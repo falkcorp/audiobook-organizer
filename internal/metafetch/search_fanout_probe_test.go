@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout_probe_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 8bda3876-c00e-45e0-aae3-0f7e50356f5e
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 
 package metafetch
 
@@ -278,7 +278,7 @@ func TestLookupASIN_AudnexusFallsBackToTheOtherRegions(t *testing.T) {
 	assert.EqualValues(t, 6, asked.Load(), `"", uk, au, ca, in, then de`)
 
 	asked.Store(0)
-	got, err = svc.lookupASIN(context.Background(), nil, metadata.SourceIDAudnexus, "B000NOWHERE")
+	got, err = svc.lookupASIN(context.Background(), nil, metadata.SourceIDAudnexus, "B000NOWHER")
 	require.NoError(t, err, "every region said not here: an answer, not a failure")
 	assert.Nil(t, got)
 	assert.EqualValues(t, maxAudnexusRequests, asked.Load(), "every region asked once")

@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.44.6
+// version: 1.45.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-11-16
 
@@ -249,6 +249,9 @@ func effectiveProviderLimits(src config.MetadataSource) providerhttp.Limits {
 		Burst:      base.Burst,
 		MaxRetries: base.MaxRetries,
 		Timeout:    base.Timeout,
+		// The attempt bound is a property of the provider, not of the budget
+		// the user tunes; an override of the budget keeps it.
+		AttemptTimeout: base.AttemptTimeout,
 	}
 	// Scale burst with the tier too. Raising RPS while leaving Burst at 1 is
 	// close to a no-op for the bursty, one-request-per-book traffic a bulk
@@ -1205,14 +1208,16 @@ func (mfs *Service) searchMetadataForBook(
 
 	// The ASIN to look up directly: the whole query is one, or the query
 	// carries one, else the book's own (resolveSearchInputs).
-	asinToLookup := ""
-	if looksLikeASIN(searchTitle) {
-		asinToLookup = searchTitle
-	} else {
-		asinToLookup = extractASIN(searchTitle)
-	}
+	//
+	// Only a value that is an ASIN is looked up. The query is free text, so a
+	// token of it counts only as written (metadata.ASINInText): the old test
+	// took any ten letters and sent 800 title words to Audible and Audnexus
+	// (400 "Bad ASIN"). The book's own stored ASIN is an identifier, so it is
+	// normalised (trim, upper case) instead. A stored value outside the grammar
+	// is nothing to look up; in.asin itself is untouched, so the fingerprint is.
+	asinToLookup := extractASIN(searchTitle)
 	if asinToLookup == "" {
-		asinToLookup = in.asin
+		asinToLookup, _ = metadata.CanonicalASIN(in.asin)
 	}
 
 	// MULTI-COMBINATION FAN-OUT. Every search -- interactive and batch --

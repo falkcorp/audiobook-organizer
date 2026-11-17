@@ -1,7 +1,7 @@
 // file: internal/metadata/audnexus_test.go
-// version: 2.5.1
+// version: 2.6.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-c5d6e7f8a9b0
-// last-edited: 2026-10-12
+// last-edited: 2026-11-16
 
 package metadata
 
@@ -122,7 +122,7 @@ func TestAudnexusClient_LookupByASIN_NotFound(t *testing.T) {
 	defer server.Close()
 
 	client := newAudnexusTestClient(server.URL)
-	_, err := client.LookupByASIN(context.Background(), "BADASIN")
+	_, err := client.LookupByASIN(context.Background(), "B0BADASIN9")
 	if err == nil {
 		t.Error("expected error on 404 response")
 	}

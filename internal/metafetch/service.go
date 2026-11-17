@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.59.3
+// version: 5.60.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 
 package metafetch
 
@@ -820,7 +820,15 @@ func (mfs *Service) archiveExistingCover(bookID string, audioFilePath string) {
 	}
 }
 
-// looksLikeASIN checks if a string looks like an Amazon ASIN (10 alphanumeric chars, typically starts with B0).
+// looksLikeASIN is the SHAPE test of the identity hash, not a lookup test: ten
+// alphanumeric characters, any case. It decides which stored ASINs count toward
+// a book's search fingerprint (fingerprint, search_title), and it is
+// deliberately loose: tightening it would change which books hash an ASIN and
+// turn every cached row hashed under the old rule identity_stale.
+//
+// It must NOT gate a provider request: it admits every ten-letter word, which
+// is how title words were sent to Audible and Audnexus as ASINs
+// (metadata.CanonicalASIN / metadata.ASINInText are the lookup grammar).
 func looksLikeASIN(s string) bool {
 	s = strings.TrimSpace(s)
 	if len(s) != 10 {
@@ -834,17 +842,11 @@ func looksLikeASIN(s string) bool {
 	return true
 }
 
-// extractASIN finds an ASIN-like pattern (B0 followed by 8 alphanumeric chars) anywhere in the string.
+// extractASIN finds an ASIN in free text (a search title): a token that is an
+// ASIN as written. See metadata.ASINInText for why a bare ten-letter word is
+// not one.
 func extractASIN(s string) string {
-	s = strings.TrimSpace(s)
-	// Split on whitespace and check each token
-	for word := range strings.FieldsSeq(s) {
-		word = strings.Trim(word, ",.;:!?()[]{}\"'")
-		if looksLikeASIN(word) {
-			return word
-		}
-	}
-	return ""
+	return metadata.ASINInText(s)
 }
 
 // metadataCanonicalID extracts the canonical external identifier from a

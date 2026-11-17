@@ -1,7 +1,7 @@
 // file: internal/metabatch/candidates.go
-// version: 1.19.1
+// version: 1.20.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 //
 // Package metabatch contains pure service types and logic for the
 // metadata candidate batch fetch / apply pipeline. HTTP handlers live
@@ -159,6 +159,17 @@ type CandidateResult struct {
 	// identity checks, or the best below the apply score floor). Empty when
 	// the chain had a usable candidate or no fallback provider was due.
 	Fallback []FallbackStep `json:"fallback,omitempty"`
+	// SourcesFailed names the sources the search could NOT ask or hear from
+	// (a timeout, a 5xx, a throttle), whatever the book's Status: a matched
+	// or no_match row with SourcesFailed set is DEGRADED -- the other
+	// sources answered, these did not, and they stay owed for the next run.
+	// ErrorCause is why, in one stable word (metadata.FailureCause:
+	// bad_asin, timeout, rate_limited, quota, upstream_5xx, client_4xx,
+	// canceled, transport, other) -- for a Status "error" row the cause of the
+	// failure, for a degraded row the cause of its failed source. The run's
+	// refresh summary counts by it. Both omitted when every source answered.
+	SourcesFailed []string `json:"sources_failed,omitempty"`
+	ErrorCause    string   `json:"error_cause,omitempty"`
 }
 
 // FallbackStep outcomes.
