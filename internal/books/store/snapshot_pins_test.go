@@ -1,5 +1,5 @@
 // file: internal/books/store/snapshot_pins_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2f6e0a4-83d1-4c57-9a7e-5d1c4e8b2f93
 // last-edited: 2026-11-17
 
@@ -210,6 +210,19 @@ func TestPrune_TwoProvisionalEntriesOnOneBookEachKeepTheirOwnPin(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 3, deleted, "ts[0], ts[1], ts[3]")
 	require.Equal(t, []int64{ts[2], ts[4], ts[5]}, f.timestamps(t, id))
+}
+
+// Winner and loser each pin from THEIR OWN baseline: the loser's floor is not the
+// winner's.
+func TestPrune_ProvisionalEntryPinsEachSideFromItsOwnBaseline(t *testing.T) {
+	f := newPinFixture(t)
+	w, wts := f.bookWithSnapshots(t, "Batman", 6)
+	l, lts := f.bookWithSnapshots(t, "Robin", 6)
+	f.journal(t, AutoMergeJournalEntry{WinnerID: w, LoserID: l, Provisional: true, BaselinesRecorded: true,
+		MergedAt: time.Now().UnixNano(), WinnerBaselineTS: wts[1], LoserBaselineTS: lts[3]})
+
+	require.Equal(t, []int64{wts[2]}, f.pinnedAmong(t, w))
+	require.Equal(t, []int64{lts[4]}, f.pinnedAmong(t, l), "the loser's pin is the first snapshot above the LOSER's baseline")
 }
 
 // An entry written before baselines were recorded has no baseline, so its floor is
