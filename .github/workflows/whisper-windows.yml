@@ -1,5 +1,5 @@
 # file: .github/workflows/whisper-windows.yml
-# version: 1.0.0
+# version: 1.0.1
 # guid: c4d81f27-3a95-4b60-8e1d-7f2a95b3c610
 # last-edited: 2026-11-17
 
@@ -15,6 +15,13 @@
 # differently, so its result never reaches auto-revert.yml. It has NO `push`
 # trigger (a trial must not produce a red run on main), no job `needs` it, and it
 # must not be added to .github/branch-protection.json or the branch ruleset.
+#
+# NOT run here: test_whisper_mlx_server.py and test_whisper_mlx_pins.py. They test
+# the Mac worker (whisper_mlx_server.py), which is darwin-only by construction: its
+# InferenceChild uses POSIX pass_fds, select() and process groups, and a Windows
+# machine never runs it. The first run of this job showed 24 and 25 failures there
+# ("pass_fds not supported on Windows"), none of them a defect in code that runs on
+# Windows. They stay in ci.yml's Linux step.
 #
 # Each test file is its own step with `if: always()`, so one red file does not
 # hide the others and the job log reads pass/fail per file.
@@ -76,11 +83,3 @@ jobs:
       - name: test_whisper_decode_child
         if: always()
         run: python -m pytest -v -rs scripts/tests/test_whisper_decode_child.py
-
-      - name: test_whisper_mlx_pins
-        if: always()
-        run: python -m pytest -v -rs scripts/tests/test_whisper_mlx_pins.py
-
-      - name: test_whisper_mlx_server
-        if: always()
-        run: python -m pytest -v -rs scripts/tests/test_whisper_mlx_server.py

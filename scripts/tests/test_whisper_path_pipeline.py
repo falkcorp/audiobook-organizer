@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_path_pipeline.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: 5d2c8e17-9b43-4a06-8f1d-3e7a0c6b9d25
 # last-edited: 2026-11-17
 #
@@ -316,6 +316,11 @@ def test_posix_refuses_a_symlink_to_a_sibling_whose_name_extends_the_root(lib, t
     assert _code(e) == "path_unmapped"
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="on a Windows worker CON.m4b IS refused (path_unrepresentable): that is the "
+    "nt-flavor rule, covered by the ntpath rows; this checks the POSIX flavor",
+)
 def test_posix_device_names_are_ordinary_files(lib):
     p, root, _ = lib
     (root / "books" / "CON.m4b").write_bytes(b"x")
