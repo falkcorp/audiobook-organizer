@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber.go
-// version: 5.0.0
+// version: 5.0.1
 // guid: dee834d3-1f7e-453e-9303-85d37479e79d
 // last-edited: 2026-11-17
 
@@ -137,7 +137,7 @@ type SeriesMergePlan struct {
 //   - an explicit marker ("Book 3") is the high tier;
 //   - a zero-padded number ("Court of Owls 05") is the high tier;
 //   - a bare number is the high tier when another series shares the base
-//     ("Mistborn 3" alongside "Mistborn 6");
+//     ("Dark Knight 3" alongside "Dark Knight 6");
 //   - a lone, unpadded bare number ("Robin 3") is reported as low, held as
 //     position_uncorroborated, and never moved: the cost of wrongly merging a real
 //     name is a corrupted series, while the cost of skipping one is that it stays
