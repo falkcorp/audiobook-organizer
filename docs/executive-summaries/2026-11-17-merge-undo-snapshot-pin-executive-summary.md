@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-17-merge-undo-snapshot-pin-executive-summary.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 6d2c9e41-0b7a-4f3d-8e15-a3c7b94d1f62 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -58,6 +58,18 @@ and merges nothing.
   merge really removed is not lost to the clean-up just because the expected
   winner was not the one kept. (An entry written before this change lists only the
   two books it expected, and is read as it always was.)
+  Nothing finishes or closes an entry that stays unfinished today, so it keeps
+  all of its books in the trash until someone releases it, even a book that is
+  put in the trash for an unrelated reason later. This errs on the side of keeping
+  things: no data is lost, and the cost is one extra book kept in the trash per
+  held book. The same was already true on main for the book such an entry names
+  as removed. Releasing these entries, and telling the person who tries to empty
+  the trash why a book is being kept, is filed as follow-up work
+  (`TODO-MERGE-PROVISIONAL-ROW-REPAIR`).
+- When someone tries to undo an unfinished entry, the refusal now lists every book
+  the merge involved and asks them to restore whichever one is in the trash. It
+  used to name only the book the entry expected to be removed, which is the book
+  that was kept when the expected winner was wrong.
 - If, after a merge, the library cannot read a book's list of saved copies to
   complete the entry, it now leaves the entry unfinished and says so in the log,
   rather than completing it with "no saved copy". An entry completed that way would

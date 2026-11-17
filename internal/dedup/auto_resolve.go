@@ -1,5 +1,5 @@
 // file: internal/dedup/auto_resolve.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 6d1e9b52-4f70-4c83-a2b9-1e5c8d0f7a34
 // last-edited: 2026-11-17
 
@@ -519,8 +519,12 @@ func (de *Engine) UnmergeAuto(journalKey string) error {
 		return fmt.Errorf("unmerge-auto: journal entry %s is closed: its merge was refused before it wrote anything, so there is nothing to undo; nothing reverted", journalKey)
 	}
 	if entry.Provisional {
-		return fmt.Errorf("unmerge-auto: journal entry %s was never finalized (the merge failed, or its post-merge record could not be written); nothing reverted. Restore loser %s from the trash, and undo any sibling moves with the sibling-move journal the merge logged",
-			journalKey, entry.LoserID)
+		// A provisional row's LoserID is the loser of the winner PREDICTED before
+		// the merge, so when the prediction was wrong it names the live winner.
+		// Name every book of the merge instead and let the operator pick the one
+		// that is in the trash.
+		return fmt.Errorf("unmerge-auto: journal entry %s was never finalized (the merge failed, or its post-merge record could not be written); nothing reverted. This merge involved books %s; restore whichever of them is in the trash, and undo any sibling moves with the sibling-move journal the merge logged",
+			journalKey, strings.Join(provisionalEntryBookIDs(entry), ", "))
 	}
 	if len(entry.Siblings) > 0 && entry.SiblingJournalID == "" {
 		return fmt.Errorf("unmerge-auto: journal entry %s lists %d moved sibling(s) but no sibling-move journal; nothing reverted", journalKey, len(entry.Siblings))
@@ -666,4 +670,20 @@ func (de *Engine) UnmergeAuto(journalKey string) error {
 	slog.Info("dedup auto-resolve unmerged", "journal", journalKey,
 		"winner", entry.WinnerID, "loser", entry.LoserID, "siblings", len(entry.Siblings))
 	return nil
+}
+
+// provisionalEntryBookIDs lists every book a provisional journal row's merge
+// involved: its Participants when it has them, else its LoserID alone (a row
+// written before Participants existed).
+func provisionalEntryBookIDs(entry *database.AutoMergeJournalEntry) []string {
+	ids := make([]string, 0, len(entry.Participants)+1)
+	for _, p := range entry.Participants {
+		if p.BookID != "" {
+			ids = append(ids, p.BookID)
+		}
+	}
+	if len(ids) == 0 {
+		ids = append(ids, entry.LoserID)
+	}
+	return ids
 }
