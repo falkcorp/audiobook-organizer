@@ -1,7 +1,7 @@
 // file: internal/transcribe/path.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 7e41c9a8-2b6d-4f03-8a15-d3c0e9b57a24
-// last-edited: 2026-10-30
+// last-edited: 2026-11-17
 
 package transcribe
 
@@ -432,10 +432,18 @@ func sendPathBatch(ctx context.Context, client *http.Client, remoteURL string, c
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("server returned HTTP %d", resp.StatusCode)
 	}
+	// Model and Language are optional: a worker that names them on a result (or
+	// once for the whole response) is believed over its /health, which only the
+	// dispatcher reads. Neither bundled worker sends them today, so both are
+	// usually empty here and the dispatcher stamps the model from /health.
 	var out struct {
-		Results map[string]struct {
-			Text  string  `json:"text"`
-			Error *string `json:"error"`
+		Model    string `json:"model"`
+		Language string `json:"language"`
+		Results  map[string]struct {
+			Text     string  `json:"text"`
+			Error    *string `json:"error"`
+			Model    string  `json:"model"`
+			Language string  `json:"language"`
 		} `json:"results"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
@@ -443,11 +451,21 @@ func sendPathBatch(ctx context.Context, client *http.Client, remoteURL string, c
 	}
 	ret := make(map[string]BatchResult, len(out.Results))
 	for id, v := range out.Results {
-		r := BatchResult{Text: v.Text}
+		r := BatchResult{Text: v.Text, Model: firstNonEmpty(v.Model, out.Model), Language: firstNonEmpty(v.Language, out.Language)}
 		if v.Error != nil {
 			r.Error = *v.Error
 		}
 		ret[id] = r
 	}
 	return ret, nil
+}
+
+// firstNonEmpty returns the first argument with any non-space text, trimmed.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if t := strings.TrimSpace(v); t != "" {
+			return t
+		}
+	}
+	return ""
 }
