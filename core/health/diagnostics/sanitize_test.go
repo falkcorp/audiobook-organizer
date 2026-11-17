@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/sanitize_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 36bfade5-be50-496e-b763-33a05bf55746
 // last-edited: 2026-11-16
 
@@ -64,6 +64,17 @@ func leakCases() []leakCase {
 			`exec: "<path>": executable file not found in $PATH`, []string{"bruce", "bin", "Hush"}},
 		{"M1 line break between two errors", "a /x Selina\nopen /c Kyle: no such file or directory", "a <path>: no such file or directory", []string{"Selina", "Kyle"}},
 		{"M1 errno text inside the first path", `open /Users/a: file exists b/Hush: no such file or directory`, `open <path>: no such file or directory`, []string{"exists", "Hush"}},
+		// U+00A0 and U+2028 separate words (unicode.IsSpace), which only wipes more.
+		{"M1 no-break space inside a name", "open /Users/bruce\u00a0Wayne/Hush: permission denied", `open <path>: permission denied`, []string{"Wayne", "Hush"}},
+		{"M1 line separator inside a name", "open /Users/bruce\u2028Wayne/Hush: permission denied", `open <path>: permission denied`, []string{"Wayne", "Hush"}},
+		// A template belongs to its own line: the words between two lines'
+		// locations are not a name that spans them.
+		{"M1 each line has its own template", "open /Users/bruce: permission denied\nnote Selina Kyle ok /Users/alfred/Hush: no such file or directory",
+			"open <path>: permission denied\nnote Selina Kyle ok <path>: no such file or directory", []string{"bruce", "alfred", "Hush"}},
+		// An errno text opens a template only after a word that ends in ":"; the
+		// same words in running prose are not an error message.
+		{"M1 errno words without a colon are prose", `see /srv/a Selina no such file or directory`, `see <path> Selina no such file or directory`, nil},
+		{"M1 errno words after a colon end a template", `see /srv/a Selina: no such file or directory`, `see <path>: no such file or directory`, []string{"Selina"}},
 
 		// M2: a location that starts glued to a name byte.
 		{"M2 compiler flags", `CGO_CFLAGS=-I/Users/bruce/include -L/Users/bruce/lib`, `<path>`, []string{"bruce", "include"}},
@@ -195,6 +206,8 @@ func TestSanitize_DotDotCannotClimbOutOfARoot(t *testing.T) {
 		`/srv/lib/../../Users/bruce/Hush`,
 		`/srv/lib/a/../../../Users/bruce/Hush`,
 		`/srv/lib\..\..\Users\bruce\Hush`,
+		// under the root when read with "/" only, outside it when "\" separates:
+		`/srv/lib/a\..\..\..\Users\bruce\Hush`,
 		`/srv/library/Hush`,
 	} {
 		if got := s.Text(in); got != "<path>" {

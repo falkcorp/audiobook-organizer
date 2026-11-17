@@ -1,7 +1,7 @@
 <!-- file: docs/plans/platform-core/implementation-plan.md -->
-<!-- version: 2.6.2 -->
+<!-- version: 2.6.3 -->
 <!-- guid: e0650f4a-4aec-4453-a256-aed84bf5ef1c -->
-<!-- last-edited: 2026-11-15 -->
+<!-- last-edited: 2026-11-16 -->
 
 # mediacore — implementation plan (Phase 6, R0–R3)
 
@@ -724,8 +724,8 @@ tier when its base-commit re-verification finds more than the plan assumed; it n
   closing PRs), `R3-nn`, and `OWNER-nn` for owner checkpoints. The flips keep their first IDs (F3-07, F4-08,
   F5-18, F6-03, F7-09, F8-04, F9-03); rows added later take the next free number of their label, and F5-17 is
   retired (its `tasklint` work is F2-17). One row, F8-03b (a follow-up to the merged F8-03), takes a lowercase
-  letter after its parent's number because its name is the diagnostics marker's (`RedesignPendingF8_03b`,
-  `ErrRedesignPendingF8_03b`, `archtest.F803bGate`); `tools/check_waves.py` accepts that form and
+  letter after its parent's number because its name was the diagnostics marker's (the marker, its
+  run-time refusal and its archtest gate, all deleted by that row); `tools/check_waves.py` accepts that form and
   `tools/test_check_waves.py` pins it. The number rule would have called it F8-05.
 - **Files** are the main paths a PR creates, modifies or deletes; a path ending in `/` is a whole directory
   (a move, a new package, or the importers a move rewires). The T6 and T7 file groups are listed by file, as the
