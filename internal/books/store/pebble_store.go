@@ -1,5 +1,5 @@
 // file: internal/books/store/pebble_store.go
-// version: 1.240.2
+// version: 1.240.3
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-11-17
 
@@ -3740,12 +3740,16 @@ func (p *PebbleStore) PruneBookSnapshots(id string, keepCount int) (int, error) 
 	// A journal row can be written between reading the pins and committing the
 	// delete. The generation is re-checked just before the commit, and the plan
 	// is redone on a changed one. That check and the commit are not atomic, and
-	// that is safe: the key list above is frozen, so only snapshots that existed
-	// when it was read can be deleted. A provisional row committed after that read
-	// can only name a snapshot its merge writes later (the row commits before the
-	// merge writes anything), which is not in the list; and the patch that
-	// finalizes a row replaces a pin by the exact snapshot it names, which is the
-	// one the floor already pinned, so it never narrows a pin this call relied on.
+	// the window left is narrow and ends harmlessly. The key list above is frozen,
+	// so only snapshots that existed when it was read can be deleted. A provisional
+	// row committed in the window pins the first snapshot above its floor, and the
+	// merge's own writes, which come after the row, are not in the frozen list. The
+	// one snapshot that can be in it is an UNRELATED edit's, if that edit landed
+	// between the merge's baseline read and the row's commit; an old-pins commit
+	// could then delete it. That takes keepCount or more newer snapshots of the same book in that
+	// window, and the patch reads the snapshot list AFTER the prune, so it names
+	// one that survived; nothing a row names is ever missing. (Which snapshot an
+	// unrelated edit in that window displaces is a separate matter: todo.d.)
 	for attempt := 0; attempt < pruneStablePinsAttempts; attempt++ {
 		pins, err := p.snapshotPins()
 		if err != nil {

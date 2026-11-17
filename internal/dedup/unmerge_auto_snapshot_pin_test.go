@@ -1,5 +1,5 @@
 // file: internal/dedup/unmerge_auto_snapshot_pin_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9c4e7a21-5b83-4d06-a1f9-3e2d8b6c0f47
 // last-edited: 2026-11-17
 
@@ -168,7 +168,8 @@ func TestMergeBooksJournaled_ProvisionalEntryRecordsEachBooksBaselineSnapshot(t 
 	// snapshot the patch would have named for each book (the first above its
 	// baseline) and nothing else of what the merge wrote.
 	for id, floor := range map[string]int64{k: wantK, l: wantL} {
-		want := engine.preMergeSnapshotNanos(id, floor)
+		want, werr := engine.preMergeSnapshotNanos(id, floor)
+		require.NoError(t, werr)
 		require.NotZero(t, want, "the merge wrote at least one snapshot of %s", id)
 		editTitle(t, f.S, id, 4)
 		_, err := f.S.PruneBookSnapshots(id, 1)

@@ -1,5 +1,5 @@
 // file: internal/dedup/merge_journaled_rowclose_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e6b9d24-8a51-4c7f-b0d2-9f4a1c7e5b68
 // last-edited: 2026-11-17
 
@@ -120,7 +120,8 @@ func TestMergeBooksJournaled_AmbiguousFailureKeepsTheProvisionalRowAndItsPin(t *
 	fs.armed = false
 	// Some write of the merge's (or this test's) lands above the baseline; the row pins the first one.
 	editTitle(t, f.S, k, 3)
-	want := engine.preMergeSnapshotNanos(k, e.WinnerBaselineTS)
+	want, werr := engine.preMergeSnapshotNanos(k, e.WinnerBaselineTS)
+	require.NoError(t, werr)
 	require.NotZero(t, want)
 	require.Contains(t, pinnedAfterPrune(t, f.S, k, 1), want, "the kept row still pins the snapshot the patch would have named")
 }

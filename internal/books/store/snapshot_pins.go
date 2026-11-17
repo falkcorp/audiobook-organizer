@@ -1,5 +1,5 @@
 // file: internal/books/store/snapshot_pins.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4a7d1c93-e5b2-4f08-9c61-2d8f0b3a6e75
 // last-edited: 2026-11-17
 
@@ -340,6 +340,15 @@ func scanAutoMergeJournal(db *GatedDB, fn func(e AutoMergeJournalEntry) error) e
 // wrote anything; 0 only when even that is missing, which pins the book's oldest
 // snapshot, the same answer the patch would have given.
 //
+// A provisional entry written by this version lists EVERY book of its merge with
+// the baseline recorded for it (Participants), and holds a floor for each, not
+// only for its own winner and loser. The post-merge patch rewrites the merge's
+// rows against the winner MergeBooks actually elected, so when the winner was
+// predicted wrongly and one row's patch write fails, the surviving provisional row
+// is not the pair it names: it still covers every book of the merge, so no real
+// loser is left in no row. An entry without the list covers its winner and loser,
+// as before.
+//
 // There is no expiry. A provisional entry stays provisional when its merge failed
 // in a way that does not prove nothing was written, or its patch could not be
 // written; UnmergeAuto refuses it and nothing else clears it, so each such entry
@@ -353,9 +362,7 @@ func collectAutoMergeSnapshotPins(db *GatedDB, pins *SnapshotPins) error {
 			return nil
 		}
 		if e.Provisional {
-			wf, lf := e.provisionalFloors()
-			pins.addFloor(e.WinnerID, wf)
-			pins.addFloor(e.LoserID, lf)
+			e.addProvisionalFloors(pins)
 			return nil
 		}
 		pins.add(e.WinnerID, e.WinnerPreMergeTS)

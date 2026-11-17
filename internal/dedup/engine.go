@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.96.9
+// version: 1.96.10
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package dedup
 
@@ -92,6 +92,10 @@ type Engine struct {
 	// the merge journal writes (putJournal). Tests set it to inject a write
 	// failure; production leaves it nil.
 	journalPut func(database.AutoMergeJournalEntry) (string, error)
+	// journalNow, when set, replaces the wall clock that stamps the merge
+	// journal's keys (journalNanos). Tests set it to put two merges on one key;
+	// production leaves it nil.
+	journalNow func() int64
 
 	// Thresholds (read from config or set directly)
 	BookHighThreshold   float64

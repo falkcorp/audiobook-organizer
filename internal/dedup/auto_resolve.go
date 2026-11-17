@@ -1,5 +1,5 @@
 // file: internal/dedup/auto_resolve.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 6d1e9b52-4f70-4c83-a2b9-1e5c8d0f7a34
 // last-edited: 2026-11-17
 
@@ -446,13 +446,15 @@ func (de *Engine) newestSnapshotNanos(bookID string) (int64, error) {
 }
 
 // preMergeSnapshotNanos returns the UnixNano of the earliest book_ver snapshot
-// strictly newer than baselineNanos — i.e. the pre-merge book record written by
-// MergeBooks' first UpdateBook call. Returns 0 if none is found.
-func (de *Engine) preMergeSnapshotNanos(bookID string, baselineNanos int64) int64 {
+// strictly newer than baselineNanos, i.e. the pre-merge book record written by
+// MergeBooks' first write. It returns 0 with a nil error when there is none (a
+// replayed merge of an already soft-deleted loser writes no new snapshot), and
+// never turns a failure to list the snapshots into 0: the result is journaled,
+// and a recorded 0 means "nothing to restore".
+func (de *Engine) preMergeSnapshotNanos(bookID string, baselineNanos int64) (int64, error) {
 	snaps, err := de.bookStore.GetBookSnapshots(bookID, 0)
 	if err != nil {
-		slog.Warn("dedup auto-resolve: GetBookSnapshots failed", "book", bookID, "err", err)
-		return 0
+		return 0, fmt.Errorf("list snapshots of book %s: %w", bookID, err)
 	}
 	// The same lookup the snapshot prune uses to keep this snapshot while the
 	// journal entry is still provisional (store.SnapshotPins), shared so the one
@@ -461,7 +463,7 @@ func (de *Engine) preMergeSnapshotNanos(bookID string, baselineNanos int64) int6
 	for i, snap := range snaps {
 		nanos[i] = snap.Timestamp.UnixNano()
 	}
-	return database.EarliestSnapshotAbove(baselineNanos, nanos)
+	return database.EarliestSnapshotAbove(baselineNanos, nanos), nil
 }
 
 // UnmergeAuto reverses a Tier-1 auto-merge recorded in the journal at journalKey

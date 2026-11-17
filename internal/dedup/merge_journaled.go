@@ -1,14 +1,14 @@
 // file: internal/dedup/merge_journaled.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 1d7c3e58-4a09-42b6-8f31-5c0e9b247a63
 // last-edited: 2026-11-17
 
 package dedup
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
-	"log/slog"
 	"slices"
 	"time"
 
@@ -65,12 +65,71 @@ func (de *Engine) MergeJournaled(candidateID int64, aID, bID, keepID, tag string
 
 var journaledMergeLog = logger.New("dedup.merge-journaled")
 
-// putJournal writes one auto-merge journal entry (see Engine.journalPut).
+// putJournal writes one auto-merge journal entry, replacing whatever is at its
+// key (see Engine.journalPut). Only the post-merge patch uses it: a row's first
+// write goes through createJournal, which never replaces another merge's row.
 func (de *Engine) putJournal(e database.AutoMergeJournalEntry) (string, error) {
 	if de.journalPut != nil {
 		return de.journalPut(e)
 	}
 	return de.embedStore.PutAutoMergeJournalEntry(e)
+}
+
+// createJournal writes a provisional row only if its key is free. created=false
+// means another row holds the key and nothing was written. The journalPut seam,
+// when set, takes the write (and always reports it created): a test that injects
+// a failure sees the same sequence of writes it always did.
+func (de *Engine) createJournal(e database.AutoMergeJournalEntry) (key string, created bool, err error) {
+	if de.journalPut != nil {
+		key, err = de.journalPut(e)
+		return key, err == nil, err
+	}
+	return de.embedStore.PutAutoMergeJournalEntryIfAbsent(e)
+}
+
+// closeJournal closes the provisional row e (written by this call, so e.Key and
+// e.RowID are set) unless the stored row is no longer the one this call wrote.
+// closed=false with a nil error means it was left alone for that reason.
+func (de *Engine) closeJournal(e database.AutoMergeJournalEntry, at int64) (closed bool, err error) {
+	if de.journalPut != nil {
+		e.AbortedAt = at
+		_, err = de.journalPut(e)
+		return err == nil, err
+	}
+	return de.embedStore.CloseAutoMergeJournalEntry(e.Key, e.RowID, at)
+}
+
+// journalNanos is the clock that stamps journal keys.
+func (de *Engine) journalNanos() int64 {
+	if de.journalNow != nil {
+		return de.journalNow()
+	}
+	return time.Now().UnixNano()
+}
+
+// provisionalKeyAttempts bounds how often a provisional row asks for a new key
+// after the one it wanted turned out to be taken. A key is a nanosecond, so one
+// retry is already unlikely and a second is not expected.
+const provisionalKeyAttempts = 8
+
+// createProvisional writes e as a new row, on a new MergedAt (so a new key) each
+// time the key it wanted is taken by another merge's row. It never replaces an
+// existing row. The returned entry carries the key it was stored at and the
+// MergedAt that key was made from.
+func (de *Engine) createProvisional(e database.AutoMergeJournalEntry) (database.AutoMergeJournalEntry, error) {
+	for range provisionalKeyAttempts {
+		key, created, err := de.createJournal(e)
+		if err != nil {
+			return e, err
+		}
+		if created {
+			e.Key = key
+			return e, nil
+		}
+		// The clock can repeat a value, so the retry is forced above the last one.
+		e.MergedAt = max(de.journalNanos(), e.MergedAt+1)
+	}
+	return e, fmt.Errorf("the journal key was taken %d times in a row", provisionalKeyAttempts)
 }
 
 // journalSiblings is the part of result.MovedSiblings that left with loserID:
@@ -187,9 +246,21 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 		predWinner = best
 	}
 
-	// mergedAt fixes the journal keys so the post-merge patch overwrites the
-	// same entries rather than creating a second set.
-	mergedAt := time.Now().UnixNano()
+	// Every provisional row lists EVERY participant with its baseline, so a row that
+	// survives a failed patch still covers the whole merge, whichever book turns
+	// out to have won (see AutoMergeJournalEntry.Participants).
+	participants := make([]database.AutoMergeJournalParticipant, len(ids))
+	for i, id := range ids {
+		participants[i] = database.AutoMergeJournalParticipant{BookID: id, BaselineTS: baselines[id]}
+	}
+
+	// One row per loser of the PREDICTED winner. MergeBooks re-derives the
+	// authoritative winner and the patch below matches the rows to the actual
+	// losers by book id, so a wrong prediction costs nothing: the row COUNT is N-1
+	// either way. Each row's key is its own (MergedAt, +i to keep a merge's rows
+	// apart) and is written only if free, so a concurrent merge that asked for the
+	// same nanosecond takes another key instead of overwriting this row.
+	mergedAt := de.journalNanos()
 	journalKeys := make([]string, 0, len(ids)-1)
 	provisional := make([]database.AutoMergeJournalEntry, 0, len(ids)-1)
 	for _, loserID := range othersThan(ids, predWinner) {
@@ -200,6 +271,7 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 			Tag:         tag,
 			MergedAt:    mergedAt + int64(len(journalKeys)),
 			Provisional: true,
+			RowID:       rand.Text(),
 			// While the entry is provisional the snapshot prune keeps ONE
 			// snapshot per book: the earliest one newer than its baseline, the
 			// pre-merge record the patch below will name (the merge's own writes
@@ -207,8 +279,9 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 			WinnerBaselineTS:  baselines[predWinner],
 			LoserBaselineTS:   baselines[loserID],
 			BaselinesRecorded: true,
+			Participants:      participants,
 		}
-		key, err := de.putJournal(entry)
+		written, err := de.createProvisional(entry)
 		if err != nil {
 			// A provisional entry that cannot be written means this merge would
 			// be irreversible, which is a worse outcome than no merge at all.
@@ -217,8 +290,8 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 			de.abortProvisional(provisional, "the next provisional entry could not be written")
 			return nil, journalKeys, fmt.Errorf("merge-journaled: write provisional journal entry (merge skipped): %w", err)
 		}
-		journalKeys = append(journalKeys, key)
-		provisional = append(provisional, entry)
+		journalKeys = append(journalKeys, written.Key)
+		provisional = append(provisional, written)
 	}
 
 	result, mergeErr := de.mergeService.MergeBooks(ids, keepID)
@@ -250,10 +323,41 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 	}
 
 	winnerID := result.PrimaryID
-	winnerTS := de.preMergeSnapshotNanos(winnerID, baselines[winnerID])
-	for i, loserID := range othersThan(ids, winnerID) {
-		if i >= len(journalKeys) {
-			break // unreachable: len(losers) == len(ids)-1 == len(journalKeys)
+	// The patch names, for each side, the earliest snapshot above its baseline. A
+	// snapshot list that cannot be read is NOT "no snapshot": writing a 0 would drop
+	// the row's floor (a finalized row pins exactly what it names, and a 0 names
+	// nothing) and leave an undo that skips that side. So a side that cannot be
+	// resolved leaves its row provisional, with its floors, and is logged.
+	winnerTS, winnerErr := de.preMergeSnapshotNanos(winnerID, baselines[winnerID])
+	rowOf := make(map[string]int, len(provisional)) // loser id -> its provisional row
+	for i, row := range provisional {
+		rowOf[row.LoserID] = i
+	}
+	for _, loserID := range othersThan(ids, winnerID) {
+		// Rows are matched to actual losers by book id. When the winner was
+		// predicted right every loser has its own row. When it was not, the
+		// predicted winner is a real loser with no row of its own, and the row
+		// whose loser is the actual winner is the spare: it takes that place.
+		idx, ok := rowOf[loserID]
+		if !ok {
+			idx, ok = rowOf[winnerID]
+		}
+		if !ok {
+			journaledMergeLog.Error("merge-journaled: no provisional row for loser %s of a finished merge (candidate %d); it is covered by the other rows' participant floors",
+				logger.SanitizeLogValue(loserID), candidateID)
+			continue
+		}
+		row := provisional[idx]
+		if winnerErr != nil {
+			journaledMergeLog.Error("merge-journaled: cannot read the snapshots of winner %s to finalize journal row %s (candidate %d); the row stays provisional and keeps pinning the snapshots, UnmergeAuto will refuse it: %v",
+				logger.SanitizeLogValue(winnerID), logger.SanitizeLogValue(row.Key), candidateID, winnerErr)
+			continue
+		}
+		loserTS, loserErr := de.preMergeSnapshotNanos(loserID, baselines[loserID])
+		if loserErr != nil {
+			journaledMergeLog.Error("merge-journaled: cannot read the snapshots of loser %s to finalize journal row %s (candidate %d); the row stays provisional and keeps pinning the snapshots, UnmergeAuto will refuse it: %v",
+				logger.SanitizeLogValue(loserID), logger.SanitizeLogValue(row.Key), candidateID, loserErr)
+			continue
 		}
 		sibs := journalSiblings(result, loserID)
 		entry := database.AutoMergeJournalEntry{
@@ -261,9 +365,9 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 			WinnerID:         winnerID,
 			LoserID:          loserID,
 			WinnerPreMergeTS: winnerTS,
-			LoserPreMergeTS:  de.preMergeSnapshotNanos(loserID, baselines[loserID]),
+			LoserPreMergeTS:  loserTS,
 			Tag:              tag,
-			MergedAt:         mergedAt + int64(i),
+			MergedAt:         row.MergedAt, // the key this row was created at
 			Siblings:         sibs,
 			IntoGroupID:      result.VersionGroupID,
 		}
@@ -283,9 +387,9 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 			// restorable from the trash, and the siblings that left with it
 			// through the sibling-move journal logged here (reverting the
 			// operation logged with it).
-			slog.Error("merge-journaled: patch journal entry failed (provisional entry stands; UnmergeAuto will refuse it)",
-				"candidate", candidateID, "journal", journalKeys[i], "loser", loserID,
-				"sibling_journal", result.SiblingJournalID, "sibling_operation", result.SiblingOperationID, "siblings", len(sibs), "err", err)
+			journaledMergeLog.Error("merge-journaled: patch journal entry failed (provisional entry stands; UnmergeAuto will refuse it) (candidate %d, journal %s, loser %s, sibling journal %s, sibling operation %s, siblings %d): %v",
+				candidateID, logger.SanitizeLogValue(row.Key), logger.SanitizeLogValue(loserID),
+				logger.SanitizeLogValue(result.SiblingJournalID), logger.SanitizeLogValue(result.SiblingOperationID), len(sibs), err)
 		}
 	}
 
@@ -307,15 +411,21 @@ func (e *BaselineReadError) Unwrap() error { return e.Err }
 
 // abortProvisional closes provisional entries whose merge provably never
 // started (AbortedAt): UnmergeAuto and the snapshot pins both ignore a closed
-// entry. A failure to close is logged and leaves the entry provisional, which is
-// the safe state: it keeps its pin and UnmergeAuto refuses it.
+// entry. A row is closed only while the stored row is still the one this call
+// wrote (its RowID): a different merge that took the key since is left alone. A
+// failure to close is logged and leaves the entry provisional, which is the safe
+// state: it keeps its pin and UnmergeAuto refuses it.
 func (de *Engine) abortProvisional(entries []database.AutoMergeJournalEntry, why string) {
-	now := time.Now().UnixNano()
+	now := de.journalNanos()
 	for _, e := range entries {
-		e.AbortedAt = now
-		if _, err := de.putJournal(e); err != nil {
+		closed, err := de.closeJournal(e, now)
+		switch {
+		case err != nil:
 			journaledMergeLog.Warn("merge-journaled: could not close a provisional journal entry for a merge that never wrote anything (candidate %d, winner %s, loser %s, %s); it stays provisional and keeps pinning one snapshot per book: %v",
 				e.CandidateID, logger.SanitizeLogValue(e.WinnerID), logger.SanitizeLogValue(e.LoserID), why, err)
+		case !closed:
+			journaledMergeLog.Warn("merge-journaled: left a journal row alone because it is no longer the provisional row this merge wrote (candidate %d, journal %s, winner %s, loser %s, %s)",
+				e.CandidateID, logger.SanitizeLogValue(e.Key), logger.SanitizeLogValue(e.WinnerID), logger.SanitizeLogValue(e.LoserID), why)
 		}
 	}
 }
