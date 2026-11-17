@@ -1,5 +1,5 @@
 // file: internal/applygate/evidence_test.go
-// version: 1.2.7
+// version: 1.2.8
 // guid: 1b7e3d52-9c4a-4f18-a26d-5e0f8b3c7a91
 // last-edited: 2026-11-17
 
@@ -144,9 +144,9 @@ func TestCheckEvidenceInBatch_OwnerExamples(t *testing.T) {
 		},
 		{
 			name: "respelled initials are not an overwrite, so no runtime is needed",
-			book: database.Book{Title: "The Hobbit", Author: &database.Author{Name: "J.R.R. Tolkien"},
-				FilePath: "/lib/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"},
-			cand: metafetch.MetadataCandidate{Title: "The Hobbit", Author: "J. R. R. Tolkien"},
+			book: database.Book{Title: "Hush", Author: &database.Author{Name: "B.R. Wayne"},
+				FilePath: "/lib/B.R. Wayne/Hush/Hush.m4b"},
+			cand: metafetch.MetadataCandidate{Title: "Hush", Author: "B. R. Wayne"},
 		},
 		// A subtitle the candidate carries inside its title is text the stored
 		// title lacks: the title is neutral, so it confirms nothing and the
