@@ -1,5 +1,5 @@
 // file: internal/seqnum/stated.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ef7d6ebc-a3a1-4738-bc60-512ed593d8eb
 // last-edited: 2026-11-17
 
@@ -46,13 +46,6 @@ const (
 	// KindPart is one piece of a single book.
 	KindPart
 )
-
-func (k Kind) String() string {
-	if k == KindPart {
-		return "part"
-	}
-	return "volume"
-}
 
 // Stated is one number a text states.
 type Stated struct {

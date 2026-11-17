@@ -1,5 +1,5 @@
 // file: internal/seqnum/stated_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e20b2f44-17f0-486d-b69d-66acf91c7b19
 // last-edited: 2026-11-17
 
@@ -14,7 +14,11 @@ import (
 func statedText(ss []Stated) string {
 	var parts []string
 	for _, s := range ss {
-		p := fmt.Sprintf("%s %s", s.Kind, s.Number.Text)
+		kind := "volume"
+		if s.Kind == KindPart {
+			kind = "part"
+		}
+		p := fmt.Sprintf("%s %s", kind, s.Number.Text)
 		if s.Of > 0 {
 			p += fmt.Sprintf(" of %g", s.Of)
 		}
