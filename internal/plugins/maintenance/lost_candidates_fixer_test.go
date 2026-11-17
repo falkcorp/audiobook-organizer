@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/lost_candidates_fixer_test.go
-// version: 1.1.5
+// version: 1.1.6
 // guid: cde35f5b-18f6-420d-bbdf-ba221050c4b8
-// last-edited: 2026-11-12
+// last-edited: 2026-11-17
 
 package maintenance
 
@@ -269,4 +269,44 @@ func TestLostCandidatesFixer_Registered(t *testing.T) {
 	// It writes only the candidate cache, so its long refetch run does not
 	// park the library scan (the engine takes no stand-down for it).
 	require.True(t, repairs.SkipsScanStandDown(f))
+}
+
+// A retired book (merged into another book, as well as trashed) has no
+// candidates worth refetching: a refetch spends provider quota on a row no
+// apply accepts. The plan leaves it out, and a planned row whose book was
+// retired since comes back skipped for the right reason ("retired", not "gone"
+// and not a generic "refetch found no candidates (fetch status skipped)").
+func TestLostCandidatesFixer_RetiredBooksAreNotPlannedAndReplanNamesWhy(t *testing.T) {
+	l := newLCLib(t)
+	l.book("merged", "/lib/R/Merged", "matched", func(b *database.Book) { b.MergedIntoBookID = new("someone-else") })
+	l.book("live", "/lib/R/Live", "matched", nil)
+	l.book("trashed-later", "/lib/R/Trashed Later", "matched", nil)
+	l.book("merged-later", "/lib/R/Merged Later", "matched", nil)
+
+	plan, rows := l.plan()
+	_, mergedListed := rows["merged"]
+	require.False(t, mergedListed, "a merged book is not a lost-candidates row")
+	for _, k := range []string{"live", "trashed-later", "merged-later"} {
+		require.True(t, rows[k].Applicable(), k)
+	}
+
+	trash := true
+	_, err := l.st.ModifyBook(l.ids["trashed-later"], func(b *database.Book) error { b.MarkedForDeletion = &trash; return nil })
+	require.NoError(t, err)
+	_, err = l.st.ModifyBook(l.ids["merged-later"], func(b *database.Book) error { b.MergedIntoBookID = new("someone-else"); return nil })
+	require.NoError(t, err)
+
+	for _, k := range []string{"trashed-later", "merged-later"} {
+		got, err := l.fixer.Replan(context.Background(), nil, rows[k], &fakeReporter{})
+		require.NoError(t, err)
+		require.Equal(t, "retired", got.Skipped, "%s: a retired book is skipped as retired", k)
+		require.False(t, got.Applicable(), k)
+		require.NotEqual(t, rows[k].Fingerprint, got.Fingerprint, "%s: the plan is stale", k)
+	}
+
+	res := l.apply(plan, false, "live", "trashed-later", "merged-later")
+	require.Equal(t, repairs.OutcomeApplied, lcRowResult(res, l.ids["live"]).Outcome)
+	require.Equal(t, repairs.OutcomeChangedSincePlan, lcRowResult(res, l.ids["trashed-later"]).Outcome)
+	require.Equal(t, repairs.OutcomeChangedSincePlan, lcRowResult(res, l.ids["merged-later"]).Outcome)
+	require.Equal(t, []string{l.ids["live"]}, l.deps.refetched, "a retired book is never refetched")
 }

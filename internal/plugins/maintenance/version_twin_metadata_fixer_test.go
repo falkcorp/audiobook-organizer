@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer_test.go
-// version: 1.3.5
+// version: 1.3.6
 // guid: 7a1e3c95-4d28-4b6f-a0c7-93e2d5b8f146
-// last-edited: 2026-11-12
+// last-edited: 2026-11-17
 
 package maintenance
 
@@ -460,6 +460,39 @@ func TestVersionTwinFixer_UnderLockGuardRefusesDemotedPrimary(t *testing.T) {
 	require.Nil(t, p.MetadataReviewStatus)
 	require.Empty(t, dcStr(p.Narrator))
 	require.False(t, *p.IsPrimaryVersion)
+}
+
+// A primary retired (trashed, or merged into another book) between the re-plan
+// and the write is refused inside the apply, and the row reports
+// changed_since_plan like every other race, not a failure: the metafetch apply
+// refuses a retired book before this fixer's own under-lock guard runs, so the
+// refusal has to be mapped back.
+func TestVersionTwinFixer_PrimaryRetiredBeforeWriteIsChangedSincePlan(t *testing.T) {
+	retire := map[string]func(*database.Book) error{
+		"trashed": func(b *database.Book) error { b.MarkedForDeletion = new(true); return nil },
+		"merged":  func(b *database.Book) error { b.MergedIntoBookID = new("someone-else"); return nil },
+	}
+	for name, mutate := range retire {
+		t.Run(name, func(t *testing.T) {
+			l := newVTLib(t)
+			l.book("p", "g-retire-race", true, nil)
+			l.appliedTwin("t", "g-retire-race", vtSaga(), nil)
+			_, rows := l.plan()
+			fresh, err := l.fixer.Replan(context.Background(), nil, rows["g-retire-race"], &fakeReporter{})
+			require.NoError(t, err)
+			require.True(t, fresh.Applicable(), fresh.SkipReason)
+
+			_, err = l.st.ModifyBook(l.ids["p"], mutate)
+			require.NoError(t, err)
+			w := repairs.NewWriter(l.st, l.st, l.fixer.ID(), "bulk_update", "repairs-").WithJournal(l.st, l.st, vtTestOpID)
+			err = l.fixer.Apply(context.Background(), w, fresh)
+			require.Error(t, err)
+			require.True(t, errors.Is(err, repairs.ErrChangedSincePlan), "got %v", err)
+			p := l.get("p")
+			require.Nil(t, p.MetadataReviewStatus, "a retired primary must not be written")
+			require.Empty(t, dcStr(p.Narrator))
+		})
+	}
 }
 
 // The fixer is registered in the Repairs lane, cleared for iTunes twins'
