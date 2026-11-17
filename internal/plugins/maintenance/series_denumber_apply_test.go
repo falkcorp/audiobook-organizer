@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_apply_test.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 4c93e07a-1d62-4b8e-a5f3-90b7c1de2846
 // last-edited: 2026-11-16
 
@@ -877,6 +877,28 @@ func TestRunSeriesDenumber_ANumberedSeriesWhoseBooksAreAllHeldCreatesNoBase(t *t
 	}
 	if l.seriesOf("owls-9-own") != 11 || l.seqOf("owls-9-own") != "9" || l.deleted[11] {
 		t.Errorf("the held book or its series changed: series %d at %s, deleted=%v", l.seriesOf("owls-9-own"), l.seqOf("owls-9-own"), l.deleted[11])
+	}
+}
+
+// A series a repair holds (Series.HeldBy) is never deleted, even when this run
+// moves every book out of it: that repair's own undo needs the row.
+func TestRunSeriesDenumber_ASeriesAnotherRepairHoldsIsMergedButNotDeleted(t *testing.T) {
+	l := newDenumberLib(t)
+	l.addSeries(10, "Court of Owls", denumberAuthor)
+	l.addSeries(11, "Court of Owls 05", denumberAuthor)
+	l.series[len(l.series)-1].HeldBy = "series-prune-fixer"
+	l.addBook("owls-5", 11, -1, "")
+
+	l.mustRun(`{"apply": true}`)
+
+	if l.seriesOf("owls-5") != 10 {
+		t.Fatalf("the book did not move: series %d", l.seriesOf("owls-5"))
+	}
+	if l.deleted[11] {
+		t.Errorf("a held series was deleted")
+	}
+	if rows := l.changesOfType(undo.ChangeTypeSeriesRowDelete); len(rows) != 0 {
+		t.Errorf("%d series_row_delete rows for a delete that must not happen", len(rows))
 	}
 }
 
