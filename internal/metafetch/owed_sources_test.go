@@ -1,7 +1,7 @@
 // file: internal/metafetch/owed_sources_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 7d2e9a40-3b15-4c86-a1f7-0e5c9d84b263
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package metafetch
 
@@ -87,9 +87,11 @@ func (f *owedFixture) sources(e *MetadataCandidateCache) []string {
 	return out
 }
 
-func (f *owedFixture) record(resp *SearchMetadataResponse, u OwedUpdate) {
+func (f *owedFixture) record(resp *SearchMetadataResponse, u OwedUpdate) (gaveUp []string) {
 	f.t.Helper()
-	require.NoError(f.t, f.mfs.RecordChainOwed(f.bk.ID, f.hash, resp.InputFingerprint, u))
+	gaveUp, err := f.mfs.RecordChainOwed(f.bk.ID, f.hash, resp.InputFingerprint, u)
+	require.NoError(f.t, err)
+	return gaveUp
 }
 
 func TestRecordChainOwed_FailureCountsAsksAndAnswerClears(t *testing.T) {
@@ -131,14 +133,24 @@ func TestRecordChainOwed_OnlyWritesTheRowItWasAskedFor(t *testing.T) {
 	u := OwedUpdate{Failed: map[string]string{"B": metadata.CauseUpstream}}
 
 	// Another book's inputs, or another question: nothing is written.
-	require.NoError(t, f.mfs.RecordChainOwed(f.bk.ID, "some-other-hash", resp.InputFingerprint, u))
-	require.NoError(t, f.mfs.RecordChainOwed(f.bk.ID, f.hash, "some-other-fingerprint", u))
-	require.NoError(t, f.mfs.RecordChainOwed(f.bk.ID, f.hash, resp.InputFingerprint, OwedUpdate{}))
-	require.NoError(t, f.mfs.RecordChainOwed("no-such-book", f.hash, resp.InputFingerprint, u))
+	for _, c := range []struct {
+		id, hash, fp string
+		u            OwedUpdate
+	}{
+		{f.bk.ID, "some-other-hash", resp.InputFingerprint, u},
+		{f.bk.ID, f.hash, "some-other-fingerprint", u},
+		{f.bk.ID, f.hash, resp.InputFingerprint, OwedUpdate{}},
+		{"no-such-book", f.hash, resp.InputFingerprint, u},
+	} {
+		gaveUp, err := f.mfs.RecordChainOwed(c.id, c.hash, c.fp, c.u)
+		require.NoError(t, err)
+		require.Empty(t, gaveUp)
+	}
 	require.Empty(t, f.row().OwedSources)
 
 	var nilSvc *Service
-	require.NoError(t, nilSvc.RecordChainOwed(f.bk.ID, f.hash, resp.InputFingerprint, u))
+	_, err := nilSvc.RecordChainOwed(f.bk.ID, f.hash, resp.InputFingerprint, u)
+	require.NoError(t, err)
 }
 
 // owe puts B on the row as owed, asked n times, last at at.
@@ -258,4 +270,176 @@ func TestCacheSearch_FailedSourceKeepsItsEarlierCandidates(t *testing.T) {
 	require.Contains(t, resp.SourcesFailed, "B")
 	require.NotEqual(t, f.row().SearchFingerprint, "")
 	require.NotContains(t, f.sources(f.row()), "B", "B's candidate from another question was carried")
+}
+
+// Every writer of the row -- the batch op, the search dialog -- hashes different
+// hints into it, yet asks the same questions: the debt must survive a row
+// rewritten under another input hash, and be cleared by one that hears the source.
+func TestCacheSearch_OwedDebtSurvivesAnotherInputHash(t *testing.T) {
+	f := newOwedFixture(t, true)
+	_, resp := f.fetch(nil, false)
+	f.record(resp, OwedUpdate{Failed: map[string]string{"B": metadata.CauseUpstream}, Answered: []string{"A"}})
+	before := f.row().OwedSources["B"]
+	require.Equal(t, 1, before.Attempts)
+
+	// The dialog's plain fetch: no query, so another SourceHash for the same book.
+	withNow(t, f.t0.Add(time.Hour))
+	_, resp2, err := f.mfs.FetchAndCacheWithResponse(context.Background(), nil, f.bk.ID, "", "", "", "", SearchOptions{})
+	require.NoError(t, err)
+	require.Contains(t, resp2.SourcesFailed, "B")
+	require.NotEqual(t, f.hash, f.row().SourceHash, "the fixture must exercise a different hash")
+	require.Equal(t, map[string]database.OwedSource{"B": before}, f.row().OwedSources,
+		"a row rewritten under another input hash forgot the debt")
+
+	// B is back and the same dialog search hears it: no longer owed.
+	f.b.byTitleErr = nil
+	withNow(t, f.t0.Add(2*time.Hour))
+	_, _, err = f.mfs.FetchAndCacheWithResponse(context.Background(), nil, f.bk.ID, "", "", "", "", SearchOptions{})
+	require.NoError(t, err)
+	require.Empty(t, f.row().OwedSources, "a search that heard B left it owed")
+}
+
+// The debt belongs to the questions: asked about another title it is dropped,
+// and so is the debt of a row past its TTL, whose failing source starts a fresh
+// schedule (the rule OwedSource.Exhausted documents).
+func TestCacheSearch_OwedDebtIsDroppedForOtherQuestionsAndPastTheTTL(t *testing.T) {
+	f := newOwedFixture(t, true)
+	_, resp := f.fetch(nil, false)
+	f.record(resp, OwedUpdate{Failed: map[string]string{"B": metadata.CauseUpstream}, Answered: []string{"A"}})
+
+	// Past the TTL: not carried.
+	withNow(t, f.t0.Add(database.MetadataCacheTTL+time.Hour))
+	f.fetch(nil, false)
+	require.Empty(t, f.row().OwedSources, "a row past its TTL carried its debt")
+	// The failed source is then recorded afresh, as a first failure.
+	gaveUp := f.record(resp, OwedUpdate{Failed: map[string]string{"B": metadata.CauseUpstream}, Answered: []string{"A"}})
+	require.Empty(t, gaveUp)
+	o := f.row().OwedSources["B"]
+	require.Equal(t, 1, o.Attempts)
+	require.False(t, o.Exhausted())
+
+	// Another title: the questions differ, the debt goes.
+	withNow(t, f.t0.Add(database.MetadataCacheTTL+2*time.Hour))
+	retitled := *f.bk
+	retitled.Title = owedTitle + " (Retitled)"
+	_, err := f.store.UpdateBook(f.bk.ID, &retitled)
+	require.NoError(t, err)
+	f.fetch(nil, false)
+	require.Empty(t, f.row().OwedSources, "the debt of other questions was carried")
+}
+
+// The fifth failed ask is the last, and says so once; a spent source is not
+// charged on, and an explicit retry (Reset) starts its schedule over.
+func TestRecordChainOwed_GivingUpIsReportedOnceAndAResetStartsOver(t *testing.T) {
+	f := newOwedFixture(t, true)
+	_, resp := f.fetch(nil, false)
+	fail := OwedUpdate{Failed: map[string]string{"B": metadata.CauseTimeout}}
+
+	f.owe(database.OwedMaxAsks-1, f.t0)
+	withNow(t, f.t0.Add(8*24*time.Hour))
+	require.Equal(t, []string{"B"}, f.record(resp, fail), "the last ask did not report giving up")
+	require.Equal(t, database.OwedMaxAsks, f.row().OwedSources["B"].Attempts)
+	require.True(t, f.row().OwedSources["B"].Exhausted())
+	require.Equal(t, []string{"B"}, f.row().OwedExhaustedSources())
+	require.Empty(t, f.row().OwedPendingSources())
+
+	// Past the cap: reported no more, not charged on.
+	withNow(t, f.t0.Add(9*24*time.Hour))
+	require.Empty(t, f.record(resp, fail))
+	require.Equal(t, database.OwedMaxAsks, f.row().OwedSources["B"].Attempts, "a spent source was charged past the cap")
+
+	// An owner retry that fails again restarts the schedule: Attempts 1, Since now.
+	reset := fail
+	reset.Reset = true
+	withNow(t, f.t0.Add(10*24*time.Hour))
+	require.Empty(t, f.record(resp, reset))
+	o := f.row().OwedSources["B"]
+	require.Equal(t, 1, o.Attempts, "a forced retry stepped on a spent schedule")
+	require.True(t, o.Since.Equal(f.t0.Add(10*24*time.Hour)), "Since did not restart: %+v", o)
+	require.False(t, o.Exhausted())
+	require.Equal(t, []string{"B"}, f.row().OwedPendingSources())
+	// A Reset on a source that is not owed is just its first failure.
+	f.owe(1, f.t0)
+	withNow(t, f.t0.Add(11*24*time.Hour))
+	require.Empty(t, f.record(resp, reset))
+	require.Equal(t, 1, f.row().OwedSources["B"].Attempts)
+}
+
+// One window is one ask: a writer that read the row before another charged it
+// (OwedUpdate.Seen) charges nothing when it records; one that read it as it is
+// still charges; a caller that read nothing (nil Seen) always does.
+func TestRecordChainOwed_SeenGuardChargesOneAskPerWindow(t *testing.T) {
+	f := newOwedFixture(t, true)
+	_, resp := f.fetch(nil, false)
+	f.owe(1, f.t0)
+	fail := func(seen map[string]time.Time) OwedUpdate {
+		return OwedUpdate{Failed: map[string]string{"B": metadata.CauseUpstream}, Seen: seen}
+	}
+	seen := map[string]time.Time{"B": f.t0} // what two askers both read
+
+	withNow(t, f.t0.Add(7*time.Hour))
+	f.record(resp, fail(seen))
+	require.Equal(t, 2, f.row().OwedSources["B"].Attempts)
+	first := f.row().OwedSources["B"].LastAttempt
+
+	// The second asker of the same window: charged nothing, row untouched.
+	withNow(t, f.t0.Add(7*time.Hour+time.Minute))
+	f.record(resp, fail(seen))
+	o := f.row().OwedSources["B"]
+	require.Equal(t, 2, o.Attempts, "two askers of one window charged two asks")
+	require.True(t, o.LastAttempt.Equal(first), "the skipped charge moved the row")
+
+	// A fresh read of the row charges the next window.
+	withNow(t, f.t0.Add(32*time.Hour))
+	f.record(resp, fail(map[string]time.Time{"B": first}))
+	require.Equal(t, 3, f.row().OwedSources["B"].Attempts)
+	// nil Seen: unconditional.
+	withNow(t, f.t0.Add(33*time.Hour))
+	f.record(resp, fail(nil))
+	require.Equal(t, 4, f.row().OwedSources["B"].Attempts)
+	// A source the row no longer owes is charged as a first failure whatever the
+	// asker saw (a TTL refetch dropped the debt it read).
+	e := f.row()
+	e.OwedSources = nil
+	require.NoError(t, f.store.PutMetadataCache(e))
+	f.record(resp, fail(map[string]time.Time{"B": f.t0}))
+	require.Equal(t, 1, f.row().OwedSources["B"].Attempts)
+}
+
+// A full search asks Audnexus only through the direct ASIN lookup, which is no
+// title question (not in SourcesAsked): hearing from it must still clear the
+// debt, and a lookup that failed must not.
+func TestAnsweredSources_CountsTheDirectASINLookup(t *testing.T) {
+	resp := &SearchMetadataResponse{
+		SourcesAsked:        []string{"Audible"},
+		SourcesAnswered:     []string{"Audible", "Audnexus (Audible)"},
+		SourcesASINAnswered: []string{"Audnexus (Audible)"},
+	}
+	require.ElementsMatch(t, []string{"Audible", "Audnexus (Audible)"}, resp.AnsweredSources())
+	// Without the lookup's answer, an ASIN-only source that sent nothing is not heard from.
+	resp.SourcesASINAnswered = nil
+	require.Equal(t, []string{"Audible"}, resp.AnsweredSources())
+	// A lookup that failed is not an answer.
+	resp.SourcesASINAnswered = []string{"Audnexus (Audible)"}
+	resp.SourcesFailed = map[string]string{"Audnexus (Audible)": "502"}
+	require.Equal(t, []string{"Audible"}, resp.AnsweredSources())
+}
+
+// OwedUpdateOf names only the chain's own sources as owed, each with its cause.
+func TestOwedUpdateOf_OnlyActiveChainSourcesAreOwed(t *testing.T) {
+	resp := &SearchMetadataResponse{SourcesFailed: map[string]string{"A": "502", "Some Other Label": "boom"}}
+	u := OwedUpdateOf(resp, []string{"A", "B"})
+	require.Len(t, u.Failed, 1)
+	require.NotEmpty(t, u.Failed["A"])
+	require.Equal(t, OwedUpdate{}, OwedUpdateOf(nil, nil))
+}
+
+// Service.Now is the overridable clock itself, the one callers outside this
+// package (the candidate fetch's selection) use to agree with the verdict.
+func TestServiceNow_IsTheOverridableClock(t *testing.T) {
+	at := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	restore := SetClockForTesting(func() time.Time { return at })
+	require.True(t, (&Service{}).Now().Equal(at))
+	restore()
+	require.WithinDuration(t, time.Now(), (&Service{}).Now(), time.Minute)
 }

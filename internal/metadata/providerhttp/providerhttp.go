@@ -1,5 +1,5 @@
 // file: internal/metadata/providerhttp/providerhttp.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 5c9e2a71-4b83-4f16-9d40-8e73a1b5c206
 // last-edited: 2026-11-17
 
@@ -22,12 +22,10 @@ package providerhttp
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"math"
 	"math/rand"
-	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -64,19 +62,16 @@ type Limits struct {
 	// A deadline set by the caller around the request covers the queue, and with
 	// N workers on a bucket of rate r the queue alone is N/r seconds: 20 workers
 	// on 2 rps spent a 10 s caller deadline entirely waiting (Audnexus, 2026-11-16).
-	// The one retry an attempt timeout gets (maxTimeoutRetries) is inside Timeout.
 	//
-	// Worst case of one call: AttemptTimeout, a backoff of at most 1.5 s, and
-	// AttemptTimeout again -- 21.5 s for Audnexus's 10 s, under its 30 s Timeout,
-	// which cuts the call off in any case (it covers the queue for the bucket
-	// too, so a call that waited long for its token has less than that left).
-	// The ASIN lookup stops at the first region that times out
-	// (metadata.AudnexusClient.LookupByASINInRegions), so a lookup in which
-	// the service hangs ends in one region's worst case: 21.5 s and two
-	// requests. Before the attempt bound each region had a 10 s deadline of
-	// its own, queue included, so the same hung lookup took 3 x 10 s = 30 s
-	// and three requests; the bound is under that in time and one request
-	// short of it.
+	// A timed-out attempt is NOT retried here: the caller's own schedule is the
+	// retry (the candidate cache re-asks a source that could not answer, on a
+	// backoff, MetadataCandidateCache.OwedSources), and a second try inside the
+	// call would double the time a hung provider ties a worker up.
+	//
+	// A group of calls that must share one time budget (the Audnexus ASIN lookup's
+	// regions) carries it on the context: WithAttemptBudget. Each attempt is then
+	// bounded by the smaller of AttemptTimeout and what is left of the budget, and
+	// is charged against it when it ends.
 	AttemptTimeout time.Duration
 }
 
@@ -315,14 +310,6 @@ func resetForTest() {
 	overrides = map[string]Limits{}
 }
 
-// maxTimeoutRetries is how many times one call re-sends a request whose attempt
-// timed out (AttemptTimeout) while the caller's own context was still live. One:
-// a retry takes a fresh token from the same bucket, so a provider that is truly
-// slow gets a second chance and no more, and the retry is counted against the
-// daily quota like any request. Throttling statuses keep their own bound
-// (maxRetries).
-const maxTimeoutRetries = 1
-
 // waitFor sleeps for d, or until ctx is done (then it returns the context's
 // error). A variable so tests record the backoff instead of waiting it out.
 var waitFor = func(ctx context.Context, d time.Duration) error {
@@ -334,6 +321,60 @@ var waitFor = func(ctx context.Context, d time.Duration) error {
 	case <-t.C:
 		return nil
 	}
+}
+
+// attemptNow is the clock an attempt is timed with. A variable so tests advance
+// it by the deadline they fire instead of waiting.
+var attemptNow = time.Now
+
+// ErrAttemptBudgetSpent is returned, with nothing sent, by a call whose
+// WithAttemptBudget budget has no time left. It wraps context.DeadlineExceeded,
+// so it classifies as a timeout, and a caller walking a list of regions can end
+// the walk on it.
+var ErrAttemptBudgetSpent = fmt.Errorf("attempt budget spent: %w", context.DeadlineExceeded)
+
+// attemptBudget is the time a group of calls may spend in exchanges with the
+// provider, measured from when each attempt holds its token (the queue is not
+// charged: that is what AttemptTimeout is for).
+type attemptBudget struct {
+	mu        sync.Mutex
+	remaining time.Duration
+}
+
+func (b *attemptBudget) left() time.Duration {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.remaining
+}
+
+func (b *attemptBudget) charge(d time.Duration) {
+	if d < 0 {
+		d = 0
+	}
+	b.mu.Lock()
+	b.remaining -= d
+	b.mu.Unlock()
+}
+
+type attemptBudgetKey struct{}
+
+// WithAttemptBudget returns a context whose calls through a provider that has an
+// AttemptTimeout share total of exchange time: each attempt gets at most what is
+// left, is charged what it used when it ends, and a call that finds none left
+// fails with ErrAttemptBudgetSpent before sending. A provider without an
+// AttemptTimeout ignores it. It bounds the sum over a loop (the regions of one
+// lookup), which a per-attempt bound cannot.
+func WithAttemptBudget(ctx context.Context, total time.Duration) context.Context {
+	return context.WithValue(ctx, attemptBudgetKey{}, &attemptBudget{remaining: total})
+}
+
+// AttemptBudgetLeft reports what is left of the budget ctx carries, and whether
+// it carries one.
+func AttemptBudgetLeft(ctx context.Context) (time.Duration, bool) {
+	if b, ok := ctx.Value(attemptBudgetKey{}).(*attemptBudget); ok {
+		return b.left(), true
+	}
+	return 0, false
 }
 
 // attemptContext derives the context one exchange runs under. A variable so
@@ -396,8 +437,26 @@ func (t *throttled) RoundTrip(req *http.Request) (*http.Response, error) {
 		// Limits.AttemptTimeout.
 		attemptReq, endAttempt := req, context.CancelFunc(func() {})
 		if t.attemptTimeout > 0 {
-			actx, cancel := attemptContext(ctx, t.attemptTimeout)
-			attemptReq, endAttempt = req.WithContext(actx), cancel
+			d := t.attemptTimeout
+			budget, _ := ctx.Value(attemptBudgetKey{}).(*attemptBudget)
+			if budget != nil {
+				left := budget.left()
+				if left <= 0 {
+					return nil, fmt.Errorf("providerhttp %s: %w", t.provider, ErrAttemptBudgetSpent)
+				}
+				d = min(d, left)
+			}
+			started := attemptNow()
+			actx, cancel := attemptContext(ctx, d)
+			var once sync.Once
+			attemptReq, endAttempt = req.WithContext(actx), func() {
+				once.Do(func() {
+					cancel()
+					if budget != nil {
+						budget.charge(attemptNow().Sub(started))
+					}
+				})
+			}
 		}
 		// deliver hands resp to the caller, tying the attempt's context to its
 		// body.
@@ -413,19 +472,8 @@ func (t *throttled) RoundTrip(req *http.Request) (*http.Response, error) {
 		resp, err := t.base.RoundTrip(attemptReq)
 		if err != nil {
 			endAttempt()
-			// The attempt ran out of time (or the network said it did) while
-			// the caller is still waiting: one bounded retry with backoff. A
-			// caller that has given up (ctx done) gets the error as before.
-			// Only a provider that has an AttemptTimeout retries a timeout: a
-			// zero-value one sends one request and returns the error, as
-			// before.
-			if t.attemptTimeout > 0 && ctx.Err() == nil && attempt < min(t.maxRetries, maxTimeoutRetries) && retryableTimeout(err) &&
-				(req.Body == nil || req.Body == http.NoBody) {
-				if werr := waitFor(ctx, backoffDelay(attempt)); werr != nil {
-					return nil, werr
-				}
-				continue
-			}
+			// A timed-out attempt is returned as it is: the caller's own
+			// schedule retries (see Limits.AttemptTimeout).
 			return nil, err
 		}
 
@@ -468,16 +516,6 @@ func (t *throttled) RoundTrip(req *http.Request) (*http.Response, error) {
 			req.Body = replay
 		}
 	}
-}
-
-// retryableTimeout reports whether err is an exchange that timed out: our
-// attempt deadline, or the network's own timeout (a dial or TLS handshake).
-func retryableTimeout(err error) bool {
-	if errors.Is(err, context.DeadlineExceeded) {
-		return true
-	}
-	var ne net.Error
-	return errors.As(err, &ne) && ne.Timeout()
 }
 
 // shouldRetry reports whether a status code represents throttling or a

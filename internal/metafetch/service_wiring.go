@@ -1,12 +1,13 @@
 // file: internal/metafetch/service_wiring.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 571bfbf4-238b-49cb-a6d8-b302921dd1c4
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package metafetch
 
 import (
 	"context"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
@@ -35,6 +36,19 @@ func (mfs *Service) SetOverrideSources(sources []metadata.MetadataSource) {
 // lookupASIN), so there is no other seam for a failing lookup.
 func (mfs *Service) SetASINLookupOverride(fn func(ctx context.Context, providerID, asin string) (*metadata.BookMetadata, error)) {
 	mfs.asinLookupOverride = fn
+}
+
+// SetClockForTesting replaces the clock the cache's freshness, the owed-source
+// backoff and the candidate fetch's selection read (nowUTC, Service.Now) with
+// fn, and returns the function that puts the previous one back. Production code
+// never calls it. An exported setter for the same reason as
+// SetASINLookupOverride: internal/server's tests drive the real selection and
+// cannot see this package's _test.go files. The clock is process-wide, so a test
+// that sets it must not run in parallel with another that reads it.
+func SetClockForTesting(fn func() time.Time) (restore func()) {
+	prev := nowUTC
+	nowUTC = fn
+	return func() { nowUTC = prev }
 }
 
 // SetActivityService sets the activity service for dual-writing to the unified activity log.

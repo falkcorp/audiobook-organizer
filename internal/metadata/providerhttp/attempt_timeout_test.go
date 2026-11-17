@@ -1,5 +1,5 @@
 // file: internal/metadata/providerhttp/attempt_timeout_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 9b4f7e21-0c58-4d3a-a6e9-3f1d82b7c405
 // last-edited: 2026-11-17
 
@@ -131,68 +131,35 @@ func TestAttemptTimeout_ZeroAddsNoDeadline(t *testing.T) {
 	_ = resp.Body.Close()
 }
 
-// An attempt that times out is retried ONCE, after a backoff, and the retry
-// takes a fresh token.
-func TestAttemptTimeout_TimeoutRetriedOnceWithBackoff(t *testing.T) {
-	var delays []time.Duration
-	swapSeams(t, func(_ context.Context, d time.Duration) error { delays = append(delays, d); return nil }, nil)
-	ev := &events{}
-	var calls atomic.Int32
-	tr := &throttled{
-		base: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-			if calls.Add(1) == 1 {
-				return nil, context.DeadlineExceeded
-			}
-			return okResponse(r), nil
-		}),
-		limiter:        recordingWaiter{ev},
-		provider:       "test",
-		maxRetries:     3,
-		attemptTimeout: 10 * time.Second,
-	}
-	req, _ := http.NewRequest(http.MethodGet, "http://192.0.2.1/x", nil)
-	resp, err := tr.RoundTrip(req)
-	if err != nil {
-		t.Fatalf("the retry should have succeeded: %v", err)
-	}
-	_ = resp.Body.Close()
-
-	if calls.Load() != 2 {
-		t.Fatalf("exchanges = %d, want 2 (timeout + one retry)", calls.Load())
-	}
-	if len(delays) != 1 || delays[0] < time.Second || delays[0] > 1500*time.Millisecond {
-		t.Fatalf("backoff = %v, want one delay in [1s, 1.5s]", delays)
-	}
-	if got := ev.list(); len(got) != 2 {
-		t.Fatalf("tokens taken = %v, want one per exchange (the retry re-queues)", got)
-	}
-}
-
-// A provider that keeps timing out is not hammered: one retry, then the error.
-func TestAttemptTimeout_RetryIsBounded(t *testing.T) {
-	var delays []time.Duration
-	swapSeams(t, func(_ context.Context, d time.Duration) error { delays = append(delays, d); return nil }, nil)
-	var calls atomic.Int32
-	tr := &throttled{
-		base: roundTripFunc(func(*http.Request) (*http.Response, error) {
-			calls.Add(1)
-			return nil, context.DeadlineExceeded
-		}),
-		limiter:        rate.NewLimiter(rate.Inf, 1),
-		provider:       "test",
-		maxRetries:     3, // the throttling bound is larger; the timeout bound still holds
-		attemptTimeout: 10 * time.Second,
-	}
-	req, _ := http.NewRequest(http.MethodGet, "http://192.0.2.1/x", nil)
-	_, err := tr.RoundTrip(req)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("err = %v, want the timeout surfaced", err)
-	}
-	if calls.Load() != 1+maxTimeoutRetries {
-		t.Fatalf("exchanges = %d, want %d", calls.Load(), 1+maxTimeoutRetries)
-	}
-	if len(delays) != maxTimeoutRetries {
-		t.Fatalf("backoffs = %v, want %d", delays, maxTimeoutRetries)
+// A timed-out attempt is NOT retried inside the call, for any provider, whether
+// the timeout is our attempt deadline or the network's own (a dial timeout): the
+// caller's schedule is the retry, and a second try would double the time a hung
+// provider ties a worker up.
+func TestAttemptTimeout_ATimeoutIsNotRetriedInTheCall(t *testing.T) {
+	for name, terr := range map[string]error{
+		"attempt deadline": context.DeadlineExceeded,
+		"dial timeout":     &net.OpError{Op: "dial", Net: "tcp", Err: timeoutErr{}},
+	} {
+		for _, attemptTimeout := range []time.Duration{0, 10 * time.Second} {
+			t.Run(name, func(t *testing.T) {
+				swapSeams(t, func(context.Context, time.Duration) error { t.Error("a backoff after a timeout"); return nil }, nil)
+				var calls atomic.Int32
+				tr := &throttled{
+					base:           roundTripFunc(func(*http.Request) (*http.Response, error) { calls.Add(1); return nil, terr }),
+					limiter:        rate.NewLimiter(rate.Inf, 1),
+					provider:       "test",
+					maxRetries:     3,
+					attemptTimeout: attemptTimeout,
+				}
+				req, _ := http.NewRequest(http.MethodGet, "http://192.0.2.1/x", nil)
+				if _, err := tr.RoundTrip(req); !errors.Is(err, terr) {
+					t.Fatalf("err = %v, want the timeout surfaced", err)
+				}
+				if calls.Load() != 1 {
+					t.Fatalf("requests = %d, want 1 (attemptTimeout %v)", calls.Load(), attemptTimeout)
+				}
+			})
+		}
 	}
 }
 
@@ -222,7 +189,7 @@ func TestAttemptTimeout_CallerGivingUpIsNotRetried(t *testing.T) {
 }
 
 // End to end over the real transport: the attempt deadline (already expired,
-// via the seam) fails the exchange, which is retried once and then surfaced.
+// via the seam) fails the exchange, which is surfaced as it is.
 func TestAttemptTimeout_RealTransportExpiredAttempt(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1) }))
@@ -299,36 +266,6 @@ func TestAttemptTimeout_AudnexusDefaultSurvivesOverride(t *testing.T) {
 	}
 }
 
-// A provider with no AttemptTimeout configured must behave exactly as it did
-// before the field existed: a dial timeout (a net.Error that reports Timeout)
-// is one request and the error, not a second request after a backoff.
-func TestAttemptTimeout_ZeroValueProviderSendsOneRequestOnDialTimeout(t *testing.T) {
-	swapSeams(t, func(context.Context, time.Duration) error {
-		t.Error("backoff for a provider with no attempt timeout")
-		return nil
-	}, nil)
-	var calls atomic.Int32
-	dialTimeout := &net.OpError{Op: "dial", Net: "tcp", Err: timeoutErr{}}
-	tr := &throttled{
-		base: roundTripFunc(func(*http.Request) (*http.Response, error) {
-			calls.Add(1)
-			return nil, dialTimeout
-		}),
-		limiter:    rate.NewLimiter(rate.Inf, 1),
-		provider:   "test",
-		maxRetries: 3,
-		// attemptTimeout is zero: the zero-value provider.
-	}
-	req, _ := http.NewRequest(http.MethodGet, "http://192.0.2.1/x", nil)
-	_, err := tr.RoundTrip(req)
-	if !errors.Is(err, dialTimeout) {
-		t.Fatalf("err = %v, want the dial timeout surfaced", err)
-	}
-	if calls.Load() != 1 {
-		t.Fatalf("requests = %d, want 1 for a provider with no AttemptTimeout", calls.Load())
-	}
-}
-
 // timeoutErr is a net.Error whose Timeout() is true, the shape of a dial or
 // TLS-handshake timeout.
 type timeoutErr struct{}
@@ -337,52 +274,174 @@ func (timeoutErr) Error() string   { return "i/o timeout" }
 func (timeoutErr) Timeout() bool   { return true }
 func (timeoutErr) Temporary() bool { return true }
 
-// The worst case of one call, by the clock the transport would see: every
-// attempt times out, and the time charged is each attempt's full deadline plus
-// the backoff actually taken (the injectable wait records it). It must stay
-// inside the provider's Timeout -- the Audnexus built-ins give 21.5 s of 30 s
-// -- and, with the lookup stopping at the first region that times out, a whole
-// lookup inside what three of the old 10 s per-region deadlines were.
-func TestAttemptTimeout_WorstCaseStaysInsideTimeout(t *testing.T) {
-	resetForTest()
-	t.Cleanup(resetForTest)
-	l := EffectiveLimitsFor("audnexus")
-	if l.AttemptTimeout <= 0 {
-		t.Fatal("audnexus has no AttemptTimeout; the bound below is moot")
-	}
-	var charged time.Duration
-	swapSeams(t, func(_ context.Context, d time.Duration) error { charged += d; return nil },
-		func(p context.Context, d time.Duration) (context.Context, context.CancelFunc) {
-			charged += d // the attempt ran to its deadline
-			return context.WithCancel(p)
-		})
-	var calls atomic.Int32
-	tr := &throttled{
-		base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+// budgetRig is a clock the test moves and the deadlines the transport gave: the
+// attempt-deadline and clock seams are swapped for it, so 30 s of exchange time
+// is spent without waiting for it.
+type budgetRig struct {
+	mu   sync.Mutex
+	now  time.Time
+	gave []time.Duration
+}
+
+func newBudgetRig(t *testing.T) *budgetRig {
+	t.Helper()
+	r := &budgetRig{now: time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)}
+	oldNow := attemptNow
+	t.Cleanup(func() { attemptNow = oldNow })
+	attemptNow = func() time.Time { r.mu.Lock(); defer r.mu.Unlock(); return r.now }
+	swapSeams(t, nil, func(p context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+		r.mu.Lock()
+		r.gave = append(r.gave, d)
+		r.mu.Unlock()
+		return context.WithCancel(p)
+	})
+	return r
+}
+
+func (r *budgetRig) advance(d time.Duration) { r.mu.Lock(); r.now = r.now.Add(d); r.mu.Unlock() }
+
+func (r *budgetRig) lastGiven() time.Duration {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.gave[len(r.gave)-1]
+}
+
+func (r *budgetRig) deadlines() []time.Duration {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]time.Duration(nil), r.gave...)
+}
+
+// transport builds a throttled transport whose exchange spends took of the fake
+// clock (or its whole given deadline when took is negative, a hang) and then
+// fails with a timeout or answers.
+func (r *budgetRig) transport(attemptTimeout time.Duration, calls *atomic.Int32, hang bool, took time.Duration) *throttled {
+	return &throttled{
+		base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			calls.Add(1)
-			return nil, context.DeadlineExceeded
+			if hang {
+				r.advance(r.lastGiven())
+				return nil, context.DeadlineExceeded
+			}
+			r.advance(took)
+			return okResponse(req), nil
 		}),
 		limiter:        rate.NewLimiter(rate.Inf, 1),
-		provider:       "audnexus",
-		maxRetries:     l.MaxRetries,
-		attemptTimeout: l.AttemptTimeout,
+		provider:       "test",
+		maxRetries:     3,
+		attemptTimeout: attemptTimeout,
 	}
-	req, _ := http.NewRequest(http.MethodGet, "http://192.0.2.1/x", nil)
-	_, _ = tr.RoundTrip(req)
-	if calls.Load() != 1+maxTimeoutRetries {
-		t.Fatalf("requests = %d, want %d", calls.Load(), 1+maxTimeoutRetries)
+}
+
+// Three regions that all hang spend exactly the 30 s budget, send exactly three
+// requests, and a fourth call (the 9-region list's next region) is refused
+// before anything is sent.
+func TestAttemptBudget_HungRegionsSpendTheBudgetAndNoMore(t *testing.T) {
+	rig := newBudgetRig(t)
+	var calls atomic.Int32
+	tr := rig.transport(10*time.Second, &calls, true, 0)
+	ctx := WithAttemptBudget(context.Background(), 30*time.Second)
+	for region := 1; region <= 3; region++ {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://192.0.2.1/x", nil)
+		if _, err := tr.RoundTrip(req); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("region %d err = %v, want a timeout", region, err)
+		}
 	}
-	if charged > l.Timeout {
-		t.Fatalf("one region's worst case = %v, over the provider Timeout %v", charged, l.Timeout)
+	if calls.Load() != 3 {
+		t.Fatalf("requests = %d, want 3", calls.Load())
 	}
-	const (
-		regions        = 3                // audnexusSearchRegions
-		oldRegionLimit = 10 * time.Second // audnexusPerRegionTimeout, queue included
-	)
-	if before := regions * oldRegionLimit; charged > before {
-		t.Fatalf("a hung lookup's worst case = %v, over the %v it was before (%d regions x %v)", charged, before, regions, oldRegionLimit)
+	if left, _ := AttemptBudgetLeft(ctx); left != 0 {
+		t.Fatalf("budget left = %v, want 0 after three 10 s hangs", left)
 	}
-	if charged > 21500*time.Millisecond {
-		t.Fatalf("one region's worst case = %v, documented as at most 21.5s", charged)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://192.0.2.1/x", nil)
+	if _, err := tr.RoundTrip(req); !errors.Is(err, ErrAttemptBudgetSpent) {
+		t.Fatalf("fourth call err = %v, want ErrAttemptBudgetSpent", err)
+	}
+	if calls.Load() != 3 {
+		t.Fatalf("a call past the budget was sent (%d requests)", calls.Load())
+	}
+	if got := rig.deadlines(); len(got) != 3 || got[0] != 10*time.Second || got[2] != 10*time.Second {
+		t.Fatalf("attempt deadlines = %v, want three of 10 s", got)
+	}
+}
+
+// An attempt never gets more than what is left: with 15 s, the second region is
+// held to 5 s and the third is refused.
+func TestAttemptBudget_AnAttemptNeverRunsPastWhatIsLeft(t *testing.T) {
+	rig := newBudgetRig(t)
+	var calls atomic.Int32
+	tr := rig.transport(10*time.Second, &calls, true, 0)
+	ctx := WithAttemptBudget(context.Background(), 15*time.Second)
+	for range 3 {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://192.0.2.1/x", nil)
+		_, _ = tr.RoundTrip(req)
+	}
+	if got := rig.deadlines(); len(got) != 2 || got[0] != 10*time.Second || got[1] != 5*time.Second {
+		t.Fatalf("attempt deadlines = %v, want [10s 5s]", got)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("requests = %d, want 2 (the third had no budget)", calls.Load())
+	}
+}
+
+// A hang in the first region, an answer in the second: the answer comes back, and
+// the budget is charged what was spent (10 s hung + 1 s answering), not the
+// queue.
+func TestAttemptBudget_ALaterRegionAnswersAfterAHangAndTheQueueIsNotCharged(t *testing.T) {
+	rig := newBudgetRig(t)
+	var n atomic.Int32
+	tr := &throttled{
+		base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if n.Add(1) == 1 {
+				rig.advance(rig.lastGiven())
+				return nil, context.DeadlineExceeded
+			}
+			rig.advance(time.Second)
+			return okResponse(req), nil
+		}),
+		// The token wait is the queue: 20 s of fake clock per request, which must
+		// not be charged to the budget.
+		limiter:        clockWaiter{rig, 20 * time.Second},
+		provider:       "test",
+		attemptTimeout: 10 * time.Second,
+	}
+	ctx := WithAttemptBudget(context.Background(), 30*time.Second)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://192.0.2.1/x", nil)
+	if _, err := tr.RoundTrip(req); err == nil {
+		t.Fatal("the first region should have timed out")
+	}
+	req, _ = http.NewRequestWithContext(ctx, http.MethodGet, "http://192.0.2.1/x", nil)
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("second region: %v", err)
+	}
+	_ = resp.Body.Close()
+	if left, _ := AttemptBudgetLeft(ctx); left != 19*time.Second {
+		t.Fatalf("budget left = %v, want 19s (10 s hung + 1 s answering; 40 s of queue not charged)", left)
+	}
+}
+
+type clockWaiter struct {
+	rig *budgetRig
+	d   time.Duration
+}
+
+func (w clockWaiter) Wait(context.Context) error { w.rig.advance(w.d); return nil }
+
+// A provider with no AttemptTimeout ignores a budget on the context: it was
+// never attempt-bounded, so nothing is charged and nothing is refused.
+func TestAttemptBudget_AProviderWithoutAnAttemptTimeoutIgnoresIt(t *testing.T) {
+	rig := newBudgetRig(t)
+	var calls atomic.Int32
+	tr := rig.transport(0, &calls, false, 5*time.Second)
+	ctx := WithAttemptBudget(context.Background(), 0) // already spent
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://192.0.2.1/x", nil)
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("err = %v, want the call sent", err)
+	}
+	_ = resp.Body.Close()
+	if len(rig.deadlines()) != 0 {
+		t.Fatalf("attempt deadlines = %v, want none", rig.deadlines())
 	}
 }

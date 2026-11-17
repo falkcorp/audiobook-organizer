@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_unfetched.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6bf34beb-7e2f-40a9-b7a7-c5755a52c7fb
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 //
 // Selects the books the scheduled candidate fetch asks the providers about:
 // books never fetched, books whose candidates were invalidated, and books
@@ -100,6 +100,13 @@ type unfetchedSelection struct {
 	// will ask it); left out, counted so a run that selects less than the owed
 	// population says why.
 	OwedWaiting int
+	// OwedExhausted: books whose row owes a chain source that has used all its
+	// asks (database.OwedMaxAsks) and is left alone: the books that gave up on a
+	// source. Counted over every cached row, whether or not the book is selected
+	// for anything else, so the number does not hide in a quiet library; an
+	// owner retry (a forced refetch) or the row's refetch after its TTL starts
+	// the source's schedule over.
+	OwedExhausted int
 	// Unsearchable: candidates the fetch would only skip (no usable query).
 	Unsearchable int
 	// Scanned: live books read.
@@ -197,9 +204,12 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 		if s.Owed {
 			owedByBook[s.BookID] = true
 		}
+		if s.OwedExhausted {
+			sel.OwedExhausted++
+		}
 	}
 	chainNames := mfs.ActiveSourceNames()
-	now := time.Now().UTC()
+	now := mfs.Now() // the service's clock: the verdict and the recorder read the same one
 
 	type pick struct {
 		book   database.Book
