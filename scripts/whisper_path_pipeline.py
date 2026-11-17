@@ -1,5 +1,5 @@
 # file: scripts/whisper_path_pipeline.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: c3e91a57-2d84-4f16-b7a9-0e5d8c4b6f13
 # last-edited: 2026-11-17
 #
@@ -35,6 +35,7 @@ import errno
 import hashlib
 import json
 import logging
+import ntpath
 import os
 import posixpath
 import shutil
@@ -47,6 +48,7 @@ from collections.abc import Callable
 from typing import Annotated, Any
 
 from fastapi import Body, HTTPException, Request
+from starlette.responses import JSONResponse
 
 log = logging.getLogger("whisper_path_pipeline")
 
@@ -189,14 +191,124 @@ class ChildFaultError(RuntimeError):
         self.starting = starting
 
 
-def parse_path_map(raw: str) -> list[tuple[str, str]]:
+# Limits on what a network request may ask for. The Go client never comes near
+# them (it sends whisper_batch_size jobs, default 16, with book-ID keys and
+# absolute library paths); they exist so a request that is not the Go client's
+# cannot make this worker allocate or queue without bound.
+MAX_PATH_CHARS = 4096  # PATH_MAX on the server that names these files
+MAX_KEY_CHARS = 512
+MAX_JOBS_PER_REQUEST = 1024
+MAX_BODY_BYTES = 8 * 1024 * 1024
+
+# Windows will not name a file with these as its base name, with or without an
+# extension ("NUL.m4b" is the NUL device). The superscript digits count too.
+_NT_RESERVED = frozenset(
+    {"con", "prn", "aux", "nul", "conin$", "conout$"}
+    | {f"{dev}{n}" for dev in ("com", "lpt") for n in "0123456789\u00b9\u00b2\u00b3"}
+)
+_NT_BAD_CHARS = frozenset('<>:"|?*\\')
+# Beyond this a Windows path needs the \\?\ form for tools that are not
+# long-path aware (ffmpeg's manifest is not known to be).
+NT_EXTENDED_FROM = 240
+
+
+def _is_nt(pathmod: Any) -> bool:
+    return getattr(pathmod, "__name__", "") == "ntpath"
+
+
+def component_problem(part: str, pathmod: Any = None) -> str | None:
+    """Why `part` (one component of a SERVER path) cannot safely be appended to a
+    local root on this worker's filesystem, or None.
+
+    On POSIX every component the server can have is addressable, so this is None.
+    On Windows a component from the network is hostile input to an API that
+    rewrites names: a backslash is a separator the server's own "/" split never
+    saw, ":" is a drive or an alternate data stream, a trailing dot or space is
+    stripped (so ".. " IS ".."), and a device name opens the device, not a file.
+    A path refused here exists on the server, so the caller reports it as
+    path_unmapped (retried, never a verdict on the book)."""
+    pathmod = pathmod or os.path
+    if not _is_nt(pathmod):
+        return None
+    if len(part) > 255:
+        return "component is longer than 255 characters"
+    if any(ord(c) < 32 or c in _NT_BAD_CHARS for c in part):
+        return "component has a character Windows cannot use in a name"
+    if part[-1] in ". ":
+        return "component ends with a dot or a space, which Windows strips"
+    if part.split(".", 1)[0].rstrip(" ").lower() in _NT_RESERVED:
+        return "component is a reserved Windows device name"
+    return None
+
+
+def strip_extended_prefix(path: str) -> str:
+    r"""Drop a Windows extended-length prefix: \\?\C:\x gives C:\x and
+    \\?\UNC\h\s\x gives \\h\s\x (a no-op on any other string). realpath may
+    hand back either spelling of the same file."""
+    if path[:8].upper() == "\\\\?\\UNC\\":
+        return "\\\\" + path[8:]
+    if path.startswith(("\\\\?\\", "\\\\.\\")):
+        return path[4:]
+    return path
+
+
+def to_extended(path: str) -> str:
+    r"""The extended-length (\\?\) spelling of an absolute Windows path (a no-op
+    if it already is one)."""
+    if path.startswith("\\\\?\\"):
+        return path
+    if path.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + path[2:]
+    return "\\\\?\\" + path
+
+
+def is_within(root: str, path: str, pathmod: Any = None) -> bool:
+    """True when `path` is `root` or lies under it, by whole components. Both
+    must already be absolute and resolved. Case-insensitive on Windows (NTFS and
+    SMB are), exact on POSIX."""
+    pathmod = pathmod or os.path
+    sep = pathmod.sep
+    r, p = strip_extended_prefix(root), strip_extended_prefix(path)
+    if _is_nt(pathmod):
+        r, p = ntpath.normcase(r), ntpath.normcase(p)
+    r, p = r.rstrip(sep), p.rstrip(sep)
+    return p == r or p.startswith(r + sep)
+
+
+def _parse_local_root(entry: str, local: str, pathmod: Any) -> str:
+    """Validate and normalise the LOCAL side of one map entry for `pathmod`'s flavor."""
+    if _is_nt(pathmod):
+        drive, rest = ntpath.splitdrive(local)
+        extended = local.startswith(("\\\\?\\", "\\\\.\\"))
+        if not drive or extended or rest[:1] not in ("\\", "/", ""):
+            raise ValueError(
+                f"entry {entry!r}: {local!r} must be a drive path (X:\\dir) or a UNC share "
+                "(\\\\host\\share\\dir), without a \\\\?\\ prefix"
+            )
+        if ".." in ntpath.normcase(local).replace("/", "\\").split("\\"):
+            raise ValueError(f"entry {entry!r}: {local!r} must be absolute with no '..'")
+        return ntpath.normpath(local)
+    if not local.startswith("/") or ".." in local.split("/"):
+        raise ValueError(f"entry {entry!r}: {local!r} must be absolute with no '..'")
+    local = posixpath.normpath(local)
+    if local == "/":
+        raise ValueError(f"entry {entry!r} maps the filesystem root")
+    return local
+
+
+def parse_path_map(raw: str, pathmod: Any = None) -> list[tuple[str, str]]:
     """Parse WHISPER_PATH_MAP into [(server_prefix, local_root), ...].
 
     Raises ValueError on ANY malformed entry: a half-understood map is a map
     that sends some jobs to the wrong place, so the whole thing is refused.
-    Both sides must be absolute and neither may be "/" (mapping the whole
-    filesystem is never what an operator meant). Longest server prefix first.
+    The SERVER side is always a POSIX absolute path (the production server's),
+    matched exactly. The LOCAL side is absolute in `pathmod`'s flavor (this
+    worker's: POSIX, or a drive path or UNC share on Windows), no "..". Neither
+    side may be the filesystem root "/". A Windows drive root (X:\\) or a UNC
+    share root is allowed as a local root: the operator names it deliberately,
+    and a network library is usually exactly that. Longest server prefix first.
     """
+    pathmod = pathmod or os.path
     pairs: list[tuple[str, str]] = []
     for entry in raw.split(","):
         entry = entry.strip()
@@ -206,13 +318,12 @@ def parse_path_map(raw: str) -> list[tuple[str, str]]:
         server, local = server.strip(), local.strip()
         if not sep or not server or not local:
             raise ValueError(f"entry {entry!r} is not server-path=local-path")
-        for side in (server, local):
-            if not side.startswith("/") or ".." in side.split("/"):
-                raise ValueError(f"entry {entry!r}: {side!r} must be absolute with no '..'")
-        server, local = posixpath.normpath(server), posixpath.normpath(local)
-        if server == "/" or local == "/":
+        if not server.startswith("/") or ".." in server.split("/"):
+            raise ValueError(f"entry {entry!r}: {server!r} must be absolute with no '..'")
+        server = posixpath.normpath(server)
+        if server == "/":
             raise ValueError(f"entry {entry!r} maps the filesystem root")
-        pairs.append((server, local))
+        pairs.append((server, _parse_local_root(entry, local, pathmod)))
     pairs.sort(key=lambda p: len(p[0]), reverse=True)
     return pairs
 
@@ -338,6 +449,10 @@ class PathPipeline:
         )
         self._extract_pool: concurrent.futures.ThreadPoolExecutor | None = None
         self._extract_pool_lock = threading.Lock()
+        # The path flavor of THIS worker's filesystem (ntpath on Windows). Only
+        # the lexical checks consult it, so a test can run them for the other
+        # flavor; everything that touches the disk uses the real os.path.
+        self.pathmod: Any = os.path
 
     # ── the map and the safety boundary ──────────────────────────────────────
 
@@ -346,7 +461,7 @@ class PathPipeline:
         health must describe what a job would do right now."""
         raw = os.environ.get(PATH_MAP_ENV, "")
         try:
-            return parse_path_map(raw), ""
+            return parse_path_map(raw, self.pathmod), ""
         except ValueError as e:
             return [], f"{PATH_MAP_ENV} invalid: {e}"
 
@@ -362,7 +477,11 @@ class PathPipeline:
         mount_nfs), which leaves the empty mountpoint directory behind: scandir on
         it succeeds, and every job would then report not_found. ismount is False
         there, so the root is correctly reported unreadable."""
-        if os.environ.get(REQUIRE_MOUNT_ENV, "1") != "0" and not os.path.ismount(root):
+        # Windows has no soft-unmount that leaves an empty mountpoint behind, and
+        # ntpath.ismount is true only for a drive or share ROOT, so a root such as
+        # X:\audiobooks would never pass: the check is POSIX-only by default.
+        require_mount = os.environ.get(REQUIRE_MOUNT_ENV, "0" if _is_nt(self.pathmod) else "1")
+        if require_mount != "0" and not os.path.ismount(root):
             return False
         try:
             with os.scandir(root) as entries:
@@ -377,22 +496,28 @@ class PathPipeline:
         for _server, local in pairs:
             # Both spellings: map_server_path hands ffmpeg the REALPATH, which
             # differs from the configured root when the mountpoint sits under a symlink.
-            for base in (local.rstrip("/"), os.path.realpath(local).rstrip("/")):
-                if local_path == base or local_path.startswith(base + "/"):
+            for base in (local, os.path.realpath(local)):
+                if is_within(base, local_path, self.pathmod):
                     return local
         return None
 
-    def map_server_path(self, path: Any, pairs: list[tuple[str, str]]) -> str:
-        """Translate a server path to its local path, or raise PathJobError.
+    def split_server_path(
+        self, path: Any, pairs: list[tuple[str, str]]
+    ) -> tuple[str, str, list[str]]:
+        """The lexical half of mapping: (server_prefix, local_root, remaining
+        components) for the longest matching prefix, or PathJobError. Touches no
+        filesystem, so it is testable for either path flavor.
 
         Matching is by path COMPONENT: /mnt/bigdataX/a must not match /mnt/bigdata.
-        ".." components, non-absolute paths and anything not under a mapped prefix
-        are refused, as is a mapped path whose realpath leaves its root (a symlink
-        out of the share). A mapped root that cannot be listed is a lost mount:
-        path_unmapped, so the caller keeps the book retryable rather than burying it.
+        The server's path is always POSIX, so it is split on "/" only, then every
+        component is checked against what THIS worker's filesystem can address
+        (component_problem): on Windows a backslash, a drive colon, a device name
+        or a trailing dot would otherwise change what the joined path means.
         """
         if not isinstance(path, str) or not path or "\x00" in path:
             raise PathJobError(ERR_BAD_REQUEST, "path must be a non-empty string")
+        if len(path) > MAX_PATH_CHARS:
+            raise PathJobError(ERR_BAD_REQUEST, f"path is longer than {MAX_PATH_CHARS} characters")
         if not path.startswith("/"):
             raise PathJobError(ERR_PATH_UNMAPPED, "path is not absolute")
         parts = [p for p in path.split("/") if p not in ("", ".")]
@@ -402,20 +527,38 @@ class PathPipeline:
             sparts = server.strip("/").split("/")
             if parts[: len(sparts)] != sparts:
                 continue
-            if not self.root_readable(local):
-                raise PathJobError(
-                    ERR_PATH_UNMAPPED, f"mapped root for {server} is not readable (mount lost?)"
-                )
-            mapped = os.path.join(local, *parts[len(sparts) :])
-            real_root = os.path.realpath(local)
-            real = os.path.realpath(mapped)
-            if os.path.commonpath([real_root, real]) != real_root:
-                raise PathJobError(ERR_PATH_UNMAPPED, "path resolves outside its mapped root")
-            # The resolved path, not `mapped`: ffmpeg then opens exactly the file
-            # that was just checked, with no symlink left to swap between the check
-            # and the open.
-            return real
+            rest = parts[len(sparts) :]
+            for part in rest:
+                problem = component_problem(part, self.pathmod)
+                if problem:
+                    raise PathJobError(ERR_PATH_UNMAPPED, problem)
+            return server, local, rest
         raise PathJobError(ERR_PATH_UNMAPPED, "path is not under a mapped prefix")
+
+    def map_server_path(self, path: Any, pairs: list[tuple[str, str]]) -> str:
+        """Translate a server path to its local path, or raise PathJobError.
+
+        See split_server_path for the lexical rules. On top of those, a mapped
+        path whose realpath leaves its root (a symlink or junction out of the
+        share) is refused. A mapped root that cannot be listed is a lost mount:
+        path_unmapped, so the caller keeps the book retryable rather than burying it.
+        """
+        server, local, rest = self.split_server_path(path, pairs)
+        if not self.root_readable(local):
+            raise PathJobError(
+                ERR_PATH_UNMAPPED, f"mapped root for {server} is not readable (mount lost?)"
+            )
+        mapped = os.path.join(local, *rest)
+        real_root = os.path.realpath(local)
+        real = os.path.realpath(mapped)
+        if not is_within(real_root, real, self.pathmod):
+            raise PathJobError(ERR_PATH_UNMAPPED, "path resolves outside its mapped root")
+        if _is_nt(self.pathmod) and len(real) >= NT_EXTENDED_FROM:
+            real = to_extended(real)  # past MAX_PATH the plain spelling is not openable
+        # The resolved path, not `mapped`: ffmpeg then opens exactly the file
+        # that was just checked, with no symlink left to swap between the check
+        # and the open.
+        return real
 
     def prepare_path_job(self, job: Any) -> tuple[str, int]:
         """Validate one job and return (local_path, seconds); raises PathJobError."""
@@ -718,6 +861,60 @@ class PathPipeline:
         }
 
 
+class _BodyTooLargeError(Exception):
+    pass
+
+
+class BodyLimitMiddleware:
+    """Pure-ASGI cap on a request body for the given paths: 413 past `limit`
+    bytes, whether the size is declared in Content-Length or only discovered by
+    counting a chunked body. Not BaseHTTPMiddleware, which would buffer.
+
+    FastAPI catches any exception raised while it reads the body and answers
+    400 itself, so raising from `receive` is not enough: once the limit has been
+    crossed the response is REPLACED, whatever the app tried to send, with a 413."""
+
+    def __init__(self, app, paths: tuple[str, ...], limit: int) -> None:
+        self.app, self.paths, self.limit = app, paths, limit
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http" or scope["path"] not in self.paths:
+            await self.app(scope, receive, send)
+            return
+        reply = JSONResponse({"detail": f"body is larger than {self.limit} bytes"}, 413)
+        declared = dict(scope["headers"]).get(b"content-length", b"")
+        if declared.isdigit() and int(declared) > self.limit:
+            await reply(scope, receive, send)
+            return
+        seen = 0
+        exceeded = False
+        replied = False
+
+        async def counting_receive():
+            nonlocal seen, exceeded
+            msg = await receive()
+            if msg["type"] == "http.request":
+                seen += len(msg.get("body", b""))
+                if seen > self.limit:
+                    exceeded = True
+                    raise _BodyTooLargeError
+            return msg
+
+        async def replacing_send(msg):
+            nonlocal replied
+            if not exceeded:
+                await send(msg)
+            elif not replied:
+                replied = True
+                await reply(scope, receive, send)
+
+        try:
+            await self.app(scope, counting_receive, replacing_send)
+        except _BodyTooLargeError:
+            if not replied:
+                await reply(scope, receive, send)
+
+
 def install_path_routes(
     app, run_jobs: Callable[[dict[str, Any], float | None], dict[str, dict]]
 ) -> tuple[Callable, Callable]:
@@ -729,6 +926,12 @@ def install_path_routes(
     answering. The Go pool probes /health with a 3 s timeout and refuses an
     endpoint it cannot read. Returns the two handlers.
     """
+
+    app.add_middleware(
+        BodyLimitMiddleware,
+        paths=("/transcribe-path", "/transcribe-path-batch"),
+        limit=MAX_BODY_BYTES,
+    )
 
     @app.post("/transcribe-path")
     def transcribe_path(body: Annotated[dict, Body()]):
@@ -748,6 +951,15 @@ def install_path_routes(
         jobs = body.get("jobs")
         if not isinstance(jobs, dict):
             raise HTTPException(status_code=422, detail='"jobs" must be an object')
+        if len(jobs) > MAX_JOBS_PER_REQUEST:
+            raise HTTPException(
+                status_code=422, detail=f"at most {MAX_JOBS_PER_REQUEST} jobs per request"
+            )
+        if any(not isinstance(k, str) or len(k) > MAX_KEY_CHARS for k in jobs):
+            raise HTTPException(
+                status_code=422,
+                detail=f"job keys must be strings of at most {MAX_KEY_CHARS} characters",
+            )
         return {"results": run_jobs(jobs, abandon_deadline(request))}
 
     return transcribe_path, transcribe_path_batch

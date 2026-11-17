@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_mlx_pins.py
-# version: 1.0.1
+# version: 1.0.2
 # guid: 0e5b7d3a-4c19-4f82-b6a0-91d3c7e5f284
 # last-edited: 2026-11-17
 #
@@ -248,8 +248,12 @@ def test_health_lists_the_longest_prefix_first(pin, monkeypatch, tmp_path):
 def test_a_child_process_starts_no_machine_id_thread(monkeypatch):
     monkeypatch.setenv("WHISPER_MACHINE_ID", "gotham-gpu-1")
     monkeypatch.setattr(sys, "argv", ["whisper_mlx_server.py", "--inference-child", "3", "4"])
+    # Only threads this import starts count: another test's server module may
+    # still have a machine-id thread of its own alive.
+    before = set(threading.enumerate())
     _load()
-    assert "machine-id" not in {t.name for t in threading.enumerate()}
+    started = set(threading.enumerate()) - before
+    assert "machine-id" not in {t.name for t in started}
 
 
 def test_a_server_process_starts_the_machine_id_thread(pin):

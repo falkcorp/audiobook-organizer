@@ -1,5 +1,5 @@
 # file: scripts/whisper_machine_id.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 6a2f9c41-8d07-4b35-a1e6-5c9d3b7f0e82
 # last-edited: 2026-11-17
 #
@@ -22,6 +22,9 @@
 # its URL, an UNKNOWN machine whose strikes never count after a file's first;
 # the background thread keeps trying (ioreg is slowest exactly when a worker
 # restarts under memory pressure).
+#
+# Sources, in order: WHISPER_MACHINE_ID, /etc/machine-id, the macOS platform
+# UUID, the Windows MachineGuid.
 #
 # One instance per server process (MachineIdentity), so a test that loads a
 # server module twice gets two independent identities.
@@ -89,6 +92,27 @@ class MachineIdentity:
                         uuid = line.split("=", 1)[1].strip().strip('"')
                         if uuid:
                             return "platform-uuid:" + uuid
+        if sys.platform == "win32":
+            guid = self.windows_machine_guid()
+            if guid:
+                return "machine-guid:" + guid
+        return None
+
+    def windows_machine_guid(self) -> str | None:
+        """HKLM\\SOFTWARE\\Microsoft\\Cryptography\\MachineGuid: set at install,
+        the same for every process on the box and across restarts (a cloned VM
+        image shares it, which WHISPER_MACHINE_ID exists to override)."""
+        try:
+            import winreg  # Windows only
+        except ImportError:
+            return None
+        with contextlib.suppress(OSError):
+            flags = winreg.KEY_READ | getattr(winreg, "KEY_WOW64_64KEY", 0)
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography", 0, flags
+            ) as key:
+                value, _ = winreg.QueryValueEx(key, "MachineGuid")
+                return str(value).strip() or None
         return None
 
     def compute(self) -> str | None:
