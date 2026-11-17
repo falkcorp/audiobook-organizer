@@ -1,7 +1,7 @@
 # file: scripts/tests/test_whisper_mlx_server.py
-# version: 1.14.0
+# version: 1.15.0
 # guid: 8b4d19f2-6c30-4e71-a5d9-1f7c3e8a2b45
-# last-edited: 2026-10-26
+# last-edited: 2026-11-17
 #
 # Contract tests for scripts/whisper_mlx_server.py.
 #
@@ -50,6 +50,17 @@ except ImportError as exc:  # pragma: no cover - dependency-gated
     )
 
 _SERVER = pathlib.Path(__file__).resolve().parents[1] / "whisper_mlx_server.py"
+
+
+def _wpp():
+    """The shared path-pipeline module the server imports. scripts/ goes on
+    sys.path the way the server puts it there, so this works before any server
+    module has been loaded."""
+    if str(_SERVER.parent) not in sys.path:
+        sys.path.insert(0, str(_SERVER.parent))
+    import whisper_path_pipeline
+
+    return whisper_path_pipeline
 
 
 def _load_module():
@@ -101,11 +112,11 @@ def test_health_advertises_batch_pipeline(srv):
 def _module_without_identity_thread(monkeypatch):
     """The module loaded as the inference child loads it, so no machine-id
     thread is running yet: a test patches the sources, then calls
-    start_machine_id() itself."""
+    identity.start() itself."""
     monkeypatch.setattr(sys, "argv", ["whisper_mlx_server.py", "--inference-child", "3", "4"])
     mod = _load_module()
     monkeypatch.setattr(sys, "argv", ["whisper_mlx_server.py"])
-    assert mod._machine_id_first is None
+    assert mod.identity.first is None
     return mod
 
 
@@ -126,12 +137,12 @@ def test_health_reports_an_opaque_machine_id(monkeypatch):
     row and returns it in API responses), never the raw name."""
     monkeypatch.setenv("WHISPER_MACHINE_ID", "gotham-gpu-1")
     mod = _module_without_identity_thread(monkeypatch)
-    mod.start_machine_id().result(timeout=10)
+    mod.identity.start().result(timeout=10)
     mid = TestClient(mod.app).get("/health").json().get("machine_id")
     assert isinstance(mid, str) and len(mid) == 16
     int(mid, 16)  # hex
     assert "gotham" not in mid
-    assert mid == mod.machine_id(), "every process on one machine reports the same id"
+    assert mid == mod.identity.compute(), "every process on one machine reports the same id"
 
 
 def test_the_server_process_starts_the_identity_thread_and_the_child_does_not(monkeypatch):
@@ -139,9 +150,9 @@ def test_the_server_process_starts_the_identity_thread_and_the_child_does_not(mo
     never runs ioreg. The inference child (which re-imports the module on every
     restart) never starts it."""
     monkeypatch.setattr(sys, "argv", ["whisper_mlx_server.py", "--inference-child", "3", "4"])
-    assert _load_module()._machine_id_first is None, "the inference child must not compute the id"
+    assert _load_module().identity.first is None, "the inference child must not compute the id"
     monkeypatch.setattr(sys, "argv", ["whisper_mlx_server.py"])
-    assert _load_module()._machine_id_first is not None, "the server process starts it at import"
+    assert _load_module().identity.first is not None, "the server process starts it at import"
 
 
 def test_a_machine_id_found_on_a_retry_is_reported_and_never_changes(monkeypatch):
@@ -157,9 +168,9 @@ def test_a_machine_id_found_on_a_retry_is_reported_and_never_changes(monkeypatch
         calls.append(1)
         return answers[min(len(calls), len(answers)) - 1]
 
-    monkeypatch.setattr(mod, "machine_id", flaky)
-    monkeypatch.setattr(mod, "MACHINE_ID_RETRY_S", 0.01)
-    mod.start_machine_id().result(timeout=10)
+    monkeypatch.setattr(mod.identity, "compute", flaky)
+    monkeypatch.setattr(mod.identity, "retry_s", 0.01)
+    mod.identity.start().result(timeout=10)
     client = TestClient(mod.app)
     assert _wait_for_machine_id(client) == "aaaaaaaaaaaaaaaa"
     time.sleep(0.1)
@@ -174,9 +185,11 @@ def test_a_slow_first_attempt_leaves_the_id_out_then_reports_it(monkeypatch):
     unknown-machine id), and reports the id once ioreg answers."""
     mod = _module_without_identity_thread(monkeypatch)
     gate = threading.Event()
-    monkeypatch.setattr(mod, "machine_id", lambda: "0123456789abcdef" if gate.wait(10) else None)
-    monkeypatch.setattr(mod, "MACHINE_ID_WAIT_S", 0.2)
-    mod.start_machine_id()
+    monkeypatch.setattr(
+        mod.identity, "compute", lambda: "0123456789abcdef" if gate.wait(10) else None
+    )
+    monkeypatch.setattr(mod.identity, "wait_s", 0.2)
+    mod.identity.start()
     client = TestClient(mod.app)
     try:
         start = time.monotonic()
@@ -198,25 +211,25 @@ def test_no_stable_source_gives_no_machine_id_never_the_hostname(monkeypatch, tm
 
     mod = _module_without_identity_thread(monkeypatch)
     monkeypatch.delenv("WHISPER_MACHINE_ID", raising=False)
-    monkeypatch.setattr(mod, "MACHINE_ID_FILE", str(tmp_path / "absent"))
+    monkeypatch.setattr(mod.identity, "id_file", str(tmp_path / "absent"))
 
     def ioreg_times_out(*args, **kwargs):
-        raise sp.TimeoutExpired(args[0], mod.MACHINE_ID_IOREG_TIMEOUT_S)
+        raise sp.TimeoutExpired(args[0], mod.identity.ioreg_timeout_s)
 
     monkeypatch.setattr(mod.subprocess, "run", ioreg_times_out)
     for platform in ("linux", "darwin"):
         monkeypatch.setattr(sys, "platform", platform)
-        assert mod.machine_id() is None, platform
+        assert mod.identity.compute() is None, platform
 
     # Each stable source, when present, is what the id is made from.
     def ioreg_answers(*args, **kwargs):
         return sp.CompletedProcess(args[0], 0, stdout='  "IOPlatformUUID" = "WAYNE-0001"\n')
 
     monkeypatch.setattr(mod.subprocess, "run", ioreg_answers)
-    assert mod.machine_id() == hashlib.sha256(b"platform-uuid:WAYNE-0001").hexdigest()[:16]
+    assert mod.identity.compute() == hashlib.sha256(b"platform-uuid:WAYNE-0001").hexdigest()[:16]
     (tmp_path / "machine-id").write_text("batcave0001\n", encoding="ascii")
-    monkeypatch.setattr(mod, "MACHINE_ID_FILE", str(tmp_path / "machine-id"))
-    assert mod.machine_id() == hashlib.sha256(b"machine-id:batcave0001").hexdigest()[:16]
+    monkeypatch.setattr(mod.identity, "id_file", str(tmp_path / "machine-id"))
+    assert mod.identity.compute() == hashlib.sha256(b"machine-id:batcave0001").hexdigest()[:16]
 
 
 def test_machine_id_override_is_hashed_and_distinguishes_machines(srv, monkeypatch):
@@ -225,9 +238,9 @@ def test_machine_id_override_is_hashed_and_distinguishes_machines(srv, monkeypat
     source, and two names give two ids."""
     mod, _ = srv
     monkeypatch.setenv("WHISPER_MACHINE_ID", "gotham-gpu-1")
-    a = mod.machine_id()
+    a = mod.identity.compute()
     monkeypatch.setenv("WHISPER_MACHINE_ID", "gotham-gpu-2")
-    b = mod.machine_id()
+    b = mod.identity.compute()
     assert a != b
     assert "gotham" not in a and len(a) == 16
 
@@ -238,13 +251,15 @@ def test_health_waits_for_the_filesystem_and_the_machine_id_side_by_side(monkeyp
     answers within the longer one, not their sum. Both defaults sit under the
     Go probe's 3 s."""
     mod = _module_without_identity_thread(monkeypatch)
-    assert mod.MACHINE_ID_WAIT_S <= mod.HEALTH_PATH_TIMEOUT_S < 3.0
+    assert mod.identity.wait_s <= mod.pipeline.health_timeout_s < 3.0
     gate = threading.Event()
-    monkeypatch.setattr(mod, "machine_id", lambda: "0123456789abcdef" if gate.wait(10) else None)
-    monkeypatch.setattr(mod, "MACHINE_ID_WAIT_S", 1.0)
-    monkeypatch.setattr(mod, "HEALTH_PATH_TIMEOUT_S", 1.0)
-    monkeypatch.setattr(mod, "_blocking_health_fields", lambda: time.sleep(1.5) or {})
-    mod.start_machine_id()
+    monkeypatch.setattr(
+        mod.identity, "compute", lambda: "0123456789abcdef" if gate.wait(10) else None
+    )
+    monkeypatch.setattr(mod.identity, "wait_s", 1.0)
+    monkeypatch.setattr(mod.pipeline, "health_timeout_s", 1.0)
+    monkeypatch.setattr(mod.pipeline, "blocking_health_fields", lambda: time.sleep(1.5) or {})
+    mod.identity.start()
     try:
         start = time.monotonic()
         body = TestClient(mod.app).get("/health").json()
@@ -455,7 +470,7 @@ def pathsrv(srv, tmp_path, monkeypatch):
         wav.write_bytes(f"{pathlib.Path(src).name}|{seconds}".encode())
         return d, str(wav)
 
-    monkeypatch.setattr(mod, "_extract_clip", fake_extract)
+    monkeypatch.setattr(mod.pipeline, "extract_clip", fake_extract)
     monkeypatch.setattr(
         mod, "_transcribe_file", lambda path: "heard:" + pathlib.Path(path).read_text()
     )
@@ -573,9 +588,9 @@ def test_missing_file_under_a_readable_root_is_not_found(pathsrv, monkeypatch):
     mod, client, _ = pathsrv
 
     def real_extract_missing(src, seconds):
-        raise mod.PathJobError(mod.ERR_NOT_FOUND, "file not found under the mapped root")
+        raise _wpp().PathJobError(_wpp().ERR_NOT_FOUND, "file not found under the mapped root")
 
-    monkeypatch.setattr(mod, "_extract_clip", real_extract_missing)
+    monkeypatch.setattr(mod.pipeline, "extract_clip", real_extract_missing)
     res = client.post(
         "/transcribe-path-batch", json={"jobs": {"k": _job("/lib/Gotham/books/A/nope.m4b")}}
     ).json()["results"]["k"]
@@ -602,14 +617,14 @@ def test_path_batch_rejects_a_non_object_jobs(pathsrv):
 def test_one_failing_path_job_does_not_fail_the_batch(pathsrv, monkeypatch):
     mod, client, share = pathsrv
     (share / "books" / "A" / "bad.m4b").write_bytes(b"x")
-    real = mod._extract_clip
+    real = mod.pipeline.extract_clip
 
     def selective(src, seconds):
         if src.endswith("bad.m4b"):
-            raise mod.PathJobError(mod.ERR_FFMPEG, "Invalid data found when processing input")
+            raise _wpp().PathJobError(_wpp().ERR_FFMPEG, "Invalid data found when processing input")
         return real(src, seconds)
 
-    monkeypatch.setattr(mod, "_extract_clip", selective)
+    monkeypatch.setattr(mod.pipeline, "extract_clip", selective)
     results = client.post(
         "/transcribe-path-batch",
         json={
@@ -639,14 +654,14 @@ def test_a_whisper_failure_is_prefixed_and_isolated(pathsrv, monkeypatch):
 def test_temp_clips_are_removed(pathsrv, monkeypatch):
     mod, client, _ = pathsrv
     seen = []
-    real = mod._extract_clip
+    real = mod.pipeline.extract_clip
 
     def tracking(src, seconds):
         d, w = real(src, seconds)
         seen.append(d)
         return d, w
 
-    monkeypatch.setattr(mod, "_extract_clip", tracking)
+    monkeypatch.setattr(mod.pipeline, "extract_clip", tracking)
     client.post("/transcribe-path-batch", json={"jobs": {"k": _job("/lib/Gotham/books/A/one.m4b")}})
     assert seen and not any(pathlib.Path(d).exists() for d in seen)
 
@@ -669,12 +684,12 @@ def test_path_handlers_are_sync_so_health_stays_live(srv):
 def test_parse_path_map_rejects_malformed_entries(srv, raw):
     mod, _ = srv
     with pytest.raises(ValueError):
-        mod.parse_path_map(raw)
+        _wpp().parse_path_map(raw)
 
 
 def test_parse_path_map_longest_prefix_first(srv):
     mod, _ = srv
-    pairs = mod.parse_path_map("/lib/Gotham=/a, /lib/Gotham/books=/b ,")
+    pairs = _wpp().parse_path_map("/lib/Gotham=/a, /lib/Gotham/books=/b ,")
     assert pairs[0][0] == "/lib/Gotham/books"
 
 
@@ -711,8 +726,8 @@ def _fake_run(monkeypatch, mod, stderr, before=None):
 
 
 def _extract_code(mod, src):
-    with pytest.raises(mod.PathJobError) as ei:
-        mod._extract_clip(src, 90)
+    with pytest.raises(_wpp().PathJobError) as ei:
+        mod.pipeline.extract_clip(src, 90)
     return ei.value.code, str(ei.value)
 
 
@@ -732,14 +747,14 @@ def test_ffmpeg_io_fault_text_is_a_retryable_timeout_not_a_verdict(
     mod, _, src = extract_env
     _fake_run(monkeypatch, mod, stderr)
     code, _ = _extract_code(mod, src)
-    assert code == mod.ERR_FFMPEG_TIMEOUT
+    assert code == _wpp().ERR_FFMPEG_TIMEOUT
 
 
 def test_ffmpeg_decode_failure_on_a_readable_file_stays_the_verdict(extract_env, monkeypatch):
     mod, _, src = extract_env
     _fake_run(monkeypatch, mod, b"book.m4b: Invalid data found when processing input\n")
     code, _ = _extract_code(mod, src)
-    assert code == mod.ERR_FFMPEG
+    assert code == _wpp().ERR_FFMPEG
 
 
 def test_ffmpeg_failure_after_the_mount_dropped_is_path_unmapped(extract_env, monkeypatch):
@@ -754,7 +769,7 @@ def test_ffmpeg_failure_after_the_mount_dropped_is_path_unmapped(extract_env, mo
         before=lambda: share.rename(gone),
     )
     code, _ = _extract_code(mod, src)
-    assert code == mod.ERR_PATH_UNMAPPED
+    assert code == _wpp().ERR_PATH_UNMAPPED
 
 
 def test_ffmpeg_failure_when_the_file_vanished_is_path_unmapped(extract_env, monkeypatch):
@@ -766,14 +781,14 @@ def test_ffmpeg_failure_when_the_file_vanished_is_path_unmapped(extract_env, mon
         before=lambda: pathlib.Path(src).unlink(),
     )
     code, _ = _extract_code(mod, src)
-    assert code == mod.ERR_PATH_UNMAPPED
+    assert code == _wpp().ERR_PATH_UNMAPPED
 
 
 def test_missing_ffmpeg_is_a_worker_fault_not_a_book_verdict(extract_env, monkeypatch):
     mod, _, src = extract_env
     monkeypatch.setattr(mod.shutil, "which", lambda name: None)
     code, text = _extract_code(mod, src)
-    assert code == mod.ERR_WORKER_MISCONFIGURED
+    assert code == _wpp().ERR_WORKER_MISCONFIGURED
     assert text.startswith("worker_misconfigured: ")
 
 
@@ -784,24 +799,26 @@ def test_ffmpeg_argv_restricts_the_demuxers_before_the_input(extract_env, monkey
     _extract_code(mod, src)
     argv = calls[0]
     i = argv.index("-format_whitelist")
-    assert argv[i + 1] == mod.FORMAT_WHITELIST
+    assert argv[i + 1] == _wpp().FORMAT_WHITELIST
     assert i < argv.index("-i")
-    names = mod.FORMAT_WHITELIST.split(",")
+    names = _wpp().FORMAT_WHITELIST.split(",")
     assert "hls" not in names and "concat" not in names and "sdp" not in names
 
 
 def test_extract_fingerprint_covers_the_format_whitelist(srv):
     mod, _ = srv
-    assert "-format_whitelist" in mod.EXTRACT_SETTINGS["args"]
+    assert "-format_whitelist" in _wpp().EXTRACT_SETTINGS["args"]
 
 
 def test_worker_misconfigured_reaches_the_client_as_a_prefixed_error(pathsrv, monkeypatch):
     mod, client, _ = pathsrv
 
     def no_ffmpeg(src, seconds):
-        raise mod.PathJobError(mod.ERR_WORKER_MISCONFIGURED, "ffmpeg is not on PATH on this worker")
+        raise _wpp().PathJobError(
+            _wpp().ERR_WORKER_MISCONFIGURED, "ffmpeg is not on PATH on this worker"
+        )
 
-    monkeypatch.setattr(mod, "_extract_clip", no_ffmpeg)
+    monkeypatch.setattr(mod.pipeline, "extract_clip", no_ffmpeg)
     res = client.post(
         "/transcribe-path-batch", json={"jobs": {"k": _job("/lib/Gotham/books/A/one.m4b")}}
     ).json()["results"]["k"]
@@ -816,9 +833,9 @@ def test_an_unmounted_empty_mountpoint_is_not_a_readable_root(srv, monkeypatch, 
     monkeypatch.setenv("WHISPER_PATH_REQUIRE_MOUNT", "1")
     mountpoint = tmp_path / "bigdata"
     mountpoint.mkdir()
-    assert mod._root_readable(str(mountpoint)) is False  # plain dir: not a mount
+    assert mod.pipeline.root_readable(str(mountpoint)) is False  # plain dir: not a mount
     monkeypatch.setattr(mod.os.path, "ismount", lambda p: True)
-    assert mod._root_readable(str(mountpoint)) is True  # the same dir, as a mount
+    assert mod.pipeline.root_readable(str(mountpoint)) is True  # the same dir, as a mount
 
 
 def test_a_forcibly_unmounted_root_fails_closed_per_job_and_in_health(srv, monkeypatch, tmp_path):
@@ -838,7 +855,7 @@ def test_a_forcibly_unmounted_root_fails_closed_per_job_and_in_health(srv, monke
 def test_the_mount_check_defaults_on(srv, monkeypatch, tmp_path):
     mod, _ = srv
     monkeypatch.delenv("WHISPER_PATH_REQUIRE_MOUNT", raising=False)
-    assert mod._root_readable(str(tmp_path)) is False
+    assert mod.pipeline.root_readable(str(tmp_path)) is False
 
 
 def test_ffmpeg_whitelist_rejection_is_container_rejected_not_a_verdict(extract_env, monkeypatch):
@@ -849,12 +866,12 @@ def test_ffmpeg_whitelist_rejection_is_container_rejected_not_a_verdict(extract_
         b"[in#0] Format not on whitelist 'mov,mp4'\n[in#0] Error opening input: Invalid argument\n",
     )
     code, _ = _extract_code(mod, src)
-    assert code == mod.ERR_CONTAINER_REJECTED
+    assert code == _wpp().ERR_CONTAINER_REJECTED
 
 
 def test_format_whitelist_names_only_real_demuxers(srv):
     mod, _ = srv
-    assert "opus" not in mod.FORMAT_WHITELIST.split(",")  # Ogg Opus is read by "ogg"
+    assert "opus" not in _wpp().FORMAT_WHITELIST.split(",")  # Ogg Opus is read by "ogg"
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed on this host")
@@ -885,11 +902,11 @@ def test_real_ffmpeg_renamed_aiff_is_container_rejected(srv, tmp_path, monkeypat
     (share / "corrupt.m4b").write_bytes(b"not audio at all")
     monkeypatch.setenv("WHISPER_PATH_MAP", f"/lib/Gotham={share}")
     for name, want in (
-        ("renamed.m4b", mod.ERR_CONTAINER_REJECTED),
-        ("corrupt.m4b", mod.ERR_FFMPEG),
+        ("renamed.m4b", _wpp().ERR_CONTAINER_REJECTED),
+        ("corrupt.m4b", _wpp().ERR_FFMPEG),
     ):
-        with pytest.raises(mod.PathJobError) as ei:
-            mod._extract_clip(str(share / name), 5)
+        with pytest.raises(_wpp().PathJobError) as ei:
+            mod.pipeline.extract_clip(str(share / name), 5)
         assert ei.value.code == want, name
 
 
@@ -946,8 +963,8 @@ def test_a_hung_root_listing_answers_200_and_keeps_the_busy_fields(srv, monkeypa
     share_b.mkdir()
     monkeypatch.setenv("WHISPER_PATH_MAP", f"/lib/Gotham={share_a},/lib/Arkham={share_b}")
     gate = threading.Event()
-    monkeypatch.setattr(mod, "HEALTH_PATH_TIMEOUT_S", 0.2)
-    monkeypatch.setattr(mod, "_root_readable", lambda root: (gate.wait(10), True)[1])
+    monkeypatch.setattr(mod.pipeline, "health_timeout_s", 0.2)
+    monkeypatch.setattr(mod.pipeline, "root_readable", lambda root: (gate.wait(10), True)[1])
     mod._inference._set_busy(12.0)  # a clip is "running" with a 12 s limit
     try:
         t0 = time.monotonic()
@@ -960,9 +977,9 @@ def test_a_hung_root_listing_answers_200_and_keeps_the_busy_fields(srv, monkeypa
         assert body["clip_timeout_floor_s"] == mod.TRANSCRIBE_MIN_TIMEOUT_S
         assert body["clip_timeout_factor"] == mod.TRANSCRIBE_TIMEOUT_FACTOR
         assert body["child_ready_timeout_s"] == mod.CHILD_READY_TIMEOUT_S
-        assert body["extract_timeout_s"] == mod.EXTRACT_TIMEOUT_S
+        assert body["extract_timeout_s"] == mod.pipeline.extract_timeout_s
         assert body["decode_fingerprint"] == mod.DECODE_FINGERPRINT
-        assert body["extract_fingerprint"] == mod.EXTRACT_FINGERPRINT
+        assert body["extract_fingerprint"] == _wpp().EXTRACT_FINGERPRINT
         # Configured, but nothing is vouched for: every root fails closed.
         assert body["path_pipeline"] is True
         assert body["path_prefixes"] == ["/lib/Gotham", "/lib/Arkham"]
@@ -981,7 +998,7 @@ def test_a_hung_listing_without_a_map_still_answers_200(srv, monkeypatch):
     mod, client = srv
     monkeypatch.delenv("WHISPER_PATH_MAP", raising=False)
     gate = threading.Event()
-    monkeypatch.setattr(mod, "HEALTH_PATH_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(mod.pipeline, "health_timeout_s", 0.2)
     monkeypatch.setattr(mod.shutil, "which", lambda name: (gate.wait(10), None)[1])
     try:
         r = client.get("/health")
@@ -999,8 +1016,8 @@ def test_root_readable_reads_one_entry_not_the_whole_listing(srv, monkeypatch, t
     monkeypatch.setattr(
         mod.os, "listdir", lambda *a, **k: pytest.fail("listdir builds the whole library listing")
     )
-    assert mod._root_readable(str(tmp_path)) is True
-    assert mod._root_readable(str(tmp_path / "missing")) is False
+    assert mod.pipeline.root_readable(str(tmp_path)) is True
+    assert mod.pipeline.root_readable(str(tmp_path / "missing")) is False
 
 
 def test_mapped_path_returned_is_the_resolved_real_path(srv, monkeypatch, tmp_path):
@@ -1010,7 +1027,7 @@ def test_mapped_path_returned_is_the_resolved_real_path(srv, monkeypatch, tmp_pa
     (real_share / "f.m4b").write_bytes(b"x")
     link = tmp_path / "link"
     link.symlink_to(real_share)
-    got = mod.map_server_path("/lib/Gotham/f.m4b", [("/lib/Gotham", str(link))])
+    got = mod.pipeline.map_server_path("/lib/Gotham/f.m4b", [("/lib/Gotham", str(link))])
     assert got == str((real_share / "f.m4b").resolve())
 
 
@@ -1100,7 +1117,7 @@ def childsrv(tmp_path, monkeypatch):
         wav.write_bytes(pathlib.Path(src).read_bytes())
         return d, str(wav)
 
-    monkeypatch.setattr(mod, "_extract_clip", fake_extract)
+    monkeypatch.setattr(mod.pipeline, "extract_clip", fake_extract)
 
     def put(name, content):
         (share / "b" / name).write_bytes(content)
@@ -1307,8 +1324,8 @@ def test_a_child_that_crashes_by_itself_is_still_decoder_crashed(childsrv, data)
 
 def test_decoder_killed_and_request_abandoned_codes_are_stable(srv):
     mod, _ = srv
-    assert mod.ERR_DECODER_KILLED == "decoder_killed"
-    assert mod.ERR_REQUEST_ABANDONED == "request_abandoned"
+    assert _wpp().ERR_DECODER_KILLED == "decoder_killed"
+    assert _wpp().ERR_REQUEST_ABANDONED == "request_abandoned"
 
 
 def test_abandoned_results_carry_the_request_abandoned_code_on_both_batch_paths(
@@ -1329,7 +1346,7 @@ def test_abandoned_results_carry_the_request_abandoned_code_on_both_batch_paths(
 
 def test_decoder_crashed_code_is_stable(srv):
     mod, _ = srv
-    assert mod.ERR_DECODER_CRASHED == "decoder_crashed"
+    assert _wpp().ERR_DECODER_CRASHED == "decoder_crashed"
 
 
 def test_a_child_that_cannot_start_fails_the_whole_batch_once(childsrv, monkeypatch):
@@ -1516,12 +1533,12 @@ def test_the_abandon_header_parser(srv):
             self.headers = Headers(raw)  # case-insensitive, like the real request
 
     before = time.monotonic()
-    got = mod._abandon_deadline(Req("30"))
+    got = mod.abandon_deadline(Req("30"))
     assert before + 30 <= got <= time.monotonic() + 30
-    assert mod._abandon_deadline(Req(" 7 ")) is not None
+    assert mod.abandon_deadline(Req(" 7 ")) is not None
     for bad in (None, "", "  ", "abc", "-5", "0", "1.5", "1_0", "5s", "\u00b2"):
-        assert mod._abandon_deadline(Req(bad)) is None, bad
-    assert mod._abandon_deadline(Req("9" * 400)) is not None, "huge is capped, never an error"
+        assert mod.abandon_deadline(Req(bad)) is None, bad
+    assert mod.abandon_deadline(Req("9" * 400)) is not None, "huge is capped, never an error"
 
 
 def test_without_a_deadline_every_upload_runs(srv):
@@ -1639,7 +1656,7 @@ def test_discarding_a_finished_extraction_removes_its_clip(srv, tmp_path):
     d = _clip_dir(tmp_path, "done")
     fut = concurrent.futures.Future()
     fut.set_result((str(d), str(d / "clip.wav")))
-    mod._discard_extraction(fut)
+    _wpp().discard_extraction(fut)
     assert not d.exists()
 
 
@@ -1650,7 +1667,7 @@ def test_discarding_a_running_extraction_removes_its_clip_when_it_finishes(srv, 
     d = _clip_dir(tmp_path, "running")
     fut = concurrent.futures.Future()
     assert fut.set_running_or_notify_cancel()  # running: cancel() cannot stop it
-    mod._discard_extraction(fut)
+    _wpp().discard_extraction(fut)
     assert d.exists(), "nothing to remove until the extraction finishes"
     fut.set_result((str(d), str(d / "clip.wav")))
     assert not d.exists()
@@ -1661,7 +1678,7 @@ def test_discarding_a_queued_extraction_cancels_it(srv):
 
     mod, _ = srv
     fut = concurrent.futures.Future()
-    mod._discard_extraction(fut)
+    _wpp().discard_extraction(fut)
     assert fut.cancelled()
 
 
@@ -1671,8 +1688,8 @@ def test_discarding_a_failed_extraction_is_quiet(srv):
     mod, _ = srv
     fut = concurrent.futures.Future()
     assert fut.set_running_or_notify_cancel()
-    mod._discard_extraction(fut)
-    fut.set_exception(mod.PathJobError(mod.ERR_NOT_FOUND, "gone"))  # nothing to clean
+    _wpp().discard_extraction(fut)
+    fut.set_exception(_wpp().PathJobError(_wpp().ERR_NOT_FOUND, "gone"))  # nothing to clean
 
 
 def test_an_abandoned_path_batch_cancels_its_extractions_and_removes_their_clips(
@@ -1690,8 +1707,8 @@ def test_an_abandoned_path_batch_cancels_its_extractions_and_removes_their_clips
         (pathlib.Path(d) / "clip.wav").write_bytes(b"x")
         return d, str(pathlib.Path(d) / "clip.wav")
 
-    monkeypatch.setattr(mod, "_extract_clip", extract)
-    monkeypatch.setattr(mod, "EXTRACT_WORKERS", 1)
+    monkeypatch.setattr(mod.pipeline, "extract_clip", extract)
+    monkeypatch.setattr(mod.pipeline, "extract_workers", 1)
     calls = []
     monkeypatch.setattr(mod, "_transcribe_file", lambda p: (calls.append(p), "ok")[1])
     jobs = {k: _job("/lib/Gotham/books/A/one.m4b") for k in ("a", "b", "c")}
@@ -1701,7 +1718,9 @@ def test_an_abandoned_path_batch_cancels_its_extractions_and_removes_their_clips
     assert calls == []
     assert {k: v["error"] for k, v in res.items()} == dict.fromkeys(jobs, ABANDONED)
     gate.set()
-    mod._extract_pool.shutdown(wait=True)  # running extractions and their callbacks are done
+    mod.pipeline._extract_pool.shutdown(
+        wait=True
+    )  # running extractions and their callbacks are done
     assert not any(pathlib.Path(d).exists() for d in made), "no temp clip may leak"
 
 
@@ -1717,7 +1736,7 @@ def test_a_start_fault_answers_the_rest_without_waiting_for_extraction(childsrv,
     import tempfile
 
     monkeypatch.setenv("WHISPER_BACKEND_FACTORY", "no_such_backend_module:factory")
-    monkeypatch.setattr(mod, "EXTRACT_WORKERS", 1)  # one runs, the rest queue
+    monkeypatch.setattr(mod.pipeline, "extract_workers", 1)  # one runs, the rest queue
     gate = threading.Event()
     extracted = []
 
@@ -1731,7 +1750,7 @@ def test_a_start_fault_answers_the_rest_without_waiting_for_extraction(childsrv,
         (pathlib.Path(d) / "clip.wav").write_bytes(b"abc")
         return d, str(pathlib.Path(d) / "clip.wav")
 
-    monkeypatch.setattr(mod, "_extract_clip", extract)
+    monkeypatch.setattr(mod.pipeline, "extract_clip", extract)
     jobs = {k: put(f"{k}.m4b", b"abc") for k in ("b", "c", "d")}
     jobs = {"first": put("first.m4b", b"abc"), **jobs}
     t0 = time.monotonic()
@@ -1744,7 +1763,9 @@ def test_a_start_fault_answers_the_rest_without_waiting_for_extraction(childsrv,
             assert res[k]["error"].startswith("worker_misconfigured:"), (k, res[k])
     finally:
         gate.set()
-    mod._extract_pool.shutdown(wait=True)  # running extractions and their callbacks are done
+    mod.pipeline._extract_pool.shutdown(
+        wait=True
+    )  # running extractions and their callbacks are done
     assert len(made) == 2, "first and b were cut"
     assert not any(pathlib.Path(d).exists() for d in made), "no temp clip may leak"
     # b was already being extracted; c and d were still queued and got cancelled.
@@ -1766,7 +1787,7 @@ def test_clip_timeout_is_four_times_the_audio_with_a_floor(srv, tmp_path):
     ninety, five = tmp_path / "90.wav", tmp_path / "5.wav"
     _write_wav(ninety, 90)
     _write_wav(five, 5)
-    assert mod._audio_seconds(str(ninety)) == pytest.approx(90)
+    assert _wpp().audio_seconds(str(ninety)) == pytest.approx(90)
     assert mod._clip_timeout(str(ninety)) == pytest.approx(360)  # 4 x 90
     assert mod._clip_timeout(str(five)) == 60  # 4 x 5 = 20, floored to 60
 
@@ -1800,8 +1821,8 @@ def test_audio_seconds_never_exceeds_what_the_file_size_allows(srv, tmp_path):
     )
     lying.write_bytes(header + b"\x00" * 100)
     size = lying.stat().st_size
-    assert mod._audio_seconds(str(lying)) == pytest.approx(size / 32000)
-    assert mod._audio_seconds(str(lying)) < 1
+    assert _wpp().audio_seconds(str(lying)) == pytest.approx(size / 32000)
+    assert _wpp().audio_seconds(str(lying)) < 1
 
 
 def test_clip_timeout_knobs_come_from_the_environment(monkeypatch):
@@ -1845,7 +1866,7 @@ def test_health_busy_fields_are_present_and_idle_by_default(srv):
 
 def test_timeout_error_code_is_stable(srv):
     mod, _ = srv
-    assert mod.ERR_TRANSCRIBE_TIMEOUT == "transcribe_timeout"
+    assert _wpp().ERR_TRANSCRIBE_TIMEOUT == "transcribe_timeout"
 
 
 def test_the_orphaned_child_exits_when_its_parent_is_killed(tmp_path, monkeypatch):
