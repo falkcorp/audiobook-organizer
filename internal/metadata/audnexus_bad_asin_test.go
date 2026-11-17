@@ -1,5 +1,5 @@
 // file: internal/metadata/audnexus_bad_asin_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5e8a2d93-7c14-4b60-8f3e-a1d9c06b7e52
 // last-edited: 2026-11-17
 
@@ -286,7 +286,7 @@ func regionClient(answer func(region string, r *http.Request) (*http.Response, e
 	c := &AudnexusClient{baseURL: "http://192.0.2.1"}
 	c.httpClient = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 		region := r.URL.Query().Get("region")
-		left, _ := providerhttp.AttemptBudgetLeft(r.Context())
+		left, _ := providerhttp.AttemptBudgetLeftForTest(r.Context())
 		rt.mu.Lock()
 		rt.regions = append(rt.regions, region)
 		rt.budgets = append(rt.budgets, left)

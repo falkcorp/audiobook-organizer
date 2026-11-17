@@ -1,5 +1,5 @@
 // file: internal/metadata/providerhttp/attempt_timeout_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9b4f7e21-0c58-4d3a-a6e9-3f1d82b7c405
 // last-edited: 2026-11-17
 
@@ -350,7 +350,7 @@ func TestAttemptBudget_HungRegionsSpendTheBudgetAndNoMore(t *testing.T) {
 	if calls.Load() != 3 {
 		t.Fatalf("requests = %d, want 3", calls.Load())
 	}
-	if left, _ := AttemptBudgetLeft(ctx); left != 0 {
+	if left, _ := AttemptBudgetLeftForTest(ctx); left != 0 {
 		t.Fatalf("budget left = %v, want 0 after three 10 s hangs", left)
 	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://192.0.2.1/x", nil)
@@ -416,7 +416,7 @@ func TestAttemptBudget_ALaterRegionAnswersAfterAHangAndTheQueueIsNotCharged(t *t
 		t.Fatalf("second region: %v", err)
 	}
 	_ = resp.Body.Close()
-	if left, _ := AttemptBudgetLeft(ctx); left != 19*time.Second {
+	if left, _ := AttemptBudgetLeftForTest(ctx); left != 19*time.Second {
 		t.Fatalf("budget left = %v, want 19s (10 s hung + 1 s answering; 40 s of queue not charged)", left)
 	}
 }
