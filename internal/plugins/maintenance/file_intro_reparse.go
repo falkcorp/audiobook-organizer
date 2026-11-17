@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_reparse.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 7d3a5e91-c2b4-4f08-a6e7-91b0d4c8f325
 // last-edited: 2026-11-17
 
@@ -368,11 +368,9 @@ func (t *reparseTally) snapshot() reparseFileIntrosResult {
 	return t.res
 }
 
-// count folds one examined row's outcome into a chunk-local tally. wrote says the
-// parse was committed (always true for a would-write row in a preview); a write
-// that failed is counted by the caller as an error and the row keeps its stored
-// kind.
-func (l *reparseFileIntrosResult) count(r reparseRow, wrote bool, fileID string) {
+// count folds one examined row's outcome into a chunk-local tally. A write that
+// failed is counted by the caller as an error and never reaches here.
+func (l *reparseFileIntrosResult) count(r reparseRow, fileID string) {
 	l.Examined++
 	if r.junk != transcribe.JunkNone {
 		l.Identity.StoredTitleJunk++
@@ -391,10 +389,6 @@ func (l *reparseFileIntrosResult) count(r reparseRow, wrote bool, fileID string)
 	}
 	l.KindBefore[r.before]++
 	l.countIdentity(r, fileID)
-	if !wrote && r.write {
-		l.KindAfter[r.before]++
-		return
-	}
 	l.KindAfter[r.after]++
 	if r.write {
 		l.ParseWrites++
@@ -699,7 +693,7 @@ func reparseOne(env reparseFileIntrosEnv, ref reparseRef, live bool, local *repa
 		Translator: reparseDeref(row.TranscribedTranslator), CoverArtist: reparseDeref(row.TranscribedCoverArtist),
 	}
 	if cur.Transcript == "" {
-		local.count(reparseRow{unreparsable: reparseNoTranscript, junk: transcribe.StoredTitleJunk(cur.Identity.Title)}, false, ref.fileID)
+		local.count(reparseRow{unreparsable: reparseNoTranscript, junk: transcribe.StoredTitleJunk(cur.Identity.Title)}, ref.fileID)
 		return
 	}
 	out := reparseDecide(cur)
@@ -707,7 +701,7 @@ func reparseOne(env reparseFileIntrosEnv, ref reparseRef, live bool, local *repa
 		if out.write {
 			tally.changed.Add(1)
 		}
-		local.count(out, true, ref.fileID)
+		local.count(out, ref.fileID)
 		return
 	}
 
@@ -732,10 +726,10 @@ func reparseOne(env reparseFileIntrosEnv, ref reparseRef, live bool, local *repa
 	case outcome == database.IntroReparseGone:
 		local.Gone++
 	case outcome == database.IntroReparseNoTranscript:
-		local.count(reparseRow{unreparsable: reparseNoTranscript, junk: out.junk}, false, ref.fileID)
+		local.count(reparseRow{unreparsable: reparseNoTranscript, junk: out.junk}, ref.fileID)
 	case outcome == database.IntroReparseWrote:
 		tally.changed.Add(1)
-		local.count(last, true, ref.fileID)
+		local.count(last, ref.fileID)
 	default:
 		// Skipped: on the fresh row there was nothing left to change (another
 		// writer, or an earlier attempt, got there first).
@@ -743,7 +737,7 @@ func reparseOne(env reparseFileIntrosEnv, ref reparseRef, live bool, local *repa
 			last = out
 		}
 		last.write = false
-		local.count(last, true, ref.fileID)
+		local.count(last, ref.fileID)
 	}
 }
 

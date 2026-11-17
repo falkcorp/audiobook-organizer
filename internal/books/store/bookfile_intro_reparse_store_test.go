@@ -1,5 +1,5 @@
 // file: internal/books/store/bookfile_intro_reparse_store_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9a4f2c68-3e17-4d85-b0c6-5e8d1f7a2b94
 // last-edited: 2026-11-17
 
@@ -153,6 +153,15 @@ func TestReparseBookFileIntro_NoTranscriptAndGone(t *testing.T) {
 	if err != nil || out != IntroReparseNoTranscript || called {
 		t.Errorf("no transcript: out=%v err=%v called=%v", out, err, called)
 	}
+	// A transcript that is present but empty is the same class as an absent one.
+	seedReparseRow(t, f, "", IntroStatusUnparsed, IntroReparseIdentity{})
+	if row := f.row(t); row.IntroTranscription == nil || *row.IntroTranscription != "" {
+		t.Fatalf("fixture: want a present, empty transcript, got %v", row.IntroTranscription)
+	}
+	out, err = f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, decide)
+	if err != nil || out != IntroReparseNoTranscript || called {
+		t.Errorf("empty transcript: out=%v err=%v called=%v", out, err, called)
+	}
 	out, err = f.s.ReparseBookFileIntro(f.book.ID, "no-such-file", decide)
 	if err != nil || out != IntroReparseGone || called {
 		t.Errorf("missing row: out=%v err=%v called=%v", out, err, called)
@@ -234,8 +243,8 @@ func TestReparseBookFileIntro_GivesUpAfterTheBudget(t *testing.T) {
 	}
 }
 
-// The decision's parse is copied: later changes to the caller's value never reach
-// the stored row, and one patch value can be reused across rows.
+// The row is encoded when the write happens: later changes to the caller's value
+// never reach the stored row, so one decision value can be reused across rows.
 func TestReparseBookFileIntro_StoresACopy(t *testing.T) {
 	f := newCASFixture(t)
 	seedReparseRow(t, f, "Batman: Year One.", IntroStatusUnparsed, IntroReparseIdentity{})

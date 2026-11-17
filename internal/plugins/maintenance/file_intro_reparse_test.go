@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_reparse_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 2e6b9d14-8a37-4c51-b0f2-d95a1c3e7840
 // last-edited: 2026-11-17
 
@@ -1133,5 +1133,117 @@ func TestDonorResult_CopiesTheClassification(t *testing.T) {
 	stored := s.get("b1", "donor")
 	if gr.res.Parse == stored.IntroParse {
 		t.Error("the copy aliases the donor's stored parse")
+	}
+}
+
+// addSample keeps the lowest reparseSampleCap distinct ids per class whatever
+// order they arrive in (chunks fold in completion order, so the order is not the
+// id order). The op test above feeds ascending ids from one chunk only.
+func TestAddSample_KeepsTheLowestDistinctIdsInAnyOrder(t *testing.T) {
+	ids := make([]string, 0, 30)
+	for i := range 30 {
+		ids = append(ids, fid(i))
+	}
+	orders := map[string][]string{
+		"ascending":  ids,
+		"descending": append([]string(nil), ids...),
+		"doubled":    append(append([]string(nil), ids...), ids...),
+	}
+	for i, j := 0, len(orders["descending"])-1; i < j; i, j = i+1, j-1 {
+		orders["descending"][i], orders["descending"][j] = orders["descending"][j], orders["descending"][i]
+	}
+	// Interleave: high, low, high, low.
+	var mixed []string
+	for i := range 15 {
+		mixed = append(mixed, ids[29-i], ids[i])
+	}
+	orders["interleaved"] = mixed
+	want := ids[:reparseSampleCap]
+	for name, in := range orders {
+		m := map[string][]string{}
+		for _, id := range in {
+			addSample(m, "c", id)
+		}
+		if !reflect.DeepEqual(m["c"], want) {
+			t.Errorf("%s: samples = %v, want %v", name, m["c"], want)
+		}
+	}
+	// One id offered twice below the cap is kept once.
+	m := map[string][]string{}
+	addSample(m, "c", "f00001")
+	addSample(m, "c", "f00001")
+	if len(m["c"]) != 1 {
+		t.Errorf("a repeated id was kept %d times", len(m["c"]))
+	}
+}
+
+// Selection reads the retained intro columns because the transcript itself is
+// stripped from the listing. Each one alone must select a row, and a row with
+// none must not.
+func TestHasIntroFields_EveryRetainedColumnSelects(t *testing.T) {
+	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	cases := map[string]database.BookFileCore{
+		"status":       {TranscribeStatus: rpStr("ok")},
+		"time":         {IntroTranscribedAt: &now},
+		"hash":         {IntroSourceHash: "hash-batman"},
+		"run id":       {IntroRunOpID: "op-batman"},
+		"title":        {TranscribedTitle: rpStr("Hush")},
+		"author":       {TranscribedAuthor: rpStr("Selina Kyle")},
+		"narrator":     {TranscribedNarrator: rpStr("Alfred Pennyworth")},
+		"translator":   {TranscribedTranslator: rpStr("Lucius Fox")},
+		"cover artist": {TranscribedCoverArtist: rpStr("Barbara Gordon")},
+	}
+	for name, c := range cases {
+		if !hasIntroFields(&c) {
+			t.Errorf("a row with only its %s is not selected", name)
+		}
+	}
+	if hasIntroFields(&database.BookFileCore{ID: "plain", BookID: "b1"}) {
+		t.Error("a row with no intro column was selected")
+	}
+}
+
+// ErrModeCollect: a chunk that fails does not stop the chunks after it. One
+// worker makes the order fixed, so a fail-fast pool would never reach them.
+func TestReparseFileIntros_AFailedChunkDoesNotStopTheOthers(t *testing.T) {
+	s := newReparseFakeStore()
+	n := reparseChunkSize*3 + 5
+	seedMany(s, n)
+	s.failWrite[rpKey("b1", fid(1))] = true // chunk 0
+	env := newReparseEnv(s, &fakeReporter{})
+	env.workers = 1
+
+	res, err := runReparseFileIntros(context.Background(), env, reparseResumeKey{}, false)
+	if err == nil || res.Errors != 1 {
+		t.Fatalf("err = %v, errors = %d, want the one failure reported", err, res.Errors)
+	}
+	if want := n - 1; s.totalWrites() != want {
+		t.Errorf("writes = %d, want %d: the chunks after the failed one were skipped", s.totalWrites(), want)
+	}
+}
+
+// When the writer re-reads the row and finds nothing left to change (another
+// writer stored the same classification between the op's read and the write),
+// the file is examined and counted as no write.
+func TestReparseFileIntros_AnotherWriterGotThereFirst(t *testing.T) {
+	s := newReparseFakeStore()
+	s.put(rpIntro("b1", "f01", rpNarr, "ok", rpNone, nil))
+	theirs := introParseFromClip(transcribe.ParseClip(rpNarr))
+	s.beforeDecide = func(st *reparseFakeStore, key string) {
+		st.mu.Lock()
+		defer st.mu.Unlock()
+		p := theirs
+		st.rows[key].IntroParse = &p
+	}
+
+	res, err := runReparseFileIntros(context.Background(), newReparseEnv(s, &fakeReporter{}), reparseResumeKey{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ParseWrites != 0 || s.totalWrites() != 0 {
+		t.Errorf("parse writes = %d, store writes = %d, want 0: the other writer's row was already current", res.ParseWrites, s.totalWrites())
+	}
+	if res.Examined != 1 || res.Reparsed != 1 || res.Selected != 1 {
+		t.Errorf("selected %d examined %d reparsed %d, want 1 each", res.Selected, res.Examined, res.Reparsed)
 	}
 }

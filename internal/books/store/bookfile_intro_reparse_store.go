@@ -1,5 +1,5 @@
 // file: internal/books/store/bookfile_intro_reparse_store.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4c9e1b72-6d38-4a05-9f4e-2b7a8d1c5e63
 // last-edited: 2026-11-17
 
@@ -116,12 +116,10 @@ func (s *PebbleStore) reparseBookFileIntroOnce(bookID, fileID string, decide fun
 		return IntroReparseSkipped, fmt.Errorf("ReparseBookFileIntro: %s: decision without a parse", fileID)
 	}
 
-	// The parse is cloned: the caller's value may be reused across retries and
-	// across rows, and the stored one must not alias it. Nothing else on the row
-	// is assigned, so the encoded row differs from the stored one only in
-	// IntroParse.
-	parse := *next
-	row.IntroParse = &parse
+	// Nothing else on the row is assigned, so the encoded row differs from the
+	// stored one only in IntroParse. The row is encoded before this call returns,
+	// so the caller's value is never retained.
+	row.IntroParse = next
 
 	res, err := s.writeIntroRow(bookID, fileID, row, raw, "ReparseBookFileIntro")
 	switch res {
