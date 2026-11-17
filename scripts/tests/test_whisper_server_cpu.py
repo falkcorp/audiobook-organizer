@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_server_cpu.py
-# version: 2.1.0
+# version: 2.2.0
 # guid: c3e91a60-2f5d-4b87-a4c2-7d0b6e18f953
 # last-edited: 2026-11-17
 #
@@ -735,3 +735,28 @@ def test_main_warns_when_bound_beyond_loopback(monkeypatch, caplog):
     warned = [r for r in caplog.records if "beyond loopback" in r.getMessage()]
     assert warned and warned[0].levelno == logging.WARNING
     assert "no authentication" in warned[0].getMessage()
+
+
+# ── upload body limit ────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("route", ["/transcribe", "/transcribe-batch"])
+def test_the_upload_routes_refuse_a_body_over_the_limit(monkeypatch, tmp_path, route):
+    monkeypatch.setattr(ws, "MAX_UPLOAD_BYTES", 4096)
+    client, fake, _, _ = _app(monkeypatch, tmp_path)
+    _sine_wav(tmp_path / "big.wav", 1.0)  # 32 KB, over the 4 KB limit
+    big = (tmp_path / "big.wav").read_bytes()
+    files = (
+        {"file": ("big.wav", big, "audio/wav")}
+        if route == "/transcribe"
+        else [("files", ("101", big, "audio/wav"))]
+    )
+    r = client.post(route, files=files)
+    assert r.status_code == 413, r.text
+    small = client.post("/transcribe", files={"file": ("a.wav", b"RIFF", "audio/wav")})
+    assert small.status_code != 413, "a body under the limit still gets through to the handler"
+
+
+def test_the_upload_limit_is_far_above_an_intro_clip():
+    # 90 s of 16 kHz mono 16-bit PCM is 2.9 MB.
+    assert ws.MAX_UPLOAD_BYTES == 256 * 1024 * 1024 > 50 * 90 * 32000
