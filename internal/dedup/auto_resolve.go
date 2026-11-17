@@ -1,7 +1,7 @@
 // file: internal/dedup/auto_resolve.go
-// version: 1.14.3
+// version: 1.15.0
 // guid: 6d1e9b52-4f70-4c83-a2b9-1e5c8d0f7a34
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package dedup
 
@@ -81,6 +81,24 @@ type AutoResolveResult struct {
 	// file under the active iTunes library (merge.ErrITunesProtected). The
 	// candidate stays pending; it is neither merged nor a failure.
 	RefusedITunes int `json:"refused_itunes"`
+
+	// The remaining fields are the dry run's reviewable plan and are empty on an
+	// apply run (auto_resolve_plan.go).
+	//
+	// MaxMerges is the cap apply would use, so a reviewer knows which of the Plan's
+	// first entries an apply run would take.
+	MaxMerges int `json:"max_merges"`
+	// Plan lists, in the order apply visits them, the eligible pairs a run would
+	// merge, up to autoResolvePlanCap; PlanTruncated is how many more there were.
+	Plan          []AutoResolvePlanEntry `json:"plan,omitempty"`
+	PlanTruncated int                    `json:"plan_truncated,omitempty"`
+	// PlannedByGuard counts every eligible pair by the clause that admitted it.
+	PlannedByGuard map[string]int `json:"planned_by_guard,omitempty"`
+	// Refused lists, up to autoResolveRefusedCap, the candidates a guard stopped
+	// and which guard; RefusedByGuard counts every refusal, listed or not.
+	Refused          []AutoResolvePlanEntry `json:"refused,omitempty"`
+	RefusedTruncated int                    `json:"refused_truncated,omitempty"`
+	RefusedByGuard   map[string]int         `json:"refused_by_guard,omitempty"`
 }
 
 // AutoResolveSample is one eligible candidate, for the dry-run/apply report.
@@ -143,6 +161,11 @@ func (de *Engine) AutoResolveCertain(ctx context.Context, apply bool, maxMerges,
 		return res, fmt.Errorf("auto-resolve: list candidates: %w", err)
 	}
 
+	// The reviewable dry-run plan (auto_resolve_plan.go). It is filled only on a
+	// dry run, adds no read and no write per candidate, and the apply path never
+	// touches it.
+	plan := newAutoResolvePlan(!apply, autoResolvePlanCap, autoResolveRefusedCap)
+
 	for _, c := range candidates {
 		select {
 		case <-ctx.Done():
@@ -155,6 +178,7 @@ func (de *Engine) AutoResolveCertain(ctx context.Context, apply bool, maxMerges,
 		bookB, errB := de.bookStore.GetBookByID(c.EntityBID)
 		if errA != nil || errB != nil || bookA == nil || bookB == nil {
 			// Conservative: cannot judge a pair whose books we can't load.
+			plan.refuse(c, autoResolveDecision{Guard: guardBookUnreadable, Reason: "a book of the pair could not be loaded"})
 			continue
 		}
 		// Skip a pair whose book was already merged away earlier in this same
@@ -162,11 +186,14 @@ func (de *Engine) AutoResolveCertain(ctx context.Context, apply bool, maxMerges,
 		// two CERTAIN pairs would otherwise be double-merged). GetBookByID does
 		// not filter soft-deleted rows, so check the flag explicitly.
 		if bookSoftDeleted(bookA) || bookSoftDeleted(bookB) {
+			plan.refuse(c, autoResolveDecision{Guard: guardBookSoftDeleted, Reason: "a book of the pair is already in the trash"})
 			continue
 		}
 
-		eligible, reason := de.autoResolveEligible(c, bookA, bookB)
+		decision := de.autoResolveEligible(c, bookA, bookB)
+		eligible, reason := decision.Eligible, decision.Reason
 		if !eligible {
+			plan.refuse(c, decision)
 			continue
 		}
 		res.Eligible++
@@ -185,6 +212,7 @@ func (de *Engine) AutoResolveCertain(ctx context.Context, apply bool, maxMerges,
 			if len(res.Samples) < sampleCap {
 				res.Samples = append(res.Samples, sample)
 			}
+			plan.add(c, decision)
 			continue
 		}
 
@@ -223,32 +251,61 @@ func (de *Engine) AutoResolveCertain(ctx context.Context, apply bool, maxMerges,
 		}
 	}
 
+	plan.finish(&res, maxMerges)
 	logger.InfoCtx(ctx, "dedup auto-resolve pass complete",
 		"dry_run", res.DryRun, "checked", res.Checked, "eligible", res.Eligible,
 		"merged", res.Merged, "skipped_cap", res.SkippedCap)
 	return res, nil
 }
 
+// Guard identifiers: which rule of autoResolveEligible decided a pair. They are
+// stored in the dry-run plan, so they are stable strings, not display text.
+const (
+	guardBookUnreadable            = "book_unreadable"
+	guardBookSoftDeleted           = "book_soft_deleted"
+	guardAutomatedRefusal          = "automated_refusal"
+	guardBand                      = "band"
+	guardNoBreakdown               = "no_breakdown"
+	guardSuppressors               = "suppressors"
+	guardPairEligibility           = "pair_eligibility"
+	guardPlausibleAudio            = "plausible_audio"
+	guardIdentifiersConflict       = "identifiers_conflict"
+	guardCorroborationSignals      = "corroboration_signals"
+	guardCorroborationLabel        = "corroboration_signature_label"
+	guardCorroborationInsufficient = "corroboration_insufficient"
+)
+
+// autoResolveDecision is the outcome of the Tier-1 rules for one pair: whether
+// it is eligible, the human reason (unchanged text), and the guard that decided.
+// For an eligible pair Guard names the corroboration clause that admitted it, as
+// every earlier guard only ever refuses.
+type autoResolveDecision struct {
+	Eligible bool
+	Reason   string
+	Guard    string
+}
+
 // autoResolveEligible implements the Tier-1 eligibility rules (02-dedup design).
-// Returns (true, humanReason) only when EVERY guard holds. The reason string is
-// surfaced in the audit sample so an operator can see why each pair qualified.
-func (de *Engine) autoResolveEligible(c database.DedupCandidate, bookA, bookB *database.Book) (bool, string) {
+// The decision is Eligible only when EVERY guard holds. The Reason is surfaced in
+// the audit sample so an operator can see why each pair qualified; Guard names
+// the rule that decided, for the stored dry-run plan.
+func (de *Engine) autoResolveEligible(c database.DedupCandidate, bookA, bookB *database.Book) autoResolveDecision {
 	// A pair a human enqueued or pinned, and two book rows at the same
 	// cleaned path, are review-queue-only by owner decision: no automated
 	// path may merge them, however strong the score (automated_guard.go).
 	if why, refused := AutomatedResolutionRefusal(c, bookA, bookB); refused {
-		return false, why
+		return autoResolveDecision{Reason: why, Guard: guardAutomatedRefusal}
 	}
 	if c.Band != unified.BandCertain {
-		return false, "band is not CERTAIN"
+		return autoResolveDecision{Reason: "band is not CERTAIN", Guard: guardBand}
 	}
 	// A nil breakdown is a pre-T015 legacy row with nothing to audit — never
 	// auto-merge it.
 	if c.ScoreBreakdown == nil {
-		return false, "no score breakdown (legacy row)"
+		return autoResolveDecision{Reason: "no score breakdown (legacy row)", Guard: guardNoBreakdown}
 	}
 	if len(c.ScoreBreakdown.Suppressors) > 0 {
-		return false, "score has active suppressors: " + strings.Join(c.ScoreBreakdown.Suppressors, ",")
+		return autoResolveDecision{Reason: "score has active suppressors: " + strings.Join(c.ScoreBreakdown.Suppressors, ","), Guard: guardSuppressors}
 	}
 	// The stored list above is retained for legacy rows, but it CANNOT be relied
 	// on: no production path populates it. unified.ComposeScore is the only
@@ -262,17 +319,17 @@ func (de *Engine) autoResolveEligible(c database.DedupCandidate, bookA, bookB *d
 	// and both books are already in hand here, so this costs nothing. It also
 	// catches a pair that became suppressed AFTER its score was written.
 	if ok, suppressors := PairEligibility(bookA, bookB); !ok {
-		return false, "pair is suppressed: " + strings.Join(suppressors, ",")
+		return autoResolveDecision{Reason: "pair is suppressed: " + strings.Join(suppressors, ","), Guard: guardPairEligibility}
 	}
 
 	// Both sides must look like real audio, and their identifiers must not
 	// actively disagree. These are independent of the signal-corroboration
 	// check and are kept as separate guards.
 	if !hasPlausibleAudio(bookA) || !hasPlausibleAudio(bookB) {
-		return false, "at least one side lacks plausible audio"
+		return autoResolveDecision{Reason: "at least one side lacks plausible audio", Guard: guardPlausibleAudio}
 	}
 	if identifiersConflict(bookA, bookB) {
-		return false, "identifiers conflict between the two books"
+		return autoResolveDecision{Reason: "identifiers conflict between the two books", Guard: guardIdentifiersConflict}
 	}
 
 	// Corroboration: ≥2 distinct primary signal kinds with Confidence>0, OR a
@@ -286,7 +343,11 @@ func (de *Engine) autoResolveEligible(c database.DedupCandidate, bookA, bookB *d
 		for _, k := range distinct {
 			kinds = append(kinds, string(k))
 		}
-		return true, fmt.Sprintf("%d distinct primary signals: %s", len(distinct), strings.Join(kinds, "+"))
+		return autoResolveDecision{
+			Eligible: true,
+			Reason:   fmt.Sprintf("%d distinct primary signals: %s", len(distinct), strings.Join(kinds, "+")),
+			Guard:    guardCorroborationSignals,
+		}
 	}
 
 	// Fallback: a whole-book-signature oracle label. Reuse the already-labeled
@@ -295,10 +356,13 @@ func (de *Engine) autoResolveEligible(c database.DedupCandidate, bookA, bookB *d
 	if ex, err := de.embedStore.GetLabeledExample(c.ID); err != nil {
 		slog.Warn("dedup auto-resolve: GetLabeledExample failed", "candidate", c.ID, "err", err)
 	} else if ex != nil && ex.Label == "true_dup" && strings.Contains(ex.LabelReason, "whole-book signatures match") {
-		return true, "whole-book-signature true_dup label"
+		return autoResolveDecision{Eligible: true, Reason: "whole-book-signature true_dup label", Guard: guardCorroborationLabel}
 	}
 
-	return false, fmt.Sprintf("insufficient corroboration (%d primary signal kind(s), no whole-book-signature label)", len(distinct))
+	return autoResolveDecision{
+		Reason: fmt.Sprintf("insufficient corroboration (%d primary signal kind(s), no whole-book-signature label)", len(distinct)),
+		Guard:  guardCorroborationInsufficient,
+	}
 }
 
 // autoMergeCertain performs a single Tier-1 merge for an eligible candidate,
@@ -407,8 +471,9 @@ func (de *Engine) preMergeSnapshotNanos(bookID string, baselineNanos int64) int6
 // pre-merge snapshot, winner) row no longer exists, an entry still marked Provisional (its merge
 // failed, or the post-merge patch could not be written, so the entry records
 // no snapshot to revert to and no siblings), an entry already undone
-// (UndoneAt; a replay would revert any later merge of the same books), and an
-// entry whose sibling undo the sibling-move journal refuses.
+// (UndoneAt; a replay would revert any later merge of the same books), an
+// entry whose pre-merge snapshot (either side's) no longer exists, naming every
+// missing one, and an entry whose sibling undo the sibling-move journal refuses.
 //
 // The sibling restore goes through the journal, not the entry's own sibling
 // list, so its refusals apply here too: once an undo has put a sibling back, a
@@ -465,14 +530,23 @@ func (de *Engine) UnmergeAuto(journalKey string) error {
 	// while its files stay retired under the other book), so that is refused
 	// here too, before the sibling undo, the first write; the store refuses the
 	// same revert itself as a backstop.
+	//
+	// The snapshot each revert restores from must also still exist. The snapshot
+	// prune used to delete them (it now keeps every one a live journal row names:
+	// books/store/snapshot_pins.go), and an undo that found one missing only after
+	// the siblings were moved back and the loser reverted left a half-applied
+	// merge that no retry could finish. Every missing snapshot is named in one
+	// refusal.
+	var missingSnapshots []string
 	for _, side := range []struct {
 		role    string
 		id      string
 		need    bool
 		reverts bool
+		ts      int64
 	}{
-		{"loser", entry.LoserID, true, entry.LoserPreMergeTS != 0},
-		{"winner", entry.WinnerID, entry.WinnerPreMergeTS != 0, entry.WinnerPreMergeTS != 0},
+		{"loser", entry.LoserID, true, entry.LoserPreMergeTS != 0, entry.LoserPreMergeTS},
+		{"winner", entry.WinnerID, entry.WinnerPreMergeTS != 0, entry.WinnerPreMergeTS != 0, entry.WinnerPreMergeTS},
 	} {
 		if !side.need {
 			continue
@@ -490,6 +564,18 @@ func (de *Engine) UnmergeAuto(journalKey string) error {
 		if err := database.RefuseRetiredShell(de.bookStore, side.id, "unmerge the "+side.role); err != nil {
 			return fmt.Errorf("unmerge-auto: %w; nothing reverted", err)
 		}
+		snapKey := fmt.Sprintf("book_ver:%s:%d", side.id, side.ts)
+		if _, verr := de.bookStore.GetBookAtVersion(side.id, time.Unix(0, side.ts)); verr != nil {
+			if errors.Is(verr, database.ErrBookVersionNotFound) {
+				missingSnapshots = append(missingSnapshots, fmt.Sprintf("%s (%s %s)", snapKey, side.role, side.id))
+				continue
+			}
+			return fmt.Errorf("unmerge-auto: read the pre-merge snapshot %s of %s %s: %w; nothing reverted", snapKey, side.role, side.id, verr)
+		}
+	}
+	if len(missingSnapshots) > 0 {
+		return fmt.Errorf("unmerge-auto: the pre-merge snapshot(s) this merge restores from no longer exist: %s; this merge cannot be undone from its journal, nothing reverted",
+			strings.Join(missingSnapshots, ", "))
 	}
 
 	var errs []string

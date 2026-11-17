@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store.go
-// version: 1.239.7
+// version: 1.240.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-11-12
+// last-edited: 2026-11-17
 
 package store
 
@@ -125,6 +125,9 @@ type PebbleStore struct {
 	// (retired_hash_scope.go); its generation is bumped by every write that
 	// can change which retired rows hold which hash.
 	retiredHash retiredHashCache
+	// snapPins caches the set of snapshots live merge journals point at
+	// (snapshot_pins.go), rebuilt when a journal is written.
+	snapPins snapshotPinCache
 	// metadataCacheLocks serialise writes of one book's metadata_cache row
 	// (striped by book id, metadataCacheLock): PutMetadataCache and
 	// DeleteMetadataCache, and the book write that re-stamps a kept row's
@@ -3610,7 +3613,7 @@ func (p *PebbleStore) GetBookAtVersion(id string, ts time.Time) (*Book, error) {
 	key := []byte(fmt.Sprintf("book_ver:%s:%d", id, ts.UnixNano()))
 	value, closer, err := p.db.Get(key)
 	if err == pebble.ErrNotFound {
-		return nil, fmt.Errorf("version not found")
+		return nil, fmt.Errorf("%w: %s", ErrBookVersionNotFound, key)
 	}
 	if err != nil {
 		return nil, err
@@ -3623,6 +3626,12 @@ func (p *PebbleStore) GetBookAtVersion(id string, ts time.Time) (*Book, error) {
 	}
 	return &book, nil
 }
+
+// ErrBookVersionNotFound is returned (wrapped, naming the key) by
+// GetBookAtVersion and RevertBookToVersion when the snapshot does not exist: it
+// was pruned, or never written. A caller that must not act on a partial restore
+// tells "gone" from "unreadable" with errors.Is.
+var ErrBookVersionNotFound = errors.New("version not found")
 
 // RevertBookToVersion restores a book to a previous version snapshot.
 //
@@ -3731,7 +3740,9 @@ func (p *PebbleStore) CountBookSnapshots(id string) (int, error) {
 	return n, iter.Error()
 }
 
-// PruneBookSnapshots keeps the newest keepCount versions and deletes the rest.
+// PruneBookSnapshots keeps the newest keepCount versions and deletes the rest,
+// except a snapshot a live merge journal row still points at (snapshot_pins.go):
+// the undo of an automatic merge restores from those, so they outlive keepCount.
 //
 // It iterates KEYS ONLY. This used to call GetBookSnapshots(id, 0), which copies
 // every snapshot's value into a fresh []byte -- solely to read a timestamp that
@@ -3740,8 +3751,8 @@ func (p *PebbleStore) CountBookSnapshots(id string) (int, error) {
 // library-wide prune would have read and copied all ~7.65 GB of snapshot history
 // to discover keys it already had.
 //
-// The set of keys deleted is unchanged: the newest keepCount are kept and every
-// older parseable key is removed.
+// The set of keys deleted is the newest-keepCount rule minus the pinned ones. If
+// the pins cannot be read it returns the error and deletes nothing.
 func (p *PebbleStore) PruneBookSnapshots(id string, keepCount int) (int, error) {
 	if keepCount < 0 {
 		keepCount = 0
@@ -3750,28 +3761,42 @@ func (p *PebbleStore) PruneBookSnapshots(id string, keepCount int) (int, error) 
 	if err != nil {
 		return 0, err
 	}
-	if len(keys) <= keepCount {
-		return 0, nil
-	}
-	// Ascending order, so the OLDEST are at the front and the newest keepCount
-	// are the tail that must survive.
-	toDelete := keys[:len(keys)-keepCount]
-
-	batch := p.db.NewBatch()
-	// Deferred so the batch is released on every path. The previous version
-	// closed it only on the error paths, leaking it on success.
-	defer func() { _ = batch.Close() }()
-
-	for _, k := range toDelete {
-		if err := batch.Delete(k, nil); err != nil {
+	// A journal row can be written between reading the pins and committing the
+	// delete. The generation is re-checked just before the commit, and the plan
+	// is redone on a changed one, so a row written during this call is honoured.
+	for attempt := 0; attempt < pruneStablePinsAttempts; attempt++ {
+		pins, err := p.snapshotPins()
+		if err != nil {
 			return 0, err
 		}
+		toDelete, _ := planSnapshotPrune(id, keys, keepCount, pins)
+		if len(toDelete) == 0 {
+			return 0, nil
+		}
+		batch := p.db.NewBatch()
+		for _, k := range toDelete {
+			if err := batch.Delete(k, nil); err != nil {
+				_ = batch.Close()
+				return 0, err
+			}
+		}
+		if !pinsAreCurrent(pins) {
+			_ = batch.Close()
+			continue
+		}
+		err = batch.Commit(pebble.Sync)
+		_ = batch.Close()
+		if err != nil {
+			return 0, err
+		}
+		return len(toDelete), nil
 	}
-	if err := batch.Commit(pebble.Sync); err != nil {
-		return 0, err
-	}
-	return len(toDelete), nil
+	return 0, fmt.Errorf("prune snapshots of book %s: merge journal changed on every attempt, nothing deleted", id)
 }
+
+// pruneStablePinsAttempts bounds the re-plan loop in PruneBookSnapshots. A
+// journal write is one per merge, so more than one retry means a merge storm.
+const pruneStablePinsAttempts = 5
 
 // DeleteBook hard-deletes a book row and the indexes keyed by it. It refuses a
 // book that still owns book_file rows (ErrBookOwnsFiles) and a book that is a

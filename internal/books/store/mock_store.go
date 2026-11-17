@@ -1,7 +1,7 @@
 // file: internal/books/store/mock_store.go
-// version: 1.157.4
+// version: 1.158.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-11-15
+// last-edited: 2026-11-17
 
 package store
 
@@ -98,6 +98,8 @@ type MockStore struct {
 	RevertBookToVersionFunc              func(id string, ts time.Time) (*Book, error)
 	PruneBookVersionsFunc                func(id string, keepCount int) (int, error)
 	CountBookSnapshotsFunc               func(id string) (int, error)
+	PlanBookSnapshotPruneFunc            func(id string, keepCount int) (BookSnapshotPrunePlan, error)
+	AuditMergeJournalSnapshotsFunc       func(idCap int) (MergeJournalSnapshotAudit, error)
 	MarkITunesSyncedFunc                 func(bookIDs []string) (int64, error)
 	GetITunesDirtyBooksFunc              func() ([]Book, error)
 	GetITunesPurgePendingBooksFunc       func() ([]Book, error)
@@ -2764,6 +2766,22 @@ func (m *MockStore) CountBookSnapshots(id string) (int, error) {
 		return m.CountBookSnapshotsFunc(id)
 	}
 	return 0, nil
+}
+
+// PlanBookSnapshotPrune reports what a prune of the book would do. Backed by its
+// own hook; the default plans nothing, like PruneBookSnapshots' default.
+func (m *MockStore) PlanBookSnapshotPrune(id string, keepCount int) (BookSnapshotPrunePlan, error) {
+	if m.PlanBookSnapshotPruneFunc != nil {
+		return m.PlanBookSnapshotPruneFunc(id, keepCount)
+	}
+	return BookSnapshotPrunePlan{}, nil
+}
+
+func (m *MockStore) AuditMergeJournalSnapshots(idCap int) (MergeJournalSnapshotAudit, error) {
+	if m.AuditMergeJournalSnapshotsFunc != nil {
+		return m.AuditMergeJournalSnapshotsFunc(idCap)
+	}
+	return MergeJournalSnapshotAudit{}, nil
 }
 
 func (m *MockStore) MarkITunesSynced(bookIDs []string) (int64, error) {
