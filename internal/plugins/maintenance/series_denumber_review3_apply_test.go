@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_review3_apply_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9b3d7e20-4c16-4a58-b1e9-6f0d2a85c734
 // last-edited: 2026-11-17
 
@@ -296,5 +296,36 @@ func TestSeriesDenumber_Round3_N7_ANilScanControllerRefusesTheApply(t *testing.T
 
 	if err == nil || !strings.Contains(err.Error(), "no scan controller") {
 		t.Fatalf("err = %v, want a refusal naming the missing scan controller", err)
+	}
+}
+
+// ─── m1: a lock found late on one version writes none of the book's versions ─
+
+// The primary version is locked after planning. Every version is checked on its
+// fresh row before the first is written, so the alternate version is never
+// written and taken back: no update, no journal row, not even a voided one.
+func TestSeriesDenumber_Round3_M1_ALockFoundOnALaterVersionWritesNoVersionAtAll(t *testing.T) {
+	l := newDenumberLib(t)
+	l.addSeries(10, "Court of Owls", denumberAuthor)
+	l.addSeries(11, "Court of Owls 05", denumberAuthor)
+	l.addBook("owls-5-primary", 11, -1, "vg")
+	l.addBook("owls-5-alt", 11, -1, "vg")
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
+	// The first read of the primary's locks is the plan's; every later one finds the lock.
+	l.lockBook("owls-5-primary", database.FieldKeySeriesName, 2)
+
+	l.mustRun(`{"apply": true}`)
+
+	if l.seriesOf("owls-5-alt") != 11 || l.seriesOf("owls-5-primary") != 11 {
+		t.Fatalf("a version moved: alt in %d, primary in %d", l.seriesOf("owls-5-alt"), l.seriesOf("owls-5-primary"))
+	}
+	if l.indexOf("update:owls-5-alt") >= 0 || l.indexOf("update:owls-5-primary") >= 0 {
+		t.Errorf("a version was written and taken back instead of never written: %v", l.events)
+	}
+	if len(l.changes) != 0 {
+		t.Errorf("%d journal rows (voided or live) for a book that was never written", len(l.changes))
+	}
+	if l.deleted[11] {
+		t.Errorf("the series was deleted while its book stayed")
 	}
 }
