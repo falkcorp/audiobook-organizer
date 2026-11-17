@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.55.6
+// version: 1.56.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package metafetch
 
@@ -693,6 +693,13 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 		return nil, fmt.Errorf("book %s: %w", id, ErrMarkedNoMatch)
 	}
 
+	// A retired book (in the trash, or absorbed into another book) is not
+	// one anybody is picking metadata for. Same choke point, same rule: an
+	// automatic apply never writes onto it (re-checked at commit, below).
+	if opts.automatic() && book.IsRetired() {
+		return nil, fmt.Errorf("book %s: %w", id, ErrBookRetired)
+	}
+
 	// The caller's Guard runs once here, on the row as read, before the apply
 	// body: the body resolves or creates a Series row (applyMetadataUnguarded)
 	// before the commit, so a guard that refuses only under the write lock
@@ -890,12 +897,16 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// logged it at Error and undo refuses that apply.
 	var noMatchGuard func(*database.Book) error
 	if opts.automatic() {
-		// The no_match check above read the row this apply loaded; re-check
-		// the row as it stands under the write lock, so a "no match" the
-		// owner set while this apply ran is not overwritten.
+		// The no_match and retired checks above read the row this apply
+		// loaded; re-check the row as it stands under the write lock, so a
+		// "no match" the owner set (or a merge or trash that landed) while
+		// this apply ran is not overwritten.
 		noMatchGuard = func(fresh *database.Book) error {
 			if IsMarkedNoMatch(fresh.MetadataReviewStatus) {
 				return fmt.Errorf("book %s: %w", id, ErrMarkedNoMatch)
+			}
+			if fresh.IsRetired() {
+				return fmt.Errorf("book %s: %w", id, ErrBookRetired)
 			}
 			return nil
 		}

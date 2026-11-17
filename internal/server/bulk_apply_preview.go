@@ -1,7 +1,7 @@
 // file: internal/server/bulk_apply_preview.go
-// version: 1.15.3
+// version: 1.16.0
 // guid: 6a2e9c15-4f70-4b3d-8e21-d5c7a0f9b384
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 //
 // The bulk-apply DRY RUN: "metadata.bulk-apply-preview".
 //
@@ -387,7 +387,7 @@ func runBulkApplyPreview(
 			slog.String("error", err.Error()))
 	}
 
-	var nApply, nBlocked, nSkipped, nWriteErr, nNoMatch, nAlreadyApplied atomic.Int64
+	var nApply, nBlocked, nSkipped, nWriteErr, nNoMatch, nAlreadyApplied, nRetired atomic.Int64
 	// One import-path read shared by every row of this dry run.
 	planBooks := withCachedImportPaths(books)
 	previewOne := func(_ context.Context, id string) error {
@@ -420,6 +420,11 @@ func runBulkApplyPreview(
 		// reporting them as books that would apply.
 		if plan.Reason == applySkipAlreadyApplied {
 			nAlreadyApplied.Add(1)
+		}
+		// A retired book is a skipped row too (reason book_retired), counted
+		// separately so the summary says why the number is not zero.
+		if plan.Reason == applySkipBookRetired {
+			nRetired.Add(1)
 		}
 		// all_cached is the select-all preview: its apply sends the hashless
 		// marker, so it reports the marker's owner-review rule.
@@ -457,8 +462,8 @@ func runBulkApplyPreview(
 	if runErr != nil {
 		return runErr
 	}
-	msg := fmt.Sprintf("dry run complete: %d would apply, %d blocked, %d skipped of %d (skipped as already applied: %d; left out, marked no match: %d; report rows not saved: %d; sibling-part index could not read %d books)",
-		nApply.Load(), nBlocked.Load(), nSkipped.Load(), len(ids)-int(nNoMatch.Load()), nAlreadyApplied.Load(), nNoMatch.Load(), nWriteErr.Load(), claims.Unreadable())
+	msg := fmt.Sprintf("dry run complete: %d would apply, %d blocked, %d skipped of %d (skipped as already applied: %d; skipped as retired: %d; left out, marked no match: %d; report rows not saved: %d; sibling-part index could not read %d books)",
+		nApply.Load(), nBlocked.Load(), nSkipped.Load(), len(ids)-int(nNoMatch.Load()), nAlreadyApplied.Load(), nRetired.Load(), nNoMatch.Load(), nWriteErr.Load(), claims.Unreadable())
 	_ = registryProgressAdapter{r: reporter}.UpdateProgress(len(ids), len(ids), msg)
 	return nil
 }
