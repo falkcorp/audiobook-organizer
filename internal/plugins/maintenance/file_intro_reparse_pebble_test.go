@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_reparse_pebble_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4c7e1a95-d2b8-4f36-9a05-e83b6d1c7f42
 // last-edited: 2026-11-17
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -96,10 +97,11 @@ func TestReparseFileIntros_AgainstThePebbleStore(t *testing.T) {
 		t.Fatalf("live = %+v", live)
 	}
 	// MJ1 on the real encoding: each rewritten row carries its whole 2 KiB
-	// fingerprint (base64 in the JSON row), so two rows are well over 4 KiB, and a
-	// live run reports the same volume the preview promised.
-	if prev.ParseWriteBytes < 2*2048 || live.ParseWriteBytes != prev.ParseWriteBytes {
-		t.Errorf("write volume: preview %d bytes, live %d bytes, want equal and at least %d", prev.ParseWriteBytes, live.ParseWriteBytes, 2*2048)
+	// fingerprint (base64 in the JSON row), so two rows are well over 4 KiB.
+	// A preview cannot know the timestamp a later write stamps, so it is within 10
+	// bytes per row of the live figure, which is the stored size.
+	if diff := live.ParseWriteBytes - prev.ParseWriteBytes; prev.ParseWriteBytes < 2*2048 || diff < -10*int64(live.ParseWrites) || diff > 10*int64(live.ParseWrites) {
+		t.Errorf("write volume: preview %d bytes, live %d bytes, want within 10 bytes per written row and at least %d", prev.ParseWriteBytes, live.ParseWriteBytes, 2*2048)
 	}
 	if !reflect.DeepEqual(live.KindAfter, prev.KindAfter) || !reflect.DeepEqual(live.Identity, prev.Identity) {
 		t.Errorf("live and preview disagree:\nlive    %+v %+v\npreview %+v %+v", live.KindAfter, live.Identity, prev.KindAfter, prev.Identity)
@@ -177,5 +179,80 @@ func TestReparseFileIntros_TranscriptOnlyRowsAgainstThePebbleStore(t *testing.T)
 		if f, _ := s.GetBookFileByID(c.book, c.file); f.IntroParse != nil {
 			t.Errorf("%s was classified outside the documented selection", c.file)
 		}
+	}
+}
+
+// movingReads re-homes one row, once, just before the op first reads it by its old
+// key: the window between a pass's listing and its read in which a merge runs.
+type movingReads struct {
+	reparseFileIntrosReads
+	book, file string
+	once       sync.Once
+	move       func()
+}
+
+func (m *movingReads) GetBookFileByID(bookID, fileID string) (*database.BookFile, error) {
+	if bookID == m.book && fileID == m.file {
+		m.once.Do(m.move)
+	}
+	return m.reparseFileIntrosReads.GetBookFileByID(bookID, fileID)
+}
+
+// R3-m1 against the real store: MoveBookFilesToBook keeps the file id and rewrites the
+// row's key, so the old (book, file) read answers nothing. The row must be classified
+// under its new book, and the run must succeed.
+func TestReparseFileIntros_ARehomedRowIsClassifiedAgainstThePebbleStore(t *testing.T) {
+	s := newRepairPebble(t)
+	mkBook := func(title, path string) *database.Book {
+		b, err := s.CreateBook(&database.Book{Title: title, FilePath: path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	src, dst := mkBook("Batman: Year One", "/lib/Gotham/Year-One"), mkBook("Batman: Hush", "/lib/Gotham/Hush")
+	var ids []string
+	for n := 1; n <= 3; n++ {
+		f := &database.BookFile{
+			BookID: src.ID, FilePath: fmt.Sprintf("/lib/Gotham/Year-One/%02d.m4b", n), FileHash: fmt.Sprintf("gotham-hash-%02d", n),
+			Duration: database.Secs(600), FileSize: 4096,
+		}
+		if err := s.CreateBookFile(f); err != nil {
+			t.Fatal(err)
+		}
+		text := rpTitle
+		if _, err := s.SetBookFileIntro(src.ID, f.ID, database.BookFileIntroResult{
+			SourceHash: f.FileHash, RunOpID: "op-batman", Status: "unparsed", Done: true, Transcript: &text,
+			At: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, f.ID)
+	}
+	moved := ids[1]
+	w, ok := database.AsCapability[database.BookFileIntroReparser](s)
+	if !ok {
+		t.Fatal("the Pebble store does not offer the re-parse writer")
+	}
+	reads := &movingReads{reparseFileIntrosReads: s, book: src.ID, file: moved, move: func() {
+		if err := s.MoveBookFilesToBook([]string{moved}, src.ID, dst.ID); err != nil {
+			t.Errorf("MoveBookFilesToBook: %v", err)
+		}
+	}}
+	env := reparseFileIntrosEnv{reads: reads, writer: w, queue: reparseQueue{}, reporter: &fakeReporter{}, workers: 1}
+
+	res, err := runReparseFileIntros(context.Background(), env, false)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	f, err := s.GetBookFileByID(dst.ID, moved)
+	if err != nil || f == nil {
+		t.Fatalf("re-homed row not found under its new book: %v %v", f, err)
+	}
+	if f.IntroParse == nil || f.IntroParse.Kind != "title_announcement" {
+		t.Fatalf("re-homed row parse = %+v, want a title announcement", f.IntroParse)
+	}
+	if res.Gone != 1 || res.ParseWrites != 3 {
+		t.Errorf("gone %d writes %d, want 1 / 3", res.Gone, res.ParseWrites)
 	}
 }

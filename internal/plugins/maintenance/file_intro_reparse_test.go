@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_reparse_test.go
-// version: 2.0.4
+// version: 2.1.0
 // guid: 2e6b9d14-8a37-4c51-b0f2-d95a1c3e7840
 // last-edited: 2026-11-17
 
@@ -52,6 +52,12 @@ type reparseFakeStore struct {
 	// decide: the point where a concurrent writer can change the row.
 	beforeDecide func(s *reparseFakeStore, key string)
 	raced        map[string]bool
+	// beforeRead runs once per key, under no lock, before the op's first read of
+	// that row: the point where a merge can re-home a row between the listing and
+	// the read. afterListing runs after every book file listing, under no lock.
+	beforeRead   func(s *reparseFakeStore, key string)
+	readRaced    map[string]bool
+	afterListing func(s *reparseFakeStore)
 	decides      map[string]int
 	// rendezvous, when set, makes a write wait (bounded) until that many writes
 	// are in flight at once; maxInflight is the most seen.
@@ -68,13 +74,25 @@ type reparseFakeStore struct {
 	// short memdb whose Pebble fallback scan failed would.
 	filesErr, booksErr error
 	listings           atomic.Int64
+	// unconfirmed lists "book/file" keys whose write is applied but reported with an
+	// error, the way a commit whose durability is unknown is.
+	unconfirmed map[string]bool
+	// stamp is the timestamp the fake's SizeWith encodes rows with (the writer's
+	// "fresh read" size); the zero value means rpStamp.
+	stamp time.Time
 }
+
+// rpStamp is the fixed timestamp the fake store and the test envs size rows with, so
+// a preview and a live run can be compared exactly.
+var rpStamp = time.Date(2026, 11, 17, 12, 0, 0, 123456789, time.UTC)
+
+func rpClock() time.Time { return rpStamp }
 
 func newReparseFakeStore() *reparseFakeStore {
 	return &reparseFakeStore{
 		rows: map[string]*database.BookFile{}, writes: map[string]int{},
 		failWrite: map[string]bool{}, failRead: map[string]bool{}, raced: map[string]bool{}, decides: map[string]int{},
-		bookText: map[string]string{},
+		readRaced: map[string]bool{}, unconfirmed: map[string]bool{}, bookText: map[string]string{},
 	}
 }
 
@@ -106,15 +124,30 @@ func (s *reparseFakeStore) totalWrites() int {
 func (s *reparseFakeStore) GetAllBookFilesCoreComplete() ([]database.BookFileCore, error) {
 	s.listings.Add(1)
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.filesErr != nil {
+		defer s.mu.Unlock()
 		return nil, s.filesErr
 	}
 	out := make([]database.BookFileCore, 0, len(s.rows))
 	for _, r := range s.rows {
 		out = append(out, r.Core())
 	}
+	hook := s.afterListing
+	s.mu.Unlock()
+	if hook != nil {
+		hook(s) // the rows it adds show in the NEXT listing, as in a live library
+	}
 	return out, nil
+}
+
+// move re-homes a row the way MoveBookFilesToBook does: same file id, new book.
+func (s *reparseFakeStore) move(fromBook, toBook, file string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.rows[rpKey(fromBook, file)]
+	delete(s.rows, rpKey(fromBook, file))
+	r.BookID = toBook
+	s.rows[rpKey(toBook, file)] = r
 }
 
 // GetAllBooksCoreComplete lists every book a row names, with the book-level
@@ -143,6 +176,14 @@ func (s *reparseFakeStore) GetAllBooksCoreComplete(limit, offset int) ([]databas
 }
 
 func (s *reparseFakeStore) GetBookFileByID(book, file string) (*database.BookFile, error) {
+	s.mu.Lock()
+	hook := s.beforeRead
+	first := !s.readRaced[rpKey(book, file)]
+	s.readRaced[rpKey(book, file)] = true
+	s.mu.Unlock()
+	if hook != nil && first {
+		hook(s, rpKey(book, file))
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failRead[rpKey(book, file)] {
@@ -195,6 +236,12 @@ func (s *reparseFakeStore) ReparseBookFileIntro(book, file string, decide func(d
 	}
 	s.decides[key]++
 	cur := database.IntroReparseRow{Transcript: *row.IntroTranscription, Parse: row.IntroParse}
+	at := s.stamp
+	if at.IsZero() {
+		at = rpStamp
+	}
+	sized := *row
+	cur.SizeWith = func(p database.IntroParse) (int, error) { return database.IntroParseRowBytes(&sized, p, at) }
 	deref := func(p *string) string {
 		if p == nil {
 			return ""
@@ -217,6 +264,9 @@ func (s *reparseFakeStore) ReparseBookFileIntro(book, file string, decide func(d
 	s.writes[key]++
 	if s.onWrite != nil {
 		s.onWrite()
+	}
+	if s.unconfirmed[key] {
+		return database.IntroReparseWrote, errors.New("applied, durability unknown (fault injected)")
 	}
 	return database.IntroReparseWrote, nil
 }
@@ -245,7 +295,7 @@ func (q reparseQueue) ListActiveOperationsV2() ([]database.OperationV2Row, error
 }
 
 func newReparseEnv(s *reparseFakeStore, rep sdk.Reporter) reparseFileIntrosEnv {
-	return reparseFileIntrosEnv{reads: s, writer: s, queue: reparseQueue{}, reporter: rep, workers: 4}
+	return reparseFileIntrosEnv{reads: s, writer: s, queue: reparseQueue{}, reporter: rep, workers: 4, now: rpClock}
 }
 
 // intro is one stored per-file intro row.
@@ -664,7 +714,7 @@ func TestReparseFileIntros_RestartVisitsRowsThatLandedBeforeTheOldStop(t *testin
 	}
 }
 
-// m2: a run that reports success leaves nothing selectable behind. A file that
+// m2: a run that reports success has visited every file its last listing held. A file that
 // appears while the run is working (here: one new row per file, once) is visited by
 // a closing pass before the run succeeds, and a library that keeps growing fails the
 // run instead of reporting a success it cannot back.
@@ -690,16 +740,79 @@ func TestReparseFileIntros_ClosingPassVisitsFilesThatAppearedDuringTheRun(t *tes
 	}
 }
 
-func TestReparseFileIntros_AGrowingLibraryFailsTheRunInsteadOfReportingSuccess(t *testing.T) {
+// R3-m2 (b): rows that keep arriving AND need a parse write keep every pass
+// productive, so the run cannot claim to be done: it ends in failure when the
+// backstop is reached, and says why.
+func TestReparseFileIntros_RowsThatKeepNeedingWritesHitTheBackstopAndFail(t *testing.T) {
 	s := newReparseFakeStore()
 	seedMany(s, 2)
 	var n atomic.Int64
-	s.beforeDecide = func(st *reparseFakeStore, key string) {
+	s.afterListing = func(st *reparseFakeStore) {
 		st.put(rpIntro("a0", fmt.Sprintf("late%03d", n.Add(1)), rpNarr, "unparsed", rpNone, nil))
 	}
-	_, err := runReparseFileIntros(context.Background(), newReparseEnv(s, &fakeReporter{}), false)
-	if err == nil || !strings.Contains(err.Error(), "still gained selectable files") {
-		t.Fatalf("err = %v, want the run to fail rather than report success", err)
+	res, err := runReparseFileIntros(context.Background(), newReparseEnv(s, &fakeReporter{}), false)
+	if err == nil || !strings.Contains(err.Error(), "kept producing writes") {
+		t.Fatalf("err = %v, want the run to fail and say passes kept producing writes", err)
+	}
+	if got := s.listings.Load(); got != reparseMaxPasses {
+		t.Errorf("%d listings, want exactly the %d passes the backstop allows", got, reparseMaxPasses)
+	}
+	if res.ParseWrites < 2+reparseMaxPasses-1 {
+		t.Errorf("parse writes = %d, want every pass to have written", res.ParseWrites)
+	}
+}
+
+// R3-m2 (a): while a whole-library transcription run adds files, each one already
+// carries a current parse. A pass over such rows writes nothing and loses nothing, so
+// the run is done: chasing rows that never needed work would only turn a finished run
+// into a failed one. A row added after the last listing is outside the run, as for any
+// snapshot.
+func TestReparseFileIntros_RowsThatAreAlreadyCurrentDoNotKeepTheRunOpen(t *testing.T) {
+	s := newReparseFakeStore()
+	seedMany(s, 3)
+	current := introParseFromClip(transcribe.ParseClip(rpNarr))
+	var n atomic.Int64
+	s.afterListing = func(st *reparseFakeStore) {
+		st.put(rpIntro("a0", fmt.Sprintf("late%03d", n.Add(1)), rpNarr, "unparsed", rpNone, &current))
+	}
+	res, err := runReparseFileIntros(context.Background(), newReparseEnv(s, &fakeReporter{}), false)
+	if err != nil {
+		t.Fatalf("a library that only gained already-current rows failed the run: %v", err)
+	}
+	if res.ParseWrites != 3 {
+		t.Errorf("parse writes = %d, want the 3 seeded rows only", res.ParseWrites)
+	}
+	if got := s.listings.Load(); got != 2 {
+		t.Errorf("%d listings, want 2: the first, and one whose pass wrote nothing and lost nothing", got)
+	}
+	if res.Examined != 4 || res.Listed != 4 {
+		t.Errorf("examined %d listed %d, want the 3 seeded rows and the one row the second listing held", res.Examined, res.Listed)
+	}
+}
+
+// R3-m1: a merge re-homes a row (same file id, new book) after pass 1 listed it and
+// before its chunk read it. The read under the old key finds nothing (Gone); the row
+// must still be classified, under its new book, by a further pass. Keyed by file id
+// alone, the old key marked the file visited and the run reported success with the
+// row unclassified.
+func TestReparseFileIntros_AFileRehomedBetweenListingAndReadIsClassifiedUnderItsNewBook(t *testing.T) {
+	s := newReparseFakeStore()
+	seedMany(s, 3)
+	moved := fid(1)
+	s.beforeRead = func(st *reparseFakeStore, key string) {
+		if key == rpKey("b1", moved) {
+			st.move("b1", "b2", moved)
+		}
+	}
+	res, err := runReparseFileIntros(context.Background(), newReparseEnv(s, &fakeReporter{}), false)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if row := s.get("b2", moved); row.IntroParse == nil {
+		t.Fatal("the run reported success with the re-homed row unclassified")
+	}
+	if res.Gone != 1 || res.ParseWrites != 3 || res.Listed != 4 {
+		t.Errorf("gone %d writes %d listed %d, want 1 / 3 / 4 (the old key, then the row under its new book)", res.Gone, res.ParseWrites, res.Listed)
 	}
 }
 
@@ -851,8 +964,8 @@ func TestReparseFileIntros_ACancelledRunShowsItsShortfall(t *testing.T) {
 
 // MJ1: the report says how much a live run would write. Each rewritten row is
 // counted at its full stored size (the whole row is re-encoded, fingerprint and
-// all), computed here from the row itself, and a preview, a live run and a repeat
-// run agree.
+// all), computed here from the row itself with the pinned timestamp, and a preview, a
+// live run and a repeat run agree.
 func TestReparseFileIntros_ReportsTheWriteVolume(t *testing.T) {
 	s := newReparseFakeStore()
 	seedMixed(s)
@@ -874,6 +987,7 @@ func TestReparseFileIntros_ReportsTheWriteVolume(t *testing.T) {
 		}
 		c := *row
 		c.IntroParse = &np
+		c.UpdatedAt = rpStamp
 		b, err := json.Marshal(&c)
 		if err != nil {
 			s.mu.Unlock()
@@ -886,7 +1000,7 @@ func TestReparseFileIntros_ReportsTheWriteVolume(t *testing.T) {
 		t.Fatalf("test setup: expected volume %d does not include the fingerprint row", want)
 	}
 
-	prev, err := runReparseFileIntros(context.Background(), reparseFileIntrosEnv{reads: reparseReader{s}, reporter: &fakeReporter{}, workers: 3}, true)
+	prev, err := runReparseFileIntros(context.Background(), reparseFileIntrosEnv{reads: reparseReader{s}, reporter: &fakeReporter{}, workers: 3, now: rpClock}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1479,5 +1593,111 @@ func TestReparseFileIntros_ReadErrorIsAnErrorNotGone(t *testing.T) {
 	}
 	if res.Selected != res.Examined+res.Gone+res.Errors || res.Examined != 4 {
 		t.Errorf("selected %d examined %d gone %d errors %d", res.Selected, res.Examined, res.Gone, res.Errors)
+	}
+}
+
+// R3-n3: a live write reports the size of the row the writer re-read under its lock,
+// not the pre-lock read. Another writer grows the row (a fingerprint lands) between
+// the op's read and the writer's decision; the live figure carries the fingerprint
+// and the preview's, taken before it landed, does not.
+func TestReparseFileIntros_LiveReportsTheSizeOfTheFreshRow(t *testing.T) {
+	s := newReparseFakeStore()
+	s.put(rpIntro("b1", "f1", rpTitle, "unparsed", rpNone, nil))
+	prev, err := runReparseFileIntros(context.Background(), reparseFileIntrosEnv{reads: reparseReader{s}, reporter: &fakeReporter{}, workers: 1, now: rpClock}, true)
+	if err != nil || prev.ParseWrites != 1 {
+		t.Fatalf("preview: writes %d err %v", prev.ParseWrites, err)
+	}
+	s.beforeDecide = func(st *reparseFakeStore, key string) {
+		st.mu.Lock()
+		st.rows[key].AcoustIDFingerprint = make([]byte, 3000)
+		st.mu.Unlock()
+	}
+	live, err := runReparseFileIntros(context.Background(), newReparseEnv(s, &fakeReporter{}), false)
+	if err != nil || live.ParseWrites != 1 {
+		t.Fatalf("live: writes %d err %v", live.ParseWrites, err)
+	}
+	stored := s.get("b1", "f1")
+	want, err := database.IntroParseRowBytes(&stored, *stored.IntroParse, rpStamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if live.ParseWriteBytes != int64(want) || live.ParseWriteBytes < prev.ParseWriteBytes+3000 {
+		t.Errorf("live reported %d bytes, want the fresh row's %d (the pre-lock row was %d)", live.ParseWriteBytes, want, prev.ParseWriteBytes)
+	}
+}
+
+// R3-n3: a write that was applied but whose durability is unknown is not an error
+// row. It is counted as written and as unconfirmed, the books still balance, and the
+// run ends failed with a message that says what happened.
+func TestReparseFileIntros_AnUnconfirmedWriteIsCountedApartFromErrors(t *testing.T) {
+	s := newReparseFakeStore()
+	seedMany(s, 4)
+	s.unconfirmed[rpKey("b1", fid(2))] = true
+	res, err := runReparseFileIntros(context.Background(), newReparseEnv(s, &fakeReporter{}), false)
+	if err == nil || !strings.Contains(err.Error(), "did not confirm them durable") || strings.Contains(err.Error(), "could not be read or written") {
+		t.Fatalf("err = %v, want the unconfirmed-durability failure and not the read/write-failure one", err)
+	}
+	if res.WritesUnconfirmed != 1 || res.Errors != 0 || res.ParseWrites != 4 {
+		t.Errorf("unconfirmed %d errors %d parse writes %d, want 1 / 0 / 4", res.WritesUnconfirmed, res.Errors, res.ParseWrites)
+	}
+	if res.Selected != res.Examined+res.Gone+res.Errors || res.Examined != 4 {
+		t.Errorf("selected %d examined %d gone %d errors %d", res.Selected, res.Examined, res.Gone, res.Errors)
+	}
+	if row := s.get("b1", fid(2)); row.IntroParse == nil {
+		t.Error("the unconfirmed row does not hold the parse it was applied with")
+	}
+	raw, _ := json.Marshal(res)
+	if !strings.Contains(string(raw), `"writes_unconfirmed":1`) {
+		t.Errorf("the result does not carry writes_unconfirmed: %s", raw)
+	}
+}
+
+// R3-n2: the selection counts AUDIO files per book, as the single-file migration does:
+// a cover-art row beside the one audio file does not make the book multi-file, and a
+// book whose only row is not audio selects nothing.
+func TestReparseFileIntros_TheSoleAudioFileIsSelectedBesideACoverArtRow(t *testing.T) {
+	s := newReparseFakeStore()
+	row := func(book, file, path string) {
+		s.put(&database.BookFile{ID: file, BookID: book, FilePath: path, IntroTranscription: rpStr(rpTitle)})
+	}
+	row("cover", "a1", "/lib/cover/01.m4b")
+	row("cover", "c1", "/lib/cover/cover.jpg")
+	s.bookText["cover"] = rpTitle
+	row("art", "c2", "/lib/art/cover.jpg")
+	s.bookText["art"] = rpTitle
+	row("two", "t1", "/lib/two/01.m4b")
+	row("two", "t2", "/lib/two/02.m4b")
+	s.bookText["two"] = rpTitle
+
+	res, err := runReparseFileIntros(context.Background(), newReparseEnv(s, &fakeReporter{}), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Selected != 1 || res.SelectedByBookTranscript != 1 || res.NotSelected != 4 {
+		t.Errorf("selected %d (by book transcript %d) not selected %d, want 1 / 1 / 4", res.Selected, res.SelectedByBookTranscript, res.NotSelected)
+	}
+	if s.get("cover", "a1").IntroParse == nil {
+		t.Error("the sole audio file of a book with a cover-art row was not classified")
+	}
+	for _, id := range [][2]string{{"cover", "c1"}, {"art", "c2"}, {"two", "t1"}, {"two", "t2"}} {
+		if s.get(id[0], id[1]).IntroParse != nil {
+			t.Errorf("%s/%s was classified outside the documented selection", id[0], id[1])
+		}
+	}
+}
+
+// R3-n2: a selected sole audio file that holds no text of its own (the book-level op
+// wrote the book's transcript, the migration never copied it) is read in full and
+// counted as no_transcript, which is what SelectedByBookTranscript's doc says.
+func TestReparseFileIntros_AnAudioFileWithoutTextSelectedThroughTheBookIsNoTranscript(t *testing.T) {
+	s := newReparseFakeStore()
+	s.put(&database.BookFile{ID: "n1", BookID: "nomigrate", FilePath: "/lib/nomigrate/01.m4b"})
+	s.bookText["nomigrate"] = rpTitle
+	res, err := runReparseFileIntros(context.Background(), newReparseEnv(s, &fakeReporter{}), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.SelectedByBookTranscript != 1 || res.Unreparsable[reparseNoTranscript] != 1 || res.ParseWrites != 0 {
+		t.Errorf("by book transcript %d, no_transcript %d, writes %d, want 1 / 1 / 0", res.SelectedByBookTranscript, res.Unreparsable[reparseNoTranscript], res.ParseWrites)
 	}
 }

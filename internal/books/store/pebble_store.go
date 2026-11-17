@@ -1,5 +1,5 @@
 // file: internal/books/store/pebble_store.go
-// version: 1.240.3
+// version: 1.240.4
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-11-17
 
@@ -121,6 +121,10 @@ type PebbleStore struct {
 	// panics on a second engine close. closeErr is the first call's result.
 	closeOnce sync.Once
 	closeErr  error
+	// introClock, when non-nil, replaces the wall clock for the UpdatedAt stamp of
+	// the per-file intro writers (introNow). Set only by tests, before the store is
+	// shared; nil in production.
+	introClock func() time.Time
 	// retiredHash is the scan-lifetime cache of RetiredBookFilesWithHash
 	// (retired_hash_scope.go); its generation is bumped by every write that
 	// can change which retired rows hold which hash.
