@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-16-series-denumber-safe-apply-executive-summary.md -->
-<!-- version: 3.0.0 -->
+<!-- version: 3.1.0 -->
 <!-- guid: 977a5f90-535a-436e-afa1-f26225c95156 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -41,8 +41,10 @@ fool, so the rule below is the third and strictest one.
 - The operation respects the owner's locks on a book's series or position, and
   stays out of the way of a running library scan; with no scan control it refuses
   to apply. Right before it deletes an emptied numbered series it reads the
-  series again and checks that nothing points at it and that its name, author and
-  holds are what the plan saw.
+  series again and checks that its name, author and holds are what the plan saw.
+  The delete itself is one step in the store that checks nothing points at the
+  series and deletes it while no book can be saved, so a book added to the series
+  at the last moment keeps it, and the report says so.
 - Before the first write into a base series it reads that series' books again,
   including trashed ones, so a book that took the position since planning stops
   the move. A book's versions are never split across two series.
@@ -58,6 +60,7 @@ fool, so the rule below is the third and strictest one.
   books, so the result can be looked at before the rest follow. A run that
   changes anything needs a report file, so there is always a record.
 - Not done: showing the held plans in the Repairs tab (filed as a task); removing
-  the empty numbered series (the existing empty-series clean-up does that); and
-  closing the small window between the final reference count and the delete
-  (filed as a task, it needs a new store operation).
+  the empty numbered series (the existing empty-series clean-up does that); and two
+  narrow windows around the delete (filed as a task): a book saved by a writer that
+  looked at the series before the delete and saves after it, and a rename of the
+  series between the operation's last look at it and the delete.

@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store_book_lock.go
-// version: 1.11.2
+// version: 1.12.0
 // guid: 3f8c2a91-6d4e-4b7a-9e15-c0d2a8b47f63
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package store
 
@@ -28,10 +28,14 @@ const bookLockStripes = 256
 //   - UpdateBook, ModifyBook and every in-store helper that reads a book and
 //     writes it back take the stripe for that book's ID around BOTH the read
 //     of the stored row and the batch commit.
-//   - No code path holds two book stripes at once. That is what makes a stripe
-//     collision between two different IDs safe: the second writer waits, it
-//     never deadlocks. A helper that writes several books (MarkITunesSynced,
-//     MoveBookFilesToBookBulk) takes and releases one stripe per book, in sequence.
+//   - No code path holds two book stripes at once, with ONE exception:
+//     lockEveryBook, which takes all of them in ascending order. That is what
+//     makes a stripe collision between two different IDs safe: the second
+//     writer waits, it never deadlocks. A helper that writes several books
+//     (MarkITunesSynced, MoveBookFilesToBookBulk) takes and releases one stripe
+//     per book, in sequence. lockEveryBook cannot deadlock against them: they
+//     hold exactly one stripe and never wait for a second, so the ascending
+//     walk waits for each in turn and gets it when that writer finishes.
 //   - Nothing slow runs under a stripe: no network, no file I/O, no ffprobe.
 //     Only Pebble reads and the one batch commit.
 //   - A ModifyBook callback must not call any book write (UpdateBook,
@@ -52,6 +56,33 @@ func (p *PebbleStore) lockBook(id string) func() {
 	mu := &p.bookLocks[stripeFor(id)]
 	mu.Lock()
 	return mu.Unlock
+}
+
+// lockEveryBook takes every book write stripe, ascending, and returns the
+// unlock func (descending). While it is held no book row can be created,
+// updated or deleted, so a read of "which books name X" cannot be outdated by
+// the time the caller acts on it.
+//
+// It is for the one question the per-book stripes cannot answer: "does ANY
+// book point at this row?" (DeleteSeriesIfUnreferenced). Every other caller
+// has a book id and wants lockBook.
+//
+// LOCK ORDER: take it BEFORE any other lock the caller needs, never after. A
+// writer holding stripe k (ModifyBook's callback may call a series write) can
+// be waiting on nameIdx.series, so a caller holding nameIdx.series that then
+// waited for stripe k would deadlock with it; taking the stripes first means
+// the only thing the caller ever waits on while holding one is the next
+// stripe. Nothing may call a book write while holding it (the stripes are not
+// re-entrant), and it is held only for Pebble and memdb reads and one delete.
+func (p *PebbleStore) lockEveryBook() func() {
+	for i := range p.bookLocks {
+		p.bookLocks[i].Lock()
+	}
+	return func() {
+		for i := len(p.bookLocks) - 1; i >= 0; i-- {
+			p.bookLocks[i].Unlock()
+		}
+	}
 }
 
 // lockBookFile takes the write stripe for a book_file ID and returns its

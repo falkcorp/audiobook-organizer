@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_op.go
-// version: 5.0.0
+// version: 5.1.0
 // guid: 3f0b6c84-52d1-4a97-9e35-c8b71d0af426
 // last-edited: 2026-11-17
 
@@ -187,10 +187,18 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 		if _, ok := database.AsCapability[database.SeriesRestorer](store); !ok {
 			return errors.New("series-denumber: refusing to apply: this store cannot restore a deleted series, so the run could not be undone")
 		}
-		// The delete re-counts the series' references immediately before it, and the
-		// base's creation checks the new row is empty: both need the per-series count.
+		// The base's creation checks the new row is empty, and the delete looks at
+		// the source's references before it journals anything: both need the
+		// per-series count.
 		if _, ok := database.AsCapability[database.SeriesBookRefCounter](store); !ok {
 			return errors.New("series-denumber: refusing to apply: this store cannot count one series' references, so a delete could not be re-checked")
+		}
+		// The delete itself is the store's check-and-delete under the locks every
+		// book write takes: a count here followed by a plain DeleteSeries leaves a
+		// window in which a book written into the series is stranded on a row that
+		// no longer exists.
+		if _, ok := database.AsCapability[database.SeriesUnreferencedDeleter](store); !ok {
+			return errors.New("series-denumber: refusing to apply: this store cannot delete a series only if nothing references it, so an emptied series could not be deleted safely")
 		}
 	}
 	// A running scan rewrites book rows underneath an apply, so the scanner stands
@@ -1102,7 +1110,8 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 		}
 		return errors.Join(errs...)
 	}
-	counter, _ := database.AsCapability[database.SeriesBookRefCounter](store) // checked present by runSeriesDenumber
+	counter, _ := database.AsCapability[database.SeriesBookRefCounter](store)      // checked present by runSeriesDenumber
+	deleter, _ := database.AsCapability[database.SeriesUnreferencedDeleter](store) // checked present by runSeriesDenumber
 
 	targets := make(map[int]int, len(run.groups)) // group index -> base series in use
 	for gi, g := range run.groups {
@@ -1404,13 +1413,18 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 
 		// Delete the emptied source only when every book it held moved, none was
 		// held back or skipped, the unfiltered guard confirms nothing else
-		// references it, and it is not a held row. The references are counted AGAIN
-		// immediately before the delete: the planning-time map is minutes old and a
-		// book may have been linked into the series since. The row is read again
-		// too: the snapshot a revert recreates it from must be the row that is
-		// deleted, not the one planned, and a series renamed or re-authored since
-		// the plan is somebody's edit this run does not delete over. The snapshot
-		// is journaled BEFORE the delete; a delete that then fails voids the row.
+		// references it, and it is not a held row. The planning-time map is minutes
+		// old and a book may have been linked into the series since, so the
+		// references are counted AGAIN before anything is journaled (a cheap early
+		// exit: a series that is plainly still referenced costs no journal row) and
+		// then ONCE MORE by the delete itself. That last check is the one that
+		// counts: DeleteSeriesIfUnreferenced counts and deletes under every book
+		// write lock, so no book can be written into the series between the two.
+		// The row is read again too: the snapshot a revert recreates it from must
+		// be the row that is deleted, not the one planned, and a series renamed or
+		// re-authored since the plan is somebody's edit this run does not delete
+		// over. The snapshot is journaled BEFORE the delete; a delete that then
+		// fails, or that finds the series referenced, voids the row.
 		src := run.seriesByID[pl.FromID]
 		if movedAll && stay == 0 && len(sr.Held) == 0 && len(heldNow) == 0 && safeToDelete &&
 			len(run.members[pl.FromID]) == 0 && !database.SeriesHeld(src) {
@@ -1461,15 +1475,26 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 						failed++
 						log.Warn("series-denumber: not deleting emptied series: its undo row was not written", "series", src.ID, "err", jerr)
 					default:
-						if derr := store.DeleteSeries(src.ID); derr != nil {
+						gone, derr := deleter.DeleteSeriesIfUnreferenced(src.ID)
+						if !gone {
 							// The row stays, so its undo row is voided: a revert has nothing to
 							// restore.
-							failed++
-							log.Warn("series-denumber: DeleteSeries failed", "series", src.ID, "err", derr)
 							if verr := void([]*database.OperationChange{delRow}); verr != nil {
 								log.Warn("series-denumber: could not void the delete's undo row", "series", src.ID, "err", verr)
 							}
-						} else {
+						}
+						switch {
+						case derr != nil && errors.Is(derr, database.ErrSeriesNotFound):
+							log.Info("series-denumber: emptied series was deleted by someone else before this run's delete", "series", src.ID)
+							outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: already deleted by someone else"})
+						case derr != nil:
+							failed++
+							log.Warn("series-denumber: DeleteSeriesIfUnreferenced failed", "series", src.ID, "err", derr)
+						case !gone:
+							heldDelete++
+							log.Warn("series-denumber: not deleting emptied series: a book was written into it before the delete", "series", src.ID, "name", src.Name)
+							outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: a book row references it at delete time"})
+						default:
 							deleted++
 							outcomes = append(outcomes, sdn.ReportRow{
 								Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "deleted",

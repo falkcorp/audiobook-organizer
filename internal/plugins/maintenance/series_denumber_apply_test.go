@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_apply_test.go
-// version: 4.0.0
+// version: 4.1.0
 // guid: 4c93e07a-1d62-4b8e-a5f3-90b7c1de2846
 // last-edited: 2026-11-17
 
@@ -32,12 +32,14 @@ const (
 	denumberAuthor = 3
 )
 
-// restoringStore adds the two capabilities an apply requires of a store, so a
-// MockStore can stand in for the real one: RestoreSeries (what the revert needs)
-// and GetSeriesBookRefCount (what the delete re-checks with).
+// restoringStore adds the capabilities an apply requires of a store, so a
+// MockStore can stand in for the real one: RestoreSeries (what the revert needs),
+// GetSeriesBookRefCount (what the delete checks with first) and
+// DeleteSeriesIfUnreferenced (the delete itself).
 type restoringStore struct {
 	*database.MockStore
-	refs func(seriesID int) (int, error)
+	refs               func(seriesID int) (int, error)
+	deleteUnreferenced func(seriesID int) (bool, error)
 }
 
 func (restoringStore) RestoreSeries(int, string, *int) error { return nil }
@@ -47,6 +49,13 @@ func (r restoringStore) GetSeriesBookRefCount(id int) (int, error) {
 		return 0, nil
 	}
 	return r.refs(id)
+}
+
+func (r restoringStore) DeleteSeriesIfUnreferenced(id int) (bool, error) {
+	if r.deleteUnreferenced == nil {
+		return false, errors.New("restoringStore: no DeleteSeriesIfUnreferenced behaviour wired")
+	}
+	return r.deleteUnreferenced(id)
 }
 
 // opIDReporter (scan_standdown_apply_test.go) gives fakeReporter the OpID() the
@@ -96,6 +105,11 @@ type denumberLib struct {
 	reportPath string
 	// refOverride, when set, answers GetSeriesBookRefCount instead of the live count.
 	refOverride func(seriesID int) (int, error)
+	// refsAtDelete, when set, answers the count the delete itself makes (the
+	// store's check-and-delete) instead of refCount, so a test can have a
+	// reference appear AFTER the op's own earlier count. It may also act as the
+	// other writer: it runs at the moment of the delete.
+	refsAtDelete func(seriesID int) (int, error)
 	// deps, when set, replaces the plugin deps of run() (a scan controller, say).
 	deps func(base *spCacheDeps) ServerDeps
 }
@@ -377,8 +391,36 @@ func (l *denumberLib) refCount(id int) (int, error) {
 	return n, nil
 }
 
+// deleteUnreferenced models the store's DeleteSeriesIfUnreferenced for a
+// single-threaded fixture: count, then delete through the MockStore's
+// DeleteSeries (so DeleteSeriesFunc injections and the event log still apply).
+// The atomicity itself is the real store's, and is tested there.
+func (l *denumberLib) deleteUnreferenced(id int) (bool, error) {
+	count := l.refCount
+	if l.refsAtDelete != nil {
+		count = l.refsAtDelete
+	}
+	n, err := count(id)
+	if err != nil {
+		return false, err
+	}
+	if cur, _ := l.store.GetSeriesByID(id); cur == nil {
+		return false, database.ErrSeriesNotFound
+	}
+	if n != 0 {
+		l.mu.Lock()
+		l.event("kept-at-delete:%d", id)
+		l.mu.Unlock()
+		return false, nil
+	}
+	if err := l.store.DeleteSeries(id); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (l *denumberLib) restoring() restoringStore {
-	return restoringStore{MockStore: l.store, refs: l.refCount}
+	return restoringStore{MockStore: l.store, refs: l.refCount, deleteUnreferenced: l.deleteUnreferenced}
 }
 
 // withReport adds a reportPath to an apply's params when they name none.

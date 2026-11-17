@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_review3_apply_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9b3d7e20-4c16-4a58-b1e9-6f0d2a85c734
 // last-edited: 2026-11-17
 
@@ -8,6 +8,7 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -329,3 +330,121 @@ func TestSeriesDenumber_Round3_M1_ALockFoundOnALaterVersionWritesNoVersionAtAll(
 		t.Errorf("the series was deleted while its book stayed")
 	}
 }
+
+// ─── m3: the delete is the store's check-and-delete ─────────────────────────
+
+func seriesRowDeleteRows(l *denumberLib) []database.OperationChange {
+	var rows []database.OperationChange
+	for _, c := range l.finalChanges() {
+		if c.ChangeType == undo.ChangeTypeSeriesRowDelete {
+			rows = append(rows, c)
+		}
+	}
+	return rows
+}
+
+// A book is written into the emptied source AFTER this run's own count and
+// before its delete. The op's early count (which sees zero) cannot catch it;
+// the store's check-and-delete does, and the series stays, reported as kept. The
+// journal row written ahead of the delete is voided, and the run is not a
+// failure: a series somebody started using is not an error.
+func TestSeriesDenumber_Round3_M3_ABookWrittenIntoTheSourceAtDeleteTimeKeepsTheSeries(t *testing.T) {
+	l := oneRunLib(t)
+	l.refsAtDelete = func(id int) (int, error) {
+		if id == 11 {
+			return 1, nil // a book row now names the source
+		}
+		return 0, nil
+	}
+
+	rep := l.mustRun(`{"apply": true}`)
+
+	if l.deleted[11] {
+		t.Fatalf("the source was deleted although a book references it at delete time: events=%v", l.events)
+	}
+	if l.indexOf("delete:11") >= 0 {
+		t.Errorf("DeleteSeries ran for a referenced series: events=%v", l.events)
+	}
+	if l.indexOf("kept-at-delete:11") < 0 {
+		t.Errorf("the store's check-and-delete was never asked: events=%v", l.events)
+	}
+	rows := seriesRowDeleteRows(l)
+	if len(rows) != 1 || !rows[0].Voided || rows[0].RevertedAt == nil {
+		t.Errorf("want one VOIDED series_row_delete row (written before the delete, voided when it kept the series), got %+v", rows)
+	}
+	if applied := readFile(t, l.reportPath+".applied"); !strings.Contains(applied, "kept: a book row references it at delete time") {
+		t.Errorf("the outcome report does not say the series was kept at delete time:\n%s", applied)
+	}
+	if !strings.Contains(joinLogs(rep), "1 emptied series NOT deleted") {
+		t.Errorf("summary %q does not count the kept series", joinLogs(rep))
+	}
+	// The move itself stands and is undoable: the book is in the new base.
+	if l.seriesOf("owls-5") == 11 {
+		t.Errorf("the book did not move out of the numbered series")
+	}
+}
+
+// The same series, deleted by someone else between this run's read and its
+// delete: nothing to delete, not a failure, and no stranded journal row.
+func TestSeriesDenumber_Round3_M3_ASourceDeletedByAnotherWriterBeforeTheDeleteIsKept(t *testing.T) {
+	l := oneRunLib(t)
+	l.refsAtDelete = func(id int) (int, error) {
+		l.mu.Lock()
+		l.deleted[id] = true // the other writer's delete lands first
+		l.mu.Unlock()
+		return 0, nil
+	}
+
+	l.mustRun(`{"apply": true}`)
+
+	rows := seriesRowDeleteRows(l)
+	if len(rows) != 1 || !rows[0].Voided {
+		t.Errorf("want one voided series_row_delete row, got %+v", rows)
+	}
+	if applied := readFile(t, l.reportPath+".applied"); !strings.Contains(applied, "kept: already deleted by someone else") {
+		t.Errorf("the outcome report does not say the series was already gone:\n%s", applied)
+	}
+}
+
+// A store whose delete fails outright is a failed run, the series stays, and the
+// row written ahead of the delete is voided (the existing contract, now through
+// the check-and-delete).
+func TestSeriesDenumber_Round3_M3_AFailingCheckAndDeleteFailsTheRunAndVoidsItsRow(t *testing.T) {
+	l := oneRunLib(t)
+	l.refsAtDelete = func(int) (int, error) { return 0, errors.New("store unavailable") }
+
+	_, err := l.run(`{"apply": true}`)
+
+	if err == nil {
+		t.Fatalf("a failed delete was reported as success")
+	}
+	rows := seriesRowDeleteRows(l)
+	if len(rows) != 1 || !rows[0].Voided {
+		t.Errorf("want one voided series_row_delete row, got %+v", rows)
+	}
+	if l.deleted[11] {
+		t.Errorf("the series was deleted although the check-and-delete failed")
+	}
+}
+
+// A store that cannot do the check-and-delete cannot delete safely, so the
+// apply is refused before it reads anything.
+func TestSeriesDenumber_Round3_M3_RefusesToApplyOnAStoreWithoutTheCheckAndDelete(t *testing.T) {
+	l := oneRunLib(t)
+	p := &Plugin{deps: fakeDeps{store: struct {
+		*database.MockStore
+		restoreOnly
+		countOnly
+	}{l.store, restoreOnly{}, countOnly{}}}}
+
+	err := p.runSeriesDenumber(context.Background(), json.RawMessage(l.withReport(`{"apply": true}`)), &opIDReporter{id: denumberOpID})
+
+	if err == nil || !strings.Contains(err.Error(), "only if nothing references it") {
+		t.Fatalf("err = %v, want a refusal naming the missing check-and-delete", err)
+	}
+	l.assertNoWrites()
+}
+
+type countOnly struct{}
+
+func (countOnly) GetSeriesBookRefCount(int) (int, error) { return 0, nil }
