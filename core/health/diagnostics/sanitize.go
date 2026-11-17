@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/sanitize.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 8d41c7a2-3b60-4e95-a1f8-6c2d9e07b534
 // last-edited: 2026-11-16
 
@@ -559,7 +559,7 @@ func hexEscapeCode(rest string, n int) (int, bool) {
 		return 0, false
 	}
 	v := 0
-	for i := 0; i < n; i++ {
+	for i := range n {
 		c := rest[i]
 		switch {
 		case c >= '0' && c <= '9':
