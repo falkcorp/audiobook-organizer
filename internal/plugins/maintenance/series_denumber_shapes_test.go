@@ -210,10 +210,19 @@ func TestSeriesDenumber_ReviewControls_CorroboratedRunStillMoves(t *testing.T) {
 			}
 		}
 	})
-	t.Run("a book whose own position matches the name", func(t *testing.T) {
+	t.Run("a book whose own position matches the name is not a corroboration by itself", func(t *testing.T) {
 		l := newDenumberLib(t)
 		l.addSeries(31, "Court of Owls 05", denumberAuthor)
 		l.addBook("owls-5", 31, 5, "")
+		before := libState(l)
+		l.mustRun(shapeApplyParams(t, nil))
+		assertLibUnchanged(t, l, before)
+	})
+	t.Run("a book whose own position matches the name moves when the run confirms it", func(t *testing.T) {
+		l := newDenumberLib(t)
+		l.addSeries(31, "Court of Owls 05", denumberAuthor)
+		l.addBook("owls-5", 31, 5, "")
+		l.addRunAround("Court of Owls", denumberAuthor, 5, 40)
 		l.mustRun(shapeApplyParams(t, nil))
 		base := l.createdID("Court of Owls")
 		if base == 0 || l.seriesOf("owls-5") != base || l.seqOf("owls-5") != "5" {

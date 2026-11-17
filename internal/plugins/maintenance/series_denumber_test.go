@@ -59,19 +59,33 @@ func TestSplitSeriesPosition_LeavesCleanNamesAlone(t *testing.T) {
 
 // 🔴 THE CORRUPTION THIS MUST NOT CAUSE. A real name ending in a number is
 // indistinguishable from a position by shape alone. Unpadded and unique, it must
-// be left alone — merging "Fahrenheit 451" into a "Fahrenheit" series would be a
-// permanent, silent corruption of the library.
-func TestSeriesDenumber_LeavesALoneUnpaddedNumberAlone(t *testing.T) {
+// never be applied: merging "Fahrenheit 451" into a "Fahrenheit" series would be
+// a permanent, silent corruption of the library. The planner still lists it, at
+// the low tier with position_uncorroborated, so the report counts it (m6): a
+// lone name that vanished from the report would be indistinguishable from one
+// the planner never saw.
+func TestSeriesDenumber_ALoneUnpaddedNumberIsListedLowAndNeverApplied(t *testing.T) {
 	in := []SeriesInput{
 		{ID: 1, Name: "Fahrenheit 451", AuthorID: 7, Books: 1},
 		{ID: 2, Name: "Blake's 7", AuthorID: 8, Books: 1},
 	}
-	if got := SeriesDenumber(in); len(got) != 0 {
-		t.Fatalf("planned %d merges for names that carry no evidence: %+v", len(got), got)
+	got := SeriesDenumber(in)
+	if len(got) != 2 {
+		t.Fatalf("planned %d plans, want both listed: %+v", len(got), got)
+	}
+	for _, p := range got {
+		if p.Confidence != ConfidenceLow || p.DemotedBy != "position_uncorroborated" {
+			t.Errorf("%q: confidence %v demoted by %q, want low / position_uncorroborated", p.FromName, p.Confidence, p.DemotedBy)
+		}
+		if ApplyEligible(p) {
+			t.Errorf("%q is apply-eligible", p.FromName)
+		}
 	}
 }
 
-// Zero-padding is evidence on its own — nobody titles a work "Discworld 05".
+// Zero-padding scores the plan high — nobody titles a work "Discworld 05" — but
+// that is only the planner's shape score: the op applies a plan only when a run
+// of single-book series around it confirms the number.
 func TestSeriesDenumber_TrustsZeroPadding(t *testing.T) {
 	in := []SeriesInput{{ID: 1, Name: "Discworld 05", AuthorID: 3, Books: 1}}
 	got := SeriesDenumber(in)
@@ -81,13 +95,14 @@ func TestSeriesDenumber_TrustsZeroPadding(t *testing.T) {
 	if got[0].IntoName != "Discworld" || got[0].Position != 5 {
 		t.Fatalf("got base=%q pos=%d, want Discworld/5", got[0].IntoName, got[0].Position)
 	}
-	if got[0].Reason != "zero-padded position" {
+	if got[0].Reason != "zero-padded number in the name" {
 		t.Fatalf("reason = %q", got[0].Reason)
 	}
 }
 
-// A repeated base is the other form of corroboration: "Mistborn 3" alongside
-// "Mistborn 6" proves the number is a position, without any padding.
+// A repeated base scores the plan higher: "Mistborn 3" alongside "Mistborn 6"
+// makes the number look like a position without any padding. It is a score, not
+// a licence to apply: two numbers are not a run (RunMin is 3).
 func TestSeriesDenumber_TrustsARepeatedBase(t *testing.T) {
 	in := []SeriesInput{
 		{ID: 1, Name: "Mistborn 3", AuthorID: 4, Books: 1},
@@ -101,7 +116,7 @@ func TestSeriesDenumber_TrustsARepeatedBase(t *testing.T) {
 		if p.IntoName != "Mistborn" {
 			t.Fatalf("base = %q, want Mistborn", p.IntoName)
 		}
-		if p.Reason != "another series shares this base" {
+		if p.Reason != "number in the name, another series shares this base" {
 			t.Fatalf("reason = %q", p.Reason)
 		}
 	}
@@ -114,8 +129,10 @@ func TestSeriesDenumber_DoesNotCorroborateAcrossAuthors(t *testing.T) {
 		{ID: 1, Name: "Genesis 2", AuthorID: 1, Books: 1},
 		{ID: 2, Name: "Genesis 3", AuthorID: 2, Books: 1},
 	}
-	if got := SeriesDenumber(in); len(got) != 0 {
-		t.Fatalf("corroborated across authors: %+v", got)
+	for _, p := range SeriesDenumber(in) {
+		if len(p.SiblingIDs) != 0 || ApplyEligible(p) {
+			t.Fatalf("corroborated across authors: %+v", p)
+		}
 	}
 }
 

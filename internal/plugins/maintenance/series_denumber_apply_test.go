@@ -565,6 +565,7 @@ func TestRunSeriesDenumber_AMatchingOwnPositionIsKeptAndNotJournaled(t *testing.
 	l := newDenumberLib(t)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
 	l.addBook("owls-5", 11, 5, "")
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
 
 	l.mustRun(`{"apply": true}`)
 
@@ -640,6 +641,7 @@ func TestRunSeriesDenumber_AJournalFailureStopsTheBookWrite(t *testing.T) {
 	l.addSeries(10, "Court of Owls", denumberAuthor)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
 	l.addBook("owls-5", 11, 5, "")
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
 	inner := l.store.CreateOperationChangeFunc
 	l.store.CreateOperationChangeFunc = func(c *database.OperationChange) error {
 		if c.ChangeType == "metadata_update" {
@@ -729,7 +731,6 @@ func TestRunSeriesDenumber_HoldsABookWhoseOwnPositionDiffers(t *testing.T) {
 	l := newDenumberLib(t)
 	l.addSeries(10, "Court of Owls", denumberAuthor)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
-	l.addBook("owls-5-moved", 11, -1, "")
 	l.addBook("owls-9-own", 11, 9, "")
 	l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
 
@@ -738,14 +739,38 @@ func TestRunSeriesDenumber_HoldsABookWhoseOwnPositionDiffers(t *testing.T) {
 	if l.seriesOf("owls-9-own") != 11 || l.seqOf("owls-9-own") != "9" {
 		t.Errorf("a book with its own position 9 was changed: series %d at %s", l.seriesOf("owls-9-own"), l.seqOf("owls-9-own"))
 	}
-	if l.seriesOf("owls-5-moved") != 10 {
-		t.Errorf("the free book did not move: series %d", l.seriesOf("owls-5-moved"))
-	}
 	if l.deleted[11] {
 		t.Errorf("the numbered series was deleted with a held book still in it")
 	}
 	if n := len(l.changesFor("owls-9-own", "series_id")) + len(l.changesFor("owls-9-own", "series_sequence")); n != 0 {
 		t.Errorf("%d journal rows for a held book", n)
+	}
+	if report := readFile(t, l.reportPath); !strings.Contains(report, "held: own_position_differs") {
+		t.Errorf("the report does not name own_position_differs:\n%s", report)
+	}
+}
+
+// R1 of the round-3 review: the decision is per SOURCE SERIES. A numbered series
+// that holds more than one distinct book is held whole: the book with no position
+// is not carried off to the base while its neighbour stays behind.
+func TestRunSeriesDenumber_HoldsASourceThatHoldsSeveralBooksWhole(t *testing.T) {
+	l := newDenumberLib(t)
+	l.addSeries(10, "Court of Owls", denumberAuthor)
+	l.addSeries(11, "Court of Owls 05", denumberAuthor)
+	l.addBook("owls-5-free", 11, -1, "")
+	l.addBook("owls-9-own", 11, 9, "")
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
+
+	l.mustRun(`{"apply": true}`)
+
+	if l.seriesOf("owls-5-free") != 11 || l.seqOf("owls-5-free") != "none" {
+		t.Errorf("a book of a multi-book series was moved out of it: series %d at %s", l.seriesOf("owls-5-free"), l.seqOf("owls-5-free"))
+	}
+	if l.deleted[11] || len(l.changes) != 0 {
+		t.Errorf("writes happened for a held source: deleted=%v changes=%v", l.deleted, l.changes)
+	}
+	if report := readFile(t, l.reportPath); !strings.Contains(report, "held: source_holds_multiple_books") {
+		t.Errorf("the report does not name source_holds_multiple_books:\n%s", report)
 	}
 }
 
@@ -768,29 +793,31 @@ func TestRunSeriesDenumber_HoldsABookWhosePositionIsTakenInTheBase(t *testing.T)
 	}
 }
 
-// Two numbered series of one base that name the same position: neither wins.
-func TestRunSeriesDenumber_HoldsBooksLandingOnOnePositionWithinThePlanSet(t *testing.T) {
+// Two numbered series of one base that name the same position: the run they
+// would form is rejected, so neither moves (and neither is a lucky winner).
+func TestRunSeriesDenumber_TwoSeriesNamingOnePositionRejectTheRun(t *testing.T) {
 	l := newDenumberLib(t)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
 	l.addSeries(12, "Court of Owls Book 5", denumberAuthor)
-	l.addSeries(13, "Court of Owls Book 7", denumberAuthor)
-	// Each book already holds the position its name carries, which is what
-	// corroborates the number; the two at 5 still collide.
-	l.addBook("owls-5-a", 11, 5, "")
-	l.addBook("owls-5-b", 12, 5, "")
-	l.addBook("owls-7", 13, 7, "")
+	l.addBook("owls-5-a", 11, -1, "")
+	l.addBook("owls-5-b", 12, -1, "")
+	// The neighbours that would make 4, 5, 6 a run.
+	l.addSeries(13, "Court of Owls 04", denumberAuthor)
+	l.addBook("owls-4", 13, -1, "")
+	l.addSeries(14, "Court of Owls 06", denumberAuthor)
+	l.addBook("owls-6", 14, -1, "")
 
 	l.mustRun(`{"apply": true}`)
 
 	if l.seriesOf("owls-5-a") != 11 || l.seriesOf("owls-5-b") != 12 {
 		t.Errorf("colliding books moved: a in %d, b in %d", l.seriesOf("owls-5-a"), l.seriesOf("owls-5-b"))
 	}
-	base := l.createdID("Court of Owls")
-	if base == 0 || l.seriesOf("owls-7") != base || l.seqOf("owls-7") != "7" {
-		t.Errorf("the book at its own free position did not move: series %d at %s (base %d)", l.seriesOf("owls-7"), l.seqOf("owls-7"), base)
+	if l.seriesOf("owls-4") != 13 || l.seriesOf("owls-6") != 14 {
+		t.Errorf("a book of the rejected run moved: owls-4 in %d, owls-6 in %d", l.seriesOf("owls-4"), l.seriesOf("owls-6"))
 	}
-	if l.deleted[11] || l.deleted[12] || !l.deleted[13] {
-		t.Errorf("deleted = %v, want only the series 13 whose book moved", l.deleted)
+	l.assertNoWrites()
+	if report := readFile(t, l.reportPath); !strings.Contains(report, "held: sibling_run_rejected") {
+		t.Errorf("the report does not name sibling_run_rejected:\n%s", report)
 	}
 }
 
@@ -854,6 +881,7 @@ func TestRunSeriesDenumber_SkipsAPlanWhoseBaseAppearedMidRun(t *testing.T) {
 	l := newDenumberLib(t)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
 	l.addBook("owls-5", 11, 5, "")
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
 	l.appearOnLookup = "Court of Owls"
 
 	rep := l.mustRun(`{"apply": true}`)
@@ -861,7 +889,7 @@ func TestRunSeriesDenumber_SkipsAPlanWhoseBaseAppearedMidRun(t *testing.T) {
 	if l.seriesOf("owls-5") != 11 || len(l.created) != 0 || len(l.changes) != 0 {
 		t.Errorf("a plan whose base appeared was applied: series %d, created %v", l.seriesOf("owls-5"), l.created)
 	}
-	if !strings.Contains(joinLogs(rep), "1 skipped because the base appeared mid-run") {
+	if !strings.Contains(joinLogs(rep), "1 plans skipped because the base appeared mid-run") {
 		t.Errorf("summary %q does not report the skipped plan", joinLogs(rep))
 	}
 }
@@ -982,6 +1010,8 @@ func TestRunSeriesDenumber_StillAppliesTheKeywordShapes(t *testing.T) {
 	l.addSeries(12, "Court of Owls, Volume 3", denumberAuthor)
 	l.addBook("owls-11", 11, 11, "")
 	l.addBook("owls-3", 12, 3, "")
+	l.addRunAround("Court of Owls", denumberAuthor, 11, 20) // 10, 11, 12
+	l.addRunAround("Court of Owls", denumberAuthor, 3, 30)  // 2, 3, 4
 
 	l.mustRun(`{"apply": true}`)
 
@@ -1004,6 +1034,8 @@ func TestRunSeriesDenumber_ABaseOfAnotherAuthorIsNeverDuplicated(t *testing.T) {
 	l.addSeries(10, "Court of Owls", denumberAuthor) // exists for the first author only
 	l.addBook("bruce-owls", 11, 5, "")
 	l.addBook("alfred-owls", 12, 5, "")
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
+	l.addRunAround("Court of Owls", denumberAuthor+1, 5, 30)
 
 	l.mustRun(`{"apply": true}`)
 
@@ -1030,6 +1062,8 @@ func TestRunSeriesDenumber_ASharedBaseNameGetsOneBasePerAuthorWhenNoneExists(t *
 	l.addSeries(12, "Court of Owls 05", denumberAuthor+1)
 	l.addBook("bruce-owls", 11, 5, "")
 	l.addBook("alfred-owls", 12, 5, "")
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
+	l.addRunAround("Court of Owls", denumberAuthor+1, 5, 30)
 
 	l.mustRun(`{"apply": true}`)
 
@@ -1070,6 +1104,7 @@ func TestRunSeriesDenumber_ASeriesAnotherRepairHoldsIsMergedButNotDeleted(t *tes
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
 	l.series[len(l.series)-1].HeldBy = "series-prune-fixer"
 	l.addBook("owls-5", 11, 5, "")
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
 
 	l.mustRun(`{"apply": true}`)
 
@@ -1090,6 +1125,7 @@ func TestRunSeriesDenumber_AnApplyThatChangedSeriesDropsTheSeriesCache(t *testin
 	l := newDenumberLib(t)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
 	l.addBook("owls-5", 11, 5, "")
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
 	l.mustRun(`{}`)
 	if n := l.cache.series.Load(); n != 0 {
 		t.Errorf("a dry run dropped the series cache %d times", n)
@@ -1116,17 +1152,21 @@ func canaryLib(t *testing.T) *denumberLib {
 	t.Helper()
 	l := newDenumberLib(t)
 	// Sorted by base name then position, the plans are:
-	//   Arkham Cell 01 (empty) | Arkham Cell 02 (1 book) | Court of Owls 05 (3 books) | Dark Knight 03 (1 book)
+	//   Arkham Cell 01 (empty) | 02, 03, 04 (one book each: a run) | Court of Owls 05 (2 books:
+	//   held whole) | Dark Knight 03 (1 book, with neighbours 02 and 04 that hold their own positions)
 	l.addSeries(21, "Arkham Cell 01", denumberAuthor)
 	l.addSeries(22, "Arkham Cell 02", denumberAuthor)
+	l.addSeries(25, "Arkham Cell 03", denumberAuthor)
+	l.addSeries(26, "Arkham Cell 04", denumberAuthor)
 	l.addSeries(23, "Court of Owls 05", denumberAuthor)
 	l.addSeries(24, "Dark Knight 03", denumberAuthor)
-	// Each book holds the position its series' name carries (the library's evidence
-	// for the number).
 	l.addBook("cell-2", 22, 2, "")
+	l.addBook("cell-3", 25, 3, "")
+	l.addBook("cell-4", 26, 4, "")
 	l.addBook("owls-5-a", 23, 5, "vg-a")
-	l.addBook("owls-5-b", 23, 5, "vg-b") // two books at one position: a collision, held
+	l.addBook("owls-5-b", 23, 5, "vg-b") // two distinct books in one series: held whole
 	l.addBook("dark-3", 24, 3, "")
+	l.addRunAround("Dark Knight", denumberAuthor, 3, 40)
 	return l
 }
 
@@ -1183,7 +1223,7 @@ func TestRunSeriesDenumber_TheReportCoversEveryPlanWhateverTheCanarySelects(t *t
 			t.Errorf("the report does not list %q although the canary left it out", name)
 		}
 	}
-	if !strings.Contains(report, "not_selected") || !strings.Contains(report, "held: position_collision") {
+	if !strings.Contains(report, "not_selected") || !strings.Contains(report, "held: source_holds_multiple_books") {
 		t.Errorf("the report does not mark unselected plans and held books:\n%s", report)
 	}
 	applied, err := os.ReadFile(path + ".applied")
@@ -1241,6 +1281,7 @@ func TestRunSeriesDenumber_KeepsASeriesThatRowsOutsideTheMembershipReadStillHold
 	l.addSeries(10, "Court of Owls", denumberAuthor)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
 	l.addBook("owls-5", 11, 5, "")
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
 	l.extraRefs[11] = 1
 
 	l.mustRun(`{"apply": true}`)
@@ -1331,6 +1372,7 @@ func TestRunSeriesDenumber_DryRunReportsGuardHeldBack(t *testing.T) {
 	l.addSeries(10, "Court of Owls", denumberAuthor)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
 	l.addBook("owls-5", 11, 5, "")
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
 	l.extraRefs[11] = 2
 
 	rep := l.mustRun(`{}`)
@@ -1342,28 +1384,46 @@ func TestRunSeriesDenumber_DryRunReportsGuardHeldBack(t *testing.T) {
 	l.assertNoWrites()
 }
 
-// A failed write on a plan that DOES move books: the failing book stays and the
+// m1: a book's versions move together or not at all. The second version's write
+// fails after the first landed; the first is taken back, so the book is not split
+// across the numbered series and the base, its journal rows are voided, and the
 // series is kept.
-func TestRunSeriesDenumber_AFailedWriteKeepsTheSeries(t *testing.T) {
+func TestRunSeriesDenumber_AFailedWriteKeepsTheSeriesAndTheVersionsTogether(t *testing.T) {
 	l := newDenumberLib(t)
 	l.addSeries(10, "Court of Owls", denumberAuthor)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
-	l.addBook("owls-5-primary", 11, 5, "vg")
-	l.addBook("owls-5-alt", 11, 5, "vg")
-	l.failUpdate["owls-5-alt"] = true
+	l.addBook("owls-5-primary", 11, -1, "vg")
+	l.addBook("owls-5-alt", 11, -1, "vg")
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
+	// The versions are written in id order: the alternate first, the primary second.
+	l.failUpdate["owls-5-primary"] = true
 
 	if _, err := l.run(`{"apply": true}`); err == nil {
 		t.Errorf("a run with a failed write was reported as success")
 	}
 
-	if l.seriesOf("owls-5-primary") != 10 {
-		t.Fatalf("fixture: the writable version did not move (series %d)", l.seriesOf("owls-5-primary"))
+	if l.seriesOf("owls-5-alt") != 11 || l.seriesOf("owls-5-primary") != 11 {
+		t.Fatalf("the book's versions were split: alt in %d, primary in %d (both must be back in 11)", l.seriesOf("owls-5-alt"), l.seriesOf("owls-5-primary"))
 	}
-	if l.seriesOf("owls-5-alt") != 11 || l.deleted[11] {
-		t.Errorf("failed book in series %d, deleted=%v: the series must stay while a book still points at it", l.seriesOf("owls-5-alt"), l.deleted[11])
+	if l.seqOf("owls-5-alt") != "none" {
+		t.Errorf("the version taken back kept the position %s it was given", l.seqOf("owls-5-alt"))
+	}
+	if l.deleted[11] {
+		t.Errorf("the series was deleted while a book still points at it")
 	}
 	if len(l.changesOfType(undo.ChangeTypeSeriesRowDelete)) != 0 {
 		t.Errorf("a series_row_delete row was written for a series that was kept")
+	}
+	// The rows of the move that was taken back are voided: a revert never acts on
+	// them.
+	voided := 0
+	for _, c := range l.changesFor("owls-5-alt", "series_id") {
+		if c.Voided {
+			voided++
+		}
+	}
+	if voided < 1 {
+		t.Errorf("no voided series_id row for the version that was taken back: %+v", l.changesFor("owls-5-alt", "series_id"))
 	}
 }
 
@@ -1374,6 +1434,7 @@ func TestRunSeriesDenumber_AFailedDeleteIsCounted(t *testing.T) {
 	l.addSeries(10, "Court of Owls", denumberAuthor)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
 	l.addBook("owls-5", 11, 5, "")
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
 	l.store.DeleteSeriesFunc = func(int) error { return errors.New("delete refused") }
 
 	rep, err := l.run(`{"apply": true}`)
@@ -1384,7 +1445,7 @@ func TestRunSeriesDenumber_AFailedDeleteIsCounted(t *testing.T) {
 	if l.seriesOf("owls-5") != 10 || l.deleted[11] {
 		t.Fatalf("fixture: book in %d, deleted=%v", l.seriesOf("owls-5"), l.deleted)
 	}
-	if !strings.Contains(joinLogs(rep), "failed 1 ") {
+	if !strings.Contains(joinLogs(rep), "failed 1)") {
 		t.Errorf("summary %q does not count the failed delete", joinLogs(rep))
 	}
 }
