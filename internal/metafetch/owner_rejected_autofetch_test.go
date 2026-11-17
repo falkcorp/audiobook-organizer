@@ -1,7 +1,7 @@
 // file: internal/metafetch/owner_rejected_autofetch_test.go
-// version: 1.2.5
+// version: 1.2.6
 // guid: 7c2e4a90-1b3d-4f6e-8a25-9d0c1e7f3b48
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package metafetch
 
@@ -34,10 +34,10 @@ type autoFetchRun struct {
 
 var autoFetchRuns = []autoFetchRun{
 	{"FetchMetadataForBook", func(s *Service, id string) (*FetchMetadataResponse, error) {
-		return s.FetchMetadataForBook(context.Background(), id)
+		return s.FetchMetadataForBook(context.Background(), id, Unattended)
 	}},
 	{"FetchMetadataForBookByTitle", func(s *Service, id string) (*FetchMetadataResponse, error) {
-		return s.FetchMetadataForBookByTitle(context.Background(), id)
+		return s.FetchMetadataForBookByTitle(context.Background(), id, Unattended)
 	}},
 }
 

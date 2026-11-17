@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-17-retired-books-metadata-apply-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 2e8c5a71-4b93-4d06-9f1a-7c3d0b6e8a52 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -30,8 +30,12 @@ refuses retired books`.
 - What did not change: you can still pick a match for one book yourself, on any
   book, including one in the trash; approving a single row on the review page
   still applies it; and "Search again" on one book still searches it.
-- Left for follow-ups, filed in the to-do list: the one-click "fetch metadata"
-  function that other automatic jobs also call does not check yet (it is shared
-  with the single-book button, so it needs a decision), the review page still
-  lists retired books, and about twenty other places in the code each spell out
+- The one-click "fetch metadata" function is covered as well. Other automatic
+  jobs call it too (organize's fetch-first step, the iTunes import, the
+  production-company author resolvers), so every place that calls it now says
+  whether a person asked for that fetch or a job did. A job's fetch of a book
+  that has been put away is refused and reported as a skip, not a failure, and
+  does not stop the run. The single-book button is unchanged.
+- Left for follow-ups, filed in the to-do list: the review page still lists
+  retired books, and about twenty other places in the code each spell out
   "retired" their own way.

@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.42.2
+// version: 1.43.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package itunesservice
 
@@ -205,7 +205,7 @@ type Importer struct {
 // database.Store pair through a live metafetch.Service. *metafetch.Service
 // satisfies this interface unmodified — newImporter's wiring is unaffected.
 type metadataFetcher interface {
-	FetchMetadataForBook(ctx context.Context, id string) (*metafetch.FetchMetadataResponse, error)
+	FetchMetadataForBook(ctx context.Context, id string, intent metafetch.FetchIntent) (*metafetch.FetchMetadataResponse, error)
 }
 
 func newImporter(deps Deps) *Importer {
@@ -1118,6 +1118,9 @@ func (imp *Importer) enrichImportedBooks(ctx context.Context, bookIDs []string, 
 
 	var mu sync.Mutex
 	enriched := 0
+	// retiredSkipped counts books the fetch refused because they are retired.
+	// Atomic: the fetch callback runs in RunItems' worker goroutines.
+	var retiredSkipped atomic.Int64
 
 	// breakerFails / breakerTripped implement the shared-aggregate circuit
 	// breaker described in the doc comment above.
@@ -1132,7 +1135,16 @@ func (imp *Importer) enrichImportedBooks(ctx context.Context, bookIDs []string, 
 	reporter := &loggerReporterAdapter{log: log}
 
 	runErr := registry.RunItems(enrichCtx, reporter, toEnrich, func(itemCtx context.Context, book *database.BookCore) error {
-		resp, err := imp.mfs.FetchMetadataForBook(itemCtx, book.ID)
+		// The import picks no book one by one: Unattended, so a book that is
+		// retired by now is refused rather than written to.
+		resp, err := imp.mfs.FetchMetadataForBook(itemCtx, book.ID, metafetch.Unattended)
+		if errors.Is(err, metafetch.ErrBookRetired) {
+			// Nothing was searched or written. Not a provider failure, so it
+			// neither trips nor resets the rate-limit breaker.
+			retiredSkipped.Add(1)
+			log.Debug("Skipped metadata enrichment for '%s': retired book", book.Title)
+			return nil
+		}
 		if errors.Is(err, metafetch.ErrReviewOnlyCandidatesNotApplied) {
 			// Every provider answered; only a review-only source (Open
 			// Library, Google Books) matched, and the auto-fetch never
@@ -1198,6 +1210,10 @@ func (imp *Importer) enrichImportedBooks(ctx context.Context, bookIDs []string, 
 		log.Warn("Enrichment phase interrupted: %v", runErr)
 	}
 
+	if n := retiredSkipped.Load(); n > 0 {
+		log.Info("Metadata enrichment complete: %d books enriched, %d retired books skipped", enriched, n)
+		return
+	}
 	log.Info("Metadata enrichment complete: %d books enriched", enriched)
 }
 

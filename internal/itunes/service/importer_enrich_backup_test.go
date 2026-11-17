@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_enrich_backup_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 13467322-3d42-4906-96a6-f205648e8c09
-// last-edited: 2026-10-10
+// last-edited: 2026-11-17
 
 package itunesservice
 
@@ -26,11 +26,11 @@ type backupCtxFetcher struct {
 	wanted []bool
 }
 
-func (f *backupCtxFetcher) FetchMetadataForBook(ctx context.Context, id string) (*metafetch.FetchMetadataResponse, error) {
+func (f *backupCtxFetcher) FetchMetadataForBook(ctx context.Context, id string, intent metafetch.FetchIntent) (*metafetch.FetchMetadataResponse, error) {
 	f.mu.Lock()
 	f.wanted = append(f.wanted, tagger.BackupWanted(ctx))
 	f.mu.Unlock()
-	return f.fakeMetadataFetcher.FetchMetadataForBook(ctx, id)
+	return f.fakeMetadataFetcher.FetchMetadataForBook(ctx, id, intent)
 }
 
 // The import enriches every book it created, a bulk tag write: with

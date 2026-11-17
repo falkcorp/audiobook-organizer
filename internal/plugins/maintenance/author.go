@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.16.4
+// version: 1.17.0
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
-// last-edited: 2026-11-15
+// last-edited: 2026-11-17
 
 package maintenance
 
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -978,7 +979,7 @@ func resolveProductionAuthorsCore(ctx context.Context, env resolveProductionEnv)
 
 	// Counters are atomics: the fetch callback and the Label closure both run
 	// inside RunItems' worker goroutines.
-	var attempted, resolved, fetchFailed atomic.Int64
+	var attempted, resolved, fetchFailed, retiredSkipped atomic.Int64
 	// Every fetch that ran may have rewritten a book's author credit, so the
 	// dedup cache is invalidated whenever one ran, including when the apply
 	// stops early (cancel, Timeout, lost lease): the books fetched before the
@@ -1006,6 +1007,11 @@ func resolveProductionAuthorsCore(ctx context.Context, env resolveProductionEnv)
 				// The op stopped (cancel, Timeout, lost lease), not this book.
 				return context.Cause(ctx)
 			}
+			if errors.Is(fetchErr, metafetch.ErrBookRetired) {
+				// A retired book is not fetched: a skip, not a failed fetch.
+				retiredSkipped.Add(1)
+				return nil
+			}
 			fetchFailed.Add(1)
 			return nil
 		}
@@ -1018,8 +1024,8 @@ func resolveProductionAuthorsCore(ctx context.Context, env resolveProductionEnv)
 		return nil
 	})
 
-	resultMsg := fmt.Sprintf("Resolved %d books across %d production companies (%d fetches failed, %d companies' book lists unreadable)",
-		resolved.Load(), total, fetchFailed.Load(), lookupFailed)
+	resultMsg := fmt.Sprintf("Resolved %d books across %d production companies (%d fetches failed, %d companies' book lists unreadable, %d retired books skipped)",
+		resolved.Load(), total, fetchFailed.Load(), lookupFailed, retiredSkipped.Load())
 	if runErr != nil {
 		env.Log(slog.LevelWarn, fmt.Sprintf("Stopped after %d of %d books: %s: %v", attempted.Load(), len(bookIDs), resultMsg, runErr))
 		return runErr
