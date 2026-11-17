@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_safety_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d3b6e52-9a14-4c70-b2f8-5e1a07c493d6
 // last-edited: 2026-11-17
 
@@ -205,6 +205,37 @@ func TestSeriesDenumberSafety_ABookWhoseLocksCannotBeReadIsHeld(t *testing.T) {
 	}
 }
 
+// Locks that read fine at planning but cannot be read inside the write fail the
+// write closed: the book is not moved, and the run reports the failure.
+func TestSeriesDenumberSafety_LocksUnreadableInsideTheWriteFailTheWriteClosed(t *testing.T) {
+	l := newDenumberLib(t)
+	l.addSeries(10, "Court of Owls", denumberAuthor)
+	l.addSeries(11, "Court of Owls 05", denumberAuthor)
+	l.addBook("owls-5", 11, 5, "")
+	var reads atomic.Int32
+	l.store.GetMetadataFieldStatesFunc = func(string) ([]database.MetadataFieldState, error) {
+		if reads.Add(1) >= 2 {
+			return nil, errors.New("metadata state unreadable")
+		}
+		return nil, nil
+	}
+
+	_, err := l.run(`{"apply": true}`)
+
+	if err == nil {
+		t.Errorf("a run whose book write failed was reported as success")
+	}
+	if reads.Load() < 2 {
+		t.Fatalf("the locks were read %d times: the write did not read them again", reads.Load())
+	}
+	if l.seriesOf("owls-5") != 11 || l.indexOf("update:owls-5") >= 0 || l.deleted[11] {
+		t.Fatalf("the book was written although its locks could not be read: series %d", l.seriesOf("owls-5"))
+	}
+	if len(l.liveJournalRows()) != 0 {
+		t.Errorf("a failed write left live journal rows %v", l.liveJournalRows())
+	}
+}
+
 // A lock the owner sets AFTER the plan was made still holds the book: it is read
 // again inside the write.
 func TestSeriesDenumberSafety_ALockSetAfterPlanningHoldsTheBookInsideTheWrite(t *testing.T) {
@@ -247,6 +278,8 @@ type sdnScanDeps struct {
 	acquireErr         error
 	renewOK            bool
 	acquired, released atomic.Int32
+	// lapsed, when set, ends the lease from the moment it returns true.
+	lapsed func() bool
 }
 
 func (d *sdnScanDeps) AcquireScanStandDown(_ context.Context, _, _ string) (func(), error) {
@@ -256,8 +289,10 @@ func (d *sdnScanDeps) AcquireScanStandDown(_ context.Context, _, _ string) (func
 	}
 	return func() { d.released.Add(1) }, nil
 }
-func (d *sdnScanDeps) RenewScanStandDown(string) bool { return d.renewOK }
-func (d *sdnScanDeps) ScanStandDownValid(string) bool { return d.renewOK }
+func (d *sdnScanDeps) RenewScanStandDown(string) bool { return d.valid() }
+func (d *sdnScanDeps) ScanStandDownValid(string) bool { return d.valid() }
+
+func (d *sdnScanDeps) valid() bool { return d.renewOK && (d.lapsed == nil || !d.lapsed()) }
 
 func (l *denumberLib) steerScan(d *sdnScanDeps) {
 	l.deps = func(base *spCacheDeps) ServerDeps {
@@ -334,6 +369,52 @@ func TestSeriesDenumberSafety_ALapsedLeaseStopsTheApplyBeforeAnyWrite(t *testing
 	l.assertNoWrites()
 	if d.released.Load() != 1 {
 		t.Errorf("the stand-down was released %d times after the lapse, want 1", d.released.Load())
+	}
+}
+
+// The lease is checked before every plan: one that has lapsed stops the run
+// before the plan's base is created, not only before its first book moves.
+func TestSeriesDenumberSafety_ALeaseLapsedBeforeAPlanCreatesNoBase(t *testing.T) {
+	l := newDenumberLib(t)
+	l.addSeries(11, "Court of Owls 05", denumberAuthor) // no base yet: the plan would create one
+	l.addBook("owls-5", 11, 5, "")
+	d := &sdnScanDeps{renewOK: false}
+	l.steerScan(d)
+
+	_, err := l.run(`{"apply": true}`)
+
+	if err == nil || !strings.Contains(err.Error(), "lease lapsed before plan") {
+		t.Fatalf("err = %v, want the lease lapsing before the plan", err)
+	}
+	if len(l.created) != 0 {
+		t.Errorf("created %+v after the lease had lapsed", l.created)
+	}
+	l.assertNoWrites()
+}
+
+// The lease is checked again before every book: one that lapses after the base
+// was created stops the run before the first book moves.
+func TestSeriesDenumberSafety_ALeaseLapsedBeforeABookMovesNoBook(t *testing.T) {
+	l := newDenumberLib(t)
+	l.addSeries(11, "Court of Owls 05", denumberAuthor)
+	l.addBook("owls-5", 11, 5, "")
+	d := &sdnScanDeps{renewOK: true, lapsed: func() bool {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		return len(l.created) > 0
+	}}
+	l.steerScan(d)
+
+	_, err := l.run(`{"apply": true}`)
+
+	if err == nil || !strings.Contains(err.Error(), "lease lapsed at book") {
+		t.Fatalf("err = %v, want the lease lapsing at the book", err)
+	}
+	if len(l.created) != 1 {
+		t.Fatalf("fixture: the base was not created before the lapse (created %+v)", l.created)
+	}
+	if l.seriesOf("owls-5") != 11 || l.indexOf("update:owls-5") >= 0 {
+		t.Errorf("a book moved after the lease lapsed: series %d", l.seriesOf("owls-5"))
 	}
 }
 

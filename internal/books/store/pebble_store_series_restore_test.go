@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store_series_restore_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c1d4e83-9a26-4f05-b8e7-3d52a0c6f194
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package store
 
@@ -93,6 +93,25 @@ func TestRestoreSeries_RefusesWhenTheIDIsLiveAsSomethingElse(t *testing.T) {
 		t.Fatalf("err = %v, want ErrSeriesIDInUse", err)
 	}
 	if got, _ := s.GetSeriesByID(made.ID); got == nil || got.Name != "Hush" {
+		t.Fatalf("the live series was changed: %+v", got)
+	}
+}
+
+// A live row with the same id and name but another author is not the row being
+// restored: the retry shortcut must not treat it as done.
+func TestRestoreSeries_RefusesWhenTheIDIsLiveUnderAnotherAuthor(t *testing.T) {
+	s := newRestoreStore(t)
+	owner, other := 12, 13
+	made, _ := s.CreateSeries("Hush", &owner)
+	for name, author := range map[string]*int{"another author": &other, "no author": nil} {
+		if err := s.RestoreSeries(made.ID, "Hush", author); !errors.Is(err, ErrSeriesIDInUse) {
+			t.Errorf("%s: err = %v, want ErrSeriesIDInUse", name, err)
+		}
+	}
+	if err := s.RestoreSeries(made.ID, "Hush", &owner); err != nil {
+		t.Errorf("the identical row is a no-op, got %v", err)
+	}
+	if got, _ := s.GetSeriesByID(made.ID); got == nil || got.AuthorID == nil || *got.AuthorID != owner {
 		t.Fatalf("the live series was changed: %+v", got)
 	}
 }
