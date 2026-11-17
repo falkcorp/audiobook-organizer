@@ -1,7 +1,7 @@
 // file: internal/books/store/memdb_strip.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: a1b2c3d4-mema-aaaa-aaaa-stripbook0001
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package store
 
@@ -153,5 +153,9 @@ func stripBookFileForMemdb(src *BookFile) *BookFile {
 	// and IntroRunOpID are NOT: selection and clear-by-run-id read them from the
 	// Core projection.
 	cp.IntroMeta = nil
+	// IntroParse: the kind and fields derived from the transcript. Nothing filters
+	// on it yet, and the op that writes it reads full rows from Pebble, so it is
+	// stripped with the transcript it was derived from.
+	cp.IntroParse = nil
 	return &cp
 }
