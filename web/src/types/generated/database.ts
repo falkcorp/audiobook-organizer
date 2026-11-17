@@ -272,9 +272,9 @@ export interface BookCore {
  * performed by stripBookFileForMemdb. It contains every BookFile field EXCEPT
  * the heavy set that memdb clears before insertion:
  * 	FingerprintFailureReason, FingerprintFailureDetail, FingerprintDiagnosticJSON,
- * 	AcoustIDFingerprint, AcoustIDSeg0..6, IntroTranscription, IntroMeta
- * IntroTranscription and IntroMeta are the only members of the per-file
- * intro-transcription group that are stripped. The others (TranscribedTitle/
+ * 	AcoustIDFingerprint, AcoustIDSeg0..6, IntroTranscription, IntroMeta, IntroParse
+ * IntroTranscription, IntroMeta and IntroParse are the only members of the
+ * per-file intro-transcription group that are stripped. The others (TranscribedTitle/
  * Author/Narrator/Translator/CoverArtist, IntroTranscribedAt, TranscribeStatus,
  * TranscribeError, TranscribeAttemptedAt, IntroSourceHash, IntroRunOpID) are
  * RETAINED here — they are the small, queryable fields (IntroSourceHash is the

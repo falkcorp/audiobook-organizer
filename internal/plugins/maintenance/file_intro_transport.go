@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_transport.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e17c4a92-5b08-4d63-a1f7-92d3b6c80e45
-// last-edited: 2026-10-26
+// last-edited: 2026-11-17
 
 package maintenance
 
@@ -109,9 +109,13 @@ func fileIntroResultsFromBatch(res map[string]transcribe.BatchResult) map[string
 	}
 	out := make(map[string]fileIntroWhisperResult, len(res))
 	for k, r := range res {
-		// BatchResult carries no model or language; IntroMeta records them when
-		// the transport starts reporting them.
-		out[k] = fileIntroWhisperResult{Text: r.Text, Error: r.Error, Condemned: r.Condemned, Endpoint: r.Endpoint, Worker: r.Worker}
+		// Model comes from the answering worker's /health and Language from the
+		// worker when it reports one; both stay empty rather than defaulted, and
+		// IntroMeta records exactly what arrived here.
+		out[k] = fileIntroWhisperResult{
+			Text: r.Text, Error: r.Error, Model: r.Model, Language: r.Language,
+			Condemned: r.Condemned, Endpoint: r.Endpoint, Worker: r.Worker,
+		}
 	}
 	return out
 }

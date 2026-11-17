@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.93.3
+// version: 1.94.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-11-05
+// last-edited: 2026-11-17
 
 package maintenance
 
@@ -324,6 +324,7 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.itunesHealDef(),
 		p.introTranscribeDef(),
 		p.fileIntroTranscribeDef(),
+		p.reparseFileIntrosDef(),
 		p.repairTranscribeStatusDef(),
 		p.clearApplyRenameFailuresDef(),
 		p.throttleResetDef(),
