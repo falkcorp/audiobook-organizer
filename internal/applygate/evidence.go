@@ -1,5 +1,5 @@
 // file: internal/applygate/evidence.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
 // last-edited: 2026-11-17
 
@@ -70,12 +70,15 @@ type CheckResult struct {
 	Reason  string `json:"reason,omitempty"`
 	Detail  string `json:"detail,omitempty"`
 
-	// fieldConflict marks a title block that comes from the two title fields
-	// themselves (the candidate and the stored title share a whole segment and
-	// each has one of its own, or use the same words with different numbers).
-	// No transcription lifts it (applyTranscribedTitle): a disagreement between
-	// the titles is not missing evidence. Not serialised.
-	fieldConflict bool
+	// fieldBlock marks a title block that comes from the two title fields
+	// themselves: a conflict (the candidate and the stored title share a whole
+	// segment and each has one of its own, or use the same words with different
+	// numbers), or a candidate with nothing in common with a stored title that
+	// is a real title. No transcription lifts it (applyTranscribedTitle): a
+	// disagreement between the titles is not missing evidence. A block against
+	// a blank or placeholder stored title ("", "Chapter 3") is missing evidence
+	// and is not marked. Not serialised.
+	fieldBlock bool
 }
 
 // EvidenceVerdict is the evidence leg's result.
@@ -408,7 +411,7 @@ func checkTitle(book *database.Book, c *metafetch.MetadataCandidate) CheckResult
 	}
 	if cmp.class == classConflictNumber || cmp.class == classConflictWords {
 		r = block("conflicting title: " + desc)
-		r.fieldConflict = true
+		r.fieldBlock = true
 		return r
 	}
 	for _, cf := range candForms {
@@ -423,7 +426,9 @@ func checkTitle(book *database.Book, c *metafetch.MetadataCandidate) CheckResult
 	case storedTitleIsSeriesName(book, c):
 		return block("stored title " + strconv.Quote(book.Title) + " is the series name; " + desc)
 	case cmp.class == classUnrelated:
-		return block("the titles have little in common: " + desc)
+		r = block("the titles have little in common: " + desc)
+		r.fieldBlock = storedTitleCarriesEvidence(book.Title)
+		return r
 	}
 	r.Outcome = OutcomeNeutral
 	if desc != "" {
@@ -446,6 +451,16 @@ func checkTitle(book *database.Book, c *metafetch.MetadataCandidate) CheckResult
 			": " + strconv.Quote(strings.Join(pathNames, ", ")))
 	}
 	return r
+}
+
+// storedTitleCarriesEvidence reports whether a stored title says what the book
+// is: it is not blank and not a placeholder, chapter or part heading that the
+// batch fetch searches by a transcription instead (metabatch.ResolveCandidateSearchQuery
+// takes its transcribed source only for such a title). A block against a title
+// that carries evidence is a disagreement no transcription may lift.
+func storedTitleCarriesEvidence(title string) bool {
+	t := strings.TrimSpace(title)
+	return t != "" && !metadata.MayBeUnsearchableTitle(t) && !metadata.NeedsFolderEvidence(t)
 }
 
 // titleSeriesNames is the series names the title check knows (the candidate's

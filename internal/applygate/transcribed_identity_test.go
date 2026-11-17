@@ -1,5 +1,5 @@
 // file: internal/applygate/transcribed_identity_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 329bd78d-e4ca-434d-aa8d-65f766d386a1
 // last-edited: 2026-11-17
 
@@ -418,6 +418,17 @@ func TestEvaluateTranscribed_QueryNeverAgreesAndNoLiftRemovesATitleConflict(t *t
 		// contradicts the stored title is a case for owner review.
 		{"Hush: Part 1", "Hush: Part 2", "4%", true, false, ReasonTitleDisagrees, OutcomeBlock},
 		{"Batman: Dark Victory", "Batman: The Long Halloween", "4%", true, false, ReasonTitleDisagrees, OutcomeBlock},
+		// A stored title that is a real title and a candidate with nothing in
+		// common with it is a disagreement between the title fields too: no
+		// lift removes it. A placeholder or empty stored title says nothing, so
+		// there the transcription may raise the title to neutral, and the
+		// runtime then decides.
+		{"Batman: Dark Victory", "Knightfall", "4%", false, false, ReasonTitleDisagrees, OutcomeBlock},
+		{"Hush", "Knightfall", "4%", true, false, ReasonTitleDisagrees, OutcomeBlock},
+		{"Chapter 3", "Knightfall", "4%", false, true, "", OutcomeNeutral},
+		{"Chapter 3", "Knightfall", "none", false, false, "", OutcomeNeutral},
+		{"", "Knightfall", "4%", true, true, "", OutcomeNeutral},
+		{"", "Knightfall", "none", false, false, ReasonInsufficientEvidence, OutcomeNeutral},
 		// "Hush" against "Hush: Part 2" is a neutral title, not a conflict: it
 		// applies only with a runtime that agrees, never with none.
 		{"Hush", "Hush: Part 2", "none", false, false, "", OutcomeNeutral},
@@ -432,9 +443,11 @@ func TestEvaluateTranscribed_QueryNeverAgreesAndNoLiftRemovesATitleConflict(t *t
 				title = ch.Outcome
 			}
 		}
-		// A title that was already neutral is left alone: the transcription
-		// explained nothing, so no identity evidence is recorded for it.
-		if tc.title == OutcomeNeutral && v.IdentityEvidence != nil {
+		// A title that was already neutral (a real stored title that partly
+		// matches) is left alone: the transcription explained nothing, so no
+		// identity evidence is recorded for it. A placeholder or empty title the
+		// lift raised to neutral did use it.
+		if tc.title == OutcomeNeutral && storedTitleCarriesEvidence(tc.stored) && v.IdentityEvidence != nil {
 			t.Errorf("%q <- %q runtime=%s: identity evidence recorded for a title the lift did not change: %+v",
 				tc.stored, tc.query, tc.runtime, v.IdentityEvidence)
 		}
