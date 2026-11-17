@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_apply_test.go
-// version: 2.1.1
+// version: 2.1.2
 // guid: 4c93e07a-1d62-4b8e-a5f3-90b7c1de2846
 // last-edited: 2026-11-16
 
@@ -72,6 +72,8 @@ type denumberLib struct {
 	// first call, as if somebody created the base while the run was deciding.
 	appearOnLookup string
 	failUpdate     map[string]bool
+	// cache counts the cache invalidations of the last run.
+	cache *spCacheDeps
 }
 
 func newDenumberLib(t *testing.T) *denumberLib {
@@ -278,7 +280,8 @@ func (l *denumberLib) wire() {
 func (l *denumberLib) run(params string) (*fakeReporter, error) {
 	l.t.Helper()
 	rep := &opIDReporter{id: denumberOpID}
-	p := &Plugin{deps: fakeDeps{store: restoringStore{l.store}}}
+	l.cache = &spCacheDeps{fakeDeps: fakeDeps{store: restoringStore{l.store}}}
+	p := &Plugin{deps: l.cache}
 	err := p.runSeriesDenumber(context.Background(), json.RawMessage(params), rep)
 	return &rep.fakeReporter, err
 }
@@ -899,6 +902,30 @@ func TestRunSeriesDenumber_ASeriesAnotherRepairHoldsIsMergedButNotDeleted(t *tes
 	}
 	if rows := l.changesOfType(undo.ChangeTypeSeriesRowDelete); len(rows) != 0 {
 		t.Errorf("%d series_row_delete rows for a delete that must not happen", len(rows))
+	}
+}
+
+// The series list is cached for a day, so an apply that changed it must drop the
+// cache; a dry run and an apply that changed nothing must not.
+func TestRunSeriesDenumber_AnApplyThatChangedSeriesDropsTheSeriesCache(t *testing.T) {
+	l := newDenumberLib(t)
+	l.addSeries(11, "Court of Owls 05", denumberAuthor)
+	l.addBook("owls-5", 11, -1, "")
+	l.mustRun(`{}`)
+	if n := l.cache.series.Load(); n != 0 {
+		t.Errorf("a dry run dropped the series cache %d times", n)
+	}
+	l.mustRun(`{"apply": true}`)
+	if n := l.cache.series.Load(); n < 1 {
+		t.Errorf("an apply that moved a book and created a base never dropped the series cache")
+	}
+
+	held := newDenumberLib(t)
+	held.addSeries(11, "Court of Owls 05", denumberAuthor)
+	held.addBook("owls-9-own", 11, 9, "")
+	held.mustRun(`{"apply": true}`)
+	if n := held.cache.series.Load(); n != 0 {
+		t.Errorf("an apply that changed nothing dropped the series cache %d times", n)
 	}
 }
 
