@@ -1,5 +1,5 @@
 // file: internal/applygate/titlecompare.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 8e41c7a2-5d09-4b3f-a6e8-2f9c0d71b5a3
 // last-edited: 2026-11-17
 
@@ -13,6 +13,8 @@ import (
 	"unicode"
 
 	"golang.org/x/text/unicode/norm"
+
+	"github.com/falkcorp/audiobook-organizer/internal/seqnum"
 )
 
 // Title comparison for the evidence leg's title check.
@@ -107,7 +109,9 @@ var (
 	// editionPhrases is the closed list of words that describe the recording,
 	// not the book, removed wherever they stand. "abridged" is NOT on it: an
 	// abridged recording is a different edition.
-	editionPhrases = [][]string{{"a", "novel"}, {"the", "audiobook"}, {"audiobook"}, {"unabridged"}, {"novel"}}
+	editionPhrases = [][]string{{"a", "novel"}, {"the", "audiobook"}, {"audiobook"}, {"unabridged"}, {"novel"},
+		// The two placeholder phrases a tagger writes where a credit would be.
+		{"unknown", "author"}, {"read", "by", "narrator"}}
 	// fieldStop are the words a remainder is not counted for: they join a title
 	// together and carry no identity.
 	fieldStop = map[string]bool{"the": true, "a": true, "an": true, "of": true, "and": true}
@@ -258,39 +262,6 @@ func formTokens(s string) []string {
 	return out
 }
 
-// titleForms are the whole forms of one side of a pair, as joined strings: the
-// title, or the title and subtitle, each also behind the series name. A side
-// with a subtitle has NO bare-title forms: the bare title is a part of what it
-// says, not the whole of it.
-func titleForms(title, subtitle, series string) []string {
-	t, sub, sr := formTokens(title), formTokens(subtitle), formTokens(series)
-	if len(t) == 0 {
-		return nil
-	}
-	var out []string
-	add := func(parts ...[]string) {
-		var all []string
-		for _, p := range parts {
-			all = append(all, p...)
-		}
-		if f := strings.Join(all, " "); !slices.Contains(out, f) {
-			out = append(out, f)
-		}
-	}
-	if len(sub) == 0 {
-		add(t)
-		if len(sr) > 0 {
-			add(sr, t)
-		}
-		return out
-	}
-	add(t, sub)
-	if len(sr) > 0 {
-		add(sr, t, sub)
-	}
-	return out
-}
-
 // fieldText is a title field and its subtitle as one text, the subtitle a
 // segment of its own.
 func fieldText(title, subtitle string) string {
@@ -345,21 +316,6 @@ func intersects(a, b map[string]bool) bool {
 	return false
 }
 
-// subMultiset reports whether every element of a is in b, counting repeats.
-func subMultiset(a, b []string) bool {
-	count := map[string]int{}
-	for _, x := range b {
-		count[x]++
-	}
-	for _, x := range a {
-		if count[x] == 0 {
-			return false
-		}
-		count[x]--
-	}
-	return true
-}
-
 // compareTitleFields classifies two TITLE fields (each a title and, when the
 // side has one, its subtitle). The result is the same with the two swapped.
 // It decides nothing about agreement beyond classEqual: the check agrees by
@@ -377,11 +333,19 @@ func compareTitleFields(a, b string) titleCmp {
 	wa, na := wordsAndNums(fa)
 	wb, nb := wordsAndNums(fb)
 
-	// The same words with numbers that differ and neither a part of the other
-	// ("Books 1-3" is a part of "Book 1"): another book of the same name.
+	// The same words with numbers that differ: another book of the same name.
+	// The numbers are read by the one sequence number reader (seqnum), which
+	// says what each number numbers; the title conflicts when both sides state a
+	// number of the SAME kind and the two differ. Nothing excuses it: "Part 1 of
+	// 3" and "Part 3" state part 1 and part 3, "Books 1-3" and "Book 1" state a
+	// range and a volume, and one side holding the other's numbers among more
+	// of its own settles nothing. A number only one side states is not compared
+	// (a volume the book's own title leaves out is the sequence leg's to check).
 	related := intersects(wa, wb) || (len(wa) == 0 && len(wb) == 0)
-	if related && len(na) > 0 && len(nb) > 0 && !slices.Equal(na, nb) && !subMultiset(na, nb) && !subMultiset(nb, na) {
-		return titleCmp{class: classConflictNumber, note: "same words, different numbers (" + numsText(na) + " vs " + numsText(nb) + ")"}
+	if related {
+		if note := numberConflict(a, b, na, nb); note != "" {
+			return titleCmp{class: classConflictNumber, note: note}
+		}
 	}
 
 	// A whole segment in common and a segment of its own on each side.
@@ -469,6 +433,95 @@ func unmatchedSegments(a, b [][]string) (remA, remB [][]string, shared bool) {
 		}
 	}
 	return remA, remB, shared
+}
+
+// statedClaims splits one text's stated numbers (seqnum) by kind.
+type statedClaims struct {
+	volume, part []seqnum.Number
+}
+
+func claimsOf(stated []seqnum.Stated) statedClaims {
+	var c statedClaims
+	for _, st := range stated {
+		if st.Kind == seqnum.KindPart {
+			c.part = append(c.part, st.Number)
+		} else {
+			c.volume = append(c.volume, st.Number)
+		}
+	}
+	return c
+}
+
+// sameNumbers reports whether two lists name the same numbers, in any order.
+func sameNumbers(a, b []seqnum.Number) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	used := make([]bool, len(b))
+	for _, x := range a {
+		hit := false
+		for j, y := range b {
+			if !used[j] && seqnum.Equal(x, y) {
+				used[j], hit = true, true
+				break
+			}
+		}
+		if !hit {
+			return false
+		}
+	}
+	return true
+}
+
+func numberTexts(ns []seqnum.Number) string {
+	parts := make([]string, len(ns))
+	for i, n := range ns {
+		parts[i] = n.Text
+	}
+	return strings.Join(parts, ",")
+}
+
+// subMultiset reports whether every element of a is in b, counting repeats.
+func subMultiset(a, b []string) bool {
+	count := map[string]int{}
+	for _, x := range b {
+		count[x]++
+	}
+	for _, x := range a {
+		if count[x] == 0 {
+			return false
+		}
+		count[x]--
+	}
+	return true
+}
+
+// numberConflict says why two title fields state numbers that differ ("" when
+// they do not). Two checks, in this order:
+//
+//  1. Both state a number of one kind (a volume, a part) and the two differ.
+//     Nothing excuses it: one side holding the other's numbers among more of
+//     its own settles nothing ("Part 1 of 3" against "Part 3").
+//  2. The numbers neither reader recognises as stated (the "One" of a name,
+//     "Night of 7 Owls", a number the reader does not see in "Court 1 (Long)")
+//     are compared as they always were: they conflict when both sides have
+//     some and neither side's holds the other's, since a title that adds words
+//     adds their numbers.
+//
+// A number only one side states (a volume the book's own title leaves out) is
+// not compared: that is the sequence leg's to check.
+func numberConflict(a, b string, na, nb []string) string {
+	sa, sb := seqnum.ReadPair(norm.NFKC.String(a), norm.NFKC.String(b))
+	ca, cb := claimsOf(sa), claimsOf(sb)
+	switch {
+	case len(ca.volume) > 0 && len(cb.volume) > 0 && !sameNumbers(ca.volume, cb.volume):
+		return "same words, different volumes (" + numberTexts(ca.volume) + " vs " + numberTexts(cb.volume) + ")"
+	case len(ca.part) > 0 && len(cb.part) > 0 && !sameNumbers(ca.part, cb.part):
+		return "same words, different parts (" + numberTexts(ca.part) + " vs " + numberTexts(cb.part) + ")"
+	case len(na) > 0 && len(nb) > 0 && !subMultiset(na, nb) && !subMultiset(nb, na):
+		return "same words, different numbers (" + numsText(na) + " vs " + numsText(nb) + ")"
+	}
+	return ""
 }
 
 func numsText(ns []string) string {

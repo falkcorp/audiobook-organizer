@@ -1,5 +1,5 @@
 // file: internal/applygate/evidence.go
-// version: 1.12.2
+// version: 1.13.0
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
 // last-edited: 2026-11-17
 
@@ -384,18 +384,42 @@ func checkAuthorPath(book *database.Book, authors Authors, c *metafetch.Metadata
 func checkTitle(book *database.Book, c *metafetch.MetadataCandidate) CheckResult {
 	r := CheckResult{Name: "title"}
 	seriesNames := titleSeriesNames(book, c)
-	bookForms, pathNames := bookTitleForms(book, seriesNames)
-	if len(bookForms) == 0 {
+	candSd := candidateTitleSide(c)
+	bookForms := titleForms(book.Title, derefStr(book.Subtitle), seriesName(book))
+	pathForms, pathNames := bookPathForms(book, seriesNames)
+	if len(bookForms) == 0 && len(pathForms) == 0 {
 		r.Outcome, r.Detail = OutcomeUnknown, "book has no title or file name"
 		return r
 	}
-	candForms := titleForms(c.Title, c.Subtitle, c.Series)
+	candForms := candSd.forms()
 	block := func(detail string) CheckResult {
 		r.Outcome, r.Reason, r.Detail = OutcomeBlock, ReasonTitleDisagrees, detail
 		return r
 	}
 	if len(candForms) == 0 {
 		return block("candidate has no title")
+	}
+
+	// PRECEDENCE, in this order and no other:
+	//  1. A whole form built from the two sides' DECLARED fields is equal (or the
+	//     two title fields say the same segments in another order): AGREE. This
+	//     is checked first, so no conflict test can overrule a pair that says the
+	//     same thing in the same words.
+	//  2. Only when no declared form is equal: the two title fields conflict
+	//     (a shared segment with a segment of its own on each side, or the same
+	//     words with different numbers): DISAGREE, unliftable.
+	//  3. Only when neither, and only for a stored title that says nothing
+	//     (blank or a placeholder): a whole form equals one of the book's file
+	//     or folder names: AGREE. A path name never causes a conflict and never
+	//     overrules one.
+	//  4. The rest is neutral, or a block when the titles share nothing.
+	if _, bf, ok := firstMatch(candForms, bookForms); ok {
+		r.Outcome, r.Detail = OutcomeAgree, "whole title equals "+strconv.Quote(bf.text)
+		return r
+	}
+	if k := segmentKey(book.Title, derefStr(book.Subtitle)); k != "" && k == segmentKey(c.Title, candSd.effectiveSubtitle()) {
+		r.Outcome, r.Detail = OutcomeAgree, "the same whole segments in another order"
+		return r
 	}
 
 	candField := fieldText(c.Title, c.Subtitle)
@@ -414,11 +438,9 @@ func checkTitle(book *database.Book, c *metafetch.MetadataCandidate) CheckResult
 		r.fieldBlock = true
 		return r
 	}
-	for _, cf := range candForms {
-		if i := slices.Index(bookForms, cf); i >= 0 {
-			r.Outcome, r.Detail = OutcomeAgree, "whole title equals "+strconv.Quote(bookForms[i])
-			return r
-		}
+	if _, pf, ok := firstMatch(candForms, pathForms); ok {
+		r.Outcome, r.Detail = OutcomeAgree, "whole title equals "+strconv.Quote(pf.text)
+		return r
 	}
 	switch {
 	case candidateTitleIsSeriesName(book, c):
@@ -548,14 +570,19 @@ func CheckASIN(book *database.Book, c *metafetch.MetadataCandidate) CheckResult 
 	return r
 }
 
-// bookTitleForms returns the book's whole forms: its stored fields joined (the
-// title, or title and subtitle, each also behind the book's series) and the file
-// base name and the folder name, each as one form (names returns them as
-// written). A folder or file name equal to a series name is skipped: it names
-// the series, not this book. The file names are forms only to AGREE with; they
-// never cause a conflict.
-func bookTitleForms(book *database.Book, seriesNames map[string]bool) (forms, names []string) {
-	out := titleForms(book.Title, derefStr(book.Subtitle), seriesName(book))
+// bookPathForms returns the forms the book's file base name and folder name make
+// (each as one joined form; names returns them as written), and only for a book
+// whose stored title says nothing: blank, or a placeholder, chapter or part
+// heading (storedTitleCarriesEvidence). A stored title that says what the book
+// is is the book's name; a file or folder name beside it is a second name that
+// could undo what the title says (a name with no subtitle agreeing with a title
+// that has one), so it is not consulted. A folder or file name equal to a series
+// name is skipped: it names the series, not this book. The names are forms only
+// to AGREE with; they never cause a conflict.
+func bookPathForms(book *database.Book, seriesNames map[string]bool) (forms []titleForm, names []string) {
+	if storedTitleCarriesEvidence(book.Title) {
+		return nil, nil
+	}
 	addPath := func(s string) {
 		f := strings.Join(formTokens(s), " ")
 		if seriesNames[f] {
@@ -563,8 +590,8 @@ func bookTitleForms(book *database.Book, seriesNames map[string]bool) (forms, na
 		}
 		if f != "" {
 			names = append(names, s)
-			if !slices.Contains(out, f) {
-				out = append(out, f)
+			if pf := (titleForm{text: f}); !slices.Contains(forms, pf) {
+				forms = append(forms, pf)
 			}
 		}
 	}
@@ -577,7 +604,7 @@ func bookTitleForms(book *database.Book, seriesNames map[string]bool) (forms, na
 			addPath(base)
 		}
 	}
-	return out, names
+	return forms, names
 }
 
 var (
