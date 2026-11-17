@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: ba5b477d-1d56-4a6a-8a46-3896b785d5f2
 // last-edited: 2026-11-17
 
@@ -59,15 +59,15 @@ func TestSplitSeriesPosition_LeavesCleanNamesAlone(t *testing.T) {
 
 // 🔴 THE CORRUPTION THIS MUST NOT CAUSE. A real name ending in a number is
 // indistinguishable from a position by shape alone. Unpadded and unique, it must
-// never be applied: merging "Fahrenheit 451" into a "Fahrenheit" series would be
+// never be applied: merging "Batman 66" into a "Batman" series would be
 // a permanent, silent corruption of the library. The planner still lists it, at
 // the low tier with position_uncorroborated, so the report counts it (m6): a
 // lone name that vanished from the report would be indistinguishable from one
 // the planner never saw.
 func TestSeriesDenumber_ALoneUnpaddedNumberIsListedLowAndNeverApplied(t *testing.T) {
 	in := []SeriesInput{
-		{ID: 1, Name: "Fahrenheit 451", AuthorID: 7, Books: 1},
-		{ID: 2, Name: "Blake's 7", AuthorID: 8, Books: 1},
+		{ID: 1, Name: "Batman 66", AuthorID: 7, Books: 1},
+		{ID: 2, Name: "Gotham 13", AuthorID: 8, Books: 1},
 	}
 	got := SeriesDenumber(in)
 	if len(got) != 2 {
@@ -83,38 +83,38 @@ func TestSeriesDenumber_ALoneUnpaddedNumberIsListedLowAndNeverApplied(t *testing
 	}
 }
 
-// Zero-padding scores the plan high — nobody titles a work "Discworld 05" — but
+// Zero-padding scores the plan high — nobody titles a work "Gotham Knights 05" — but
 // that is only the planner's shape score: the op applies a plan only when a run
 // of single-book series around it confirms the number.
 func TestSeriesDenumber_TrustsZeroPadding(t *testing.T) {
-	in := []SeriesInput{{ID: 1, Name: "Discworld 05", AuthorID: 3, Books: 1}}
+	in := []SeriesInput{{ID: 1, Name: "Gotham Knights 05", AuthorID: 3, Books: 1}}
 	got := SeriesDenumber(in)
 	if len(got) != 1 {
 		t.Fatalf("planned %d merges, want 1", len(got))
 	}
-	if got[0].IntoName != "Discworld" || got[0].Position != 5 {
-		t.Fatalf("got base=%q pos=%d, want Discworld/5", got[0].IntoName, got[0].Position)
+	if got[0].IntoName != "Gotham Knights" || got[0].Position != 5 {
+		t.Fatalf("got base=%q pos=%d, want Gotham Knights/5", got[0].IntoName, got[0].Position)
 	}
 	if got[0].Reason != "zero-padded number in the name" {
 		t.Fatalf("reason = %q", got[0].Reason)
 	}
 }
 
-// A repeated base scores the plan higher: "Mistborn 3" alongside "Mistborn 6"
+// A repeated base scores the plan higher: "Dark Knight 3" alongside "Dark Knight 6"
 // makes the number look like a position without any padding. It is a score, not
 // a licence to apply: two numbers are not a run (RunMin is 3).
 func TestSeriesDenumber_TrustsARepeatedBase(t *testing.T) {
 	in := []SeriesInput{
-		{ID: 1, Name: "Mistborn 3", AuthorID: 4, Books: 1},
-		{ID: 2, Name: "Mistborn 6", AuthorID: 4, Books: 1},
+		{ID: 1, Name: "Dark Knight 3", AuthorID: 4, Books: 1},
+		{ID: 2, Name: "Dark Knight 6", AuthorID: 4, Books: 1},
 	}
 	got := SeriesDenumber(in)
 	if len(got) != 2 {
 		t.Fatalf("planned %d merges, want 2", len(got))
 	}
 	for _, p := range got {
-		if p.IntoName != "Mistborn" {
-			t.Fatalf("base = %q, want Mistborn", p.IntoName)
+		if p.IntoName != "Dark Knight" {
+			t.Fatalf("base = %q, want Dark Knight", p.IntoName)
 		}
 		if p.Reason != "number in the name, another series shares this base" {
 			t.Fatalf("reason = %q", p.Reason)

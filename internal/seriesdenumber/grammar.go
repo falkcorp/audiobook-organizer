@@ -1,5 +1,5 @@
 // file: internal/seriesdenumber/grammar.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 5e2c7a91-3b48-4d06-9a1f-c70d8e3b6f24
 // last-edited: 2026-11-17
 
@@ -54,7 +54,7 @@ import (
 //
 // Words are whole tokens, and an apostrophe inside a word does not split it:
 // "Don't" is one word, not "Don" and "t". A held word is held wherever it
-// stands, so "V for Vendetta 03" and "No Country 02" are held; that is the
+// stands, so "V for Vengeance 03" and "No Man's Land 02" are held; that is the
 // price of a list a wrong move cannot get past, and the counts are in the
 // report.
 //
