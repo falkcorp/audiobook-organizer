@@ -1,5 +1,5 @@
 // file: internal/books/store/dedup_automerge_journal.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 8b2f7d14-6c93-4a05-9e21-3f8a5c0d7e46
 // last-edited: 2026-11-17
 
@@ -137,8 +137,10 @@ type AutoMergeJournalEntry struct {
 	// and loser. The post-merge patch rewrites the merge's rows against the winner
 	// MergeBooks actually elected, so a row whose patch write fails still describes
 	// the whole cluster: while any such row is live the snapshot prune keeps one
-	// snapshot for each participant (store.collectAutoMergeSnapshotPins). A row
-	// without the list (an older one) behaves as before: its winner and loser only.
+	// snapshot for each participant (store.collectAutoMergeSnapshotPins), and the
+	// trash purge keeps every participant (OpenAutoMergeLosers), because this row's
+	// LoserID is only the loser of the PREDICTED winner. A row without the list (an
+	// older one) behaves as before: its winner and loser only.
 	// The patch drops it with the other baseline fields. A binary that predates the
 	// field ignores it and still floors the winner and loser.
 	Participants []AutoMergeJournalParticipant `json:"participants,omitempty"`
@@ -335,6 +337,14 @@ func (s *EmbeddingStore) ListAutoMergeJournalEntries(limit int) ([]AutoMergeJour
 // refusal for one tells the operator to restore the loser from the trash.
 // Dropping the loser then would leave nothing to restore.
 //
+// A LIVE provisional entry (neither undone nor closed) also holds every other
+// book in its Participants list, because its LoserID is only the loser of the
+// winner PREDICTED before the merge: when the merge elected another book, the
+// predicted winner is a real loser named by no entry's LoserID, and the entry's
+// own LoserID is the actual winner. Holding an extra participant that was never
+// soft-deleted is harmless, since the purge only asks about trashed books. An
+// entry without a Participants list, or a closed one, holds its loser alone.
+//
 // Winners is the other book UnmergeAuto needs: an entry that recorded a
 // pre-merge snapshot of its winner (WinnerPreMergeTS != 0) makes UnmergeAuto
 // refuse, before it touches anything, when the winner row no longer exists. A
@@ -370,12 +380,30 @@ func (s *EmbeddingStore) OpenAutoMergeLosers() (*AutoMergeOpenLosers, error) {
 		if err := json.Unmarshal(iter.Value(), &entry); err != nil {
 			return nil, fmt.Errorf("automerge journal entry %s cannot be decoded, so the books it holds cannot be told: %w", iter.Key(), err)
 		}
-		if entry.UndoneAt != 0 || entry.LoserID == "" {
+		if entry.UndoneAt != 0 {
 			continue
 		}
-		out.Losers[entry.LoserID] = string(iter.Key())
+		key := string(iter.Key())
+		if entry.LoserID != "" {
+			out.Losers[entry.LoserID] = key
+		}
+		// A live provisional row's LoserID is a PREDICTION: its WinnerID is the
+		// winner predicted before the merge, and when the merge elected another book
+		// the row is the spare that takes the predicted winner's place, so it names
+		// the actual winner as its loser and no row names the real loser the
+		// prediction was. A row left provisional (its patch could not run) therefore
+		// holds every book it lists. A closed row describes a merge that never wrote,
+		// so it holds only its loser, as it always did. A loser key set by its own
+		// row is never replaced by the participant key of another.
+		if entry.Provisional && entry.AbortedAt == 0 {
+			for _, p := range entry.Participants {
+				if _, held := out.Losers[p.BookID]; !held && p.BookID != "" {
+					out.Losers[p.BookID] = key
+				}
+			}
+		}
 		if !entry.Provisional && entry.WinnerPreMergeTS != 0 && entry.WinnerID != "" {
-			out.Winners[entry.WinnerID] = string(iter.Key())
+			out.Winners[entry.WinnerID] = key
 		}
 	}
 	if err := iter.Error(); err != nil {

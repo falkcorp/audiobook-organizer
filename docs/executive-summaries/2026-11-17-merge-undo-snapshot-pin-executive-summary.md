@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-17-merge-undo-snapshot-pin-executive-summary.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 6d2c9e41-0b7a-4f3d-8e15-a3c7b94d1f62 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -53,7 +53,11 @@ and merges nothing.
   only the two it expects to be the winner and the loser. If the merge turns out to
   have kept a different book than the one expected, and the step that completes
   the entries then fails part way, no book of the merge is left without a saved
-  copy being kept for it.
+  copy being kept for it. The same entry also keeps every book of the merge from
+  being deleted for good from the trash while it is unfinished, so a book the
+  merge really removed is not lost to the clean-up just because the expected
+  winner was not the one kept. (An entry written before this change lists only the
+  two books it expected, and is read as it always was.)
 - If, after a merge, the library cannot read a book's list of saved copies to
   complete the entry, it now leaves the entry unfinished and says so in the log,
   rather than completing it with "no saved copy". An entry completed that way would
