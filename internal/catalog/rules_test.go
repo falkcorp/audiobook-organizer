@@ -1,7 +1,7 @@
 // file: internal/catalog/rules_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 1f8b3d52-6e9a-4c07-b4d1-8a2c5e7f9b30
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 
 package catalog
 
@@ -32,6 +32,12 @@ func TestParseSequence(t *testing.T) {
 		{"Book 2", 2, 2, true},
 		{"III", 3, 3, true},
 		{"3-1", 0, 0, false}, // reversed range: no position, never a gap
+		// Spans the dash regex does not spell are the shared seqnum ranges.
+		{"1 & 2", 1, 2, true},
+		{"Books 1 and 2", 1, 2, true},
+		{"Books 1, 2 & 3", 1, 3, true},
+		{"1, 2, 3", 1, 3, true},
+		{"1, 3", 0, 0, false}, // skips a volume: no range, never a gap
 		{"Prequel", 0, 0, false},
 		{"0", 0, 0, true},
 		{"10", 10, 10, true},

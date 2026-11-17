@@ -1,7 +1,7 @@
 // file: internal/catalog/sequence.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d3f1b62-4a7e-4c19-b5d8-2e6a9c0f7d35
-// last-edited: 2026-10-01
+// last-edited: 2026-11-16
 
 package catalog
 
@@ -44,6 +44,16 @@ func ParseSequence(s string) (lo, hi float64, ok bool) {
 	n, found := seqnum.ParsePosition(t)
 	if !found {
 		return 0, 0, false
+	}
+	if n.IsRange() {
+		// A span the regex above does not spell ("1 & 2", "Books 1, 2 & 3")
+		// is the same range. A list that skips a volume ("1, 3") covers
+		// positions it does not name, so it names no range: no position,
+		// never a series gap.
+		if strings.Contains(n.Text, ",") {
+			return 0, 0, false
+		}
+		return n.Value, n.Last, true
 	}
 	return n.Value, n.Value, true
 }

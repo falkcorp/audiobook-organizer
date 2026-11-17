@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/calibrate_scoring_test.go
-// version: 1.1.3
+// version: 1.2.0
 // guid: b3e6a1c8-9d24-4f57-8a06-1c2d3e4f5a61
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 
 package metafetch
 
@@ -26,6 +26,7 @@ import (
 func fieldsFromBookMetadata(bm metadata.BookMetadata) candFields {
 	return candFields{
 		Title:          bm.Title,
+		Subtitle:       bm.Subtitle,
 		Author:         bm.Author,
 		Narrator:       bm.Narrator,
 		Description:    bm.Description,
@@ -61,11 +62,47 @@ func TestScoreCore_PinnedToProductionScorer(t *testing.T) {
 	}
 
 	for i, bm := range cases {
-		want := metafetch.ScoreOneResult(bm, words)
-		got := scoreCore(fieldsFromBookMetadata(bm), words, k)
+		want := metafetch.ScoreOneResult(bm, words, "")
+		got := scoreCore(fieldsFromBookMetadata(bm), words, "", k)
 		if got != want {
 			t.Fatalf("case %d %q: scoreCore=%.10f, want ScoreOneResult=%.10f", i, bm.Title, got, want)
 		}
+	}
+}
+
+// TestScoreCore_PinnedCollectedEdition pins the mirror to the real scorer on
+// the branch that lifts the compilation penalty, and on every neighbour that
+// must keep it: same range, different range, one side numbered, single book vs
+// compilation, no book in scope.
+func TestScoreCore_PinnedCollectedEdition(t *testing.T) {
+	words := metafetch.SignificantWords("Knightfall Omnibus")
+	k := defaultSweepKnobs()
+	cases := []struct {
+		name      string
+		bookTitle string
+		cand      metadata.BookMetadata
+		lifted    bool
+	}{
+		{"same range", "Knightfall Omnibus, Books 1-3", metadata.BookMetadata{Title: "Knightfall Omnibus", Subtitle: "Books 1-3"}, true},
+		{"same range in the series position", "Knightfall Omnibus, Books 1-3", metadata.BookMetadata{Title: "Knightfall Omnibus", SeriesPosition: "1-3"}, true},
+		{"different range", "Knightfall Omnibus, Books 1-3", metadata.BookMetadata{Title: "Knightfall Omnibus", Subtitle: "Books 1-5"}, false},
+		{"book numbered, candidate not", "Knightfall Omnibus, Books 1-3", metadata.BookMetadata{Title: "Knightfall Omnibus"}, false},
+		{"same wording, neither numbered", "Knightfall Omnibus", metadata.BookMetadata{Title: "Knightfall Omnibus"}, true},
+		{"single volume book", "Knightfall", metadata.BookMetadata{Title: "Knightfall Omnibus"}, false},
+		{"no book in scope", "", metadata.BookMetadata{Title: "Knightfall Omnibus"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			want := metafetch.ScoreOneResult(c.cand, words, c.bookTitle)
+			got := scoreCore(fieldsFromBookMetadata(c.cand), words, c.bookTitle, k)
+			if got != want {
+				t.Fatalf("scoreCore=%.10f, want ScoreOneResult=%.10f", got, want)
+			}
+			penalised := metafetch.ScoreOneResult(c.cand, words, "")
+			if c.lifted == (want == penalised) {
+				t.Fatalf("lifted=%v but score %.6f vs penalised %.6f", c.lifted, want, penalised)
+			}
+		})
 	}
 }
 

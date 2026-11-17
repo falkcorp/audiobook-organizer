@@ -1,7 +1,7 @@
 // file: internal/metadata/series_position.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c1d0a4e-9b73-4f26-8a51-6d2e4c9f7b30
-// last-edited: 2026-09-02
+// last-edited: 2026-11-16
 
 package metadata
 
@@ -160,6 +160,21 @@ func hasLetter(s string) bool {
 	return false
 }
 
+// EndsInTagWord reports whether a stripped base name IS, or ends in, a disc /
+// chapter / track / part / pack word: "02 Chapter" (what SplitSeriesPosition
+// leaves of "02 Chapter 1"), "Disc", "The Tower of Nero - Chapter". It is the
+// word half of IsJunkSeriesBase, exposed alone for callers that ask whether a
+// number sits beside such a word and so is a tag, not a volume. It does NOT
+// include IsJunkSeriesBase's punctuation and length rules: "Big Cats," and
+// "Big Cats:" are real titles whose trailing number is a volume.
+func EndsInTagWord(base string) bool {
+	b := strings.TrimSpace(base)
+	if _, ok := junkSeriesBases[strings.ToLower(b)]; ok {
+		return true
+	}
+	return trailingJunkWord.MatchString(b)
+}
+
 // IsJunkSeriesBase reports whether a stripped base name is a tag artefact rather
 // than a series.
 //
@@ -175,10 +190,7 @@ func IsJunkSeriesBase(base string) bool {
 	if len([]rune(b)) < 2 {
 		return true
 	}
-	if _, ok := junkSeriesBases[strings.ToLower(b)]; ok {
-		return true
-	}
-	if trailingJunkWord.MatchString(b) {
+	if EndsInTagWord(b) {
 		return true
 	}
 	// The leading-number shapes strand punctuation at the FRONT, where the

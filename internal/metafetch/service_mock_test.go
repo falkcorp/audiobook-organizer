@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.18.5
+// version: 1.18.6
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 
 package metafetch
 
@@ -140,14 +140,14 @@ func TestScoreOneResult(t *testing.T) {
 	t.Run("perfect_match", func(t *testing.T) {
 		r := metadata.BookMetadata{Title: "The Way of Kings"}
 		words := SignificantWords("The Way of Kings")
-		score := ScoreOneResult(r, words)
+		score := ScoreOneResult(r, words, "")
 		assert.Greater(t, score, 0.5)
 	})
 
 	t.Run("no_overlap", func(t *testing.T) {
 		r := metadata.BookMetadata{Title: "Completely Different Title XYZ"}
 		words := SignificantWords("Mistborn Final Empire")
-		score := ScoreOneResult(r, words)
+		score := ScoreOneResult(r, words, "")
 		assert.Equal(t, 0.0, score)
 	})
 
@@ -155,8 +155,8 @@ func TestScoreOneResult(t *testing.T) {
 		normal := metadata.BookMetadata{Title: "Mistborn"}
 		boxSet := metadata.BookMetadata{Title: "Mistborn Box Set"}
 		words := SignificantWords("Mistborn")
-		scoreNormal := ScoreOneResult(normal, words)
-		scoreBox := ScoreOneResult(boxSet, words)
+		scoreNormal := ScoreOneResult(normal, words, "")
+		scoreBox := ScoreOneResult(boxSet, words, "")
 		assert.Greater(t, scoreNormal, scoreBox, "compilation should be penalized")
 	})
 
@@ -169,14 +169,14 @@ func TestScoreOneResult(t *testing.T) {
 			Narrator:    "Michael Kramer",
 		}
 		words := SignificantWords("Mistborn")
-		scorePlain := ScoreOneResult(plain, words)
-		scoreRich := ScoreOneResult(rich, words)
+		scorePlain := ScoreOneResult(plain, words, "")
+		scoreRich := ScoreOneResult(rich, words, "")
 		assert.Greater(t, scoreRich, scorePlain, "rich metadata should get bonus")
 	})
 
 	t.Run("empty_search_words", func(t *testing.T) {
 		r := metadata.BookMetadata{Title: "Something"}
-		score := ScoreOneResult(r, map[string]bool{})
+		score := ScoreOneResult(r, map[string]bool{}, "")
 		assert.Equal(t, 0.0, score)
 	})
 }
@@ -188,21 +188,21 @@ func TestScoreOneResult(t *testing.T) {
 func TestApplyNonBaseAdjustments(t *testing.T) {
 	t.Run("compilation_penalty", func(t *testing.T) {
 		r := metadata.BookMetadata{Title: "Complete Collection Box Set"}
-		score := ApplyNonBaseAdjustments(1.0, r, 2)
+		score := ApplyNonBaseAdjustments(1.0, r, 2, "")
 		assert.Less(t, score, 0.5, "compilation should be heavily penalized")
 	})
 
 	t.Run("length_penalty", func(t *testing.T) {
 		short := metadata.BookMetadata{Title: "Mistborn"}
 		long := metadata.BookMetadata{Title: "Mistborn The Final Empire A Really Long Title With Extra Words"}
-		scoreShort := ApplyNonBaseAdjustments(1.0, short, 1)
-		scoreLong := ApplyNonBaseAdjustments(1.0, long, 1)
+		scoreShort := ApplyNonBaseAdjustments(1.0, short, 1, "")
+		scoreLong := ApplyNonBaseAdjustments(1.0, long, 1, "")
 		assert.Greater(t, scoreShort, scoreLong, "much longer titles should be penalized")
 	})
 
 	t.Run("no_length_penalty_when_disabled", func(t *testing.T) {
 		r := metadata.BookMetadata{Title: "A Very Long Title With Many Words Extra Stuff"}
-		score := ApplyNonBaseAdjustments(1.0, r, 0)
+		score := ApplyNonBaseAdjustments(1.0, r, 0, "")
 		// With baseWordCount=0, no length penalty; only rich-metadata bonus
 		assert.GreaterOrEqual(t, score, 1.0)
 	})
@@ -216,7 +216,7 @@ func TestApplyNonBaseAdjustments(t *testing.T) {
 			ISBN:        "isbn",
 		}
 		// All 4 bonuses = 0.20, but cap is 0.15
-		score := ApplyNonBaseAdjustments(1.0, r, 0)
+		score := ApplyNonBaseAdjustments(1.0, r, 0, "")
 		assert.InDelta(t, 1.15, score, 0.001)
 	})
 }
@@ -831,7 +831,7 @@ func TestPickBestMatchFromScored(t *testing.T) {
 		scores := []float64{0.9, 0.5}
 		words := SignificantWords("Mistborn")
 
-		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{})
+		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{}, "")
 		require.NotEmpty(t, matched)
 		assert.Equal(t, "Mistborn", matched[0].Title)
 	})
@@ -843,7 +843,7 @@ func TestPickBestMatchFromScored(t *testing.T) {
 		scores := []float64{0.1}
 		words := SignificantWords("Something")
 
-		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{})
+		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{}, "")
 		assert.Nil(t, matched, "score below threshold should return nil")
 	})
 
@@ -855,7 +855,7 @@ func TestPickBestMatchFromScored(t *testing.T) {
 		scores := []float64{0.8, 0.7}
 		words := SignificantWords("Mistborn")
 
-		matched := pickBestMatchFromScored(results, scores, "f1", words, "Brandon Sanderson", "", localRuntime{})
+		matched := pickBestMatchFromScored(results, scores, "f1", words, "Brandon Sanderson", "", localRuntime{}, "")
 		require.NotEmpty(t, matched)
 		assert.Equal(t, "Brandon Sanderson", matched[0].Author, "author match should boost score")
 	})
@@ -868,13 +868,13 @@ func TestPickBestMatchFromScored(t *testing.T) {
 		scores := []float64{0.7, 0.65}
 		words := SignificantWords("Mistborn")
 
-		matched := pickBestMatchFromScored(results, scores, "f1", words, "Brandon Sanderson", "Michael Kramer", localRuntime{})
+		matched := pickBestMatchFromScored(results, scores, "f1", words, "Brandon Sanderson", "Michael Kramer", localRuntime{}, "")
 		require.NotEmpty(t, matched)
 		assert.Equal(t, "Michael Kramer", matched[0].Narrator, "narrator match should boost score")
 	})
 
 	t.Run("empty_results", func(t *testing.T) {
-		matched := pickBestMatchFromScored(nil, nil, "f1", map[string]bool{}, "", "", localRuntime{})
+		matched := pickBestMatchFromScored(nil, nil, "f1", map[string]bool{}, "", "", localRuntime{}, "")
 		assert.Nil(t, matched)
 	})
 
@@ -885,7 +885,7 @@ func TestPickBestMatchFromScored(t *testing.T) {
 		scores := []float64{0.0}
 		words := SignificantWords("Mistborn")
 
-		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{})
+		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{}, "")
 		assert.Nil(t, matched, "zero base score in F1 tier should be skipped even with rich metadata")
 	})
 }
@@ -956,7 +956,7 @@ func TestPickBestMatchFromScored_DurationBreaksTie(t *testing.T) {
 	scores := []float64{0.8, 0.8}
 	words := SignificantWords("Mistborn")
 
-	matched := pickBestMatchFromScored(results, scores, "f1", words, "Brandon Sanderson", "", knownRuntime(bookDuration))
+	matched := pickBestMatchFromScored(results, scores, "f1", words, "Brandon Sanderson", "", knownRuntime(bookDuration), "")
 	require.NotEmpty(t, matched)
 	assert.Equal(t, 36000, matched[0].DurationSec, "candidate with matching duration should win the tie")
 }
@@ -973,7 +973,7 @@ func TestPickBestMatchFromScored_WrongEditionRejected(t *testing.T) {
 	scores := []float64{0.82, 0.80}
 	words := SignificantWords("Mistborn")
 
-	matched := pickBestMatchFromScored(results, scores, "f1", words, "Brandon Sanderson", "", knownRuntime(bookDuration))
+	matched := pickBestMatchFromScored(results, scores, "f1", words, "Brandon Sanderson", "", knownRuntime(bookDuration), "")
 	require.NotEmpty(t, matched)
 	assert.Equal(t, 35700, matched[0].DurationSec, "full edition should win despite lower base score")
 }

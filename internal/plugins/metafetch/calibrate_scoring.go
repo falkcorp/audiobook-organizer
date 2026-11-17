@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/calibrate_scoring.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: 4e1c8b2a-6d90-4f37-9b1a-2c3d4e5f6a70
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 
 // Package metafetch — op metafetch.calibrate-scoring (INIT-3-T1).
 //
@@ -256,6 +256,7 @@ func knobsFromConfig(cfg config.MetadataScoringConfig) sweepKnobs {
 // only in the pin test), so the scorer is independent of either concrete type.
 type candFields struct {
 	Title          string
+	Subtitle       string
 	Author         string
 	Narrator       string
 	Description    string
@@ -269,6 +270,7 @@ type candFields struct {
 func fieldsFromCandidate(c metafetch.MetadataCandidate) candFields {
 	return candFields{
 		Title:          c.Title,
+		Subtitle:       c.Subtitle,
 		Author:         c.Author,
 		Narrator:       c.Narrator,
 		Description:    c.Description,
@@ -362,10 +364,13 @@ func f1Base(title string, searchWords map[string]bool) float64 {
 }
 
 // nonBaseAdjust mirrors ApplyNonBaseAdjustments: compilation penalty, length
-// penalty, and capped rich-metadata bonus, all parameterized by k.
-func nonBaseAdjust(base float64, f candFields, baseWordCount int, k sweepKnobs) float64 {
+// penalty, and capped rich-metadata bonus, all parameterized by k. bookTitle
+// is the book's STORED title ("" when none): the compilation penalty is not
+// applied when the book is itself the same collected edition, decided by the
+// production helper so the mirror cannot drift from it.
+func nonBaseAdjust(base float64, f candFields, baseWordCount int, bookTitle string, k sweepKnobs) float64 {
 	score := base
-	if isCompilationTitle(f.Title) {
+	if isCompilationTitle(f.Title) && !metafetch.SameCollectedEdition(bookTitle, f.Title, f.Subtitle, f.SeriesPosition) {
 		score *= k.CompilationPenalty
 	}
 	if baseWordCount > 0 {
@@ -398,12 +403,12 @@ func nonBaseAdjust(base float64, f candFields, baseWordCount int, k sweepKnobs) 
 // scoreCore mirrors metafetch.ScoreOneResult: the f1 base plus non-base
 // adjustments, preserving the "base == 0 → 0 (skip bonus)" early return. This
 // is the portion pinned bit-for-bit against the real scorer at default knobs.
-func scoreCore(f candFields, searchWords map[string]bool, k sweepKnobs) float64 {
+func scoreCore(f candFields, searchWords map[string]bool, bookTitle string, k sweepKnobs) float64 {
 	base := f1Base(f.Title, searchWords)
 	if base == 0 {
 		return 0
 	}
-	return nonBaseAdjust(base, f, len(searchWords), k)
+	return nonBaseAdjust(base, f, len(searchWords), bookTitle, k)
 }
 
 // durationTierValues mirrors durationTier's tier lookup (fixed edges, swept
@@ -488,7 +493,7 @@ func transcriptionBoost(score float64, f candFields, th transcriptionHints, k sw
 // package comment): core (pinned) → F1 floor → duration → transcription →
 // series-number. Every swept knob participates so a sweep moves ranks.
 func rankScore(f candFields, book *database.Book, rt database.BookRuntime, searchWords map[string]bool, hints transcriptionHints, k sweepKnobs) float64 {
-	score := scoreCore(f, searchWords, k)
+	score := scoreCore(f, searchWords, book.Title, k)
 	if score < k.F1MinScore {
 		// Below the F1 floor a candidate is disqualified (mirrors the min-score
 		// gate the production f1 tier applies before ranking).

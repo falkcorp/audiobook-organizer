@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_scoring_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 7e3f6a1c-9b4d-4e2a-8c1f-6d5b3a2e9f70
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 
 package metafetch
 
@@ -398,12 +398,12 @@ func TestScoringConfigDefaultsMatchLegacyLiterals(t *testing.T) {
 	})
 
 	t.Run("compilationPenalty", func(t *testing.T) {
-		got := ApplyNonBaseAdjustments(1.0, metadata.BookMetadata{Title: "The Best of Everything: Omnibus"}, 0)
+		got := ApplyNonBaseAdjustments(1.0, metadata.BookMetadata{Title: "The Best of Everything: Omnibus"}, 0, "")
 		assert.InDelta(t, 0.15, got, 1e-9, "legacy compilation penalty was score *= 0.15")
 	})
 
 	t.Run("richMetadataBonusSingleField", func(t *testing.T) {
-		got := ApplyNonBaseAdjustments(0.0, metadata.BookMetadata{Title: "Single Field Book", ISBN: "123"}, 0)
+		got := ApplyNonBaseAdjustments(0.0, metadata.BookMetadata{Title: "Single Field Book", ISBN: "123"}, 0, "")
 		assert.InDelta(t, 0.05, got, 1e-9, "legacy rich-metadata bonus per field was +0.05")
 	})
 
@@ -412,7 +412,7 @@ func TestScoringConfigDefaultsMatchLegacyLiterals(t *testing.T) {
 			Title: "Uncapped Bonus Book", Description: "d", CoverURL: "c", Narrator: "n", ISBN: "i",
 		}
 		// legacy: 4 fields * 0.05 = 0.20, capped at 0.15.
-		got := ApplyNonBaseAdjustments(0.0, r, 0)
+		got := ApplyNonBaseAdjustments(0.0, r, 0, "")
 		assert.InDelta(t, 0.15, got, 1e-9, "legacy rich-metadata bonus was capped at 0.15")
 	})
 
@@ -469,25 +469,25 @@ func TestScoringConfigExplicitZeroHonored(t *testing.T) {
 
 	t.Run("CompilationPenalty explicit zero disables the penalty", func(t *testing.T) {
 		withMetadataScoringConfig(t, config.MetadataScoringConfig{CompilationPenalty: &zero})
-		got := ApplyNonBaseAdjustments(1.0, metadata.BookMetadata{Title: "Omnibus Collection"}, 0)
+		got := ApplyNonBaseAdjustments(1.0, metadata.BookMetadata{Title: "Omnibus Collection"}, 0, "")
 		assert.InDelta(t, 0.0, got, 1e-9, "explicit CompilationPenalty=0 must zero the score for a compilation, not fall back to 0.15")
 	})
 
 	t.Run("CompilationPenalty nil falls back to legacy default", func(t *testing.T) {
 		withMetadataScoringConfig(t, config.MetadataScoringConfig{CompilationPenalty: nil})
-		got := ApplyNonBaseAdjustments(1.0, metadata.BookMetadata{Title: "Omnibus Collection"}, 0)
+		got := ApplyNonBaseAdjustments(1.0, metadata.BookMetadata{Title: "Omnibus Collection"}, 0, "")
 		assert.InDelta(t, 0.15, got, 1e-9)
 	})
 
 	t.Run("RichMetadataBonusCap explicit zero suppresses the bonus", func(t *testing.T) {
 		withMetadataScoringConfig(t, config.MetadataScoringConfig{RichMetadataBonusCap: &zero})
-		got := ApplyNonBaseAdjustments(0.0, metadata.BookMetadata{Title: "Bonus Book", ISBN: "i"}, 0)
+		got := ApplyNonBaseAdjustments(0.0, metadata.BookMetadata{Title: "Bonus Book", ISBN: "i"}, 0, "")
 		assert.InDelta(t, 0.0, got, 1e-9, "explicit RichMetadataBonusCap=0 must suppress the bonus entirely")
 	})
 
 	t.Run("RichMetadataBonusCap nil falls back to legacy default", func(t *testing.T) {
 		withMetadataScoringConfig(t, config.MetadataScoringConfig{RichMetadataBonusCap: nil})
-		got := ApplyNonBaseAdjustments(0.0, metadata.BookMetadata{Title: "Bonus Book", ISBN: "i"}, 0)
+		got := ApplyNonBaseAdjustments(0.0, metadata.BookMetadata{Title: "Bonus Book", ISBN: "i"}, 0, "")
 		assert.InDelta(t, 0.05, got, 1e-9)
 	})
 }

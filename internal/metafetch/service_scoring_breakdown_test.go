@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_scoring_breakdown_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 9a4d7f21-5e83-4c06-b1d7-3f8092ac5e14
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 
 package metafetch
 
@@ -68,7 +68,7 @@ func searchWordsForHobbit() map[string]bool {
 func TestBreakdown_RecomposesToScore(t *testing.T) {
 	words := searchWordsForHobbit()
 	for _, r := range scoringInputs() {
-		score, bd := ScoreOneResultWithBreakdown(r, words)
+		score, bd := ScoreOneResultWithBreakdown(r, words, "")
 
 		if bd.Score != score {
 			t.Fatalf("%q: breakdown.Score=%v, returned score=%v", r.Title, bd.Score, score)
@@ -89,7 +89,7 @@ func TestBreakdown_RecomposesToScore(t *testing.T) {
 func TestBreakdown_RunningMatchesPrefix(t *testing.T) {
 	words := searchWordsForHobbit()
 	for _, r := range scoringInputs() {
-		_, bd := ScoreOneResultWithBreakdown(r, words)
+		_, bd := ScoreOneResultWithBreakdown(r, words, "")
 		for i := range bd.Steps {
 			want := RecomposeScore(bd.Steps[:i+1])
 			if got := bd.Steps[i].Running; math.Abs(got-want) > 1e-12 {
@@ -106,15 +106,15 @@ func TestBreakdown_RunningMatchesPrefix(t *testing.T) {
 func TestBreakdown_MatchesPlainScorer(t *testing.T) {
 	words := searchWordsForHobbit()
 	for _, r := range scoringInputs() {
-		want := ScoreOneResult(r, words)
-		got, _ := ScoreOneResultWithBreakdown(r, words)
+		want := ScoreOneResult(r, words, "")
+		got, _ := ScoreOneResultWithBreakdown(r, words, "")
 		if want != got {
 			t.Fatalf("%q: ScoreOneResult=%.15f, WithBreakdown=%.15f", r.Title, want, got)
 		}
 
 		base := computeF1Base(r, words)
-		wantAdj := ApplyNonBaseAdjustments(base, r, len(words))
-		gotAdj, _ := ApplyNonBaseAdjustmentsWithBreakdown(base, r, len(words))
+		wantAdj := ApplyNonBaseAdjustments(base, r, len(words), "")
+		gotAdj, _ := ApplyNonBaseAdjustmentsWithBreakdown(base, r, len(words), "")
 		if wantAdj != gotAdj {
 			t.Fatalf("%q: ApplyNonBaseAdjustments=%.15f, WithBreakdown=%.15f",
 				r.Title, wantAdj, gotAdj)
@@ -131,7 +131,7 @@ func TestBreakdown_ZeroBaseIsExplained(t *testing.T) {
 		Title: "Utterly Unrelated Nonsense", Description: "d", CoverURL: "c",
 		Narrator: "n", ISBN: "i",
 	}
-	score, bd := ScoreOneResultWithBreakdown(r, words)
+	score, bd := ScoreOneResultWithBreakdown(r, words, "")
 	if score != 0 {
 		t.Fatalf("expected zero score, got %v", score)
 	}

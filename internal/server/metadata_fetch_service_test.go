@@ -1,7 +1,7 @@
 // file: internal/server/metadata_fetch_service_test.go
-// version: 4.4.8
+// version: 4.4.9
 // guid: f6a7b8c9-d0e1-f2a3-b4c5-d6e7f8a9b0c1
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 
 package server
 
@@ -1292,7 +1292,7 @@ func TestScoreOneResult_BasicScoring(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			score := metafetch.ScoreOneResult(tc.result, searchWords)
+			score := metafetch.ScoreOneResult(tc.result, searchWords, "")
 			if score < tc.minExp || score > tc.maxExp {
 				t.Errorf("metafetch.ScoreOneResult() = %.3f, want [%.3f, %.3f]", score, tc.minExp, tc.maxExp)
 			}
