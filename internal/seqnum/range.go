@@ -1,5 +1,5 @@
 // file: internal/seqnum/range.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3e8a1d57-4c20-4b9f-a6d3-91f5b0c7e248
 // last-edited: 2026-11-17
 
@@ -55,7 +55,8 @@ var (
 
 	// reTailEnd is what may follow the last continuation of a span: the end
 	// of the text or a terminator (the same set a spelled-out second end needs).
-	reTailEnd = regexp.MustCompile(`^` + terminal)
+	// An "&" ends a list too: "Books 1-3, 5 & Other Stories" is the list 1-3,5.
+	reTailEnd = regexp.MustCompile(`^(?:` + terminal + `|\s+&\s)`)
 
 	reListDigits = regexp.MustCompile(rangeKeyword + `(` + digitsN + `(?:` + sepList + digitsN + `)+)` + terminal)
 	reListWords  = regexp.MustCompile(rangeKeyword + `(` + anyNum + `(?:` + sepList + anyNum + `)+)` + terminal)

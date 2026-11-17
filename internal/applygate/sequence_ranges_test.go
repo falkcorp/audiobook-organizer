@@ -1,5 +1,5 @@
 // file: internal/applygate/sequence_ranges_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 4d9c2a71-8e35-4f60-b2a8-17c6e3d05f94
 // last-edited: 2026-11-17
 
@@ -287,7 +287,7 @@ func TestCheckSequence_CandidateReadsItselfOneWay(t *testing.T) {
 }
 
 // SourceNumber text is reported and may be read again: every range shape
-// survives the trip through agree.
+// survives the trip through resolve.
 func TestAgree_RangeTextRoundTrips(t *testing.T) {
 	for _, in := range []string{"Knightfall, Books 1-3", "Knightfall, Books 1, 3", "Knightfall, Books 1.5-2"} {
 		nums := BookNumbers(&database.Book{Title: in})
@@ -295,8 +295,8 @@ func TestAgree_RangeTextRoundTrips(t *testing.T) {
 			t.Fatalf("%q: %v", in, nums)
 		}
 		cand := CandidateNumbers(&metafetch.MetadataCandidate{Title: in})
-		a, _, _ := agree(nums, false)
-		b, _, _ := agree(cand, false)
+		a := resolve(nums, false).Num
+		b := resolve(cand, false).Num
 		if !a.IsRange() || a.Text != nums[0].Number || fmt.Sprint(a) != fmt.Sprint(b) {
 			t.Errorf("%q: book %+v candidate %+v", in, a, b)
 		}

@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
 // last-edited: 2026-11-17
 
@@ -512,8 +512,13 @@ func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookR
 // or title can be stale, and the gate cannot tell which of the two numbers is.
 func CheckSequence(book *database.Book, c *metafetch.MetadataCandidate) SequenceVerdict {
 	v := SequenceVerdict{BookNumbers: BookNumbers(book), CandidateNumbers: CandidateNumbers(c)}
-	bookNum, bookOK, bookConflict := agree(v.BookNumbers, false)
-	candNum, candOK, candConflict := agree(v.CandidateNumbers, false)
+	bookSide := resolve(v.BookNumbers, false)
+	candSide := resolve(v.CandidateNumbers, false)
+	bookNum, bookOK, bookConflict := bookSide.Num, bookSide.OK, bookSide.Conflict
+	candNum, candOK, candConflict := candSide.Num, candSide.OK, candSide.Conflict
+	// The side whose verdict decides the pass: the weak numbers it dropped are
+	// the ones that must still equal the number its remaining sources agreed on.
+	decided := bookSide
 
 	switch {
 	case bookConflict:
@@ -527,7 +532,8 @@ func CheckSequence(book *database.Book, c *metafetch.MetadataCandidate) Sequence
 		// Only here, where the candidate names no number, does a part suffix
 		// stand aside: "Rogue Lawyer - 001" and "Wheel of Time - 003" look the
 		// same, so a candidate with a DIFFERENT number still refuses below.
-		if _, ok, conflict := agree(v.BookNumbers, true); !ok && !conflict {
+		if skip := resolve(v.BookNumbers, true); !skip.OK && !skip.Conflict {
+			decided = skip
 			v.Pass = true
 			v.Detail = "book's only number is a part suffix (" + describe(v.BookNumbers) + "), candidate has no number"
 			break
@@ -542,15 +548,20 @@ func CheckSequence(book *database.Book, c *metafetch.MetadataCandidate) Sequence
 		v.Pass = true
 	}
 	if v.Pass {
-		v.WeakSetAside = weakSetAside(v.BookNumbers)
+		v.WeakSetAside = weakSetAside(decided)
 	}
 	return v
 }
 
-// weakSetAside says what agree set aside when a weak number disagrees with
-// the book's strong number ("" when there is no weak number, when every weak
-// number agrees, or when there is no strong source, where the weak numbers
-// still count).
+// weakSetAside refuses what resolve set aside: it returns a reason ("" for
+// none) when any weak number resolve dropped differs from the number the
+// remaining sources agreed on. It reads only resolve's own partition, so what
+// counts as a strong source is decided in one place; there is no second
+// notion of "strong" here to drift from it. The rule it enforces: the
+// sequence leg passes only if every book-side number, weak ones included,
+// equals the candidate's; weak numbers change the REASON (review, with a
+// track-number explanation, instead of a hard conflict), never the outcome
+// from refuse to allow.
 //
 // There is no independent source to corroborate with: the stored title, the
 // stored series position and a file or folder name (a "Book N" marker
@@ -560,27 +571,13 @@ func CheckSequence(book *database.Book, c *metafetch.MetadataCandidate) Sequence
 // them. An earlier version let the title and runtime checks stand in for a
 // second source; they cannot: the title check agrees on any shared title
 // segment, so two volumes of one storyline confirmed each other.
-func weakSetAside(src []SourceNumber) string {
-	var strong *SourceNumber
-	var weak []SourceNumber
-	for i, s := range src {
-		if s.Form == FormRangeEndpoint || !counted(s) {
-			continue
-		}
-		if s.Weak {
-			weak = append(weak, s)
-			continue
-		}
-		if strong == nil {
-			strong = &src[i]
-		}
-	}
-	if strong == nil {
+func weakSetAside(side sideNumber) string {
+	if len(side.Dropped) == 0 || len(side.Kept) == 0 {
 		return ""
 	}
-	pos, _ := seqnum.ParsePosition(strong.Number)
-	for _, w := range weak {
-		if n, _ := seqnum.ParsePosition(w.Number); !seqnum.Equal(pos, n) {
+	strong := side.Kept[0]
+	for _, w := range side.Dropped {
+		if n, _ := seqnum.ParsePosition(w.Number); !seqnum.Equal(side.Num, n) {
 			return weakKind(w) + " " + w.Number + " in the " + w.Source + " looks like a list or track number, not a volume; " +
 				"it was set aside for the " + strong.Source + " " + strong.Number + ", but the stored title, the stored series position and the file and folder names " +
 				"are all fields an earlier apply can have written, so the volume is not confirmed"
@@ -864,12 +861,26 @@ func counted(s SourceNumber) bool {
 	return s.Form != FormPartSuffix && s.Form != FormDerivedPosition
 }
 
-// effective is the sources that decide a side's number: with skipPart the
-// part-suffix ones are dropped (counted), a position set aside as a range
-// endpoint is always dropped, and weak sources are dropped when any stronger
-// one remains. When only weak sources remain they all stay: a weak number is
-// still the side's only evidence, and ambiguity must not turn into a pass.
-func effective(src []SourceNumber, skipPart bool) []SourceNumber {
+// sideNumber is one side's reduced number and the partition that produced it.
+type sideNumber struct {
+	Num      seqnum.Number
+	OK       bool // at least one source remains
+	Conflict bool // two remaining sources name different numbers
+	// Kept are the sources that decided Num; Dropped are the weak numbers set
+	// aside because a stronger source remained (they are never part of Kept).
+	Kept, Dropped []SourceNumber
+}
+
+// resolve is the ONE place that decides which sources of a side count: with
+// skipPart the part-suffix ones are dropped (counted), a position set aside as
+// a range endpoint is always dropped (it states the title's range a second
+// time, not a number of its own), and weak sources are dropped when any
+// non-weak one remains (a part suffix is non-weak, so it keeps them out
+// exactly as a stored position does). When only weak sources remain they all
+// stay: a weak number is still the side's only evidence, and ambiguity must
+// not turn into a pass. The weak sources it drops are returned in Dropped so
+// the sequence leg can refuse when any of them differs from Num.
+func resolve(src []SourceNumber, skipPart bool) sideNumber {
 	var kept []SourceNumber
 	strong := false
 	for _, s := range src {
@@ -881,16 +892,30 @@ func effective(src []SourceNumber, skipPart bool) []SourceNumber {
 			strong = true
 		}
 	}
-	if !strong {
-		return kept
+	var r sideNumber
+	if strong {
+		for _, s := range kept {
+			if s.Weak {
+				r.Dropped = append(r.Dropped, s)
+			} else {
+				r.Kept = append(r.Kept, s)
+			}
+		}
+	} else {
+		r.Kept = kept
 	}
-	out := kept[:0:0]
-	for _, s := range kept {
-		if !s.Weak {
-			out = append(out, s)
+	for _, s := range r.Kept {
+		cur, _ := seqnum.ParsePosition(s.Number)
+		if !r.OK {
+			r.Num, r.OK = cur, true
+			continue
+		}
+		if !seqnum.Equal(r.Num, cur) {
+			r.Conflict = true
+			return r
 		}
 	}
-	return out
+	return r
 }
 
 // CandidateNumbers lists every number found on the candidate, one per source.
@@ -912,23 +937,6 @@ func CandidateNumbers(c *metafetch.MetadataCandidate) []SourceNumber {
 	// 1-3" in its title or subtitle and a position equal to an end of that
 	// range is stating the range twice, not two numbers.
 	return markRangeEndpoint(out, "title", "subtitle")
-}
-
-// agree reduces a source list to one number. ok=false when the list is empty;
-// conflict=true when two sources name different numbers. With skipPart,
-// sources BookNumbers marked as part suffixes are skipped.
-func agree(src []SourceNumber, skipPart bool) (n seqnum.Number, ok, conflict bool) {
-	for _, s := range effective(src, skipPart) {
-		cur, _ := seqnum.ParsePosition(s.Number)
-		if !ok {
-			n, ok = cur, true
-			continue
-		}
-		if !seqnum.Equal(n, cur) {
-			return n, true, true
-		}
-	}
-	return n, ok, false
 }
 
 func ftoa(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) }
