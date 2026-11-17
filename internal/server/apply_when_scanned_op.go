@@ -1,7 +1,7 @@
 // file: internal/server/apply_when_scanned_op.go
-// version: 1.8.4
+// version: 1.8.5
 // guid: 4c1f7e2a-9b3d-4e85-a6f0-2d8c5b71e934
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package server
 
@@ -199,6 +199,11 @@ func init() {
 type opResultApplyOutcome struct {
 	applied bool
 	skipped bool
+	// alreadyApplied: the skip was because the book already records an applied
+	// match (planOpResultApply, applySkipAlreadyApplied), not because it has no
+	// candidate or was marked "no match". A queued apply logs it, since the
+	// operation otherwise ends with nothing said about a book it was queued for.
+	alreadyApplied bool
 	// blocked: refused before any write (certainty gate or rename
 	// preflight); blockMsg says which.
 	blocked  bool
@@ -348,6 +353,13 @@ func (s *Server) runQueuedOpResultCandidate(ctx context.Context, q metadatahandl
 		return fmt.Errorf("not applied: %s", o.blockMsg)
 	case o.errMsg != "":
 		return errors.New(o.errMsg)
+	case o.alreadyApplied:
+		// Not an error, and not silent: this apply was queued because the scan
+		// held the book, and by the time it ran another apply had already
+		// recorded a match (an undo of that apply clears the record, so a later
+		// run would apply again).
+		batchApplyCandidatesLog.Info("queued apply skipped, book already has an applied match: op=%s book=%s",
+			logger.SanitizeLogValue(q.OperationID), logger.SanitizeLogValue(q.BookID))
 	}
 	return nil
 }
@@ -377,6 +389,11 @@ func (s *Server) applyOpResultCandidateLocked(ctx context.Context, books bookRea
 	if plan.Reason == applySkipMarkedNoMatch {
 		// Marked "no match" since the fetch: nothing to apply.
 		return opResultApplyOutcome{skipped: true}
+	}
+	if plan.Reason == applySkipAlreadyApplied {
+		// Applied since the fetch (by another path): nothing to apply, and not
+		// an error either, as in the cached bulk apply.
+		return opResultApplyOutcome{skipped: true, alreadyApplied: true}
 	}
 	if plan.Reason == applySkipGateBlocked {
 		return opResultApplyOutcome{blocked: true, blockMsg: fmt.Sprintf("%s: %v", bookID, plan.Err)}
