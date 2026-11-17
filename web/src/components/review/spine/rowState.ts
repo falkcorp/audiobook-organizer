@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/rowState.ts
-// version: 1.9.0
+// version: 1.10.0
 // guid: 4d17c69b-0e83-4a25-91f6-7b2c8a034e51
 // last-edited: 2026-11-17
 //
@@ -333,7 +333,7 @@ export function owedSourceChips(r: {
       kind: 'owed',
       label: 'Source still owed',
       color: 'warning',
-      detail: `${pending.join(', ')} could not be asked when this book was last searched. It is asked again on a backoff (6 hours, then 1, 3 and 7 days), and a better candidate may appear.`,
+      detail: `${pending.join(', ')} could not be asked when this book was last searched. The scheduled refresh asks it again on a backoff (6 hours, then 1, 3 and 7 days), and a better candidate may appear.`,
     });
   }
   if (exhausted.length > 0) {
@@ -341,7 +341,7 @@ export function owedSourceChips(r: {
       kind: 'gave_up',
       label: 'Gave up on a source',
       color: 'default',
-      detail: `${exhausted.join(', ')} did not answer after five asks over about eleven days, so it is no longer asked. A forced refetch (Search again) asks it afresh.`,
+      detail: `${exhausted.join(', ')} did not answer in five searches, so the scheduled refresh no longer asks it. A forced refetch (Search again) asks it afresh.`,
     });
   }
   return out;

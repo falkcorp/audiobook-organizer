@@ -1,5 +1,5 @@
 // file: internal/server/metadata_candidate_owed_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c41e7a96-5d03-4f28-9b6a-2e8f1d70a3c5
 // last-edited: 2026-11-17
 
@@ -538,14 +538,14 @@ func TestCandidateOwed_DialogFetchBetweenRunsKeepsTheDebt(t *testing.T) {
 // charged. If its record missed that row the book would be due on every run and
 // never exhaust, the unbounded re-ask the schedule exists to stop.
 func TestCandidateOwed_FailedReaskAfterADialogRewriteIsStillCharged(t *testing.T) {
-	for _, failAll := range []bool{false, true} {
-		t.Run(fmt.Sprintf("every_source_fails=%t", failAll), func(t *testing.T) {
-			failedReaskAfterADialogRewrite(t, failAll)
+	for _, c := range []struct{ failAll, force bool }{{false, false}, {true, false}, {true, true}} {
+		t.Run(fmt.Sprintf("every_source_fails=%t,forced=%t", c.failAll, c.force), func(t *testing.T) {
+			failedReaskAfterADialogRewrite(t, c.failAll, c.force)
 		})
 	}
 }
 
-func failedReaskAfterADialogRewrite(t *testing.T, failAll bool) {
+func failedReaskAfterADialogRewrite(t *testing.T, failAll, force bool) {
 	t.Helper()
 	f, _, _ := newOwedServerFixture(t)
 	b := f.book(t, owedTitle, withASIN(refreshASIN))
@@ -559,17 +559,31 @@ func failedReaskAfterADialogRewrite(t *testing.T, failAll bool) {
 	before := owedRow(t, f, b.ID).OwedSources["Audnexus (Audible)"]
 
 	if failAll {
-		// Nothing answers the re-ask, so the search writes no row of its own.
-		f.google.answer = nil
-		f.google.err = &metadata.ProviderStatusError{Provider: metadata.SourceIDGoogleBooks, Status: 503, Body: "backend error"}
+		// Every chain source fails the re-ask (Audnexus's ASIN lookup is down
+		// already), so the search hears from nobody and writes no row of its own.
+		for _, src := range []*idSource{f.audible, f.openlib, f.google} {
+			src.mu.Lock()
+			src.answer = nil
+			src.err = &metadata.ProviderStatusError{Provider: src.id, Status: 503, Body: "backend error"}
+			src.mu.Unlock()
+		}
 	}
-	f.run(t, b.ID) // the due re-ask: Audnexus is still down
+	if force {
+		f.opCounter++
+		runCandidateFetch(t, f.s, fmt.Sprintf("op-forced-%d", f.opCounter), []string{b.ID}, true) // Search again
+	} else {
+		f.run(t, b.ID) // the due re-ask: Audnexus is still down
+	}
 	after, owed := owedRow(t, f, b.ID).OwedSources["Audnexus (Audible)"]
 	if !owed {
 		t.Fatal("the failed re-ask cleared the debt")
 	}
-	if after.Attempts != before.Attempts+1 {
-		t.Fatalf("attempts after a failed re-ask on the dialog's row = %d, want %d", after.Attempts, before.Attempts+1)
+	want := before.Attempts + 1
+	if force {
+		want = 1 // an owner retry restarts the schedule
+	}
+	if after.Attempts != want {
+		t.Fatalf("attempts after a failed re-ask on the dialog's row = %d, want %d", after.Attempts, want)
 	}
 	if !after.LastAttempt.After(before.LastAttempt) {
 		t.Fatalf("last attempt did not move (%v -> %v): the book would be due again at once", before.LastAttempt, after.LastAttempt)
