@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/prune_book_snapshots_test.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 8bb33b18-e9eb-4210-87e4-f87bb86bf4ae
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package jobs_test
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"maps"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -21,6 +22,39 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// planWithTotal is what the store's planner answers for a book with n snapshots
+// and nothing pinned: everything older than the newest keep is deletable.
+func planWithTotal(n int) func(string, int) (database.BookSnapshotPrunePlan, error) {
+	return func(_ string, keep int) (database.BookSnapshotPrunePlan, error) {
+		return database.BookSnapshotPrunePlan{Total: n, Delete: max(0, n-keep)}, nil
+	}
+}
+
+// resultCapture is a result setter that keeps the last stored value as JSON, as
+// the operations row would serve it.
+type resultCapture struct {
+	mu  sync.Mutex
+	raw []byte
+}
+
+func (r *resultCapture) set(v any) error {
+	b, err := json.Marshal(v)
+	r.mu.Lock()
+	r.raw = b
+	r.mu.Unlock()
+	return err
+}
+
+func (r *resultCapture) decode(t *testing.T) map[string]any {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	require.NotEmpty(t, r.raw, "the job stored no result")
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(r.raw, &m))
+	return m
+}
 
 // Mirrors the unexported defaultKeepCount so the test states the expected value
 // explicitly rather than reading it from the code under test.
@@ -81,8 +115,8 @@ func (r *pruneRecorder) snapshot() map[string]int {
 func TestPruneBookSnapshotsJob_HonoursKeepCountFromLiveParams(t *testing.T) {
 	rec := &pruneRecorder{}
 	store := &database.MockStore{
-		ListBookIDsFunc:        func() ([]string, error) { return []string{"b1"}, nil },
-		CountBookSnapshotsFunc: func(id string) (int, error) { return 100, nil },
+		ListBookIDsFunc:           func() ([]string, error) { return []string{"b1"}, nil },
+		PlanBookSnapshotPruneFunc: planWithTotal(100),
 		// Deliberately NOT stubbed: if the job ever regresses to reading
 		// GetOperationParams, it gets the zero value and falls back to the
 		// default, which this assertion catches.
@@ -108,8 +142,8 @@ func TestPruneBookSnapshotsJob_ZeroKeepCountFallsBackToDefault(t *testing.T) {
 	for _, body := range []string{`{"keep_count":0}`, `{"keep_count":-5}`, `{}`, `not json`} {
 		rec := &pruneRecorder{}
 		store := &database.MockStore{
-			ListBookIDsFunc:        func() ([]string, error) { return []string{"b1"}, nil },
-			CountBookSnapshotsFunc: func(id string) (int, error) { return 100, nil },
+			ListBookIDsFunc:           func() ([]string, error) { return []string{"b1"}, nil },
+			PlanBookSnapshotPruneFunc: planWithTotal(100),
 			PruneBookVersionsFunc: func(id string, keep int) (int, error) {
 				rec.record(id, keep)
 				return 90, nil
@@ -127,8 +161,8 @@ func TestPruneBookSnapshotsJob_ZeroKeepCountFallsBackToDefault(t *testing.T) {
 func TestPruneBookSnapshotsJob_DefaultsWhenNoParams(t *testing.T) {
 	rec := &pruneRecorder{}
 	store := &database.MockStore{
-		ListBookIDsFunc:        func() ([]string, error) { return []string{"b1"}, nil },
-		CountBookSnapshotsFunc: func(id string) (int, error) { return 100, nil },
+		ListBookIDsFunc:           func() ([]string, error) { return []string{"b1"}, nil },
+		PlanBookSnapshotPruneFunc: planWithTotal(100),
 		PruneBookVersionsFunc: func(id string, keep int) (int, error) {
 			rec.record(id, keep)
 			return 90, nil
@@ -143,8 +177,8 @@ func TestPruneBookSnapshotsJob_DefaultsWhenNoParams(t *testing.T) {
 func TestPruneBookSnapshotsJob_DryRunDeletesNothing(t *testing.T) {
 	rec := &pruneRecorder{}
 	store := &database.MockStore{
-		ListBookIDsFunc:        func() ([]string, error) { return []string{"b1", "b2"}, nil },
-		CountBookSnapshotsFunc: func(id string) (int, error) { return 50, nil },
+		ListBookIDsFunc:           func() ([]string, error) { return []string{"b1", "b2"}, nil },
+		PlanBookSnapshotPruneFunc: planWithTotal(50),
 		PruneBookVersionsFunc: func(id string, keep int) (int, error) {
 			rec.record(id, keep)
 			return 40, nil
@@ -152,16 +186,23 @@ func TestPruneBookSnapshotsJob_DryRunDeletesNothing(t *testing.T) {
 	}
 	j, err := maintenance.Get("prune-book-snapshots")
 	require.NoError(t, err)
-	require.NoError(t, j.Run(context.Background(), store, &noopReporter{}, true))
+	var capture resultCapture
+	ctx := maintenance.WithResultSetter(context.Background(), capture.set)
+	require.NoError(t, j.Run(ctx, store, &noopReporter{}, true))
 	assert.Empty(t, rec.snapshot(), "dry_run must not call PruneBookSnapshots at all")
+	got := capture.decode(t)
+	assert.EqualValues(t, 2, got["books_pruned"])
+	assert.EqualValues(t, 80, got["snapshots_deleted"], "50 snapshots, keep 10, 2 books")
 }
 
 func TestPruneBookSnapshotsJob_SkipsBooksAtOrBelowKeepCount(t *testing.T) {
 	rec := &pruneRecorder{}
 	counts := map[string]int{"under": 9, "exact": 10, "over": 11}
 	store := &database.MockStore{
-		ListBookIDsFunc:        func() ([]string, error) { return []string{"under", "exact", "over"}, nil },
-		CountBookSnapshotsFunc: func(id string) (int, error) { return counts[id], nil },
+		ListBookIDsFunc: func() ([]string, error) { return []string{"under", "exact", "over"}, nil },
+		PlanBookSnapshotPruneFunc: func(id string, keep int) (database.BookSnapshotPrunePlan, error) {
+			return planWithTotal(counts[id])(id, keep)
+		},
 		PruneBookVersionsFunc: func(id string, keep int) (int, error) {
 			rec.record(id, keep)
 			return 1, nil
@@ -181,8 +222,8 @@ func TestPruneBookSnapshotsJob_SkipsBooksAtOrBelowKeepCount(t *testing.T) {
 // returns nil reports success while deleting nothing.
 func TestPruneBookSnapshotsJob_ReportsFailures(t *testing.T) {
 	store := &database.MockStore{
-		ListBookIDsFunc:        func() ([]string, error) { return []string{"b1"}, nil },
-		CountBookSnapshotsFunc: func(id string) (int, error) { return 100, nil },
+		ListBookIDsFunc:           func() ([]string, error) { return []string{"b1"}, nil },
+		PlanBookSnapshotPruneFunc: planWithTotal(100),
 		PruneBookVersionsFunc: func(id string, keep int) (int, error) {
 			return 0, errors.New("pebble: write failed")
 		},
@@ -203,8 +244,8 @@ func TestPruneBookSnapshotsJob_VisitsEveryBook(t *testing.T) {
 	}
 	rec := &pruneRecorder{}
 	store := &database.MockStore{
-		ListBookIDsFunc:        func() ([]string, error) { return ids, nil },
-		CountBookSnapshotsFunc: func(id string) (int, error) { return 20, nil },
+		ListBookIDsFunc:           func() ([]string, error) { return ids, nil },
+		PlanBookSnapshotPruneFunc: planWithTotal(20),
 		PruneBookVersionsFunc: func(id string, keep int) (int, error) {
 			rec.record(id, keep)
 			return 10, nil
@@ -214,4 +255,98 @@ func TestPruneBookSnapshotsJob_VisitsEveryBook(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, j.Run(context.Background(), store, &noopReporter{}, false))
 	assert.Len(t, rec.snapshot(), n, "every book must be visited exactly once")
+}
+
+// A dry run reports what the prune would keep because a merge journal row points
+// at it, and reads the journal once for the "already lost" audit, not per book.
+func TestPruneBookSnapshotsJob_DryRunReportsPinsAndLostMergeSnapshots(t *testing.T) {
+	ids := []string{"b1", "b2", "b3"}
+	var auditCalls atomic.Int32
+	store := &database.MockStore{
+		ListBookIDsFunc: func() ([]string, error) { return ids, nil },
+		PlanBookSnapshotPruneFunc: func(id string, keep int) (database.BookSnapshotPrunePlan, error) {
+			if id == "b2" {
+				return database.BookSnapshotPrunePlan{Total: 12, Delete: 0, PinnedByJournal: 2}, nil
+			}
+			return database.BookSnapshotPrunePlan{Total: 15, Delete: 4, PinnedByJournal: 1}, nil
+		},
+		AuditMergeJournalSnapshotsFunc: func(idCap int) (database.MergeJournalSnapshotAudit, error) {
+			auditCalls.Add(1)
+			assert.Equal(t, 200, idCap, "the id list is capped")
+			return database.MergeJournalSnapshotAudit{
+				LiveEntries: 7, MissingSnapshotEntries: 3,
+				MissingJournalIDs: []string{"dedup:automerge:0000000000000001", "dedup:automerge:0000000000000002"},
+				Truncated:         1,
+				StaleProvisional:  2, StaleProvisionalIDs: []string{"dedup:automerge:0000000000000009"}, StaleProvisionalTruncated: 1,
+			}, nil
+		},
+	}
+	j, err := maintenance.Get("prune-book-snapshots")
+	require.NoError(t, err)
+	var capture resultCapture
+	require.NoError(t, j.Run(maintenance.WithResultSetter(context.Background(), capture.set), store, &noopReporter{}, true))
+
+	got := capture.decode(t)
+	assert.EqualValues(t, 4, got["pinned_by_journal"], "1 + 2 + 1")
+	assert.EqualValues(t, 8, got["snapshots_deleted"], "pinned snapshots are not counted as deletable")
+	assert.EqualValues(t, 2, got["books_pruned"], "b2 has nothing deletable")
+	assert.EqualValues(t, 7, got["live_merge_journals"])
+	assert.EqualValues(t, 3, got["merge_journals_missing_snapshots"])
+	assert.EqualValues(t, 1, got["merge_journals_missing_truncated"])
+	assert.Equal(t, []any{"dedup:automerge:0000000000000001", "dedup:automerge:0000000000000002"}, got["merge_journals_missing_ids"])
+	assert.EqualValues(t, 2, got["stale_provisional_merge_journals"])
+	assert.EqualValues(t, 1, got["stale_provisional_merge_journals_truncated"])
+	assert.Equal(t, []any{"dedup:automerge:0000000000000009"}, got["stale_provisional_merge_journal_ids"])
+	assert.EqualValues(t, 1, auditCalls.Load(), "one pass over the journal for the whole run")
+}
+
+// An audit that cannot read the journal must fail the dry run, not report that
+// no merge has lost its snapshots.
+func TestPruneBookSnapshotsJob_DryRunFailsWhenTheAuditCannotRun(t *testing.T) {
+	store := &database.MockStore{
+		ListBookIDsFunc: func() ([]string, error) { return []string{"b1"}, nil },
+		AuditMergeJournalSnapshotsFunc: func(int) (database.MergeJournalSnapshotAudit, error) {
+			return database.MergeJournalSnapshotAudit{}, errors.New("journal unreadable")
+		},
+	}
+	j, err := maintenance.Get("prune-book-snapshots")
+	require.NoError(t, err)
+	var capture resultCapture
+	err = j.Run(maintenance.WithResultSetter(context.Background(), capture.set), store, &noopReporter{}, true)
+	require.ErrorContains(t, err, "journal unreadable")
+}
+
+// A real run does not audit (the audit is the dry run's report) and still
+// deletes only what the planner says is deletable.
+func TestPruneBookSnapshotsJob_RealRunSkipsTheAuditAndSkipsFullyPinnedBooks(t *testing.T) {
+	rec := &pruneRecorder{}
+	store := &database.MockStore{
+		ListBookIDsFunc: func() ([]string, error) { return []string{"pinned", "free"}, nil },
+		PlanBookSnapshotPruneFunc: func(id string, keep int) (database.BookSnapshotPrunePlan, error) {
+			if id == "pinned" {
+				return database.BookSnapshotPrunePlan{Total: 12, Delete: 0, PinnedByJournal: 2}, nil
+			}
+			return database.BookSnapshotPrunePlan{Total: 12, Delete: 2}, nil
+		},
+		AuditMergeJournalSnapshotsFunc: func(int) (database.MergeJournalSnapshotAudit, error) {
+			t.Error("a real run must not run the audit")
+			return database.MergeJournalSnapshotAudit{}, nil
+		},
+		PruneBookVersionsFunc: func(id string, keep int) (int, error) {
+			rec.record(id, keep)
+			return 2, nil
+		},
+	}
+	j, err := maintenance.Get("prune-book-snapshots")
+	require.NoError(t, err)
+	require.NoError(t, j.Run(context.Background(), store, &noopReporter{}, false))
+	assert.Equal(t, map[string]int{"free": 10}, rec.snapshot(), "a book whose only deletable snapshots are pinned is not pruned")
+}
+
+// A dry run whose result cannot be stored fails: the result is its only product.
+func TestPruneBookSnapshotsJob_DryRunFailsWithoutAResultSetter(t *testing.T) {
+	store := &database.MockStore{ListBookIDsFunc: func() ([]string, error) { return nil, nil }}
+	j, err := maintenance.Get("prune-book-snapshots")
+	require.NoError(t, err)
+	require.ErrorIs(t, j.Run(context.Background(), store, &noopReporter{}, true), maintenance.ErrNoResultSetter)
 }

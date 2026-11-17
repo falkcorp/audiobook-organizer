@@ -1,7 +1,7 @@
 // file: internal/dedup/merge_journaled.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: 1d7c3e58-4a09-42b6-8f31-5c0e9b247a63
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package dedup
 
@@ -191,6 +191,11 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 			Tag:         tag,
 			MergedAt:    mergedAt + int64(len(journalKeys)),
 			Provisional: true,
+			// The snapshot prune keeps every snapshot of these two books newer
+			// than their baselines until the patch below finalizes the entry
+			// (the merge's own writes are the pre-merge records it will name).
+			WinnerBaselineTS: baselines[predWinner],
+			LoserBaselineTS:  baselines[loserID],
 		})
 		if err != nil {
 			// A provisional entry that cannot be written means this merge would

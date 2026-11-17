@@ -1,7 +1,7 @@
 // file: internal/dedup/manual_candidate_protection_test.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: 8c81c949-8a0f-4c52-9f6b-839b956d087d
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package dedup
 
@@ -244,7 +244,7 @@ func TestAutoResolveEligible_RefusesManualCandidate(t *testing.T) {
 		Band: unified.BandCertain, ScoreBreakdown: &unified.UnifiedDedupScore{Band: unified.BandCertain},
 		Source: database.CandidateSourceManual,
 	}
-	ok, reason := eng.autoResolveEligible(c, &database.Book{ID: "a"}, &database.Book{ID: "b"})
+	ok, reason := arEligible(eng, c, &database.Book{ID: "a"}, &database.Book{ID: "b"})
 	if ok {
 		t.Fatal("a manual candidate must never be auto-resolved")
 	}

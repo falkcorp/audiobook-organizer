@@ -1,7 +1,7 @@
 // file: internal/books/store/iface_book.go
-// version: 2.30.1
+// version: 2.31.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package store
 
@@ -344,6 +344,15 @@ type BookVersionMutator interface {
 	// CountBookSnapshots reports how many snapshots a book has WITHOUT reading
 	// their payloads, so a prune can be planned without paying for one.
 	CountBookSnapshots(id string) (int, error)
+	// PlanBookSnapshotPrune reports what PruneBookSnapshots(id, keepCount)
+	// would do without deleting: how many it would remove and how many it keeps
+	// only because a live merge journal row points at them. A dry run takes its
+	// numbers from here, not from arithmetic on CountBookSnapshots.
+	PlanBookSnapshotPrune(id string, keepCount int) (BookSnapshotPrunePlan, error)
+	// AuditMergeJournalSnapshots counts live auto-merge journal entries whose
+	// snapshots are already gone (ids only, capped). Read-only; one pass over the
+	// journal.
+	AuditMergeJournalSnapshots(idCap int) (MergeJournalSnapshotAudit, error)
 }
 
 // BookTombstoneWriter manages tombstones for deleted books.

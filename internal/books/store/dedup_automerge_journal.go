@@ -1,7 +1,7 @@
 // file: internal/books/store/dedup_automerge_journal.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 8b2f7d14-6c93-4a05-9e21-3f8a5c0d7e46
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package store
 
@@ -98,6 +98,16 @@ type AutoMergeJournalEntry struct {
 	// Entries written before this field existed read as not provisional,
 	// which is what every patched one of them is.
 	Provisional bool `json:"provisional,omitempty"`
+
+	// WinnerBaselineTS / LoserBaselineTS are, on a provisional entry, the UnixNano
+	// of each book's newest book_ver snapshot when the merge began (0: it had
+	// none, or the entry predates these fields). The merge's pre-merge record is
+	// the earliest snapshot newer than this, so the snapshot prune keeps every
+	// snapshot of the book newer than it while the entry is provisional
+	// (store.collectAutoMergeSnapshotPins). The patch that finalizes the entry
+	// drops them: from then on the entry names the snapshots exactly.
+	WinnerBaselineTS int64 `json:"winner_baseline_ts,omitempty"`
+	LoserBaselineTS  int64 `json:"loser_baseline_ts,omitempty"`
 
 	// UndoneAt is when UnmergeAuto reverted this entry (UnixNano), zero
 	// before. UnmergeAuto refuses an entry already undone: its reverts

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/auto_resolve.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 3a7c1f08-9d24-4e6b-8b15-2c9f0a5d7e61
-// last-edited: 2026-10-18
+// last-edited: 2026-11-17
 
 package dedup
 
@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -90,6 +92,18 @@ func (p *Plugin) runAutoResolve(ctx context.Context, raw json.RawMessage, report
 		mode, res.Checked, res.Eligible, res.Merged, res.SkippedCap))
 	reporter.Logger().Info("dedup auto-resolve complete",
 		"dry_run", res.DryRun, "checked", res.Checked, "eligible", res.Eligible,
-		"merged", res.Merged, "skipped_cap", res.SkippedCap, "samples", len(res.Samples))
+		"merged", res.Merged, "skipped_cap", res.SkippedCap, "samples", len(res.Samples),
+		"plan", len(res.Plan), "plan_truncated", res.PlanTruncated)
+
+	// A dry run's only product is the list of pairs a run would merge, so it is
+	// stored as the op result (GET /operations/:id/result) and a failure to store
+	// it fails the op: a plan nobody can read back is the silent shape this
+	// replaces. An apply run stores nothing: it already did its work, and this op
+	// adds no write to it.
+	if !params.Apply {
+		if err := registry.ReporterSetResult(reporter, dedupengine.NewAutoResolveDryRunReport(res)); err != nil {
+			return fmt.Errorf("auto-resolve: store the dry-run plan: %w", err)
+		}
+	}
 	return nil
 }

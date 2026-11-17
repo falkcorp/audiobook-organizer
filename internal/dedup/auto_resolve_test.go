@@ -1,7 +1,7 @@
 // file: internal/dedup/auto_resolve_test.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: 2f4b8c19-7a03-4d56-9e18-5c0d7f2a6b91
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 // Tests for the Tier-1 (Band CERTAIN) auto-resolution pass:
 // Engine.AutoResolveCertain, autoResolveEligible, and UnmergeAuto.
@@ -42,6 +42,14 @@ func certainBreakdown(aID, bID string, kinds ...unified.SignalKind) *unified.Uni
 	}
 }
 
+// arEligible is the (eligible, reason) view of autoResolveEligible's decision,
+// which the rule tests below assert on; the guard that decided is tested in
+// auto_resolve_plan_test.go.
+func arEligible(de *Engine, c database.DedupCandidate, a, b *database.Book) (bool, string) {
+	d := de.autoResolveEligible(c, a, b)
+	return d.Eligible, d.Reason
+}
+
 func arPlausibleBook(id, title string) *database.Book {
 	d := 3600
 	return &database.Book{ID: id, Title: title, Duration: &d}
@@ -68,7 +76,7 @@ func TestAutoResolveEligible(t *testing.T) {
 	}
 
 	t.Run("accepts CERTAIN with 2 primary signals", func(t *testing.T) {
-		ok, reason := engine.autoResolveEligible(base(), bookA, bookB)
+		ok, reason := arEligible(engine, base(), bookA, bookB)
 		if !ok {
 			t.Fatalf("expected eligible, got not eligible: %s", reason)
 		}
@@ -78,7 +86,7 @@ func TestAutoResolveEligible(t *testing.T) {
 		c := base()
 		c.Band = unified.BandHigh
 		c.ScoreBreakdown.Band = unified.BandHigh
-		if ok, _ := engine.autoResolveEligible(c, bookA, bookB); ok {
+		if ok, _ := arEligible(engine, c, bookA, bookB); ok {
 			t.Fatal("expected not eligible for HIGH band")
 		}
 	})
@@ -86,7 +94,7 @@ func TestAutoResolveEligible(t *testing.T) {
 	t.Run("rejects non-empty suppressors", func(t *testing.T) {
 		c := base()
 		c.ScoreBreakdown.Suppressors = []string{"series_volume_differs"}
-		if ok, _ := engine.autoResolveEligible(c, bookA, bookB); ok {
+		if ok, _ := arEligible(engine, c, bookA, bookB); ok {
 			t.Fatal("expected not eligible with suppressors")
 		}
 	})
@@ -114,7 +122,7 @@ func TestAutoResolveEligible(t *testing.T) {
 			t.Fatalf("fixture must leave the stored list empty to cover the gap, got %v",
 				c.ScoreBreakdown.Suppressors)
 		}
-		ok, reason := engine.autoResolveEligible(c, a, b)
+		ok, reason := arEligible(engine, c, a, b)
 		if ok {
 			t.Fatal("expected not eligible: both books are in the same version group")
 		}
@@ -132,7 +140,7 @@ func TestAutoResolveEligible(t *testing.T) {
 			t.Fatalf("fixture must leave the stored list empty to cover the gap, got %v",
 				c.ScoreBreakdown.Suppressors)
 		}
-		ok, reason := engine.autoResolveEligible(c, a, b)
+		ok, reason := arEligible(engine, c, a, b)
 		if ok {
 			t.Fatal("expected not eligible: the two books are distinct series volumes")
 		}
@@ -142,7 +150,7 @@ func TestAutoResolveEligible(t *testing.T) {
 	})
 
 	t.Run("still accepts an unsuppressed pair once the live check runs", func(t *testing.T) {
-		ok, reason := engine.autoResolveEligible(base(), bookA, bookB)
+		ok, reason := arEligible(engine, base(), bookA, bookB)
 		if !ok {
 			t.Fatalf("live eligibility must not refuse a clean pair, got: %s", reason)
 		}
@@ -151,7 +159,7 @@ func TestAutoResolveEligible(t *testing.T) {
 	t.Run("rejects nil ScoreBreakdown", func(t *testing.T) {
 		c := base()
 		c.ScoreBreakdown = nil
-		if ok, _ := engine.autoResolveEligible(c, bookA, bookB); ok {
+		if ok, _ := arEligible(engine, c, bookA, bookB); ok {
 			t.Fatal("expected not eligible with nil breakdown")
 		}
 	})
@@ -159,7 +167,7 @@ func TestAutoResolveEligible(t *testing.T) {
 	t.Run("rejects implausible audio on one side", func(t *testing.T) {
 		c := base()
 		bad := &database.Book{ID: "B", Title: "Same Book"} // no duration/size
-		if ok, _ := engine.autoResolveEligible(c, bookA, bad); ok {
+		if ok, _ := arEligible(engine, c, bookA, bad); ok {
 			t.Fatal("expected not eligible when a side lacks plausible audio")
 		}
 	})
@@ -170,7 +178,7 @@ func TestAutoResolveEligible(t *testing.T) {
 		b := arPlausibleBook("B", "Same Book")
 		a.ISBN13 = new("9780000000001")
 		b.ISBN13 = new("9780000000002")
-		if ok, _ := engine.autoResolveEligible(c, a, b); ok {
+		if ok, _ := arEligible(engine, c, a, b); ok {
 			t.Fatal("expected not eligible with conflicting ISBNs")
 		}
 	})
@@ -178,7 +186,7 @@ func TestAutoResolveEligible(t *testing.T) {
 	t.Run("rejects single primary signal without label", func(t *testing.T) {
 		c := base()
 		c.ScoreBreakdown = certainBreakdown("A", "B", unified.SigExactFile)
-		if ok, _ := engine.autoResolveEligible(c, bookA, bookB); ok {
+		if ok, _ := arEligible(engine, c, bookA, bookB); ok {
 			t.Fatal("expected not eligible with only 1 primary signal and no label")
 		}
 	})
@@ -194,7 +202,7 @@ func TestAutoResolveEligible(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("UpsertLabeledExample: %v", err)
 		}
-		ok, reason := engine.autoResolveEligible(c, bookA, bookB)
+		ok, reason := arEligible(engine, c, bookA, bookB)
 		if !ok {
 			t.Fatalf("expected eligible via label fallback, got: %s", reason)
 		}
@@ -204,7 +212,7 @@ func TestAutoResolveEligible(t *testing.T) {
 		c := base()
 		// Two signals but both SUPPORTING kinds — must not qualify.
 		c.ScoreBreakdown = certainBreakdown("A", "B", unified.SigDuration, unified.SigFolderPath)
-		if ok, _ := engine.autoResolveEligible(c, bookA, bookB); ok {
+		if ok, _ := arEligible(engine, c, bookA, bookB); ok {
 			t.Fatal("expected not eligible with only supporting signals")
 		}
 	})
@@ -219,7 +227,7 @@ func TestAutoResolveEligible(t *testing.T) {
 		b.FilePath = "/lib/Author/Book//Book.m4b" // Clean-equal to a's path
 
 		c := base()
-		ok, reason := engine.autoResolveEligible(c, a, b)
+		ok, reason := arEligible(engine, c, a, b)
 		if ok {
 			t.Fatal("expected not eligible: two book rows share the same cleaned path")
 		}
@@ -236,7 +244,7 @@ func TestAutoResolveEligible(t *testing.T) {
 		a.FilePath = "/lib/Author/Book (Copy A)/Book.m4b"
 		b.FilePath = "/lib/Author/Book (Copy B)/Book.m4b"
 
-		ok, reason := engine.autoResolveEligible(base(), a, b)
+		ok, reason := arEligible(engine, base(), a, b)
 		if !ok {
 			t.Fatalf("expected eligible for a distinct-path pair, got: %s", reason)
 		}

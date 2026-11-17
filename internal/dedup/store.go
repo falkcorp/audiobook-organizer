@@ -1,7 +1,7 @@
 // file: internal/dedup/store.go
-// version: 1.13.1
+// version: 1.14.0
 // guid: 6c17e2b9-3f48-4d95-8a20-7b5e1c904f36
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package dedup
 
@@ -67,6 +67,9 @@ type dedupBookQueries interface {
 	GetBooksByMetadataSourceHash(hash string) ([]database.Book, error)
 	GetBookAlternativeTitles(bookID string) ([]database.BookAlternativeTitle, error)
 	GetBookSnapshots(id string, limit int) ([]database.BookSnapshot, error)
+	// GetBookAtVersion is UnmergeAuto's pre-write check that the snapshot a
+	// journal row names still exists.
+	GetBookAtVersion(id string, ts time.Time) (*database.Book, error)
 	GetDuplicateBooks() ([][]database.Book, error)
 }
 
