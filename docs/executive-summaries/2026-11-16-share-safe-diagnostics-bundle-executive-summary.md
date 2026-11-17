@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-16-share-safe-diagnostics-bundle-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 83fb8459-963c-4432-b2f8-ffd4fd4bd16d -->
 <!-- last-edited: 2026-11-16 -->
 
@@ -56,11 +56,14 @@ yet: a later change connects it, and it can now be connected.
   of the recognised ones loses its ending. The earlier wording that the owner
   had accepted a leftover word (`Wayne` in `/Users/Bruce Wayne`) was wrong: it
   was an assumption in the plan, and that leftover is gone.
-- Three shapes remain that no rule can tell from ordinary prose: a relative
-  path whose first folder name ends in a space or an opening quote, a folder
-  name that contains a line break (the next line is not recognised), and an old
-  Mac-style `Macintosh HD:Users:bruce` path. A bare user name or host name
-  written outside any path is also not removed.
+- Four shapes remain that no rule can tell from ordinary prose: a relative
+  path whose first folder name ends in a space or an opening quote, or has
+  after a space a word that looks like the start of a path (`HD /x`,
+  `Alfred ~Robin/x`); a folder name that contains a line break (a line with no
+  separator is not recognised); an old Mac-style `Macintosh HD:Users:bruce`
+  path; and a folder name that ends in one of the stock error phrases (such as
+  `File Exists`), where the phrase itself stays and nothing else of the name.
+  A bare user name or host name written outside any path is also not removed.
 
 ## What it was
 

@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/sanitize_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 36bfade5-be50-496e-b763-33a05bf55746
 // last-edited: 2026-11-16
 
@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"testing"
 	"unicode"
+	"unicode/utf8"
 )
 
 // The fixtures are Batman-universe: people, titles and places only. "Hush" is
@@ -194,6 +195,46 @@ func TestSanitize_WhatSurvivesAndWhatIsLost(t *testing.T) {
 		{`planned Alfred Pennyworth/Batman Hush/Part 1.m4b`, `<path>`},
 		{`openat Alfred Pennyworth/Batman Hush.m4b: path escapes from parent`, `<path>: path escapes from parent`},
 		{`level=INFO msg=reading Alfred Pennyworth/x`, `<path>`},
+		// A word in the middle of a relative name that only holds a trigger byte
+		// ("I:", "\u0026", an escaped quote, a lone "&amp;") is not a head: the run
+		// starts at the line, so the name's first words are wiped with the rest.
+		{`planned Batman Part I: Hush/01.m4b`, `<path>`},
+		{`openat Batman Part I: Hush/01.m4b: path escapes from parent`, `<path>: path escapes from parent`},
+		{`import "Cass \"Orphan\" Cain/Hush.m4b": unsupported codec`, `<path>`},
+		{`payload={"rel":"Alfred \u0026 Robin/Batman Hush"}`, `<path>`},
+		{`planned Alfred &amp; Robin/Batman Hush`, `<path>`},
+		{`planned Alfred ~Robin Batman/Hush`, `<path>`},
+		{`see \"/Users/x y`, `<path>`},
+		{`line1\nAlfred/Hush`, `<path>`},
+		// What no rule can tell apart: "Alfred ~Robin/x" is spelled like "see
+		// ~bruce/x", a real head after a word, so the word before it stays.
+		{`Alfred ~Robin/Batman Hush`, `Alfred <path>`},
+		{`Alfred /Batman Hush`, `Alfred <path>`},
+		// The fixed-vocabulary tail: a name that ends in a known error text, after a
+		// ": ", keeps that text (it can only be a word of the list), and a name made
+		// only of an exempt phrase has no trigger left.
+		{`/srv/lib/Alfred Pennyworth/Batman: File Exists`, `<root:lib>: File Exists`},
+		{`/srv/lib/Alfred Pennyworth/Batman: EOF`, `<root:lib>: EOF`},
+		{`Batman: input/output error`, `Batman: input/output error`},
+		// A name that holds a line break is wiped one line at a time: a line of it
+		// with no separator and no head survives.
+		{"Alfred\nBatman/Hush", "Alfred\n<path>"},
+		{"see /x\nfoo\nbar/y", "see <path>\nfoo\n<path>"},
+		// A real head, in every spelling, starts the run at itself.
+		{`see \u002FUsers\u002Fx y`, `see <path>`},
+		{`see \x2fUsers\x2Fx y`, `see <path>`},
+		{`see \/Users\/x y`, `see <path>`},
+		{`see \\Users\\x y`, `see <path>`},
+		{`see \Users\x y`, `see <path>`},
+		{`see &#92;Users&#92;x y`, `see <path>`},
+		{`see &#x5c;Users x y`, `see <path>`},
+		{`see &#0047;Users x y`, `see <path>`},
+		{`see &amp;#47;Users&amp;#47;x y`, `see <path>`},
+		{`see &amp;amp;sol;Users x y`, `see <path>`},
+		{`see &bsol;Users x y`, `see <path>`},
+		{`see ~/x y`, `see <path>`},
+		{`see C:/Users/x y`, `see <path>`},
+		{`see C:x\y z`, `see <path>`},
 		// Each line is its own run: a location on one line leaves the next alone.
 		{"copy /Users/bruce/x y z\nnext line is fine\nthen /srv/lib/a b", "copy <path>\nnext line is fine\nthen <root:lib>"},
 		// Not locations, so not touched.
@@ -210,11 +251,50 @@ func TestSanitize_WhatSurvivesAndWhatIsLost(t *testing.T) {
 	}
 }
 
+// TestSanitize_RunStartHeads is runStart's table: a head starts the run at its
+// word; anything else that triggers starts it at the line.
+func TestSanitize_RunStartHeads(t *testing.T) {
+	heads := []string{
+		"/x", "(/x", "k=/x", `k="/x`, `\`, `\x`, `\\x`, `\/x`, `\u002Fx`, `\u005cx`, `\u007Ex`, `\x2Fx`, `\x5Cx`, `\unix`, `\xyz`, `\Users\x`,
+		"~/x", "~bruce/x", `~bruce\x`, "(~/x", "C:/x", `C:\x`, `C:x\y`, "c:x/y", `"C:\x`,
+		"smb://h/x", "file:///x", "a+b.c-d://x",
+		"%2Fx", "%5cx", "%7ex", "&#47;x", "&#x2F;x", "&#X2f;x", "&#0000047;x", "&#92;x", "&#x5C;x", "&#126;x", "&#x7E;x", "&#47x", "&sol;x", "&bsol;x", "&amp;#47;x", "&amp;amp;#x2F;x", "&amp;sol;x",
+	}
+	for _, w := range heads {
+		if !runStart(w) {
+			t.Errorf("runStart(%q) = false, want a head", w)
+		}
+	}
+	notHeads := []string{
+		"", "(", "I:", "C:x", "(I:", "~", "~Robin", "(~Robin", "k=~Robin",
+		`\"x`, `\'x`, `\nx`, `\rx`, `\tx`, `\bx`, `\fx`, `\vx`, `\ax`, `\0x`, `\7x`, `\u0026x`, `\u0041`, `\u00aex`, `\u00AEx`, `\x26x`, `\x41`, `\x2ax`, `\x2Ax`,
+		"&amp;", "&amp;amp;", "&#x41;", "&#38;", "&#;", "&#x;", "&amp;#38;", "&lt;x", "&", "&#4",
+		"%2", "%41x", "%252Fx", "Gordon/x", "-I/x", "text/plain", "a:b", "http:x", "1:",
+	}
+	for _, w := range notHeads {
+		if runStart(w) {
+			t.Errorf("runStart(%q) = true, want no head", w)
+		}
+	}
+}
+
 // TestSanitize_OverlongStringIsRedactedWhole: a string over maxTextBytes that has
 // a trigger byte is replaced whole (it is never tokenized); one without a trigger
 // byte is returned as is, at any length; one at the limit is sanitized.
 func TestSanitize_OverlongStringIsRedactedWhole(t *testing.T) {
 	s := testSanitizer()
+	// The bound is the text-file line bound, 1 MiB, in bytes (not a symbol that
+	// would follow a change of either): a JSON value costs what a line does.
+	const oneMiB = 1 << 20
+	if maxTextBytes != oneMiB || maxLineBytes != oneMiB {
+		t.Fatalf("maxTextBytes = %d, maxLineBytes = %d, want both %d", maxTextBytes, maxLineBytes, oneMiB)
+	}
+	if got := s.Text("see /Users/bruce/x" + strings.Repeat(" ", oneMiB)); got != "<redacted:line_too_long>" {
+		t.Errorf("a value over 1 MiB with a location: got %d bytes", len(got))
+	}
+	if got := s.Text("see /Users/bruce/x" + strings.Repeat(" ", oneMiB-len("see /Users/bruce/x"))); !strings.HasPrefix(got, "see <path>") {
+		t.Errorf("a value of exactly 1 MiB is sanitized: got %.30q", got)
+	}
 	over := "open /Users/bruce/x " + strings.Repeat("a/ ", maxTextBytes/3)
 	if len(over) <= maxTextBytes {
 		t.Fatalf("test input is %d bytes, want over %d", len(over), maxTextBytes)
@@ -369,6 +449,10 @@ func plantNames() []string {
 		"a&b #c=d;e?f%g", "a`b c", "HD ", " lead", "x:y z", "Zoë Ünï", "Harleen Quinzel", "a\u00a0b", "a\u2028b",
 		"Batman: Year One", `The "Long" Halloween`, "Jason `Robin` Todd", "a: b: c d", "Brucie (1)",
 		"Dick Grayson: Nightwing", `Cass "Orphan" Cain`,
+		// A word in the middle of a relative name that only looks like the head of
+		// a location: a drive with no separator, a JSON and a Go escape, a lone
+		// tilde word. The run must start at the line, not at that word.
+		"Batman Part I: Hush", `Alfred \u0026 Robin`, `Cass \"Orphan\" Cain`, "~Robin",
 	}
 }
 
@@ -415,6 +499,7 @@ func plantedNameWords() []string {
 	return []string{
 		"selina", "Bruce", "Wayne", "Books", "Brien", "Zoë", "Ünï", "lead", "Last", "First", "Harleen", "Quinzel", "Macintosh",
 		"Year", "Halloween", "Todd", "Brucie", "Grayson", "Nightwing", "Orphan", "Cain", "Batman", "Part", "Unabridged",
+		"Alfred", "Robin",
 	}
 }
 
@@ -540,6 +625,13 @@ func FuzzSanitizerText(f *testing.F) {
 			f.Add("open ", n, "Bruce Wayne", "Hush", ": permission denied", uint8(i))
 		}
 	}
+	for i, pf := range forms {
+		if pf.start == "" {
+			for _, n := range []string{"Batman Part I:", `Alfred \u0026 Robin`, `Cass \"Orphan\" Cain`, "~Robin", "Alfred &amp; Robin", "Alfred ~Robin"} {
+				f.Add("planned ", n, "Gordon Dent", "Hush", "", uint8(i))
+			}
+		}
+	}
 	f.Add("", "a b", "c d", "Hush", "", uint8(0))
 	f.Add("CGO_CFLAGS=", "a", "b", "Hush", ` -L/Users/bruce/lib`, uint8(1))
 	f.Add("", `a" b`, "c\td", "Hush", `","q":"a?b","p":"/Users%2F@z%2F`, uint8(15))
@@ -552,12 +644,21 @@ func FuzzSanitizerText(f *testing.F) {
 				t.Skip("the fuzzer wrote the marker itself")
 			}
 		}
-		for _, x := range []string{n1, n2, final} {
-			if strings.Contains(x, "\n") {
-				// A name with a line break in it is wiped one line at a time: the
-				// words on the next line have no trigger (a known limit, see the
-				// Sanitizer doc and seams F8-03).
-				t.Skip("a name with a line break")
+		pf := forms[int(form)%len(forms)]
+		// A line break is wiped one line at a time, so only words that no line of
+		// the location reaches can stay: the last segment, a relative first name
+		// (its line holds no separator), and a line of a name between two breaks.
+		// A name with one break is checked, its part after the break being read as a
+		// relative first name (below).
+		if strings.Contains(final, "\n") {
+			t.Skip("a final segment with a line break (a known limit, see the Sanitizer doc and seams F8-03)")
+		}
+		if pf.start == "" && strings.Contains(n1, "\n") {
+			t.Skip("a relative first name with a line break (the same limit)")
+		}
+		for _, x := range []string{n1, n2} {
+			if strings.Count(x, "\n") > 1 {
+				t.Skip("a name with two line breaks (the same limit)")
 			}
 		}
 		if final == "" {
@@ -565,7 +666,6 @@ func FuzzSanitizerText(f *testing.F) {
 		} else {
 			final += marker
 		}
-		pf := forms[int(form)%len(forms)]
 		in := plant(pre, pf, []string{n1, n2}, final, suf)
 		got := s.Text(in)
 		if strings.Contains(got, marker) {
@@ -586,14 +686,23 @@ func FuzzSanitizerText(f *testing.F) {
 		for _, w := range strings.FieldsFunc(pre+" "+suf, unicode.IsSpace) {
 			fixed[w] = true
 		}
-		// With no start of its own the first name is the first word of the line,
-		// and "000 /x" is spelled like the word "000" before an absolute path: the
-		// first name is not checked then (a known limit, see seams F8-03).
-		checked := []string{n1, n2}
-		if pf.start == "" {
-			checked = []string{n2}
-			for _, w := range strings.FieldsFunc(n1, unicode.IsSpace) {
-				fixed[w] = true // the same word in n2 cannot be told from the first name's
+		// A first name with no start of its own, and the part of a name after a line
+		// break, begin a line: their words that come before a real head are spelled
+		// like prose before an absolute path ("HD /x", "Alfred ~Robin/x"). One that
+		// ends in white space or an opening quote, or holds a word that is a head,
+		// is the known limit and is not checked. Any other name is.
+		var checked []string
+		for i, n := range []string{n1, n2} {
+			prose := i == 0 && pf.start == "" && relativeFirstNameIsProse(n, pf.sep)
+			if parts := strings.Split(n, "\n"); len(parts) == 2 && relativeFirstNameIsProse(parts[1], pf.sep) {
+				prose = true
+			}
+			if !prose {
+				checked = append(checked, n)
+				continue
+			}
+			for _, w := range strings.FieldsFunc(n, unicode.IsSpace) {
+				fixed[w] = true // the same word in the other name cannot be told from this one's
 			}
 		}
 		for _, n := range checked {
@@ -604,6 +713,31 @@ func FuzzSanitizerText(f *testing.F) {
 			}
 		}
 	})
+}
+
+// relativeFirstNameIsProse reports a first name of a relative path whose words
+// are spelled like the prose before an absolute path: it ends in white space or
+// an opening quote or bracket, or a word after its first is a real head once the
+// separator is appended ("Alfred ~Robin" + "/" is "~Robin/").
+func relativeFirstNameIsProse(n1, sep string) bool {
+	if n1 == "" {
+		return false
+	}
+	last, _ := utf8.DecodeLastRuneInString(n1)
+	if unicode.IsSpace(last) || strings.ContainsRune("\"'([{<", last) {
+		return true
+	}
+	ws := strings.FieldsFunc(n1, unicode.IsSpace)
+	for i := 1; i < len(ws); i++ {
+		w := ws[i]
+		if i == len(ws)-1 {
+			w += sep
+		}
+		if runStart(w) {
+			return true
+		}
+	}
+	return false
 }
 
 // FuzzSanitizerArbitrary is the brief's item 4a: any input at all. The output is
