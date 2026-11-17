@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
 // last-edited: 2026-11-17
 
@@ -132,9 +132,11 @@ type SourceNumber struct {
 	// or folder name. A weak number is set aside whenever a stronger source
 	// exists; with no stronger source it still counts, so it can only ever
 	// remove a conflict between two sources, never hide the book's only number
-	// (BookNumbers, agree). When the stored series position is the only
-	// stronger source, setting a weak number aside is not enough by itself:
-	// SequenceVerdict.Corroborate.
+	// (BookNumbers, agree). Setting a weak number aside that DISAGREES with the
+	// stronger source is never enough to apply unattended: the stronger
+	// sources are fields an earlier apply can have written, so the verdict
+	// carries SequenceVerdict.WeakSetAside and the gate refuses it as
+	// sequence_unconfirmed.
 	Weak bool `json:"weak,omitempty"`
 }
 
@@ -145,12 +147,15 @@ type SequenceVerdict struct {
 	Detail           string         `json:"detail,omitempty"`
 	BookNumbers      []SourceNumber `json:"book_numbers,omitempty"`
 	CandidateNumbers []SourceNumber `json:"candidate_numbers,omitempty"`
-	// Corroborate is set on a PASSING verdict that set a weak number aside
-	// while the stored series position was the book's only strong number: the
-	// text says what it was ("title leading 8 set aside for series_position
-	// 6"). EvaluateTranscribed then asks for the title and runtime legs
-	// (corroborationRefusal) before it allows the apply.
-	Corroborate string `json:"corroborate,omitempty"`
+	// WeakSetAside is set on a PASSING verdict that set a weak number aside
+	// although it disagrees with the book's strong number: the text says what
+	// was set aside, why it looks like a track or list number, and why the
+	// remaining sources do not settle it. EvaluateTranscribed always refuses
+	// it as sequence_unconfirmed, whatever the title and runtime say: every
+	// strong source on the book (the stored title, the stored series position,
+	// an unmarked file or folder name) is a field an earlier apply or rename
+	// can have written, so none is independent evidence of the volume.
+	WeakSetAside string `json:"weak_set_aside,omitempty"`
 }
 
 // Verdict is the whole gate's decision for one book/candidate pair.
@@ -405,9 +410,7 @@ func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookR
 		used = true
 	}
 	seqUnconfirmed, collUnconfirmed := "", ""
-	if v.Sequence.Corroborate != "" {
-		seqUnconfirmed = corroborationRefusal(book, c, v.Sequence, v.Evidence)
-	}
+	seqUnconfirmed = v.Sequence.WeakSetAside
 	collUnconfirmed = collectedRuntimeRefusal(book, c, v.Sequence, v.Evidence)
 	if seqUnconfirmed != "" {
 		v.Unconfirmed = append(v.Unconfirmed, ReasonSequenceUnconfirmed)
@@ -460,7 +463,7 @@ func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookR
 		v.Reason, v.Detail = v.Evidence.Reason, v.Evidence.Detail
 	case seqUnconfirmed != "":
 		v.Reason = ReasonSequenceUnconfirmed
-		v.Detail = v.Sequence.Corroborate + "; " + seqUnconfirmed
+		v.Detail = seqUnconfirmed
 	case collUnconfirmed != "":
 		v.Reason = ReasonCollectedRuntimeUnconfirmed
 		v.Detail = collUnconfirmed
@@ -503,11 +506,10 @@ func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookR
 // volumes, and "Books 1-3" never to "Books 1-5". Weak numbers (SourceNumber
 // .Weak: leading ordinals and track numbers) are set aside whenever a stronger
 // source exists on the same side, so "08 - Title" against series position 6
-// is one book numbered 6, not a conflict. When that stronger source is only
-// the stored series position the verdict passes with Corroborate set, and the
-// gate (EvaluateTranscribed) additionally requires the title and runtime legs
-// to confirm it: a stored position can be stale, and the gate cannot tell
-// which of the two numbers is.
+// is one book numbered 6, not a conflict. When the weak number disagrees with
+// that stronger source the verdict passes with WeakSetAside set, and the gate
+// (EvaluateTranscribed) refuses it as sequence_unconfirmed: a stored position
+// or title can be stale, and the gate cannot tell which of the two numbers is.
 func CheckSequence(book *database.Book, c *metafetch.MetadataCandidate) SequenceVerdict {
 	v := SequenceVerdict{BookNumbers: BookNumbers(book), CandidateNumbers: CandidateNumbers(c)}
 	bookNum, bookOK, bookConflict := agree(v.BookNumbers, false)
@@ -540,24 +542,25 @@ func CheckSequence(book *database.Book, c *metafetch.MetadataCandidate) Sequence
 		v.Pass = true
 	}
 	if v.Pass {
-		v.Corroborate = positionOnlyWeakAside(v.BookNumbers)
+		v.WeakSetAside = weakSetAside(v.BookNumbers)
 	}
 	return v
 }
 
-// positionOnlyWeakAside says what agree set aside when every strong number on
-// the book comes from a field an earlier apply can WRITE and a weak number
-// disagrees with it ("" for everything else: no weak number, a weak number
-// that agrees, no strong source at all, where the weak numbers still count, or
-// a strong source an apply cannot write).
+// weakSetAside says what agree set aside when a weak number disagrees with
+// the book's strong number ("" when there is no weak number, when every weak
+// number agrees, or when there is no strong source, where the weak numbers
+// still count).
 //
-// The stored title, the stored series position and a file or folder name
-// without a marker are all fields an earlier (possibly wrong) apply or rename
-// can have written, so any number of them count as ONE source: two of them
-// agreeing is not two independent opinions. Only a "Book N" marker in a file
-// or folder name, which no apply writes, is independent of the stored
-// metadata and lets the weak number be set aside without corroboration.
-func positionOnlyWeakAside(src []SourceNumber) string {
+// There is no independent source to corroborate with: the stored title, the
+// stored series position and a file or folder name (a "Book N" marker
+// included: the shipped naming patterns copy the stored title into both
+// names) are all fields an earlier, possibly wrong, apply or rename can have
+// written, so a weak number that disagrees with them is never confirmed by
+// them. An earlier version let the title and runtime checks stand in for a
+// second source; they cannot: the title check agrees on any shared title
+// segment, so two volumes of one storyline confirmed each other.
+func weakSetAside(src []SourceNumber) string {
 	var strong *SourceNumber
 	var weak []SourceNumber
 	for i, s := range src {
@@ -567,9 +570,6 @@ func positionOnlyWeakAside(src []SourceNumber) string {
 		if s.Weak {
 			weak = append(weak, s)
 			continue
-		}
-		if (s.Source == "file_name" || s.Source == "folder_name") && s.Form == "marker" {
-			return ""
 		}
 		if strong == nil {
 			strong = &src[i]
@@ -581,10 +581,23 @@ func positionOnlyWeakAside(src []SourceNumber) string {
 	pos, _ := seqnum.ParsePosition(strong.Number)
 	for _, w := range weak {
 		if n, _ := seqnum.ParsePosition(w.Number); !seqnum.Equal(pos, n) {
-			return w.Source + " " + w.Number + " set aside for " + strong.Source + " " + strong.Number
+			return weakKind(w) + " " + w.Number + " in the " + w.Source + " looks like a list or track number, not a volume; " +
+				"it was set aside for the " + strong.Source + " " + strong.Number + ", but the stored title, the stored series position and the file and folder names " +
+				"are all fields an earlier apply can have written, so the volume is not confirmed"
 		}
 	}
 	return ""
+}
+
+// weakKind names how a weak number was read, for a detail an owner reads.
+func weakKind(s SourceNumber) string {
+	if n, ok := seqnum.ParsePosition(s.Number); ok && n.IsRange() {
+		return "the range"
+	}
+	if s.Form == "leading" {
+		return "the leading number"
+	}
+	return "the track, disc or part number"
 }
 
 // Forms of a book source that may be only a part number. They count like any
@@ -647,6 +660,21 @@ func BookNumbers(book *database.Book) []SourceNumber {
 		}
 		out = append(out, SourceNumber{Source: src, Number: n.Text, Form: n.Form,
 			Weak: weakBookNumber(src, text, n)})
+		// seqnum.Parse reads ONE number per text and prefers the leading one,
+		// so a leading list number would hide a number the title itself
+		// states ("01 - Batman: Year 2" has the 2 as well as the 01). For the
+		// stored TITLE the text after the leading number is read too, so adding
+		// a list number to a title never removes the title's own number from
+		// the comparison. File and folder names are not: their trailing number
+		// is routinely a track count ("01 Opening Credits 57.mp3").
+		if n.Form == "leading" && src == "title" {
+			if rest := leadingNumberRe.ReplaceAllString(text, ""); rest != text {
+				if rn, rok := seqnum.Parse(rest); rok && rn.Form != "leading" {
+					out = append(out, SourceNumber{Source: src, Number: rn.Text, Form: rn.Form,
+						Weak: weakBookNumber(src, rest, rn)})
+				}
+			}
+		}
 	}
 	switch {
 	case book.SeriesPositionRaw != nil && strings.TrimSpace(*book.SeriesPositionRaw) != "":
@@ -681,7 +709,10 @@ func BookNumbers(book *database.Book) []SourceNumber {
 // a reason to set a number aside.
 var (
 	trackTagRe = regexp.MustCompile(`(?i)\b(?:chapter|chap|ch|track|trk|disc|disk|cd|part|pt)\.?\s*0*(\d+(?:\.\d+)?)\b`)
-	trackOfRe  = regexp.MustCompile(`(?i)(?:^|[\s_.\-\[(])0*(\d+)\s+of\s+\d+\b`)
+	// leadingNumberRe is the leading list number seqnum.Parse reads as a
+	// "leading" number, with its separator.
+	leadingNumberRe = regexp.MustCompile(`^\s*\d{1,3}(?:\.\d+)?\s*[-._:)]?\s+`)
+	trackOfRe       = regexp.MustCompile(`(?i)(?:^|[\s_.\-\[(])0*(\d+)\s+of\s+\d+\b`)
 	// trackLeadRe is a number that STARTS the text and is directly followed by
 	// a tag word ("02 Chapter 1", "03 - Track 07"): the leading number is the
 	// ordinal of that chapter or track in its list.
