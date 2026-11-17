@@ -1,5 +1,5 @@
 // file: internal/transcribe/grammar_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7e03b9d5-c4a1-4268-9b7f-1d6a85f2e093
 // last-edited: 2026-11-17
 
@@ -35,6 +35,7 @@ func TestGrammarChapterMarkers(t *testing.T) {
 		{"bare number alone", "3.", 3},
 		{"chapter zero", "Chapter 0", 0},
 		{"disc", "Disc Two", 2},
+		{"episode", "Episode Seven. The Court of Owls", 7},
 		{"mid part includes", "Hush. This part includes chapter 2 and chapter 3", 2},
 		{"mid disc continued", "The tape resumes. Disc two continued", 2},
 		{"mid end of part", "End of part three", 3},

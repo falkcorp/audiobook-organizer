@@ -1,5 +1,5 @@
 // file: internal/transcribe/reconcile_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d6a38f04-5b17-4e92-8c0d-93e1f7b25a68
 // last-edited: 2026-11-17
 
@@ -120,6 +120,19 @@ func TestReconcileRule(t *testing.T) {
 			stored: StoredIntro{Status: "ok", Identity: Identity{Title: "Year One"}},
 			parse:  titleParse2("Gotham Audio presents, Year One", "", ""),
 			want:   Identity{Title: "Year One"}, wantStatus: "ok",
+		},
+		{
+			name:   "rule3 a six word name is at the cap and clean",
+			stored: StoredIntro{Status: "ok", Identity: Identity{Title: "Hush", Author: "Alfred Pennyworth Lucius Fox Barbara Gordon"}},
+			parse:  titleParse2("Hush", "Selina Kyle", ""),
+			want:   Identity{Title: "Hush", Author: "Alfred Pennyworth Lucius Fox Barbara Gordon"}, wantStatus: "ok",
+		},
+		{
+			name:   "rule3 a seven word name is over the cap and defective",
+			stored: StoredIntro{Status: "ok", Identity: Identity{Title: "Hush", Author: "Alfred Pennyworth Lucius Fox Barbara Gordon Kyle"}},
+			parse:  titleParse2("Hush", "Selina Kyle", ""),
+			want:   Identity{Title: "Hush", Author: "Selina Kyle"}, wantStatus: "ok",
+			idWrite: true, fix: 1,
 		},
 		{
 			name:   "rule3 over-long name is defective",

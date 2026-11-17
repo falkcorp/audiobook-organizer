@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_reparse_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2e6b9d14-8a37-4c51-b0f2-d95a1c3e7840
 // last-edited: 2026-11-17
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -46,6 +47,14 @@ type reparseFakeStore struct {
 	beforeDecide func(s *reparseFakeStore, key string)
 	raced        map[string]bool
 	decides      map[string]int
+	// rendezvous, when set, makes a write wait (bounded) until that many writes
+	// are in flight at once; maxInflight is the most seen.
+	rendezvous   int
+	rendezvoused atomic.Bool
+	inflight     atomic.Int64
+	maxInflight  atomic.Int64
+	// onWrite sees every committed write (called under the store lock).
+	onWrite func()
 }
 
 func newReparseFakeStore() *reparseFakeStore {
@@ -103,6 +112,20 @@ func (s *reparseFakeStore) GetBookFileByID(book, file string) (*database.BookFil
 
 func (s *reparseFakeStore) ReparseBookFileIntro(book, file string, decide func(database.IntroReparseRow) (database.IntroReparsePatch, bool)) (database.IntroReparseOutcome, error) {
 	key := rpKey(book, file)
+	n := s.inflight.Add(1)
+	defer s.inflight.Add(-1)
+	for {
+		m := s.maxInflight.Load()
+		if n <= m || s.maxInflight.CompareAndSwap(m, n) {
+			break
+		}
+	}
+	if s.rendezvous > 0 && !s.rendezvoused.Swap(true) { // only the first write waits
+		deadline := time.Now().Add(2 * time.Second)
+		for s.inflight.Load() < int64(s.rendezvous) && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+	}
 	s.mu.Lock()
 	hook := s.beforeDecide
 	first := !s.raced[key]
@@ -163,6 +186,9 @@ func (s *reparseFakeStore) ReparseBookFileIntro(book, file string, decide func(d
 		row.TranscribeStatus = &st
 	}
 	s.writes[key]++
+	if s.onWrite != nil {
+		s.onWrite()
+	}
 	return database.IntroReparseWrote, nil
 }
 
@@ -307,6 +333,11 @@ func TestReparseDecide(t *testing.T) {
 			row:    cur(transcribe.SilenceSentinel, "empty", rpNone, nil),
 			note:   reparseSilenceOnly,
 			before: reparseKindUnclassified, after: "music_or_silence", write: true, identityNil: true,
+		},
+		{
+			name:   "a parse from an older grammar that no longer matches is rewritten",
+			row:    cur(rpChapter, "ok", rpNone, &database.IntroParse{Version: 1, Kind: "garbage"}),
+			before: "garbage", after: "chapter_marker", write: true, identityNil: true,
 		},
 		{
 			name:   "narration on an unparsed row stays unparsed",
@@ -844,5 +875,102 @@ func TestWhisperGroupResult_IdentityOnlyFromAnAnnouncement(t *testing.T) {
 	ch := whisperGroupResult(fileIntroWhisperResult{Text: rpChapter}, now).res
 	if ch.Status != statusUnparsed || ch.Title != "" || ch.Parse.Kind != "chapter_marker" || ch.Parse.ChapterNumber != 12 {
 		t.Errorf("chapter = status %q title %q parse %+v", ch.Status, ch.Title, ch.Parse)
+	}
+}
+
+// The chunks really run in parallel: with a pool of four, at least two writes are
+// in flight at once. (A rendezvous in the fake holds each write until a second
+// one arrives or two seconds pass, so a sequential run fails rather than hangs.)
+func TestReparseFileIntros_ChunksRunInParallel(t *testing.T) {
+	s := newReparseFakeStore()
+	seedMany(s, reparseChunkSize*4)
+	s.rendezvous = 2
+
+	if _, err := runReparseFileIntros(context.Background(), newReparseEnv(s, &fakeReporter{}), 0, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.maxInflight.Load(); got < 2 {
+		t.Errorf("at most %d writes in flight at once with 4 workers and 4 chunks, want at least 2", got)
+	}
+}
+
+// A live run waits before every chunk's writes while a scan runs, and writes
+// nothing while the queue reports it. The start gate sees a clear queue first.
+func TestReparseFileIntros_WaitsForAScanBeforeEveryChunk(t *testing.T) {
+	old := fileIntroPauseInterval
+	fileIntroPauseInterval = time.Millisecond
+	t.Cleanup(func() { fileIntroPauseInterval = old })
+
+	s := newReparseFakeStore()
+	seedMany(s, reparseChunkSize*3)
+	q := &flippingQueue{}
+	s.onWrite = func() {
+		if q.busyNow() {
+			q.sawWriteWhileBusy.Store(true)
+		}
+	}
+	env := newReparseEnv(s, &fakeReporter{})
+	env.queue = q
+	env.workers = 3
+
+	if _, err := runReparseFileIntros(context.Background(), env, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	if q.sawWriteWhileBusy.Load() {
+		t.Error("a write was committed while a scan was reported running")
+	}
+	if q.busyAnswers.Load() == 0 {
+		t.Fatal("the queue never reported busy: the test did not exercise the wait")
+	}
+	if s.totalWrites() != reparseChunkSize*3 {
+		t.Errorf("writes = %d, want every file once the scan finished", s.totalWrites())
+	}
+}
+
+// flippingQueue answers clear to the start gate, then busy for a while, then clear
+// again, and says whether it is currently reporting busy.
+type flippingQueue struct {
+	mu                sync.Mutex
+	calls             int
+	busy              bool
+	busyAnswers       atomic.Int64
+	sawWriteWhileBusy atomic.Bool
+}
+
+func (q *flippingQueue) ListActiveOperationsV2() ([]database.OperationV2Row, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.calls++
+	// call 1 is the start gate; calls 2..6 report a running scan.
+	q.busy = q.calls >= 2 && q.calls <= 6
+	if q.busy {
+		q.busyAnswers.Add(1)
+		return []database.OperationV2Row{{DefID: "library.scan", Status: "running"}}, nil
+	}
+	return nil, nil
+}
+
+func (q *flippingQueue) busyNow() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.busy
+}
+
+// A group that reuses a donor's result copies the donor's classification, as a
+// separate value.
+func TestDonorResult_CopiesTheClassification(t *testing.T) {
+	donor := rpIntro("b1", "donor", rpTitle, "ok", database.IntroReparseIdentity{Title: "The Killing Joke"},
+		&database.IntroParse{Version: 1, Kind: "title_announcement", Title: "The Killing Joke"})
+	s := newReparseFakeStore()
+	s.put(donor)
+	w := &fileIntroWorker{store: s}
+
+	gr := w.donorResult(fileIntroGroup{DonorBookID: "b1", DonorFileID: "donor", Hash: donor.IntroSourceHash})
+	if !gr.hasResult || gr.res.Parse == nil || gr.res.Parse.Kind != "title_announcement" || gr.res.Parse.Title != "The Killing Joke" {
+		t.Fatalf("donor result = %+v", gr.res)
+	}
+	stored := s.get("b1", "donor")
+	if gr.res.Parse == stored.IntroParse {
+		t.Error("the copy aliases the donor's stored parse")
 	}
 }
