@@ -1,5 +1,5 @@
 // file: internal/metadata/asin.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d3b1c52-8e64-4f0a-9b27-5a1e6c4d9f38
 // last-edited: 2026-11-16
 
@@ -67,6 +67,20 @@ func CanonicalASIN(s string) (string, bool) {
 		return "", false
 	}
 	return c, true
+}
+
+// ASINQuery returns the ASIN a whole search query IS, or "". A user who pastes
+// an identifier into "Search again" means it, in either case and in the
+// ten-digit form, so the query is normalised like a stored ASIN (CanonicalASIN);
+// but a one-word title is also a whole query, so a value of letters alone is
+// not taken: the modern shape (`B` then a digit) or the digit form is required,
+// which no English word has. "Batmobiles" and "BATMOBILES" are titles.
+func ASINQuery(s string) string {
+	c, ok := CanonicalASIN(s)
+	if !ok || !(c[0] >= '0' && c[0] <= '9' || c[1] >= '0' && c[1] <= '9') {
+		return ""
+	}
+	return c
 }
 
 // ASINInText returns the first token of free text (a title, a folder name)

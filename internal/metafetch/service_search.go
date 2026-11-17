@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.45.0
+// version: 1.45.1
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-11-16
 
@@ -1209,13 +1209,17 @@ func (mfs *Service) searchMetadataForBook(
 	// The ASIN to look up directly: the whole query is one, or the query
 	// carries one, else the book's own (resolveSearchInputs).
 	//
-	// Only a value that is an ASIN is looked up. The query is free text, so a
-	// token of it counts only as written (metadata.ASINInText): the old test
+	// Only a value that is an ASIN is looked up. A query that IS one (pasted
+	// into "Search again", in either case) counts (metadata.ASINQuery); a
+	// token of free text counts only as written (metadata.ASINInText): the old test
 	// took any ten letters and sent 800 title words to Audible and Audnexus
 	// (400 "Bad ASIN"). The book's own stored ASIN is an identifier, so it is
 	// normalised (trim, upper case) instead. A stored value outside the grammar
 	// is nothing to look up; in.asin itself is untouched, so the fingerprint is.
-	asinToLookup := extractASIN(searchTitle)
+	asinToLookup := metadata.ASINQuery(searchTitle)
+	if asinToLookup == "" {
+		asinToLookup = extractASIN(searchTitle)
+	}
 	if asinToLookup == "" {
 		asinToLookup, _ = metadata.CanonicalASIN(in.asin)
 	}
