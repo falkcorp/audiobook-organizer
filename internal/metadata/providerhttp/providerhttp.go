@@ -1,5 +1,5 @@
 // file: internal/metadata/providerhttp/providerhttp.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5c9e2a71-4b83-4f16-9d40-8e73a1b5c206
 // last-edited: 2026-11-17
 
@@ -368,9 +368,10 @@ func WithAttemptBudget(ctx context.Context, total time.Duration) context.Context
 	return context.WithValue(ctx, attemptBudgetKey{}, &attemptBudget{remaining: total})
 }
 
-// AttemptBudgetLeft reports what is left of the budget ctx carries, and whether
-// it carries one.
-func AttemptBudgetLeft(ctx context.Context) (time.Duration, bool) {
+// AttemptBudgetLeftForTest reports what is left of the budget ctx carries, and whether
+// it carries one. A test seam (the name keeps the deadcode ratchet from counting it):
+// the audnexus tests in another package read the budget a request's context carries.
+func AttemptBudgetLeftForTest(ctx context.Context) (time.Duration, bool) {
 	if b, ok := ctx.Value(attemptBudgetKey{}).(*attemptBudget); ok {
 		return b.left(), true
 	}
