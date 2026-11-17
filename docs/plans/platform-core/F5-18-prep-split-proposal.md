@@ -59,7 +59,7 @@ Source column is where the obligation is written today. IDs O1.. are used by the
 | O30 | Native writing kinds' Effects names are `pkg/ops/effects.go` constants only; new constants `cover_text`, `file_provenance` once F5-06 lands | seams.d/F5-02.md:43-55; seams.d/F5-06.md:49 |
 | O31 | Schedules for every kind (`sched(kind)` supplied by `books.ScheduleFor`), stay F5-14's | seams.d/F5-07.md:34; F5-18 brief lines 133-139 |
 | O32 | Cross-row seams: F5-01 `books.memdb` and `NewStore` (seams.d/F5-01.md:24), F2-01/F2-03/F2-11 notes | seams.d/F2-01.md:84; F2-03.md:23; F2-11.md:29,34 |
-| O33 | Rewrite the write-set oracle's SSA walk on `callgraph/vta` (or `cha`) so a store write reached through a non-store name is not dropped | todo.d/2026-11-16-jobwrites-must-be-empty-before-f5-18-flip.md:6 (PR #4683, open; the fragment is not on main yet) |
+| O33 | Rewrite the write-set oracle's SSA walk on `callgraph/vta` (or `cha`) so a store write reached through a non-store name is not dropped | todo.d/2026-11-16-jobwrites-must-be-empty-before-f5-18-flip.md:6 (merged in #4683 `d98ee6a67`; still in `todo.d/` on main, not yet folded into `TODO.md`) |
 | O34 | Key `traceInert` by `<receiver>.<method>` | same fragment :14 |
 | O35 | Make write-set deferral visible: deferral reason on the run, alert when a scheduled kind waited more than a set number of hours (tombstone-cleanup, author-split-scan, purge-deleted, trash-cleanup) | same fragment :17 |
 | O36 | Retire the legacy `author_books_legacy:` rows the store stages in `ModifyBook`, so `authors` leaves the book row and tombstone-cleanup goes back to 2 overlapping jobs | same fragment :23 |
@@ -235,7 +235,7 @@ the Depends column; file sets are disjoint where the Files column says so, to ke
 - Covers: O33, O34, O38.
 - Proves: a write reached through a non-store name is classified; `traceInert` is receiver-keyed; the cgo and
   non-cgo taglib variants reach the same write helpers; `FailJobWritesWith` is safe under `t.Parallel`.
-- Depends: PR #4683 merged (its fragment is the source).
+- Depends: none beyond #4683, which is merged (its fragment is the source).
 - Source: todo.d/2026-11-16-jobwrites-must-be-empty-before-f5-18-flip.md:6,14,31,35.
 
 ## 4. What remains for the flip itself
@@ -248,7 +248,7 @@ the rollback (revert the flip PR, which is safe because every prep row is dark a
 
 ## 5. Order and size
 
-F5-18a (M) -> F5-18b (L) -> F5-18c (L) -> { F5-18d (M), F5-18e (M), F5-18f (S), F5-18g (S), F5-18i (M), F5-18l (S) } -> F5-18h (L), F5-18j (L) -> F5-18k (S); F5-18m (S) after #4683 merges, independent of the rest.
+F5-18a (M) -> F5-18b (L) -> F5-18c (L) -> { F5-18d (M), F5-18e (M), F5-18f (S), F5-18g (S), F5-18i (M), F5-18l (S) } -> F5-18h (L), F5-18j (L) -> F5-18k (S); F5-18m (S) independent of the rest.
 Totals: 13 rows. S x5 (f, g, k, l, m), M x4 (a, d, e, i), L x4 (b, c, h, j). The new rows do not
 change the critical path until the flips resume; they do lengthen R2 by the chain a -> b -> c -> h/j -> k.
 
