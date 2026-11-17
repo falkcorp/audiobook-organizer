@@ -1,7 +1,7 @@
 // file: internal/books/store/store.go
-// version: 2.130.4
+// version: 2.131.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package store
 
@@ -1406,6 +1406,55 @@ type BookFile struct {
 	// IntroMeta is how the clip was made and which model heard it. Not queried by
 	// any filter, so stripBookFileForMemdb clears it like IntroTranscription.
 	IntroMeta *IntroMeta `json:"intro_meta,omitempty"`
+	// IntroParse is what the stored transcript IS: the clip's kind and the
+	// structured fields read from it (chapter number, part number, publisher, ...).
+	// It is derived from IntroTranscription alone and is therefore rewritable
+	// without another Whisper call (maintenance.reparse-file-intros). Additive: the
+	// status and Transcribed* identity columns keep their meaning, and a row
+	// without one simply has not been classified. Stripped from memdb like
+	// IntroMeta: nothing filters on it yet.
+	IntroParse *IntroParse `json:"intro_parse,omitempty"`
+}
+
+// IntroParse is the classification of one stored per-file intro transcript. It is
+// a plain-value mirror of transcribe.ClipParse (the database package cannot import
+// that one); Kind is a transcribe.ClipKind string. Chapter continuity (the
+// chapter/part numbers, which say where in the book a clip sits) is kept apart
+// from identity (Title/Author/Narrator/..., which say what book it is): a clip
+// can carry one, the other, both or neither.
+//
+// Every field is written exactly as the parse produced it, so two parses of the
+// same text with the same Version are byte-identical and a re-run is a no-op.
+type IntroParse struct {
+	// Version is transcribe.ClipParserVersion at the time of the parse. A row whose
+	// Version is older than the running grammar is eligible for a re-parse.
+	Version int `json:"version"`
+	// Kind is the transcribe.ClipKind: title_announcement, credits, chapter_marker,
+	// part_marker, front_back_matter, narration, music_or_silence or garbage.
+	Kind string `json:"kind"`
+
+	// Chapter and part position. The Has* flags tell "chapter 0" from "no number".
+	ChapterNumber    int    `json:"chapter_number,omitempty"`
+	HasChapterNumber bool   `json:"has_chapter_number,omitempty"`
+	ChapterTitle     string `json:"chapter_title,omitempty"`
+	PartNumber       int    `json:"part_number,omitempty"`
+	HasPartNumber    bool   `json:"has_part_number,omitempty"`
+	// Marker is the keyword that announced the position ("chapter", "prologue").
+	Marker string `json:"marker,omitempty"`
+
+	// Identity fields a title announcement carries. Publisher is the "<X> presents"
+	// lead that is removed from Title.
+	Title       string `json:"title,omitempty"`
+	Author      string `json:"author,omitempty"`
+	Narrator    string `json:"narrator,omitempty"`
+	Translator  string `json:"translator,omitempty"`
+	CoverArtist string `json:"cover_artist,omitempty"`
+	Publisher   string `json:"publisher,omitempty"`
+
+	// CollectionFrom and CollectionTo are the "books N through M" range an
+	// announcement states; both zero when it states none.
+	CollectionFrom int `json:"collection_from,omitempty"`
+	CollectionTo   int `json:"collection_to,omitempty"`
 }
 
 // IntroMeta records the settings behind one per-file intro transcript. Every

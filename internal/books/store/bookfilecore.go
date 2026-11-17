@@ -1,7 +1,7 @@
 // file: internal/books/store/bookfilecore.go
-// version: 1.12.3
+// version: 1.12.4
 // guid: 715f4b68-2d23-4f52-b1dd-1b3d0357a4f6
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package store
 
@@ -12,10 +12,10 @@ import "time"
 // the heavy set that memdb clears before insertion:
 //
 //	FingerprintFailureReason, FingerprintFailureDetail, FingerprintDiagnosticJSON,
-//	AcoustIDFingerprint, AcoustIDSeg0..6, IntroTranscription, IntroMeta
+//	AcoustIDFingerprint, AcoustIDSeg0..6, IntroTranscription, IntroMeta, IntroParse
 //
-// IntroTranscription and IntroMeta are the only members of the per-file
-// intro-transcription group that are stripped. The others (TranscribedTitle/
+// IntroTranscription, IntroMeta and IntroParse are the only members of the
+// per-file intro-transcription group that are stripped. The others (TranscribedTitle/
 // Author/Narrator/Translator/CoverArtist, IntroTranscribedAt, TranscribeStatus,
 // TranscribeError, TranscribeAttemptedAt, IntroSourceHash, IntroRunOpID) are
 // RETAINED here — they are the small, queryable fields (IntroSourceHash is the
