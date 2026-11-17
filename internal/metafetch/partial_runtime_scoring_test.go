@@ -1,5 +1,5 @@
 // file: internal/metafetch/partial_runtime_scoring_test.go
-// version: 1.2.6
+// version: 1.2.7
 // guid: 3d0c8a52-6b1e-4f87-9a4d-5e2f7c1b8d93
 // last-edited: 2026-11-16
 
@@ -230,8 +230,8 @@ func TestScoreBrowseAnswer_PartialRuntimePenalty(t *testing.T) {
 	r := metadata.BookMetadata{Title: "Zeta Quest", Author: "Ann Writer", Narrator: "Bo Reader", DurationSec: 14*3600 + 42*60}
 	words := map[string]bool{"zeta": true, "quest": true}
 	partial := runtimeOf(ownerCaseFiles())
-	penalised := scoreBrowseAnswer(r, "Audible", "Zeta Quest", words, "Ann Writer", "", partial)
-	neutral := scoreBrowseAnswer(r, "Audible", "Zeta Quest", words, "Ann Writer", "", localRuntime{})
+	penalised := scoreBrowseAnswer(r, "Audible", "Zeta Quest", "", words, "Ann Writer", "", partial)
+	neutral := scoreBrowseAnswer(r, "Audible", "Zeta Quest", "", words, "Ann Writer", "", localRuntime{})
 	assert.Equal(t, -20.0, penalised.DurationScore)
 	assert.InDelta(t, neutral.Score*0.5, penalised.Score, 1e-9)
 }

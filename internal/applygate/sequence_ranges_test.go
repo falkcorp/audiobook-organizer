@@ -1,5 +1,5 @@
 // file: internal/applygate/sequence_ranges_test.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 4d9c2a71-8e35-4f60-b2a8-17c6e3d05f94
 // last-edited: 2026-11-16
 
@@ -72,13 +72,22 @@ func TestCheckSequence_TrackOrdinalIsNotTheVolume(t *testing.T) {
 		{"chapter file name alone vs different volume", database.Book{Title: "Hush", FilePath: "/lib/A/Hush/02 Chapter 1.m4b"},
 			metafetch.MetadataCandidate{Title: "Hush", SeriesPosition: "8"}, false, ReasonSequenceMismatch},
 
-		// A trailing number that no volume marker and no tag word names, but whose
-		// file name carries a disc or track number (metadata.ExtractTrackInfoFromFilename):
-		// the file is a part of the book, so its number labels the part.
-		{"trailing number beside a disc number in the file name", database.Book{Title: "Year One", SeriesPositionRaw: new("1"), FilePath: "/lib/A/Year One/Year One 3 - Disc 1 of 2.mp3"},
+		// A number beside a tag word that is NOT the parsed number says nothing
+		// about the parsed number: "Year One 3 - Disc 1 of 2" is volume 3 on
+		// a disc, so it conflicts with a stored position of 1 (the review's
+		// trace 1). The stored position wins every disagreement.
+		{"trailing number beside a disc number in the file name conflicts with the position", database.Book{Title: "Year One", SeriesPositionRaw: new("1"), FilePath: "/lib/A/Year One/Year One 3 - Disc 1 of 2.mp3"},
+			metafetch.MetadataCandidate{Title: "Year One", SeriesPosition: "1"}, false, ReasonBookSequenceConflict},
+		{"trailing number beside a track number in the file name conflicts with the position", database.Book{Title: "Year One", SeriesPositionRaw: new("1"), FilePath: "/lib/A/Year One/Year One 3 - Track 07.mp3"},
+			metafetch.MetadataCandidate{Title: "Year One", SeriesPosition: "1"}, false, ReasonBookSequenceConflict},
+		// The tag's own number is the parsed one: it is the track.
+		{"trailing number that IS the track number", database.Book{Title: "Year One", SeriesPositionRaw: new("1"), FilePath: "/lib/A/Year One/Year One Track 07.mp3"},
 			metafetch.MetadataCandidate{Title: "Year One", SeriesPosition: "1"}, true, ""},
-		{"trailing number beside a track number in the file name", database.Book{Title: "Year One", SeriesPositionRaw: new("1"), FilePath: "/lib/A/Year One/Year One 3 - Track 07.mp3"},
-			metafetch.MetadataCandidate{Title: "Year One", SeriesPosition: "1"}, true, ""},
+		// A bundle word is never a tag word: "Omnibus 2" is volume 2 of the omnibuses.
+		{"omnibus number is a volume number", database.Book{Title: "Year One", SeriesPositionRaw: new("1"), FilePath: "/lib/A/Year One/Year One Omnibus 2.m4b"},
+			metafetch.MetadataCandidate{Title: "Year One", SeriesPosition: "1"}, false, ReasonBookSequenceConflict},
+		{"pack number is a volume number", database.Book{Title: "Year One", SeriesPositionRaw: new("1"), FilePath: "/lib/A/Year One/Year One Pack 2.m4b"},
+			metafetch.MetadataCandidate{Title: "Year One", SeriesPosition: "1"}, false, ReasonBookSequenceConflict},
 
 		// Leading ordinal in the folder name.
 		{"leading folder ordinal, position wins", database.Book{Title: "Year One", SeriesPositionRaw: new("3"), FilePath: "/lib/A/23 - Year One/Year One.m4b"},
@@ -128,7 +137,7 @@ func TestBookNumbers_WeakSources(t *testing.T) {
 		}
 	}
 	v := CheckSequence(&b, &metafetch.MetadataCandidate{Title: "The Long Halloween", SeriesPosition: "6"})
-	if !strings.Contains(describe(v.BookNumbers), "track or file number") {
+	if !strings.Contains(describe(v.BookNumbers), "list or track number") {
 		t.Errorf("describe does not name the set-aside numbers: %s", describe(v.BookNumbers))
 	}
 }
@@ -382,8 +391,9 @@ func TestCheckSeriesNumberLost_Range(t *testing.T) {
 	}
 }
 
-// partial_book decides span by the shared range reader, so one edition is a
-// span on whichever side it is written, and a single volume still is not.
+// partial_book compares the spans themselves, by the shared range reader: one
+// edition is the same span on whichever side it is written, a single volume is
+// not a span, and two different spans refuse (review of #4682, MAJOR-2).
 func TestCheckPartialBook_SpanByRange(t *testing.T) {
 	cases := []struct {
 		name string
@@ -391,13 +401,25 @@ func TestCheckPartialBook_SpanByRange(t *testing.T) {
 		cand metafetch.MetadataCandidate
 		want string
 	}{
+		// Equal spans pass, in every spelling.
 		{"Book 1-3 against Books 1-3", database.Book{ID: "b1", Title: "Knightfall, Book 1-3"}, metafetch.MetadataCandidate{Title: "Knightfall", Subtitle: "Books 1-3"}, ""},
 		{"Vols 1–3 against Books 1 to 3", database.Book{ID: "b1", Title: "Knightfall, Vols 1–3"}, metafetch.MetadataCandidate{Title: "Knightfall", Subtitle: "Books 1 to 3"}, ""},
 		{"Vol. 01-02 against Books 1-2", database.Book{ID: "b1", Title: "Dark Detective Vol. 01-02"}, metafetch.MetadataCandidate{Title: "Dark Detective", Subtitle: "Books 1-2"}, ""},
+		{"Books 1-3 against Books 1, 2 & 3", database.Book{ID: "b1", Title: "Knightfall, Books 1-3"}, metafetch.MetadataCandidate{Title: "Knightfall", Subtitle: "Books 1, 2 & 3"}, ""},
+		{"the plural form on both sides (passed on main)", database.Book{ID: "b1", Title: "Knightfall, Books 1-3"}, metafetch.MetadataCandidate{Title: "Knightfall", Subtitle: "Books 1-3"}, ""},
+		{"omnibus against omnibus", database.Book{ID: "b1", Title: "Knightfall Omnibus"}, metafetch.MetadataCandidate{Title: "Knightfall Omnibus"}, ""},
+		{"boxed set against box set", database.Book{ID: "b1", Title: "Year One Boxed Set"}, metafetch.MetadataCandidate{Title: "Year One Box Set"}, ""},
+		// One side only refuses.
 		{"singular range book against a single volume", database.Book{ID: "b1", Title: "Knightfall, Book 1-3"}, metafetch.MetadataCandidate{Title: "Knightfall"}, ReasonPartialBook},
 		{"single volume against a singular range candidate", database.Book{ID: "b1", Title: "Knightfall"}, metafetch.MetadataCandidate{Title: "Knightfall, Book 1-3"}, ReasonPartialBook},
 		{"single volume against Books 1, 2 & 3", database.Book{ID: "b1", Title: "Knightfall, Book 1"}, metafetch.MetadataCandidate{Title: "Knightfall", Subtitle: "Books 1, 2 & 3"}, ReasonPartialBook},
-		{"a book titled with a plain dash is not a span", database.Book{ID: "b1", Title: "Catch-22"}, metafetch.MetadataCandidate{Title: "Catch-22"}, ""},
+		// Different spans refuse (the review's trace 4: both sides are spans).
+		{"Books 1-3 against Books 1-5", database.Book{ID: "b1", Title: "Knightfall, Books 1-3"}, metafetch.MetadataCandidate{Title: "Knightfall", Subtitle: "Books 1-5"}, ReasonPartialBook},
+		{"Book 1-3 against Vols 2–4", database.Book{ID: "b1", Title: "Knightfall, Book 1-3"}, metafetch.MetadataCandidate{Title: "Knightfall", Subtitle: "Vols 2–4"}, ReasonPartialBook},
+		{"Books 1-3 against a list that adds a volume", database.Book{ID: "b1", Title: "Knightfall, Books 1-3"}, metafetch.MetadataCandidate{Title: "Knightfall", Subtitle: "Books 1-3 & 5"}, ReasonPartialBook},
+		{"omnibus against a box set", database.Book{ID: "b1", Title: "Knightfall Omnibus"}, metafetch.MetadataCandidate{Title: "Knightfall Box Set"}, ReasonPartialBook},
+		{"omnibus against a range", database.Book{ID: "b1", Title: "Knightfall Omnibus"}, metafetch.MetadataCandidate{Title: "Knightfall", Subtitle: "Books 1-3"}, ReasonPartialBook},
+		{"a plain dash in a title is not a span", database.Book{ID: "b1", Title: "Batman-22"}, metafetch.MetadataCandidate{Title: "Batman-22"}, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -406,5 +428,213 @@ func TestCheckPartialBook_SpanByRange(t *testing.T) {
 				t.Fatalf("reason %q (%s), want %q", r.Reason, r.Detail, c.want)
 			}
 		})
+	}
+}
+
+// evalAll runs one pair through the whole gate and reports whether it was
+// allowed and the reason. Every must-still-refuse case below goes through here
+// (review of #4682, MINOR-2), not through a helper alone.
+//
+// Author and narrator agree on both sides, so the evidence leg's two required
+// agreements never depend on the runtime: whatever refuses is the rule under
+// test, not a shortage of evidence.
+func evalAll(b *database.Book, c *metafetch.MetadataCandidate) (bool, string) {
+	bb, cc := *b, *c
+	bb.Author = &database.Author{Name: "Bruce Wayne"}
+	bb.Narrator = new("Alfred Pennyworth")
+	cc.Author, cc.Narrator = "Bruce Wayne", "Alfred Pennyworth"
+	v := evalRuntime(&bb, &cc)
+	return v.Allowed, v.Reason
+}
+
+// Review trace 1 (MAJOR-1): the stored position is the field most likely to be
+// stale. "Year One 3 - Track 07" is volume 3; a candidate for volume 1 must not
+// be applied to it.
+func TestEvaluate_Trace1_TrailingVolumeBesideTrackTag(t *testing.T) {
+	cand := metafetch.MetadataCandidate{Title: "Year One", Series: "Gotham Years", SeriesPosition: "1", Score: 0.95, DurationSec: 36000}
+	for name, path := range map[string]string{
+		"track tag": "/lib/A/Year One/Year One 3 - Track 07.mp3",
+		"disc tag":  "/lib/A/Year One/Year One 3 - Disc 1 of 2.mp3",
+	} {
+		for runtime, dur := range map[string]*int{"unknown": nil, "agreeing": new(36000)} {
+			book := &database.Book{Title: "Year One", SeriesPositionRaw: new("1"), FilePath: path, Duration: dur}
+			if ok, reason := evalAll(book, &cand); ok || reason != ReasonBookSequenceConflict {
+				t.Errorf("%s, runtime %s: allowed=%v reason=%q, want book_sequence_conflict", name, runtime, ok, reason)
+			}
+		}
+	}
+}
+
+// Review trace 2 (MAJOR-1): a leading ordinal against a stale position, where
+// the book's title is only the series' own words. Setting the ordinal aside is
+// not enough; the title says nothing about the volume and an unknown runtime
+// confirms nothing.
+func TestEvaluate_Trace2_LeadingOrdinalWithSeriesNameTitle(t *testing.T) {
+	cand := metafetch.MetadataCandidate{Title: "Knightfall", Series: "Batman: Knightfall Saga", SeriesPosition: "1", Score: 0.95, DurationSec: 36000}
+	for runtime, dur := range map[string]*int{"unknown": nil, "agreeing": new(36000), "neutral": new(34000)} {
+		book := &database.Book{Title: "Knightfall", SeriesPositionRaw: new("1"), FilePath: "/lib/A/Knightfall/03 - Knightfall.m4b", Duration: dur}
+		ok, reason := evalAll(book, &cand)
+		if ok || reason != ReasonSequenceUnconfirmed {
+			t.Errorf("runtime %s: allowed=%v reason=%q, want sequence_unconfirmed", runtime, ok, reason)
+		}
+	}
+	// A title that is not the series name, agreeing, with the runtime agreeing, is the measured fix and applies.
+	good := &database.Book{Title: "03 - Knightfall", SeriesPositionRaw: new("1"), Duration: new(36000)}
+	other := metafetch.MetadataCandidate{Title: "Knightfall", Series: "Gotham Years", SeriesPosition: "1", Score: 0.95, DurationSec: 36000}
+	if ok, reason := evalAll(good, &other); !ok {
+		t.Errorf("distinct title, agreeing runtime: refused (%s)", reason)
+	}
+	// The same pair with an unknown or merely neutral runtime stays refused:
+	// by this rule with a neutral runtime, and by the unknown-runtime overwrite
+	// check (which runs first) when the runtime is unknown.
+	neutral := &database.Book{Title: "03 - Knightfall", SeriesPositionRaw: new("1"), Duration: new(34000)}
+	if ok, reason := evalAll(neutral, &other); ok || reason != ReasonSequenceUnconfirmed {
+		t.Errorf("distinct title, neutral runtime: allowed=%v reason=%q, want sequence_unconfirmed", ok, reason)
+	}
+	unknown := &database.Book{Title: "03 - Knightfall", SeriesPositionRaw: new("1")}
+	if ok, _ := evalAll(unknown, &other); ok {
+		t.Error("distinct title, unknown runtime: applied")
+	}
+	// A title that disagrees with the candidate never applies.
+	wrong := &database.Book{Title: "03 - Dark Victory", SeriesPositionRaw: new("1"), Duration: new(36000)}
+	if ok, _ := evalAll(wrong, &other); ok {
+		t.Error("a different title applied through a set-aside ordinal")
+	}
+}
+
+// Review trace 3 (MAJOR-1): a bundle word is not a tag word, so the number
+// after it is a volume number.
+func TestEvaluate_Trace3_PackNumberIsAVolume(t *testing.T) {
+	cand := metafetch.MetadataCandidate{Title: "Knightfall", Subtitle: "Omnibus 1", Series: "Gotham Years", SeriesPosition: "1", Score: 0.95, DurationSec: 108000}
+	book := &database.Book{Title: "Knightfall Omnibus 2", SeriesPositionRaw: new("1"), Duration: new(108000)}
+	if ok, reason := evalAll(book, &cand); ok || reason != ReasonBookSequenceConflict {
+		t.Fatalf("allowed=%v reason=%q, want book_sequence_conflict", ok, reason)
+	}
+}
+
+// Review trace 4 (MAJOR-2): a span on each side is not the same span. An
+// omnibus of volumes 1-3 is not "Book 4-6", whatever the runtime-neutral legs
+// say; with the runtime unknown or merely neutral the gate keeps refusing.
+func TestEvaluate_Trace4_DifferentSpansRefuse(t *testing.T) {
+	cand := metafetch.MetadataCandidate{Title: "Knightfall", Subtitle: "Book 4-6", Series: "Gotham Years", Score: 0.95, DurationSec: 108000}
+	for runtime, dur := range map[string]*int{"unknown": nil, "neutral": new(101000)} {
+		book := &database.Book{Title: "Knightfall Omnibus", Duration: dur}
+		if ok, reason := evalAll(book, &cand); ok {
+			t.Errorf("runtime %s: an omnibus was given another span's metadata (reason %q)", runtime, reason)
+		}
+	}
+	// The same spans spelled differently on the two sides still match, with a confirming runtime.
+	same := metafetch.MetadataCandidate{Title: "Knightfall", Subtitle: "Books 1 to 3", Series: "Gotham Years", SeriesPosition: "1-3", Score: 0.95, DurationSec: 108000}
+	book := &database.Book{Title: "Knightfall, Book 1-3", SeriesPositionRaw: new("1-3"), Duration: new(108000)}
+	if ok, reason := evalAll(book, &same); !ok {
+		t.Errorf("the same span in two spellings refused: %s", reason)
+	}
+}
+
+// Review trace 5 (MAJOR-4): two editions with the same wording and nothing
+// else to tell them apart. A runtime that is unknown or only neutral is review.
+func TestEvaluate_Trace5_UnnumberedEditionsNeedAnAgreeingRuntime(t *testing.T) {
+	cand := metafetch.MetadataCandidate{Title: "Knightfall Omnibus", Series: "Gotham Years", Score: 0.95, DurationSec: 108000}
+	for runtime, dur := range map[string]*int{"unknown": nil, "neutral": new(101000)} {
+		book := &database.Book{Title: "Knightfall Omnibus", Duration: dur}
+		if ok, reason := evalAll(book, &cand); ok || reason != ReasonCollectedRuntimeUnconfirmed {
+			t.Errorf("runtime %s: allowed=%v reason=%q, want collected_edition_runtime_unconfirmed", runtime, ok, reason)
+		}
+	}
+	book := &database.Book{Title: "Knightfall Omnibus", Duration: new(108000)}
+	if ok, reason := evalAll(book, &cand); !ok {
+		t.Errorf("the same omnibus with an agreeing runtime refused: %s", reason)
+	}
+	// A different collection is kept at the compilation penalty by the scorer
+	// (metafetch TestApplyNonBaseAdjustments_CollectedEdition); this test
+	// injects the score, so it covers only the gate's runtime rule.
+}
+
+// The measured fix of MAJOR-3: "Book 2 - Three Jokers" is volume 2 of a title
+// that starts with a number word; its right single-volume candidate applies.
+func TestEvaluate_BookNumberThenNumberWordTitle(t *testing.T) {
+	book := &database.Book{Title: "Batman, Book 2 - Three Jokers", SeriesPositionRaw: new("2"), Duration: new(36000)}
+	cand := metafetch.MetadataCandidate{Title: "Three Jokers", Series: "Batman", SeriesPosition: "2", Score: 0.95, DurationSec: 36000}
+	if ok, reason := evalAll(book, &cand); !ok {
+		t.Fatalf("right match refused: %s", reason)
+	}
+	// And volume 2 is not given volume 3's metadata.
+	three := cand
+	three.SeriesPosition = "3"
+	if ok, reason := evalAll(book, &three); ok || reason != ReasonSequenceMismatch {
+		t.Fatalf("volume 3 applied to volume 2: allowed=%v reason=%q", ok, reason)
+	}
+}
+
+// A collected edition refuses without a confirming runtime, whichever side it
+// is on, and a single volume is not affected by the rule.
+func TestEvaluate_CollectedRuntimeRuleIsOneSidedOrBoth(t *testing.T) {
+	// Book is a box set: the candidate carries the same range (sequence passes).
+	same := metafetch.MetadataCandidate{Title: "Knightfall", Subtitle: "Books 1-3", Series: "Gotham Years", SeriesPosition: "1-3", Score: 0.95, DurationSec: 108000}
+	for runtime, dur := range map[string]*int{"unknown": nil, "neutral": new(101000)} {
+		book := &database.Book{Title: "Knightfall, Books 1-3", Duration: dur}
+		if ok, reason := evalAll(book, &same); ok || reason != ReasonCollectedRuntimeUnconfirmed {
+			t.Errorf("runtime %s: allowed=%v reason=%q, want collected_edition_runtime_unconfirmed", runtime, ok, reason)
+		}
+	}
+	// A single volume against a single volume has no such rule: an unknown runtime still applies it
+	// when nothing is overwritten and two other signals agree.
+	single := &database.Book{Title: "Hush", SeriesPositionRaw: new("8"), Duration: new(36000)}
+	sc := metafetch.MetadataCandidate{Title: "Hush", Series: "Gotham Years", SeriesPosition: "8", Score: 0.95, DurationSec: 36000}
+	if ok, reason := evalAll(single, &sc); !ok {
+		t.Errorf("a single volume refused: %s", reason)
+	}
+}
+
+// Both new refusals are structural and an owner review may lift them.
+func TestNewRefusals_OwnerReviewOverridableAndStructural(t *testing.T) {
+	for _, reason := range []string{ReasonSequenceUnconfirmed, ReasonCollectedRuntimeUnconfirmed} {
+		if !StructuralRefusal(reason) {
+			t.Errorf("%s is not structural", reason)
+		}
+		v := Verdict{Reason: reason}
+		if !v.OwnerReviewOverridable() {
+			t.Errorf("%s is not owner-review overridable", reason)
+		}
+		if got := v.RefusingReasons(); len(got) != 1 || got[0] != reason {
+			t.Errorf("RefusingReasons for %s = %v", reason, got)
+		}
+	}
+}
+
+// A collected edition that shows only in the candidate's series position field
+// (the partial-book check reads title and subtitle, not the position) still
+// needs an agreeing runtime.
+func TestEvaluate_CollectedPositionOnlyOnCandidate(t *testing.T) {
+	cand := metafetch.MetadataCandidate{Title: "Knightfall", Series: "Gotham Years", SeriesPosition: "1-3", Score: 0.95, DurationSec: 108000}
+	book := &database.Book{Title: "Knightfall", Duration: new(101000)}
+	if ok, reason := evalAll(book, &cand); ok || reason != ReasonCollectedRuntimeUnconfirmed {
+		t.Fatalf("neutral runtime: allowed=%v reason=%q, want collected_edition_runtime_unconfirmed", ok, reason)
+	}
+}
+
+// A stored title with no words of its own (only stop words and numbers) names
+// no volume, so it never corroborates a set-aside number.
+func TestTitleIsSeriesWords(t *testing.T) {
+	cand := &metafetch.MetadataCandidate{Series: "Gotham Years"}
+	cases := []struct {
+		title, series string
+		want          bool
+	}{
+		{"The", "", true},
+		{"08", "", true},
+		{"Gotham Years", "", true},
+		{"Gotham", "Gotham Years", true},
+		{"Year One", "Gotham Years", false},
+		{"The Long Halloween", "Gotham Years", false},
+	}
+	for _, c := range cases {
+		b := &database.Book{Title: c.title}
+		if c.series != "" {
+			b.Series = &database.Series{Name: c.series}
+		}
+		if got := titleIsSeriesWords(b, cand); got != c.want {
+			t.Errorf("titleIsSeriesWords(%q, series %q) = %v, want %v", c.title, c.series, got, c.want)
+		}
 	}
 }

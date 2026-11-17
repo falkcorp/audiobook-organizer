@@ -1,5 +1,5 @@
 // file: internal/metafetch/browse_search.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 5bc1837f-3fbc-42c0-ad1c-7faf383b5983
 // last-edited: 2026-11-16
 //
@@ -156,7 +156,7 @@ func (mfs *Service) BrowseSearch(ctx context.Context, bookID string, q BrowseQue
 		if !seen.add(a.r) {
 			continue
 		}
-		c := scoreBrowseAnswer(a.r, a.source, title, words, author, bookNarrator, bookRuntime)
+		c := scoreBrowseAnswer(a.r, a.source, title, book.Title, words, author, bookNarrator, bookRuntime)
 		c.FromCatalog = a.fromCatalog
 		out = append(out, c)
 	}
@@ -216,14 +216,17 @@ func (mfs *Service) browseProviders(ctx context.Context, title, author string) (
 // scoreBrowseAnswer scores one answer against what was typed with the
 // existing scorer steps: the title F1 (ScoreOneResultWithBreakdown) when a
 // title was typed, else a flat base; then author, narrator and runtime
-// agreement. Nothing is dropped for a low score.
-func scoreBrowseAnswer(r metadata.BookMetadata, source, title string, words map[string]bool, author, bookNarrator string, bookRuntime localRuntime) MetadataCandidate {
+// agreement. Nothing is dropped for a low score. storedBookTitle is the stored
+// book's own title: with it the compilation penalty is lifted for the very
+// collected edition the book is (SameCollectedEdition), so this view and the
+// per-book search show one score for one omnibus.
+func scoreBrowseAnswer(r metadata.BookMetadata, source, title, storedBookTitle string, words map[string]bool, author, bookNarrator string, bookRuntime localRuntime) MetadataCandidate {
 	var rec *scoreRecorder
 	if title == "" {
 		rec = newScoreRecorder(browseNoTitleBase, "Author search",
 			"No title was typed, so every result starts level; author, narrator and runtime agreement with the book order them.")
 	} else {
-		s, bd := ScoreOneResultWithBreakdown(r, words, "")
+		s, bd := ScoreOneResultWithBreakdown(r, words, storedBookTitle)
 		rec = recorderFrom(s, &bd)
 	}
 	if author != "" {

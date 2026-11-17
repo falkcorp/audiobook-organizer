@@ -1,7 +1,7 @@
 // file: internal/applygate/refusal.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f3b7bf9e-36b3-4b4a-a634-beaf4cf1a2fa
-// last-edited: 2026-10-30
+// last-edited: 2026-11-16
 
 package applygate
 
@@ -50,6 +50,7 @@ var structuralRefusals = map[string]struct{}{
 	ReasonCandidateSequenceConflict:  {},
 	ReasonSeriesNumberLost:           {},
 	ReasonSeriesRenamed:              {},
+	ReasonSequenceUnconfirmed:        {},
 	// Evidence leg.
 	ReasonRuntimeMismatch:         {},
 	ReasonRuntimeUnknownOverwrite: {},
@@ -59,6 +60,8 @@ var structuralRefusals = map[string]struct{}{
 	ReasonNarratorMismatch:        {},
 	ReasonASINConflict:            {},
 	ReasonInsufficientEvidence:    {},
+	// Combined legs (unattended.go).
+	ReasonCollectedRuntimeUnconfirmed: {},
 	// Candidate shape.
 	ReasonCastInAuthor: {},
 }

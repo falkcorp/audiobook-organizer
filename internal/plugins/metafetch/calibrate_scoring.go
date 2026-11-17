@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/calibrate_scoring.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 4e1c8b2a-6d90-4f37-9b1a-2c3d4e5f6a70
 // last-edited: 2026-11-16
 
@@ -493,7 +493,11 @@ func transcriptionBoost(score float64, f candFields, th transcriptionHints, k sw
 // package comment): core (pinned) → F1 floor → duration → transcription →
 // series-number. Every swept knob participates so a sweep moves ranks.
 func rankScore(f candFields, book *database.Book, rt database.BookRuntime, searchWords map[string]bool, hints transcriptionHints, k sweepKnobs) float64 {
-	score := scoreCore(f, searchWords, book.Title, k)
+	bookTitle := ""
+	if book != nil {
+		bookTitle = book.Title
+	}
+	score := scoreCore(f, searchWords, bookTitle, k)
 	if score < k.F1MinScore {
 		// Below the F1 floor a candidate is disqualified (mirrors the min-score
 		// gate the production f1 tier applies before ranking).

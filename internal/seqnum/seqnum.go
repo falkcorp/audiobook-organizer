@@ -1,5 +1,5 @@
 // file: internal/seqnum/seqnum.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5b0e7c2a-9d41-4f6e-8a13-c7d2e4f90b61
 // last-edited: 2026-11-16
 
@@ -151,6 +151,12 @@ func Parse(s string) (Number, bool) {
 	if n, ok := ParseRange(c); ok {
 		return n, true
 	}
+	return parseSingle(c)
+}
+
+// parseSingle is Parse without the range reading: the one number a title,
+// file or folder name carries, whatever its collected-edition wording.
+func parseSingle(c string) (Number, bool) {
 	if m := reMarker.FindStringSubmatch(c); m != nil {
 		if n, ok := toNumber(m[1], "marker"); ok {
 			return n, true
@@ -245,6 +251,31 @@ func ParsePosition(s string) (Number, bool) {
 		return n, true
 	}
 	n, ok := Parse(s)
+	if ok {
+		n.Form = "position"
+	}
+	return n, ok
+}
+
+// ParsePositionNoRange is ParsePosition for a caller that stores the result in
+// a numeric field and must keep one volume's meaning: it never reads a range
+// or a list, so "1 & 2" is the single number it always read (2), not the span
+// 1-2. catalog.ParseSequence uses it for what its own dash regex does not
+// match, which keeps every stored sequence bound what it was before ranges
+// existed.
+func ParsePositionNoRange(s string) (Number, bool) {
+	t := strings.ToLower(strings.TrimSpace(s))
+	if t == "" {
+		return Number{}, false
+	}
+	if rePlainNumber.MatchString(t) || reRomanOnly.MatchString(t) {
+		return toNumber(t, "position")
+	}
+	c := clean(s)
+	if c == "" {
+		return Number{}, false
+	}
+	n, ok := parseSingle(c)
 	if ok {
 		n.Form = "position"
 	}

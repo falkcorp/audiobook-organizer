@@ -1,5 +1,5 @@
 // file: internal/metafetch/collected_edition.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6c1f8e24-9b07-4d53-a8e1-3f7d2b50c486
 // last-edited: 2026-11-16
 
@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/falkcorp/audiobook-organizer/internal/seqnum"
 )
@@ -26,10 +27,15 @@ import (
 //   - both state a range (seqnum.ParseRange on a title or subtitle, a series
 //     position field): the same range, nothing else;
 //   - exactly one states a range: no ("Books 1-3" is not "Omnibus");
-//   - neither does: both carry the same collected-edition wording (an omnibus
-//     is an omnibus, a box set a box set) and neither carries a volume number,
-//     or both carry the same one ("Publisher's Pack 2" is not "Publisher's
+//   - neither does: they carry the same collected-edition wording and no
+//     volume number or the same one ("Publisher's Pack 2" is not "Publisher's
 //     Pack 3").
+//
+// Whichever branch applies, the titles must also be EQUAL once the number and
+// range spelling is set aside (sameEditionName: the candidate's title, or its
+// title and subtitle, against the stored title). Sharing a wording class or a
+// range is not enough: two omnibuses of one author share "omnibus" and little
+// else, and "Books 1-3" of one series is not "Books 1-3" of another.
 //
 // The wording is matched on word boundaries, never as a substring, so
 // "recollection" is not "collection". The book side is the STORED title, not a
@@ -114,6 +120,9 @@ func SameCollectedEdition(bookTitle, candTitle, candSubtitle, candSeriesPosition
 	if strings.TrimSpace(bookTitle) == "" {
 		return false
 	}
+	if !sameEditionName(bookTitle, candTitle, candSubtitle) {
+		return false
+	}
 	b := describeCollected(bookTitle, "", "")
 	c := describeCollected(candTitle, candSubtitle, candSeriesPosition)
 	if b.span != nil || c.span != nil {
@@ -129,4 +138,48 @@ func SameCollectedEdition(bookTitle, candTitle, candSubtitle, candSeriesPosition
 		return seqnum.Equal(*b.single, *c.single)
 	}
 	return false
+}
+
+// rangeSpelling are the words and connectors a range or volume number is
+// spelled with; they do not name the edition.
+var rangeSpelling = map[string]bool{
+	"book": true, "books": true, "bk": true, "bks": true, "volume": true, "volumes": true,
+	"vol": true, "vols": true, "to": true, "through": true, "thru": true, "and": true,
+}
+
+// editionName is a title for equality: lowercase words with every number and
+// every range-spelling word dropped. "Knightfall, Books 1-3" and "Knightfall"
+// + "Vols 1 to 3" name the same edition; "Knightfall Omnibus Edition" does not
+// name "Knightfall Omnibus".
+func editionName(s string) string {
+	var out []string
+	for _, w := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		if rangeSpelling[w] || strings.IndexFunc(w, unicode.IsDigit) >= 0 {
+			continue
+		}
+		out = append(out, w)
+	}
+	return strings.Join(out, " ")
+}
+
+// sameEditionName reports whether the stored title names the candidate's
+// edition: equal to the candidate's title, or to its title and subtitle.
+func sameEditionName(bookTitle, candTitle, candSubtitle string) bool {
+	bn := editionName(bookTitle)
+	if bn == "" {
+		return false
+	}
+	return bn == editionName(candTitle) || bn == editionName(candTitle+" "+candSubtitle)
+}
+
+// IsCollectedEdition reports whether a title, subtitle and series position
+// describe a collected edition: a stated range ("Books 1-3", position "1-3"),
+// collected-edition wording (omnibus, box set, publisher's pack, collection,
+// anthology, "3 books") or a title isCompilation flags. The bulk-apply gate
+// asks it of both sides to decide which pairs need a confirming runtime.
+func IsCollectedEdition(title, subtitle, position string) bool {
+	e := describeCollected(title, subtitle, position)
+	return e.span != nil || len(e.words) > 0 || isCompilation(title) || isCompilation(subtitle)
 }
