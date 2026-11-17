@@ -1,6 +1,7 @@
 - [ ] **SERIES-DENUMBER-REPAIRS-TAB** Surface the series de-numbering plans that are not
-      applied unattended (the low tier, the plans demoted by a shape check, and the books held
-      back for a position conflict) in the Repairs tab, so an owner can approve them one at a
+      applied unattended (the low tier, the plans demoted by the name grammar, the books held
+      back as position_uncorroborated, series_locked, base_under_another_author or for a
+      position conflict) in the Repairs tab, so an owner can approve them one at a
       time. Design: a fixer whose trial lists one numbered series with its books, the target base
       and the position each book would take, and whose apply runs the same per-book move as the
       operation (`internal/seriesdenumber.Decide` for the position check, `sdn.MoveRows` for the

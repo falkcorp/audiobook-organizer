@@ -1,5 +1,5 @@
 // file: internal/seriesdenumber/grammar_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7ebf2f9c-4978-464b-9c4c-c768027dd6ce
 // last-edited: 2026-11-17
 
@@ -86,6 +86,11 @@ func TestParseName_Holds(t *testing.T) {
 		{"Gotham Knights & 3", CodeBaseEndsConnector},
 		{"Gotham Knights and 3", CodeBaseEndsConnector},
 		{"Gotham Knights to 3", CodeBaseEndsConnector},
+		// A base made only of structural words is a slice of a file, not a series
+		// (the words the part/format list and the volume list do not already hold).
+		{"Chapters 03", CodeStructuralBase},
+		{"Episodes 04", CodeStructuralBase},
+		{"Chapters Episodes 03", CodeStructuralBase},
 		// B3: a decimal point.
 		{"Gotham Knights Book .5", CodeFractionalNumber},
 		{"Gotham Knights #.5", CodeFractionalNumber},
