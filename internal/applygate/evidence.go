@@ -1,5 +1,5 @@
 // file: internal/applygate/evidence.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
 // last-edited: 2026-11-17
 
@@ -359,28 +359,31 @@ func checkAuthorPath(book *database.Book, authors Authors, c *metafetch.Metadata
 }
 
 // checkTitle compares the candidate's title with the book's, by the one rule
-// in titlecompare.go: AGREE when a whole form of the candidate equals a whole
-// form of the book (the declared fields joined, never trimmed; the book's file
-// and folder names are forms of the book too), DISAGREE when the two TITLE
-// fields conflict (a shared segment with a segment of its own on each side, or
-// the same words with different numbers), and NEUTRAL otherwise: one title
-// holds words or a number the other lacks. A neutral title confirms nothing, and
-// EvidenceVerdict.tally applies it only with a runtime that agrees.
+// in titlecompare.go and titleforms.go, which it applies in the order the
+// PRECEDENCE comment in the body gives: AGREE when a whole form of the
+// candidate equals a whole form of the book (the declared fields joined, never
+// trimmed; checked first); DISAGREE when the two TITLE fields conflict (a
+// shared segment with a segment of its own on each side, or numbers of the same
+// kind that differ); AGREE through a file or folder name only when the stored
+// title says nothing (blank or a placeholder); and NEUTRAL otherwise: one title
+// holds words or a number the other lacks. A neutral title confirms nothing,
+// and EvidenceVerdict.tally applies it only with a runtime that agrees.
 //
 // "Hush: Part 1" and "Hush: Part 2", or "Batman: Dark Victory" and "Batman:
 // The Long Halloween", share a storyline or franchise name and are different
 // books; a series name, a credited name, a path or a year never makes a pair
-// agree or disagree (an earlier version excused them, and each excuse was a way
-// for two books to agree). A candidate title that equals a SERIES name ("Star
-// Wars" for "A New Dawn: Star Wars") is not a title, and neither is a stored
-// title that equals one ("Batman" for "Batman: Dark Victory" in the series
-// "Batman"): both are the 2026-09-13 "Star Wars" at 233% row, from either side,
-// and block unless a whole form agrees.
+// disagree, and only the declared forms in titleforms.go (a series, a position,
+// a credit, each in a fixed role) make one agree. A candidate title that equals
+// a SERIES name ("Star Wars" for "A New Dawn: Star Wars") is not a title, and
+// neither is a stored title that equals one ("Batman" for "Batman: Dark
+// Victory" in the series "Batman"): both are the 2026-09-13 "Star Wars" at 233%
+// row, from either side, and block unless a whole form agrees.
 //
-// A conflict between the two title fields blocks even when a file name agrees:
-// the stored title and the file name disagreeing with each other is not
-// confirmation. A path never causes a conflict. A pair with nothing in common
-// blocks only when no form agrees.
+// Because agreement is decided first, a candidate form that is built from a
+// credit or a position can make a pair AGREE that the two title fields alone
+// would call a conflict; that is the one place the rule trusts a candidate's
+// own other fields, and the role tags in titleForm keep a credit from standing
+// for a series. A path never causes a conflict and never overrules one.
 func checkTitle(book *database.Book, c *metafetch.MetadataCandidate) CheckResult {
 	r := CheckResult{Name: "title"}
 	seriesNames := titleSeriesNames(book, c)

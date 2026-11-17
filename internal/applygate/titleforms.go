@@ -1,5 +1,5 @@
 // file: internal/applygate/titleforms.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5c1d7e93-2b48-4a0f-9e36-71d4b8a2c605
 // last-edited: 2026-11-17
 
@@ -33,10 +33,14 @@ import (
 //     a subtitle: the candidate also has the forms without it. A series name
 //     WITHOUT the declared position is never dropped, and neither is a
 //     statement on a self-titled candidate (title = series name).
-//   - the series name, the position (bare or behind a closed marker) and the
-//     title in the other usual orders: "S N T", "T S N", "S N T U", "U N T".
-//   - the title beside a declared author or narrator: "T A", "A T", "S N T A",
-//     "A S N T".
+//   - for a candidate with NO real subtitle (none, or only a closed
+//     non-subtitle): the series name, the position (bare or behind a closed
+//     marker) and the title in the other usual orders, "S N T" and "T S N";
+//     and the title beside a declared author or narrator, "T X", "X T",
+//     "S N T X" and "X S N T" (X is the credit).
+//   - for a candidate WITH a real subtitle U: only the forms that say U,
+//     "S N T U" and "U N T" (N is the position, bare or behind a closed marker).
+//     See "A SUBTITLE IS NEVER LEFT OUT" below.
 //
 // ROLES. A form records which declared fields it is built from where that
 // matters (titleForm). Equal text is not equal meaning: a candidate's title
@@ -47,9 +51,9 @@ import (
 // the credit and position forms.
 //
 // A SUBTITLE IS NEVER LEFT OUT. A candidate that carries a real subtitle offers
-// only the forms that say it. The forms that omit the subtitle ("T S N", "T A",
-// "A T", "S N T", "S N T A", "A S N T") are offered only when the candidate has
-// none, once the closed non-subtitles (an edition phrase, its own series
+// only the forms that say it. The forms that omit the subtitle ("S N T",
+// "T S N", "T X", "X T", "S N T X", "X S N T") are offered only when the
+// candidate has none, once the closed non-subtitles (an edition phrase, its own series
 // statement) are dropped. Without this, words added to a candidate as a subtitle
 // could still reach AGREE through a form that leaves them out.
 

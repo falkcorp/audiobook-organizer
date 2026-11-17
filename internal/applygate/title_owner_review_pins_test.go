@@ -20,7 +20,7 @@ import (
 // tally in evidence.go). Whether that is enough for these shapes is the owner's
 // call: the replay found that 49 of the 61 applies that depend on a neutral
 // title are of this kind, so changing the rule changes most of what applies
-// that depends on a neutral title (todo.d/20261117_applygate_neutral_title_review.md).
+// that depends on a neutral title (todo.d/2026-11-17-applygate-neutral-title-review.md).
 //
 // These tests are not a claim that the outcome is right. They exist so that the
 // outcome cannot change by accident: if the owner decides one of these shapes
