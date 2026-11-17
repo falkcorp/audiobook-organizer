@@ -1,5 +1,5 @@
 // file: internal/dedup/merge_journaled.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 1d7c3e58-4a09-42b6-8f31-5c0e9b247a63
 // last-edited: 2026-11-17
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -329,6 +330,13 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 	// nothing) and leave an undo that skips that side. So a side that cannot be
 	// resolved leaves its row provisional, with its floors, and is logged.
 	winnerTS, winnerErr := de.preMergeSnapshotNanos(winnerID, baselines[winnerID])
+	if winnerErr != nil {
+		// Every row of this merge needs the winner's snapshot, so none can be
+		// finalized: say so once, naming them all, instead of once per row.
+		journaledMergeLog.Error("merge-journaled: cannot read the snapshots of winner %s to finalize the journal rows of this merge (candidate %d); the rows %s stay provisional and keep pinning the snapshots, UnmergeAuto will refuse them: %v",
+			logger.SanitizeLogValue(winnerID), candidateID, logger.SanitizeLogValue(strings.Join(journalKeys, ", ")), winnerErr)
+		return result, journalKeys, nil
+	}
 	rowOf := make(map[string]int, len(provisional)) // loser id -> its provisional row
 	for i, row := range provisional {
 		rowOf[row.LoserID] = i
@@ -348,11 +356,6 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 			continue
 		}
 		row := provisional[idx]
-		if winnerErr != nil {
-			journaledMergeLog.Error("merge-journaled: cannot read the snapshots of winner %s to finalize journal row %s (candidate %d); the row stays provisional and keeps pinning the snapshots, UnmergeAuto will refuse it: %v",
-				logger.SanitizeLogValue(winnerID), logger.SanitizeLogValue(row.Key), candidateID, winnerErr)
-			continue
-		}
 		loserTS, loserErr := de.preMergeSnapshotNanos(loserID, baselines[loserID])
 		if loserErr != nil {
 			journaledMergeLog.Error("merge-journaled: cannot read the snapshots of loser %s to finalize journal row %s (candidate %d); the row stays provisional and keeps pinning the snapshots, UnmergeAuto will refuse it: %v",

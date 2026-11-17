@@ -1,5 +1,5 @@
 // file: internal/books/store/dedup_automerge_journal_rows_test.go
-// version: 1.1.0
+// version: 1.0.0
 // guid: 6a3d8e15-c2f7-49b0-8d14-e5b09a7c3f62
 // last-edited: 2026-11-17
 
@@ -210,4 +210,94 @@ func TestOpenAutoMergeLosers_AClosedRowStillHoldsItsLoser(t *testing.T) {
 	open, err = f.es.OpenAutoMergeLosers()
 	require.NoError(t, err)
 	require.NotContains(t, open.Losers, "robin", "an undone row releases it")
+}
+
+// A live provisional row holds EVERY book it lists from the trash purge, not only
+// its own loser. Its LoserID is only a prediction (the row's winner is the
+// PREDICTED winner), so when the prediction was wrong and the row could not be
+// finalized, the predicted winner, a real loser, is named by no row's LoserID and
+// only the participant list reaches it.
+func TestOpenAutoMergeLosers_ALiveProvisionalRowHoldsEveryParticipant(t *testing.T) {
+	f := newPinFixture(t)
+	key, created, err := f.es.PutAutoMergeJournalEntryIfAbsent(AutoMergeJournalEntry{
+		WinnerID: "batman", LoserID: "nightwing", MergedAt: 400, Provisional: true, RowID: "r",
+		BaselinesRecorded: true,
+		Participants: []AutoMergeJournalParticipant{
+			{BookID: "batman"}, {BookID: "nightwing"}, {BookID: "robin"},
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, created)
+
+	open, err := f.es.OpenAutoMergeLosers()
+	require.NoError(t, err)
+	for _, id := range []string{"batman", "nightwing", "robin"} {
+		require.Equal(t, key, open.Losers[id], "%s is a participant of a live provisional row", id)
+	}
+	require.NotContains(t, open.Winners, "batman", "a provisional row still does not hold a winner as a winner")
+}
+
+// Only a LIVE provisional row widens the hold: a closed one describes a merge that
+// never wrote, so its other participants were never touched by it; an undone one
+// releases everything; a finalized one names its two books exactly.
+func TestOpenAutoMergeLosers_OnlyALiveProvisionalRowHoldsItsOtherParticipants(t *testing.T) {
+	parts := []AutoMergeJournalParticipant{{BookID: "batman"}, {BookID: "robin"}, {BookID: "batgirl"}}
+	for name, tc := range map[string]struct {
+		entry AutoMergeJournalEntry
+		holds bool
+	}{
+		"live provisional": {AutoMergeJournalEntry{Provisional: true, Participants: parts}, true},
+		"closed":           {AutoMergeJournalEntry{Provisional: true, AbortedAt: 7, Participants: parts}, false},
+		"undone":           {AutoMergeJournalEntry{Provisional: true, UndoneAt: 7, Participants: parts}, false},
+		"finalized":        {AutoMergeJournalEntry{Participants: parts}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newPinFixture(t)
+			e := tc.entry
+			e.WinnerID, e.LoserID, e.MergedAt = "batman", "robin", 500
+			_, err := f.es.PutAutoMergeJournalEntry(e)
+			require.NoError(t, err)
+			open, err := f.es.OpenAutoMergeLosers()
+			require.NoError(t, err)
+			if tc.holds {
+				require.Contains(t, open.Losers, "batgirl")
+			} else {
+				require.NotContains(t, open.Losers, "batgirl")
+			}
+			if name != "undone" {
+				require.Contains(t, open.Losers, "robin", "its own loser is held as it always was")
+			}
+		})
+	}
+}
+
+// A row with no participant list (written before it existed) holds its loser and
+// nothing else, as it always did.
+func TestOpenAutoMergeLosers_AProvisionalRowWithoutParticipantsHoldsOnlyItsLoser(t *testing.T) {
+	f := newPinFixture(t)
+	old := `{"winner_id":"batman","loser_id":"robin","merged_at":1,"provisional":true,"baselines_recorded":true}`
+	require.NoError(t, f.s.SetRaw(dedupAutoMergeJournalPfx+"0000000000000001", []byte(old)))
+
+	open, err := f.es.OpenAutoMergeLosers()
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"robin": dedupAutoMergeJournalPfx + "0000000000000001"}, open.Losers)
+}
+
+// When one book is both a row's own loser and another live provisional row's
+// participant, the hold names the row that has it as its LOSER, whichever row the
+// scan meets first.
+func TestOpenAutoMergeLosers_ALoserKeyIsNeverReplacedByAParticipantKey(t *testing.T) {
+	f := newPinFixture(t)
+	parts := []AutoMergeJournalParticipant{{BookID: "batman"}, {BookID: "robin"}, {BookID: "batgirl"}}
+	for _, e := range []AutoMergeJournalEntry{
+		{WinnerID: "batman", LoserID: "robin", MergedAt: 600, Provisional: true, Participants: parts},
+		{WinnerID: "batman", LoserID: "batgirl", MergedAt: 601, Provisional: true, Participants: parts},
+	} {
+		_, err := f.es.PutAutoMergeJournalEntry(e)
+		require.NoError(t, err)
+	}
+	open, err := f.es.OpenAutoMergeLosers()
+	require.NoError(t, err)
+	require.Equal(t, string(autoMergeJournalKey(601)), open.Losers["batgirl"])
+	require.Equal(t, string(autoMergeJournalKey(600)), open.Losers["robin"], "the later row lists robin only as a participant")
 }
