@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_resources.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f9b6d21-5a84-4e07-b1c3-7d2e08a46f59
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package maintenance
 
@@ -19,12 +19,6 @@ import (
 // spy, every Effects test and F5-18's gated writers read a row of it by method
 // name.
 var t6WriterResources = resources.Table()
-
-// t6RowsUnion is the sorted, de-duplicated union of the given rows, as a new
-// non-nil slice (resources.Union).
-func t6RowsUnion(rows ...[]ops.Resource) []ops.Resource {
-	return resources.Union(rows...)
-}
 
 // t6WriterView is the rows of t6WriterResources for the methods of the given
 // writer interfaces: a group's view of the shared table. rename sends a method

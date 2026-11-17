@@ -1,12 +1,13 @@
 // file: internal/plugins/maintenance/kinds_resources_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: bcdb3688-95b2-48e0-8c53-bb880996284f
-// last-edited: 2026-11-15
+// last-edited: 2026-11-17
 
 package maintenance
 
 import (
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance/resources"
 
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
@@ -25,5 +26,5 @@ func t6RowsOf(methods ...string) []ops.Resource {
 		}
 		rows = append(rows, row)
 	}
-	return t6RowsUnion(rows...)
+	return resources.Union(rows...)
 }

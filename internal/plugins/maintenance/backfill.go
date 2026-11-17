@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/backfill.go
-// version: 1.10.7
+// version: 1.10.8
 // guid: f2a3b4c5-d6e7-8901-5678-123456789012
-// last-edited: 2026-11-15
+// last-edited: 2026-11-17
 
 package maintenance
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance/resources"
 	"log/slog"
 	"time"
 
@@ -523,7 +524,7 @@ func t6g2MalformedM4BTranscodeMeta() t6g2Meta {
 		// (quarantine_after): QuarantineBook calls ModifyBook, whose row also writes
 		// metadata_cache and indexes, so the declaration is the union of the two shared
 		// rows of t6WriterResources (kinds_resources.go), not a retyped list.
-		Effects: tasks.Writes(t6g2Res(t6RowsUnion(t6WriterResources["TranscodeMalformedM4BFiles"],
+		Effects: tasks.Writes(t6g2Res(resources.Union(t6WriterResources["TranscodeMalformedM4BFiles"],
 			t6WriterResources["QuarantineKnownBadFiles"])...)...),
 		Resume:          tasks.ResumeAsk,
 		Priority:        tasks.PriorityLow,
