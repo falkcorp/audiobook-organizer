@@ -1,5 +1,5 @@
 // file: core/internal/healthhttp/routes_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e6dcf7f8-396a-47a8-b1bd-154ed75f5597
 // last-edited: 2026-11-16
 
@@ -387,7 +387,7 @@ func TestHealthRoute_DetailRedactedAndShaped(t *testing.T) {
 
 // TestHealthRoute_DetailLocationsAreWiped (m1): component Detail is free text
 // that a probe writes from an error, so it passes the same location rule as the
-// bundle. A route given no Sanitize is fail-closed (every location "<path>"); one
+// bundle. A route given no Roots is fail-closed (every location "<path>"); one
 // given the library sanitizer names a root.
 func TestHealthRoute_DetailLocationsAreWiped(t *testing.T) {
 	cases := []struct{ detail, bare, rooted string }{
@@ -396,7 +396,7 @@ func TestHealthRoute_DetailLocationsAreWiped(t *testing.T) {
 		{`stat C:\Users\Harleen Quinzel\Hush: The system cannot find the file specified.`, "stat <path>: The system cannot find the file specified.", "stat <path>: The system cannot find the file specified."},
 		{"smb://nas.example/home/selina/Hush", "<path>", "<path>"},
 		{"CGO_CFLAGS=-I/Users/selina/include", "<path>", "<path>"},
-		{"open /srv/lib/Frank Miller/Hush.m4b: permission denied", "open <path>: permission denied", "open <root:lib>: permission denied"},
+		{"open /srv/lib/Jim Gordon/Hush.m4b: permission denied", "open <path>: permission denied", "open <root:lib>: permission denied"},
 		{"relay to https://oswald:" + hhSecretPw + "@penguin.example/Users/selina/x failed", "", ""},
 		{"queue is full", "queue is full", "queue is full"},
 	}
@@ -409,7 +409,7 @@ func TestHealthRoute_DetailLocationsAreWiped(t *testing.T) {
 			}
 			d.Health = hhRegistry{snap: health.Snapshot{Ready: true, Live: true, Components: comps}}
 			if mode == "rooted" {
-				d.Sanitize = diagnostics.NewSanitizer([]diagnostics.PathRoot{{Name: "lib", Path: "/srv/lib"}}).Text
+				d.Roots = []diagnostics.PathRoot{{Name: "lib", Path: "/srv/lib"}}
 			}
 		})
 		rep := r.do(hhAs(hhBruce, auth.MethodAPIKey, manage), "GET", "/health", "", "")
@@ -426,7 +426,7 @@ func TestHealthRoute_DetailLocationsAreWiped(t *testing.T) {
 				want = c.rooted
 			}
 			d := got.Components[i].Detail
-			for _, leak := range []string{"selina", "Harvey", "Dent", "Harleen", "Quinzel", "Hush", "Frank", "Miller", "Macintosh", hhSecretPw} {
+			for _, leak := range []string{"selina", "Harvey", "Dent", "Harleen", "Quinzel", "Hush", "Jim", "Gordon", "Macintosh", hhSecretPw} {
 				if strings.Contains(d, leak) {
 					t.Errorf("%s: Detail %q holds %q", mode, d, leak)
 				}

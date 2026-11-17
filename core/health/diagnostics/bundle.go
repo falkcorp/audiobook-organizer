@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/bundle.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: effb9b73-b53b-433b-92a8-5f9cb806d08d
 // last-edited: 2026-11-16
 
@@ -545,9 +545,11 @@ func validSectionName(n string) bool {
 
 // validEntryName reports whether name is a relative path with no "..", no
 // backslash, no NUL and no empty segment: a zip entry that cannot climb out of
-// its section directory (zip slip). A name a section writes must also pass
-// Sanitizer.Text unchanged (sectionWriter.entry), which refuses a subdirectory
-// and every spelling of a location.
+// its section directory (zip slip). A name a section writes (sectionWriter.entry)
+// is also a single path element and must pass Sanitizer.Text unchanged: the
+// second check is about the spellings of a location, not about what a name
+// means, so a name such as "Batman Hush.txt" passes it (nothing in a name tells
+// a title from a word, and no producer names a file after a book).
 func validEntryName(name string) bool {
 	return fs.ValidPath(name) && name != "." && !strings.ContainsAny(name, "\\\x00")
 }
@@ -564,14 +566,16 @@ func (w *sectionWriter) entry(name string) (*countingEntry, error) {
 	if w.open {
 		return nil, errors.New("diagnostics: finish the open JSONL file before starting another")
 	}
-	if !validEntryName(name) {
-		return nil, fmt.Errorf("diagnostics: file name %q is not a plain relative path", name)
+	if !validEntryName(name) || strings.Contains(name, "/") {
+		// One element: "fork/exec" and an error text such as "input/output" pass
+		// Sanitizer.Text unchanged and would otherwise make a subdirectory.
+		return nil, errors.New("diagnostics: file name is not a single plain element")
 	}
 	if w.st.san.Text(name) != name {
 		// An entry name is bytes of the bundle: one the sanitizer would change
-		// names a location (or has a separator). The error text is sanitized
-		// when it is recorded, so the name does not leak through it.
-		return nil, errors.New("diagnostics: file name names a location, or holds a separator the sanitizer would wipe")
+		// spells a location. The error text is sanitized when it is recorded, so
+		// the name does not leak through it.
+		return nil, errors.New("diagnostics: file name spells a location the sanitizer would wipe")
 	}
 	path := w.section + "/" + name
 	if w.st.written[path] {
