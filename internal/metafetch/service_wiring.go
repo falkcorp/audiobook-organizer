@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_wiring.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 571bfbf4-238b-49cb-a6d8-b302921dd1c4
 // last-edited: 2026-11-17
 
@@ -43,12 +43,16 @@ func (mfs *Service) SetASINLookupOverride(fn func(ctx context.Context, providerI
 // fn, and returns the function that puts the previous one back. Production code
 // never calls it. An exported setter for the same reason as
 // SetASINLookupOverride: internal/server's tests drive the real selection and
-// cannot see this package's _test.go files. The clock is process-wide, so a test
-// that sets it must not run in parallel with another that reads it.
+// cannot see this package's _test.go files. The clock is process-wide (its reads
+// and writes are atomic), so a test that sets it must not run in parallel with
+// another that depends on the real time.
 func SetClockForTesting(fn func() time.Time) (restore func()) {
-	prev := nowUTC
-	nowUTC = fn
-	return func() { nowUTC = prev }
+	var p *func() time.Time
+	if fn != nil {
+		p = &fn
+	}
+	prev := nowClock.Swap(p)
+	return func() { nowClock.Store(prev) }
 }
 
 // SetActivityService sets the activity service for dual-writing to the unified activity log.

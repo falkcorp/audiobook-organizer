@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/rowState.test.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: a80c5f34-7d16-4e92-b503-6c1f9a27e408
 // last-edited: 2026-11-17
 
@@ -234,7 +234,7 @@ describe('owedSourceChips', () => {
     expect(rest).toEqual([]);
     expect(chip.kind).toBe('gave_up');
     expect(chip.label).toBe('Gave up on a source');
-    expect(chip.detail).toMatch(/Audnexus \(Audible\) did not answer after five asks/);
+    expect(chip.detail).toMatch(/Audnexus \(Audible\) did not answer in five searches/);
     expect(chip.detail).toMatch(/Search again/);
   });
 
