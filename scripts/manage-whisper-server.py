@@ -1,5 +1,5 @@
 # file: scripts/manage-whisper-server.py
-# version: 1.2.0
+# version: 2.0.0
 # guid: f7a8b9c0-d1e2-3456-fabc-678901234567
 # last-edited: 2026-11-17
 #
@@ -17,10 +17,30 @@
 #   2. uv installed locally: curl -LsSf https://astral.sh/uv/install.sh | sh
 #
 # The host is REQUIRED via the ABK_GPU_HOST environment variable (hostname or
-# IP, e.g. <windows-gpu-host>) — there is no internal-network default — and the
-# Windows account via WHISPER_WIN_USER. --deploy copies whisper_server.py AND the
-# two modules it imports (whisper_path_pipeline.py, whisper_machine_id.py) into
-# that account's profile folder: the three go together or the server will not start.
+# IP, e.g. <windows-gpu-host>) — there is no internal-network default. The
+# Windows account (WHISPER_WIN_USER) is needed only by --deploy and --restart;
+# --status is a plain HTTP request and needs neither the account nor a password.
+# --deploy copies whisper_server.py AND the three modules it imports
+# (whisper_path_pipeline.py, whisper_machine_id.py, whisper_decode_child.py) into
+# that account's profile folder: the four go together or the server will not start.
+#
+# Port: ONE source of truth, WHISPER_PORT in this script's environment (default
+# 19847, the server's own default), used for the health check, for finding the old
+# process to kill, and for the launched server (--port).
+#
+# Bind: --restart launches the server on 127.0.0.1 (loopback) unless you pass
+# --bind-host. The server has no authentication and its path routes return
+# transcripts of files under WHISPER_PATH_MAP, so a LAN worker is an explicit
+# opt-in. A loopback worker does not answer --status from this machine (the check
+# runs from here, over the network); reach it through an SSH tunnel, or run the
+# check on the Windows machine itself.
+#
+# WinRM command length: pywinrm sends a script as `powershell -encodedcommand
+# <base64 of UTF-16>` on a command line that cmd.exe limits to 8191 characters, so
+# a script can carry about 3 KB of text. The files here are 8-47 KB, and the old
+# whole-file-in-one-command deploy could not work for them. --deploy now writes each
+# file in CHUNK_BYTES pieces (an encoded command of about 5 KB) and verifies the
+# SHA-256 of what landed before it moves on.
 #
 # Usage:
 #   ABK_GPU_HOST=<windows-gpu-host> uv run scripts/manage-whisper-server.py --deploy
@@ -35,6 +55,7 @@
 import argparse
 import base64
 import getpass
+import hashlib
 import os
 import sys
 import urllib.error
@@ -53,22 +74,38 @@ if not COMPUTER:
         "(hostname or IP of the Windows GPU machine, e.g. <windows-gpu-host>)"
     )
     sys.exit(1)
-WIN_USER = os.environ.get("WHISPER_WIN_USER")
-if not WIN_USER:
-    print("ERROR: WHISPER_WIN_USER environment variable is required (the Windows account name)")
-    sys.exit(1)
-REMOTE_DIR = rf"C:\Users\{WIN_USER}"
-REMOTE_PATH = rf"{REMOTE_DIR}\whisper_server.py"
+WIN_USER = os.environ.get("WHISPER_WIN_USER")  # required only by --deploy / --restart
+PORT = int(os.environ.get("WHISPER_PORT") or 19847)
+HEALTH_URL = f"http://{COMPUTER}:{PORT}/health"
 # The server imports these from its own folder; they are deployed with it.
-SERVER_FILES = ("whisper_server.py", "whisper_path_pipeline.py", "whisper_machine_id.py")
-MODEL = "base.en"
-HEALTH_URL = f"http://{COMPUTER}:8000/health"
+SERVER_FILES = (
+    "whisper_server.py",
+    "whisper_path_pipeline.py",
+    "whisper_machine_id.py",
+    "whisper_decode_child.py",
+)
+CHUNK_BYTES = 1200  # raw bytes per WinRM command; see the header on the 8191 limit
+
+
+def require_win_user() -> str:
+    if not WIN_USER:
+        print(
+            "ERROR: WHISPER_WIN_USER is required for --deploy and --restart "
+            "(the Windows account name)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return WIN_USER
+
+
+def remote_dir() -> str:
+    return rf"C:\Users\{require_win_user()}"
 
 
 def get_session(password: str) -> winrm.Session:
     return winrm.Session(
         f"http://{COMPUTER}:5985/wsman",
-        auth=(WIN_USER, password),
+        auth=(require_win_user(), password),
         transport="ntlm",  # NTLM works for non-domain (workgroup) machines
         server_cert_validation="ignore",
     )
@@ -93,10 +130,44 @@ def cmd_status():
 
             data = json.loads(r.read())
             print(
-                f"  RUNNING — model={data.get('model')} batch_pipeline={data.get('batch_pipeline')}"
+                f"  RUNNING — device={data.get('device')} model={data.get('model')} "
+                f"batch_pipeline={data.get('batch_pipeline')}"
             )
-    except urllib.error.URLError:
-        print("  NOT RESPONDING — server may be stopped")
+    except (urllib.error.URLError, OSError):
+        print(
+            "  NOT RESPONDING — the server may be stopped, or bound to loopback only "
+            "(the default), which is not reachable from this machine"
+        )
+
+
+def _deploy_one(session: winrm.Session, local_path: str, remote_path: str) -> None:
+    with open(local_path, "rb") as f:
+        data = f.read()
+    expected = hashlib.sha256(data).hexdigest()
+    tmp = remote_path + ".part"
+    # First chunk creates/truncates the file; each later chunk appends.
+    for i in range(0, max(len(data), 1), CHUNK_BYTES):
+        encoded = base64.b64encode(data[i : i + CHUNK_BYTES]).decode()
+        mode = "Create" if i == 0 else "Append"
+        run_ps(
+            session,
+            f"""
+$b = [Convert]::FromBase64String('{encoded}')
+$fs = [System.IO.File]::Open('{tmp}', [System.IO.FileMode]::{mode}, [System.IO.FileAccess]::Write)
+$fs.Write($b, 0, $b.Length)
+$fs.Close()
+""",
+        )
+    got = run_ps(
+        session,
+        f"(Get-FileHash -Algorithm SHA256 -LiteralPath '{tmp}').Hash.ToLower()",
+    ).strip()
+    if got != expected:
+        raise RuntimeError(
+            f"{remote_path}: SHA-256 mismatch after copy (sent {expected}, got {got})"
+        )
+    run_ps(session, f"Move-Item -Force -LiteralPath '{tmp}' -Destination '{remote_path}'")
+    print(f"  {len(data)} bytes, sha256 {expected[:12]} verified")
 
 
 def cmd_deploy(session: winrm.Session):
@@ -110,29 +181,30 @@ def cmd_deploy(session: winrm.Session):
 
     for name in SERVER_FILES:
         local_path = os.path.join(here, name)
-        remote_path = rf"{REMOTE_DIR}\{name}"
+        remote_path = rf"{remote_dir()}\{name}"
         print(f"==> Deploying {local_path} → {COMPUTER}:{remote_path}")
-        with open(local_path, "rb") as f:
-            encoded = base64.b64encode(f.read()).decode()
-
-        # Decode on Windows and write to disk.
-        run_ps(
-            session,
-            f"""
-$bytes = [Convert]::FromBase64String('{encoded}')
-[System.IO.File]::WriteAllBytes('{remote_path}', $bytes)
-Write-Host "Written $($bytes.Length) bytes to {remote_path}"
-""",
-        )
+        _deploy_one(session, local_path, remote_path)
     print("  Deployed OK")
 
 
-def cmd_restart(session: winrm.Session, device: str):
-    print(f"==> Restarting Whisper server on {COMPUTER} (model={MODEL}, device={device})")
+def cmd_restart(session: winrm.Session, device: str, model: str, bind_host: str):
+    print(
+        f"==> Restarting Whisper server on {COMPUTER} "
+        f"(model={model or '(server default for the device)'}, device={device}, "
+        f"bind={bind_host}, port={PORT})"
+    )
+    if bind_host not in ("127.0.0.1", "::1", "localhost"):
+        print(
+            "  WARNING: the worker has no authentication; any host that can reach "
+            f"{bind_host}:{PORT} can obtain transcripts of files under WHISPER_PATH_MAP. "
+            "Firewall it to the server only.",
+            file=sys.stderr,
+        )
 
-    # Kill any process listening on port 8000.
+    # Kill any process LISTENING on the server port (match the local address column,
+    # not a connection that merely has the port as its remote end).
     kill_script = r"""
-$pids = (netstat -ano | Select-String ':8000\s') -replace '.*\s(\d+)$','$1' |
+$pids = (netstat -ano | Select-String ':__PORT__\s+\S+\s+LISTENING') -replace '.*\s(\d+)$','$1' |
         Sort-Object -Unique
 foreach ($p in $pids) {
     if ($p -match '^\d+$') {
@@ -141,12 +213,17 @@ foreach ($p in $pids) {
     }
 }
 Start-Sleep -Seconds 1
-"""
+""".replace("__PORT__", str(PORT))
     out = run_ps(session, kill_script)
     if out:
         print(f"  {out}")
 
     # Locate uv and launch the server in the background.
+    server_args = ["run", rf"{remote_dir()}\whisper_server.py", "--device", device]
+    if model:
+        server_args += ["--model", model]
+    server_args += ["--host", bind_host, "--port", str(PORT)]
+    args_ps = ", ".join('"' + a.replace('"', '`"') + '"' for a in server_args)
     launch_script = rf"""
 $uvExe = (Get-Command uv -ErrorAction SilentlyContinue)?.Source
 if (-not $uvExe) {{ $uvExe = "$env:USERPROFILE\.local\bin\uv.exe" }}
@@ -157,7 +234,7 @@ if (-not (Test-Path $uvExe)) {{
 $log = "$env:USERPROFILE\whisper_server.log"
 $p = Start-Process `
     -FilePath $uvExe `
-    -ArgumentList "run", "{REMOTE_PATH}", "{MODEL}", "--device", "{device}" `
+    -ArgumentList {args_ps} `
     -RedirectStandardOutput $log `
     -RedirectStandardError  "$log.err" `
     -WindowStyle Hidden `
@@ -180,7 +257,7 @@ def main():
     parser.add_argument(
         "--deploy",
         action="store_true",
-        help="Copy whisper_server.py and its two sibling modules to Windows",
+        help="Copy whisper_server.py and its three sibling modules to Windows",
     )
     parser.add_argument("--restart", action="store_true", help="Kill + relaunch the server")
     parser.add_argument("--status", action="store_true", help="Check /health (no auth needed)")
@@ -189,6 +266,18 @@ def main():
         choices=("auto", "cpu", "cuda"),
         default="auto",
         help="inference device for --restart (default: auto = CUDA if it loads, else CPU)",
+    )
+    parser.add_argument(
+        "--model",
+        default="",
+        help="model for --restart (default: unset, so the server picks by device: "
+        "large-v2 on cuda, base.en on cpu)",
+    )
+    parser.add_argument(
+        "--bind-host",
+        default="127.0.0.1",
+        help="address the server binds (default 127.0.0.1, loopback only; the server has "
+        "no authentication, so a wider bind is an explicit opt-in)",
     )
     args = parser.parse_args()
 
@@ -201,7 +290,7 @@ def main():
 
     # Auth only needed for deploy/restart.
     password = os.environ.get("WHISPER_WIN_PASSWORD") or getpass.getpass(
-        f"Windows password for {WIN_USER}@{COMPUTER}: "
+        f"Windows password for {require_win_user()}@{COMPUTER}: "
     )
     session = get_session(password)
 
@@ -210,7 +299,7 @@ def main():
     if args.deploy:
         cmd_deploy(session)
     if args.restart:
-        cmd_restart(session, args.device)
+        cmd_restart(session, args.device, args.model, args.bind_host)
 
 
 if __name__ == "__main__":

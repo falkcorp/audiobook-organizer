@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-17-whisper-cpu-worker-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7b3e5a90-1c64-4d28-9e0f-a52d8c7b1f46 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -33,6 +33,14 @@ a Windows machine.
 - The Windows start-up script restarts a crashed worker after a growing pause
   instead of immediately, refuses to start when a needed file is missing, and no
   longer assumes a particular user folder.
+- A transcription that gets stuck no longer freezes the Windows worker: the work
+  runs in a separate process that is stopped and restarted when it takes too long,
+  as on the Macs.
+- The worker now listens only to the machine it runs on unless someone deliberately
+  opens it to the network. It has no password, so opening it would let anything on
+  the network ask it to transcribe library files; a password is filed as follow-up
+  work for both workers. A machine that already used the graphics card keeps the
+  same model and the same fingerprint, so none of its earlier results are thrown away.
 - Not verified: anything on a real Windows machine, how fast a real desktop
   processor transcribes (the starting settings are guesses to measure), and a
   real end-to-end run from the server.

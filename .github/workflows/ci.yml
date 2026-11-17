@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.40.0
+# version: 3.41.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-11-17
 
@@ -645,16 +645,29 @@ jobs:
       # answered before that pipeline moved out of it; test_whisper_path_pipeline
       # holds the path-safety tests (traversal, symlink and UNC escape, Windows
       # device names, request limits), whose Windows rules run here on Linux
-      # through ntpath. No model is loaded and no GPU is needed; the real-ffmpeg
-      # tests use the runner's ffmpeg and skip where there is none.
+      # through ntpath. No model is loaded and no GPU is needed.
+      # test_whisper_decode_child spawns real child processes around a fake
+      # backend that hangs, crashes and exits.
+      #
+      # The real-ffmpeg tests must RUN here, not skip: the step installs ffmpeg,
+      # sets WHISPER_TESTS_REQUIRE_FFMPEG=1 (a guard test in test_whisper_server_cpu
+      # fails when ffmpeg is missing under it) and passes -rs so any remaining
+      # skip is listed in the log. Green with the ffmpeg tests skipped proves
+      # nothing about the clip cutter.
+      - name: Install ffmpeg for the Whisper worker tests
+        run: scripts/ci/apt_install.sh ffmpeg
+
       - name: Whisper worker contract tests
+        env:
+          WHISPER_TESTS_REQUIRE_FFMPEG: "1"
         run: |
           python3 -m pip install --quiet fastapi httpx pytest python-multipart
-          python3 -m pytest -v \
+          python3 -m pytest -v -rs \
             scripts/tests/test_whisper_mlx_server.py \
             scripts/tests/test_whisper_mlx_pins.py \
             scripts/tests/test_whisper_path_pipeline.py \
-            scripts/tests/test_whisper_server_cpu.py
+            scripts/tests/test_whisper_server_cpu.py \
+            scripts/tests/test_whisper_decode_child.py
 
   # Required checks of 09 §9.2.1 (R1-02): go vet over BOTH modules (root and
   # core/; ./... from the root never reaches the nested core/ module) for every
