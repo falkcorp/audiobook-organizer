@@ -1,5 +1,5 @@
 # file: scripts/whisper_server.py
-# version: 3.0.0
+# version: 4.0.0
 # guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 # last-edited: 2026-11-17
 #
@@ -33,24 +33,26 @@
 #     sends a file PATH, this worker maps it through WHISPER_PATH_MAP, cuts the
 #     first seconds with ffmpeg and transcribes the clip. The pipeline, its path
 #     safety and /health fields are shared with the Mac worker and live in
-#     scripts/whisper_path_pipeline.py and scripts/whisper_machine_id.py: copy
-#     all three files together.
+#     scripts/whisper_path_pipeline.py and scripts/whisper_machine_id.py, and the
+#     killable decode child is scripts/whisper_decode_child.py: copy all four
+#     files together.
 #   * the older WAV UPLOAD endpoints (/transcribe, /transcribe-batch).
 #
 # Run (uv handles all deps -- no pip install needed):
-#   uv run scripts/whisper_server.py                      # auto device, base.en
+#   uv run scripts/whisper_server.py                      # auto device, 127.0.0.1 only
 #   uv run scripts/whisper_server.py --device cpu         # force CPU
 #   uv run scripts/whisper_server.py small.en --device cpu --cpu-threads 6
 #
 # Settings (flag, then environment, then default):
 #   --device         WHISPER_DEVICE        auto | cpu | cuda          auto
-#   --model          WHISPER_MODEL         faster-whisper model name  base.en
-#                    (or the first positional argument)
+#   --model          WHISPER_MODEL         faster-whisper model name  large-v2 on cuda,
+#                    (or the first positional argument)                   base.en on cpu
 #   --compute-type   WHISPER_COMPUTE_TYPE  float16 on cuda, int8 on cpu
 #   --cpu-threads    WHISPER_CPU_THREADS   logical cores - 2, 1..8
-#   --num-workers    WHISPER_NUM_WORKERS   concurrent decodes             1
+#   --num-workers    WHISPER_NUM_WORKERS   decode processes (each holds
+#                                          its own copy of the model)    1
 #   --batch-size     WHISPER_BATCH_SIZE    batched-pipeline batch size    8
-#   --host           WHISPER_HOST          0.0.0.0
+#   --host           WHISPER_HOST          127.0.0.1 (loopback only; see below)
 #   --port           WHISPER_PORT          19847
 #
 # CPU guidance (starting points, NOT benchmarked on a specific machine; measure
@@ -63,24 +65,35 @@
 # --num-workers only if the machine has many more cores than --cpu-threads
 # (workers x threads is the number of cores kept busy).
 #
-# This worker decodes IN-PROCESS: it cannot kill a decode that hangs, unlike the
-# Mac worker, whose inference runs in a child process it can kill. It therefore
-# never answers transcribe_timeout or decoder_crashed. It does report, on
-# /health, how long the current clip has been running and its generous limit
-# (busy_seconds / busy_limit_seconds), so the server's stuck detection still
-# refuses a worker that has wedged.
+# BINDING: there is no authentication on any route, and the path routes read files
+# under WHISPER_PATH_MAP, so anything that can reach the port can obtain transcripts
+# of files under the mapped roots. The default is therefore loopback, like the Mac
+# worker: the server reaches workers through an SSH tunnel. A worker meant to be
+# reached over the LAN must opt in with --host 0.0.0.0 (or an interface address),
+# must be firewalled to the server, and logs a warning when it is.
+#
+# DECODING happens in a child process (scripts/whisper_decode_child.py): the model
+# loads there, the parent enforces a per-clip deadline max(floor, factor x audio
+# seconds) and kills a child that misses it, and the next clip starts a fresh one.
+# A hung or crashed decode answers transcribe_timeout / decoder_crashed /
+# decoder_killed exactly like the Mac worker and the worker recovers by itself.
+# The deadline constants are generous and NOT benchmarked (a slow CPU must not be
+# killed for being slow): WHISPER_TRANSCRIBE_MIN_TIMEOUT_S (300) and
+# WHISPER_TRANSCRIBE_TIMEOUT_FACTOR (8).
 #
 # Windows: see docs/whisper-remote-extract.md. Needs ffmpeg on PATH for the path
 # pipeline. WHISPER_PATH_MAP local sides are drive paths or UNC shares.
 
 import argparse
+import contextlib
 import dataclasses
 import hashlib
-import io
 import json
 import logging
 import os
+import queue
 import sys
+import tempfile
 import threading
 import time
 from typing import Annotated, Any, Callable, List, Optional, Protocol
@@ -89,7 +102,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger("whisper_server")
 
 try:
-    from fastapi import FastAPI, File, UploadFile
+    from fastapi import FastAPI, File, Request, UploadFile
 except ImportError as e:  # pragma: no cover - dependency probe
     print(f"Missing dependency: {e}")
     print('Install with: pip install "faster-whisper>=1.0.0" fastapi "uvicorn[standard]"')
@@ -100,15 +113,30 @@ except ImportError as e:  # pragma: no cover - dependency probe
 # supervisor, a test that loads it by path).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from whisper_decode_child import DecodeChild  # noqa: E402
 from whisper_machine_id import MachineIdentity  # noqa: E402
 from whisper_path_pipeline import (  # noqa: E402
+    ERR_WORKER_MISCONFIGURED,
+    ChildFaultError,
+    PathJobError,
     PathPipeline,
+    abandon_deadline,
+    abandoned_result,
     audio_seconds,
+    error_result,
     install_path_routes,
+    past,
 )
 
 DEVICES = ("auto", "cpu", "cuda")
-DEFAULT_MODEL = "base.en"
+# The model follows the device that RESOLVES, not a single default: a GPU install
+# has always run large-v2 (which is what the Windows supervisor passed), and
+# silently dropping it to base.en would change every transcript and orphan every
+# journalled one. A CPU worker defaults to the small model.
+DEFAULT_CUDA_MODEL = "large-v2"
+DEFAULT_CPU_MODEL = "base.en"
+LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
+BACKEND_FACTORY = "whisper_server:child_backend"
 DEFAULT_PORT = 19847
 DEFAULT_BATCH_SIZE = 8
 BEAM_SIZE = 5
@@ -118,16 +146,20 @@ LANGUAGE = "en"
 CPU_COMPUTE_TYPES = ("int8", "int8_float32", "float32", "int16")
 CUDA_ONLY_COMPUTE_TYPES = ("float16", "int8_float16", "bfloat16")
 
-# The in-process worker cannot kill a clip, so these are NOT deadlines it
-# enforces: they are what /health reports so the server can size its own HTTP
-# ceiling (max(floor, factor x audio seconds) per clip) and spot a wedged
-# worker. Generous on purpose: a slow CPU must not look stuck.
-CLIP_TIMEOUT_FLOOR_S = 300.0
-CLIP_TIMEOUT_FACTOR = 3.0
-# The model is loaded before the server listens, so a request never waits on a
-# decoder start; reported as a token second, not zero (zero reads as "predates
-# the field" and gets the server's 300 s default allowance added).
-CHILD_READY_TIMEOUT_S = 1.0
+# The per-clip deadline: max(floor, factor x audio seconds). A decode past it is
+# killed (the clip answers transcribe_timeout, which the Go side counts as a
+# strike), so it is generous on purpose: a slow CPU must not be killed for being
+# slow. NOT benchmarked on a particular machine; tune with the environment.
+# /health reports both so the server sizes its own HTTP ceiling from them.
+CLIP_TIMEOUT_FLOOR_S = float(os.environ.get("WHISPER_TRANSCRIBE_MIN_TIMEOUT_S", "300"))
+CLIP_TIMEOUT_FACTOR = float(os.environ.get("WHISPER_TRANSCRIBE_TIMEOUT_FACTOR", "8"))
+# How long a RESTARTED child may take to load the model (cached by then). Reported
+# on /health: the server adds it to its HTTP ceiling.
+CHILD_READY_TIMEOUT_S = float(os.environ.get("WHISPER_CHILD_READY_TIMEOUT_S", "300"))
+CHILD_FAULT_TTL_S = float(os.environ.get("WHISPER_CHILD_FAULT_TTL_S", "300"))
+# The FIRST start may download the model (large-v2 is about 3 GB), so it waits far
+# longer than a restart. Startup is before the worker listens, not inside a request.
+STARTUP_TIMEOUT_S = float(os.environ.get("WHISPER_STARTUP_TIMEOUT_S", "3600"))
 
 # VAD parameters tuned for audiobook intros: lower threshold so music/quiet speech
 # isn't stripped; shorter silence gap so publisher jingles don't eat the whole clip.
@@ -143,13 +175,13 @@ VAD_PARAMS = {
 
 @dataclasses.dataclass(frozen=True)
 class ServerConfig:
-    model: str = DEFAULT_MODEL
+    model: Optional[str] = None  # None = the resolved device's default
     device: str = "auto"  # what was ASKED: auto | cpu | cuda
     compute_type: Optional[str] = None  # None = the device's default
     cpu_threads: Optional[int] = None  # None = default_cpu_threads()
-    num_workers: int = 1
+    num_workers: int = 1  # decode processes
     batch_size: int = DEFAULT_BATCH_SIZE
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = DEFAULT_PORT
 
 
@@ -202,14 +234,19 @@ def build_parser(env: dict) -> argparse.ArgumentParser:
         "--num-workers",
         type=_positive_int,
         default=from_env("WHISPER_NUM_WORKERS", 1),
-        help="decodes that may run at once (default: 1)",
+        help="decode processes, each with its own copy of the model (default: 1)",
     )
     parser.add_argument(
         "--batch-size",
         type=_positive_int,
         default=from_env("WHISPER_BATCH_SIZE", DEFAULT_BATCH_SIZE),
     )
-    parser.add_argument("--host", default=from_env("WHISPER_HOST", "0.0.0.0"))
+    parser.add_argument(
+        "--host",
+        default=from_env("WHISPER_HOST", "127.0.0.1"),
+        help="bind address (default: 127.0.0.1; anything wider exposes the file-read "
+        "routes to the network and has no authentication)",
+    )
     parser.add_argument(
         "--port", type=_positive_int, default=from_env("WHISPER_PORT", DEFAULT_PORT)
     )
@@ -235,7 +272,7 @@ def parse_config(argv: List[str], env: Optional[dict] = None) -> ServerConfig:
     # choices= is not checked against a default taken from the environment.
     if args.device not in DEVICES:
         parser.error(f"WHISPER_DEVICE {args.device!r} is not one of: {', '.join(DEVICES)}")
-    model = args.model or args.model_pos or env.get("WHISPER_MODEL", "").strip() or DEFAULT_MODEL
+    model = args.model or args.model_pos or env.get("WHISPER_MODEL", "").strip() or None
     compute = args.compute_type.strip().lower() if args.compute_type else None
     if compute and args.device == "cpu" and compute not in CPU_COMPUTE_TYPES:
         parser.error(
@@ -312,16 +349,21 @@ def effective_compute_type(cfg: ServerConfig, device: str) -> str:
 # ── the model behind a small interface ───────────────────────────────────────
 
 
+def resolve_model(cfg: ServerConfig, device: str) -> str:
+    """The model to load on `device`: the configured one, else large-v2 on cuda (what
+    a GPU install has always run) and base.en on the CPU."""
+    return cfg.model or (DEFAULT_CUDA_MODEL if device == "cuda" else DEFAULT_CPU_MODEL)
+
+
 class Transcriber(Protocol):
-    """What the server needs from a speech model. `audio` is a path to a WAV
-    file or a BytesIO of WAV bytes."""
+    """What the child needs from a speech model. `audio` is a path to a WAV."""
 
     device: str  # what actually loaded, not what was asked for
     compute_type: str
     batched: bool
     device_source: str  # "model" if read back off the loaded model, else "requested"
 
-    def transcribe(self, audio: "str | io.BytesIO") -> str: ...
+    def transcribe(self, audio: str) -> str: ...
 
 
 class FasterWhisperTranscriber:
@@ -331,12 +373,11 @@ class FasterWhisperTranscriber:
     def __init__(self, cfg: ServerConfig, device: str, compute_type: str) -> None:
         import faster_whisper
 
-        kwargs: dict = {"device": device, "compute_type": compute_type}
+        # One decode per process: concurrency is --num-workers PROCESSES, so a hung
+        # decode can be killed on its own. ctranslate2's own num_workers stays 1.
+        kwargs: dict = {"device": device, "compute_type": compute_type, "num_workers": 1}
         if device == "cpu":
             kwargs["cpu_threads"] = cfg.cpu_threads or default_cpu_threads()
-            kwargs["num_workers"] = cfg.num_workers
-        else:
-            kwargs["num_workers"] = cfg.num_workers
         self._model = faster_whisper.WhisperModel(cfg.model, **kwargs)
         self._batch_size = cfg.batch_size
         # BatchedInferencePipeline (faster-whisper >= 1.0.0) decodes several chunks
@@ -362,7 +403,7 @@ class FasterWhisperTranscriber:
             return value.strip().lower(), "model"
         return requested, "requested"
 
-    def transcribe(self, audio: "str | io.BytesIO") -> str:
+    def transcribe(self, audio: str) -> str:
         if self._batched is not None:
             segments, _info = self._batched.transcribe(
                 audio,
@@ -387,9 +428,11 @@ class FasterWhisperTranscriber:
 @dataclasses.dataclass
 class LoadedModel:
     transcriber: Transcriber
-    requested_device: str
-    requested_compute_type: str
+    model: str  # the model that loaded (the device's default when none was given)
+    attempted_device: str  # the first device tried; differs from the loaded one after a fallback
+    attempted_compute_type: str
     device_reason: str
+    fallback: bool = False
 
 
 def load_transcriber(
@@ -401,27 +444,40 @@ def load_transcriber(
     is running and why.
 
     --device auto that finds a CUDA device but cannot load the model on it (a
-    driver or CUDA runtime problem) falls back to the CPU, once, with the reason
-    in that line. An explicit --device cuda that cannot load is NOT papered over:
-    it raises, so a worker an operator asked to be a GPU worker never
-    quietly serves from the CPU."""
+    driver or CUDA runtime problem) falls back to the CPU, once, at WARNING level
+    with the reason in the line, and /health shows it (requested_device auto,
+    device cpu, fallback true). It lasts the life of the child. An explicit
+    --device cuda that cannot load is NOT papered over: it raises, so a worker an
+    operator asked to be a GPU worker never quietly serves from the CPU."""
     device, reason = resolve_device(cfg.device, count_cuda)
     compute = effective_compute_type(cfg, device)
-    requested_compute = compute
+    attempted_device, attempted_compute = device, compute
+    model = resolve_model(cfg, device)
+    fallback = False
     try:
-        transcriber = make(cfg, device, compute)
+        transcriber = make(dataclasses.replace(cfg, model=model), device, compute)
     except Exception as exc:
         if not (cfg.device == "auto" and device == "cuda"):
             raise
+        fallback = True
         reason = f"auto: CUDA found but the model failed to load on it ({exc}); using cpu"
         device = "cpu"
         compute = effective_compute_type(dataclasses.replace(cfg, compute_type=None), "cpu")
-        transcriber = make(cfg, device, compute)
+        model = resolve_model(cfg, "cpu")
+        log.warning(
+            "whisper GPU FALLBACK: a CUDA device was found but model %s failed to load on "
+            "it (%s); this worker now runs on the CPU with model %s until it is restarted. "
+            "Set require_gpu on endpoints that must be GPU.",
+            resolve_model(cfg, "cuda"),
+            exc,
+            model,
+        )
+        transcriber = make(dataclasses.replace(cfg, model=model), device, compute)
     log.info(
         "whisper device: %s compute=%s model=%s threads=%s workers=%s (%s)",
         transcriber.device,
         transcriber.compute_type,
-        cfg.model,
+        model,
         (cfg.cpu_threads or default_cpu_threads()) if transcriber.device == "cpu" else "n/a",
         cfg.num_workers,
         reason,
@@ -433,7 +489,7 @@ def load_transcriber(
             device,
             transcriber.device,
         )
-    return LoadedModel(transcriber, device, requested_compute, reason)
+    return LoadedModel(transcriber, model, attempted_device, attempted_compute, reason, fallback)
 
 
 # DECODE_FINGERPRINT is a short hash of every setting that changes the text this
@@ -441,16 +497,17 @@ def load_transcriber(
 # result-journal key, so retuning any of these (a VAD threshold, the model, the
 # compute type, the decode path) makes previously journalled transcripts
 # unreachable instead of serving them for the new configuration. The settings
-# and their order are unchanged from 2.x, so a GPU float16 worker keeps its
-# fingerprint; a CPU worker's differs by compute type, as it should.
-def decode_fingerprint(cfg: ServerConfig, compute_type: str, batched: bool) -> str:
+# and their order are unchanged from 2.x, so an existing GPU install (large-v2,
+# float16, batched, batch size 8) keeps its fingerprint; a CPU worker's differs by
+# model and compute type, as it should.
+def decode_fingerprint(model: str, batch_size: int, compute_type: str, batched: bool) -> str:
     settings = {
         "backend": "faster-whisper",
-        "model": cfg.model,
+        "model": model,
         "compute_type": compute_type,
         # The batched pipeline and the beam-search fallback are different decoders.
         "path": "batched" if batched else "beam",
-        "batch_size": cfg.batch_size if batched else None,
+        "batch_size": batch_size if batched else None,
         "beam_size": BEAM_SIZE if not batched else None,
         "language": LANGUAGE,
         "vad_filter": True,
@@ -459,48 +516,158 @@ def decode_fingerprint(cfg: ServerConfig, compute_type: str, batched: bool) -> s
     return hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()[:16]
 
 
+class ChildBackend:
+    """What the decode child builds: the model plus the meta the parent reports."""
+
+    def __init__(self, cfg: ServerConfig, loaded: LoadedModel) -> None:
+        self._transcriber = loaded.transcriber
+        t = loaded.transcriber
+        self.meta = {
+            "model": loaded.model,
+            "device": t.device,
+            "compute_type": t.compute_type,
+            "batched": bool(t.batched),
+            "batch_size": cfg.batch_size,
+            "device_source": t.device_source,
+            "attempted_device": loaded.attempted_device,
+            "attempted_compute_type": loaded.attempted_compute_type,
+            "device_reason": loaded.device_reason,
+            "fallback": loaded.fallback,
+        }
+
+    def transcribe(self, wav_path: str) -> str:
+        return self._transcriber.transcribe(wav_path)
+
+
+def child_backend(arg: dict) -> ChildBackend:
+    """The factory the decode child calls (named by BACKEND_FACTORY): rebuild the
+    config from plain data, resolve the device and load the model, IN THE CHILD."""
+    cfg = ServerConfig(**arg["cfg"])
+    return ChildBackend(cfg, load_transcriber(cfg))
+
+
 # ── running a decode ─────────────────────────────────────────────────────────
 
 
-class Engine:
-    """Runs decodes for the HTTP handlers: at most `num_workers` at once, and a
-    record of what is running so /health can report busy_seconds."""
+class InProcessRunner:
+    """A runner that decodes in THIS process, with no deadline and no kill. Production
+    never uses it (a hung decode would wedge the worker; see DecodeChild); it exists so
+    the HTTP surface can be tested without spawning a process per test."""
 
-    def __init__(self, transcriber: Transcriber, num_workers: int) -> None:
-        self.transcriber = transcriber
-        self._slots = threading.BoundedSemaphore(num_workers)
-        self._lock = threading.Lock()
-        self._active: dict[int, tuple[float, float]] = {}
-        self._next = 0
+    def __init__(self, transcriber: Transcriber) -> None:
+        self._t = transcriber
+        self._mu = threading.Lock()
+        self._since: Optional[float] = None
+        self._limit: Optional[float] = None
+
+    def run(self, wav_path: str, timeout_s: float) -> str:
+        with self._mu:
+            self._since, self._limit = time.monotonic(), timeout_s
+        try:
+            return self._t.transcribe(wav_path)
+        finally:
+            with self._mu:
+                self._since = self._limit = None
+
+    def busy(self) -> "tuple[float, Optional[float]]":
+        with self._mu:
+            if self._since is None:
+                return 0.0, None
+            return time.monotonic() - self._since, self._limit
+
+    def start_error(self) -> Optional[str]:
+        return None
+
+    def meta(self) -> dict:
+        t = self._t
+        return {
+            "model": getattr(t, "model", None) or DEFAULT_CPU_MODEL,
+            "device": t.device,
+            "compute_type": t.compute_type,
+            "batched": bool(t.batched),
+            "batch_size": DEFAULT_BATCH_SIZE,
+            "device_source": t.device_source,
+            "attempted_device": t.device,
+            "attempted_compute_type": t.compute_type,
+            "device_reason": "in-process test runner",
+            "fallback": False,
+        }
+
+    def shutdown(self) -> None:
+        pass
+
+
+class Engine:
+    """Runs decodes for the HTTP handlers on a pool of runners (one decode process
+    each), and aggregates what /health reports: the most overdue running clip, the
+    last start failure, and the loaded model's meta."""
+
+    def __init__(self, runners: list) -> None:
+        self.runners = list(runners)
+        self._free: queue.Queue = queue.Queue()
+        for r in self.runners:
+            self._free.put(r)
 
     @staticmethod
     def clip_limit_s(audio_s: Optional[float]) -> float:
         return max(CLIP_TIMEOUT_FLOOR_S, CLIP_TIMEOUT_FACTOR * (audio_s or 0.0))
 
-    def run(self, audio: "str | io.BytesIO", audio_s: Optional[float]) -> str:
+    def run(self, wav_path: str, audio_s: Optional[float]) -> str:
         limit = self.clip_limit_s(audio_s)
-        with self._slots:
-            with self._lock:
-                token = self._next
-                self._next += 1
-                self._active[token] = (time.monotonic(), limit)
-            try:
-                return self.transcriber.transcribe(audio)
-            finally:
-                with self._lock:
-                    self._active.pop(token, None)
+        runner = self._free.get()
+        try:
+            return runner.run(wav_path, limit)
+        finally:
+            self._free.put(runner)
 
     def busy(self) -> "tuple[float, Optional[float]]":
-        """(seconds the most overdue running decode has run, its limit), or
-        (0, None) when idle. Read without holding a decode slot, so a wedged
-        decode cannot hide itself."""
-        with self._lock:
-            running = list(self._active.values())
-        if not running:
+        """(seconds the most overdue running decode has run, its limit), or (0, None)
+        when idle. Never waits on a decode slot, so a stuck decode cannot hide."""
+        now_busy = [b for b in (r.busy() for r in self.runners) if b[1] is not None]
+        if not now_busy:
             return 0.0, None
-        now = time.monotonic()
-        started, limit = max(running, key=lambda r: (now - r[0]) - r[1])
-        return now - started, limit
+        return max(now_busy, key=lambda b: b[0] - (b[1] or 0.0))
+
+    def start_error(self) -> Optional[str]:
+        for r in self.runners:
+            err = r.start_error()
+            if err:
+                return err
+        return None
+
+    def meta(self) -> dict:
+        for r in self.runners:
+            m = r.meta()
+            if m:
+                return m
+        return {}
+
+    def shutdown(self) -> None:
+        for r in self.runners:
+            with contextlib.suppress(Exception):
+                r.shutdown()
+
+
+def build_engine(cfg: ServerConfig) -> Engine:
+    """The production engine: --num-workers decode processes, started now (the model
+    is loaded, or the load error raised, before the worker listens)."""
+    children = [
+        DecodeChild(
+            BACKEND_FACTORY,
+            {"cfg": dataclasses.asdict(cfg)},
+            ready_timeout_s=CHILD_READY_TIMEOUT_S,
+            fault_ttl_s=CHILD_FAULT_TTL_S,
+        )
+        for _ in range(cfg.num_workers)
+    ]
+    engine = Engine(children)
+    try:
+        for c in children:
+            c.start(STARTUP_TIMEOUT_S)
+    except BaseException:
+        engine.shutdown()
+        raise
+    return engine
 
 
 # ── the app ──────────────────────────────────────────────────────────────────
@@ -508,7 +675,7 @@ class Engine:
 
 def create_app(
     cfg: ServerConfig,
-    loaded: LoadedModel,
+    engine: Engine,
     pipeline: Optional[PathPipeline] = None,
     identity: Optional[MachineIdentity] = None,
 ) -> FastAPI:
@@ -516,9 +683,6 @@ def create_app(
     pipeline = pipeline or PathPipeline()
     identity = identity or MachineIdentity()
     identity.start()
-    transcriber = loaded.transcriber
-    engine = Engine(transcriber, cfg.num_workers)
-    fingerprint = decode_fingerprint(cfg, transcriber.compute_type, transcriber.batched)
     app.state.engine = engine
     app.state.pipeline = pipeline
     app.state.identity = identity
@@ -531,14 +695,47 @@ def create_app(
 
     install_path_routes(app, run_path_jobs)
 
-    def do_transcribe(data: bytes, filename: str) -> dict:
+    def do_transcribe(data: bytes, filename: str, on_start_fault=None) -> dict:
+        """One upload to the {"text","error"} shape. Never raises: one bad WAV must
+        not fail a batch. The deadline is computed from the upload's own audio
+        length, like a path clip's, not a flat limit."""
+        tmp_path = None
         try:
-            text = engine.run(io.BytesIO(data), None)
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
+                tf.write(data)
+                tmp_path = tf.name
+            text = engine.run(tmp_path, audio_seconds(tmp_path))
             log.info(f"transcribed {filename}: {len(text)} chars")
             return {"text": text, "error": None}
+        except ChildFaultError as e:
+            log.error(f"decode child fault for {filename}: {e}")
+            if e.starting and on_start_fault is not None:
+                on_start_fault(e)
+            return error_result(PathJobError(ERR_WORKER_MISCONFIGURED, str(e)))
         except Exception as e:
             log.error(f"transcription failed for {filename}: {e}")
             return {"text": "", "error": str(e)}
+        finally:
+            if tmp_path:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp_path)
+
+    def run_upload_batch(files, deadline: Optional[float] = None) -> dict:
+        """Sequential. Once `deadline` (monotonic) has passed, clips not yet started
+        are answered as abandoned: the client gave up and will never read them, and
+        decoding them would hold a slot. The check is before STARTING a clip."""
+        results: dict = {}
+        start_fault: list = []
+        for f in files:
+            if past(deadline):
+                results[f.filename] = abandoned_result()
+            elif start_fault:
+                results[f.filename] = error_result(
+                    PathJobError(ERR_WORKER_MISCONFIGURED, str(start_fault[0]))
+                )
+            else:
+                results[f.filename] = do_transcribe(f.file.read(), f.filename, start_fault.append)
+        return results
 
     # Plain `def`, not `async def`: FastAPI runs these in its threadpool, so a
     # decode does not freeze the event loop and /health keeps answering while the
@@ -549,42 +746,60 @@ def create_app(
         return do_transcribe(file.file.read(), file.filename)
 
     @app.post("/transcribe-batch")
-    def transcribe_batch(files: Annotated[List[UploadFile], File()]):
+    def transcribe_batch(files: Annotated[List[UploadFile], File()], request: Request):
         """Multi-file endpoint: WAV files in one multipart request; each part's
-        filename is its result key. Returns {"results": {name: {"text","error"}}}."""
-        return {"results": {f.filename: do_transcribe(f.file.read(), f.filename) for f in files}}
+        filename is its result key. Returns {"results": {name: {"text","error"}}}.
+        X-Whisper-Request-Timeout-S is honoured like the Mac worker does."""
+        return {"results": run_upload_batch(files, abandon_deadline(request))}
 
     @app.get("/health")
     async def health():
         """Health probe. Every field the Mac worker reports, plus compute_type,
-        requested_device/requested_compute_type and device_source (additive: the
+        requested_device, attempted_device, fallback and device_source (additive: the
         server ignores fields it does not know). `device` is the RESOLVED device
         read back off the loaded model, never the requested one, so the server's
-        require_gpu gate measures what is running."""
+        require_gpu gate measures what is running. Everything model-related comes
+        from the live child, so a restart that landed somewhere else shows."""
+        meta = engine.meta()
+        device = meta.get("device", "unknown")
+        model = meta.get("model", cfg.model or DEFAULT_CPU_MODEL)
+        compute = meta.get("compute_type", "")
+        batched = bool(meta.get("batched", False))
         return await pipeline.health_payload(
             identity=identity,
-            model=cfg.model,
+            model=model,
             backend="faster-whisper",
-            device=transcriber.device,
-            decode_fingerprint=fingerprint,
+            device=device,
+            decode_fingerprint=decode_fingerprint(
+                model, int(meta.get("batch_size", cfg.batch_size)), compute, batched
+            ),
             busy=engine.busy,
-            start_error=lambda: None,
+            start_error=engine.start_error,
             clip_timeout_floor_s=CLIP_TIMEOUT_FLOOR_S,
             clip_timeout_factor=CLIP_TIMEOUT_FACTOR,
             child_ready_timeout_s=CHILD_READY_TIMEOUT_S,
             extra={
                 # The shared payload says True; this worker knows whether the
                 # batched pipeline actually loaded.
-                "batch_pipeline": transcriber.batched,
-                "compute_type": transcriber.compute_type,
-                "requested_device": loaded.requested_device,
-                "requested_compute_type": loaded.requested_compute_type,
-                "device_source": transcriber.device_source,
-                "device_reason": loaded.device_reason,
+                "batch_pipeline": batched,
+                "compute_type": compute,
+                # What was ASKED (auto|cpu|cuda), what the first attempt tried, and
+                # whether the load fell back, so a GPU that vanished is visible.
+                "requested_device": cfg.device,
+                "attempted_device": meta.get("attempted_device", device),
+                "requested_compute_type": meta.get("attempted_compute_type", compute),
+                "fallback": bool(meta.get("fallback", False)),
+                "device_source": meta.get("device_source", ""),
+                "device_reason": meta.get("device_reason", ""),
                 "num_workers": cfg.num_workers,
+                # "nt" or "posix": a Windows worker cannot represent every title
+                # (path_unrepresentable), so a dispatcher can keep those off it.
+                "path_flavor": "nt"
+                if getattr(pipeline.pathmod, "__name__", "") == "ntpath"
+                else "posix",
                 **(
                     {"cpu_threads": cfg.cpu_threads or default_cpu_threads()}
-                    if transcriber.device == "cpu"
+                    if device == "cpu"
                     else {}
                 ),
             },
@@ -595,17 +810,37 @@ def create_app(
 
 def main(argv: Optional[List[str]] = None) -> None:
     cfg = parse_config(sys.argv[1:] if argv is None else argv)
-    log.info(f"Loading {cfg.model} (device={cfg.device}; the first run downloads the model)...")
-    loaded = load_transcriber(cfg)
-    app = create_app(cfg, loaded)
+    log.info(
+        f"Loading model (device={cfg.device}, model={cfg.model or 'by device'}; "
+        "the first run downloads the model)..."
+    )
+    try:
+        engine = build_engine(cfg)
+    except ChildFaultError as e:
+        # Loud and fail-closed: no process means no /health, so the dispatcher
+        # refuses this endpoint instead of this worker serving something other than
+        # what it was asked to (an explicit cuda that cannot load is never papered
+        # over by a CPU run).
+        log.error(f"cannot start: {e}")
+        raise SystemExit(1)
+    app = create_app(cfg, engine)
     import uvicorn
 
+    if cfg.host not in LOOPBACK_HOSTS:
+        log.warning(
+            f"binding {cfg.host} — this exposes the worker beyond loopback: there is no "
+            "authentication, and any host that can reach the port can obtain transcripts "
+            "of files under WHISPER_PATH_MAP"
+        )
     # log_config=None is required, not cosmetic. uvicorn.run() otherwise applies
     # its own dictConfig with disable_existing_loggers=True, which silences the
     # module logger above -- uvicorn's access lines appear while every
     # log.info/log.error from this file vanishes (an ffmpeg failure on every
     # request once left no trace here: 2,472 requests logged as "200 OK").
-    uvicorn.run(app, host=cfg.host, port=cfg.port, log_level="info", log_config=None)
+    try:
+        uvicorn.run(app, host=cfg.host, port=cfg.port, log_level="info", log_config=None)
+    finally:
+        engine.shutdown()
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_mlx_pins.py
-# version: 1.0.2
+# version: 1.1.0
 # guid: 0e5b7d3a-4c19-4f82-b6a0-91d3c7e5f284
 # last-edited: 2026-11-17
 #
@@ -75,6 +75,10 @@ FFMPEG_ARGV_TEMPLATE = [
     "0",
     "-t",
     "{seconds}",
+    # Added in whisper-cpu round 2 (defence in depth: local files only). The one
+    # deliberate change to this pin; EXTRACT_FINGERPRINT is unchanged.
+    "-protocol_whitelist",
+    "file",
     "-i",
     "{src}",
     "-vn",
@@ -224,7 +228,10 @@ def test_health_reports_an_invalid_map(pin, monkeypatch):
     body = client.get("/health").json()
     assert body["path_pipeline"] is False
     assert body["path_map_error"] == (
-        "WHISPER_PATH_MAP invalid: entry '/lib/Gotham' is not server-path=local-path"
+        # Deliberate change (whisper-cpu round 2): the entry is named by number, not
+        # quoted, because /health shows this to any caller and a local side can name
+        # a host and share.
+        "WHISPER_PATH_MAP invalid: entry 1 is not server-path=local-path"
     )
 
 
