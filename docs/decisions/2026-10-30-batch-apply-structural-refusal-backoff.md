@@ -1,7 +1,7 @@
 <!-- file: docs/decisions/2026-10-30-batch-apply-structural-refusal-backoff.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: bf0525bb-f508-4e36-8859-ec16a5f76118 -->
-<!-- last-edited: 2026-10-30 -->
+<!-- last-edited: 2026-11-17 -->
 
 # metadata.batch-apply-cached remembers structural refusals
 
@@ -56,7 +56,8 @@ on the other books in the batch), `owner_rejected` and `owner_manual_only` (the
 owner can undo them without touching the book), `owner_*_check_failed` (a store
 read failed: transient). Every non-gate skip (`authors_unreadable`,
 `apply_failed`, `decode_failed`, `no_cached_candidates`, `file_work_would_fail`,
-`book_not_found`, a write-back gate deferral) is never recorded.
+`book_not_found`, `book_retired` (a trashed or merged-away book: left alone, not a
+gate refusal), a write-back gate deferral) is never recorded.
 
 ### Fingerprint
 

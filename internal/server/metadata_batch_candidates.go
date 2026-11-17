@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.33.0
+// version: 4.34.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-11-17
 //
@@ -129,6 +129,26 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 		return
 	}
 
+	// Retired books (in the trash, or merged into another book) are not
+	// searched: the fetch would spend provider quota on rows no apply accepts.
+	// Reported separately from "skipped" below, which means "already being
+	// fetched by another run".
+	// A person's "Search again" on one book (singleBookSearch) is the owner
+	// working on that book by hand and is not filtered.
+	retiredSkipped := 0
+	if !singleBookSearch(req, candidateIDs) {
+		candidateIDs, retiredSkipped = dropRetiredBookIDs(s.storeForWiring(), candidateIDs)
+	}
+	if len(candidateIDs) == 0 {
+		httputil.RespondWithOK(c, gin.H{
+			"message":         fmt.Sprintf("all %d selected books are retired (in the trash or merged into another book); nothing to fetch", retiredSkipped),
+			"operation_id":    "",
+			"book_count":      0,
+			"retired_skipped": retiredSkipped,
+		})
+		return
+	}
+
 	// Optionally exclude books already having a "matched" candidate.
 	if req.OnlyUnmatched {
 		matched := metabatch.LatestMatchedBookIDs(store)
@@ -187,15 +207,17 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 
 	if len(bookIDs) == 0 {
 		httputil.RespondWithOK(c, struct {
-			Message     string `json:"message"`
-			OperationID string `json:"operation_id"`
-			BookCount   int    `json:"book_count"`
-			Skipped     int    `json:"skipped"`
+			Message        string `json:"message"`
+			OperationID    string `json:"operation_id"`
+			BookCount      int    `json:"book_count"`
+			Skipped        int    `json:"skipped"`
+			RetiredSkipped int    `json:"retired_skipped"`
 		}{
-			Message:     fmt.Sprintf("All %d books are already being fetched in another operation", skippedCount),
-			OperationID: "",
-			BookCount:   0,
-			Skipped:     skippedCount,
+			Message:        fmt.Sprintf("All %d books are already being fetched in another operation", skippedCount),
+			OperationID:    "",
+			BookCount:      0,
+			Skipped:        skippedCount,
+			RetiredSkipped: retiredSkipped,
 		})
 		return
 	}
@@ -231,17 +253,19 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 	// op will fetch and the ones left to a fetch already running. total_books
 	// repeats book_count for existing readers.
 	httputil.RespondWithSuccess(c, http.StatusAccepted, struct {
-		OperationID string `json:"operation_id"`
-		TotalBooks  int    `json:"total_books"`
-		BookCount   int    `json:"book_count"`
-		Skipped     int    `json:"skipped"`
-		Message     string `json:"message"`
+		OperationID    string `json:"operation_id"`
+		TotalBooks     int    `json:"total_books"`
+		BookCount      int    `json:"book_count"`
+		Skipped        int    `json:"skipped"`
+		RetiredSkipped int    `json:"retired_skipped"`
+		Message        string `json:"message"`
 	}{
-		OperationID: opID,
-		TotalBooks:  totalBooks,
-		BookCount:   totalBooks,
-		Skipped:     skippedCount,
-		Message:     "metadata candidate fetch started",
+		OperationID:    opID,
+		TotalBooks:     totalBooks,
+		BookCount:      totalBooks,
+		Skipped:        skippedCount,
+		RetiredSkipped: retiredSkipped,
+		Message:        "metadata candidate fetch started",
 	})
 }
 
@@ -264,6 +288,10 @@ const (
 // every previous run -- those books are never "matched", so the only-unmatched
 // selection hands them back every time, and the per-provider fetch cache does
 // not store empty answers.
+//
+// interactive is a person's "Search again" on this one book
+// (metabatch.FetchOpParams.Interactive): the one case a retired book is still
+// searched, because the owner is looking at that book.
 func (s *Server) fetchCandidateForBook(
 	ctx context.Context,
 	mfs *metafetch.Service,
@@ -273,6 +301,7 @@ func (s *Server) fetchCandidateForBook(
 	force bool,
 	googleCapped bool,
 	folderMemo *metabatch.FolderMemo,
+	interactive bool,
 ) CandidateResult {
 	book, err := store.GetBookByID(bookID)
 	if err != nil || book == nil {
@@ -284,6 +313,21 @@ func (s *Server) fetchCandidateForBook(
 	}
 
 	bookInfo := metabatch.BuildCandidateBookInfo(store, book)
+
+	// A retired book (in the trash, or merged into another book) takes no
+	// provider call: no apply will accept what the search finds. The id lists
+	// that feed this op drop retired books before they get here
+	// (dropRetiredBookIDs, handlers.cacheRowStale, unfetchedCandidateBookIDs);
+	// this is the backstop for a list built earlier (a queued or resumed run)
+	// and for a book retired since. A person's own single-book search is not
+	// affected.
+	if book.IsRetired() && !interactive {
+		return CandidateResult{
+			Book:   bookInfo,
+			Status: "skipped",
+			Error:  "skipped: retired book",
+		}
+	}
 
 	// The owner marked this book "no match": do not spend provider quota
 	// searching for, or offer, a match they rejected. "skipped", not

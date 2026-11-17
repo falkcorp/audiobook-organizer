@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.43.6
+// version: 1.44.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-11-17
 
@@ -240,7 +240,28 @@ const (
 	// and in replace mode an overwrite of the owner's later edits. The preview
 	// reports these rows as verdict "skipped", reason "already_applied".
 	applySkipAlreadyApplied = "already_applied"
+	// applySkipBookRetired: the book is retired (database.Book.IsRetired: in
+	// the trash, or absorbed into another book) and nobody confirmed THIS book:
+	// a row pin is the owner approving one book on its review row and still
+	// applies; no pin, a review-page bulk pin and the hashless marker do not.
+	// Nothing is written. The preview reports these rows as verdict "skipped",
+	// reason "book_retired". Not recorded in the structural-refusal ledger: it is
+	// not a gate refusal.
+	applySkipBookRetired = "book_retired"
 )
+
+// refuseRetired is the retirement refusal both plan functions share, the one
+// place the unattended applies decide a book is retired. owner is the row pin
+// when the caller has one (planOpResultApply has none): only a single-row
+// review pin lets a retired book through, because that click is the owner
+// confirming one book (metafetch.CandidatePin.IsRowReview).
+func refuseRetired(book *database.Book, cand *metafetch.MetadataCandidate, pin *metafetch.CandidatePin) (cachedApplyPlan, bool) {
+	if !book.IsRetired() || (pin != nil && pin.IsRowReview()) {
+		return cachedApplyPlan{}, false
+	}
+	return cachedApplyPlan{Book: book, Candidate: cand, Reason: applySkipBookRetired,
+		Err: fmt.Errorf("book %s: %w", book.ID, metafetch.ErrBookRetired)}, true
+}
 
 // ownerRejectedAtApply is the gate verdict for an apply that
 // metafetch.Service.ApplyMetadataCandidateWithOptions refused for the
@@ -435,6 +456,12 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 		}
 		return cachedApplyPlan{Candidate: &cand, Reason: applySkipBookNotFound, Err: berr}
 	}
+	// A retired book is left alone unless the owner approved it on its own
+	// review row. Checked before the pin and applied tests, so a bulk pin on a
+	// retired book reports book_retired, not stale_candidate or already_applied.
+	if plan, retired := refuseRetired(book, &cand, pin); retired {
+		return plan
+	}
 	// An applied book is left alone unless the owner approved this candidate
 	// on its single review row (a row pin, still checked for staleness
 	// below): that click is the owner choosing to re-apply. A review-page bulk
@@ -576,6 +603,9 @@ func planOpResultApply(books bookReader, id string, cr CandidateResult, claims *
 			berr = fmt.Errorf("book %s not found", id)
 		}
 		return cachedApplyPlan{Candidate: &cand, Reason: applySkipBookNotFound, Err: berr}
+	}
+	if plan, retired := refuseRetired(book, &cand, nil); retired {
+		return plan
 	}
 	// An applied book is always left alone here. planCachedApply lets a single
 	// review-row pin re-apply one, but nobody picks candidates on this path, so
@@ -853,6 +883,11 @@ func applyCachedCandidateForBookTimed(
 		// Marked "no match" between the plan and the apply: nothing written,
 		// reported as the skip it is rather than a failure.
 		return applyOutcome{Reason: applySkipMarkedNoMatch, Err: aerr, Gate: plan.Gate}.withPlan(plan)
+	}
+	if aerr != nil && errors.Is(aerr, metafetch.ErrBookRetired) {
+		// Trashed or merged away between the plan and the apply: nothing
+		// written, reported as the skip it is rather than a failure.
+		return applyOutcome{Reason: applySkipBookRetired, Err: aerr, Gate: plan.Gate}.withPlan(plan)
 	}
 	if aerr != nil {
 		return applyOutcome{Reason: applySkipApplyFailed, Err: aerr, Gate: plan.Gate, OwnerReviewed: plan.OwnerReviewed}.withPlan(plan)

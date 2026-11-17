@@ -1,7 +1,7 @@
 // file: internal/metafetch/candidate_pin.go
-// version: 1.16.1
+// version: 1.17.0
 // guid: 9f4a1d63-2c7e-4b85-a0d9-5e3b8c1f6a42
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package metafetch
 
@@ -304,7 +304,8 @@ type ApplyOptions struct {
 
 // automatic reports whether nobody picked this candidate: a fill-only apply,
 // or an overwriting one of a candidate nobody was shown. An automatic apply
-// refuses a book marked "no match" (at the start and again at commit) and
+// refuses a book marked "no match" or retired (at the start and again at
+// commit) and
 // records the match only when the book ends up holding the candidate's title.
 func (o ApplyOptions) automatic() bool { return o.FillOnly || o.UnseenCandidate }
 
@@ -318,6 +319,13 @@ var ErrNothingToApply = errors.New("metadata apply: no field left to write")
 // skipped, not failed. A person-picked apply is the owner overriding their own
 // mark and is not refused.
 var ErrMarkedNoMatch = errors.New("metadata: book is marked no match")
+
+// ErrBookRetired is returned by an automatic apply (nobody picked this
+// candidate for this book) for a retired book: one in the trash or absorbed
+// into another book (database.Book.IsRetired). Nothing is written. Bulk callers
+// report the book as skipped, not failed. A person-picked apply is the owner
+// working on that one book by hand and is not refused.
+var ErrBookRetired = errors.New("metadata: book is retired")
 
 // IsMarkedNoMatch reports whether the owner marked this book "no match"
 // (MetadataReviewStatus == "no_match", written by Service.MarkNoMatch).
