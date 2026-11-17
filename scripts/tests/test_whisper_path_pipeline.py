@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_path_pipeline.py
-# version: 1.2.0
+# version: 1.3.0
 # guid: 5d2c8e17-9b43-4a06-8f1d-3e7a0c6b9d25
 # last-edited: 2026-11-17
 #
@@ -673,6 +673,69 @@ def test_ffmpeg_stderr_never_reaches_the_category(lib, monkeypatch):
     assert "hunter2" not in e.value.wire and "Bruce" not in e.value.wire
 
 
+@pytest.mark.parametrize(
+    "folder",
+    [
+        "The Long Halloween - Truncated Edition",  # a table phrase
+        "Arkham Permission Denied",  # a table phrase
+        "Invalid Data Found Gotham",  # a table phrase
+        "Stale File Handle Edition",  # an I/O-fault marker
+        "Not On Whitelist Wayne",  # the whitelist-rejection marker
+    ],
+)
+def test_a_phrase_planted_in_the_path_never_picks_the_category(lib, folder):
+    # ffmpeg prints the path it was given, so stderr carries the title's folder name.
+    # A stderr that says nothing the table knows is "other" whatever the path spells.
+    p, root, _ = lib
+    book = root / "books" / folder
+    book.mkdir()
+    (book / "01.mp3").write_bytes(b"x")
+    src = str(book / "01.mp3")
+    with pytest.raises(wpp.PathJobError) as e:
+        p._raise_ffmpeg_failure(src, f"{src}: Conversion failed!".encode())
+    assert e.value.wire == "ffmpeg_error: other"
+    # Each way the path can be spelled, and the clip's own temp file, are removed too.
+    wav = "/tmp/whisper-clip-x/Truncated clip.wav"
+    for spelled in (src.upper(), src.replace("/", "\\"), src.replace("\\", "/")):
+        with pytest.raises(wpp.PathJobError) as e:
+            p._raise_ffmpeg_failure(
+                src, f"{spelled}: Conversion failed!\n{wav}: Exiting".encode(), wav
+            )
+        assert e.value.wire == "ffmpeg_error: other", spelled
+
+
+def test_the_stderr_outside_the_path_still_picks_the_category(lib):
+    p, root, _ = lib
+    book = root / "books" / "Truncated Edition"
+    book.mkdir()
+    (book / "01.mp3").write_bytes(b"x")
+    src = str(book / "01.mp3")
+    for stderr, wire in (
+        (f"{src}: Invalid data found when processing input", "ffmpeg_error: invalid_data"),
+        (
+            f"[mov @ 0x1] moov atom not found\n{src}: Invalid data found",
+            "ffmpeg_error: moov_missing",
+        ),
+        (f"{src}: Input/output error", "ffmpeg_timeout: io_fault"),
+        (
+            f"{src}: Demuxer not on whitelist",
+            "container_rejected: this worker does not accept the file's container",
+        ),
+    ):
+        with pytest.raises(wpp.PathJobError) as e:
+            p._raise_ffmpeg_failure(src, stderr.encode())
+        assert e.value.wire == wire, stderr
+
+
+def test_a_specific_truncation_row_beats_the_generic_invalid_data_row():
+    for stderr in (
+        b"Invalid data found when processing input\nav_read_frame: partial file",
+        b"Invalid data found when processing input\nError: End of file",
+        b"partial file\nInvalid data found when processing input",
+    ):
+        assert wpp.ffmpeg_stderr_category(stderr) == wpp.CAT_TRUNCATED_FILE, stderr
+
+
 def test_a_component_problem_is_a_categorised_path_unrepresentable():
     got = {
         name: wpp.component_problem(name, ntpath).wire
@@ -757,3 +820,94 @@ def test_a_relative_directory_that_exists_is_local(tmp_path, monkeypatch):
     assert wpp.public_model_name("gotham-model").startswith("local:")
     # The same text with no such directory is a name, as a hub id would be.
     assert wpp.public_model_name("arkham-model") == "arkham-model"
+
+
+@pytest.fixture(autouse=True)
+def _fresh_model_verdicts():
+    # is_local_model keeps its first answer per value for the life of the process; a test
+    # that changes the disk under a name it already asked about starts from nothing.
+    wpp._LOCAL_MODEL_VERDICTS.clear()
+    yield
+    wpp._LOCAL_MODEL_VERDICTS.clear()
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "./gotham-model",  # relative, written as a path
+        "../models/arkham",
+        ".hidden-model",
+        "/opt/models/wayne",  # rooted, no drive: isabs is False for it on Windows 3.13+
+        "\\models\\wayne",
+        "C:models",  # a drive-relative path
+        "~/models/wayne",
+    ],
+)
+def test_a_value_written_as_a_path_is_local_whether_or_not_it_exists(raw, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # nothing named like it is on disk
+    assert wpp.is_local_model(raw) is True
+    assert wpp.public_model_name(raw).startswith("local:")
+
+
+def test_the_local_verdict_is_decided_once_and_kept(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    gone = tmp_path / "gotham-model"
+    gone.mkdir()
+    late = "arkham-model"
+    assert wpp.is_local_model("gotham-model") is True  # asked at startup: a directory
+    assert wpp.is_local_model(late) is False  # asked at startup: nothing there
+    label, name = wpp.public_model_name("gotham-model"), wpp.public_model_name(late)
+    gone.rmdir()  # the drive goes away ...
+    (tmp_path / late).mkdir()  # ... and something else appears
+    for _ in range(3):  # every request, and every /health, gets the startup answer
+        assert wpp.public_model_name("gotham-model") == label
+        assert wpp.public_model_name(late) == name == late
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)  # a changed working directory does not flip it either
+    assert wpp.public_model_name("gotham-model") == label
+
+
+def test_a_worker_side_ffmpeg_fault_is_worker_misconfigured_never_a_verdict_on_the_book(
+    lib, monkeypatch, tmp_path
+):
+    p, root, _ = lib
+    src = str(root / "books" / "Wayne" / "Year One.m4b")
+    monkeypatch.setattr(wpp.shutil, "which", lambda *a, **k: "/usr/bin/ffmpeg")
+
+    def refuse(argv, **kw):
+        raise PermissionError(13, "Permission denied", "/usr/bin/ffmpeg")
+
+    monkeypatch.setattr(wpp.subprocess, "run", refuse)
+    with pytest.raises(wpp.PathJobError) as e:
+        p.extract_clip(src, 5)
+    assert e.value.wire == "worker_misconfigured: spawn_failed"
+
+    # The worker's own clip cannot be read back: also the worker's.
+    clip = tmp_path / "clip.wav"
+    clip.write_bytes(b"RIFF" + b"\0" * 100)
+
+    def unreadable(path, mode="rb"):
+        raise PermissionError(13, "Permission denied", str(path))
+
+    monkeypatch.setattr(wpp.wave, "open", unreadable)
+    with pytest.raises(wpp.PathJobError) as e:
+        wpp.validate_wav(str(clip))
+    assert e.value.wire == "worker_misconfigured: temp_wav_unusable"
+    monkeypatch.undo()
+    # A WAV that opens but is wrong is still ffmpeg's doing, about the file.
+    clip.write_bytes(b"not a wav" * 20)
+    with pytest.raises(wpp.PathJobError) as e:
+        wpp.validate_wav(str(clip))
+    assert e.value.wire == "ffmpeg_error: invalid_wav"
+
+
+def test_the_worker_side_words_are_worker_categories_and_not_ffmpeg_ones():
+    assert wpp.CAT_SPAWN_FAILED in wpp.CODE_CATEGORIES[wpp.ERR_WORKER_MISCONFIGURED]
+    assert wpp.CAT_TEMP_WAV_UNUSABLE in wpp.CODE_CATEGORIES[wpp.ERR_WORKER_MISCONFIGURED]
+    assert wpp.CAT_SPAWN_FAILED not in wpp.CODE_CATEGORIES[wpp.ERR_FFMPEG]
+    assert wpp.CAT_TEMP_WAV_UNUSABLE not in wpp.CODE_CATEGORIES[wpp.ERR_FFMPEG]
+    # /health's child_start_error and ChildFaultError stay the START words only.
+    assert wpp.CAT_SPAWN_FAILED not in wpp.START_CATEGORIES
+    with pytest.raises(ValueError):
+        wpp.ChildFaultError("x", starting=True, category=wpp.CAT_SPAWN_FAILED)

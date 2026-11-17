@@ -1,5 +1,5 @@
 # file: scripts/whisper_path_pipeline.py
-# version: 1.6.0
+# version: 1.7.0
 # guid: c3e91a57-2d84-4f16-b7a9-0e5d8c4b6f13
 # last-edited: 2026-11-17
 #
@@ -190,9 +190,10 @@ _MAX_REQUEST_TIMEOUT_S = 10**9
 #     fixed sentence. Nothing the failure itself said can reach it, because wire_error
 #     takes no text and refuses a category its code does not list;
 #   * the failure's own detail (PathJobError.detail, an exception's text, ffmpeg's
-#     stderr line) goes to the worker log only, which is written by error_result at the
-#     moment it makes the body, so a body and its log line cannot disagree about what
-#     failed and no site has to remember to log;
+#     stderr line) goes to the worker log only. error_result logs it when a site passes
+#     `where`; a refused job (prepare_path_job) is instead logged by log_refusals, ONE
+#     line per request that keeps the first detail of each code/category group, so a
+#     batch of 1000 refusals is not 1000 lines;
 #   * test_whisper_wire_text_guard.py reads every scripts/whisper_*.py and fails on the
 #     response shapes it knows how to read (its header lists exactly which); it is a
 #     tripwire for the common ways to write a leak, not a proof. The guarantee that no
@@ -221,6 +222,13 @@ START_CATEGORIES = frozenset(
         CAT_FFMPEG_MISSING,
     }
 )
+# A worker-side fault that is not about starting the decode process: the OS would not
+# run ffmpeg, or the clip this worker just cut cannot be used (its own temp directory).
+# Both are the worker's problem and never a verdict on the book, so they are sent as
+# worker_misconfigured, which the Go client defers and retries on another worker.
+CAT_SPAWN_FAILED = "spawn_failed"
+CAT_TEMP_WAV_UNUSABLE = "temp_wav_unusable"
+WORKER_CATEGORIES = START_CATEGORIES | frozenset({CAT_SPAWN_FAILED, CAT_TEMP_WAV_UNUSABLE})
 
 # path_unmapped: the path is refused, or the root it maps to cannot be read. They need
 # different operator actions (fix a mount, or fix the map), which is why the word is kept.
@@ -243,9 +251,10 @@ CAT_SECONDS_INVALID = "seconds_invalid"
 CAT_PATH_INVALID = "path_invalid"
 CAT_PATH_TOO_LONG = "path_too_long"
 CAT_JOB_NOT_OBJECT = "job_not_object"
-# ffmpeg_error: why the clip could not be cut. The first two come from checking the WAV;
-# the next five from a fixed table over ffmpeg's stderr (FFMPEG_STDERR_CATEGORIES);
-# spawn_failed is the OS refusing to run ffmpeg; other is stderr the table does not know.
+# ffmpeg_error: why the clip could not be cut, always about the FILE (a worker-side fault
+# is worker_misconfigured). The first two come from checking the WAV ffmpeg wrote; the
+# next five from a fixed table over ffmpeg's stderr (FFMPEG_STDERR_CATEGORIES); other is
+# stderr the table does not know.
 CAT_EMPTY_CLIP = "empty_clip"
 CAT_INVALID_WAV = "invalid_wav"
 CAT_INVALID_DATA = "invalid_data"
@@ -253,8 +262,7 @@ CAT_MOOV_MISSING = "moov_missing"
 CAT_NO_AUDIO_STREAM = "no_audio_stream"
 CAT_UNSUPPORTED_CODEC = "unsupported_codec"
 CAT_TRUNCATED_FILE = "truncated_file"
-CAT_PERMISSION_DENIED = "permission_denied"
-CAT_SPAWN_FAILED = "spawn_failed"
+CAT_PERMISSION_DENIED = "permission_denied"  # reading the SOURCE file
 CAT_OTHER = "other"
 # ffmpeg_timeout: a read that stalled or faulted, not a verdict on the file.
 CAT_IO_FAULT = "io_fault"
@@ -301,30 +309,33 @@ CODE_CATEGORIES = {
             CAT_UNSUPPORTED_CODEC,
             CAT_TRUNCATED_FILE,
             CAT_PERMISSION_DENIED,
-            CAT_SPAWN_FAILED,
             CAT_OTHER,
         }
     ),
     ERR_FFMPEG_TIMEOUT: frozenset({CAT_IO_FAULT, CAT_EXTRACT_TIMEOUT, CAT_OS_IO_ERROR}),
     ERR_DECODER_CRASHED: frozenset({CAT_DIED_ON_CLIP, CAT_WRONG_ANSWER}),
     ERR_DECODER_KILLED: frozenset({CAT_KILLED_BY_SIGNAL, CAT_NOT_REAPED}),
-    ERR_WORKER_MISCONFIGURED: START_CATEGORIES,
+    ERR_WORKER_MISCONFIGURED: WORKER_CATEGORIES,
 }
 
 # What ffmpeg's stderr says, as a category: the FIRST row whose text is in the
 # lower-cased stderr wins, and stderr no row matches is CAT_OTHER. A fixed table over
 # fixed phrases: the stderr itself (which carries the file's path) is never an output.
+# The text is matched only AFTER the file's path is removed from it (ffmpeg_stderr_text),
+# because a title's folder name ("... Truncated Edition") is not what ffmpeg said.
+# Order matters: a specific row goes before a generic one, since a truncated file's
+# stderr usually carries both "partial file" and "Invalid data found".
 FFMPEG_STDERR_CATEGORIES = (
     ("moov atom not found", CAT_MOOV_MISSING),
+    ("partial file", CAT_TRUNCATED_FILE),
+    ("end of file", CAT_TRUNCATED_FILE),
+    ("truncated", CAT_TRUNCATED_FILE),
     ("invalid data found", CAT_INVALID_DATA),
     ("does not contain any stream", CAT_NO_AUDIO_STREAM),
     ("matches no streams", CAT_NO_AUDIO_STREAM),
     ("unknown decoder", CAT_UNSUPPORTED_CODEC),
     ("decoder (codec", CAT_UNSUPPORTED_CODEC),
     ("unsupported codec", CAT_UNSUPPORTED_CODEC),
-    ("end of file", CAT_TRUNCATED_FILE),
-    ("partial file", CAT_TRUNCATED_FILE),
-    ("truncated", CAT_TRUNCATED_FILE),
     ("permission denied", CAT_PERMISSION_DENIED),
 )
 
@@ -345,9 +356,28 @@ def all_public_sentences() -> frozenset:
     return frozenset(PUBLIC_SENTENCES.values()) | words
 
 
-def ffmpeg_stderr_category(stderr: bytes) -> str:
-    """The category of an ffmpeg failure, from its stderr by FFMPEG_STDERR_CATEGORIES."""
+def ffmpeg_stderr_text(stderr: bytes, paths: tuple[str, ...] = ()) -> str:
+    """ffmpeg's stderr, lower-cased, with every occurrence of each of `paths` removed.
+
+    ffmpeg prints the path it was given, which is the book's folder and file name, so a
+    phrase in a title ("Truncated Edition", "Permission Denied") would otherwise be read
+    as something ffmpeg said. Each path is removed as written and with its separators
+    flipped (a Windows build may print either), longest first, so a path that contains
+    another is removed whole."""
     text = stderr.decode("utf-8", "replace").lower()
+    spellings = set()
+    for path in paths:
+        if path:
+            spellings |= {path, path.replace("/", "\\"), path.replace("\\", "/")}
+    for spelling in sorted(spellings, key=len, reverse=True):
+        text = text.replace(spelling.lower(), " ")
+    return text
+
+
+def ffmpeg_stderr_category(stderr: bytes, paths: tuple[str, ...] = ()) -> str:
+    """The category of an ffmpeg failure, from its stderr by FFMPEG_STDERR_CATEGORIES,
+    matched over the stderr with `paths` (the source file, the clip) removed."""
+    text = ffmpeg_stderr_text(stderr, paths)
     for phrase, category in FFMPEG_STDERR_CATEGORIES:
         if phrase in text:
             return category
@@ -377,19 +407,38 @@ def wire_error(code: str, category: str | None = None) -> str:
 
 LOCAL_MODEL_PREFIX = "local:"
 
+# The verdict for each model setting this process has been asked about, kept from the
+# first answer. A worker asks at startup (both mains log the label), so the answer is the
+# one the filesystem gave THEN: a directory that later disappears (a removable or network
+# drive) or a working directory that changes cannot flip a label mid-process, which Go
+# would read as an identity change and which would put the raw path on the wire.
+_LOCAL_MODEL_VERDICTS: dict[str, bool] = {}
+_LOCAL_MODEL_LOCK = threading.Lock()
+
+
+def _names_a_local_path(value: str) -> bool:
+    """Lexical: a rooted, drive, UNC, home or relative-dot path, on any platform. A
+    hub id ("Systran/faster-whisper-small") starts with none of these. os.path.isabs is
+    not used: on Windows since Python 3.13 it is false for "/opt/models/x", which is
+    still a path on this machine."""
+    return value.startswith(("/", "\\", "~", ".")) or bool(ntpath.splitdrive(value)[0])
+
 
 def is_local_model(value: str) -> bool:
-    """True when a model setting names something on THIS machine's disk: an existing
-    directory, or an absolute path of either flavor (a drive or UNC path counts on any
-    platform, so the answer does not depend on where the worker runs). A hub repo id
-    ("Systran/faster-whisper-small", "mlx-community/...") contains a "/" but is neither,
-    and a short name ("base.en") names nothing local."""
-    return (
-        os.path.isdir(value)
-        or os.path.isabs(value)
-        or bool(ntpath.splitdrive(value)[0])
-        or value.startswith("~")
-    )
+    """True when a model setting names something on THIS machine's disk: a path written
+    as one (rooted with "/" or "\\", a drive or UNC path, "~..." or "./..."/"../..."),
+    on any platform, or a name that is an existing directory (a bare "my-model" next to
+    the worker). A hub repo id ("Systran/faster-whisper-small", "mlx-community/...")
+    contains a "/" but is neither, and a short name ("base.en") names nothing local.
+
+    Decided once per value, the first time it is asked about, and kept: the directory
+    check is not repeated, so the answer does not change while the process runs."""
+    with _LOCAL_MODEL_LOCK:
+        verdict = _LOCAL_MODEL_VERDICTS.get(value)
+        if verdict is None:
+            verdict = _names_a_local_path(value) or os.path.isdir(value)
+            _LOCAL_MODEL_VERDICTS[value] = verdict
+        return verdict
 
 
 def public_model_name(value: str) -> str:
@@ -711,6 +760,16 @@ def _ffmpeg_tail(stderr: bytes) -> str:
     return (lines[-1] if lines else "no output")[:200]
 
 
+def _stderr_line_faults_on(stderr: bytes, path: str, phrase: str) -> bool:
+    """True when a line of `stderr` names `path` (as written, or with its separators
+    flipped) and says `phrase`: the failure is about that file."""
+    spellings = {path.lower(), path.replace("/", "\\").lower(), path.replace("\\", "/").lower()}
+    for line in stderr.decode("utf-8", "replace").lower().splitlines():
+        if phrase in line and any(sp in line for sp in spellings):
+            return True
+    return False
+
+
 def validate_wav(path: str) -> None:
     """Non-empty and parses as the 16 kHz mono PCM we asked for."""
     try:
@@ -721,8 +780,16 @@ def validate_wav(path: str) -> None:
                 raise PathJobError(
                     ERR_FFMPEG, "ffmpeg produced an invalid WAV", category=CAT_INVALID_WAV
                 )
-    except (wave.Error, EOFError, OSError) as e:
+    except (wave.Error, EOFError) as e:
         raise PathJobError(ERR_FFMPEG, f"invalid WAV: {e}", category=CAT_INVALID_WAV)
+    except OSError as e:
+        # The clip is this worker's own file in its own temp directory: not being able to
+        # read it says nothing about the book.
+        raise PathJobError(
+            ERR_WORKER_MISCONFIGURED,
+            f"cannot read the clip this worker cut: {e}",
+            category=CAT_TEMP_WAV_UNUSABLE,
+        )
 
 
 def discard_extraction(fut: concurrent.futures.Future) -> None:
@@ -917,7 +984,7 @@ class PathPipeline:
 
     # ── extraction ───────────────────────────────────────────────────────────
 
-    def _raise_ffmpeg_failure(self, src: str, stderr: bytes) -> None:
+    def _raise_ffmpeg_failure(self, src: str, stderr: bytes, wav: str | None = None) -> None:
         """Classify a nonzero ffmpeg exit. ffmpeg_error is a DURABLE verdict on the
         Go side (the book is hidden until its mtime changes), so it is reserved for
         a file that is still readable and still will not decode. A read fault
@@ -927,10 +994,13 @@ class PathPipeline:
           the mapped root is no longer listable, or the file is gone -> path_unmapped
           stderr names an I/O fault or timeout                       -> ffmpeg_timeout
           ffmpeg refused the container (format whitelist)            -> container_rejected
+          ffmpeg could not write the clip this worker asked for      -> worker_misconfigured
           otherwise                                                  -> ffmpeg_error
 
         The caller is told the code and a category (ffmpeg_stderr_category for the last
-        one); ffmpeg's own line goes to the worker log.
+        one); ffmpeg's own line goes to the worker log. Every marker is looked for in the
+        stderr with `src` and `wav` removed (ffmpeg_stderr_text): ffmpeg prints those
+        paths, and a folder named "Stale File Handle" must not read as a fault.
         """
         root = self.mapped_root_of(src)
         if (root is not None and not self.root_readable(root)) or not os.path.isfile(src):
@@ -939,7 +1009,16 @@ class PathPipeline:
                 "source became unreadable while ffmpeg ran (mount lost?)",
                 category=CAT_SOURCE_UNREADABLE,
             )
-        text = stderr.decode("utf-8", "replace").lower()
+        paths = (src, wav) if wav else (src,)
+        if wav and _stderr_line_faults_on(stderr, wav, "permission denied"):
+            # ffmpeg could not write its own output: this worker's temp directory, not
+            # the book. (A "permission denied" about the SOURCE is the file's: below.)
+            raise PathJobError(
+                ERR_WORKER_MISCONFIGURED,
+                f"ffmpeg could not write the clip: {_ffmpeg_tail(stderr)}",
+                category=CAT_TEMP_WAV_UNUSABLE,
+            )
+        text = ffmpeg_stderr_text(stderr, paths)
         if any(marker in text for marker in IO_FAULT_MARKERS):
             raise PathJobError(
                 ERR_FFMPEG_TIMEOUT,
@@ -952,7 +1031,7 @@ class PathPipeline:
                 "container is not on this worker's format whitelist (renamed or unusual file)",
             )
         raise PathJobError(
-            ERR_FFMPEG, _ffmpeg_tail(stderr), category=ffmpeg_stderr_category(stderr)
+            ERR_FFMPEG, _ffmpeg_tail(stderr), category=ffmpeg_stderr_category(stderr, paths)
         )
 
     def extract_clip(self, src: str, seconds: int) -> tuple[str, str]:
@@ -1017,9 +1096,11 @@ class PathPipeline:
             except OSError as e:
                 if e.errno in (errno.EIO, errno.ETIMEDOUT):
                     raise PathJobError(ERR_FFMPEG_TIMEOUT, str(e), category=CAT_OS_IO_ERROR)
-                raise PathJobError(ERR_FFMPEG, str(e), category=CAT_SPAWN_FAILED)
+                # The OS would not run ffmpeg (not executable, no memory, too many open
+                # files): this worker's fault, never a verdict on the book.
+                raise PathJobError(ERR_WORKER_MISCONFIGURED, str(e), category=CAT_SPAWN_FAILED)
             if proc.returncode != 0:
-                self._raise_ffmpeg_failure(src, proc.stderr)
+                self._raise_ffmpeg_failure(src, proc.stderr, wav)
             validate_wav(wav)
             return tmpdir, wav
         except BaseException:

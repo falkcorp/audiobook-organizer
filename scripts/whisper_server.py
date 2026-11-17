@@ -1,5 +1,5 @@
 # file: scripts/whisper_server.py
-# version: 5.3.0
+# version: 5.4.0
 # guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 # last-edited: 2026-11-17
 #
@@ -956,6 +956,10 @@ def main(argv: Optional[List[str]] = None) -> None:
         # over by a CPU run).
         log.error(f"cannot start: {e}")
         raise SystemExit(1)
+    # Decide now, while the worker starts, whether the model it actually loaded is a local
+    # path (is_local_model keeps the answer for the life of the process): the label on
+    # /health and in every answer cannot change later if the directory goes away.
+    public_model_name(engine.meta().get("model", cfg.model or DEFAULT_CPU_MODEL))
     app = create_app(cfg, engine)
     import uvicorn
 

@@ -1,7 +1,7 @@
 // file: internal/transcribe/workerfault_requeue_test.go
-// version: 1.8.3
+// version: 1.8.4
 // guid: f07c4f8d-09cb-4988-bf56-25da7f68d1e9
-// last-edited: 2026-10-28
+// last-edited: 2026-11-17
 
 package transcribe
 
@@ -422,10 +422,18 @@ func TestIsNoAnswer(t *testing.T) {
 		"decoder_killed: the decode process was killed from outside (exit code -9)":       false,
 		misconfText:               true,
 		"worker_fault: no answer": true,
-		timeoutText:               false,
-		crashText:                 false,
-		"whisper_error: boom":     false,
-		"":                        false,
+		// The Python workers' worker-side faults (the OS would not run ffmpeg, the
+		// worker's own temp clip unusable) are worker_misconfigured: no answer about
+		// the file, deferred, never the durable ffmpeg_error verdict. Only a fault of
+		// the FILE keeps ffmpeg_error.
+		"worker_misconfigured: spawn_failed":      true,
+		"worker_misconfigured: temp_wav_unusable": true,
+		"ffmpeg_error: permission_denied":         false,
+		"ffmpeg_error: invalid_wav":               false,
+		timeoutText:                               false,
+		crashText:                                 false,
+		"whisper_error: boom":                     false,
+		"":                                        false,
 	} {
 		if got := IsNoAnswer(text); got != want {
 			t.Errorf("IsNoAnswer(%q) = %v, want %v", text, got, want)

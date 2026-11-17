@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_server_cpu.py
-# version: 2.5.0
+# version: 2.6.0
 # guid: c3e91a60-2f5d-4b87-a4c2-7d0b6e18f953
 # last-edited: 2026-11-17
 #
@@ -755,6 +755,15 @@ def test_main_binds_loopback_quietly_by_default(monkeypatch, caplog):
     assert not [r for r in caplog.records if "beyond loopback" in r.getMessage()]
 
 
+def test_main_decides_at_startup_whether_the_loaded_model_is_a_local_path(monkeypatch, caplog):
+    wpp._LOCAL_MODEL_VERDICTS.clear()
+    try:
+        _run_main(monkeypatch, caplog, [], [])
+        assert wpp._LOCAL_MODEL_VERDICTS, "startup asked about no model: the first request would"
+    finally:
+        wpp._LOCAL_MODEL_VERDICTS.clear()
+
+
 def test_main_warns_when_bound_beyond_loopback(monkeypatch, caplog):
     shutdowns = []
     served = _run_main(monkeypatch, caplog, ["--host", "0.0.0.0"], shutdowns)
@@ -1044,7 +1053,8 @@ def _fake_ffmpeg(monkeypatch, *, stderr=b"", returncode=1, raises=None, write=No
             raise raises
         if write is not None:
             pathlib.Path(argv[-1]).write_bytes(write)
-        return subprocess.CompletedProcess(argv, returncode, b"", stderr)
+        err = stderr(argv) if callable(stderr) else stderr
+        return subprocess.CompletedProcess(argv, returncode, b"", err)
 
     monkeypatch.setattr(wpp.subprocess, "run", run)
 
@@ -1099,6 +1109,23 @@ def _scenarios():
     def extraction_io_oserror(monkeypatch, tmp_path, client, fake, share, app):
         _mapped_source(share)
         _fake_ffmpeg(monkeypatch, raises=OSError(errno.EIO, f"read failed on {SECRET}"))
+
+    def extraction_times_out(monkeypatch, tmp_path, client, fake, share, app):
+        _mapped_source(share)
+        _fake_ffmpeg(monkeypatch, raises=subprocess.TimeoutExpired(FFMPEG_CANARY, 1))
+
+    def source_vanishes_during_decode(monkeypatch, tmp_path, client, fake, share, app):
+        _mapped_source(share)
+
+        def stderr(argv):
+            os.unlink(argv[argv.index("-i") + 1])  # the mount dropped while ffmpeg ran
+            return f"{SECRET}: Conversion failed!".encode()
+
+        _fake_ffmpeg(monkeypatch, stderr=stderr)
+
+    def path_map_malformed(monkeypatch, tmp_path, client, fake, share, app):
+        _mapped_source(share)
+        monkeypatch.setenv(wpp.PATH_MAP_ENV, f"/lib/Gotham={share},{SECRET}")
 
     def invalid_wav_oserror(monkeypatch, tmp_path, client, fake, share, app):
         _mapped_source(share)
@@ -1159,13 +1186,44 @@ def _scenarios():
             "container_rejected: this worker does not accept the file's container",
             _path_answer,
         ),
-        "path-ffmpeg-oserror": (extraction_oserror, "ffmpeg_error: spawn_failed", _path_answer),
+        # The worker's own faults are worker_misconfigured (the Go client defers them and
+        # tries another worker); only a fault of the FILE is the durable ffmpeg_error.
+        "path-ffmpeg-oserror": (
+            extraction_oserror,
+            "worker_misconfigured: spawn_failed",
+            _path_answer,
+        ),
+        "path-ffmpeg-cannot-write-clip": (
+            ffmpeg_fails(lambda argv: f"{argv[-1]}: Permission denied".encode()),
+            "worker_misconfigured: temp_wav_unusable",
+            _path_answer,
+        ),
+        "path-ffmpeg-cannot-read-source": (
+            ffmpeg_fails(lambda argv: f"{argv[argv.index('-i') + 1]}: Permission denied".encode()),
+            "ffmpeg_error: permission_denied",
+            _path_answer,
+        ),
         "path-ffmpeg-io-oserror": (
             extraction_io_oserror,
             "ffmpeg_timeout: os_io_error",
             _path_answer,
         ),
-        "path-invalid-wav": (invalid_wav_oserror, "ffmpeg_error: invalid_wav", _path_answer),
+        "path-extract-timeout": (
+            extraction_times_out,
+            "ffmpeg_timeout: extract_timeout",
+            _path_answer,
+        ),
+        "path-source-vanished": (
+            source_vanishes_during_decode,
+            "path_unmapped: source_unreadable",
+            _path_answer,
+        ),
+        "path-map-invalid": (path_map_malformed, "path_unmapped: path_map_invalid", _path_answer),
+        "path-invalid-wav": (
+            invalid_wav_oserror,
+            "worker_misconfigured: temp_wav_unusable",
+            _path_answer,
+        ),
         "path-root-unreadable": (
             root_unreadable,
             "path_unmapped: root_unreadable",
@@ -1191,6 +1249,11 @@ LOGGED_DETAIL = {
     "path-ffmpeg-read-fault": "read fault during decode",
     "path-ffmpeg-container": "format whitelist",
     "path-ffmpeg-oserror": "No such file or directory",
+    "path-ffmpeg-cannot-write-clip": "ffmpeg could not write the clip",
+    "path-ffmpeg-cannot-read-source": "Permission denied",
+    "path-extract-timeout": "ffmpeg exceeded",
+    "path-source-vanished": "source became unreadable",
+    "path-map-invalid": "is not server-path=local-path",
     "path-ffmpeg-io-oserror": "read failed on",
     "path-invalid-wav": "cannot open",
     "path-root-unreadable": "(mount lost?)",

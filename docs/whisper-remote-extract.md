@@ -1,5 +1,5 @@
 <!-- file: docs/whisper-remote-extract.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.9.0 -->
 <!-- guid: 38f7ba56-da3d-4ab2-8b9c-839df9cb5612 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -268,23 +268,32 @@ it. The sets, from the raise sites:
 
 | Code | Words |
 |---|---|
-| `ffmpeg_error` | `invalid_data`, `moov_missing`, `no_audio_stream`, `unsupported_codec`, `truncated_file`, `permission_denied`, `empty_clip`, `invalid_wav`, `spawn_failed`, `other` |
+| `ffmpeg_error` | `invalid_data`, `moov_missing`, `no_audio_stream`, `unsupported_codec`, `truncated_file`, `permission_denied` (reading the source file), `empty_clip`, `invalid_wav`, `other` |
 | `ffmpeg_timeout` | `extract_timeout`, `io_fault`, `os_io_error` |
 | `path_unmapped` | `not_absolute`, `dot_dot`, `not_under_prefix`, `root_unreadable`, `symlink_escape`, `path_map_unset`, `path_map_invalid`, `mapping_failed`, `source_unreadable` |
 | `path_unrepresentable` | `bad_character`, `component_too_long`, `reserved_name`, `trailing_dot_or_space` |
 | `bad_request` | `job_not_object`, `path_invalid`, `path_too_long`, `seconds_invalid` |
 | `decoder_killed` | `killed_by_signal`, `not_reaped` |
 | `decoder_crashed` | `died_on_clip`, `wrong_answer` |
-| `worker_misconfigured` | `exited_during_start`, `ffmpeg_missing`, `model_load_failed`, `pinned_model_mismatch`, `process_start_failed`, `protocol_error`, `start_timeout` |
+| `worker_misconfigured` | `exited_during_start`, `ffmpeg_missing`, `model_load_failed`, `pinned_model_mismatch`, `process_start_failed`, `protocol_error`, `start_timeout`, `spawn_failed`, `temp_wav_unusable` |
 
 `not_found`, `whisper_error`, `container_rejected`, `transcribe_timeout`,
 `request_abandoned` and `internal_error` have one reason each and carry a fixed sentence.
 ffmpeg's stderr is mapped onto the `ffmpeg_error` words by a short ordered table of
 phrases (`moov atom not found` is `moov_missing`, `Invalid data found` is `invalid_data`,
-and so on) with `other` for anything unmatched, so which line ffmpeg printed never decides
-what is sent. The detail that used to be in the answer (the exception, ffmpeg's last line,
-the `OSError`, the exit code of a dead decode process) is written to the worker's log at
-the moment the answer is made, and a refused batch is logged once per request with the job
+and so on; a specific row such as `partial file` comes before the generic `Invalid data
+found`) with `other` for anything unmatched, so which line ffmpeg printed never decides
+what is sent. The table is matched against the stderr with the book's file path (and the
+worker's temp clip path) removed from it, because ffmpeg prints that path and a folder
+named `... Truncated Edition` is not something ffmpeg said; the same goes for the I/O-fault
+and container-whitelist markers. A fault of the WORKER is never an `ffmpeg_error`, which
+the server stores as a durable verdict on the book: ffmpeg that the OS would not run
+(`spawn_failed`), a clip the worker cannot read or ffmpeg cannot write in its own temp
+directory (`temp_wav_unusable`) are `worker_misconfigured`, which the server defers (no
+status written) and the dispatcher retries on another worker. `permission_denied` stays
+under `ffmpeg_error` only for the source file. The detail that used to be in the answer
+(the exception, ffmpeg's last line, the `OSError`, the exit code of a dead decode process)
+is written to the worker's log, and a refused batch is logged once per request with the job
 count, grouped by code and word with the first detail of each group, not once per job.
 
 **What the server stores.** The Go client reads the code and nothing after it to choose a
@@ -298,10 +307,12 @@ on the Go side parses a word.
 
 `/health` reports `ffmpeg` as `true`/`false` (found or not), never where it was found. The
 path map's error and `device_reason` were already fixed text. `identity.model` (also
-`/health` `model`) is the `--model` value only when that is a hub id; when it is an
-existing directory or an absolute path (POSIX, a Windows drive or UNC path, or a leading
-`~`) it is `local:` plus the first 16 hex digits of the SHA-256 of the value, and the worker
-logs the raw value once at startup so the label can be traced. The decode fingerprint still
+`/health` `model`) is the `--model` value only when that is a hub id; when it is written as
+a path (a leading `/`, `\`, `~` or `.`, a Windows drive or UNC path) or names an existing
+directory it is `local:` plus the first 16 hex digits of the SHA-256 of the value, and the
+worker logs the raw value once at startup so the label can be traced. Which of the two it
+is is decided once, at startup, and kept, so a directory that later disappears cannot turn
+the label into the raw path. The decode fingerprint still
 hashes the raw value, so settings that differ only in the model's location still differ.
 One limit: FastAPI's own 422 for a request that is not a JSON object echoes the caller's
 own input back to the caller.
@@ -312,8 +323,9 @@ tests are the guarantee. `test_whisper_wire_text_guard.py` is a cheaper tripwire
 parses every `scripts/whisper_*.py` and fails on a dict `error`/`detail`, an
 `HTTPException` detail (keyword or positional), the content of a `*Response`, a
 `_note_start` argument, or a `ChildFaultError`/`PathJobError` category that is not built in
-the sanctioned shape (a `wire_error(...)` call, a fixed string, or a `CAT_*` constant). It
-does not prove other shapes safe (a body assembled in a variable, a key other than
+the sanctioned shape (a `CAT_*` constant, a conditional of two, `ffmpeg_stderr_category(...)`
+or a fault's own `.category`; a bare string is refused) or is not one of its code's words
+(read from `CODE_CATEGORIES`). It does not prove other shapes safe (a body assembled in a variable, a key other than
 `error`/`detail`), which is why the runtime tests exist.
 
 ### Choosing the device

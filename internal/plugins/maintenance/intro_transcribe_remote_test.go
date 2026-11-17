@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe_remote_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b21d7c95-3e48-4a06-9f1d-5c8e0a64b7f3
 // last-edited: 2026-11-17
 
@@ -423,21 +423,34 @@ func TestRemotePage_SilenceRetriesGoToTheWorkerNotToFFmpeg(t *testing.T) {
 // A worker whose ffmpeg is missing says so with worker_misconfigured. That is a
 // fault of the worker, not a verdict about the book: nothing is written and the
 // book is deferred (writing it as a per-book status is the 2026-08-31 shape).
+//
+// The Python workers send the same code for their other worker-side faults (ffmpeg that
+// the OS would not run, the worker's own temp clip unusable), so each of those defers
+// the same way instead of storing the durable ffmpeg_error verdict.
 func TestRemotePage_WorkerMisconfiguredWritesNothingAndDefers(t *testing.T) {
-	src := writeSource(t, "one.m4b")
-	store, written, books := remoteBookStore(t, map[string][]string{"b1": {src}})
-	rootDir, noWrites := noClipWrites(t)
-	swapPathSeams(t, true, "", func(context.Context, map[string]transcribe.PathJob, transcribe.BatchOptions) (map[string]transcribe.BatchResult, error) {
-		return map[string]transcribe.BatchResult{"b1": {Error: "worker_misconfigured: ffmpeg is not on PATH on this worker"}}, nil
-	})
-	n, accum := runRemotePage(t, store, books, rootDir)
-	if n != 0 || len(*written) != 0 {
-		t.Fatalf("processed=%d writes=%d, want 0 and 0", n, len(*written))
+	for _, errText := range []string{
+		"worker_misconfigured: ffmpeg is not on PATH on this worker",
+		"worker_misconfigured: ffmpeg_missing",
+		"worker_misconfigured: spawn_failed",
+		"worker_misconfigured: temp_wav_unusable",
+	} {
+		t.Run(errText, func(t *testing.T) {
+			src := writeSource(t, "one.m4b")
+			store, written, books := remoteBookStore(t, map[string][]string{"b1": {src}})
+			rootDir, noWrites := noClipWrites(t)
+			swapPathSeams(t, true, "", func(context.Context, map[string]transcribe.PathJob, transcribe.BatchOptions) (map[string]transcribe.BatchResult, error) {
+				return map[string]transcribe.BatchResult{"b1": {Error: errText}}, nil
+			})
+			n, accum := runRemotePage(t, store, books, rootDir)
+			if n != 0 || len(*written) != 0 {
+				t.Fatalf("processed=%d writes=%d, want 0 and 0", n, len(*written))
+			}
+			if st := accum.snapshot(); st.Deferred != 1 {
+				t.Errorf("stats = %+v, want Deferred=1", st)
+			}
+			noWrites()
+		})
 	}
-	if st := accum.snapshot(); st.Deferred != 1 {
-		t.Errorf("stats = %+v, want Deferred=1", st)
-	}
-	noWrites()
 }
 
 // A silence retry that FAILED (transport error, per-job error) proves nothing
