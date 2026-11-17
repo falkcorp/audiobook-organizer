@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-11-16-applygate-sequence-ranges-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 2c7e5a90-4b13-4d68-9f0a-e81d6b3c7a45 -->
-<!-- last-edited: 2026-11-16 -->
+<!-- last-edited: 2026-11-17 -->
 
 # The bulk-apply gate stops refusing some correct matches, without trusting a stale volume number
 
@@ -30,8 +30,14 @@ before this change, and nothing here has been re-run against that data.
 - A review of the first version found that this was still too trusting. The
   stored volume number on a book is the field most likely to be out of date,
   so a book whose only firm number is that stored one is no longer applied
-  just because a weaker number was ignored. It now also needs the title to
-  agree and the recording length to be known and to agree.
+  just because a weaker number was ignored. It now also needs the recording
+  length to be known and to agree, and every word of the book's stored title
+  that tells volumes apart (such as "Two" against "One") to appear in the
+  match's title or subtitle. A shared start of a title ("Batman") is no longer
+  enough, because two volumes of one storyline share it. The stored title,
+  the stored volume number and an unmarked file name all count as one source,
+  since an earlier apply can have written any of them; only a "Book N" marker
+  in a file or folder name is independent of that.
 - Collected editions got the same caution. Any collected edition, on either
   side, now needs a known recording length that agrees. If the length is
   unknown or only roughly close, the match goes to a person.
@@ -39,10 +45,22 @@ before this change, and nothing here has been re-run against that data.
   Jokers" is volume 2 of a book whose title starts with a number word, not a
   range from 2 to 3. A range followed by more numbers ("Books 1-3 and 5") is
   a different list, not the plain range.
-- Outcome: the whole set of safety refusals still holds, with two new reasons
-  added for the cases above. How many of the earlier false refusals this
-  removes is not known until the measurement is run again against the merged
-  change; the new rules can hold some of them for a person as well.
+- Outcome: two new refusal reasons were added for the cases above, and each
+  is listed on an owner's override record whenever it would have fired, even
+  if an earlier check refused first. Neither can be lifted by the review-page
+  button that applies rows nobody saw. The tests pin the cases named in this
+  summary; they do not prove that every refusal the gate had before is
+  unchanged. How many of the earlier false refusals this removes is not
+  known until the measurement is run again against the merged change; the new
+  rules can hold some of them for a person as well.
+- Known limit, accepted: two identical collected-edition titles with no
+  number in either ("Knightfall Omnibus" on the book and on the match) are
+  applied when the recording length agrees. The title says nothing about
+  which omnibus this is, so only the recording length speaks for it.
+- The one refusal that is new compared with before this change and remains
+  by design: a collected edition (on either side) whose recording length is
+  unknown or only roughly close now goes to a person, where two agreeing
+  signals used to be enough, even when the two sides are the same range.
 
 ## A track or list number was read as the volume number
 
@@ -74,7 +92,13 @@ the same range. The ranking penalty for compilations is lifted only when the
 book is itself a collected edition and the match is demonstrably the same one:
 the names are equal once the number wording is set aside, and the range or the
 edition wording agrees. Applying any collected edition unattended also needs a
-known, agreeing recording length.
+known, agreeing recording length. A single volume that merely sits in a folder
+named like a box set is not treated as a collected edition because of the
+folder name, and a word that only contains a bundle word ("Recollection") is a
+single volume. The same edition worded differently on the two sides
+("Books 1-3" against "Omnibus: Books 1-3") is no longer a refusal an owner
+cannot override; it goes to the recording-length rule, which an owner review
+can lift.
 
 ## Titles that merely start with a number word
 
@@ -87,4 +111,6 @@ could look like the three-book range inside it.
 
 **The fix.** A second end is read only when it is digits, or a roman numeral or
 number word directly after a range keyword. A range followed by more numbers is
-a list and matches only the same list.
+a list and matches only the same list. A number that starts the title after a
+comma ("Batman, Book 2, 10 Nights of the Beast") is not a list member, so the
+book stays volume 2.

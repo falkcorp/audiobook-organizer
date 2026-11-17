@@ -1,7 +1,7 @@
 // file: internal/seqnum/seqnum.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 5b0e7c2a-9d41-4f6e-8a13-c7d2e4f90b61
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 // Package seqnum extracts a volume / sequence number ("Big Cats 3", "Vol. III",
 // "02 - Title", "Book 1.5") from free text, so a bulk metadata apply can refuse
@@ -259,8 +259,8 @@ func ParsePosition(s string) (Number, bool) {
 
 // ParsePositionNoRange is ParsePosition for a caller that stores the result in
 // a numeric field and must keep one volume's meaning: it never reads a range
-// or a list, so "1 & 2" is the single number it always read (2), not the span
-// 1-2. catalog.ParseSequence uses it for what its own dash regex does not
+// or a list, so "1 & 2" is the single number it always read (the leading 1,
+// "Books 1 and 2" the trailing 2), not the span 1-2. catalog.ParseSequence uses it for what its own dash regex does not
 // match, which keeps every stored sequence bound what it was before ranges
 // existed.
 func ParsePositionNoRange(s string) (Number, bool) {

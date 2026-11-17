@@ -1,12 +1,13 @@
 // file: internal/applygate/sequence_ranges_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4d9c2a71-8e35-4f60-b2a8-17c6e3d05f94
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package applygate
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -635,6 +636,258 @@ func TestTitleIsSeriesWords(t *testing.T) {
 		}
 		if got := titleIsSeriesWords(b, cand); got != c.want {
 			t.Errorf("titleIsSeriesWords(%q, series %q) = %v, want %v", c.title, c.series, got, c.want)
+		}
+	}
+}
+
+// Round 3 (review r2). R2-MAJOR-1: the general title check agrees on a shared
+// prefix ("Batman" of two volumes of one storyline), so corroboration also
+// needs every word of the stored title that tells volumes apart on the
+// candidate.
+func TestEvaluate_R2Major1_SharedTitlePrefixIsNotCorroboration(t *testing.T) {
+	series := "Legends of the Dark Knight"
+	for name, tc := range map[string]struct {
+		book database.Book
+		cand metafetch.MetadataCandidate
+	}{
+		"Year Two against Year One": {
+			database.Book{Title: "02 - Batman: Year Two", SeriesPositionRaw: new("1"), Duration: new(36000)},
+			metafetch.MetadataCandidate{Title: "Batman: Year One", Series: series, SeriesPosition: "1", Score: 0.95, DurationSec: 36000}},
+		"Part Two against Part One": {
+			database.Book{Title: "02 - Hush: Part Two", SeriesPositionRaw: new("1"), Duration: new(36000)},
+			metafetch.MetadataCandidate{Title: "Hush: Part One", Series: series, SeriesPosition: "1", Score: 0.95, DurationSec: 36000}},
+	} {
+		book, cand := tc.book, tc.cand
+		if ok, reason := evalAll(&book, &cand); ok || reason != ReasonSequenceUnconfirmed {
+			t.Errorf("%s: allowed=%v reason=%q, want sequence_unconfirmed", name, ok, reason)
+		}
+	}
+	// Must still apply: the ordinal is the only word that differs, or the words match.
+	for name, tc := range map[string]struct {
+		book database.Book
+		cand metafetch.MetadataCandidate
+	}{
+		"ordinal only": {
+			database.Book{Title: "08 - The Long Halloween", SeriesPositionRaw: new("6"), Duration: new(36000)},
+			metafetch.MetadataCandidate{Title: "The Long Halloween", Series: series, SeriesPosition: "6", Score: 0.95, DurationSec: 36000}},
+		"same words, volume word on both sides": {
+			database.Book{Title: "02 - Batman: Year Two", SeriesPositionRaw: new("2"), Duration: new(36000)},
+			metafetch.MetadataCandidate{Title: "Batman: Year Two", Series: series, SeriesPosition: "2", Score: 0.95, DurationSec: 36000}},
+		"title word only in the candidate's subtitle": {
+			database.Book{Title: "03 - Knightfall: The Broken Bat", SeriesPositionRaw: new("1"), Duration: new(36000)},
+			metafetch.MetadataCandidate{Title: "Knightfall", Subtitle: "The Broken Bat", Series: series, SeriesPosition: "1", Score: 0.95, DurationSec: 36000}},
+		"series words in the stored title need not be on the candidate": {
+			database.Book{Title: "02 - Legends: Batman Year One", SeriesPositionRaw: new("1"), Duration: new(36000)},
+			metafetch.MetadataCandidate{Title: "Batman: Year One", Series: series, SeriesPosition: "1", Score: 0.95, DurationSec: 36000}},
+		"stop words in the stored title need not be on the candidate": {
+			database.Book{Title: "08 - The Long Halloween", SeriesPositionRaw: new("6"), Duration: new(36000)},
+			metafetch.MetadataCandidate{Title: "Long Halloween", Series: series, SeriesPosition: "6", Score: 0.95, DurationSec: 36000}},
+		"candidate has extra words": {
+			database.Book{Title: "03 - Knightfall", SeriesPositionRaw: new("1"), Duration: new(36000)},
+			metafetch.MetadataCandidate{Title: "Knightfall", Subtitle: "The Broken Bat", Series: series, SeriesPosition: "1", Score: 0.95, DurationSec: 36000}},
+	} {
+		book, cand := tc.book, tc.cand
+		if ok, reason := evalAll(&book, &cand); !ok {
+			t.Errorf("%s: refused (%s)", name, reason)
+		}
+	}
+	// The missing words are named.
+	b := &database.Book{Title: "02 - Batman: Year Two", SeriesPositionRaw: new("1")}
+	c := &metafetch.MetadataCandidate{Title: "Batman: Year One", Series: series, SeriesPosition: "1"}
+	if got := titleWordsMissing(b, c, CheckSequence(b, c)); len(got) != 1 || got[0] != "two" {
+		t.Errorf("titleWordsMissing = %v, want [two]", got)
+	}
+}
+
+// R2-MINOR-1: the stored title, the stored position and an unmarked file name
+// are fields an earlier apply can write, so they count as one source.
+func TestCheckSequence_WritableSourcesAreOneSource(t *testing.T) {
+	cand := metafetch.MetadataCandidate{Title: "Year One", Series: "Gotham Years", SeriesPosition: "1", Score: 0.95, DurationSec: 36000}
+	// Title and position both say 1 (an earlier apply wrote them); the file says 2.
+	b := database.Book{Title: "Year One 1", SeriesPositionRaw: new("1"), FilePath: "/lib/A/Year One/02 - Year Two.m4b"}
+	v := CheckSequence(&b, &cand)
+	if !v.Pass || v.Corroborate == "" {
+		t.Fatalf("title+position+weak file number: pass=%v corroborate=%q, want a pass that needs corroboration", v.Pass, v.Corroborate)
+	}
+	for runtime, dur := range map[string]*int{"unknown": nil, "neutral": new(34000)} {
+		bb := b
+		bb.Duration = dur
+		if ok, reason := evalAll(&bb, &cand); ok || (runtime == "neutral" && reason != ReasonSequenceUnconfirmed) {
+			t.Errorf("runtime %s: allowed=%v reason=%q", runtime, ok, reason)
+		}
+	}
+	// A "Book N" marker in the file name is not something an apply writes: independent, no corroboration.
+	m := database.Book{Title: "Year One", SeriesPositionRaw: new("3"), FilePath: "/lib/A/08 - Year One/Year One Book 3.m4b"}
+	mv := CheckSequence(&m, &metafetch.MetadataCandidate{Title: "Year One", SeriesPosition: "3"})
+	if !mv.Pass || mv.Corroborate != "" {
+		t.Errorf("independent marker: pass=%v corroborate=%q, want a pass without corroboration", mv.Pass, mv.Corroborate)
+	}
+}
+
+// R2-MINOR-2: the shapes round 2 refused that main did not.
+func TestEvaluate_R2Minor2_NewFalseRefusalsFixed(t *testing.T) {
+	neutral := new(34000)
+	// 1: a single volume inside a box-set FOLDER is not a collected edition by the folder name.
+	box := &database.Book{Title: "Knightfall", FilePath: "/lib/A/Knightfall, Books 1-3/Knightfall Book 2.m4b", Duration: neutral}
+	single := metafetch.MetadataCandidate{Title: "Knightfall", Series: "Gotham Years", SeriesPosition: "2", Score: 0.95, DurationSec: 36000}
+	// An agreeing runtime lifts partial_book (main's rule, unchanged); the
+	// collected-edition rule must then not add a refusal of its own.
+	agreeing := *box
+	agreeing.Duration = new(36000)
+	if ok, reason := evalAll(&agreeing, &single); !ok {
+		t.Errorf("single volume in a box-set folder, agreeing runtime: refused (%s)", reason)
+	}
+	// With a neutral runtime main already refused it as partial_book (a range in the folder, none in the candidate).
+	if ok, reason := evalAll(box, &single); ok || reason != ReasonPartialBook {
+		t.Errorf("single volume in a box-set folder, neutral runtime: allowed=%v reason=%q, want main's partial_book", ok, reason)
+	}
+	if got := collectedSide(box, &single, CheckSequence(box, &single)); got != "" {
+		t.Errorf("collectedSide for a single volume in a box-set folder = %q", got)
+	}
+	// 2: "Recollection" is a single volume (word-boundary test, not a substring).
+	rec := &database.Book{Title: "Batman: Recollection", SeriesPositionRaw: new("2"), Duration: neutral}
+	recCand := metafetch.MetadataCandidate{Title: "Batman: Recollection", Series: "Gotham Years", SeriesPosition: "2", Score: 0.95, DurationSec: 36000}
+	if ok, reason := evalAll(rec, &recCand); !ok {
+		t.Errorf("Recollection: refused (%s)", reason)
+	}
+	// 3: a candidate whose title states a range and whose position is an end of it.
+	box13 := &database.Book{Title: "Knightfall, Books 1-3", Duration: new(108000)}
+	endpoint := metafetch.MetadataCandidate{Title: "Knightfall, Books 1-3", Series: "Gotham Years", SeriesPosition: "3", Score: 0.95, DurationSec: 108000}
+	if ok, reason := evalAll(box13, &endpoint); !ok {
+		t.Errorf("range title with an endpoint position: refused (%s)", reason)
+	}
+	// ... and that candidate is still never given to one volume, nor is its endpoint a licence for a different range.
+	vol3 := &database.Book{Title: "Knightfall, Book 3", SeriesPositionRaw: new("3"), Duration: new(108000)}
+	if ok, reason := evalAll(vol3, &endpoint); ok || reason != ReasonSequenceMismatch {
+		t.Errorf("volume 3 against the range with an endpoint position: allowed=%v reason=%q", ok, reason)
+	}
+	// 4: the same edition with extra wording on one side is not a hard partial_book.
+	omni := metafetch.MetadataCandidate{Title: "Knightfall Omnibus", Subtitle: "Books 1-3", Series: "Gotham Years", SeriesPosition: "1-3", Score: 0.95, DurationSec: 108000}
+	for runtime, dur := range map[string]*int{"unknown": nil, "neutral": new(101000)} {
+		b := &database.Book{Title: "Knightfall, Books 1-3", SeriesPositionRaw: new("1-3"), Duration: dur}
+		v := evalRuntime(b, &omni)
+		if v.Allowed || v.Reason == ReasonPartialBook {
+			t.Errorf("runtime %s: allowed=%v reason=%q, want an overridable refusal that is not partial_book", runtime, v.Allowed, v.Reason)
+		}
+		if !v.OwnerReviewOverridable() {
+			t.Errorf("runtime %s: an owner review cannot lift %q", runtime, v.Reason)
+		}
+	}
+	// Different ranges are still the hard refusal.
+	other := omni
+	other.Subtitle, other.SeriesPosition = "Books 1-5", "1-5"
+	b := &database.Book{Title: "Knightfall, Books 1-3", SeriesPositionRaw: new("1-3"), Duration: neutral}
+	if v := evalRuntime(b, &other); v.Allowed || v.OwnerReviewOverridable() && v.Reason == ReasonPartialBook {
+		t.Errorf("different ranges: allowed=%v reason=%q", v.Allowed, v.Reason)
+	}
+}
+
+// R2-MINOR-3: a candidate collection that no span reader sees (wording only
+// in the subtitle) still needs an agreeing runtime.
+func TestEvaluate_R2Minor3_CandidateCompleteCollection(t *testing.T) {
+	cand := metafetch.MetadataCandidate{Title: "Knightfall", Subtitle: "The Complete Collection", Series: "Gotham Years", Score: 0.95, DurationSec: 108000}
+	book := &database.Book{Title: "Knightfall", Duration: new(101000)}
+	if ok, reason := evalAll(book, &cand); ok || reason != ReasonCollectedRuntimeUnconfirmed {
+		t.Fatalf("allowed=%v reason=%q, want collected_edition_runtime_unconfirmed", ok, reason)
+	}
+}
+
+// R2-MINOR-4 and NIT-1: an override record names both combined-leg reasons
+// whenever they would fire, whatever refused first, and the hashless marker
+// lifts neither.
+func TestVerdict_UnconfirmedReasonsAlwaysListed(t *testing.T) {
+	// A collected edition with an unknown runtime whose score is also below the floor.
+	cand := metafetch.MetadataCandidate{Title: "Knightfall Omnibus", Series: "Gotham Years", Score: 0.5, DurationSec: 108000}
+	book := &database.Book{Title: "Knightfall Omnibus", Author: &database.Author{Name: "Bruce Wayne"}, Narrator: new("Alfred Pennyworth")}
+	cand.Author, cand.Narrator = "Bruce Wayne", "Alfred Pennyworth"
+	v := evalRuntime(book, &cand)
+	if v.Allowed || v.Reason != ReasonScoreBelowFloor {
+		t.Fatalf("setup: allowed=%v reason=%q, want score_below_floor first", v.Allowed, v.Reason)
+	}
+	if !slices.Contains(v.RefusingReasons(), ReasonCollectedRuntimeUnconfirmed) {
+		t.Errorf("override record omits the collected-edition reason: %v", v.RefusingReasons())
+	}
+	if v.UnseenOwnerReviewOverridable() {
+		t.Error("the hashless marker lifts a pair that also needs a confirming runtime")
+	}
+	// A weak ordinal over a stale position, refused by the evidence leg first (unknown runtime on an overwrite).
+	b := &database.Book{Title: "03 - Knightfall", SeriesPositionRaw: new("1")}
+	c := metafetch.MetadataCandidate{Title: "Knightfall", Series: "Gotham Years", SeriesPosition: "1", Score: 0.95, DurationSec: 36000}
+	v2 := evalRuntime(b, &c)
+	if v2.Allowed || !slices.Contains(v2.RefusingReasons(), ReasonSequenceUnconfirmed) {
+		t.Errorf("allowed=%v reasons=%v, want sequence_unconfirmed listed", v2.Allowed, v2.RefusingReasons())
+	}
+	// Neither new reason is lifted by the hashless marker even as the first reason.
+	for _, r := range []string{ReasonSequenceUnconfirmed, ReasonCollectedRuntimeUnconfirmed} {
+		if (Verdict{Reason: r}).UnseenOwnerReviewOverridable() {
+			t.Errorf("%s is lifted by the hashless marker", r)
+		}
+		if !(Verdict{Reason: r}).OwnerReviewOverridable() {
+			t.Errorf("%s is not lifted by an owner review", r)
+		}
+	}
+}
+
+// R2-MINOR-6: a digit list needs a terminator, so a number that starts the
+// title after a comma is not a list member.
+func TestEvaluate_R2Minor6_NumberStartingTheTitle(t *testing.T) {
+	book := &database.Book{Title: "Batman, Book 2, 10 Nights of the Beast", SeriesPositionRaw: new("2"), Duration: new(36000)}
+	cand := metafetch.MetadataCandidate{Title: "Batman, Book 2, 10 Nights of the Beast", Series: "Batman", SeriesPosition: "2", Score: 0.95, DurationSec: 36000}
+	if ok, reason := evalAll(book, &cand); !ok {
+		t.Fatalf("right match refused: %s", reason)
+	}
+}
+
+// A "Book N" marker in a FOLDER name is as independent of an earlier apply as
+// one in a file name.
+func TestCheckSequence_FolderMarkerIsIndependent(t *testing.T) {
+	m := database.Book{Title: "Year One", SeriesPositionRaw: new("3"), FilePath: "/lib/A/Year One Book 3/08 - Year One.m4b"}
+	mv := CheckSequence(&m, &metafetch.MetadataCandidate{Title: "Year One", SeriesPosition: "3"})
+	if !mv.Pass || mv.Corroborate != "" {
+		t.Errorf("folder marker: pass=%v corroborate=%q, want a pass without corroboration", mv.Pass, mv.Corroborate)
+	}
+}
+
+// The endpoint rule is symmetric: a range in the candidate's SUBTITLE with a
+// position equal to an end of it is the range stated twice.
+func TestEvaluate_CandidateSubtitleRangeWithEndpointPosition(t *testing.T) {
+	book := &database.Book{Title: "Knightfall, Books 1-3", Duration: new(108000)}
+	cand := metafetch.MetadataCandidate{Title: "Knightfall", Subtitle: "Books 1-3", Series: "Gotham Years", SeriesPosition: "3", Score: 0.95, DurationSec: 108000}
+	if ok, reason := evalAll(book, &cand); !ok {
+		t.Errorf("subtitle range with an endpoint position: refused (%s)", reason)
+	}
+}
+
+// collectedSide reads each side on its own: book wording with no range (which
+// partial_book would mask in a full evaluation), and the hidden-reason lift.
+func TestCollectedSide_EachSideOnItsOwn(t *testing.T) {
+	single := &metafetch.MetadataCandidate{Title: "Knightfall", Series: "Gotham Years", SeriesPosition: "2"}
+	book := &database.Book{Title: "Knightfall Omnibus"}
+	if got := collectedSide(book, single, CheckSequence(book, single)); got != "the book" {
+		t.Errorf("book wording only: %q, want the book", got)
+	}
+	vol := &database.Book{Title: "Knightfall", SeriesPositionRaw: new("1-3")}
+	if got := collectedSide(vol, single, CheckSequence(vol, single)); got != "the book" {
+		t.Errorf("stored range position: %q, want the book", got)
+	}
+	omni := &metafetch.MetadataCandidate{Title: "Knightfall", Subtitle: "Books 1-3", SeriesPosition: "3"}
+	sb := &database.Book{Title: "Knightfall", SeriesPositionRaw: new("2")}
+	if got := collectedSide(sb, omni, CheckSequence(sb, omni)); got != "the candidate" {
+		t.Errorf("candidate range in the subtitle: %q, want the candidate", got)
+	}
+}
+
+func TestVerdict_HiddenUnconfirmedReasonIsNeverUnseenOverridable(t *testing.T) {
+	for _, r := range []string{ReasonSequenceUnconfirmed, ReasonCollectedRuntimeUnconfirmed} {
+		v := Verdict{Reason: ReasonScoreBelowFloor, Unconfirmed: []string{r}}
+		if !v.OwnerReviewOverridable() {
+			t.Fatalf("setup: score_below_floor is not owner-overridable")
+		}
+		if v.UnseenOwnerReviewOverridable() {
+			t.Errorf("a pair that also needs %s is lifted by the hashless marker", r)
+		}
+		if !slices.Contains(v.RefusingReasons(), r) {
+			t.Errorf("override record omits %s: %v", r, v.RefusingReasons())
 		}
 	}
 }

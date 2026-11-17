@@ -1,11 +1,14 @@
 // file: internal/applygate/owner_review.go
-// version: 1.7.3
+// version: 1.7.4
 // guid: 3e7b2c14-8d95-4f06-a1c3-6b9e0d4f7a28
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package applygate
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // An OWNER-REVIEWED apply is one the owner started from an apply button on the
 // review page: a single row or a bulk button (owner ruling 2026-09-27, every
@@ -80,9 +83,14 @@ func (v Verdict) OwnerReviewOverridable() bool {
 //
 // transcription_runtime_unverified is excluded for the same reason: the owner
 // who reads a flagged row sees the runtime warning and may apply it, but the
-// marker proves nobody saw the row, so the warning was never read.
+// marker proves nobody saw the row, so the warning was never read. The two
+// combined-leg reasons (sequence_unconfirmed, collected_edition_runtime_
+// unconfirmed) are runtime warnings of the same kind and are excluded whether
+// or not they were the first leg to refuse.
 func (v Verdict) UnseenOwnerReviewOverridable() bool {
 	return v.Reason != ReasonReviewOnlySource && v.Reason != ReasonTranscriptionRuntimeUnverified &&
+		v.Reason != ReasonSequenceUnconfirmed && v.Reason != ReasonCollectedRuntimeUnconfirmed &&
+		!slices.Contains(v.Unconfirmed, ReasonSequenceUnconfirmed) && !slices.Contains(v.Unconfirmed, ReasonCollectedRuntimeUnconfirmed) &&
 		v.OwnerReviewOverridable()
 }
 
@@ -110,9 +118,6 @@ func (v Verdict) RefusingReasons() []string {
 	if v.ScoreReason != "" {
 		out = append(out, v.ScoreReason)
 	}
-	if v.Reason == ReasonSequenceUnconfirmed || v.Reason == ReasonCollectedRuntimeUnconfirmed {
-		out = append(out, v.Reason)
-	}
 	if !v.Sequence.Pass && v.Sequence.Reason != "" {
 		out = append(out, v.Sequence.Reason)
 	}
@@ -127,6 +132,13 @@ func (v Verdict) RefusingReasons() []string {
 		if !blocked && v.Evidence.Reason != "" {
 			out = append(out, v.Evidence.Reason)
 		}
+	}
+	// The combined-leg reasons, whichever leg refused first: they are computed
+	// unconditionally (Verdict.Unconfirmed), and a verdict built by hand with
+	// one of them as its Reason is listed too.
+	out = append(out, v.Unconfirmed...)
+	if (v.Reason == ReasonSequenceUnconfirmed || v.Reason == ReasonCollectedRuntimeUnconfirmed) && !slices.Contains(v.Unconfirmed, v.Reason) {
+		out = append(out, v.Reason)
 	}
 	return out
 }

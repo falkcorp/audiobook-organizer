@@ -1,7 +1,7 @@
 // file: internal/seqnum/range_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7b2d9e41-5a63-4c08-b1f7-d4e08a36c915
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package seqnum
 
@@ -215,6 +215,10 @@ func TestParse_RangeOverReads(t *testing.T) {
 		{"Batman, Book 1 - L.A. Confidential", "1"},
 		{"Batman, Book 1 - C Is for Catwoman", "1"},
 		{"Batman, Book 2 to Three Jokers", "2"},
+		{"Batman, Book 2, 10 Nights of the Beast", "2"},
+		{"Batman, Book 3 and 4 Horsemen", "3"},
+		{"Batman, Books 3, 4 and 5", "3-5 (range)"},
+		{"Batman, Books 3, 4 and 5: Unabridged", "3-5 (range)"},
 		{"Batman, Book 4 - 52", "4"},
 		{"Batman, Book 2 - 3 Jokers", "2"},
 		{"Batman, Vol. 2 - Three Jokers", "2"},
