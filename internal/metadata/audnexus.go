@@ -1,5 +1,5 @@
 // file: internal/metadata/audnexus.go
-// version: 2.13.0
+// version: 2.13.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-a3b4c5d6e7f8
 // last-edited: 2026-11-16
 
@@ -167,8 +167,11 @@ var audnexusRegions = []string{"", "us", "uk", "au", "ca", "in", "de", "fr", "jp
 // 10 s context deadline created before the request was handed to the transport,
 // so it ran while the request waited its turn on the shared token bucket
 // (providerhttp, 2 rps): 20 workers queued on that bucket wait 20/2 = 10 s, the
-// whole budget, and 482 of 814 lookups in the 2026-11-16 candidate-fetch run died
-// with a bare "context deadline exceeded" on requests Audnexus answers in 0.3 s.
+// whole budget. That is the INFERRED cause of the 482 of 814 lookups in the
+// 2026-11-16 candidate-fetch run that died with a bare "context deadline
+// exceeded" (the arithmetic fits and nothing in the logs contradicts it; the
+// per-lookup wait was not measured), on requests Audnexus answers in 0.3 s when
+// asked on its own.
 // providerhttp.Limits.AttemptTimeout bounds the exchange itself and starts only
 // once the request holds its token, so a long queue no longer fails a lookup.
 

@@ -1,5 +1,5 @@
 // file: internal/metadata/provider_error.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: fa58b130-5ad4-4cfc-b726-728a75522364
 // last-edited: 2026-11-16
 
@@ -84,6 +84,23 @@ const (
 	CauseOther       = "other"
 )
 
+// limiterDeadlineMessage is what golang.org/x/time/rate's Limiter.Wait says when
+// the next token would arrive after the caller's context deadline: a plain
+// fmt.Errorf with no sentinel and no wrapped context error, so only its text
+// identifies it. TestFailureCause_LimiterDeadlineRefusal builds the error with a
+// real limiter, so a library that rewords it fails there, not in production.
+const limiterDeadlineMessage = "would exceed context deadline"
+
+// isLimiterDeadlineRefusal reports whether err is the rate limiter declining to
+// queue a call that could not get its token before the caller's deadline. The
+// call was never sent: the time budget ran out waiting in the queue, which is a
+// timeout in the only sense a caller can act on (fewer workers, a longer
+// deadline), not an "other". providerhttp and the ASIN lookup's own limiter wait
+// both return it, wrapped, so the match is on the text.
+func isLimiterDeadlineRefusal(err error) bool {
+	return err != nil && strings.Contains(err.Error(), limiterDeadlineMessage)
+}
+
 // FailureCause classifies a provider error into one of the Cause* words. A
 // spent daily budget is quota; a hold or an open breaker is provider_held (we
 // did not ask: an earlier failure, whatever it was, put the provider on hold).
@@ -99,7 +116,7 @@ func FailureCause(err error) string {
 		return CauseHeld
 	case errors.Is(err, context.Canceled):
 		return CauseCanceled
-	case errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, context.DeadlineExceeded), isLimiterDeadlineRefusal(err):
 		return CauseTimeout
 	}
 	if se, ok := errors.AsType[*ProviderStatusError](err); ok {

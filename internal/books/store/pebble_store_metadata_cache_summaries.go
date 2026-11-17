@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store_metadata_cache_summaries.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 2e7b4c90-5d16-4a8f-b3c2-8f1e6a9d0c57
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 
 package store
 
@@ -53,10 +53,20 @@ type metadataCacheSummaryRow struct {
 	Candidates []struct{} `json:"candidates"`
 	FetchedAt  time.Time  `json:"fetched_at"`
 	Stale      bool       `json:"stale,omitempty"`
+	// OwedSources is decoded for its Attempts alone (MetadataCacheSummary.Owed).
+	OwedSources map[string]struct {
+		Attempts int `json:"attempts,omitempty"`
+	} `json:"owed_sources,omitempty"`
 }
 
 func (r *metadataCacheSummaryRow) summary() MetadataCacheSummary {
-	return MetadataCacheSummary{BookID: r.BookID, FetchedAt: r.FetchedAt, CandidateCount: len(r.Candidates), Stale: r.Stale}
+	owed := false
+	for _, o := range r.OwedSources {
+		if o.Attempts < OwedMaxAsks {
+			owed = true
+		}
+	}
+	return MetadataCacheSummary{BookID: r.BookID, FetchedAt: r.FetchedAt, CandidateCount: len(r.Candidates), Stale: r.Stale, Owed: owed}
 }
 
 // ListMetadataCacheKeys returns one summary per cached entry, ordered by

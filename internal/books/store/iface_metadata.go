@@ -1,7 +1,7 @@
 // file: internal/books/store/iface_metadata.go
-// version: 1.11.1
+// version: 1.12.0
 // guid: 4c6267a6-b5ae-4e10-bce6-94b362c33a3f
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 //
 // METADATA-CACHED-MATCHER: storage surface for the per-book
 // metadata-candidate cache. Cache lives under PebbleDB key prefix
@@ -12,6 +12,8 @@ package store
 
 import (
 	"encoding/json"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 )
@@ -96,6 +98,29 @@ type MetadataCandidateCache struct {
 	// empty answer. A deferral (budget spent, throttle hold, 429/5xx/timeout)
 	// is an attempt but never settles.
 	FallbackAttempts map[string]FallbackAttempt `json:"fallback_attempts,omitempty"`
+	// OwedSources records the chain sources (not the fallback providers:
+	// FallbackAttempts is theirs) that could not be asked, or could not be
+	// heard from, when the last search wrote this row -- Audnexus on a 5xx,
+	// a timeout or a breaker hold -- keyed by display name like EmptyAnswers.
+	// "Could not ask" is not "has nothing", and a row that holds candidates
+	// from the OTHER sources still owes that source its answer.
+	//
+	// It exists because the candidates' 30-day freshness (MetadataCacheTTL)
+	// says nothing about a source that never answered: without it a book
+	// whose Audnexus lookup failed in the run that found its Open Library or
+	// Google Books candidate was parked on those review-only candidates for a
+	// month, and Audnexus -- the one source that answers for the book's own
+	// ASIN, with a runtime and narrators that can be bulk-applied -- was
+	// never asked again. The verdict (metafetch.CachedBatchVerdict) and the
+	// scheduled selection read it: a source that is owed AND due
+	// (OwedSource.Due) is re-asked, alone, on a bounded backoff
+	// (OwedBackoff) that ends at OwedMaxAsks asks.
+	//
+	// Kept across writes for the same fingerprint and ASIN, dropped when
+	// either changes (the question it owes is another one), and cleared per
+	// source the moment that source answers. A row written before this field
+	// existed decodes to nil: it owes nothing, as before.
+	OwedSources map[string]OwedSource `json:"owed_sources,omitempty"`
 	// Stale marks a row whose candidates were fetched for a search identity
 	// the book no longer has (it was retitled or re-credited after the fetch).
 	// This is NOT the TTL freshness of IsFresh() (the review page's existing
@@ -108,6 +133,89 @@ type MetadataCandidateCache struct {
 	// StaleQuestionFP is the SearchFingerprint of the question the row was
 	// stale against, for an operator reading a refusal. Empty unless Stale.
 	StaleQuestionFP string `json:"stale_question_fp,omitempty"`
+}
+
+// OwedSource is one chain source's unanswered question on a cache row
+// (MetadataCandidateCache.OwedSources).
+type OwedSource struct {
+	// Since is when the source first failed to answer these inputs.
+	Since time.Time `json:"since"`
+	// LastAttempt is when it was last asked and did not answer. The backoff
+	// counts from here.
+	LastAttempt time.Time `json:"last_attempt"`
+	// Attempts counts the asks that reached the provider and failed. A hold
+	// (an open breaker, a throttle) sent nothing, so it moves LastAttempt and
+	// not this: an outage of the provider's own making must not use up the
+	// book's asks.
+	Attempts int `json:"attempts,omitempty"`
+	// Cause is why the last ask failed (metadata.Cause* word), for an operator
+	// reading the row.
+	Cause string `json:"cause,omitempty"`
+}
+
+// OwedBackoff is the wait before the re-ask that follows the n-th failed ask
+// (index n-1): 6 h, then 24 h, 3 d, 7 d. A fifth failure ends the re-asks
+// (OwedMaxAsks), after about 11.5 days -- inside the row's 30-day TTL, and
+// short of "every tick, forever" for an ASIN the provider will never answer.
+// A source's asks are the only ones this spends: the fallback providers, and
+// so the Google Books budget, are never re-asked on its account.
+var OwedBackoff = [...]time.Duration{6 * time.Hour, 24 * time.Hour, 72 * time.Hour, 168 * time.Hour}
+
+// OwedMaxAsks is the most asks (the first, which left the source owed, and the
+// re-asks) a source gets for one row before it is left alone.
+const OwedMaxAsks = len(OwedBackoff) + 1
+
+// Exhausted reports that the source has used all OwedMaxAsks asks: the
+// scheduled selection and the verdict no longer re-ask it. A forced refetch,
+// a change of the book's search inputs or ASIN, or the row's refetch after its
+// TTL asks it again.
+func (o OwedSource) Exhausted() bool { return o.Attempts >= OwedMaxAsks }
+
+// NextAttempt is when the source is next due, false when it is exhausted.
+func (o OwedSource) NextAttempt() (time.Time, bool) {
+	if o.Exhausted() {
+		return time.Time{}, false
+	}
+	i := max(o.Attempts, 1) - 1
+	return o.LastAttempt.Add(OwedBackoff[i]), true
+}
+
+// Due reports whether the source should be re-asked at now.
+func (o OwedSource) Due(now time.Time) bool {
+	at, ok := o.NextAttempt()
+	return ok && !now.Before(at)
+}
+
+// OwedDue returns, sorted, the sources of active that the row still owes an
+// answer and whose backoff has run out at now: the ones to re-ask, alone. A
+// nil row owes nothing.
+func (c *MetadataCandidateCache) OwedDue(now time.Time, active []string) []string {
+	if c == nil || len(c.OwedSources) == 0 {
+		return nil
+	}
+	var due []string
+	for _, name := range active {
+		if o, ok := c.OwedSources[name]; ok && o.Due(now) {
+			due = append(due, name)
+		}
+	}
+	sort.Strings(due)
+	return slices.Compact(due)
+}
+
+// OwedPending reports whether any owed source can still be re-asked (is not
+// exhausted), whatever its backoff says now. It is the cheap row-level flag
+// MetadataCacheSummary.Owed mirrors.
+func (c *MetadataCandidateCache) OwedPending() bool {
+	if c == nil {
+		return false
+	}
+	for _, o := range c.OwedSources {
+		if !o.Exhausted() {
+			return true
+		}
+	}
+	return false
 }
 
 // FallbackDeferred reports whether a fallback provider's last attempt for
@@ -193,6 +301,11 @@ type MetadataCacheSummary struct {
 	// Stale mirrors MetadataCandidateCache.Stale so the candidate fetch
 	// selection can pick stale rows without decoding every entry.
 	Stale bool `json:"stale,omitempty"`
+	// Owed mirrors MetadataCandidateCache.OwedPending: the row owes a chain
+	// source an answer it can still be asked for, so the candidate fetch
+	// selection reads the row (and its backoff) for a book that holds
+	// candidates and has no fallback provider enabled.
+	Owed bool `json:"owed,omitempty"`
 }
 
 // MetadataCacheStore is the persistence layer for the per-book
