@@ -1,5 +1,5 @@
 // file: internal/seqnum/range.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3e8a1d57-4c20-4b9f-a6d3-91f5b0c7e248
 // last-edited: 2026-11-17
 
@@ -52,6 +52,10 @@ var (
 
 	// A span's continuation: ", 5", "& 5", "and 4-6".
 	reSpanTail = regexp.MustCompile(`^` + sepList + `(` + digitsN + `)(?:\s*[-–—]\s*(` + digitsN + `))?\b`)
+
+	// reTailEnd is what may follow the last continuation of a span: the end
+	// of the text or a terminator (the same set a spelled-out second end needs).
+	reTailEnd = regexp.MustCompile(`^` + terminal)
 
 	reListDigits = regexp.MustCompile(rangeKeyword + `(` + digitsN + `(?:` + sepList + digitsN + `)+)` + terminal)
 	reListWords  = regexp.MustCompile(rangeKeyword + `(` + anyNum + `(?:` + sepList + anyNum + `)+)` + terminal)
@@ -133,26 +137,44 @@ func ParseRange(s string) (Number, bool) {
 
 // appendTail adds the "& 5" / ", 7-9" continuations that follow a span.
 func appendTail(segs []seg, rest string) []seg {
+	// A continuation counts only when it ends the list: at the end of the
+	// text or before a terminator (reTailEnd). "Books 1-3, 10 Nights of the
+	// Beast" is the span 1-3 and a title that starts with 10, not the list
+	// 1-3 & 10. Continuations are collected first and the ones the text does
+	// not end after are dropped from the back.
+	type tail struct {
+		sg  seg
+		end int
+	}
+	var tails []tail
+	off := 0
 	for {
-		m := reSpanTail.FindStringSubmatchIndex(rest)
+		m := reSpanTail.FindStringSubmatchIndex(rest[off:])
 		if m == nil {
-			return segs
+			break
 		}
-		a, aok := toNumber(rest[m[2]:m[3]], "range")
+		a, aok := toNumber(rest[off+m[2]:off+m[3]], "range")
 		if !aok {
-			return segs
+			break
 		}
 		sg := seg{a.Value, a.Value}
 		if m[4] >= 0 {
-			b, bok := toNumber(rest[m[4]:m[5]], "range")
+			b, bok := toNumber(rest[off+m[4]:off+m[5]], "range")
 			if !bok {
-				return segs
+				break
 			}
 			sg.hi = b.Value
 		}
-		segs = append(segs, sg)
-		rest = rest[m[1]:]
+		off += m[1]
+		tails = append(tails, tail{sg, off})
 	}
+	for len(tails) > 0 && !reTailEnd.MatchString(rest[tails[len(tails)-1].end:]) {
+		tails = tails[:len(tails)-1]
+	}
+	for _, t := range tails {
+		segs = append(segs, t.sg)
+	}
+	return segs
 }
 
 // parsePositionRange reads a bare span or list that is the whole position

@@ -1,5 +1,5 @@
 // file: internal/seqnum/range_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7b2d9e41-5a63-4c08-b1f7-d4e08a36c915
 // last-edited: 2026-11-17
 
@@ -242,6 +242,11 @@ func TestParse_RangeOverReads(t *testing.T) {
 		{"Batman, Books 1-3 and 4-6", "1-6 (range)"},
 		{"Batman, Books 1-3 & 4", "1-4 (range)"},
 		{"Batman, Books 1-2 & 4-5", "1-2,4-5 (range)"},
+		// A continuation must end the list: a number that starts the title after
+		// it is not a member (R3-NIT-2).
+		{"Batman Books 1-3, 10 Nights of the Beast", "1-3 (range)"},
+		{"Batman, Books 1-3 & 5, 7 Nights of the Beast", "1-3,5 (range)"},
+		{"Batman, Books 1-3, 5: Unabridged", "1-3,5 (range)"},
 	}
 	for _, tc := range cases {
 		n, ok := Parse(tc.in)
