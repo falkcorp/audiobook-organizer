@@ -1,5 +1,5 @@
 // file: internal/metafetch/retired_apply_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 91d2a6c4-0e7b-4f35-8a19-2b6c5d7e3f80
 // last-edited: 2026-11-17
 
@@ -128,10 +128,22 @@ func TestRetiredApply_OverwritingApplyWithoutAllowRetiredRefusesRetiredBook(t *t
 			t.Run(rc.name+"/"+label, func(t *testing.T) {
 				store, book, updated := stampFixture(false)
 				rc.retire(book)
+				// As for the automatic options: the refusal comes at the start,
+				// before the apply body reads field states and resolves or
+				// creates author and series rows. A check that only refused at
+				// the commit would leave those rows behind for a book that was
+				// never going to be written.
+				bodyReads := 0
+				inner := store.GetMetadataFieldStatesFunc
+				store.GetMetadataFieldStatesFunc = func(id string) ([]database.MetadataFieldState, error) {
+					bodyReads++
+					return inner(id)
+				}
 				resp, err := NewService(store).ApplyMetadataCandidateWithOptions("stamp-1", stampCandidate, nil, opts)
 				require.ErrorIs(t, err, ErrBookRetired)
 				require.Nil(t, resp)
 				require.Nil(t, *updated, "nothing was committed")
+				require.Zero(t, bodyReads, "the apply body ran before the refusal")
 			})
 		}
 	}
