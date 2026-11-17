@@ -28,3 +28,9 @@
         locking (a per-book resource ID through `RunItems`) instead of a
         whole-kind write set, so a scheduled kind waits for one batch and not for
         a job's 4h timeout.
+      - No test checks that `taglib_cgo.go` and `taglib_support.go` reach the
+        same write helpers. The write-set oracle walks the non-cgo variant;
+        production ships the cgo one (`native_taglib`), which cannot be loaded
+        without cgo and the vendored libraries.
+      - `FailJobWritesWith` (in `export_writes_test.go`) swaps a package
+        variable, so it is unsafe under `t.Parallel`.

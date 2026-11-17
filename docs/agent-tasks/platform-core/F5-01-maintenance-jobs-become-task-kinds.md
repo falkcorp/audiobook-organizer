@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/F5-01-maintenance-jobs-become-task-kinds.md -->
-<!-- version: 1.1.3 -->
+<!-- version: 1.1.4 -->
 <!-- guid: 4851e004-a6e4-42d7-97a5-b7407fc8b8a3 -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-17 -->
 
 # F5-01 — Conversion group T2: the 34 `MaintenanceJob`s of `internal/maintenance/jobs` become books Task kinds, dark
 
@@ -328,7 +328,7 @@ or `main.go`.
 
 ## TDD: tests to write first (names coined here)
 
-- `TestJobKinds_Conformance`: `taskstest.Conformance(t, jobs.Kinds(fakeKindDeps(t), nil)...)` over all 34.
+- `TestJobKinds_Conformance`: `defs, err := jobs.Kinds(fakeKindDeps(t), nil)` (`require.NoError`), then `taskstest.Conformance(t, defs...)` over all 34.
 - `TestJobKinds_MatchHEADWrapper`: for every `maintenance.All()` job, kind = `books.maintenance.` + ID,
   `Title`, `Resume`, `Timeout`, the `Effects` class (ReadOnly exactly for the jobs whose advertised dry-run
   default is false and that hold no write capability) and `Perms.Start` match what HEAD's wrapper declares.
