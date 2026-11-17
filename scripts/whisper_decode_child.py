@@ -1,5 +1,5 @@
 # file: scripts/whisper_decode_child.py
-# version: 2.2.1
+# version: 2.3.0
 # guid: 5d0c8e7a-3b94-4a62-9f1e-b7a4c2d81e56
 # last-edited: 2026-11-17
 #
@@ -413,7 +413,7 @@ class DecodeChild:
             self._fault_free_start(wait)
         except ChildFaultError as e:
             log.warning("decode process failed to start (%s): %s", e.category, e)
-            self._note_start(f"worker_misconfigured: {e.category or 'start_failed'}")
+            self._note_start(f"worker_misconfigured: {e.category}")
             raise
         self._note_start(None)
         return self.meta()

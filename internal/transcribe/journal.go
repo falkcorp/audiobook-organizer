@@ -1,5 +1,5 @@
 // file: internal/transcribe/journal.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 60c7ae00-b3ec-476b-a63e-00418bb73933
 // last-edited: 2026-11-17
 
@@ -50,7 +50,10 @@ type journalResult struct {
 // endpoint's model identity and decode fingerprint, which with the clip bytes
 // make up every key.
 // A nil *endpointJournal is valid and means "no journal": plan passes every
-// job through and complete is a no-op, which is the pre-journal behaviour.
+// job through and complete is a no-op, which is the pre-journal behaviour. So does
+// one whose journal field is nil (newEndpointJournal makes one whenever the endpoint was
+// probed, journal or not, so that observe can still drop a cached probe that an answer
+// disproved).
 //
 // Immutable after construction except for written (under mu), so the per-file
 // workers and the batch loop can use it without further locking; the journal
@@ -130,7 +133,20 @@ type responseIdentity struct {
 // identity, so an old worker is mentioned once, not once per chunk.
 var noIdentityLogged sync.Map
 
-// observe makes the journal view agree with the worker that actually answered.
+// observe is observeIdentity for an upload-route answer (its rows are keyed by the clip's
+// bytes, so the extract fingerprint plays no part in their keys).
+func (ej *endpointJournal) observe(resp *responseIdentity) (journalable bool) {
+	return ej.observeIdentity(resp, false)
+}
+
+// observePath is observeIdentity for a path-route answer: its rows are keyed by the file's
+// identity AND by how the worker extracted it, so the extract fingerprint is required too.
+func (ej *endpointJournal) observePath(resp *responseIdentity) (journalable bool) {
+	return ej.observeIdentity(resp, true)
+}
+
+// observeIdentity makes the journal view agree with the worker that actually answered, and
+// reports whether this answer's results may be journalled.
 //
 // The view starts from the /health probe the gate read, which can be up to
 // gateProbeTTL old, and a worker PROCESS that was replaced since (restarted by its
@@ -139,35 +155,57 @@ var noIdentityLogged sync.Map
 // probe's model would serve it as the old model's from then on. So the answer's own
 // identity wins: the results of this answer, and of every later one in the call, are
 // filed under it, and the cached probe for the endpoint is dropped so the next
-// dispatch asks again instead of reusing the stale view.
+// dispatch asks again instead of reusing the stale view. The probe is dropped whether
+// or not there is a journal: the view is as stale for the gate either way.
 //
-// An answer with no identity (a worker older than the field) changes nothing: it is
-// journalled under what /health said, as before, and that is logged once per
-// endpoint. Safe for concurrent use.
-func (ej *endpointJournal) observe(resp *responseIdentity) {
+// Three cases:
+//   - No identity object at all (a worker older than the field): nothing changes, the
+//     results are journalled under what /health said, as before, and that is logged
+//     once per endpoint.
+//   - A complete identity: model, backend and decode_fingerprint all non-empty. These are
+//     the three that key every row, and an empty one would make a key less specific than
+//     the worker's real identity (a model-only key is also the one a worker that reports
+//     no fingerprint is served from, whatever its decode settings). The extract
+//     fingerprint is required only when needExtract is set (path rows, whose key holds
+//     it); an upload answer that omits it keeps the probe's, which no upload key reads.
+//   - An identity that is present but not complete: it is not trusted, and not repaired
+//     from the probe either (the answer said something other than the probe did). The
+//     answer is NOT journalled (journalable is false; the caller still returns the text),
+//     the call's identity is left as it was, and the cached probe is dropped.
+//
+// Safe for concurrent use.
+func (ej *endpointJournal) observeIdentity(resp *responseIdentity, needExtract bool) (journalable bool) {
 	if ej == nil {
-		return
+		return false
 	}
-	if resp == nil || strings.TrimSpace(resp.Model) == "" {
-		if _, seen := noIdentityLogged.LoadOrStore(ej.endpoint, struct{}{}); !seen {
-			journalLog.Info("worker answers carry no identity, journalling under its /health identity: url=%s", logger.SanitizeLogValue(ej.endpoint))
+	if resp == nil {
+		if ej.journal != nil {
+			if _, seen := noIdentityLogged.LoadOrStore(ej.endpoint, struct{}{}); !seen {
+				journalLog.Info("worker answers carry no identity, journalling under its /health identity: url=%s", logger.SanitizeLogValue(ej.endpoint))
+			}
 		}
-		return
+		return true
 	}
 	got := journalIdent{
 		model:       joinModelIdentity(resp.Backend, resp.Model),
 		fingerprint: strings.TrimSpace(resp.DecodeFingerprint),
 		extract:     strings.TrimSpace(resp.ExtractFingerprint),
 	}
+	if strings.TrimSpace(resp.Model) == "" || strings.TrimSpace(resp.Backend) == "" || got.fingerprint == "" || (needExtract && got.extract == "") {
+		journalLog.Warn("worker answered with an incomplete identity, its results are not journalled and the cached probe is dropped: url=%s model=%t backend=%t decode_fingerprint=%t extract_fingerprint=%t",
+			logger.SanitizeLogValue(ej.endpoint), strings.TrimSpace(resp.Model) != "", strings.TrimSpace(resp.Backend) != "", got.fingerprint != "", got.extract != "")
+		forgetGateProbe(ej.endpoint)
+		return false
+	}
 	ej.mu.Lock()
 	if got.extract == "" {
-		// Not reported (an answer of a route that does not extract): keep the probe's.
+		// Upload answer without it (see above): keep the probe's.
 		got.extract = ej.extract
 	}
 	was := journalIdent{model: ej.model, fingerprint: ej.fingerprint, extract: ej.extract}
 	if got == was {
 		ej.mu.Unlock()
-		return
+		return true
 	}
 	ej.model, ej.fingerprint, ej.extract = got.model, got.fingerprint, got.extract
 	ej.mu.Unlock()
@@ -175,6 +213,7 @@ func (ej *endpointJournal) observe(resp *responseIdentity) {
 	journalLog.Warn("worker answered as a different model than its /health probe said, journalling under the answer's identity and dropping the cached probe: url=%s probed=%s#%s answered=%s#%s",
 		logger.SanitizeLogValue(ej.endpoint), logger.SanitizeLogValue(was.model), logger.SanitizeLogValue(was.fingerprint), logger.SanitizeLogValue(got.model), logger.SanitizeLogValue(got.fingerprint))
 	forgetGateProbe(ej.endpoint)
+	return true
 }
 
 // joinModelIdentity is the model's journal identity: qualified by its backend when
@@ -199,31 +238,41 @@ func (h remoteHealth) modelIdentity() string {
 	return joinModelIdentity(h.Backend, h.Model)
 }
 
-// newEndpointJournal returns the journal view for one endpoint, or nil when
-// there is no journal or the endpoint's model is unknown.
+// newEndpointJournal returns the view of one endpoint for a call: its identity, which every
+// journal key is built from, and the journal to write to. Nil when the endpoint was not
+// probed (there is no view to compare an answer with).
 //
 // Unknown model means NO journalling for that endpoint, not a fallback key:
 // the key's model component is what keeps a transcript from one model from
 // being served for another, and a blank or URL-derived stand-in would let two
 // different models collide on one key (or keep serving the old model's text
 // after a worker is re-pointed at a new one). Both bundled servers report
-// "model" on /health, so this only bites a server too old to say, or a probe
-// that failed -- and those still transcribe, just without restart protection.
+// "model" on /health, so this only bites a server too old to say -- and those
+// still transcribe, just without restart protection. Likewise with no journal
+// (j nil). Either way the view is still returned, with a nil journal, so that
+// observe can drop the cached probe an answer disproves.
 func newEndpointJournal(j ResultJournal, endpoint string, h remoteHealth, probed bool) *endpointJournal {
-	if j == nil {
+	if !probed {
+		if j != nil {
+			journalLog.Warn("endpoint was not probed, results from it are not journalled: url=%s", endpoint)
+		}
 		return nil
 	}
 	model := h.modelIdentity()
-	if !probed || model == "" {
-		journalLog.Warn("endpoint reports no model on /health, results from it are not journalled: url=%s probed=%t", endpoint, probed)
-		return nil
-	}
 	fp := strings.TrimSpace(h.DecodeFingerprint)
-	if fp == "" {
+	if j != nil && model == "" {
+		journalLog.Warn("endpoint reports no model on /health, results from it are not journalled: url=%s", endpoint)
+		j = nil
+	}
+	if j != nil && fp == "" {
 		journalLog.Info("endpoint reports no decode_fingerprint, journalling by model only: url=%s model=%s", endpoint, model)
 	}
 	return &endpointJournal{journal: j, endpoint: endpoint, model: model, fingerprint: fp, extract: strings.TrimSpace(h.ExtractFingerprint)}
 }
+
+// journalOff reports whether nothing can be read from or written to the journal: no view,
+// or a view built without one.
+func (ej *endpointJournal) journalOff() bool { return ej == nil || ej.journal == nil }
 
 // lookupBypass is a ResultJournal whose Lookup always misses: every clip is
 // sent, and fresh results are still journalled (they overwrite old entries).
@@ -278,7 +327,7 @@ func hashClip(path string) (string, error) {
 // uploaded (see completeOne), so a clip replaced between plan and upload is
 // never journalled under the old bytes' key.
 func (ej *endpointJournal) plan(jobs map[string]string) (served map[string]BatchResult, send map[string]string, followers map[string][]string) {
-	if ej == nil {
+	if ej.journalOff() {
 		return nil, jobs, nil
 	}
 	served = make(map[string]BatchResult)
@@ -340,7 +389,7 @@ func (ej *endpointJournal) plan(jobs map[string]string) (served map[string]Batch
 // and still flows to the caller, which writes it to the book; losing the
 // journal entry costs only restart protection for that clip.
 func (ej *endpointJournal) complete(results map[string]BatchResult, uploaded map[string]string) {
-	if ej == nil {
+	if ej.journalOff() {
 		return
 	}
 	for id, r := range results {
@@ -349,7 +398,7 @@ func (ej *endpointJournal) complete(results map[string]BatchResult, uploaded map
 }
 
 func (ej *endpointJournal) completeOne(id, uploadedHash string, r BatchResult) {
-	if ej == nil || uploadedHash == "" {
+	if ej.journalOff() || uploadedHash == "" {
 		return
 	}
 	ident := ej.ident()
@@ -361,7 +410,7 @@ func (ej *endpointJournal) completeOne(id, uploadedHash string, r BatchResult) {
 // no per-file error is journalled (see complete for why), and a failed write is
 // logged, not returned.
 func (ej *endpointJournal) put(id, key, label string, r BatchResult) {
-	if ej == nil || r.Error != "" || r.Text == "" {
+	if ej.journalOff() || r.Error != "" || r.Text == "" {
 		return
 	}
 	if err := ej.journal.Complete(key, ej.endpoint, label, journalResult{Text: r.Text}); err != nil {
@@ -385,7 +434,7 @@ func (ej *endpointJournal) put(id, key, label string, r BatchResult) {
 // removal is logged: the entries then stay, which is the state before this
 // existed.
 func (ej *endpointJournal) invalidateWritten() {
-	if ej == nil {
+	if ej.journalOff() {
 		return
 	}
 	ej.mu.Lock()

@@ -1,5 +1,5 @@
 # file: scripts/whisper_path_pipeline.py
-# version: 1.4.0
+# version: 1.5.0
 # guid: c3e91a57-2d84-4f16-b7a9-0e5d8c4b6f13
 # last-edited: 2026-11-17
 #
@@ -16,7 +16,9 @@
 # unreadable path is a per-job error, never a guess.
 #
 # What lives here:
-#   * the stable per-job error codes (ERR_*) and PathJobError
+#   * the stable per-job error codes (ERR_*), PathJobError, and wire_error: the ONE
+#     place that decides what error text leaves the process (see "What leaves the
+#     process" below)
 #   * WHISPER_PATH_MAP parsing and the path-safety boundary (map_server_path)
 #   * the root readability probe
 #   * clip extraction (ffmpeg, format allow-list) and WAV validation
@@ -173,12 +175,105 @@ ABANDONED_DETAIL = "the client's request timeout passed before this clip started
 _MAX_REQUEST_TIMEOUT_S = 10**9
 
 
-class PathJobError(Exception):
-    """A per-job failure carrying one of the stable ERR_* codes."""
+# ── What leaves the process ──────────────────────────────────────────────────
+#
+# Nothing here is authenticated: whoever can reach the port reads every response body
+# and /health. The text of an exception, an ffmpeg stderr line, a file name or a
+# mapped path can each name a directory under a user profile, a host and share, or a
+# token, so none of it may be put in a body. The rule is enforced by construction,
+# not by remembering at each site:
+#
+#   * an error that leaves in a body is ALWAYS wire_error(code, category): a stable
+#     code (the ERR_* list above, which the Go client matches on) and ONE fixed
+#     sentence per code, or, for worker_misconfigured only, a fixed category word.
+#     Nothing the failure itself said can reach it, because wire_error takes no text;
+#   * the failure's own detail (PathJobError.detail, an exception's text, ffmpeg's
+#     stderr line) goes to the worker log only, which is written by error_result at the
+#     moment it makes the body, so a body and its log line cannot disagree about what
+#     failed and no site has to remember to log;
+#   * test_whisper_wire_text_guard.py walks every worker script and fails on a response
+#     built any other way.
+ERR_INTERNAL = "internal_error"  # a handler failed unexpectedly: the 500 body only
 
-    def __init__(self, code: str, detail: str):
+# A fixed word for why a worker cannot do jobs, shown on /health as child_start_error and
+# in a worker_misconfigured answer. A closed set: ChildFaultError and PathJobError refuse
+# any other, so a library's message cannot become a category.
+CAT_PROCESS_START_FAILED = "process_start_failed"
+CAT_START_TIMEOUT = "start_timeout"
+CAT_EXITED_DURING_START = "exited_during_start"
+CAT_MODEL_LOAD_FAILED = "model_load_failed"
+CAT_PROTOCOL_ERROR = "protocol_error"
+CAT_PINNED_MODEL_MISMATCH = "pinned_model_mismatch"
+CAT_FFMPEG_MISSING = "ffmpeg_missing"
+START_CATEGORIES = frozenset(
+    {
+        CAT_PROCESS_START_FAILED,
+        CAT_START_TIMEOUT,
+        CAT_EXITED_DURING_START,
+        CAT_MODEL_LOAD_FAILED,
+        CAT_PROTOCOL_ERROR,
+        CAT_PINNED_MODEL_MISMATCH,
+        CAT_FFMPEG_MISSING,
+    }
+)
+
+# One sentence per code. Written for the operator who reads a Go-side status, so each
+# says what kind of thing went wrong without saying where.
+PUBLIC_SENTENCES = {
+    ERR_PATH_UNMAPPED: "the path is not available on this worker",
+    ERR_NOT_FOUND: "the file was not found on this worker",
+    ERR_FFMPEG: "the audio could not be extracted from the file",
+    ERR_FFMPEG_TIMEOUT: "reading the file did not finish in time",
+    ERR_BAD_REQUEST: "the request was not valid",
+    ERR_WHISPER: "transcription failed on this worker",
+    ERR_WORKER_MISCONFIGURED: "this worker cannot run the job",
+    ERR_CONTAINER_REJECTED: "this worker does not accept the file's container",
+    ERR_TRANSCRIBE_TIMEOUT: "transcription did not finish in time and was stopped",
+    ERR_DECODER_CRASHED: "the decode process crashed on this clip",
+    ERR_DECODER_KILLED: "the decode process was killed while on this clip",
+    ERR_REQUEST_ABANDONED: ABANDONED_DETAIL,
+    ERR_PATH_UNREPRESENTABLE: "this worker's filesystem cannot represent the path",
+    ERR_INTERNAL: "the worker failed while handling the request",
+}
+
+
+def all_public_sentences() -> frozenset:
+    """Every text wire_error can put after a code (the sentences and the categories)."""
+    return frozenset(PUBLIC_SENTENCES.values()) | START_CATEGORIES
+
+
+def wire_error(code: str, category: str | None = None) -> str:
+    """THE sanitizer: the one error text that may leave the process in an HTTP body.
+
+    "<code>: <fixed sentence>", or "worker_misconfigured: <category>" when the failure
+    has a category. It takes no free text, so there is nothing to scrub: a path, a
+    stderr line or an exception message cannot get in. The Go side reads the code (the
+    text before the first ": ") and nothing else (PathErrorCode)."""
+    if code not in PUBLIC_SENTENCES:
+        raise ValueError(f"unknown error code {code!r}")
+    if code == ERR_WORKER_MISCONFIGURED and category is not None:
+        if category not in START_CATEGORIES:
+            raise ValueError(f"unknown start category {category!r}")
+        return f"{code}: {category}"
+    return f"{code}: {PUBLIC_SENTENCES[code]}"
+
+
+class PathJobError(Exception):
+    """A per-job failure carrying one of the stable ERR_* codes.
+
+    `detail` is for the worker log only (str(e) is "code: detail", which is what the
+    log lines print); what the caller is told is `wire`, built from the code alone."""
+
+    def __init__(self, code: str, detail: str, *, category: str | None = None):
+        wire_error(code, category)  # refuses an unknown code or category at construction
         super().__init__(f"{code}: {detail}")
         self.code = code
+        self.detail = detail
+        self.category = category
+
+    @property
+    def wire(self) -> str:
+        return wire_error(self.code, self.category)
 
 
 class ChildFaultError(RuntimeError):
@@ -191,25 +286,22 @@ class ChildFaultError(RuntimeError):
     deterministically kills it must be able to settle. The flag stays so a
     handler can tell the two apart if a start-less fault is ever raised again."""
 
-    def __init__(self, message: str, *, starting: bool, category: str | None = None):
+    def __init__(self, message: str, *, starting: bool, category: str):
+        if category not in START_CATEGORIES:
+            raise ValueError(f"unknown start category {category!r}")
         super().__init__(message)
         self.starting = starting
-        # A short fixed word for the UNAUTHENTICATED /health (child_start_error) and for
-        # job answers; the message, which can carry a path or a library's exception
-        # text, goes to the log only. None is a fault with no word of its own, which
-        # misconfigured_error answers with the message: the Mac worker's faults, whose
-        # text is pinned (test_whisper_mlx_pins) and is not changed by this.
+        # Required, one of START_CATEGORIES: the fixed word /health shows as
+        # child_start_error and a job answer carries. The message, which can carry a
+        # path or a library's exception text, goes to the log only.
         self.category = category
 
 
 def misconfigured_error(e: "ChildFaultError") -> dict:
-    """The job answer for a worker that cannot decode: the stable code and the fault's
-    fixed category word, NEVER the exception text. A job answer reaches whoever can
-    reach the port (there is no authentication), and the message can carry a path or a
-    library's exception text; it is in the worker log, where the caller of this
-    function has already written it. The same word /health shows as child_start_error.
-    A fault with no category (the Mac worker's) is answered with its message, as before."""
-    return error_result(PathJobError(ERR_WORKER_MISCONFIGURED, e.category or str(e)))
+    """The job answer for a worker that cannot decode: worker_misconfigured and the
+    fault's category word, NEVER the exception text (see wire_error). The caller has
+    already logged the fault."""
+    return error_result(PathJobError(ERR_WORKER_MISCONFIGURED, str(e), category=e.category))
 
 
 # Limits on what a network request may ask for. The Go client never comes near
@@ -362,8 +454,18 @@ def check_seconds(value: Any) -> int:
     return value
 
 
-def error_result(e: Exception) -> dict:
-    return {"text": "", "error": str(e)}
+def error_result(e: BaseException, where: str | None = None) -> dict:
+    """The {"text","error"} answer for a failed job, and the only way one is made.
+
+    A PathJobError answers with its own code; any other exception is the inference
+    raising, whisper_error. Either way the body is wire_error's fixed text. `where`,
+    when given, writes the full detail to the worker log, which is where the text the
+    body withholds goes (an abandoned clip passes none: nothing failed)."""
+    if where is not None:
+        log.error("%s: %s", where, e)
+    if isinstance(e, PathJobError):
+        return {"text": "", "error": e.wire}
+    return {"text": "", "error": wire_error(ERR_WHISPER)}
 
 
 def abandoned_result() -> dict:
@@ -647,7 +749,11 @@ class PathPipeline:
             raise PathJobError(ERR_NOT_FOUND, "file not found under the mapped root")
         ffmpeg = shutil.which("ffmpeg")
         if not ffmpeg:
-            raise PathJobError(ERR_WORKER_MISCONFIGURED, "ffmpeg is not on PATH on this worker")
+            raise PathJobError(
+                ERR_WORKER_MISCONFIGURED,
+                "ffmpeg is not on PATH on this worker",
+                category=CAT_FFMPEG_MISSING,
+            )
         tmpdir = tempfile.mkdtemp(prefix="whisper-clip-")
         wav = os.path.join(tmpdir, "clip.wav")
         try:
@@ -738,10 +844,13 @@ class PathPipeline:
             try:
                 src, seconds = self.prepare_path_job(job)
             except PathJobError as e:
-                results[key] = error_result(e)
+                results[key] = error_result(e, f"path job {key} refused")
                 continue
             except Exception as e:  # defensive: a mapping bug must not fail the batch
-                results[key] = error_result(PathJobError(ERR_PATH_UNMAPPED, str(e)))
+                results[key] = error_result(
+                    PathJobError(ERR_PATH_UNMAPPED, f"mapping failed: {e}"),
+                    f"path job {key} refused",
+                )
                 continue
             pending[key] = pool.submit(self.extract_clip, src, seconds)
         start_fault: ChildFaultError | None = None
@@ -769,8 +878,7 @@ class PathPipeline:
                     log.info(f"transcribed path job {key}: {len(text)} chars")
                     results[key] = {"text": text, "error": None}
                 except PathJobError as e:
-                    log.error(f"path job {key} failed: {e}")
-                    results[key] = error_result(e)
+                    results[key] = error_result(e, f"path job {key} failed")
                 except ChildFaultError as e:
                     # A child that cannot start is this worker's fault, not a verdict
                     # on the clip: the Go side defers worker_misconfigured and writes
@@ -780,8 +888,7 @@ class PathPipeline:
                     if e.starting:
                         start_fault = e
                 except Exception as e:
-                    log.error(f"path job {key} failed: {e}")
-                    results[key] = error_result(PathJobError(ERR_WHISPER, str(e)))
+                    results[key] = error_result(e, f"path job {key} failed")
                 finally:
                     if tmpdir:
                         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -822,7 +929,9 @@ class PathPipeline:
         return out
 
     def blocking_health_fields(self) -> dict:
-        return {"ffmpeg": shutil.which("ffmpeg"), **self.path_health()}
+        # Whether ffmpeg was found, never where: /health is unauthenticated and the
+        # path says which account and which install the worker runs from.
+        return {"ffmpeg": shutil.which("ffmpeg") is not None, **self.path_health()}
 
     async def bounded_blocking_health_fields(self) -> dict:
         """blocking_health_fields on the health pool, or the fallback fields once
@@ -953,6 +1062,28 @@ class BodyLimitMiddleware:
                 await reply(scope, receive, send)
 
 
+def install_error_handlers(app) -> None:
+    """Answer an exception no handler caught with a fixed body, and log it.
+
+    Starlette's own 500 body is already plain text with no detail; this makes it the
+    same shape as every other error this worker sends (a code and a fixed sentence,
+    wire_error) and puts the exception, with its traceback, in the worker log, where it
+    is read. The exception is re-raised by Starlette after the response is sent, so
+    the server's own error log still records it."""
+
+    async def internal_error(request: Request, exc: Exception) -> JSONResponse:
+        log.error(
+            "unhandled error on %s %s: %s",
+            request.method,
+            request.url.path,
+            exc,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+        return JSONResponse({"detail": wire_error(ERR_INTERNAL)}, status_code=500)
+
+    app.add_exception_handler(Exception, internal_error)
+
+
 def install_path_routes(
     app,
     run_jobs: Callable[[dict[str, Any], float | None], dict[str, dict]],
@@ -979,6 +1110,7 @@ def install_path_routes(
         paths=("/transcribe-path", "/transcribe-path-batch"),
         limit=MAX_BODY_BYTES,
     )
+    install_error_handlers(app)
 
     @app.post("/transcribe-path")
     def transcribe_path(body: Annotated[dict, Body()]):

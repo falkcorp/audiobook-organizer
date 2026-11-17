@@ -1,5 +1,5 @@
 # file: scripts/whisper_server.py
-# version: 5.1.0
+# version: 5.2.0
 # guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 # last-edited: 2026-11-17
 #
@@ -131,6 +131,7 @@ from whisper_path_pipeline import (  # noqa: E402
     abandon_deadline,
     abandoned_result,
     audio_seconds,
+    error_result,
     install_path_routes,
     misconfigured_error,
     past,
@@ -832,8 +833,9 @@ def create_app(
                 on_start_fault(e)
             return misconfigured_error(e)
         except Exception as e:
-            log.error(f"transcription failed for {filename}: {e}")
-            return {"text": "", "error": str(e)}
+            # whisper_error and a fixed sentence; the exception is in the log, which
+            # error_result writes.
+            return error_result(e, f"transcription failed for {filename}")
         finally:
             if tmp_path:
                 with contextlib.suppress(OSError):

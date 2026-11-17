@@ -1,5 +1,5 @@
 <!-- file: docs/whisper-remote-extract.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 38f7ba56-da3d-4ab2-8b9c-839df9cb5612 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -257,6 +257,25 @@ and not part of this change.
 names the entry's position ("entry 2 is not server-path=local-path") and never
 quotes its text, because `/health` is unauthenticated.
 
+**What an error answer says, on both workers.** Nothing a failure said. Every error
+that leaves either worker in an HTTP body, a per-clip `error` on the upload and path
+routes and the body of an unexpected 500 alike, is a stable code and one fixed sentence
+(`whisper_error: transcription failed on this worker`), built by one function
+(`wire_error` in `scripts/whisper_path_pipeline.py`) that takes no text, so a path, an
+ffmpeg stderr line or a library's exception message cannot reach it. For
+`worker_misconfigured` the sentence is the fixed category word (`model_load_failed`,
+`ffmpeg_missing`, ...). The code is the part the server reads and acts on; nothing on
+the Go side reads the sentence. The detail that used to be in the answer (the exception,
+ffmpeg's last line, the `OSError`, the exit code of a dead decode process) is written to
+the worker's log at the moment the answer is made. `/health` reports `ffmpeg` as
+`true`/`false` (found or not), never where it was found. The path map's error and
+`device_reason` were already fixed text. Two limits: FastAPI's own 422 for a request
+that is not a JSON object echoes the caller's own input back to the caller, and
+`identity.model` (also on `/health`) is the value of `--model`, which is a local
+directory when the model is loaded from one. A test walks the worker scripts and fails
+on any response built from failure text (`test_whisper_wire_text_guard.py`), and
+`test_whisper_server_cpu.py` drives every error route with planted paths and stderr.
+
 ### Choosing the device
 
 ```
@@ -332,9 +351,14 @@ model. So `/transcribe`, `/transcribe-batch`, `/transcribe-path` and
 the same function `/health` uses, so the two cannot disagree and a restarted child
 cannot change it. The server files each result under the identity of the answer that
 carried it. When the identity differs from the probe it logs a warning and drops that
-endpoint's cached probe, so the next dispatch asks `/health` again. A worker too old
-to send `identity` is journalled under its `/health` identity as before, and that is
-logged once per endpoint. One limit: the journal is looked up, before a request is
+endpoint's cached probe (whether or not the call has a journal), so the next dispatch
+asks `/health` again. An `identity` is complete or it is not used: it needs a model, a
+backend and a decode fingerprint (and, for a path result, an extract fingerprint), none
+of them blank. A partial one is logged, the cached probe is dropped, and that answer's
+results are NOT journalled at all; they are not filed under the probe's identity either,
+because a row keyed on less than the whole identity would be served to a worker that
+decodes differently. A worker too old to send `identity` is journalled under its
+`/health` identity as before, and that is logged once per endpoint. One limit: the journal is looked up, before a request is
 sent, with the identity the last probe gave, so a result is never filed under the
 wrong model but a lookup in the first dispatch after a replacement can still miss or
 hit under the old one. The Mac worker does not send `identity` yet.
@@ -358,7 +382,7 @@ receive kills the child, so a stale answer is never taken for the next clip's:
 
 - `transcribe_timeout`: no result within the deadline (the child was killed);
 - `decoder_crashed`: the child died on the clip (a segfault, an exception that took
-  the process down); the error text carries the exit code;
+  the process down); the exit code is in the worker log;
 - `decoder_killed`: the child was killed from outside (an operator, the out-of-memory
   killer; POSIX only, since Windows reports no signal, so a process killed from
   outside reads as `decoder_crashed` there);
@@ -367,14 +391,17 @@ receive kills the child, so a stale answer is never taken for the next clip's:
   it can. `/health` and the job answer are both reachable without authentication, so
   both carry only a fixed code and a short category word (`model_load_failed`,
   `start_timeout`, `exited_during_start`, `process_start_failed`,
-  `pinned_model_mismatch`, `protocol_error`; the job error reads
+  `pinned_model_mismatch`, `protocol_error`, and `ffmpeg_missing` for a job; the job
+  error reads
   `worker_misconfigured: model_load_failed`); the full error text, which can hold a
   path or a library's exception, goes to the worker log only. A worker is
   also reported busy (`busy_seconds`) while a child is being started for a request.
 
 These are the Mac worker's codes with the same meaning, so the server treats them
-identically. The Mac worker's own child (`InferenceChild`) is unchanged: it is built
-on POSIX file descriptors and process groups, and only the contract is shared.
+identically. The Mac worker's own child (`InferenceChild`) is built on POSIX file
+descriptors and process groups, and only the contract is shared; its start faults now
+carry the same category words, so its `child_start_error` and job answers are the
+fixed text too, not the message they used to be.
 
 The per-clip deadline is `max(300 s, 8 x the clip's audio length)`, capped at 3600 s
 (`WHISPER_TRANSCRIBE_MAX_TIMEOUT_S`; a clip of ten minutes of audio would otherwise

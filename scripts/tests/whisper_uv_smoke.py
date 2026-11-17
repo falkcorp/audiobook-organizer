@@ -1,5 +1,5 @@
 # file: scripts/tests/whisper_uv_smoke.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 8e2a6d40-1c53-4f9b-a7d8-3b5c0e9f1a64
 # last-edited: 2026-11-17
 
@@ -86,6 +86,7 @@ def main():
         check(health["device"] == "cpu" and health["model"] == "base.en", health)
         first_pid = engine.runners[0].meta()["pid"]
         check(first_pid != os.getpid(), f"the decode ran in the server process ({first_pid})")
+        starts_before = engine.runners[0].starts
         with tempfile.TemporaryDirectory() as d:
             body = pathlib.Path(wav(d, "a.wav")).read_bytes()
             r = client.post("/transcribe", files={"file": ("a.wav", body, "audio/wav")}).json()
@@ -100,9 +101,15 @@ def main():
             again = client.post("/transcribe", files={"file": ("b.wav", body, "audio/wav")}).json()
             check(again["error"] is None and again["text"].startswith("heard:"), again)
             new_pid = engine.runners[0].meta()["pid"]
+            # That a NEW process served it is the start counter, not the pid: the OS may
+            # hand the dead process's pid to its replacement (Windows reuses them readily),
+            # and a pid comparison would then fail a restart that really happened.
             check(
-                new_pid not in (first_pid, os.getpid()), f"no restart: pid {first_pid}->{new_pid}"
+                engine.runners[0].starts == starts_before + 1,
+                f"no restart: {starts_before} starts before the hang, "
+                f"{engine.runners[0].starts} after",
             )
+            check(new_pid != os.getpid(), f"the replacement runs in the server process ({new_pid})")
             check(pid_alive(new_pid), f"the replacement decode process {new_pid} is not running")
         print("SMOKE OK")
     finally:

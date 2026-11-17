@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-17-whisper-cpu-worker-executive-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 7b3e5a90-1c64-4d28-9e0f-a52d8c7b1f46 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -45,6 +45,17 @@ task, the remote-management step and the processor's speed have not been tried.
   work it had already done is redone one time; nothing is lost, it is repeated.
   The worker also decides its model once, at start-up, and holds to it: a restart
   can no longer quietly switch it to a smaller model.
+- The worker has no password, so anyone who can reach it could read the messages it
+  sends back when something fails, and those messages could contain a folder name
+  from the Windows user's profile or part of a program's error text. Every failure
+  now answers with a short fixed code and a fixed sentence, on both the Windows and
+  the Mac workers, and what used to be in the message goes to the worker's own log.
+  The health report also says whether the audio-cutting tool was found, not where it is. The
+  server only ever read the code, so nothing on its side changes. The Mac worker's
+  failure wording changed with it.
+- When a worker answers with an incomplete description of itself (a missing model name
+  or settings fingerprint), the server now keeps that answer out of its saved results
+  instead of filing it under a less specific key.
 - Not verified: anything on a real Windows machine, how fast a real desktop
   processor transcribes (the starting settings are guesses to measure), and a
   real end-to-end run from the server.

@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_supervisor.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 0d3f5c1e-6b27-4a58-b8f1-7c2e9a4d6b13
 # last-edited: 2026-11-17
 
@@ -9,8 +9,13 @@ The crash-loop breaker must count a start that never became ready as a failure
 however long it ran (the old rule reset the streak on wall-clock time alone, so a
 start that hangs in a model load and dies could loop forever). The fake uv runs
 whisper_fake_uv.py in one of three modes: exit at once, run without ever answering
-/health, or answer /health. Uses powershell.exe on Windows, pwsh elsewhere; skipped
-without either.
+/health, or answer /health.
+
+Windows only, and skipped everywhere else. The supervisor is a Windows PowerShell 5.1
+script (powershell.exe is what the scheduled task runs it under); pwsh 7 on Linux is a
+different engine, so a pass there said nothing about what ships, and about a minute of
+real restarts sat in the required Repo Guards job for it. The Windows trial workflow
+(.github/workflows/whisper-windows.yml) runs it for real against powershell.exe.
 
 Standard library unittest only (no pytest): scripts/ is discovered by plain
 `python3 -m unittest discover` in the Repo Guards job, which installs no packages, and
@@ -27,7 +32,7 @@ import threading
 import time
 import unittest
 
-PS = shutil.which("powershell.exe" if sys.platform == "win32" else "pwsh")
+PS = shutil.which("powershell.exe") if sys.platform == "win32" else None
 SUPERVISOR = pathlib.Path(__file__).resolve().parent.parent / "whisper-supervisor.ps1"
 PORT = 19861
 
@@ -54,7 +59,10 @@ FAKE_UV = textwrap.dedent(
 )
 
 
-@unittest.skipUnless(PS, "no PowerShell on this machine")
+@unittest.skipUnless(
+    sys.platform == "win32", "whisper-supervisor.ps1 is run under Windows PowerShell 5.1"
+)
+@unittest.skipUnless(PS, "no powershell.exe on this machine")
 class SupervisorBreaker(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -73,12 +81,7 @@ class SupervisorBreaker(unittest.TestCase):
         fake.write_text(FAKE_UV)
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
-        if sys.platform == "win32":
-            (bin_dir / "uv.cmd").write_text(f'@"{sys.executable}" "{fake}" %*\r\n')
-        else:
-            launcher = bin_dir / "uv"
-            launcher.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{fake}" "$@"\n')
-            launcher.chmod(0o755)
+        (bin_dir / "uv.cmd").write_text(f'@"{sys.executable}" "{fake}" %*\r\n')
         self.rig = (prof, bin_dir)
 
     def _supervise(self, mode, run_s, extra):
@@ -95,7 +98,8 @@ class SupervisorBreaker(unittest.TestCase):
         cmd = [
             PS,
             "-NoProfile",
-            *(["-ExecutionPolicy", "Bypass"] if sys.platform == "win32" else []),
+            "-ExecutionPolicy",
+            "Bypass",
             "-File",
             str(SUPERVISOR),
             "-ScriptPath",
