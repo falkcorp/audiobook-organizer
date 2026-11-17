@@ -1,17 +1,17 @@
 <!-- file: docs/agent-tasks/platform-core/F9-01-shell-packages-dark.md -->
-<!-- version: 1.1.4 -->
+<!-- version: 1.1.6 -->
 <!-- guid: 1cd3e2f0-6d5d-4edb-b717-11340b83d272 -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-17 -->
 
 # F9-01 — Shell packages, dark: @mediacore/ui-kit and @mediacore/shell (with /vite and /testing), hello's web package, the rest of core ui (Handler, FromFS, the policy builder, UIBundle), hello's ui_embed.go
 
 | Field | Value |
 |---|---|
 | ID | F9-01 |
-| Release | R2 (dark; lands during R2), flip label F9; the shell ships in R3 by default (plan §(l) item 7) |
+| Release | R3 (dark; merges after OWNER-05), flip label F9 (owner direction 2026-11-16: the whole shell ships in R3, plan §(l) item 7) |
 | Tier | **T3** (Opus / high): new packages with a build-time preset and a fail-closed bundle loader; the CSP policy and the stale-build rule are security and availability contracts |
-| Wave | W31 (beside F3-08, F4-07, F5-01, F5-02, F5-03, F5-04, F5-05, F5-06, F5-07, F5-08, F5-09, F5-10, F5-11, F5-12, F5-13, F5-19, F6-04, F7-05, F7-06; file-disjoint; F3-07 is in W32, after this row) |
-| Depends on | R1-30 (`core/web` workspace with `@mediacore/api-client`), F6-02 (core realtime hub: the shell's realtime client targets `/api/core/v1/events`) |
+| Wave | W41 (beside R3-02; file-disjoint). It moved from W31 on 2026-11-16 with the rest of the shell, so it now merges after OWNER-05 and F9-05, F9-02 and F9-04 follow it in W42 and W43 |
+| Depends on | R1-30 (`core/web` workspace with `@mediacore/api-client`), F6-02 (core realtime hub: the shell's realtime client targets `/api/core/v1/events`), OWNER-05 (R2 is cut and deployed; the shell ships in R3) |
 | Spec | 07 §7.3 (layout, exports, peers, compilation, import boundary, §7.3.2 build sites, §7.3.3 versions), §7.4 (extension API: `defineModule`, `ShellConfig`, slots, §7.4.3 shell routes, §7.4.4 `/testing`, §7.4.5 schema forms), §7.5 (server manifest and intersection), §7.6 (Go `ui`: §7.6.1 API, §7.6.2 CSP, §7.6.3 mounting), §7.7 theming, §7.9 auth and realtime client, §7.10 build preset, §7.18 tests, §7.19 step 4; 06 §6.4.10 ("Shell" row), §6.12.5 (hello's `main.go` and `ui_embed.go`); 04 §8.1 F9 |
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. **Dark:** ABO's `web/` does not import the

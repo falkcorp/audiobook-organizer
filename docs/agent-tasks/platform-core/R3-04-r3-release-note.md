@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/R3-04-r3-release-note.md -->
-<!-- version: 1.0.6 -->
+<!-- version: 1.0.7 -->
 <!-- guid: 9333a60d-0082-4464-a9b9-c1a2d1cf879b -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-17 -->
 
 # R3-04 — The R3 release note: the upgrade floor (install the R2 release, by its tag, first; exit 78, launchd's 60 s sleep), the `.encryption_key` deletion with the macOS and Docker notes, `library.bleve`'s deletion and the removed `--db-type` and SQLite flags
 
@@ -12,13 +12,13 @@
 | Tier | **T1** (Sonnet / medium): a release note from texts the spec fixes; one new Markdown file |
 | Wave | W45 (beside no other row; file-disjoint) |
 | Depends on | OWNER-05 (the R2 release is cut and deployed, so its tag is known), R3-01, R3-02, R3-03, R3-05, F9-03 |
-| Spec | 09 §9.4 R3 ("Content": the release-note text, verbatim), §9.2.2 ("The R3 floor": exit 78, launchd's 60 s sleep, the macOS and Docker notes, the host-loss procedure), §9.6 row 21 (the shell's paths; F9 ships in R3 by default); 06 §6.11.1 step 6 (the no-op flags deleted) |
+| Spec | 09 §9.4 R3 ("Content": the release-note text, verbatim), §9.2.2 ("The R3 floor": exit 78, launchd's 60 s sleep, the macOS and Docker notes, the host-loss procedure), §9.6 row 21 (the shell's paths; F9 ships in R3); 06 §6.11.1 step 6 (the no-op flags deleted) |
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. This PR writes the R3 release note, which
 OWNER-06 prepends to the generated R3 release notes when it cuts R3 (CLAUDE.md: prepend, never replace), and carries
 R3's executive summary and TODO check-offs (CLAUDE.md "Post-Task Hygiene"; plan §(n) item 4).
 
-**The shell ships in R3.** F9 ships in R3 by default (plan §(n); 09 lets F9 slip to R3): F9-03 merges after OWNER-05
+**The shell ships in R3.** F9 ships in R3 (owner direction 2026-11-16; plan §(l) item 7; 09 lets F9 slip to R3): F9-03 merges after OWNER-05
 cuts R2, outside the freeze, and R2-01's note leaves the shell out. So this note always carries the new page
 addresses (step 5).
 

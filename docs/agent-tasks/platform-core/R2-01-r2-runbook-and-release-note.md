@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/R2-01-r2-runbook-and-release-note.md -->
-<!-- version: 1.1.6 -->
+<!-- version: 1.1.7 -->
 <!-- guid: 67640be6-8c43-45e8-8d9e-9a3167774c7e -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-17 -->
 
 # R2-01 — Last PR of R2: the operator runbook (deploy, rollback, smoke run) and the assembled R2 release note
 
@@ -18,8 +18,8 @@
 It carries the runbook and the release note (09 §9.2.9: no consumer waits for it), plus R2's executive summary and
 TODO check-offs (plan §(n) item 4), and nothing else.
 
-**The shell is not in R2.** F9 ships in R3 by default (plan §(n); 09 lets F9 slip to R3): F9-03 merges after
-OWNER-05 cuts R2, outside the freeze. This PR does not wait for F9-03, and neither the runbook nor the R2 note
+**The shell is not in R2.** F9 ships in R3 (owner direction 2026-11-16; plan §(l) item 7; 09 lets F9 slip to R3): all
+five F9 rows, F9-01 included, merge after OWNER-05 cuts R2, outside the freeze. This PR does not wait for F9-03, and neither the runbook nor the R2 note
 mentions the shell or 09 §9.6 row 21; R3-04's note carries them.
 
 ## START HERE (do this first, exactly)
