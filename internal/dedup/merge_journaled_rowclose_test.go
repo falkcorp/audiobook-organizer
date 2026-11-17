@@ -1,5 +1,5 @@
 // file: internal/dedup/merge_journaled_rowclose_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e6b9d24-8a51-4c7f-b0d2-9f4a1c7e5b68
 // last-edited: 2026-11-17
 
@@ -244,4 +244,104 @@ func TestMergeBooksJournaled_FailureToCloseARefusedRowLeavesItProvisional(t *tes
 	require.True(t, e.Provisional)
 	require.Zero(t, e.AbortedAt)
 	require.ErrorContains(t, engine.UnmergeAuto(keys[0]), "never finalized")
+}
+
+// failSnapshotListStore fails GetBookSnapshots for one book.
+type failSnapshotListStore struct {
+	database.Store
+	failID string
+}
+
+func (f *failSnapshotListStore) Unwrap() database.Store { return f.Store }
+func (f *failSnapshotListStore) GetBookSnapshots(id string, limit int) ([]database.BookSnapshot, error) {
+	if id == f.failID {
+		return nil, errors.New("injected: snapshot list unreadable")
+	}
+	return f.Store.GetBookSnapshots(id, limit)
+}
+
+// readCountingStore counts the book reads MergeBooks makes: its first act is to
+// load every participant, so zero reads proves MergeBooks was never called.
+type readCountingStore struct {
+	database.Store
+	reads int
+}
+
+func (r *readCountingStore) Unwrap() database.Store { return r.Store }
+func (r *readCountingStore) GetBookByID(id string) (*database.Book, error) {
+	r.reads++
+	return r.Store.GetBookByID(id)
+}
+
+// A participant whose snapshot list cannot be read has no knowable baseline, and
+// 0 is a real baseline, so recording the failure as 0 would be a lie. The merge is
+// refused with a typed error before any journal write and before MergeBooks.
+func TestMergeBooksJournaled_UnreadableSnapshotListRefusesBeforeAnyWrite(t *testing.T) {
+	for _, side := range []string{"winner", "loser"} {
+		t.Run(side, func(t *testing.T) {
+			f := vptest.New(t)
+			counter := &readCountingStore{Store: f.S}
+			engine, _ := engineOn(t, f, counter)
+			k := f.Book(t, vptest.Spec{ID: "batman", Group: "H", Primary: "true"})
+			l := f.Book(t, vptest.Spec{ID: "robin", Group: "G", Primary: "true"})
+			failID := map[string]string{"winner": k, "loser": l}[side]
+			engine.bookStore = &failSnapshotListStore{Store: f.S, failID: failID}
+			puts := 0
+			engine.journalPut = func(database.AutoMergeJournalEntry) (string, error) {
+				puts++
+				return "", errors.New("no journal write is expected")
+			}
+			counter.reads = 0
+
+			res, keys, err := engine.MergeBooksJournaled(0, []string{l, k}, k, "t")
+			require.Nil(t, res)
+			require.Empty(t, keys)
+			var re *BaselineReadError
+			require.ErrorAs(t, err, &re)
+			require.Equal(t, failID, re.BookID, "the error names the book whose list could not be read")
+			require.ErrorContains(t, err, "injected: snapshot list unreadable", "the cause is wrapped")
+			require.Zero(t, puts, "no journal row was written")
+			require.Zero(t, counter.reads, "MergeBooks was not called")
+			lb, gerr := f.S.GetBookByID(l)
+			require.NoError(t, gerr)
+			require.False(t, lb.IsSoftDeleted(), "no merge write happened")
+		})
+	}
+}
+
+// A book that simply has no snapshot yet is a real baseline of 0, and the merge
+// goes ahead and records it as recorded.
+func TestMergeBooksJournaled_BookWithNoSnapshotsMergesWithABaselineOfZero(t *testing.T) {
+	f := vptest.New(t)
+	engine, es := engineOn(t, f, f.S)
+	k := f.Book(t, vptest.Spec{ID: "batman", Group: "H", Primary: "true"})
+	l := f.Book(t, vptest.Spec{ID: "robin", Group: "G", Primary: "true"})
+	for _, id := range []string{k, l} {
+		// The fixture's own writes left snapshots; remove them so the book has none.
+		snaps, serr := f.S.GetBookSnapshots(id, 0)
+		require.NoError(t, serr)
+		for _, sn := range snaps {
+			require.NoError(t, f.S.DeleteRaw(fmt.Sprintf("book_ver:%s:%d", id, sn.Timestamp.UnixNano())))
+		}
+		n, err := engine.newestSnapshotNanos(id)
+		require.NoError(t, err)
+		require.Zero(t, n, "precondition: %s has no snapshot", id)
+	}
+	// Hold the entry provisional so the recorded baselines are visible.
+	calls := 0
+	engine.journalPut = func(e database.AutoMergeJournalEntry) (string, error) {
+		calls++
+		if calls > 1 {
+			return "", errors.New("injected patch failure")
+		}
+		return es.PutAutoMergeJournalEntry(e)
+	}
+	_, keys, err := engine.MergeBooksJournaled(0, []string{l, k}, k, "t")
+	require.NoError(t, err)
+	e, gerr := es.GetAutoMergeJournalEntry(keys[0])
+	require.NoError(t, gerr)
+	require.True(t, e.Provisional)
+	require.True(t, e.BaselinesRecorded)
+	require.Zero(t, e.WinnerBaselineTS)
+	require.Zero(t, e.LoserBaselineTS)
 }

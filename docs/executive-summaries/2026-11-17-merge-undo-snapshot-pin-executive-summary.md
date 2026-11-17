@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-17-merge-undo-snapshot-pin-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 6d2c9e41-0b7a-4f3d-8e15-a3c7b94d1f62 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -43,6 +43,9 @@ and merges nothing.
   one copy for as long as it exists, and the preview counts such entries so they
   can be looked at. An entry whose merge was refused before it wrote anything is
   closed and keeps nothing.
+- If the library cannot read a book's list of saved copies when a merge is about
+  to start, the merge now refuses to run and writes nothing, instead of noting
+  "this book had no saved copies", which would have been untrue.
 - The preview of the trim now says how many copies it is keeping for this reason,
   and counts, without changing anything, the merges whose saved copies are
   already gone and the entries that were never completed, so we learn whether any

@@ -1,5 +1,5 @@
 // file: internal/dedup/merge_journaled.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 1d7c3e58-4a09-42b6-8f31-5c0e9b247a63
 // last-edited: 2026-11-17
 
@@ -161,9 +161,17 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 		return nil, nil, fmt.Errorf("merge-journaled: %w", err)
 	}
 
+	// Each book's newest snapshot is recorded in its provisional row as the floor
+	// its pin starts from. A snapshot list that cannot be read is not "no
+	// snapshot" (that is a real baseline of 0), so the merge is refused here,
+	// before the first journal write and before MergeBooks: no row, no pin.
 	baselines := make(map[string]int64, len(ids))
 	for _, id := range ids {
-		baselines[id] = de.newestSnapshotNanos(id)
+		nanos, err := de.newestSnapshotNanos(id)
+		if err != nil {
+			return nil, nil, &BaselineReadError{BookID: id, Err: err}
+		}
+		baselines[id] = nanos
 	}
 
 	// Predict the winner the same way MergeBooks will, so the provisional
@@ -283,6 +291,19 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 
 	return result, journalKeys, nil
 }
+
+// BaselineReadError is a merge refused because a participant's snapshot list
+// could not be read, so its baseline could not be recorded. Nothing was written:
+// the refusal comes before the provisional journal rows and before MergeBooks.
+type BaselineReadError struct {
+	BookID string
+	Err    error
+}
+
+func (e *BaselineReadError) Error() string {
+	return fmt.Sprintf("merge-journaled: cannot read the snapshots of book %s to record the merge's baseline, merge refused before anything was written: %v", e.BookID, e.Err)
+}
+func (e *BaselineReadError) Unwrap() error { return e.Err }
 
 // abortProvisional closes provisional entries whose merge provably never
 // started (AbortedAt): UnmergeAuto and the snapshot pins both ignore a closed

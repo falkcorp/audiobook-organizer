@@ -1,5 +1,5 @@
 // file: internal/dedup/auto_resolve.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 6d1e9b52-4f70-4c83-a2b9-1e5c8d0f7a34
 // last-edited: 2026-11-17
 
@@ -430,13 +430,19 @@ func bookSoftDeleted(b *database.Book) bool {
 }
 
 // newestSnapshotNanos returns the UnixNano of the newest existing book_ver
-// snapshot for a book, or 0 if none exists.
-func (de *Engine) newestSnapshotNanos(bookID string) int64 {
+// snapshot for a book. A book with no snapshot is a real answer: 0 with a nil
+// error. A failure to list the snapshots is returned and never turned into 0,
+// because the value is recorded as the merge's baseline and 0 is a legitimate
+// baseline: a swallowed error would read as "the book had no snapshot".
+func (de *Engine) newestSnapshotNanos(bookID string) (int64, error) {
 	snaps, err := de.bookStore.GetBookSnapshots(bookID, 1)
-	if err != nil || len(snaps) == 0 {
-		return 0
+	if err != nil {
+		return 0, err
 	}
-	return snaps[0].Timestamp.UnixNano()
+	if len(snaps) == 0 {
+		return 0, nil
+	}
+	return snaps[0].Timestamp.UnixNano(), nil
 }
 
 // preMergeSnapshotNanos returns the UnixNano of the earliest book_ver snapshot
