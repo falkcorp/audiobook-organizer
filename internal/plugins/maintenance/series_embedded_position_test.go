@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_embedded_position_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c41ba05-3e92-4d18-b6a7-51fd0e93c284
-// last-edited: 2026-08-06
+// last-edited: 2026-11-16
 
 package maintenance
 
@@ -294,10 +294,10 @@ func TestSeriesDenumber_AssignsTiersAndGatesTheApplySet(t *testing.T) {
 	}
 }
 
-// The report is the rollback artefact: a merge creates and deletes series rows,
-// so there is no transaction to abort and replaying this file is the only way
-// back. It must therefore list EVERY candidate — including the held ones, which
-// are exactly what an operator is deciding about.
+// The report is what an operator reads before applying and audits after: a
+// merge creates and deletes series rows, so there is no transaction to abort.
+// It must therefore list EVERY candidate — including the held ones, which are
+// exactly what an operator is deciding about.
 func TestWriteSeriesDenumberReport_ListsHeldCandidatesToo(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "report.tsv")
 	plans := []SeriesMergePlan{
@@ -308,7 +308,7 @@ func TestWriteSeriesDenumberReport_ListsHeldCandidatesToo(t *testing.T) {
 		{FromID: 3, FromName: "08. Battle for the Abyss", IntoName: "Battle for the Abyss", Position: 8,
 			Books: 1, Shape: ShapeLeadingBare, Confidence: ConfidenceLow, Reason: "bare leading number"},
 	}
-	if err := writeSeriesDenumberReport(path, plans, false); err != nil {
+	if err := writeSeriesDenumberReport(path, plans, false, nil); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	raw, err := os.ReadFile(path)
@@ -319,7 +319,7 @@ func TestWriteSeriesDenumberReport_ListsHeldCandidatesToo(t *testing.T) {
 	if len(lines) != 4 {
 		t.Fatalf("%d lines, want 1 header + 3 candidates:\n%s", len(lines), raw)
 	}
-	if !strings.HasPrefix(lines[0], "from_series_id\tfrom_name") {
+	if !strings.HasPrefix(lines[0], "kind\tfrom_series_id\tfrom_name") {
 		t.Errorf("header = %q", lines[0])
 	}
 	// Eligibility is recorded per row so the file explains itself without the
@@ -327,12 +327,15 @@ func TestWriteSeriesDenumberReport_ListsHeldCandidatesToo(t *testing.T) {
 	wantEligible := []bool{true, false, false}
 	for i, want := range wantEligible {
 		cols := strings.Split(lines[i+1], "\t")
-		if len(cols) != 9 {
-			t.Fatalf("row %d has %d columns, want 9: %q", i, len(cols), lines[i+1])
+		if len(cols) != 15 {
+			t.Fatalf("row %d has %d columns, want 15: %q", i, len(cols), lines[i+1])
 		}
-		got := cols[7] == "true"
+		if cols[0] != "plan" {
+			t.Errorf("row %d kind = %q, want plan", i, cols[0])
+		}
+		got := cols[8] == "true"
 		if got != want {
-			t.Errorf("row %d (%s): eligible=%v, want %v", i, cols[1], got, want)
+			t.Errorf("row %d (%s): eligible=%v, want %v", i, cols[2], got, want)
 		}
 	}
 }
@@ -345,7 +348,7 @@ func TestWriteSeriesDenumberReport_NeutralisesTabsInNames(t *testing.T) {
 		FromID: 1, FromName: "Broken\tName\nHere", IntoName: "Broken", Position: 2,
 		Shape: ShapeMidColon, Confidence: ConfidenceLow, Reason: "bare number before the title",
 	}}
-	if err := writeSeriesDenumberReport(path, plans, false); err != nil {
+	if err := writeSeriesDenumberReport(path, plans, false, nil); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	raw, _ := os.ReadFile(path)
@@ -353,7 +356,7 @@ func TestWriteSeriesDenumberReport_NeutralisesTabsInNames(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("%d lines, want 2 — an embedded newline split the row:\n%s", len(lines), raw)
 	}
-	if cols := strings.Split(lines[1], "\t"); len(cols) != 9 {
-		t.Fatalf("%d columns, want 9 — an embedded tab shifted the row: %q", len(cols), lines[1])
+	if cols := strings.Split(lines[1], "\t"); len(cols) != 15 {
+		t.Fatalf("%d columns, want 15 — an embedded tab shifted the row: %q", len(cols), lines[1])
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/seriesdenumber/demote.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 609bfb39-82de-4bb5-b398-b84db96913fa
 // last-edited: 2026-11-16
 
@@ -103,8 +103,8 @@ func Demote(c Candidate) (Verdict, bool) {
 	case c.AuthorID == 0:
 		return Verdict{CodeNoAuthor, "the series has no author, so every no-author series of this name would fold into one base"}, true
 
-	case formatWord.MatchString(c.FromName) && partSuffix.MatchString(c.FromName):
-		return Verdict{CodeFilePart, "\"Part N\" beside format words (Unabridged, Disc, CD, Audio) numbers the audio files, not the series"}, true
+	case partSuffix.MatchString(c.FromName):
+		return Verdict{CodeFilePart, "a trailing \"Part N\" numbers the audio files of one book, not the volumes of a series"}, true
 
 	case formatWord.MatchString(base):
 		return Verdict{CodeFormatWord, "the base still carries a format or edition word (Unabridged, Disc, CD, Audio)"}, true

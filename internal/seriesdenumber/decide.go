@@ -1,5 +1,5 @@
 // file: internal/seriesdenumber/decide.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b7e5d3a-6c14-4f82-a9d0-3e81c75b2f46
 // last-edited: 2026-11-16
 
@@ -50,6 +50,12 @@ type Group struct {
 	// Existing are the target's current members. Empty when TargetID is 0.
 	Existing []Book
 	Sources  []Source
+	// TargetIsSource is true when the target is itself a numbered series another
+	// plan of the run folds elsewhere (a base name that resolves, ignoring case,
+	// to a numbered series). Books moved into it would be read by that plan only
+	// if it ran later, and stranded if it ran first, so nothing moves into it
+	// this run.
+	TargetIsSource bool
 }
 
 // Move is one book that may move into the target.
@@ -76,6 +82,10 @@ const (
 	// HoldCollision: more than one book would sit at the same position of the
 	// target, counting books already there.
 	HoldCollision HoldCode = "position_collision"
+	// HoldChainedTarget: the base series is itself a numbered series this run
+	// folds into another base. It is merged first on a later run, then these
+	// books fold into whatever its name resolves to then.
+	HoldChainedTarget HoldCode = "base_is_a_numbered_series"
 )
 
 // Held is a book the decision refused to move.
@@ -124,6 +134,19 @@ func (r GroupResult) MovedBooks() int {
 // fails a check, all are held.
 func Decide(g Group) GroupResult {
 	res := GroupResult{Sources: make([]SourceResult, len(g.Sources))}
+
+	if g.TargetIsSource {
+		for si, s := range g.Sources {
+			res.Sources[si].FromID = s.FromID
+			for _, b := range s.Books {
+				res.Sources[si].Held = append(res.Sources[si].Held, Held{
+					BookID: b.ID, FromSeriesID: s.FromID, Code: HoldChainedTarget,
+					Reason: fmt.Sprintf("the base %q is itself a numbered series this run merges elsewhere; merge it first, then run again", g.BaseName),
+				})
+			}
+		}
+		return res
+	}
 
 	// identities already at each position of the target.
 	existingAt := map[int]map[string]bool{}

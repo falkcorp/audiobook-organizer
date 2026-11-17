@@ -1,14 +1,16 @@
 // file: internal/plugins/maintenance/series_denumber.go
-// version: 3.0.0
+// version: 3.1.0
 // guid: dee834d3-1f7e-453e-9303-85d37479e79d
-// last-edited: 2026-09-02
+// last-edited: 2026-11-16
 
 package maintenance
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	sdn "github.com/falkcorp/audiobook-organizer/internal/seriesdenumber"
 )
 
 // ─── THE MATCHER MOVED TO internal/metadata ─────────────────────────────────
@@ -96,6 +98,10 @@ type SeriesInput struct {
 type SeriesMergePlan struct {
 	FromID   int
 	FromName string
+	// AuthorID is the numbered series' author, 0 when it has none. The base is
+	// resolved and created under it, so a base name shared by two authors is two
+	// bases.
+	AuthorID int
 	IntoName string // canonical base name
 	IntoID   int    // existing series with the base name, 0 when one must be created
 	Position int
@@ -106,6 +112,11 @@ type SeriesMergePlan struct {
 	// only on the split because the op consumes plans, and a merge that creates
 	// and deletes series rows is the destructive step that needs the gate.
 	Confidence SeriesConfidence
+	// DemotedBy names the check (seriesdenumber.Code) that moved this plan to low
+	// after the planner scored it, "" when none did. DemotedFrom is the tier the
+	// planner gave it. See DemotePlans.
+	DemotedBy   string
+	DemotedFrom SeriesConfidence
 }
 
 // SeriesDenumber plans the merges that collapse "<Series> <N>" rows into one
@@ -187,9 +198,40 @@ func SeriesDenumber(in []SeriesInput) []SeriesMergePlan {
 
 		plans = append(plans, SeriesMergePlan{
 			FromID: s.ID, FromName: s.Name, IntoName: sp.Base,
-			IntoID: canonical[k], Position: sp.Position, Reason: reason, Books: s.Books,
+			AuthorID: s.AuthorID,
+			IntoID:   canonical[k], Position: sp.Position, Reason: reason, Books: s.Books,
 			Shape: sp.Shape, Confidence: conf,
 		})
 	}
 	return plans
+}
+
+// DemotePlans moves every plan that has one of the known wrong shapes out of the
+// apply tier, to low, with the check named in DemotedBy and the evidence in
+// Reason. The planner scores a NAME; these checks read what the name cannot
+// show -- an audio file's "Part N", a base that is the author's own name, a
+// position of 100 or more, a base of one letter, a series with no author -- and
+// each was found in the "high" tier of a production dry run. authorNames maps an
+// author id to its name for the base-equals-author check; an id it lacks skips
+// that check only. The input is not modified.
+func DemotePlans(plans []SeriesMergePlan, authorNames map[int]string) []SeriesMergePlan {
+	out := make([]SeriesMergePlan, len(plans))
+	for i, pl := range plans {
+		out[i] = pl
+		if pl.Confidence == ConfidenceLow {
+			continue
+		}
+		v, held := sdn.Demote(sdn.Candidate{
+			FromName: pl.FromName, Base: pl.IntoName, Position: pl.Position,
+			AuthorID: pl.AuthorID, AuthorName: authorNames[pl.AuthorID],
+		})
+		if !held {
+			continue
+		}
+		out[i].DemotedBy = string(v.Code)
+		out[i].DemotedFrom = pl.Confidence
+		out[i].Confidence = ConfidenceLow
+		out[i].Reason = fmt.Sprintf("held (%s): %s; was %s: %s", v.Code, v.Reason, pl.Confidence, pl.Reason)
+	}
+	return out
 }

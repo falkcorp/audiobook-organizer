@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.42 -->
+<!-- version: 10.78.43 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -3842,6 +3842,9 @@ into one of the curated sections below, is a normal direct edit.
          source then gets deleted under the trashed row. The old per-series read had
          this gap too, so it was not introduced by the hoist. Fix: track moved-in
          counts per series and compare `refCounts[FromID] + movedIn[FromID]`.
+         ✅ Item 2 closed 2026-11-16 (series-denumber safe-apply PR): a base that resolves to a
+         numbered series the same run folds away now takes no books that run
+         (`seriesdenumber.Group.TargetIsSource`), so nothing is moved in to mask a count.
 
 - [ ] **AUTHOR-REFCOUNT-SPLIT (owner decision)** #3309 split author reference counts into live, — ❓ owner decision 2026-10-03: which of the 4,163 held authors (live vs historical refs) may be purged?
       trashed and dangling. Junction rows whose book no longer exists are dangling, and

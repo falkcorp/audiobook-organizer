@@ -1,5 +1,5 @@
 // file: internal/seriesdenumber/demote_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c2a81e47-5f30-4d96-b7a3-19e60d8f4b25
 // last-edited: 2026-11-16
 
@@ -18,7 +18,7 @@ func TestDemote(t *testing.T) {
 		{"keyword book", Candidate{"Gotham Knights: Book 11", "Gotham Knights", 11, 3, author}, ""},
 		{"keyword volume", Candidate{"Gotham Knights, Volume 3", "Gotham Knights", 3, 3, author}, ""},
 		{"zero padded", Candidate{"Court of Owls 05", "Court of Owls", 5, 3, author}, ""},
-		{"part keyword without format words", Candidate{"The Long Halloween Part 2", "The Long Halloween", 2, 3, author}, ""},
+		{"part marker without format words", Candidate{"The Long Halloween Part 2", "The Long Halloween", 2, 3, author}, CodeFilePart},
 		{"disc is a whole word only", Candidate{"Discord Knights 05", "Discord Knights", 5, 3, author}, ""},
 		{"three letter base is allowed", Candidate{"BAT 07", "BAT", 7, 3, author}, ""},
 		{"position 99 is allowed", Candidate{"Arkham Asylum 99", "Arkham Asylum", 99, 3, author}, ""},

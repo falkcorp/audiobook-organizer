@@ -1,5 +1,5 @@
 // file: internal/seriesdenumber/decide_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9f1c3e58-27a4-4b60-8d93-e6a05b72c149
 // last-edited: 2026-11-16
 
@@ -204,5 +204,21 @@ func TestDecide_ResultsFollowSourceOrder(t *testing.T) {
 	}
 	if res.MovedBooks() != 2 {
 		t.Fatalf("MovedBooks = %d, want 2", res.MovedBooks())
+	}
+}
+
+// A base that is itself a numbered series folding elsewhere this run takes no
+// books: they would be stranded when it is merged away.
+func TestDecide_ChainedTargetHoldsEverything(t *testing.T) {
+	res := Decide(Group{
+		TargetID: 2, BaseName: "Alpha 05", TargetIsSource: true,
+		Sources: []Source{{FromID: 3, Position: 7, Books: []Book{{ID: "y1"}}}},
+	})
+	r := res.Sources[0]
+	if len(r.Moves) != 0 || len(r.Held) != 1 || r.Held[0].Code != HoldChainedTarget || r.Held[0].Reason == "" {
+		t.Fatalf("got %+v, want y1 held as %s with a reason", r, HoldChainedTarget)
+	}
+	if res.CreateTarget {
+		t.Fatalf("CreateTarget true although nothing moves")
 	}
 }
