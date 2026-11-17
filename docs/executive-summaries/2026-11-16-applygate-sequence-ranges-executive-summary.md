@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-16-applygate-sequence-ranges-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 2c7e5a90-4b13-4d68-9f0a-e81d6b3c7a45 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -78,8 +78,19 @@ run before this change, and nothing here has been re-run against that data.
   another volume's details on the current main (four of five reviewed pairs do);
   and the "already applied" skip exists only on the cached-apply route, not on
   the route that fetches fresh candidates.
-- Outcome: no book with a track-like number that disagrees with its stored
-  volume is applied without a person in this change. The tests pin the cases
+- The rule this change keeps, stated once: a book is applied without a person
+  only if every number it carries (stored position, title, file and folder
+  names, the track-like ones included) equals the match's number. A track-like
+  number changes the reason a book is held (a review with a track-number
+  explanation instead of a hard conflict); it never turns a refusal into an
+  apply. The same books are refused as before, with one exception worth
+  naming: a stored title that has both a leading list number and a number of
+  its own at the end ("01 - Batman 451", position 1) used to be read as 1 only
+  and could apply; it is now read as 1 and 451 and held, which is what the
+  gate already did to the same title without the list number.
+- Outcome: no book with a track-like number that disagrees with the number the
+  rest of its names and fields agree on is applied without a person in this
+  change. The tests pin the cases
   named in this summary and compare a title with and without a list number
   added; they do not prove that every refusal the gate had before is
   unchanged. How many of the earlier false refusals this removes is not known

@@ -1,5 +1,5 @@
 // file: internal/applygate/sequence_unconfirmed_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d0b7e43-92c1-4a68-b3f7-0e8a1c64d2b9
 // last-edited: 2026-11-17
 
@@ -11,6 +11,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/seqnum"
 )
 
 // The five inputs review r3 raised against the title-word corroboration, as
@@ -96,5 +97,77 @@ func TestBookNumbers_PlainTitleReadsTheSameWeakNumber(t *testing.T) {
 	c := &metafetch.MetadataCandidate{Title: "Hush", Series: "Batman", SeriesPosition: "8"}
 	if v := CheckSequence(b, c); !v.Pass || v.WeakSetAside == "" {
 		t.Fatalf("pass=%v reason=%q weakSetAside=%q numbers=%s", v.Pass, v.Reason, v.WeakSetAside, describe(v.BookNumbers))
+	}
+}
+
+// Review r4 MAJOR: a part suffix on the file name is "strong" to effective()
+// (it is not weak), so the folder's leading ordinal 02 was dropped and the
+// suffix 001 agreed with the candidate's #1. weakSetAside skipped the suffix
+// as uncounted, found no strong source and returned "", so nothing refused.
+// At 719347773 this APPLIED (measured); main refuses it (book_sequence_conflict,
+// 02 against 001).
+func TestEvaluate_R4Major_PartSuffixStrongWeakDroppedStillRefuses(t *testing.T) {
+	for runtime, dur := range map[string]*int{"unknown": nil, "agreeing": new(36000)} {
+		book := &database.Book{Title: "Batman", FilePath: "/lib/Bruce Wayne/02 Batman/Batman - 001.mp3", Duration: dur}
+		cand := &metafetch.MetadataCandidate{Title: "Batman", SeriesPosition: "1", Score: 0.95, DurationSec: 36000}
+		if ok, reason := evalAll(book, cand); ok || reason != ReasonSequenceUnconfirmed {
+			t.Errorf("runtime %s: allowed=%v reason=%q, want sequence_unconfirmed", runtime, ok, reason)
+		}
+	}
+}
+
+// The invariant behind the weak-number rule, over generated source sets: the
+// sequence leg (a CheckSequence pass that also carries no WeakSetAside, which
+// is what lets EvaluateTranscribed go on) passes ONLY IF every book-side
+// number, weak ones included, equals the candidate's number. So the passes are
+// a subset of what an "every source must agree" rule passes: weak numbers
+// change the reason (review, with a track-number explanation, instead of a
+// hard conflict), never the outcome from refuse to allow. Ranges are excluded
+// (their own endpoint rule is tested elsewhere); the candidate always names a
+// number, because a part suffix is set aside when it names none.
+func TestCheckSequence_PassImpliesEverySourceAgrees(t *testing.T) {
+	titles := []string{"", "Batman", "Batman: Year 2", "01 - Batman", "02 - Batman: Year 2", "Batman, Book 2",
+		"Batman Book 3", "Batman - 001", "Batman, Part 2", "03 Batman", "Batman 451", "01 - Batman 451", "Batman 2 of 20"}
+	paths := []string{"", "/lib/A/Batman/Batman.m4b", "/lib/A/02 Batman/Batman - 001.mp3", "/lib/A/Batman/03 Chapter 1.mp3",
+		"/lib/A/Batman/Batman Book 3 - Track 07.mp3", "/lib/A/01 Batman/Batman.m4b", "/lib/A/Batman - 002/Batman 02 of 20.mp3",
+		"/lib/A/Batman Book 1/01 Batman.m4b", "/lib/A/Batman"}
+	positions := []string{"", "1", "2", "3"}
+	candPositions := []string{"1", "2", "3"}
+	var passes, weakRefusals, total int
+	for _, title := range titles {
+		for _, path := range paths {
+			for _, pos := range positions {
+				for _, cp := range candPositions {
+					book := &database.Book{Title: title, FilePath: path}
+					if pos != "" {
+						book.SeriesPositionRaw = new(pos)
+					}
+					cand := &metafetch.MetadataCandidate{Title: "Batman", SeriesPosition: cp}
+					v := CheckSequence(book, cand)
+					total++
+					if v.Pass && v.WeakSetAside != "" {
+						weakRefusals++
+					}
+					if !v.Pass || v.WeakSetAside != "" {
+						continue
+					}
+					passes++
+					want, _ := seqnum.ParsePosition(cp)
+					for _, s := range v.BookNumbers {
+						if s.Form == FormRangeEndpoint {
+							continue
+						}
+						if got, _ := seqnum.ParsePosition(s.Number); !seqnum.Equal(got, want) {
+							t.Fatalf("title %q path %q position %q candidate %q: sequence leg passed but %s=%s differs (%s)",
+								title, path, pos, cp, s.Source, s.Number, describe(v.BookNumbers))
+						}
+					}
+				}
+			}
+		}
+	}
+	// The table must exercise both sides, or it proves nothing.
+	if passes < 20 || weakRefusals < 20 {
+		t.Fatalf("degenerate table: %d of %d passed, %d held for a weak number", passes, total, weakRefusals)
 	}
 }
