@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_server_cpu.py
-# version: 2.0.0
+# version: 2.0.1
 # guid: c3e91a60-2f5d-4b87-a4c2-7d0b6e18f953
 # last-edited: 2026-11-17
 #
@@ -698,3 +698,38 @@ def test_creating_the_app_starts_the_machine_id_thread_once(monkeypatch, tmp_pat
     assert ident.first is not None
     first = ident.first
     assert first.result(timeout=5) is None and ident.start() is first
+
+
+def _run_main(monkeypatch, caplog, argv, shutdowns):
+    """main() with the engine and uvicorn stubbed: returns what uvicorn was given."""
+    import types
+
+    served = {}
+    engine = _engine(FakeTranscriber())
+    monkeypatch.setattr(ws, "build_engine", lambda cfg: engine)
+    monkeypatch.setattr(engine, "shutdown", lambda: shutdowns.append(1))
+    monkeypatch.setitem(
+        sys.modules,
+        "uvicorn",
+        types.SimpleNamespace(run=lambda app, **kw: served.update(kw)),
+    )
+    monkeypatch.setenv("WHISPER_MACHINE_ID", "gotham-cpu-main")
+    with caplog.at_level(logging.WARNING, logger=ws.log.name):
+        ws.main(argv)
+    return served
+
+
+def test_main_binds_loopback_quietly_by_default(monkeypatch, caplog):
+    shutdowns = []
+    served = _run_main(monkeypatch, caplog, [], shutdowns)
+    assert served["host"] == "127.0.0.1" and shutdowns == [1]
+    assert not [r for r in caplog.records if "beyond loopback" in r.getMessage()]
+
+
+def test_main_warns_when_bound_beyond_loopback(monkeypatch, caplog):
+    shutdowns = []
+    served = _run_main(monkeypatch, caplog, ["--host", "0.0.0.0"], shutdowns)
+    assert served["host"] == "0.0.0.0" and shutdowns == [1]
+    warned = [r for r in caplog.records if "beyond loopback" in r.getMessage()]
+    assert warned and warned[0].levelno == logging.WARNING
+    assert "no authentication" in warned[0].getMessage()
