@@ -1,5 +1,5 @@
 // file: internal/dedup/unmerge_auto_snapshot_pin_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c4e7a21-5b83-4d06-a1f9-3e2d8b6c0f47
 // last-edited: 2026-11-17
 
@@ -140,7 +140,10 @@ func TestMergeBooksJournaled_ProvisionalEntryRecordsEachBooksBaselineSnapshot(t 
 	l := f.Book(t, vptest.Spec{ID: "robin", Group: "G", Primary: "true"})
 	editTitle(t, f.S, k, 2)
 	editTitle(t, f.S, l, 3)
-	wantK, wantL := engine.newestSnapshotNanos(k), engine.newestSnapshotNanos(l)
+	wantK, err := engine.newestSnapshotNanos(k)
+	require.NoError(t, err)
+	wantL, err := engine.newestSnapshotNanos(l)
+	require.NoError(t, err)
 	require.NotZero(t, wantK)
 	require.NotZero(t, wantL)
 
