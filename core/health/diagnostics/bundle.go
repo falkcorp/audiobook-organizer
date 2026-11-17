@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/bundle.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: effb9b73-b53b-433b-92a8-5f9cb806d08d
 // last-edited: 2026-11-16
 
@@ -344,7 +344,7 @@ func (st *build) scrub(key, s string) (string, bool) {
 	out, kind := st.red.StringKinds(key, s)
 	changed := kind != 0 || out != s
 	p := ""
-	if valid, ok := safeKey(key); ok && valid(out) {
+	if valid, ok := safeKey(key, st.routes); ok && valid(out) {
 		p = out
 	} else {
 		p = st.san.Text(out)

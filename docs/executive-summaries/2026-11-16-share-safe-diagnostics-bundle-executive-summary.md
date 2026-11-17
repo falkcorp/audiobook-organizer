@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-16-share-safe-diagnostics-bundle-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 83fb8459-963c-4432-b2f8-ffd4fd4bd16d -->
 <!-- last-edited: 2026-11-16 -->
 
@@ -34,9 +34,11 @@ yet: a later change connects it, and it can now be connected.
 - A file inside one of your library folders is shown as the name of that
   folder and nothing after it, because what follows is usually an author or a
   title.
-- Fields that are not free text (log level, time, component, request route,
-  reason) keep their value when it has the expected shape, so a bundle stays
-  readable.
+- Fields that are not free text (log level, time, component, reason) keep their
+  value when it has the expected shape, so a bundle stays readable. A request
+  route is kept only when it is exactly one of the routes the server has
+  registered, so a request that happens to look like a file path never passes;
+  until the server hands over that list, a route is written as `<path>`.
 - The same rule now applies to the health page's detail text, which had no path
   protection at all, and to the names of the files inside the zip. The health
   page now takes the list of library folders and builds the rule itself, so it

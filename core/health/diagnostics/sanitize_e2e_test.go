@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/sanitize_e2e_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 17158067-310c-4881-b709-9b9df6b06410
 // last-edited: 2026-11-16
 
@@ -158,6 +158,9 @@ func TestSanitizeE2E_BuildOverAFakeRing(t *testing.T) {
 	}
 	e := f.exporterWith(viewerOf("core:system.manage"), func(cfg *diagnostics.Config) {
 		cfg.Roots = []diagnostics.PathRoot{{Name: "audiobooks", Path: "/srv/gotham/audiobooks"}}
+		cfg.RoutePatterns = func() []string {
+			return []string{"GET /api/v1/books/{id}", "/api/v1/files/{path...}", "/Users/selina/Hush"}
+		}
 		cfg.Contributors = []diagnostics.Contributor{contrib}
 		cfg.Sources.Logs = ringSource(ringLines())
 		cfg.App = "/Users/selina/gotham-audio"
