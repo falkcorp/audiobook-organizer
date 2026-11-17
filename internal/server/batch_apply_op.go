@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.28.2
+// version: 1.29.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
-// last-edited: 2026-10-30
+// last-edited: 2026-11-17
 //
 // batch_apply_op registers the "metadata.batch-apply-cached" v2 OperationDef.
 // The HTTP handler BatchApplyFromCache enqueues this and returns the op id
@@ -412,6 +412,10 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// already applied and no single-row approval asked to re-apply
 			// (applySkipAlreadyApplied).
 			var alreadyApplied atomic.Int64
+			// retired counts books left alone because they are retired (in
+			// the trash, or merged into another book) and the owner did not
+			// approve them on their own review row (applySkipBookRetired).
+			var retired atomic.Int64
 			// refusalSkipped counts books left out WITHOUT being evaluated because
 			// an earlier run refused them for a structural reason and nothing the
 			// gate reads has changed since (applyRefusalLedger). Never counted for
@@ -613,6 +617,9 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 					case applySkipAlreadyApplied:
 						// Applied before; nobody asked to re-apply it.
 						alreadyApplied.Add(1)
+					case applySkipBookRetired:
+						// Trashed or merged away; nobody confirmed this book.
+						retired.Add(1)
 					}
 					notApplied.Add(1)
 					attrs := []slog.Attr{
@@ -810,8 +817,8 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// not books that merely waited once.
 			stillDeferred := len(snapshotGateDeferred())
 			summary := fmt.Sprintf(
-				"applied %d of %d (owner-reviewed over the certainty gate %d, refused by certainty gate %d, reviewed candidate changed since it was shown %d, marked no match %d, already applied %d, skipped because an earlier run refused them for a structural reason and nothing changed %d, authors unreadable %d, refused because the rename could not land %d, no candidates %d, book not found %d, decode failed %d, apply failed %d, write-back failed %d, owner-reviewed change history not recorded %d, gate unavailable %d, kept user-locked fields on %d, sibling-part index could not read %d books)",
-				applied.Load(), total, ownerReviewed.Load(), gateBlocked.Load(), staleCandidate.Load(), markedNoMatch.Load(), alreadyApplied.Load(), refusalSkipped.Load(), authorsUnreadable.Load(), fileWorkBlocked.Load(), noCandidates.Load(), bookMissing.Load(), decodeFailed.Load(),
+				"applied %d of %d (owner-reviewed over the certainty gate %d, refused by certainty gate %d, reviewed candidate changed since it was shown %d, marked no match %d, already applied %d, retired %d, skipped because an earlier run refused them for a structural reason and nothing changed %d, authors unreadable %d, refused because the rename could not land %d, no candidates %d, book not found %d, decode failed %d, apply failed %d, write-back failed %d, owner-reviewed change history not recorded %d, gate unavailable %d, kept user-locked fields on %d, sibling-part index could not read %d books)",
+				applied.Load(), total, ownerReviewed.Load(), gateBlocked.Load(), staleCandidate.Load(), markedNoMatch.Load(), alreadyApplied.Load(), retired.Load(), refusalSkipped.Load(), authorsUnreadable.Load(), fileWorkBlocked.Load(), noCandidates.Load(), bookMissing.Load(), decodeFailed.Load(),
 				applyFailed.Load(), writeFailed.Load(), historyFailed.Load(), stillDeferred,
 				skippedLocked.Load(), claims.Unreadable())
 			if n := refusalSkipped.Load(); n > 0 {

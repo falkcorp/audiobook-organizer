@@ -1,7 +1,7 @@
 // file: internal/server/apply_when_scanned_op.go
-// version: 1.8.4
+// version: 1.9.0
 // guid: 4c1f7e2a-9b3d-4e85-a6f0-2d8c5b71e934
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package server
 
@@ -374,8 +374,9 @@ func (s *Server) applyOpResultCandidateLocked(ctx context.Context, books bookRea
 	// sequence-number guard. The "matched" status above is only "the
 	// top non-rejected candidate", with no floor behind it.
 	plan := planOpResultApply(books, bookID, cr, claims)
-	if plan.Reason == applySkipMarkedNoMatch {
-		// Marked "no match" since the fetch: nothing to apply.
+	if plan.Reason == applySkipMarkedNoMatch || plan.Reason == applySkipBookRetired {
+		// Marked "no match", or trashed or merged away, since the fetch:
+		// nothing to apply.
 		return opResultApplyOutcome{skipped: true}
 	}
 	if plan.Reason == applySkipGateBlocked {
@@ -411,8 +412,8 @@ func (s *Server) applyOpResultCandidateLocked(ctx context.Context, books bookRea
 		// write, like the gate's own owner_rejected refusal.
 		return opResultApplyOutcome{blocked: true, blockMsg: fmt.Sprintf("%s: %v", bookID, err)}
 	}
-	if err != nil && errors.Is(err, metafetch.ErrMarkedNoMatch) {
-		// Marked "no match" between the plan and the apply.
+	if err != nil && (errors.Is(err, metafetch.ErrMarkedNoMatch) || errors.Is(err, metafetch.ErrBookRetired)) {
+		// Marked "no match", or retired, between the plan and the apply.
 		return opResultApplyOutcome{skipped: true}
 	}
 	if err != nil {

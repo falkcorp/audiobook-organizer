@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.17.1
+// version: 3.19.0
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 //
 // Registers the metadata.candidate-fetch v2 OperationDef. Pure params
 // type moved to internal/metabatch.FetchOpParams.
@@ -327,7 +327,7 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 				if cerr != nil {
 					return
 				}
-				result := s.fetchCandidateForBook(ctx, mfs, store, limiter, opID, bookID, p.Force, googleCapped[bookID], folderMemo)
+				result := s.fetchCandidateForBook(ctx, mfs, store, limiter, opID, bookID, p.Force, googleCapped[bookID], folderMemo, p.Interactive)
 				release()
 				resultJSON, err := json.Marshal(result)
 				if err != nil {
@@ -435,9 +435,9 @@ func (s *Server) selectUnfetchedBooks(ctx context.Context, reporter opsregistry.
 	msg := fmt.Sprintf("selected %d books to fetch: %d never fetched or invalidated, %d with an empty answer to questions no longer asked, %d with a row marked stale (the book's identity changed), "+
 		"%d owed a fallback provider's answer, %d of them holding only unusable candidates (%d Google Books lookups left for a later quota day, %d of those books still asked of Open Library) "+
 		"(%d books the chain has not answered keep their chain and Open Library steps with any Google step put off) "+
-		"(%d live books read, %d left out with no usable search title)",
+		"(%d books read, %d retired books left out, %d left out with no usable search title)",
 		len(sel.IDs), sel.NoRow, sel.StaleEmpty, sel.Stale, sel.FallbackPending, sel.FallbackUnusable, sel.FallbackCapped, len(sel.GoogleCapped)-sel.ChainCapped,
-		sel.ChainCapped, sel.Scanned, sel.Unsearchable)
+		sel.ChainCapped, sel.Scanned, sel.Retired, sel.Unsearchable)
 	_ = reporter.Log(slog.LevelInfo, msg)
 	candidateFetchLog.Info("%s", msg)
 	return sel, nil

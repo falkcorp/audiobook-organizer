@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade.go
-// version: 2.5.4
+// version: 2.6.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 //
 // Background job that upgrades metadata from lower-quality sources
 // (Open Library, Google Books, Wikipedia) to richer ones (Hardcover,
@@ -142,6 +142,8 @@ type upgradeOutcome struct {
 const (
 	upgradeSkipUnranked          = "current source is unranked; it is never replaced"
 	upgradeSkipMarkedNoMatch     = "owner marked the book no match"
+	upgradeSkipRetired           = "book is retired (in the trash or merged into another book)"
+	upgradeSkipRetiredDuringRun  = "book was retired while it was being searched"
 	upgradeSkipNoResults         = "search returned no candidates"
 	upgradeSkipNoneOutrank       = "no candidate from a higher-ranked source"
 	upgradeSkipGateRefused       = "every higher-ranked candidate was refused by the gate"
@@ -395,6 +397,12 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 	if metafetch.IsMarkedNoMatch(book.MetadataReviewStatus) {
 		return skip(upgradeSkipMarkedNoMatch)
 	}
+	// A retired book (trash, or merged into another) is neither searched nor
+	// written: the search would spend provider quota on a book the apply
+	// refuses (ErrBookRetired, below).
+	if book.IsRetired() {
+		return skip(upgradeSkipRetired)
+	}
 	// Standing owner rule: Doctor Who / Big Finish / Torchwood are never
 	// touched by a bulk or automatic apply; the owner applies them by hand.
 	// Checked before the search so no provider quota is spent on them.
@@ -550,6 +558,10 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 		// a skip, not a failure.
 		if errors.Is(applyErr, metafetch.ErrMarkedNoMatch) {
 			return skip(upgradeSkipMarkedDuringDone)
+		}
+		// The book was trashed or merged away while this run searched it.
+		if errors.Is(applyErr, metafetch.ErrBookRetired) {
+			return skip(upgradeSkipRetiredDuringRun)
 		}
 		// The owner rejected the candidate while this run searched (the
 		// gate read the rejections before the search): the apply's own

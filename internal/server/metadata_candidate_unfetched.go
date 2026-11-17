@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_unfetched.go
-// version: 1.4.3
+// version: 1.5.0
 // guid: 6bf34beb-7e2f-40a9-b7a7-c5755a52c7fb
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 //
 // Selects the books the scheduled candidate fetch asks the providers about:
 // books never fetched, books whose candidates were invalidated, and books
@@ -89,7 +89,11 @@ type unfetchedSelection struct {
 	GoogleCapped []string
 	// Unsearchable: candidates the fetch would only skip (no usable query).
 	Unsearchable int
-	// Scanned: live books read.
+	// Retired: books left out because they are retired (in the trash, or
+	// merged into another book; database.Book.IsRetired). Fetching candidates
+	// for them spends provider quota on rows no apply will accept.
+	Retired int
+	// Scanned: books read, retired ones included.
 	Scanned int
 }
 
@@ -202,7 +206,8 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 		for i := range page {
 			b := page[i]
 			sel.Scanned++
-			if b.MarkedForDeletion != nil && *b.MarkedForDeletion {
+			if b.IsRetired() {
+				sel.Retired++
 				continue
 			}
 			if !database.EffectiveIsPrimaryVersion(b.IsPrimaryVersion) || audiobooks.BookMetadataApplied(&b) ||
