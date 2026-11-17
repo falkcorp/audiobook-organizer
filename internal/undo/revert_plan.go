@@ -1,7 +1,7 @@
 // file: internal/undo/revert_plan.go
-// version: 1.12.5
+// version: 1.13.0
 // guid: 7c3e9a51-2f84-4b6d-a0e7-5d1c8b4f2e96
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 
 package undo
 
@@ -61,6 +61,12 @@ type RevertPlan struct {
 	// (Gate refuses them). A delete row that restored the author but not every
 	// alias (*AuthorPartlyRestoredError) does not count: the author is live.
 	refusedAuthor map[int]bool
+	// restoredSeries: series a series_row_delete row recorded restored is
+	// predicted to have brought back (SeriesView). The revert runs newest first,
+	// so the books' series_id rows, older than the delete, find the series live
+	// again; the store still shows it deleted until then, which is what a
+	// preflight reads.
+	restoredSeries map[int]bool
 	// primaries: the primary AuthorID each book is predicted to carry once the
 	// rows recorded restored so far are reverted (a credits move or id repoint
 	// that changed it puts back its before value). Rows run newest-first, so an
@@ -105,7 +111,7 @@ func PlanRevert(rows []*database.OperationChange, files func(bookID string) ([]d
 	p := &RevertPlan{Stamps: OpSoftDeleteStamps(rows), deps: deps, depIDs: map[string]bool{},
 		restored: map[string]bool{}, refusedBook: map[string]bool{}, handedOff: map[string]bool{}, demoted: map[string]bool{},
 		fieldLocks: map[string][]*database.OperationChange{}, seriesLinks: map[string]*database.OperationChange{},
-		refusedAuthor: map[int]bool{}, primaries: map[string]*int{},
+		refusedAuthor: map[int]bool{}, restoredSeries: map[int]bool{}, primaries: map[string]*int{},
 		newerMain: newerMainRows(rows), unrestored: map[string]bool{}, heldAfter: map[string]string{},
 		shellRetires: map[string][]string{}, retiredInto: map[string]bool{}}
 	for _, c := range rows {
@@ -281,6 +287,9 @@ func (p *RevertPlan) Record(c *database.OperationChange, err error) {
 	}
 	if err == nil {
 		p.restored[c.ID] = true
+		if c.ChangeType == ChangeTypeSeriesRowDelete && c.SeriesID != nil {
+			p.restoredSeries[*c.SeriesID] = true
+		}
 		if before, ok := primaryRestoredBy(c); ok {
 			p.primaries[c.BookID] = before
 		}
@@ -548,4 +557,15 @@ func deletedAuthor(c *database.OperationChange) (int, bool) {
 		return 0, false
 	}
 	return snap.ID, true
+}
+
+// SeriesView is store as the revert will see its series once every
+// series_row_delete row recorded restored so far has been reverted: a series
+// such a row brings back reads as live. A nil plan, or one with none, returns
+// store unchanged.
+func (p *RevertPlan) SeriesView(store SeriesLookup) SeriesLookup {
+	if p == nil || len(p.restoredSeries) == 0 {
+		return store
+	}
+	return restoredSeriesView{SeriesLookup: store, restored: p.restoredSeries}
 }
