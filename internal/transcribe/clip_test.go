@@ -1,5 +1,5 @@
 // file: internal/transcribe/clip_test.go
-// version: 1.0.0
+// version: 1.1.1
 // guid: 0b5d7f91-3e28-4c64-a1d9-62f8c0e47b35
 // last-edited: 2026-11-17
 
@@ -53,7 +53,7 @@ func TestParseClipKinds(t *testing.T) {
 			if got.Kind != tc.want || got.Reason != tc.reason {
 				t.Fatalf("ParseClip(%q) = %s/%s, want %s/%s", tc.text, got.Kind, got.Reason, tc.want, tc.reason)
 			}
-			if got.Kind != ClipKindNone && !got.Kind.Valid() {
+			if got.Kind != ClipKindNone && !validClipKind(got.Kind) {
 				t.Fatalf("kind %q is not a storable kind", got.Kind)
 			}
 		})
@@ -150,21 +150,14 @@ func TestParseClipJinglePublisher(t *testing.T) {
 	}
 }
 
-// TestParseClipAgreesWithClassifyIntro pins the invariant the design rests on:
-// the finer kind is a refinement of IntroKind, never a second opinion.
-func TestParseClipAgreesWithClassifyIntro(t *testing.T) {
+// TestParseClipTitleAnnouncementsCarryATitle pins the one invariant the stored
+// kind rests on: a clip is a title announcement exactly when a title was parsed.
+func TestParseClipTitleAnnouncementsCarryATitle(t *testing.T) {
 	check := func(t *testing.T, text string) {
 		t.Helper()
-		c := ClassifyIntro(text, UnknownPosition)
 		p := ParseClip(text)
-		if (c.Kind == IntroKindCredits) != (p.Kind == ClipKindTitle) {
-			t.Fatalf("credits/title disagree for %q: intro %s clip %s", text, c.Kind, p.Kind)
-		}
-		if c.Kind == IntroKindChapter && p.Kind != ClipKindChapter && p.Kind != ClipKindPart {
-			t.Fatalf("chapter disagrees for %q: clip %s", text, p.Kind)
-		}
-		if c.Kind == IntroKindCredits && c.Fields.Title != p.Title {
-			t.Fatalf("title disagrees for %q: %q vs %q", text, c.Fields.Title, p.Title)
+		if (p.Kind == ClipKindTitle) != (p.Title != "") {
+			t.Fatalf("kind %s with title %q for %q", p.Kind, p.Title, text)
 		}
 	}
 	for _, r := range loadCorpus(t) {
@@ -178,11 +171,21 @@ func TestParseClipAgreesWithClassifyIntro(t *testing.T) {
 // TestParseClipCorpusDistribution runs the kinds over the production corpus: no
 // panic, every row lands on a storable kind, and the distribution is plausible
 // (a canary, not a label check).
+// validClipKind reports whether k is one of the storable kinds.
+func validClipKind(k ClipKind) bool {
+	for _, v := range AllClipKinds {
+		if k == v {
+			return true
+		}
+	}
+	return false
+}
+
 func TestParseClipCorpusDistribution(t *testing.T) {
 	counts := map[ClipKind]int{}
 	for _, r := range loadCorpus(t) {
 		p := ParseClip(r.Text)
-		if p.Kind != ClipKindNone && !p.Kind.Valid() {
+		if p.Kind != ClipKindNone && !validClipKind(p.Kind) {
 			t.Fatalf("invalid kind %q", p.Kind)
 		}
 		counts[p.Kind]++

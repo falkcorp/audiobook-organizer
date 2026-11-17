@@ -1,5 +1,5 @@
 // file: internal/transcribe/parse.go
-// version: 3.1.0
+// version: 3.1.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-11-17
 
@@ -42,14 +42,7 @@ type IntroFields struct {
 var (
 	// "[Publisher] (audio) presents " — bounded to ~80 chars so a real title that
 	// happens to contain "presents" later isn't eaten.
-	//
-	// The word may be followed by punctuation instead of a bare space: Whisper
-	// writes "Wayne Audio presents, The Long Halloween". Requiring whitespace
-	// meant the lead was NOT stripped in that form and the publisher's name
-	// became the front of the stored title. The lead is only treated as a
-	// publisher after viewClip's guard (it must not be a chapter heading or
-	// narration).
-	presentsPrefixRe = regexp.MustCompile(`(?i)^.{0,80}?\b(?:audio\s+)?presents\b[\s,.:;\x{2013}\x{2014}-]*`)
+	presentsPrefixRe = regexp.MustCompile(`(?i)^.{0,80}?\b(?:audio\s+)?presents\b\s+`)
 
 	// Common junk openers captured by the 90s clip before the real announcement.
 	junkOpenerRe = regexp.MustCompile(`(?i)^(?:this is audible[.,]?\s+|audible hopes you enjoy[^.]*\.\s+|an audible original[.,]?\s+|brilliance audio[.,]?\s+)`)

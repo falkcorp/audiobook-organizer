@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
 // last-edited: 2026-11-17
 
@@ -1675,22 +1675,21 @@ func whisperGroupResult(r fileIntroWhisperResult, now time.Time) groupResult {
 			Parse: silenceParse(),
 		}}
 	default:
-		// The clip is classified once, with the same grammar maintenance.
-		// reparse-file-intros applies to stored text, so a freshly written row and
-		// a re-parsed one agree and a re-parse of a new row changes nothing. Only a
-		// title announcement carries identity (the rule Reconcile enforces on a
-		// re-parse); the kind and the other fields are stored beside it.
-		clip := transcribe.ParseClip(r.Text)
-		var fields transcribe.ClipParse
-		if clip.Kind == transcribe.ClipKindTitle {
-			fields = clip
-		}
+		// Two parses of the same text, with two different jobs. The identity
+		// columns (title, author, narrator, translator, cover artist) and the
+		// status come from the LEGACY grammar, exactly as they always have: guards,
+		// the metadata search query and the apply gate read them, and
+		// TestLegacyParseGolden pins that grammar. The classification stored beside
+		// them (IntroParse) comes from the clip grammar, which maintenance.
+		// reparse-file-intros applies to stored text, so a new row and a re-parsed
+		// one carry the same classification.
+		fields := transcribe.ParseAudiobookIntro(r.Text)
 		status, kind := statusOK, "ok"
 		if fields.Title == "" {
 			status, kind = statusUnparsed, "unparsed"
 		}
 		text := r.Text
-		parse := introParseFromClip(clip)
+		parse := introParseFromClip(transcribe.ParseClip(r.Text))
 		return groupResult{kind: kind, hasResult: true, fillable: true, res: database.BookFileIntroResult{
 			Status: status, Transcript: &text, At: now, Done: true,
 			Title: fields.Title, Author: fields.Author, Narrator: fields.Narrator,

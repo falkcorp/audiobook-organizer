@@ -1,5 +1,5 @@
 // file: internal/transcribe/clip.go
-// version: 1.0.0
+// version: 1.1.1
 // guid: 9c4e1b73-28a5-4d06-bf92-7a3d05e8c614
 // last-edited: 2026-11-17
 
@@ -15,12 +15,11 @@ import (
 //
 // IntroKind answers a narrower question for the regroup classifier ("does this
 // file START a book, CONTINUE one, or say nothing?"). ClipKind answers the
-// question an operator asks of a stored transcript: what did Whisper hear?
-// Both come from the same grammar (ParseClip calls ClassifyIntro first and
-// refines its verdict), so title_announcement is exactly IntroKindCredits and
-// the two chapter/part kinds are exactly IntroKindChapter. The reverse is not
-// true: ClipKind adds front/back matter, credits-with-no-title, silence and
-// garbage, which IntroKind folds into unknown.
+// question an operator asks of a stored transcript: what did Whisper hear? It
+// comes from its own parser (clip_classify.go), separate from ClassifyIntro, so
+// the two may disagree about a clip: ClipKind adds front/back matter,
+// credits-with-no-title, silence and garbage, and reads markers the legacy
+// grammar does not. Nothing that decides identity reads ClipKind.
 //
 // The kind is additive to a row's status. A row's status stays the vocabulary
 // readers already switch on (ok / unparsed / empty / the failure statuses);
@@ -69,16 +68,6 @@ const (
 var AllClipKinds = []ClipKind{
 	ClipKindTitle, ClipKindCredits, ClipKindChapter, ClipKindPart,
 	ClipKindMatter, ClipKindNarration, ClipKindSilence, ClipKindGarbage,
-}
-
-// Valid reports whether k is one of the storable kinds.
-func (k ClipKind) Valid() bool {
-	for _, v := range AllClipKinds {
-		if k == v {
-			return true
-		}
-	}
-	return false
 }
 
 // ClipParserVersion is bumped whenever ParseClip's grammar changes in a way that
@@ -216,8 +205,8 @@ func ParseClip(text string) ClipParse {
 		return ClipParse{Kind: ClipKindCredits, Reason: string(ReasonBoilerplateOnly), Publisher: publisherFromJingle(text)}
 	}
 
-	c := ClassifyIntro(cleaned, UnknownPosition)
-	switch c.Kind {
+	c := classifyClip(v)
+	switch c.kind {
 	case IntroKindCredits:
 		return titleParse(c, v)
 	case IntroKindChapter:
@@ -244,8 +233,8 @@ func ParseClip(text string) ClipParse {
 }
 
 // titleParse builds the parse of a book-opening announcement.
-func titleParse(c IntroClassification, v clipView) ClipParse {
-	f := c.Fields
+func titleParse(c clipClass, v clipView) ClipParse {
+	f := c.fields
 	p := ClipParse{
 		Kind: ClipKindTitle, Reason: string(ReasonCreditGrammar),
 		Title: f.Title, Author: f.Author, Narrator: f.Narrator,
@@ -262,8 +251,8 @@ func titleParse(c IntroClassification, v clipView) ClipParse {
 }
 
 // markerParse builds the parse of a chapter/part marker clip.
-func markerParse(c IntroClassification, v clipView) ClipParse {
-	p := ClipParse{Reason: c.Reason}
+func markerParse(c clipClass, v clipView) ClipParse {
+	p := ClipParse{Reason: string(c.reason)}
 	rest := v.body
 	var chapterRest string
 	first := true
@@ -293,8 +282,8 @@ func markerParse(c IntroClassification, v clipView) ClipParse {
 		// Continuation wording ("This part includes Chapter 2"): the classifier
 		// found a number but there is no marker at the start to read a title from.
 		p.Marker = "continuation"
-		if c.ChapterNumber > 0 {
-			p.ChapterNumber, p.HasChapterNumber = c.ChapterNumber, true
+		if c.chapterNumber > 0 {
+			p.ChapterNumber, p.HasChapterNumber = c.chapterNumber, true
 		}
 		p.Kind = ClipKindChapter
 		return p

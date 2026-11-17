@@ -1,5 +1,5 @@
 // file: internal/transcribe/marker.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5a2d9e04-7b1c-4f83-a6d0-c3e81f4b7295
 // last-edited: 2026-11-17
 
@@ -8,6 +8,7 @@ package transcribe
 import (
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // markerClass says what a structural marker announces.
@@ -86,17 +87,43 @@ func parseMarkerAt(s string) (structuralMarker, bool) {
 			End: len(m[0]) + used,
 		}, true
 	}
-	if m := matterRe.FindStringSubmatch(s); m != nil {
+	if m := matterRe.FindStringSubmatch(s); m != nil && matterTailOK(s[len(m[0]):]) {
 		return structuralMarker{Class: markerMatter, Keyword: strings.ToLower(m[1]), End: len(m[0])}, true
 	}
 	if m := bareNumberRe.FindStringSubmatch(s); m != nil {
-		n := parseSpokenNumber(m[1])
+		n := parseClipNumber(m[1])
 		return structuralMarker{
 			Class: markerChapter, Keyword: "chapter", Number: n, HasNumber: true,
 			End: len(m[0]),
 		}, true
 	}
 	return structuralMarker{}, false
+}
+
+// matterTailOK reports whether what follows a front/back matter word reads as a
+// heading and not as a sentence that happens to start with the word: the end of
+// the clip, punctuation, or a capitalised word or digit after a space.
+// "Dedication was the one thing Bruce never lacked" is narration; "Dedication.
+// For Alfred" and "Prologue Bruce Wayne stood" are headings.
+func matterTailOK(rest string) bool {
+	if rest == "" {
+		return true
+	}
+	r := []rune(rest)
+	switch r[0] {
+	case '.', ',', ':', ';', '!', '?', '-', '\u2013', '\u2014', ')':
+		return true
+	}
+	if !unicode.IsSpace(r[0]) {
+		return false
+	}
+	for _, c := range r {
+		if unicode.IsSpace(c) {
+			continue
+		}
+		return unicode.IsUpper(c) || unicode.IsDigit(c) || strings.ContainsRune(".,:;!?-\u2013\u2014(", c)
+	}
+	return true
 }
 
 // startsWithMarker reports whether s opens with a structural marker.

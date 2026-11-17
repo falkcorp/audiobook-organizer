@@ -1,5 +1,5 @@
 // file: internal/transcribe/numbers_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 41d8c6b2-0a97-4e53-9f1c-8b25e7a0d364
 // last-edited: 2026-11-17
 
@@ -77,8 +77,8 @@ func TestParseSpokenNumberWholeToken(t *testing.T) {
 		"": 0, "twelve monkeys": 0, "banana": 0,
 	}
 	for in, want := range cases {
-		if got := parseSpokenNumber(in); got != want {
-			t.Errorf("parseSpokenNumber(%q) = %d, want %d", in, got, want)
+		if got := parseClipNumber(in); got != want {
+			t.Errorf("parseClipNumber(%q) = %d, want %d", in, got, want)
 		}
 	}
 }

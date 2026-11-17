@@ -1,5 +1,5 @@
 // file: internal/transcribe/classify.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7d41f0a2-6c93-4b18-a5e7-2f9b6c0d3184
 // last-edited: 2026-11-17
 
@@ -7,6 +7,7 @@ package transcribe
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -237,13 +238,19 @@ var (
 	// is strictly worse. Do not "fix" this without changing what consumes it.
 	titleSepRe = regexp.MustCompile(`(?i)\b(?:written|authored|edited|translated|adapted|compiled)\s+by\b|\bby\b`)
 
-	// creditVerbOnlyRe matches a title candidate that is nothing but a credit verb,
-	// optionally led by "this has been" and followed by "for you": the front half
-	// of "Narrated by X" cut at the bare "by".
-	creditVerbOnlyRe = regexp.MustCompile(`(?i)^(?:(?:this (?:has been|is)|you (?:have been|are) (?:listening to|hearing))\s+)?(?:an?\s+)?(?:written|authored|narrated|read|performed|voiced|produced|directed|edited|translated|published|presented|adapted|compiled|abridged|unabridged)(?:\s+and\s+\w+)?(?:\s+for\s+you)?$`)
-
 	// anyCreditVerbRe is the presence test for announcement grammar of any kind.
 	anyCreditVerbRe = regexp.MustCompile(`(?i)\b(?:read|narrated|performed|voiced|written|authored|edited|translated|adapted|compiled|produced|presented|directed)(?:\s+for\s+you)?\s+by\b`)
+
+	// chapterMarkerRe matches a structural announcement. Anchored forms only —
+	// "chapter" appearing mid-prose is not a marker.
+	chapterMarkerRe = regexp.MustCompile(`(?i)^(?:chapter|part|book|disc|track|section|episode)\s+([0-9]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|twenty)\b`)
+
+	// midChapterMarkerRe catches the explicit continuation phrasing anywhere in
+	// the clip: "This part includes Chapter 2".
+	midChapterMarkerRe = regexp.MustCompile(`(?i)\bthis part (?:includes|contains)\b|\bend of (?:the )?(?:part|chapter|disc|book)\b|\bcontinued\b`)
+
+	// chapterNumRe pulls a chapter/part number out of a structural announcement.
+	chapterNumRe = regexp.MustCompile(`(?i)\b(?:chapter|part|disc|track|section)\s+([0-9]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|twenty)\b`)
 
 	// boilerplateOnlyRe matches clips that are nothing but a publisher jingle.
 	// "This is Audible." is 12% of the sampled corpus and carries zero identity
@@ -333,78 +340,6 @@ const (
 	creditVerbWindow = 400
 )
 
-// clipView is a transcript after the normalisation every reader of it shares:
-// whitespace collapsed, the publisher jingle and any "<publisher> presents" lead
-// removed. ClassifyIntro and ParseClip both start from it, so the two cannot
-// disagree about where the announcement begins.
-type clipView struct {
-	// stripped is the text with whitespace collapsed and the jingle removed.
-	stripped string
-	// body is stripped with the "<publisher> presents" lead removed.
-	body string
-	// publisher is the text that led the "presents", "" when there was none.
-	publisher string
-	// hadPresents reports that the lead was found and removed.
-	hadPresents bool
-	// boilerplateOnly reports a clip that is nothing but a publisher jingle.
-	boilerplateOnly bool
-	// jingle is the publisher jingle that opened the clip, "" when none.
-	jingle string
-}
-
-// leadSentenceEndRe splits a lead into sentences.
-var leadSentenceEndRe = regexp.MustCompile(`[.!?]+\s+`)
-
-// isPublisherLead reports whether the text before a "presents" reads as a
-// publisher: it must not open with a structural marker, carry narration
-// (lowercase pronouns or past-tense verbs), or, when it spans several
-// sentences, end on a clause that names no publisher ("Bruce stared at the
-// screen. Alfred presents..."). A multi-sentence jingle that does end on one
-// ("Gotham Audio. A tale in your mind. Gotham Audio presents") still counts.
-func isPublisherLead(lead string) bool {
-	// Judge the lead WITHOUT the word "presents": it is the last word of the final
-	// sentence, and would make "Wayne Audio. A Division of Gotham Books.
-	// Presents" end on a clause that names no publisher.
-	lead = publisherFromLead(lead)
-	if startsWithMarker(lead) || proseMarkerRe.MatchString(lead) || proseVerbRe.MatchString(lead) {
-		return false
-	}
-	if titleHasSentenceBreak(lead) {
-		parts := leadSentenceEndRe.Split(strings.TrimSpace(lead), -1)
-		return publisherishRe.MatchString(parts[len(parts)-1])
-	}
-	return true
-}
-
-// viewClip normalises a transcript (already trimmed, non-empty, not the
-// sentinel).
-func viewClip(raw string) clipView {
-	norm := collapseWS(strings.Join(splitLines(raw), " "))
-	stripped := strings.TrimSpace(junkOpenerRe.ReplaceAllString(norm, ""))
-	v := clipView{stripped: stripped, body: stripped}
-	if jl := junkOpenerRe.FindString(norm); jl != "" {
-		v.jingle = clean(jl)
-	}
-	if boilerplateOnlyRe.MatchString(stripped) {
-		v.boilerplateOnly = true
-		return v
-	}
-	if loc := presentsPrefixRe.FindStringIndex(stripped); loc != nil {
-		lead := stripped[:loc[1]]
-		// 🔴 The lead is a PUBLISHER only when it reads like one. A chapter
-		// heading or a sentence of narration can also precede the word
-		// ("Chapter 3. Alfred presents his findings..."): stripping that would
-		// delete the heading and every word before the verb, so the clip would
-		// lose the very marker that identifies it.
-		if isPublisherLead(lead) {
-			v.body = strings.TrimSpace(stripped[loc[1]:])
-			v.publisher = publisherFromLead(lead)
-			v.hadPresents = true
-		}
-	}
-	return v
-}
-
 // ClassifyIntro decides what a transcript is, using position as a supporting
 // discriminator.
 //
@@ -429,17 +364,15 @@ func ClassifyIntro(text string, pos IntroPosition) IntroClassification {
 		return IntroClassification{Kind: IntroKindUnknown, Reason: string(ReasonSilenceSentinel)}
 	}
 
-	// Non-speech tags ("[Music]") are never part of an announcement. Dropping
-	// them here, not only in ParseClip, keeps the verdict and the stored clip
-	// kind a function of the same text.
-	raw, _ = stripSoundTags(raw)
-
-	v := viewClip(raw)
-	if v.boilerplateOnly {
+	norm := collapseWS(strings.Join(splitLines(raw), " "))
+	stripped := strings.TrimSpace(junkOpenerRe.ReplaceAllString(norm, ""))
+	if boilerplateOnlyRe.MatchString(strings.TrimSpace(stripped)) {
 		// Publisher jingle and nothing else — the clip captured no content.
 		return IntroClassification{Kind: IntroKindUnknown, Reason: string(ReasonBoilerplateOnly)}
 	}
-	body, hadPresents := v.body, v.hadPresents
+
+	body := strings.TrimSpace(presentsPrefixRe.ReplaceAllString(stripped, ""))
+	hadPresents := body != stripped
 
 	// --- Credits: announcement grammar with a plausible title. ---
 	//
@@ -466,19 +399,20 @@ func ClassifyIntro(text string, pos IntroPosition) IntroClassification {
 	}
 
 	// --- Chapter: structural marker, no usable announcement. ---
-	//
-	// Front and back matter ("Prologue", "Epilogue") is NOT a chapter here: it is
-	// as likely to open a book as to continue one, so calling it continuation
-	// evidence would be a guess. ParseClip reports it as its own kind.
-	if mk, ok := parseMarkerAt(body); ok && mk.Class != markerMatter {
+	if m := chapterMarkerRe.FindStringSubmatch(body); m != nil {
+		n := parseSpokenNumber(m[1])
 		return IntroClassification{
 			Kind:          IntroKindChapter,
-			Confidence:    positionAdjust(chapterConfidence(mk.Number), IntroKindChapter, pos),
+			Confidence:    positionAdjust(chapterConfidence(n), IntroKindChapter, pos),
 			Reason:        string(ReasonChapterMarker),
-			ChapterNumber: mk.Number,
+			ChapterNumber: n,
 		}
 	}
-	if n, ok := midMarker(body); ok {
+	if midChapterMarkerRe.MatchString(body) {
+		n := 0
+		if m := chapterNumRe.FindStringSubmatch(body); m != nil {
+			n = parseSpokenNumber(m[1])
+		}
 		return IntroClassification{
 			Kind:          IntroKindChapter,
 			Confidence:    positionAdjust(chapterConfidence(n), IntroKindChapter, pos),
@@ -538,9 +472,7 @@ func extractCredits(body string, hasCreditVerb bool) (f IntroFields, confidence 
 		return IntroFields{}, 0, false
 	}
 	f.Title = clean(title)
-	if f.Title == "" || creditVerbOnlyRe.MatchString(f.Title) {
-		// A "title" that is only a credit verb ("Narrated by Selina Kyle...") is the
-		// start of a credits run, not a book title.
+	if f.Title == "" {
 		return IntroFields{}, 0, false
 	}
 
@@ -683,4 +615,20 @@ func boolWeight(b bool, w float64) float64 {
 		return w
 	}
 	return 0
+}
+
+// spokenNumbers maps the number words Whisper emits in chapter announcements.
+var spokenNumbers = map[string]int{
+	"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+	"eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+	"fourteen": 14, "fifteen": 15, "twenty": 20,
+}
+
+// parseSpokenNumber converts "12" or "twelve" to 12. Returns 0 when unparseable.
+func parseSpokenNumber(s string) int {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if n, err := strconv.Atoi(s); err == nil {
+		return n
+	}
+	return spokenNumbers[s]
 }

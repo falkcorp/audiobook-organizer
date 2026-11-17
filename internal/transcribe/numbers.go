@@ -1,5 +1,5 @@
 // file: internal/transcribe/numbers.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3b8e5c17-92d4-4a60-b1f3-6e07d2a94c58
 // last-edited: 2026-11-17
 
@@ -297,10 +297,11 @@ func isNumberWord(w string) bool {
 	return u || t
 }
 
-// parseSpokenNumber converts "12", "twelve" or "twenty-one" to its value.
-// Returns 0 when s is not wholly a number. It keeps the contract the classifier
-// had before the grammar was shared (it is used on already-isolated tokens).
-func parseSpokenNumber(s string) int {
+// parseClipNumber converts "12", "twelve" or "twenty-one" to its value.
+// Returns 0 when s is not wholly a number. It is the clip grammar's own reader
+// (the legacy classifier keeps its own parseSpokenNumber) and is used on
+// already-isolated tokens.
+func parseClipNumber(s string) int {
 	s = strings.TrimSpace(s)
 	if n, err := strconv.Atoi(s); err == nil {
 		return n

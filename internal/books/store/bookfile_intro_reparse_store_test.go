@@ -1,5 +1,5 @@
 // file: internal/books/store/bookfile_intro_reparse_store_test.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 9a4f2c68-3e17-4d85-b0c6-5e8d1f7a2b94
 // last-edited: 2026-11-17
 
@@ -7,6 +7,7 @@ package store
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -28,69 +29,65 @@ func seedReparseRow(t *testing.T, f *casFixture, text, status string, id IntroRe
 	}
 }
 
-func okPatch(parse IntroParse) func(IntroReparseRow) (IntroReparsePatch, bool) {
-	return func(IntroReparseRow) (IntroReparsePatch, bool) {
-		return IntroReparsePatch{Parse: &parse}, true
-	}
+func okParse(parse IntroParse) func(IntroReparseRow) (*IntroParse, bool) {
+	return func(IntroReparseRow) (*IntroParse, bool) { return &parse, true }
 }
 
-// The re-parse writes the classification, the identity and the status it is given
-// and NOTHING of the run's provenance: not the transcript, the done marker, the
-// run id, the model, nor the times.
-func TestReparseBookFileIntro_WritesOnlyWhatThePatchNames(t *testing.T) {
+// The re-parse writes the classification and NOTHING else: not the identity, the
+// status, the transcript, the done marker, the run id, the model, nor the times.
+func TestReparseBookFileIntro_WritesOnlyTheParse(t *testing.T) {
 	f := newCASFixture(t)
 	seedReparseRow(t, f, "Batman: Year One. Written by Frank Miller.", IntroStatusUnparsed, IntroReparseIdentity{})
 	before := f.row(t)
 
 	parse := IntroParse{Version: 1, Kind: "title_announcement", Title: "Batman: Year One", Author: "Frank Miller"}
 	var seen IntroReparseRow
-	out, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, func(cur IntroReparseRow) (IntroReparsePatch, bool) {
+	out, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, func(cur IntroReparseRow) (*IntroParse, bool) {
 		seen = cur
-		return IntroReparsePatch{
-			Parse:    &parse,
-			Identity: &IntroReparseIdentity{Title: "Batman: Year One", Author: "Frank Miller"},
-			Status:   IntroStatusOK,
-		}, true
+		return &parse, true
 	})
 	if err != nil || out != IntroReparseWrote {
 		t.Fatalf("ReparseBookFileIntro: out=%v err=%v", out, err)
 	}
-	if seen.Transcript != "Batman: Year One. Written by Frank Miller." || seen.Status != IntroStatusUnparsed || seen.Parse != nil {
-		t.Errorf("decide saw %+v, want the stored text, the unparsed status and no parse", seen)
+	if seen.Transcript != "Batman: Year One. Written by Frank Miller." || seen.Identity != (IntroReparseIdentity{}) || seen.Parse != nil {
+		t.Errorf("decide saw %+v, want the stored text, no identity and no parse", seen)
 	}
 
 	got := f.row(t)
 	if got.IntroParse == nil || *got.IntroParse != parse {
 		t.Errorf("IntroParse = %+v, want %+v", got.IntroParse, parse)
 	}
-	if got.TranscribedTitle == nil || *got.TranscribedTitle != "Batman: Year One" ||
-		got.TranscribedAuthor == nil || *got.TranscribedAuthor != "Frank Miller" || got.TranscribedNarrator != nil {
-		t.Errorf("identity = %v/%v/%v, want the patch's title and author and no narrator", got.TranscribedTitle, got.TranscribedAuthor, got.TranscribedNarrator)
-	}
-	if got.TranscribeStatus == nil || *got.TranscribeStatus != IntroStatusOK {
-		t.Errorf("status = %v, want ok", got.TranscribeStatus)
-	}
-	// Provenance untouched.
-	if *got.IntroTranscription != *before.IntroTranscription || got.IntroSourceHash != before.IntroSourceHash ||
-		got.IntroRunOpID != before.IntroRunOpID || *got.IntroMeta != *before.IntroMeta ||
-		!got.IntroTranscribedAt.Equal(*before.IntroTranscribedAt) || !got.TranscribeAttemptedAt.Equal(*before.TranscribeAttemptedAt) {
-		t.Errorf("the re-parse rewrote run provenance:\nbefore %+v\nafter  %+v", before, got)
+	// Everything but IntroParse is as stored: compare the rows with the parse
+	// blanked on both sides.
+	a, b := *before, *got
+	a.IntroParse, b.IntroParse = nil, nil
+	a.UpdatedAt, b.UpdatedAt = time.Time{}, time.Time{}
+	if !reflect.DeepEqual(a, b) {
+		t.Errorf("the re-parse changed more than IntroParse:\nbefore %+v\nafter  %+v", a, b)
 	}
 }
 
-// A patch with no identity and no status leaves both columns exactly as stored.
-func TestReparseBookFileIntro_ParseOnlyKeepsIdentityAndStatus(t *testing.T) {
+// The identity the decision is shown is the stored one, and it is still stored
+// after the write.
+func TestReparseBookFileIntro_ShowsAndKeepsIdentityAndStatus(t *testing.T) {
 	f := newCASFixture(t)
 	seedReparseRow(t, f, "Chapter 4. The Long Halloween.", IntroStatusOK, IntroReparseIdentity{Title: "The Long Halloween", Author: "Jeph Loeb"})
 
 	parse := IntroParse{Version: 1, Kind: "chapter_marker", ChapterNumber: 4, HasChapterNumber: true}
-	out, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, okPatch(parse))
+	var seen IntroReparseIdentity
+	out, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, func(cur IntroReparseRow) (*IntroParse, bool) {
+		seen = cur.Identity
+		return &parse, true
+	})
 	if err != nil || out != IntroReparseWrote {
 		t.Fatalf("ReparseBookFileIntro: out=%v err=%v", out, err)
 	}
+	if seen != (IntroReparseIdentity{Title: "The Long Halloween", Author: "Jeph Loeb"}) {
+		t.Errorf("decide saw identity %+v, want the stored one", seen)
+	}
 	got := f.row(t)
 	if got.TranscribedTitle == nil || *got.TranscribedTitle != "The Long Halloween" || *got.TranscribedAuthor != "Jeph Loeb" || *got.TranscribeStatus != IntroStatusOK {
-		t.Errorf("identity/status changed by a parse-only patch: %v/%v/%v", got.TranscribedTitle, got.TranscribedAuthor, got.TranscribeStatus)
+		t.Errorf("identity/status changed by a re-parse: %v/%v/%v", got.TranscribedTitle, got.TranscribedAuthor, got.TranscribeStatus)
 	}
 	if got.IntroParse == nil || got.IntroParse.Kind != "chapter_marker" || got.IntroParse.ChapterNumber != 4 {
 		t.Errorf("IntroParse = %+v", got.IntroParse)
@@ -104,8 +101,8 @@ func TestReparseBookFileIntro_DeclinedWritesNothing(t *testing.T) {
 	seedReparseRow(t, f, "Batman: Hush.", IntroStatusUnparsed, IntroReparseIdentity{})
 	before := f.row(t)
 
-	out, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, func(IntroReparseRow) (IntroReparsePatch, bool) {
-		return IntroReparsePatch{}, false
+	out, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, func(IntroReparseRow) (*IntroParse, bool) {
+		return nil, false
 	})
 	if err != nil || out != IntroReparseSkipped {
 		t.Fatalf("out=%v err=%v, want skipped", out, err)
@@ -115,13 +112,13 @@ func TestReparseBookFileIntro_DeclinedWritesNothing(t *testing.T) {
 	}
 
 	parse := IntroParse{Version: 1, Kind: "narration"}
-	if _, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, okPatch(parse)); err != nil {
+	if _, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, okParse(parse)); err != nil {
 		t.Fatal(err)
 	}
 	var stored *IntroParse
-	if _, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, func(cur IntroReparseRow) (IntroReparsePatch, bool) {
+	if _, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, func(cur IntroReparseRow) (*IntroParse, bool) {
 		stored = cur.Parse
-		return IntroReparsePatch{}, false
+		return nil, false
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -130,18 +127,19 @@ func TestReparseBookFileIntro_DeclinedWritesNothing(t *testing.T) {
 	}
 }
 
-// A patch without a parse is a caller bug and is refused loudly, not written.
-func TestReparseBookFileIntro_PatchWithoutParseIsRefused(t *testing.T) {
+// A decision that says "write" but hands back no parse is a caller bug and is
+// refused loudly, not written.
+func TestReparseBookFileIntro_WriteWithoutParseIsRefused(t *testing.T) {
 	f := newCASFixture(t)
 	seedReparseRow(t, f, "Batman: Hush.", IntroStatusUnparsed, IntroReparseIdentity{})
-	_, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, func(IntroReparseRow) (IntroReparsePatch, bool) {
-		return IntroReparsePatch{Status: IntroStatusOK}, true
+	_, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, func(IntroReparseRow) (*IntroParse, bool) {
+		return nil, true
 	})
 	if err == nil {
-		t.Fatal("a patch with no parse was accepted")
+		t.Fatal("a write decision with no parse was accepted")
 	}
-	if got := f.row(t); *got.TranscribeStatus != IntroStatusUnparsed {
-		t.Errorf("status = %q, want the refused patch not to have written", *got.TranscribeStatus)
+	if got := f.row(t); got.IntroParse != nil {
+		t.Errorf("IntroParse = %+v, want the refused decision not to have written", got.IntroParse)
 	}
 }
 
@@ -149,7 +147,7 @@ func TestReparseBookFileIntro_PatchWithoutParseIsRefused(t *testing.T) {
 func TestReparseBookFileIntro_NoTranscriptAndGone(t *testing.T) {
 	f := newCASFixture(t)
 	called := false
-	decide := func(IntroReparseRow) (IntroReparsePatch, bool) { called = true; return IntroReparsePatch{}, false }
+	decide := func(IntroReparseRow) (*IntroParse, bool) { called = true; return nil, false }
 
 	out, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, decide)
 	if err != nil || out != IntroReparseNoTranscript || called {
@@ -170,9 +168,9 @@ func TestReparseBookFileIntro_RedecidesOnTheFreshRow(t *testing.T) {
 
 	runs := 0
 	parse := IntroParse{Version: 1, Kind: "garbage"}
-	out, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, func(IntroReparseRow) (IntroReparsePatch, bool) {
+	out, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, func(IntroReparseRow) (*IntroParse, bool) {
 		runs++
-		return IntroReparsePatch{Parse: &parse}, true
+		return &parse, true
 	})
 	if err != nil || out != IntroReparseWrote {
 		t.Fatalf("out=%v err=%v", out, err)
@@ -202,10 +200,10 @@ func TestReparseBookFileIntro_DecidesFromTheTextTheRowHoldsNow(t *testing.T) {
 	})
 
 	var texts []string
-	out, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, func(cur IntroReparseRow) (IntroReparsePatch, bool) {
+	out, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, func(cur IntroReparseRow) (*IntroParse, bool) {
 		texts = append(texts, cur.Transcript)
 		p := IntroParse{Version: 1, Kind: "narration", Title: cur.Transcript}
-		return IntroReparsePatch{Parse: &p}, true
+		return &p, true
 	})
 	if err != nil || out != IntroReparseWrote {
 		t.Fatalf("out=%v err=%v", out, err)
@@ -226,7 +224,7 @@ func TestReparseBookFileIntro_GivesUpAfterTheBudget(t *testing.T) {
 	injectBeforeCommit(t, 0, func(i int) { f.strayScan(t, "gotham-hash-old", 100+i, 1000) })
 
 	parse := IntroParse{Version: 1, Kind: "garbage"}
-	_, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, okPatch(parse))
+	_, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, okParse(parse))
 	if !errors.Is(err, ErrBookFileConflict) {
 		t.Fatalf("err = %v, want ErrBookFileConflict", err)
 	}
@@ -236,13 +234,13 @@ func TestReparseBookFileIntro_GivesUpAfterTheBudget(t *testing.T) {
 	}
 }
 
-// The patch's parse is copied: later changes to the caller's value never reach
+// The decision's parse is copied: later changes to the caller's value never reach
 // the stored row, and one patch value can be reused across rows.
 func TestReparseBookFileIntro_StoresACopy(t *testing.T) {
 	f := newCASFixture(t)
 	seedReparseRow(t, f, "Batman: Year One.", IntroStatusUnparsed, IntroReparseIdentity{})
 	parse := IntroParse{Version: 1, Kind: "narration"}
-	if _, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, okPatch(parse)); err != nil {
+	if _, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, okParse(parse)); err != nil {
 		t.Fatal(err)
 	}
 	parse.Kind = "garbage"
@@ -293,5 +291,53 @@ func TestClearBookFileIntro_ClearsTheParse(t *testing.T) {
 	}
 	if got := f.row(t); got.IntroParse != nil || got.IntroTranscription != nil {
 		t.Errorf("row after clear: parse %+v transcript %v, want both gone", got.IntroParse, got.IntroTranscription)
+	}
+}
+
+// n4. The live write re-encodes the WHOLE row, fingerprint included, and stores
+// it under the same key. This pins both halves of what that costs, with a
+// realistic fingerprint: the stored row grows by only the encoded IntroParse, and
+// the bytes handed to Pebble per write are the full row. The numbers are logged
+// for the PR.
+func TestReparseBookFileIntro_WriteSizeIsTheWholeRowAndGrowthIsTheParse(t *testing.T) {
+	f := newCASFixture(t)
+	seedReparseRow(t, f, "Batman: Year One. Written by Frank Miller. Read by Selina Kyle.", IntroStatusOK, IntroReparseIdentity{Title: "Batman: Year One", Author: "Frank Miller", Narrator: "Selina Kyle"})
+	// A 6 hour book's whole-file chromaprint is about 8 hashes a second of 4 bytes:
+	// 6 * 3600 * 8 * 4 = 691,200 bytes, stored base64 in the JSON row.
+	const fingerprintBytes = 6 * 3600 * 8 * 4
+	f.strayWrite(t, func(r *BookFile) { r.AcoustIDFingerprint = make([]byte, fingerprintBytes) })
+
+	size := func() int {
+		v, closer, err := f.s.db.Get(bookFileKey(f.book.ID, f.file.ID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer closer.Close()
+		return len(v)
+	}
+	before := size()
+
+	parse := IntroParse{
+		Version: 1, Kind: "title_announcement", Title: "Batman: Year One", Author: "Frank Miller", Narrator: "Selina Kyle",
+		Publisher: "Gotham Audio", Marker: "Part 1", ChapterTitle: "The Long Halloween",
+	}
+	if out, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, okParse(parse)); err != nil || out != IntroReparseWrote {
+		t.Fatalf("out=%v err=%v", out, err)
+	}
+	after := size()
+	growth := after - before
+	t.Logf("stored row: %d bytes before, %d after; one write hands Pebble %d bytes to add %d bytes of live data", before, after, after, growth)
+
+	if before < fingerprintBytes {
+		t.Fatalf("fixture row is %d bytes, smaller than its fingerprint (%d)", before, fingerprintBytes)
+	}
+	// A fully populated parse (every text field set) must stay small: the growth of
+	// the live set is 66,000 of these.
+	if growth <= 0 || growth > 512 {
+		t.Errorf("stored row grew by %d bytes, want 1..512", growth)
+	}
+	// The write carries the whole row, so its size tracks the fingerprint, not the parse.
+	if after < fingerprintBytes {
+		t.Errorf("written row is %d bytes, want the whole row (fingerprint %d)", after, fingerprintBytes)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/transcribe/grammar_test.go
-// version: 1.0.1
+// version: 1.2.0
 // guid: 7e03b9d5-c4a1-4268-9b7f-1d6a85f2e093
 // last-edited: 2026-11-17
 
@@ -45,9 +45,13 @@ func TestGrammarChapterMarkers(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c := ClassifyIntro(tc.text, UnknownPosition)
-			if c.Kind != IntroKindChapter || c.ChapterNumber != tc.want {
-				t.Fatalf("ClassifyIntro(%q) = kind %s number %d, want chapter %d (reason %s)", tc.text, c.Kind, c.ChapterNumber, tc.want, c.Reason)
+			p := ParseClip(tc.text)
+			n, has := p.ChapterNumber, p.HasChapterNumber
+			if !has {
+				n, has = p.PartNumber, p.HasPartNumber
+			}
+			if (p.Kind != ClipKindChapter && p.Kind != ClipKindPart) || !has || n != tc.want {
+				t.Fatalf("ParseClip(%q) = kind %s number %d (has %v), want a marker numbered %d (reason %s)", tc.text, p.Kind, n, has, tc.want, p.Reason)
 			}
 		})
 	}
@@ -87,10 +91,6 @@ func TestGrammarMustNotMatch(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c := ClassifyIntro(tc.text, UnknownPosition)
-			if c.Kind == IntroKindChapter {
-				t.Fatalf("ClassifyIntro(%q) = chapter %d (%s); must not be a chapter", tc.text, c.ChapterNumber, c.Reason)
-			}
 			p := ParseClip(tc.text)
 			if p.Kind == ClipKindChapter || p.Kind == ClipKindPart {
 				t.Fatalf("ParseClip(%q) = %s; must not be a marker", tc.text, p.Kind)
@@ -105,16 +105,27 @@ func TestGrammarMustNotMatch(t *testing.T) {
 func TestGrammarMatterMarkers(t *testing.T) {
 	for _, kw := range []string{"Prologue", "Epilogue", "Interlude", "Afterword", "Foreword", "Introduction", "Preface", "Prelude", "Intermission", "Dedication", "Epigraph", "Acknowledgements"} {
 		text := kw + ". Bruce Wayne stood at the window of the manor and watched the rain fall over Gotham for a long while"
-		if c := ClassifyIntro(text, UnknownPosition); c.Kind == IntroKindChapter {
-			t.Errorf("%s classified as a chapter; matter is not continuation evidence", kw)
-		}
 		p := ParseClip(text)
 		if p.Kind != ClipKindMatter || p.Marker != toLower(kw) {
 			t.Errorf("ParseClip(%s...) = %s marker %q, want front_back_matter %q", kw, p.Kind, p.Marker, toLower(kw))
 		}
 	}
+	// A heading with no punctuation, followed by a capitalised word or a digit.
+	for _, text := range []string{
+		"Prologue Bruce Wayne stood at the window of the manor and watched the rain fall over Gotham for a long while",
+		"Epilogue 2 Bruce Wayne stood at the window of the manor and watched the rain fall over Gotham for a long while",
+		"Interlude",
+	} {
+		if p := ParseClip(text); p.Kind != ClipKindMatter {
+			t.Errorf("ParseClip(%q) = %s, want front_back_matter", text, p.Kind)
+		}
+	}
 	// Words that merely start with one are not matter.
 	for _, text := range []string{
+		"Dedication was the one thing Bruce never lacked, and Alfred knew it well as he poured the tea in the manor",
+		"Introduction to the study of bats was the one class Bruce never missed at the university in Gotham city",
+		"Epilogue aside, the story of the cave was told many times over by the old butler to the guests at the manor",
+		"Prelude and fugue were what Alfred played on the piano every evening in the great hall of Wayne Manor tonight",
 		"Introductions were made all around the table, and Bruce shook hands with every guest at the party in Gotham",
 		"Prologues are rarely read, Alfred said, as he poured the tea for Bruce in the study of the old manor house",
 	} {
@@ -164,10 +175,6 @@ func TestGrammarPresentsFix(t *testing.T) {
 				t.Fatalf("got title %q author %q narrator %q publisher %q; want %q %q %q %q",
 					p.Title, p.Author, p.Narrator, p.Publisher, tc.title, tc.author, tc.narr, tc.publisher)
 			}
-			// ParseAudiobookIntro (the status source) must agree on the title.
-			if f := ParseAudiobookIntro(tc.text); f.Title != tc.title {
-				t.Fatalf("ParseAudiobookIntro title = %q, want %q", f.Title, tc.title)
-			}
 		})
 	}
 }
@@ -185,8 +192,8 @@ func TestGrammarPresentsMustNotMatch(t *testing.T) {
 			t.Errorf("viewClip(%q) stripped a lead %q; a heading or narration is not a publisher", text, v.publisher)
 		}
 	}
-	c := ClassifyIntro("Chapter 3. Alfred presents his findings to the Justice League after the storm hits Gotham", UnknownPosition)
-	if c.Kind != IntroKindChapter || c.ChapterNumber != 3 {
+	c := ParseClip("Chapter 3. Alfred presents his findings to the Justice League after the storm hits Gotham")
+	if c.Kind != ClipKindChapter || c.ChapterNumber != 3 {
 		t.Errorf("heading with presents = %s %d, want chapter 3", c.Kind, c.ChapterNumber)
 	}
 }
