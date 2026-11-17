@@ -1,7 +1,7 @@
 // file: internal/metadata/audnexus.go
-// version: 2.12.1
+// version: 2.13.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-a3b4c5d6e7f8
-// last-edited: 2026-10-12
+// last-edited: 2026-11-16
 
 package metadata
 
@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
 )
@@ -143,8 +142,15 @@ func (c *AudnexusClient) SearchByContext(ctx context.Context, sc *SearchContext)
 	// bounds each region request with a per-request timeout). This entry point
 	// used to get context.Background() because FetchMetadataForBook had no ctx to
 	// thread — that ctx is now plumbed end-to-end.
+	//
+	// A value that is not an ASIN is nothing to ask, not a failure: answering
+	// it as an error made the source chain record Audnexus as failing (and its
+	// breaker count it) for a book whose "ASIN" was a word.
 	metadata, err := c.LookupByASIN(ctx, sc.ASIN)
 	if err != nil {
+		if IsBadASIN(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	if metadata == nil {
@@ -157,19 +163,25 @@ func (c *AudnexusClient) SearchByContext(ctx context.Context, sc *SearchContext)
 // Some books are only available in certain regional Audible stores.
 var audnexusRegions = []string{"", "us", "uk", "au", "ca", "in", "de", "fr", "jp"}
 
-// audnexusPerRegionTimeout bounds a single region request so one slow/unreachable
-// regional Audible store can't consume the whole lookup budget. Nine regions ×
-// this cap is the worst case for a missing ASIN (was 9×30s = 270s uninterruptible
-// before contexts were threaded).
-const audnexusPerRegionTimeout = 10 * time.Second
+// The per-request time bound of a region lookup is NOT set here. It used to be a
+// 10 s context deadline created before the request was handed to the transport,
+// so it ran while the request waited its turn on the shared token bucket
+// (providerhttp, 2 rps): 20 workers queued on that bucket wait 20/2 = 10 s, the
+// whole budget, and 482 of 814 lookups in the 2026-11-16 candidate-fetch run died
+// with a bare "context deadline exceeded" on requests Audnexus answers in 0.3 s.
+// providerhttp.Limits.AttemptTimeout bounds the exchange itself and starts only
+// once the request holds its token, so a long queue no longer fails a lookup.
 
 // LookupByASIN fetches a book directly by its Audible ASIN.
 // Tries multiple regions since books may only be indexed in certain Audible stores.
 //
 // The region loop honors ctx: it bails immediately when ctx is cancelled/expired
 // (so a batch cancel aborts promptly instead of grinding through all 9 regions),
-// and each region request is additionally bounded by audnexusPerRegionTimeout via
-// http.NewRequestWithContext so a single hung region can't stall the lookup.
+// and each region request is bounded by the transport's attempt timeout so a
+// single hung region can't stall the lookup.
+//
+// A value outside the ASIN grammar is refused with ErrBadASIN before any request
+// is sent (asin.go): Audnexus would answer every region 400.
 func (c *AudnexusClient) LookupByASIN(ctx context.Context, asin string) (*BookMetadata, error) {
 	return c.LookupByASINInRegions(ctx, asin, audnexusRegions)
 }
@@ -181,6 +193,11 @@ func (c *AudnexusClient) LookupByASINInRegions(ctx context.Context, asin string,
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	canonical, ok := CanonicalASIN(asin)
+	if !ok {
+		return nil, fmt.Errorf("audnexus lookup not sent: %w", ErrBadASIN)
+	}
+	asin = canonical
 	// A region that failed (5xx, 429, transport) outranks one that answered
 	// "not here" (IsNotFound): the ASIN may live in the failed region, so the
 	// lookup as a whole failed. Only when every region said "not here" is the
@@ -204,6 +221,12 @@ func (c *AudnexusClient) LookupByASINInRegions(ctx context.Context, asin string,
 			if ctx.Err() != nil {
 				return nil, err
 			}
+			// A refusal of the ASIN itself is the same in every region: stop.
+			// Trying the rest sent 3 requests per bad ASIN (9 on the
+			// full list) for an answer that was final after the first.
+			if IsBadASIN(err) {
+				return nil, err
+			}
 			if IsNotFound(err) {
 				notFound = err
 			} else {
@@ -217,20 +240,16 @@ func (c *AudnexusClient) LookupByASINInRegions(ctx context.Context, asin string,
 	return nil, notFound
 }
 
-// lookupRegion issues a single-region ASIN lookup bounded by
-// audnexusPerRegionTimeout. Returns done=true with the metadata on a hit;
-// done=false with an error to try the next region. Kept as its own function so
-// the per-request context cancel is deferred cleanly (vet-safe) rather than
-// juggling cancel() across the loop's multiple continue paths.
+// lookupRegion issues a single-region ASIN lookup. Returns done=true with the
+// metadata on a hit; done=false with an error to try the next region. The
+// request's time bound is the transport's attempt timeout (see above), not a
+// deadline set here.
 func (c *AudnexusClient) lookupRegion(ctx context.Context, asin, region string) (*BookMetadata, bool, error) {
-	reqCtx, cancel := context.WithTimeout(ctx, audnexusPerRegionTimeout)
-	defer cancel()
-
 	bookURL := fmt.Sprintf("%s/books/%s", c.baseURL, url.PathEscape(asin))
 	if region != "" {
 		bookURL += "?region=" + region
 	}
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, bookURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, bookURL, nil)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to create Audnexus request: %w", err)
 	}
