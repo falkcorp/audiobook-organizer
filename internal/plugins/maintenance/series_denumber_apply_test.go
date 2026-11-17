@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_apply_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 4c93e07a-1d62-4b8e-a5f3-90b7c1de2846
 // last-edited: 2026-11-16
 
@@ -836,6 +836,47 @@ func TestRunSeriesDenumber_ASharedBaseNameResolvesPerAuthor(t *testing.T) {
 	}
 	if l.seriesOf("alfred-owls") != l.created[0].ID || l.seriesOf("alfred-owls") == 10 {
 		t.Errorf("the second author's book is in series %d, want their own new base %d", l.seriesOf("alfred-owls"), l.created[0].ID)
+	}
+}
+
+// With no base for either author, each author's numbered series folds into a
+// base of their own. Merged by name alone the two Court of Owls 05 books would
+// share one position of one base and both be held.
+func TestRunSeriesDenumber_ASharedBaseNameGetsOneBasePerAuthorWhenNoneExists(t *testing.T) {
+	l := newDenumberLib(t)
+	l.addSeries(11, "Court of Owls 05", denumberAuthor)
+	l.addSeries(12, "Court of Owls 05", denumberAuthor+1)
+	l.addBook("bruce-owls", 11, -1, "")
+	l.addBook("alfred-owls", 12, -1, "")
+
+	l.mustRun(`{"apply": true}`)
+
+	if len(l.created) != 2 {
+		t.Fatalf("created %+v, want one base per author", l.created)
+	}
+	for _, id := range []string{"bruce-owls", "alfred-owls"} {
+		if l.seriesOf(id) == 11 || l.seriesOf(id) == 12 || l.seqOf(id) != "5" {
+			t.Errorf("%s was not folded: series %d at %s", id, l.seriesOf(id), l.seqOf(id))
+		}
+	}
+	if l.seriesOf("bruce-owls") == l.seriesOf("alfred-owls") {
+		t.Errorf("both authors' books landed in series %d", l.seriesOf("bruce-owls"))
+	}
+}
+
+// A plan whose only book is held moves nothing, so it must not create a base.
+func TestRunSeriesDenumber_ANumberedSeriesWhoseBooksAreAllHeldCreatesNoBase(t *testing.T) {
+	l := newDenumberLib(t)
+	l.addSeries(11, "Court of Owls 05", denumberAuthor)
+	l.addBook("owls-9-own", 11, 9, "")
+
+	l.mustRun(`{"apply": true}`)
+
+	if len(l.created) != 0 {
+		t.Errorf("created %+v for a plan that moves nothing", l.created)
+	}
+	if l.seriesOf("owls-9-own") != 11 || l.seqOf("owls-9-own") != "9" || l.deleted[11] {
+		t.Errorf("the held book or its series changed: series %d at %s, deleted=%v", l.seriesOf("owls-9-own"), l.seqOf("owls-9-own"), l.deleted[11])
 	}
 }
 
