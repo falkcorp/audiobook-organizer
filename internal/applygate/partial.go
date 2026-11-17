@@ -1,5 +1,5 @@
 // file: internal/applygate/partial.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b1e7d4a0-3c58-4f26-9a8d-0f6c2e5b7d19
 // last-edited: 2026-11-16
 
@@ -204,10 +204,18 @@ func checkPartialBook(book *database.Book, c *metafetch.MetadataCandidate, runti
 		r.Detail = "the files are part " + ftoa(bp) + "; the candidate " + partText(cp, cok)
 		return r
 	}
+	// The spans themselves are compared: equal spans pass; a span on one
+	// side only, or two different spans ("Books 1-3" and "Books 1-5", an
+	// omnibus and a box set), are a book covering other books than the
+	// candidate does.
 	bs, cs := spanOf(bside), spanOf(cside)
-	if (bs == "") != (cs == "") {
+	if bs != cs {
 		r.Outcome, r.Reason = OutcomeBlock, ReasonPartialBook
-		r.Detail = "only one side covers several books: files " + strconv.Quote(bs) + ", candidate " + strconv.Quote(cs)
+		if bs == "" || cs == "" {
+			r.Detail = "only one side covers several books: files " + strconv.Quote(bs) + ", candidate " + strconv.Quote(cs)
+		} else {
+			r.Detail = "the two sides cover different books: files " + strconv.Quote(bs) + ", candidate " + strconv.Quote(cs)
+		}
 		return r
 	}
 	for _, s := range claims.get(ClaimKey(c)) {
@@ -223,20 +231,45 @@ func checkPartialBook(book *database.Book, c *metafetch.MetadataCandidate, runti
 	return r
 }
 
-// spanOf returns the text that marks s as covering several books, or "". It
-// is the span wording (spanRe: omnibus, box set, publisher's pack, ...) or a
-// range read by the shared range reader (seqnum.ParseRange), so "Book 1-3",
-// "Books 1-3", "Vols 1–3" and "Books 1, 2 & 3" are all spans on whichever
-// side they appear: a reading that depended on the plural keyword made the
-// same edition a span on one side and a single book on the other.
+// spanWordingRe is the span wording that is not a range: the edition kinds.
+var spanWordingRe = regexp.MustCompile(`(?i)\b(omnibus|box(?:ed)?\s*set|boxset|publisher.?s\s+pack|complete\s+series)\b`)
+
+// spanOf returns the key of what s covers when it covers several books, or ""
+// when it covers one. Two texts cover the same books exactly when their keys
+// are equal. The key joins every part the text states:
+//
+//   - the edition wording, folded to a class (omnibus, box set, publisher's
+//     pack, complete series: "boxed set" and "boxset" are one class);
+//   - the range, read by the shared range reader (seqnum.ParseRange) in every
+//     spelling it accepts, so "Book 1-3", "Books 1 to 3", "Vols 1–3" and
+//     "Books 1, 2 & 3" key the same and "Books 1-3 & 5" keys differently;
+//   - any other span wording spanRe knows that the range reader does not,
+//     lowercased with its spacing collapsed.
 func spanOf(s string) string {
-	if m := spanRe.FindString(s); m != "" {
-		return m
+	var parts []string
+	if m := spanWordingRe.FindString(s); m != "" {
+		class := strings.ToLower(m)
+		switch {
+		case strings.Contains(class, "box"):
+			class = "box set"
+		case strings.Contains(class, "pack"):
+			class = "publisher's pack"
+		case strings.Contains(class, "complete"):
+			class = "complete series"
+		}
+		parts = append(parts, class)
 	}
 	if n, ok := seqnum.ParseRange(s); ok {
-		return "books " + n.Text
+		parts = append(parts, "books "+n.Text)
+	} else {
+		for _, m := range spanRe.FindAllString(s, -1) {
+			if !spanWordingRe.MatchString(m) {
+				parts = append(parts, strings.Join(strings.Fields(strings.ToLower(m)), " "))
+			}
+		}
 	}
-	return ""
+	sort.Strings(parts)
+	return strings.Join(parts, "; ")
 }
 
 func partText(p float64, ok bool) string {

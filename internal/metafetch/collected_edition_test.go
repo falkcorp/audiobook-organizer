@@ -1,5 +1,5 @@
 // file: internal/metafetch/collected_edition_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0e7b3a95-2c48-4f16-b9d3-5a81c7e4f620
 // last-edited: 2026-11-16
 
@@ -25,7 +25,9 @@ func TestSameCollectedEdition(t *testing.T) {
 		{"same range, different spelling", "Knightfall, Books 1-3", "Knightfall", "Vols 1 to 3", "", true},
 		{"same range from the series position", "Knightfall Omnibus, Books 1-3", "Knightfall Omnibus", "", "1-3", true},
 		{"same range, book side only in title", "Year One Box Set, Books 1-2", "Year One Box Set", "Books 1-2", "", true},
-		{"same wording, neither numbered", "Knightfall Omnibus", "Knightfall Omnibus Edition", "", "", true},
+		{"same range, name only in title plus subtitle", "Knightfall Omnibus, Books 1-3", "Knightfall", "Omnibus Books 1 to 3", "", true},
+		{"same wording, neither numbered", "Knightfall Omnibus", "Knightfall Omnibus", "", "", true},
+		{"same wording, subtitle completes the title", "Knightfall Omnibus", "Knightfall", "Omnibus", "", true},
 		{"same pack number", "Publisher's Pack 2", "Publisher's Pack 2", "", "", true},
 
 		// Penalised: the safety refusals.
@@ -43,12 +45,19 @@ func TestSameCollectedEdition(t *testing.T) {
 		{"the other side numbered, same wording", "Publisher's Pack", "Publisher's Pack 2", "", "", false},
 		{"different counts of books", "Knightfall 3 books", "Knightfall 5 books", "", "", false},
 		{"a gappy list is not the span", "Knightfall, Books 1, 3", "Knightfall", "Books 1-3", "", false},
+		// Same wording or the same range is not enough: the titles must name
+		// one edition (review of #4682, MAJOR-4).
+		{"same wording, another title", "Knightfall Omnibus", "Dark Detective Omnibus", "", "", false},
+		{"same wording, a longer title", "Knightfall Omnibus", "Knightfall Omnibus Edition", "", "", false},
+		{"same range, another series", "Knightfall, Books 1-3", "Dark Detective", "Books 1-3", "", false},
+		{"same range from the position, another series", "Knightfall, Books 1-3", "Dark Detective", "", "1-3", false},
+		{"same pack number, another title", "Publisher's Pack 2", "Retail Pack 2", "", "", false},
 		// Word boundaries: "recollection" is not "collection".
 		{"substring is not wording", "A Recollection", "A Recollection", "", "", false},
 		{"substring on one side only", "Collection of Shadows", "Recollection of Shadows", "", "", false},
 		{"no wording at all", "Knightfall", "Knightfall", "", "", false},
 		// A plain dash in a title is not a range.
-		{"hyphenated title", "Catch-22", "Catch-22 Omnibus", "", "", false},
+		{"hyphenated title", "Batman-22", "Batman-22 Omnibus", "", "", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -103,6 +112,7 @@ func TestApplyNonBaseAdjustments_CollectedEdition(t *testing.T) {
 		"a single volume":       "Knightfall",
 		"a different range":     "Knightfall Omnibus, Books 1-5",
 		"an unnumbered omnibus": "Knightfall Omnibus",
+		"another omnibus":       "Dark Detective Omnibus, Books 1-3",
 	} {
 		if got := ApplyNonBaseAdjustments(1.0, cand, 0, bookTitle); got > penalty+0.001 {
 			t.Errorf("%s: score %.3f, want the %.2f penalty kept", name, got, penalty)
@@ -110,6 +120,15 @@ func TestApplyNonBaseAdjustments_CollectedEdition(t *testing.T) {
 	}
 	if got := ApplyNonBaseAdjustments(1.0, plain, 0, "Knightfall"); got > penalty+0.001 {
 		t.Errorf("single volume vs compilation candidate: %.3f, want the %.2f penalty", got, penalty)
+	}
+
+	// Two collections that share only the wording keep the penalty.
+	gotham := metadata.BookMetadata{Title: "Gotham Collection"}
+	if got := ApplyNonBaseAdjustments(1.0, gotham, 0, "Arkham Collection"); got > penalty+0.001 {
+		t.Errorf("another collection: %.3f, want the %.2f penalty", got, penalty)
+	}
+	if got := ApplyNonBaseAdjustments(1.0, gotham, 0, "Gotham Collection"); got < 0.99 {
+		t.Errorf("the same collection was penalised: %.3f", got)
 	}
 
 	// The breakdown records the lifted step as x1.00 so a reviewer sees it was considered.
@@ -137,6 +156,47 @@ func TestScoreOneResult_CollectedEditionBreakdownAgrees(t *testing.T) {
 		got, _ := ScoreOneResultWithBreakdown(cand, words, bt)
 		if got != want {
 			t.Errorf("book %q: breakdown %.6f != score %.6f", bt, got, want)
+		}
+	}
+}
+
+// The browse view scores through scoreBrowseAnswer: with the stored book's
+// title it lifts the penalty for the same collected edition, exactly as the
+// per-book search does, and keeps it for every other title (NIT 5 of the
+// review of #4682).
+func TestScoreBrowseAnswer_CollectedEditionMatchesTheMainSearch(t *testing.T) {
+	r := metadata.BookMetadata{Title: "Knightfall Omnibus", Subtitle: "Books 1-3", Author: "Bruce Wayne"}
+	words := SignificantWords("Knightfall Omnibus")
+	lifted := scoreBrowseAnswer(r, "Audible", "Knightfall Omnibus", "Knightfall Omnibus, Books 1-3", words, "", "", localRuntime{})
+	kept := scoreBrowseAnswer(r, "Audible", "Knightfall Omnibus", "Knightfall", words, "", "", localRuntime{})
+	noBook := scoreBrowseAnswer(r, "Audible", "Knightfall Omnibus", "", words, "", "", localRuntime{})
+	if lifted.Score <= kept.Score*2 {
+		t.Errorf("the book's own omnibus scored %.3f against %.3f for a single volume's title; the penalty was not lifted", lifted.Score, kept.Score)
+	}
+	if noBook.Score != kept.Score {
+		t.Errorf("no stored title scored %.3f, want the penalised %.3f", noBook.Score, kept.Score)
+	}
+}
+
+// IsCollectedEdition is the gate's question: a stated range anywhere (a
+// position field included), collected wording, or a flagged compilation.
+func TestIsCollectedEdition(t *testing.T) {
+	cases := []struct {
+		name, title, sub, pos string
+		want                  bool
+	}{
+		{"range in the title", "Knightfall, Books 1-3", "", "", true},
+		{"range in the subtitle", "Knightfall", "Books 1 to 3", "", true},
+		{"range only in the position", "Knightfall", "", "1-3", true},
+		{"omnibus wording", "Knightfall Omnibus", "", "", true},
+		{"box set in the subtitle", "Knightfall", "Box Set", "", true},
+		{"single volume", "Knightfall, Book 2", "", "2", false},
+		{"plain title", "Knightfall", "", "", false},
+		{"title with a dash", "Batman-22", "", "", false},
+	}
+	for _, c := range cases {
+		if got := IsCollectedEdition(c.title, c.sub, c.pos); got != c.want {
+			t.Errorf("%s: IsCollectedEdition(%q, %q, %q) = %v, want %v", c.name, c.title, c.sub, c.pos, got, c.want)
 		}
 	}
 }

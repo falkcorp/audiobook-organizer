@@ -1,11 +1,14 @@
 // file: internal/seqnum/range_test.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 7b2d9e41-5a63-4c08-b1f7-d4e08a36c915
 // last-edited: 2026-11-16
 
 package seqnum
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // rng renders a Number the way a reader of a report sees it: the canonical
 // text, with "(range)" when it covers several volumes.
@@ -49,8 +52,8 @@ func TestParse_Ranges(t *testing.T) {
 		// A gappy list is one Number that equals only itself.
 		{"The Dark Knight Archive, Books 1, 3", "1,3 (range)"},
 		// Not ranges: no keyword, reversed, one volume, years, discs.
-		{"Catch-22", "22"},
-		{"9-1-1", "1"},
+		{"Batman-22", "22"},
+		{"Batman 9-1-1", "1"},
 		{"The Dark Knight Archive, Books 3-1", "1"},
 		{"The Dark Knight Archive, Books 2-2", "2"},
 		{"The Dark Knight Archive 1-3", "3"},
@@ -171,7 +174,7 @@ func TestEqual_Ranges(t *testing.T) {
 // Text must read back to an Equal Number, because reports and JSON carry the
 // text and a reader (applygate's agree) may parse it again.
 func TestRange_TextRoundTrips(t *testing.T) {
-	for _, in := range []string{"Books 1-3", "Books 1, 3", "Books 1.5-2", "Books 1 & 2"} {
+	for _, in := range []string{"Books 1-3", "Books 1, 3", "Books 1.5-2", "Books 1 & 2", "Books 1-3 & 5", "Books 1-2 & 4-5"} {
 		n, ok := Parse(in)
 		if !ok {
 			t.Fatalf("%q did not parse", in)
@@ -184,7 +187,7 @@ func TestRange_TextRoundTrips(t *testing.T) {
 }
 
 func TestParseRange(t *testing.T) {
-	if _, ok := ParseRange("Catch-22"); ok {
+	if _, ok := ParseRange("Batman-22"); ok {
 		t.Error("an unkeyworded dash is a name, not a range")
 	}
 	if _, ok := ParseRange("1-3"); ok {
@@ -192,5 +195,99 @@ func TestParseRange(t *testing.T) {
 	}
 	if n, ok := ParseRange("Books 1-3"); !ok || n.Value != 1 || n.Last != 3 || !n.IsRange() {
 		t.Errorf("ParseRange(Books 1-3) = %+v ok=%v", n, ok)
+	}
+}
+
+// A second end that is the first word of a title is not a second end, and a
+// range with a tail is a list, not the bare range.
+func TestParse_RangeOverReads(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string // "" = no number
+	}{
+		// Single volumes whose title starts with a number word, a roman token or a number.
+		{"Batman, Book 2 - Three Jokers", "2"},
+		{"Batman, Book 2 - Ten Nights of the Beast", "2"},
+		{"Batman, Book 1 and Two-Face", "1"},
+		{"Batman, Book 1, Two-Face", "1"},
+		{"Batman, Book 1 - V for Victory", "1"},
+		{"Batman, Book 1 - X Marks the Spot", "1"},
+		{"Batman, Book 1 - L.A. Confidential", "1"},
+		{"Batman, Book 1 - C Is for Catwoman", "1"},
+		{"Batman, Book 2 to Three Jokers", "2"},
+		{"Batman, Book 4 - 52", "4"},
+		{"Batman, Book 2 - 3 Jokers", "2"},
+		{"Batman, Vol. 2 - Three Jokers", "2"},
+		{"Batman, Book 1 and Ten Thousand Fists", "1"},
+		// Real ranges still read, in every spelling that is safe.
+		{"Batman, Books 1 - 3", "1-3 (range)"},
+		{"Batman, Vols 4 – 6", "4-6 (range)"},
+		{"Batman, Book 1-3", "1-3 (range)"},
+		{"Batman, Book 1 to 3", "1-3 (range)"},
+		{"Batman, Books one to three", "1-3 (range)"},
+		{"Batman, Books I-III", "1-3 (range)"},
+		{"Batman, Books I to III: Unabridged", "1-3 (range)"},
+		{"Batman, Books one-three (Unabridged)", "1-3 (range)"},
+		{"Batman, Books 1 and 2", "1-2 (range)"},
+		{"Batman, Books One and Two", "1-2 (range)"},
+		{"Batman, Books 1-3 Boxed Set", "1-3 (range)"},
+		// A range with a tail is a list.
+		{"Batman, Books 1-3 & 5", "1-3,5 (range)"},
+		{"Batman, Books 1-3, 5", "1-3,5 (range)"},
+		{"Batman, Books 1-3 and 5", "1-3,5 (range)"},
+		{"Batman, Books 1-3 and 4-6", "1-6 (range)"},
+		{"Batman, Books 1-3 & 4", "1-4 (range)"},
+		{"Batman, Books 1-2 & 4-5", "1-2,4-5 (range)"},
+	}
+	for _, tc := range cases {
+		n, ok := Parse(tc.in)
+		got := rng(n, ok)
+		if got != tc.want {
+			t.Errorf("Parse(%q) = %q (form %q), want %q", tc.in, got, n.Form, tc.want)
+		}
+	}
+	// A tail that overlaps the span is no list and no gappy range.
+	if n, ok := Parse("Batman, Books 1-3 & 3"); ok && n.IsRange() && strings.Contains(n.Text, ",") {
+		t.Errorf("an overlapping tail read as the list %q", n.Text)
+	}
+	// "Books 1-3 & 5" is never equal to the bare "Books 1-3" or to "Books 1-5".
+	list, _ := Parse("Batman, Books 1-3 & 5")
+	for _, other := range []string{"Batman, Books 1-3", "Batman, Books 1-5", "Batman, Books 1-4"} {
+		o, _ := Parse(other)
+		if Equal(list, o) || Equal(o, list) {
+			t.Errorf("%q is Equal to %q", "Books 1-3 & 5", other)
+		}
+	}
+	// The position field reads the same list the same way.
+	pos, ok := ParsePosition("1-3 & 5")
+	if !ok || !Equal(pos, list) {
+		t.Errorf("ParsePosition(1-3 & 5) = %+v ok=%v, want Equal to the title's list %+v", pos, ok, list)
+	}
+	if bare, _ := ParsePosition("1-3"); Equal(pos, bare) {
+		t.Error("the position list 1-3 & 5 must not equal 1-3")
+	}
+}
+
+// ParsePositionNoRange is the reading a numeric field keeps: it never returns
+// a range, whatever the text says, and agrees with ParsePosition on every
+// single number.
+func TestParsePositionNoRange(t *testing.T) {
+	for _, in := range []string{"1-3", "Books 1-3", "1 & 2", "Books 1, 2 & 3", "1, 3", "Books 1-3 & 5", "Vols 4 – 6", "1.5-2"} {
+		if n, ok := ParsePositionNoRange(in); ok && n.IsRange() {
+			t.Errorf("ParsePositionNoRange(%q) = range %q", in, n.Text)
+		}
+	}
+	for _, in := range []string{"3", "03", "Book 3", "Batman Book 3", "III", "2.5", "08 - Hush"} {
+		a, aok := ParsePositionNoRange(in)
+		b, bok := ParsePosition(in)
+		if aok != bok || a.Value != b.Value || b.IsRange() {
+			t.Errorf("single %q: NoRange %+v/%v, ParsePosition %+v/%v", in, a, aok, b, bok)
+		}
+	}
+	// The values the catalog stored before ranges existed.
+	for in, want := range map[string]float64{"1 & 2": 1, "Books 1 and 2": 2, "Books 1, 2 & 3": 3, "1, 3": 3} {
+		if n, ok := ParsePositionNoRange(in); !ok || n.Value != want {
+			t.Errorf("ParsePositionNoRange(%q) = %v ok=%v, want %v", in, n.Value, ok, want)
+		}
 	}
 }

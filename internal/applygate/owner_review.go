@@ -1,7 +1,7 @@
 // file: internal/applygate/owner_review.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: 3e7b2c14-8d95-4f06-a1c3-6b9e0d4f7a28
-// last-edited: 2026-10-29
+// last-edited: 2026-11-16
 
 package applygate
 
@@ -109,6 +109,9 @@ func (v Verdict) RefusingReasons() []string {
 	}
 	if v.ScoreReason != "" {
 		out = append(out, v.ScoreReason)
+	}
+	if v.Reason == ReasonSequenceUnconfirmed || v.Reason == ReasonCollectedRuntimeUnconfirmed {
+		out = append(out, v.Reason)
 	}
 	if !v.Sequence.Pass && v.Sequence.Reason != "" {
 		out = append(out, v.Sequence.Reason)
