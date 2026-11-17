@@ -200,22 +200,11 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 	// (applySeriesDenumber).
 	hold := t6g1Hold{Lost: func() bool { return false }, Release: func() {}}
 	if params.Apply {
-		// The shared helper returns held=false, with no error, when there is no scan
-		// controller (a degraded context). Other write ops run on without the
-		// interlock then; this one writes series rows library-wide and does not: no
-		// gate, no apply.
-		holderID, held, release, sdErr := acquireScanStandDownForApply(ctx, p.deps, reporter, "series-denumber apply")
-		if sdErr != nil {
-			return fmt.Errorf("series-denumber: refusing to apply: acquire scan stand-down: %w", sdErr)
+		var sdErr error
+		if hold, sdErr = standDownForApply(ctx, p.deps, reporter); sdErr != nil {
+			return sdErr
 		}
-		defer release()
-		if !held {
-			return errors.New("series-denumber: refusing to apply: the scanner could not be stood down (no scan controller), so a running scan could rewrite the books underneath the writes")
-		}
-		hold = t6g1Hold{
-			Lost:    func() bool { return scanStandDownLostForApply(p.deps, holderID, held) },
-			Release: release,
-		}
+		defer hold.Release()
 	}
 	log.Info("series-denumber: starting", "apply", params.Apply, "limit", params.Limit,
 		"min_books", params.MinBooks, "base_name", params.BaseName)
@@ -295,6 +284,26 @@ type denumberRun struct {
 	booksByTier   map[SeriesConfidence]int
 	byDemotion    map[string]int
 	emptyNumbered int
+}
+
+// standDownForApply stands the scanner down for an apply and returns the gate the
+// apply renews. It fails closed: a nil scan controller, or one that cannot take
+// the gate, refuses the apply. The shared helper (acquireScanStandDownForApply)
+// answers held=false with no error for a nil controller so that ops with no
+// interlock run on; this one writes series rows library-wide and does not.
+func standDownForApply(ctx context.Context, scan ScanController, reporter sdk.Reporter) (t6g1Hold, error) {
+	holderID, held, release, err := acquireScanStandDownForApply(ctx, scan, reporter, "series-denumber apply")
+	if err != nil {
+		return t6g1Hold{}, fmt.Errorf("series-denumber: refusing to apply: acquire scan stand-down: %w", err)
+	}
+	if !held {
+		release()
+		return t6g1Hold{}, errors.New("series-denumber: refusing to apply: the scanner could not be stood down (no scan controller), so a running scan could rewrite the books underneath the writes")
+	}
+	return t6g1Hold{
+		Lost:    func() bool { return scanStandDownLostForApply(scan, holderID, held) },
+		Release: release,
+	}, nil
 }
 
 func authorPtr(id int) *int {

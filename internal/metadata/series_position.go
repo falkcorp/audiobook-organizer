@@ -1,5 +1,5 @@
 // file: internal/metadata/series_position.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5c1d0a4e-9b73-4f26-8a51-6d2e4c9f7b30
 // last-edited: 2026-11-17
 
@@ -140,6 +140,14 @@ var junkSeriesBases = map[string]struct{}{
 // one outright: "The Tower of Nero - Chapter", "The Darkling Child: ... , Chapter".
 // Stripping "Chapter 12" leaves the keyword stranded on the end, and merging on
 // that base manufactures a series named after the word "chapter".
+//
+// The list is the tag keywords themselves plus two families of file and edition
+// words that strand the same way: the part and format words (ch, ep, episode(s),
+// disc(s), cd(s), side(s), reel, hour(s)) and the abbreviated volume words (v, t,
+// bd, nr, vols). internal/seriesdenumber holds the same families in its grammar,
+// where they are matched anywhere in a name; this loose reader is the planner's,
+// so it is kept at least as wide as the grammar's at the END of a base. A word
+// added to one list is added to the other.
 var trailingJunkWord = regexp.MustCompile(
 	`(?i)[\s:,\-–—_]+(chapter|chapters|ch|ep|episode|episodes|disc|discs|disk|cd|cds|track|part|pt|book|vol|vols|volume|volumes|v|t|bd|nr|side|sides|reel|hour|hours|tape|section|pack|omnibus|box set|boxset)\s*$`)
 
