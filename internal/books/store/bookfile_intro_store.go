@@ -1,5 +1,5 @@
 // file: internal/books/store/bookfile_intro_store.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 8c1e5a47-2f93-4d06-b7a8-3e90d14c6b25
 // last-edited: 2026-11-17
 
@@ -389,7 +389,7 @@ func (s *PebbleStore) setBookFileIntroOnce(bookID, fileID string, r BookFileIntr
 	if r.Done {
 		row.IntroSourceHash = r.SourceHash
 	}
-	res, err := s.writeIntroRow(bookID, fileID, row, raw, "SetBookFileIntro")
+	res, err := s.writeIntroRow(bookID, fileID, row, raw, "SetBookFileIntro", s.introNow())
 	if res == IntroWriteWrote && had {
 		res = IntroWriteReplaced
 	}
@@ -458,7 +458,7 @@ func (s *PebbleStore) clearBookFileIntroOnce(bookID, fileID, runOpID string) (be
 	row.IntroMeta = nil
 	row.IntroParse = nil
 	row.IntroTimeouts, row.IntroTimeoutHash, row.IntroTimeoutRunID, row.IntroTimeoutAt, row.IntroTimeoutWorker = 0, "", "", nil, ""
-	res, err := s.writeIntroRow(bookID, fileID, row, raw, "ClearBookFileIntro")
+	res, err := s.writeIntroRow(bookID, fileID, row, raw, "ClearBookFileIntro", s.introNow())
 	if err != nil {
 		return nil, res == IntroWriteWrote, err
 	}
@@ -625,13 +625,28 @@ func (s *PebbleStore) ClearIntroTimeouts(bookID, fileID, sourceHash string) (boo
 	return cleared && stored != nil, nil
 }
 
+// introNow is the clock the intro writers stamp UpdatedAt with. It is the wall
+// clock unless a test pinned introClock: the encoded width of a time.Time depends on
+// its fractional digits, so a test that compares encoded sizes needs a stamp it
+// controls.
+func (s *PebbleStore) introNow() time.Time {
+	if s.introClock != nil {
+		return s.introClock()
+	}
+	return time.Now()
+}
+
 // writeIntroRow commits an edited row: the primary key and memdb only, under
 // the caller's stripe. raw is the stored value the row was decoded from: the
 // write happens only while the row still holds exactly those bytes, and a row
 // that changed meanwhile is reported as errBookFileRowVanished (the caller
 // re-reads and re-decides). A row deleted meanwhile is reported stale.
-func (s *PebbleStore) writeIntroRow(bookID, fileID string, row *BookFile, raw []byte, who string) (BookFileIntroWrite, error) {
-	row.UpdatedAt = time.Now()
+//
+// at is the UpdatedAt the row is stamped with. Callers take it from introNow; the
+// re-parse takes it BEFORE it offers the row to its decision, so the size it reports
+// for the write (IntroReparseRow.SizeWith) is encoded with the very timestamp stored.
+func (s *PebbleStore) writeIntroRow(bookID, fileID string, row *BookFile, raw []byte, who string, at time.Time) (BookFileIntroWrite, error) {
+	row.UpdatedAt = at
 	data, err := marshalBookFileDropSegs(row)
 	if err != nil {
 		return IntroWriteSkipped, fmt.Errorf("%s: encode %s: %w", who, fileID, err)

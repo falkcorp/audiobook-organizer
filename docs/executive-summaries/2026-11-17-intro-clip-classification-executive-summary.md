@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-17-intro-clip-classification-executive-summary.md -->
-<!-- version: 2.1.0 -->
+<!-- version: 2.2.0 -->
 <!-- guid: 2ea20baf-f7c7-4c6f-99bf-ec253571136b -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -79,17 +79,24 @@ to the first file, reads every file it already finished, sees that each is
 current and leaves it alone. That costs one extra read-only pass, and it is
 deliberate. An earlier version remembered a position and skipped everything
 before it, which would have skipped any file that appeared or moved in the
-library between the two attempts while still reporting success. A run that
-reports success now has also listed the library again at the end and found
-nothing left that it had not looked at. A file that fails to save fails the run,
+library between the two attempts while still reporting success. The job
+works in passes over the library as it stands at the start of each pass, and
+finishes successfully when a whole pass writes nothing and finds nothing that
+moved. Files that appear after that last pass began are outside the run, and a
+file that was moved to another book between a listing and its read is read again
+under its new book. If passes keep producing writes, the job stops after five
+and fails saying so; running it again picks up from there. A file that fails to save fails the run,
 and the next attempt tries it again.
 
 **The cost the job reports.** Saving the new record rewrites the whole stored
 entry for the file, not just the few hundred bytes being added, and that entry
 carries the file's audio fingerprint. A live run therefore rewrites the full
-entry of every previously processed file. The preview now says exactly how many
-entries that is and how many bytes in total, so the size is known before anyone
-starts it. Because nothing reads the new record yet, a live run is not
+entry of every previously processed file. The preview says how many entries
+that is and how many bytes in total (within ten bytes per entry, because the
+saved entry carries a time stamp whose width varies), so the size is known
+before anyone starts it; a live run reports the exact size of what it wrote. A
+write that was applied but that the database did not confirm as durable is
+counted on its own line, apart from errors. Because nothing reads the new record yet, a live run is not
 recommended until something does; the preview is the useful part today. Storing
 the record under its own small key, so that a re-read writes about two hundred
 bytes per file, is filed as a follow-up for the owner to decide.
