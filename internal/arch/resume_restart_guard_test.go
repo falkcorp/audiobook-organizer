@@ -1,7 +1,7 @@
 // file: internal/arch/resume_restart_guard_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 87f31afd-8f18-4eed-8095-a44c9e9c30bf
-// last-edited: 2026-11-15
+// last-edited: 2026-11-17
 
 package arch
 
@@ -236,6 +236,7 @@ var restartWithoutCheckpoint = map[string]string{
 		"re-selected on restart, and the whisper result journal serves the clips a killed run already transcribed; HEAD's CheckpointFn " +
 		"({LastBookID, OnlyMissing}) was never called at the page concurrency (registry.runItemsPar), so no resume anchor was lost",
 	"internal/plugins/maintenance/file_intro_transcribe.go fileIntroOpID":    "a file is DONE when IntroSourceHash == FileHash, so the remaining work is re-selected on restart (the file's own comment)",
+	"internal/plugins/maintenance/file_intro_reparse.go reparseFileIntrosID": "a file is DONE when its stored parse carries the current ClipParserVersion; a restart re-reads the finished rows, finds them current and skips them without a write, so nothing is repeated, paid for or rewritten (a stored position would skip files that came to sort before it)",
 	"internal/plugins/maintenance/reconcile.go itunes.heal":                  "a reflinked file is no longer missing, so it leaves the heal set; reflink is idempotent",
 	"internal/plugins/dedup/window_index_build.go windowIndexBuildOpID":      "a file with a member list is skipped, so a rerun continues where the last stopped (the op's own comment)",
 	"internal/plugins/deluge/link_backfill.go linkBackfillOpID":              "a linked row is skipped as already_linked; the run is bounded by limit and reports next_start_after",

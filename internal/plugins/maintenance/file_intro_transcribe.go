@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.8.11
+// version: 1.10.0
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
-// last-edited: 2026-11-15
+// last-edited: 2026-11-17
 
 package maintenance
 
@@ -1671,19 +1671,31 @@ func whisperGroupResult(r fileIntroWhisperResult, now time.Time) groupResult {
 		return groupResult{kind: "silence", hasResult: true, res: database.BookFileIntroResult{
 			Status: statusEmpty, Error: "whisper returned empty text", Transcript: &s, At: now, Done: true, Silence: true,
 			Meta: &database.IntroMeta{Model: r.Model, Language: r.Language, ClipLengthSec: fileIntroClipSeconds},
+			// The sentinel is a silence verdict by construction.
+			Parse: silenceParse(),
 		}}
 	default:
+		// Two parses of the same text, with two different jobs. The identity
+		// columns (title, author, narrator, translator, cover artist) and the
+		// status come from the LEGACY grammar, exactly as they always have: guards,
+		// the metadata search query and the apply gate read them, and
+		// TestLegacyParseGolden pins that grammar. The classification stored beside
+		// them (IntroParse) comes from the clip grammar, which maintenance.
+		// reparse-file-intros applies to stored text, so a new row and a re-parsed
+		// one carry the same classification.
 		fields := transcribe.ParseAudiobookIntro(r.Text)
 		status, kind := statusOK, "ok"
 		if fields.Title == "" {
 			status, kind = statusUnparsed, "unparsed"
 		}
 		text := r.Text
+		parse := introParseFromClip(transcribe.ParseClip(r.Text))
 		return groupResult{kind: kind, hasResult: true, fillable: true, res: database.BookFileIntroResult{
 			Status: status, Transcript: &text, At: now, Done: true,
 			Title: fields.Title, Author: fields.Author, Narrator: fields.Narrator,
 			Translator: fields.Translator, CoverArtist: fields.CoverArtist,
-			Meta: &database.IntroMeta{Model: r.Model, Language: r.Language, ClipLengthSec: fileIntroClipSeconds},
+			Meta:  &database.IntroMeta{Model: r.Model, Language: r.Language, ClipLengthSec: fileIntroClipSeconds},
+			Parse: &parse,
 		}}
 	}
 }
@@ -1717,9 +1729,26 @@ func (w *fileIntroWorker) donorResult(g fileIntroGroup) groupResult {
 		Silence: text == transcribe.SilenceSentinel,
 		Title:   str(d.TranscribedTitle), Author: str(d.TranscribedAuthor), Narrator: str(d.TranscribedNarrator),
 		Translator: str(d.TranscribedTranslator), CoverArtist: str(d.TranscribedCoverArtist),
+		Parse: donorParse(d.IntroParse, text),
 	}}
 	gr.fillable = text != transcribe.SilenceSentinel && (status == statusOK || status == statusUnparsed)
 	return gr
+}
+
+// donorParse is the classification a reused result carries. The donor's own parse
+// describes the same text, so it is copied (never shared, so the stored values never
+// alias) when it is at the current clip grammar version or newer (a newer parser's
+// verdict is left for that parser to own, as reparseDecide leaves it). A donor with
+// no parse (a row transcribed before the field existed) or with one from an older
+// grammar is NOT copied: the new row would then be stored already out of date and
+// the re-parse op would have to find and rewrite it, so the parse is derived from
+// the text now, exactly as a fresh transcription derives it.
+func donorParse(donor *database.IntroParse, text string) *database.IntroParse {
+	if donor != nil && donor.Version >= transcribe.ClipParserVersion {
+		return cloneIntroParse(donor)
+	}
+	p := introParseFromClip(transcribe.ParseClip(text))
+	return &p
 }
 
 // applyGroup writes one group's result to every member and counts it.
