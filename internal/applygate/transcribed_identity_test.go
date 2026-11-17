@@ -432,6 +432,12 @@ func TestEvaluateTranscribed_QueryNeverAgreesAndNoLiftRemovesATitleConflict(t *t
 				title = ch.Outcome
 			}
 		}
+		// A title that was already neutral is left alone: the transcription
+		// explained nothing, so no identity evidence is recorded for it.
+		if tc.title == OutcomeNeutral && v.IdentityEvidence != nil {
+			t.Errorf("%q <- %q runtime=%s: identity evidence recorded for a title the lift did not change: %+v",
+				tc.stored, tc.query, tc.runtime, v.IdentityEvidence)
+		}
 		if v.Allowed != tc.allowed || (tc.reason != "" && v.Reason != tc.reason) || title != tc.title {
 			t.Errorf("%q <- %q runtime=%s audio=%v: allowed=%v reason=%q (%s) title=%s, want allowed=%v reason=%q title=%s",
 				tc.stored, tc.query, tc.runtime, tc.audio, v.Allowed, v.Reason, v.Detail, title, tc.allowed, tc.reason, tc.title)
