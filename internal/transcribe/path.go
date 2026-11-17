@@ -1,7 +1,7 @@
 // file: internal/transcribe/path.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 7e41c9a8-2b6d-4f03-8a15-d3c0e9b57a24
-// last-edited: 2026-10-30
+// last-edited: 2026-11-17
 
 package transcribe
 
@@ -238,7 +238,12 @@ func pathSignature(j PathJob) string {
 // pathKey is the journal key for a path job with the given signature. Its own
 // version string and the extract fingerprint keep it disjoint from clip keys.
 func (ej *endpointJournal) pathKey(sig string) string {
-	return resultjournal.ContentKey(sig, ej.model, ej.fingerprint, ej.extract, pathParamsVersion)
+	return ej.ident().pathKey(sig)
+}
+
+// pathKey is the journal key for a path job with the given signature.
+func (id journalIdent) pathKey(sig string) string {
+	return resultjournal.ContentKey(sig, id.model, id.fingerprint, id.extract, pathParamsVersion)
 }
 
 // planPath is plan for path jobs: journalled jobs are served and not sent, the
@@ -283,9 +288,10 @@ func (ej *endpointJournal) completePath(results map[string]BatchResult, sigs map
 	if ej == nil {
 		return
 	}
+	ident := ej.ident()
 	for id, r := range results {
 		if sig := sigs[id]; sig != "" {
-			ej.put(id, ej.pathKey(sig), r)
+			ej.put(id, ident.pathKey(sig), ident.label(), r)
 		}
 	}
 }
@@ -366,10 +372,13 @@ func transcribePathChunks(ctx context.Context, remoteURL string, h remoteHealth,
 		}
 		timeout := requestTimeout(h, secs, true)
 		client := &http.Client{Timeout: timeout}
-		var batchResults map[string]BatchResult
+		var (
+			batchResults map[string]BatchResult
+			answeredAs   *responseIdentity
+		)
 		err = superviseRequest(ctx, remoteURL, h, timeout, ids, func(rctx context.Context) error {
 			var serr error
-			batchResults, serr = sendPathBatch(rctx, client, remoteURL, chunk)
+			batchResults, answeredAs, serr = sendPathBatch(rctx, client, remoteURL, chunk)
 			return serr
 		})
 		release()
@@ -380,6 +389,8 @@ func transcribePathChunks(ctx context.Context, remoteURL string, h remoteHealth,
 		}
 		// One response is judged on its own (see workerFaultIn).
 		kept, fault := splitWorkerFault(remoteURL, batchResults)
+		// Filed under who ANSWERED, not under the probe that preceded the request.
+		ej.observe(answeredAs)
 		ej.completePath(kept, sigs)
 		for id, r := range kept {
 			results[id] = r
@@ -404,8 +415,9 @@ func transcribePathChunks(ctx context.Context, remoteURL string, h remoteHealth,
 	return results, nil
 }
 
-// sendPathBatch POSTs one chunk. Keys are echoed back verbatim by the worker.
-func sendPathBatch(ctx context.Context, client *http.Client, remoteURL string, chunk []pathJobEntry) (map[string]BatchResult, error) {
+// sendPathBatch POSTs one chunk. Keys are echoed back verbatim by the worker. The
+// identity is the one the worker put in its answer (nil from an older worker).
+func sendPathBatch(ctx context.Context, client *http.Client, remoteURL string, chunk []pathJobEntry) (map[string]BatchResult, *responseIdentity, error) {
 	type wireJob struct {
 		Path    string `json:"path"`
 		Seconds int    `json:"seconds"`
@@ -416,30 +428,31 @@ func sendPathBatch(ctx context.Context, client *http.Client, remoteURL string, c
 	}
 	body, err := json.Marshal(map[string]any{"jobs": wire})
 	if err != nil {
-		return nil, fmt.Errorf("encode path batch: %w", err)
+		return nil, nil, fmt.Errorf("encode path batch: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, remoteURL+"/transcribe-path-batch", bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	setRequestDeadlineHeader(req, client)
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server returned HTTP %d", resp.StatusCode)
+		return nil, nil, fmt.Errorf("server returned HTTP %d", resp.StatusCode)
 	}
 	var out struct {
 		Results map[string]struct {
 			Text  string  `json:"text"`
 			Error *string `json:"error"`
 		} `json:"results"`
+		Identity *responseIdentity `json:"identity"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("decode path batch response: %w", err)
+		return nil, nil, fmt.Errorf("decode path batch response: %w", err)
 	}
 	ret := make(map[string]BatchResult, len(out.Results))
 	for id, v := range out.Results {
@@ -449,5 +462,5 @@ func sendPathBatch(ctx context.Context, client *http.Client, remoteURL string, c
 		}
 		ret[id] = r
 	}
-	return ret, nil
+	return ret, out.Identity, nil
 }

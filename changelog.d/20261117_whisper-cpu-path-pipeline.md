@@ -42,14 +42,25 @@ to the CPU switches to `base.en`.
 #### The startup resolution is pinned for the life of the worker
 
 The first decode process to start resolves `auto` (device, model, compute type).
-Every later process and every restart is started with those values explicitly and is
-refused if it reports anything else, so a restart can never quietly turn a
+Every later process and every restart is started with those values explicitly (the
+model, device, compute type and batched mode) and is refused if it reports anything
+else, so a restart can never quietly turn a
 `large-v2` GPU worker into a `base.en` CPU one and file `base.en` text under
 `large-v2`'s journal key. A process that cannot load exactly the pinned values is a
 start fault (`worker_misconfigured` on path jobs, `child_start_error` on `/health`),
 not a fallback. With `--num-workers` above 1 every process serves the same pinned
 resolution or the worker refuses to start. `/health` reports the pinned values and
 the parent logs what each process loaded.
+
+#### Every transcription answer names the worker that produced it
+
+The upload and path routes of the non-Mac worker return an `identity` object (model,
+backend, decode and extract fingerprint) read from the startup pin. The server files
+each result in the result journal under the identity of the answer that carried it,
+not under the `/health` probe it read up to 30 seconds earlier, so text from a worker
+process that was replaced in between is never filed under the old model. A mismatch
+is logged and drops the endpoint's cached probe. A worker without the field keeps the
+old behaviour, logged once per endpoint. The Mac worker does not send it yet.
 
 #### The non-Mac worker binds loopback unless told otherwise
 
@@ -89,23 +100,27 @@ request-deadline header of more than 12 digits is capped instead of answering 50
 #### Decode children are tied to the worker
 
 A decode process ignores Ctrl-C and runs in its own session (POSIX), so stopping the
-worker does not fail the in-flight clip as `decoder_crashed`; a clip still in flight
-when the worker shuts the process down answers `decoder_killed`, as the Mac worker's
-does. On Windows each process is put in a Job Object with kill-on-close, so it dies
-with the worker even while stuck in a native call. Any exception between sending a
+worker does not fail the in-flight clip as `decoder_crashed`. The process is killed
+only after the web server has returned, and the server's default graceful stop waits
+for requests in flight, so a stop during a hung decode can wait up to that clip's
+deadline (at most 3600 s) unless the worker is stopped a second time (not tried with
+a real hung decode); a worker killed outright gives its caller a dropped connection. On Windows each process is put in a Job Object with kill-on-close, so it dies
+with the worker even while stuck in a native call; a process that could not be put in
+the job shows as `child_unprotected: true` on `/health`. Any exception between sending a
 clip and reading its answer kills and restarts the process, and every request
 carries an id the process echoes, so a stale reply is never read as the next clip's
 transcript. The timeout environment variables must be finite and positive (the worker
 exits at startup naming the variable otherwise), the computed deadline is capped at
 3600 s (`WHISPER_TRANSCRIBE_MAX_TIMEOUT_S`) and the upload routes refuse bodies over
-256 MiB (413): 256 MiB is about 2.3 hours of 16 kHz stereo PCM, far above an intro
-clip; the cap keeps a huge upload from earning a multi-day deadline.
+256 MiB (413): 256 MiB is about 2.3 hours of 16 kHz mono 16-bit PCM (about 1.2 hours
+of stereo), far above an intro clip; the cap keeps a huge upload from earning a multi-day deadline.
 
 #### `/health` no longer shows raw start errors, and shows busy during a start
 
 `child_start_error` on the non-Mac worker is now a fixed code plus a short category
-(for example `worker_misconfigured: model_load_failed`); the exception text is in the
-log only. `busy_seconds` covers the time a request spends waiting for a child to
+(for example `worker_misconfigured: model_load_failed`), `device_reason` is a fixed
+phrase, and a `worker_misconfigured` job answer carries the same category word and
+no exception text; the exception text is in the log only. `busy_seconds` covers the time a request spends waiting for a child to
 (re)start, so `/health` never reports idle while a model load is in progress.
 
 #### Request limits on the path routes (both workers)
