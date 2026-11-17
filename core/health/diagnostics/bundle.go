@@ -1,7 +1,7 @@
 // file: core/health/diagnostics/bundle.go
-// version: 1.0.10
+// version: 1.3.0
 // guid: effb9b73-b53b-433b-92a8-5f9cb806d08d
-// last-edited: 2026-11-15
+// last-edited: 2026-11-16
 
 package diagnostics
 
@@ -299,16 +299,6 @@ const (
 // redactString applies the pattern layer to one string under key, counting what
 // changed. A redactor that panics fails closed.
 func (st *build) redactString(key, s string) (out string) {
-	return st.redactText(key, s, false)
-}
-
-// redactValue is redactString for a string that is a whole JSON value: an
-// absolute path that is the entire value is replaced as one (pathRoots.redactValue).
-func (st *build) redactValue(key, s string) (out string) {
-	return st.redactText(key, s, true)
-}
-
-func (st *build) redactText(key, s string, whole bool) (out string) {
 	defer func() {
 		if recover() != nil {
 			out = redactedErr
@@ -319,7 +309,7 @@ func (st *build) redactText(key, s string, whole bool) (out string) {
 		st.counts.typed++
 		return s
 	}
-	out, changed := st.scrub(key, s, whole)
+	out, changed := st.scrub(key, s)
 	if changed {
 		st.counts.pattern++
 	}
@@ -328,10 +318,9 @@ func (st *build) redactText(key, s string, whole bool) (out string) {
 
 // redactKey applies the pattern layer to an object member's name. A key is text
 // like any other (a map keyed by URL, by token or by path puts that text in the
-// bytes), so it passes the same redactor and path rule as a value, and it is a
-// whole string like a value is: a key that is one path ("/Users/bruce/k k") is
-// replaced as one, spaces and all, not cut at its first space. A key is never a
-// typed placeholder, so there is no typed shortcut here.
+// bytes), so it passes the same redactor and Sanitizer.Text as a value, and
+// never the key allowlist (that judges values). A key is never a typed
+// placeholder, so there is no typed shortcut here.
 func (st *build) redactKey(k string) (out string) {
 	defer func() {
 		if recover() != nil {
@@ -339,23 +328,28 @@ func (st *build) redactKey(k string) (out string) {
 			st.counts.pattern++
 		}
 	}()
-	out, changed := st.scrub("", k, true)
+	out, changed := st.scrub("", k)
 	if changed {
 		st.counts.pattern++
 	}
 	return out
 }
 
-// scrub is the pattern layer proper: the log.Redactor, then the absolute-path
-// rule. It reports whether either changed s.
-func (st *build) scrub(key, s string, whole bool) (string, bool) {
+// scrub is the pattern layer proper: the log.Redactor (secrets), then the
+// location rule. The location rule is last, so it reads whatever the redactor
+// built (its credential scrub can join a host to a path). A value whose key has
+// a validator in safeKey and passes it is kept as the redactor left it; any
+// other string goes through Sanitizer.Text. It reports whether either changed s.
+func (st *build) scrub(key, s string) (string, bool) {
 	out, kind := st.red.StringKinds(key, s)
 	changed := kind != 0 || out != s
-	redact := st.roots.redactPaths
-	if whole {
-		redact = st.roots.redactValue
+	p := ""
+	if valid, ok := safeKey(key, st.routes); ok && valid(out) {
+		p = out
+	} else {
+		p = st.san.Text(out)
 	}
-	if p := redact(out); p != out {
+	if p != out {
 		out, changed = p, true
 	}
 	return out, changed
@@ -396,7 +390,7 @@ func (st *build) walk(key string, v any, depth int) any {
 	}
 	switch x := v.(type) {
 	case string:
-		return st.redactValue(key, x)
+		return st.redactString(key, x)
 	case map[string]any:
 		return st.walkObject(x, depth)
 	case []any:
@@ -551,7 +545,11 @@ func validSectionName(n string) bool {
 
 // validEntryName reports whether name is a relative path with no "..", no
 // backslash, no NUL and no empty segment: a zip entry that cannot climb out of
-// its section directory (zip slip).
+// its section directory (zip slip). A name a section writes (sectionWriter.entry)
+// is also a single path element and must pass Sanitizer.Text unchanged: the
+// second check is about the spellings of a location, not about what a name
+// means, so a name such as "Batman Hush.txt" passes it (nothing in a name tells
+// a title from a word, and no producer names a file after a book).
 func validEntryName(name string) bool {
 	return fs.ValidPath(name) && name != "." && !strings.ContainsAny(name, "\\\x00")
 }
@@ -568,8 +566,16 @@ func (w *sectionWriter) entry(name string) (*countingEntry, error) {
 	if w.open {
 		return nil, errors.New("diagnostics: finish the open JSONL file before starting another")
 	}
-	if !validEntryName(name) {
-		return nil, fmt.Errorf("diagnostics: file name %q is not a plain relative path", name)
+	if !validEntryName(name) || strings.Contains(name, "/") {
+		// One element: "fork/exec" and an error text such as "input/output" pass
+		// Sanitizer.Text unchanged and would otherwise make a subdirectory.
+		return nil, errors.New("diagnostics: file name is not a single plain element")
+	}
+	if w.st.san.Text(name) != name {
+		// An entry name is bytes of the bundle: one the sanitizer would change
+		// spells a location. The error text is sanitized when it is recorded, so
+		// the name does not leak through it.
+		return nil, errors.New("diagnostics: file name spells a location the sanitizer would wipe")
 	}
 	path := w.section + "/" + name
 	if w.st.written[path] {
@@ -673,10 +679,10 @@ func (w *sectionWriter) File(name string, r io.Reader) error {
 
 // redactLine redacts one line of a File. A line that is a JSON object (the
 // structured log's line, a JSONL row) is decoded and walked like any JSON
-// value, so a quoted path stays inside its string, the escapes stay valid and
-// a deny-listed member name replaces its value; it is written back compact with
-// its members in key order. Any other line is text and takes the string rule,
-// which cuts a path at its first space.
+// value, so a quoted path stays inside its string, the escapes stay valid, a
+// deny-listed member name replaces its value and a structured field keeps its
+// validated value; it is written back compact with its members in key order.
+// Any other line is text and takes Sanitizer.Text as a whole.
 func (w *sectionWriter) redactLine(line []byte) string {
 	if t := bytes.TrimLeft(line, " \t"); len(t) > 0 && t[0] == '{' {
 		dec := json.NewDecoder(bytes.NewReader(t))

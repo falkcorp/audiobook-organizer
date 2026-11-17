@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/R3-02-r3-upgrade-floor-legacy-deletions.md -->
-<!-- version: 1.1.6 -->
+<!-- version: 1.1.7 -->
 <!-- guid: c967232d-f699-4787-8455-5badc8f3fca6 -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-17 -->
 
 # R3-02 — The R3 floor: UpgradeFloor{InstallFirst: <R2 tag>}, books' legacy steps 1..66 and the code only they call, the HEAD-format readers, internal/books/cutover and TestR0OpensR1Store deleted, and together tools/cmd/opsgen, web/src/generated/ops.ts and internal/operations/state
 
@@ -10,7 +10,7 @@
 | ID | R3-02 |
 | Release | R3 |
 | Tier | **T4** (Opus / xhigh–max): the upgrade floor refuses stores at boot and at restore staging; a wrong floor either bricks a valid store or lets an unmigrated one boot with its readers deleted |
-| Wave | W41 (beside F9-05; file-disjoint) |
+| Wave | W41 (beside F9-01; file-disjoint) |
 | Depends on | OWNER-05 (R2 released and deployed) |
 | Spec | 09 §9.2.2 ("The R3 floor", "Fresh installs"), §9.4 R3; 05-storage §5S.3.5 (`UpgradeFloor`, `ErrUpgradeFloor`, runner rules "Atomicity" and "Upgrade floor"), §5S.4 steps 3 and 6, §5S.9.3, §5S.10; 05-backup §5B.3.4 step 4; 05-tasks §5T.8.1 (the `internal/operations/state` row); 07 §7.8 (opsgen, `ops.ts`, `operationPolling`); 03 §3.7 ("one floor, in R3"), §3.8 R3; 06 §6.4.10 R3, §6.5.1 "Releases" R3 |
 
@@ -90,7 +90,7 @@ R3 runs no migration step and changes no stored data (09 §9.4 R3 "Migrations");
 | modify | `scripts/deploy-wait-ready.sh` (only if its exit-78 message differs from I-floor-4) |
 | modify | `internal/arch/layering_test.go`, `scripts/ci/short_test_weights.json` (drop deleted packages) |
 | modify | `Makefile` (`generate-ops`, `ops-check` and `ops-check` in `ci:`), `.github/workflows/ci.yml` (the `make ops-check` step and the `web/src/generated/*` classifier case comment), `.github/workflows/extraction-gates.yml` (the R2 cutover-suite and restore-drill jobs) |
-| modify | the books web files that import `generated/ops`: `web/src/modules/books/legacy/` (`operationPolling.ts` and its tests, 07 §7.11) and `web/src/modules/books/legacyApi.ts` (the legacy remainder of `services/api.ts`). If F9 slipped to R3 and has not merged before this PR, these are still `web/src/utils/operationPolling.ts` and `web/src/services/api.ts`: edit them there instead and say so in the PR |
+| modify | the books web files that import `generated/ops`: `web/src/modules/books/legacy/` (`operationPolling.ts` and its tests, 07 §7.11) and `web/src/modules/books/legacyApi.ts` (the legacy remainder of `services/api.ts`). F9 is in R3 and its cut rows merge after this PR (F9-01 is beside it in W41, F9-05 follows in W42), so these are still `web/src/utils/operationPolling.ts` and `web/src/services/api.ts`: edit them there instead and say so in the PR |
 | create | one `changelog.d/` fragment (headerless) |
 
 ## Re-verify before editing (expected results at your base)

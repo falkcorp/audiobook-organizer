@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file.go
-// version: 1.6.8
+// version: 1.6.9
 // guid: 6b0d94e7-1c58-4a32-bf07-9e5d2a17c630
-// last-edited: 2026-11-15
+// last-edited: 2026-11-16
 
 package maintenance
 
@@ -181,7 +181,7 @@ func (p *Plugin) introMigrateSingleFileKind(deps t6g4Deps, sched *tasks.Schedule
 			// drifted (the shared UpdateBookFile row, kinds_resources.go; stack parity
 			// review P1). It was declared as a read of books until then.
 			// The recompute reaches ModifyBook, so the row is the whole ModifyBook row: authors,
-			// metadata_cache, indexes too (THE RULE, kinds_resources.go).
+			// metadata_cache, indexes too (THE RULE, internal/maintenance/resources).
 			Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResAuthors, ops.ResMetadataCache, ops.ResIndexes)...),
 			Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
 			// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in

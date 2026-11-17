@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_test.go
-// version: 1.2.14
+// version: 1.2.15
 // guid: 952f6abf-08d2-41bd-aec8-95b8a3f39bd9
-// last-edited: 2026-11-15
+// last-edited: 2026-11-17
 
 package maintenance
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance/resources"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -764,7 +765,7 @@ type t6g4Want struct {
 func t6g4DeriveWrites(rows []t6g4Want) []t6g4Want {
 	for i := range rows {
 		if len(rows[i].calls) > 0 || len(rows[i].outside) > 0 {
-			rows[i].writes = t6RowsUnion(t6RowsOf(rows[i].calls...), rows[i].outside)
+			rows[i].writes = resources.Union(t6RowsOf(rows[i].calls...), rows[i].outside)
 		}
 	}
 	return rows

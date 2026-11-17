@@ -1,7 +1,7 @@
 <!-- file: docs/plans/platform-core/implementation-plan.md -->
-<!-- version: 2.6.2 -->
+<!-- version: 2.6.4 -->
 <!-- guid: e0650f4a-4aec-4453-a256-aed84bf5ef1c -->
-<!-- last-edited: 2026-11-15 -->
+<!-- last-edited: 2026-11-17 -->
 
 # mediacore — implementation plan (Phase 6, R0–R3)
 
@@ -66,7 +66,7 @@ OWNER-03, before F3-08 and in OWNER-05; R2-02 is folded into OWNER-05 and R1-31 
 | R2, F6 | outbox and realtime, the outbox operator routes, the journal's live tail | 05-events §5E.11, §5E.13; 05-realtime §11; 05-logging §5 | F6-01 … F6-05 |
 | R2, F7 | integrations with their instance routes, AI jobs, provider gates, library roots, notify; M6 | 05-metadata M1.3, M1.10; 05-ai §10; 05-notify §10; 05-library §5L.10 | F7-01 … F7-10 |
 | R2, F8 | backup, the updater move, health, the kernel `/metrics` mount | 05-backup §5B.10; 05-updater; 05-health §5H.10; 05-metrics §13 | F8-01 … F8-04, and F8-03b (the diagnostics bundle follow-up) |
-| R2, F9 | the shell (R3 by default: its dark rows land during R2, its flip F9-03 after OWNER-05) | 07 §7.11, §7.19 steps 4–5 | F9-01 … F9-05 |
+| R3, F9 | the whole shell (owner direction 2026-11-16, §(l) item 7): all five rows merge after OWNER-05, the dark rows first and the flip F9-03 last | 07 §7.11, §7.19 steps 4–5 | F9-01 … F9-05 |
 | R2, last PR | the runbook and the R2 release note; the owner ends the freeze in OWNER-05 | 09 §9.2.9, §9.4 R2 | R2-01 |
 | R3 | deletions, the service registry's last clusters, `legacy-file-cleanup`, `UpgradeFloor{InstallFirst: <R2 tag>}`, the R3 release note | 09 §9.4 R3; 09 §9.2.2; 06 §6.11.1 steps 4, 6 | R3-01 … R3-05 |
 | Owner | decisions, production reads, releases and deploys | 09 §9.4 Owner rows; §9.7 | OWNER-01 … OWNER-06 |
@@ -94,8 +94,8 @@ same PR (09 §9.3; `TestBootCrashMatrix` for a kernel writer, `TestBootCrashMatr
 | **F6** | F5 merged; outbox, realtime, the outbox operator routes and the journal's live tail merged dark (F6-01, F6-02, F6-04, F6-05). | The stream tests (05-events outbox set, 05-realtime hub set); the event half of `TestJournal_RequiresSystemManage`; `/api/events` deleted and the SPA on `/api/core/v1/events`, its log view on the live tail; e2e. | as F3 |
 | **F7** | F6 merged; F7-01 … F7-08 and F7-10 merged dark. | The search oracle `TestBooksIndexRebuiltAtCutover`; the webhook delivery test; `TestRootsCutover_FromHEADFixture`; the instance routes in place of the class-i `/api/v1/config` handlers; the dashboard-reference test after the AI renames; `internal/plugin` deleted with no importer left. | as F3 |
 | **F8** | F7 merged; F8-01 … F8-03 and F8-03b merged dark. | The dashboard-reference test over the kernel `/metrics` mount (no rename); R0's updater tests re-pointed with unchanged expectations, `TestABOUpdaterSourceMatchesHEAD`, `TestApply_RawAssetNoBackup`; `TestBasicGate_ExemptSetGolden` with `/health` exempt; `TestLegacyArchiveRestoreThenMigrate`; `unit-lifecycle`. | as F3 |
-| **F9** | F8 merged; F9-01, F9-02, F9-04 and F9-05 merged dark; 07 §7.19 steps 1–2 done. Not ready: it moves to R3 unchanged. | The shell's checks (07 §7.19 step 4: `make build-api && ./audiobook-organizer serve` answers `/` with the placeholder; `TestABOManifestBootsWithShell`); e2e; the image job boots the embedded bundle. | as F3 (in R3: `make rollback` to R2) |
-| **R2 last PR** | F8 merged (and F9 when it is in R2). | The runbook (deploy, rollback, smoke run) and the release note assembled from the rename table, the kind-rename map, the deleted routes, the metric renames and 09 §9.6, each owner's text verbatim (09 §9.2.9). OWNER-05 deploys, cuts R2 and clears `RELEASE_FREEZE`. | `make rollback-restore`: checkpoint or off-host archive offline, plus the pre-freeze release; every write since the upgrade is lost |
+| **F9** | OWNER-05 done (R2 cut and deployed); F8 merged; F9-01, F9-02, F9-04 and F9-05 merged dark; 07 §7.19 steps 1–2 done. F9 is R3's as a whole (§(l) item 7); none of its rows is part of R2. | The shell's checks (07 §7.19 step 4: `make build-api && ./audiobook-organizer serve` answers `/` with the placeholder; `TestABOManifestBootsWithShell`); e2e; the image job boots the embedded bundle. | as F3 (in R3: `make rollback` to R2) |
+| **R2 last PR** | F8 merged. F9 is not in R2. | The runbook (deploy, rollback, smoke run) and the release note assembled from the rename table, the kind-rename map, the deleted routes, the metric renames and 09 §9.6, each owner's text verbatim (09 §9.2.9). OWNER-05 deploys, cuts R2 and clears `RELEASE_FREEZE`. | `make rollback-restore`: checkpoint or off-host archive offline, plus the pre-freeze release; every write since the upgrade is lost |
 | **R3** | R2 released and deployed (OWNER-05). | `make ci`; e2e; the crash matrix over `legacy-file-cleanup`; a pre-R2 store refused at boot with exit 78 (`TestPreR2StoreRefusedByR3`); `TestRestoreBelowUpgradeFloorRefusedAtStaging`; `TestFreshInstallPostFloorBootsTwice`. OWNER-06 deploys. | `make rollback` to R2 |
 
 ---
@@ -110,16 +110,16 @@ before it merges (§(i))**; an owner release checkpoint (cut, deploy) takes 1 da
 owner turns a checkpoint around the day it is reached. R2's briefs may be executed and their PRs opened
 during R1; only the merge waits for OWNER-03.
 
-**The critical path** (30 sequential agent PRs and 5 release checkpoints):
+**The critical path** (31 sequential agent PRs and 5 release checkpoints):
 
-OWNER-01 (OWNER, 0.5) → R0-05 (T4, 3) → OWNER-02 (OWNER, 1) → R1-35 (T1, 0.5) → R1-01 (T3, 1.5) → R1-02 (T2, 1) → R1-10 (T3, 1.5) → R1-32 (T3, 1.5) → R1-36 (T3, 1.5) → R1-13 (T4, 3) → R1-20 (T4, 3) → R1-21 (T4, 3) → R1-23 (T4, 3) → R1-25 (T4, 3) → R1-27 (T3, 1.5) → R1-28 (T2, 1) → OWNER-03 (OWNER, 1) → F2-09 (T2, 1) → F2-01 (T3, 1.5) → F2-06 (T4, 3) → F3-04 (T4, 3) → F3-06 (T4, 3) → F3-07 (flip, 6.5) → F4-08 (flip, 6.5) → F5-18 (flip, 6.5) → F6-03 (flip, 3.5) → F7-09 (flip, 3.5) → F8-04 (flip, 3.5) → R2-01 (T2, 1) → OWNER-05 (OWNER, 1) → F9-05 (T3, 1.5) → F9-02 (T3, 1.5) → F9-03 (flip, 3.5) → R3-04 (T1, 0.5) → OWNER-06 (OWNER, 1)
+OWNER-01 (OWNER, 0.5) → R0-05 (T4, 3) → OWNER-02 (OWNER, 1) → R1-35 (T1, 0.5) → R1-01 (T3, 1.5) → R1-02 (T2, 1) → R1-10 (T3, 1.5) → R1-32 (T3, 1.5) → R1-36 (T3, 1.5) → R1-13 (T4, 3) → R1-20 (T4, 3) → R1-21 (T4, 3) → R1-23 (T4, 3) → R1-25 (T4, 3) → R1-27 (T3, 1.5) → R1-28 (T2, 1) → OWNER-03 (OWNER, 1) → F2-09 (T2, 1) → F2-01 (T3, 1.5) → F2-06 (T4, 3) → F3-04 (T4, 3) → F3-06 (T4, 3) → F3-07 (flip, 6.5) → F4-08 (flip, 6.5) → F5-18 (flip, 6.5) → F6-03 (flip, 3.5) → F7-09 (flip, 3.5) → F8-04 (flip, 3.5) → R2-01 (T2, 1) → OWNER-05 (OWNER, 1) → F9-01 (T3, 1.5) → F9-05 (T3, 1.5) → F9-02 (T3, 1.5) → F9-03 (flip, 3.5) → R3-04 (T1, 0.5) → OWNER-06 (OWNER, 1)
 
 | Scenario | Working days |
 |---|---|
-| Base rates, dependencies only (pipelined execution) | **82** (about 16 weeks) |
-| Base rates, with the four optional smoke days | 86 |
-| Shell (F9) ships in R2 instead of its R3 default | 86.5 |
-| Every T3, T4 and flip PR takes 1.5× its base rate | 118.25 |
+| Base rates, dependencies only (pipelined execution) | **83.5** (about 17 weeks) |
+| Base rates, with the four optional smoke days | 87.5 |
+| Counterfactual, no longer the plan: the shell (F9) ships in R2 instead of R3 (computed before F9-01 moved behind OWNER-05; the owner chose R3 on 2026-11-16) | 86.5 |
+| Every T3, T4 and flip PR takes 1.5× its base rate | 120.5 |
 | Waves run strictly in lockstep (§(d), each wave as long as its longest PR) | 106.5 |
 
 R0 and R1 take 30 of these days; R1's storage chain (R1-20 → R1-21 → R1-23 → R1-25) and the deploy
@@ -221,7 +221,7 @@ What makes the plan safe beyond the per-wave rule:
 | W28 | F2, F3, F4, F7 | F2-04, F3-06, F4-11, F7-01 | 3.0 | 4 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); the R2 PRs here land dark (no route, schedule or stored row changes before their flip). |
 | W29 | F2, F4, F5, F7 | F2-05, F2-11, F4-03, F4-06, F5-16, F7-04, F7-10 | 3.0 | 7 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F4-03 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip). |
 | W30 | F2, F4, F5, F6, F7, F8 | F2-16, F4-05, F5-15, F6-01, F6-02, F7-02, F8-01, F8-03 | 3.0 | 8 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F7-02 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip); F2-16 is the wave's one owner of the kernel and module wiring files. |
-| W31 | F3, F4, F5, F6, F7, F9 | F3-08, F4-07, F5-01, F5-02, F5-03, F5-04, F5-05, F5-06, F5-07, F5-08, F5-09, F5-10, F5-11, F5-12, F5-13, F5-19, F6-04, F7-05, F7-06, F9-01 | 3.0 | 20 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F5-03, F7-05 run inside an announced move window: no other PR in the wave touches the packages they move or rewire or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip); F3-08 records the pre-freeze tag after the owner set RELEASE_FREEZE to R2, with no release run in flight; F5-01, F5-02, F5-04, F5-05, F5-06, F5-07, F5-08, F5-09, F5-10, F5-11, F5-12, F5-13 each delete only their own exemption entry file. |
+| W31 | F3, F4, F5, F6, F7 | F3-08, F4-07, F5-01, F5-02, F5-03, F5-04, F5-05, F5-06, F5-07, F5-08, F5-09, F5-10, F5-11, F5-12, F5-13, F5-19, F6-04, F7-05, F7-06 | 3.0 | 19 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F5-03, F7-05 run inside an announced move window: no other PR in the wave touches the packages they move or rewire or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip); F3-08 records the pre-freeze tag after the owner set RELEASE_FREEZE to R2, with no release run in flight; F5-01, F5-02, F5-04, F5-05, F5-06, F5-07, F5-08, F5-09, F5-10, F5-11, F5-12, F5-13 each delete only their own exemption entry file. |
 | W32 | F3, F6, F7 | F3-07, F6-05, F7-07 | 6.5 | 3 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F3-07 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F3-07 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip); F3-07 is the wave's one owner of the kernel and module wiring files. |
 | W33 | F5, F7, F8 | F5-14, F7-03, F8-02 | 3.0 | 3 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F8-02 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip). |
 | W34 | F4, F7 | F4-08, F7-08 | 6.5 | 2 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F4-08 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F4-08 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip); F4-08 is the wave's one owner of the kernel and module wiring files. |
@@ -231,9 +231,9 @@ What makes the plan safe beyond the per-wave rule:
 | W38 | F8 | F8-04 | 3.5 | every dependency merged in an earlier wave (check 2); F8-04 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F8-04 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; F8-04 is the wave's one owner of the kernel and module wiring files. |
 | W39 | R2 | R2-01 | 1.0 | every dependency merged in an earlier wave (check 2). |
 | W40 | OWNER | OWNER-05 | 1.0 | owner checkpoint OWNER-05: no files, NOT AGENT WORK; it gates the tasks that depend on it. |
-| W41 | F9, R3 | F9-05, R3-02 | 3.0 | 2 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); the R2 PRs here land dark (no route, schedule or stored row changes before their flip). |
-| W42 | F9, R3 | F9-02, F9-04, R3-05 | 1.5 | 3 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); the R2 PRs here land dark (no route, schedule or stored row changes before their flip). |
-| W43 | R3 | R3-01, R3-03 | 1.5 | 2 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2). |
+| W41 | F9, R3 | F9-01, R3-02 | 3.0 | 2 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); the F9 PR here lands dark (R3's, after OWNER-05; no route, schedule or stored row changes before F9-03). |
+| W42 | F9, R3 | F9-05, R3-05 | 1.5 | 2 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); the F9 PR here lands dark (R3's, after OWNER-05; no route, schedule or stored row changes before F9-03). |
+| W43 | F9, R3 | F9-02, F9-04, R3-01, R3-03 | 1.5 | 4 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); the F9 PRs here land dark (R3's, after OWNER-05; no route, schedule or stored row changes before F9-03). |
 | W44 | F9 | F9-03 | 3.5 | every dependency merged in an earlier wave (check 2); F9-03 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F9-03 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; F9-03 is the wave's one owner of the kernel and module wiring files. |
 | W45 | R3 | R3-04 | 0.5 | every dependency merged in an earlier wave (check 2). |
 | W46 | OWNER | OWNER-06 | 1.0 | owner checkpoint OWNER-06: no files, NOT AGENT WORK; it gates the tasks that depend on it. |
@@ -720,12 +720,12 @@ tier when its base-commit re-verification finds more than the plan assumed; it n
 
 ## (k) Conventions
 
-- **IDs** encode the release: `R0-nn`, `R1-nn`, `F2-nn` … `F9-nn` (R2's foundation and flips), `R2-nn` (R2's
+- **IDs** encode the release: `R0-nn`, `R1-nn`, `F2-nn` … `F9-nn` (R2's foundation and flips; F9, the shell, is R3's), `R2-nn` (R2's
   closing PRs), `R3-nn`, and `OWNER-nn` for owner checkpoints. The flips keep their first IDs (F3-07, F4-08,
   F5-18, F6-03, F7-09, F8-04, F9-03); rows added later take the next free number of their label, and F5-17 is
   retired (its `tasklint` work is F2-17). One row, F8-03b (a follow-up to the merged F8-03), takes a lowercase
-  letter after its parent's number because its name is the diagnostics marker's (`RedesignPendingF8_03b`,
-  `ErrRedesignPendingF8_03b`, `archtest.F803bGate`); `tools/check_waves.py` accepts that form and
+  letter after its parent's number because its name was the diagnostics marker's (the marker, its
+  run-time refusal and its archtest gate, all deleted by that row); `tools/check_waves.py` accepts that form and
   `tools/test_check_waves.py` pins it. The number rule would have called it F8-05.
 - **Files** are the main paths a PR creates, modifies or deletes; a path ending in `/` is a whole directory
   (a move, a new package, or the importers a move rewires). The T6 and T7 file groups are listed by file, as the
@@ -780,9 +780,11 @@ Each is a choice inside 09's rules, recorded so a reviewer can overturn it.
    not in core's `archtest/tasklint`, because it names books' files.
 6. **One PR per flip label**, F8 and F7 included, because 09's flips table speaks of "the flip PR"; F7 is
    also one step, M6.
-7. **F9 in R3 by default** (advisor S1; 09 lets the shell slip to R3): F9-01, F9-02, F9-04 and F9-05 land
-   dark during R2, and F9-03 merges after OWNER-05 cuts R2, outside the freeze. This takes a flip that changes
-   every page URL and the owner of `/` out of the one-way release; its rollback is `make rollback` to R2.
+7. **F9 in R3** (advisor S1 made it the default and 09 lets the shell slip to R3; the owner made it
+   unconditional on 2026-11-16): all five rows, F9-01 included, merge after OWNER-05 cuts R2, outside the
+   freeze, in the order F9-01, F9-05, F9-02 and F9-04, F9-03. This takes a flip that changes every page URL and
+   the owner of `/` out of the one-way release, and takes five rows and one flip out of R2's length; its rollback
+   is `make rollback` to R2. No R2 row depends on an F9 row (checked 2026-11-17 against every `depends_on`).
 8. **Unkeyed 04 rows.** `internal/bookfiles`, `internal/writeback` and the `internal/models` merge go in
    R3-01; `internal/logger/mocks` goes with `retention.go` in F5-18.
 9. **`make rollback-restore RELEASE=`** lands with `updater fetch-release` in F8-02; R1-27 lands the
@@ -829,6 +831,7 @@ questions the plan carries instead:
 2. **Independent review before merge.** Every T4 and flip PR gets a second review before it merges: either a
    separate Opus agent reviewing the diff against the brief's spec sections and invariants (`/code-review high`
    with the brief as context), or the owner. The schedule prices this at 0.5 day.
+   Since 2026-11-16 this is the full tier of a two-tier bar; item 13 says which rows get only the dark tier.
 3. **The brief is the approved plan.** CLAUDE.md's "Plan Before Execution" is satisfied by this plan and the
    task's brief, which the owner approves by merging the plan PR. The agent puts its `PLAN.md` content in the PR
    description instead of waiting for a second approval. Every other CLAUDE.md rule applies unchanged.
@@ -859,3 +862,20 @@ questions the plan carries instead:
     minutes, not a soak, so D11 stands.
 12. **Owner facts are committed.** OWNER-02 records the R0 tag, and F2-12 commits it as `ci/r0_release.txt`, the
     same way F3-08 commits the pre-freeze tag.
+13. **Direction, agent cap and the two-tier review bar (owner, 2026-11-16).** Product work comes first. All seven
+    flip rows (F3-07, F4-08, F5-18, F6-03, F7-09, F8-04, F9-03) are ON HOLD until the owner lifts the hold: no agent
+    starts, enqueues or merges one. At most 3 agents work on dark platform rows at a time. Reviews use two tiers:
+    - **Dark tier**, for a row that only adds code no live path executes (a dark kind, a package nothing registers,
+      tests, docs): it merges at 0 blocker and 0 major with CI green. Its minors do not go back for another round;
+      each is filed in a headerless `todo.d/` fragment (`todo.d/README.md`) named
+      `<date>-<subsystem>-must-be-empty-before-<flip row>-flip.md`, each entry opened by a bold id that ends in the flip
+      row (first example: `**JOBWRITES-F5-18**` in `todo.d/2026-11-16-jobwrites-must-be-empty-before-f5-18-flip.md`,
+      merged in #4683, still in `todo.d/` on main). Fragments fold into `TODO.md` daily and are deleted, so the per-subsystem "must be
+      empty before the flip" list is every entry whose id ends in that flip row, in `todo.d/` and in `TODO.md`; the flip row
+      refuses to merge while one is open. No mutation pass is required.
+    - **Full tier**, for every flip, every security row and any code a live path executes (a shared body, a store
+      method, a scheduled kind that is already registered): adversarial review, the mutation pass and delta
+      rounds until 0 blocker and 0 major, as item 2 and the brief say.
+
+    A row that mixes the two takes the full tier for its live-path part. A reviewer who is unsure which tier a
+    change belongs to uses the full one.

@@ -1,13 +1,13 @@
 <!-- file: docs/plans/platform-core/task-summary.md -->
-<!-- version: 1.5.1 -->
+<!-- version: 1.5.2 -->
 <!-- guid: 98285867-08c9-4873-8207-d381e15999fc -->
-<!-- last-edited: 2026-11-15 -->
+<!-- last-edited: 2026-11-17 -->
 
 # Platform-core: every task in plain language
 
 All 134 tasks of the [implementation plan](implementation-plan.md) (128 for agents, 6 for the owner) in 46 waves, grouped by stage in the order they run. Each has what it builds and why it is needed. The full brief for each task is in [`docs/agent-tasks/platform-core/`](../../agent-tasks/platform-core/README.md).
 
-Critical path (82 working days; 106.5 if every wave waits for the one before): OWNER-01 → R0-05 → OWNER-02 → R1-35 → R1-01 → R1-02 → R1-10 → R1-32 → R1-36 → R1-13 → R1-20 → R1-21 → R1-23 → R1-25 → R1-27 → R1-28 → OWNER-03 → F2-09 → F2-01 → F2-06 → F3-04 → F3-06 → F3-07 → F4-08 → F5-18 → F6-03 → F7-09 → F8-04 → R2-01 → OWNER-05 → F9-05 → F9-02 → F9-03 → R3-04 → OWNER-06.
+Critical path (83.5 working days; 106.5 if every wave waits for the one before): OWNER-01 → R0-05 → OWNER-02 → R1-35 → R1-01 → R1-02 → R1-10 → R1-32 → R1-36 → R1-13 → R1-20 → R1-21 → R1-23 → R1-25 → R1-27 → R1-28 → OWNER-03 → F2-09 → F2-01 → F2-06 → F3-04 → F3-06 → F3-07 → F4-08 → F5-18 → F6-03 → F7-09 → F8-04 → R2-01 → OWNER-05 → F9-01 → F9-05 → F9-02 → F9-03 → R3-04 → OWNER-06.
 
 ## Your decisions and release cuts (6)
 
@@ -204,14 +204,14 @@ Backup, the updater and the one-command rollback move onto the engine.
 
 ## The new UI shell (ships in R3) (5)
 
-The web app moves onto the engine's shared UI frame. Its first part lands during R2; the switch-over and the rest merge after R2 is released, so R3 carries it.
+The web app moves onto the engine's shared UI frame. All five of its tasks merge after R2 is released (the owner moved the whole shell to R3 on 2026-11-16), so R3 carries it.
 
 | Task | Kind | What | Why | Wave · needs |
 |---|---|---|---|---|
-| **F9-01** Build the shared UI shell packages | Feature | Creates the shared UI kit and shell packages, a sample app package, and core's UI serving code. Dark. | The audiobook UI needs to run inside a reusable shell. Without these packages, there is nothing to move the UI onto. | W31 · R1-30, F6-02 |
-| **F9-05** Move providers, stores and shared components **(critical path)** | Cleanup | Moves auth, toasts, app state, common components and the Activity page into the shell, with books supplying task labels. Dark. | Shell pieces still live in the app. Until moved, the shell cannot run on its own. | W41 · F9-01, F8-04, OWNER-05 |
-| **F9-02** Move layout code into the shell **(critical path)** | Cleanup | Cuts the audiobook-specific imports out of the layout files into books slots and moves the layout into core's web code. Dark. | The layout mixes shell and audiobook code. It has to be separated before the shell can own it. | W42 · F9-01, F8-04, F9-05 |
-| **F9-04** Move shell pages out of the app | Cleanup | Moves shared pages (login, setup, users, system, settings, dashboard and more) into the shell, with their audiobook parts becoming books widgets. Dark. | These pages belong to the platform, not the audiobook app. They must all move before the entry point can switch to the shell. | W42 · F9-01, F8-04, F9-05 |
+| **F9-01** Build the shared UI shell packages **(critical path)** | Feature | Creates the shared UI kit and shell packages, a sample app package, and core's UI serving code. Dark. | The audiobook UI needs to run inside a reusable shell. Without these packages, there is nothing to move the UI onto. | W41 · R1-30, F6-02, OWNER-05 |
+| **F9-05** Move providers, stores and shared components **(critical path)** | Cleanup | Moves auth, toasts, app state, common components and the Activity page into the shell, with books supplying task labels. Dark. | Shell pieces still live in the app. Until moved, the shell cannot run on its own. | W42 · F9-01, F8-04, OWNER-05 |
+| **F9-02** Move layout code into the shell **(critical path)** | Cleanup | Cuts the audiobook-specific imports out of the layout files into books slots and moves the layout into core's web code. Dark. | The layout mixes shell and audiobook code. It has to be separated before the shell can own it. | W43 · F9-01, F8-04, F9-05 |
+| **F9-04** Move shell pages out of the app | Cleanup | Moves shared pages (login, setup, users, system, settings, dashboard and more) into the shell, with their audiobook parts becoming books widgets. Dark. | These pages belong to the platform, not the audiobook app. They must all move before the entry point can switch to the shell. | W43 · F9-01, F8-04, F9-05 |
 | **F9-03** Switch the UI to the shell **(critical path)** | Migration | In one PR, boots the app through the shell, uses the shell's realtime client, drops the old SPA serving, and moves all audiobook URLs under /books/. | This is the UI cutover. Every page path changes, with no redirects from old URLs, so bookmarks break and the release note lists the new paths. | W44 · F8-04, F9-02, F9-04, F9-05, OWNER-05 |
 
 ## R2 · Ship the cutover (1)

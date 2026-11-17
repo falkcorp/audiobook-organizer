@@ -1,7 +1,7 @@
 // file: core/health/diagnostics/round4_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 7c2e9a40-5d18-4b63-a0f7-1e94c6b83d25
-// last-edited: 2026-11-14
+// last-edited: 2026-11-16
 
 package diagnostics_test
 
@@ -11,7 +11,6 @@ import (
 	"io"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/falkcorp/mediacore/health/diagnostics"
 	"github.com/falkcorp/mediacore/internal/authz"
@@ -76,136 +75,6 @@ func runPathCases(t *testing.T, cases []pathCase) {
 	assertNoneOf(t, files, "bruce", "/home")
 }
 
-// TestDiagnostics_QueryStringIsOpaque: a route is left as written, but its query
-// and fragment are one placeholder (round 6). filesystem/browse logs
-// "?path=/Users/bruce/x" (the access log writes the raw query), the route
-// allowlist used to pass the whole target through untouched, and round 5 judged
-// the query value by value, which a raw "&", "#" or "=" in a directory name
-// defeats. Nothing after the first "?" or "#" is shown, in a value, a text line
-// and a JSON log line.
-func TestDiagnostics_QueryStringIsOpaque(t *testing.T) {
-	runPathCases(t, []pathCase{
-		same("/api/v1/filesystem/browse?path=/Users/bruce/x", "/api/v1/filesystem/browse?<query>"),
-		same("/api/v1/filesystem/browse?path=%2FUsers%2Fbruce", "/api/v1/filesystem/browse?<query>"),
-		same("/api/v1/filesystem/browse?path=%252FUsers%252Fbruce", "/api/v1/filesystem/browse?<query>"),
-		same("/api/v1/filesystem/browse?path=/srv/lib/Joker&show=all", "/api/v1/filesystem/browse?<query>"),
-		same("/api/v1/filesystem/browse?path=/srv/lib/Joker%20Wild%2F..%2F..%2Fhome%2Fbruce", "/api/v1/filesystem/browse?<query>"),
-		same("/api/v1/books?sort=title&page=2", "/api/v1/books?<query>"),
-		same("/api/v1/books?next=/api/v1/series", "/api/v1/books?<query>"),
-		same("/api/v1/books?sort=a%20b", "/api/v1/books?<query>"),
-		same("/metrics?path=/Users/bruce/x", "/metrics?<query>"),
-		same("/api/v1/books#/home/bruce/y", "/api/v1/books#<fragment>"),
-		same("/api/v1/books?a=1#/home/bruce/y", "/api/v1/books?<query>"),
-		// The pattern layer runs first and writes "c=[REDACTED]" for the nested
-		// URL-shaped tail; the query runs to the end of the chunk (G9), so the
-		// trailing "]" is inside it and nothing of it is left behind.
-		same("/api/v1/x?a=/api/x?b=/api/x?c=/api/x?d=/Users/bruce", "/api/v1/x?<query>"),
-	})
-
-	// The access log's own JSON line.
-	jl := logsOf(t, round4Roots, []string{
-		`{"msg":"request","path":"/api/v1/filesystem/browse?path=/Users/bruce/x","status":200}`,
-		`{"msg":"request","path":"/api/v1/filesystem/browse?path=%2FUsers%2Fbruce","status":200}`,
-	})
-	if strings.Contains(jl, "bruce") || strings.Count(jl, `filesystem/browse?<query>`) != 2 {
-		t.Errorf("access-log JSON lines:\n%s", jl)
-	}
-}
-
-// TestDiagnostics_BackslashDotDotUnderPosixRoot: filepath.Clean on a POSIX
-// host does not read "\" as a separator, and the rule's own rewrite did, so
-// "/srv/lib\..\..\home\bruce\x" came out as "<root:lib>/../../home/bruce/x".
-// A backslash is a separator only in a Windows path; a POSIX path whose
-// backslash reading leaves the root is "<path>", and one that stays keeps its
-// backslash (it is a character of a name there).
-func TestDiagnostics_BackslashDotDotUnderPosixRoot(t *testing.T) {
-	runPathCases(t, []pathCase{
-		same(`/srv/lib\..\..\home\bruce\x`, "<path>"),
-		same(`/srv/lib/x\..\..\..\home\bruce`, "<path>"),
-		same(`/srv/lib/x\..\..\vault\y`, "<path>"),
-		same(`/srv/lib/a\b/c`, `<root:lib>/a\b/c`),
-		same(`/srv/lib/a/\..\..\..\home\bruce`, "<path>"),
-		// n-2: the tail of a POSIX root is not rewritten.
-		same(`/srv/lib/a\b\c`, `<root:lib>/a\b\c`),
-	})
-}
-
-// TestDiagnostics_PathAfterAnyNonNameByte: the boundary is closed over the
-// bytes a name can hold, not an allowlist of delimiters, so a path is found
-// after "@", "+", "#", "!", "&", "*", a backslash escape, U+2028 and a doubled
-// slash, and inside a root's own tail.
-func TestDiagnostics_PathAfterAnyNonNameByte(t *testing.T) {
-	runPathCases(t, []pathCase{
-		same("see user@/home/bruce/x", "see user@<path>"),
-		same("a+/home/bruce/x", "a+<path>"),
-		same("note#/home/bruce/x", "note#<path>"),
-		same("wow!/home/bruce/x", "wow!<path>"),
-		same("a&/home/bruce/x", "a&<path>"),
-		same("a*/home/bruce/x", "a*<path>"),
-		same(`msg="l1\n/home/bruce/x"`, `msg="l1\n<path>"`),
-		same(`l1\t/home/bruce/x`, `l1\t<path>`),
-		same(`l1 /home/bruce/x`, `l1 <path>`),
-		same("l1 /home/bruce/x", "l1 <path>"),
-		same("//home/bruce/y", "<path>"),
-		same("open //home/bruce/y now", "open <path> now"),
-		same("file://localhost/home/bruce/z", "file://localhost<path>"),
-		same("file:///home/bruce/z", "file://<path>"),
-		same("/srv/lib/a b@/home/bruce/x", "<root:lib>/a b@<path>"),
-		same("/srv/lib/a@/home/bruce/x", "<root:lib>/a@<path>"),
-		same("/srv/lib/a=/home/bruce/x", "<root:lib>/a=<path>"),
-		same(`/srv/lib/a \n/home/bruce/x`, `<root:lib>/a \n<path>`),
-		// Not paths.
-		same("https://example.com/api/x", "https://example.com/api/x"),
-		same("and/or a/b w/o", "and/or a/b w/o"),
-		same("</div>", "</div>"),
-		// A name with letters of another script before a slash is one path as a
-		// whole value, spaces and all (a text line cuts at its first space).
-		{in: "/Users/Bruce Wayne/Café/x", value: "<path>"},
-	})
-}
-
-// TestDiagnostics_ExactEndpointsAndEncodedDotDot: an exact endpoint ends there
-// (or at a query); a ".." that arrives percent-encoded is a ".." to the router
-// and so to the rule; a bad escape or a backslash reading does not shelter.
-func TestDiagnostics_ExactEndpointsAndEncodedDotDot(t *testing.T) {
-	runPathCases(t, []pathCase{
-		same("/metrics/home/bruce/y", "<path>"),
-		same("/livez/home/bruce/z", "<path>"),
-		same("/readyz/home/bruce/z", "<path>"),
-		same("/api/%2e%2e/home/bruce", "<path>"),
-		same("/api/%2E%2E/home/bruce", "<path>"),
-		same("/api/%252e%252e/home/bruce", "<path>"),
-		same("/api/v1%2F..%2F..%2Fhome%2Fbruce", "<path>"),
-		same("/api/v1/x%zz/home/bruce", "<path>"),
-		same(`/api/..\..\home\bruce`, "<path>"),
-		same("/metrics/", "<path>"),
-		same("/livez/", "<path>"),
-		same("/metrics", "/metrics"),
-		same("/livez?x=1", "/livez?<query>"),
-		same("/readyz", "/readyz"),
-		same("/api/v1/books/%7Bid%7D", "/api/v1/books/%7Bid%7D"),
-		same("GET /api/v1/books/{id}", "GET /api/v1/books/{id}"),
-	})
-}
-
-// TestDiagnostics_DotRunsAndSentenceTail: a final segment of dots is a name
-// ("..." is legal), sentence punctuation after a path is cut, and neither
-// misnames the path.
-func TestDiagnostics_DotRunsAndSentenceTail(t *testing.T) {
-	runPathCases(t, []pathCase{
-		same("/srv/lib/...", "<root:lib>/..."),
-		same("/srv/lib/a/...", "<root:lib>/a/..."),
-		// A backslash escape ends a POSIX path: the text after it is not its tail.
-		same(`open /home/bruce/x\nnext line`, `open <path>\nnext line`),
-		same(`open /srv/lib/a\tnext`, `open <root:lib>/a\tnext`),
-		same("see /srv/lib/a.", "see <root:lib>/a."),
-		same("see /srv/lib/a..:", "see <root:lib>/a..:"),
-		same("open /srv/lib/a/b: denied", "open <root:lib>/a/b: denied"),
-		same("see /home/bruce/x.", "see <path>."),
-		same("/srv/lib/a/..", "<root:lib>"),
-	})
-}
-
 // TestDiagnostics_KeyThatIsOnePathIsReplacedWhole: a map key is a whole string
 // like a value, so a path with a space in it does not leak the part after the
 // space.
@@ -222,13 +91,13 @@ func TestDiagnostics_KeyThatIsOnePathIsReplacedWhole(t *testing.T) {
 		t.Fatal(err)
 	}
 	files := f.zipFiles(res.File)
-	assertNoneOf(t, files, "bruce", "k k")
+	assertNoneOf(t, files, "bruce", "k k", "Joker", "Wild")
 	var got map[string]int
 	if err := json.Unmarshal(files["batcave.v/d.json"], &got); err != nil {
 		t.Fatal(err)
 	}
-	if got["<path>"] != 1 || got["<root:lib>/Joker Wild/ch1"] != 2 {
-		t.Errorf("keys = %v, want <path> and <root:lib>/Joker Wild/ch1", got)
+	if got["<path>"] != 1 || got["<root:lib>"] != 2 {
+		t.Errorf("keys = %v, want <path> and <root:lib> (the tail under a root is hidden)", got)
 	}
 }
 
@@ -289,11 +158,12 @@ func TestDiagnostics_ViewerForSeesTheStampedMethod(t *testing.T) {
 }
 
 // TestDiagnostics_LongPathShapesThroughThePipeline: the log.Redactor runs before
-// the path rule and bounds the text it passes on (64 KiB, the rest is replaced),
-// so a shape is only a cost to the rule if it survives the redactor. These are the shapes that could (a long segment of mixed characters
-// with a trailing run of dots and colons, a run of dot segments, a long query),
-// sent through the real exporter; each must finish in a bounded time and leave
-// no path behind. The rule is linear, so the bound is far from the cost.
+// the sanitizer and bounds the text it passes on (64 KiB, the rest is replaced),
+// so a shape is only a cost to the sanitizer if it survives the redactor. These
+// are the shapes that could (a long segment of mixed characters with a trailing
+// run of dots and colons, a run of dot segments, a long query), sent through the
+// real exporter; none may leave a location behind. The cost is bounded by
+// TestSanitize_OpsAreLinear, which counts steps; there is no clock here.
 func TestDiagnostics_LongPathShapesThroughThePipeline(t *testing.T) {
 	lines := []string{
 		"open /x/a" + strings.Repeat(".", 60_000), // under the redactor's 64 KiB bound: reaches the path rule whole
@@ -312,13 +182,9 @@ func TestDiagnostics_LongPathShapesThroughThePipeline(t *testing.T) {
 			return io.NopCloser(strings.NewReader(strings.Join(lines, "\n") + "\n")), nil
 		}
 	})
-	start := time.Now()
 	res, err := f.build(e, "run-long", diagnostics.ExportParams{ActorID: "robin"})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if d := time.Since(start); d > 10*time.Second {
-		t.Errorf("redacting %d long lines took %s: some shape is not linear", len(lines), d)
 	}
 	assertNoneOf(t, f.zipFiles(res.File), "/home/bruce")
 }

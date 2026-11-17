@@ -1,7 +1,7 @@
 // file: internal/catalog/sequence.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d3f1b62-4a7e-4c19-b5d8-2e6a9c0f7d35
-// last-edited: 2026-10-01
+// last-edited: 2026-11-16
 
 package catalog
 
@@ -41,7 +41,7 @@ func ParseSequence(s string) (lo, hi float64, ok bool) {
 		}
 		return a, b, true
 	}
-	n, found := seqnum.ParsePosition(t)
+	n, found := seqnum.ParsePositionNoRange(t)
 	if !found {
 		return 0, 0, false
 	}

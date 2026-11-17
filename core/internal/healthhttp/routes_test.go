@@ -1,7 +1,7 @@
 // file: core/internal/healthhttp/routes_test.go
-// version: 1.0.2
+// version: 1.2.0
 // guid: e6dcf7f8-396a-47a8-b1bd-154ed75f5597
-// last-edited: 2026-11-14
+// last-edited: 2026-11-16
 
 package healthhttp
 
@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -381,6 +382,59 @@ func TestHealthRoute_DetailRedactedAndShaped(t *testing.T) {
 	}
 	if rep.header.Get("Cache-Control") != "no-store" {
 		t.Errorf("Cache-Control = %q", rep.header.Get("Cache-Control"))
+	}
+}
+
+// TestHealthRoute_DetailLocationsAreWiped (m1): component Detail is free text
+// that a probe writes from an error, so it passes the same location rule as the
+// bundle. A route given no Roots is fail-closed (every location "<path>"); one
+// given the library sanitizer names a root.
+func TestHealthRoute_DetailLocationsAreWiped(t *testing.T) {
+	cases := []struct{ detail, bare, rooted string }{
+		{"open /Users/selina/My Books/Hush: permission denied", "open <path>: permission denied", "open <path>: permission denied"},
+		{"scan /Volumes/Harvey Dent: open /Volumes/Harvey Dent/x: no such file or directory", "scan <path>: no such file or directory", "scan <path>: no such file or directory"},
+		{`stat C:\Users\Harleen Quinzel\Hush: The system cannot find the file specified.`, "stat <path>: The system cannot find the file specified.", "stat <path>: The system cannot find the file specified."},
+		{"smb://nas.example/home/selina/Hush", "<path>", "<path>"},
+		{"CGO_CFLAGS=-I/Users/selina/include", "<path>", "<path>"},
+		{"open /srv/lib/Jim Gordon/Hush.m4b: permission denied", "open <path>: permission denied", "open <root:lib>: permission denied"},
+		{"relay to https://oswald:" + hhSecretPw + "@penguin.example/Users/selina/x failed", "", ""},
+		{"queue is full", "queue is full", "queue is full"},
+	}
+	for _, mode := range []string{"bare", "rooted"} {
+		r := newRig(t)
+		r.mount(func(d *Deps) {
+			var comps []health.ComponentState
+			for i, c := range cases {
+				comps = append(comps, health.ComponentState{ID: health.ComponentID(fmt.Sprintf("core.c%d", i)), Result: health.Result{Status: health.StatusDegraded, Detail: c.detail}})
+			}
+			d.Health = hhRegistry{snap: health.Snapshot{Ready: true, Live: true, Components: comps}}
+			if mode == "rooted" {
+				d.Roots = []diagnostics.PathRoot{{Name: "lib", Path: "/srv/lib"}}
+			}
+		})
+		rep := r.do(hhAs(hhBruce, auth.MethodAPIKey, manage), "GET", "/health", "", "")
+		if rep.status != 200 {
+			t.Fatalf("%s: status %d: %s", mode, rep.status, rep.body)
+		}
+		var got healthResponse
+		if err := json.Unmarshal(rep.body, &got); err != nil {
+			t.Fatal(err)
+		}
+		for i, c := range cases {
+			want := c.bare
+			if mode == "rooted" {
+				want = c.rooted
+			}
+			d := got.Components[i].Detail
+			for _, leak := range []string{"selina", "Harvey", "Dent", "Harleen", "Quinzel", "Hush", "Jim", "Gordon", "Macintosh", hhSecretPw} {
+				if strings.Contains(d, leak) {
+					t.Errorf("%s: Detail %q holds %q", mode, d, leak)
+				}
+			}
+			if want != "" && d != want {
+				t.Errorf("%s: Detail(%q) = %q, want %q", mode, c.detail, d, want)
+			}
+		}
 	}
 }
 

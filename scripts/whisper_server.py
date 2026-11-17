@@ -1,10 +1,13 @@
 # file: scripts/whisper_server.py
-# version: 2.11.1
+# version: 2.12.0
 # guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-# last-edited: 2026-10-20
+# last-edited: 2026-11-16
 #
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.14,<3.15"
+# # Upper bound is deliberate: the default python3 on the Mac is 3.15, and
+# # uvicorn[standard] has no cp315 wheels yet, so an open ">=3.14" makes uv
+# # pick 3.15 and compile from source. Lift the cap once 3.15 wheels exist.
 # dependencies = [
 #   "faster-whisper>=1.0.0",
 #   "fastapi>=0.111",

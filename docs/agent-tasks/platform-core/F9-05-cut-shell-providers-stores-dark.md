@@ -1,16 +1,16 @@
 <!-- file: docs/agent-tasks/platform-core/F9-05-cut-shell-providers-stores-dark.md -->
-<!-- version: 1.0.7 -->
+<!-- version: 1.0.8 -->
 <!-- guid: 63f1b27d-a358-4726-9d66-3132e9ec5db8 -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-17 -->
 
 # F9-05 — Cut the shell-classified providers, stores and presentational pieces, dark: the Activity page with `useOperationsStore`, `operationGrouping` and `OperationTrackerProvider`, `AuthContext`, `ToastProvider`, `useAppStore`, the `storageKeys` split, `components/common`, `ErrorBoundary`, `KeyboardShortcutsDialog`, `AnnouncementBanner`, the four ui-kit hooks and the `apiFetch` group
 
 | Field | Value |
 |---|---|
 | ID | F9-05 |
-| Release | R3 (dark; merges after OWNER-05), flip label F9; the shell ships in R3 by default (plan §(l) item 7) |
+| Release | R3 (dark; merges after OWNER-05), flip label F9; the shell ships in R3 (owner direction 2026-11-16, plan §(l) item 7) |
 | Tier | **T3** (Opus / high): a cut of shell-classified providers, stores and presentational pieces, the Activity page among them; the import boundary must prove the cut and the SPA must behave the same |
-| Wave | W41 (alone). This row is the **first** of the three F9 cut rows: F9-02 and F9-04 depend on it and follow in W40 |
+| Wave | W42 (beside R3-05; file-disjoint). This row is the **first** of the three F9 cut rows: F9-02 and F9-04 depend on it and follow in W43. It moved from W41 on 2026-11-16, when F9-01 moved to W41 behind OWNER-05 |
 | Depends on | F9-01 (the `ui-kit`, `shell` and `api-client` packages), F8-04 (the last R2 flip: F4-08 through F8-04 edit the `web/src/` files this row moves), OWNER-05 |
 | Precondition | 07 §7.19 step 4: every R2 flip whose native routes the cut files call has merged (enforced by `Depends on`: F8-04) |
 | Spec | 07 §7.11 (the classification table: the rows named in the title), §7.9.1 (`AuthProvider`, the 401 rule, `safeReturn`), §7.3.1 (import boundary; ui-kit's graph), §7.4.2 (`TaskKindPresentation`, `ActivityPaneContribution`, `storageKey()`, the provider order), §7.18 (`shellStorageKeys.test.tsx`, `shortcuts.test.tsx`, `auth.flow.test.tsx`), §7.19 step 4 |
@@ -61,7 +61,7 @@ nothing to check here.
    `settings.showAdvanced` where their files move) become `storageKey()` names; `app-theme-mode` stays as it is for
    F9-03 to pass as `themeStorageKey` (07 §7.7, §7.10). No audiobook key name enters `core/web` (03 R1). The one-time
    reset of those preferences is the spec's, "at shell adoption" (07 §7.11), and R3-04's note lists it. F9 ships in R3
-   by default (plan §(l) item 7), and this row depends on OWNER-05, so it merges after R2 is cut and the reset
+   (plan §(l) item 7), and this row depends on OWNER-05, so it merges after R2 is cut and the reset
    reaches users only with R3, whose note lists it. Until F9-03 passes the app ID through
    `createShell`, give `storageKey()` ABO's app ID the way F9-01's shell exposes for a non-shell host, and say how in
    the PR.

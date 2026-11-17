@@ -1,7 +1,7 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.60.0 -->
+<!-- version: 1.61.1 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
-<!-- last-edited: 2026-11-14 -->
+<!-- last-edited: 2026-11-17 -->
 
 # Platform-core planning operation — state
 
@@ -71,6 +71,39 @@ S2 adopted (no flip-upgrade test; M8 registered once as `books.rewrite`, kept la
 freeze is the repository variable `RELEASE_FREEZE`, toggled by the owner in OWNER-02, OWNER-03, before F3-08 and in
 OWNER-05; R2-02 removed). Recorded in spec 02 §2.6 and OWNER-01.
 
+## Direction (2026-11-16)
+
+The owner's answers of 2026-11-16 change how the rest of the plan is worked. They are recorded in plan §(n) item 13
+(direction, agent cap, review tiers) and §(l) item 7 (F9 in R3).
+
+- **Product work comes first.** All seven flip rows (F3-07, F4-08, F5-18, F6-03, F7-09, F8-04, F9-03) are ON HOLD until
+  the owner lifts the hold. No agent starts, enqueues or merges one. The superseded line "finish the refactor as fast as
+  possible" (Owner 2026-11-07, under Blockers) still stands for the "no owner gates, no burn-in" part only.
+- **At most 3 agents** work on dark platform rows at a time.
+- **Two review tiers.** A purely dark row (code no live path executes) merges at 0 blocker and 0 major with CI green; no
+  mutation pass. Its minors go on a per-subsystem "must be empty before the flip" list: headerless `todo.d/` fragments
+  named `todo.d/<date>-<subsystem>-must-be-empty-before-<flip row>-flip.md` (first example: `todo.d/2026-11-16-jobwrites-must-be-empty-before-f5-18-flip.md`, merged in #4683 `d98ee6a67` and still in `todo.d/` on main, not yet folded into `TODO.md`), each entry
+  opened by a bold id that ends in the flip row (`**JOBWRITES-F5-18**`). Fragments fold into `TODO.md` daily and
+  are deleted, so the list is every entry whose id ends in that flip row, in `todo.d/` and in `TODO.md`. The flip row
+  will not merge while one is open. Flips, security rows and any code a live
+  path executes keep the full bar: adversarial review, mutation pass, delta rounds.
+- **F9, the whole web shell, moves to R3.** F9-01 to F9-05 all merge after OWNER-05. F9-01 moved from W31 to W41,
+  F9-05 from W41 to W42, F9-02 and F9-04 from W42 to W43; F9-03 stays W44. No R2 row depends on an F9 row (checked
+  against every `depends_on` in `tools/inventory.json`); OWNER-05's prose that said it follows F9-03 was stale and is
+  corrected. Critical path 82 to 83.5 working days (F9-01 is now on it); 106.5 in lockstep is unchanged. The plan
+  sentence that allows the move is §(l) item 7 ("09 lets the shell slip to R3"), with §(b)'s F9 row ("it moves to R3
+  unchanged") and R2-01's inventory note ("If F9 slips to R3, this PR drops F9-03 from its dependencies").
+- **F5-18 is to be split** into dark prep rows that land before the flip. The proposal, with every obligation and its
+  source, is `docs/plans/platform-core/F5-18-prep-split-proposal.md`; it creates no brief and changes none.
+
+Counts (computed 2026-11-17 from the Execution table below against the 134 ids of `tools/inventory.json`): **98 of 128
+agent briefs merged, 30 remaining**; owner checkpoints recorded in the table **4 of 6** (OWNER-01, OWNER-02, OWNER-03, OWNER-04;
+OWNER-05 and OWNER-06 are not reached); **102 of 134 rows recorded, 32 remaining**. Not
+counted as briefs: F4-02b and the R1-25 follow-up (table rows without an inventory id) and the side PRs. The 30 agent
+rows remaining: F3-07, F3-08, F4-08, F5-03, F5-04, F5-05, F5-12, F5-13, F5-14, F5-16, F5-18, F5-19, F6-03, F6-04,
+F6-05, F7-08, F7-09, F8-02, F8-04, F9-01, F9-02, F9-03, F9-04, F9-05,
+R2-01, R3-01, R3-02, R3-03, R3-04, R3-05.
+
 ## Execution
 
 | Wave | Rows | Merged (PR, commit) | Notes |
@@ -79,6 +112,7 @@ OWNER-05; R2-02 removed). Recorded in spec 02 §2.6 and OWNER-01.
 | W01 | R0-02 | #4388 `3169acbd6` | step-8 STOP: 3 tests asserted the defect; lead approved, 5 paths added to the inventory; bootstrap skill documents the 403 |
 | W01 | R0-04 | #4387 `d27b893b2` | no drift |
 | W01 | R0-06 | #4389 `32c432b12` | CodeQL `go/request-forgery` fixed with a release-tag match at the URL site; the AppConfig read ratchet kept by `config.Snapshot()` |
+| W01 | OWNER-01 | — | owner answers recorded 2026-11-05 on #4382 (https://github.com/falkcorp/audiobook-organizer/issues/4382#issuecomment-6668510906): P14 Branch A, Q-I (a) with the merge queue, R1 freeze kept, Q-G accepted; the brief's Status line says the same. Added to the table 2026-11-17: W01 predates the table's first entries for owner rows, so it was never listed |
 | W02 | R0-05 | #4391 `d617240ac` | T4 independent review: 0 BLOCKER, 1 MAJOR (blank saved password trimmed, invisible to P14) reverted to the brief, pinned by two rows; first PR through the merge queue |
 | W02 | R0-03 | #4393 `1df727a55` | step-6 STOP: 2 master-list tests asserted the defect; lead approved, 1 path added to the inventory |
 | W03 | OWNER-02 | — | owner-authorized run 2026-11-06: R0 production release **v0.223.0**, deployed, `RELEASE_FREEZE=R1`; recorded on #4382 |
@@ -169,6 +203,17 @@ OWNER-05; R2-02 removed). Recorded in spec 02 §2.6 and OWNER-01.
 | W38 | F7-03 | #4655 `6bb29e45b` | T4: core AI router, the `core.openai_compat` adapter and durable batch jobs (dark). Re-cut r2. Merged 2026-11-12 22:22 EST; not deployed yet |
 | W39 | F7-05 | #4662 `042c67282` | core notify service with webhook and email channels (dark). Merged 2026-11-13 |
 | W39 | F5-15 | #4659 `5112ee600` | native system-log journal in `core/log`, importer, tap and books cutover step M5 (dark; nothing registers the step or starts the tap until F5-18). Merged 2026-11-13 |
+| W40 | F4-07 | #4668 `68d6bc3c0` | T3: the reach oracle's books half with R0's recorded baseline (dark; tests and recorded data). Merged 2026-11-15 19:34 EST |
+| W40 | F8-03 | #4658 `34d4751ca` | T3: core health completed: probes, diagnostics and sysinfo (dark), after twelve review rounds. Its follow-up row F8-03b (the share-safe diagnostics bundle, brief `F8-03b-share-safe-bundle.md`) is the next row, merged as #4679. Merged 2026-11-15 19:44 EST |
+| W40 | F8-03b | #4679 `72f9414cd` | T3: the share-safe diagnostics bundle by structural redaction (dark; keeps wipe-to-end-of-line). Merged 2026-11-17 01:42 EST |
+| W40 | F5-06 | #4678 `1c402d70e` (row commit `40c594c29`) | T2: native kinds group 1 and six Effects resources (dark). One of six rows rebase-merged in the one integration PR #4678; supersedes the closed #4669. Merged 2026-11-16 01:18 EST |
+| W40 | F5-07 | #4678 `1c402d70e` (row commit `0eb8fa998`) | T2: native kinds group 2 (dark). Supersedes the closed #4663 |
+| W40 | F5-08 | #4678 `1c402d70e` (row commit `0f5eaef88`) | T2: native kinds group 3 (dark). Supersedes the closed #4660 |
+| W40 | F5-09 | #4678 `1c402d70e` (row commit `d44dee0ed`) | T2: native kinds group 4: whisper intros, duration backfill, ident index (dark). Supersedes the closed #4667. The yield-margin boundary mutant is recorded as equivalent in practice (`1c402d70e`) |
+| W40 | F5-10 | #4678 `1c402d70e` (row commit `dee75f759`) | T2: native kinds group 5 (dark). Supersedes the closed #4665 |
+| W40 | F5-11 | #4678 `1c402d70e` (row commit `d2b2dec03`) | T2: native kinds group 6, optimize child wait, opchange index (dark). Supersedes the closed #4664 |
+
+Side PR 2026-11-15 (not a plan row): #4677 `efb6c6e9d` (test-only: the executor's await tests count their goroutines from a bubble stack dump, not `NumGoroutine`), merged 2026-11-15 23:08 EST. Follow-up PR #4683 `d98ee6a67` (the live job write table derived from the traced store table, F5-01's table), merged 2026-11-17 01:45 EST. Side PR #4682 `b3cb300f6` (applygate: stop refusing correct matches over track ordinals and collected editions; product work, not a plan row), merged 2026-11-17 02:23 EST.
 
 Side PRs this period (not plan rows): #4400 `0f5f0d509` (promote dispatch with `GITHUB_TOKEN`), #4401 `cd7578a2c`
 (github-common pins → `23ed8a4`, nightly e2e skipped: it starts no server), #4402 `18348c535` (v0.223.0 changelog
@@ -207,11 +252,13 @@ Pending brief notes (2026-11-10), for briefs that agents are working from now an
 - Spec drift to note: 05-authn §3.2 still names `authsys.Principal`, found in the F4-09 re-verify; the spec text is to be reconciled.
 - F3-03 follow-up #4576 is merged. The core/config engine PR for an OIDC `Ref` in a list value is #4577 (not a plan row), in review fixes.
 
-Owner 2026-11-07: no owner gates and no burn-in periods; finish the refactor as fast as possible. Woodpecker runs only staticcheck and test-native-taglib from #4439 on; PRs gate on the GitHub test shards.
+Owner 2026-11-07: no owner gates and no burn-in periods; finish the refactor as fast as possible. **Superseded in part on 2026-11-16** (see Direction): product work comes first, all seven flips are on hold, at most 3 agents work on dark rows, and dark rows use the lighter review tier; "no owner gates and no burn-in" stands. Woodpecker runs only staticcheck and test-native-taglib from #4439 on; PRs gate on the GitHub test shards.
 
 ## Next action
 
-Status 2026-11-14: W39 merged 2 plan rows on 2026-11-13: F7-05 (#4662) and F5-15 (#4659). In review, not merged: 8 PRs (#4669 F5-06, #4660 F5-08, #4663 F5-07, #4667 F5-09, #4665 F5-10, #4664 F5-11, #4668 F4-07 and #4658 F8-03). F5-19 waited on F5-15, which is now merged. Still held: F3-08 (`RELEASE_FREEZE`) and the R1-27 owner action (host.conf and the root-owned rollback helpers). In plain terms: two more dark building blocks (notifications and the system-log journal) are in; nothing users see has changed.
+Status 2026-11-17: since the 2026-11-14 status below, W40 merged 9 plan rows: F4-07 (#4668) and F8-03 (#4658) on 2026-11-15, F5-06, F5-07, F5-08, F5-09, F5-10 and F5-11 together as #4678 on 2026-11-16, and F8-03b (#4679) on 2026-11-17; the eight PRs listed there as in review are resolved (F4-07 and F8-03 merged; #4669, #4660, #4663, #4667, #4665 and #4664 closed and superseded by #4678). Plan rows merged: 98 of 128 agent briefs (30 remaining); the four owner checkpoints with a table row are recorded (see Direction for the exact counts). F8-03b (#4679) and the side PR #4683 (the live job write table) merged on 2026-11-17 01:42 and 01:45 EST. By the owner's 2026-11-16 direction all seven flips are on hold, at most 3 agents work on dark platform rows, F9 moved to R3, and the F5-18 split proposal is `F5-18-prep-split-proposal.md`. Still held: F3-08 (`RELEASE_FREEZE`) and the R1-27 owner action (host.conf and the root-owned rollback helpers). In plain terms: six more of the old maintenance jobs now have switched-off new versions, plus health and access-reach checks; nothing users see has changed, and the switch-overs wait until the owner lifts the hold.
+
+Before W40: Status 2026-11-14: W39 merged 2 plan rows on 2026-11-13: F7-05 (#4662) and F5-15 (#4659). In review, not merged: 8 PRs (#4669 F5-06, #4660 F5-08, #4663 F5-07, #4667 F5-09, #4665 F5-10, #4664 F5-11, #4668 F4-07 and #4658 F8-03). F5-19 waited on F5-15, which is now merged. Still held: F3-08 (`RELEASE_FREEZE`) and the R1-27 owner action (host.conf and the root-owned rollback helpers). In plain terms: two more dark building blocks (notifications and the system-log journal) are in; nothing users see has changed.
 
 Before W39: Status 2026-11-13 01:40 EST: W38 (the 11-12 batch) merged 14 plan rows: F4-05, F7-02, F2-16, F3-06, F7-07, F4-11, F5-01, F6-02, F5-02, F7-06, F4-06, F6-01, F8-01 and F7-03, with follow-ups #4625, #4628, #4629, #4641, #4643, #4645 and #4647. Deployed twice on 2026-11-12 with `make deploy-debug`: 03:08 EST at `024ba0c4a` and 15:28 EST at `bfb2d4fc6` (health 200). Main has moved past the last deploy by F7-03 (#4655) and #4656. Being built now: 8 rows (F5-15, F7-05, F4-07, F8-03 and F5-06 to F5-09). Next ready: F5-10, F5-11, F5-12, F5-04, F5-05, F5-13, F5-16, F9-01 and F6-04. F5-19 waits on F5-15. Still held: F3-08 (`RELEASE_FREEZE`) and the R1-27 owner action (host.conf and the root-owned rollback helpers). In plain terms: the remaining dark building blocks (AI routing, backup, outbox, library, search index) are in, and the old maintenance and repair jobs are being moved onto the new task system; nothing users see has changed.
 

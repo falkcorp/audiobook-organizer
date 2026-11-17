@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.18.2
+// version: 1.19.0
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 
 package metafetch
 
@@ -145,8 +145,14 @@ func titleF1(title string, searchWords map[string]bool) float64 {
 // when the length ratio is meaningless for a non-token-overlap scorer).
 // ApplyNonBaseAdjustments applies bonuses/penalties to a base similarity score
 // based on metadata heuristics (series, narrator, language, etc.).
-func ApplyNonBaseAdjustments(baseScore float64, r metadata.BookMetadata, baseWordCount int) float64 {
-	score, _ := ApplyNonBaseAdjustmentsWithBreakdown(baseScore, r, baseWordCount)
+//
+// bookTitle is the STORED title of the book being matched, "" when there is no
+// book in scope (then the compilation penalty applies to every compilation
+// candidate, as it always did). It is read by one rule only: a book that is
+// itself a collected edition is not penalised for a candidate that is the same
+// edition (SameCollectedEdition).
+func ApplyNonBaseAdjustments(baseScore float64, r metadata.BookMetadata, baseWordCount int, bookTitle string) float64 {
+	score, _ := ApplyNonBaseAdjustmentsWithBreakdown(baseScore, r, baseWordCount, bookTitle)
 	return score
 }
 
@@ -167,15 +173,24 @@ func ApplyNonBaseAdjustmentsWithBreakdown(
 	baseScore float64,
 	r metadata.BookMetadata,
 	baseWordCount int,
+	bookTitle string,
 ) (float64, []ScoreStep) {
 	k := scoringKnobs()
 	rec := newScoreRecorder(baseScore, "Title/author match",
 		"Fuzzy F1 overlap between the search title/author and this result.")
 
-	// Compilation penalty
+	// Compilation penalty. Not applied when the book is itself the same
+	// collected edition (SameCollectedEdition): the penalty exists to keep a
+	// box set from outranking a single book, and recorded as a x1.00 step so a
+	// reviewer sees it was considered and lifted.
 	if isCompilation(r.Title) {
-		rec.mul("compilation", "Compilation penalty", k.CompilationPenalty,
-			"The result title looks like a box set or collection rather than a single book.")
+		if SameCollectedEdition(bookTitle, r.Title, r.Subtitle, r.SeriesPosition) {
+			rec.mulRecorded("compilation", "Compilation penalty", 1,
+				"The result is a collected edition, and so is the book, with the same range or wording: no penalty.")
+		} else {
+			rec.mul("compilation", "Compilation penalty", k.CompilationPenalty,
+				"The result title looks like a box set or collection rather than a single book.")
+		}
 	}
 
 	// Length penalty: penalise results that are much longer than the search.
@@ -895,6 +910,7 @@ func pickBestMatchFromScored(
 	searchWords map[string]bool,
 	bookAuthor, bookNarrator string,
 	bookRuntime localRuntime,
+	bookTitle string,
 	hints ...transcriptionHints,
 ) []metadata.BookMetadata {
 	f1MinScore := scoringKnobs().F1MinScore
@@ -921,12 +937,12 @@ func pickBestMatchFromScored(
 			if baseScore == 0 {
 				continue
 			}
-			score = ApplyNonBaseAdjustments(baseScore, r, len(searchWords))
+			score = ApplyNonBaseAdjustments(baseScore, r, len(searchWords), bookTitle)
 		} else {
 			// Non-F1 tiers (embedding, etc.) skip the length penalty by
 			// passing baseWordCount=0; the cosine-based base has no
 			// token-overlap ratio for the penalty to be meaningful.
-			score = ApplyNonBaseAdjustments(baseScore, r, 0)
+			score = ApplyNonBaseAdjustments(baseScore, r, 0, bookTitle)
 		}
 
 		// Author-based scoring: boost matches, penalize mismatches or missing.
@@ -988,8 +1004,11 @@ func pickBestMatchFromScored(
 // against a set of search-title significant words. It preserves the
 // pre-refactor signature and behavior, composing computeF1Base and
 // applyNonBaseAdjustments. Existing callers are unchanged.
-func ScoreOneResult(r metadata.BookMetadata, searchWords map[string]bool) float64 {
-	score, _ := ScoreOneResultWithBreakdown(r, searchWords)
+//
+// bookTitle is the stored title of the book (see ApplyNonBaseAdjustments), ""
+// when there is none.
+func ScoreOneResult(r metadata.BookMetadata, searchWords map[string]bool, bookTitle string) float64 {
+	score, _ := ScoreOneResultWithBreakdown(r, searchWords, bookTitle)
 	return score
 }
 
@@ -1005,6 +1024,7 @@ func ScoreOneResult(r metadata.BookMetadata, searchWords map[string]bool) float6
 func ScoreOneResultWithBreakdown(
 	r metadata.BookMetadata,
 	searchWords map[string]bool,
+	bookTitle string,
 ) (float64, ScoreBreakdown) {
 	base := computeF1Base(r, searchWords)
 	if base == 0 {
@@ -1020,7 +1040,7 @@ func ScoreOneResultWithBreakdown(
 		bd := rec.breakdown()
 		return bd.Score, *bd
 	}
-	score, steps := ApplyNonBaseAdjustmentsWithBreakdown(base, r, len(searchWords))
+	score, steps := ApplyNonBaseAdjustmentsWithBreakdown(base, r, len(searchWords), bookTitle)
 	return score, ScoreBreakdown{Score: score, Steps: steps}
 }
 
@@ -1130,7 +1150,7 @@ func (mfs *Service) bestTitleMatchForBook(
 	}
 
 	baseScores, baseTier := mfs.ScoreBaseCandidates(context.Background(), book, results, searchWords)
-	return pickBestMatchFromScored(results, baseScores, baseTier, searchWords, bookAuthor, bookNarrator, mfs.bookRuntime(book), hintsFromBook(book))
+	return pickBestMatchFromScored(results, baseScores, baseTier, searchWords, bookAuthor, bookNarrator, mfs.bookRuntime(book), book.Title, hintsFromBook(book))
 }
 
 // hintsFromBook extracts the audio-derived transcription fields from a book for
@@ -1319,7 +1339,9 @@ func BestTitleMatchWithContext(results []metadata.BookMetadata, bookAuthor, book
 		baseScores[i] = computeF1Base(r, searchWords)
 	}
 
-	return pickBestMatchFromScored(results, baseScores, "f1", searchWords, bookAuthor, bookNarrator, localRuntime{})
+	// No book in scope here (the title-only entry point): the compilation
+	// penalty keeps applying to every compilation candidate.
+	return pickBestMatchFromScored(results, baseScores, "f1", searchWords, bookAuthor, bookNarrator, localRuntime{}, "")
 }
 
 var scoreTitleStop = map[string]bool{

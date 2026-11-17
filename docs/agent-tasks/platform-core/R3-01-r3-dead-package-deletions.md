@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/R3-01-r3-dead-package-deletions.md -->
-<!-- version: 1.1.5 -->
+<!-- version: 1.1.6 -->
 <!-- guid: c637a7a0-9253-4a38-bf4b-34bc36514047 -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-17 -->
 
 # R3-01 — R3 deletions: serviceregistry, pkg/plugin/sdk with sdkguard, the no-op --db-type and SQLite flags, bookfiles, writeback; internal/models merged into internal/dedup/unified
 
@@ -10,7 +10,7 @@
 | ID | R3-01 |
 | Release | R3 (cleanup and the upgrade floor) |
 | Tier | **T2** (Sonnet / high): deletions of packages with no caller left, plus one small type merge; multi-file but fully specified |
-| Wave | W43 (beside R3-03; file-disjoint: this row owns `internal/books/services.go` in W46, R3-03 owns `internal/books/module.go`) |
+| Wave | W43 (beside R3-03, F9-02, F9-04; file-disjoint: this row owns `internal/books/services.go` in W46, R3-03 owns `internal/books/module.go`) |
 | Depends on | OWNER-05 (R2 released and deployed), R3-05 (books' `ServiceDefs` list emptied, so `internal/serviceregistry` has no registrant left) |
 | Spec | 09 §9.4 R3 "Content"; 04 §3.6 (the delete rows), §5 (`internal/models`), §6 (`pkg/plugin/sdk`, `tools/cmd/sdkguard`); 03 §3.8 R3; 06 §6.11.1 steps 3–6, §6.11.3 |
 

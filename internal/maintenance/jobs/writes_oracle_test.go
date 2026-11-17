@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/writes_oracle_test.go
-// version: 1.0.1
+// version: 1.2.0
 // guid: 40eadd67-76ac-419f-a3fe-7d1ed5e586e2
-// last-edited: 2026-11-15
+// last-edited: 2026-11-16
 
 package jobs_test
 
@@ -27,6 +27,23 @@ import (
 // oracleModule is the module whose code the oracle walks into; a call that
 // leaves it is judged by name only (os file mutators), never followed.
 const oracleModule = "github.com/falkcorp/audiobook-organizer"
+
+// oracleBuildTags and oracleEnv are the build the oracle walks: the production
+// binary's (Dockerfile and Makefile build -tags "embed_frontend fts5
+// native_taglib" for linux), not the host's. Without them the walk follows
+// reflink_darwin.go and fix_file_modes_unix.go on a Mac and the !native_taglib
+// files, which are not what ships.
+//
+// native_taglib is the one production tag left out: taglib_cgo.go imports "C"
+// and needs the vendored static libraries and a linux C toolchain to load, which
+// a developer machine does not have, so the walk would not type-check (the
+// !native_taglib variant, taglib_support.go, is walked instead). Both variants
+// reach the same store surface from scan-composer-tags (ResolvePathForWrite,
+// fileops.WriteTagsSafe, VerifyWritten), checked by reading both. CGO_ENABLED=0
+// keeps the load from invoking cgo for the same reason.
+const oracleBuildTags = "-tags=embed_frontend,fts5"
+
+var oracleEnv = []string{"GOOS=linux", "CGO_ENABLED=0"}
 
 // oracleVerb is what makes an interface method call a write. A method that
 // does not start with one of these is a read.
@@ -93,8 +110,9 @@ func oracleNoun(name string) string {
 
 // derivedWrites walks every function a job's Run reaches (closures included,
 // inside the module only) and returns the resource kinds it writes.
-func derivedWrites(prog *ssa.Program, runFn *ssa.Function) (kinds []string, evidence map[string]string, checkpoints bool) {
+func derivedWrites(prog *ssa.Program, runFn *ssa.Function) (kinds []string, evidence map[string]string, checkpoints bool, calls map[string]string) {
 	set := map[string]bool{}
+	calls = map[string]string{}
 	evidence = map[string]string{}
 	note := func(kind, why string) {
 		set[kind] = true
@@ -162,6 +180,9 @@ func derivedWrites(prog *ssa.Program, runFn *ssa.Function) (kinds []string, evid
 				if com.IsInvoke() {
 					name := com.Method.Name()
 					recv := types.TypeString(com.Value.Type(), func(p *types.Package) string { return p.Name() })
+					if _, ok := calls[recv+"."+name]; !ok {
+						calls[recv+"."+name] = f.String()
+					}
 					if oracleVerb.MatchString(name) && !oracleNotAWrite.MatchString(recv) {
 						note(oracleResource(recv, name), recv+"."+name+" in "+f.String())
 					}
@@ -178,6 +199,15 @@ func derivedWrites(prog *ssa.Program, runFn *ssa.Function) (kinds []string, evid
 				}
 				if callee.Pkg != nil && callee.Pkg.Pkg.Path() == "os" && oracleFileWriters[callee.Name()] {
 					note("files", "os."+callee.Name()+" in "+f.String())
+				}
+				if callee.Pkg != nil && strings.Contains(callee.Pkg.Pkg.Path(), "/internal/books/store") {
+					key := "STOREFN." + callee.Name()
+					if callee.Signature.Recv() != nil {
+						key = "STORECONCRETE." + types.TypeString(callee.Signature.Recv().Type(), func(p *types.Package) string { return p.Name() }) + "." + callee.Name()
+					}
+					if _, ok := calls[key]; !ok {
+						calls[key] = f.String()
+					}
 				}
 				// A concrete store type called directly (not through an
 				// interface) is judged like an interface call: the store
@@ -197,7 +227,7 @@ func derivedWrites(prog *ssa.Program, runFn *ssa.Function) (kinds []string, evid
 		kinds = append(kinds, k)
 	}
 	sort.Strings(kinds)
-	return kinds, evidence, checkpoints
+	return kinds, evidence, checkpoints, calls
 }
 
 // oracleJobWrites loads the jobs package with its dependencies' syntax and
@@ -207,16 +237,60 @@ type oracleJob struct {
 	writes      []string
 	evidence    map[string]string
 	checkpoints bool
+	// calls is every method the job's Run reaches on an interface, and every
+	// function or method of the store package it calls directly, as
+	// "<receiver>.<method>" (STOREFN.<name> for a store package function), with
+	// the function it was found in. The names are unfiltered: writes_trace_test.go
+	// decides which of them write.
+	calls map[string]string
+}
+
+// checkProductionBuild fails when the load did not pick the production build: the
+// linux variant of a file the jobs reach through internal/fileops, and not the
+// darwin one the host would give. A Config that silently stopped applying the
+// build flags would otherwise walk the wrong files and still pass.
+func checkProductionBuild(pkgs []*packages.Package) error {
+	var found bool
+	var bad error
+	packages.Visit(pkgs, nil, func(p *packages.Package) {
+		if p.PkgPath != oracleModule+"/internal/fileops" {
+			return
+		}
+		found = true
+		var linux, darwin bool
+		for _, f := range p.GoFiles {
+			switch {
+			case strings.HasSuffix(f, "reflink_linux.go"):
+				linux = true
+			case strings.HasSuffix(f, "reflink_darwin.go"):
+				darwin = true
+			}
+		}
+		if !linux || darwin {
+			bad = fmt.Errorf("the oracle did not load the linux build of internal/fileops (reflink_linux.go=%v, reflink_darwin.go=%v)", linux, darwin)
+		}
+	})
+	if !found {
+		return fmt.Errorf("internal/fileops is not in the jobs package's import graph; pick another file to check the build with")
+	}
+	return bad
 }
 
 func loadOracleJobs() (map[string]oracleJob, error) {
-	cfg := &packages.Config{Mode: packages.LoadAllSyntax}
+	cfg := &packages.Config{
+		Mode:       packages.LoadAllSyntax,
+		BuildFlags: []string{oracleBuildTags},
+		Env:        append(os.Environ(), oracleEnv...),
+	}
 	pkgs, err := packages.Load(cfg, "github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs")
 	if err != nil {
 		return nil, fmt.Errorf("load jobs package: %w", err)
 	}
 	if packages.PrintErrors(pkgs) > 0 {
 		return nil, fmt.Errorf("the jobs package does not type-check")
+	}
+	if err := checkProductionBuild(pkgs); err != nil {
+		return nil, err
 	}
 	prog, ssapkgs := ssautil.AllPackages(pkgs, ssa.InstantiateGenerics)
 	for _, p := range ssapkgs {
@@ -247,8 +321,8 @@ func loadOracleJobs() (map[string]oracleJob, error) {
 		if id == "" {
 			return nil, fmt.Errorf("job type %s: ID() does not return a constant string", tn.Name())
 		}
-		w, why, cp := derivedWrites(prog, prog.MethodValue(runSel))
-		out[id] = oracleJob{writes: w, evidence: why, checkpoints: cp}
+		w, why, cp, calls := derivedWrites(prog, prog.MethodValue(runSel))
+		out[id] = oracleJob{writes: w, evidence: why, checkpoints: cp, calls: calls}
 	}
 	return out, nil
 }
@@ -269,6 +343,16 @@ func oracleJobs(t *testing.T) map[string]oracleJob {
 	return oracleResult
 }
 
+// oracleKinds is every job's native kind, built with the real write sets.
+func oracleKinds(t *testing.T) []tasks.Definition {
+	t.Helper()
+	defs, err := jobs.Kinds(jobs.KindDeps{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return defs
+}
+
 // constantReturn is the string a one-statement method returns.
 func constantReturn(f *ssa.Function) string {
 	for _, b := range f.Blocks {
@@ -283,26 +367,34 @@ func constantReturn(f *ssa.Function) string {
 	return ""
 }
 
-// TestJobWrites_MatchSSAOracle derives every job's write set from its code
-// (the interface writes and file mutations its Run reaches) and compares it,
-// kind for kind, with the Effects the native kind declares. The count-only
-// check in TestKindShell_EffectsTable cannot see a swapped kind.
+// TestJobWrites_MatchSSAOracle derives every job's write set from its code by
+// NAME (the interface writes and file mutations its Run reaches, classified by
+// the receiver's and the method's noun) and requires the Effects the native kind
+// declares to cover it, kind for kind. It is a floor: it stops at the store and
+// reads names, so it cannot see what a store method writes underneath (the stale
+// stamp and the ident: rows of ModifyBook, the books aggregate behind a file-row
+// method). Equality with what the store writes is TestJobWrites_DerivedFromCodeAndSharedTable
+// in writes_trace_test.go, which reads the shared method-to-resource table.
+// Before 2026-11-16 this test demanded equality with the name classes, which
+// pinned the table to the oracle's blind spot (stack review M2).
 func TestJobWrites_MatchSSAOracle(t *testing.T) {
 	if os.Getenv("JOBWRITES_ORACLE_DUMP") != "" {
 		for id, j := range oracleJobs(t) {
 			fmt.Printf("ORACLE %s: %v checkpoints=%v %v\n", id, j.writes, j.checkpoints, j.evidence)
+			for c, in := range j.calls {
+				fmt.Printf("CALL %s: %s <- %s\n", id, c, in)
+			}
 		}
 		return
 	}
 	derived := oracleJobs(t)
-	defs := jobs.Kinds(jobs.KindDeps{}, nil)
+	defs := oracleKinds(t)
 	if len(defs) != len(derived) {
 		t.Errorf("%d kinds but the oracle found %d jobs", len(defs), len(derived))
 	}
 	for _, d := range defs {
 		id := strings.TrimPrefix(string(d.Kind()), "books.maintenance.")
 		dj, ok := derived[id]
-		want := dj.writes
 		if !ok {
 			t.Errorf("%s: the oracle found no job of that ID", id)
 			continue
@@ -313,8 +405,10 @@ func TestJobWrites_MatchSSAOracle(t *testing.T) {
 			got = append(got, r.Kind)
 		}
 		sort.Strings(got)
-		if !slices.Equal(got, want) {
-			t.Errorf("%s: declared writes %v, derived from the code %v (evidence %v)", id, got, want, dj.evidence)
+		for _, w := range dj.writes {
+			if !slices.Contains(got, w) {
+				t.Errorf("%s: declared writes %v lack %s, which the code names (evidence %v)", id, got, w, dj.evidence)
+			}
 		}
 	}
 }
@@ -325,7 +419,7 @@ func TestJobWrites_MatchSSAOracle(t *testing.T) {
 // read from the code, not from checkpointingJobs.
 func TestKindShell_ResumeContinueMeansCheckpoint(t *testing.T) {
 	derived := oracleJobs(t)
-	for _, d := range jobs.Kinds(jobs.KindDeps{}, nil) {
+	for _, d := range oracleKinds(t) {
 		id := strings.TrimPrefix(string(d.Kind()), "books.maintenance.")
 		got := tasks.CommonOf(d).Resume
 		if got == tasks.ResumeContinue && !derived[id].checkpoints {

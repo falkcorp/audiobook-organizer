@@ -1,5 +1,5 @@
 // file: internal/server/metadata_scoring_refactor_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 3a7c2b1d-e84f-4d59-9f16-0e5a8b2c4d7e
 
 package server
@@ -63,7 +63,7 @@ func TestScoreOneResult_RefactorEquivalence(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := metafetch.ScoreOneResult(tc.input, searchWords)
+			got := metafetch.ScoreOneResult(tc.input, searchWords, "")
 			assert.GreaterOrEqual(t, got, tc.minExp, "score below expected range")
 			assert.LessOrEqual(t, got, tc.maxExp, "score above expected range")
 		})
@@ -212,7 +212,7 @@ func TestMetadataScorer_WiredEndToEnd(t *testing.T) {
 	// main search loop's minScore check after applyNonBaseAdjustments).
 	var kept []int
 	for i, s := range scores {
-		adjusted := metafetch.ApplyNonBaseAdjustments(s, results[i], 0)
+		adjusted := metafetch.ApplyNonBaseAdjustments(s, results[i], 0, "")
 		if adjusted > config.AppConfig.MetadataScoring.EmbeddingMinScore {
 			kept = append(kept, i)
 		}

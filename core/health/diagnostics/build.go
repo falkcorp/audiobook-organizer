@@ -1,7 +1,7 @@
 // file: core/health/diagnostics/build.go
-// version: 1.1.0
+// version: 1.3.0
 // guid: 0e48d09a-7583-4133-9749-d96bbfaf2aa5
-// last-edited: 2026-11-15
+// last-edited: 2026-11-16
 
 package diagnostics
 
@@ -15,7 +15,7 @@ import (
 	"os"
 	"runtime/debug"
 	"slices"
-	"testing"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/mediacore/log"
@@ -130,12 +130,22 @@ type Config struct {
 	Contributors []Contributor
 	// Redactor is the pattern layer; nil means log.NewRedactor(nil).
 	Redactor *log.Redactor
-	// Roots are the known filesystem roots (the library roots): an absolute
-	// path inside one is written "<root:NAME>/...", any other absolute path
-	// "<path>", in every string of the bundle (within the limits listed in
-	// seams.d/F8-03.md Round 8; F8-03b).
-	Roots   []PathRoot
-	Metrics MetricsSink
+	// Roots are the known filesystem roots (the library roots): a location
+	// under one is written "<root:NAME>" (nothing after it), any other location
+	// "<path>", in every string of the bundle (Sanitizer; the residual and the
+	// costs are in seams.d/F8-03.md, "F8-03b").
+	Roots []PathRoot
+	// RoutePatterns returns the router's registered patterns, as the strings a
+	// producer writes into a `route` or `pattern` field (F8-04 passes the
+	// router's `Method + " " + Pattern` and `Pattern` for each route). It is
+	// called once per run. A `route` or `pattern` value is kept verbatim only
+	// when it is exactly one of them (and the entry has the shape of a route: an
+	// entry that spells a location is ignored); any other value goes through the
+	// Sanitizer. Nil, or a list with no usable entry, keeps nothing: every route
+	// value is sanitized, so the safe default is a bundle with "<path>" where a
+	// route was.
+	RoutePatterns func() []string
+	Metrics       MetricsSink
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 	// App and Version go in the manifest.
@@ -150,17 +160,6 @@ type Config struct {
 type Exporter struct {
 	cfg      Config
 	sections []Section
-	// isTestBinary is testing.Testing unless a test replaces it; nil (a zero
-	// Exporter) means testing.Testing. redesignRefusal reads it.
-	isTestBinary func() bool
-}
-
-// testBinary reports whether the process is a test binary.
-func (e *Exporter) testBinary() bool {
-	if e.isTestBinary != nil {
-		return e.isTestBinary()
-	}
-	return testing.Testing()
 }
 
 // manage is the permission every core section needs: what starting a bundle
@@ -171,16 +170,7 @@ func manage() rbac.Requirement { return rbac.Need("core:system.manage") }
 // contributors'. A malformed section (bad name, no Write, zero or delegated
 // Perm, a duplicate name, the reserved core.manifest) is an error here, at
 // boot, not a hole in a bundle later.
-//
-// While RedesignPendingF8_03b is true, New returns ErrRedesignPendingF8_03b
-// outside a test binary, before it looks at cfg.
-func New(cfg Config) (*Exporter, error) { return newExporter(cfg, testing.Testing) }
-
-// newExporter is New with the test-binary probe passed in.
-func newExporter(cfg Config, isTestBinary func() bool) (*Exporter, error) {
-	if err := redesignRefusal(RedesignPendingF8_03b, isTestBinary); err != nil {
-		return nil, err
-	}
+func New(cfg Config) (*Exporter, error) {
 	if cfg.Root == nil {
 		return nil, errors.New("diagnostics: Config.Root is nil")
 	}
@@ -199,7 +189,7 @@ func newExporter(cfg Config, isTestBinary func() bool) (*Exporter, error) {
 	if cfg.BuildInfo == nil {
 		cfg.BuildInfo = debug.ReadBuildInfo
 	}
-	e := &Exporter{cfg: cfg, isTestBinary: isTestBinary}
+	e := &Exporter{cfg: cfg}
 	all := e.coreSections()
 	for _, c := range cfg.Contributors {
 		if c == nil {
@@ -303,11 +293,20 @@ func (e *Exporter) coreSections() []Section {
 	return out
 }
 
+// routeSet is the registered patterns of this run (Config.RoutePatterns).
+func (e *Exporter) routeSet() routeSet {
+	if e.cfg.RoutePatterns == nil {
+		return nil
+	}
+	return newRouteSet(e.cfg.RoutePatterns())
+}
+
 // build is one run's state.
 type build struct {
 	zw        *zip.Writer
 	red       *log.Redactor
-	roots     pathRoots
+	san       Sanitizer
+	routes    routeSet
 	counts    counts
 	written   map[string]bool
 	truncated []string
@@ -377,15 +376,7 @@ func checkStampedActor(stamped tasks.Actor, p ExportParams) error {
 // actor other than p.ActorID gets ErrActorMismatch and no file.
 // progress (nil allowed) is called after each section with how many are done of
 // how many are planned.
-//
-// While RedesignPendingF8_03b is true, Build returns ErrRedesignPendingF8_03b
-// outside a test binary and writes nothing.
 func (e *Exporter) Build(ctx context.Context, runID string, actor tasks.Actor, p ExportParams, progress func(done, total int)) (res ExportResult, err error) {
-	// First, before the actor check, the run id or any file: while the path
-	// redactor is the one F8-03b replaces, no bundle is written outside a test.
-	if err := redesignRefusal(RedesignPendingF8_03b, e.testBinary); err != nil {
-		return ExportResult{}, err
-	}
 	if err := checkStampedActor(actor, p); err != nil {
 		e.countBundle("error")
 		return ExportResult{}, err
@@ -422,7 +413,8 @@ func (e *Exporter) Build(ctx context.Context, runID string, actor tasks.Actor, p
 	st := &build{
 		zw:      zip.NewWriter(f),
 		red:     e.cfg.Redactor,
-		roots:   newPathRoots(e.cfg.Roots),
+		san:     NewSanitizer(e.cfg.Roots),
+		routes:  e.routeSet(),
 		written: map[string]bool{},
 		limit:   e.cfg.MaxFileBytes,
 		now:     e.cfg.Now,
@@ -543,9 +535,19 @@ func (e *Exporter) runSection(ctx context.Context, st *build, sec Section, v Vie
 }
 
 // writeManifest writes core.manifest/manifest.json. It does not pass through
-// the section writer (the manifest is the account of what that did) but its
-// free text, the section errors, was redacted when recorded.
+// the section writer (the manifest is the account of what that did), so every
+// free-text field passes the sanitizer here: the section errors were redacted
+// when recorded, and App, Version, ActorID and the truncated entry names (each
+// name already passed entry()) are read again, one path element at a time.
 func (st *build) writeManifest(m Manifest) error {
+	m.App, m.Version, m.ActorID = st.san.Text(m.App), st.san.Text(m.Version), st.san.Text(m.ActorID)
+	for i, t := range m.Truncated {
+		parts := strings.Split(t, "/")
+		for j, p := range parts {
+			parts[j] = st.san.Text(p)
+		}
+		m.Truncated[i] = strings.Join(parts, "/")
+	}
 	zw, err := st.zw.CreateHeader(&zip.FileHeader{Name: ManifestFile, Method: zip.Deflate, Modified: st.now()})
 	if err != nil {
 		return fmt.Errorf("diagnostics: create manifest: %w", err)

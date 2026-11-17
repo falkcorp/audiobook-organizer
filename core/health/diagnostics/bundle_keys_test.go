@@ -1,7 +1,7 @@
 // file: core/health/diagnostics/bundle_keys_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 8d2f4a61-7c03-4e95-b1a8-3f6e0c9d5b72
-// last-edited: 2026-11-15
+// last-edited: 2026-11-16
 
 package diagnostics
 
@@ -15,10 +15,9 @@ import (
 	"github.com/falkcorp/mediacore/log"
 )
 
-// keysBuild is a build that walks objects: the redactor and the path roots of
-// the scaling tests, and nothing it writes.
+// keysBuild is a build that walks objects: the redactor and a sanitizer over one root, and nothing it writes.
 func keysBuild() *build {
-	return &build{red: log.NewRedactor(nil), roots: scalingRoots(), written: map[string]bool{}}
+	return &build{red: log.NewRedactor(nil), san: NewSanitizer([]PathRoot{{Name: "lib", Path: "/srv/lib"}}), written: map[string]bool{}}
 }
 
 // referenceKeys is walkObject's suffix rule as it was written before it was made
@@ -54,17 +53,17 @@ func TestWalkObject_CollisionSuffixFormatIsPinned(t *testing.T) {
 		"/Users/bruce/a": 1, // sorted first: keeps "<path>"
 		"/Users/bruce/b": 2, // "<path>#2"
 		"/Users/bruce/c": 3, // "<path>#3"
-		"/srv/lib/x":     4, // under a root: "<root:lib>/x", no collision
+		"/srv/lib/x":     4, // under a root: "<root:lib>", no collision
 		"<path>#2":       5, // a real key reading like a suffix: moved aside
 		"Robin":          6, // untouched
 	}, 0)
 	want := map[string]any{
-		"<path>":       1,
-		"<path>#2":     2,
-		"<path>#3":     3,
-		"<root:lib>/x": 4,
-		"<path>#2#2":   5,
-		"Robin":        6,
+		"<path>":     1,
+		"<path>#2":   2,
+		"<path>#3":   3,
+		"<root:lib>": 4,
+		"<path>#2#2": 5,
+		"Robin":      6,
 	}
 	if !maps.Equal(got, want) {
 		t.Errorf("collision keys changed:\n got  %v\n want %v", got, want)
@@ -73,7 +72,7 @@ func TestWalkObject_CollisionSuffixFormatIsPinned(t *testing.T) {
 	// No collision, no suffix: a bundle without colliding keys is byte for byte
 	// what it was.
 	plain := map[string]any{"Robin": 1, "Alfred": 2, "/srv/lib/y": 3, "Bat": 4}
-	if got := st.walkObject(plain, 0); !maps.Equal(got, map[string]any{"Robin": 1, "Alfred": 2, "<root:lib>/y": 3, "Bat": 4}) {
+	if got := st.walkObject(plain, 0); !maps.Equal(got, map[string]any{"Robin": 1, "Alfred": 2, "<root:lib>": 3, "Bat": 4}) {
 		t.Errorf("keys with no collision were suffixed or altered: %v", got)
 	}
 }

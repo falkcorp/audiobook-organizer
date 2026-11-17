@@ -1,7 +1,7 @@
 // file: internal/metafetch/transcription_match_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 9d3f1a6c-2b85-4e07-bc41-7a8e0f2d5c39
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 
 package metafetch
 
@@ -29,7 +29,7 @@ func TestPickBestMatch_TranscriptionBoost(t *testing.T) {
 		words := SignificantWords("The Long Halloween")
 		th := transcriptionHints{title: "The Long Halloween"}
 
-		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{Sec: 36000}, th)
+		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{Sec: 36000}, "", th)
 		require.NotEmpty(t, matched)
 		assert.Equal(t, "The Long Halloween", matched[0].Title)
 	})
@@ -43,7 +43,7 @@ func TestPickBestMatch_TranscriptionBoost(t *testing.T) {
 		words := SignificantWords("Knightfall")
 		th := transcriptionHints{author: "Bruce Wayne"}
 
-		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{Sec: 36000}, th)
+		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{Sec: 36000}, "", th)
 		require.NotEmpty(t, matched)
 		assert.Equal(t, "Bruce Wayne", matched[0].Author)
 	})
@@ -58,8 +58,8 @@ func TestPickBestMatch_TranscriptionBoost(t *testing.T) {
 
 		// Empty variadic (no hints) and an explicit-empty hint must both match
 		// the pre-feature result: highest base score wins.
-		withoutArg := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{})
-		withEmpty := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{}, transcriptionHints{})
+		withoutArg := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{}, "")
+		withEmpty := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{}, "", transcriptionHints{})
 		require.NotEmpty(t, withoutArg)
 		require.NotEmpty(t, withEmpty)
 		assert.Equal(t, "Knightfall", withoutArg[0].Title)

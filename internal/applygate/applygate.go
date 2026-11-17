@@ -1,7 +1,7 @@
 // file: internal/applygate/applygate.go
-// version: 1.17.3
+// version: 1.22.0
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 // Package applygate is the certainty gate every BULK metadata apply consults
 // before it writes a candidate onto a book: the cached batch apply
@@ -47,6 +47,8 @@ package applygate
 
 import (
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -83,6 +85,20 @@ const (
 	ReasonSequenceMissingOnCandidate     = "sequence_missing_on_candidate"
 	ReasonBookSequenceConflict           = "book_sequence_conflict"
 	ReasonCandidateSequenceConflict      = "candidate_sequence_conflict"
+	// ReasonSequenceUnconfirmed: the sequence leg passed only by setting a
+	// weak number aside (a leading ordinal, a track number) while the stored
+	// series position was the book's only strong number. That position is
+	// the field most likely to be stale, so the pass is not enough for an
+	// unattended apply: the title must agree against a title that is not just
+	// the series name, and the runtime must be known and agree
+	// (corroborationRefusal).
+	ReasonSequenceUnconfirmed = "sequence_unconfirmed"
+	// ReasonCollectedRuntimeUnconfirmed: the book or the candidate is a
+	// collected edition (an omnibus, a box set, a range of volumes) and the
+	// runtime check did not agree. A collected edition's identity is a
+	// number and a few words, and two editions of one author share both, so
+	// only a known runtime within RuntimeAgreeRatio applies one unattended.
+	ReasonCollectedRuntimeUnconfirmed = "collected_edition_runtime_unconfirmed"
 	// ReasonReviewOnlySource refuses a candidate from a review-only source
 	// (ReviewOnlySource: Open Library, Google Books). An owner review pin
 	// of the shown candidate lifts it -- that is the owner applying it by
@@ -109,6 +125,19 @@ type SourceNumber struct {
 	Source string `json:"source"` // series_position | title | subtitle | file_name | folder_name
 	Number string `json:"number"`
 	Form   string `json:"form"`
+	// Weak marks a number that is about the file or its place in a list, not
+	// about the volume: a leading ordinal ("08 - Title"), the number a
+	// chapter/track/disc/part word or an "N of M" names when that is the
+	// number the reader parsed, or a collected edition's range read off a file
+	// or folder name. A weak number is set aside whenever a stronger source
+	// exists; with no stronger source it still counts, so it can only ever
+	// remove a conflict between two sources, never hide the book's only number
+	// (BookNumbers, agree). Setting a weak number aside that DISAGREES with the
+	// stronger source is never enough to apply unattended: the stronger
+	// sources are fields an earlier apply can have written, so the verdict
+	// carries SequenceVerdict.WeakSetAside and the gate refuses it as
+	// sequence_unconfirmed.
+	Weak bool `json:"weak,omitempty"`
 }
 
 // SequenceVerdict is the result of CheckSequence.
@@ -118,6 +147,15 @@ type SequenceVerdict struct {
 	Detail           string         `json:"detail,omitempty"`
 	BookNumbers      []SourceNumber `json:"book_numbers,omitempty"`
 	CandidateNumbers []SourceNumber `json:"candidate_numbers,omitempty"`
+	// WeakSetAside is set on a PASSING verdict that set a weak number aside
+	// although it disagrees with the book's strong number: the text says what
+	// was set aside, why it looks like a track or list number, and why the
+	// remaining sources do not settle it. EvaluateTranscribed always refuses
+	// it as sequence_unconfirmed, whatever the title and runtime say: every
+	// strong source on the book (the stored title, the stored series position,
+	// an unmarked file or folder name) is a field an earlier apply or rename
+	// can have written, so none is independent evidence of the volume.
+	WeakSetAside string `json:"weak_set_aside,omitempty"`
 }
 
 // Verdict is the whole gate's decision for one book/candidate pair.
@@ -138,6 +176,12 @@ type Verdict struct {
 	// (ReviewedTranscriptionAgrees). It is an annotation for an owner-reviewed
 	// row apply and decides nothing: no leg reads it.
 	TranscriptionAgreesOnReview bool `json:"transcription_agrees_on_review,omitempty"`
+	// Unconfirmed lists the combined-leg reasons (ReasonSequenceUnconfirmed,
+	// ReasonCollectedRuntimeUnconfirmed) that WOULD refuse this pair, whatever
+	// earlier leg refused first. They are computed unconditionally so an owner
+	// override record (RefusingReasons) never silently covers a reason the owner
+	// was not shown.
+	Unconfirmed []string `json:"unconfirmed,omitempty"`
 	// IdentityEvidence is set when the candidate passed the title check or
 	// the identity leg on the transcribed title it was found by
 	// (EvaluateTranscribed) and the verdict is not identity_stale or
@@ -365,6 +409,15 @@ func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookR
 	if identityLifted {
 		used = true
 	}
+	seqUnconfirmed, collUnconfirmed := "", ""
+	seqUnconfirmed = v.Sequence.WeakSetAside
+	collUnconfirmed = collectedRuntimeRefusal(book, c, v.Sequence, v.Evidence)
+	if seqUnconfirmed != "" {
+		v.Unconfirmed = append(v.Unconfirmed, ReasonSequenceUnconfirmed)
+	}
+	if collUnconfirmed != "" {
+		v.Unconfirmed = append(v.Unconfirmed, ReasonCollectedRuntimeUnconfirmed)
+	}
 	manualReason, manualDetail := ManualOnlyDetail(book, c, ts, guard)
 	rejectReason, rejectDetail := rejections.refusal(c)
 
@@ -408,6 +461,12 @@ func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookR
 		v.Reason, v.Detail = v.Sequence.Reason, v.Sequence.Detail
 	case !v.Evidence.Pass:
 		v.Reason, v.Detail = v.Evidence.Reason, v.Evidence.Detail
+	case seqUnconfirmed != "":
+		v.Reason = ReasonSequenceUnconfirmed
+		v.Detail = seqUnconfirmed
+	case collUnconfirmed != "":
+		v.Reason = ReasonCollectedRuntimeUnconfirmed
+		v.Detail = collUnconfirmed
 	default:
 		v.Allowed = true
 	}
@@ -440,10 +499,26 @@ func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookR
 //   - book has a number, candidate has none → BLOCK;
 //   - both have one and they differ → BLOCK;
 //   - neither has one, or only the candidate has one → pass.
+//
+// A number is a single position or a range (seqnum.Number.IsRange: "Books
+// 1-3", position "1-3"). A range equals only the same range, so a single
+// volume is never matched to a box set, a box set never to one of its
+// volumes, and "Books 1-3" never to "Books 1-5". Weak numbers (SourceNumber
+// .Weak: leading ordinals and track numbers) are set aside whenever a stronger
+// source exists on the same side, so "08 - Title" against series position 6
+// is one book numbered 6, not a conflict. When the weak number disagrees with
+// that stronger source the verdict passes with WeakSetAside set, and the gate
+// (EvaluateTranscribed) refuses it as sequence_unconfirmed: a stored position
+// or title can be stale, and the gate cannot tell which of the two numbers is.
 func CheckSequence(book *database.Book, c *metafetch.MetadataCandidate) SequenceVerdict {
 	v := SequenceVerdict{BookNumbers: BookNumbers(book), CandidateNumbers: CandidateNumbers(c)}
-	bookNum, bookOK, bookConflict := agree(v.BookNumbers, false)
-	candNum, candOK, candConflict := agree(v.CandidateNumbers, false)
+	bookSide := resolve(v.BookNumbers, false)
+	candSide := resolve(v.CandidateNumbers, false)
+	bookNum, bookOK, bookConflict := bookSide.Num, bookSide.OK, bookSide.Conflict
+	candNum, candOK, candConflict := candSide.Num, candSide.OK, candSide.Conflict
+	// The side whose verdict decides the pass: the weak numbers it dropped are
+	// the ones that must still equal the number its remaining sources agreed on.
+	decided := bookSide
 
 	switch {
 	case bookConflict:
@@ -457,7 +532,8 @@ func CheckSequence(book *database.Book, c *metafetch.MetadataCandidate) Sequence
 		// Only here, where the candidate names no number, does a part suffix
 		// stand aside: "Rogue Lawyer - 001" and "Wheel of Time - 003" look the
 		// same, so a candidate with a DIFFERENT number still refuses below.
-		if _, ok, conflict := agree(v.BookNumbers, true); !ok && !conflict {
+		if skip := resolve(v.BookNumbers, true); !skip.OK && !skip.Conflict {
+			decided = skip
 			v.Pass = true
 			v.Detail = "book's only number is a part suffix (" + describe(v.BookNumbers) + "), candidate has no number"
 			break
@@ -465,10 +541,60 @@ func CheckSequence(book *database.Book, c *metafetch.MetadataCandidate) Sequence
 		v.Reason, v.Detail = ReasonSequenceMissingOnCandidate, "book is #"+bookNum.Text+" ("+describe(v.BookNumbers)+"), candidate has no number"
 	case !seqnum.Equal(bookNum, candNum):
 		v.Reason, v.Detail = ReasonSequenceMismatch, "book is #"+bookNum.Text+", candidate is #"+candNum.Text
+		if bookNum.IsRange() || candNum.IsRange() {
+			v.Detail += " (a collected edition is never matched to a different range or to a single volume)"
+		}
 	default:
 		v.Pass = true
 	}
+	if v.Pass {
+		v.WeakSetAside = weakSetAside(decided)
+	}
 	return v
+}
+
+// weakSetAside refuses what resolve set aside: it returns a reason ("" for
+// none) when any weak number resolve dropped differs from the number the
+// remaining sources agreed on. It reads only resolve's own partition, so what
+// counts as a strong source is decided in one place; there is no second
+// notion of "strong" here to drift from it. The rule it enforces: the
+// sequence leg passes only if every book-side number, weak ones included,
+// equals the candidate's; weak numbers change the REASON (review, with a
+// track-number explanation, instead of a hard conflict), never the outcome
+// from refuse to allow.
+//
+// There is no independent source to corroborate with: the stored title, the
+// stored series position and a file or folder name (a "Book N" marker
+// included: the shipped naming patterns copy the stored title into both
+// names) are all fields an earlier, possibly wrong, apply or rename can have
+// written, so a weak number that disagrees with them is never confirmed by
+// them. An earlier version let the title and runtime checks stand in for a
+// second source; they cannot: the title check agrees on any shared title
+// segment, so two volumes of one storyline confirmed each other.
+func weakSetAside(side sideNumber) string {
+	if len(side.Dropped) == 0 || len(side.Kept) == 0 {
+		return ""
+	}
+	strong := side.Kept[0]
+	for _, w := range side.Dropped {
+		if n, _ := seqnum.ParsePosition(w.Number); !seqnum.Equal(side.Num, n) {
+			return weakKind(w) + " " + w.Number + " in the " + w.Source + " looks like a list or track number, not a volume; " +
+				"it was set aside for the " + strong.Source + " " + strong.Number + ", but the stored title, the stored series position and the file and folder names " +
+				"are all fields an earlier apply can have written, so the volume is not confirmed"
+		}
+	}
+	return ""
+}
+
+// weakKind names how a weak number was read, for a detail an owner reads.
+func weakKind(s SourceNumber) string {
+	if n, ok := seqnum.ParsePosition(s.Number); ok && n.IsRange() {
+		return "the range"
+	}
+	if s.Form == "leading" {
+		return "the leading number"
+	}
+	return "the track, disc or part number"
 }
 
 // Forms of a book source that may be only a part number. They count like any
@@ -487,6 +613,15 @@ const (
 	// (matcher.IdentifySeries), so such a position is the suffix again, not
 	// a second piece of evidence.
 	FormDerivedPosition = "part_suffix_position"
+	// FormRangeEndpoint: a series position equal to an end of the range the
+	// book's own TITLE states ("Books 1-3" with position 3). The importer
+	// read the range as its last (plural) or first (singular) number and
+	// stored that, so the position is the title again, not a second opinion.
+	// The range governs and the position is set aside on every comparison;
+	// a position inside the range (2 for "Books 1-3") is a real
+	// disagreement and still blocks. Only the title sets it aside: a range
+	// in a folder or file name is weak, and never overrides a position.
+	FormRangeEndpoint = "range_endpoint_position"
 )
 
 // BookNumbers lists every number found on the book, one per source.
@@ -509,6 +644,7 @@ func BookNumbers(book *database.Book) []SourceNumber {
 			out = append(out, SourceNumber{Source: src, Number: n.Text, Form: n.Form})
 		}
 	}
+	// addText reads one text.
 	addText := func(src, text string) {
 		if n, stem, ok := seqnum.PartSuffix(text); ok {
 			out = append(out, SourceNumber{Source: src, Number: n.Text, Form: FormPartSuffix})
@@ -516,7 +652,26 @@ func BookNumbers(book *database.Book) []SourceNumber {
 			return
 		}
 		n, ok := seqnum.Parse(text)
-		add(src, n, ok)
+		if !ok {
+			return
+		}
+		out = append(out, SourceNumber{Source: src, Number: n.Text, Form: n.Form,
+			Weak: weakBookNumber(src, text, n)})
+		// seqnum.Parse reads ONE number per text and prefers the leading one,
+		// so a leading list number would hide a number the title itself
+		// states ("01 - Batman: Year 2" has the 2 as well as the 01). For the
+		// stored TITLE the text after the leading number is read too, so adding
+		// a list number to a title never removes the title's own number from
+		// the comparison. File and folder names are not: their trailing number
+		// is routinely a track count ("01 Opening Credits 57.mp3").
+		if n.Form == "leading" && src == "title" {
+			if rest := leadingNumberRe.ReplaceAllString(text, ""); rest != text {
+				if rn, rok := seqnum.Parse(rest); rok && rn.Form != "leading" {
+					out = append(out, SourceNumber{Source: src, Number: rn.Text, Form: rn.Form,
+						Weak: weakBookNumber(src, rest, rn)})
+				}
+			}
+		}
 	}
 	switch {
 	case book.SeriesPositionRaw != nil && strings.TrimSpace(*book.SeriesPositionRaw) != "":
@@ -539,7 +694,102 @@ func BookNumbers(book *database.Book) []SourceNumber {
 			addText("folder_name", base)
 		}
 	}
+	out = markRangeEndpoint(out, "title")
 	return discountPartSuffix(book, out, stems)
+}
+
+// trackTagRe is a chapter, track, disc or part tag word at a word boundary and
+// the number it names ("Chapter 1", "Track 07", "Disc 2", "Pt. 3"); "ch" is
+// matched only as a whole word, so "Watch 2" is not a chapter. trackOfRe is
+// the "3 of 20" track form. Both are anchored on purpose: the shared
+// metadata.ExtractTrackInfoFromFilename patterns are not, and a weak mark is
+// a reason to set a number aside.
+var (
+	trackTagRe = regexp.MustCompile(`(?i)\b(?:chapter|chap|ch|track|trk|disc|disk|cd|part|pt)\.?\s*0*(\d+(?:\.\d+)?)\b`)
+	// leadingNumberRe is the leading list number seqnum.Parse reads as a
+	// "leading" number, with its separator.
+	leadingNumberRe = regexp.MustCompile(`^\s*\d{1,3}(?:\.\d+)?\s*[-._:)]?\s+`)
+	trackOfRe       = regexp.MustCompile(`(?i)(?:^|[\s_.\-\[(])0*(\d+)\s+of\s+\d+\b`)
+	// trackLeadRe is a number that STARTS the text and is directly followed by
+	// a tag word ("02 Chapter 1", "03 - Track 07"): the leading number is the
+	// ordinal of that chapter or track in its list.
+	trackLeadRe = regexp.MustCompile(`(?i)^\W*0*(\d+(?:\.\d+)?)\s*[-._)]*\s*(?:chapter|chap|ch|track|trk|disc|disk|cd|part|pt)\b`)
+)
+
+// weakBookNumber reports whether a number read from one of the book's own
+// texts says something about the file or its list position rather than the
+// volume. src is the source name, text the text it was read from.
+//
+//   - an explicit keyword ("Book 3", "Vol. 2", "#4") and a bracketed number
+//     are the title speaking about the volume: never weak;
+//   - a collected edition's range read off a file or folder name labels the
+//     set of files, not the book: weak;
+//   - a LEADING number ("08 - Title", "02 Title") numbers the title in a
+//     list, whether the list is a series folder or a set of tracks: weak;
+//   - the number a chapter, track, disc or part tag word (or "N of M") names,
+//     or the leading number such a tag word follows ("02 Chapter 1"), and only
+//     when that IS the number the reader parsed: a track tag elsewhere
+//     in the text says nothing about a volume number read from a different
+//     place ("Year One 3 - Track 07" is volume 3, the track is 7).
+//
+// A trailing number ("Big Cats 3", "Knightfall Omnibus 2") is the shape the
+// gate was built to protect and stays strong, so bundle words (omnibus, pack,
+// box set, collection) are never tag words here.
+func weakBookNumber(src, text string, n seqnum.Number) bool {
+	if n.Form == "marker" || n.Form == "bracket" {
+		return false
+	}
+	if n.IsRange() {
+		return src == "file_name" || src == "folder_name"
+	}
+	if n.Form == "leading" {
+		return true
+	}
+	for _, m := range trackTagRe.FindAllStringSubmatch(text, -1) {
+		if f, err := strconv.ParseFloat(m[1], 64); err == nil && f == n.Value {
+			return true
+		}
+	}
+	for _, m := range trackLeadRe.FindAllStringSubmatch(text, -1) {
+		if f, err := strconv.ParseFloat(m[1], 64); err == nil && f == n.Value {
+			return true
+		}
+	}
+	for _, m := range trackOfRe.FindAllStringSubmatch(text, -1) {
+		if f, err := strconv.ParseFloat(m[1], 64); err == nil && f == n.Value {
+			return true
+		}
+	}
+	return false
+}
+
+// markRangeEndpoint sets aside a series position that equals an end of a range
+// stated by one of rangeSources (the book's own title; a candidate's title or
+// subtitle) (FormRangeEndpoint).
+func markRangeEndpoint(src []SourceNumber, rangeSources ...string) []SourceNumber {
+	var title seqnum.Number
+	hasRange := false
+	for _, s := range src {
+		if !slices.Contains(rangeSources, s.Source) || s.Weak || s.Form == FormPartSuffix {
+			continue
+		}
+		if n, ok := seqnum.ParsePosition(s.Number); ok && n.IsRange() {
+			title, hasRange = n, true
+		}
+	}
+	if !hasRange {
+		return src
+	}
+	for i, s := range src {
+		if s.Source != "series_position" {
+			continue
+		}
+		n, ok := seqnum.ParsePosition(s.Number)
+		if ok && !n.IsRange() && (n.Value == title.Value || n.Value == title.Last) {
+			src[i].Form = FormRangeEndpoint
+		}
+	}
+	return src
 }
 
 // discountPartSuffix applies the BookNumbers rule to the sources a part
@@ -611,6 +861,63 @@ func counted(s SourceNumber) bool {
 	return s.Form != FormPartSuffix && s.Form != FormDerivedPosition
 }
 
+// sideNumber is one side's reduced number and the partition that produced it.
+type sideNumber struct {
+	Num      seqnum.Number
+	OK       bool // at least one source remains
+	Conflict bool // two remaining sources name different numbers
+	// Kept are the sources that decided Num; Dropped are the weak numbers set
+	// aside because a stronger source remained (they are never part of Kept).
+	Kept, Dropped []SourceNumber
+}
+
+// resolve is the ONE place that decides which sources of a side count: with
+// skipPart the part-suffix ones are dropped (counted), a position set aside as
+// a range endpoint is always dropped (it states the title's range a second
+// time, not a number of its own), and weak sources are dropped when any
+// non-weak one remains (a part suffix is non-weak, so it keeps them out
+// exactly as a stored position does). When only weak sources remain they all
+// stay: a weak number is still the side's only evidence, and ambiguity must
+// not turn into a pass. The weak sources it drops are returned in Dropped so
+// the sequence leg can refuse when any of them differs from Num.
+func resolve(src []SourceNumber, skipPart bool) sideNumber {
+	var kept []SourceNumber
+	strong := false
+	for _, s := range src {
+		if s.Form == FormRangeEndpoint || (skipPart && !counted(s)) {
+			continue
+		}
+		kept = append(kept, s)
+		if !s.Weak {
+			strong = true
+		}
+	}
+	var r sideNumber
+	if strong {
+		for _, s := range kept {
+			if s.Weak {
+				r.Dropped = append(r.Dropped, s)
+			} else {
+				r.Kept = append(r.Kept, s)
+			}
+		}
+	} else {
+		r.Kept = kept
+	}
+	for _, s := range r.Kept {
+		cur, _ := seqnum.ParsePosition(s.Number)
+		if !r.OK {
+			r.Num, r.OK = cur, true
+			continue
+		}
+		if !seqnum.Equal(r.Num, cur) {
+			r.Conflict = true
+			return r
+		}
+	}
+	return r
+}
+
 // CandidateNumbers lists every number found on the candidate, one per source.
 func CandidateNumbers(c *metafetch.MetadataCandidate) []SourceNumber {
 	if c == nil {
@@ -626,27 +933,10 @@ func CandidateNumbers(c *metafetch.MetadataCandidate) []SourceNumber {
 	if n, ok := seqnum.Parse(c.Subtitle); ok {
 		out = append(out, SourceNumber{Source: "subtitle", Number: n.Text, Form: n.Form})
 	}
-	return out
-}
-
-// agree reduces a source list to one number. ok=false when the list is empty;
-// conflict=true when two sources name different numbers. With skipPart,
-// sources BookNumbers marked as part suffixes are skipped.
-func agree(src []SourceNumber, skipPart bool) (n seqnum.Number, ok, conflict bool) {
-	for _, s := range src {
-		if skipPart && !counted(s) {
-			continue
-		}
-		cur, _ := seqnum.ParsePosition(s.Number)
-		if !ok {
-			n, ok = cur, true
-			continue
-		}
-		if !seqnum.Equal(n, cur) {
-			return n, true, true
-		}
-	}
-	return n, ok, false
+	// The same endpoint rule as the book side: a provider that states "Books
+	// 1-3" in its title or subtitle and a position equal to an end of that
+	// range is stating the range twice, not two numbers.
+	return markRangeEndpoint(out, "title", "subtitle")
 }
 
 func ftoa(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) }
@@ -658,6 +948,16 @@ func describe(src []SourceNumber) string {
 		p := s.Source + "=" + s.Number
 		if !counted(s) {
 			p += " (part number)"
+		}
+		if s.Form == FormRangeEndpoint {
+			p += " (end of the title's range)"
+		}
+		if s.Weak {
+			if n, ok := seqnum.ParsePosition(s.Number); ok && n.IsRange() {
+				p += " (range on a file or folder name)"
+			} else {
+				p += " (list or track number)"
+			}
 		}
 		parts = append(parts, p)
 	}

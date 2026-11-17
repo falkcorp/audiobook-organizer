@@ -1,7 +1,7 @@
 // file: internal/applygate/partial.go
-// version: 1.2.1
+// version: 1.5.0
 // guid: b1e7d4a0-3c58-4f26-9a8d-0f6c2e5b7d19
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package applygate
 
@@ -15,6 +15,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/seqnum"
 )
 
 // ReasonPartialBook: the files hold one part of a book (or a span of several
@@ -203,10 +204,25 @@ func checkPartialBook(book *database.Book, c *metafetch.MetadataCandidate, runti
 		r.Detail = "the files are part " + ftoa(bp) + "; the candidate " + partText(cp, cok)
 		return r
 	}
-	bs, cs := spanRe.FindString(bside), spanRe.FindString(cside)
-	if (bs == "") != (cs == "") {
+	// The spans themselves are compared. The RANGES (the books covered) must
+	// be equal: a range on one side only, or two different ranges ("Books 1-3"
+	// and "Books 1-5", a list with a tail), is a book covering other books than
+	// the candidate does. Equal ranges with different edition wording ("Books
+	// 1-3" and "Omnibus: Books 1-3") are the same books under another name, so
+	// this hard refusal does not apply: the collected-edition rule
+	// (collectedRuntimeRefusal), which an owner review can lift, decides. With
+	// no range on either side the edition wording is the span, and it must be
+	// equal (omnibus against a box set, wording on one side only).
+	bw, br := spanParts(bside)
+	cw, cr := spanParts(cside)
+	if br != cr || (br == "" && bw != cw) {
 		r.Outcome, r.Reason = OutcomeBlock, ReasonPartialBook
-		r.Detail = "only one side covers several books: files " + strconv.Quote(bs) + ", candidate " + strconv.Quote(cs)
+		bs, cs := joinSpan(bw, br), joinSpan(cw, cr)
+		if bs == "" || cs == "" {
+			r.Detail = "only one side covers several books: files " + strconv.Quote(bs) + ", candidate " + strconv.Quote(cs)
+		} else {
+			r.Detail = "the two sides cover different books: files " + strconv.Quote(bs) + ", candidate " + strconv.Quote(cs)
+		}
 		return r
 	}
 	for _, s := range claims.get(ClaimKey(c)) {
@@ -220,6 +236,53 @@ func checkPartialBook(book *database.Book, c *metafetch.MetadataCandidate, runti
 		}
 	}
 	return r
+}
+
+// spanWordingRe is the span wording that is not a range: the edition kinds.
+var spanWordingRe = regexp.MustCompile(`(?i)\b(omnibus|box(?:ed)?\s*set|boxset|publisher.?s\s+pack|complete\s+series)\b`)
+
+// spanParts reads what s covers when it covers several books: the edition
+// wording class (omnibus, box set, publisher's pack, complete series; "boxed
+// set" and "boxset" are one class) and the range, read by the shared range
+// reader (seqnum.ParseRange) in every spelling it accepts, so "Book 1-3",
+// "Books 1 to 3", "Vols 1–3" and "Books 1, 2 & 3" give one range and "Books
+// 1-3 & 5" another. Any other span wording spanRe knows that the range reader
+// does not is part of the range, lowercased with its spacing collapsed. Both
+// are "" for a text that covers one book.
+func spanParts(s string) (wording, rng string) {
+	if m := spanWordingRe.FindString(s); m != "" {
+		wording = strings.ToLower(m)
+		switch {
+		case strings.Contains(wording, "box"):
+			wording = "box set"
+		case strings.Contains(wording, "pack"):
+			wording = "publisher's pack"
+		case strings.Contains(wording, "complete"):
+			wording = "complete series"
+		}
+	}
+	var parts []string
+	if n, ok := seqnum.ParseRange(s); ok {
+		parts = append(parts, "books "+n.Text)
+	} else {
+		for _, m := range spanRe.FindAllString(s, -1) {
+			if !spanWordingRe.MatchString(m) {
+				parts = append(parts, strings.Join(strings.Fields(strings.ToLower(m)), " "))
+			}
+		}
+	}
+	sort.Strings(parts)
+	return wording, strings.Join(parts, "; ")
+}
+
+func joinSpan(wording, rng string) string {
+	switch {
+	case wording == "":
+		return rng
+	case rng == "":
+		return wording
+	}
+	return wording + "; " + rng
 }
 
 func partText(p float64, ok bool) string {

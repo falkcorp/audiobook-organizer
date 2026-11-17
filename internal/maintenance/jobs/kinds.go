@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/kinds.go
-// version: 1.1.2
+// version: 1.3.1
 // guid: a3972df8-a6a8-49ee-b157-c35c462e3c8d
-// last-edited: 2026-11-15
+// last-edited: 2026-11-17
 
 package jobs
 
@@ -22,7 +22,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
-	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -215,32 +214,55 @@ const (
 // Kinds returns one native kind per registered maintenance job, in
 // maintenance.All() order. Nothing registers them in production: F5-18 passes
 // the list to Registrar.Tasks. sched is the schedule lookup of rule R9; nil
-// means no kind is scheduled.
-func Kinds(deps KindDeps, sched func(tasks.Kind) *tasks.Schedule) []tasks.Definition {
+// means no kind is scheduled. The error is a job whose declared write set cannot
+// be derived (a trace names a store method the shared table has no row for): no
+// kind is returned then, because a list that silently lacks one job's writes
+// would register it as declaring none.
+func Kinds(deps KindDeps, sched func(tasks.Kind) *tasks.Schedule) ([]tasks.Definition, error) {
 	jobs := maintenance.All()
 	out := make([]tasks.Definition, 0, len(jobs))
 	for _, job := range jobs {
-		out = append(out, kindFor(job, deps, sched))
+		d, err := kindFor(job, deps, sched)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
 	}
-	return out
+	return out, nil
 }
 
-// kindsRoot names Kinds from non-test code so tasklint's unregistered-kind rule
-// counts it a registration root until F5-18's Registrar.Tasks call replaces
-// this line (a list function nothing references registers nothing, and the
-// analyzer does not load test files). F5-18 deletes it.
-var _ = Kinds
+// kindsRoot is Kinds as the one-result list function tasklint's
+// unregistered-kind rule recognises (it counts a package-level func whose only
+// result is []tasks.Definition; Kinds also returns an error, so it is not one),
+// named from non-test code so the rule counts it a registration root until
+// F5-18's Registrar.Tasks call replaces this line (a list function nothing
+// references registers nothing, and the analyzer does not load test files).
+// Nothing calls it: it exists for the analyzer, and the error it drops is
+// Kinds' to report to its real caller. F5-18 deletes both lines.
+func kindsRoot(deps KindDeps, sched func(tasks.Kind) *tasks.Schedule) []tasks.Definition {
+	defs, err := Kinds(deps, sched)
+	if err != nil {
+		return nil
+	}
+	return defs
+}
+
+var _ = kindsRoot
 
 // kindFor builds one job's native kind.
-func kindFor(job maintenance.MaintenanceJob, deps KindDeps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+func kindFor(job maintenance.MaintenanceJob, deps KindDeps, sched func(tasks.Kind) *tasks.Schedule) (tasks.Definition, error) {
 	id := job.ID()
+	fx, err := effectsFor(id)
+	if err != nil {
+		return nil, fmt.Errorf("maintenance job %s: %w", id, err)
+	}
 	kind := tasks.Kind(kindNamePrefix + id)
 	pol := job.Policy()
 
 	c := tasks.Common{
 		Title:    job.Name(),
 		Help:     job.Description(),
-		Effects:  effectsFor(id),
+		Effects:  fx,
 		Perms:    tasks.Permissions{Start: startRequirement(job)},
 		Resume:   resumeForJob(id, pol.ResumePolicy),
 		Priority: tasks.PriorityNormal,
@@ -254,7 +276,7 @@ func kindFor(job maintenance.MaintenanceJob, deps KindDeps, sched func(tasks.Kin
 		c.Schedule = sched(kind)
 	}
 	shell := kindShell{kind: kind, job: job, deps: deps, liveOnly: !AdvertisedDryRunDefault(job), derivesApply: declaresApplyKey(job)}
-	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, json.RawMessage]{Common: c, Run: shell.run})
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, json.RawMessage]{Common: c, Run: shell.run}), nil
 }
 
 // resumeFor is rule R5's resume column. An unspecified policy stays zero, which
@@ -323,64 +345,33 @@ func startRequirement(job maintenance.MaintenanceJob) rbac.Requirement {
 	return rbac.Requirement{}
 }
 
-// jobWrites is rule R7's "Writes found": per job, the books resource kinds its
-// body and every function it calls write, read off the write methods it calls
-// on its store argument and the files it writes (reachability over the job's
-// Run, listed per job in the PR description). An empty set is a job that
-// writes nothing (ReadOnly). A job missing from the table gets no declared
-// Effects, which registration refuses.
+// effectsFor is rule R7's "Writes found": per job, the resource kinds its body
+// and every function it calls write (jobWritesFor). They are DERIVED, not typed:
+// kinds_writes.go lists, per job, the store write methods the job reaches, and
+// the union of their rows in the shared table
+// (internal/maintenance/resources) is the set. An empty set is a job that
+// writes nothing (ReadOnly). A job missing from the traces gets no declared
+// Effects, which registration refuses. The error is a trace that names a method
+// the table has no row for.
 //
 // Resource kinds (tasks.Res("books", kind)) are the pkg/ops constants.
-var jobWrites = map[string][]ops.Resource{
-	"backfill-book-files":             {ops.ResBookFiles, ops.ResOperations},
-	"backfill-file-hashes":            {ops.ResBooks, ops.ResBookFiles, ops.ResOperations, ops.ResFiles},
-	"backfill-itunes-positions":       {ops.ResUserState},
-	"backfill-merge-undo-pointers":    {ops.ResOperations},
-	"backfill-metadata-source-hash":   {ops.ResBooks},
-	"backfill-sync-ids":               {ops.ResSyncIdentity},
-	"bulk-deluge-import":              {ops.ResBookFiles, ops.ResFiles, ops.ResOperations},
-	"cleanup-empty-folders":           {ops.ResFiles},
-	"cleanup-organize-mess":           {ops.ResFiles},
-	"cleanup-series":                  {ops.ResBooks, ops.ResSeries},
-	"dedup-books":                     {ops.ResBooks, ops.ResBookFiles, ops.ResExternalIDs, ops.ResUserState},
-	"enrich-book-files":               {ops.ResBookFiles},
-	"fix-author-narrator-swap":        {ops.ResBooks},
-	"fix-file-modes":                  {ops.ResFiles},
-	"fix-read-by-narrator":            {ops.ResBooks},
-	"fix-version-groups":              {ops.ResBooks, ops.ResBookFiles},
-	"merge-chapter-groups":            {ops.ResBooks, ops.ResBookFiles, ops.ResAuthors, ops.ResExternalIDs, ops.ResUserState, ops.ResOperations, ops.ResSyncIdentity},
-	"normalize-primary-flags":         {ops.ResBooks},
-	"prune-book-snapshots":            {ops.ResBooks},
-	"purge-unknown-author-duplicates": {ops.ResBooks},
-	"recompute-book-aggregates":       {ops.ResBooks, ops.ResOperations},
-	"recompute-itunes-paths":          {ops.ResBookFiles},
-	"refetch-missing-authors":         {ops.ResBooks, ops.ResAuthors},
-	"relink-missing-to-itunes":        {ops.ResBooks, ops.ResBookFiles},
-	"relink-report":                   {},
-	"repoint-version-primary":         {ops.ResBooks},
-	"retention-and-hygiene":           {ops.ResOperations, ops.ResSettings},
-	"revert-metadata-fetch":           {ops.ResBooks},
-	"scan-chapter-groups":             {},
-	"scan-composer-tags":              {ops.ResBookFiles, ops.ResFileProvenance, ops.ResOperations, ops.ResFiles},
-	"scan-duplicate-files":            {},
-	"scan-duration-mismatch":          {},
-	"scan-metadata-hash-dups":         {},
-	"sweep-pebble-metrics-ttl":        {ops.ResMetrics},
-}
-
-func effectsFor(jobID string) tasks.Effects {
-	ws, ok := jobWrites[jobID]
+func effectsFor(jobID string) (tasks.Effects, error) {
+	all, err := jobWritesFor()
+	if err != nil {
+		return tasks.Effects{}, err
+	}
+	ws, ok := all[jobID]
 	if !ok {
-		return tasks.Effects{}
+		return tasks.Effects{}, nil
 	}
 	if len(ws) == 0 {
-		return tasks.ReadOnly()
+		return tasks.ReadOnly(), nil
 	}
 	refs := make([]tasks.Resource, len(ws))
 	for i, w := range ws {
 		refs[i] = tasks.Res("books", string(w))
 	}
-	return tasks.Writes(refs...)
+	return tasks.Writes(refs...), nil
 }
 
 // kindShell is the native shell around one job's Run.

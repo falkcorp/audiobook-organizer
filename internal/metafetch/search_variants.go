@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_variants.go
-// version: 1.9.4
+// version: 1.9.5
 // guid: 74a7d36b-024c-4887-a6c3-4ebaf2e61490
-// last-edited: 2026-10-31
+// last-edited: 2026-11-16
 
 package metafetch
 
@@ -484,7 +484,8 @@ var numberSegmentRe = regexp.MustCompile(`\s*(?:[:;,()\[\]]|\s[-–—]\s)\s*`)
 // 08" -> "8"), or "" for none. A range or a list ("8-10", "8, 9, 10") names
 // no single position -- an omnibus is not book 8 -- so it is "" too: it
 // neither satisfies a position nor refutes one. (normalizeSeriesNumber reads
-// its first number, seqnum.ParsePosition its last.)
+// its first number; seqnum.ParsePosition reads a range as a range, which this
+// function has already turned into "" above.)
 func normPosition(pos string) string {
 	if len(titleNumberRe.FindAllString(pos, 2)) > 1 {
 		return ""

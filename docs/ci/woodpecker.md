@@ -1,7 +1,7 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 2.0.0 -->
+<!-- version: 2.1.1 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
-<!-- last-edited: 2026-11-07 -->
+<!-- last-edited: 2026-11-17 -->
 
 # Woodpecker CI: install runbook
 
@@ -68,6 +68,39 @@ Mac are idle until a heavy workflow is added again.
 
 Every workflow clones with `lfs: false`, because GitHub's LFS budget is
 exhausted and no check reads LFS content. Every image is pinned by digest.
+
+## Trial: GitHub-hosted lint
+
+Step one of moving the last two Woodpecker workflows to GitHub-hosted runners
+(owner decision 2026-11-16/17). `.github/workflows/lint-trial.yml` adds a job
+named `Lint (GitHub-hosted, trial)` that runs `make staticcheck` (the same
+target, the same pinned `tools/staticcheck` v0.8.1, Go 1.27.3, modules `.` and
+`core`) on `ubuntu-latest`, on pull requests and in the merge queue.
+
+**Woodpecker's `checks-lint` stays the gate.** The trial is not in the main
+ruleset, no job depends on it, and nothing in `.woodpecker/` changed. It lives
+in its own workflow rather than in ci.yml because auto-revert.yml reacts to the
+conclusion of the whole `Continuous Integration` run: a red trial job inside
+that run would revert main. For the same reason the trial has no `push`
+trigger.
+
+The trial has its own Go cache key (`<os>-lint-trial-go-1.27-<go.sum hash>`,
+not starting with `<os>-go-1.27-`). ci.yml's keys are only read-only
+`restore-keys` fallbacks, so a cold trial starts warm. The trial never writes a
+key ci.yml reads: actions/cache never re-saves an existing key, so a
+staticcheck-only cache saved under ci.yml's key would be restored by every
+ci.yml test job until go.sum changed (the #3882 race-cache problem).
+
+Exit criteria for step two (a separate PR, only with the owner's go):
+
+1. N consecutive runs (N = 20, counting only PRs that touch Go code) in which
+   the trial and `checks-lint` reach the same verdict on the same commit. A
+   disagreement in either direction restarts the count and gets a root cause.
+2. The trial's wall time (checkout to result, warm cache) is at or below
+   `checks-lint`'s on the same commits.
+3. Then: add the check to the main ruleset, delete
+   `.woodpecker/checks-lint.yaml`, and update the tables above. `test-native-taglib`
+   follows the same path afterwards (it needs TagLib built on the runner).
 
 ## 1. Server on U0
 

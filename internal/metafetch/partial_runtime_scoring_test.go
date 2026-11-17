@@ -1,7 +1,7 @@
 // file: internal/metafetch/partial_runtime_scoring_test.go
-// version: 1.2.5
+// version: 1.2.7
 // guid: 3d0c8a52-6b1e-4f87-9a4d-5e2f7c1b8d93
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 
 package metafetch
 
@@ -141,14 +141,14 @@ func TestPickBestMatch_PartialRuntimePenalisesTooLongCandidate(t *testing.T) {
 	scores := []float64{0.9, 0.9}
 
 	partial := runtimeOf(ownerCaseFiles())
-	got := pickBestMatchFromScored(results, scores, "f1", words, "Ann Writer", "", partial)
+	got := pickBestMatchFromScored(results, scores, "f1", words, "Ann Writer", "", partial, "")
 	require.Len(t, got, 1)
 	assert.Equal(t, 1000, got[0].DurationSec, "the candidate that fits the files wins")
 
 	// And with no size information nothing separates them: first wins, as before.
 	sizeless := ownerCaseFiles()
 	sizeless[1].FileSize = 0
-	got = pickBestMatchFromScored(results, scores, "f1", words, "Ann Writer", "", runtimeOf(sizeless))
+	got = pickBestMatchFromScored(results, scores, "f1", words, "Ann Writer", "", runtimeOf(sizeless), "")
 	require.Len(t, got, 1)
 	assert.Equal(t, long.DurationSec, got[0].DurationSec)
 }
@@ -230,8 +230,8 @@ func TestScoreBrowseAnswer_PartialRuntimePenalty(t *testing.T) {
 	r := metadata.BookMetadata{Title: "Zeta Quest", Author: "Ann Writer", Narrator: "Bo Reader", DurationSec: 14*3600 + 42*60}
 	words := map[string]bool{"zeta": true, "quest": true}
 	partial := runtimeOf(ownerCaseFiles())
-	penalised := scoreBrowseAnswer(r, "Audible", "Zeta Quest", words, "Ann Writer", "", partial)
-	neutral := scoreBrowseAnswer(r, "Audible", "Zeta Quest", words, "Ann Writer", "", localRuntime{})
+	penalised := scoreBrowseAnswer(r, "Audible", "Zeta Quest", "", words, "Ann Writer", "", partial)
+	neutral := scoreBrowseAnswer(r, "Audible", "Zeta Quest", "", words, "Ann Writer", "", localRuntime{})
 	assert.Equal(t, -20.0, penalised.DurationScore)
 	assert.InDelta(t, neutral.Score*0.5, penalised.Score, 1e-9)
 }

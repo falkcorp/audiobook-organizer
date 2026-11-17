@@ -1,7 +1,7 @@
 // file: core/health/diagnostics/hardening_test.go
-// version: 1.0.9
+// version: 1.2.0
 // guid: 8d3f1b6a-47c2-4e90-a5d8-1f7b9c2e6a03
-// last-edited: 2026-11-14
+// last-edited: 2026-11-16
 
 package diagnostics_test
 
@@ -105,99 +105,6 @@ func TestDiagnostics_MapKeysRedacted(t *testing.T) {
 	}
 	if m := manifestOf(t, files); m.Redactions["pattern"] < 6 {
 		t.Errorf("pattern redactions = %d, want the keys counted too (%v)", m.Redactions["pattern"], m.Redactions)
-	}
-}
-
-// TestDiagnostics_AbsolutePathsRedacted pins 5H.3.5 layer 2: an absolute path
-// in a known root is "<root:NAME>/...", any other absolute path is "<path>",
-// in JSON values and keys, in File lines and in the manifest's errors[].
-func TestDiagnostics_AbsolutePathsRedacted(t *testing.T) {
-	f := newFixture(t)
-	roots := []diagnostics.PathRoot{
-		{Name: "audiobooks", Path: "/srv/gotham/audiobooks"},
-		{Name: "vault", Path: "/srv/gotham/archive vault"},
-	}
-	text := func(context.Context) (io.ReadCloser, error) {
-		lines := []string{
-			"open /var/lib/batcave/state.db: permission denied",
-			"scanned /srv/gotham/audiobooks/Joker/ch1.m4b ok",
-			"see https://gotham.example/api/x and/or the Batmobile",
-			"plain line",
-		}
-		return io.NopCloser(strings.NewReader(strings.Join(lines, "\n") + "\n")), nil
-	}
-	c := contributor{
-		{Name: "batcave.values", Perm: manage, Write: func(_ context.Context, w diagnostics.Writer, _ diagnostics.Viewer) error {
-			return w.JSON("v.json", map[string]any{
-				"in_root":          "/srv/gotham/audiobooks/Joker/ch1.m4b",
-				"root_only":        "/srv/gotham/audiobooks",
-				"spaced":           "/srv/gotham/archive vault/Penguin/ch2.m4b",
-				"outside":          "/etc/batcave/secret.conf",
-				"sibling":          "/srv/gotham/audiobooks2/x",
-				"windows":          `C:\Users\bruce\Documents\plans.txt`,
-				"embedded":         "failed: open /root/.ssh/id_ed25519: denied.",
-				"file_url":         "file:///home/bruce/plans.txt",
-				"not_a_path":       "and/or 3/4 https://gotham.example/api/x",
-				"/home/bruce/keys": "map key path",
-			})
-		}},
-		{Name: "batcave.broken", Perm: manage, Write: func(context.Context, diagnostics.Writer, diagnostics.Viewer) error {
-			return errors.New("cannot read /var/lib/batcave/cowl.db and /srv/gotham/audiobooks/Joker")
-		}},
-	}
-	e := f.exporterWith(viewerOf("core:system.manage"), func(cfg *diagnostics.Config) {
-		cfg.Roots = roots
-		cfg.Contributors = []diagnostics.Contributor{c}
-		cfg.Sources.Logs = text
-	})
-	res, err := f.build(e, "run-paths", diagnostics.ExportParams{ActorID: "bruce"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	files := f.zipFiles(res.File)
-	assertNoneOf(t, files, "/var/lib/batcave", "/etc/batcave", "/root/.ssh", "/home/bruce", `C:\Users`, "/srv/gotham/audiobooks2", "/srv/gotham/archive vault", "/srv/gotham/audiobooks/")
-
-	var v map[string]string
-	if err := json.Unmarshal(files["batcave.values/v.json"], &v); err != nil {
-		t.Fatal(err)
-	}
-	want := map[string]string{
-		"in_root":    "<root:audiobooks>/Joker/ch1.m4b",
-		"root_only":  "<root:audiobooks>",
-		"spaced":     "<root:vault>/Penguin/ch2.m4b",
-		"outside":    "<path>",
-		"sibling":    "<path>",
-		"windows":    "<path>",
-		"embedded":   "failed: open <path>: denied.",
-		"file_url":   "file://<path>",
-		"not_a_path": "and/or 3/4 https://gotham.example/api/x",
-		"<path>":     "map key path",
-	}
-	for k, w := range want {
-		if v[k] != w {
-			t.Errorf("%q = %q, want %q", k, v[k], w)
-		}
-	}
-
-	logs := string(files["core.logs/logs.jsonl"])
-	for _, w := range []string{
-		"open <path>: permission denied",
-		"scanned <root:audiobooks>/Joker/ch1.m4b ok",
-		"see https://gotham.example/api/x and/or the Batmobile",
-		"plain line",
-	} {
-		if !strings.Contains(logs, w) {
-			t.Errorf("logs.jsonl lacks %q:\n%s", w, logs)
-		}
-	}
-
-	m := manifestOf(t, files)
-	if len(m.Errors) != 1 || m.Errors[0].Section != "batcave.broken" ||
-		m.Errors[0].Error != "cannot read <path> and <root:audiobooks>/Joker" {
-		t.Errorf("manifest errors = %+v", m.Errors)
-	}
-	if m.Redactions["pattern"] < 10 {
-		t.Errorf("pattern redactions = %d (%v)", m.Redactions["pattern"], m.Redactions)
 	}
 }
 
@@ -647,10 +554,10 @@ func TestDiagnostics_JSONLogLinesStayValid(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[1]), &second); err != nil {
 		t.Fatal(err)
 	}
-	if first["msg"] != `config file "<path>" not found` {
+	if first["msg"] != `config file "<path>` {
 		t.Errorf("msg = %q", first["msg"])
 	}
-	if first["path"] != "<root:audiobooks>/Joker/ch1.m4b" {
+	if first["path"] != "<root:audiobooks>" {
 		t.Errorf("path = %q", first["path"])
 	}
 	if first["cwd"] != "<path>" {
@@ -659,211 +566,15 @@ func TestDiagnostics_JSONLogLinesStayValid(t *testing.T) {
 	if first["password"] == "hunter2-not-real" {
 		t.Errorf("password survived: %v", first["password"])
 	}
-	if second["err"] != `open "<path>": denied` || second["n"] != float64(7) {
+	if second["err"] != `open "<path>` || second["n"] != float64(7) {
 		t.Errorf("second line = %v", second)
 	}
 	assertNoneOf(t, map[string][]byte{"logs": []byte(out)}, "/etc/batcave", "/var/lib/batcave", "Application Support", "hunter2-not-real")
 
-	// A line that is not JSON keeps the text rule, and a quote escape still
-	// ends a path in text.
+	// A line that is not JSON takes the text rule: a word that holds a location
+	// is wiped whole, with the key and the escape glued to it.
 	text := logsOf(t, nil, []string{`msg=\"/etc/batcave/app.yaml\" gone`, "{not json /etc/batcave/x"})
-	if !strings.Contains(text, `msg=\"<path>\" gone`) || strings.Contains(text, "/etc/batcave") {
-		t.Errorf("text lines:\n%s", text)
-	}
-}
-
-// TestDiagnostics_RouteShapesAndEdgesOfPathRule pins what the path rule leaves
-// alone and what it still names: router-mounted routes (a request line, a
-// Prometheus label) are the same text on every host; a closing tag is not a
-// path; punctuation after a root keeps the root's name; a UNC share is a path;
-// the rewrite is a fixed point.
-func TestDiagnostics_RouteShapesAndEdgesOfPathRule(t *testing.T) {
-	roots := []diagnostics.PathRoot{{Name: "lib", Path: "/srv/lib"}}
-	in := []string{
-		`GET /api/v1/books/123 200`,
-		`http_requests_total{route="/api/v1/books/{id}"} 3`,
-		`probe /readyz and /livez?x=1 ok but /livez-backup/db is a file`,
-		`see /srv/lib. and /srv/lib: gone`,
-		`<div>x</div> and <root:lib>/x already done`,
-		`share \\gotham-nas\batcave\x unreachable`,
-	}
-	got := strings.Split(strings.TrimSpace(logsOf(t, roots, in)), "\n")
-	want := []string{
-		`GET /api/v1/books/123 200`,
-		`http_requests_total{route="/api/v1/books/{id}"} 3`,
-		`probe /readyz and /livez?<query> ok but <path> is a file`,
-		`see <root:lib>. and <root:lib>: gone`,
-		`<div>x</div> and <root:lib>/x already done`,
-		`share <path> unreachable`,
-	}
-	if len(got) != len(want) {
-		t.Fatalf("got %d lines: %q", len(got), got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("line %d\n got %q\nwant %q", i, got[i], want[i])
-		}
-	}
-	// Redacting the output again changes nothing.
-	again := strings.Split(strings.TrimSpace(logsOf(t, roots, got)), "\n")
-	for i := range got {
-		if again[i] != got[i] {
-			t.Errorf("not idempotent, line %d: %q -> %q", i, got[i], again[i])
-		}
-	}
-}
-
-// TestDiagnostics_PathRuleDelimitersDoNotHideAPath: "<" and ">" are path
-// boundaries like any delimiter, so a path put right after markup is redacted;
-// only the redactor's own placeholders and a real closing tag are skipped.
-func TestDiagnostics_PathRuleDelimitersDoNotHideAPath(t *testing.T) {
-	roots := []diagnostics.PathRoot{{Name: "lib", Path: "/srv/lib"}}
-	in := []string{
-		`<b>/home/bruce/secret.txt`,
-		`x=<i>/etc/shadow and </home/bruce/y>`,
-		"a</etc/passwd b",
-		`<path>/home/bruce/z and <root:cowl>/home/bruce/w`,
-		`</div> <root:lib>/x <path> done`,
-	}
-	got := strings.Split(strings.TrimSpace(logsOf(t, roots, in)), "\n")
-	want := []string{
-		`<b><path>`,
-		`x=<i><path> and <<path>>`,
-		`a<<path> b`,
-		`<path><path> and <root:cowl><path>`,
-		`</div> <root:lib>/x <path> done`,
-	}
-	if len(got) != len(want) {
-		t.Fatalf("got %d lines: %q", len(got), got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("line %d\n got %q\nwant %q", i, got[i], want[i])
-		}
-	}
-	assertNoneOf(t, map[string][]byte{"logs": []byte(strings.Join(got, "\n"))}, "/home/bruce", "/etc/shadow", "/etc/passwd")
-}
-
-// TestDiagnostics_WholeValuePathRuleOnlyForASinglePath: a JSON string that
-// merely starts with a path, root or not, is prose: every path in it is
-// redacted and its text kept. Only a value that is one clean path is replaced
-// as a whole.
-func TestDiagnostics_WholeValuePathRuleOnlyForASinglePath(t *testing.T) {
-	f := newFixture(t)
-	vals := map[string]string{
-		"msg_root":     "/srv/lib/x: open /home/bruce/cowl: denied",
-		"quoted_root":  "/srv/lib/x '/home/bruce/y'",
-		"msg_outside":  "/etc/a: /home/bruce/b",
-		"two_outside":  "/etc/a /home/bruce/c",
-		"dq_outside":   `/etc/a "/home/bruce/d"`,
-		"spaced":       "/Users/bruce/Library/Application Support/app/db",
-		"apostrophe":   "/Users/bruce/Bruce's Music/x",
-		"clean_root":   "/srv/lib/Joker/ch1.m4b",
-		"trailing_dot": "/srv/lib.",
-		// Not canonical is not prose: a name with a space keeps its tail out.
-		"trailing_slash": "/home/bruce wayne/x/",
-		"doubled_slash":  "/home/bruce wayne//x",
-		"dot_segment":    "/srv/lib/a b/./c",
-		"dot_outside":    "/home/bruce wayne/./cowl/",
-	}
-	e := f.exporterWith(viewerOf("core:system.manage"), func(cfg *diagnostics.Config) {
-		cfg.Roots = []diagnostics.PathRoot{{Name: "lib", Path: "/srv/lib"}}
-		cfg.Contributors = []diagnostics.Contributor{jsonSection("batcave.v", vals)}
-	})
-	res, err := f.build(e, "run-single", diagnostics.ExportParams{ActorID: "bruce"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	files := f.zipFiles(res.File)
-	var got map[string]string
-	if err := json.Unmarshal(files["batcave.v/d.json"], &got); err != nil {
-		t.Fatal(err)
-	}
-	want := map[string]string{
-		"msg_root":     "<root:lib>/x: open <path>: denied",
-		"quoted_root":  "<root:lib>/x '<path>'",
-		"msg_outside":  "<path>: <path>",
-		"two_outside":  "<path> <path>",
-		"dq_outside":   `<path> "<path>"`,
-		"spaced":       "<path>",
-		"apostrophe":   "<path>",
-		"clean_root":   "<root:lib>/Joker/ch1.m4b",
-		"trailing_dot": "<root:lib>.",
-
-		"trailing_slash": "<path>",
-		"doubled_slash":  "<path>",
-		"dot_segment":    "<root:lib>/a b/c", // the cleaned tail is written
-		"dot_outside":    "<path>",
-	}
-	for k, w := range want {
-		if got[k] != w {
-			t.Errorf("%s = %q, want %q", k, got[k], w)
-		}
-	}
-	assertNoneOf(t, files, "/home/bruce", "/Users/bruce", "Application Support", "Bruce's", "wayne")
-}
-
-// TestDiagnostics_DotDotCannotCarryAPathOutOfARoot: a path is named from its
-// cleaned form. A raw prefix match called "/srv/lib/../../home/bruce/x" a path
-// in the lib root and wrote the outside path out; now it is "<path>", a ".."
-// that stays inside the root keeps the root's name (with the cleaned tail), a
-// path that resolves into another root takes that root's name, and a route
-// prefix does not shelter a ".." either. The same rule holds in a value, in a
-// JSON log line and in a text log line.
-func TestDiagnostics_DotDotCannotCarryAPathOutOfARoot(t *testing.T) {
-	roots := []diagnostics.PathRoot{{Name: "lib", Path: "/srv/lib"}, {Name: "vault", Path: "/srv/vault"}}
-	cases := []struct{ in, want string }{
-		{"/srv/lib/../../home/bruce/x", "<path>"},
-		{"/srv/lib/./../etc/passwd", "<path>"},
-		{"/srv/lib//..//home/bruce", "<path>"},
-		{"/srv/lib/..", "<path>"},
-		{"/srv/lib/b/../a", "<root:lib>/a"},
-		{"/srv/lib/../vault/x", "<root:vault>/x"},
-		{"/srv/lib//a/./b/", "<root:lib>/a/b"},
-		{"/api/../home/bruce/x", "<path>"},
-	}
-	f := newFixture(t)
-	vals := map[string]string{}
-	var lines []string
-	for i, c := range cases {
-		key := string(rune('a' + i))
-		vals[key] = c.in
-		lines = append(lines, "open "+c.in+" now")
-	}
-	e := f.exporterWith(viewerOf("core:system.manage"), func(cfg *diagnostics.Config) {
-		cfg.Roots = roots
-		cfg.Contributors = []diagnostics.Contributor{jsonSection("batcave.v", vals)}
-		cfg.Sources.Logs = func(context.Context) (io.ReadCloser, error) {
-			return io.NopCloser(strings.NewReader(strings.Join(lines, "\n") + "\n")), nil
-		}
-	})
-	res, err := f.build(e, "run-dotdot", diagnostics.ExportParams{ActorID: "robin"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	files := f.zipFiles(res.File)
-	assertNoneOf(t, files, "bruce", "/home", "/etc/passwd", "..")
-
-	var got map[string]string
-	if err := json.Unmarshal(files["batcave.v/d.json"], &got); err != nil {
-		t.Fatal(err)
-	}
-	logLines := strings.Split(strings.TrimSpace(string(files["core.logs/logs.jsonl"])), "\n")
-	if len(logLines) != len(cases) {
-		t.Fatalf("got %d log lines, want %d: %q", len(logLines), len(cases), logLines)
-	}
-	for i, c := range cases {
-		if v := got[string(rune('a'+i))]; v != c.want {
-			t.Errorf("value %q = %q, want %q", c.in, v, c.want)
-		}
-		if want := "open " + c.want + " now"; logLines[i] != want {
-			t.Errorf("text line for %q = %q, want %q", c.in, logLines[i], want)
-		}
-	}
-
-	// A JSON log line takes the same rule.
-	jl := logsOf(t, roots, []string{`{"msg":"open","path":"/srv/lib/../../home/bruce/x","note":"see /srv/lib/../etc/hosts"}`})
-	if strings.Contains(jl, "bruce") || strings.Contains(jl, "/etc/hosts") || !strings.Contains(jl, `"path":"<path>"`) {
-		t.Errorf("JSON log line: %s", jl)
+	if text != "<path>\n{not json <path>\n" {
+		t.Errorf("text lines:\n%q", text)
 	}
 }

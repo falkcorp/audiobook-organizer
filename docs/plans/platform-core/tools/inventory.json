@@ -3562,14 +3562,10 @@
   ],
   "files": [
    "core/health/diagnostics/",
-   "core/internal/healthhttp/",
-   "core/archtest/f803b_gate.go",
-   "core/archtest/f803b_gate_test.go",
-   "core/archtest/f803b_probe.go",
-   "core/archtest/f803b_probe_test.go"
+   "core/internal/healthhttp/"
   ],
   "spec": "05-health \u00a75H.3.5; docs/agent-tasks/platform-core/seams.d/F8-03.md (S1, Round 8)",
-  "notes": "Tier: a sanitizer that decides what a third party may read; Opus review and a T3 security review before merge. A follow-up row of the merged F8-03 (round 7 and 8 reviews of PR #4658), named F8-03b because its name is the marker's (diagnostics.RedesignPendingF8_03b, ErrRedesignPendingF8_03b, archtest.F803bGate); the rows-take-the-next-free-number rule would call it F8-05. Replaces the token scanner in core/health/diagnostics/paths.go, applies the sanitizer to every byte that leaves (Writer.JSON values and keys, Writer.File lines, manifest text, zip entry names, the health route's Detail) and deletes the marker, the runtime refusal in New and Build, and the archtest gate, probe pin and linker-flag guard. Covers no 04 key of its own: F8-03 owns the F8 grow of mediacore/health/diagnostics. F8-04 depends on it: F8-04 mounts the diagnostics routes. Dark: no route is mounted, nothing in ABO switches."
+  "notes": "Tier: a sanitizer that decides what a third party may read; Opus review and a T3 security review before merge. A follow-up row of the merged F8-03 (round 7 and 8 reviews of PR #4658), named F8-03b because its name was the marker's (the marker, the runtime refusal and the archtest gate this row deleted); the rows-take-the-next-free-number rule would call it F8-05. Replaces the token scanner in core/health/diagnostics/paths.go, applies the sanitizer to every byte that leaves (Writer.JSON values and keys, Writer.File lines, manifest text, zip entry names, the health route's Detail) and deletes the marker, the runtime refusal in New and Build, and the archtest gate, probe pin and linker-flag guard (the four core/archtest/f803b_*.go files, which are therefore no longer listed under files). Landed in round 13 of seams.d/F8-03.md. Covers no 04 key of its own: F8-03 owns the F8 grow of mediacore/health/diagnostics. F8-04 depends on it: F8-04 mounts the diagnostics routes. Dark: no route is mounted, nothing in ABO switches."
  },
  {
   "id": "F8-04",
@@ -3637,11 +3633,12 @@
   "id": "F9-01",
   "title": "Shell packages, dark: @mediacore/ui-kit and @mediacore/shell (with /vite and /testing), hello's web package, the rest of core ui (Handler, FromFS, the policy builder, UIBundle), hello's ui_embed.go",
   "release": "F9",
-  "wave": "W31",
+  "wave": "W41",
   "tier": "T3",
   "depends_on": [
    "R1-30",
-   "F6-02"
+   "F6-02",
+   "OWNER-05"
   ],
   "files": [
    "core/web/packages/ui-kit/",
@@ -3658,13 +3655,13 @@
    "core/web/e2e/"
   ],
   "spec": "07 §7.3, §7.5, §7.6, §7.19 step 4; 04 §8.1 F9; 06 §6.4.10 Shell",
-  "notes": "Tier: new packages with a build-time preset. 04 keys: F9 create npm @mediacore/ui-kit; F9 create npm @mediacore/shell; F9 create hello web package; F9 create mediacore/ui (full package, leaf since R1)."
+  "notes": "Tier: new packages with a build-time preset. Merges after OWNER-05: the whole shell ships in R3 (owner direction 2026-11-16, plan section (l) item 7). 04 keys: F9 create npm @mediacore/ui-kit; F9 create npm @mediacore/shell; F9 create hello web package; F9 create mediacore/ui (full package, leaf since R1)."
  },
  {
   "id": "F9-05",
   "title": "Cut the shell-classified providers, stores and presentational pieces, dark: the Activity page with useOperationsStore, operationGrouping and OperationTrackerProvider, AuthContext, ToastProvider, useAppStore, the storageKeys split, components/common, ErrorBoundary, KeyboardShortcutsDialog, AnnouncementBanner, the four ui-kit hooks and the apiFetch group",
   "release": "F9",
-  "wave": "W41",
+  "wave": "W42",
   "tier": "T3",
   "depends_on": [
    "F9-01",
@@ -3721,7 +3718,7 @@
   "id": "F9-02",
   "title": "Cut the audiobook imports out of the shell-classified layout files into books slots under web/src/modules/books/ and move the layout into core/web, dark",
   "release": "F9",
-  "wave": "W42",
+  "wave": "W43",
   "tier": "T3",
   "depends_on": [
    "F9-01",
@@ -3740,7 +3737,7 @@
   "id": "F9-04",
   "title": "Cut the shell-classified pages, dark: Login, AcceptInvite, Setup, NotFound, Users, System with its Storage, Quota and SystemInfo tabs and the split MaintenanceTab, the Settings frame, Dashboard, Diagnostics and the WelcomeWizard frame; their audiobook parts become books widgets, setup and userPageExtensions",
   "release": "F9",
-  "wave": "W42",
+  "wave": "W43",
   "tier": "T3",
   "depends_on": [
    "F9-01",
@@ -3811,7 +3808,7 @@
    "scripts/tests/test_assemble_r2_notes.py"
   ],
   "spec": "09 §9.2.9, §9.4 R2 (Content, Owner), §9.6; 05-authn §11 (identity text); 05-config §1.12.2 (release note)",
-  "notes": "Tier: a runbook and a generated release note. If F9 slips to R3, this PR drops F9-03 from its dependencies and the shell's paths from the note. The runbook covers a production hotfix during the freeze: cut from the pre-freeze tag, ci/prefreeze_release.txt updated, the drill re-run; and names the tag make rollback-restore RELEASE= uses afterwards. Carries R2's executive summary and TODO check-offs (plan §(n) item 4)."
+  "notes": "Tier: a runbook and a generated release note. F9 is in R3 (owner direction 2026-11-16, plan section (l) item 7), so this PR has no F9 dependency and the shell's paths are not in the note. The runbook covers a production hotfix during the freeze: cut from the pre-freeze tag, ci/prefreeze_release.txt updated, the drill re-run; and names the tag make rollback-restore RELEASE= uses afterwards. Carries R2's executive summary and TODO check-offs (plan §(n) item 4)."
  },
  {
   "id": "OWNER-05",
@@ -3852,7 +3849,7 @@
    "scripts/ci/short_test_weights.json"
   ],
   "spec": "09 §9.2.2 (the R3 floor), §9.4 R3; 05-storage §5S.3.5, §5S.9.3; 05-tasks §5T.8.1 (opsgen, ops.ts, state together); 03 §3.8 R3; 06 §6.4.10 R3",
-  "notes": "Tier: the upgrade floor refuses stores at boot and at restore staging. The refusal exits 78 with 'install <R2 tag> first' (the R2 release, by its tag) as its last stderr line; launchd sleeps 60 s first; restore staging refuses a pre-R2 archive. InstallFirst holds the R2 release's tag, written when R2 is tagged. UpgradeFloor.Requires names F3-06's M2-M6 step IDs. Moves operationPolling onto the generated TaskRunView states (07 §7.8); if F9 slipped to R3 those files are still web/src/utils/operationPolling.ts and web/src/services/api.ts. 04 keys: R3 delete internal/books/cutover; R3 delete internal/operations/state; R3 delete tools/cmd/opsgen; R3 delete web/src/generated/ops.ts. Owns gate tests: TestPreR2StoreRefusedByR3 (the exit-78 boot test); TestRestoreBelowUpgradeFloorRefusedAtStaging; TestFreshInstallPostFloorBootsTwice."
+  "notes": "Tier: the upgrade floor refuses stores at boot and at restore staging. The refusal exits 78 with 'install <R2 tag> first' (the R2 release, by its tag) as its last stderr line; launchd sleeps 60 s first; restore staging refuses a pre-R2 archive. InstallFirst holds the R2 release's tag, written when R2 is tagged. UpgradeFloor.Requires names F3-06's M2-M6 step IDs. Moves operationPolling onto the generated TaskRunView states (07 §7.8); F9 is in R3 and its cut rows (F9-05 is W42) merge after this row, so those files are still web/src/utils/operationPolling.ts and web/src/services/api.ts. 04 keys: R3 delete internal/books/cutover; R3 delete internal/operations/state; R3 delete tools/cmd/opsgen; R3 delete web/src/generated/ops.ts. Owns gate tests: TestPreR2StoreRefusedByR3 (the exit-78 boot test); TestRestoreBelowUpgradeFloorRefusedAtStaging; TestFreshInstallPostFloorBootsTwice."
  },
  {
   "id": "R3-05",
