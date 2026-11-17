@@ -868,9 +868,10 @@ questions the plan carries instead:
     - **Dark tier**, for a row that only adds code no live path executes (a dark kind, a package nothing registers,
       tests, docs): it merges at 0 blocker and 0 major with CI green. Its minors do not go back for another round;
       each is filed in a headerless `todo.d/` fragment (`todo.d/README.md`) named
-      `<date>-<subsystem>-must-be-empty-before-<flip row>-flip.md`, each entry tagged `PRE-<flip row>`, for example
-      `PRE-F5-18`. Fragments fold into `TODO.md` daily, so the per-subsystem "must be
-      empty before the flip" list is every entry carrying that tag in `todo.d/` and in `TODO.md`; the flip row
+      `<date>-<subsystem>-must-be-empty-before-<flip row>-flip.md`, each entry opened by a bold id that ends in the flip
+      row (first example: `**JOBWRITES-F5-18**` in `todo.d/2026-11-16-jobwrites-must-be-empty-before-f5-18-flip.md`,
+      PR #4683, open). Fragments fold into `TODO.md` daily and are deleted, so the per-subsystem "must be
+      empty before the flip" list is every entry whose id ends in that flip row, in `todo.d/` and in `TODO.md`; the flip row
       refuses to merge while one is open. No mutation pass is required.
     - **Full tier**, for every flip, every security row and any code a live path executes (a shared body, a store
       method, a scheduled kind that is already registered): adversarial review, the mutation pass and delta
