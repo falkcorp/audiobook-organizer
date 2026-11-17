@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_decode_child.py
-# version: 2.0.1
+# version: 2.0.2
 # guid: 2c9d7e15-6a48-4f3b-8e01-d5b7a39c6f82
 # last-edited: 2026-11-17
 #
@@ -676,8 +676,16 @@ def _parent_dies_mid_decode(tmp_path, clip, disable_job=False):
             """
         )
     )
-    out = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=180)
-    return int(out.stdout.strip().splitlines()[-1])
+    # stdout goes to a FILE, not a pipe: on Windows the decode child inherits the
+    # parent's pipe handles, so after the parent dies the child still holds the write
+    # end and a pipe reader would wait for an EOF that never comes (subprocess.run
+    # then hangs even past its own timeout).
+    out_path = tmp_path / "parent.out"
+    with open(out_path, "w") as sink:
+        subprocess.run(
+            [sys.executable, str(script)], stdout=sink, stderr=subprocess.STDOUT, timeout=180
+        )
+    return int(out_path.read_text().strip().splitlines()[-1])
 
 
 def _wait_gone(pid, seconds):
