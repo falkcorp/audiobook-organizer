@@ -1,5 +1,5 @@
 # file: scripts/whisper_path_pipeline.py
-# version: 1.3.0
+# version: 1.4.0
 # guid: c3e91a57-2d84-4f16-b7a9-0e5d8c4b6f13
 # last-edited: 2026-11-17
 #
@@ -191,13 +191,25 @@ class ChildFaultError(RuntimeError):
     deterministically kills it must be able to settle. The flag stays so a
     handler can tell the two apart if a start-less fault is ever raised again."""
 
-    def __init__(self, message: str, *, starting: bool, category: str = "start_failed"):
+    def __init__(self, message: str, *, starting: bool, category: str | None = None):
         super().__init__(message)
         self.starting = starting
-        # A short fixed word for the UNAUTHENTICATED /health (child_start_error); the
-        # message, which can carry a path or a library's exception text, goes to the
-        # log only.
+        # A short fixed word for the UNAUTHENTICATED /health (child_start_error) and for
+        # job answers; the message, which can carry a path or a library's exception
+        # text, goes to the log only. None is a fault with no word of its own, which
+        # misconfigured_error answers with the message: the Mac worker's faults, whose
+        # text is pinned (test_whisper_mlx_pins) and is not changed by this.
         self.category = category
+
+
+def misconfigured_error(e: "ChildFaultError") -> dict:
+    """The job answer for a worker that cannot decode: the stable code and the fault's
+    fixed category word, NEVER the exception text. A job answer reaches whoever can
+    reach the port (there is no authentication), and the message can carry a path or a
+    library's exception text; it is in the worker log, where the caller of this
+    function has already written it. The same word /health shows as child_start_error.
+    A fault with no category (the Mac worker's) is answered with its message, as before."""
+    return error_result(PathJobError(ERR_WORKER_MISCONFIGURED, e.category or str(e)))
 
 
 # Limits on what a network request may ask for. The Go client never comes near
@@ -742,7 +754,7 @@ class PathPipeline:
                     results[key] = (
                         abandoned_result()
                         if start_fault is None
-                        else error_result(PathJobError(ERR_WORKER_MISCONFIGURED, str(start_fault)))
+                        else misconfigured_error(start_fault)
                     )
                     discard_extraction(fut)
                     continue
@@ -764,7 +776,7 @@ class PathPipeline:
                     # on the clip: the Go side defers worker_misconfigured and writes
                     # nothing, where whisper_error would be recorded as failed.
                     log.error(f"path job {key}: inference child fault: {e}")
-                    results[key] = error_result(PathJobError(ERR_WORKER_MISCONFIGURED, str(e)))
+                    results[key] = misconfigured_error(e)
                     if e.starting:
                         start_fault = e
                 except Exception as e:
@@ -942,9 +954,18 @@ class BodyLimitMiddleware:
 
 
 def install_path_routes(
-    app, run_jobs: Callable[[dict[str, Any], float | None], dict[str, dict]]
+    app,
+    run_jobs: Callable[[dict[str, Any], float | None], dict[str, dict]],
+    identity: Callable[[], dict] | None = None,
 ) -> tuple[Callable, Callable]:
     """Register /transcribe-path and /transcribe-path-batch on `app`.
+
+    `identity`, when given, is called AFTER the jobs ran and its dict is returned as
+    the response's "identity": the model, backend and fingerprints this worker
+    decoded with, the same values /health reports. The Go client files each result
+    under that, not under an earlier /health probe, so a worker process that came
+    back with a different model between the probe and the request cannot have its
+    text filed under the old one. Left out, the responses are exactly what they were.
 
     `run_jobs(jobs, deadline)` is the server's runner (PathPipeline.run_path_jobs
     bound to its model). Plain `def`, not `async def`: FastAPI runs these in its
@@ -962,7 +983,8 @@ def install_path_routes(
     @app.post("/transcribe-path")
     def transcribe_path(body: Annotated[dict, Body()]):
         """Single path job: {"path": ..., "seconds": 90} -> {"text","error"}."""
-        return run_jobs({"job": body}, None)["job"]
+        result = run_jobs({"job": body}, None)["job"]
+        return {**result, "identity": identity()} if identity else result
 
     @app.post("/transcribe-path-batch")
     def transcribe_path_batch(body: Annotated[dict, Body()], request: Request):
@@ -986,6 +1008,7 @@ def install_path_routes(
                 status_code=422,
                 detail=f"job keys must be strings of at most {MAX_KEY_CHARS} characters",
             )
-        return {"results": run_jobs(jobs, abandon_deadline(request))}
+        results = run_jobs(jobs, abandon_deadline(request))
+        return {"results": results, "identity": identity()} if identity else {"results": results}
 
     return transcribe_path, transcribe_path_batch

@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_decode_child.py
-# version: 2.1.0
+# version: 2.2.0
 # guid: 2c9d7e15-6a48-4f3b-8e01-d5b7a39c6f82
 # last-edited: 2026-11-17
 #
@@ -295,7 +295,8 @@ def test_a_hung_decode_answers_transcribe_timeout_then_the_next_job_works(worker
     res = _job(client, "hang")
     assert res["error"].startswith("transcribe_timeout:") and res["text"] == ""
     ok = _job(client, "ok")
-    assert ok == {"text": "heard:ok.wav", "error": None}, "recovered with no restart by a human"
+    assert ok["text"] == "heard:ok.wav" and ok["error"] is None
+    assert set(ok) == {"text", "error", "identity"}, "recovered with no restart by a human"
 
 
 def test_a_crash_answers_decoder_crashed_through_the_http_surface(worker):
@@ -350,7 +351,8 @@ def test_a_restart_that_cannot_load_is_worker_misconfigured_and_visible_in_healt
     marker.write_text("x")  # from now on a restart cannot load its model
     assert _job(client, "hang")["error"].startswith("transcribe_timeout:")
     err = _job(client, "ok")["error"]
-    assert err.startswith("worker_misconfigured:") and "could not load its model" in err
+    assert err == "worker_misconfigured: model_load_failed"
+    assert "could not load" not in err and "model file missing" not in err, "no raw load error"
     shown = client.get("/health").json()["child_start_error"]
     assert shown == "worker_misconfigured: model_load_failed"
     assert "could not load" not in shown and "Error" not in shown, "no raw load error text"
@@ -438,7 +440,12 @@ def test_a_restart_is_pinned_to_the_first_resolution(tmp_path):
             "cuda",
             "float16",
         ), "and kept the pinned model, device and compute type"
-        assert pin.values() == {"model": "large-v2", "device": "cuda", "compute_type": "float16"}
+        assert pin.values() == {
+            "model": "large-v2",
+            "device": "cuda",
+            "compute_type": "float16",
+            "batched": True,
+        }
     finally:
         kid.shutdown()
 
@@ -471,6 +478,84 @@ def test_a_child_that_reports_other_than_the_pin_is_refused_even_if_it_loaded(tm
         assert not kid.alive(), "the mismatching child was killed"
     finally:
         kid.shutdown()
+
+
+def test_a_restart_that_lost_the_batched_pipeline_is_refused_like_any_other_mismatch(tmp_path):
+    # `batched` feeds the decode fingerprint (batched and beam search are different
+    # decoders), so a restart with the same model, device and compute type but no batched
+    # pipeline must not serve under the batched worker's fingerprint.
+    pin, (kid,) = _pinned_children(tmp_path, unbatch_after_first=True)
+    try:
+        assert kid.start()["batched"] is True
+        with pytest.raises(wpp.PathJobError):
+            kid.run(_wav(tmp_path, "hang.wav"), 0.5)
+        with pytest.raises(wpp.ChildFaultError, match="pinned to") as e:
+            kid.run(_wav(tmp_path, "a.wav"), 20)
+        assert e.value.category == "pinned_model_mismatch" and e.value.starting
+        assert not kid.alive(), "the mismatching child was killed"
+        assert pin.values()["batched"] is True, "the pin is not rewritten by the refusal"
+    finally:
+        kid.shutdown()
+
+
+def test_every_start_fault_the_decode_child_raises_has_a_category_word():
+    # A fault without one is answered with its MESSAGE (the Mac worker's faults), which
+    # can carry a path or a library's exception text: on this worker that would put it in
+    # a job answer and on /health. Every raise here must name its fixed word.
+    import ast
+
+    tree = ast.parse((HERE.parent / "whisper_decode_child.py").read_text())
+    calls = [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and getattr(n.func, "id", getattr(n.func, "attr", "")) == "ChildFaultError"
+    ]
+    assert len(calls) >= 6, "the scan found the raises"
+    missing = [n.lineno for n in calls if "category" not in {k.arg for k in n.keywords}]
+    assert not missing, f"ChildFaultError without a category at lines {missing}"
+
+
+def test_the_pin_compares_batched_directly():
+    pin = wdc.StartPin()
+    base = {"model": "base.en", "device": "cpu", "compute_type": "int8"}
+    assert pin.check_and_record({**base, "batched": True}) is None
+    assert pin.check_and_record({**base, "batched": True, "pid": 9}) is None
+    assert "pinned to" in pin.check_and_record({**base, "batched": False})
+    assert "pinned to" in pin.check_and_record(base), "a start that did not say is a mismatch"
+
+
+def test_a_child_outside_the_job_object_is_shown_on_health(tmp_path, monkeypatch):
+    # On Windows the job object is what kills a child whose parent died while a decode
+    # held the GIL. A failed assignment is a warning in the log AND child_unprotected on
+    # /health, so an operator who never reads that log can still see the loss.
+    monkeypatch.setenv("WHISPER_MACHINE_ID", "gotham-job-1")
+    monkeypatch.setenv(wpp.REQUIRE_MOUNT_ENV, "0")
+    outcomes = iter([False, True])
+    monkeypatch.setattr(wdc.DecodeChild, "_protect", staticmethod(lambda pid: next(outcomes)))
+    kid = wdc.DecodeChild(FACTORY, {}, ready_timeout_s=60.0)
+    engine = ws.Engine([kid])
+    try:
+        kid.start()
+        client = TestClient(ws.create_app(ws.ServerConfig(), engine))
+        assert kid.unprotected() and client.get("/health").json()["child_unprotected"] is True
+        with pytest.raises(wpp.PathJobError):
+            kid.run(_wav(tmp_path, "hang.wav"), 0.5)
+        assert kid.run(_wav(tmp_path, "a.wav"), 20) == "heard:a.wav"  # restarted: protected
+        assert not kid.unprotected()
+        assert "child_unprotected" not in client.get("/health").json(), "absent, not false"
+    finally:
+        engine.shutdown()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows job objects")
+def test_assigning_a_process_that_cannot_be_opened_reports_failure():
+    assert wdc._assign_to_job(0xFFFFFFF0) is False
+
+
+def test_posix_children_are_never_reported_unprotected():
+    if sys.platform != "win32":
+        assert wdc.DecodeChild._protect(12345) is True
 
 
 def test_with_several_workers_all_serve_the_pin_or_the_worker_refuses_to_start(tmp_path):
@@ -520,6 +605,35 @@ def test_health_reports_the_pinned_resolution_even_after_a_restart(tmp_path, mon
         h = TestClient(app).get("/health").json()
         assert h["model"] == "large-v2" and h["device"] == "cuda" and h["compute_type"] == "float16"
         assert h["decode_fingerprint"] == ws.decode_fingerprint("large-v2", 8, "float16", True)
+    finally:
+        engine.shutdown()
+
+
+def test_an_answer_after_a_child_restart_carries_the_pinned_identity(tmp_path, monkeypatch):
+    # The case the Go client files results by: the decode child died and came back (here
+    # its unpinned `auto` would have landed on base.en), and the answer must still say the
+    # model that decoded, which is the pinned one, on the upload and the path routes alike.
+    monkeypatch.setenv("WHISPER_MACHINE_ID", "gotham-pin-2")
+    monkeypatch.setenv(wpp.REQUIRE_MOUNT_ENV, "0")
+    pin, (kid,) = _pinned_children(tmp_path)
+    engine = ws.Engine([kid], pin)
+    try:
+        kid.start()
+        client = TestClient(ws.create_app(ws.ServerConfig(), engine))
+        upload = [("files", ("101", b"aa", "audio/wav"))]
+        before = client.post("/transcribe-batch", files=upload).json()["identity"]
+        with pytest.raises(wpp.PathJobError):
+            kid.run(_wav(tmp_path, "hang.wav"), 0.5)  # killed, restarted on the next clip
+        after = client.post("/transcribe-batch", files=upload)
+        single = client.post("/transcribe", files={"file": ("a.wav", b"aa", "audio/wav")})
+        assert kid.meta()["loads"] == 2, "the child really was restarted"
+        health = client.get("/health").json()
+        want = {
+            k: health[k] for k in ("model", "backend", "decode_fingerprint", "extract_fingerprint")
+        }
+        assert want["model"] == "large-v2"
+        assert before == after.json()["identity"] == single.json()["identity"] == want
+        assert after.json()["results"]["101"]["error"] is None
     finally:
         engine.shutdown()
 

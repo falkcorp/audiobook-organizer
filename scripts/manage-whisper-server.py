@@ -1,5 +1,5 @@
 # file: scripts/manage-whisper-server.py
-# version: 3.0.0
+# version: 3.1.0
 # guid: f7a8b9c0-d1e2-3456-fabc-678901234567
 # last-edited: 2026-11-17
 #
@@ -111,11 +111,30 @@ def ps_quote(text: str) -> str:
 def start_process_arg(arg: str) -> str:
     """One element of Start-Process -ArgumentList as a PowerShell literal. Start-Process
     joins the elements with spaces and does NOT quote them, so a value with a space (a
-    profile folder, "John Smith") must carry its own double quotes to stay one
-    argument."""
+    profile folder, "Bruce Wayne") must carry its own double quotes to stay one
+    argument.
+
+    The quoting follows the rule the Windows argument parser (CommandLineToArgvW) reads
+    by: backslashes are literal EXCEPT in front of a double quote, where each one must
+    be doubled and the quote itself escaped. That matters at the end of a value, where
+    our closing quote follows it: a model directory such as `C:\\Models\\Wayne Manor\\`
+    must reach the server with its trailing backslash and not as an escaped quote that
+    swallows the next argument."""
     if arg and not any(c.isspace() or c == '"' for c in arg):
         return ps_quote(arg)
-    return ps_quote('"' + arg.replace('"', '\\"') + '"')
+    out = []
+    backslashes = 0
+    for c in arg:
+        if c == "\\":
+            backslashes += 1
+            continue
+        if c == '"':
+            out.append("\\" * (backslashes * 2 + 1) + '"')
+        else:
+            out.append("\\" * backslashes + c)
+        backslashes = 0
+    out.append("\\" * (backslashes * 2))  # in front of the closing quote
+    return ps_quote('"' + "".join(out) + '"')
 
 
 def build_kill_script(port: int) -> str:

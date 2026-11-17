@@ -1,5 +1,5 @@
 # file: scripts/whisper_server.py
-# version: 5.0.0
+# version: 5.1.0
 # guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 # last-edited: 2026-11-17
 #
@@ -124,16 +124,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from whisper_decode_child import DecodeChild, StartPin  # noqa: E402
 from whisper_machine_id import MachineIdentity  # noqa: E402
 from whisper_path_pipeline import (  # noqa: E402
-    ERR_WORKER_MISCONFIGURED,
+    EXTRACT_FINGERPRINT,
     BodyLimitMiddleware,
     ChildFaultError,
-    PathJobError,
     PathPipeline,
     abandon_deadline,
     abandoned_result,
     audio_seconds,
-    error_result,
     install_path_routes,
+    misconfigured_error,
     past,
 )
 
@@ -180,15 +179,19 @@ def _env_seconds(name: str, default: float, *, maximum: float = 7 * 86400.0) -> 
 
 CLIP_TIMEOUT_FLOOR_S = _env_seconds("WHISPER_TRANSCRIBE_MIN_TIMEOUT_S", 300.0)
 CLIP_TIMEOUT_FACTOR = _env_seconds("WHISPER_TRANSCRIBE_TIMEOUT_FACTOR", 8.0, maximum=1e4)
-# Hard ceiling on the COMPUTED deadline (floor x factor x audio length). A clip of
-# 10 minutes of audio gets 8 x 600 = 4800 s at the default factor, so 3600 s (one
-# hour) is above any intro this worker is sent and far below what a huge upload
-# would otherwise earn (a 1 GB upload read as 31,250 s of audio would get 69 hours,
-# and busy_limit_seconds would keep the server's stuck rule from ever firing).
+# Hard ceiling on the COMPUTED deadline, max(floor, factor x audio length). At the
+# default factor of 8 the cap binds for audio longer than 450 s: a 10-minute clip
+# is cut to 3600 s (6x its length, not 8x), and so is anything longer. An intro
+# clip is far shorter than 450 s, so this does not touch the clips this worker is
+# sent; it is there for what a huge upload would otherwise earn (a 1 GB upload read
+# as 31,250 s of audio would get 69 hours, and busy_limit_seconds would keep the
+# server's stuck rule from ever firing). The Go client sizes its own ceiling from
+# the uncapped formula, so it can only wait longer than this worker does.
 CLIP_TIMEOUT_CAP_S = _env_seconds("WHISPER_TRANSCRIBE_MAX_TIMEOUT_S", 3600.0)
 # Upload routes (/transcribe, /transcribe-batch) take whole WAVs, which the path
-# routes' 8 MiB limit would refuse. 256 MiB is 2.3 hours of 16 kHz stereo 16-bit PCM,
-# far more than an intro clip, and the whole body is read into memory.
+# routes' 8 MiB limit would refuse. 256 MiB is about 2.3 hours of 16 kHz MONO 16-bit
+# PCM (32,000 bytes a second), or about 1.2 hours of stereo; either is far more than
+# an intro clip. The whole body is read into memory.
 MAX_UPLOAD_BYTES = 256 * 1024 * 1024
 # How long a RESTARTED child may take to load the model (cached by then). Reported
 # on /health: the server adds it to its HTTP ceiling.
@@ -360,7 +363,12 @@ def resolve_device(
     count, why = count_cuda()
     if count > 0:
         return "cuda", f"auto: {count} CUDA device(s) found"
-    return "cpu", "auto: " + (f"CUDA probe failed ({why})" if why else "no CUDA device found")
+    if why:
+        # The reason is on the unauthenticated /health (device_reason), so it is a
+        # fixed phrase; the probe's own error text can name a library path.
+        log.warning("CUDA probe failed: %s", why)
+        return "cpu", "auto: CUDA probe failed"
+    return "cpu", "auto: no CUDA device found"
 
 
 def effective_compute_type(cfg: ServerConfig, device: str) -> str:
@@ -497,7 +505,10 @@ def load_transcriber(
         if not (cfg.device == "auto" and device == "cuda"):
             raise
         fallback = True
-        reason = f"auto: CUDA found but the model failed to load on it ({exc}); using cpu"
+        # A fixed phrase for /health's device_reason; the exception is in the log line
+        # below (an exception from a model load can name a cache path under a user
+        # profile, and /health has no authentication).
+        reason = "auto: CUDA found but the model failed to load on it; using cpu"
         device = "cpu"
         compute = effective_compute_type(dataclasses.replace(cfg, compute_type=None), "cpu")
         model = resolve_model(cfg, "cpu")
@@ -684,6 +695,11 @@ class Engine:
                 return err
         return None
 
+    def unprotected(self) -> bool:
+        """True when any decode child runs without the Windows job object that kills
+        it with this process (see DecodeChild.unprotected)."""
+        return any(getattr(r, "unprotected", lambda: False)() for r in self.runners)
+
     def meta(self) -> dict:
         """What /health reports: the PINNED resolution (the first start's model,
         device and compute type, which every child is held to), else the first live
@@ -767,13 +783,36 @@ def create_app(
     app.state.pipeline = pipeline
     app.state.identity = identity
 
+    def identity_of(meta: dict) -> dict:
+        """What this worker's output is filed under: the model and backend it decodes
+        with, and the fingerprints of its decode and extraction settings. ONE function
+        for /health and for every transcription response, so the two cannot disagree
+        about what the worker is. It is read from the engine's pin (the first start's
+        resolution, which every decode child is held to), so it is the identity of the
+        process that decoded, whichever child process that was."""
+        model = meta.get("model", cfg.model or DEFAULT_CPU_MODEL)
+        return {
+            "model": model,
+            "backend": "faster-whisper",
+            "decode_fingerprint": decode_fingerprint(
+                model,
+                int(meta.get("batch_size", cfg.batch_size)),
+                meta.get("compute_type", ""),
+                bool(meta.get("batched", False)),
+            ),
+            "extract_fingerprint": EXTRACT_FINGERPRINT,
+        }
+
+    def response_identity() -> dict:
+        return identity_of(engine.meta())
+
     def transcribe_clip(wav_path: str) -> str:
         return engine.run(wav_path, audio_seconds(wav_path))
 
     def run_path_jobs(jobs: dict, deadline: Optional[float] = None) -> dict:
         return pipeline.run_path_jobs(jobs, deadline, transcribe_clip)
 
-    install_path_routes(app, run_path_jobs)
+    install_path_routes(app, run_path_jobs, response_identity)
 
     def do_transcribe(data: bytes, filename: str, on_start_fault=None) -> dict:
         """One upload to the {"text","error"} shape. Never raises: one bad WAV must
@@ -791,7 +830,7 @@ def create_app(
             log.error(f"decode child fault for {filename}: {e}")
             if e.starting and on_start_fault is not None:
                 on_start_fault(e)
-            return error_result(PathJobError(ERR_WORKER_MISCONFIGURED, str(e)))
+            return misconfigured_error(e)
         except Exception as e:
             log.error(f"transcription failed for {filename}: {e}")
             return {"text": "", "error": str(e)}
@@ -810,9 +849,7 @@ def create_app(
             if past(deadline):
                 results[f.filename] = abandoned_result()
             elif start_fault:
-                results[f.filename] = error_result(
-                    PathJobError(ERR_WORKER_MISCONFIGURED, str(start_fault[0]))
-                )
+                results[f.filename] = misconfigured_error(start_fault[0])
             else:
                 results[f.filename] = do_transcribe(f.file.read(), f.filename, start_fault.append)
         return results
@@ -822,15 +859,19 @@ def create_app(
     # worker is busy (the server reads a silent worker as a dead one).
     @app.post("/transcribe")
     def transcribe(file: Annotated[UploadFile, File()]):
-        """Single-file endpoint — kept for backward compatibility."""
-        return do_transcribe(file.file.read(), file.filename)
+        """Single-file endpoint — kept for backward compatibility. The answer carries
+        the worker's identity (see identity_of), read after the decode."""
+        result = do_transcribe(file.file.read(), file.filename)
+        return {**result, "identity": response_identity()}
 
     @app.post("/transcribe-batch")
     def transcribe_batch(files: Annotated[List[UploadFile], File()], request: Request):
         """Multi-file endpoint: WAV files in one multipart request; each part's
         filename is its result key. Returns {"results": {name: {"text","error"}}}.
-        X-Whisper-Request-Timeout-S is honoured like the Mac worker does."""
-        return {"results": run_upload_batch(files, abandon_deadline(request))}
+        X-Whisper-Request-Timeout-S is honoured like the Mac worker does. The answer
+        carries the worker's identity (see identity_of), read after the decodes."""
+        results = run_upload_batch(files, abandon_deadline(request))
+        return {"results": results, "identity": response_identity()}
 
     @app.get("/health")
     async def health():
@@ -839,20 +880,20 @@ def create_app(
         server ignores fields it does not know). `device` is the RESOLVED device
         read back off the loaded model, never the requested one, so the server's
         require_gpu gate measures what is running. Everything model-related comes
-        from the live child, so a restart that landed somewhere else shows."""
+        from the engine's pin: the first start's resolution, to which every decode
+        child, restarts included, is held (a restart that cannot load exactly that
+        is a start fault, shown as child_start_error, never a different model)."""
         meta = engine.meta()
         device = meta.get("device", "unknown")
-        model = meta.get("model", cfg.model or DEFAULT_CPU_MODEL)
+        ident = identity_of(meta)
         compute = meta.get("compute_type", "")
         batched = bool(meta.get("batched", False))
         return await pipeline.health_payload(
             identity=identity,
-            model=model,
-            backend="faster-whisper",
+            model=ident["model"],
+            backend=ident["backend"],
             device=device,
-            decode_fingerprint=decode_fingerprint(
-                model, int(meta.get("batch_size", cfg.batch_size)), compute, batched
-            ),
+            decode_fingerprint=ident["decode_fingerprint"],
             busy=engine.busy,
             start_error=engine.start_error,
             clip_timeout_floor_s=CLIP_TIMEOUT_FLOOR_S,
@@ -872,6 +913,10 @@ def create_app(
                 "device_source": meta.get("device_source", ""),
                 "device_reason": meta.get("device_reason", ""),
                 "num_workers": cfg.num_workers,
+                # Present (true) ONLY while a decode child runs outside the Windows
+                # job object that kills it with this worker: it would then outlive
+                # a killed worker if a decode holds the GIL. Absent otherwise.
+                **({"child_unprotected": True} if engine.unprotected() else {}),
                 # "nt" or "posix": a Windows worker cannot represent every title
                 # (path_unrepresentable), so a dispatcher can keep those off it.
                 "path_flavor": "nt"
