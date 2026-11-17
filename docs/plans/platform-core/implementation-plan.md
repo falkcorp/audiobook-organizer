@@ -870,7 +870,7 @@ questions the plan carries instead:
       each is filed in a headerless `todo.d/` fragment (`todo.d/README.md`) named
       `<date>-<subsystem>-must-be-empty-before-<flip row>-flip.md`, each entry opened by a bold id that ends in the flip
       row (first example: `**JOBWRITES-F5-18**` in `todo.d/2026-11-16-jobwrites-must-be-empty-before-f5-18-flip.md`,
-      PR #4683, open). Fragments fold into `TODO.md` daily and are deleted, so the per-subsystem "must be
+      merged in #4683, still in `todo.d/` on main). Fragments fold into `TODO.md` daily and are deleted, so the per-subsystem "must be
       empty before the flip" list is every entry whose id ends in that flip row, in `todo.d/` and in `TODO.md`; the flip row
       refuses to merge while one is open. No mutation pass is required.
     - **Full tier**, for every flip, every security row and any code a live path executes (a shared body, a store
