@@ -1,7 +1,7 @@
 // file: internal/books/store/bookfile_intro_provenance_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 3f8a2c6e-91d4-4b7a-a5e0-6d2b4c8f1e73
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package store
 
@@ -57,6 +57,7 @@ func introSeed(t *testing.T, s *PebbleStore) (*BookFile, string) {
 		IntroTimeoutHash:       "hash-of-the-bytes",
 		IntroTimeoutRunID:      "run-that-counted-it",
 		IntroMeta:              &IntroMeta{Model: "model-x", Language: "en", ClipStartSec: 0, ClipLengthSec: 90},
+		IntroParse:             &IntroParse{Version: 1, Kind: "title_announcement", Title: "Example Title", Author: "Example Author", Narrator: "Example Reader"},
 	}
 	if err := s.CreateBookFile(seed); err != nil {
 		t.Fatalf("CreateBookFile: %v", err)
@@ -101,6 +102,9 @@ func assertIntroGroupKept(t *testing.T, want, got *BookFile) {
 	}
 	if got.IntroMeta == nil || *got.IntroMeta != *want.IntroMeta {
 		t.Errorf("IntroMeta was not kept: want %+v, got %+v", want.IntroMeta, got.IntroMeta)
+	}
+	if got.IntroParse == nil || *got.IntroParse != *want.IntroParse {
+		t.Errorf("IntroParse was not kept: want %+v, got %+v", want.IntroParse, got.IntroParse)
 	}
 }
 
@@ -179,6 +183,9 @@ func TestRescan_ReplacedFileDropsPerFileIntroGroup(t *testing.T) {
 		t.Errorf("the old file's transcript/provenance survived the replacement: transcript=%v meta=%+v run=%q",
 			got.IntroTranscription, got.IntroMeta, got.IntroRunOpID)
 	}
+	if got.IntroParse != nil {
+		t.Errorf("the old file's classification survived the replacement: %+v", got.IntroParse)
+	}
 	if got.IntroTimeouts != 0 || got.IntroTimeoutHash != "" || got.IntroTimeoutRunID != "" {
 		t.Errorf("the old file's timeout strikes survived the replacement: %d/%q", got.IntroTimeouts, got.IntroTimeoutHash)
 	}
@@ -211,11 +218,15 @@ func TestUpdateBookFile_SlimRoundTripKeepsIntroMeta(t *testing.T) {
 func TestStripBookFileForMemdb_IntroProvenance(t *testing.T) {
 	src := &BookFile{
 		ID: "bf-1", FileHash: "h", IntroSourceHash: "h", IntroRunOpID: "op-1",
-		IntroMeta: &IntroMeta{Model: "m", ClipLengthSec: 90},
+		IntroMeta:  &IntroMeta{Model: "m", ClipLengthSec: 90},
+		IntroParse: &IntroParse{Version: 1, Kind: "narration"},
 	}
 	stripped := stripBookFileForMemdb(src)
 	if stripped.IntroMeta != nil {
 		t.Errorf("IntroMeta must be stripped from memdb, got %+v", stripped.IntroMeta)
+	}
+	if stripped.IntroParse != nil {
+		t.Errorf("IntroParse must be stripped from memdb, got %+v", stripped.IntroParse)
 	}
 	core := stripped.Core()
 	if core.IntroSourceHash != "h" || core.IntroRunOpID != "op-1" {
@@ -223,5 +234,8 @@ func TestStripBookFileForMemdb_IntroProvenance(t *testing.T) {
 	}
 	if src.IntroMeta == nil {
 		t.Error("source mutated: IntroMeta nil on src")
+	}
+	if src.IntroParse == nil {
+		t.Error("source mutated: IntroParse nil on src")
 	}
 }

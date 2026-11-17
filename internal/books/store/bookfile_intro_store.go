@@ -1,7 +1,7 @@
 // file: internal/books/store/bookfile_intro_store.go
-// version: 1.7.2
+// version: 1.8.0
 // guid: 8c1e5a47-2f93-4d06-b7a8-3e90d14c6b25
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package store
 
@@ -207,6 +207,10 @@ type BookFileIntroResult struct {
 	Title, Author, Narrator, Translator, CoverArtist string
 	// Meta is how the clip was made; written with a Transcript.
 	Meta *IntroMeta
+	// Parse is the classification of Transcript, written with it (nil clears: a
+	// stored parse always describes the stored transcript, never an earlier one).
+	// The re-parse op fills it in for rows written before it existed.
+	Parse *IntroParse
 	// At is the attempt time.
 	At time.Time
 	// Done stamps IntroSourceHash = SourceHash, the op's done marker. Set it
@@ -351,6 +355,7 @@ func (s *PebbleStore) setBookFileIntroOnce(bookID, fileID string, r BookFileIntr
 		at := r.At
 		row.IntroTranscribedAt = &at
 		row.IntroMeta = r.Meta
+		row.IntroParse = r.Parse
 		// A transcript supersedes any timeout record: the file decodes.
 		row.IntroTimeouts, row.IntroTimeoutHash, row.IntroTimeoutRunID, row.IntroTimeoutAt, row.IntroTimeoutWorker = 0, "", "", nil, ""
 		if stampsSentinel {
@@ -451,6 +456,7 @@ func (s *PebbleStore) clearBookFileIntroOnce(bookID, fileID, runOpID string) (be
 	row.IntroSourceHash = ""
 	row.IntroRunOpID = ""
 	row.IntroMeta = nil
+	row.IntroParse = nil
 	row.IntroTimeouts, row.IntroTimeoutHash, row.IntroTimeoutRunID, row.IntroTimeoutAt, row.IntroTimeoutWorker = 0, "", "", nil, ""
 	res, err := s.writeIntroRow(bookID, fileID, row, raw, "ClearBookFileIntro")
 	if err != nil {
