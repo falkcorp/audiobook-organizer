@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store_series.go
-// version: 1.11.3
+// version: 1.12.0
 // guid: 29120d16-9add-4efd-81a5-edc1e8951f4d
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package store
 
@@ -249,6 +249,18 @@ func (p *PebbleStore) DeleteSeries(id int) error {
 	p.nameIdx.series.Lock()
 	defer p.nameIdx.series.Unlock()
 
+	if err := p.deleteSeriesRowLocked(id); err != nil {
+		return err
+	}
+	p.notifySeriesRenamed(id)
+	return nil
+}
+
+// deleteSeriesRowLocked is DeleteSeries' body: the held-row refusal, the
+// ownership-checked name-index delete, the row delete and the memdb write. The
+// caller holds nameIdx.series across the call and fires the rename
+// notification after it.
+func (p *PebbleStore) deleteSeriesRowLocked(id int) error {
 	key := []byte(fmt.Sprintf("series:%d", id))
 
 	// Read the series first to clean up the name index
@@ -279,7 +291,6 @@ func (p *PebbleStore) DeleteSeries(id int) error {
 		return err
 	}
 	p.DeleteSeriesFromMemDB(id)
-	p.notifySeriesRenamed(id)
 	return nil
 }
 
