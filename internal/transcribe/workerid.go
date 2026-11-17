@@ -1,7 +1,7 @@
 // file: internal/transcribe/workerid.go
-// version: 1.2.6
+// version: 1.3.0
 // guid: 41850903-354a-4f35-819b-d4acdeea1adb
-// last-edited: 2026-10-27
+// last-edited: 2026-11-17
 
 package transcribe
 
@@ -179,6 +179,43 @@ func (g gatedEndpoint) answerWorker() string {
 		return w
 	}
 	return joinWorkers([]string{w, g.learned})
+}
+
+// answerModel is the model the endpoint's /health reported, stamped on every
+// answer it gives (BatchResult.Model). Empty when g was not probed: a result is
+// never labelled with a model nobody read.
+func (g gatedEndpoint) answerModel() string {
+	if !g.Probed {
+		return ""
+	}
+	return strings.TrimSpace(g.Health.Model)
+}
+
+// answerLanguage is answerModel for the decode language; empty until a worker
+// reports one.
+func (g gatedEndpoint) answerLanguage() string {
+	if !g.Probed {
+		return ""
+	}
+	return strings.TrimSpace(g.Health.Language)
+}
+
+// stampAnswer names the endpoint that gave br on the result: the URL for logs,
+// the machine identity stored with strikes, and the model and language the
+// worker reports. A field the result already carries (a worker whose response
+// names its own model) is kept: the response is more specific than /health.
+// worker is passed in because the two dispatch paths store it differently (see
+// storedWorker and answerWorker).
+func stampAnswer(br BatchResult, g gatedEndpoint, url, worker string) BatchResult {
+	br.Endpoint = url
+	br.Worker = worker
+	if br.Model == "" {
+		br.Model = g.answerModel()
+	}
+	if br.Language == "" {
+		br.Language = g.answerLanguage()
+	}
+	return br
 }
 
 // workerID is the identity stored with a strike: "m:" + the reported
