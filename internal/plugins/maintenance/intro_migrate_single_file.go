@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file.go
-// version: 1.6.10
+// version: 1.7.0
 // guid: 6b0d94e7-1c58-4a32-bf07-9e5d2a17c630
 // last-edited: 2026-11-17
 
@@ -17,6 +17,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
+	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
@@ -418,6 +419,11 @@ var introMigratedFields = []string{
 	"TranscribeStatus",
 	"TranscribeError",
 	"TranscribeAttemptedAt",
+	// IntroParse is DERIVED, not copied: the classification of the transcript this
+	// migration writes (applyBookIntroFieldsToFile), so the stored parse always
+	// describes the stored text. Without it, an overwrite replaced a file's text and
+	// left the parse of the old one.
+	"IntroParse",
 }
 
 // introNotMigratedFields are the BookFile intro-group fields this migration
@@ -438,9 +444,6 @@ var introMigratedFields = []string{
 //   - IntroMeta: model, language and clip length of the transcription. The book
 //     op's settings at the time are not recorded on the book, so there is nothing
 //     truthful to put here.
-//   - IntroParse: the classification of THIS file's own transcript. The book-level
-//     transcript's kind is a different question (it is the book's, not the file's),
-//     and maintenance.reparse-file-intros derives it per file from stored text.
 //   - IntroTimeouts / IntroTimeoutHash / IntroTimeoutRunID / IntroTimeoutAt / IntroTimeoutWorker: how many times the Whisper decoder ran
 //     past its deadline on THESE bytes. A migration never ran the decoder, so it
 //     has no strikes to carry, and copying a book-level status cannot say
@@ -453,7 +456,6 @@ var introNotMigratedFields = []string{
 	"IntroSourceHash",
 	"IntroRunOpID",
 	"IntroMeta",
-	"IntroParse",
 	"IntroTimeouts",
 	"IntroTimeoutHash",
 	"IntroTimeoutRunID",
@@ -462,9 +464,16 @@ var introNotMigratedFields = []string{
 }
 
 // applyBookIntroFieldsToFile copies the ten-field intro-transcription group
-// from a Book onto one of its BookFiles. It is the ONLY place this migration
-// mutates a BookFile, so the blast radius is one small function with a
-// reflective test pinning it.
+// from a Book onto one of its BookFiles and derives the file's IntroParse from the
+// copied text (the same derivation maintenance.reparse-file-intros uses). It is the
+// ONLY place this migration mutates a BookFile, so the blast radius is one small
+// function with a reflective test pinning it.
+//
+// The parse is derived because the copy REPLACES the file's text (overwrite=true
+// targets a file that already has some): a stored parse always describes the stored
+// transcript, never an earlier one. With no transcript to copy there is nothing to
+// describe and the parse is nil. A non-nil parse is what survives the book_file merge
+// (the group is bfPreserveAlways, so a zero value would keep the stored one).
 //
 // dst must be a FULL Pebble row (from GetBookFiles), never a memdb projection:
 // the caller writes dst back wholesale, so every field it does not set must
@@ -480,4 +489,11 @@ func applyBookIntroFieldsToFile(dst *database.BookFile, src database.Book) {
 	dst.TranscribeStatus = src.TranscribeStatus
 	dst.TranscribeError = src.TranscribeError
 	dst.TranscribeAttemptedAt = src.TranscribeAttemptedAt
+	dst.IntroParse = nil
+	if src.IntroTranscription != nil {
+		if p := transcribe.ParseClip(*src.IntroTranscription); p.Kind != transcribe.ClipKindNone {
+			parse := introParseFromClip(p)
+			dst.IntroParse = &parse
+		}
+	}
 }

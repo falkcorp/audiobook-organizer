@@ -1,5 +1,5 @@
 // file: internal/books/store/bookfile_intro_reparse_store_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9a4f2c68-3e17-4d85-b0c6-5e8d1f7a2b94
 // last-edited: 2026-11-17
 
@@ -351,40 +351,100 @@ func TestReparseBookFileIntro_WriteSizeIsTheWholeRowAndGrowthIsTheParse(t *testi
 	}
 }
 
-// MJ1: IntroParseRowBytes is the exact size of the row the write stores, not an
-// estimate: computed from the row before the write, it equals the stored length
-// after it, with a fingerprint carried and the deprecated segment columns (which
-// the stored form drops) set on the input. It never changes the row it is given.
+// storedRowLen is the length of the row as stored.
+func storedRowLen(t *testing.T, f *casFixture) int {
+	t.Helper()
+	v, closer, err := f.s.db.Get(bookFileKey(f.book.ID, f.file.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closer.Close()
+	return len(v)
+}
+
+// R3-m3 / MJ1: IntroParseRowBytes is the stored size when it is given the timestamp
+// the write stamps. The old test compared against a size computed with the row's OLD
+// UpdatedAt and failed whenever the old and new stamps had a different number of
+// trailing fractional zeros (about one run in five). The clock is pinned, so the
+// stamp is a known value and the comparison is exact on every run: the old stamp has
+// no fractional digits at all, the new one has nine, the widest difference there is.
 func TestIntroParseRowBytes_IsTheStoredSizeAndMutatesNothing(t *testing.T) {
 	f := newCASFixture(t)
 	seedReparseRow(t, f, "Batman: Year One. Written by Alfred Pennyworth. Read by Selina Kyle.", IntroStatusOK, IntroReparseIdentity{Title: "Batman: Year One"})
 	f.strayWrite(t, func(r *BookFile) { r.AcoustIDFingerprint = make([]byte, 5000) })
 
+	stamp := time.Date(2026, 11, 17, 12, 0, 0, 123456789, time.UTC)
+	f.s.introClock = func() time.Time { return stamp }
+
 	row := *f.row(t)
 	row.AcoustIDSeg0 = "legacy-segment-batman" // dropped from the stored form
+	row.UpdatedAt = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	parse := IntroParse{Version: 1, Kind: "title_announcement", Title: "Batman: Year One", Author: "Alfred Pennyworth", Publisher: "Gotham Audio"}
-	want, err := IntroParseRowBytes(&row, parse)
+	want, err := IntroParseRowBytes(&row, parse, stamp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.IntroParse != nil || row.AcoustIDSeg0 != "legacy-segment-batman" {
-		t.Errorf("IntroParseRowBytes changed its argument: parse %+v seg0 %q", row.IntroParse, row.AcoustIDSeg0)
+	if row.IntroParse != nil || row.AcoustIDSeg0 != "legacy-segment-batman" || !row.UpdatedAt.Equal(time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)) {
+		t.Errorf("IntroParseRowBytes changed its argument: parse %+v seg0 %q updated %v", row.IntroParse, row.AcoustIDSeg0, row.UpdatedAt)
+	}
+	// The test is only sensitive to the bug if the two stamps encode to different widths.
+	if withOld, _ := IntroParseRowBytes(&row, parse, row.UpdatedAt); withOld == want {
+		t.Fatalf("the old and the new stamp encode to the same width (%d bytes): this test cannot tell them apart", want)
 	}
 
 	if out, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, okParse(parse)); err != nil || out != IntroReparseWrote {
 		t.Fatalf("out=%v err=%v", out, err)
 	}
-	v, closer, err := f.s.db.Get(bookFileKey(f.book.ID, f.file.ID))
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := len(v)
-	closer.Close()
 	// The stored row has no segment columns, so the reported size must not count them.
-	if got != want {
+	if got := storedRowLen(t, f); got != want {
 		t.Errorf("IntroParseRowBytes = %d, the stored row is %d bytes", want, got)
 	}
 	if want < 5000 {
 		t.Errorf("IntroParseRowBytes = %d, smaller than the fingerprint it must carry", want)
+	}
+}
+
+// R3-m3 / R3-n3: the size the writer hands the decision (SizeWith) is the size of the
+// row it then stores, on the REAL clock, every time: the attempt takes one timestamp
+// for both. Run with -count to see it never flake.
+func TestReparseBookFileIntro_SizeWithIsTheStoredSizeOnTheRealClock(t *testing.T) {
+	f := newCASFixture(t)
+	seedReparseRow(t, f, "Batman: Year One. Written by Alfred Pennyworth. Read by Selina Kyle.", IntroStatusOK, IntroReparseIdentity{Title: "Batman: Year One"})
+	f.strayWrite(t, func(r *BookFile) { r.AcoustIDFingerprint = make([]byte, 3000) })
+
+	var sized int
+	parse := IntroParse{Version: 1, Kind: "title_announcement", Title: "Batman: Year One", Author: "Alfred Pennyworth"}
+	out, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, func(cur IntroReparseRow) (*IntroParse, bool) {
+		n, serr := cur.SizeWith(parse)
+		if serr != nil {
+			t.Errorf("SizeWith: %v", serr)
+		}
+		sized = n
+		return &parse, true
+	})
+	if err != nil || out != IntroReparseWrote {
+		t.Fatalf("out=%v err=%v", out, err)
+	}
+	if got := storedRowLen(t, f); got != sized {
+		t.Errorf("SizeWith said %d bytes, the stored row is %d", sized, got)
+	}
+}
+
+// R3-m3: the intro writers stamp UpdatedAt from introNow, which a test can pin.
+func TestIntroWritersStampUpdatedAtFromTheClock(t *testing.T) {
+	f := newCASFixture(t)
+	stamp := time.Date(2026, 11, 17, 12, 0, 0, 5, time.UTC)
+	f.s.introClock = func() time.Time { return stamp }
+	seedReparseRow(t, f, "Batman: Year One.", IntroStatusOK, IntroReparseIdentity{})
+	if got := f.row(t).UpdatedAt; !got.Equal(stamp) {
+		t.Fatalf("UpdatedAt after SetBookFileIntro = %v, want the pinned clock %v", got, stamp)
+	}
+	later := stamp.Add(time.Hour)
+	f.s.introClock = func() time.Time { return later }
+	if _, err := f.s.ReparseBookFileIntro(f.book.ID, f.file.ID, okParse(IntroParse{Version: 1, Kind: "narration"})); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.row(t).UpdatedAt; !got.Equal(later) {
+		t.Errorf("UpdatedAt after ReparseBookFileIntro = %v, want %v", got, later)
 	}
 }

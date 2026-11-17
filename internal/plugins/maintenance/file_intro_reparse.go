@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_reparse.go
-// version: 3.0.0
+// version: 3.1.0
 // guid: 7d3a5e91-c2b4-4f08-a6e7-91b0d4c8f325
 // last-edited: 2026-11-17
 
@@ -43,9 +43,10 @@ const reparseFileIntrosID = "maintenance.reparse-file-intros"
 // Chunks are disjoint sets of files, so no two workers ever touch the same row.
 const reparseChunkSize = 64
 
-// reparseMaxPasses bounds the closing re-listing of a live run (see
-// runReparseFileIntros): it ends when a fresh listing holds no file the run has not
-// visited, and fails rather than loop if the library keeps gaining selectable files.
+// reparseMaxPasses is the backstop on a live run's passes (see runReparseFileIntros).
+// A run normally ends because a pass wrote nothing and lost nothing; it reaches this
+// only when every pass keeps producing parse writes or keeps finding files gone, and
+// then it fails, saying so, rather than loop.
 const reparseMaxPasses = 5
 
 // reparseSampleCap bounds each class's sample list. Samples are file ids only (no
@@ -129,8 +130,11 @@ type reparseFileIntrosResult struct {
 	// surprising number visible.
 	NotSelected int `json:"files_without_intro_fields"`
 	// SelectedByBookTranscript is how many selected files were selected only because
-	// they are the sole file of a book with a book-level transcript (they carry no
-	// retained intro column of their own): the transcript-only rows.
+	// they are the sole audio file of a book with a book-level transcript and carry no
+	// retained intro column of their own. It is the transcript-only rows PLUS every
+	// such file that holds no text of its own (a book whose transcript the book-level
+	// op wrote and the single-file migration never copied): those are read in full and
+	// land in unreparsable.no_transcript, so that class is inflated by them.
 	SelectedByBookTranscript int `json:"selected_by_book_transcript"`
 	// Listed is the files the run set out to read, over every pass; Selected is the
 	// files a worker actually started on. They are equal on a run that finished. A
@@ -160,11 +164,21 @@ type reparseFileIntrosResult struct {
 	// absent). It is the only thing this op writes.
 	ParseWrites int `json:"parse_writes"`
 	// ParseWriteBytes is the total size, in bytes, of the stored rows those writes
-	// replace (each row as it would be stored with the new parse): the volume a live
-	// run pushes through the database, and what a preview reports so the size is
-	// known before anyone starts a live run. Every write re-encodes the WHOLE row,
+	// replace (each row as it is stored with the new parse): the volume a live run
+	// pushes through the database, and what a preview reports so the size is known
+	// before anyone starts a live run. Every write re-encodes the WHOLE row,
 	// fingerprint included, to add the few hundred bytes of the parse.
+	//
+	// A live run reports the size of the row the writer re-read under its lock, encoded
+	// with the timestamp it stamped: exact. A preview cannot know the timestamp a later
+	// write will stamp, and the encoded timestamp's width depends on its fractional
+	// digits, so its figure is within 10 bytes per written row (database.IntroParseRowBytes).
 	ParseWriteBytes int64 `json:"parse_write_bytes"`
+	// WritesUnconfirmed counts parse writes (already in ParseWrites) that were applied
+	// but whose durability the database could not confirm. The row holds the new parse
+	// in the running process; a repeat run rewrites nothing that did land. It is not an
+	// error row, and a run that has any ends in a failure that says so.
+	WritesUnconfirmed int `json:"writes_unconfirmed"`
 
 	// Identity is the disagreement report; Samples lists up to reparseSampleCap
 	// file ids per class (keys like "conflict.publisher_prefix").
@@ -349,6 +363,7 @@ func (t *reparseTally) add(l *reparseFileIntrosResult) {
 	r.Unreparsed += l.Unreparsed
 	r.ParseWrites += l.ParseWrites
 	r.ParseWriteBytes += l.ParseWriteBytes
+	r.WritesUnconfirmed += l.WritesUnconfirmed
 	r.Gone += l.Gone
 	r.Errors += l.Errors
 	addCounts(r.Unreparsable, l.Unreparsable)
@@ -437,6 +452,16 @@ type reparseFileIntrosEnv struct {
 	reporter sdk.Reporter
 	// workers is the pool size; 0 means runtime.NumCPU().
 	workers int
+	// now is the clock a preview uses for the timestamp it assumes a write would
+	// stamp when it sizes a row; nil means time.Now. Tests pin it.
+	now func() time.Time
+}
+
+func (e reparseFileIntrosEnv) stamp() time.Time {
+	if e.now != nil {
+		return e.now()
+	}
+	return time.Now()
 }
 
 // reparseFileIntrosReads are the reads the op makes: the two listings it selects
@@ -457,10 +482,10 @@ func (p *Plugin) reparseFileIntrosDef() sdk.OperationDef {
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "maintenance",
 		DisplayName: "Re-parse stored file intro transcripts",
-		Description: "Classifies each stored per-file intro transcript (title announcement, credits, chapter marker, part marker, front/back matter, narration, music or silence, garbage) and reads the fields in it (chapter and part number, chapter title, publisher, \"books N through M\", title, author, narrator) from the stored text, with no Whisper call and no change to which files get transcribed. " +
+		Description: "Classifies the stored per-file intro transcripts (title announcement, credits, chapter marker, part marker, front/back matter, narration, music or silence, garbage) and reads the fields in it (chapter and part number, chapter title, publisher, \"books N through M\", title, author, narrator) from the stored text, with no Whisper call and no change to which files get transcribed. " +
 			"The classification is stored on the file as one new additive field (IntroParse) and NOTHING else is written: the status, the title, author, narrator, translator and cover artist columns, the transcript and its provenance keep exactly the values the transcription run stored, so no guard, search query or apply gate sees a different value. " +
 			"Reports before and after counts per kind, and a disagreement report that changes nothing: for rows whose clip is a title announcement, how many agree with the stored identity, how many would fill an empty field and how many conflict (publisher prefix, truncation, different title, franchise term lost, another field), plus the stored titles the grammar itself rejects, with up to 10 sample file ids per class (file ids only). " +
-			"Rows with no transcript cannot be re-parsed and are counted by class. dry_run defaults to true and reports the number of rows a live run would rewrite and their total size in bytes (every write re-encodes the whole stored row, fingerprint included). A live run is NOT recommended until something reads the field: nothing does today, so a live run only spends that write volume. A restart begins again from the first file, reads the rows already done and rewrites none of them, and a repeat run changes nothing.",
+			"Rows with no transcript cannot be re-parsed and are counted by class. dry_run defaults to true and reports the number of rows a live run would rewrite and their total size in bytes, within 10 bytes per row (every write re-encodes the whole stored row, fingerprint included). A live run is NOT recommended until something reads the field: nothing does today, so a live run only spends that write volume. A restart begins again from the first file, reads the rows already done and rewrites none of them, and a repeat run changes nothing.",
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  reparseFileIntrosID,
@@ -469,8 +494,12 @@ func (p *Plugin) reparseFileIntrosDef() sdk.OperationDef {
 		// under the row's lock, compare-and-swap on the stored bytes), and a
 		// whole-row writer that reads under that lock cannot revert it because the
 		// shared book_file merge classes keep the group (bookFileFieldClasses). The
-		// scanner's batch upsert reads without the row lock, which is why a live run
-		// refuses to start while a scan runs and waits before every chunk's writes.
+		// scanner's batch upsert takes the same file stripes from its lookup to its
+		// commit, so it cannot interleave with a write here. The start gate and the
+		// wait before every chunk's writes are kept all the same: the other ops in
+		// fileIntroBusyOps (import, folder auto-scan, bulk metadata apply) and the
+		// batch paths that take no file stripe (moves, deletes) have not been checked
+		// against this field, so the op does not run alongside them.
 		Cancellable:     true,
 		Isolate:         false,
 		Timeout:         6 * time.Hour,
@@ -527,15 +556,21 @@ func hasIntroFields(c *database.BookFileCore) bool {
 // and a failed scan is an error, never a shorter list).
 //
 // A file is selected when it has any retained intro column (hasIntroFields), or
-// when it is the only file of a book whose book-level transcript is non-blank. The
-// second rule is how a transcript-only row is reached: the listing cannot say whether
-// a file holds text, but the two writers that leave a file with text and no
+// when it is the only AUDIO file of a book whose book-level transcript is non-blank.
+// The second rule is how a transcript-only row is reached: the listing cannot say
+// whether a file holds text, but the two writers that leave a file with text and no
 // retained column both start from a book-level transcript (the silence sentinel and
-// the single-file migration, which copies a book's transcript onto its single file).
+// the single-file migration, which copies a book's transcript onto the book's single
+// audio file and counts audio files only, so a cover-art row beside it does not
+// make the book multi-file here either; isTranscribable is the shared test).
 // A transcript-only row whose book has no transcript, and a transcript-only file of
 // a multi-file book, cannot be told from a file with no transcript without reading
 // every book_file row in the library (fingerprints included), which this op does not
 // do; NotSelected counts them with everything else not selected.
+//
+// The second rule also selects an audio file that holds no text at all (a book whose
+// transcript only the book-level op wrote and the migration never copied): the row is
+// read in full and counted as unreparsable.no_transcript.
 func selectReparseFiles(reads reparseFileIntrosReads) (refs []reparseRef, notSelected, byBookTranscript int, err error) {
 	files, err := reads.GetAllBookFilesCoreComplete()
 	if err != nil {
@@ -553,14 +588,16 @@ func selectReparseFiles(reads reparseFileIntrosReads) (refs []reparseRef, notSel
 	}
 	perBook := make(map[string]int, len(books))
 	for i := range files {
-		perBook[files[i].BookID]++
+		if isTranscribable(&files[i]) {
+			perBook[files[i].BookID]++
+		}
 	}
 	for i := range files {
 		c := &files[i]
 		switch {
 		case hasIntroFields(c):
 			refs = append(refs, reparseRef{c.BookID, c.ID})
-		case perBook[c.BookID] == 1 && hasBookText[c.BookID]:
+		case isTranscribable(c) && perBook[c.BookID] == 1 && hasBookText[c.BookID]:
 			refs = append(refs, reparseRef{c.BookID, c.ID})
 			byBookTranscript++
 		default:
@@ -580,13 +617,24 @@ func selectReparseFiles(reads reparseFileIntrosReads) (refs []reparseRef, notSel
 
 // runReparseFileIntros is the op body.
 //
-// A live run ends only when a fresh listing holds no selectable file it has not
-// visited: after the chunks of a pass finish, the library is listed again, and any
-// file that appeared since the previous listing (a new row, a file whose first
-// intro field was just written) is visited in a further pass, up to
-// reparseMaxPasses. So a run that reports success has visited every file that was
-// selectable when it finished listing, with no position to skip a file that came
-// to sort early. A preview is a single pass: it reports one listing.
+// A live run works in passes. Each pass lists the library, visits the selected
+// files the run has not visited yet, and the run ends successfully when a pass
+// makes no parse write and finds no file Gone: everything that pass read was
+// already current and nothing it listed had vanished or moved, so another pass
+// would only read more current rows. A pass that wrote, or found a file Gone, is
+// followed by a fresh listing: a row a merge re-homed (same file id, new book)
+// reappears under its new book, which is a new (book id, file id) key and is
+// visited, and a row the pass itself made selectable is seen. reparseMaxPasses is
+// only a backstop; a run that reaches it fails and says passes kept producing writes.
+//
+// What a success does and does not say: every file the LAST pass's listing held was
+// visited, and that pass found nothing to write or lose. It does not say the library
+// holds no unclassified row. A file that appears after the last pass's listing (a
+// transcription run finishing one, a new row) is outside this run, as it would be
+// for any snapshot of a library that is being written to; a repeat run picks it up.
+// Rows that are already current when they appear never prolong the run, which is
+// what keeps it from failing while a whole-library transcription run adds files.
+// A preview is a single pass: it reports one listing.
 func runReparseFileIntros(ctx context.Context, env reparseFileIntrosEnv, dryRun bool) (reparseFileIntrosResult, error) {
 	mark := introModeMarker(dryRun)
 	reporter := env.reporter
@@ -596,16 +644,19 @@ func runReparseFileIntros(ctx context.Context, env reparseFileIntrosEnv, dryRun 
 		if env.writer == nil {
 			return reparseFileIntrosResult{DryRun: dryRun}, fmt.Errorf("%s: the store does not support per-file intro re-parse writes", reparseFileIntrosID)
 		}
-		// A scan's unlocked read-modify-write can bring a stale intro group back
-		// over a re-parse, so a live run obeys the same gate as a transcription
-		// run: no start while one is active, and a wait before every chunk.
+		// A live run does not write alongside a scan, import, folder auto-scan or
+		// bulk metadata apply (fileIntroBusyOps): no start while one is active, and a
+		// wait before every chunk. See the note on the op's definition for what is
+		// and is not known about each of those writers.
 		if err := reparseRefuseIfBusy(env.queue); err != nil {
 			return reparseFileIntrosResult{DryRun: dryRun}, err
 		}
 	}
 
 	tally := newReparseTally(dryRun)
-	visited := map[string]struct{}{}
+	// Keyed by (book id, file id): a merge re-homes a row under a new book with the
+	// same file id, and that row has not been visited at its new place.
+	visited := map[reparseRef]struct{}{}
 	for pass := 1; ; pass++ {
 		_ = reporter.UpdateProgress(0, 1, mark+"Selecting files — reading the book file listing")
 		listed, notSelected, byBook, err := selectReparseFiles(env.reads)
@@ -621,7 +672,7 @@ func runReparseFileIntros(ctx context.Context, env reparseFileIntrosEnv, dryRun 
 		}
 		refs := listed[:0:0]
 		for _, r := range listed {
-			if _, seen := visited[r.fileID]; !seen {
+			if _, seen := visited[r]; !seen {
 				refs = append(refs, r)
 			}
 		}
@@ -629,7 +680,7 @@ func runReparseFileIntros(ctx context.Context, env reparseFileIntrosEnv, dryRun 
 			break
 		}
 		if pass > 1 {
-			log.Info(reparseFileIntrosID+": files appeared during the run; visiting them", "pass", pass, "files", len(refs))
+			log.Info(reparseFileIntrosID+": further files to visit; running another pass", "pass", pass, "files", len(refs))
 		}
 		// Counted here, before any worker starts, so a chunk that is abandoned
 		// (cancelled run, a scan wait that ended in an error) leaves Selected below
@@ -638,15 +689,20 @@ func runReparseFileIntros(ctx context.Context, env reparseFileIntrosEnv, dryRun 
 		tally.res.Listed += len(refs)
 		tally.mu.Unlock()
 
+		before := tally.snapshot()
 		err = runReparsePass(ctx, env, refs, dryRun, tally)
 		for _, r := range refs {
-			visited[r.fileID] = struct{}{}
+			visited[r] = struct{}{}
 		}
 		if err != nil || dryRun {
 			return finishReparse(env, tally, dryRun, err)
 		}
+		after := tally.snapshot()
+		if after.ParseWrites == before.ParseWrites && after.Gone == before.Gone {
+			break
+		}
 		if pass >= reparseMaxPasses {
-			return finishReparse(env, tally, dryRun, fmt.Errorf("%s: the library still gained selectable files after %d passes; run it again", reparseFileIntrosID, pass))
+			return finishReparse(env, tally, dryRun, fmt.Errorf("%s: passes kept producing writes: after %d passes the library still held rows that needed a parse write or had moved; run it again", reparseFileIntrosID, pass))
 		}
 	}
 	return finishReparse(env, tally, dryRun, nil)
@@ -659,13 +715,18 @@ func finishReparse(env reparseFileIntrosEnv, tally *reparseTally, dryRun bool, e
 	log := reporter.Logger()
 	res := tally.snapshot()
 	id := res.Identity
-	summary := fmt.Sprintf("%s%d files listed, %d selected, %d examined, %d re-parsed, %d could not be re-parsed; %d parse writes (%d bytes of rows); title announcements: %d agree, %d would fill, %d conflict; %d stored titles the grammar rejects; %d gone, %d errors",
-		mark, res.Listed, res.Selected, res.Examined, res.Reparsed, res.Unreparsed, res.ParseWrites, res.ParseWriteBytes, id.Agree, id.WouldFill, id.Conflict, id.StoredTitleJunk, res.Gone, res.Errors)
+	summary := fmt.Sprintf("%s%d files listed, %d selected, %d examined, %d re-parsed, %d could not be re-parsed; %d parse writes (%d bytes of rows, %d not confirmed durable); title announcements: %d agree, %d would fill, %d conflict; %d stored titles the grammar rejects; %d gone, %d errors",
+		mark, res.Listed, res.Selected, res.Examined, res.Reparsed, res.Unreparsed, res.ParseWrites, res.ParseWriteBytes, res.WritesUnconfirmed, id.Agree, id.WouldFill, id.Conflict, id.StoredTitleJunk, res.Gone, res.Errors)
 	log.Info(reparseFileIntrosID+": finished", "summary", summary, "err", err)
 	_ = reporter.UpdateProgress(1, 1, summary)
 	if res.Errors > 0 {
 		// err is non-nil here: a chunk with failures returns an error.
 		return res, fmt.Errorf("%s: %d files could not be read or written; they keep their stored values and a repeat run retries them: %w", reparseFileIntrosID, res.Errors, errors.Join(err))
+	}
+	if res.WritesUnconfirmed > 0 && err == nil {
+		// Not an error row: the writes were applied. The database could not say they
+		// are durable, which an operator should hear, so the run still ends failed.
+		return res, fmt.Errorf("%s: %d parse writes were applied but the database did not confirm them durable; a repeat run rewrites nothing that did land", reparseFileIntrosID, res.WritesUnconfirmed)
 	}
 	return res, err
 }
@@ -761,10 +822,12 @@ func reparseOne(env reparseFileIntrosEnv, ref reparseRef, live bool, local *repa
 		return
 	}
 	out := reparseDecide(cur)
-	if out.write {
-		// The size of the row as it would be stored with the new parse: the volume
-		// this write costs, reported by a preview and a live run alike.
-		n, merr := database.IntroParseRowBytes(row, out.parse)
+	if out.write && !live {
+		// A preview's size of the row as a write would store it, within 10 bytes (the
+		// timestamp the write will stamp is not known yet). A live run sizes the row
+		// the writer re-reads under its lock instead, below, and does not encode a
+		// row (fingerprint and all) twice.
+		n, merr := database.IntroParseRowBytes(row, out.parse, env.stamp())
 		if merr != nil {
 			log.Warn(reparseFileIntrosID+": could not size the row", "file_id", ref.fileID, "err", merr)
 			local.Errors++
@@ -784,6 +847,8 @@ func reparseOne(env reparseFileIntrosEnv, ref reparseRef, live bool, local *repa
 	// writer that changed the row since the read above is never overwritten with
 	// a verdict about text it no longer holds. last is the outcome of the final
 	// run of decide (the store may run it more than once); ran says it ran at all.
+	// The size reported for a write is the fresh row's, encoded as the store will
+	// write it (SizeWith), so it is the row that was actually stored.
 	var last reparseRow
 	ran := false
 	outcome, werr := env.writer.ReparseBookFileIntro(ref.bookID, ref.fileID, func(fresh database.IntroReparseRow) (*database.IntroParse, bool) {
@@ -792,9 +857,29 @@ func reparseOne(env reparseFileIntrosEnv, ref reparseRef, live bool, local *repa
 			return nil, false
 		}
 		p := last.parse
+		last.rowBytes = 0
+		if fresh.SizeWith != nil {
+			n, serr := fresh.SizeWith(p)
+			if serr != nil {
+				log.Warn(reparseFileIntrosID+": could not size the row", "file_id", ref.fileID, "err", serr)
+			}
+			last.rowBytes = int64(n)
+		} else if n, serr := database.IntroParseRowBytes(row, p, env.stamp()); serr == nil {
+			// A store that cannot size the fresh row: the pre-lock row is the best
+			// there is, within 10 bytes.
+			last.rowBytes = int64(n)
+		}
 		return &p, true
 	})
 	switch {
+	case outcome == database.IntroReparseWrote && werr != nil:
+		// Applied, durability unknown (the store says so with the outcome): the row
+		// carries the new parse, so it is counted as written and separately as
+		// unconfirmed, and is not an error row.
+		log.Warn(reparseFileIntrosID+": write applied but not confirmed durable", "file_id", ref.fileID, "err", werr)
+		tally.changed.Add(1)
+		local.WritesUnconfirmed++
+		local.count(last, ref.fileID)
 	case werr != nil:
 		log.Warn(reparseFileIntrosID+": write failed", "file_id", ref.fileID, "err", werr)
 		local.Errors++
@@ -804,7 +889,6 @@ func reparseOne(env reparseFileIntrosEnv, ref reparseRef, live bool, local *repa
 		local.count(reparseRow{unreparsable: reparseNoTranscript, junk: out.junk}, ref.fileID)
 	case outcome == database.IntroReparseWrote:
 		tally.changed.Add(1)
-		last.rowBytes = out.rowBytes
 		local.count(last, ref.fileID)
 	default:
 		// Skipped: on the fresh row there was nothing left to change (another
@@ -826,9 +910,9 @@ func reparseDeref(p *string) string {
 }
 
 // reparseRefuseIfBusy is the START gate of a live run: it refuses to begin while
-// a scan or bulk apply is queued or running, and refuses when the queue cannot
-// be read. A point-in-time check; the wait before every chunk covers a scan that
-// starts later.
+// a scan, import, folder auto-scan or bulk apply is queued or running, and refuses
+// when the queue cannot be read. A point-in-time check; the wait before every chunk
+// covers one that starts later.
 func reparseRefuseIfBusy(queue OpQueueReader) error {
 	if queue == nil {
 		return fmt.Errorf("%s: cannot verify no library scan is active; refusing to run", reparseFileIntrosID)
@@ -838,7 +922,7 @@ func reparseRefuseIfBusy(queue OpQueueReader) error {
 		return fmt.Errorf("%s: cannot list active operations; refusing to run: %w", reparseFileIntrosID, err)
 	}
 	if def := fileIntroBusyDef(active); def != "" {
-		return fmt.Errorf("%s: %s is queued or running; refusing to start: a scan rewrites book_file rows with a read-modify-write that can erase an intro group written between its read and its commit. Run this op when the scan has finished", reparseFileIntrosID, def)
+		return fmt.Errorf("%s: %s is queued or running; refusing to start: this op does not write alongside an op that rewrites book_file rows in bulk, whose writers have not been checked against the intro-parse field. Run it when that op has finished", reparseFileIntrosID, def)
 	}
 	return nil
 }
