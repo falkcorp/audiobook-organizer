@@ -1,8 +1,14 @@
+# file: scripts/install-whisper-supervisor.ps1
+# version: 2.0.0
+# guid: 445a38c7-e60e-4e07-a441-80bba4e8b034
+# last-edited: 2026-11-17
+
 <#
 .SYNOPSIS
-    Installs whisper-supervisor.ps1 as a durable Scheduled Task on the Windows
-    GPU box, stops any manually-started whisper_server.py, and starts the
-    supervisor (which relaunches whisper under supervision).
+    Installs whisper-supervisor.ps1 as a durable Scheduled Task on a Windows
+    machine (GPU or CPU), copies the Whisper server files next to it, stops any
+    manually-started whisper_server.py, and starts the supervisor (which
+    relaunches whisper under supervision).
 
 .DESCRIPTION
     Run this ONCE from a normal (non-elevated) PowerShell. After this, the
@@ -14,28 +20,38 @@
     vector. Whisper needs no admin rights (it is launched unelevated manually).
 
     Run from your repo clone so it picks up the committed supervisor script:
-      cd C:\Users\jdfal\audiobook-organizer
+      cd <your clone of audiobook-organizer>
       git pull
       powershell -ExecutionPolicy Bypass -File scripts\install-whisper-supervisor.ps1
+
+    CPU-only machine (no GPU, or a GPU you do not trust), library on a share:
+      powershell -ExecutionPolicy Bypass -File scripts\install-whisper-supervisor.ps1 `
+          -Device cpu -PathMap "/lib/Gotham=\\arkham\audio\lib"
 
 .PARAMETER RepoScript
     Path to the committed supervisor script. Default: .\scripts\whisper-supervisor.ps1
     (relative to where you run this from).
 
-.PARAMETER InstallPath
-    Where the supervisor is copied to and run from. Default: C:\Users\jdfal\whisper-supervisor.ps1
+.PARAMETER InstallDir
+    Where the supervisor AND whisper_server.py, whisper_path_pipeline.py and
+    whisper_machine_id.py are copied and run from. Default: your user profile folder.
+
+.PARAMETER Device, Model, ComputeType, CpuThreads, NumWorkers, PathMap, Port
+    Passed to the supervisor in the scheduled task's command line (see
+    whisper-supervisor.ps1). Unset means the supervisor's and server's defaults:
+    -Device auto, the server's model, the device's compute type.
 
 .PARAMETER TaskName
     Scheduled Task name. Default: WhisperSupervisor
 
 .NOTES
     Applying a new whisper_server.py (or restarting cleanly):
-      New-Item C:\Users\jdfal\whisper-stop.flag
+      New-Item <InstallDir>\whisper-stop.flag
       Get-CimInstance Win32_Process -Filter "name='python.exe'" |
         Where-Object { $_.CommandLine -like '*whisper_server.py*' } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
       # ...replace whisper_server.py...
-      Remove-Item C:\Users\jdfal\whisper-stop.flag
+      Remove-Item <InstallDir>\whisper-stop.flag
       Start-ScheduledTask -TaskName WhisperSupervisor
 
     Stop supervision entirely:
@@ -43,18 +59,31 @@
       Unregister-ScheduledTask -TaskName WhisperSupervisor -Confirm:$false
 
     Watch it:
-      Get-Content C:\Users\jdfal\whisper-supervisor.log -Wait
+      Get-Content <InstallDir>\whisper-supervisor.log -Wait
 #>
 
 [CmdletBinding()]
 param(
     [string]$RepoScript  = ".\scripts\whisper-supervisor.ps1",
-    [string]$InstallPath = "C:\Users\jdfal\whisper-supervisor.ps1",
-    [string]$TaskName    = "WhisperSupervisor"
+    [string]$InstallDir  = $env:USERPROFILE,
+    [string]$TaskName    = "WhisperSupervisor",
+    [ValidateSet("auto", "cpu", "cuda")]
+    [string]$Device      = "auto",
+    [string]$Model       = "",
+    [string]$ComputeType = "",
+    [int]$CpuThreads     = 0,
+    [int]$NumWorkers     = 1,
+    [string]$PathMap     = "",
+    [int]$Port           = 19847
 )
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+
+$InstallPath = Join-Path $InstallDir "whisper-supervisor.ps1"
+$SentinelPath = Join-Path $InstallDir "whisper-stop.flag"
+$LogPath = Join-Path $InstallDir "whisper-supervisor.log"
+$ServerPath = Join-Path $InstallDir "whisper_server.py"
 
 function Info($m) { Write-Host "[install] $m" }
 
@@ -62,18 +91,32 @@ function Info($m) { Write-Host "[install] $m" }
 # whisper_server.py needs no admin rights (it's launched manually unelevated),
 # and registering a task for your own account does not require admin. We
 # deliberately do NOT use -RunLevel Highest — that would run a script from a
-# user-writable path (C:\Users\jdfal\...) elevated, which is a privilege-
+# user-writable path (under the user profile) elevated, which is a privilege-
 # escalation vector (any unprivileged write to the script = elevated code at
 # next logon). Normal-level + user-writable path crosses no privilege boundary.
 
 if (-not (Test-Path $RepoScript)) {
-    Write-Error "Supervisor script not found at $RepoScript. Run from your repo clone (cd C:\Users\jdfal\audiobook-organizer) after 'git pull'."
+    Write-Error "Supervisor script not found at $RepoScript. Run from your repo clone after 'git pull'."
     exit 1
 }
 
-# 1. Copy the committed supervisor to the install path.
+# 1. Copy the committed supervisor to the install path, and the server with its
+# two sibling modules (whisper_server.py imports them from its own folder, so
+# all three or none).
+$repoDir = Split-Path -Parent (Resolve-Path $RepoScript)
+$serverFiles = @("whisper_server.py", "whisper_path_pipeline.py", "whisper_machine_id.py")
+foreach ($f in $serverFiles) {
+    if (-not (Test-Path (Join-Path $repoDir $f))) {
+        Write-Error "$f not found next to $RepoScript; the server cannot run without all of: $($serverFiles -join ', ')."
+        exit 1
+    }
+}
 Copy-Item $RepoScript $InstallPath -Force
 Info "copied supervisor -> $InstallPath"
+foreach ($f in $serverFiles) {
+    Copy-Item (Join-Path $repoDir $f) (Join-Path $InstallDir $f) -Force
+    Info "copied $f -> $InstallDir"
+}
 
 # 2. Verify it parses before we rely on it.
 $errs = $null
@@ -84,7 +127,7 @@ if ($errs.Count -gt 0) {
 }
 Info "supervisor parse OK"
 
-# 3. Stop any manually-started whisper so the supervisor's instance can bind 19847.
+# 3. Stop any manually-started whisper so the supervisor's instance can bind port $Port.
 $whisper = Get-CimInstance Win32_Process -Filter "name='python.exe'" |
     Where-Object { $_.CommandLine -like '*whisper_server.py*' }
 foreach ($w in $whisper) {
@@ -94,7 +137,7 @@ foreach ($w in $whisper) {
 Start-Sleep -Seconds 2
 
 # 4. Clear any stale stop-sentinel.
-Remove-Item "C:\Users\jdfal\whisper-stop.flag" -Force -ErrorAction SilentlyContinue
+Remove-Item $SentinelPath -Force -ErrorAction SilentlyContinue
 
 # 5. Register the Scheduled Task (recreate if present). Runs at the user's
 # NORMAL token (RunLevel Limited) — intentionally NOT elevated, so the
@@ -107,8 +150,23 @@ Remove-Item "C:\Users\jdfal\whisper-stop.flag" -Force -ErrorAction SilentlyConti
 # before it registers anything. -ErrorAction SilentlyContinue makes the
 # not-present case a clean no-op.
 Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+# The supervisor's own settings ride in the task's command line. Every value is
+# quoted so a path with a space stays one argument; unset options are left out
+# so the supervisor's and the server's defaults apply.
+$supArgs = @(
+    "-ScriptPath `"$ServerPath`"",
+    "-SentinelPath `"$SentinelPath`"",
+    "-LogPath `"$LogPath`"",
+    "-Device $Device",
+    "-NumWorkers $NumWorkers",
+    "-Port $Port"
+)
+if ($Model) { $supArgs += "-Model `"$Model`"" }
+if ($ComputeType) { $supArgs += "-ComputeType `"$ComputeType`"" }
+if ($CpuThreads -gt 0) { $supArgs += "-CpuThreads $CpuThreads" }
+if ($PathMap) { $supArgs += "-PathMap `"$PathMap`"" }
 $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallPath`""
+    -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallPath`" $($supArgs -join ' ')"
 $trigger = New-ScheduledTaskTrigger -AtLogOn
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
@@ -123,19 +181,19 @@ Start-Sleep -Seconds 5
 Info "task state: $((Get-ScheduledTask -TaskName $TaskName).State)"
 
 # 7. Wait for whisper to come back up (model load can take ~30-60s).
-Info "waiting for whisper /health on :19847 (model load can take up to ~90s)..."
+Info "waiting for whisper /health on :$Port (model load can take up to ~90s; a first run also downloads the model)..."
 $ok = $false
 for ($i = 0; $i -lt 30; $i++) {
     Start-Sleep -Seconds 3
     try {
-        $h = (Invoke-WebRequest -UseBasicParsing -Uri "http://localhost:19847/health" -TimeoutSec 4).Content
+        $h = (Invoke-WebRequest -UseBasicParsing -Uri "http://localhost:$Port/health" -TimeoutSec 4).Content
         if ($h -match '"status"\s*:\s*"ok"') { Info "whisper healthy: $h"; $ok = $true; break }
     } catch { }
 }
 if (-not $ok) {
     Write-Warning "whisper did not report healthy yet. Check the log:"
-    Write-Warning "  Get-Content C:\Users\jdfal\whisper-supervisor.log -Tail 40"
+    Write-Warning "  Get-Content `"$LogPath`" -Tail 40"
 } else {
     Info "DONE. Supervisor installed and whisper is up."
-    Info "Watch: Get-Content C:\Users\jdfal\whisper-supervisor.log -Wait"
+    Info "Watch: Get-Content `"$LogPath`" -Wait"
 }
