@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_denumber.go
-// version: 3.1.1
+// version: 4.0.0
 // guid: dee834d3-1f7e-453e-9303-85d37479e79d
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package maintenance
 
@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	sdn "github.com/falkcorp/audiobook-organizer/internal/seriesdenumber"
 )
@@ -68,22 +69,20 @@ func IsJunkSeriesBase(base string) bool {
 	return metadata.IsJunkSeriesBase(base)
 }
 
-// ApplyEligible reports whether a plan may be executed unattended.
+// ApplyEligible reports whether a plan may be executed unattended: only the
+// high tier, and only when no shape check demoted it (a demotion moves the plan
+// to low, so the confidence alone carries both).
 //
-// 🔒 Low is unconditional: there is no parameter that lets it through. The whole
-// reason the tier exists is that "86—EIGHTY-SIX" and "08. Battle for the Abyss"
-// are the same string shape, and a merge creates and deletes series rows.
-// allowMedium exists so the first production apply can be scoped to keyword-
-// vouched names only, with the dry run reporting what medium WOULD have done.
-func ApplyEligible(p SeriesMergePlan, allowMedium bool) bool {
-	switch p.Confidence {
-	case ConfidenceHigh:
-		return true
-	case ConfidenceMedium:
-		return allowMedium
-	default:
-		return false
-	}
+// 🔒 Medium and low are unconditional refusals: there is no parameter that lets
+// them through. Low, because "86—EIGHTY-SIX" and "08. Battle for the Abyss" are
+// the same string shape and a merge creates and deletes series rows. Medium (a
+// bracketed number, "Dragon Born [04]"), because the owner ruled on 2026-09-02
+// that a bracketed number is usually a fragment of one shattered book and not a
+// position, and that a position about 90% likely to be wrong must not be written
+// (metadata.SeriesCleanup.DiscardedPosition). Both tiers are reported, never
+// applied.
+func ApplyEligible(p SeriesMergePlan) bool {
+	return p.Confidence == ConfidenceHigh
 }
 
 // SeriesInput is one series row, reduced to what the planner needs.
@@ -117,6 +116,11 @@ type SeriesMergePlan struct {
 	// planner gave it. See DemotePlans.
 	DemotedBy   string
 	DemotedFrom SeriesConfidence
+	// SiblingRun is true when at least two other series of the same author, with
+	// the same base, that pass the grammar and hold at least one book form a run
+	// of consecutive numbers with this one (seriesdenumber.RunCorroborated). It
+	// is the library's evidence for a position the book does not carry itself.
+	SiblingRun bool
 }
 
 // SeriesDenumber plans the merges that collapse "<Series> <N>" rows into one
@@ -157,6 +161,35 @@ func SeriesDenumber(in []SeriesInput) []SeriesMergePlan {
 			continue
 		}
 		canonical[key{strings.ToLower(strings.TrimSpace(s.Name)), s.AuthorID}] = s.ID
+	}
+
+	// Pass 3 -- the siblings that can corroborate a position: series of the same
+	// author, with the same base, whose names pass the positive grammar and that
+	// hold at least one book. An empty row, a held shape ("Part 1") and a series
+	// of another author are not evidence.
+	type sibling struct{ id, n int }
+	siblings := map[key][]sibling{}
+	for _, s := range in {
+		if s.AuthorID == 0 || s.Books < 1 {
+			continue
+		}
+		if parsed, _, ok := sdn.ParseName(s.Name); ok {
+			k := key{strings.ToLower(parsed.Base), s.AuthorID}
+			siblings[k] = append(siblings[k], sibling{s.ID, parsed.N})
+		}
+	}
+	siblingRun := func(s SeriesInput) bool {
+		parsed, _, ok := sdn.ParseName(s.Name)
+		if !ok || s.AuthorID == 0 {
+			return false
+		}
+		var nums []int
+		for _, sib := range siblings[key{strings.ToLower(parsed.Base), s.AuthorID}] {
+			if sib.id != s.ID {
+				nums = append(nums, sib.n)
+			}
+		}
+		return sdn.RunCorroborated(parsed.N, nums)
 	}
 
 	var plans []SeriesMergePlan
@@ -200,21 +233,21 @@ func SeriesDenumber(in []SeriesInput) []SeriesMergePlan {
 			FromID: s.ID, FromName: s.Name, IntoName: sp.Base,
 			AuthorID: s.AuthorID,
 			IntoID:   canonical[k], Position: sp.Position, Reason: reason, Books: s.Books,
-			Shape: sp.Shape, Confidence: conf,
+			Shape: sp.Shape, Confidence: conf, SiblingRun: siblingRun(s),
 		})
 	}
 	return plans
 }
 
-// DemotePlans moves every plan that has one of the known wrong shapes out of the
-// apply tier, to low, with the check named in DemotedBy and the evidence in
-// Reason. The planner scores a NAME; these checks read what the name cannot
-// show -- an audio file's "Part N", a base that is the author's own name, a
-// position of 100 or more, a base of one letter, a series with no author -- and
-// each was found in the "high" tier of a production dry run. authorNames maps an
-// author id to its name for the base-equals-author check, which compares the base
-// with every author's name, not only the series' own; an empty map skips that
-// check only. The input is not modified.
+// DemotePlans moves every plan the positive grammar does not accept out of the
+// apply tier, to low, with the rule that held it in DemotedBy and the evidence in
+// Reason. The planner scores a NAME with a loose matcher; the grammar
+// (seriesdenumber.ParseName) re-reads the name strictly and the checks beside it
+// read what a name cannot show -- an author row that is a placeholder, a base
+// that is an author's name in any word order, a planner that read a different
+// base or number than the name carries. authorNames maps an author id to its
+// name; the base is compared with every author's name, not only the series' own,
+// and an empty map skips the author checks only. The input is not modified.
 func DemotePlans(plans []SeriesMergePlan, authorNames map[int]string) []SeriesMergePlan {
 	out := make([]SeriesMergePlan, len(plans))
 	names := make([]string, 0, len(authorNames))
@@ -224,12 +257,14 @@ func DemotePlans(plans []SeriesMergePlan, authorNames map[int]string) []SeriesMe
 	authors := sdn.NewAuthorSet(names)
 	for i, pl := range plans {
 		out[i] = pl
-		if pl.Confidence == ConfidenceLow {
+		if pl.Confidence != ConfidenceHigh {
 			continue
 		}
+		name, known := authorNames[pl.AuthorID]
 		v, held := sdn.Demote(sdn.Candidate{
 			FromName: pl.FromName, Base: pl.IntoName, Position: pl.Position,
-			AuthorID: pl.AuthorID, AuthorName: authorNames[pl.AuthorID], Authors: authors,
+			AuthorID: pl.AuthorID, AuthorName: name, Authors: authors,
+			AuthorPlaceholder: known && isPlaceholderSeriesAuthor(name),
 		})
 		if !held {
 			continue
@@ -240,4 +275,12 @@ func DemotePlans(plans []SeriesMergePlan, authorNames map[int]string) []SeriesMe
 		out[i].Reason = fmt.Sprintf("held (%s): %s; was %s: %s", v.Code, v.Reason, pl.Confidence, pl.Reason)
 	}
 	return out
+}
+
+// isPlaceholderSeriesAuthor reports whether an author row stands for "no known
+// author": the system's own placeholder, a placeholder title that leaked into
+// the author field, or one of the stand-ins ("Various", "VA", "N/A") the author
+// repair ops treat the same way.
+func isPlaceholderSeriesAuthor(name string) bool {
+	return authorname.IsPlaceholder(name) || authorname.IsPlaceholderAuthor(name) || isPlaceholderAuthorName(name)
 }

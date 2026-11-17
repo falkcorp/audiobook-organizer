@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_embedded_position_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 7c41ba05-3e92-4d18-b6a7-51fd0e93c284
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package maintenance
 
@@ -227,26 +227,17 @@ func TestSeriesDenumber_RefusesAPackNumber(t *testing.T) {
 	}
 }
 
-// 🔒 The gate itself. Low must never be eligible, at any setting, and medium only
-// when an operator has opted in.
-func TestApplyEligible_LowNeverApplies(t *testing.T) {
-	cases := []struct {
-		conf        SeriesConfidence
-		allowMedium bool
-		want        bool
-	}{
-		{ConfidenceHigh, false, true},
-		{ConfidenceHigh, true, true},
-		{ConfidenceMedium, false, false},
-		{ConfidenceMedium, true, true},
-		{ConfidenceLow, false, false},
-		{ConfidenceLow, true, false}, // ← the one that matters
-	}
-	for _, c := range cases {
-		got := ApplyEligible(SeriesMergePlan{Confidence: c.conf}, c.allowMedium)
-		if got != c.want {
-			t.Errorf("ApplyEligible(%s, allowMedium=%v) = %v, want %v",
-				c.conf, c.allowMedium, got, c.want)
+// 🔒 The gate itself. Only high is eligible: low and medium are report-only, at
+// every setting (there is no setting left that lets them through).
+func TestApplyEligible_OnlyHighApplies(t *testing.T) {
+	for conf, want := range map[SeriesConfidence]bool{
+		ConfidenceHigh:   true,
+		ConfidenceMedium: false,
+		ConfidenceLow:    false,
+		"":               false,
+	} {
+		if got := ApplyEligible(SeriesMergePlan{Confidence: conf}); got != want {
+			t.Errorf("ApplyEligible(%q) = %v, want %v", conf, got, want)
 		}
 	}
 }
@@ -285,7 +276,7 @@ func TestSeriesDenumber_AssignsTiersAndGatesTheApplySet(t *testing.T) {
 
 	var eligible int
 	for _, p := range plans {
-		if ApplyEligible(p, false) {
+		if ApplyEligible(p) {
 			eligible++
 		}
 	}
@@ -308,7 +299,7 @@ func TestWriteSeriesDenumberReport_ListsHeldCandidatesToo(t *testing.T) {
 		{FromID: 3, FromName: "08. Battle for the Abyss", IntoName: "Battle for the Abyss", Position: 8,
 			Books: 1, Shape: ShapeLeadingBare, Confidence: ConfidenceLow, Reason: "bare leading number"},
 	}
-	if err := writeSeriesDenumberReport(path, plans, false, nil); err != nil {
+	if err := writeSeriesDenumberReport(path, plans, nil); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	raw, err := os.ReadFile(path) // split on "\n" only: TrimSpace would eat the trailing empty columns (tabs) of the last row
@@ -348,7 +339,7 @@ func TestWriteSeriesDenumberReport_NeutralisesTabsInNames(t *testing.T) {
 		FromID: 1, FromName: "Broken\tName\nHere", IntoName: "Broken", Position: 2,
 		Shape: ShapeMidColon, Confidence: ConfidenceLow, Reason: "bare number before the title",
 	}}
-	if err := writeSeriesDenumberReport(path, plans, false, nil); err != nil {
+	if err := writeSeriesDenumberReport(path, plans, nil); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	raw, _ := os.ReadFile(path)

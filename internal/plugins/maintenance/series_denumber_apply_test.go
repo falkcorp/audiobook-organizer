@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_denumber_apply_test.go
-// version: 2.1.2
+// version: 3.0.0
 // guid: 4c93e07a-1d62-4b8e-a5f3-90b7c1de2846
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package maintenance
 
@@ -31,11 +31,22 @@ const (
 	denumberAuthor = 3
 )
 
-// restoringStore adds the one capability an apply requires of a store, so a
-// MockStore can stand in for the real one.
-type restoringStore struct{ *database.MockStore }
+// restoringStore adds the two capabilities an apply requires of a store, so a
+// MockStore can stand in for the real one: RestoreSeries (what the revert needs)
+// and GetSeriesBookRefCount (what the delete re-checks with).
+type restoringStore struct {
+	*database.MockStore
+	refs func(seriesID int) (int, error)
+}
 
 func (restoringStore) RestoreSeries(int, string, *int) error { return nil }
+
+func (r restoringStore) GetSeriesBookRefCount(id int) (int, error) {
+	if r.refs == nil {
+		return 0, nil
+	}
+	return r.refs(id)
+}
 
 // opIDReporter (scan_standdown_apply_test.go) gives fakeReporter the OpID() the
 // registry's reporter has.
@@ -74,6 +85,13 @@ type denumberLib struct {
 	failUpdate     map[string]bool
 	// cache counts the cache invalidations of the last run.
 	cache *spCacheDeps
+	// reportPath is the report an apply writes: run() adds it to every apply that
+	// names none, because an apply without one is refused.
+	reportPath string
+	// refOverride, when set, answers GetSeriesBookRefCount instead of the live count.
+	refOverride func(seriesID int) (int, error)
+	// deps, when set, replaces the plugin deps of run() (a scan controller, say).
+	deps func(base *spCacheDeps) ServerDeps
 }
 
 func newDenumberLib(t *testing.T) *denumberLib {
@@ -116,6 +134,22 @@ func (l *denumberLib) addBook(id string, seriesID, seq int, group string) {
 		b.VersionGroupID = &g
 	}
 	l.books[id] = b
+}
+
+// addRunAround gives the numbered series "base NN" two siblings of the same
+// author, each holding one book already placed elsewhere (so the siblings move
+// nothing themselves), so that NN sits in a run of three consecutive numbers: the
+// library's evidence for a position the book does not carry. firstID and
+// firstID+1 are the siblings' series ids.
+func (l *denumberLib) addRunAround(base string, author, n, firstID int) {
+	nums := []int{n - 1, n + 1}
+	if n < 2 {
+		nums = []int{n + 1, n + 2}
+	}
+	for i, k := range nums {
+		l.addSeries(firstID+i, fmt.Sprintf("%s %02d", base, k), author)
+		l.addBook(fmt.Sprintf("sib-%d", firstID+i), firstID+i, 99, "")
+	}
 }
 
 func (l *denumberLib) event(format string, args ...any) {
@@ -274,15 +308,70 @@ func (l *denumberLib) wire() {
 		return nil
 	}
 	s.GetAllAuthorsFunc = func() ([]database.Author, error) { return l.authors, nil }
+	s.GetSeriesByIDFunc = func(id int) (*database.Series, error) {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		for _, row := range l.liveSeries() {
+			if row.ID == id {
+				cp := row
+				return &cp, nil
+			}
+		}
+		return nil, nil
+	}
+}
+
+// refCount is the unfiltered count of book rows naming a series: the live books
+// plus the ones only the unfiltered read sees.
+func (l *denumberLib) refCount(id int) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.refOverride != nil {
+		return l.refOverride(id)
+	}
+	n := l.extraRefs[id]
+	for _, b := range l.books {
+		if b.SeriesID != nil && *b.SeriesID == id {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (l *denumberLib) restoring() restoringStore {
+	return restoringStore{MockStore: l.store, refs: l.refCount}
+}
+
+// withReport adds a reportPath to an apply's params when they name none.
+func (l *denumberLib) withReport(params string) string {
+	if !strings.Contains(params, `"apply": true`) || strings.Contains(params, `"reportPath"`) {
+		return params
+	}
+	if l.reportPath == "" {
+		l.reportPath = filepath.Join(l.t.TempDir(), "report.tsv")
+	}
+	// Inserted as text, so a test of malformed or duplicated keys still reaches the
+	// decoder exactly as written.
+	return strings.Replace(params, "{", `{"reportPath": `+strconv.Quote(l.reportPath)+`, `, 1)
 }
 
 // run executes the op with an operation id and a store that can restore series.
 func (l *denumberLib) run(params string) (*fakeReporter, error) {
 	l.t.Helper()
+	return l.runCtx(context.Background(), params)
+}
+
+// runCtx is run under a caller's context (a test that cancels mid-apply).
+func (l *denumberLib) runCtx(ctx context.Context, params string) (*fakeReporter, error) {
+	l.t.Helper()
 	rep := &opIDReporter{id: denumberOpID}
-	l.cache = &spCacheDeps{fakeDeps: fakeDeps{store: restoringStore{l.store}}}
-	p := &Plugin{deps: l.cache}
-	err := p.runSeriesDenumber(context.Background(), json.RawMessage(params), rep)
+	l.cache = &spCacheDeps{fakeDeps: fakeDeps{store: l.restoring()}}
+	var deps ServerDeps = l.cache
+	if l.deps != nil {
+		deps = l.deps(l.cache)
+	}
+	p := &Plugin{deps: deps}
+	err := p.runSeriesDenumber(ctx, json.RawMessage(l.withReport(params)), rep)
 	return &rep.fakeReporter, err
 }
 
@@ -377,6 +466,7 @@ func TestRunSeriesDenumber_ApplyMovesEveryVersionAndJournalsIt(t *testing.T) {
 	l.addBook("talon-1", baseID, 1, "")
 	l.addBook("owls-5-primary", numberedID, -1, "vg-owls-5")
 	l.addBook("owls-5-alternate-rip", numberedID, -1, "vg-owls-5")
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
 
 	l.mustRun(`{"apply": true}`)
 
@@ -475,9 +565,9 @@ func TestRunSeriesDenumber_RefusesToApplyWithoutAnOperationID(t *testing.T) {
 	l := newDenumberLib(t)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
 	l.addBook("owls-5", 11, -1, "")
-	p := &Plugin{deps: fakeDeps{store: restoringStore{l.store}}}
+	p := &Plugin{deps: fakeDeps{store: l.restoring()}}
 
-	err := p.runSeriesDenumber(context.Background(), json.RawMessage(`{"apply": true}`), &fakeReporter{})
+	err := p.runSeriesDenumber(context.Background(), json.RawMessage(l.withReport(`{"apply": true}`)), &fakeReporter{})
 	if err == nil || !strings.Contains(err.Error(), "operation id") {
 		t.Fatalf("err = %v, want a refusal naming the missing operation id", err)
 	}
@@ -493,7 +583,7 @@ func TestRunSeriesDenumber_RefusesToApplyOnAStoreThatCannotRestoreASeries(t *tes
 	l.addBook("owls-5", 11, -1, "")
 	p := &Plugin{deps: fakeDeps{store: l.store}} // a bare MockStore: no RestoreSeries
 
-	err := p.runSeriesDenumber(context.Background(), json.RawMessage(`{"apply": true}`), &opIDReporter{id: denumberOpID})
+	err := p.runSeriesDenumber(context.Background(), json.RawMessage(l.withReport(`{"apply": true}`)), &opIDReporter{id: denumberOpID})
 	if err == nil || !strings.Contains(err.Error(), "restore") {
 		t.Fatalf("err = %v, want a refusal naming the missing restore capability", err)
 	}
@@ -510,7 +600,7 @@ func TestRunSeriesDenumber_AJournalFailureStopsTheBookWrite(t *testing.T) {
 	l := newDenumberLib(t)
 	l.addSeries(10, "Court of Owls", denumberAuthor)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
-	l.addBook("owls-5", 11, -1, "")
+	l.addBook("owls-5", 11, 5, "")
 	inner := l.store.CreateOperationChangeFunc
 	l.store.CreateOperationChangeFunc = func(c *database.OperationChange) error {
 		if c.ChangeType == "metadata_update" {
@@ -519,7 +609,9 @@ func TestRunSeriesDenumber_AJournalFailureStopsTheBookWrite(t *testing.T) {
 		return inner(c)
 	}
 
-	l.mustRun(`{"apply": true}`)
+	if _, err := l.run(`{"apply": true}`); err == nil {
+		t.Errorf("a run whose journal write failed was reported as success")
+	}
 
 	if l.seriesOf("owls-5") != 11 || l.indexOf("update:owls-5") >= 0 {
 		t.Fatalf("the book was written although its journal row failed: series %d", l.seriesOf("owls-5"))
@@ -538,6 +630,7 @@ func TestRunSeriesDenumber_CreatesTheBaseOnlyWhenABookMovesIntoIt(t *testing.T) 
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
 	l.addBook("owls-5", 11, -1, "")
 	l.addSeries(12, "Dark Knight 03", denumberAuthor) // empty: nothing moves
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
 
 	rep := l.mustRun(`{"apply": true}`)
 
@@ -599,6 +692,7 @@ func TestRunSeriesDenumber_HoldsABookWhoseOwnPositionDiffers(t *testing.T) {
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
 	l.addBook("owls-5-moved", 11, -1, "")
 	l.addBook("owls-9-own", 11, 9, "")
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
 
 	l.mustRun(`{"apply": true}`)
 
@@ -622,6 +716,7 @@ func TestRunSeriesDenumber_HoldsABookWhosePositionIsTakenInTheBase(t *testing.T)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
 	l.addBook("talon-5", 10, 5, "") // already holds position 5 of the base
 	l.addBook("owls-5", 11, -1, "")
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20) // so the collision, not a lack of evidence, holds it
 
 	l.mustRun(`{"apply": true}`)
 
@@ -640,9 +735,11 @@ func TestRunSeriesDenumber_HoldsBooksLandingOnOnePositionWithinThePlanSet(t *tes
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
 	l.addSeries(12, "Court of Owls Book 5", denumberAuthor)
 	l.addSeries(13, "Court of Owls Book 7", denumberAuthor)
-	l.addBook("owls-5-a", 11, -1, "")
-	l.addBook("owls-5-b", 12, -1, "")
-	l.addBook("owls-7", 13, -1, "")
+	// Each book already holds the position its name carries, which is what
+	// corroborates the number; the two at 5 still collide.
+	l.addBook("owls-5-a", 11, 5, "")
+	l.addBook("owls-5-b", 12, 5, "")
+	l.addBook("owls-7", 13, 7, "")
 
 	l.mustRun(`{"apply": true}`)
 
@@ -665,6 +762,7 @@ func TestRunSeriesDenumber_VersionsOfOneBookDoNotCollide(t *testing.T) {
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
 	l.addBook("owls-5-primary", 11, -1, "vg")
 	l.addBook("owls-5-alt", 11, -1, "vg")
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
 
 	l.mustRun(`{"apply": true}`)
 
@@ -692,6 +790,7 @@ func TestRunSeriesDenumber_TheFreshRowDecidesAtWriteTime(t *testing.T) {
 			l.addSeries(10, "Court of Owls", denumberAuthor)
 			l.addSeries(11, "Court of Owls 05", denumberAuthor)
 			l.addBook("owls-5", 11, -1, "")
+			l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
 			l.afterMembership = func() {
 				l.mu.Lock()
 				defer l.mu.Unlock()
@@ -715,7 +814,7 @@ func TestRunSeriesDenumber_TheFreshRowDecidesAtWriteTime(t *testing.T) {
 func TestRunSeriesDenumber_SkipsAPlanWhoseBaseAppearedMidRun(t *testing.T) {
 	l := newDenumberLib(t)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
-	l.addBook("owls-5", 11, -1, "")
+	l.addBook("owls-5", 11, 5, "")
 	l.appearOnLookup = "Court of Owls"
 
 	rep := l.mustRun(`{"apply": true}`)
@@ -729,29 +828,35 @@ func TestRunSeriesDenumber_SkipsAPlanWhoseBaseAppearedMidRun(t *testing.T) {
 }
 
 // A base name that resolves to a numbered series this run folds elsewhere takes
-// no books: they would be stranded when that series is merged away. With
-// applyMedium the bracketed "Court of Owls [04]" is such a series, and
-// "Court of Owls [04] Book 3" names it as its base.
+// no books: they would be stranded when that series is merged away. The grammar
+// keeps a digit out of every base, so no name the planner reads resolves this
+// way today; the store, which matches names its own way, is simulated here, and
+// the decision must still hold both plans.
 func TestRunSeriesDenumber_AChainedBaseTakesNoBooksThisRun(t *testing.T) {
 	l := newDenumberLib(t)
-	l.addSeries(1, "Court of Owls", denumberAuthor)
-	l.addSeries(2, "Court of Owls [04]", denumberAuthor) // folds into series 1
-	l.addSeries(3, "Court of Owls [04] Book 3", denumberAuthor)
-	l.addBook("x1", 2, -1, "")
-	l.addBook("y1", 3, -1, "")
-
-	l.mustRun(`{"apply": true, "applyMedium": true}`)
-
-	if l.seriesOf("x1") != 1 || l.seqOf("x1") != "4" {
-		t.Fatalf("fixture: x1 in series %d at %s, want the base 1 at 4", l.seriesOf("x1"), l.seqOf("x1"))
-	}
-	if l.seriesOf("y1") != 3 || l.deleted[3] {
-		t.Errorf("y1 moved into a series this run deletes (series %d, deleted=%v)", l.seriesOf("y1"), l.deleted[3])
-	}
-	for id, b := range l.books {
-		if l.deleted[*b.SeriesID] {
-			t.Errorf("book %s points at series %d, which the run deleted", id, *b.SeriesID)
+	l.addSeries(2, "Court of Owls 04", denumberAuthor)
+	l.addSeries(3, "Court of Owls 05", denumberAuthor)
+	l.addBook("x1", 2, 4, "")
+	l.addBook("y1", 3, 5, "")
+	inner := l.store.GetSeriesByNameFunc
+	l.store.GetSeriesByNameFunc = func(name string, authorID *int) (*database.Series, error) {
+		if strings.EqualFold(name, "Court of Owls") { // the base "resolves" onto numbered series 2
+			a := denumberAuthor
+			return &database.Series{ID: 2, Name: "Court of Owls 04", AuthorID: &a}, nil
 		}
+		return inner(name, authorID)
+	}
+
+	rep := l.mustRun(`{"apply": true}`)
+
+	for id, want := range map[string]int{"x1": 2, "y1": 3} {
+		if got := l.seriesOf(id); got != want || l.deleted[want] {
+			t.Errorf("%s moved into a series this run deletes (series %d, deleted=%v)", id, got, l.deleted[want])
+		}
+	}
+	l.assertNoWrites()
+	if !strings.Contains(joinLogs(rep), "nothing to apply") {
+		t.Errorf("summary %q should say there is nothing to apply", joinLogs(rep))
 	}
 }
 
@@ -760,22 +865,28 @@ func TestRunSeriesDenumber_AChainedBaseTakesNoBooksThisRun(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRunSeriesDenumber_NeverAppliesAWrongShape(t *testing.T) {
-	cases := []struct{ name, series string }{
-		{"file part marker", "Court of Owls Part 3"},
-		{"file part marker, dashed", "Court of Owls-Part03"},
-		{"position of 100 or more", "Court of Owls Book 150"},
-		{"base equal to the author's name", "Bruce Wayne 05"},
-		{"base equal to another author's name", "Alfred Pennyworth 05"},
-		{"base with a leftover trailing digit", "Court of Owls 2 05"},
-		{"two letter base", "Ab 05"},
-		{"chapter base", "Chap-12 03"},
-		{"digit-leading base", "9 Lives 05"},
+	// Every book holds the position its name carries, so the library corroborates
+	// each number and only the shape check can hold it: the report must name it.
+	cases := []struct {
+		name, series string
+		seq          int
+		why          string
+	}{
+		{"file part marker", "Court of Owls Part 3", 3, "part_or_format_word"},
+		{"file part marker, glued", "Court of Owls-Part03", 3, "no_separator"},
+		{"position of 100 or more", "Court of Owls Book 150", 50, "number_out_of_range"},
+		{"base equal to the author's name", "Bruce Wayne 05", 5, "base_is_author_name"},
+		{"base equal to another author's name", "Alfred Pennyworth 05", 5, "base_is_author_name"},
+		{"base with a leftover trailing digit", "Court of Owls 2 05", 5, "base_has_digit"},
+		{"two letter base", "Ab 05", 5, "base_too_short"},
+		{"chapter base", "Chap-12 03", 3, "part_or_format_word"},
+		{"digit-leading base", "9 Lives 05", 5, "base_has_digit"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			l := newDenumberLib(t)
 			l.addSeries(11, tc.series, denumberAuthor)
-			l.addBook("owls", 11, -1, "")
+			l.addBook("owls", 11, tc.seq, "")
 
 			rep := l.mustRun(`{"apply": true}`)
 
@@ -786,6 +897,9 @@ func TestRunSeriesDenumber_NeverAppliesAWrongShape(t *testing.T) {
 			if !strings.Contains(joinLogs(rep), "nothing to apply") {
 				t.Errorf("summary %q should say there is nothing to apply", joinLogs(rep))
 			}
+			if report := readFile(t, l.reportPath); !strings.Contains(report, tc.why) {
+				t.Errorf("the report does not name %q as the reason:\n%s", tc.why, report)
+			}
 		})
 	}
 }
@@ -793,11 +907,33 @@ func TestRunSeriesDenumber_NeverAppliesAWrongShape(t *testing.T) {
 func TestRunSeriesDenumber_NeverAppliesASeriesWithNoAuthor(t *testing.T) {
 	l := newDenumberLib(t)
 	l.addSeries(11, "Court of Owls 05", 0)
-	l.addBook("owls-5", 11, -1, "")
+	l.addBook("owls-5", 11, 5, "")
 
 	l.mustRun(`{"apply": true}`)
 
 	l.assertNoWrites()
+	if report := readFile(t, l.reportPath); !strings.Contains(report, "no_author") {
+		t.Errorf("the report does not name no_author:\n%s", report)
+	}
+}
+
+// An author row that stands for "no known author" holds like author id 0.
+func TestRunSeriesDenumber_NeverAppliesASeriesOfAPlaceholderAuthor(t *testing.T) {
+	for _, name := range []string{"Unknown", "Various Authors", "Various", "N/A", "Audiobook"} {
+		t.Run(name, func(t *testing.T) {
+			l := newDenumberLib(t)
+			l.authors = append(l.authors, database.Author{ID: 40, Name: name})
+			l.addSeries(11, "Court of Owls 05", 40)
+			l.addBook("owls-5", 11, 5, "")
+
+			l.mustRun(`{"apply": true}`)
+
+			l.assertNoWrites()
+			if report := readFile(t, l.reportPath); !strings.Contains(report, "placeholder_author") {
+				t.Errorf("the report does not name placeholder_author:\n%s", report)
+			}
+		})
+	}
 }
 
 // The shapes that must keep applying: a keyword the name vouches for.
@@ -805,8 +941,8 @@ func TestRunSeriesDenumber_StillAppliesTheKeywordShapes(t *testing.T) {
 	l := newDenumberLib(t)
 	l.addSeries(11, "Court of Owls: Book 11", denumberAuthor)
 	l.addSeries(12, "Court of Owls, Volume 3", denumberAuthor)
-	l.addBook("owls-11", 11, -1, "")
-	l.addBook("owls-3", 12, -1, "")
+	l.addBook("owls-11", 11, 11, "")
+	l.addBook("owls-3", 12, 3, "")
 
 	l.mustRun(`{"apply": true}`)
 
@@ -820,25 +956,29 @@ func TestRunSeriesDenumber_StillAppliesTheKeywordShapes(t *testing.T) {
 	}
 }
 
-// One base name under two authors is two bases.
-func TestRunSeriesDenumber_ASharedBaseNameResolvesPerAuthor(t *testing.T) {
+// A base that exists for one author is that author's. A second author's numbered
+// series is held rather than given a second base of the same name beside it.
+func TestRunSeriesDenumber_ABaseOfAnotherAuthorIsNeverDuplicated(t *testing.T) {
 	l := newDenumberLib(t)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
 	l.addSeries(12, "Court of Owls 05", denumberAuthor+1)
 	l.addSeries(10, "Court of Owls", denumberAuthor) // exists for the first author only
-	l.addBook("bruce-owls", 11, -1, "")
-	l.addBook("alfred-owls", 12, -1, "")
+	l.addBook("bruce-owls", 11, 5, "")
+	l.addBook("alfred-owls", 12, 5, "")
 
 	l.mustRun(`{"apply": true}`)
 
 	if l.seriesOf("bruce-owls") != 10 {
 		t.Errorf("the first author's book is in series %d, want their own base 10", l.seriesOf("bruce-owls"))
 	}
-	if len(l.created) != 1 || l.created[0].AuthorID == nil || *l.created[0].AuthorID != denumberAuthor+1 {
-		t.Fatalf("created %+v, want one base for the second author", l.created)
+	if len(l.created) != 0 {
+		t.Fatalf("created %+v: a second base of the same name was made under another author row", l.created)
 	}
-	if l.seriesOf("alfred-owls") != l.created[0].ID || l.seriesOf("alfred-owls") == 10 {
-		t.Errorf("the second author's book is in series %d, want their own new base %d", l.seriesOf("alfred-owls"), l.created[0].ID)
+	if l.seriesOf("alfred-owls") != 12 || l.deleted[12] {
+		t.Errorf("the second author's book moved or its series was deleted: series %d", l.seriesOf("alfred-owls"))
+	}
+	if report := readFile(t, l.reportPath); !strings.Contains(report, "base_under_another_author") {
+		t.Errorf("the report does not name base_under_another_author:\n%s", report)
 	}
 }
 
@@ -849,8 +989,8 @@ func TestRunSeriesDenumber_ASharedBaseNameGetsOneBasePerAuthorWhenNoneExists(t *
 	l := newDenumberLib(t)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
 	l.addSeries(12, "Court of Owls 05", denumberAuthor+1)
-	l.addBook("bruce-owls", 11, -1, "")
-	l.addBook("alfred-owls", 12, -1, "")
+	l.addBook("bruce-owls", 11, 5, "")
+	l.addBook("alfred-owls", 12, 5, "")
 
 	l.mustRun(`{"apply": true}`)
 
@@ -890,7 +1030,7 @@ func TestRunSeriesDenumber_ASeriesAnotherRepairHoldsIsMergedButNotDeleted(t *tes
 	l.addSeries(10, "Court of Owls", denumberAuthor)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
 	l.series[len(l.series)-1].HeldBy = "series-prune-fixer"
-	l.addBook("owls-5", 11, -1, "")
+	l.addBook("owls-5", 11, 5, "")
 
 	l.mustRun(`{"apply": true}`)
 
@@ -910,7 +1050,7 @@ func TestRunSeriesDenumber_ASeriesAnotherRepairHoldsIsMergedButNotDeleted(t *tes
 func TestRunSeriesDenumber_AnApplyThatChangedSeriesDropsTheSeriesCache(t *testing.T) {
 	l := newDenumberLib(t)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
-	l.addBook("owls-5", 11, -1, "")
+	l.addBook("owls-5", 11, 5, "")
 	l.mustRun(`{}`)
 	if n := l.cache.series.Load(); n != 0 {
 		t.Errorf("a dry run dropped the series cache %d times", n)
@@ -942,10 +1082,12 @@ func canaryLib(t *testing.T) *denumberLib {
 	l.addSeries(22, "Arkham Cell 02", denumberAuthor)
 	l.addSeries(23, "Court of Owls 05", denumberAuthor)
 	l.addSeries(24, "Dark Knight 03", denumberAuthor)
-	l.addBook("cell-2", 22, -1, "")
-	l.addBook("owls-5-a", 23, -1, "vg-a")
-	l.addBook("owls-5-b", 23, -1, "vg-b") // two books at one position: a collision, held
-	l.addBook("dark-3", 24, -1, "")
+	// Each book holds the position its series' name carries (the library's evidence
+	// for the number).
+	l.addBook("cell-2", 22, 2, "")
+	l.addBook("owls-5-a", 23, 5, "vg-a")
+	l.addBook("owls-5-b", 23, 5, "vg-b") // two books at one position: a collision, held
+	l.addBook("dark-3", 24, 3, "")
 	return l
 }
 
@@ -1059,7 +1201,7 @@ func TestRunSeriesDenumber_KeepsASeriesThatRowsOutsideTheMembershipReadStillHold
 	l := newDenumberLib(t)
 	l.addSeries(10, "Court of Owls", denumberAuthor)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
-	l.addBook("owls-5", 11, -1, "")
+	l.addBook("owls-5", 11, 5, "")
 	l.extraRefs[11] = 1
 
 	l.mustRun(`{"apply": true}`)
@@ -1149,7 +1291,7 @@ func TestRunSeriesDenumber_DryRunReportsGuardHeldBack(t *testing.T) {
 	l := newDenumberLib(t)
 	l.addSeries(10, "Court of Owls", denumberAuthor)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
-	l.addBook("owls-5", 11, -1, "")
+	l.addBook("owls-5", 11, 5, "")
 	l.extraRefs[11] = 2
 
 	rep := l.mustRun(`{}`)
@@ -1167,11 +1309,13 @@ func TestRunSeriesDenumber_AFailedWriteKeepsTheSeries(t *testing.T) {
 	l := newDenumberLib(t)
 	l.addSeries(10, "Court of Owls", denumberAuthor)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
-	l.addBook("owls-5-primary", 11, -1, "vg")
-	l.addBook("owls-5-alt", 11, -1, "vg")
+	l.addBook("owls-5-primary", 11, 5, "vg")
+	l.addBook("owls-5-alt", 11, 5, "vg")
 	l.failUpdate["owls-5-alt"] = true
 
-	l.mustRun(`{"apply": true}`)
+	if _, err := l.run(`{"apply": true}`); err == nil {
+		t.Errorf("a run with a failed write was reported as success")
+	}
 
 	if l.seriesOf("owls-5-primary") != 10 {
 		t.Fatalf("fixture: the writable version did not move (series %d)", l.seriesOf("owls-5-primary"))
@@ -1190,10 +1334,13 @@ func TestRunSeriesDenumber_AFailedDeleteIsCounted(t *testing.T) {
 	l := newDenumberLib(t)
 	l.addSeries(10, "Court of Owls", denumberAuthor)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
-	l.addBook("owls-5", 11, -1, "")
+	l.addBook("owls-5", 11, 5, "")
 	l.store.DeleteSeriesFunc = func(int) error { return errors.New("delete refused") }
 
-	rep := l.mustRun(`{"apply": true}`)
+	rep, err := l.run(`{"apply": true}`)
+	if err == nil {
+		t.Errorf("a run with a failed delete was reported as success")
+	}
 
 	if l.seriesOf("owls-5") != 10 || l.deleted[11] {
 		t.Fatalf("fixture: book in %d, deleted=%v", l.seriesOf("owls-5"), l.deleted)

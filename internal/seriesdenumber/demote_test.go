@@ -1,66 +1,75 @@
 // file: internal/seriesdenumber/demote_test.go
-// version: 1.0.2
+// version: 2.0.0
 // guid: c2a81e47-5f30-4d96-b7a3-19e60d8f4b25
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package seriesdenumber
 
-import "testing"
+import (
+	"math/rand"
+	"regexp"
+	"strconv"
+	"strings"
+	"testing"
+)
 
-func TestDemote(t *testing.T) {
-	const author = "Alfred Pennyworth"
+const testAuthor = "Alfred Pennyworth"
+
+// cand builds a candidate whose planner base and position agree with the name,
+// the common case; tests that need a disagreement build the struct themselves.
+func cand(name string) Candidate {
+	c := Candidate{FromName: name, AuthorID: 3, AuthorName: testAuthor}
+	if p, _, ok := ParseName(name); ok {
+		c.Base, c.Position = p.Base, p.N
+	} else {
+		c.Base, c.Position = name, 1
+	}
+	return c
+}
+
+func TestDemote_AppliesTheNamesTheOpExistsFor(t *testing.T) {
+	for _, name := range []string{
+		"Gotham Knights: Book 11", "Gotham Knights, Volume 3", "Court of Owls 05", "Discord Knights 05",
+		"BAT 07", "Arkham Asylum 99", "Gotham Knights - 03", "Court of Owls #5",
+	} {
+		if v, held := Demote(cand(name)); held {
+			t.Errorf("%q held as %s (%s), want it to pass", name, v.Code, v.Reason)
+		}
+	}
+	// An author name that is unknown skips only the author check.
+	c := cand("Alfred Pennyworth 12")
+	c.AuthorName = ""
+	if v, held := Demote(c); held {
+		t.Errorf("held as %s with no author name to compare", v.Code)
+	}
+}
+
+func TestDemote_HoldsWithNamedReason(t *testing.T) {
 	cases := []struct {
 		name string
 		c    Candidate
-		want Code // "" = must still apply
+		want Code
 	}{
-		// ── Must still apply: the tier must not collapse to nothing. ──
-		{"keyword book", Candidate{"Gotham Knights: Book 11", "Gotham Knights", 11, 3, author, nil}, ""},
-		{"keyword volume", Candidate{"Gotham Knights, Volume 3", "Gotham Knights", 3, 3, author, nil}, ""},
-		{"zero padded", Candidate{"Court of Owls 05", "Court of Owls", 5, 3, author, nil}, ""},
-		{"part marker without format words", Candidate{"The Long Halloween Part 2", "The Long Halloween", 2, 3, author, nil}, CodeFilePart},
-		{"disc is a whole word only", Candidate{"Discord Knights 05", "Discord Knights", 5, 3, author, nil}, ""},
-		{"three letter base is allowed", Candidate{"BAT 07", "BAT", 7, 3, author, nil}, ""},
-		{"position 99 is allowed", Candidate{"Arkham Asylum 99", "Arkham Asylum", 99, 3, author, nil}, ""},
-		{"author name unknown skips that check", Candidate{"Alfred Pennyworth 12", "Alfred Pennyworth", 12, 3, "", nil}, ""},
-
-		// ── Each wrong shape, named. ──
-		{"file part marker", Candidate{"Year One Unabridged Part 1", "Year One Unabridged", 1, 3, author, nil}, CodeFilePart},
-		{"file part marker no space", Candidate{"The Cowl Unabridged Part2", "The Cowl Unabridged", 2, 3, author, nil}, CodeFilePart},
-		{"file part marker in brackets", Candidate{"Hush (Unabridged) Part 2", "Hush (Unabridged)", 2, 3, author, nil}, CodeFilePart},
-		{"file part beside disc", Candidate{"Hush Disc 1 Part 2", "Hush Disc 1", 2, 3, author, nil}, CodeFilePart},
-		{"format word in base", Candidate{"Hush Disc 2", "Hush Disc", 2, 3, author, nil}, CodeFormatWord},
-		{"cd in base", Candidate{"Hush CD 3", "Hush CD", 3, 3, author, nil}, CodeFormatWord},
-		{"audio base", Candidate{"Audio 01", "Audio", 1, 3, author, nil}, CodeFormatWord},
-		{"position 100", Candidate{"Knightfall 100", "Knightfall", 100, 3, author, nil}, CodeHighPosition},
-		{"position 201", Candidate{"Knightfall 201", "Knightfall", 201, 3, author, nil}, CodeHighPosition},
-		{"base is the author", Candidate{"Alfred Pennyworth 12", "Alfred Pennyworth", 12, 3, author, nil}, CodeAuthorBase},
-		{"base is the author, punctuation differs", Candidate{"alfred-pennyworth 12", "alfred-pennyworth", 12, 3, author, nil}, CodeAuthorBase},
-		{"two numbers", Candidate{"No Mans Land 2-1", "No Mans Land 2", 1, 3, author, nil}, CodeBaseTrailingDigit},
-		{"dot number left in base", Candidate{"Dark Victory.1 04", "Dark Victory.1", 4, 3, author, nil}, CodeBaseTrailingDigit},
-		{"one letter base", Candidate{"B 05", "B", 5, 3, author, nil}, CodeTinyBase},
-		{"two letter base", Candidate{"BM 05", "BM", 5, 3, author, nil}, CodeTinyBase},
-		{"chap", Candidate{"chap-01", "chap", 1, 3, author, nil}, CodeStructuralBase},
-		{"chapter", Candidate{"Chapter 4", "Chapter", 4, 3, author, nil}, CodeStructuralBase},
-		{"digit leading base", Candidate{"01 Knightfall 04", "01 Knightfall", 4, 3, author, nil}, CodeDigitLeadingBase},
-		{"no author", Candidate{"Gotham Knights: Book 11", "Gotham Knights", 11, 0, author, nil}, CodeNoAuthor},
-		{"no author wins over everything", Candidate{"Hush Disc 2", "Hush Disc", 2, 0, author, nil}, CodeNoAuthor},
-		{"file part wins over position", Candidate{"Year One Unabridged Part 1", "Year One Unabridged", 120, 3, author, nil}, CodeFilePart},
+		{"no author", func() Candidate { c := cand("Gotham Knights: Book 11"); c.AuthorID = 0; return c }(), CodeNoAuthor},
+		{"no author wins over everything", func() Candidate { c := cand("Hush Disc 2"); c.AuthorID = 0; return c }(), CodeNoAuthor},
+		{"placeholder author", func() Candidate { c := cand("Gotham Knights: Book 11"); c.AuthorPlaceholder = true; return c }(), CodePlaceholderAuthor},
+		{"part", cand("Hush Part: 2"), CodePartOrFormatWord},
+		{"base with a second number", cand("Gotham Knights 01 of 03"), CodeBaseHasDigit},
+		{"fraction", cand("Gotham Knights Book .5"), CodeFractionalNumber},
+		{"too large", cand("Knightfall 100"), CodeNumberOutOfRange},
+		{"the planner disagrees about the base", Candidate{FromName: "Court of Owls 05", Base: "Court", Position: 5, AuthorID: 3}, CodeNamesDisagree},
+		{"the planner disagrees about the position", Candidate{FromName: "Court of Owls 05", Base: "Court of Owls", Position: 6, AuthorID: 3}, CodeNamesDisagree},
+		{"base is the author", cand("Alfred Pennyworth 12"), CodeAuthorBase},
+		{"base is the author, punctuation differs", cand("alfred-pennyworth 12"), CodeAuthorBase},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			v, held := Demote(tc.c)
-			if tc.want == "" {
-				if held {
-					t.Fatalf("held as %s (%s), want it to apply", v.Code, v.Reason)
-				}
-				return
-			}
 			if !held {
 				t.Fatalf("applied, want held as %s", tc.want)
 			}
 			if v.Code != tc.want {
-				t.Fatalf("held as %s, want %s", v.Code, tc.want)
+				t.Fatalf("held as %s (%s), want %s", v.Code, v.Reason, tc.want)
 			}
 			if v.Reason == "" {
 				t.Fatalf("held as %s with no reason", v.Code)
@@ -69,18 +78,101 @@ func TestDemote(t *testing.T) {
 	}
 }
 
-// A base that is ANY author's name is held, not only the series' own author.
+// B5: a base that is ANY author's name, in any word order, as a part of a
+// composite credit, or spelled with a decomposed accent.
 func TestDemote_BaseEqualToAnyAuthorsName(t *testing.T) {
-	authors := NewAuthorSet([]string{"Bruce Wayne", "  alfred   PENNYWORTH ", ""})
-	own := Candidate{FromName: "Alfred Pennyworth 05", Base: "Alfred Pennyworth", Position: 5, AuthorID: 3, AuthorName: "Bruce Wayne", Authors: authors}
-	if v, ok := Demote(own); !ok || v.Code != CodeAuthorBase {
-		t.Fatalf("a base that is another author's name: got %+v held=%v, want %s", v, ok, CodeAuthorBase)
+	authors := NewAuthorSet([]string{
+		"Bruce Wayne", "  alfred   PENNYWORTH ", "", "Dick Grayson & Barbara Gordon", "Renée Montoya",
+		"Gordon, James", "Kyle, Selina and Harvey Dent", "Tim Drake, Jason Todd",
+	})
+	for _, name := range []string{
+		"Alfred Pennyworth 05",             // another author's name
+		"Wayne, Bruce 03",                  // inverted Last, First
+		"Barbara Gordon 03",                // part of a composite credit
+		"Dick Grayson 03",                  // the other part
+		"Renée Montoya 03",                // decomposed accent against a composed one
+		"James Gordon 03",                  // stored inverted, read upright
+		"Selina Kyle 03",                   // composite with an inverted part
+		"Harvey Dent 03",                   // the other part of that credit
+		"Jason Todd 03",                    // comma-listed credit
+		"Gordon, James 03",                 // inverted in both
+		"Bruce Wayne 03",                   // plain
+		"BRUCE   WAYNE 03",                 // case and spacing
+		"Dick Grayson & Barbara Gordon 03", // the composite itself
+	} {
+		c := cand(name)
+		c.AuthorName = "Someone Else"
+		c.Authors = authors
+		if v, ok := Demote(c); !ok || v.Code != CodeAuthorBase {
+			t.Errorf("%q: got %+v held=%v, want %s", name, v, ok, CodeAuthorBase)
+		}
 	}
-	notAuthor := Candidate{FromName: "Court of Owls 05", Base: "Court of Owls", Position: 5, AuthorID: 3, AuthorName: "Bruce Wayne", Authors: authors}
-	if v, ok := Demote(notAuthor); ok {
+	c := cand("Court of Owls 05")
+	c.AuthorName = "Bruce Wayne"
+	c.Authors = authors
+	if v, ok := Demote(c); ok {
 		t.Fatalf("a base that is nobody's name was held: %+v", v)
 	}
 	if (AuthorSet)(nil).Has("Bruce Wayne") {
 		t.Fatalf("a nil set matched")
 	}
+}
+
+// Every plan the pipeline lets through is rebuilt exactly from its fields by an
+// oracle that shares no code with ParseName: the name is base + separator +
+// optional marker + N, the base has no digit, and N is the position written.
+func TestDemote_EligiblePlansRebuildTheirNameExactly(t *testing.T) {
+	pool := []string{
+		"Gotham", "Knights", "Court", "of", "Owls", "Part", "Pt.", "Unabridged", "Disc", "CD", "Book", "Vol.", "Volume",
+		"No", "#", "Tome", "Band", "and", "&", "to", "-", ":", ",", "01", "2", "05", "66", "1989", ".5", "2.5", "(Special)",
+		"'", "III", "Bat", "BW", "Edition", "99", "100", "0", "Wayne", "Bruce",
+	}
+	oracle := regexp.MustCompile(`(?i)^(.+?)(?:\s*[-:,\x{2013}\x{2014}]\s*|\s+)(?:(?:book|bk|vol|volume|no)\.?\s*|#\s*)?(\d{1,3})$`)
+	rng := rand.New(rand.NewSource(7))
+	authors := NewAuthorSet([]string{"Bruce Wayne"})
+	eligible := 0
+	for i := 0; i < 60000; i++ {
+		var b strings.Builder
+		for j, n := 0, 1+rng.Intn(6); j < n; j++ {
+			if j > 0 && rng.Intn(6) != 0 {
+				b.WriteByte(' ')
+			}
+			b.WriteString(pool[rng.Intn(len(pool))])
+		}
+		name := b.String()
+		norm := strings.Join(strings.Fields(name), " ")
+		// The planner's reading is taken from the oracle, so the property does not
+		// lean on ParseName for the plan's fields.
+		c := Candidate{FromName: name, AuthorID: 3, Authors: authors}
+		if m := oracle.FindStringSubmatch(norm); m != nil {
+			c.Base = m[1]
+			c.Position, _ = strconv.Atoi(m[2])
+		} else {
+			c.Base, c.Position = norm, 1
+		}
+		if _, held := Demote(c); held {
+			continue
+		}
+		eligible++
+		m := oracle.FindStringSubmatch(norm)
+		if m == nil {
+			t.Fatalf("%q is eligible but is not base + separator + marker + number", name)
+		}
+		if strings.ContainsAny(c.Base, "0123456789") {
+			t.Fatalf("%q is eligible with a digit in the base %q", name, c.Base)
+		}
+		if n, _ := strconv.Atoi(m[2]); n != c.Position || n < 1 || n > MaxPosition {
+			t.Fatalf("%q is eligible at position %d, the name says %s", name, c.Position, m[2])
+		}
+		if !strings.HasPrefix(strings.ToLower(norm), strings.ToLower(c.Base)) {
+			t.Fatalf("%q: base %q is not a prefix of the name", name, c.Base)
+		}
+		if strings.EqualFold(norm[:len(c.Base)], "Bruce Wayne") {
+			t.Fatalf("%q is eligible with an author's name as its base", name)
+		}
+	}
+	if eligible < 200 {
+		t.Fatalf("only %d of 60000 generated plans were eligible: the generator no longer reaches the accept path", eligible)
+	}
+	t.Logf("%d of 60000 generated plans eligible", eligible)
 }

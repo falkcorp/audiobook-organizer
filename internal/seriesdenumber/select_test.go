@@ -1,7 +1,7 @@
 // file: internal/seriesdenumber/select_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e9b2d64-18c7-4a03-9f5e-a4d176c20b83
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package seriesdenumber
 
@@ -33,6 +33,7 @@ func TestSelect(t *testing.T) {
 		{"base and limit", Selection{BaseName: "Knightfall", Limit: 1}, []int{3}},
 		{"base and min books", Selection{BaseName: "Knightfall", MinBooks: 2}, []int{3}},
 		{"nothing matches", Selection{BaseName: "Hush", MinBooks: 5}, []int{}},
+		{"internal runs of space fold, as the store folds them", Selection{BaseName: "Knight\t  fall"}, []int{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -54,5 +55,19 @@ func TestSelect_DoesNotMutateItems(t *testing.T) {
 	_ = Select(items, Selection{})
 	if items[0].IntoName != "Hush" || items[1].IntoName != "Arkham" {
 		t.Fatalf("items reordered: %+v", items)
+	}
+}
+
+// The store keys a series name with runs of white space folded to one, so a
+// stored "Court  of   Owls" and a requested "court of owls" are the same base.
+func TestSelect_FoldsInternalSpacesLikeTheStore(t *testing.T) {
+	items := []Item{
+		{IntoName: "Court  of   Owls", Position: 1, Books: 1},
+		{IntoName: "Court of Owls", Position: 2, Books: 1},
+		{IntoName: "Court of Owl", Position: 3, Books: 1},
+	}
+	got := Select(items, Selection{BaseName: "  court \t of owls "})
+	if !slices.Equal(got, []int{0, 1}) {
+		t.Fatalf("Select = %v, want [0 1]", got)
 	}
 }

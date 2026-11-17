@@ -1,14 +1,17 @@
 // file: internal/plugins/maintenance/series_denumber_undo_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d2b9e40-3a61-4c85-b1f7-e08c4a5d9376
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -73,6 +76,11 @@ func (w *denumberUndoWorld) addBook(t *testing.T, label string, seriesName strin
 func (w *denumberUndoWorld) run(t *testing.T, params, opID string) {
 	t.Helper()
 	p := &Plugin{deps: fakeDeps{store: w.st}}
+	// An apply needs a report path; the params are edited as text so they reach the
+	// decoder as written.
+	if strings.Contains(params, `"apply": true`) && !strings.Contains(params, "reportPath") {
+		params = strings.Replace(params, "{", `{"reportPath": `+strconv.Quote(filepath.Join(t.TempDir(), "report.tsv"))+`, `, 1)
+	}
 	require.NoError(t, p.runSeriesDenumber(context.Background(), json.RawMessage(params), &opIDReporter{id: opID}))
 }
 
@@ -96,6 +104,20 @@ func (w *denumberUndoWorld) seriesByName(t *testing.T, name string) *database.Se
 	return s
 }
 
+// withSiblings adds the series "Court of Owls NN" for each given number, each
+// holding one book already placed at position 99. They are held themselves
+// (their own position differs), and they make a run of consecutive numbers around
+// the series under test, which is the library's evidence for a position a book
+// does not carry.
+func (w *denumberUndoWorld) withSiblings(t *testing.T, nums ...int) {
+	t.Helper()
+	for _, n := range nums {
+		name := fmt.Sprintf("Court of Owls %02d", n)
+		w.addSeries(t, name)
+		w.addBook(t, fmt.Sprintf("sibling-%02d", n), name, 99, "", true)
+	}
+}
+
 // Two numbered series fold into ONE base the run creates. After the revert both
 // numbered series are back under their own ids with their books (and the
 // alternate version) at their old, position-less state, and the base is gone.
@@ -108,6 +130,7 @@ func TestSeriesDenumber_ApplyThenRevertRestoresEverythingUnderTheSameIDs(t *test
 	w.addBook(t, "owls-5-primary", "Court of Owls 05", -1, "vg-owls-5", true)
 	w.addBook(t, "owls-5-alternate", "Court of Owls 05", -1, "vg-owls-5", false)
 	w.addBook(t, "owls-7", "Court of Owls Book 7", -1, "", true)
+	w.withSiblings(t, 6)
 
 	w.run(t, `{"apply": true}`, "op-denumber-e2e")
 
@@ -155,6 +178,7 @@ func TestSeriesDenumber_ApplyThenRevertLeavesTheBaseAndItsBooksAlone(t *testing.
 	id5 := w.addSeries(t, "Court of Owls 05")
 	w.addBook(t, "talon-1", "Court of Owls", 1, "", true)
 	w.addBook(t, "owls-5", "Court of Owls 05", -1, "", true)
+	w.withSiblings(t, 4, 6)
 
 	w.run(t, `{"apply": true}`, "op-denumber-existing-base")
 	sid, seq := w.bookState(t, "owls-5")
@@ -181,6 +205,11 @@ func TestSeriesDenumber_ACanaryApplyIsReverted(t *testing.T) {
 	w.addSeries(t, "Dark Knight 03")
 	w.addBook(t, "owls-5", "Court of Owls 05", -1, "", true)
 	w.addBook(t, "dark-3", "Dark Knight 03", -1, "", true)
+	w.withSiblings(t, 4, 6)
+	w.addSeries(t, "Dark Knight 02")
+	w.addSeries(t, "Dark Knight 04")
+	w.addBook(t, "dark-2", "Dark Knight 02", 99, "", true)
+	w.addBook(t, "dark-4", "Dark Knight 04", 99, "", true)
 
 	w.run(t, `{"apply": true, "baseName": "Court of Owls"}`, "op-denumber-canary")
 	sid, _ := w.bookState(t, "dark-3")
