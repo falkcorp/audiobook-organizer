@@ -1,5 +1,5 @@
 // file: internal/books/store/dedup_automerge_journal_rows_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6a3d8e15-c2f7-49b0-8d14-e5b09a7c3f62
 // last-edited: 2026-11-17
 
@@ -235,6 +235,9 @@ func TestOpenAutoMergeLosers_ALiveProvisionalRowHoldsEveryParticipant(t *testing
 		require.Equal(t, key, open.Losers[id], "%s is a participant of a live provisional row", id)
 	}
 	require.NotContains(t, open.Winners, "batman", "a provisional row still does not hold a winner as a winner")
+	require.NotContains(t, open.Participants, "nightwing", "its own loser is a loser hold, not a participant hold")
+	require.Equal(t, map[string]string{"batman": key, "robin": key}, open.Participants,
+		"the books held only as participants are marked, so a hold reason can say so")
 }
 
 // Only a LIVE provisional row widens the hold: a closed one describes a merge that
@@ -300,4 +303,6 @@ func TestOpenAutoMergeLosers_ALoserKeyIsNeverReplacedByAParticipantKey(t *testin
 	require.NoError(t, err)
 	require.Equal(t, string(autoMergeJournalKey(601)), open.Losers["batgirl"])
 	require.Equal(t, string(autoMergeJournalKey(600)), open.Losers["robin"], "the later row lists robin only as a participant")
+	require.Equal(t, map[string]string{"batman": string(autoMergeJournalKey(600))}, open.Participants,
+		"a book that is some row's own loser is never marked as a participant hold")
 }

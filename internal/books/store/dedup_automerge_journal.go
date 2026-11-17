@@ -1,5 +1,5 @@
 // file: internal/books/store/dedup_automerge_journal.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 8b2f7d14-6c93-4a05-9e21-3f8a5c0d7e46
 // last-edited: 2026-11-17
 
@@ -325,8 +325,9 @@ func (s *EmbeddingStore) ListAutoMergeJournalEntries(limit int) ([]AutoMergeJour
 }
 
 // AutoMergeOpenLosers is a snapshot of the auto-merge journal's open entries:
-// the id of every book that is the loser of an auto-merge whose undo
-// (Engine.UnmergeAuto) has not run, mapped to the journal key that holds it.
+// the id of every book the purge must keep because of an auto-merge whose undo
+// (Engine.UnmergeAuto) has not run (a loser, or for a live provisional entry
+// every participant of its merge), mapped to the journal key that holds it.
 // Gen is AutoMergeJournalGeneration read before the scan.
 //
 // An entry is open while UndoneAt is zero. A closed one (AbortedAt) is open here
@@ -341,9 +342,17 @@ func (s *EmbeddingStore) ListAutoMergeJournalEntries(limit int) ([]AutoMergeJour
 // book in its Participants list, because its LoserID is only the loser of the
 // winner PREDICTED before the merge: when the merge elected another book, the
 // predicted winner is a real loser named by no entry's LoserID, and the entry's
-// own LoserID is the actual winner. Holding an extra participant that was never
-// soft-deleted is harmless, since the purge only asks about trashed books. An
-// entry without a Participants list, or a closed one, holds its loser alone.
+// own LoserID is the actual winner. An entry without a Participants list, or a
+// closed one, holds its loser alone.
+//
+// The hold has no expiry and nothing releases a provisional entry today: it is
+// neither finalized nor closed after a failed patch or a crash, and UnmergeAuto
+// refuses it. So a live provisional entry holds all its participants from every
+// purge path for as long as it exists, including a participant (the predicted
+// winner, or the actual winner) that is trashed for an unrelated reason later.
+// It fails closed, so no data is lost; the cost is one kept trash row per held
+// book. The same was already true on main for a provisional entry's own losers.
+// TODO-MERGE-PROVISIONAL-ROW-REPAIR tracks releasing such entries.
 //
 // Winners is the other book UnmergeAuto needs: an entry that recorded a
 // pre-merge snapshot of its winner (WinnerPreMergeTS != 0) makes UnmergeAuto
@@ -356,6 +365,11 @@ type AutoMergeOpenLosers struct {
 	Gen     uint64
 	Losers  map[string]string
 	Winners map[string]string
+	// Participants is the subset of Losers held only because a live provisional
+	// entry lists the book as a participant, not because an entry names it as its
+	// loser. It maps to the same key as Losers does. It exists so a hold reason can
+	// say which kind of hold it is.
+	Participants map[string]string
 }
 
 // OpenAutoMergeLosers scans the auto-merge journal once. Unlike
@@ -367,7 +381,7 @@ func (s *EmbeddingStore) OpenAutoMergeLosers() (*AutoMergeOpenLosers, error) {
 	if err := s.checkClosed(); err != nil {
 		return nil, err
 	}
-	out := &AutoMergeOpenLosers{Gen: AutoMergeJournalGeneration(), Losers: map[string]string{}, Winners: map[string]string{}}
+	out := &AutoMergeOpenLosers{Gen: AutoMergeJournalGeneration(), Losers: map[string]string{}, Winners: map[string]string{}, Participants: map[string]string{}}
 	prefix := []byte(dedupAutoMergeJournalPfx)
 	upper := append([]byte(dedupAutoMergeJournalPfx), 0xff)
 	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
@@ -386,6 +400,7 @@ func (s *EmbeddingStore) OpenAutoMergeLosers() (*AutoMergeOpenLosers, error) {
 		key := string(iter.Key())
 		if entry.LoserID != "" {
 			out.Losers[entry.LoserID] = key
+			delete(out.Participants, entry.LoserID)
 		}
 		// A live provisional row's LoserID is a PREDICTION: its WinnerID is the
 		// winner predicted before the merge, and when the merge elected another book
@@ -399,6 +414,7 @@ func (s *EmbeddingStore) OpenAutoMergeLosers() (*AutoMergeOpenLosers, error) {
 			for _, p := range entry.Participants {
 				if _, held := out.Losers[p.BookID]; !held && p.BookID != "" {
 					out.Losers[p.BookID] = key
+					out.Participants[p.BookID] = key
 				}
 			}
 		}

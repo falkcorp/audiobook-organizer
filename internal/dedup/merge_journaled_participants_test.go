@@ -1,5 +1,5 @@
 // file: internal/dedup/merge_journaled_participants_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d1e5b93-0c42-4a8f-9e36-b2f40a6d8c15
 // last-edited: 2026-11-17
 
@@ -205,8 +205,9 @@ func byLoser(t *testing.T, es *database.EmbeddingStore, keys []string) map[strin
 // winner and one failed patch write, every real loser is the LoserID of exactly one
 // row, and the one row left provisional names the loser whose write failed. By
 // INDEX the failed write would be some other loser's, so one loser would name no
-// row and another would name two, and the purge hold for the first would be gone
-// (the participant lists of the provisional rows keep it pinned either way).
+// row and another would name two, which the duplicate-LoserID and missing-row
+// assertions below catch. The purge hold is not what fails here: the participant
+// lists of the provisional rows keep every book held either way.
 //
 // Rows are (alfred,batgirl) (alfred,catwoman) (alfred,nightwing), the real losers
 // are alfred, batgirl, catwoman, and the patch writes them in that order, so the
@@ -307,6 +308,12 @@ func TestMergeBooksJournaled_ATwoBookMergeWithAMispredictedWinnerHoldsItsRealLos
 			open, err := es.OpenAutoMergeLosers()
 			require.NoError(t, err)
 			require.Equal(t, row.Key, open.Losers[p], "the real loser is held from the trash purge")
+
+			// The undo refusal must name the real loser, not only the row's
+			// LoserID (which here is the live winner).
+			uerr := engine.UnmergeAuto(row.Key)
+			require.Error(t, uerr)
+			require.Contains(t, uerr.Error(), p, "the refusal names the real loser, which is the book in the trash")
 		})
 	}
 }

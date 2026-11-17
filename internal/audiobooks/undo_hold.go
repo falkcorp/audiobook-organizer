@@ -1,7 +1,7 @@
 // file: internal/audiobooks/undo_hold.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7b3e1c94-5a28-4d60-9f17-c2d84e60a3b5
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package audiobooks
 
@@ -33,9 +33,10 @@ import (
 //     reverts the loser from its pre-merge snapshot, and the winner from its
 //     own when the entry recorded one, and refuses (writing nothing) when
 //     either row is gone. A purged loser or winner therefore makes the undo
-//     impossible, so both are held while the entry is open (a provisional
-//     entry cannot be undone: only its loser, which is restored from the
-//     trash, is held).
+//     impossible, so both are held while the entry is open. A provisional
+//     entry cannot be undone, and its loser is only a prediction, so a live
+//     provisional entry holds every participant of its merge instead, until
+//     something releases the entry (nothing does today).
 //
 // What a hold does NOT keep, and what a purge of a held-then-released book
 // costs: a purged auto-merge loser or combine shell takes its listening state
@@ -187,9 +188,10 @@ func (h *undoHold) Holds(b *database.Book) (reason string, held bool, err error)
 	return "", false, nil
 }
 
-// autoHolds reports whether id is the loser (or the snapshot-restored winner)
-// of an auto-merge that has not been undone, rebuilding its snapshot first when
-// an entry was written since. role is "loser" or "winner".
+// autoHolds reports whether id is the loser, a participant of a live provisional
+// entry, or the snapshot-restored winner of an auto-merge that has not been
+// undone, rebuilding its snapshot first when an entry was written since. role is
+// "loser", "participant" or "winner".
 func (h *undoHold) autoHolds(id string) (key, role string, held bool, err error) {
 	if h.emb == nil {
 		return "", "", false, nil
@@ -202,6 +204,9 @@ func (h *undoHold) autoHolds(id string) (key, role string, held bool, err error)
 		}
 	}
 	if key, held = h.auto.Losers[id]; held {
+		if h.auto.Participants[id] == key {
+			return key, "participant", true, nil
+		}
 		return key, "loser", true, nil
 	}
 	if key, held = h.auto.Winners[id]; held {
