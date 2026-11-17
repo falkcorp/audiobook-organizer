@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_mlx_server.py
-# version: 1.15.0
+# version: 1.17.0
 # guid: 8b4d19f2-6c30-4e71-a5d9-1f7c3e8a2b45
 # last-edited: 2026-11-17
 #
@@ -50,6 +50,14 @@ except ImportError as exc:  # pragma: no cover - dependency-gated
     )
 
 _SERVER = pathlib.Path(__file__).resolve().parents[1] / "whisper_mlx_server.py"
+
+# What a caller is told for a failure: a code and ONE fixed sentence, never what the
+# failure said (whisper-cpu round 5). The detail is in the worker log, so the tests that
+# used to read it from the body read it from caplog.
+WHISPER_ERROR = "whisper_error: transcription failed on this worker"
+UNMAPPED = "path_unmapped: the path is not available on this worker"
+DECODER_CRASHED = "decoder_crashed: the decode process crashed on this clip"
+DECODER_KILLED = "decoder_killed: the decode process was killed while on this clip"
 
 
 def _wpp():
@@ -355,7 +363,7 @@ def test_batch_keys_results_by_filename_verbatim(srv):
     assert sorted(r.json()["results"].keys()) == sorted(ids)
 
 
-def test_one_failing_file_does_not_fail_the_batch(srv):
+def test_one_failing_file_does_not_fail_the_batch(srv, caplog):
     """A 64-file batch must not be lost to one bad WAV. The failing entry gets
     a non-null error and an empty text; every other entry still transcribes.
     remote.go copies error into BatchResult.Error per id and keeps the rest."""
@@ -380,8 +388,8 @@ def test_one_failing_file_does_not_fail_the_batch(srv):
     results = r.json()["results"]
     assert results["good-1"] == {"text": "ok", "error": None}
     assert results["good-2"] == {"text": "ok", "error": None}
-    assert results["bad-1"]["text"] == ""
-    assert "Invalid data" in results["bad-1"]["error"]
+    assert results["bad-1"] == {"text": "", "error": WHISPER_ERROR}
+    assert "Invalid data" in caplog.text
 
 
 def test_every_result_carries_exactly_text_and_error(srv):
@@ -566,13 +574,13 @@ def test_symlink_escaping_the_root_is_refused(pathsrv, tmp_path):
     assert res["error"].startswith("path_unmapped:")
 
 
-def test_lost_mount_fails_each_job_closed_as_path_unmapped(pathsrv, monkeypatch, tmp_path):
+def test_lost_mount_fails_each_job_closed_as_path_unmapped(pathsrv, monkeypatch, tmp_path, caplog):
     _, client, _ = pathsrv
     monkeypatch.setenv("WHISPER_PATH_MAP", f"/lib/Gotham={tmp_path / 'gone'}")
     res = client.post(
         "/transcribe-path-batch", json={"jobs": {"k": _job("/lib/Gotham/books/A/one.m4b")}}
     ).json()["results"]["k"]
-    assert res["error"].startswith("path_unmapped:") and "mount" in res["error"]
+    assert res["error"] == UNMAPPED and "mount lost" in caplog.text
 
 
 def test_no_map_refuses_every_job(pathsrv, monkeypatch):
@@ -638,7 +646,7 @@ def test_one_failing_path_job_does_not_fail_the_batch(pathsrv, monkeypatch):
     assert results["bad"]["error"].startswith("ffmpeg_error:")
 
 
-def test_a_whisper_failure_is_prefixed_and_isolated(pathsrv, monkeypatch):
+def test_a_whisper_failure_is_prefixed_and_isolated(pathsrv, monkeypatch, caplog):
     mod, client, _ = pathsrv
 
     def boom(path):
@@ -648,7 +656,7 @@ def test_a_whisper_failure_is_prefixed_and_isolated(pathsrv, monkeypatch):
     res = client.post(
         "/transcribe-path-batch", json={"jobs": {"k": _job("/lib/Gotham/books/A/one.m4b")}}
     ).json()["results"]["k"]
-    assert res["error"].startswith("whisper_error:") and "model fell over" in res["error"]
+    assert res["error"] == WHISPER_ERROR and "model fell over" in caplog.text
 
 
 def test_temp_clips_are_removed(pathsrv, monkeypatch):
@@ -1243,7 +1251,7 @@ def test_upload_batch_isolates_a_timeout_per_file(childsrv):
     assert r["c"] == {"text": "heard-6", "error": None}
 
 
-def test_a_child_that_dies_mid_clip_is_a_decoder_crash_on_the_path_batch(childsrv):
+def test_a_child_that_dies_mid_clip_is_a_decoder_crash_on_the_path_batch(childsrv, caplog):
     """A clip that deterministically kills the child must SETTLE: it is reported
     as decoder_crashed, which the Go side strikes like transcribe_timeout. As
     worker_misconfigured (a worker fault, deferred without a strike) it would be
@@ -1254,14 +1262,13 @@ def test_a_child_that_dies_mid_clip_is_a_decoder_crash_on_the_path_batch(childsr
         json={"jobs": {"dies": put("d.m4b", b"DIEDIE"), "next": put("n.m4b", b"abc")}},
     ).json()["results"]
     assert res["dies"]["text"] == ""
-    assert res["dies"]["error"].startswith("decoder_crashed: ")
-    assert "exit code 9" in res["dies"]["error"]
-    assert "on this clip; it was restarted" in res["dies"]["error"]
+    assert res["dies"]["error"] == DECODER_CRASHED
+    assert "exit code 9" in caplog.text and "it was restarted" in caplog.text
     # The next clip starts a fresh child and is served normally.
     assert res["next"] == {"text": "heard-3", "error": None}
 
 
-def test_a_child_that_dies_mid_clip_is_a_decoder_crash_on_the_upload_batch(childsrv):
+def test_a_child_that_dies_mid_clip_is_a_decoder_crash_on_the_upload_batch(childsrv, caplog):
     _, client, _, _ = childsrv
     res = client.post(
         "/transcribe-batch",
@@ -1273,18 +1280,18 @@ def test_a_child_that_dies_mid_clip_is_a_decoder_crash_on_the_upload_batch(child
     ).json()["results"]
     assert res["a"] == {"text": "heard-4", "error": None}
     assert res["b"]["text"] == ""
-    assert res["b"]["error"].startswith("decoder_crashed: "), res["b"]
-    assert "exit code 9" in res["b"]["error"]
+    assert res["b"]["error"] == DECODER_CRASHED, res["b"]
+    assert "exit code 9" in caplog.text
     assert res["c"] == {"text": "heard-6", "error": None}, "the child restarts for a later clip"
 
 
 def test_a_child_that_dies_mid_clip_is_a_decoder_crash_on_the_single_upload(childsrv):
     _, client, _, _ = childsrv
     r = client.post("/transcribe", files={"file": ("a", b"DIEDIE", "audio/wav")}).json()
-    assert r["text"] == "" and r["error"].startswith("decoder_crashed: ")
+    assert r["text"] == "" and r["error"] == DECODER_CRASHED
 
 
-def test_a_child_sigkilled_mid_clip_is_decoder_killed_not_a_crash(childsrv):
+def test_a_child_sigkilled_mid_clip_is_decoder_killed_not_a_crash(childsrv, caplog):
     """A SIGKILL comes from outside the decoder (jetsam, an operator), so it is
     decoder_killed, not decoder_crashed: the Go side strikes it like a timeout
     that only a second, different machine can make permanent, where a crash is a
@@ -1295,11 +1302,11 @@ def test_a_child_sigkilled_mid_clip_is_decoder_killed_not_a_crash(childsrv):
         json={"jobs": {"killed": put("k.m4b", b"KILLKILL"), "next": put("n.m4b", b"abc")}},
     ).json()["results"]
     assert res["killed"]["text"] == ""
-    assert res["killed"]["error"].startswith("decoder_killed: "), res["killed"]
-    assert "exit code -9" in res["killed"]["error"]
+    assert res["killed"]["error"] == DECODER_KILLED, res["killed"]
+    assert "exit code -9" in caplog.text
     assert res["next"] == {"text": "heard-3", "error": None}, "a fresh child serves the next clip"
     up = client.post("/transcribe", files={"file": ("a", b"KILLKILL", "audio/wav")}).json()
-    assert up["text"] == "" and up["error"].startswith("decoder_killed: ")
+    assert up["text"] == "" and up["error"] == DECODER_KILLED
 
 
 def test_a_child_sigterm_or_unreaped_is_decoder_killed(childsrv, monkeypatch):
@@ -1349,7 +1356,7 @@ def test_decoder_crashed_code_is_stable(srv):
     assert _wpp().ERR_DECODER_CRASHED == "decoder_crashed"
 
 
-def test_a_child_that_cannot_start_fails_the_whole_batch_once(childsrv, monkeypatch):
+def test_a_child_that_cannot_start_fails_the_whole_batch_once(childsrv, monkeypatch, caplog):
     """A child that never becomes ready is a worker fault, reported as
     worker_misconfigured for EVERY job, and the start is attempted ONCE: without
     the short-circuit each clip would wait out its own CHILD_READY_TIMEOUT_S."""
@@ -1367,11 +1374,11 @@ def test_a_child_that_cannot_start_fails_the_whole_batch_once(childsrv, monkeypa
     assert len(spawns) == 1, "one failed start must short-circuit the rest of the batch"
     for k in ("a", "b", "c"):
         assert res[k]["text"] == ""
-        assert res[k]["error"].startswith("worker_misconfigured:"), res[k]
-        assert "while starting" in res[k]["error"]
+        assert res[k]["error"] == "worker_misconfigured: exited_during_start", res[k]
+    assert "while starting" in caplog.text
 
 
-def test_a_child_that_never_gets_ready_is_a_worker_fault(childsrv, monkeypatch, tmp_path):
+def test_a_child_that_never_gets_ready_is_a_worker_fault(childsrv, monkeypatch, tmp_path, caplog):
     mod, client, put, _ = childsrv
     monkeypatch.setattr(mod, "CHILD_READY_TIMEOUT_S", 0.3)
     monkeypatch.setenv("WHISPER_BACKEND_FACTORY", "slow_loading_backend:factory")
@@ -1385,8 +1392,8 @@ def test_a_child_that_never_gets_ready_is_a_worker_fault(childsrv, monkeypatch, 
     res = client.post("/transcribe-path-batch", json={"jobs": {"a": put("a.m4b", b"abc")}}).json()[
         "results"
     ]
-    assert res["a"]["error"].startswith("worker_misconfigured:")
-    assert "not ready" in res["a"]["error"]
+    assert res["a"]["error"] == "worker_misconfigured: start_timeout"
+    assert "not ready" in caplog.text
 
 
 def test_upload_batch_short_circuits_after_a_failed_child_start(childsrv, monkeypatch):
@@ -1403,14 +1410,14 @@ def test_upload_batch_short_circuits_after_a_failed_child_start(childsrv, monkey
     assert all(r[n]["error"].startswith("worker_misconfigured:") for n in "abc")
 
 
-def test_a_backend_exception_is_a_per_file_whisper_error(childsrv):
+def test_a_backend_exception_is_a_per_file_whisper_error(childsrv, caplog):
     _, client, put, _ = childsrv
     res = client.post(
         "/transcribe-path-batch",
         json={"jobs": {"boom": put("b.m4b", b"BOOMBOOM"), "ok": put("o.m4b", b"ab")}},
     ).json()["results"]
-    assert res["boom"]["error"].startswith("whisper_error:")
-    assert "fake backend exploded" in res["boom"]["error"]
+    assert res["boom"]["error"] == WHISPER_ERROR
+    assert "fake backend exploded" in caplog.text
     assert res["ok"] == {"text": "heard-2", "error": None}
 
 
@@ -1439,7 +1446,7 @@ def test_health_has_no_child_start_error_by_default(srv):
     assert "child_start_error" not in client.get("/health").json()
 
 
-def test_a_failed_child_start_is_reported_in_health(childsrv, monkeypatch):
+def test_a_failed_child_start_is_reported_in_health(childsrv, monkeypatch, caplog):
     """Go refuses a worker that reports child_start_error, so a worker that cannot
     start its child is taken out of rotation BEFORE a request is sent to it."""
     mod, client, put, _ = childsrv
@@ -1447,16 +1454,37 @@ def test_a_failed_child_start_is_reported_in_health(childsrv, monkeypatch):
     res = client.post("/transcribe-path", json=put("a.m4b", b"abc")).json()
     assert res["error"].startswith("worker_misconfigured:")
     body = client.get("/health").json()
-    assert "child_start_error" in body
-    assert "while starting" in body["child_start_error"]
-    assert body["child_start_error"] in res["error"]
+    # The category word, the same one the job answer carries: /health is
+    # unauthenticated and the message ("... exit code 3") is in the log.
+    assert body["child_start_error"] == "worker_misconfigured: exited_during_start"
+    assert body["child_start_error"] == res["error"]
+    assert "while starting" in caplog.text
 
 
 def test_a_failed_child_start_in_an_upload_is_reported_in_health(childsrv, monkeypatch):
     _, client, _, _ = childsrv
     monkeypatch.setenv("WHISPER_BACKEND_FACTORY", "no_such_backend_module:factory")
     client.post("/transcribe", files={"file": ("a", b"abc", "audio/wav")})
-    assert "while starting" in client.get("/health").json()["child_start_error"]
+    assert (
+        client.get("/health").json()["child_start_error"]
+        == "worker_misconfigured: exited_during_start"
+    )
+
+
+def test_an_upload_batch_after_a_start_fault_answers_every_clip_with_the_category(
+    childsrv, monkeypatch, caplog
+):
+    """The first clip meets the start fault, the rest are answered with the same fault
+    without starting again; every answer is the fixed category text, and the start's own
+    message (exit code, module name) is in the log and in no answer."""
+    mod, _, _, _ = childsrv
+    monkeypatch.setenv("WHISPER_BACKEND_FACTORY", "no_such_backend_module:factory")
+    res = mod._run_upload_batch(_uploads("a", "b", "c"))
+    assert set(res) == {"a", "b", "c"}
+    for name, answer in res.items():
+        assert answer == {"text": "", "error": "worker_misconfigured: exited_during_start"}, name
+    assert "no_such_backend_module" not in repr(res)
+    assert "while starting" in caplog.text
 
 
 def test_child_start_error_expires_after_the_ttl(childsrv, monkeypatch):

@@ -59,8 +59,13 @@ backend, decode and extract fingerprint) read from the startup pin. The server f
 each result in the result journal under the identity of the answer that carried it,
 not under the `/health` probe it read up to 30 seconds earlier, so text from a worker
 process that was replaced in between is never filed under the old model. A mismatch
-is logged and drops the endpoint's cached probe. A worker without the field keeps the
-old behaviour, logged once per endpoint. The Mac worker does not send it yet.
+is logged and drops the endpoint's cached probe, with or without a result journal. An
+identity is complete (model, backend and decode fingerprint, plus the extract
+fingerprint for a path result, none blank) or its answer is not journalled at all; a
+partial one never falls back to the probe's identity, because a row keyed on less than
+the whole identity could be served to a worker that decodes differently. A worker
+without the field keeps the old behaviour, logged once per endpoint. The Mac worker
+does not send it yet.
 
 #### The non-Mac worker binds loopback unless told otherwise
 
@@ -91,11 +96,13 @@ The backend-independent half of `whisper_mlx_server.py` now lives in
 `scripts/whisper_path_pipeline.py` and `scripts/whisper_machine_id.py`, imported
 by both workers. Deploy `whisper_server.py` together with those two files and
 `whisper_decode_child.py`. A new characterization suite (`test_whisper_mlx_pins.py`)
-was written against the Mac worker before the move; it passes unchanged except for
-two pins that were deliberately edited. Three changes in the shared modules reach
-the Mac worker: ffmpeg now runs with `-protocol_whitelist file`, the
-`path_map_error` text on `/health` no longer quotes path-map entries, and a
-request-deadline header of more than 12 digits is capped instead of answering 500.
+was written against the Mac worker before the move; it passed unchanged across the
+move and has since been edited on purpose in three places (the ffmpeg argv, the
+`path_map_error` text, and the error wording below). Four changes in the shared
+modules reach the Mac worker: ffmpeg now runs with `-protocol_whitelist file`, the
+`path_map_error` text on `/health` no longer quotes path-map entries, a
+request-deadline header of more than 12 digits is capped instead of answering 500,
+and its error answers are now a code plus a fixed sentence (next entry).
 
 #### Decode children are tied to the worker
 
@@ -115,13 +122,27 @@ exits at startup naming the variable otherwise), the computed deadline is capped
 256 MiB (413): 256 MiB is about 2.3 hours of 16 kHz mono 16-bit PCM (about 1.2 hours
 of stereo), far above an intro clip; the cap keeps a huge upload from earning a multi-day deadline.
 
-#### `/health` no longer shows raw start errors, and shows busy during a start
+#### No local detail in any response body, and busy shows during a start
 
-`child_start_error` on the non-Mac worker is now a fixed code plus a short category
-(for example `worker_misconfigured: model_load_failed`), `device_reason` is a fixed
-phrase, and a `worker_misconfigured` job answer carries the same category word and
-no exception text; the exception text is in the log only. `busy_seconds` covers the time a request spends waiting for a child to
-(re)start, so `/health` never reports idle while a model load is in progress.
+Both workers are unauthenticated, so what they return must not carry what a failure
+said (an exception message, ffmpeg's stderr, a path under a user profile). Every error
+in a response body is now a stable code plus ONE fixed sentence, built by a single
+function that takes no text (`wire_error`), for the upload routes, the path routes and
+an unexpected 500: `whisper_error: transcription failed on this worker` instead of the
+exception, `ffmpeg_error: the audio could not be extracted from the file` instead of
+ffmpeg's last line, and so on for every code. The detail goes to the worker log when the
+answer is made. `/health` reports `ffmpeg` as a boolean, not the path it was found at.
+`child_start_error` is a fixed code plus a short category (for example
+`worker_misconfigured: model_load_failed`) on both workers, `device_reason` is a fixed
+phrase, and a `worker_misconfigured` job answer carries the same category word
+(`ffmpeg_missing` when ffmpeg is not on the PATH). The Go client reads only the code,
+so nothing on the server changes. **The Mac worker's error wording changes** (it used
+to return the exception's own text, and a dead decode's exit code); its codes do not.
+Two limits remain: FastAPI's own 422 for a body that is not a JSON object echoes the
+caller's own input, and `identity.model` is the `--model` value, a local directory when
+the model is loaded from one. `busy_seconds` covers the time a request spends waiting
+for a child to (re)start, so `/health` never reports idle while a model load is in
+progress.
 
 #### Request limits on the path routes (both workers)
 

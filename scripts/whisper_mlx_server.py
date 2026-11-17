@@ -1,5 +1,5 @@
 # file: scripts/whisper_mlx_server.py
-# version: 1.16.0
+# version: 1.17.0
 # guid: 3f8c21d4-7b6e-4a52-9c18-2d5e7a9b4c60
 # last-edited: 2026-11-17
 #
@@ -138,10 +138,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from whisper_machine_id import MachineIdentity  # noqa: E402
 from whisper_path_pipeline import (  # noqa: E402
+    CAT_EXITED_DURING_START,
+    CAT_PROCESS_START_FAILED,
+    CAT_PROTOCOL_ERROR,
+    CAT_START_TIMEOUT,
     ERR_DECODER_CRASHED,
     ERR_DECODER_KILLED,
     ERR_TRANSCRIBE_TIMEOUT,
-    ERR_WORKER_MISCONFIGURED,
     ChildFaultError,
     PathJobError,
     PathPipeline,
@@ -150,6 +153,7 @@ from whisper_path_pipeline import (  # noqa: E402
     audio_seconds,
     error_result,
     install_path_routes,
+    misconfigured_error,
     past,
 )
 
@@ -384,7 +388,9 @@ class InferenceChild:
         try:
             self._start()
         except ChildFaultError as e:
-            self._note_start(str(e))
+            # The fixed category word, as the decode child does: /health is
+            # unauthenticated and the message can carry a path or an OSError's text.
+            self._note_start(f"worker_misconfigured: {e.category}")
             raise
         self._note_start(None)
 
@@ -395,7 +401,11 @@ class InferenceChild:
         try:
             self._spawn()
         except OSError as e:
-            raise ChildFaultError(f"inference process could not be started: {e}", starting=True)
+            raise ChildFaultError(
+                f"inference process could not be started: {e}",
+                starting=True,
+                category=CAT_PROCESS_START_FAILED,
+            )
         # Model load happens HERE, before the clip's clock starts: at a high
         # machine load it can eat most of a 60 s floor, and a clip must not time
         # out because the model was slow to load.
@@ -405,17 +415,23 @@ class InferenceChild:
             code = self._exit_code()
             self._kill()
             raise ChildFaultError(
-                f"inference process exited while starting (exit code {code})", starting=True
+                f"inference process exited while starting (exit code {code})",
+                starting=True,
+                category=CAT_EXITED_DURING_START,
             )
         if line is None:
             self._kill()
             raise ChildFaultError(
-                f"inference process not ready after {CHILD_READY_TIMEOUT_S:.0f}s", starting=True
+                f"inference process not ready after {CHILD_READY_TIMEOUT_S:.0f}s",
+                starting=True,
+                category=CAT_START_TIMEOUT,
             )
         if not json.loads(line).get("ready"):
             self._kill()
             raise ChildFaultError(
-                "inference process sent an unexpected startup message", starting=True
+                "inference process sent an unexpected startup message",
+                starting=True,
+                category=CAT_PROTOCOL_ERROR,
             )
 
     def run(self, path: str, timeout_s: float) -> str:
@@ -605,10 +621,11 @@ def _do_transcribe(data: bytes, filename: str, on_start_fault=None) -> dict:
         log.error(f"inference child fault for {filename}: {e}")
         if e.starting and on_start_fault is not None:
             on_start_fault(e)
-        return error_result(PathJobError(ERR_WORKER_MISCONFIGURED, str(e)))
+        return misconfigured_error(e)
     except Exception as e:
-        log.error(f"transcription failed for {filename}: {e}")
-        return {"text": "", "error": str(e)}
+        # A PathJobError from the child (a timeout, a crash) answers with its own code;
+        # anything else is whisper_error. Both are fixed text, the detail is logged.
+        return error_result(e, f"transcription failed for {filename}")
     finally:
         if tmp_path:
             with contextlib.suppress(OSError):
@@ -642,9 +659,7 @@ def _run_upload_batch(files, deadline: float | None = None) -> dict[str, dict]:
         if start_fault:
             # The child never became ready: every further clip would wait out the
             # same CHILD_READY_TIMEOUT_S. Answer the rest with the same fault.
-            results[f.filename] = error_result(
-                PathJobError(ERR_WORKER_MISCONFIGURED, str(start_fault[0]))
-            )
+            results[f.filename] = misconfigured_error(start_fault[0])
             continue
         results[f.filename] = _do_transcribe(f.file.read(), f.filename, start_fault.append)
     return results

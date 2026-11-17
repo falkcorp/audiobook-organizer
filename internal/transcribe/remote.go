@@ -1,5 +1,5 @@
 // file: internal/transcribe/remote.go
-// version: 2.18.0
+// version: 2.19.0
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
 // last-edited: 2026-11-17
 
@@ -415,8 +415,9 @@ func transcribeRemoteBatched(ctx context.Context, remoteURL string, h remoteHeal
 		// says about its clips is a verdict only when the worker itself is sound.
 		kept, fault := splitWorkerFault(remoteURL, batchResults)
 		// Filed under who ANSWERED, not under the probe that preceded the request.
-		ej.observe(answeredAs)
-		ej.complete(kept, uploaded)
+		if ej.observe(answeredAs) {
+			ej.complete(kept, uploaded)
+		}
 		for id, r := range kept {
 			results[id] = r
 			done++
@@ -603,8 +604,9 @@ func transcribeRemotePerFile(ctx context.Context, remoteURL string, limit int, j
 			}
 			continue
 		}
-		ej.observe(item.identity)
-		ej.completeOne(item.id, item.uploaded, item.result)
+		if ej.observe(item.identity) {
+			ej.completeOne(item.id, item.uploaded, item.result)
+		}
 		results[item.id] = item.result
 		if onProgress != nil {
 			onProgress(len(results), total)

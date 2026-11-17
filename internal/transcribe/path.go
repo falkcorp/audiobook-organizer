@@ -1,5 +1,5 @@
 // file: internal/transcribe/path.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 7e41c9a8-2b6d-4f03-8a15-d3c0e9b57a24
 // last-edited: 2026-11-17
 
@@ -252,7 +252,7 @@ func (id journalIdent) pathKey(sig string) string {
 // no followers: two files are never assumed identical without reading them. A
 // nil receiver sends everything.
 func (ej *endpointJournal) planPath(jobs map[string]PathJob) (served map[string]BatchResult, send map[string]PathJob, sigs map[string]string) {
-	if ej == nil {
+	if ej.journalOff() {
 		return nil, jobs, nil
 	}
 	served = make(map[string]BatchResult)
@@ -285,7 +285,7 @@ func (ej *endpointJournal) planPath(jobs map[string]PathJob) (served map[string]
 
 // completePath journals results under the keys planPath computed.
 func (ej *endpointJournal) completePath(results map[string]BatchResult, sigs map[string]string) {
-	if ej == nil {
+	if ej.journalOff() {
 		return
 	}
 	ident := ej.ident()
@@ -390,8 +390,9 @@ func transcribePathChunks(ctx context.Context, remoteURL string, h remoteHealth,
 		// One response is judged on its own (see workerFaultIn).
 		kept, fault := splitWorkerFault(remoteURL, batchResults)
 		// Filed under who ANSWERED, not under the probe that preceded the request.
-		ej.observe(answeredAs)
-		ej.completePath(kept, sigs)
+		if ej.observePath(answeredAs) {
+			ej.completePath(kept, sigs)
+		}
 		for id, r := range kept {
 			results[id] = r
 			done++

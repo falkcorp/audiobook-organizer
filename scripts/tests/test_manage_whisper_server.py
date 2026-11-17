@@ -1,5 +1,5 @@
 # file: scripts/tests/test_manage_whisper_server.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 5b0c7a52-3d0e-4c1c-9a6e-0e0a4f3b7d21
 # last-edited: 2026-11-17
 
@@ -116,12 +116,17 @@ class ManageWhisperServerScripts(unittest.TestCase):
             'trailing quote and space "',
             'C:\\a b\\\\"c',
             "plain",
+            # An empty value and one of only spaces: each must stay ONE argument (joined
+            # unquoted, an empty element vanishes and spaces separate nothing), so each
+            # is the explicit quoted form list2cmdline produces ('""' and '"   "').
+            "",
+            "   ",
         ):
             with self.subTest(value=value):
                 literal = self.mws.start_process_arg(value)
                 self.assertTrue(literal.startswith("'") and literal.endswith("'"))
                 inner = literal[1:-1].replace("''", "'")
-                if any(c.isspace() or c == '"' for c in value):
+                if not value or any(c.isspace() or c == '"' for c in value):
                     self.assertEqual(inner, subprocess.list2cmdline([value]))
                 else:
                     self.assertEqual(inner, value)

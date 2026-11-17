@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_decode_child.py
-# version: 2.2.0
+# version: 2.3.0
 # guid: 2c9d7e15-6a48-4f3b-8e01-d5b7a39c6f82
 # last-edited: 2026-11-17
 #
@@ -305,10 +305,11 @@ def test_a_crash_answers_decoder_crashed_through_the_http_surface(worker):
     assert _job(client, "ok")["error"] is None
 
 
-def test_a_backend_error_is_a_whisper_error_not_a_decoder_code(worker):
+def test_a_backend_error_is_a_whisper_error_not_a_decoder_code(worker, caplog):
     client, _ = worker()
     err = _job(client, "boom")["error"]
-    assert err.startswith("whisper_error:") and "model exploded" in err
+    assert err == "whisper_error: transcription failed on this worker"
+    assert "model exploded" in caplog.text, "the backend's text is in the log, not the body"
 
 
 def test_health_answers_while_a_decode_hangs_and_reports_it_busy(worker):

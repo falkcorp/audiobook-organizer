@@ -1,5 +1,5 @@
 // file: internal/transcribe/journal_identity_test.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 5b0f3f64-3a51-4f3e-9d0e-6c1f6f2a8e17
 // last-edited: 2026-11-17
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -285,9 +286,11 @@ func TestIdentity_ObserveRules(t *testing.T) {
 		ej.observe(&responseIdentity{Model: "m"})
 		(&endpointJournal{endpoint: "unit-nil-id"}).observe(nil)
 	})
-	t.Run("a blank model is no identity", func(t *testing.T) {
+	t.Run("a blank model is a partial identity", func(t *testing.T) {
 		ej := &endpointJournal{endpoint: "unit-blank", model: "cpu/Robin", fingerprint: "fp"}
-		ej.observe(&responseIdentity{Model: "  ", DecodeFingerprint: "other"})
+		if ej.observe(&responseIdentity{Model: "  ", Backend: "cpu", DecodeFingerprint: "other"}) {
+			t.Fatal("an answer with a blank model was accepted for journalling")
+		}
 		if id := ej.ident(); id.model != "cpu/Robin" || id.fingerprint != "fp" {
 			t.Fatalf("a blank model overwrote the identity: %+v", id)
 		}
@@ -341,5 +344,255 @@ func TestIdentity_RowsFollowTheWorkerAcrossAChunkBoundary(t *testing.T) {
 	slices.Sort(labels)
 	if want := []string{"cpu/Nightwing#fp-y", "cpu/Robin#fp-x"}; !slices.Equal(labels, want) {
 		t.Fatalf("labels = %v, want one row per identity %v", labels, want)
+	}
+}
+
+// partialIdentityCases are identity objects an answer can carry that are present but not
+// complete: a journal key built from any of them would be less specific than the worker's
+// real identity. "Complete" is model, backend and decode_fingerprint (the three that key
+// every row).
+var partialIdentityCases = []struct {
+	name   string
+	answer map[string]any
+}{
+	// The reviewer's trace: the probe said backend and fingerprint, the answer has neither.
+	{"blank backend and fingerprint", idAnswer("Robin", "", "", "ex-x")},
+	{"blank backend", idAnswer("Robin", "", "fp-y", "ex-x")},
+	{"blank fingerprint", idAnswer("Robin", "cpu", "", "ex-x")},
+	{"spaces-only fingerprint", idAnswer("Robin", "cpu", "   ", "ex-x")},
+	{"blank model", idAnswer("", "cpu", "fp-y", "ex-x")},
+	{"empty object", map[string]any{}},
+}
+
+// A partial identity is not trusted: the answer is not journalled at all, under neither its
+// own partial values (a model-only key that a fingerprint-less worker with other decode
+// settings could be served from) nor the probe's (the answer said something else).
+func TestIdentity_APartialIdentityIsNotJournalled(t *testing.T) {
+	health := map[string]any{"status": "ok", "model": "Robin", "backend": "cpu", "decode_fingerprint": "fp-x", "extract_fingerprint": "ex-x"}
+	for _, tc := range partialIdentityCases {
+		t.Run("batch/"+tc.name, func(t *testing.T) {
+			srv := identityServer(t, maps.Clone(health), func(int) map[string]any { return tc.answer })
+			jobs := writeClips(t, 2)
+			h, ok := probeRemoteHealth(context.Background(), srv.URL)
+			if !ok || !h.supportsBatch() {
+				t.Fatalf("setup: ok=%v", ok)
+			}
+			j := newMapJournal()
+			res, err := transcribeRemoteWithHealth(context.Background(), srv.URL, h, ok, 1, jobs, nil, j)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(res) != 2 {
+				t.Fatalf("the transcripts must still reach the caller, got %d results", len(res))
+			}
+			if got := j.keys(); len(got) != 0 {
+				t.Fatalf("a partial identity was journalled under %v", got)
+			}
+		})
+		t.Run("per-file/"+tc.name, func(t *testing.T) {
+			srv := identityServer(t, maps.Clone(health), func(int) map[string]any { return tc.answer })
+			jobs := writeClips(t, 2)
+			h, ok := probeRemoteHealth(context.Background(), srv.URL)
+			h.BatchPipeline = nil
+			j := newMapJournal()
+			res, err := transcribeRemoteWithHealth(context.Background(), srv.URL, h, ok, 1, jobs, nil, j)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(res) != 2 {
+				t.Fatalf("the transcripts must still reach the caller, got %d results", len(res))
+			}
+			if got := j.keys(); len(got) != 0 {
+				t.Fatalf("a partial identity was journalled under %v", got)
+			}
+		})
+		t.Run("path/"+tc.name, func(t *testing.T) {
+			w := newPathWorker(t, pathHealth(maps.Clone(health)))
+			w.identity = tc.answer
+			useEndpoints(t, 0, w.srv.URL)
+			j := newMapJournal()
+			if _, err := TranscribeByPathBatch(context.Background(), pathJobs(t, 1), BatchOptions{Journal: j}); err != nil {
+				t.Fatal(err)
+			}
+			if got := j.keys(); len(got) != 0 {
+				t.Fatalf("a partial identity was journalled under %v", got)
+			}
+		})
+	}
+}
+
+// The extract fingerprint is part of a path key only. A path answer without it is partial
+// (its key would mix the answer's decode identity with the probe's extraction settings);
+// an upload answer without it is complete, because no upload key contains it.
+func TestIdentity_ExtractIsRequiredForPathRowsOnly(t *testing.T) {
+	health := map[string]any{"status": "ok", "model": "Robin", "backend": "cpu", "decode_fingerprint": "fp-x", "extract_fingerprint": "ex-x"}
+	noExtract := idAnswer("Nightwing", "cpu", "fp-y", "")
+
+	srv := identityServer(t, maps.Clone(health), func(int) map[string]any { return noExtract })
+	jobs := writeClips(t, 1)
+	h, ok := probeRemoteHealth(context.Background(), srv.URL)
+	j := newMapJournal()
+	if _, err := transcribeRemoteWithHealth(context.Background(), srv.URL, h, ok, 1, jobs, nil, j); err != nil {
+		t.Fatal(err)
+	}
+	if want := clipKeyFor("cpu/Nightwing", "fp-y", clipHashOf(t, jobs["book-0"])); len(j.keys()) != 1 || j.keys()[0] != want {
+		t.Fatalf("upload answer without extract: keys = %v, want %s", j.keys(), want)
+	}
+
+	w := newPathWorker(t, pathHealth(maps.Clone(health)))
+	w.identity = noExtract
+	useEndpoints(t, 0, w.srv.URL)
+	jp := newMapJournal()
+	if _, err := TranscribeByPathBatch(context.Background(), pathJobs(t, 1), BatchOptions{Journal: jp}); err != nil {
+		t.Fatal(err)
+	}
+	if got := jp.keys(); len(got) != 0 {
+		t.Fatalf("a path answer without extract_fingerprint was journalled under %v", got)
+	}
+}
+
+// A partial answer between two complete ones costs only its own rows: the call keeps its
+// identity from the last complete answer and the later complete answer is journalled.
+func TestIdentity_APartialAnswerSkipsOnlyItsOwnRows(t *testing.T) {
+	srv := identityServer(t, map[string]any{"status": "ok", "model": "Robin", "backend": "cpu", "decode_fingerprint": "fp-x"},
+		func(n int) map[string]any {
+			if n == 1 {
+				return idAnswer("Robin", "", "", "")
+			}
+			return idAnswer("Robin", "cpu", "fp-x", "")
+		})
+	h, ok := probeRemoteHealth(context.Background(), srv.URL)
+	h.BatchPipeline = nil
+	j := newMapJournal()
+	if _, err := transcribeRemoteWithHealth(context.Background(), srv.URL, h, ok, 1, writeClips(t, 3), nil, j); err != nil {
+		t.Fatal(err)
+	}
+	if got := j.keys(); len(got) != 2 {
+		t.Fatalf("journalled %d rows, want the 2 complete answers' rows", len(got))
+	}
+}
+
+// Without a journal there is nothing to key, but the cached probe is just as stale: an
+// answer that disagrees with it drops it all the same.
+func TestIdentity_AMismatchDropsTheCachedProbeWithoutAJournal(t *testing.T) {
+	enableProbeCache(t)
+	srv := identityServer(t, map[string]any{"status": "ok", "model": "Robin", "backend": "cpu", "decode_fingerprint": "fp-x"},
+		func(int) map[string]any { return idAnswer("Nightwing", "cpu", "fp-y", "") })
+	h, ok := probeForGate(context.Background(), srv.URL, true)
+	if !ok {
+		t.Fatal("setup probe failed")
+	}
+	if _, err := transcribeRemoteWithHealth(context.Background(), srv.URL, h, ok, 1, writeClips(t, 2), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	gateProbeCache.mu.Lock()
+	_, cached := gateProbeCache.m[srv.URL]
+	gateProbeCache.mu.Unlock()
+	if cached {
+		t.Fatal("with no journal, the cached /health probe survived an answer that disagreed with it")
+	}
+}
+
+// A partial identity shows the cached view is stale just as a different one does, so it drops
+// the cached probe too (and with no journal at all).
+func TestIdentity_APartialIdentityDropsTheCachedProbe(t *testing.T) {
+	for _, tc := range partialIdentityCases {
+		for _, withJournal := range []bool{true, false} {
+			name := tc.name + "/no-journal"
+			if withJournal {
+				name = tc.name + "/journal"
+			}
+			t.Run(name, func(t *testing.T) {
+				enableProbeCache(t)
+				srv := identityServer(t, map[string]any{"status": "ok", "model": "Robin", "backend": "cpu", "decode_fingerprint": "fp-x"},
+					func(int) map[string]any { return tc.answer })
+				h, ok := probeForGate(context.Background(), srv.URL, true)
+				if !ok {
+					t.Fatal("setup probe failed")
+				}
+				gateProbeCache.mu.Lock()
+				_, cached := gateProbeCache.m[srv.URL]
+				gateProbeCache.mu.Unlock()
+				if !cached {
+					t.Fatal("setup: the probe was not cached")
+				}
+				var j ResultJournal
+				if withJournal {
+					j = newMapJournal()
+				}
+				if _, err := transcribeRemoteWithHealth(context.Background(), srv.URL, h, ok, 1, writeClips(t, 2), nil, j); err != nil {
+					t.Fatal(err)
+				}
+				gateProbeCache.mu.Lock()
+				_, cached = gateProbeCache.m[srv.URL]
+				gateProbeCache.mu.Unlock()
+				if cached {
+					t.Fatal("the cached /health probe survived an answer with a partial identity")
+				}
+			})
+		}
+	}
+}
+
+// Same without a journal, for a probe that named no model (so nothing could be journalled
+// anyway): the answer still shows the cached view is stale.
+func TestIdentity_AMismatchDropsTheCachedProbeOfAModellessEndpoint(t *testing.T) {
+	enableProbeCache(t)
+	srv := identityServer(t, map[string]any{"status": "ok"},
+		func(int) map[string]any { return idAnswer("Nightwing", "cpu", "fp-y", "") })
+	h, ok := probeForGate(context.Background(), srv.URL, true)
+	if !ok {
+		t.Fatal("setup probe failed")
+	}
+	j := newMapJournal()
+	if _, err := transcribeRemoteWithHealth(context.Background(), srv.URL, h, ok, 1, writeClips(t, 2), nil, j); err != nil {
+		t.Fatal(err)
+	}
+	if j.len() != 0 {
+		t.Fatalf("an endpoint whose probe named no model was journalled: %v", j.keys())
+	}
+	gateProbeCache.mu.Lock()
+	_, cached := gateProbeCache.m[srv.URL]
+	gateProbeCache.mu.Unlock()
+	if cached {
+		t.Fatal("the cached /health probe survived an answer that disagreed with it")
+	}
+}
+
+// observe's contract in one table: what it reports about whether the answer's rows may be
+// journalled, and what it leaves behind.
+func TestIdentity_ObserveReturnsWhetherTheAnswerMayBeJournalled(t *testing.T) {
+	probe := func() *endpointJournal {
+		return &endpointJournal{journal: newMapJournal(), endpoint: "unit-ret", model: "cpu/Robin", fingerprint: "fp-x", extract: "ex-x"}
+	}
+	t.Run("an answer without identity", func(t *testing.T) {
+		if !probe().observe(nil) {
+			t.Fatal("an old worker's answer must still be journalled under /health")
+		}
+	})
+	t.Run("a complete identity", func(t *testing.T) {
+		ej := probe()
+		if !ej.observe(&responseIdentity{Model: "Nightwing", Backend: "cpu", DecodeFingerprint: "fp-y"}) {
+			t.Fatal("a complete identity was refused")
+		}
+		if id := ej.ident(); id.model != "cpu/Nightwing" || id.fingerprint != "fp-y" {
+			t.Fatalf("ident = %+v", id)
+		}
+	})
+	for _, tc := range partialIdentityCases {
+		t.Run("partial/"+tc.name, func(t *testing.T) {
+			ej := probe()
+			resp := &responseIdentity{}
+			b, _ := json.Marshal(tc.answer)
+			if err := json.Unmarshal(b, resp); err != nil {
+				t.Fatal(err)
+			}
+			if ej.observe(resp) {
+				t.Fatalf("partial identity %+v accepted", resp)
+			}
+			if id := ej.ident(); id.model != "cpu/Robin" || id.fingerprint != "fp-x" || id.extract != "ex-x" {
+				t.Fatalf("a refused answer changed the identity: %+v", id)
+			}
+		})
 	}
 }

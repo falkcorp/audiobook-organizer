@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_server_cpu.py
-# version: 2.3.1
+# version: 2.4.0
 # guid: c3e91a60-2f5d-4b87-a4c2-7d0b6e18f953
 # last-edited: 2026-11-17
 #
@@ -13,12 +13,15 @@
 # installed, unless WHISPER_TESTS_REQUIRE_FFMPEG=1 (CI), where a missing ffmpeg FAILS.
 
 import asyncio
+import errno
+import json
 import logging
 import math
 import os
 import pathlib
 import shutil
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -698,12 +701,23 @@ def test_the_batch_upload_endpoint_keys_results_by_filename(monkeypatch, tmp_pat
     }
 
 
-def test_an_upload_failure_is_reported_in_the_body_as_it_always_was(monkeypatch, tmp_path):
+def test_an_upload_failure_is_a_code_and_a_fixed_sentence_with_the_detail_in_the_log(
+    monkeypatch, tmp_path, caplog
+):
+    # It used to be the exception's own text ("decode failed"), which a library can
+    # fill with a path under a user profile; the body now carries whisper_error and a
+    # fixed sentence, and the text is in the worker log.
     client, fake, *_ = _app(monkeypatch, tmp_path)
-    fake.boom = "decode failed"
-    r = client.post("/transcribe", files={"file": ("a.wav", b"x", "audio/wav")})
+    fake.boom = f"decode failed on {SECRET}"
+    with caplog.at_level(logging.ERROR):
+        r = client.post("/transcribe", files={"file": ("a.wav", b"x", "audio/wav")})
     assert r.status_code == 200
-    assert r.json() == {"text": "", "error": "decode failed", "identity": _health_identity(client)}
+    assert r.json() == {
+        "text": "",
+        "error": f"whisper_error: {wpp.PUBLIC_SENTENCES[wpp.ERR_WHISPER]}",
+        "identity": _health_identity(client),
+    }
+    assert SECRET in caplog.text, "the exception itself is in the worker log"
 
 
 def test_creating_the_app_starts_the_machine_id_thread_once(monkeypatch, tmp_path):
@@ -918,3 +932,284 @@ def test_a_worker_misconfigured_answer_is_a_category_word_never_the_exception(
         assert {v["error"] for v in answers[name].json()["results"].values()} == {want}, name
     assert answers["path"].json()["error"] == want
     assert SECRET in caplog.text, "the exception itself is in the worker log"
+
+
+# ── no local detail leaves the process (every error route) ───────────────────
+
+# Every error that can be put in an HTTP body, driven through the real routes with a
+# string in each failure that must not survive: a path under a user profile, a temp
+# directory, ffmpeg's stderr, an OSError's file name. A body may carry a code and a
+# fixed sentence and nothing else, so the check is the strict one: no path separator
+# at all, none of the planted strings, none of the machine's own temp directory,
+# home directory or user name.
+
+STDERR_TAIL = "Impossible to open the batcave-keypad-ledger input"
+FFMPEG_CANARY = SECRET + r"\ffmpeg.exe"
+
+
+def _forbidden(tmp_path):
+    import tempfile
+
+    names = [SECRET, "hunter2", "Bruce", STDERR_TAIL, "Traceback", "Errno", str(tmp_path)]
+    names += [tempfile.gettempdir(), str(pathlib.Path.home())]
+    return names
+
+
+def _assert_nothing_local(tmp_path, where, text, separators=True):
+    for needle in _forbidden(tmp_path):
+        assert needle not in text, f"{where}: {needle!r} is in {text!r}"
+    if separators:
+        assert "/" not in text and "\\" not in text, f"{where}: a path separator in {text!r}"
+
+
+def _errors_in(body):
+    """Every per-clip error string in a response body."""
+    if "results" in body:
+        return [v["error"] for v in body["results"].values() if v["error"]]
+    return [body["error"]] if body.get("error") else []
+
+
+def _fake_ffmpeg(monkeypatch, *, stderr=b"", returncode=1, raises=None, write=None):
+    """ffmpeg is found at a path under a user profile and then behaves as asked."""
+    monkeypatch.setattr(wpp.shutil, "which", lambda name, *a, **k: FFMPEG_CANARY)
+
+    def run(argv, **kw):
+        if raises is not None:
+            raise raises
+        if write is not None:
+            pathlib.Path(argv[-1]).write_bytes(write)
+        return subprocess.CompletedProcess(argv, returncode, b"", stderr)
+
+    monkeypatch.setattr(wpp.subprocess, "run", run)
+
+
+PATH_JOB = {"path": "/lib/Gotham/Wayne/a.wav", "seconds": 5}
+
+
+def _path_answer(client):
+    return client.post("/transcribe-path-batch", json={"jobs": {"k": PATH_JOB}}).json()
+
+
+def _scenarios():
+    """name -> (setup(monkeypatch, tmp_path, client, fake, share, app), want_code, send)
+    where send(client) is the request that reaches the failure."""
+
+    def upload(client):
+        return client.post(
+            "/transcribe", files={"file": ("a.wav", b"RIFFxxxx", "audio/wav")}
+        ).json()
+
+    def upload_batch(client):
+        return client.post("/transcribe-batch", files=[("files", ("1", b"aa", "audio/wav"))]).json()
+
+    def path_single(client):
+        return client.post("/transcribe-path", json=PATH_JOB).json()
+
+    def boom(monkeypatch, tmp_path, client, fake, share, app):
+        fake.boom = f"decode failed on {SECRET} ({STDERR_TAIL})"
+
+    def boom_path(monkeypatch, tmp_path, client, fake, share, app):
+        boom(monkeypatch, tmp_path, client, fake, share, app)
+        _mapped_source(share)
+        _stub_extract(app, tmp_path)
+
+    def source_only(monkeypatch, tmp_path, client, fake, share, app):
+        _mapped_source(share)
+
+    def ffmpeg_fails(stderr, **kw):
+        def setup(monkeypatch, tmp_path, client, fake, share, app):
+            _mapped_source(share)
+            _fake_ffmpeg(monkeypatch, stderr=stderr, **kw)
+
+        return setup
+
+    def extraction_oserror(monkeypatch, tmp_path, client, fake, share, app):
+        _mapped_source(share)
+        _fake_ffmpeg(
+            monkeypatch, raises=OSError(errno.ENOENT, "No such file or directory", FFMPEG_CANARY)
+        )
+
+    def extraction_io_oserror(monkeypatch, tmp_path, client, fake, share, app):
+        _mapped_source(share)
+        _fake_ffmpeg(monkeypatch, raises=OSError(errno.EIO, f"read failed on {SECRET}"))
+
+    def invalid_wav_oserror(monkeypatch, tmp_path, client, fake, share, app):
+        _mapped_source(share)
+        _fake_ffmpeg(monkeypatch, returncode=0, write=b"RIFF" + b"\0" * 100)
+
+        def opened(*a, **k):
+            raise OSError(errno.EACCES, "cannot open", SECRET)
+
+        monkeypatch.setattr(wpp.wave, "open", opened)
+
+    def mapping_raises(monkeypatch, tmp_path, client, fake, share, app):
+        def mapped(*a, **k):
+            raise RuntimeError(f"mapping failed under {SECRET}")
+
+        app.state.pipeline.map_server_path = mapped
+        _mapped_source(share)
+
+    def extraction_raises(monkeypatch, tmp_path, client, fake, share, app):
+        _mapped_source(share)
+
+        def cut(src, seconds):
+            raise RuntimeError(f"cannot cut {SECRET}")
+
+        app.state.pipeline.extract_clip = cut
+
+    def root_unreadable(monkeypatch, tmp_path, client, fake, share, app):
+        _mapped_source(share)
+        monkeypatch.setenv(wpp.REQUIRE_MOUNT_ENV, "1")  # a plain directory is not a mount
+
+    def start_fault(monkeypatch, tmp_path, client, fake, share, app):
+        _mapped_source(share)
+        _stub_extract(app, tmp_path)
+        app.state.engine.runners[:] = [_PathNamingFaultRunner(fake)]
+        app.state.engine._free.get_nowait()
+        app.state.engine._free.put(app.state.engine.runners[0])
+
+    return {
+        "upload-backend-exception": (boom, "whisper_error", upload),
+        "upload-batch-backend-exception": (boom, "whisper_error", upload_batch),
+        "path-backend-exception": (boom_path, "whisper_error", path_single),
+        "path-batch-backend-exception": (boom_path, "whisper_error", _path_answer),
+        "path-extraction-raises": (extraction_raises, "whisper_error", _path_answer),
+        "path-mapping-raises": (mapping_raises, "path_unmapped", _path_answer),
+        "path-ffmpeg-stderr-tail": (
+            ffmpeg_fails(f"{SECRET}: {STDERR_TAIL}".encode()),
+            "ffmpeg_error",
+            _path_answer,
+        ),
+        "path-ffmpeg-read-fault": (
+            ffmpeg_fails(f"{SECRET}: Input/output error".encode()),
+            "ffmpeg_timeout",
+            _path_answer,
+        ),
+        "path-ffmpeg-container": (
+            ffmpeg_fails(f"{SECRET}: demuxer not on whitelist".encode()),
+            "container_rejected",
+            _path_answer,
+        ),
+        "path-ffmpeg-oserror": (extraction_oserror, "ffmpeg_error", _path_answer),
+        "path-ffmpeg-io-oserror": (extraction_io_oserror, "ffmpeg_timeout", _path_answer),
+        "path-invalid-wav": (invalid_wav_oserror, "ffmpeg_error", _path_answer),
+        "path-root-unreadable": (root_unreadable, "path_unmapped", _path_answer),
+        "path-start-fault": (start_fault, "worker_misconfigured", _path_answer),
+        "upload-start-fault": (start_fault, "worker_misconfigured", upload),
+    }
+
+
+class _PathNamingFaultRunner(ws.InProcessRunner):
+    """A start fault whose message names a path: only its category word may leave."""
+
+    def run(self, wav_path, timeout_s):
+        raise wpp.ChildFaultError(
+            f"decode process could not be started: {SECRET}",
+            starting=True,
+            category=wpp.CAT_PROCESS_START_FAILED,
+        )
+
+
+@pytest.mark.parametrize("name", sorted(_scenarios()))
+def test_no_error_route_puts_local_detail_in_a_body(name, monkeypatch, tmp_path, caplog):
+    setup, want_code, send = _scenarios()[name]
+    client, fake, share, app = _app(monkeypatch, tmp_path)
+    setup(monkeypatch, tmp_path, client, fake, share, app)
+    with caplog.at_level(logging.WARNING):
+        body = send(client)
+    errors = _errors_in(body)
+    assert errors, f"{name}: the scenario produced no error: {body}"
+    for err in errors:
+        code, _, sentence = err.partition(": ")
+        assert code == want_code, (name, err)
+        assert sentence, (name, err)
+        _assert_nothing_local(tmp_path, name, err)
+    # Nothing but the code and a fixed sentence: the sentence is one the worker has
+    # on file, not a rendering of this particular failure.
+    for err in errors:
+        assert err.partition(": ")[2] in wpp.all_public_sentences(), err
+    # The whole body, identity and keys included, carries nothing local either (the
+    # server-side prefix and the job key are the caller's own and are not in it).
+    _assert_nothing_local(tmp_path, name, str(body), separators=False)
+    # Every refusal leaves its detail in the worker log: that is where the text the
+    # body withholds goes, so a body that says less never means an operator knows less.
+    assert caplog.text, f"{name}: nothing was logged"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "path-backend-exception",
+        "path-ffmpeg-stderr-tail",
+        "path-ffmpeg-oserror",
+        "path-invalid-wav",
+        "path-mapping-raises",
+        "upload-backend-exception",
+    ],
+)
+def test_the_detail_withheld_from_the_body_is_in_the_worker_log(
+    name, monkeypatch, tmp_path, caplog
+):
+    setup, _code, send = _scenarios()[name]
+    client, fake, share, app = _app(monkeypatch, tmp_path)
+    setup(monkeypatch, tmp_path, client, fake, share, app)
+    with caplog.at_level(logging.WARNING):
+        send(client)
+    # OSError quotes a file name with its backslashes doubled, so look for the part
+    # of the planted path that has none.
+    assert "batcave-passphrase-hunter2" in caplog.text or STDERR_TAIL in caplog.text, name
+
+
+def test_health_reports_whether_ffmpeg_was_found_never_where(monkeypatch, tmp_path):
+    client, *_ = _app(monkeypatch, tmp_path)
+    monkeypatch.setattr(wpp.shutil, "which", lambda name, *a, **k: FFMPEG_CANARY)
+    found = client.get("/health").json()
+    assert found["ffmpeg"] is True
+    monkeypatch.setattr(wpp.shutil, "which", lambda name, *a, **k: None)
+    missing = client.get("/health").json()
+    assert missing["ffmpeg"] is False
+    for body in (found, missing):
+        text = json.dumps(body)
+        assert SECRET not in text and "ffmpeg.exe" not in text and "hunter2" not in text
+
+
+def test_an_unexpected_failure_of_a_route_is_a_fixed_body_not_the_exception(
+    monkeypatch, tmp_path, caplog
+):
+    client, fake, share, app = _app(monkeypatch, tmp_path)
+
+    def broken(jobs, deadline=None):
+        raise RuntimeError(f"unexpected failure at {SECRET}")
+
+    client = TestClient(app, raise_server_exceptions=False)
+    app.state.pipeline.run_path_jobs = lambda jobs, deadline, transcribe: broken(jobs, deadline)
+    with caplog.at_level(logging.ERROR):
+        r = client.post("/transcribe-path-batch", json={"jobs": {"k": PATH_JOB}})
+    assert r.status_code == 500
+    _assert_nothing_local(tmp_path, "500", r.text)
+    assert r.json() == {"detail": f"internal_error: {wpp.PUBLIC_SENTENCES[wpp.ERR_INTERNAL]}"}
+    assert SECRET in caplog.text, "the exception is in the worker log"
+
+
+@pytest.mark.parametrize(
+    "send",
+    [
+        lambda c: c.post("/transcribe-path-batch", json={"jobs": []}),
+        lambda c: c.post(
+            "/transcribe-path-batch", json={"jobs": {str(i): {} for i in range(2000)}}
+        ),
+        lambda c: c.post("/transcribe-path-batch", json={"jobs": {"k" * 600: {}}}),
+        lambda c: c.post(
+            "/transcribe-path-batch",
+            content=b"x" * (wpp.MAX_BODY_BYTES + 1),
+            headers={"content-type": "application/json"},
+        ),
+    ],
+    ids=["jobs-not-an-object", "too-many-jobs", "key-too-long", "body-too-large"],
+)
+def test_a_whole_request_refusal_carries_only_its_own_fixed_text(send, monkeypatch, tmp_path):
+    client, *_ = _app(monkeypatch, tmp_path)
+    r = send(client)
+    assert r.status_code in (413, 422), r.text
+    _assert_nothing_local(tmp_path, "refusal", r.text, separators=False)
+    assert set(r.json()) == {"detail"}

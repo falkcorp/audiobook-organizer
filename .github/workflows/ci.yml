@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.43.0
+# version: 3.44.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-11-17
 
@@ -650,10 +650,12 @@ jobs:
       # backend that hangs, crashes and exits. test_manage_whisper_server parses the
       # PowerShell that manage-whisper-server.py sends (with pwsh where the runner has
       # it; the Windows trial parses it with powershell.exe, the 5.1 WinRM uses).
-      # test_whisper_supervisor (about a minute of real restarts) and
-      # test_manage_whisper_server are standard-library unittest, so the unittest
-      # discovery above runs them (a pytest import there made the guard fail to load
-      # them); the Windows trial workflow runs them too, against powershell.exe.
+      # test_whisper_supervisor and test_manage_whisper_server are standard-library
+      # unittest, so the unittest discovery above loads them (a pytest import there made
+      # the guard fail to load them). The supervisor test is skipped here: it is
+      # about a minute of real restarts of a Windows PowerShell 5.1 script, and it runs
+      # only on Windows, in the trial workflow (whisper-windows.yml), against
+      # powershell.exe. test_whisper_wire_text_guard is stdlib too and runs here.
       #
       # The real-ffmpeg tests must RUN here, not skip: the step installs ffmpeg,
       # sets WHISPER_TESTS_REQUIRE_FFMPEG=1 (a guard test in test_whisper_server_cpu
