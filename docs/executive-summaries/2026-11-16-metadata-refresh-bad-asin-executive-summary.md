@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-16-metadata-refresh-bad-asin-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 7a1c9e34-5b82-4d06-b3f1-0e8d2a64c957 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -44,8 +44,8 @@ scheduled refresh keeps failing the same way until the change is released.
   asked every six hours for ever. A pause forced by the service being held back
   for a while does not use up one of the five tries. When the service answers,
   its suggestion is added, ranked ahead of the weaker one, and the mark is
-  removed. A failed try never removes or outranks a suggestion the book already
-  has, and the other sources, including the one with a daily allowance, are not
+  removed. A failed try keeps the suggestions the book already has and ranks
+  them with the new answer (a book still holds at most ten), and the other sources, including the one with a daily allowance, are not
   asked again on its account.
 - Each run now ends with one line saying how many books were fully refreshed,
   how many were partly refreshed, how many failed (grouped by cause), how many
@@ -101,7 +101,7 @@ of thirty seconds bounds the whole lookup, counted only while a request is out,
 so the worst case is the same as before this change: thirty seconds and three
 requests.
 
-## A book that opens in the search dialog kept its mark
+## The search dialog forgot which source still owed an answer
 
 **What it was.** Opening the Search Metadata dialog on a book rewrites the
 book's saved suggestions. That rewrite forgot the mark saying the catalog
