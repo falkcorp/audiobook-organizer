@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/lost_candidates_fixer_test.go
-// version: 1.1.7
+// version: 1.1.8
 // guid: cde35f5b-18f6-420d-bbdf-ba221050c4b8
 // last-edited: 2026-11-17
 
@@ -30,6 +30,9 @@ type lcDeps struct {
 	st       *database.PebbleStore
 	outcomes map[string]CandidateFetchOutcome
 	found    map[string]int
+	// skipped maps a book id to the detail the fetch declined it with (the
+	// real fetch returns Status "skipped" for a retired or no-match book).
+	skipped map[string]string
 
 	mu        sync.Mutex
 	refetched []string
@@ -48,6 +51,9 @@ func (d *lcDeps) RefetchMetadataCandidates(_ context.Context, id string) (Candid
 	d.mu.Lock()
 	d.refetched = append(d.refetched, id)
 	d.mu.Unlock()
+	if detail, ok := d.skipped[id]; ok {
+		return CandidateRefetchResult{Status: "skipped", Detail: "skipped: " + detail}, nil
+	}
 	n := d.found[id]
 	cands := make([]json.RawMessage, 0, n)
 	for range n {
@@ -312,4 +318,22 @@ func TestLostCandidatesFixer_RetiredBooksAreNotPlannedAndReplanNamesWhy(t *testi
 	require.Equal(t, repairs.OutcomeChangedSincePlan, lcRowResult(res, l.ids["trashed-later"]).Outcome)
 	require.Equal(t, repairs.OutcomeChangedSincePlan, lcRowResult(res, l.ids["merged-later"]).Outcome)
 	require.Equal(t, []string{l.ids["live"]}, l.deps.refetched, "a retired book is never refetched")
+}
+
+// A refetch the fetch declines to run at all (the book was retired between the
+// re-plan and the fetch, or marked "no match") searched nothing, so the row is
+// a failure that says so: not a success, and not "found no candidates".
+func TestLostCandidatesFixer_RefetchTheFetchSkippedIsNotFoundNothing(t *testing.T) {
+	l := newLCLib(t)
+	l.book("declined", "/lib/R/Declined", "matched", nil)
+	plan, rows := l.plan()
+	require.True(t, rows["declined"].Applicable())
+
+	l.deps.skipped = map[string]string{l.ids["declined"]: "book is retired"}
+	res := l.apply(plan, false, "declined")
+	got := lcRowResult(res, l.ids["declined"])
+	require.Equal(t, repairs.OutcomeFailed, got.Outcome)
+	require.Contains(t, got.Error, errRefetchSkipped.Error(), got.Error)
+	require.Contains(t, got.Error, "book is retired", "the fetch's own reason is the detail")
+	require.NotContains(t, got.Error, errRefetchFoundNothing.Error(), "nothing was searched, so nothing was found or not found")
 }
