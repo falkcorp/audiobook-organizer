@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.17.0
+// version: 1.17.1
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
 // last-edited: 2026-11-17
 
@@ -913,6 +913,7 @@ func resolveProductionAuthorsCore(ctx context.Context, env resolveProductionEnv)
 	// workers can never fetch-and-apply the same book row at the same time.
 	var bookIDs []string
 	seen := make(map[string]bool)
+	listRetired := 0
 	for i, author := range prodAuthors {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -927,15 +928,26 @@ func resolveProductionAuthorsCore(ctx context.Context, env resolveProductionEnv)
 			prog.StepN(i+1, fmt.Sprintf("Listed %d/%d production companies", i+1, total))
 			continue
 		}
+		listed := 0
 		for _, b := range books {
-			if !seen[b.ID] {
-				seen[b.ID] = true
-				bookIDs = append(bookIDs, b.ID)
+			if seen[b.ID] {
+				continue
 			}
+			seen[b.ID] = true
+			// A retired book (trashed, or merged into another book) is left out
+			// of the work list: the fetch refuses it, so the dry run must not
+			// promise it and the apply must not spend a provider call on it.
+			// Counted once, whichever company lists it.
+			if b.IsRetired() {
+				listRetired++
+				continue
+			}
+			bookIDs = append(bookIDs, b.ID)
+			listed++
 		}
 		if dryRun {
 			env.Log(slog.LevelInfo, fmt.Sprintf("Would re-fetch metadata for %d books credited to %q (id %d)",
-				len(books), author.Name, author.ID))
+				listed, author.Name, author.ID))
 		}
 		prog.StepN(i+1, fmt.Sprintf("Listed %d/%d production companies", i+1, total))
 	}
@@ -943,8 +955,8 @@ func resolveProductionAuthorsCore(ctx context.Context, env resolveProductionEnv)
 	if dryRun {
 		// The fetch applies as well as searches, so the dry run never calls
 		// it; it counts the books instead.
-		resultMsg := fmt.Sprintf("DRY RUN: would re-fetch metadata for %d books across %d production companies; "+
-			"pass dry_run=false to write", len(bookIDs), total)
+		resultMsg := fmt.Sprintf("DRY RUN: would re-fetch metadata for %d books across %d production companies "+
+			"(%d retired books left out); pass dry_run=false to write", len(bookIDs), total, listRetired)
 		env.Log(slog.LevelInfo, resultMsg)
 		prog.Done(resultMsg)
 		return nil
@@ -952,8 +964,8 @@ func resolveProductionAuthorsCore(ctx context.Context, env resolveProductionEnv)
 	if len(bookIDs) == 0 {
 		// Nothing to fetch: finish without taking the scan stand-down, which
 		// would park a running scan for no write.
-		resultMsg := fmt.Sprintf("Resolved 0 books across %d production companies (no books to re-fetch, %d companies' book lists unreadable)",
-			total, lookupFailed)
+		resultMsg := fmt.Sprintf("Resolved 0 books across %d production companies (no books to re-fetch, %d companies' book lists unreadable, %d retired books skipped)",
+			total, lookupFailed, listRetired)
 		env.Log(slog.LevelInfo, resultMsg)
 		prog.Done(resultMsg)
 		return nil
@@ -1025,7 +1037,7 @@ func resolveProductionAuthorsCore(ctx context.Context, env resolveProductionEnv)
 	})
 
 	resultMsg := fmt.Sprintf("Resolved %d books across %d production companies (%d fetches failed, %d companies' book lists unreadable, %d retired books skipped)",
-		resolved.Load(), total, fetchFailed.Load(), lookupFailed, retiredSkipped.Load())
+		resolved.Load(), total, fetchFailed.Load(), lookupFailed, int64(listRetired)+retiredSkipped.Load())
 	if runErr != nil {
 		env.Log(slog.LevelWarn, fmt.Sprintf("Stopped after %d of %d books: %s: %v", attempted.Load(), len(bookIDs), resultMsg, runErr))
 		return runErr

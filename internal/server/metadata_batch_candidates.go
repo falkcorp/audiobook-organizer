@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.31.0
+// version: 4.31.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-11-17
 //
@@ -48,6 +48,27 @@ type batchFetchRequest = metabatch.BatchFetchRequest
 // batchApplyRequest is the JSON body for handleBatchApplyCandidates.
 type batchApplyRequest = metabatch.BatchApplyRequest
 
+// batchFetchStartResponse is the body every outcome of handleBatchFetchCandidates
+// answers with, the started op and each "nothing to do" path alike: one shape,
+// so a count one path reports cannot be missing from another (the web client
+// reads them all off the same type, BatchFetchStartResponse).
+type batchFetchStartResponse struct {
+	// Message says what happened, for a toast.
+	Message string `json:"message"`
+	// OperationID is empty when the server declined to start.
+	OperationID string `json:"operation_id"`
+	// TotalBooks repeats BookCount on the started path, for existing readers.
+	TotalBooks int `json:"total_books"`
+	// BookCount is the books the started op will fetch; 0 on every
+	// "nothing to do" path.
+	BookCount int `json:"book_count"`
+	// Skipped is the books left to a fetch already running.
+	Skipped int `json:"skipped"`
+	// RetiredSkipped is the books left out because they are retired (trashed,
+	// or merged into another book). Never in Skipped.
+	RetiredSkipped int `json:"retired_skipped"`
+}
+
 var batchApplyCandidatesLog = logger.New("server.batch-apply-candidates")
 
 var batchFetchCandidatesLog = logger.New("server.batch-fetch-candidates")
@@ -84,12 +105,7 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 		}
 		if len(staleIDs) == 0 {
 			// Not a bad request: the backlog is simply clear.
-			httputil.RespondWithOK(c, gin.H{
-				"message":      "no stale books to refetch",
-				"operation_id": "",
-				"book_count":   0,
-				"skipped":      0,
-			})
+			httputil.RespondWithOK(c, batchFetchStartResponse{Message: "no stale books to refetch"})
 			return
 		}
 		candidateIDs = staleIDs
@@ -137,14 +153,17 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 	// working on that book by hand and is not filtered.
 	retiredSkipped := 0
 	if !singleBookSearch(req, candidateIDs) {
-		candidateIDs, retiredSkipped = dropRetiredBookIDs(s.storeForWiring(), candidateIDs)
+		var dropErr error
+		candidateIDs, retiredSkipped, dropErr = dropRetiredBookIDs(c.Request.Context(), s.storeForWiring(), candidateIDs)
+		if dropErr != nil {
+			httputil.InternalError(c, "failed to check the selected books for retirement", dropErr)
+			return
+		}
 	}
 	if len(candidateIDs) == 0 {
-		httputil.RespondWithOK(c, gin.H{
-			"message":         fmt.Sprintf("all %d selected books are retired (in the trash or merged into another book); nothing to fetch", retiredSkipped),
-			"operation_id":    "",
-			"book_count":      0,
-			"retired_skipped": retiredSkipped,
+		httputil.RespondWithOK(c, batchFetchStartResponse{
+			Message:        fmt.Sprintf("all %d selected books are retired (in the trash or merged into another book); nothing to fetch", retiredSkipped),
+			RetiredSkipped: retiredSkipped,
 		})
 		return
 	}
@@ -160,10 +179,9 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 		}
 		candidateIDs = filtered
 		if len(candidateIDs) == 0 {
-			httputil.RespondWithOK(c, gin.H{
-				"message":      "all selected books already have matched candidates",
-				"operation_id": "",
-				"book_count":   0,
+			httputil.RespondWithOK(c, batchFetchStartResponse{
+				Message:        "all selected books already have matched candidates",
+				RetiredSkipped: retiredSkipped,
 			})
 			return
 		}
@@ -206,16 +224,8 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 	}
 
 	if len(bookIDs) == 0 {
-		httputil.RespondWithOK(c, struct {
-			Message        string `json:"message"`
-			OperationID    string `json:"operation_id"`
-			BookCount      int    `json:"book_count"`
-			Skipped        int    `json:"skipped"`
-			RetiredSkipped int    `json:"retired_skipped"`
-		}{
+		httputil.RespondWithOK(c, batchFetchStartResponse{
 			Message:        fmt.Sprintf("All %d books are already being fetched in another operation", skippedCount),
-			OperationID:    "",
-			BookCount:      0,
 			Skipped:        skippedCount,
 			RetiredSkipped: retiredSkipped,
 		})
@@ -252,14 +262,7 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 	// book_count and skipped are what the caller should report: the books this
 	// op will fetch and the ones left to a fetch already running. total_books
 	// repeats book_count for existing readers.
-	httputil.RespondWithSuccess(c, http.StatusAccepted, struct {
-		OperationID    string `json:"operation_id"`
-		TotalBooks     int    `json:"total_books"`
-		BookCount      int    `json:"book_count"`
-		Skipped        int    `json:"skipped"`
-		RetiredSkipped int    `json:"retired_skipped"`
-		Message        string `json:"message"`
-	}{
+	httputil.RespondWithSuccess(c, http.StatusAccepted, batchFetchStartResponse{
 		OperationID:    opID,
 		TotalBooks:     totalBooks,
 		BookCount:      totalBooks,
@@ -275,6 +278,12 @@ const (
 	candidateCachedCandidates = "candidates"
 	candidateCachedKnownEmpty = "known_empty"
 )
+
+// candidateSkipRetired is the per-book Error of a candidate fetch that skipped
+// a retired book (in the trash, or merged into another book). Callers that map
+// a "skipped" result to an outcome (identFetchResultOf) match on it, so it is
+// one constant.
+const candidateSkipRetired = "skipped: retired book"
 
 // fetchCandidateForBook fetches metadata candidates for a single book, respecting
 // the rate limiter. Returns a CandidateResult.
@@ -325,7 +334,7 @@ func (s *Server) fetchCandidateForBook(
 		return CandidateResult{
 			Book:   bookInfo,
 			Status: "skipped",
-			Error:  "skipped: retired book",
+			Error:  candidateSkipRetired,
 		}
 	}
 

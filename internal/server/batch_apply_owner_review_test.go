@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_owner_review_test.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 1a8c5e37-6f02-4d94-b7e3-9c4d2a0f5b81
-// last-edited: 2026-10-12
+// last-edited: 2026-11-17
 //
 // An owner-reviewed apply: the review lane pins the candidate it showed, and
 // a matching pin lifts the certainty legs of the gate. A stale pin, no pin,
@@ -486,8 +486,25 @@ func TestReviewApproved_PreviewOptionsEqualApplyOptions(t *testing.T) {
 	previewBulkApplyRow(rprev, "b1", planCachedApply(rprev, books, "b1", nil, nil), true, false)
 	reviewed := &fakeApplySvc{candidates: candidateJSON(t, cand)}
 	applyCachedCandidateForBookTimed(context.Background(), reviewed, books, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
-	if len(rprev.previewOpts) != 1 || len(reviewed.applyOpts) != 1 || !reflect.DeepEqual(rprev.previewOpts[0], reviewed.applyOpts[0]) {
+	if len(rprev.previewOpts) != 1 || len(reviewed.applyOpts) != 1 {
 		t.Fatalf("review-only row: preview %+v, review-lane apply %+v", rprev.previewOpts, reviewed.applyOpts)
+	}
+	// AllowRetired is the one option that follows the PIN's origin, not the row
+	// (metafetch.PinAllowsRetired: only a single review row may write a retired
+	// book), and a dry run is pinless by construction. It cannot differ here
+	// for any reason but the pin: a pinless preview of a retired book is refused
+	// at the plan (refuseRetired), and for a live book the flag changes nothing
+	// the apply writes. So it is compared apart, and pinned both ways.
+	if rprev.previewOpts[0].AllowRetired {
+		t.Fatalf("a pinless preview must not carry AllowRetired: %+v", rprev.previewOpts[0])
+	}
+	if !reviewed.applyOpts[0].AllowRetired {
+		t.Fatalf("a single review row's apply must carry AllowRetired: %+v", reviewed.applyOpts[0])
+	}
+	reviewedOpts := reviewed.applyOpts[0]
+	reviewedOpts.AllowRetired = false
+	if !reflect.DeepEqual(rprev.previewOpts[0], reviewedOpts) {
+		t.Fatalf("review-only row: preview %+v, review-lane apply %+v", rprev.previewOpts[0], reviewed.applyOpts[0])
 	}
 }
 

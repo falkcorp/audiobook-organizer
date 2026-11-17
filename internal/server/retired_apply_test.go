@@ -1,5 +1,5 @@
 // file: internal/server/retired_apply_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3f0c8e52-7a14-4b69-9d27-5c1e6a8b0f43
 // last-edited: 2026-11-17
 
@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -389,6 +391,40 @@ func TestRetiredFetch_OpSearchesInteractiveRetiredBook(t *testing.T) {
 	}
 }
 
+// Interactive is the owner's search on exactly one book: it skips the retired
+// check and spends the reserved quota. The op itself, not only the HTTP route,
+// refuses it with more than one book (or a self-selected Unfetched list), so
+// params built anywhere else cannot turn a library-sized run into "interactive"
+// and have it search every retired book in it.
+func TestRetiredFetch_OpRefusesInteractiveWithMoreThanOneBook(t *testing.T) {
+	cases := map[string]func(fx retiredServerFixture) metadataCandidateFetchOpParams{
+		"two_books": func(fx retiredServerFixture) metadataCandidateFetchOpParams {
+			return metadataCandidateFetchOpParams{BookIDs: []string{fx.live, fx.retired["soft_deleted"]}, Force: true, Interactive: true}
+		},
+		"unfetched_selection": func(fx retiredServerFixture) metadataCandidateFetchOpParams {
+			return metadataCandidateFetchOpParams{Unfetched: true, Interactive: true}
+		},
+	}
+	for name, mk := range cases {
+		t.Run(name, func(t *testing.T) {
+			s, cleanup := setupTestServer(t)
+			defer cleanup()
+			src := &countingSource{name: "SrcA"}
+			mfs := metafetch.NewService(s.storeForWiring())
+			mfs.SetOverrideSources([]metadata.MetadataSource{src})
+			s.metadataFetchService = mfs
+			fx := newRetiredServerFixture(t, s)
+			params, err := json.Marshal(mk(fx))
+			require.NoError(t, err)
+			before := sourceCalls(src)
+			err = s.runMetadataCandidateFetchOp(context.Background(), params, &resumeRecorder{opID: "op-interactive-many-" + name})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "interactive")
+			assert.Equal(t, before, sourceCalls(src), "a provider was asked about a book before the params were refused")
+		})
+	}
+}
+
 // dropRetiredBookIDs keeps order, drops both retirement shapes, and keeps an
 // id the store cannot read (the op re-reads it).
 func TestDropRetiredBookIDs(t *testing.T) {
@@ -401,9 +437,35 @@ func TestDropRetiredBookIDs(t *testing.T) {
 		"merged":   {ID: "merged", MergedIntoBookID: &into},
 		"unmerged": {ID: "unmerged", MergedIntoBookID: &empty}, // an un-merge clears to ""; not retired
 	}
-	kept, n := dropRetiredBookIDs(books, []string{"live", "trash", "other", "merged", "unmerged"})
+	kept, n, err := dropRetiredBookIDs(context.Background(), books, []string{"live", "trash", "other", "merged", "unmerged"})
+	require.NoError(t, err)
 	assert.Equal(t, []string{"live", "other", "unmerged"}, kept)
 	assert.Equal(t, 2, n)
+}
+
+// A cancelled context stops the reads and returns its error with no partial
+// list: a dropped request must not keep reading a library-sized selection.
+func TestDropRetiredBookIDs_CancelledContextStopsAndReturnsItsError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	reads := &countingBookReader{}
+	ids := make([]string, 500)
+	for i := range ids {
+		ids[i] = "b" + strconv.Itoa(i)
+	}
+	kept, n, err := dropRetiredBookIDs(ctx, reads, ids)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, kept)
+	assert.Zero(t, n)
+	assert.Zero(t, reads.n.Load(), "no id may be read once the context is already done")
+}
+
+// countingBookReader counts GetBookByID calls.
+type countingBookReader struct{ n atomic.Int64 }
+
+func (r *countingBookReader) GetBookByID(string) (*database.Book, error) {
+	r.n.Add(1)
+	return &database.Book{}, nil
 }
 
 // The all_cached dry run lists a retired book as a skipped book_retired row

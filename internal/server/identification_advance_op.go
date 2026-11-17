@@ -1,5 +1,5 @@
 // file: internal/server/identification_advance_op.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 96facb01-98fa-4ebd-b06d-1422569abedd
 // last-edited: 2026-11-17
 //
@@ -219,6 +219,11 @@ func identFetchResultOf(res CandidateResult, skipStatus func() string) identific
 	case candidateStatusDeferred:
 		return identification.FetchResult{Outcome: identification.OutcomeDeferred, Reason: database.IdentReasonQuotaDeferred}
 	case "skipped":
+		if res.Error == candidateSkipRetired {
+			// Retired (trashed or merged away): not a ruling on the book, so it
+			// must not read as the owner's no-match below. Its own reason.
+			return identification.FetchResult{Outcome: identification.OutcomeSkippedDone, Reason: database.IdentReasonRetired}
+		}
 		if !strings.Contains(res.Error, metabatch.SkipDetailNoUsableTitle) {
 			// Marked no match by the owner: held, which the derivation sees.
 			return identification.FetchResult{Outcome: identification.OutcomeSkippedDone}
