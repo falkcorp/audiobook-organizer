@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_refresh_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0d7c3e59-a418-4b62-93f7-5e2b8c1d6a04
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package server
 
@@ -202,7 +202,7 @@ func TestCandidateFetchTally_RefreshSummary(t *testing.T) {
 	tally.recordError("result_not_recorded")
 
 	want := "refresh summary: refreshed 3, degraded 2 (timeout 1, upstream_5xx 1), " +
-		"failed 4 (other 1, rate_limited 2, result_not_recorded 1), deferred 1, not asked 2"
+		"failed 4 (other 1, rate_limited 2, result_not_recorded 1), deferred 1, not asked 2, gave up on a source 0"
 	if got := tally.refreshSummary(); got != want {
 		t.Fatalf("refreshSummary =\n %q\nwant\n %q", got, want)
 	}
@@ -214,7 +214,7 @@ func TestCandidateFetchTally_RefreshSummary(t *testing.T) {
 
 func TestCandidateFetchTally_RefreshSummaryEmpty(t *testing.T) {
 	var tally candidateFetchTally
-	if got, want := tally.refreshSummary(), "refresh summary: refreshed 0, degraded 0, failed 0, deferred 0, not asked 0"; got != want {
+	if got, want := tally.refreshSummary(), "refresh summary: refreshed 0, degraded 0, failed 0, deferred 0, not asked 0, gave up on a source 0"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
@@ -226,7 +226,7 @@ func TestCandidateFetchTally_DeferredIsNotRefreshed(t *testing.T) {
 	tally.record(CandidateResult{Status: candidateStatusDeferred})
 	tally.record(CandidateResult{Status: candidateStatusDeferred, Fallback: []metabatch.FallbackStep{
 		{Provider: "google-books", Outcome: metabatch.FallbackDeferred}}})
-	want := "refresh summary: refreshed 0, degraded 0, failed 0, deferred 2, not asked 0"
+	want := "refresh summary: refreshed 0, degraded 0, failed 0, deferred 2, not asked 0, gave up on a source 0"
 	if got := tally.refreshSummary(); got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
@@ -243,22 +243,25 @@ func TestCandidateFetchTally_CachedRowsAreNotAskedOnlyWhenNothingWasAsked(t *tes
 		want string
 	}{
 		{"cached, no fallback", CandidateResult{Status: "matched", Cached: candidateCachedCandidates},
-			"refreshed 0, degraded 0, failed 0, deferred 0, not asked 1"},
+			"refreshed 0, degraded 0, failed 0, deferred 0, not asked 1, gave up on a source 0"},
 		{"cached, fallback matched live", CandidateResult{Status: "matched", Cached: candidateCachedCandidates,
 			Fallback: []metabatch.FallbackStep{{Provider: "openlibrary", Outcome: metabatch.FallbackMatched}}},
-			"refreshed 1, degraded 0, failed 0, deferred 0, not asked 0"},
+			"refreshed 1, degraded 0, failed 0, deferred 0, not asked 0, gave up on a source 0"},
 		{"cached, fallback answered no match", CandidateResult{Status: "no_match", Cached: candidateCachedKnownEmpty,
 			Fallback: []metabatch.FallbackStep{{Provider: "openlibrary", Outcome: metabatch.FallbackNoMatch}}},
-			"refreshed 1, degraded 0, failed 0, deferred 0, not asked 0"},
+			"refreshed 1, degraded 0, failed 0, deferred 0, not asked 0, gave up on a source 0"},
 		{"cached, fallback errored live", CandidateResult{Status: "no_match", Cached: candidateCachedKnownEmpty,
 			Fallback: []metabatch.FallbackStep{{Provider: "openlibrary", Outcome: metabatch.FallbackError}}},
-			"refreshed 1, degraded 0, failed 0, deferred 0, not asked 0"},
+			"refreshed 1, degraded 0, failed 0, deferred 0, not asked 0, gave up on a source 0"},
 		{"cached, fallback only skipped", CandidateResult{Status: "matched", Cached: candidateCachedCandidates,
 			Fallback: []metabatch.FallbackStep{{Provider: "google-books", Outcome: metabatch.FallbackSkipped}}},
-			"refreshed 0, degraded 0, failed 0, deferred 0, not asked 1"},
+			"refreshed 0, degraded 0, failed 0, deferred 0, not asked 1, gave up on a source 0"},
 		{"cached, owed source re-asked and failed", CandidateResult{Status: "matched", Cached: candidateCachedCandidates,
 			FailedSources: []string{"Audnexus (Audible)"}, ErrorCause: metadata.CauseTimeout},
-			"refreshed 0, degraded 1 (timeout 1), failed 0, deferred 0, not asked 0"},
+			"refreshed 0, degraded 1 (timeout 1), failed 0, deferred 0, not asked 0, gave up on a source 0"},
+		{"owed source re-asked, failed, used its last ask", CandidateResult{Status: "matched", Cached: candidateCachedCandidates,
+			FailedSources: []string{"Audnexus (Audible)"}, ErrorCause: metadata.CauseTimeout, OwedGaveUp: []string{"Audnexus (Audible)"}},
+			"refreshed 0, degraded 1 (timeout 1), failed 0, deferred 0, not asked 0, gave up on a source 1"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -291,7 +294,7 @@ func TestCandidateFetchTally_ResumeSeedsCausesFromStoredRows(t *testing.T) {
 		}
 		seeded.record(back)
 	}
-	want := "refresh summary: refreshed 1, degraded 1 (bad_asin 1), failed 1 (timeout 1), deferred 0, not asked 0"
+	want := "refresh summary: refreshed 1, degraded 1 (bad_asin 1), failed 1 (timeout 1), deferred 0, not asked 0, gave up on a source 0"
 	if got := seeded.refreshSummary(); got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}

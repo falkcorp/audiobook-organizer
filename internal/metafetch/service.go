@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.60.0
+// version: 5.61.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package metafetch
 
@@ -441,6 +441,15 @@ type SearchMetadataResponse struct {
 	// "answered" for the per-provider bookkeeping, cannot by itself make a
 	// search whose every asked source failed look answered.
 	SourcesAsked []string `json:"-"`
+	// SourcesASINAnswered names the providers the search's direct ASIN lookup
+	// got an answer from, "no such ASIN" included. Internal: a full search asks
+	// Audnexus only this way (its title ladder sends nothing, so it is not in
+	// SourcesAsked), and the owed-source bookkeeping must still count that as
+	// hearing from it (AnsweredSources) or a forced refetch or the search
+	// dialog could never clear the debt. noSourceAnswered does NOT read it: a
+	// lookup answering "no such ASIN" is no evidence the title sources found
+	// nothing.
+	SourcesASINAnswered []string `json:"-"`
 	// InputFingerprint identifies the questions this search asked (see
 	// searchInputs.fingerprint). Internal, stored on the cache entry.
 	InputFingerprint string `json:"-"`

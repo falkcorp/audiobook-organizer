@@ -1,5 +1,5 @@
 // file: internal/metadata/audnexus.go
-// version: 2.14.0
+// version: 2.15.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-a3b4c5d6e7f8
 // last-edited: 2026-11-17
 
@@ -8,11 +8,13 @@ package metadata
 import (
 	"context"
 	json "encoding/json/v2"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
 )
@@ -175,6 +177,12 @@ var audnexusRegions = []string{"", "us", "uk", "au", "ca", "in", "de", "fr", "jp
 // providerhttp.Limits.AttemptTimeout bounds the exchange itself and starts only
 // once the request holds its token, so a long queue no longer fails a lookup.
 
+// audnexusLookupBudget is the exchange time one ASIN lookup may spend across all
+// the regions it walks: the 30 s that three regions' own 10 s deadlines allowed
+// before the attempt bound existed (those deadlines covered the queue; this does
+// not, so a long queue no longer fails a lookup).
+const audnexusLookupBudget = 30 * time.Second
+
 // LookupByASIN fetches a book directly by its Audible ASIN.
 // Tries multiple regions since books may only be indexed in certain Audible stores.
 //
@@ -206,6 +214,13 @@ func (c *AudnexusClient) LookupByASINInRegions(ctx context.Context, asin string,
 	// lookup as a whole failed. Only when every region said "not here" is the
 	// result a not-found error.
 	var failed, notFound error
+	// One time budget for the whole walk, charged from the moment each region's
+	// request holds its token (providerhttp.WithAttemptBudget): each region gets
+	// at most the transport's attempt bound and never what is past the budget,
+	// so a service that hangs costs one lookup at most audnexusLookupBudget of
+	// exchange time, however many regions are tried (the same 30 s the three
+	// regions' own 10 s deadlines allowed before the attempt bound).
+	ctx = providerhttp.WithAttemptBudget(ctx, audnexusLookupBudget)
 	for _, region := range regions {
 		// Bail promptly on cancellation rather than starting another region.
 		if err := ctx.Err(); err != nil {
@@ -234,16 +249,13 @@ func (c *AudnexusClient) LookupByASINInRegions(ctx context.Context, asin string,
 				notFound = err
 			} else {
 				failed = err
-				// A region that TIMED OUT (the attempt bound, its one retry
-				// included, or the limiter refusing a call that could not be
-				// served in time) says the service is not answering, not that
-				// this region is unlucky: the next region would wait the same
-				// way. Stopping bounds a hung lookup to one region's
-				// worst case (about 21.5 s, 2 requests) instead of one per
-				// region, which is under what the lookup cost before the
-				// attempt bound existed (3 regions x the 10 s deadline, 3
-				// requests, queue included).
-				if FailureCause(err) == CauseTimeout {
+				// The caller's time ran out waiting in the limiter's queue, or
+				// this lookup's own budget is spent: no later region can be
+				// sent either, so end the walk. A region that merely TIMED OUT
+				// does not: the ASIN may be served from the next one (a store
+				// the default region's upstream is slow for), and the budget
+				// above bounds the whole walk.
+				if isLimiterDeadlineRefusal(err) || errors.Is(err, providerhttp.ErrAttemptBudgetSpent) {
 					return nil, failed
 				}
 			}

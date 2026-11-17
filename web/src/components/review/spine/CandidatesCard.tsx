@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/CandidatesCard.tsx
-// version: 1.3.1
+// version: 1.4.0
 // guid: ceb6a375-997d-44e0-8c71-d83c1980ea33
-// last-edited: 2026-10-10
+// last-edited: 2026-11-17
 //
 // The Candidates view's card (owner-approved 2026-10-07): the book's full info
 // on the LEFT, and on the RIGHT the full ranked candidate list the per-book
@@ -61,6 +61,7 @@ import {
   getRowSx,
   isRowActionable,
   noCandidateLabel,
+  owedSourceChips,
   scoreColor,
 } from './rowState';
 import type { SpineRowProps } from './CompareSpine';
@@ -445,6 +446,18 @@ export const CandidatesCard = memo(function CandidatesCard({
                 data-testid="no-candidate-chip"
               />
             )}
+            {owedSourceChips(r).map((chip) => (
+              <Chip
+                key={chip.kind}
+                label={chip.label}
+                title={chip.detail}
+                color={chip.color}
+                size="small"
+                variant="outlined"
+                sx={{ mt: 1, mr: 0.5 }}
+                data-testid={`owed-source-chip-${chip.kind}`}
+              />
+            ))}
             {rowState === 'applied' && (
               <Chip label="Applied" size="small" color="success" sx={{ mt: 1 }} />
             )}

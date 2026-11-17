@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_stale.go
-// version: 1.13.2
+// version: 1.14.0
 // guid: ba7b75e1-2940-4864-ac78-6a8982bcd9a3
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package handlers
 
@@ -93,6 +93,10 @@ type loadedCacheRow struct {
 	// since (a dialog search, a chain refresh) waits on no lookup, and the
 	// selection never picks it again, so counting it would stick forever.
 	fallbackDeferred bool
+	// owedPending / owedExhausted are the chain sources the row owes an answer
+	// (entry.OwedPendingSources / OwedExhaustedSources): still to be re-asked,
+	// and given up on after all their asks.
+	owedPending, owedExhausted []string
 }
 
 // cacheRowSet is what loadCacheRows read.
@@ -222,6 +226,7 @@ func (l *cacheRowLoader) readEntry(r *loadedCacheRow, files chunkFiles) (*metafe
 // the row is then dated off its summary and holds no candidate.
 func (l *cacheRowLoader) fill(r *loadedCacheRow, entry *metafetch.MetadataCandidateCache, files chunkFiles) {
 	r.lastChecked = cacheRowLastChecked(entry, r.sum.FetchedAt)
+	r.owedPending, r.owedExhausted = entry.OwedPendingSources(), entry.OwedExhaustedSources()
 	r.fallbackDeferred = entry.FallbackDeferred() && r.book != nil &&
 		!metabatch.NoUsableCandidate(l.store, files, r.book, entry).Usable
 	if entry != nil && len(entry.Candidates) > 0 {

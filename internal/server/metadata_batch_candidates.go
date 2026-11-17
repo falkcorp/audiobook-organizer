@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.32.0
+// version: 4.33.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -330,10 +330,15 @@ func (s *Server) fetchCandidateForBook(
 	// answered is DEGRADED (FailedSources set), not silently clean.
 	var chainFailed []string
 	chainCause := ""
+	// gaveUp names the chain sources whose last ask, in this run, used up the
+	// row's asks (database.OwedMaxAsks): the book will not be asked again for
+	// them until an owner retry, so the result says so.
+	var gaveUp []string
 	withQuery := func(r CandidateResult) CandidateResult {
 		r.SearchQuery = query.Title
 		r.SearchQuerySource = query.Source
 		r.SearchAuthor = searchAuthor
+		r.OwedGaveUp = gaveUp
 		if len(chainFailed) > 0 {
 			r.FailedSources = chainFailed
 			if r.ErrorCause == "" {
@@ -426,8 +431,10 @@ func (s *Server) fetchCandidateForBook(
 	// owedReask: the row holds candidates and the verdict named only the chain
 	// sources it still owes an answer, whose backoff has run out
 	// (database.MetadataCandidateCache.OwedSources). The re-ask asks those
-	// alone and MERGES what they say into the row's candidates; the fallback
-	// providers (and their budget) are not asked on their account.
+	// alone and MERGES what they say into the row's candidates. The fallback
+	// providers (and their budget) are not asked on their account: one is asked
+	// only when the row is still without a usable candidate and that provider
+	// itself owes the book an answer.
 	owedReask := false
 	if !force {
 		cached, verdict, ask := mfs.CachedBatchVerdict(book, query.Title, authorForHash)
@@ -487,16 +494,29 @@ func (s *Server) fetchCandidateForBook(
 	// the book's row: a source that could not be asked or heard from is owed
 	// (re-asked on a backoff, MetadataCandidateCache.OwedSources), one that
 	// answered is not. A cancelled run says nothing about the providers.
+	seenOwed := make(map[string]time.Time, len(chainNames))
+	if entry != nil {
+		for _, name := range chainNames {
+			seenOwed[name] = entry.OwedSources[name].LastAttempt // zero: not owed
+		}
+	}
 	recordOwed := func(resp *metafetch.SearchMetadataResponse) {
 		if resp == nil || ctx.Err() != nil {
 			return
 		}
-		u := owedUpdateOf(resp, chainNames)
-		if err := mfs.RecordChainOwed(bookID, metafetch.BatchSourceHash(bookID, query.Title, authorForHash),
-			resp.InputFingerprint, u); err != nil {
+		u := metafetch.OwedUpdateOf(resp, chainNames)
+		u.Reset = force // an explicit retry restarts a spent schedule
+		// What the row said when this run decided to ask: a second op that asked
+		// the same book in the same window charges it first, and one window is
+		// one ask (metafetch.OwedUpdate.Seen).
+		u.Seen = seenOwed
+		exhausted, err := mfs.RecordChainOwed(bookID, metafetch.BatchSourceHash(bookID, query.Title, authorForHash),
+			resp.InputFingerprint, u)
+		if err != nil {
 			candidateFetchLog.Warn("record owed sources: book=%s err=%v",
 				logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(err.Error()))
 		}
+		gaveUp = exhausted
 	}
 	if len(plan) == 0 || len(primary) > 0 {
 		onlySources := askOnly
@@ -551,6 +571,7 @@ func (s *Server) fetchCandidateForBook(
 				})
 			}
 			recordOwed(resp)
+			r.OwedGaveUp = gaveUp // set by the record above, after r was built
 			return r
 		}
 		if resp != nil && len(resp.SourcesFailed) > 0 {

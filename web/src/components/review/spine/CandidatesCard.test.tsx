@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/CandidatesCard.test.tsx
-// version: 1.3.1
+// version: 1.4.0
 // guid: e012200e-9c38-4a1d-8587-8ac43ce9803b
-// last-edited: 2026-10-10
+// last-edited: 2026-11-17
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
@@ -317,6 +317,38 @@ describe('Candidates view', () => {
     // A non-cached candidate has no server-side reject: it is hidden here.
     await user.click(within(items[0]).getByRole('button', { name: 'Reject' }));
     expect(screen.queryByText('High')).not.toBeInTheDocument();
+  });
+});
+
+describe('owed source chips', () => {
+  const loader = () => new CandidateLoader(() => new Promise<MetadataCandidate[]>(() => {}));
+
+  it('shows nothing on a row that owes no source', () => {
+    renderCards([row('b1')], { loader: loader(), apply: vi.fn() });
+    expect(screen.queryByTestId('owed-source-chip-owed')).toBeNull();
+    expect(screen.queryByTestId('owed-source-chip-gave_up')).toBeNull();
+  });
+
+  it('shows "Source still owed" with the source named in its tooltip', () => {
+    renderCards([{ ...row('b1'), owed_pending: ['Audnexus (Audible)'] }], {
+      loader: loader(),
+      apply: vi.fn(),
+    });
+    const chip = screen.getByTestId('owed-source-chip-owed');
+    expect(chip).toHaveTextContent('Source still owed');
+    expect(chip).toHaveAttribute('title', expect.stringContaining('Audnexus (Audible)'));
+    expect(screen.queryByTestId('owed-source-chip-gave_up')).toBeNull();
+  });
+
+  it('shows "Gave up on a source" for an exhausted one', () => {
+    renderCards([{ ...row('b1'), owed_exhausted: ['Audnexus (Audible)'] }], {
+      loader: loader(),
+      apply: vi.fn(),
+    });
+    const chip = screen.getByTestId('owed-source-chip-gave_up');
+    expect(chip).toHaveTextContent('Gave up on a source');
+    expect(chip).toHaveAttribute('title', expect.stringContaining('five asks'));
+    expect(screen.queryByTestId('owed-source-chip-owed')).toBeNull();
   });
 });
 

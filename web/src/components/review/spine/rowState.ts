@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/rowState.ts
-// version: 1.8.0
+// version: 1.9.0
 // guid: 4d17c69b-0e83-4a25-91f6-7b2c8a034e51
-// last-edited: 2026-10-29
+// last-edited: 2026-11-17
 //
 // Row-state derivations and formatting, lifted verbatim from
 // MetadataReviewDialog so CompareSpine can reuse them rather than reimplement
@@ -303,6 +303,48 @@ export function noCandidateLabel(r: {
         detail: r.error_message || `Status: ${r.status}`,
       };
   }
+}
+
+/** One chip for a book's chain source that failed and is owed an answer. */
+export interface OwedSourceChip {
+  /** Stable id for tests and the chip's `data-testid`. */
+  kind: 'owed' | 'gave_up';
+  label: string;
+  color: 'warning' | 'default';
+  detail: string;
+}
+
+/**
+ * The chips for the chain sources a book's cache row owes an answer: one for the
+ * sources that will be asked again ("Source still owed"), one for the sources
+ * that used all their asks ("Gave up on a source"). The row's candidates are
+ * whatever the other sources found; these say the book may gain a better one.
+ * Empty for a row that owes nothing (a row from before the fields existed too).
+ */
+export function owedSourceChips(r: {
+  owed_pending?: string[];
+  owed_exhausted?: string[];
+}): OwedSourceChip[] {
+  const out: OwedSourceChip[] = [];
+  const pending = r.owed_pending ?? [];
+  const exhausted = r.owed_exhausted ?? [];
+  if (pending.length > 0) {
+    out.push({
+      kind: 'owed',
+      label: 'Source still owed',
+      color: 'warning',
+      detail: `${pending.join(', ')} could not be asked when this book was last searched. It is asked again on a backoff (6 hours, then 1, 3 and 7 days), and a better candidate may appear.`,
+    });
+  }
+  if (exhausted.length > 0) {
+    out.push({
+      kind: 'gave_up',
+      label: 'Gave up on a source',
+      color: 'default',
+      detail: `${exhausted.join(', ')} did not answer after five asks over about eleven days, so it is no longer asked. A forced refetch (Search again) asks it afresh.`,
+    });
+  }
+  return out;
 }
 
 /**

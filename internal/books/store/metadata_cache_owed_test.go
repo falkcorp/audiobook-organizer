@@ -1,7 +1,7 @@
 // file: internal/books/store/metadata_cache_owed_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b6c3f82-9e47-4d15-b8a3-5f2d7e91c604
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package store
 
@@ -46,7 +46,7 @@ func TestOwedSource_ScheduleAndCap(t *testing.T) {
 }
 
 // Total span of the schedule from the first failure to the last re-ask: what the
-// PR states ("about 11.5 days").
+// PR states (270 h, 11.25 days).
 func TestOwedSource_ScheduleSpan(t *testing.T) {
 	var span time.Duration
 	for _, d := range OwedBackoff {
