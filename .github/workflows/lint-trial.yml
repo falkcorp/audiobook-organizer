@@ -1,5 +1,5 @@
 # file: .github/workflows/lint-trial.yml
-# version: 1.0.0
+# version: 1.1.0
 # guid: 6b0e4f9a-2c71-4d85-b3a6-9e1f7c5d0a42
 # last-edited: 2026-11-17
 
@@ -74,14 +74,27 @@ jobs:
       - name: Free runner disk
         run: scripts/ci/free_runner_disk.sh
 
-      - name: Restore Go cache (manual)
+      # Its own key namespace, and it must stay one. ci.yml's jobs restore and
+      # save `<os>-go-1.27-<go.sum hash>`, and actions/cache never re-saves an
+      # existing key (the race-cache comment in ci.yml's go-test-short-shards
+      # job, #3882, says what that costs): if this job saved under that key it
+      # could win the save with a staticcheck-only cache and every ci.yml test
+      # job would restore it until go.sum changed. So this key is
+      # `<os>-lint-trial-go-1.27-...`, deliberately NOT starting with
+      # `<os>-go-1.27-`, because ci.yml's restore-keys are prefixes
+      # (`<os>-go-1.27-`, `<os>-go-`) and would otherwise pick this entry up
+      # as "newest" on a cold start. ci.yml's keys appear below only as
+      # read-only restore-keys fallbacks, so a cold trial still starts warm.
+      # The trial never writes a key ci.yml reads.
+      - name: Restore Go cache (trial's own key)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
+          key: ${{ runner.os }}-lint-trial-go-1.27-${{ hashFiles('**/go.sum') }}
           restore-keys: |
+            ${{ runner.os }}-lint-trial-go-1.27-
             ${{ runner.os }}-go-1.27-
             ${{ runner.os }}-go-
 
