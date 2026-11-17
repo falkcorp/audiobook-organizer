@@ -10,7 +10,7 @@
 # Stage 1: Build frontend
 # SHA pinned 2026-06-23 (node:26-alpine manifest-list). Refresh with:
 #   docker buildx imagetools inspect node:26-alpine --format '{{.Manifest.Digest}}'
-FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:8996bb5821d62a8fd9bb27c1cb07462f3fdce6e47d640c6a881ead0b064ce216 AS frontend-builder
+FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5 AS frontend-builder
 
 WORKDIR /build/web
 
@@ -41,7 +41,7 @@ RUN npm run build
 # Uses native platform (no cross-compile) so CGO works without cross-toolchain.
 # SHA pinned 2026-11-05 (golang:1.27.3-alpine manifest-list). Keep in step with
 # the Makefile's GOTOOLCHAIN pin.
-FROM golang:1.27.3-alpine@sha256:dbaa054703263d06c8b49576667418473b6231f8c0fa69dee103207fdb8e3654 AS go-builder
+FROM golang:1.27.3-alpine@sha256:fa3d596898d9f126af7c01d14ee7597bab3f39cccf392ef36b69fe77cd681f18 AS go-builder
 
 WORKDIR /build
 
@@ -97,7 +97,7 @@ RUN CGO_ENABLED=1 go build \
 
 # Stage 3: Minimal runtime image (scratch-compatible since binary is static)
 # SHA pinned 2026-06-23 (alpine:3.24 manifest-list).
-FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 
 RUN apk add --no-cache ca-certificates tzdata ffmpeg \
     && addgroup -g 1000 audiobook \

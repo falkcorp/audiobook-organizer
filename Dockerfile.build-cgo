@@ -11,7 +11,7 @@
 #     -f Dockerfile.build-cgo --output type=local,dest=dist/ .
 
 # SHA pinned 2026-06-23 (node:26-alpine manifest-list).
-FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:8996bb5821d62a8fd9bb27c1cb07462f3fdce6e47d640c6a881ead0b064ce216 AS frontend-builder
+FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5 AS frontend-builder
 WORKDIR /build/web
 # The one web-dependency entry point (see Dockerfile for the four steps of 07 §7.3.2);
 # it expects /build/scripts/ci/, /build/core/web and /build/web.
@@ -26,7 +26,7 @@ RUN npm run build
 
 # SHA pinned 2026-11-05 (golang:1.27.3-alpine manifest-list). Keep in step with
 # the Makefile's GOTOOLCHAIN pin and the main Dockerfile.
-FROM golang:1.27.3-alpine@sha256:dbaa054703263d06c8b49576667418473b6231f8c0fa69dee103207fdb8e3654 AS go-builder
+FROM golang:1.27.3-alpine@sha256:fa3d596898d9f126af7c01d14ee7597bab3f39cccf392ef36b69fe77cd681f18 AS go-builder
 
 ARG TARGETPLATFORM
 ARG TARGETOS
