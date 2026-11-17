@@ -1,13 +1,15 @@
 // file: internal/server/metadata_candidate_unfetched.go
-// version: 1.4.3
+// version: 1.5.0
 // guid: 6bf34beb-7e2f-40a9-b7a7-c5755a52c7fb
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 //
 // Selects the books the scheduled candidate fetch asks the providers about:
 // books never fetched, books whose candidates were invalidated, and books
 // whose empty answer was recorded for questions a search no longer asks, and
 // books with no usable candidate that a fallback provider still owes an
-// answer (candidate_fallback.go).
+// answer (candidate_fallback.go), and books whose row holds candidates while a
+// chain source it owes an answer (Audnexus failed in the run that wrote it) is
+// due again on its backoff (database.OwedBackoff).
 
 package server
 
@@ -87,6 +89,17 @@ type unfetchedSelection struct {
 	// of the chain and Open Library only;
 	// metabatch.FetchOpParams.GoogleCappedBookIDs).
 	GoogleCapped []string
+	// OwedDue: books selected ONLY because a chain source their row owes an
+	// answer (database.MetadataCandidateCache.OwedSources) is due again: the
+	// row keeps its candidates and the fetch asks that source alone, on a
+	// backoff that ends after database.OwedMaxAsks asks. They cost no Google
+	// Books budget (no fallback provider is asked on their account).
+	OwedDue int
+	// OwedWaiting: books whose row owes a chain source an answer that is not
+	// due yet (a source that has used all its asks is not counted: nothing
+	// will ask it); left out, counted so a run that selects less than the owed
+	// population says why.
+	OwedWaiting int
 	// Unsearchable: candidates the fetch would only skip (no usable query).
 	Unsearchable int
 	// Scanned: live books read.
@@ -175,12 +188,18 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 	}
 	candidates := make(map[string]int, len(summaries))
 	staleByBook := make(map[string]bool)
+	owedByBook := make(map[string]bool)
 	for _, s := range summaries {
 		candidates[s.BookID] = s.CandidateCount
 		if s.Stale {
 			staleByBook[s.BookID] = true
 		}
+		if s.Owed {
+			owedByBook[s.BookID] = true
+		}
 	}
+	chainNames := mfs.ActiveSourceNames()
+	now := time.Now().UTC()
 
 	type pick struct {
 		book   database.Book
@@ -214,8 +233,9 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 			// candidates may all be unusable); with no fallback provider
 			// enabled it was fetched and is left alone.
 			// A row marked stale is never left alone: its candidates are for
-			// another identity.
-			if hasRow && n > 0 && len(plan) == 0 && !staleByBook[b.ID] {
+			// another identity. Nor is a row that owes a chain source an answer
+			// it can still be asked for (the pool reads its backoff).
+			if hasRow && n > 0 && len(plan) == 0 && !staleByBook[b.ID] && !owedByBook[b.ID] {
 				continue
 			}
 			picks = append(picks, pick{book: b, hasRow: hasRow})
@@ -244,6 +264,11 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 		}
 		googleOwed[i] = fallbackGates(store, b, query).ManualOnly == ""
 	}
+	// owedSel marks a book selected because a chain source its row owes an
+	// answer is due (database.MetadataCandidateCache.OwedDue); owedWait, one
+	// whose row owes a source that can still be asked but is not due.
+	owedSel := make([]bool, len(picks))
+	owedWait := make([]bool, len(picks))
 	otherOwed := make([]bool, len(picks))
 	googleTried := make([]time.Time, len(picks))
 	var mu sync.Mutex
@@ -300,7 +325,22 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 				}
 				return nil
 			}
+			// A chain source the row owes an answer, due again: the book is
+			// selected for that re-ask alone, whatever the row's candidates are
+			// (a usable one included -- they are what it was parked on). The
+			// fallback checks below may select it too, and then it is that
+			// book's (funded) fallback pass that this rides on.
+			owedDue := len(entry.OwedDue(now, chainNames)) > 0
+			markOwed := func() {
+				switch {
+				case owedDue:
+					keep[i], owedSel[i] = true, true
+				case entry.OwedPending():
+					owedWait[i] = true
+				}
+			}
 			if metabatch.NoUsableCandidate(store, store, b, entry).Usable {
+				markOwed()
 				return nil
 			}
 			gate := fallbackGates(store, b, q.Title)
@@ -312,6 +352,7 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 				owed = slices.DeleteFunc(owed, func(fb fallbackProvider) bool { return fb.isGoogle() })
 			}
 			if len(owed) == 0 {
+				markOwed()
 				return nil
 			}
 			keep[i], fallback[i], unusable[i] = true, true, len(entry.Candidates) > 0
@@ -325,6 +366,11 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 	}
 	if err := g.Wait(); err != nil {
 		return sel, err
+	}
+	for i := range picks {
+		if owedWait[i] && !keep[i] {
+			sel.OwedWaiting++
+		}
 	}
 	// FallbackPending books first (they are known to need their fallback
 	// step; a book the chain has not answered only may), then Google-owed
@@ -350,6 +396,9 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 			continue
 		}
 		switch {
+		case owedSel[i] && !fallback[i]:
+			// Selected only for the re-ask of an owed chain source.
+			sel.OwedDue++
 		case !fallback[i]:
 			// The chain has not answered (stale empty, no row): selected
 			// whatever the budget; only its Google step may be put off.

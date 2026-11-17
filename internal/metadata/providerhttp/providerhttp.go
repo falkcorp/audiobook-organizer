@@ -1,5 +1,5 @@
 // file: internal/metadata/providerhttp/providerhttp.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5c9e2a71-4b83-4f16-9d40-8e73a1b5c206
 // last-edited: 2026-11-16
 
@@ -53,15 +53,25 @@ type Limits struct {
 	// wait for a token, every retry and its backoff, and the exchange.
 	Timeout time.Duration
 	// AttemptTimeout bounds one exchange with the provider -- connect, send, the
-	// response headers -- and starts only AFTER the request holds its token (and
-	// its daily-quota reservation), so time spent queued behind the other
-	// workers on the shared bucket is not charged to it. 0 means no per-attempt
-	// bound (Timeout alone governs).
+	// response headers AND the body read (the attempt's context ends when the
+	// caller closes the body, so a stalled body is cut off too) -- and starts
+	// only AFTER the request holds its token (and its daily-quota reservation),
+	// so time spent queued behind the other workers on the shared bucket is not
+	// charged to it. 0 means no per-attempt bound (Timeout alone governs) and no
+	// timeout retry: a provider without one behaves exactly as it did before the
+	// field existed.
 	//
 	// A deadline set by the caller around the request covers the queue, and with
 	// N workers on a bucket of rate r the queue alone is N/r seconds: 20 workers
 	// on 2 rps spent a 10 s caller deadline entirely waiting (Audnexus, 2026-11-16).
 	// The one retry an attempt timeout gets (maxTimeoutRetries) is inside Timeout.
+	//
+	// Worst case of one call: AttemptTimeout, a backoff of at most 1.5 s, and
+	// AttemptTimeout again -- 21.5 s for Audnexus's 10 s, under its 30 s Timeout,
+	// which cuts the call off in any case. The ASIN lookup asks up to three
+	// regions, so a lookup in which every region hangs ends in 64.5 s at most
+	// (six requests); before the attempt bound the same lookup took 90 s
+	// (three 30 s Timeouts, three requests).
 	AttemptTimeout time.Duration
 }
 
@@ -401,7 +411,10 @@ func (t *throttled) RoundTrip(req *http.Request) (*http.Response, error) {
 			// The attempt ran out of time (or the network said it did) while
 			// the caller is still waiting: one bounded retry with backoff. A
 			// caller that has given up (ctx done) gets the error as before.
-			if ctx.Err() == nil && attempt < min(t.maxRetries, maxTimeoutRetries) && retryableTimeout(err) &&
+			// Only a provider that has an AttemptTimeout retries a timeout: a
+			// zero-value one sends one request and returns the error, as
+			// before.
+			if t.attemptTimeout > 0 && ctx.Err() == nil && attempt < min(t.maxRetries, maxTimeoutRetries) && retryableTimeout(err) &&
 				(req.Body == nil || req.Body == http.NoBody) {
 				if werr := waitFor(ctx, backoffDelay(attempt)); werr != nil {
 					return nil, werr
