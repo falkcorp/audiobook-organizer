@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.24.3
+// version: 1.25.0
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package metafetch
 
@@ -173,7 +173,11 @@ func reviewOnlyNotApplied(title string, found []string) error {
 // ASIN lookup, so a batch/import cancel (or timeout) aborts an in-flight
 // external fetch promptly instead of waiting out the ~90s Audnexus region-loop
 // bound. Callers with no natural context may pass context.Background().
-func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*FetchMetadataResponse, error) {
+//
+// intent says who asked (FetchIntent): an Unattended caller gets
+// ErrBookRetired for a retired book before any source is searched, and again
+// under the write lock if the book was retired while the search ran.
+func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string, intent FetchIntent) (*FetchMetadataResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -181,6 +185,9 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil || book == nil {
 		return nil, fmt.Errorf("audiobook not found")
+	}
+	if err := checkFetchIntent(intent, book); err != nil {
+		return nil, err
 	}
 
 	if IsMarkedNoMatch(book.MetadataReviewStatus) {
@@ -509,7 +516,8 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			// the book's write stripe, the stripe RecordRejection writes
 			// under, so a rejection and this write are ordered.
 			updatedBook, updateErr := mfs.commitApply(id, historyBefore, book, credits, src.Name(), "",
-				func(*database.Book) error { return mfs.refuseOwnerRejected(id, src.Name(), pickedTitle, pickedIDs) })
+				composeCommitGuards(retiredCommitGuard(intent, id),
+					func(*database.Book) error { return mfs.refuseOwnerRejected(id, src.Name(), pickedTitle, pickedIDs) }))
 			if updatedBook == nil {
 				return nil, updateErr
 			}
@@ -577,10 +585,15 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 // holder's ctx) stops the search loop, and the write is refused when the cancel
 // lands before the apply starts. A cancel that lands during the apply itself
 // (guardedApply/commitApply) does not interrupt it: that one write completes.
-func (mfs *Service) FetchMetadataForBookByTitle(ctx context.Context, id string) (*FetchMetadataResponse, error) {
+//
+// intent says who asked, as for FetchMetadataForBook.
+func (mfs *Service) FetchMetadataForBookByTitle(ctx context.Context, id string, intent FetchIntent) (*FetchMetadataResponse, error) {
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil || book == nil {
 		return nil, fmt.Errorf("audiobook not found")
+	}
+	if err := checkFetchIntent(intent, book); err != nil {
+		return nil, err
 	}
 	// Searches AND applies with nobody picking the candidate (the
 	// production-company resolvers loop over it), so it refuses a book the
@@ -708,7 +721,8 @@ func (mfs *Service) FetchMetadataForBookByTitle(ctx context.Context, id string) 
 		// commitApply logged it and undo refuses that apply. The guard is
 		// the owner-rejection check under the write stripe.
 		updatedBook, updateErr := mfs.commitApply(id, historyBefore, book, credits, src.Name(), "",
-			func(*database.Book) error { return mfs.refuseOwnerRejected(id, src.Name(), pickedTitle, pickedIDs) })
+			composeCommitGuards(retiredCommitGuard(intent, id),
+				func(*database.Book) error { return mfs.refuseOwnerRejected(id, src.Name(), pickedTitle, pickedIDs) }))
 		if updatedBook == nil {
 			return nil, updateErr
 		}

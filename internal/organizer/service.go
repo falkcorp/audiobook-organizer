@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.65.3
+// version: 1.66.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package organizer
 
@@ -145,6 +145,13 @@ type Store interface {
 // Compile-time proof that PebbleStore satisfies organizer.Store.
 var _ Store = (*database.PebbleStore)(nil)
 
+// ErrFetchSkippedRetired is what the FetchMetadataForBook callback returns,
+// wrapped, for a book the metadata fetch refused because it is retired (in the
+// trash or merged into another book). Nothing was fetched or written. The
+// fetch-first loop counts it as a skip. It is defined here, not borrowed from
+// metafetch, because metafetch imports this package.
+var ErrFetchSkippedRetired = errors.New("organize: metadata fetch skipped, book is retired")
+
 // Service orchestrates the library organization operation.
 type Service struct {
 	db            Store
@@ -175,6 +182,11 @@ type Service struct {
 	// Returns (result, error). Breaks the metafetch import cycle.
 	// ctx is threaded so a cancelled organize op aborts an in-flight external
 	// metadata fetch promptly.
+	//
+	// Organize works through the library with nobody picking a book, so the
+	// wiring fetches Unattended (metafetch.FetchIntent). A book the fetch
+	// refuses as retired comes back wrapped around ErrFetchSkippedRetired, which
+	// the fetch-first loop counts as a skip rather than a failure.
 	FetchMetadataForBook func(ctx context.Context, bookID string) (any, error)
 
 	// VersionGroupLocker takes a key in the server's file-work lock table
@@ -351,6 +363,7 @@ func (orgSvc *Service) PerformOrganizeStats(ctx context.Context, req *Request, l
 	if req.FetchMetadataFirst {
 		log.Info("Fetching metadata before organizing...")
 		enriched := 0
+		retiredSkipped := 0
 		// A fetch over many books is a bulk write: each fetched book's cover
 		// embed and tag write keep no .bak-* sibling (owner decision D69).
 		// With create_backups on, a backup per file would hold a full copy of
@@ -367,11 +380,20 @@ func (orgSvc *Service) PerformOrganizeStats(ctx context.Context, req *Request, l
 			if book.CoverURL != nil {
 				continue // already enriched
 			}
-			if _, err := orgSvc.FetchMetadataForBook(fetchCtx, book.ID); err == nil {
+			_, fetchErr := orgSvc.FetchMetadataForBook(fetchCtx, book.ID)
+			switch {
+			case fetchErr == nil:
 				enriched++
+			case errors.Is(fetchErr, ErrFetchSkippedRetired):
+				// A retired book is not fetched, and is not a failed fetch.
+				retiredSkipped++
 			}
 		}
-		log.Info("Metadata enriched for %d books", enriched)
+		if retiredSkipped > 0 {
+			log.Info("Metadata enriched for %d books, %d retired books skipped", enriched, retiredSkipped)
+		} else {
+			log.Info("Metadata enriched for %d books", enriched)
+		}
 
 		// Re-fetch the books since metadata may have changed. Through the same
 		// loader, so the reload is scoped exactly like the first load: it

@@ -1,7 +1,7 @@
 // file: internal/metafetch/writeback_backup_ctx_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: f164b316-5969-47b6-ba84-173a926a536b
-// last-edited: 2026-10-10
+// last-edited: 2026-11-17
 
 package metafetch
 
@@ -86,7 +86,7 @@ func TestFetchMetadataForBook_BackupOptOutReachesPooledTagWrite(t *testing.T) {
 				results: []metadata.BookMetadata{{Title: "A Book", Author: "Some Author"}},
 			}}
 
-			_, err := svc.FetchMetadataForBook(tc.ctx, "b1")
+			_, err := svc.FetchMetadataForBook(tc.ctx, "b1", Unattended)
 			require.NoError(t, err)
 			require.Equal(t, []bool{tc.wantBackup}, wanted, "BackupWanted at the pooled tag write")
 		})

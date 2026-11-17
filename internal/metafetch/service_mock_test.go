@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.18.6
+// version: 1.18.7
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package metafetch
 
@@ -1465,7 +1465,7 @@ func TestFetchMetadataForBook(t *testing.T) {
 			},
 		}
 		svc := NewService(mock)
-		_, err := svc.FetchMetadataForBook(context.Background(), "nonexistent")
+		_, err := svc.FetchMetadataForBook(context.Background(), "nonexistent", Unattended)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not found")
 	})
@@ -1478,7 +1478,7 @@ func TestFetchMetadataForBook(t *testing.T) {
 			},
 		}
 		svc := NewService(mock)
-		_, err := svc.FetchMetadataForBook(context.Background(), "b1")
+		_, err := svc.FetchMetadataForBook(context.Background(), "b1", Unattended)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no-match")
 	})
@@ -1491,7 +1491,7 @@ func TestFetchMetadataForBook(t *testing.T) {
 		}
 		svc := NewService(mock)
 		svc.SetOverrideSources([]metadata.MetadataSource{})
-		_, err := svc.FetchMetadataForBook(context.Background(), "b1")
+		_, err := svc.FetchMetadataForBook(context.Background(), "b1", Unattended)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no metadata sources")
 	})
@@ -1506,7 +1506,7 @@ func TestFetchMetadataForBook(t *testing.T) {
 		svc.SetOverrideSources([]metadata.MetadataSource{
 			&mockMetadataSource{name: "test", results: nil},
 		})
-		_, err := svc.FetchMetadataForBook(context.Background(), "b1")
+		_, err := svc.FetchMetadataForBook(context.Background(), "b1", Unattended)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no metadata found")
 	})
@@ -1544,7 +1544,7 @@ func TestFetchMetadataForBook(t *testing.T) {
 			},
 		})
 
-		resp, err := svc.FetchMetadataForBook(context.Background(), "b1")
+		resp, err := svc.FetchMetadataForBook(context.Background(), "b1", Unattended)
 		require.NoError(t, err)
 		assert.Equal(t, "test-source", resp.Source)
 		assert.Equal(t, "metadata fetched and applied", resp.Message)
@@ -1568,7 +1568,7 @@ func TestFetchMetadataForBook(t *testing.T) {
 			},
 		})
 
-		_, err := svc.FetchMetadataForBook(context.Background(), "b1")
+		_, err := svc.FetchMetadataForBook(context.Background(), "b1", Unattended)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no metadata found")
 	})
@@ -1586,7 +1586,7 @@ func TestFetchMetadataForBookByTitle(t *testing.T) {
 			},
 		}
 		svc := NewService(mock)
-		_, err := svc.FetchMetadataForBookByTitle(context.Background(), "nonexistent")
+		_, err := svc.FetchMetadataForBookByTitle(context.Background(), "nonexistent", Unattended)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not found")
 	})
@@ -1599,7 +1599,7 @@ func TestFetchMetadataForBookByTitle(t *testing.T) {
 		}
 		svc := NewService(mock)
 		svc.SetOverrideSources([]metadata.MetadataSource{})
-		_, err := svc.FetchMetadataForBookByTitle(context.Background(), "b1")
+		_, err := svc.FetchMetadataForBookByTitle(context.Background(), "b1", Unattended)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "no metadata sources")
 	})

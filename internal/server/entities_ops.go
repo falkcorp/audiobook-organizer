@@ -1,7 +1,7 @@
 // file: internal/server/entities_ops.go
-// version: 1.17.3
+// version: 1.18.0
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 // entities_ops registers the UOS-02 OperationDefs for author entity
 // operations: author-merge and resolve-production-author. Each def is
@@ -13,6 +13,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -26,6 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
@@ -566,14 +568,23 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 			resolved := 0
 			failed := 0
 			hydrateSkipped := 0
+			retiredSkipped := 0
 			for i, book := range books {
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
 				_ = progress.UpdateProgress(i, len(books), fmt.Sprintf("Processing %d/%d: %s", i+1, len(books), book.Title))
 
-				// Try metadata fetch by title only
-				resp, fetchErr := s.metadataFetchService.FetchMetadataForBookByTitle(ctx, book.ID)
+				// Try metadata fetch by title only. The op loops over every book
+				// credited to the production company and nobody picks one:
+				// Unattended, so a retired book is refused.
+				resp, fetchErr := s.metadataFetchService.FetchMetadataForBookByTitle(ctx, book.ID, metafetch.Unattended)
+				if errors.Is(fetchErr, metafetch.ErrBookRetired) {
+					// Skipped outright: the AI cover analysis below would
+					// otherwise assign an author to the retired book too.
+					retiredSkipped++
+					continue
+				}
 				if fetchErr == nil && resp != nil && resp.Book != nil && resp.Book.AuthorID != nil {
 					// Check if the found author is different from the production company
 					newAuthor, _ := store.GetAuthorByID(*resp.Book.AuthorID)
@@ -644,7 +655,7 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 			}
 			s.authorsCache.InvalidateAll()
 
-			resultMsg := fmt.Sprintf("Resolved %d/%d books for %q (%d unresolved, %d skipped on hydrate error)", resolved, len(books), prodAuthorName, failed, hydrateSkipped)
+			resultMsg := fmt.Sprintf("Resolved %d/%d books for %q (%d unresolved, %d skipped on hydrate error, %d retired books skipped)", resolved, len(books), prodAuthorName, failed, hydrateSkipped, retiredSkipped)
 			_ = progress.Log("info", resultMsg, nil)
 			_ = progress.UpdateProgress(len(books), len(books), resultMsg)
 			return nil

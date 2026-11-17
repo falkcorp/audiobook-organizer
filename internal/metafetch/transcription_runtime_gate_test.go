@@ -1,7 +1,7 @@
 // file: internal/metafetch/transcription_runtime_gate_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 5b0c1e7e-39f4-4d0e-9a53-6c1d2f8a4b17
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package metafetch
 
@@ -299,7 +299,7 @@ func TestFetchMetadataForBook_TranscriptionOnlyMatchNeedsRuntime(t *testing.T) {
 				name:    "Audible",
 				results: []metadata.BookMetadata{{Title: heard, Author: "Bruce Wayne", Narrator: "Alfred Pennyworth", DurationSec: tt.candSec}},
 			}}
-			resp, err := svc.FetchMetadataForBook(context.Background(), "b1")
+			resp, err := svc.FetchMetadataForBook(context.Background(), "b1", Unattended)
 			if tt.wantApply {
 				require.NoError(t, err)
 				require.NotNil(t, resp)

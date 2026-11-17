@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.76.6
+// version: 1.77.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -783,7 +783,10 @@ func (s *Server) FetchMetadataByTitle(ctx context.Context, bookID string) (*int,
 	if s.metadataFetchService == nil {
 		return nil, errors.New("metadata fetch service not initialized")
 	}
-	resp, err := s.metadataFetchService.FetchMetadataForBookByTitle(ctx, bookID)
+	// The resolvers loop over every book credited to a production company and
+	// nobody picks one: Unattended, so a retired book comes back as
+	// metafetch.ErrBookRetired for the caller to count as a skip.
+	resp, err := s.metadataFetchService.FetchMetadataForBookByTitle(ctx, bookID, metafetch.Unattended)
 	if err != nil {
 		return nil, err
 	}

@@ -1,7 +1,7 @@
 // file: internal/server/pipeline_integration_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: b1c2d3e4-f5a6-7890-abcd-ef1234567890
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package server
 
@@ -73,7 +73,7 @@ func TestPipeline_ImportThenFetchMetadata(t *testing.T) {
 
 	// 6. Call FetchMetadataForBook
 	svc := metafetch.NewService(env.Store)
-	resp, err := svc.FetchMetadataForBook(context.Background(), book.ID)
+	resp, err := svc.FetchMetadataForBook(context.Background(), book.ID, metafetch.Unattended)
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 
@@ -163,7 +163,7 @@ func TestPipeline_FetchMetadata_MultiSourceFallback(t *testing.T) {
 
 	// 5. Call FetchMetadataForBook
 	svc := metafetch.NewService(env.Store)
-	resp, err := svc.FetchMetadataForBook(context.Background(), book.ID)
+	resp, err := svc.FetchMetadataForBook(context.Background(), book.ID, metafetch.Unattended)
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 
@@ -224,7 +224,7 @@ func TestPipeline_ChapterTitle_StillFindsBook(t *testing.T) {
 
 	// 4. Call FetchMetadataForBook
 	svc := metafetch.NewService(env.Store)
-	resp, err := svc.FetchMetadataForBook(context.Background(), book.ID)
+	resp, err := svc.FetchMetadataForBook(context.Background(), book.ID, metafetch.Unattended)
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 
@@ -272,7 +272,7 @@ func TestPipeline_FetchMetadata_NoResults_AllSources(t *testing.T) {
 
 	// 4. Call FetchMetadataForBook
 	svc := metafetch.NewService(env.Store)
-	resp, err := svc.FetchMetadataForBook(context.Background(), book.ID)
+	resp, err := svc.FetchMetadataForBook(context.Background(), book.ID, metafetch.Unattended)
 
 	// 5. Assert: error contains "no metadata found"
 	require.Error(t, err)

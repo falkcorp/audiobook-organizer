@@ -1,7 +1,7 @@
 // file: internal/server/e2e_workflow_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: c9d0e1f2-a3b4-5678-cdef-901234567012
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package server
 
@@ -158,7 +158,7 @@ func TestE2E_ScanAndFetchMetadata(t *testing.T) {
 
 	// Step 2: Fetch metadata
 	metaSvc := metafetch.NewService(env.Store)
-	resp, err := metaSvc.FetchMetadataForBook(context.Background(), bookID)
+	resp, err := metaSvc.FetchMetadataForBook(context.Background(), bookID, metafetch.Unattended)
 	require.NoError(t, err)
 	assert.NotNil(t, resp)
 

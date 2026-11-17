@@ -1,7 +1,7 @@
 // file: internal/metafetch/fetch_cache_identity_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 6b1e9c42-8d3f-4a7e-b25c-0f9a3d7e41c8
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package metafetch
 
@@ -107,7 +107,7 @@ func TestFetchCache_LegacyRowWithoutIdentityIsNotReplayed(t *testing.T) {
 	key := "metadata_fetch_cache:b1:" + util.NormalizeString(metadata.ProviderKey(src))
 	raw[key] = legacy
 
-	_, _ = svc.FetchMetadataForBook(context.Background(), "b1")
+	_, _ = svc.FetchMetadataForBook(context.Background(), "b1", Unattended)
 
 	assert.Positive(t, src.calls.Load(),
 		"a cache row with no search identity must be a miss; the provider has to be asked again")
@@ -179,7 +179,7 @@ func TestApplyInvalidation_NarratorOnlyChangeKeepsFetchRows(t *testing.T) {
 	assert.Contains(t, raw, other, "every provider's row survives the apply hook")
 
 	// The book now differs only in narrator, which is not part of the identity.
-	_, _ = svc.FetchMetadataForBook(context.Background(), "b1")
+	_, _ = svc.FetchMetadataForBook(context.Background(), "b1", Unattended)
 	assert.Zero(t, src.calls.Load(), "an unchanged identity must replay the cached row, not refetch")
 }
 
@@ -194,7 +194,7 @@ func TestApplyInvalidation_TitleChangeMakesFetchRowsMiss(t *testing.T) {
 
 	require.NoError(t, NewService(scanningRawStore(raw, new(string))).InvalidateCachedCandidates("b1"))
 
-	_, _ = svc.FetchMetadataForBook(context.Background(), "b1")
+	_, _ = svc.FetchMetadataForBook(context.Background(), "b1", Unattended)
 	assert.Positive(t, src.calls.Load(), "a row fetched for the old title must miss after the title changes")
 
 	var entry database.CachedMetadataEntry
