@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_reparse_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 2e6b9d14-8a37-4c51-b0f2-d95a1c3e7840
 // last-edited: 2026-11-17
 
@@ -813,6 +813,32 @@ func TestReparseFileIntros_AFileRehomedBetweenListingAndReadIsClassifiedUnderIts
 	}
 	if res.Gone != 1 || res.ParseWrites != 3 || res.Listed != 4 {
 		t.Errorf("gone %d writes %d listed %d, want 1 / 3 / 4 (the old key, then the row under its new book)", res.Gone, res.ParseWrites, res.Listed)
+	}
+}
+
+// R3-m2: a pass that wrote nothing is not done if it lost a row. The only file of
+// the library is re-homed between listing and read, so pass 1 writes nothing and
+// sees one Gone; the run must go round again and classify the row under its new
+// book. A termination test on writes alone ends the run here with the row
+// unclassified.
+func TestReparseFileIntros_AZeroWritePassThatLostARowRunsAgain(t *testing.T) {
+	s := newReparseFakeStore()
+	seedMany(s, 1)
+	moved := fid(0)
+	s.beforeRead = func(st *reparseFakeStore, key string) {
+		if key == rpKey("b1", moved) {
+			st.move("b1", "b9", moved)
+		}
+	}
+	res, err := runReparseFileIntros(context.Background(), newReparseEnv(s, &fakeReporter{}), false)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if row := s.get("b9", moved); row.IntroParse == nil {
+		t.Fatal("a pass that wrote nothing and lost the only row ended the run with the row unclassified")
+	}
+	if res.Gone != 1 || res.ParseWrites != 1 {
+		t.Errorf("gone %d writes %d, want 1 / 1", res.Gone, res.ParseWrites)
 	}
 }
 
