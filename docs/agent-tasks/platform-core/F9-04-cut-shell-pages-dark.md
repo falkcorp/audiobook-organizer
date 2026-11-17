@@ -1,16 +1,16 @@
 <!-- file: docs/agent-tasks/platform-core/F9-04-cut-shell-pages-dark.md -->
-<!-- version: 1.0.4 -->
+<!-- version: 1.0.5 -->
 <!-- guid: 7e3b5f23-bec9-40f3-bf21-45877bf529e2 -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-17 -->
 
 # F9-04 — Cut the shell-classified pages, dark: Login, AcceptInvite, Setup, NotFound, Users, System with its Storage, Quota and SystemInfo tabs and the split MaintenanceTab, the Settings frame, Dashboard, Diagnostics and the WelcomeWizard frame; their audiobook parts become books widgets, setup and userPageExtensions
 
 | Field | Value |
 |---|---|
 | ID | F9-04 |
-| Release | R3 (dark; merges after OWNER-05), flip label F9; the shell ships in R3 by default (plan §(l) item 7) |
+| Release | R3 (dark; merges after OWNER-05), flip label F9; the shell ships in R3 (owner direction 2026-11-16, plan §(l) item 7) |
 | Tier | **T3** (Opus / high): a cut of shell-classified pages into the shell and books' slots; the import boundary must prove the cut and the SPA must render the same |
-| Wave | W42 (beside F9-02, R3-05; file-disjoint) |
+| Wave | W43 (beside F9-02, R3-01, R3-03; file-disjoint). It moved from W42 on 2026-11-16, behind F9-05 (now W42) |
 | Depends on | F9-01 (the `shell` and `ui-kit` packages), F8-04 (F4-08 through F8-04 edit these pages under `web/src/`), F9-05 (the pages import its providers and utils) |
 | Precondition | 07 §7.19 step 4: every R2 flip whose native routes the pages call has merged (enforced by `Depends on`: F8-04) |
 | Spec | 07 §7.11 (the classification table: the `pages/Login.tsx …`, `pages/Users.tsx`, `pages/System.tsx`, `components/system/MaintenanceTab.tsx`, `pages/Settings.tsx`, `pages/Dashboard.tsx`, `pages/Diagnostics.tsx` and `components/wizard/WelcomeWizard.tsx` rows), §7.4.2 (`WidgetContribution`, `SetupContribution`, `UserPageExtensions`, `SettingsPanelContribution`), §7.4.3 (shell routes), §7.9.1 (permission atoms; `/setup` and the first-run gate order), §7.3.1 (import boundary), §7.19 step 4 |
