@@ -1,7 +1,7 @@
 // file: internal/metadata/audnexus_bad_asin_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5e8a2d93-7c14-4b60-8f3e-a1d9c06b7e52
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package metadata
 
@@ -256,5 +256,55 @@ func TestFailureCause_LimiterDeadlineRefusal(t *testing.T) {
 	// Burst exceeded is a different refusal and stays "other".
 	if got := FailureCause(errors.New("rate: Wait(n=2) exceeds limiter's burst 1")); got != CauseOther {
 		t.Fatalf("burst refusal classified %q, want other", got)
+	}
+}
+
+// A region that times out ends the lookup: the next region would wait the same
+// way. One request, not one per region, bounds a hung Audnexus to one region's
+// worst case. A region that answers 5xx is another matter (the ASIN may live in
+// the next one) and still tries on, pinned by the next test.
+type timeoutTransport struct {
+	mu    sync.Mutex
+	calls int
+	err   error
+}
+
+func (tt *timeoutTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	tt.mu.Lock()
+	tt.calls++
+	tt.mu.Unlock()
+	return nil, tt.err
+}
+
+func TestAudnexusLookup_StopsAtTheFirstRegionThatTimesOut(t *testing.T) {
+	for name, terr := range map[string]error{
+		"attempt deadline": context.DeadlineExceeded,
+		"limiter refusal":  errors.New("rate limit wait: rate: Wait(n=1) would exceed context deadline"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			tt := &timeoutTransport{err: terr}
+			c := &AudnexusClient{httpClient: &http.Client{Transport: tt}, baseURL: "http://192.0.2.1"}
+			_, err := c.LookupByASINInRegions(context.Background(), "B0GOTHAM99", []string{"", "uk", "au"})
+			if FailureCause(err) != CauseTimeout {
+				t.Fatalf("err = %v (cause %q), want a timeout", err, FailureCause(err))
+			}
+			if tt.calls != 1 {
+				t.Fatalf("requests = %d, want 1: a timed-out region must end the lookup", tt.calls)
+			}
+		})
+	}
+}
+
+func TestAudnexusLookup_A5xxRegionStillTriesTheNext(t *testing.T) {
+	c, rl, closeSrv := plainAudnexus(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	})
+	defer closeSrv()
+	_, err := c.LookupByASINInRegions(context.Background(), "B0GOTHAM99", []string{"", "uk", "au"})
+	if FailureCause(err) != CauseUpstream {
+		t.Fatalf("err = %v, want upstream_5xx", err)
+	}
+	if rl.n() != 3 {
+		t.Fatalf("requests = %d, want 3: a 5xx is not a hang", rl.n())
 	}
 }
