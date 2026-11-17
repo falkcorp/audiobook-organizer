@@ -1,5 +1,5 @@
 // file: internal/books/store/bookfile_intro_reparse_store.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4c9e1b72-6d38-4a05-9f4e-2b7a8d1c5e63
 // last-edited: 2026-11-17
 
@@ -8,6 +8,7 @@ package store
 import (
 	"errors"
 	"fmt"
+	"time"
 )
 
 // BookFileIntroReparser is the narrow capability maintenance.reparse-file-intros
@@ -53,6 +54,11 @@ type IntroReparseRow struct {
 	Identity IntroReparseIdentity
 	// Parse is the stored classification, nil when the row was never classified.
 	Parse *IntroParse
+	// SizeWith is the size, in bytes, the row will have once stored with the given
+	// parse: this very row, the timestamp this attempt will stamp, the encoding the
+	// write uses. It is exact for the write that follows in the same attempt. Nil from
+	// a writer that cannot size the row.
+	SizeWith func(IntroParse) (int, error)
 }
 
 // IntroReparseOutcome is what ReparseBookFileIntro did.
@@ -100,7 +106,12 @@ func (s *PebbleStore) reparseBookFileIntroOnce(bookID, fileID string, decide fun
 		return IntroReparseNoTranscript, nil
 	}
 
+	// One timestamp per attempt: SizeWith encodes the row with it and the write
+	// stamps it, so the size decide reports is the size stored.
+	at := s.introNow()
 	cur := IntroReparseRow{Transcript: *row.IntroTranscription, Parse: row.IntroParse}
+	sized := *row
+	cur.SizeWith = func(p IntroParse) (int, error) { return IntroParseRowBytes(&sized, p, at) }
 	cur.Identity = IntroReparseIdentity{
 		Title:       derefString(row.TranscribedTitle),
 		Author:      derefString(row.TranscribedAuthor),
@@ -121,7 +132,7 @@ func (s *PebbleStore) reparseBookFileIntroOnce(bookID, fileID string, decide fun
 	// so the caller's value is never retained.
 	row.IntroParse = next
 
-	res, err := s.writeIntroRow(bookID, fileID, row, raw, "ReparseBookFileIntro")
+	res, err := s.writeIntroRow(bookID, fileID, row, raw, "ReparseBookFileIntro", at)
 	switch res {
 	case IntroWriteStale:
 		return IntroReparseGone, err
@@ -131,14 +142,22 @@ func (s *PebbleStore) reparseBookFileIntroOnce(bookID, fileID string, decide fun
 	return IntroReparseSkipped, err
 }
 
-// IntroParseRowBytes is the size, in bytes, of row as ReparseBookFileIntro would
-// store it with parse as its IntroParse: the same encoding the write uses
-// (marshalBookFileDropSegs), so the figure is the volume one write pushes into the
-// database, not an estimate of it. It never mutates row: the parse is set on a copy.
-// A dry run uses it to report what a live run would write.
-func IntroParseRowBytes(row *BookFile, parse IntroParse) (int, error) {
+// IntroParseRowBytes is the size, in bytes, of row as ReparseBookFileIntro stores
+// it with parse as its IntroParse and at as its UpdatedAt: the same encoding the write
+// uses (marshalBookFileDropSegs), so with the timestamp the write stamps the figure is
+// the stored length, not an estimate of it. It never mutates row: the parse and the
+// stamp are set on a copy.
+//
+// A dry run cannot know the timestamp a later write will stamp, and a time.Time
+// encodes with its trailing fractional zeros trimmed (RFC3339Nano), so its width
+// varies by up to 10 bytes (a whole second drops the dot and all nine digits). A
+// preview passes the current time and its figure is within 10 bytes per row of what a
+// write then stores; a live write sizes through IntroReparseRow.SizeWith instead,
+// which is exact.
+func IntroParseRowBytes(row *BookFile, parse IntroParse, at time.Time) (int, error) {
 	c := *row
 	c.IntroParse = &parse
+	c.UpdatedAt = at
 	b, err := marshalBookFileDropSegs(&c)
 	if err != nil {
 		return 0, fmt.Errorf("IntroParseRowBytes: encode %s: %w", row.ID, err)
