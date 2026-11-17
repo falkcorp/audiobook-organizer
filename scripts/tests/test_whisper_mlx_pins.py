@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_mlx_pins.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: 0e5b7d3a-4c19-4f82-b6a0-91d3c7e5f284
 # last-edited: 2026-11-17
 #
@@ -252,13 +252,10 @@ def test_a_child_process_starts_no_machine_id_thread(monkeypatch):
     assert "machine-id" not in {t.name for t in threading.enumerate()}
 
 
-def test_a_server_process_starts_the_machine_id_thread(monkeypatch):
-    monkeypatch.setenv("WHISPER_MACHINE_ID", "gotham-gpu-1")
-    monkeypatch.setattr(sys, "argv", ["whisper_mlx_server.py"])
-    mod = _load()
-    mod.start_machine_id().result(timeout=10)
-    # The thread publishes and exits; what matters is the id it left behind.
-    assert mod.current_machine_id() == MACHINE_ID_FOR_OVERRIDE
+def test_a_server_process_starts_the_machine_id_thread(pin):
+    client, _, _ = pin
+    # Started at import by the server process; /health then carries the id.
+    assert _health_with_machine_id(client)["machine_id"] == MACHINE_ID_FOR_OVERRIDE
 
 
 # ── extraction: the exact ffmpeg invocation ──────────────────────────────────
