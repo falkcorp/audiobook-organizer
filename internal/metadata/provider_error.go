@@ -1,14 +1,16 @@
 // file: internal/metadata/provider_error.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: fa58b130-5ad4-4cfc-b726-728a75522364
-// last-edited: 2026-10-01
+// last-edited: 2026-11-16
 
 package metadata
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -36,6 +38,87 @@ func IsNotFound(err error) bool {
 	}
 	body := strings.TrimSpace(se.Body)
 	return strings.HasPrefix(body, "{") || strings.HasPrefix(body, "[")
+}
+
+// ErrBadASIN is a provider's refusal of an ASIN it will not look up at all:
+// Audnexus answers HTTP 400 {"error":{"code":"BAD_REQUEST","message":"Bad ASIN"}}
+// for a value outside the ASIN grammar (asin.go). It is a permanent answer about
+// the QUERY, in every region: unlike IsNotFound it must not be retried in other
+// regions, and unlike a failure it must not mark the provider failed.
+var ErrBadASIN = errors.New("not a valid ASIN")
+
+// IsBadASIN reports whether err is ErrBadASIN, or a 400 whose body is the
+// provider's own JSON (so a proxy's or an edge's HTML 400 stays a failure, as in
+// IsNotFound).
+func IsBadASIN(err error) bool {
+	if errors.Is(err, ErrBadASIN) {
+		return true
+	}
+	var se *ProviderStatusError
+	if !errors.As(err, &se) || se.Status != http.StatusBadRequest || se.BodyUnreadable {
+		return false
+	}
+	body := strings.TrimSpace(se.Body)
+	return strings.HasPrefix(body, "{") || strings.HasPrefix(body, "[")
+}
+
+// Failure causes, as reported in a run's refresh summary and a result row's
+// error_cause. They name WHY a provider call failed in a few stable words, never
+// the provider's text, so a summary carries no title, ASIN or URL.
+const (
+	CauseBadASIN     = "bad_asin"
+	CauseTimeout     = "timeout"
+	CauseRateLimited = "rate_limited"
+	CauseQuota       = "quota"
+	CauseHeld        = "provider_held"
+	CauseUpstream    = "upstream_5xx"
+	CauseClientError = "client_4xx"
+	CauseCanceled    = "canceled"
+	CauseTransport   = "transport"
+	CauseOther       = "other"
+)
+
+// FailureCause classifies a provider error into one of the Cause* words. A
+// spent daily budget is quota; a hold or an open breaker is provider_held (we
+// did not ask: an earlier failure, whatever it was, put the provider on hold).
+func FailureCause(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case IsBadASIN(err):
+		return CauseBadASIN
+	case IsDailyBudgetRefusal(err):
+		return CauseQuota
+	case errors.Is(err, ErrProviderThrottled), errors.Is(err, ErrCircuitOpen):
+		return CauseHeld
+	case errors.Is(err, context.Canceled):
+		return CauseCanceled
+	case errors.Is(err, context.DeadlineExceeded):
+		return CauseTimeout
+	}
+	if se, ok := errors.AsType[*ProviderStatusError](err); ok {
+		switch {
+		case se.Status == http.StatusTooManyRequests:
+			return CauseRateLimited
+		case se.Status >= 500:
+			return CauseUpstream
+		case se.Status >= 400:
+			if reason, _, _ := ClassifyProviderError(se); reason == ThrottleDailyQuota {
+				return CauseQuota
+			} else if reason == ThrottleRateLimit {
+				return CauseRateLimited
+			}
+			return CauseClientError
+		}
+	}
+	var ne net.Error
+	if errors.As(err, &ne) {
+		if ne.Timeout() {
+			return CauseTimeout
+		}
+		return CauseTransport
+	}
+	return CauseOther
 }
 
 // providerErrorBodyLimit bounds how much of a failing response we keep. Enough

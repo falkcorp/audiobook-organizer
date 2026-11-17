@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.17.1
+// version: 3.18.0
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 //
 // Registers the metadata.candidate-fetch v2 OperationDef. Pure params
 // type moved to internal/metabatch.FetchOpParams.
@@ -334,7 +334,7 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 					// No result row, so the book stays owed (not marked done)
 					// and is retried on resume -- but it is an error for this
 					// attempt, and it is counted and logged as one.
-					tally.errored.Add(1)
+					tally.recordError("result_not_recorded")
 					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("error: %s — could not record the result: %s",
 						opLogBookRef(result.Book.Title, result.Book.Author, bookID, result.Book.FilePath), logger.SanitizeLogValue(err.Error())),
 						slog.String("book_id", logger.SanitizeLogValue(bookID)), slog.String("outcome", "error"))
@@ -384,10 +384,13 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 		writeCheckpoint()
 		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("canceled after %d/%d books — %s",
 			finalCount, totalBooks, tally.counts()))
+		_ = reporter.Log(slog.LevelInfo, tally.refreshSummary())
 		candidateFetchLog.Info("canceled: opID=%s finalCount=%d totalBooks=%d %s",
 			logger.SanitizeLogValue(opID), finalCount, totalBooks, tally.counts())
 		return ctx.Err()
 	}
+	_ = reporter.Log(slog.LevelInfo, tally.refreshSummary())
+	candidateFetchLog.Info("done: opID=%s %s", logger.SanitizeLogValue(opID), tally.refreshSummary())
 	summary := fmt.Sprintf("completed %d/%d books — %s", finalCount, totalBooks, tally.counts())
 	_ = progress.UpdateProgress(int(finalCount), totalBooks, summary)
 	candidateFetchLog.Info("done: opID=%s force=%v %s", logger.SanitizeLogValue(opID), p.Force, summary)

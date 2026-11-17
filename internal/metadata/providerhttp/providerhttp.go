@@ -1,7 +1,7 @@
 // file: internal/metadata/providerhttp/providerhttp.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 5c9e2a71-4b83-4f16-9d40-8e73a1b5c206
-// last-edited: 2026-10-12
+// last-edited: 2026-11-16
 
 // Package providerhttp hands out rate-limited HTTP clients for outbound
 // metadata-provider calls.
@@ -21,10 +21,13 @@
 package providerhttp
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"math/rand"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -46,8 +49,20 @@ type Limits struct {
 	// MaxRetries bounds retries for throttling/transient responses. 0 disables
 	// retrying (the response is returned as-is).
 	MaxRetries int
-	// Timeout is the per-request client timeout.
+	// Timeout is the per-request client timeout. It covers the WHOLE call: the
+	// wait for a token, every retry and its backoff, and the exchange.
 	Timeout time.Duration
+	// AttemptTimeout bounds one exchange with the provider -- connect, send, the
+	// response headers -- and starts only AFTER the request holds its token (and
+	// its daily-quota reservation), so time spent queued behind the other
+	// workers on the shared bucket is not charged to it. 0 means no per-attempt
+	// bound (Timeout alone governs).
+	//
+	// A deadline set by the caller around the request covers the queue, and with
+	// N workers on a bucket of rate r the queue alone is N/r seconds: 20 workers
+	// on 2 rps spent a 10 s caller deadline entirely waiting (Audnexus, 2026-11-16).
+	// The one retry an attempt timeout gets (maxTimeoutRetries) is inside Timeout.
+	AttemptTimeout time.Duration
 }
 
 // defaultLimits are deliberately conservative. Only Hardcover publishes a number
@@ -61,8 +76,10 @@ var defaultLimits = map[string]Limits{
 	// Hardcover documents 60 requests/minute.
 	"hardcover": {RPS: 1.0, Burst: 1, MaxRetries: 3, Timeout: 30 * time.Second},
 	// Audible/Audnexus are unofficial surfaces; be gentle.
-	"audible":  {RPS: 2.0, Burst: 2, MaxRetries: 3, Timeout: 30 * time.Second},
-	"audnexus": {RPS: 2.0, Burst: 2, MaxRetries: 3, Timeout: 30 * time.Second},
+	"audible": {RPS: 2.0, Burst: 2, MaxRetries: 3, Timeout: 30 * time.Second},
+	// AttemptTimeout 10 s is the bound the lookup used to impose itself, before
+	// the queue.
+	"audnexus": {RPS: 2.0, Burst: 2, MaxRetries: 3, Timeout: 30 * time.Second, AttemptTimeout: 10 * time.Second},
 	// Google Books' documented anonymous quota is per-day, not per-second; the
 	// practical constraint is per-IP throttling, so pace modestly.
 	"google-books": {RPS: 3.0, Burst: 3, MaxRetries: 3, Timeout: 30 * time.Second},
@@ -165,6 +182,13 @@ func EffectiveLimitsFor(provider string) Limits {
 // limitsFor resolves the effective budget for a provider. Caller holds mu.
 func limitsFor(provider string) Limits {
 	if l, ok := overrides[provider]; ok {
+		// An override replaces the budget field by field; it does not name an
+		// attempt bound, so the provider's built-in one carries over (the
+		// settings UI has no such field, and dropping it silently would put
+		// the queue back inside the caller's deadline).
+		if l.AttemptTimeout == 0 {
+			l.AttemptTimeout = defaultLimits[provider].AttemptTimeout
+		}
 		return normalize(l)
 	}
 	if l, ok := defaultLimits[provider]; ok {
@@ -189,6 +213,9 @@ func normalize(l Limits) Limits {
 	}
 	if l.Timeout <= 0 {
 		l.Timeout = fallbackLimits.Timeout
+	}
+	if l.AttemptTimeout < 0 {
+		l.AttemptTimeout = 0
 	}
 	return l
 }
@@ -216,10 +243,11 @@ func Client(provider string) *http.Client {
 	c := &http.Client{
 		Timeout: l.Timeout,
 		Transport: &throttled{
-			base:       http.DefaultTransport,
-			limiter:    lim,
-			provider:   provider,
-			maxRetries: l.MaxRetries,
+			base:           http.DefaultTransport,
+			limiter:        lim,
+			provider:       provider,
+			maxRetries:     l.MaxRetries,
+			attemptTimeout: l.AttemptTimeout,
 		},
 	}
 	clients[provider] = c
@@ -253,10 +281,11 @@ func ClientWithTransport(provider string, base http.RoundTripper) *http.Client {
 	return &http.Client{
 		Timeout: l.Timeout,
 		Transport: &throttled{
-			base:       base,
-			limiter:    lim,
-			provider:   provider,
-			maxRetries: l.MaxRetries,
+			base:           base,
+			limiter:        lim,
+			provider:       provider,
+			maxRetries:     l.MaxRetries,
+			attemptTimeout: l.AttemptTimeout,
 		},
 	}
 }
@@ -271,13 +300,62 @@ func resetForTest() {
 	overrides = map[string]Limits{}
 }
 
+// maxTimeoutRetries is how many times one call re-sends a request whose attempt
+// timed out (AttemptTimeout) while the caller's own context was still live. One:
+// a retry takes a fresh token from the same bucket, so a provider that is truly
+// slow gets a second chance and no more, and the retry is counted against the
+// daily quota like any request. Throttling statuses keep their own bound
+// (maxRetries).
+const maxTimeoutRetries = 1
+
+// waitFor sleeps for d, or until ctx is done (then it returns the context's
+// error). A variable so tests record the backoff instead of waiting it out.
+var waitFor = func(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// attemptContext derives the context one exchange runs under. A variable so
+// tests can fire the attempt deadline on demand instead of waiting for the
+// clock.
+var attemptContext = context.WithTimeout
+
+// tokenWaiter is the part of *rate.Limiter the transport uses: block until a
+// token is granted, or ctx is done. An interface so a test can order the wait
+// against the attempt's deadline without waiting on a clock.
+type tokenWaiter interface {
+	Wait(ctx context.Context) error
+}
+
 // throttled paces requests through a shared token bucket and retries throttling
 // responses with backoff.
 type throttled struct {
 	base       http.RoundTripper
-	limiter    *rate.Limiter
+	limiter    tokenWaiter
 	provider   string
 	maxRetries int
+	// attemptTimeout bounds one exchange, started after the token is held
+	// (Limits.AttemptTimeout); 0 disables it.
+	attemptTimeout time.Duration
+}
+
+// attemptBody ends the attempt's context when the caller finishes with the
+// response body: cancelling it at RoundTrip's return would abort the read.
+type attemptBody struct {
+	io.ReadCloser
+	end context.CancelFunc
+}
+
+func (b *attemptBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.end()
+	return err
 }
 
 func (t *throttled) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -299,13 +377,42 @@ func (t *throttled) RoundTrip(req *http.Request) (*http.Response, error) {
 			return nil, fmt.Errorf("providerhttp %s: %w", t.provider, err)
 		}
 
-		resp, err := t.base.RoundTrip(req)
+		// The attempt's own deadline starts here, after the queue: see
+		// Limits.AttemptTimeout.
+		attemptReq, endAttempt := req, context.CancelFunc(func() {})
+		if t.attemptTimeout > 0 {
+			actx, cancel := attemptContext(ctx, t.attemptTimeout)
+			attemptReq, endAttempt = req.WithContext(actx), cancel
+		}
+		// deliver hands resp to the caller, tying the attempt's context to its
+		// body.
+		deliver := func(resp *http.Response) *http.Response {
+			if t.attemptTimeout > 0 && resp.Body != nil {
+				resp.Body = &attemptBody{ReadCloser: resp.Body, end: endAttempt}
+			} else {
+				endAttempt()
+			}
+			return resp
+		}
+
+		resp, err := t.base.RoundTrip(attemptReq)
 		if err != nil {
+			endAttempt()
+			// The attempt ran out of time (or the network said it did) while
+			// the caller is still waiting: one bounded retry with backoff. A
+			// caller that has given up (ctx done) gets the error as before.
+			if ctx.Err() == nil && attempt < min(t.maxRetries, maxTimeoutRetries) && retryableTimeout(err) &&
+				(req.Body == nil || req.Body == http.NoBody) {
+				if werr := waitFor(ctx, backoffDelay(attempt)); werr != nil {
+					return nil, werr
+				}
+				continue
+			}
 			return nil, err
 		}
 
 		if attempt >= t.maxRetries || !shouldRetry(resp.StatusCode) {
-			return resp, nil
+			return deliver(resp), nil
 		}
 
 		// Decide replayability BEFORE draining. A request body cannot be replayed
@@ -316,11 +423,11 @@ func (t *throttled) RoundTrip(req *http.Request) (*http.Response, error) {
 		var replay io.ReadCloser
 		if req.Body != nil {
 			if req.GetBody == nil {
-				return resp, nil
+				return deliver(resp), nil
 			}
 			b, berr := req.GetBody()
 			if berr != nil {
-				return resp, nil
+				return deliver(resp), nil
 			}
 			replay = b
 		}
@@ -330,20 +437,29 @@ func (t *throttled) RoundTrip(req *http.Request) (*http.Response, error) {
 		// Drain and close before reusing the connection, otherwise it is
 		// discarded and we leak sockets under sustained throttling.
 		drain(resp)
+		endAttempt()
 
-		select {
-		case <-ctx.Done():
+		if werr := waitFor(ctx, delay); werr != nil {
 			if replay != nil {
 				_ = replay.Close()
 			}
-			return nil, ctx.Err()
-		case <-time.After(delay):
+			return nil, werr
 		}
 
 		if replay != nil {
 			req.Body = replay
 		}
 	}
+}
+
+// retryableTimeout reports whether err is an exchange that timed out: our
+// attempt deadline, or the network's own timeout (a dial or TLS handshake).
+func retryableTimeout(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 // shouldRetry reports whether a status code represents throttling or a
@@ -370,7 +486,11 @@ func retryDelay(resp *http.Response, attempt int) time.Duration {
 	if d, ok := parseRetryAfter(resp.Header.Get("Retry-After")); ok {
 		return d
 	}
-	// 1s, 2s, 4s, ... capped, plus up to 50% jitter.
+	return backoffDelay(attempt)
+}
+
+// backoffDelay is 1s, 2s, 4s, ... capped, plus up to 50% jitter.
+func backoffDelay(attempt int) time.Duration {
 	base := min(time.Duration(math.Pow(2, float64(attempt)))*time.Second, 30*time.Second)
 	jitter := time.Duration(rand.Int63n(int64(base/2) + 1))
 	return base + jitter

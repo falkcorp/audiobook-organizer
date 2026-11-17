@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout.go
-// version: 1.7.6
+// version: 1.8.0
 // guid: f2309d86-b2ad-4db6-9612-f5872d0e00df
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 
 package metafetch
 
@@ -437,6 +437,16 @@ func asinCacheSource(providerID, asin string) string {
 // With it off, only a found record is written, to the book's own row: an
 // error, a throttle refusal and a "no such ASIN" are never cached.
 func (mfs *Service) cachedLookupASIN(p fanoutParams, providerID, asin string) (*metadata.BookMetadata, error) {
+	// A value outside the ASIN grammar names no product: nothing is asked and
+	// nothing is cached under it (a negative row keyed by a title word would
+	// only be noise). It is not an error either -- erroring would leave the
+	// provider failed and the book unanswered, the 814-book retry loop this
+	// guard exists to end. The key and the request use the canonical form.
+	canonical, ok := metadata.CanonicalASIN(asin)
+	if !ok {
+		return nil, nil
+	}
+	asin = canonical
 	cacheSource := asinCacheSource(providerID, asin)
 	shared := sharedCacheEnabled()
 	pkey := ""
@@ -542,7 +552,14 @@ func (mfs *Service) lookupASIN(ctx context.Context, limiter *rate.Limiter, provi
 	// the search records the source as answered rather than failed -- a
 	// failed source makes ErrNoSourceAnswered and the batch re-asks the book
 	// on every run, forever, for an ASIN that simply does not exist.
-	if metadata.IsNotFound(err) {
+	//
+	// A 400 "Bad ASIN" is the same kind of answer, and a permanent one: the
+	// provider has refused THIS value in every region, and will again. It is
+	// remembered like a not-found (the negative pcache row, below, for the
+	// provider's negative TTL), and unlike a failure it must not count against
+	// the provider's breaker, or one book's bad value would trip Audnexus for
+	// every other book. It does not start the fallback-region pass above.
+	if metadata.IsNotFound(err) || metadata.IsBadASIN(err) {
 		res, err = nil, nil
 	}
 	// Counted by hand for the same reason the throttle is: this call does not
@@ -601,7 +618,7 @@ func (mfs *Service) enrichRuntimeByASIN(p fanoutParams, states []*fanoutSource, 
 			for i := range st.results {
 				r := &st.results[i]
 				asin := strings.ToUpper(strings.TrimSpace(r.ASIN))
-				if asin == "" || r.DurationSec > 0 || !looksLikeASIN(asin) || done[asin] {
+				if asin == "" || r.DurationSec > 0 || !isASIN(asin) || done[asin] {
 					continue
 				}
 				if pass == 0 {
@@ -698,4 +715,11 @@ func newSearchCandidate(r metadata.BookMetadata, source string, score float64, b
 		GoogleRatingAverage:     r.GoogleRatingAverage,
 		GoogleRatingCount:       r.GoogleRatingCount,
 	}
+}
+
+// isASIN reports whether s is in the ASIN grammar a provider will look up
+// (metadata.CanonicalASIN), as opposed to looksLikeASIN's identity-hash shape.
+func isASIN(s string) bool {
+	_, ok := metadata.CanonicalASIN(s)
+	return ok
 }

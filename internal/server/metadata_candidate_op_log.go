@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op_log.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 17ed77c1-1759-4abb-947e-4de2acc4000c
-// last-edited: 2026-10-12
+// last-edited: 2026-11-16
 //
 // Per-book outcome lines and running outcome counts for the
 // metadata.candidate-fetch op log.
@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
@@ -59,8 +60,18 @@ type candidateFetchTally struct {
 	// adds nothing. nil reads as zeros.
 	stage *metafetch.CatalogStageStats
 
-	mu  sync.Mutex
-	msg string
+	// The refresh summary (refreshSummary): refreshed books had every source
+	// they were asked answer; degraded books were answered by the others
+	// while some source could not be (CandidateResult.SourcesFailed); failed
+	// books are the errors; notAsked books were served from the cache or
+	// skipped without a provider call. degradedBy / failedBy count the last
+	// two by cause (metadata.Cause*), under mu.
+	refreshed, degraded, notAsked atomic.Int64
+
+	mu         sync.Mutex
+	msg        string
+	degradedBy map[string]int64
+	failedBy   map[string]int64
 }
 
 // record counts one book's outcome.
@@ -83,6 +94,64 @@ func (t *candidateFetchTally) record(r CandidateResult) {
 	case candidateCachedKnownEmpty:
 		t.knownEmpty.Add(1)
 	}
+	t.recordRefresh(r)
+}
+
+// recordError counts a book that failed with no result row to read the cause
+// from (its result could not be recorded).
+func (t *candidateFetchTally) recordError(cause string) {
+	t.errored.Add(1)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.failedBy = bumpCause(t.failedBy, cause)
+}
+
+func bumpCause(m map[string]int64, cause string) map[string]int64 {
+	if cause == "" {
+		cause = metadata.CauseOther
+	}
+	if m == nil {
+		m = map[string]int64{}
+	}
+	m[cause]++
+	return m
+}
+
+// recordRefresh files one book under refreshed / degraded / failed / not asked.
+func (t *candidateFetchTally) recordRefresh(r CandidateResult) {
+	switch {
+	case r.Status == "error":
+		t.mu.Lock()
+		t.failedBy = bumpCause(t.failedBy, r.ErrorCause)
+		t.mu.Unlock()
+	case r.Status == "skipped" || r.Cached != "":
+		t.notAsked.Add(1)
+	case len(r.SourcesFailed) > 0:
+		t.degraded.Add(1)
+		t.mu.Lock()
+		t.degradedBy = bumpCause(t.degradedBy, r.ErrorCause)
+		t.mu.Unlock()
+	default:
+		t.refreshed.Add(1)
+	}
+}
+
+// refreshSummary renders the run's refresh outcome with the failures by cause,
+// e.g. "refresh summary: refreshed 700, degraded 12 (timeout 12), failed 3
+// (rate_limited 3), not asked 40". It is logged once, when the run ends or is
+// cancelled; counts() is the running line and is deliberately unchanged.
+func (t *candidateFetchTally) refreshSummary() string {
+	t.mu.Lock()
+	degradedBy, failedBy := refreshCauseCounts(t.degradedBy), refreshCauseCounts(t.failedBy)
+	t.mu.Unlock()
+	with := func(n int64, by string) string {
+		if by == "" {
+			return fmt.Sprintf("%d", n)
+		}
+		return fmt.Sprintf("%d (%s)", n, by)
+	}
+	return fmt.Sprintf("refresh summary: refreshed %d, degraded %s, failed %s, not asked %d",
+		t.refreshed.Load(), with(t.degraded.Load(), degradedBy), with(t.errored.Load(), failedBy), t.notAsked.Load())
 }
 
 // counts renders the outcome counts, e.g. "matched 820, no match 55, skipped

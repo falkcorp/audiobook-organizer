@@ -1,11 +1,13 @@
 // file: internal/metafetch/service_wiring.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 571bfbf4-238b-49cb-a6d8-b302921dd1c4
-// last-edited: 2026-10-16
+// last-edited: 2026-11-16
 
 package metafetch
 
 import (
+	"context"
+
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -21,6 +23,14 @@ func NewService(db Store) *Service {
 // SetOverrideSources overrides the metadata source chain for testing.
 func (mfs *Service) SetOverrideSources(sources []metadata.MetadataSource) {
 	mfs.overrideSources = sources
+}
+
+// SetASINLookupOverride replaces the live Audible/Audnexus ASIN clients with fn
+// for testing (nil restores them). A caller outside this package cannot reach
+// the field, and the candidate fetch's degraded-source paths are only
+// reachable through it.
+func (mfs *Service) SetASINLookupOverride(fn func(ctx context.Context, providerID, asin string) (*metadata.BookMetadata, error)) {
+	mfs.asinLookupOverride = fn
 }
 
 // SetActivityService sets the activity service for dual-writing to the unified activity log.
