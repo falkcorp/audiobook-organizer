@@ -1,5 +1,5 @@
 // file: internal/books/store/book_visibility.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4eee927b-72ce-4b07-aa41-a91afb2368ba
 // last-edited: 2026-11-17
 
@@ -63,7 +63,22 @@ func (b *Book) IsSoftDeleted() bool {
 // A manual, single-book apply by the owner does not consult this: the owner
 // can still put a candidate on a retired book by hand.
 func (b *Book) IsRetired() bool {
-	return b != nil && (bookIsSoftDeleted(b) || (b.MergedIntoBookID != nil && *b.MergedIntoBookID != ""))
+	return b != nil && retiredRow(b.MarkedForDeletion, b.MergedIntoBookID)
+}
+
+// IsRetired is the BookCore twin of Book.IsRetired, for the callers that hold
+// whichever row type their scan returned (GetAllBooksCore,
+// GetBooksByAuthorIDWithRoleCore). Both delegate to retiredRow, so the rule is
+// stated once.
+func (b *BookCore) IsRetired() bool {
+	return b != nil && retiredRow(b.MarkedForDeletion, b.MergedIntoBookID)
+}
+
+// retiredRow is the retired rule itself: the trash bit set, or a non-empty
+// merged-into id. See Book.IsRetired for why the merged half is non-empty
+// rather than non-nil.
+func retiredRow(markedForDeletion *bool, mergedInto *string) bool {
+	return markedForDeletionFlag(markedForDeletion) || (mergedInto != nil && *mergedInto != "")
 }
 
 // IsSoftDeleted is the BookCore twin of Book.IsSoftDeleted, for the same reason

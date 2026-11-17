@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.43.4
+// version: 1.43.5
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -239,9 +239,13 @@ func (s *Server) runBulkMetadataFetchAll(
 	}
 	var work []bookWork
 	var noMatch noMatchSkips // marked-no-match books left out of work; reported in the summary
+	var retired retiredSkips // retired (trashed or merged) books left out of work; reported in the summary
 	for i := range allBooks {
 		b := &allBooks[i]
 		if done[b.ID] {
+			continue
+		}
+		if retired.skip(b.IsRetired()) {
 			continue
 		}
 		if noMatch.skip(b.MetadataReviewStatus) {
@@ -286,6 +290,7 @@ func (s *Server) runBulkMetadataFetchAll(
 	logger.InfoCtx(ctx, "bulk-metadata-fetch books total, already cached, to fetch", "totalBooks", totalBooks, "alreadyDone", alreadyDone, "work_count", len(work))
 
 	noMatch.log(ctx, "bulk-metadata-fetch")
+	retired.log(ctx, "bulk-metadata-fetch")
 
 	// Track affected books in operation context
 	for i := range work {
@@ -295,7 +300,7 @@ func (s *Server) runBulkMetadataFetchAll(
 		fmt.Sprintf("resuming: %d/%d already cached", alreadyDone, totalBooks))
 
 	if len(work) == 0 {
-		_ = progress.UpdateProgress(totalBooks, totalBooks, "all books already cached"+noMatch.suffix())
+		_ = progress.UpdateProgress(totalBooks, totalBooks, "all books already cached"+noMatch.suffix()+retired.suffix())
 		return false, nil
 	}
 
@@ -335,7 +340,7 @@ func (s *Server) runBulkMetadataFetchAll(
 	// be folded into notFound.
 	var found, notFound, skipped, errored atomic.Int64
 	counts := func() string {
-		return bulkFetchCounts(found.Load(), notFound.Load(), skipped.Load(), errored.Load()) + noMatch.suffix()
+		return bulkFetchCounts(found.Load(), notFound.Load(), skipped.Load(), errored.Load()) + noMatch.suffix() + retired.suffix()
 	}
 
 	// Per-provider semaphore (fixed cap 2) shared by all workers so N pool workers
@@ -478,7 +483,7 @@ func (s *Server) runBulkMetadataFetchAll(
 		fmt.Sprintf("complete %d/%d — %s", finalCount, totalBooks, counts()))
 	op.SetStatus("success")
 	logger.InfoCtx(ctx, "bulk-metadata-fetch complete", "finalCount", finalCount, "found", found.Load(), "notFound", notFound.Load(),
-		"errors", errored.Load(), "no_match_skipped", noMatch.n, "stopped_early", stoppedEarly.Load())
+		"errors", errored.Load(), "no_match_skipped", noMatch.n, "retired_skipped", retired.n, "stopped_early", stoppedEarly.Load())
 	return stoppedEarly.Load(), nil
 }
 
@@ -922,12 +927,16 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 	}
 	var work []bookWork
 	var noMatch noMatchSkips // marked-no-match books left out of work; reported in the summary
+	var retired retiredSkips // retired (trashed or merged) books left out of work; reported in the summary
 	for _, id := range bookIDs {
 		if done[id] {
 			continue
 		}
 		b, err := store.GetBookByID(id)
 		if err != nil || b == nil {
+			continue
+		}
+		if retired.skip(b.IsRetired()) {
 			continue
 		}
 		if noMatch.skip(b.MetadataReviewStatus) {
@@ -970,6 +979,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 	totalBooks := alreadyDone + len(work)
 	logger.InfoCtx(ctx, "bulk-metadata-fetch-ids total, done, to fetch", "totalBooks", totalBooks, "alreadyDone", alreadyDone, "work_count", len(work))
 	noMatch.log(ctx, "bulk-metadata-fetch-ids")
+	retired.log(ctx, "bulk-metadata-fetch-ids")
 	_ = progress.UpdateProgress(alreadyDone, totalBooks,
 		fmt.Sprintf("resuming: %d/%d already done", alreadyDone, totalBooks))
 
@@ -1006,7 +1016,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 	var found, notFound, skipped, errored atomic.Int64
 	counts := func() string {
 		c := bulkFetchCounts(found.Load(), notFound.Load(), skipped.Load(), errored.Load())
-		return c + noMatch.suffix()
+		return c + noMatch.suffix() + retired.suffix()
 	}
 
 	// Per-provider semaphore (fixed cap 2) shared by all workers, built from the
@@ -1141,7 +1151,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 		fmt.Sprintf("complete %d/%d — %s", finalCount, totalBooks, counts()))
 	op.SetStatus("success")
 	logger.InfoCtx(ctx, "bulk-metadata-fetch-ids complete", "finalCount", finalCount, "found", found.Load(), "notFound", notFound.Load(),
-		"errors", errored.Load(), "no_match_skipped", noMatch.n, "stopped_early", stoppedEarly.Load())
+		"errors", errored.Load(), "no_match_skipped", noMatch.n, "retired_skipped", retired.n, "stopped_early", stoppedEarly.Load())
 	return stoppedEarly.Load(), nil
 }
 

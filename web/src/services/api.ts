@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.208.0
+// version: 2.209.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-11-17
 
@@ -4966,10 +4966,13 @@ export interface BatchFetchRequest {
  * callers happened to read, because the previous flat declaration here was the
  * reason the missing envelope hop went unnoticed by the type checker.
  *
- * The handler has three success shapes and they do not share a field set:
- *  - started      -> `operation_id` (non-empty), `total_books`, `message`
+ * Every success is one shape (server `batchFetchStartResponse`), so each path
+ * carries every field below; the web type keeps most of them optional because
+ * older servers and the test doubles omit some:
+ *  - started       -> `operation_id` (non-empty), `total_books`, `book_count`
  *  - nothing to do -> `operation_id: ""`, `book_count: 0`, `message`
- *  - all skipped   -> `operation_id: ""`, `book_count: 0`, `skipped`, `message`
+ *  - all skipped   -> `operation_id: ""`, `book_count: 0`, `skipped` and/or
+ *                     `retired_skipped`, `message`
  *
  * `operation_id` is always present and is the EMPTY STRING, not absent, when
  * the server declined to start — which is why callers may keep testing it for
@@ -4985,6 +4988,12 @@ export interface BatchFetchStartResponse {
   book_count?: number;
   /** Books left out because they are already in a running fetch. */
   skipped?: number;
+  /**
+   * Books left out because they are retired (in the trash, or merged into
+   * another book). Counted apart from `skipped`. Not set on a single-book
+   * "Search again", which is never filtered.
+   */
+  retired_skipped?: number;
 }
 
 export async function batchFetchCandidates(

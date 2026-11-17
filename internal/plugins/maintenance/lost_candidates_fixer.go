@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/lost_candidates_fixer.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 0583655e-5bf4-4704-8046-c880bf7522b6
-// last-edited: 2026-11-12
+// last-edited: 2026-11-17
 
 package maintenance
 
@@ -34,6 +34,10 @@ const (
 	lostSkipHasCandidates = "has_candidates"
 	lostSkipNotMatched    = "no_matched_fetch"
 	lostSkipSearchedSince = "searched_since"
+	// lostSkipRetired: the book was trashed or merged into another book. Not
+	// "gone": the row still exists, and a refetch would spend provider quota
+	// on a book no apply accepts.
+	lostSkipRetired = "retired"
 )
 
 // Classes of a lost-candidates row: whether the book carries an ASIN now. The
@@ -53,8 +57,8 @@ const (
 // plus 421 that lost theirs to the 10-04 author relink and junk-title
 // retitles).
 //
-// A row is a live book that is not applied and not marked "no match", whose
-// latest metadata.candidate-fetch outcome is "matched" (the evidence it HAD a
+// A row is a live book (not trashed, not merged into another book) that is not
+// applied and not marked "no match", whose latest metadata.candidate-fetch outcome is "matched" (the evidence it HAD a
 // candidate: the deletion itself left no record), and whose candidate cache
 // now holds none. A book whose cache row was searched again after that
 // outcome and came back empty is skipped (searched_since): the providers
@@ -137,7 +141,7 @@ func (f *lostCandidatesFixer) Plan(ctx context.Context, _ json.RawMessage, rep r
 	for i := range all {
 		b := all[i]
 		o, ok := outcomes[b.ID]
-		if !ok || o.Status != "matched" || b.IsSoftDeleted() || reviewRuled(&b) {
+		if !ok || o.Status != "matched" || b.IsRetired() || reviewRuled(&b) {
 			continue
 		}
 		cands = append(cands, lostCandidateInput{book: b, outcome: o, known: true})
@@ -196,11 +200,18 @@ func (f *lostCandidatesFixer) Replan(ctx context.Context, _ json.RawMessage, pla
 	if err != nil {
 		return repairs.Row{}, fmt.Errorf("read book %s: %w", planned.RowID, err)
 	}
-	if b == nil || b.IsSoftDeleted() {
+	if b == nil {
 		r := repairs.Row{RowID: planned.RowID, BookIDs: []string{planned.RowID}, Skipped: lostSkipGone,
 			SkipReason: "the book no longer exists", Risk: repairs.RiskLow}
 		r.Reason = r.SkipReason
 		r.Fingerprint = lostFingerprint(r, "gone")
+		return r, nil
+	}
+	if b.IsRetired() {
+		r := repairs.Row{RowID: planned.RowID, BookIDs: []string{planned.RowID}, Title: b.Title, Skipped: lostSkipRetired,
+			SkipReason: "the book was moved to the trash or merged into another book", Risk: repairs.RiskLow}
+		r.Reason = r.SkipReason
+		r.Fingerprint = lostFingerprint(r, "retired")
 		return r, nil
 	}
 	o, ok, err := f.p.deps.LatestCandidateFetchOutcome(b.ID)
@@ -308,6 +319,10 @@ func lostFingerprint(r repairs.Row, extra string) string {
 // candidates.
 var errRefetchFoundNothing = errors.New("refetch found no candidates")
 
+// errRefetchSkipped marks a refetch the fetch declined to run at all: the book
+// was retired (trashed or merged) or marked "no match" after the re-plan.
+var errRefetchSkipped = errors.New("refetch skipped")
+
 // errRefetchDeferred marks a refetch whose fallback lookup was put off to a
 // later run: the chain found nothing and Google Books was not asked yet.
 var errRefetchDeferred = errors.New("refetch deferred: the chain found nothing and a fallback lookup was put off to a later run")
@@ -320,6 +335,12 @@ func (f *lostCandidatesFixer) Apply(ctx context.Context, _ *repairs.Writer, fres
 		return fmt.Errorf("refetch candidates of %s: %w", fresh.RowID, err)
 	}
 	if res.Candidates == 0 {
+		if res.Status == "skipped" {
+			// The fetch declined the book (retired since the re-plan, or marked
+			// "no match"), so nothing was searched: not "found nothing". The
+			// fetch's own reason is the detail.
+			return fmt.Errorf("%w: %s", errRefetchSkipped, strings.TrimPrefix(res.Detail, "skipped: "))
+		}
 		if res.Status == "deferred" {
 			// A deferral is not "found nothing": a fallback provider was not
 			// asked yet (budget spent, a throttle hold, a passing failure).
