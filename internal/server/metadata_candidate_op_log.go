@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op_log.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 17ed77c1-1759-4abb-947e-4de2acc4000c
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 //
 // Per-book outcome lines and running outcome counts for the
 // metadata.candidate-fetch op log.
@@ -68,6 +68,10 @@ type candidateFetchTally struct {
 	// skipped without a provider call. degradedBy / failedBy count the
 	// degraded and failed ones by cause (metadata.Cause*), under mu.
 	refreshed, degraded, notAsked atomic.Int64
+	// gaveUp counts books whose ask in this run used up a chain source's asks
+	// (CandidateResult.OwedGaveUp): left alone until an owner retry. It overlaps
+	// degraded rather than adding to it.
+	gaveUp atomic.Int64
 
 	mu         sync.Mutex
 	msg        string
@@ -94,6 +98,9 @@ func (t *candidateFetchTally) record(r CandidateResult) {
 		t.fromCache.Add(1)
 	case candidateCachedKnownEmpty:
 		t.knownEmpty.Add(1)
+	}
+	if len(r.OwedGaveUp) > 0 {
+		t.gaveUp.Add(1)
 	}
 	t.recordRefresh(r)
 }
@@ -162,7 +169,9 @@ func (t *candidateFetchTally) recordRefresh(r CandidateResult) {
 
 // refreshSummary renders the run's refresh outcome with the failures by cause,
 // e.g. "refresh summary: refreshed 700, degraded 12 (timeout 12), failed 3
-// (rate_limited 3), deferred 5, not asked 40". It is logged once, when the run ends or is
+// (rate_limited 3), deferred 5, not asked 40, gave up on a source 2". "gave up"
+// counts books whose ask this run used up a source's last ask (they are also
+// counted under degraded). It is logged once, when the run ends or is
 // cancelled; counts() is the running line and is deliberately unchanged.
 func (t *candidateFetchTally) refreshSummary() string {
 	t.mu.Lock()
@@ -174,8 +183,9 @@ func (t *candidateFetchTally) refreshSummary() string {
 		}
 		return fmt.Sprintf("%d (%s)", n, by)
 	}
-	return fmt.Sprintf("refresh summary: refreshed %d, degraded %s, failed %s, deferred %d, not asked %d",
-		t.refreshed.Load(), with(t.degraded.Load(), degradedBy), with(t.errored.Load(), failedBy), t.deferred.Load(), t.notAsked.Load())
+	return fmt.Sprintf("refresh summary: refreshed %d, degraded %s, failed %s, deferred %d, not asked %d, gave up on a source %d",
+		t.refreshed.Load(), with(t.degraded.Load(), degradedBy), with(t.errored.Load(), failedBy), t.deferred.Load(), t.notAsked.Load(),
+		t.gaveUp.Load())
 }
 
 // counts renders the outcome counts, e.g. "matched 820, no match 55, skipped

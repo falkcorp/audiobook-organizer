@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_refresh.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e4b82a9d-1f63-4c75-8a0e-6d3c5b19f7a2
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 //
 // The candidate-fetch op's refresh accounting: which sources a search could
 // not ask (degraded / failed books) and the run's per-cause summary line.
@@ -42,36 +42,6 @@ func chainFailure(resp *metafetch.SearchMetadataResponse, ferr error) (names []s
 		return names, metadata.CauseOther
 	}
 	return nil, ""
-}
-
-// owedUpdateOf is what resp (the chain search's response) says about the
-// chain's sources, for metafetch.Service.RecordChainOwed: each source that
-// failed with its cause (metadata.FailureCause of its own error, else "other"),
-// and each that was asked and answered. Only the chain's own sources (active:
-// the names a re-ask can name, metafetch.Service.ActiveSourceNames) are owed:
-// a failure filed under another label (the search's direct ASIN lookup, "Audnexus
-// (Audible)", which enriches a runtime) is no source the verdict could re-ask.
-// A nil resp (the search failed before it ran) says nothing.
-func owedUpdateOf(resp *metafetch.SearchMetadataResponse, active []string) metafetch.OwedUpdate {
-	if resp == nil {
-		return metafetch.OwedUpdate{}
-	}
-	u := metafetch.OwedUpdate{Answered: resp.AnsweredSources()}
-	if len(resp.SourcesFailed) > 0 {
-		errs := resp.SourceErrors()
-		u.Failed = make(map[string]string, len(resp.SourcesFailed))
-		for name := range resp.SourcesFailed {
-			if !slices.Contains(active, name) {
-				continue
-			}
-			cause := metadata.FailureCause(errs[name])
-			if cause == "" {
-				cause = metadata.CauseOther
-			}
-			u.Failed[name] = cause
-		}
-	}
-	return u
 }
 
 // onlyASINSourcesFailed reports ErrNoSourceAnswered caused solely by sources

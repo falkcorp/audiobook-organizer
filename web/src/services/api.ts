@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.207.3
+// version: 2.208.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -4910,6 +4910,19 @@ export interface CandidateResult {
    * or a passing failure. The book waits for a later run.
    */
   fallback_deferred?: boolean;
+  /**
+   * Chain sources (display names, sorted) the book's cache row still owes an
+   * answer that will be asked again on a backoff: the source failed (a timeout,
+   * a 5xx) in the run that found the row's candidates. Cache review list only;
+   * absent when none.
+   */
+  owed_pending?: string[];
+  /**
+   * Chain sources the row used all its asks on and is left alone for, until an
+   * owner retry (a forced refetch) or the row's refetch after its 30-day TTL
+   * starts the schedule over. Absent when none.
+   */
+  owed_exhausted?: string[];
 }
 
 export interface BatchFetchRequest {

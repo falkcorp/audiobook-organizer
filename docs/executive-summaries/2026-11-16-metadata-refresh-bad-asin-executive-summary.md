@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-16-metadata-refresh-bad-asin-executive-summary.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 7a1c9e34-5b82-4d06-b3f1-0e8d2a64c957 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -40,7 +40,7 @@ scheduled refresh keeps failing the same way until the change is released.
   narrators, so the book is marked as still owed an answer from it. The next
   runs ask the catalog service again, and only the catalog service: after six
   hours, then a day, three days and a week. After five failed tries it stops,
-  about eleven and a half days in, so a code the service never answers is not
+  about eleven days and six hours in, so a code the service never answers is not
   asked every six hours for ever. A pause forced by the service being held back
   for a while does not use up one of the five tries. When the service answers,
   its suggestion is added, ranked ahead of the weaker one, and the mark is
@@ -92,8 +92,28 @@ service answers in well under a second. This part of the diagnosis is inferred
 from the numbers: the production logs do not record how long each request took.
 
 **The fix.** The limit now starts when the request has its place in the line and
-covers only the exchange with the service. A request that times out is tried
-once more after a short pause, and no more than that. This retry applies only
-to a service that has such a limit. A lookup that hangs now gives up after the first region that times out, since the next one would
-wait the same way: at worst about twenty-two seconds and two requests, where it
-used to be thirty seconds and three requests.
+covers only the exchange with the service. A request that times out is not tried
+again inside the lookup: the book is marked as still owed an answer and asked
+again later on the schedule described above. A lookup that hangs does not give up
+at the first region any more: it goes on to the next regions, as it always did,
+so a book whose code only a later region knows is still found. One overall limit
+of thirty seconds bounds the whole lookup, counted only while a request is out,
+so the worst case is the same as before this change: thirty seconds and three
+requests.
+
+## A book that opens in the search dialog kept its mark
+
+**What it was.** Opening the Search Metadata dialog on a book rewrites the
+book's saved suggestions. That rewrite forgot the mark saying the catalog
+service still owed an answer, and did not record a failed catalog lookup of its
+own.
+
+**Why it mattered.** A book the owner looked at was quietly forgiven: it stayed
+on its weaker suggestion and was never asked again.
+
+**The fix.** The mark now follows the book's questions, not whichever screen
+saved the suggestions, and the dialog records what it learned about each source
+too. A forced retry that sees the service fail again starts the schedule over
+from the first try; a book searched again after thirty days starts a new
+schedule. The run's summary and the review page now say when a book has a source
+still owed, and when the system gave up on one after five tries.

@@ -1,14 +1,16 @@
 // file: internal/server/metadata_candidate_owed_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c41e7a96-5d03-4f28-9b6a-2e8f1d70a3c5
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package server
 
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -429,16 +431,16 @@ func TestCandidateOwed_ReaskKeepsAnotherChainSourcesCandidate(t *testing.T) {
 	}
 }
 
-// owedUpdateOf names only the chain's own sources as owed: a failure filed under
+// metafetch.OwedUpdateOf names only the chain's own sources as owed: a failure filed under
 // a label the verdict cannot re-ask (the direct ASIN lookup's) is no debt.
 func TestOwedUpdateOf_OnlyActiveChainSourcesAreOwed(t *testing.T) {
 	resp := &metafetch.SearchMetadataResponse{SourcesFailed: map[string]string{
 		"Audnexus (Audible)": "502", "Some Other Label": "boom"}}
-	u := owedUpdateOf(resp, []string{"Audnexus (Audible)", "Google Books"})
+	u := metafetch.OwedUpdateOf(resp, []string{"Audnexus (Audible)", "Google Books"})
 	if len(u.Failed) != 1 || u.Failed["Audnexus (Audible)"] == "" {
 		t.Fatalf("Failed = %v, want only Audnexus (Audible)", u.Failed)
 	}
-	if got := owedUpdateOf(nil, nil); len(got.Failed) != 0 || len(got.Answered) != 0 {
+	if got := metafetch.OwedUpdateOf(nil, nil); len(got.Failed) != 0 || len(got.Answered) != 0 {
 		t.Fatalf("a nil response said something: %+v", got)
 	}
 }
@@ -471,5 +473,290 @@ func TestCandidateOwed_CancelledRunRecordsNoDebt(t *testing.T) {
 	}
 	if len(e.OwedSources) != 0 {
 		t.Fatalf("a cancelled run left OwedSources = %+v", e.OwedSources)
+	}
+}
+
+// setOwed rewrites the book's owed source on its row: asked n times, last asked
+// (and first failed) ago ago.
+func setOwed(t *testing.T, f *fallbackFixture, bookID string, n int, ago time.Duration) {
+	t.Helper()
+	e := owedRow(t, f, bookID)
+	at := time.Now().UTC().Add(-ago)
+	e.OwedSources = map[string]database.OwedSource{"Audnexus (Audible)": {Since: at, LastAttempt: at, Attempts: n, Cause: metadata.CauseUpstream}}
+	if err := f.store.PutMetadataCache(e); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The owner opens the Search Metadata dialog on a parked book between two runs.
+// Its plain fetch writes the row under another input hash than the op's, and
+// must neither drop the debt Audnexus owes nor spend the book's re-ask: the next
+// selection still hands the book back and the op still asks Audnexus.
+func TestCandidateOwed_DialogFetchBetweenRunsKeepsTheDebt(t *testing.T) {
+	f, _, ol := newOwedServerFixture(t)
+	b := f.book(t, owedTitle, withASIN(refreshASIN))
+	f.run(t, b.ID) // Audnexus down, Google matches: Audnexus is owed
+	if _, owed := owedRow(t, f, b.ID).OwedSources["Audnexus (Audible)"]; !owed {
+		t.Fatal("setup: run 1 recorded no debt")
+	}
+
+	// What the dialog's handler runs (handlers/metadata plain fetch): the books's
+	// own title, the throttle bypassed. Audnexus is still down in it.
+	if _, err := f.mfs.FetchAndCache(context.Background(), b.ID, "", "", "", "",
+		metafetch.SearchOptions{BypassProviderThrottle: true}); err != nil {
+		t.Fatalf("dialog fetch: %v", err)
+	}
+	row := owedRow(t, f, b.ID)
+	o, owed := row.OwedSources["Audnexus (Audible)"]
+	if !owed {
+		t.Fatalf("the dialog's fetch dropped the debt: %+v", row.OwedSources)
+	}
+	if o.Attempts != 2 {
+		t.Fatalf("attempts after a failed dialog ask = %d, want 2 (one ask for the failed dialog search)", o.Attempts)
+	}
+
+	// Next selection, once the backoff has run: the book is handed back.
+	ol.down.Store(false)
+	metadata.ResetThrottlesForTesting()
+	ageOwed(t, f, b.ID, 25*time.Hour)
+	sel, err := unfetchedCandidateBookIDs(t.Context(), f.store, f.mfs, f.s.newFolderMemo(f.store), nil, 800)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(sel.IDs, b.ID) {
+		t.Fatalf("selection after the dialog fetch = %+v, want the book handed back for its owed source", sel)
+	}
+	r := f.run(t, b.ID)[b.ID]
+	if r.Candidate == nil || r.Candidate.Source != "Audnexus (Audible)" || len(owedRow(t, f, b.ID).OwedSources) != 0 {
+		t.Fatalf("the re-ask after the dialog fetch = {%+v}, owed %+v, want Audnexus answered and the debt cleared",
+			r.Candidate, owedRow(t, f, b.ID).OwedSources)
+	}
+}
+
+// A dialog search that hears from Audnexus clears the debt it owed; one that does
+// not leaves it. (The dialog is the other writer of the row.)
+func TestCandidateOwed_DialogFetchThatAnswersClearsTheDebt(t *testing.T) {
+	f, _, ol := newOwedServerFixture(t)
+	b := f.book(t, owedTitle, withASIN(refreshASIN))
+	f.run(t, b.ID)
+	ol.down.Store(false)
+	metadata.ResetThrottlesForTesting()
+	if _, err := f.mfs.FetchAndCache(context.Background(), b.ID, "", "", "", "",
+		metafetch.SearchOptions{BypassProviderThrottle: true}); err != nil {
+		t.Fatalf("dialog fetch: %v", err)
+	}
+	if got := owedRow(t, f, b.ID).OwedSources; len(got) != 0 {
+		t.Fatalf("a dialog search Audnexus answered left the debt: %+v", got)
+	}
+}
+
+// The fifth failed ask of a source is the last: the run says so (the result's
+// owed_gave_up, the refresh summary), the selection counts the book, and an
+// owner's forced retry then starts the schedule over instead of stepping on a
+// spent one.
+func TestCandidateOwed_GivingUpIsReportedAndAForcedRetryStartsOver(t *testing.T) {
+	f, _, _ := newOwedServerFixture(t)
+	b := f.book(t, owedTitle, withASIN(refreshASIN))
+	f.run(t, b.ID)
+
+	// The 4th ask has been spent; the 5th, due now, fails again.
+	metadata.ResetThrottlesForTesting()
+	setOwed(t, f, b.ID, database.OwedMaxAsks-1, 8*24*time.Hour)
+	r := f.run(t, b.ID)[b.ID]
+	if !slices.Equal(r.OwedGaveUp, []string{"Audnexus (Audible)"}) {
+		t.Fatalf("5th failed ask result OwedGaveUp = %v, want [Audnexus (Audible)]", r.OwedGaveUp)
+	}
+	if got := owedRow(t, f, b.ID).OwedSources["Audnexus (Audible)"].Attempts; got != database.OwedMaxAsks {
+		t.Fatalf("attempts = %d, want %d", got, database.OwedMaxAsks)
+	}
+	var tally candidateFetchTally
+	tally.record(r)
+	if got := tally.refreshSummary(); got != "refresh summary: refreshed 0, degraded 1 (upstream_5xx 1), failed 0, deferred 0, not asked 0, gave up on a source 1" {
+		t.Fatalf("summary = %q", got)
+	}
+	sel, err := unfetchedCandidateBookIDs(t.Context(), f.store, f.mfs, f.s.newFolderMemo(f.store), nil, 800)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sel.OwedExhausted != 1 || slices.Contains(sel.IDs, b.ID) {
+		t.Fatalf("selection = %+v, want the book counted as gave-up (1) and left alone", sel)
+	}
+	// The row says so to the review lane.
+	if got := owedRow(t, f, b.ID).OwedExhaustedSources(); !slices.Equal(got, []string{"Audnexus (Audible)"}) {
+		t.Fatalf("OwedExhaustedSources = %v", got)
+	}
+
+	// Spent: the plain run leaves it alone ...
+	metadata.ResetThrottlesForTesting()
+	before := callsOf(f)
+	plain := f.run(t, b.ID)[b.ID]
+	if plain.Cached != candidateCachedCandidates || len(plain.OwedGaveUp) != 0 || callsOf(f) != before {
+		t.Fatalf("a spent source was asked by a plain run: %+v", plain)
+	}
+	// ... and the owner's forced retry asks it again and, when it fails again,
+	// restarts at the first ask: not a sixth.
+	f.opCounter++
+	forced := runCandidateFetch(t, f.s, fmt.Sprintf("op-owed-forced-%d", f.opCounter), []string{b.ID}, true)[b.ID]
+	o := owedRow(t, f, b.ID).OwedSources["Audnexus (Audible)"]
+	if o.Attempts != 1 || o.Exhausted() || time.Since(o.Since) > time.Minute {
+		t.Fatalf("after a forced retry the source is %+v, want a fresh schedule (attempts 1, since now)", o)
+	}
+	if len(forced.OwedGaveUp) != 0 {
+		t.Fatalf("a forced retry that restarted the schedule reported giving up: %v", forced.OwedGaveUp)
+	}
+	// It is asked again on the new schedule's first backoff (6 h), not left spent.
+	ageOwed(t, f, b.ID, 7*time.Hour)
+	sel, err = unfetchedCandidateBookIDs(t.Context(), f.store, f.mfs, f.s.newFolderMemo(f.store), nil, 800)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(sel.IDs, b.ID) || sel.OwedExhausted != 0 {
+		t.Fatalf("selection after the forced retry = %+v, want the book due again and nothing gave up", sel)
+	}
+}
+
+// A row refetched after its TTL does not carry the debt it exhausted: a source
+// that fails in the refetch is recorded as a first failure with a fresh schedule.
+func TestCandidateOwed_TTLRefetchAfterExhaustionGetsAFreshSchedule(t *testing.T) {
+	f, _, _ := newOwedServerFixture(t)
+	b := f.book(t, owedTitle, withASIN(refreshASIN))
+	f.run(t, b.ID)
+	setOwed(t, f, b.ID, database.OwedMaxAsks, 40*24*time.Hour)
+	e := owedRow(t, f, b.ID)
+	e.FetchedAt = time.Now().UTC().Add(-(database.MetadataCacheTTL + 24*time.Hour))
+	if err := f.store.PutMetadataCache(e); err != nil {
+		t.Fatal(err)
+	}
+	metadata.ResetThrottlesForTesting()
+
+	f.run(t, b.ID) // the row is past its TTL: the book is searched afresh
+	o := owedRow(t, f, b.ID).OwedSources["Audnexus (Audible)"]
+	if o.Attempts != 1 || o.Exhausted() || time.Since(o.Since) > time.Minute {
+		t.Fatalf("a TTL refetch left the source %+v, want a fresh schedule (attempts 1, since now)", o)
+	}
+}
+
+// Two ops on one book in the same window charge ONE ask. The server's per-book
+// claim (bookFetchClaims) makes the second wait for the first and then read the
+// row it left, so it is served from the cache and asks Audnexus nothing; the
+// charge guard (metafetch.OwedUpdate.Seen) is the second line, below.
+func TestCandidateOwed_TwoConcurrentOpsChargeOneAsk(t *testing.T) {
+	f, cc, _ := newOwedServerFixture(t)
+	b := f.book(t, owedTitle, withASIN(refreshASIN))
+	f.run(t, b.ID)
+	setOwed(t, f, b.ID, 1, 7*time.Hour)
+	metadata.ResetThrottlesForTesting()
+	before := cc.get(metadata.SourceIDAudnexus)
+
+	params, err := json.Marshal(metadataCandidateFetchOpParams{BookIDs: []string{b.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = f.s.runMetadataCandidateFetchOp(context.Background(), params,
+				&resumeRecorder{opID: fmt.Sprintf("op-owed-concurrent-%d", i)})
+		}()
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("op %d: %v", i, err)
+		}
+	}
+	if got := owedRow(t, f, b.ID).OwedSources["Audnexus (Audible)"].Attempts; got != 2 {
+		t.Fatalf("attempts after two concurrent ops = %d, want 2 (one ask charged, not two)", got)
+	}
+	if got := cc.get(metadata.SourceIDAudnexus) - before; got != 1 {
+		t.Fatalf("Audnexus lookups across two concurrent ops = %d, want 1", got)
+	}
+}
+
+// The writer the per-book claim does NOT cover is the search dialog's plain
+// fetch. While an op is mid-ask (its row read, Audnexus not yet answered), the
+// owner's dialog search asks Audnexus too and charges that window's ask first; the
+// op, recording after it, sees the row's last attempt has moved and charges nothing.
+// Run with -race: the two writers share the row.
+func TestCandidateOwed_OpAndDialogInTheSameWindowChargeOneAsk(t *testing.T) {
+	var gate atomic.Bool
+	var calls atomic.Int32
+	inLookup, release := make(chan struct{}), make(chan struct{})
+	ol := &owedLookup{}
+	f, _ := newRefreshFixtureRecord(t, func(provider string) (*metadata.BookMetadata, error) {
+		if provider == metadata.SourceIDAudnexus && gate.Load() && calls.Add(1) == 1 {
+			close(inLookup) // the op's own ask: hold it until the dialog has answered
+			select {
+			case <-release:
+			case <-time.After(10 * time.Second):
+			}
+		}
+		return ol.lookup(provider)
+	})
+	ol.down.Store(true)
+	f.google.answer = answersTitle(owedTitle, "Bruce Wayne")
+	b := f.book(t, owedTitle, withASIN(refreshASIN))
+	f.run(t, b.ID)
+	setOwed(t, f, b.ID, 1, 7*time.Hour)
+	metadata.ResetThrottlesForTesting()
+	gate.Store(true)
+
+	params, err := json.Marshal(metadataCandidateFetchOpParams{BookIDs: []string{b.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opDone := make(chan error, 1)
+	go func() {
+		opDone <- f.s.runMetadataCandidateFetchOp(context.Background(), params, &resumeRecorder{opID: "op-owed-vs-dialog"})
+	}()
+	select {
+	case <-inLookup:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the op never reached Audnexus")
+	}
+	// The dialog searches the same title with the same author hint, so its row
+	// has the op's source hash and fingerprint: the op's record would find a
+	// row it may write (with another hash it would find none, and the guard would
+	// never be reached).
+	if _, err := f.mfs.FetchAndCache(context.Background(), b.ID, owedTitle, "", "", "",
+		metafetch.SearchOptions{BypassProviderThrottle: true}); err != nil {
+		t.Fatalf("dialog fetch: %v", err)
+	}
+	// The dialog is the first writer of the window and charges its ask.
+	if got := owedRow(t, f, b.ID).OwedSources["Audnexus (Audible)"].Attempts; got != 2 {
+		t.Fatalf("attempts after the dialog's fetch = %d, want 2", got)
+	}
+	close(release)
+	if err := <-opDone; err != nil {
+		t.Fatalf("op: %v", err)
+	}
+	if got := owedRow(t, f, b.ID).OwedSources["Audnexus (Audible)"].Attempts; got != 2 {
+		t.Fatalf("attempts after an op and a dialog search in one window = %d, want 2 (one ask charged, not two)", got)
+	}
+}
+
+// The selection reads the service's clock, the one the verdict and the recorder
+// read, not the wall clock: moving it forward makes a row's backoff run out in
+// the selection exactly as it does in the verdict.
+func TestCandidateOwed_SelectionReadsTheServiceClock(t *testing.T) {
+	f, _, _ := newOwedServerFixture(t)
+	b := f.book(t, owedTitle, withASIN(refreshASIN))
+	f.run(t, b.ID) // owed Audnexus, asked just now: due in 6 h
+	pick := func() unfetchedSelection {
+		sel, err := unfetchedCandidateBookIDs(t.Context(), f.store, f.mfs, f.s.newFolderMemo(f.store), nil, 800)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sel
+	}
+	if sel := pick(); slices.Contains(sel.IDs, b.ID) || sel.OwedWaiting != 1 {
+		t.Fatalf("selection before the backoff = %+v, want the book waiting", sel)
+	}
+	t.Cleanup(metafetch.SetClockForTesting(func() time.Time { return time.Now().UTC().Add(7 * time.Hour) }))
+	if sel := pick(); !slices.Contains(sel.IDs, b.ID) || sel.OwedDue != 1 {
+		t.Fatalf("selection 7 h on the service clock = %+v, want the book due", sel)
 	}
 }
