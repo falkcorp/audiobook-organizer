@@ -1,7 +1,7 @@
 // file: internal/metafetch/batch_verdict_test.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: fcb57db8-150d-40b2-a501-0934fa3be00b
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 // Tests for the batch candidate fetch's durable verdicts (CachedBatchVerdict):
 // when a book may be answered from the candidate cache without a provider
@@ -91,9 +91,7 @@ func (f *verdictFixture) batchFetch(id string) BatchVerdict {
 
 func withNow(t *testing.T, at time.Time) {
 	t.Helper()
-	prev := nowUTC
-	nowUTC = func() time.Time { return at }
-	t.Cleanup(func() { nowUTC = prev })
+	t.Cleanup(SetClockForTesting(func() time.Time { return at }))
 }
 
 // A provider whose ladder did not finish has not answered. Two ways the
