@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file_test.go
-// version: 1.0.6
+// version: 1.1.0
 // guid: 91e4c07b-5a63-4d28-8f10-2b74e9d6a35c
-// last-edited: 2026-11-15
+// last-edited: 2026-11-17
 
 package maintenance
 
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 )
 
 // TestApplyBookIntroFieldsTouchesNothingElse is THE guard on this migration.
@@ -278,5 +279,73 @@ func fillAllFields(t *testing.T, v reflect.Value, seed int) {
 				*tv = time.Unix(int64(1500000000+i), 0)
 			}
 		}
+	}
+}
+
+// R3-m4: the migration replaces the file's transcript, so the classification it
+// carries must describe the NEW text. Before, IntroParse stayed what it was, and with
+// overwrite=true a file that held a chapter marker and received a title announcement
+// kept the chapter-marker parse: a stored parse describing text the row no longer
+// holds. The parse is derived from the copied text by the same derivation the re-parse
+// op uses.
+func TestApplyBookIntroFieldsDerivesTheParseFromTheCopiedText(t *testing.T) {
+	text := "The Killing Joke, written by Alfred Pennyworth, read by Selina Kyle"
+	stale := &database.IntroParse{Version: transcribe.ClipParserVersion, Kind: "chapter_marker", ChapterNumber: 12, HasChapterNumber: true}
+	dst := database.BookFile{ID: "f1", IntroTranscription: new("Chapter 12. The Long Halloween."), IntroParse: stale}
+
+	applyBookIntroFieldsToFile(&dst, database.Book{IntroTranscription: &text})
+
+	want := introParseFromClip(transcribe.ParseClip(text))
+	if dst.IntroParse == nil || *dst.IntroParse != want {
+		t.Fatalf("IntroParse = %+v, want the parse of the copied text %+v", dst.IntroParse, want)
+	}
+	if dst.IntroParse.Kind != "title_announcement" {
+		t.Errorf("kind = %q, want title_announcement", dst.IntroParse.Kind)
+	}
+	if *stale != (database.IntroParse{Version: transcribe.ClipParserVersion, Kind: "chapter_marker", ChapterNumber: 12, HasChapterNumber: true}) {
+		t.Errorf("the previous parse was mutated in place: %+v", stale)
+	}
+
+	// No text, no parse: nothing to describe.
+	applyBookIntroFieldsToFile(&dst, database.Book{})
+	if dst.IntroParse != nil {
+		t.Errorf("IntroParse = %+v with no transcript copied, want nil", dst.IntroParse)
+	}
+}
+
+// R3-m4 through the real store and the merge classes: with overwrite=true the file's
+// stored text and parse are both replaced, and the stored parse is the new text's.
+func TestMigrateOneBookOverwriteReplacesTheParseWithTheTranscript(t *testing.T) {
+	s := newRepairPebble(t)
+	text := "The Killing Joke, written by Alfred Pennyworth, read by Selina Kyle"
+	book, err := s.CreateBook(&database.Book{Title: "Batman: The Killing Joke", FilePath: "/lib/Gotham/Killing-Joke", IntroTranscription: &text})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &database.BookFile{BookID: book.ID, FilePath: "/lib/Gotham/Killing-Joke/01.m4b", FileHash: "gotham-hash-01", Duration: database.Secs(600), FileSize: 4096}
+	if err := s.CreateBookFile(f); err != nil {
+		t.Fatal(err)
+	}
+	own := "Chapter 12. The Long Halloween."
+	if _, err := s.SetBookFileIntro(book.ID, f.ID, database.BookFileIntroResult{
+		SourceHash: f.FileHash, RunOpID: "op-batman", Status: "unparsed", Done: true, Transcript: &own,
+		Parse: &database.IntroParse{Version: transcribe.ClipParserVersion, Kind: "chapter_marker", ChapterNumber: 12, HasChapterNumber: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := t6g4MigrateOneBook(s, s, slog.Default(), book.ID, false, true); got != migrateWrote {
+		t.Fatalf("migrate = %q, want %q", got, migrateWrote)
+	}
+	row, err := s.GetBookFileByID(book.ID, f.ID)
+	if err != nil || row == nil {
+		t.Fatalf("read: %v %v", row, err)
+	}
+	if row.IntroTranscription == nil || *row.IntroTranscription != text {
+		t.Fatalf("transcript = %v, want the book's", row.IntroTranscription)
+	}
+	want := introParseFromClip(transcribe.ParseClip(text))
+	if row.IntroParse == nil || *row.IntroParse != want {
+		t.Errorf("stored parse = %+v, want the parse of the stored text %+v", row.IntroParse, want)
 	}
 }
