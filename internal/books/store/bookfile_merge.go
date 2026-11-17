@@ -1,7 +1,7 @@
 // file: internal/books/store/bookfile_merge.go
-// version: 1.9.4
+// version: 1.9.5
 // guid: 0f6bdcdf-d13a-46a8-90f7-5d62bbccd3a8
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package store
 
@@ -279,6 +279,9 @@ var bookFileFieldClasses = map[string]bookFileFieldRule{
 	// The worker that gave that strike; travels with the strikes.
 	"IntroTimeoutWorker": preserveAudio,
 	"IntroMeta":          {class: bfPreserveAlways, derived: derivedAudio}, // memdb-stripped
+	// What the transcript IS, derived from IntroTranscription alone: lives and dies
+	// with the transcript, memdb-stripped like it.
+	"IntroParse": {class: bfPreserveAlways, derived: derivedAudio},
 }
 
 // bookFileRulesByIndex is bookFileFieldClasses resolved to BookFile struct
