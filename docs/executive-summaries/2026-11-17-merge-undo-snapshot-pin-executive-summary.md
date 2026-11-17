@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-17-merge-undo-snapshot-pin-executive-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 6d2c9e41-0b7a-4f3d-8e15-a3c7b94d1f62 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -11,11 +11,15 @@ and merges nothing.
 
 ## Executive Summary
 
-- When the library merges two copies of the same book without anyone clicking
-  merge (the file-hash pass), or when the owner merges a whole cluster of copies
-  at once, it writes down how to put things back: it keeps a saved copy of each
-  book as it was just before the merge, and a journal entry that points at those
-  saved copies. Undoing the merge means restoring both books from them.
+- When the library merges copies of the same book without anyone clicking merge,
+  it writes down how to put things back: it keeps a saved copy of each book as it
+  was just before the merge, and a journal entry that points at those saved
+  copies. Undoing the merge means restoring the books from them. Every merge the
+  system records this way is covered by this change: the pass that merges
+  automatically when it is certain (auto-resolve, when it is switched on), the
+  merge the language model suggests, a single pair merged from the review screen,
+  a bulk merge from a filter, the file-hash pass, and a whole cluster merged at
+  once by the owner.
 - The library also trims old saved copies of a book to save space. That trim did
   not know the journal existed. It kept the newest few copies of each book and
   deleted the rest, so after a handful of ordinary edits to a book and one trim,
@@ -42,7 +46,22 @@ and merges nothing.
   their own. There is no timer on this: an entry whose merge failed keeps that
   one copy for as long as it exists, and the preview counts such entries so they
   can be looked at. An entry whose merge was refused before it wrote anything is
-  closed and keeps nothing.
+  closed and keeps nothing. (A closed entry still counts as holding its book, so
+  the book is not deleted for good from the trash while the entry exists. That is
+  the cautious choice and it is unchanged.)
+- An entry written before a merge now lists every book the merge involves, not
+  only the two it expects to be the winner and the loser. If the merge turns out to
+  have kept a different book than the one expected, and the step that completes
+  the entries then fails part way, no book of the merge is left without a saved
+  copy being kept for it.
+- If, after a merge, the library cannot read a book's list of saved copies to
+  complete the entry, it now leaves the entry unfinished and says so in the log,
+  rather than completing it with "no saved copy". An entry completed that way would
+  have let the trim delete the copy the undo needs, and the undo would have put
+  one book back and left the other where it was.
+- Two merges that start in the same instant can no longer overwrite each other's
+  entry. A new entry is only written where there is none, and a merge that is
+  refused closes only the entry it wrote itself.
 - If the library cannot read a book's list of saved copies when a merge is about
   to start, the merge now refuses to run and writes nothing, instead of noting
   "this book had no saved copies", which would have been untrue.

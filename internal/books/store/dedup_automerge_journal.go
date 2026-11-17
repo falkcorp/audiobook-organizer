@@ -1,5 +1,5 @@
 // file: internal/books/store/dedup_automerge_journal.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8b2f7d14-6c93-4a05-9e21-3f8a5c0d7e46
 // last-edited: 2026-11-17
 
@@ -8,6 +8,7 @@ package store
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -18,6 +19,13 @@ import (
 // one Pebble DB (every NewEmbeddingStoreFromStore call builds another), and a
 // reader holding a snapshot must see a write made through any of them.
 var autoMergeJournalGen atomic.Uint64
+
+// autoMergeJournalMu serialises every journal write for the same reason the
+// generation is package-level: the several EmbeddingStore values over one DB must
+// share it. It makes "write only if absent" and "close only the row I wrote" a
+// read and a write that nothing can interleave with. Pebble holds an exclusive
+// process lock on the DB, so no other process writes the journal.
+var autoMergeJournalMu sync.Mutex
 
 // AutoMergeJournalGeneration is how many times this process has written an
 // auto-merge journal entry. A snapshot of the journal (OpenAutoMergeLosers)
@@ -117,13 +125,43 @@ type AutoMergeJournalEntry struct {
 	// entry pins no snapshot. It stays Provisional on purpose, so a binary that
 	// predates the field still refuses to undo it and still treats its loser as
 	// open. UnmergeAuto and the snapshot pins both ignore an aborted entry.
+	//
+	// It does NOT release the loser from the trash purge: OpenAutoMergeLosers
+	// skips only UndoneAt, so a closed row still holds its loser for as long as the
+	// row exists. That is the conservative answer (the row is provisional, and a
+	// provisional row's loser may have been soft-deleted), and it is deliberate.
 	AbortedAt int64 `json:"aborted_at,omitempty"`
+
+	// Participants is, on a provisional entry written by this version, EVERY book
+	// of the merge with the baseline recorded for it, not only this entry's winner
+	// and loser. The post-merge patch rewrites the merge's rows against the winner
+	// MergeBooks actually elected, so a row whose patch write fails still describes
+	// the whole cluster: while any such row is live the snapshot prune keeps one
+	// snapshot for each participant (store.collectAutoMergeSnapshotPins). A row
+	// without the list (an older one) behaves as before: its winner and loser only.
+	// The patch drops it with the other baseline fields. A binary that predates the
+	// field ignores it and still floors the winner and loser.
+	Participants []AutoMergeJournalParticipant `json:"participants,omitempty"`
+
+	// RowID identifies the write that created a provisional entry. It is how the
+	// merge that wrote a row recognises it later: a refused merge closes its row
+	// only while the stored row still carries the RowID that merge wrote
+	// (CloseAutoMergeJournalEntry), so a different merge's row at the same key is
+	// never overwritten. The patch drops it: a finalized row is nobody's to close.
+	RowID string `json:"row_id,omitempty"`
 
 	// UndoneAt is when UnmergeAuto reverted this entry (UnixNano), zero
 	// before. UnmergeAuto refuses an entry already undone: its reverts
 	// rewrite both books' whole rows from the pre-merge snapshots, so a
 	// replay after the books were merged again would revert that later merge.
 	UndoneAt int64 `json:"undone_at,omitempty"`
+}
+
+// AutoMergeJournalParticipant is one book of a merge and its baseline: the UnixNano
+// of its newest book_ver snapshot when the merge began (0: it had none).
+type AutoMergeJournalParticipant struct {
+	BookID     string `json:"book_id"`
+	BaselineTS int64  `json:"baseline_ts"`
 }
 
 // AutoMergeJournalSibling records one sibling a merge moved: from FromGroupID
@@ -138,10 +176,21 @@ type AutoMergeJournalSibling struct {
 
 // PutAutoMergeJournalEntry writes an auto-merge journal entry keyed by
 // entry.MergedAt (nanoseconds). Mirrors UpsertLabeledExample's storage pattern.
+//
+// It replaces whatever is at the key. A merge's first write of a row must use
+// PutAutoMergeJournalEntryIfAbsent instead, so two merges cannot share a key.
 func (s *EmbeddingStore) PutAutoMergeJournalEntry(entry AutoMergeJournalEntry) (string, error) {
 	if err := s.checkClosed(); err != nil {
 		return "", err
 	}
+	autoMergeJournalMu.Lock()
+	defer autoMergeJournalMu.Unlock()
+	return s.putAutoMergeJournalEntryLocked(entry)
+}
+
+// putAutoMergeJournalEntryLocked writes the entry; the caller holds
+// autoMergeJournalMu.
+func (s *EmbeddingStore) putAutoMergeJournalEntryLocked(entry AutoMergeJournalEntry) (string, error) {
 	key := autoMergeJournalKey(entry.MergedAt)
 	entry.Key = string(key)
 	data, err := json.Marshal(entry)
@@ -155,6 +204,70 @@ func (s *EmbeddingStore) PutAutoMergeJournalEntry(entry AutoMergeJournalEntry) (
 	// before the write or will see the write on its next scan.
 	autoMergeJournalGen.Add(1)
 	return entry.Key, nil
+}
+
+// PutAutoMergeJournalEntryIfAbsent writes the entry only when nothing is stored at
+// its key. created=false (and a nil error) means the key is taken and nothing was
+// written: the caller picks a new MergedAt and tries again. Keys come from a
+// nanosecond clock, so two merges starting together can ask for the same one.
+func (s *EmbeddingStore) PutAutoMergeJournalEntryIfAbsent(entry AutoMergeJournalEntry) (key string, created bool, err error) {
+	if err := s.checkClosed(); err != nil {
+		return "", false, err
+	}
+	autoMergeJournalMu.Lock()
+	defer autoMergeJournalMu.Unlock()
+	k := autoMergeJournalKey(entry.MergedAt)
+	val, closer, gerr := s.db.Get(k)
+	switch {
+	case gerr == nil:
+		_ = val
+		_ = closer.Close()
+		return string(k), false, nil
+	case gerr != pebble.ErrNotFound:
+		return "", false, fmt.Errorf("check automerge journal key %s: %w", k, gerr)
+	}
+	key, err = s.putAutoMergeJournalEntryLocked(entry)
+	if err != nil {
+		return "", false, err
+	}
+	return key, true, nil
+}
+
+// CloseAutoMergeJournalEntry sets AbortedAt on the entry at key, but only while
+// the stored entry still carries rowID, i.e. is the row the caller wrote. It
+// returns closed=false (nil error) when the key is empty or holds anything else,
+// including a different merge's row or this merge's own row once it was patched,
+// and writes nothing then. A blank rowID never matches.
+func (s *EmbeddingStore) CloseAutoMergeJournalEntry(key, rowID string, abortedAt int64) (closed bool, err error) {
+	if err := s.checkClosed(); err != nil {
+		return false, err
+	}
+	if rowID == "" {
+		return false, nil
+	}
+	autoMergeJournalMu.Lock()
+	defer autoMergeJournalMu.Unlock()
+	val, closer, gerr := s.db.Get([]byte(key))
+	if gerr == pebble.ErrNotFound {
+		return false, nil
+	}
+	if gerr != nil {
+		return false, fmt.Errorf("get automerge journal entry %s: %w", key, gerr)
+	}
+	var entry AutoMergeJournalEntry
+	uerr := json.Unmarshal(val, &entry)
+	_ = closer.Close()
+	if uerr != nil {
+		return false, fmt.Errorf("unmarshal automerge journal entry %s: %w", key, uerr)
+	}
+	if entry.RowID != rowID {
+		return false, nil
+	}
+	entry.AbortedAt = abortedAt
+	if _, err := s.putAutoMergeJournalEntryLocked(entry); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // GetAutoMergeJournalEntry returns the entry at the given full key, or nil if
@@ -214,7 +327,9 @@ func (s *EmbeddingStore) ListAutoMergeJournalEntries(limit int) ([]AutoMergeJour
 // (Engine.UnmergeAuto) has not run, mapped to the journal key that holds it.
 // Gen is AutoMergeJournalGeneration read before the scan.
 //
-// An entry is open while UndoneAt is zero. A PROVISIONAL entry counts too:
+// An entry is open while UndoneAt is zero. A closed one (AbortedAt) is open here
+// too, on purpose: it stays provisional and holds its loser from the purge for as
+// long as it exists. A PROVISIONAL entry counts too:
 // it is written before the merge and patched after it, so the loser can be
 // soft-deleted while the entry is still provisional, and UnmergeAuto's own
 // refusal for one tells the operator to restore the loser from the trash.
@@ -279,4 +394,17 @@ func (e AutoMergeJournalEntry) provisionalFloors() (winner, loser int64) {
 		return e.WinnerBaselineTS, e.LoserBaselineTS
 	}
 	return e.MergedAt, e.MergedAt
+}
+
+// addProvisionalFloors records on pins the floor this provisional entry holds for
+// each book it covers: its winner and loser as provisionalFloors gives them, and
+// every other participant it lists. An entry without a participant list covers the
+// winner and the loser, as entries always did.
+func (e AutoMergeJournalEntry) addProvisionalFloors(pins *SnapshotPins) {
+	wf, lf := e.provisionalFloors()
+	pins.addFloor(e.WinnerID, wf)
+	pins.addFloor(e.LoserID, lf)
+	for _, p := range e.Participants {
+		pins.addFloor(p.BookID, p.BaselineTS)
+	}
 }

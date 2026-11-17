@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/prune_book_snapshots.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f3714dde-e788-468a-958a-5514eebcd952
 // last-edited: 2026-11-17
 
@@ -106,9 +106,12 @@ type PruneBookSnapshotsResult struct {
 	DryRun    bool `json:"dry_run"`
 	KeepCount int  `json:"keep_count"`
 	// Complete is false on the result a dry run stores before the per-book pass:
-	// the merge journal audit below is final, the per-book counts are not. A run
-	// that ends early (a failed book, a cancel) leaves that result in place, so the
-	// audit survives.
+	// the merge journal audit below is final, the per-book counts are not. The result
+	// of a pass that finishes replaces it with complete=true, whatever the books
+	// did: a book that fails is counted in Failed and does not end the pass. A run
+	// that ends before the pass finishes (a cancel, or an error that stops it)
+	// leaves the placeholder in place, so the audit survives and the partial counts
+	// are never stored as if they were the whole library.
 	Complete bool `json:"complete"`
 	// BooksScanned is every book visited.
 	BooksScanned int `json:"books_scanned"`
@@ -264,6 +267,14 @@ func (j *pruneBookSnapshotsJob) Run(ctx context.Context, store maintenance.JobSt
 	}
 	if werr := g.Wait(); werr != nil {
 		return werr
+	}
+	// A cancel that arrives after the last book was handed to a worker makes the
+	// workers skip their books and return nil, so Wait reports success for a pass
+	// that visited only some of the library. The parent context is checked here, not
+	// the group's (Wait cancels that one): a cancelled run returns before it stores
+	// a result that would read as complete.
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
 	}
 
 	verb := "Deleted"

@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/prune_book_snapshots_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8bb33b18-e9eb-4210-87e4-f87bb86bf4ae
 // last-edited: 2026-11-17
 
@@ -467,4 +467,32 @@ func TestPruneBookSnapshotsJob_DryRunStoresTheAuditBeforeThePerBookPass(t *testi
 	assert.Equal(t, false, atFirstPlan["complete"])
 	assert.EqualValues(t, 9, atFirstPlan["live_merge_journals"])
 	assert.Equal(t, true, capture.decode(t)["complete"], "the finished run replaces it")
+}
+
+// A cancel that arrives while the last book is being planned makes the workers skip
+// the books still queued and return nil, so errgroup's Wait reports success. The
+// run must still return the cancellation and must not store complete:true with
+// the partial counts: the audit placeholder, complete:false, is what is left.
+func TestPruneBookSnapshotsJob_CancelDuringThePassNeverStoresACompleteResult(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var capture resultCapture
+	store := &database.MockStore{
+		ListBookIDsFunc: func() ([]string, error) { return []string{"only"}, nil },
+		PlanBookSnapshotPruneFunc: func(string, int) (database.BookSnapshotPrunePlan, error) {
+			cancel() // the cancel lands after the last book was handed to a worker
+			return database.BookSnapshotPrunePlan{Total: 12, Delete: 2}, nil
+		},
+		AuditMergeJournalSnapshotsFunc: func(int) (database.MergeJournalSnapshotAudit, error) {
+			return database.MergeJournalSnapshotAudit{LiveEntries: 3}, nil
+		},
+	}
+	j, err := maintenance.Get("prune-book-snapshots")
+	require.NoError(t, err)
+	err = j.Run(maintenance.WithResultSetter(ctx, capture.set), store, &noopReporter{}, true)
+	require.ErrorIs(t, err, context.Canceled)
+
+	got := capture.decode(t)
+	assert.Equal(t, false, got["complete"], "the partial counts are not stored as the whole library's")
+	assert.EqualValues(t, 3, got["live_merge_journals"], "the audit survives")
 }
