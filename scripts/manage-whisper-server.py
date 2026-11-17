@@ -1,14 +1,14 @@
 # file: scripts/manage-whisper-server.py
-# version: 1.1.1
+# version: 1.2.0
 # guid: f7a8b9c0-d1e2-3456-fabc-678901234567
-# last-edited: 2026-10-20
+# last-edited: 2026-11-17
 #
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["pywinrm>=0.4.3"]
 # ///
 #
-# Manages the Whisper transcription server on the Windows GPU machine via
+# Manages the Whisper transcription server on the Windows machine (GPU or CPU) via
 # WinRM (HTTP port 5985). Works from macOS or Linux — no WSMan client library,
 # no OpenSSH, no PowerShell for macOS needed.
 #
@@ -16,14 +16,17 @@
 #   1. Run scripts/setup-winrm-windows.ps1 as Administrator on the Windows machine
 #   2. uv installed locally: curl -LsSf https://astral.sh/uv/install.sh | sh
 #
-# The GPU host is REQUIRED via the ABK_GPU_HOST environment variable
-# (hostname or IP, e.g. <windows-gpu-host>) — there is no internal-network
-# default.
+# The host is REQUIRED via the ABK_GPU_HOST environment variable (hostname or
+# IP, e.g. <windows-gpu-host>) — there is no internal-network default — and the
+# Windows account via WHISPER_WIN_USER. --deploy copies whisper_server.py AND the
+# two modules it imports (whisper_path_pipeline.py, whisper_machine_id.py) into
+# that account's profile folder: the three go together or the server will not start.
 #
 # Usage:
 #   ABK_GPU_HOST=<windows-gpu-host> uv run scripts/manage-whisper-server.py --deploy
 #   uv run scripts/manage-whisper-server.py --restart           # kill + relaunch
 #   uv run scripts/manage-whisper-server.py --deploy --restart  # both (most common)
+#   uv run scripts/manage-whisper-server.py --restart --device cpu   # force CPU
 #   uv run scripts/manage-whisper-server.py --status            # check /health
 #
 # Credentials: prompted on first run; pass via env vars to skip the prompt:
@@ -50,8 +53,14 @@ if not COMPUTER:
         "(hostname or IP of the Windows GPU machine, e.g. <windows-gpu-host>)"
     )
     sys.exit(1)
-WIN_USER = "jdfalk"
-REMOTE_PATH = r"C:\Users\jdfalk\whisper_server.py"
+WIN_USER = os.environ.get("WHISPER_WIN_USER")
+if not WIN_USER:
+    print("ERROR: WHISPER_WIN_USER environment variable is required (the Windows account name)")
+    sys.exit(1)
+REMOTE_DIR = rf"C:\Users\{WIN_USER}"
+REMOTE_PATH = rf"{REMOTE_DIR}\whisper_server.py"
+# The server imports these from its own folder; they are deployed with it.
+SERVER_FILES = ("whisper_server.py", "whisper_path_pipeline.py", "whisper_machine_id.py")
 MODEL = "base.en"
 HEALTH_URL = f"http://{COMPUTER}:8000/health"
 
@@ -91,31 +100,35 @@ def cmd_status():
 
 
 def cmd_deploy(session: winrm.Session):
-    # Find whisper_server.py relative to this script's directory.
+    # The server files live next to this script.
     here = os.path.dirname(os.path.abspath(__file__))
-    local_path = os.path.join(here, "whisper_server.py")
-    if not os.path.exists(local_path):
-        print(f"ERROR: cannot find {local_path}", file=sys.stderr)
-        sys.exit(1)
+    for name in SERVER_FILES:
+        local_path = os.path.join(here, name)
+        if not os.path.exists(local_path):
+            print(f"ERROR: cannot find {local_path}", file=sys.stderr)
+            sys.exit(1)
 
-    print(f"==> Deploying {local_path} → {COMPUTER}:{REMOTE_PATH}")
-    with open(local_path, "rb") as f:
-        encoded = base64.b64encode(f.read()).decode()
+    for name in SERVER_FILES:
+        local_path = os.path.join(here, name)
+        remote_path = rf"{REMOTE_DIR}\{name}"
+        print(f"==> Deploying {local_path} → {COMPUTER}:{remote_path}")
+        with open(local_path, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode()
 
-    # Decode on Windows and write to disk.
-    run_ps(
-        session,
-        f"""
+        # Decode on Windows and write to disk.
+        run_ps(
+            session,
+            f"""
 $bytes = [Convert]::FromBase64String('{encoded}')
-[System.IO.File]::WriteAllBytes('{REMOTE_PATH}', $bytes)
-Write-Host "Written $($bytes.Length) bytes to {REMOTE_PATH}"
+[System.IO.File]::WriteAllBytes('{remote_path}', $bytes)
+Write-Host "Written $($bytes.Length) bytes to {remote_path}"
 """,
-    )
+        )
     print("  Deployed OK")
 
 
-def cmd_restart(session: winrm.Session):
-    print(f"==> Restarting Whisper server on {COMPUTER} (model={MODEL})")
+def cmd_restart(session: winrm.Session, device: str):
+    print(f"==> Restarting Whisper server on {COMPUTER} (model={MODEL}, device={device})")
 
     # Kill any process listening on port 8000.
     kill_script = r"""
@@ -144,7 +157,7 @@ if (-not (Test-Path $uvExe)) {{
 $log = "$env:USERPROFILE\whisper_server.log"
 $p = Start-Process `
     -FilePath $uvExe `
-    -ArgumentList "run", "{REMOTE_PATH}", "{MODEL}" `
+    -ArgumentList "run", "{REMOTE_PATH}", "{MODEL}", "--device", "{device}" `
     -RedirectStandardOutput $log `
     -RedirectStandardError  "$log.err" `
     -WindowStyle Hidden `
@@ -164,9 +177,19 @@ Write-Host "Started PID $($p.Id)"
 
 def main():
     parser = argparse.ArgumentParser(description="Manage the remote Whisper server")
-    parser.add_argument("--deploy", action="store_true", help="Copy whisper_server.py to Windows")
+    parser.add_argument(
+        "--deploy",
+        action="store_true",
+        help="Copy whisper_server.py and its two sibling modules to Windows",
+    )
     parser.add_argument("--restart", action="store_true", help="Kill + relaunch the server")
     parser.add_argument("--status", action="store_true", help="Check /health (no auth needed)")
+    parser.add_argument(
+        "--device",
+        choices=("auto", "cpu", "cuda"),
+        default="auto",
+        help="inference device for --restart (default: auto = CUDA if it loads, else CPU)",
+    )
     args = parser.parse_args()
 
     if not any([args.deploy, args.restart, args.status]):
@@ -187,7 +210,7 @@ def main():
     if args.deploy:
         cmd_deploy(session)
     if args.restart:
-        cmd_restart(session)
+        cmd_restart(session, args.device)
 
 
 if __name__ == "__main__":
