@@ -1488,8 +1488,14 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 							log.Info("series-denumber: emptied series was deleted by someone else before this run's delete", "series", src.ID)
 							outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: already deleted by someone else"})
 						case derr != nil:
+							// The store would not answer "unreferenced" (a memdb that is not
+							// serving or is missing rows refuses rather than guess, the series
+							// is held, or the write failed): the series stays, the run fails,
+							// and the report says why, as it does for the count above.
 							failed++
+							heldDelete++
 							log.Warn("series-denumber: DeleteSeriesIfUnreferenced failed", "series", src.ID, "err", derr)
+							outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: the delete could not verify the series is unreferenced: " + derr.Error()})
 						case !gone:
 							heldDelete++
 							log.Warn("series-denumber: not deleting emptied series: a book was written into it before the delete", "series", src.ID, "name", src.Name)

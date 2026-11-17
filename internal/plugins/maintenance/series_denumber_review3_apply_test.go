@@ -418,12 +418,20 @@ func TestSeriesDenumber_Round3_M3_AFailingCheckAndDeleteFailsTheRunAndVoidsItsRo
 	if err == nil {
 		t.Fatalf("a failed delete was reported as success")
 	}
+	if !strings.Contains(err.Error(), "1 emptied series NOT deleted") {
+		t.Errorf("the failure summary %q does not count the series that was kept", err)
+	}
 	rows := seriesRowDeleteRows(l)
 	if len(rows) != 1 || !rows[0].Voided {
 		t.Errorf("want one voided series_row_delete row, got %+v", rows)
 	}
 	if l.deleted[11] {
 		t.Errorf("the series was deleted although the check-and-delete failed")
+	}
+	// The failed series is a row in the outcome report, not a silent gap: a
+	// degraded memdb makes the store refuse, and the operator reads why.
+	if applied := readFile(t, l.reportPath+".applied"); !strings.Contains(applied, "kept: the delete could not verify the series is unreferenced") {
+		t.Errorf("the outcome report has no row for the series whose delete failed:\n%s", applied)
 	}
 }
 

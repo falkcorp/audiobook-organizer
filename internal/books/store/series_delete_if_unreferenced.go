@@ -63,11 +63,27 @@ var (
 // the reverse order would deadlock with it. nameIdx.series is the lock
 // DeleteSeries, CreateSeries, RenameSeriesIf and the rest of the series
 // writers take. The book stripes are the lock every writer of a book row takes
-// around its read and its commit. The row is written in exactly two places,
-// createBook and updateBookLockedMode (UpdateBook, ModifyBook and every in-store
-// helper built on them), and removed in one, deleteBook; each runs with the
-// row's stripe held (the credit, narrator-credit, signature and hash-index
-// writers take it too). series_id lives only in that row.
+// around its read and its commit. The `book:<id>` row is written by three
+// functions and removed by one, and each runs with the row's lockBook stripe
+// held: createBook (the row's first write); updateBookLockedMode (every update:
+// UpdateBook, ModifyBook, ModifyBookCredits, ClearBookSignature and the helpers
+// built on them, all of which take the stripe before calling it);
+// commitBookSigMigration (rewrites the row it read under the stripe with the
+// signature bytes stripped, series_id untouched; reached only from
+// MigrateBookSigToSidecar); and deleteBook (the removal, which takes the stripe
+// before the owner stripe). The credit writers (SetBookAuthors and its
+// narrator twin) take their own stripes and do not touch the book row or its
+// memdb entry's series_id. series_id lives only in the book row.
+//
+// WHY THE REVERSE ORDER IS NOT USED, and why this one cannot deadlock: no holder
+// of nameIdx.series (CreateSeries, UpdateSeriesName, RenameSeriesIf,
+// RenameSeriesIfCurrent, DeleteSeries, HoldSeries, RestoreSeries) takes a book
+// stripe, an owner stripe or a credit stripe: they read and write series rows,
+// the name index and the series memdb table only. The change observer they fire
+// is the one place outside this package's control; the server's implementation
+// queues its fan-out and returns at once, so it takes no book lock either. The
+// only edge between the two families is stripe -> series (a ModifyBook callback
+// that creates a series), which is the order taken here.
 //
 // WHAT IT IS ATOMIC AGAINST: every one of those writers. While the count and
 // the delete run, no book row can be created, repointed to this series,
@@ -126,9 +142,6 @@ func (p *PebbleStore) deleteSeriesIfUnreferencedLocked(id int) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if seriesDeleteTestHookAfterCount != nil {
-		seriesDeleteTestHookAfterCount(id)
-	}
 	if refs != 0 {
 		return false, nil
 	}
@@ -143,8 +156,18 @@ func (p *PebbleStore) deleteSeriesIfUnreferencedLocked(id int) (bool, error) {
 
 // seriesRefCountForDelete is the unfiltered count of book rows naming id, read
 // while every book stripe is held, so it must never be a whole-library scan on
-// a store that is meant to have a memdb.
+// a store that is meant to have a memdb. The after-count test hook fires from
+// in here, so it runs wherever the count runs: a count hoisted out from under
+// the locks takes the hook (and the lock-held assertions made in it) with it.
 func (p *PebbleStore) seriesRefCountForDelete(id int) (int, error) {
+	n, err := p.countRefsForDelete(id)
+	if err == nil && seriesDeleteTestHookAfterCount != nil {
+		seriesDeleteTestHookAfterCount(id)
+	}
+	return n, err
+}
+
+func (p *PebbleStore) countRefsForDelete(id int) (int, error) {
 	if m := p.memOrRefuse("DeleteSeriesIfUnreferenced"); m != nil {
 		n, err := m.GetSeriesBookRefCount(id)
 		if err != nil {
