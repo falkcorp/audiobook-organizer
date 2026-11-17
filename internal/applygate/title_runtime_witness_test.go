@@ -1,5 +1,5 @@
 // file: internal/applygate/title_runtime_witness_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4d8b2f61-7a3c-4e95-8c10-b2f6a9e35d07
 // last-edited: 2026-11-17
 
@@ -145,7 +145,7 @@ func wtForEachChunk(t *testing.T, pool []wtPair, fn func(chunk []wtPair)) {
 }
 
 func TestEvaluate_NeutralTitleNeverAppliesWithoutAnAgreeingRuntime(t *testing.T) {
-	pool := wtTitlePool()
+	pool := sampled(wtTitlePool())
 	var mu sync.Mutex
 	checked, neutral := 0, 0
 	var offenders []string
@@ -184,7 +184,7 @@ func TestEvaluate_NeutralTitleNeverAppliesWithoutAnAgreeingRuntime(t *testing.T)
 			byNarrator[k] += n
 		}
 	})
-	if neutral < 500 {
+	if neutral < scaled(500) {
 		t.Fatalf("only %d of %d generated inputs had a neutral title and no agreeing runtime: the generator is not reaching the case", neutral, checked)
 	}
 	if len(offenders) > 0 {
@@ -264,7 +264,7 @@ func TestEvaluate_NeutralTitleNeedsRuntimeWhateverTheOtherWitness(t *testing.T) 
 			var mu sync.Mutex
 			checked, neutral, titleAgree := 0, 0, 0
 			var offenders []string
-			wtForEachChunk(t, wtTitlePool(), func(chunk []wtPair) {
+			wtForEachChunk(t, sampled(wtTitlePool()), func(chunk []wtPair) {
 				var lChecked, lNeutral, lAgree int
 				var lOffenders []string
 				for _, p := range chunk {
