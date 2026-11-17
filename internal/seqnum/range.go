@@ -1,7 +1,7 @@
 // file: internal/seqnum/range.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e8a1d57-4c20-4b9f-a6d3-91f5b0c7e248
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package seqnum
 
@@ -53,7 +53,7 @@ var (
 	// A span's continuation: ", 5", "& 5", "and 4-6".
 	reSpanTail = regexp.MustCompile(`^` + sepList + `(` + digitsN + `)(?:\s*[-–—]\s*(` + digitsN + `))?\b`)
 
-	reListDigits = regexp.MustCompile(rangeKeyword + `(` + digitsN + `(?:` + sepList + digitsN + `)+)\b`)
+	reListDigits = regexp.MustCompile(rangeKeyword + `(` + digitsN + `(?:` + sepList + digitsN + `)+)` + terminal)
 	reListWords  = regexp.MustCompile(rangeKeyword + `(` + anyNum + `(?:` + sepList + anyNum + `)+)` + terminal)
 	reListItem   = regexp.MustCompile(anyNum)
 

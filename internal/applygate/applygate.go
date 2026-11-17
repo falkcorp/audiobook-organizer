@@ -1,7 +1,7 @@
 // file: internal/applygate/applygate.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 // Package applygate is the certainty gate every BULK metadata apply consults
 // before it writes a candidate onto a book: the cached batch apply
@@ -48,6 +48,7 @@ package applygate
 import (
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -170,6 +171,12 @@ type Verdict struct {
 	// (ReviewedTranscriptionAgrees). It is an annotation for an owner-reviewed
 	// row apply and decides nothing: no leg reads it.
 	TranscriptionAgreesOnReview bool `json:"transcription_agrees_on_review,omitempty"`
+	// Unconfirmed lists the combined-leg reasons (ReasonSequenceUnconfirmed,
+	// ReasonCollectedRuntimeUnconfirmed) that WOULD refuse this pair, whatever
+	// earlier leg refused first. They are computed unconditionally so an owner
+	// override record (RefusingReasons) never silently covers a reason the owner
+	// was not shown.
+	Unconfirmed []string `json:"unconfirmed,omitempty"`
 	// IdentityEvidence is set when the candidate passed the title check or
 	// the identity leg on the transcribed title it was found by
 	// (EvaluateTranscribed) and the verdict is not identity_stale or
@@ -397,6 +404,17 @@ func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookR
 	if identityLifted {
 		used = true
 	}
+	seqUnconfirmed, collUnconfirmed := "", ""
+	if v.Sequence.Corroborate != "" {
+		seqUnconfirmed = corroborationRefusal(book, c, v.Sequence, v.Evidence)
+	}
+	collUnconfirmed = collectedRuntimeRefusal(book, c, v.Sequence, v.Evidence)
+	if seqUnconfirmed != "" {
+		v.Unconfirmed = append(v.Unconfirmed, ReasonSequenceUnconfirmed)
+	}
+	if collUnconfirmed != "" {
+		v.Unconfirmed = append(v.Unconfirmed, ReasonCollectedRuntimeUnconfirmed)
+	}
 	manualReason, manualDetail := ManualOnlyDetail(book, c, ts, guard)
 	rejectReason, rejectDetail := rejections.refusal(c)
 
@@ -440,12 +458,12 @@ func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookR
 		v.Reason, v.Detail = v.Sequence.Reason, v.Sequence.Detail
 	case !v.Evidence.Pass:
 		v.Reason, v.Detail = v.Evidence.Reason, v.Evidence.Detail
-	case v.Sequence.Corroborate != "" && corroborationRefusal(book, c, v.Evidence) != "":
+	case seqUnconfirmed != "":
 		v.Reason = ReasonSequenceUnconfirmed
-		v.Detail = v.Sequence.Corroborate + "; " + corroborationRefusal(book, c, v.Evidence)
-	case collectedRuntimeRefusal(book, c, v.Sequence, v.Evidence) != "":
+		v.Detail = v.Sequence.Corroborate + "; " + seqUnconfirmed
+	case collUnconfirmed != "":
 		v.Reason = ReasonCollectedRuntimeUnconfirmed
-		v.Detail = collectedRuntimeRefusal(book, c, v.Sequence, v.Evidence)
+		v.Detail = collUnconfirmed
 	default:
 		v.Allowed = true
 	}
@@ -527,11 +545,18 @@ func CheckSequence(book *database.Book, c *metafetch.MetadataCandidate) Sequence
 	return v
 }
 
-// positionOnlyWeakAside says what agree set aside when the book's only strong
-// number is the stored series position and a weak number disagrees with it
-// ("" for everything else: no weak number, a weak number that agrees, another
-// strong source, or no strong source at all, where the weak numbers still
-// count).
+// positionOnlyWeakAside says what agree set aside when every strong number on
+// the book comes from a field an earlier apply can WRITE and a weak number
+// disagrees with it ("" for everything else: no weak number, a weak number
+// that agrees, no strong source at all, where the weak numbers still count, or
+// a strong source an apply cannot write).
+//
+// The stored title, the stored series position and a file or folder name
+// without a marker are all fields an earlier (possibly wrong) apply or rename
+// can have written, so any number of them count as ONE source: two of them
+// agreeing is not two independent opinions. Only a "Book N" marker in a file
+// or folder name, which no apply writes, is independent of the stored
+// metadata and lets the weak number be set aside without corroboration.
 func positionOnlyWeakAside(src []SourceNumber) string {
 	var strong *SourceNumber
 	var weak []SourceNumber
@@ -543,10 +568,12 @@ func positionOnlyWeakAside(src []SourceNumber) string {
 			weak = append(weak, s)
 			continue
 		}
-		if s.Source != "series_position" || strong != nil {
+		if (s.Source == "file_name" || s.Source == "folder_name") && s.Form == "marker" {
 			return ""
 		}
-		strong = &src[i]
+		if strong == nil {
+			strong = &src[i]
+		}
 	}
 	if strong == nil {
 		return ""
@@ -554,7 +581,7 @@ func positionOnlyWeakAside(src []SourceNumber) string {
 	pos, _ := seqnum.ParsePosition(strong.Number)
 	for _, w := range weak {
 		if n, _ := seqnum.ParsePosition(w.Number); !seqnum.Equal(pos, n) {
-			return w.Source + " " + w.Number + " set aside for series_position " + strong.Number
+			return w.Source + " " + w.Number + " set aside for " + strong.Source + " " + strong.Number
 		}
 	}
 	return ""
@@ -642,7 +669,7 @@ func BookNumbers(book *database.Book) []SourceNumber {
 			addText("folder_name", base)
 		}
 	}
-	out = markRangeEndpoint(out)
+	out = markRangeEndpoint(out, "title")
 	return discountPartSuffix(book, out, stems)
 }
 
@@ -708,13 +735,14 @@ func weakBookNumber(src, text string, n seqnum.Number) bool {
 	return false
 }
 
-// markRangeEndpoint sets aside a series position that equals an end of the
-// range the book's own title states (FormRangeEndpoint).
-func markRangeEndpoint(src []SourceNumber) []SourceNumber {
+// markRangeEndpoint sets aside a series position that equals an end of a range
+// stated by one of rangeSources (the book's own title; a candidate's title or
+// subtitle) (FormRangeEndpoint).
+func markRangeEndpoint(src []SourceNumber, rangeSources ...string) []SourceNumber {
 	var title seqnum.Number
 	hasRange := false
 	for _, s := range src {
-		if s.Source != "title" || s.Weak || s.Form == FormPartSuffix {
+		if !slices.Contains(rangeSources, s.Source) || s.Weak || s.Form == FormPartSuffix {
 			continue
 		}
 		if n, ok := seqnum.ParsePosition(s.Number); ok && n.IsRange() {
@@ -849,7 +877,10 @@ func CandidateNumbers(c *metafetch.MetadataCandidate) []SourceNumber {
 	if n, ok := seqnum.Parse(c.Subtitle); ok {
 		out = append(out, SourceNumber{Source: "subtitle", Number: n.Text, Form: n.Form})
 	}
-	return out
+	// The same endpoint rule as the book side: a provider that states "Books
+	// 1-3" in its title or subtitle and a position equal to an end of that
+	// range is stating the range twice, not two numbers.
+	return markRangeEndpoint(out, "title", "subtitle")
 }
 
 // agree reduces a source list to one number. ok=false when the list is empty;

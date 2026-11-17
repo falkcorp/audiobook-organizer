@@ -1,7 +1,7 @@
 // file: internal/metafetch/collected_edition_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0e7b3a95-2c48-4f16-b9d3-5a81c7e4f620
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package metafetch
 
@@ -190,6 +190,8 @@ func TestIsCollectedEdition(t *testing.T) {
 		{"range only in the position", "Knightfall", "", "1-3", true},
 		{"omnibus wording", "Knightfall Omnibus", "", "", true},
 		{"box set in the subtitle", "Knightfall", "Box Set", "", true},
+		{"complete collection in the subtitle", "Knightfall", "The Complete Collection", "", true},
+		{"substring is not wording", "Batman: Recollection", "", "", false},
 		{"single volume", "Knightfall, Book 2", "", "2", false},
 		{"plain title", "Knightfall", "", "", false},
 		{"title with a dash", "Batman-22", "", "", false},

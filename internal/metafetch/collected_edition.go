@@ -1,7 +1,7 @@
 // file: internal/metafetch/collected_edition.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6c1f8e24-9b07-4d53-a8e1-3f7d2b50c486
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package metafetch
 
@@ -177,9 +177,11 @@ func sameEditionName(bookTitle, candTitle, candSubtitle string) bool {
 // IsCollectedEdition reports whether a title, subtitle and series position
 // describe a collected edition: a stated range ("Books 1-3", position "1-3"),
 // collected-edition wording (omnibus, box set, publisher's pack, collection,
-// anthology, "3 books") or a title isCompilation flags. The bulk-apply gate
-// asks it of both sides to decide which pairs need a confirming runtime.
+// anthology, "3 books"), all matched on word boundaries: the same reader the
+// penalty lift uses, never the substring test isCompilation (so "Recollection"
+// is a single volume). The bulk-apply gate asks it of both sides to decide
+// which pairs need a confirming runtime.
 func IsCollectedEdition(title, subtitle, position string) bool {
 	e := describeCollected(title, subtitle, position)
-	return e.span != nil || len(e.words) > 0 || isCompilation(title) || isCompilation(subtitle)
+	return e.span != nil || len(e.words) > 0
 }
