@@ -1,7 +1,7 @@
 // file: internal/books/store/bookfilecore_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 29325171-4866-4142-82c6-e010f724ae5e
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package store
 
@@ -35,6 +35,7 @@ var strippedBookFileFields = []string{
 	// and stay on Core. See the rationale block in memdb_strip.go.
 	"IntroTranscription",
 	"IntroMeta",
+	"IntroParse",
 }
 
 // structFieldNames is defined once in bookcore_test.go (same package) and

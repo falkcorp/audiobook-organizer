@@ -1,7 +1,7 @@
 // file: internal/books/store/book_file_clone.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 7b0e4c18-52fd-4a6e-9c33-1d8a5f2e6b40
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package store
 
@@ -51,12 +51,14 @@ func cloneBookFile(f *BookFile) BookFile {
 	c.IntroTimeoutAt = cloneBookFileScalar(f.IntroTimeoutAt)
 	// IntroMeta holds only value fields, so copying the struct is a deep copy.
 	c.IntroMeta = cloneBookFileScalar(f.IntroMeta)
+	// IntroParse holds only value fields too.
+	c.IntroParse = cloneBookFileScalar(f.IntroParse)
 	return c
 }
 
 // cloneBookFileScalar copies the value a pointer field points at. T must hold
 // no reference fields of its own (every use above is a scalar, time.Time or
-// IntroMeta).
+// IntroMeta or IntroParse).
 func cloneBookFileScalar[T any](p *T) *T {
 	if p == nil {
 		return nil
