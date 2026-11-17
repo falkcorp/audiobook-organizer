@@ -85,10 +85,17 @@ attempt.
   now skips such books, and a queued apply that is skipped for this reason says
   so in the log. Undoing an apply clears the book's "applied" mark (this is
   tested), so a later run can apply it again on purpose.
-- What this costs. Some pairs that used to apply on their own now wait for
-  review: any pair where one title only says more than the other and the
-  recording length is missing or more than 5% off. How many is not known. It
-  depends on the library, and the count has to come from running the read-only
+- What this costs, measured. A read-only replay over 4000 stored book and
+  candidate pairs compared three versions. The check as it was applied 276 of
+  them. The first rebuilt check applied 203, so it lost too many pairs that are
+  plainly the same book. This version applies 247: 34 that used to apply now wait
+  for review (31 of those 34 were read by hand as the same book; 3 could not be
+  told), and 5 apply that did not before, each a pair the old check refused as
+  "title disagrees" and this one applies, all five with recording lengths within
+  5% (they are listed for review in the PR, not judged here). Of the 34, 19 are now refused as "title disagrees" and 15 wait
+  because the title is only partly matched and the recording length does not
+  confirm it.
+  The count for a real library still has to come from running the read-only
   preview again before the next bulk apply.
 - What is still not caught. These pairs are the same as before this change, or
   they are neutral and apply when the lengths agree, so they are open:

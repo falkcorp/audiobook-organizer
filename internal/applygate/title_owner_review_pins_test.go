@@ -1,5 +1,5 @@
 // file: internal/applygate/title_owner_review_pins_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4e7a91d3-2b58-4c06-a9f1-0d63b8e5c274
 // last-edited: 2026-11-17
 
@@ -32,8 +32,6 @@ type neutralPin struct {
 	book database.Book
 	pos  string
 	cand metafetch.MetadataCandidate
-	// the title leg's outcome at every runtime
-	title string
 	// the verdict reason at a runtime 5 percent off, 7 percent off, and none
 	// ("" is an apply)
 	want [3]string

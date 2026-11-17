@@ -1,5 +1,5 @@
 // file: internal/applygate/title_rule_examples_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6d1c58a2-9e04-4b73-8f25-a3e07d94b160
 // last-edited: 2026-11-17
 
@@ -51,6 +51,9 @@ func TestCheckTitle_RuleExamples(t *testing.T) {
 		{"part 1 of 3 against part 3 of 3 conflicts",
 			database.Book{Title: "Hush, Part 1 of 3"},
 			metafetch.MetadataCandidate{Title: "Hush, Part 3 of 3"}, "block"},
+		{"a side that holds the other's part among more of its own is still a conflict",
+			database.Book{Title: "Hush, Part 1 and Part 2"},
+			metafetch.MetadataCandidate{Title: "Hush, Part 2"}, "block"},
 		{"swapped numbers that each side contains are still a conflict",
 			database.Book{Title: "Hush 1 and 2"},
 			metafetch.MetadataCandidate{Title: "Hush 2 and 3"}, "block"},

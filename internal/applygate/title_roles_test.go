@@ -1,5 +1,5 @@
 // file: internal/applygate/title_roles_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f8a21c6-7d54-4e09-b1a3-c5e96d20f748
 // last-edited: 2026-11-17
 
@@ -50,6 +50,19 @@ func TestCheckTitle_ACreditNeverMatchesASeries(t *testing.T) {
 		{"the printed pair: narrator equals the book's series, subtitle added",
 			titleOnlyBook("Riddler", "Owls Dark"),
 			metafetch.MetadataCandidate{Title: "Riddler", Subtitle: "Mirage", Series: "Hush 2", Narrator: "Owls Dark", Author: "Bruce Wayne"}},
+		// The forms that carry the series and the position as well as a credit:
+		// "S N T X" and "X S N T". Each pair is built so the title beside the
+		// credit is not itself the stored title, so only the long form could
+		// match, and only by letting a credit stand for part of a series name.
+		{"series, position, title, then the narrator spells the book's series then its title",
+			titleOnlyBook("Returns", "Dark 2 Hush"),
+			metafetch.MetadataCandidate{Title: "Hush", Series: "Dark", SeriesPosition: "2", Narrator: "Returns", Author: "Bruce Wayne"}},
+		{"the narrator, then series, position and title spells the book's series then its title",
+			titleOnlyBook("2 Hush", "Owls Dark"),
+			metafetch.MetadataCandidate{Title: "Hush", Series: "Dark", SeriesPosition: "2", Narrator: "Owls", Author: "Bruce Wayne"}},
+		{"the same with the author as the credit",
+			titleOnlyBook("2 Hush", "Owls Dark"),
+			metafetch.MetadataCandidate{Title: "Hush", Series: "Dark", SeriesPosition: "2", Author: "Owls"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got := checkTitle(&c.book, &c.cand)
