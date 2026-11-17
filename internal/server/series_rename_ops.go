@@ -1,7 +1,7 @@
 // file: internal/server/series_rename_ops.go
-// version: 1.8.4
+// version: 1.8.5
 // guid: f9b6a9b0-62cc-40eb-8c93-e281b6dce050
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 
 // series_rename_ops registers entities.series-rename, the queued operation
 // behind PUT /series/:id/name and PATCH /series/:id. Both endpoints used to
@@ -155,8 +155,9 @@ func (s *Server) invalidateBookDuplicateCaches() {
 }
 
 // revertOperation is the operations handler's revert: it reverses the
-// operation's change ledger and, when any series_rename row was restored,
-// drops the series caches so GET /series shows the restored name at once;
+// operation's change ledger and, when any series row was restored (a
+// rename, a created or deleted series, a book's series link), drops the series
+// caches so GET /series shows the restored state at once;
 // when any merge_combine_journal or merge_sibling_journal row was restored (a
 // combine or sibling move undone), it drops the book duplicate caches, as the
 // retired merge-undo routes did; when any
@@ -168,7 +169,9 @@ func (s *Server) invalidateBookDuplicateCaches() {
 // name them.
 func (s *Server) revertOperation(id string, actor audiobookspkg.RevertActor) (*audiobookspkg.RevertResult, error) {
 	res, err := audiobookspkg.NewRevertService(s.storeForWiring()).WithActor(actor).RevertOperation(id)
-	if res != nil && res.RestoredTypes[undo.ChangeTypeSeriesRename] > 0 {
+	// A restored series_rename, series_create or series_row_delete row, or a
+	// book's series link put back (series-denumber), changes what GET /series lists.
+	if res.RestoredSeriesRows() {
 		s.invalidateSeriesCaches()
 	}
 	// A merge_sibling_journal row (a merge's sibling move undone) changes
