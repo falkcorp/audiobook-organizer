@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache.go
-// version: 1.39.2
+// version: 1.40.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 //
 // Cache-layer on top of metafetch.Service. The persisted record type
 // lives in internal/books/store (MetadataCandidateCache) — re-exported
@@ -690,6 +690,10 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 	sameQuestions := prev != nil && prev.SearchFingerprint != "" && prev.SearchFingerprint == entry.SearchFingerprint
 	if sameQuestions && sameASIN {
 		entry.FallbackAttempts = prev.FallbackAttempts
+		// A source this search asked and heard from no longer owes its answer;
+		// the others still do. With other questions or another ASIN the debt
+		// is another one and is dropped (the batch fetch asks everything again).
+		entry.OwedSources = owedAfterSearch(prev.OwedSources, resp)
 	}
 
 	switch {
@@ -734,6 +738,23 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 		// row; one it asked answered afresh.
 		entry.Candidates = mergeCandidateRows(raw, candidatesFromSources(prev.Candidates,
 			fallbackAnswered(entry.FallbackAttempts, resp.SourcesTried)), resp.mergeRank)
+	}
+
+	// A source this search could not ask or hear from (resp.SourcesFailed)
+	// says nothing about the candidates the row already holds from it for the
+	// same questions and ASIN: a refetch whose other sources answered must not
+	// replace them (the forced refetch while Audnexus was failing used to drop
+	// the book's own-ASIN candidate and leave only the others'). They are
+	// carried, ranked with the new answer like every other merge, so a
+	// review-only candidate from a fallback provider still ranks after them.
+	if len(raw) > 0 && sameQuestions && sameASIN && len(resp.SourcesFailed) > 0 && len(prev.Candidates) > 0 {
+		failed := make(map[string]bool, len(resp.SourcesFailed))
+		for name := range resp.SourcesFailed {
+			failed[name] = true
+		}
+		if kept := candidatesFromSources(prev.Candidates, failed); len(kept) > 0 {
+			entry.Candidates = mergeCandidateRows(entry.Candidates, kept, resp.mergeRank)
+		}
 	}
 
 	// Preserve-on-empty. A search WITH results always replaces, exactly as
@@ -1098,6 +1119,124 @@ func (mfs *Service) RecordFallbackAttempt(bookID, sourceHash, fingerprint, sourc
 	return nil
 }
 
+// OwedUpdate is what one chain search (the sources of the batch fetch's
+// primary pass, not the fallback providers) learned about the sources it
+// asked, for RecordChainOwed.
+type OwedUpdate struct {
+	// Failed maps a source (display name) that could not be asked or heard
+	// from to why (a metadata.Cause* word).
+	Failed map[string]string
+	// Answered names the sources that answered, with candidates or with
+	// nothing: they no longer owe the row an answer.
+	Answered []string
+}
+
+// AnsweredSources returns the sources of resp that were asked and answered:
+// the ones that no longer owe the row an answer (OwedUpdate.Answered). A
+// source with nothing to be asked (Audnexus for a book with no ASIN) is
+// "answered" for the per-provider bookkeeping but said nothing about the book,
+// so it is counted only when the response does not name what it asked, as
+// noSourceAnswered does.
+func (r *SearchMetadataResponse) AnsweredSources() []string {
+	if r == nil {
+		return nil
+	}
+	asked := make(map[string]bool, len(r.SourcesAsked))
+	for _, n := range r.SourcesAsked {
+		asked[n] = true
+	}
+	var out []string
+	for _, n := range r.SourcesAnswered {
+		if len(asked) == 0 || asked[n] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// owedAfterSearch is prev less the sources resp asked and heard from, nil when
+// none is left.
+func owedAfterSearch(prev map[string]database.OwedSource, resp *SearchMetadataResponse) map[string]database.OwedSource {
+	if len(prev) == 0 {
+		return nil
+	}
+	answered := resp.AnsweredSources()
+	out := make(map[string]database.OwedSource, len(prev))
+	for name, o := range prev {
+		if !slices.Contains(answered, name) {
+			out[name] = o
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// owedCountsAsAsk reports whether a failure with this cause reached the
+// provider and so uses one of the source's OwedMaxAsks asks. A hold (an open
+// breaker, a throttle registry entry) sent nothing: it re-dates the backoff but
+// does not spend an ask, or one outage would exhaust every book at once.
+func owedCountsAsAsk(cause string) bool { return cause != metadata.CauseHeld }
+
+// RecordChainOwed records, on bookID's cache row, the chain sources a search
+// could not ask or hear from (o.Failed) as owed -- MetadataCandidateCache.
+// OwedSources, with their backoff -- and clears the ones that answered
+// (o.Answered). It changes only a row for the same inputs (sourceHash) and
+// questions (fingerprint), and writes only when something changed.
+//
+// It is a second step, after the search's own write, because the search does
+// not know which of its sources are the chain's and which a fallback
+// provider's (whose deferrals FallbackAttempts keeps), and because a search
+// that heard from nobody writes no row at all. Whatever the fallback wrote in
+// between carried the owed map across (cacheSearchResponse).
+func (mfs *Service) RecordChainOwed(bookID, sourceHash, fingerprint string, o OwedUpdate) error {
+	if mfs == nil || mfs.db == nil || (len(o.Failed) == 0 && len(o.Answered) == 0) {
+		return nil
+	}
+	defer mfs.lockRow(bookID)()
+	entry, err := mfs.db.GetMetadataCache(bookID)
+	if err != nil {
+		return fmt.Errorf("read cache row for %s: %w", bookID, err)
+	}
+	if entry == nil || entry.SourceHash != sourceHash || entry.SearchFingerprint != fingerprint {
+		return nil
+	}
+	now := nowUTC()
+	next := make(map[string]database.OwedSource, len(entry.OwedSources)+len(o.Failed))
+	maps.Copy(next, entry.OwedSources)
+	changed := false
+	for _, name := range o.Answered {
+		if _, ok := next[name]; ok {
+			delete(next, name)
+			changed = true
+		}
+	}
+	for name, cause := range o.Failed {
+		cur, had := next[name]
+		if !had {
+			cur.Since = now
+		}
+		if owedCountsAsAsk(cause) {
+			cur.Attempts++
+		}
+		cur.LastAttempt, cur.Cause = now, cause
+		next[name] = cur
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	if len(next) == 0 {
+		next = nil
+	}
+	entry.OwedSources = next
+	if err := mfs.db.PutMetadataCache(entry); err != nil {
+		return fmt.Errorf("write owed sources for %s: %w", bookID, err)
+	}
+	return nil
+}
+
 // ClearDeferredFallbackAttempts drops the unsettled (deferred) fallback
 // attempts from bookID's row for the same inputs and questions: the book has
 // a usable candidate now, so it no longer waits on a fallback lookup and the
@@ -1320,6 +1459,11 @@ func (mfs *Service) cachedRowVouched(entry *MetadataCandidateCache, book *databa
 // as identity_stale the book would be stuck until the row expired. An entry with no fingerprint predates
 // 2026-09-19; the path that wrote it recorded an empty result even when every
 // provider had failed, so it proves nothing and is re-asked in full.
+//
+// A row that holds fresh candidates is not always BatchVerdictFreshCandidates:
+// when a chain source it owes an answer (OwedSources) is due again, the verdict
+// is BatchVerdictNone naming that source, so a book whose Audnexus lookup
+// failed is not parked on the other sources' candidates for the TTL.
 func (mfs *Service) CachedBatchVerdict(book *database.Book, query, author string) (*MetadataCandidateCache, BatchVerdict, []string) {
 	if mfs == nil || mfs.db == nil || book == nil {
 		return nil, BatchVerdictNone, nil
@@ -1371,6 +1515,15 @@ func (mfs *Service) CachedBatchVerdict(book *database.Book, query, author string
 		// look, not the candidates.
 		if entry.IsFresh() ||
 			(entry.LastEmptyFetchAt != nil && now.Sub(*entry.LastEmptyFetchAt) < database.MetadataCacheTTL) {
+			// Fresh for the sources that answered. A chain source the row
+			// still owes an answer whose backoff has run out is re-asked,
+			// ALONE (the verdict names it; the fallback providers and their
+			// budget are not asked on its account): the candidates stay and
+			// the answer is merged into them (SearchOptions.MergeWithCached).
+			// Not due yet, or out of asks (database.OwedMaxAsks): fresh.
+			if due := entry.OwedDue(now, mfs.ActiveSourceNames()); len(due) > 0 {
+				return entry, BatchVerdictNone, due
+			}
 			return entry, BatchVerdictFreshCandidates, nil
 		}
 		return entry, BatchVerdictNone, nil

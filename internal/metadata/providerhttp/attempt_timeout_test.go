@@ -1,5 +1,5 @@
 // file: internal/metadata/providerhttp/attempt_timeout_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9b4f7e21-0c58-4d3a-a6e9-3f1d82b7c405
 // last-edited: 2026-11-16
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -295,5 +296,89 @@ func TestAttemptTimeout_AudnexusDefaultSurvivesOverride(t *testing.T) {
 	}
 	if got := EffectiveLimitsFor("hardcover").AttemptTimeout; got != 0 {
 		t.Fatalf("hardcover AttemptTimeout = %v, want none", got)
+	}
+}
+
+// A provider with no AttemptTimeout configured must behave exactly as it did
+// before the field existed: a dial timeout (a net.Error that reports Timeout)
+// is one request and the error, not a second request after a backoff.
+func TestAttemptTimeout_ZeroValueProviderSendsOneRequestOnDialTimeout(t *testing.T) {
+	swapSeams(t, func(context.Context, time.Duration) error {
+		t.Error("backoff for a provider with no attempt timeout")
+		return nil
+	}, nil)
+	var calls atomic.Int32
+	dialTimeout := &net.OpError{Op: "dial", Net: "tcp", Err: timeoutErr{}}
+	tr := &throttled{
+		base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			calls.Add(1)
+			return nil, dialTimeout
+		}),
+		limiter:    rate.NewLimiter(rate.Inf, 1),
+		provider:   "test",
+		maxRetries: 3,
+		// attemptTimeout is zero: the zero-value provider.
+	}
+	req, _ := http.NewRequest(http.MethodGet, "http://192.0.2.1/x", nil)
+	_, err := tr.RoundTrip(req)
+	if !errors.Is(err, dialTimeout) {
+		t.Fatalf("err = %v, want the dial timeout surfaced", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("requests = %d, want 1 for a provider with no AttemptTimeout", calls.Load())
+	}
+}
+
+// timeoutErr is a net.Error whose Timeout() is true, the shape of a dial or
+// TLS-handshake timeout.
+type timeoutErr struct{}
+
+func (timeoutErr) Error() string   { return "i/o timeout" }
+func (timeoutErr) Timeout() bool   { return true }
+func (timeoutErr) Temporary() bool { return true }
+
+// The worst case of one call, by the clock the transport would see: every
+// attempt times out, and the time charged is each attempt's full deadline plus
+// the backoff actually taken (the injectable wait records it). It must stay
+// inside the provider's Timeout -- the Audnexus built-ins give 21.5 s of 30 s
+// -- and a lookup of three regions inside what three of the old Timeouts were.
+func TestAttemptTimeout_WorstCaseStaysInsideTimeout(t *testing.T) {
+	resetForTest()
+	t.Cleanup(resetForTest)
+	l := EffectiveLimitsFor("audnexus")
+	if l.AttemptTimeout <= 0 {
+		t.Fatal("audnexus has no AttemptTimeout; the bound below is moot")
+	}
+	var charged time.Duration
+	swapSeams(t, func(_ context.Context, d time.Duration) error { charged += d; return nil },
+		func(p context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+			charged += d // the attempt ran to its deadline
+			return context.WithCancel(p)
+		})
+	var calls atomic.Int32
+	tr := &throttled{
+		base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			calls.Add(1)
+			return nil, context.DeadlineExceeded
+		}),
+		limiter:        rate.NewLimiter(rate.Inf, 1),
+		provider:       "audnexus",
+		maxRetries:     l.MaxRetries,
+		attemptTimeout: l.AttemptTimeout,
+	}
+	req, _ := http.NewRequest(http.MethodGet, "http://192.0.2.1/x", nil)
+	_, _ = tr.RoundTrip(req)
+	if calls.Load() != 1+maxTimeoutRetries {
+		t.Fatalf("requests = %d, want %d", calls.Load(), 1+maxTimeoutRetries)
+	}
+	if charged > l.Timeout {
+		t.Fatalf("one region's worst case = %v, over the provider Timeout %v", charged, l.Timeout)
+	}
+	const regions = 3 // audnexusSearchRegions
+	if perLookup, before := regions*charged, regions*l.Timeout; perLookup > before {
+		t.Fatalf("a %d-region lookup's worst case = %v, over the %v it was before", regions, perLookup, before)
+	}
+	if charged > 21500*time.Millisecond {
+		t.Fatalf("one region's worst case = %v, documented as at most 21.5s", charged)
 	}
 }

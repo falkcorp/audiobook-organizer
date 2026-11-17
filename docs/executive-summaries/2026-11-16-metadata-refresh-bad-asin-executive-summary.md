@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-16-metadata-refresh-bad-asin-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7a1c9e34-5b82-4d06-b3f1-0e8d2a64c957 -->
 <!-- last-edited: 2026-11-16 -->
 
@@ -34,9 +34,22 @@ scheduled refresh keeps failing the same way until the change is released.
   If only the catalog service failed, the fallback sources that still owed the
   book an answer are asked, and the book is reported as partly refreshed
   instead of as an error.
+- A book whose catalog lookup failed, but which found a suggestion from another
+  source, is not left on that weaker suggestion for a month. The catalog service
+  is the one source that can supply the book's own recording length and
+  narrators, so the book is marked as still owed an answer from it. The next
+  runs ask the catalog service again, and only the catalog service: after six
+  hours, then a day, three days and a week. After five failed tries it stops,
+  about eleven and a half days in, so a code the service never answers is not
+  asked every six hours for ever. A pause forced by the service being held back
+  for a while does not use up one of the five tries. When the service answers,
+  its suggestion is added, ranked ahead of the weaker one, and the mark is
+  removed. A failed try never removes or outranks a suggestion the book already
+  has, and the other sources, including the one with a daily allowance, are not
+  asked again on its account.
 - Each run now ends with one line saying how many books were fully refreshed,
-  how many were partly refreshed and how many failed, with the failures grouped
-  by cause.
+  how many were partly refreshed, how many failed (grouped by cause), how many
+  were put off for later and how many were not asked at all.
 
 ## Title words were sent as product codes
 
@@ -80,4 +93,7 @@ from the numbers: the production logs do not record how long each request took.
 
 **The fix.** The limit now starts when the request has its place in the line and
 covers only the exchange with the service. A request that times out is tried
-once more after a short pause, and no more than that.
+once more after a short pause, and no more than that. This retry applies only
+to a service that has such a limit. In the worst case a lookup that hangs in all
+three regions now ends after about a minute (it took a minute and a half before),
+at the cost of six requests instead of three.

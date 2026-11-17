@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_wiring.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 571bfbf4-238b-49cb-a6d8-b302921dd1c4
 // last-edited: 2026-11-16
 
@@ -26,9 +26,13 @@ func (mfs *Service) SetOverrideSources(sources []metadata.MetadataSource) {
 }
 
 // SetASINLookupOverride replaces the live Audible/Audnexus ASIN clients with fn
-// for testing (nil restores them). A caller outside this package cannot reach
-// the field, and the candidate fetch's degraded-source paths are only
-// reachable through it.
+// for testing (nil restores them); production code never calls it. It is an
+// exported setter, like SetOverrideSources above, and not an export_test.go
+// hook, because its only callers outside this package are internal/server's
+// candidate-fetch tests, which drive the real op and cannot see a _test.go
+// file of another package. A build tag would put a tag on every `go test` of
+// that package. The ASIN lookup is not on the MetadataSource interface (see
+// lookupASIN), so there is no other seam for a failing lookup.
 func (mfs *Service) SetASINLookupOverride(fn func(ctx context.Context, providerID, asin string) (*metadata.BookMetadata, error)) {
 	mfs.asinLookupOverride = fn
 }
