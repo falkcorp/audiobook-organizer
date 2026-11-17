@@ -1,7 +1,7 @@
 // file: internal/metadata/providerhttp/providerhttp.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 5c9e2a71-4b83-4f16-9d40-8e73a1b5c206
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 // Package providerhttp hands out rate-limited HTTP clients for outbound
 // metadata-provider calls.
@@ -68,10 +68,15 @@ type Limits struct {
 	//
 	// Worst case of one call: AttemptTimeout, a backoff of at most 1.5 s, and
 	// AttemptTimeout again -- 21.5 s for Audnexus's 10 s, under its 30 s Timeout,
-	// which cuts the call off in any case. The ASIN lookup asks up to three
-	// regions, so a lookup in which every region hangs ends in 64.5 s at most
-	// (six requests); before the attempt bound the same lookup took 90 s
-	// (three 30 s Timeouts, three requests).
+	// which cuts the call off in any case (it covers the queue for the bucket
+	// too, so a call that waited long for its token has less than that left).
+	// The ASIN lookup stops at the first region that times out
+	// (metadata.AudnexusClient.LookupByASINInRegions), so a lookup in which
+	// the service hangs ends in one region's worst case: 21.5 s and two
+	// requests. Before the attempt bound each region had a 10 s deadline of
+	// its own, queue included, so the same hung lookup took 3 x 10 s = 30 s
+	// and three requests; the bound is under that in time and one request
+	// short of it.
 	AttemptTimeout time.Duration
 }
 

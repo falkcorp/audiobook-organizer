@@ -1,7 +1,7 @@
 // file: internal/metadata/audnexus.go
-// version: 2.13.1
+// version: 2.14.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-a3b4c5d6e7f8
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package metadata
 
@@ -234,6 +234,18 @@ func (c *AudnexusClient) LookupByASINInRegions(ctx context.Context, asin string,
 				notFound = err
 			} else {
 				failed = err
+				// A region that TIMED OUT (the attempt bound, its one retry
+				// included, or the limiter refusing a call that could not be
+				// served in time) says the service is not answering, not that
+				// this region is unlucky: the next region would wait the same
+				// way. Stopping bounds a hung lookup to one region's
+				// worst case (about 21.5 s, 2 requests) instead of one per
+				// region, which is under what the lookup cost before the
+				// attempt bound existed (3 regions x the 10 s deadline, 3
+				// requests, queue included).
+				if FailureCause(err) == CauseTimeout {
+					return nil, failed
+				}
 			}
 		}
 	}
