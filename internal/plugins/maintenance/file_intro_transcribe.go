@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.8.11
+// version: 1.9.0
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
-// last-edited: 2026-11-15
+// last-edited: 2026-11-17
 
 package maintenance
 
@@ -1671,19 +1671,32 @@ func whisperGroupResult(r fileIntroWhisperResult, now time.Time) groupResult {
 		return groupResult{kind: "silence", hasResult: true, res: database.BookFileIntroResult{
 			Status: statusEmpty, Error: "whisper returned empty text", Transcript: &s, At: now, Done: true, Silence: true,
 			Meta: &database.IntroMeta{Model: r.Model, Language: r.Language, ClipLengthSec: fileIntroClipSeconds},
+			// The sentinel is a silence verdict by construction.
+			Parse: silenceParse(),
 		}}
 	default:
-		fields := transcribe.ParseAudiobookIntro(r.Text)
+		// The clip is classified once, with the same grammar maintenance.
+		// reparse-file-intros applies to stored text, so a freshly written row and
+		// a re-parsed one agree and a re-parse of a new row changes nothing. Only a
+		// title announcement carries identity (the rule Reconcile enforces on a
+		// re-parse); the kind and the other fields are stored beside it.
+		clip := transcribe.ParseClip(r.Text)
+		var fields transcribe.ClipParse
+		if clip.Kind == transcribe.ClipKindTitle {
+			fields = clip
+		}
 		status, kind := statusOK, "ok"
 		if fields.Title == "" {
 			status, kind = statusUnparsed, "unparsed"
 		}
 		text := r.Text
+		parse := introParseFromClip(clip)
 		return groupResult{kind: kind, hasResult: true, fillable: true, res: database.BookFileIntroResult{
 			Status: status, Transcript: &text, At: now, Done: true,
 			Title: fields.Title, Author: fields.Author, Narrator: fields.Narrator,
 			Translator: fields.Translator, CoverArtist: fields.CoverArtist,
-			Meta: &database.IntroMeta{Model: r.Model, Language: r.Language, ClipLengthSec: fileIntroClipSeconds},
+			Meta:  &database.IntroMeta{Model: r.Model, Language: r.Language, ClipLengthSec: fileIntroClipSeconds},
+			Parse: &parse,
 		}}
 	}
 }
@@ -1717,6 +1730,9 @@ func (w *fileIntroWorker) donorResult(g fileIntroGroup) groupResult {
 		Silence: text == transcribe.SilenceSentinel,
 		Title:   str(d.TranscribedTitle), Author: str(d.TranscribedAuthor), Narrator: str(d.TranscribedNarrator),
 		Translator: str(d.TranscribedTranslator), CoverArtist: str(d.TranscribedCoverArtist),
+		// The donor's classification describes the same text. It is copied, not
+		// shared, so the stored values never alias.
+		Parse: cloneIntroParse(d.IntroParse),
 	}}
 	gr.fillable = text != transcribe.SilenceSentinel && (status == statusOK || status == statusUnparsed)
 	return gr

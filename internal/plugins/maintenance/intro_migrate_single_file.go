@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file.go
-// version: 1.6.8
+// version: 1.6.9
 // guid: 6b0d94e7-1c58-4a32-bf07-9e5d2a17c630
-// last-edited: 2026-11-15
+// last-edited: 2026-11-17
 
 package maintenance
 
@@ -438,6 +438,9 @@ var introMigratedFields = []string{
 //   - IntroMeta: model, language and clip length of the transcription. The book
 //     op's settings at the time are not recorded on the book, so there is nothing
 //     truthful to put here.
+//   - IntroParse: the classification of THIS file's own transcript. The book-level
+//     transcript's kind is a different question (it is the book's, not the file's),
+//     and maintenance.reparse-file-intros derives it per file from stored text.
 //   - IntroTimeouts / IntroTimeoutHash / IntroTimeoutRunID / IntroTimeoutAt / IntroTimeoutWorker: how many times the Whisper decoder ran
 //     past its deadline on THESE bytes. A migration never ran the decoder, so it
 //     has no strikes to carry, and copying a book-level status cannot say
@@ -450,6 +453,7 @@ var introNotMigratedFields = []string{
 	"IntroSourceHash",
 	"IntroRunOpID",
 	"IntroMeta",
+	"IntroParse",
 	"IntroTimeouts",
 	"IntroTimeoutHash",
 	"IntroTimeoutRunID",
