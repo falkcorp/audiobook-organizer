@@ -18,7 +18,7 @@ item 13), except where a row says it touches live code, and then it keeps the fu
 
 F5-18 as written (brief lines 6, 33-216) is one atomic PR that wires every converted kind, deletes HEAD's
 engine, moves routes, metrics and logging, and also carries every obligation the dark rows deferred to
-it. The dark rows recorded the obligations below against it, 32 numbered items (table in section 2). Most of them are code and tests
+it. The dark rows recorded the obligations below against it, 38 numbered items (table in section 2). Most of them are code and tests
 that can land before the switch. The flip PR should keep only the switch.
 
 ## 2. Obligations recorded against F5-18
@@ -43,7 +43,7 @@ Source column is where the obligation is written today. IDs O1.. are used by the
 | O14 | Delete the `kinds_t6_g3.go` entry of the journal-direct-writers allowlist once a real `CreateOperationChange` writer is wired | seams.d/F5-08.md:64; TODO.md:101 |
 | O15 | `t6g3Deps` wiring: `StandDownKey`, `Store`, `NewWriter`, `GuardTags`, cover-text reader; delete `t6g3KindList` | seams.d/F5-08.md:14-19 |
 | O16 | `t6g4Deps` wiring: `NewWriter` over `internal/books/writer`, `Stats` (registration refuses nil), `Scan` | seams.d/F5-09.md:19,68-71 |
-| O17 | One resource per gated write: stamping obligation, the run cannot detect an under-declared Effects | seams.d/F5-09.md:94; F5-10.md:46,89; todo.d `2026-11-15-f5-18-multi-resource-writer-stamping` |
+| O17 | One resource per gated write: stamping obligation, the run cannot detect an under-declared Effects | seams.d/F5-09.md:94; F5-10.md:46,89; TODO.md:164 (the folded `2026-11-15-f5-18-multi-resource-writer-stamping` fragment) |
 | O18 | Clone's plain `os.Remove` calls (mixed-apply cleanup, rollback) run outside the writer and the fence; route through the writer | seams.d/F5-10.md:39,79 |
 | O19 | Register the books module resources for group 5, including `metadata_cache` (written by metadata-cache-reap) | seams.d/F5-10.md:97 |
 | O20 | Dropped HEAD fields and schedules (`FormerIDs`, `Liveness`, `Cancellable`, `Plugin`, the `0 6 * * *` refresh schedule; group 6's `10 0 * * *` and `15 2 * * *`): F5-18 decides | seams.d/F5-10.md:30; F5-11.md:50 |
@@ -59,6 +59,12 @@ Source column is where the obligation is written today. IDs O1.. are used by the
 | O30 | Native writing kinds' Effects names are `pkg/ops/effects.go` constants only; new constants `cover_text`, `file_provenance` once F5-06 lands | seams.d/F5-02.md:43-55; seams.d/F5-06.md:49 |
 | O31 | Schedules for every kind (`sched(kind)` supplied by `books.ScheduleFor`), stay F5-14's | seams.d/F5-07.md:34; F5-18 brief lines 133-139 |
 | O32 | Cross-row seams: F5-01 `books.memdb` and `NewStore` (seams.d/F5-01.md:24), F2-01/F2-03/F2-11 notes | seams.d/F2-01.md:84; F2-03.md:23; F2-11.md:29,34 |
+| O33 | Rewrite the write-set oracle's SSA walk on `callgraph/vta` (or `cha`) so a store write reached through a non-store name is not dropped | todo.d/2026-11-16-jobwrites-must-be-empty-before-f5-18-flip.md:6 (PR #4683, open; the fragment is not on main yet) |
+| O34 | Key `traceInert` by `<receiver>.<method>` | same fragment :14 |
+| O35 | Make write-set deferral visible: deferral reason on the run, alert when a scheduled kind waited more than a set number of hours (tombstone-cleanup, author-split-scan, purge-deleted, trash-cleanup) | same fragment :17 |
+| O36 | Retire the legacy `author_books_legacy:` rows the store stages in `ModifyBook`, so `authors` leaves the book row and tombstone-cleanup goes back to 2 overlapping jobs | same fragment :23 |
+| O37 | Convert `backfill-file-hashes`, `recompute-book-aggregates`, `scan-composer-tags` to per-batch book locking (a per-book resource id through `RunItems`) | same fragment :26 |
+| O38 | Test that `taglib_cgo.go` and `taglib_support.go` reach the same write helpers; make `FailJobWritesWith` safe under `t.Parallel` | same fragment :31,35 |
 
 (O28 and O32 are references to the seams notes the F5-18 author must still read; they carry no new
 code of their own beyond the rows below.)
@@ -159,7 +165,7 @@ the Depends column; file sets are disjoint where the Files column says so, to ke
   refs and its Effects are the narrowest set the child writes (O25). A ref lock cannot narrow an Effects hold
   (seams.d/F5-09.md:44), so the child, not the parent, holds the write.
 - Files: `internal/plugins/maintenance/file_intro*.go`, the wav-clips and intro-migrate files, their tests.
-- Covers: O24, O25.
+- Covers: O24, O25, O37 (the fragment names `backfill-file-hashes`, `recompute-book-aggregates` and `scan-composer-tags` for the same per-batch locking; include them or file them as a sibling row).
 - Proves: while a child run of batch N holds, a metadata write to a book outside batch N is admitted; a
   parent restart resumes at the batch cursor; cancel stops after the current child; per-batch results
   roll up into the parent's summary. Live-code note: this row changes a live job's structure and keeps the
@@ -175,7 +181,8 @@ the Depends column; file sets are disjoint where the Files column says so, to ke
   a scheduled kind has waited on `writeset` longer than a threshold taken from its schedule interval.
 - Files: `core/internal/executor/dispatch.go`, `instruments.go`, `deploy/prometheus/*.yml`,
   `alert-rules.test.yml`, the Activity data type.
-- Covers: new requirement (no obligation file records it; it follows from F5-18k and the dispatch reasons at `core/internal/executor/dispatch.go:22-31`).
+- Covers: O35. Builds on the dispatch reasons at `core/internal/executor/dispatch.go:22-31`.
+- Source: todo.d/2026-11-16-jobwrites-must-be-empty-before-f5-18-flip.md:17.
 - Proves: a run held by a write-set conflict shows who blocks it; the alert fires in
   `alert-rules.test.yml` for a scheduled kind queued past its threshold and does not fire for a manual kind.
 - Depends: F5-18c.
@@ -190,13 +197,13 @@ the Depends column; file sets are disjoint where the Files column says so, to ke
   author source, and drops `authors` from the resource rows of the book-write methods.
 - Files: `internal/books/store/` (book write path), `internal/plugins/maintenance/kinds_resources.go`, a
   maintenance op for the row retirement, their tests.
-- Covers: O25 (removes one of the four coarse resources from the 25 widened kinds).
+- Covers: O25, O36 (removes one of the four coarse resources from the 25 widened kinds).
 - Proves: after retirement no `author_books_legacy:` row is staged or read; `t6WriterResources` rows for
   `ModifyBook`, `UpdateBook`, `CreateBook`, `RecomputeBookAggregates` no longer list `authors`; the store-key
   diff test stays green.
 - Depends: F5-18b. Touches live store code: full review bar. Needs an owner go before the retirement op
   runs on prod.
-- Source: TODO.md:9320-9321 (legacy `Book.AuthorID` versus junction), seams.d/F5-10.md:58.
+- Source: todo.d/2026-11-16-jobwrites-must-be-empty-before-f5-18-flip.md:23; TODO.md:9320-9321 (legacy `Book.AuthorID` versus junction), seams.d/F5-10.md:58.
 
 ### F5-18k: scheduled kinds that newly wait behind manual jobs (S, a decision row)
 
@@ -208,7 +215,7 @@ the Depends column; file sets are disjoint where the Files column says so, to ke
   (`books`, `authors`, `files`, `settings`, ...), decide per kind: narrow, accept the wait, or run as a
   child run.
 - Files: a table in `seams.d/F5-18k.md`, Effects edits in the kinds above.
-- Covers: O25, O31.
+- Covers: O25, O31, O35 (the four kinds are the fragment's list, :17).
 - Proves: a test per kind asserts its declared set; with F5-18i's alert, a wait past the threshold is seen.
 - Depends: F5-18h, F5-18i, F5-18j.
 - Source of scope: seams.d/F5-08.md:76-77 (purge-deleted, trash-cleanup write sets), seams.d/F5-06.md:60
@@ -221,6 +228,16 @@ the Depends column; file sets are disjoint where the Files column says so, to ke
 - Depends: F5-15 (merged), F5-18c.
 - Source: TODO.md:237, TODO.md:461.
 
+### F5-18m: write-set oracle hardening (S)
+
+- Scope: the oracle gaps and test holes the job-writes fragment lists.
+- Files: `internal/maintenance/jobs/writes_oracle_test.go`, `writes_trace_test.go`, `export_writes_test.go`.
+- Covers: O33, O34, O38.
+- Proves: a write reached through a non-store name is classified; `traceInert` is receiver-keyed; the cgo and
+  non-cgo taglib variants reach the same write helpers; `FailJobWritesWith` is safe under `t.Parallel`.
+- Depends: PR #4683 merged (its fragment is the source).
+- Source: todo.d/2026-11-16-jobwrites-must-be-empty-before-f5-18-flip.md:6,14,31,35.
+
 ## 4. What remains for the flip itself
 
 F5-18 keeps only: register every list function through `Registrar.Tasks`, start executor and scheduler
@@ -231,8 +248,8 @@ the rollback (revert the flip PR, which is safe because every prep row is dark a
 
 ## 5. Order and size
 
-F5-18a (M) -> F5-18b (L) -> F5-18c (L) -> { F5-18d (M), F5-18e (M), F5-18f (S), F5-18g (S), F5-18i (M), F5-18l (S) } -> F5-18h (L), F5-18j (L) -> F5-18k (S).
-Totals: 12 rows. S x4 (f, g, k, l), M x4 (a, d, e, i), L x4 (b, c, h, j). The new rows do not
+F5-18a (M) -> F5-18b (L) -> F5-18c (L) -> { F5-18d (M), F5-18e (M), F5-18f (S), F5-18g (S), F5-18i (M), F5-18l (S) } -> F5-18h (L), F5-18j (L) -> F5-18k (S); F5-18m (S) after #4683 merges, independent of the rest.
+Totals: 13 rows. S x5 (f, g, k, l, m), M x4 (a, d, e, i), L x4 (b, c, h, j). The new rows do not
 change the critical path until the flips resume; they do lengthen R2 by the chain a -> b -> c -> h/j -> k.
 
 ## 6. Open questions for the owner

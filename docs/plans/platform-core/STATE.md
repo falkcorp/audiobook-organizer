@@ -82,11 +82,10 @@ The owner's answers of 2026-11-16 change how the rest of the plan is worked. The
 - **At most 3 agents** work on dark platform rows at a time.
 - **Two review tiers.** A purely dark row (code no live path executes) merges at 0 blocker and 0 major with CI green; no
   mutation pass. Its minors go on a per-subsystem "must be empty before the flip" list: headerless `todo.d/` fragments
-  named `todo.d/<date>-<subsystem>-must-be-empty-before-<flip row>-flip.md` (for example
-  `todo.d/2026-11-16-jobwrites-must-be-empty-before-f5-18-flip.md`), each entry tagged `PRE-<flip row>` (for example
-  `PRE-F5-18`). Fragments fold into `TODO.md` daily, so the list is every entry with that tag in `todo.d/` and
-  `TODO.md`. The flip row will not merge while one is open. No such fragment exists on main yet (the live job write
-  table PR #4683 is open and its changed-file list has none). Flips, security rows and any code a live
+  named `todo.d/<date>-<subsystem>-must-be-empty-before-<flip row>-flip.md` (first example: `todo.d/2026-11-16-jobwrites-must-be-empty-before-f5-18-flip.md` on PR #4683, open), each entry
+  opened by a bold id that ends in the flip row (`**JOBWRITES-F5-18**`). Fragments fold into `TODO.md` daily and
+  are deleted, so the list is every entry whose id ends in that flip row, in `todo.d/` and in `TODO.md`. The flip row
+  will not merge while one is open. Flips, security rows and any code a live
   path executes keep the full bar: adversarial review, mutation pass, delta rounds.
 - **F9, the whole web shell, moves to R3.** F9-01 to F9-05 all merge after OWNER-05. F9-01 moved from W31 to W41,
   F9-05 from W41 to W42, F9-02 and F9-04 from W42 to W43; F9-03 stays W44. No R2 row depends on an F9 row (checked
@@ -98,8 +97,8 @@ The owner's answers of 2026-11-16 change how the rest of the plan is worked. The
   source, is `docs/plans/platform-core/F5-18-prep-split-proposal.md`; it creates no brief and changes none.
 
 Counts (computed 2026-11-17 from the Execution table below against the 134 ids of `tools/inventory.json`): **97 of 128
-agent briefs merged, 31 remaining**; owner checkpoints recorded in the table **3 of 6** (OWNER-02, OWNER-03, OWNER-04;
-OWNER-01 has no table row; OWNER-05 and OWNER-06 are not reached); **100 of 134 rows recorded, 34 remaining**. Not
+agent briefs merged, 31 remaining**; owner checkpoints recorded in the table **4 of 6** (OWNER-01, OWNER-02, OWNER-03, OWNER-04;
+OWNER-05 and OWNER-06 are not reached); **101 of 134 rows recorded, 33 remaining**. Not
 counted as briefs: F4-02b and the R1-25 follow-up (table rows without an inventory id) and the side PRs. The 31 agent
 rows remaining: F3-07, F3-08, F4-08, F5-03, F5-04, F5-05, F5-12, F5-13, F5-14, F5-16, F5-18, F5-19, F6-03, F6-04,
 F6-05, F7-08, F7-09, F8-02, F8-03b (PR #4679, open, in review: not merged), F8-04, F9-01, F9-02, F9-03, F9-04, F9-05,
@@ -113,6 +112,7 @@ R2-01, R3-01, R3-02, R3-03, R3-04, R3-05.
 | W01 | R0-02 | #4388 `3169acbd6` | step-8 STOP: 3 tests asserted the defect; lead approved, 5 paths added to the inventory; bootstrap skill documents the 403 |
 | W01 | R0-04 | #4387 `d27b893b2` | no drift |
 | W01 | R0-06 | #4389 `32c432b12` | CodeQL `go/request-forgery` fixed with a release-tag match at the URL site; the AppConfig read ratchet kept by `config.Snapshot()` |
+| W01 | OWNER-01 | — | owner answers recorded 2026-11-05 on #4382 (https://github.com/falkcorp/audiobook-organizer/issues/4382#issuecomment-6668510906): P14 Branch A, Q-I (a) with the merge queue, R1 freeze kept, Q-G accepted; the brief's Status line says the same. Added to the table 2026-11-17: W01 predates the table's first entries for owner rows, so it was never listed |
 | W02 | R0-05 | #4391 `d617240ac` | T4 independent review: 0 BLOCKER, 1 MAJOR (blank saved password trimmed, invisible to P14) reverted to the brief, pinned by two rows; first PR through the merge queue |
 | W02 | R0-03 | #4393 `1df727a55` | step-6 STOP: 2 master-list tests asserted the defect; lead approved, 1 path added to the inventory |
 | W03 | OWNER-02 | — | owner-authorized run 2026-11-06: R0 production release **v0.223.0**, deployed, `RELEASE_FREEZE=R1`; recorded on #4382 |
