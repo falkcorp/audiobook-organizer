@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/sanitize_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 36bfade5-be50-496e-b763-33a05bf55746
 // last-edited: 2026-11-16
 
@@ -890,6 +890,19 @@ func TestSanitize_CollidingKeysAreLinear(t *testing.T) {
 	}
 }
 
+// validatorOf is the grammar of a key under test. `route` is tested through
+// validRoute, the shape filter of Config.RoutePatterns: safeKey itself keeps a
+// route only on a registered pattern (TestRoutePatterns_*), which the empty set
+// here would trivially refuse.
+func validatorOf(t *testing.T, key string) (func(string) bool, bool) {
+	t.Helper()
+	valid, ok := safeKey(key, nil)
+	if ok && (key == "route" || key == "pattern") {
+		valid = validRoute
+	}
+	return valid, ok
+}
+
 // TestSafeKeys_Negatives: the allowlist validators refuse what is not their
 // grammar, so a value that would carry a location is wiped by Text instead.
 func TestSafeKeys_Negatives(t *testing.T) {
@@ -900,7 +913,7 @@ func TestSafeKeys_Negatives(t *testing.T) {
 			"/api/v1/a b", "/api/{}", "/api/{a-b}", "/public", "/api/./x", "/api/x?p=/Users/bruce", "/api/x#f", "GET  /api/x",
 			"/api/v1/{id", "/api/v1/id}", `/api/a\b`, "api/v1/x", "", "GET", "GET ", "/api/" + strings.Repeat("a/", 20),
 			"/api/" + strings.Repeat("a", 300), "/livez/x", "/metrics/Users", "/api/~bruce", "/api/Users bruce",
-			"/api/v1/files/C:/Users", "/api/&#47;x",
+			"/api/v1/files/C:/Users", "/api/&#47;x", "//", "/api//", "/ ", "/x", "/Users/",
 		},
 		"method":    {"get", "FETCH", "GET ", "", "G/ET"},
 		"level":     {"", "info!", "/Users", "LOUD"},
@@ -911,7 +924,7 @@ func TestSafeKeys_Negatives(t *testing.T) {
 		"time":      {"", "yesterday", "2026-11-16", "/Users/bruce"},
 	}
 	for key, vals := range bad {
-		valid, ok := safeKey(key)
+		valid, ok := validatorOf(t, key)
 		if !ok {
 			t.Fatalf("%s is not an allowlisted key", key)
 		}
@@ -922,7 +935,7 @@ func TestSafeKeys_Negatives(t *testing.T) {
 		}
 	}
 	good := map[string][]string{
-		"route":     {"GET /api/v1/books/{id}", "/api/v1/files/{path...}", "/metrics", "/livez", "/readyz", "POST /api/v1/x/", "/public/health", "DELETE /api/v1/a/{$}"},
+		"route":     {"GET /api/v1/books/{id}", "/api/v1/files/{path...}", "/metrics", "/livez", "/readyz", "POST /api/v1/x/", "/public/health", "DELETE /api/v1/a/{$}", "/", "GET /", "/api/", "/public/"},
 		"method":    {"GET", "DELETE"},
 		"level":     {"INFO", "warn", "ERROR"},
 		"reason":    {"no_roots:read", "a-b.c", "x"},
@@ -932,7 +945,7 @@ func TestSafeKeys_Negatives(t *testing.T) {
 		"component": {"core.health"},
 	}
 	for key, vals := range good {
-		valid, _ := safeKey(key)
+		valid, _ := validatorOf(t, key)
 		for _, v := range vals {
 			if !valid(v) {
 				t.Errorf("%s refuses %q", key, v)
@@ -940,7 +953,7 @@ func TestSafeKeys_Negatives(t *testing.T) {
 		}
 	}
 	for _, k := range []string{"path", "msg", "err", "error", "detail", "file", "dir", "url", "Route", "ROUTE", "", "pattern ", "name"} {
-		if _, ok := safeKey(k); ok {
+		if _, ok := safeKey(k, nil); ok {
 			t.Errorf("%q must not be an allowlisted key", k)
 		}
 	}
@@ -950,6 +963,7 @@ func TestSafeKeys_Negatives(t *testing.T) {
 // value only when it validates; a route that is not a template is wiped.
 func TestScrub_SafeKeyValuesAreKeptAndOthersWiped(t *testing.T) {
 	st := keysBuild()
+	st.routes = newRouteSet([]string{"GET /api/v1/books/{id}", "/api/v1/files/{path...}"})
 	for _, c := range []struct{ key, in, want string }{
 		{"route", "GET /api/v1/books/{id}", "GET /api/v1/books/{id}"},
 		{"route", "/Users/bruce/Hush", "<path>"},

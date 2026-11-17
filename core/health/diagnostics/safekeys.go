@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/safekeys.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f6a9d13-c8e4-4b70-9a15-d3e7b0c41f68
 // last-edited: 2026-11-16
 
@@ -19,10 +19,12 @@ import (
 // expressions (core forbids package-level regexps, 03 R5); the specs are in the
 // comments.
 //
-// A key is matched exactly (case-sensitive). The allowlist is a promise about
-// the producer of the field: `route` and `pattern` hold a router template, never
-// a raw URL, and the validator only bounds its shape (see validRoute).
-func safeKey(key string) (func(string) bool, bool) {
+// A key is matched exactly (case-sensitive). `route` and `pattern` are the one
+// field whose value is data a request can influence, so no grammar stands in for
+// the router: the value is kept only when it is exactly one of the registered
+// patterns (routeSet), and every route value goes through Text when none are
+// registered.
+func safeKey(key string, routes routeSet) (func(string) bool, bool) {
 	switch key {
 	case "level":
 		return validLevel, true
@@ -33,7 +35,7 @@ func safeKey(key string) (func(string) bool, bool) {
 	case "method":
 		return validMethod, true
 	case "route", "pattern":
-		return validRoute, true
+		return routes.has, true
 	case "run_id", "id":
 		return validID, true
 	case "version":
@@ -80,14 +82,62 @@ func validMethod(s string) bool {
 	return false
 }
 
-// validRoute is a router pattern: an optional "METHOD " prefix and a path that
-// starts "/", whose segments (at most 16, none empty but a trailing one, none
-// "." or "..") are a name of [A-Za-z0-9._-] or a wildcard, "{name}", "{name...}"
-// or "{$}" (name of [A-Za-z0-9_]). The first segment is a mount the router
-// owns, "api" or "public" (with at least one segment after it), or the whole
-// path is "/livez", "/readyz" or "/metrics": "/Users/bruce/x" is not a route.
-// What it cannot tell is a raw request path that spells a filesystem path under
-// "/api/": a producer of `route` or `pattern` must give the template.
+// routeSet is the registered router patterns a bundle may keep verbatim in a
+// `route` or `pattern` field (Config.RoutePatterns). The zero value is empty:
+// nothing is kept.
+type routeSet map[string]struct{}
+
+// maxRoutePatterns bounds the supplied list. A router table is a few hundred
+// entries; a list longer than this is not one (it is more likely built from
+// requests), so the whole list is ignored and nothing is kept.
+const maxRoutePatterns = 4096
+
+// newRouteSet is the set of the patterns that also have the shape of a route
+// (validRoute). The shape check is not a second way in: it is a filter on what the
+// supplied list may contain, so a list entry that spells a location ("/Users/bruce",
+// "smb://nas.example/x", "/api/../Users/bruce", a name with spaces) is dropped and
+// the value equal to it goes through Text like any other string. A list longer
+// than maxRoutePatterns, or with no entry left, keeps nothing.
+//
+// What the filter cannot do is tell a registered literal route that merely looks
+// like a path ("/api/v1/files/Users/bruce", registered as such) from a request
+// path: the router registered it, so it is a constant of the program and is
+// kept; a request path is kept only if it equals one.
+func newRouteSet(patterns []string) routeSet {
+	if len(patterns) > maxRoutePatterns {
+		return nil
+	}
+	var rs routeSet
+	for _, p := range patterns {
+		if !validRoute(p) {
+			continue
+		}
+		if rs == nil {
+			rs = routeSet{}
+		}
+		rs[p] = struct{}{}
+	}
+	return rs
+}
+
+// has reports that s is exactly a registered pattern: no prefix, case folding or
+// trimming.
+func (rs routeSet) has(s string) bool {
+	_, ok := rs[s]
+	return ok
+}
+
+// validRoute is the shape of a router pattern: an optional "METHOD " prefix and a
+// path that starts "/", whose segments (at most 16, none empty but a trailing
+// one, none "." or "..") are a name of [A-Za-z0-9._-] or a wildcard, "{name}",
+// "{name...}" or "{$}" (name of [A-Za-z0-9_]). The first segment is a mount the
+// router owns, "api" or "public" (a subtree pattern such as "/api/" included), or
+// the whole path is "/" (the SPA owner), "/livez", "/readyz" or "/metrics":
+// "/Users/bruce/x" is not a route. A pattern the router registered outside these
+// mounts has no shape here and is written "<path>" (fail-closed; widen the mounts
+// when one is added). It is only a filter on Config.RoutePatterns (newRouteSet),
+// never a reason to keep a value: a raw request path under "/api/" has this shape
+// too.
 func validRoute(s string) bool {
 	if len(s) > 256 {
 		return false
@@ -99,7 +149,7 @@ func validRoute(s string) bool {
 		s = rest
 	}
 	switch s {
-	case "/livez", "/readyz", "/metrics":
+	case "/", "/livez", "/readyz", "/metrics":
 		return true
 	}
 	if !strings.HasPrefix(s, "/") {
@@ -111,7 +161,7 @@ func validRoute(s string) bool {
 	}
 	for i, seg := range segs {
 		if seg == "" {
-			if i == len(segs)-1 && i > 1 {
+			if i == len(segs)-1 && i >= 1 {
 				continue
 			}
 			return false

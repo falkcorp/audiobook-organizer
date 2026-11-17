@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/build.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0e48d09a-7583-4133-9749-d96bbfaf2aa5
 // last-edited: 2026-11-16
 
@@ -134,8 +134,18 @@ type Config struct {
 	// under one is written "<root:NAME>" (nothing after it), any other location
 	// "<path>", in every string of the bundle (Sanitizer; the residual and the
 	// costs are in seams.d/F8-03.md, "F8-03b").
-	Roots   []PathRoot
-	Metrics MetricsSink
+	Roots []PathRoot
+	// RoutePatterns returns the router's registered patterns, as the strings a
+	// producer writes into a `route` or `pattern` field (F8-04 passes the
+	// router's `Method + " " + Pattern` and `Pattern` for each route). It is
+	// called once per run. A `route` or `pattern` value is kept verbatim only
+	// when it is exactly one of them (and the entry has the shape of a route: an
+	// entry that spells a location is ignored); any other value goes through the
+	// Sanitizer. Nil, or a list with no usable entry, keeps nothing: every route
+	// value is sanitized, so the safe default is a bundle with "<path>" where a
+	// route was.
+	RoutePatterns func() []string
+	Metrics       MetricsSink
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 	// App and Version go in the manifest.
@@ -283,11 +293,20 @@ func (e *Exporter) coreSections() []Section {
 	return out
 }
 
+// routeSet is the registered patterns of this run (Config.RoutePatterns).
+func (e *Exporter) routeSet() routeSet {
+	if e.cfg.RoutePatterns == nil {
+		return nil
+	}
+	return newRouteSet(e.cfg.RoutePatterns())
+}
+
 // build is one run's state.
 type build struct {
 	zw        *zip.Writer
 	red       *log.Redactor
 	san       Sanitizer
+	routes    routeSet
 	counts    counts
 	written   map[string]bool
 	truncated []string
@@ -395,6 +414,7 @@ func (e *Exporter) Build(ctx context.Context, runID string, actor tasks.Actor, p
 		zw:      zip.NewWriter(f),
 		red:     e.cfg.Redactor,
 		san:     NewSanitizer(e.cfg.Roots),
+		routes:  e.routeSet(),
 		written: map[string]bool{},
 		limit:   e.cfg.MaxFileBytes,
 		now:     e.cfg.Now,

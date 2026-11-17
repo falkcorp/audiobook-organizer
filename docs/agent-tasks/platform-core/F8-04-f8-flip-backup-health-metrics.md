@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F8-04-f8-flip-backup-health-metrics.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 9c425807-35e2-4fe7-9289-5de6f5478ebe -->
 <!-- last-edited: 2026-11-16 -->
 
@@ -20,7 +20,7 @@ the subsystems, deletes what they replace and switches every first-party caller 
 boots and passes e2e. It merges alone in its wave. The R2 freeze is on (since F3-08, which merged before F3-07): do not touch
 `.github/workflows/prerelease.yml`.
 
-> F8-03b has merged: the diagnostics bundle is share-safe (`seams.d/F8-03.md`, Round 13). When this row mounts `healthhttp` and builds the Exporter, pass the library roots both as `diagnostics.Config.Roots` and as `healthhttp.Deps.Roots` (`healthhttp` builds `diagnostics.NewSanitizer(Roots)` itself; there is no function to pass, and nil roots are fail-closed: every location is written `<path>`).
+> F8-03b has merged: the diagnostics bundle is share-safe (`seams.d/F8-03.md`, Round 13). When this row mounts `healthhttp` and builds the Exporter, pass the library roots both as `diagnostics.Config.Roots` and as `healthhttp.Deps.Roots` (`healthhttp` builds `diagnostics.NewSanitizer(Roots)` itself; there is no function to pass, and nil roots are fail-closed: every location is written `<path>`). Also set `diagnostics.Config.RoutePatterns` to a function that returns the router's registered patterns: for each `RouteInfo` from `Router.Routes()` both `ri.Pattern` and `strings.TrimSpace(ri.Method + " " + ri.Pattern)` (the two spellings the access log and `authhttp` write into `route`). A `route` or `pattern` value is kept only when it exactly equals one of them; with nil, or a list of nothing usable, every route value is written `<path>` (fail-closed). The list must come from the router, never from request data. It is called once per bundle, so routes registered after boot are known; keep it cheap (it is one pass over the table). `diagnostics.Config` has no other place where routes are named, and a test in this row builds the real router, sets `RoutePatterns` from it and checks a registered `GET /api/...` template survives a bundle while a request path does not.
 
 ## START HERE (do this first, exactly)
 
