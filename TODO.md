@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.43 -->
+<!-- version: 10.78.44 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -23,6 +23,64 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **TODO-SEQ-RANGE-FOLLOWUPS** Follow-ups left by the apply-gate sequence range fix: (1) re-run the apply measurement against the merged gate and record how many collected-edition false refusals it removed and how many leading-ordinal books now sit in `sequence_unconfirmed` instead of `book_sequence_conflict` (none of them applies unattended: a weak number that disagrees with the stored position is always review) and how many the new `sequence_unconfirmed` and `collected_edition_runtime_unconfirmed` reasons now hold for review; (2) the ASIN backfill's `asin_match.go` `rejectBoxSet` is an unconditional box-set veto that does not know a book can be the same collected edition; (3) a leading-ordinal-only book against a candidate with no number is still refused (ambiguous by design, but worth a measured look); (4) `catalog.ParseSequence` keeps its own dash-range regex beside `seqnum.ParseRange`, and still stores a single number for "1 & 2" (migrating the stored `SeqLo`/`SeqHi` meaning is a separate decision); (5) "Disc 1-3" reads as 3 (unchanged); (6) a title that ends in digit-dash-digit after a plural keyword ("Books 4-5") reads as a range, which is the intended reading and the one residual false reading of a real title.
+
+- [ ] **JOBWRITES-F5-18** Maintenance job write sets: must be empty before the
+      F5-18 flip (the native job kinds are unregistered until then, so none of
+      this changes behaviour today). Two oracle gaps in
+      `internal/maintenance/jobs/writes_oracle_test.go` and
+      `writes_trace_test.go`, and three F5-18 preparation items.
+      - Rewrite the SSA walk on `golang.org/x/tools/go/callgraph/vta` (or
+        `cha`) over the same program. It follows an interface call into its
+        implementations, which removes the hand alias for
+        `tagger.LibraryImporter.ImportPath`, and it follows functions passed as
+        values and calls that leave the module. Today a store write reached
+        through a non-store name (for example `dedup.dedupBookWriter.RevertBookToVersion`)
+        is dropped silently, because only names that start with a write verb or
+        have a table row are classified.
+      - Key `traceInert` by `"<receiver>.<method>"`, as `traceAliases` already is.
+        It matches a bare method name on any receiver, so a future write named
+        `Move` or `Locked` on another type would be ignored.
+      - Make write-set deferral visible before the flip: surface the deferral
+        reason on the run and alert when a scheduled kind has waited longer than a
+        set number of hours. At the flip the four scheduled kinds that can be held
+        back by a manual whole-library job are `books.maintenance.tombstone-cleanup`
+        (overlaps 20 jobs, was 2), `books.maintenance.author-split-scan`,
+        `books.maintenance.purge-deleted` and `books.maintenance.trash-cleanup`.
+      - Retire the legacy author-junction rows (`author_books_legacy:`) the store
+        stages inside `ModifyBook`, so `authors` leaves the book row and
+        `tombstone-cleanup` goes back to 2 overlapping jobs.
+      - Convert the long whole-library jobs (`backfill-file-hashes`,
+        `recompute-book-aggregates`, `scan-composer-tags`) to per-batch book
+        locking (a per-book resource ID through `RunItems`) instead of a
+        whole-kind write set, so a scheduled kind waits for one batch and not for
+        a job's 4h timeout.
+      - No test checks that `taglib_cgo.go` and `taglib_support.go` reach the
+        same write helpers. The write-set oracle walks the non-cgo variant;
+        production ships the cgo one (`native_taglib`), which cannot be loaded
+        without cgo and the vendored libraries.
+      - `FailJobWritesWith` (in `export_writes_test.go`) swaps a package
+        variable, so it is unsafe under `t.Parallel`.
+
+- [ ] **TODO-CHECKTITLE-SHARED-SEGMENT** `applygate.checkTitle` (`internal/applygate/evidence.go`, the variant loop at lines 335-366) agrees on a SHARED TITLE SEGMENT: it compares the candidate's whole title and its part before ":" or a spaced dash against the book's whole title and each of the book's segments, and `best >= 0.85` is an agree. Two volumes of one storyline share the segment before the colon, so the title check agrees for the wrong volume. Measured against `origin/main` (not the sequence work): with the leading list number stripped from the stored title and file name and a stale stored position, main APPLIES four of five pairs: stored "Hush: Part 1" with file "Hush: Part 1.m4b" and stale position 2 against candidate "Hush: Part 2" #2; stored "Hush: Part 2" and stale position 1 against "Hush: Part 1" #1; stored "Hush: Part I" with file "Hush Part I.m4b" and stale position 2 against "Hush: Part II" #2; stored "Batman: Dark Victory" and stale position 1 against "Batman: The Long Halloween" with subtitle "The Prelude to Dark Victory" #1 (runtime within 5% on every pair). The fifth, stored "Batman: Year 2" and position 1 against "Batman: Year One" #1, is refused by main as a book sequence conflict (the title's own 2 against position 1). The fix belongs to its own PR: a title check that also requires the candidate's whole `Title` field (not only its main part, and not the subtitle) to be covered by the book's title, with roman numerals, digits and number words folded and single-letter numerals kept. Related gap, also on main: the `already_applied` skip exists only in `planCachedApply` (`internal/server/batch_apply_one.go:444-447`); `planOpResultApply` (same file, lines 568-615, used by the candidate-batch route and `apply_when_scanned_op.go`) has no `MetadataApplied` check, so an applied book gets a fresh fetch and is gated again on that path.
+
+- [ ] **CI-LINT-2** Promote the GitHub-hosted lint trial (`lint-trial.yml`,
+      `Lint (GitHub-hosted, trial)`) and retire Woodpecker's `checks-lint`.
+      Exit criteria are in `docs/ci/woodpecker.md` ("Trial: GitHub-hosted
+      lint"): N consecutive green runs that agree with `checks-lint` on the
+      same commits, and a wall time at or below it. Then, in a separate PR and
+      with the owner's go, add the check to the main ruleset and delete
+      `.woodpecker/checks-lint.yaml`.
+- [ ] **CI-TAGLIB-GH** Move `test-native-taglib` to a GitHub-hosted runner the
+      same way: a non-required trial job first (build TagLib 2.0.2 via
+      `scripts/ci/build_taglib_static.py`, install ffmpeg, ffprobe and fpcalc,
+      run `go test -tags native_taglib -race` of `internal/metadata`,
+      `internal/tagger` and `internal/metafetch`), compare with Woodpecker on
+      the same commits, then make it required and retire
+      `.woodpecker/test-native-taglib.yaml` in a separate PR with the owner's
+      go. Put the trial in its own workflow file, not ci.yml, so a red trial
+      cannot trigger auto-revert.
 
 - [ ] **F4-06-REPORTKEY** `m3.reportKey` (F4-06) should report a key whose base set is empty and whose owner's role closure holds no ambient scope, as `OutcomeReported` with the warning "a key's scopes lie outside its owner's roles, which hold no ambient scope; it reaches no route after the cutover". Such a key compiles to an empty checker (05-rbac 6.3 as amended by F4-07's ruling), so the cutover's dry-run report should name it instead of letting it fail silently at runtime.
 
