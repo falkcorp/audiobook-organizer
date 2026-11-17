@@ -1,5 +1,5 @@
 // file: internal/applygate/evidence.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
 // last-edited: 2026-11-17
 
@@ -69,6 +69,13 @@ type CheckResult struct {
 	Outcome string `json:"outcome"`
 	Reason  string `json:"reason,omitempty"`
 	Detail  string `json:"detail,omitempty"`
+
+	// fieldConflict marks a title block that comes from the two title fields
+	// themselves (the candidate and the stored title share a whole segment and
+	// each has one of its own, or use the same words with different numbers).
+	// No transcription lifts it (applyTranscribedTitle): a disagreement between
+	// the titles is not missing evidence. Not serialised.
+	fieldConflict bool
 }
 
 // EvidenceVerdict is the evidence leg's result.
@@ -400,7 +407,9 @@ func checkTitle(book *database.Book, c *metafetch.MetadataCandidate) CheckResult
 		}
 	}
 	if cmp.class == classConflictNumber || cmp.class == classConflictWords {
-		return block("conflicting title: " + desc)
+		r = block("conflicting title: " + desc)
+		r.fieldConflict = true
+		return r
 	}
 	for _, cf := range candForms {
 		if i := slices.Index(bookForms, cf); i >= 0 {

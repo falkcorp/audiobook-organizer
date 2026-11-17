@@ -1,7 +1,7 @@
 // file: internal/applygate/transcribed_identity_test.go
-// version: 1.6.5
+// version: 1.7.0
 // guid: 329bd78d-e4ca-434d-aa8d-65f766d386a1
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package applygate
 
@@ -75,13 +75,25 @@ func TestEvaluateTranscribed(t *testing.T) {
 			wantReason: ReasonIdentityStale, wantAgree: -1},
 		{name: "no transcribed search: the placeholder title blocks as before",
 			wantReason: ReasonTitleDisagrees, wantBlock: ReasonTitleDisagrees, wantAgree: -1},
-		{name: "file-level transcription: the title match counts once",
+		// The query is the gate's own text, not a witness: with no book-level
+		// transcription behind it the lift raises the title to NEUTRAL, never
+		// to agree, so author plus a neutral title is one agreement and the
+		// pair waits for a runtime that agrees.
+		{name: "file-level transcription, no runtime: the query alone confirms nothing",
 			mod: func(f *fixture) {
 				f.transcribed = nil
 				f.duration, f.cand.DurationSec = nil, 0
 			},
+			ts:         TranscribedSearch{Query: hulk, Source: "file_transcribed_title"},
+			wantReason: ReasonInsufficientEvidence, wantEvid: true, wantAgree: 1},
+		{name: "file-level transcription, runtime agrees: author and runtime carry it",
+			mod:         func(f *fixture) { f.transcribed = nil },
 			ts:          TranscribedSearch{Query: hulk, Source: "file_transcribed_title"},
 			wantAllowed: true, wantEvid: true, wantAgree: 2},
+		{name: "file-level transcription, runtime 30% off: refused",
+			mod:        func(f *fixture) { f.transcribed = nil; f.cand.DurationSec = 46800 },
+			ts:         TranscribedSearch{Query: hulk, Source: "file_transcribed_title"},
+			wantReason: ReasonRuntimeMismatch, wantEvid: true, wantAgree: -1},
 		{name: "file-level transcription heard another author: refused",
 			mod: func(f *fixture) {
 				f.transcribed = nil
@@ -90,11 +102,8 @@ func TestEvaluateTranscribed(t *testing.T) {
 			},
 			ts:        TranscribedSearch{Query: hulk, Author: "Greg Pak", Source: "file_transcribed_title"},
 			wantBlock: ReasonTitleDisagrees, wantAgree: -1},
-		{name: "file-level transcription heard the candidate's author: passes",
-			mod: func(f *fixture) {
-				f.transcribed = nil
-				f.duration, f.cand.DurationSec = nil, 0
-			},
+		{name: "file-level transcription heard the candidate's author: passes with a runtime",
+			mod:         func(f *fixture) { f.transcribed = nil },
 			ts:          TranscribedSearch{Query: hulk, Author: "Greg Pak", Source: "file_transcribed_title"},
 			wantAllowed: true, wantEvid: true, wantAgree: 2},
 		{name: "book-level transcription alone is one fact, not two",
@@ -103,9 +112,10 @@ func TestEvaluateTranscribed(t *testing.T) {
 				f.authors, f.cand.Author = nil, ""
 			},
 			// With no runtime on either side the transcription cannot confirm
-			// the book (ReasonTranscriptionRuntimeUnverified); the evidence still
-			// counts the title as the one fact it is.
-			identityErr: stale, ts: explained, wantReason: ReasonTranscriptionRuntimeUnverified, wantEvid: true, wantAgree: 1},
+			// the book (ReasonTranscriptionRuntimeUnverified). The title is
+			// neutral (the transcription check holds the one fact), so nothing
+			// else agrees.
+			identityErr: stale, ts: explained, wantReason: ReasonTranscriptionRuntimeUnverified, wantEvid: true, wantAgree: 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -365,5 +375,66 @@ func TestEvaluateTranscribed_OwnerManualOnly(t *testing.T) {
 				t.Errorf("evidence stamped on a manual-only refusal: %+v", cand.IdentityEvidence)
 			}
 		})
+	}
+}
+
+// The search query is the gate's own text, so it never makes a title agree, and
+// no transcription lifts a conflict between the two title fields. These are the
+// pairs measured through EvaluateTranscribed before the lift was changed (the
+// first two applied at a 4% runtime, the third with no runtime at all), as fixed
+// rows. "lift-audio" is the same pair with a book-level transcription that
+// names the candidate: it no longer lifts a title-field conflict either.
+func TestEvaluateTranscribed_QueryNeverAgreesAndNoLiftRemovesATitleConflict(t *testing.T) {
+	run := func(stored, query, runtime string, audio bool) Verdict {
+		book := database.Book{ID: "b1", Title: stored, Author: &database.Author{Name: "Bruce Wayne"}}
+		cand := metafetch.MetadataCandidate{Title: query, Author: "Bruce Wayne", Score: 0.95}
+		if audio {
+			book.TranscribedTitle, book.TranscribedAuthor = new(query), new("Bruce Wayne")
+		}
+		switch runtime {
+		case "4%":
+			book.Duration, cand.DurationSec = new(36000), 37440
+		case "30%":
+			book.Duration, cand.DurationSec = new(36000), 46800
+		default:
+			cand.DurationSec = 36600
+		}
+		rt := database.ComputeBookRuntime(&book, nil)
+		return EvaluateTranscribed(&book, snap(&book), rt, &cand, nil, nil, nil, TranscribedSearch{Query: query, Author: "Bruce Wayne"}, ManualOnlyGuard{})
+	}
+	cases := []struct {
+		stored, query, runtime string
+		audio                  bool
+		allowed                bool
+		reason                 string // "" : only Allowed and the title outcome are checked
+		title                  string // the title check's outcome
+	}{
+		{"Hush: Part 1", "Hush: Part 2", "4%", false, false, ReasonTitleDisagrees, OutcomeBlock},
+		{"Hush: Part 1", "Hush: Part 2", "none", false, false, "", OutcomeBlock},
+		{"Batman: Dark Victory", "Batman: The Long Halloween", "4%", false, false, ReasonTitleDisagrees, OutcomeBlock},
+		{"Batman: Dark Victory", "Batman: The Long Halloween", "none", false, false, "", OutcomeBlock},
+		// A book-level transcription naming the candidate no longer lifts a
+		// conflict between the title fields: a real transcription that
+		// contradicts the stored title is a case for owner review.
+		{"Hush: Part 1", "Hush: Part 2", "4%", true, false, ReasonTitleDisagrees, OutcomeBlock},
+		{"Batman: Dark Victory", "Batman: The Long Halloween", "4%", true, false, ReasonTitleDisagrees, OutcomeBlock},
+		// "Hush" against "Hush: Part 2" is a neutral title, not a conflict: it
+		// applies only with a runtime that agrees, never with none.
+		{"Hush", "Hush: Part 2", "none", false, false, "", OutcomeNeutral},
+		{"Hush", "Hush: Part 2", "30%", false, false, ReasonRuntimeMismatch, OutcomeNeutral},
+		{"Hush", "Hush: Part 2", "4%", false, true, "", OutcomeNeutral},
+	}
+	for _, tc := range cases {
+		v := run(tc.stored, tc.query, tc.runtime, tc.audio)
+		title := ""
+		for _, ch := range v.Evidence.Checks {
+			if ch.Name == "title" {
+				title = ch.Outcome
+			}
+		}
+		if v.Allowed != tc.allowed || (tc.reason != "" && v.Reason != tc.reason) || title != tc.title {
+			t.Errorf("%q <- %q runtime=%s audio=%v: allowed=%v reason=%q (%s) title=%s, want allowed=%v reason=%q title=%s",
+				tc.stored, tc.query, tc.runtime, tc.audio, v.Allowed, v.Reason, v.Detail, title, tc.allowed, tc.reason, tc.title)
+		}
 	}
 }

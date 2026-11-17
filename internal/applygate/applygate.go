@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate.go
-// version: 1.22.1
+// version: 1.22.2
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
 // last-edited: 2026-11-17
 
@@ -360,8 +360,10 @@ func EvaluateInBatch(book *database.Book, authors Authors, rt database.BookRunti
 // match is identity evidence:
 //
 //   - the title check, which compares the candidate with the book's stored
-//     title and path and so blocks a book titled "" or "Chapter 3", passes it
-//     like a normal title match (applyTranscribedTitle);
+//     title and path and so blocks a book titled "" or "Chapter 3", is raised
+//     to NEUTRAL (never to agree: the query is the gate's own text), so the
+//     candidate applies only with a runtime that agrees; a conflict between
+//     the two title fields is never lifted (applyTranscribedTitle);
 //   - an identity_stale error passes too, but ONLY when ts.ExplainsStaleIdentity:
 //     the caller proved the cached row differs from the book in its query
 //     alone. identity_stale for any other reason (an author change, a row
