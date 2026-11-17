@@ -1,5 +1,5 @@
 // file: internal/transcribe/clip_version_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 9a3d6e18-5b27-4c40-a1f9-2e8b7c0d4a65
 // last-edited: 2026-11-17
 
@@ -157,7 +157,7 @@ func clipGrammarTables() map[string]string {
 
 		"soundTagRe": tableRe(soundTagRe), "hallucinationRe": tableRe(hallucinationRe), "creditsOnlyRe": tableRe(creditsOnlyRe),
 		"publisherishRe": tableRe(publisherishRe), "presentsTailRe": tableRe(presentsTailRe), "publishedByRe": tableRe(publishedByRe),
-		"writtenByRe": tableRe(writtenByRe),
+		"writtenByRe":    tableRe(writtenByRe),
 		"minRepeatWords": fmt.Sprint(minRepeatWords), "maxRepeatDistinctRatio": fmt.Sprint(maxRepeatDistinctRatio), "minLetterShare": fmt.Sprint(minLetterShare),
 
 		"clipPresentsPrefixRe": tableRe(clipPresentsPrefixRe), "creditVerbOnlyRe": tableRe(creditVerbOnlyRe), "leadSentenceEndRe": tableRe(leadSentenceEndRe),
