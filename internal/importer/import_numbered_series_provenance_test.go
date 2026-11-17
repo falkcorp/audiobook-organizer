@@ -1,5 +1,5 @@
 // file: internal/importer/import_numbered_series_provenance_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d4a17c3-6e92-4b05-a1f8-3c70e5b29d64
 // last-edited: 2026-11-17
 
@@ -8,7 +8,6 @@ package importer
 import (
 	"testing"
 
-	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
@@ -108,5 +107,4 @@ func TestImportFile_DoesNotCreateANumberedSeriesRow(t *testing.T) {
 			t.Errorf("the importer created the numbered series %q", s.Name)
 		}
 	}
-	var _ database.Series
 }
