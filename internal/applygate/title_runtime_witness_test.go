@@ -1,5 +1,5 @@
 // file: internal/applygate/title_runtime_witness_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4d8b2f61-7a3c-4e95-8c10-b2f6a9e35d07
 // last-edited: 2026-11-17
 
@@ -7,7 +7,9 @@ package applygate
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
+	"sync"
 	"testing"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -120,36 +122,73 @@ func wtRuntimeOutcome(v Verdict) string {
 	return ""
 }
 
+// wtForEachChunk runs fn over the pool in a fixed number of chunks, each in its
+// own parallel subtest, and returns once every chunk is done. Every input is
+// independent (Evaluate keeps no state between calls), so the chunks never touch
+// the same data; the caller merges its per-chunk results under its own lock. The
+// wrapping "chunks" subtest is what makes the parent wait: parallel subtests
+// only start when their parent function returns, so code after a bare loop of
+// t.Run calls would run before any chunk had.
+func wtForEachChunk(t *testing.T, pool []wtPair, fn func(chunk []wtPair)) {
+	t.Helper()
+	const chunks = 16
+	per := (len(pool) + chunks - 1) / chunks
+	t.Run("chunks", func(t *testing.T) {
+		for lo := 0; lo < len(pool); lo += per {
+			chunk := pool[lo:min(lo+per, len(pool))]
+			t.Run(strconv.Itoa(lo/per), func(t *testing.T) {
+				t.Parallel()
+				fn(chunk)
+			})
+		}
+	})
+}
+
 func TestEvaluate_NeutralTitleNeverAppliesWithoutAnAgreeingRuntime(t *testing.T) {
 	pool := wtTitlePool()
+	var mu sync.Mutex
 	checked, neutral := 0, 0
 	var offenders []string
 	byNarrator := map[string]int{}
-	for _, p := range pool {
-		for _, narrator := range []string{"none", "candidate-only", "agree"} {
-			for _, series := range []string{"none", "both"} {
-				for _, pos := range []string{"", "2"} {
-					for _, runtime := range []string{"none", "candidate-unknown", "6%", "9%", "30%"} {
-						v := wtRun(p, narrator, series, pos, runtime)
-						checked++
-						if wtTitleOutcome(v) != string(OutcomeNeutral) || wtRuntimeOutcome(v) == string(OutcomeAgree) {
-							continue
-						}
-						neutral++
-						if v.Allowed {
-							byNarrator[narrator]++
-							offenders = append(offenders, fmt.Sprintf("stored %q cand %q/%q narrator=%s series=%s pos=%q runtime=%s: APPLIED (%d agreements)",
-								p.stored, p.cand.Title, p.cand.Subtitle, narrator, series, pos, runtime, v.Evidence.Agreements))
+	wtForEachChunk(t, pool, func(chunk []wtPair) {
+		var lChecked, lNeutral int
+		var lOffenders []string
+		lByNarrator := map[string]int{}
+		for _, p := range chunk {
+			for _, narrator := range []string{"none", "candidate-only", "agree"} {
+				for _, series := range []string{"none", "both"} {
+					for _, pos := range []string{"", "2"} {
+						for _, runtime := range []string{"none", "candidate-unknown", "6%", "9%", "30%"} {
+							v := wtRun(p, narrator, series, pos, runtime)
+							lChecked++
+							if wtTitleOutcome(v) != string(OutcomeNeutral) || wtRuntimeOutcome(v) == string(OutcomeAgree) {
+								continue
+							}
+							lNeutral++
+							if v.Allowed {
+								lByNarrator[narrator]++
+								lOffenders = append(lOffenders, fmt.Sprintf("stored %q cand %q/%q narrator=%s series=%s pos=%q runtime=%s: APPLIED (%d agreements)",
+									p.stored, p.cand.Title, p.cand.Subtitle, narrator, series, pos, runtime, v.Evidence.Agreements))
+							}
 						}
 					}
 				}
 			}
 		}
-	}
+		mu.Lock()
+		defer mu.Unlock()
+		checked += lChecked
+		neutral += lNeutral
+		offenders = append(offenders, lOffenders...)
+		for k, n := range lByNarrator {
+			byNarrator[k] += n
+		}
+	})
 	if neutral < 500 {
 		t.Fatalf("only %d of %d generated inputs had a neutral title and no agreeing runtime: the generator is not reaching the case", neutral, checked)
 	}
 	if len(offenders) > 0 {
+		sort.Strings(offenders) // chunks finish in any order; keep the shown sample stable
 		show := offenders
 		if len(show) > 12 {
 			show = show[:12]
@@ -222,29 +261,41 @@ func wtWitnessRun(p wtPair, witness, runtime string) Verdict {
 func TestEvaluate_NeutralTitleNeedsRuntimeWhateverTheOtherWitness(t *testing.T) {
 	for _, witness := range []string{"asin", "audio", "lift-audio", "lift-query"} {
 		t.Run(witness, func(t *testing.T) {
+			var mu sync.Mutex
 			checked, neutral, titleAgree := 0, 0, 0
 			var offenders []string
-			for _, p := range wtTitlePool() {
-				for _, runtime := range []string{"none", "candidate-unknown", "4%", "6%", "9%", "30%"} {
-					v := wtWitnessRun(p, witness, runtime)
-					checked++
-					switch wtTitleOutcome(v) {
-					case string(OutcomeAgree):
-						titleAgree++
-						continue
-					case string(OutcomeNeutral):
-					default:
-						continue
-					}
-					if wtRuntimeOutcome(v) == string(OutcomeAgree) {
-						continue
-					}
-					neutral++
-					if v.Allowed {
-						offenders = append(offenders, fmt.Sprintf("stored %q cand %q runtime=%s: APPLIED", p.stored, p.cand.Title, runtime))
+			wtForEachChunk(t, wtTitlePool(), func(chunk []wtPair) {
+				var lChecked, lNeutral, lAgree int
+				var lOffenders []string
+				for _, p := range chunk {
+					for _, runtime := range []string{"none", "candidate-unknown", "4%", "6%", "9%", "30%"} {
+						v := wtWitnessRun(p, witness, runtime)
+						lChecked++
+						switch wtTitleOutcome(v) {
+						case string(OutcomeAgree):
+							lAgree++
+							continue
+						case string(OutcomeNeutral):
+						default:
+							continue
+						}
+						if wtRuntimeOutcome(v) == string(OutcomeAgree) {
+							continue
+						}
+						lNeutral++
+						if v.Allowed {
+							lOffenders = append(lOffenders, fmt.Sprintf("stored %q cand %q runtime=%s: APPLIED", p.stored, p.cand.Title, runtime))
+						}
 					}
 				}
-			}
+				mu.Lock()
+				defer mu.Unlock()
+				checked += lChecked
+				neutral += lNeutral
+				titleAgree += lAgree
+				offenders = append(offenders, lOffenders...)
+			})
+			sort.Strings(offenders)
 			t.Logf("%s: %d inputs, %d with a neutral title and no agreeing runtime, %d with the title agreeing, %d of the neutral ones applied",
 				witness, checked, neutral, titleAgree, len(offenders))
 			for i, o := range offenders {
