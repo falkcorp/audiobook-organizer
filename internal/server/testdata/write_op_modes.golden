@@ -1,7 +1,7 @@
 # file: internal/server/testdata/write_op_modes.golden
-# version: 1.27.1
+# version: 1.27.2
 # guid: 656b77a9-3e50-456c-9945-dbbebbd7e041
-# last-edited: 2026-10-30
+# last-edited: 2026-11-17
 #
 # What `{}` does for every registered operation that can write (declares
 # library.write, files.write or db.migrate, declares the resources it writes
@@ -215,3 +215,4 @@ scheduler.metadata-upgrade	no-mode
 catalog.harvest-authors	preview
 identification.advance	preview
 collections.refresh-relative-dynamic	preview
+maintenance.reparse-file-intros	preview
