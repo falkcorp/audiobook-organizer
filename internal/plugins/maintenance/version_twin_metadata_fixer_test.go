@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer_test.go
-// version: 1.3.10
+// version: 1.3.11
 // guid: 7a1e3c95-4d28-4b6f-a0c7-93e2d5b8f146
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -535,7 +535,7 @@ func TestVersionTwinFixer_PrimaryRetiredBeforeTheApplyIsRefusedByTheFixersOwnChe
 	}{
 		{"trashed", func(b *database.Book) error { b.MarkedForDeletion = new(true); return nil }, "is gone"},
 		{"merged", func(b *database.Book) error { b.MergedIntoBookID = new("someone-else"); return nil }, "was merged into"},
-		{"blank_merged_into", func(b *database.Book) error { b.MergedIntoBookID = new("   "); return nil }, "was merged into"},
+		{"whitespace_only_merged_into", func(b *database.Book) error { b.MergedIntoBookID = new("   "); return nil }, "was merged into"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -564,8 +564,8 @@ func TestVersionTwinFixer_PrimaryRetiredBeforeTheApplyIsRefusedByTheFixersOwnChe
 // the merged-into id: a primary whose merged-into id is only whitespace is
 // retired by that rule (it does not trim), so its group is not planned. The old
 // local copy trimmed the id and called such a primary live. No writer produces
-// a blank non-empty id, so this pins agreement with the rule, not a population.
-func TestVersionTwinFixer_PrimaryWithBlankMergedIntoIsRetiredByTheOneRule(t *testing.T) {
+// a whitespace-only id, so this pins agreement with the rule, not a population.
+func TestVersionTwinFixer_PrimaryWithWhitespaceOnlyMergedIntoIsRetiredByTheOneRule(t *testing.T) {
 	// Two libraries, not two groups in one: a second group with the same title
 	// and author is a cross-group collision the planner holds on its own.
 	live := newVTLib(t)
@@ -574,11 +574,11 @@ func TestVersionTwinFixer_PrimaryWithBlankMergedIntoIsRetiredByTheOneRule(t *tes
 	_, liveRows := live.plan()
 	require.True(t, liveRows["g"].Applicable(), "control: a live primary's group is planned: %+v", liveRows["g"])
 
-	blank := newVTLib(t)
-	blank.book("p", "g", true, func(b *database.Book) { b.MergedIntoBookID = new("   ") })
-	blank.appliedTwin("t", "g", vtSaga(), nil)
-	require.True(t, blank.get("p").IsRetired(), "fixture: the one rule must call a blank merged-into id retired")
-	_, rows := blank.plan()
+	spaces := newVTLib(t)
+	spaces.book("p", "g", true, func(b *database.Book) { b.MergedIntoBookID = new("   ") })
+	spaces.appliedTwin("t", "g", vtSaga(), nil)
+	require.True(t, spaces.get("p").IsRetired(), "fixture: the one rule must call a whitespace-only merged-into id retired")
+	_, rows := spaces.plan()
 	if r, ok := rows["g"]; ok {
 		require.False(t, r.Applicable(), "a retired primary's group is not applicable: %+v", r)
 	}

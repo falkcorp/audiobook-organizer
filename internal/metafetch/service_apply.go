@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.57.1
+// version: 1.57.2
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package metafetch
 
@@ -412,10 +412,16 @@ func legacyAudioConfirmedMarker(candidate MetadataCandidate, th transcriptionHin
 // read of lock keys, not a book write, so it is safe under the stripe.
 //
 // A copy that is retired (trashed or merged away) when its row is read under
-// that stripe is refused: nothing is written to it, neither its columns nor its
-// author and narrator joins, and the error wraps errFileTargetChanged so the
-// caller stops before writing tags to its files. Every other failure is logged
-// and returns nil, as before.
+// that stripe is refused: nothing is written to it, and the error wraps
+// errFileTargetChanged so the caller stops before writing tags to its files.
+// The decision is made twice, each time on the row read under the copy's own
+// stripe: once for the columns, and again in a second locked pass for the
+// author and narrator joins (the stripe is released between the two, and a
+// trash or merge can land in that gap). So no write lands on a copy after the
+// pass that read it retired. What a lock cannot cover: a copy that retires
+// after the join pass commits still has its files tagged by the caller, because
+// that is file I/O and cannot run under a store lock; writeBackForBook states
+// the same residual. Every other failure is logged and returns nil, as before.
 func (mfs *Service) syncMetadataToLibraryCopy(original, libCopy *database.Book) error {
 	var restored []string
 	var lockErr error
@@ -471,28 +477,59 @@ func (mfs *Service) syncMetadataToLibraryCopy(original, libCopy *database.Book) 
 	// author_name / narrator columns, so the same lock governs them. Copying
 	// the original's rows over a locked copy would undo through the join table
 	// exactly what the guard above just preserved on the column.
+	//
+	// The original's rows are read here, outside any lock; only the writes to
+	// the copy need its row lock.
+	var newAuthors []database.BookAuthor
 	if !lockedOnCopy[database.FieldKeyAuthorName] {
-		if authors, err := mfs.db.GetBookAuthors(original.ID); err == nil && len(authors) > 0 {
-			var newAuthors []database.BookAuthor
+		if authors, err := mfs.db.GetBookAuthors(original.ID); err == nil {
 			for _, ba := range authors {
 				newAuthors = append(newAuthors, database.BookAuthor{
 					BookID: libCopy.ID, AuthorID: ba.AuthorID, Role: ba.Role, Position: ba.Position,
 				})
 			}
-			_ = mfs.db.SetBookAuthors(libCopy.ID, newAuthors)
 		}
 	}
-
+	var newNarrators []database.BookNarrator
 	if !lockedOnCopy[database.FieldKeyNarrator] {
-		if narrators, err := mfs.db.GetBookNarrators(original.ID); err == nil && len(narrators) > 0 {
-			var newNarrators []database.BookNarrator
+		if narrators, err := mfs.db.GetBookNarrators(original.ID); err == nil {
 			for _, bn := range narrators {
 				newNarrators = append(newNarrators, database.BookNarrator{
 					BookID: libCopy.ID, NarratorID: bn.NarratorID, Role: bn.Role, Position: bn.Position,
 				})
 			}
+		}
+	}
+	if len(newAuthors) == 0 && len(newNarrators) == 0 {
+		return nil
+	}
+
+	// SECOND LOCKED PASS. The column pass above released the copy's write
+	// stripe, and a trash or merge can land after it. The joins are written
+	// inside a second ModifyBook that rechecks the row under the stripe and
+	// refuses a retired one, with the join writes nested in the callback (the
+	// shape the iTunes enrichment join uses: the nested writes take only the
+	// book_authors / book_narrators edge of the stripe order the book already
+	// holds). The callback never rewrites the row itself, so it returns
+	// ErrSkipBookWrite either way. A join write that fails is dropped, as
+	// before; the copy keeps its old credits until the next apply.
+	retiredAtJoin := false
+	_, _ = mfs.db.ModifyBook(libCopy.ID, func(row *database.Book) error {
+		if row.IsRetired() {
+			retiredAtJoin = true
+			return database.ErrSkipBookWrite
+		}
+		if len(newAuthors) > 0 {
+			_ = mfs.db.SetBookAuthors(libCopy.ID, newAuthors)
+		}
+		if len(newNarrators) > 0 {
 			_ = mfs.db.SetBookNarrators(libCopy.ID, newNarrators)
 		}
+		return database.ErrSkipBookWrite
+	})
+	if retiredAtJoin {
+		return fmt.Errorf("library copy %s was retired (trashed or merged away) after its columns were synced, so its credits were not synced: %w",
+			libCopy.ID, errFileTargetChanged)
 	}
 	return nil
 }
@@ -1460,7 +1497,31 @@ func (mfs *Service) librarySiblingMatching(book *database.Book, accept func(*dat
 
 // librarySiblingMatchingIn is librarySiblingMatching with its protected-file-row
 // check made from the import-path read r.
+//
+// A RETIRED sibling (merged away; GetBooksByVersionGroup already omits trashed
+// rows) is never the library copy: file work on it is refused as retired, so
+// handing it back made the job fail even when a live copy sat behind it. sortVersions
+// puts the primary flag first, and a merged row keeps its flag, so a merged
+// primary routinely sorts ahead of the live copy. The lookup skips it and goes
+// on to the next sibling; retiredLibrarySiblingIn finds what it skipped, for the
+// one caller that must not create a second copy beside it.
 func (mfs *Service) librarySiblingMatchingIn(r *importRootsRead, book *database.Book, accept func(*database.Book) bool) *database.Book {
+	return mfs.qualifyingLibrarySiblingIn(r, book, accept, false)
+}
+
+// retiredLibrarySiblingIn returns a RETIRED version sibling that would be
+// book's library copy but for being retired: under root_dir with no protected
+// file row. Nil when there is none. resolveLibraryCopy asks it when the lookup
+// found no live copy, so it can refuse to make a second organized copy of a book
+// whose copy was merged away.
+func (mfs *Service) retiredLibrarySiblingIn(r *importRootsRead, book *database.Book) *database.Book {
+	return mfs.qualifyingLibrarySiblingIn(r, book, nil, true)
+}
+
+// qualifyingLibrarySiblingIn is the one scan behind both lookups: the first
+// version-group sibling that is a library copy (under root_dir, accepted, no
+// protected file row) and whose retired state is wantRetired.
+func (mfs *Service) qualifyingLibrarySiblingIn(r *importRootsRead, book *database.Book, accept func(*database.Book) bool, wantRetired bool) *database.Book {
 	if book.VersionGroupID == nil || *book.VersionGroupID == "" {
 		return nil
 	}
@@ -1471,6 +1532,9 @@ func (mfs *Service) librarySiblingMatchingIn(r *importRootsRead, book *database.
 	for i := range siblings {
 		sib := &siblings[i]
 		if sib.ID == book.ID || !pathUnderRoot(sib.FilePath, config.AppConfig.RootDir) {
+			continue
+		}
+		if sib.IsRetired() != wantRetired {
 			continue
 		}
 		if accept != nil && !accept(sib) {
