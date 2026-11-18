@@ -1,5 +1,5 @@
 // file: internal/server/entities_ops_retired_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7733bb72-345a-4ee6-8a06-e0268bf4721e
 // last-edited: 2026-11-18
 
@@ -71,6 +71,22 @@ type retireBeforeModifyStore struct {
 
 func (s *retireBeforeModifyStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
 	if s.fired.CompareAndSwap(false, true) {
+		s.retire()
+	}
+	return s.Store.ModifyBook(id, fn)
+}
+
+// retireBetweenPassesStore merges the book away right before the SECOND
+// ModifyBook the op takes: after the author column write (the first pass)
+// landed, before the join pass that would rewrite the credits.
+type retireBetweenPassesStore struct {
+	database.Store
+	retire func()
+	calls  atomic.Int64
+}
+
+func (s *retireBetweenPassesStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	if s.calls.Add(1) == 2 {
 		s.retire()
 	}
 	return s.Store.ModifyBook(id, fn)
@@ -215,6 +231,28 @@ func TestResolveProductionAuthorOp_BookRetiredBeforeAuthorWriteIsNotWritten(t *t
 	require.Contains(t, r.logs, "0 unresolved")
 }
 
+// n20. A book retired BETWEEN the two locked passes was resolved: its author
+// column was written while it was live. It counts as resolved, with the join
+// skip on its own line, and not as a retired book skipped (nothing was skipped
+// but the join) or as unresolved.
+func TestResolveProductionAuthorOp_BookRetiredBetweenThePassesCountsAsResolved(t *testing.T) {
+	src := &countingSource{name: "SrcA"}
+	r := runResolve(t, src, true, func(s *Server, id string) database.Store {
+		inner := s.storeForWiring()
+		return &retireBetweenPassesStore{Store: inner, retire: func() { retireMeanwhile(t, inner, id) }}
+	})
+
+	require.Equal(t, int64(1), r.aiCalls, "the book was live for the cover pass")
+	require.NotNil(t, r.finalBk.AuthorID, "the column was written while the book was live")
+	require.NotEqual(t, r.prodID, *r.finalBk.AuthorID)
+	require.Len(t, r.finalJoin, 1)
+	require.Equal(t, r.prodID, r.finalJoin[0].AuthorID, "the join of the retired book was left alone")
+	require.Contains(t, r.logs, "Resolved 1/1 books", "the book counts as resolved")
+	require.Contains(t, r.logs, "0 retired books skipped", "it is not a retired book skipped")
+	require.Contains(t, r.logs, "0 unresolved")
+	require.Contains(t, r.logs, "1 of the resolved books were retired after their author was written", "the join skip is counted separately")
+}
+
 // The Publisher path: the fetch found and applied an author, then the book was
 // merged away before the Publisher reclassification took the row lock.
 func TestResolveProductionAuthorOp_BookRetiredBeforePublisherWriteIsNotWritten(t *testing.T) {
@@ -297,7 +335,8 @@ func TestAssignResolvedAuthorPreservingRecord_DoesNotRewriteTheJoinOfABookRetire
 
 	err := assignResolvedAuthorPreservingRecord(store, "b1", resolved, prod)
 
-	require.ErrorIs(t, err, errResolveBookRetired, "a book retired before the join pass is a retired skip")
+	require.ErrorIs(t, err, errResolveJoinRetired, "a book retired between the passes is reported as such")
+	require.NotErrorIs(t, err, errResolveBookRetired, "and is not a book whose write was refused")
 	require.Zero(t, joinWrites, "the join of a retired book must not be rewritten")
 	require.Equal(t, resolved, *store.stored("b1").AuthorID, "the column was written while the book was live")
 }
