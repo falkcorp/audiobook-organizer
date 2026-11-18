@@ -1,5 +1,5 @@
 // file: internal/seqnum/stated_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e20b2f44-17f0-486d-b69d-66acf91c7b19
 // last-edited: 2026-11-18
 
@@ -123,5 +123,43 @@ func TestReadStatedBareSpan(t *testing.T) {
 		if got := statedText(ReadStated(tc.in)); got != tc.want {
 			t.Errorf("ReadStated(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// P1: a part carries the marker word it was written with, so a caller can tell a
+// disc of a part from a part ("Hush Part 2 / Disc 1" are two levels).
+func TestReadStatedMarker(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"Hush: Part 2", "part"},
+		{"Hush Pt. 3", "part"},
+		{"Hush Parts 2", "part"},
+		{"Hush - Disc 2", "disc"},
+		{"Hush Disk 2", "disc"},
+		{"Hush CD 1", "cd"},
+		{"Hush CD1", "cd"},
+		{"Hush (2 of 3)", "of"},
+		{"Hush, Part 1 of 3", "part"},
+		{"Hush: The First Part", "part"},
+		{"Hush: Part the First", "part"},
+	} {
+		var got string
+		for _, st := range ReadStated(tc.in) {
+			if st.Kind == KindPart {
+				got = st.Marker
+				break
+			}
+		}
+		if got != tc.want {
+			t.Errorf("ReadStated(%q) part marker = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+	// A volume carries no marker, and the first part keeps its own.
+	for _, st := range ReadStated("Hush, Book 2: Disc 1 and Part 3") {
+		if st.Kind == KindVolume && st.Marker != "" {
+			t.Errorf("a volume carries marker %q", st.Marker)
+		}
+	}
+	if ss := ReadStated("Hush Disc 2, Part 3"); len(ss) != 2 || ss[0].Marker != "disc" || ss[1].Marker != "part" {
+		t.Errorf("two parts keep their own markers: %+v", ss)
 	}
 }

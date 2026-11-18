@@ -1,5 +1,5 @@
 // file: internal/seqnum/stated.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: ef7d6ebc-a3a1-4738-bc60-512ed593d8eb
 // last-edited: 2026-11-18
 
@@ -55,6 +55,12 @@ type Stated struct {
 	// Of is the M of "N of M", 0 when the text gives none. It is a total, not
 	// a number the text states.
 	Of float64
+	// Marker is the word a part was written with, normalised: "part" (part,
+	// parts, pt), "disc" (disc, disk), "cd", or "of" for a bare "(2 of 3)".
+	// A disc of a part and a part are different levels, and a caller that
+	// compares two parts of one book needs to know which level each names.
+	// Empty for a volume.
+	Marker string
 }
 
 var (
@@ -171,7 +177,7 @@ func takeParts(t string) (string, []Stated) {
 			return " "
 		}
 		if n, ok := toNumber(m[1], "part"); ok {
-			st := Stated{Kind: KindPart, Number: n}
+			st := Stated{Kind: KindPart, Number: n, Marker: partMarker(m[0])}
 			if of, ok := parseFloat(m[2]); ok {
 				st.Of = of
 			}
@@ -181,7 +187,7 @@ func takeParts(t string) (string, []Stated) {
 	})
 	t = replaceAllSub(t, reParenOf, func(m []string) string {
 		if n, ok := toNumber(m[1], "part"); ok {
-			st := Stated{Kind: KindPart, Number: n}
+			st := Stated{Kind: KindPart, Number: n, Marker: "of"}
 			if of, ok := parseFloat(m[2]); ok {
 				st.Of = of
 			}
@@ -190,6 +196,18 @@ func takeParts(t string) (string, []Stated) {
 		return " "
 	})
 	return t, parts
+}
+
+// partMarker normalises the marker word a rePartStated match opens with.
+func partMarker(match string) string {
+	switch {
+	case strings.HasPrefix(match, "cd"):
+		return "cd"
+	case strings.HasPrefix(match, "dis"):
+		return "disc"
+	default:
+		return "part"
+	}
 }
 
 func readStated(s string, loneI bool) []Stated { return readStatedIn(s, loneI, false) }
@@ -284,7 +302,7 @@ func ordinalStated(volume **Stated, parts *[]Stated, marker, ord string) string 
 	}
 	n := Number{Value: v, Text: ftoa(v), Form: "ordinal"}
 	if marker == "part" {
-		*parts = append(*parts, Stated{Kind: KindPart, Number: n})
+		*parts = append(*parts, Stated{Kind: KindPart, Number: n, Marker: "part"})
 	} else if *volume == nil {
 		*volume = &Stated{Kind: KindVolume, Number: n}
 	}

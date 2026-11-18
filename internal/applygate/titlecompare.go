@@ -1,5 +1,5 @@
 // file: internal/applygate/titlecompare.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 8e41c7a2-5d09-4b3f-a6e8-2f9c0d71b5a3
 // last-edited: 2026-11-18
 
@@ -48,11 +48,14 @@ import (
 //     "Who Am I 2"). A series name, a credit and a path never make a pair
 //     disagree. A year in brackets ("Knightfall (1993)") is a release tag and a
 //     leading list number ("08 - ") a file's: both are set aside before the
-//     conflict tests read the text (comparableText), the year only when the other
-//     title carries no year of its own. A year-like number written bare
-//     ("Gotham 2033") is a number of the title: it conflicts with any different
-//     number the other title states ("Gotham 2", "Gotham 2034"), and it is
-//     compared with nothing when the other title states none. Ordinals beside a
+//     conflict tests read the text (comparableText). Two titles that each carry a
+//     year, bracketed or bare, conflict when the years differ ("Gotham (2033)" /
+//     "Gotham (2034)"); an equal year, or a year only one title carries, is
+//     evidence of nothing ("Gotham (2033)" / "Gotham 2" is neutral, as "Gotham"
+//     / "Gotham 2" is). A year-like number written bare ("Gotham 2033") is also
+//     a number of the title: it conflicts with any different number the other
+//     title states ("Gotham 2"), and it is compared with nothing when the other
+//     title states none. Ordinals beside a
 //     marker read as the cardinal ("Third Book" is "Book 3").
 //   - everything else that is related is NEUTRAL: one title holds words or a
 //     number the other lacks, so the pair is confirmed by nothing in the title.
@@ -364,17 +367,27 @@ func intersects(a, b map[string]bool) bool {
 // form equality (checkTitle), and this only separates a conflict from a pair
 // that merely is not confirmed.
 func compareTitleFields(a, b string) titleCmp {
-	a, b = comparableText(a, b), comparableText(b, a)
+	// The years are compared on the text as written, bracketed or bare, before
+	// the release tags are set aside (comparableText).
+	yearA, yearB := yearsOf(a), yearsOf(b)
+	a, b = comparableText(a), comparableText(b)
 	sa, sb := titleSegments(a), titleSegments(b)
 	if len(sa) == 0 || len(sb) == 0 {
 		return titleCmp{class: classUnrelated}
 	}
 	fa, fb := formTokens(a), formTokens(b)
+	wa, na := wordsAndNums(fa)
+	wb, nb := wordsAndNums(fb)
+	// Two titles that each carry a year and differ in it are two books, even
+	// when the years are all that tells the words apart ("Gotham (2033)" /
+	// "Gotham (2034)" are the same tokens once the release tags are set aside).
+	if len(yearA) > 0 && len(yearB) > 0 && !slices.Equal(yearA, yearB) &&
+		(intersects(wa, wb) || (len(wa) == 0 && len(wb) == 0)) {
+		return titleCmp{class: classConflictNumber, note: "same words, different years (" + strings.Join(yearA, ",") + " vs " + strings.Join(yearB, ",") + ")"}
+	}
 	if slices.Equal(fa, fb) {
 		return titleCmp{class: classEqual}
 	}
-	wa, na := wordsAndNums(fa)
-	wb, nb := wordsAndNums(fb)
 
 	// The same words with numbers that differ: another book of the same name.
 	// The numbers are read by the one sequence number reader (seqnum), which
@@ -424,20 +437,26 @@ var (
 	yearAnyRe = regexp.MustCompile(`\b(?:1\d{3}|20\d{2}|2100)\b`)
 )
 
-// comparableText is a title field as the conflict tests read it, set beside the
-// text of the other field: without a year in brackets, unless the other text
-// carries a year too (two titles that each carry a year are told apart by
-// them, bracketed or not: "Gotham (2033)" and "Gotham (2034)" are two books),
-// and without a leading list number ("08 - "). A year in brackets on one side
-// only is a tagger's release date, not the book's; a list number is a file's.
+// yearsOf is the year-like numbers (1000-2100) a text carries, bracketed or
+// bare, each once and sorted.
+func yearsOf(s string) []string {
+	ys := yearAnyRe.FindAllString(s, -1)
+	slices.Sort(ys)
+	return slices.Compact(ys)
+}
+
+// comparableText is a title field as the conflict tests read it: without a year
+// in brackets and without a leading list number ("08 - "). A year in brackets is
+// a tagger's release date, not the book's, and a list number is a file's.
 // seqnum's own reader already sets the year aside and reads the list number as
 // the weak number it is, and the conflict tests must not see more than it does.
-// Only the conflict tests read this text; the forms (titleforms.go) are built
-// from the fields as declared.
-func comparableText(s, other string) string {
-	if !yearAnyRe.MatchString(other) {
-		s = yearTagRe.ReplaceAllString(s, "")
-	}
+// Two titles that each carry a year are told apart by them before this text is
+// read (compareTitleFields: "Gotham (2033)" and "Gotham (2034)" are two books),
+// and an equal year, bracketed or not, is evidence of nothing, so the bracket
+// goes from the word tests either way. Only the conflict tests read this text;
+// the forms (titleforms.go) are built from the fields as declared.
+func comparableText(s string) string {
+	s = yearTagRe.ReplaceAllString(s, "")
 	if n, ok := seqnum.Parse(s); ok && n.Form == "leading" {
 		s = leadingNumberRe.ReplaceAllString(s, "")
 	}
@@ -588,9 +607,10 @@ func subMultiset(a, b []string) bool {
 //     a different number the other side states ("Gotham 2", "Knightfall: Book
 //     1" against "Knightfall 1993") as well as with another year ("Gotham
 //     2034"). (A year in BRACKETS is a release tag and is set aside by
-//     comparableText unless the other side carries a year too.) Beside a title
-//     that states no number at all there is nothing to compare, so a lone year
-//     conflicts with nothing.
+//     comparableText; compareTitleFields has already compared the years of the
+//     two texts as written, so two different years conflict however they are
+//     written.) Beside a title that states no number at all there is nothing to
+//     compare, so a lone year conflicts with nothing.
 //
 // A number only one side states (a volume the book's own title leaves out) is
 // not compared: that is the sequence leg's to check.
