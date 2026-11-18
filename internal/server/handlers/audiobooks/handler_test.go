@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.21.3
+// version: 1.21.4
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
@@ -1516,5 +1516,23 @@ func TestPreviewPurgeSoftDeleted_PassesTheRequestingUserToTheEnqueue(t *testing.
 	h.PreviewPurgeSoftDeleted(c)
 	if w.Code != http.StatusAccepted || rec.actor != "" {
 		t.Fatalf("code %d actor %q, want 202 and no actor", w.Code, rec.actor)
+	}
+}
+
+// A series_id that names a series which no longer exists is the caller's bad
+// input: 400 naming the series. The store's refusal also says "not found", and
+// before it was matched first the handler answered 404 "audiobook not found" for
+// a book that is there.
+func TestUpdateAudiobook_DeletedSeriesIDIs400NotAnAudiobook404(t *testing.T) {
+	h, d := newHandler(t)
+	refused := fmt.Errorf("book b1: series 4715 does not exist, so the book cannot be linked to it: %w", database.ErrSeriesNotFound)
+	d.updater.EXPECT().UpdateAudiobookWithWarnings(mock.Anything, "b1", mock.Anything).Return(nil, nil, refused)
+	c, w := newCtx("PUT", "/audiobooks/b1", map[string]any{"series_id": 4715}, p("id", "b1"))
+	h.UpdateAudiobook(c)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "4715") {
+		t.Fatalf("the answer must name the series: %s", w.Body.String())
 	}
 }

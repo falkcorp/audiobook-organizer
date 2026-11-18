@@ -1,7 +1,7 @@
 // file: internal/metadata/enhanced.go
-// version: 1.31.3
+// version: 1.31.4
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
-// last-edited: 2026-11-12
+// last-edited: 2026-11-18
 
 package metadata
 
@@ -1155,7 +1155,16 @@ func ImportMetadata(data map[string]any, store importMetadataStore, validate boo
 		// Create or update book
 		if _, err := store.CreateBook(book); err != nil {
 			mu.Lock()
-			errs = append(errs, fmt.Errorf("book %d: failed to import: %w", i, err))
+			if errors.Is(err, database.ErrSeriesNotFound) && book.SeriesID != nil {
+				// series_id comes straight from the payload (an export writes
+				// only the id, never the series row), so a book whose series
+				// was deleted since arrives naming nothing. It is refused on
+				// its own, saying which series, and the rest of the payload
+				// still imports (the 206 partial result).
+				errs = append(errs, fmt.Errorf("book %d: not imported: series_id %d names a series that does not exist: %w", i, *book.SeriesID, err))
+			} else {
+				errs = append(errs, fmt.Errorf("book %d: failed to import: %w", i, err))
+			}
 			mu.Unlock()
 			return nil
 		}

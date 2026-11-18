@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.19.6
+// version: 1.19.7
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // Write-side CRUD + batch endpoints for the audiobooks domain: update
 // (full-column replacement with change-history recording + file write-back),
@@ -52,6 +52,14 @@ func (h *Handler) UpdateAudiobook(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, audiobookspkg.ErrInvalidAudiobookUpdate) {
 			httputil.RespondWithBadRequest(c, err.Error())
+			return
+		}
+		// A series_id naming a series that no longer exists is the caller's bad
+		// input, not a missing audiobook: the store's refusal says "not found"
+		// too, so it is matched first (it would otherwise answer 404 for a book
+		// that is there).
+		if errors.Is(err, database.ErrSeriesNotFound) {
+			httputil.RespondWithBadRequest(c, "series_id names a series that does not exist: "+err.Error())
 			return
 		}
 		if strings.Contains(err.Error(), "not found") {

@@ -1,14 +1,16 @@
 // file: internal/metadata/enhanced_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 8f7e6d5c-4b3a-2c1d-0e9f-8a7b6c5d4e3f
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package metadata
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -848,4 +850,35 @@ func expectFreshRead(t *testing.T, store *mocks.MockStore, id string, stored *da
 		RunAndReturn(func(string) (*database.Book, error) {
 			return database.SnapshotBook(stored)
 		}).Once()
+}
+
+// A payload book whose series_id names a series that no longer exists is
+// refused on its own, with an error naming the series (the handler answers 206
+// with it), and the other books in the payload still import.
+func TestImportMetadata_ADeletedSeriesIDRefusesThatBookAndNamesTheSeries(t *testing.T) {
+	store := newMockStore(t)
+	store.EXPECT().CreateBook(mock.MatchedBy(func(b *database.Book) bool {
+		return b != nil && b.Title == "Batman Year One" && b.SeriesID != nil && *b.SeriesID == 4717
+	})).Return(nil, fmt.Errorf("book: series 4717 does not exist: %w", database.ErrSeriesNotFound)).Once()
+	store.EXPECT().CreateBook(mock.MatchedBy(func(b *database.Book) bool {
+		return b != nil && b.Title == "Batman Hush"
+	})).Return(&database.Book{ID: "b2"}, nil).Once()
+
+	data := map[string]any{"books": []any{
+		map[string]any{"title": "Batman Year One", "format": "m4b", "series_id": float64(4717)},
+		map[string]any{"title": "Batman Hush", "format": "m4b"},
+	}}
+
+	count, errs := ImportMetadata(data, store, false)
+
+	if count != 1 {
+		t.Fatalf("count = %d, want 1 (the book with no dead series still imports)", count)
+	}
+	if len(errs) != 1 {
+		t.Fatalf("errs = %v, want exactly one", errs)
+	}
+	msg := errs[0].Error()
+	if !strings.Contains(msg, "series_id 4717") || !strings.Contains(msg, "book 0") || !errors.Is(errs[0], database.ErrSeriesNotFound) {
+		t.Fatalf("the error must name the book index and the missing series and keep its identity: %q", msg)
+	}
 }
