@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/rig_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d82c4a15-9e63-4f07-b1a9-7035e8c6f241
 // last-edited: 2026-11-18
 
@@ -298,9 +298,9 @@ func (r *rig) activity() datamigrate.DataMigration {
 	return dm
 }
 
-// migration is M4 over this rig, built the way F5-18 builds it.
-func (r *rig) migration() datamigrate.DataMigration {
-	dm, err := m4.New(m4.Config{
+// config is M4's Config over this rig.
+func (r *rig) config() m4.Config {
+	return m4.Config{
 		Importer: r.imp,
 		Legacy: func() storage.Reader {
 			lr := r.legacy.Load()
@@ -323,7 +323,14 @@ func (r *rig) migration() datamigrate.DataMigration {
 			return r.reconcileFn(ctx)
 		},
 		Logger: slog.New(slog.NewTextHandler(r.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
-	}, cutover.TasksCutoverID, cutover.BooksCutoverLevel, []storage.StepRef{cutover.BooksLevelStepRef(r.levelVersion())})
+	}
+}
+
+func m4Config(r *rig) m4.Config { return r.config() }
+
+// migration is M4 over this rig, built the way F5-18 builds it.
+func (r *rig) migration() datamigrate.DataMigration {
+	dm, err := m4.New(r.config(), cutover.TasksCutoverID, cutover.BooksCutoverLevel, []storage.StepRef{cutover.BooksLevelStepRef(r.levelVersion())})
 	if err != nil {
 		r.t.Fatal(err)
 	}

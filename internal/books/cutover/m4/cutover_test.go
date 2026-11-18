@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/cutover_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8e41b7d3-c960-4f25-a1e8-5d3f0b92c7a6
 // last-edited: 2026-11-18
 
@@ -298,6 +298,34 @@ func TestCutover_RunRecordFullyMapped(t *testing.T) {
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("imported record differs:\n got %+v\nwant %+v", got, want)
+		}
+	})
+}
+
+// TestCutover_RunModeFollowsTheRecord: a run keeps the mode HEAD stored for it
+// (a preview run that carries no dry_run param stays a preview), and the two
+// repairs defs override the stored mode: a plan is always a Preview, an apply
+// always Live (05-tasks 5T.8.2 rule 2).
+func TestCutover_RunModeFollowsTheRecord(t *testing.T) {
+	done := epoch.Add(time.Hour)
+	run := func(i int, def, mode string, params any) runSpec {
+		return runSpec{id: runID(i), def: def, st: "succeeded", completed: tptr(done), mode: mode, params: params}
+	}
+	r := newRig(t, withRuns(nil,
+		run(1, "dedup.book-scan", "preview", map[string]any{}),
+		run(2, "dedup.book-scan", "live", map[string]any{"dry_run": true}),
+		run(3, "repairs.plan", "live", map[string]any{"fixer_id": "hush"}),
+		run(4, "repairs.apply", "preview", map[string]any{"fixer_id": "hush", "plan_op_id": runID(3)}),
+	))
+	r.runObserve(t, func(ctx context.Context, s *snap) {
+		for i, want := range []tasks.Mode{tasks.ModePreview, tasks.ModeLive, tasks.ModePreview, tasks.ModeLive} {
+			rec, err := s.Stores.Runs.Get(ctx, tasks.RunID(runID(i+1)))
+			if err != nil {
+				t.Fatalf("run %d: %v", i+1, err)
+			}
+			if rec.Mode != want {
+				t.Errorf("run %d (%s): mode %q, want %q", i+1, rec.Kind, rec.Mode, want)
+			}
 		}
 	})
 }

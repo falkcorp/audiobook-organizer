@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/activity.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b1f8d36-c4a7-4e09-9d52-0a63e7b1c8f4
 // last-edited: 2026-11-18
 
@@ -74,8 +74,8 @@ type Activity struct {
 
 // NewActivity returns the in-place activity rewrite with ID id.
 //
-// raisesLevel and after are the flip's, as for New; the migration is run after
-// M4 (After M4's ID is the caller's to add to after).
+// raisesLevel and after are the flip's, as for New, with M4's own ref among
+// them when it is meant to run after M4 (Steps adds it).
 //
 // Parallelism is CPU(): rows are independent. A worker writes its own primary
 // row and the one act:typ: index key that names it (the key carries the row's

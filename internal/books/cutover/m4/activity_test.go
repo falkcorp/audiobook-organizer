@@ -1,16 +1,21 @@
 // file: internal/books/cutover/m4/activity_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8e43c7a1-2f95-4b60-a8d3-5c71b9e0f246
 // last-edited: 2026-11-18
 
 package m4_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/books/cutover/kindrename"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // act is one activity row and its index keys, as the feed's store writes them.
@@ -57,13 +62,13 @@ func decodeAct(t *testing.T, raw string) map[string]any {
 	return m
 }
 
-// TestCutover_KindReferencesRewritten: every activity row that stored a HEAD def
+// kindReferencesSynthetic is the synthetic half of TestCutover_KindReferencesRewritten: every activity row that stored a HEAD def
 // ID names the renamed kind afterwards in type, details.def_id and its def: tag;
 // act:typ: holds the re-keyed entry and not the old one; the digest's items are
 // renamed; a type that is no def ID (and the repairs defs, whose kind needs a
 // run's fixer) stay as stored; every other index and every other field is
 // untouched; a row that does not decode is held in place.
-func TestCutover_KindReferencesRewritten(t *testing.T) {
+func kindReferencesSynthetic(t *testing.T) {
 	raw := map[string]string{}
 	n := func(i int) string { return fmt.Sprintf("%020d", 1_700_000_000_000_000_000+int64(i)) }
 	rows := []act{
@@ -215,4 +220,164 @@ func TestCutover_KindReferencesRewritten(t *testing.T) {
 	if s.Verify.Written != 6 {
 		t.Errorf("the report wrote %d rows, want 6 (the rows that named a def ID): %+v", s.Verify.Written, s.Verify)
 	}
+}
+
+// TestCutover_KindReferencesRewritten: the activity feed's rewrite, over
+// synthetic rows that cover every shape of reference, and over stage 1 of the
+// R2 corpus, the feed R0 wrote.
+func TestCutover_KindReferencesRewritten(t *testing.T) {
+	t.Run("synthetic", kindReferencesSynthetic)
+	t.Run("corpus", kindReferencesCorpus)
+}
+
+var (
+	actPrimary = regexp.MustCompile(`^act:(audit|batch|change|debug|digest|info|system):[0-9]{20}:[0-9A-Za-z]+$`)
+	// dotted is the shape of a HEAD def ID (and of a kind): two or more
+	// dot-separated lowercase words.
+	dotted = regexp.MustCompile(`^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$`)
+)
+
+// defRefs lists every def ID or kind a feed row names, wherever it names one:
+// type, details.def_id, the def: tags and the digest's items.
+func defRefs(row map[string]any) []string {
+	var out []string
+	add := func(v any) {
+		if s, ok := v.(string); ok && dotted.MatchString(s) {
+			out = append(out, s)
+		}
+	}
+	tags := func(v any) {
+		ts, _ := v.([]any)
+		for _, tg := range ts {
+			if s, ok := tg.(string); ok {
+				if id, ok := strings.CutPrefix(s, "def:"); ok {
+					add(id)
+				}
+			}
+		}
+	}
+	add(row["type"])
+	tags(row["tags"])
+	if d, ok := row["details"].(map[string]any); ok {
+		add(d["def_id"])
+		if items, ok := d["items"].([]any); ok {
+			for _, it := range items {
+				if m, ok := it.(map[string]any); ok {
+					add(m["type"])
+					tags(m["tags"])
+				}
+			}
+		}
+	}
+	return out
+}
+
+// kindReferencesCorpus: the activity rewrite over the rows R0 wrote. Every row
+// is still there, every row that named a def ID names the kind the map gives it,
+// act:typ: has one entry per row under the row's new type, and a scan of the
+// whole feed afterwards finds no HEAD def ID that the table renames and no ID
+// the table does not know. A hit is a gap in the table (the brief's stop
+// condition): it is reported, never added to an allowlist here.
+func kindReferencesCorpus(t *testing.T) {
+	var pre map[string]string
+	r := newRig(t, withCorpus("stage1"))
+	r.mutate = func(ctx context.Context, t testing.TB, lr storage.LegacyRange) {
+		pre = map[string]string{}
+		for kv, err := range lr.Scan(ctx, storage.ScanOptions{Start: []byte("act:"), End: []byte("act;")}) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			pre[string(kv.Key)] = string(kv.Value)
+		}
+	}
+	s, err := r.runWith(t, r.seed(t), r.activity())
+	if err != nil {
+		t.Fatalf("%v\n%s", err, r.logs)
+	}
+	if len(s.Quarantine) != 0 || s.Verify.Held != 0 {
+		t.Errorf("held %d, quarantined %+v: R0's feed holds no row the rewrite cannot read", s.Verify.Held, s.Quarantine)
+	}
+
+	var rows, renamed, indexed int
+	for k, v := range pre {
+		if !actPrimary.MatchString(k) {
+			// Every index other than act:typ: is untouched.
+			if !strings.HasPrefix(k, "act:typ:") && s.Act[k] != v {
+				t.Errorf("%s changed in the rewrite", k)
+			}
+			continue
+		}
+		rows++
+		old := decodeAct(t, v)
+		got, ok := s.Act[k]
+		if !ok {
+			t.Errorf("%s was dropped", k)
+			continue
+		}
+		now := decodeAct(t, got)
+		oldType, _ := old["type"].(string)
+		wantType := oldType
+		if tg, ok := kindrename.Lookup(oldType); ok && tg.Kind != "" {
+			wantType = string(tg.Kind)
+		}
+		if now["type"] != wantType {
+			t.Errorf("%s: type %v, want %q", k, now["type"], wantType)
+		}
+		if wantType != oldType {
+			renamed++
+		}
+		if wantType != "" {
+			indexed++
+			parts := strings.SplitN(strings.TrimPrefix(k, "act:"), ":", 3)
+			a := act{tier: parts[0], nanos: parts[1], ulid: parts[2]}
+			if ref, ok := s.Act[a.typ(wantType)]; !ok || ref != a.ref() {
+				t.Errorf("%s: type index entry under %q = %q, %v; want %q", k, wantType, ref, ok, a.ref())
+			}
+			if wantType != oldType {
+				if _, still := s.Act[a.typ(oldType)]; still {
+					t.Errorf("%s: the index entry under the old type %q is still there", k, oldType)
+				}
+			}
+		}
+	}
+	if rows == 0 {
+		t.Fatal("stage 1 holds no activity row: the test would compare nothing with nothing")
+	}
+	var typ int
+	for k := range s.Act {
+		if strings.HasPrefix(k, "act:typ:") {
+			typ++
+		}
+	}
+	if typ != indexed {
+		t.Errorf("act:typ: holds %d entries after the rewrite, %d rows have a type", typ, indexed)
+	}
+
+	// The whole-feed scan: no def ID in any position that the table renames or
+	// does not know.
+	seen := map[string]int{}
+	for k, v := range s.Act {
+		if !actPrimary.MatchString(k) {
+			continue
+		}
+		for _, id := range defRefs(decodeAct(t, v)) {
+			seen[id]++
+		}
+	}
+	for id, n := range seen {
+		tg, known := kindrename.Lookup(id)
+		switch {
+		case strings.HasPrefix(id, "books.") || strings.HasPrefix(id, "core."):
+			// A kind already.
+		case known && tg.Kind == "":
+			// A repairs def: the kind needs a run's fixer, so the feed keeps the def ID.
+		case known:
+			t.Errorf("STOP: %d feed positions still name the HEAD def ID %q, which the table renames to %q", n, id, tg.Kind)
+		default:
+			t.Errorf("STOP: %d feed positions name %q, which is neither a kind nor in the rename table", n, id)
+		}
+	}
+	checkAnswers(t, "activity_stage1", map[string]int{"rows": rows, "renamed": renamed, "typed": indexed, "type_index_entries": typ,
+		"distinct_references_after": len(seen), "verify_written": int(s.Verify.Written), "verify_held": int(s.Verify.Held)})
+	t.Logf("stage 1 feed: %d rows, %d renamed, %d typed, %d distinct def or kind references after the rewrite", rows, renamed, indexed, len(seen))
 }

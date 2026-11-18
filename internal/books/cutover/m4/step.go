@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/step.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a9d5f13e-7c02-4b68-8e41-35b0c6d7e2f8
 // last-edited: 2026-11-18
 
@@ -158,6 +158,39 @@ func New(cfg Config, id string, raisesLevel int, after []storage.StepRef) (datam
 		Step:            m.Step,
 		Verify:          m.Verify,
 	}, nil
+}
+
+// StepIDs are the IDs of M4's two steps. They are the caller's: F3-06 reserved
+// M4's step ID in internal/books/cutover/stepids.go, and a later flip adds
+// the activity rewrite's beside it.
+type StepIDs struct {
+	// Runs is the step that imports the operation families into core's task
+	// store.
+	Runs string
+	// Activity is the in-place rewrite of the activity feed's kind references.
+	Activity string
+}
+
+// Steps returns M4's two steps in the order they run: the run families' step
+// after the passed refs, then the activity rewrite after the passed refs and
+// the run families' step (each later step runs After the one before it, so the
+// feed names kinds only once the runs that carry them have been imported).
+// Both raise raisesLevel, which is the flip's. It is the one constructor F5-18
+// calls; New and NewActivity build the steps one by one for tests.
+func Steps(cfg Config, actCfg ActivityConfig, ids StepIDs, raisesLevel int, after []storage.StepRef) ([]datamigrate.DataMigration, error) {
+	if ids.Runs == ids.Activity {
+		return nil, fmt.Errorf("m4: the two steps need different IDs, both are %q", ids.Runs)
+	}
+	runs, err := New(cfg, ids.Runs, raisesLevel, after)
+	if err != nil {
+		return nil, err
+	}
+	actAfter := append(append([]storage.StepRef(nil), after...), storage.StepRef{Owner: storage.Owner(runs.Owner), DataMigration: runs.ID})
+	act, err := NewActivity(actCfg, ids.Activity, raisesLevel, actAfter)
+	if err != nil {
+		return nil, err
+	}
+	return []datamigrate.DataMigration{runs, act}, nil
 }
 
 // reconcile runs HEAD's reconcile once, before the first row is decoded. A
