@@ -1,7 +1,7 @@
 // file: internal/books/store/dataloss_preserve_invariant_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: d3f4a5b6-7c8d-9e0f-1a2b-preserveinv001
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package store
 
@@ -127,6 +127,8 @@ func TestUpdateBook_PreservesEveryStrippedFieldOnNilIncoming(t *testing.T) {
 	if len(indices) == 0 {
 		t.Fatal("no stripped fields derived — populator or strip changed")
 	}
+	// The populated book names series 7; a book write refuses a series that does not exist.
+	seedSeriesRow(t, store, 7)
 
 	for k, idx := range indices {
 		name := names[k]
