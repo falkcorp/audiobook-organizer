@@ -1,7 +1,7 @@
 // file: internal/server/author_reclassify_op.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 40643c5c-2000-4271-813a-297ab2aa23e1
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // author_reclassify_op registers entities.author-reclassify: the op behind the
 // Authors view's "reclassify as narrator" button (POST
@@ -18,21 +18,25 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/falkcorp/mediacore/tasks"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 // authorReclassifyOpParams is the wire shape, defined once in package entities.
 type authorReclassifyOpParams = entities.AuthorReclassifyOpParams
 
-// RegisterAuthorReclassifyOp registers the "entities.author-reclassify" v2 OperationDef.
-func (s *Server) RegisterAuthorReclassifyOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
+// authorReclassifyDef is HEAD's definition. Its Run is the v2 shell.
+func (s *Server) authorReclassifyDef() opsregistry.OperationDef {
+	return opsregistry.OperationDef{
 		ID:              entities.AuthorReclassifyOpID,
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "entities",
@@ -72,40 +76,162 @@ func (s *Server) RegisterAuthorReclassifyOp(reg *opsregistry.Registry) error {
 			_ = progress.Log("info", msg, nil)
 			return nil
 		},
-	})
+	}
 }
 
-// runAuthorReclassify is the op's body: hold the scan stand-down, reclassify the
-// author journaled under opID, and drop the author caches on EVERY exit after the
-// first write (a partial move changes the lists too). It returns the success line.
-func (s *Server) runAuthorReclassify(ctx context.Context, opID string, authorID int) (string, error) {
+// RegisterAuthorReclassifyOp registers the "entities.author-reclassify" v2 OperationDef.
+func (s *Server) RegisterAuthorReclassifyOp(reg *opsregistry.Registry) error {
+	return reg.RegisterOp(s.authorReclassifyDef())
+}
+
+// authorReclassifyStore is the reads of the reclassify: the author and the
+// narrator it becomes, each book's credits, and the books the author credits
+// (the trash included).
+type authorReclassifyStore interface {
+	GetAuthorByID(id int) (*database.Author, error)
+	GetAuthorByName(name string) (*database.Author, error)
+	GetNarratorByName(name string) (*database.Narrator, error)
+	GetBookNarrators(bookID string) ([]database.BookNarrator, error)
+	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
+	GetBooksByAuthorIDForRelinkCore(authorID int) ([]database.BookCore, error)
+	GetAuthorAliases(authorID int) ([]database.AuthorAlias, error)
+}
+
+// authorReclassifyWriter is the writes of the reclassify: the credits it moves,
+// the author it deletes, the narrator and unknown-author rows it may create, the
+// undo journal row under the op's id, and the two caches the lists are served
+// from.
+type authorReclassifyWriter interface {
+	CreateAuthor(name string) (*database.Author, error)
+	DeleteAuthor(id int) error
+	CreateNarrator(name string) (*database.Narrator, error)
+	SetBookAuthors(bookID string, authors []database.BookAuthor) error
+	SetBookNarrators(bookID string, narrators []database.BookNarrator) error
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+	CreateOperationChange(change *database.OperationChange) error
+	// InvalidateAuthorCaches drops the author-duplicates and authors list caches.
+	InvalidateAuthorCaches()
+}
+
+// authorReclassifyEnv is what the shared core takes from its shell (rules R2,
+// R10).
+type authorReclassifyEnv struct {
+	t7Env
+	Store     authorReclassifyStore
+	Writer    authorReclassifyWriter
+	StandDown t7StandDown
+}
+
+// authorReclassifyPair is the entities.ReclassifyStore (and journal store) the
+// shared core hands the move: reads from the env's Store, writes from its Writer.
+type authorReclassifyPair struct {
+	authorReclassifyStore
+	authorReclassifyWriter
+}
+
+// authorReclassifyCore is the op's body: hold the scan stand-down, reclassify the
+// author journaled under env.OpID, and drop the author caches on EVERY exit after
+// the first write (a partial move changes the lists too). It returns the success
+// line. Shared by HEAD's shell and the native kind.
+func authorReclassifyCore(ctx context.Context, authorID int, env authorReclassifyEnv) (string, error) {
 	if authorID <= 0 {
 		return "", fmt.Errorf("author-reclassify: invalid author id %d", authorID)
 	}
 	// Taken before the first write, so a refusal leaves nothing to invalidate.
-	release, herr := s.holdReclassifyStandDown(ctx, opID, "author-reclassify")
+	hold, herr := env.StandDown(ctx, "author-reclassify")
 	if herr != nil {
 		return "", fmt.Errorf("author-reclassify: %w", herr)
 	}
-	defer release()
+	defer func() { _ = hold.Finish(nil) }()
 
-	store := s.Ops()
-	defer func() {
-		s.dedupCache.Invalidate("author-duplicates")
-		s.authorsCache.InvalidateAll()
-	}()
+	store := authorReclassifyPair{env.Store, env.Writer}
+	defer env.Writer.InvalidateAuthorCaches()
 	out, err := entities.ReclassifyAuthorAsNarrator(store, authorID, entities.ReclassifyOptions{
 		// Journaled under this operation, so a revert of it undoes the reclassify.
-		Journal: &entities.ReclassifyJournal{OperationID: opID, Store: store},
+		Journal: &entities.ReclassifyJournal{OperationID: env.OpID, Store: store},
 		// No SkipBook: this is a person's explicit action on one author, unlike the
 		// AI apply, which leaves a book whose author_name or narrator is locked.
 		// Lease renews the stand-down before each book's writes.
-		Lease: func() bool { return s.scanGate().RenewScanStandDown(opID) },
+		Lease: hold.Renew,
 	})
 	if err != nil {
 		return "", reclassifyFailure(authorID, out, err)
 	}
 	return fmt.Sprintf("Reclassified author %d as narrator %d: %d book(s) updated", authorID, out.NarratorID, out.BooksUpdated), nil
+}
+
+// headAuthorReclassifyWriter is HEAD's write side: the ops store's own methods,
+// and the server's two caches, each called as HEAD's body called them.
+type headAuthorReclassifyWriter struct {
+	database.Store
+	s *Server
+}
+
+func (w headAuthorReclassifyWriter) InvalidateAuthorCaches() {
+	w.s.dedupCache.Invalidate("author-duplicates")
+	w.s.authorsCache.InvalidateAll()
+}
+
+// runAuthorReclassify is HEAD's body: authorReclassifyCore over the server's ops
+// store, the server's caches and the scan gate's stand-down.
+func (s *Server) runAuthorReclassify(ctx context.Context, opID string, authorID int) (string, error) {
+	store := s.storeForWiring()
+	env := authorReclassifyEnv{
+		t7Env:  t7Env{Live: true, OpID: opID},
+		Store:  store,
+		Writer: headAuthorReclassifyWriter{Store: store, s: s},
+		StandDown: func(ctx context.Context, reason string) (t7Hold, error) {
+			release, err := s.holdReclassifyStandDown(ctx, opID, reason)
+			if err != nil {
+				return t7Hold{}, err
+			}
+			return t7Hold{
+				Renew:  func() bool { return s.scanGate().RenewScanStandDown(opID) },
+				Finish: func(runErr error) error { release(); return runErr },
+			}, nil
+		},
+	}
+	return authorReclassifyCore(ctx, authorID, env)
+}
+
+// authorReclassifyNative is the native books.entities.author-reclassify kind. It
+// moves book credits (authors), creates the narrator, and deletes the author.
+func (s *Server) authorReclassifyNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	kind := t7KindFor(entities.AuthorReclassifyOpID)
+	c := t7Common(s.authorReclassifyDef(), sched)
+	c.Effects = t7Writes(ops.ResBooks, ops.ResAuthors, ops.ResOperations)
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			p, err := t7DecodeNative[authorReclassifyOpParams](kind, raw)
+			if err != nil {
+				return struct{}{}, err
+			}
+			if err := t7LiveOnly(rc, kind); err != nil {
+				return struct{}{}, err
+			}
+			if err := t7NeedStore(kind, deps); err != nil {
+				return struct{}{}, err
+			}
+			w, err := t7NewWriter(kind, deps, rc)
+			if err != nil {
+				return struct{}{}, err
+			}
+			env := authorReclassifyEnv{
+				t7Env:     t7NativeEnv(rc),
+				Store:     deps.Store,
+				Writer:    w,
+				StandDown: t7NativeStandDown(rc, deps.StandDownKey),
+			}
+			msg, err := authorReclassifyCore(rc.Context(), p.AuthorID, env)
+			if err != nil {
+				env.Log(slog.LevelError, err.Error())
+				return struct{}{}, err
+			}
+			env.Log(slog.LevelInfo, msg)
+			return struct{}{}, nil
+		},
+	})
 }
 
 // reclassifyFailure words a failed reclassify for the op's error_message, which
