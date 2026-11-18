@@ -1,7 +1,7 @@
 // file: internal/applygate/titlecompare_test.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 0b5a7e12-93c4-4d68-a1f7-6e2d9c40b835
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package applygate
 
@@ -470,15 +470,21 @@ func oClass(book, cand atitle) string {
 	// 1. a whole declared form is equal, or the two title fields say the same
 	//    segments in another order
 	//    One exception: a candidate that is its own series name with no real
-	//    subtitle says no volume by its bare title, or by the series name in
-	//    front of it, so those two forms and the segment key are NEUTRAL, not
-	//    agree. A form that states the position agrees as ever.
+	//    subtitle says no volume by its bare title, by the series name in
+	//    front of it, or by its title with a credit beside it, so those forms
+	//    and the segment key are NEUTRAL, not agree. A form that states the
+	//    position agrees as ever.
 	selfBare := oSelfTitled(cand) && len(oEffectiveSub(cand)) == 0
 	forms := oCandForms(cand)
 	var bare []oForm
 	if selfBare {
 		t := join(flat(cand.segs))
 		bare = []oForm{{text: t}, {text: t + " " + t, series: true}}
+		for _, f := range forms {
+			if f.credit && !f.series {
+				bare = append(bare, f)
+			}
+		}
 		forms = slices.DeleteFunc(slices.Clone(forms), func(f oForm) bool { return slices.Contains(bare, f) })
 	}
 	if oAnyMatch(forms, oBookForms(book)) {
@@ -506,7 +512,7 @@ func oClass(book, cand atitle) string {
 		}
 	}
 	if book.blank && len(book.path) > 0 && !names[join(book.path)] &&
-		oAnyMatch(oCandForms(cand), []oForm{{text: join(book.path)}}) {
+		oAnyMatch(forms, []oForm{{text: join(book.path)}}) {
 		return "agree"
 	}
 	// 4. a title that is a series name, on either side, is not a title
@@ -964,7 +970,8 @@ func TestCheckTitle_MatchesTheOracle(t *testing.T) {
 // on the book change nothing.
 func TestCheckTitle_IsSymmetric(t *testing.T) {
 	r := rand.New(rand.NewPCG(7, 4688))
-	asymmetric, selfTitled := 0, 0
+	compared, asymmetric, selfTitled := 0, 0, 0
+	exempt := map[string]int{}
 	for i := 0; i < scaled(15000); i++ {
 		a := genSide(r)
 		b := genSide(r)
@@ -982,32 +989,64 @@ func TestCheckTitle_IsSymmetric(t *testing.T) {
 		}
 		x := runTitleCheck(bookOf(a, 1), candOf(b, 2))
 		y := runTitleCheck(bookOf(b, 2), candOf(a, 1))
-		if outcomeClass(x) != outcomeClass(y) {
-			// The one asymmetry: the pair's words are a proper subset one way
-			// round. A candidate that ADDS words to the stored title is neutral;
-			// one that is a few words OF a longer stored title must share half
-			// of them (compareTitleFields). Pinned by example, and required to
-			// be the only asymmetry: both orders are then a word subset.
-			aw, _ := oWordsNums(flat(oSegs(oCanon(a))))
-			bw, _ := oWordsNums(flat(oSegs(oCanon(b))))
-			if len(aw) > 0 && len(bw) > 0 && (oSubset(aw, bw) != oSubset(bw, aw)) {
-				asymmetric++
-				continue
+		cx, cy := outcomeClass(x), outcomeClass(y)
+		if cx == cy {
+			compared++
+			continue
+		}
+		// The pair differs: x is book A with candidate B, y is book B with
+		// candidate A. Each exemption names the DIRECTION of the difference, so
+		// a pair that differs the wrong way round, or in a class the rule does
+		// not produce, still fails.
+		aw, _ := oWordsNums(flat(oSegs(oCanon(a))))
+		bw, _ := oWordsNums(flat(oSegs(oCanon(b))))
+		switch {
+		// The subset bound: a candidate that ADDS words to the stored title is
+		// neutral; one that is a few words OF a longer stored title must share
+		// half of them (compareTitleFields) and is a block when it does not.
+		// Pinned by example. So the order whose candidate is the proper subset
+		// of the stored words is the block and the other order is neutral.
+		case len(aw) > 0 && len(bw) > 0 && oSubset(aw, bw) != oSubset(bw, aw):
+			asymmetric++
+			candIsSubsetInX := oSubset(bw, aw) // candidate B is a subset of book A
+			want := [2]string{"neutral", "block"}
+			if candIsSubsetInX {
+				want = [2]string{"block", "neutral"}
 			}
-			// The other: a candidate whose title is its own series name says no
-			// volume by it (neutral), a stored title that is its series name is
-			// an ordinary stored title. The rule is about the candidate's side
-			// only (pinned by the rule examples).
-			if oSelfTitled(oCanon(a)) || oSelfTitled(oCanon(b)) {
-				selfTitled++
-				continue
+			if [2]string{cx, cy} != want {
+				t.Fatalf("subset pair differs the wrong way round: book A cand B = %s (%s), book B cand A = %s (%s), want %v; A=%+v B=%+v",
+					cx, x.Detail, cy, y.Detail, want, a, b)
 			}
+			exempt["subset "+cx+"/"+cy]++
+		// A candidate whose title is its own series name says no volume by it
+		// (neutral or a series-name block); a stored title that is its series
+		// name is an ordinary stored title. The side that is the self-titled
+		// candidate never comes out higher (block, neutral, agree) than the
+		// same side as the book. (Pinned by the rule examples.)
+		case oSelfTitled(oCanon(a)) || oSelfTitled(oCanon(b)):
+			selfTitled++
+			rank := map[string]int{"block": 0, "neutral": 1, "agree": 2}
+			// y has A as the candidate, x has B as the candidate
+			selfCandHigher := (oSelfTitled(oCanon(a)) && !oSelfTitled(oCanon(b)) && rank[cy] > rank[cx]) ||
+				(oSelfTitled(oCanon(b)) && !oSelfTitled(oCanon(a)) && rank[cx] > rank[cy])
+			// and the difference is always agree against neutral: a self-titled
+			// candidate's bare forms are neutral where the stored side's agree
+			if selfCandHigher || !((cx == "agree" && cy == "neutral") || (cx == "neutral" && cy == "agree")) {
+				t.Fatalf("a self-titled pair differs in the wrong direction or in classes other than agree and neutral: book A cand B = %s (%s), book B cand A = %s (%s); A=%+v B=%+v",
+					cx, x.Detail, cy, y.Detail, a, b)
+			}
+			exempt["self-titled "+cx+"/"+cy]++
+		default:
 			t.Fatalf("book A cand B = %s (%s), book B cand A = %s (%s); A=%+v B=%+v", x.Outcome, x.Detail, y.Outcome, y.Detail, a, b)
 		}
 	}
-	// The exemption must not swallow the property: it only covers pairs where
-	// one title's words are a proper subset of the other's.
-	t.Logf("%d pairs differ only by the subset bound, %d only by a self-titled side", asymmetric, selfTitled)
+	// The exemptions must not swallow the property: most pairs are compared and
+	// agree in both orders, and the floor fails the test if a change makes the
+	// two exemptions (or a skip) take over.
+	if compared < scaled(13500) {
+		t.Fatalf("only %d pairs were compared in both orders (floor %d): the exemptions are taking over the property", compared, scaled(13500))
+	}
+	t.Logf("%d pairs compared, %d differ only by the subset bound, %d only by a self-titled side; exempt classes %v", compared, asymmetric, selfTitled, exempt)
 }
 
 // A note on what is NOT in the property: declaring a SERIES on a candidate that
@@ -1019,9 +1058,12 @@ func TestCheckTitle_IsSymmetric(t *testing.T) {
 //
 // TestCheckTitle_CandidateOnlyFieldsOnlyMoveTowardAgree: the fields only a
 // candidate declares, its narrator and its series position, add forms and
-// nothing else. Adding them to a candidate leaves the class as it was or makes
-// it AGREE, never the reverse (agree is decided first, so a form that now
-// matches wins over a conflict the plain fields had). The same fields on the
+// nothing else. Adding them to a candidate leaves the class as it was or moves
+// it up the order block, neutral, agree, never down (agree is decided first, so
+// a form that now matches wins over a conflict the plain fields had; for a
+// candidate whose title is its own series name the credit forms are neutral,
+// so a credit that completes the stored title lifts a block to neutral and no
+// further). The same fields on the
 // BOOK are not read: a stored credit or position is never part of a form.
 func TestCheckTitle_CandidateOnlyFieldsOnlyMoveTowardAgree(t *testing.T) {
 	r := rand.New(rand.NewPCG(17, 4688))
@@ -1067,10 +1109,10 @@ func TestCheckTitle_CandidateOnlyFieldsOnlyMoveTowardAgree(t *testing.T) {
 		}
 		before := outcomeClass(checkTitle(&book, &plain))
 		after := outcomeClass(checkTitle(&book, &with))
-		switch {
+		switch rank := map[string]int{"block": 0, "neutral": 1, "agree": 2}; {
 		case before == after:
 			same++
-		case after == "agree":
+		case rank[after] > rank[before]:
 			moved++
 		default:
 			t.Fatalf("candidate credit/position moved %s to %s: %s", before, after, describePair(book, with))

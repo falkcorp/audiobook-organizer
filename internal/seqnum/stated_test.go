@@ -1,7 +1,7 @@
 // file: internal/seqnum/stated_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e20b2f44-17f0-486d-b69d-66acf91c7b19
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package seqnum
 
@@ -82,6 +82,22 @@ func TestReadPairLoneRoman(t *testing.T) {
 		{"Hush I", "Hush Volume II", "volume 1", "volume 2"},
 		{"Hush I", "Hush #2", "volume 1", "volume 2"},
 		{"Hush I", "Hush (2)", "volume 1", "volume 2"},
+		// m11: the marker may be followed by a hash or sit inside the bracket,
+		// and a closing edition note ("(Unabridged)") on either side is not one
+		// of the title's words.
+		{"Hush I", "Hush, Book #2", "volume 1", "volume 2"},
+		{"Hush I", "Hush (Book 2)", "volume 1", "volume 2"},
+		{"Hush I", "Hush [Book 2]", "volume 1", "volume 2"},
+		{"Hush I", "Hush II (Unabridged)", "volume 1", "volume 2"},
+		{"Hush I", "Hush 2 (Unabridged)", "volume 1", "volume 2"},
+		{"Hush I (Unabridged)", "Hush 2", "volume 1", "volume 2"},
+		{"Hush I (Unabridged)", "Hush, Book 2 (Unabridged)", "volume 1", "volume 2"},
+		{"Who Am I", "Who Am I, Book #2", "", "volume 2"},
+		{"Who Am I", "Who Am I (Book 2)", "", "volume 2"},
+		{"Who Am I", "Who Am I II (Unabridged)", "", "volume 2"},
+		{"Hush I (Unabridged)", "Hush: Dark Victory", "", ""},
+		// A note that holds a number is a statement of its own and stays one.
+		{"Hush (Part 2)", "Hush (Part 3)", "part 2", "part 3"},
 		// ... but only when the words before the I are the same words.
 		{"Who Am I", "Who Am I: Book 2", "", "volume 2"},
 		{"Who Am I", "Who Am I #2", "", "volume 2"},

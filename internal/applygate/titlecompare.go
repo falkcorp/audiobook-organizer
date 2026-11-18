@@ -1,7 +1,7 @@
 // file: internal/applygate/titlecompare.go
-// version: 2.2.1
+// version: 2.3.0
 // guid: 8e41c7a2-5d09-4b3f-a6e8-2f9c0d71b5a3
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package applygate
 
@@ -45,10 +45,14 @@ import (
 //     Halloween"), or each states a number of the same KIND (a volume, a part;
 //     seqnum.ReadStated) and the numbers differ ("Part 1" / "Part 2", "Hush 1" /
 //     "Hush 2"). A number only one side states is not a conflict ("Who Am I" /
-//     "Who Am I 2"). A series name, a credit, a path or a year never makes a
-//     pair disagree: a year in brackets ("Knightfall (1993)"), a year only one
-//     title carries and a leading list number ("08 - ") are set aside before the
-//     conflict tests read the text (comparableText), and ordinals beside a
+//     "Who Am I 2"). A series name, a credit and a path never make a pair
+//     disagree. A year in brackets ("Knightfall (1993)") is a release tag and a
+//     leading list number ("08 - ") a file's: both are set aside before the
+//     conflict tests read the text (comparableText), the year only when the other
+//     title carries no year of its own. A year-like number written bare
+//     ("Gotham 2033") is a number of the title: it conflicts with any different
+//     number the other title states ("Gotham 2", "Gotham 2034"), and it is
+//     compared with nothing when the other title states none. Ordinals beside a
 //     marker read as the cardinal ("Third Book" is "Book 3").
 //   - everything else that is related is NEUTRAL: one title holds words or a
 //     number the other lacks, so the pair is confirmed by nothing in the title.
@@ -360,7 +364,7 @@ func intersects(a, b map[string]bool) bool {
 // form equality (checkTitle), and this only separates a conflict from a pair
 // that merely is not confirmed.
 func compareTitleFields(a, b string) titleCmp {
-	a, b = comparableText(a), comparableText(b)
+	a, b = comparableText(a, b), comparableText(b, a)
 	sa, sb := titleSegments(a), titleSegments(b)
 	if len(sa) == 0 || len(sb) == 0 {
 		return titleCmp{class: classUnrelated}
@@ -416,46 +420,28 @@ var (
 	// yearTagRe is a year alone in brackets or parentheses, the way a tagger or
 	// a folder writes a release year: "Knightfall (1993)".
 	yearTagRe = regexp.MustCompile(`\s*[(\[]\s*(?:1\d{3}|20\d{2}|2100)\s*[)\]]`)
+	// yearAnyRe is a year-like number (1000-2100) anywhere in a text.
+	yearAnyRe = regexp.MustCompile(`\b(?:1\d{3}|20\d{2}|2100)\b`)
 )
 
-// comparableText is a title field as the conflict tests read it: without a year
-// in brackets and without a leading list number ("08 - "). Both are a file's
-// or a tagger's, not the book's: seqnum's own reader already sets the year aside
-// and reads the list number as the weak number it is, and the conflict tests
-// must not see more than it does. Only the conflict tests read this text; the
-// forms (titleforms.go) are built from the fields as declared.
-func comparableText(s string) string {
-	s = yearTagRe.ReplaceAllString(s, "")
+// comparableText is a title field as the conflict tests read it, set beside the
+// text of the other field: without a year in brackets, unless the other text
+// carries a year too (two titles that each carry a year are told apart by
+// them, bracketed or not: "Gotham (2033)" and "Gotham (2034)" are two books),
+// and without a leading list number ("08 - "). A year in brackets on one side
+// only is a tagger's release date, not the book's; a list number is a file's.
+// seqnum's own reader already sets the year aside and reads the list number as
+// the weak number it is, and the conflict tests must not see more than it does.
+// Only the conflict tests read this text; the forms (titleforms.go) are built
+// from the fields as declared.
+func comparableText(s, other string) string {
+	if !yearAnyRe.MatchString(other) {
+		s = yearTagRe.ReplaceAllString(s, "")
+	}
 	if n, ok := seqnum.Parse(s); ok && n.Form == "leading" {
 		s = leadingNumberRe.ReplaceAllString(s, "")
 	}
 	return s
-}
-
-// yearLike reports whether a cardinal token is a four-digit year (1000-2100).
-func yearLike(t string) bool {
-	v, err := strconv.ParseFloat(t[1:], 64)
-	return err == nil && v == float64(int(v)) && v >= 1000 && v <= 2100
-}
-
-// withoutOneSidedYears drops the year-like numbers of the side that has them
-// when the other side has none: a year only one title carries is a release
-// date or a tag, not a number that differs. Two titles that each carry one
-// ("Gotham 2033" / "Gotham 2034") are numbered by them, and the pair stays a
-// conflict.
-func withoutOneSidedYears(na, nb []string) ([]string, []string) {
-	years := func(ns []string) bool { return slices.ContainsFunc(ns, yearLike) }
-	if ya, yb := years(na), years(nb); ya != yb {
-		drop := func(ns []string) []string {
-			return slices.DeleteFunc(slices.Clone(ns), yearLike)
-		}
-		if ya {
-			na = drop(na)
-		} else {
-			nb = drop(nb)
-		}
-	}
-	return na, nb
 }
 
 // tokenOverlap is the share of identity tokens two normalised token sequences
@@ -597,10 +583,14 @@ func subMultiset(a, b []string) bool {
 //     "Night of 7 Owls", a number the reader does not see in "Court 1 (Long)")
 //     are compared as they always were: they conflict when both sides have
 //     some and neither side's holds the other's, since a title that adds words
-//     adds their numbers. A year-like number (1000-2100) that only one side
-//     carries is a release date or a tag, not a number that differs
-//     ("Knightfall 1993" / "Knightfall: Book 1"); two titles that each carry
-//     one are numbered by them ("Gotham 2033" / "Gotham 2034").
+//     adds their numbers. A year-like number (1000-2100) is one of them: a
+//     bare year is the title's own number ("Gotham 2033"), so it conflicts with
+//     a different number the other side states ("Gotham 2", "Knightfall: Book
+//     1" against "Knightfall 1993") as well as with another year ("Gotham
+//     2034"). (A year in BRACKETS is a release tag and is set aside by
+//     comparableText unless the other side carries a year too.) Beside a title
+//     that states no number at all there is nothing to compare, so a lone year
+//     conflicts with nothing.
 //
 // A number only one side states (a volume the book's own title leaves out) is
 // not compared: that is the sequence leg's to check.
@@ -613,7 +603,6 @@ func numberConflict(a, b string, na, nb []string) string {
 	case len(ca.part) > 0 && len(cb.part) > 0 && !sameNumbers(ca.part, cb.part):
 		return "same words, different parts (" + numberTexts(ca.part) + " vs " + numberTexts(cb.part) + ")"
 	}
-	na, nb = withoutOneSidedYears(na, nb)
 	if len(na) > 0 && len(nb) > 0 && !subMultiset(na, nb) && !subMultiset(nb, na) {
 		return "same words, different numbers (" + numsText(na) + " vs " + numsText(nb) + ")"
 	}

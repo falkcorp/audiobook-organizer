@@ -1,7 +1,7 @@
 // file: internal/applygate/title_rule_examples_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 6d1c58a2-9e04-4b73-8f25-a3e07d94b160
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package applygate
 
@@ -132,18 +132,47 @@ func TestCheckTitle_RuleExamples(t *testing.T) {
 			database.Book{Title: "Gotham Knights Detective"},
 			metafetch.MetadataCandidate{Title: "Gotham"}, "block"},
 
-		// a year is not a number the titles state: it never causes a
-		// disagreement, whichever side carries it
-		{"a year in the stored title is no disagreement with a stated volume",
+		// A year in brackets is a release tag and drops out when the other side
+		// carries no year. A bare year-like number is the title's own number
+		// ("Gotham 2033"): it drops only when the other side states no number
+		// at all, and two years that differ conflict however they are written.
+		{"a bracketed year in the stored title is no disagreement with a stated volume",
 			database.Book{Title: "Knightfall (1993)"},
 			metafetch.MetadataCandidate{Title: "Knightfall: Book 1"}, "neutral"},
-		{"two different years each side carries are the numbers that title carries",
+		{"two different bare years each side carries are the numbers that title carries",
 			database.Book{Title: "Gotham 2033"},
 			metafetch.MetadataCandidate{Title: "Gotham 2034"}, "block"},
-		{"a bare year only the stored title carries is no disagreement with a volume",
+		{"m10: two different bracketed years conflict",
+			database.Book{Title: "Gotham (2033)"},
+			metafetch.MetadataCandidate{Title: "Gotham (2034)"}, "block"},
+		{"m10: a bare year against a different bracketed year conflicts",
+			database.Book{Title: "Gotham 2033"},
+			metafetch.MetadataCandidate{Title: "Gotham (2034)"}, "block"},
+		{"m10: a bracketed year against a different bare year conflicts",
+			database.Book{Title: "Gotham (2033)"},
+			metafetch.MetadataCandidate{Title: "Gotham 2034"}, "block"},
+		{"m10: the same year bracketed on one side only is the same title",
+			database.Book{Title: "Gotham (2033)"},
+			metafetch.MetadataCandidate{Title: "Gotham 2033"}, "agree"},
+		{"D3: a bare year in the stored title is its number against a stated volume",
 			database.Book{Title: "Knightfall 1993"},
-			metafetch.MetadataCandidate{Title: "Knightfall: Book 1"}, "neutral"},
-		{"a year in the candidate's title is no disagreement with a stated volume",
+			metafetch.MetadataCandidate{Title: "Knightfall: Book 1"}, "block"},
+		{"D3: a bare year in the stored title against a plain trailing number",
+			database.Book{Title: "Gotham 2033"},
+			metafetch.MetadataCandidate{Title: "Gotham 2"}, "block"},
+		{"D3: a bare year in the stored title against a Book N subtitle",
+			database.Book{Title: "Gotham 2033"},
+			metafetch.MetadataCandidate{Title: "Gotham: Book 2"}, "block"},
+		{"D3: a bare year in the candidate's title against a stated volume",
+			database.Book{Title: "Knightfall: Book 1"},
+			metafetch.MetadataCandidate{Title: "Knightfall 1993"}, "block"},
+		{"D3: a bare year against a title that states no number drops out",
+			database.Book{Title: "Knightfall 1993"},
+			metafetch.MetadataCandidate{Title: "Knightfall: The Knightsend"}, "neutral"},
+		{"D3: a bare year the other title lacks drops out of a title with no number",
+			database.Book{Title: "Knightfall"},
+			metafetch.MetadataCandidate{Title: "Knightfall 1993"}, "neutral"},
+		{"a bracketed year in the candidate's title is no disagreement with a stated volume",
 			database.Book{Title: "Knightfall: Book 1"},
 			metafetch.MetadataCandidate{Title: "Knightfall (1993)"}, "neutral"},
 
@@ -194,6 +223,27 @@ func TestCheckTitle_RuleExamples(t *testing.T) {
 		{"Hush, Book 2 against Hush I conflicts",
 			database.Book{Title: "Hush, Book 2"},
 			metafetch.MetadataCandidate{Title: "Hush I"}, "block"},
+		{"m11: Hush I against Hush, Book #2 conflicts",
+			database.Book{Title: "Hush I"},
+			metafetch.MetadataCandidate{Title: "Hush, Book #2"}, "block"},
+		{"m11: Hush I against Hush (Book 2) conflicts",
+			database.Book{Title: "Hush I"},
+			metafetch.MetadataCandidate{Title: "Hush (Book 2)"}, "block"},
+		{"m11: Hush I against Hush II (Unabridged) conflicts",
+			database.Book{Title: "Hush I"},
+			metafetch.MetadataCandidate{Title: "Hush II (Unabridged)"}, "block"},
+		{"m11: Hush I (Unabridged) against Hush 2 conflicts",
+			database.Book{Title: "Hush I (Unabridged)"},
+			metafetch.MetadataCandidate{Title: "Hush 2"}, "block"},
+		{"m11: Hush, Book #2 against Hush I conflicts",
+			database.Book{Title: "Hush, Book #2"},
+			metafetch.MetadataCandidate{Title: "Hush I"}, "block"},
+		{"m11: the pronoun I beside Book #2 is still a word",
+			database.Book{Title: "Who Am I"},
+			metafetch.MetadataCandidate{Title: "Who Am I, Book #2"}, "neutral"},
+		{"m11: the pronoun I beside (Book 2) is still a word",
+			database.Book{Title: "Who Am I"},
+			metafetch.MetadataCandidate{Title: "Who Am I (Book 2)"}, "neutral"},
 		{"Hush I against Hush, Book 1 is no conflict",
 			database.Book{Title: "Hush I"},
 			metafetch.MetadataCandidate{Title: "Hush, Book 1"}, "neutral"},
@@ -299,9 +349,9 @@ func TestGate_PartMarkerRules(t *testing.T) {
 			database.Book{Title: "Hush", FilePath: "/lib/Bruce Wayne/Hush Disc 2/Hush.m4b"},
 			metafetch.MetadataCandidate{Title: "Hush"},
 			[2]string{"", ReasonPartialBook}},
-		// B1: a candidate that is itself a part is compared with the book's
-		// whole side, the folder included: a stale folder marker is the best
-		// evidence of which part the files are once the candidate names one
+		// B1: a candidate that is itself a part is compared with the part the
+		// files are, and the folder's marker is read when the book's own text
+		// states none (B1' below: the own text first)
 		{"B1a: a part only the folder states is a different part when the candidate's subtitle names another",
 			database.Book{Title: "Hush", FilePath: "/lib/Bruce Wayne/Hush Part 1/Hush.m4b"},
 			metafetch.MetadataCandidate{Title: "Hush", Subtitle: "Part 2"},
@@ -322,6 +372,21 @@ func TestGate_PartMarkerRules(t *testing.T) {
 			database.Book{Title: "Hush, Part 2", FilePath: "/lib/Bruce Wayne/Hush Part 1/Hush.m4b"},
 			metafetch.MetadataCandidate{Title: "Hush", Subtitle: "Part 2"},
 			[2]string{"", ""}},
+		// B1': the book's own text (title, subtitle, the single file's name) is
+		// read before the folder's, for every candidate that names a part; the
+		// folder's part counts only when the own text states none
+		{"B1'a: the file's own part decides before a stale folder's (candidate names the folder's part)",
+			database.Book{Title: "Hush", FilePath: "/lib/Bruce Wayne/Hush Part 1/Hush Part 2.m4b"},
+			metafetch.MetadataCandidate{Title: "Hush", Subtitle: "Part 1"},
+			[2]string{ReasonPartialBook, ReasonPartialBook}},
+		{"B1'b: the file's own part decides before a stale folder's (mirror)",
+			database.Book{Title: "Hush", FilePath: "/lib/Bruce Wayne/Hush Part 2/Hush Part 1.m4b"},
+			metafetch.MetadataCandidate{Title: "Hush", Subtitle: "Part 2"},
+			[2]string{ReasonPartialBook, ReasonPartialBook}},
+		{"B1'c: the file's own part is the candidate's part, whatever the folder says",
+			database.Book{Title: "Hush", FilePath: "/lib/Bruce Wayne/Hush Part 1/Hush Part 2.m4b"},
+			metafetch.MetadataCandidate{Title: "Hush", Subtitle: "Part 2"},
+			[2]string{"", ReasonInsufficientEvidence}},
 
 		// m3: a stale part marker in the stored title or the single file's own
 		// name refuses a whole-book candidate whose runtime agrees. Rule
@@ -352,10 +417,12 @@ func TestGate_PartMarkerRules(t *testing.T) {
 }
 
 // storedTitleSaysNothing is storedTitleCarriesEvidence's negation except for
-// one shape: a bare trailing capital letter ("Robin X", "Robin Y"). The two are
-// kept apart on purpose (the first lets a folder name stand in for a title, the
-// second keeps a title conflict out of a transcription's reach), so this pins
-// that the shape is the ONLY difference.
+// one shape: a bare trailing capital letter ("Robin X", "Robin Y"), with or
+// without rip details after it ("Robin X [64kbps]": rip details are not the
+// title, so what is left is what is judged, M1'). The two are kept apart on
+// purpose (the first lets a folder name stand in for a title, the second keeps
+// a title conflict out of a transcription's reach), so this pins that the shape
+// is the ONLY difference.
 func TestStoredTitleSaysNothing_DiffersOnlyForTheCapitalLetterShape(t *testing.T) {
 	letterShape := func(title string) bool {
 		_, tok, ok := metadata.SiblingPartStem(title)
@@ -363,21 +430,28 @@ func TestStoredTitleSaysNothing_DiffersOnlyForTheCapitalLetterShape(t *testing.T
 	}
 	differ := 0
 	for _, title := range []string{
-		"", "   ", "Chapter 3", "Track 07", "Part 1 of 3", "Disc 2", "The Sunrise Lands 1", "Hush 1",
+		"", "   ", "Chapter 3", "Track 07", "Part 1 of 3", "Disc 2", "Gotham 13", "Hush 1",
 		"Hush [64kbps]", "Hush (Unabridged)", "Hush", "Hush: Part 2", "Hush: Dark Victory", "Who Am I",
 		"Robin X", "Robin Y", "Batman 4", "Gotham 2033", "08 - The Long Halloween", "Hush CD1",
+		// M1': rip details are set aside and the rest is judged
+		"[64kbps]", "Robin X [64kbps]", "Hush: Dark Victory [64k]", "Gotham 13 [64kbps]", "Hush: Part 2 [128 kbps]",
 	} {
-		says, carries := storedTitleSaysNothing(title), storedTitleCarriesEvidence(title)
-		wantDiffer := !carries && letterShape(title)
+		// the title as the rule judges it: without its rip details
+		judged := title
+		if cleaned, had := metadata.StripRipJunk(title); had {
+			judged = cleaned
+		}
+		says, carries := storedTitleSaysNothing(title), storedTitleCarriesEvidence(judged)
+		wantDiffer := !carries && letterShape(judged)
 		if (says == carries) != wantDiffer {
-			t.Errorf("%q: saysNothing=%v carriesEvidence=%v, letter shape %v: the two may differ only for the letter shape",
-				title, says, carries, letterShape(title))
+			t.Errorf("%q: saysNothing=%v carriesEvidence(%q)=%v, letter shape %v: the two may differ only for the letter shape",
+				title, says, judged, carries, letterShape(judged))
 		}
 		if says == carries { // not each other's negation
 			differ++
 		}
 	}
-	if differ != 3 {
-		t.Fatalf("%d titles are not each other's negation, want exactly the three letter-shape rows (Who Am I, Robin X, Robin Y)", differ)
+	if differ != 4 {
+		t.Fatalf("%d titles are not each other's negation, want exactly the four letter-shape rows (Who Am I, Robin X, Robin Y, Robin X [64kbps])", differ)
 	}
 }

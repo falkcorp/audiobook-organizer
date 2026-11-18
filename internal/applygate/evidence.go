@@ -1,7 +1,7 @@
 // file: internal/applygate/evidence.go
-// version: 1.14.1
+// version: 1.15.0
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package applygate
 
@@ -371,10 +371,11 @@ func checkAuthorPath(book *database.Book, authors Authors, c *metafetch.Metadata
 //
 // "Hush: Part 1" and "Hush: Part 2", or "Batman: Dark Victory" and "Batman:
 // The Long Halloween", share a storyline or franchise name and are different
-// books; a series name, a credited name, a path, a year in brackets, a year
-// only one title carries or a leading list number ("08 - ") never makes a pair
-// disagree, and only the declared forms in titleforms.go (a series, a position,
-// a credit, each in a fixed role) make one agree. A candidate title that equals
+// books; a series name, a credited name, a path, a leading list number ("08 -
+// ") or a year in brackets that the other title has no year to set against
+// never makes a pair disagree (a bare year-like number is the title's own
+// number, titlecompare.go), and only the declared forms in titleforms.go (a
+// series, a position, a credit, each in a fixed role) make one agree. A candidate title that equals
 // a SERIES name ("Batman" for "Gotham Knights: Batman") is not a title, and
 // neither is a stored title that equals one ("Batman" for "Batman: Dark
 // Victory" in the series "Batman"): both are the 2026-09-13 series-name row at
@@ -425,17 +426,25 @@ func checkTitle(book *database.Book, c *metafetch.MetadataCandidate) CheckResult
 	// title ("Batman" in the series "Batman"). Its bare title equalling a stored
 	// title is NEUTRAL, not AGREE: it is the same unconfirmed claim the
 	// series-name blocks below refuse, except that nothing on either side
-	// contradicts it. A form that states the position ("S N T") agrees as ever.
+	// contradicts it. So is the title with a credit beside it ("Batman - Bruce
+	// Wayne", "Bruce Wayne - Batman"): a credit names no volume either. A form
+	// that states the position ("S N T", "S N T X") agrees as ever.
 	selfTitled := candSd.selfTitled() && candSd.effectiveSubtitle() == ""
 	agreeForms := candForms
-	var bareForms []titleForm
+	var neutralForms []titleForm
 	if selfTitled {
 		// The title alone and the series name in front of it ("Batman",
 		// "Batman Batman"): both only restate the one word the title and the
-		// series share, and say no volume.
+		// series share, and say no volume. The credit forms are the same word
+		// with a name beside it, and the name says none either.
 		t := strings.Join(formTokens(c.Title), " ")
-		bareForms = []titleForm{{text: t}, {text: t + " " + t, series: true}}
-		agreeForms = slices.DeleteFunc(slices.Clone(candForms), func(f titleForm) bool { return slices.Contains(bareForms, f) })
+		neutralForms = []titleForm{{text: t}, {text: t + " " + t, series: true}}
+		for _, f := range candForms {
+			if f.credit && !f.series {
+				neutralForms = append(neutralForms, f)
+			}
+		}
+		agreeForms = slices.DeleteFunc(slices.Clone(candForms), func(f titleForm) bool { return slices.Contains(neutralForms, f) })
 	}
 	if _, bf, ok := firstMatch(agreeForms, bookForms); ok {
 		r.Outcome, r.Detail = OutcomeAgree, "whole title equals "+strconv.Quote(bf.text)
@@ -448,7 +457,7 @@ func checkTitle(book *database.Book, c *metafetch.MetadataCandidate) CheckResult
 	k := segmentKey(book.Title, derefStr(book.Subtitle))
 	sameSegments := k != "" && (k == segmentKey(c.Title, candSd.effectiveSubtitle()) || k == segmentKey(c.Title, c.Subtitle))
 	if selfTitled {
-		if _, _, bare := firstMatch(bareForms, bookForms); bare || sameSegments {
+		if _, _, bare := firstMatch(neutralForms, bookForms); bare || sameSegments {
 			r.Outcome, r.Detail = OutcomeNeutral, "the candidate's title is its series name, "+strconv.Quote(c.Series)+", which names no volume"
 			return r
 		}
@@ -473,7 +482,9 @@ func checkTitle(book *database.Book, c *metafetch.MetadataCandidate) CheckResult
 		r.fieldBlock = true
 		return r
 	}
-	if _, pf, ok := firstMatch(candForms, pathForms); ok {
+	// The path names stand in for a blank title, and a form that is neutral
+	// from a stored title is neutral from a file name too: agreeForms again.
+	if _, pf, ok := firstMatch(agreeForms, pathForms); ok {
 		r.Outcome, r.Detail = OutcomeAgree, "whole title equals "+strconv.Quote(pf.text)
 		return r
 	}
@@ -523,8 +534,8 @@ func storedTitleCarriesEvidence(title string) bool {
 // storedTitleSaysNothing reports whether a stored title says nothing a file or
 // folder name beside it could not say better, so that name may stand in for it
 // (bookPathForms): blank, a placeholder, a chapter or section heading, a
-// counted part ("Part 1 of 3"), a bare trailing part number ("The Sunrise Lands
-// 1") or rip details. It is storedTitleCarriesEvidence's negation except for one
+// counted part ("Part 1 of 3"), a bare trailing part number ("Hush 1") or
+// nothing but rip details. It is storedTitleCarriesEvidence's negation except for one
 // shape: a bare trailing CAPITAL LETTER ("Robin X", "Robin Y") is a word of a
 // whole book, which metadata.SiblingPartStem's own doc says its shape cannot
 // tell from a part token. That shape still keeps a block against it from a
@@ -537,8 +548,12 @@ func storedTitleSaysNothing(title string) bool {
 		if t == "" || metadata.MayBeUnsearchableTitle(t) || metadata.IsCountedPartTitle(t) {
 			return true
 		}
-		if _, had := metadata.StripRipJunk(t); had {
-			return true
+		// Rip details ("[64kbps]") are not the title: what is left of it is
+		// judged on its own, so "Robin X [64kbps]" is the title "Robin X" and
+		// says what that says, and a title that was nothing but rip details
+		// says nothing.
+		if cleaned, had := metadata.StripRipJunk(t); had {
+			return cleaned == "" || storedTitleSaysNothing(cleaned)
 		}
 		// Only the bare trailing token is left of NeedsFolderEvidence's shapes:
 		// a digit is a part number, a letter is a word.
