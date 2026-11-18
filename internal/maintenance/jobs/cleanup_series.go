@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/cleanup_series.go
-// version: 2.13.0
+// version: 2.14.0
 // guid: a1000002-0000-0000-0000-000000000002
 // last-edited: 2026-11-18
 
@@ -62,6 +62,22 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 				"(database.SeriesUnreferencedDeleter)", store)
 		}
 		writer = cleanupSeriesStore{seriesBookModifier: store, SeriesUnreferencedDeleter: deleter}
+
+		// A store that HAS the delete but cannot count right now (its memdb is not
+		// serving, or is known to be missing rows) refuses every delete, and phase 1
+		// unlinks a series' books BEFORE it deletes. Asked once, here, before any
+		// read or write, so such a store is refused the way a store without the
+		// delete is, with nothing touched. It is a snapshot: the in-loop stop on the
+		// first failed delete below is the backstop for a store that degrades later.
+		ready, ok := database.AsCapability[database.SeriesDeleteReadiness](store)
+		if !ok {
+			return fmt.Errorf("cleanup-series refusing to run: store %T cannot say whether it can count references to a series "+
+				"(database.SeriesDeleteReadiness)", store)
+		}
+		if err := ready.SeriesDeleteReady(); err != nil {
+			return fmt.Errorf("cleanup-series refusing to run: the store cannot count references to a series right now, "+
+				"so no delete could be verified; nothing was read or written: %w", err)
+		}
 	}
 
 	allSeries, err := store.GetAllSeries()
@@ -120,12 +136,29 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 	// Phase 1: single-book series
 	var singleApplied, singleFound, singleSkipped, singleBooksSkipped int
 	// singleKept: single-book series whose row the conditional delete left in
-	// place (a book linked in since the read, a row changed since, or already
-	// gone). Separate from singleSkipped, which is the start-of-run reference
-	// guard: a different cause with a different remedy.
+	// place (a book linked in since the read, a row changed since, already gone,
+	// or a delete the store could not answer). Separate from singleSkipped, which
+	// is the start-of-run reference guard: a different cause with a different
+	// remedy.
 	var singleKept csKept
-	deletedIDs := make(map[int]bool)
+	// singleUnlinkFailed: series whose unlink failed part-way, so the delete was
+	// never attempted and the row stays. In no singleKept bucket: the store was
+	// never asked. With the buckets above, singleFound = singleApplied +
+	// singleKept (all four) + singleUnlinkFailed.
+	var singleUnlinkFailed int
+	// phase1Settled: series phase 1 made a delete decision about (deleted, kept
+	// or already gone). Phase 2 must not group them: their books are already
+	// unlinked, so its start-of-run reference count would refuse them again and
+	// count them a second time, under a cause that is not the real one. Series
+	// whose unlink failed (csNotAttempted) are NOT settled: they stay grouped, with
+	// the hoisted map updated by the unlinks that did succeed.
+	phase1Settled := make(map[int]bool)
+	// phase1Stopped: the store could not answer a delete, so phase 1 stopped
+	// instead of unlinking the books of every remaining candidate for nothing, and
+	// phase 2 (which re-homes books before it deletes) did not run.
+	phase1Stopped := false
 
+phase1:
 	for _, ser := range allSeries {
 		select {
 		case <-ctx.Done():
@@ -195,25 +228,34 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 			res, applyErr := csUnlinkAndDeleteSeries(writer, unlink, ser, members)
 			singleBooksSkipped += res.Skipped
 			switch {
+			case applyErr != nil && res.Outcome == csNotAttempted:
+				// An unlink failed, so the delete was never attempted and the row
+				// stays by design. Its own bucket, and it stays in phase 2's groups.
+				singleUnlinkFailed++
+				csLog.Error("Failed to remove 1-book series %d (%q): %v", ser.ID, ser.Name, applyErr)
 			case applyErr != nil:
-				// An unlink failure (the row stays by design) or a delete the store
-				// could not answer. Only the second is counted here: the first never
-				// reached the delete.
+				// Every unlink succeeded and the store could not answer the delete.
+				// It will not answer the next one either, so stop before unlinking
+				// more books for deletes that cannot happen.
+				// Not added to phase1Settled: phase 2 does not run after a stop, so
+				// there is nothing to keep the series out of.
 				singleKept.add(res.Outcome)
-				slog.Error("Failed to remove 1-book series", "seriesID", ser.ID, "seriesName", ser.Name, "err", applyErr)
+				phase1Stopped = true
+				csLog.Error("Failed to remove 1-book series %d (%q): %v", ser.ID, ser.Name, applyErr)
+				reporter.Increment()
+				break phase1
 			case res.Outcome == csDeleted:
-				deletedIDs[ser.ID] = true
+				phase1Settled[ser.ID] = true
 				singleApplied++
 			default:
 				// The books were unlinked but the row stayed: the conditional delete
 				// would not remove it. Counted and reported through the reporter, not
-				// only slog, like the start-of-run guard above. An already-gone row is
-				// kept out of phase 2's groups (it has no row to merge); a kept one
-				// stays in them, with the hoisted map already updated by the unlinks.
+				// only slog, like the start-of-run guard above. Settled: the books
+				// are already unlinked and the hoisted map says so, so phase 2 has
+				// nothing to merge from it and its reference count (taken before
+				// the unlinks) would only refuse it a second time.
 				singleKept.add(res.Outcome)
-				if res.Outcome == csAlreadyGone {
-					deletedIDs[ser.ID] = true
-				}
+				phase1Settled[ser.ID] = true
 				reporter.Log("warn", csKeptLine(ser, res.Outcome), nil)
 			}
 		}
@@ -223,7 +265,7 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 	// Phase 2: duplicate series by normalized name
 	normGroups := make(map[string][]database.Series)
 	for _, ser := range allSeries {
-		if deletedIDs[ser.ID] {
+		if phase1Settled[ser.ID] {
 			continue
 		}
 		key := csNormalizeSeriesName(ser.Name)
@@ -232,7 +274,16 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 
 	var dupApplied, dupFound, dupRefused, dupBooksSkipped int
 	var dupKept csKept // merged-from series the conditional delete left in place; see singleKept
+	// Per merged-from series, so the Done line adds up: dupMergeFrom = dupDeleted +
+	// dupRefused + dupKept (all four) + dupNotReached, in a run that wrote.
+	// dupNotReached is the series of a group left unprocessed by an error that
+	// stopped it.
+	var dupMergeFrom, dupDeleted, dupNotReached int
+	phase2Stopped := false
 	for normName, group := range normGroups {
+		if phase1Stopped || phase2Stopped {
+			break
+		}
 		if len(group) < 2 {
 			continue
 		}
@@ -254,6 +305,7 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 				mergeFrom = append(mergeFrom, ser)
 			}
 		}
+		dupMergeFrom += len(mergeFrom)
 
 		if !dryRun {
 			res, mergeErr := csMergeSeriesGroup(writer, keeper.ID, mergeFrom, refCounts, members)
@@ -263,6 +315,14 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 			dupKept.Changed += res.Kept.Changed
 			dupKept.Gone += res.Kept.Gone
 			dupKept.Failed += res.Kept.Failed
+			dupDeleted += res.Merged
+			dupNotReached += res.NotReached
+			if res.Kept.Failed > 0 {
+				// The store could not answer a delete: the same stop as phase 1.
+				// Later groups would re-home their books and then meet the same
+				// refusal.
+				phase2Stopped = true
+			}
 			switch {
 			case mergeErr != nil:
 				slog.Error("Failed to merge series group", "normName", normName, "err", mergeErr)
@@ -306,6 +366,27 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 				"(the store could not count their references); kept, see the error log",
 			singleKept.Failed, dupKept.Failed))
 	}
+	if singleUnlinkFailed > 0 {
+		kept = append(kept, fmt.Sprintf(
+			"%d single-book series could not be unlinked (a book write failed); the series stay, see the error log",
+			singleUnlinkFailed))
+	}
+	if dupNotReached > 0 {
+		kept = append(kept, fmt.Sprintf(
+			"%d merged-from series were not processed: an error stopped their group; see the error log",
+			dupNotReached))
+	}
+	if phase1Stopped || phase2Stopped {
+		phase := "phase 1 (single-book series)"
+		rest := "no further books were unlinked and the merge phase did not run"
+		if phase2Stopped {
+			phase = "phase 2 (duplicate merge)"
+			rest = "no further groups were merged"
+		}
+		kept = append(kept, fmt.Sprintf(
+			"stopped in %s at the first delete the store could not verify: %s; rerun once the store can count references",
+			phase, rest))
+	}
 	if len(kept) > 0 {
 		reporter.Log("warn", strings.Join(kept, "; "), nil)
 	}
@@ -323,6 +404,9 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 		"singleKeptChanged", singleKept.Changed, "dupKeptChanged", dupKept.Changed,
 		"singleAlreadyGone", singleKept.Gone, "dupAlreadyGone", dupKept.Gone,
 		"singleDeleteFailed", singleKept.Failed, "dupDeleteFailed", dupKept.Failed,
+		"singleUnlinkFailed", singleUnlinkFailed, "dupNotReached", dupNotReached,
+		"dupMergeFromSeries", dupMergeFrom, "dupSeriesDeleted", dupDeleted,
+		"stoppedPhase1", phase1Stopped, "stoppedPhase2", phase2Stopped,
 		"dupFound", dupFound, "dupApplied", dupApplied, "dupRefused", dupRefused, "dryRun", dryRun)
 	return nil
 }
@@ -547,7 +631,8 @@ func csUnlinkAndDeleteSeries(store seriesUnlinker, books []database.BookCore, se
 //
 // Each series is settled on its own: a series the conditional delete keeps does
 // not stop the next one. A store that cannot answer at all (an error) stops the
-// group and returns what was settled so far with the error; the series stays.
+// group and returns what was settled so far with the error; the series stays,
+// and the ones after it are counted in NotReached.
 //
 // mergeFrom carries the rows, not just their ids, because the conditional delete
 // compares each row's name and author with the live one.
@@ -560,7 +645,7 @@ func csUnlinkAndDeleteSeries(store seriesUnlinker, books []database.BookCore, se
 // successful repoint is recorded with members.Move.
 func csMergeSeriesGroup(store seriesMerger, keepID int, mergeFrom []database.Series, refCounts map[int]int, members database.SeriesBooksMap) (csMergeResult, error) {
 	var res csMergeResult
-	for _, from := range mergeFrom {
+	for idx, from := range mergeFrom {
 		fromID := from.ID
 		// AllVersions, not Core. This loop repoints every row it is handed and
 		// then deletes fromID, so the getter and the refCounts guard below must
@@ -612,6 +697,7 @@ func csMergeSeriesGroup(store seriesMerger, keepID int, mergeFrom []database.Ser
 				return nil
 			})
 			if err != nil {
+				res.NotReached = len(mergeFrom) - idx
 				return res, fmt.Errorf("ModifyBook(%s): %w", book.ID, err)
 			}
 			if written == nil {
@@ -653,6 +739,7 @@ func csMergeSeriesGroup(store seriesMerger, keepID int, mergeFrom []database.Ser
 		outcome, err := csDeleteSeriesIfUnreferenced(store, from)
 		if err != nil {
 			res.Kept.add(csDeleteFailed)
+			res.NotReached = len(mergeFrom) - idx - 1
 			return res, fmt.Errorf("DeleteSeriesIfUnreferenced(%d): %w", fromID, err)
 		}
 		if outcome == csDeleted {
@@ -670,6 +757,12 @@ type csMergeResult struct {
 	Refused int    // series kept by the start-of-run refCounts guard
 	Skipped int    // books left alone: their row no longer named the series
 	Kept    csKept // series the conditional delete left in place, by cause
+	// NotReached is the merged-from series of this group an error left
+	// unprocessed: the series whose book write failed and every one after it, or
+	// every one after the series whose delete the store could not answer (that
+	// one is Kept.Failed). With Merged, Refused and Kept, it accounts for every
+	// series in mergeFrom.
+	NotReached int
 }
 
 var csNonAlphanumRE = regexp.MustCompile(`[^\p{L}\p{N}\s]+`)

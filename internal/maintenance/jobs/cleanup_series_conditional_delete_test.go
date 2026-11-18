@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/cleanup_series_conditional_delete_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 11f4d28a-ab07-4fe7-97c6-9d5d2854e15d
 // last-edited: 2026-11-18
 
@@ -39,12 +39,14 @@ type csCondStore struct {
 	afterMembership func(s *csCondStore)
 	// modifyErr, when set, fails every ModifyBook.
 	modifyErr error
+	// notReady, when set, is what SeriesDeleteReady returns: a store that has the
+	// conditional delete but cannot count right now.
+	notReady error
 	// deleteIfErr, when set, is what DeleteSeriesIfUnreferenced returns instead of
 	// looking at the rows.
 	deleteIfErr error
 
 	conditionalCalls []int // ids passed to DeleteSeriesIfUnreferenced
-	plainDeletes     []int // ids passed to DeleteSeries
 	membershipReads  int
 }
 
@@ -165,12 +167,6 @@ func (s *csCondStore) ModifyBook(id string, fn func(*database.Book) error) (*dat
 	return row, nil
 }
 
-func (s *csCondStore) DeleteSeries(id int) error {
-	s.plainDeletes = append(s.plainDeletes, id)
-	delete(s.series, id)
-	return nil
-}
-
 func (s *csCondStore) DeleteSeriesIfUnreferenced(id int, expectName string, expectAuthorID *int) (bool, error) {
 	s.conditionalCalls = append(s.conditionalCalls, id)
 	if s.deleteIfErr != nil {
@@ -193,6 +189,8 @@ func (s *csCondStore) DeleteSeriesIfUnreferenced(id int, expectName string, expe
 	delete(s.series, id)
 	return true, nil
 }
+
+func (s *csCondStore) SeriesDeleteReady() error { return s.notReady }
 
 func (s *csCondStore) hasSeries(id int) bool {
 	_, ok := s.series[id]
@@ -288,9 +286,6 @@ func TestCleanupSeriesRun_Phase1DeletesAnUnchangedOneBookSeriesThroughTheConditi
 	if store.hasSeries(7) {
 		t.Fatal("series 7 should have been deleted: nothing references it")
 	}
-	if len(store.plainDeletes) != 0 {
-		t.Fatalf("plain DeleteSeries called for %v: the delete must be the conditional one", store.plainDeletes)
-	}
 	if len(store.conditionalCalls) != 1 || store.conditionalCalls[0] != 7 {
 		t.Fatalf("conditional deletes = %v, want [7]", store.conditionalCalls)
 	}
@@ -313,9 +308,6 @@ func TestCleanupSeriesRun_Phase1FailsClosedWhenTheConditionalDeleteErrors(t *tes
 
 	if !store.hasSeries(7) {
 		t.Fatal("series 7 was deleted although the store could not verify it unreferenced")
-	}
-	if len(store.plainDeletes) != 0 {
-		t.Fatalf("an error from the conditional delete fell back to the plain delete: %v", store.plainDeletes)
 	}
 	// A store that cannot count would send every delete down this path; the job
 	// log an operator reads must say so, not only the error log.
@@ -378,9 +370,6 @@ func TestCleanupSeriesRun_Phase2DeletesAnUnchangedMergedFromSeriesThroughTheCond
 	if store.hasSeries(7) {
 		t.Fatal("series 7 should have been merged away: nothing references it after the re-home")
 	}
-	if len(store.plainDeletes) != 0 {
-		t.Fatalf("plain DeleteSeries called for %v: the delete must be the conditional one", store.plainDeletes)
-	}
 	if len(store.conditionalCalls) != 1 || store.conditionalCalls[0] != 7 {
 		t.Fatalf("conditional deletes = %v, want [7]", store.conditionalCalls)
 	}
@@ -403,9 +392,6 @@ func TestCleanupSeriesRun_Phase2FailsClosedWhenTheConditionalDeleteErrors(t *tes
 
 	if !store.hasSeries(7) {
 		t.Fatal("series 7 was deleted although the store could not verify it unreferenced")
-	}
-	if len(store.plainDeletes) != 0 {
-		t.Fatalf("an error from the conditional delete fell back to the plain delete: %v", store.plainDeletes)
 	}
 	if !csLogContains(rep, "could not verify 0 single-book series and 1 merged-from series unreferenced") {
 		t.Fatalf("the failed delete must be counted in the warn line, got %v", rep.logs)
@@ -494,9 +480,6 @@ func TestCleanupSeriesRun_Phase1CountsASeriesAlreadyDeletedBySomeoneElse(t *test
 		t.Fatalf("Run: %v", err)
 	}
 
-	if len(store.plainDeletes) != 0 {
-		t.Fatalf("plain DeleteSeries called for %v", store.plainDeletes)
-	}
 	if !csLogContains(rep, "1 single-book series and 0 merged-from series were already deleted by someone else") {
 		t.Fatalf("an already-gone series must be counted, got %v", rep.logs)
 	}

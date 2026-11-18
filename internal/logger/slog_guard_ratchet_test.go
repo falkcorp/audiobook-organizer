@@ -1,7 +1,7 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.35.8
+// version: 1.35.9
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package logger
 
@@ -115,7 +115,7 @@ var slogRatchet = map[string]int{
 	"internal/maintenance/jobs/bulk_deluge_import.go":            6,
 	"internal/maintenance/jobs/cleanup_empty_folders.go":         7,
 	"internal/maintenance/jobs/cleanup_organize_mess.go":         4,
-	"internal/maintenance/jobs/cleanup_series.go":                4,
+	"internal/maintenance/jobs/cleanup_series.go":                3,
 	"internal/maintenance/jobs/enrich_book_files.go":             4,
 	"internal/maintenance/jobs/fix_author_narrator_swap.go":      3,
 	"internal/maintenance/jobs/fix_file_modes.go":                2,
