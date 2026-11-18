@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.serverQuery.test.ts
-// version: 1.12.2
+// version: 1.12.3
 // guid: 3b6f1d84-7c20-4a95-9e58-c1d70a2b4e63
 // last-edited: 2026-11-17
 //
@@ -622,6 +622,45 @@ describe('the lane requests', () => {
       expect(toast).toHaveBeenCalledTimes(1);
       expect(String(toast.mock.calls[0][0])).toMatch(/2 retired books/);
       expect(String(toast.mock.calls[0][0])).toMatch(/nothing to search/i);
+    });
+
+    it('names BOTH causes when books were left out as retired and as already being searched', async () => {
+      const result = await laneWithRows(['a1', 'a2', 'a3', 'a4']);
+      // Started: 1 searched, 2 retired and 1 already being fetched left out.
+      vi.mocked(api.batchFetchCandidates).mockResolvedValue({
+        operation_id: 'op-mixed',
+        total_books: 1,
+        book_count: 1,
+        skipped: 1,
+        retired_skipped: 2,
+      });
+      await act(async () => {
+        expect(await result.current.searchAgain(['a1', 'a2', 'a3', 'a4'], confirm)).toBe('op-mixed');
+      });
+      const message = String(toast.mock.calls[0][0]);
+      expect(message).toMatch(/Searching again for 1 book /);
+      expect(message).toMatch(/2 retired books/);
+      expect(message).toMatch(/1 book already being searched/);
+    });
+
+    it('an all-declined set with both causes names both, not just the last chunk message', async () => {
+      const result = await laneWithRows(['a1', 'a2', 'a3']);
+      vi.mocked(api.batchFetchCandidates).mockResolvedValue({
+        operation_id: '',
+        message: 'those books are already being fetched',
+        book_count: 0,
+        skipped: 1,
+        retired_skipped: 2,
+      });
+      await act(async () => {
+        expect(await result.current.searchAgain(['a1', 'a2', 'a3'], confirm)).toBeNull();
+      });
+      expect(toast).toHaveBeenCalledTimes(1);
+      const message = String(toast.mock.calls[0][0]);
+      expect(message).toMatch(/nothing to search/i);
+      expect(message).toMatch(/2 retired books/);
+      expect(message).toMatch(/1 book already being searched/);
+      expect(message).not.toBe('those books are already being fetched');
     });
 
     it('a last chunk that is all retired does not hide the searches the earlier chunks started', async () => {
