@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.24.2
+// version: 1.24.3
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package metafetch
 
@@ -813,7 +813,11 @@ func (mfs *Service) writeBackForBook(ctx context.Context, id string, segmentFilt
 	if libCopy.ID != book.ID {
 		// Sync metadata from the original book to the library copy so both
 		// DB records stay in sync and the tag map uses current data.
-		mfs.syncMetadataToLibraryCopy(originalBook, libCopy)
+		if err := mfs.syncMetadataToLibraryCopy(originalBook, libCopy); err != nil {
+			// The copy was retired after the file job locked it: nothing is
+			// written to its row, and no tag is written to its files.
+			return 0, fmt.Errorf("cannot write back: %w", err)
+		}
 		book = libCopy
 	}
 

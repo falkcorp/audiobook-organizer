@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_files.go
-// version: 1.21.3
+// version: 1.21.4
 // guid: 969b284a-5657-442b-beba-275e325e000b
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package metafetch
 
@@ -147,12 +147,18 @@ func (mfs *Service) fileWorkTarget(book *database.Book, targetID string) (*datab
 }
 
 // libraryCopyGone says why cp is no longer book's library copy, or "" when it
-// still is one: a row under root_dir, in book's version group, with no present
-// file row inside a protected tree -- what librarySibling requires.
+// still is one: a row under root_dir, in book's version group, not retired
+// (the lookup omits trashed rows; merged ones are the same refusal), with no
+// present file row inside a protected tree -- what librarySibling requires.
 func (mfs *Service) libraryCopyGone(book, cp *database.Book) string {
 	switch {
 	case cp == nil:
 		return "the copy was deleted"
+	case cp.IsRetired():
+		// The lookup that picked the copy (GetBooksByVersionGroup) leaves
+		// trashed rows out; a copy trashed or merged away after the lock step
+		// is exactly the one this re-read exists to catch.
+		return "the copy was retired (trashed or merged away)"
 	case !pathUnderRoot(cp.FilePath, config.AppConfig.RootDir):
 		return "the copy is no longer under root_dir"
 	case book.VersionGroupID == nil || cp.VersionGroupID == nil || *book.VersionGroupID != *cp.VersionGroupID:
