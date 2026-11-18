@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-17-retired-books-metadata-apply-executive-summary.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.5.1 -->
 <!-- guid: 2e8c5a71-4b93-4d06-9f1a-7c3d0b6e8a52 -->
 <!-- last-edited: 2026-11-18 -->
 
@@ -68,7 +68,7 @@ refuses retired books`.
   Fetch button, the single-book write-back) still write everything. The whole
   library write-back skips such a book before renaming it and counts it as
   skipped, not failed; a book put away after its rename but before its tags
-  is counted as failed instead, because its files had already moved. How the skip is reported: for the single-book dialog it
+  is counted as failed instead, because the tags it owed were not written (the log line says the rename step ran, not that a file moved: the step also runs when every file is already where it belongs). How the skip is reported: for the single-book dialog it
   is one warning line in the log and the screen shows the apply as a success;
   the whole-library write-back counts it in its skipped total; the batch apply
   counts it with its write-back failures. After a restart, a job that was in
