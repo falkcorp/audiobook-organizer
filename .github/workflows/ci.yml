@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.44.1
+# version: 3.44.2
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-11-18
 
@@ -663,6 +663,11 @@ jobs:
       # skip is listed in the log. Green with the ffmpeg tests skipped proves
       # nothing about the clip cutter.
       - name: Install ffmpeg for the Whisper worker tests
+        # Hard cap on the step: a mirror hang held this job ~15 minutes until it was
+        # cancelled. 3 attempts x 2 calls x (60 s + 10 s kill grace) + backoff stays under it.
+        timeout-minutes: 9
+        env:
+          APT_INSTALL_CALL_TIMEOUT: "60"
         run: scripts/ci/apt_install.sh ffmpeg
 
       - name: Whisper worker contract tests
@@ -1207,6 +1212,9 @@ jobs:
       # skip when exec.LookPath cannot find these tools. Without them this job
       # would report those tests as passing while running none of them.
       - name: Install system dependencies
+        timeout-minutes: 9
+        env:
+          APT_INSTALL_CALL_TIMEOUT: "60"
         run: scripts/ci/apt_install.sh libtag1-dev ffmpeg libchromaprint-tools
 
       # internal/books' TestR0OpensR1Store runs the R0 release binary. Restore
