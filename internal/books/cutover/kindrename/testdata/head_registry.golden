@@ -1,0 +1,262 @@
+# file: internal/books/cutover/kindrename/testdata/head_registry.golden
+# version: 1.0.0
+# guid: 0b6d3f81-72a4-4c59-8e1d-93f5a2c7b640
+# last-edited: 2026-11-18
+#
+# HEAD's registered operation IDs and FormerIDs aliases, as a booted registry
+# reports them (internal/server/kindrename_inputs_test.go writes and checks
+# it). Read by the kind-rename generator (internal/books/cutover/kindrename/gen).
+# Regenerate: UPDATE_KINDRENAME_REGISTRY=1 go test ./internal/server -run TestKindRenameInputs_RegistryDump
+alias library.optimize maintenance.library-optimize
+alias maintenance.dedup-llm-review dedup.llm-review
+alias maintenance.itunes-clone-into-library itunes.clone-into-library
+alias maintenance.itunes-heal itunes.heal
+alias maintenance.itunes-playlist-import itunes.playlist-import
+alias maintenance.itunes-regroup itunes.regroup
+alias maintenance.metadata-upgrade scheduler.metadata-upgrade
+alias maintenance.series-normalize dedup.series-normalize
+alias maintenance.series-prune dedup.series-prune
+alias scheduler.author-split-scan maintenance.author-split-scan
+alias scheduler.cleanup-old-backups maintenance.cleanup-old-backups
+alias scheduler.db-optimize maintenance.db-optimize
+alias scheduler.dedup-llm-review dedup.llm-review
+alias scheduler.metadata-refresh maintenance.metadata-refresh
+alias scheduler.purge-deleted maintenance.purge-deleted
+alias scheduler.resolve-production-authors maintenance.resolve-production-authors
+alias scheduler.temp-file-cleanup maintenance.temp-file-cleanup
+alias scheduler.tombstone-cleanup maintenance.tombstone-cleanup
+alias scheduler.trash-cleanup maintenance.trash-cleanup
+id acoustid.backfill
+id acoustid.fingerprint-duration-repair
+id acoustid.fingerprint-rescan
+id acoustid.lookup-online
+id acoustid.lsh-backfill
+id acoustid.reset-all
+id acoustid.scan
+id acoustid.window-backfill
+id ai.author-merge-apply
+id ai.author-review
+id ai.author-scan
+id ai.author-scan-apply
+id catalog.coverage-report
+id catalog.harvest-authors
+id collections.refresh-relative-dynamic
+id dedup.author-scan
+id dedup.auto-resolve
+id dedup.book-combine
+id dedup.book-merge
+id dedup.book-scan
+id dedup.book-signature-scan
+id dedup.bookfile-seg-drop
+id dedup.breakdown-backfill
+id dedup.build-candidate-status-index
+id dedup.build-isbn-index
+id dedup.calibrate-composite
+id dedup.calibrate-embedding-thresholds
+id dedup.check-book
+id dedup.cleanup-orphan-author-embeddings
+id dedup.cleanup-orphan-embeddings
+id dedup.dataset-backfill
+id dedup.drain-stale
+id dedup.emb-reencode
+id dedup.embed-async
+id dedup.embed-scan
+id dedup.full-scan
+id dedup.label-refinement
+id dedup.llm-review
+id dedup.lsh-index-build
+id dedup.mine-gold-labels
+id dedup.purge-legacy-fp-candidates
+id dedup.purge-stale
+id dedup.quarantine-chapter-artifacts
+id dedup.rebuild-gold-labels
+id dedup.reembed-embeddings
+id dedup.rescore
+id dedup.rescore-labeled-examples
+id dedup.run-all
+id dedup.series-dedup
+id dedup.series-merge
+id dedup.series-normalize
+id dedup.series-prune
+id dedup.series-scan
+id dedup.split-book-bulk-merge
+id dedup.split-book-scan
+id dedup.window-index-build
+id deluge.centralize
+id deluge.link-backfill
+id deluge.path-update
+id deluge.protected-paths-sync
+id diagnostics.ai-analyze
+id diagnostics.export
+id entities.author-merge
+id entities.author-reclassify
+id entities.resolve-production-author
+id entities.series-rename
+id identification.advance
+id itunes.clone-into-library
+id itunes.heal
+id itunes.import
+id itunes.playlist-import
+id itunes.position-sync
+id itunes.regroup
+id library.ai-parse
+id library.bulk-metadata-fetch
+id library.bulk-write-back
+id library.folder-auto-scan
+id library.import
+id library.organize
+id library.organize-when-scanned
+id library.purge-soft-deleted
+id library.scan
+id library.size-refresh
+id library.transcode
+id maintenance.activity-filter-index-backfill
+id maintenance.ai-dedup-batch
+id maintenance.author-conjunction-repair
+id maintenance.author-duplicate-merge
+id maintenance.author-id-repair
+id maintenance.author-path-link
+id maintenance.author-split-scan
+id maintenance.author-strip-merge
+id maintenance.author-title-fragment-scan
+id maintenance.author-whitespace-collision-report
+id maintenance.authority-build
+id maintenance.auto-match-transcribed
+id maintenance.backfill-book-files
+id maintenance.backfill-file-hashes
+id maintenance.backfill-itunes-positions
+id maintenance.backfill-merge-undo-pointers
+id maintenance.backfill-metadata-source-hash
+id maintenance.backfill-sync-ids
+id maintenance.book-atpath-index-backfill
+id maintenance.book-atpath-index-verify
+id maintenance.book-hash-index-repair
+id maintenance.book-shape-report
+id maintenance.bookfile-acoustid-index-repair
+id maintenance.booksig-recovery-audit
+id maintenance.booksig-sidecar-migrate
+id maintenance.build-folder-book-files
+id maintenance.bulk-deluge-import
+id maintenance.bulk-write-back
+id maintenance.chapters-backfill
+id maintenance.cleanup-activity-log
+id maintenance.cleanup-empty-folders
+id maintenance.cleanup-old-backups
+id maintenance.cleanup-organize-mess
+id maintenance.cleanup-series
+id maintenance.clear-apply-rename-failures
+id maintenance.combine-journal-check
+id maintenance.compact-activity-log
+id maintenance.cover-text-read
+id maintenance.credit-census
+id maintenance.credits-backfill
+id maintenance.db-census-exact
+id maintenance.db-optimize
+id maintenance.dedup-books
+id maintenance.dedup-exact-triage
+id maintenance.dedupe-book-file-rows
+id maintenance.duration-backfill
+id maintenance.enrich-book-files
+id maintenance.external-id-backfill
+id maintenance.extract-wav-clips
+id maintenance.file-integrity-check
+id maintenance.file-provenance-capture
+id maintenance.file-provenance-export
+id maintenance.filepath-collision-report
+id maintenance.fix-author-narrator-swap
+id maintenance.fix-file-modes
+id maintenance.fix-read-by-narrator
+id maintenance.fix-version-groups
+id maintenance.folder-cover-backfill
+id maintenance.fs-regroup-xml
+id maintenance.ident-index-rebuild
+id maintenance.intro-migrate-single-file
+id maintenance.library-optimize
+id maintenance.malformed-m4b-remux
+id maintenance.malformed-m4b-transcode
+id maintenance.mark-missing-files
+id maintenance.merge-chapter-groups
+id maintenance.merge-same-path-dupes
+id maintenance.metadata-cache-reap
+id maintenance.metadata-refresh
+id maintenance.missing-file-audit
+id maintenance.missing-file-repair
+id maintenance.missing-file-repoint
+id maintenance.move-book-file-rows
+id maintenance.movement-atom-cleanup
+id maintenance.nightly-compact-activity-log
+id maintenance.normalize-primary-flags
+id maintenance.opchange-book-index-rebuild
+id maintenance.orphan-book-files-cleanup
+id maintenance.orphan-book-files-repoint-plan
+id maintenance.probe-directory-books
+id maintenance.prune-ai-journal
+id maintenance.prune-book-snapshots
+id maintenance.purge-deleted
+id maintenance.purge-empty-authors
+id maintenance.purge-empty-narrators
+id maintenance.purge-old-logs
+id maintenance.purge-unknown-author-duplicates
+id maintenance.recompact-activity-digests
+id maintenance.recompute-book-aggregates
+id maintenance.recompute-itunes-paths
+id maintenance.recover-missing-files
+id maintenance.refetch-missing-authors
+id maintenance.regroup-shattered-ai
+id maintenance.relink-missing-to-itunes
+id maintenance.relink-report
+id maintenance.relink-unlinked-books
+id maintenance.repair-library-state
+id maintenance.repair-merged-user-state
+id maintenance.repair-transcribe-status
+id maintenance.repoint-book-file-rows
+id maintenance.repoint-missing-to-folder-audio
+id maintenance.repoint-unrecorded-renames
+id maintenance.repoint-version-primary
+id maintenance.reports-prune
+id maintenance.resolve-production-authors
+id maintenance.retention-and-hygiene
+id maintenance.revert-metadata-fetch
+id maintenance.review-status-index-repair
+id maintenance.rewrite-path-prefix
+id maintenance.scan-chapter-groups
+id maintenance.scan-composer-tags
+id maintenance.scan-duplicate-files
+id maintenance.scan-duration-mismatch
+id maintenance.scan-metadata-hash-dups
+id maintenance.series-denumber
+id maintenance.series-phantom-repair
+id maintenance.split-joined-narrators
+id maintenance.sweep-pebble-metrics-ttl
+id maintenance.tag-backfill
+id maintenance.temp-file-cleanup
+id maintenance.throttle-reset
+id maintenance.title-backfill
+id maintenance.title-repair
+id maintenance.tombstone-cleanup
+id maintenance.transcode-temp-cleanup
+id maintenance.transcribe-book-intros
+id maintenance.transcribe-file-intros
+id maintenance.trash-cleanup
+id maintenance.unknown-author-audit
+id maintenance.user-merge
+id maintenance.version-group-primary-repair
+id maintenance.version-group-primary-report
+id maintenance.window
+id metadata.apply-when-scanned
+id metadata.batch-apply-cached
+id metadata.batch-apply-refusals-reset
+id metadata.batch-save
+id metadata.bulk-apply-preview
+id metadata.candidate-fetch
+id metafetch.asin-backfill
+id metafetch.calibrate-scoring
+id metafetch.pcache-sweep
+id openlibrary.download
+id openlibrary.import
+id operations.backfill-legacy-status
+id reconcile.apply
+id reconcile.scan
+id repairs.apply
+id repairs.plan
+id scheduler.metadata-upgrade
