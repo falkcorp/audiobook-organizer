@@ -1,5 +1,5 @@
 // file: core/internal/storagetasks/kinds_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2a99dbbf-d3e7-4586-b768-b26eb0d5d60c
 // last-edited: 2026-11-18
 
@@ -20,6 +20,7 @@ import (
 	"github.com/cockroachdb/pebble/v2/vfs"
 
 	"github.com/falkcorp/mediacore/entity"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/falkcorp/mediacore/tasks/taskstest"
@@ -219,8 +220,11 @@ func TestStorageKinds_CompactHoldsExclusiveKey(t *testing.T) {
 	if c.Resume != tasks.ResumeDrop || c.Priority != tasks.PriorityLow || c.Timeout != 2*time.Hour {
 		t.Errorf("Resume %v Priority %v Timeout %v, want ResumeDrop, PriorityLow, 2h", c.Resume, c.Priority, c.Timeout)
 	}
-	if c.Perms.Start.IsZero() {
-		t.Error("Perms.Start is not set")
+	// A scheduled kind is started by the system actor, which the executor
+	// strips of every AuthRequired scope (SEC2-15): core:system.manage would
+	// leave it unable to fire on its schedule.
+	if got := c.Perms.Start.Permissions(); !slices.Equal(got, []rbac.Permission{"core:tasks.manage"}) {
+		t.Errorf("Perms.Start = %v, want core:tasks.manage (reachable by the system actor)", got)
 	}
 }
 
@@ -241,6 +245,9 @@ func TestStorageKinds_CensusDeclaration(t *testing.T) {
 	}
 	if c.Schedule != nil {
 		t.Errorf("Schedule = %+v, want none", c.Schedule)
+	}
+	if got := c.Perms.Start.Permissions(); !slices.Equal(got, []rbac.Permission{"core:system.manage"}) {
+		t.Errorf("Perms.Start = %v, want core:system.manage (operator-run storage administration)", got)
 	}
 	if c.Resume != tasks.ResumeFromZero {
 		t.Errorf("Resume = %v, want ResumeFromZero (a pass recounts and overwrites)", c.Resume)

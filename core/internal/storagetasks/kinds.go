@@ -1,5 +1,5 @@
 // file: core/internal/storagetasks/kinds.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 451daab0-74d7-4793-a071-0a041b865144
 // last-edited: 2026-11-18
 
@@ -124,8 +124,13 @@ func compactKind(s Surface, o Options) tasks.Definition {
 		Title: "Compact the main store",
 		Help: "Compacts the whole key range of the main store, reclaiming the space deleted and overwritten rows still hold. " +
 			"One pass at a time with backup and the census.",
-		Effects:        tasks.Writes(tasks.Res("core", "storage")),
-		Perms:          tasks.Permissions{Start: rbac.Need("core:system.manage")},
+		Effects: tasks.Writes(tasks.Res("core", "storage")),
+		// core:tasks.manage, not core:system.manage: the scheduler starts
+		// this kind as core's system actor, and the executor strips every
+		// AuthRequired scope (core:system.manage among them) from a system
+		// actor's set (SEC2-15), so a kind that needed it would never fire
+		// on its schedule. Same choice as core.outbox.relay.
+		Perms:          tasks.Permissions{Start: rbac.Need("core:tasks.manage")},
 		Resume:         tasks.ResumeDrop,
 		Priority:       tasks.PriorityLow,
 		Timeout:        CompactTimeout,
@@ -191,7 +196,9 @@ func censusKind(s Surface, sink CensusSink, o Options) tasks.Definition {
 		Title: "Count the store exactly",
 		Help: "Counts every key and byte of the store by partition and records the result as the latest census. " +
 			"One pass at a time with compaction and backup.",
-		Effects:         tasks.Writes(tasks.Res("core", "storage")),
+		Effects: tasks.Writes(tasks.Res("core", "storage")),
+		// Operator-run only (no Schedule), so it takes the storage
+		// administration scope; a system actor never starts it.
 		Perms:           tasks.Permissions{Start: rbac.Need("core:system.manage")},
 		Resume:          tasks.ResumeFromZero,
 		Timeout:         CensusTimeout,
