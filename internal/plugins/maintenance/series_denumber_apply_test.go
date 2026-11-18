@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_apply_test.go
-// version: 4.1.0
+// version: 4.2.0
 // guid: 4c93e07a-1d62-4b8e-a5f3-90b7c1de2846
 // last-edited: 2026-11-17
 
@@ -39,7 +39,7 @@ const (
 type restoringStore struct {
 	*database.MockStore
 	refs               func(seriesID int) (int, error)
-	deleteUnreferenced func(seriesID int) (bool, error)
+	deleteUnreferenced func(seriesID int, name string, authorID *int) (bool, error)
 }
 
 func (restoringStore) RestoreSeries(int, string, *int) error { return nil }
@@ -51,11 +51,11 @@ func (r restoringStore) GetSeriesBookRefCount(id int) (int, error) {
 	return r.refs(id)
 }
 
-func (r restoringStore) DeleteSeriesIfUnreferenced(id int) (bool, error) {
+func (r restoringStore) DeleteSeriesIfUnreferenced(id int, name string, authorID *int) (bool, error) {
 	if r.deleteUnreferenced == nil {
 		return false, errors.New("restoringStore: no DeleteSeriesIfUnreferenced behaviour wired")
 	}
-	return r.deleteUnreferenced(id)
+	return r.deleteUnreferenced(id, name, authorID)
 }
 
 // opIDReporter (scan_standdown_apply_test.go) gives fakeReporter the OpID() the
@@ -392,10 +392,14 @@ func (l *denumberLib) refCount(id int) (int, error) {
 }
 
 // deleteUnreferenced models the store's DeleteSeriesIfUnreferenced for a
-// single-threaded fixture: count, then delete through the MockStore's
+// single-threaded fixture, in the real method's terms: the row must exist and
+// still be the expected name and author (ErrSeriesChanged), then the references
+// are counted (refsAtDelete, when a test sets it, is also the point where a test
+// changes the library "at delete time"), a referenced series is kept, a held row
+// is refused (ErrSeriesHeld), and the delete goes through the MockStore's
 // DeleteSeries (so DeleteSeriesFunc injections and the event log still apply).
 // The atomicity itself is the real store's, and is tested there.
-func (l *denumberLib) deleteUnreferenced(id int) (bool, error) {
+func (l *denumberLib) deleteUnreferenced(id int, name string, authorID *int) (bool, error) {
 	count := l.refCount
 	if l.refsAtDelete != nil {
 		count = l.refsAtDelete
@@ -404,14 +408,21 @@ func (l *denumberLib) deleteUnreferenced(id int) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if cur, _ := l.store.GetSeriesByID(id); cur == nil {
+	cur, _ := l.store.GetSeriesByID(id)
+	if cur == nil {
 		return false, database.ErrSeriesNotFound
+	}
+	if cur.Name != name || !sameAuthorPtr(cur.AuthorID, authorID) {
+		return false, database.ErrSeriesChanged
 	}
 	if n != 0 {
 		l.mu.Lock()
 		l.event("kept-at-delete:%d", id)
 		l.mu.Unlock()
 		return false, nil
+	}
+	if database.SeriesHeld(*cur) {
+		return false, fmt.Errorf("%w by %s", database.ErrSeriesHeld, cur.HeldBy)
 	}
 	if err := l.store.DeleteSeries(id); err != nil {
 		return false, err
