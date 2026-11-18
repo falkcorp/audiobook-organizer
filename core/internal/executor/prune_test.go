@@ -16,6 +16,7 @@ import (
 
 	"github.com/falkcorp/mediacore/entity"
 	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/falkcorp/mediacore/tasks/taskstest"
 )
@@ -271,7 +272,7 @@ func TestPrune_CancelStopsBetweenChunks(t *testing.T) {
 
 // End to end over the native run store: old terminal runs go, a run that is
 // not terminal stays, and a second pass finds nothing.
-func TestPrune_RemovesOldTerminalRunsFromTheRunStore(t *testing.T) {
+func TestTasksPrune_TerminalOnlyByRetention(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan tasks.RunID, 1)
 	var h *harness
@@ -298,6 +299,25 @@ func TestPrune_RemovesOldTerminalRunsFromTheRunStore(t *testing.T) {
 		h.waitState(id, tasks.StateSucceeded)
 		old = append(old, id)
 	}
+	// A run imported from HEAD (a terminal row the cutover staged through the
+	// native importer) ages out by the same rule as a native one.
+	imp := tasks.RunRecord{
+		ID: "01HEADOPDONE0000000000000A", Kind: "gotham.patrol", Mode: tasks.ModeLive, State: tasks.StateSucceeded,
+		Actor: tasks.Actor{UserID: "bruce", AuthMethod: "session"}, Trigger: tasks.TriggerManual,
+		Created: time.Now().Add(-3 * time.Hour), Started: time.Now().Add(-2 * time.Hour), Finished: time.Now().Add(-time.Hour),
+		Priority: tasks.PriorityNormal, Params: json.RawMessage(`{}`), Attempt: 1, FenceEpoch: 1,
+	}
+	b := h.ks.NewIndexedBatch()
+	if err := tasks.NativeImporter(h.ks).Run(t.Context(), b, imp); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if err := b.Commit(t.Context(), storage.Sync); err != nil {
+		t.Fatalf("commit import: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	old = append(old, imp.ID)
 	live := h.start("gotham.stakeout", tasks.StartRequest{})
 	<-started
 
@@ -307,8 +327,8 @@ func TestPrune_RemovesOldTerminalRunsFromTheRunStore(t *testing.T) {
 	if err := json.Unmarshal(r.Result, &res); err != nil {
 		t.Fatalf("result %s: %v", r.Result, err)
 	}
-	if res.Deleted != 5 {
-		t.Errorf("deleted = %d, want the 5 patrol runs (the stakeout is running and the prune run itself is not terminal yet)", res.Deleted)
+	if res.Deleted != 6 {
+		t.Errorf("deleted = %d, want the 5 patrol runs and the imported one (the stakeout is running and the prune run itself is not terminal yet)", res.Deleted)
 	}
 	for _, id := range old {
 		if _, err := h.stores.Runs.Get(t.Context(), id); !errors.Is(err, tasks.ErrRunNotFound) {
