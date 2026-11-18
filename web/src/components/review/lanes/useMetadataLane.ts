@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.53.1
+// version: 1.53.2
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-11-17
 //
@@ -3213,26 +3213,39 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           alreadyFetching += resp.skipped ?? 0;
           sent += part.length;
         }
-        const retiredNote =
-          retiredLeftOut > 0
-            ? ` (${retiredLeftOut.toLocaleString()} retired book${retiredLeftOut !== 1 ? 's' : ''} left out)`
-            : '';
+        const plural = (n: number, noun: string) =>
+          `${n.toLocaleString()} ${noun}${n !== 1 ? 's' : ''}`;
+        // What the server left out of the set, by cause. Both causes can hold
+        // at once (a set with trashed books and books already being searched),
+        // and a toast that names only one reads as if the other were searched.
+        const leftOut: string[] = [];
+        if (retiredLeftOut > 0) {
+          leftOut.push(`${plural(retiredLeftOut, 'retired book')} (in the trash or merged into another book)`);
+        }
+        if (alreadyFetching > 0) {
+          leftOut.push(`${plural(alreadyFetching, 'book')} already being searched`);
+        }
         if (opIds.length === 0) {
-          // Every chunk declined. Retired books are the one cause worth
-          // naming on its own: the server's per-chunk message covers only its
-          // own chunk, so the last one would stand for the whole set.
+          // Every chunk declined. The server's per-chunk message covers only
+          // its own chunk, so the last one would stand for the whole set:
+          // name the causes from the summed counts instead, when there are any.
           toast(
-            retiredLeftOut > 0 && alreadyFetching === 0
-              ? `Nothing to search: ${retiredLeftOut.toLocaleString()} retired book${retiredLeftOut !== 1 ? 's' : ''} ` +
-                  '(in the trash or merged into another book) left out.'
+            leftOut.length > 0
+              ? `Nothing to search: ${leftOut.join(' and ')} left out.`
               : (lastMessage ?? 'Those books are already being searched.'),
             'info'
           );
           return null;
         }
+        const leftOutShort: string[] = [];
+        if (retiredLeftOut > 0) leftOutShort.push(plural(retiredLeftOut, 'retired book'));
+        if (alreadyFetching > 0) {
+          leftOutShort.push(`${plural(alreadyFetching, 'book')} already being searched`);
+        }
+        const leftOutNote = leftOutShort.length > 0 ? ` (${leftOutShort.join(' and ')} left out)` : '';
         toast(
           `Searching again for ${searched.toLocaleString()} book${searched !== 1 ? 's' : ''}` +
-            retiredNote +
+            leftOutNote +
             " with each book's title and author" +
             (opIds.length > 1 ? ` in ${opIds.length} batches` : '') +
             ' — watch the bell for progress. The list reloads when the search finishes.',

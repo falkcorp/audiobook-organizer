@@ -1,5 +1,5 @@
 // file: internal/server/candidate_refetch_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 74a3c673-3586-4bc4-861e-c56db3fd0ab5
 // last-edited: 2026-11-09
 
@@ -174,5 +174,42 @@ func TestBookFetchClaims_WaitAndRelease(t *testing.T) {
 		r()
 	case <-time.After(2 * time.Second):
 		t.Fatal("the waiter was not woken by the release")
+	}
+}
+
+// A refetch of a book that is retired (trashed, or merged away) is a skip the
+// fetch reports as retired, with a typed flag: the lost-candidates fixer turns
+// it into "changed since plan" instead of a failure. No provider is asked and
+// nothing is cached. A book the owner marked "no match" is also skipped, but
+// is not retired.
+func TestRefetchMetadataCandidates_ReportsARetiredSkipAsRetired(t *testing.T) {
+	noMatch := "no_match"
+	shapes := append([]retiredShape{}, retiredShapes...)
+	shapes = append(shapes, retiredShape{"marked_no_match", func(b *database.Book) { b.MetadataReviewStatus = &noMatch }})
+	for _, shape := range shapes {
+		t.Run(shape.name, func(t *testing.T) {
+			s, cleanup := setupTestServer(t)
+			defer cleanup()
+			store := s.storeForWiring()
+			src := &countingSource{name: "Finds", results: []metadata.BookMetadata{{Title: "Batman Year One", Author: "Selina Kyle"}}}
+			mfs := metafetch.NewService(store)
+			mfs.SetOverrideSources([]metadata.MetadataSource{src})
+			s.metadataFetchService = mfs
+			id := retiredFetchBook(t, s, "Batman Year One", shape.retire)
+
+			res, err := s.RefetchMetadataCandidates(context.Background(), id)
+			if err != nil {
+				t.Fatalf("RefetchMetadataCandidates: %v", err)
+			}
+			if res.Status != "skipped" || res.Candidates != 0 {
+				t.Fatalf("result = %+v, want a skip with no candidates", res)
+			}
+			if wantRetired := shape.name != "marked_no_match"; res.Retired != wantRetired {
+				t.Fatalf("Retired = %v, want %v (result %+v)", res.Retired, wantRetired, res)
+			}
+			if src.calls.Load() != 0 {
+				t.Fatal("a skipped book must not spend a provider call")
+			}
+		})
 	}
 }
