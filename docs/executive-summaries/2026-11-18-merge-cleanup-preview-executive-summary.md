@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-18-merge-cleanup-preview-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: fea71315-0fbe-4b70-a41a-0174fad61b55 -->
 <!-- last-edited: 2026-11-18 -->
 
@@ -22,19 +22,36 @@ no button that does.
   fragment kept in place of the full recording (the two should swap roles), and
   a pointer that leads to a book that has itself been set aside (it should lead
   to the live book instead).
-- A row only proposes a fix when the evidence agrees: different titles, different
-  authors or a different place in a series, and matching or clearly different
-  running times. A row with one weak signal, or with a running time that is
-  missing or could be two parts of one book, is listed with its reasons and no
-  proposal.
-- Rows the owner already refused to join, rows that belong to the version-group
-  repair, books holding retired file versions, and merges that Audiobookshelf
-  clients still follow are all listed as held, with the reason, so none of them
-  is proposed by accident.
+- A row only proposes that two books be separated when at least two signs agree
+  that they are different works: titles that share nothing, authors that share no
+  name, or different places in the same series. Even then it holds back if the
+  titles match (or one book is also known by the other's title), if the two files
+  are the same recording, or if the running times and file sizes are identical.
+  When a fact is missing or unreliable (a placeholder such as "Unknown" for a title
+  or author, an author record that no longer exists, a file with no measured
+  length or no recorded size, or chapters that are listed but no longer on disk
+  and would change the answer) the row is listed with its reasons and no proposal.
+  A book whose title and author were swapped is sent to the repair that exists for
+  that, not proposed here.
+- Rows that belong to the version-group repair, books holding retired file
+  versions, and merges that Audiobookshelf clients still follow are listed as
+  held, with the reason, so none of them is proposed by accident. A pair the
+  owner already refused to join is held whenever the proposal would say the two
+  are one work (a swap, or moving a pointer onto the other book); a proposal to
+  separate them agrees with the refusal, so it is shown, marked with the owner's
+  refusal.
+- When a pointer leads to a book that has been set aside, the list follows the
+  trail one step further, to the live book the content went to, and proposes
+  pointing there only if that book really looks like the same work. It says a
+  book should stand on its own only when nothing live could be found around the
+  dead end; if the trail loops or runs on without an end, the row is held.
 - The list reports counts: how many rows of each kind, how many were held and for
   which reasons, and how many looked like the earlier automatic merge pass
-  (it leaves a recognisable mark) versus some other cause. Those counts are what
-  the later steps of the plan are sized from.
+  (it leaves a recognisable mark) versus some other cause or an unknown one. Every
+  row is in those counts, including the ones that are held or could not be read.
+  Those counts are what the later steps of the plan are sized from. If the
+  library's in-memory index is found to be missing books, the list refuses to run
+  and says by how many, rather than judge a library that is not whole.
 - This change was checked against test libraries only. It has not been run against
   the real library, so the real counts are not known yet.
 

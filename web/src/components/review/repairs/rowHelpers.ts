@@ -1,5 +1,5 @@
 // file: web/src/components/review/repairs/rowHelpers.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 21e5fc7d-cd22-4c0a-9773-b83015403a68
 // last-edited: 2026-11-18
 
@@ -138,6 +138,8 @@ const FLAG_LABELS: Record<string, string> = {
   origin_match4: 'Merged by metadata match (pointer, flag and shared source hash)',
   origin_match4_partial: 'Looks like a metadata-match merge (no shared source hash)',
   origin_other: 'Merge pointer left by something other than a metadata match',
+  origin_unknown: 'Where the merge pointer came from could not be read',
+  sync_redirect_broken: 'Audiobookshelf sync redirect chain is broken and cannot be followed',
 };
 
 export function flagLabel(f: string): string {

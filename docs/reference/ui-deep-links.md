@@ -1,5 +1,5 @@
 <!-- file: docs/reference/ui-deep-links.md -->
-<!-- version: 2.5.0 -->
+<!-- version: 2.6.0 -->
 <!-- guid: B610EF08-9346-47FD-AAA3-C65958E0127C -->
 <!-- last-edited: 2026-11-18 -->
 
@@ -72,7 +72,7 @@ The `/review` repairs row takes these values for the merge-cleanup preview
 `skipped:sync_redirect_broken`) and `filter=flag:<name>` with one of
 `chain_via_merged`, `chain_via_trashed`, `group_needs_handoff`,
 `sync_redirect_present`, `owner_says_distinct`, `origin_match4`,
-`origin_match4_partial`, `origin_other`. These add no row to the table: the
+`origin_match4_partial`, `origin_other`, `origin_unknown`, `sync_redirect_broken`. These add no row to the table: the
 class, skip kind and flag tokens already follow the row's token rule.
 
 Count: 34 rows: 22 done, 9 existing, 3 n/a. A row that gained a parameter
