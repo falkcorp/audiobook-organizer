@@ -1,5 +1,5 @@
 // file: internal/reconcile/apply_file_rows_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c2e84b17-5d93-4a06-b8f1-7e3a90d4c625
 // last-edited: 2026-11-18
 
@@ -116,8 +116,8 @@ func (f *applyFixture) bookPath(bookID string) string {
 }
 
 // apply runs ExecuteReconcile on store for matches under operationID and
-// returns its error and the result it saved.
-func (f *applyFixture) apply(store Store, operationID string, matches ...ReconcileApplyItem) (error, ReconcileApplyResult) {
+// returns the result it saved and its error.
+func (f *applyFixture) apply(store Store, operationID string, matches ...ReconcileApplyItem) (ReconcileApplyResult, error) {
 	f.t.Helper()
 	var got ReconcileApplyResult
 	save := func(payload any) error {
@@ -125,7 +125,7 @@ func (f *applyFixture) apply(store Store, operationID string, matches ...Reconci
 		return json.Unmarshal(raw, &got)
 	}
 	err := ExecuteReconcile(context.Background(), store, operationID, save, matches, logger.New("reconcile-test"))
-	return err, got
+	return got, err
 }
 
 // journal is the operation's change rows by type.
@@ -202,7 +202,7 @@ func TestExecuteReconcile_RepointsTheBookFileRowWithTheBook(t *testing.T) {
 	id := f.book("Batman: Year One", old)
 	row := f.row(id, old)
 
-	err, res := f.apply(f.ps, "op-repoint", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+	res, err := f.apply(f.ps, "op-repoint", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestExecuteReconcile_ABookWithNoFileRowsMovesAlone(t *testing.T) {
 	f := newApplyFixture(t)
 	id := f.book("Batman: The Long Halloween", f.missingPath("Long Halloween.m4b"))
 
-	err, res := f.apply(f.ps, "op-norows", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+	res, err := f.apply(f.ps, "op-norows", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
 	if err != nil || res.Applied != 1 {
 		t.Fatalf("apply: %v, result %+v", err, res)
 	}
@@ -293,7 +293,7 @@ func TestExecuteReconcile_ARowAlreadyAtTheFoundFileIsLeftAndTheBookMoves(t *test
 	id := f.book("Batman: Dark Victory", f.missingPath("Dark Victory.m4b"))
 	row := f.row(id, f.newPath)
 
-	err, res := f.apply(f.ps, "op-rowfirst", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+	res, err := f.apply(f.ps, "op-rowfirst", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
 	if err != nil || res.Applied != 1 {
 		t.Fatalf("apply: %v, result %+v", err, res)
 	}
@@ -396,7 +396,7 @@ func TestExecuteReconcile_RefusesAMatchItCannotRepointCleanly(t *testing.T) {
 			id := tc.set(f, old)
 			before := f.rows(id)
 
-			err, res := f.apply(f.ps, "op-refused", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+			res, err := f.apply(f.ps, "op-refused", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
 			if err == nil || res.Applied != 0 || res.Skipped != 1 {
 				t.Fatalf("err = %v, result %+v, want an error and 0 applied, 1 skipped", err, res)
 			}
@@ -422,7 +422,7 @@ func TestExecuteReconcile_StoreWithoutFileRowWritesRefusesABookWithRows(t *testi
 
 	// Only Store's methods are promoted: no ModifyBookFile, no BookFilesAtPath.
 	narrow := struct{ Store }{f.ps}
-	err, res := f.apply(narrow, "op-narrow", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+	res, err := f.apply(narrow, "op-narrow", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
 	if err == nil || res.Applied != 0 || res.Skipped != 1 {
 		t.Fatalf("err = %v, result %+v, want refused", err, res)
 	}
@@ -502,7 +502,7 @@ func TestExecuteReconcile_BookWriteFailureRestoresTheRowAndARerunApplies(t *test
 	before := f.rows(id)
 	store := &failingStore{PebbleStore: f.ps, failBook: true, failRowAfter: -1}
 
-	err, res := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+	res, err := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
 	if err == nil || res.Applied != 0 || res.Skipped != 1 {
 		t.Fatalf("err = %v, result %+v, want a failed match counted as skipped, never applied", err, res)
 	}
@@ -515,7 +515,7 @@ func TestExecuteReconcile_BookWriteFailureRestoresTheRowAndARerunApplies(t *test
 	}
 
 	store.heal()
-	err, res = f.apply(store, "op-2", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+	res, err = f.apply(store, "op-2", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
 	if err != nil || res.Applied != 1 {
 		t.Fatalf("rerun: %v, result %+v", err, res)
 	}
@@ -538,7 +538,7 @@ func TestExecuteReconcile_RollbackFailureIsReportedAndARerunFinishesTheMatch(t *
 	// The first ModifyBookFile (the forward repoint) lands, every later one fails.
 	store := &failingStore{PebbleStore: f.ps, failBook: true, failRowAfter: 1}
 
-	err, res := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+	res, err := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
 	if err == nil || res.Applied != 0 || res.Skipped != 1 {
 		t.Fatalf("err = %v, result %+v, want a failed match counted as skipped, never applied", err, res)
 	}
@@ -551,7 +551,7 @@ func TestExecuteReconcile_RollbackFailureIsReportedAndARerunFinishesTheMatch(t *
 	f.requireRepointedRow(id, row) // the stranded state: the row is at the found file
 
 	store.heal()
-	err, res = f.apply(store, "op-2", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+	res, err = f.apply(store, "op-2", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
 	if err != nil || res.Applied != 1 {
 		t.Fatalf("rerun: %v, result %+v", err, res)
 	}
@@ -573,7 +573,7 @@ func TestExecuteReconcile_RowWriteFailureLeavesTheBookAlone(t *testing.T) {
 	before := f.rows(id)
 	store := &failingStore{PebbleStore: f.ps, failRowAfter: 0}
 
-	err, res := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+	res, err := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
 	if err == nil || res.Applied != 0 || res.Skipped != 1 {
 		t.Fatalf("err = %v, result %+v, want a failed match counted as skipped, never applied", err, res)
 	}
@@ -602,7 +602,7 @@ func TestExecuteReconcile_ARowChangedUnderTheApplyIsNotRepointed(t *testing.T) {
 		}
 	}
 
-	err, res := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+	res, err := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
 	if err == nil || res.Applied != 0 || res.Skipped != 1 {
 		t.Fatalf("err = %v, result %+v, want refused", err, res)
 	}
@@ -627,7 +627,7 @@ func TestExecuteReconcile_ARefusedMatchDoesNotStopTheNext(t *testing.T) {
 	row := f.row(good, goodOld)
 	badTarget := f.file("found/Hush.m4b", "other audio")
 
-	err, res := f.apply(f.ps, "op-mixed",
+	res, err := f.apply(f.ps, "op-mixed",
 		ReconcileApplyItem{BookID: bad, NewPath: badTarget},
 		ReconcileApplyItem{BookID: good, NewPath: f.newPath})
 	if err == nil {
@@ -661,7 +661,7 @@ func TestExecuteReconcile_ABookRepointedUnderTheApplyIsNotOverwrittenAndItsRowIs
 		}
 	}
 
-	err, res := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+	res, err := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
 	if err == nil || res.Applied != 0 || res.Skipped != 1 {
 		t.Fatalf("err = %v, result %+v, want refused and never applied", err, res)
 	}
