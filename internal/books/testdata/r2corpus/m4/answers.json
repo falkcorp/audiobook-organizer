@@ -1,0 +1,106 @@
+{
+  "_header": {
+    "file": "internal/books/testdata/r2corpus/m4/answers.json",
+    "guid": "4c8d1e72-a05b-4f36-b9d4-7e2f60a1c853",
+    "last-edited": "2026-11-18",
+    "version": "1.0.0"
+  },
+  "activity_stage1": {
+    "distinct_references_after": 15,
+    "renamed": 231,
+    "rows": 1236,
+    "type_index_entries": 1236,
+    "typed": 1236,
+    "verify_held": 0,
+    "verify_written": 231
+  },
+  "overlay": {
+    "imported_by_kind": {
+      "books.dedup.check-book": 1,
+      "books.library.folder-auto-scan": 1,
+      "books.library.scan": 9,
+      "books.maintenance.activity-filter-index-backfill": 4,
+      "books.maintenance.book-atpath-index-backfill": 3,
+      "books.maintenance.book-hash-index-repair": 4,
+      "books.maintenance.external-id-backfill": 3,
+      "books.maintenance.malformed-m4b-remux": 3,
+      "books.maintenance.malformed-m4b-transcode": 3,
+      "books.maintenance.metadata-refresh": 2,
+      "books.maintenance.movement-atom-cleanup": 3,
+      "books.maintenance.opchange-book-index-rebuild": 4,
+      "books.maintenance.purge-deleted": 4,
+      "books.maintenance.temp-file-cleanup": 4,
+      "books.maintenance.transcode-temp-cleanup": 4,
+      "books.repairs.fix-read-by-narrator": 2,
+      "core.log.journal.prune": 2
+    },
+    "imported_by_state": {
+      "awaiting_decision": 1,
+      "canceled": 2,
+      "failed": 7,
+      "interrupted": 5,
+      "interrupted_dropped": 1,
+      "interrupted_quiesced": 4,
+      "queued": 1,
+      "succeeded": 33,
+      "timed_out": 1,
+      "waiting_deps": 1
+    },
+    "quarantined_runs": [
+      "01M731PC68J15F6MDMEJMZEEX0"
+    ],
+    "rows_quarantined": 11,
+    "runs_imported": 56,
+    "runs_in_source": 57,
+    "totals": {
+      "events": 167,
+      "intents": 13,
+      "items": 13,
+      "log_lines": 265,
+      "marks": 25,
+      "plan_rows": 2
+    },
+    "verify_read": 62,
+    "verify_written": 61
+  },
+  "stage1": {
+    "imported_by_kind": {
+      "books.library.folder-auto-scan": 1,
+      "books.library.scan": 6,
+      "books.maintenance.activity-filter-index-backfill": 3,
+      "books.maintenance.book-atpath-index-backfill": 3,
+      "books.maintenance.book-hash-index-repair": 3,
+      "books.maintenance.external-id-backfill": 3,
+      "books.maintenance.malformed-m4b-remux": 3,
+      "books.maintenance.malformed-m4b-transcode": 3,
+      "books.maintenance.metadata-refresh": 1,
+      "books.maintenance.movement-atom-cleanup": 3,
+      "books.maintenance.opchange-book-index-rebuild": 3,
+      "books.maintenance.purge-deleted": 3,
+      "books.maintenance.temp-file-cleanup": 3,
+      "books.maintenance.transcode-temp-cleanup": 3,
+      "core.log.journal.prune": 1
+    },
+    "imported_by_state": {
+      "canceled": 1,
+      "failed": 6,
+      "interrupted_quiesced": 1,
+      "queued": 1,
+      "succeeded": 33
+    },
+    "quarantined_runs": [],
+    "rows_quarantined": 0,
+    "runs_imported": 42,
+    "runs_in_source": 42,
+    "totals": {
+      "events": 124,
+      "intents": 0,
+      "items": 0,
+      "log_lines": 239,
+      "marks": 0,
+      "plan_rows": 0
+    },
+    "verify_read": 44,
+    "verify_written": 44
+  }
+}
