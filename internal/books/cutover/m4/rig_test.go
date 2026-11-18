@@ -97,6 +97,8 @@ type lazyImporter struct {
 	mu   sync.Mutex
 	imp  tasks.Importer
 	runs map[tasks.RunID]int
+	// clocks counts the Clock calls per kind.
+	clocks map[tasks.Kind]int
 }
 
 func (l *lazyImporter) bind(ks storage.Keyspace) {
@@ -131,7 +133,19 @@ func (l *lazyImporter) RunData(ctx context.Context, b *storage.Batch, id tasks.R
 	return l.get().RunData(ctx, b, id, d)
 }
 
+func (l *lazyImporter) clockCalls(k tasks.Kind) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.clocks[k]
+}
+
 func (l *lazyImporter) Clock(ctx context.Context, b *storage.Batch, k tasks.Kind, c tasks.Clock) error {
+	l.mu.Lock()
+	if l.clocks == nil {
+		l.clocks = map[tasks.Kind]int{}
+	}
+	l.clocks[k]++
+	l.mu.Unlock()
 	return l.get().Clock(ctx, b, k, c)
 }
 
@@ -280,6 +294,7 @@ func (r *rig) migration() datamigrate.DataMigration {
 			return *lr
 		},
 		ScanStandDownKey: scanKey,
+		StampAt:          stampAt,
 		Location:         cmp.Or(r.zone, gotham),
 		Reconcile: func(ctx context.Context) error {
 			r.reconcil.Add(1)
@@ -397,6 +412,8 @@ func read(ctx context.Context, t testing.TB, db *storage.DB, dm datamigrate.Data
 		{Start: []byte("opv3:"), End: []byte("opv3;")},
 		{Start: []byte("opv2:row"), End: []byte("opv2:rox")},
 		{Start: []byte("op:batch:"), End: []byte("op:batch;")},
+		{Start: []byte("op:completion:"), End: []byte("op:completion;")},
+		{Start: []byte("op:deprev:"), End: []byte("op:deprev;")},
 		{Start: []byte("setting:scheduled_task_last_tick."), End: []byte("setting:scheduled_task_last_tick/")},
 		{Start: []byte("setting:library_scan_full_last_run"), End: []byte("setting:library_scan_full_last_run\x00")},
 		{Start: []byte("setting:maintenance_window_last_run"), End: []byte("setting:maintenance_window_last_run\x00")},
@@ -492,6 +509,24 @@ func (r *rig) runObserve(t testing.TB, observe func(ctx context.Context, s *snap
 	}
 }
 
+// runObserve2 boots the store fsys holds, as it is, and hands observe the
+// booted store's snapshot (runObserve on a store a test already worked on).
+func (r *rig) runObserve2(t testing.TB, fsys vfs.FS, observe func(ctx context.Context, s *snap)) {
+	t.Helper()
+	dm := r.migration()
+	err := r.boot(context.Background(), fsys, dm, func(ctx context.Context, db *storage.DB) error {
+		s, err := read(ctx, t, db, dm)
+		if err != nil {
+			return err
+		}
+		observe(ctx, s)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("boot: %v\n%s", err, r.logs)
+	}
+}
+
 func syncTree(t testing.TB, fsys vfs.FS, dir string) {
 	t.Helper()
 	syncDir := func(p string) {
@@ -564,6 +599,9 @@ var epoch = time.Date(2026, 11, 5, 3, 0, 0, 0, time.UTC)
 // would name it; gotham is the zone the window's date was written in (west of
 // UTC, so reading the date as UTC puts it hours ahead of the window that ran).
 const scanKey tasks.Key = "books.library.scan"
+
+// stampAt is the instant the rig imports every stamp at.
+var stampAt = time.Date(2026, 11, 6, 4, 0, 0, 0, time.UTC)
 
 var gotham = time.FixedZone("Gotham", -5*3600)
 
@@ -783,3 +821,6 @@ func (s *snap) legacyGet(ctx context.Context, key string) (string, error) {
 	raw, err := s.legacy.Get(ctx, []byte(key))
 	return string(raw), err
 }
+
+// revJSON is an op:completion: or op:deprev: row.
+func revJSON(rev uint64) string { return fmt.Sprintf(`{"rev":%d}`, rev) }

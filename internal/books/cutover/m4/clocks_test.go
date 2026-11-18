@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/datamigrate"
 	"github.com/falkcorp/mediacore/tasks"
 )
 
@@ -262,5 +263,52 @@ func TestCutover_ClockRowTakenByItsGroupIsLeftAlone(t *testing.T) {
 	s, err := r.runWith(t, r.seed(t), r.migration())
 	if err == nil || !strings.Contains(err.Error(), "still present") {
 		t.Fatalf("boot = %+v, %v; want Verify's finding for the row nobody imported", s, err)
+	}
+}
+
+// TestCutover_ClockGroupDriverCommitsBetweenReads: a clock group is read in
+// several steps (a scan per family, a Get per exact key), and a worker that
+// started before the group's driver committed can finish its reads after it:
+// the driver has taken every row of the group, so the late reads find the group
+// without the driver's rows and the worker, now the lowest row it can see,
+// would import a clock built from its own row alone, over the driver's merged
+// one. The worker re-reads its own row last and leaves a group already taken:
+// it writes no clock.
+func TestCutover_ClockGroupDriverCommitsBetweenReads(t *testing.T) {
+	early := time.Date(2026, 11, 3, 1, 0, 0, 0, time.UTC)
+	late := early.Add(48 * time.Hour)
+	const sweep, tick = "setting:library_scan_full_last_run", "setting:scheduled_task_last_tick.library_scan_full"
+	raw := map[string]string{}
+	setting(raw, "library_scan_full_last_run", early.Format(time.RFC3339))
+	setting(raw, "scheduled_task_last_tick.library_scan_full", late.Format(time.RFC3339))
+	r := newRig(t, withRaw(raw), func(r *rig) {
+		r.parallelism = func(dm *datamigrate.DataMigration) { dm.Parallelism = fixedOne() }
+	})
+	dm := r.migration()
+	inner := dm.Step
+	handed := 0
+	dm.Step = func(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
+		handed++
+		if handed != 1 {
+			return inner(ctx, kv, w)
+		}
+		// The runner hands the higher row (the interval clock's) first, as a
+		// parallel shard can, and the driver's commit lands after the worker's
+		// scan of the interval clocks and before its read of the sweep key: the
+		// driver's row and the worker's own are gone from every point read.
+		r.view = func(key string) ([]byte, bool, error) {
+			return nil, key == sweep || key == tick, storage.ErrNotFound
+		}
+		defer func() { r.view = nil }()
+		err := inner(ctx, storage.KV{Key: []byte(tick), Value: []byte(raw[tick])}, w)
+		if n := r.imp.clockCalls("books.library.scan-full"); n != 0 {
+			t.Errorf("%d clock imports from a worker that read a group the driver had already taken", n)
+		}
+		return err
+	}
+	// Only the first call is the race; the boot then ends with the rows still
+	// there, which Verify reports.
+	if _, err := r.runWith(t, r.seed(t), dm); err == nil || !strings.Contains(err.Error(), "still present") {
+		t.Errorf("boot = %v, want Verify's finding for the rows the swapped call never handled", err)
 	}
 }
