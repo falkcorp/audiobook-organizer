@@ -1,7 +1,7 @@
 // file: internal/decisions/reasons.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c2a65f18-d907-4e34-8b7a-3f10e6d95a82
-// last-edited: 2026-10-30
+// last-edited: 2026-11-18
 
 package decisions
 
@@ -92,6 +92,9 @@ var mergeShapedRepairs = map[string]bool{
 	"repairs:duplicate-copies":        true,
 	"repairs:version-twin-metadata":   true,
 	"repairs:consolidation-leftovers": true,
+	// A reject of a merge-cleanup row says the proposed repair of an existing
+	// merge is wrong, which is the same question the split-books reasons ask.
+	"repairs:maintenance.merge-cleanup": true,
 }
 
 // Reasons returns the taxonomy for opKind: the common codes plus the codes of

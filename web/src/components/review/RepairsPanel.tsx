@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.35.1
+// version: 1.36.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
-// last-edited: 2026-11-05
+// last-edited: 2026-11-18
 
 /**
  * The repairs lane's surface: a rail of fixers and the selected fixer's trial.
@@ -526,6 +526,26 @@ export const SKIP_KIND_LABEL: Record<string, string> = {
   skipped_numbered_set_unsure: 'Numbered files may be several works',
   skipped_what_if: 'What-if plan (never applied)',
   skipped_interrupted_run: 'An earlier repair of this folder did not finish',
+  // maintenance.merge-cleanup (a preview: nothing here has an Apply control).
+  runtime_incomplete: 'A book has a file with no measured length, so its runtime cannot be compared',
+  runtime_ambiguous: 'Lengths do not settle it (about half as long, or a very short file)',
+  suspicious: 'Looks like a wrong merge, but only one sign says so',
+  cannot_tell: 'Cannot tell whether the two are the same work',
+  merge_looks_correct: 'The merge looks right (same work, similar length)',
+  no_longer_merged: 'No longer merged into another book',
+  gone: 'No longer a live merged book with files',
+  chain_over_cap: 'Merge chain is longer than 10 books',
+  cycle_not_head: 'Part of a merge loop; another book in the loop is handled first',
+  repoint_ambiguous: 'Merge target is gone and more than one live book could replace it',
+  handled_by_version_group_repair: 'Handled by "Pick the main version of each book"',
+  retired_shell: 'Holds file rows retired from another book',
+  cross_group: 'The two books are in different version groups',
+  swap_target_not_primary: "The merge target is not its version group's main version",
+  swap_would_not_crown_keeper: "Swapping would not make the longer book its group's main version",
+  group_needs_handoff: 'Its version group would be left with no main version',
+  sync_redirect_present: 'An Audiobookshelf sync redirect points away from this book',
+  owner_says_distinct: 'You rejected joining these two books',
+  owner_veto_unresolvable: 'A reject of yours could not be matched to one book',
   error: 'Error',
 };
 

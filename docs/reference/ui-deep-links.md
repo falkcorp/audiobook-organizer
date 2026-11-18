@@ -1,7 +1,7 @@
 <!-- file: docs/reference/ui-deep-links.md -->
-<!-- version: 2.2.0 -->
+<!-- version: 2.3.0 -->
 <!-- guid: B610EF08-9346-47FD-AAA3-C65958E0127C -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-18 -->
 
 # UI deep links
 
@@ -61,6 +61,16 @@ the address, and `page` is always 1-based in a URL.
 | `/dedup`, `/dedup/labels`, `/books/dedup`, `/authors/dedup` | redirects to `/review` | keeps `book`, `band` | existing |
 | `/config`, `/config/api-keys`, `/audiobookshelf*` | redirects (Audiobookshelf URLs) | | existing |
 | `/setup`, `/login`, `/invite/:token` | pre-auth, no navigable state | | n/a |
+
+The `/review` repairs row takes these values for the merge-cleanup preview
+(`fixer=maintenance.merge-cleanup`): `class=unmerge|swap_keeper|repoint_chain|no_verdict|error`,
+`filter=skipped:<kind>` with a kind from the preview's skip list (for example
+`skipped:runtime_incomplete`, `skipped:group_needs_handoff`,
+`skipped:sync_redirect_present`) and `filter=flag:<name>` with one of
+`chain_via_merged`, `chain_via_trashed`, `group_needs_handoff`,
+`sync_redirect_present`, `owner_says_distinct`, `origin_match4`,
+`origin_match4_partial`, `origin_other`. These add no row to the table: the
+class, skip kind and flag tokens already follow the row's token rule.
 
 Count: 34 rows: 22 done, 9 existing, 3 n/a. A row that gained a parameter
 next to an existing one is counted under `done`; the two legacy redirects

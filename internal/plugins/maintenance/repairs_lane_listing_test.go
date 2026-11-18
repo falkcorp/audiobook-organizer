@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repairs_lane_listing_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 7e1c9a54-2b60-4d83-a5f7-0c8d3b6e9142
-// last-edited: 2026-11-05
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -29,6 +29,7 @@ var laneOrder = []struct {
 	{"folder-books", repairs.GroupDuplicates, "Break up folder-sized books"},
 	{"consolidation-leftovers", repairs.GroupDuplicates, "Merge leftover one-chapter books"},
 	{"duplicate-copies", repairs.GroupDuplicates, "Merge duplicate copies of a book"},
+	{mergeCleanupFixerID, repairs.GroupDuplicates, "Fix mistaken merges"},
 
 	{"maintenance.repair-swapped-title-author", repairs.GroupTitles, "Fix swapped title and author"},
 	{"maintenance.repair-junk-titles", repairs.GroupTitles, "Fix junk titles"},
@@ -56,7 +57,7 @@ var laneOrder = []struct {
 	{"master-list-import", repairs.GroupImports, "Import read status from a master list"},
 }
 
-// The 22 fixers the plugin registers are listed in exactly the owner's order,
+// The 23 fixers the plugin registers are listed in exactly the owner's order,
 // each under its group, and the list is the same on every call.
 func TestRepairsLane_ListingOrderAndGroups(t *testing.T) {
 	p := &Plugin{deps: fakeDeps{}}
