@@ -1,5 +1,5 @@
 // file: core/updater/github/github.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b27e4d90-5a13-4c68-8f0e-93d1c7a6e254
 // last-edited: 2026-11-18
 
@@ -193,7 +193,11 @@ func (r apiRelease) release(ch updater.Channel) updater.Release {
 		out.Channel = updater.ChannelPrerelease
 	}
 	if r.PublishedAt != "" {
-		out.PublishedAt, _ = time.Parse(time.RFC3339, r.PublishedAt)
+		// PublishedAt is informational: a value the API sends malformed leaves
+		// it zero rather than failing the release.
+		if t, err := time.Parse(time.RFC3339, r.PublishedAt); err == nil {
+			out.PublishedAt = t
+		}
 	}
 	for _, a := range r.Assets {
 		out.Assets = append(out.Assets, updater.Asset{Name: a.Name, URL: a.BrowserDownloadURL, Size: a.Size})

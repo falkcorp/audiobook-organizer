@@ -1,5 +1,5 @@
 // file: core/updater/updater.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d
 // last-edited: 2026-11-18
 
@@ -426,7 +426,7 @@ func (u *Updater) assetOf(r Release) *Asset {
 // probeWritable reports whether the executable's directory can be written by
 // this process: it creates and removes a probe file through an os.Root opened
 // on that directory (OPS2-4).
-func (u *Updater) probeWritable() error {
+func (u *Updater) probeWritable() (err error) {
 	exe, err := u.executablePath()
 	if err != nil {
 		return fmt.Errorf("executable path: %w", err)
@@ -435,7 +435,11 @@ func (u *Updater) probeWritable() error {
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrBinaryNotWritable, err)
 	}
-	defer func() { _ = root.Close() }()
+	defer func() {
+		if cerr := root.Close(); cerr != nil {
+			err = errors.Join(err, fmt.Errorf("%w: %v", ErrBinaryNotWritable, cerr))
+		}
+	}()
 	const probe = ".updater-write-probe"
 	f, err := root.OpenFile(probe, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
