@@ -1,5 +1,5 @@
 // file: internal/applygate/partial.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b1e7d4a0-3c58-4f26-9a8d-0f6c2e5b7d19
 // last-edited: 2026-11-17
 
@@ -167,9 +167,11 @@ func ClaimKey(c *metafetch.MetadataCandidate) string {
 //
 // Rule (a), the part marker, runs whatever the runtime says: parts of one book
 // can be within 5% of each other's length, so a matching runtime does not say
-// which part the files are. With a runtime that agrees only the book's own
-// title and file name are read for it, not the folder's label, which is where
-// a stale marker lives. Rules (b) and (c) are skipped when the runtime
+// which part the files are. With a runtime that agrees and a candidate that
+// names no part, only the book's own title and file name are read for it, not
+// the folder's label, which is where a stale marker lives; a candidate that
+// does name a part is compared with the whole side, folder included. Rules (b)
+// and (c) are skipped when the runtime
 // AGREES: files whose runtime matches the candidate's are the whole thing,
 // whatever the folder says. It returns only block or neutral, never agree.
 //
@@ -196,11 +198,14 @@ func checkPartialBook(book *database.Book, c *metafetch.MetadataCandidate, runti
 	bp, bok := partOf(bside)
 	cp, cok := partOf(cside)
 	// With a runtime that agrees the folder's label is the one a stale part
-	// marker lives in (a "Disc 2" folder whose files were merged since), so a
-	// part the files are said to be counts only when this book's own text (its
-	// title and its own file name) says it.
+	// marker lives in (a "Disc 2" folder whose files were merged since), so for
+	// a candidate that names no part, a part the files are said to be counts
+	// only when this book's own text (its title and its own file name) says
+	// it. A candidate that is itself a part is another matter: its runtime
+	// agrees with files that are part-sized, and then the folder's marker is the
+	// best evidence of which part they are, so the whole side is compared.
 	mp, mok := bp, bok
-	if runtimeOutcome == OutcomeAgree {
+	if runtimeOutcome == OutcomeAgree && !cok {
 		mp, mok = partOf(bookOwnSide(bTitle, book.FilePath))
 	}
 	if mok && (!cok || mp != cp) {

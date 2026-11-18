@@ -1,5 +1,5 @@
 // file: internal/applygate/property_scale_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7ff3bd8b-cf0b-4af8-8fe7-0506ee171ae5
 // last-edited: 2026-11-17
 
@@ -27,7 +27,7 @@ func scaled(full int) int {
 }
 
 // sampled keeps every raceScaleDown-th element under -race and all of them
-// otherwise. The stride is coprime to the pool's loop extents (6, 9, 6), so the
+// otherwise. The stride is coprime to the pool's loop extents (6, 6, 9, 6), so the
 // sample still crosses every title form instead of aliasing onto one.
 func sampled[T any](pool []T) []T {
 	if !raceEnabled {

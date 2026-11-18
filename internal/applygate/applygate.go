@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate.go
-// version: 1.22.2
+// version: 1.23.0
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
 // last-edited: 2026-11-17
 
@@ -629,7 +629,8 @@ const (
 	FormRangeEndpoint = "range_endpoint_position"
 )
 
-// BookNumbers lists every number found on the book, one per source.
+// BookNumbers lists every number found on the book, one per source: its series
+// position, title, subtitle, and the primary file's name and folder name.
 //
 // A part suffix ("- 001", see seqnum.PartSuffix) is marked, and so is a
 // series position that only repeats it (set aside only when the candidate
@@ -687,6 +688,13 @@ func BookNumbers(book *database.Book) []SourceNumber {
 		add("series_position", n, ok)
 	}
 	addText("title", book.Title)
+	// The stored subtitle is the book's own text as much as its title is
+	// ("Batman, Book 2" there is a volume): the candidate side reads its
+	// subtitle too, so a volume only the subtitle states is compared rather
+	// than passed for want of a number.
+	if sub := strings.TrimSpace(derefStr(book.Subtitle)); sub != "" {
+		addText("subtitle", sub)
+	}
 
 	if p := strings.TrimSpace(book.FilePath); p != "" {
 		base := filepath.Base(p)
@@ -699,7 +707,7 @@ func BookNumbers(book *database.Book) []SourceNumber {
 			addText("folder_name", base)
 		}
 	}
-	out = markRangeEndpoint(out, "title")
+	out = markRangeEndpoint(out, "title", "subtitle")
 	return discountPartSuffix(book, out, stems)
 }
 

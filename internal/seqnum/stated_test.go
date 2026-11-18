@@ -1,5 +1,5 @@
 // file: internal/seqnum/stated_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: e20b2f44-17f0-486d-b69d-66acf91c7b19
 // last-edited: 2026-11-17
 
@@ -75,6 +75,18 @@ func TestReadPairLoneRoman(t *testing.T) {
 		{"Who Am I", "Who Am I 2", "", "volume 2"},
 		{"Who Am I 2", "Who Am I", "volume 2", ""},
 		{"Hush I", "Hush: Dark Victory II", "", "volume 2"},
+		// The numeral beside the I may sit behind a volume marker or in the
+		// usual brackets; the marker is not one of the title's words.
+		{"Hush I", "Hush, Book 2", "volume 1", "volume 2"},
+		{"Hush, Book 2", "Hush I", "volume 2", "volume 1"},
+		{"Hush I", "Hush Volume II", "volume 1", "volume 2"},
+		{"Hush I", "Hush #2", "volume 1", "volume 2"},
+		{"Hush I", "Hush (2)", "volume 1", "volume 2"},
+		// ... but only when the words before the I are the same words.
+		{"Who Am I", "Who Am I: Book 2", "", "volume 2"},
+		{"Who Am I", "Who Am I #2", "", "volume 2"},
+		{"Who Am I", "Who Am I (2)", "", "volume 2"},
+		{"Hush I", "Gotham, Book 2", "", "volume 2"},
 	} {
 		sa, sb := ReadPair(tc.a, tc.b)
 		if got := statedText(sa); got != tc.wantA {

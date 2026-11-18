@@ -1,5 +1,5 @@
 // file: internal/applygate/title_owner_review_pins_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 4e7a91d3-2b58-4c06-a9f1-0d63b8e5c274
 // last-edited: 2026-11-17
 
@@ -12,15 +12,23 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
-// UNDER OWNER REVIEW. Every test in this file pins today's outcome for a pair
-// whose title leg is NEUTRAL (the two titles share text but neither equals the
-// other and nothing conflicts) and which applies only because the runtimes
-// agree within 5 percent. The rule is deliberate: a neutral title confirms
-// nothing, and a runtime within the window is what carries the apply (see
-// tally in evidence.go). Whether that is enough for these shapes is the owner's
-// call: the replay found that 49 of the 61 applies that depend on a neutral
-// title are of this kind, so changing the rule changes most of what applies
-// that depends on a neutral title (todo.d/2026-11-17-applygate-neutral-title-review.md).
+// UNDER OWNER REVIEW. Two kinds of pin live in this file.
+//
+// TestUnderOwnerReview_NeutralTitleAppliesOnAnAgreeingRuntime pins today's
+// outcome for a pair whose title leg is NEUTRAL (the two titles share text but
+// neither equals the other and nothing conflicts) and which applies only
+// because the runtimes agree within 5 percent. The rule is deliberate: a
+// neutral title confirms nothing, and a runtime within the window is what
+// carries the apply (see tally in evidence.go). Whether that is enough for
+// these shapes is the owner's call: the replay found that 49 of the 61 applies
+// that depend on a neutral title are of this kind, so changing the rule changes
+// most of what applies that depends on a neutral title
+// (todo.d/2026-11-17-applygate-neutral-title-review.md).
+//
+// TestUnderOwnerReview_BlankStoredTitleWithNothingToCompareApplies (M2a) is a
+// different kind: the title leg is UNKNOWN, not neutral, so the pair applies at
+// EVERY runtime, a book with no runtime at all included. No runtime carries
+// that apply, which is the question the owner is asked about it.
 //
 // These tests are not a claim that the outcome is right. They exist so that the
 // outcome cannot change by accident: if the owner decides one of these shapes

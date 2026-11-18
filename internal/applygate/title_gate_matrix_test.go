@@ -1,5 +1,5 @@
 // file: internal/applygate/title_gate_matrix_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 9a1e4c73-5d2b-4f08-b6a1-3c7e0d58f924
 // last-edited: 2026-11-17
 
@@ -121,7 +121,7 @@ func TestEvaluate_TitleGateMatrix(t *testing.T) {
 		{"N1b year folder vs volume, 'Knightfall: Book 1'", "neutral", "rt5", database.Book{Title: "Knightfall", FilePath: "/lib/Bruce Wayne/Knightfall (1993)/Knightfall (1993).m4b"}, "", metafetch.MetadataCandidate{Title: "Knightfall: Book 1", Series: bat, SeriesPosition: "1"}},
 		{"N2 stored 'Book 2', candidate position 2", "neutral", "never", database.Book{Title: "Knightfall: Book 2"}, "", metafetch.MetadataCandidate{Title: "Knightfall", SeriesPosition: "2"}},
 		{"N3a disc file vs part title", "agree", "any", database.Book{Title: "Hush: Part 1", FilePath: "/lib/Bruce Wayne/Hush - Disc 2.m4b"}, "", metafetch.MetadataCandidate{Title: "Hush: Part 1"}},
-		{"N3b ordinal word vs digit", "block", "never", database.Book{Title: "Hush: Book 3"}, "", metafetch.MetadataCandidate{Title: "Hush: Third Book"}},
+		{"N3b ordinal word vs digit (CHANGED: agree, the ordinal beside a marker is its number)", "agree", "any", database.Book{Title: "Hush: Book 3"}, "", metafetch.MetadataCandidate{Title: "Hush: Third Book"}},
 		{"N3c compound number word", "agree", "any", database.Book{Title: "Gotham Year Twenty-One"}, "", metafetch.MetadataCandidate{Title: "Gotham Year 21"}},
 		{"N3d pronoun I", "neutral", "rt5", database.Book{Title: "Who Am I"}, "", metafetch.MetadataCandidate{Title: "Who Am I 2"}},
 
