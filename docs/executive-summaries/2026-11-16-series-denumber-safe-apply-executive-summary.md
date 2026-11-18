@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-11-16-series-denumber-safe-apply-executive-summary.md -->
-<!-- version: 3.2.0 -->
+<!-- version: 3.3.0 -->
 <!-- guid: 977a5f90-535a-436e-afa1-f26225c95156 -->
-<!-- last-edited: 2026-11-17 -->
+<!-- last-edited: 2026-11-18 -->
 
 # The series clean-up can now be undone, and applies only what the library itself backs up
 
@@ -57,11 +57,27 @@ fool, so the rule below is the third and strictest one.
   deleted. A record whose write then failed is marked so an undo never acts on it,
   and a run with failed writes ends as a failure, not a success. Undoing the
   operation puts the numbered series back under its own identity with its books
-  and their positions as they were.
+  and their positions as they were. The undo is as careful as the operation: when
+  it removes a base series the operation created, it checks that nothing points at
+  it and deletes it in one step, so a book added at the last moment keeps the
+  series, and a series that was renamed, held or is already gone is left alone and
+  listed in the undo's report instead of passing without a word. If someone else
+  had already deleted an emptied numbered series before the operation reached it,
+  the undo record for it is kept, so the undo can bring that series back and put
+  the books in it.
+- The operation now registers the books and series it writes with the scheduler,
+  so the other series clean-ups (empty-series removal, merge, rename, normalize,
+  the repairs apply) do not run at the same time. Its dry run says how many emptied
+  series it would delete, and the apply's summary accounts for each one: deleted,
+  kept at the last moment, already deleted by someone else, or not emptied.
 - A first run can be limited to one series, or to the series with the most
   books, so the result can be looked at before the rest follow. A run that
   changes anything needs a report file, so there is always a record.
 - Not done: showing the held plans in the Repairs tab (filed as a task); removing
-  the empty numbered series (the existing empty-series clean-up does that); and one
-  narrow window around the delete (filed as a task): a book saved by a writer that
-  looked at the series before the delete and saves after it.
+  the empty numbered series (the existing empty-series clean-up does that); and
+  two narrow windows around the delete (filed as a task): a book saved by a writer
+  that looked at the series before the delete and saves after it, and another
+  program using the same database at the same time, or a database that cannot do
+  the one-step delete (the operation refuses to start on one). The undo itself is
+  started from the web page and is not yet held back by the scheduler's
+  one-at-a-time rule (filed as a task); its delete is safe on its own.

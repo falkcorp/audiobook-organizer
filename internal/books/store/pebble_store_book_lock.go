@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store_book_lock.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 3f8c2a91-6d4e-4b7a-9e15-c0d2a8b47f63
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package store
 
@@ -42,6 +42,20 @@ const bookLockStripes = 256
 //     ModifyBook, FillBookMediaInfo, or a helper built on them) -- the stripe
 //     it would need may be the one already held, and sync.Mutex does not
 //     re-enter. Callbacks mutate the struct they are handed and return.
+//   - lockEveryBook means NO lock that is ever taken while a book stripe is
+//     held may be held while taking one, and none may be waited for under a
+//     stripe that an every-book holder can be holding: lockEveryBook holds all
+//     256 stripes and then waits for nameIdx.series, so a stripe holder waiting
+//     on any lock the every-book holder owns, or on one its own holder needs,
+//     is a deadlock. That covers application mutexes taken inside a ModifyBook
+//     callback or a stripe-held helper, not only the store's own locks. The
+//     edges that exist, in the one allowed order: version stripe
+//     (lockBookVersion) -> book stripe (restageUnderVersionLock holds the
+//     version stripe across its attempt, whose afterRetireWrite calls
+//     notifyBookFileChanges -> RecomputeBookAggregates -> ModifyBook), and
+//     book stripe -> nameIdx.series (a ModifyBook callback that creates a
+//     series). Never take a version stripe while holding a book stripe, and
+//     never take a book stripe after nameIdx.series.
 type bookLocks [bookLockStripes]sync.Mutex
 
 // stripeFor returns the stripe index for a book ID (FNV-1a).
