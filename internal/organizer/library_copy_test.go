@@ -1,7 +1,7 @@
 // file: internal/organizer/library_copy_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 93a1faee-be59-4abb-ab7d-eb7996f3665e
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package organizer
 
@@ -225,12 +225,12 @@ func runPreviewAndOrganize_ProtectedOriginalResolveToSameLibraryCopy(t *testing.
 	f := newLibraryCopyFixture(t, "vg-1", order)
 	spy := &collisionSpy{}
 	f.svc.SetOrganizeHooks(spy)
-	resolve := LibraryCopyResolver(func(b *database.Book) (*database.Book, bool) {
+	resolve := LibraryCopyResolver(func(b *database.Book) (*database.Book, bool, *database.Book) {
 		if b.ID == f.original.ID {
 			cp, err := f.store.GetBookByID(f.libCopy.ID)
-			return cp, err == nil && cp != nil
+			return cp, err == nil && cp != nil, nil
 		}
-		return b, true
+		return b, true, nil
 	})
 
 	preview := NewPreviewService(f.store)
@@ -249,7 +249,10 @@ func runPreviewAndOrganize_ProtectedOriginalResolveToSameLibraryCopy(t *testing.
 		t.Errorf("preview current_path = %s; want the copy's %s", resp.CurrentPath, f.libCopy.FilePath)
 	}
 
-	subject := ResolveOrganizeSubject(resolve, f.original)
+	subject, rerr := ResolveOrganizeSubject(resolve, f.original)
+	if rerr != nil {
+		t.Fatalf("ResolveOrganizeSubject = %v", rerr)
+	}
 	landing, err := f.svc.OrganizeOneBook(f.organizer(spy), subject, &noopLogger{})
 	if err != nil {
 		t.Fatalf("OrganizeOneBook(resolved) = %v", err)
@@ -273,12 +276,33 @@ func runPreviewAndOrganize_ProtectedOriginalResolveToSameLibraryCopy(t *testing.
 
 func TestResolveOrganizeSubject_FallsBackToTheBook(t *testing.T) {
 	b := &database.Book{ID: "b"}
-	if got := ResolveOrganizeSubject(nil, b); got != b {
-		t.Errorf("nil resolver: got %v", got)
+	if got, err := ResolveOrganizeSubject(nil, b); got != b || err != nil {
+		t.Errorf("nil resolver: got %v, %v", got, err)
 	}
-	noCopy := func(*database.Book) (*database.Book, bool) { return nil, false }
-	if got := ResolveOrganizeSubject(noCopy, b); got != b {
-		t.Errorf("protected with no copy must organize the original (which makes one); got %v", got)
+	noCopy := func(*database.Book) (*database.Book, bool, *database.Book) { return nil, false, nil }
+	if got, err := ResolveOrganizeSubject(noCopy, b); got != b || err != nil {
+		t.Errorf("protected with no copy must organize the original (which makes one); got %v, %v", got, err)
+	}
+}
+
+// A protected book whose only library copy is retired is neither "no copy" nor
+// a copy to organize: the resolver's third answer becomes a typed error, and
+// the row handed back is still the book (the batch organize's lock set uses
+// it and ignores the error).
+func TestResolveOrganizeSubject_RetiredOnlyCopyIsATypedRefusal(t *testing.T) {
+	b := &database.Book{ID: "b"}
+	dead := &database.Book{ID: "dead", FilePath: "/lib/Year One/Year One.m4b"}
+	retiredOnly := func(*database.Book) (*database.Book, bool, *database.Book) { return nil, false, dead }
+	got, err := ResolveOrganizeSubject(retiredOnly, b)
+	var re *LibraryCopyRetiredError
+	if !errors.As(err, &re) || !errors.Is(err, ErrLibraryCopyRetired) {
+		t.Fatalf("err = %v; want a *LibraryCopyRetiredError", err)
+	}
+	if re.BookID != "b" || re.CopyID != "dead" || re.CopyPath != dead.FilePath {
+		t.Errorf("error = %+v; want the book and the merged row named", re)
+	}
+	if got != b {
+		t.Errorf("subject = %v; want the book itself for the lock set", got)
 	}
 }
 
@@ -293,6 +317,84 @@ func runOrganizeBooks_OwnLibraryCopyCountsAsSkipped(t *testing.T, order idOrder)
 	if stats.Collisions[CollisionLibraryCopyExists] != 1 {
 		t.Errorf("collisions = %v; want %s=1", stats.Collisions, CollisionLibraryCopyExists)
 	}
+}
+
+// B6, batch door. The library.organize batch acts on the original row itself
+// (it never resolves a subject), so a protected original whose only library
+// copy was merged away must not come out of it with a second organized file
+// laid beside the merged one. Without the resolver check the untagged shape is
+// caught by the same-hash backstop (a library_copy_exists skip) but the tagged
+// one (the merged copy's FileHash moved after a tag write, its
+// OriginalFileHash did not) is the shape the backstop cannot see and came out
+// as a _copy1 sibling. Both are one counted library_copy_retired skip now.
+func TestOrganizeBooks_OnlyAMergedLibraryCopyMakesNoSecondCopy(t *testing.T) {
+	cases := []struct {
+		name   string
+		rehash bool
+	}{
+		{"untagged_copy_same_hash", false},
+		{"tagged_copy_rehashed", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newLibraryCopyFixture(t, "vg-1", bothIDOrders[0])
+			// A protected original is organized by copying it in; without a
+			// strategy the organize fails for a reason that has nothing to do
+			// with the merged copy.
+			prevStrategy := config.AppConfig.OrganizationStrategy
+			config.AppConfig.OrganizationStrategy = "copy"
+			t.Cleanup(func() { config.AppConfig.OrganizationStrategy = prevStrategy })
+			// The resolver production wires, in miniature: the book's only
+			// library copy of its own file is retired.
+			f.svc.ResolveLibraryCopy = func(b *database.Book) (*database.Book, bool, *database.Book) {
+				cp, err := f.store.GetBookByID(f.libCopy.ID)
+				if err != nil || cp == nil || b.ID != f.original.ID || !IsLibraryCopyOf(b, cp) {
+					return nil, false, nil
+				}
+				if cp.IsRetired() {
+					return nil, false, cp
+				}
+				return cp, true, nil
+			}
+			merged := *f.libCopy
+			into := f.original.ID
+			merged.MergedIntoBookID = &into
+			if c.rehash {
+				orig := *f.original.FileHash
+				after := "h-after-tag-write"
+				merged.FileHash, merged.OriginalFileHash = &after, &orig
+			}
+			if _, err := f.store.UpdateBook(merged.ID, &merged); err != nil {
+				t.Fatal(err)
+			}
+			before := dirEntries(t, filepath.Dir(f.libCopy.FilePath))
+
+			stats := f.svc.organizeBooksOpts(context.Background(), []database.Book{*f.original}, nil, &noopLogger{}, "", false, nil)
+
+			if after := dirEntries(t, filepath.Dir(f.libCopy.FilePath)); len(after) != len(before) {
+				t.Errorf("library folder %v -> %v: the batch organize wrote a second copy beside the merged one", before, after)
+			}
+			if stats.Organized != 0 || stats.Failed != 0 || stats.Skipped != 1 {
+				t.Errorf("stats organized=%d failed=%d skipped=%d; want a single counted skip", stats.Organized, stats.Failed, stats.Skipped)
+			}
+			if stats.Collisions[CollisionLibraryCopyRetired] != 1 {
+				t.Errorf("collisions = %v; want %s=1", stats.Collisions, CollisionLibraryCopyRetired)
+			}
+		})
+	}
+}
+
+func dirEntries(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, e := range entries {
+		out = append(out, e.Name())
+	}
+	return out
 }
 
 func TestIsLibraryCopyOf(t *testing.T) {

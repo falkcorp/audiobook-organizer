@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.57.2
+// version: 1.57.3
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-11-18
 
@@ -1435,13 +1435,24 @@ func (mfs *Service) MarkNoMatch(id string) error {
 // check reported the book's own library copy as a foreign duplicate
 // ("duplicate file already organized at ...") and filed a dedup candidate
 // pairing the two.
-func (mfs *Service) ExistingLibraryCopyOfFile(book *database.Book) (*database.Book, bool) {
+//
+// retired is the third answer: a protected book whose only same-file library
+// copy is retired (merged away; the lookup already omits trashed rows) has no
+// LIVE copy, and the caller must not read that as "no copy yet, make one" --
+// organizing the original would lay a second organized copy beside the merged
+// one, whose own file is still on disk. ok is false and retired is the merged
+// row, so organize can refuse and name it. It is nil whenever ok is true or
+// there is no such row.
+func (mfs *Service) ExistingLibraryCopyOfFile(book *database.Book) (libraryCopy *database.Book, ok bool, retired *database.Book) {
 	if mfs == nil || book == nil {
-		return book, true
+		return book, true, nil
 	}
-	return mfs.existingLibraryCopyMatching(book, func(sib *database.Book) bool {
-		return organizer.IsLibraryCopyOf(book, sib)
-	})
+	accept := func(sib *database.Book) bool { return organizer.IsLibraryCopyOf(book, sib) }
+	r := mfs.readImportRoots()
+	if cp, found := mfs.existingLibraryCopyMatchingIn(r, book, accept); found {
+		return cp, true, nil
+	}
+	return nil, false, mfs.retiredLibrarySiblingMatchingIn(r, book, accept)
 }
 
 // existingLibraryCopy resolves the row file work may touch WITHOUT creating
@@ -1515,7 +1526,14 @@ func (mfs *Service) librarySiblingMatchingIn(r *importRootsRead, book *database.
 // found no live copy, so it can refuse to make a second organized copy of a book
 // whose copy was merged away.
 func (mfs *Service) retiredLibrarySiblingIn(r *importRootsRead, book *database.Book) *database.Book {
-	return mfs.qualifyingLibrarySiblingIn(r, book, nil, true)
+	return mfs.retiredLibrarySiblingMatchingIn(r, book, nil)
+}
+
+// retiredLibrarySiblingMatchingIn is retiredLibrarySiblingIn restricted to the
+// siblings accept admits (nil admits all), the filter the organize resolver
+// narrows the live lookup with (a copy of THIS book's file).
+func (mfs *Service) retiredLibrarySiblingMatchingIn(r *importRootsRead, book *database.Book, accept func(*database.Book) bool) *database.Book {
+	return mfs.qualifyingLibrarySiblingIn(r, book, accept, true)
 }
 
 // qualifyingLibrarySiblingIn is the one scan behind both lookups: the first

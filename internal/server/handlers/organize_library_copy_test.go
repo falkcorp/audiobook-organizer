@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize_library_copy_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 68af52f3-742d-4b0c-99ba-e3a73e2e0443
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package handlers_test
 
@@ -123,13 +123,13 @@ func organizeHandlersActOnTheLibraryCopy(t *testing.T, origID, copyID string) {
 	}
 
 	resolveCalls := 0
-	resolve := organizer.LibraryCopyResolver(func(b *database.Book) (*database.Book, bool) {
+	resolve := organizer.LibraryCopyResolver(func(b *database.Book) (*database.Book, bool, *database.Book) {
 		resolveCalls++
 		if b.ID == origID {
 			cp, err := store.GetBookByID(copyID)
-			return cp, err == nil && cp != nil
+			return cp, err == nil && cp != nil, nil
 		}
-		return b, true
+		return b, true, nil
 	})
 	spy := &handlerCollisionSpy{}
 	orgSvc := organizer.NewService(store)

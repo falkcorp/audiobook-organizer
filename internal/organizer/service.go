@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.66.0
+// version: 1.66.1
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package organizer
 
@@ -1642,6 +1642,40 @@ func (orgSvc *Service) organizeBooksOpts(ctx context.Context, booksToOrganize []
 		}
 
 		oldPath := book.FilePath
+
+		// A protected original whose only library copy of its own file was
+		// merged away is not "a book with no copy yet": organizing it would lay
+		// a second organized file beside the merged one's. A merged copy that
+		// still holds the original's hash is caught by OrganizeBook's same-hash
+		// backstop (library_copy_exists); one whose tags were written and that
+		// a scan re-hashed is not, and used to come out as a _copy1 sibling.
+		// A counted skip, like library_copy_exists, never a failure. The
+		// single-book organize and its preview answer the same case with a
+		// 409 (ResolveOrganizeSubject).
+		if _, rerr := ResolveOrganizeSubject(orgSvc.ResolveLibraryCopy, &book); rerr != nil {
+			if retired, ok := errors.AsType[*LibraryCopyRetiredError](rerr); ok {
+				log.Warn("Organize: %s not copied -- %s", book.Title, retired.Error())
+				statsMu.Lock()
+				stats.Skipped++
+				stats.addCollision(CollisionLibraryCopyRetired, 1)
+				statsMu.Unlock()
+				if operationID != "" {
+					if cerr := database.RecordOperationChange(orgSvc.db, &database.OperationChange{
+						ID:          ulid.Make().String(),
+						OperationID: operationID,
+						BookID:      book.ID,
+						ChangeType:  "organize_skipped",
+						FieldName:   "file_path",
+						OldValue:    oldPath,
+						NewValue:    CollisionLibraryCopyRetired + ": its only library copy " + retired.CopyID + " was merged away",
+					}); cerr != nil {
+						log.Warn("Organize: record retired-library-copy skip for %s: %v", book.ID, cerr)
+					}
+				}
+				progressCounter.Add(1)
+				return
+			}
+		}
 
 		if target, collapsed := fragmentCollapsed[book.ID]; collapsed {
 			orgSvc.recordFragmentCollapse(&book, target)

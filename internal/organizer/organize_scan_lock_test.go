@@ -1,7 +1,7 @@
 // file: internal/organizer/organize_scan_lock_test.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 7c3a9e15-2f84-4d6b-a0c1-58e2b94d7f36
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package organizer
 
@@ -243,10 +243,10 @@ func TestOrganizeBooks_LocksTheLibraryCopyToo(t *testing.T) {
 	svc, store, root := setupInPlace(t)
 	src := filepath.Join(root, "incoming", "orig.m4b")
 	b := addInPlaceBook(t, store, "orig", "Orig Title", src, filled(150, 5), nil, 0)
-	svc.ResolveLibraryCopy = func(book *database.Book) (*database.Book, bool) {
+	svc.ResolveLibraryCopy = func(book *database.Book) (*database.Book, bool, *database.Book) {
 		cp := *book
 		cp.ID = "lib-copy"
-		return &cp, true
+		return &cp, true, nil
 	}
 
 	scan := holdBook(t, "lib-copy")
@@ -283,10 +283,10 @@ func TestOrganizeBooks_UnsettledCopyIsSkippedBusy(t *testing.T) {
 	src := filepath.Join(root, "incoming", "flux.m4b")
 	b := addInPlaceBook(t, store, "flux", "Flux Title", src, filled(150, 5), nil, 0)
 	var n atomic.Int32
-	svc.ResolveLibraryCopy = func(book *database.Book) (*database.Book, bool) {
+	svc.ResolveLibraryCopy = func(book *database.Book) (*database.Book, bool, *database.Book) {
 		cp := *book
 		cp.ID = fmt.Sprintf("copy-%d", n.Add(1))
-		return &cp, true
+		return &cp, true, nil
 	}
 	st := svc.organizeBooksOpts(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "", true, nil)
 	if st.Organized+st.ReOrganized != 0 || st.Skipped != 1 {
@@ -307,10 +307,10 @@ func TestOrganizeBooks_RetryLocksTheStoredRowsCopy(t *testing.T) {
 	svc, store, root := setupInPlace(t)
 	src := filepath.Join(root, "incoming", "stale.m4b")
 	b := addInPlaceBook(t, store, "stale", "Fresh Title", src, filled(150, 5), nil, 0)
-	svc.ResolveLibraryCopy = func(book *database.Book) (*database.Book, bool) {
+	svc.ResolveLibraryCopy = func(book *database.Book) (*database.Book, bool, *database.Book) {
 		cp := *book
 		cp.ID = "copy-of-" + book.Title
-		return &cp, true
+		return &cp, true, nil
 	}
 	listed := *b
 	listed.Title = "Stale Title"
