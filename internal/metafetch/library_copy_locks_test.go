@@ -1,7 +1,7 @@
 // file: internal/metafetch/library_copy_locks_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 9c2d6b03-7f18-4a54-b3e6-5d0a91c7e482
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package metafetch
 
@@ -78,7 +78,7 @@ func TestSyncMetadataToLibraryCopy_HonorsTheCopysOwnLocks(t *testing.T) {
 	svc := NewService(store)
 	original, libCopy := libCopyPair()
 
-	svc.syncMetadataToLibraryCopy(original, libCopy)
+	require.NoError(t, svc.syncMetadataToLibraryCopy(original, libCopy))
 
 	require.NotNil(t, *written, "the unlocked fields must still be synced")
 	assert.Equal(t, "My Title", (*written).Title, "the copy's locked title was overwritten")
@@ -98,7 +98,7 @@ func TestSyncMetadataToLibraryCopy_UnlockedCopySyncsEverything(t *testing.T) {
 	svc := NewService(store)
 	original, libCopy := libCopyPair()
 
-	svc.syncMetadataToLibraryCopy(original, libCopy)
+	require.NoError(t, svc.syncMetadataToLibraryCopy(original, libCopy))
 
 	require.NotNil(t, *written)
 	assert.Equal(t, "Fetched Title", (*written).Title,
@@ -113,7 +113,7 @@ func TestSyncMetadataToLibraryCopy_LockReadErrorSyncsNothing(t *testing.T) {
 	svc := NewService(store)
 	original, libCopy := libCopyPair()
 
-	svc.syncMetadataToLibraryCopy(original, libCopy)
+	require.NoError(t, svc.syncMetadataToLibraryCopy(original, libCopy))
 
 	assert.Nil(t, *written, "fail closed: an unreadable lock set must not overwrite the copy")
 	assert.Equal(t, 0, *authorWrites)
@@ -155,7 +155,7 @@ func TestSyncMetadataToLibraryCopy_CarriesRatingsAndWorkIDAlongsideALock(t *test
 	original.UserRatingOverall = &rating
 	original.Quantity = &qty
 
-	svc.syncMetadataToLibraryCopy(original, libCopy)
+	require.NoError(t, svc.syncMetadataToLibraryCopy(original, libCopy))
 
 	require.NotNil(t, *written)
 	assert.Equal(t, "My Title", (*written).Title, "the copy's locked title was overwritten")
