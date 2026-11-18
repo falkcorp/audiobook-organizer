@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-18-reconcile-apply-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: e2bdcb58-8b1a-4c4d-bccb-3f57448befa9 -->
 <!-- last-edited: 2026-11-18 -->
 
@@ -19,7 +19,10 @@ action, which re-points a book at an audio file the library found for it.
   the existing record (it is never deleted or replaced), marks it present, and
   records the real size. If any check fails, nothing is written for that book. If
   the book cannot be updated after the file record was, the file record is put
-  back.
+  back. A book in the trash, or a "file" that is really a folder, is refused.
+- A match that fails part-way no longer leaves a live entry in the undo history
+  for something that never happened. Without that, undoing the failed run could
+  have reversed a later run that succeeded.
 - The old hash of the file is cleared rather than kept, because the apply step
   does not know how the file was matched, and a wrong hash could make two
   different recordings look like duplicates. A background job fills it in again.
