@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops.go
-// version: 1.43.6
+// version: 1.44.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
 // last-edited: 2026-11-18
 //
@@ -1256,9 +1256,10 @@ func (s *Server) runBulkWriteBack(
 		// and a book trashed or merged while the job queued is retired
 		// whatever that read said. Counted skipped, not failed: nothing went
 		// wrong, and a retry would be refused the same way. (metafetch's
-		// fileWorkTarget refuses again under the book's lock, which closes the
-		// window between this read and the write; that refusal is mapped to
-		// skipped below.)
+		// fileWorkTarget refuses again under the book's lock, which narrows the
+		// window between this read and the write to the instant between the
+		// check and the first byte; that refusal is mapped to skipped below,
+		// except after a rename that already ran, which is failed.)
 		if fresh, freshErr := store.GetBookByID(bookID); freshErr == nil && fresh != nil {
 			book = fresh
 		}
@@ -1278,6 +1279,7 @@ func (s *Server) runBulkWriteBack(
 		// reverse of an apply's order, and it deadlocks against an apply of the
 		// same book; the table is not reentrant either, so the path lock inside
 		// would wait on the one held here.
+		renamed := false
 		if doRename {
 			// Same rule as the single-book write-back: refuse before anything
 			// moves when the rename is known to fail, and never write tags
@@ -1301,6 +1303,7 @@ func (s *Server) runBulkWriteBack(
 				_ = progress.Log("warn", fmt.Sprintf("book %s: rename failed, tags not written: %v", bookID, renameErr), nil)
 				return
 			}
+			renamed = true
 			if fresh, freshErr := store.GetBookByID(bookID); freshErr == nil && fresh != nil {
 				book = fresh
 			}
@@ -1316,6 +1319,15 @@ func (s *Server) runBulkWriteBack(
 
 		if writeErr != nil {
 			if errors.Is(writeErr, metafetch.ErrBookRetired) {
+				if renamed {
+					// The book retired after its rename finished and before its
+					// tags were written. Its files already moved, so this is not
+					// "left alone": the job did half of what it owed. Counted
+					// failed, and the line says which half.
+					failed.Add(1)
+					_ = progress.Log("warn", fmt.Sprintf("book %s: retired after its rename, files renamed but tags not written: %v", bookID, writeErr), nil)
+					return
+				}
 				skipped.Add(1)
 				_ = progress.Log("info", fmt.Sprintf("book %s: skipping write-back (retired: trashed or merged away): %v", bookID, writeErr), nil)
 				return
