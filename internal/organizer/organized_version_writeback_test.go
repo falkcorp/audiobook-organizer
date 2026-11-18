@@ -1,7 +1,7 @@
 // file: internal/organizer/organized_version_writeback_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 8eea5b3c-7be2-4f84-a629-aca6c5044dbb
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package organizer
 
@@ -28,13 +28,19 @@ func newWritebackTestBook(t *testing.T, store *database.PebbleStore) *database.B
 
 	// SeriesID is set beside the object: a write holds Series to SeriesID, so
 	// an object with no link would be dropped (the shape production rows have).
-	seriesID := 1
+	// The series row exists first: a book write refuses a series_id that names
+	// no series.
+	seriesRow, err := store.CreateSeries("Original Series", nil)
+	if err != nil {
+		t.Fatalf("CreateSeries: %v", err)
+	}
+	seriesID := seriesRow.ID
 	created, err := store.CreateBook(&database.Book{
 		Title:    "Writeback Probe",
 		FilePath: filepath.Join(t.TempDir(), "original.m4b"),
 		Author:   &database.Author{ID: 1, Name: "Original Author"},
 		SeriesID: &seriesID,
-		Series:   &database.Series{ID: 1, Name: "Original Series"},
+		Series:   &database.Series{ID: seriesRow.ID, Name: "Original Series"},
 	})
 	if err != nil {
 		t.Fatalf("CreateBook: %v", err)
