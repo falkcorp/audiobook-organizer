@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer_enrich_parallel_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 8d3a5b1e-6f2c-4a97-9e1d-3c7b8f4a2d6e
 // last-edited: 2026-11-17
 
@@ -7,6 +7,7 @@ package itunesservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -124,8 +125,16 @@ func buildEnrichFixture(t *testing.T, n int) ([]database.Book, *dbmocks.MockStor
 	m.EXPECT().GetAllBooksCore(0, 0).Return(cores, nil)
 	for i := range books {
 		id := books[i].ID
-		m.EXPECT().GetBookAuthors(id).Return(nil, nil).Maybe()
-		m.EXPECT().SetBookAuthors(id, mock.Anything).Return(nil).Maybe()
+		// The enrichment's author join: a locked row read (live here), then a
+		// locked join replacement.
+		m.EXPECT().ModifyBook(id, mock.Anything).RunAndReturn(func(_ string, fn func(*database.Book) error) (*database.Book, error) {
+			row := &database.Book{ID: id}
+			if err := fn(row); err != nil && !errors.Is(err, database.ErrSkipBookWrite) {
+				return nil, err
+			}
+			return row, nil
+		}).Maybe()
+		m.EXPECT().ModifyBookAuthors(id, mock.Anything).Return(nil, nil).Maybe()
 	}
 	return books, m
 }
