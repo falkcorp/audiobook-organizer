@@ -295,6 +295,7 @@ func TestSeriesPhantomRepair_RefusesAReportPathOutsideTheReportDir(t *testing.T)
 			p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: noTouchStore{}}, root: root}}
 			res, err := p.seriesPhantomRepair(context.Background(), seriesPhantomRepairParams{ReportPath: explicit}, &fakeReporter{})
 			require.Error(t, err)
+			require.Contains(t, err.Error(), "report", "the refusal must be about the report path, not an unrelated failure")
 			require.Nil(t, res)
 		})
 	}
@@ -314,6 +315,7 @@ func TestSeriesDenumber_RefusesAReportPathOutsideTheReportDir(t *testing.T) {
 	for name, explicit := range cases {
 		_, err := l.run(fmt.Sprintf(`{"apply": true, "reportPath": %q}`, explicit))
 		require.Error(t, err, "%s (%q)", name, explicit)
+		require.Contains(t, err.Error(), "report", "%s: the refusal must be about the report path", name)
 		l.assertNoWrites()
 	}
 	require.Zero(t, l.bulkReads, "a refused report path must be refused before the library is read")

@@ -1,5 +1,5 @@
 // file: core/library/libroot_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 8e1c5a73-d2b4-4f69-a0e8-3b7f9d1c6a25
 // last-edited: 2026-11-18
 
@@ -452,6 +452,49 @@ func TestReportPathNotifyExplicitRefusesSymlinkEscapes(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(existing); string(b) != "keep" {
 		t.Fatalf("a refused path changed the file it linked to: %q", b)
+	}
+}
+
+// A directory swapped for a symlink out of the report directory after the first
+// check, while the path's directories are being created, is caught by the check
+// that follows the creation, including when the link leads to a sibling whose
+// name only starts with the report directory's name.
+func TestReportPathNotifyExplicitRechecksAfterCreatingTheDirectories(t *testing.T) {
+	for _, name := range []string{"a directory elsewhere", "a sibling sharing the report directory's name"} {
+		t.Run(name, func(t *testing.T) {
+			root, reports := reportRootFor(t) // a fresh root, so no earlier run's link is in the way
+			target := t.TempDir()
+			if strings.HasPrefix(name, "a sibling") {
+				target = reports + "-other"
+				if err := os.Mkdir(target, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			env := defaultReportEnv()
+			env.afterCreate = func(parent string) {
+				if err := os.Remove(parent); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, parent); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := reportPathNotify(root, filepath.Join("sub", "r.tsv"), "ignored.tsv", nil, env)
+			if err == nil {
+				t.Fatalf("a directory swapped for a symlink out must be refused, got %q", got)
+			}
+			if got != "" {
+				t.Fatalf("a refusal must return no path, got %q", got)
+			}
+		})
+	}
+}
+
+// A NUL byte is refused by name, not left to whichever system call trips on it.
+func TestReportPathNotifyExplicitNamesANULByte(t *testing.T) {
+	root, _ := reportRootFor(t)
+	if _, err := ReportPathNotify(root, "bad\x00.tsv", "ignored.tsv", nil); err == nil || !strings.Contains(err.Error(), "contains a NUL byte") {
+		t.Fatalf("a NUL byte must be refused by name, got %v", err)
 	}
 }
 
