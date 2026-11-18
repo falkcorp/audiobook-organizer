@@ -1,5 +1,5 @@
 // file: internal/applygate/title_e3_delta_gate_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b3d5f27-6a14-4c90-b2e8-1f7a9c04d653
 // last-edited: 2026-11-18
 
@@ -27,6 +27,9 @@ import (
 func TestGate_E3DeltaPairs(t *testing.T) {
 	ins := ReasonInsufficientEvidence
 	neutral := [3]step1bWant{{"", "neutral"}, {ins, "neutral"}, {ReasonRuntimeUnknownOverwrite, "neutral"}}
+	// A stored title with a closed subtitle has an overwrite signal of its own at
+	// no runtime: the apply is short of a second signal, not of a runtime.
+	neutralStoredSub := [3]step1bWant{{"", "neutral"}, {ins, "neutral"}, {ins, "neutral"}}
 	// A blank stored title with a self-titled candidate has no stored text to
 	// be neutral about: the file name restating the candidate's own title is
 	// the series-name block's to refuse, as it is on main.
@@ -51,6 +54,11 @@ func TestGate_E3DeltaPairs(t *testing.T) {
 		// [64kbps]" keeps its rip words in the comparison and shares too little
 		// with "Robin"; "Hush: Dark Victory [64k]" continues past "Hush" and is
 		// neutral, which an agreeing runtime alone can apply.
+		// (n4: M1'a blocks because the rip tokens stay in compareTitleFields and
+		// dilute the overlap, not because of the M1' rule itself; M1'b is what
+		// shows the rule's own effect, no folder agree. A later change that strips
+		// rip junk in formTokens would turn M1'a neutral with M1' still correct,
+		// and this row would then be the one to re-decide.)
 		{"M1'a", "refuse", database.Book{Title: "Robin X [64kbps]", FilePath: "/lib/Bruce Wayne/Robin/Robin X [64kbps].m4b"}, "", metafetch.MetadataCandidate{Title: "Robin"},
 			[3]step1bWant{{ReasonTitleDisagrees, "block"}, {ReasonTitleDisagrees, "block"}, {ReasonRuntimeUnknownOverwrite, "block"}}},
 		{"M1'b", "refuse", database.Book{Title: "Hush: Dark Victory [64k]", FilePath: "/lib/Bruce Wayne/Hush/Hush.m4b"}, "", metafetch.MetadataCandidate{Title: "Hush"},
@@ -69,6 +77,34 @@ func TestGate_E3DeltaPairs(t *testing.T) {
 			[3]step1bWant{{ReasonTitleDisagrees, "block"}, {ReasonTitleDisagrees, "block"}, {ReasonRuntimeUnknownOverwrite, "block"}}},
 		{"D3b", "refuse", database.Book{Title: "Gotham 2033"}, "", metafetch.MetadataCandidate{Title: "Gotham: Book 2"},
 			[3]step1bWant{{ReasonTitleDisagrees, "block"}, {ReasonTitleDisagrees, "block"}, {ReasonRuntimeUnknownOverwrite, "block"}}},
+		// Y1: an equal year, one of them in brackets, is a release tag and
+		// evidence of nothing: the bracket is set aside before the word tests, so
+		// "Gotham 2033" beside "Gotham 2 (2033)" is D3a again and the candidate
+		// that is a few words of a longer stored title still must share half.
+		{"Y1a", "refuse", database.Book{Title: "Gotham 2033"}, "", metafetch.MetadataCandidate{Title: "Gotham 2 (2033)"},
+			[3]step1bWant{{ReasonTitleDisagrees, "block"}, {ReasonTitleDisagrees, "block"}, {ReasonTitleDisagrees, "block"}}},
+		{"Y1b", "refuse", database.Book{Title: "Gotham Knights Tales 2033"}, "", metafetch.MetadataCandidate{Title: "Gotham (2033)"},
+			[3]step1bWant{{ReasonTitleDisagrees, "block"}, {ReasonTitleDisagrees, "block"}, {ReasonRuntimeUnknownOverwrite, "block"}}},
+		// Controls: the same year in brackets and bare is the same title; a
+		// bracketed year beside a numbered title with no year of its own is a
+		// release tag (the open "Hush" / "Hush 2" class).
+		{"Y1c", "same", database.Book{Title: "Gotham 2033"}, "", metafetch.MetadataCandidate{Title: "Gotham (2033)"},
+			[3]step1bWant{{"", "agree"}, {"", "agree"}, {"", "agree"}}},
+		{"Y1d", "same", database.Book{Title: "Gotham (2033)"}, "", metafetch.MetadataCandidate{Title: "Gotham 2"},
+			[3]step1bWant{{"", "neutral"}, {ins, "neutral"}, {ReasonRuntimeUnknownOverwrite, "neutral"}}},
+
+		// D1 closed subtitle: an edition word is no subtitle, so a self-titled
+		// candidate's title with it ("Batman Unabridged") says no volume, as the
+		// bare title does.
+		{"D1s-a", "refuse", database.Book{Title: "Batman", Subtitle: new("Unabridged")}, "",
+			metafetch.MetadataCandidate{Title: "Batman", Subtitle: "Unabridged", Series: "Batman", SeriesPosition: "4"}, neutralStoredSub},
+		{"D1s-b", "refuse", database.Book{Title: "Batman Unabridged"}, "",
+			metafetch.MetadataCandidate{Title: "Batman", Subtitle: "Unabridged", Series: "Batman", SeriesPosition: "4"}, neutralStoredSub},
+		// Control: the same candidate beside a stored title that states the
+		// position still agrees.
+		{"D1s-c", "same", database.Book{Title: "Batman 4 Batman"}, "",
+			metafetch.MetadataCandidate{Title: "Batman", Subtitle: "Unabridged", Series: "Batman", SeriesPosition: "4"},
+			[3]step1bWant{{"", "agree"}, {"", "agree"}, {ReasonRuntimeUnknownOverwrite, "agree"}}},
 		// Control: a year the other side has no number to set against is a tag.
 		{"D3c", "same", database.Book{Title: "Gotham 2033"}, "", metafetch.MetadataCandidate{Title: "Gotham: The Long Night"},
 			[3]step1bWant{{"", "neutral"}, {ins, "neutral"}, {ReasonRuntimeUnknownOverwrite, "neutral"}}},

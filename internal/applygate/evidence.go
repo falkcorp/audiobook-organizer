@@ -1,5 +1,5 @@
 // file: internal/applygate/evidence.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
 // last-edited: 2026-11-18
 
@@ -427,8 +427,9 @@ func checkTitle(book *database.Book, c *metafetch.MetadataCandidate) CheckResult
 	// title is NEUTRAL, not AGREE: it is the same unconfirmed claim the
 	// series-name blocks below refuse, except that nothing on either side
 	// contradicts it. So is the title with a credit beside it ("Batman - Bruce
-	// Wayne", "Bruce Wayne - Batman"): a credit names no volume either. A form
-	// that states the position ("S N T", "S N T X") agrees as ever.
+	// Wayne", "Bruce Wayne - Batman") or with an edition word ("Batman
+	// Unabridged"): neither names a volume. A form that
+	// states the position ("S N T", "S N T X") agrees as ever.
 	selfTitled := candSd.selfTitled() && candSd.effectiveSubtitle() == ""
 	agreeForms := candForms
 	var neutralForms []titleForm
@@ -439,6 +440,14 @@ func checkTitle(book *database.Book, c *metafetch.MetadataCandidate) CheckResult
 		// with a name beside it, and the name says none either.
 		t := strings.Join(formTokens(c.Title), " ")
 		neutralForms = []titleForm{{text: t}, {text: t + " " + t, series: true}}
+		// A closed subtitle (an edition word: "Batman, Unabridged") is no
+		// subtitle, so the title with it is the same word with a label beside
+		// it, and says no volume either.
+		for _, f := range titleForms(c.Title, c.Subtitle, c.Series) {
+			if !slices.Contains(neutralForms, f) {
+				neutralForms = append(neutralForms, f)
+			}
+		}
 		for _, f := range candForms {
 			if f.credit && !f.series {
 				neutralForms = append(neutralForms, f)

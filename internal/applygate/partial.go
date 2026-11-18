@@ -1,5 +1,5 @@
 // file: internal/applygate/partial.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: b1e7d4a0-3c58-4f26-9a8d-0f6c2e5b7d19
 // last-edited: 2026-11-18
 
@@ -172,7 +172,9 @@ func ClaimKey(c *metafetch.MetadataCandidate) string {
 // folder's label only when that text states none: the folder is where a stale
 // marker lives, and a book that says its own part has said which one it is.
 // With a runtime that agrees and a candidate that names no part, the folder's
-// label is not read at all. Rules (b) and (c) are skipped when the runtime
+// label is not read at all. The own text outranks the folder only under the
+// same marker word ("Part" over "Part"); a disc or CD in the own text and a part
+// in the folder are two levels and both must be the candidate's part. Rules (b) and (c) are skipped when the runtime
 // AGREES: files whose runtime matches the candidate's are the whole thing,
 // whatever the folder says. It returns only block or neutral, never agree.
 //
@@ -196,7 +198,7 @@ func checkPartialBook(book *database.Book, c *metafetch.MetadataCandidate, runti
 	bTitle := strings.TrimSpace(book.Title + " " + derefStr(book.Subtitle))
 	bside := bookSide(bTitle, book.FilePath)
 	cside := c.Title + " " + c.Subtitle
-	bp, bok := partOf(bside)
+	_, bok := partOf(bside)
 	cp, cok := partOf(cside)
 	// The part the files are: the book's own text decides (title, subtitle, the
 	// single file's own name), because a folder's label is where a stale marker
@@ -204,13 +206,26 @@ func checkPartialBook(book *database.Book, c *metafetch.MetadataCandidate, runti
 	// folder's part counts only when the own text states none, and a candidate
 	// that names no part, with a runtime that agrees, does not read the folder
 	// at all: those files are the whole thing whatever the folder says.
-	mp, mok := partOf(bookOwnSide(bTitle, book.FilePath))
+	//
+	// The own text beats the folder only when both use the SAME marker word
+	// ("Part 2" over "Part 1": one level, and the folder's label is stale). A
+	// disc, a CD and a part are different levels ("Hush Disc 1" in the folder
+	// "Hush Part 2" is disc 1 OF part 2: neither contradicts the other), so
+	// when the words differ BOTH must be the candidate's part.
+	mp, mm, mok := partWithMarker(bookOwnSide(bTitle, book.FilePath))
+	fp, fm, fok := partWithMarker(dirBase(d))
 	if !mok && (cok || runtimeOutcome != OutcomeAgree) {
-		mp, mok = bp, bok
+		mp, mm, mok = fp, fm, fok
+		fok = false // the folder is the one level read
 	}
 	if mok && (!cok || mp != cp) {
 		r.Outcome, r.Reason = OutcomeBlock, ReasonPartialBook
 		r.Detail = "the files are part " + ftoa(mp) + "; the candidate " + partText(cp, cok)
+		return r
+	}
+	if mok && fok && fm != mm && fp != cp {
+		r.Outcome, r.Reason = OutcomeBlock, ReasonPartialBook
+		r.Detail = "the folder says " + fm + " " + ftoa(fp) + " and the files " + mm + " " + ftoa(mp) + ", two levels; the candidate " + partText(cp, cok)
 		return r
 	}
 	// The candidate is one part of a book and nothing on the book's side, the
@@ -315,6 +330,17 @@ func partText(p float64, ok bool) string {
 		return "is the whole book"
 	}
 	return "is part " + ftoa(p)
+}
+
+// partWithMarker is partOf with the marker word the part was written with
+// ("part", "disc", "cd", "of": seqnum.Stated.Marker).
+func partWithMarker(s string) (float64, string, bool) {
+	for _, st := range seqnum.ReadStated(s) {
+		if st.Kind == seqnum.KindPart {
+			return st.Number.Value, st.Marker, true
+		}
+	}
+	return 0, "", false
 }
 
 // partOf returns the part number of the first part marker in s, read by the

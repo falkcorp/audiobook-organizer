@@ -1,5 +1,5 @@
 // file: internal/applygate/title_rule_examples_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6d1c58a2-9e04-4b73-8f25-a3e07d94b160
 // last-edited: 2026-11-18
 
@@ -154,6 +154,19 @@ func TestCheckTitle_RuleExamples(t *testing.T) {
 		{"m10: the same year bracketed on one side only is the same title",
 			database.Book{Title: "Gotham (2033)"},
 			metafetch.MetadataCandidate{Title: "Gotham 2033"}, "agree"},
+		// Y1: an equal year is evidence of nothing, however it is written: the
+		// bracket is a release tag and is set aside before the word tests, so it
+		// neither excuses a different number nor lifts a short candidate over
+		// the half-the-words bound.
+		{"Y1: an equal bracketed year does not excuse a different number",
+			database.Book{Title: "Gotham 2033"},
+			metafetch.MetadataCandidate{Title: "Gotham 2 (2033)"}, "block"},
+		{"Y1: an equal bracketed year does not count toward the words a candidate shares",
+			database.Book{Title: "Gotham Knights Tales 2033"},
+			metafetch.MetadataCandidate{Title: "Gotham (2033)"}, "block"},
+		{"Y1: a bracketed year beside a numbered title with no year is a release tag",
+			database.Book{Title: "Gotham (2033)"},
+			metafetch.MetadataCandidate{Title: "Gotham 2"}, "neutral"},
 		{"D3: a bare year in the stored title is its number against a stated volume",
 			database.Book{Title: "Knightfall 1993"},
 			metafetch.MetadataCandidate{Title: "Knightfall: Book 1"}, "block"},
@@ -386,6 +399,38 @@ func TestGate_PartMarkerRules(t *testing.T) {
 		{"B1'c: the file's own part is the candidate's part, whatever the folder says",
 			database.Book{Title: "Hush", FilePath: "/lib/Bruce Wayne/Hush Part 1/Hush Part 2.m4b"},
 			metafetch.MetadataCandidate{Title: "Hush", Subtitle: "Part 2"},
+			[2]string{"", ReasonInsufficientEvidence}},
+		// P1: a disc, a CD and a part are different levels. The own text beats
+		// the folder only when both use the SAME marker word (a stale label);
+		// when the words differ they are two levels and BOTH must be the
+		// candidate's part.
+		{"P1a: a file named for its disc does not outrank a folder named for its part",
+			database.Book{Title: "Hush", FilePath: "/lib/Bruce Wayne/Hush Part 2/Hush Disc 1.m4b"},
+			metafetch.MetadataCandidate{Title: "Hush", Subtitle: "Part 1"},
+			[2]string{ReasonPartialBook, ReasonPartialBook}},
+		{"P1b: the same with a CD marker",
+			database.Book{Title: "Hush", FilePath: "/lib/Bruce Wayne/Hush Part 1/Hush CD 2.m4b"},
+			metafetch.MetadataCandidate{Title: "Hush", Subtitle: "Part 2"},
+			[2]string{ReasonPartialBook, ReasonPartialBook}},
+		{"P1c: both levels equal the candidate's part (disc 1 of part 1)",
+			database.Book{Title: "Hush", FilePath: "/lib/Bruce Wayne/Hush Part 1/Hush Disc 1.m4b"},
+			metafetch.MetadataCandidate{Title: "Hush", Subtitle: "Part 1"},
+			[2]string{"", ReasonInsufficientEvidence}},
+		{"P1d: a title that says its part and a folder that says a disc are two levels",
+			database.Book{Title: "Hush, Part 2", FilePath: "/lib/Bruce Wayne/Hush Disc 1/Hush.m4b"},
+			metafetch.MetadataCandidate{Title: "Hush", Subtitle: "Part 2"},
+			[2]string{ReasonPartialBook, ReasonPartialBook}},
+		{"P1e: the same marker word on both levels is a stale folder, the file decides",
+			database.Book{Title: "Hush", FilePath: "/lib/Bruce Wayne/Hush Disc 2/Hush Disc 1.m4b"},
+			metafetch.MetadataCandidate{Title: "Hush", Subtitle: "Part 1"},
+			[2]string{"", ReasonInsufficientEvidence}},
+		{"P1f: a disc folder and a CD file are two levels and must both match",
+			database.Book{Title: "Hush", FilePath: "/lib/Bruce Wayne/Hush Disc 2/Hush CD 1.m4b"},
+			metafetch.MetadataCandidate{Title: "Hush", Subtitle: "Part 1"},
+			[2]string{ReasonPartialBook, ReasonPartialBook}},
+		{"P1g: a disc folder and a CD file that both equal the candidate's part",
+			database.Book{Title: "Hush", FilePath: "/lib/Bruce Wayne/Hush Disc 1/Hush CD 1.m4b"},
+			metafetch.MetadataCandidate{Title: "Hush", Subtitle: "Part 1"},
 			[2]string{"", ReasonInsufficientEvidence}},
 
 		// m3: a stale part marker in the stored title or the single file's own

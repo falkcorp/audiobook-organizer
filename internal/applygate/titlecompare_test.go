@@ -1,5 +1,5 @@
 // file: internal/applygate/titlecompare_test.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 0b5a7e12-93c4-4d68-a1f7-6e2d9c40b835
 // last-edited: 2026-11-18
 
@@ -1109,10 +1109,16 @@ func TestCheckTitle_CandidateOnlyFieldsOnlyMoveTowardAgree(t *testing.T) {
 		}
 		before := outcomeClass(checkTitle(&book, &plain))
 		after := outcomeClass(checkTitle(&book, &with))
+		// A block may become neutral only for a candidate whose title is its own
+		// series name (m14): there the credit forms are neutral and a credit that
+		// completes the stored title lifts the block to neutral. For any other
+		// candidate an added credit or position can only add forms that AGREE, so
+		// a block to neutral move there would be a regression.
+		selfTitledCand := len(formTokens(with.Series)) > 0 && slices.Equal(formTokens(with.Title), formTokens(with.Series))
 		switch rank := map[string]int{"block": 0, "neutral": 1, "agree": 2}; {
 		case before == after:
 			same++
-		case rank[after] > rank[before]:
+		case rank[after] > rank[before] && (after == "agree" || selfTitledCand):
 			moved++
 		default:
 			t.Fatalf("candidate credit/position moved %s to %s: %s", before, after, describePair(book, with))

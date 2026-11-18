@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-17-metadata-title-check-executive-summary.md -->
-<!-- version: 2.4.0 -->
+<!-- version: 2.5.0 -->
 <!-- guid: 3b9d6e21-8c47-4f05-a1d2-6e0f7a4c9b83 -->
 <!-- last-edited: 2026-11-18 -->
 
@@ -49,11 +49,15 @@ attempt.
     number of the same kind (a volume, or a part) and the numbers differ ("Part
     1" and "Part 2", "Hush 1" and "Hush 2", "Part 1 of 3" and "Part 3"). A
     number only one side states is not a difference ("Who Am I" and "Who Am I
-    2"). The match is refused. A series name, a credit or a file name cannot
-    talk the check out of this, and neither can a year that is written as part
-    of the title: "Gotham 2033" and "Gotham 2034" are different books, and so
-    are "Gotham 2033" and "Gotham 2". (A year in brackets next to a title that
-    has no year of its own is only a release date and is ignored.) Numbers swapped between the pieces
+    2"). The match is refused. A series name or a file name cannot talk the
+    check out of this, and neither can a year that is written as part of the
+    title: "Gotham 2033" and "Gotham 2034" are different books, and so are
+    "Gotham 2033" and "Gotham 2". (A credit written beside the title can make
+    a pair the same that the two titles alone would call different; that is the
+    one place the check trusts the found book's other fields.) A year in brackets
+    is only a release date: it is set aside, so it neither makes two titles
+    different nor counts as something they share, except that two different
+    years, bracketed or not, make two titles different. Numbers swapped between the pieces
     ("Knightfall 2: Book 3" and "Knightfall 3: Book 2") now count as different;
     an earlier version of this change let them through.
   - **Neutral.** Everything else that is related: one title simply says more
@@ -73,6 +77,9 @@ attempt.
   when the lengths agreed. When the library book's own title or file name says which part it is, that is
   what counts; the folder name is used only when they say nothing, so an old
   "Part 1" folder over a file called "Part 2" can no longer let a "Part 1" through.
+  That holds only when both use the same word. A disc and a part are different
+  levels ("Disc 1" in a folder called "Part 2" is disc 1 of part 2), so then both
+  must match the found book's part or the match is refused.
   When the found book names no part, an old "Disc 2"
   folder name does not refuse a book whose recording length agrees (as before);
   a part marker left in the library book's own title or its single file's name
@@ -95,7 +102,7 @@ attempt.
   now skips such books, and a queued apply that is skipped for this reason says
   so in the log. Undoing an apply clears the book's "applied" mark (this is
   tested), so a later run can apply it again on purpose.
-- A third and a fourth review of the rule tightened it in seven places, each started from a
+- Three rounds of review (the third to the fifth) tightened the rule in several places, each started from a
   failing test:
   - A found title that is only a few words of a longer library title ("Gotham"
     against "Gotham Knights Detective Tales") is no longer taken as related
@@ -112,13 +119,15 @@ attempt.
     "Batman") no longer counts as the same title as a library book called
     "Batman"; it waits for a matching recording length. The same goes for a library
     title that is "Batman" with the author's name beside it ("Batman - Bruce
-    Wayne"), and for a file name used in place of an empty title.
+    Wayne"), for the title with an edition word ("Batman, Unabridged"), and for a
+    file name used in place of an empty title.
   - A list number in front ("08 - ") never makes two titles different, and a
-    year in brackets does not either unless the other title carries a year too.
+    year in brackets is a release date and is set aside (two different years,
+    bracketed or not, still make two titles different).
     A year written plainly in a title ("Gotham 2033") is part of its name: it
     differs from any other year and from any other number ("Gotham 2034",
     "Gotham 2"). It is ignored only against a title that states no number at all.
-    A fourth review found that the first version of this rule was too generous
+    A review found that the first version of this rule was too generous
     ("Gotham (2033)" and "Gotham (2034)" were treated as the same book); it now
     refuses them, at the price of waiting for review on a few titles that carry
     a plain year, such as "Knightfall 1993" against "Knightfall: Book 1".
