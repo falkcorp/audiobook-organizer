@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_round3_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7e985540-891e-4d66-9ce1-fd86d2879faa
 // last-edited: 2026-11-18
 
@@ -324,6 +324,28 @@ func TestMergeCleanupReplanSeesAChangeToTheRepointTarget(t *testing.T) {
 	require.NotEqual(t, planned.Fingerprint, r.Fingerprint, "the repoint target's files are part of what the owner approved")
 }
 
+// A size on the target's file row is read by nothing the row shows, so only the
+// file signature carries it into the fingerprint.
+func TestMergeCleanupReplanSeesATargetFileSizeThatNothingElseShows(t *testing.T) {
+	x := newMCFixture(t)
+	x.mk("heir", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000), group: "g-s", primary: mcTrue()})
+	x.mk("dead", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000), group: "g-s", primary: mcFalse(), trashed: true})
+	x.mk("loser", mcHushSpec(30000))
+	x.point("loser", "dead")
+	planned := x.plan()["loser"]
+	require.Equal(t, mcKindRepoint, planned.Class)
+
+	files, err := x.st.GetBookFiles(x.ids["heir"])
+	require.NoError(t, err)
+	f := files[0]
+	f.FileSize += 4096
+	require.NoError(t, x.st.UpdateBookFile(f.ID, &f))
+	r, err := x.f.Replan(context.Background(), nil, planned, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, planned.Current, r.Current, "premise: the row shows nothing different")
+	require.NotEqual(t, planned.Fingerprint, r.Fingerprint)
+}
+
 // ---- R2-m2: the other losers of one dead end ----
 
 func TestMergeCleanupCoLosersOfOneDeadEndAreHeldTogether(t *testing.T) {
@@ -362,6 +384,10 @@ func TestMergeCleanupADeadEndsLoneLoserIsNotHeldAndNeitherIsOneWithAnEmptyMate(t
 	x.point("shell", "dead")
 	x.mk("trashed-mate", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000), trashed: true})
 	x.point("trashed-mate", "dead")
+	// In the trash by library state but not soft-deleted: the listing still
+	// hands it over, so only the index's own trash check keeps it out.
+	x.mk("state-trashed-mate", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000), state: "deleted"})
+	x.point("state-trashed-mate", "dead")
 	// And a loser of another dead end.
 	mcDeadEnd(x, "other-dead", "other-loser", mcHushSpec(30000))
 	rows := x.plan()
