@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/cleanup_series.go
-// version: 2.16.0
+// version: 2.17.0
 // guid: a1000002-0000-0000-0000-000000000002
 // last-edited: 2026-11-18
 
@@ -154,7 +154,7 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 	reporter.SetTotal(len(allSeries))
 
 	// Phase 1: single-book series
-	var singleApplied, singleFound, singleSkipped, singleBooksSkipped int
+	var singleApplied, singleFound, singleSkipped, singleBooksSkipped, singleBooksHeld int
 	// singleKept: single-book series whose row the conditional delete left in
 	// place (a book linked in since the read, a row changed since, already gone,
 	// or a delete the store could not answer). Separate from singleSkipped, which
@@ -164,7 +164,7 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 	// singleUnlinkFailed: series whose unlink failed part-way, so the delete was
 	// never attempted and the row stays. In no singleKept bucket: the store was
 	// never asked. With the buckets above, in a run that wrote, singleFound =
-	// singleApplied + singleKept (all four) + singleUnlinkFailed +
+	// singleApplied + singleKept (all five) + singleUnlinkFailed +
 	// singleNotReached. (A dry run finds candidates and applies none, so none of
 	// the buckets fill and the identity does not hold. singleSkipped, the
 	// start-of-run guard, is counted before singleFound and is in no bucket.)
@@ -265,6 +265,7 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 		if !dryRun {
 			res, applyErr := csUnlinkAndDeleteSeries(writer, unlink, ser, members)
 			singleBooksSkipped += res.Skipped
+			singleBooksHeld += res.BooksHeld
 			switch {
 			case applyErr != nil && res.Outcome == csNotAttempted:
 				// An unlink failed, so the delete was never attempted and the row
@@ -325,10 +326,10 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 		normGroups[key] = append(normGroups[key], ser)
 	}
 
-	var dupApplied, dupFound, dupRefused, dupBooksSkipped int
+	var dupApplied, dupFound, dupRefused, dupBooksSkipped, dupBooksHeld int
 	var dupKept csKept // merged-from series the conditional delete left in place; see singleKept
 	// Per merged-from series, so the Done line adds up: dupMergeFrom = dupDeleted +
-	// dupRefused + dupKept (all four) + dupNotReached, in a run that wrote.
+	// dupRefused + dupKept (all five) + dupNotReached, in a run that wrote.
 	// dupNotReached is the series of a group left unprocessed: by an error that
 	// stopped the group, or because a store-wide refusal had stopped the run
 	// (dupGroupsNotReached counts those groups).
@@ -371,6 +372,8 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 			res, mergeErr := csMergeSeriesGroup(writer, keeper.ID, mergeFrom, refCounts, members)
 			dupRefused += res.Refused
 			dupBooksSkipped += res.Skipped
+			dupBooksHeld += res.BooksHeld
+			dupKept.LockHeld += res.Kept.LockHeld
 			dupKept.Referenced += res.Kept.Referenced
 			dupKept.Changed += res.Kept.Changed
 			dupKept.Gone += res.Kept.Gone
@@ -427,6 +430,12 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 				"(it returned an error: the cause of each is in the error log); kept",
 			singleKept.Failed, dupKept.Failed))
 	}
+	if singleKept.LockHeld > 0 || dupKept.LockHeld > 0 {
+		kept = append(kept, fmt.Sprintf(
+			"%d single-book series and %d merged-from series were kept because a book the user locked to that series "+
+				"(series_name) still names it; unlock the series on those books to let a rerun settle them",
+			singleKept.LockHeld, dupKept.LockHeld))
+	}
 	if singleUnlinkFailed > 0 {
 		kept = append(kept, fmt.Sprintf(
 			"%d single-book series could not be unlinked (a book write failed); the series stay, see the error log",
@@ -459,9 +468,17 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 				"(another writer moved it after this run read membership)",
 			singleBooksSkipped, dupBooksSkipped), nil)
 	}
+	if singleBooksHeld > 0 || dupBooksHeld > 0 {
+		reporter.Log("warn", fmt.Sprintf(
+			"Left %d books in single-book cleanup and %d books in series merges on their series: "+
+				"the user locked the series (series_name) on each, so this run did not move them",
+			singleBooksHeld, dupBooksHeld), nil)
+	}
 	slog.Info("Done single_found single_applied single_skipped dup_groups_found dup_applied dup_refused dryRun",
 		"singleFound", singleFound, "singleApplied", singleApplied, "singleSkipped", singleSkipped,
 		"singleBooksSkipped", singleBooksSkipped, "dupBooksSkipped", dupBooksSkipped,
+		"singleBooksLockHeld", singleBooksHeld, "dupBooksLockHeld", dupBooksHeld,
+		"singleKeptLockHeld", singleKept.LockHeld, "dupKeptLockHeld", dupKept.LockHeld,
 		"singleRefusedLive", singleKept.Referenced, "dupRefusedLive", dupKept.Referenced,
 		"singleKeptChanged", singleKept.Changed, "dupKeptChanged", dupKept.Changed,
 		"singleAlreadyGone", singleKept.Gone, "dupAlreadyGone", dupKept.Gone,
@@ -504,12 +521,17 @@ const (
 	csKeptChanged
 	// csAlreadyGone: there is no row any more; someone else deleted it first.
 	csAlreadyGone
+	// csKeptLockHeld: a book the user locked to the series (series_name) still
+	// names it, so this run did not move that book and did not ask the store to
+	// delete the row. The books it could move were moved; the series stays.
+	csKeptLockHeld
 )
 
 // csKept counts the series rows the conditional delete left in place, by why.
 // Failed is the rows whose delete returned an error: the store could not say
-// whether anything references them, so they stayed.
-type csKept struct{ Referenced, Changed, Gone, Failed int }
+// whether anything references them, so they stayed. LockHeld is the rows the
+// delete was never asked about, because a user-locked book still names them.
+type csKept struct{ Referenced, Changed, Gone, Failed, LockHeld int }
 
 func (k *csKept) add(o csDeleteOutcome) {
 	switch o {
@@ -521,6 +543,8 @@ func (k *csKept) add(o csDeleteOutcome) {
 		k.Gone++
 	case csDeleteFailed:
 		k.Failed++
+	case csKeptLockHeld:
+		k.LockHeld++
 	}
 }
 
@@ -535,6 +559,8 @@ func csKeptLine(ser database.Series, o csDeleteOutcome) string {
 		return fmt.Sprintf("Kept 1-book series %d (%q): it was renamed, re-authored or held after this run read it", ser.ID, ser.Name)
 	case csAlreadyGone:
 		return fmt.Sprintf("1-book series %d (%q) was already deleted by someone else; nothing left to remove", ser.ID, ser.Name)
+	case csKeptLockHeld:
+		return fmt.Sprintf("Kept 1-book series %d (%q): a book the user locked to it (series_name) still names it", ser.ID, ser.Name)
 	}
 	return fmt.Sprintf("1-book series %d (%q) was not deleted", ser.ID, ser.Name)
 }
@@ -581,6 +607,10 @@ type csUnlinkResult struct {
 	// Skipped is the number of books left alone because their row no longer
 	// named the series.
 	Skipped int
+	// BooksHeld is the number of books left on the series because the user
+	// locked it on them (series_name). They still name the series, so the delete
+	// is not attempted (Outcome csKeptLockHeld).
+	BooksHeld int
 	// Outcome is the conditional delete's result: csNotAttempted when an unlink
 	// failed first, csDeleteFailed (with an error) when the store could not
 	// answer.
@@ -614,6 +644,12 @@ type csUnlinkResult struct {
 // that still exists, and a later run retries. Deleting after a partial unlink
 // would strand exactly the rows that failed.
 //
+// A book whose user locked its series (series_name) is not unlinked: the lock is
+// read under the same hold as the write (database.ModifyBookRespectingLocks) and
+// an unreadable lock is an error that stops the unlinks like any failed write.
+// A held book still names the series, so the delete is not attempted
+// (csKeptLockHeld) and the books that could move have moved.
+//
 // members is the job's hoisted membership map; each successful unlink is
 // recorded in it so a partial failure leaves the map matching the store.
 //
@@ -629,7 +665,7 @@ func csUnlinkAndDeleteSeries(store seriesUnlinker, books []database.BookCore, se
 		// already skips an empty set; this is the second lock on that door.
 		return csUnlinkResult{}, fmt.Errorf("refusing to delete series %d: no books to unlink", seriesID)
 	}
-	skipped, unlinked := 0, 0
+	skipped, unlinked, heldBooks := 0, 0, 0
 	for i := range books {
 		id := books[i].ID
 		// Compare-and-set. The books come from membership read once at the start
@@ -640,7 +676,7 @@ func csUnlinkAndDeleteSeries(store seriesUnlinker, books []database.BookCore, se
 		// is not itself a stale read.
 		var movedTo *int
 		stale := false
-		written, err := store.ModifyBook(id, func(current *database.Book) error {
+		written, held, err := database.ModifyBookRespectingLocks(store, store, id, func(current *database.Book) error {
 			if current.SeriesID == nil || *current.SeriesID != seriesID {
 				stale = true
 				if current.SeriesID != nil {
@@ -654,10 +690,17 @@ func csUnlinkAndDeleteSeries(store seriesUnlinker, books []database.BookCore, se
 			return nil
 		})
 		if err != nil {
-			return csUnlinkResult{Unlinked: unlinked, Skipped: skipped}, fmt.Errorf("ModifyBook(%s): %w", id, err)
+			return csUnlinkResult{Unlinked: unlinked, Skipped: skipped, BooksHeld: heldBooks}, fmt.Errorf("ModifyBook(%s): %w", id, err)
+		}
+		if len(held) > 0 {
+			// The user locked this book's series. It still names seriesID, so it
+			// stays in members and the delete below is not made.
+			heldBooks++
+			csLog.Warn("cleanup-series: leaving book %s on series %d: locked by the user (%s)", id, seriesID, strings.Join(held, ", "))
+			continue
 		}
 		if written == nil {
-			return csUnlinkResult{Unlinked: unlinked, Skipped: skipped}, fmt.Errorf("book %s not found", id)
+			return csUnlinkResult{Unlinked: unlinked, Skipped: skipped, BooksHeld: heldBooks}, fmt.Errorf("book %s not found", id)
 		}
 		if stale {
 			// Not ours to write. It no longer references seriesID, so it does not
@@ -669,6 +712,12 @@ func csUnlinkAndDeleteSeries(store seriesUnlinker, books []database.BookCore, se
 		}
 		members.Move(id, seriesID, nil)
 		unlinked++
+	}
+	if heldBooks > 0 {
+		// A book the user locked to the series still names it: the conditional
+		// delete would refuse (and report "linked in after this run read it", which
+		// is not what happened), so it is not asked. The books that could move have.
+		return csUnlinkResult{Unlinked: unlinked, Skipped: skipped, BooksHeld: heldBooks, Outcome: csKeptLockHeld}, nil
 	}
 	outcome, err := csDeleteSeriesIfUnreferenced(store, ser)
 	if err != nil {
@@ -747,7 +796,7 @@ func csMergeSeriesGroup(store seriesMerger, keepID int, mergeFrom []database.Ser
 		// count we could not confirm is what stranded 6,893 series IDs across
 		// 13,322 books. Pinned by
 		// TestCsMergeSeriesGroup_RefusesWhenARowCannotBeHydrated.
-		moved, skippedHere := 0, 0
+		moved, skippedHere, heldHere := 0, 0, 0
 		for _, book := range books {
 			// Repoint only SeriesID, under the book's write lock, so a column
 			// another writer commits meanwhile is not reverted (audit A1#15).
@@ -758,7 +807,7 @@ func csMergeSeriesGroup(store seriesMerger, keepID int, mergeFrom []database.Ser
 			// must not be pulled onto the keeper.
 			var movedTo *int
 			stale := false
-			written, err := store.ModifyBook(book.ID, func(current *database.Book) error {
+			written, held, err := database.ModifyBookRespectingLocks(store, store, book.ID, func(current *database.Book) error {
 				if current.SeriesID != nil && *current.SeriesID == keepID {
 					return database.ErrSkipBookWrite
 				}
@@ -777,6 +826,14 @@ func csMergeSeriesGroup(store seriesMerger, keepID int, mergeFrom []database.Ser
 				res.NotReached = len(mergeFrom) - idx
 				return res, fmt.Errorf("ModifyBook(%s): %w", book.ID, err)
 			}
+			if len(held) > 0 {
+				// The user locked this book's series: it stays on fromID, so
+				// fromID cannot be deleted below.
+				heldHere++
+				res.BooksHeld++
+				csLog.Warn("cleanup-series: leaving book %s on series %d: locked by the user (%s)", book.ID, fromID, strings.Join(held, ", "))
+				continue
+			}
 			if written == nil {
 				continue
 			}
@@ -791,6 +848,13 @@ func csMergeSeriesGroup(store seriesMerger, keepID int, mergeFrom []database.Ser
 			}
 			members.Move(book.ID, fromID, &keepID)
 			moved++
+		}
+		if heldHere > 0 {
+			// Not Refused: the guard below is about rows this run could not SEE,
+			// and these it saw and was told not to move. The books that could move
+			// have moved; the row stays because a locked book still names it.
+			res.Kept.add(csKeptLockHeld)
+			continue
 		}
 		if stranded := refCounts[fromID] - moved - skippedHere; stranded > 0 {
 			// Books were still reassigned above -- that is strictly an
@@ -840,10 +904,13 @@ func csMergeSeriesGroup(store seriesMerger, keepID int, mergeFrom []database.Ser
 
 // csMergeResult is what csMergeSeriesGroup did across one duplicate group.
 type csMergeResult struct {
-	Merged  int    // series rows deleted
-	Refused int    // series kept by the start-of-run refCounts guard
-	Skipped int    // books left alone: their row no longer named the series
-	Kept    csKept // series the conditional delete left in place, by cause
+	Merged  int // series rows deleted
+	Refused int // series kept by the start-of-run refCounts guard
+	Skipped int // books left alone: their row no longer named the series
+	// BooksHeld is the books left on their series because the user locked it
+	// (series_name) on them; each such series is in Kept.LockHeld.
+	BooksHeld int
+	Kept      csKept // series the conditional delete left in place, by cause
 	// NotReached is the merged-from series of this group an error left
 	// unprocessed: the series whose book write failed and every one after it, or
 	// every one after the series whose delete failed store-wide (that one is

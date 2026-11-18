@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g2.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: f05c0cfb-33a6-46e3-a29b-4ab6825825dc
-// last-edited: 2026-11-15
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -140,6 +140,9 @@ type t6g2HashIndexRun struct {
 }
 
 type t6g2BookReads interface {
+	// The field-lock read: the audit's description restore consults the user's
+	// locks (restoreRecoverableFields).
+	database.MetadataFieldStateReader
 	GetBookByID(id string) (*database.Book, error)
 	ListBookIDs() ([]string, error)
 	GetBookSnapshots(id string, limit int) ([]database.BookSnapshot, error)
@@ -328,7 +331,13 @@ func headT6G2Items(r sdk.Reporter, workers int) t6g2Items {
 type headT6G2Store struct{ ops OpsStore }
 
 func (s headT6G2Store) GetBookByID(id string) (*database.Book, error) { return s.ops.GetBookByID(id) }
-func (s headT6G2Store) ListBookIDs() ([]string, error)                { return s.ops.ListBookIDs() }
+func (s headT6G2Store) GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error) {
+	return s.ops.GetMetadataFieldStates(bookID)
+}
+func (s headT6G2Store) GetUserPreference(key string) (*database.UserPreference, error) {
+	return s.ops.GetUserPreference(key)
+}
+func (s headT6G2Store) ListBookIDs() ([]string, error) { return s.ops.ListBookIDs() }
 func (s headT6G2Store) GetBookSnapshots(id string, limit int) ([]database.BookSnapshot, error) {
 	return s.ops.GetBookSnapshots(id, limit)
 }
