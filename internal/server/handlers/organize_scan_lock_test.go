@@ -1,5 +1,5 @@
 // file: internal/server/handlers/organize_scan_lock_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 0e8b5c27-4a13-4f96-b7d2-c93a61e8f405
 // last-edited: 2026-11-18
 
@@ -368,6 +368,28 @@ func TestOrganizeBook_RetiredCopyAnsweredUnderTheHoldStands(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), organizer.CollisionLibraryCopyRetired) {
 		t.Fatalf("409 is not the retired-copy refusal: %s", w.Body.String())
+	}
+	if svc.calls.Load() != 0 {
+		t.Fatalf("organized %d time(s)", svc.calls.Load())
+	}
+}
+
+// The queued organize keeps only a string for its failure, so a retired-copy
+// refusal names the copy in it (the 409 body's copy_book_id).
+func TestRunQueuedOrganize_RetiredCopyFailureNamesTheCopy(t *testing.T) {
+	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/Old/Old.m4b"}}
+	svc := inPlaceSvc()
+	h := handlers.NewOrganizeHandler(store, nil, svc, nil, false)
+	h.SetLibraryCopyResolver(func(b *database.Book) (*database.Book, bool, *database.Book) {
+		return nil, false, &database.Book{ID: "s1-the-copy", FilePath: "/lib/Merged/Merged.m4b"}
+	})
+
+	err := h.RunQueuedOrganize(context.Background(), "b1", nil)
+	if err == nil {
+		t.Fatal("a retired-only library copy must fail the queued organize")
+	}
+	if !strings.Contains(err.Error(), "s1-the-copy") || !strings.Contains(err.Error(), "409") {
+		t.Fatalf("failure does not name the copy and status: %v", err)
 	}
 	if svc.calls.Load() != 0 {
 		t.Fatalf("organized %d time(s)", svc.calls.Load())
