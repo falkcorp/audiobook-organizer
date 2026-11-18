@@ -1,5 +1,5 @@
 // file: web/src/services/api.organizeLibraryCopyRetired.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d2b8e41-7c36-4f09-b1a8-3e90c7d4a652
 // last-edited: 2026-11-18
 
@@ -10,10 +10,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-// The server's 409 body when a book's only library copy was merged away
+// The server's 409 body when a book's only library copy is retired
 // (handlers.libraryCopyRetiredBody).
 const retiredBody = {
-  error: "organize declined: this book's only library copy was merged away; revive or un-merge it first",
+  error:
+    "organize declined: this book's only library copy is retired (merged into another book, merged into this one, or marked for deletion); revive or un-merge it first",
   category: 'library_copy_retired',
   reason: 'library copy b2 of b1 is retired',
   book_id: 'b1',
@@ -53,10 +54,14 @@ describe('organize 409 library_copy_retired', () => {
     expect(err.status).toBe(409);
     // What it means.
     expect(err.message).toMatch(/only library copy/i);
-    expect(err.message).toMatch(/merged away/i);
+    expect(err.message).toMatch(/retired/i);
+    // It does not claim where the copy was merged: it may be this very book.
+    expect(err.message).not.toMatch(/merged away into another book/i);
+    expect(err.message).toMatch(/possibly this one/i);
     // What to do, and where the copy is.
     expect(err.message).toMatch(/revive or un-merge the copy first/i);
     expect(err.message).toContain('/library/Batman/Year One.m4b');
+    expect(err.message).toContain('book b2');
     // The body stays available to callers that want the ids.
     expect((err.data as { copy_book_id: string }).copy_book_id).toBe('b2');
   });
@@ -65,6 +70,15 @@ describe('organize 409 library_copy_retired', () => {
     stubStatus(409, { ...retiredBody, copy_path: undefined });
     const err = await caught(() => organizeBook('b1'));
     expect(err.message).toMatch(/revive or un-merge the copy first/i);
+    expect(err.message).toContain('book b2');
+    expect(err.message).not.toContain('undefined');
+  });
+
+  it('still reads cleanly when the body names neither the copy nor its path', async () => {
+    stubStatus(409, { ...retiredBody, copy_path: undefined, copy_book_id: undefined });
+    const err = await caught(() => organizeBook('b1'));
+    expect(err.message).toMatch(/only library copy is retired/i);
+    expect(err.message).not.toContain('()');
     expect(err.message).not.toContain('undefined');
   });
 

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/organize.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: b3c4d5e6-f7a8-9012-bcde-f01234567890
 // last-edited: 2026-11-18
 
@@ -193,10 +193,12 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 }
 
 // libraryCopyRetiredBody is the 409 body of an organize or preview refused
-// because the book's only library copy was merged away.
+// because the book's only library copy is retired: merged into another book,
+// merged into this same book (the copy of a duplicate pair), or marked for
+// deletion. copy_book_id names the copy.
 func libraryCopyRetiredBody(e *organizer.LibraryCopyRetiredError) gin.H {
 	return gin.H{
-		"error":        "organize declined: this book's only library copy was merged away; revive or un-merge it first",
+		"error":        "organize declined: this book's only library copy is retired (merged into another book, merged into this one, or marked for deletion); revive or un-merge it first",
 		"category":     organizer.CollisionLibraryCopyRetired,
 		"reason":       e.Error(),
 		"book_id":      e.BookID,

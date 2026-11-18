@@ -1,5 +1,5 @@
 // file: internal/server/handlers/organize_scan_lock.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 2b7e4c91-5d08-4f3a-b6e2-9a14c7d3f058
 // last-edited: 2026-11-18
 
@@ -286,6 +286,12 @@ func (r *recordingOrganizeResponder) json(status int, body any) {
 	if h, isH := body.(gin.H); isH {
 		if e, has := h["error"]; has {
 			msg = fmt.Sprint(e)
+		}
+		// The op's failure keeps only a string, so the copy the refusal is about
+		// travels in it: the 409 body carries copy_book_id, and the queued
+		// organize's message must name the same row.
+		if id, ok := h["copy_book_id"].(string); ok && id != "" {
+			msg += " (library copy: book " + id + ")"
 		}
 	}
 	r.set(status, msg)

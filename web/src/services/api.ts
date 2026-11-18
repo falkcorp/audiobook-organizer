@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.210.0
+// version: 2.210.1
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-11-18
 
@@ -127,9 +127,10 @@ const buildApiError = async (response: Response, fallbackMessage: string) => {
 
 /**
  * The `category` of the 409 an organize or its preview answers when the book's
- * only library copy was merged away into another book (server
- * `organizer.CollisionLibraryCopyRetired`). Organizing would otherwise write a
- * second copy beside a row the library already treats as gone.
+ * only library copy is retired (server `organizer.CollisionLibraryCopyRetired`):
+ * merged into another book, merged into this same book (the copy of a duplicate
+ * pair), or marked for deletion. Organizing would otherwise write a second copy
+ * beside a row the library already treats as gone.
  */
 export const ORGANIZE_LIBRARY_COPY_RETIRED = 'library_copy_retired';
 
@@ -137,21 +138,28 @@ export const ORGANIZE_LIBRARY_COPY_RETIRED = 'library_copy_retired';
  * buildOrganizeError is buildApiError for the organize and preview-organize
  * routes: a 409 in the library_copy_retired category gets a message that says
  * what it means and what to do first, instead of the server's one-line error.
- * The body stays on `data` (book_id, copy_book_id, copy_path) for callers that
- * want the ids. Any other status or category keeps the server's message.
+ * It names the copy (book id from `copy_book_id`, path from `copy_path`) and
+ * does not claim where the copy was merged, because it may have been merged
+ * into this very book. The body stays on `data` (book_id, copy_book_id,
+ * copy_path). Any other status or category keeps the server's message.
  */
 const buildOrganizeError = async (response: Response, fallbackMessage: string) => {
   const err = await buildApiError(response, fallbackMessage);
-  const data = err.data as { category?: unknown; copy_path?: unknown } | undefined;
+  const data = err.data as
+    { category?: unknown; copy_path?: unknown; copy_book_id?: unknown } | undefined;
   if (response.status !== 409 || data?.category !== ORGANIZE_LIBRARY_COPY_RETIRED) {
     return err;
   }
-  const where =
-    typeof data.copy_path === 'string' && data.copy_path !== '' ? ` (${data.copy_path})` : '';
+  const copyId =
+    typeof data.copy_book_id === 'string' && data.copy_book_id !== '' ? data.copy_book_id : '';
+  const copyPath =
+    typeof data.copy_path === 'string' && data.copy_path !== '' ? data.copy_path : '';
+  const named = [copyId && `book ${copyId}`, copyPath].filter(Boolean).join(', ');
+  const where = named ? ` (${named})` : '';
   const message =
-    `Organize declined: this book's only library copy${where} was merged away into another book, ` +
-    'so organizing would make a second copy beside it. Revive or un-merge the copy first, ' +
-    'then organize again.';
+    `Organize declined: this book's only library copy${where} is retired (merged into a book, ` +
+    'possibly this one, or marked for deletion), so organizing would make a second copy beside it. ' +
+    'Revive or un-merge the copy first, then organize again.';
   return new ApiError(message, err.status, err.data, err.retryAfterMs);
 };
 
