@@ -1,7 +1,7 @@
-// file: internal/updater/swapslot_test.go
-// version: 1.0.0
+// file: core/updater/swapslot_test.go
+// version: 1.0.2
 // guid: d13289f7-2386-4617-b888-5fb4eb506d55
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package updater
 
@@ -75,8 +75,8 @@ func TestApplyRefusesWhileSwapPendingOrInflight(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), restorejournal.TokenRestorePending) {
 			t.Fatalf("err = %v, want one carrying %s", err, restorejournal.TokenRestorePending)
 		}
-		if !errors.Is(err, ErrSwapBusy) {
-			t.Errorf("err = %v, want it to match ErrSwapBusy", err)
+		if !errors.Is(err, restorejournal.ErrSwapPending) {
+			t.Errorf("err = %v, want it to match restorejournal.ErrSwapPending", err)
 		}
 		assertBinaryUntouched(t, exe)
 	})
@@ -90,8 +90,8 @@ func TestApplyRefusesWhileSwapPendingOrInflight(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), restorejournal.TokenRestoreInflight) {
 			t.Fatalf("err = %v, want one carrying %s", err, restorejournal.TokenRestoreInflight)
 		}
-		if !errors.Is(err, ErrSwapBusy) {
-			t.Errorf("err = %v, want it to match ErrSwapBusy", err)
+		if !errors.Is(err, restorejournal.ErrSwapPending) {
+			t.Errorf("err = %v, want it to match restorejournal.ErrSwapPending", err)
 		}
 		assertBinaryUntouched(t, exe)
 	})
