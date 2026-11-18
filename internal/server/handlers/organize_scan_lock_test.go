@@ -1,5 +1,5 @@
 // file: internal/server/handlers/organize_scan_lock_test.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 0e8b5c27-4a13-4f96-b7d2-c93a61e8f405
 // last-edited: 2026-11-18
 
@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -29,11 +30,46 @@ import (
 type countingOrganizeSvc struct {
 	organizeSvcSpy
 	calls atomic.Int32
+	mu    sync.Mutex
+	ids   []string
 }
 
 func (s *countingOrganizeSvc) OrganizeOneBook(o *organizer.Organizer, b *database.Book, l logger.Logger) (*organizer.Landing, error) {
 	s.calls.Add(1)
+	s.mu.Lock()
+	s.ids = append(s.ids, b.ID)
+	s.mu.Unlock()
 	return s.organizeSvcSpy.OrganizeOneBook(o, b, l)
+}
+
+// organized is the ID of every row OrganizeOneBook was called on, in order.
+func (s *countingOrganizeSvc) organized() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.ids...)
+}
+
+// copyAppearsAtCoreCheck is a resolver for a book that has no library copy when
+// the lock step looks (its two resolutions per attempt) and gains one, "s1",
+// just before the core's own re-check: the copy "appears after the lock set
+// settled". With everyAttempt the third resolution of EVERY attempt finds it
+// and the book never settles; without, it appears once and the next attempt's
+// lock step finds it and holds it.
+func copyAppearsAtCoreCheck(everyAttempt bool) func(*database.Book) (*database.Book, bool, *database.Book) {
+	var calls atomic.Int32
+	return func(b *database.Book) (*database.Book, bool, *database.Book) {
+		n := calls.Add(1)
+		appeared := n > 2
+		if everyAttempt {
+			appeared = n%3 == 0
+		}
+		if !appeared {
+			return nil, false, nil
+		}
+		cp := *b
+		cp.ID = "s1"
+		return &cp, true, nil
+	}
 }
 
 type fakeOrganizeQueuer struct{ ids []string }
@@ -262,26 +298,67 @@ func TestRunQueuedOrganize_UnsettledLockSetFailsWithoutOrganizing(t *testing.T) 
 
 // A library copy that appears AFTER the lock set settled is a row the hold does
 // not cover. The core must not swap it in and organize it without its scan
-// lock: the answer is the unsettled 409 and no file is touched.
-func TestOrganizeBook_CopyAppearingAfterTheLockSetSettledIsNotOrganized(t *testing.T) {
+// lock. It is the same condition the lock step retries, so the request retries
+// too: the second lock step resolves the copy, holds it, and organizes THAT row
+// exactly once (200), where the first attempt wrote nothing.
+func TestOrganizeBook_CopyAppearingAfterTheLockSetSettledRetriesAndOrganizesTheCopy(t *testing.T) {
 	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/Old/Old.m4b"}}
 	svc := inPlaceSvc()
 	h := handlers.NewOrganizeHandler(store, nil, svc, nil, false)
-	// The two resolutions of the lock step (before and under the hold) see no
-	// copy; the third, the core's own re-check, sees one that was just created.
-	var calls atomic.Int32
-	h.SetLibraryCopyResolver(func(b *database.Book) (*database.Book, bool, *database.Book) {
-		if calls.Add(1) <= 2 {
-			return nil, false, nil
-		}
-		cp := *b
-		cp.ID = "s1"
-		return &cp, true, nil
-	})
+	h.SetLibraryCopyResolver(copyAppearsAtCoreCheck(false))
+
+	w := organizeRequest(h, "b1")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200 (the retry organizes the copy): %s", w.Code, w.Body.String())
+	}
+	if got := svc.organized(); len(got) != 1 || got[0] != "s1" {
+		t.Fatalf("organized %v; want exactly [s1], the copy the retry held (never the original, never twice)", got)
+	}
+	if n := scanlock.Books.Held(); n != 0 {
+		t.Fatalf("left %d scan lock(s) held", n)
+	}
+}
+
+// When the core finds a copy it does not hold on every attempt, the request
+// stops after organizeLockTries attempts and answers like a lock set that never
+// settles: 409 with no queuer wired, nothing organized, no lock left held.
+func TestOrganizeBook_CoreUnsettledOnEveryAttemptAnswers409(t *testing.T) {
+	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/Old/Old.m4b"}}
+	svc := inPlaceSvc()
+	h := handlers.NewOrganizeHandler(store, nil, svc, nil, false)
+	h.SetLibraryCopyResolver(copyAppearsAtCoreCheck(true))
 
 	w := organizeRequest(h, "b1")
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status %d, want 409: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "kept changing") {
+		t.Fatalf("409 is not the unsettled refusal: %s", w.Body.String())
+	}
+	if svc.calls.Load() != 0 {
+		t.Fatalf("organized %d time(s) a copy that was never in the lock hold", svc.calls.Load())
+	}
+	if n := scanlock.Books.Held(); n != 0 {
+		t.Fatalf("left %d scan lock(s) held", n)
+	}
+}
+
+// With a queuer wired, the same never-settling core is queued (202), exactly as
+// the lock step queues a set that never settles.
+func TestOrganizeBook_CoreUnsettledOnEveryAttemptIsQueued(t *testing.T) {
+	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/Old/Old.m4b"}}
+	svc := inPlaceSvc()
+	h := handlers.NewOrganizeHandler(store, nil, svc, nil, false)
+	h.SetLibraryCopyResolver(copyAppearsAtCoreCheck(true))
+	q := &fakeOrganizeQueuer{}
+	h.SetOrganizeQueuer(q)
+
+	w := organizeRequest(h, "b1")
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status %d, want 202: %s", w.Code, w.Body.String())
+	}
+	if len(q.ids) != 1 || q.ids[0] != "b1" {
+		t.Fatalf("queued %v", q.ids)
 	}
 	if svc.calls.Load() != 0 {
 		t.Fatalf("organized %d time(s) a copy that was never in the lock hold", svc.calls.Load())
@@ -316,14 +393,59 @@ func TestOrganizeBook_HeldLibraryCopyIsTheSubjectWithoutAnotherResolution(t *tes
 	if calls.Load() != 2 {
 		t.Fatalf("resolver ran %d time(s); want 2 (the lock step's, none in the core for a held copy)", calls.Load())
 	}
-	if svc.calls.Load() != 1 {
-		t.Fatalf("OrganizeOneBook calls = %d, want 1", svc.calls.Load())
+	if got := svc.organized(); len(got) != 1 || got[0] != "s1" {
+		t.Fatalf("organized %v; want exactly [s1], the copy the hold covers", got)
 	}
 }
 
-// A queued organize that meets the same moving copy fails the op with the
-// unsettled message instead of organizing a row it does not hold.
-func TestRunQueuedOrganize_CopyAppearingAfterTheLockSetSettledFailsTheOp(t *testing.T) {
+// A queued organize that meets the same moving copy retries, as it does for a
+// lock set that will not settle: the next lock step holds the copy, and the op
+// organizes that row once and succeeds.
+func TestRunQueuedOrganize_CopyAppearingAfterTheLockSetSettledRetriesThenOrganizes(t *testing.T) {
+	defer handlers.SetOrganizeUnsettledRetryForTest(5, time.Millisecond)()
+	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/Old/Old.m4b"}}
+	svc := inPlaceSvc()
+	h := handlers.NewOrganizeHandler(store, nil, svc, nil, false)
+	h.SetLibraryCopyResolver(copyAppearsAtCoreCheck(false))
+
+	if err := h.RunQueuedOrganize(context.Background(), "b1", nil); err != nil {
+		t.Fatalf("the retry should have organized the copy, got %v", err)
+	}
+	if got := svc.organized(); len(got) != 1 || got[0] != "s1" {
+		t.Fatalf("organized %v; want exactly [s1]", got)
+	}
+	if n := scanlock.Books.Held(); n != 0 {
+		t.Fatalf("left %d scan lock(s) held", n)
+	}
+}
+
+// A core that finds a copy it does not hold on every attempt shares the lock
+// set's retry budget: after organizeUnsettledRetries the op fails with the
+// unsettled message and nothing was organized.
+func TestRunQueuedOrganize_CoreUnsettledOnEveryAttemptFailsTheOp(t *testing.T) {
+	defer handlers.SetOrganizeUnsettledRetryForTest(3, time.Millisecond)()
+	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/Old/Old.m4b"}}
+	svc := inPlaceSvc()
+	h := handlers.NewOrganizeHandler(store, nil, svc, nil, false)
+	h.SetLibraryCopyResolver(copyAppearsAtCoreCheck(true))
+
+	err := h.RunQueuedOrganize(context.Background(), "b1", nil)
+	if !handlers.IsOrganizeSetUnsettled(err) {
+		t.Fatalf("want the unsettled refusal, got %v", err)
+	}
+	if svc.calls.Load() != 0 {
+		t.Fatalf("organized %d time(s) a copy that was never in the lock hold", svc.calls.Load())
+	}
+	if n := scanlock.Books.Held(); n != 0 {
+		t.Fatalf("left %d scan lock(s) held", n)
+	}
+}
+
+// The lock step saw the book as having no library copy (so the hold is just the
+// book), and by the core's re-check the book's only copy has been merged away.
+// That is a refusal, not an unsettled retry: the core answers the retired 409
+// and writes nothing. The branch at the core's re-check, not the lock step's.
+func TestOrganizeBook_CoreRecheckFindingARetiredCopyRefuses(t *testing.T) {
 	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/Old/Old.m4b"}}
 	svc := inPlaceSvc()
 	h := handlers.NewOrganizeHandler(store, nil, svc, nil, false)
@@ -332,17 +454,28 @@ func TestRunQueuedOrganize_CopyAppearingAfterTheLockSetSettledFailsTheOp(t *test
 		if calls.Add(1) <= 2 {
 			return nil, false, nil
 		}
-		cp := *b
-		cp.ID = "s1"
-		return &cp, true, nil
+		return nil, false, &database.Book{ID: "s1-the-copy", FilePath: "/lib/Merged/Merged.m4b"}
 	})
 
-	err := h.RunQueuedOrganize(context.Background(), "b1", nil)
-	if err == nil || !strings.Contains(err.Error(), "kept changing") {
-		t.Fatalf("want the unsettled failure, got %v", err)
+	w := organizeRequest(h, "b1")
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status %d, want 409: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, organizer.CollisionLibraryCopyRetired) || !strings.Contains(body, "s1-the-copy") {
+		t.Fatalf("409 is not the retired-copy refusal naming the copy: %s", body)
+	}
+	if strings.Contains(body, "kept changing") {
+		t.Fatalf("a retired copy must not be answered as unsettled: %s", body)
+	}
+	if calls.Load() != 3 {
+		t.Fatalf("resolver ran %d time(s); want 3 (two in the lock step, the core's re-check)", calls.Load())
 	}
 	if svc.calls.Load() != 0 {
-		t.Fatalf("organized %d time(s) a copy that was never in the lock hold", svc.calls.Load())
+		t.Fatalf("organized %d time(s)", svc.calls.Load())
+	}
+	if n := scanlock.Books.Held(); n != 0 {
+		t.Fatalf("left %d scan lock(s) held", n)
 	}
 }
 
@@ -368,6 +501,11 @@ func TestOrganizeBook_RetiredCopyAnsweredUnderTheHoldStands(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), organizer.CollisionLibraryCopyRetired) {
 		t.Fatalf("409 is not the retired-copy refusal: %s", w.Body.String())
+	}
+	// The lookup never returns a trashed row, so the text names only a merged
+	// copy and agrees with `reason` ("was merged away").
+	if strings.Contains(w.Body.String(), "marked for deletion") || !strings.Contains(w.Body.String(), "merged into another book, or into this one") {
+		t.Fatalf("409 text does not describe a merged copy only: %s", w.Body.String())
 	}
 	if svc.calls.Load() != 0 {
 		t.Fatalf("organized %d time(s)", svc.calls.Load())

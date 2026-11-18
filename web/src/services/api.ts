@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.210.1
+// version: 2.210.2
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-11-18
 
@@ -128,9 +128,10 @@ const buildApiError = async (response: Response, fallbackMessage: string) => {
 /**
  * The `category` of the 409 an organize or its preview answers when the book's
  * only library copy is retired (server `organizer.CollisionLibraryCopyRetired`):
- * merged into another book, merged into this same book (the copy of a duplicate
- * pair), or marked for deletion. Organizing would otherwise write a second copy
- * beside a row the library already treats as gone.
+ * merged into another book, or merged into this same book (the copy of a
+ * duplicate pair). A copy in the trash cannot be named here: the server's
+ * lookup leaves trashed rows out. Organizing would otherwise write a second
+ * copy beside a row the library already treats as gone.
  */
 export const ORGANIZE_LIBRARY_COPY_RETIRED = 'library_copy_retired';
 
@@ -158,7 +159,7 @@ const buildOrganizeError = async (response: Response, fallbackMessage: string) =
   const where = named ? ` (${named})` : '';
   const message =
     `Organize declined: this book's only library copy${where} is retired (merged into a book, ` +
-    'possibly this one, or marked for deletion), so organizing would make a second copy beside it. ' +
+    'possibly this one), so organizing would make a second copy beside it. ' +
     'Revive or un-merge the copy first, then organize again.';
   return new ApiError(message, err.status, err.data, err.retryAfterMs);
 };
