@@ -1,7 +1,7 @@
 // file: core/app/storage_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: cd83307e-c3ce-4393-b440-9d8ba60a7afb
-// last-edited: 2026-11-08
+// last-edited: 2026-11-18
 
 package app
 
@@ -235,5 +235,21 @@ func TestStorageAdminNilWithoutAStore(t *testing.T) {
 	defer func() { _ = a.Close(context.Background()) }()
 	if a.StorageAdmin() != nil {
 		t.Fatal("StorageAdmin() != nil with no store")
+	}
+}
+
+// TestKernelConfig_CarriesFromRelease: Options.FromRelease is the tag the
+// pre-migration checkpoint records as from_release (05-storage §5S.3.12
+// "How"), so kernelConfig, which New and every offline open build their kernel
+// config from, hands it on unchanged; an app that embeds none leaves it empty.
+func TestKernelConfig_CarriesFromRelease(t *testing.T) {
+	for _, tag := range []string{"", "v0.232.0"} {
+		c, err := kernelConfig(Options{AppID: "gotham", FromRelease: tag}, nil)
+		if err != nil {
+			t.Fatalf("kernelConfig(%q): %v", tag, err)
+		}
+		if c.FromRelease != tag {
+			t.Fatalf("kernel FromRelease = %q, want %q", c.FromRelease, tag)
+		}
 	}
 }

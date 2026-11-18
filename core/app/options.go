@@ -1,7 +1,7 @@
 // file: core/app/options.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 55e09ad5-34c8-4d0f-b8d5-117718ebf0ed
-// last-edited: 2026-11-12
+// last-edited: 2026-11-18
 
 package app
 
@@ -111,6 +111,12 @@ type Options struct {
 	// resolves them at R1 (ABO: HEAD's .encryption_key and the gap-fill
 	// config.yaml); from F3 core config builds the table.
 	StorageStateFiles []storage.StateFile
+	// FromRelease is the pre-freeze release's tag the build embeds (09 §9.2.1;
+	// ABO: the one tag line of ci/prefreeze_release.txt). The pre-migration
+	// checkpoint records it as from_release, because HEAD's store records no
+	// app version, and `make rollback-restore` names it. "" = the build embeds
+	// none (a build without cutover steps).
+	FromRelease string
 	// R1BeforeSwap runs in storage restore-offline (in place) and storage
 	// reset after every check passed and before the first write that stages
 	// or moves anything, with core.storage.path (kernel.Config.BeforeSwap).

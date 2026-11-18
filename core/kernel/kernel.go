@@ -1,7 +1,7 @@
 // file: core/kernel/kernel.go
-// version: 1.0.21
+// version: 1.0.22
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
-// last-edited: 2026-11-12
+// last-edited: 2026-11-18
 
 // Package kernel is core's boot machinery (06 §6.4.6): the boot-phase runner
 // of 06 §6.5.1, the Registrar and Deps of each module, the collision checks
@@ -139,6 +139,9 @@ type Config struct {
 	// StorageStateFiles is the state-file table the pre-migration checkpoint
 	// copies (05-config §2.4; storage.OpenOptions.StateFiles).
 	StorageStateFiles []storage.StateFile
+	// FromRelease is the tag the pre-migration checkpoint records as
+	// from_release (storage.OpenOptions.FromRelease); "" = none embedded.
+	FromRelease string
 	// StateDir is core.paths.state_dir, absolute, resolved once from
 	// pre-boot inputs (06 §6.4.5 StateDir). Set, the kernel runs P0a, the
 	// pre-boot swap, over <StateDir>/restore/ before the store opens, and
