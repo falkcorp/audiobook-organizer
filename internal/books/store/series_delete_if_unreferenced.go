@@ -1,7 +1,7 @@
 // file: internal/books/store/series_delete_if_unreferenced.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 70d67056-7e94-4c44-b37f-39897839efed
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package store
 
@@ -102,12 +102,15 @@ var (
 // the same stripe, so the count and the rows agree. A write that was waiting
 // runs after the delete.
 //
-// It is atomic against every write of the series row too (rename, re-author,
-// hold, restore, delete all hold nameIdx.series): the name and author the
-// caller passes are compared with the row under that lock, and the delete
-// follows under the same hold, so a snapshot the caller built from them (an
-// undo row) is exactly the row that is deleted. A mismatch is ErrSeriesChanged
-// and writes nothing; a held row is refused with ErrSeriesHeld by the delete.
+// It is atomic against every write of the series row too (rename, hold,
+// restore and delete all hold nameIdx.series): the name and author the caller
+// passes are compared with the row under that lock, and the delete follows under
+// the same hold, so a snapshot the caller built from them (an undo row) is
+// exactly the row that is deleted. The compare is a defensive check, not a
+// second kind of writer: nothing writes a series row's author without going
+// through a rename, so in practice a mismatch means a rename. A mismatch is
+// ErrSeriesChanged and writes nothing; a held row is refused with ErrSeriesHeld
+// by the delete.
 //
 // WHAT IT IS NOT ATOMIC AGAINST:
 //   - A writer that read the series row EARLIER and writes series_id after the
@@ -145,8 +148,8 @@ func (p *PebbleStore) deleteSeriesIfUnreferencedLocked(id int, expectName string
 	defer p.nameIdx.series.Unlock()
 
 	// The row as it is NOW, read from Pebble (the authority the rename writers
-	// write first), compared with the row the caller read and journaled. A rename
-	// or a re-author between that read and this point is a change the caller's
+	// write first), compared with the row the caller read and journaled. A change
+	// between that read and this point (in practice a rename) is one the caller's
 	// snapshot does not describe.
 	val, closer, err := p.db.Get([]byte(fmt.Sprintf("series:%d", id)))
 	if err != nil {

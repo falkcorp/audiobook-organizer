@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_denumber_op.go
-// version: 5.2.0
+// version: 5.3.0
 // guid: 3f0b6c84-52d1-4a97-9e35-c8b71d0af426
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -155,7 +155,16 @@ func (p *Plugin) seriesDenumberDef() sdk.OperationDef {
 		Timeout:         2 * time.Hour,
 		ProgressTimeout: 30 * time.Minute,
 		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
-		Run:             p.runSeriesDenumber,
+		// Writes: the apply moves books between series and creates and deletes
+		// series rows. The dispatcher's write-set gate keeps ops whose declared
+		// writes intersect from running together (an op that declares none is
+		// invisible to it in both directions), so this is what keeps
+		// dedup.series-prune, series-normalize, series-merge, series-rename,
+		// cleanup-series and repairs.apply off the same rows while it runs. The set
+		// is static per definition, so a dry run holds it too (as credits-backfill's
+		// does); it is read-only and short.
+		Writes: []sdk.Resource{sdk.ResBooks, sdk.ResSeries},
+		Run:    p.runSeriesDenumber,
 	}
 }
 
@@ -763,6 +772,27 @@ func (r *denumberRun) bookRows() []sdn.ReportRow {
 
 // describe is the operator-facing summary of a plan: the same text heads a dry
 // run and an apply that has nothing to do, so the two read alike.
+// wouldDelete is whether the apply expects to delete plan idx's emptied source.
+// It reads r.members, which the apply empties as books move, so it is asked
+// BEFORE the apply moves anything (the dry run, and the apply's expected set at
+// its start), never after:
+// every book the source holds moves (nothing held at plan time), the unfiltered
+// reference guard finds nothing else naming it, it is not a held row, and it is
+// not the base itself. The dry run's "would delete" count and the apply's own
+// delete branch both read it, so the two cannot drift: the apply summary's
+// buckets are reconciled against this number.
+func (r *denumberRun) wouldDelete(idx int) bool {
+	pl := r.plans[idx]
+	sr := r.results[idx]
+	src := r.seriesByID[pl.FromID]
+	members := len(r.members[pl.FromID])
+	return r.refCounts[pl.FromID] <= members &&
+		len(sr.Held) == 0 &&
+		len(sr.Moves) == members &&
+		!database.SeriesHeld(src) &&
+		r.groups[r.groupOf[idx]].targetID != pl.FromID
+}
+
 func (r *denumberRun) describe(params SeriesDenumberParams) string {
 	tiers := fmt.Sprintf("high=%d(%d books) medium=%d(%d books) low=%d(%d books)",
 		r.byTier[ConfidenceHigh], r.booksByTier[ConfidenceHigh],
@@ -782,7 +812,7 @@ func (r *denumberRun) describe(params SeriesDenumberParams) string {
 	// What the selected plans would do.
 	bases := map[int]struct{}{}
 	newBases := map[int]struct{}{}
-	booksMoving, heldBackByGuard := 0, 0
+	booksMoving, heldBackByGuard, wouldDeleteN := 0, 0, 0
 	byReason := map[string]int{}
 	var examples, heldBackExamples []string
 	for _, i := range r.selected {
@@ -793,6 +823,9 @@ func (r *denumberRun) describe(params SeriesDenumberParams) string {
 			newBases[gi] = struct{}{}
 		}
 		booksMoving += len(r.results[i].Moves)
+		if r.wouldDelete(i) {
+			wouldDeleteN++
+		}
 		byReason[pl.Reason]++
 		if len(examples) < 12 {
 			examples = append(examples, fmt.Sprintf("%q → %q #%d [%s]", pl.FromName, pl.IntoName, pl.Position, pl.Reason))
@@ -822,14 +855,14 @@ func (r *denumberRun) describe(params SeriesDenumberParams) string {
 			"%d plans are apply-eligible and %d of them move books; books held back, never moved, by reason: %s. "+
 			"%d numbered series have no books at all (dedup.series-prune removes empty series; this op does not). "+
 			"Selected (minBooks %d, base %q, limit %d): %d plans into %d base series (%d to be created), %d books would move, "+
-			"%d would be merged but NOT deleted (still referenced by rows this run cannot move: %s) — by evidence: %s | "+
+			"%d emptied series would be deleted, %d would be merged but NOT deleted (still referenced by rows this run cannot move: %s) — by evidence: %s | "+
 			"applying: %s | held: %s",
 		r.scanned, len(r.candidates), tiers,
 		sumCounts(r.byDemotion), strings.Join(demoted, " "),
 		len(r.plans), carrying, formatHoldCounts(heldByCode),
 		r.emptyNumbered,
 		maxInt(params.MinBooks, 1), params.BaseName, params.Limit, len(r.selected), len(bases), len(newBases), booksMoving,
-		heldBackByGuard, strings.Join(heldBackExamples, "; "),
+		wouldDeleteN, heldBackByGuard, strings.Join(heldBackExamples, "; "),
 		strings.Join(reasons, " "),
 		strings.Join(examples, "; "), strings.Join(heldExamples, "; "))
 }
@@ -1121,7 +1154,19 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 	}
 	states := map[int]*targetState{} // group index -> what the base holds, read at the first write
 	var outcomes []sdn.ReportRow
-	var merged, plansMoving, movedBooks, created, deleted, failed, stayed, refusedByGuard, targetAppeared, heldDelete int
+	var merged, plansMoving, movedBooks, created, deleted, failed, stayed, refusedByGuard, targetAppeared, heldDelete, goneByOthers int
+	// settled is the plans whose delete branch reached an outcome (deleted, kept,
+	// or already gone). A plan the dry run expected to delete that is not in it
+	// never got there: a book stayed, the plan was skipped, a write failed.
+	settled := map[int]bool{}
+	// expected is the plans the dry run counted as "would delete", fixed before
+	// the first book moves (run.members changes as they do).
+	expected := map[int]bool{}
+	for _, idx := range run.selected {
+		if run.wouldDelete(idx) {
+			expected[idx] = true
+		}
+	}
 	appliedHeld := map[sdn.HoldCode]int{}
 	receivedBase := map[int]bool{}
 
@@ -1413,7 +1458,8 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 
 		// Delete the emptied source only when every book it held moved, none was
 		// held back or skipped, the unfiltered guard confirms nothing else
-		// references it, and it is not a held row. The planning-time map is minutes
+		// references it, and it is not a held row (the expected set, from the
+		// same predicate the dry run counts with). The planning-time map is minutes
 		// old and a book may have been linked into the series since, so the
 		// references are counted AGAIN before anything is journaled (a cheap early
 		// exit: a series that is plainly still referenced costs no journal row) and
@@ -1421,20 +1467,25 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 		// counts: DeleteSeriesIfUnreferenced counts and deletes under every book
 		// write lock, so no book can be written into the series between the two.
 		// The row is read again too: the snapshot a revert recreates it from must
-		// be the row that is deleted, not the one planned, and a series renamed or
-		// re-authored since the plan is somebody's edit this run does not delete
-		// over. The delete is passed that row's name and author and compares them under
-		// the store's lock, so a rename between this read and the delete is refused
-		// too. The snapshot is journaled BEFORE the delete; a delete that then fails,
-		// or that finds the series referenced, changed or held, voids the row.
+		// be the row that is deleted, not the one planned, and a series renamed
+		// since the plan is somebody's edit this run does not delete over. The
+		// delete is passed that row's name and author and compares them under the
+		// store's lock, so a change between this read and the delete is refused too
+		// (the compare is defensive: the name and author have no writer that does
+		// not also change the name). The snapshot is journaled BEFORE the delete; a
+		// delete that then fails, or that finds the series referenced, changed or
+		// held, voids the row. A series somebody else already deleted keeps its
+		// row LIVE: the books this run moved out of it carry series_id undo rows,
+		// and a revert refuses to link a book into a series that does not exist,
+		// so the row is what lets the revert recreate the source first.
 		src := run.seriesByID[pl.FromID]
-		if movedAll && stay == 0 && len(sr.Held) == 0 && len(heldNow) == 0 && safeToDelete &&
-			len(run.members[pl.FromID]) == 0 && !database.SeriesHeld(src) {
+		if expected[idx] && movedAll && stay == 0 && len(heldNow) == 0 && len(run.members[pl.FromID]) == 0 {
 			// The lease is checked again here: this is the last write of the plan and
 			// the only one with no book loop around it to renew it.
 			if hold.Lost() {
 				return fmt.Errorf("series-denumber: scan stand-down lease lapsed before deleting series %d; stopped with %d books moved", src.ID, movedBooks)
 			}
+			settled[idx] = true
 			cur, gerr := store.GetSeriesByID(src.ID)
 			switch {
 			case gerr != nil:
@@ -1443,9 +1494,27 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 				log.Warn("series-denumber: not deleting emptied series: it could not be read again", "series", src.ID, "err", gerr)
 				outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: row not readable: " + gerr.Error()})
 			case cur == nil:
-				// Already gone: nothing to delete and nothing to journal.
-				log.Info("series-denumber: emptied series is already deleted", "series", src.ID)
-				outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: already deleted by someone else"})
+				// Already gone before this run's re-read. Nothing to delete, but the
+				// moves are journaled and their reverts need the series to exist, so
+				// the delete is journaled from the planned row, live.
+				goneByOthers++
+				status := "kept: already deleted by someone else"
+				snap, serr := undo.NewSeriesSnapshotJSON(undo.SeriesSnapshot{ID: src.ID, Name: src.Name, AuthorID: src.AuthorID})
+				srcID := src.ID
+				var jerr error
+				if serr != nil {
+					jerr = serr
+				} else {
+					jerr = record(&database.OperationChange{SeriesID: &srcID, ChangeType: undo.ChangeTypeSeriesRowDelete, OldValue: snap})
+				}
+				if jerr != nil {
+					failed++
+					status += "; its undo row was not written, so the moves out of it cannot be reverted until it is recreated by hand"
+					log.Warn("series-denumber: emptied series is already deleted and its undo row was not written", "series", src.ID, "err", jerr)
+				} else {
+					log.Info("series-denumber: emptied series is already deleted by someone else; journaled it so the moves stay revertible", "series", src.ID)
+				}
+				outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: status})
 			case cur.Name != src.Name || !sameAuthorPtr(cur.AuthorID, src.AuthorID) || database.SeriesHeld(*cur):
 				heldDelete++
 				log.Warn("series-denumber: not deleting emptied series: it changed since the plan was made",
@@ -1474,26 +1543,35 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 					}
 					switch {
 					case jerr != nil:
+						// Nothing was deleted: the series stays, and the report says so.
 						failed++
+						heldDelete++
 						log.Warn("series-denumber: not deleting emptied series: its undo row was not written", "series", src.ID, "err", jerr)
+						outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: undo row not written: " + jerr.Error()})
 					default:
 						gone, derr := deleter.DeleteSeriesIfUnreferenced(src.ID, cur.Name, cur.AuthorID)
-						if !gone {
-							// The row stays, so its undo row is voided: a revert has nothing to
-							// restore.
+						// The row stays unless it is gone (deleted here, or by someone
+						// else first: a revert recreates it either way), so its undo row
+						// is voided. A void that fails leaves a live row for a delete
+						// that did not happen: the run fails.
+						if !gone && !errors.Is(derr, database.ErrSeriesNotFound) {
 							if verr := void([]*database.OperationChange{delRow}); verr != nil {
+								failed++
 								log.Warn("series-denumber: could not void the delete's undo row", "series", src.ID, "err", verr)
 							}
 						}
 						switch {
 						case derr != nil && errors.Is(derr, database.ErrSeriesNotFound):
+							goneByOthers++
 							log.Info("series-denumber: emptied series was deleted by someone else before this run's delete", "series", src.ID)
 							outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: already deleted by someone else"})
 						case errors.Is(derr, database.ErrSeriesChanged):
-							// Renamed or re-authored after this run's re-read: the journaled
-							// snapshot would not describe the row, so nothing is deleted.
+							// Changed after this run's re-read: the journaled snapshot would
+							// not describe the row, so nothing is deleted. (The status text
+							// is the reported wording; the store's compare covers name and
+							// author together.)
 							heldDelete++
-							log.Warn("series-denumber: not deleting emptied series: it was renamed or re-authored at delete time", "series", src.ID, "planned_name", src.Name)
+							log.Warn("series-denumber: not deleting emptied series: it changed at delete time", "series", src.ID, "planned_name", src.Name)
 							outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: the series was renamed or re-authored at delete time"})
 						case errors.Is(derr, database.ErrSeriesHeld):
 							// A repair took the series between the re-read and the delete: its
@@ -1503,9 +1581,9 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 							outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: held by a repair at delete time"})
 						case derr != nil:
 							// The store would not answer "unreferenced" (a memdb that is not
-							// serving or is missing rows refuses rather than guess, the series
-							// is held, or the write failed): the series stays, the run fails,
-							// and the report says why, as it does for the count above.
+							// serving or is missing rows refuses rather than guess, or the
+							// write failed): the series stays, the run fails, and the report
+							// says why, as it does for the count above.
 							failed++
 							heldDelete++
 							log.Warn("series-denumber: DeleteSeriesIfUnreferenced failed", "series", src.ID, "err", derr)
@@ -1531,15 +1609,27 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 		}
 	}
 
+	// The dry run's "would delete" count, reconciled: every plan it expected to
+	// delete is in exactly one bucket here. deleted, heldDelete and goneByOthers
+	// are the delete branch's outcomes (a plan in settled); the rest never got
+	// there (a book stayed, the plan was skipped, a write failed).
+	expectedDeletes, notEmptied := len(expected), 0
+	for idx := range expected {
+		if !settled[idx] {
+			notEmptied++
+		}
+	}
 	heldPlan, _ := run.heldByCode()
 	summary := fmt.Sprintf(
 		"series-denumber: %d series scanned, %d of %d selected plans moved at least one book, %d books moved into %d base series "+
 			"(%d base series created, %d emptied series deleted, %d emptied series NOT deleted because a book or a change appeared since the plan, "+
 			"%d plans' sources kept by the reference guard, %d plans skipped because the base appeared mid-run, "+
+			"against %d the dry run expected to delete: %d emptied series already deleted by someone else, %d sources not emptied or skipped before their delete, "+
 			"%d books skipped at apply time: %s, failed %d) | held at plan time over every eligible plan, by reason: %s | "+
 			"demoted to low, never applied: %s | undo: revert operation %s",
 		run.scanned, plansMoving, len(run.selected), movedBooks, len(receivedBase),
 		created, deleted, heldDelete, refusedByGuard, targetAppeared,
+		expectedDeletes, goneByOthers, notEmptied,
 		stayed, formatHoldCounts(appliedHeld), failed,
 		formatHoldCounts(heldPlan), run.demotedSummary(), opID)
 	_ = reporter.Log(slog.LevelInfo, summary)

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.100.1
+// version: 1.101.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-11-16
+// last-edited: 2026-11-18
 
 package audiobooks
 
@@ -392,6 +392,11 @@ type RevertResult struct {
 	// never silent. A marker of the operation being reverted that has no row is
 	// stamped reverted here too and counted.
 	OrphanMarkers int `json:"orphan_markers,omitempty"`
+	// SeriesKept counts series_create rows whose series the revert did NOT
+	// delete: it was renamed, held, referenced by a book or already gone by the
+	// time the revert reached it. The row counts Restored (a retry could only
+	// delete a series that is somebody else's now); Kept names each one.
+	SeriesKept int `json:"series_kept,omitempty"`
 	// BooksLeftOut counts collection and playlist rows of a retire's carry
 	// whose retired book was NOT put back: it was itself a survivor, listed
 	// only for retires that have all been reverted since, so it never belonged
@@ -462,6 +467,9 @@ func (r *RevertResult) Summary() string {
 	}
 	if r.ListsEditedByHand > 0 {
 		fmt.Fprintf(&b, "; %d list position(s) restored beside books arranged by hand since, where the records could not confirm the slot (see kept)", r.ListsEditedByHand)
+	}
+	if r.SeriesKept > 0 {
+		fmt.Fprintf(&b, "; %d created series kept because they are no longer the operation's to delete (see kept)", r.SeriesKept)
 	}
 	if r.SurvivorsReleased > 0 {
 		fmt.Fprintf(&b, "; %d survivor(s) taken out of a list they were left in (see kept)", r.SurvivorsReleased)
@@ -884,6 +892,14 @@ func (rs *RevertService) revertLoaded(operationID string, scope *revertScope, ch
 			deferredMarkers = append(deferredMarkers, c)
 			plan.Record(c, nil)
 			continue
+		}
+		if kept, ok := errors.AsType[*seriesKept](err); ok {
+			// The row is done: the series is not the operation's to delete. Said
+			// so, never silently.
+			result.SeriesKept++
+			result.Kept = append(result.Kept, RevertNote{Text: fmt.Sprintf("change %s: %s", c.ID, kept.detail)})
+			revertLog.Warn("revert of change %s: %s", c.ID, kept.detail)
+			err = nil
 		}
 		if released, ok := errors.AsType[*survivorReleased](err); ok {
 			// The book was already back; what an interrupted earlier revert of
@@ -2916,65 +2932,47 @@ func (rs *RevertService) revertSeriesRowDelete(c *database.OperationChange) erro
 // revertSeriesCreate removes the series an operation created, by the id the row
 // journaled, and only while it is still that series (same name and author), is
 // not held, and no book names it. Rows are reverted newest first, so the books
-// the operation moved into it are put back before this runs. Anything else
-// keeps the row and succeeds: a series somebody renamed or filled is theirs.
+// the operation moved into it are put back before this runs.
+//
+// The check and the delete are ONE store call (DeleteSeriesIfUnreferenced counts
+// the references and deletes under every book write lock): a count here followed
+// by a plain delete would let a book be linked into the series between the two
+// and be left naming a deleted id. A series that is renamed, held, referenced or
+// already gone is somebody else's by now; it is kept, and the row is reported
+// kept (seriesKept) instead of passing silently. A store without the conditional
+// delete fails the row closed rather than fall back to count-then-delete.
 func (rs *RevertService) revertSeriesCreate(c *database.OperationChange) error {
 	snap, err := undo.DecodeSeriesCreate(c)
 	if err != nil {
 		return err
 	}
-	cur, err := rs.db.GetSeriesByID(snap.ID)
-	if err != nil {
-		return fmt.Errorf("look up created series %d: %w", snap.ID, err)
-	}
-	if cur == nil {
-		return nil // already gone
-	}
-	if cur.Name != snap.Name || !sameAuthorPtr(cur.AuthorID, snap.AuthorID) {
-		revertLog.Info("revert kept series %d: renamed since the operation created it", cur.ID)
-		return nil
-	}
-	if database.SeriesHeld(*cur) {
-		revertLog.Info("revert kept series %d: held", cur.ID)
-		return nil
-	}
-	counter, ok := database.AsCapability[database.SeriesBookRefCounter](rs.db)
+	deleter, ok := database.AsCapability[database.SeriesUnreferencedDeleter](rs.db)
 	if !ok {
-		return fmt.Errorf("revert created series %d: this store cannot count its books", cur.ID)
+		return fmt.Errorf("revert created series %d: this store cannot check and delete a series in one step", snap.ID)
 	}
-	n, err := counter.GetSeriesBookRefCount(cur.ID)
-	if err != nil {
-		return fmt.Errorf("count books of created series %d: %w", cur.ID, err)
-	}
-	if n > 0 {
-		revertLog.Info("revert kept series %d: still holds %d books", cur.ID, n)
+	deleted, err := deleter.DeleteSeriesIfUnreferenced(snap.ID, snap.Name, snap.AuthorID)
+	switch {
+	case err == nil && deleted:
 		return nil
+	case err == nil:
+		return &seriesKept{detail: fmt.Sprintf("created series %d (%q) kept: a book still references it", snap.ID, snap.Name)}
+	case errors.Is(err, database.ErrSeriesNotFound):
+		return &seriesKept{detail: fmt.Sprintf("created series %d (%q) kept: it no longer exists", snap.ID, snap.Name)}
+	case errors.Is(err, database.ErrSeriesChanged):
+		return &seriesKept{detail: fmt.Sprintf("created series %d (%q) kept: it was renamed or given another author since the operation created it", snap.ID, snap.Name)}
+	case errors.Is(err, database.ErrSeriesHeld):
+		return &seriesKept{detail: fmt.Sprintf("created series %d (%q) kept: it is held by a repair", snap.ID, snap.Name)}
 	}
-	deleter, ok := database.AsCapability[seriesDeleter](rs.db)
-	if !ok {
-		return fmt.Errorf("revert created series %d: this store cannot delete a series", cur.ID)
-	}
-	if err := deleter.DeleteSeries(cur.ID); err != nil {
-		if errors.Is(err, database.ErrSeriesHeld) {
-			return nil
-		}
-		return fmt.Errorf("delete created series %d: %w", cur.ID, err)
-	}
-	return nil
+	return fmt.Errorf("delete created series %d: %w", snap.ID, err)
 }
 
-// seriesDeleter is the one series write revertSeriesCreate needs; revertServiceStore
-// is narrow on purpose, so it is resolved as a capability.
-type seriesDeleter interface {
-	DeleteSeries(id int) error
-}
+// seriesKept is what revertSeriesCreate returns when it left the series in
+// place because it is no longer the operation's to delete. The row counts as
+// restored (a retry could only delete somebody else's series);
+// RevertOperation counts it in RevertResult.SeriesKept and names it in Kept.
+type seriesKept struct{ detail string }
 
-func sameAuthorPtr(a, b *int) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
-}
+func (k *seriesKept) Error() string { return k.detail }
 
 // renameRefusal turns a RenameSeriesIf refusal into the undo.ReferentError
 // carrying the reason the preflight gives for the same state. Any other error

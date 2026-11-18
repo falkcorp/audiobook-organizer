@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_denumber_review3_apply_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9b3d7e20-4c16-4a58-b1e9-6f0d2a85c734
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -384,8 +384,11 @@ func TestSeriesDenumber_Round3_M3_ABookWrittenIntoTheSourceAtDeleteTimeKeepsTheS
 	}
 }
 
-// The same series, deleted by someone else between this run's read and its
-// delete: nothing to delete, not a failure, and no stranded journal row.
+// The same series, deleted by someone else between this run's re-read and its
+// delete: nothing to delete, not a failure. The undo row the run journaled
+// stays LIVE: it describes a row that is gone, and a revert that finds the
+// books' series_id rows needs that series back (it refuses to link a book into
+// a series that does not exist), so the row is what lets the moves be undone.
 func TestSeriesDenumber_Round3_M3_ASourceDeletedByAnotherWriterBeforeTheDeleteIsKept(t *testing.T) {
 	l := oneRunLib(t)
 	l.refsAtDelete = func(id int) (int, error) {
@@ -398,8 +401,12 @@ func TestSeriesDenumber_Round3_M3_ASourceDeletedByAnotherWriterBeforeTheDeleteIs
 	l.mustRun(`{"apply": true}`)
 
 	rows := seriesRowDeleteRows(l)
-	if len(rows) != 1 || !rows[0].Voided {
-		t.Errorf("want one voided series_row_delete row, got %+v", rows)
+	if len(rows) != 1 || rows[0].Voided || rows[0].RevertedAt != nil {
+		t.Fatalf("want one LIVE series_row_delete row (the revert recreates the series from it), got %+v", rows)
+	}
+	snap, err := undo.DecodeSeriesRowDelete(&rows[0])
+	if err != nil || snap.ID != 11 || snap.Name != "Court of Owls 05" || snap.AuthorID == nil || *snap.AuthorID != denumberAuthor {
+		t.Errorf("the live row's snapshot = %+v (%v), want series 11 \"Court of Owls 05\" of author %d", snap, err, denumberAuthor)
 	}
 	if applied := readFile(t, l.reportPath+".applied"); !strings.Contains(applied, "kept: already deleted by someone else") {
 		t.Errorf("the outcome report does not say the series was already gone:\n%s", applied)
