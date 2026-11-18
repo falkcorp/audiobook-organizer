@@ -1,7 +1,7 @@
 // file: pkg/ops/effects.go
-// version: 1.4.4
+// version: 1.4.5
 // guid: 56bbb3ad-7cb3-4962-a476-26ea63bdc9ba
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package ops
 
@@ -75,6 +75,13 @@ const (
 	// provenance capture/export kinds and the quarantine path write. No F5-06
 	// kind uses it; the siblings that write it switch to it.
 	ResFileProvenance Resource = "file_provenance"
+	// ResAuxStores is books' two auxiliary Pebble stores: the AI scan database
+	// and the OpenLibrary cache, each opened apart from the main store (their
+	// own compaction counters, internal/plugins/maintenance StoreOptimizer).
+	// Only books.maintenance.aux-store-compact (F5-03) writes it, by compacting
+	// them. It is not ResMetadataCache, which is the cached lookup rows, nor the
+	// main store's own resources.
+	ResAuxStores Resource = "aux_stores"
 )
 
 // deletePrefix marks a Resource built by Deletes.

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/db.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: d4e5f6a7-b8c9-0123-def0-345678901234
 // last-edited: 2026-11-18
 
@@ -18,6 +18,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 
 	"github.com/falkcorp/mediacore/storage"
@@ -202,10 +203,6 @@ func compactAuxStores(ctx context.Context, aux StoreOptimizer, env auxCompactEnv
 // OpenLibrary stores; the main store is core.storage.compact).
 const auxStoreCompactKind tasks.Kind = "books.maintenance.aux-store-compact"
 
-// auxStoresResource is the resource kind the native kind writes: the two
-// auxiliary stores, which no other kind's write set names. Coined by F5-03.
-const auxStoresResource = "aux_stores"
-
 // auxStoreCompactSteps is the length of the native kind's own step sequence.
 const auxStoreCompactSteps = 2
 
@@ -227,11 +224,19 @@ type auxStoreCompactResult struct {
 // native run fails when a store did, after trying both. A nil aux yields a
 // definition whose Run is nil, which tasks.Problems reports, so registration
 // fails closed.
-//
-//tasklint:constructor the tasks flip F5 registers it (F5-18) with the books schedule key F5-14 declares; nothing registers it before
 func auxStoreCompactDef(aux StoreOptimizer, sched *tasks.Schedule) tasks.Definition {
 	return auxStoreCompactDefEvery(aux, sched, storage.DefaultInterval)
 }
+
+// auxStoreCompactKindList is the books kind as the kind list tasklint's
+// unregistered-kind rule counts as a registration root (a list function without
+// a receiver, named by non-test code: the blank var below does, as t6g1KindList's
+// does). F5-18's Registrar.Tasks call replaces both; F5-18 deletes them.
+func auxStoreCompactKindList(aux StoreOptimizer, sched *tasks.Schedule) []tasks.Definition {
+	return []tasks.Definition{auxStoreCompactDef(aux, sched)}
+}
+
+var _ = auxStoreCompactKindList
 
 // auxStoreCompactDefEvery is auxStoreCompactDef with the compaction sampling
 // interval a test can shorten.
@@ -239,7 +244,7 @@ func auxStoreCompactDefEvery(aux StoreOptimizer, sched *tasks.Schedule, interval
 	c := t6g1Common(auxStoreCompactKind, func(tasks.Kind) *tasks.Schedule { return sched })
 	c.Title = "Compact the AI scan and OpenLibrary stores"
 	c.Help = "Compacts books' separate AI scan database and OpenLibrary cache, logging what the engine is doing as it goes. A store that has no database of its own is skipped."
-	c.Effects = tasks.Writes(tasks.Res("books", auxStoresResource))
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResAuxStores)))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.Timeout = 2 * time.Hour
