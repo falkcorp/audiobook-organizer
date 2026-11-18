@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/step.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a9d5f13e-7c02-4b68-8e41-35b0c6d7e2f8
 // last-edited: 2026-11-18
 
@@ -65,6 +65,11 @@ type Config struct {
 	// clock is that date's midnight in this zone. Required, not defaulted, so a
 	// build can never silently read the date as UTC.
 	Location *time.Location
+	// StampAt is the time every imported Requires stamp carries. HEAD stored the
+	// dependency revision a completion was recorded at, never the time, so the
+	// stamp has no source time; a fixed instant (the migration's, chosen once by
+	// the caller) keeps a resumed boot's stamps equal to an uninterrupted one's.
+	StampAt time.Time
 	// Logger receives one line per quarantined run (its ID and a fixed class,
 	// never a value). nil discards.
 	Logger *slog.Logger
@@ -81,12 +86,13 @@ type Migration struct {
 
 	scanKey tasks.Key
 	loc     *time.Location
+	stampAt time.Time
 
 	reconMu   sync.Mutex
 	reconDone bool
 
 	runs, runsQuarantined, rowsQuarantined, derived, deferred, orphans atomic.Int64
-	clocks, markers, buckets, dropped                                  atomic.Int64
+	clocks, markers, buckets, stamps, dropped                          atomic.Int64
 }
 
 // New returns the data migration for the step with ID id.
@@ -119,6 +125,8 @@ func New(cfg Config, id string, raisesLevel int, after []storage.StepRef) (datam
 		return datamigrate.DataMigration{}, errors.New("m4: Config.Reconcile is HEAD's ReconcileOpsV3WithV2 (5T.8.3 order step 1)")
 	case cfg.ScanStandDownKey == "":
 		return datamigrate.DataMigration{}, errors.New("m4: Config.ScanStandDownKey is the scan kinds' stand-down key")
+	case cfg.StampAt.IsZero():
+		return datamigrate.DataMigration{}, errors.New("m4: Config.StampAt is the time the imported Requires stamps carry")
 	case cfg.Location == nil:
 		return datamigrate.DataMigration{}, errors.New("m4: Config.Location is the zone HEAD wrote the maintenance window's date in")
 	case id == "":
@@ -128,7 +136,7 @@ func New(cfg Config, id string, raisesLevel int, after []storage.StepRef) (datam
 	case len(after) == 0:
 		return datamigrate.DataMigration{}, errors.New("m4: after is books' level step")
 	}
-	m := &Migration{imp: cfg.Importer, legacy: cfg.Legacy, recon: cfg.Reconcile, logger: cfg.Logger, scanKey: cfg.ScanStandDownKey, loc: cfg.Location}
+	m := &Migration{imp: cfg.Importer, legacy: cfg.Legacy, recon: cfg.Reconcile, logger: cfg.Logger, scanKey: cfg.ScanStandDownKey, loc: cfg.Location, stampAt: cfg.StampAt.UTC()}
 	if m.logger == nil {
 		m.logger = slog.New(slog.DiscardHandler)
 	}
@@ -190,6 +198,10 @@ func (m *Migration) Step(ctx context.Context, kv storage.KV, w *datamigrate.Step
 		return m.stepStandDown(ctx, kv, w)
 	case family == prefixBatch:
 		return m.stepBucket(ctx, kv, w)
+	case family == prefixCompletion:
+		return m.stepSubjectStamps(ctx, kv, w)
+	case family == prefixDeprev:
+		return m.stepDeprev(ctx, kv, w)
 	}
 	// A row a run owns, visited before (or without) its run's driver.
 	_, err := m.legacy().Get(ctx, []byte(prefixRun+id))
@@ -333,8 +345,8 @@ func scanRows(ctx context.Context, r storage.Reader, prefix string) ([]storage.K
 // resumed after a crash reports only what it stepped.
 func (m *Migration) Verify(ctx context.Context, r storage.Reader) (datamigrate.VerifyReport, error) {
 	rep := datamigrate.VerifyReport{
-		Read:        m.runs.Load() + m.runsQuarantined.Load() + m.clocks.Load() + m.markers.Load() + m.buckets.Load() + m.dropped.Load(),
-		Written:     m.runs.Load() + m.clocks.Load() + m.markers.Load() + m.buckets.Load(),
+		Read:        m.runs.Load() + m.runsQuarantined.Load() + m.clocks.Load() + m.markers.Load() + m.buckets.Load() + m.stamps.Load() + m.dropped.Load(),
+		Written:     m.runs.Load() + m.clocks.Load() + m.markers.Load() + m.buckets.Load() + m.stamps.Load(),
 		Quarantined: m.runsQuarantined.Load() + m.rowsQuarantined.Load() + m.orphans.Load(),
 	}
 	for _, rg := range SourceRanges() {

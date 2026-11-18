@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/head.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3b7e1c94-d2a6-4f08-95b1-6c0e8a47d213
 // last-edited: 2026-11-18
 
@@ -84,7 +84,7 @@ var derived = []string{prefixIxDef, prefixIxDone, prefixIxParent, prefixIxState,
 
 // otherPrefixes are the source families that belong to no run and are not
 // derived: the clock families and the debounce buckets.
-var otherPrefixes = []string{prefixSched, settingTick, prefixBatch}
+var otherPrefixes = []string{prefixSched, settingTick, prefixBatch, prefixCompletion, prefixDeprev}
 
 // SourcePrefixes is every family prefix the step's Source covers, in key
 // order. F5-18 retires exactly these claims and the sub-claims SourceKeys
