@@ -1,5 +1,5 @@
 // file: internal/applygate/titlecompare_scan_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0c4e8a71-d395-4b26-9f17-6a8b3e5d2c40
 // last-edited: 2026-11-18
 
@@ -25,9 +25,12 @@ import (
 // over strings with the characters the expressions treat specially.
 
 var (
-	refTitleTokenRe    = regexp.MustCompile(`\d+\.\d+|[\p{L}\p{N}]+`)
-	refRomanRe         = regexp.MustCompile(`^(?:x{0,3})(?:ix|iv|v?i{0,3})$`)
-	refOrdinalDigitRe  = regexp.MustCompile(`^(\d+)(?:st|nd|rd|th)$`)
+	refTitleTokenRe   = regexp.MustCompile(`\d+\.\d+|[\p{L}\p{N}]+`)
+	refRomanRe        = regexp.MustCompile(`^(?:x{0,3})(?:ix|iv|v?i{0,3})$`)
+	refOrdinalDigitRe = regexp.MustCompile(`^(\d+)(?:st|nd|rd|th)$`)
+	// segSplitRe is the expression splitSegments replaced (it was segSplitRe in
+	// evidence.go, behind titleforms, titlecompare and booknum).
+	segSplitRe         = regexp.MustCompile(`\s*(?::|\s-\s|\s–\s|\s—\s|[(\[\])])\s*`)
 	refSegNormReplacer = func(s string) string {
 		return strings.NewReplacer("&", " and ", "#", " ", "'", "", "’", "").Replace(s)
 	}
