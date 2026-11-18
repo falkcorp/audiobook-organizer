@@ -1,5 +1,5 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.28.0
+// version: 1.28.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-11-18
 
@@ -31,7 +31,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
-	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
@@ -811,15 +810,18 @@ func FindUntrackedFiles(ctx context.Context, store Store, knownPaths map[string]
 // row at its old path, at the matched file, and records OperationChanges. Nothing
 // moves on disk and no row is deleted.
 //
-// Per match, in this order: read and check everything (planFileRow: no write),
-// journal the book's path change and the row's repoint, repoint the row, then
-// write the book's path. A refusal before the first write leaves the match
-// untouched. If the book write fails after the row moved, the row is put back
-// (rollBack) so the match is all or nothing; a rollback that itself fails is
-// reported by name in the result's errors (the row is then at the matched file
-// while the book is at the old path, and a rerun of the match finishes it:
-// planFileRow sees the row already there). A match that is skipped or fails is
-// never counted as applied.
+// Per match (applyMatch), in this order: read and check everything with no write
+// (the book is not in the trash, the matched path is a regular file, planFileRow
+// finds exactly one row to repoint), journal the book's path change and the row's
+// repoint, repoint the row, then write the book's path. A refusal before the
+// first journal row leaves the match untouched. If a later step fails, the match
+// is taken back: the row is put back when it had moved, and the journal rows are
+// voided when the book is confirmed not to hold the matched path, so a revert of
+// this operation cannot act on a write that never landed. A rollback that itself
+// fails is reported by name in the result's errors, and nothing is voided (the
+// row is at the matched file while the book is at the old path; a rerun of the
+// match finishes it, and journals the row's repoint again so the rerun reverts on
+// its own). A match that is skipped or fails is never counted as applied.
 func ExecuteReconcile(ctx context.Context, store Store, operationID string, saveResult SaveResultFunc, matches []ReconcileApplyItem, log logger.Logger) error {
 	result := &ReconcileApplyResult{
 		Errors: []string{},
@@ -856,105 +858,12 @@ func ExecuteReconcile(ctx context.Context, store Store, operationID string, save
 
 		log.UpdateProgress(i+1, total, fmt.Sprintf("Updating %d/%d (%s) %s", i+1, total, fmtPct(i+1, total), m.BookID))
 
-		book, err := store.GetBookByID(m.BookID)
-		if err != nil || book == nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("book %s: not found", m.BookID))
-			result.Skipped++
-			continue
-		}
-
-		// Verify the new path exists
-		newInfo, err := os.Stat(m.NewPath)
-		if err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("book %s: new path does not exist: %s", m.BookID, m.NewPath))
-			result.Skipped++
-			continue
-		}
-
-		oldPath := book.FilePath
-
-		// The book's file row at the old path moves with it. Planned (and
-		// refused) before anything is journaled or written.
-		move, err := planFileRow(store, book, m.NewPath, newInfo.Size())
-		if err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("book %s: not applied, nothing written: %v", m.BookID, err))
-			result.Skipped++
-			continue
-		}
-
-		// Record the change for undo support
-		change := &database.OperationChange{
-			ID:          ulid.Make().String(),
-			OperationID: operationID,
-			BookID:      book.ID,
-			// book_path_update, not the legacy "file_path_update" this apply
-			// journaled until 2026-11-18: that type is one the revert engine
-			// cannot reverse, so with the file row's repoint row (which it CAN
-			// reverse) beside it a revert would put the row back and leave the
-			// book at the matched file. With both reversible, reverting the
-			// operation restores the book and its row together.
-			ChangeType: undo.ChangeTypeBookPathUpdate,
-			FieldName:  "file_path",
-			OldValue:   oldPath,
-			NewValue:   m.NewPath,
-		}
-		if err := database.RecordOperationChange(store, change); err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("book %s: failed to record change: %v", m.BookID, err))
-			result.Skipped++
-			continue
-		}
-
-		if move != nil {
-			if err := database.RecordOperationChange(store, move.journalRow(operationID)); err != nil {
-				result.Errors = append(result.Errors, fmt.Sprintf("book %s: failed to record the file row change: %v", m.BookID, err))
-				result.Skipped++
-				continue
-			}
-			if err := move.forward(); err != nil {
-				result.Errors = append(result.Errors, fmt.Sprintf("book %s: file row %s not repointed, the book is left at %s: %v", m.BookID, move.fileID, oldPath, err))
-				result.Skipped++
-				continue
-			}
-		}
-
-		// Update the book's file path through ModifyBook: FilePath alone is set
-		// on the row as it is under the book's write lock, so a column another
-		// writer committed after the GetBookByID above (the os.Stat and the
-		// change record sit between them) is not reverted (audit A1#15). The
-		// path it replaces must still be the one the row move and the journal
-		// were made from.
-		written, err := store.ModifyBook(book.ID, func(b *database.Book) error {
-			if b.FilePath == m.NewPath {
-				return database.ErrSkipBookWrite
-			}
-			if b.FilePath != oldPath {
-				return fmt.Errorf("it now points at %q, not %q", b.FilePath, oldPath)
-			}
-			b.FilePath = m.NewPath
-			return nil
-		})
-		if err == nil && written == nil {
-			err = errors.New("it vanished before its path could be updated")
-		}
-		if err != nil {
-			msg := fmt.Sprintf("book %s: failed to update: %v", m.BookID, err)
-			if move != nil {
-				if rerr := move.rollBack(); rerr != nil {
-					msg += fmt.Sprintf("; file row %s is left at %s and could not be put back to %s (%v), rerun the match to finish it",
-						move.fileID, m.NewPath, oldPath, rerr)
-				} else {
-					msg += fmt.Sprintf("; file row %s put back to %s", move.fileID, oldPath)
-				}
-			}
+		// One match, whole or not at all (applyMatch): a match that fails is
+		// reported and counted as skipped, never applied.
+		if msg := applyMatch(store, operationID, m, log); msg != "" {
 			result.Errors = append(result.Errors, msg)
 			result.Skipped++
 			continue
-		}
-
-		if move != nil {
-			log.Info("Updated book %s and its file row %s: %s -> %s", book.ID, move.fileID, oldPath, m.NewPath)
-		} else {
-			log.Info("Updated book %s: %s -> %s", book.ID, oldPath, m.NewPath)
 		}
 		result.Applied++
 	}

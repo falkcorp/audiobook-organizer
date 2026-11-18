@@ -1,5 +1,5 @@
 // file: internal/reconcile/apply_file_rows_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: c2e84b17-5d93-4a06-b8f1-7e3a90d4c625
 // last-edited: 2026-11-18
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -142,6 +143,28 @@ func (f *applyFixture) journal(operationID string) map[string][]*database.Operat
 	return out
 }
 
+// requireRows fails unless the operation's journal holds exactly total change
+// rows of which exactly live are not voided. A voided row is rewritten under its
+// id, so a failure that takes its rows back keeps total and drops live.
+func (f *applyFixture) requireRows(operationID string, total, live int) {
+	f.t.Helper()
+	all, err := f.ps.GetOperationChanges(operationID)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	n := 0
+	for _, c := range all {
+		if !c.Voided {
+			n++
+		} else if c.RevertedAt == nil {
+			f.t.Errorf("row %s is voided without RevertedAt, so a revert would still act on it", c.ID)
+		}
+	}
+	if len(all) != total || n != live {
+		f.t.Errorf("operation %s journal has %d rows, %d live; want %d rows, %d live", operationID, len(all), n, total, live)
+	}
+}
+
 // requireUntouched fails unless the book and its rows are exactly as they were
 // created: the match was refused before anything was written.
 func (f *applyFixture) requireUntouched(bookID, oldPath string, rowsBefore []database.BookFile) {
@@ -263,6 +286,12 @@ func TestExecuteReconcile_RepointsTheBookFileRowWithTheBook(t *testing.T) {
 	reverted := f.rows(id)
 	if len(reverted) != 1 || reverted[0].ID != row.ID || reverted[0].FilePath != old || !reverted[0].Missing || reverted[0].FileHash != applyOldHash {
 		t.Errorf("after the revert the row is %+v, want the original %+v back", reverted, row)
+	}
+	if got := f.atPath(f.newPath); len(got) != 0 {
+		t.Errorf("after the revert the found file is still held by %v, want nobody", got)
+	}
+	if got := f.atPath(old); len(got) != 1 || got[0] != id {
+		t.Errorf("after the revert the old path is held by %v, want the book %s", got, id)
 	}
 }
 
@@ -448,6 +477,15 @@ type failingStore struct {
 	// writer changing the book between the apply's read and its write.
 	beforeBookCall func()
 	bookCalls      int
+	// failJournal, when set, fails the recording of a (live) change row of that
+	// type: the journal write itself failing.
+	failJournal string
+	// bookLandsThenErr makes ModifyBook write and then report a failure: a
+	// write that landed whose error reached the caller anyway.
+	bookLandsThenErr bool
+	// unsyncedRowCalls are the ModifyBookFile call indexes (0 is the first) that
+	// write for real and then report ErrBookFileDurabilityUnknown.
+	unsyncedRowCalls map[int]bool
 }
 
 var errInjected = errors.New("injected store failure")
@@ -463,6 +501,12 @@ func (s *failingStore) ModifyBook(id string, fn func(*database.Book) error) (*da
 		hook()
 	}
 	if fail {
+		return nil, errInjected
+	}
+	if s.bookLandsThenErr {
+		if _, err := s.PebbleStore.ModifyBook(id, fn); err != nil {
+			return nil, err
+		}
 		return nil, errInjected
 	}
 	return s.PebbleStore.ModifyBook(id, fn)
@@ -481,7 +525,20 @@ func (s *failingStore) ModifyBookFile(bookID, fileID string, fn func(*database.B
 	if after >= 0 && call >= after {
 		return nil, errInjected
 	}
+	if s.unsyncedRowCalls[call] {
+		if _, err := s.PebbleStore.ModifyBookFile(bookID, fileID, fn); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: injected", database.ErrBookFileDurabilityUnknown)
+	}
 	return s.PebbleStore.ModifyBookFile(bookID, fileID, fn)
+}
+
+func (s *failingStore) CreateOperationChange(c *database.OperationChange) error {
+	if s.failJournal != "" && c.ChangeType == s.failJournal && !c.Voided {
+		return errInjected
+	}
+	return s.PebbleStore.CreateOperationChange(c)
 }
 
 func (s *failingStore) heal() {
@@ -510,6 +567,7 @@ func TestExecuteReconcile_BookWriteFailureRestoresTheRowAndARerunApplies(t *test
 		t.Errorf("errors = %q, want the row reported as put back", res.Errors)
 	}
 	f.requireUntouched(id, old, before)
+	f.requireRows("op-1", 2, 0) // the failed match's rows are taken back, so no revert acts on them
 	if got := f.atPath(f.newPath); len(got) != 0 {
 		t.Errorf("the found file is held by %v after the rollback, want nobody", got)
 	}
@@ -549,6 +607,7 @@ func TestExecuteReconcile_RollbackFailureIsReportedAndARerunFinishesTheMatch(t *
 		t.Errorf("book path = %q, want it left at %q", got, old)
 	}
 	f.requireRepointedRow(id, row) // the stranded state: the row is at the found file
+	f.requireRows("op-1", 2, 2)    // the row landed, so its repoint row and the book's stay live
 
 	store.heal()
 	res, err = f.apply(store, "op-2", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
@@ -559,8 +618,11 @@ func TestExecuteReconcile_RollbackFailureIsReportedAndARerunFinishesTheMatch(t *
 		t.Errorf("book path = %q, want %q", got, f.newPath)
 	}
 	f.requireRepointedRow(id, row)
-	if n := len(f.journal("op-2")[database.ChangeTypeBookFileRepoint]); n != 0 {
-		t.Errorf("the rerun journaled %d repoint rows for a row it did not move", n)
+	// The rerun moved no row, but it journals the earlier operation's repoint as
+	// a twin so that reverting the rerun alone restores book and row together
+	// (see TestExecuteReconcile_ARerunThatFinishesAStrandedMatchRevertsOnItsOwn).
+	if n := len(f.journal("op-2")[database.ChangeTypeBookFileRepoint]); n != 1 {
+		t.Errorf("the rerun journaled %d repoint rows, want the one twin row", n)
 	}
 }
 
@@ -581,6 +643,7 @@ func TestExecuteReconcile_RowWriteFailureLeavesTheBookAlone(t *testing.T) {
 		t.Errorf("errors = %q, want the row reported as not repointed", res.Errors)
 	}
 	f.requireUntouched(id, old, before)
+	f.requireRows("op-1", 2, 0)
 }
 
 // The row is repointed only while it still is where the apply read it. Another
@@ -613,6 +676,7 @@ func TestExecuteReconcile_ARowChangedUnderTheApplyIsNotRepointed(t *testing.T) {
 	if len(rows) != 1 || rows[0].FilePath != old || rows[0].Missing {
 		t.Errorf("rows = %+v, want the row left where the other writer put it", rows)
 	}
+	f.requireRows("op-1", 2, 0)
 }
 
 // One refused match does not stop the rest: the good match is applied whole.
@@ -669,4 +733,365 @@ func TestExecuteReconcile_ABookRepointedUnderTheApplyIsNotOverwrittenAndItsRowIs
 		t.Errorf("errors = %q, want the changed path and the restored row named", res.Errors)
 	}
 	f.requireUntouched(id, theirs, before)
+	f.requireRows("op-1", 2, 0) // the refusal saw the other writer's path: nothing of this match landed
+}
+
+// The row's own journal write failing takes back the book's row, which was
+// recorded first, and writes nothing else.
+func TestExecuteReconcile_RowJournalFailureVoidsTheBookRow(t *testing.T) {
+	f := newApplyFixture(t)
+	old := f.missingPath("Year One.m4b")
+	id := f.book("Batman: Year One", old)
+	f.row(id, old)
+	before := f.rows(id)
+	store := &failingStore{PebbleStore: f.ps, failRowAfter: -1, failJournal: database.ChangeTypeBookFileRepoint}
+
+	res, err := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+	if err == nil || res.Applied != 0 || res.Skipped != 1 {
+		t.Fatalf("err = %v, result %+v, want refused", err, res)
+	}
+	if len(res.Errors) != 1 || !strings.Contains(res.Errors[0], "failed to record the file row change") || !strings.Contains(res.Errors[0], "voided") {
+		t.Errorf("errors = %q, want the journal failure and the voiding named", res.Errors)
+	}
+	f.requireUntouched(id, old, before)
+	f.requireRows("op-1", 1, 0)
+}
+
+// A book with no rows has only the book's row, and a failed book write takes it
+// back like any other.
+func TestExecuteReconcile_ABookWithNoRowsVoidsItsJournalRowWhenTheBookWriteFails(t *testing.T) {
+	f := newApplyFixture(t)
+	old := f.missingPath("Year One.m4b")
+	id := f.book("Batman: Year One", old)
+	store := &failingStore{PebbleStore: f.ps, failBook: true, failRowAfter: -1}
+
+	res, err := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+	if err == nil || res.Applied != 0 || res.Skipped != 1 {
+		t.Fatalf("err = %v, result %+v, want a failed match", err, res)
+	}
+	if got := f.bookPath(id); got != old {
+		t.Errorf("book path = %q, want %q", got, old)
+	}
+	f.requireRows("op-1", 1, 0)
+}
+
+// ModifyBook's error alone cannot tell a failure from a write that landed. When
+// the book turns out to hold the matched path, nothing is voided: the rows
+// describe a write that happened, and a revert must be able to undo it.
+func TestExecuteReconcile_ABookWriteThatLandedButReportedAnErrorKeepsItsRows(t *testing.T) {
+	f := newApplyFixture(t)
+	old := f.missingPath("Year One.m4b")
+	id := f.book("Batman: Year One", old)
+	f.row(id, old)
+	store := &failingStore{PebbleStore: f.ps, bookLandsThenErr: true, failRowAfter: -1}
+
+	res, err := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+	if err == nil || res.Applied != 0 || res.Skipped != 1 {
+		t.Fatalf("err = %v, result %+v, want reported as failed", err, res)
+	}
+	if len(res.Errors) != 1 || !strings.Contains(res.Errors[0], "could not be confirmed unwritten") {
+		t.Errorf("errors = %q, want the unconfirmed state named", res.Errors)
+	}
+	if got := f.bookPath(id); got != f.newPath {
+		t.Fatalf("book path = %q, want the write that landed, %q", got, f.newPath)
+	}
+	f.requireRows("op-1", 2, 2)
+}
+
+// A row write that landed but whose fsync failed is applied, not failed: the
+// match goes on, its rows stay live, and the match counts as applied.
+func TestExecuteReconcile_ARowWriteWhoseFsyncFailedIsApplied(t *testing.T) {
+	f := newApplyFixture(t)
+	old := f.missingPath("Year One.m4b")
+	id := f.book("Batman: Year One", old)
+	row := f.row(id, old)
+	store := &failingStore{PebbleStore: f.ps, failRowAfter: -1, unsyncedRowCalls: map[int]bool{0: true}}
+
+	res, err := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+	if err != nil || res.Applied != 1 || res.Skipped != 0 {
+		t.Fatalf("err = %v, result %+v, want applied", err, res)
+	}
+	if got := f.bookPath(id); got != f.newPath {
+		t.Errorf("book path = %q, want %q", got, f.newPath)
+	}
+	f.requireRepointedRow(id, row)
+	f.requireRows("op-1", 2, 2)
+}
+
+// A rollback whose fsync failed was still put back: it is not reported as a
+// stranded row, and the failed match's rows are voided.
+func TestExecuteReconcile_ARollbackWhoseFsyncFailedWasStillPutBack(t *testing.T) {
+	f := newApplyFixture(t)
+	old := f.missingPath("Year One.m4b")
+	id := f.book("Batman: Year One", old)
+	f.row(id, old)
+	before := f.rows(id)
+	store := &failingStore{PebbleStore: f.ps, failBook: true, failRowAfter: -1, unsyncedRowCalls: map[int]bool{1: true}}
+
+	res, err := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+	if err == nil || res.Applied != 0 || res.Skipped != 1 {
+		t.Fatalf("err = %v, result %+v, want a failed match", err, res)
+	}
+	if len(res.Errors) != 1 || strings.Contains(res.Errors[0], "could not be put back") || !strings.Contains(res.Errors[0], "put back to "+old) {
+		t.Errorf("errors = %q, want the row reported as put back", res.Errors)
+	}
+	f.requireUntouched(id, old, before)
+	f.requireRows("op-1", 2, 0)
+}
+
+// The target book and file are checked before anything is written.
+func TestExecuteReconcile_RefusesATrashedBookAndANonFilePath(t *testing.T) {
+	t.Run("a book in the trash", func(t *testing.T) {
+		f := newApplyFixture(t)
+		old := f.missingPath("Year One.m4b")
+		id := f.book("Batman: Year One", old)
+		f.row(id, old)
+		before := f.rows(id)
+		yes := true
+		if _, err := f.ps.ModifyBook(id, func(b *database.Book) error { b.MarkedForDeletion = &yes; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		res, err := f.apply(f.ps, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+		if err == nil || res.Applied != 0 || res.Skipped != 1 || len(res.Errors) != 1 || !strings.Contains(res.Errors[0], "in the trash") {
+			t.Fatalf("err = %v, result %+v, want refused as trashed", err, res)
+		}
+		f.requireUntouched(id, old, before)
+		f.requireRows("op-1", 0, 0)
+	})
+	t.Run("a directory", func(t *testing.T) {
+		f := newApplyFixture(t)
+		old := f.missingPath("Year One.m4b")
+		id := f.book("Batman: Year One", old)
+		f.row(id, old)
+		before := f.rows(id)
+		res, err := f.apply(f.ps, "op-1", ReconcileApplyItem{BookID: id, NewPath: filepath.Dir(f.newPath)})
+		if err == nil || res.Applied != 0 || res.Skipped != 1 || len(res.Errors) != 1 || !strings.Contains(res.Errors[0], "not a regular file") {
+			t.Fatalf("err = %v, result %+v, want refused as not a file", err, res)
+		}
+		f.requireUntouched(id, old, before)
+		f.requireRows("op-1", 0, 0)
+	})
+}
+
+// The apply that finishes a stranded match (the row at the found file, the book
+// at the old path, left by a rollback that failed) journals the row's repoint
+// again, so reverting it ALONE restores the book and the row together. Without
+// that twin row the revert would put the book back and leave the row at the
+// found file.
+func TestExecuteReconcile_ARerunThatFinishesAStrandedMatchRevertsOnItsOwn(t *testing.T) {
+	f := newApplyFixture(t)
+	old := f.missingPath("Year One.m4b")
+	id := f.book("Batman: Year One", old)
+	row := f.row(id, old)
+	store := &failingStore{PebbleStore: f.ps, failBook: true, failRowAfter: 1}
+	if _, err := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath}); err == nil {
+		t.Fatal("want the first apply to fail and strand the row")
+	}
+	store.heal()
+
+	res, err := f.apply(store, "op-2", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+	if err != nil || res.Applied != 1 {
+		t.Fatalf("rerun: %v, result %+v", err, res)
+	}
+	f.requireRepointedRow(id, row)
+	j := f.journal("op-2")
+	if len(j[undo.ChangeTypeBookPathUpdate]) != 1 || len(j[database.ChangeTypeBookFileRepoint]) != 1 {
+		t.Fatalf("rerun journal = %d book_path_update, %d repoint rows, want 1 and 1", len(j[undo.ChangeTypeBookPathUpdate]), len(j[database.ChangeTypeBookFileRepoint]))
+	}
+
+	if _, err := audiobooks.NewRevertService(f.ps).RevertOperation("op-2"); err != nil {
+		t.Fatalf("revert of the rerun alone: %v", err)
+	}
+	if got := f.bookPath(id); got != old {
+		t.Errorf("after reverting the rerun the book is at %q, want %q", got, old)
+	}
+	reverted := f.rows(id)
+	if len(reverted) != 1 || reverted[0].ID != row.ID || reverted[0].FilePath != old || !reverted[0].Missing || reverted[0].FileHash != applyOldHash {
+		t.Errorf("after reverting the rerun the row is %+v, want the original %+v back (book and row in agreement)", reverted, row)
+	}
+	if got := f.atPath(f.newPath); len(got) != 0 {
+		t.Errorf("after reverting the rerun the found file is still held by %v, want nobody", got)
+	}
+	if got := f.atPath(old); len(got) != 1 || got[0] != id {
+		t.Errorf("after reverting the rerun the old path is held by %v, want the book %s", got, id)
+	}
+}
+
+// A resume of the same operation already holds the row's repoint in its journal:
+// it is not journaled twice.
+func TestExecuteReconcile_AResumeOfTheSameOperationDoesNotJournalTheRowTwice(t *testing.T) {
+	f := newApplyFixture(t)
+	old := f.missingPath("Year One.m4b")
+	id := f.book("Batman: Year One", old)
+	f.row(id, old)
+	store := &failingStore{PebbleStore: f.ps, failBook: true, failRowAfter: 1}
+	if _, err := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath}); err == nil {
+		t.Fatal("want the first apply to fail and strand the row")
+	}
+	store.heal()
+	if res, err := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath}); err != nil || res.Applied != 1 {
+		t.Fatalf("resume: %v, result %+v", err, res)
+	}
+	if n := len(f.journal("op-1")[database.ChangeTypeBookFileRepoint]); n != 1 {
+		t.Errorf("the operation journals %d repoint rows for one row, want 1", n)
+	}
+}
+
+// When another writer repointed the book AND the row could not be put back, the
+// advice is to check the book first: "rerun the match" would write the matched
+// path over the other writer's. Nothing is voided, the row landed.
+func TestExecuteReconcile_ARepointedBookWithAStrandedRowSaysToCheckTheBook(t *testing.T) {
+	f := newApplyFixture(t)
+	old := f.missingPath("Year One.m4b")
+	id := f.book("Batman: Year One", old)
+	row := f.row(id, old)
+	theirs := f.missingPath("Year One (moved by someone else).m4b")
+	store := &failingStore{PebbleStore: f.ps, failRowAfter: 1}
+	store.beforeBookCall = func() {
+		if _, err := f.ps.ModifyBook(id, func(b *database.Book) error { b.FilePath = theirs; return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	res, err := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+	if err == nil || res.Applied != 0 || res.Skipped != 1 || len(res.Errors) != 1 {
+		t.Fatalf("err = %v, result %+v, want one failed match", err, res)
+	}
+	if !strings.Contains(res.Errors[0], "check the book before rerunning") || strings.Contains(res.Errors[0], "rerun the match to finish it") {
+		t.Errorf("errors = %q, want the advice to check the book first", res.Errors)
+	}
+	if got := f.bookPath(id); got != theirs {
+		t.Errorf("book path = %q, want the other writer's %q left alone", got, theirs)
+	}
+	f.requireRepointedRow(id, row)
+	f.requireRows("op-1", 2, 2)
+}
+
+// The twin copies only a LIVE repoint row of an earlier operation. A row that was
+// voided, or already reverted, describes a write that is no longer there, and
+// journaling a copy of it would let a revert undo something it did not do.
+func TestExecuteReconcile_AFinishingRerunDoesNotTwinAVoidedOrRevertedRow(t *testing.T) {
+	for name, mark := range map[string]func(*database.OperationChange){
+		"voided":   func(c *database.OperationChange) { c.Voided = true },
+		"reverted": func(c *database.OperationChange) { now := time.Now(); c.RevertedAt = &now },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newApplyFixture(t)
+			old := f.missingPath("Year One.m4b")
+			id := f.book("Batman: Year One", old)
+			f.row(id, old)
+			store := &failingStore{PebbleStore: f.ps, failBook: true, failRowAfter: 1}
+			if _, err := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath}); err == nil {
+				t.Fatal("want the first apply to fail and strand the row")
+			}
+			for _, c := range f.journal("op-1")[database.ChangeTypeBookFileRepoint] {
+				v := *c
+				mark(&v)
+				if err := f.ps.CreateOperationChange(&v); err != nil {
+					t.Fatal(err)
+				}
+			}
+			store.heal()
+
+			res, err := f.apply(store, "op-2", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+			if err != nil || res.Applied != 1 {
+				t.Fatalf("rerun: %v, result %+v", err, res)
+			}
+			if n := len(f.journal("op-2")[database.ChangeTypeBookFileRepoint]); n != 0 {
+				t.Errorf("the rerun journaled %d repoint rows from an earlier row that is %s, want none", n, name)
+			}
+		})
+	}
+}
+
+// The twin is only a copy of a repoint of THIS row from THIS old path to THIS
+// matched file. An earlier live row that moved it somewhere else says nothing
+// about this match, and copying it would let a revert put the row at a path this
+// apply never saw.
+func TestExecuteReconcile_AFinishingRerunDoesNotTwinARowForAnotherPath(t *testing.T) {
+	f := newApplyFixture(t)
+	old := f.missingPath("Year One.m4b")
+	id := f.book("Batman: Year One", old)
+	row := f.row(id, old)
+	other := f.file("found/Batman Year One (other copy).m4b", "other copy")
+	store := &failingStore{PebbleStore: f.ps, failBook: true, failRowAfter: 1}
+	if _, err := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: other}); err == nil {
+		t.Fatal("want the first apply to fail and strand the row at the other copy")
+	}
+	store.heal()
+	// Something else (the organizer) then moves the row to the file this match found.
+	to := database.BookFileLocation{Path: f.newPath, Size: 50}
+	if _, err := f.ps.ModifyBookFile(id, row.ID, func(bf *database.BookFile) error { to.Apply(bf); return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := f.apply(store, "op-2", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+	if err != nil || res.Applied != 1 {
+		t.Fatalf("rerun: %v, result %+v", err, res)
+	}
+	if n := len(f.journal("op-2")[database.ChangeTypeBookFileRepoint]); n != 0 {
+		t.Errorf("the rerun journaled %d repoint rows copied from a repoint to another path, want none", n)
+	}
+}
+
+// The same holds for the path the row came from: an earlier repoint of this row
+// that started from a different old path is not this match's twin.
+func TestExecuteReconcile_AFinishingRerunDoesNotTwinARowFromAnotherOldPath(t *testing.T) {
+	f := newApplyFixture(t)
+	old := f.missingPath("Year One.m4b")
+	id := f.book("Batman: Year One", old)
+	f.row(id, old)
+	store := &failingStore{PebbleStore: f.ps, failBook: true, failRowAfter: 1}
+	if _, err := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath}); err == nil {
+		t.Fatal("want the first apply to fail and strand the row")
+	}
+	store.heal()
+	// The book is then pointed somewhere else, so the stranded repoint (from old)
+	// is not the one that left this book behind.
+	elsewhere := f.missingPath("Year One (elsewhere).m4b")
+	if _, err := f.ps.ModifyBook(id, func(b *database.Book) error { b.FilePath = elsewhere; return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := f.apply(store, "op-2", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+	if err != nil || res.Applied != 1 {
+		t.Fatalf("rerun: %v, result %+v", err, res)
+	}
+	if n := len(f.journal("op-2")[database.ChangeTypeBookFileRepoint]); n != 0 {
+		t.Errorf("the rerun journaled %d repoint rows copied from a repoint that started elsewhere, want none", n)
+	}
+}
+
+// An earlier repoint whose target is a MISSING row at the found path does not
+// describe a row that holds the found file, so it is not copied either.
+func TestExecuteReconcile_AFinishingRerunDoesNotTwinARepointToAMissingRow(t *testing.T) {
+	f := newApplyFixture(t)
+	old := f.missingPath("Year One.m4b")
+	id := f.book("Batman: Year One", old)
+	f.row(id, old)
+	store := &failingStore{PebbleStore: f.ps, failBook: true, failRowAfter: 1}
+	if _, err := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath}); err == nil {
+		t.Fatal("want the first apply to fail and strand the row")
+	}
+	for _, c := range f.journal("op-1")[database.ChangeTypeBookFileRepoint] {
+		to, err := database.DecodeBookFileLocation(c.NewValue)
+		if err != nil {
+			t.Fatal(err)
+		}
+		to.Missing = true
+		v := *c
+		v.NewValue = to.Encode()
+		if err := f.ps.CreateOperationChange(&v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store.heal()
+
+	res, err := f.apply(store, "op-2", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+	if err != nil || res.Applied != 1 {
+		t.Fatalf("rerun: %v, result %+v", err, res)
+	}
+	if n := len(f.journal("op-2")[database.ChangeTypeBookFileRepoint]); n != 0 {
+		t.Errorf("the rerun journaled %d repoint rows copied from a repoint to a missing row, want none", n)
+	}
 }
