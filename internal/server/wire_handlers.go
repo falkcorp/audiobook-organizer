@@ -289,6 +289,11 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		// row was restored (series_rename_ops.go).
 		s.revertOperation,
 	).WithRepairsOpAccess(repairsOps).
+		// A revert runs under the write-set its operation declares, so it never
+		// runs beside another writer of the same tables (pinned by
+		// TestWireHandlers_RevertWriteGateIsInstalled). Guarded like opsOpReg: a
+		// nil *Registry must not become a non-nil interface.
+		WithRevertWriteGate(s.revertWriteGate()).
 		// The tombstone sweep unlinks a file only with the book purge's own checks.
 		// Resolved per request: s.audiobookService is set from the container, and
 		// the closure must not box a nil *AudiobookService into the interface
@@ -878,4 +883,14 @@ func (s *Server) handlersSchedulerProvider() func() handlers.Scheduler {
 		}
 		return nil
 	}
+}
+
+// revertWriteGate is the operations registry as the revert handler's write-set
+// gate, or a nil interface when the server has no registry (a typed nil would
+// pass the handler's nil check and panic in HoldWriteSet).
+func (s *Server) revertWriteGate() operations.RevertWriteGate {
+	if s.opRegistry == nil {
+		return nil
+	}
+	return s.opRegistry
 }
