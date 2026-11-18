@@ -1,7 +1,7 @@
 // file: internal/server/leaf_stores.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 4d92a6f8-1b07-4e53-9c81-3a05d7e264b9
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package server
 
@@ -47,12 +47,16 @@ type entityAssignStore interface {
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 }
 
-// authorAssignStore: assignResolvedAuthorPreservingRecord.
+// authorAssignStore: assignResolvedAuthorPreservingRecord. The join is
+// rewritten by ModifyBookAuthors inside a second ModifyBook pass, so the
+// retired check and the write hold the row's lock together and two writers of
+// the join cannot lose each other's credit.
 type authorAssignStore interface {
 	entityAssignStore
 
 	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
 	SetBookAuthors(bookID string, authors []database.BookAuthor) error
+	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
 }
 
 // adminLookupStore: findActiveAdminUser and firstActiveAdmin.

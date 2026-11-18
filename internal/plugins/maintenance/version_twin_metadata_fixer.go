@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: 2f6c8e14-7b3a-4d59-9e02-c4a1b7d36e85
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -263,9 +263,11 @@ func (f *versionTwinFixer) readers(res *repairs.PathResolver) (vtReaders, error)
 // is the one retired rule (BookCore.IsRetired), so the planner, the under-lock
 // check (vtStillNeeds) and every other unattended writer agree on what "merged"
 // means. (The store's hash lookup, GetBooksByMetadataSourceHash, drops any
-// non-nil merged pointer, a blank one included; a blank one is not retired
-// here, and is therefore missing from that answer and from MATCH-4's alike, so
-// the two never disagree about a cluster.)
+// non-nil merged pointer, an EMPTY one ("", how an un-merge clears the field)
+// included. An empty one is live under the one rule, so a book carrying it is
+// missing from that answer and from MATCH-4's alike, and the two never disagree
+// about a cluster. A whitespace-only id is retired under both: the rule does not
+// trim it, and the lookup drops every non-nil pointer.)
 func vtLive(b *database.BookCore) bool { return !b.IsRetired() }
 
 func vtIsPrimary(b *database.BookCore) bool {

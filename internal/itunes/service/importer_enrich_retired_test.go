@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_enrich_retired_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: e1cf22ab-aed6-46a8-b67a-9f9695f4ac01
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package itunesservice
 
@@ -129,8 +129,11 @@ func TestEnrichImportedBooks_AuthorJoinIsNotWrittenOntoABookRetiredAfterTheCommi
 
 			require.Equal(t, []int{placeholderID}, enrichedJoin(t, store, id),
 				"a retired book's author credits must be left as they were")
-			// The run counts it as a skip, not as an enriched book.
-			require.Contains(t, out.String(), "0 books enriched, 1 retired books skipped")
+			// The fetch committed while the book was live, so it is an enriched
+			// book; only its join was left alone, and the summary says so
+			// rather than calling the book skipped.
+			require.Contains(t, out.String(), "1 books enriched, 1 author credits left alone on books retired after their fetch")
+			require.NotContains(t, out.String(), "retired books skipped")
 		})
 	}
 }

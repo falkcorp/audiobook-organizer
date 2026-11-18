@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.43.1
+// version: 1.43.2
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package itunesservice
 
@@ -1123,6 +1123,10 @@ func (imp *Importer) enrichImportedBooks(ctx context.Context, bookIDs []string, 
 	// retiredSkipped counts books the fetch refused because they are retired.
 	// Atomic: the fetch callback runs in RunItems' worker goroutines.
 	var retiredSkipped atomic.Int64
+	// joinRetired counts books that WERE enriched (the fetch committed while
+	// they were live) and were retired before their author join; only the join
+	// was left alone, so they are enriched books, not skipped ones.
+	var joinRetired atomic.Int64
 
 	// breakerFails / breakerTripped implement the shared-aggregate circuit
 	// breaker described in the doc comment above.
@@ -1190,11 +1194,13 @@ func (imp *Importer) enrichImportedBooks(ctx context.Context, bookIDs []string, 
 				log.Warn("Could not set the fetched author credit for '%s': %v", book.Title, joinErr)
 			}
 			if retired {
-				// Retired after the fetch committed: the join was left alone.
-				// Not a provider failure, so the breaker is untouched.
-				retiredSkipped.Add(1)
+				// Enriched while live, retired before the join: the fetch's
+				// metadata was written, only the author join was left alone.
+				// So the book counts as enriched below, and separately here as
+				// one whose join was skipped; it is not a "retired book
+				// skipped". Not a provider failure, so the breaker is untouched.
+				joinRetired.Add(1)
 				log.Debug("Skipped author credit for '%s': retired since the fetch", book.Title)
-				return nil
 			}
 		}
 
@@ -1217,11 +1223,17 @@ func (imp *Importer) enrichImportedBooks(ctx context.Context, bookIDs []string, 
 		log.Warn("Enrichment phase interrupted: %v", runErr)
 	}
 
-	if n := retiredSkipped.Load(); n > 0 {
-		log.Info("Metadata enrichment complete: %d books enriched, %d retired books skipped", enriched, n)
-		return
+	skipped, joinLeft := retiredSkipped.Load(), joinRetired.Load()
+	switch {
+	case skipped > 0 && joinLeft > 0:
+		log.Info("Metadata enrichment complete: %d books enriched, %d retired books skipped, %d author credits left alone on books retired after their fetch", enriched, skipped, joinLeft)
+	case skipped > 0:
+		log.Info("Metadata enrichment complete: %d books enriched, %d retired books skipped", enriched, skipped)
+	case joinLeft > 0:
+		log.Info("Metadata enrichment complete: %d books enriched, %d author credits left alone on books retired after their fetch", enriched, joinLeft)
+	default:
+		log.Info("Metadata enrichment complete: %d books enriched", enriched)
 	}
-	log.Info("Metadata enrichment complete: %d books enriched", enriched)
 }
 
 // replaceSingleAuthorCredit gives a freshly enriched book the author the fetch
