@@ -1,7 +1,7 @@
 // file: cmd/commands_test.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 6f5b7d78-11d8-4c1a-a150-96d2c4a1a885
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package cmd
 
@@ -363,5 +363,23 @@ func TestServe_InvalidShutdownBudgetRefusesToStart(t *testing.T) {
 	}
 	if started {
 		t.Fatal("composition root reached despite the invalid value")
+	}
+}
+
+// serve hands books the pre-freeze tag main embedded (cmd.SetFromRelease), as
+// ServeInputs.FromRelease; unset it is empty (09 §9.2.1).
+func TestServe_PassesTheEmbeddedPrefreezeTag(t *testing.T) {
+	stubCommandDeps(t)
+	orig := fromRelease
+	t.Cleanup(func() { fromRelease = orig })
+	for _, tag := range []string{"", "v0.232.0"} {
+		SetFromRelease(tag)
+		_, in, err := serveWithStubs(t)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if in.FromRelease != tag {
+			t.Fatalf("ServeInputs.FromRelease = %q, want %q", in.FromRelease, tag)
+		}
 	}
 }

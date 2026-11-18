@@ -1,7 +1,7 @@
 // file: internal/books/composed_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 4b8f2e61-9a3d-4c75-a0e2-6d1f8b3c5e97
-// last-edited: 2026-11-10
+// last-edited: 2026-11-18
 
 package books
 
@@ -712,5 +712,18 @@ func TestOptions_ShutdownBudgetReachesR1Values(t *testing.T) {
 		opts, err := Options(c.mod, ServeInputs{Server: c.mod.serveConfig(), Telemetry: snap, ShutdownBudget: want})
 		require.NoError(t, err)
 		assert.Equal(t, want, opts.R1Values().ShutdownBudget)
+	}
+}
+
+// ServeInputs.FromRelease (the pre-freeze tag main embeds) becomes
+// app.Options.FromRelease, which the pre-migration checkpoint records as
+// from_release (09 §9.2.1).
+func TestOptions_FromReleaseReachesCore(t *testing.T) {
+	c := bootComposed(t, false, nil, nil)
+	snap := config.Snapshot()
+	for _, want := range []string{"", "v0.232.0"} {
+		opts, err := Options(c.mod, ServeInputs{Server: c.mod.serveConfig(), Telemetry: snap, FromRelease: want})
+		require.NoError(t, err)
+		assert.Equal(t, want, opts.FromRelease)
 	}
 }
