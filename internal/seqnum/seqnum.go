@@ -1,7 +1,7 @@
 // file: internal/seqnum/seqnum.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 5b0e7c2a-9d41-4f6e-8a13-c7d2e4f90b61
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 // Package seqnum extracts a volume / sequence number ("Big Cats 3", "Vol. III",
 // "02 - Title", "Book 1.5") from free text, so a bulk metadata apply can refuse
@@ -45,7 +45,6 @@
 package seqnum
 
 import (
-	"regexp"
 	"strconv"
 	"strings"
 )
@@ -92,24 +91,24 @@ func Equal(a, b Number) bool {
 var (
 	// Noise removed before extraction. Order matters: disc/part markers go
 	// first so "Part 1 of 3" is removed whole rather than leaving "of 3".
-	reDiscPart = regexp.MustCompile(`\b(?:disc|disk|cd|part|pt|track|trk|chapter|ch)\.?\s*(?:\d+|[ivxlc]+|one|two|three|four|five|six|seven|eight|nine|ten)\b(?:\s*(?:of|/)\s*\d+)?`)
-	reBitrate  = regexp.MustCompile(`\b\d+(?:\.\d+)?\s*(?:kbps|kb/s|kbit/s|kbits|khz|hz|mb|gb|k)\b`)
-	reYear     = regexp.MustCompile(`\b(?:1\d{3}|20\d{2}|2100)\b`)
+	reDiscPart = guard(`\b(?:disc|disk|cd|part|pt|track|trk|chapter|ch)\.?\s*(?:\d+|[ivxlc]+|one|two|three|four|five|six|seven|eight|nine|ten)\b(?:\s*(?:of|/)\s*\d+)?`,
+		hasAny("dis", "cd", "part", "pt", "tr", "ch"))
+	reBitrate = guard(`\b\d+(?:\.\d+)?\s*(?:kbps|kb/s|kbit/s|kbits|khz|hz|mb|gb|k)\b`,
+		all(hasDigit, hasAny("k", "hz", "mb", "gb")))
+	reYear = guard(`\b(?:1\d{3}|20\d{2}|2100)\b`, hasAny("1", "2"))
 
 	numAlt   = `(\d+(?:\.\d+)?|[ivxlc]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)`
-	reMarker = regexp.MustCompile(`(?:\b(?:book|bk|volume|vol|number|no)\.?|#)\s*#?\s*` + numAlt + `\b`)
+	reMarker = guard(`(?:\b(?:book|bk|volume|vol|number|no)\.?|#)\s*#?\s*`+numAlt+`\b`,
+		hasAny("book", "bk", "vol", "number", "no", "#"))
 	// A number alone inside brackets or parentheses: "Big Cats (2)", "[03]".
-	reBracket = regexp.MustCompile(`[\[(]\s*(\d{1,3}(?:\.\d+)?)\s*[\])]`)
+	reBracket = guard(`[\[(]\s*(\d{1,3}(?:\.\d+)?)\s*[\])]`, all(hasAny("[", "("), hasDigit))
 	// "02 - Title", "1.5. Title", "3) Title", "02 Title".
-	reLeading = regexp.MustCompile(`^\s*(\d{1,3}(?:\.\d+)?)\s*[-._:)]?\s+\S`)
+	reLeading = guard(`^\s*(\d{1,3}(?:\.\d+)?)\s*[-._:)]?\s+\S`, hasDigit)
 	// "Big Cats 1", "Big Cats, 2", "Big Cats - 3", "Catch-22".
-	reTrailing = regexp.MustCompile(`(?:^|[\s,:\-])(\d{1,3}(?:\.\d+)?)\s*$`)
+	reTrailing = guard(`(?:^|[\s,:\-])(\d{1,3}(?:\.\d+)?)\s*$`, hasDigit)
 	// Trailing roman numerals, II..XX. Single letters (I, V, X) are excluded:
 	// "Malcolm X" and "Plan B"-style titles are not volume numbers.
-	reTrailingRoman = regexp.MustCompile(`\s(ii|iii|iv|vi|vii|viii|ix|xi|xii|xiii|xiv|xv|xvi|xvii|xviii|xix|xx)\s*$`)
-
-	rePlainNumber = regexp.MustCompile(`^\d+(?:\.\d+)?$`)
-	reRomanOnly   = regexp.MustCompile(`^[ivxlc]+$`)
+	reTrailingRoman = guard(`\s(ii|iii|iv|vi|vii|viii|ix|xi|xii|xiii|xiv|xv|xvi|xvii|xviii|xix|xx)\s*$`, hasAny("i", "x"))
 )
 
 var wordNumbers = map[string]float64{
@@ -123,7 +122,7 @@ var wordNumbers = map[string]float64{
 // sequence number. Both sides of every comparison go through it.
 func clean(s string) string {
 	s = strings.ToLower(s)
-	s = strings.NewReplacer("_", " ").Replace(s)
+	s = strings.ReplaceAll(s, "_", " ")
 	s = reDiscPart.ReplaceAllString(s, " ")
 	s = reBitrate.ReplaceAllString(s, " ")
 	s = reYear.ReplaceAllString(s, " ")
@@ -134,7 +133,7 @@ func clean(s string) string {
 	return strings.TrimRight(s, " -,:;.")
 }
 
-var reEmptyBrackets = regexp.MustCompile(`[\[(]\s*[\])]`)
+var reEmptyBrackets = guard(`[\[(]\s*[\])]`, hasAny("[", "("))
 
 // Parse extracts a sequence number from free text — a title, a file name, a
 // folder name. Patterns are tried from most to least explicit: an explicit
@@ -189,7 +188,7 @@ func parseSingle(c string) (Number, bool) {
 // "Empire of Man 04 - We Few", "The Legends of the First Empire - 3 - Age of
 // War". Parse does not see it (it is neither leading nor trailing), so it is
 // used only by ParseTitle.
-var reMidTitle = regexp.MustCompile(`(?:^|\s)(\d{1,3}(?:\.\d+)?)\s+(?:-|–|—|:)\s+\S`)
+var reMidTitle = guard(`(?:^|\s)(\d{1,3}(?:\.\d+)?)\s+(?:-|–|—|:)\s+\S`, all(hasDigit, hasAny("-", "–", "—", ":")))
 
 // ParseTitle is Parse plus a number between title segments. It is for
 // asking whether a title CARRIES a volume number that another title drops;
@@ -208,7 +207,7 @@ func ParseTitle(s string) (Number, bool) {
 // "Rogue Lawyer - 001". Multi-part rips number their pieces this way (001,
 // 002, ...); a volume number in a title is written with one or two digits
 // ("Big Cats - 3", "Mistborn 01"), so "- 03" is NOT matched.
-var rePartSuffix = regexp.MustCompile(`^(.*\S)\s+[-–—]\s+(0\d\d)\s*$`)
+var rePartSuffix = guard(`^(.*\S)\s+[-–—]\s+(0\d\d)\s*$`, all(hasAny("0"), hasDash))
 
 // PartSuffix reports whether s ends in a part-number suffix ("Rogue Lawyer -
 // 001") and carries no other sequence number. It returns the part number and
@@ -244,7 +243,7 @@ func ParsePosition(s string) (Number, bool) {
 	if t == "" {
 		return Number{}, false
 	}
-	if rePlainNumber.MatchString(t) || reRomanOnly.MatchString(t) {
+	if isPlainNumber(t) || isRomanOnly(t) {
 		return toNumber(t, "position")
 	}
 	if n, ok := parsePositionRange(t); ok {
@@ -268,7 +267,7 @@ func ParsePositionNoRange(s string) (Number, bool) {
 	if t == "" {
 		return Number{}, false
 	}
-	if rePlainNumber.MatchString(t) || reRomanOnly.MatchString(t) {
+	if isPlainNumber(t) || isRomanOnly(t) {
 		return toNumber(t, "position")
 	}
 	c := clean(s)
@@ -287,7 +286,7 @@ func ParsePositionNoRange(s string) (Number, bool) {
 func toNumber(tok, form string) (Number, bool) {
 	var v float64
 	switch {
-	case rePlainNumber.MatchString(tok):
+	case isPlainNumber(tok):
 		f, err := strconv.ParseFloat(tok, 64)
 		if err != nil {
 			return Number{}, false
@@ -295,7 +294,7 @@ func toNumber(tok, form string) (Number, bool) {
 		v = f
 	case wordNumbers[tok] > 0:
 		v = wordNumbers[tok]
-	case reRomanOnly.MatchString(tok):
+	case isRomanOnly(tok):
 		r, ok := romanValue(tok)
 		if !ok {
 			return Number{}, false

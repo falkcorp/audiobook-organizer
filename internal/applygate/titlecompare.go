@@ -1,5 +1,5 @@
 // file: internal/applygate/titlecompare.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 8e41c7a2-5d09-4b3f-a6e8-2f9c0d71b5a3
 // last-edited: 2026-11-18
 
@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
 
@@ -97,14 +98,11 @@ type titleCmp struct {
 }
 
 var (
-	// titleTokenRe keeps "1.5" whole and splits everything else on
-	// non-alphanumerics.
-	titleTokenRe = regexp.MustCompile(`\d+\.\d+|[\p{L}\p{N}]+`)
-	// romanRe is I..XXXIX over the letters I, V, X only: "mix" and "civil" are
-	// words, "vi" and "xii" are numerals.
-	romanRe = regexp.MustCompile(`^(?:x{0,3})(?:ix|iv|v?i{0,3})$`)
-	// ordinalDigitRe is "1st", "22nd", "3rd", "4th".
-	ordinalDigitRe = regexp.MustCompile(`^(\d+)(?:st|nd|rd|th)$`)
+	// segNormReplacer is segTokens' character pass. strings.NewReplacer builds a
+	// lookup trie when it is first used, and segTokens used to make a new one on
+	// every call (a check normalises the same few texts dozens of times); a
+	// Replacer is safe for concurrent use, so the one is built once.
+	segNormReplacer = strings.NewReplacer("&", " and ", "#", " ", "'", "", "\u2019", "")
 
 	unitWords = map[string]int{
 		"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
@@ -144,6 +142,151 @@ var (
 	fieldStop = map[string]bool{"the": true, "a": true, "an": true, "of": true, "and": true}
 )
 
+// foldTitleText is the character pass of segTokens: NFKC (so a unicode roman
+// numeral "Ⅱ" is "II"), lower case, "&" read as "and", "#" as a space,
+// apostrophes removed, then NFD with the combining marks dropped (so "Noël" is
+// "noel").
+//
+// Text that is all ASCII skips both normalisation forms and the mark filter: ASCII
+// is already in every normalisation form and holds no combining mark, so for it
+// they are the identity. Most titles are ASCII, and the two passes each copy the
+// string.
+func foldTitleText(s string) string {
+	if isASCII(s) {
+		return segNormReplacer.Replace(strings.ToLower(s))
+	}
+	s = strings.ToLower(norm.NFKC.String(s))
+	s = segNormReplacer.Replace(s)
+	var b strings.Builder
+	for _, r := range norm.NFD.String(s) {
+		if !unicode.Is(unicode.Mn, r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
+func isASCIIDigit(r rune) bool { return r >= '0' && r <= '9' }
+
+// titleTokens splits folded text into its words and numbers: a run of letters
+// and numbers is one token, and a decimal ("1.5": ASCII digits, a point, ASCII
+// digits) stays whole. It is the scanner form of the expression
+//
+//	\d+\.\d+|[\p{L}\p{N}]+
+//
+// matched left to right (TestTitleTokens_MatchTheExpression holds the two
+// equal). The scanner does what the expression does, without the regexp
+// matcher: a title check made hundreds of matches, and under the race detector
+// (every CI run) sync.Pool drops a share of its Puts, so the matcher's pooled
+// state is allocated again for many of them (97% of the bytes a title check
+// allocated under -race, measured with -memprofilerate=1).
+func titleTokens(s string) []string {
+	var out []string
+	for i := 0; i < len(s); {
+		if end := decimalEnd(s, i); end > i {
+			out = append(out, s[i:end])
+			i = end
+			continue
+		}
+		j := i
+		for j < len(s) {
+			r, w := utf8.DecodeRuneInString(s[j:])
+			if !unicode.IsLetter(r) && !unicode.IsNumber(r) {
+				break
+			}
+			j += w
+		}
+		if j == i {
+			// Not a token character: step over one rune (a byte of invalid UTF-8
+			// is one rune, as the regexp reads it).
+			_, w := utf8.DecodeRuneInString(s[i:])
+			i += w
+			continue
+		}
+		out = append(out, s[i:j])
+		i = j
+	}
+	return out
+}
+
+// decimalEnd is the end of the decimal that starts at s[i] (ASCII digits, a
+// point, ASCII digits), or i when none starts there.
+func decimalEnd(s string, i int) int {
+	j := i
+	for j < len(s) && isASCIIDigit(rune(s[j])) {
+		j++
+	}
+	if j == i || j >= len(s) || s[j] != '.' {
+		return i
+	}
+	k := j + 1
+	for k < len(s) && isASCIIDigit(rune(s[k])) {
+		k++
+	}
+	if k == j+1 {
+		return i
+	}
+	return k
+}
+
+// isRomanNumeral is I..XXXIX over the letters I, V, X only: "mix" and "civil"
+// are words, "vi" and "xii" are numerals. It is the expression
+// ^(?:x{0,3})(?:ix|iv|v?i{0,3})$ (TestIsRomanNumeral_MatchesTheExpression).
+func isRomanNumeral(s string) bool {
+	tens := 0
+	for tens < len(s) && tens < 3 && s[tens] == 'x' {
+		tens++
+	}
+	// The tens are x{0,3}: any count up to the leading run may be taken, since
+	// the units below may themselves begin with an x ("ix").
+	for n := tens; n >= 0; n-- {
+		switch s[n:] {
+		case "", "ix", "iv", "i", "ii", "iii", "v", "vi", "vii", "viii":
+			return true
+		}
+	}
+	return false
+}
+
+// ordinalDigitSplit splits "22nd" into its digits and suffix; ok is false for
+// anything that is not ASCII digits and then st, nd, rd or th. It is the
+// expression ^(\d+)(?:st|nd|rd|th)$ (TestOrdinalDigits_MatchTheExpression).
+func ordinalDigitSplit(t string) (digits string, ok bool) {
+	i := 0
+	for i < len(t) && isASCIIDigit(rune(t[i])) {
+		i++
+	}
+	if i == 0 {
+		return "", false
+	}
+	switch t[i:] {
+	case "st", "nd", "rd", "th":
+		return t[:i], true
+	}
+	return "", false
+}
+
+func isOrdinalDigits(t string) bool {
+	_, ok := ordinalDigitSplit(t)
+	return ok
+}
+
+// ordinalDigitValue is the digits of an ordinal written in digits ("22nd" is
+// "22"); the caller has checked isOrdinalDigits.
+func ordinalDigitValue(t string) string {
+	d, _ := ordinalDigitSplit(t)
+	return d
+}
+
 // cardTok is the token for a cardinal number; ordTok for an ordinal. They never
 // collide with a word token (the tokenizer cannot produce '#' or '@') and an
 // ordinal is never equal to a cardinal.
@@ -158,15 +301,8 @@ func isNumTok(t string) bool { return strings.HasPrefix(t, "#") }
 // strip also removes the edition words (editionPhrases); a segment that is only
 // edition words ("(Unabridged)") is then empty.
 func segTokens(s string, strip bool) []string {
-	s = strings.ToLower(norm.NFKC.String(s))
-	s = strings.NewReplacer("&", " and ", "#", " ", "'", "", "\u2019", "").Replace(s)
-	var b strings.Builder
-	for _, r := range norm.NFD.String(s) {
-		if !unicode.Is(unicode.Mn, r) {
-			b.WriteRune(r)
-		}
-	}
-	raw := titleTokenRe.FindAllString(b.String(), -1)
+	s = foldTitleText(s)
+	raw := titleTokens(s)
 	out := make([]string, 0, len(raw))
 	for i := 0; i < len(raw); i++ {
 		t := raw[i]
@@ -176,10 +312,10 @@ func segTokens(s string, strip bool) []string {
 				out = append(out, cardTok(strconv.FormatFloat(v, 'f', -1, 64)))
 				continue
 			}
-		case ordinalDigitRe.MatchString(t) || ordinalWords[t] > 0:
+		case isOrdinalDigits(t) || ordinalWords[t] > 0:
 			v := ordinalWords[t]
 			if v == 0 {
-				v, _ = strconv.Atoi(ordinalDigitRe.FindStringSubmatch(t)[1])
+				v, _ = strconv.Atoi(ordinalDigitValue(t))
 			}
 			// "the Third Book" says what "Book 3" says: an ordinal beside a
 			// volume or part marker is that marker's number (seqnum reads it
@@ -191,11 +327,11 @@ func segTokens(s string, strip bool) []string {
 			}
 			out = append(out, ordTok(v))
 			continue
-		case ordinalMarkers[t] && i+2 < len(raw) && raw[i+1] == "the" && (ordinalWords[raw[i+2]] > 0 || ordinalDigitRe.MatchString(raw[i+2])):
+		case ordinalMarkers[t] && i+2 < len(raw) && raw[i+1] == "the" && (ordinalWords[raw[i+2]] > 0 || isOrdinalDigits(raw[i+2])):
 			// "Book the Third".
 			v := ordinalWords[raw[i+2]]
 			if v == 0 {
-				v, _ = strconv.Atoi(ordinalDigitRe.FindStringSubmatch(raw[i+2])[1])
+				v, _ = strconv.Atoi(ordinalDigitValue(raw[i+2]))
 			}
 			out = append(out, t, cardTok(strconv.Itoa(v)))
 			i += 2
@@ -213,7 +349,7 @@ func segTokens(s string, strip bool) []string {
 		case unitWords[t] > 0:
 			out = append(out, cardTok(strconv.Itoa(unitWords[t])))
 			continue
-		case len(t) >= 2 && romanRe.MatchString(t):
+		case len(t) >= 2 && isRomanNumeral(t):
 			out = append(out, cardTok(strconv.Itoa(romanValue(t))))
 			continue
 		case (t == "i" || t == "v" || t == "x") && len(out) > 0 && numberMarkers[out[len(out)-1]]:
@@ -276,11 +412,67 @@ func romanValue(s string) int {
 	return total
 }
 
+// isRegexpSpace is the \s of the regexp package: tab, newline, form feed,
+// carriage return and space (not vertical tab, not the Unicode spaces).
+func isRegexpSpace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\f' || b == '\r'
+}
+
+// splitSegments splits a title field into the pieces between its separators: a
+// colon, a spaced dash (hyphen, en dash or em dash with a space each side) or a
+// bracket, each with the white space around it. It returns what
+//
+//	segSplitRe.Split(s, -1)
+//
+// returns, piece for piece (TestSplitSegments_MatchesTheExpression), without
+// running the expression: a title check split the same few fields dozens of times.
+func splitSegments(s string) []string {
+	if s == "" {
+		return []string{""}
+	}
+	var out []string
+	beg := 0
+	for i := 0; i < len(s); {
+		// A separator that starts at i is: white space, a core, white space. The
+		// expression takes all the white space in front of the core when it can
+		// (a colon or a bracket follows the run) and all but the last byte of it
+		// when the core is a spaced dash, whose own first byte is white space.
+		p := i
+		for p < len(s) && isRegexpSpace(s[p]) {
+			p++
+		}
+		coreEnd := -1
+		if p < len(s) && (s[p] == ':' || s[p] == '(' || s[p] == '[' || s[p] == ']' || s[p] == ')') {
+			coreEnd = p + 1
+		} else if p > i {
+			for _, dash := range [...]string{"-", "\u2013", "\u2014"} {
+				if strings.HasPrefix(s[p:], dash) && p+len(dash) < len(s) && isRegexpSpace(s[p+len(dash)]) {
+					coreEnd = p + len(dash) + 1
+					break
+				}
+			}
+		}
+		if coreEnd < 0 {
+			// No separator at i; none starts inside the white space either (the
+			// same text follows it), so go on from the first byte after the run.
+			i = max(p, i+1)
+			continue
+		}
+		end := coreEnd
+		for end < len(s) && isRegexpSpace(s[end]) {
+			end++
+		}
+		out = append(out, s[beg:i])
+		beg, i = end, end
+	}
+	return append(out, s[beg:])
+}
+
 // titleSegments splits a title field on ":", a spaced dash and brackets and
 // normalises each piece. Empty pieces are dropped. When every piece is
 // edition words the title is kept as written rather than emptied.
 func titleSegments(s string) [][]string {
-	parts := segSplitRe.Split(s, -1)
+	parts := splitSegments(s)
 	for _, strip := range []bool{true, false} {
 		var out [][]string
 		for _, part := range parts {

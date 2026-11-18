@@ -1,5 +1,5 @@
 // file: internal/applygate/titleforms.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5c1d7e93-2b48-4a0f-9e36-71d4b8a2c605
 // last-edited: 2026-11-18
 
@@ -87,7 +87,7 @@ func joinToks(parts ...[]string) []string {
 // phrases.
 func editionOnly(s string) bool {
 	any := false
-	for _, part := range segSplitRe.Split(s, -1) {
+	for _, part := range splitSegments(s) {
 		if len(segTokens(part, false)) == 0 {
 			continue
 		}

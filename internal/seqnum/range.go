@@ -1,7 +1,7 @@
 // file: internal/seqnum/range.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 3e8a1d57-4c20-4b9f-a6d3-91f5b0c7e248
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package seqnum
 
@@ -41,14 +41,19 @@ const (
 )
 
 var (
+	// rangeNeeds is what every expression below that starts with a range
+	// keyword needs of the text: one of the keyword's words (book, bk, vol) or
+	// the hash.
+	rangeNeeds = hasAny("book", "bk", "vol", "#")
+
 	rangeKeyword   = `(?:\b` + kwWord + `\.?|#)\s*#?\s*`
 	rangeKeywordPl = `\b` + kwPlural + `\.?\s*#?\s*`
 	secondKw       = `(?:` + kwWord + `\.?\s*|#\s*)?`
 
 	// Spans, tried in this order of generality; the earliest match wins.
-	reSpanDigits = regexp.MustCompile(rangeKeyword + `(` + anyNum + `)(?:[-–—]|` + connTo + `)` + secondKw + `(` + digitsN + `)\b`)
-	reSpanSpaced = regexp.MustCompile(rangeKeywordPl + `(` + anyNum + `)\s+[-–—]\s+` + secondKw + `(` + digitsN + `)\b`)
-	reSpanWords  = regexp.MustCompile(rangeKeyword + `(` + anyNum + `)(?:[-–—]|` + connTo + `)` + secondKw + `(` + wordNum + `)` + terminal)
+	reSpanDigits = guard(rangeKeyword+`(`+anyNum+`)(?:[-–—]|`+connTo+`)`+secondKw+`(`+digitsN+`)\b`, rangeNeeds)
+	reSpanSpaced = guard(rangeKeywordPl+`(`+anyNum+`)\s+[-–—]\s+`+secondKw+`(`+digitsN+`)\b`, rangeNeeds)
+	reSpanWords  = guard(rangeKeyword+`(`+anyNum+`)(?:[-–—]|`+connTo+`)`+secondKw+`(`+wordNum+`)`+terminal, rangeNeeds)
 
 	// A span's continuation: ", 5", "& 5", "and 4-6".
 	reSpanTail = regexp.MustCompile(`^` + sepList + `(` + digitsN + `)(?:\s*[-–—]\s*(` + digitsN + `))?\b`)
@@ -58,8 +63,8 @@ var (
 	// An "&" ends a list too: "Books 1-3, 5 & Other Stories" is the list 1-3,5.
 	reTailEnd = regexp.MustCompile(`^(?:` + terminal + `|\s+&\s)`)
 
-	reListDigits = regexp.MustCompile(rangeKeyword + `(` + digitsN + `(?:` + sepList + digitsN + `)+)` + terminal)
-	reListWords  = regexp.MustCompile(rangeKeyword + `(` + anyNum + `(?:` + sepList + anyNum + `)+)` + terminal)
+	reListDigits = guard(rangeKeyword+`(`+digitsN+`(?:`+sepList+digitsN+`)+)`+terminal, rangeNeeds)
+	reListWords  = guard(rangeKeyword+`(`+anyNum+`(?:`+sepList+anyNum+`)+)`+terminal, rangeNeeds)
 	reListItem   = regexp.MustCompile(anyNum)
 
 	// A position FIELD is only a position, so its span needs no keyword:
@@ -107,7 +112,7 @@ func ParseRange(s string) (Number, bool) {
 			segs = appendTail(segs, c[loc[1]:])
 		}
 	}
-	for _, re := range []*regexp.Regexp{reSpanDigits, reSpanSpaced} {
+	for _, re := range []*guardedRe{reSpanDigits, reSpanSpaced} {
 		if loc := re.FindStringSubmatchIndex(c); loc != nil {
 			try(loc[:2], []string{c[loc[2]:loc[3]], c[loc[4]:loc[5]]}, true)
 		}
@@ -118,7 +123,7 @@ func ParseRange(s string) (Number, bool) {
 	if best >= 0 {
 		return segmentsNumber(segs)
 	}
-	for _, re := range []*regexp.Regexp{reListDigits, reListWords} {
+	for _, re := range []*guardedRe{reListDigits, reListWords} {
 		m := re.FindStringSubmatch(c)
 		if m == nil {
 			continue
