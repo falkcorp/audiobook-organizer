@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.17.1
+// version: 1.18.0
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -165,7 +165,10 @@ type authorSplitRun struct {
 	attempted    atomic.Int64
 	booksUpdated atomic.Int64
 	relinkErrs   atomic.Int64
-	errCount     atomic.Int64
+	// held counts books left alone because the user locked their author
+	// (author_name); their credits and primary were not touched.
+	held     atomic.Int64
+	errCount atomic.Int64
 	// wrote records that any author or book row changed, so the dedup cache is
 	// dropped even when the apply stops early.
 	wrote atomic.Bool
@@ -199,8 +202,34 @@ type authorSplitRun struct {
 // AuthorID), not preserved-stale (STOREFID W5d-1 / #1887), and a column another
 // writer commits meanwhile is not reverted (audit A1#15). A primary moved off
 // the composite meanwhile is left alone.
+//
+// A book whose user locked its author (author_name) is left alone WHOLE, before
+// either write. Holding only the primary would still rewrite the credits, and a
+// book whose credits name the parts while its locked AuthorID names the composite
+// is neither what the user chose nor what the split intended; the composite then
+// stays (VerifyAuthorUnlinked refuses it while that book names it). The lock is
+// read again under the book's write lock by the primary write
+// (database.ModifyBookRespectingLocks), which is the check that decides there:
+// a lock saved between the two writes leaves the credits split and the primary on
+// the composite, the same state a failure between them leaves, and a rerun
+// settles it once the user unlocks the author. A lock that cannot be read writes
+// nothing and counts as an error.
 func (r *authorSplitRun) relinkBook(it *authorSplitItem) {
 	book := it.book
+
+	locks, lerr := database.LoadFieldLocks(r.store, book.ID)
+	if lerr != nil {
+		r.relinkErrs.Add(1)
+		r.errCount.Add(1)
+		r.env.Log(slog.LevelWarn, fmt.Sprintf("author split: book %s NOT relinked, its locks cannot be read: %v", book.ID, lerr))
+		authorSplitLog.Warn("author split: book %s NOT relinked, its locks cannot be read: %s", logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(lerr.Error()))
+		return
+	}
+	if locks.Locked(database.FieldKeyAuthorName) {
+		r.held.Add(1)
+		r.env.Log(slog.LevelInfo, fmt.Sprintf("author split: book %s left as it is, its author is locked by the user", book.ID))
+		return
+	}
 
 	wroteCredits := false
 	_, err := r.writer.ModifyBookAuthors(book.ID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
@@ -287,7 +316,7 @@ func (r *authorSplitRun) relinkBook(it *authorSplitItem) {
 	newPrimary := primaryPlan.newAuthors[0]
 	firstID := newPrimary.ID
 	applied := false
-	written, err := r.writer.ModifyBook(book.ID, func(full *database.Book) error {
+	written, held, err := database.ModifyBookRespectingLocks(r.writer, r.store, book.ID, func(full *database.Book) error {
 		if full.AuthorID == nil || *full.AuthorID != composite.ID {
 			return database.ErrSkipBookWrite
 		}
@@ -297,6 +326,9 @@ func (r *authorSplitRun) relinkBook(it *authorSplitItem) {
 		return nil
 	})
 	switch {
+	case len(held) > 0:
+		r.held.Add(1)
+		r.env.Log(slog.LevelInfo, fmt.Sprintf("author split: book %s primary author left on %q, locked by the user after its credits were relinked", book.ID, composite.Name))
 	case err != nil:
 		r.errCount.Add(1)
 		r.env.Log(slog.LevelWarn, fmt.Sprintf("author split: failed to update primary author on book %s: %v", book.ID, err))
@@ -337,6 +369,7 @@ const authorSplitScanKind = tasks.Kind("books.maintenance.author-split-scan")
 
 // authorSplitStore is the reads the op makes.
 type authorSplitStore interface {
+	database.MetadataFieldStateReader
 	GetAllAuthors() ([]database.Author, error)
 	GetAuthorByName(name string) (*database.Author, error)
 	GetBookByID(id string) (*database.Book, error)
@@ -348,7 +381,7 @@ type authorSplitStore interface {
 type authorSplitWriter interface {
 	CreateAuthor(name string) (*database.Author, error)
 	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
-	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+	database.BookModifier
 	DeleteAuthor(id int) error
 }
 
@@ -610,8 +643,8 @@ func authorSplitScanCore(ctx context.Context, env authorSplitEnv) (retErr error)
 		}
 	}
 
-	resultMsg := fmt.Sprintf("Split %d composite authors, updated %d books (%d errors, %d books not relinked due to credit-list errors)",
-		splitCount, run.booksUpdated.Load(), run.errCount.Load(), run.relinkErrs.Load())
+	resultMsg := fmt.Sprintf("Split %d composite authors, updated %d books (%d errors, %d books not relinked due to credit-list errors, %d books left alone: author locked by the user)",
+		splitCount, run.booksUpdated.Load(), run.errCount.Load(), run.relinkErrs.Load(), run.held.Load())
 	env.Log(slog.LevelInfo, resultMsg)
 	prog.Done(resultMsg)
 	return nil

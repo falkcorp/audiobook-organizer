@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_author_narrator_swap.go
-// version: 2.5.1
+// version: 2.6.0
 // guid: a1000003-0000-0000-0000-000000000003
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package jobs
 
@@ -36,7 +36,7 @@ func (j *fixAuthorNarratorSwapJob) CanResume() bool { return false }
 func (j *fixAuthorNarratorSwapJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	const batchSize = 500
 	offset := 0
-	var found, applied int
+	var found, applied, lockHeld int
 
 	for {
 		batch, err := store.GetAllBooksCore(batchSize, offset)
@@ -82,8 +82,10 @@ func (j *fixAuthorNarratorSwapJob) Run(ctx context.Context, store maintenance.Jo
 				// the listing read and this write is not reverted (audit
 				// A1#15). The decision is re-made on the fresh row: a book
 				// whose author was already cleared or changed meanwhile is
-				// left alone.
-				written, updateErr := store.ModifyBook(book.ID, func(current *database.Book) error {
+				// left alone. A book whose user locked the author is left
+				// alone too: the lock is read under the same hold, and an
+				// unreadable lock writes nothing (the error is logged below).
+				written, held, updateErr := database.ModifyBookRespectingLocks(store, store, book.ID, func(current *database.Book) error {
 					if current.AuthorID == nil || *current.AuthorID != *book.AuthorID {
 						return database.ErrSkipBookWrite
 					}
@@ -91,6 +93,9 @@ func (j *fixAuthorNarratorSwapJob) Run(ctx context.Context, store maintenance.Jo
 					return nil
 				})
 				switch {
+				case len(held) > 0:
+					lockHeld++
+					reporter.Log("warn", fmt.Sprintf("Author left in place, field locked by user (%s): %s", strings.Join(held, ", "), book.ID), nil)
 				case updateErr != nil:
 					errMsg := updateErr.Error()
 					slog.Error("Failed to update book", "book", book.ID, "updateErr", updateErr)
@@ -112,7 +117,7 @@ func (j *fixAuthorNarratorSwapJob) Run(ctx context.Context, store maintenance.Jo
 		offset += batchSize
 	}
 
-	slog.Info("Done found applied dryRun", "found", found, "applied", applied, "dryRun", dryRun)
+	slog.Info("Done found applied lockHeld dryRun", "found", found, "applied", applied, "lockHeld", lockHeld, "dryRun", dryRun)
 	return nil
 }
 

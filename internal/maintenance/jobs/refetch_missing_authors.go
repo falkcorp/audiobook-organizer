@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/refetch_missing_authors.go
-// version: 2.13.2
+// version: 2.14.0
 // guid: a1000012-0000-0000-0000-000000000012
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package jobs
 
@@ -79,6 +79,7 @@ func (j *refetchMissingAuthorsJob) Run(ctx context.Context, store maintenance.Jo
 	filled := 0
 	skipped := 0
 	errors := 0
+	lockHeld := 0
 
 	for i := range books {
 		if ctx.Err() != nil {
@@ -179,6 +180,10 @@ func (j *refetchMissingAuthorsJob) Run(ctx context.Context, store maintenance.Jo
 				b.ID, logger.SanitizeLogValue(authorName))
 			skipped++
 			continue
+		case tagAuthorsHeld:
+			logger.New("refetch-missing-authors").Warn("book %s: author is locked by the user; leaving it authorless", b.ID)
+			lockHeld++
+			continue
 		case tagAuthorsFailed:
 			slog.Error("failed to set author for book", "authorName", authorName, "bookID", b.ID, "err", lerr)
 			errors++
@@ -192,8 +197,8 @@ func (j *refetchMissingAuthorsJob) Run(ctx context.Context, store maintenance.Jo
 		filled++
 	}
 
-	summary := fmt.Sprintf("refetch-missing-authors complete: total=%d filled=%d skipped=%d errors=%d dryRun=%v",
-		len(books), filled, skipped, errors, dryRun)
+	summary := fmt.Sprintf("refetch-missing-authors complete: total=%d filled=%d skipped=%d lockHeld=%d errors=%d dryRun=%v",
+		len(books), filled, skipped, lockHeld, errors, dryRun)
 	slog.Info(summary)
 	slog.Info("", "opID", opID, "summary", summary)
 	return nil
@@ -204,6 +209,8 @@ const (
 	tagAuthorsLinked   = "linked"
 	tagAuthorsCombined = "combined"
 	tagAuthorsFailed   = "failed"
+	// tagAuthorsHeld: the user locked the book's author, so none was linked.
+	tagAuthorsHeld = "held"
 	// tagAuthorsPartial: the primary was set but the co-authors were not
 	// credited.
 	tagAuthorsPartial = "partial"
@@ -212,7 +219,8 @@ const (
 // tagAuthorStore is what linkTagAuthors reads and writes.
 type tagAuthorStore interface {
 	authorcredit.Store
-	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+	database.BookModifier
+	database.MetadataFieldStateReader
 	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
 }
 
@@ -227,7 +235,21 @@ type tagAuthorStore interface {
 // commits while the tags were being read from disk is not reverted (audit
 // A1#15). "Still has no author" is decided on the fresh row: one filled
 // meanwhile is kept, and then no co-author is added either.
+//
+// A book whose author the user locked is tagAuthorsHeld and is left authorless.
+// The lock is read BEFORE the resolve, because the resolve can create author
+// rows and a refused link would leave them behind; the same lock is read again
+// under the book's write lock (database.ModifyBookRespectingLocks), which is
+// the check that decides, since the first read is only advisory. A lock read
+// that fails is tagAuthorsFailed with nothing written.
 func linkTagAuthors(store tagAuthorStore, bookID, authorName string) (string, error) {
+	locks, lerr := database.LoadFieldLocks(store, bookID)
+	if lerr != nil {
+		return tagAuthorsFailed, fmt.Errorf("book %s NOT written: %w", bookID, lerr)
+	}
+	if locks.Locked(database.FieldKeyAuthorName) {
+		return tagAuthorsHeld, nil
+	}
 	authors, err := authorcredit.ResolveBook(store, bookID, authorName, authorcredit.PrepareGate)
 	if stderrors.Is(err, authorcredit.ErrCombinedCredit) {
 		return tagAuthorsCombined, nil
@@ -239,7 +261,7 @@ func linkTagAuthors(store tagAuthorStore, bookID, authorName string) (string, er
 		return tagAuthorsFailed, fmt.Errorf("no author resolved from %q", authorName)
 	}
 	authorID := authors[0].ID
-	full, err := store.ModifyBook(bookID, func(cur *database.Book) error {
+	full, held, err := database.ModifyBookRespectingLocks(store, store, bookID, func(cur *database.Book) error {
 		if cur.AuthorID != nil {
 			return database.ErrSkipBookWrite
 		}
@@ -248,6 +270,9 @@ func linkTagAuthors(store tagAuthorStore, bookID, authorName string) (string, er
 	})
 	if err != nil {
 		return tagAuthorsFailed, fmt.Errorf("update book: %w", err)
+	}
+	if len(held) > 0 {
+		return tagAuthorsHeld, nil
 	}
 	if full == nil {
 		return tagAuthorsFailed, fmt.Errorf("book vanished before author update")

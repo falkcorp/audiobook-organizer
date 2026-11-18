@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_read_by_narrator.go
-// version: 2.6.2
+// version: 2.7.0
 // guid: a1000001-0000-0000-0000-000000000001
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package jobs
 
@@ -41,7 +41,7 @@ func (j *fixReadByNarratorJob) Run(ctx context.Context, store maintenance.JobSto
 	}
 	reporter.SetTotal(len(allBooks))
 
-	var applied, found int
+	var applied, found, lockHeld int
 	for i := range allBooks {
 		select {
 		case <-ctx.Done():
@@ -79,16 +79,21 @@ func (j *fixReadByNarratorJob) Run(ctx context.Context, store maintenance.JobSto
 
 		found++
 		if !dryRun {
-			if applyErr := rbnrApplyFix(store, book, fix); applyErr != nil {
+			held, applyErr := rbnrApplyFix(store, book, fix)
+			switch {
+			case applyErr != nil:
 				slog.Error("Failed to fix book", "book", book.ID, "applyErr", applyErr)
-			} else {
+			case len(held) > 0:
+				lockHeld++
+				reporter.Log("warn", fmt.Sprintf("Read-by fix left in place, field locked by user (%s): %s", strings.Join(held, ", "), book.ID), nil)
+			default:
 				applied++
 			}
 		}
 		reporter.Increment()
 	}
 
-	slog.Info("Done found applied dryRun", "found", found, "applied", applied, "dryRun", dryRun)
+	slog.Info("Done found applied lockHeld dryRun", "found", found, "applied", applied, "lockHeld", lockHeld, "dryRun", dryRun)
 	return nil
 }
 
@@ -195,9 +200,14 @@ func rbnrTitleFromFilePath(fp string) string {
 // writer commits between the listing read and this write is not reverted
 // (audit A1#15). The fix was derived from the title as listed; if the stored
 // title has changed since, the fix no longer applies and nothing is written.
-// A book that vanished meanwhile is still an error.
-func rbnrApplyFix(store bookMutator, book *database.BookCore, fix *rbnrFixResult) error {
-	written, err := store.ModifyBook(book.ID, func(current *database.Book) error {
+//
+// The fix is one decision over two columns (the narrator comes out of the very
+// title it rewrites), so a user lock on EITHER holds the whole fix: held lists
+// the lock keys that did it and nothing was written. An unreadable lock is an
+// error and nothing is written. A book that vanished meanwhile is still an
+// error.
+func rbnrApplyFix(store bookMutator, book *database.BookCore, fix *rbnrFixResult) (held []string, err error) {
+	written, held, err := database.ModifyBookRespectingLocks(store, store, book.ID, func(current *database.Book) error {
 		if current.Title != book.Title {
 			return database.ErrSkipBookWrite
 		}
@@ -208,12 +218,15 @@ func rbnrApplyFix(store bookMutator, book *database.BookCore, fix *rbnrFixResult
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("ModifyBook: %w", err)
+		return nil, fmt.Errorf("ModifyBook: %w", err)
+	}
+	if len(held) > 0 {
+		return held, nil
 	}
 	if written == nil {
-		return fmt.Errorf("book %s not found", book.ID)
+		return nil, fmt.Errorf("book %s not found", book.ID)
 	}
-	return nil
+	return nil, nil
 }
 
 func rbnrCaseInsensitiveIndex(s, substr string) int {

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/writes_trace_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: c58e1d07-3a92-4f64-b0d3-7e49a2f6c815
-// last-edited: 2026-11-16
+// last-edited: 2026-11-18
 
 package jobs_test
 
@@ -79,6 +79,12 @@ var traceAliases = map[string]string{
 	// (internal/deluge/importer_adapter.go:94), the call bulk-deluge-import makes.
 	// The oracle does not follow an interface call into its implementation.
 	"tagger.LibraryImporter.ImportPath": "UpdateBookFile",
+	// database.ModifyBookRespectingLocks is a function in the store package, whose
+	// bodies the oracle does not walk, and its one write is the ModifyBook it
+	// makes under the book's lock. A job that calls it is a ModifyBook caller;
+	// without this the call reads as an unlisted write named after the helper and
+	// the ModifyBook the job's trace lists reads as unreached.
+	"STOREFN.ModifyBookRespectingLocks": "ModifyBook",
 }
 
 // traceWriteName is the store method a call key stands for, and whether it is a

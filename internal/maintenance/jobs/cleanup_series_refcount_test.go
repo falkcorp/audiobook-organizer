@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/cleanup_series_refcount_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 2f871254-fb7f-475b-a668-ec240f1b0ef3
 // last-edited: 2026-11-18
 
@@ -35,6 +35,7 @@ import (
 // takes. Only the membership getter is modelled -- the whole point is that it
 // cannot see every referencing row.
 type csFakeMerger struct {
+	noUserLocks
 	visible      map[int][]database.BookCore
 	unhydratable map[string]bool
 	deleted      []int
