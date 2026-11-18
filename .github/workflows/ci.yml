@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.44.4
+# version: 3.44.5
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-11-18
 
@@ -341,7 +341,7 @@ jobs:
   # package's tests timed the 25m `go test` out), so those tests cover a fifth
   # of the texts there. This job runs the same two packages at full size, in
   # about half a minute, so a regression the smaller draw would miss (a title the gate wrongly agrees on, a guard that
-  # hides a match) still fails a PR. Fixed seeds, so the two runs draw the same
+  # hides a match) shows red on a PR. Fixed seeds, so the two runs draw the same
   # first texts and a failure here reproduces with
   # `go test ./internal/applygate ./internal/seqnum` on a laptop.
   full-size-parsers:
@@ -369,8 +369,12 @@ jobs:
       - name: Free runner disk
         run: scripts/ci/free_runner_disk.sh
 
-      - name: Restore Go cache (manual)
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # Restore only, never save: this job builds two packages' worth of
+      # objects, and actions/cache's post step would save that small set under
+      # the shared go.sum key if it finished first on a key miss, leaving every
+      # later job a thinner cache. The shards save theirs on main.
+      - name: Restore Go cache (restore only)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/go-build
