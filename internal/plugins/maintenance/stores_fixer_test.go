@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/stores_fixer_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6d2a9f41-8c53-4b17-a0e6-3f7b1d94c285
-// last-edited: 2026-11-12
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -375,7 +375,7 @@ func (s recordingStores) BookTagReader() BookTagReader {
 }
 
 // Invariant 7, with working stores: the shell's FixerStores on the context are
-// the only stores any of the 22 fixers' Plan, Replan, Apply, BeginApply and
+// the only stores any of the 23 fixers' Plan, Replan, Apply, BeginApply and
 // AfterApply reach, including through the bodies they share with the v2
 // operations. The plugin's own deps report every accessor reached (tripDeps);
 // the shell's stores are the real in-memory ones, so each fixer reads a library
@@ -393,7 +393,7 @@ func TestFixers_PlanReplanAndApplyReadOnlyTheShellStores(t *testing.T) {
 	real := fakeDeps{store: st, root: root, labels: &fakeLabels{}}
 	reg := New(tripDeps{ServerDeps: real, t: t}).Repairs()
 	fixers := reg.List()
-	require.Len(t, fixers, 22)
+	require.Len(t, fixers, 23)
 	for _, f := range fixers {
 		t.Run(f.ID(), func(t *testing.T) {
 			rec := recordingStores{FixerStores: pluginFixerStores{real}, mu: &sync.Mutex{}, hits: map[string]int{}}

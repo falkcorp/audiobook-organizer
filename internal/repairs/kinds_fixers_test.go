@@ -1,7 +1,7 @@
 // file: internal/repairs/kinds_fixers_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9e5b2d71-4a8c-4e03-b6f9-1d3c7a0e5b84
-// last-edited: 2026-11-12
+// last-edited: 2026-11-18
 
 package repairs_test
 
@@ -21,7 +21,7 @@ import (
 )
 
 // These tests build the real maintenance plugin's registry, as that package's
-// own tests do, and ask what the 22 fixers it registers at this base become.
+// own tests do, and ask what the 23 fixers it registers at this base become.
 
 // atomScopes is books' atom table, the resolver the kernel hands KindDeps.
 func atomScopes(atom auth.Permission) ([]rbac.Permission, bool) {
@@ -40,7 +40,7 @@ func atomScopes(atom auth.Permission) ([]rbac.Permission, bool) {
 type noDeps struct{ maintenance.ServerDeps }
 
 // retiredAtBase are the fixers `52e732a28` retired after `ac4368bdb`: the
-// brief's 25 are 22 at this base.
+// brief's 25 are 22 at this base, and 23 with maintenance.merge-cleanup.
 var retiredAtBase = []string{"maintenance.normalize-letter-l-ordinals", "maintenance.relink-stale-series", "dedup.split-books"}
 
 func registryAt(t *testing.T) *repairs.Registry {
@@ -50,7 +50,7 @@ func registryAt(t *testing.T) *repairs.Registry {
 
 func TestRepairsKinds_Count(t *testing.T) {
 	fixers := registryAt(t).List()
-	require.Len(t, fixers, 22, "the maintenance plugin registers 22 fixers at this base (25 at ac4368bdb less the 3 retired since)")
+	require.Len(t, fixers, 23, "the maintenance plugin registers 23 fixers at this base (25 at ac4368bdb less the 3 retired since, plus maintenance.merge-cleanup)")
 	defs := repairs.Kinds(fixers, repairs.KindDeps{Scopes: atomScopes})
 	require.Len(t, defs, len(fixers))
 
