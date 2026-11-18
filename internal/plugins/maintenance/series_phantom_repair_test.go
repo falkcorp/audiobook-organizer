@@ -47,7 +47,15 @@ func seedSeriesPhantomFixture(t *testing.T, s *database.PebbleStore) seriesPhant
 	author := 42
 	mk := func(title string, seriesID int) string {
 		sid := seriesID
-		b, err := s.CreateBook(&database.Book{Title: title, SeriesID: &sid, AuthorID: &author})
+		b, err := s.CreateBook(&database.Book{Title: title, AuthorID: &author})
+		require.NoError(t, err)
+		if sid == real.ID {
+			_, err = s.ModifyBook(b.ID, func(bk *database.Book) error { bk.SeriesID = &sid; return nil })
+		} else {
+			// A phantom link is a row an older build left: the book write now
+			// refuses a series that has no row, so seed it the legacy way.
+			_, err = s.SeedLegacyBookRowForTest(b.ID, func(bk *database.Book) error { bk.SeriesID = &sid; return nil })
+		}
 		require.NoError(t, err)
 		return b.ID
 	}
