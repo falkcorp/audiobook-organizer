@@ -1,5 +1,5 @@
 // file: internal/server/handlers/organize_scan_lock_test.go
-// version: 1.3.4
+// version: 1.4.0
 // guid: 0e8b5c27-4a13-4f96-b7d2-c93a61e8f405
 // last-edited: 2026-11-18
 
@@ -257,5 +257,119 @@ func TestRunQueuedOrganize_UnsettledLockSetFailsWithoutOrganizing(t *testing.T) 
 	}
 	if n := scanlock.Books.Held(); n != 0 {
 		t.Fatalf("left %d scan lock(s) held", n)
+	}
+}
+
+// A library copy that appears AFTER the lock set settled is a row the hold does
+// not cover. The core must not swap it in and organize it without its scan
+// lock: the answer is the unsettled 409 and no file is touched.
+func TestOrganizeBook_CopyAppearingAfterTheLockSetSettledIsNotOrganized(t *testing.T) {
+	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/Old/Old.m4b"}}
+	svc := inPlaceSvc()
+	h := handlers.NewOrganizeHandler(store, nil, svc, nil, false)
+	// The two resolutions of the lock step (before and under the hold) see no
+	// copy; the third, the core's own re-check, sees one that was just created.
+	var calls atomic.Int32
+	h.SetLibraryCopyResolver(func(b *database.Book) (*database.Book, bool, *database.Book) {
+		if calls.Add(1) <= 2 {
+			return nil, false, nil
+		}
+		cp := *b
+		cp.ID = "s1"
+		return &cp, true, nil
+	})
+
+	w := organizeRequest(h, "b1")
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status %d, want 409: %s", w.Code, w.Body.String())
+	}
+	if svc.calls.Load() != 0 {
+		t.Fatalf("organized %d time(s) a copy that was never in the lock hold", svc.calls.Load())
+	}
+	if n := scanlock.Books.Held(); n != 0 {
+		t.Fatalf("left %d scan lock(s) held", n)
+	}
+}
+
+// The lock step held a library copy: that copy is in the hold, so the core
+// acts on it as it stands and does not resolve again. A resolver that would
+// answer differently now (the copy went away) is not consulted, and the row
+// organized is the one whose scan lock is held.
+func TestOrganizeBook_HeldLibraryCopyIsTheSubjectWithoutAnotherResolution(t *testing.T) {
+	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/Old/Old.m4b"}}
+	svc := inPlaceSvc()
+	h := handlers.NewOrganizeHandler(store, nil, svc, nil, false)
+	var calls atomic.Int32
+	h.SetLibraryCopyResolver(func(b *database.Book) (*database.Book, bool, *database.Book) {
+		if calls.Add(1) > 2 {
+			return nil, false, nil
+		}
+		cp := *b
+		cp.ID = "s1"
+		return &cp, true, nil
+	})
+
+	w := organizeRequest(h, "b1")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("resolver ran %d time(s); want 2 (the lock step's, none in the core for a held copy)", calls.Load())
+	}
+	if svc.calls.Load() != 1 {
+		t.Fatalf("OrganizeOneBook calls = %d, want 1", svc.calls.Load())
+	}
+}
+
+// A queued organize that meets the same moving copy fails the op with the
+// unsettled message instead of organizing a row it does not hold.
+func TestRunQueuedOrganize_CopyAppearingAfterTheLockSetSettledFailsTheOp(t *testing.T) {
+	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/Old/Old.m4b"}}
+	svc := inPlaceSvc()
+	h := handlers.NewOrganizeHandler(store, nil, svc, nil, false)
+	var calls atomic.Int32
+	h.SetLibraryCopyResolver(func(b *database.Book) (*database.Book, bool, *database.Book) {
+		if calls.Add(1) <= 2 {
+			return nil, false, nil
+		}
+		cp := *b
+		cp.ID = "s1"
+		return &cp, true, nil
+	})
+
+	err := h.RunQueuedOrganize(context.Background(), "b1", nil)
+	if err == nil || !strings.Contains(err.Error(), "kept changing") {
+		t.Fatalf("want the unsettled failure, got %v", err)
+	}
+	if svc.calls.Load() != 0 {
+		t.Fatalf("organized %d time(s) a copy that was never in the lock hold", svc.calls.Load())
+	}
+}
+
+// The refusal the lock step computed under its hold stands: a book whose only
+// library copy was retired at that moment is refused even if the core's own
+// re-check no longer sees the retired copy, rather than organizing the
+// original on the strength of a later, unheld answer.
+func TestOrganizeBook_RetiredCopyAnsweredUnderTheHoldStands(t *testing.T) {
+	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/Old/Old.m4b"}}
+	svc := inPlaceSvc()
+	h := handlers.NewOrganizeHandler(store, nil, svc, nil, false)
+	var calls atomic.Int32
+	h.SetLibraryCopyResolver(func(b *database.Book) (*database.Book, bool, *database.Book) {
+		if calls.Add(1) <= 2 {
+			return nil, false, &database.Book{ID: "s1", FilePath: "/lib/Merged/Merged.m4b"}
+		}
+		return nil, false, nil
+	})
+
+	w := organizeRequest(h, "b1")
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status %d, want 409: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), organizer.CollisionLibraryCopyRetired) {
+		t.Fatalf("409 is not the retired-copy refusal: %s", w.Body.String())
+	}
+	if svc.calls.Load() != 0 {
+		t.Fatalf("organized %d time(s)", svc.calls.Load())
 	}
 }

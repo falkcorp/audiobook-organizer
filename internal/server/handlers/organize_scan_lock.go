@@ -1,5 +1,5 @@
 // file: internal/server/handlers/organize_scan_lock.go
-// version: 1.3.3
+// version: 1.4.0
 // guid: 2b7e4c91-5d08-4f3a-b6e2-9a14c7d3f058
 // last-edited: 2026-11-18
 
@@ -73,14 +73,28 @@ var errOrganizeSetUnsettled = errors.New("the book's library copy kept changing 
 // check its lock set.
 var errOrganizeBookUnreadable = errors.New("failed to fetch book")
 
+// organizeSubject is what the lock step resolved under its hold: the row the
+// organize acts on, and, when the book's only library copy was merged away,
+// the refusal the core must answer. Both are decided in one resolution, under
+// the lock, so the core neither resolves a different row nor loses the refusal.
+type organizeSubject struct {
+	// book is the row the organize acts on and the hold covers: the library
+	// copy, or the book itself when it has none (or only a merged one).
+	book *database.Book
+	// retired is non-nil when the book's only library copy is retired. The
+	// organize then refuses; book is still the requested book, so the lock set
+	// is just that book.
+	retired *organizer.LibraryCopyRetiredError
+}
+
 // organizeLockSet is the rows an organize of id must hold: id, and the library
 // copy it resolves to (organizeBookCore acts on that copy's files), sorted. A
 // scanner reaching the copy normally locks {copy, id} through their version
 // group, but not when the group is over the scanner's cap -- so the organize
-// holds both itself. subject is the row the organize acts on (the copy, or
+// holds both itself. subject.book is the row the organize acts on (the copy, or
 // the book itself). A book that does not exist is {id} with a nil subject: the
 // core answers not-found and touches nothing. A read error is returned.
-func (h *OrganizeHandler) organizeLockSet(id string) (ids []string, subject *database.Book, err error) {
+func (h *OrganizeHandler) organizeLockSet(id string) (ids []string, subject *organizeSubject, err error) {
 	ids = []string{id}
 	if h.store == nil {
 		return ids, nil, nil
@@ -92,12 +106,17 @@ func (h *OrganizeHandler) organizeLockSet(id string) (ids []string, subject *dat
 	if requested == nil {
 		return ids, nil, nil
 	}
-	// A retired-only copy leaves the subject as the book itself: the lock set is
-	// just the book, and organizeBookCore, which asks again under that lock,
-	// refuses with the 409. The error is not a lock-set failure.
-	subject, _ = organizer.ResolveOrganizeSubject(h.resolveLibraryCopy, requested)
-	if subject != nil && subject.ID != id {
-		ids = append(ids, subject.ID)
+	// A retired-only copy leaves book as the book itself: the lock set is just
+	// the book, and the refusal travels with the subject. It is the answer
+	// computed under the hold, so the core refuses on it instead of asking
+	// again. It is not a lock-set failure.
+	book, rerr := organizer.ResolveOrganizeSubject(h.resolveLibraryCopy, requested)
+	subject = &organizeSubject{book: book}
+	if retiredErr, ok := errors.AsType[*organizer.LibraryCopyRetiredError](rerr); ok {
+		subject.retired = retiredErr
+	}
+	if book != nil && book.ID != id {
+		ids = append(ids, book.ID)
 	}
 	slices.Sort(ids)
 	return ids, subject, nil
@@ -110,10 +129,11 @@ func (h *OrganizeHandler) organizeLockSet(id string) (ids []string, subject *dat
 // everything and returns errOrganizeSetUnsettled -- it never hands back a
 // hold that does not cover the row the organize would act on.
 //
-// subject is the row resolved under the lock; organizeBookCore acts on it
-// without resolving again, so it writes exactly the copy it holds. It is nil
-// only when the book does not exist (or there is no store).
-func (h *OrganizeHandler) lockOrganizeSet(id string, lock func([]string) (*scanlock.Hold, error)) (*scanlock.Hold, *database.Book, error) {
+// subject is what was resolved under the lock; organizeBookCore acts on its
+// book (and answers its retired refusal) and never swaps in a row resolved
+// later, so it writes exactly the copy it holds. It is nil only when the book
+// does not exist (or there is no store).
+func (h *OrganizeHandler) lockOrganizeSet(id string, lock func([]string) (*scanlock.Hold, error)) (*scanlock.Hold, *organizeSubject, error) {
 	for range organizeLockTries {
 		want, _, err := h.organizeLockSet(id)
 		if err != nil {
@@ -143,7 +163,7 @@ func (h *OrganizeHandler) lockOrganizeSet(id string, lock func([]string) (*scanl
 // read answers 500. ok=false with nothing written means the client went away.
 //
 // subject is lockOrganizeSet's: the row to organize, resolved under the lock.
-func (h *OrganizeHandler) lockBookForOrganize(c *gin.Context, id string) (_ *scanlock.Hold, subject *database.Book, ok bool) {
+func (h *OrganizeHandler) lockBookForOrganize(c *gin.Context, id string) (_ *scanlock.Hold, subject *organizeSubject, ok bool) {
 	reqCtx := c.Request.Context()
 	wctx, cancel := context.WithTimeout(reqCtx, organizeBookLockWait)
 	hold, subject, err := h.lockOrganizeSet(id, func(ids []string) (*scanlock.Hold, error) { return scanlock.Books.LockSet(wctx, ids) })
@@ -191,7 +211,7 @@ func (h *OrganizeHandler) lockBookForOrganize(c *gin.Context, id string) (_ *sca
 // organizeUnsettledRetries times, then fails the op (nothing organized).
 func (h *OrganizeHandler) RunQueuedOrganize(ctx context.Context, id string, beat func(msg string)) error {
 	var hold *scanlock.Hold
-	var subject *database.Book
+	var subject *organizeSubject
 	unsettled := 0
 	for {
 		wctx, cancel := context.WithTimeout(ctx, queuedOrganizeBeat)
@@ -284,4 +304,12 @@ func (r *recordingOrganizeResponder) failure() error {
 		return fmt.Errorf("organize failed (%d): %s", r.status, r.msg)
 	}
 	return nil
+}
+
+// bookOrNil is the subject's row, or nil when there is no subject.
+func (s *organizeSubject) bookOrNil() *database.Book {
+	if s == nil {
+		return nil
+	}
+	return s.book
 }
