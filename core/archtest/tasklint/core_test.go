@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/core_test.go
-// version: 1.0.13
+// version: 1.0.14
 // guid: 033d7131-0d90-4946-aecb-74c2016a00b0
 // last-edited: 2026-11-18
 
@@ -41,6 +41,9 @@ func TestTasklint_Core(t *testing.T) {
 			core + "/internal/storagetasks.CensusTask",           // as CompactTask, for core.storage.census
 			core + "/internal/executor.PruneDefinition",          // dark until the kernel hands core.tasks.prune to the executor's definition list at the tasks flip (F5-18); delete with the directive
 			core + "/internal/logjournal.PruneDefinition",        // dark until the kernel registers core.log.journal.prune at the tasks flip (F5-18); delete with the directive
+			core + "/updater.CheckTask",                          // the three core.updater.* kinds: dark until the kernel registers them at P6 when the app opts into the core updater (F8-04); delete with the directives
+			core + "/updater.ApplyTask",                          // as CheckTask
+			core + "/updater.RollbackTask",                       // as CheckTask
 		}})
 }
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/storage_format_guard.py
-# version: 2.5.0
+# version: 2.6.0
 # guid: 35696d63-9d8e-4fc3-b6a8-9c9770cd798c
-# last-edited: 2026-11-09
+# last-edited: 2026-11-18
 
 """The store guard of `make rollback` and `make rollback-restore`.
 
@@ -115,6 +115,10 @@ _STATUSES = ("open", "served", "completed", "restore_left", "consumed", "release
 # name), a release tag and an RFC 3339 time. Anything else is not printed.
 _OWNER = re.compile(r"[a-z][a-z0-9_.-]{0,63}")
 _RELEASE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}")
+# RELEASE=<tag>: a version tag, as `updater fetch-release --version` takes it.
+# It goes into a remote shell line, so it is held to this charset here and
+# core refuses a tag that is not a version (latest, a URL, a path) again.
+_RELEASE_TAG = re.compile(r"v?[0-9][A-Za-z0-9._+-]{0,63}")
 _TAKEN_AT = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})"
 )
@@ -160,6 +164,19 @@ class Opts:
     archive_dir: str = ""
     # ROLLBACK_ARCHIVE: an archive's file name inside archive_dir.
     archive: str = ""
+    # RELEASE: the release tag `make rollback-restore` fetches to put back as
+    # .prev, and stage_bin (HOST_CONFIG), the file the fetch writes and
+    # `install-staged prev` installs from.
+    release: str = ""
+    stage_bin: str = ""
+    # prev_path names the binary whose levels, format and capabilities the
+    # recipes read: "" = DEPLOY_BIN.prev, the fetched file once a RELEASE was
+    # fetched and has not been installed.
+    prev_path: str = ""
+
+    @property
+    def prev(self) -> str:
+        return self.prev_path or f"{self.bin}.prev"
 
     @property
     def cp_area(self) -> str:
@@ -189,9 +206,20 @@ def commands(o: Opts, name: str = "") -> dict[str, str]:
         "levels": f"sudo -n -u {o.user} /usr/bin/cat {o.db}.storage-levels",
         "format": f"sudo -n -u {o.user} /usr/bin/cat {o.db}.storage-format",
         "pointer": f"sudo -n -u {o.user} /usr/bin/cat {o.db}.migration-checkpoint",
-        "prev_levels": f"{o.bin}.prev --print-storage-levels",
-        "prev_format": f"{o.bin}.prev --print-storage-format",
-        "prev_caps": f"{o.bin}.prev --print-capabilities",
+        "prev_levels": f"{o.prev} --print-storage-levels",
+        "prev_format": f"{o.prev} --print-storage-format",
+        "prev_caps": f"{o.prev} --print-capabilities",
+        # RELEASE: the current binary's offline fetch, with a scratch state
+        # directory so the deploy user needs no access to the service's
+        # (the command reads no store); then the discard of the file it
+        # wrote, and the helper's install of it as .prev.
+        "fetch_release": (
+            'd=$(mktemp -d) && ABK_STATE_DIR="$d" HOME="$d" '
+            f"{o.bin} updater fetch-release --version {o.release} --out {o.stage_bin}; "
+            'rc=$?; rm -rf "$d"; exit $rc'
+        ),
+        "discard_fetched": f"rm -f {o.stage_bin} {o.stage_bin}.part",
+        "install_prev": f"sudo -n {h}/install-staged prev",
         "current_format": f"{o.bin} --print-storage-format",
         "record": f"sudo -n -u {o.user} {h}/checkpoint-record {name}",
         "into": f"sudo -n {h}/restore-offline into-check {o.archive}",
@@ -309,6 +337,7 @@ def load_host_config(o: Opts, get: Getter) -> list[str]:
         ]
     o.state_dir, o.user = cfg["state_dir"], cfg["service_user"]
     o.checkpoint_dir, o.archive_dir = cfg.get("checkpoint_dir", ""), cfg["archive_dir"]
+    o.stage_bin = cfg.get("stage_bin", "")
     bad = _validate(o)
     if bad:
         return [f"REFUSING: {HOST_CONFIG}: {bad}. Nothing was changed."]
@@ -458,10 +487,10 @@ def prev_vector(o: Opts, get: Getter) -> tuple[dict[str, int] | None, str]:
             return v, "it printed them"
         return (
             None,
-            f"`{o.bin}.prev --print-storage-levels` printed no JSON level vector ({_cause(r)})",
+            f"`{o.prev} --print-storage-levels` printed no JSON level vector ({_cause(r)})",
         )
     if not _OLD_LEVELS_FLAG.search(r.stderr):
-        return None, f"`{o.bin}.prev --print-storage-levels` failed ({_cause(r)})"
+        return None, f"`{o.prev} --print-storage-levels` failed ({_cause(r)})"
     f = get("prev_format")
     n = _int(f.stdout) if f.rc == 0 else None
     if n == 1 or (f.rc != 0 and _OLD_FORMAT_FLAG.search(f.stderr)):
@@ -591,6 +620,9 @@ class Source:
     release: str
     taken_at: str
     restore_cmd: str
+    # The release tag the source was taken under, when the source records one
+    # (a checkpoint's from_release): what RELEASE= should name. "" = unknown.
+    tag: str = ""
 
 
 def _checkpoint_source(o: Opts, get: Getter) -> tuple[Source | None, list[str]]:
@@ -663,6 +695,7 @@ def _checkpoint_source(o: Opts, get: Getter) -> tuple[Source | None, list[str]]:
         else "the release you upgraded from (the checkpoint records no from_release)",
         taken_at=taken_at if _TAKEN_AT.fullmatch(taken_at) else "unknown",
         restore_cmd=commands(o, name)["restore_checkpoint"],
+        tag=release if _RELEASE_TAG.fullmatch(release) else "",
     ), []
 
 
@@ -691,40 +724,73 @@ def _archive_source(o: Opts, get: Getter) -> tuple[Source | None, list[str]]:
     ), []
 
 
-def decide_restore(o: Opts, get: Getter) -> tuple[int, list[str], str]:
-    """Return (exit, lines, the remote restore command or "")."""
+def decide_restore(
+    o: Opts, get: Getter, fetch: Callable[[Source], list[str]] | None = None
+) -> tuple[int, list[str], str]:
+    """Return (exit, lines, the remote restore command or "").
+
+    fetch is RELEASE's step (deploy_rollback.Run.fetch_release): called with
+    the source once it is read, before .prev is measured, it fetches the named
+    release, points o.prev_path at it, and returns refusal lines, or none."""
     refusal = check_inflight(o, get)
     if refusal:
         return 1, refusal, ""
     src, lines = (_archive_source if o.archive else _checkpoint_source)(o, get)
     if src is None:
         return 1, lines, ""
+    if fetch is not None:
+        refusal = fetch(src)
+        if refusal:
+            return 1, refusal, ""
     prev, how = prev_vector(o, get)
+    subject = f"RELEASE={o.release}" if o.release else o.prev
     if prev is None:
         return (
             1,
             [
-                f"REFUSING: cannot tell which store levels {o.bin}.prev serves: {how}. Nothing was changed."
+                f"REFUSING: cannot tell which store levels {subject} serves: {how}. Nothing was changed."
             ],
             "",
         )
     diff = differs(src.levels, prev)
     if diff:
+        if o.release:
+            hint = (
+                f"{src.release} is the release this source was taken under: run make rollback-restore "
+                f"RELEASE={src.tag}."
+                if src.tag
+                else f"Name the tag of {src.release} in RELEASE."
+            )
+            return (
+                1,
+                [
+                    f"REFUSING: the {src.describe} is at levels {fmt(src.levels)}, and RELEASE={o.release} "
+                    f"serves {fmt(prev)} ({', '.join(diff)} differ). That binary would refuse the restored "
+                    f"store or migrate it again (DATA-9). Nothing was changed; {o.bin}.prev is as it was.",
+                    hint,
+                ],
+                "",
+            )
+        retry = (
+            f"make rollback-restore RELEASE={src.tag}"
+            if src.tag
+            else "make rollback-restore RELEASE=<tag>"
+        )
         return (
             1,
             [
                 f"REFUSING: the {src.describe} is at levels {fmt(src.levels)}, and {o.bin}.prev serves {fmt(prev)} "
                 f"({', '.join(diff)} differ). That binary would refuse the restored store or migrate it again "
                 "(DATA-9). Nothing was changed.",
-                f"Install {src.release} as {o.bin}.prev, then run make rollback-restore again. "
-                "(`make rollback-restore RELEASE=<tag>` fetches it once F8's updater fetch-release ships.)",
+                f"Install {src.release} as {o.bin}.prev, then run make rollback-restore again; or have make "
+                f"fetch it and install it as {o.bin}.prev once the levels agree: {retry}.",
             ],
             "",
         )
     return (
         0,
         [
-            f"rollback-restore: {src.describe} matches {o.bin}.prev ({fmt(prev)}; {how}).",
+            f"rollback-restore: {src.describe} matches {subject} ({fmt(prev)}; {how}).",
             f"Restoring it discards every write made since it was taken ({src.taken_at}): imports, edits, and the "
             "listening progress the phone apps synced.",
             "WARNING: every credential change made since then is undone too. A key revoked, a user disabled or a "
@@ -771,6 +837,7 @@ def _validate(o: Opts) -> str:
         ("db", o.db),
         ("state_dir", o.state_dir),
         ("archive_dir", o.archive_dir),
+        ("stage_bin", o.stage_bin),
     ):
         if p and (not _SAFE_PATH.match(p) or ".." in p.split("/")):
             return f"{label} {p!r} must be an absolute path of letters, digits and ._/@+-"
@@ -778,6 +845,10 @@ def _validate(o: Opts) -> str:
         return f"checkpoint_dir {o.checkpoint_dir!r} must be an absolute path of letters, digits and ._/@+-"
     if o.archive and (not _ARCHIVE_NAME.fullmatch(o.archive) or ".." in o.archive):
         return f"ROLLBACK_ARCHIVE {o.archive!r} must be a file name in archive_dir (letters, digits and ._-, no /)"
+    if o.release and not _RELEASE_TAG.fullmatch(o.release):
+        return (
+            f"RELEASE {o.release!r} must be a release tag such as v1.2.3 (letters, digits and ._+-)"
+        )
     if not _SAFE_USER.match(o.user) or o.user == "root":
         return f"service_user {o.user!r} is not the service's user"
     if not re.fullmatch(r"[A-Za-z0-9@._-]+\.service", o.unit):

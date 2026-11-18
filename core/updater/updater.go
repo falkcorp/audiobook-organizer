@@ -1,43 +1,46 @@
 // file: core/updater/updater.go
-// version: 1.2.1
+// version: 2.0.0
 // guid: 2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d
 // last-edited: 2026-11-18
 
+// Package updater is the R0 updater moved into core (05-updater, F8-02): a
+// release source, HEAD's raw-asset download and rename swap with the hotfix's
+// semver rule, .prev slot and exit-75 restart, plus exactly two additions to
+// HEAD's pipeline, the core.updater.max_download cap and the --version-json
+// self-test. It names no app: the app passes its ID, binary name and release
+// source (Options).
 package updater
 
 import (
 	"context"
-	json "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
-	"github.com/falkcorp/mediacore/storage/restorejournal"
 	"golang.org/x/mod/semver"
+
+	"github.com/falkcorp/mediacore/health"
+	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
 
-// RestartExitCode is the status RestartSelf exits with after an update. The
-// committed systemd unit uses Restart=on-failure, which restarts a service
-// that exits non-zero; HEAD exited 0, which left the service stopped. 75 is
-// EX_TEMPFAIL: "try again", which is what a restart onto a new binary is.
+// RestartExitCode is the status a restart onto a new binary exits with:
+// EX_TEMPFAIL, "try again". The committed systemd unit uses Restart=on-failure,
+// which restarts a service that exits non-zero; HEAD exited 0, which left the
+// service stopped. The kernel's Restarter uses core.lifecycle.restart_exit_code
+// (default this value).
 const RestartExitCode = 75
 
-// LocalBuildNote is UpdateInfo.Note on a local build.
+// LocalBuildNote is Status's note on a local build.
 const LocalBuildNote = "local build, not compared"
-
-// defaultAPIBase is the GitHub REST API root the release lookups use.
-const defaultAPIBase = "https://api.github.com"
 
 // Refusals of a manual apply. Each is returned before anything is downloaded.
 var (
@@ -55,19 +58,40 @@ var (
 	ErrInvalidVersion = errors.New("version is not a release tag")
 	// ErrReleaseNotFound: the release source has no release with that tag.
 	ErrReleaseNotFound = errors.New("release not found")
+	// ErrNoStateDir: the updater was built without a state directory, so it
+	// cannot read the swap slot and refuses rather than skip the check.
+	ErrNoStateDir = errors.New("updater has no state directory: cannot check the swap slot, refusing to apply")
+	// ErrDisabled: core.updater.mode is off.
+	ErrDisabled = errors.New("updater is off")
+	// ErrBinaryNotWritable: the executable's directory cannot be written by
+	// this process, so no swap could be made.
+	ErrBinaryNotWritable = errors.New("binary_not_writable: the executable's directory is not writable by this process")
+	// ErrNoAsset: the release has no asset for this platform.
+	ErrNoAsset = errors.New("no_asset: the release has no asset for this platform")
+	// ErrNoTagLookup: the configured source cannot look a release up by tag.
+	ErrNoTagLookup = errors.New("the release source cannot look a release up by tag")
+	// ErrDownloadFailed: the asset could not be downloaded in full.
+	ErrDownloadFailed = errors.New("download_failed")
+	// ErrOversize: the asset is larger than core.updater.max_download.
+	ErrOversize = errors.New("the download exceeds core.updater.max_download")
+	// ErrSelfTest: the downloaded binary failed its --version-json self-test.
+	ErrSelfTest = errors.New("selftest_failed")
+	// ErrNoPrevious: there is no <exe>.prev to roll back to.
+	ErrNoPrevious = errors.New("there is no previous binary to roll back to")
+	// ErrNoRestarter: the updater was built without a Restarter.
+	ErrNoRestarter = errors.New("updater has no restarter")
+	// ErrNoVersion: the updater was built without the running version.
+	ErrNoVersion = errors.New("updater has no running version")
 	// A staged (restore_pending) or in-flight (restore_inflight) restore or
 	// reset swap refuses an apply with restorejournal.ErrSwapPending, the
 	// slot probe's own sentinel (05-updater 5U.12). Core declares no second
 	// one: callers match restorejournal.ErrSwapPending. Swapping in a new
 	// binary under such a swap would pair the new build with the old build's
 	// intent.
-	// ErrNoStateDir: the updater was built without a state directory, so it
-	// cannot read the swap slot and refuses rather than skip the check.
-	ErrNoStateDir = errors.New("updater has no state directory: cannot check the swap slot, refusing to apply")
 )
 
 // describeSuffix returns the pattern that matches the suffix `git describe --tags --always --dirty`
-// (Makefile VERSION) appends to a tag when the build is not exactly that tag:
+// (a Makefile VERSION) appends to a tag when the build is not exactly that tag:
 // -<commits since tag>-g<abbreviated hash>, optionally followed by -dirty.
 func describeSuffix() *regexp.Regexp {
 	return regexp.MustCompile(`-[0-9]+-g[0-9a-f]+(-dirty)?$`)
@@ -77,68 +101,48 @@ func describeSuffix() *regexp.Regexp {
 // release-lookup URL: "v", three numeric parts, and optional pre-release and
 // build parts drawn from [0-9A-Za-z.-]. normalizeTag already requires a valid
 // semantic version, which implies this; the match is repeated at the request
-// site so the URL is visibly built from a value that cannot hold "/", "?",
+// site so a URL is visibly built from a value that cannot hold "/", "?",
 // "#", "%" or "..".
 func releaseTagPattern() *regexp.Regexp {
 	return regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
 }
 
-// UpdateInfo holds the result of an update check.
-type UpdateInfo struct {
-	CurrentVersion  string    `json:"current_version"`
-	LatestVersion   string    `json:"latest_version"`
-	Channel         string    `json:"channel"`
-	UpdateAvailable bool      `json:"update_available"`
-	ReleaseURL      string    `json:"release_url,omitempty"`
-	ReleaseNotes    string    `json:"release_notes,omitempty"`
-	PublishedAt     time.Time `json:"published_at"`
-	LastChecked     time.Time `json:"last_checked"`
-	// LocalBuild is set when the running version carries a git describe
-	// suffix: it is not compared with releases and nothing is offered.
-	LocalBuild bool `json:"local_build"`
-	// AutoApplyPaused is set while the operator asked for automatic apply
-	// (auto_update.enabled): this build only checks, it never applies
-	// unattended.
-	AutoApplyPaused bool `json:"auto_apply_paused"`
-	// Note is LocalBuildNote on a local build, else empty.
-	Note string `json:"note"`
-
-	// named marks an apply target the operator named explicitly (PrepareApply
-	// with a version). Only a named target may be applied to a local build.
-	named bool
-}
-
-// Updater checks for and applies updates from GitHub releases.
+// Updater checks for and applies updates from one release Source (one per
+// App). Every mutation happens inside the apply and rollback tasks, which the
+// kernel serialises on one concurrency key; Status is a lock-free read.
 type Updater struct {
-	currentVersion string
-	repo           string // "falkcorp/audiobook-organizer"
-	mu             sync.Mutex
-	lastCheck      *UpdateInfo
-	httpClient     *http.Client
+	opts    Options
+	d       Deps
+	source  Source
+	version string // the running build's version
 
-	// Seams, all defaulted when zero so a literal &Updater{...} still works.
-	apiBase    string                              // GitHub API root; defaultAPIBase
+	settings   func() Settings
+	stateDir   string // resolved absolute state directory whose restore/ holds the swap slot
+	dbPath     string // core.storage.path: the store ReaderCheck judges
+	secret     func(ctx context.Context, name string) (string, error)
 	executable func() (string, error)              // os.Executable
 	rename     func(oldpath, newpath string) error // os.Rename
-	exit       func(code int)                      // os.Exit
+	log        *slog.Logger
+	metrics    *Metrics
+	now        func() time.Time
 
-	// stateDir is the resolved absolute state directory whose restore/ holds
-	// the swap slot. Empty means "unknown": an apply refuses (ErrNoStateDir).
-	stateDir string
+	// skipSelfTest keeps the gin /api/v1/update/* path as HEAD's R0 had it
+	// until F8-04 deletes that path (LegacySkipSelfTest).
+	skipSelfTest bool
 
-	// log receives the updater's lines; nil discards them. Versions, tags and
-	// asset URLs come from the release source, so the app passes a logger
-	// whose handler sanitises (WithLogger).
-	log *slog.Logger
+	status atomic.Pointer[Status]
 }
 
-// Option configures an Updater built by NewUpdater.
+// Option configures an Updater built by New. They carry what §5U.3's Options
+// and Deps do not: the running version, the directories and the settings.
 type Option func(*Updater)
 
-// WithAPIBaseForTest points the release lookups at another API root (a test server).
-func WithAPIBaseForTest(base string) Option {
-	return func(u *Updater) { u.apiBase = strings.TrimRight(base, "/") }
-}
+// WithVersion sets the running build's version (app.Options.Version).
+func WithVersion(v string) Option { return func(u *Updater) { u.version = v } }
+
+// WithSettings sets the reader of the live core.updater.* values; without it
+// the updater runs on DefaultSettings(Options.DefaultMode).
+func WithSettings(f func() Settings) Option { return func(u *Updater) { u.settings = f } }
 
 // WithStateDir sets the resolved absolute state directory (the one the
 // kernel's app.Options.StateDir names) whose restore/ holds the swap slot. An
@@ -158,25 +162,18 @@ func WithStateDir(dir string) Option {
 	}
 }
 
-// WithLogger sets the logger the updater's lines go to. The app passes its
-// sanitising logger: versions, tags and asset URLs come from the release
-// source.
-func WithLogger(l *slog.Logger) Option {
-	return func(u *Updater) { u.log = l }
+// WithDBPath sets core.storage.path, the store the rollback's ReaderCheck
+// judges the previous binary against.
+func WithDBPath(p string) Option { return func(u *Updater) { u.dbPath = p } }
+
+// WithSecrets sets how a Source's TokenSecret is read (the kernel binds it
+// over the secret store).
+func WithSecrets(f func(ctx context.Context, name string) (string, error)) Option {
+	return func(u *Updater) { u.secret = f }
 }
 
-// logf writes one line: HEAD's updateLog took a format and arguments.
-func (u *Updater) logf(level slog.Level, format string, args ...any) {
-	if u.log == nil {
-		return
-	}
-	u.log.Log(context.Background(), level, fmt.Sprintf(format, args...))
-}
-
-// WithHTTPClientForTest replaces the HTTP client used for lookups and downloads.
-func WithHTTPClientForTest(c *http.Client) Option {
-	return func(u *Updater) { u.httpClient = c }
-}
+// WithMetrics sets the updater's series; nil records nothing.
+func WithMetrics(m *Metrics) Option { return func(u *Updater) { u.metrics = m } }
 
 // WithExecutableForTest replaces the function that names the running executable,
 // which is the file an apply replaces.
@@ -184,64 +181,72 @@ func WithExecutableForTest(fn func() (string, error)) Option {
 	return func(u *Updater) { u.executable = fn }
 }
 
-// WithExitForTest replaces the function RestartSelf exits through.
-func WithExitForTest(fn func(code int)) Option {
-	return func(u *Updater) { u.exit = fn }
+// WithRenameForTest replaces os.Rename in the swap.
+func WithRenameForTest(fn func(oldpath, newpath string) error) Option {
+	return func(u *Updater) { u.rename = fn }
 }
 
-// githubRelease is the subset of GitHub's release API response we use.
-type githubRelease struct {
-	TagName     string `json:"tag_name"`
-	HTMLURL     string `json:"html_url"`
-	Body        string `json:"body"`
-	Prerelease  bool   `json:"prerelease"`
-	PublishedAt string `json:"published_at"`
-	Assets      []struct {
-		Name               string `json:"name"`
-		BrowserDownloadURL string `json:"browser_download_url"`
-	} `json:"assets"`
-}
+// WithClockForTest replaces the clock.
+func WithClockForTest(now func() time.Time) Option { return func(u *Updater) { u.now = now } }
 
-// githubCommit is the subset of GitHub's commit API response we use.
-type githubCommit struct {
-	SHA     string `json:"sha"`
-	HTMLURL string `json:"html_url"`
-	Commit  struct {
-		Message string `json:"message"`
-		Author  struct {
-			Date string `json:"date"`
-		} `json:"author"`
-	} `json:"commit"`
-}
+// LegacySkipSelfTest keeps the --version-json self-test off the pipeline. It
+// exists for the gin /api/v1/update/* path, which F8-02 must leave answering
+// as R0 did (only releases from v0.224.0 on print --version-json); F8-04
+// deletes that path and this option with it. The task path never sets it.
+func LegacySkipSelfTest() Option { return func(u *Updater) { u.skipSelfTest = true } }
 
-// NewUpdater creates an Updater for the given current version.
-func NewUpdater(currentVersion string, opts ...Option) *Updater {
-	u := &Updater{
-		currentVersion: currentVersion,
-		repo:           "falkcorp/audiobook-organizer",
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+// New builds the updater for opts and d. Without the running version
+// (WithVersion) it refuses: HEAD's updater was given it at construction too.
+func New(opts Options, d Deps, with ...Option) (*Updater, error) {
+	switch {
+	case strings.TrimSpace(opts.AppID) == "":
+		return nil, errors.New("updater: Options.AppID is empty")
+	case strings.TrimSpace(opts.BinaryName) == "":
+		return nil, errors.New("updater: Options.BinaryName is empty")
+	case opts.Source == nil:
+		return nil, errors.New("updater: Options.Source is nil")
 	}
-	for _, opt := range opts {
-		opt(u)
+	if opts.AssetName == nil {
+		opts.AssetName = RawBinary(opts.BinaryName)
 	}
-	return u
+	u := &Updater{opts: opts, d: d, log: d.Log, now: time.Now}
+	for _, w := range with {
+		w(u)
+	}
+	if strings.TrimSpace(u.version) == "" {
+		return nil, ErrNoVersion
+	}
+	if u.settings == nil {
+		def := DefaultSettings(opts.DefaultMode)
+		u.settings = func() Settings { return def }
+	}
+	u.source = opts.Source
+	if b, ok := opts.Source.(Binder); ok {
+		env := Env{UserAgent: opts.BinaryName + "/" + u.version, Secret: u.secret}
+		if d.HTTP != nil {
+			env.HTTP = d.HTTP.Client()
+		}
+		u.source = b.Bind(env)
+	}
+	st := Status{Current: u.version}
+	st.Mode, st.Channel = u.settings().Mode, u.settings().Channel
+	u.status.Store(&st)
+	return u, nil
 }
 
-func (u *Updater) apiURL(format string, args ...any) string {
-	base := u.apiBase
-	if base == "" {
-		base = defaultAPIBase
-	}
-	return base + fmt.Sprintf(format, args...)
-}
+func goos() string   { return runtime.GOOS }
+func goarch() string { return runtime.GOARCH }
 
-func (u *Updater) client() *http.Client {
-	if u.httpClient == nil {
-		return http.DefaultClient
+// ComponentID is the health component the kernel registers for the updater
+// (kernel/health.go registers it with Probe as its source; Deps.Health is
+// therefore not used to register it here).
+const ComponentID health.ComponentID = "core.updater"
+
+// logf writes one line; a nil logger discards it.
+func (u *Updater) logf(level slog.Level, msg string, args ...any) {
+	if u.log != nil {
+		u.log.Log(context.Background(), level, msg, args...)
 	}
-	return u.httpClient
 }
 
 func (u *Updater) executablePath() (string, error) {
@@ -256,6 +261,31 @@ func (u *Updater) renameFile(oldpath, newpath string) error {
 		return u.rename(oldpath, newpath)
 	}
 	return os.Rename(oldpath, newpath)
+}
+
+// Status returns the updater's last known state; a lock-free atomic read.
+func (u *Updater) Status() Status { return *u.status.Load() }
+
+// setStatus publishes st.
+func (u *Updater) setStatus(st Status) { u.status.Store(&st) }
+
+// Probe is the core.updater component's source (05-updater 5U.9): Up, or
+// Degraded with one of the fixed reasons check_failed, binary_not_writable,
+// auto_update_paused. An off updater reports Up with reason "off".
+func (u *Updater) Probe(context.Context) health.Result {
+	st := u.Status()
+	res := health.Result{Status: health.StatusUp, At: u.now()}
+	switch {
+	case st.Mode < ModeCheck:
+		res.Reason = "off"
+	case st.DisabledReason == "binary_not_writable":
+		res.Status, res.Reason = health.StatusDegraded, "binary_not_writable"
+	case st.LastError != "":
+		res.Status, res.Reason = health.StatusDegraded, "check_failed"
+	case st.AutoApplyPaused:
+		res.Status, res.Reason = health.StatusDegraded, "auto_update_paused"
+	}
+	return res
 }
 
 // canonicalVersion returns v with a leading "v" when it is a valid semantic
@@ -295,179 +325,6 @@ func isNewer(latest, current string) bool {
 	return semver.Compare(l, c) > 0
 }
 
-// LastCheck returns the most recent update check result, or nil.
-func (u *Updater) LastCheck() *UpdateInfo {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	return u.lastCheck
-}
-
-// CheckForUpdate queries GitHub for the latest version on the given channel
-// and records the result as the last check. It never applies anything.
-func (u *Updater) CheckForUpdate(channel string) (*UpdateInfo, error) {
-	return u.check(channel, false)
-}
-
-// CheckUnattended is the check the unattended paths (the scheduler's tick and
-// the maintenance window's step 1) run instead of applying. Both run only
-// while auto_update.enabled is true, so the status they record carries
-// AutoApplyPaused: the operator asked for automatic apply and this build
-// paused it. A newer release is logged at info with both versions; it is
-// applied only from Settings.
-func (u *Updater) CheckUnattended(channel string) (*UpdateInfo, error) {
-	info, err := u.check(channel, true)
-	if err != nil {
-		return nil, err
-	}
-	if info.UpdateAvailable {
-		u.logf(slog.LevelInfo, "update available; apply it from Settings: running %s, latest %s (channel %s)",
-			info.CurrentVersion, info.LatestVersion, info.Channel)
-	}
-	return info, nil
-}
-
-func (u *Updater) check(channel string, autoApplyPaused bool) (*UpdateInfo, error) {
-	var info *UpdateInfo
-	var err error
-
-	switch channel {
-	case "develop":
-		info, err = u.checkDevelop()
-	default:
-		info, err = u.checkStable()
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	if IsLocalBuild(u.currentVersion) {
-		info.LocalBuild = true
-		info.Note = LocalBuildNote
-		info.UpdateAvailable = false
-	}
-	info.AutoApplyPaused = autoApplyPaused
-
-	u.mu.Lock()
-	u.lastCheck = info
-	u.mu.Unlock()
-
-	return info, nil
-}
-
-func (u *Updater) checkStable() (*UpdateInfo, error) {
-	release, found, err := u.fetchRelease(u.apiURL("/repos/%s/releases/latest", u.repo))
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		// No releases yet
-		return &UpdateInfo{
-			CurrentVersion:  u.currentVersion,
-			LatestVersion:   u.currentVersion,
-			Channel:         "stable",
-			UpdateAvailable: false,
-			LastChecked:     time.Now(),
-		}, nil
-	}
-
-	latestVersion := strings.TrimPrefix(release.TagName, "v")
-	var publishedAt time.Time
-	if release.PublishedAt != "" {
-		publishedAt, _ = time.Parse(time.RFC3339, release.PublishedAt)
-	}
-
-	return &UpdateInfo{
-		CurrentVersion:  u.currentVersion,
-		LatestVersion:   latestVersion,
-		Channel:         "stable",
-		UpdateAvailable: isNewer(release.TagName, u.currentVersion),
-		ReleaseURL:      release.HTMLURL,
-		ReleaseNotes:    release.Body,
-		PublishedAt:     publishedAt,
-		LastChecked:     time.Now(),
-	}, nil
-}
-
-// fetchRelease GETs one release object. found is false on a 404.
-func (u *Updater) fetchRelease(apiURL string) (release githubRelease, found bool, err error) {
-	req, err := http.NewRequest("GET", apiURL, nil)
-	if err != nil {
-		return release, false, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
-	req.Header.Set("User-Agent", "audiobook-organizer/"+u.currentVersion)
-
-	resp, err := u.client().Do(req)
-	if err != nil {
-		return release, false, fmt.Errorf("failed to check for updates: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return release, false, nil
-	}
-	if resp.StatusCode != http.StatusOK {
-		return release, false, fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
-	}
-	if err := json.UnmarshalRead(resp.Body, &release); err != nil {
-		return release, false, fmt.Errorf("failed to decode release: %w", err)
-	}
-	return release, true, nil
-}
-
-func (u *Updater) checkDevelop() (*UpdateInfo, error) {
-	req, err := http.NewRequest("GET", u.apiURL("/repos/%s/commits/main", u.repo), nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
-	req.Header.Set("User-Agent", "audiobook-organizer/"+u.currentVersion)
-
-	resp, err := u.client().Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to check for updates: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
-	}
-
-	var commit githubCommit
-	if err := json.UnmarshalRead(resp.Body, &commit); err != nil {
-		return nil, fmt.Errorf("failed to decode commit: %w", err)
-	}
-
-	shortSHA := commit.SHA
-	if len(shortSHA) > 7 {
-		shortSHA = shortSHA[:7]
-	}
-
-	var committedAt time.Time
-	if commit.Commit.Author.Date != "" {
-		committedAt, _ = time.Parse(time.RFC3339, commit.Commit.Author.Date)
-	}
-
-	firstLine := commit.Commit.Message
-	if idx := strings.Index(firstLine, "\n"); idx != -1 {
-		firstLine = firstLine[:idx]
-	}
-
-	// HEAD's develop rule, kept: a commit hash cannot be ordered against a
-	// version, so any difference counts. check() clears it on a local build.
-	return &UpdateInfo{
-		CurrentVersion:  u.currentVersion,
-		LatestVersion:   shortSHA,
-		Channel:         "develop",
-		UpdateAvailable: shortSHA != u.currentVersion && u.currentVersion != "dev",
-		ReleaseURL:      commit.HTMLURL,
-		ReleaseNotes:    firstLine,
-		PublishedAt:     committedAt,
-		LastChecked:     time.Now(),
-	}, nil
-}
-
 // normalizeTag turns an operator-typed version into the release tag form
 // (leading "v") and rejects anything that is not a semantic version, so the
 // value can never carry a path or query into the release lookup.
@@ -476,34 +333,144 @@ func normalizeTag(version string) (string, bool) {
 	if !strings.HasPrefix(v, "v") {
 		v = "v" + v
 	}
-	if !semver.IsValid(v) {
+	if !semver.IsValid(v) || !releaseTagPattern().MatchString(v) || strings.Contains(v, "..") {
 		return "", false
 	}
 	return v, true
+}
+
+// Check queries the release source on the configured channel and records the
+// result. It never applies anything and notifies nobody (the check task
+// does, through the run's Writer).
+func (u *Updater) Check(ctx context.Context) (Status, error) {
+	return u.CheckWith(ctx, CheckOptions{})
+}
+
+// CheckWith is Check with one run's refinements.
+func (u *Updater) CheckWith(ctx context.Context, o CheckOptions) (Status, error) {
+	st, _, err := u.check(ctx, o)
+	return st, err
+}
+
+// check runs one check and returns the release it saw (zero when none).
+func (u *Updater) check(ctx context.Context, o CheckOptions) (Status, Release, error) {
+	set := u.settings()
+	ch := set.Channel
+	if o.Channel != "" {
+		ch = o.Channel
+	}
+	if ch == "" {
+		ch = ChannelStable
+	}
+	st := Status{
+		Mode: set.Mode, Channel: ch, Current: u.version,
+		AutoApplyPaused: set.AutoApplyPaused || o.AutoApplyPaused,
+		LocalBuild:      IsLocalBuild(u.version),
+		PreviousKept:    u.Status().PreviousKept,
+	}
+	if st.Mode < ModeCheck {
+		st.DisabledReason = "off"
+		u.setStatus(st)
+		return st, Release{}, nil
+	}
+	if _, ok := canonicalVersion(u.version); !ok && !st.LocalBuild {
+		st.DisabledReason = "dev_build"
+	}
+	if err := u.probeWritable(); err != nil && st.DisabledReason == "" {
+		st.DisabledReason = "binary_not_writable"
+	}
+
+	rel, err := u.source.Latest(ctx, ch)
+	st.LastChecked = u.now()
+	switch {
+	case errors.Is(err, ErrReleaseNotFound):
+		// No release yet: nothing to offer, not a failed check.
+		st.Latest = u.version
+		u.metrics.Check(ctx, "ok")
+		u.metrics.Available(ctx, false)
+		u.setStatus(st)
+		return st, Release{}, nil
+	case err != nil:
+		st.LastError = "check_failed"
+		u.logf(slog.LevelWarn, "update check failed", "err", err)
+		u.metrics.Check(ctx, "failed")
+		u.setStatus(st)
+		return st, Release{}, fmt.Errorf("update check: %w", err)
+	}
+	st.Latest = rel.Version
+	st.Available = !st.LocalBuild && isNewer(rel.Version, u.version)
+	outcome := "ok"
+	if st.Available && u.assetOf(rel) == nil {
+		st.LastError, outcome = "no_asset", "no_asset"
+	}
+	u.metrics.Check(ctx, outcome)
+	u.metrics.Available(ctx, st.Available)
+	if st.Available {
+		u.logf(slog.LevelInfo, "update available; apply it from Settings", "running", u.version, "latest", rel.Version, "channel", string(ch))
+	}
+	u.setStatus(st)
+	return st, rel, nil
+}
+
+// assetOf is the release's asset for this platform, or nil.
+func (u *Updater) assetOf(r Release) *Asset {
+	want := u.opts.AssetName(r, goos(), goarch())
+	for i := range r.Assets {
+		if r.Assets[i].Name == want {
+			return &r.Assets[i]
+		}
+	}
+	return nil
+}
+
+// probeWritable reports whether the executable's directory can be written by
+// this process: it creates and removes a probe file through an os.Root opened
+// on that directory (OPS2-4).
+func (u *Updater) probeWritable() error {
+	exe, err := u.executablePath()
+	if err != nil {
+		return fmt.Errorf("executable path: %w", err)
+	}
+	root, err := os.OpenRoot(filepath.Dir(exe))
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrBinaryNotWritable, err)
+	}
+	defer func() { _ = root.Close() }()
+	const probe = ".updater-write-probe"
+	f, err := root.OpenFile(probe, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrBinaryNotWritable, err)
+	}
+	cerr := f.Close()
+	rerr := root.Remove(probe)
+	if cerr != nil || rerr != nil {
+		return fmt.Errorf("%w: %v", ErrBinaryNotWritable, errors.Join(cerr, rerr))
+	}
+	return nil
 }
 
 // applyAllowed is the R0 apply rule, applied to the tag that would actually be
 // downloaded: a local build applies only a version the operator named; any
 // other build applies only a release strictly newer than itself.
 func (u *Updater) applyAllowed(tag string, named bool) error {
-	if IsLocalBuild(u.currentVersion) {
+	if IsLocalBuild(u.version) {
 		if named {
 			return nil
 		}
 		return ErrLocalBuildNeedsVersion
 	}
-	if _, ok := canonicalVersion(u.currentVersion); !ok {
+	if _, ok := canonicalVersion(u.version); !ok {
 		return ErrUnversioned
 	}
-	if !isNewer(tag, u.currentVersion) {
+	if !isNewer(tag, u.version) {
 		return ErrNotNewer
 	}
 	return nil
 }
 
-// PrepareApply resolves what a manual apply installs and enforces the R0
-// refusals without touching the network. version "" means the release the last
-// check offered; otherwise version names a release tag ("v" optional).
+// Prepare resolves what a manual apply installs and enforces the R0 refusals
+// without touching the network. version "" means the release the last check
+// offered; otherwise version names a release tag ("v" optional).
 //
 // Refusals, in order: an unnamed apply on a local build
 // (ErrLocalBuildNeedsVersion); an unnamed apply with nothing offered
@@ -511,122 +478,32 @@ func (u *Updater) applyAllowed(tag string, named bool) error {
 // no release version (ErrUnversioned); a target that is not newer than a
 // non-local running version (ErrNotNewer). A named version on a local build is
 // allowed without the newer-than check.
-func (u *Updater) PrepareApply(version string) (*UpdateInfo, error) {
+func (u *Updater) Prepare(version string) (Target, error) {
 	if strings.TrimSpace(version) == "" {
-		if IsLocalBuild(u.currentVersion) {
-			return nil, ErrLocalBuildNeedsVersion
+		if IsLocalBuild(u.version) {
+			return Target{}, ErrLocalBuildNeedsVersion
 		}
-		last := u.LastCheck()
-		if last == nil || !last.UpdateAvailable {
-			return nil, ErrNoUpdate
+		last := u.Status()
+		if !last.Available {
+			return Target{}, ErrNoUpdate
 		}
-		target := *last
-		if target.Channel == "develop" {
-			// DownloadAndReplace refuses develop with HEAD's message.
-			return &target, nil
+		tag, ok := normalizeTag(last.Latest)
+		if !ok {
+			return Target{}, ErrInvalidVersion
 		}
-		if err := u.applyAllowed(target.LatestVersion, false); err != nil {
-			return nil, err
+		if err := u.applyAllowed(tag, false); err != nil {
+			return Target{}, err
 		}
-		return &target, nil
+		return Target{Version: tag}, nil
 	}
-
 	tag, ok := normalizeTag(version)
 	if !ok {
-		return nil, ErrInvalidVersion
+		return Target{}, ErrInvalidVersion
 	}
 	if err := u.applyAllowed(tag, true); err != nil {
-		return nil, err
+		return Target{}, err
 	}
-	return &UpdateInfo{
-		CurrentVersion: u.currentVersion,
-		LatestVersion:  strings.TrimPrefix(tag, "v"),
-		Channel:        "stable",
-		LocalBuild:     IsLocalBuild(u.currentVersion),
-		named:          true,
-	}, nil
-}
-
-// DownloadAndReplace downloads the release info names (by its tag, so the
-// bytes installed are the release that was checked or named, never whatever
-// is latest at apply time) and swaps it in place of the running executable.
-//
-// The swap: write <exe>.new (0755) and fsync it, rename <exe> -> <exe>.prev
-// (replacing an older .prev), rename <exe>.new -> <exe>, fsync the directory.
-// If the second rename fails, .prev is renamed back and .new deleted. .prev is
-// never deleted: it is the slot `make rollback` uses.
-func (u *Updater) DownloadAndReplace(info *UpdateInfo) error {
-	if info == nil || (!info.UpdateAvailable && !info.named) {
-		return ErrNoUpdate
-	}
-	if info.Channel == "develop" {
-		return errDevelopApply
-	}
-
-	tag, ok := normalizeTag(info.LatestVersion)
-	if !ok {
-		return ErrInvalidVersion
-	}
-	// Re-applied here, on the tag about to be downloaded, so no caller can
-	// install a release the R0 rule refuses.
-	if err := u.applyAllowed(tag, info.named); err != nil {
-		return err
-	}
-	// Before anything is downloaded or renamed: no swap may be staged or in
-	// flight.
-	if err := u.checkSwapSlot(); err != nil {
-		return err
-	}
-
-	assetURL, err := u.findAssetURL(info)
-	if err != nil {
-		return err
-	}
-
-	u.logf(slog.LevelInfo, "Downloading update %s from %s", tag, assetURL)
-
-	execPath, err := u.executablePath()
-	if err != nil {
-		return fmt.Errorf("failed to get executable path: %w", err)
-	}
-
-	req, err := http.NewRequest("GET", assetURL, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create download request: %w", err)
-	}
-	req.Header.Set("Accept", "application/octet-stream")
-	req.Header.Set("User-Agent", "audiobook-organizer/"+u.currentVersion)
-
-	resp, err := u.client().Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to download update: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download returned status %d", resp.StatusCode)
-	}
-
-	newPath := execPath + ".new"
-	if err := writeExecutable(newPath, resp.Body); err != nil {
-		return err
-	}
-
-	// Again just before the rename: a restore or reset staged while the
-	// release downloaded must still find the binary that staged it.
-	if err := u.checkSwapSlot(); err != nil {
-		if rerr := os.Remove(newPath); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
-			u.logf(slog.LevelWarn, "Could not remove the downloaded binary %s: %v", newPath, rerr)
-		}
-		return err
-	}
-
-	if err := u.swap(execPath, newPath); err != nil {
-		return err
-	}
-
-	u.logf(slog.LevelInfo, "Update applied successfully: %s -> %s", info.CurrentVersion, info.LatestVersion)
-	return nil
+	return Target{Version: tag, Named: true}, nil
 }
 
 // checkSwapSlot refuses while the swap slot holds a staged (restore_pending)
@@ -634,12 +511,17 @@ func (u *Updater) DownloadAndReplace(info *UpdateInfo) error {
 // slot it cannot read, or an updater with no state directory to read it in,
 // refuses too.
 func (u *Updater) checkSwapSlot() error {
-	if strings.TrimSpace(u.stateDir) == "" {
+	return slotRefusal(u.stateDir)
+}
+
+// slotRefusal reads the swap slot under stateDir.
+func slotRefusal(stateDir string) error {
+	if strings.TrimSpace(stateDir) == "" {
 		return ErrNoStateDir
 	}
-	st, err := restorejournal.ReadSlot(vfs.Default, u.stateDir)
+	st, err := restorejournal.ReadSlot(vfs.Default, stateDir)
 	if err != nil {
-		return fmt.Errorf("cannot read the swap slot, refusing to apply: %w", err)
+		return fmt.Errorf("cannot read the swap slot, refusing: %w", err)
 	}
 	if st.Busy() {
 		return st.Err()
@@ -649,55 +531,33 @@ func (u *Updater) checkSwapSlot() error {
 
 // writeExecutable streams body into path (mode 0755) and fsyncs it, so the
 // renamed binary is never an empty or partial file after a crash. Any failure
-// deletes path.
-func writeExecutable(path string, body io.Reader) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+// deletes path. It returns the bytes written.
+func writeExecutable(path string, body io.Reader) (int64, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 	if err != nil {
-		return fmt.Errorf("failed to create new binary file: %w", err)
+		return 0, fmt.Errorf("failed to create new binary file: %w", err)
 	}
-	if _, err := io.Copy(f, body); err != nil {
+	n, err := io.Copy(f, body)
+	if err != nil {
 		closeErr := f.Close()
-		os.Remove(path)
-		return fmt.Errorf("failed to write new binary: %w", errors.Join(err, closeErr))
+		_ = os.Remove(path)
+		return n, fmt.Errorf("failed to write new binary: %w", errors.Join(err, closeErr))
 	}
 	if err := f.Sync(); err != nil {
 		closeErr := f.Close()
-		os.Remove(path)
-		return fmt.Errorf("failed to sync new binary: %w", errors.Join(err, closeErr))
+		_ = os.Remove(path)
+		return n, fmt.Errorf("failed to sync new binary: %w", errors.Join(err, closeErr))
 	}
 	if err := f.Close(); err != nil {
-		os.Remove(path)
-		return fmt.Errorf("failed to close new binary: %w", err)
+		_ = os.Remove(path)
+		return n, fmt.Errorf("failed to close new binary: %w", err)
 	}
-	return nil
-}
-
-// swap moves execPath to execPath.prev and newPath to execPath. On failure the
-// running binary is left at execPath.
-func (u *Updater) swap(execPath, newPath string) error {
-	prevPath := execPath + ".prev"
-
-	if err := u.renameFile(execPath, prevPath); err != nil {
-		os.Remove(newPath)
-		return fmt.Errorf("failed to rename current binary: %w", err)
+	// The mode is set by the umask at create; the binary must be runnable.
+	if err := os.Chmod(path, 0o755); err != nil {
+		_ = os.Remove(path)
+		return n, fmt.Errorf("failed to make the new binary executable: %w", err)
 	}
-
-	if err := u.renameFile(newPath, execPath); err != nil {
-		restoreErr := u.renameFile(prevPath, execPath)
-		os.Remove(newPath)
-		if restoreErr != nil {
-			return fmt.Errorf("failed to rename new binary into place: %w (restoring the previous binary from %s also failed: %v)", err, prevPath, restoreErr)
-		}
-		return fmt.Errorf("failed to rename new binary into place: %w", err)
-	}
-
-	// Both renames succeeded: the update is applied. A failed directory
-	// fsync is logged, not returned, so a completed swap is never reported as
-	// a failure (which would skip the restart onto the new binary).
-	if err := syncDir(filepath.Dir(execPath)); err != nil {
-		u.logf(slog.LevelWarn, "Update applied but the binary directory could not be synced: %v", err)
-	}
-	return nil
+	return n, nil
 }
 
 // syncDir fsyncs a directory so the renames in it are durable.
@@ -712,51 +572,4 @@ func syncDir(dir string) error {
 		return syncErr
 	}
 	return closeErr
-}
-
-// errDevelopApply refuses an apply on the develop channel (HEAD's rule).
-var errDevelopApply = errors.New("develop channel binary downloads require CI-published assets; use stable channel for binary updates")
-
-// findAssetURL locates the download URL for the current OS/arch in the
-// release tagged info.LatestVersion (with a leading "v").
-func (u *Updater) findAssetURL(info *UpdateInfo) (string, error) {
-	if info.Channel == "develop" {
-		// For develop channel, use the latest release assets as a proxy
-		// (requires CI to publish binaries for each commit)
-		return "", errDevelopApply
-	}
-	tag, ok := normalizeTag(info.LatestVersion)
-	if !ok || !releaseTagPattern().MatchString(tag) || strings.Contains(tag, "..") {
-		return "", ErrInvalidVersion
-	}
-
-	release, found, err := u.fetchRelease(u.apiURL("/repos/%s/releases/tags/%s", u.repo, url.PathEscape(tag)))
-	if err != nil {
-		return "", fmt.Errorf("failed to fetch release: %w", err)
-	}
-	if !found {
-		return "", fmt.Errorf("%w: %s", ErrReleaseNotFound, tag)
-	}
-
-	// Look for asset matching audiobook-organizer-{GOOS}-{GOARCH}
-	wantName := fmt.Sprintf("audiobook-organizer-%s-%s", runtime.GOOS, runtime.GOARCH)
-	for _, asset := range release.Assets {
-		if asset.Name == wantName {
-			return asset.BrowserDownloadURL, nil
-		}
-	}
-
-	return "", fmt.Errorf("no release asset found for %s/%s (looking for %s)", runtime.GOOS, runtime.GOARCH, wantName)
-}
-
-// RestartSelf exits the process with RestartExitCode so that systemd's
-// Restart=on-failure (or launchd's KeepAlive) restarts it with the new binary.
-func (u *Updater) RestartSelf() error {
-	u.logf(slog.LevelInfo, "Exiting with status %d for restart with updated binary", RestartExitCode)
-	exit := u.exit
-	if exit == nil {
-		exit = os.Exit
-	}
-	exit(RestartExitCode)
-	return nil // unreachable with os.Exit
 }

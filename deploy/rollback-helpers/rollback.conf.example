@@ -1,7 +1,7 @@
 # file: deploy/rollback-helpers/rollback.conf.example
-# version: 1.3.0
+# version: 1.4.0
 # guid: 8bafb640-d659-4122-8365-282864483ab6
-# last-edited: 2026-11-09
+# last-edited: 2026-11-18
 #
 # /etc/audiobook-organizer/rollback.conf: the fixed paths the rollback helpers
 # use, make deploy's included. Root-owned, mode 0644, in a root-owned
@@ -26,7 +26,10 @@ offline_env = HOME=/var/lib/audiobook-organizer ABK_STATE_DIR=/var/lib/audiobook
 # whose User= or Group= differ from these.
 service_group =
 # Where make deploy uploads the binary and local.conf (scp, as the deploy
-# user); install-staged binary|local-conf installs from these. The unit is
+# user); install-staged binary|local-conf installs from these. stage_bin is
+# also where make rollback-restore RELEASE=<tag> fetches that release to
+# (updater fetch-release writes it as the deploy user; install-staged prev
+# installs it as <bin>.prev), so RELEASE= needs it set. The unit is
 # not uploaded: install-staged unit installs the copy of
 # deploy/audiobook-organizer.service installed with the helpers.
 stage_bin = /home/USER/audiobook-organizer

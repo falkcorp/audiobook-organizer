@@ -1,5 +1,5 @@
-// file: core/updater/hotfix_test.go
-// version: 1.1.0
+// file: internal/updater/hotfix_test.go
+// version: 2.0.0
 // guid: 55cb52f7-49f0-4844-881d-0df9ba6269f3
 // last-edited: 2026-11-18
 
@@ -143,7 +143,7 @@ type hotfixRig struct {
 
 const oldBinary = "the running binary"
 
-func newRig(t *testing.T, current string, f *fakeReleases) *hotfixRig {
+func newRig(t *testing.T, current string, f *fakeReleases, extra ...Option) *hotfixRig {
 	t.Helper()
 	dir := t.TempDir()
 	exe := filepath.Join(dir, "audiobook-organizer")
@@ -151,13 +151,15 @@ func newRig(t *testing.T, current string, f *fakeReleases) *hotfixRig {
 		t.Fatal(err)
 	}
 	rec := &exitRecorder{}
-	u := NewUpdater(current,
+	state := t.TempDir()
+	opts := append([]Option{
 		WithAPIBaseForTest(f.srv.URL),
 		WithHTTPClientForTest(f.srv.Client()),
 		WithExecutableForTest(func() (string, error) { return exe, nil }),
 		WithExitForTest(rec.exit),
-		WithStateDir(t.TempDir()),
-	)
+		WithStateDir(state),
+	}, extra...)
+	u := NewUpdater(current, opts...)
 	return &hotfixRig{u: u, f: f, exe: exe, exit: rec}
 }
 
@@ -232,13 +234,14 @@ func TestApply_SwapAtomicAndPrevKept(t *testing.T) {
 	})
 
 	t.Run("a failed second rename leaves the old binary at <exe>", func(t *testing.T) {
-		rig := newRig(t, "v0.223.0", newFakeReleases(t, "v0.224.0"))
-		rig.u.rename = func(oldpath, newpath string) error {
-			if oldpath == rig.exe+".new" && newpath == rig.exe {
+		var exe string
+		rig := newRig(t, "v0.223.0", newFakeReleases(t, "v0.224.0"), WithRenameForTest(func(oldpath, newpath string) error {
+			if oldpath == exe+".new" && newpath == exe {
 				return errors.New("injected: second rename failed")
 			}
 			return os.Rename(oldpath, newpath)
-		}
+		}))
+		exe = rig.exe
 
 		if _, err := rig.u.CheckForUpdate("stable"); err != nil {
 			t.Fatalf("check: %v", err)

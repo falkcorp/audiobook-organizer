@@ -1,7 +1,7 @@
 // file: core/app/offline.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 418dd945-667d-43dc-a795-d22188dd4b58
-// last-edited: 2026-11-12
+// last-edited: 2026-11-18
 
 package app
 
@@ -41,8 +41,10 @@ type Command struct {
 // migrate --dry-run and storage quarantine list, export and purge
 // (05-storage §5S.3.6, §5S.3.13), with the service stopped; and F4-06's
 // storage cutover-blockers list, fix and delete (05-storage §5S.3.6), with
-// the service stopped, one command whose first argument is the verb. R2's
-// other flips add theirs (06 §6.4.10).
+// the service stopped, one command whose first argument is the verb; and
+// F8-02's updater fetch-release (05-updater §5U.4), which opens no store and
+// reads Options.Updater's release source. R2's other flips add theirs (06
+// §6.4.10).
 func OfflineCommands(opts Options, mods ...module.Module) []Command {
 	return []Command{
 		pruneCheckpointsCommand(opts, mods), restoreOfflineCommand(opts, mods), resetCommand(opts, mods),
@@ -50,5 +52,6 @@ func OfflineCommands(opts Options, mods ...module.Module) []Command {
 		configCheckCommand(opts, mods),
 		migrateCommand(opts, mods), quarantineListCommand(opts, mods), quarantineExportCommand(opts, mods),
 		quarantinePurgeCommand(opts, mods), cutoverBlockersCommand(opts, mods),
+		fetchReleaseCommand(opts, mods),
 	}
 }

@@ -70,7 +70,7 @@ var coreLayerOf = map[string]int{
 	// layer of their highest import)
 	"events": 4, "outbox": 4, "tasks": 4, "storage/datamigrate": 4, "library": 4,
 	"auth": 4, "auth/oidc": 4, "auth/password": 4, "rbac": 4, "audit": 4,
-	"integrations": 4, "backup": 4, "backup/journal": 4, "updater": 4,
+	"integrations": 4, "backup": 4, "backup/journal": 4, "updater": 4, "updater/github": 4,
 	"health": 4, "health/diagnostics": 4,
 	"internal/storagemigrate": 4, "internal/logjournal": 4,
 	// internal/storagetasks bridges storage (L1) and tasks (L4): it declares
