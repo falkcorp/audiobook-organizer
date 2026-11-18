@@ -88,9 +88,10 @@ type Migration struct {
 // pulls it), or, when the runner already recorded the driver's write of it in
 // this boot, never steps it at all (RewritesInPlace: a write into another
 // shard's unvisited part is recorded and skipped). A run's driver commits the
-// import and every delete of the run together, so the record's absence means
-// its rows are gone too, and a row of no run record is an orphan that nothing
-// else will ever claim. Two workers therefore never write one row, and no run
+// import and every delete of the run together, so once the record is absent its
+// rows are absent too; a row that is still present with no run record is an
+// orphan that nothing else will ever claim (a row handed over just before its
+// driver's commit is told apart by re-reading the row itself). Two workers therefore never write one row, and no run
 // is imported twice (the importer's create-only guard would refuse it).
 func New(cfg Config, id string, raisesLevel int, after []storage.StepRef) (datamigrate.DataMigration, error) {
 	switch {
@@ -170,6 +171,17 @@ func (m *Migration) Step(ctx context.Context, kv storage.KV, w *datamigrate.Step
 		w.Count(OutcomeDeferred)
 		return nil // the run's driver pulls it
 	case errors.Is(err, storage.ErrNotFound):
+		// No run record now. Either the row is an orphan, or its driver's chunk
+		// committed after the runner handed this row over and took it with the
+		// run (the runner iterates a snapshot): that is told apart by the row's
+		// own key, which the driver's batch deleted.
+		if _, gone := m.legacy().Get(ctx, kv.Key); errors.Is(gone, storage.ErrNotFound) {
+			m.deferred.Add(1)
+			w.Count(OutcomeDeferred)
+			return nil
+		} else if gone != nil {
+			return gone
+		}
 		m.logger.Warn("m4: a run-owned row of no run record is quarantined", "key", key)
 		m.orphans.Add(1)
 		return w.Quarantine(kv.Key, kv.Value, reasonOrphan)
@@ -180,7 +192,16 @@ func (m *Migration) Step(ctx context.Context, kv storage.KV, w *datamigrate.Step
 // stepRun imports one run: the run record, then every row the run owns, in one
 // batch, with the deletes of exactly those rows.
 func (m *Migration) stepRun(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter, id string) error {
-	rr, err := m.collect(ctx, id, kv)
+	// The runner's kv comes from the iterator's snapshot, which can predate the
+	// reconcile that ran in this boot's first Step: read the record itself.
+	raw, err := m.legacy().Get(ctx, kv.Key)
+	switch {
+	case errors.Is(err, storage.ErrNotFound):
+		return nil // gone since the snapshot: its rows are orphans, set aside when visited
+	case err != nil:
+		return err
+	}
+	rr, err := m.collect(ctx, id, storage.KV{Key: kv.Key, Value: raw})
 	if err != nil {
 		return err
 	}
