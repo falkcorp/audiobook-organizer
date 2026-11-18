@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.24.5
+// version: 1.24.6
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
 // last-edited: 2026-11-18
 
@@ -822,8 +822,10 @@ func (mfs *Service) writeBackForBook(ctx context.Context, id string, segmentFilt
 		// Sync metadata from the original book to the library copy so both
 		// DB records stay in sync and the tag map uses current data.
 		if err := mfs.syncMetadataToLibraryCopy(originalBook, libCopy); err != nil {
-			// The copy was retired after the file job locked it: nothing is
-			// written to its row, and no tag is written to its files.
+			// Retired after the file job locked it: nothing is written to its
+			// row, and no tag to its files. Any other failure leaves the copy's
+			// columns stale, and tagging it from them would write the wrong
+			// metadata into the audio file, so the write-back stops either way.
 			return 0, fmt.Errorf("cannot write back: %w", err)
 		}
 		book = libCopy

@@ -1,5 +1,5 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.29.0
+// version: 1.29.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-11-18
 
@@ -1819,7 +1819,27 @@ func mergeDupeIntoStoredRow(store mergeDupeStore, cached, src *database.Book, ca
 			changed = true
 		}
 		var all []string
-		restored = locks.Apply(b, func(b *database.Book) { all = MergeBookMetadata(b, src) })
+		restored = locks.Apply(b, func(b *database.Book) {
+			all = MergeBookMetadata(b, src)
+			// The fill can lay the dupe's series on the winner, and the dupe can
+			// name one that was deleted; a book write refuses that, which would
+			// fail the whole merge. Dropped here, inside the lock guard, so a
+			// locked series_id is still restored. A dropped fill is not "merged";
+			// a dropped link the row already had is a change of its own.
+			if database.DropDanglingSeriesRef(store, b, caller) {
+				filled := false
+				all = slices.DeleteFunc(all, func(n string) bool {
+					if n == "series_id" {
+						filled = true
+						return true
+					}
+					return false
+				})
+				if !filled {
+					changed = true
+				}
+			}
+		})
 		for _, name := range all {
 			if !slices.Contains(restored, name) {
 				merged = append(merged, name)

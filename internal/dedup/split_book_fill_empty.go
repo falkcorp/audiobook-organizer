@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_fill_empty.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 668a8c6b-8d6c-4b88-a86b-aa3127cfc705
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package dedup
 
@@ -156,6 +156,19 @@ func applyFillEmpty(store Store, keepID string, plan FillEmptyPlan) (*merge.Comb
 		}
 		if v.AuthorID != nil && b.AuthorID == nil && !locks.Locked(database.FieldKeyAuthorName) {
 			b.AuthorID, filled.AuthorID = v.AuthorID, v.AuthorID
+		}
+		// The planned series is read off a source book and can name one that was
+		// deleted (older builds left such links). A book write refuses a link to a
+		// series that has no row, which would refuse this whole fill and lose the
+		// ASIN, narrator and author with it, so a deleted series is left out of
+		// the fill (and out of the journal, which records only what was written).
+		// Only a link this fill made is looked at: filled.SeriesID is nil when the
+		// row's own series was kept.
+		if filled.SeriesID != nil && database.DropDanglingSeriesRef(store, b, "dedup.split-fill-empty") {
+			filled.SeriesID = nil
+			if filled.SeriesSequence != nil {
+				b.SeriesSequence, filled.SeriesSequence = nil, nil
+			}
 		}
 		if filled.Empty() {
 			return database.ErrSkipBookWrite
