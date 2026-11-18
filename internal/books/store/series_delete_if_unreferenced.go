@@ -1,5 +1,5 @@
 // file: internal/books/store/series_delete_if_unreferenced.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 70d67056-7e94-4c44-b37f-39897839efed
 // last-edited: 2026-11-18
 
@@ -44,7 +44,10 @@ type SeriesUnreferencedDeleter interface {
 	// row whose name or author is not the expected one, ErrSeriesHeld for a
 	// held row, and an error when the reference count cannot be trusted (a
 	// memdb known to be missing rows, or not serving): never a delete on a
-	// guess.
+	// guess. An error that wraps ErrMemdbIncomplete or
+	// ErrSeriesDeleteMemdbNotServing is about the whole store, so every other
+	// delete would fail the same way; any other error (a row that will not
+	// decode, a failed write) is about this row.
 	DeleteSeriesIfUnreferenced(id int, expectName string, expectAuthorID *int) (deleted bool, err error)
 }
 
@@ -75,12 +78,18 @@ func (p *PebbleStore) SeriesDeleteReady() error {
 		return m.requireTablesComplete("series reference count", memTableBooks)
 	}
 	if p.UseMemDB {
-		return errSeriesDeleteMemdbNotServing
+		return ErrSeriesDeleteMemdbNotServing
 	}
 	return nil
 }
 
-var errSeriesDeleteMemdbNotServing = errors.New("the memdb is not serving, and a library scan under every book lock is refused")
+// ErrSeriesDeleteMemdbNotServing is wrapped by DeleteSeriesIfUnreferenced and
+// SeriesDeleteReady when the store is meant to have a memdb but it is not
+// serving, so the reference count would need a library scan under every book
+// lock, which is refused. Like ErrMemdbIncomplete it says the store cannot count
+// references to ANY series right now, not that one row is bad: a caller that
+// drives many deletes stops on either, and carries on past any other error.
+var ErrSeriesDeleteMemdbNotServing = errors.New("the memdb is not serving, and a library scan under every book lock is refused")
 
 // seriesDeleteTestHookAfterCount and seriesDeleteTestHookBeforeDelete, when
 // non-nil, run in DeleteSeriesIfUnreferenced with every lock the method takes
@@ -244,7 +253,7 @@ func (p *PebbleStore) countRefsForDelete(id int) (int, error) {
 		return n, nil
 	}
 	if p.UseMemDB {
-		return 0, fmt.Errorf("count references to series %d: %w", id, errSeriesDeleteMemdbNotServing)
+		return 0, fmt.Errorf("count references to series %d: %w", id, ErrSeriesDeleteMemdbNotServing)
 	}
 	counts, err := p.getAllSeriesBookRefCountsPebble()
 	if err != nil {

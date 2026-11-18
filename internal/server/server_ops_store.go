@@ -1,7 +1,7 @@
 // file: internal/server/server_ops_store.go
-// version: 1.24.4
+// version: 1.24.5
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package server
 
@@ -26,7 +26,7 @@ import (
 // 🔑 WHY THIS IS NOT THE WHOLE STORY, and why storeForWiring still exists.
 // Narrowing this accessor does NOT narrow what the wiring sites can reach. Those
 // sites pass a store into a callee that already declares its own narrow
-// interface (dedup.Store at 40, maintenance.JobStore at 52, and 88 others), and
+// interface (dedup.Store at 40, maintenance.JobStore at 68, and 88 others), and
 // Go accepts the wide value structurally. The union of what those callees
 // require is 268 methods -- so a single accessor serving both roles is pinned at
 // 268 no matter how carefully this list is trimmed. Splitting the roles is the
