@@ -1,5 +1,5 @@
 // file: internal/server/organize_library_copy_wiring_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 96b14120-70fb-45b5-93bd-c9e1c9449b82
 // last-edited: 2026-11-18
 
@@ -65,7 +65,7 @@ func newOrgWiringFixture(t *testing.T) *orgWiringFixture {
 	t.Cleanup(func() { _ = store.Close() })
 	store.WaitForWarmup()
 	store.UseMemDB = true
-	author, err := store.CreateAuthor("Harmon Example")
+	author, err := store.CreateAuthor("Alfred Pennyworth")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func (f *orgWiringFixture) book(t *testing.T, id, path string, content []byte, b
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	b.ID, b.FilePath, b.Title, b.AuthorID = id, path, "Welcome to the Rift", &f.author
+	b.ID, b.FilePath, b.Title, b.AuthorID = id, path, "The Long Halloween", &f.author
 	if _, err := f.store.CreateBook(&b); err != nil {
 		t.Fatalf("create %s: %v", id, err)
 	}
@@ -122,8 +122,8 @@ func TestOrganizeWiring_ProtectedOriginalUsesItsOwnLibraryCopy(t *testing.T) {
 	f := newOrgWiringFixture(t)
 	content := bytes.Repeat([]byte{7}, 300)
 	group := "vg-rift"
-	origPath := filepath.Join(f.itunes, "Music", "Welcome to the Rift.mp3")
-	copyPath := filepath.Join(f.root, "Harmon Example", "Welcome to the Rift", "Welcome to the Rift.mp3")
+	origPath := filepath.Join(f.itunes, "Music", "The Long Halloween.mp3")
+	copyPath := filepath.Join(f.root, "Alfred Pennyworth", "The Long Halloween", "The Long Halloween.mp3")
 	f.book(t, "orig", origPath, content, database.Book{FileHash: new("h-orig"), VersionGroupID: &group, LibraryState: new("imported")})
 	f.book(t, "copy", copyPath, content, database.Book{
 		FileHash: new("h-after-tag-write"), OriginalFileHash: new("h-orig"),
@@ -159,8 +159,8 @@ func TestOrganizeWiring_ProtectedOriginalUsesItsOwnLibraryCopy(t *testing.T) {
 func TestOrganizeWiring_DifferentEditionIsNotTheLibraryCopy(t *testing.T) {
 	f := newOrgWiringFixture(t)
 	group := "vg-rift"
-	origPath := filepath.Join(f.itunes, "Music", "Welcome to the Rift.m4b")
-	editionPath := filepath.Join(f.root, "Harmon Example", "Welcome to the Rift (mp3)", "Welcome to the Rift.mp3")
+	origPath := filepath.Join(f.itunes, "Music", "The Long Halloween.m4b")
+	editionPath := filepath.Join(f.root, "Alfred Pennyworth", "The Long Halloween (mp3)", "The Long Halloween.mp3")
 	f.book(t, "orig", origPath, bytes.Repeat([]byte{1}, 300), database.Book{FileHash: new("h-m4b"), VersionGroupID: &group, LibraryState: new("imported")})
 	f.book(t, "mp3", editionPath, bytes.Repeat([]byte{2}, 300), database.Book{
 		FileHash: new("h-mp3"), OriginalFileHash: new("h-mp3"), OrganizedFileHash: new("h-mp3"),
@@ -227,8 +227,8 @@ func TestOrganizeWiring_OnlyAMergedLibraryCopyIsRefusedNotDuplicated(t *testing.
 			f := newOrgWiringFixture(t)
 			content := bytes.Repeat([]byte{7}, 300)
 			group := "vg-rift"
-			origPath := filepath.Join(f.itunes, "Music", "Welcome to the Rift.mp3")
-			copyPath := filepath.Join(f.root, "Harmon Example", "Welcome to the Rift", "Welcome to the Rift.mp3")
+			origPath := filepath.Join(f.itunes, "Music", "The Long Halloween.mp3")
+			copyPath := filepath.Join(f.root, "Alfred Pennyworth", "The Long Halloween", "The Long Halloween.mp3")
 			f.book(t, "orig", origPath, content, database.Book{FileHash: new("h-orig"), VersionGroupID: &group, LibraryState: new("imported")})
 			merged := c.copy
 			into := "orig"
@@ -271,9 +271,9 @@ func TestOrganizeWiring_LiveCopyBesideAMergedOneIsStillUsed(t *testing.T) {
 	group := "vg-rift"
 	into := "orig"
 	primary := true
-	origPath := filepath.Join(f.itunes, "Music", "Welcome to the Rift.mp3")
-	livePath := filepath.Join(f.root, "Harmon Example", "Welcome to the Rift", "Welcome to the Rift.mp3")
-	deadPath := filepath.Join(f.root, "Harmon Example", "Welcome to the Rift (old)", "Welcome to the Rift.mp3")
+	origPath := filepath.Join(f.itunes, "Music", "The Long Halloween.mp3")
+	livePath := filepath.Join(f.root, "Alfred Pennyworth", "The Long Halloween", "The Long Halloween.mp3")
+	deadPath := filepath.Join(f.root, "Alfred Pennyworth", "The Long Halloween (old)", "The Long Halloween.mp3")
 	f.book(t, "orig", origPath, content, database.Book{FileHash: new("h-orig"), VersionGroupID: &group, LibraryState: new("imported")})
 	f.book(t, "dead", deadPath, content, database.Book{FileHash: new("h-dead"), OriginalFileHash: new("h-orig"), VersionGroupID: &group, MergedIntoBookID: &into, IsPrimaryVersion: &primary})
 	f.book(t, "live", livePath, content, database.Book{FileHash: new("h-live"), OriginalFileHash: new("h-orig"), VersionGroupID: &group, LibraryState: new("organized")})

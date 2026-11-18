@@ -1,5 +1,5 @@
 // file: internal/metafetch/file_work_intent_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 6c1e4b3a-8d27-4f5e-9a0c-3b7d5e2f1a48
 // last-edited: 2026-11-18
 
@@ -59,7 +59,7 @@ func newIntentFixture(t *testing.T, retire func(*database.Book)) *intentFixture 
 	writeFile(t, a, "part one")
 	writeFile(t, b, "part two, longer")
 	f.oldFiles = []string{a, b}
-	f.book = &database.Book{ID: "b1", Title: "Year One", FilePath: f.oldDir, Author: &database.Author{ID: 1, Name: "Harmon Example"}}
+	f.book = &database.Book{ID: "b1", Title: "Year One", FilePath: f.oldDir, Author: &database.Author{ID: 1, Name: "Alfred Pennyworth"}}
 	if retire != nil {
 		retire(f.book)
 	}
@@ -306,9 +306,11 @@ func TestFetchMetadataForBook_FileWorkJobCarriesTheFetchsIntent(t *testing.T) {
 			scheduled = append(scheduled, intent)
 			work()
 		}
+		// The source answers with the harness book's own title, so the match
+		// holds whatever the shared harness names its book.
 		svc.overrideSources = []metadata.MetadataSource{fakeSource{
 			name:    "Audible",
-			results: []metadata.BookMetadata{{Title: "A Book", Author: "Some Author", Genre: "Fantasy"}},
+			results: []metadata.BookMetadata{{Title: book.Title, Author: "Lucius Fox", Genre: "Fantasy"}},
 		}}
 		return svc, calls, &scheduled, book
 	}
