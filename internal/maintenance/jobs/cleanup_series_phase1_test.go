@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/cleanup_series_phase1_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 7c4e1a90-3d52-4b18-8f6a-2ad9e5b71c34
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package jobs
 
@@ -47,6 +47,19 @@ type csPhase1Store struct {
 
 func (s csPhase1Store) GetAllSeriesBookRefCounts() (map[int]int, error) {
 	return s.refCounts, nil
+}
+
+// DeleteSeriesIfUnreferenced is the capability cleanup-series resolves for its
+// delete (database.SeriesUnreferencedDeleter; not on database.Store, so the
+// MockStore does not have it). The fixtures built on csPhase1Store have no
+// writer that links a book in late, so every delete is of an unreferenced series
+// and reduces to the mock's DeleteSeries recorder; the stateful csCondStore
+// covers the refusal. Value receiver, like GetAllSeriesBookRefCounts above.
+func (s csPhase1Store) DeleteSeriesIfUnreferenced(id int, _ string, _ *int) (bool, error) {
+	if err := s.MockStore.DeleteSeries(id); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func newCsPhase1Store(t *testing.T, refCounts map[int]int, deleted *[]int) csPhase1Store {

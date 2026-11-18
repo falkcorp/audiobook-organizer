@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/kinds_writes.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 6d1a4e9c-2b7f-4c35-9e80-a3f5c7d1b284
-// last-edited: 2026-11-16
+// last-edited: 2026-11-18
 
 package jobs
 
@@ -63,7 +63,7 @@ var jobTraces = map[string]jobTrace{"backfill-book-files": {Methods: []string{"B
 	},
 	"cleanup-empty-folders":    {Files: true},
 	"cleanup-organize-mess":    {Files: true},
-	"cleanup-series":           {Methods: []string{"DeleteSeries", "ModifyBook"}},
+	"cleanup-series":           {Methods: []string{"DeleteSeriesIfUnreferenced", "ModifyBook"}},
 	"dedup-books":              {Methods: []string{"AddBookUserTag", "ModifyBook", "MoveBookFilesToBook", "ReassignExternalIDs"}},
 	"enrich-book-files":        {Methods: []string{"UpdateBookFile"}},
 	"fix-author-narrator-swap": {Methods: []string{"ModifyBook"}},
