@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/cleanup_series_phase1_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c4e1a90-3d52-4b18-8f6a-2ad9e5b71c34
 // last-edited: 2026-11-18
 
@@ -61,6 +61,10 @@ func (s csPhase1Store) DeleteSeriesIfUnreferenced(id int, _ string, _ *int) (boo
 	}
 	return true, nil
 }
+
+// SeriesDeleteReady is the readiness capability cleanup-series probes before it
+// writes (database.SeriesDeleteReadiness): these fixtures' store can always count.
+func (s csPhase1Store) SeriesDeleteReady() error { return nil }
 
 func newCsPhase1Store(t *testing.T, refCounts map[int]int, deleted *[]int) csPhase1Store {
 	t.Helper()

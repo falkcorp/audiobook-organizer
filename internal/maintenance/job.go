@@ -1,5 +1,5 @@
 // file: internal/maintenance/job.go
-// version: 1.30.1
+// version: 1.30.2
 // guid: 11111111-1111-1111-1111-111111111111
 // last-edited: 2026-11-17
 
@@ -349,7 +349,6 @@ type jobContributorStore interface {
 	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
 	GetAllSeries() ([]database.Series, error)
 	GetAllSeriesBookCounts() (map[int]int, error)
-	DeleteSeries(id int) error
 }
 
 type jobUserStateStore interface {
