@@ -1,7 +1,7 @@
 // file: internal/server/retired_apply_round2_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7b2e94d1-3c58-4a06-b9f7-1d8e0c4a6f35
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package server
 
