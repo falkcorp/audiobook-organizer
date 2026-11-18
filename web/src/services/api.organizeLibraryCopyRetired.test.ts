@@ -1,5 +1,5 @@
 // file: web/src/services/api.organizeLibraryCopyRetired.test.ts
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5d2b8e41-7c36-4f09-b1a8-3e90c7d4a652
 // last-edited: 2026-11-18
 
@@ -14,7 +14,7 @@ afterEach(() => {
 // (handlers.libraryCopyRetiredBody).
 const retiredBody = {
   error:
-    "organize declined: this book's only library copy is retired (merged into another book, merged into this one, or marked for deletion); revive or un-merge it first",
+    "organize declined: this book's only library copy is retired (merged into another book, or into this one); revive or un-merge it first",
   category: 'library_copy_retired',
   reason: 'library copy b2 of b1 is retired',
   book_id: 'b1',
@@ -58,6 +58,9 @@ describe('organize 409 library_copy_retired', () => {
     // It does not claim where the copy was merged: it may be this very book.
     expect(err.message).not.toMatch(/merged away into another book/i);
     expect(err.message).toMatch(/possibly this one/i);
+    // A trashed row is never the copy the server names (its lookup leaves them out), so
+    // the text must not send the owner to the trash.
+    expect(err.message).not.toMatch(/deletion|trash/i);
     // What to do, and where the copy is.
     expect(err.message).toMatch(/revive or un-merge the copy first/i);
     expect(err.message).toContain('/library/Batman/Year One.m4b');

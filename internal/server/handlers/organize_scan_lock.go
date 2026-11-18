@@ -1,5 +1,5 @@
 // file: internal/server/handlers/organize_scan_lock.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 2b7e4c91-5d08-4f3a-b6e2-9a14c7d3f058
 // last-edited: 2026-11-18
 
@@ -190,36 +190,65 @@ func (h *OrganizeHandler) lockBookForOrganize(c *gin.Context, id string) (_ *sca
 		}
 		return nil, nil, false
 	}
-	opID, qerr := h.queuer.EnqueueOrganizeWhenScanned(reqCtx, id)
+	h.queueOrganize(c, id)
+	return nil, nil, false
+}
+
+// queueOrganize queues book id's organize until the scan moves on and answers
+// 202, or 500 when it cannot be queued. The caller has already established
+// that a queuer is wired.
+func (h *OrganizeHandler) queueOrganize(c *gin.Context, id string) {
+	opID, qerr := h.queuer.EnqueueOrganizeWhenScanned(c.Request.Context(), id)
 	if qerr != nil {
 		httputil.InternalError(c, "queue the organize until the scan moves on", qerr)
-		return nil, nil, false
+		return
 	}
 	organizeLockLog.Info("organize of book %s queued behind the library scan as operation %s",
 		logger.SanitizeLogValue(id), opID)
 	httputil.RespondWithSuccess(c, http.StatusAccepted, gin.H{
 		"queued": true, "operation_id": opID, "message": organizeQueuedMessage, "book_id": id,
 	})
-	return nil, nil, false
+}
+
+// organizeStillUnsettled is the answer when the core's re-check kept finding a
+// library copy the hold did not cover, organizeLockTries times running: the
+// same one the lock step gives a set that will not settle. Queued when a
+// queuer is wired (the queued op retries on its own schedule), else a 409.
+// Nothing was organized.
+func (h *OrganizeHandler) organizeStillUnsettled(c *gin.Context, id string) {
+	if h.queuer == nil {
+		httputil.RespondWithConflict(c, errOrganizeSetUnsettled.Error())
+		return
+	}
+	h.queueOrganize(c, id)
 }
 
 // RunQueuedOrganize is the queued organize: wait for the book as long as the
 // op lives, beating so the progress watchdog sees a live wait, then organize
 // exactly as the request would have. A refusal or failure the request would
 // have answered with a 4xx/5xx fails the op with the same message. A lock set
-// that will not settle is retried after organizeUnsettledDelay, at most
-// organizeUnsettledRetries times, then fails the op (nothing organized).
+// that will not settle, and a library copy the core finds after the lock set
+// settled (the hold does not cover it), are retried the same way: after
+// organizeUnsettledDelay, at most organizeUnsettledRetries times in all, then
+// the op fails (nothing organized).
 func (h *OrganizeHandler) RunQueuedOrganize(ctx context.Context, id string, beat func(msg string)) error {
-	var hold *scanlock.Hold
-	var subject *organizeSubject
 	unsettled := 0
 	for {
 		wctx, cancel := context.WithTimeout(ctx, queuedOrganizeBeat)
-		var err error
-		hold, subject, err = h.lockOrganizeSet(id, func(ids []string) (*scanlock.Hold, error) { return scanlock.Books.LockSet(wctx, ids) })
+		hold, subject, err := h.lockOrganizeSet(id, func(ids []string) (*scanlock.Hold, error) { return scanlock.Books.LockSet(wctx, ids) })
 		cancel()
 		if err == nil {
-			break
+			r := &recordingOrganizeResponder{}
+			coreUnsettled := func() bool {
+				defer hold.Release()
+				return h.organizeBookCore(ctx, r, id, subject)
+			}()
+			if !coreUnsettled {
+				return r.failure()
+			}
+			// The hold is released; the next lock step resolves the copy the
+			// core found and holds it too.
+			err = errOrganizeSetUnsettled
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -242,10 +271,6 @@ func (h *OrganizeHandler) RunQueuedOrganize(ctx context.Context, id string, beat
 			beat("waiting for the library scan to finish reading book " + id)
 		}
 	}
-	defer hold.Release()
-	r := &recordingOrganizeResponder{}
-	h.organizeBookCore(ctx, r, id, subject)
-	return r.failure()
 }
 
 // organizeResponder receives organizeBookCore's outcome.

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/organize.go
-// version: 1.13.1
+// version: 1.13.3
 // guid: b3c4d5e6-f7a8-9012-bcde-f01234567890
 // last-edited: 2026-11-18
 
@@ -184,21 +184,40 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 	// library copy below: the scanner's lock set for either row includes the
 	// other through their version group, so {id} covers both. L0 is taken
 	// before any L1 key (the version-group key CreateOrganizedVersion takes).
-	hold, subject, ok := h.lockBookForOrganize(c, id)
-	if !ok {
-		return
+	//
+	// The core's re-check can find a library copy that appeared after the lock
+	// set settled. That is the same condition the lock step retries, so it is
+	// retried here too (the next lock step resolves and holds the copy), at most
+	// organizeLockTries times, then queued or answered 409 like a set that never
+	// settles. Nothing is written on an unsettled attempt.
+	for attempt := 1; ; attempt++ {
+		hold, subject, ok := h.lockBookForOrganize(c, id)
+		if !ok {
+			return
+		}
+		unsettled := func() bool {
+			defer hold.Release()
+			return h.organizeBookCore(c.Request.Context(), ginOrganizeResponder{c}, id, subject)
+		}()
+		if !unsettled {
+			return
+		}
+		if attempt >= organizeLockTries {
+			h.organizeStillUnsettled(c, id)
+			return
+		}
 	}
-	defer hold.Release()
-	h.organizeBookCore(c.Request.Context(), ginOrganizeResponder{c}, id, subject)
 }
 
 // libraryCopyRetiredBody is the 409 body of an organize or preview refused
 // because the book's only library copy is retired: merged into another book,
-// merged into this same book (the copy of a duplicate pair), or marked for
-// deletion. copy_book_id names the copy.
+// or merged into this same book (the copy of a duplicate pair). A copy in the
+// trash cannot be named here: the library-copy lookup leaves trashed rows
+// out, and `reason` says "was merged away" for the same reason. copy_book_id
+// names the copy.
 func libraryCopyRetiredBody(e *organizer.LibraryCopyRetiredError) gin.H {
 	return gin.H{
-		"error":        "organize declined: this book's only library copy is retired (merged into another book, merged into this one, or marked for deletion); revive or un-merge it first",
+		"error":        "organize declined: this book's only library copy is retired (merged into another book, or into this one); revive or un-merge it first",
 		"category":     organizer.CollisionLibraryCopyRetired,
 		"reason":       e.Error(),
 		"book_id":      e.BookID,
@@ -218,7 +237,12 @@ func libraryCopyRetiredBody(e *organizer.LibraryCopyRetiredError) gin.H {
 // answers that refusal; it never swaps in a row resolved later, because a row
 // outside the hold has no scan lock. nil means the lock step could not resolve
 // (no store, or no such book), and the core resolves here.
-func (h *OrganizeHandler) organizeBookCore(ctx context.Context, r organizeResponder, id string, locked *organizeSubject) {
+//
+// unsettled is true, with nothing written and nothing sent to r, when the core's
+// re-check found a library copy the hold does not cover (see below). The
+// caller releases its hold and retries from the lock step, which resolves and
+// holds the copy. Every other outcome goes to r and returns false.
+func (h *OrganizeHandler) organizeBookCore(ctx context.Context, r organizeResponder, id string, locked *organizeSubject) (unsettled bool) {
 
 	// Correlation key only — no operations row is created: undo replays the
 	// OperationChange records with a GetOperationChanges prefix scan keyed on
@@ -255,10 +279,15 @@ func (h *OrganizeHandler) organizeBookCore(ctx context.Context, r organizeRespon
 	// When the lock step resolved to the book itself, the row is asked for once
 	// more here only to check that answer still holds. A copy that appeared
 	// after the lock set settled is a row the hold does not cover: organizing
-	// it would run without its scan lock, so the answer is "unsettled", the same
-	// refusal as a lock set that never settles, and nothing is written. When the
-	// lock step resolved to a library copy, that copy is in the hold and is the
-	// subject as it stands; it is not resolved again.
+	// it would run without its scan lock, so the answer is "unsettled" (returned
+	// to the caller, which retries from the lock step like a set that never
+	// settled) and nothing is written. When the lock step resolved to a library
+	// copy, that copy is in the hold and is the subject as it stands; it is not
+	// resolved again. The hold is the SCAN lock only: a merge or trash of that
+	// copy takes no scan lock, so a copy retired after the lock step is still
+	// organized in place, as on main (OrganizeOneBook has no retired check).
+	// That window is the same size as the one the book-itself case keeps between
+	// this re-check and OrganizeOneBook; the store-guard todo lists it.
 	book := locked.bookOrNil()
 	if locked != nil && locked.retired != nil {
 		r.json(http.StatusConflict, libraryCopyRetiredBody(locked.retired))
@@ -273,8 +302,7 @@ func (h *OrganizeHandler) organizeBookCore(ctx context.Context, r organizeRespon
 		if book == nil {
 			book = resolved
 		} else if resolved == nil || resolved.ID != book.ID {
-			r.json(http.StatusConflict, gin.H{"error": errOrganizeSetUnsettled.Error()})
-			return
+			return true
 		}
 	}
 	originalID := ""
@@ -417,6 +445,7 @@ func (h *OrganizeHandler) organizeBookCore(ctx context.Context, r organizeRespon
 		"operation_id":     opID,
 	}
 	r.ok(resp)
+	return false
 }
 
 // -----------------------------------------------------------------------
