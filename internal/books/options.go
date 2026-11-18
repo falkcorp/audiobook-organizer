@@ -1,7 +1,7 @@
 // file: internal/books/options.go
-// version: 1.2.7
+// version: 1.2.8
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
-// last-edited: 2026-11-10
+// last-edited: 2026-11-18
 
 package books
 
@@ -28,6 +28,7 @@ import (
 	system "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
+	"github.com/falkcorp/audiobook-organizer/internal/updater"
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/metrics"
@@ -200,6 +201,7 @@ func OfflineOptions() (app.Options, error) {
 	if err != nil {
 		return app.Options{}, err
 	}
+	coreOpts := updater.CoreOptions()
 	return app.Options{
 		AppID: AppID,
 		// serve's Version: the binary ID a staged swap records hashes it, so
@@ -227,6 +229,9 @@ func OfflineOptions() (app.Options, error) {
 		// The process logger, through internal/logger (the slog guard):
 		// prune-checkpoints logs each deletion beside its stdout report.
 		Logger: logger.FromContext(context.Background()).With("subsystem", "offline"),
+		// updater fetch-release: the release source of this app's own
+		// releases, which F8-04 hands to the kernel as well.
+		Updater: &coreOpts,
 	}, nil
 }
 

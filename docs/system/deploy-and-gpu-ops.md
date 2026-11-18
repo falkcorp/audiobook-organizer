@@ -1,7 +1,7 @@
 <!-- file: docs/system/deploy-and-gpu-ops.md -->
-<!-- version: 1.20.0 -->
+<!-- version: 1.21.0 -->
 <!-- guid: d5e7f9a1-b3c5-4d7e-9f1a-3b5c7d9e1f3a -->
-<!-- last-edited: 2026-11-09 -->
+<!-- last-edited: 2026-11-18 -->
 
 # Deploy Rollback & Windows GPU Keepalive
 
@@ -288,6 +288,7 @@ restore plus the previous binary (05-storage §5S.3.12, 09 §9.2.1):
 ```bash
 make rollback-restore                                  # the latest pre-upgrade checkpoint
 make rollback-restore ROLLBACK_ARCHIVE=batcave.tar.gz  # an archive in the helpers' archive_dir
+make rollback-restore RELEASE=v0.41.0                  # fetch that release and install it as .prev first
 ```
 
 It uses `DEPLOY_HOST`, `DEPLOY_BIN`, `DEPLOY_DB`, `DEPLOY_UNIT` and
@@ -297,13 +298,10 @@ restore runs with) comes from the helpers' config on the host.
 `ROLLBACK_ARCHIVE` is a file name inside the config's `archive_dir`, never a
 path. `scripts/deploy_rollback.py restore` runs it, in order:
 
-1. `RELEASE=<tag>` refuses: fetching a named release is F8's `updater
-   fetch-release`, which this build does not have. Install that release's
-   binary as `$(DEPLOY_BIN).prev` by hand instead.
-2. **Read-only checks while the service still runs**, so a refusal leaves it
+1. **Read-only checks while the service still runs**, so a refusal leaves it
    running:
    - the helpers' config names this run's binary, store and unit, and
-     `$(DEPLOY_BIN).prev` exists;
+     `$(DEPLOY_BIN).prev` exists (not required with `RELEASE=`, below);
    - the in-flight probe (the same one `make rollback` runs, no override);
    - the source's levels: the latest checkpoint's record (`from_vector`,
      named by `$(DEPLOY_DB).migration-checkpoint`, read by the
@@ -326,17 +324,36 @@ path. `scripts/deploy_rollback.py restore` runs it, in order:
      serves more would migrate it again. On a mismatch it refuses and names
      the release to install as `.prev`: the checkpoint's `from_release`, or
      for an archive the release you ran when it was taken (HEAD's archives
-     record no version).
+     record no version). The refusal prints the command that fetches it:
+     `make rollback-restore RELEASE=<that tag>`.
+   - **`RELEASE=<tag>`** (09 §9.2.1, after an R2 hotfix: the tag you ran
+     before the freeze) replaces the `.prev` you would otherwise install by
+     hand. Once the source is read, the **current** binary runs
+     `updater fetch-release --version <tag> --out <stage_bin>` on the host as
+     the deploy user (05-updater §5U.4): it downloads that release's binary
+     for this platform from the app's release source (HTTPS only: no checksum
+     or signature is checked in this build), runs it once with
+     `--version-json` to check it is this app at that release, and renames it
+     into place; it reads no store, so it runs with a scratch state directory
+     and the service can stay up. The fetched file's
+     `--print-storage-levels` must then **equal** the source's levels, exactly
+     as for `.prev`. Only when they do does `install-staged prev` install it as
+     `$(DEPLOY_BIN).prev`, **replacing any `.prev`**, and delete the staged
+     copy. Any refusal before that (the fetch failed, an unknown tag, other
+     levels, an earlier restore still running) deletes the staged copy and
+     leaves `.prev` as it was. `RELEASE` must be a version tag
+     (`v1.2.3`; `latest`, a URL or a path is refused), and `stage_bin` must be
+     set in the helpers' config.
    - It prints the source's time and warns that everything written since is
      lost, **including every credential change**: a key revoked, a user
      disabled or a password changed since then is live again. Repeat those
      revocations once the rollback is up.
-3. Still before the stop, it matches the unit type to `.prev` and reads the
+2. Still before the stop, it matches the unit type to `.prev` and reads the
    unit's `InvocationID`.
-4. It stops the unit and checks that it **stays stopped** (`inactive` or
+3. It stops the unit and checks that it **stays stopped** (`inactive` or
    `failed`; an unreadable unit is a state unknown and refuses too), then runs
    the in-flight probe again.
-5. The **current** binary runs `storage restore-offline --checkpoint <name>
+4. The **current** binary runs `storage restore-offline --checkpoint <name>
    --accept-loss` (or `--archive <archive_dir>/<name> --accept-loss`) through
    the `restore-offline` helper: as the service user (`systemd-run --uid`),
    never as root, so every file keeps the service's ownership, in the
@@ -370,7 +387,7 @@ path. `scripts/deploy_rollback.py restore` runs it, in order:
    access to the state directory is `inflight-probe`'s read-only `find`. The
    recipe does not retry. Afterwards it checks again that the unit stayed
    stopped.
-6. The `swap-prev` helper keeps the current binary as
+5. The `swap-prev` helper keeps the current binary as
    `$(DEPLOY_BIN).rolled-back` and installs `.prev` atomically; it starts
    the unit and waits as above.
 
@@ -436,7 +453,7 @@ root-owned config:
 | `restore-offline` | root, the restore as the service user | `checkpoint NAME`, `archive FILE`, `into-check FILE` | `storage restore-offline` in a transient unit |
 | `unit-type` | root | `simple` or `notify` | writes or removes the fixed `Type=simple` drop-in, `daemon-reload` |
 | `swap-prev` | root | none | `.prev` installed atomically, the old binary kept |
-| `install-staged` | root | `binary`, `unit` or `local-conf` | installs `stage_bin` as the binary (atomically, the old one kept as `.prev`); copies the bundle's root-owned `audiobook-organizer.service` as the unit; or renders the `[Service]` and `Environment=` lines of `stage_local_conf` as the `local.conf` drop-in; then `daemon-reload` |
+| `install-staged` | root | `binary`, `prev`, `unit` or `local-conf` | installs `stage_bin` as the binary (atomically, the old one kept as `.prev`) or, with `prev`, as `.prev` alone (`make rollback-restore RELEASE=`; the binary is not touched); copies the bundle's root-owned `audiobook-organizer.service` as the unit; or renders the `[Service]` and `Environment=` lines of `stage_local_conf` as the `local.conf` drop-in; then `daemon-reload` |
 | `pprof` | root | `on` or `off` | writes or removes the fixed drop-in `pprof.conf` (`Environment=ABK_PPROF_ADDR=localhost:6060`), `daemon-reload` |
 
 `install-staged` never installs uploaded text as a unit file. systemd reads
@@ -474,8 +491,8 @@ where Python and systemd read a line differently. Instead:
   a check that passed on them would not be checking what systemd reads.
   Only spaces and tabs are trimmed. Comments may hold any UTF-8 (they are
   never installed).
-- **`install-staged binary`** copies the staged binary through the open file
-  descriptor it checked, never by name.
+- **`install-staged binary`** and **`install-staged prev`** copy the staged
+  binary through the open file descriptor they checked, never by name.
 
 Every staged file is opened as root, so `install-staged` opens it with no
 symlink in any component of its path (each directory from `/` with

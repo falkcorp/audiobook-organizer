@@ -1,10 +1,11 @@
 #!/bin/sh
 # file: deploy/rollback-helpers/install-staged
-# version: 1.0.0
+# version: 1.1.0
 # guid: c6bcffce-5f45-4e12-83f8-2f7cd8f0c67a
-# last-edited: 2026-11-09
+# last-edited: 2026-11-18
 #
-# Install the staged binary, unit or local.conf (binary | unit | local-conf), as root.
+# Install the staged binary (as the binary, or as its .prev), unit or local.conf
+# (binary | prev | unit | local-conf), as root.
 # A sudoers-granted stub: it runs one fixed operation of rollback_helper.py,
 # which validates every argument itself (docs/system/deploy-and-gpu-ops.md,
 # "Rollback helpers"). Install root-owned, mode 0755, in
