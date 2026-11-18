@@ -1,5 +1,5 @@
 // file: internal/metafetch/file_work_intent_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c1e4b3a-8d27-4f5e-9a0c-3b7d5e2f1a48
 // last-edited: 2026-11-18
 
@@ -159,6 +159,23 @@ func TestFileWorkTarget_RetiredSelfByIntent(t *testing.T) {
 			require.Error(t, err, "a caller that did not state its intent must get neither behaviour")
 			require.NotErrorIs(t, err, ErrBookRetired)
 			require.Nil(t, got)
+		}
+	})
+	// The intent is checked before any branch resolves a target: a job that
+	// locked a library copy (or none) and forgot its intent fails too, and
+	// the store is not even asked for the copy.
+	t.Run("no_intent_is_an_error_on_every_branch", func(t *testing.T) {
+		svc := NewService(&database.MockStore{GetBookByIDFunc: func(id string) (*database.Book, error) {
+			t.Errorf("GetBookByID(%q): an invalid intent must be refused before any target is resolved", id)
+			return nil, nil
+		}})
+		for _, targetID := range []string{"copy-1", ""} {
+			for _, intent := range []FetchIntent{0, 99} {
+				got, err := svc.fileWorkTarget(live, targetID, intent)
+				require.Error(t, err, "target %q intent %d", targetID, intent)
+				require.NotErrorIs(t, err, ErrBookRetired)
+				require.Nil(t, got)
+			}
 		}
 	})
 }
