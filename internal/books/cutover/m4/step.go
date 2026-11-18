@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/step.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: a9d5f13e-7c02-4b68-8e41-35b0c6d7e2f8
 // last-edited: 2026-11-18
 
