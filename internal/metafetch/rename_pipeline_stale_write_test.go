@@ -1,7 +1,7 @@
 // file: internal/metafetch/rename_pipeline_stale_write_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 4a7c2e91-6b3d-4f08-9d15-e8b0c6a3f752
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package metafetch
 
@@ -132,7 +132,7 @@ func TestRunApplyPipeline_RenameKeepsEditCommittedDuringRename(t *testing.T) {
 	fx.onFileWrite = fx.concurrentEdit
 	stale := fx.stored
 	oldDir := stale.FilePath
-	_, err := svc.runApplyPipeline(context.Background(), "b1", &stale, "b1", nil)
+	_, err := svc.runApplyPipeline(context.Background(), "b1", &stale, "b1", Unattended, nil)
 	require.NoError(t, err)
 	fx.assertEditSurvivedAndPathMoved(t, oldDir)
 }
@@ -141,7 +141,7 @@ func TestRunApplyPipeline_ReturnsBookFilePathWriteFailure(t *testing.T) {
 	fx, svc := newRenameFixture(t)
 	fx.onFileWrite = func(int) error { return errInjectedFileWrite }
 	stale := fx.stored
-	_, err := svc.runApplyPipeline(context.Background(), "b1", &stale, "b1", nil)
+	_, err := svc.runApplyPipeline(context.Background(), "b1", &stale, "b1", Unattended, nil)
 	require.ErrorIs(t, err, errInjectedFileWrite, "a moved file whose DB path was not written must fail the rename")
 }
 
@@ -150,7 +150,7 @@ func TestRunApplyPipelineRenameOnly_KeepsEditCommittedDuringRename(t *testing.T)
 	fx.onFileWrite = fx.concurrentEdit
 	stale := fx.stored
 	oldDir := stale.FilePath
-	require.NoError(t, svc.RunApplyPipelineRenameOnly(context.Background(), "b1", &stale))
+	require.NoError(t, svc.RunApplyPipelineRenameOnly(context.Background(), "b1", &stale, Unattended))
 	fx.assertEditSurvivedAndPathMoved(t, oldDir)
 }
 
@@ -158,6 +158,6 @@ func TestRunApplyPipelineRenameOnly_ReturnsBookFilePathWriteFailure(t *testing.T
 	fx, svc := newRenameFixture(t)
 	fx.onFileWrite = func(int) error { return errInjectedFileWrite }
 	stale := fx.stored
-	err := svc.RunApplyPipelineRenameOnly(context.Background(), "b1", &stale)
+	err := svc.RunApplyPipelineRenameOnly(context.Background(), "b1", &stale, Unattended)
 	require.ErrorIs(t, err, errInjectedFileWrite, "a moved file whose DB path was not written must fail the rename")
 }

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_background_apply_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6e2b9d47-3f81-4c0a-b5d6-1a7e8c4f9b23
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package metadatahandler_test
 
@@ -89,7 +89,29 @@ func TestApplyAudiobookMetadata_BackgroundWithoutQueuerAppliesInline(t *testing.
 	d.mfs.EXPECT().RenamePreflight("b1", mock.Anything, mock.Anything).Return(nil)
 	d.mfs.EXPECT().ApplyMetadataCandidate("b1", mock.Anything, mock.Anything).
 		Return(&metafetch.FetchMetadataResponse{Message: "applied", Book: &database.Book{ID: "b1"}}, nil)
-	d.pool.EXPECT().Submit("b1", mock.Anything).Return(true)
+	d.pool.EXPECT().Submit("b1", metafetch.Interactive, mock.Anything).Return(true)
+
+	w := doReq(h.ApplyAudiobookMetadata, http.MethodPost, "/audiobooks/b1/apply-metadata",
+		backgroundBody(metafetch.MetadataCandidate{Title: "Synthetic Title"}, ""), idParam("b1"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// The dialog's file job is the owner's own action on this one book, so it runs
+// Interactive: submitted to the pool with it (the pool persists it for a
+// restart's replay) and handed to the file work, which then writes a retired
+// book's files. A job that ran Unattended would be refused them.
+func TestApplyAudiobookMetadata_FileJobRunsInteractive(t *testing.T) {
+	h, d := newHandler(t)
+	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1"}, nil)
+	d.mfs.EXPECT().RenamePreflight("b1", mock.Anything, mock.Anything).Return(nil)
+	d.mfs.EXPECT().ApplyMetadataCandidate("b1", mock.Anything, mock.Anything).
+		Return(&metafetch.FetchMetadataResponse{Message: "applied", Book: &database.Book{ID: "b1"}, PendingCoverURL: "https://covers.example/batman.jpg"}, nil)
+	d.pool.EXPECT().Submit("b1", metafetch.Interactive, mock.Anything).
+		Run(func(_ string, _ metafetch.FetchIntent, fn func()) { fn() }).Return(true)
+	d.mfs.EXPECT().FinishApplyFileWork(mock.Anything, "b1", "https://covers.example/batman.jpg", true, true, metafetch.Interactive, mock.Anything).
+		Return(nil).Once()
 
 	w := doReq(h.ApplyAudiobookMetadata, http.MethodPost, "/audiobooks/b1/apply-metadata",
 		backgroundBody(metafetch.MetadataCandidate{Title: "Synthetic Title"}, ""), idParam("b1"))

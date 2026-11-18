@@ -1,7 +1,7 @@
 // file: internal/server/scanlock_order_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3a8d0f52-6c1e-4b97-9e24-d71b5a0c8e63
-// last-edited: 2026-10-10
+// last-edited: 2026-11-18
 
 package server
 
@@ -14,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/scanlock"
 )
 
@@ -128,9 +129,9 @@ func TestLockOrder_ApplyTakesL0ThenFileWorkTakesL1(t *testing.T) {
 	hold, err := scanlock.Books.LockSet(context.Background(), []string{id})
 	require.NoError(t, err)
 	jobDone := make(chan struct{})
-	require.True(t, pool.Submit(id, func() {
+	require.True(t, pool.Submit(id, metafetch.Unattended, func() {
 		defer close(jobDone)
-		_ = mfs.FinishApplyFileWork(context.Background(), id, "", true, true, nil)
+		_ = mfs.FinishApplyFileWork(context.Background(), id, "", true, true, metafetch.Unattended, nil)
 	}))
 	hold.Release()
 

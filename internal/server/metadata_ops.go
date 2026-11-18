@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.43.5
+// version: 1.43.6
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -1248,6 +1248,26 @@ func (s *Server) runBulkWriteBack(
 		}
 		defer releaseFileWrite()
 
+		// A retired book (trashed, or merged away) is left alone BEFORE the
+		// rename, not discovered by the tag write after it: this is an
+		// unattended job, and unattended file work writes none of a retired
+		// book's files. The row is read again here, after the wait for the
+		// file-I/O gate, because the first read can be arbitrarily old by now
+		// and a book trashed or merged while the job queued is retired
+		// whatever that read said. Counted skipped, not failed: nothing went
+		// wrong, and a retry would be refused the same way. (metafetch's
+		// fileWorkTarget refuses again under the book's lock, which closes the
+		// window between this read and the write; that refusal is mapped to
+		// skipped below.)
+		if fresh, freshErr := store.GetBookByID(bookID); freshErr == nil && fresh != nil {
+			book = fresh
+		}
+		if book.IsRetired() {
+			skipped.Add(1)
+			_ = progress.Log("info", fmt.Sprintf("book %s: skipping write-back (retired: trashed or merged away)", bookID), nil)
+			return
+		}
+
 		// Rename FIRST, then write. Both calls lock for themselves, in the order
 		// every apply takes (metafetch's lockBook): the book's lock, its library
 		// copy's, then the path lock -- from writeBackPathLocks, which metafetch
@@ -1269,7 +1289,14 @@ func (s *Server) runBulkWriteBack(
 				_ = progress.Log("warn", fmt.Sprintf("book %s: rename refused before any move, tags not written: %v", bookID, pfErr), nil)
 				return
 			}
-			if renameErr := mfs.RunApplyPipelineRenameOnly(ctx, bookID, book); renameErr != nil {
+			if renameErr := mfs.RunApplyPipelineRenameOnly(ctx, bookID, book, metafetch.Unattended); renameErr != nil {
+				if errors.Is(renameErr, metafetch.ErrBookRetired) {
+					// Retired between the read above and the rename's own
+					// check, under the book's lock: nothing was moved.
+					skipped.Add(1)
+					_ = progress.Log("info", fmt.Sprintf("book %s: skipping write-back (retired: trashed or merged away): %v", bookID, renameErr), nil)
+					return
+				}
 				failed.Add(1)
 				_ = progress.Log("warn", fmt.Sprintf("book %s: rename failed, tags not written: %v", bookID, renameErr), nil)
 				return
@@ -1285,9 +1312,14 @@ func (s *Server) runBulkWriteBack(
 		// one-second .bak- backup name, is historical).
 		// ctx carries the caller's tagger.WithoutBackup opt-out down to the
 		// tag and cover writes (WriteBackMetadataForBookContext).
-		count, writeErr := writeBackBookFiles(mfs, ctx, bookID)
+		count, writeErr := writeBackBookFiles(mfs, ctx, bookID, metafetch.Unattended)
 
 		if writeErr != nil {
+			if errors.Is(writeErr, metafetch.ErrBookRetired) {
+				skipped.Add(1)
+				_ = progress.Log("info", fmt.Sprintf("book %s: skipping write-back (retired: trashed or merged away): %v", bookID, writeErr), nil)
+				return
+			}
 			failed.Add(1)
 			_ = progress.Log("warn", fmt.Sprintf("book %s: write-back failed: %v", bookID, writeErr), nil)
 			return

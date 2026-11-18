@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/book_scan_lock.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: 070620af-532e-4357-a2a3-3f746b5e9e30
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package metadatahandler
 
@@ -327,14 +327,17 @@ func (h *Handler) applyCandidateCore(ctx context.Context, id string, cand metafe
 	if pool := h.fileIOPool; pool != nil {
 		mfs := h.metadataFetchService
 		pendingCover := resp.PendingCoverURL
-		accepted := pool.Submit(id, func() {
+		// Interactive: the owner's own action on this one book, so a
+		// retired book (the dialog's AllowRetired path) still has its files
+		// written, and a restart replays the job the same way.
+		accepted := pool.Submit(id, metafetch.Interactive, func() {
 			// Cover download FIRST, then the file I/O, then the tags exactly
 			// once (FinishApplyFileWork). It takes metafetch's own book and
 			// path locks; this job holds none of that table. The response is
 			// already written, so a failure can only be logged.
 			// A single-book apply: ctx carries no backup opt-out, so the
 			// writes keep a .bak-* sibling when create_backups is on.
-			if err := mfs.FinishApplyFileWork(ctx, id, pendingCover, true, shouldWriteBack, nil); err != nil {
+			if err := mfs.FinishApplyFileWork(ctx, id, pendingCover, true, shouldWriteBack, metafetch.Interactive, nil); err != nil {
 				bookLockLog.Warn("background apply file work failed for book %s: %s", logger.SanitizeLogValue(id), logger.SanitizeLogValue(err.Error()))
 			}
 		})
@@ -388,7 +391,7 @@ func (h *Handler) writeBackCore(ctx context.Context, id string, segmentIDs []str
 			}
 			return res, fmt.Errorf("rename preflight failed: %w", err)
 		}
-		if err := h.metadataFetchService.RunApplyPipelineRenameOnly(ctx, id, book); err != nil {
+		if err := h.metadataFetchService.RunApplyPipelineRenameOnly(ctx, id, book, metafetch.Interactive); err != nil {
 			// Some files may have moved; writing tags now would stamp a
 			// half-moved book.
 			status := http.StatusInternalServerError
@@ -400,9 +403,9 @@ func (h *Handler) writeBackCore(ctx context.Context, id string, segmentIDs []str
 		res.renamed = true
 	}
 	if len(segmentIDs) > 0 {
-		res.written, err = h.metadataFetchService.WriteBackMetadataForBook(id, segmentIDs)
+		res.written, err = h.metadataFetchService.WriteBackMetadataForBook(id, metafetch.Interactive, segmentIDs)
 	} else {
-		res.written, err = h.metadataFetchService.WriteBackMetadataForBook(id)
+		res.written, err = h.metadataFetchService.WriteBackMetadataForBook(id, metafetch.Interactive)
 	}
 	if err != nil {
 		return res, fmt.Errorf("failed to write back metadata: %w", err)

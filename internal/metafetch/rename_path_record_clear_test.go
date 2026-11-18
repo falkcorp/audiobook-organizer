@@ -1,7 +1,7 @@
 // file: internal/metafetch/rename_path_record_clear_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7f3c1a58-e926-4b04-8d7e-2a5b9c0e1f64
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package metafetch
 
@@ -53,7 +53,7 @@ func TestRename_SuccessfulPathWriteClearsEarlierRecord(t *testing.T) {
 	mu := prefStore(svc, prefs)
 
 	st := fx.stored
-	require.NoError(t, svc.RunApplyPipelineRenameOnly(context.Background(), "b1", &st))
+	require.NoError(t, svc.RunApplyPipelineRenameOnly(context.Background(), "b1", &st, Unattended))
 
 	mu.Lock()
 	defer mu.Unlock()

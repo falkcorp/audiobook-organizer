@@ -1,7 +1,7 @@
 // file: internal/server/backup_optout_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: e1296d8d-87ce-482e-a80c-45c24c802435
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package server
 
@@ -76,7 +76,7 @@ func captureWriteBack(t *testing.T) *ctxRecorder {
 	t.Helper()
 	rec := &ctxRecorder{}
 	prev := writeBackBookFiles
-	writeBackBookFiles = func(_ *metafetch.Service, ctx context.Context, _ string) (int, error) {
+	writeBackBookFiles = func(_ *metafetch.Service, ctx context.Context, _ string, _ metafetch.FetchIntent) (int, error) {
 		rec.add(ctx)
 		return 0, nil
 	}
@@ -203,7 +203,7 @@ func TestBackupOptOut_ApplyWhenScannedFileWork(t *testing.T) {
 	rec := &ctxRecorder{}
 	done := make(chan struct{})
 	prev := finishApplyFileWork
-	finishApplyFileWork = func(_ *metafetch.Service, ctx context.Context, _, _ string, _, _ bool, _ func() error) error {
+	finishApplyFileWork = func(_ *metafetch.Service, ctx context.Context, _, _ string, _, _ bool, _ metafetch.FetchIntent, _ func() error) error {
 		rec.add(ctx)
 		close(done)
 		return nil
@@ -225,7 +225,7 @@ func TestBackupOptOut_ApplyWhenScannedFileWork(t *testing.T) {
 // fakeAutoFetchRecoverer records the ctx of the auto-fetch replay.
 type fakeAutoFetchRecoverer struct{ rec *ctxRecorder }
 
-func (f fakeAutoFetchRecoverer) FinishAutoFetchFileWork(ctx context.Context, _, _ string, _ bool) error {
+func (f fakeAutoFetchRecoverer) FinishAutoFetchFileWork(ctx context.Context, _, _ string, _ bool, _ metafetch.FetchIntent) error {
 	f.rec.add(ctx)
 	return nil
 }
@@ -233,11 +233,11 @@ func (f fakeAutoFetchRecoverer) FinishAutoFetchFileWork(ctx context.Context, _, 
 func TestBackupOptOut_FileIOPoolReplays(t *testing.T) {
 	backupsOn(t)
 	apply := &fakeApplyRecoverer{}
-	recoverApplyMetadataFileOp(apply, "b1")
+	recoverApplyMetadataFileOp(apply, "b1", metafetch.Unattended)
 	(&ctxRecorder{ctxs: apply.ctxs}).requireAllOptOut(t, 1)
 
 	auto := &ctxRecorder{}
-	recoverAutoFetchFileOp(fakeAutoFetchRecoverer{rec: auto}, "b1")
+	recoverAutoFetchFileOp(fakeAutoFetchRecoverer{rec: auto}, "b1", metafetch.Unattended)
 	auto.requireAllOptOut(t, 1)
 }
 

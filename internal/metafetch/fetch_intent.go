@@ -1,7 +1,7 @@
 // file: internal/metafetch/fetch_intent.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: fd965b79-3063-458c-b45b-bfefdbef80af
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package metafetch
 
@@ -17,6 +17,16 @@ import (
 // retired (in the trash, or absorbed into another book) depends on the caller,
 // not on the function. Every call site states which it is: the argument is
 // required, and it has no default.
+//
+// The same two answers name who is behind a job that writes a book's FILES
+// (FinishApplyFileWork, FinishAutoFetchFileWork, ApplyMetadataFileIO,
+// WriteBackMetadataForBook, RunApplyPipelineRenameOnly): an Interactive job is
+// a person's own action on this one book and writes a retired book's files
+// like any other; an Unattended job writes none of a retired book's files
+// (checkFileWorkIntent, enforced by fileWorkTarget, so the rename, the cover
+// embed and the tag write stop together). The intent travels with the job,
+// including through the file-I/O pool's persisted record, so a job replayed
+// after a restart keeps it.
 type FetchIntent int
 
 const (
@@ -60,6 +70,28 @@ func checkFetchIntent(intent FetchIntent, book *database.Book) error {
 		return nil
 	default:
 		return fmt.Errorf("metafetch: invalid fetch intent %s", intent)
+	}
+}
+
+// checkFileWorkIntent is the one place a file-work intent is turned into a
+// refusal. target is the book whose files the job is about to write, and
+// self says that book is the job's own book (not its library copy: a retired
+// copy is refused for every intent by libraryCopyGone). An Unattended job
+// refuses a retired self with ErrBookRetired and writes nothing. An intent
+// that is neither constant is an error, as for checkFetchIntent: a caller that
+// did not state its intent must not get either behaviour, least of all the
+// one that writes.
+func checkFileWorkIntent(intent FetchIntent, target *database.Book, self bool) error {
+	switch intent {
+	case Interactive:
+		return nil
+	case Unattended:
+		if self && target != nil && target.IsRetired() {
+			return fmt.Errorf("book %s is retired (trashed or merged away), so none of its files were written: %w", target.ID, ErrBookRetired)
+		}
+		return nil
+	default:
+		return fmt.Errorf("metafetch: invalid file-work intent %s", intent)
 	}
 }
 
