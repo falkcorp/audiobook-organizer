@@ -1,5 +1,5 @@
 // file: internal/transcribe/batch_model_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a47c0e92-6d18-4f35-b2a9-5e1f83d7c046
 // last-edited: 2026-11-17
 
@@ -104,7 +104,7 @@ func TestSendPathBatch_DecodesModelAndLanguage(t *testing.T) {
 		})
 	}))
 	t.Cleanup(srv.Close)
-	got, err := sendPathBatch(context.Background(), srv.Client(), srv.URL, []pathJobEntry{
+	got, _, err := sendPathBatch(context.Background(), srv.Client(), srv.URL, []pathJobEntry{
 		{id: "a", job: PathJob{Path: "/x/a", Seconds: 1}},
 		{id: "b", job: PathJob{Path: "/x/b", Seconds: 1}},
 	})
