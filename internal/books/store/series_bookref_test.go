@@ -1,7 +1,7 @@
 // file: internal/books/store/series_bookref_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 8f2c14ba-6d97-4e35-b0a1-72e5c9d38a04
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package store
 
@@ -33,6 +33,7 @@ func seedRefStore(t *testing.T) *PebbleStore {
 
 func mkBook(t *testing.T, s *PebbleStore, title string, seriesID int, primary, trashed bool) *Book {
 	t.Helper()
+	seedSeriesRow(t, s, seriesID)
 	b, err := s.CreateBook(&Book{
 		Title:             title,
 		FilePath:          "/ref/" + title,
@@ -105,6 +106,7 @@ func TestSeriesBookRefCounts_MemDBAndPebbleAgree(t *testing.T) {
 		mkBook(t, store, fmt.Sprintf("mix-%02d", i), sid, i%2 == 0, i%3 == 0)
 	}
 	// nil flags — the pointer-nil branch each filter treats differently.
+	seedSeriesRow(t, store, 927)
 	_, err := store.CreateBook(&Book{Title: "nilflags", FilePath: "/ref/nilflags", SeriesID: new(927)})
 	require.NoError(t, err)
 	// no series at all — must not appear under any key.
@@ -117,6 +119,7 @@ func TestSeriesBookRefCounts_MemDBAndPebbleAgree(t *testing.T) {
 	// only ever produced keys that both of them happened to admit. A
 	// conformance test is bounded by the diversity of its fixture, not by the
 	// number of implementations it compares.
+	seedSeriesRow(t, store, 928)
 	_, err = store.CreateBook(&Book{
 		ID: "ZZREF00000000000000000000", Title: "letterled",
 		FilePath: "/ref/letterled", SeriesID: new(928),
@@ -195,6 +198,7 @@ func TestSeriesBookRefCounts_CountsALetterLeadingBookID(t *testing.T) {
 	store := seedRefStore(t)
 
 	const lonely = 940 // referenced by exactly one book, so the count is unambiguous
+	seedSeriesRow(t, store, lonely)
 	b, err := store.CreateBook(&Book{
 		ID: "ZZBOUNDS0000000000000000", Title: "letter-leading",
 		FilePath: "/ref/letter-leading", SeriesID: new(lonely),

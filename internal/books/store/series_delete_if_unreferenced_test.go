@@ -1,5 +1,5 @@
 // file: internal/books/store/series_delete_if_unreferenced_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 0b5d7e92-3c4a-4f18-a6d1-52e8c9f03b74
 // last-edited: 2026-11-18
 
@@ -136,9 +136,12 @@ func TestDeleteSeriesIfUnreferenced_AWriteBetweenCountAndDeleteCannotLand(t *tes
 			}
 			mu.Lock()
 			defer mu.Unlock()
-			require.NoError(t, writeErr)
 			require.True(t, sawRow)
 			require.Nil(t, seriesAtWrite, "the write must run after the delete, never between the count and it")
+			// It runs after the delete, so it names a series that is gone: the
+			// write verifies that and is refused rather than stranding the book
+			// (book_write_series_exists_test.go pins the same from the writer's side).
+			require.ErrorIs(t, writeErr, ErrSeriesNotFound)
 		})
 	}
 }
@@ -181,6 +184,7 @@ func TestDeleteSeriesIfUnreferenced_HoldsEveryBookStripeAndTheSeriesLockAcrossTh
 			// straight through (a leaked lock would hang here).
 			book, err := s.CreateBook(&Book{Title: "The Long Halloween Part One", FilePath: "/gap/tlh-1"})
 			require.NoError(t, err)
+			seedSeriesRow(t, s, 77)
 			require.NoError(t, repointBook(s, book.ID, 77, nil))
 			_, err = s.CreateSeries("Dark Victory", nil)
 			require.NoError(t, err)

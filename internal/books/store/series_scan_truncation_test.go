@@ -1,7 +1,7 @@
 // file: internal/books/store/series_scan_truncation_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 6c1f9a72-3d84-4b05-9e27-8a5d61b3f9c4
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package store
 
@@ -80,6 +80,7 @@ func truncatingStoreWithFixture(t *testing.T, seriesID int) (*PebbleStore, *erro
 	require.NoError(t, err)
 	seed.WaitForWarmup()
 
+	seedSeriesRow(t, seed, seriesID) // a book write refuses a series that does not exist
 	yes := true
 	for i := range 12 {
 		seq := i
