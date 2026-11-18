@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/step.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a9d5f13e-7c02-4b68-8e41-35b0c6d7e2f8
 // last-edited: 2026-11-18
 
@@ -238,29 +238,61 @@ func (m *Migration) Step(ctx context.Context, kv storage.KV, w *datamigrate.Step
 		return m.stepDeprev(ctx, kv, w)
 	}
 	// A row a run owns, visited before (or without) its run's driver.
-	_, err := m.legacy().Get(ctx, []byte(prefixRun+id))
-	switch {
-	case err == nil:
+	driver, err := m.driverOf(ctx, id)
+	if err != nil {
+		return err
+	}
+	if family == prefixOp1 && driver == driverOp1 {
+		return m.stepRun(ctx, kv, w, id)
+	}
+	switch driver {
+	case driverRun, driverOp1:
 		m.deferred.Add(1)
 		w.Count(OutcomeDeferred)
 		return nil // the run's driver pulls it
-	case errors.Is(err, storage.ErrNotFound):
-		// No run record now. Either the row is an orphan, or its driver's chunk
-		// committed after the runner handed this row over and took it with the
-		// run (the runner iterates a snapshot): that is told apart by the row's
-		// own key, which the driver's batch deleted.
-		if _, gone := m.legacy().Get(ctx, kv.Key); errors.Is(gone, storage.ErrNotFound) {
-			m.deferred.Add(1)
-			w.Count(OutcomeDeferred)
-			return nil
-		} else if gone != nil {
-			return gone
-		}
-		m.logger.Warn("m4: a run-owned row of no run record is quarantined", "key", key)
-		m.orphans.Add(1)
-		return w.Quarantine(kv.Key, kv.Value, reasonOrphan)
 	}
-	return err
+	// No driver now. Either the row is an orphan, or its driver's chunk
+	// committed after the runner handed this row over and took it with the run
+	// (the runner iterates a snapshot): that is told apart by the row's own
+	// key, which the driver's batch deleted.
+	if _, gone := m.legacy().Get(ctx, kv.Key); errors.Is(gone, storage.ErrNotFound) {
+		m.deferred.Add(1)
+		w.Count(OutcomeDeferred)
+		return nil
+	} else if gone != nil {
+		return gone
+	}
+	m.logger.Warn("m4: a run-owned row of no run record is quarantined", "key", key)
+	m.orphans.Add(1)
+	return w.Quarantine(kv.Key, kv.Value, reasonOrphan)
+}
+
+// The row that drives a run's import.
+const (
+	driverNone = iota
+	driverRun  // opv3:run:<id>
+	driverOp1  // operation:<id>, for a v1 operation no v3 record or v2 row covers
+)
+
+// driverOf says which row imports the rows of run id: its v3 record, or, for
+// a v1 operation with no v3 record and no v2 operation row (a v2 row with no
+// record is an orphan the step sets aside, and so is the operation's history),
+// the v1 operation row.
+func (m *Migration) driverOf(ctx context.Context, id string) (int, error) {
+	r := m.legacy()
+	for _, c := range []struct {
+		key  string
+		want int
+	}{{prefixRun + id, driverRun}, {prefixOp2 + id, driverNone}, {prefixOp1 + id, driverOp1}} {
+		_, err := r.Get(ctx, []byte(c.key))
+		switch {
+		case err == nil:
+			return c.want, nil
+		case !errors.Is(err, storage.ErrNotFound):
+			return driverNone, err
+		}
+	}
+	return driverNone, nil
 }
 
 // stepRun imports one run: the run record, then every row the run owns, in one
@@ -291,6 +323,17 @@ func (m *Migration) stepRun(ctx context.Context, kv storage.KV, w *datamigrate.S
 		return fmt.Errorf("m4: import the data of run %q: %w", id, err)
 	}
 	for _, row := range rr.all() {
+		if strings.HasPrefix(string(row.Key), prefixOpState1) && strings.HasSuffix(string(row.Key), ":params") {
+			// The chunk journal of a running backfill is live state (HEAD's
+			// keyfamilies.go says so) that nothing here consumes: set aside
+			// rather than deleted, until the owner rules on it.
+			m.logger.Warn("m4: a v1 checkpoint journal row is quarantined", "run", rr.id)
+			m.rowsQuarantined.Add(1)
+			if err := w.Quarantine(row.Key, row.Value, reasonV1Params); err != nil {
+				return err
+			}
+			continue
+		}
 		if rr.op2 != nil && string(row.Key) == string(rr.op2.Key) && !json.Valid(row.Value) {
 			// The v2 operation row is a mirror of the record just imported, but
 			// bytes that are not even JSON are not deleted unseen: set aside.
@@ -315,14 +358,15 @@ func (m *Migration) stepRun(ctx context.Context, kv storage.KV, w *datamigrate.S
 func (m *Migration) quarantineRun(rr *runRows, w *datamigrate.StepWriter, reason string) error {
 	m.logger.Warn("m4: a run is quarantined", "run", rr.id, "reason", reason)
 	for _, row := range rr.all() {
+		driver := string(row.Key) == prefixRun+rr.id || (rr.run == nil && string(row.Key) == prefixOp1+rr.id)
 		why := reasonOfRunQuar
-		if string(row.Key) == prefixRun+rr.id {
+		if driver {
 			why = reason
 		}
 		if err := w.Quarantine(row.Key, row.Value, why); err != nil {
 			return err
 		}
-		if string(row.Key) == prefixRun+rr.id {
+		if driver {
 			m.runsQuarantined.Add(1)
 		} else {
 			m.rowsQuarantined.Add(1)
@@ -336,7 +380,11 @@ func (m *Migration) quarantineRun(rr *runRows, w *datamigrate.StepWriter, reason
 func (m *Migration) collect(ctx context.Context, id string, run storage.KV) (*runRows, error) {
 	r := m.legacy()
 	rr := &runRows{id: id}
-	rr.run = &run
+	if strings.HasPrefix(string(run.Key), prefixOp1) {
+		rr.op1 = &run // a v1 operation with no v3 record: its row drives the import
+	} else {
+		rr.run = &run
+	}
 	one := func(prefix string) (*storage.KV, error) {
 		raw, err := r.Get(ctx, []byte(prefix+id))
 		switch {
@@ -363,6 +411,17 @@ func (m *Migration) collect(ctx context.Context, id string, run storage.KV) (*ru
 	if rr.state2, err = one(prefixState2); err != nil {
 		return nil, err
 	}
+	if rr.op1 == nil {
+		if rr.op1, err = one(prefixOp1); err != nil {
+			return nil, err
+		}
+	}
+	if rr.sum1, err = one(prefixOpSum1); err != nil {
+		return nil, err
+	}
+	if rr.state1, err = one(prefixOpState1); err != nil {
+		return nil, err
+	}
 	for _, f := range []struct {
 		prefix string
 		dst    *[]storage.KV
@@ -370,6 +429,7 @@ func (m *Migration) collect(ctx context.Context, id string, run storage.KV) (*ru
 		{prefixEvt, &rr.evt}, {prefixIntent, &rr.intent}, {prefixItem, &rr.item}, {prefixLog, &rr.log},
 		{prefixSnap, &rr.snap}, {prefixMark, &rr.mark}, {prefixRowMark, &rr.rowmark},
 		{prefixRow, &rr.row}, {prefixRowIx, &rr.rowix}, {prefixLog2, &rr.log2}, {prefixErr2, &rr.err2},
+		{prefixOpLog1, &rr.log1}, {prefixOpRes1, &rr.res1}, {prefixOpState1, &rr.jrnl1},
 	} {
 		if *f.dst, err = scanRows(ctx, r, f.prefix+id+":"); err != nil {
 			return nil, err

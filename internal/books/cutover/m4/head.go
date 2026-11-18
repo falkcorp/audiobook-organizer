@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/head.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3b7e1c94-d2a6-4f08-95b1-6c0e8a47d213
 // last-edited: 2026-11-18
 
@@ -70,6 +70,17 @@ const (
 	prefixQ2    = "opv2:q:"
 	prefixWait2 = "opv2:wait:"
 
+	// HEAD's v1 operations store (05-storage 5S.9.1 row 12), keyed by the
+	// operation ID: the operation row, its summary and its checkpoint (one row
+	// each), the log lines and the per-book results. The checkpoint family
+	// also holds opstate:<id>:params, the backfill-file-hashes chunk journal,
+	// which keyfamilies.go marks LIVE.
+	prefixOp1      = "operation:"
+	prefixOpLog1   = "operationlog:"
+	prefixOpRes1   = "op_result:"
+	prefixOpSum1   = "opsummary:"
+	prefixOpState1 = "opstate:"
+
 	// Clocks: HEAD's v3 schedule state and the scheduler's settings clocks.
 	prefixSched = "opv3:sched:"
 	// The scheduler's interval clock: one setting row per task, setting:<this
@@ -97,6 +108,7 @@ var runScoped = []string{
 	prefixProg, prefixEvt, prefixCkpt, prefixLedger, prefixSnap, prefixIntent,
 	prefixItem, prefixLog, prefixMark, prefixRowMark, prefixRow, prefixRowIx,
 	prefixOp2, prefixState2, prefixLog2, prefixErr2,
+	prefixOp1, prefixOpLog1, prefixOpRes1, prefixOpSum1, prefixOpState1,
 }
 
 // derived are the families deleted by rule: indexes HEAD rebuilt from the run
@@ -280,6 +292,33 @@ type opErrV2 struct {
 	Message     string
 	Attrs       string // a JSON object, as text
 	OccurredAt  time.Time
+}
+
+// op1Row is operation: (store.Operation, HEAD's v1 operation row).
+type op1Row struct {
+	ID           string     `json:"id"`
+	UserID       string     `json:"user_id"`
+	Type         string     `json:"type"`
+	Status       string     `json:"status"`
+	Progress     int        `json:"progress"`
+	Total        int        `json:"total"`
+	Message      string     `json:"message"`
+	FolderPath   *string    `json:"folder_path"`
+	CreatedAt    time.Time  `json:"created_at"`
+	StartedAt    *time.Time `json:"started_at"`
+	CompletedAt  *time.Time `json:"completed_at"`
+	ErrorMessage *string    `json:"error_message"`
+	ResultData   *string    `json:"result_data"`
+}
+
+// opLog1Row is operationlog: (store.OperationLog).
+type opLog1Row struct {
+	ID          int       `json:"id"`
+	OperationID string    `json:"operation_id"`
+	Level       string    `json:"level"`
+	Message     string    `json:"message"`
+	Details     *string   `json:"details"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // rowIndex is opv2:rowix: for a repairs plan row: the class a page filters by.

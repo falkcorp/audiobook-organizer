@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/convert.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c41d9e07-5a3b-48f2-b6c8-0d7e2f91a354
 // last-edited: 2026-11-18
 
@@ -52,7 +52,27 @@ const (
 	reasonOrphan     = "the row belongs to no run record"
 	reasonOfRunQuar  = "the row belongs to a run that is quarantined"
 	reasonMarkFormat = "a mark key of the run has no name separator"
+	reasonV1Op       = "the v1 operation row does not decode, or carries no ID, type or creation time"
+	reasonV1Status   = "the v1 operation's status is not one 5T.8.3's v1 table lists"
+	reasonV1Log      = "a v1 log line of the operation does not decode"
+	reasonV1Params   = "opstate:<id>:params is the backfill-file-hashes chunk journal, a live record that no import consumes"
 )
+
+// CheckpointV1Result and CheckpointV1Summary carry HEAD's per-book result rows
+// (op_result:<id>:<book>, keyed here by the book) and an operation's summary
+// row (opsummary:<id>) as HEAD wrote them, for the operations that keep them.
+const (
+	CheckpointV1ResultPrefix = "head-v1-result:"
+	CheckpointV1Summary      = "head-v1-summary"
+	// CheckpointV1Operation is the v1 operation row of a run that also has a v3
+	// record: the v3 record is the run's truth, and the v1 row's own fields
+	// (message, folder, result text) ride along unread.
+	CheckpointV1Operation = "head-v1-operation"
+)
+
+// V1Unfinished is the reason a v1 operation that never finished is imported
+// as interrupted_dropped: v1 operations had no resume, so the run is history.
+const V1Unfinished = "v1_unfinished"
 
 // runRows is everything HEAD stores for one run, read by prefix.
 type runRows struct {
@@ -66,17 +86,22 @@ type runRows struct {
 	// lines.
 	op2, state2 *storage.KV
 	log2, err2  []storage.KV
+	// The v1 history: the operation row (the driver of a run with no v3
+	// record), its summary and checkpoint, and the log lines, per-book results
+	// and checkpoint journal rows.
+	op1, sum1, state1 *storage.KV
+	log1, res1, jrnl1 []storage.KV
 }
 
 // all lists every row of the run, driver included, for deletion or quarantine.
 func (r *runRows) all() []storage.KV {
 	var out []storage.KV
-	for _, one := range []*storage.KV{r.run, r.prog, r.ckpt, r.ledger, r.op2, r.state2} {
+	for _, one := range []*storage.KV{r.run, r.prog, r.ckpt, r.ledger, r.op2, r.state2, r.op1, r.sum1, r.state1} {
 		if one != nil {
 			out = append(out, *one)
 		}
 	}
-	for _, many := range [][]storage.KV{r.evt, r.intent, r.item, r.log, r.snap, r.mark, r.rowmark, r.row, r.rowix, r.log2, r.err2} {
+	for _, many := range [][]storage.KV{r.evt, r.intent, r.item, r.log, r.snap, r.mark, r.rowmark, r.row, r.rowix, r.log2, r.err2, r.log1, r.res1, r.jrnl1} {
 		out = append(out, many...)
 	}
 	return out
@@ -91,6 +116,9 @@ type converted struct {
 // convert builds the importer's record and data for a run, or the reason the
 // run is quarantined. It reads nothing but rr.
 func convert(rr *runRows) (*converted, string) {
+	if rr.run == nil {
+		return convertV1(rr)
+	}
 	var row runRow
 	if err := json.Unmarshal(rr.run.Value, &row); err != nil {
 		return nil, reasonRun
@@ -158,7 +186,7 @@ func convert(rr *runRows) (*converted, string) {
 	if err := out.pages(rr); err != "" {
 		return nil, err
 	}
-	if err := out.checkpoints(rr); err != "" {
+	if err := out.checkpoints(rr, !st.Terminal()); err != "" {
 		return nil, err
 	}
 	if err := out.rows(rr); err != "" {
@@ -287,7 +315,10 @@ func (c *converted) pages(rr *runRows) string {
 		}
 		c.data.Pages = append(c.data.Pages, tasks.PageEntry{Page: tasks.PageLog, Seq: seq, Log: tasks.LogLine{At: l.At.UTC(), Level: l.Level, Message: l.Message, Fields: l.Fields}})
 	}
-	return c.pagesV2(rr)
+	if reason := c.pagesV2(rr); reason != "" {
+		return reason
+	}
+	return c.pagesV1(rr)
 }
 
 // pagesV2 adds the v2 mirror's log and error lines to the run's log page.
@@ -385,7 +416,7 @@ func subjectRef(s string) entity.Ref {
 }
 
 // checkpoints carries HEAD's checkpoint, ledger and snapshot bytes.
-func (c *converted) checkpoints(rr *runRows) string {
+func (c *converted) checkpoints(rr *runRows, open bool) string {
 	c.data.Checkpoints = map[string][]byte{}
 	if rr.ckpt != nil {
 		var ck ckptRow
@@ -406,6 +437,15 @@ func (c *converted) checkpoints(rr *runRows) string {
 	if _, has := c.data.Checkpoints[CheckpointV1]; !has && rr.state2 != nil {
 		c.data.Checkpoints[CheckpointV1] = bytes.Clone(rr.state2.Value)
 	}
+	// HEAD's v1 checkpoint proper (operations.SaveCheckpoint's opstate:<id>) is
+	// the run's checkpoint named v1 while the run is open, and wins over the
+	// staged copies above: it is what the converted kind's Restore reads
+	// (5T.8.3). A finished run has no use for it, and it is deleted with the
+	// run.
+	if open && rr.state1 != nil {
+		c.data.Checkpoints[CheckpointV1] = bytes.Clone(rr.state1.Value)
+	}
+	c.v1Extras(rr)
 	if rr.ledger != nil {
 		c.data.Checkpoints[CheckpointLedger] = bytes.Clone(rr.ledger.Value)
 	}
@@ -456,4 +496,166 @@ func (c *converted) rows(rr *runRows) string {
 		add(key)
 	}
 	return ""
+}
+
+// pagesV1 adds the v1 log lines (operationlog:<id>:<nanos>:<seq>) to the run's
+// log page, after every line before it: the v1 family numbers its lines
+// independently of the v3 and v2 ones. A line that does not decode quarantines
+// the run.
+func (c *converted) pagesV1(rr *runRows) string {
+	base := c.maxSeq(tasks.PageLog)
+	for i, kv := range rr.log1 {
+		var l opLog1Row
+		if json.Unmarshal(kv.Value, &l) != nil {
+			return reasonV1Log
+		}
+		seq := logSeq(string(kv.Key))
+		if seq == 0 {
+			seq = uint64(i + 1)
+		}
+		var fields map[string]string
+		if l.Details != nil {
+			fields = attrFields(*l.Details)
+		}
+		c.data.Pages = append(c.data.Pages, tasks.PageEntry{Page: tasks.PageLog, Seq: base + seq, Log: tasks.LogLine{At: l.CreatedAt.UTC(), Level: l.Level, Message: l.Message, Fields: fields}})
+	}
+	return ""
+}
+
+// v1Extras carries the v1 result rows and the summary row under their
+// checkpoint names, byte for byte, so no byte of a v1 operation's output is
+// dropped.
+func (c *converted) v1Extras(rr *runRows) {
+	for _, kv := range rr.res1 {
+		book := strings.TrimPrefix(string(kv.Key), prefixOpRes1+rr.id+":")
+		c.data.Checkpoints[CheckpointV1ResultPrefix+book] = bytes.Clone(kv.Value)
+	}
+	if rr.sum1 != nil {
+		c.data.Checkpoints[CheckpointV1Summary] = bytes.Clone(rr.sum1.Value)
+	}
+	if rr.run != nil && rr.op1 != nil {
+		c.data.Checkpoints[CheckpointV1Operation] = bytes.Clone(rr.op1.Value)
+	}
+}
+
+// v1Status is HEAD's v1 operation statuses: the ones that finished map to the
+// state they mean, the ones that never finished (v1 had no resume) are history
+// that was cut off.
+func v1Status(s string) (st tasks.RunState, why string, ok bool) {
+	switch s {
+	case "completed":
+		return tasks.StateSucceeded, "", true
+	case "failed":
+		return tasks.StateFailed, "", true
+	case "timed_out":
+		return tasks.StateTimedOut, "", true
+	case "canceled", "cancelled":
+		return tasks.StateCanceled, "", true
+	case "pending", "queued", "running", "processing", "paused", "interrupted":
+		return tasks.StateInterruptedDropped, V1Unfinished, true
+	}
+	return "", "", false
+}
+
+// convertV1 imports a v1 operation that has no v3 record as a terminal run:
+// its kind goes through the rename map (an ID the map does not know is kept as
+// books.retired.<type>, rule 5), its status through v1Status, its log lines
+// become the run's log page, and its input folder rides in the run's params.
+// An operation that never finished finishes when its last recorded activity
+// does: the latest of its log lines, its start and its creation, all of them
+// HEAD's own times.
+func convertV1(rr *runRows) (*converted, string) {
+	var op op1Row
+	if rr.op1 == nil || json.Unmarshal(rr.op1.Value, &op) != nil || op.ID != rr.id || op.Type == "" || op.CreatedAt.IsZero() {
+		return nil, reasonV1Op
+	}
+	kind, err := v1Kind(op.Type)
+	if err != nil {
+		return nil, reasonKind
+	}
+	st, why, ok := v1Status(op.Status)
+	if !ok {
+		return nil, reasonV1Status
+	}
+	out := &converted{}
+	rec := &out.rec
+	rec.ID, rec.Kind, rec.State, rec.Reason = tasks.RunID(op.ID), kind, st, why
+	rec.Mode, rec.Trigger, rec.Priority = tasks.ModeLive, tasks.TriggerManual, tasks.PriorityNormal
+	rec.Actor = tasks.Actor{UserID: op.UserID}
+	if op.UserID == "" {
+		rec.Actor.System = "books"
+	}
+	rec.Created = op.CreatedAt.UTC()
+	if op.StartedAt != nil {
+		rec.Started = op.StartedAt.UTC()
+	}
+	rec.Done, rec.Total = op.Progress, op.Total
+	if op.ErrorMessage != nil {
+		rec.Error = *op.ErrorMessage
+	}
+	if op.ResultData != nil {
+		if rec.Result, err = jsonOrString(*op.ResultData); err != nil {
+			return nil, reasonV1Op
+		}
+	}
+	rec.Params = json.RawMessage(`{}`)
+	if op.FolderPath != nil {
+		raw, err := json.Marshal(map[string]string{"folder_path": *op.FolderPath})
+		if err != nil {
+			return nil, reasonV1Op
+		}
+		rec.Params = raw
+	}
+	out.data.Checkpoints = map[string][]byte{}
+	if reason := out.pagesV1(rr); reason != "" {
+		return nil, reason
+	}
+	out.v1Extras(rr)
+	if len(out.data.Checkpoints) == 0 {
+		out.data.Checkpoints = nil
+	}
+	fin := time.Time{}
+	switch {
+	case why == V1Unfinished:
+		fin = op.CreatedAt
+		if op.StartedAt != nil && op.StartedAt.After(fin) {
+			fin = *op.StartedAt
+		}
+		for _, p := range out.data.Pages {
+			if p.Log.At.After(fin) {
+				fin = p.Log.At
+			}
+		}
+	case op.CompletedAt != nil && !op.CompletedAt.IsZero():
+		fin = *op.CompletedAt
+	default:
+		return nil, reasonFinished
+	}
+	rec.Finished = fin.UTC()
+	rec.Seq.Log = out.maxSeq(tasks.PageLog)
+	return out, ""
+}
+
+// v1Kind is the kind of a v1 operation by its type text: the rename map's
+// answer when the text is a def ID it knows, else the retired kind (history
+// only). A def ID whose kind needs a run's params (the repairs defs) cannot be
+// a v1 operation's type and keeps the retired kind too.
+func v1Kind(typ string) (tasks.Kind, error) {
+	tg, err := kindrename.Resolve(typ)
+	if err != nil {
+		return "", err
+	}
+	if rt, err := tg.ForRun(nil); err == nil {
+		return rt.Kind, nil
+	}
+	return kindrename.RetiredKind(typ)
+}
+
+// jsonOrString is a v1 text field as a JSON value: itself when it is valid
+// JSON, else the text as a JSON string.
+func jsonOrString(s string) (json.RawMessage, error) {
+	if json.Valid([]byte(s)) {
+		return json.RawMessage(s), nil
+	}
+	return json.Marshal(s)
 }

@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/rig_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d82c4a15-9e63-4f07-b1a9-7035e8c6f241
 // last-edited: 2026-11-18
 
@@ -456,6 +456,13 @@ func read(ctx context.Context, t testing.TB, db *storage.DB, dm datamigrate.Data
 		{Start: []byte("opv3:"), End: []byte("opv3;")},
 		{Start: []byte("opv2:"), End: []byte("opv2;")},
 		{Start: []byte("op:"), End: []byte("op;")},
+		// v1 (5S.9.1 row 12): operation: and operationlog: are separate
+		// families, so the ranges are too.
+		{Start: []byte("operation:"), End: []byte("operation;")},
+		{Start: []byte("operationlog:"), End: []byte("operationlog;")},
+		{Start: []byte("op_result:"), End: []byte("op_result;")},
+		{Start: []byte("opsummary:"), End: []byte("opsummary;")},
+		{Start: []byte("opstate:"), End: []byte("opstate;")},
 		{Start: []byte("setting:scheduled_task_last_tick."), End: []byte("setting:scheduled_task_last_tick/")},
 		{Start: []byte("setting:library_scan_full_last_run"), End: []byte("setting:library_scan_full_last_run\x00")},
 		{Start: []byte("setting:maintenance_window_last_run"), End: []byte("setting:maintenance_window_last_run\x00")},
@@ -539,24 +546,6 @@ func (r *rig) runObserve(t testing.TB, observe func(ctx context.Context, s *snap
 	t.Helper()
 	dm := r.migration()
 	err := r.boot(context.Background(), r.seed(t), dm, func(ctx context.Context, db *storage.DB) error {
-		s, err := read(ctx, t, db, dm)
-		if err != nil {
-			return err
-		}
-		observe(ctx, s)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("boot: %v\n%s", err, r.logs)
-	}
-}
-
-// runObserve2 boots the store fsys holds, as it is, and hands observe the
-// booted store's snapshot (runObserve on a store a test already worked on).
-func (r *rig) runObserve2(t testing.TB, fsys vfs.FS, observe func(ctx context.Context, s *snap)) {
-	t.Helper()
-	dm := r.migration()
-	err := r.boot(context.Background(), fsys, dm, func(ctx context.Context, db *storage.DB) error {
 		s, err := read(ctx, t, db, dm)
 		if err != nil {
 			return err
