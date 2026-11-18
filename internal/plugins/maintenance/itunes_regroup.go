@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.33.2
+// version: 1.34.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-11-15
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -135,6 +135,8 @@ type t6g5RegroupUserState interface {
 type itunesRegroupReader interface {
 	itunesRegroupSnapshotReader
 	regroupBookReader
+	// The canonical-title write reads the survivor's field locks.
+	database.MetadataFieldStateReader
 	regroupManualOnlyReader
 	database.RetiredBookFileReader
 	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
@@ -1021,6 +1023,7 @@ func t6g5ApplyRegroupPlan(ctx context.Context, store itunesRegroupStore, plan it
 		applyRegroupGroup(store, plan, gi, rootDir, reporter, touched, &c)
 	}
 	moved, titled, titleKept, created, recheckSkipped := c.moved, c.titled, c.titleKept, c.created, c.recheckSkipped
+	titleLocked := c.titleLocked
 	errCount := c.errCount
 
 	// Delete projected-empty books, GUARDED: re-assert no files AND no ext-ids.
@@ -1211,8 +1214,8 @@ func t6g5ApplyRegroupPlan(ctx context.Context, store itunesRegroupStore, plan it
 	}
 
 	reporter.Log(slog.LevelInfo, fmt.Sprintf(
-		"APPLIED: moved=%d titled=%d library-title-kept=%d fresh=%d deleted=%d state-carried=%d state-carried-unlisted=%d skipped-target-not-listed=%d state-reappeared=%d delete-skipped=%d recheck-skipped=%d errors=%d",
-		moved, titled, titleKept, created, deleted, stateCarried, len(report.StateCarriedUnlisted), len(report.SkippedTargetNotListed), stateReappeared, deleteSkipped, recheckSkipped, errCount))
+		"APPLIED: moved=%d titled=%d library-title-kept=%d user-title-locked=%d fresh=%d deleted=%d state-carried=%d state-carried-unlisted=%d skipped-target-not-listed=%d state-reappeared=%d delete-skipped=%d recheck-skipped=%d errors=%d",
+		moved, titled, titleKept, titleLocked, created, deleted, stateCarried, len(report.StateCarriedUnlisted), len(report.SkippedTargetNotListed), stateReappeared, deleteSkipped, recheckSkipped, errCount))
 	if n := len(report.StateCarriedUnlisted); n > 0 {
 		reporter.Log(slog.LevelWarn, fmt.Sprintf(
 			"%d book(s)' listening state was carried to a book ABS does not list (first ids: %s)",
@@ -1227,6 +1230,9 @@ func t6g5ApplyRegroupPlan(ctx context.Context, store itunesRegroupStore, plan it
 // regroupApplyCounts are t6g5ApplyRegroupPlan's per-group tallies.
 type regroupApplyCounts struct {
 	moved, titled, titleKept, created, recheckSkipped, errCount int
+	// titleLocked counts survivors whose canonical title was not written because
+	// the user locked their title.
+	titleLocked int
 	// targets maps each written group's plan index to the book its files
 	// went to (regroupStateTarget).
 	targets map[int]string
@@ -1360,14 +1366,17 @@ func applyRegroupGroup(store itunesRegroupStore, plan itunesservice.RegroupPlan,
 	// A1#15); a survivor already carrying the canonical title is skipped.
 	// A library-folder copy (planned or as re-read just now) keeps its
 	// title: its metadata comes from the metadata pipeline, never from
-	// an iTunes album tag.
+	// an iTunes album tag. A survivor whose user locked the title keeps it too:
+	// the lock is read under the same hold as the write
+	// (database.ModifyBookRespectingLocks), and one that cannot be read writes
+	// nothing and counts as an error.
 	if keepTitle {
 		c.titleKept++
 		touched[target] = true
 		return
 	}
 	retitled := false
-	if written, err := store.ModifyBook(target, func(tb *database.Book) error {
+	if written, held, err := database.ModifyBookRespectingLocks(store, store, target, func(tb *database.Book) error {
 		if tb.Title == a.Title {
 			return database.ErrSkipBookWrite
 		}
@@ -1377,6 +1386,9 @@ func applyRegroupGroup(store itunesRegroupStore, plan itunesservice.RegroupPlan,
 	}); err != nil {
 		reporter.Log(slog.LevelWarn, fmt.Sprintf("set title on %s failed: %v", target, err))
 		c.errCount++
+	} else if len(held) > 0 {
+		c.titleLocked++
+		reporter.Log(slog.LevelInfo, fmt.Sprintf("title of %s left as it is: locked by the user", target))
 	} else if written != nil && retitled {
 		c.titled++
 	}

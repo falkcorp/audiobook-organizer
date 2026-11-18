@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/cleanup_series_cas_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5d2b8f41-7a36-4e09-b1c8-93e4f6a02d75
 // last-edited: 2026-11-18
 
@@ -32,6 +32,7 @@ import (
 // casStore is a tiny stateful store: rows that ModifyBook reads and writes, a
 // hook that runs before each read (the "other writer"), and a delete record.
 type casStore struct {
+	noUserLocks
 	books        map[string]*database.Book
 	beforeModify func(id string)
 	deleted      []int

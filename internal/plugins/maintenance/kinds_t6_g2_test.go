@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g2_test.go
-// version: 1.3.11
+// version: 1.4.1
 // guid: 7d3c1e58-2b94-4a6f-9e07-c5a18f2d4b63
 // last-edited: 2026-11-18
 
@@ -84,6 +84,16 @@ type t6g2ScanPage struct {
 }
 
 func (s *t6g2FakeStore) Describe() string { return "t6g2FakeStore" }
+
+// GetMetadataFieldStates and GetUserPreference answer "no user locks": the
+// description restore reads them, and no scenario here locks a field.
+func (s *t6g2FakeStore) GetMetadataFieldStates(string) ([]database.MetadataFieldState, error) {
+	return nil, nil
+}
+
+func (s *t6g2FakeStore) GetUserPreference(string) (*database.UserPreference, error) {
+	return nil, nil
+}
 
 func (s *t6g2FakeStore) Supports(c t6g2Capability) bool { return !s.unsupported[c] }
 
