@@ -32,11 +32,13 @@ type t7Row struct {
 	// liveOnly: HEAD has no Preview and a write capability, so a Preview run
 	// is refused (R7, "live-only writer").
 	liveOnly bool
+	// noParams: HEAD's body takes no params at all, so there is nothing to refuse.
+	noParams bool
 }
 
 // t7ServerRows is every converted server definition. A conversion adds its row.
 var t7ServerRows = []t7Row{
-	{id: librarySizeRefreshOpID, readOnly: true},
+	{id: librarySizeRefreshOpID, readOnly: true, noParams: true},
 	{id: batchApplyRefusalsResetOpID},
 	{id: itunesImportOpID, liveOnly: true},
 	{id: olDownloadOpID, liveOnly: true},
@@ -54,6 +56,9 @@ var t7ServerRows = []t7Row{
 	{id: handlers.AIScanApplyDefID},
 	{id: catalogCoverageOpID, readOnly: true},
 	{id: seriesRenameOpID},
+	{id: candidateFetchOpID},
+	{id: batchSaveOpID, liveOnly: true},
+	{id: bulkApplyPreviewOpID},
 }
 
 // t7ScanFullKind is the one native kind with no HEAD definition.
@@ -176,7 +181,7 @@ func TestT7ServerKinds_MatchHEADDefs(t *testing.T) {
 
 		require.Equal(t, head.DisplayName, c.Title, "%s title", r.id)
 		require.Equal(t, head.Description, c.Help, "%s help", r.id)
-		require.Equal(t, head.Timeout, c.Timeout, "%s timeout", r.id)
+		require.Equal(t, min(head.Timeout, tasks.MaxTimeout), c.Timeout, "%s timeout", r.id)
 		require.Equal(t, head.ProgressTimeout, c.ProgressTimeout, "%s progress timeout", r.id)
 		wantKey := tasks.Key("")
 		if head.ConcurrencyKey != "" {
@@ -229,9 +234,11 @@ func TestT7ServerKinds_WritesThroughShell(t *testing.T) {
 
 		// A mode key in params is refused natively: the mode is the start
 		// request's (05-tasks 5T.3.7 item 3).
-		_, err := t7RunKind(t, d, tasks.ModeLive, &t7GateWriter{name: "mode"}, `{"dry_run":true}`)
-		require.Error(t, err, "%s: a dry_run param must be refused", r.id)
-		require.Contains(t, err.Error(), "mode", "%s", r.id)
+		if !r.noParams {
+			_, err := t7RunKind(t, d, tasks.ModeLive, &t7GateWriter{name: "mode"}, `{"dry_run":true}`)
+			require.Error(t, err, "%s: a dry_run param must be refused", r.id)
+			require.Contains(t, err.Error(), "mode", "%s", r.id)
+		}
 
 		if r.readOnly {
 			continue

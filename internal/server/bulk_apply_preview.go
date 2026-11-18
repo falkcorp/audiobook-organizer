@@ -37,12 +37,15 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 const bulkApplyPreviewOpID = "metadata.bulk-apply-preview"
@@ -86,7 +89,7 @@ type bulkApplyPreviewParams struct {
 
 // previewService is what the preview needs from *metafetch.Service.
 type previewService interface {
-	cachedApplyService
+	cachedApplyReader
 	// PreviewMetadataCandidateWithOptions previews the apply with the same
 	// ApplyOptions the apply would use (cachedApplyPlan.applyOptions).
 	PreviewMetadataCandidateWithOptions(id string, candidate metafetch.MetadataCandidate, writeBack bool, opts metafetch.ApplyOptions) (*metafetch.ApplyPreview, error)
@@ -256,63 +259,52 @@ type previewResultStore interface {
 	GetOperationResults(operationID string) ([]database.OperationResult, error)
 }
 
-// RegisterBulkApplyPreviewOp registers "metadata.bulk-apply-preview".
-func (s *Server) RegisterBulkApplyPreviewOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              bulkApplyPreviewOpID,
-		Liveness:        opsregistry.LivenessRunItems,
-		Plugin:          "metadata",
-		DisplayName:     "Preview Bulk Metadata Apply (dry run)",
-		Description:     "Dry run of a bulk metadata apply: works out, for each book, the candidate it would take, the certainty gate's verdict, the field changes and any rename, without applying anything. The finished operation's message gives the counts.",
-		DefaultPriority: opsregistry.PriorityNormal,
-		Cancellable:     true,
-		Timeout:         4 * time.Hour,
-		// Requeue, not Restart: the preview holds no checkpoint state and writes
-		// nothing to the library, so a run cut off by a restart is simply
-		// replaced by a fresh one. Unspecified is refused by the registry, and
-		// a refused registration stops the server from starting at all.
-		ResumePolicy: opsregistry.ResumeRequeue,
-		// Its own key: a preview never waits behind a real apply, and never
-		// merges into one (it declares no MergeQueuedParams).
-		ConcurrencyKey: bulkApplyPreviewOpID,
-		Permissions:    []auth.Permission{auth.PermLibraryView},
-		// Read-only: no CapLibraryWrite, no CapFilesWrite, and no scan
-		// stand-down hold — a preview can run while a scan does.
-		Capabilities: []opsregistry.Capability{opsregistry.CapLibraryRead},
-		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
-			var p bulkApplyPreviewParams
-			if len(rawParams) > 0 {
-				if err := json.Unmarshal(rawParams, &p); err != nil {
-					return fmt.Errorf("bulk-apply-preview: decode params: %w", err)
-				}
-			}
-			svc := s.metadataFetchService
-			if svc == nil {
-				return fmt.Errorf("bulk-apply-preview: metadata fetch service not initialized")
-			}
-			opID := opsregistry.ReporterOpID(reporter)
-			if opID == "" {
-				return fmt.Errorf("bulk-apply-preview: reporter has no op id to file results under")
-			}
-			return runBulkApplyPreview(ctx, reporter, svc, s.store, s.Ops(), opID, p)
-		},
-	})
+// previewSummarySvc is previewService plus the cached-book summaries an
+// "all cached" run lists.
+type previewSummarySvc interface {
+	previewService
+	ListCachedSummaries(ctx context.Context) ([]metafetch.MetadataCacheSummary, error)
 }
 
-// runBulkApplyPreview is the op body, separated from Server so a test can run
-// it against fakes.
-func runBulkApplyPreview(
-	ctx context.Context,
-	reporter opsregistry.Reporter,
-	svc interface {
-		previewService
-		ListCachedSummaries(ctx context.Context) ([]metafetch.MetadataCacheSummary, error)
-	},
-	books claimBookReader,
-	results previewResultStore,
-	opID string,
-	p bulkApplyPreviewParams,
-) error {
+// bulkApplyPreviewStore is every read the dry run makes: the metadata cache and
+// the planning it feeds (cachedApplyReader, never an apply), the cached-book
+// summaries, the books and their files, and the candidate-fetch results a
+// previewSourceOpResults run previews.
+type bulkApplyPreviewStore interface {
+	previewSummarySvc
+	claimBookReader
+	GetOperationResults(operationID string) ([]database.OperationResult, error)
+}
+
+// previewReportWriter is the dry run's one write: its own report rows, filed under
+// the run's own id (bulk-apply-preview writes no library state).
+type previewReportWriter interface {
+	CreateOperationResult(result *database.OperationResult) error
+}
+
+// bulkApplyPreviewEnv is what the shared core takes from its shell (rules R2, R10).
+type bulkApplyPreviewEnv struct {
+	t7Env
+	Store  bulkApplyPreviewStore
+	Writer previewReportWriter
+}
+
+// previewParts joins the three collaborators HEAD's shell and the dry-run tests
+// hand over separately into the one store the core reads.
+type previewParts struct {
+	previewSummarySvc
+	claimBookReader
+	previewResultStore
+}
+
+// bulkApplyPreviewCore is the op body, shared by HEAD's shell and the native kind
+// and separated from Server so a test can run it against fakes.
+func bulkApplyPreviewCore(ctx context.Context, p bulkApplyPreviewParams, env bulkApplyPreviewEnv) error {
+	opID := env.OpID
+	if opID == "" {
+		return fmt.Errorf("bulk-apply-preview: reporter has no op id to file results under")
+	}
+	svc, books := env.Store, env.Store
 	writeBack := p.WriteBack == nil || *p.WriteBack
 	source := p.Source
 	if source == "" {
@@ -339,7 +331,7 @@ func runBulkApplyPreview(
 		if p.OperationID == "" {
 			return fmt.Errorf("bulk-apply-preview: source %q needs operation_id", source)
 		}
-		rows, err := results.GetOperationResults(p.OperationID)
+		rows, err := env.Store.GetOperationResults(p.OperationID)
 		if err != nil {
 			return fmt.Errorf("bulk-apply-preview: load results of %s: %w", p.OperationID, err)
 		}
@@ -379,11 +371,11 @@ func runBulkApplyPreview(
 		return fmt.Errorf("bulk-apply-preview: %w", claimErr)
 	}
 	if n := claims.Unreadable(); n > 0 {
-		_ = reporter.Log(slog.LevelWarn, "sibling-part index could not read some books; rows in a related folder or with the same ASIN are blocked for manual review",
+		env.Log(slog.LevelWarn, "sibling-part index could not read some books; rows in a related folder or with the same ASIN are blocked for manual review",
 			slog.Int("unreadable", n))
 	}
-	if err := writePreviewIndexRow(results, opID, claims.Unreadable()); err != nil {
-		_ = reporter.Log(slog.LevelWarn, "preview index row not saved",
+	if err := writePreviewIndexRow(env.Writer, opID, claims.Unreadable()); err != nil {
+		env.Log(slog.LevelWarn, "preview index row not saved",
 			slog.String("error", err.Error()))
 	}
 
@@ -439,33 +431,127 @@ func runBulkApplyPreview(
 		}
 		raw, err := json.Marshal(row)
 		if err == nil {
-			err = results.CreateOperationResult(&database.OperationResult{
+			err = env.Writer.CreateOperationResult(&database.OperationResult{
 				OperationID: opID, BookID: id, ResultJSON: string(raw), Status: row.Verdict,
 			})
 		}
 		if err != nil {
 			// A report row that failed to save must be visible, not a silent gap.
 			nWriteErr.Add(1)
-			_ = reporter.Log(slog.LevelWarn, "preview row not saved", slog.String("book_id", id), slog.String("error", err.Error()))
+			env.Log(slog.LevelWarn, "preview row not saved", slog.String("book_id", id), slog.String("error", err.Error()))
 		}
 		return nil
 	}
 
 	// CPU/DB-bound per book (cache read, lock read, organizer path build), so
 	// NumCPU workers; the rows are disjoint by book id.
-	runErr := opsregistry.RunItems(ctx, reporter, ids, previewOne, opsregistry.RunItemsOptions{
-		Concurrency:    runtime.NumCPU(),
-		PerItemTimeout: time.Minute,
-		ErrMode:        opsregistry.ErrModeCollect,
-		Label:          func(int, int) string { return "previewing bulk metadata apply" },
-	})
+	runErr := t7ForEach(ctx, env.t7Env, ids, t7ItemsOptions{
+		Concurrency:   runtime.NumCPU(),
+		ItemTimeout:   time.Minute,
+		CollectErrors: true,
+		PureLabel:     func(int, int) string { return "previewing bulk metadata apply" },
+	}, previewOne)
 	if runErr != nil {
 		return runErr
 	}
 	msg := fmt.Sprintf("dry run complete: %d would apply, %d blocked, %d skipped of %d (skipped as already applied: %d; skipped as retired: %d; left out, marked no match: %d; report rows not saved: %d; sibling-part index could not read %d books)",
 		nApply.Load(), nBlocked.Load(), nSkipped.Load(), len(ids)-int(nNoMatch.Load()), nAlreadyApplied.Load(), nRetired.Load(), nNoMatch.Load(), nWriteErr.Load(), claims.Unreadable())
-	_ = registryProgressAdapter{r: reporter}.UpdateProgress(len(ids), len(ids), msg)
+	env.progress(len(ids), len(ids), msg)
 	return nil
+}
+
+// runBulkApplyPreview runs the core on a reporter and the three collaborators the
+// dry-run tests fake separately.
+func runBulkApplyPreview(
+	ctx context.Context,
+	reporter opsregistry.Reporter,
+	svc previewSummarySvc,
+	books claimBookReader,
+	results previewResultStore,
+	opID string,
+	p bulkApplyPreviewParams,
+) error {
+	env := t7HeadEnv(reporter, true)
+	env.OpID = opID
+	return bulkApplyPreviewCore(ctx, p, bulkApplyPreviewEnv{t7Env: env, Store: previewParts{svc, books, results}, Writer: results})
+}
+
+// bulkApplyPreviewDef is "metadata.bulk-apply-preview".
+func (s *Server) bulkApplyPreviewDef() opsregistry.OperationDef {
+	return opsregistry.OperationDef{
+		ID:              bulkApplyPreviewOpID,
+		Liveness:        opsregistry.LivenessRunItems,
+		Plugin:          "metadata",
+		DisplayName:     "Preview Bulk Metadata Apply (dry run)",
+		Description:     "Dry run of a bulk metadata apply: works out, for each book, the candidate it would take, the certainty gate's verdict, the field changes and any rename, without applying anything. The finished operation's message gives the counts.",
+		DefaultPriority: opsregistry.PriorityNormal,
+		Cancellable:     true,
+		Timeout:         4 * time.Hour,
+		// Requeue, not Restart: the preview holds no checkpoint state and writes
+		// nothing to the library, so a run cut off by a restart is simply
+		// replaced by a fresh one. Unspecified is refused by the registry, and
+		// a refused registration stops the server from starting at all.
+		ResumePolicy: opsregistry.ResumeRequeue,
+		// Its own key: a preview never waits behind a real apply, and never
+		// merges into one (it declares no MergeQueuedParams).
+		ConcurrencyKey: bulkApplyPreviewOpID,
+		Permissions:    []auth.Permission{auth.PermLibraryView},
+		// Read-only: no CapLibraryWrite, no CapFilesWrite, and no scan
+		// stand-down hold — a preview can run while a scan does.
+		Capabilities: []opsregistry.Capability{opsregistry.CapLibraryRead},
+		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
+			var p bulkApplyPreviewParams
+			if len(rawParams) > 0 {
+				if err := json.Unmarshal(rawParams, &p); err != nil {
+					return fmt.Errorf("bulk-apply-preview: decode params: %w", err)
+				}
+			}
+			svc := s.metadataFetchService
+			if svc == nil {
+				return fmt.Errorf("bulk-apply-preview: metadata fetch service not initialized")
+			}
+			results := s.Ops()
+			return bulkApplyPreviewCore(ctx, p, bulkApplyPreviewEnv{
+				t7Env:  t7HeadEnv(reporter, true),
+				Store:  previewParts{svc, s.storeForWiring(), results},
+				Writer: results,
+			})
+		},
+	}
+}
+
+// RegisterBulkApplyPreviewOp registers "metadata.bulk-apply-preview".
+func (s *Server) RegisterBulkApplyPreviewOp(reg *opsregistry.Registry) error {
+	return reg.RegisterOp(s.bulkApplyPreviewDef())
+}
+
+// bulkApplyPreviewNative is the native books.metadata.bulk-apply-preview kind. It
+// takes one worker per CPU (HEAD's `runtime.NumCPU()`, CPU/DB-bound per book) and
+// is a dry run by definition: HEAD declares no write capability, so Preview and
+// Live both run the same report.
+func (s *Server) bulkApplyPreviewNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	kind := t7KindFor(bulkApplyPreviewOpID)
+	c := t7Common(s.bulkApplyPreviewDef(), sched)
+	c.Effects = t7Writes(ops.ResOperations)
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			p, err := t7DecodeNative[bulkApplyPreviewParams](kind, raw)
+			if err != nil {
+				return struct{}{}, err
+			}
+			if err := t7NeedStore(kind, deps); err != nil {
+				return struct{}{}, err
+			}
+			w, err := t7NewWriter(kind, deps, rc)
+			if err != nil {
+				return struct{}{}, err
+			}
+			env := t7NativeEnv(rc)
+			env.Items = t7NativeItems(rc, tasks.CPU())
+			return struct{}{}, bulkApplyPreviewCore(rc.Context(), p, bulkApplyPreviewEnv{t7Env: env, Store: deps.Store, Writer: w})
+		},
+	})
 }
 
 // previewIndexRowID is the reserved op-result key under which the preview op
@@ -480,7 +566,7 @@ type previewIndexRow struct {
 }
 
 // writePreviewIndexRow saves the index facts of preview op opID.
-func writePreviewIndexRow(results previewResultStore, opID string, unreadable int) error {
+func writePreviewIndexRow(results previewReportWriter, opID string, unreadable int) error {
 	raw, err := json.Marshal(previewIndexRow{UnreadableBooks: unreadable})
 	if err != nil {
 		return err

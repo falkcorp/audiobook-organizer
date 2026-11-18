@@ -26,12 +26,17 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
+	"github.com/falkcorp/mediacore/tasks"
 	"golang.org/x/time/rate"
 )
 
 // metadataCandidateFetchOpParams is a server-local alias for the shared params
 // type so callers in this package do not need to qualify the package name.
 type metadataCandidateFetchOpParams = metabatch.FetchOpParams
+
+// candidateFetchOpID is the OperationDef id of metadata.candidate-fetch.
+const candidateFetchOpID = "metadata.candidate-fetch"
 
 // candidateFetchCheckpointEvery is how many completed books sit between
 // checkpoints. Each checkpoint is a store write of the remaining id list, so
@@ -101,16 +106,15 @@ func candidateFetchCheckpointState(all []string, done *doneSet, total int, googl
 	return metadataCandidateFetchOpParams{BookIDs: done.remaining(all), TotalBooks: total, GoogleCappedBookIDs: googleCapped}
 }
 
-// RegisterMetadataCandidateFetchOp registers the "metadata.candidate-fetch"
-// v2 OperationDef. The HTTP handler enqueues this def and returns the id
+// candidateFetchDef is the "metadata.candidate-fetch" v2 OperationDef. The HTTP handler enqueues this def and returns the id
 // EnqueueOp minted; Run writes OperationResult rows under that same id.
 //
 // It used to mint a separate v1 operations row first and key results on that,
 // which meant the id the client held resolved at one endpoint and not the
 // other.
-func (s *Server) RegisterMetadataCandidateFetchOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "metadata.candidate-fetch",
+func (s *Server) candidateFetchDef() opsregistry.OperationDef {
+	return opsregistry.OperationDef{
+		ID:              candidateFetchOpID,
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "metadata",
 		DisplayName:     "Fetch Metadata Candidates",
@@ -134,7 +138,7 @@ func (s *Server) RegisterMetadataCandidateFetchOp(reg *opsregistry.Registry) err
 		// and never re-issues a provider call for a fetched book. The
 		// result-row filter below stays as a second, independent guard.
 		ResumePolicy:   opsregistry.ResumeRestart,
-		ConcurrencyKey: "metadata.candidate-fetch",
+		ConcurrencyKey: candidateFetchOpID,
 		// The author-catalog harvest and the identification driver share
 		// Audible's token bucket. DependsOn is one-directional, so each op
 		// lists the other.
@@ -142,22 +146,74 @@ func (s *Server) RegisterMetadataCandidateFetchOp(reg *opsregistry.Registry) err
 		Permissions:  []auth.Permission{auth.PermLibraryEditMetadata},
 		Capabilities: []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkGeneric},
 		Run:          s.runMetadataCandidateFetchOp,
-	})
+	}
 }
 
-// runMetadataCandidateFetchOp is the Run body of metadata.candidate-fetch. It is
-// a named method rather than a closure so the resume test can drive it with a
-// recording reporter and a cancelled context.
-func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
-	var p metadataCandidateFetchOpParams
-	if len(rawParams) > 0 {
-		if err := json.Unmarshal(rawParams, &p); err != nil {
-			return fmt.Errorf("metadata-candidate-fetch: decode params: %w", err)
-		}
+// RegisterMetadataCandidateFetchOp registers the "metadata.candidate-fetch" v2
+// OperationDef.
+func (s *Server) RegisterMetadataCandidateFetchOp(reg *opsregistry.Registry) error {
+	return reg.RegisterOp(s.candidateFetchDef())
+}
+
+// candidateFetchReads is the reads the fetch makes through its env: its own
+// earlier result rows (a resumed run skips them), the unfetched-book selection
+// and the per-run folder memo.
+type candidateFetchReads interface {
+	GetOperationResults(operationID string) ([]database.OperationResult, error)
+	// SelectUnfetched resolves an Unfetched run's books (unfetchedCandidateBookIDs),
+	// leaving out books another candidate fetch is already fetching.
+	SelectUnfetched(ctx context.Context) (unfetchedSelection, error)
+	// NewFolderMemo is one folder memo for a pass over the library.
+	NewFolderMemo() *metabatch.FolderMemo
+}
+
+// candidateFetchWriter is the writes of the fetch: its result rows, the
+// identification dirty marks, and the one engine call that spends provider quota
+// and writes the candidate cache (fetchCandidateForBook).
+type candidateFetchWriter interface {
+	CreateOperationResult(result *database.OperationResult) error
+	// MarkIdentDirty marks bookID in the identification dirty set; false when the
+	// mark did not land (database.MarkIdentDirtyBestEffort).
+	MarkIdentDirty(bookID, reason string) bool
+	// ClaimBook serialises per-book candidate fetches: it waits for a lost-candidates
+	// refetch of the book and returns the release.
+	ClaimBook(ctx context.Context, bookID string) (release func(), err error)
+	// FetchCandidate searches the providers for one book and writes its candidate
+	// cache row, returning the outcome.
+	FetchCandidate(ctx context.Context, limiter *rate.Limiter, opID, bookID string, force, googleCapped bool, memo *metabatch.FolderMemo, interactive bool) CandidateResult
+}
+
+// candidateFetchEnv is what the shared core takes from its shell (rules R2, R10).
+type candidateFetchEnv struct {
+	t7Env
+	Store  candidateFetchReads
+	Writer candidateFetchWriter
+}
+
+// candidateFetchSelect resolves an Unfetched run's books and logs what it found.
+func candidateFetchSelect(ctx context.Context, env candidateFetchEnv) (unfetchedSelection, error) {
+	sel, err := env.Store.SelectUnfetched(ctx)
+	if err != nil {
+		return unfetchedSelection{}, err
 	}
-	store := s.storeForWiring()
-	mfs := s.metadataFetchService
-	progress := registryProgressAdapter{r: reporter}
+	msg := fmt.Sprintf("selected %d books to fetch: %d never fetched or invalidated, %d with an empty answer to questions no longer asked, %d with a row marked stale (the book's identity changed), "+
+		"%d owed a fallback provider's answer, %d of them holding only unusable candidates (%d Google Books lookups left for a later quota day, %d of those books still asked of Open Library) "+
+		"(%d books the chain has not answered keep their chain and Open Library steps with any Google step put off) "+
+		"(%d books read, %d retired books left out, %d left out with no usable search title) "+
+		"(%d books held candidates and are asked again only for a source that failed earlier; %d more owe such a source but wait on its backoff) "+
+		"(%d books gave up on a source after %d asks and are left alone until an owner retry or the row's TTL refetch)",
+		len(sel.IDs), sel.NoRow, sel.StaleEmpty, sel.Stale, sel.FallbackPending, sel.FallbackUnusable, sel.FallbackCapped, len(sel.GoogleCapped)-sel.ChainCapped,
+		sel.ChainCapped, sel.Scanned, sel.Retired, sel.Unsearchable, sel.OwedDue, sel.OwedWaiting, sel.OwedExhausted, database.OwedMaxAsks)
+	env.Log(slog.LevelInfo, msg)
+	candidateFetchLog.Info("%s", msg)
+	return sel, nil
+}
+
+// candidateFetchCore is the body of metadata.candidate-fetch, shared by HEAD's
+// shell and the native kind. It keeps HEAD's own worker pool (a goroutine per
+// worker over a channel of book ids): HEAD never ran this loop on
+// registry.RunItems, and changing a definition's parallelism is a separate PR.
+func candidateFetchCore(ctx context.Context, p metadataCandidateFetchOpParams, env candidateFetchEnv) error {
 	if p.Interactive {
 		// Interactive is one book a person asked for (singleBookSearch). It
 		// widens two things at once: the reserved interactive share of the
@@ -174,22 +230,22 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 	}
 
 	if len(p.BookIDs) == 0 && p.Unfetched {
-		sel, err := s.selectUnfetchedBooks(ctx, reporter)
+		sel, err := candidateFetchSelect(ctx, env)
 		if err != nil {
 			return err
 		}
 		if p.MarkDirtyOnly {
-			return markCandidateSafetyNet(store, reporter, sel.IDs)
+			return markCandidateSafetyNet(env, sel.IDs)
 		}
 		if len(sel.IDs) == 0 {
-			_ = progress.UpdateProgress(0, 0, "completed: no unfetched books")
+			env.progress(0, 0, "completed: no unfetched books")
 			return nil
 		}
 		p.BookIDs, p.TotalBooks, p.Unfetched = sel.IDs, len(sel.IDs), false
 		p.GoogleCappedBookIDs = sel.GoogleCapped
 		// Persist the selection before the first fetch, so a resume is handed
 		// this list (with "unfetched": false) and never re-selects.
-		if err := reporter.Checkpoint(p); err != nil {
+		if err := env.Checkpoint(p); err != nil {
 			candidateFetchLog.Warn("selection checkpoint failed: err=%s", logger.SanitizeLogValue(err.Error()))
 		}
 	}
@@ -204,7 +260,7 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 	// separately by the handler; that row is gone, and the result keyspace
 	// takes an arbitrary string key, so it keys on the id every reader
 	// already has.
-	opID := opsregistry.ReporterOpID(reporter)
+	opID := env.OpID
 	// ReporterOpID documents "" as a legitimate return that callers must
 	// treat as unknown. Every result row keys on this, so an empty id would
 	// file the whole run under one blank key and make its results
@@ -250,7 +306,7 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 	ctx = metafetch.WithCatalogStageStats(ctx, stageStats)
 	tally := &candidateFetchTally{stage: stageStats}
 
-	if existing, rerr := store.GetOperationResults(opID); rerr == nil && len(existing) > 0 {
+	if existing, rerr := env.Store.GetOperationResults(opID); rerr == nil && len(existing) > 0 {
 		for _, row := range existing {
 			var prior CandidateResult
 			if json.Unmarshal([]byte(row.ResultJSON), &prior) != nil {
@@ -267,12 +323,12 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 				logger.SanitizeLogValue(opID), skipped, len(p.BookIDs))
 		}
 		if len(p.BookIDs) == 0 {
-			_ = progress.UpdateProgress(totalBooks, totalBooks, "completed")
+			env.progress(totalBooks, totalBooks, "completed")
 			return nil
 		}
 	}
 
-	_ = progress.UpdateProgress(alreadyDone, totalBooks, fmt.Sprintf("starting: %d books to fetch", len(p.BookIDs)))
+	env.progress(alreadyDone, totalBooks, fmt.Sprintf("starting: %d books to fetch", len(p.BookIDs)))
 
 	// The op's gate and pool are sized from the enabled sources' own budgets
 	// (candidateFetchLimiter, candidateFetchWorkers): a fixed 10/s across
@@ -281,7 +337,7 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 	budget := metafetch.EnabledSourcesBudget()
 	limiter := candidateFetchLimiter(budget.RPS, budget.Burst)
 	// One folder memo per run, shared by every worker (resolver folder reads).
-	folderMemo := s.newFolderMemo(store)
+	folderMemo := env.Store.NewFolderMemo()
 
 	workCh := make(chan string, len(p.BookIDs))
 	for _, id := range p.BookIDs {
@@ -312,7 +368,7 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 	writeCheckpoint := func() {
 		ckptMu.Lock()
 		defer ckptMu.Unlock()
-		if err := reporter.Checkpoint(candidateFetchCheckpointState(p.BookIDs, done, totalBooks, p.GoogleCappedBookIDs)); err != nil {
+		if err := env.Checkpoint(candidateFetchCheckpointState(p.BookIDs, done, totalBooks, p.GoogleCappedBookIDs)); err != nil {
 			candidateFetchLog.Warn("checkpoint failed: opID=%s err=%s",
 				logger.SanitizeLogValue(opID), logger.SanitizeLogValue(err.Error()))
 		}
@@ -332,11 +388,11 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 				}
 				// A lost-candidates refetch of this book may be running; wait
 				// for it rather than fetch the book twice at once.
-				release, cerr := s.candidateFetchClaims.claim(ctx, bookID)
+				release, cerr := env.Writer.ClaimBook(ctx, bookID)
 				if cerr != nil {
 					return
 				}
-				result := s.fetchCandidateForBook(ctx, mfs, store, limiter, opID, bookID, p.Force, googleCapped[bookID], folderMemo, p.Interactive)
+				result := env.Writer.FetchCandidate(ctx, limiter, opID, bookID, p.Force, googleCapped[bookID], folderMemo, p.Interactive)
 				release()
 				resultJSON, err := json.Marshal(result)
 				if err != nil {
@@ -344,14 +400,14 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 					// and is retried on resume -- but it is an error for this
 					// attempt, and it is counted and logged as one.
 					tally.recordError("result_not_recorded")
-					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("error: %s — could not record the result: %s",
+					env.Log(slog.LevelWarn, fmt.Sprintf("error: %s — could not record the result: %s",
 						opLogBookRef(result.Book.Title, result.Book.Author, bookID, result.Book.FilePath), logger.SanitizeLogValue(err.Error())),
 						slog.String("book_id", logger.SanitizeLogValue(bookID)), slog.String("outcome", "error"))
 					continue
 				}
 				tally.record(result)
-				logCandidateOutcome(reporter, result)
-				if err := store.CreateOperationResult(&database.OperationResult{
+				logCandidateOutcome(env.Log, result)
+				if err := env.Writer.CreateOperationResult(&database.OperationResult{
 					OperationID: opID,
 					BookID:      bookID,
 					ResultJSON:  string(resultJSON),
@@ -360,12 +416,12 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 					// The outcome line above already went out; this says the
 					// row behind it was not persisted, so the review page will
 					// not show it.
-					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("error: %s — result row not saved: %s",
+					env.Log(slog.LevelWarn, fmt.Sprintf("error: %s — result row not saved: %s",
 						opLogBookRef(result.Book.Title, result.Book.Author, bookID, result.Book.FilePath), logger.SanitizeLogValue(err.Error())),
 						slog.String("book_id", logger.SanitizeLogValue(bookID)))
 				}
 				finished := atomic.AddInt64(&completed, 1)
-				_ = progress.UpdateProgress(int(finished), totalBooks, tally.progressLine(finished, totalBooks))
+				env.progress(int(finished), totalBooks, tally.progressLine(finished, totalBooks))
 				if done.mark(bookID) {
 					writeCheckpoint()
 				}
@@ -391,47 +447,51 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 		// last periodic one are not re-owed. The store does not take ctx, so
 		// this write succeeds under a cancelled context.
 		writeCheckpoint()
-		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("canceled after %d/%d books — %s",
+		env.Log(slog.LevelInfo, fmt.Sprintf("canceled after %d/%d books — %s",
 			finalCount, totalBooks, tally.counts()))
-		_ = reporter.Log(slog.LevelInfo, tally.refreshSummary())
+		env.Log(slog.LevelInfo, tally.refreshSummary())
 		candidateFetchLog.Info("canceled: opID=%s finalCount=%d totalBooks=%d %s",
 			logger.SanitizeLogValue(opID), finalCount, totalBooks, tally.counts())
 		return ctx.Err()
 	}
-	_ = reporter.Log(slog.LevelInfo, tally.refreshSummary())
+	env.Log(slog.LevelInfo, tally.refreshSummary())
 	candidateFetchLog.Info("done: opID=%s %s", logger.SanitizeLogValue(opID), tally.refreshSummary())
 	summary := fmt.Sprintf("completed %d/%d books — %s", finalCount, totalBooks, tally.counts())
-	_ = progress.UpdateProgress(int(finalCount), totalBooks, summary)
+	env.progress(int(finalCount), totalBooks, summary)
 	candidateFetchLog.Info("done: opID=%s force=%v %s", logger.SanitizeLogValue(opID), p.Force, summary)
 	return nil
 }
 
-// markCandidateSafetyNet is an Unfetched run with MarkDirtyOnly: the
-// identification driver (identification.advance) is on, so the scheduled
-// tick marks the books its whole-library selection found in the
-// identification dirty set instead of fetching them. safety_net_marked=N is
-// the count of books the writers did not mark themselves; it should trend
-// to 0 once every writer marks correctly. A failed mark is logged by
-// MarkIdentDirtyBestEffort and the next tick tries again.
-func markCandidateSafetyNet(store any, reporter opsregistry.Reporter, ids []string) error {
-	marked := 0
-	for _, id := range ids {
-		if database.MarkIdentDirtyBestEffort(store, id, "candidate_fetch safety net") {
-			marked++
+// runMetadataCandidateFetchOp is the Run body of metadata.candidate-fetch. It is
+// a named method rather than a closure so the resume test can drive it with a
+// recording reporter and a cancelled context.
+func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
+	var p metadataCandidateFetchOpParams
+	if len(rawParams) > 0 {
+		if err := json.Unmarshal(rawParams, &p); err != nil {
+			return fmt.Errorf("metadata-candidate-fetch: decode params: %w", err)
 		}
 	}
-	msg := fmt.Sprintf("completed: safety_net_marked=%d of %d selected books (identification_advance_enabled: marked for identification.advance, not fetched)",
-		marked, len(ids))
-	_ = reporter.Log(slog.LevelInfo, msg)
-	candidateFetchLog.Info("%s", msg)
-	_ = reporter.UpdateProgress(len(ids), len(ids), msg)
-	return nil
+	h := headCandidateFetch{s: s}
+	return candidateFetchCore(ctx, p, candidateFetchEnv{t7Env: t7HeadEnv(reporter, true), Store: h, Writer: h})
 }
 
-// selectUnfetchedBooks resolves an Unfetched run's books
-// (unfetchedCandidateBookIDs), leaving out books another candidate fetch is
-// already fetching, and logs what it found.
-func (s *Server) selectUnfetchedBooks(ctx context.Context, reporter opsregistry.Reporter) (unfetchedSelection, error) {
+// headCandidateFetch is HEAD's side of both interfaces: the server's store and
+// the engine the fetch ran through before the conversion.
+type headCandidateFetch struct{ s *Server }
+
+func (h headCandidateFetch) GetOperationResults(operationID string) ([]database.OperationResult, error) {
+	return h.s.storeForWiring().GetOperationResults(operationID)
+}
+
+func (h headCandidateFetch) NewFolderMemo() *metabatch.FolderMemo {
+	return h.s.newFolderMemo(h.s.storeForWiring())
+}
+
+// SelectUnfetched resolves an Unfetched run's books (unfetchedCandidateBookIDs),
+// leaving out books another candidate fetch is already fetching.
+func (h headCandidateFetch) SelectUnfetched(ctx context.Context) (unfetchedSelection, error) {
+	s := h.s
 	if s.metadataFetchService == nil {
 		return unfetchedSelection{}, fmt.Errorf("metadata-candidate-fetch: metadata service not initialized")
 	}
@@ -444,17 +504,93 @@ func (s *Server) selectUnfetchedBooks(ctx context.Context, reporter opsregistry.
 	if err != nil {
 		return unfetchedSelection{}, fmt.Errorf("metadata-candidate-fetch: select unfetched books: %w", err)
 	}
-	msg := fmt.Sprintf("selected %d books to fetch: %d never fetched or invalidated, %d with an empty answer to questions no longer asked, %d with a row marked stale (the book's identity changed), "+
-		"%d owed a fallback provider's answer, %d of them holding only unusable candidates (%d Google Books lookups left for a later quota day, %d of those books still asked of Open Library) "+
-		"(%d books the chain has not answered keep their chain and Open Library steps with any Google step put off) "+
-		"(%d books read, %d retired books left out, %d left out with no usable search title) "+
-		"(%d books held candidates and are asked again only for a source that failed earlier; %d more owe such a source but wait on its backoff) "+
-		"(%d books gave up on a source after %d asks and are left alone until an owner retry or the row's TTL refetch)",
-		len(sel.IDs), sel.NoRow, sel.StaleEmpty, sel.Stale, sel.FallbackPending, sel.FallbackUnusable, sel.FallbackCapped, len(sel.GoogleCapped)-sel.ChainCapped,
-		sel.ChainCapped, sel.Scanned, sel.Retired, sel.Unsearchable, sel.OwedDue, sel.OwedWaiting, sel.OwedExhausted, database.OwedMaxAsks)
-	_ = reporter.Log(slog.LevelInfo, msg)
-	candidateFetchLog.Info("%s", msg)
 	return sel, nil
+}
+
+func (h headCandidateFetch) CreateOperationResult(result *database.OperationResult) error {
+	return h.s.storeForWiring().CreateOperationResult(result)
+}
+
+func (h headCandidateFetch) MarkIdentDirty(bookID, reason string) bool {
+	return database.MarkIdentDirtyBestEffort(h.s.storeForWiring(), bookID, reason)
+}
+
+func (h headCandidateFetch) ClaimBook(ctx context.Context, bookID string) (func(), error) {
+	return h.s.candidateFetchClaims.claim(ctx, bookID)
+}
+
+func (h headCandidateFetch) FetchCandidate(ctx context.Context, limiter *rate.Limiter, opID, bookID string, force, googleCapped bool, memo *metabatch.FolderMemo, interactive bool) CandidateResult {
+	return h.s.fetchCandidateForBook(ctx, h.s.metadataFetchService, h.s.storeForWiring(), limiter, opID, bookID, force, googleCapped, memo, interactive)
+}
+
+// candidateFetchNative is the native books.metadata.candidate-fetch kind.
+//
+// HEAD's resume overlays the checkpoint's keys onto the row's params; the native
+// shell does the same from rc.Restore: the remaining book ids, the original total
+// and the capped list replace the params', and Unfetched is false so a resumed run
+// never re-selects (candidateFetchOverlay).
+func (s *Server) candidateFetchNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	kind := t7KindFor(candidateFetchOpID)
+	c := t7Common(s.candidateFetchDef(), sched)
+	c.Resume = t7Resume(opsregistry.ResumeRestart, true)
+	c.Effects = t7Writes(ops.ResOperations, ops.ResMetadataCache)
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			p, err := t7DecodeNative[metadataCandidateFetchOpParams](kind, raw)
+			if err != nil {
+				return struct{}{}, err
+			}
+			if err := t7NeedStore(kind, deps); err != nil {
+				return struct{}{}, err
+			}
+			var ck metadataCandidateFetchOpParams
+			if ok, rerr := rc.Restore(&ck); rerr != nil {
+				return struct{}{}, fmt.Errorf("metadata-candidate-fetch: restore checkpoint: %w", rerr)
+			} else if ok {
+				p = candidateFetchOverlay(p, ck)
+			}
+			w, err := t7NewWriter(kind, deps, rc)
+			if err != nil {
+				return struct{}{}, err
+			}
+			return struct{}{}, candidateFetchCore(rc.Context(), p, candidateFetchEnv{t7Env: t7NativeEnv(rc), Store: deps.Store, Writer: w})
+		},
+	})
+}
+
+// candidateFetchOverlay is what HEAD's registry does with a checkpoint: its keys
+// replace the params'. A checkpoint (candidateFetchCheckpointState) always carries
+// the remaining ids, the total and "unfetched": false; the capped list only when
+// non-empty (omitempty), so an absent one leaves the params' list standing.
+func candidateFetchOverlay(p, ck metadataCandidateFetchOpParams) metadataCandidateFetchOpParams {
+	p.BookIDs, p.TotalBooks, p.Unfetched = ck.BookIDs, ck.TotalBooks, ck.Unfetched
+	if len(ck.GoogleCappedBookIDs) > 0 {
+		p.GoogleCappedBookIDs = ck.GoogleCappedBookIDs
+	}
+	return p
+}
+
+// markCandidateSafetyNet is an Unfetched run with MarkDirtyOnly: the
+// identification driver (identification.advance) is on, so the scheduled
+// tick marks the books its whole-library selection found in the
+// identification dirty set instead of fetching them. safety_net_marked=N is
+// the count of books the writers did not mark themselves; it should trend
+// to 0 once every writer marks correctly. A failed mark is logged by
+// MarkIdentDirtyBestEffort and the next tick tries again.
+func markCandidateSafetyNet(env candidateFetchEnv, ids []string) error {
+	marked := 0
+	for _, id := range ids {
+		if env.Writer.MarkIdentDirty(id, "candidate_fetch safety net") {
+			marked++
+		}
+	}
+	msg := fmt.Sprintf("completed: safety_net_marked=%d of %d selected books (identification_advance_enabled: marked for identification.advance, not fetched)",
+		marked, len(ids))
+	env.Log(slog.LevelInfo, msg)
+	candidateFetchLog.Info("%s", msg)
+	env.progress(len(ids), len(ids), msg)
+	return nil
 }
 
 // candidateFetchLog is the process-log side of metadata.candidate-fetch

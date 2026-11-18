@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/falkcorp/mediacore/entity"
 	"github.com/falkcorp/mediacore/rbac"
@@ -159,6 +160,11 @@ type t7ItemsOptions struct {
 	// CheckpointState receives the absolute contiguous-completion watermark
 	// (ResumeFrom included). Calls are serialized; a failed item never advances it.
 	CheckpointState func(ctx context.Context, watermark int) error
+	// ItemTimeout bounds each item (registry PerItemTimeout / tasks ItemTimeout).
+	ItemTimeout time.Duration
+	// CollectErrors runs every item whatever fails (registry ErrModeCollect /
+	// tasks.Collect); false stops dispatch on the first error.
+	CollectErrors bool
 	// Label is HEAD's per-item progress label for a loop whose label reads
 	// running counters. Only HEAD's pool carries it: the native label is pure.
 	Label func(i, total int) string
@@ -176,6 +182,14 @@ func t7ForEach[T any](ctx context.Context, env t7Env, items []T, o t7ItemsOption
 	return env.Items(ctx, len(items), o, func(ctx context.Context, i int) error { return fn(ctx, items[i]) })
 }
 
+// t7HeadErrMode maps the pool's error mode onto registry.RunItems's.
+func t7HeadErrMode(o t7ItemsOptions) opsregistry.ErrMode {
+	if o.CollectErrors {
+		return opsregistry.ErrModeCollect
+	}
+	return opsregistry.ErrModeFail
+}
+
 // t7HeadItems is HEAD's pool: registry.RunItems over the indexes.
 func t7HeadItems(rep opsregistry.Reporter) t7ItemsFunc {
 	return func(ctx context.Context, n int, o t7ItemsOptions, fn func(ctx context.Context, i int) error) error {
@@ -191,6 +205,8 @@ func t7HeadItems(rep opsregistry.Reporter) t7ItemsFunc {
 			return fn(ctx, i)
 		}, opsregistry.RunItemsOptions{
 			Concurrency:       o.Concurrency,
+			PerItemTimeout:    o.ItemTimeout,
+			ErrMode:           t7HeadErrMode(o),
 			ProgressOffset:    o.ProgressBase,
 			ProgressTotal:     o.ProgressTotal,
 			ResumeFrom:        o.ResumeFrom,
@@ -215,7 +231,10 @@ func t7NativeItems(rc *tasks.RC, par tasks.Parallelism) t7ItemsFunc {
 			idx = append(idx, i)
 		}
 		wm := &t7Watermark{done: make([]bool, n), next: from, every: max(o.CheckpointEvery, 1), fn: o.CheckpointState}
-		itemsOpts := tasks.ItemsOptions[int]{ProgressBase: o.ProgressBase + from, ProgressTotal: o.ProgressTotal}
+		itemsOpts := tasks.ItemsOptions[int]{ProgressBase: o.ProgressBase + from, ProgressTotal: o.ProgressTotal, ItemTimeout: o.ItemTimeout}
+		if o.CollectErrors {
+			itemsOpts.OnError = tasks.Collect
+		}
 		if o.PureLabel != nil {
 			itemsOpts.Label = func(i int) string { return o.PureLabel(i, n) }
 		}
@@ -433,6 +452,9 @@ type t7StoreLibrary interface {
 	aiScanApplyStore
 	catalogCoverageStore
 	seriesRenameReads
+	candidateFetchReads
+	batchSaveReads
+	bulkApplyPreviewStore
 }
 
 // t7Writer is every write the converted cores make, composed from each
@@ -464,6 +486,9 @@ type t7WriterLibrary interface {
 	aiMergeApplyWriter
 	aiScanApplyWriter
 	seriesRenameWriter
+	candidateFetchWriter
+	batchSaveWriter
+	previewReportWriter
 }
 
 // t7WriterFiles is the writes of the file-writing definitions.
@@ -646,12 +671,14 @@ func t7Priority(p opsregistry.Priority) tasks.Priority {
 func t7Common(head opsregistry.OperationDef, sched func(tasks.Kind) *tasks.Schedule) tasks.Common {
 	kind := t7KindFor(head.ID)
 	c := tasks.Common{
-		Title:           head.DisplayName,
-		Help:            head.Description,
-		Perms:           tasks.Permissions{Start: t7StartRequirement(head.Permissions)},
-		Resume:          t7Resume(head.ResumePolicy, false),
-		Priority:        t7Priority(head.DefaultPriority),
-		Timeout:         head.Timeout,
+		Title:    head.DisplayName,
+		Help:     head.Description,
+		Perms:    tasks.Permissions{Start: t7StartRequirement(head.Permissions)},
+		Resume:   t7Resume(head.ResumePolicy, false),
+		Priority: t7Priority(head.DefaultPriority),
+		// Clamped: the kernel refuses a Timeout over tasks.MaxTimeout (24h) and
+		// diagnostics.ai-analyze declares 25h at HEAD (seams.d/F5-13.md).
+		Timeout:         min(head.Timeout, tasks.MaxTimeout),
 		ProgressTimeout: head.ProgressTimeout,
 		Dedupe: tasks.DedupePolicy{
 			AnyParams:     head.DedupeQueuedRuns,
@@ -756,6 +783,9 @@ func t7KindList(s *Server, deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) 
 		s.aiScanApplyNative(deps, sched),
 		s.catalogCoverageNative(deps, sched),
 		s.seriesRenameNative(deps, sched),
+		s.candidateFetchNative(deps, sched),
+		s.batchSaveNative(deps, sched),
+		s.bulkApplyPreviewNative(deps, sched),
 	}
 }
 
