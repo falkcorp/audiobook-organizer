@@ -1,7 +1,7 @@
 // file: internal/server/transcode_version.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 9e2b7c41-3d58-4a16-8f0e-6c1d4a7b2e93
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package server
 
@@ -157,6 +157,10 @@ func recordTranscodedVersion(ctx context.Context, store transcodeVersionStore, o
 		// Ungrouped: no group to be a non-primary member of.
 		nb.IsPrimaryVersion = nil
 	}
+	// The M4B record inherits the original's series link verbatim; a series
+	// since deleted is not carried onto a new row, which the store would refuse
+	// (and the transcode's record with it).
+	database.DropDanglingSeriesRef(store, nb, "transcode.m4b-record")
 	if _, cerr := store.CreateBook(nb); cerr != nil {
 		logf("warn", fmt.Sprintf("Failed to create M4B version record, updating original: %v", cerr))
 		rewritten, updateErr := transcodeLockedGroupWrite(store, original.ID, groupID, groupID, func(b *database.Book) error {

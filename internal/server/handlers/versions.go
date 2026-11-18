@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions.go
-// version: 1.13.4
+// version: 1.13.5
 // guid: 7e3c1a92-4b8d-4f60-9a2e-1c0d5f8b6a47
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package handlers
 
@@ -861,7 +861,7 @@ func (h *VersionsHandler) SplitVersion(c *gin.Context) {
 	newTitle := fmt.Sprintf("%s (Version %d)", sourceBook.Title, existing+1)
 	primaryFlag := false
 	gid := versionGroupID
-	createdBook, err := h.store.CreateBook(&database.Book{
+	versionBook := &database.Book{
 		Title:            newTitle,
 		AuthorID:         sourceBook.AuthorID,
 		SeriesID:         sourceBook.SeriesID,
@@ -874,7 +874,11 @@ func (h *VersionsHandler) SplitVersion(c *gin.Context) {
 		Publisher:        sourceBook.Publisher,
 		VersionGroupID:   &gid,
 		IsPrimaryVersion: &primaryFlag,
-	})
+	}
+	// The new book inherits the source's series link verbatim; a series since
+	// deleted is not carried onto a new row, which the store would refuse.
+	database.DropDanglingSeriesRef(h.store, versionBook, "versions.split-version")
+	createdBook, err := h.store.CreateBook(versionBook)
 	if err != nil {
 		h.unmintSplitGroup(id, minted, prevPrimary)
 		release()
@@ -1148,6 +1152,10 @@ func (h *VersionsHandler) SplitSegmentsToBooks(c *gin.Context) {
 			FileSize:  &f.FileSize,
 		}
 
+		// The new book inherits the source's series link verbatim; a series
+		// since deleted is not carried onto a new row, which the store would
+		// refuse.
+		database.DropDanglingSeriesRef(h.store, newBook, "versions.split-file")
 		created, createErr := h.store.CreateBook(newBook)
 		if createErr != nil || created == nil {
 			fail(fileID, fmt.Sprintf("failed to create the book for file %s: %v", fileID, createErr), nil)
@@ -1270,7 +1278,7 @@ func (h *VersionsHandler) splitSegmentsToOneBook(c *gin.Context, sourceBook *dat
 	if !ok {
 		return
 	}
-	created, err := h.store.CreateBook(&database.Book{
+	oneBook := &database.Book{
 		Title:     title,
 		AuthorID:  sourceBook.AuthorID,
 		SeriesID:  sourceBook.SeriesID,
@@ -1282,7 +1290,11 @@ func (h *VersionsHandler) splitSegmentsToOneBook(c *gin.Context, sourceBook *dat
 		// ABS lists only library_state "organized" books, so a new book with
 		// no state would vanish from ABS while its source still shows.
 		LibraryState: sourceBook.LibraryState,
-	})
+	}
+	// The new book inherits the source's series link verbatim; a series since
+	// deleted is not carried onto a new row, which the store would refuse.
+	database.DropDanglingSeriesRef(h.store, oneBook, "versions.split-to-one")
+	created, err := h.store.CreateBook(oneBook)
 	if err != nil {
 		httputil.InternalError(c, "failed to create book", err)
 		return
