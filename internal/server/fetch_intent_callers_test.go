@@ -1,5 +1,5 @@
 // file: internal/server/fetch_intent_callers_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: ba95b95d-5a6d-4c26-bb9e-9f78520ebbc9
 // last-edited: 2026-11-17
 
@@ -24,6 +24,12 @@ import (
 // maintenance plugin's resolver (through Server.FetchMetadataByTitle) and the
 // entities.resolve-production-author op. A retired book must cost neither a
 // provider call nor a write, and neither caller may count it as a failure.
+
+// prodCompanyName is a fictional Gotham production company. The detector
+// (personname.IsProductionCompany) matches a lowercased known-name list and also
+// any name ending in " theater" or " theatre", so this fires it without a real
+// publisher's name in the fixtures.
+const prodCompanyName = "Gotham Theater"
 
 func retiredFetchBook(t *testing.T, s *Server, title string, retire func(*database.Book)) string {
 	t.Helper()
@@ -82,8 +88,7 @@ func runResolveProductionAuthor(t *testing.T, retire func(*database.Book)) (int6
 	mfs.SetOverrideSources([]metadata.MetadataSource{src})
 	s.metadataFetchService = mfs
 
-	// A real publisher string on purpose: the production-company detector fires only on its known names, and "Tantor Media" is the exact one this test needs.
-	prod, err := store.CreateAuthor("Tantor Media")
+	prod, err := store.CreateAuthor(prodCompanyName)
 	require.NoError(t, err)
 	id := retiredFetchBook(t, s, "Batman Year One", retire)
 	require.NoError(t, store.SetBookAuthors(id, []database.BookAuthor{{BookID: id, AuthorID: prod.ID, Role: "author", Position: 0}}))
@@ -92,7 +97,7 @@ func runResolveProductionAuthor(t *testing.T, retire func(*database.Book)) (int6
 	require.NoError(t, s.RegisterResolveProductionAuthorOp(reg))
 	def, ok := reg.Def("entities.resolve-production-author")
 	require.True(t, ok)
-	params, err := json.Marshal(resolveProductionAuthorOpParams{AuthorID: prod.ID, ProdAuthorName: "Tantor Media"})
+	params, err := json.Marshal(resolveProductionAuthorOpParams{AuthorID: prod.ID, ProdAuthorName: prodCompanyName})
 	require.NoError(t, err)
 	rec := &resumeRecorder{opID: "op-resolve-prod"}
 	require.NoError(t, def.Run(context.Background(), params, rec))
