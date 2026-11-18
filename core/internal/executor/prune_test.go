@@ -1,5 +1,5 @@
 // file: core/internal/executor/prune_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e61178bc-35fc-4695-8a78-596683d7ace9
 // last-edited: 2026-11-18
 
@@ -172,6 +172,22 @@ func TestPrune_NonPositiveRetentionKeepsEverything(t *testing.T) {
 		}
 		if res.Deleted != 0 || !res.Kept {
 			t.Errorf("retention %v: result %+v, want Kept and nothing deleted", d, res)
+		}
+	}
+}
+
+// An enormous retention must keep everything, never wrap into a cutoff at or
+// after now (which would prune every terminal run).
+func TestPrune_HugeRetentionNeverYieldsAFutureCutoff(t *testing.T) {
+	for _, d := range []time.Duration{time.Duration(1<<63 - 1), 1 << 62, 100 * 365 * 24 * time.Hour} {
+		f := &fakePruner{}
+		if _, err := runPrune(t, pruneDef(f, retention(d)), taskstest.NewFakeRun(t.Context(), KindPrune)); err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range f.snapshot() {
+			if !c.before.Before(pruneNow) {
+				t.Errorf("retention %v: cutoff %v is not before now %v", d, c.before, pruneNow)
+			}
 		}
 	}
 }

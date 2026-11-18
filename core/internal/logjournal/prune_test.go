@@ -1,5 +1,5 @@
 // file: core/internal/logjournal/prune_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 740b55f6-69cc-4f61-abda-08b91342f365
 // last-edited: 2026-11-18
 
@@ -9,8 +9,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -192,6 +194,78 @@ func TestJournal_PruneDisabledJournalIsLeftAlone(t *testing.T) {
 	}
 	if n := len(remaining(t, s)); n != 1 {
 		t.Errorf("%d records remain, want 1", n)
+	}
+}
+
+// Zero keeps everything (05-logging §8); a negative value, which the schema
+// refuses, is read the same fail-closed way: nothing is deleted.
+func TestJournal_PruneNegativeRetentionKeepsEverything(t *testing.T) {
+	s := &scriptStore{steps: []step{{10_000, true, nil}}}
+	res, err := runPrune(t.Context(), t, pruneDef(s, settings(-1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Kept || res.Deleted != 0 || len(s.got()) != 0 {
+		t.Errorf("result %+v, %d Prune calls; want Kept and no calls", res, len(s.got()))
+	}
+}
+
+// A retention past the maximum overflowed time.Duration arithmetic into a
+// cutoff in the future, which prunes the whole journal. It now fails the run
+// before the store is touched.
+func TestJournal_PruneRefusesRetentionPastTheMaximum(t *testing.T) {
+	for _, days := range []int{logjournal.MaxRetentionDays + 1, 106_752, 1 << 40, math.MaxInt} {
+		s := &scriptStore{steps: []step{{10_000, true, nil}}}
+		_, err := runPrune(t.Context(), t, pruneDef(s, settings(days)))
+		if !errors.Is(err, logjournal.ErrRetentionOutOfRange) {
+			t.Errorf("retention_days %d: err = %v, want ErrRetentionOutOfRange", days, err)
+		}
+		if n := len(s.got()); n != 0 {
+			t.Errorf("retention_days %d: Prune called %d times, want 0", days, n)
+		}
+	}
+}
+
+// The maximum itself works, and its cutoff is strictly before now.
+func TestJournal_PruneAtTheMaximumUsesAPastCutoff(t *testing.T) {
+	s := &scriptStore{steps: []step{{0, false, nil}}}
+	if _, err := runPrune(t.Context(), t, pruneDef(s, settings(logjournal.MaxRetentionDays))); err != nil {
+		t.Fatal(err)
+	}
+	calls := s.got()
+	if len(calls) != 1 || !calls[0].before.Before(epoch) {
+		t.Fatalf("calls = %+v, want one with a cutoff before %v", calls, epoch)
+	}
+	if want := epoch.AddDate(0, 0, -logjournal.MaxRetentionDays); !calls[0].before.Equal(want) {
+		t.Errorf("cutoff = %v, want %v", calls[0].before, want)
+	}
+}
+
+// Whatever the clock, a cutoff is never at or after now: one day back is
+// before it.
+func TestJournal_PruneCutoffIsBeforeNow(t *testing.T) {
+	for _, now := range []time.Time{epoch, {}, time.Unix(0, 0), epoch.AddDate(1000, 0, 0)} {
+		s := &scriptStore{steps: []step{{0, false, nil}}}
+		def := logjournal.PruneDefinition(s, settings(1), func() time.Time { return now })
+		if _, err := runPrune(t.Context(), t, def); err != nil {
+			t.Fatal(err)
+		}
+		if c := s.got(); len(c) != 1 || !c[0].before.Before(now) {
+			t.Errorf("now %v: calls %+v, want a cutoff before now", now, c)
+		}
+	}
+}
+
+// The schema maximum of Settings.RetentionDays is the constant the task
+// enforces, so config refuses what the task would.
+func TestSettings_RetentionDaysSchemaMaximumMatchesTheTask(t *testing.T) {
+	f, ok := reflect.TypeFor[logjournal.Settings]().FieldByName("RetentionDays")
+	if !ok {
+		t.Fatal("no RetentionDays field")
+	}
+	want := "maximum=" + strconv.Itoa(logjournal.MaxRetentionDays)
+	if tag := f.Tag.Get("schema"); !strings.Contains(tag, want) || !strings.Contains(tag, "minimum=0") {
+		t.Errorf("schema tag = %q, want minimum=0 and %s", tag, want)
 	}
 }
 

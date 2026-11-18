@@ -1,5 +1,5 @@
 // file: core/internal/logjournal/prune.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d0c7e32-8a41-4f6b-9b13-2e7a4c1d8f90
 // last-edited: 2026-11-18
 
@@ -30,9 +30,14 @@ const (
 	// liveness as it lands, so the watchdog's derived gap (a sixth of this) is
 	// the longest one call may take.
 	PruneTimeout = time.Hour
-
-	day = 24 * time.Hour
 )
+
+// MaxRetentionDays bounds core.log.journal.retention_days (100 years). It is
+// the schema maximum of Settings.RetentionDays, and the prune task enforces it
+// again at run time, because a value past about 106,000 days overflows a
+// time.Duration and a wrapped cutoff in the future would delete the whole
+// journal. A value above it fails the run and deletes nothing.
+const MaxRetentionDays = 36500
 
 // PruneParams is empty: each pass reads the settings afresh.
 type PruneParams struct{}
@@ -88,16 +93,41 @@ func PruneDefinition(store log.JournalStore, settings func() Settings, now func(
 
 var errNoPruneProgress = errors.New("logjournal: prune reported more records but deleted none")
 
+// ErrRetentionOutOfRange: retention_days is above MaxRetentionDays, or the
+// cutoff it yields is not strictly before now. The prune task refuses the run
+// and deletes nothing: an unusable retention must never read as "everything is
+// old".
+var ErrRetentionOutOfRange = errors.New("logjournal: retention_days out of range")
+
+// retentionCutoff is the instant records older than which are pruned: now minus
+// days calendar days, as HEAD's PruneOldLogs computes it (AddDate, so no
+// Duration arithmetic that could wrap). days must be in [1, MaxRetentionDays]
+// and the result strictly before now, or it fails closed with
+// ErrRetentionOutOfRange.
+func retentionCutoff(now time.Time, days int) (time.Time, error) {
+	if days < 1 || days > MaxRetentionDays {
+		return time.Time{}, fmt.Errorf("%w: %d (want 1 to %d)", ErrRetentionOutOfRange, days, MaxRetentionDays)
+	}
+	cutoff := now.AddDate(0, 0, -days)
+	if !cutoff.Before(now) {
+		return time.Time{}, fmt.Errorf("%w: cutoff %s is not before %s", ErrRetentionOutOfRange, cutoff.UTC().Format(time.RFC3339), now.UTC().Format(time.RFC3339))
+	}
+	return cutoff, nil
+}
+
 func pruneJournal(rc *tasks.RC, store log.JournalStore, s Settings, now time.Time) (PruneResult, error) {
 	switch {
 	case !s.Enabled:
 		rc.Progress().Note("the journal is off: nothing to prune")
 		return PruneResult{Disabled: true}, nil
 	case s.RetentionDays <= 0:
-		rc.Progress().Note("retention_days is 0: every record is kept")
+		rc.Progress().Note("retention_days is not positive: every record is kept")
 		return PruneResult{Kept: true}, nil
 	}
-	cutoff := now.Add(-time.Duration(s.RetentionDays) * day)
+	cutoff, err := retentionCutoff(now, s.RetentionDays)
+	if err != nil {
+		return PruneResult{}, err
+	}
 	var more atomic.Bool
 	more.Store(true)
 	calls := iter.Seq[int](func(yield func(int) bool) {
