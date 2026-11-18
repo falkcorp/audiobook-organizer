@@ -1,7 +1,7 @@
 // file: internal/organizer/library_copy.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: f3144b62-7dfb-4ee1-95d2-ea314e1fde3c
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package organizer
 
@@ -24,21 +24,36 @@ import (
 // rules), narrowed by IsLibraryCopyOf to a copy of THIS book's file, so the
 // organize preview and the organize apply agree on the row and never act on a
 // different edition of the book. A resolver must never create anything.
-type LibraryCopyResolver func(book *database.Book) (libraryCopy *database.Book, ok bool)
+//
+// retired is a third answer, non-nil only with ok=false: the book's only
+// library copy of its own file is retired (merged away). That is not "no copy
+// yet": organizing the original would lay a second organized copy beside the
+// merged one's file, so ResolveOrganizeSubject turns it into a
+// LibraryCopyRetiredError and the caller refuses.
+type LibraryCopyResolver func(book *database.Book) (libraryCopy *database.Book, ok bool, retired *database.Book)
 
 // ResolveOrganizeSubject applies resolve to book and returns the row to
 // organize. A nil resolver, ok=false, or a nil copy all mean "the book
 // itself": organizing the original is exactly what happened before resolvers
 // existed, and for a protected book with no copy it is what makes one.
-func ResolveOrganizeSubject(resolve LibraryCopyResolver, book *database.Book) *database.Book {
+//
+// The exception is a book whose only library copy is retired: the error is a
+// *LibraryCopyRetiredError, and the returned row is still book, so a caller
+// that only wants the lock set (the batch organize, which acts on the original
+// either way) can use it and ignore the error. A caller that organizes must
+// refuse.
+func ResolveOrganizeSubject(resolve LibraryCopyResolver, book *database.Book) (*database.Book, error) {
 	if resolve == nil || book == nil {
-		return book
+		return book, nil
 	}
-	target, ok := resolve(book)
+	target, ok, retired := resolve(book)
+	if retired != nil {
+		return book, &LibraryCopyRetiredError{BookID: book.ID, CopyID: retired.ID, CopyPath: retired.FilePath}
+	}
 	if !ok || target == nil {
-		return book
+		return book, nil
 	}
-	return target
+	return target, nil
 }
 
 // SameVersionGroup reports whether a and b are versions of one book: both
@@ -94,6 +109,30 @@ func IsLibraryCopyOf(original, candidate *database.Book) bool {
 // CollisionLibraryCopyExists is the batch organize's skip category (Stats
 // Collisions, organize_skipped change rows) for a LibraryCopyExistsError.
 const CollisionLibraryCopyExists = "library_copy_exists"
+
+// CollisionLibraryCopyRetired is the 409 category of a single-book organize or
+// preview refused because the book's only library copy was merged away.
+const CollisionLibraryCopyRetired = "library_copy_retired"
+
+// ErrLibraryCopyRetired is the sentinel LibraryCopyRetiredError unwraps to.
+var ErrLibraryCopyRetired = errors.New("organize: book's only library copy is retired")
+
+// LibraryCopyRetiredError is a single-book organize or preview declining to
+// copy a book whose only library copy of its own file was merged away. The
+// merged row's file is still on disk, so a second copy would sit beside it.
+// Nothing is written. The owner revives or un-merges CopyID first (the merge
+// is undone, then the copy is a live library copy again), or deletes it.
+type LibraryCopyRetiredError struct {
+	BookID   string
+	CopyID   string
+	CopyPath string
+}
+
+func (e *LibraryCopyRetiredError) Error() string {
+	return fmt.Sprintf("organize: book %s's only library copy, book %s at %s, was merged away; revive or un-merge it first (a second copy would sit beside it)", e.BookID, e.CopyID, e.CopyPath)
+}
+
+func (e *LibraryCopyRetiredError) Unwrap() error { return ErrLibraryCopyRetired }
 
 // ErrLibraryCopyExists is the sentinel LibraryCopyExistsError unwraps to.
 var ErrLibraryCopyExists = errors.New("organize: book already has a library copy")
