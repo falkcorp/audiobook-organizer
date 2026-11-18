@@ -1,5 +1,5 @@
 // file: internal/books/store/series_delete_if_unreferenced_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0b5d7e92-3c4a-4f18-a6d1-52e8c9f03b74
 // last-edited: 2026-11-18
 
@@ -488,9 +488,9 @@ func TestSeriesDeleteReady_AgreesWithTheDelete(t *testing.T) {
 		ser, err := s.CreateSeries("Knightfall", nil)
 		require.NoError(t, err)
 		s.memPtr.Store(nil)
-		require.ErrorIs(t, s.SeriesDeleteReady(), errSeriesDeleteMemdbNotServing)
+		require.ErrorIs(t, s.SeriesDeleteReady(), ErrSeriesDeleteMemdbNotServing)
 		_, derr := s.DeleteSeriesIfUnreferenced(ser.ID, ser.Name, ser.AuthorID)
-		require.ErrorIs(t, derr, errSeriesDeleteMemdbNotServing)
+		require.ErrorIs(t, derr, ErrSeriesDeleteMemdbNotServing)
 	})
 	t.Run("a store built without a memdb is ready", func(t *testing.T) {
 		s := seedRefStore(t)

@@ -1,7 +1,7 @@
 // file: internal/maintenance/job.go
-// version: 1.30.2
+// version: 1.30.3
 // guid: 11111111-1111-1111-1111-111111111111
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package maintenance
 
