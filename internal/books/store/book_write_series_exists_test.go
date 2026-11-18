@@ -1,5 +1,5 @@
 // file: internal/books/store/book_write_series_exists_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5c0e8a14-6b27-4d93-a1f8-3e9d27b40c61
 // last-edited: 2026-11-18
 
@@ -8,6 +8,7 @@ package store
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -271,4 +272,23 @@ func TestBookWrites_NeverStrandABookOnADeletedSeriesUnderConcurrentDeletes(t *te
 		require.NoError(t, err)
 		require.NotNil(t, ser, "book %s names series %d, which does not exist", bid, *got.SeriesID)
 	}
+}
+
+// DeleteSeriesIfUnreferenced and the book writers exclude each other with locks
+// that live in one process. That is enough only while no second process can open
+// the same database: Pebble takes the directory's lock file, so a second open of
+// a live store's path is refused rather than sharing it. Pinned because the
+// atomicity above silently stops holding if that ever changes (a shared or
+// read-write second opener would need the check to move into the database).
+func TestPebbleStore_ASecondOpenOfALiveStoreIsRefused(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "series-lock.pebble")
+	first, err := NewPebbleStore(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = first.Close() })
+
+	second, err := NewPebbleStore(path)
+	if err == nil {
+		_ = second.Close()
+	}
+	require.Error(t, err, "a second opener of the same directory must be refused while the first is open")
 }
