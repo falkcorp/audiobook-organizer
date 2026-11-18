@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.46 -->
+<!-- version: 10.78.47 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -2750,7 +2750,8 @@ into one of the curated sections below, is a normal direct edit.
       `overrides` entry pinning `@typescript/old` to `~6.0.3` in `web/package.json`.
 - [ ] **WOODPECKER-TYPECHECK** The frontend tests run only vitest and have never
       type-checked (Woodpecker's `web-test` step was removed with `checks-build.yaml` on
-      2026-11-07; the web tests now run in `.github/workflows/frontend-ci.yml`). Add
+      2026-11-07; the web tests now run in `.github/workflows/ci.yml`'s `Frontend Unit Tests`
+      job, and since 2026-11-18 no longer in `frontend-ci.yml`, which sets `skip-tests`). Add
       `npm run typecheck` (about 2 s on TS 7) to the frontend test job there.
 
 - [ ] **WINDOW-QUIESCED-SCAN-OVERLAP** A maintenance window
