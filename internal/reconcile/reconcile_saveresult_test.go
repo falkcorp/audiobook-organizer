@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile_saveresult_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 9a4e1c73-2b85-4f60-8d19-3e7c0a5b6f24
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package reconcile
 
@@ -97,6 +97,11 @@ func (f *applyFakeStore) GetBookByID(string) (*database.Book, error) {
 	}
 	return database.SnapshotBook(f.book)
 }
+
+// GetBookFiles: the double's book has no file rows, so the apply repoints the
+// book alone (planFileRow). The rows-moving cases run on a real PebbleStore in
+// apply_file_rows_test.go.
+func (f *applyFakeStore) GetBookFiles(string) ([]database.BookFile, error) { return nil, nil }
 
 func (f *applyFakeStore) CreateOperationChange(c *database.OperationChange) error {
 	f.changes = append(f.changes, c)
