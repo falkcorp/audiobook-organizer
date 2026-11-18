@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.57.0
+// version: 1.57.1
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-11-17
 
@@ -410,26 +410,48 @@ func legacyAudioConfirmedMarker(candidate MetadataCandidate, th transcriptionHin
 // earlier read of it, so a concurrent write to a column this sync does not
 // own is kept. The lock rows are read inside the callback; that is a Pebble
 // read of lock keys, not a book write, so it is safe under the stripe.
-func (mfs *Service) syncMetadataToLibraryCopy(original, libCopy *database.Book) {
+//
+// A copy that is retired (trashed or merged away) when its row is read under
+// that stripe is refused: nothing is written to it, neither its columns nor its
+// author and narrator joins, and the error wraps errFileTargetChanged so the
+// caller stops before writing tags to its files. Every other failure is logged
+// and returns nil, as before.
+func (mfs *Service) syncMetadataToLibraryCopy(original, libCopy *database.Book) error {
 	var restored []string
 	var lockErr error
+	retired := false
 	updated, err := mfs.db.ModifyBook(libCopy.ID, func(row *database.Book) error {
+		// The row as it stands under its write stripe. The lookup that picked
+		// this copy leaves trashed rows out and fileWorkTarget re-read it, but
+		// a trash or merge can land after either: writing the original's
+		// columns onto a retired copy would revive stale metadata on it.
+		if row.IsRetired() {
+			retired = true
+			return database.ErrSkipBookWrite
+		}
 		restored, lockErr = database.ApplyRespectingLocks(mfs.db, row, func(b *database.Book) {
 			mfs.copyMetadataColumns(original, b)
 		})
 		return lockErr
 	})
+	if retired {
+		// Nothing was written. The joins and the caller's tag write are
+		// skipped with it: errFileTargetChanged is the file job's "the copy
+		// is not the one it locked" refusal.
+		return fmt.Errorf("library copy %s is retired (trashed or merged away), so nothing was synced to it: %w",
+			libCopy.ID, errFileTargetChanged)
+	}
 	if lockErr != nil {
 		slog.Warn("not syncing metadata to the library copy: its field locks are unreadable",
 			"libCopyID", libCopy.ID, "error", lockErr)
-		return
+		return nil
 	}
 	switch {
 	case err != nil:
 		slog.Warn("failed to sync metadata to library copy", "id", libCopy.ID, "error", err)
 	case updated == nil:
 		logger.New("metafetch-library-copy").Warn("library copy %s vanished before the metadata sync", logger.SanitizeLogValue(libCopy.ID))
-		return
+		return nil
 	default:
 		// Keep the caller's struct in step with what was written, as the
 		// in-place mutation did before.
@@ -472,6 +494,7 @@ func (mfs *Service) syncMetadataToLibraryCopy(original, libCopy *database.Book) 
 			_ = mfs.db.SetBookNarrators(libCopy.ID, newNarrators)
 		}
 	}
+	return nil
 }
 
 // copyMetadataColumns is the field list syncMetadataToLibraryCopy copies. Split
@@ -608,7 +631,14 @@ func (mfs *Service) ensureLibraryCopy(book *database.Book) *database.Book {
 		return nil
 	}
 
-	mfs.syncMetadataToLibraryCopy(book, created)
+	if err := mfs.syncMetadataToLibraryCopy(book, created); err != nil {
+		// The copy was retired between its creation and the sync (a merge or
+		// trash landed in that window): hand back no copy, so no file work
+		// follows onto it.
+		logger.New("metafetch-library-copy").Warn("not using the library copy just made for %s: %s",
+			logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(err.Error()))
+		return nil
+	}
 
 	slog.Info("created library copy for protected book", "path", created.FilePath, "newBookID", created.ID, "originalBookID", book.ID)
 	return created
