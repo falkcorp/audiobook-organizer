@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_files.go
-// version: 1.21.4
+// version: 1.21.5
 // guid: 969b284a-5657-442b-beba-275e325e000b
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package metafetch
 
@@ -92,6 +92,11 @@ const (
 // errFileTargetChanged means a file step resolved a different book than the
 // one its job locked.
 var errFileTargetChanged = errors.New("the book's library copy changed after its file work locked one")
+
+// errLibraryCopyRetired means a protected book's only library copy was merged
+// away, so there is no live copy to write and none is created beside the dead
+// one. The book's metadata is applied; only its file work is skipped.
+var errLibraryCopyRetired = errors.New("the book's library copy was retired")
 
 // fileWorkTarget is the book whose audio files a file step writes: book itself,
 // or -- for a book under a protected (iTunes/import) path -- its library copy.
@@ -405,6 +410,14 @@ func (mfs *Service) resolveLibraryCopy(id string, book *database.Book, policy co
 	target, ok := mfs.existingLibraryCopyMatchingIn(r, fresh, nil)
 	if ok || policy != createLibraryCopy {
 		return target, nil
+	}
+	// No LIVE copy. The lookup skips a retired one, so a copy merged away looks
+	// exactly like no copy at all; creating a fresh one beside it would give the
+	// book two organized copies once the merge is undone. The metadata is
+	// already applied: say that the file work, and only that, was skipped.
+	if dead := mfs.retiredLibrarySiblingIn(r, fresh); dead != nil {
+		return nil, fmt.Errorf("apply file work for book %s: its only library copy, book %s, was merged away or trashed, so no audio files were written and no new copy was made: %w",
+			id, dead.ID, errLibraryCopyRetired)
 	}
 	// With the Deluge list unloaded, or the import-path list unreadable, every
 	// book outside root_dir looks protected (isProtectedPath), so a copy made

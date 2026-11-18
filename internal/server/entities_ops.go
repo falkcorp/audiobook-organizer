@@ -1,7 +1,7 @@
 // file: internal/server/entities_ops.go
-// version: 1.18.1
+// version: 1.18.2
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 // entities_ops registers the UOS-02 OperationDefs for author entity
 // operations: author-merge and resolve-production-author. Each def is
@@ -640,6 +640,15 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 							// shared creation gate runs first: a junk AI
 							// answer is no answer, and an existing junk row
 							// must not be linked either.
+							//
+							// Known residual: the author row is created here,
+							// before the locked write below can refuse a book
+							// retired in the meantime. Creating it inside the
+							// book's lock would nest an author write in a book
+							// stripe for a window of microseconds, so it is not
+							// done: a book retired in that window leaves one
+							// author row, created from the AI's answer and linked
+							// to nothing. No write lands on the book itself.
 							var existing *database.Author
 							if aiAuthor, why := personname.PrepareAuthorNameForCreation(parsed.Author); why == "" {
 								existing, _ = store.GetAuthorByName(aiAuthor)
@@ -659,8 +668,9 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 								if err := assignResolvedAuthorPreservingRecord(store, book.ID, existing.ID, authorID); err != nil {
 									if errors.Is(err, errResolveBookRetired) {
 										// Retired between the re-read above and
-										// the write: refused under the lock, the
-										// join untouched. A skip, not a failure.
+										// one of the two locked passes: refused
+										// under the lock, so nothing is written
+										// after it retired. A skip, not a failure.
 										retiredSkipped++
 										continue
 									}
@@ -754,14 +764,26 @@ func assignPublisherPreservingRecord(store entityAssignStore, bookID, publisher 
 // logged by the caller path but does not roll back the AuthorID write (matching
 // prior behavior).
 //
-// A row that is retired when the closure reads it is refused with
-// errResolveBookRetired: the ModifyBook error aborts the write and this returns
-// before the join is read or rewritten, so a retired book's credits are never
-// touched.
+// Two locked passes, each deciding on the row it reads under the lock:
+//
+//  1. ModifyBook sets AuthorID, refusing a retired row.
+//  2. A second ModifyBook rechecks the row and, only if it is still live,
+//     rewrites the join through ModifyBookAuthors nested inside it (the shape
+//     the iTunes enrichment join uses), so the retired check and the join
+//     write hold the row's lock together. The join is not rewritten inside the
+//     first pass because the store orders equal-position credits by the
+//     STORED row's AuthorID, which is still the old one until the first pass
+//     commits.
+//
+// A row retired when either pass reads it is refused with errResolveBookRetired
+// and the caller counts a retired skip. What this does NOT cover: a book that
+// retires between the two passes keeps the resolved AuthorID (written while it
+// was live) with its join left as it was, so the column and the join disagree
+// on that retired row; no write lands on the retired book after it retired.
 func assignResolvedAuthorPreservingRecord(store authorAssignStore, bookID string, resolvedAuthorID, prodAuthorID int) error {
 	written, err := store.ModifyBook(bookID, func(full *database.Book) error {
-		// Refuse a retired row under the lock; the error aborts the write and
-		// returns before the join rewrite below, so the join is left alone too.
+		// Refuse a retired row under the lock; the error aborts the write, and
+		// the caller returns before the join pass below runs.
 		if full.IsRetired() {
 			return errResolveBookRetired
 		}
@@ -777,17 +799,37 @@ func assignResolvedAuthorPreservingRecord(store authorAssignStore, bookID string
 	}
 
 	// Rewrite the book_authors join: drop the production-company author, add the
-	// resolved author. Best-effort, as before — a failure here is logged but does
-	// not fail the resolution (the denormalized AuthorID already points correctly).
+	// resolved author. Best-effort, as before: a failure here is logged but does
+	// not fail the resolution (the denormalized AuthorID already points
+	// correctly). It is a second locked pass (see the function comment): the row
+	// is read again under its lock, and the join is rewritten inside that lock
+	// only while the book is still live.
 	//
 	// The resolved author takes the production company's slot (its position
 	// and role) rather than being appended at position 0, which collided
 	// with whatever credit already held position 0; a book already crediting
 	// the resolved author keeps that one credit.
-	bookAuthors, _ := store.GetBookAuthors(bookID)
-	updated := replaceAuthorCredit(bookID, bookAuthors, prodAuthorID, resolvedAuthorID)
-	if err := store.SetBookAuthors(bookID, updated); err != nil {
-		slog.Warn("resolve-production-author: failed to rewrite book_authors join", "book", bookID, "err", err)
+	retiredAtJoin := false
+	var joinErr error
+	_, passErr := store.ModifyBook(bookID, func(row *database.Book) error {
+		if row.IsRetired() {
+			retiredAtJoin = true
+			return database.ErrSkipBookWrite
+		}
+		_, joinErr = store.ModifyBookAuthors(bookID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
+			return replaceAuthorCredit(bookID, cur, prodAuthorID, resolvedAuthorID), nil
+		})
+		// The row itself is not rewritten: only the join is.
+		return database.ErrSkipBookWrite
+	})
+	if retiredAtJoin {
+		return fmt.Errorf("book %s retired before its author join was rewritten: %w", bookID, errResolveBookRetired)
+	}
+	if passErr == nil {
+		passErr = joinErr
+	}
+	if passErr != nil {
+		slog.Warn("resolve-production-author: failed to rewrite book_authors join", "book", bookID, "err", passErr)
 	}
 	return nil
 }

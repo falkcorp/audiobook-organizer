@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.24.3
+// version: 1.24.4
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package metafetch
 
@@ -790,7 +790,9 @@ func (mfs *Service) WriteBackMetadataForBookContext(ctx context.Context, id stri
 // every other apply, so the tags and the row agree.
 //
 // targetID is the book its caller locked (lockLibraryCopy); the files written
-// are that book's, and a book that now resolves elsewhere is an error.
+// are that book's, and a book that now resolves elsewhere is an error. A target
+// that is retired (trashed or merged away) is refused with ErrBookRetired
+// whether it is the book itself or its library copy.
 func (mfs *Service) writeBackForBook(ctx context.Context, id string, segmentFilter []string, targetID string, pt *ApplyPhaseTimings) (int, error) {
 	prepStart := time.Now()
 	book, err := mfs.db.GetBookByID(id)
@@ -809,6 +811,16 @@ func (mfs *Service) writeBackForBook(ctx context.Context, id string, segmentFilt
 	}
 	if libCopy == nil {
 		return 0, fmt.Errorf("cannot write back: no library copy for protected book %s", id)
+	}
+	if libCopy.ID == book.ID && libCopy.IsRetired() {
+		// The book is its own file-work target (under root_dir, or not
+		// protected) and is trashed or merged away: its tags are not written.
+		// A retired library COPY is refused by libraryCopyGone and the sync
+		// below; this is the same refusal for the self case, which had none.
+		// The read above is not under a store lock (writing tags is file I/O
+		// and cannot be), so a book that retires after this check still has
+		// this call's tags written. That window is the length of one write-back.
+		return 0, fmt.Errorf("cannot write back: book %s is retired (trashed or merged away), so no tag was written: %w", id, ErrBookRetired)
 	}
 	if libCopy.ID != book.ID {
 		// Sync metadata from the original book to the library copy so both

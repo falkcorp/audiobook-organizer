@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-11-17-retired-books-metadata-apply-executive-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: 2e8c5a71-4b93-4d06-9f1a-7c3d0b6e8a52 -->
-<!-- last-edited: 2026-11-17 -->
+<!-- last-edited: 2026-11-18 -->
 
 # Automatic metadata changes no longer land on books that have been put away
 
@@ -45,6 +45,24 @@ refuses retired books`.
   details that is kept on its library copy after every metadata apply (a copy
   that was trashed or merged away is refused and the file is not rewritten),
   and the iTunes import's author fill.
+- Two of those writers (the production-company author fill and the library
+  copy's author and narrator credits) used to check the book and then write
+  its credits after releasing the check. They now check again at the moment
+  they write the credits, so a book put away in between is left alone.
+- A book whose files live in the iTunes folder gets its file work done on an
+  organized copy in the library. If the only such copy has been merged away,
+  the book's details are still applied, but its audio files are not touched and
+  no second copy is made beside the merged one; the job reports that plainly.
+  If a live copy exists behind the merged one, the live copy is used. In the
+  single-book organize screen, a book in that situation now gets a fresh copy
+  of itself, as a book with no copy at all does.
+- Writing tags into a book's own audio files is now refused for a book that has
+  been put away, as it already was for its library copy.
+- Two gaps remain by nature, and are listed in the to-do file. Tags are written
+  to files after the check, so a book put away during that one write still has
+  that write land. And the production-company author fill can create an author
+  record just before it finds the book was put away, leaving one author with no
+  books; nothing is written to the book.
 - The lost-candidates repair now reports a book that was put away between its
   re-check and its re-search as "changed since it was planned", like the
   version-twin repair, instead of as a failure. "Search again" now says so when
