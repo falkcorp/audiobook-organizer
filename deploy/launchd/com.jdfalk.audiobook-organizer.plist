@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- file: deploy/launchd/com.jdfalk.audiobook-organizer.plist -->
-<!-- version: 2.0.0 -->
+<!-- version: 2.1.0 -->
 <!-- guid: 1f2e3d4c-5b6a-4789-90ab-cdef12345678 -->
+<!-- last-edited: 2026-11-18 -->
 <!--
   macOS launchd plist for audiobook-organizer
 
@@ -41,15 +42,10 @@
     <!-- Environment variables for runtime configuration -->
     <key>EnvironmentVariables</key>
     <dict>
-        <!-- Root directory where audiobook files are located (EDIT THIS) -->
-        <key>AUDIOBOOK_ROOT_DIR</key>
-        <string>/Users/USERNAME/Audiobooks</string>
-        <!-- Path to application database (EDIT THIS) -->
-        <key>DATABASE_PATH</key>
+        <!-- Path to application database (EDIT THIS). The library root is the
+             core.library.roots key: set it in Settings. -->
+        <key>ABO_CORE_STORAGE_PATH</key>
         <string>/Users/USERNAME/.audiobook-organizer/db</string>
-        <!-- Web server port -->
-        <key>PORT</key>
-        <string>8484</string>
     </dict>
 
     <!-- Working directory for relative paths -->
