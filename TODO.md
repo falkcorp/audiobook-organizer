@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.46 -->
+<!-- version: 10.78.47 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -214,7 +214,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] F5-18: back the native authority-build plan lookup with the tasks run store. A native Preview's `plan_op_id` is its RunID, but `deps.PlanReader` reads a v2 operation row, so a native apply of a native dry run cannot find its plan. Replace `TestT6G1Kinds_AuthorityBuildAppliesFromAPlantedV2PlanRow` with a test that feeds a native Preview's own result to the Live run. See `docs/agent-tasks/platform-core/seams.d/F5-06.md`.
 - [ ] F5-18: rewrite the native Help text of the 12 T6 group 1 writing kinds. It is verbatim HEAD and tells callers to pass `apply=true` or `dry_run=false`, which the native kinds refuse; name the run mode instead.
-- [ ] F5-18: register every resource name the T6 group 1 kinds use in `r.Resources(...)`: `activity`, `metadata_cache`, `field_states`, `ai_journal`, `authority_lists`; also `sync_identity` and `metrics` (F5-01), `cover_text` (F5-08) and `file_provenance` (F5-09, F5-07). No kind uses `aux_stores` any more.
+- [x] F5-18: register every resource name the T6 group 1 kinds use in `r.Resources(...)`: `activity`, `metadata_cache`, `field_states`, `ai_journal`, `authority_lists`; also `sync_identity` and `metrics` (F5-01), `cover_text` (F5-08) and `file_provenance` (F5-09, F5-07). No kind uses `aux_stores` any more. DONE (F5-18a): `internal/books/module.go` declares the whole `pkg/ops` resource vocabulary (23 names) in `Register`; `internal/books/resources_test.go` keeps it equal to `pkg/ops/effects.go`.
 - [ ] F5-18: add the first test that runs the real metafetch apply (resolve-production-authors, auto-match-transcribed) through an Effects-enforcing writer; the gated writer must map tag writes to books, the change record to operations and `metadata_state:` to field_states.
 
 - [ ] **TODO-F5-07-CHAPTERS-KEY** Decide whether `maintenance.chapters-backfill` should
