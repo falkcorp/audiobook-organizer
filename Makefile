@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.55.0
+# version: 2.56.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-11-10
+# last-edited: 2026-11-18
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -1026,34 +1026,39 @@ rollback:
 	  --guard="$(ROLLBACK_GUARD)" --host="$(DEPLOY_HOST)" --bin="$(DEPLOY_BIN)" --db="$(DEPLOY_DB)" \
 	  --url="$(DEPLOY_URL)" --unit="$(DEPLOY_UNIT)" --timeout="$(DEPLOY_READY_TIMEOUT)"
 
-## rollback-restore: Restore the pre-upgrade checkpoint (or ROLLBACK_ARCHIVE=<file name in the helpers' archive_dir>) with the current binary, then reinstall .prev and start (requires DEPLOY_HOST, DEPLOY_BIN, DEPLOY_DB; DEPLOY_URL as for rollback)
+## rollback-restore: Restore the pre-upgrade checkpoint (or ROLLBACK_ARCHIVE=<file name in the helpers' archive_dir>) with the current binary, then reinstall .prev and start; RELEASE=<tag> first fetches that release as .prev (requires DEPLOY_HOST, DEPLOY_BIN, DEPLOY_DB; DEPLOY_URL as for rollback)
 #
 # The rollback of a release whose boot ran a level step (R2), where a binary
 # swap is refused (05-storage §5S.3.12 row `make rollback-restore`, 09 §9.2.1
 # "Rollback"). scripts/deploy_rollback.py restore runs it:
-#   1. RELEASE set: refuse. Fetching a named release is F8's
-#      `updater fetch-release`, which this build does not have.
-#   2. Read-only checks while the service still runs, so a refusal leaves it
+#   1. Read-only checks while the service still runs, so a refusal leaves it
 #      running: the helpers' config, DEPLOY_BIN.prev exists, the in-flight
 #      probe, the source (the latest restorable checkpoint's from_vector, or
 #      the levels of the archived store, read from a scratch copy the helper
 #      extracts and deletes as the service user), and DEPLOY_BIN.prev
 #      --print-storage-levels, which must EQUAL the source's levels.
-#   3. Match the unit type to .prev and read the InvocationID, still before
+#      RELEASE=<tag> (the release the checkpoint was taken under, e.g. the
+#      pre-freeze tag after an R2 hotfix) replaces the .prev check: once the
+#      source is read, the CURRENT binary's `updater fetch-release --version
+#      <tag>` downloads that release to the helpers' stage_bin, as the deploy
+#      user; its levels must EQUAL the source's; only then does the
+#      install-staged helper install it as DEPLOY_BIN.prev (replacing any
+#      .prev). A refusal before that deletes the fetched file and leaves
+#      .prev as it was. The fetch is 05-updater §5U.4.
+#   2. Match the unit type to .prev and read the InvocationID, still before
 #      the stop.
-#   4. Stop the unit; check it stays stopped; probe again.
-#   5. The CURRENT binary's storage restore-offline --accept-loss through the
+#   3. Stop the unit; check it stays stopped; probe again.
+#   4. The CURRENT binary's storage restore-offline --accept-loss through the
 #      restore-offline helper: as the service user, in a transient unit that
 #      outlives a dropped connection. Its swap lock refuses while a service
 #      is running or starting; nothing retries it.
-#   6. Check the unit stayed stopped; install .prev atomically; start; wait
+#   5. Check the unit stayed stopped; install .prev atomically; start; wait
 #      as rollback does.
 # Every failure after a change says what state the host is in and prints the
 # commands that finish or undo the rollback. The unit is not masked
 # (systemctl mask refuses a unit file installed in /etc/systemd/system).
 .PHONY: rollback-restore
 rollback-restore:
-	@[ -z "$(RELEASE)" ] || (echo "ERROR: RELEASE=$(RELEASE): fetching a named release needs F8's updater fetch-release, which this build does not have. Install that release's binary as $(DEPLOY_BIN).prev on $(DEPLOY_HOST) by hand, then run make rollback-restore without RELEASE."; exit 1)
 	@[ -n "$(DEPLOY_HOST)" ] || (echo "ERROR: DEPLOY_HOST is not set. Add it to Makefile.local or export it."; exit 1)
 	@[ -n "$(DEPLOY_BIN)" ] || (echo "ERROR: DEPLOY_BIN is not set. Add it to Makefile.local or export it."; exit 1)
 	@[ -n "$(DEPLOY_DB)" ] || (echo "ERROR: DEPLOY_DB is not set. Set it to the main Pebble store path on DEPLOY_HOST (the --db / DATABASE_PATH value) in Makefile.local or export it."; exit 1)
@@ -1061,7 +1066,7 @@ rollback-restore:
 	@python3 scripts/deploy_rollback.py restore \
 	  --guard="$(ROLLBACK_GUARD)" --host="$(DEPLOY_HOST)" --bin="$(DEPLOY_BIN)" --db="$(DEPLOY_DB)" \
 	  --url="$(DEPLOY_URL)" --unit="$(DEPLOY_UNIT)" --timeout="$(DEPLOY_READY_TIMEOUT)" \
-	  --archive="$(ROLLBACK_ARCHIVE)"
+	  --archive="$(ROLLBACK_ARCHIVE)" --release="$(RELEASE)"
 
 # Quick aliases
 .PHONY: t c b v

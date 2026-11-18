@@ -1,7 +1,7 @@
 # file: scripts/tests/test_make_rollback.py
-# version: 1.3.1
+# version: 1.4.0
 # guid: 17d15b8e-ad9f-4804-af7c-e1f0e4b72b13
-# last-edited: 2026-11-09
+# last-edited: 2026-11-18
 
 """`make rollback` and `make rollback-restore` against a fake host.
 
@@ -121,6 +121,7 @@ class FakeHost:
         stopped=None,
         shows=None,
         config=None,
+        releases=None,
     ):
         self._tmp = tempfile.TemporaryDirectory()
         tc.addCleanup(self._tmp.cleanup)
@@ -144,6 +145,23 @@ class FakeHost:
             "into_levels": "books 0\ncore 0\n",
         }
         cur.update(current or {})
+        # releases: tag -> identity overrides of the fake binary that
+        # `updater fetch-release --version tag` writes (RELEASE=<tag>).
+        self.stage = self.root / "home" / "audiobook-organizer"
+        self.stage.parent.mkdir()
+        cur["releases"] = {
+            tag: fake_ssh.fake_app_text(
+                {
+                    "name": f"fetched-{tag}",
+                    "levels": R1,
+                    "format": 1,
+                    "capabilities": "sd_notify",
+                    **over,
+                    "log": str(self.log),
+                }
+            )
+            for tag, over in (releases or {}).items()
+        }
         old = {"name": "prev", "levels": R1, "format": 1, "capabilities": "sd_notify"}
         old.update(prev or {})
         fake_ssh.write_fake_app(self.bin, {**cur, "log": str(self.log)})
@@ -172,7 +190,7 @@ class FakeHost:
             }
             doc.update(record or {})
             (self.cp_area / f"{CHECKPOINT}.json").write_text(json.dumps(doc))
-        self._install_helpers(config or {})
+        self._install_helpers({"stage_bin": str(self.stage), **(config or {})})
         self.server = fake_ssh.HealthServer([READY])
         tc.addCleanup(self.server.close)
         all_rules = list(rules or [])
@@ -253,6 +271,7 @@ class FakeHost:
             "restore-offline",
             "unit-type",
             "swap-prev",
+            "install-staged",
         ):
             text = (HELPERS / stub).read_text()
             assert lib_line in text, stub
@@ -747,12 +766,118 @@ class RollbackRestoreTest(unittest.TestCase):
             assert m is not None, name
             self.assertEqual(ast.literal_eval(m.group(1)), getattr(guard, name), name)
 
-    def test_release_refuses_naming_f8(self) -> None:
-        host = FakeHost(self)
+    # --- RELEASE=<tag> (05-updater 5U.4 fetch-release; 09 9.2.1)
+
+    def test_release_fetches_checks_the_levels_installs_prev_then_restores(self) -> None:
+        """After an R2 hotfix .prev is an R2 build; RELEASE names the R1 tag
+        the checkpoint was taken under, and make fetches it."""
+        host = FakeHost(self, prev={"levels": R2}, releases={"v0.41.0": {}})
+        p = host.make("rollback-restore", RELEASE="v0.41.0")
+        self.assertEqual(p.returncode, 0, out(p))
+        self.assert_order(
+            host,
+            guard.HOST_CONFIG,
+            "inflight-probe",
+            ".migration-checkpoint",
+            f"checkpoint-record {CHECKPOINT}",
+            f"updater fetch-release --version v0.41.0 --out {host.stage}",
+            f"{host.stage} --print-storage-levels",
+            "install-staged prev",
+            ".prev --print-capabilities",
+            "unit-type notify",
+            "systemctl stop",
+            f"restore-offline checkpoint {CHECKPOINT}",
+            "swap-prev",
+            "systemctl start",
+        )
+        fetch = next(c for c in host.ssh() if "updater fetch-release" in c)
+        self.assertIn(
+            "ABK_STATE_DIR=", fetch, "a scratch state directory: no access to the service's"
+        )
+        runs = [e for e in host.calls() if e["kind"] == "app" and e["args"][:1] == ["updater"]]
+        self.assertEqual([r["name"] for r in runs], ["current"], "the CURRENT binary fetches")
+        self.assertEqual(
+            host.installed(), "fetched-v0.41.0", "the fetched release is what is swapped in"
+        )
+        self.assertFalse(host.stage.exists(), "the staged copy is deleted once installed")
+        self.assertEqual(
+            fake_ssh.fake_app_name(host.prev), "fetched-v0.41.0", ".prev is the fetched release"
+        )
+        self.assertFalse(Path(f"{host.bin}.prev.tmp").exists())
+
+    def test_release_needs_no_prev_to_exist(self) -> None:
+        host = FakeHost(self, releases={"v0.41.0": {}})
+        host.prev.unlink()
+        p = host.make("rollback-restore", RELEASE="v0.41.0")
+        self.assertEqual(p.returncode, 0, out(p))
+        self.assertEqual(host.installed(), "fetched-v0.41.0")
+
+    def test_release_at_other_levels_than_the_source_is_refused_and_prev_kept(self) -> None:
+        host = FakeHost(self, prev={"levels": R2}, releases={"v0.42.0": {"levels": R2}})
+        p = host.make("rollback-restore", RELEASE="v0.42.0")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("RELEASE=v0.42.0", out(p))
+        self.assertIn("books: 0, core: 0", out(p))
+        self.assertIn(
+            "make rollback-restore RELEASE=v0.41.0", out(p), "names the checkpoint's own release"
+        )
+        self.assertEqual(host.changes(), [])
+        self.assertFalse(any("install-staged prev" in c for c in host.ssh()), host.ssh())
+        self.assertFalse(host.stage.exists(), "the fetched file is deleted on a refusal")
+        self.assertEqual(fake_ssh.fake_app_name(host.prev), "prev", ".prev is as it was")
+        self.assertEqual(host.installed(), "current")
+
+    def test_a_release_the_source_does_not_have_is_refused_and_prev_kept(self) -> None:
+        host = FakeHost(self, prev={"levels": R2}, releases={"v0.41.0": {}})
+        p = host.make("rollback-restore", RELEASE="v0.9.9")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("release not found", out(p))
+        self.assertIn("updater fetch-release", out(p))
+        self.assertEqual(host.changes(), [])
+        self.assertFalse(any("install-staged prev" in c for c in host.ssh()))
+        self.assertEqual(fake_ssh.fake_app_name(host.prev), "prev")
+
+    def test_release_is_fetched_only_after_the_source_is_known(self) -> None:
+        """No checkpoint: the refusal comes before a download."""
+        host = FakeHost(self, pointer=False, releases={"v0.41.0": {}})
         p = host.make("rollback-restore", RELEASE="v0.41.0")
         self.assertNotEqual(p.returncode, 0)
-        self.assertIn("needs F8's updater fetch-release", out(p))
-        self.assertEqual(host.ssh(), [], "refused before any ssh")
+        self.assertEqual(host.index("updater fetch-release"), -1, host.ssh())
+
+    def test_release_needs_stage_bin_in_the_helpers_config(self) -> None:
+        host = FakeHost(self, releases={"v0.41.0": {}}, config={"stage_bin": None})
+        p = host.make("rollback-restore", RELEASE="v0.41.0")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("stage_bin", out(p))
+        self.assertEqual(host.index("updater fetch-release"), -1)
+        self.assertEqual(host.changes(), [])
+
+    def test_a_refusal_after_the_fetch_deletes_the_fetched_file(self) -> None:
+        """An earlier restore still running: refused after the levels agree
+        and before .prev is replaced."""
+        host = FakeHost(self, prev={"levels": R2}, releases={"v0.41.0": {}})
+        host.transient_state.write_text("active\n")
+        p = host.make("rollback-restore", RELEASE="v0.41.0")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("an earlier restore is still running", out(p))
+        self.assertNotEqual(host.index("updater fetch-release"), -1)
+        self.assertFalse(host.stage.exists())
+        self.assertFalse(any("install-staged prev" in c for c in host.ssh()))
+        self.assertEqual(fake_ssh.fake_app_name(host.prev), "prev")
+
+    def test_a_release_that_is_not_a_tag_is_refused_before_any_ssh(self) -> None:
+        for bad in ("latest", "dev", "v1.0.0; touch /tmp/pwned-f802", "../x", "v1 2", "1.2.3\nrm"):
+            host = FakeHost(self, releases={"v0.41.0": {}})
+            p = host.make("rollback-restore", RELEASE=bad)
+            self.assertEqual(p.returncode, 2, bad)
+            self.assertEqual(host.ssh(), [], bad)
+
+    def test_a_prev_mismatch_without_release_names_the_tag_to_pass(self) -> None:
+        host = FakeHost(self, prev={"levels": R2})
+        p = host.make("rollback-restore")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("make rollback-restore RELEASE=v0.41.0", out(p))
+        self.assertEqual(host.index("updater fetch-release"), -1, "never fetches unasked")
 
     def test_no_checkpoint_names_rollback_archive(self) -> None:
         host = FakeHost(self, pointer=False)
@@ -1003,6 +1128,7 @@ class SudoersDrift(unittest.TestCase):
             ("rollback", {}, {}),
             ("rollback-restore", {}, {}),
             ("rollback-restore", {"ROLLBACK_ARCHIVE": ARCHIVE}, {"pointer": False}),
+            ("rollback-restore", {"RELEASE": "v0.41.0"}, {"releases": {"v0.41.0": {}}}),
         ):
             host = FakeHost(self, **host_kw)
             p = host.make(target, **kw)
@@ -1134,7 +1260,7 @@ class MutationProbes(unittest.TestCase):
         host = FakeHost(self, prev={"levels_exit": 2})
         m = mutant(
             self,
-            '        return None, f"`{o.bin}.prev --print-storage-levels` failed ({_cause(r)})"\n',
+            '        return None, f"`{o.prev} --print-storage-levels` failed ({_cause(r)})"\n',
             '        return {}, "guessed"\n',
         )
         self.assertEqual(host.make("rollback", guard=m).returncode, 0)
@@ -1144,6 +1270,24 @@ class MutationProbes(unittest.TestCase):
         m = mutant(self, "    diff = differs(src.levels, prev)\n", "    diff = []\n")
         self.assertEqual(host.make("rollback-restore", guard=m).returncode, 0)
         self.assertNotEqual(host.changes(), [])
+
+    def test_release_equality_removed(self) -> None:
+        """RELEASE's fetched binary is held to the source's levels too."""
+        host = FakeHost(self, releases={"v0.42.0": {"levels": R2}})
+        m = mutant(self, "    diff = differs(src.levels, prev)\n", "    diff = []\n")
+        self.assertEqual(host.make("rollback-restore", guard=m, RELEASE="v0.42.0").returncode, 0)
+        self.assertTrue(any("install-staged prev" in c for c in host.ssh()))
+
+    def test_release_tag_check_removed(self) -> None:
+        """The tag goes into a remote shell line: only the charset guards it."""
+        host = FakeHost(self, releases={"v0.41.0": {}})
+        m = mutant(
+            self,
+            "    if o.release and not _RELEASE_TAG.fullmatch(o.release):\n",
+            "    if False:\n",
+        )
+        host.make("rollback-restore", guard=m, RELEASE="v1.0.0;true")
+        self.assertTrue(any("v1.0.0;true" in c for c in host.ssh()), host.ssh())
 
     def test_stopped_check_removed(self) -> None:
         host = FakeHost(self, stopped=[unit_state("activating", "start")])

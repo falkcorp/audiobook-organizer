@@ -1,7 +1,7 @@
 // file: core/archtest/tasklint/core_test.go
-// version: 1.0.12
+// version: 1.0.13
 // guid: 033d7131-0d90-4946-aecb-74c2016a00b0
-// last-edited: 2026-11-12
+// last-edited: 2026-11-18
 
 package tasklint_test
 
@@ -37,6 +37,9 @@ func TestTasklint_Core(t *testing.T) {
 			core + "/backup.VerifyTask",                          // as CreateTask
 			core + "/backup.PruneTask",                           // as CreateTask
 			core + "/backup.StageRestoreTask",                    // as CreateTask
+			core + "/updater.CheckTask",                          // the three core.updater.* kinds: dark until the kernel registers them at P6 when the app opts into the core updater (F8-04); delete with the directives
+			core + "/updater.ApplyTask",                          // as CheckTask
+			core + "/updater.RollbackTask",                       // as CheckTask
 		}})
 }
 

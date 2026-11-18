@@ -1,8 +1,8 @@
 #!/usr/bin/python3 -I
 # file: deploy/rollback-helpers/rollback_helper.py
-# version: 1.11.0
+# version: 1.12.0
 # guid: 1d8f47fb-8f03-4fc9-af45-4b16e6ef75aa
-# last-edited: 2026-11-09
+# last-edited: 2026-11-18
 
 """Root-owned helpers for `make deploy`, `make rollback` and `make rollback-restore` (R1-27).
 
@@ -62,10 +62,14 @@ Operations (the stub name, then the subcommand):
                      writes the fixed drop-in `[Service]\\nType=simple\\n` to
                      /etc/systemd/system/<unit>.d/zz-rollback-type-simple.conf;
                      notify removes it. Then `systemctl daemon-reload`.
-  install-staged     `install binary`, `install unit` or `install local-conf`,
-                     as root: the deploy. binary installs stage_bin as <bin>
-                     atomically (copy to <bin>.new, fsync, rename), keeping
-                     the replaced one as <bin>.prev. systemd reads the unit
+  install-staged     `install binary`, `install prev`, `install unit` or
+                     `install local-conf`, as root: the deploy. binary
+                     installs stage_bin as <bin> atomically (copy to
+                     <bin>.new, fsync, rename), keeping the replaced one as
+                     <bin>.prev. prev installs stage_bin as <bin>.prev the
+                     same way and touches nothing else (make rollback-restore
+                     RELEASE=<tag>, once it has fetched that release into
+                     stage_bin and checked its store levels). systemd reads the unit
                      and its drop-ins as root, so neither takes free-form
                      content from the deploy user: unit installs
                      LIBDIR/UNIT_TEMPLATE, the copy of
@@ -1167,10 +1171,10 @@ def _read_template(cfg: dict[str, str]) -> bytes:
 
 
 def op_install(args: list[str]) -> int:
-    _arity(args, 1, "install binary|unit|local-conf")
+    _arity(args, 1, "install binary|prev|unit|local-conf")
     what = args[0]
-    if what not in ("binary", "unit", "local-conf"):
-        raise RefusedError("usage: install binary|unit|local-conf", 2)
+    if what not in ("binary", "prev", "unit", "local-conf"):
+        raise RefusedError("usage: install binary|prev|unit|local-conf", 2)
     cfg = load_config()
     if what in ("unit", "local-conf"):
         # Before anything is read or copied: without a good host.conf the
@@ -1187,12 +1191,14 @@ def op_install(args: list[str]) -> int:
         print(f"installed the unit template {LIBDIR}/{UNIT_TEMPLATE} as {dest}")
         _daemon_reload()
         return 0
-    key = "stage_bin" if what == "binary" else "stage_local_conf"
+    key = "stage_bin" if what in ("binary", "prev") else "stage_local_conf"
     src = cfg.get(key, "")
     if not src:
         raise RefusedError(f"{key} is not set in {CONFIG}: nothing to install from")
     if what == "binary":
         return _install_binary(cfg["bin"], src)
+    if what == "prev":
+        return _install_prev(cfg["bin"], src)
     fd, _ = _read_staged(src, UNIT_LIMIT)
     try:
         data = _read_all(fd, UNIT_LIMIT + 1)
@@ -1244,6 +1250,33 @@ def _install_binary(b: str, src: str) -> int:
     finally:
         os.close(fd)
     print(f"installed {src} as {b}; the replaced binary is {prev}")
+    return 0
+
+
+def _install_prev(b: str, src: str) -> int:
+    """Install src as <b>.prev and nothing else: <b> is not read or changed."""
+    prev, tmp = f"{b}.prev", f"{b}.prev.tmp"
+    fd, _ = _read_staged(src, None)
+    try:
+        try:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(tmp)
+            out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o755)
+            with os.fdopen(out, "wb") as f, os.fdopen(os.dup(fd), "rb") as s:
+                shutil.copyfileobj(s, f, 1 << 20)
+                f.flush()
+                os.fchmod(f.fileno(), 0o755)
+                os.fsync(f.fileno())
+            os.replace(tmp, prev)
+        except OSError as e:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise RefusedError(
+                f"installing {src} as {prev} failed ({e}); {prev} is unchanged"
+            ) from e
+    finally:
+        os.close(fd)
+    print(f"installed {src} as {prev}")
     return 0
 
 

@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/F8-02-updater-move-into-core.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.2.0 -->
 <!-- guid: dd9d9131-a311-46ff-ac6c-d78aac9f8d12 -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-18 -->
 
 # F8-02 — The R0 updater moved into core/updater and core/updater/github, parameterised by release source, with `updater fetch-release` and `make rollback-restore RELEASE=<pre-freeze tag>`
 
@@ -64,7 +64,8 @@ command, and the `RELEASE=` branch of `make rollback-restore`. Exactly two addit
 | create | `core/internal/updaterhttp/` (the four routes of §5U.10, not mounted) |
 | create | `core/app/offline_updater.go` (`updater fetch-release --version <tag> --out <path>` through `app.OfflineCommands`) |
 | modify | `internal/updater/` (keep `scheduler.go`, `register.go` and the gin-facing type working over the moved code, or keep a thin ABO adapter; R0's tests move to `core/updater` with the fixture change) |
-| modify | `Makefile` (`rollback-restore`: the `RELEASE=` branch) |
+| modify | `Makefile` (`rollback-restore`: the `RELEASE=` branch), `scripts/deploy_rollback.py`, `scripts/storage_format_guard.py`, `deploy/rollback-helpers/` (`rollback_helper.py`, `install-staged`, `rollback.conf.example`: the `install prev` operation), `scripts/tests/` (`fake_ssh.py`, `test_make_rollback.py`, `test_rollback_helper.py`), `docs/system/deploy-and-gpu-ops.md` |
+| modify | `core/app/options.go` (`Options.Updater`), `core/app/offline.go` (registers the command), `core/app/offline_open_test.go` (the command list), `internal/books/options.go` (`OfflineOptions` passes `updater.CoreOptions()`) |
 | modify | `internal/arch/layering_test.go` (`layerOf` for `core/updater*`, `core/internal/updaterhttp`), `scripts/ci/short_test_weights.json` (if a weight names `internal/updater`) |
 | create | one `changelog.d/` fragment (headerless) |
 
@@ -80,9 +81,10 @@ grep -rl --include='*.go' "\"$M/internal/updater\"" . | grep -v '^./internal/upd
 grep -n 'falkcorp/audiobook-organizer\|"audiobook-organizer/"\|audiobook-organizer-%s-%s' internal/updater/updater.go
 # 4. R0's updater tests. Expected: each of the five R0 test names found once
 grep -rn -E 'func (TestApply_RestartExits75|TestApply_SwapAtomicAndPrevKept|TestCheck_SemverNeverDowngrades|TestCheck_DescribeSuffixedCurrentNotCompared|TestCheck_ScheduledRunNeverApplies)\(' internal/updater/
-# 5. make rollback-restore exists from R1-27 and has no RELEASE branch yet. Expected: target found; RELEASE 0 hits in it
+# 5. make rollback-restore exists from R1-27 and refuses RELEASE=<tag> ("needs F8's updater fetch-release") instead of
+#    fetching. Expected: target found; the refusal line is the only RELEASE-fetch code in it (this row replaces it)
 grep -n '^rollback-restore:' Makefile
-sed -n '/^rollback-restore:/,/^$/p' Makefile | grep -c 'RELEASE'
+sed -n '/^rollback-restore:/,/^$/p' Makefile | grep -n 'RELEASE'
 # 6. The Deps types exist in core (F7-02, F2-10, F4-04, F7-05). Expected: >=1 hit each
 grep -rn 'type Client struct' core/integrations/providerhttp/ ; grep -rn 'type Registry struct' core/health/
 grep -rn 'type Bus struct' core/events/ ; grep -rn 'type Service struct' core/integrations/notify/ 2>/dev/null
@@ -90,7 +92,7 @@ grep -rn 'type Bus struct' core/events/ ; grep -rn 'type Service struct' core/in
 grep -rn 'func OfflineCommands\|OfflineCommands' core/app/*.go | head -5
 ```
 
-STOP and report if grep 4 misses any R0 test, if grep 5 shows `rollback-restore` absent (R1-27 owns it), or if grep 6
+STOP and report if grep 4 misses any R0 test, if grep 5 shows `rollback-restore` absent (R1-27 owns it) or already fetching, or if grep 6
 misses any of the four `Deps` types (each dependency is merged before this wave, so a miss means a dependency changed
 its API).
 
@@ -118,12 +120,17 @@ its API).
    --out <path>` command; compiled-in cap 512 MiB (it reads no store).
 8. ABO side: keep `internal/updater`'s scheduler and registration compiling against the moved code (or a thin
    adapter in `internal/updater` that preserves HEAD's gin-facing calls), so `/api/v1/update/*` behaves as before.
-9. `Makefile` `rollback-restore`: with `RELEASE=<tag>`, run `<current binary> updater fetch-release --version
-   $(RELEASE) --out <prev path>.fetched` on the host, compare its `--print-storage-levels` with the source's levels
-   (the checkpoint's `from_vector`, or the archive's levels) and install it as `.prev` only when equal; refuse
-   otherwise and keep the existing `.prev`. Without `RELEASE`, when `.prev`'s levels differ, refuse and print the tag
-   to pass (from the checkpoint's `from_release` or the archive's producing release). Extend
-   `scripts/tests/test_make_rollback.py` (R1-27's test) with the `RELEASE=` cells.
+9. `Makefile` `rollback-restore`: with `RELEASE=<tag>`, after the source (checkpoint or archive) is read, run the
+   current binary's `updater fetch-release --version $(RELEASE) --out <stage_bin>` on the host as the deploy user
+   (the helpers' `stage_bin`, because the deploy user cannot write the bin directory; a scratch `ABK_STATE_DIR` and
+   `HOME` from `mktemp -d`), compare its `--print-storage-levels` with the source's levels (the checkpoint's
+   `from_vector`, or the archive's levels) and install it as `.prev` with the new root-helper operation
+   `sudo install-staged prev` (replacing any `.prev`, deleting the staged copy) only when equal; refuse otherwise,
+   delete the staged copy and keep the existing `.prev`. Without `RELEASE`, when `.prev`'s levels differ, refuse and
+   print the tag to pass (from the checkpoint's `from_release` or the archive's producing release). Extend
+   `scripts/tests/test_make_rollback.py` (R1-27's test) with the `RELEASE=` cells. The helper change
+   (`deploy/rollback-helpers/rollback_helper.py`, `install-staged`) is root-owned on the host: the owner reinstalls
+   the bundle and sets `stage_bin` in `/etc/audiobook-organizer/rollback.conf`.
 10. Metrics (05-updater §5U.9): `mediacore_updater_checks_total`, `mediacore_updater_update_available`,
    `mediacore_updater_apply_total`, `mediacore_updater_rollbacks_total` and `mediacore_updater_download_bytes_total`,
    with §5U.9's labels and closed `outcome` values, on the core `updater` metrics scope (namespace from
@@ -243,3 +250,11 @@ data is written (dark; `c/updater/seen` is written only once F8-04 wires the che
   (09 §9.2.10). No release or flip trailer (09 §9.2.1).
 - Move window announced; feature PRs touching `internal/updater` are held until this merges.
 
+## Drift found at execution (2026-11-18)
+
+- Re-verify 5 was stale: `rollback-restore` already named `RELEASE` (R1-27's refusal). Fixed above.
+- The brief's file set did not cover the rows added to the Files table above (the helper op, `Options.Updater`, the offline registration, `books.OfflineOptions`).
+- Step 9 said to fetch to `<prev path>.fetched`; the deploy user cannot write the bin directory, so the fetch goes to `stage_bin` and a root helper op installs it.
+- F8-04's brief also says it registers `updater fetch-release` in `offline.go`; F8-02 does it, because the command is useless to the rollback recipe without it.
+- 05-updater §5U.3's `Deps` has no inputs for settings, version, state dir, db path or secrets; `New` gained functional Options. `Source{Latest, Open}` cannot fetch a named tag; the optional `TagSource` was added.
+- Details and the items left for F8-04: `docs/agent-tasks/platform-core/seams.d/F8-02.md`.

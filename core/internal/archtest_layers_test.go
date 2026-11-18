@@ -1,7 +1,7 @@
 // file: core/internal/archtest_layers_test.go
-// version: 1.0.18
+// version: 1.0.19
 // guid: 2d3bc73d-ccb4-47c7-92d8-0d5c18bcfb8a
-// last-edited: 2026-11-12
+// last-edited: 2026-11-18
 
 // Package internal holds core's R4 layer guard (03 §3.5.1 item 2), the
 // redesigned successor of ABO's internal/arch/layering_test.go for core. It
@@ -70,7 +70,7 @@ var coreLayerOf = map[string]int{
 	// layer of their highest import)
 	"events": 4, "outbox": 4, "tasks": 4, "storage/datamigrate": 4, "library": 4,
 	"auth": 4, "auth/oidc": 4, "auth/password": 4, "rbac": 4, "audit": 4,
-	"integrations": 4, "backup": 4, "backup/journal": 4, "updater": 4,
+	"integrations": 4, "backup": 4, "backup/journal": 4, "updater": 4, "updater/github": 4,
 	"health": 4, "health/diagnostics": 4,
 	"internal/storagemigrate": 4, "internal/logjournal": 4,
 	// internal/rbacstore implements rbac's role Store over c/rbac/ (F4-01,

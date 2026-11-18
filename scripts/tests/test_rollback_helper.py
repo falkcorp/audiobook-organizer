@@ -1,7 +1,7 @@
 # file: scripts/tests/test_rollback_helper.py
-# version: 1.12.1
+# version: 1.13.0
 # guid: 9609b377-57c2-454a-9130-320303c2815e
-# last-edited: 2026-11-09
+# last-edited: 2026-11-18
 
 """Tests for deploy/rollback-helpers/rollback_helper.py, the root-owned
 helpers the rollback recipes run through sudo (R1-27).
@@ -1990,6 +1990,55 @@ class InstallStaged(unittest.TestCase):
         self.assertEqual(h.run("install", "binary")[0], 0)
         self.assertEqual(b.read_text(), "new")
         self.assertFalse(Path(f"{b}.prev").exists())
+
+    def test_prev_installs_the_staged_binary_as_prev_and_touches_nothing_else(self):
+        """make rollback-restore RELEASE=<tag>: the fetched release becomes
+        <bin>.prev atomically; <bin> is neither read nor changed."""
+        h, b = self.bin_host()
+        b.write_text("current")
+        b.chmod(0o755)
+        Path(f"{b}.prev").write_text("hotfix")
+        (self.stage / "audiobook-organizer").write_text("fetched")
+        old_ino = os.stat(b).st_ino
+        code, out, err = h.run("install", "prev")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(Path(f"{b}.prev").read_text(), "fetched")
+        self.assertEqual(stat.S_IMODE(os.stat(f"{b}.prev").st_mode), 0o755)
+        self.assertEqual((b.read_text(), os.stat(b).st_ino), ("current", old_ino))
+        self.assertFalse(Path(f"{b}.prev.tmp").exists())
+        self.assertFalse(Path(f"{b}.new").exists())
+        self.assertFalse(Path(f"{b}.rolled-back").exists())
+        self.assertIn(f"{b}.prev", out)
+        self.assertEqual(h.tools(), [], "nothing is reloaded or restarted")
+
+    def test_prev_with_no_current_binary_or_no_prev_installs_one(self):
+        h, b = self.bin_host()
+        (self.stage / "audiobook-organizer").write_text("fetched")
+        self.assertEqual(h.run("install", "prev")[0], 0)
+        self.assertEqual(Path(f"{b}.prev").read_text(), "fetched")
+        self.assertFalse(b.exists(), "<bin> is not created")
+
+    def test_prev_refuses_what_binary_refuses_and_keeps_prev(self):
+        h, b = self.bin_host()
+        Path(f"{b}.prev").write_text("hotfix")
+        staged = self.stage / "audiobook-organizer"
+        target = h.root / "elsewhere-bin"
+        target.write_text("evil")
+        os.symlink(target, staged)  # a symlink
+        self.assertEqual(h.run("install", "prev")[0], 1)
+        staged.unlink()
+        other = h.root / "elsewhere"
+        other.write_text("new")
+        os.link(other, staged)  # a second hard link
+        self.assertEqual(h.run("install", "prev")[0], 1)
+        staged.unlink()
+        staged.write_text("new")
+        with unittest.mock.patch.dict(os.environ, {"SUDO_UID": str(os.getuid() + 1)}):
+            self.assertEqual(h.run("install", "prev")[0], 1)  # another owner
+        staged.unlink()
+        self.assertEqual(h.run("install", "prev")[0], 1, "nothing staged")
+        self.assertEqual(Path(f"{b}.prev").read_text(), "hotfix")
+        self.assertFalse(Path(f"{b}.prev.tmp").exists())
 
     def test_symlinked_staged_binary_is_refused(self):
         h, b = self.bin_host()
