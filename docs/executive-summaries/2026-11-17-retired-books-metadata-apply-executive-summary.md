@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-17-retired-books-metadata-apply-executive-summary.md -->
-<!-- version: 1.3.1 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 2e8c5a71-4b93-4d06-9f1a-7c3d0b6e8a52 -->
 <!-- last-edited: 2026-11-18 -->
 
@@ -53,11 +53,29 @@ refuses retired books`.
   organized copy in the library. If the only such copy has been merged away,
   the book's details are still applied, but its audio files are not touched and
   no second copy is made beside the merged one; the job reports that plainly.
-  If a live copy exists behind the merged one, the live copy is used. In the
-  single-book organize screen, a book in that situation now gets a fresh copy
-  of itself, as a book with no copy at all does.
-- Writing tags into a book's own audio files is now refused for a book that has
-  been put away, as it already was for its library copy.
+  If a live copy exists behind the merged one, the live copy is used. Organize
+  now behaves the same way: asked to organize a book whose only library copy
+  was merged away, it refuses and names the merged copy (revive it or un-merge
+  it first) instead of creating a second copy beside it. That covers the
+  single-book organize and its preview, the organize queued behind a scan and
+  the whole-library organize, which counts such a book as skipped. A book whose
+  only copy is in the trash (not merged) still gets a fresh copy; that case is
+  in the to-do file.
+- When an automatic job (not a person) works on the files of a book that has
+  been put away, it now stops before touching any of them: it no longer renames
+  the file, embeds the cover or writes the tags. Before, only the tag write
+  stopped. A person's own actions on a single book (the apply dialog, the
+  Fetch button, the single-book write-back) still write everything. The whole
+  library write-back skips such a book before renaming it and counts it as
+  skipped, not failed. How the skip is reported: for the single-book dialog it
+  is one warning line in the log and the screen shows the apply as a success;
+  the whole-library write-back counts it in its skipped total; the batch apply
+  counts it with its write-back failures. After a restart, a job that was in
+  flight resumes with the same attended or automatic setting it had.
+- The production-company author fill counts a book that was put away between
+  writing its author and rewriting its credits as resolved (its author was
+  written while it was live) and reports the untouched credits on a separate
+  line, rather than calling it a retired book skipped.
 - Two gaps remain by nature, and are listed in the to-do file. Tags are written
   to files after the check, so a book put away during that one write still has
   that write land. And the production-company author fill can create an author
