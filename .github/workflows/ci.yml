@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.44.3
+# version: 3.44.4
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-11-18
 
@@ -333,6 +333,57 @@ jobs:
 
       - name: Check errcheck findings against baseline
         run: bash scripts/check-errcheck-ratchet.sh
+
+  # The property tests of internal/applygate and internal/seqnum at full size,
+  # without the race detector. Under -race (the sharded short suite below, every
+  # CI run) their random draws are divided by five and their exhaustive walks
+  # are one length shorter (`scaled` and `exhaustiveLen`, written after the
+  # package's tests timed the 25m `go test` out), so those tests cover a fifth
+  # of the texts there. This job runs the same two packages at full size, in
+  # about half a minute, so a regression the smaller draw would miss (a title the gate wrongly agrees on, a guard that
+  # hides a match) still fails a PR. Fixed seeds, so the two runs draw the same
+  # first texts and a failure here reproduces with
+  # `go test ./internal/applygate ./internal/seqnum` on a laptop.
+  full-size-parsers:
+    name: Full-Size Tests (applygate, seqnum)
+    needs: changes
+    if: ${{ needs.changes.outputs.go == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go (no built-in cache)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+
+      # Before the cache restore, in every job that restores it:
+      # scripts/ci/free_runner_disk.sh says why.
+      - name: Free runner disk
+        run: scripts/ci/free_runner_disk.sh
+
+      - name: Restore Go cache (manual)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.27-
+            ${{ runner.os }}-go-
+
+      # No -short and no -race: that is the point. -count=1 so a cached result
+      # from an earlier run of the same sources is not reported as this one.
+      - name: Run applygate and seqnum tests at full size
+        run: go test -count=1 -timeout 8m ./internal/applygate ./internal/seqnum
 
   # Ratchet on production functions unreachable from every main (01-P9, D18).
   # One-way like errcheck-ratchet (D47): only a NEW unreachable identifier
