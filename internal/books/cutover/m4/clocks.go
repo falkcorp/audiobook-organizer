@@ -255,6 +255,18 @@ func (m *Migration) stepClock(ctx context.Context, kv storage.KV, w *datamigrate
 		w.Count(OutcomeDeferred)
 		return nil // the group's lowest row imports it
 	}
+	// The reads above are several (a scan per family, a Get per exact key), not
+	// one snapshot: the group's driver may have committed between them, taking
+	// every row of the group, and a later read would then see a group missing
+	// its driver's rows. Its commit is atomic, so my own row still being here
+	// after the last read proves no such commit came first.
+	if _, err := m.legacy().Get(ctx, kv.Key); errors.Is(err, storage.ErrNotFound) {
+		m.deferred.Add(1)
+		w.Count(OutcomeDeferred)
+		return nil
+	} else if err != nil {
+		return err
+	}
 	var c tasks.Clock
 	for _, g := range group {
 		c.LastDue = later(c.LastDue, g.due)
