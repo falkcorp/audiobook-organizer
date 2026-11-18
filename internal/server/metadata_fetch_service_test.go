@@ -1,7 +1,7 @@
 // file: internal/server/metadata_fetch_service_test.go
-// version: 4.4.10
+// version: 4.4.11
 // guid: f6a7b8c9-d0e1-f2a3-b4c5-d6e7f8a9b0c1
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package server
 
@@ -868,7 +868,7 @@ func TestWriteBackMetadataForBook_NotFound(t *testing.T) {
 	mockStore.On("GetBookByID", "missing-id").Return(nil, nil)
 
 	svc := metafetch.NewService(mockStore)
-	_, err := svc.WriteBackMetadataForBook("missing-id")
+	_, err := svc.WriteBackMetadataForBook("missing-id", metafetch.Unattended)
 	if err == nil {
 		t.Fatal("expected error for missing book")
 	}
@@ -907,7 +907,7 @@ func TestWriteBackMetadataForBook_SingleFile(t *testing.T) {
 	// The only file write fails (the file does not exist). A write-back in
 	// which every attempted write failed is a failure: until 2026-09-14 this
 	// returned (0, nil), and callers counted the book as written.
-	count, err := svc.WriteBackMetadataForBook(book.ID)
+	count, err := svc.WriteBackMetadataForBook(book.ID, metafetch.Unattended)
 	if err == nil || !strings.Contains(err.Error(), "failed and none succeeded") {
 		t.Fatalf("err = %v, want the all-writes-failed error", err)
 	}

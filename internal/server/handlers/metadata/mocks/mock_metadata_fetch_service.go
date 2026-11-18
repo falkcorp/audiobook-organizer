@@ -587,16 +587,16 @@ func (_c *MockMetadataFetchService_FetchMetadataForBook_Call) RunAndReturn(run f
 }
 
 // FinishApplyFileWork provides a mock function for the type MockMetadataFetchService
-func (_mock *MockMetadataFetchService) FinishApplyFileWork(ctx context.Context, id string, pendingCoverURL string, fileIO bool, writeTags bool, checkpoint func() error) error {
-	ret := _mock.Called(ctx, id, pendingCoverURL, fileIO, writeTags, checkpoint)
+func (_mock *MockMetadataFetchService) FinishApplyFileWork(ctx context.Context, id string, pendingCoverURL string, fileIO bool, writeTags bool, intent metafetch.FetchIntent, checkpoint func() error) error {
+	ret := _mock.Called(ctx, id, pendingCoverURL, fileIO, writeTags, intent, checkpoint)
 
 	if len(ret) == 0 {
 		panic("no return value specified for FinishApplyFileWork")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, bool, bool, func() error) error); ok {
-		r0 = returnFunc(ctx, id, pendingCoverURL, fileIO, writeTags, checkpoint)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, bool, bool, metafetch.FetchIntent, func() error) error); ok {
+		r0 = returnFunc(ctx, id, pendingCoverURL, fileIO, writeTags, intent, checkpoint)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -614,12 +614,13 @@ type MockMetadataFetchService_FinishApplyFileWork_Call struct {
 //   - pendingCoverURL string
 //   - fileIO bool
 //   - writeTags bool
+//   - intent metafetch.FetchIntent
 //   - checkpoint func() error
-func (_e *MockMetadataFetchService_Expecter) FinishApplyFileWork(ctx any, id any, pendingCoverURL any, fileIO any, writeTags any, checkpoint any) *MockMetadataFetchService_FinishApplyFileWork_Call {
-	return &MockMetadataFetchService_FinishApplyFileWork_Call{Call: _e.mock.On("FinishApplyFileWork", ctx, id, pendingCoverURL, fileIO, writeTags, checkpoint)}
+func (_e *MockMetadataFetchService_Expecter) FinishApplyFileWork(ctx any, id any, pendingCoverURL any, fileIO any, writeTags any, intent any, checkpoint any) *MockMetadataFetchService_FinishApplyFileWork_Call {
+	return &MockMetadataFetchService_FinishApplyFileWork_Call{Call: _e.mock.On("FinishApplyFileWork", ctx, id, pendingCoverURL, fileIO, writeTags, intent, checkpoint)}
 }
 
-func (_c *MockMetadataFetchService_FinishApplyFileWork_Call) Run(run func(ctx context.Context, id string, pendingCoverURL string, fileIO bool, writeTags bool, checkpoint func() error)) *MockMetadataFetchService_FinishApplyFileWork_Call {
+func (_c *MockMetadataFetchService_FinishApplyFileWork_Call) Run(run func(ctx context.Context, id string, pendingCoverURL string, fileIO bool, writeTags bool, intent metafetch.FetchIntent, checkpoint func() error)) *MockMetadataFetchService_FinishApplyFileWork_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -641,9 +642,13 @@ func (_c *MockMetadataFetchService_FinishApplyFileWork_Call) Run(run func(ctx co
 		if args[4] != nil {
 			arg4 = args[4].(bool)
 		}
-		var arg5 func() error
+		var arg5 metafetch.FetchIntent
 		if args[5] != nil {
-			arg5 = args[5].(func() error)
+			arg5 = args[5].(metafetch.FetchIntent)
+		}
+		var arg6 func() error
+		if args[6] != nil {
+			arg6 = args[6].(func() error)
 		}
 		run(
 			arg0,
@@ -652,6 +657,7 @@ func (_c *MockMetadataFetchService_FinishApplyFileWork_Call) Run(run func(ctx co
 			arg3,
 			arg4,
 			arg5,
+			arg6,
 		)
 	})
 	return _c
@@ -662,7 +668,7 @@ func (_c *MockMetadataFetchService_FinishApplyFileWork_Call) Return(err error) *
 	return _c
 }
 
-func (_c *MockMetadataFetchService_FinishApplyFileWork_Call) RunAndReturn(run func(ctx context.Context, id string, pendingCoverURL string, fileIO bool, writeTags bool, checkpoint func() error) error) *MockMetadataFetchService_FinishApplyFileWork_Call {
+func (_c *MockMetadataFetchService_FinishApplyFileWork_Call) RunAndReturn(run func(ctx context.Context, id string, pendingCoverURL string, fileIO bool, writeTags bool, intent metafetch.FetchIntent, checkpoint func() error) error) *MockMetadataFetchService_FinishApplyFileWork_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1003,16 +1009,16 @@ func (_c *MockMetadataFetchService_RenamePreflight_Call) RunAndReturn(run func(i
 }
 
 // RunApplyPipelineRenameOnly provides a mock function for the type MockMetadataFetchService
-func (_mock *MockMetadataFetchService) RunApplyPipelineRenameOnly(ctx context.Context, id string, book *store.Book) error {
-	ret := _mock.Called(ctx, id, book)
+func (_mock *MockMetadataFetchService) RunApplyPipelineRenameOnly(ctx context.Context, id string, book *store.Book, intent metafetch.FetchIntent) error {
+	ret := _mock.Called(ctx, id, book, intent)
 
 	if len(ret) == 0 {
 		panic("no return value specified for RunApplyPipelineRenameOnly")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, *store.Book) error); ok {
-		r0 = returnFunc(ctx, id, book)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, *store.Book, metafetch.FetchIntent) error); ok {
+		r0 = returnFunc(ctx, id, book, intent)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -1028,11 +1034,12 @@ type MockMetadataFetchService_RunApplyPipelineRenameOnly_Call struct {
 //   - ctx context.Context
 //   - id string
 //   - book *store.Book
-func (_e *MockMetadataFetchService_Expecter) RunApplyPipelineRenameOnly(ctx any, id any, book any) *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call {
-	return &MockMetadataFetchService_RunApplyPipelineRenameOnly_Call{Call: _e.mock.On("RunApplyPipelineRenameOnly", ctx, id, book)}
+//   - intent metafetch.FetchIntent
+func (_e *MockMetadataFetchService_Expecter) RunApplyPipelineRenameOnly(ctx any, id any, book any, intent any) *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call {
+	return &MockMetadataFetchService_RunApplyPipelineRenameOnly_Call{Call: _e.mock.On("RunApplyPipelineRenameOnly", ctx, id, book, intent)}
 }
 
-func (_c *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call) Run(run func(ctx context.Context, id string, book *store.Book)) *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call {
+func (_c *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call) Run(run func(ctx context.Context, id string, book *store.Book, intent metafetch.FetchIntent)) *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -1046,10 +1053,15 @@ func (_c *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call) Run(run func
 		if args[2] != nil {
 			arg2 = args[2].(*store.Book)
 		}
+		var arg3 metafetch.FetchIntent
+		if args[3] != nil {
+			arg3 = args[3].(metafetch.FetchIntent)
+		}
 		run(
 			arg0,
 			arg1,
 			arg2,
+			arg3,
 		)
 	})
 	return _c
@@ -1060,7 +1072,7 @@ func (_c *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call) Return(err e
 	return _c
 }
 
-func (_c *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call) RunAndReturn(run func(ctx context.Context, id string, book *store.Book) error) *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call {
+func (_c *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call) RunAndReturn(run func(ctx context.Context, id string, book *store.Book, intent metafetch.FetchIntent) error) *MockMetadataFetchService_RunApplyPipelineRenameOnly_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1158,12 +1170,12 @@ func (_c *MockMetadataFetchService_SearchMetadataForBookWithOptions_Call) RunAnd
 }
 
 // WriteBackMetadataForBook provides a mock function for the type MockMetadataFetchService
-func (_mock *MockMetadataFetchService) WriteBackMetadataForBook(id string, segmentFilter ...[]string) (int, error) {
+func (_mock *MockMetadataFetchService) WriteBackMetadataForBook(id string, intent metafetch.FetchIntent, segmentFilter ...[]string) (int, error) {
 	var tmpRet mock.Arguments
 	if len(segmentFilter) > 0 {
-		tmpRet = _mock.Called(id, segmentFilter)
+		tmpRet = _mock.Called(id, intent, segmentFilter)
 	} else {
-		tmpRet = _mock.Called(id)
+		tmpRet = _mock.Called(id, intent)
 	}
 	ret := tmpRet
 
@@ -1173,16 +1185,16 @@ func (_mock *MockMetadataFetchService) WriteBackMetadataForBook(id string, segme
 
 	var r0 int
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, ...[]string) (int, error)); ok {
-		return returnFunc(id, segmentFilter...)
+	if returnFunc, ok := ret.Get(0).(func(string, metafetch.FetchIntent, ...[]string) (int, error)); ok {
+		return returnFunc(id, intent, segmentFilter...)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, ...[]string) int); ok {
-		r0 = returnFunc(id, segmentFilter...)
+	if returnFunc, ok := ret.Get(0).(func(string, metafetch.FetchIntent, ...[]string) int); ok {
+		r0 = returnFunc(id, intent, segmentFilter...)
 	} else {
 		r0 = ret.Get(0).(int)
 	}
-	if returnFunc, ok := ret.Get(1).(func(string, ...[]string) error); ok {
-		r1 = returnFunc(id, segmentFilter...)
+	if returnFunc, ok := ret.Get(1).(func(string, metafetch.FetchIntent, ...[]string) error); ok {
+		r1 = returnFunc(id, intent, segmentFilter...)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -1196,27 +1208,33 @@ type MockMetadataFetchService_WriteBackMetadataForBook_Call struct {
 
 // WriteBackMetadataForBook is a helper method to define mock.On call
 //   - id string
+//   - intent metafetch.FetchIntent
 //   - segmentFilter ...[]string
-func (_e *MockMetadataFetchService_Expecter) WriteBackMetadataForBook(id any, segmentFilter ...any) *MockMetadataFetchService_WriteBackMetadataForBook_Call {
+func (_e *MockMetadataFetchService_Expecter) WriteBackMetadataForBook(id any, intent any, segmentFilter ...any) *MockMetadataFetchService_WriteBackMetadataForBook_Call {
 	return &MockMetadataFetchService_WriteBackMetadataForBook_Call{Call: _e.mock.On("WriteBackMetadataForBook",
-		append([]any{id}, segmentFilter...)...)}
+		append([]any{id, intent}, segmentFilter...)...)}
 }
 
-func (_c *MockMetadataFetchService_WriteBackMetadataForBook_Call) Run(run func(id string, segmentFilter ...[]string)) *MockMetadataFetchService_WriteBackMetadataForBook_Call {
+func (_c *MockMetadataFetchService_WriteBackMetadataForBook_Call) Run(run func(id string, intent metafetch.FetchIntent, segmentFilter ...[]string)) *MockMetadataFetchService_WriteBackMetadataForBook_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 string
 		if args[0] != nil {
 			arg0 = args[0].(string)
 		}
-		var arg1 [][]string
-		var variadicArgs [][]string
-		if len(args) > 1 {
-			variadicArgs = args[1].([][]string)
+		var arg1 metafetch.FetchIntent
+		if args[1] != nil {
+			arg1 = args[1].(metafetch.FetchIntent)
 		}
-		arg1 = variadicArgs
+		var arg2 [][]string
+		var variadicArgs [][]string
+		if len(args) > 2 {
+			variadicArgs = args[2].([][]string)
+		}
+		arg2 = variadicArgs
 		run(
 			arg0,
-			arg1...,
+			arg1,
+			arg2...,
 		)
 	})
 	return _c
@@ -1227,7 +1245,7 @@ func (_c *MockMetadataFetchService_WriteBackMetadataForBook_Call) Return(n int, 
 	return _c
 }
 
-func (_c *MockMetadataFetchService_WriteBackMetadataForBook_Call) RunAndReturn(run func(id string, segmentFilter ...[]string) (int, error)) *MockMetadataFetchService_WriteBackMetadataForBook_Call {
+func (_c *MockMetadataFetchService_WriteBackMetadataForBook_Call) RunAndReturn(run func(id string, intent metafetch.FetchIntent, segmentFilter ...[]string) (int, error)) *MockMetadataFetchService_WriteBackMetadataForBook_Call {
 	_c.Call.Return(run)
 	return _c
 }

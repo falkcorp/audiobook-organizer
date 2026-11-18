@@ -1,7 +1,7 @@
 // file: internal/metafetch/writeback_protected_test.go
-// version: 2.4.3
+// version: 2.4.4
 // guid: 0d5a8e37-b6c2-4f91-8a3e-c47f1d209b65
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package metafetch
 
@@ -221,7 +221,7 @@ func TestResolveLibraryCopy_RefusesWhileImportPathListUnreadable(t *testing.T) {
 	if svc.protectedListLoadedIn(svc.readImportRoots()) {
 		t.Fatal("protectedListLoaded true while the import-path list is unreadable")
 	}
-	got, err := svc.resolveLibraryCopy("b1", book, createLibraryCopy, func() error { return nil })
+	got, err := svc.resolveLibraryCopy("b1", book, createLibraryCopy, Interactive, func() error { return nil })
 	if !errors.Is(err, tagger.ErrProtectedListNotLoaded) {
 		t.Fatalf("err = %v, want ErrProtectedListNotLoaded", err)
 	}
@@ -236,7 +236,7 @@ func TestResolveLibraryCopy_RefusesWhileImportPathListUnreadable(t *testing.T) {
 	if !svc.protectedListLoadedIn(svc.readImportRoots()) {
 		t.Error("protectedListLoaded false once the store reads again")
 	}
-	if _, err := svc.resolveLibraryCopy("b1", book, createLibraryCopy, func() error { return nil }); errors.Is(err, tagger.ErrProtectedListNotLoaded) {
+	if _, err := svc.resolveLibraryCopy("b1", book, createLibraryCopy, Interactive, func() error { return nil }); errors.Is(err, tagger.ErrProtectedListNotLoaded) {
 		t.Errorf("still refused once the store reads: %v", err)
 	}
 }
@@ -266,7 +266,7 @@ func TestResolveLibraryCopy_ReadsImportPathsOnce(t *testing.T) {
 	}
 	svc := NewService(mock)
 
-	got, err := svc.resolveLibraryCopy("b1", book, createLibraryCopy, func() error { return nil })
+	got, err := svc.resolveLibraryCopy("b1", book, createLibraryCopy, Interactive, func() error { return nil })
 	if !errors.Is(err, tagger.ErrProtectedListNotLoaded) {
 		t.Fatalf("err = %v, want ErrProtectedListNotLoaded", err)
 	}

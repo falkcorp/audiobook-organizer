@@ -1,5 +1,5 @@
 // file: internal/server/file_ops_handlers_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2c1f8b4d-9e3a-4f50-a7d6-8b1c5e0f9a23
 
 package server
@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
 func TestHandleListPendingFileOps_NoPool(t *testing.T) {
@@ -50,8 +52,8 @@ func TestHandleListPendingFileOps_PopulatedPool(t *testing.T) {
 		ch:       make(chan fileIOJobEntry, 8),
 		overflow: make(chan struct{}, 1),
 	}
-	pool.SubmitTyped("book-A", "apply_metadata", func() {})
-	pool.SubmitTyped("book-B", "tag_writeback", func() {})
+	pool.SubmitTyped("book-A", "apply_metadata", metafetch.Unattended, func() {})
+	pool.SubmitTyped("book-B", "tag_writeback", metafetch.Unattended, func() {})
 
 	srv := &Server{router: gin.New(), fileIOPool: pool}
 	srv.router.GET("/api/v1/file-ops/pending", srv.handleListPendingFileOps)
@@ -96,9 +98,9 @@ func TestHandleListPendingFileOps_SortedByStartedAt(t *testing.T) {
 		overflow: make(chan struct{}, 1),
 	}
 	// Submit A first — should sort earlier than B since started_at is set in SubmitTyped.
-	pool.SubmitTyped("first", "apply_metadata", func() {})
-	pool.SubmitTyped("second", "apply_metadata", func() {})
-	pool.SubmitTyped("third", "apply_metadata", func() {})
+	pool.SubmitTyped("first", "apply_metadata", metafetch.Unattended, func() {})
+	pool.SubmitTyped("second", "apply_metadata", metafetch.Unattended, func() {})
+	pool.SubmitTyped("third", "apply_metadata", metafetch.Unattended, func() {})
 
 	srv := &Server{router: gin.New(), fileIOPool: pool}
 	srv.router.GET("/api/v1/file-ops/pending", srv.handleListPendingFileOps)

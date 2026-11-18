@@ -1,7 +1,7 @@
 // file: internal/server/file_io_pool_shutdown_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6afc6fa0-a6da-44ed-a974-2584e955bc4d
-// last-edited: 2026-09-07
+// last-edited: 2026-11-18
 //
 // Shutdown-safety tests for FileIOPool. Both tests are written to FAIL against
 // the pre-2026-09-07 implementation, which guarded submission with a bare
@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
 // TestFileIOPool_StopJoinsOverflowGoroutines pins the invariant stated in
@@ -35,7 +37,7 @@ func TestFileIOPool_StopJoinsOverflowGoroutines(t *testing.T) {
 	started := make(chan struct{}, workers)
 	release := make(chan struct{})
 	for i := range workers {
-		p.SubmitTyped(fmt.Sprintf("blocker-%d", i), "hold", func() {
+		p.SubmitTyped(fmt.Sprintf("blocker-%d", i), "hold", metafetch.Unattended, func() {
 			started <- struct{}{}
 			<-release
 		})
@@ -47,14 +49,14 @@ func TestFileIOPool_StopJoinsOverflowGoroutines(t *testing.T) {
 	// Fill the 500-slot buffer. With both workers parked these all sit in the
 	// channel, so the next submit has nowhere to go but the overflow path.
 	for i := range 500 {
-		p.SubmitTyped(fmt.Sprintf("filler-%d", i), "noop", func() {})
+		p.SubmitTyped(fmt.Sprintf("filler-%d", i), "noop", metafetch.Unattended, func() {})
 	}
 
 	// The overflow semaphore holds `workers` slots, so this many go down the
 	// overflow path without any of them blocking on it.
 	var finished atomic.Int64
 	for i := range workers {
-		p.SubmitTyped(fmt.Sprintf("overflow-%d", i), "slow", func() {
+		p.SubmitTyped(fmt.Sprintf("overflow-%d", i), "slow", metafetch.Unattended, func() {
 			// Long enough that a Stop which does not join will win the race
 			// deterministically, short enough not to slow the suite.
 			time.Sleep(100 * time.Millisecond)
@@ -97,7 +99,7 @@ func TestFileIOPool_SubmitDuringStop_DoesNotPanic(t *testing.T) {
 		for s := range submitters {
 			wg.Go(func() {
 				for j := 0; !stop.Load(); j++ {
-					p.SubmitTyped(fmt.Sprintf("b-%d-%d", s, j), "apply_metadata", func() {})
+					p.SubmitTyped(fmt.Sprintf("b-%d-%d", s, j), "apply_metadata", metafetch.Unattended, func() {})
 				}
 			})
 		}

@@ -122,16 +122,16 @@ func (_c *MockMetadataCacheFetchService_ApplyMetadataCandidate_Call) RunAndRetur
 }
 
 // ApplyMetadataFileIO provides a mock function for the type MockMetadataCacheFetchService
-func (_mock *MockMetadataCacheFetchService) ApplyMetadataFileIO(ctx context.Context, id string) error {
-	ret := _mock.Called(ctx, id)
+func (_mock *MockMetadataCacheFetchService) ApplyMetadataFileIO(ctx context.Context, id string, intent metafetch.FetchIntent) error {
+	ret := _mock.Called(ctx, id, intent)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ApplyMetadataFileIO")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) error); ok {
-		r0 = returnFunc(ctx, id)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, metafetch.FetchIntent) error); ok {
+		r0 = returnFunc(ctx, id, intent)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -146,11 +146,12 @@ type MockMetadataCacheFetchService_ApplyMetadataFileIO_Call struct {
 // ApplyMetadataFileIO is a helper method to define mock.On call
 //   - ctx context.Context
 //   - id string
-func (_e *MockMetadataCacheFetchService_Expecter) ApplyMetadataFileIO(ctx any, id any) *MockMetadataCacheFetchService_ApplyMetadataFileIO_Call {
-	return &MockMetadataCacheFetchService_ApplyMetadataFileIO_Call{Call: _e.mock.On("ApplyMetadataFileIO", ctx, id)}
+//   - intent metafetch.FetchIntent
+func (_e *MockMetadataCacheFetchService_Expecter) ApplyMetadataFileIO(ctx any, id any, intent any) *MockMetadataCacheFetchService_ApplyMetadataFileIO_Call {
+	return &MockMetadataCacheFetchService_ApplyMetadataFileIO_Call{Call: _e.mock.On("ApplyMetadataFileIO", ctx, id, intent)}
 }
 
-func (_c *MockMetadataCacheFetchService_ApplyMetadataFileIO_Call) Run(run func(ctx context.Context, id string)) *MockMetadataCacheFetchService_ApplyMetadataFileIO_Call {
+func (_c *MockMetadataCacheFetchService_ApplyMetadataFileIO_Call) Run(run func(ctx context.Context, id string, intent metafetch.FetchIntent)) *MockMetadataCacheFetchService_ApplyMetadataFileIO_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -160,9 +161,14 @@ func (_c *MockMetadataCacheFetchService_ApplyMetadataFileIO_Call) Run(run func(c
 		if args[1] != nil {
 			arg1 = args[1].(string)
 		}
+		var arg2 metafetch.FetchIntent
+		if args[2] != nil {
+			arg2 = args[2].(metafetch.FetchIntent)
+		}
 		run(
 			arg0,
 			arg1,
+			arg2,
 		)
 	})
 	return _c
@@ -173,7 +179,7 @@ func (_c *MockMetadataCacheFetchService_ApplyMetadataFileIO_Call) Return(err err
 	return _c
 }
 
-func (_c *MockMetadataCacheFetchService_ApplyMetadataFileIO_Call) RunAndReturn(run func(ctx context.Context, id string) error) *MockMetadataCacheFetchService_ApplyMetadataFileIO_Call {
+func (_c *MockMetadataCacheFetchService_ApplyMetadataFileIO_Call) RunAndReturn(run func(ctx context.Context, id string, intent metafetch.FetchIntent) error) *MockMetadataCacheFetchService_ApplyMetadataFileIO_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -360,12 +366,12 @@ func (_c *MockMetadataCacheFetchService_ListCachedSummaries_Call) RunAndReturn(r
 }
 
 // WriteBackMetadataForBook provides a mock function for the type MockMetadataCacheFetchService
-func (_mock *MockMetadataCacheFetchService) WriteBackMetadataForBook(id string, segmentFilter ...[]string) (int, error) {
+func (_mock *MockMetadataCacheFetchService) WriteBackMetadataForBook(id string, intent metafetch.FetchIntent, segmentFilter ...[]string) (int, error) {
 	var tmpRet mock.Arguments
 	if len(segmentFilter) > 0 {
-		tmpRet = _mock.Called(id, segmentFilter)
+		tmpRet = _mock.Called(id, intent, segmentFilter)
 	} else {
-		tmpRet = _mock.Called(id)
+		tmpRet = _mock.Called(id, intent)
 	}
 	ret := tmpRet
 
@@ -375,16 +381,16 @@ func (_mock *MockMetadataCacheFetchService) WriteBackMetadataForBook(id string, 
 
 	var r0 int
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, ...[]string) (int, error)); ok {
-		return returnFunc(id, segmentFilter...)
+	if returnFunc, ok := ret.Get(0).(func(string, metafetch.FetchIntent, ...[]string) (int, error)); ok {
+		return returnFunc(id, intent, segmentFilter...)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, ...[]string) int); ok {
-		r0 = returnFunc(id, segmentFilter...)
+	if returnFunc, ok := ret.Get(0).(func(string, metafetch.FetchIntent, ...[]string) int); ok {
+		r0 = returnFunc(id, intent, segmentFilter...)
 	} else {
 		r0 = ret.Get(0).(int)
 	}
-	if returnFunc, ok := ret.Get(1).(func(string, ...[]string) error); ok {
-		r1 = returnFunc(id, segmentFilter...)
+	if returnFunc, ok := ret.Get(1).(func(string, metafetch.FetchIntent, ...[]string) error); ok {
+		r1 = returnFunc(id, intent, segmentFilter...)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -398,27 +404,33 @@ type MockMetadataCacheFetchService_WriteBackMetadataForBook_Call struct {
 
 // WriteBackMetadataForBook is a helper method to define mock.On call
 //   - id string
+//   - intent metafetch.FetchIntent
 //   - segmentFilter ...[]string
-func (_e *MockMetadataCacheFetchService_Expecter) WriteBackMetadataForBook(id any, segmentFilter ...any) *MockMetadataCacheFetchService_WriteBackMetadataForBook_Call {
+func (_e *MockMetadataCacheFetchService_Expecter) WriteBackMetadataForBook(id any, intent any, segmentFilter ...any) *MockMetadataCacheFetchService_WriteBackMetadataForBook_Call {
 	return &MockMetadataCacheFetchService_WriteBackMetadataForBook_Call{Call: _e.mock.On("WriteBackMetadataForBook",
-		append([]any{id}, segmentFilter...)...)}
+		append([]any{id, intent}, segmentFilter...)...)}
 }
 
-func (_c *MockMetadataCacheFetchService_WriteBackMetadataForBook_Call) Run(run func(id string, segmentFilter ...[]string)) *MockMetadataCacheFetchService_WriteBackMetadataForBook_Call {
+func (_c *MockMetadataCacheFetchService_WriteBackMetadataForBook_Call) Run(run func(id string, intent metafetch.FetchIntent, segmentFilter ...[]string)) *MockMetadataCacheFetchService_WriteBackMetadataForBook_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 string
 		if args[0] != nil {
 			arg0 = args[0].(string)
 		}
-		var arg1 [][]string
-		var variadicArgs [][]string
-		if len(args) > 1 {
-			variadicArgs = args[1].([][]string)
+		var arg1 metafetch.FetchIntent
+		if args[1] != nil {
+			arg1 = args[1].(metafetch.FetchIntent)
 		}
-		arg1 = variadicArgs
+		var arg2 [][]string
+		var variadicArgs [][]string
+		if len(args) > 2 {
+			variadicArgs = args[2].([][]string)
+		}
+		arg2 = variadicArgs
 		run(
 			arg0,
-			arg1...,
+			arg1,
+			arg2...,
 		)
 	})
 	return _c
@@ -429,7 +441,7 @@ func (_c *MockMetadataCacheFetchService_WriteBackMetadataForBook_Call) Return(n 
 	return _c
 }
 
-func (_c *MockMetadataCacheFetchService_WriteBackMetadataForBook_Call) RunAndReturn(run func(id string, segmentFilter ...[]string) (int, error)) *MockMetadataCacheFetchService_WriteBackMetadataForBook_Call {
+func (_c *MockMetadataCacheFetchService_WriteBackMetadataForBook_Call) RunAndReturn(run func(id string, intent metafetch.FetchIntent, segmentFilter ...[]string) (int, error)) *MockMetadataCacheFetchService_WriteBackMetadataForBook_Call {
 	_c.Call.Return(run)
 	return _c
 }

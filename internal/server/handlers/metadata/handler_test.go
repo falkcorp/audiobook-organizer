@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.21.4
+// version: 1.21.5
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 // Tests for the metadata-domain handlers. The store / metadata-fetch-service /
 // write-back-enqueuer / operations-registry / file-io-pool deps are generated
@@ -406,7 +406,7 @@ func TestApplyAudiobookMetadata(t *testing.T) {
 	d.mfs.EXPECT().ApplyMetadataCandidate("b1", mock.Anything, mock.Anything).
 		Return(&metafetch.FetchMetadataResponse{Message: "applied", Source: "audible", Book: &database.Book{ID: "b1"}}, nil)
 	// Background pool submit fires synchronously in test (we don't run fn).
-	d.pool.EXPECT().Submit("b1", mock.Anything).Return(true)
+	d.pool.EXPECT().Submit("b1", metafetch.Interactive, mock.Anything).Return(true)
 	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "T"}, nil)
 	w := doReq(h.ApplyAudiobookMetadata, http.MethodPost, "/audiobooks/b1/apply-metadata",
 		map[string]any{"candidate": map[string]any{"title": "X"}, "fields": []string{"title"}}, idParam("b1"))
@@ -566,7 +566,7 @@ func TestPruneBookCOWVersions_BadKeepCount(t *testing.T) {
 func TestWriteBackAudiobookMetadata(t *testing.T) {
 	h, d := newHandler(t)
 	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "T"}, nil)
-	d.mfs.EXPECT().WriteBackMetadataForBook("b1").Return(2, nil)
+	d.mfs.EXPECT().WriteBackMetadataForBook("b1", metafetch.Interactive).Return(2, nil)
 	w := doReq(h.WriteBackAudiobookMetadata, http.MethodPost, "/audiobooks/b1/write-back", nil, idParam("b1"))
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())

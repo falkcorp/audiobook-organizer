@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.25.0
+// version: 1.25.1
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package metafetch
 
@@ -534,11 +534,15 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string, intent 
 			pendingCover := meta.CoverURL
 			writeBack := config.AppConfig.WriteBackMetadata
 			if sched := mfs.fileWorkScheduler; sched != nil {
-				sched(id, func() {
+				// The job carries the fetch's own intent: the Fetch button
+				// (Interactive) writes a retired book's files like any other's;
+				// an Unattended fetch never reaches here for a retired book
+				// (the fetch refused it), and the job refuses one retired after.
+				sched(id, intent, func() {
 					// ctx reaches the pool job for its values only: a bulk
 					// caller (the iTunes import's enrichment) wraps it with
 					// tagger.WithoutBackup; the per-book Fetch button does not.
-					if err := mfs.FinishAutoFetchFileWork(ctx, id, pendingCover, writeBack); err != nil {
+					if err := mfs.FinishAutoFetchFileWork(ctx, id, pendingCover, writeBack, intent); err != nil {
 						slog.Warn("auto-fetch: file-side apply failed; the metadata is in the database", "id", logger.SanitizeLogValue(id), "error", logger.SanitizeLogValue(err.Error()))
 					}
 				})

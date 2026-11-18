@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.23.1
+// version: 1.23.2
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 //
 // Regression tests for applying ONE book's cached metadata candidate.
 //
@@ -31,6 +31,7 @@ type finishCall struct {
 	cover     string
 	fileIO    bool
 	writeTags bool
+	intent    metafetch.FetchIntent
 }
 
 // fakeApplySvc records which of the file-side calls were made.
@@ -251,15 +252,15 @@ func TestApplyCachedCandidate_HistoryAndWriteBackFailuresBothSurface(t *testing.
 	}
 }
 
-func (f *fakeApplySvc) FinishApplyFileWork(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error) error {
+func (f *fakeApplySvc) FinishApplyFileWork(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, intent metafetch.FetchIntent, checkpoint func() error) error {
 	f.ctxs = append(f.ctxs, ctx)
-	f.finishCalls = append(f.finishCalls, finishCall{id: id, cover: pendingCoverURL, fileIO: fileIO, writeTags: writeTags})
+	f.finishCalls = append(f.finishCalls, finishCall{id: id, cover: pendingCoverURL, fileIO: fileIO, writeTags: writeTags, intent: intent})
 	f.checkpoints = append(f.checkpoints, checkpoint)
 	return f.finishErr
 }
 
-func (f *fakeApplySvc) FinishApplyFileWorkTimed(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error, _ *metafetch.ApplyPhaseTimings) error {
-	return f.FinishApplyFileWork(ctx, id, pendingCoverURL, fileIO, writeTags, checkpoint)
+func (f *fakeApplySvc) FinishApplyFileWorkTimed(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, intent metafetch.FetchIntent, checkpoint func() error, _ *metafetch.ApplyPhaseTimings) error {
+	return f.FinishApplyFileWork(ctx, id, pendingCoverURL, fileIO, writeTags, intent, checkpoint)
 }
 
 // The metadata.batch-apply-cached op holds a scan stand-down, and its check
@@ -306,7 +307,7 @@ func TestApplyCachedCandidate_WritesFilesForAppliedBook(t *testing.T) {
 	// itself guarantees the tags are written once (TestFinishApplyFileWork_*
 	// in internal/metafetch); this path used to call ApplyMetadataFileIO and
 	// then WriteBackMetadataForBook, which tagged twice.
-	want := []finishCall{{id: "b1", fileIO: true, writeTags: true}}
+	want := []finishCall{{id: "b1", fileIO: true, writeTags: true, intent: metafetch.Unattended}}
 	if !reflect.DeepEqual(svc.finishCalls, want) {
 		t.Errorf("file work = %+v, want %+v", svc.finishCalls, want)
 	}
@@ -324,7 +325,7 @@ func TestApplyCachedCandidate_WriteBackFalseSuppressesFileIO(t *testing.T) {
 	}
 	// The only file-side call allowed is the cover download: no file I/O,
 	// no tags.
-	want := []finishCall{{id: "b1", fileIO: false, writeTags: false}}
+	want := []finishCall{{id: "b1", fileIO: false, writeTags: false, intent: metafetch.Unattended}}
 	if !reflect.DeepEqual(svc.finishCalls, want) {
 		t.Errorf("file work ran despite write_back=false: %+v, want %+v", svc.finishCalls, want)
 	}

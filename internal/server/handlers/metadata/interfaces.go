@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.31.0
+// version: 1.31.1
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 // Narrow dependency interfaces for the metadata-domain HTTP handlers (the 19
 // per-book + library metadata endpoints extracted from the server package's
@@ -188,8 +188,11 @@ type MetadataApplier interface {
 	// download, file I/O, and a tag write that happens exactly once.
 	// checkpoint, when non-nil, is the caller's scan stand-down check, re-run
 	// before each file-writing step; nil means the caller holds none.
-	FinishApplyFileWork(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error) error
-	RunApplyPipelineRenameOnly(ctx context.Context, id string, book *database.Book) error
+	// intent is metafetch.Interactive for the single-book dialog (the person's
+	// own action, which writes a retired book's files) and Unattended for
+	// everything else.
+	FinishApplyFileWork(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, intent metafetch.FetchIntent, checkpoint func() error) error
+	RunApplyPipelineRenameOnly(ctx context.Context, id string, book *database.Book, intent metafetch.FetchIntent) error
 	// RenameOnlyPreflight reports, before RunApplyPipelineRenameOnly moves
 	// anything, that the rename is known to fail (wrapping
 	// metafetch.ErrApplyFileWorkWouldFail).
@@ -198,7 +201,9 @@ type MetadataApplier interface {
 
 // MetadataWriteBacker writes metadata back to the files on disk.
 type MetadataWriteBacker interface {
-	WriteBackMetadataForBook(id string, segmentFilter ...[]string) (int, error)
+	// intent is metafetch.Interactive for the single-book write-back (the
+	// person's own action) and Unattended for a job.
+	WriteBackMetadataForBook(id string, intent metafetch.FetchIntent, segmentFilter ...[]string) (int, error)
 }
 
 // MetadataMatchMarker marks a book as having no acceptable match.
@@ -247,5 +252,7 @@ type OperationsRegistry interface {
 // I/O off the request path. Only Submit is used; the in-method `pool != nil`
 // guard is preserved by the controller passing a typed-nil-guarded value.
 type FileIOPool interface {
-	Submit(bookID string, fn func()) bool
+	// intent is persisted with the pool's recovery record: see
+	// server.FileIOJob.Intent.
+	Submit(bookID string, intent metafetch.FetchIntent, fn func()) bool
 }
