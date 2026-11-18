@@ -1,7 +1,7 @@
 <!-- file: deploy/README.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 67014893-53d8-4968-8ba4-2208288e61f2 -->
-<!-- last-edited: 2026-09-09 -->
+<!-- last-edited: 2026-11-18 -->
 
 # Audiobook Organizer - Deployment Files
 
@@ -12,7 +12,7 @@ Service configuration files for running audiobook-organizer as a background serv
 ### macOS (launchd)
 
 ```bash
-# 1. Edit the plist to set your paths (USERNAME, AUDIOBOOK_ROOT_DIR, DATABASE_PATH)
+# 1. Edit the plist to set your paths (USERNAME, ABO_CORE_STORAGE_PATH)
 nano deploy/launchd/com.jdfalk.audiobook-organizer.plist
 
 # 2. Ensure binary is installed
@@ -79,19 +79,19 @@ sudo setfacl -R -m u:audiobook:rX /path/to/audiobooks
 
 Both service files can be configured through environment variables:
 
-- `AUDIOBOOK_ROOT_DIR`: Path to audiobook library (e.g., `/path/to/audiobooks`)
-- `DATABASE_PATH`: Path to database file (e.g., `/var/lib/audiobook-organizer/audiobooks.pebble`)
+- `ABO_CORE_STORAGE_PATH`: Path to database file (e.g., `/var/lib/audiobook-organizer/audiobooks.pebble`)
+- Library root: the `core.library.roots` key, set in Settings (no environment variable in the shipped files names it)
 - Port: Default is `8484` (configurable via command-line flags)
 
 Edit the respective service file before installation to set these values.
 
 ### The database path is authoritative for more than the database
 
-`DATABASE_PATH` (and the `--db` flag) sets where several other things land,
+`ABO_CORE_STORAGE_PATH` (and the `--db` flag) sets where several other things land,
 because they are resolved *beside* the database rather than configured
 separately:
 
-| Also lives in `dirname($DATABASE_PATH)` | Why it matters |
+| Also lives in `dirname($ABO_CORE_STORAGE_PATH)` | Why it matters |
 |---|---|
 | `certs/` | TLS key material, if the service is pointed at certs there. |
 | `library.bleve` | The search index. A relocation leaves the populated index behind and builds an empty one, so search silently returns nothing. |
@@ -110,7 +110,7 @@ regardless of where the database is:
 | `.bootstrap-token` | The documented emergency-access path, including the `sudoers` rule that reads it. Both name a fixed path; a moving target breaks recovery exactly when recovery is needed. |
 | `.readonly-key` | Same reasoning, same directory. |
 
-Override with `ABK_STATE_DIR` — for tests and for containers that cannot write
+Override with `ABO_CORE_PATHS_STATE_DIR` — for tests and for containers that cannot write
 `/var/lib`. If the default is not creatable and no override is set, the app falls
 back to the database directory (the pre-2026-09-09 behaviour) and logs a warning
 naming both paths, so `serve` still runs on a developer machine.
@@ -159,7 +159,7 @@ location not worked, so a live service is the proof.
 
 The script never restarts the service: a restart resumes the interrupted library scan.
 
-As of 2026-09-09 an explicitly supplied `DATABASE_PATH` or `--db` **overrides**
+As of 2026-09-09 an explicitly supplied `ABO_CORE_STORAGE_PATH` or `--db` **overrides**
 the path stored in the config blob (PR #3168). Before that the stored value won,
 so relocating the database required editing the database you were moving.
 
