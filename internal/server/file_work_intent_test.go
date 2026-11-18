@@ -1,5 +1,5 @@
 // file: internal/server/file_work_intent_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0d7b3c52-9e41-4a68-b1f5-7c2e8a4d6f93
 // last-edited: 2026-11-18
 
@@ -516,6 +516,47 @@ func TestBulkWriteBack_SkipsARetiredBookBeforeItsRename(t *testing.T) {
 		}
 	}
 	assert.Equal(t, "bulk write-back complete: 1 written, 0 failed, 1 skipped out of 2", summary)
+}
+
+// The retired check runs BEFORE the rename preflight, not after it: a retired
+// book whose rename the preflight would refuse (an unplannable file-name verb)
+// is still just skipped, not failed. Without the early check the preflight's
+// refusal came first and the book was counted failed. The live row is the
+// control: the same pattern makes the preflight refuse it, counted failed.
+func TestBulkWriteBack_RetiredBookIsSkippedEvenWhenItsRenameWouldBeRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		retired bool
+		want    string
+	}{
+		{"retired", true, "bulk write-back complete: 0 written, 0 failed, 1 skipped out of 1"},
+		{"live_control", false, "bulk write-back complete: 0 written, 1 failed, 0 skipped out of 1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, cleanup := setupTestServer(t)
+			defer cleanup()
+			root := t.TempDir()
+			withRenameConfig(t, root)
+			config.Mutate(func(c *config.Config) { c.FileNamingPattern = "{title} - {track:x}" })
+			intents := captureWriteBackIntents(t)
+			id, files := renameableBook(t, s, root, "Year One", tc.retired)
+
+			rec := &resumeRecorder{opID: "op-bulk-preflight"}
+			require.NoError(t, s.runBulkWriteBack(context.Background(), "op-bulk-preflight", []string{id}, true, 0, registryProgressAdapter{r: rec}, nil))
+
+			rec.mu.Lock()
+			defer rec.mu.Unlock()
+			var summary string
+			for _, l := range rec.logs {
+				if strings.HasPrefix(l, "bulk write-back complete") {
+					summary = l
+				}
+			}
+			assert.Equal(t, tc.want, summary)
+			assert.False(t, anyMissing(files), "no file moved")
+			assert.Empty(t, intents.all(), "no tag write was reached")
+		})
+	}
 }
 
 // A book retired while the job waited for the file-I/O gate is skipped too:
