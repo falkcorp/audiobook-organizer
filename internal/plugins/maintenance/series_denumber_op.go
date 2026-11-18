@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_op.go
-// version: 5.4.2
+// version: 5.4.3
 // guid: 3f0b6c84-52d1-4a97-9e35-c8b71d0af426
 // last-edited: 2026-11-18
 
@@ -164,11 +164,14 @@ func (p *Plugin) seriesDenumberDef() sdk.OperationDef {
 		// runs. It does NOT cover maintenance.cleanup-series or any other
 		// maintenance job: those register with no Writes
 		// (internal/server/maintenance_job_op.go), so the gate cannot see them in
-		// either direction. cleanup-series is only partly protected on its own side:
-		// its book writes (the unlink and the re-home) are compare-and-set on the
-		// series being cleaned, so a book this op has just moved is skipped, not
-		// undone; its series delete is not (see the todo.d fragment on maintenance
-		// job ops), so do not run both at once. The set is static
+		// either direction. cleanup-series guards its own side: its book writes
+		// (the unlink and the re-home) are compare-and-set on the series being
+		// cleaned, so a book this op has just moved is skipped, not undone, and its
+		// series delete is the store's check-and-delete (DeleteSeriesIfUnreferenced),
+		// so a series this op has just linked a book into is kept, not deleted. The
+		// two can still reach the same series from reads taken at different times,
+		// and the gate cannot hold one back for the other (see the todo.d fragment
+		// on maintenance job ops), so do not run both at once. The set is static
 		// per definition, so a dry run holds it too (as credits-backfill's does); it
 		// is read-only and short.
 		Writes: []sdk.Resource{sdk.ResBooks, sdk.ResSeries},

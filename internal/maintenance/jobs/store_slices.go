@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/store_slices.go
-// version: 1.11.1
+// version: 1.12.0
 // guid: 3a142df0-9e5d-4ead-9db6-bb75dbed428f
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package jobs
 
@@ -136,11 +136,23 @@ type bookSoftDeleter interface {
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 }
 
-// seriesUnlinker moves books off a series (under each book's write lock) and
-// then removes the series row.
-type seriesUnlinker interface {
+// seriesBookModifier is the one book write the series cleanup makes: a
+// read-modify-write of a single row under that book's write lock.
+type seriesBookModifier interface {
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
-	DeleteSeries(id int) error
+}
+
+// seriesUnlinker moves books off a series (under each book's write lock) and
+// then removes the series row, but only if no book names it at that moment.
+//
+// It carries database.SeriesUnreferencedDeleter and deliberately NOT a plain
+// DeleteSeries: the job decides to delete from membership and reference counts
+// it read at the start of the run, and a book linked into the series after that
+// read would be left naming a deleted series. The conditional delete counts and
+// deletes under every book write lock (CLEANUP-SERIES-DELETE-NOT-CONDITIONAL).
+type seriesUnlinker interface {
+	seriesBookModifier
+	database.SeriesUnreferencedDeleter
 }
 
 // seriesMerger is what csMergeSeriesGroup writes through. It deliberately has
@@ -148,10 +160,21 @@ type seriesUnlinker interface {
 // once per job via database.SeriesMembershipAllVersions and passes it in, so
 // a per-series GetBooksBySeriesIDAllVersions inside the merge loop -- a full
 // Pebble scan per series once memdb is tainted -- is a compile error here
-// (SERIES-MERGE-PERSERIES-SCAN-COST).
+// (SERIES-MERGE-PERSERIES-SCAN-COST). It has no plain DeleteSeries either, for
+// the reason seriesUnlinker does not.
 type seriesMerger interface {
-	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
-	DeleteSeries(id int) error
+	seriesBookModifier
+	database.SeriesUnreferencedDeleter
+}
+
+// cleanupSeriesStore is what the cleanup-series job hands its two helpers: the
+// job's store for the book writes and the conditional delete the store resolves
+// as a capability (database.SeriesUnreferencedDeleter is not on database.Store,
+// so maintenance.JobStore cannot carry it). Run builds it once, before any
+// write, and refuses to run for real without the capability.
+type cleanupSeriesStore struct {
+	seriesBookModifier
+	database.SeriesUnreferencedDeleter
 }
 
 // Compile-time proof that the real store satisfies every slice above. Without
@@ -173,4 +196,6 @@ var (
 	_ bookSoftDeleter         = (*database.PebbleStore)(nil)
 	_ seriesUnlinker          = (*database.PebbleStore)(nil)
 	_ seriesMerger            = (*database.PebbleStore)(nil)
+	_ seriesUnlinker          = cleanupSeriesStore{}
+	_ seriesMerger            = cleanupSeriesStore{}
 )

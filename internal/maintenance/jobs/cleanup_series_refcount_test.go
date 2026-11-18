@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/cleanup_series_refcount_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 2f871254-fb7f-475b-a668-ec240f1b0ef3
 // last-edited: 2026-11-18
 
@@ -78,9 +78,12 @@ func (f *csFakeMerger) GetBooksBySeriesIDAllVersions(seriesID int) ([]database.B
 	return f.visible[seriesID], nil
 }
 
-func (f *csFakeMerger) DeleteSeries(id int) error {
+// DeleteSeriesIfUnreferenced is the only delete the seriesMerger slice carries.
+// These fixtures have no writer that links a book in late, so every delete is of
+// an unreferenced series; the stateful csCondStore covers the refusal.
+func (f *csFakeMerger) DeleteSeriesIfUnreferenced(id int, _ string, _ *int) (bool, error) {
 	f.deleted = append(f.deleted, id)
-	return nil
+	return true, nil
 }
 
 func TestCsMergeSeriesGroup_KeepsSeriesRowWhenHiddenBooksStillReferenceIt(t *testing.T) {
@@ -89,10 +92,11 @@ func TestCsMergeSeriesGroup_KeepsSeriesRowWhenHiddenBooksStillReferenceIt(t *tes
 	// cannot see them, so deleting the row would strand them.
 	f := &csFakeMerger{visible: map[int][]database.BookCore{7: {{ID: "VISIBLE"}}}}
 
-	merged, refused, _, err := csMergeSeriesGroup(f, 1, []int{7}, map[int]int{7: 4}, database.SeriesBooksMap(f.visible))
+	res, err := csMergeSeriesGroup(f, 1, csSeries(7), map[int]int{7: 4}, database.SeriesBooksMap(f.visible))
 	if err != nil {
 		t.Fatalf("csMergeSeriesGroup returned an error, want a clean refusal: %v", err)
 	}
+	merged, refused := res.Merged, res.Refused
 	if merged != 0 || refused != 1 {
 		t.Fatalf("a refusal must be reported to the caller as (merged=0, refused=1), got (%d, %d) — "+
 			"the caller counts merged>0 as an applied group, so a mis-report makes the refusal invisible",
@@ -117,10 +121,11 @@ func TestCsMergeSeriesGroup_StillDeletesAGenuinelyUnreferencedSeries(t *testing.
 	// the test above while silently turning the job into a no-op.
 	f := &csFakeMerger{visible: map[int][]database.BookCore{7: {{ID: "ONLYBOOK"}}}}
 
-	merged, refused, _, err := csMergeSeriesGroup(f, 1, []int{7}, map[int]int{7: 1}, database.SeriesBooksMap(f.visible))
+	res, err := csMergeSeriesGroup(f, 1, csSeries(7), map[int]int{7: 1}, database.SeriesBooksMap(f.visible))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	merged, refused := res.Merged, res.Refused
 	if merged != 1 || refused != 0 {
 		t.Fatalf("a real merge must report (merged=1, refused=0), got (%d, %d)", merged, refused)
 	}
@@ -143,10 +148,11 @@ func TestCsMergeSeriesGroup_AbsentFromRefCountsMeansUnreferenced(t *testing.T) {
 	// would make the job stop deleting the orphans it exists to remove.
 	f := &csFakeMerger{visible: map[int][]database.BookCore{7: nil}}
 
-	merged, refused, _, err := csMergeSeriesGroup(f, 1, []int{7}, map[int]int{}, database.SeriesBooksMap(f.visible))
+	res, err := csMergeSeriesGroup(f, 1, csSeries(7), map[int]int{}, database.SeriesBooksMap(f.visible))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	merged, refused := res.Merged, res.Refused
 	if merged != 1 || refused != 0 {
 		t.Fatalf("an absent key means unreferenced, so this must report (merged=1, refused=0), got (%d, %d)", merged, refused)
 	}
@@ -170,10 +176,11 @@ func TestCsMergeSeriesGroup_RefusesWhenARowCannotBeHydrated(t *testing.T) {
 		unhydratable: map[string]bool{"GHOST": true},
 	}
 
-	merged, refused, _, err := csMergeSeriesGroup(f, 1, []int{7}, map[int]int{7: 2}, database.SeriesBooksMap(f.visible))
+	res, err := csMergeSeriesGroup(f, 1, csSeries(7), map[int]int{7: 2}, database.SeriesBooksMap(f.visible))
 	if err != nil {
 		t.Fatalf("an unhydratable row must be a clean refusal, not an error: %v", err)
 	}
+	merged, refused := res.Merged, res.Refused
 	if merged != 0 || refused != 1 {
 		t.Fatalf("want (merged=0, refused=1), got (%d, %d)", merged, refused)
 	}

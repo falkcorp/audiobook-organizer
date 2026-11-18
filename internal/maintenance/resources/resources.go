@@ -1,7 +1,7 @@
 // file: internal/maintenance/resources/resources.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 511262bb-c287-4138-a7ee-7566c9543e3b
-// last-edited: 2026-11-16
+// last-edited: 2026-11-18
 
 // Package resources is the ONE method-to-resource table of the native
 // maintenance kinds: for a store (or writer) method name, everything that method
@@ -191,6 +191,11 @@ func Table() map[string][]ops.Resource {
 		// tombstone chain pass that calls it declares authors through
 		// ResolveTombstoneChains.
 		"InvalidateAuthorsCache": {},
+		// DeleteSeriesIfUnreferenced is the same delete as DeleteSeries (series:<id>
+		// and its series:name: index row) behind a count of the book rows that name
+		// the series, taken under every book write lock. It takes those locks and
+		// writes no book row: the books resource is not in its row.
+		"DeleteSeriesIfUnreferenced": {ops.ResSeries},
 		// --- book_file rows -----------------------------------------------------
 		"CreateBookFile":          fileRow,
 		"UpdateBookFile":          fileRow,

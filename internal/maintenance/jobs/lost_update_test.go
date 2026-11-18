@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/lost_update_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3b88da9b-5958-44c8-b57a-183be0ee6123
 // last-edited: 2026-11-18
 
@@ -155,12 +155,12 @@ func TestCsMergeSeriesGroup_DoesNotRevertConcurrentColumns(t *testing.T) {
 	from := 7
 	store, rows := newLostUpdateStore(database.Book{ID: "m1", Title: "Merged", SeriesID: &from})
 	members := database.SeriesBooksMap{from: {{ID: "m1"}}}
-	merged, refused, _, err := csMergeSeriesGroup(store, 1, []int{from}, map[int]int{from: 1}, members)
+	res, err := csMergeSeriesGroup(csUnreferencedWriter(store), 1, csSeries(from), map[int]int{from: 1}, members)
 	if err != nil {
 		t.Fatalf("csMergeSeriesGroup: %v", err)
 	}
-	if merged != 1 || refused != 0 {
-		t.Fatalf("merged=%d refused=%d, want 1/0", merged, refused)
+	if res.Merged != 1 || res.Refused != 0 {
+		t.Fatalf("merged=%d refused=%d, want 1/0", res.Merged, res.Refused)
 	}
 	got := rows.get("m1")
 	if got == nil || got.SeriesID == nil || *got.SeriesID != 1 {
@@ -176,7 +176,7 @@ func TestCsUnlinkAndDeleteSeries_DoesNotRevertConcurrentColumns(t *testing.T) {
 	seq := 2
 	store, rows := newLostUpdateStore(database.Book{ID: "u1", Title: "Unlinked", SeriesID: &sid, SeriesSequence: &seq})
 	members := database.SeriesBooksMap{sid: {{ID: "u1"}}}
-	if _, err := csUnlinkAndDeleteSeries(store, []database.BookCore{{ID: "u1"}}, sid, members); err != nil {
+	if _, err := csUnlinkAndDeleteSeries(csUnreferencedWriter(store), []database.BookCore{{ID: "u1"}}, database.Series{ID: sid}, members); err != nil {
 		t.Fatalf("csUnlinkAndDeleteSeries: %v", err)
 	}
 	got := rows.get("u1")
