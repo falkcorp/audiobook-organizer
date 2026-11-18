@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-16-series-denumber-safe-apply-executive-summary.md -->
-<!-- version: 3.4.0 -->
+<!-- version: 3.5.0 -->
 <!-- guid: 977a5f90-535a-436e-afa1-f26225c95156 -->
 <!-- last-edited: 2026-11-18 -->
 
@@ -83,8 +83,12 @@ fool, so the rule below is the third and strictest one.
   one-at-a-time rule (filed as a task); its delete is safe on its own. The
   library's maintenance jobs, the empty-series clean-up among them, are also not
   held back by that rule (filed as a task); the clean-up was made to skip a book
-  another process has just moved, instead of undoing the move, but it can still
-  delete a series a book was moved into after the clean-up looked (filed as a
-  task), so the two should not be run at the same time. An undo that could
+  another process has just moved, instead of undoing the move, and to keep a
+  series a book was moved into after the clean-up looked, instead of deleting it
+  (it now deletes a series only through the same one-step delete). The two should
+  still not be run at the same time: the scheduler cannot hold one back for the
+  other, and a writer that looked at a series before the clean-up's delete and
+  saves after it can still leave its book on a deleted series (the same narrow
+  window as above). An undo that could
   not put one of its own books back now stays unfinished, so a retry removes the
   series it had created instead of leaving it behind.

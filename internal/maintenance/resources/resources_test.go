@@ -1,7 +1,7 @@
 // file: internal/maintenance/resources/resources_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7b3c9e52-1d84-4a6f-9c07-e5a2f81d3b46
-// last-edited: 2026-11-16
+// last-edited: 2026-11-18
 
 package resources
 
@@ -133,6 +133,7 @@ var rowsPinned = map[string]string{
 	"DeleteRaw/merge_journal":        "operations",
 	"DeleteRaw/user_state":           "user_state",
 	"DeleteSeries":                   "series",
+	"DeleteSeriesIfUnreferenced":     "series",
 	"MarkBookAggregatesBackfillDone": "",
 	"MintOrGetSyncFileID":            "sync_identity",
 	"PruneBookSnapshots":             "books",

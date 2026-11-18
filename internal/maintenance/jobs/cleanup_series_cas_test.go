@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/cleanup_series_cas_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d2b8f41-7a36-4e09-b1c8-93e4f6a02d75
 // last-edited: 2026-11-18
 
@@ -67,9 +67,13 @@ func (s *casStore) ModifyBook(id string, fn func(*database.Book) error) (*databa
 	return row, nil
 }
 
-func (s *casStore) DeleteSeries(id int) error {
+// DeleteSeriesIfUnreferenced is the only delete casStore offers, because it is
+// the only one the helpers' interfaces carry. These tests have no writer that
+// links a book in late, so every delete is of an unreferenced series; the
+// stateful csCondStore covers the refusal.
+func (s *casStore) DeleteSeriesIfUnreferenced(id int, _ string, _ *int) (bool, error) {
 	s.deleted = append(s.deleted, id)
-	return nil
+	return true, nil
 }
 
 func (s *casStore) seriesOf(id string) int {
@@ -89,10 +93,11 @@ func TestCsUnlinkAndDeleteSeries_SkipsABookAnotherWriterMovedToAnotherSeries(t *
 	store := newCasStore(database.Book{ID: "batman-3", SeriesID: intp(900), SeriesSequence: intp(3)})
 	members := database.SeriesBooksMap{703: {{ID: "batman-3"}}}
 
-	skipped, err := csUnlinkAndDeleteSeries(store, []database.BookCore{{ID: "batman-3"}}, 703, members)
+	res, err := csUnlinkAndDeleteSeries(store, []database.BookCore{{ID: "batman-3"}}, database.Series{ID: 703}, members)
 	if err != nil {
 		t.Fatalf("csUnlinkAndDeleteSeries: %v", err)
 	}
+	skipped := res.Skipped
 	if got := store.seriesOf("batman-3"); got != 900 {
 		t.Fatalf("book is in series %d, want 900: phase 1 cleared a link it no longer owned", got)
 	}
@@ -116,10 +121,11 @@ func TestCsUnlinkAndDeleteSeries_StillUnlinksABookThatNamesTheSeries(t *testing.
 	store := newCasStore(database.Book{ID: "robin-1", SeriesID: intp(703), SeriesSequence: intp(1)})
 	members := database.SeriesBooksMap{703: {{ID: "robin-1"}}}
 
-	skipped, err := csUnlinkAndDeleteSeries(store, []database.BookCore{{ID: "robin-1"}}, 703, members)
+	res, err := csUnlinkAndDeleteSeries(store, []database.BookCore{{ID: "robin-1"}}, database.Series{ID: 703}, members)
 	if err != nil {
 		t.Fatalf("csUnlinkAndDeleteSeries: %v", err)
 	}
+	skipped := res.Skipped
 	if skipped != 0 {
 		t.Fatalf("skipped = %d, want 0", skipped)
 	}
@@ -138,10 +144,11 @@ func TestCsUnlinkAndDeleteSeries_UnlinksTheRestWhenOneBookMovedAway(t *testing.T
 	)
 	members := database.SeriesBooksMap{703: {{ID: "alfred-1"}, {ID: "alfred-2"}}}
 
-	skipped, err := csUnlinkAndDeleteSeries(store, []database.BookCore{{ID: "alfred-1"}, {ID: "alfred-2"}}, 703, members)
+	res, err := csUnlinkAndDeleteSeries(store, []database.BookCore{{ID: "alfred-1"}, {ID: "alfred-2"}}, database.Series{ID: 703}, members)
 	if err != nil {
 		t.Fatalf("csUnlinkAndDeleteSeries: %v", err)
 	}
+	skipped := res.Skipped
 	if skipped != 1 {
 		t.Fatalf("skipped = %d, want 1", skipped)
 	}
@@ -191,10 +198,11 @@ func TestCsMergeSeriesGroup_DoesNotRehomeABookAnotherWriterMovedAway(t *testing.
 	store := newCasStore(database.Book{ID: "batman-3", SeriesID: intp(900)})
 	members := database.SeriesBooksMap{7: {{ID: "batman-3"}}}
 
-	merged, refused, skipped, err := csMergeSeriesGroup(store, 1, []int{7}, map[int]int{7: 1}, members)
+	res, err := csMergeSeriesGroup(store, 1, csSeries(7), map[int]int{7: 1}, members)
 	if err != nil {
 		t.Fatalf("csMergeSeriesGroup: %v", err)
 	}
+	merged, refused, skipped := res.Merged, res.Refused, res.Skipped
 	if got := store.seriesOf("batman-3"); got != 900 {
 		t.Fatalf("book is in series %d, want 900: phase 2 re-homed a book it did not own", got)
 	}
@@ -218,10 +226,11 @@ func TestCsMergeSeriesGroup_StillRehomesABookThatNamesTheSeries(t *testing.T) {
 	store := newCasStore(database.Book{ID: "robin-1", SeriesID: intp(7)})
 	members := database.SeriesBooksMap{7: {{ID: "robin-1"}}}
 
-	merged, refused, skipped, err := csMergeSeriesGroup(store, 1, []int{7}, map[int]int{7: 1}, members)
+	res, err := csMergeSeriesGroup(store, 1, csSeries(7), map[int]int{7: 1}, members)
 	if err != nil {
 		t.Fatalf("csMergeSeriesGroup: %v", err)
 	}
+	merged, refused, skipped := res.Merged, res.Refused, res.Skipped
 	if store.seriesOf("robin-1") != 1 || skipped != 0 || merged != 1 || refused != 0 {
 		t.Fatalf("book in %d, skipped=%d merged=%d refused=%d, want 1/0/1/0",
 			store.seriesOf("robin-1"), skipped, merged, refused)
@@ -234,10 +243,11 @@ func TestCsMergeSeriesGroup_ABookAlreadyInTheKeeperIsNotASkip(t *testing.T) {
 	store := newCasStore(database.Book{ID: "robin-1", SeriesID: intp(1)})
 	members := database.SeriesBooksMap{7: {{ID: "robin-1"}}}
 
-	merged, _, skipped, err := csMergeSeriesGroup(store, 1, []int{7}, map[int]int{7: 1}, members)
+	res, err := csMergeSeriesGroup(store, 1, csSeries(7), map[int]int{7: 1}, members)
 	if err != nil {
 		t.Fatalf("csMergeSeriesGroup: %v", err)
 	}
+	merged, skipped := res.Merged, res.Skipped
 	if skipped != 0 || merged != 1 {
 		t.Fatalf("skipped=%d merged=%d, want 0/1", skipped, merged)
 	}
@@ -249,10 +259,11 @@ func TestCsMergeSeriesGroup_AHiddenRowStillRefusesTheDeleteWhenABookWasSkipped(t
 	store := newCasStore(database.Book{ID: "batman-3", SeriesID: intp(900)})
 	members := database.SeriesBooksMap{7: {{ID: "batman-3"}}}
 
-	merged, refused, skipped, err := csMergeSeriesGroup(store, 1, []int{7}, map[int]int{7: 3}, members)
+	res, err := csMergeSeriesGroup(store, 1, csSeries(7), map[int]int{7: 3}, members)
 	if err != nil {
 		t.Fatalf("csMergeSeriesGroup: %v", err)
 	}
+	merged, refused, skipped := res.Merged, res.Refused, res.Skipped
 	if merged != 0 || refused != 1 || skipped != 1 || len(store.deleted) != 0 {
 		t.Fatalf("merged=%d refused=%d skipped=%d deleted=%v, want 0/1/1/none", merged, refused, skipped, store.deleted)
 	}
