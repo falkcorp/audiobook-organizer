@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_round3_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7e985540-891e-4d66-9ce1-fd86d2879faa
 // last-edited: 2026-11-18
 
@@ -175,15 +175,59 @@ func TestMergeCleanupDeadEndTrashedAnchorWhosePointerLeadsNowhereLetsTheLoserSta
 
 func TestMergeCleanupDeadEndAnchorNamedByTwoRoutesIsListedOnce(t *testing.T) {
 	x := newMCFixture(t)
-	mcDeadEnd(x, "dead", "loser", mcHushSpec(30000))
-	// The holder is also a member of the dead hop's group that is merged into a
-	// dead end: two routes name it.
+	// The holder of the dead hop's retired versions is also a member of its
+	// group that was merged into a dead end: two routes name it.
+	x.mk("dead", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, group: "g", primary: mcTrue(), trashed: true})
+	x.mk("loser", mcHushSpec(30000))
+	x.point("loser", "dead")
 	x.mk("gone", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
-	x.mk("holder", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000)})
+	x.mk("holder", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000), group: "g", primary: mcFalse()})
 	x.point("holder", "gone")
 	retireRowOnto(t, x.st, x.ids["dead"], x.ids["holder"], "rt3", filepath.Join(x.root, "retired", "t3.m4b"))
 	r := wantRow(t, x.plan(), "loser", mcKindUnmerge, "")
 	require.Equal(t, 1, strings.Count(strings.Join(r.Evidence, " "), x.ids["holder"]))
+}
+
+func TestMergeCleanupDeadEndTrashedHolderWithNoPointerLeadsNowhere(t *testing.T) {
+	x := newMCFixture(t)
+	mcDeadEnd(x, "dead", "loser", mcHushSpec(30000))
+	x.mk("holder", mcHushSpec(30000))
+	retireRowOnto(t, x.st, x.ids["dead"], x.ids["holder"], "rt4", filepath.Join(x.root, "retired", "t4.m4b"))
+	mcTrash(t, x, "holder")
+	r := wantRow(t, x.plan(), "loser", mcKindUnmerge, "")
+	require.Empty(t, r.Proposed["merged_into_book_id"])
+	require.Contains(t, strings.Join(r.Evidence, " "), x.ids["holder"], "the trashed holder is named as followed")
+}
+
+func TestMergeCleanupDeadEndDoesNotCountTheLosersOwnChainAsFollowed(t *testing.T) {
+	x := newMCFixture(t)
+	// L -> hop (in the trash by library state, still pointing on, in group g) ->
+	// dead. The group read returns the hop, which carries a pointer; it is the
+	// loser's own chain, not an anchor the walk had to follow.
+	x.mk("dead", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+	x.mk("hop", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, group: "g", primary: mcFalse(), state: "deleted"})
+	x.point("hop", "dead")
+	x.mk("loser", mcHushSpec(30000))
+	x.point("loser", "hop")
+	r := wantRow(t, x.plan(), "loser", mcKindUnmerge, "")
+	ev := strings.Join(r.Evidence, " ")
+	require.Contains(t, ev, "stands alone")
+	require.NotContains(t, ev, "every holder", "no anchor was followed: the only book looked at is the chain itself")
+}
+
+// A repoint says the loser and the target are one work. When the signals read
+// the target as a fragment of the loser the hold is right but the words are not
+// "not the same work": a swap of the keeper is what the pair needs.
+func TestMergeCleanupRepointTargetThatIsAFragmentIsHeldWithWordsThatSayFragment(t *testing.T) {
+	x := newMCFixture(t)
+	x.mk("heir", mcSpec{title: "Year One", authors: []string{"Bruce Wayne"}, files: one(9000), group: "g-f", primary: mcTrue()})
+	x.mk("dead", mcSpec{title: "Year One", authors: []string{"Bruce Wayne"}, files: one(9000), group: "g-f", primary: mcFalse(), trashed: true})
+	x.mk("loser", mcSpec{title: "Year One", authors: []string{"Bruce Wayne"}, files: one(36000)})
+	x.point("loser", "dead")
+	r := wantRow(t, x.plan(), "loser", mcKindRepoint, mcSkipRepointNotSameWork)
+	require.Contains(t, r.SkipReason, "fragment of the loser")
+	require.NotContains(t, r.SkipReason, "do not call the loser")
+	require.Equal(t, x.ids["heir"], r.Proposed["merged_into_book_id"])
 }
 
 func TestMergeCleanupDeadEndOnAMissingBookSaysItReadNothing(t *testing.T) {

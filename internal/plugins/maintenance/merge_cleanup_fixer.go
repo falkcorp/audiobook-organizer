@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_fixer.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 0e4c7d58-a1b3-4f26-8c19-6d5a3e7f9b02
 // last-edited: 2026-11-18
 
@@ -583,8 +583,9 @@ func (r *mcRun) deadEndMates(fa *mcFacts) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		// A merged book with no file of its own is not a copy of the work.
-		if l != nil && !database.IsInTrash(l.book) && mcHasPointer(l.book) && l.side.Files > 0 {
+		// The index holds only live merged books; one with no file of its own is
+		// not a copy of the work.
+		if l != nil && l.side.Files > 0 {
 			mates = append(mates, id)
 		}
 	}
