@@ -14,9 +14,11 @@ import (
 	"encoding/json"
 	stderrors "errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
 	ulid "github.com/oklog/ulid/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
@@ -29,6 +31,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 // scanApplyStore is what applying a result needs: the shared author merge and the
@@ -285,9 +288,308 @@ func applyScanResult(
 	return res, false
 }
 
-// RegisterAIScanApplyOp registers the "ai.author-scan-apply" v2 OperationDef.
-func (s *Server) RegisterAIScanApplyOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
+// scanLeaseFunc adapts a hold's renew function to the scanLeaseRenewer the merge
+// loop renews the stand-down through.
+type scanLeaseFunc func() bool
+
+func (f scanLeaseFunc) RenewScanStandDown(string) bool { return f() }
+
+// aiScanApplyStore is the reads of the scan apply: the scan and its stored
+// results, and the model's stored role flags.
+type aiScanApplyStore interface {
+	// ScanApplyAvailable reports whether the AI scan store and its pipeline are
+	// wired.
+	ScanApplyAvailable() bool
+	GetScan(id int) (*database.Scan, error)
+	GetScanResults(scanID int) ([]database.ScanResult, error)
+	// LoadRawRoleFlags is aiscan.LoadRawRoleFlags over the scan store.
+	LoadRawRoleFlags(scanID int) (aiscan.RawRoleFlags, error)
+}
+
+// aiScanApplyWriter is the writes of the scan apply. The merge of one result is a
+// single coarse method: it renews the stand-down before every author's writes
+// and journals each move under the op id, on the store it is handed.
+type aiScanApplyWriter interface {
+	ClaimScanForApply(scanID int, claimID string) error
+	ReleaseScanApply(scanID int, claimID string) error
+	// EnsureKeepIDs fills in the keep authors the scan stored without one.
+	EnsureKeepIDs(scanID int) error
+	// ApplyScanResult is applyScanResult.
+	ApplyScanResult(ctx context.Context, opID string, r database.ScanResult, flags aiscan.RawRoleFlags, dryRun bool, lease scanLeaseRenewer, canceled func() bool) (scanApplyResult, bool)
+	// JournalAppliedResult is journalAppliedResult.
+	JournalAppliedResult(opID string, scanID, resultID int) (void func() error, err error)
+	MarkResultApplied(scanID, resultID int) error
+	// InvalidateAuthorCaches drops the duplicate and author-list caches.
+	InvalidateAuthorCaches()
+}
+
+// aiScanApplyEnv is what the shared core takes from its shell (rules R2, R10).
+type aiScanApplyEnv struct {
+	t7Env
+	Store     aiScanApplyStore
+	Writer    aiScanApplyWriter
+	StandDown t7StandDown
+}
+
+func (e aiScanApplyEnv) canceled() bool { return e.Canceled != nil && e.Canceled() }
+
+// saveReport stores the per-result outcomes on the run. A failure to store them
+// is logged, not returned: the merges have happened and the run's own status
+// carries the headline.
+func (e aiScanApplyEnv) saveReport(ctx context.Context, report scanApplyReport) {
+	if e.SetResult == nil {
+		return
+	}
+	if err := e.SetResult(report); err != nil {
+		logger.WarnCtx(ctx, "ai scan apply: could not store the per-result outcomes", "scan_id", report.ScanID, "err", err)
+	}
+}
+
+// aiScanApplyCore applies the selected results of one scan, one at a time.
+//
+// SEQUENTIAL ON PURPOSE. Results of one scan can share authors (a full scan
+// proposes overlapping groups, and one result's keep can be another's merge id),
+// and each merge deletes authors. Two workers on two results could merge the same
+// author twice or fold an author into one that a sibling is deleting, so the
+// results are disjoint only by being processed in order, with each merge reading
+// the store as the previous one left it. The loop is bounded by the selection a
+// person made, not the library, so the single core costs nothing.
+func aiScanApplyCore(ctx context.Context, p handlers.AIScanApplyOpParams, dryRun bool, env aiScanApplyEnv) (*scanApplyReport, error) {
+	if !env.Store.ScanApplyAvailable() {
+		return nil, fmt.Errorf("ai.author-scan-apply: the AI scan store is not initialized")
+	}
+	opID := env.OpID
+
+	// Every exit invalidates: a cancel or a failure part way follows merges that
+	// already happened, and a stale cached list keeps offering authors that are gone.
+	if !dryRun {
+		defer env.Writer.InvalidateAuthorCaches()
+	}
+
+	scan, err := env.Store.GetScan(p.ScanID)
+	if err != nil {
+		return nil, fmt.Errorf("ai.author-scan-apply: read scan %d: %w", p.ScanID, err)
+	}
+	if scan == nil {
+		return nil, fmt.Errorf("ai.author-scan-apply: scan %d not found", p.ScanID)
+	}
+	if scan.Status == "superseded" {
+		return nil, (&database.ScanSupersededError{ScanID: scan.ID, By: scan.SupersededBy})
+	}
+	// Only a finished scan's results are final. The route checks this too; the run
+	// re-checks, because the scan can change between the request and the run.
+	if scan.Status != "complete" {
+		return nil, fmt.Errorf("ai.author-scan-apply: scan %d is %s; only a finished scan's results can be applied", scan.ID, scan.Status)
+	}
+	// Stand the library scanner down for the whole apply, before the first write: a
+	// concurrent library.scan rewrites book_authors on the rows the merges repoint.
+	// ONE hold spans every result (the registry keys a hold by op id, so a hold per
+	// result would release the gate between them and re-park the scanner N times).
+	// Taken before the claim so a refusal leaves no claim behind. A preview writes
+	// nothing and does not park the production scanner for it.
+	var lease scanLeaseRenewer
+	if !dryRun {
+		hold, herr := env.StandDown(ctx, "ai.author-scan-apply")
+		if herr != nil {
+			return nil, fmt.Errorf("ai.author-scan-apply: %w", herr)
+		}
+		defer func() { _ = hold.Finish(nil) }()
+		lease = scanLeaseFunc(hold.Renew)
+	}
+	// Claim the scan before the first merge: a nightly run that supersedes it
+	// meanwhile is refused (database.AIScanStore.SupersedeIfUnapplied), where an
+	// unclaimed scan was hidden under a run that then merged its results and could
+	// not mark them. The claim is the authoritative status check too (it re-reads
+	// under the store's apply lock). A preview writes nothing and claims nothing.
+	if !dryRun {
+		claimID := opID
+		if claimID == "" {
+			claimID = database.UnattributedApplyClaimPrefix + ulid.Make().String()
+		}
+		if err := env.Writer.ClaimScanForApply(p.ScanID, claimID); err != nil {
+			return nil, fmt.Errorf("ai.author-scan-apply: %w", err)
+		}
+		// Released on every exit. A run that dies without reaching here leaves a
+		// claim that stops holding the scan as soon as the registry no longer runs
+		// this op (AIScanStore.SetApplyRunLiveness), is cleared at the next
+		// startup, and expires anyway (database.AIScanApplyClaimTTL).
+		defer func() {
+			if err := env.Writer.ReleaseScanApply(p.ScanID, claimID); err != nil {
+				logger.WarnCtx(ctx, "ai scan apply: could not release the scan claim", "scan_id", p.ScanID, "err", err)
+			}
+		}()
+	}
+	if err := env.Writer.EnsureKeepIDs(p.ScanID); err != nil {
+		logger.WarnCtx(ctx, "ai scan apply: could not fill in keep authors", "scan_id", p.ScanID, "err", err)
+	}
+	stored, err := env.Store.GetScanResults(p.ScanID)
+	if err != nil {
+		return nil, fmt.Errorf("ai.author-scan-apply: read results of scan %d: %w", p.ScanID, err)
+	}
+	byID := make(map[int]database.ScanResult, len(stored))
+	for _, r := range stored {
+		byID[r.ID] = r
+	}
+	// Fails closed: an unreadable stored answer must not read as "nothing flagged".
+	flags, err := env.Store.LoadRawRoleFlags(p.ScanID)
+	if err != nil {
+		return nil, fmt.Errorf("ai.author-scan-apply: %w", err)
+	}
+
+	mode := "Applying"
+	if dryRun {
+		mode = "Previewing"
+	}
+	total := len(p.ResultIDs)
+	env.Log(slog.LevelInfo, fmt.Sprintf("%s %d result(s) of AI scan #%d", mode, total, p.ScanID))
+
+	report := scanApplyReport{ScanID: p.ScanID, DryRun: dryRun}
+	applied, failed := 0, 0
+	var failures []string
+	for i, rid := range p.ResultIDs {
+		if env.canceled() {
+			env.Log(slog.LevelWarn, "Operation cancelled by user")
+			env.saveReport(ctx, report)
+			return &report, fmt.Errorf("cancelled")
+		}
+		env.progress(i, total, fmt.Sprintf("%s result %d/%d", mode, i+1, total))
+
+		r, ok := byID[rid]
+		if !ok {
+			report.Results = append(report.Results, scanApplyResult{ResultID: rid,
+				Errors: []string{fmt.Sprintf("result %d is not in scan %d", rid, p.ScanID)}})
+			failed++
+			failures = append(failures, report.Results[len(report.Results)-1].Errors[0])
+			continue
+		}
+		if r.Applied {
+			// Already merged by an earlier apply (a repeated request, or the run
+			// this one replaced): counted, not redone.
+			report.Results = append(report.Results, scanApplyResult{ResultID: rid, Applied: true, Skipped: "already applied"})
+			applied++
+			continue
+		}
+
+		res, cancelled := env.Writer.ApplyScanResult(ctx, opID, r, flags, dryRun, lease, env.canceled)
+		if cancelled {
+			env.Log(slog.LevelWarn, "Operation cancelled by user")
+			report.Results = append(report.Results, res)
+			env.saveReport(ctx, report)
+			return &report, fmt.Errorf("cancelled")
+		}
+		if res.aborted != "" {
+			// The lease is gone, so the remaining results are not attempted: the
+			// scanner may already be writing. What merged stays merged, the merged
+			// results were already marked, and this one is left unapplied.
+			env.Log(slog.LevelError, res.aborted)
+			report.Results = append(report.Results, res)
+			env.saveReport(ctx, report)
+			return &report, fmt.Errorf("ai.author-scan-apply aborted after %d of %d result(s): %s", i, total, res.aborted)
+		}
+		if res.Applied && !dryRun {
+			// Mark ONLY a result whose merge fully succeeded. The note that lets an
+			// undo of this operation mark the result pending again is written first
+			// and voided if the mark is refused, like every other row of the ledger.
+			res.Applied = false
+			voidNote, nerr := env.Writer.JournalAppliedResult(opID, p.ScanID, rid)
+			switch {
+			case nerr != nil:
+				res.Errors = append(res.Errors, fmt.Sprintf("merged, but the result was not marked applied: its undo note could not be recorded: %v", nerr))
+			default:
+				if merr := env.Writer.MarkResultApplied(p.ScanID, rid); merr != nil {
+					if verr := voidNote(); verr != nil {
+						logger.WarnCtx(ctx, "ai scan apply: could not void the undo note of a result that was not marked applied",
+							"scan_id", p.ScanID, "result_id", rid, "err", verr)
+					}
+					if _, ok := stderrors.AsType[*database.ScanSupersededError](merr); ok {
+						res.Errors = append(res.Errors, fmt.Sprintf("merged, but scan %d was superseded meanwhile, so the result was not marked applied: %v", p.ScanID, merr))
+					} else {
+						res.Errors = append(res.Errors, fmt.Sprintf("merged, but the result could not be marked applied: %v", merr))
+					}
+				} else {
+					res.Applied = true
+				}
+			}
+		}
+		report.Results = append(report.Results, res)
+		if res.Applied {
+			applied++
+			env.Log(slog.LevelInfo, fmt.Sprintf("Result %d: author %d kept, %d merged, %d reclassified", rid, res.KeepID, len(res.Merged), len(res.Reclassified)))
+			continue
+		}
+		failed++
+		detail := strings.Join(res.Errors[:min(len(res.Errors), 3)], "; ")
+		failures = append(failures, fmt.Sprintf("result %d: %s", rid, detail))
+		env.Log(slog.LevelWarn, fmt.Sprintf("Result %d not applied: %s", rid, detail))
+	}
+
+	env.saveReport(ctx, report)
+	msg := fmt.Sprintf("AI scan #%d: %d of %d result(s) applied, %d not applied", p.ScanID, applied, total, failed)
+	if dryRun {
+		msg = fmt.Sprintf("AI scan #%d PREVIEW (nothing written): %d of %d result(s) would apply, %d would not", p.ScanID, applied, total, failed)
+	}
+	env.progress(total, total, msg)
+	env.Log(slog.LevelInfo, msg)
+	if failed > 0 && !dryRun {
+		// Fail rather than complete: the op used to be a mark-only call that
+		// completed whatever happened. The results that merged are marked; the
+		// rest stay unapplied so the page offers them again, with the reasons here.
+		return &report, fmt.Errorf("%s: %s", msg, strings.Join(failures[:min(len(failures), 3)], "; "))
+	}
+	return &report, nil
+}
+
+// headAIScanApply is HEAD's side of both interfaces: the server's AI scan store
+// and pipeline manager, the ops store for the merge and the journal, and the two
+// caches, each called as HEAD's body called them.
+type headAIScanApply struct{ s *Server }
+
+func (h headAIScanApply) ScanApplyAvailable() bool {
+	return h.s.aiScanStore != nil && h.s.pipelineManager != nil
+}
+
+func (h headAIScanApply) GetScan(id int) (*database.Scan, error) { return h.s.aiScanStore.GetScan(id) }
+
+func (h headAIScanApply) GetScanResults(scanID int) ([]database.ScanResult, error) {
+	return h.s.aiScanStore.GetScanResults(scanID)
+}
+
+func (h headAIScanApply) LoadRawRoleFlags(scanID int) (aiscan.RawRoleFlags, error) {
+	return aiscan.LoadRawRoleFlags(h.s.aiScanStore, scanID)
+}
+
+func (h headAIScanApply) ClaimScanForApply(scanID int, claimID string) error {
+	return h.s.aiScanStore.ClaimScanForApply(scanID, claimID)
+}
+
+func (h headAIScanApply) ReleaseScanApply(scanID int, claimID string) error {
+	return h.s.aiScanStore.ReleaseScanApply(scanID, claimID)
+}
+
+func (h headAIScanApply) EnsureKeepIDs(scanID int) error {
+	return h.s.pipelineManager.EnsureKeepIDs(scanID)
+}
+
+func (h headAIScanApply) ApplyScanResult(ctx context.Context, opID string, r database.ScanResult, flags aiscan.RawRoleFlags, dryRun bool, lease scanLeaseRenewer, canceled func() bool) (scanApplyResult, bool) {
+	return applyScanResult(ctx, h.s.Ops(), opID, r, flags, dryRun, lease, canceled)
+}
+
+func (h headAIScanApply) JournalAppliedResult(opID string, scanID, resultID int) (func() error, error) {
+	return journalAppliedResult(h.s.Ops(), opID, scanID, resultID)
+}
+
+func (h headAIScanApply) MarkResultApplied(scanID, resultID int) error {
+	return h.s.aiScanStore.MarkResultApplied(scanID, resultID)
+}
+
+func (h headAIScanApply) InvalidateAuthorCaches() {
+	h.s.dedupCache.InvalidateAll()
+	h.s.authorsCache.InvalidateAll()
+}
+
+// aiScanApplyDef is HEAD's definition. Its Run is the v2 shell.
+func (s *Server) aiScanApplyDef() opsregistry.OperationDef {
+	return opsregistry.OperationDef{
 		ID:              handlers.AIScanApplyDefID,
 		Preview:         opsregistry.PreviewSpec{Params: handlers.AIScanApplyOpParams{}},
 		Liveness:        opsregistry.LivenessManual,
@@ -328,217 +630,61 @@ func (s *Server) RegisterAIScanApplyOp(reg *opsregistry.Registry) error {
 			if p.ScanID == 0 {
 				return fmt.Errorf("ai.author-scan-apply: scan_id is required")
 			}
-			if s.aiScanStore == nil || s.pipelineManager == nil {
-				return fmt.Errorf("ai.author-scan-apply: the AI scan store is not initialized")
+			h := headAIScanApply{s: s}
+			env := aiScanApplyEnv{t7Env: t7HeadEnv(reporter, !dryRun), Store: h, Writer: h, StandDown: s.t7HeadAuthorStandDown(opsregistry.ReporterOpID(reporter))}
+			_, err := aiScanApplyCore(ctx, p, dryRun, env)
+			return err
+		},
+	}
+}
+
+// RegisterAIScanApplyOp registers the "ai.author-scan-apply" v2 OperationDef.
+func (s *Server) RegisterAIScanApplyOp(reg *opsregistry.Registry) error {
+	return reg.RegisterOp(s.aiScanApplyDef())
+}
+
+// aiScanApplyNativeParams are the native kind's params: HEAD's without the mode
+// keys, which the start request carries.
+type aiScanApplyNativeParams struct {
+	ScanID    int   `json:"scan_id"`
+	ResultIDs []int `json:"result_ids"`
+}
+
+// aiScanApplyNative is the native books.ai.author-scan-apply kind. It merges
+// authors, reclassifies narrators, and marks the scan's results applied. HEAD's
+// default of a preview when the mode is omitted is the start request's: a
+// Preview run writes nothing and takes no stand-down.
+func (s *Server) aiScanApplyNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	kind := t7KindFor(handlers.AIScanApplyDefID)
+	c := t7Common(s.aiScanApplyDef(), sched)
+	c.Effects = t7Writes(ops.ResBooks, ops.ResAuthors, ops.ResOperations, t7ResAIScans)
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, scanApplyReport]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (scanApplyReport, error) {
+			np, err := t7DecodeNative[aiScanApplyNativeParams](kind, raw)
+			if err != nil {
+				return scanApplyReport{}, err
 			}
-			return s.runAIScanApply(ctx, p, dryRun, reporter)
+			if np.ScanID == 0 {
+				return scanApplyReport{}, fmt.Errorf("ai.author-scan-apply: scan_id is required")
+			}
+			if err := t7NeedStore(kind, deps); err != nil {
+				return scanApplyReport{}, err
+			}
+			w, err := t7NewWriter(kind, deps, rc)
+			if err != nil {
+				return scanApplyReport{}, err
+			}
+			p := handlers.AIScanApplyOpParams{ScanID: np.ScanID, ResultIDs: np.ResultIDs}
+			dryRun := rc.Mode() != tasks.ModeLive
+			env := aiScanApplyEnv{t7Env: t7NativeEnv(rc), Store: deps.Store, Writer: w, StandDown: t7NativeStandDown(rc, deps.StandDownKey)}
+			report, err := aiScanApplyCore(rc.Context(), p, dryRun, env)
+			if report == nil {
+				return scanApplyReport{}, err
+			}
+			return *report, err
 		},
 	})
-}
-
-// runAIScanApply applies the selected results of one scan, one at a time.
-//
-// SEQUENTIAL ON PURPOSE. Results of one scan can share authors (a full scan
-// proposes overlapping groups, and one result's keep can be another's merge id),
-// and each merge deletes authors. Two workers on two results could merge the same
-// author twice or fold an author into one that a sibling is deleting, so the
-// results are disjoint only by being processed in order, with each merge reading
-// the store as the previous one left it. The loop is bounded by the selection a
-// person made, not the library, so the single core costs nothing.
-func (s *Server) runAIScanApply(ctx context.Context, p handlers.AIScanApplyOpParams, dryRun bool, reporter opsregistry.Reporter) error {
-	progress := registryProgressAdapter{r: reporter}
-	store := s.Ops()
-	opID := opsregistry.ReporterOpID(reporter)
-
-	// Every exit invalidates: a cancel or a failure part way follows merges that
-	// already happened, and a stale cached list keeps offering authors that are gone.
-	if !dryRun {
-		defer func() {
-			s.dedupCache.InvalidateAll()
-			s.authorsCache.InvalidateAll()
-		}()
-	}
-
-	scan, err := s.aiScanStore.GetScan(p.ScanID)
-	if err != nil {
-		return fmt.Errorf("ai.author-scan-apply: read scan %d: %w", p.ScanID, err)
-	}
-	if scan == nil {
-		return fmt.Errorf("ai.author-scan-apply: scan %d not found", p.ScanID)
-	}
-	if scan.Status == "superseded" {
-		return (&database.ScanSupersededError{ScanID: scan.ID, By: scan.SupersededBy})
-	}
-	// Only a finished scan's results are final. The route checks this too; the run
-	// re-checks, because the scan can change between the request and the run.
-	if scan.Status != "complete" {
-		return fmt.Errorf("ai.author-scan-apply: scan %d is %s; only a finished scan's results can be applied", scan.ID, scan.Status)
-	}
-	// Stand the library scanner down for the whole apply, before the first write: a
-	// concurrent library.scan rewrites book_authors on the rows the merges repoint.
-	// ONE hold spans every result (the registry keys a hold by op id, so a hold per
-	// result would release the gate between them and re-park the scanner N times).
-	// Taken before the claim so a refusal leaves no claim behind. A preview writes
-	// nothing and does not park the production scanner for it.
-	var lease scanLeaseRenewer
-	if !dryRun {
-		release, herr := s.holdAuthorMergeStandDown(ctx, opID, "ai.author-scan-apply")
-		if herr != nil {
-			return fmt.Errorf("ai.author-scan-apply: %w", herr)
-		}
-		defer release()
-		lease = s.scanGate()
-	}
-	// Claim the scan before the first merge: a nightly run that supersedes it
-	// meanwhile is refused (database.AIScanStore.SupersedeIfUnapplied), where an
-	// unclaimed scan was hidden under a run that then merged its results and could
-	// not mark them. The claim is the authoritative status check too (it re-reads
-	// under the store's apply lock). A preview writes nothing and claims nothing.
-	if !dryRun {
-		claimID := opID
-		if claimID == "" {
-			claimID = database.UnattributedApplyClaimPrefix + ulid.Make().String()
-		}
-		if err := s.aiScanStore.ClaimScanForApply(p.ScanID, claimID); err != nil {
-			return fmt.Errorf("ai.author-scan-apply: %w", err)
-		}
-		// Released on every exit. A run that dies without reaching here leaves a
-		// claim that stops holding the scan as soon as the registry no longer runs
-		// this op (AIScanStore.SetApplyRunLiveness), is cleared at the next
-		// startup, and expires anyway (database.AIScanApplyClaimTTL).
-		defer func() {
-			if err := s.aiScanStore.ReleaseScanApply(p.ScanID, claimID); err != nil {
-				logger.WarnCtx(ctx, "ai scan apply: could not release the scan claim", "scan_id", p.ScanID, "err", err)
-			}
-		}()
-	}
-	if err := s.pipelineManager.EnsureKeepIDs(p.ScanID); err != nil {
-		logger.WarnCtx(ctx, "ai scan apply: could not fill in keep authors", "scan_id", p.ScanID, "err", err)
-	}
-	stored, err := s.aiScanStore.GetScanResults(p.ScanID)
-	if err != nil {
-		return fmt.Errorf("ai.author-scan-apply: read results of scan %d: %w", p.ScanID, err)
-	}
-	byID := make(map[int]database.ScanResult, len(stored))
-	for _, r := range stored {
-		byID[r.ID] = r
-	}
-	// Fails closed: an unreadable stored answer must not read as "nothing flagged".
-	flags, err := aiscan.LoadRawRoleFlags(s.aiScanStore, p.ScanID)
-	if err != nil {
-		return fmt.Errorf("ai.author-scan-apply: %w", err)
-	}
-
-	mode := "Applying"
-	if dryRun {
-		mode = "Previewing"
-	}
-	total := len(p.ResultIDs)
-	_ = progress.Log("info", fmt.Sprintf("%s %d result(s) of AI scan #%d", mode, total, p.ScanID), nil)
-
-	report := scanApplyReport{ScanID: p.ScanID, DryRun: dryRun}
-	applied, failed := 0, 0
-	var failures []string
-	for i, rid := range p.ResultIDs {
-		if progress.IsCanceled() {
-			_ = progress.Log("warn", "Operation cancelled by user", nil)
-			s.saveScanApplyReport(ctx, reporter, report)
-			return fmt.Errorf("cancelled")
-		}
-		_ = progress.UpdateProgress(i, total, fmt.Sprintf("%s result %d/%d", mode, i+1, total))
-
-		r, ok := byID[rid]
-		if !ok {
-			report.Results = append(report.Results, scanApplyResult{ResultID: rid,
-				Errors: []string{fmt.Sprintf("result %d is not in scan %d", rid, p.ScanID)}})
-			failed++
-			failures = append(failures, report.Results[len(report.Results)-1].Errors[0])
-			continue
-		}
-		if r.Applied {
-			// Already merged by an earlier apply (a repeated request, or the run
-			// this one replaced): counted, not redone.
-			report.Results = append(report.Results, scanApplyResult{ResultID: rid, Applied: true, Skipped: "already applied"})
-			applied++
-			continue
-		}
-
-		res, cancelled := applyScanResult(ctx, store, opID, r, flags, dryRun, lease, progress.IsCanceled)
-		if cancelled {
-			_ = progress.Log("warn", "Operation cancelled by user", nil)
-			report.Results = append(report.Results, res)
-			s.saveScanApplyReport(ctx, reporter, report)
-			return fmt.Errorf("cancelled")
-		}
-		if res.aborted != "" {
-			// The lease is gone, so the remaining results are not attempted: the
-			// scanner may already be writing. What merged stays merged, the merged
-			// results were already marked, and this one is left unapplied.
-			_ = progress.Log("error", res.aborted, nil)
-			report.Results = append(report.Results, res)
-			s.saveScanApplyReport(ctx, reporter, report)
-			return fmt.Errorf("ai.author-scan-apply aborted after %d of %d result(s): %s", i, total, res.aborted)
-		}
-		if res.Applied && !dryRun {
-			// Mark ONLY a result whose merge fully succeeded. The note that lets an
-			// undo of this operation mark the result pending again is written first
-			// and voided if the mark is refused, like every other row of the ledger.
-			res.Applied = false
-			voidNote, nerr := journalAppliedResult(store, opID, p.ScanID, rid)
-			switch {
-			case nerr != nil:
-				res.Errors = append(res.Errors, fmt.Sprintf("merged, but the result was not marked applied: its undo note could not be recorded: %v", nerr))
-			default:
-				if merr := s.aiScanStore.MarkResultApplied(p.ScanID, rid); merr != nil {
-					if verr := voidNote(); verr != nil {
-						logger.WarnCtx(ctx, "ai scan apply: could not void the undo note of a result that was not marked applied",
-							"scan_id", p.ScanID, "result_id", rid, "err", verr)
-					}
-					if _, ok := stderrors.AsType[*database.ScanSupersededError](merr); ok {
-						res.Errors = append(res.Errors, fmt.Sprintf("merged, but scan %d was superseded meanwhile, so the result was not marked applied: %v", p.ScanID, merr))
-					} else {
-						res.Errors = append(res.Errors, fmt.Sprintf("merged, but the result could not be marked applied: %v", merr))
-					}
-				} else {
-					res.Applied = true
-				}
-			}
-		}
-		report.Results = append(report.Results, res)
-		if res.Applied {
-			applied++
-			_ = progress.Log("info", fmt.Sprintf("Result %d: author %d kept, %d merged, %d reclassified", rid, res.KeepID, len(res.Merged), len(res.Reclassified)), nil)
-			continue
-		}
-		failed++
-		detail := strings.Join(res.Errors[:min(len(res.Errors), 3)], "; ")
-		failures = append(failures, fmt.Sprintf("result %d: %s", rid, detail))
-		_ = progress.Log("warn", fmt.Sprintf("Result %d not applied: %s", rid, detail), nil)
-	}
-
-	s.saveScanApplyReport(ctx, reporter, report)
-	msg := fmt.Sprintf("AI scan #%d: %d of %d result(s) applied, %d not applied", p.ScanID, applied, total, failed)
-	if dryRun {
-		msg = fmt.Sprintf("AI scan #%d PREVIEW (nothing written): %d of %d result(s) would apply, %d would not", p.ScanID, applied, total, failed)
-	}
-	_ = progress.UpdateProgress(total, total, msg)
-	_ = progress.Log("info", msg, nil)
-	if failed > 0 && !dryRun {
-		// Fail rather than complete: the op used to be a mark-only call that
-		// completed whatever happened. The results that merged are marked; the
-		// rest stay unapplied so the page offers them again, with the reasons here.
-		return fmt.Errorf("%s: %s", msg, strings.Join(failures[:min(len(failures), 3)], "; "))
-	}
-	return nil
-}
-
-// saveScanApplyReport stores the per-result outcomes on the run. A failure to
-// store them is logged, not returned: the merges have happened and the run's own
-// status carries the headline.
-func (s *Server) saveScanApplyReport(ctx context.Context, reporter opsregistry.Reporter, report scanApplyReport) {
-	if err := opsregistry.ReporterSetResult(reporter, report); err != nil {
-		logger.WarnCtx(ctx, "ai scan apply: could not store the per-result outcomes", "scan_id", report.ScanID, "err", err)
-	}
 }
 
 func init() {
