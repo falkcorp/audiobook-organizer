@@ -1,7 +1,7 @@
 // file: internal/server/entities_ops_hydrate_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: b9d41f27-8e6a-4c02-9f5b-2a7c14e630d8
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package server
 
@@ -38,6 +38,14 @@ func fullyPopulatedBook(t *testing.T, store *database.PebbleStore) *database.Boo
 		AudibleRatingOverall: fp(4.7),
 		AudibleRatingCount:   ip(1234),
 		GoogleRatingAverage:  fp(4.2),
+	}
+	// A book write refuses a series that has no row, so series 7 is created.
+	restorer, ok := database.AsCapability[database.SeriesRestorer](store)
+	if !ok {
+		t.Fatal("store cannot restore a series row")
+	}
+	if err := restorer.RestoreSeries(seriesID, "The Dark Knight Returns", nil); err != nil {
+		t.Fatalf("RestoreSeries: %v", err)
 	}
 	created, err := store.CreateBook(book)
 	if err != nil {
