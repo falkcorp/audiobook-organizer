@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.61.1
+// version: 3.61.2
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package registry
 
@@ -64,6 +64,10 @@ type Registry struct {
 	pluginRunning   map[string]int        // plugin → count of running ops
 	pluginMax       map[string]int        // plugin → max_concurrent (0 = unlimited)
 	concurrencyKeys map[string]string     // key → opID of holder
+	// externalWrites are write-sets held by callers that write outside the
+	// dispatcher (HoldWriteSet): holder id → claim. Under mu. Never part of
+	// running, so nothing that walks running ops sees one.
+	externalWrites map[string]externalWriteHold
 	// writeSetDeferred dedupes the Gate-3b deferral log line: queued opID →
 	// running opID last logged as blocking it. Dispatcher-goroutine-private
 	// (only dispatchCycle and its helpers touch it), so it is NOT guarded by
