@@ -1,15 +1,17 @@
-// file: internal/updater/updater.go
-// version: 1.1.2
+// file: core/updater/updater.go
+// version: 1.2.1
 // guid: 2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package updater
 
 import (
+	"context"
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -23,13 +25,7 @@ import (
 	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 	"golang.org/x/mod/semver"
-
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
-
-// updateLog routes the updater's lines through internal/logger's sanitizing
-// layer: versions, tags and asset URLs come from the release source.
-var updateLog = logger.New("updater")
 
 // RestartExitCode is the status RestartSelf exits with after an update. The
 // committed systemd unit uses Restart=on-failure, which restarts a service
@@ -59,29 +55,33 @@ var (
 	ErrInvalidVersion = errors.New("version is not a release tag")
 	// ErrReleaseNotFound: the release source has no release with that tag.
 	ErrReleaseNotFound = errors.New("release not found")
-	// ErrSwapBusy: a restore or reset swap is staged (restore_pending) or in
-	// flight (restore_inflight) in the one swap slot (05-updater 5U.12). It is
-	// restorejournal's own sentinel, so the error the slot probe returns
-	// matches it. Swapping in a new binary under a staged or half-applied
-	// swap would pair the new build with the old build's intent.
-	ErrSwapBusy = restorejournal.ErrSwapPending
+	// A staged (restore_pending) or in-flight (restore_inflight) restore or
+	// reset swap refuses an apply with restorejournal.ErrSwapPending, the
+	// slot probe's own sentinel (05-updater 5U.12). Core declares no second
+	// one: callers match restorejournal.ErrSwapPending. Swapping in a new
+	// binary under such a swap would pair the new build with the old build's
+	// intent.
 	// ErrNoStateDir: the updater was built without a state directory, so it
 	// cannot read the swap slot and refuses rather than skip the check.
 	ErrNoStateDir = errors.New("updater has no state directory: cannot check the swap slot, refusing to apply")
 )
 
-// describeSuffix matches the suffix `git describe --tags --always --dirty`
+// describeSuffix returns the pattern that matches the suffix `git describe --tags --always --dirty`
 // (Makefile VERSION) appends to a tag when the build is not exactly that tag:
 // -<commits since tag>-g<abbreviated hash>, optionally followed by -dirty.
-var describeSuffix = regexp.MustCompile(`-[0-9]+-g[0-9a-f]+(-dirty)?$`)
+func describeSuffix() *regexp.Regexp {
+	return regexp.MustCompile(`-[0-9]+-g[0-9a-f]+(-dirty)?$`)
+}
 
-// releaseTagPattern is the only shape a tag may have when it is put into a
+// releaseTagPattern returns the only shape a tag may have when it is put into a
 // release-lookup URL: "v", three numeric parts, and optional pre-release and
 // build parts drawn from [0-9A-Za-z.-]. normalizeTag already requires a valid
 // semantic version, which implies this; the match is repeated at the request
 // site so the URL is visibly built from a value that cannot hold "/", "?",
 // "#", "%" or "..".
-var releaseTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
+func releaseTagPattern() *regexp.Regexp {
+	return regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
+}
 
 // UpdateInfo holds the result of an update check.
 type UpdateInfo struct {
@@ -91,7 +91,7 @@ type UpdateInfo struct {
 	UpdateAvailable bool      `json:"update_available"`
 	ReleaseURL      string    `json:"release_url,omitempty"`
 	ReleaseNotes    string    `json:"release_notes,omitempty"`
-	PublishedAt     time.Time `json:"published_at,omitempty"`
+	PublishedAt     time.Time `json:"published_at"`
 	LastChecked     time.Time `json:"last_checked"`
 	// LocalBuild is set when the running version carries a git describe
 	// suffix: it is not compared with releases and nothing is offered.
@@ -125,6 +125,11 @@ type Updater struct {
 	// stateDir is the resolved absolute state directory whose restore/ holds
 	// the swap slot. Empty means "unknown": an apply refuses (ErrNoStateDir).
 	stateDir string
+
+	// log receives the updater's lines; nil discards them. Versions, tags and
+	// asset URLs come from the release source, so the app passes a logger
+	// whose handler sanitises (WithLogger).
+	log *slog.Logger
 }
 
 // Option configures an Updater built by NewUpdater.
@@ -151,6 +156,21 @@ func WithStateDir(dir string) Option {
 			u.stateDir = abs
 		}
 	}
+}
+
+// WithLogger sets the logger the updater's lines go to. The app passes its
+// sanitising logger: versions, tags and asset URLs come from the release
+// source.
+func WithLogger(l *slog.Logger) Option {
+	return func(u *Updater) { u.log = l }
+}
+
+// logf writes one line: HEAD's updateLog took a format and arguments.
+func (u *Updater) logf(level slog.Level, format string, args ...any) {
+	if u.log == nil {
+		return
+	}
+	u.log.Log(context.Background(), level, fmt.Sprintf(format, args...))
 }
 
 // WithHTTPClientForTest replaces the HTTP client used for lookups and downloads.
@@ -258,7 +278,7 @@ func canonicalVersion(v string) (string, bool) {
 // and orders it below its own base tag, so comparing it with releases would
 // offer the base tag, or an older one, as an update.
 func IsLocalBuild(version string) bool {
-	return describeSuffix.MatchString(version) || strings.HasSuffix(version, "-dirty")
+	return describeSuffix().MatchString(version) || strings.HasSuffix(version, "-dirty")
 }
 
 // isNewer reports whether release tag latest is strictly newer than current.
@@ -300,7 +320,7 @@ func (u *Updater) CheckUnattended(channel string) (*UpdateInfo, error) {
 		return nil, err
 	}
 	if info.UpdateAvailable {
-		updateLog.Info("update available; apply it from Settings: running %s, latest %s (channel %s)",
+		u.logf(slog.LevelInfo, "update available; apply it from Settings: running %s, latest %s (channel %s)",
 			info.CurrentVersion, info.LatestVersion, info.Channel)
 	}
 	return info, nil
@@ -563,7 +583,7 @@ func (u *Updater) DownloadAndReplace(info *UpdateInfo) error {
 		return err
 	}
 
-	updateLog.Info("Downloading update %s from %s", tag, assetURL)
+	u.logf(slog.LevelInfo, "Downloading update %s from %s", tag, assetURL)
 
 	execPath, err := u.executablePath()
 	if err != nil {
@@ -596,7 +616,7 @@ func (u *Updater) DownloadAndReplace(info *UpdateInfo) error {
 	// release downloaded must still find the binary that staged it.
 	if err := u.checkSwapSlot(); err != nil {
 		if rerr := os.Remove(newPath); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
-			updateLog.Warn("Could not remove the downloaded binary %s: %v", newPath, rerr)
+			u.logf(slog.LevelWarn, "Could not remove the downloaded binary %s: %v", newPath, rerr)
 		}
 		return err
 	}
@@ -605,7 +625,7 @@ func (u *Updater) DownloadAndReplace(info *UpdateInfo) error {
 		return err
 	}
 
-	updateLog.Info("Update applied successfully: %s -> %s", info.CurrentVersion, info.LatestVersion)
+	u.logf(slog.LevelInfo, "Update applied successfully: %s -> %s", info.CurrentVersion, info.LatestVersion)
 	return nil
 }
 
@@ -675,7 +695,7 @@ func (u *Updater) swap(execPath, newPath string) error {
 	// fsync is logged, not returned, so a completed swap is never reported as
 	// a failure (which would skip the restart onto the new binary).
 	if err := syncDir(filepath.Dir(execPath)); err != nil {
-		updateLog.Warn("Update applied but the binary directory could not be synced: %v", err)
+		u.logf(slog.LevelWarn, "Update applied but the binary directory could not be synced: %v", err)
 	}
 	return nil
 }
@@ -706,7 +726,7 @@ func (u *Updater) findAssetURL(info *UpdateInfo) (string, error) {
 		return "", errDevelopApply
 	}
 	tag, ok := normalizeTag(info.LatestVersion)
-	if !ok || !releaseTagPattern.MatchString(tag) || strings.Contains(tag, "..") {
+	if !ok || !releaseTagPattern().MatchString(tag) || strings.Contains(tag, "..") {
 		return "", ErrInvalidVersion
 	}
 
@@ -732,7 +752,7 @@ func (u *Updater) findAssetURL(info *UpdateInfo) (string, error) {
 // RestartSelf exits the process with RestartExitCode so that systemd's
 // Restart=on-failure (or launchd's KeepAlive) restarts it with the new binary.
 func (u *Updater) RestartSelf() error {
-	updateLog.Info("Exiting with status %d for restart with updated binary", RestartExitCode)
+	u.logf(slog.LevelInfo, "Exiting with status %d for restart with updated binary", RestartExitCode)
 	exit := u.exit
 	if exit == nil {
 		exit = os.Exit
