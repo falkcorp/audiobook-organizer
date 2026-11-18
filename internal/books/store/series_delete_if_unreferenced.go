@@ -1,13 +1,15 @@
 // file: internal/books/store/series_delete_if_unreferenced.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 70d67056-7e94-4c44-b37f-39897839efed
 // last-edited: 2026-11-17
 
 package store
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/cockroachdb/pebble/v2"
 
@@ -21,6 +23,11 @@ var seriesDeleteLog = logger.New("database.series-delete")
 // ErrSeriesNotFound: no series has that id.
 var ErrSeriesNotFound = errors.New("series not found")
 
+// ErrSeriesChanged: the series' name or author is not what the caller expected,
+// so the caller's snapshot of the row (an undo row, say) is not the row that
+// would have been deleted. Nothing is written.
+var ErrSeriesChanged = errors.New("series changed since it was read")
+
 // SeriesUnreferencedDeleter is the delete a maintenance op uses when it has
 // emptied a series itself and wants the row gone only if that is still true.
 // A separate one-method capability, resolved with AsCapability, for the reason
@@ -30,11 +37,15 @@ type SeriesUnreferencedDeleter interface {
 	// DeleteSeriesIfUnreferenced deletes series id if no book row of any state
 	// names it at the moment of deletion, and reports whether it did. A series
 	// something still references is kept: (false, nil). Nothing is written then.
-	// It returns ErrSeriesNotFound for an id with no row, ErrSeriesHeld for a
+	// expectName and expectAuthorID are the row the caller read (and, for an
+	// undo journal, snapshotted): the delete happens only if the row still has
+	// exactly that name and author, compared under the series lock.
+	// It returns ErrSeriesNotFound for an id with no row, ErrSeriesChanged for a
+	// row whose name or author is not the expected one, ErrSeriesHeld for a
 	// held row, and an error when the reference count cannot be trusted (a
 	// memdb known to be missing rows, or not serving): never a delete on a
 	// guess.
-	DeleteSeriesIfUnreferenced(id int) (deleted bool, err error)
+	DeleteSeriesIfUnreferenced(id int, expectName string, expectAuthorID *int) (deleted bool, err error)
 }
 
 var _ SeriesUnreferencedDeleter = (*PebbleStore)(nil)
@@ -91,6 +102,13 @@ var (
 // the same stripe, so the count and the rows agree. A write that was waiting
 // runs after the delete.
 //
+// It is atomic against every write of the series row too (rename, re-author,
+// hold, restore, delete all hold nameIdx.series): the name and author the
+// caller passes are compared with the row under that lock, and the delete
+// follows under the same hold, so a snapshot the caller built from them (an
+// undo row) is exactly the row that is deleted. A mismatch is ErrSeriesChanged
+// and writes nothing; a held row is refused with ErrSeriesHeld by the delete.
+//
 // WHAT IT IS NOT ATOMIC AGAINST:
 //   - A writer that read the series row EARLIER and writes series_id after the
 //     delete. Book writes do not check that the series they name exists, so a
@@ -100,9 +118,6 @@ var (
 //     and its write is the caller's, and closing it needs the book write to
 //     verify the series under nameIdx.series (a change to every writer, not
 //     made here).
-//   - The caller's earlier reads. A snapshot taken before this call (the name
-//     and author an undo row records) can be out of date by the time the row
-//     is deleted: a rename between the caller's read and this call is not seen.
 //   - Another process on the same database, and any store that does not
 //     implement this method (it is not part of Store).
 //
@@ -115,27 +130,40 @@ var (
 // without a memdb (UseMemDB false: tests) counts with the Pebble scan.
 //
 // The rename notification fires after every lock is released.
-func (p *PebbleStore) DeleteSeriesIfUnreferenced(id int) (bool, error) {
-	deleted, err := p.deleteSeriesIfUnreferencedLocked(id)
+func (p *PebbleStore) DeleteSeriesIfUnreferenced(id int, expectName string, expectAuthorID *int) (bool, error) {
+	deleted, err := p.deleteSeriesIfUnreferencedLocked(id, expectName, expectAuthorID)
 	if deleted {
 		p.notifySeriesRenamed(id)
 	}
 	return deleted, err
 }
 
-func (p *PebbleStore) deleteSeriesIfUnreferencedLocked(id int) (bool, error) {
+func (p *PebbleStore) deleteSeriesIfUnreferencedLocked(id int, expectName string, expectAuthorID *int) (bool, error) {
 	unlockBooks := p.lockEveryBook()
 	defer unlockBooks()
 	p.nameIdx.series.Lock()
 	defer p.nameIdx.series.Unlock()
 
-	if _, closer, err := p.db.Get([]byte(fmt.Sprintf("series:%d", id))); err != nil {
+	// The row as it is NOW, read from Pebble (the authority the rename writers
+	// write first), compared with the row the caller read and journaled. A rename
+	// or a re-author between that read and this point is a change the caller's
+	// snapshot does not describe.
+	val, closer, err := p.db.Get([]byte(fmt.Sprintf("series:%d", id)))
+	if err != nil {
 		if errors.Is(err, pebble.ErrNotFound) {
 			return false, fmt.Errorf("series %d: %w", id, ErrSeriesNotFound)
 		}
 		return false, fmt.Errorf("read series %d: %w", id, err)
-	} else {
-		closer.Close()
+	}
+	var cur Series
+	uerr := json.Unmarshal(val, &cur)
+	closer.Close()
+	if uerr != nil {
+		return false, fmt.Errorf("decode series %d: %w", id, uerr)
+	}
+	if cur.Name != expectName || !sameSeriesAuthor(cur.AuthorID, expectAuthorID) {
+		return false, fmt.Errorf("series %d is %q under %s, expected %q under %s: %w",
+			id, cur.Name, authorLabel(cur.AuthorID), expectName, authorLabel(expectAuthorID), ErrSeriesChanged)
 	}
 
 	refs, err := p.seriesRefCountForDelete(id)
@@ -187,4 +215,12 @@ func (p *PebbleStore) countRefsForDelete(id int) (int, error) {
 		return 0, fmt.Errorf("count references to series %d: %w", id, err)
 	}
 	return counts[id], nil
+}
+
+// authorLabel renders an optional author id for an error message.
+func authorLabel(id *int) string {
+	if id == nil {
+		return "no author"
+	}
+	return "author " + strconv.Itoa(*id)
 }

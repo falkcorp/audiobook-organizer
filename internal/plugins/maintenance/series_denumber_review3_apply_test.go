@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_review3_apply_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9b3d7e20-4c16-4a58-b1e9-6f0d2a85c734
 // last-edited: 2026-11-17
 
@@ -432,6 +432,94 @@ func TestSeriesDenumber_Round3_M3_AFailingCheckAndDeleteFailsTheRunAndVoidsItsRo
 	// degraded memdb makes the store refuse, and the operator reads why.
 	if applied := readFile(t, l.reportPath+".applied"); !strings.Contains(applied, "kept: the delete could not verify the series is unreferenced") {
 		t.Errorf("the outcome report has no row for the series whose delete failed:\n%s", applied)
+	}
+}
+
+// mutateSeriesNow changes series id as another writer would at the moment it is
+// called (a test calls it from refsAtDelete, which runs after the op's own
+// re-read and before the delete).
+func (l *denumberLib) mutateSeriesNow(id int, mutate func(s *database.Series)) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for i := range l.series {
+		if l.series[i].ID == id {
+			mutate(&l.series[i])
+		}
+	}
+}
+
+// The series is renamed or re-authored AFTER the op's own re-read and before the
+// delete. The undo row the op journaled holds the old name and author, so a
+// delete that went ahead would leave a revert recreating a series nobody has
+// any more. The store compares under its lock and refuses; the op keeps the
+// series, voids the row, reports why, and does not fail the run.
+func TestSeriesDenumber_Round3_M3_ASourceRenamedOrReauthoredAtDeleteTimeIsKept(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(s *database.Series)
+	}{
+		{"renamed", func(s *database.Series) { s.Name = "Court of Owls: The Return" }},
+		{"given another author", func(s *database.Series) { a := denumberAuthor + 1; s.AuthorID = &a }},
+		{"given no author", func(s *database.Series) { s.AuthorID = nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := oneRunLib(t)
+			l.refsAtDelete = func(id int) (int, error) {
+				if id == 11 {
+					l.mutateSeriesNow(11, tc.mutate)
+				}
+				return 0, nil
+			}
+
+			rep := l.mustRun(`{"apply": true}`)
+
+			if l.deleted[11] {
+				t.Fatalf("the series was deleted although it changed after the op read it: events=%v", l.events)
+			}
+			rows := seriesRowDeleteRows(l)
+			if len(rows) != 1 || !rows[0].Voided {
+				t.Errorf("want one VOIDED series_row_delete row, got %+v", rows)
+			}
+			if applied := readFile(t, l.reportPath+".applied"); !strings.Contains(applied, "kept: the series was renamed or re-authored at delete time") {
+				t.Errorf("the outcome report does not say why the series was kept:\n%s", applied)
+			}
+			if !strings.Contains(joinLogs(rep), "1 emptied series NOT deleted") {
+				t.Errorf("summary %q does not count the kept series", joinLogs(rep))
+			}
+		})
+	}
+}
+
+// A repair holds the series after the op's re-read and before the delete. The
+// store refuses a held row; the op keeps it, voids the row and reports the hold
+// as the reason, rather than as a failed delete.
+func TestSeriesDenumber_Round3_M3_ASourceHeldAtDeleteTimeIsKeptAsHeld(t *testing.T) {
+	l := oneRunLib(t)
+	l.refsAtDelete = func(id int) (int, error) {
+		if id == 11 {
+			l.mutateSeriesNow(11, func(s *database.Series) { s.HeldBy = "series-prune-fixer" })
+		}
+		return 0, nil
+	}
+
+	rep := l.mustRun(`{"apply": true}`)
+
+	if l.deleted[11] {
+		t.Fatalf("a held series was deleted: events=%v", l.events)
+	}
+	rows := seriesRowDeleteRows(l)
+	if len(rows) != 1 || !rows[0].Voided {
+		t.Errorf("want one VOIDED series_row_delete row, got %+v", rows)
+	}
+	applied := readFile(t, l.reportPath+".applied")
+	if !strings.Contains(applied, "kept: held by a repair at delete time") {
+		t.Errorf("the outcome report does not say the series was held:\n%s", applied)
+	}
+	if strings.Contains(applied, "could not verify") {
+		t.Errorf("a hold was reported as a failed check:\n%s", applied)
+	}
+	if !strings.Contains(joinLogs(rep), "1 emptied series NOT deleted") {
+		t.Errorf("summary %q does not count the held series", joinLogs(rep))
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_op.go
-// version: 5.1.0
+// version: 5.2.0
 // guid: 3f0b6c84-52d1-4a97-9e35-c8b71d0af426
 // last-edited: 2026-11-17
 
@@ -1423,8 +1423,10 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 		// The row is read again too: the snapshot a revert recreates it from must
 		// be the row that is deleted, not the one planned, and a series renamed or
 		// re-authored since the plan is somebody's edit this run does not delete
-		// over. The snapshot is journaled BEFORE the delete; a delete that then
-		// fails, or that finds the series referenced, voids the row.
+		// over. The delete is passed that row's name and author and compares them under
+		// the store's lock, so a rename between this read and the delete is refused
+		// too. The snapshot is journaled BEFORE the delete; a delete that then fails,
+		// or that finds the series referenced, changed or held, voids the row.
 		src := run.seriesByID[pl.FromID]
 		if movedAll && stay == 0 && len(sr.Held) == 0 && len(heldNow) == 0 && safeToDelete &&
 			len(run.members[pl.FromID]) == 0 && !database.SeriesHeld(src) {
@@ -1475,7 +1477,7 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 						failed++
 						log.Warn("series-denumber: not deleting emptied series: its undo row was not written", "series", src.ID, "err", jerr)
 					default:
-						gone, derr := deleter.DeleteSeriesIfUnreferenced(src.ID)
+						gone, derr := deleter.DeleteSeriesIfUnreferenced(src.ID, cur.Name, cur.AuthorID)
 						if !gone {
 							// The row stays, so its undo row is voided: a revert has nothing to
 							// restore.
@@ -1487,6 +1489,18 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 						case derr != nil && errors.Is(derr, database.ErrSeriesNotFound):
 							log.Info("series-denumber: emptied series was deleted by someone else before this run's delete", "series", src.ID)
 							outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: already deleted by someone else"})
+						case errors.Is(derr, database.ErrSeriesChanged):
+							// Renamed or re-authored after this run's re-read: the journaled
+							// snapshot would not describe the row, so nothing is deleted.
+							heldDelete++
+							log.Warn("series-denumber: not deleting emptied series: it was renamed or re-authored at delete time", "series", src.ID, "planned_name", src.Name)
+							outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: the series was renamed or re-authored at delete time"})
+						case errors.Is(derr, database.ErrSeriesHeld):
+							// A repair took the series between the re-read and the delete: its
+							// books are linked back by an undo, so the row stays.
+							heldDelete++
+							log.Warn("series-denumber: not deleting emptied series: it was held at delete time", "series", src.ID, "name", src.Name)
+							outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: held by a repair at delete time"})
 						case derr != nil:
 							// The store would not answer "unreferenced" (a memdb that is not
 							// serving or is missing rows refuses rather than guess, the series

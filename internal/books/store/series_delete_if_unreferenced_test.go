@@ -1,5 +1,5 @@
 // file: internal/books/store/series_delete_if_unreferenced_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b5d7e92-3c4a-4f18-a6d1-52e8c9f03b74
 // last-edited: 2026-11-17
 
@@ -125,7 +125,7 @@ func TestDeleteSeriesIfUnreferenced_AWriteBetweenCountAndDeleteCannotLand(t *tes
 				}
 			})
 
-			deleted, err := s.DeleteSeriesIfUnreferenced(ser.ID)
+			deleted, err := s.DeleteSeriesIfUnreferenced(ser.ID, ser.Name, ser.AuthorID)
 			require.NoError(t, err)
 			require.True(t, deleted, "nothing referenced the series when it was counted under the locks")
 
@@ -172,7 +172,7 @@ func TestDeleteSeriesIfUnreferenced_HoldsEveryBookStripeAndTheSeriesLockAcrossTh
 					t.Errorf("the series name-index lock is free %s", pos.name)
 				}
 			})
-			deleted, err := s.DeleteSeriesIfUnreferenced(ser.ID)
+			deleted, err := s.DeleteSeriesIfUnreferenced(ser.ID, ser.Name, ser.AuthorID)
 			require.NoError(t, err)
 			require.True(t, deleted)
 			require.True(t, checked.Load(), "the hook did not run")
@@ -209,7 +209,7 @@ func TestDeleteSeriesIfUnreferenced_KeepsASeriesAnyKindOfRowReferences(t *testin
 			require.NoError(t, err)
 			mkBook(t, s, "Knightfall Part One", ser.ID, tc.primary, tc.trashed)
 
-			deleted, err := s.DeleteSeriesIfUnreferenced(ser.ID)
+			deleted, err := s.DeleteSeriesIfUnreferenced(ser.ID, ser.Name, ser.AuthorID)
 			require.NoError(t, err)
 			require.False(t, deleted, "a referenced series must be kept")
 			got, err := s.GetSeriesByID(ser.ID)
@@ -230,7 +230,7 @@ func TestDeleteSeriesIfUnreferenced_DeletesAnUnreferencedSeriesAndItsNameIndex(t
 	require.NoError(t, err)
 	mkBook(t, s, "Contagion Part One", other.ID, true, false) // another series' reference does not count
 
-	deleted, err := s.DeleteSeriesIfUnreferenced(ser.ID)
+	deleted, err := s.DeleteSeriesIfUnreferenced(ser.ID, ser.Name, ser.AuthorID)
 	require.NoError(t, err)
 	require.True(t, deleted)
 	got, err := s.GetSeriesByID(ser.ID)
@@ -247,7 +247,7 @@ func TestDeleteSeriesIfUnreferenced_DeletesAnUnreferencedSeriesAndItsNameIndex(t
 func TestDeleteSeriesIfUnreferenced_Refusals(t *testing.T) {
 	t.Run("a series that does not exist", func(t *testing.T) {
 		s := seedRefStore(t)
-		deleted, err := s.DeleteSeriesIfUnreferenced(424242)
+		deleted, err := s.DeleteSeriesIfUnreferenced(424242, "Detective Comics", nil)
 		require.ErrorIs(t, err, ErrSeriesNotFound)
 		require.False(t, deleted)
 	})
@@ -256,7 +256,7 @@ func TestDeleteSeriesIfUnreferenced_Refusals(t *testing.T) {
 		ser, err := s.CreateSeries("Zero Year", nil)
 		require.NoError(t, err)
 		require.NoError(t, s.HoldSeries(ser.ID, "test-hold"))
-		deleted, err := s.DeleteSeriesIfUnreferenced(ser.ID)
+		deleted, err := s.DeleteSeriesIfUnreferenced(ser.ID, ser.Name, ser.AuthorID)
 		require.ErrorIs(t, err, ErrSeriesHeld)
 		require.False(t, deleted)
 		got, err := s.GetSeriesByID(ser.ID)
@@ -268,13 +268,119 @@ func TestDeleteSeriesIfUnreferenced_Refusals(t *testing.T) {
 		ser, err := s.CreateSeries("Endgame", nil)
 		require.NoError(t, err)
 		s.mem().recordLostRows(memTableBooks, 1)
-		deleted, err := s.DeleteSeriesIfUnreferenced(ser.ID)
+		deleted, err := s.DeleteSeriesIfUnreferenced(ser.ID, ser.Name, ser.AuthorID)
 		require.ErrorIs(t, err, ErrMemdbIncomplete, "a short count answers low, which authorises a delete: refuse instead")
 		require.False(t, deleted)
 		got, err := s.GetSeriesByID(ser.ID)
 		require.NoError(t, err)
 		require.NotNil(t, got)
 	})
+}
+
+// The caller read the series (and journaled what it read) before calling; the
+// delete is only of that row. A row that has since been renamed, or given another
+// author or none, is not deleted: nothing the caller recorded would describe it.
+func TestDeleteSeriesIfUnreferenced_RefusesARowChangedSinceTheCallerReadIt(t *testing.T) {
+	author := 7
+	other := 8
+	for _, tc := range []struct {
+		name       string
+		expectName string
+		expectAuth *int
+	}{
+		{"a different name", "Batman: Hush", &author},
+		{"a name differing only by case", "the long halloween", &author},
+		{"a different author", "The Long Halloween", &other},
+		{"an author where the row has none", "The Long Halloween", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := seedRefStore(t)
+			ser, err := s.CreateSeries("The Long Halloween", &author)
+			require.NoError(t, err)
+
+			deleted, err := s.DeleteSeriesIfUnreferenced(ser.ID, tc.expectName, tc.expectAuth)
+
+			require.ErrorIs(t, err, ErrSeriesChanged)
+			require.False(t, deleted)
+			got, err := s.GetSeriesByID(ser.ID)
+			require.NoError(t, err)
+			require.NotNil(t, got, "a refused delete leaves the row")
+			byName, err := s.GetSeriesByName("The Long Halloween", &author)
+			require.NoError(t, err)
+			require.NotNil(t, byName, "and its name index entry")
+		})
+	}
+	t.Run("a row that has no author, expected with one", func(t *testing.T) {
+		s := seedRefStore(t)
+		ser, err := s.CreateSeries("Dark Victory", nil)
+		require.NoError(t, err)
+		deleted, err := s.DeleteSeriesIfUnreferenced(ser.ID, "Dark Victory", &author)
+		require.ErrorIs(t, err, ErrSeriesChanged)
+		require.False(t, deleted)
+	})
+	t.Run("a rename between the caller's read and the call", func(t *testing.T) {
+		s := seedRefStore(t)
+		ser, err := s.CreateSeries("Year One", nil)
+		require.NoError(t, err)
+		read := *ser // what the caller read and journaled
+		require.NoError(t, s.RenameSeriesIfCurrent(ser.ID, "Year One", "Batman: Year One"))
+
+		deleted, err := s.DeleteSeriesIfUnreferenced(read.ID, read.Name, read.AuthorID)
+
+		require.ErrorIs(t, err, ErrSeriesChanged)
+		require.False(t, deleted)
+		got, err := s.GetSeriesByID(ser.ID)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.Equal(t, "Batman: Year One", got.Name, "the rename stands")
+	})
+}
+
+// The compare and the delete are one step under the series lock: a rename that
+// starts while the method runs waits for it, and then finds the series gone. Run
+// at both hook positions, so a compare moved out from under the lock, or a lock
+// released before the delete, shows here.
+func TestDeleteSeriesIfUnreferenced_ARenameCannotLandBetweenTheCompareAndTheDelete(t *testing.T) {
+	for _, pos := range deleteHookPositions {
+		t.Run(pos.name, func(t *testing.T) {
+			s := seedRefStore(t)
+			ser, err := s.CreateSeries("Zero Year", nil)
+			require.NoError(t, err)
+
+			var (
+				done      = make(chan struct{})
+				mu        sync.Mutex
+				renameErr error
+			)
+			setSeriesDeleteHook(t, pos.set, func(id int) {
+				go func() {
+					defer close(done)
+					err := s.RenameSeriesIfCurrent(id, "Zero Year", "Batman: Zero Year")
+					mu.Lock()
+					renameErr = err
+					mu.Unlock()
+				}()
+				select {
+				case <-done:
+					t.Error("a rename landed while the compare and the delete were running")
+				case <-time.After(300 * time.Millisecond):
+				}
+			})
+
+			deleted, err := s.DeleteSeriesIfUnreferenced(ser.ID, ser.Name, ser.AuthorID)
+			require.NoError(t, err)
+			require.True(t, deleted)
+
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the held-back rename never completed after the method returned")
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			require.ErrorIs(t, renameErr, ErrRenameSeriesNotFound, "the rename ran after the delete")
+		})
+	}
 }
 
 // A store built without a memdb counts with the Pebble scan, and answers the
@@ -288,10 +394,10 @@ func TestDeleteSeriesIfUnreferenced_WithoutAMemdbCountsWithThePebbleScan(t *test
 	require.NoError(t, err)
 	mkBook(t, s, "Batman Eternal Part One", held.ID, true, true)
 
-	deleted, err := s.DeleteSeriesIfUnreferenced(held.ID)
+	deleted, err := s.DeleteSeriesIfUnreferenced(held.ID, held.Name, held.AuthorID)
 	require.NoError(t, err)
 	require.False(t, deleted)
-	deleted, err = s.DeleteSeriesIfUnreferenced(free.ID)
+	deleted, err = s.DeleteSeriesIfUnreferenced(free.ID, free.Name, free.AuthorID)
 	require.NoError(t, err)
 	require.True(t, deleted)
 }
@@ -336,7 +442,7 @@ func TestDeleteSeriesIfUnreferenced_DoesNotDeadlockWithWritersThatCreateSeries(t
 		for i := 0; i < 60; i++ {
 			ser, err := s.CreateSeries(fmt.Sprintf("No Mans Land %d", i%3), nil)
 			if err == nil {
-				_, _ = s.DeleteSeriesIfUnreferenced(ser.ID)
+				_, _ = s.DeleteSeriesIfUnreferenced(ser.ID, ser.Name, ser.AuthorID)
 			}
 		}
 	}()
