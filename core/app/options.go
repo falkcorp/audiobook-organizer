@@ -1,7 +1,7 @@
 // file: core/app/options.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 55e09ad5-34c8-4d0f-b8d5-117718ebf0ed
-// last-edited: 2026-11-12
+// last-edited: 2026-11-18
 
 package app
 
@@ -19,12 +19,13 @@ import (
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/updater"
 )
 
 // Options configure one process (06 §6.4.5). Zero values are valid defaults
 // unless noted. These are the R1 fields that need no storage (06 §6.4.10)
 // and F3's config lists; a field whose package lands later (UI, UIOptions,
-// Authenticators, Auth, Adapters, Updater, InterimBackends) arrives with it.
+// Authenticators, Auth, Adapters, InterimBackends) arrives with it.
 type Options struct {
 	AppID string // app identifier, [a-z][a-z0-9]{1,15} (03 §3.6), e.g. "abo"
 	// MetricNamespace is the namespace of every series the App emits: core's
@@ -180,6 +181,14 @@ type Options struct {
 	// that cannot be built degrades the Provider and New goes on (05-metrics
 	// §8, as ABO's InitOTEL did).
 	Telemetry *Telemetry
+
+	// Updater is the app's release source and binary name for core's updater
+	// (05-updater §5U.3): nil = no updater, no routes and no tasks. Only
+	// `updater fetch-release` reads it in this build (F8-02); F8-04 hands it
+	// to the kernel, which then registers the three core.updater.* tasks and
+	// mounts the four routes. The Options' Source names the repository and its
+	// AssetName the release asset, so core names no app.
+	Updater *updater.Options
 }
 
 // R1Server is one listener R1Listen opens: what the supervisor drives.

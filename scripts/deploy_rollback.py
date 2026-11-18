@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/deploy_rollback.py
-# version: 1.1.1
+# version: 1.2.0
 # guid: 0d519d12-853d-4902-8896-8d5744a32cbd
-# last-edited: 2026-11-09
+# last-edited: 2026-11-18
 
 """`make rollback` and `make rollback-restore` (R1-27).
 
@@ -11,7 +11,7 @@ rollback-restore`, 09 §9.2.1 "Rollback", 09 §9.2.2.
 
 Usage (the Makefile passes every value):
     deploy_rollback.py rollback --guard G --host H --bin B --db D --url U --unit N --timeout S
-    deploy_rollback.py restore  --guard G --host H --bin B --db D --url U --unit N --timeout S [--archive NAME]
+    deploy_rollback.py restore  --guard G --host H --bin B --db D --url U --unit N --timeout S [--archive NAME] [--release TAG]
 
 The decisions are scripts/storage_format_guard.py's, loaded from --guard so
 the recipe tests can run a mutated copy; every remote command is in its
@@ -32,6 +32,14 @@ restore (make rollback-restore):
      still runs, so a refusal leaves it running: the probe, the source (the
      latest restorable checkpoint, or ROLLBACK_ARCHIVE, a file name in the
      helpers' archive_dir), `.prev`'s levels EQUAL to the source's.
+     With RELEASE=<tag> (--release) there need be no `.prev`: after the
+     source is read, the CURRENT binary's `updater fetch-release` downloads
+     that release to the helpers' stage_bin, as the deploy user, with a
+     scratch state directory (it reads no store); its levels must EQUAL the
+     source's, and only then does the install-staged helper install it as
+     `<bin>.prev` (replacing any `.prev`, which is the point of the flag).
+     Any refusal before that deletes the fetched file and leaves `.prev` as
+     it was.
   2. Match the unit type to `.prev` and read the InvocationID, still before
      the stop.
   3. Stop the unit; check it stays stopped; probe again.
@@ -90,17 +98,35 @@ class Run:
         self.g = guard
         self.a = a
         self.o = guard.Opts(
-            host=a.host, db=a.db, bin=a.bin, unit=a.unit, archive=getattr(a, "archive", "") or ""
+            host=a.host,
+            db=a.db,
+            bin=a.bin,
+            unit=a.unit,
+            archive=getattr(a, "archive", "") or "",
+            release=getattr(a, "release", "") or "",
         )
         self.get = guard.SSH(self.o)
+        # RELEASE's file in stage_bin: fetched and not yet installed as .prev,
+        # so every refusal in between deletes it.
+        self.fetched = False
 
     def say(self, *lines: str, err: bool = False) -> None:
         for line in lines:
             print(self.g.clean(line), file=sys.stderr if err else sys.stdout, flush=True)
 
     def refuse(self, *lines: str) -> int:
+        self.discard_fetched()
         self.say(*lines, err=True)
         return 1
+
+    def discard_fetched(self) -> None:
+        """Delete RELEASE's fetched file after a refusal (best effort: it is
+        only a staged copy, and the next fetch replaces it)."""
+        if not self.fetched:
+            return
+        self.fetched = False
+        self.o.prev_path = ""
+        self.g.run_remote(self.o.host, self.cmd("discard_fetched"), timeout=60)
 
     def cmd(self, key: str, name: str = "") -> str:
         return self.g.commands(self.o, name)[key]
@@ -132,11 +158,61 @@ class Run:
         refusal = self.g.load_host_config(self.o, self.get)
         if refusal:
             return self.refuse(*refusal)
-        if self.get("prev_exists").rc != 0:
+        if self.o.release and not self.o.stage_bin:
+            return self.refuse(
+                f"REFUSING: RELEASE={self.o.release} fetches the release to stage_bin, which {self.g.HOST_CONFIG} "
+                f"on {self.o.host} does not set. Nothing was changed.",
+                f"Set stage_bin there (the file make deploy uploads the binary to; {self.g.DOCS}).",
+            )
+        if not self.o.release and self.get("prev_exists").rc != 0:
             return self.refuse(
                 f"REFUSING: no {self.o.bin}.prev on {self.o.host}: install the release to roll back to as "
-                f"{self.o.bin}.prev first. Nothing was changed."
+                f"{self.o.bin}.prev first (make rollback-restore RELEASE=<tag> fetches and installs a "
+                "release). Nothing was changed."
             )
+        return 0
+
+    def fetch_release(self, src) -> list[str]:
+        """RELEASE: download the named release with the current binary into
+        stage_bin and make it the binary whose levels are compared. Returns
+        refusal lines, or none. The guard calls it once the source is read."""
+        o = self.o
+        self.say(
+            f"→ Fetching release {o.release} with {o.bin} updater fetch-release (to {o.stage_bin}; "
+            f"{o.bin}.prev is not touched until its levels are checked)..."
+        )
+        # A file left in stage_bin is the caller's from now on: a refusal
+        # deletes it, whatever state the fetch left it in.
+        self.fetched = True
+        r = self.act("fetch_release", stream=True, timeout=None)
+        if r.rc != 0:
+            return [
+                f"REFUSING: `{o.bin} updater fetch-release --version {o.release}` failed (exit {r.rc}; its "
+                f"message is above). Nothing was changed; {o.bin}.prev is as it was.",
+                f"The release must exist in the app's release source with this platform's binary; "
+                f"{o.bin} must be a build that has `updater fetch-release`.",
+            ]
+        o.prev_path = o.stage_bin
+        return []
+
+    def install_fetched(self) -> int:
+        """RELEASE: install the fetched file, whose levels equal the source's,
+        as <bin>.prev."""
+        o = self.o
+        self.say(f"→ Installing release {o.release} as {o.bin}.prev (install-staged prev)...")
+        r = self.act("install_prev")
+        if r.rc != 0:
+            return self.refuse(
+                f"REFUSING: installing release {o.release} as {o.bin}.prev failed ({self.g._cause(r)}). Nothing "
+                f"was stopped or restored; {o.bin}.prev is unchanged.",
+                f"The install-staged helper must be the one that has `prev` (deploy/rollback-helpers, {self.g.DOCS}): "
+                "reinstall the helpers as root if it reports a usage error.",
+            )
+        # Installed: the staged copy has done its job (a deploy uploads a
+        # fresh one), and the levels read from it are now read from .prev.
+        self.discard_fetched()
+        for key in ("prev_levels", "prev_format", "prev_caps"):
+            self.get.cache.pop(key, None)
         return 0
 
     def match_unit_type(self) -> int:
@@ -231,14 +307,18 @@ def rollback(run: Run) -> int:
 def restore(run: Run) -> int:
     o = run.o
     run.say(
-        f"→ Rollback-restore of {o.db} on {o.host}{' from ' + o.archive if o.archive else ''}..."
+        f"→ Rollback-restore of {o.db} on {o.host}{' from ' + o.archive if o.archive else ''}"
+        f"{' with release ' + o.release if o.release else ''}..."
     )
     if run.preflight():
         return 1
-    code, lines, restore_cmd = run.g.decide_restore(o, run.get)
-    run.say(*lines, err=code != 0)
+    code, lines, restore_cmd = run.g.decide_restore(
+        o, run.get, fetch=run.fetch_release if o.release else None
+    )
     if code:
+        run.refuse(*lines)
         return 1
+    run.say(*lines)
     # A restore from an earlier run (lost to an ssh drop) may still be
     # running: refuse before anything here stops or changes the service.
     r = run.get("restore_unit")
@@ -256,6 +336,8 @@ def restore(run: Run) -> int:
             f"If it succeeded, finish with: {run.ssh_line('swap')} && {run.ssh_line('start')}",
             "If it failed, run make rollback-restore again once it has ended.",
         )
+    if o.release and run.install_fetched():
+        return 1
     if run.match_unit_type():
         return 1
     previous, err = run.invocation()
@@ -372,12 +454,13 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--timeout", type=float, default=300.0)
         if mode == "restore":
             p.add_argument("--archive", default="")
+            p.add_argument("--release", default="")
     a = parser.parse_args(argv)
     guard = load_guard(a.guard)
     for k in ("host", "bin", "db", "unit", "url"):
         setattr(a, k, getattr(a, k).strip())
     if a.mode == "restore":
-        a.archive = a.archive.strip()
+        a.archive, a.release = a.archive.strip(), a.release.strip()
     run = Run(guard, a)
     bad = guard._validate(run.o)
     if bad or a.timeout < 0:

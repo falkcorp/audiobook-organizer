@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/tests/fake_ssh.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: e299f5fd-6b61-4552-a861-35f0c11b511d
-# last-edited: 2026-11-09
+# last-edited: 2026-11-18
 
 """A fake deploy host for the deploy and rollback recipes' tests.
 
@@ -206,6 +206,20 @@ if args[:2] == ["storage", "restore-offline"]:
         sys.exit(IDENT["restore_exit"])
     print("Restored (journal 20261109T000000Z-0badc0de); start the service.")
     sys.exit(0)
+if args[:2] == ["updater", "fetch-release"]:
+    # releases: tag -> the text of the fake binary that release is (fake_app_text).
+    rest = dict(zip(args[2::2], args[3::2]))
+    text = IDENT.get("releases", {{}}).get(rest.get("--version", ""))
+    if text is None:
+        sys.stderr.write("Error: updater fetch-release: release not found: " + rest.get("--version", "") + "\\n")
+        sys.exit(1)
+    out = rest["--out"]
+    with open(out + ".part", "w", encoding="utf-8") as f:
+        f.write(text)
+    os.chmod(out + ".part", 0o755)
+    os.replace(out + ".part", out)
+    print("fetched release " + rest["--version"] + " to " + out)
+    sys.exit(0)
 sys.stderr.write("fake app: unexpected arguments " + repr(args) + "\\n")
 sys.exit(3)
 """
@@ -310,14 +324,19 @@ def write_fake_app(path: str | Path, ident: dict) -> None:
     levels_exit (exit with this status and no output instead), format (for
     --print-storage-format, None for "unknown flag"), capabilities (None for
     "unknown flag"), restore_exit, restore_stderr, into_exit, into_levels (the
-    .storage-levels text an --into copy gets).
+    .storage-levels text an --into copy gets), releases (tag -> fake_app_text of
+    the binary `updater fetch-release --version tag --out P` writes to P; a
+    tag not in it exits 1 "release not found").
     """
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(
-        _APP_TEMPLATE.format(ident=json.dumps(ident), name=ident.get("name", "")), encoding="utf-8"
-    )
+    p.write_text(fake_app_text(ident), encoding="utf-8")
     p.chmod(0o755)
+
+
+def fake_app_text(ident: dict) -> str:
+    """The text of the fake binary write_fake_app writes for ident."""
+    return _APP_TEMPLATE.format(ident=json.dumps(ident), name=ident.get("name", ""))
 
 
 def fake_app_name(path: str | Path) -> str:

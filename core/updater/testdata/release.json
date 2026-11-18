@@ -1,8 +1,8 @@
 {
-  "file": "internal/updater/testdata/release.json",
-  "version": "1.0.0",
+  "file": "core/updater/testdata/release.json",
+  "version": "1.0.1",
   "guid": "b1da7e3d-1132-42d2-bc27-8051db49a38c",
-  "last_edited": "2026-11-05",
+  "last_edited": "2026-11-18",
   "tag_name": "{{TAG}}",
   "html_url": "https://example.invalid/releases/{{TAG}}",
   "body": "The Long Halloween",
@@ -10,8 +10,8 @@
   "published_at": "2026-11-01T00:00:00Z",
   "assets": [
     {
-      "name": "audiobook-organizer-plan9-386",
-      "browser_download_url": "{{BASE}}/assets/{{TAG}}/audiobook-organizer-plan9-386"
+      "name": "gotham-hq-plan9-386",
+      "browser_download_url": "{{BASE}}/assets/{{TAG}}/gotham-hq-plan9-386"
     },
     {
       "name": "{{ASSET_NAME}}",

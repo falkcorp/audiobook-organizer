@@ -1,5 +1,5 @@
-// file: core/updater/swapslot_test.go
-// version: 1.0.2
+// file: internal/updater/swapslot_test.go
+// version: 2.0.0
 // guid: d13289f7-2386-4617-b888-5fb4eb506d55
 // last-edited: 2026-11-18
 
@@ -18,16 +18,20 @@ import (
 
 // slotRig is an updater with a state directory of its own, so a test can put
 // swap intents in it, and a fake release to apply.
-func slotRig(t *testing.T, stateDir string) (*Updater, string, *UpdateInfo) {
+func slotRig(t *testing.T, stateDir string, wrap ...func(*http.Client) *http.Client) (*Updater, string, *UpdateInfo) {
 	t.Helper()
 	f := newFakeReleases(t, "v0.224.0")
 	exe := filepath.Join(t.TempDir(), "audiobook-organizer")
 	if err := os.WriteFile(exe, []byte(oldBinary), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	client := f.srv.Client()
+	for _, w := range wrap {
+		client = w(client)
+	}
 	opts := []Option{
 		WithAPIBaseForTest(f.srv.URL),
-		WithHTTPClientForTest(f.srv.Client()),
+		WithHTTPClientForTest(client),
 		WithExecutableForTest(func() (string, error) { return exe, nil }),
 		WithExitForTest(func(int) {}),
 	}
@@ -98,11 +102,13 @@ func TestApplyRefusesWhileSwapPendingOrInflight(t *testing.T) {
 
 	t.Run("a swap staged during the download refuses before the rename", func(t *testing.T) {
 		state := t.TempDir()
-		u, exe, target := slotRig(t, state)
 		// The asset download stages a reset in the slot as it starts, as an
 		// operator's storage reset racing the update would.
-		staging := &stageOnDownload{next: u.httpClient.Transport, pending: restorejournal.PendingPath(state), t: t}
-		u.httpClient = &http.Client{Transport: staging}
+		staging := &stageOnDownload{pending: restorejournal.PendingPath(state), t: t}
+		u, exe, target := slotRig(t, state, func(c *http.Client) *http.Client {
+			staging.next = c.Transport
+			return &http.Client{Transport: staging}
+		})
 
 		err := u.DownloadAndReplace(target)
 		if !staging.done {
