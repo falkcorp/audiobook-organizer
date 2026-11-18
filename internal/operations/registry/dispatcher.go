@@ -1,7 +1,7 @@
 // file: internal/operations/registry/dispatcher.go
-// version: 2.8.2
+// version: 2.8.3
 // guid: a7b8c9d0-e1f2-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package registry
 
@@ -399,6 +399,9 @@ func (r *Registry) releaseClaim(opID, plugin, concurrencyKey string) (canceled b
 // A zombie handle stays in r.running with its writes, so it keeps blocking
 // overlapping writers until its goroutine exits (intended: it may still be
 // writing those resources).
+//
+// A write-set held outside the dispatcher (HoldWriteSet, r.externalWrites)
+// blocks like a running op; its stand-in handle is built here and never stored.
 func (r *Registry) writeSetConflictLocked(candidateID string, candidateWrites []Resource) (*runHandle, []Resource) {
 	if len(candidateWrites) == 0 {
 		return nil, nil
@@ -415,6 +418,22 @@ func (r *Registry) writeSetConflictLocked(candidateID string, candidateWrites []
 		}
 		if len(overlap) > 0 {
 			return h, overlap
+		}
+	}
+	// Write-sets held outside the dispatcher (HoldWriteSet) count like a running
+	// op's. The stand-in handle carries only what callers read: id, defID, writes.
+	for holderID, hold := range r.externalWrites {
+		if holderID == candidateID {
+			continue
+		}
+		var overlap []Resource
+		for _, w := range candidateWrites {
+			if slices.Contains(hold.writes, w) {
+				overlap = append(overlap, w)
+			}
+		}
+		if len(overlap) > 0 {
+			return &runHandle{id: holderID, defID: hold.reason, writes: hold.writes}, overlap
 		}
 	}
 	return nil, nil
