@@ -1,16 +1,18 @@
 // file: internal/operations/registry/external_write_hold_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9d4f1c62-3a85-4e07-b6d9-71c2e8a05f43
 // last-edited: 2026-11-18
 
 package registry_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -235,4 +237,54 @@ func TestWriteSetOfDef(t *testing.T) {
 	if n := len(r.WriteSetOfDef("test.unregistered")); n != 0 {
 		t.Fatalf("unregistered def: %d resources", n)
 	}
+}
+
+// The deferral log line for an op held back by a HOLD names the hold (held_by),
+// not an op: a hold has no def id, and its reason used to be printed as
+// running_def_id under a message that says "running op".
+func TestHoldWriteSet_TheDeferralLogNamesTheHoldNotARunningOp(t *testing.T) {
+	ctx := t.Context()
+	var buf syncBuffer
+	lg := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	store := newFakeStore()
+	r := registry.New(store, lg, 4, nil)
+	_ = r.RegisterOp(writerDef("test.hold-logged", []registry.Resource{registry.ResSeries}, nil))
+	r.Start(ctx)
+	rel, err := r.HoldWriteSet("revert:op-z", "the revert of op-z", []registry.Resource{registry.ResSeries})
+	if err != nil {
+		t.Fatalf("HoldWriteSet: %v", err)
+	}
+	defer rel()
+	opID, err := r.EnqueueOp(ctx, "test.hold-logged", nil)
+	if err != nil {
+		t.Fatalf("EnqueueOp: %v", err)
+	}
+	assertStaysQueued(t, store, opID, 500*time.Millisecond)
+
+	out := buf.String()
+	if !strings.Contains(out, `held_by="the revert of op-z"`) {
+		t.Fatalf("the deferral line must name the hold as held_by:\n%s", out)
+	}
+	if strings.Contains(out, "running_def_id") || strings.Contains(out, "conflict with running op") {
+		t.Fatalf("a hold is not a running op, but the line says so:\n%s", out)
+	}
+}
+
+// syncBuffer is a bytes.Buffer safe for the dispatcher goroutine to write while
+// the test reads.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
