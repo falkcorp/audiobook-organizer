@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_stale.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: ba7b75e1-2940-4864-ac78-6a8982bcd9a3
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package handlers
 
