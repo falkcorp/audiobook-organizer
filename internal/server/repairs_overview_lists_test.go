@@ -1,7 +1,7 @@
 // file: internal/server/repairs_overview_lists_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8b4e2d71-5c93-4a60-b7f2-e19d3a6c0845
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // The operations overview lists as the server wires them, driven through the
 // real router: every GET route under /operations and /op-defs that lists
@@ -66,7 +66,6 @@ var overviewRoutes = map[string]overviewKind{
 	"/api/v1/op-defs":                           kindNoRows,
 	"/api/v1/op-defs/:id":                       kindNoRows,
 	"/api/v1/operations/audit-files":            kindNoRows,
-	"/api/v1/operations/reconcile/preview":      kindNoRows,
 	"/api/v1/operations/reconcile/scan/latest":  kindNoRows,
 	"/api/v1/operations/active":                 kindRetired,
 	"/api/v1/operations/recent":                 kindRetired,

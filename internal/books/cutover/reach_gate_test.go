@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_gate_test.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: 7d3a8f21-6c4e-4b95-a0d7-1e9b2c5f8a36
 // last-edited: 2026-11-18
 
@@ -367,8 +367,9 @@ func TestIdentityCutover_ReachOracle(t *testing.T) {
 // the reason. A route that appears or disappears fails, never silently.
 var (
 	reachWantR0Only = []string{
-		"GET /",                             // the SPA handler, outside the manifest (served by the embedded frontend)
-		"POST /api/v1/system/factory-reset", // HEAD's reset routes: deleted at F4, the native core route succeeds them (05-rbac 6.2)
+		"GET /", // the SPA handler, outside the manifest (served by the embedded frontend)
+		"GET /api/v1/operations/reconcile/preview", // P14C-PREVIEW-ROUTE: dropped 2026-11-18 (an unqueued full-library sweep on library.view, no caller; POST /operations/reconcile/scan and scan/latest cover it)
+		"POST /api/v1/system/factory-reset",        // HEAD's reset routes: deleted at F4, the native core route succeeds them (05-rbac 6.2)
 		"POST /api/v1/system/reset",
 	}
 	reachWantR2Only = []string{

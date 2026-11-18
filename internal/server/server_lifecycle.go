@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.69.5
+// version: 4.69.6
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-18
 
@@ -2962,7 +2962,6 @@ func (s *Server) setupRoutes() {
 
 			protected.GET("/file-ops/pending", s.perm(auth.PermLibraryView), s.handleListPendingFileOps)
 			protected.GET("/operations/:id/results", s.perm(auth.PermLibraryView), s.handleGetOperationResults)
-			protected.GET("/operations/reconcile/preview", s.perm(auth.PermLibraryView), s.reconcilePreview)
 			// settings.manage is what reconcile.apply declares: the route enforces the
 			// definition's permission (it was scan.trigger, which the seeded editor
 			// holds, so an editor could repoint books here while POST /operations/v2

@@ -1,7 +1,7 @@
 // file: internal/server/reconcile_scan_merge_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 8b2e4f61-9d03-4a75-b6c8-1e7f3a5d9c02
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package server
 
@@ -212,24 +212,6 @@ func TestLatestReconcileScan_NoUsableScanAnswersWithTheNewestRun(t *testing.T) {
 	assert.Nil(t, empty["operation"])
 	assert.Nil(t, empty["preview"])
 	assert.Nil(t, empty["latest_attempt"])
-}
-
-// GET /operations/reconcile/preview is a synchronous full-library sweep. It runs
-// under the request's context so a client that goes away stops it: with a
-// canceled request the handler must not even load the books (the strict mock
-// fails on an unexpected call) and must answer nothing.
-func TestReconcilePreview_StopsWhenTheRequestIsCanceled(t *testing.T) {
-	srv, _, _ := bootRegisteredOpIDs(t)
-	require.NotNil(t, srv.storeForWiring())
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/operations/reconcile/preview", nil).WithContext(ctx)
-
-	srv.reconcilePreview(c)
-	assert.Empty(t, w.Body.String(), "a canceled request gets no body, and in particular no 500")
 }
 
 func TestRecentReconcileScans_MatchesOnCanonicalID(t *testing.T) {
