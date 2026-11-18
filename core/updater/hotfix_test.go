@@ -1,7 +1,7 @@
-// file: internal/updater/hotfix_test.go
-// version: 1.0.1
+// file: core/updater/hotfix_test.go
+// version: 1.1.0
 // guid: 55cb52f7-49f0-4844-881d-0df9ba6269f3
-// last-edited: 2026-11-08
+// last-edited: 2026-11-18
 
 package updater
 
@@ -23,7 +23,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 )
 
 // fakeReleases serves the GitHub release API subset the updater reads.
@@ -415,15 +414,10 @@ func TestCheck_DescribeSuffixedCurrentNotCompared(t *testing.T) {
 
 func TestCheck_ScheduledRunNeverApplies(t *testing.T) {
 	rig := newRig(t, "v0.223.0", newFakeReleases(t, "v0.224.0"))
-	hour := time.Now().Hour()
-	s := NewScheduler(rig.u, func() SchedulerConfig {
-		// Inside the window: the hour now is in [hour, hour+1). The window
-		// gated HEAD's unattended apply; a check-only tick must not apply
-		// inside it either.
-		return SchedulerConfig{Enabled: true, Channel: "stable", CheckMins: 60, WindowStart: hour, WindowEnd: (hour + 1) % 24}
-	})
-
-	s.tick()
+	// The scheduler's tick is exactly this call (internal/updater/scheduler.go).
+	if _, err := rig.u.CheckUnattended("stable"); err != nil {
+		t.Fatalf("CheckUnattended: %v", err)
+	}
 
 	if n := rig.f.latestHits.Load(); n == 0 {
 		t.Fatal("the scheduled run did not check")

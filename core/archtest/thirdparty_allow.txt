@@ -1,7 +1,7 @@
 # file: core/archtest/thirdparty_allow.txt
-# version: 1.0.15
+# version: 1.0.16
 # guid: cb537e35-a463-43d1-b870-3ea941cf278d
-# last-edited: 2026-11-12
+# last-edited: 2026-11-18
 #
 # The third-party import paths core may use (03 R1(b), TestCoreImportsOnlyCore).
 # One import-path prefix per line; a prefix also admits its sub-packages
@@ -129,3 +129,8 @@ github.com/fsnotify/fsnotify
 # packages/param, shared); archtest.NoAISDKOutsideAdapters pins the import to
 # integrations/ai/openai, so no other core package may name an SDK type.
 github.com/openai/openai-go/v3
+
+# F8-02: updater compares release versions with semver (05-updater §5U.4), the
+# one semantic-version comparison HEAD's updater already uses. Pinned at the
+# root's version (check_module_skew.py).
+golang.org/x/mod/semver

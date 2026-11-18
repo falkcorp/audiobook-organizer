@@ -1,7 +1,7 @@
-// file: internal/updater/updater_test.go
-// version: 1.1.0
+// file: core/updater/updater_test.go
+// version: 1.1.1
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-11-05
+// last-edited: 2026-11-18
 
 package updater
 
@@ -115,25 +115,5 @@ func TestUpdateInfo_JSON(t *testing.T) {
 
 	if decoded.CurrentVersion != "1.0.0" || decoded.LatestVersion != "2.0.0" {
 		t.Errorf("round-trip failed: got %+v", decoded)
-	}
-}
-
-func TestSchedulerConfig(t *testing.T) {
-	u := NewUpdater("1.0.0")
-	s := NewScheduler(u, func() SchedulerConfig {
-		return SchedulerConfig{
-			Enabled:     false,
-			Channel:     "stable",
-			CheckMins:   60,
-			WindowStart: 2,
-			WindowEnd:   4,
-		}
-	})
-
-	// Start should be a no-op when disabled
-	s.Start()
-	// No ticker should be created
-	if s.ticker != nil {
-		t.Error("ticker should be nil when disabled")
 	}
 }

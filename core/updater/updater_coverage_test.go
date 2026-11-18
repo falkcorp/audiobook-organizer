@@ -1,7 +1,7 @@
-// file: internal/updater/updater_coverage_test.go
-// version: 1.1.0
+// file: core/updater/updater_coverage_test.go
+// version: 1.1.1
 // guid: 3c6f7d36-dd58-41ad-be17-9aba3794ccc8
-// last-edited: 2026-11-05
+// last-edited: 2026-11-18
 
 package updater
 
@@ -140,91 +140,6 @@ func TestCoverage_UpdateInfo_Fields(t *testing.T) {
 		t.Error("CurrentVersion not set")
 	}
 	if info.Channel != "stable" {
-		t.Error("Channel not set")
-	}
-}
-
-// --- Scheduler coverage tests ---
-
-func TestCoverage_NewScheduler(t *testing.T) {
-	u := NewUpdater("1.0.0")
-	configGetter := func() SchedulerConfig {
-		return SchedulerConfig{
-			Enabled:     true,
-			Channel:     "stable",
-			CheckMins:   60,
-			WindowStart: 2,
-			WindowEnd:   4,
-		}
-	}
-	s := NewScheduler(u, configGetter)
-	if s == nil {
-		t.Fatal("NewScheduler returned nil")
-	}
-	if s.updater != u {
-		t.Error("updater not set")
-	}
-}
-
-func TestCoverage_Scheduler_StartStop(t *testing.T) {
-	u := NewUpdater("1.0.0")
-	s := NewScheduler(u, func() SchedulerConfig {
-		return SchedulerConfig{
-			Enabled:   true,
-			Channel:   "stable",
-			CheckMins: 1,
-		}
-	})
-
-	s.Start()
-	if s.ticker == nil {
-		t.Error("ticker should be created when enabled")
-	}
-
-	s.Stop()
-}
-
-func TestCoverage_Scheduler_Disabled(t *testing.T) {
-	u := NewUpdater("1.0.0")
-	s := NewScheduler(u, func() SchedulerConfig {
-		return SchedulerConfig{Enabled: false}
-	})
-
-	s.Start()
-	if s.ticker != nil {
-		t.Error("ticker should be nil when disabled")
-	}
-}
-
-func TestCoverage_Scheduler_MinInterval(t *testing.T) {
-	u := NewUpdater("1.0.0")
-	s := NewScheduler(u, func() SchedulerConfig {
-		return SchedulerConfig{
-			Enabled:   true,
-			Channel:   "stable",
-			CheckMins: 0, // should default to 1 minute
-		}
-	})
-
-	s.Start()
-	if s.ticker == nil {
-		t.Error("ticker should be created even with 0 CheckMins")
-	}
-	s.Stop()
-}
-
-func TestCoverage_SchedulerConfig_Struct(t *testing.T) {
-	cfg := SchedulerConfig{
-		Enabled:     true,
-		Channel:     "develop",
-		CheckMins:   30,
-		WindowStart: 22,
-		WindowEnd:   6,
-	}
-	if !cfg.Enabled {
-		t.Error("Enabled not set")
-	}
-	if cfg.Channel != "develop" {
 		t.Error("Channel not set")
 	}
 }
