@@ -1,7 +1,7 @@
 // file: internal/applygate/booknum.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9d4f2c83-6a1e-4b57-8c09-e3b7a5d16f42
-// last-edited: 2026-11-16
+// last-edited: 2026-11-18
 
 package applygate
 
@@ -155,7 +155,7 @@ var numTok = regexp.MustCompile(`^(?:\d+(?:\.\d+)?|[ivxlc]+|one|two|three|four|f
 // number stands alone ("Legends of the First Empire - 3 - Age of War").
 func numberContext(title string, n seqnum.Number) map[string]bool {
 	var segs []string
-	for _, s := range segSplitRe.Split(title, -1) {
+	for _, s := range splitSegments(title) {
 		if strings.TrimSpace(s) != "" {
 			segs = append(segs, s)
 		}

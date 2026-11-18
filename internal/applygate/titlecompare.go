@@ -422,10 +422,11 @@ func isRegexpSpace(b byte) bool {
 // colon, a spaced dash (hyphen, en dash or em dash with a space each side) or a
 // bracket, each with the white space around it. It returns what
 //
-//	segSplitRe.Split(s, -1)
+//	regexp.MustCompile(`\s*(?::|\s-\s|\s–\s|\s—\s|[(\[\])])\s*`).Split(s, -1)
 //
-// returns, piece for piece (TestSplitSegments_MatchesTheExpression), without
-// running the expression: a title check split the same few fields dozens of times.
+// returns, piece for piece (TestSplitSegments_MatchesTheExpression holds the two
+// equal), without running the expression: a title check split the same few
+// fields dozens of times.
 func splitSegments(s string) []string {
 	if s == "" {
 		return []string{""}

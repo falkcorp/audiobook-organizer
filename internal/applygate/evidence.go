@@ -1,5 +1,5 @@
 // file: internal/applygate/evidence.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
 // last-edited: 2026-11-18
 
@@ -696,10 +696,7 @@ func bookPathForms(book *database.Book, seriesNames map[string]bool) (forms []ti
 	return forms, names
 }
 
-var (
-	parenRe    = regexp.MustCompile(`[(\[][^)\]]*[)\]]`)
-	segSplitRe = regexp.MustCompile(`\s*(?::|\s-\s|\s–\s|\s—\s|[(\[\])])\s*`)
-)
+var parenRe = regexp.MustCompile(`[(\[][^)\]]*[)\]]`)
 
 // titleSim is |A∩B| / max(|A|,|B|) over identity tokens. Unlike a token-set
 // ratio it does NOT score a subset as a full match: "Star Wars" against
