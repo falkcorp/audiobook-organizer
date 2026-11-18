@@ -1,5 +1,5 @@
 // file: internal/server/file_work_intent_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0d7b3c52-9e41-4a68-b1f5-7c2e8a4d6f93
 // last-edited: 2026-11-18
 
@@ -442,9 +442,9 @@ func captureWriteBackIntents(t *testing.T) *intentRecorder {
 // files somewhere else, so a rename that runs is visible on disk.
 func renameableBook(t *testing.T, s *Server, root, title string, retire bool) (id string, files []string) {
 	t.Helper()
-	author, err := s.store.CreateAuthor("Harmon Example")
+	author, err := s.store.CreateAuthor("Alfred Pennyworth")
 	if err != nil {
-		author, err = s.store.GetAuthorByName("Harmon Example")
+		author, err = s.store.GetAuthorByName("Alfred Pennyworth")
 	}
 	require.NoError(t, err)
 	dir := filepath.Join(root, "incoming", title)
