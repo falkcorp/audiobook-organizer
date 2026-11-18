@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/db_aux_store_compact_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7e3a91c4-2b58-4d06-9f1a-c4d82b6e0a37
 // last-edited: 2026-11-18
 
@@ -376,4 +376,22 @@ func (r *seqReporter) logged() []string {
 	r.fmu.Lock()
 	defer r.fmu.Unlock()
 	return append([]string(nil), r.ls...)
+}
+
+// The shared core's outcome is what both shells read: HEAD's shell takes the
+// count, the native shell the failures.
+func TestAuxStoreCompact_CoreOutcomeCountsStoresAndFailures(t *testing.T) {
+	env := func() auxCompactEnv {
+		return auxCompactEnv{Rep: &seqReporter{}, Frame: func(int, string) {}, First: 0, Total: 2, Interval: testTick, Log: slog.New(slog.DiscardHandler)}
+	}
+	ok := compactAuxStores(t.Context(), &auxStub{aiOwned: true, olOwned: true}, env())
+	assert.Equal(t, 2, ok.Optimized)
+	assert.Zero(t, ok.Failed)
+	assert.Empty(t, ok.Errs)
+
+	bad := compactAuxStores(t.Context(), &auxStub{aiOwned: true, olOwned: true, olErr: errors.New("riddler")}, env())
+	assert.Equal(t, 1, bad.Optimized)
+	assert.Equal(t, 1, bad.Failed)
+	require.Len(t, bad.Errs, 1)
+	assert.Contains(t, bad.Errs[0].Error(), "OpenLibrary cache")
 }
