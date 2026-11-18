@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/step_internal_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e7b2f094-1d6a-4c83-9a50-3c8d4f1e6b27
 // last-edited: 2026-11-18
 
@@ -56,6 +56,8 @@ func TestFrozenRowsMatchTheStore(t *testing.T) {
 		{"item", itemRow{}, store.ItemOutcome{}},
 		{"log", logRow{}, store.LogLine{}},
 		{"checkpoint", ckptRow{}, store.Checkpoint{}},
+		{"v1 operation", op1Row{}, store.Operation{}},
+		{"v1 log", opLog1Row{}, store.OperationLog{}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
