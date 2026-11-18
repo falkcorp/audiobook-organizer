@@ -1,5 +1,5 @@
 <!-- file: docs/reference/ui-deep-links.md -->
-<!-- version: 2.3.0 -->
+<!-- version: 2.4.0 -->
 <!-- guid: B610EF08-9346-47FD-AAA3-C65958E0127C -->
 <!-- last-edited: 2026-11-18 -->
 
@@ -65,8 +65,11 @@ the address, and `page` is always 1-based in a URL.
 The `/review` repairs row takes these values for the merge-cleanup preview
 (`fixer=maintenance.merge-cleanup`): `class=unmerge|swap_keeper|repoint_chain|no_verdict|error`,
 `filter=skipped:<kind>` with a kind from the preview's skip list (for example
-`skipped:runtime_incomplete`, `skipped:group_needs_handoff`,
-`skipped:sync_redirect_present`) and `filter=flag:<name>` with one of
+`skipped:runtime_incomplete`, `skipped:size_incomplete`,
+`skipped:runtime_includes_missing`, `skipped:placeholder_metadata`,
+`skipped:dangling_author`, `skipped:title_author_swapped`,
+`skipped:group_needs_handoff`, `skipped:sync_redirect_present`,
+`skipped:sync_redirect_broken`) and `filter=flag:<name>` with one of
 `chain_via_merged`, `chain_via_trashed`, `group_needs_handoff`,
 `sync_redirect_present`, `owner_says_distinct`, `origin_match4`,
 `origin_match4_partial`, `origin_other`. These add no row to the table: the

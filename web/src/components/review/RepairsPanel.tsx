@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.36.0
+// version: 1.37.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-11-18
 
@@ -528,6 +528,12 @@ export const SKIP_KIND_LABEL: Record<string, string> = {
   skipped_interrupted_run: 'An earlier repair of this folder did not finish',
   // maintenance.merge-cleanup (a preview: nothing here has an Apply control).
   runtime_incomplete: 'A book has a file with no measured length, so its runtime cannot be compared',
+  size_incomplete: 'A book has a file with no recorded size, so the same-audio check cannot be made',
+  runtime_includes_missing: 'The answer changes if the chapters that are off disk are counted',
+  placeholder_metadata: 'A title or author is a placeholder (Unknown), so it says nothing about the book',
+  dangling_author: 'A credit points at an author that no longer exists',
+  title_author_swapped: 'One book has its title and author swapped; "Fix swapped title and author" repairs it',
+  sync_redirect_broken: 'An Audiobookshelf sync redirect is broken and cannot be followed',
   runtime_ambiguous: 'Lengths do not settle it (about half as long, or a very short file)',
   suspicious: 'Looks like a wrong merge, but only one sign says so',
   cannot_tell: 'Cannot tell whether the two are the same work',
