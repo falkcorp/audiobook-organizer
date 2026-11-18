@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize_scan_lock_test.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 0e8b5c27-4a13-4f96-b7d2-c93a61e8f405
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package handlers_test
 
@@ -105,10 +105,10 @@ func TestOrganizeBook_LocksTheLibraryCopyItActsOn(t *testing.T) {
 	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/Old/Old.m4b"}}
 	svc := inPlaceSvc()
 	h := handlers.NewOrganizeHandler(store, nil, svc, nil, false)
-	h.SetLibraryCopyResolver(func(b *database.Book) (*database.Book, bool) {
+	h.SetLibraryCopyResolver(func(b *database.Book) (*database.Book, bool, *database.Book) {
 		cp := *b
 		cp.ID = "s1"
-		return &cp, true
+		return &cp, true, nil
 	})
 	scan := lockBook(t, "s1")
 
@@ -204,12 +204,12 @@ func TestRunQueuedOrganize_WaitsThenRunsAndReportsFailure(t *testing.T) {
 
 // unsettledResolver resolves the book to a DIFFERENT library copy on every
 // call: the lock set never settles.
-func unsettledResolver() func(*database.Book) (*database.Book, bool) {
+func unsettledResolver() func(*database.Book) (*database.Book, bool, *database.Book) {
 	var n atomic.Int32
-	return func(b *database.Book) (*database.Book, bool) {
+	return func(b *database.Book) (*database.Book, bool, *database.Book) {
 		cp := *b
 		cp.ID = "copy-" + string(rune('a'+n.Add(1)%26))
-		return &cp, true
+		return &cp, true, nil
 	}
 }
 

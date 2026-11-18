@@ -1,7 +1,7 @@
 // file: internal/server/organize_library_copy_wiring_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 96b14120-70fb-45b5-93bd-c9e1c9449b82
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package server
 
@@ -169,7 +169,7 @@ func TestOrganizeWiring_DifferentEditionIsNotTheLibraryCopy(t *testing.T) {
 
 	// The metadata apply's own resolver still accepts the edition (its rule
 	// is unchanged); organize's does not.
-	if _, ok := f.srv.organizeLibraryCopyResolver()(mustBook(t, f.store, "orig")); ok {
+	if _, ok, _ := f.srv.organizeLibraryCopyResolver()(mustBook(t, f.store, "orig")); ok {
 		t.Fatalf("organize resolver accepted a different edition as the library copy")
 	}
 
@@ -205,4 +205,97 @@ func mustBook(t *testing.T, store *database.PebbleStore, id string) *database.Bo
 		t.Fatalf("read %s: %v", id, err)
 	}
 	return b
+}
+
+// B6. A protected book whose only same-file library copy was merged away must
+// not get a second organized copy laid beside the merged one: organize refuses
+// with a 409 naming the merged row, and writes no file and no row. Both shapes
+// of the merged copy are covered: one whose tags were written and a scan
+// re-hashed it (its FileHash moved, its OriginalFileHash did not), and one
+// never touched (its FileHash still equals the original's, which the same-hash
+// backstop used to answer with a dead-end "organize that copy instead").
+func TestOrganizeWiring_OnlyAMergedLibraryCopyIsRefusedNotDuplicated(t *testing.T) {
+	cases := []struct {
+		name string
+		copy database.Book
+	}{
+		{"tagged_copy_rehashed", database.Book{FileHash: new("h-after-tag-write"), OriginalFileHash: new("h-orig"), OrganizedFileHash: new("h-orig")}},
+		{"untagged_copy_same_hash", database.Book{FileHash: new("h-orig"), OriginalFileHash: new("h-orig")}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newOrgWiringFixture(t)
+			content := bytes.Repeat([]byte{7}, 300)
+			group := "vg-rift"
+			origPath := filepath.Join(f.itunes, "Music", "Welcome to the Rift.mp3")
+			copyPath := filepath.Join(f.root, "Harmon Example", "Welcome to the Rift", "Welcome to the Rift.mp3")
+			f.book(t, "orig", origPath, content, database.Book{FileHash: new("h-orig"), VersionGroupID: &group, LibraryState: new("imported")})
+			merged := c.copy
+			into := "orig"
+			merged.VersionGroupID, merged.LibraryState, merged.MergedIntoBookID = &group, new("organized"), &into
+			f.book(t, "copy", copyPath, content, merged)
+			before := libraryFiles(t, f.root)
+
+			for _, preview := range []bool{true, false} {
+				method := http.MethodPost
+				if preview {
+					method = http.MethodGet
+				}
+				code, body := f.call(t, method, "orig", preview)
+				if code != http.StatusConflict {
+					t.Fatalf("preview=%v: HTTP %d %v; want 409 for a merged-only library copy", preview, code, body)
+				}
+				if body["category"] != "library_copy_retired" {
+					t.Errorf("preview=%v: category %v; want library_copy_retired (not %q, a dead end naming a row nothing hands back)",
+						preview, body["category"], "library_copy_exists")
+				}
+				if body["copy_book_id"] != "copy" {
+					t.Errorf("preview=%v: copy_book_id %v; want the merged row", preview, body["copy_book_id"])
+				}
+			}
+			if after := libraryFiles(t, f.root); len(after) != len(before) {
+				t.Errorf("library files %v -> %v; refused organize must write no file", before, after)
+			}
+			if books, _ := f.store.GetBooksByVersionGroup(group); len(books) != 2 {
+				t.Errorf("version group has %d rows; refused organize must make no row", len(books))
+			}
+		})
+	}
+}
+
+// A live copy beside the merged one is the organize subject, as before: the
+// merged row is not it, and the live one answers "already organized".
+func TestOrganizeWiring_LiveCopyBesideAMergedOneIsStillUsed(t *testing.T) {
+	f := newOrgWiringFixture(t)
+	content := bytes.Repeat([]byte{7}, 300)
+	group := "vg-rift"
+	into := "orig"
+	primary := true
+	origPath := filepath.Join(f.itunes, "Music", "Welcome to the Rift.mp3")
+	livePath := filepath.Join(f.root, "Harmon Example", "Welcome to the Rift", "Welcome to the Rift.mp3")
+	deadPath := filepath.Join(f.root, "Harmon Example", "Welcome to the Rift (old)", "Welcome to the Rift.mp3")
+	f.book(t, "orig", origPath, content, database.Book{FileHash: new("h-orig"), VersionGroupID: &group, LibraryState: new("imported")})
+	f.book(t, "dead", deadPath, content, database.Book{FileHash: new("h-dead"), OriginalFileHash: new("h-orig"), VersionGroupID: &group, MergedIntoBookID: &into, IsPrimaryVersion: &primary})
+	f.book(t, "live", livePath, content, database.Book{FileHash: new("h-live"), OriginalFileHash: new("h-orig"), VersionGroupID: &group, LibraryState: new("organized")})
+
+	code, applied := f.call(t, http.MethodPost, "orig", false)
+	if code != http.StatusOK {
+		t.Fatalf("apply HTTP %d: %v", code, applied)
+	}
+	if applied["book_id"] != "live" || applied["message"] != "already organized" {
+		t.Errorf("apply acted on %v (%v); want the live copy, already organized", applied["book_id"], applied["message"])
+	}
+}
+
+// libraryFiles lists every file under root.
+func libraryFiles(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			out = append(out, p)
+		}
+		return nil
+	})
+	return out
 }

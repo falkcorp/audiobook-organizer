@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize_scan_lock.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 2b7e4c91-5d08-4f3a-b6e2-9a14c7d3f058
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package handlers
 
@@ -92,7 +92,10 @@ func (h *OrganizeHandler) organizeLockSet(id string) (ids []string, subject *dat
 	if requested == nil {
 		return ids, nil, nil
 	}
-	subject = organizer.ResolveOrganizeSubject(h.resolveLibraryCopy, requested)
+	// A retired-only copy leaves the subject as the book itself: the lock set is
+	// just the book, and organizeBookCore, which asks again under that lock,
+	// refuses with the 409. The error is not a lock-set failure.
+	subject, _ = organizer.ResolveOrganizeSubject(h.resolveLibraryCopy, requested)
 	if subject != nil && subject.ID != id {
 		ids = append(ids, subject.ID)
 	}
