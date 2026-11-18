@@ -1,5 +1,5 @@
 // file: internal/seqnum/stated.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: ef7d6ebc-a3a1-4738-bc60-512ed593d8eb
 // last-edited: 2026-11-18
 
@@ -65,33 +65,27 @@ type Stated struct {
 var (
 	// A part marker with its number, an optional "of M", and the tail that
 	// would make it a range of parts.
-	rePartStated = guard(`\b(?:parts?|pts?|discs?|disks?|cds?)\.?\s*`+numAlt+`\b(?:\s*(?:of|/)\s*(\d+)\b)?(\s*(?:[-–—]|to|thru|through|&|and)\s*(?:\d+|[ivxlc]+)\b)?`,
-		hasAny("part", "pt", "disc", "disk", "cd"))
+	rePartStated = guard(`\b(?:parts?|pts?|discs?|disks?|cds?)\.?\s*` + numAlt + `\b(?:\s*(?:of|/)\s*(\d+)\b)?(\s*(?:[-–—]|to|thru|through|&|and)\s*(?:\d+|[ivxlc]+)\b)?`)
 	// "(2 of 3)": a parenthesised N of M is a part.
-	reParenOf = guard(`\(\s*(\d+)\s+of\s+(\d+)\s*\)`, all(hasAny("("), hasAny("of"), hasDigit))
+	reParenOf = guard(`\(\s*(\d+)\s+of\s+(\d+)\s*\)`)
 	// "1 of 2": a position in a set of M.
-	reBareOf = guard(`\b(\d+)\s+of\s+(\d+)\b`, all(hasAny("of"), hasDigit))
+	reBareOf = guard(`\b(\d+)\s+of\s+(\d+)\b`)
 
 	ordAlt       = `(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|\d+(?:st|nd|rd|th))`
-	reOrdBefore  = guard(`\b`+ordAlt+`\s+(book|volume|vol|part)\b`, hasAny("book", "vol", "part"))
-	reOrdAfter   = guard(`\b(book|volume|vol|part)\s+(?:the\s+)?`+ordAlt+`\b`, hasAny("book", "vol", "part"))
-	reLoneRomanI = guard(`\S\s+i\s*$`, hasAny("i"))
+	reOrdBefore  = guard(`\b` + ordAlt + `\s+(book|volume|vol|part)\b`)
+	reOrdAfter   = guard(`\b(book|volume|vol|part)\s+(?:the\s+)?` + ordAlt + `\b`)
+	reLoneRomanI = guard(`\S\s+i\s*$`)
 	// A numeral closing a text, bare or behind a hash or an opening bracket
 	// ("Hush 2", "Hush #2", "Hush (2)").
-	reTrailingNum = guard(`(?:^|[\s,:\-#(\[])(?:\d{1,3}(?:\.\d+)?|ii|iii|iv|vi|vii|viii|ix|xi|xii|xiii|xiv|xv|xvi|xvii|xviii|xix|xx)[)\]]?\s*$`,
-		numeralEnds)
+	reTrailingNum = guard(`(?:^|[\s,:\-#(\[])(?:\d{1,3}(?:\.\d+)?|ii|iii|iv|vi|vii|viii|ix|xi|xii|xiii|xiv|xv|xvi|xvii|xviii|xix|xx)[)\]]?\s*$`)
 	// The marker word and the punctuation before it, between a title's words
 	// and its numeral ("Hush, Book 2", "Hush Volume II", "Hush (Book 2)"); a
 	// hash after the marker ("Hush, Book #2") leaves a space behind it.
-	reNumeralMarker = guard(`[\s,:\-(\[]+(?:book|bk|volume|vol|no|number)\.?\s*$`, hasAny("book", "bk", "vol", "no", "number"))
+	reNumeralMarker = guard(`[\s,:\-(\[]+(?:book|bk|volume|vol|no|number)\.?\s*$`)
 	// A closing note with no number in it ("(Unabridged)", "[Dramatized]"): an
 	// edition label, not a word of the title and not a statement of a number.
-	reClosingNote = guard(`\s*[(\[][^()\[\]\d]*[)\]]\s*$`, all(hasAny("(", "["), hasAny(")", "]")))
+	reClosingNote = guard(`\s*[(\[][^()\[\]\d]*[)\]]\s*$`)
 )
-
-// numeralEnds is what reTrailingNum needs of the text: a digit, or the i or x
-// every roman numeral from II to XX holds.
-var numeralEnds = hasAnyOr(hasDigit, hasAny("i", "x"))
 
 var ordinalNumbers = map[string]float64{
 	"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6, "seventh": 7, "eighth": 8,
@@ -288,7 +282,7 @@ func volumeIn(t string, volume *Stated, loneI bool) *Stated {
 // one volume), but a title that says "1-3" does not say volume 3: it says the
 // first three. The ends must be short and ordered so a year span or a phone
 // number is not one.
-var reTrailingSpan = guard(`(?:^|\s)(\d{1,3}\s*[-–—]\s*\d{1,3})\s*$`, all(hasDigit, hasDash))
+var reTrailingSpan = guard(`(?:^|\s)(\d{1,3}\s*[-–—]\s*\d{1,3})\s*$`)
 
 func trailingSpan(t string) (Number, bool) {
 	m := reTrailingSpan.FindStringSubmatch(clean(t))

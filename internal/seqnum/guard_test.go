@@ -1,5 +1,5 @@
 // file: internal/seqnum/guard_test.go
-// version: 1.1.0
+// version: 2.0.0
 // guid: 5a91c3e7-2b6d-4f08-8e14-d70b9a3c6f52
 // last-edited: 2026-11-18
 
@@ -85,38 +85,64 @@ func randomGuardText(r *rand.Rand, pieces int) string {
 	return b.String()
 }
 
+// unguardedOK is the sources of expressions that are meant to run on every text
+// because they need nothing in particular of it. It is empty: every expression
+// in the package needs a marker word, a digit, a bracket or a dash.
+var unguardedOK = map[string]bool{}
+
+// guardTexts is n generated texts, the same for every caller with the same seed.
+func guardTexts(seed1, seed2 uint64, n, pieces int) []string {
+	r := rand.New(rand.NewPCG(seed1, seed2))
+	texts := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		texts = append(texts, randomGuardText(r, pieces))
+	}
+	return texts
+}
+
+// holdGuardToItsExpression fails the test when the guard says no to a text its
+// expression matches, and returns how many of texts the expression matched and
+// how many the guard turned away.
+func holdGuardToItsExpression(t *testing.T, g *guardedRe, texts []string) (matched, skipped int) {
+	t.Helper()
+	for _, s := range texts {
+		m := g.re.MatchString(s)
+		if m {
+			matched++
+		}
+		if g.skip(s) {
+			skipped++
+			if m {
+				t.Fatalf("the guard of %q says no to %q, which the expression matches", g.re, s)
+			}
+		}
+	}
+	return matched, skipped
+}
+
 // TestGuards_NeverHideAMatch holds every guard to the expression it fronts: a
 // guard that says "no" about a text its expression matches would change what the
 // readers see. It also requires that each expression is matched by a share of
-// the generated texts, so a guard cannot pass by never being asked.
+// the generated texts, so a guard cannot pass by never being asked, and that
+// every expression has a guard (an expression that needs nothing of the text,
+// say one that gained an optional branch, would silently lose the speed-up: add
+// its source to unguardedOK to say so on purpose).
 func TestGuards_NeverHideAMatch(t *testing.T) {
 	if len(guards) == 0 {
 		t.Fatal("no guarded expressions registered")
 	}
-	r := rand.New(rand.NewPCG(41, 43))
 	n := scaled(60000)
-	texts := make([]string, 0, n)
-	for i := 0; i < n; i++ {
-		texts = append(texts, randomGuardText(r, 8))
-	}
+	texts := guardTexts(41, 43, n, 8)
 	for _, g := range guards {
-		matched, skipped := 0, 0
-		for _, s := range texts {
-			m := g.re.MatchString(s)
-			if m {
-				matched++
-			}
-			if !g.mayMatch(s) {
-				skipped++
-				if m {
-					t.Fatalf("the guard of %q says no to %q, which the expression matches", g.re, s)
-				}
-			}
+		if g.need == nil && !unguardedOK[g.re.String()] {
+			t.Errorf("%q needs nothing of the text, so it has no guard; if that is intended add it to unguardedOK", g.re)
+			continue
 		}
+		matched, skipped := holdGuardToItsExpression(t, g, texts)
 		if matched < n/2400 {
 			t.Errorf("%q matched only %d of %d generated texts: its guard is not being tested", g.re, matched, len(texts))
 		}
-		if skipped == 0 {
+		if g.need != nil && skipped == 0 {
 			t.Errorf("the guard of %q never said no over %d texts: it saves nothing", g.re, len(texts))
 		}
 	}
@@ -125,14 +151,10 @@ func TestGuards_NeverHideAMatch(t *testing.T) {
 // TestGuards_ReadersAreUnchangedByThem runs every reader over generated texts
 // with the guards in force and again with every guard answering "maybe" (so
 // every expression runs, as before the guards), and requires the same answers.
-// It is not parallel: it swaps the guards.
+// It is not parallel: it switches the guards off for the first pass, and puts
+// them back with t.Cleanup so a panic in a reader cannot leave them off.
 func TestGuards_ReadersAreUnchangedByThem(t *testing.T) {
-	r := rand.New(rand.NewPCG(53, 59))
-	n := scaled(10000)
-	texts := make([]string, 0, n)
-	for i := 0; i < n; i++ {
-		texts = append(texts, randomGuardText(r, 9))
-	}
+	texts := guardTexts(53, 59, scaled(10000), 9)
 	type answers struct {
 		Clean                  string
 		Parse, ParseTitle      [2]any
@@ -164,17 +186,23 @@ func TestGuards_ReadersAreUnchangedByThem(t *testing.T) {
 		return a
 	}
 	want := make([]answers, len(texts))
-	saved := make([]func(string) bool, len(guards))
+	saved := make([]*requirement, len(guards))
+	restore := func() {
+		for i, g := range guards {
+			g.need = saved[i]
+		}
+	}
 	for i, g := range guards {
-		saved[i] = g.mayMatch
-		g.mayMatch = func(string) bool { return true }
+		saved[i] = g.need
+	}
+	t.Cleanup(restore)
+	for _, g := range guards {
+		g.need = nil // every expression runs, as before the guards
 	}
 	for i, s := range texts {
 		want[i] = read(s, texts[(i*7+3)%len(texts)])
 	}
-	for i, g := range guards {
-		g.mayMatch = saved[i]
-	}
+	restore()
 	for i, s := range texts {
 		if got := read(s, texts[(i*7+3)%len(texts)]); !reflect.DeepEqual(got, want[i]) {
 			t.Fatalf("with the guards, %q (beside %q) reads %+v; without them %+v", s, texts[(i*7+3)%len(texts)], got, want[i])
