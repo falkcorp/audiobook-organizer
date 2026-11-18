@@ -20,12 +20,15 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	ulid "github.com/oklog/ulid/v2"
 )
 
@@ -251,9 +254,72 @@ func (s *Server) reopenAppliedScanResults(opID string) {
 	}
 }
 
-// RegisterSeriesRenameOp registers the "entities.series-rename" v2 OperationDef.
-func (s *Server) RegisterSeriesRenameOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
+// seriesRenameReads is the read the series rename makes: the series row.
+type seriesRenameReads interface {
+	GetSeriesByID(id int) (*database.Series, error)
+}
+
+// seriesRenameWriter is the writes of the series rename: the compare-and-set
+// rename, its undo journal rows, and the caches the rename makes stale.
+type seriesRenameWriter interface {
+	RenameSeriesIfCurrent(id int, expectCurrent, newName string) error
+	CreateOperationChange(change *database.OperationChange) error
+	MarkOperationChangesReverted(operationID string, changeIDs []string) error
+	// InvalidateSeriesCaches drops the series list and series-duplicates caches.
+	InvalidateSeriesCaches()
+}
+
+// seriesRenamePair is the seriesRenameStore runSeriesRename takes: reads from the
+// env's Store, writes from its Writer.
+type seriesRenamePair struct {
+	seriesRenameReads
+	seriesRenameWriter
+}
+
+// seriesRenameEnv is what the shared core takes from its shell (rules R2, R10).
+type seriesRenameEnv struct {
+	t7Env
+	Store  seriesRenameReads
+	Writer seriesRenameWriter
+}
+
+// seriesRenameCore is the body of the op, shared by HEAD's shell and the native
+// kind.
+func seriesRenameCore(p seriesRenameOpParams, env seriesRenameEnv) error {
+	if p.SeriesID <= 0 || p.Name == "" {
+		return fmt.Errorf("series-rename: invalid params (series_id %d, empty name %t)", p.SeriesID, p.Name == "")
+	}
+	opID := env.OpID
+	changed, err := runSeriesRename(seriesRenamePair{env.Store, env.Writer}, opID, p.SeriesID, p.Name)
+	if err != nil {
+		return err
+	}
+	if changed {
+		env.Writer.InvalidateSeriesCaches()
+	}
+	msg := fmt.Sprintf("Renamed series %d to %q", p.SeriesID, p.Name)
+	if !changed {
+		msg = fmt.Sprintf("Series %d already named %q; nothing to do", p.SeriesID, p.Name)
+	}
+	env.Log(slog.LevelInfo, msg)
+	slog.Info("series rename op finished", "op", logger.SanitizeLogValue(opID),
+		"series_id", p.SeriesID, "name", logger.SanitizeLogValue(p.Name), "changed", changed)
+	return nil
+}
+
+// headSeriesRename is HEAD's side of both interfaces: the server's full store
+// (s.store, not s.Ops(): ServerOpsStore does not carry the series writers, and the
+// synchronous handlers wrote through the same full store) and its series caches.
+type headSeriesRename struct {
+	database.Store
+	s *Server
+}
+
+func (h headSeriesRename) InvalidateSeriesCaches() { h.s.invalidateSeriesCaches() }
+
+// seriesRenameDef is HEAD's definition. Its Run is the v2 shell.
+func (s *Server) seriesRenameDef() opsregistry.OperationDef {
+	return opsregistry.OperationDef{
 		ID:              seriesRenameOpID,
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "entities",
@@ -284,28 +350,38 @@ func (s *Server) RegisterSeriesRenameOp(reg *opsregistry.Registry) error {
 			if err := json.Unmarshal(rawParams, &p); err != nil {
 				return fmt.Errorf("series-rename: decode params: %w", err)
 			}
-			if p.SeriesID <= 0 || p.Name == "" {
-				return fmt.Errorf("series-rename: invalid params (series_id %d, empty name %t)", p.SeriesID, p.Name == "")
-			}
-			opID := opsregistry.ReporterOpID(reporter)
-			// s.store, not s.Ops(): ServerOpsStore does not carry the series
-			// writers, and the synchronous handlers wrote through the same
-			// full store.
-			changed, err := runSeriesRename(s.store, opID, p.SeriesID, p.Name)
+			h := headSeriesRename{Store: s.store, s: s}
+			return seriesRenameCore(p, seriesRenameEnv{t7Env: t7HeadEnv(reporter, true), Store: h, Writer: h})
+		},
+	}
+}
+
+// RegisterSeriesRenameOp registers the "entities.series-rename" v2 OperationDef.
+func (s *Server) RegisterSeriesRenameOp(reg *opsregistry.Registry) error {
+	return reg.RegisterOp(s.seriesRenameDef())
+}
+
+// seriesRenameNative is the native books.entities.series-rename kind. It renames
+// one series and journals the undo row under the run id.
+func (s *Server) seriesRenameNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	kind := t7KindFor(seriesRenameOpID)
+	c := t7Common(s.seriesRenameDef(), sched)
+	c.Effects = t7Writes(ops.ResSeries)
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			p, err := t7DecodeNative[seriesRenameOpParams](kind, raw)
 			if err != nil {
-				return err
+				return struct{}{}, err
 			}
-			if changed {
-				s.invalidateSeriesCaches()
+			if err := t7NeedStore(kind, deps); err != nil {
+				return struct{}{}, err
 			}
-			msg := fmt.Sprintf("Renamed series %d to %q", p.SeriesID, p.Name)
-			if !changed {
-				msg = fmt.Sprintf("Series %d already named %q; nothing to do", p.SeriesID, p.Name)
+			w, err := t7NewWriter(kind, deps, rc)
+			if err != nil {
+				return struct{}{}, err
 			}
-			_ = reporter.Log(slog.LevelInfo, msg)
-			slog.Info("series rename op finished", "op", logger.SanitizeLogValue(opID),
-				"series_id", p.SeriesID, "name", logger.SanitizeLogValue(p.Name), "changed", changed)
-			return nil
+			return struct{}{}, seriesRenameCore(p, seriesRenameEnv{t7Env: t7NativeEnv(rc), Store: deps.Store, Writer: w})
 		},
 	})
 }
