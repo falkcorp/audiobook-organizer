@@ -1,5 +1,5 @@
 // file: internal/updater/adapter.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 6f1c2d3e-4a5b-4c6d-8e7f-9a0b1c2d3e4f
 // last-edited: 2026-11-18
 
@@ -483,6 +483,7 @@ func (u *Updater) DownloadAndReplace(info *UpdateInfo) error {
 		return ErrLocalBuildNeedsVersion
 	}
 	updateLog.Info("Downloading update v%s", strings.TrimPrefix(info.LatestVersion, "v"))
+	//lint:ignore SA1019 the gin /api/v1/update/apply path is the one deliberate caller of the legacy entry; F8-04 deletes both it and Install
 	if err := u.core.Install(context.Background(), info.LatestVersion); err != nil {
 		return err
 	}

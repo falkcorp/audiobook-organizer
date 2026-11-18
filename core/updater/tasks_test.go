@@ -1,5 +1,5 @@
 // file: core/updater/tasks_test.go
-// version: 1.0.0
+// version: 1.1.1
 // guid: 0d5e8a31-7c94-4b26-a1f3-e82b6c09d174
 // last-edited: 2026-11-18
 
@@ -333,4 +333,19 @@ func seriesValue(t *testing.T, p *metrics.Provider, family string, want map[stri
 		}
 	}
 	return 0, false
+}
+
+// TestTasks_ApplyAndRollbackAreOwnerRouteOnly: the apply and rollback routes
+// require an interactive session on top of core:admin (HEAD's credential
+// guard), so neither kind may be startable through the generic task API,
+// which checks only Perms.Start. The check kind has no such gate.
+func TestTasks_ApplyAndRollbackAreOwnerRouteOnly(t *testing.T) {
+	for name, d := range map[string]tasks.Definition{"apply": ApplyTask(nil), "rollback": RollbackTask(nil)} {
+		if tasks.CommonOf(d).Perms.OwnerRouteOnly == "" {
+			t.Errorf("%s is startable through the generic task API, which skips the route's interactive-session gate", name)
+		}
+	}
+	if got := tasks.CommonOf(CheckTask(nil)).Perms.OwnerRouteOnly; got != "" {
+		t.Errorf("check is owner-route-only (%q); its route has no gate beyond its permission", got)
+	}
 }

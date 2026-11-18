@@ -1,17 +1,20 @@
 // file: core/internal/taskhttp/start_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 99faaab6-513a-4a2b-b858-934b54651a82
-// last-edited: 2026-11-11
+// last-edited: 2026-11-18
 
 package taskhttp
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/internal/executor"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 )
 
@@ -300,4 +303,48 @@ func TestStart_RefusesAndMaps(t *testing.T) {
 			t.Fatalf("body = %v, want only the id and kind", got)
 		}
 	})
+}
+
+// TestStart_OwnerRouteOnlyKindRefusedOnTheGenericRoute: a kind whose owner's
+// route enforces gates the definition cannot state (an interactive session)
+// is not startable through POST /definitions/{kind}/runs, even by a caller
+// holding its Start scope under any method. Only a caller short of Start
+// still gets the plain permission answer, and the listing says it cannot be
+// started here.
+func TestStart_OwnerRouteOnlyKindRefusedOnTheGenericRoute(t *testing.T) {
+	const kindSignal = tasks.Kind("batcave.signal")
+	noop := func(*tasks.RC, struct{}) (struct{}, error) { return struct{}{}, nil }
+	signal := tasks.Task(kindSignal, tasks.TaskSpec[struct{}, struct{}]{
+		Title: "Light the signal", Effects: tasks.Writes(tasks.Res("batcave", "signal")),
+		Perms:  tasks.Permissions{Start: rbac.Need(scopeRun), OwnerRouteOnly: "the signal's own route needs a session"},
+		Resume: tasks.ResumeDrop, Run: noop})
+	g := newRig(t, func(d *Deps) { d.Definitions = append(defs(), signal) })
+	start := func(as *auth.Principal) *httptest.ResponseRecorder {
+		return g.do(req{method: "POST", path: "/definitions/" + string(kindSignal) + "/runs", as: as})
+	}
+
+	for name, as := range map[string]*auth.Principal{
+		"session": session("lucius", scopeRun),
+		"api key": who("lucius", auth.MethodAPIKey, scopeRun),
+	} {
+		t.Run(name, func(t *testing.T) {
+			wantProblem(t, start(as), 403, "tasks.owner_route_only")
+		})
+	}
+	wantProblem(t, start(session("lucius", scopeSee)), 403, "permission_denied")
+	if n := len(g.client.starts); n != 0 {
+		t.Fatalf("a refused start reached Client.Start %d times", n)
+	}
+
+	var one definitionDTO
+	rec := g.do(req{method: "GET", path: "/definitions/" + string(kindSignal), as: session("lucius", scopeRun, scopeView)})
+	decode(t, rec, &one)
+	if rec.Code != 200 || one.Kind != string(kindSignal) || one.CanStart {
+		t.Fatalf("listing = %d %+v, want can_start false for an owner-route-only kind", rec.Code, one)
+	}
+
+	// Control: the same caller starts an ordinary kind through the same route.
+	if rec := g.do(startReq("", "")); rec.Code != http.StatusAccepted {
+		t.Fatalf("an ordinary kind = %d, want 202\n%s", rec.Code, rec.Body.String())
+	}
 }

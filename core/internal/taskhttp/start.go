@@ -1,7 +1,7 @@
 // file: core/internal/taskhttp/start.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2490f91d-eebe-4721-a6ad-7bece467ef47
-// last-edited: 2026-11-11
+// last-edited: 2026-11-18
 
 package taskhttp
 
@@ -91,8 +91,17 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request, p *auth.Princi
 	// A kind with no definition here (unknown, or held) is left to the
 	// executor, which answers 404 tasks.unknown_kind or 409 tasks.held.
 	if def := s.defs[kind]; def != nil {
-		if need := tasks.CommonOf(def).Perms.Start; !p.Perms.Satisfies(need) {
-			s.write(w, r, forbidden(need))
+		perms := tasks.CommonOf(def).Perms
+		if !p.Perms.Satisfies(perms.Start) {
+			s.write(w, r, forbidden(perms.Start))
+			return
+		}
+		// After the permission check, so a caller short of Start gets the
+		// answer it always did and only one who may start the kind learns it
+		// has its own route.
+		if perms.OwnerRouteOnly != "" {
+			s.write(w, r, problem{Status: http.StatusForbidden, Code: "tasks.owner_route_only",
+				Detail: "this kind is started through its owner's own route, not through the task API"})
 			return
 		}
 	}

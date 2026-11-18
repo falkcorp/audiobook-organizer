@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.20.0 -->
+<!-- version: 1.20.1 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
-<!-- last-edited: 2026-11-11 -->
+<!-- last-edited: 2026-11-18 -->
 
 # 05 — Tasks (`core/tasks`)
 
@@ -647,6 +647,14 @@ type Permissions struct {
 	// StartableByViewers is a reviewed reason allowing Start to be satisfied by
 	// a view-class scope (05-rbac PermissionSpec.Class). Empty = refused (SEC-9).
 	StartableByViewers string
+
+	// OwnerRouteOnly is a reviewed reason this kind is started only through its
+	// owner's own route, never through the generic POST /definitions/{kind}/runs,
+	// because that route enforces a gate a definition cannot state (an interactive
+	// session). Empty = startable through both. Added by F8-02 for the updater's
+	// apply and rollback kinds (05-updater 5U.10); taskhttp answers 403
+	// tasks.owner_route_only after the Start check and lists can_start false.
+	OwnerRouteOnly string
 }
 
 type Approval struct {
