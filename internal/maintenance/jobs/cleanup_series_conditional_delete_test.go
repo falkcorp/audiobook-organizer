@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/cleanup_series_conditional_delete_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 11f4d28a-ab07-4fe7-97c6-9d5d2854e15d
 // last-edited: 2026-11-18
 
@@ -299,12 +299,11 @@ func TestCleanupSeriesRun_Phase1FailsClosedWhenTheConditionalDeleteErrors(t *tes
 		[]database.Series{{ID: 7, Name: "The Long Halloween"}},
 		database.Book{ID: "long-halloween-1", SeriesID: intp(7)},
 	)
-	store.deleteIfErr = errors.New("memdb is missing rows")
+	cause := errors.New("memdb is missing rows")
+	store.deleteIfErr = cause
 	rep := &csPhase1Reporter{}
 
-	if err := (&cleanupSeriesJob{}).Run(context.Background(), store, rep, false); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
+	csRequireStopError(t, (&cleanupSeriesJob{}).Run(context.Background(), store, rep, false), cause, "phase 1")
 
 	if !store.hasSeries(7) {
 		t.Fatal("series 7 was deleted although the store could not verify it unreferenced")
@@ -383,12 +382,11 @@ func TestCleanupSeriesRun_Phase2DeletesAnUnchangedMergedFromSeriesThroughTheCond
 
 func TestCleanupSeriesRun_Phase2FailsClosedWhenTheConditionalDeleteErrors(t *testing.T) {
 	store := dupSeriesStore()
-	store.deleteIfErr = errors.New("memdb is missing rows")
+	cause := errors.New("memdb is missing rows")
+	store.deleteIfErr = cause
 	rep := &csPhase1Reporter{}
 
-	if err := (&cleanupSeriesJob{}).Run(context.Background(), store, rep, false); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
+	csRequireStopError(t, (&cleanupSeriesJob{}).Run(context.Background(), store, rep, false), cause, "phase 2")
 
 	if !store.hasSeries(7) {
 		t.Fatal("series 7 was deleted although the store could not verify it unreferenced")

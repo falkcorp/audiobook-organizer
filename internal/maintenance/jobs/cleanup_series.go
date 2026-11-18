@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/cleanup_series.go
-// version: 2.14.0
+// version: 2.15.0
 // guid: a1000002-0000-0000-0000-000000000002
 // last-edited: 2026-11-18
 
@@ -26,6 +26,13 @@ func init() { maintenance.Register(&cleanupSeriesJob{}) }
 // the log-injection barrier (a series name is user data). The job's older direct
 // slog calls are on the guard's ratchet and stay at their count.
 var csLog = logger.New("maintenance.cleanup-series")
+
+// ErrCleanupSeriesStopped is wrapped by the error Run returns when a live run
+// stopped because the store could not answer a conditional delete. The job left
+// work undone, so the op must show as failed; the counts and the warn line are
+// logged first, so the failed op still says how far it got. The store's own
+// error is wrapped alongside it.
+var ErrCleanupSeriesStopped = errors.New("cleanup-series stopped: the store could not verify a series delete")
 
 type cleanupSeriesJob struct{}
 
@@ -157,6 +164,9 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 	// instead of unlinking the books of every remaining candidate for nothing, and
 	// phase 2 (which re-homes books before it deletes) did not run.
 	phase1Stopped := false
+	// stopCause is the store's error from the delete that stopped the run, for the
+	// error Run returns once the counts are logged.
+	var stopCause error
 
 phase1:
 	for _, ser := range allSeries {
@@ -241,6 +251,7 @@ phase1:
 				// there is nothing to keep the series out of.
 				singleKept.add(res.Outcome)
 				phase1Stopped = true
+				stopCause = applyErr
 				csLog.Error("Failed to remove 1-book series %d (%q): %v", ser.ID, ser.Name, applyErr)
 				reporter.Increment()
 				break phase1
@@ -322,6 +333,7 @@ phase1:
 				// Later groups would re-home their books and then meet the same
 				// refusal.
 				phase2Stopped = true
+				stopCause = mergeErr
 			}
 			switch {
 			case mergeErr != nil:
@@ -408,6 +420,14 @@ phase1:
 		"dupMergeFromSeries", dupMergeFrom, "dupSeriesDeleted", dupDeleted,
 		"stoppedPhase1", phase1Stopped, "stoppedPhase2", phase2Stopped,
 		"dupFound", dupFound, "dupApplied", dupApplied, "dupRefused", dupRefused, "dryRun", dryRun)
+	if phase1Stopped || phase2Stopped {
+		// After the counts and the warn line, so a failed op still reports them.
+		phase := "phase 1 (single-book series)"
+		if phase2Stopped {
+			phase = "phase 2 (duplicate merge)"
+		}
+		return fmt.Errorf("%w: in %s: %w", ErrCleanupSeriesStopped, phase, stopCause)
+	}
 	return nil
 }
 

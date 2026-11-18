@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/cleanup_series_round2_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c8e2b19-7d34-4a60-9f13-0b6a4e7d2c85
 // last-edited: 2026-11-18
 
@@ -334,7 +334,13 @@ func TestCleanupSeriesRun_DoneLineBuckets(t *testing.T) {
 			store := c.build()
 			rep := &csPhase1Reporter{}
 
-			if err := (&cleanupSeriesJob{}).Run(context.Background(), store, rep, false); err != nil {
+			err := (&cleanupSeriesJob{}).Run(context.Background(), store, rep, false)
+			// A stop fails the op, wrapping the sentinel; every other run succeeds.
+			stopped := c.want.stopped1 || c.want.stopped2
+			if stopped != errors.Is(err, ErrCleanupSeriesStopped) {
+				t.Fatalf("Run error = %v, want errors.Is(ErrCleanupSeriesStopped) = %v", err, stopped)
+			}
+			if !stopped && err != nil {
 				t.Fatalf("Run: %v", err)
 			}
 
@@ -448,11 +454,17 @@ func TestCleanupSeriesRun_Phase1StopsAtTheFirstDeleteTheStoreCannotAnswer(t *tes
 		database.Book{ID: "zero-year-1", SeriesID: intp(8)},
 		database.Book{ID: "endgame-1", SeriesID: intp(9)},
 	)
-	store.deleteIfErr = errors.New("memdb is missing rows")
+	cause := errors.New("memdb is missing rows")
+	store.deleteIfErr = cause
 	rep := &csPhase1Reporter{}
+	done := csCaptureDone(t)
 
-	if err := (&cleanupSeriesJob{}).Run(context.Background(), store, rep, false); err != nil {
-		t.Fatalf("Run: %v", err)
+	err := (&cleanupSeriesJob{}).Run(context.Background(), store, rep, false)
+	csRequireStopError(t, err, cause, "phase 1")
+	// The counts are logged before the error returns, so a failed op still says
+	// how far it got.
+	if d := done(); csDoneInt(t, d, "singleFound") != 1 || !csDoneBool(t, d, "stoppedPhase1") {
+		t.Fatalf("Done line must be logged before the stop error returns: %v", d)
 	}
 
 	if len(store.conditionalCalls) != 1 {
@@ -482,11 +494,15 @@ func TestCleanupSeriesRun_Phase2StopsAtTheFirstDeleteTheStoreCannotAnswer(t *tes
 		database.Book{ID: "night-of-owls-2", SeriesID: intp(10)},
 		database.Book{ID: "night-of-owls-3", SeriesID: intp(10)},
 	)
-	store.deleteIfErr = errors.New("memdb is missing rows")
+	cause := errors.New("memdb is missing rows")
+	store.deleteIfErr = cause
 	rep := &csPhase1Reporter{}
+	done := csCaptureDone(t)
 
-	if err := (&cleanupSeriesJob{}).Run(context.Background(), store, rep, false); err != nil {
-		t.Fatalf("Run: %v", err)
+	err := (&cleanupSeriesJob{}).Run(context.Background(), store, rep, false)
+	csRequireStopError(t, err, cause, "phase 2")
+	if d := done(); csDoneInt(t, d, "dupFound") != 1 || !csDoneBool(t, d, "stoppedPhase2") {
+		t.Fatalf("Done line must be logged before the stop error returns: %v", d)
 	}
 
 	if len(store.conditionalCalls) != 1 {
@@ -519,17 +535,32 @@ func TestCleanupSeriesRun_Phase2DoesNotRunAfterPhase1Stopped(t *testing.T) {
 		database.Book{ID: "night-of-owls-1", SeriesID: intp(9)},
 		database.Book{ID: "night-of-owls-2", SeriesID: intp(9)},
 	)
-	store.deleteIfErr = errors.New("memdb is missing rows")
+	cause := errors.New("memdb is missing rows")
+	store.deleteIfErr = cause
 	rep := &csPhase1Reporter{}
 
-	if err := (&cleanupSeriesJob{}).Run(context.Background(), store, rep, false); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
+	err := (&cleanupSeriesJob{}).Run(context.Background(), store, rep, false)
+	csRequireStopError(t, err, cause, "phase 1")
 
 	if len(store.conditionalCalls) != 1 || store.conditionalCalls[0] != 7 {
 		t.Fatalf("conditional deletes = %v, want only phase 1's [7]", store.conditionalCalls)
 	}
 	if got := store.books["court-of-owls-1"].SeriesID; got == nil || *got != 8 {
 		t.Fatalf("phase 2 re-homed a book after phase 1 had stopped: %v", got)
+	}
+}
+
+// csRequireStopError checks the error a stopped run returns: the sentinel, the
+// phase it stopped in, and the store's own error, all reachable.
+func csRequireStopError(t *testing.T, err, cause error, phase string) {
+	t.Helper()
+	if !errors.Is(err, ErrCleanupSeriesStopped) {
+		t.Fatalf("Run error = %v, want it to wrap ErrCleanupSeriesStopped", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("Run error = %v, want it to wrap the store's error %v", err, cause)
+	}
+	if !strings.Contains(err.Error(), phase) {
+		t.Fatalf("Run error = %q, want it to name %s", err, phase)
 	}
 }
