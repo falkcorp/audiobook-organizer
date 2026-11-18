@@ -1,5 +1,5 @@
 // file: internal/operations/registry/dispatcher.go
-// version: 2.8.3
+// version: 2.8.4
 // guid: a7b8c9d0-e1f2-3a4b-5c6d-7e8f9a0b1c2d
 // last-edited: 2026-11-18
 
@@ -421,7 +421,9 @@ func (r *Registry) writeSetConflictLocked(candidateID string, candidateWrites []
 		}
 	}
 	// Write-sets held outside the dispatcher (HoldWriteSet) count like a running
-	// op's. The stand-in handle carries only what callers read: id, defID, writes.
+	// op's. The stand-in handle carries only what callers read: id, holdReason, writes
+	// (no defID: a hold is not an op, and a reason in that field made the deferral
+	// log print it as running_def_id).
 	for holderID, hold := range r.externalWrites {
 		if holderID == candidateID {
 			continue
@@ -433,7 +435,7 @@ func (r *Registry) writeSetConflictLocked(candidateID string, candidateWrites []
 			}
 		}
 		if len(overlap) > 0 {
-			return &runHandle{id: holderID, defID: hold.reason, writes: hold.writes}, overlap
+			return &runHandle{id: holderID, holdReason: hold.reason, writes: hold.writes}, overlap
 		}
 	}
 	return nil, nil
@@ -467,6 +469,13 @@ func (r *Registry) logWriteSetDeferral(opID, defID string, holder *runHandle, ov
 	resources := make([]string, len(overlap))
 	for i, res := range overlap {
 		resources[i] = string(res)
+	}
+	if holder.holdReason != "" {
+		r.logger.Info("registry: op deferred: write-set conflict with a held write-set",
+			"op_id", opID, "def_id", defID,
+			"holder_id", holder.id, "held_by", holder.holdReason,
+			"resources", resources)
+		return
 	}
 	r.logger.Info("registry: op deferred: write-set conflict with running op",
 		"op_id", opID, "def_id", defID,

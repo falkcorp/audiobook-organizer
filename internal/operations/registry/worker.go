@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.42.1
+// version: 2.42.2
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package registry
 
@@ -84,7 +84,11 @@ type runHandle struct {
 	// C-2 leak class cannot recur here because there is no separate map to
 	// forget to clear).
 	writes []Resource
-	cancel context.CancelFunc
+	// holdReason is set only on the stand-in handle Gate 3b builds for a write-set
+	// held outside the dispatcher (HoldWriteSet): such a holder is not an op, so it
+	// has no defID, and the deferral log names it by this instead.
+	holdReason string
+	cancel     context.CancelFunc
 	// cancelCause cancels the run with a cause (see cancelWithCause). Nil on
 	// dispatcher stub handles, like cancel.
 	cancelCause   context.CancelCauseFunc
