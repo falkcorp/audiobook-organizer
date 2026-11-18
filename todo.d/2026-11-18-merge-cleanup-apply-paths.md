@@ -18,3 +18,17 @@
       merge-cleanup row is stored under, or that the next plan reads it back. Verify
       that end to end (reject a row, re-plan, see the row held as
       `owner_says_distinct`) before an apply path is built.
+- [ ] **TODO-MERGE-CLEANUP-HUMAN-MERGED** PLAN puts `human_merged` in the preview, and only the
+      journal half of it is tracked above. The other half is not built: hold a row
+      whose pointer a person made, meaning a dedup candidate a person accepted or
+      dismissed for this pair. Read the dedup candidate decisions for the pair in the
+      preview (a narrow read exposed to the maintenance plugin, like the journal
+      one), flag the row, and hold an unmerge or swap that contradicts the person's
+      call, before any apply path exists.
+- [ ] **TODO-MERGE-CLEANUP-MANUAL-ONLY-GUARDS** PLAN's manual-only skip kinds are not implemented: a
+      loser or target whose `itunes_path` is set (the iTunes library is import-only
+      and its files are left as they are) and the Doctor Who and Battlestar
+      Galactica books that stay manual-only until the census is read. They do not
+      matter while the fixer cannot write, but an apply path must not be built
+      without them: add the skip kinds, their labels and their tests with the first
+      apply.

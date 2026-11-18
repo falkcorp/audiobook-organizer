@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_fixer.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0e4c7d58-a1b3-4f26-8c19-6d5a3e7f9b02
 // last-edited: 2026-11-18
 
@@ -57,6 +57,13 @@ const (
 	mcFlagOriginMatch4  = "origin_match4"
 	mcFlagOriginPartial = "origin_match4_partial"
 	mcFlagOriginOther   = "origin_other"
+	// mcFlagOriginUnknown: the loser (or the book it points at) could not be
+	// read, so its origin could not be classified. An error row carries this
+	// instead of a guessed origin, so the origin flags add up to every row.
+	mcFlagOriginUnknown = "origin_unknown"
+	// mcFlagSyncBroken: the book's sync identity has a redirect chain that is
+	// dangling, cyclic or too long; whether a redirect exists cannot be told.
+	mcFlagSyncBroken = "sync_redirect_broken"
 )
 
 // Why a book was in the merged listing but is not a row.
@@ -549,6 +556,9 @@ type mcFacts struct {
 	groupEffect string
 	// cycleHead is the member of a cycle chosen to be unmerged.
 	cycleHead string
+	// syncBroken is the error text of a sync redirect chain that could not be
+	// resolved ("" when it resolved or there is none).
+	syncBroken string
 }
 
 func (fa *mcFacts) flag(name string) { fa.flags[name] = true }
@@ -577,17 +587,9 @@ func (r *mcRun) classify(ctx context.Context, id string) (mcOutcome, error) {
 	fa := &mcFacts{id: id, l: l, flags: map[string]bool{}, cur: map[string]string{}, prop: map[string]string{}}
 	fa.cur["merged_into_book_id"] = *l.book.MergedIntoBookID
 
-	held, err := database.RetiredRowsHeldFor(r.ops, id)
-	if err != nil {
-		return mcOutcome{}, err
-	}
-	if held > 0 {
-		fa.class = mcClassNoVerdict
-		fa.hold(mcSkipRetiredShell, fmt.Sprintf("%d of this book's file rows were retired onto another book; it is a retired shell, and a merge cleanup would write a book that holds retired versions", held))
-		fa.cur["retired_rows_held"] = strconv.Itoa(held)
-		return mcOutcome{row: r.buildRow(fa)}, nil
-	}
-
+	// The chain, the pointer's origin and the sync redirect are read for every
+	// row, a retired shell included: the census splits rows by them, and the
+	// split has to add up to the rows.
 	chain, err := mcWalkChain(l.book, r.book)
 	if err != nil {
 		return mcOutcome{}, err
@@ -599,6 +601,17 @@ func (r *mcRun) classify(ctx context.Context, id string) (mcOutcome, error) {
 	r.noteOrigin(fa)
 	if err := r.noteSync(fa); err != nil {
 		return mcOutcome{}, err
+	}
+
+	held, err := database.RetiredRowsHeldFor(r.ops, id)
+	if err != nil {
+		return mcOutcome{}, err
+	}
+	if held > 0 {
+		fa.class = mcClassNoVerdict
+		fa.hold(mcSkipRetiredShell, fmt.Sprintf("%d of this book's file rows were retired onto another book; it is a retired shell, and a merge cleanup would write a book that holds retired versions", held))
+		fa.cur["retired_rows_held"] = strconv.Itoa(held)
+		return mcOutcome{row: r.buildRow(fa)}, nil
 	}
 
 	switch chain.End {
@@ -639,30 +652,34 @@ func (r *mcRun) noteChain(fa *mcFacts) error {
 	return nil
 }
 
+// mcClassifyOrigin says where a merge pointer most likely came from, from the
+// loser and the first book it points at. hop is nil when that book is missing
+// (a pointer to nothing is MATCH-4's shape without a shared source hash).
+func mcClassifyOrigin(b, hop *database.Book) (origin, why, flag string) {
+	if b.IsPrimaryVersion == nil || *b.IsPrimaryVersion {
+		return "other", "the explicit false primary flag MATCH-4 leaves is not set, so another writer left this pointer", mcFlagOriginOther
+	}
+	origin, why, flag = "match4_partial", "the pointer and an explicit false primary flag (MATCH-4's signature), but no metadata-source hash shared with the book it points at", mcFlagOriginPartial
+	if hop != nil {
+		lh, th := mcDeref(b.MetadataSourceHash), mcDeref(hop.MetadataSourceHash)
+		if lh != "" && lh == th {
+			origin, why, flag = "match4", "the pointer, an explicit false primary flag and the metadata-source hash shared with the book it points at: MATCH-4's signature", mcFlagOriginMatch4
+		}
+	}
+	return origin, why, flag
+}
+
 // noteOrigin records where the pointer most likely came from. It is evidence,
 // never a gate: a pointer is repaired the same whoever wrote it.
 func (r *mcRun) noteOrigin(fa *mcFacts) {
-	b := fa.l.book
-	origin, why := "other", "the explicit false primary flag MATCH-4 leaves is not set, so another writer left this pointer"
-	if b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion {
-		origin, why = "match4_partial", "the pointer and an explicit false primary flag (MATCH-4's signature), but no metadata-source hash shared with the book it points at"
-		if len(fa.chain.Hops) > 0 && fa.chain.Hops[0].Book != nil {
-			lh, th := mcDeref(b.MetadataSourceHash), mcDeref(fa.chain.Hops[0].Book.MetadataSourceHash)
-			if lh != "" && lh == th {
-				origin, why = "match4", "the pointer, an explicit false primary flag and the metadata-source hash shared with the book it points at: MATCH-4's signature"
-			}
-		}
+	var hop *database.Book
+	if len(fa.chain.Hops) > 0 {
+		hop = fa.chain.Hops[0].Book
 	}
+	origin, why, flag := mcClassifyOrigin(fa.l.book, hop)
 	fa.cur["origin"] = origin
 	fa.evidence = append(fa.evidence, "origin: "+why)
-	switch origin {
-	case "match4":
-		fa.flag(mcFlagOriginMatch4)
-	case "match4_partial":
-		fa.flag(mcFlagOriginPartial)
-	default:
-		fa.flag(mcFlagOriginOther)
-	}
+	fa.flag(flag)
 }
 
 // noteSync records whether the book's sync identity resolves to another book
@@ -681,6 +698,15 @@ func (r *mcRun) noteSync(fa *mcFacts) error {
 		return nil
 	}
 	item, err := r.syncIDs.ResolveSyncItem(sid)
+	if errors.Is(err, database.ErrSyncRedirectChainBroken) {
+		// Permanent, not a read failure: retrying cannot mend it. It is a hold,
+		// not an error row, because the book itself read fine; whether a
+		// redirect clients follow exists is what cannot be told.
+		fa.flag(mcFlagSyncBroken)
+		fa.syncBroken = err.Error()
+		fa.cur["sync_redirect"] = "broken"
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("resolve the sync identity of %s: %w", fa.id, err)
 	}
@@ -793,7 +819,10 @@ func (r *mcRun) cycleHead(members []string) (string, error) {
 		if l == nil || database.IsInTrash(l.book) || l.side.Files == 0 {
 			continue
 		}
-		c := mcCycleCand{id: id, secs: l.side.Runtime.Seconds, files: l.side.Files}
+		// KnownSeconds, not Seconds: a partial runtime is a lower bound, and a
+		// member with one unmeasured file must not outrank one measured whole.
+		secs, _ := l.side.Runtime.KnownSeconds()
+		c := mcCycleCand{id: id, secs: secs, files: l.side.Files}
 		if l.book.CreatedAt != nil {
 			c.created, c.hasTime = *l.book.CreatedAt, true
 		}
@@ -1006,6 +1035,9 @@ func (r *mcRun) gates(ctx context.Context, fa *mcFacts) error {
 		}
 	case mcKindUnmerge:
 		r.unmergeGroupGate(fa)
+	}
+	if fa.syncBroken != "" && fa.kind != "" {
+		fa.hold(mcSkipSyncBroken, "the book's sync redirect chain cannot be followed ("+fa.syncBroken+"), so whether clients are redirected away from it cannot be told")
 	}
 	if fa.flags[mcFlagSyncRedirect] && fa.kind != "" {
 		fa.hold(mcSkipSyncRedirect, "the book's sync identity resolves to "+fa.cur["sync_redirect_to"]+", a redirect clients follow; clearing it is not part of this release")
@@ -1496,10 +1528,51 @@ func mcAbsentRow(id, excluded string) repairs.Row {
 	return row
 }
 
+// errorFlags are the flags an error row carries, read again on a best-effort
+// basis: the read that failed is usually one of the files or the chain, not the
+// book itself, and the census splits every row by origin. A loser whose origin
+// cannot be read again is origin_unknown, never a guessed one, so the origin
+// flags add up to the rows. The sync redirect is read the same way; a failure
+// there leaves its flags off (the row already says a read failed).
+func (r *mcRun) errorFlags(id string) []string {
+	flags := map[string]bool{}
+	b, err := r.book(id)
+	known := false
+	if err == nil && b != nil && mcHasPointer(b) {
+		if b.IsPrimaryVersion == nil || *b.IsPrimaryVersion {
+			_, _, f := mcClassifyOrigin(b, nil)
+			flags[f], known = true, true
+		} else if hop, herr := r.book(*b.MergedIntoBookID); herr == nil {
+			_, _, f := mcClassifyOrigin(b, hop)
+			flags[f], known = true, true
+		}
+	}
+	if !known {
+		flags[mcFlagOriginUnknown] = true
+	}
+	if b != nil && r.syncIDs != nil {
+		if sid, ok, err := r.syncIDs.GetSyncIDForBook(id); err == nil && ok {
+			item, err := r.syncIDs.ResolveSyncItem(sid)
+			switch {
+			case errors.Is(err, database.ErrSyncRedirectChainBroken):
+				flags[mcFlagSyncBroken] = true
+			case err == nil && item != nil && item.CurrentBookID != "" && item.CurrentBookID != id:
+				flags[mcFlagSyncRedirect] = true
+			}
+		}
+	}
+	out := make([]string, 0, len(flags))
+	for f := range flags {
+		out = append(out, f)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // mcErrorRow is the row of a book whose reads failed.
-func mcErrorRow(id, title string, err error) repairs.Row {
+func mcErrorRow(id, title string, err error, flags []string) repairs.Row {
 	row := repairs.Row{RowID: id, BookIDs: []string{id}, Title: title, Class: mcClassError, Skipped: mcSkipError,
-		SkipReason: err.Error(), Reason: err.Error(), Risk: repairs.RiskReview}
+		SkipReason: err.Error(), Reason: err.Error(), Risk: repairs.RiskReview, Flags: flags}
 	row.Fingerprint = mcFingerprint(&row, []string{err.Error()})
 	return row
 }
@@ -1561,7 +1634,7 @@ func (f *mergeCleanupFixer) plan(ctx context.Context, _ json.RawMessage, rep reg
 		case ctx.Err() != nil:
 			return ctx.Err()
 		default:
-			outs[i] = mcOutcome{row: mcErrorRow(ids[i].id, ids[i].title, err)}
+			outs[i] = mcOutcome{row: mcErrorRow(ids[i].id, ids[i].title, err, run.errorFlags(ids[i].id))}
 		}
 		return nil
 	}, registry.RunItemsOptions{

@@ -1,11 +1,11 @@
 // file: web/src/components/review/repairs/rowHelpers.mergeCleanup.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b0e3c18-7f42-4d95-8a61-c2d4f9e07b35
 // last-edited: 2026-11-18
 
 /**
  * The merge-cleanup preview lists three row classes, a "no verdict" class and
- * eight flags. A chip reading "repoint_chain (3)" tells the owner nothing, so
+ * ten flags. A chip reading "repoint_chain (3)" tells the owner nothing, so
  * each needs words and no two may read alike.
  */
 import { describe, expect, it } from 'vitest';
@@ -22,6 +22,8 @@ describe('merge-cleanup labels', () => {
     'origin_match4',
     'origin_match4_partial',
     'origin_other',
+    'origin_unknown',
+    'sync_redirect_broken',
   ];
 
   it('words every class', () => {
