@@ -1,7 +1,7 @@
 // file: internal/server/itunes_ops.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4b7e9f2a-1c3d-4e5f-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-10-08
+// last-edited: 2026-11-18
 
 // itunes_ops registers the v2 OperationDef for iTunes import, the one iTunes
 // action. The incremental "itunes.sync" op was removed on 2026-10-08 (owner
@@ -26,21 +26,72 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
+
+// itunesImportOpID is HEAD's def ID for the iTunes import.
+const itunesImportOpID = "itunes.import"
 
 type itunesImportOpParams struct {
 	Request itunesservice.ImportRequest `json:"request"`
 }
 
-// RegisterITunesImportOp registers the "itunes.import" v2 OperationDef.
-func (s *Server) RegisterITunesImportOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "itunes.import",
+// itunesImportWriter is every write the iTunes import makes: the importer's own
+// library writes (books, files, authors, series, playlists, external ids), and
+// the activity-log rows it closes the run with. The importer holds its store
+// itself, so the import is one method here rather than a store call.
+type itunesImportWriter interface {
+	// ImportITunesLibrary runs the importer for the run keyed by opID.
+	ImportITunesLibrary(ctx context.Context, opID string, req itunesservice.ImportRequest, log logger.Logger) error
+	t7ActivityWriter
+}
+
+// itunesImportEnv is what the shared core takes from its shell (rules R2, R10).
+type itunesImportEnv struct {
+	t7Env
+	Writer itunesImportWriter
+}
+
+// itunesImportCore is the body of the op, shared by HEAD's shell and the native
+// kind. env.OpID is the run's own id: it keys the importer's checkpoint state
+// and the activity log. No v1 row is written here.
+func itunesImportCore(ctx context.Context, p itunesImportOpParams, env itunesImportEnv) error {
+	if env.Writer == nil {
+		return fmt.Errorf("itunes-import: iTunes importer not initialized")
+	}
+	runErr := env.Writer.ImportITunesLibrary(ctx, env.OpID, p.Request, operations.LoggerFromReporter(env.reporter()))
+	env.Writer.FlushActivityOp(env.OpID)
+	summary := "iTunes import completed"
+	if runErr != nil {
+		summary = fmt.Sprintf("iTunes import failed: %v", runErr)
+	}
+	env.Writer.EmitActivityInfo(env.OpID, "itunes.import", "itunes", summary, activity.AlwaysShow)
+	return runErr
+}
+
+// headITunesImportWriter is HEAD's write side: the service's importer and the
+// server's activity writer, each called as HEAD's body called it.
+type headITunesImportWriter struct {
+	headT7Activity
+	importer *itunesservice.Importer
+}
+
+func (w headITunesImportWriter) ImportITunesLibrary(ctx context.Context, opID string, req itunesservice.ImportRequest, log logger.Logger) error {
+	return w.importer.Execute(ctx, opID, req, log)
+}
+
+// itunesImportDef is HEAD's definition. Its Run is the v2 shell.
+func (s *Server) itunesImportDef() opsregistry.OperationDef {
+	return opsregistry.OperationDef{
+		ID:              itunesImportOpID,
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "itunes",
 		DisplayName:     "iTunes Import",
@@ -50,7 +101,7 @@ func (s *Server) RegisterITunesImportOp(reg *opsregistry.Registry) error {
 		Isolate:         false,
 		Timeout:         4 * time.Hour,
 		ResumePolicy:    opsregistry.ResumeDrop,
-		ConcurrencyKey:  "itunes.import",
+		ConcurrencyKey:  itunesImportOpID,
 		Permissions:     []auth.Permission{auth.PermIntegrationsManage},
 		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkITunes},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
@@ -60,21 +111,42 @@ func (s *Server) RegisterITunesImportOp(reg *opsregistry.Registry) error {
 					return fmt.Errorf("itunes-import: decode params: %w", err)
 				}
 			}
-			// opID is the v2 run's own id. It keys the importer's checkpoint
-			// state and the activity log. No v1 row is written here: the worker
-			// records this run's terminal status on the v2 row itself.
-			opID := opsregistry.ReporterOpID(reporter)
-			progress := registryProgressAdapter{r: reporter}
-			runErr := s.itunesSvc.Importer.Execute(ctx, opID, p.Request, operations.LoggerFromReporter(progress))
-			if s.activityWriter != nil {
-				activity.FlushOperation(s.activityWriter, opID)
-				summary := "iTunes import completed"
-				if runErr != nil {
-					summary = fmt.Sprintf("iTunes import failed: %v", runErr)
-				}
-				activity.EmitInfo(s.activityWriter, opID, "itunes.import", "itunes", summary, activity.AlwaysShow)
+			env := itunesImportEnv{t7Env: t7HeadEnv(reporter, true)}
+			if s.itunesSvc != nil {
+				env.Writer = headITunesImportWriter{importer: s.itunesSvc.Importer, headT7Activity: headT7Activity{w: s.activityWriter}}
 			}
-			return runErr
+			return itunesImportCore(ctx, p, env)
+		},
+	}
+}
+
+// RegisterITunesImportOp registers the "itunes.import" v2 OperationDef.
+func (s *Server) RegisterITunesImportOp(reg *opsregistry.Registry) error {
+	return reg.RegisterOp(s.itunesImportDef())
+}
+
+// itunesImportNative is the native books.itunes.import kind. HEAD runs it only
+// live (no preview, a library-write capability), so a Preview run is refused.
+// It writes the library the importer fills, and the activity log.
+func (s *Server) itunesImportNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	kind := t7KindFor(itunesImportOpID)
+	c := t7Common(s.itunesImportDef(), sched)
+	c.Effects = t7Writes(ops.ResBooks, ops.ResBookFiles, ops.ResAuthors, ops.ResSeries, ops.ResExternalIDs, ops.ResUserState, ops.ResSettings, ops.ResActivity)
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			if err := t7LiveOnly(rc, kind); err != nil {
+				return struct{}{}, err
+			}
+			p, err := t7DecodeNative[itunesImportOpParams](kind, raw)
+			if err != nil {
+				return struct{}{}, err
+			}
+			w, err := t7NewWriter(kind, deps, rc)
+			if err != nil {
+				return struct{}{}, err
+			}
+			return struct{}{}, itunesImportCore(rc.Context(), p, itunesImportEnv{t7Env: t7NativeEnv(rc), Writer: w})
 		},
 	})
 }

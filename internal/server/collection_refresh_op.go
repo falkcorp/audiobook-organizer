@@ -1,7 +1,7 @@
 // file: internal/server/collection_refresh_op.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 0c8d3b61-7e94-4a25-b3f0-9d1a6e2c5b47
-// last-edited: 2026-10-25
+// last-edited: 2026-11-18
 
 package server
 
@@ -12,10 +12,13 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 )
 
 // collectionRefreshOpID is the op the hourly collections_refresh task
@@ -52,7 +55,12 @@ func init() {
 // evaluated for each viewer on every read and never stored, so there is nothing to
 // refresh and this op has no viewer to evaluate it for.
 func (s *Server) RegisterCollectionRefreshOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
+	return reg.RegisterOp(s.collectionRefreshDef())
+}
+
+// collectionRefreshDef is HEAD's definition. Its Run is the v2 shell.
+func (s *Server) collectionRefreshDef() opsregistry.OperationDef {
+	return opsregistry.OperationDef{
 		ID:          collectionRefreshOpID,
 		Preview:     opsregistry.PreviewSpec{Params: collectionRefreshParams{}},
 		Liveness:    opsregistry.LivenessManual,
@@ -72,7 +80,7 @@ func (s *Server) RegisterCollectionRefreshOp(reg *opsregistry.Registry) error {
 		Permissions:  []auth.Permission{auth.PermCollectionsManage},
 		Capabilities: []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
 		Run:          s.runCollectionRefreshOp,
-	})
+	}
 }
 
 // collectionsRefreshPending is the scheduler's precondition for the hourly task:
@@ -82,6 +90,89 @@ func (s *Server) collectionsRefreshPending() (bool, error) {
 		return false, nil
 	}
 	return s.collectionHandler().RelativeRefreshPending()
+}
+
+// collectionRefreshNativeParams are the native kind's params: HEAD's without the
+// two dry-run spellings, which the run's mode carries.
+type collectionRefreshNativeParams struct{}
+
+// collectionRefreshStore is the read the preview makes: the same evaluation as
+// the live run, counting and storing nothing (RefreshRelativeDynamic with
+// dryRun true).
+type collectionRefreshStore interface {
+	PreviewRefreshRelativeDynamic(ctx context.Context, progress func(done, total int)) (handlers.RelativeRefreshResult, error)
+}
+
+// collectionRefreshWriter is the one write the run makes: the handler's refresh,
+// which stores a changed member list (dryRun false).
+type collectionRefreshWriter interface {
+	RefreshRelativeDynamic(ctx context.Context, progress func(done, total int)) (handlers.RelativeRefreshResult, error)
+}
+
+// collectionRefreshEnv is what the shared core takes from its shell (rules R2,
+// R10).
+type collectionRefreshEnv struct {
+	t7Env
+	Store  collectionRefreshStore
+	Writer collectionRefreshWriter
+}
+
+// collectionRefreshCore is the body of the op, shared by HEAD's shell and the
+// native kind. A dry run reads through env.Store; a live run writes through
+// env.Writer.
+func collectionRefreshCore(ctx context.Context, env collectionRefreshEnv) error {
+	dryRun := !env.Live
+	progress := func(done, total int) {
+		env.progress(done, total, fmt.Sprintf("refreshed %d of %d collections", done, total))
+	}
+	var (
+		res    handlers.RelativeRefreshResult
+		runErr error
+	)
+	if dryRun {
+		res, runErr = env.Store.PreviewRefreshRelativeDynamic(ctx, progress)
+	} else {
+		res, runErr = env.Writer.RefreshRelativeDynamic(ctx, progress)
+	}
+	if res.IndexUnavailable {
+		// One line, and a clean finish: the index being closed or rebuilding is
+		// routine around a start or a reindex, and the next hourly run retries.
+		mode := ""
+		if dryRun {
+			mode = "dry run: "
+		}
+		msg := fmt.Sprintf("%ssearch index not open: skipped %d relative-date dynamic collection(s); the next run retries", mode, res.Considered)
+		env.Log(slog.LevelInfo, msg)
+		collectionRefreshLog.Info("%s opID=%s", msg, logger.SanitizeLogValue(env.OpID))
+		env.progress(1, 1, msg)
+		return nil
+	}
+	mode := ""
+	if dryRun {
+		mode = "dry run: "
+	}
+	msg := fmt.Sprintf("%s%d relative-date dynamic collection(s) considered: %d refreshed, %d unchanged, %d skipped (edited during the run), %d failed",
+		mode, res.Considered, res.Refreshed, res.Unchanged, res.Conflicts, res.Failed)
+	env.Log(slog.LevelInfo, msg)
+	collectionRefreshLog.Info("%s opID=%s", msg, logger.SanitizeLogValue(env.OpID))
+	if res.Considered == 0 {
+		// No collection to walk means no per-item call stamped liveness.
+		env.progress(1, 1, msg)
+	}
+	return runErr
+}
+
+// headCollectionRefresh is HEAD's side of both interfaces: the collection
+// handler's RefreshRelativeDynamic, called with dryRun true for the read and
+// false for the write, as HEAD's body called it.
+type headCollectionRefresh struct{ h *handlers.CollectionHandler }
+
+func (c headCollectionRefresh) PreviewRefreshRelativeDynamic(ctx context.Context, progress func(done, total int)) (handlers.RelativeRefreshResult, error) {
+	return c.h.RefreshRelativeDynamic(ctx, true, progress)
+}
+
+func (c headCollectionRefresh) RefreshRelativeDynamic(ctx context.Context, progress func(done, total int)) (handlers.RelativeRefreshResult, error) {
+	return c.h.RefreshRelativeDynamic(ctx, false, progress)
 }
 
 func (s *Server) runCollectionRefreshOp(ctx context.Context, raw json.RawMessage, reporter opsregistry.Reporter) error {
@@ -95,33 +186,35 @@ func (s *Server) runCollectionRefreshOp(ctx context.Context, raw json.RawMessage
 	if err != nil {
 		return err
 	}
-	res, runErr := s.collectionHandler().RefreshRelativeDynamic(ctx, dryRun, func(done, total int) {
-		_ = reporter.UpdateProgress(done, total, fmt.Sprintf("refreshed %d of %d collections", done, total))
+	h := headCollectionRefresh{h: s.collectionHandler()}
+	return collectionRefreshCore(ctx, collectionRefreshEnv{t7Env: t7HeadEnv(reporter, !dryRun), Store: h, Writer: h})
+}
+
+// collectionRefreshNative is the native books.collections.refresh-relative-dynamic
+// kind. Preview evaluates and counts through the read side; Live stores a
+// changed member list through the writer.
+func (s *Server) collectionRefreshNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	kind := t7KindFor(collectionRefreshOpID)
+	c := t7Common(s.collectionRefreshDef(), sched)
+	c.Effects = t7Writes(t7ResCollections)
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			if _, err := t7DecodeNative[collectionRefreshNativeParams](kind, raw); err != nil {
+				return struct{}{}, err
+			}
+			if err := t7NeedStore(kind, deps); err != nil {
+				return struct{}{}, err
+			}
+			env := collectionRefreshEnv{t7Env: t7NativeEnv(rc), Store: deps.Store}
+			if env.Live {
+				w, err := t7NewWriter(kind, deps, rc)
+				if err != nil {
+					return struct{}{}, err
+				}
+				env.Writer = w
+			}
+			return struct{}{}, collectionRefreshCore(rc.Context(), env)
+		},
 	})
-	if res.IndexUnavailable {
-		// One line, and a clean finish: the index being closed or rebuilding is
-		// routine around a start or a reindex, and the next hourly run retries.
-		mode := ""
-		if dryRun {
-			mode = "dry run: "
-		}
-		msg := fmt.Sprintf("%ssearch index not open: skipped %d relative-date dynamic collection(s); the next run retries", mode, res.Considered)
-		_ = reporter.Log(slog.LevelInfo, msg)
-		collectionRefreshLog.Info("%s opID=%s", msg, logger.SanitizeLogValue(opsregistry.ReporterOpID(reporter)))
-		_ = reporter.UpdateProgress(1, 1, msg)
-		return nil
-	}
-	mode := ""
-	if dryRun {
-		mode = "dry run: "
-	}
-	msg := fmt.Sprintf("%s%d relative-date dynamic collection(s) considered: %d refreshed, %d unchanged, %d skipped (edited during the run), %d failed",
-		mode, res.Considered, res.Refreshed, res.Unchanged, res.Conflicts, res.Failed)
-	_ = reporter.Log(slog.LevelInfo, msg)
-	collectionRefreshLog.Info("%s opID=%s", msg, logger.SanitizeLogValue(opsregistry.ReporterOpID(reporter)))
-	if res.Considered == 0 {
-		// No collection to walk means no per-item call stamped liveness.
-		_ = reporter.UpdateProgress(1, 1, msg)
-	}
-	return runErr
 }
