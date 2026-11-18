@@ -1,5 +1,5 @@
 // file: internal/applygate/title_runtime_witness_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4d8b2f61-7a3c-4e95-8c10-b2f6a9e35d07
 // last-edited: 2026-11-17
 
@@ -142,6 +142,42 @@ func wtForEachChunk(t *testing.T, pool []wtPair, fn func(chunk []wtPair)) {
 			})
 		}
 	})
+}
+
+// The pool's hand-written specials follow its generated block (6x6x9x6 pairs),
+// which sampled() thins under -race and which can drop a special by stride
+// (index 1944, stored "Batman" against "Batman" with the subtitle "Dark
+// Victory", was one). They are checked here whole, on every run, with the same
+// predicate: a neutral title with no agreeing runtime never applies.
+func TestEvaluate_NeutralSpecialsNeverApplyWithoutAnAgreeingRuntime(t *testing.T) {
+	pool := wtTitlePool()
+	specials := pool[6*6*9*6:]
+	if len(specials) != 5 || specials[0].stored != "Batman" || specials[0].cand.Subtitle != "Dark Victory" {
+		t.Fatalf("the pool's specials moved: %d of them, first %q / %+v", len(specials), specials[0].stored, specials[0].cand)
+	}
+	neutral := 0
+	for _, p := range specials {
+		for _, narrator := range []string{"none", "candidate-only", "agree"} {
+			for _, series := range []string{"none", "both"} {
+				for _, pos := range []string{"", "2"} {
+					for _, runtime := range []string{"none", "candidate-unknown", "6%", "9%", "30%"} {
+						v := wtRun(p, narrator, series, pos, runtime)
+						if wtTitleOutcome(v) != string(OutcomeNeutral) || wtRuntimeOutcome(v) == string(OutcomeAgree) {
+							continue
+						}
+						neutral++
+						if v.Allowed {
+							t.Errorf("stored %q cand %q/%q narrator=%s series=%s pos=%q runtime=%s applied with a neutral title and no agreeing runtime",
+								p.stored, p.cand.Title, p.cand.Subtitle, narrator, series, pos, runtime)
+						}
+					}
+				}
+			}
+		}
+	}
+	if neutral < 100 {
+		t.Fatalf("only %d special inputs had a neutral title and no agreeing runtime", neutral)
+	}
 }
 
 func TestEvaluate_NeutralTitleNeverAppliesWithoutAnAgreeingRuntime(t *testing.T) {

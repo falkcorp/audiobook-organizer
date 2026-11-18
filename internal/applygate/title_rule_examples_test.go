@@ -1,5 +1,5 @@
 // file: internal/applygate/title_rule_examples_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6d1c58a2-9e04-4b73-8f25-a3e07d94b160
 // last-edited: 2026-11-17
 
@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
@@ -212,6 +213,9 @@ func TestCheckTitle_RuleExamples(t *testing.T) {
 		{"a statement subtitle gives the segment key whatever the position says",
 			database.Book{Title: "Book 2 of Batman: Hush"},
 			metafetch.MetadataCandidate{Title: "Hush", Subtitle: "Book 2 of Batman", Series: "Batman"}, "agree"},
+		{"the segment key ignores the statement subtitle when the segments are reordered",
+			database.Book{Title: "Dark: Hush"},
+			metafetch.MetadataCandidate{Title: "Hush: Dark", Subtitle: "Batman, Book 2", Series: "Batman", SeriesPosition: "2"}, "agree"},
 		{"adding the position keeps that pair in agreement",
 			database.Book{Title: "Book 2 of Batman: Hush"},
 			metafetch.MetadataCandidate{Title: "Hush", Subtitle: "Book 2 of Batman", Series: "Batman", SeriesPosition: "2"}, "agree"},
@@ -237,6 +241,14 @@ func TestCheckTitle_RuleExamples(t *testing.T) {
 		{"a self-titled candidate with no declared series agrees as before",
 			database.Book{Title: "Batman"},
 			metafetch.MetadataCandidate{Title: "Batman"}, "agree"},
+		// the same segments in another order are the same bare claim
+		{"a self-titled candidate with the same segments in another order is neutral",
+			database.Book{Title: "Batman: Dark Victory"},
+			metafetch.MetadataCandidate{Title: "Dark Victory: Batman", Series: "Dark Victory: Batman"}, "neutral"},
+		// a real subtitle is no bare series name: the exception does not apply
+		{"a candidate with a real subtitle is not self-titled and keeps the series-name block",
+			database.Book{Title: "Batman"},
+			metafetch.MetadataCandidate{Title: "Batman", Subtitle: "Dark Victory", Series: "Batman"}, "block"},
 
 		// a path form stands in only for a title that says nothing: a bare
 		// trailing capital letter ("Robin X") is a word, not a part token
@@ -336,5 +348,36 @@ func TestGate_PartMarkerRules(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// storedTitleSaysNothing is storedTitleCarriesEvidence's negation except for
+// one shape: a bare trailing capital letter ("Robin X", "Plan B"). The two are
+// kept apart on purpose (the first lets a folder name stand in for a title, the
+// second keeps a title conflict out of a transcription's reach), so this pins
+// that the shape is the ONLY difference.
+func TestStoredTitleSaysNothing_DiffersOnlyForTheCapitalLetterShape(t *testing.T) {
+	letterShape := func(title string) bool {
+		_, tok, ok := metadata.SiblingPartStem(title)
+		return ok && tok != "" && tok[0] >= 'A' && tok[0] <= 'Z'
+	}
+	differ := 0
+	for _, title := range []string{
+		"", "   ", "Chapter 3", "Track 07", "Part 1 of 3", "Disc 2", "The Sunrise Lands 1", "Hush 1",
+		"Hush [64kbps]", "Hush (Unabridged)", "Hush", "Hush: Part 2", "Hush: Dark Victory", "Who Am I",
+		"Robin X", "Plan B", "Batman 4", "Gotham 2033", "08 - The Long Halloween", "Hush CD1",
+	} {
+		says, carries := storedTitleSaysNothing(title), storedTitleCarriesEvidence(title)
+		wantDiffer := !carries && letterShape(title)
+		if (says == carries) != wantDiffer {
+			t.Errorf("%q: saysNothing=%v carriesEvidence=%v, letter shape %v: the two may differ only for the letter shape",
+				title, says, carries, letterShape(title))
+		}
+		if says == carries { // not each other's negation
+			differ++
+		}
+	}
+	if differ != 3 {
+		t.Fatalf("%d titles are not each other's negation, want exactly the three letter-shape rows (Who Am I, Robin X, Plan B)", differ)
 	}
 }
