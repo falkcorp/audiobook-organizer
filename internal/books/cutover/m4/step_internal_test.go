@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/step_internal_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e7b2f094-1d6a-4c83-9a50-3c8d4f1e6b27
 // last-edited: 2026-11-18
 
@@ -80,5 +80,36 @@ func TestFrozenRowsMatchTheStore(t *testing.T) {
 		if _, ok := head[name]; !ok {
 			t.Errorf("progRow reads %q, which the store's RunRecord (the hot half's source) has no field for", name)
 		}
+	}
+}
+
+// TestFrozenV2RowsMatchTheStore is the same hold for the v2 rows, which have no
+// JSON tags: the Go field names are the stored keys, so each field of the frozen
+// copy must exist by name, with the same type, in the store's row.
+func TestFrozenV2RowsMatchTheStore(t *testing.T) {
+	cases := []struct {
+		name          string
+		frozen, store any
+	}{
+		{"log", opLogV2{}, store.OpLogV2Row{}},
+		{"error", opErrV2{}, store.OpErrorV2Row{}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ft, st := reflect.TypeOf(c.frozen), reflect.TypeOf(c.store)
+			for i := range ft.NumField() {
+				f := ft.Field(i)
+				sf, ok := st.FieldByName(f.Name)
+				switch {
+				case !ok:
+					t.Errorf("the frozen copy reads %q, which %v has no field for", f.Name, st)
+				case sf.Type != f.Type:
+					t.Errorf("%q: the frozen copy holds a %v, the store's field is a %v", f.Name, f.Type, sf.Type)
+				}
+				if f.Tag.Get("json") != "" || sf.Tag.Get("json") != "" {
+					t.Errorf("%q has a JSON tag: the key is no longer the Go name this test holds the copy to", f.Name)
+				}
+			}
+		})
 	}
 }
