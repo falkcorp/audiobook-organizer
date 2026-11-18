@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_storediff_test.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 8e2f6a1c-47b3-4d09-9c5e-b13a7d60f4e2
-// last-edited: 2026-11-15
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -464,7 +464,7 @@ func t6g5PreviewCases() []t6g5PreviewCase {
 			_, err := s.CreateBook(&database.Book{ID: "01BATMAN00000000000000MM02", Title: "Year One", FilePath: dir})
 			require.NoError(t, err)
 			require.NoError(t, s.CreateBookFile(&database.BookFile{ID: "01ROWMM0000000000000000002", BookID: "01BATMAN00000000000000MM02", FilePath: filepath.Join(dir, "gone.mp3")}))
-			return s, New(fakeDeps{store: s, root: dir}), `{"reportPath":"` + filepath.Join(dir, "r.tsv") + `"}`
+			return s, New(fakeDeps{store: s, root: dir}), `{"reportPath":"` + filepath.Join(dir, ".reports", "r.tsv") + `"}`
 		}},
 		{"maintenance.missing-file-repoint", t6g5ScanKey, func(t *testing.T) (*database.PebbleStore, *Plugin, string) {
 			s := newRepairPebble(t)
@@ -474,7 +474,7 @@ func t6g5PreviewCases() []t6g5PreviewCase {
 			_, err := s.CreateBook(&database.Book{ID: book, Title: "The Long Halloween", FilePath: dir})
 			require.NoError(t, err)
 			require.NoError(t, s.CreateBookFile(&database.BookFile{ID: "01ROWRP0000000000000000002", BookID: book, FilePath: filepath.Join(dir, "Year One - 2", "35.mp3"), FileSize: 1234}))
-			return s, New(fakeDeps{store: s, root: dir}), `{"reportPath":"` + filepath.Join(dir, "r.tsv") + `"}`
+			return s, New(fakeDeps{store: s, root: dir}), `{"reportPath":"` + filepath.Join(dir, ".reports", "r.tsv") + `"}`
 		}},
 		{"maintenance.merge-same-path-dupes", "", func(t *testing.T) (*database.PebbleStore, *Plugin, string) {
 			s := newRepairPebble(t)
@@ -485,13 +485,13 @@ func t6g5PreviewCases() []t6g5PreviewCase {
 				require.NoError(t, err)
 				require.NoError(t, s.CreateBookFile(&database.BookFile{BookID: id, FilePath: path, FileHash: "H"}))
 			}
-			return s, New(fakeDeps{store: s, root: dir}), `{"reportPath":"` + filepath.Join(dir, "r.tsv") + `"}`
+			return s, New(fakeDeps{store: s, root: dir}), `{"reportPath":"` + filepath.Join(dir, ".reports", "r.tsv") + `"}`
 		}},
 		{"maintenance.metadata-cache-reap", "", func(t *testing.T) (*database.PebbleStore, *Plugin, string) {
 			s := newRepairPebble(t)
 			dir := t.TempDir()
 			require.NoError(t, s.PutMetadataCache(&database.MetadataCandidateCache{BookID: "01BATMAN00000000000000OR02", FetchedAt: time.Now()}))
-			return s, New(fakeDeps{store: s, root: dir}), `{"reportPath":"` + filepath.Join(dir, "r.tsv") + `"}`
+			return s, New(fakeDeps{store: s, root: dir}), `{"reportPath":"` + filepath.Join(dir, ".reports", "r.tsv") + `"}`
 		}},
 		{"maintenance.move-book-file-rows", t6g5ScanKey, func(t *testing.T) (*database.PebbleStore, *Plugin, string) {
 			f := newMBFFixture(t)

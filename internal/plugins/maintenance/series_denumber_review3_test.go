@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_denumber_review3_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3c8e1f72-5a09-4d46-b7e3-9d12a60c4f85
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -70,7 +70,7 @@ func addNumberedRun(l *denumberLib, firstSeriesID int, author int, nameFor func(
 func runLib(t *testing.T, l *denumberLib) map[string]string {
 	t.Helper()
 	before := libState(l)
-	l.mustRun(shapeApplyParams(t, nil))
+	l.mustRun(shapeApplyParams(l, nil))
 	return before
 }
 
@@ -218,7 +218,7 @@ func TestSeriesDenumber_Round3_M1_APartOfTheAuthorsNameIsNotASeries(t *testing.T
 func TestSeriesDenumber_Round3_Control_ADistinctSingleBookRunStillMoves(t *testing.T) {
 	l := newDenumberLib(t)
 	addNumberedRun(l, 80, denumberAuthor, func(n int) string { return "Court of Owls " + zero2(n) }, 2, 3, 4)
-	l.mustRun(shapeApplyParams(t, nil))
+	l.mustRun(shapeApplyParams(l, nil))
 	base := l.createdID("Court of Owls")
 	if base == 0 {
 		t.Fatalf("no base created; events=%v", l.events)

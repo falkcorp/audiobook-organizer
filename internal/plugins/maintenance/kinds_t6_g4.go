@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g4.go
-// version: 1.0.19
+// version: 1.0.20
 // guid: a6f18f0f-9e00-4b3a-a135-2ea70c56209f
-// last-edited: 2026-11-15
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -381,8 +381,9 @@ type t6g4View struct {
 
 // t6g4ReportPath is the report-path resolution Plugin.resolveReportPath makes,
 // over the library root a core reads from its store rather than from the
-// plugin's deps: the caller's explicit path when given, else
-// {RootDir}/.reports/<fileName>, with its directory proven writable.
+// plugin's deps: the caller's explicit path when given (confined to
+// {RootDir}/.reports), else {RootDir}/.reports/<fileName>, with its directory
+// proven writable.
 func t6g4ReportPath(store t6g4PathReads, explicit, fileName string) (string, error) {
 	return library.ReportPathNotify(store.RootDir(), explicit, fileName, func(dir string, was fs.FileMode) {
 		logger.New("maintenance").Warn("removed world write from the report directory, its mode was %o dir=%s", was, logger.SanitizeLogValue(dir))

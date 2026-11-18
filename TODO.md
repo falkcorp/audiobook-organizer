@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.46 -->
+<!-- version: 10.78.47 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -2146,7 +2146,11 @@ into one of the curated sections below, is a normal direct edit.
       `registry.Decode[T]` that Run calls and that sets Preview, touching
       every declaring op's Run (about 85 decode sites plus the maintenance
       job bridge).
-- [ ] **05-PR9 follow-up** `maintenance.book-shape-report`'s `reportPath`
+- [x] **05-PR9 follow-up** (done 2026-11-18: `library.ReportPathNotify` confines
+      an explicit report path to `{root_dir}/.reports/`, which covers every op
+      that resolves one, and `series-denumber` and `series-phantom-repair`, which
+      wrote the caller's path directly, now resolve it first)
+      `maintenance.book-shape-report`'s `reportPath`
       param is used as the report destination with no containment check
       (`resolveReportPath`, `internal/plugins/maintenance/report_path.go`), so a
       caller with the op's permission can make it overwrite any file the

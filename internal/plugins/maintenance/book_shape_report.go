@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_shape_report.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 3f0c5a71-8d4e-4a92-9b16-2c7e5d40ab31
-// last-edited: 2026-11-14
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -226,7 +226,10 @@ type bookShapeReportParams struct {
 	// SampleLimit bounds how many findings are echoed to the log (0 = default).
 	SampleLimit int `json:"sampleLimit,omitempty"`
 
-	// ReportPath overrides where the per-finding TSV is written. Empty =
+	// ReportPath overrides where the per-finding TSV is written, but only inside
+	// {RootDir}/.reports: a relative path is taken relative to that directory, and
+	// one that resolves outside it (absolute, "..", or through a symlink) is
+	// refused before the store is read. Empty =
 	// {RootDir}/.reports/book-shape-report-<opID>.tsv.
 	ReportPath string `json:"reportPath,omitempty"`
 

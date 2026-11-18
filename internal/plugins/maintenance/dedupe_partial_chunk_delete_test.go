@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_partial_chunk_delete_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4e8b2d71-6c3a-4f95-b0d8-1a7c5e9f3b26
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -63,9 +63,10 @@ func TestDedupeBookFileRows_PartialChunkedDeleteIsReportedAsPartial(t *testing.T
 	const copies = 70 // one keeper, 69 redundant: chunk 1 deletes 64, chunk 2 (5) fails
 	s, bookIDs := newDupStore(t, 1, copies)
 	bookID := bookIDs[0]
-	report := t.TempDir() + "/dupes.tsv"
+	root := t.TempDir()
+	report := root + "/.reports/dupes.tsv" // a report may only be written under {root}/.reports
 
-	p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: &chunkTwoFailStore{PebbleStore: s}}, root: t.TempDir()}}
+	p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: &chunkTwoFailStore{PebbleStore: s}}, root: root}}
 	raw, _ := json.Marshal(DedupeBookFileRowsParams{Apply: true, BookIDs: []string{bookID}, ReportPath: report})
 	rep := &concurrentReporter{}
 	if err := p.runDedupeBookFileRows(context.Background(), raw, rep); err != nil {
@@ -91,7 +92,8 @@ func TestDedupeBookFileRows_PartialChunkedDeleteIsReportedAsPartial(t *testing.T
 // The remove_row_ids path has the same shape: 70 named rows, chunk 2 fails.
 func TestRemoveRowIDs_PartialChunkedDeleteIsReportedAsPartial(t *testing.T) {
 	s := newDupeReportStore(t)
-	report := t.TempDir() + "/r.tsv"
+	root := t.TempDir()
+	report := root + "/.reports/r.tsv" // a report may only be written under {root}/.reports
 	bookID := cfSeedBook(t, s, "Batman: Hush", "/lib/Gotham/Hush")
 	keeper := cfSeedRow(t, s, bookID, "/lib/Gotham/Hush/00.m4b", 10, 60, "gotham-keeper")
 	const named = 70
@@ -100,7 +102,7 @@ func TestRemoveRowIDs_PartialChunkedDeleteIsReportedAsPartial(t *testing.T) {
 		ids = append(ids, cfSeedRow(t, s, bookID, fmt.Sprintf("/lib/Gotham/Hush/%02d.m4b", i+1), 10, 60, ""))
 	}
 
-	p := &Plugin{deps: fakeDeps{store: &chunkTwoFailStore{PebbleStore: s}}}
+	p := &Plugin{deps: fakeDeps{store: &chunkTwoFailStore{PebbleStore: s}, root: root}}
 	raw, _ := json.Marshal(DedupeBookFileRowsParams{Apply: true, RemoveRowIDs: ids, ConfirmedDuplicate: true, ReportPath: report})
 	rep := &concurrentReporter{}
 	if err := p.runDedupeBookFileRows(context.Background(), raw, rep); err != nil {

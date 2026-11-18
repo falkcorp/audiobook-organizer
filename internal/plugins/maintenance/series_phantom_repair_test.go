@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_phantom_repair_test.go
-// version: 1.4.4
+// version: 1.4.5
 // guid: baa66b78-fd15-4fb8-87c8-2892d296df6e
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -117,8 +117,9 @@ func runSeriesPhantom(t *testing.T, p *Plugin, params seriesPhantomRepairParams)
 func TestSeriesPhantomRepair_ReportGroupsPhantomsByHolderCountAndWritesNothing(t *testing.T) {
 	s := newSeriesPhantomStore(t)
 	fx := seedSeriesPhantomFixture(t, s)
-	p := &Plugin{deps: fakeDeps{store: s}}
-	reportPath := filepath.Join(t.TempDir(), "phantoms.tsv")
+	root := t.TempDir()
+	p := &Plugin{deps: fakeDeps{store: s, root: root}}
+	reportPath := filepath.Join(root, ".reports", "phantoms.tsv") // a report may only be written under {root}/.reports
 
 	res, err := runSeriesPhantom(t, p, seriesPhantomRepairParams{ReportPath: reportPath})
 	require.NoError(t, err)

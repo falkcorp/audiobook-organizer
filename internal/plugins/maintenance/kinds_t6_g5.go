@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g5.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 30f92b7b-033e-4403-927a-99445211075c
-// last-edited: 2026-11-15
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -206,8 +206,8 @@ func t6g5HeadOpID(ctx context.Context, reporter sdk.Reporter) string {
 }
 
 // t6g5ReportPath is resolveReportPath(explicit, opReportFileName(...)) over the
-// env: the explicit path when one was given, otherwise
-// {root}/.reports/<prefix>-<opID>.tsv ("unknown-op" with no ID), its directory
+// env: the explicit path when one was given (confined to {root}/.reports),
+// otherwise {root}/.reports/<prefix>-<opID>.tsv ("unknown-op" with no ID), its directory
 // proven writable before any work (HEAD's contract).
 func t6g5ReportPath(env t6g5Base, explicit, prefix string) (string, error) {
 	name := env.OpID

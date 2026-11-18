@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_native_test.go
-// version: 1.5.3
+// version: 1.5.4
 // guid: 6c1f0b7e-3a52-4d8c-9f40-b8e2a7d15c63
-// last-edited: 2026-11-15
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -583,7 +583,7 @@ func TestT6G5Native_MarkMissingFiles(t *testing.T) {
 	require.NoError(t, s.CreateBookFile(&database.BookFile{ID: "01ROWMM0000000000000000001", BookID: "01BATMAN00000000000000MM01", FilePath: gone}))
 
 	r, d := t6g5RunNativeDiff(t, s, New(fakeDeps{store: s, root: dir}), tasks.ModeLive, "maintenance.mark-missing-files", t6g5ScanKey,
-		`{"reportPath":"`+filepath.Join(dir, "r.tsv")+`"}`)
+		`{"reportPath":"`+filepath.Join(dir, ".reports", "r.tsv")+`"}`)
 	require.NoError(t, r.err)
 	r.requireWriter(t)
 	r.requireStoreWritesWithin(t, d, string(ops.ResBookFiles))
@@ -612,7 +612,7 @@ func TestT6G5Native_MissingFileRepoint(t *testing.T) {
 	require.NoError(t, s.CreateBookFile(&database.BookFile{ID: "01ROWRP0000000000000000001", BookID: book, FilePath: broken, FileSize: 1234}))
 
 	r, d := t6g5RunNativeDiff(t, s, New(fakeDeps{store: s, root: dir}), tasks.ModeLive, "maintenance.missing-file-repoint", t6g5ScanKey,
-		`{"reportPath":"`+filepath.Join(dir, "r.tsv")+`"}`)
+		`{"reportPath":"`+filepath.Join(dir, ".reports", "r.tsv")+`"}`)
 	require.NoError(t, r.err)
 	r.requireWriter(t)
 	r.requireStoreWritesWithin(t, d, string(ops.ResBookFiles))
@@ -640,7 +640,7 @@ func TestT6G5Native_MergeSamePathDupes(t *testing.T) {
 	// The merge runs for real (merge.Service over the same store), so the store
 	// diff sees the merge's own journal, redirect and sync rows, not the stub's none.
 	r, d := t6g5RunNativeDiff(t, s, New(fakeDeps{store: s, root: dir}), tasks.ModeLive, "maintenance.merge-same-path-dupes", t6g5ScanKey,
-		`{"reportPath":"`+filepath.Join(dir, "r.tsv")+`"}`, t6g5MergeThroughStore(s))
+		`{"reportPath":"`+filepath.Join(dir, ".reports", "r.tsv")+`"}`, t6g5MergeThroughStore(s))
 	require.NoError(t, r.err)
 	r.requireWriter(t)
 	r.requireStoreWritesWithin(t, d, string(ops.ResBooks))
@@ -695,7 +695,7 @@ func TestT6G5Native_MergeSamePathDupesCarriesIDsStateAndSiblings(t *testing.T) {
 		require.NoError(t, s.SetUserBookState(&database.UserBookState{UserID: u.ID, BookID: id, Status: database.UserBookStatusInProgress, ProgressPct: 30 + i, LastActivityAt: time.Now()}))
 	}
 	r, d := t6g5RunNativeDiff(t, s, New(fakeDeps{store: s, root: dir}), tasks.ModeLive, "maintenance.merge-same-path-dupes", t6g5ScanKey,
-		`{"reportPath":"`+filepath.Join(dir, "r.tsv")+`"}`, t6g5MergeThroughStore(s))
+		`{"reportPath":"`+filepath.Join(dir, ".reports", "r.tsv")+`"}`, t6g5MergeThroughStore(s))
 	require.NoError(t, r.err)
 	r.requireWriter(t)
 	r.requireStoreWritesWithin(t, d, string(ops.ResBooks), string(ops.ResExternalIDs), string(ops.ResUserState), string(ops.ResSyncIdentity), string(ops.ResOperations))
@@ -719,7 +719,7 @@ func TestT6G5Native_MetadataCacheReap(t *testing.T) {
 	require.NoError(t, s.PutMetadataCache(&database.MetadataCandidateCache{BookID: live, FetchedAt: time.Now()}))
 
 	r, d := t6g5RunNativeDiff(t, s, New(fakeDeps{store: s, root: dir}), tasks.ModeLive, "maintenance.metadata-cache-reap", "",
-		`{"reportPath":"`+filepath.Join(dir, "r.tsv")+`"}`)
+		`{"reportPath":"`+filepath.Join(dir, ".reports", "r.tsv")+`"}`)
 	require.NoError(t, r.err)
 	r.requireWriter(t)
 	r.requireStoreWritesWithin(t, d, string(ops.ResMetadataCache))
@@ -850,7 +850,7 @@ func TestT6G5Head_MarkMissingFilesApplies(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, s.CreateBookFile(&database.BookFile{ID: "01ROWMM0000000000000000002", BookID: book, FilePath: filepath.Join(dir, "gone.mp3")}))
 	p := New(fakeDeps{store: s, root: dir})
-	report := filepath.Join(dir, "r.tsv")
+	report := filepath.Join(dir, ".reports", "r.tsv")
 
 	require.NoError(t, p.markMissingFilesDef().Run(context.Background(), []byte(`{"reportPath":"`+report+`"}`), &resultReporter{}))
 	files, err := s.GetBookFiles(book)
