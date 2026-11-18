@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/head.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3b7e1c94-d2a6-4f08-95b1-6c0e8a47d213
 // last-edited: 2026-11-18
 
@@ -37,6 +37,17 @@ const (
 	prefixRow     = "opv2:row:"
 	prefixRowIx   = "opv2:rowix:"
 
+	// HEAD's v2 operations store, written beside the v3 projection while the
+	// opv2 mirror is on (05-storage 5S.9.1 rows 11 and 13). Per run: the
+	// operation row and the resume-state row (one row each, keyed by the run
+	// ID) and the log and error lines (keyed <run ID>:<nanos>[:<seq>]). The
+	// lines are history the v3 half does not hold; the rows are mirrors of the
+	// v3 record (HEAD's reconcile makes them agree before anything is read).
+	prefixOp2    = "opv2:op:"
+	prefixState2 = "opv2:state:"
+	prefixLog2   = "opv2:log:"
+	prefixErr2   = "opv2:err:"
+
 	// The four opv3:ix: indexes are claimed one by one (books' claims have no
 	// claim over opv3:ix: itself), so a Source range over the bare prefix would
 	// cross four claim boundaries.
@@ -48,6 +59,16 @@ const (
 	prefixDef      = "opv3:def:"
 	prefixMeta     = "opv3:meta:"
 	prefixStrike   = "opv2:strike:"
+
+	// The v2 indexes and registry rows, all rebuilt from the operation rows
+	// and the registered definitions: the active set, the definition rows, the
+	// two timeline indexes, the queue and the waiting-deps index.
+	prefixAct2  = "opv2:act:"
+	prefixDef2  = "opv2:def:"
+	prefixDone2 = "opv2:done:"
+	prefixOpen2 = "opv2:open:"
+	prefixQ2    = "opv2:q:"
+	prefixWait2 = "opv2:wait:"
 
 	// Clocks: HEAD's v3 schedule state and the scheduler's settings clocks.
 	prefixSched = "opv3:sched:"
@@ -75,12 +96,16 @@ var settingKeys = []string{keyFullSweep, keyWindow, keyPause, keyStandDown}
 var runScoped = []string{
 	prefixProg, prefixEvt, prefixCkpt, prefixLedger, prefixSnap, prefixIntent,
 	prefixItem, prefixLog, prefixMark, prefixRowMark, prefixRow, prefixRowIx,
+	prefixOp2, prefixState2, prefixLog2, prefixErr2,
 }
 
 // derived are the families deleted by rule: indexes HEAD rebuilt from the run
 // record (the native store derives its own), definition rows (registration
 // rebuilds c/tasks/def/) and the census row (native Counts is derived).
-var derived = []string{prefixIxDef, prefixIxDone, prefixIxParent, prefixIxState, prefixQueue, prefixDef, prefixMeta, prefixStrike}
+var derived = []string{
+	prefixIxDef, prefixIxDone, prefixIxParent, prefixIxState, prefixQueue, prefixDef, prefixMeta, prefixStrike,
+	prefixAct2, prefixDef2, prefixDone2, prefixOpen2, prefixQ2, prefixWait2,
+}
 
 // otherPrefixes are the source families that belong to no run and are not
 // derived: the clock families and the debounce buckets.
@@ -235,6 +260,26 @@ type logRow struct {
 type ckptRow struct {
 	State       json.RawMessage `json:"state"`
 	LegacyState []byte          `json:"legacy_state"`
+}
+
+// opLogV2 is opv2:log: (store.OpLogV2Row, which has no JSON tags: the Go field
+// names are the keys).
+type opLogV2 struct {
+	OperationID string
+	Level       string
+	Message     string
+	Attrs       string // a JSON object, as text
+	CreatedAt   time.Time
+}
+
+// opErrV2 is opv2:err: (store.OpErrorV2Row).
+type opErrV2 struct {
+	OperationID string
+	Plugin      string
+	DefID       string
+	Message     string
+	Attrs       string // a JSON object, as text
+	OccurredAt  time.Time
 }
 
 // rowIndex is opv2:rowix: for a repairs plan row: the class a page filters by.
