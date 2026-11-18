@@ -1,7 +1,7 @@
 // file: internal/books/cutover/reach_golden_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e41c7a05-92d3-4b68-a1f7-5c08d3b6e294
-// last-edited: 2026-11-14
+// last-edited: 2026-11-18
 
 package cutover
 
@@ -141,6 +141,10 @@ var reachGoldenCells = []string{
 	"POST /api/v1/books/:id/status/repair / key:fp-worker:users: R0 A, R2 D",
 	"POST /api/v1/books/:id/status/repair / key:fp-worker:view: R0 A, R2 D",
 	"POST /api/v1/import-paths / authoff: R0 A, R2 D",
+	"POST /api/v1/operations/reconcile / key:admin:settings: R0 D, R2 A",
+	"POST /api/v1/operations/reconcile / key:editor:empty: R0 A, R2 D",
+	"POST /api/v1/operations/reconcile / key:editor:every: R0 A, R2 D",
+	"POST /api/v1/operations/reconcile / session:editor: R0 A, R2 D",
 	"POST /api/v1/playlists / key:fp-worker:settings: R0 A, R2 D",
 	"POST /api/v1/playlists / key:fp-worker:users: R0 A, R2 D",
 	"POST /api/v1/playlists / key:fp-worker:view: R0 A, R2 D",
