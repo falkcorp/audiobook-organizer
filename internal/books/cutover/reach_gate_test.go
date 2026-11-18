@@ -1,7 +1,7 @@
 // file: internal/books/cutover/reach_gate_test.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 7d3a8f21-6c4e-4b95-a0d7-1e9b2c5f8a36
-// last-edited: 2026-11-15
+// last-edited: 2026-11-18
 
 package cutover
 
@@ -198,6 +198,28 @@ func reachExpected() []reachExpect {
 	}
 }
 
+// reachPostR0Decisions are changes of policy made on HEAD after the R0 tag was
+// recorded, so R0's letter is the old policy and R2's is the manifest's. Each is
+// a decision about reach (a TODO.md item or an owner ruling), named by it, and
+// asserted on both letters like every row. They stay until R0's reach is
+// re-recorded over a newer tag.
+func reachPostR0Decisions() []reachExpect {
+	return []reachExpect{
+		{
+			name:  "RECONCILE-APPLY-PERMISSION: POST /operations/reconcile enforces the settings.manage reconcile.apply declares (narrowing)",
+			why:   "the route was mounted on scan.trigger, which the seeded editor holds, while the op's definition and POST /operations/v2 require settings.manage; an editor could repoint books through the route",
+			route: routeIs("POST /api/v1/operations/reconcile"), who: whoIs("session:editor", "key:editor:every", "key:editor:empty"),
+			r0: 'A', r2: 'D', want: 3,
+		},
+		{
+			name:  "RECONCILE-APPLY-PERMISSION: POST /operations/reconcile enforces the settings.manage reconcile.apply declares (widening)",
+			why:   "a key scoped to settings.manage alone could not start the op through the route (scan.trigger was required); it holds the permission the op declares",
+			route: routeIs("POST /api/v1/operations/reconcile"), who: whoIs("key:admin:settings"),
+			r0: 'D', r2: 'A', want: 1,
+		},
+	}
+}
+
 // reachRecorderLimits are differences that are not a change of policy: the
 // probe cannot reach the authorization decision R0's own code makes, so R0's
 // letter is the handler's refusal of the probe, not the router's reach. Each is
@@ -319,7 +341,7 @@ func reachStaticProblems(t testing.TB, vd *reachR0Doc, atoms []m3.AtomRow, whos 
 
 // reachOracleRows are every expected row the oracle holds the diff to.
 func reachOracleRows() []reachExpect {
-	return slices.Concat(reachExpected(), reachHandlerRefusals(), reachRecorderLimits())
+	return slices.Concat(reachExpected(), reachHandlerRefusals(), reachRecorderLimits(), reachPostR0Decisions())
 }
 
 func TestIdentityCutover_ReachOracle(t *testing.T) {

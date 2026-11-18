@@ -1,7 +1,7 @@
 // file: internal/books/cutover/reach_owner_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 5c0e8b71-3f2a-4d96-8a14-b7e69d1c2f08
-// last-edited: 2026-11-15
+// last-edited: 2026-11-18
 
 package cutover
 
@@ -28,7 +28,7 @@ import (
 // table holds none, so every principal is refused. reachOwnerSetVerdict is that
 // model; the test compares it with the recording, route by route and principal
 // by principal. It is a separate comparison with no expected differences, so the
-// 217-cell golden list is untouched. A missing recording fails it (the recording is
+// golden list is untouched. A missing recording fails it (the recording is
 // committed; the flip guard in reach_pin_source_test.go holds the same condition
 // at the mount switch).
 

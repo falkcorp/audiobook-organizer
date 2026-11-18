@@ -1,7 +1,7 @@
 // file: internal/books/cutover/reach_baseline_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3b8f1c64-d702-4e95-a6c3-0e47b9d1f258
-// last-edited: 2026-11-15
+// last-edited: 2026-11-18
 
 package cutover
 
@@ -243,7 +243,7 @@ func reachCountProblems(vd *reachR0Doc, res reachDiffResult) []string {
 		"routes only R0 has":                     3,
 		"routes only R2 has":                     1,
 		"cells compared (task pseudo-routes in)": 27145,
-		"cells that differ":                      217,
+		"cells that differ":                      221,
 	}
 	var keys []string
 	for k := range want {
