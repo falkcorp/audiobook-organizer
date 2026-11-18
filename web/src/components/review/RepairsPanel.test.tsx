@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.29.2
+// version: 1.30.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
-// last-edited: 2026-11-07
+// last-edited: 2026-11-18
 //
 // The repairs surface, rendered over the real lane hook with a mocked API, so
 // the clicks go through the same dispatch the workspace uses.
@@ -1083,6 +1083,34 @@ describe('SKIP_KIND_LABEL', () => {
       expect(SKIP_KIND_LABEL[kind], kind).toBeTruthy();
       expect(SKIP_KIND_LABEL[kind]).not.toEqual(kind);
     }
+  });
+
+  it('words every hold of the merge-cleanup preview', () => {
+    for (const kind of [
+      'runtime_incomplete',
+      'runtime_ambiguous',
+      'suspicious',
+      'cannot_tell',
+      'merge_looks_correct',
+      'no_longer_merged',
+      'gone',
+      'chain_over_cap',
+      'cycle_not_head',
+      'repoint_ambiguous',
+      'handled_by_version_group_repair',
+      'retired_shell',
+      'cross_group',
+      'swap_target_not_primary',
+      'swap_would_not_crown_keeper',
+      'group_needs_handoff',
+      'sync_redirect_present',
+      'owner_says_distinct',
+      'owner_veto_unresolvable',
+    ]) {
+      expect(SKIP_KIND_LABEL[kind], kind).toBeTruthy();
+      expect(SKIP_KIND_LABEL[kind]).not.toEqual(kind);
+    }
+    expect(SKIP_KIND_LABEL.handled_by_version_group_repair).toContain('"Pick the main version of each book"');
   });
 
   it('points at the fixers by their lane titles, never by a nickname', () => {

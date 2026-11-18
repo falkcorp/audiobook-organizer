@@ -1,7 +1,7 @@
 // file: web/src/components/review/repairs/rowHelpers.ts
-// version: 1.4.1
+// version: 1.5.0
 // guid: 21e5fc7d-cd22-4c0a-9773-b83015403a68
-// last-edited: 2026-11-04
+// last-edited: 2026-11-18
 
 /**
  * Pure helpers shared by the three repairs row views (Compact, Details,
@@ -129,6 +129,15 @@ export function classLabel(c: string): string {
 /** Display names of fixer row flags (Row.flags); an unknown flag shows as itself. */
 const FLAG_LABELS: Record<string, string> = {
   combine_undo_aware: 'From a combine that can still be undone',
+  // maintenance.merge-cleanup
+  chain_via_merged: 'Merge chain passes through another merged book',
+  chain_via_trashed: 'Merge chain passes through a trashed book',
+  group_needs_handoff: 'Version group would need a new main version',
+  sync_redirect_present: 'Audiobookshelf sync redirect points away from it',
+  owner_says_distinct: 'You rejected joining this pair',
+  origin_match4: 'Merged by metadata match (pointer, flag and shared source hash)',
+  origin_match4_partial: 'Looks like a metadata-match merge (no shared source hash)',
+  origin_other: 'Merge pointer left by something other than a metadata match',
 };
 
 export function flagLabel(f: string): string {
@@ -182,6 +191,11 @@ const CLASS_LABELS: Record<string, string> = {
   same_book_version_review_location: 'Same-book link, review: file not in an import folder',
   same_book_version_review_format: 'Same-book link, review: format disagrees',
   same_book_version_review_dates: 'Same-book link, review: import and file record dated far apart',
+  // maintenance.merge-cleanup: what the merge of this book turned out to be.
+  unmerge: 'Wrong work: undo the merge',
+  swap_keeper: 'Fragment kept over the full copy: keep the full copy',
+  repoint_chain: 'Merge target is gone: point at the live book',
+  no_verdict: 'No verdict (left alone)',
   error: 'Error',
 };
 
