@@ -1,5 +1,5 @@
 // file: internal/server/entities_ops.go
-// version: 1.18.2
+// version: 1.18.3
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
 // last-edited: 2026-11-18
 
@@ -569,6 +569,11 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 			failed := 0
 			hydrateSkipped := 0
 			retiredSkipped := 0
+			// joinLeftAlone counts books whose author WAS resolved (the column
+			// write landed while they were live) and that were then retired
+			// before the join pass: they are resolved books, not skipped ones;
+			// only the join was left alone.
+			joinLeftAlone := 0
 			for i, book := range books {
 				if ctx.Err() != nil {
 					return ctx.Err()
@@ -666,6 +671,16 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 								// book consistently attributed to the production
 								// company rather than half-resolved or wiped.
 								if err := assignResolvedAuthorPreservingRecord(store, book.ID, existing.ID, authorID); err != nil {
+									if errors.Is(err, errResolveJoinRetired) {
+										// The author column was written while the
+										// book was live; it was retired before the
+										// join pass and only the join was left
+										// alone. Resolved, with the skipped join
+										// counted on its own line.
+										resolved++
+										joinLeftAlone++
+										continue
+									}
 									if errors.Is(err, errResolveBookRetired) {
 										// Retired between the re-read above and
 										// one of the two locked passes: refused
@@ -696,6 +711,9 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 			s.authorsCache.InvalidateAll()
 
 			resultMsg := fmt.Sprintf("Resolved %d/%d books for %q (%d unresolved, %d skipped on hydrate error, %d retired books skipped)", resolved, len(books), prodAuthorName, failed, hydrateSkipped, retiredSkipped)
+			if joinLeftAlone > 0 {
+				resultMsg += fmt.Sprintf("; %d of the resolved books were retired after their author was written, so their author credits were left alone", joinLeftAlone)
+			}
 			_ = progress.Log("info", resultMsg, nil)
 			_ = progress.UpdateProgress(len(books), len(books), resultMsg)
 			return nil
@@ -707,6 +725,14 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 // return when the row, read under the book's write lock, is retired (trashed or
 // merged away). The op counts it as a retired skip, not a failure.
 var errResolveBookRetired = errors.New("book retired before the write")
+
+// errResolveJoinRetired is the other half of a two-pass resolution: the book
+// was live for the first pass (its AuthorID was written) and retired before
+// the second pass would rewrite its author join. The book is a resolved one
+// whose join was left alone, so the caller counts it resolved and counts the
+// skipped join separately; it is not errResolveBookRetired, which means
+// nothing was written.
+var errResolveJoinRetired = errors.New("book retired after its author was written, before its author join")
 
 // assignPublisherPreservingRecord reclassifies a production company as the
 // book's Publisher WITHOUT wiping the rest of the stored record.
@@ -775,11 +801,13 @@ func assignPublisherPreservingRecord(store entityAssignStore, bookID, publisher 
 //     STORED row's AuthorID, which is still the old one until the first pass
 //     commits.
 //
-// A row retired when either pass reads it is refused with errResolveBookRetired
-// and the caller counts a retired skip. What this does NOT cover: a book that
-// retires between the two passes keeps the resolved AuthorID (written while it
-// was live) with its join left as it was, so the column and the join disagree
-// on that retired row; no write lands on the retired book after it retired.
+// A row retired when the first pass reads it is refused with errResolveBookRetired
+// (nothing was written) and the caller counts a retired skip. A row retired
+// BETWEEN the passes was resolved: it keeps the AuthorID written while it was
+// live, its join is left as it was, and the error is errResolveJoinRetired, so
+// the caller counts the book as resolved and the skipped join on its own line.
+// The column and the join disagree on that retired row; no write lands on the
+// book after it retired.
 func assignResolvedAuthorPreservingRecord(store authorAssignStore, bookID string, resolvedAuthorID, prodAuthorID int) error {
 	written, err := store.ModifyBook(bookID, func(full *database.Book) error {
 		// Refuse a retired row under the lock; the error aborts the write, and
@@ -823,7 +851,7 @@ func assignResolvedAuthorPreservingRecord(store authorAssignStore, bookID string
 		return database.ErrSkipBookWrite
 	})
 	if retiredAtJoin {
-		return fmt.Errorf("book %s retired before its author join was rewritten: %w", bookID, errResolveBookRetired)
+		return fmt.Errorf("book %s: %w", bookID, errResolveJoinRetired)
 	}
 	if passErr == nil {
 		passErr = joinErr
