@@ -1,7 +1,7 @@
 // file: internal/transcribe/dispatcher_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 1ca890f2-8505-4a42-9d74-209cc293077e
-// last-edited: 2026-10-26
+// last-edited: 2026-11-18
 
 package transcribe
 
@@ -30,12 +30,16 @@ func newWhisperStub(t *testing.T) *httptest.Server {
 }
 
 // deadServerURL returns a URL whose listener has been closed, so every
-// connection is refused.
+// connection is refused. A dispatch to it benches the URL in the process-wide
+// cooldown registry, and its port is free for the next test's server to take, so
+// the bench is cleared when the test ends: otherwise that server inherits a
+// cooldown it never earned (see startWorkerServer).
 func deadServerURL(t *testing.T) string {
 	t.Helper()
 	srv := httptest.NewServer(http.NotFoundHandler())
 	url := srv.URL
 	srv.Close()
+	t.Cleanup(func() { clearCooldown(url) })
 	return url
 }
 
