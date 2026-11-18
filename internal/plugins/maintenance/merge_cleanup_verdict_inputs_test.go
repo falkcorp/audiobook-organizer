@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_verdict_inputs_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b0c6a2e-5d71-4e0f-9a64-c1f2d8e7b905
 // last-edited: 2026-11-18
 
@@ -32,6 +32,7 @@ func TestMergeCleanupCreditParts(t *testing.T) {
 		{"and splits", "Bruce Wayne and Selina Kyle", []string{"bruce wayne", "kyle selina"}},
 		{"an ampersand splits", "Bruce Wayne & Selina Kyle", []string{"bruce wayne", "kyle selina"}},
 		{"surname first folds to given first", "Wayne, Bruce", []string{"bruce wayne"}},
+		{"the same name twice is one name", "Bruce Wayne & BRUCE WAYNE", []string{"bruce wayne"}},
 		{"nothing", "", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -136,6 +137,23 @@ func TestMergeCleanupTitleAuthorSwappedPairIsHeldNotUnmerged(t *testing.T) {
 	})
 }
 
+func TestMergeCleanupTransposedIgnoresAPlaceholderCredit(t *testing.T) {
+	// "Unknown" is a placeholder author but a real-looking title: a book titled
+	// Unknown beside a book credited to Unknown is not a title/author swap.
+	a := mcTestSide("A", "Unknown", []string{"year one"}, 7*3600)
+	a.Credits = []string{"Year One"}
+	b := mcTestSide("B", "Year One", []string{"unknown"}, 7*3600)
+	b.Credits = []string{"Unknown"}
+	require.False(t, mcTransposed(a, b))
+	require.False(t, mcTransposed(b, a))
+	require.False(t, mcComputeSignals(a, b).Transposed)
+	// Premise: with a real name in its place the same shape is a swap.
+	b.Credits = []string{"Bruce Wayne"}
+	a.Title = "Bruce Wayne"
+	require.True(t, mcTransposed(a, b))
+	require.True(t, mcTransposed(b, a), "the question is symmetric")
+}
+
 func TestMergeCleanupAlternativeTitleStopsTitleDiffAndVetoesAnUnmerge(t *testing.T) {
 	const hour = 3600
 	l := mcTestSide("L", "Year One", mcBruce, 7*hour)
@@ -168,6 +186,23 @@ func TestMergeCleanupAlternativeTitleStopsTitleDiffAndVetoesAnUnmerge(t *testing
 		l.AltTitles = []string{"Unknown Title"}
 		tg := mcTestSide("T", "Unknown Title", mcSelina, 9*hour)
 		require.False(t, mcComputeSignals(l, tg).TitleAltMatch)
+		// A placeholder matches every other placeholder, so one on each side
+		// would be a match on nothing.
+		tg = mcTestSide("T", "Hush", mcSelina, 9*hour)
+		tg.AltTitles = []string{"Unknown Title"}
+		s := mcComputeSignals(l, tg)
+		require.False(t, s.TitleAltMatch, "two placeholder alternative titles are not a match")
+		require.True(t, s.TitleDiff, "and they do not stop TITLE_DIFF")
+	})
+	t.Run("a near-match through an alternative title is not TITLE_DIFF", func(t *testing.T) {
+		// One letter apart: similar enough that the titles do not differ,
+		// though they share no word.
+		l := mcTestSide("L", "Year One", mcBruce, 7*hour)
+		l.AltTitles = []string{"abcdefghij"}
+		tg := mcTestSide("T", "abcdefghix", mcSelina, 9*hour)
+		require.False(t, mcComputeSignals(l, tg).TitleDiff)
+		l.AltTitles = nil
+		require.True(t, mcComputeSignals(l, tg).TitleDiff, "premise: without the alternative title they differ")
 	})
 }
 
@@ -267,4 +302,20 @@ func TestMergeCleanupSwapIsDecidedOnWhatIsOnDisk(t *testing.T) {
 		require.Equal(t, mcSkipRuntimeIncludesMissing, v.Skip, "a swap on a target that is only a fragment on disk")
 		require.Equal(t, mcKindSwap, v.Kind)
 	})
+}
+
+func TestMergeCleanupMissingChaptersThatOnlyChangeWhyASwapIsHeldStillHoldIt(t *testing.T) {
+	const hour = 3600
+	// On disk the target is twenty minutes: a probe, so the swap is held as
+	// runtime_ambiguous. With its three missing hours counted it is a three-hour
+	// target of a ten-hour loser, an unheld swap. Both are swaps; the answer
+	// still depends on audio the book does not have, so that is what holds it.
+	loser := mcTestSide("L", "Hush", mcBruce, 10*hour)
+	target := mcWithMissing(mcTestSide("T", "Hush", mcBruce, 1200), 3*hour, 4)
+	v := mcDecide(loser, target)
+	require.Equal(t, mcKindSwap, v.Kind)
+	require.Equal(t, mcSkipRuntimeIncludesMissing, v.Skip)
+	require.Len(t, v.Extra, 1)
+	require.Equal(t, mcSkipRuntimeAmbiguous, v.Extra[0].Skip, "the on-disk hold is kept beside it")
+	require.Contains(t, v.Why, "an unheld swap")
 }
