@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.21.5
+// version: 1.21.6
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
 // last-edited: 2026-11-18
 
@@ -728,3 +728,17 @@ type stringError string
 func (e stringError) Error() string { return string(e) }
 
 func assertErr(s string) error { return stringError(s) }
+
+// A delete that lands between the revert reading the snapshot and writing it
+// refuses the write with ErrSeriesNotFound: a retryable conflict, never a 500.
+func TestRevertAudiobookMetadata_ASeriesDeletedInTheGapIs409(t *testing.T) {
+	h, d := newHandler(t)
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	d.store.EXPECT().RevertBookToVersion("b1", mock.Anything).
+		Return(nil, fmt.Errorf("book b1: series 4716 does not exist: %w", database.ErrSeriesNotFound))
+	w := doReq(h.RevertAudiobookMetadata, http.MethodPost, "/audiobooks/b1/revert-metadata",
+		map[string]any{"timestamp": ts}, idParam("b1"))
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
+	}
+}

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/edit_clears_fields_test.go
-// version: 1.8.4
+// version: 1.8.5
 // guid: 451212a4-52da-4236-9a22-658fce80859a
 // last-edited: 2026-11-18
 
@@ -1965,4 +1965,25 @@ func TestUpdateAudiobook_PositionEqualAsANumberIsNotAnEdit(t *testing.T) {
 		map[string]any{"series_position": "1.0"})
 	require.NoError(t, err)
 	require.NotContains(t, lockedKeys(t, store, book.ID), database.FieldKeySeriesPosition)
+}
+
+// A direct edit that sets series_id to a series that was deleted is refused by
+// the store, and the error keeps its identity through the edit service so the
+// handler can answer 400 (TestUpdateAudiobook_DeletedSeriesIDIs400...) instead
+// of a 500. The book is untouched.
+func TestUpdateAudiobook_SeriesIDOfADeletedSeriesIsRefusedAndKeepsItsIdentity(t *testing.T) {
+	store, book, _ := seriesFixture(t)
+	gone, err := store.CreateSeries("Cataclysm", nil)
+	require.NoError(t, err)
+	deleted, err := store.DeleteSeriesIfUnreferenced(gone.ID, gone.Name, gone.AuthorID)
+	require.NoError(t, err)
+	require.True(t, deleted)
+
+	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID,
+		map[string]any{"series_id": float64(gone.ID)})
+
+	require.ErrorIs(t, err, database.ErrSeriesNotFound)
+	row, gerr := store.GetBookByID(book.ID)
+	require.NoError(t, gerr)
+	require.NotNil(t, row.SeriesID, "a refused edit leaves the book's series alone")
 }
