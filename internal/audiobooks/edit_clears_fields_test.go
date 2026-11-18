@@ -1,7 +1,7 @@
 // file: internal/audiobooks/edit_clears_fields_test.go
-// version: 1.8.3
+// version: 1.8.4
 // guid: 451212a4-52da-4236-9a22-658fce80859a
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package audiobooks_test
 
@@ -407,8 +407,14 @@ func TestUpdateAudiobook_DanglingSeriesIDIsDroppedWithoutLockOrPositionWipe(t *t
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	dangling, seq := 999999, 4
-	book, err := store.CreateBook(&database.Book{Title: "T", FilePath: "/library/d.m4b", Format: "m4b",
-		SeriesID: &dangling, SeriesSequence: &seq})
+	book, err := store.CreateBook(&database.Book{Title: "T", FilePath: "/library/d.m4b", Format: "m4b"})
+	require.NoError(t, err)
+	// A book write now refuses a series that does not exist, so the dangling
+	// link is seeded the way an older build left it.
+	_, err = store.SeedLegacyBookRowForTest(book.ID, func(b *database.Book) error {
+		b.SeriesID, b.SeriesSequence = &dangling, &seq
+		return nil
+	})
 	require.NoError(t, err)
 
 	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID,
@@ -1637,7 +1643,9 @@ func TestUpdateAudiobook_LocksAndHistoryAlwaysMatchWhatGETShows(t *testing.T) {
 	t.Run("dangling SeriesID relinked by name", func(t *testing.T) {
 		store, book := invariantFixture(t)
 		dangling := 999999
-		_, err := store.ModifyBook(book.ID, func(b *database.Book) error { b.SeriesID, b.Series = &dangling, nil; return nil })
+		// A book write refuses a series that does not exist, so the dangling
+		// link is seeded the way an older build left it.
+		_, err := store.SeedLegacyBookRowForTest(book.ID, func(b *database.Book) error { b.SeriesID, b.Series = &dangling, nil; return nil })
 		require.NoError(t, err)
 		_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, editor("series_name", "the saga"))
 		require.NoError(t, err)
@@ -1839,7 +1847,11 @@ func TestUpdateAudiobook_DanglingRelinkBySameNameKeepsThePosition(t *testing.T) 
 	require.NoError(t, err)
 	dangling, seq, raw := 999999, 4, "4"
 	book, err := store.CreateBook(&database.Book{Title: "T", FilePath: "/library/d.m4b", Format: "m4b",
-		SeriesID: &dangling, SeriesSequence: &seq, SeriesPositionRaw: &raw})
+		SeriesSequence: &seq, SeriesPositionRaw: &raw})
+	require.NoError(t, err)
+	// A book write refuses a series that does not exist, so the dangling link
+	// is seeded the way an older build left it.
+	_, err = store.SeedLegacyBookRowForTest(book.ID, func(b *database.Book) error { b.SeriesID = &dangling; return nil })
 	require.NoError(t, err)
 	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, seriesWebSave("Foo"))
 	require.NoError(t, err)
