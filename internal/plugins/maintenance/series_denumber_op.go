@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_op.go
-// version: 5.3.0
+// version: 5.3.1
 // guid: 3f0b6c84-52d1-4a97-9e35-c8b71d0af426
 // last-edited: 2026-11-18
 
@@ -1471,8 +1471,8 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 		// since the plan is somebody's edit this run does not delete over. The
 		// delete is passed that row's name and author and compares them under the
 		// store's lock, so a change between this read and the delete is refused too
-		// (the compare is defensive: the name and author have no writer that does
-		// not also change the name). The snapshot is journaled BEFORE the delete; a
+		// (the compare is defensive: no store method changes an existing series
+		// row's author, only create and restore set it). The snapshot is journaled BEFORE the delete; a
 		// delete that then fails, or that finds the series referenced, changed or
 		// held, voids the row. A series somebody else already deleted keeps its
 		// row LIVE: the books this run moved out of it carry series_id undo rows,
