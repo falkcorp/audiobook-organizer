@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reconcile_fixer.go
-// version: 2.11.0
+// version: 2.11.1
 // guid: 4e4de696-418a-4936-9e25-23a68ff19562
-// last-edited: 2026-11-12
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -531,9 +531,11 @@ func (f *reconcileFixer) evaluate(ctx context.Context, rd rmReader, res *repairs
 	// re-runs a canceled_skipped/aborted row and the fixer recognises its
 	// own finished steps).
 	//
-	// The state alone is not evidence: the legacy reconcile.apply
-	// (ExecuteReconcile) leaves exactly that state too. rmStepOneOf requires
-	// the book's journal to show this fixer wrote it.
+	// The state alone is not evidence: a book the legacy reconcile.apply
+	// (ExecuteReconcile) repointed before 2026-11-18 is in exactly that state
+	// too (it wrote the book and left its rows; it now repoints the row with
+	// the book, but those older books remain). rmStepOneOf requires the
+	// book's journal to show this fixer wrote it.
 	stepOne, err := rmStepOneOf(rd, c, book, files)
 	if err != nil {
 		fp.WriteString("|journal-unreadable")
@@ -721,9 +723,10 @@ var rmPathChangeTypes = map[string]bool{
 // matched file, exactly one of its rows is still at the old path and none is
 // at the matched file, AND the book's latest path change in the op journal
 // is this fixer's book_path_update from the old path to the matched file,
-// not reverted. The legacy reconcile.apply (ExecuteReconcile) sets the book's
-// path and leaves its rows, the same state; without the journal check it
-// would be claimed as ours, finished, and its undo would move only the row.
+// not reverted. A book the legacy reconcile.apply (ExecuteReconcile) set the
+// path of before 2026-11-18 and left its rows is in the same state, journaled
+// without this fixer's Source; without the journal check it would be claimed
+// as ours, finished, and its undo would move only the row.
 // Any operation counts (a cancel then a new apply starts a new op). The
 // hashes must be as that step 1 left them: cleared for a match that clears
 // them, and not cleared by it for a "hash" match. nil when not.
