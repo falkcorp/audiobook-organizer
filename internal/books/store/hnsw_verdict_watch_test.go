@@ -1,7 +1,7 @@
 // file: internal/books/store/hnsw_verdict_watch_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5f0c0b8e-6a0f-4a43-9d7e-2b8c1f4e9a61
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package store
 
@@ -244,6 +244,7 @@ func TestVerdictWatch_StoreChokepoints(t *testing.T) {
 	update("primary flag", 1, func(b *Book) { b.IsPrimaryVersion = boolp(false) })
 	update("primary flag unset (reads as primary)", 1, func(b *Book) { b.IsPrimaryVersion = nil })
 	update("primary flag set true from unset", 0, func(b *Book) { b.IsPrimaryVersion = boolp(true) })
+	seedSeriesRow(t, ps, 3) // a book write refuses a series that does not exist
 	update("series id", 1, func(b *Book) { b.SeriesID = intp(3) })
 	update("title without a series sequence", 1, func(b *Book) { b.Title = "Venom, Book 2" })
 	update("series sequence", 1, func(b *Book) { b.SeriesSequence = intp(2) })
