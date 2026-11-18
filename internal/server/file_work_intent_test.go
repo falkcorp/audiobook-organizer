@@ -1,5 +1,5 @@
 // file: internal/server/file_work_intent_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 0d7b3c52-9e41-4a68-b1f5-7c2e8a4d6f93
 // last-edited: 2026-11-18
 
@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -669,8 +670,9 @@ func TestBulkWriteBack_RetiredInTheWindowIsSkippedNotFailed(t *testing.T) {
 	assert.Contains(t, strings.Join(rec.logs, "\n"), "0 written, 0 failed, 1 skipped")
 }
 
-// The write-back's own refusal (the book retired after the rename step) is a
-// skip as well.
+// The write-back's own refusal is a skip as well when no rename step ran
+// (doRename=false): nothing was done to the book before it was refused. After a
+// rename step that did run, the same refusal is failed (the next two tests).
 func TestBulkWriteBack_RetiredRefusalFromTheTagWriteIsSkippedNotFailed(t *testing.T) {
 	s, cleanup := setupTestServer(t)
 	defer cleanup()
@@ -689,10 +691,11 @@ func TestBulkWriteBack_RetiredRefusalFromTheTagWriteIsSkippedNotFailed(t *testin
 	assert.Contains(t, strings.Join(rec.logs, "\n"), "0 written, 0 failed, 1 skipped")
 }
 
-// A book that retires AFTER its rename finished but before its tags were
-// written is not "nothing happened": its files already moved. It is counted
-// failed (the tags the job owed were not written) with a line that says the
-// rename ran, not skipped like a book that was left alone.
+// A book that retires AFTER its rename step ran but before its tags were
+// written is not "nothing happened": the job ran a step it owed and could not
+// write the tags it owed. It is counted failed with a line that says the rename
+// step ran and the tags were not written, not skipped like a book that was left
+// alone. The line must not claim a file moved: see the next test.
 func TestBulkWriteBack_RetiredAfterItsRenameIsFailedNotSkipped(t *testing.T) {
 	s, cleanup := setupTestServer(t)
 	defer cleanup()
@@ -713,7 +716,61 @@ func TestBulkWriteBack_RetiredAfterItsRenameIsFailedNotSkipped(t *testing.T) {
 	defer rec.mu.Unlock()
 	logs := strings.Join(rec.logs, "\n")
 	assert.Contains(t, logs, "0 written, 1 failed, 0 skipped")
-	assert.Contains(t, logs, "retired after its rename")
+	assert.Contains(t, logs, "retired after its rename step, tags not written")
+	assert.NotContains(t, logs, "files renamed")
+}
+
+// The same retirement for a book whose files already sit at their targets (the
+// usual state of an organized library): the rename step returns nil having
+// moved nothing. The outcome is the same (failed, the tags were owed and not
+// written), and the line is just as true because it does not say a file moved.
+func TestBulkWriteBack_RetiredAfterANoOpRenameStepIsFailedWithoutClaimingAMove(t *testing.T) {
+	s, cleanup := setupTestServer(t)
+	defer cleanup()
+	root := t.TempDir()
+	withRenameConfig(t, root)
+	id, _ := renameableBook(t, s, root, "Year One", false)
+	prev := writeBackBookFiles
+	t.Cleanup(func() { writeBackBookFiles = prev })
+
+	// First run: the rename moves the files to their targets; the tag write is
+	// stubbed to succeed.
+	writeBackBookFiles = func(*metafetch.Service, context.Context, string, metafetch.FetchIntent) (int, error) {
+		return 0, nil
+	}
+	first := &resumeRecorder{opID: "op-bulk-noop-first"}
+	require.NoError(t, s.runBulkWriteBack(context.Background(), "op-bulk-noop-first", []string{id}, true, 0, registryProgressAdapter{r: first}, nil))
+	atTarget := bookFilePaths(t, s, id)
+	require.NotEmpty(t, atTarget)
+
+	// Second run: everything is already at its target, so the rename step moves
+	// nothing, and the tag write then finds the book retired.
+	writeBackBookFiles = func(*metafetch.Service, context.Context, string, metafetch.FetchIntent) (int, error) {
+		return 0, fmt.Errorf("book %s is retired: %w", id, metafetch.ErrBookRetired)
+	}
+	rec := &resumeRecorder{opID: "op-bulk-noop-second"}
+	require.NoError(t, s.runBulkWriteBack(context.Background(), "op-bulk-noop-second", []string{id}, true, 0, registryProgressAdapter{r: rec}, nil))
+
+	assert.Equal(t, atTarget, bookFilePaths(t, s, id), "the second rename step moved nothing")
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	logs := strings.Join(rec.logs, "\n")
+	assert.Contains(t, logs, "0 written, 1 failed, 0 skipped")
+	assert.Contains(t, logs, "retired after its rename step, tags not written")
+	assert.NotContains(t, logs, "files renamed")
+}
+
+// bookFilePaths is the paths of a book's files, in the store's order.
+func bookFilePaths(t *testing.T, s *Server, id string) []string {
+	t.Helper()
+	files, err := s.store.GetBookFiles(id)
+	require.NoError(t, err)
+	paths := make([]string, 0, len(files))
+	for _, f := range files {
+		paths = append(paths, f.FilePath)
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 // A non-retired failure from the tag write is still a failure.

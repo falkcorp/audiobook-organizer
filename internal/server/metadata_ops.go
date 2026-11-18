@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops.go
-// version: 1.44.0
+// version: 1.44.1
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
 // last-edited: 2026-11-18
 //
@@ -1259,7 +1259,7 @@ func (s *Server) runBulkWriteBack(
 		// fileWorkTarget refuses again under the book's lock, which narrows the
 		// window between this read and the write to the instant between the
 		// check and the first byte; that refusal is mapped to skipped below,
-		// except after a rename that already ran, which is failed.)
+		// except after the rename step ran, which is failed.)
 		if fresh, freshErr := store.GetBookByID(bookID); freshErr == nil && fresh != nil {
 			book = fresh
 		}
@@ -1279,7 +1279,12 @@ func (s *Server) runBulkWriteBack(
 		// reverse of an apply's order, and it deadlocks against an apply of the
 		// same book; the table is not reentrant either, so the path lock inside
 		// would wait on the one held here.
-		renamed := false
+		// renameRan is true once the rename step has returned without error. It
+		// does NOT mean a file moved: the step also returns nil for a book with
+		// no files, for one whose entries are all protected, and for one whose
+		// files already sit at their targets (the usual state of an organized
+		// library). Nothing below may say "moved" on the strength of it.
+		renameRan := false
 		if doRename {
 			// Same rule as the single-book write-back: refuse before anything
 			// moves when the rename is known to fail, and never write tags
@@ -1303,7 +1308,7 @@ func (s *Server) runBulkWriteBack(
 				_ = progress.Log("warn", fmt.Sprintf("book %s: rename failed, tags not written: %v", bookID, renameErr), nil)
 				return
 			}
-			renamed = true
+			renameRan = true
 			if fresh, freshErr := store.GetBookByID(bookID); freshErr == nil && fresh != nil {
 				book = fresh
 			}
@@ -1319,13 +1324,16 @@ func (s *Server) runBulkWriteBack(
 
 		if writeErr != nil {
 			if errors.Is(writeErr, metafetch.ErrBookRetired) {
-				if renamed {
-					// The book retired after its rename finished and before its
-					// tags were written. Its files already moved, so this is not
-					// "left alone": the job did half of what it owed. Counted
-					// failed, and the line says which half.
+				if renameRan {
+					// The book retired after its rename step ran and before its
+					// tags were written. Files may have moved (or all been at
+					// their targets already, which this step cannot tell apart),
+					// so this is not "left alone": the job ran a step it owed and
+					// then could not write the tags it owed. Counted failed, and
+					// the line says which step ran and which did not, without
+					// claiming a file moved.
 					failed.Add(1)
-					_ = progress.Log("warn", fmt.Sprintf("book %s: retired after its rename, files renamed but tags not written: %v", bookID, writeErr), nil)
+					_ = progress.Log("warn", fmt.Sprintf("book %s: retired after its rename step, tags not written: %v", bookID, writeErr), nil)
 					return
 				}
 				skipped.Add(1)
