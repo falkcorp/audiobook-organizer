@@ -1,5 +1,5 @@
 // file: internal/server/entities_ops.go
-// version: 1.18.0
+// version: 1.18.1
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
 // last-edited: 2026-11-17
 
@@ -596,6 +596,13 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 						// UpdateBook cannot wipe Title/FilePath/ratings/etc.
 						if book.Publisher == nil || *book.Publisher == "" {
 							if err := assignPublisherPreservingRecord(store, book.ID, prodAuthorName); err != nil {
+								if errors.Is(err, errResolveBookRetired) {
+									// Merged or trashed since the fetch: the
+									// closure read the row under its lock and
+									// refused, so nothing was written.
+									retiredSkipped++
+									continue
+								}
 								_ = progress.Log("warn", fmt.Sprintf("Skipped publisher reclassify for %q (hydrate failed, record left intact): %v", book.Title, err), nil)
 								hydrateSkipped++
 							}
@@ -608,6 +615,22 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 				// If metadata failed and AI is enabled, try cover art analysis
 				aiParser := newAIParser(config.AppConfig.OpenAIAPIKey, config.AppConfig.EnableAIParsing)
 				if aiParser.IsEnabled() && book.FilePath != "" {
+					// The fetch above can take seconds, and a fetch that finds
+					// nothing never reaches its own retired guard (that runs
+					// at commit). Read the row again before the paid vision
+					// call: a book merged or trashed meanwhile costs nothing.
+					// The write closure below rechecks under the lock for the
+					// window that remains after this read.
+					current, curErr := store.GetBookByID(book.ID)
+					if curErr != nil || current == nil {
+						failed++
+						_ = progress.Log("warn", fmt.Sprintf("Skipped cover analysis for %q (could not re-read the book: %v)", book.Title, curErr), nil)
+						continue
+					}
+					if current.IsRetired() {
+						retiredSkipped++
+						continue
+					}
 					imgData, mime, imgErr := metadata.ExtractCoverArtBytes(book.FilePath)
 					if imgErr == nil && len(imgData) > 0 {
 						parsed, aiErr := aiParser.ParseCoverArt(ctx, imgData, mime)
@@ -634,6 +657,13 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 								// book consistently attributed to the production
 								// company rather than half-resolved or wiped.
 								if err := assignResolvedAuthorPreservingRecord(store, book.ID, existing.ID, authorID); err != nil {
+									if errors.Is(err, errResolveBookRetired) {
+										// Retired between the re-read above and
+										// the write: refused under the lock, the
+										// join untouched. A skip, not a failure.
+										retiredSkipped++
+										continue
+									}
 									_ = progress.Log("warn", fmt.Sprintf("Skipped author resolve for %q (hydrate failed, record left intact): %v", book.Title, err), nil)
 									hydrateSkipped++
 									failed++
@@ -663,6 +693,11 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 	})
 }
 
+// errResolveBookRetired is what the resolve-production-author write closures
+// return when the row, read under the book's write lock, is retired (trashed or
+// merged away). The op counts it as a retired skip, not a failure.
+var errResolveBookRetired = errors.New("book retired before the write")
+
 // assignPublisherPreservingRecord reclassifies a production company as the
 // book's Publisher WITHOUT wiping the rest of the stored record.
 //
@@ -679,8 +714,18 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 // NOTHING, and a book that no longer exists is reported as not found. A skipped
 // publisher tag is far better than a wiped record; the caller counts the skip
 // and moves on to the next book.
+//
+// A row that is retired (trashed or merged away) when the closure reads it is
+// refused with errResolveBookRetired and nothing is written: the op runs
+// unattended, and the fetch before this write is slow enough for a merge to
+// land in between.
 func assignPublisherPreservingRecord(store entityAssignStore, bookID, publisher string) error {
 	written, err := store.ModifyBook(bookID, func(full *database.Book) error {
+		// The fetch that led here took seconds: the book may have been merged
+		// away or trashed since. This read is the row under the lock.
+		if full.IsRetired() {
+			return errResolveBookRetired
+		}
 		pub := publisher
 		full.Publisher = &pub
 		return nil
@@ -708,8 +753,18 @@ func assignPublisherPreservingRecord(store entityAssignStore, bookID, publisher 
 // (audit A1#15). The join rewrite itself is best-effort: an error there is
 // logged by the caller path but does not roll back the AuthorID write (matching
 // prior behavior).
+//
+// A row that is retired when the closure reads it is refused with
+// errResolveBookRetired: the ModifyBook error aborts the write and this returns
+// before the join is read or rewritten, so a retired book's credits are never
+// touched.
 func assignResolvedAuthorPreservingRecord(store authorAssignStore, bookID string, resolvedAuthorID, prodAuthorID int) error {
 	written, err := store.ModifyBook(bookID, func(full *database.Book) error {
+		// Refuse a retired row under the lock; the error aborts the write and
+		// returns before the join rewrite below, so the join is left alone too.
+		if full.IsRetired() {
+			return errResolveBookRetired
+		}
 		aid := resolvedAuthorID
 		full.AuthorID = &aid
 		return nil
