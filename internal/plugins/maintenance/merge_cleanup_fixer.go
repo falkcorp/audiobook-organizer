@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_fixer.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0e4c7d58-a1b3-4f26-8c19-6d5a3e7f9b02
 // last-edited: 2026-11-18
 
@@ -201,7 +201,6 @@ type mcRun struct {
 	syncIDs database.SyncIdentityStore
 	applier *vgApplier
 	loader  versionprimary.Loader
-	alive   func(string) bool
 
 	books    sync.Map // id -> *onceVal[*database.Book]
 	groups   sync.Map // gid -> *onceVal[[]database.Book]
@@ -239,8 +238,7 @@ func (f *mergeCleanupFixer) newRun(ctx context.Context, rep registry.Reporter) (
 	}
 	r := &mcRun{store: ops, ops: ops, vetoes: vetoes, syncIDs: database.AsSyncIdentityStore(ops),
 		applier: &vgApplier{store: ops, reporter: rep, seriesNames: names, paths: repairs.NewPathResolver()},
-		loader:  versionprimary.Loader{Files: ops, Chapters: vps, RootDir: config.AppConfig.RootDir, Probe: probe},
-		alive:   vgStoreAlive(ops)}
+		loader:  versionprimary.Loader{Files: ops, Chapters: vps, RootDir: config.AppConfig.RootDir, Probe: probe}}
 	return r, nil
 }
 
@@ -264,7 +262,7 @@ func (r *mcRun) groupMembers(ctx context.Context, gid string) ([]versionprimary.
 		if err != nil {
 			return nil, fmt.Errorf("read version group %s: %w", gid, err)
 		}
-		return r.loader.LoadMembers(ctx, books, r.alive)
+		return r.loader.LoadMembers(ctx, books, vgStoreAlive(r.ops))
 	})
 }
 
