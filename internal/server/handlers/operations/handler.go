@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.27.4
+// version: 1.27.5
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // Package operations hosts the background-operation HTTP handlers extracted
 // from the server package: the long-running scan / organize / optimize /
@@ -47,6 +47,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
@@ -108,10 +109,86 @@ type Handler struct {
 	// WithRepairsOpAccess.
 	repairsAccess *opaccess.Repairs
 
+	// revertGate holds the write-set of the operation being reverted, so the
+	// revert runs under the same exclusion the dispatcher gives the operation
+	// itself (see WithRevertWriteGate). Nil means a revert is not gated.
+	revertGate RevertWriteGate
+
 	// tombstoneGuard resolves, at request time, the guard that lets
 	// SweepTombstones unlink a file (see WithTombstoneSweepGuard). Nil, or a
 	// resolver that returns nil, means every file removal is refused.
 	tombstoneGuard func() sweep.FileGuard
+}
+
+// RevertWriteGate is the slice of the operations registry a revert needs to
+// run under the write-set gate. *opsregistry.Registry satisfies it.
+type RevertWriteGate interface {
+	// WriteSetOfDef is the write-set the operation definition declares (none
+	// for an unregistered def or one that declares no Writes).
+	WriteSetOfDef(defID string) []opsregistry.Resource
+	// HoldWriteSet claims writes for holderID until release is called, refusing
+	// with a *opsregistry.WriteSetConflict while a running operation or another
+	// hold declares an overlapping write.
+	HoldWriteSet(holderID, reason string, writes []opsregistry.Resource) (release func(), err error)
+}
+
+// WithRevertWriteGate installs the write-set gate a revert runs under. A revert
+// is an HTTP request, not a dispatched operation, so the dispatcher's write-set
+// gate (Gate 3b) never saw it: a revert of a series-denumber run could rewrite
+// books and series beside dedup.series-prune, a series merge or a rename, and
+// the dispatcher would start those beside it. With the gate installed, the
+// revert claims the write-set its operation's definition declares: it is refused
+// with 409 while a running operation (or another revert) declares an
+// overlapping write, and while it runs the dispatcher defers every operation
+// whose Writes overlap. An operation whose definition declares no Writes is not
+// gated, exactly as the dispatcher treats it.
+//
+// A setter rather than a New parameter, like WithRepairsOpAccess, because New
+// already has nine and a dozen call sites. Unlike that one, omitting it does not
+// refuse: reverts of every operation would stop in every test that builds the
+// handler by hand. The server's wiring is pinned by
+// TestWireHandlers_RevertWriteGateIsInstalled, which fails if the gate is
+// missing. The scan stand-down is deliberately not taken here: HTTP requests
+// coordinate with the scanner per book, not by standing the scan down
+// (registry/scan_standdown_hold.go).
+func (h *Handler) WithRevertWriteGate(g RevertWriteGate) *Handler {
+	h.revertGate = g
+	return h
+}
+
+// holdRevertWriteSet claims the write-set of operation id's definition for the
+// length of the revert. It answers false, having written the response, when the
+// revert must not run: 409 while another writer holds an overlapping write-set
+// (naming it), 500 when the gate cannot say. The returned release is never nil.
+func (h *Handler) holdRevertWriteSet(c *gin.Context, id string) (release func(), ok bool) {
+	noop := func() {}
+	if h.revertGate == nil {
+		return noop, true
+	}
+	row, err := h.store.GetOperationV2(id)
+	if err != nil {
+		httputil.InternalError(c, "failed to get operation", err)
+		return noop, false
+	}
+	if row == nil {
+		return noop, true
+	}
+	writes := h.revertGate.WriteSetOfDef(row.DefID)
+	if len(writes) == 0 {
+		return noop, true
+	}
+	release, err = h.revertGate.HoldWriteSet("revert:"+id, "the revert of operation "+id, writes)
+	if err != nil {
+		var conflict *opsregistry.WriteSetConflict
+		if errors.As(err, &conflict) {
+			httputil.RespondWithConflict(c, "this operation cannot be reverted right now: "+conflict.Error()+
+				", which it also writes. Try again when that finishes.")
+			return noop, false
+		}
+		httputil.InternalError(c, "failed to reserve the operation's write-set for the revert", err)
+		return noop, false
+	}
+	return release, true
 }
 
 // WithTombstoneSweepGuard installs the resolver for the guard the tombstone
@@ -709,6 +786,11 @@ func (h *Handler) RevertOperation(c *gin.Context) {
 	if !h.mayUndoChanges(c, r, changes) {
 		return
 	}
+	release, ok := h.holdRevertWriteSet(c, id)
+	if !ok {
+		return
+	}
+	defer release()
 	result, err := h.revert(id, requestRevertActor(c))
 	// The report's merge warnings name users and what they were listening to;
 	// only a caller who may manage users reads them (the operation has already
