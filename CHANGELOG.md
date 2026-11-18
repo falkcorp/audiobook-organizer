@@ -7,6 +7,310 @@
 
 <!-- scriv-insert-here -->
 
+<a id='changelog-v0.232.0'></a>
+## v0.232.0 — 2026-11-18
+
+### Added
+
+- Candidate-fetch result rows carry `failed_sources` and `error_cause` (`bad_asin`, `timeout`, `rate_limited`, `quota`, `provider_held`, `upstream_5xx`, `client_4xx`, `canceled`, `transport`, `other`), both omitted when every source answered. The op log ends with a `refresh summary: refreshed N, degraded M (by cause), failed K (by cause), deferred D, not asked J` line, also on cancel; a resumed run seeds it from the stored rows.
+- A book is counted "not asked" in the refresh summary only when no source was asked: a cached row whose fallback provider ran live, or whose owed source was re-asked and failed again (degraded), is not. Deferred books (a fallback lookup put off) have their own count and are not "refreshed". The op's selection message says how many books were picked only for an owed-source re-ask and how many wait on their backoff.
+
+- CI: a trial, non-required `Lint (GitHub-hosted, trial)` job (new `lint-trial.yml`) runs the same `make staticcheck` as Woodpecker's `checks-lint` on a GitHub-hosted runner, so the two verdicts can be compared before the Woodpecker job is retired. Woodpecker's `checks-lint` remains the gate; the trial is not in the branch ruleset.
+
+#### Non-Mac Whisper worker serves the path pipeline, on CPU or GPU
+
+`scripts/whisper_server.py` now answers `/transcribe-path` and
+`/transcribe-path-batch` (the server sends a file path, the worker maps it
+through `WHISPER_PATH_MAP`, cuts the first seconds with ffmpeg and transcribes
+the clip), with the same request and result shapes, error codes and `/health`
+fields as the Mac worker, including `backend`, `machine_id`, `busy_seconds` and
+the mapped roots' readability. `--device auto|cpu|cuda` (`WHISPER_DEVICE`) picks
+the device: `auto` uses CUDA when it loads and otherwise logs one line and runs
+on the CPU, `cpu` never touches CUDA, and an explicit `cuda` that cannot load is
+an error; an `auto` fallback from CUDA to CPU is logged at WARNING and shown in
+`/health` (`fallback`, `requested_device`, `device_reason`). CPU defaults to int8
+with configurable model, threads (`--cpu-threads`) and decode processes
+(`--num-workers`). `/health` reports the device that actually loaded.
+
+#### The non-Mac worker kills a hung decode
+
+The model now loads in a spawned child process and the parent enforces a per-clip
+deadline (`max(300 s, 8 x audio length)`, unbenchmarked), killing a child that
+misses it and starting a fresh one. It answers the Mac worker's
+`transcribe_timeout`, `decoder_crashed` and `decoder_killed`, so a hung decode no
+longer wedges the worker until someone restarts it. The upload endpoints get the
+same length-derived limit and honour the request-deadline header.
+
+#### The model default follows the device
+
+With no `--model` the worker runs `large-v2` on CUDA and `base.en` on CPU. The
+decode fingerprint of a GPU install (large-v2, float16, batched, batch 8) is
+unchanged, pinned in a test as `850881e4bf06fae4`. **The result journal key still
+changes once.** `/health` now also reports `"backend": "faster-whisper"`, and the
+server keys the journal as `<backend>/<model>`, so an upgraded GPU worker's
+journal moves from `large-v2` to `faster-whisper/large-v2` and the transcripts it
+already held are redone once under the new key. There is no alias for the old key
+in this change. A GPU install that was launched from main's `manage-whisper-server.py`
+(which passed `base.en` and `float16`, not the supervisor's `large-v2`) now gets
+`large-v2` by default: a new fingerprint, about 3 GB of VRAM, and a first-start model
+download. Pass `--model base.en` to keep the old model. A GPU worker that falls back
+to the CPU switches to `base.en`.
+
+#### The startup resolution is pinned for the life of the worker
+
+The first decode process to start resolves `auto` (device, model, compute type).
+Every later process and every restart is started with those values explicitly (the
+model, device, compute type and batched mode) and is refused if it reports anything
+else, so a restart can never quietly turn a
+`large-v2` GPU worker into a `base.en` CPU one and file `base.en` text under
+`large-v2`'s journal key. A process that cannot load exactly the pinned values is a
+start fault (`worker_misconfigured` on path jobs, `child_start_error` on `/health`),
+not a fallback. With `--num-workers` above 1 every process serves the same pinned
+resolution or the worker refuses to start. `/health` reports the pinned values and
+the parent logs what each process loaded.
+
+#### Every transcription answer names the worker that produced it
+
+The upload and path routes of the non-Mac worker return an `identity` object (model,
+backend, decode and extract fingerprint) read from the startup pin. The server files
+each result in the result journal under the identity of the answer that carried it,
+not under the `/health` probe it read up to 30 seconds earlier, so text from a worker
+process that was replaced in between is never filed under the old model. A mismatch
+is logged and drops the endpoint's cached probe, with or without a result journal. An
+identity is complete (model, backend and decode fingerprint, plus the extract
+fingerprint for a path result, none blank) or its answer is not journalled at all; a
+partial one never falls back to the probe's identity, because a row keyed on less than
+the whole identity could be served to a worker that decodes differently. A worker
+without the field keeps the old behaviour, logged once per endpoint. The Mac worker
+does not send it yet.
+
+#### The non-Mac worker binds loopback unless told otherwise
+
+`whisper_server.py` binds `127.0.0.1` by default, like the Mac worker, and logs a
+warning when bound wider. The worker has no authentication: a worker bound to the
+LAN (`--host 0.0.0.0`, `-BindHost` in the supervisor and installer) lets any host
+that can reach the port obtain transcripts of files under its mapped roots, so a
+LAN worker is an explicit opt-in and should be firewalled to the server. This
+changes the old default of `0.0.0.0`: a worker the server reaches directly over
+the LAN must now be started with `-BindHost 0.0.0.0` (or reached through an SSH
+tunnel). `/health` no longer quotes path-map entries in `path_map_error`.
+
+#### Windows path rules and a Windows machine id
+
+The shared path code understands drive letters, UNC shares, case-insensitive
+containment and long paths, and refuses server paths whose components Windows
+cannot name (a colon or backslash, a trailing dot or space, `CON` or `NUL.m4b`)
+with their own code, `path_unrepresentable` (the Go side treats an unknown code as
+a retryable worker error, so the book is retried), distinct from `path_unmapped`.
+A bare drive letter (`X:`) is refused as a local root. The machine id gains the
+Windows MachineGuid as a source.
+
+### Changed
+
+- core: the diagnostics bundle is share-safe by construction (F8-03b). `diagnostics.Sanitizer` replaces the path scanner: every string that leaves a bundle (JSON values and keys, text-file lines, manifest text, the health route's Detail) is wiped from the first word that can be a filesystem location to the end of its line, and the wipe is written `<path>`, or `<root:NAME>` under a configured library root, whatever the spelling: spaces, quotes, colons, backticks and commas in directory names, a start glued to a flag or a letter, `\Users\`, `C:rel`, `~user`, JSON-escaped, percent-encoded and HTML-entity forms, relative paths, and the path of an `smb`, `nfs`, `sftp` or `file` URL. The one thing kept after a location is a known error text that ends the line, so `open /Volumes/My Books/x: permission denied` becomes `open <path>: permission denied`. Structured fields (`level`, `time`, `component`, `method`, `reason`, `run_id`, `version` and the like) keep their value when it passes the field's validator; `route` and `pattern` are kept only when they exactly equal a registered router pattern (`diagnostics.Config.RoutePatterns`, which F8-04 fills from the router; nil keeps none, so a route is written `GET <path>`). `healthhttp.Deps.Roots` gives the Detail text the same rule (the route builds the sanitizer itself; nil roots write every location `<path>`). Nothing mounts the routes yet (F8-04). Limits: the rest of a line after a location is lost (`copied /a/b to the shelf` is `copied <path>`), and so is every inline route, URL, MIME type and `a/b` word in free text, and the tail of an error that is not a known text; a relative path wipes from the start of its line; no word of a path segment survives except in four shapes (a relative path whose first name ends in a space or an opening quote, or holds after a space a word that begins like a path, `HD /x` and `Alfred ~Robin/x`; a name that holds a line break; a classic Mac `HD:Users:x` path; a name that ends in a stock error phrase, which keeps that phrase, `Batman: File Exists`); a word that only holds a trigger byte inside a relative name (`Part I: Hush/x`, `\u0026`, an escaped quote) starts the run at the line, and a string over 1 MiB with a trigger byte is `<redacted:line_too_long>`; bare usernames and host names outside locations are out of scope.
+- core: a bundle section's file name must be one plain path element that the sanitizer leaves unchanged: a subdirectory or a name that spells a location is refused, and the error does not repeat the name.
+
+- Platform-core plan docs: product-first direction recorded (all seven flips on hold, at most three agents on dark rows, two-tier review bar with a per-subsystem "must be empty before the flip" list), F9 (web shell) moved from R2 to R3 with its waves and critical path recomputed, STATE.md execution table brought up to date, and a proposal to split F5-18 into dark prep rows.
+
+#### Path pipeline and machine identity moved into shared modules
+
+The backend-independent half of `whisper_mlx_server.py` now lives in
+`scripts/whisper_path_pipeline.py` and `scripts/whisper_machine_id.py`, imported
+by both workers. Deploy `whisper_server.py` together with those two files and
+`whisper_decode_child.py`. A new characterization suite (`test_whisper_mlx_pins.py`)
+was written against the Mac worker before the move; it passed unchanged across the
+move and has since been edited on purpose in three places (the ffmpeg argv, the
+`path_map_error` text, and the error wording below). Four changes in the shared
+modules reach the Mac worker: ffmpeg now runs with `-protocol_whitelist file`, the
+`path_map_error` text on `/health` no longer quotes path-map entries, a
+request-deadline header of more than 12 digits is capped instead of answering 500,
+and its error answers are now a code plus a fixed sentence or a word from a closed set (next entry).
+
+#### Decode children are tied to the worker
+
+A decode process ignores Ctrl-C and runs in its own session (POSIX), so stopping the
+worker does not fail the in-flight clip as `decoder_crashed`. The process is killed
+only after the web server has returned, and the server's default graceful stop waits
+for requests in flight, so a stop during a hung decode can wait up to that clip's
+deadline (at most 3600 s) unless the worker is stopped a second time (not tried with
+a real hung decode); a worker killed outright gives its caller a dropped connection. On Windows each process is put in a Job Object with kill-on-close, so it dies
+with the worker even while stuck in a native call; a process that could not be put in
+the job shows as `child_unprotected: true` on `/health`. Any exception between sending a
+clip and reading its answer kills and restarts the process, and every request
+carries an id the process echoes, so a stale reply is never read as the next clip's
+transcript. The timeout environment variables must be finite and positive (the worker
+exits at startup naming the variable otherwise), the computed deadline is capped at
+3600 s (`WHISPER_TRANSCRIBE_MAX_TIMEOUT_S`) and the upload routes refuse bodies over
+256 MiB (413): 256 MiB is about 2.3 hours of 16 kHz mono 16-bit PCM (about 1.2 hours
+of stereo), far above an intro clip; the cap keeps a huge upload from earning a multi-day deadline.
+
+#### No local detail in any response body, and busy shows during a start
+
+Both workers are unauthenticated, so what they return must not carry what a failure
+said (an exception message, ffmpeg's stderr, a path under a user profile). Every error
+in a response body is now a stable code plus either ONE fixed sentence (a code with a
+single reason: `whisper_error: transcription failed on this worker`) or ONE word from a
+closed set for that code (a code with several reasons), built by a single function that
+takes no free text (`wire_error`), for the upload routes, the path routes and an
+unexpected 500. The sets are: `ffmpeg_error` (`invalid_data`, `moov_missing`,
+`no_audio_stream`, `unsupported_codec`, `truncated_file`, `permission_denied`,
+`empty_clip`, `invalid_wav`, `other`), `ffmpeg_timeout`
+(`extract_timeout`, `io_fault`, `os_io_error`), `path_unmapped` (`not_absolute`,
+`dot_dot`, `not_under_prefix`, `root_unreadable`, `symlink_escape`, `path_map_unset`,
+`path_map_invalid`, `mapping_failed`, `source_unreadable`), `path_unrepresentable`
+(`bad_character`, `component_too_long`, `reserved_name`, `trailing_dot_or_space`),
+`bad_request` (`job_not_object`, `path_invalid`, `path_too_long`, `seconds_invalid`),
+`decoder_killed` (`killed_by_signal`, `not_reaped`), `decoder_crashed` (`died_on_clip`,
+`wrong_answer`) and `worker_misconfigured` (`exited_during_start`, `ffmpeg_missing`,
+`model_load_failed`, `pinned_model_mismatch`, `process_start_failed`, `protocol_error`,
+`start_timeout`, `spawn_failed`, `temp_wav_unusable`). ffmpeg's stderr is mapped onto the `ffmpeg_error` words by a small fixed
+phrase table (matched with the book's file path removed from the stderr, and specific rows
+before the generic one) with `other` for anything it does not match, so a stderr line never
+reaches the answer. A worker-side fault (ffmpeg that cannot be run, the worker's own temp
+clip unreadable or unwritable) is `worker_misconfigured`, which the server defers and
+retries on another worker, not the durable `ffmpeg_error` verdict on the book. The detail goes to the worker log when the answer is made. `/health` reports
+`ffmpeg` as a boolean, not the path it was found at. `child_start_error` is a fixed code
+plus one of the `worker_misconfigured` words on both workers, and `device_reason` is a fixed
+phrase. What the server stores: the Go client reads only the code to choose the status.
+The stored `transcribe_error` is then `ffmpeg_error`'s word alone (the status is already
+`ffmpeg_error`), or `<code>: <word>` for every other code (for example
+`path_unmapped: root_unreadable`), or, when the server cannot stat the file either, its own
+`source file not found: <path>`. **The Mac worker's error wording changes** (it used to
+return the exception's own text, and a dead decode's exit code); its codes do not.
+`identity.model` and `/health` `model` no longer carry a local path: a `--model` written as
+a path or naming an existing directory (decided once at startup) is reported as `local:` and the first 16 hex digits
+of the SHA-256 of the value (a hub id such as `Systran/faster-whisper-small` is reported
+unchanged), and the raw value is logged once at startup. The decode fingerprint still hashes
+the raw value. One limit remains: FastAPI's own 422 for a body that is not a JSON object
+echoes the caller's own input back to the caller. A source-level test walks every
+`scripts/whisper_*.py` and fails on a response built in one of the shapes it knows
+(it is a tripwire for a route written later, not the guarantee: the runtime tests that
+plant a secret in every failure and look for it in the body are). `busy_seconds` covers the time a request spends waiting
+for a child to (re)start, so `/health` never reports idle while a model load is in
+progress.
+
+#### Request limits on the path routes (both workers)
+
+At most 1024 jobs and 512-character keys per `/transcribe-path-batch` (422), a
+path of at most 4096 characters (per-job `bad_request`) and a request body of at
+most 8 MiB (413). The server's own requests are far below each limit.
+
+#### Windows supervisor takes `-Device` and backs off on crashes
+
+`whisper-supervisor.ps1` no longer defaults to `float16` (which the CPU cannot
+run); it takes `-Device`, `-CpuThreads`, `-NumWorkers` and `-PathMap`, restarts
+with a doubling delay, refuses to start when a sibling module is missing, and
+quotes its arguments (including a `-PathMap` ending in a backslash), takes
+`-BindHost`, and gives up after 8 crashes in a row (`-MaxCrashStreak`; the old
+20-in-10-minutes breaker could never trip). A run counts as healthy only if it
+answered `/health`, so a start that never became ready counts as a failure however
+long it ran. The installer and
+`manage-whisper-server.py` deploy all four server files and no longer hard-code a
+user profile path or account name (`WHISPER_WIN_USER` is needed only by
+`--deploy` and `--restart`). `manage-whisper-server.py` copies files in chunks
+with a SHA-256 check (a 47 KB file cannot go in one WinRM command), uses one port
+(`WHISPER_PORT`, default 19847; it used 8000) and launches loopback-bound.
+
+#### ffmpeg runs with `-protocol_whitelist file` (both workers)
+
+The clip cutter may only read local files. The extract fingerprint is unchanged.
+
+### Removed
+
+- core: the F8-03b marker, the run-time refusal in `diagnostics.New` and `Exporter.Build`, and the `archtest.F803bGate` guard with its probe pin and its real-binary test: the sanitizer meets the invariant they were holding the routes back for.
+
+### Fixed
+
+- A leading list number or a track, chapter, disc or part number ("08 - Title", "02 Chapter 1.m4b") no longer makes the bulk-apply gate refuse a book as a hard `book_sequence_conflict`. It is a weak volume reading, set aside only when it IS the number the reader parsed (a tag number elsewhere in the text says nothing about a volume number read from a different place). When it disagrees with the stored title, stored series position or an unmarked file or folder name, the book is NOT applied unattended: it goes to review as `sequence_unconfirmed`, whose detail says which number was set aside, that it looks like a list or track number, and why the rest does not settle it. Every other source on the book (the stored title, the stored position, a file or folder name, a "Book N" marker included) is a field an earlier apply can have written, so none confirms the volume, and neither the title nor the runtime check can stand in for one. `main` refused the same books as `book_sequence_conflict`; both reasons are owner-review overridable on `main` and here (`owner_review.go`), and `sequence_unconfirmed` is additionally not lifted by the hashless unseen-review marker.
+- The text after a leading list number in the stored title is read too, so adding a list number to a title never hides the title's own number ("01 - Batman: Year 2" still has the 2). A stored title with a leading list number and a trailing number of its own ("01 - Batman 451", position 1) was applied on `main` (only the 01 was read) and is now held as a `book_sequence_conflict`, as the same title without the list number already was.
+- The rule for weak numbers is one function, `resolve`: it decides which sources of a side count and returns the weak numbers it dropped, and the sequence leg refuses (`sequence_unconfirmed`) whenever any dropped weak number differs from the number the remaining sources agreed on. The sequence leg therefore passes only if every book-side number, weak ones included, equals the candidate's; weak numbers change the reason, never the outcome from refuse to allow. Three things are not subject to it, and each is deliberate. (1) A stored position equal to an end of the title's own range is set aside silently: "Batman Books 1-3" at position 3 passes the sequence check against a 1-3 candidate, and then still needs the collected-edition runtime rule (a known, agreeing runtime) to apply. (2) A book with no number at all passes, as on main. (3) A book whose only numbers are part suffixes passes against a candidate that names no number, as on main. A file name's part suffix ("Batman - 001") counts as a source in that rule, so a folder ordinal ("02 Batman") against it is held, as it was a conflict on `main`.
+- A volume range ("Books 1-3", "Vols 1 to 3", "Books 1, 2 & 3") is one number with a span (`seqnum.Number.Last`, `IsRange`). A range equals only the same range, and a range with a tail ("Books 1-3 & 5") is a different list. A second end is read only when it is digits, or a roman numeral or number word directly after a range keyword (so "Book 2 - Three Jokers" and "Book 1 and Two-Face" are single volumes), a digit list or a span continuation counts only when it ends the list ("Batman, Book 2, 10 Nights of the Beast" is volume 2, "Batman Books 1-3, 10 Nights of the Beast" is the span 1-3). A stored series position equal to an end of a range stated in the book's own title, or in the candidate's title or subtitle, is set aside.
+- Partial-book detection compares the ranges themselves: equal ranges pass, a range on one side only or two different ranges are held for review. The same range under different edition wording ("Books 1-3" and "Omnibus: Books 1-3") is not a `partial_book`; the collected-edition runtime rule decides, and an owner review can lift it. Its detail names the differing wording.
+- The compilation penalty (`metadata_scoring.compilation_penalty`) is not applied when the book is itself a collected edition and the candidate is the same one (`metafetch.SameCollectedEdition`): the normalized titles are equal once number and range spelling is set aside, and the same stated range, or the same wording class with no number or an equal one. The Candidates view scores through the same helper. Cached candidate scores keep their old value until the book is re-scored.
+- Any collected edition on either side (read by word-boundary wording or a stated range, never a substring, and never from a folder name alone) needs a known, agreeing runtime to apply unattended, otherwise the apply is refused as `collected_edition_runtime_unconfirmed` and goes to review. This is stricter than before for a same-range collected edition, which previously needed only two agreeing signals; a collected edition applies unattended only on a same-range match with an agreeing runtime. Two identical unnumbered collected-edition titles apply on an agreeing runtime (a known, accepted limit).
+- Both new reasons are always listed on an owner override record when they would fire, whichever earlier check refused first (`Verdict.Unconfirmed`), and neither is lifted by the hashless unseen-review marker.
+- `catalog.ParseSequence` stores the same sequence bounds as before for every text its dash-range pattern does not match (`seqnum.ParsePositionNoRange`).
+- Not fixed here, filed in `todo.d`: `checkTitle` agrees on any shared title segment, and the `already_applied` skip exists only on the cached-apply path.
+
+- core: a location under a library root is written `<root:NAME>` with nothing after it; the part below the root, and the rest of its line, name authors and titles and no longer reach a bundle.
+- core: the bundle's tests no longer read a clock to assert linearity: the sanitizer counts its own steps and the test compares one size with four times it.
+
+- The write sets of the 34 native maintenance job kinds (`internal/maintenance/jobs`) are now derived from the one method-to-resource table the converted maintenance groups use, instead of a second hand-written list that disagreed with it. The table moved to its own package, `internal/maintenance/resources`, so both families of kinds read the same rows without importing each other, and every store write method a job reaches now has a row in it (the 18 that had none were traced in the store and added, `SetRaw` and `DeleteRaw` by key family). `enrich-book-files`, `recompute-itunes-paths`, `backfill-book-files`, `bulk-deluge-import` and `scan-composer-tags` write book rows (a file-row method recomputes the books aggregate through `ModifyBook`) and now declare `books`; `retention-and-hygiene` declares `books` for the dead `book:series:` and `book:author:` keys it deletes; every job that calls a `ModifyBook`-family method also declares `authors`, `metadata_cache` and `indexes`, which the store writes underneath the call. 21 of the 34 jobs changed, 13 did not. The kinds are not registered yet (F5-18 registers them), so no running job changes behaviour today; at the cutover the wider sets make more job pairs wait for each other. The sets are now derived on first use, not when the package loads, and a trace that names a method with no row is an error from `Kinds`, not a panic at startup. A job whose code gains a store write, or whose trace goes stale, fails a test by job name; the known gaps of the code walk are in `todo.d`.
+
+- The scheduled metadata candidate refresh no longer fails on nearly every book it selects. In the latest production run all 814 selected books errored (482 Audnexus timeouts, 332 Audnexus "Bad ASIN" 400s), and the same books were selected again every six hours. Cause: the search treated any ten letters and digits as an ASIN, so every ten-letter word of a book's title (800 of the 814) was looked up on Audible and Audnexus as one. A lookup is now sent only for a value in the ASIN grammar (`metadata.CanonicalASIN` for a stored or typed value, normalised to upper case; `metadata.ASINInText` for free text, which accepts only an upper-case `B` + digit token as written). The identity hash is unchanged, so no cached row turns `identity_stale`.
+- An Audnexus 400 whose JSON body says "Bad ASIN" is the provider's permanent answer about that ASIN, not a failure of the provider: the region loop stops at the first region (it asked 3, or 9 on the full list), the answer is remembered as a negative cache row for the provider's negative TTL, and the provider's breaker is not charged. Only Audnexus is read this way; any other 400 (a proxy's error page, JSON about another parameter, another provider's 400) is still a failure and is never cached. A whole query that is an ASIN (pasted into "Search again", in either case, or the ten-digit form) is still looked up directly (`metadata.ASINQuery`); a one-word title is not.
+- The Audnexus request's 10 s deadline no longer includes the wait for the provider's shared token bucket. It was set before the request queued, so 20 workers on a 2 requests-per-second bucket spent it all waiting. `providerhttp.Limits.AttemptTimeout` now bounds the exchange itself, starts once the request holds its token and daily-quota reservation, and survives a configured override of the budget. A timed-out attempt is NOT retried inside the lookup (the owed-source schedule below is the retry), and one overall budget bounds a whole region lookup (`providerhttp.WithAttemptBudget`, 30 s for Audnexus, counted only while a request is in flight, so the queue is never charged): each region attempt is at most `AttemptTimeout` and never runs past what is left of the budget. A region that times out or answers 5xx goes on to the next region, as it did before this change, so a non-US ASIN a hung default region cannot answer is still found in a later one. Worst case, a hung service across all regions is 30 s and 3 requests (the 9-region list is cut off at the 30 s budget), which is what main's three per-region deadlines already allowed (3 x 10 s). A caller cancel, a bad ASIN, the rate limiter's "would exceed context deadline" refusal or a spent budget stops the walk at once. That refusal is classified `timeout` instead of `other`. One failed lookup spends ONE owed-source ask however many regions it tried.
+- A book whose only failed source is identifier-asked (Audnexus) no longer blocks the fallback providers that still owe it an answer: they are asked, the book is reported as degraded (or as an error when the fallback finds nothing).
+- A chain source that could not be asked (Audnexus on a 5xx, a timeout or a hold) while another source found a candidate is no longer forgotten for the row's 30 days. The cache row records it as owed (`owed_sources`, additive: a row without the field owes nothing, as before). The batch fetch's verdict and the scheduled "only unmatched" selection treat a row with a due owed source as due for a re-ask of ONLY that source: the row's candidates are kept, the answer is merged into them (Audnexus's own-ASIN candidate ranks ahead of a review-only Open Library or Google Books one), the fallback providers and the Google Books budget are not asked on its account, and the debt is cleared the moment the source answers. The re-ask is bounded: after the 1st failed ask the next is due after 6 h, then 24 h, 3 d and 7 d, and the 5th failed ask ends them (270 h, 11.25 days, in all), so an ASIN that never answers is not asked every six hours forever. A provider hold sends nothing and does not spend an ask. The debt is carried across rewrites of the row by any writer (the batch op, the Search Metadata dialog's plain fetch, which hashes other inputs) whenever the book's search questions and ASIN are unchanged, and the dialog records what it learned about the chain's sources too, so opening the dialog neither forgives nor loses a debt. When a source uses its fifth ask the row says so: the result carries `owed_gave_up`, the refresh summary counts `gave up on a source`, the selection log counts the books that gave up, and the review lane's rows carry `owed_pending` and `owed_exhausted` (additive) with a "Source still owed" / "Gave up on a source" chip on the Candidates card. A forced refetch that asks a source and sees it fail again restarts its schedule at the first ask instead of stepping on a spent one; a row refetched after its 30-day TTL does not carry the debt, so a source that fails in it starts a fresh schedule; a changed search question or ASIN drops it. The search dialog's plain fetch charges one ask per search it makes (it has no backoff), so five failed dialog searches also use a source up; the chip says "five searches" for that reason. A failed re-ask is charged to the row it was selected from whichever writer's input hash the row carries (the row must already owe, be fetched for the same ASIN and be inside the TTL), also when every source failed and the search wrote no row of its own. Two writers of one book in one window charge one ask (the charge is skipped when the row's last attempt moved since the writer read it). A source that fails in a later search keeps the candidates it earlier supplied for the same question and ASIN, ranked with the new answer, so a degraded refetch does not discard the better source's candidate for being absent from this answer (the row still holds at most ten candidates, and the worst ranked leave first when more are merged). A re-ask asks only the owed source; a fallback provider is asked only if the row is still unusable and one is owed.
+- A full search that heard Audnexus through its direct ASIN lookup now counts it as answered (`SearchMetadataResponse.SourcesASINAnswered`), so a forced refetch or the dialog clears the debt; before, only a re-ask of Audnexus alone did.
+
+#### The apply gate's title check compares whole titles by one rule, and a partial match needs an agreeing runtime
+
+`checkTitle` in `internal/applygate/evidence.go` scored title agreement 1.0 when the candidate's main title equalled ANY segment of the stored title. Two volumes of one storyline share the segment before the colon, so with the runtime inside 5% and the author agreeing a bulk apply wrote the wrong volume onto the book unattended ("Hush: Part 1" took the metadata of "Hush: Part 2" and the reverse, "Batman: Dark Victory" took "Batman: The Long Halloween"). Round 1 compared the whole title but decided agreement by removing text (series names, credited names, "of N", a parenthetical, fuzzy overlap), and each removal was a new way for two books to agree; it is replaced.
+
+The rule lives in `internal/applygate/titlecompare.go` (the field comparison) and `internal/applygate/titleforms.go` (the forms), and `checkTitle` applies it in this order:
+
+- AGREE comes first. A whole form of the candidate equals a whole form of the book, or the two title fields say the same whole segments in another order. A form is declared fields joined and never trimmed: the title, the title and subtitle, each also behind the series name; a side that has a subtitle has no bare-title form. A candidate with NO real subtitle also offers the series and position forms ("S N T", "T S N") and the title beside its author or narrator ("T X", "X T", "S N T X", "X S N T"); a candidate WITH a real subtitle offers only the forms that say it ("S N T U", "U N T"), so words added as a subtitle can never agree through a form that leaves them out. A subtitle that is a closed edition phrase ("A Novel", "Unabridged", "Unknown Author", "Read by Narrator") or exactly the candidate's own "Series, Book N" / "Book N of Series" is not a real subtitle. Each form carries a role: a form with a credit in it never equals a form with a series in it, so a narrator can never stand for a series name. Equality is over a closed normalisation: NFKC, case, diacritics, "&", number words, roman numerals and digits as the same value, ordinals as another kind of token, a leading article per segment. "abridged" stays significant. The book's file and folder names are forms of the book only when its stored title is blank or a placeholder; against a title that says something they confirm nothing and refuse nothing.
+- DISAGREE (`title_disagrees`) comes second and only from the two title fields: they share a whole segment and each has a segment of its own, or each states a number of the same kind (a volume, a part, read by `seqnum.ReadStated`) and the numbers differ ("Hush 1" and "Hush 2", "Part 1 of 3" and "Part 3"). A number only one side states is not a conflict ("Who Am I" and "Who Am I 2"). A lone trailing "I" counts as a numeral only when the other side has a numeral in the same place ("Hush I" against "Hush II" or "Hush 2", not "Who Am I" against "Who Am I 2"). A series name, a credit or a path never makes a pair disagree, and neither does a year in brackets that the other title has no year to set against (see the year rule below). The block cannot be lifted by a transcription. A title equal to a series name (candidate's or stored, edition tags ignored) still blocks unless a whole form agreed.
+- NEUTRAL is everything else that is related. A neutral title confirms nothing, so `EvidenceVerdict.tally` applies it only when the runtime check AGREES (known on both sides and within 5%); narrator, ASIN and transcription agreement never substitute. Otherwise the refusal is `title_unconfirmed` ("title only partly matches ... and the runtime does not confirm it"), which a structural owner-review lift can clear, like `insufficient_evidence` (when the author is the only other agreement the count refuses first, as `insufficient_evidence`).
+
+Because AGREE is decided first, a candidate form built from a credit or a position can make a pair agree that the two title fields alone would call a conflict. That is the one place the rule trusts a candidate's other fields; the role tags and the no-real-subtitle condition keep it narrow.
+
+The part-marker check in `internal/applygate/partial.go` (`checkPartialBook`) changed with it. It now runs when the runtime agrees too. Which text it reads for the book's own part then depends on the candidate: a candidate that names no part is compared with the book's own text only (its title, its stored subtitle, and a single file's own name), not its folder, so a stale "Disc 2" folder next to a whole-book candidate stays allowed when the runtime agrees, as on main. The book's own text is read first whatever the candidate says (its title, its stored subtitle, and a single file's own name), and the folder's label counts only when that text states no part and, when both state one, only if both use the same marker word: a book whose file says "Part 2" has said which part it is, so a stale "Hush Part 1" folder over "Hush Part 2.m4b" no longer lets a candidate "Hush: Part 1" through. A disc, a CD and a part are different levels, though ("Hush Disc 1" in the folder "Hush Part 2" is disc 1 of part 2), so when the file's marker word and the folder's differ both must be the candidate's part, or the pair refuses as `partial_book` (`seqnum.Stated.Marker` carries the word; `TestGate_PartMarkerRules` rows P1a-P1g). A part marker the candidate states and the book does not refuses as `partial_book`. A stored subtitle counts as book text for that check. A stale part marker in the stored title or in a single file's own name ("Hush CD1" against a whole-book "Hush") now refuses even when the runtime agrees (`partial_book`, which an owner review cannot lift); main did not refuse it, so this is a rule change, pinned by `TestGate_PartMarkerRules`. In the 4000-pair replay it changes 0 pairs: both `partial_book` refusals there have no runtime and main refused them too. Its private part reader is replaced by the new `seqnum.ReadStated` / `seqnum.ReadPair` (`internal/seqnum/stated.go`, additive: `Parse` is unchanged), so the title rule, the part rule and the sequence rule read numbers through one reader.
+
+The same gate guards the metadata auto-upgrade (`metabatch/upgrade.go`), so that unattended path takes the same rule. Recall change: a subtitle, a bracketed tag, a series prefix or a leading list number ("08 - The Long Halloween") on one side only (for example "Hush: A Gotham Story" against "Hush") is now neutral, and applies only with an agreeing runtime.
+
+Reversals from the rule an earlier commit of this PR had. Two decisions were reversed on purpose, and their tests were rewritten to assert the new behaviour:
+
+- A candidate that carries a part the book does not ("Hush: Part 2", or "Hush" with the subtitle "Part 2", against the stored "Hush") was a neutral title that applied with an agreeing runtime. It is now refused as `partial_book` whatever the runtime says, because two parts of one book are often within 5% of each other's length. (`TestEvaluate_TitleGateMatrix` row M3d and the "Hush" / "Hush: Part 2" rows of `TestEvaluateTranscribed_QueryNeverAgreesAndNoLiftRemovesATitleConflict`.)
+- Numbers swapped between the two sides ("Knightfall 2: Book 3" against "Knightfall 3: Book 2") were neutral because each side contained the other's numbers. Each side states different volumes in its own fields, so it is now a title conflict (`title_disagrees`). (`TestEvaluate_TitleGateMatrix` row O5.)
+
+The transcription lift (`applyTranscribedTitle`, `transcribed_identity.go`) was the same defect through another door: a search query equal to the candidate's title made the title AGREE with no runtime requirement, and the lift removed a `title_disagrees` block from the two title fields ("Hush: Part 1" took "Hush: Part 2" at a 4% runtime; a real stored title took an unrelated candidate). The query is the gate's own text, not a witness, so it now raises a title with no evidence (a block against a blank or placeholder stored title) to NEUTRAL at most, and the neutral-needs-runtime rule applies. A block from the two title fields (a conflict, or nothing in common with a real stored title) is never lifted, by the query or by a book-level transcription; the series-name and folder refusals are unchanged. Cost: a placeholder-titled book found by a transcription query now applies only with a runtime that agrees.
+
+Under owner review, and not changed here: a neutral title applies with a runtime within 5%. In the replay, 49 of the 61 applies that depend on a neutral title are of that kind (`todo.d/2026-11-17-applygate-neutral-title-review.md`). `TestUnderOwnerReview_*` pins today's outcome for a franchise word in front of the stored title, a stored subtitle that names the book against the franchise, a stored franchise-and-book title against the franchise, and a blank stored title with nothing to compare.
+
+Rules added by the third, fourth and fifth review rounds, each with a failing table test first (`TestGate_E3FreshPairs`, `TestGate_E3DeltaPairs`, `TestCheckTitle_RuleExamples`, `TestGate_PartMarkerRules`, `internal/seqnum/stated_test.go`):
+
+- A neutral title that is a few words OF a longer stored title ("Gotham" for the stored "Gotham Knights Detective Tales") is neutral only when it shares at least half the words, as on main; it was neutral at any size. A candidate that ADDS words to the stored title ("Gotham" stored, "Gotham Knights Detective Tales" found) stays neutral at any size. The bound is deliberately one-way, so the comparison is no longer symmetric in that one step (`compareTitleFields`).
+- A stored title that ends in one capital letter ("Robin X", "Robin Y") is a word of a whole book, so its folder name no longer stands in for it and a candidate "Robin" no longer agrees through the folder (`storedTitleSaysNothing`). That shape still keeps a title conflict out of a transcription's reach. Rip details after a title ("Robin X [64kbps]", "Hush: Dark Victory [64k]") are set aside and what is left is judged the same way: only a title that is nothing but rip details, or whose remainder says nothing, lets a folder name stand in for it.
+- The stored subtitle is read as book text by the sequence leg (`BookNumbers`): a stored subtitle "Batman, Book 2" against a candidate at position 3 refuses as `sequence_mismatch`, against a candidate with no position as `sequence_missing_on_candidate`.
+- A candidate whose title is its own series name and that has no real subtitle ("Batman" in the series "Batman"), against a stored title that equals it, is NEUTRAL, not AGREE: the bare title names no volume. The title with an edition word beside it ("Batman Unabridged", the candidate's subtitle "Unabridged" being no real subtitle) and the title with a credit beside it ("Batman - Bruce Wayne", "Bruce Wayne - Batman") are the same word with a name next to it and is neutral too, whether the stored title says it or a file name stands in for a blank title; a file name that is only the bare title no longer agrees for such a candidate either (the series-name refusal applies, as on main). A form that states the position ("Batman 4 Batman", "Batman 4 Batman Bruce Wayne") still agrees. Known cost: a stored "Batman 4" against such a candidate blocks, as before this round, because the candidate has no "series, position" form without the title.
+- A leading list number ("08 - ") never makes two titles disagree. A year in brackets ("Knightfall (1993)") is a release tag: it is set aside before the word and number tests, so it never makes a pair disagree on its own and never counts as shared evidence either ("Gotham (2033)" against "Gotham 2" is neutral, the same open class as "Gotham" against "Gotham 2"; "Gotham 2033" against "Gotham 2 (2033)" is the plain "Gotham 2033" against "Gotham 2" and refuses; "Gotham (2033)" is no word in common with "Gotham Knights Tales 2033" beyond the one). The years of the two titles are compared first, bracketed or bare: when both titles carry a year and the years differ they conflict ("Gotham (2033)" against "Gotham (2034)" or "Gotham 2034"). A bare year-like number ("Gotham 2033") is a number of the title: it conflicts with a different number the other title states ("Gotham 2", "Knightfall: Book 1" against "Knightfall 1993"); it is compared with nothing only when the other title states no number at all. Cost: a stored "Knightfall 1993" and a candidate "Knightfall: Book 1" is now a refusal (it was neutral); a bracketed year still never is.
+- "Hush I" now conflicts with "Hush, Book 2", "Hush, Book #2", "Hush #2", "Hush (2)", "Hush (Book 2)", "Hush Volume II" and "Hush II (Unabridged)", the same as with "Hush II". A closing note with no number in it ("(Unabridged)") on either title is not one of its words when the title states no volume with it in place; "Who Am I" against "Who Am I (Book 2)" or "Who Am I II (Unabridged)" is still the pronoun.
+- An ordinal beside a volume or part marker reads as that marker's number ("Third Book", "Book the Third", "3rd Volume" are "Book 3", "Volume 3"), so those agree with the numeral spelling and conflict with a different one. An ordinal that is no marker's number ("The Second Robin" against "The Third Robin") stays a word and is neutral.
+- A series, position or credit the candidate declares only moves a pair up the order refuse, neutral, agree, never down, except the one move above: a candidate whose title is its series name stops agreeing on the bare title (and the credit forms) once it declares that series. For such a candidate a credit that completes the stored title lifts a refusal to neutral and no further.
+
+Still open, as on main: a sequel with a one-sided word or number ("Hush" and "Hush 2", neutral), an ordinal that is no marker's number ("The Second Robin" and "The Third Robin"), one word changed in a long title, a franchise-only candidate with no series, a one-sided credit ("Year One" and "Grayson: Year One"). Tests: an oracle-based property test written from the rule and not from the code (it draws titles, subtitles, series, narrators, positions, closed subtitles and blank titles with file names from one word pool), a symmetry property for the declared title fields, a property that a candidate's credit or position only moves a pair toward AGREE, the "added text never agrees" property, a table of the review's predicted inputs asserted at a runtime 5% off, 7% off and missing (`TestGate_Step1bInputs`), and by-example tests for each decision (`TestCheckTitle_RuleExamples`, `TestGate_PartMarkerRules`, `TestCheckTitle_ACreditNeverMatchesASeries`).
+
+#### Batch apply from candidate-fetch results no longer re-applies an applied book
+
+`planOpResultApply` (the planner for `/metadata/batch-apply-candidates` and its preview) lacked the already-applied check `planCachedApply` has. The op result's own "applied" status is written only when this path applies the book, so a book applied since the fetch by the cached bulk apply, the review lane or the single-book dialog still had a "matched" result and was applied again: file work, a tag write, an iTunes write-back and a history entry. It now comes back `already_applied` (skipped, not an error), the preview reports it as skipped, and a queued apply skipped for this reason logs it. Undoing an apply restores the book's review status, so an undone book can be applied again.
+
+- Frontend CI no longer goes red on every pull request that touches both `web/` and Go. The Go CI job inside the shared `reusable-ci.yml` checks out at depth 1 with no base ref, so `TestTasklintExemptions_ShrinkOnly` (which deliberately fails under `CI=true` without `origin/main`) had nothing to diff against. `frontend-ci.yml` now passes the new `fetch-base-branch-tip: true` input (falkcorp/github-common#394), which fetches the default branch's tip at depth 1 right after checkout; `ci.yml` already did the same for its own Go jobs (e3793d06e). The test is unchanged. `nightly.yml` needs nothing: it runs on the default branch, whose checkout already has `origin/main`. The github-common pins in every workflow and `.github/ghcommon-ref.txt` move to bd20b4030, which contains the input (it also brings the opt-in `run-frontend` input, unused here).
+
+- The book version snapshot prune can no longer make an automatic merge impossible to undo. An undo restores both books from the saved snapshots its journal row names, and the prune kept only the newest N per book and exempted nothing, so N later edits and one prune (the per-book "Prune (keep 5)" button and its route, or the `prune-book-snapshots` job) left the undo with nothing to restore. The prune and its dry run now decide through one function (`planSnapshotPrune`) that asks one pin set, built once from the live `dedup:automerge:` journal rows and rebuilt only when a journal row is written, so a whole-library run does not scan the journal once per book. An entry that was undone releases its snapshots. A merge still being journaled (a provisional entry, written before the merge and finalized after it) pins exactly ONE snapshot per book, per row: the first snapshot above that row's own floor, which is the pre-merge record the post-merge patch will name. The floor is the book's newest snapshot when the merge began, which the entry now records (`winner_baseline_ts`, `loser_baseline_ts`, `baselines_recorded`); an older entry without them uses its `merged_at`. Floors are kept per row and never merged, so two in-flight merges on one book each keep their own snapshot, and the first-above lookup (`EarliestSnapshotAbove`) is the same function the patch uses, so the snapshot kept and the snapshot named cannot drift. A floor is resolved against the book's snapshots at the moment the prune decides, so a snapshot the merge wrote after the pin set was built is covered. A provisional row has no expiry: one whose merge failed in a way that does not prove nothing was written keeps pinning for as long as it exists, and the dry run counts those (`stale_provisional_merge_journals`, ids capped at 200). A row whose merge was refused by `MergeBooks`' read-only phase (`merge.RefusedBeforeWriteError`, which proves nothing was written) is closed (`aborted_at`) and pins nothing; `UnmergeAuto` refuses it and says why. The prune re-checks its pins before committing and re-plans if a journal row landed meanwhile (5 attempts, then it deletes nothing and errors). A journal that cannot be read fails the prune, a whole-library run and the per-book route (`POST /audiobooks/:id/cow-versions/prune`) included, naming the row: "a merge journal row is unreadable: <key>; prune is blocked until it is repaired". The check runs once before the worker pool in both modes, and the failure is remembered for a short time so it is not rediscovered per book.
+- `Engine.UnmergeAuto` checks that both pre-merge snapshots still exist before it writes anything. When one is gone it returns an error naming the missing `book_ver:` key and says nothing was reverted. Before, it put the loser's siblings and the loser back first, then failed on the survivor with "version not found" and left the entry open, a half-applied undo no retry could finish.
+- The `prune-book-snapshots` dry run reports `pinned_by_journal` (snapshots it would have deleted but keeps because a live merge journal row points at them) and, read-only, the live merge journal entries whose undo snapshots are already gone (`live_merge_journals`, `merge_journals_missing_snapshots`, `merge_journals_missing_ids` capped at 200, `merge_journals_missing_truncated`), so whether production has already lost any is known. Nothing is repaired. The job now stores a structured result (`GET /operations/:id/result`).
+- The `dedup.auto-resolve` dry run keeps its plan. It stores, as the op result, the pairs a run would merge (cap 2000, with `plan_truncated`) and the pairs a guard refused (cap 500, with `refused_truncated`), with per-guard refusal counts. Each entry has the candidate id, both book ids, band, score, the signals as evaluated, the guard that decided, the reason, the rule id (`dedup.auto-resolve/tier1-certain/v1`), and `shares_book_with_rank` for a pair that names a book an earlier entry names. `planned_by_guard` counts every planned merge by the clause that admitted it, so the number resting on the whole-book-signature label fallback (`corroboration_signature_label`) is visible. No titles. Each entry stores the signal kinds with their raw value and confidence, not the signals' evidence text. `autoResolveEligible` returns a decision with a `Guard`; its eligibility rules are unchanged. The apply path, the `dedup.auto_resolve_enabled` flag and its default, and the per-candidate cost are unchanged: the dry run collects the plan in memory and adds no read or write per candidate.
+- `apply` of `dedup.auto-resolve` is unchanged, and the dry-run plan says so in `apply_description`: apply is not bound to a reviewed plan and counts only successful merges against `max_merges`, so it can merge pairs ranked past `max_merges`. Binding apply to a dry run is filed as `TODO-AUTORESOLVE-APPLY-BOUND-TO-PLAN`.
+- Dead code removed: `CountBookSnapshots` and its mock hook. The `database.Store` width ratchet moves from 444 to 443.
+- `MergeBooksJournaled` no longer records a failed snapshot-list read as a baseline of 0. `newestSnapshotNanos` returns the error, and the merge is refused with `dedup.BaselineReadError` (naming the book and wrapping the cause) before the provisional journal rows and before `MergeBooks`, so no row, pin or merge write is left behind; a book with no snapshots is still a real baseline of 0.
+- The post-merge patch no longer finalizes a journal row with a 0 that came from a failed snapshot read. `preMergeSnapshotNanos` returns `(int64, error)`; on an error for the winner every row of the merge is left provisional (one log line for the merge naming every row key), on an error for one loser only that loser's row is (one line per row), logged as `dedup.merge-journaled`. A row finalized with 0 would have dropped its pin (a finalized row pins exactly what it names) and made `UnmergeAuto` skip that side yet still mark the entry undone. A provisional row keeps its floors, so a later prune keeps the pre-merge snapshot, and `UnmergeAuto` refuses the row by name ("never finalized"). `UnmergeAuto` still accepts a 0 timestamp on a finalized row: a replayed, already soft-deleted loser legitimately has no new snapshot.
+- A provisional row now lists every participant of its merge with its baseline (`participants`, readable by older binaries, which ignore it and still floor the winner and loser from `winner_baseline_ts` / `loser_baseline_ts`; a row without the list behaves as before), and the prune holds a floor for each. The post-merge patch matches provisional rows to the actual losers by book id instead of by position: when the winner was predicted wrongly (a merge of any two or more books, and the file-hash auto-merge, which passes no keeper, is two), the row whose loser is the actual winner takes the place of the predicted winner. Before, a mispredicted winner plus one failed patch write could leave a real loser in no row, so its pre-merge snapshot was unpinned.
+- `OpenAutoMergeLosers` (the trash purge hold) now holds every book listed by a live provisional journal row, not only the row's own loser. A row left provisional because its patch could not run (a failed write or an unreadable snapshot list) carries the loser of the PREDICTED winner, so when the winner was predicted wrongly it names the actual winner as its loser and no row named the predicted winner, a real and soft-deleted loser, which the purge could then delete for good 30 days later (the unreadable-snapshot case is new in this PR; before it that row was finalized and held it). A closed (`aborted_at`), undone or finalized row widens nothing, and a row written before `participants` existed holds its loser alone, as before. The hold has no expiry and nothing releases a live provisional row today (it is neither finalized nor closed after a failed patch or a crash): all its participants are held from every purge path until it is released, including a participant trashed for an unrelated reason later. It fails closed, so no data is lost, and it costs one kept trash row per held book; a provisional row's own losers were already held the same way on main. Releasing such rows, and surfacing the hold reason to operators (all four purge callers drop it), is filed as `TODO-MERGE-PROVISIONAL-ROW-REPAIR`. `UnmergeAuto`'s refusal for a provisional row now names every book of the merge (its participants, or the loser alone for a row without them) and tells the operator to restore whichever is in the trash, because the row's loser is a prediction and can be the live winner.
+- A provisional journal row is written only if its key is free (`PutAutoMergeJournalEntryIfAbsent`, under one lock shared by every journal writer; on a collision the merge takes a new `merged_at` strictly above the last one tried, 8 attempts), and carries an identity (`row_id`). A merge refused before it wrote closes a row only while the stored row still carries the identity that merge wrote (`CloseAutoMergeJournalEntry`), so it can no longer overwrite another merge's finalized row at the same key. The patch drops the identity.
+- The `prune-book-snapshots` job returns the cancellation when its context was cancelled during the pass, instead of storing `complete: true` with partial counts, and the `Complete` field's documentation now says what ends a run early.
+- Closed (`aborted_at`) journal rows still hold their loser from the trash purge: `OpenAutoMergeLosers` skips only undone rows. This is unchanged and now stated.
+
+#### `whisper_server.py` pins `av<19`
+
+faster-whisper 1.2.1 calls `av.open(..., metadata_errors=...)`, which PyAV 19
+removed, and faster-whisper only requires `av>=11`, so an unpinned `uv run`
+resolved av 19 and every decode failed with `open() got an unexpected keyword
+argument 'metadata_errors'`.
+
+- The ffmpeg install steps in CI no longer block the merge queue on a flaky package source. The Windows Whisper trial ran a bare `choco install ffmpeg`, which failed on one HTTP error from the Chocolatey community feed and then failed `test_ci_has_ffmpeg_when_it_says_it_does`; it now runs `scripts/ci/install_ffmpeg_windows.ps1` (3 Chocolatey attempts, each killed after 150 s, with backoff, then a checksum-verified download of the pinned ffmpeg 9.0.2 release zip, failing with the reason if neither works). The two Linux steps that install ffmpeg through `scripts/ci/apt_install.sh` (the Repo Guards Whisper step, which hung about 15 minutes until cancelled, and the system-dependencies step of the test job) now have a step timeout (15 and 20 minutes) and a per-apt-call cap (120 s and 180 s) (`APT_INSTALL_CALL_TIMEOUT`, default still 600).
+
 <a id='changelog-v0.231.0'></a>
 ## v0.231.0 — 2026-11-17
 
