@@ -1,5 +1,5 @@
 # file: .github/workflows/frontend-ci.yml
-# version: 2.18.0
+# version: 2.18.1
 # guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
 # last-edited: 2026-11-18
 
@@ -68,36 +68,40 @@ jobs:
       go-version: '1.27.3'
       node-version: ${{ needs.frontend-config.outputs.node-version }}
       system-packages: 'libtag1-dev'
-      # Tests are off here: Go and frontend (the E2E step below is off on its own).
-      # Frontend CI's Go CI job ran `go test -v -race ./...` over the WHOLE suite
+      # The reusable workflow's tests are off here (skip-tests): its Go tests, its
+      # frontend tests, and its Python tests (root `pytest --cov=.`, which only
+      # runs when a run of this workflow also touches a .py file). The E2E step is off on its own.
+      # Why: its Go CI job ran `go test -v -race ./...` over the WHOLE suite
       # (no -short, one unsharded `go test`). When it reached a verdict it took
       # 40-57 min of a 60 min job cap that is hard-coded in reusable-ci, and 6 of
       # the last 18 such runs hit the cap (among them the push to main run
       # 44262876677 and PRs #4703 and #4708). internal/plugins/maintenance alone
       # took ~715 s there, against 186 s in ci.yml's -short weights.
-      # That was a second copy of what ci.yml already gates on every Go change:
-      # `Go Tests (short, race)` in four shards plus the core shard (14-20 min wall
-      # each), the 30% floor in `Coverage Floor (PR gate)`, and
-      # `Full-Size Tests (applygate, seqnum)`. The frontend half has the same
-      # twin: reusable-ci's `npm run test` here is `Frontend Unit Tests` in
-      # ci.yml (`npm test -- --run`), which also runs `Frontend Lint & Build`
-      # on the same paths. The same overlap was removed from Minimal CI by 07-C3
-      # (`run-go-tests: false`, ci.yml); this removes the last copy.
       #
-      # What is given up: the tests `-short` skips (53 files call
-      # testing.Short()) no longer run on a PR that touches both web/ and Go, and
-      # nothing replaces them there. nightly.yml runs them (`force-all`, full
-      # suite, same 25m per-binary timeout), so a regression in them shows on main
-      # the next morning, not on the PR. nightly's Go CI has the same 60 min cap
-      # and hit it on 3 of its last 8 runs, so that copy needs its own fix
-      # (sharding it, upstream or in ci.yml). Go CI here still runs, but only
-      # `go mod download` and `go build ./...` (~4 min); the job name does not
-      # change.
+      # What ci.yml already runs that overlaps: the SHORT Go suite
+      # (`Go Tests (short, race)`, four shards plus the core shard, 14-20 min wall
+      # each), the 30% floor (`Coverage Floor (PR gate)`), applygate and seqnum at
+      # full size (`Full-Size Tests (applygate, seqnum)`), and the same frontend
+      # tests, lint and build (`Frontend Unit Tests` = `npm test -- --run`,
+      # `Frontend Lint & Build`) on a superset of this workflow's paths. Minimal CI
+      # lost its copy of the short suite the same way in 07-C3 (`run-go-tests:
+      # false`, ci.yml).
       #
-      # To bring the Go tests back, set skip-tests: false and re-add
+      # What is NOT covered elsewhere on a PR, and is given up here:
+      #  - the Go tests that -short skips (53 files call testing.Short()). Only
+      #    nightly.yml runs them now, and its Go CI has the same 60 min cap and
+      #    hit it on 3 of its last 8 runs, so that copy needs its own fix
+      #    (sharding it, upstream or in ci.yml). A regression in them shows on
+      #    main the next morning, not on the PR.
+      #  - the Python tests the repo-guards job does not run: ci.yml runs
+      #    unittest discovery over scripts/ and .github/workflows/scripts/ plus six
+      #    named Whisper pytest files, not a root `pytest --cov=.`.
+      # Go CI here still runs, but only `go mod download` and `go build ./...`
+      # (~4 min), and keeps its name.
+      #
+      # To bring the tests back, set skip-tests: false and re-add
       # go-test-timeout: '25m' (Go's own 10m default kills internal/books/store,
-      # 510-600 s under -race), coverage-threshold: '30', free-runner-disk: true
-      # (-race test binaries filled the runner disk on 2026-11-04) and
+      # 510-600 s under -race), coverage-threshold: '30' and
       # fetch-base-branch-tip: true (TestTasklintExemptions_ShrinkOnly needs
       # origin/main in the depth-1 checkout; needs github-common#394).
       skip-tests: true
@@ -106,6 +110,12 @@ jobs:
       # every PR that touches web/ or Go, chromium+webkit nightly), so here it
       # would only add ~20 min per run.
       skip-e2e-tests: true
+      # Frees ~25 GB before Go CI restores its cache: -race test binaries filled
+      # the runner disk on 2026-11-04 ("final link failed: No space left on
+      # device"). No test binary is linked here any more, but the step costs ~97 s
+      # and the cache restore is what it protects, so it stays until a run
+      # without it has been seen to pass on a cold cache.
+      free-runner-disk: true
     secrets: inherit
 
   # Fail-closed gate (CI-06). The `frontend` job's `if:` above depends on an
