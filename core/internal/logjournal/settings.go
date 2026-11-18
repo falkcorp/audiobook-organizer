@@ -1,7 +1,7 @@
 // file: core/internal/logjournal/settings.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5a9e3d71-c204-4f8b-b6a0-8e1d7c3f9b52
-// last-edited: 2026-11-13
+// last-edited: 2026-11-18
 
 package logjournal
 
@@ -24,8 +24,9 @@ type Settings struct {
 	// MinLevel is the least severe record the journal keeps: debug, info, warn
 	// or error. It is independent of the primary output's level.
 	MinLevel string `json:"min_level" schema:"enum=debug|info|warn|error"`
-	// RetentionDays is how long a record is kept; 0 keeps everything.
-	RetentionDays int `json:"retention_days" schema:"minimum=0"`
+	// RetentionDays is how long a record is kept; 0 keeps everything. The
+	// maximum is MaxRetentionDays (a literal in the tag; a test pins them equal).
+	RetentionDays int `json:"retention_days" schema:"minimum=0,maximum=36500"`
 	// QueueSize is the tap's queue; a full queue drops the newest records and
 	// counts them under mediacore_log_dropped_total{sink="journal"}.
 	QueueSize int `json:"queue_size" reload:"restart" schema:"minimum=64"`
