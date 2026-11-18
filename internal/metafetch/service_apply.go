@@ -417,11 +417,23 @@ func legacyAudioConfirmedMarker(candidate MetadataCandidate, th transcriptionHin
 // The decision is made twice, each time on the row read under the copy's own
 // stripe: once for the columns, and again in a second locked pass for the
 // author and narrator joins (the stripe is released between the two, and a
-// trash or merge can land in that gap). So no write lands on a copy after the
-// pass that read it retired. What a lock cannot cover: a copy that retires
-// after the join pass commits still has its files tagged by the caller, because
-// that is file I/O and cannot run under a store lock; writeBackForBook states
-// the same residual. Every other failure is logged and returns nil, as before.
+// trash or merge can land in that gap). So no write THIS FUNCTION makes lands
+// on a copy after the pass that read it retired. Two things stay outside that:
+//
+//   - The store's own narrator junction sync. When the column pass changes the
+//     Narrator column, ModifyBook calls database.syncNarratorJunctionAfterWrite
+//     AFTER releasing the stripe (narrator_credit_sync.go); that sync resolves
+//     the credit, re-takes the stripe and writes book_narrators if the column
+//     still holds the credit it resolved. It checks the column, not the retired
+//     flag, so a copy trashed or merged in that gap can still get its narrator
+//     junction rewritten by the store. That is the store's behaviour for every
+//     ModifyBook caller, not something this function can lock out; the second
+//     locked pass below does not cover it either.
+//   - File I/O. A copy that retires after the join pass commits still has its
+//     files tagged by the caller, because that is file I/O and cannot run under
+//     a store lock; writeBackForBook states the same residual.
+//
+// Every other failure is logged and returns nil, as before.
 func (mfs *Service) syncMetadataToLibraryCopy(original, libCopy *database.Book) error {
 	var restored []string
 	var lockErr error
