@@ -2510,6 +2510,7 @@
    "core/internal/executor/prune.go",
    "core/internal/executor/prune_test.go",
    "core/internal/logjournal/prune.go",
+   "core/internal/logjournal/prune_internal_test.go",
    "core/internal/logjournal/prune_test.go",
    "core/internal/logjournal/settings.go",
    "core/internal/archtest_layers_test.go",
