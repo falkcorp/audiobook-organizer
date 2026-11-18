@@ -1,5 +1,5 @@
 // file: core/internal/storagetasks/kinds_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2a99dbbf-d3e7-4586-b768-b26eb0d5d60c
 // last-edited: 2026-11-18
 
@@ -112,6 +112,9 @@ type fakeSurface struct {
 	stats      []storage.CompactionStats
 	census     []storage.CensusEntry
 	censusErr  error
+	// cancelDuringCensus cancels the run while Census is counting, then
+	// returns the entries anyway: a count that finished as the run was stopped.
+	cancelDuringCensus context.CancelFunc
 
 	mu        sync.Mutex
 	samples   int
@@ -144,6 +147,9 @@ func (f *fakeSurface) CompactionStats() storage.CompactionStats {
 func (f *fakeSurface) Census(ctx context.Context) ([]storage.CensusEntry, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if f.cancelDuringCensus != nil {
+		f.cancelDuringCensus()
 	}
 	return slices.Clone(f.census), f.censusErr
 }
@@ -471,6 +477,20 @@ func TestCensus_CanceledRunRecordsNothing(t *testing.T) {
 	}
 	if n := len(sink.puts()); n != 0 {
 		t.Errorf("sink got %d records from a canceled run", n)
+	}
+}
+
+// A run canceled while the count was finishing must not record it: the last
+// good census stays the latest.
+func TestCensus_CanceledWhileCountingRecordsNothing(t *testing.T) {
+	sink := &memSink{}
+	ctx, cancel := context.WithCancel(t.Context())
+	_, census := kindsOf(t, &fakeSurface{census: entries(), cancelDuringCensus: cancel}, sink)
+	if _, err := runKind[CensusResult](t, census, newHost(ctx, KindCensus)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if n := len(sink.puts()); n != 0 {
+		t.Errorf("sink got %d records from a run canceled while counting", n)
 	}
 }
 
