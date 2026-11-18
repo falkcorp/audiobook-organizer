@@ -7,6 +7,8 @@ package m4_test
 
 import (
 	"context"
+	"encoding/json"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -197,4 +199,105 @@ func TestM4_VerifyFailsWhenARowIsLeft(t *testing.T) {
 	if !strings.Contains(err.Error(), "still present") {
 		t.Errorf("the boot failed, but not on Verify's finding: %v", err)
 	}
+}
+
+// TestCutover_RowOfACommittedRunIsNotAnOrphan: a worker handed a run-owned row
+// whose driver's chunk has committed since (the run record and the row are both
+// gone from the live store, though the runner's iterator still holds the row)
+// leaves it alone. It is not an orphan: the driver imported it.
+func TestCutover_RowOfACommittedRunIsNotAnOrphan(t *testing.T) {
+	id := runID(1)
+	r := newRig(t, withRuns(nil, runSpec{id: id, def: "library.scan", st: "succeeded", completed: tptr(epoch.Add(time.Hour)), evts: 2}), func(r *rig) {
+		r.parallelism = func(dm *datamigrate.DataMigration) { dm.Parallelism = fixedOne() }
+		// Every row of the run sorts before its driver row except the run's own
+		// logs-and-later families; the dependent path reads the run record and
+		// then the row itself, and both reads see the commit.
+		r.view = func(key string) ([]byte, bool, error) {
+			return nil, strings.Contains(key, id), storage.ErrNotFound
+		}
+	})
+	dm := r.migration()
+	inner := dm.Step
+	dm.Step = func(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
+		if strings.HasPrefix(string(kv.Key), "opv3:run:") {
+			r.view = nil // the driver reads its own run with the live store
+		}
+		return inner(ctx, kv, w)
+	}
+	s, err := r.runWith(t, r.seed(t), dm)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, r.logs)
+	}
+	for _, q := range s.Quarantine {
+		if q.Reason == "the row belongs to no run record" {
+			t.Errorf("a row of an imported run was quarantined as an orphan: %+v", q)
+		}
+	}
+}
+
+// TestCutover_DriverReadsItsRunAfterReconcile: HEAD's reconcile runs inside the
+// first Step, after the runner's iterator took its snapshot, so the bytes the
+// runner hands the driver can predate it. The driver imports what the store
+// holds when it runs, not what the snapshot held.
+func TestCutover_DriverReadsItsRunAfterReconcile(t *testing.T) {
+	id := runID(1)
+	done := epoch.Add(time.Hour)
+	var repaired []byte
+	r := newRig(t, withRuns(nil, runSpec{id: id, def: "library.scan", st: "queued"}), func(r *rig) {
+		r.parallelism = func(dm *datamigrate.DataMigration) { dm.Parallelism = fixedOne() }
+		r.reconcileFn = func(ctx context.Context) error {
+			// The v2 row says the op finished: reconcile rewrites the v3 record.
+			repaired = []byte(`{"v":3,"id":"` + id + `","def_id":"library.scan","state":"failed","error":"mislabeled","queued_at":"` + epoch.Format(time.RFC3339) + `","completed_at":"` + done.Format(time.RFC3339) + `","priority":1}`)
+			return nil
+		}
+		r.view = func(key string) ([]byte, bool, error) {
+			if key == "opv3:run:"+id && repaired != nil {
+				return repaired, true, nil
+			}
+			return nil, false, nil
+		}
+	})
+	r.runObserve(t, func(ctx context.Context, s *snap) {
+		rec, err := s.Stores.Runs.Get(ctx, tasks.RunID(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rec.State != tasks.StateFailed || rec.Error != "mislabeled" || !rec.Finished.Equal(done) {
+			t.Errorf("imported %q (error %q, finished %v): the driver used the snapshot's bytes, not the store's", rec.State, rec.Error, rec.Finished)
+		}
+	})
+}
+
+// TestCutover_RunRecordFullyMapped compares one imported run to the whole
+// record it must become: the fields no other test asserts one by one (Result,
+// Error, Parent, Attempt, FenceEpoch, the system actor, the repairs run-level
+// rule's Mode and PlanRef, the counters).
+func TestCutover_RunRecordFullyMapped(t *testing.T) {
+	id, plan, parent := runID(1), runID(2), runID(3)
+	done := epoch.Add(2 * time.Hour)
+	params := `{"fixer_id":"two-face-asins","plan_op_id":"` + plan + `","dry_run":true}`
+	r := newRig(t, withRuns(nil, runSpec{
+		id: id, def: "repairs.apply", st: "failed", completed: tptr(done), started: tptr(epoch.Add(time.Minute)),
+		mode: "preview", params: json.RawMessage(params), parent: parent, priority: 1, result: `{"merged":3}`, errText: "mislabeled",
+		system: true, evts: 2, intents: 1, logs: 3,
+	}))
+	r.runObserve(t, func(ctx context.Context, s *snap) {
+		got, err := s.Stores.Runs.Get(ctx, tasks.RunID(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := tasks.RunRecord{
+			RunView: tasks.RunView{
+				ID: tasks.RunID(id), Kind: "books.repairs.two-face-asins", Mode: tasks.ModeLive, State: tasks.StateFailed,
+				Actor: tasks.Actor{AuthMethod: "system", System: "books"}, Trigger: tasks.TriggerManual,
+				Parent: tasks.RunID(parent), PlanRef: tasks.RunID(plan),
+				Created: epoch, Started: epoch.Add(time.Minute), Finished: done, Done: 7, Total: 9, Current: "The Long Halloween",
+			},
+			Priority: tasks.PriorityNormal, Params: json.RawMessage(params), Result: json.RawMessage(`{"merged":3}`), Error: "mislabeled",
+			Attempt: 1, FenceEpoch: 2, Seq: tasks.RunSeqs{Event: 2, Intent: 1, Log: 3},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("imported record differs:\n got %+v\nwant %+v", got, want)
+		}
+	})
 }

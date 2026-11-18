@@ -168,6 +168,27 @@ type rig struct {
 	// and Migrate (Config.Legacy).
 	legacy   atomic.Pointer[storage.LegacyRange]
 	reconcil atomic.Int64
+	// view, when set, is consulted by every point read the step makes through
+	// Config.Legacy: handled says the value (or err, e.g. storage.ErrNotFound)
+	// is the answer. It stands for what a worker sees while another worker's
+	// chunk commits, and for what HEAD's reconcile leaves behind (the runner's
+	// own iterator keeps the snapshot it started from).
+	view func(key string) (val []byte, handled bool, err error)
+	// reconcileFn, when set, is what HEAD's reconcile does in the rig.
+	reconcileFn func(ctx context.Context) error
+}
+
+// viewReader is a storage.Reader whose point reads go through view first.
+type viewReader struct {
+	storage.Reader
+	view func(key string) ([]byte, bool, error)
+}
+
+func (v viewReader) Get(ctx context.Context, key []byte) ([]byte, error) {
+	if val, handled, err := v.view(string(key)); handled {
+		return val, err
+	}
+	return v.Reader.Get(ctx, key)
 }
 
 func newRig(t testing.TB, opts ...func(*rig)) *rig {
@@ -240,10 +261,19 @@ func (r *rig) migration() datamigrate.DataMigration {
 			if lr == nil {
 				r.t.Fatal("the legacy range is read before the store is open")
 			}
+			if r.view != nil {
+				return viewReader{Reader: *lr, view: r.view}
+			}
 			return *lr
 		},
-		Reconcile: func(context.Context) error { r.reconcil.Add(1); return nil },
-		Logger:    slog.New(slog.NewTextHandler(r.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Reconcile: func(ctx context.Context) error {
+			r.reconcil.Add(1)
+			if r.reconcileFn == nil {
+				return nil
+			}
+			return r.reconcileFn(ctx)
+		},
+		Logger: slog.New(slog.NewTextHandler(r.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	}, cutover.TasksCutoverID, cutover.BooksCutoverLevel, []storage.StepRef{cutover.BooksLevelStepRef(r.levelVersion())})
 	if err != nil {
 		r.t.Fatal(err)
@@ -526,6 +556,10 @@ type runSpec struct {
 	derived                bool
 	noQueued               bool
 	corruptRun, corruptLog bool
+	// result and errText fill the run's Result and Error; system makes the
+	// actor HEAD's system actor (no user, auth method "system").
+	result, errText string
+	system          bool
 }
 
 func tptr(t time.Time) *time.Time { return &t }
@@ -575,6 +609,13 @@ func seedRun(ctx context.Context, t testing.TB, lr storage.LegacyRange, s runSpe
 	}
 	if s.noQueued {
 		rec.QueuedAt = nil
+	}
+	if s.result != "" {
+		rec.Result = json.RawMessage(s.result)
+	}
+	rec.Error = s.errText
+	if s.system {
+		rec.Actor = store.Actor{AuthMethod: "system"}
 	}
 	if s.corruptRun {
 		put("opv3:run:"+s.id, []byte(`{"v":3,"id":`))
