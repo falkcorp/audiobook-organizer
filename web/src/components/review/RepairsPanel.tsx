@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.37.0
+// version: 1.38.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-11-18
 
@@ -533,6 +533,7 @@ export const SKIP_KIND_LABEL: Record<string, string> = {
   placeholder_metadata: 'A title or author is a placeholder (Unknown), so it says nothing about the book',
   dangling_author: 'A credit points at an author that no longer exists',
   title_author_swapped: 'One book has its title and author swapped; "Fix swapped title and author" repairs it',
+  repoint_target_not_same_work: 'The book it would be repointed at does not look like the same work',
   sync_redirect_broken: 'An Audiobookshelf sync redirect is broken and cannot be followed',
   runtime_ambiguous: 'Lengths do not settle it (about half as long, or a very short file)',
   suspicious: 'Looks like a wrong merge, but only one sign says so',

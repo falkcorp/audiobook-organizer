@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_fixer_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5f0f2a63-1d4e-4b6e-9f55-2f3a7c0b8e14
 // last-edited: 2026-11-18
 
@@ -1145,17 +1145,34 @@ func TestMergeCleanupCensusCountsEveryHold(t *testing.T) {
 
 // A dead end's candidate must be a live book that is not itself merged away:
 // repointing at a book that points on would only lengthen the chain.
-func TestMergeCleanupDeadEndCandidateThatIsMergedIsNotACandidate(t *testing.T) {
-	x := newMCFixture(t)
-	x.mk("z", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000)})
-	x.mk("heir", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000), group: "g-p", primary: mcTrue()})
-	x.mk("dead", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000), group: "g-p", primary: mcFalse(), trashed: true})
-	x.point("heir", "z")
-	x.mk("loser", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000)})
-	x.point("loser", "dead")
-	r := wantRow(t, x.plan(), "loser", mcKindUnmerge, "")
-	require.Equal(t, "dead", r.Current["chain_end"])
-	require.Empty(t, r.Proposed["merged_into_book_id"])
+// A merged group member is followed one more hop to the live book it was merged
+// into: the loser's content is there, so the pointer moves there. Round 1 read
+// "the member is merged" as "nothing is reachable" and proposed that the loser
+// stand alone while a live book sat one hop away.
+func TestMergeCleanupDeadEndMergedGroupMemberIsFollowedToItsLiveTarget(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		// point merges heir into z; plain leaves heir's primary flag as it was.
+		point func(x *mcFixture)
+	}{
+		{"a merged member with the explicit false primary flag", func(x *mcFixture) { x.point("heir", "z") }},
+		{"a merged member that is still the group's primary", func(x *mcFixture) { x.pointRaw("heir", "z") }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			x := newMCFixture(t)
+			x.mk("z", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000)})
+			x.mk("heir", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000), group: "g-p", primary: mcTrue()})
+			x.mk("dead", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000), group: "g-p", primary: mcFalse(), trashed: true})
+			c.point(x)
+			x.mk("loser", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000)})
+			x.point("loser", "dead")
+			r := wantRow(t, x.plan(), "loser", mcKindRepoint, "")
+			require.Equal(t, "dead", r.Current["chain_end"])
+			require.Equal(t, x.ids["z"], r.Proposed["merged_into_book_id"], "the live book the member was merged into")
+			require.Contains(t, r.Evidence[len(r.Evidence)-1], "merged into "+x.ids["z"])
+			require.NotContains(t, strings.Join(r.Evidence, " "), "stands alone")
+		})
+	}
 }
 
 // ---- failures are loud ----
@@ -1503,17 +1520,18 @@ func TestMergeCleanupCycleHeadIsALiveBookWithFiles(t *testing.T) {
 
 // A dead end's candidate holder of retired versions must itself be a live book
 // with no pointer.
-func TestMergeCleanupDeadEndHolderMustBeLiveAndUnmerged(t *testing.T) {
+func TestMergeCleanupDeadEndHolderIsFollowedToALiveBookOnly(t *testing.T) {
 	x := newMCFixture(t)
 	x.mk("z", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000)})
-	// The retired rows went to a holder that is itself merged away.
+	// The retired rows went to a holder that is itself merged away: the loser's
+	// content is in the live book the holder was merged into.
 	x.mk("p-dead", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
 	x.mk("p-holder", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000)})
 	x.point("p-holder", "z")
 	retireRowOnto(t, x.st, x.ids["p-dead"], x.ids["p-holder"], "rp", filepath.Join(x.root, "retired", "p.m4b"))
 	x.mk("p-loser", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000)})
 	x.point("p-loser", "p-dead")
-	// ... or to a holder that is in the trash.
+	// ... or to a holder that is in the trash: nothing live is reachable.
 	x.mk("t-dead", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
 	x.mk("t-holder", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000)})
 	retireRowOnto(t, x.st, x.ids["t-dead"], x.ids["t-holder"], "rt", filepath.Join(x.root, "retired", "t.m4b"))
@@ -1527,11 +1545,15 @@ func TestMergeCleanupDeadEndHolderMustBeLiveAndUnmerged(t *testing.T) {
 	x.point("t-loser", "t-dead")
 
 	rows := x.plan()
-	for _, n := range []string{"p-loser", "t-loser"} {
-		r := wantRow(t, rows, n, mcKindUnmerge, "")
-		require.Equal(t, "dead", r.Current["chain_end"], n)
-		require.Empty(t, r.Proposed["merged_into_book_id"], "%s: a book that points on or sits in the trash is no place to repoint to", n)
-	}
+	r := wantRow(t, rows, "p-loser", mcKindRepoint, "")
+	require.Equal(t, "dead", r.Current["chain_end"])
+	require.Equal(t, x.ids["z"], r.Proposed["merged_into_book_id"])
+	require.Contains(t, strings.Join(r.Evidence, " "), "holds the retired versions of "+x.ids["p-dead"])
+
+	r = wantRow(t, rows, "t-loser", mcKindUnmerge, "")
+	require.Equal(t, "dead", r.Current["chain_end"])
+	require.Empty(t, r.Proposed["merged_into_book_id"], "a book in the trash is no place to repoint to")
+	require.Contains(t, strings.Join(r.Evidence, " "), "no live book is reachable", "the walk proved it")
 }
 
 // A version-group hold on the swap's target is a hold on a swap only: an

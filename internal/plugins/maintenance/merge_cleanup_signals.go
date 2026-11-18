@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_signals.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 67839bc7-cc2f-4877-afbc-e2646b549e49
 // last-edited: 2026-11-18
 
@@ -84,6 +84,9 @@ const (
 	// The pair is a title/author-swapped book against its correct twin; the
 	// "Fix swapped title and author" fixer owns it.
 	mcSkipTitleAuthorSwapped = "title_author_swapped"
+	// The live book a repoint would point at is not, by the signals, the same
+	// work as the loser.
+	mcSkipRepointNotSameWork = "repoint_target_not_same_work"
 	mcSkipRuntimeAmbiguous   = "runtime_ambiguous"
 	mcSkipSuspicious         = "suspicious"
 	mcSkipCannotTell         = "cannot_tell"
