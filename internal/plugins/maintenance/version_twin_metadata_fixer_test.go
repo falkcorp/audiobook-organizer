@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer_test.go
-// version: 1.3.9
+// version: 1.3.10
 // guid: 7a1e3c95-4d28-4b6f-a0c7-93e2d5b8f146
 // last-edited: 2026-11-17
 
@@ -518,6 +518,44 @@ func TestVersionTwinFixer_PrimaryRetiredBeforeWriteIsChangedSincePlan(t *testing
 			p := l.get("p")
 			require.Nil(t, p.MetadataReviewStatus, "a retired primary must not be written")
 			require.Empty(t, dcStr(p.Narrator))
+		})
+	}
+}
+
+// A primary retired AFTER the replan and BEFORE the apply starts is refused by
+// the fixer's own pre-write check (vtStillNeeds), not only by the metafetch
+// apply behind it: that second refusal would also map to changed_since_plan, so
+// the layer is pinned by the error text. A merged-into id of only whitespace is
+// retired by the one rule, so it takes the same path.
+func TestVersionTwinFixer_PrimaryRetiredBeforeTheApplyIsRefusedByTheFixersOwnCheck(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*database.Book) error
+		want   string
+	}{
+		{"trashed", func(b *database.Book) error { b.MarkedForDeletion = new(true); return nil }, "is gone"},
+		{"merged", func(b *database.Book) error { b.MergedIntoBookID = new("someone-else"); return nil }, "was merged into"},
+		{"blank_merged_into", func(b *database.Book) error { b.MergedIntoBookID = new("   "); return nil }, "was merged into"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			l := newVTLib(t)
+			l.book("p", "g-pre-write", true, nil)
+			l.appliedTwin("t", "g-pre-write", vtSaga(), nil)
+			_, rows := l.plan()
+			fresh, err := l.fixer.Replan(context.Background(), nil, rows["g-pre-write"], &fakeReporter{})
+			require.NoError(t, err)
+			require.True(t, fresh.Applicable(), fresh.SkipReason)
+
+			_, err = l.st.ModifyBook(l.ids["p"], c.mutate)
+			require.NoError(t, err)
+			w := repairs.NewWriter(l.st, l.st, l.fixer.ID(), "bulk_update", "repairs-").WithJournal(l.st, l.st, vtTestOpID)
+			err = l.fixer.Apply(context.Background(), w, fresh)
+
+			require.Error(t, err)
+			require.True(t, errors.Is(err, repairs.ErrChangedSincePlan), "got %v", err)
+			require.Contains(t, err.Error(), c.want, "the fixer's own check, not the apply behind it")
+			require.Nil(t, l.get("p").MetadataReviewStatus, "a retired primary must not be written")
 		})
 	}
 }
