@@ -1,7 +1,7 @@
 // file: internal/transcribe/journal_identity_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5b0f3f64-3a51-4f3e-9d0e-6c1f6f2a8e17
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package transcribe
 
@@ -89,9 +89,7 @@ func identityServer(t *testing.T, health map[string]any, identityFor func(n int)
 		}
 		_ = json.NewEncoder(w).Encode(out)
 	})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return srv
+	return startWorkerServer(t, mux)
 }
 
 // clipHashOf is the sha256 the journal key is built from for a written clip.
