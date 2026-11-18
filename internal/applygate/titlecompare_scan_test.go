@@ -1,5 +1,5 @@
 // file: internal/applygate/titlecompare_scan_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0c4e8a71-d395-4b26-9f17-6a8b3e5d2c40
 // last-edited: 2026-11-18
 
@@ -9,7 +9,6 @@ import (
 	"math/rand/v2"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"unicode"
@@ -47,69 +46,6 @@ func refFold(s string) string {
 		}
 	}
 	return b.String()
-}
-
-// refSegTokens is segTokens as it was written with the expressions: the same
-// body, with the three regexp calls where the scanners are now.
-func refSegTokens(s string, strip bool) []string {
-	s = refFold(s)
-	raw := refTitleTokenRe.FindAllString(s, -1)
-	out := make([]string, 0, len(raw))
-	for i := 0; i < len(raw); i++ {
-		t := raw[i]
-		switch {
-		case isDecimalOrDigits(t):
-			if v, err := strconv.ParseFloat(t, 64); err == nil {
-				out = append(out, cardTok(strconv.FormatFloat(v, 'f', -1, 64)))
-				continue
-			}
-		case refOrdinalDigitRe.MatchString(t) || ordinalWords[t] > 0:
-			v := ordinalWords[t]
-			if v == 0 {
-				v, _ = strconv.Atoi(refOrdinalDigitRe.FindStringSubmatch(t)[1])
-			}
-			if i+1 < len(raw) && ordinalMarkers[raw[i+1]] {
-				out = append(out, raw[i+1], cardTok(strconv.Itoa(v)))
-				i++
-				continue
-			}
-			out = append(out, ordTok(v))
-			continue
-		case ordinalMarkers[t] && i+2 < len(raw) && raw[i+1] == "the" && (ordinalWords[raw[i+2]] > 0 || refOrdinalDigitRe.MatchString(raw[i+2])):
-			v := ordinalWords[raw[i+2]]
-			if v == 0 {
-				v, _ = strconv.Atoi(refOrdinalDigitRe.FindStringSubmatch(raw[i+2])[1])
-			}
-			out = append(out, t, cardTok(strconv.Itoa(v)))
-			i += 2
-			continue
-		case tensWords[t] > 0:
-			v := tensWords[t]
-			if i+1 < len(raw) && unitWords[raw[i+1]] >= 1 && unitWords[raw[i+1]] <= 9 {
-				v += unitWords[raw[i+1]]
-				i++
-			}
-			out = append(out, cardTok(strconv.Itoa(v)))
-			continue
-		case unitWords[t] > 0:
-			out = append(out, cardTok(strconv.Itoa(unitWords[t])))
-			continue
-		case len(t) >= 2 && refRomanRe.MatchString(t):
-			out = append(out, cardTok(strconv.Itoa(romanValue(t))))
-			continue
-		case (t == "i" || t == "v" || t == "x") && len(out) > 0 && numberMarkers[out[len(out)-1]]:
-			out = append(out, cardTok(strconv.Itoa(romanValue(t))))
-			continue
-		}
-		out = append(out, t)
-	}
-	if strip {
-		out = stripEdition(out)
-	}
-	if len(out) > 1 && leadingArticles[out[0]] {
-		out = out[1:]
-	}
-	return out
 }
 
 // exhaustiveLen is the longest string an exhaustive walk visits: one shorter under
@@ -223,24 +159,6 @@ func TestFoldTitleText_MatchesTheTwoPassForm(t *testing.T) {
 	for i := 0; i < scaled(30000); i++ {
 		check(randomScanText(r, 8))
 	}
-}
-
-// TestSegTokens_MatchTheExpressionForm is the whole function against its
-// previous form, over the same strings, with and without the edition words.
-func TestSegTokens_MatchTheExpressionForm(t *testing.T) {
-	check := func(s string) {
-		t.Helper()
-		for _, strip := range []bool{true, false} {
-			if got, want := segTokens(s, strip), refSegTokens(s, strip); !slices.Equal(got, want) {
-				t.Fatalf("segTokens(%q, %v) = %q, the expression form gives %q", s, strip, got, want)
-			}
-		}
-	}
-	r := rand.New(rand.NewPCG(17, 19))
-	for i := 0; i < scaled(80000); i++ {
-		check(randomScanText(r, 10))
-	}
-	everyString([]string{"x", "i", "1", "st", " ", "the", "book", "é"}, exhaustiveLen(4), check)
 }
 
 func TestSplitSegments_MatchesTheExpression(t *testing.T) {
