@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_prune_fixer_test.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 30beca88-5314-4b9d-92de-0c91dc9f4151
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -50,6 +50,9 @@ func newSPLibrary(t *testing.T) *spLibrary {
 	st, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
+	// The fixer's deletes ask the store whether it can count references
+	// (SeriesDeleteReady), which refuses while the memdb is still warming.
+	st.WaitForWarmup()
 	l := &spLibrary{st: st}
 	author := func(name string) *int {
 		a, err := st.CreateAuthor(name)
