@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.209.0
+// version: 2.210.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -123,6 +123,36 @@ const buildApiError = async (response: Response, fallbackMessage: string) => {
   const retryAfterMs =
     Number.isFinite(retryAfter) && retryAfter > 0 ? Math.round(retryAfter * 1000) : undefined;
   return new ApiError(message, response.status, data, retryAfterMs);
+};
+
+/**
+ * The `category` of the 409 an organize or its preview answers when the book's
+ * only library copy was merged away into another book (server
+ * `organizer.CollisionLibraryCopyRetired`). Organizing would otherwise write a
+ * second copy beside a row the library already treats as gone.
+ */
+export const ORGANIZE_LIBRARY_COPY_RETIRED = 'library_copy_retired';
+
+/**
+ * buildOrganizeError is buildApiError for the organize and preview-organize
+ * routes: a 409 in the library_copy_retired category gets a message that says
+ * what it means and what to do first, instead of the server's one-line error.
+ * The body stays on `data` (book_id, copy_book_id, copy_path) for callers that
+ * want the ids. Any other status or category keeps the server's message.
+ */
+const buildOrganizeError = async (response: Response, fallbackMessage: string) => {
+  const err = await buildApiError(response, fallbackMessage);
+  const data = err.data as { category?: unknown; copy_path?: unknown } | undefined;
+  if (response.status !== 409 || data?.category !== ORGANIZE_LIBRARY_COPY_RETIRED) {
+    return err;
+  }
+  const where =
+    typeof data.copy_path === 'string' && data.copy_path !== '' ? ` (${data.copy_path})` : '';
+  const message =
+    `Organize declined: this book's only library copy${where} was merged away into another book, ` +
+    'so organizing would make a second copy beside it. Revive or un-merge the copy first, ' +
+    'then organize again.';
+  return new ApiError(message, err.status, err.data, err.retryAfterMs);
 };
 
 // Response types
@@ -6301,7 +6331,7 @@ export interface OrganizeResult {
 export async function previewOrganize(bookId: string): Promise<OrganizePreviewResponse> {
   const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/preview-organize`);
   if (!response.ok) {
-    throw await buildApiError(response, 'Failed to preview organize');
+    throw await buildOrganizeError(response, 'Failed to preview organize');
   }
   const body = await response.json();
   return body.data;
@@ -6310,7 +6340,7 @@ export async function previewOrganize(bookId: string): Promise<OrganizePreviewRe
 export async function organizeBook(bookId: string): Promise<OrganizeResult> {
   const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/organize`, { method: 'POST' });
   if (!response.ok) {
-    throw await buildApiError(response, 'Failed to organize book');
+    throw await buildOrganizeError(response, 'Failed to organize book');
   }
   const body = await response.json();
   return body.data;
