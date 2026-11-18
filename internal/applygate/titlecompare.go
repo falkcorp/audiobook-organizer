@@ -1,5 +1,5 @@
 // file: internal/applygate/titlecompare.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 8e41c7a2-5d09-4b3f-a6e8-2f9c0d71b5a3
 // last-edited: 2026-11-17
 
@@ -441,7 +441,7 @@ func yearLike(t string) bool {
 // withoutOneSidedYears drops the year-like numbers of the side that has them
 // when the other side has none: a year only one title carries is a release
 // date or a tag, not a number that differs. Two titles that each carry one
-// ("Metro 2033" / "Metro 2034") are numbered by them, and the pair stays a
+// ("Gotham 2033" / "Gotham 2034") are numbered by them, and the pair stays a
 // conflict.
 func withoutOneSidedYears(na, nb []string) ([]string, []string) {
 	years := func(ns []string) bool { return slices.ContainsFunc(ns, yearLike) }
