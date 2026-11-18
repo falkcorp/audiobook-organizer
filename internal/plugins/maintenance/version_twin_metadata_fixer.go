@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: 2f6c8e14-7b3a-4d59-9e02-c4a1b7d36e85
 // last-edited: 2026-11-17
 
@@ -259,17 +259,14 @@ func (f *versionTwinFixer) readers(res *repairs.PathResolver) (vtReaders, error)
 	return f.readersVia(f.p.fixerStores(context.Background()), res)
 }
 
-// vtLive reports whether b is a live member: not trashed, not merged away.
-func vtLive(b *database.BookCore) bool {
-	return !b.IsSoftDeleted() && !vtMerged(b.MergedIntoBookID)
-}
-
-// vtMerged reports whether a merged_into_book_id names a book: nil and a
-// blank string are both "not merged", as in metafetch's ASIN backfill and the
-// book-shape report. (The store's hash lookup, GetBooksByMetadataSourceHash,
-// drops any non-nil pointer; a blank one is therefore missing from its answer
-// here and from MATCH-4's alike, so the two never disagree about a cluster.)
-func vtMerged(p *string) bool { return p != nil && strings.TrimSpace(*p) != "" }
+// vtLive reports whether b is a live member: not trashed, not merged away. It
+// is the one retired rule (BookCore.IsRetired), so the planner, the under-lock
+// check (vtStillNeeds) and every other unattended writer agree on what "merged"
+// means. (The store's hash lookup, GetBooksByMetadataSourceHash, drops any
+// non-nil merged pointer, a blank one included; a blank one is not retired
+// here, and is therefore missing from that answer and from MATCH-4's alike, so
+// the two never disagree about a cluster.)
+func vtLive(b *database.BookCore) bool { return !b.IsRetired() }
 
 func vtIsPrimary(b *database.BookCore) bool {
 	return b.IsPrimaryVersion != nil && *b.IsPrimaryVersion
@@ -1367,7 +1364,8 @@ func vtStillNeeds(b *database.Book, d *vtDetail) error {
 	switch {
 	case b == nil || b.IsSoftDeleted():
 		return errVTChanged("primary %s is gone", d.primaryID)
-	case vtMerged(b.MergedIntoBookID):
+	case b.IsRetired():
+		// Not trashed (the case above), so merged: IsRetired is trashed OR merged.
 		return errVTChanged("book %s was merged into %s", d.primaryID, dcStr(b.MergedIntoBookID))
 	case b.IsPrimaryVersion == nil || !*b.IsPrimaryVersion:
 		return errVTChanged("book %s is no longer its group's primary", d.primaryID)
