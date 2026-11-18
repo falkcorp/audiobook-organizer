@@ -1,7 +1,7 @@
 // file: internal/server/aiscan_op.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4f7a2c91-8d63-4e05-b1a7-9c3e5d80f624
-// last-edited: 2026-09-19
+// last-edited: 2026-11-18
 
 // aiscan_op registers the ai.author-scan OperationDef. Before 2026-08-22 the
 // multi-pass AI author dedup pipeline was the last subsystem with no
@@ -16,6 +16,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/falkcorp/mediacore/tasks"
 
 	"github.com/falkcorp/audiobook-organizer/internal/aiscan"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
@@ -32,10 +34,45 @@ type aiAuthorScanParams struct {
 	ScanID int `json:"scan_id"`
 }
 
-// RegisterAIAuthorScanOp registers the "ai.author-scan" v2 OperationDef.
-func (s *Server) RegisterAIAuthorScanOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "ai.author-scan",
+// aiAuthorScanOpID is HEAD's def ID for the AI author scan.
+const aiAuthorScanOpID = "ai.author-scan"
+
+// aiAuthorScanWriter is the one write the scan makes: RunScan drives the
+// multi-pass pipeline and persists its phases, chunks and proposals in the
+// ai_scans store.
+type aiAuthorScanWriter interface {
+	RunAIAuthorScan(ctx context.Context, scanID int, sink aiscan.ProgressSink) error
+}
+
+// aiAuthorScanEnv is what the shared core takes from its shell (rules R2, R10).
+type aiAuthorScanEnv struct {
+	t7Env
+	Writer aiAuthorScanWriter
+}
+
+// aiAuthorScanCore is the body of the op, shared by HEAD's shell and the native
+// kind.
+func aiAuthorScanCore(ctx context.Context, p aiAuthorScanParams, env aiAuthorScanEnv) error {
+	if p.ScanID == 0 {
+		return fmt.Errorf("ai.author-scan: scan_id is required")
+	}
+	if env.Writer == nil {
+		return fmt.Errorf("ai.author-scan: pipeline manager not initialized")
+	}
+	return env.Writer.RunAIAuthorScan(ctx, p.ScanID, env.reporter())
+}
+
+// headAIAuthorScanWriter is HEAD's write: the pipeline manager's RunScan.
+type headAIAuthorScanWriter struct{ pm *aiscan.PipelineManager }
+
+func (w headAIAuthorScanWriter) RunAIAuthorScan(ctx context.Context, scanID int, sink aiscan.ProgressSink) error {
+	return w.pm.RunScan(ctx, scanID, sink)
+}
+
+// aiAuthorScanDef is HEAD's definition. Its Run is the v2 shell.
+func (s *Server) aiAuthorScanDef() opsregistry.OperationDef {
+	return opsregistry.OperationDef{
+		ID:              aiAuthorScanOpID,
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "ai",
 		DisplayName:     "AI Author Scan",
@@ -77,7 +114,7 @@ func (s *Server) RegisterAIAuthorScanOp(reg *opsregistry.Registry) error {
 		// Serializes scans. Two could previously run at once; a second now
 		// queues. Deliberate: this is a paid whole-library LLM pass, and two
 		// concurrent ones are almost always a double-click, not an intent.
-		ConcurrencyKey: "ai.author-scan",
+		ConcurrencyKey: aiAuthorScanOpID,
 
 		Permissions:  []auth.Permission{auth.PermLibraryEditMetadata},
 		Capabilities: []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapNetworkOpenAI},
@@ -89,13 +126,40 @@ func (s *Server) RegisterAIAuthorScanOp(reg *opsregistry.Registry) error {
 					return fmt.Errorf("ai.author-scan: decode params: %w", err)
 				}
 			}
-			if p.ScanID == 0 {
-				return fmt.Errorf("ai.author-scan: scan_id is required")
+			env := aiAuthorScanEnv{t7Env: t7HeadEnv(reporter, true)}
+			if s.pipelineManager != nil {
+				env.Writer = headAIAuthorScanWriter{pm: s.pipelineManager}
 			}
-			if s.pipelineManager == nil {
-				return fmt.Errorf("ai.author-scan: pipeline manager not initialized")
+			return aiAuthorScanCore(ctx, p, env)
+		},
+	}
+}
+
+// RegisterAIAuthorScanOp registers the "ai.author-scan" v2 OperationDef.
+func (s *Server) RegisterAIAuthorScanOp(reg *opsregistry.Registry) error {
+	return reg.RegisterOp(s.aiAuthorScanDef())
+}
+
+// aiAuthorScanNative is the native books.ai.author-scan kind. Its body writes
+// only through the pipeline (the ai_scans store). HEAD's ResumeRestart keeps no
+// reporter checkpoint (the checkpoint is the persisted phase state), so the
+// native resume is ResumeFromZero, which re-enters RunScan on the same scan_id.
+func (s *Server) aiAuthorScanNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	kind := t7KindFor(aiAuthorScanOpID)
+	c := t7Common(s.aiAuthorScanDef(), sched)
+	c.Effects = t7Writes(t7ResAIScans)
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			p, err := t7DecodeNative[aiAuthorScanParams](kind, raw)
+			if err != nil {
+				return struct{}{}, err
 			}
-			return s.pipelineManager.RunScan(ctx, p.ScanID, reporter)
+			w, err := t7NewWriter(kind, deps, rc)
+			if err != nil {
+				return struct{}{}, err
+			}
+			return struct{}{}, aiAuthorScanCore(rc.Context(), p, aiAuthorScanEnv{t7Env: t7NativeEnv(rc), Writer: w})
 		},
 	})
 }

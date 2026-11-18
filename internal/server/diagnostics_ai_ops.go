@@ -17,8 +17,11 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/diagnostics"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -33,7 +36,136 @@ const (
 	diagAIMaxPolls     = 288 // 24h / 5min
 )
 
-// RegisterDiagnosticsAIOp registers the "diagnostics.ai-analyze" v2 OperationDef.
+// diagnosticsAIStore is the read the analysis makes: every book, as the
+// diagnostics export collects them.
+type diagnosticsAIStore interface {
+	CollectDiagnosticsBooks() ([]database.BookCore, error)
+}
+
+// diagnosticsAIEnv is what the shared core takes from its shell (rules R2, R10).
+// The run writes no library row: it submits to the OpenAI batch API and returns
+// the batch's results, so it has a Store and no Writer.
+type diagnosticsAIEnv struct {
+	t7Env
+	Store diagnosticsAIStore
+}
+
+// diagnosticsAICore is the body of the op, shared by HEAD's shell and the native
+// kind. It returns the result payload GetAIResults and ApplySuggestions read
+// back, and hands it to env.SetResult where the shell has one, at the point HEAD
+// stored it.
+func diagnosticsAICore(ctx context.Context, p handlers.DiagnosticsAIOpParams, env diagnosticsAIEnv) (map[string]any, error) {
+	if p.Category == "" {
+		p.Category = "general"
+	}
+
+	// Fail loudly instead of the old nil-parser branch, which marked the
+	// operation completed with a "pending-<opID>" batch id and no
+	// results — a run that reported success having submitted nothing.
+	if config.AppConfig.OpenAIAPIKey == "" || !config.AppConfig.EnableAIParsing {
+		return nil, fmt.Errorf("diagnostics.ai-analyze: OpenAI batch submission is not enabled")
+	}
+	parser := ai.NewOpenAIParser(&config.AppConfig, config.AppConfig.OpenAIAPIKey, config.AppConfig.EnableAIParsing)
+
+	env.progress(10, 100, "Generating export data")
+	allBooks, err := env.Store.CollectDiagnosticsBooks()
+	if err != nil {
+		return nil, fmt.Errorf("collect books: %w", err)
+	}
+	slimBooks := make([]diagnostics.SlimBook, len(allBooks))
+	for i, b := range allBooks {
+		slimBooks[i] = diagnostics.ToSlimBook(b)
+	}
+
+	env.progress(50, 100, "Building batch JSONL")
+	jsonlData, err := diagnostics.BuildBatchJSONL(p.Category, p.Description, slimBooks, nil, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build batch JSONL: %w", err)
+	}
+	requestCount := countJSONLRequests(jsonlData)
+
+	env.progress(70, 100, "Submitting to OpenAI batch API")
+	fileID, err := parser.UploadBatchFile(ctx, bytes.NewBuffer(jsonlData))
+	if err != nil {
+		return nil, fmt.Errorf("upload batch file: %w", err)
+	}
+	batchID, err := parser.CreateBatchWithMetadata(ctx, fileID, "diagnostics", nil)
+	if err != nil {
+		return nil, fmt.Errorf("create batch: %w", err)
+	}
+	env.Log(slog.LevelInfo, fmt.Sprintf("Batch %s submitted with %d request(s) — polling for completion", batchID, requestCount))
+	env.progress(80, 100, fmt.Sprintf("Batch %s submitted, awaiting completion", batchID))
+
+	for i := range diagAIMaxPolls {
+		if env.Canceled != nil && env.Canceled() {
+			// Best-effort: the batch keeps costing money on OpenAI's side
+			// if it is left running after the op is gone.
+			if cErr := parser.CancelBatch(ctx, batchID); cErr != nil {
+				env.Log(slog.LevelWarn, fmt.Sprintf("Could not cancel batch %s: %v", batchID, cErr))
+			}
+			return nil, fmt.Errorf("cancelled")
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(diagAIPollInterval):
+		}
+
+		status, outputFileID, sErr := parser.CheckBatchStatus(ctx, batchID)
+		if sErr != nil {
+			env.Log(slog.LevelWarn, fmt.Sprintf("Poll error: %v", sErr))
+			continue
+		}
+
+		// Creep 80 -> 99 across the poll budget so a long batch still
+		// shows movement; the watchdog needs a report each interval
+		// regardless of whether the status changed.
+		env.progress(80+(i*19/diagAIMaxPolls), 100,
+			fmt.Sprintf("Batch %s: %s (poll %d/%d)", batchID, status, i+1, diagAIMaxPolls))
+
+		switch status {
+		case "completed":
+			rawResults, dErr := parser.DownloadBatchRaw(ctx, outputFileID)
+			if dErr != nil {
+				return nil, fmt.Errorf("download diagnostics results: %w", dErr)
+			}
+			// The payload shape GetAIResults and ApplySuggestions read
+			// back. It lands on this run's own v2 row; the result route
+			// became two-keyspace aware in #2771, which is what makes it
+			// readable at all.
+			result := map[string]any{
+				"batch_id":      batchID,
+				"request_count": requestCount,
+				"raw_responses": rawResults,
+			}
+			if env.SetResult != nil {
+				if err := env.SetResult(result); err != nil {
+					return nil, fmt.Errorf("persist diagnostics results: %w", err)
+				}
+			}
+			env.progress(100, 100, fmt.Sprintf("Batch complete: %d response(s)", len(rawResults)))
+			return result, nil
+
+		case "failed", "expired", "cancelled":
+			return nil, fmt.Errorf("batch %s: %s", batchID, status)
+		}
+	}
+	return nil, fmt.Errorf("batch %s timed out after 24h", batchID)
+}
+
+// headDiagnosticsAIStore is HEAD's read: the server's diagnostics service, or one
+// built over the store when the server has none, as HEAD's body built it.
+type headDiagnosticsAIStore struct{ s *Server }
+
+func (h headDiagnosticsAIStore) CollectDiagnosticsBooks() ([]database.BookCore, error) {
+	ds := h.s.diagnosticsService
+	if ds == nil {
+		ds = diagnostics.NewService(h.s.storeForWiring(), nil, config.AppConfig.ITunes.LibraryReadPath)
+	}
+	return ds.CollectAllBooks()
+}
+
+// diagnosticsAIDef is HEAD's definition. Its Run is the v2 shell.
 //
 // The run polls its own batch to completion rather than handing that job to
 // BatchPoller. That is not a style choice: BatchPoller's completion path found
@@ -43,8 +175,8 @@ const (
 // two sibling batch producers (maintenance/dedup_ops.go and aiscan/pipeline.go)
 // already poll their own batches; this makes all three consistent and lets the
 // scan be deleted.
-func (s *Server) RegisterDiagnosticsAIOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
+func (s *Server) diagnosticsAIDef() opsregistry.OperationDef {
+	return opsregistry.OperationDef{
 		ID:              handlers.DiagnosticsAIDefID,
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "diagnostics",
@@ -71,105 +203,35 @@ func (s *Server) RegisterDiagnosticsAIOp(reg *opsregistry.Registry) error {
 					return fmt.Errorf("diagnostics.ai-analyze: decode params: %w", err)
 				}
 			}
-			if p.Category == "" {
-				p.Category = "general"
-			}
+			_, err := diagnosticsAICore(ctx, p, diagnosticsAIEnv{t7Env: t7HeadEnv(reporter, true), Store: headDiagnosticsAIStore{s: s}})
+			return err
+		},
+	}
+}
 
-			// Fail loudly instead of the old nil-parser branch, which marked the
-			// operation completed with a "pending-<opID>" batch id and no
-			// results — a run that reported success having submitted nothing.
-			if config.AppConfig.OpenAIAPIKey == "" || !config.AppConfig.EnableAIParsing {
-				return fmt.Errorf("diagnostics.ai-analyze: OpenAI batch submission is not enabled")
-			}
-			parser := ai.NewOpenAIParser(&config.AppConfig, config.AppConfig.OpenAIAPIKey, config.AppConfig.EnableAIParsing)
+// RegisterDiagnosticsAIOp registers the "diagnostics.ai-analyze" v2 OperationDef.
+func (s *Server) RegisterDiagnosticsAIOp(reg *opsregistry.Registry) error {
+	return reg.RegisterOp(s.diagnosticsAIDef())
+}
 
-			store := s.storeForWiring()
-			ds := s.diagnosticsService
-			if ds == nil {
-				ds = diagnostics.NewService(store, nil, config.AppConfig.ITunes.LibraryReadPath)
-			}
-
-			_ = reporter.UpdateProgress(10, 100, "Generating export data")
-			allBooks, err := ds.CollectAllBooks()
+// diagnosticsAINative is the native books.diagnostics.ai-analyze kind. It reads
+// the library and submits to the OpenAI batch API; it writes no store row, so it
+// is declared ReadOnly. It returns the result HEAD stored with ReporterSetResult.
+func (s *Server) diagnosticsAINative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	kind := t7KindFor(handlers.DiagnosticsAIDefID)
+	c := t7Common(s.diagnosticsAIDef(), sched)
+	c.Effects = tasks.ReadOnly()
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, map[string]any]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (map[string]any, error) {
+			p, err := t7DecodeNative[handlers.DiagnosticsAIOpParams](kind, raw)
 			if err != nil {
-				return fmt.Errorf("collect books: %w", err)
+				return nil, err
 			}
-			slimBooks := make([]diagnostics.SlimBook, len(allBooks))
-			for i, b := range allBooks {
-				slimBooks[i] = diagnostics.ToSlimBook(b)
+			if err := t7NeedStore(kind, deps); err != nil {
+				return nil, err
 			}
-
-			_ = reporter.UpdateProgress(50, 100, "Building batch JSONL")
-			jsonlData, err := diagnostics.BuildBatchJSONL(p.Category, p.Description, slimBooks, nil, nil, nil)
-			if err != nil {
-				return fmt.Errorf("build batch JSONL: %w", err)
-			}
-			requestCount := countJSONLRequests(jsonlData)
-
-			_ = reporter.UpdateProgress(70, 100, "Submitting to OpenAI batch API")
-			fileID, err := parser.UploadBatchFile(ctx, bytes.NewBuffer(jsonlData))
-			if err != nil {
-				return fmt.Errorf("upload batch file: %w", err)
-			}
-			batchID, err := parser.CreateBatchWithMetadata(ctx, fileID, "diagnostics", nil)
-			if err != nil {
-				return fmt.Errorf("create batch: %w", err)
-			}
-			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Batch %s submitted with %d request(s) — polling for completion", batchID, requestCount))
-			_ = reporter.UpdateProgress(80, 100, fmt.Sprintf("Batch %s submitted, awaiting completion", batchID))
-
-			for i := range diagAIMaxPolls {
-				if reporter.IsCanceled() {
-					// Best-effort: the batch keeps costing money on OpenAI's side
-					// if it is left running after the op is gone.
-					if cErr := parser.CancelBatch(ctx, batchID); cErr != nil {
-						_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Could not cancel batch %s: %v", batchID, cErr))
-					}
-					return fmt.Errorf("cancelled")
-				}
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(diagAIPollInterval):
-				}
-
-				status, outputFileID, sErr := parser.CheckBatchStatus(ctx, batchID)
-				if sErr != nil {
-					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Poll error: %v", sErr))
-					continue
-				}
-
-				// Creep 80 -> 99 across the poll budget so a long batch still
-				// shows movement; the watchdog needs a report each interval
-				// regardless of whether the status changed.
-				_ = reporter.UpdateProgress(80+(i*19/diagAIMaxPolls), 100,
-					fmt.Sprintf("Batch %s: %s (poll %d/%d)", batchID, status, i+1, diagAIMaxPolls))
-
-				switch status {
-				case "completed":
-					rawResults, dErr := parser.DownloadBatchRaw(ctx, outputFileID)
-					if dErr != nil {
-						return fmt.Errorf("download diagnostics results: %w", dErr)
-					}
-					// The payload shape GetAIResults and ApplySuggestions read
-					// back. It lands on this run's own v2 row; the result route
-					// became two-keyspace aware in #2771, which is what makes it
-					// readable at all.
-					if err := opsregistry.ReporterSetResult(reporter, map[string]any{
-						"batch_id":      batchID,
-						"request_count": requestCount,
-						"raw_responses": rawResults,
-					}); err != nil {
-						return fmt.Errorf("persist diagnostics results: %w", err)
-					}
-					_ = reporter.UpdateProgress(100, 100, fmt.Sprintf("Batch complete: %d response(s)", len(rawResults)))
-					return nil
-
-				case "failed", "expired", "cancelled":
-					return fmt.Errorf("batch %s: %s", batchID, status)
-				}
-			}
-			return fmt.Errorf("batch %s timed out after 24h", batchID)
+			return diagnosticsAICore(rc.Context(), p, diagnosticsAIEnv{t7Env: t7NativeEnv(rc), Store: deps.Store})
 		},
 	})
 }
