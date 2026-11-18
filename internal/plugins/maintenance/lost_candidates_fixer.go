@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/lost_candidates_fixer.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 0583655e-5bf4-4704-8046-c880bf7522b6
 // last-edited: 2026-11-17
 
@@ -320,7 +320,8 @@ func lostFingerprint(r repairs.Row, extra string) string {
 var errRefetchFoundNothing = errors.New("refetch found no candidates")
 
 // errRefetchSkipped marks a refetch the fetch declined to run at all: the book
-// was retired (trashed or merged) or marked "no match" after the re-plan.
+// was retired (trashed or merged) or marked "no match" after the re-plan. A
+// retired skip is also repairs.ErrChangedSincePlan (see Apply).
 var errRefetchSkipped = errors.New("refetch skipped")
 
 // errRefetchDeferred marks a refetch whose fallback lookup was put off to a
@@ -339,7 +340,14 @@ func (f *lostCandidatesFixer) Apply(ctx context.Context, _ *repairs.Writer, fres
 			// The fetch declined the book (retired since the re-plan, or marked
 			// "no match"), so nothing was searched: not "found nothing". The
 			// fetch's own reason is the detail.
-			return fmt.Errorf("%w: %s", errRefetchSkipped, strings.TrimPrefix(res.Detail, "skipped: "))
+			detail := strings.TrimPrefix(res.Detail, "skipped: ")
+			if res.Retired {
+				// Retired between the replan and this refetch: the same "changed
+				// since plan" the replan reports for a book retired earlier (the
+				// version-twin fixer maps the same race the same way), not a failure.
+				return fmt.Errorf("%w: %w: %s", repairs.ErrChangedSincePlan, errRefetchSkipped, detail)
+			}
+			return fmt.Errorf("%w: %s", errRefetchSkipped, detail)
 		}
 		if res.Status == "deferred" {
 			// A deferral is not "found nothing": a fallback provider was not

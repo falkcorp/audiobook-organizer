@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/asin_backfill_retired_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c41f6a82-5d93-4e07-8b1a-6f2d9e0a3b57
 // last-edited: 2026-11-17
 
@@ -166,5 +166,27 @@ func TestASINBackfill_BookRetiredDuringISBNLookupGetsNoISBN(t *testing.T) {
 				t.Fatalf("not counted as a retired skip (%s): %+v", shape.name, res)
 			}
 		})
+	}
+}
+
+// The start-of-run check is the one retired rule (database.Book.IsRetired), the
+// same one the under-lock rechecks use, so a run cannot read a book as live and
+// then find it retired by its own definition. The only input the old open-coded
+// copy answered differently was a whitespace-only merged-into id (it trimmed it
+// to "live"; IsRetired does not trim): such a row is retired here too. No writer
+// produces one, so this pins agreement rather than a case anyone depends on.
+func TestASINBackfill_StartOfRunUsesTheOneRetiredRule(t *testing.T) {
+	fa := retiredBackfillFake()
+	p, s := newASINTestPlugin(t, fa)
+	aid := mkAuthor(t, s, retiredBackfillAuthor)
+	b := mkBook(t, s, &database.Book{Title: retiredBackfillTitle, AuthorID: &aid, ISBN13: new(retiredBackfillISBN),
+		FilePath: "/x/by1.m4b", MergedIntoBookID: new("   ")})
+	if !b.IsRetired() {
+		t.Fatalf("fixture: IsRetired = false for a merged-into id of spaces; the one rule changed")
+	}
+
+	res := runASIN(t, p, `{"dry_run":false,"book_ids":["`+b.ID+`"]}`).res(t)
+	if res.SkippedMerged != 1 || fa.calls.Load() != 0 || asinOf(t, s, b.ID) != "" {
+		t.Fatalf("result = %+v calls = %d", res, fa.calls.Load())
 	}
 }

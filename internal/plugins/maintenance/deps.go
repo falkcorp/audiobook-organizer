@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.104.0
+// version: 1.104.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-11-17
 
@@ -1022,6 +1022,11 @@ type CandidateRefetchResult struct {
 	Status     string
 	Candidates int
 	Detail     string
+	// Retired is set with Status "skipped" when the fetch declined the book
+	// because it is retired (trashed or merged away), as opposed to any other
+	// skip (marked "no match", no usable title). A typed flag, so the caller
+	// need not match the fetch's message text.
+	Retired bool
 }
 
 // ReconcileScan is the latest saved reconcile scan, chosen by the rule GET

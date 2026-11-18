@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/lost_candidates_fixer_test.go
-// version: 1.1.8
+// version: 1.1.9
 // guid: cde35f5b-18f6-420d-bbdf-ba221050c4b8
 // last-edited: 2026-11-17
 
@@ -33,6 +33,9 @@ type lcDeps struct {
 	// skipped maps a book id to the detail the fetch declined it with (the
 	// real fetch returns Status "skipped" for a retired or no-match book).
 	skipped map[string]string
+	// retiredSkip marks the skipped books the fetch declined because they are
+	// retired (CandidateRefetchResult.Retired).
+	retiredSkip map[string]bool
 
 	mu        sync.Mutex
 	refetched []string
@@ -52,7 +55,7 @@ func (d *lcDeps) RefetchMetadataCandidates(_ context.Context, id string) (Candid
 	d.refetched = append(d.refetched, id)
 	d.mu.Unlock()
 	if detail, ok := d.skipped[id]; ok {
-		return CandidateRefetchResult{Status: "skipped", Detail: "skipped: " + detail}, nil
+		return CandidateRefetchResult{Status: "skipped", Detail: "skipped: " + detail, Retired: d.retiredSkip[id]}, nil
 	}
 	n := d.found[id]
 	cands := make([]json.RawMessage, 0, n)
@@ -320,20 +323,41 @@ func TestLostCandidatesFixer_RetiredBooksAreNotPlannedAndReplanNamesWhy(t *testi
 	require.Equal(t, []string{l.ids["live"]}, l.deps.refetched, "a retired book is never refetched")
 }
 
-// A refetch the fetch declines to run at all (the book was retired between the
-// re-plan and the fetch, or marked "no match") searched nothing, so the row is
-// a failure that says so: not a success, and not "found no candidates".
+// A refetch the fetch declines to run at all for a reason other than
+// retirement (the book was marked "no match" after the re-plan) searched
+// nothing, so the row is a failure that says so: not a success, and not "found
+// no candidates". (A retired skip is changed-since-plan: see
+// TestLostCandidatesFixer_RefetchOfABookRetiredAfterTheReplanIsChangedSincePlan.)
 func TestLostCandidatesFixer_RefetchTheFetchSkippedIsNotFoundNothing(t *testing.T) {
 	l := newLCLib(t)
 	l.book("declined", "/lib/R/Declined", "matched", nil)
 	plan, rows := l.plan()
 	require.True(t, rows["declined"].Applicable())
 
-	l.deps.skipped = map[string]string{l.ids["declined"]: "book is retired"}
+	l.deps.skipped = map[string]string{l.ids["declined"]: "marked no match"}
 	res := l.apply(plan, false, "declined")
 	got := lcRowResult(res, l.ids["declined"])
 	require.Equal(t, repairs.OutcomeFailed, got.Outcome)
 	require.Contains(t, got.Error, errRefetchSkipped.Error(), got.Error)
-	require.Contains(t, got.Error, "book is retired", "the fetch's own reason is the detail")
+	require.Contains(t, got.Error, "marked no match", "the fetch's own reason is the detail")
 	require.NotContains(t, got.Error, errRefetchFoundNothing.Error(), "nothing was searched, so nothing was found or not found")
+}
+
+// The race the engine's replan cannot close: the book is retired AFTER the
+// replan and BEFORE the refetch, so the fetch declines it as retired. That is
+// the same "changed since plan" the replan reports for a book retired earlier,
+// not a failure; it matches the version-twin fixer's mapping of the same race.
+func TestLostCandidatesFixer_RefetchOfABookRetiredAfterTheReplanIsChangedSincePlan(t *testing.T) {
+	l := newLCLib(t)
+	l.book("retired-late", "/lib/R/Retired Late", "matched", nil)
+	plan, rows := l.plan()
+	require.True(t, rows["retired-late"].Applicable())
+
+	l.deps.skipped = map[string]string{l.ids["retired-late"]: "retired book"}
+	l.deps.retiredSkip = map[string]bool{l.ids["retired-late"]: true}
+	res := l.apply(plan, false, "retired-late")
+	got := lcRowResult(res, l.ids["retired-late"])
+	require.Equal(t, repairs.OutcomeChangedSincePlan, got.Outcome, got.Error)
+	require.Contains(t, got.Error, "retired book", "the fetch's own reason is the detail")
+	require.NotContains(t, got.Error, errRefetchFoundNothing.Error())
 }
