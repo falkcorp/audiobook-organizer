@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_signals.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 67839bc7-cc2f-4877-afbc-e2646b549e49
 // last-edited: 2026-11-18
 
@@ -386,7 +386,7 @@ func mcComputeSignals(l, t mcSide) mcSignals {
 	s.TitleMatch = primarySim >= mcTitleMatchMin
 	s.TitleAltMatch = !s.TitleMatch && s.TitleSim >= mcTitleMatchMin
 	s.TitleDiff = lp != "" && tp != "" && s.TitleSim < mcTitleDiffMax && s.TitleOverlap < mcTitleOverlapMax
-	s.Transposed = mcTransposed(l, t) || mcTransposed(t, l)
+	s.Transposed = mcTransposed(l, t) // symmetric: swapping the arguments asks the same question
 	s.AuthDiff = mcAuthorsDiffer(l.Authors, t.Authors)
 	// A position differs only inside one series: two series say nothing about
 	// which volume a book is.
