@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_prune_fixer.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3aa1a5a7-404c-42f9-9a8d-b6213e7b09f2
-// last-edited: 2026-11-12
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -76,13 +76,22 @@ const (
 // CONCURRENCY. Every series write the fixer makes runs under repairs.apply,
 // which declares the series write-set, so the dispatcher never runs it beside
 // dedup.series-prune, -normalize, -merge or entities.series-rename. A book
-// write from any other op can still land between the re-plan and a delete;
-// each delete therefore re-counts the references to its one series
-// immediately before the write (spWriteStore.DeleteSeries) and refuses on
-// any. What is left is the moment between that count and the delete itself:
-// book writes take a per-book lock, not the series lock DeleteSeries takes,
-// so no store-level guarded delete could close it without making every book
-// write contend on the series lock.
+// write from any other op can still land between the re-plan and a delete, so
+// each delete is the store's check-and-delete, DeleteSeriesIfUnreferenced
+// (spWriteStore.DeleteSeries): it counts the rows that name the series, in any
+// state, and deletes under every book write lock, so a book another writer
+// linked into the series since the re-plan makes the delete refuse
+// (repairs.ErrChangedSincePlan) instead of leaving that book naming a row that
+// no longer exists. There is no count-to-delete window left. The store's check
+// also compares the row's name and author with the ones the plan read, so a
+// series renamed or re-authored since is somebody's edit this fixer does not
+// delete over.
+//
+// A store that cannot do that delete (it lacks the capability, or its memdb is
+// not serving or is missing rows) refuses the row BEFORE the first book is
+// moved (spDeleteReady), never falling back to the plain DeleteSeries: a merge
+// that moved its books and then could not delete would be half applied for no
+// reason.
 //
 // JOURNAL FIRST. Each series_merge and series_delete row is journaled before
 // the write it describes (Writer.JournalStep), and voided when the write is
@@ -631,15 +640,53 @@ func spResolvedRow(planned repairs.Row) repairs.Row {
 
 // spWriteStore routes the cores' writes through the Repairs Writer: each
 // repoint through Writer.Modify (fenced, lease-renewing, metadata history
-// recorded), and each series delete behind a fresh reference count. Both run
-// inside the ledger's Writer.JournalStep, which renews the lease (and checks
-// the run's fence) before journaling, so a stopped or lease-lost run neither
-// journals nor writes anything more.
+// recorded), and each series delete through the store's check-and-delete
+// (DeleteSeriesIfUnreferenced). Both run inside the ledger's
+// Writer.JournalStep, which renews the lease (and checks the run's fence)
+// before journaling, so a stopped or lease-lost run neither journals nor
+// writes anything more.
 type spWriteStore struct {
 	store OpsStore
 	w     *repairs.Writer
 	// from is the series each book must still hold when it is repointed.
 	from map[string]int
+	// rows are the series rows this apply may delete, by id, as the plan read
+	// them: the delete compares each one's name and author with the live row.
+	rows map[int]database.Series
+}
+
+// spRows indexes series by id for spWriteStore.rows.
+func spRows(series ...database.Series) map[int]database.Series {
+	m := make(map[int]database.Series, len(series))
+	for _, s := range series {
+		m[s.ID] = s
+	}
+	return m
+}
+
+// spDeleteReady refuses, before anything is written, when the store cannot run
+// the check-and-delete the fixer's deletes need right now: it has no such
+// delete or no readiness probe, or its memdb is not serving or is known to be
+// missing rows. A merge moves books first and deletes after, so asking up front
+// keeps a store that cannot delete from moving anything. A snapshot, not a
+// promise: spWriteStore.DeleteSeries still handles a refusal from the delete
+// itself. The error is about the whole store, so it is not a change since the
+// plan.
+func spDeleteReady(store OpsStore) error {
+	if _, ok := database.AsCapability[database.SeriesUnreferencedDeleter](store); !ok {
+		return fmt.Errorf("%s: refusing to apply: store %T cannot delete a series only if nothing references it "+
+			"(database.SeriesUnreferencedDeleter), so a series could not be removed safely", seriesPruneFixerID, store)
+	}
+	ready, ok := database.AsCapability[database.SeriesDeleteReadiness](store)
+	if !ok {
+		return fmt.Errorf("%s: refusing to apply: store %T cannot say whether it can count references to a series "+
+			"(database.SeriesDeleteReadiness)", seriesPruneFixerID, store)
+	}
+	if err := ready.SeriesDeleteReady(); err != nil {
+		return fmt.Errorf("%s: refusing to apply: the store cannot count references to a series right now, "+
+			"so no delete could be verified; nothing was written: %w", seriesPruneFixerID, err)
+	}
+	return nil
 }
 
 func (s spWriteStore) GetBookByID(id string) (*database.Book, error) { return s.store.GetBookByID(id) }
@@ -668,23 +715,48 @@ func (s spWriteStore) ModifyBook(id string, fn func(*database.Book) error) (*dat
 	return &database.Book{ID: id, SeriesID: now}, nil
 }
 
-// DeleteSeries deletes series id only when NOTHING references it right now.
-// The row was decided on reference counts read at the re-plan (the run's
-// snapshot); a book another op pointed at the series since then would be
-// stranded by the delete. So the one series is re-counted, unfiltered
-// (trashed and non-primary rows included), immediately before the write: one
-// index read, not a library scan (database.SeriesRefCount). A count that
-// cannot be read refuses (fail closed). The window left is the count-to-delete
-// moment; see the type comment for why no lock closes it.
+// DeleteSeries deletes series id only when NOTHING references it right now, and
+// only while the row is still the one the plan read. The row was decided on
+// reference counts read at the re-plan (the run's snapshot); a book another op
+// pointed at the series since then would be stranded by a plain delete. So the
+// delete is DeleteSeriesIfUnreferenced, which counts and deletes under every
+// book write lock: the count and the delete are one step.
+//
+//   - deleted: nil.
+//   - a book names it now (false, nil): ErrChangedSincePlan, nothing written.
+//   - ErrSeriesNotFound or ErrSeriesChanged (gone, renamed or re-authored since
+//     the plan): ErrChangedSincePlan, nothing written.
+//   - ErrSeriesHeld: returned as is; applyOrphan settles it as a change since
+//     the plan, and a merge reports it in its errors.
+//   - any other error (a memdb that is not serving or is missing rows refuses
+//     rather than guess, or the write failed): returned, so the row fails CLOSED
+//     with the series in place. There is no fallback to the plain DeleteSeries.
+//
+// A store without the capability refuses too (spDeleteReady asks first, so a
+// merge never gets here without it).
 func (s spWriteStore) DeleteSeries(id int) error {
-	n, err := database.SeriesRefCount(s.store, id)
-	if err != nil {
-		return fmt.Errorf("re-count references to series %d before deleting it: %w", id, err)
+	row, ok := s.rows[id]
+	if !ok {
+		return fmt.Errorf("%w: series %d is not one of the series this row deletes", repairs.ErrChangedSincePlan, id)
 	}
-	if n != 0 {
-		return fmt.Errorf("%w: %d book row(s) now name series %d", repairs.ErrChangedSincePlan, n, id)
+	del, ok := database.AsCapability[database.SeriesUnreferencedDeleter](s.store)
+	if !ok {
+		return fmt.Errorf("store %T cannot delete series %d only if nothing references it; not deleting it", s.store, id)
 	}
-	return s.store.DeleteSeries(id)
+	gone, err := del.DeleteSeriesIfUnreferenced(id, row.Name, row.AuthorID)
+	switch {
+	case errors.Is(err, database.ErrSeriesNotFound):
+		return fmt.Errorf("%w: series %d is gone: %w", repairs.ErrChangedSincePlan, id, err)
+	case errors.Is(err, database.ErrSeriesChanged):
+		return fmt.Errorf("%w: series %d was renamed or re-authored since the plan: %w", repairs.ErrChangedSincePlan, id, err)
+	case errors.Is(err, database.ErrSeriesHeld):
+		return fmt.Errorf("delete series %d: %w", id, err)
+	case err != nil:
+		return fmt.Errorf("delete series %d, which could not be verified unreferenced: %w", id, err)
+	case !gone:
+		return fmt.Errorf("%w: book rows now name series %d", repairs.ErrChangedSincePlan, id)
+	}
+	return nil
 }
 
 // spJournalFirst is the fixer's ledger: every row is journaled under the
@@ -715,6 +787,11 @@ func (f *seriesPruneFixer) Apply(ctx context.Context, w *repairs.Writer, fresh r
 			return
 		}
 		f.invalidateCaches()
+	}
+	// Before the first write: a store that cannot run the check-and-delete
+	// moves no book and journals nothing.
+	if err := spDeleteReady(store); err != nil {
+		return err
 	}
 	if d.kind == dedup.SeriesPruneOrphan {
 		return f.applyOrphan(w, store, d, wrote)
@@ -749,7 +826,7 @@ func (f *seriesPruneFixer) applyOrphan(w *repairs.Writer, store OpsStore, d *spD
 	if err := spSeriesExist(store, nil, d.orphan); err != nil {
 		return err
 	}
-	res := dedup.DeleteOrphanSeries(spWriteStore{store: store, w: w}, d.orphan, d.orphanRf, spJournalFirst(w))
+	res := dedup.DeleteOrphanSeries(spWriteStore{store: store, w: w, rows: spRows(d.orphan)}, d.orphan, d.orphanRf, spJournalFirst(w))
 	switch {
 	case res.Referenced, res.Held:
 		// evaluate never hands Apply such a row; the core's guard stands
@@ -795,7 +872,7 @@ func (f *seriesPruneFixer) applyMerge(w *repairs.Writer, store OpsStore, d *spDe
 			return fmt.Errorf("%w: book %s is no longer in series %d", repairs.ErrChangedSincePlan, id, sid)
 		}
 	}
-	res := dedup.MergeSeriesGroup(spWriteStore{store: store, w: w, from: from}, d.keep, d.away, d.refs, d.members, spJournalFirst(w))
+	res := dedup.MergeSeriesGroup(spWriteStore{store: store, w: w, from: from, rows: spRows(d.away...)}, d.keep, d.away, d.refs, d.members, spJournalFirst(w))
 	moved := res.Repointed > 0 || res.Merged > 0
 	if moved {
 		wrote()
