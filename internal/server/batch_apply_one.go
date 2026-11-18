@@ -25,6 +25,23 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
+// cachedApplyReader is the read side of cachedApplyService: what PLANNING a cached
+// apply (planCachedApply and the transcription proofs it asks) reads from the
+// metadata service. It writes nothing, so the dry run (previewService) and a native
+// store can carry it without carrying an apply.
+type cachedApplyReader interface {
+	GetCachedCandidates(bookID string) (*metafetch.MetadataCandidateCache, bool, error)
+	// ValidateCachedIdentityForBook is the identity leg of the bulk-apply gate:
+	// the cache row must have been fetched for the book's current title/author.
+	// liveAuthors is database.LiveBookAuthorNames for the book.
+	ValidateCachedIdentityForBook(entry *metafetch.MetadataCandidateCache, book *database.Book, liveAuthors []string) error
+	// CachedQueryMatchesIdentity reports whether the row was fetched for
+	// query (a transcribed stand-in title) and the book's current author:
+	// the proof that lets the gate accept a transcription-found candidate
+	// (cachedTranscribedSearch).
+	CachedQueryMatchesIdentity(entry *metafetch.MetadataCandidateCache, book *database.Book, liveAuthors []string, query string) bool
+}
+
 // cachedApplyService is the narrow slice of *metafetch.Service that applying one
 // cached candidate needs. It exists so the per-book logic can be tested against
 // fakes without standing up a Server — the four regression tests that used to
@@ -36,16 +53,7 @@ import (
 // without extracting it would have left the tests exercising a code path
 // production no longer used.
 type cachedApplyService interface {
-	GetCachedCandidates(bookID string) (*metafetch.MetadataCandidateCache, bool, error)
-	// ValidateCachedIdentityForBook is the identity leg of the bulk-apply gate:
-	// the cache row must have been fetched for the book's current title/author.
-	// liveAuthors is database.LiveBookAuthorNames for the book.
-	ValidateCachedIdentityForBook(entry *metafetch.MetadataCandidateCache, book *database.Book, liveAuthors []string) error
-	// CachedQueryMatchesIdentity reports whether the row was fetched for
-	// query (a transcribed stand-in title) and the book's current author:
-	// the proof that lets the gate accept a transcription-found candidate
-	// (cachedTranscribedSearch).
-	CachedQueryMatchesIdentity(entry *metafetch.MetadataCandidateCache, book *database.Book, liveAuthors []string, query string) bool
+	cachedApplyReader
 	// ApplyMetadataCandidateWithOptions is ApplyMetadataCandidate; opts records
 	// an owner-reviewed override of the certainty gate in the change history.
 	ApplyMetadataCandidateWithOptions(id string, candidate metafetch.MetadataCandidate, fields []string, opts metafetch.ApplyOptions) (*metafetch.FetchMetadataResponse, error)
@@ -446,7 +454,7 @@ func (p cachedApplyPlan) applyOptions() metafetch.ApplyOptions {
 // is owner-reviewed on the top cached candidate as it stands, and it does not
 // lift a "no match" mark. No pin, or a pin of any other origin, means the
 // ordinary hard gate.
-func planCachedApply(svc cachedApplyService, books bookReader, id string, claims *applygate.ClaimIndex, pin *metafetch.CandidatePin) cachedApplyPlan {
+func planCachedApply(svc cachedApplyReader, books bookReader, id string, claims *applygate.ClaimIndex, pin *metafetch.CandidatePin) cachedApplyPlan {
 	entry, _, err := svc.GetCachedCandidates(id)
 	if err != nil || entry == nil || len(entry.Candidates) == 0 {
 		return cachedApplyPlan{Reason: applySkipNoCachedCandidates, Err: err}
@@ -684,7 +692,7 @@ func planOpResultApply(books bookReader, id string, cr CandidateResult, claims *
 // The search also carries the book's first present file path
 // (transcribedFirstFile), from which the gate reads the work folder that can
 // contradict the transcription.
-func cachedTranscribedSearch(svc cachedApplyService, books bookReader, entry *metafetch.MetadataCandidateCache, book *database.Book, authors []string, idErr error) applygate.TranscribedSearch {
+func cachedTranscribedSearch(svc cachedApplyReader, books bookReader, entry *metafetch.MetadataCandidateCache, book *database.Book, authors []string, idErr error) applygate.TranscribedSearch {
 	if idErr == nil || !errors.Is(idErr, metafetch.ErrStaleMetadataCache) {
 		return applygate.TranscribedSearch{}
 	}
@@ -710,7 +718,7 @@ func cachedTranscribedSearch(svc cachedApplyService, books bookReader, entry *me
 // lets only an owner's single review row past identity_stale on it. The stand-in
 // for a title with nothing to search by (folder_title) is NOT explained: it was
 // identity_stale on every path before the variant and stays so.
-func cachedFolderSearchExplains(svc cachedApplyService, books bookReader, entry *metafetch.MetadataCandidateCache, book *database.Book, authors []string, idErr error) bool {
+func cachedFolderSearchExplains(svc cachedApplyReader, books bookReader, entry *metafetch.MetadataCandidateCache, book *database.Book, authors []string, idErr error) bool {
 	if idErr == nil || !errors.Is(idErr, metafetch.ErrStaleMetadataCache) || !config.Snapshot().MetadataFetch.FolderParsePersonTitle {
 		return false
 	}
