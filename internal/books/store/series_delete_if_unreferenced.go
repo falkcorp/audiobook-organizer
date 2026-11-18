@@ -1,5 +1,5 @@
 // file: internal/books/store/series_delete_if_unreferenced.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 70d67056-7e94-4c44-b37f-39897839efed
 // last-edited: 2026-11-18
 
@@ -107,8 +107,9 @@ var (
 // passes are compared with the row under that lock, and the delete follows under
 // the same hold, so a snapshot the caller built from them (an undo row) is
 // exactly the row that is deleted. The compare is a defensive check, not a
-// second kind of writer: nothing writes a series row's author without going
-// through a rename, so in practice a mismatch means a rename. A mismatch is
+// second kind of writer: the only non-test writers of a series row's author are
+// CreateSeries and RestoreSeries (they set it when the row is made), and no store
+// method changes it afterwards, so in practice a mismatch means a rename. A mismatch is
 // ErrSeriesChanged and writes nothing; a held row is refused with ErrSeriesHeld
 // by the delete.
 //
