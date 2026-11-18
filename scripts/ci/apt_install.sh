@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # file: scripts/ci/apt_install.sh
-# version: 1.1.0
+# version: 1.2.0
 # guid: 3b7e9d52-6a14-4c8f-b0e1-5d2a7f9c4e68
 # last-edited: 2026-11-18
 #
@@ -16,6 +16,10 @@ set -uo pipefail
 export DEBIAN_FRONTEND=noninteractive
 call_timeout="${APT_INSTALL_CALL_TIMEOUT:-600}"
 opts=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+# APT_INSTALL_EXTRA_OPTS: extra apt-get -o options, space separated (used by
+# apt_cached_install.sh to keep the downloaded .deb files in a cacheable directory).
+# shellcheck disable=SC2206
+[ -n "${APT_INSTALL_EXTRA_OPTS:-}" ] && opts+=(${APT_INSTALL_EXTRA_OPTS})
 for attempt in 1 2 3; do
   if timeout -k 10 "$call_timeout" sudo apt-get "${opts[@]}" update &&
     timeout -k 10 "$call_timeout" sudo apt-get "${opts[@]}" install -y --no-install-recommends "$@"; then

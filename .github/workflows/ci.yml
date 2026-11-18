@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.44.3
+# version: 3.45.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-11-18
 
@@ -662,15 +662,29 @@ jobs:
       # fails when ffmpeg is missing under it) and passes -rs so any remaining
       # skip is listed in the log. Green with the ffmpeg tests skipped proves
       # nothing about the clip cutter.
+      # No live mirror on a warm cache: the .deb files (ffmpeg and the libraries the
+      # image lacks) are cached, keyed on the runner image version plus the package
+      # list, verified against a sha256 manifest and installed with dpkg. Only a
+      # miss (new image, new package list) goes to the mirror, through the same
+      # retrying apt_install.sh as before. Tuning that script's timeouts alone did
+      # not stop the flake: PRs 4708, 4709 and 4711 each lost this step to a slow
+      # mirror. The tests need only the ffmpeg binary (shutil.which("ffmpeg")).
+      - name: Compute apt cache key (whisper-ffmpeg)
+        id: aptkey
+        run: echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore apt packages cache (whisper-ffmpeg)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/apt-debs-whisper-ffmpeg
+          key: apt-debs-whisper-ffmpeg-${{ steps.aptkey.outputs.image }}-${{ hashFiles('scripts/ci/apt_cached_install.sh', 'scripts/ci/apt_install.sh') }}-ffmpeg
+
       - name: Install ffmpeg for the Whisper worker tests
-        # Hard cap on the step: a mirror hang held this job ~15 minutes until it was
-        # cancelled. 3 attempts x 2 calls x (120 s + 10 s kill grace) + backoff = 13.5
-        # minutes worst case, under the cap. (60 s per call was tried and is too tight:
-        # a slow-but-working mirror hit it on all 3 attempts in PR 4706's CI.)
+        # Miss path worst case: 3 attempts x 2 calls x (120 s + 10 s) + backoff = 13.5 min.
         timeout-minutes: 15
         env:
           APT_INSTALL_CALL_TIMEOUT: "120"
-        run: scripts/ci/apt_install.sh ffmpeg
+        run: scripts/ci/apt_cached_install.sh "$HOME/apt-debs-whisper-ffmpeg" ffmpeg
 
       - name: Whisper worker contract tests
         env:
@@ -1213,12 +1227,24 @@ jobs:
       # internal/scanner and internal/server, whose real-audio-file tests
       # skip when exec.LookPath cannot find these tools. Without them this job
       # would report those tests as passing while running none of them.
+      # Cached .deb install, see the Repo Guards ffmpeg step: a warm cache needs no
+      # apt mirror, and the script finishes an interrupted dpkg first.
+      - name: Compute apt cache key (fixture-system-deps)
+        id: aptkey
+        run: echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore apt packages cache (fixture-system-deps)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/apt-debs-fixture-system-deps
+          key: apt-debs-fixture-system-deps-${{ steps.aptkey.outputs.image }}-${{ hashFiles('scripts/ci/apt_cached_install.sh', 'scripts/ci/apt_install.sh') }}-libtag1-dev_ffmpeg_libchromaprint-tools
+
       - name: Install system dependencies
-        # 3 x 2 x (180 s + 10 s) + backoff = 19.5 minutes worst case.
+        # Miss path worst case: 3 x 2 x (180 s + 10 s) + backoff = 19.5 minutes.
         timeout-minutes: 20
         env:
           APT_INSTALL_CALL_TIMEOUT: "180"
-        run: scripts/ci/apt_install.sh libtag1-dev ffmpeg libchromaprint-tools
+        run: scripts/ci/apt_cached_install.sh "$HOME/apt-debs-fixture-system-deps" libtag1-dev ffmpeg libchromaprint-tools
 
       # internal/books' TestR0OpensR1Store runs the R0 release binary. Restore
       # its archive from cache and fetch it here (gh, retrying, checksum
