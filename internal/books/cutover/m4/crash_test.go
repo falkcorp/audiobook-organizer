@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/crash_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9a3d6e18-f2b4-4c07-85d1-6e0a7b49c2f3
 // last-edited: 2026-11-18
 
@@ -46,6 +46,16 @@ func TestCutover_ResumableCrashMatrix(t *testing.T) {
 	}
 	specs = append(specs, runSpec{id: runID(5), def: "library.scan", st: "succeeded", completed: tptr(done), evts: 1, corruptRun: true})
 	raw := map[string]string{"opv3:item:" + runID(90) + ":failed:k": `{"key":"k"}`} // an orphan
+	// The rows no run owns: a clock group of two rows (one imports, one defers),
+	// both markers and a bucket of two subjects, each importing in one batch.
+	fire := epoch.Add(2 * time.Hour)
+	raw["opv3:sched:library.scan"] = schedRowJSON("library.scan", &fire, nil, 1)
+	setting(raw, "scheduled_task_last_tick.library_scan", fire.Add(time.Hour).Format(time.RFC3339))
+	setting(raw, "maintenance_window_last_run", "2026-11-04")
+	setting(raw, "registry.operations_paused", `{"paused":true,"reason":"Arkham","by":"bruce.wayne","since_unix_nano":1}`)
+	setting(raw, "registry.scan_standdown", `{"holder_op_id":"`+runID(1)+`","scan_op_id":"`+runID(2)+`","lease_expiry_unix_nano":2}`)
+	raw["op:batch:dedup.book-scan:book:year-one"] = batchRowJSON("book", "year-one", fire)
+	raw["op:batch:dedup.book-scan:book:killing-joke"] = batchRowJSON("book", "killing-joke", fire.Add(time.Minute))
 
 	type mode struct {
 		name          string
