@@ -1,5 +1,5 @@
 // file: internal/applygate/titlecompare_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 0b5a7e12-93c4-4d68-a1f7-6e2d9c40b835
 // last-edited: 2026-11-17
 
@@ -454,7 +454,10 @@ func oUnrelated(bs, cs [][]string) bool {
 			}
 		}
 	}
-	if len(bw) > 0 && len(cw) > 0 && (oSubset(bw, cw) || oSubset(cw, bw)) {
+	// bs is the stored title: a candidate that adds words to it is related at
+	// any size; one that is a few words OF a longer stored title must share
+	// half the words (oOverlap), as the rule's "bound" says.
+	if len(bw) > 0 && len(cw) > 0 && oSubset(bw, cw) {
 		return false
 	}
 	return oOverlap(flat(cs), flat(bs)) < 0.5
@@ -466,10 +469,28 @@ func oClass(book, cand atitle) string {
 	book, cand = oCanon(book), oCanon(cand)
 	// 1. a whole declared form is equal, or the two title fields say the same
 	//    segments in another order
-	if oAnyMatch(oCandForms(cand), oBookForms(book)) {
+	//    One exception: a candidate that is its own series name with no real
+	//    subtitle says no volume by its bare title, or by the series name in
+	//    front of it, so those two forms and the segment key are NEUTRAL, not
+	//    agree. A form that states the position agrees as ever.
+	selfBare := oSelfTitled(cand) && len(oEffectiveSub(cand)) == 0
+	forms := oCandForms(cand)
+	var bare []oForm
+	if selfBare {
+		t := join(flat(cand.segs))
+		bare = []oForm{{text: t}, {text: t + " " + t, series: true}}
+		forms = slices.DeleteFunc(slices.Clone(forms), func(f oForm) bool { return slices.Contains(bare, f) })
+	}
+	if oAnyMatch(forms, oBookForms(book)) {
 		return "agree"
 	}
-	if k := oSegKey(book.segs, book.sub); k != "" && k == oSegKey(cand.segs, oEffectiveSub(cand)) {
+	k := oSegKey(book.segs, book.sub)
+	sameSegs := k != "" && (k == oSegKey(cand.segs, oEffectiveSub(cand)) || k == oSegKey(cand.segs, cand.sub))
+	if selfBare {
+		if oAnyMatch(bare, oBookForms(book)) || sameSegs {
+			return "neutral"
+		}
+	} else if sameSegs {
 		return "agree"
 	}
 	// 2. the two title fields conflict (a blank stored title has none)
@@ -661,6 +682,34 @@ func genMutate(r *rand.Rand, a atitle) atitle {
 		b.series = nil
 	}
 	return b
+}
+
+// genStatementPair draws a book whose title states the candidate's series and
+// position ("Book 2 of Batman: Hush", "Batman, Book 2: Hush") and a candidate
+// with the same title and series whose subtitle is that statement.
+func genStatementPair(r *rand.Rand) (book, cand atitle) {
+	T := genSeg(r)
+	S := genSeg(r)
+	for len(S) > 0 && S[0] == "the" {
+		S = S[1:]
+	}
+	if len(S) == 0 || join(S) == join(T) {
+		S = []string{"mask", "penguin"}
+		if join(T) == join(S) {
+			T = []string{"robin"}
+		}
+	}
+	n := oracleNums[r.IntN(3)]
+	stmt := 1 + r.IntN(2)
+	var words []string
+	if stmt == 1 {
+		words = append(slices.Clone(S), "book", n)
+	} else {
+		words = append([]string{"book", n, "of"}, S...)
+	}
+	book = atitle{segs: [][]string{slices.Clone(words), slices.Clone(T)}}
+	cand = atitle{segs: [][]string{slices.Clone(T)}, series: slices.Clone(S), pos: n, stmt: stmt, sub: slices.Clone(words)}
+	return book, cand
 }
 
 func genPath(r *rand.Rand, a atitle, other atitle) []string {
@@ -894,7 +943,12 @@ func TestCheckTitle_MatchesTheOracle(t *testing.T) {
 // ---- properties -------------------------------------------------------------
 
 // TestCheckTitle_IsSymmetric: swapping which side is the book and which the
-// candidate never changes the answer, series and subtitles included. The first
+// candidate never changes the answer, series and subtitles included, EXCEPT for
+// a pair whose words are a proper subset one way round (the subset bound
+// compareTitleFields applies in one direction only; see the rule examples
+// "a few words of a longer stored title" and its mirror) and for a pair with a
+// side whose title is its own series name (checkTitle's self-titled exception,
+// the candidate's side only). The first
 // version decided "identity" from its first argument only (MINOR-4 of the
 // review: the class changed with which side carried the series spelling).
 //
@@ -910,6 +964,7 @@ func TestCheckTitle_MatchesTheOracle(t *testing.T) {
 // on the book change nothing.
 func TestCheckTitle_IsSymmetric(t *testing.T) {
 	r := rand.New(rand.NewPCG(7, 4688))
+	asymmetric, selfTitled := 0, 0
 	for i := 0; i < scaled(15000); i++ {
 		a := genSide(r)
 		b := genSide(r)
@@ -928,11 +983,40 @@ func TestCheckTitle_IsSymmetric(t *testing.T) {
 		x := runTitleCheck(bookOf(a, 1), candOf(b, 2))
 		y := runTitleCheck(bookOf(b, 2), candOf(a, 1))
 		if outcomeClass(x) != outcomeClass(y) {
+			// The one asymmetry: the pair's words are a proper subset one way
+			// round. A candidate that ADDS words to the stored title is neutral;
+			// one that is a few words OF a longer stored title must share half
+			// of them (compareTitleFields). Pinned by example, and required to
+			// be the only asymmetry: both orders are then a word subset.
+			aw, _ := oWordsNums(flat(oSegs(oCanon(a))))
+			bw, _ := oWordsNums(flat(oSegs(oCanon(b))))
+			if len(aw) > 0 && len(bw) > 0 && (oSubset(aw, bw) != oSubset(bw, aw)) {
+				asymmetric++
+				continue
+			}
+			// The other: a candidate whose title is its own series name says no
+			// volume by it (neutral), a stored title that is its series name is
+			// an ordinary stored title. The rule is about the candidate's side
+			// only (pinned by the rule examples).
+			if oSelfTitled(oCanon(a)) || oSelfTitled(oCanon(b)) {
+				selfTitled++
+				continue
+			}
 			t.Fatalf("book A cand B = %s (%s), book B cand A = %s (%s); A=%+v B=%+v", x.Outcome, x.Detail, y.Outcome, y.Detail, a, b)
 		}
 	}
+	// The exemption must not swallow the property: it only covers pairs where
+	// one title's words are a proper subset of the other's.
+	t.Logf("%d pairs differ only by the subset bound, %d only by a self-titled side", asymmetric, selfTitled)
 }
 
+// A note on what is NOT in the property: declaring a SERIES on a candidate that
+// is titled with it ("Batman" in the series "Batman") turns an equal bare title
+// from AGREE into NEUTRAL (checkTitle's self-titled rule, pinned by the rule
+// examples). The property adds a position and a narrator to a candidate that
+// already has its series, never the series itself, so it does not draw that
+// move.
+//
 // TestCheckTitle_CandidateOnlyFieldsOnlyMoveTowardAgree: the fields only a
 // candidate declares, its narrator and its series position, add forms and
 // nothing else. Adding them to a candidate leaves the class as it was or makes
@@ -941,12 +1025,20 @@ func TestCheckTitle_IsSymmetric(t *testing.T) {
 // BOOK are not read: a stored credit or position is never part of a form.
 func TestCheckTitle_CandidateOnlyFieldsOnlyMoveTowardAgree(t *testing.T) {
 	r := rand.New(rand.NewPCG(17, 4688))
-	moved, same := 0, 0
+	moved, same, statements := 0, 0, 0
 	for i := 0; i < scaled(15000); i++ {
 		a := genSide(r)
 		b := genMutate(r, a)
 		if r.IntN(2) == 0 {
 			b.series = slices.Clone(a.series)
+		}
+		// A quarter of the draws: the book writes the series statement into its
+		// title ("Book 2 of Batman: Hush") and the candidate into its subtitle,
+		// where declaring the position turns that subtitle into a statement the
+		// candidate's effective subtitle drops.
+		stmtShape := r.IntN(4) == 0
+		if stmtShape {
+			a, b = genStatementPair(r)
 		}
 		// Half the draws: the candidate is the book's title minus its last
 		// segment and the candidate's narrator is that segment, so the credit
@@ -967,7 +1059,10 @@ func TestCheckTitle_CandidateOnlyFieldsOnlyMoveTowardAgree(t *testing.T) {
 		if completing != "" {
 			with.Narrator = completing
 		}
-		if len(b.series) > 0 {
+		if stmtShape {
+			with.SeriesPosition = b.pos
+			statements++
+		} else if len(b.series) > 0 {
 			with.SeriesPosition = oracleNums[int(seed%3)]
 		}
 		before := outcomeClass(checkTitle(&book, &plain))
@@ -987,9 +1082,10 @@ func TestCheckTitle_CandidateOnlyFieldsOnlyMoveTowardAgree(t *testing.T) {
 			t.Fatalf("the book's own credit or position changed %s to %s: %s", before, got, describePair(other, plain))
 		}
 	}
-	if moved < scaled(50) || same < scaled(5000) {
-		t.Fatalf("the property was not exercised: %d moved toward agree, %d unchanged", moved, same)
+	if moved < scaled(50) || same < scaled(5000) || statements < scaled(2000) {
+		t.Fatalf("the property was not exercised: %d moved toward agree, %d unchanged, %d statement pairs", moved, same, statements)
 	}
+	t.Logf("%d moved toward agree, %d unchanged, %d statement pairs", moved, same, statements)
 }
 
 // TestCheckTitle_SeriesCreditsAndPathsNeverChangeAConflict: for a pair whose

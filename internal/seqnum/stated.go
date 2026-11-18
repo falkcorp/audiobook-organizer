@@ -1,5 +1,5 @@
 // file: internal/seqnum/stated.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: ef7d6ebc-a3a1-4738-bc60-512ed593d8eb
 // last-edited: 2026-11-17
 
@@ -66,11 +66,16 @@ var (
 	// "1 of 2": a position in a set of M.
 	reBareOf = regexp.MustCompile(`\b(\d+)\s+of\s+(\d+)\b`)
 
-	ordAlt        = `(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|\d+(?:st|nd|rd|th))`
-	reOrdBefore   = regexp.MustCompile(`\b` + ordAlt + `\s+(book|volume|vol|part)\b`)
-	reOrdAfter    = regexp.MustCompile(`\b(book|volume|vol|part)\s+(?:the\s+)?` + ordAlt + `\b`)
-	reLoneRomanI  = regexp.MustCompile(`\S\s+i\s*$`)
-	reTrailingNum = regexp.MustCompile(`(?:^|[\s,:\-])(?:\d{1,3}(?:\.\d+)?|ii|iii|iv|vi|vii|viii|ix|xi|xii|xiii|xiv|xv|xvi|xvii|xviii|xix|xx)\s*$`)
+	ordAlt       = `(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|\d+(?:st|nd|rd|th))`
+	reOrdBefore  = regexp.MustCompile(`\b` + ordAlt + `\s+(book|volume|vol|part)\b`)
+	reOrdAfter   = regexp.MustCompile(`\b(book|volume|vol|part)\s+(?:the\s+)?` + ordAlt + `\b`)
+	reLoneRomanI = regexp.MustCompile(`\S\s+i\s*$`)
+	// A numeral closing a text, bare or behind a hash or an opening bracket
+	// ("Hush 2", "Hush #2", "Hush (2)").
+	reTrailingNum = regexp.MustCompile(`(?:^|[\s,:\-#(\[])(?:\d{1,3}(?:\.\d+)?|ii|iii|iv|vi|vii|viii|ix|xi|xii|xiii|xiv|xv|xvi|xvii|xviii|xix|xx)[)\]]?\s*$`)
+	// The marker word and punctuation between a title's words and its numeral
+	// ("Hush, Book 2", "Hush Volume II").
+	reNumeralMarker = regexp.MustCompile(`[\s,:\-]+(?:book|bk|volume|vol|no|number)\.?$`)
 )
 
 var ordinalNumbers = map[string]float64{
@@ -114,7 +119,11 @@ func ReadPair(a, b string) (sa, sb []Stated) {
 }
 
 // numeralBeside reports whether other ends in a numeral whose preceding words
-// are the words that precede the lone "I" ending s.
+// are the words that precede the lone "I" ending s. The numeral may be bare
+// ("Hush 2"), behind a volume marker ("Hush, Book 2", "Hush Volume II") or in
+// the usual brackets ("Hush #2", "Hush (2)"): the marker is not one of the
+// words, and "Who Am I: Book 2" still does not match "Who Am I", whose words
+// before the "I" are "who am".
 func numeralBeside(s, other string) bool {
 	rest, _ := takeParts(strings.ToLower(strings.ReplaceAll(other, "_", " ")))
 	c := clean(rest)
@@ -128,7 +137,12 @@ func numeralBeside(s, other string) bool {
 	if loc == nil {
 		return false
 	}
-	return strings.Join(strings.Fields(oc[:loc[0]+1]), " ") == strings.Join(strings.Fields(c[:ix[0]]), " ")
+	return wordsBefore(oc[:loc[0]+1]) == wordsBefore(reNumeralMarker.ReplaceAllString(c[:ix[0]], ""))
+}
+
+// wordsBefore is the words of s with the punctuation that closes them dropped.
+func wordsBefore(s string) string {
+	return strings.Join(strings.Fields(strings.TrimRight(s, " ,:;-")), " ")
 }
 
 // takeParts removes the part statements from lower-cased text and returns them.

@@ -1,5 +1,5 @@
 // file: internal/applygate/transcribed_identity.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: fedfaa92-fca3-4c73-b38b-25f4b0426918
 // last-edited: 2026-11-17
 
@@ -109,7 +109,7 @@ func TranscribedIdentityLifts(book *database.Book, authors Authors, c *metafetch
 //     or the audio says: a transcription that contradicts the stored title is
 //     a case for owner review, not unattended apply;
 //   - a candidate whose title is the series name, the title check's hard block
-//     (an intro announcing "Discworld" names no volume);
+//     (an intro announcing "Batman" names no volume);
 //   - a book whose folder names a different work than the transcription, which
 //     is evidence against the transcription, not a missing title.
 //

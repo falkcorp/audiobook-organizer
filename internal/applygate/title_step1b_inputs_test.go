@@ -1,5 +1,5 @@
 // file: internal/applygate/title_step1b_inputs_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b2d4f61-3c97-4a05-9e1b-d7f40c6a3e82
 // last-edited: 2026-11-17
 
@@ -101,8 +101,11 @@ func TestGate_Step1bInputs(t *testing.T) {
 			[3]step1bWant{{ReasonTitleDisagrees, "block"}, {ReasonTitleDisagrees, "block"}, {ReasonTitleDisagrees, "block"}}},
 		{"M4b", "same", database.Book{Title: "Knightfall", Subtitle: new("A Batman Novel")}, "", metafetch.MetadataCandidate{Title: "Knightfall", Subtitle: "Batman, Book 1"},
 			[3]step1bWant{{ReasonTitleDisagrees, "block"}, {ReasonTitleDisagrees, "block"}, {ReasonTitleDisagrees, "block"}}},
+		// The sequence leg now reads the stored subtitle (BookNumbers): the book
+		// is volume 2 and the candidate states none, so it refuses first. The
+		// title leg still blocks (the two subtitles differ).
 		{"M4c", "same", database.Book{Title: "Hush", Subtitle: new("Batman, Book 2")}, "", metafetch.MetadataCandidate{Title: "Hush", Subtitle: "A Gotham Story"},
-			[3]step1bWant{{ReasonTitleDisagrees, "block"}, {ReasonTitleDisagrees, "block"}, {ReasonTitleDisagrees, "block"}}},
+			[3]step1bWant{{ReasonSequenceMissingOnCandidate, "block"}, {ReasonSequenceMissingOnCandidate, "block"}, {ReasonSequenceMissingOnCandidate, "block"}}},
 		{"M5a", "same", database.Book{Title: "Hush"}, "", metafetch.MetadataCandidate{Title: "Hush", Subtitle: "A Novel"},
 			[3]step1bWant{{"", "agree"}, {"", "agree"}, {"", "agree"}}},
 		{"M5b", "same", database.Book{Title: "Hush", Subtitle: new("Unabridged")}, "", metafetch.MetadataCandidate{Title: "Hush"},

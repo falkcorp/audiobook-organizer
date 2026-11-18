@@ -8,8 +8,14 @@
       pins today's outcome in `TestUnderOwnerReview_*`
       (`internal/applygate/title_owner_review_pins_test.go`) for a franchise
       word added in front of the stored title, a stored subtitle that names the
-      book against a franchise-only candidate (B1b), a stored franchise-and-book
-      title against the franchise (M1a) and a blank stored title with nothing
-      to compare (M2a). For each shape, decide: apply on the runtime alone,
-      need a second witness, or refuse. A change is one deliberate edit to
-      `tally` or `checkTitle` and to its pin, and moves up to 49 replay applies.
+      book against a franchise-only candidate (B1b) and a stored
+      franchise-and-book title against the franchise (M1a). For each of those
+      shapes, decide: apply on the runtime alone, need a second witness, or
+      refuse. A change is one deliberate edit to `tally` or `checkTitle` and to
+      its pin, and moves up to 49 replay applies.
+
+      A separate question, M2a, is pinned in the same file: a blank stored
+      title with nothing to compare (only a file name and a series that share no
+      word with the candidate) has an UNKNOWN title leg, and applies at every
+      runtime, with no runtime at all included. No runtime carries that apply.
+      Decide: keep it, or require an agreeing runtime for it as well.

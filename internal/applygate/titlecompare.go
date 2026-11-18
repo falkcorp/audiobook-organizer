@@ -1,5 +1,5 @@
 // file: internal/applygate/titlecompare.go
-// version: 2.1.1
+// version: 2.2.0
 // guid: 8e41c7a2-5d09-4b3f-a6e8-2f9c0d71b5a3
 // last-edited: 2026-11-17
 
@@ -46,16 +46,24 @@ import (
 //     seqnum.ReadStated) and the numbers differ ("Part 1" / "Part 2", "Hush 1" /
 //     "Hush 2"). A number only one side states is not a conflict ("Who Am I" /
 //     "Who Am I 2"). A series name, a credit, a path or a year never makes a
-//     pair disagree.
+//     pair disagree: a year in brackets ("Knightfall (1993)"), a year only one
+//     title carries and a leading list number ("08 - ") are set aside before the
+//     conflict tests read the text (comparableText), and ordinals beside a
+//     marker read as the cardinal ("Third Book" is "Book 3").
 //   - everything else that is related is NEUTRAL: one title holds words or a
 //     number the other lacks, so the pair is confirmed by nothing in the title.
 //     A neutral title applies only with a runtime that agrees (EvidenceVerdict
 //     tally).
 //
-// compareTitleFields is symmetric in its two texts and no remainder is ever
-// excused by what the other fields say. The whole check is symmetric only in
-// the declared title fields: the candidate-only forms (credit, position) are
-// one-sided on purpose (titleforms.go).
+// compareTitleFields is symmetric in its two texts EXCEPT for the last step:
+// a stored title whose words are all in the candidate's title (the candidate
+// adds a franchise or a subtitle) is neutral at any size, while a candidate
+// that is a few words of a longer stored title must share half the words to be
+// neutral, because it is another book of the same name's family. No remainder
+// is ever excused by what the other fields say. The whole check is symmetric
+// only in the declared title fields: the candidate-only forms (credit,
+// position) and a self-titled candidate (checkTitle) are one-sided on purpose
+// (titleforms.go).
 
 // titleClass is the verdict on one pair of title fields.
 type titleClass int
@@ -112,6 +120,10 @@ var (
 		"ch": true, "disc": true, "disk": true, "cd": true, "track": true, "episode": true, "act": true,
 		"season": true, "no": true, "number": true,
 	}
+	// ordinalMarkers are the markers an ordinal beside them is a number of
+	// ("the Third Book", "Part the First"); seqnum's ordinal reader has the same
+	// four.
+	ordinalMarkers = map[string]bool{"book": true, "volume": true, "vol": true, "part": true}
 	// leadingArticles are dropped from the front of a segment.
 	leadingArticles = map[string]bool{"the": true, "a": true, "an": true}
 	// editionPhrases is the closed list of words that describe the recording,
@@ -157,12 +169,29 @@ func segTokens(s string, strip bool) []string {
 				out = append(out, cardTok(strconv.FormatFloat(v, 'f', -1, 64)))
 				continue
 			}
-		case ordinalDigitRe.MatchString(t):
-			v, _ := strconv.Atoi(ordinalDigitRe.FindStringSubmatch(t)[1])
+		case ordinalDigitRe.MatchString(t) || ordinalWords[t] > 0:
+			v := ordinalWords[t]
+			if v == 0 {
+				v, _ = strconv.Atoi(ordinalDigitRe.FindStringSubmatch(t)[1])
+			}
+			// "the Third Book" says what "Book 3" says: an ordinal beside a
+			// volume or part marker is that marker's number (seqnum reads it
+			// the same way), so the two spellings are one token sequence.
+			if i+1 < len(raw) && ordinalMarkers[raw[i+1]] {
+				out = append(out, raw[i+1], cardTok(strconv.Itoa(v)))
+				i++
+				continue
+			}
 			out = append(out, ordTok(v))
 			continue
-		case ordinalWords[t] > 0:
-			out = append(out, ordTok(ordinalWords[t]))
+		case ordinalMarkers[t] && i+2 < len(raw) && raw[i+1] == "the" && (ordinalWords[raw[i+2]] > 0 || ordinalDigitRe.MatchString(raw[i+2])):
+			// "Book the Third".
+			v := ordinalWords[raw[i+2]]
+			if v == 0 {
+				v, _ = strconv.Atoi(ordinalDigitRe.FindStringSubmatch(raw[i+2])[1])
+			}
+			out = append(out, t, cardTok(strconv.Itoa(v)))
+			i += 2
 			continue
 		case tensWords[t] > 0:
 			v := tensWords[t]
@@ -325,11 +354,13 @@ func intersects(a, b map[string]bool) bool {
 }
 
 // compareTitleFields classifies two TITLE fields (each a title and, when the
-// side has one, its subtitle). The result is the same with the two swapped.
-// It decides nothing about agreement beyond classEqual: the check agrees by
+// side has one, its subtitle): a is the candidate's, b the stored title. The
+// result is the same with the two swapped except for the subset bound at the
+// end (see the header). It decides nothing about agreement beyond classEqual: the check agrees by
 // form equality (checkTitle), and this only separates a conflict from a pair
 // that merely is not confirmed.
 func compareTitleFields(a, b string) titleCmp {
+	a, b = comparableText(a), comparableText(b)
 	sa, sb := titleSegments(a), titleSegments(b)
 	if len(sa) == 0 || len(sb) == 0 {
 		return titleCmp{class: classUnrelated}
@@ -367,12 +398,64 @@ func compareTitleFields(a, b string) titleCmp {
 	}
 
 	switch {
-	case len(wa) > 0 && len(wb) > 0 && (subsetOf(wa, wb) || subsetOf(wb, wa)):
-		return titleCmp{class: classNeutral, note: "one title holds words or a number the other lacks"}
+	// b is the stored title: a candidate that ADDS words to the stored title
+	// (a franchise prefix, a subtitle the stored one lacks) is neutral at any
+	// size. One that is a few words OF a longer stored title is another book
+	// of the same name's family, and must share half the words (below): a
+	// candidate "Gotham" for a stored "Gotham Knights Detective Tales" is not
+	// confirmed by it.
+	case len(wa) > 0 && len(wb) > 0 && subsetOf(wb, wa):
+		return titleCmp{class: classNeutral, note: "the candidate holds words or a number the stored title lacks"}
 	case tokenOverlap(fa, fb) >= 0.5:
 		return titleCmp{class: classNeutral, note: "the titles share part of their words"}
 	}
 	return titleCmp{class: classUnrelated}
+}
+
+var (
+	// yearTagRe is a year alone in brackets or parentheses, the way a tagger or
+	// a folder writes a release year: "Knightfall (1993)".
+	yearTagRe = regexp.MustCompile(`\s*[(\[]\s*(?:1\d{3}|20\d{2}|2100)\s*[)\]]`)
+)
+
+// comparableText is a title field as the conflict tests read it: without a year
+// in brackets and without a leading list number ("08 - "). Both are a file's
+// or a tagger's, not the book's: seqnum's own reader already sets the year aside
+// and reads the list number as the weak number it is, and the conflict tests
+// must not see more than it does. Only the conflict tests read this text; the
+// forms (titleforms.go) are built from the fields as declared.
+func comparableText(s string) string {
+	s = yearTagRe.ReplaceAllString(s, "")
+	if n, ok := seqnum.Parse(s); ok && n.Form == "leading" {
+		s = leadingNumberRe.ReplaceAllString(s, "")
+	}
+	return s
+}
+
+// yearLike reports whether a cardinal token is a four-digit year (1000-2100).
+func yearLike(t string) bool {
+	v, err := strconv.ParseFloat(t[1:], 64)
+	return err == nil && v == float64(int(v)) && v >= 1000 && v <= 2100
+}
+
+// withoutOneSidedYears drops the year-like numbers of the side that has them
+// when the other side has none: a year only one title carries is a release
+// date or a tag, not a number that differs. Two titles that each carry one
+// ("Metro 2033" / "Metro 2034") are numbered by them, and the pair stays a
+// conflict.
+func withoutOneSidedYears(na, nb []string) ([]string, []string) {
+	years := func(ns []string) bool { return slices.ContainsFunc(ns, yearLike) }
+	if ya, yb := years(na), years(nb); ya != yb {
+		drop := func(ns []string) []string {
+			return slices.DeleteFunc(slices.Clone(ns), yearLike)
+		}
+		if ya {
+			na = drop(na)
+		} else {
+			nb = drop(nb)
+		}
+	}
+	return na, nb
 }
 
 // tokenOverlap is the share of identity tokens two normalised token sequences
@@ -514,7 +597,10 @@ func subMultiset(a, b []string) bool {
 //     "Night of 7 Owls", a number the reader does not see in "Court 1 (Long)")
 //     are compared as they always were: they conflict when both sides have
 //     some and neither side's holds the other's, since a title that adds words
-//     adds their numbers.
+//     adds their numbers. A year-like number (1000-2100) that only one side
+//     carries is a release date or a tag, not a number that differs
+//     ("Knightfall 1993" / "Knightfall: Book 1"); two titles that each carry
+//     one are numbered by them ("Gotham 2033" / "Gotham 2034").
 //
 // A number only one side states (a volume the book's own title leaves out) is
 // not compared: that is the sequence leg's to check.
@@ -526,7 +612,9 @@ func numberConflict(a, b string, na, nb []string) string {
 		return "same words, different volumes (" + numberTexts(ca.volume) + " vs " + numberTexts(cb.volume) + ")"
 	case len(ca.part) > 0 && len(cb.part) > 0 && !sameNumbers(ca.part, cb.part):
 		return "same words, different parts (" + numberTexts(ca.part) + " vs " + numberTexts(cb.part) + ")"
-	case len(na) > 0 && len(nb) > 0 && !subMultiset(na, nb) && !subMultiset(nb, na):
+	}
+	na, nb = withoutOneSidedYears(na, nb)
+	if len(na) > 0 && len(nb) > 0 && !subMultiset(na, nb) && !subMultiset(nb, na) {
 		return "same words, different numbers (" + numsText(na) + " vs " + numsText(nb) + ")"
 	}
 	return ""
