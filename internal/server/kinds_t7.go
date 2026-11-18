@@ -9,10 +9,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/falkcorp/mediacore/entity"
 	"github.com/falkcorp/mediacore/rbac"
@@ -65,6 +67,9 @@ type t7Env struct {
 	// SetResult persists a result document: HEAD's ReporterSetResult. Nil in a
 	// native shell, whose Task returns the result instead.
 	SetResult func(v any) error
+	// Items runs a loop on the shell's pool (HEAD: registry.RunItems; native:
+	// tasks.RunItems at the kind's parallelism). Nil in a body that has no loop.
+	Items t7ItemsFunc
 	// Touch stamps the run's liveness clock without reporting progress.
 	Touch func()
 	// Checkpoint saves state for the run's resume (rc.Checkpoint). Nil in a
@@ -102,6 +107,7 @@ func t7HeadEnv(rep opsregistry.Reporter, live bool) t7Env {
 		Canceled:  rep.IsCanceled,
 		OpID:      opsregistry.ReporterOpID(rep),
 		SetResult: func(v any) error { return opsregistry.ReporterSetResult(rep, v) },
+		Items:     t7HeadItems(rep),
 		Touch:     func() { opsregistry.TouchLiveness(rep) },
 		// HEAD's cores that checkpoint write the remaining work, which HEAD's
 		// resume overlays onto the params; they never read it back.
@@ -132,6 +138,133 @@ func t7NativeEnv(rc *tasks.RC) t7Env {
 		Checkpoint: rc.Checkpoint,
 		Restore:    rc.Restore,
 	}
+}
+
+// t7ItemsOptions are the per-loop settings a core hands its pool.
+type t7ItemsOptions struct {
+	// Concurrency is HEAD's worker count (registry.RunItems clamps below 1 up to
+	// 1). Only HEAD's pool reads it: the native pool runs the parallelism the kind
+	// declares, so the two cannot disagree about what "unset" means.
+	Concurrency int
+	// ProgressBase and ProgressTotal place a slice of a larger set on the bar.
+	ProgressBase, ProgressTotal int
+	// ResumeFrom skips the first N items, a resumed run's finished prefix.
+	ResumeFrom int
+	// CheckpointEvery throttles CheckpointState to once per N completed items
+	// (0 is every item).
+	CheckpointEvery int
+	// CheckpointFn is HEAD's sequential hook, called after each item completes
+	// successfully; its error is logged and dropped.
+	CheckpointFn func(ctx context.Context) error
+	// CheckpointState receives the absolute contiguous-completion watermark
+	// (ResumeFrom included). Calls are serialized; a failed item never advances it.
+	CheckpointState func(ctx context.Context, watermark int) error
+	// Label is HEAD's per-item progress label for a loop whose label reads
+	// running counters. Only HEAD's pool carries it: the native label is pure.
+	Label func(i, total int) string
+	// PureLabel is a label that reads only the index and the total. Both pools
+	// carry it. Set at most one of Label and PureLabel.
+	PureLabel func(i, total int) string
+}
+
+// t7ItemsFunc runs fn over the indexes 0..n-1 on the shell's pool. The first item
+// error stops dispatch and is returned.
+type t7ItemsFunc func(ctx context.Context, n int, o t7ItemsOptions, fn func(ctx context.Context, i int) error) error
+
+// t7ForEach runs fn over items on env's pool.
+func t7ForEach[T any](ctx context.Context, env t7Env, items []T, o t7ItemsOptions, fn func(ctx context.Context, item T) error) error {
+	return env.Items(ctx, len(items), o, func(ctx context.Context, i int) error { return fn(ctx, items[i]) })
+}
+
+// t7HeadItems is HEAD's pool: registry.RunItems over the indexes.
+func t7HeadItems(rep opsregistry.Reporter) t7ItemsFunc {
+	return func(ctx context.Context, n int, o t7ItemsOptions, fn func(ctx context.Context, i int) error) error {
+		idx := make([]int, n)
+		for i := range idx {
+			idx[i] = i
+		}
+		lbl := o.Label
+		if lbl == nil {
+			lbl = o.PureLabel
+		}
+		return opsregistry.RunItems(ctx, rep, idx, func(ctx context.Context, i int) error {
+			return fn(ctx, i)
+		}, opsregistry.RunItemsOptions{
+			Concurrency:       o.Concurrency,
+			ProgressOffset:    o.ProgressBase,
+			ProgressTotal:     o.ProgressTotal,
+			ResumeFrom:        o.ResumeFrom,
+			CheckpointEvery:   o.CheckpointEvery,
+			CheckpointFn:      o.CheckpointFn,
+			CheckpointStateFn: o.CheckpointState,
+			Label:             lbl,
+		})
+	}
+}
+
+// t7NativeItems is the native pool: tasks.RunItems over the indexes, on par, the
+// kind's declared parallelism. A failed item's own error comes back, as at HEAD,
+// not the ItemsError around it. The checkpoint is HEAD's: the cores keep their own
+// checkpoint struct and rc.Checkpoint/rc.Restore store it, so the pool tracks the
+// contiguous watermark itself, with the same meaning as registry.RunItems's.
+func t7NativeItems(rc *tasks.RC, par tasks.Parallelism) t7ItemsFunc {
+	return func(_ context.Context, n int, o t7ItemsOptions, fn func(ctx context.Context, i int) error) error {
+		from := min(max(o.ResumeFrom, 0), n)
+		idx := make([]int, 0, n-from)
+		for i := from; i < n; i++ {
+			idx = append(idx, i)
+		}
+		wm := &t7Watermark{done: make([]bool, n), next: from, every: max(o.CheckpointEvery, 1), fn: o.CheckpointState}
+		itemsOpts := tasks.ItemsOptions[int]{ProgressBase: o.ProgressBase + from, ProgressTotal: o.ProgressTotal}
+		if o.PureLabel != nil {
+			itemsOpts.Label = func(i int) string { return o.PureLabel(i, n) }
+		}
+		_, err := tasks.RunItems(rc, par, idx, func(ic *tasks.ItemRC, i int) error {
+			if err := fn(ic.Context(), i); err != nil {
+				return err
+			}
+			if cerr := wm.complete(ic.Context(), i); cerr != nil {
+				rc.Log().Warn("checkpoint write failed", "err", cerr)
+			}
+			if o.CheckpointFn != nil {
+				if cerr := o.CheckpointFn(ic.Context()); cerr != nil {
+					rc.Log().Warn("checkpoint write failed", "err", cerr)
+				}
+			}
+			return nil
+		}, itemsOpts)
+		var ie *tasks.ItemsError
+		if errors.As(err, &ie) && ie.First != nil {
+			return ie.First
+		}
+		return err
+	}
+}
+
+// t7Watermark tracks the contiguous prefix of finished items out of n and hands it
+// to a callback every `every` completions, serialized.
+type t7Watermark struct {
+	mu    sync.Mutex
+	done  []bool
+	next  int
+	count int
+	every int
+	fn    func(ctx context.Context, watermark int) error
+}
+
+// complete records item i as finished and reports the watermark when due.
+func (w *t7Watermark) complete(ctx context.Context, i int) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.done[i] = true
+	for w.next < len(w.done) && w.done[w.next] {
+		w.next++
+	}
+	w.count++
+	if w.fn == nil || w.count%w.every != 0 {
+		return nil
+	}
+	return w.fn(ctx, w.next)
 }
 
 // t7Hold is a scan stand-down held for the rest of a run. A definition's HEAD
@@ -187,6 +320,22 @@ func (s *Server) t7HeadMetadataStandDown(rep opsregistry.Reporter) t7StandDown {
 			Check:  opsregistry.ScanStandDownCheckpoint,
 			Renew:  hold.Beat,
 			Finish: hold.Finish,
+		}, nil
+	}
+}
+
+// t7HeadAuthorStandDown is HEAD's stand-down for the author ops: the scan gate's
+// hold keyed by the run's op id (holdAuthorMergeStandDown), renewed through the
+// gate. It refuses a run with no op id, before any write.
+func (s *Server) t7HeadAuthorStandDown(opID string) t7StandDown {
+	return func(ctx context.Context, reason string) (t7Hold, error) {
+		release, err := s.holdAuthorMergeStandDown(ctx, opID, reason)
+		if err != nil {
+			return t7Hold{}, err
+		}
+		return t7Hold{
+			Renew:  func() bool { return s.scanGate().RenewScanStandDown(opID) },
+			Finish: func(runErr error) error { release(); return runErr },
 		}, nil
 	}
 }
@@ -281,6 +430,9 @@ type t7StoreLibrary interface {
 	diagnosticsAIStore
 	aiAuthorReviewStore
 	aiMergeApplyStore
+	aiScanApplyStore
+	catalogCoverageStore
+	seriesRenameReads
 }
 
 // t7Writer is every write the converted cores make, composed from each
@@ -310,6 +462,8 @@ type t7WriterLibrary interface {
 	folderAutoScanWriter
 	libraryAIParseWriter
 	aiMergeApplyWriter
+	aiScanApplyWriter
+	seriesRenameWriter
 }
 
 // t7WriterFiles is the writes of the file-writing definitions.
@@ -599,6 +753,9 @@ func t7KindList(s *Server, deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) 
 		s.diagnosticsAINative(deps, sched),
 		s.aiAuthorReviewNative(deps, sched),
 		s.aiMergeApplyNative(deps, sched),
+		s.aiScanApplyNative(deps, sched),
+		s.catalogCoverageNative(deps, sched),
+		s.seriesRenameNative(deps, sched),
 	}
 }
 

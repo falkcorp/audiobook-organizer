@@ -25,11 +25,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 const catalogCoverageOpID = "catalog.coverage-report"
@@ -49,11 +52,60 @@ func init() {
 	})
 }
 
-// RegisterCatalogCoverageOp registers catalog.coverage-report. It writes
-// nothing (no Writes resource), so it is not behind catalog.enabled: an empty
-// catalog is reported as such rather than refused.
-func (s *Server) RegisterCatalogCoverageOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
+// catalogCoverageStore is everything the report reads: the book rows and their
+// credits, the identification index, and the author catalog.
+type catalogCoverageStore interface {
+	catalogCoverageBooks
+	catalogCoverageCatalog
+	IdentBookIDs(states []database.IdentState) (map[string]struct{}, error)
+	// CatalogCoverageReady refuses, with HEAD's wording, a store the report cannot
+	// read: no store, no catalog store (not Pebble-backed), or no identification
+	// index.
+	CatalogCoverageReady() error
+}
+
+// catalogCoverageParts is the three reads HEAD's body resolves from the store,
+// as one catalogCoverageStore.
+type catalogCoverageParts struct {
+	catalogCoverageBooks
+	catalogCoverageCatalog
+	idents database.IdentIndexReader
+}
+
+func (p catalogCoverageParts) IdentBookIDs(states []database.IdentState) (map[string]struct{}, error) {
+	return p.idents.IdentBookIDs(states)
+}
+
+func (catalogCoverageParts) CatalogCoverageReady() error { return nil }
+
+// headCatalogCoverage resolves HEAD's reads from the server's store, as HEAD's
+// body did, deferring each refusal to CatalogCoverageReady.
+type headCatalogCoverage struct {
+	catalogCoverageParts
+	err error
+}
+
+func (h headCatalogCoverage) CatalogCoverageReady() error { return h.err }
+
+func (s *Server) headCatalogCoverage() headCatalogCoverage {
+	store := s.storeForWiring()
+	if store == nil {
+		return headCatalogCoverage{err: fmt.Errorf("%s: store unavailable", catalogCoverageOpID)}
+	}
+	cat := database.NewCatalogStoreFromStore(store)
+	if cat == nil {
+		return headCatalogCoverage{err: fmt.Errorf("%s: catalog store unavailable (store is not Pebble-backed)", catalogCoverageOpID)}
+	}
+	idents, ok := database.AsCapability[database.IdentIndexReader](store)
+	if !ok {
+		return headCatalogCoverage{err: fmt.Errorf("%s: the identification index is not available on this store", catalogCoverageOpID)}
+	}
+	return headCatalogCoverage{catalogCoverageParts: catalogCoverageParts{catalogCoverageBooks: store, catalogCoverageCatalog: cat, idents: idents}}
+}
+
+// catalogCoverageDef is HEAD's definition. Its Run is the v2 shell.
+func (s *Server) catalogCoverageDef() opsregistry.OperationDef {
+	return opsregistry.OperationDef{
 		ID:          catalogCoverageOpID,
 		Liveness:    opsregistry.LivenessRunItems,
 		Plugin:      "catalog",
@@ -77,23 +129,42 @@ func (s *Server) RegisterCatalogCoverageOp(reg *opsregistry.Registry) error {
 		Permissions:  []auth.Permission{auth.PermSettingsManage},
 		Capabilities: []opsregistry.Capability{opsregistry.CapLibraryRead},
 		Run:          s.runCatalogCoverageOp,
-	})
+	}
+}
+
+// RegisterCatalogCoverageOp registers catalog.coverage-report. It writes
+// nothing (no Writes resource), so it is not behind catalog.enabled: an empty
+// catalog is reported as such rather than refused.
+func (s *Server) RegisterCatalogCoverageOp(reg *opsregistry.Registry) error {
+	return reg.RegisterOp(s.catalogCoverageDef())
 }
 
 func (s *Server) runCatalogCoverageOp(ctx context.Context, _ json.RawMessage, reporter opsregistry.Reporter) error {
-	store := s.storeForWiring()
-	if store == nil {
-		return fmt.Errorf("%s: store unavailable", catalogCoverageOpID)
-	}
-	cat := database.NewCatalogStoreFromStore(store)
-	if cat == nil {
-		return fmt.Errorf("%s: catalog store unavailable (store is not Pebble-backed)", catalogCoverageOpID)
-	}
-	idents, ok := database.AsCapability[database.IdentIndexReader](store)
-	if !ok {
-		return fmt.Errorf("%s: the identification index is not available on this store", catalogCoverageOpID)
-	}
-	return runCatalogCoverage(ctx, reporter, store, idents, cat)
+	_, err := catalogCoverageCore(ctx, t7HeadEnv(reporter, true), s.headCatalogCoverage())
+	return err
+}
+
+// catalogCoverageNative is the native books.catalog.coverage-report kind. It
+// reads the library, the identification index and the catalog and writes
+// nothing, so it is ReadOnly. Its pool is tasks.CPU(): HEAD sized it to max(NumCPU, 2), so only a one-core host differs.
+func (s *Server) catalogCoverageNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	kind := t7KindFor(catalogCoverageOpID)
+	c := t7Common(s.catalogCoverageDef(), sched)
+	c.Effects = tasks.ReadOnly().AlsoReads(t7Res(ops.ResBooks, ops.ResAuthors, ops.ResCatalog)...)
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, catalogCoverageResult]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (catalogCoverageResult, error) {
+			if _, err := t7DecodeNative[struct{}](kind, raw); err != nil {
+				return catalogCoverageResult{}, err
+			}
+			if err := t7NeedStore(kind, deps); err != nil {
+				return catalogCoverageResult{}, err
+			}
+			env := t7NativeEnv(rc)
+			env.Items = t7NativeItems(rc, tasks.CPU())
+			return catalogCoverageCore(rc.Context(), env, deps.Store)
+		},
+	})
 }
 
 // catalogCoverageBooks is what the report reads of the library: one book row
@@ -254,24 +325,35 @@ func (t *coverageTally) top(n int) []catalogCoverageCredit {
 // pool; no book is written, so there is no exclusivity to protect.
 func runCatalogCoverage(ctx context.Context, reporter opsregistry.Reporter, books catalogCoverageBooks,
 	idents database.IdentIndexReader, cat catalogCoverageCatalog) error {
-	blocks, err := cat.CountAuthorNameBlocks()
+	_, err := catalogCoverageCore(ctx, t7HeadEnv(reporter, true),
+		catalogCoverageParts{catalogCoverageBooks: books, catalogCoverageCatalog: cat, idents: idents})
+	return err
+}
+
+// catalogCoverageCore is runCatalogCoverage's body, shared by HEAD's shell and the
+// native kind, and it returns the report it logs.
+func catalogCoverageCore(ctx context.Context, env t7Env, st catalogCoverageStore) (catalogCoverageResult, error) {
+	if err := st.CatalogCoverageReady(); err != nil {
+		return catalogCoverageResult{}, err
+	}
+	blocks, err := st.CountAuthorNameBlocks()
 	if err != nil {
-		return fmt.Errorf("%s: count catalog author blocks: %w", catalogCoverageOpID, err)
+		return catalogCoverageResult{}, fmt.Errorf("%s: count catalog author blocks: %w", catalogCoverageOpID, err)
 	}
 	if blocks == 0 {
 		msg := "the author catalog holds no harvested author blocks (no cat_author:name: keys); run catalog.harvest-authors first. Nothing was measured."
-		_ = reporter.Log(slog.LevelWarn, msg)
+		env.Log(slog.LevelWarn, msg)
 		catalogCoverageLog.Warn("%s", msg)
-		_ = reporter.UpdateProgress(1, 1, "catalog has no harvested authors; nothing measured")
-		return nil
+		env.progress(1, 1, "catalog has no harvested authors; nothing measured")
+		return catalogCoverageResult{}, nil
 	}
 
-	idSet, err := idents.IdentBookIDs([]database.IdentState{database.IdentUnasked, database.IdentAskedEmpty})
+	idSet, err := st.IdentBookIDs([]database.IdentState{database.IdentUnasked, database.IdentAskedEmpty})
 	if err != nil {
 		if errors.Is(err, database.ErrIdentIndexBuilding) {
-			return fmt.Errorf("%s: the identification index is still being built; retry shortly: %w", catalogCoverageOpID, err)
+			return catalogCoverageResult{}, fmt.Errorf("%s: the identification index is still being built; retry shortly: %w", catalogCoverageOpID, err)
 		}
-		return fmt.Errorf("%s: read identification index: %w", catalogCoverageOpID, err)
+		return catalogCoverageResult{}, fmt.Errorf("%s: read identification index: %w", catalogCoverageOpID, err)
 	}
 	ids := make([]string, 0, len(idSet))
 	for id := range idSet {
@@ -284,11 +366,15 @@ func runCatalogCoverage(ctx context.Context, reporter opsregistry.Reporter, book
 	if catalogCoverageOptsObserver != nil {
 		catalogCoverageOptsObserver(opts)
 	}
-	err = opsregistry.RunItems(ctx, reporter, ids, func(_ context.Context, id string) error {
-		return coverBook(books, cat, tally, id)
-	}, opts)
+	err = t7ForEach(ctx, env, ids, t7ItemsOptions{
+		Concurrency:   opts.Concurrency,
+		ProgressTotal: opts.ProgressTotal,
+		PureLabel:     opts.Label,
+	}, func(_ context.Context, id string) error {
+		return coverBook(st, st, tally, id)
+	})
 	if err != nil {
-		return err
+		return catalogCoverageResult{}, err
 	}
 
 	res := catalogCoverageResult{
@@ -303,23 +389,23 @@ func runCatalogCoverage(ctx context.Context, reporter opsregistry.Reporter, book
 		res.UnreadableNote = "unreadable books are counted in books_considered with unknown scope; they are in neither books_covered nor books_uncovered"
 		msg := fmt.Sprintf("%d books could not be read (first %d logged by id at warn): %s",
 			res.BooksUnreadable, min(res.BooksUnreadable, catalogCoverageUnreadableLogCap), res.UnreadableNote)
-		_ = reporter.Log(slog.LevelWarn, msg)
+		env.Log(slog.LevelWarn, msg)
 	}
 	line, err := json.Marshal(res)
 	if err != nil {
-		return fmt.Errorf("%s: encode result: %w", catalogCoverageOpID, err)
+		return catalogCoverageResult{}, fmt.Errorf("%s: encode result: %w", catalogCoverageOpID, err)
 	}
 	// The credit names are library data: they go to the op log only, never to
 	// a file in the repo.
-	_ = reporter.Log(slog.LevelInfo, string(line))
+	env.Log(slog.LevelInfo, string(line))
 	pct := 0.0
 	if res.BooksConsidered > 0 {
 		pct = 100 * float64(res.BooksCovered) / float64(res.BooksConsidered)
 	}
-	_ = reporter.UpdateProgress(len(ids), len(ids), fmt.Sprintf("covered %d of %d (%.1f%%)", res.BooksCovered, res.BooksConsidered, pct))
+	env.progress(len(ids), len(ids), fmt.Sprintf("covered %d of %d (%.1f%%)", res.BooksCovered, res.BooksConsidered, pct))
 	catalogCoverageLog.Info("catalog coverage: considered=%d covered=%d uncovered=%d unreadable=%d blocks=%d",
 		res.BooksConsidered, res.BooksCovered, res.BooksUncovered, res.BooksUnreadable, res.CatalogAuthorBlocks)
-	return nil
+	return res, nil
 }
 
 // coverBook classifies one book into the tally. A book that is gone, or no
