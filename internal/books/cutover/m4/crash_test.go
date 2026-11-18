@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/crash_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9a3d6e18-f2b4-4c07-85d1-6e0a7b49c2f3
 // last-edited: 2026-11-18
 
@@ -47,6 +47,12 @@ func TestCutover_ResumableCrashMatrix(t *testing.T) {
 	}
 	specs = append(specs, runSpec{id: runID(5), def: "library.scan", st: "succeeded", completed: tptr(done), evts: 1, corruptRun: true})
 	raw := map[string]string{"opv3:item:" + runID(90) + ":failed:k": `{"key":"k"}`} // an orphan
+	// v1 history: a finished operation, one cut off mid-run with its live
+	// chunk journal, v1 rows folded into a v3 run, and a log of no operation.
+	v1Op{id: runID(20), typ: "dedup.book-scan", status: "completed", done: tptr(done), logs: 2, results: 1, summary: true, state: true}.put(raw)
+	v1Op{id: runID(21), typ: "dedup.book-scan", status: "running", logs: 1, state: true, journal: true}.put(raw)
+	v1Op{id: runID(2), typ: "library.scan", status: "running", logs: 1, results: 1, state: true}.put(raw)
+	raw["operationlog:"+runID(91)+":00000000000000000001:1"] = `{"id":1}`
 	// The rows no run owns: a clock group of two rows (one imports, one defers),
 	// both markers and a bucket of two subjects, each importing in one batch.
 	fire := epoch.Add(2 * time.Hour)
