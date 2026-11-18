@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_book_preserve_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 9a2f1c6e-4d3b-4a71-8e2c-6b7d8f9012ab
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package store
 
@@ -164,6 +164,7 @@ func TestUpdateBook_PreservesAuthorSeriesOnNilIncoming(t *testing.T) {
 
 	authorID := 42
 	seriesID := 7
+	seedSeriesRow(t, s, seriesID)
 	author := &Author{ID: authorID, Name: "Ursula K. Le Guin"}
 	series := &Series{ID: seriesID, Name: "Earthsea"}
 

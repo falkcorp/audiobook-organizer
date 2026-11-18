@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store.go
-// version: 1.240.3
+// version: 1.240.4
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package store
 
@@ -2707,6 +2707,12 @@ func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 	unlock := p.lockBook(book.ID)
 	defer unlock()
 
+	// The series the row names must exist, checked under the stripe held to the
+	// commit below (requireSeriesForBookWrite).
+	if err := p.requireSeriesForBookWrite(book.ID, book.SeriesID, nil); err != nil {
+		return nil, err
+	}
+
 	// Set timestamps
 	now := time.Now()
 	book.CreatedAt = &now
@@ -2981,6 +2987,16 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 	}
 
 	book.ID = id
+
+	// A write that makes a series link names a series that must exist, checked
+	// under the stripe the caller holds to the commit below
+	// (requireSeriesForBookWrite). The seed path that writes rows older builds
+	// left (SeedLegacyBookRowForTest) skips it with the other legacy rules.
+	if !opts.legacySeries {
+		if err := p.requireSeriesForBookWrite(id, book.SeriesID, oldBook.SeriesID); err != nil {
+			return nil, err
+		}
+	}
 
 	// Preserve created_at from old book, update updated_at
 	if oldBook.CreatedAt != nil {

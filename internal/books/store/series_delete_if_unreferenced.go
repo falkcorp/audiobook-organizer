@@ -1,5 +1,5 @@
 // file: internal/books/store/series_delete_if_unreferenced.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 70d67056-7e94-4c44-b37f-39897839efed
 // last-edited: 2026-11-18
 
@@ -155,16 +155,15 @@ var (
 // by the delete.
 //
 // WHAT IT IS NOT ATOMIC AGAINST:
-//   - A writer that read the series row EARLIER and writes series_id after the
-//     delete. Book writes do not check that the series they name exists, so a
-//     writer holding a stale "series 7 exists" runs its commit once the
-//     stripes are free and strands its own book. The window this method closes
-//     is count-to-delete; the window between a caller's own read of the series
-//     and its write is the caller's, and closing it needs the book write to
-//     verify the series under nameIdx.series (a change to every writer, not
-//     made here).
 //   - Another process on the same database, and any store that does not
 //     implement this method (it is not part of Store).
+//
+// A writer that read the series row EARLIER and writes series_id after the
+// delete is not a gap any more: the two row writers of series_id (createBook and
+// updateBookLockedMode) check that the series exists, under the stripe they hold
+// to their commit, whenever they make a link (requireSeriesForBookWrite), so a
+// writer queued behind this delete is refused (ErrSeriesNotFound) instead of
+// stranding its book.
 //
 // COST. Every book write waits while the count and the delete run: one memdb
 // index read and one Pebble delete, a few milliseconds. The count is taken from

@@ -1,7 +1,7 @@
 // file: internal/books/store/dataloss_roundtrip_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: e4a5b6c7-8d9e-0f1a-2b3c-roundtrip00001
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package store
 
@@ -77,6 +77,8 @@ func TestRoundTrip_UpdateBook(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBook: %v", err)
 	}
+	// The populated book names series 7; a book write refuses a series that does not exist.
+	seedSeriesRow(t, store, 7)
 
 	full := &Book{}
 	dlPopulateNonZero(t, reflect.ValueOf(full).Elem(), "Book")
