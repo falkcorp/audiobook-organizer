@@ -1,11 +1,12 @@
 // file: internal/books/store/book_write_series_exists_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5c0e8a14-6b27-4d93-a1f8-3e9d27b40c61
 // last-edited: 2026-11-18
 
 package store
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -291,4 +292,61 @@ func TestPebbleStore_ASecondOpenOfALiveStoreIsRefused(t *testing.T) {
 		_ = second.Close()
 	}
 	require.Error(t, err, "a second opener of the same directory must be refused while the first is open")
+}
+
+// A snapshot taken while the book was in a series that has since been deleted
+// restores without the series instead of refusing the whole revert. A refused
+// revert would also make an unmerge that reverts through here unfinishable on
+// retry. Every other column comes back as it was.
+func TestRevertBookToVersion_ASnapshotSeriesThatWasDeletedIsLeftOut(t *testing.T) {
+	s := seedRefStore(t)
+	// snapshotWith edits the book once (a write snapshots the row it replaces)
+	// and returns the timestamp of the snapshot that holds the given title.
+	snapshotTitled := func(bookID, title string) time.Time {
+		snaps, err := s.GetBookSnapshots(bookID, 0)
+		require.NoError(t, err)
+		for _, sn := range snaps {
+			var b Book
+			require.NoError(t, json.Unmarshal(sn.Data, &b))
+			if b.Title == title {
+				return sn.Timestamp
+			}
+		}
+		t.Fatalf("no snapshot of book %s titled %q among %d", bookID, title, len(snaps))
+		return time.Time{}
+	}
+
+	ser, err := s.CreateSeries("Batman Eternal", nil)
+	require.NoError(t, err)
+	book, err := s.CreateBook(&Book{Title: "Batman Eternal One", FilePath: "/w/be-1", SeriesID: &ser.ID})
+	require.NoError(t, err)
+	_, err = s.ModifyBook(book.ID, func(b *Book) error { b.Title = "Edited Title"; return nil })
+	require.NoError(t, err)
+	ts := snapshotTitled(book.ID, "Batman Eternal One") // holds the series link
+	_, err = s.ModifyBook(book.ID, func(b *Book) error { b.SeriesID = nil; b.Series = nil; return nil })
+	require.NoError(t, err)
+	deleted, err := s.DeleteSeriesIfUnreferenced(ser.ID, ser.Name, ser.AuthorID)
+	require.NoError(t, err)
+	require.True(t, deleted)
+
+	got, err := s.RevertBookToVersion(book.ID, ts)
+	require.NoError(t, err, "a deleted snapshot series must not refuse the revert")
+	require.Equal(t, "Batman Eternal One", got.Title, "the rest of the snapshot comes back")
+	require.Nil(t, got.SeriesID, "the series that no longer exists is not restored")
+	stored, err := s.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.Equal(t, "Batman Eternal One", stored.Title)
+	require.Nil(t, stored.SeriesID)
+
+	// A snapshot series that still exists is restored as before.
+	live, err := s.CreateSeries("Batman Inc", nil)
+	require.NoError(t, err)
+	b2, err := s.CreateBook(&Book{Title: "Batman Inc One", FilePath: "/w/bi-1", SeriesID: &live.ID})
+	require.NoError(t, err)
+	_, err = s.ModifyBook(b2.ID, func(b *Book) error { b.Title = "Edited Inc"; b.SeriesID = nil; b.Series = nil; return nil })
+	require.NoError(t, err)
+	back, err := s.RevertBookToVersion(b2.ID, snapshotTitled(b2.ID, "Batman Inc One"))
+	require.NoError(t, err)
+	require.NotNil(t, back.SeriesID)
+	require.Equal(t, live.ID, *back.SeriesID)
 }

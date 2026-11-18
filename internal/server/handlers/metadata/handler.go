@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.46.0
+// version: 1.46.1
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -853,6 +853,13 @@ func (h *Handler) revertAudiobookMetadataImpl(c *gin.Context) {
 			// A whole-row revert would un-trash the shell and clear its
 			// merged-into link while its files stay retired under another book.
 			httputil.RespondWithError(c, http.StatusConflict, err.Error(), httputil.CodeRetiredShell)
+			return
+		}
+		if errors.Is(err, database.ErrSeriesNotFound) {
+			// The snapshot's series was deleted between the revert reading it and
+			// writing (a delete that landed in that gap); a retry restores the
+			// book without the series.
+			httputil.RespondWithConflict(c, "the series this version belongs to was just deleted; retry the revert: "+err.Error())
 			return
 		}
 		httputil.InternalError(c, "failed to revert metadata", err)
