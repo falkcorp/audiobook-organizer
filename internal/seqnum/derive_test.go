@@ -1,5 +1,5 @@
 // file: internal/seqnum/derive_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e7c0a52-91d4-4b6f-a8c3-5d12f6e9b407
 // last-edited: 2026-11-18
 
@@ -13,135 +13,10 @@ import (
 )
 
 // The tests here hold derive, the walker that turns a compiled expression into
-// the condition its guard checks, to three things: the hand-written conditions
-// it replaced (TestDerive_AgainstTheHandWrittenGuards), the expression's own
-// behaviour on generated expressions (TestDerive_NeverRejectsAMatch), and an
-// exact table of what each node kind needs (TestDerive_Table).
-
-// --- the hand-written conditions the walker replaced ------------------------
-
-func oldAny(lits ...string) func(string) bool {
-	return func(s string) bool {
-		for _, l := range lits {
-			if strings.Contains(s, l) {
-				return true
-			}
-		}
-		return false
-	}
-}
-
-func oldDigit(s string) bool { return strings.ContainsAny(s, "0123456789") }
-func oldDash(s string) bool  { return strings.ContainsAny(s, "-–—") }
-
-func oldAll(conds ...func(string) bool) func(string) bool {
-	return func(s string) bool {
-		for _, c := range conds {
-			if !c(s) {
-				return false
-			}
-		}
-		return true
-	}
-}
-
-func oldAnyOf(conds ...func(string) bool) func(string) bool {
-	return func(s string) bool {
-		for _, c := range conds {
-			if c(s) {
-				return true
-			}
-		}
-		return false
-	}
-}
-
-// handWritten is the condition each of the 26 guarded expressions carried before
-// guards were derived, copied from the commit that introduced them. They are
-// the reference the derived conditions are compared with, never used by
-// production code.
-func handWritten() map[*guardedRe]func(string) bool {
-	rangeNeeds := oldAny("book", "bk", "vol", "#")
-	return map[*guardedRe]func(string) bool{
-		reDiscPart:      oldAny("dis", "cd", "part", "pt", "tr", "ch"),
-		reBitrate:       oldAll(oldDigit, oldAny("k", "hz", "mb", "gb")),
-		reYear:          oldAny("1", "2"),
-		reMarker:        oldAny("book", "bk", "vol", "number", "no", "#"),
-		reBracket:       oldAll(oldAny("[", "("), oldDigit),
-		reLeading:       oldDigit,
-		reTrailing:      oldDigit,
-		reTrailingRoman: oldAny("i", "x"),
-		reEmptyBrackets: oldAny("[", "("),
-		reMidTitle:      oldAll(oldDigit, oldAny("-", "–", "—", ":")),
-		rePartSuffix:    oldAll(oldAny("0"), oldDash),
-		reSpanDigits:    rangeNeeds,
-		reSpanSpaced:    rangeNeeds,
-		reSpanWords:     rangeNeeds,
-		reListDigits:    rangeNeeds,
-		reListWords:     rangeNeeds,
-		rePartStated:    oldAny("part", "pt", "disc", "disk", "cd"),
-		reParenOf:       oldAll(oldAny("("), oldAny("of"), oldDigit),
-		reBareOf:        oldAll(oldAny("of"), oldDigit),
-		reOrdBefore:     oldAny("book", "vol", "part"),
-		reOrdAfter:      oldAny("book", "vol", "part"),
-		reLoneRomanI:    oldAny("i"),
-		reTrailingNum:   oldAnyOf(oldDigit, oldAny("i", "x")),
-		reNumeralMarker: oldAny("book", "bk", "vol", "no", "number"),
-		reClosingNote:   oldAll(oldAny("(", "["), oldAny(")", "]")),
-		reTrailingSpan:  oldAll(oldDigit, oldDash),
-	}
-}
-
-// TestDerive_AgainstTheHandWrittenGuards holds each derived condition to the
-// hand-written one it replaced, over the texts the guard tests use, in the one
-// direction that is a matter of correctness: every text the expression matches
-// is accepted by the derived condition, which includes every match the
-// hand-written one accepted. (A derived condition may turn away a text the old
-// one let through when the expression does not match it: it is exact where the
-// old list used a shorter literal, "dis" for disc and disk, and the number of
-// such texts is logged. That is why this is not "at least as permissive" in the
-// literal sense; soundness is this test plus TestGuards_NeverHideAMatch and
-// TestDerive_NeverRejectsAMatch.)
-func TestDerive_AgainstTheHandWrittenGuards(t *testing.T) {
-	old := handWritten()
-	if len(old) != 26 {
-		t.Fatalf("the reference holds %d conditions, the 26 hand-written guards were expected", len(old))
-	}
-	texts := guardTexts(41, 43, scaled(60000), 8)
-	for g, oldCond := range old {
-		if g.need == nil {
-			t.Errorf("%q has no derived condition, but the hand-written one was a real one", g.re)
-			continue
-		}
-		tighter := 0
-		for _, s := range texts {
-			derived := g.need.holds(s)
-			if g.re.MatchString(s) && !derived {
-				t.Fatalf("the derived condition of %q rejects %q, which it matches", g.re, s)
-			}
-			if oldCond(s) && !derived {
-				tighter++
-			}
-		}
-		t.Logf("%-70.70q derived turns away %6d of %d texts the hand-written one let through", g.re, tighter, len(texts))
-	}
-}
-
-// TestDerive_NeverLooserThanTheHandWrittenGuards is about speed, not
-// correctness: a derived condition that accepts a text the hand-written one
-// turned away would run an expression the old guard skipped. Over the guard
-// test texts it never does, so the speed-up the hand-written guards gave is kept
-// (and the derived ones add to it).
-func TestDerive_NeverLooserThanTheHandWrittenGuards(t *testing.T) {
-	texts := guardTexts(41, 43, scaled(60000), 8)
-	for g, oldCond := range handWritten() {
-		for _, s := range texts {
-			if g.need != nil && g.need.holds(s) && !oldCond(s) {
-				t.Fatalf("the derived condition of %q accepts %q, which the hand-written one turned away", g.re, s)
-			}
-		}
-	}
-}
+// the condition its guard checks, to two things: the expression's own behaviour
+// on generated expressions (TestDerive_NeverRejectsAMatch), and an exact table of
+// what each node kind needs (TestDerive_Table). The guards of the package's own
+// expressions are held to those expressions by TestGuards_NeverHideAMatch.
 
 // --- the walker against the regexp package ----------------------------------
 
@@ -150,7 +25,9 @@ func TestDerive_NeverLooserThanTheHandWrittenGuards(t *testing.T) {
 // multi-range, negated), \d \s \S ., the assertions, groups, alternations (with
 // an empty branch now and then) and the quantifiers.
 func randomExpr(r *rand.Rand, depth int) string {
-	atoms := []string{"a", "b", "c", "ab", "bc", "x", "-", "–", "[ab]", "[a-cx-z]", "[^a]", "[b-d]", `\d`, `\s`, `\S`, `\w`, ".", `\b`, "^", "$", "[0-9]", "é"}
+	atoms := []string{"a", "b", "c", "ab", "bc", "x", "-", "–", "[ab]", "[a-cx-z]", "[^a]", "[b-d]", `\d`, `\s`, `\S`, `\w`, ".", `\b`, "^", "$", "[0-9]", "é",
+		`[a\x{FFFD}]`, `\x{FFFD}`, `(?m:^)`, `(?m:$)`, `\B`, `\A`, `\z`, `(?s:.)`, `[^\x00-\x{10FFFF}]`,
+		"[a-p]", "[a-q]"} // [a-p] holds 16 runes, the most a class may and still be searched for; [a-q] one more
 	if depth <= 0 || r.IntN(4) == 0 {
 		return atoms[r.IntN(len(atoms))]
 	}
@@ -182,7 +59,7 @@ func randomExpr(r *rand.Rand, depth int) string {
 }
 
 func randomText(r *rand.Rand) string {
-	alphabet := []string{"a", "b", "c", "d", "x", "y", "z", "A", "B", "1", "2", "0", " ", " ", "-", "–", "é", "\n", "_", "\xff"}
+	alphabet := []string{"a", "b", "c", "d", "p", "q", "x", "y", "z", "A", "B", "1", "2", "0", " ", " ", "-", "–", "é", "\n", "_", "\xff"}
 	var b strings.Builder
 	for n := r.IntN(9); n > 0; n-- {
 		b.WriteString(alphabet[r.IntN(len(alphabet))])
@@ -190,7 +67,7 @@ func randomText(r *rand.Rand) string {
 	return b.String()
 }
 
-// TestDerive_NeverRejectsAMatch is the soundness proof of the walker: over
+// TestDerive_NeverRejectsAMatch is a sampled soundness check of the walker: over
 // thousands of generated expressions and texts, a text the compiled expression
 // matches is never turned away by the derived condition. Floors keep the test from passing vacuously:
 // enough expressions have a condition, enough texts are matched, and the
@@ -199,7 +76,7 @@ func randomText(r *rand.Rand) string {
 func TestDerive_NeverRejectsAMatch(t *testing.T) {
 	r := rand.New(rand.NewPCG(71, 73))
 	exprs, texts := scaled(4000), 160
-	withNeed, matches, rejected := 0, 0, 0
+	withNeed, matchesUnderNeed, rejected := 0, 0, 0
 	for i := 0; i < exprs; i++ {
 		expr := randomExpr(r, 4)
 		re, err := regexp.Compile(expr)
@@ -213,7 +90,9 @@ func TestDerive_NeverRejectsAMatch(t *testing.T) {
 		for j := 0; j < texts; j++ {
 			s := randomText(r)
 			if re.MatchString(s) {
-				matches++
+				if g.need != nil {
+					matchesUnderNeed++
+				}
 				if g.skip(s) {
 					t.Fatalf("the derived condition of %q rejects %q, which it matches", expr, s)
 				}
@@ -225,8 +104,9 @@ func TestDerive_NeverRejectsAMatch(t *testing.T) {
 	if withNeed < exprs/3 {
 		t.Errorf("only %d of %d generated expressions have a derived condition", withNeed, exprs)
 	}
-	if matches < exprs*texts/20 {
-		t.Errorf("only %d matches in %d pairs: the texts do not exercise the conditions", matches, exprs*texts)
+	// Only a match of an expression that has a condition can fail the test above.
+	if matchesUnderNeed < exprs*texts/100 {
+		t.Errorf("only %d matches of expressions that have a condition, in %d pairs: the texts do not exercise the conditions", matchesUnderNeed, exprs*texts)
 	}
 	if rejected < exprs*texts/20 {
 		t.Errorf("the conditions turned away only %d of %d pairs: they save nothing", rejected, exprs*texts)
@@ -280,6 +160,10 @@ func TestDerive_Table(t *testing.T) {
 		{expr: `(?i)abc`, nothing: true},
 		{expr: `(?i:abc)d`, must: []string{"ABCd"}, mustNot: []string{"abc"}},
 		{expr: `a(?i:b)c`, must: []string{"aBc"}, mustNot: []string{"a", "c"}},
+		{expr: `[a\x{FFFD}]`, nothing: true},
+		{expr: `[a\x{FFFD}]b`, must: []string{"\xffb", "ab", "a\uFFFDb"}, mustNot: []string{"a", "xyz"}},
+		{expr: `[a-p]x`, must: []string{"ax", "px"}, mustNot: []string{"qx", "x", "a"}},
+		{expr: `[a-q]x`, must: []string{"qx", "x"}, mustNot: []string{"a", "qz"}},
 		{expr: `a[^\x{FFFD}]b`, must: []string{"axb", "ab"}, mustNot: []string{"a", "b"}},
 	}
 	for _, tc := range tests {
@@ -312,12 +196,18 @@ func TestDerive_Table(t *testing.T) {
 // so an expression that needs U+FFFD is left unguarded rather than turn such a
 // text away.
 func TestDerive_InvalidBytesAreNotHidden(t *testing.T) {
-	g := newGuard("a�b")
-	if g.need != nil {
-		t.Fatal("an expression with U+FFFD in it is guarded")
+	for _, expr := range []string{"a\uFFFDb", `[a\x{FFFD}]`} {
+		g := newGuard(expr)
+		if g.need != nil {
+			t.Errorf("%q has U+FFFD in it and is guarded: %+v", expr, g.need)
+		}
 	}
-	if s := "a\xffb"; !g.re.MatchString(s) {
-		t.Skipf("the regexp package no longer reads an invalid byte as U+FFFD: %q", s)
+	// The text the guard must not hide from them.
+	if !regexp.MustCompile("a\uFFFDb").MatchString("a\xffb") || !regexp.MustCompile(`[a\x{FFFD}]`).MatchString("\xff") {
+		t.Skip("the regexp package no longer reads an invalid byte as U+FFFD")
+	}
+	if g := newGuard(`[a\x{FFFD}]b`); g.skip("\xffb") {
+		t.Error("the guard of [a\\x{FFFD}]b hides \"\\xffb\", which the expression matches")
 	}
 }
 
@@ -326,10 +216,10 @@ func TestDerive_InvalidBytesAreNotHidden(t *testing.T) {
 // TestDerive_AKeywordAddedToAnExpressionIsNotHidden is the case the derived
 // guards exist for. reMarker's source gains a keyword and nothing else changes:
 // the new expression matches "episode 4", the guard built from it accepts that
-// text, and the whole guard test still holds it to the expression. The
-// hand-written condition of the unedited expression turns the same text away,
-// which is what an edit to an expression, with a copy of its words kept beside
-// it, used to do while the tests stayed green.
+// text, and the whole guard test still holds it to the expression. A condition
+// kept beside the expression as a copy of its words would turn that text away,
+// which is what an edit to an expression used to do while the tests stayed
+// green.
 func TestDerive_AKeywordAddedToAnExpressionIsNotHidden(t *testing.T) {
 	src := reMarker.re.String()
 	edited := strings.Replace(src, "volume|vol|number|no", "volume|vol|episode|number|no", 1)
@@ -346,9 +236,6 @@ func TestDerive_AKeywordAddedToAnExpressionIsNotHidden(t *testing.T) {
 	}
 	if reMarker.re.MatchString(text) || !reMarker.skip(text) {
 		t.Fatalf("the unedited expression and guard should both pass over %q", text)
-	}
-	if handWritten()[reMarker](text) {
-		t.Fatalf("the hand-written condition accepted %q: the case no longer shows the drift", text)
 	}
 	texts := append(guardTexts(41, 43, scaled(20000), 8), text, "episode 12", "no episode 1")
 	matched, skipped := holdGuardToItsExpression(t, g, texts)
