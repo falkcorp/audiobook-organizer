@@ -1,0 +1,264 @@
+// file: internal/applygate/titlecompare_scan_test.go
+// version: 1.1.0
+// guid: 0c4e8a71-d395-4b26-9f17-6a8b3e5d2c40
+// last-edited: 2026-11-18
+
+package applygate
+
+import (
+	"math/rand/v2"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+	"testing"
+	"unicode"
+
+	"golang.org/x/text/unicode/norm"
+)
+
+// The title tokenizer used to be three regular expressions and a strings.Replacer
+// built on every call. They are scanners now (titlecompare.go): a title check made
+// hundreds of matches, and under -race the regexp matcher's pooled state is
+// allocated again for many of them. These tests keep the old expressions as the reference and
+// hold every replacement to them: exhaustively over short strings, and at random
+// over strings with the characters the expressions treat specially.
+
+var (
+	refTitleTokenRe    = regexp.MustCompile(`\d+\.\d+|[\p{L}\p{N}]+`)
+	refRomanRe         = regexp.MustCompile(`^(?:x{0,3})(?:ix|iv|v?i{0,3})$`)
+	refOrdinalDigitRe  = regexp.MustCompile(`^(\d+)(?:st|nd|rd|th)$`)
+	refSegNormReplacer = func(s string) string {
+		return strings.NewReplacer("&", " and ", "#", " ", "'", "", "’", "").Replace(s)
+	}
+)
+
+// refFold is segTokens' character pass as it was written before the scanners.
+func refFold(s string) string {
+	s = strings.ToLower(norm.NFKC.String(s))
+	s = refSegNormReplacer(s)
+	var b strings.Builder
+	for _, r := range norm.NFD.String(s) {
+		if !unicode.Is(unicode.Mn, r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// refSegTokens is segTokens as it was written with the expressions: the same
+// body, with the three regexp calls where the scanners are now.
+func refSegTokens(s string, strip bool) []string {
+	s = refFold(s)
+	raw := refTitleTokenRe.FindAllString(s, -1)
+	out := make([]string, 0, len(raw))
+	for i := 0; i < len(raw); i++ {
+		t := raw[i]
+		switch {
+		case isDecimalOrDigits(t):
+			if v, err := strconv.ParseFloat(t, 64); err == nil {
+				out = append(out, cardTok(strconv.FormatFloat(v, 'f', -1, 64)))
+				continue
+			}
+		case refOrdinalDigitRe.MatchString(t) || ordinalWords[t] > 0:
+			v := ordinalWords[t]
+			if v == 0 {
+				v, _ = strconv.Atoi(refOrdinalDigitRe.FindStringSubmatch(t)[1])
+			}
+			if i+1 < len(raw) && ordinalMarkers[raw[i+1]] {
+				out = append(out, raw[i+1], cardTok(strconv.Itoa(v)))
+				i++
+				continue
+			}
+			out = append(out, ordTok(v))
+			continue
+		case ordinalMarkers[t] && i+2 < len(raw) && raw[i+1] == "the" && (ordinalWords[raw[i+2]] > 0 || refOrdinalDigitRe.MatchString(raw[i+2])):
+			v := ordinalWords[raw[i+2]]
+			if v == 0 {
+				v, _ = strconv.Atoi(refOrdinalDigitRe.FindStringSubmatch(raw[i+2])[1])
+			}
+			out = append(out, t, cardTok(strconv.Itoa(v)))
+			i += 2
+			continue
+		case tensWords[t] > 0:
+			v := tensWords[t]
+			if i+1 < len(raw) && unitWords[raw[i+1]] >= 1 && unitWords[raw[i+1]] <= 9 {
+				v += unitWords[raw[i+1]]
+				i++
+			}
+			out = append(out, cardTok(strconv.Itoa(v)))
+			continue
+		case unitWords[t] > 0:
+			out = append(out, cardTok(strconv.Itoa(unitWords[t])))
+			continue
+		case len(t) >= 2 && refRomanRe.MatchString(t):
+			out = append(out, cardTok(strconv.Itoa(romanValue(t))))
+			continue
+		case (t == "i" || t == "v" || t == "x") && len(out) > 0 && numberMarkers[out[len(out)-1]]:
+			out = append(out, cardTok(strconv.Itoa(romanValue(t))))
+			continue
+		}
+		out = append(out, t)
+	}
+	if strip {
+		out = stripEdition(out)
+	}
+	if len(out) > 1 && leadingArticles[out[0]] {
+		out = out[1:]
+	}
+	return out
+}
+
+// exhaustiveLen is the longest string an exhaustive walk visits: one shorter under
+// -race, where every extra length multiplies the walk by the alphabet's size and
+// the walk is the most of these tests' time. The random draws that follow it carry
+// the longer strings (scaled).
+func exhaustiveLen(full int) int {
+	if raceEnabled {
+		return full - 1
+	}
+	return full
+}
+
+// everyString calls f with every string of length 0..maxLen over alphabet.
+func everyString(alphabet []string, maxLen int, f func(string)) {
+	var walk func(prefix string, left int)
+	walk = func(prefix string, left int) {
+		f(prefix)
+		if left == 0 {
+			return
+		}
+		for _, a := range alphabet {
+			walk(prefix+a, left-1)
+		}
+	}
+	walk("", maxLen)
+}
+
+// scanPieces are the fragments the random strings are built from: what the
+// expressions and the tokenizer treat specially, in the spellings a title has.
+var scanPieces = []string{
+	"a", "b", "z", "x", "v", "i", "l", "c", "I", "V", "X", "xx", "xxx", "xxxx", "ix", "iv", "vi", "vii", "viii", "mix", "civil",
+	"0", "1", "2", "7", "10", "22", "199", "2033", "1.5", "2.", ".5", ".", "..", "3.14.15", "1,5",
+	" ", "  ", "-", " - ", ":", ": ", "(", ")", "[", "]", "&", "#", "'", "’", "_", "/",
+	"st", "nd", "rd", "th", "1st", "2nd", "3rd", "4th", "22nd", "0th", "first", "second", "third", "twelfth",
+	"one", "two", "nine", "ten", "twelve", "nineteen", "twenty", "thirty", "ninety", "twenty-one",
+	"the", "a", "an", "of", "and", "book", "part", "vol", "volume", "chapter", "no", "number", "abridged",
+	"unabridged", "audiobook", "novel", "a novel", "the audiobook", "unknown author", "read by narrator",
+	"é", "ë", "ñ", "Noël", "́", "̈", "İ", "ǅ", "ß", "Ⅱ", "Ⅲ", "ⅷ", "²", "½", "٣", "१२", "ª", "日本", "Ωmega", " ", "–", "—",
+	"\xff", "\xc3", "\xe2\x80", "\x00", "\n", "\t",
+}
+
+func randomScanText(r *rand.Rand, pieces int) string {
+	var b strings.Builder
+	for n := r.IntN(pieces + 1); n > 0; n-- {
+		b.WriteString(scanPieces[r.IntN(len(scanPieces))])
+	}
+	return b.String()
+}
+
+func TestTitleTokens_MatchTheExpression(t *testing.T) {
+	check := func(s string) {
+		t.Helper()
+		got := titleTokens(s)
+		want := refTitleTokenRe.FindAllString(s, -1)
+		if !slices.Equal(got, want) {
+			t.Fatalf("titleTokens(%q) = %q, the expression finds %q", s, got, want)
+		}
+	}
+	everyString([]string{"a", "1", ".", " ", "é", "\xff", "٣", "-"}, exhaustiveLen(6), check)
+	r := rand.New(rand.NewPCG(7, 11))
+	for i := 0; i < scaled(60000); i++ {
+		check(randomScanText(r, 8))
+	}
+}
+
+func TestIsRomanNumeral_MatchesTheExpression(t *testing.T) {
+	everyString([]string{"x", "v", "i", "l", "a", "1"}, exhaustiveLen(8), func(s string) {
+		if got, want := isRomanNumeral(s), refRomanRe.MatchString(s); got != want {
+			t.Fatalf("isRomanNumeral(%q) = %v, the expression says %v", s, got, want)
+		}
+	})
+}
+
+func TestOrdinalDigits_MatchTheExpression(t *testing.T) {
+	check := func(s string) {
+		t.Helper()
+		m := refOrdinalDigitRe.FindStringSubmatch(s)
+		if got := isOrdinalDigits(s); got != (m != nil) {
+			t.Fatalf("isOrdinalDigits(%q) = %v, the expression says %v", s, got, m != nil)
+		}
+		if m != nil {
+			if got := ordinalDigitValue(s); got != m[1] {
+				t.Fatalf("ordinalDigitValue(%q) = %q, the expression captures %q", s, got, m[1])
+			}
+		}
+	}
+	everyString([]string{"1", "2", "s", "t", "n", "d", "r", "h", "a", "٣"}, 5, check)
+	for _, s := range []string{"1st", "22nd", "3rd", "4th", "0th", "007th", "1th", "st", "1st ", " 1st", "1st\n", "1ST", "12345678901234567890th"} {
+		check(s)
+	}
+}
+
+// TestFoldTitleText_MatchesTheTwoPassForm holds the ASCII shortcut to the full
+// NFKC, replace, NFD, drop-marks pass it skips.
+func TestFoldTitleText_MatchesTheTwoPassForm(t *testing.T) {
+	check := func(s string) {
+		t.Helper()
+		if got, want := foldTitleText(s), refFold(s); got != want {
+			t.Fatalf("foldTitleText(%q) = %q, the full pass gives %q", s, got, want)
+		}
+	}
+	// Every ASCII byte alone and in pairs: the shortcut is only taken for ASCII.
+	for a := 0; a < 128; a++ {
+		check(string(rune(a)))
+		for b := 0; b < 128; b++ {
+			check(string([]rune{rune(a), rune(b)}))
+		}
+	}
+	r := rand.New(rand.NewPCG(3, 5))
+	for i := 0; i < scaled(30000); i++ {
+		check(randomScanText(r, 8))
+	}
+}
+
+// TestSegTokens_MatchTheExpressionForm is the whole function against its
+// previous form, over the same strings, with and without the edition words.
+func TestSegTokens_MatchTheExpressionForm(t *testing.T) {
+	check := func(s string) {
+		t.Helper()
+		for _, strip := range []bool{true, false} {
+			if got, want := segTokens(s, strip), refSegTokens(s, strip); !slices.Equal(got, want) {
+				t.Fatalf("segTokens(%q, %v) = %q, the expression form gives %q", s, strip, got, want)
+			}
+		}
+	}
+	r := rand.New(rand.NewPCG(17, 19))
+	for i := 0; i < scaled(80000); i++ {
+		check(randomScanText(r, 10))
+	}
+	everyString([]string{"x", "i", "1", "st", " ", "the", "book", "é"}, exhaustiveLen(4), check)
+}
+
+func TestSplitSegments_MatchesTheExpression(t *testing.T) {
+	check := func(s string) {
+		t.Helper()
+		got, want := splitSegments(s), segSplitRe.Split(s, -1)
+		if !slices.Equal(got, want) {
+			t.Fatalf("splitSegments(%q) = %q, the expression gives %q", s, got, want)
+		}
+	}
+	everyString([]string{"a", " ", "\t", "-", ":", "(", "\u2013", "\u00a0", "\v"}, exhaustiveLen(6), check)
+	r := rand.New(rand.NewPCG(23, 29))
+	pieces := []string{"a", "hush", "Batman", " ", "  ", "\t", "\n", "\v", "\f", "\r", "\u00a0", "\u2003", "-", "--", " - ", "–", " – ", "—", " — ", "-a", "a-", ":", ": ", " :", "(", ")", "[", "]", "()", " (", ") ", "\xff", "\xe2\x80", "é", "1", "2"}
+	for i := 0; i < scaled(80000); i++ {
+		var b strings.Builder
+		for n := r.IntN(9); n > 0; n-- {
+			b.WriteString(pieces[r.IntN(len(pieces))])
+		}
+		check(b.String())
+	}
+	for _, s := range []string{"", " ", ":", " : ", "a:", ":a", "a: ", " :a", "a - b", "a  -  b", "a -b", "a- b", "a – b", "a — b", "a-b", "a (b) c", "a [b]", "a ( b ) c", "x - ", " - x", "-", " -", "- "} {
+		check(s)
+	}
+}

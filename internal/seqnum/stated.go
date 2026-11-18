@@ -1,12 +1,11 @@
 // file: internal/seqnum/stated.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: ef7d6ebc-a3a1-4738-bc60-512ed593d8eb
 // last-edited: 2026-11-18
 
 package seqnum
 
 import (
-	"regexp"
 	"strings"
 )
 
@@ -66,27 +65,33 @@ type Stated struct {
 var (
 	// A part marker with its number, an optional "of M", and the tail that
 	// would make it a range of parts.
-	rePartStated = regexp.MustCompile(`\b(?:parts?|pts?|discs?|disks?|cds?)\.?\s*` + numAlt + `\b(?:\s*(?:of|/)\s*(\d+)\b)?(\s*(?:[-–—]|to|thru|through|&|and)\s*(?:\d+|[ivxlc]+)\b)?`)
+	rePartStated = guard(`\b(?:parts?|pts?|discs?|disks?|cds?)\.?\s*`+numAlt+`\b(?:\s*(?:of|/)\s*(\d+)\b)?(\s*(?:[-–—]|to|thru|through|&|and)\s*(?:\d+|[ivxlc]+)\b)?`,
+		hasAny("part", "pt", "disc", "disk", "cd"))
 	// "(2 of 3)": a parenthesised N of M is a part.
-	reParenOf = regexp.MustCompile(`\(\s*(\d+)\s+of\s+(\d+)\s*\)`)
+	reParenOf = guard(`\(\s*(\d+)\s+of\s+(\d+)\s*\)`, all(hasAny("("), hasAny("of"), hasDigit))
 	// "1 of 2": a position in a set of M.
-	reBareOf = regexp.MustCompile(`\b(\d+)\s+of\s+(\d+)\b`)
+	reBareOf = guard(`\b(\d+)\s+of\s+(\d+)\b`, all(hasAny("of"), hasDigit))
 
 	ordAlt       = `(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|\d+(?:st|nd|rd|th))`
-	reOrdBefore  = regexp.MustCompile(`\b` + ordAlt + `\s+(book|volume|vol|part)\b`)
-	reOrdAfter   = regexp.MustCompile(`\b(book|volume|vol|part)\s+(?:the\s+)?` + ordAlt + `\b`)
-	reLoneRomanI = regexp.MustCompile(`\S\s+i\s*$`)
+	reOrdBefore  = guard(`\b`+ordAlt+`\s+(book|volume|vol|part)\b`, hasAny("book", "vol", "part"))
+	reOrdAfter   = guard(`\b(book|volume|vol|part)\s+(?:the\s+)?`+ordAlt+`\b`, hasAny("book", "vol", "part"))
+	reLoneRomanI = guard(`\S\s+i\s*$`, hasAny("i"))
 	// A numeral closing a text, bare or behind a hash or an opening bracket
 	// ("Hush 2", "Hush #2", "Hush (2)").
-	reTrailingNum = regexp.MustCompile(`(?:^|[\s,:\-#(\[])(?:\d{1,3}(?:\.\d+)?|ii|iii|iv|vi|vii|viii|ix|xi|xii|xiii|xiv|xv|xvi|xvii|xviii|xix|xx)[)\]]?\s*$`)
+	reTrailingNum = guard(`(?:^|[\s,:\-#(\[])(?:\d{1,3}(?:\.\d+)?|ii|iii|iv|vi|vii|viii|ix|xi|xii|xiii|xiv|xv|xvi|xvii|xviii|xix|xx)[)\]]?\s*$`,
+		numeralEnds)
 	// The marker word and the punctuation before it, between a title's words
 	// and its numeral ("Hush, Book 2", "Hush Volume II", "Hush (Book 2)"); a
 	// hash after the marker ("Hush, Book #2") leaves a space behind it.
-	reNumeralMarker = regexp.MustCompile(`[\s,:\-(\[]+(?:book|bk|volume|vol|no|number)\.?\s*$`)
+	reNumeralMarker = guard(`[\s,:\-(\[]+(?:book|bk|volume|vol|no|number)\.?\s*$`, hasAny("book", "bk", "vol", "no", "number"))
 	// A closing note with no number in it ("(Unabridged)", "[Dramatized]"): an
 	// edition label, not a word of the title and not a statement of a number.
-	reClosingNote = regexp.MustCompile(`\s*[(\[][^()\[\]\d]*[)\]]\s*$`)
+	reClosingNote = guard(`\s*[(\[][^()\[\]\d]*[)\]]\s*$`, all(hasAny("(", "["), hasAny(")", "]")))
 )
+
+// numeralEnds is what reTrailingNum needs of the text: a digit, or the i or x
+// every roman numeral from II to XX holds.
+var numeralEnds = hasAnyOr(hasDigit, hasAny("i", "x"))
 
 var ordinalNumbers = map[string]float64{
 	"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6, "seventh": 7, "eighth": 8,
@@ -283,7 +288,7 @@ func volumeIn(t string, volume *Stated, loneI bool) *Stated {
 // one volume), but a title that says "1-3" does not say volume 3: it says the
 // first three. The ends must be short and ordered so a year span or a phone
 // number is not one.
-var reTrailingSpan = regexp.MustCompile(`(?:^|\s)(\d{1,3}\s*[-–—]\s*\d{1,3})\s*$`)
+var reTrailingSpan = guard(`(?:^|\s)(\d{1,3}\s*[-–—]\s*\d{1,3})\s*$`, all(hasDigit, hasDash))
 
 func trailingSpan(t string) (Number, bool) {
 	m := reTrailingSpan.FindStringSubmatch(clean(t))
@@ -311,7 +316,7 @@ func ordinalStated(volume **Stated, parts *[]Stated, marker, ord string) string 
 
 // replaceAllSub replaces every match of re in s by f(submatches), which is
 // handed the whole match at index 0.
-func replaceAllSub(s string, re *regexp.Regexp, f func(m []string) string) string {
+func replaceAllSub(s string, re *guardedRe, f func(m []string) string) string {
 	var b strings.Builder
 	last := 0
 	for _, ix := range re.FindAllStringSubmatchIndex(s, -1) {
