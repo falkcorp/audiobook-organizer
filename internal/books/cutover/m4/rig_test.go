@@ -279,6 +279,17 @@ func (r *rig) owners(cut bool) []storage.OwnerSpec {
 	}
 }
 
+// activity is the activity rewrite over this rig, built the way F5-18 builds
+// it (after the flip's level step).
+func (r *rig) activity() datamigrate.DataMigration {
+	dm, err := m4.NewActivity(m4.ActivityConfig{Logger: slog.New(slog.NewTextHandler(r.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))},
+		cutover.TasksCutoverID+"-activity", cutover.BooksCutoverLevel, []storage.StepRef{cutover.BooksLevelStepRef(r.levelVersion())})
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return dm
+}
+
 // migration is M4 over this rig, built the way F5-18 builds it.
 func (r *rig) migration() datamigrate.DataMigration {
 	dm, err := m4.New(m4.Config{
@@ -390,6 +401,7 @@ func (r *rig) boot(ctx context.Context, fsys vfs.FS, dm datamigrate.DataMigratio
 
 type snap struct {
 	legacy     storage.Reader
+	Act        map[string]string // every row of the activity feed's act: families
 	Left       map[string]string // rows still in books' source families
 	Tasks      map[string]string // every row of core's task keyspace
 	Quarantine []quarantined
@@ -403,9 +415,15 @@ type quarantined struct{ Key, Reason, Step string }
 
 func read(ctx context.Context, t testing.TB, db *storage.DB, dm datamigrate.DataMigration) (*snap, error) {
 	t.Helper()
-	s := &snap{Left: map[string]string{}, Tasks: map[string]string{}, db: db}
+	s := &snap{Left: map[string]string{}, Act: map[string]string{}, Tasks: map[string]string{}, db: db}
 	lr, _ := db.Legacy(cutover.BooksOwner)
 	s.legacy = lr
+	for kv, err := range lr.Scan(ctx, storage.ScanOptions{Start: []byte("act:"), End: []byte("act;")}) {
+		if err != nil {
+			return nil, err
+		}
+		s.Act[string(kv.Key)] = string(kv.Value)
+	}
 	// Left is read over the families as the test names them, not over
 	// m4.SourceRanges: a family the step forgot to claim must still show up.
 	for _, rg := range []storage.Range{
@@ -444,7 +462,7 @@ func read(ctx context.Context, t testing.TB, db *storage.DB, dm datamigrate.Data
 	}
 	slices.SortFunc(s.Quarantine, func(a, b quarantined) int { return strings.Compare(a.Key, b.Key) })
 	sks, _ := db.Keyspace("core/storage")
-	switch raw, err := sks.Get(ctx, storage.DataMigrationKey(cutover.TasksCutoverID)); {
+	switch raw, err := sks.Get(ctx, storage.DataMigrationKey(dm.ID)); {
 	case errors.Is(err, storage.ErrNotFound):
 	case err != nil:
 		return nil, err
