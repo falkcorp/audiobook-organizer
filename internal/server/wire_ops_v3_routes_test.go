@@ -1,7 +1,7 @@
 // file: internal/server/wire_ops_v3_routes_test.go
-// version: 1.8.3
+// version: 1.8.4
 // guid: f0aca62d-8230-49ce-ab21-61cbd082ce99
-// last-edited: 2026-11-10
+// last-edited: 2026-11-18
 
 package server
 
@@ -303,7 +303,7 @@ var readOnlyByDeclaration = map[string]string{
 	"maintenance.author-title-fragment-scan":         "reads; logs",
 	"maintenance.author-whitespace-collision-report": "reads; logs",
 	"maintenance.book-atpath-index-verify":           "snapshot scans only",
-	"maintenance.book-shape-report":                  "report TSV under .reports (reportPath can redirect it: see todo)",
+	"maintenance.book-shape-report":                  "report TSV under .reports (reportPath is confined to that directory)",
 	"maintenance.combine-journal-check":              "reads the combine-journal rows; reports each unreadable one by key",
 	"maintenance.credit-census":                      "reads; reports",
 	"maintenance.file-integrity-check":               "reads and hashes files; reports",

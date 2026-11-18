@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_denumber_undo_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7d2b9e40-3a61-4c85-b1f7-e08c4a5d9376
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -26,7 +26,10 @@ import (
 // it journaled them.
 
 type denumberUndoWorld struct {
-	st     *database.PebbleStore
+	st *database.PebbleStore
+	// root is the library root the plugin reports: a report path is confined to
+	// {root}/.reports.
+	root   string
 	author int
 	// series ids by name, as created.
 	series map[string]int
@@ -38,7 +41,7 @@ func newDenumberUndoWorld(t *testing.T) *denumberUndoWorld {
 	st := newRelinkTrashedStore(t)
 	a, err := st.CreateAuthor("Alfred Pennyworth")
 	require.NoError(t, err)
-	return &denumberUndoWorld{st: st, author: a.ID, series: map[string]int{}, books: map[string]string{}}
+	return &denumberUndoWorld{st: st, root: t.TempDir(), author: a.ID, series: map[string]int{}, books: map[string]string{}}
 }
 
 func (w *denumberUndoWorld) addSeries(t *testing.T, name string) int {
@@ -82,11 +85,11 @@ func (w *denumberUndoWorld) addBookTitled(t *testing.T, label, title, seriesName
 
 func (w *denumberUndoWorld) run(t *testing.T, params, opID string) {
 	t.Helper()
-	p := &Plugin{deps: fakeDeps{store: w.st}}
-	// An apply needs a report path; the params are edited as text so they reach the
-	// decoder as written.
+	p := &Plugin{deps: fakeDeps{store: w.st, root: w.root}}
+	// An apply needs a report path, inside {root}/.reports; the params are edited
+	// as text so they reach the decoder as written.
 	if strings.Contains(params, `"apply": true`) && !strings.Contains(params, "reportPath") {
-		params = strings.Replace(params, "{", `{"reportPath": `+strconv.Quote(filepath.Join(t.TempDir(), "report.tsv"))+`, `, 1)
+		params = strings.Replace(params, "{", `{"reportPath": `+strconv.Quote(filepath.Join(w.root, ".reports", "report.tsv"))+`, `, 1)
 	}
 	require.NoError(t, p.runSeriesDenumber(context.Background(), json.RawMessage(params), &opIDReporter{id: opID}))
 }

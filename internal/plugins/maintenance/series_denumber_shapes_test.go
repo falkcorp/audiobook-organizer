@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_denumber_shapes_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 60a27f27-6670-4e9f-9f7c-b5f9deccf612
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -31,10 +31,15 @@ type seriesSpec struct {
 	seq int
 }
 
-// shapeApplyParams is an apply with the pre-apply report the op requires.
-func shapeApplyParams(t *testing.T, extra map[string]any) string {
-	t.Helper()
-	p := map[string]any{"apply": true, "reportPath": filepath.Join(t.TempDir(), "report.tsv")}
+// shapeApplyParams is an apply with the pre-apply report the op requires, which
+// has to lie under l's report directory, {root}/.reports.
+func shapeApplyParams(l *denumberLib, extra map[string]any) string {
+	l.t.Helper()
+	t := l.t
+	if l.reportPath == "" {
+		l.reportPath = filepath.Join(l.root, ".reports", "report.tsv")
+	}
+	p := map[string]any{"apply": true, "reportPath": l.reportPath}
 	for k, v := range extra {
 		p[k] = v
 	}
@@ -62,7 +67,7 @@ func runShape(t *testing.T, authors []string, specs []seriesSpec) (*denumberLib,
 			orig[id] = s.id
 		}
 	}
-	l.mustRun(shapeApplyParams(t, nil))
+	l.mustRun(shapeApplyParams(l, nil))
 	return l, orig
 }
 
@@ -198,7 +203,7 @@ func TestSeriesDenumber_ReviewControls_CorroboratedRunStillMoves(t *testing.T) {
 			l.addSeries(20+i, n, denumberAuthor)
 			l.addBook(bookIDFor(20+i, 0), 20+i, -1, "")
 		}
-		l.mustRun(shapeApplyParams(t, nil))
+		l.mustRun(shapeApplyParams(l, nil))
 		base := l.createdID("Court of Owls")
 		if base == 0 {
 			t.Fatalf("no base created; events=%v", l.events)
@@ -215,7 +220,7 @@ func TestSeriesDenumber_ReviewControls_CorroboratedRunStillMoves(t *testing.T) {
 		l.addSeries(31, "Court of Owls 05", denumberAuthor)
 		l.addBook("owls-5", 31, 5, "")
 		before := libState(l)
-		l.mustRun(shapeApplyParams(t, nil))
+		l.mustRun(shapeApplyParams(l, nil))
 		assertLibUnchanged(t, l, before)
 	})
 	t.Run("a book whose own position matches the name moves when the run confirms it", func(t *testing.T) {
@@ -223,7 +228,7 @@ func TestSeriesDenumber_ReviewControls_CorroboratedRunStillMoves(t *testing.T) {
 		l.addSeries(31, "Court of Owls 05", denumberAuthor)
 		l.addBook("owls-5", 31, 5, "")
 		l.addRunAround("Court of Owls", denumberAuthor, 5, 40)
-		l.mustRun(shapeApplyParams(t, nil))
+		l.mustRun(shapeApplyParams(l, nil))
 		base := l.createdID("Court of Owls")
 		if base == 0 || l.seriesOf("owls-5") != base || l.seqOf("owls-5") != "5" {
 			t.Fatalf("book in series %d at %s, want the created base %d at 5", l.seriesOf("owls-5"), l.seqOf("owls-5"), base)

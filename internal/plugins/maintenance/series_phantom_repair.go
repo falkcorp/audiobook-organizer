@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_phantom_repair.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 7c2dfefe-ccbe-4a60-b69b-5baee504d537
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -109,7 +109,9 @@ type seriesPhantomRepairParams struct {
 	// never caps the report.
 	Limit int `json:"limit,omitempty"`
 	// ReportPath, when set, writes every phantom id and every holder as TSV so
-	// the decision between null and recreate can be made from the whole list.
+	// the decision between null and recreate can be made from the whole list. It
+	// must lie inside {root_dir}/.reports (a relative path is taken relative to
+	// that directory); anything that resolves outside it is refused.
 	ReportPath string `json:"report_path,omitempty"`
 }
 
@@ -251,6 +253,16 @@ func (p *Plugin) seriesPhantomRepair(ctx context.Context, params seriesPhantomRe
 		return nil, fmt.Errorf("series-phantom-repair: no store")
 	}
 	log := reporter.Logger()
+
+	// The caller's report_path is confined to {root_dir}/.reports before any read,
+	// so a path that would escape it is refused with nothing done.
+	if params.ReportPath != "" {
+		resolved, rpErr := p.resolveReportPath(params.ReportPath, opReportFileName(reporter, "series-phantom-repair"))
+		if rpErr != nil {
+			return nil, fmt.Errorf("series-phantom-repair: %w", rpErr)
+		}
+		params.ReportPath = resolved
+	}
 
 	// 1. The denominator: every series id any book row references, in ANY
 	// state. Fails CLOSED. A filtered count is the exact instrument that created

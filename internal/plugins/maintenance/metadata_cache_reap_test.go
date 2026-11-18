@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/metadata_cache_reap_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 2f7a5c81-9de3-4b06-8c14-a35f7e290bd6
-// last-edited: 2026-11-14
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -393,9 +393,10 @@ func reapMockStore(ids []string, present map[string]bool, deleted *[]string) *da
 func TestMetadataCacheReap_RunDefaultsToDryRun(t *testing.T) {
 	var deleted []string
 	store := reapMockStore([]string{"b1", "b2", "b3"}, map[string]bool{"b1": true}, &deleted)
-	p := New(fakeDeps{store: store})
+	root := t.TempDir()
+	p := New(fakeDeps{store: store, root: root})
 
-	reportPath := filepath.Join(t.TempDir(), "reap.tsv")
+	reportPath := filepath.Join(root, ".reports", "reap.tsv") // a report may only be written under {root}/.reports
 	body := fmt.Sprintf(`{"reportPath":%q}`, reportPath)
 	require.NoError(t, p.runMetadataCacheReap(context.Background(), []byte(body), &fakeReporter{}))
 
@@ -412,9 +413,10 @@ func TestMetadataCacheReap_RunDefaultsToDryRun(t *testing.T) {
 func TestMetadataCacheReap_RunAppliesWhenAsked(t *testing.T) {
 	var deleted []string
 	store := reapMockStore([]string{"b1", "b2", "b3"}, map[string]bool{"b1": true}, &deleted)
-	p := New(fakeDeps{store: store})
+	root := t.TempDir()
+	p := New(fakeDeps{store: store, root: root})
 
-	reportPath := filepath.Join(t.TempDir(), "reap.tsv")
+	reportPath := filepath.Join(root, ".reports", "reap.tsv") // a report may only be written under {root}/.reports
 	body := fmt.Sprintf(`{"apply":true,"reportPath":%q}`, reportPath)
 	require.NoError(t, p.runMetadataCacheReap(context.Background(), []byte(body), &fakeReporter{}))
 

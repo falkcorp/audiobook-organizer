@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g2_test.go
-// version: 1.3.9
+// version: 1.3.10
 // guid: 7d3c1e58-2b94-4a6f-9e07-c5a18f2d4b63
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -2331,7 +2331,9 @@ func t6g2HeadWidthSubtests(t *testing.T) {
 				r = c
 			}
 		}
-		p := &Plugin{deps: t6g2HeadDeps{fakeDeps: fakeDeps{store: t6g2HeadStore{f: f}}, w: f.writer}}
+		// root is the library root HEAD resolves a report path against: an explicit
+		// reportPath has to lie under {root}/.reports.
+		p := &Plugin{deps: t6g2HeadDeps{fakeDeps: fakeDeps{store: t6g2HeadStore{f: f}, root: f.reportDir}, w: f.writer}}
 		if err := r.def(p).Run(context.Background(), json.RawMessage(params), rep); err != nil {
 			t.Fatalf("HEAD run: %v", err)
 		}
@@ -2486,7 +2488,7 @@ func t6g2HeadWidthSubtests(t *testing.T) {
 		}
 		rep := &t6g2TouchReporter{t6g2ResultReporter: &t6g2ResultReporter{fakeReporter: &fakeReporter{}}}
 		rep.gt.set(want)
-		params := fmt.Sprintf(`{"oversizedThreshold":1,"reportPath":%q}`, filepath.Join(f.reportDir, "shape.tsv"))
+		params := fmt.Sprintf(`{"oversizedThreshold":1,"reportPath":%q}`, filepath.Join(f.reportDir, ".reports", "shape.tsv"))
 		runWith(t, f, t6g2KindBookShapeReport, params, rep)
 		if got := rep.gt.peakInFlight(); got != want {
 			t.Errorf("HEAD classified %d shards at once, want its %d workers", got, want)

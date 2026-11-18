@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_report_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 5e3b8c71-2d94-4f0a-a6c7-91b4e2d0f358
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -105,7 +105,10 @@ func newDupeReportStore(t *testing.T) *database.PebbleStore {
 
 func runDupeReport(t *testing.T, s *database.PebbleStore, params DedupeBookFileRowsParams) [][]string {
 	t.Helper()
-	p := &Plugin{deps: fakeDeps{store: s}}
+	// A report is only written under {root}/.reports, so the run gets a real root.
+	root := t.TempDir()
+	params.ReportPath = filepath.Join(root, ".reports", "r.tsv")
+	p := &Plugin{deps: fakeDeps{store: s, root: root}}
 	raw, _ := json.Marshal(params)
 	if err := p.runDedupeBookFileRows(context.Background(), raw, &concurrentReporter{}); err != nil {
 		t.Fatalf("runDedupeBookFileRows: %v", err)
@@ -123,7 +126,7 @@ func TestDedupeBookFileRows_DryRunWritesReport(t *testing.T) {
 	s := newDupeReportStore(t)
 	ids := seedDupBooks(t, s, 3, 4)
 
-	rows := runDupeReport(t, s, DedupeBookFileRowsParams{ReportPath: filepath.Join(t.TempDir(), "r.tsv")})
+	rows := runDupeReport(t, s, DedupeBookFileRowsParams{})
 	if len(rows) != 3 {
 		t.Fatalf("got %d report rows, want 3: %q", len(rows), rows)
 	}
@@ -151,7 +154,7 @@ func TestDedupeBookFileRows_ReportRowsAreSortedByBookID(t *testing.T) {
 	s := newDupeReportStore(t)
 	seedDupBooks(t, s, 6, 3)
 
-	rows := runDupeReport(t, s, DedupeBookFileRowsParams{ReportPath: filepath.Join(t.TempDir(), "r.tsv")})
+	rows := runDupeReport(t, s, DedupeBookFileRowsParams{})
 	if len(rows) != 6 {
 		t.Fatalf("got %d rows, want 6", len(rows))
 	}
@@ -181,7 +184,7 @@ func TestDedupeBookFileRows_ReportOmitsBooksWithNoDuplicates(t *testing.T) {
 		clean[bk.ID] = true
 	}
 
-	rows := runDupeReport(t, s, DedupeBookFileRowsParams{ReportPath: filepath.Join(t.TempDir(), "r.tsv")})
+	rows := runDupeReport(t, s, DedupeBookFileRowsParams{})
 	if len(rows) != 3 {
 		t.Fatalf("got %d rows, want exactly the 3 duplicated books: %q", len(rows), rows)
 	}
@@ -214,7 +217,7 @@ func TestDedupeBookFileRows_ReportFlagsFingerprintOnRedundantRow(t *testing.T) {
 	both := mk("both", []byte{1, 2}, []byte{3, 4})
 	one := mk("one", []byte{1, 2}, nil)
 
-	rows := runDupeReport(t, s, DedupeBookFileRowsParams{ReportPath: filepath.Join(t.TempDir(), "r.tsv")})
+	rows := runDupeReport(t, s, DedupeBookFileRowsParams{})
 	got := map[string]string{}
 	for _, r := range rows {
 		got[r[0]] = r[5]

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_crossfolder_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 5bb37ed8-73c4-429c-8168-cc4e2fb52f0e
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -190,17 +190,21 @@ type crossFolderFixture struct {
 	missingID, twinID  string
 	missingPath, twin  string
 	reportPath, others string
+	// root is the library root the plugin reports; reportPath lies under its
+	// .reports directory, the only place a report may be written.
+	root string
 }
 
 func newCrossFolderFixture(t *testing.T) crossFolderFixture {
 	t.Helper()
 	s := newDupeReportStore(t) // warmed PebbleStore; skips in -short
 	dir := t.TempDir()
-	fx := crossFolderFixture{store: s,
+	root := t.TempDir()
+	fx := crossFolderFixture{store: s, root: root,
 		missingPath: filepath.Join(dir, "old", "Ch 01.mp3"),
 		twin:        filepath.Join(dir, "new", "Ch 01.mp3"),
 		others:      filepath.Join(dir, "new", "Ch 02.mp3"),
-		reportPath:  filepath.Join(t.TempDir(), "report.tsv"),
+		reportPath:  filepath.Join(root, ".reports", "report.tsv"),
 	}
 	cfWrite(t, fx.twin, 1000)
 	cfWrite(t, fx.others, 2000)
@@ -255,9 +259,9 @@ func cfRowIDs(t *testing.T, s *database.PebbleStore, bookID string) map[string]b
 	return out
 }
 
-func cfRunDedupe(t *testing.T, s *database.PebbleStore, params DedupeBookFileRowsParams) *concurrentReporter {
+func cfRunDedupe(t *testing.T, s *database.PebbleStore, root string, params DedupeBookFileRowsParams) *concurrentReporter {
 	t.Helper()
-	p := &Plugin{deps: fakeDeps{store: s}}
+	p := &Plugin{deps: fakeDeps{store: s, root: root}}
 	raw, _ := json.Marshal(params)
 	rep := &concurrentReporter{}
 	if err := p.runDedupeBookFileRows(context.Background(), raw, rep); err != nil {
@@ -278,7 +282,7 @@ func cfBookDuration(t *testing.T, s *database.PebbleStore, bookID string) int {
 // The preview lists the row it would delete, with its twin, and writes nothing.
 func TestCrossFolder_PreviewWritesNothing(t *testing.T) {
 	fx := newCrossFolderFixture(t)
-	rep := cfRunDedupe(t, fx.store, DedupeBookFileRowsParams{
+	rep := cfRunDedupe(t, fx.store, fx.root, DedupeBookFileRowsParams{
 		CrossFolder: true, BookIDs: []string{fx.bookID}, ReportPath: fx.reportPath,
 	})
 	if ids := cfRowIDs(t, fx.store, fx.bookID); len(ids) != 3 {
@@ -307,7 +311,7 @@ func TestCrossFolder_PreviewWritesNothing(t *testing.T) {
 // that survive, the same way the same-folder path does it.
 func TestCrossFolder_ApplyDeletesAndRecomputes(t *testing.T) {
 	fx := newCrossFolderFixture(t)
-	rep := cfRunDedupe(t, fx.store, DedupeBookFileRowsParams{
+	rep := cfRunDedupe(t, fx.store, fx.root, DedupeBookFileRowsParams{
 		Apply: true, CrossFolder: true, BookIDs: []string{fx.bookID}, ReportPath: fx.reportPath,
 	})
 	// The op's own recompute ran (the store's delete hook also recomputes, so
@@ -343,7 +347,7 @@ func TestCrossFolder_ApplyDeletesAndRecomputes(t *testing.T) {
 // its missing row.
 func TestCrossFolder_OffByDefault(t *testing.T) {
 	fx := newCrossFolderFixture(t)
-	cfRunDedupe(t, fx.store, DedupeBookFileRowsParams{Apply: true, BookIDs: []string{fx.bookID}, ReportPath: fx.reportPath})
+	cfRunDedupe(t, fx.store, fx.root, DedupeBookFileRowsParams{Apply: true, BookIDs: []string{fx.bookID}, ReportPath: fx.reportPath})
 	if !cfRowIDs(t, fx.store, fx.bookID)[fx.missingID] {
 		t.Fatal("the missing row was deleted without cross_folder:true")
 	}
@@ -361,7 +365,7 @@ func TestCrossFolder_FileReappearsAtApplyTime(t *testing.T) {
 		}
 		return os.Stat(p)
 	}
-	rep := cfRunDedupe(t, fx.store, DedupeBookFileRowsParams{
+	rep := cfRunDedupe(t, fx.store, fx.root, DedupeBookFileRowsParams{
 		Apply: true, CrossFolder: true, BookIDs: []string{fx.bookID}, ReportPath: fx.reportPath,
 	})
 	if !cfRowIDs(t, fx.store, fx.bookID)[fx.missingID] {
@@ -382,7 +386,7 @@ func TestCrossFolder_BookIDsScope(t *testing.T) {
 	cfSeedRow(t, fx.store, otherBook, twin, 1000, 600, "")
 	outMissing := cfSeedRow(t, fx.store, otherBook, filepath.Join(dir, "old", "Ch 01.mp3"), 1000, 600, "")
 
-	cfRunDedupe(t, fx.store, DedupeBookFileRowsParams{
+	cfRunDedupe(t, fx.store, fx.root, DedupeBookFileRowsParams{
 		Apply: true, CrossFolder: true, BookIDs: []string{fx.bookID}, ReportPath: fx.reportPath,
 	})
 	if cfRowIDs(t, fx.store, fx.bookID)[fx.missingID] {
@@ -398,7 +402,8 @@ func TestCrossFolder_BookIDsScope(t *testing.T) {
 func TestRemoveRowIDs_Gates(t *testing.T) {
 	s := newDupeReportStore(t)
 	dir := t.TempDir()
-	report := filepath.Join(t.TempDir(), "r.tsv")
+	root := t.TempDir()
+	report := filepath.Join(root, ".reports", "r.tsv")
 	ch := filepath.Join(dir, "Ch 31.mp3")
 	extra := filepath.Join(dir, "The Testament.mp3")
 	cfWrite(t, ch, 100)
@@ -409,7 +414,7 @@ func TestRemoveRowIDs_Gates(t *testing.T) {
 	cfSetStaleDuration(t, s, book, 99999)
 
 	// No hash twin, not confirmed: preview and apply both refuse.
-	rep := cfRunDedupe(t, s, DedupeBookFileRowsParams{Apply: true, RemoveRowIDs: []string{extraID}, ReportPath: report})
+	rep := cfRunDedupe(t, s, root, DedupeBookFileRowsParams{Apply: true, RemoveRowIDs: []string{extraID}, ReportPath: report})
 	if !cfRowIDs(t, s, book)[extraID] {
 		t.Fatal("row removed without a hash twin or confirmed_duplicate")
 	}
@@ -418,7 +423,7 @@ func TestRemoveRowIDs_Gates(t *testing.T) {
 	}
 
 	// Confirmed, preview: listed, nothing written.
-	rep = cfRunDedupe(t, s, DedupeBookFileRowsParams{RemoveRowIDs: []string{extraID}, ConfirmedDuplicate: true, ReportPath: report})
+	rep = cfRunDedupe(t, s, root, DedupeBookFileRowsParams{RemoveRowIDs: []string{extraID}, ConfirmedDuplicate: true, ReportPath: report})
 	if !cfRowIDs(t, s, book)[extraID] || cfBookDuration(t, s, book) != 99999 {
 		t.Fatal("preview wrote")
 	}
@@ -427,7 +432,7 @@ func TestRemoveRowIDs_Gates(t *testing.T) {
 	}
 
 	// Confirmed, apply: row gone, file kept, duration recomputed.
-	rep = cfRunDedupe(t, s, DedupeBookFileRowsParams{Apply: true, RemoveRowIDs: []string{extraID}, ConfirmedDuplicate: true, ReportPath: report})
+	rep = cfRunDedupe(t, s, root, DedupeBookFileRowsParams{Apply: true, RemoveRowIDs: []string{extraID}, ConfirmedDuplicate: true, ReportPath: report})
 	if !strings.Contains(rep.loggedText(), "1 deleted, recomputed 1 books") {
 		t.Fatalf("summary does not report the deletion and recompute:\n%s", rep.loggedText())
 	}
@@ -447,7 +452,8 @@ func TestRemoveRowIDs_Gates(t *testing.T) {
 func TestRemoveRowIDs_HashTwinAndNeverEmptiesABook(t *testing.T) {
 	s := newDupeReportStore(t)
 	dir := t.TempDir()
-	report := filepath.Join(t.TempDir(), "r.tsv")
+	root := t.TempDir()
+	report := filepath.Join(root, ".reports", "r.tsv")
 	a := filepath.Join(dir, "a.mp3")
 	b := filepath.Join(dir, "b.mp3")
 	cfWrite(t, a, 10)
@@ -457,18 +463,18 @@ func TestRemoveRowIDs_HashTwinAndNeverEmptiesABook(t *testing.T) {
 	bID := cfSeedRow(t, s, book, b, 10, 60, "same")
 
 	// Both named: each one's only twin is itself named, so neither qualifies.
-	cfRunDedupe(t, s, DedupeBookFileRowsParams{Apply: true, RemoveRowIDs: []string{aID, bID}, ReportPath: report})
+	cfRunDedupe(t, s, root, DedupeBookFileRowsParams{Apply: true, RemoveRowIDs: []string{aID, bID}, ReportPath: report})
 	if ids := cfRowIDs(t, s, book); !ids[aID] || !ids[bID] {
 		t.Fatalf("named rows justified each other: %v", ids)
 	}
 
-	cfRunDedupe(t, s, DedupeBookFileRowsParams{Apply: true, RemoveRowIDs: []string{bID}, ReportPath: report})
+	cfRunDedupe(t, s, root, DedupeBookFileRowsParams{Apply: true, RemoveRowIDs: []string{bID}, ReportPath: report})
 	if ids := cfRowIDs(t, s, book); !ids[aID] || ids[bID] {
 		t.Fatalf("rows after hash-twin removal = %v, want only %s", ids, aID)
 	}
 
 	// The last row, even confirmed, is never removed.
-	cfRunDedupe(t, s, DedupeBookFileRowsParams{Apply: true, RemoveRowIDs: []string{aID}, ConfirmedDuplicate: true, ReportPath: report})
+	cfRunDedupe(t, s, root, DedupeBookFileRowsParams{Apply: true, RemoveRowIDs: []string{aID}, ConfirmedDuplicate: true, ReportPath: report})
 	if !cfRowIDs(t, s, book)[aID] {
 		t.Fatal("the book's last row was removed")
 	}
@@ -481,7 +487,8 @@ func TestRemoveRowIDs_HashTwinAndNeverEmptiesABook(t *testing.T) {
 func TestCrossFolder_ScopedPreviewListsEveryDecision(t *testing.T) {
 	s := newDupeReportStore(t)
 	dir := t.TempDir()
-	report := filepath.Join(t.TempDir(), "r.tsv")
+	root := t.TempDir()
+	report := filepath.Join(root, ".reports", "r.tsv")
 	present := filepath.Join(dir, "new", "Ch 01.mp3")
 	cfWrite(t, present, 10)
 	book := cfSeedBook(t, s, "Scoped", filepath.Join(dir, "new"))
@@ -490,7 +497,7 @@ func TestCrossFolder_ScopedPreviewListsEveryDecision(t *testing.T) {
 	lonely := cfSeedRow(t, s, book, filepath.Join(dir, "old", "Renamed.mp3"), 10, 60, "")
 
 	off := false
-	rep := cfRunDedupe(t, s, DedupeBookFileRowsParams{
+	rep := cfRunDedupe(t, s, root, DedupeBookFileRowsParams{
 		CrossFolder: true, PruneSuperseded: &off, BookIDs: []string{book}, ReportPath: report,
 	})
 	logs := rep.loggedText()
@@ -510,7 +517,8 @@ func TestCrossFolder_ScopedPreviewListsEveryDecision(t *testing.T) {
 func TestRemoveRowIDs_HashTwinNeedsSameSize(t *testing.T) {
 	s := newDupeReportStore(t)
 	dir := t.TempDir()
-	report := filepath.Join(t.TempDir(), "r.tsv")
+	root := t.TempDir()
+	report := filepath.Join(root, ".reports", "r.tsv")
 	a := filepath.Join(dir, "a.mp3")
 	b := filepath.Join(dir, "b.mp3")
 	cfWrite(t, a, 10)
@@ -518,7 +526,7 @@ func TestRemoveRowIDs_HashTwinNeedsSameSize(t *testing.T) {
 	book := cfSeedBook(t, s, "Size Differs", dir)
 	cfSeedRow(t, s, book, a, 10, 60, "same")
 	bID := cfSeedRow(t, s, book, b, 11, 60, "same")
-	cfRunDedupe(t, s, DedupeBookFileRowsParams{Apply: true, RemoveRowIDs: []string{bID}, ReportPath: report})
+	cfRunDedupe(t, s, root, DedupeBookFileRowsParams{Apply: true, RemoveRowIDs: []string{bID}, ReportPath: report})
 	if !cfRowIDs(t, s, book)[bID] {
 		t.Fatal("a row was removed on a hash match with a different size")
 	}

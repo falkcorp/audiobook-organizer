@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_denumber_apply_test.go
-// version: 4.2.0
+// version: 4.2.1
 // guid: 4c93e07a-1d62-4b8e-a5f3-90b7c1de2846
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -100,8 +100,12 @@ type denumberLib struct {
 	failUpdate     map[string]bool
 	// cache counts the cache invalidations of the last run.
 	cache *spCacheDeps
+	// root is the library root the plugin deps report. A report path is confined to
+	// {root}/.reports, so it is a real temp directory, not the fake "/lib".
+	root string
 	// reportPath is the report an apply writes: run() adds it to every apply that
-	// names none, because an apply without one is refused.
+	// names none, because an apply without one is refused. It lies under
+	// {root}/.reports.
 	reportPath string
 	// refOverride, when set, answers GetSeriesBookRefCount instead of the live count.
 	refOverride func(seriesID int) (int, error)
@@ -118,6 +122,7 @@ func newDenumberLib(t *testing.T) *denumberLib {
 	t.Helper()
 	l := &denumberLib{
 		t:            t,
+		root:         t.TempDir(),
 		store:        &database.MockStore{},
 		deleted:      map[int]bool{},
 		books:        map[string]*database.Book{},
@@ -440,7 +445,7 @@ func (l *denumberLib) withReport(params string) string {
 		return params
 	}
 	if l.reportPath == "" {
-		l.reportPath = filepath.Join(l.t.TempDir(), "report.tsv")
+		l.reportPath = filepath.Join(l.root, ".reports", "report.tsv")
 	}
 	// Inserted as text, so a test of malformed or duplicated keys still reaches the
 	// decoder exactly as written.
@@ -457,7 +462,7 @@ func (l *denumberLib) run(params string) (*fakeReporter, error) {
 func (l *denumberLib) runCtx(ctx context.Context, params string) (*fakeReporter, error) {
 	l.t.Helper()
 	rep := &opIDReporter{id: denumberOpID}
-	l.cache = &spCacheDeps{fakeDeps: fakeDeps{store: l.restoring()}}
+	l.cache = &spCacheDeps{fakeDeps: fakeDeps{store: l.restoring(), root: l.root}}
 	var deps ServerDeps = l.cache
 	if l.deps != nil {
 		deps = l.deps(l.cache)
@@ -1262,7 +1267,7 @@ func TestRunSeriesDenumber_MinBooksAndBaseNameScopeTheApply(t *testing.T) {
 
 func TestRunSeriesDenumber_TheReportCoversEveryPlanWhateverTheCanarySelects(t *testing.T) {
 	l := canaryLib(t)
-	path := filepath.Join(t.TempDir(), "nested", "report.tsv")
+	path := filepath.Join(l.root, ".reports", "nested", "report.tsv")
 
 	l.mustRun(fmt.Sprintf(`{"apply": true, "limit": 1, "reportPath": %q}`, path))
 
@@ -1288,7 +1293,10 @@ func TestRunSeriesDenumber_TheReportCoversEveryPlanWhateverTheCanarySelects(t *t
 // An apply nobody can audit does not start.
 func TestRunSeriesDenumber_AnUnwritableReportStopsTheApply(t *testing.T) {
 	l := canaryLib(t)
-	dir := t.TempDir()
+	dir := filepath.Join(l.root, ".reports")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	blocker := filepath.Join(dir, "file")
 	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)

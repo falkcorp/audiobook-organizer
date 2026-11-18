@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_op.go
-// version: 5.4.3
+// version: 5.4.4
 // guid: 3f0b6c84-52d1-4a97-9e35-c8b71d0af426
 // last-edited: 2026-11-18
 
@@ -55,7 +55,9 @@ type SeriesDenumberParams struct {
 	// decision as TSV before a single row is touched, and the outcomes of an apply
 	// to ReportPath + ".applied". REQUIRED to apply: the undo journal is the way
 	// back, and the report is what a person audits an apply against, so an apply
-	// that leaves no report is refused. A dry run may omit it.
+	// that leaves no report is refused. A dry run may omit it. It must lie inside
+	// {root_dir}/.reports (a relative path is taken relative to that directory);
+	// anything that resolves outside it is refused before any work.
 	ReportPath string `json:"reportPath,omitempty"`
 }
 
@@ -221,6 +223,22 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 			return errors.New("series-denumber: refusing to apply: this store cannot delete a series only if nothing references it, so an emptied series could not be deleted safely")
 		}
 	}
+	// The caller's reportPath is confined to {root_dir}/.reports before any read
+	// and before the scanner is stood down, so a path that would escape it is
+	// refused with nothing done. The outcome report is written beside it as
+	// ReportPath + ".applied", so that name is held to the same rule now rather
+	// than failing after the apply.
+	if params.ReportPath != "" {
+		resolved, rpErr := p.resolveReportPath(params.ReportPath, opReportFileName(reporter, "series-denumber"))
+		if rpErr != nil {
+			return fmt.Errorf("series-denumber: %w", rpErr)
+		}
+		if _, rpErr = p.resolveReportPath(resolved+".applied", opReportFileName(reporter, "series-denumber")); rpErr != nil {
+			return fmt.Errorf("series-denumber: %w", rpErr)
+		}
+		params.ReportPath = resolved
+	}
+
 	// A running scan rewrites book rows underneath an apply, so the scanner stands
 	// down for the whole run, planning included: the plan is read from the library
 	// the writes then change. A dry run writes nothing and takes no gate. The lease
