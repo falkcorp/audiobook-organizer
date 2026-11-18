@@ -92,20 +92,16 @@ func handWritten() map[*guardedRe]func(string) bool {
 	}
 }
 
-// TestDerive_AgainstTheHandWrittenGuards compares each derived condition with
-// the hand-written one it replaced, over the texts the guard tests use. For
-// every guard and every text:
-//
-//   - a text the expression matches is accepted by the derived condition (no
-//     match is hidden), including the texts the old condition accepted;
-//   - a text the derived condition accepts is accepted by the old one too: the
-//     derived guard is never looser, so no speed-up the hand-written one gave is
-//     lost.
-//
-// A text the old condition accepted and the derived one turns away is allowed
-// when the expression does not match it: the derived condition is exact where a
-// hand-written one used a shorter literal ("dis" for disc and disk), and the
-// test reports how many such texts there were.
+// TestDerive_AgainstTheHandWrittenGuards holds each derived condition to the
+// hand-written one it replaced, over the texts the guard tests use, in the one
+// direction that is a matter of correctness: every text the expression matches
+// is accepted by the derived condition, which includes every match the
+// hand-written one accepted. (A derived condition may turn away a text the old
+// one let through when the expression does not match it: it is exact where the
+// old list used a shorter literal, "dis" for disc and disk, and the number of
+// such texts is logged. That is why this is not "at least as permissive" in the
+// literal sense; soundness is this test plus TestGuards_NeverHideAMatch and
+// TestDerive_NeverRejectsAMatch.)
 func TestDerive_AgainstTheHandWrittenGuards(t *testing.T) {
 	old := handWritten()
 	if len(old) != 26 {
@@ -114,23 +110,36 @@ func TestDerive_AgainstTheHandWrittenGuards(t *testing.T) {
 	texts := guardTexts(41, 43, scaled(60000), 8)
 	for g, oldCond := range old {
 		if g.need == nil {
-			t.Errorf("%q has no derived condition, the hand-written one was %s", g.re, "a real one")
+			t.Errorf("%q has no derived condition, but the hand-written one was a real one", g.re)
 			continue
 		}
 		tighter := 0
 		for _, s := range texts {
-			derived, hand := g.need.holds(s), oldCond(s)
+			derived := g.need.holds(s)
 			if g.re.MatchString(s) && !derived {
 				t.Fatalf("the derived condition of %q rejects %q, which it matches", g.re, s)
 			}
-			if derived && !hand {
-				t.Fatalf("the derived condition of %q accepts %q, which the hand-written one turned away: it would run an expression the old guard skipped", g.re, s)
-			}
-			if hand && !derived {
+			if oldCond(s) && !derived {
 				tighter++
 			}
 		}
 		t.Logf("%-70.70q derived turns away %6d of %d texts the hand-written one let through", g.re, tighter, len(texts))
+	}
+}
+
+// TestDerive_NeverLooserThanTheHandWrittenGuards is about speed, not
+// correctness: a derived condition that accepts a text the hand-written one
+// turned away would run an expression the old guard skipped. Over the guard
+// test texts it never does, so the speed-up the hand-written guards gave is kept
+// (and the derived ones add to it).
+func TestDerive_NeverLooserThanTheHandWrittenGuards(t *testing.T) {
+	texts := guardTexts(41, 43, scaled(60000), 8)
+	for g, oldCond := range handWritten() {
+		for _, s := range texts {
+			if g.need != nil && g.need.holds(s) && !oldCond(s) {
+				t.Fatalf("the derived condition of %q accepts %q, which the hand-written one turned away", g.re, s)
+			}
+		}
 	}
 }
 
@@ -183,7 +192,7 @@ func randomText(r *rand.Rand) string {
 
 // TestDerive_NeverRejectsAMatch is the soundness proof of the walker: over
 // thousands of generated expressions and texts, a text the compiled expression
-// matches is never turned away by the derived condition. Floors keep it honest:
+// matches is never turned away by the derived condition. Floors keep the test from passing vacuously:
 // enough expressions have a condition, enough texts are matched, and the
 // conditions turn enough texts away that a walker that returned nothing for
 // everything would fail.
@@ -254,7 +263,7 @@ func TestDerive_Table(t *testing.T) {
 		{expr: `a\Bb`, must: []string{"ab", "xaby"}, mustNot: []string{"a b", "a x b", "a", "b"}},
 		{expr: `(a)(b)`, must: []string{"ab", "xaby"}, mustNot: []string{"ba", "a", "b", ""}},
 		{expr: `n(?:o|umber)`, must: []string{"no", "number"}, mustNot: []string{"n", "o", "umber", "nu", "on"}},
-		{expr: `vol(?:ume)?s?`, must: []string{"vol", "volumes"}, mustNot: []string{"vo", "ol", "vo"}},
+		{expr: `vol(?:ume)?s?`, must: []string{"vol", "volumes"}, mustNot: []string{"vo", "ol", "v"}},
 		{expr: `(a|b)+c`, must: []string{"ac", "bc"}, mustNot: []string{"c", "a", "xyz"}},
 		{expr: `\bfoo\b`, must: []string{"foo"}, mustNot: []string{"", "fo", "bar"}},
 		{expr: `^$`, nothing: true},
