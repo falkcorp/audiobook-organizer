@@ -6,3 +6,7 @@
 ### Changed
 
 - The self-updater now lives in the shared core module (`core/updater`), parameterised by the release source, the binary name and the app name, and with a GitHub release source (`core/updater/github`). Its behaviour on the existing `/api/v1/update/*` routes is unchanged: the same check, the same download of `audiobook-organizer-<os>-<arch>`, the same swap that keeps the old binary as `.prev`, the same exit status 75. What the move adds underneath, none of it mounted yet: a check that cannot offer a downgrade, a self-test that runs the downloaded binary's `--version-json` before it replaces anything (skipped on the existing routes, so a release from before that flag still applies), the five updater metrics, three background task definitions and four HTTP routes that a later release turns on.
+
+### Security
+
+- The updater's apply and rollback tasks can no longer be started through the generic task-start route. Their own routes (not mounted yet) require an interactive session on top of the admin permission, as the existing `/api/v1/update/apply` does, and the generic route checked only the permission, so an API key holding it could have enqueued an install without that. A task definition now has an `OwnerRouteOnly` setting for this: the generic route answers 403 `tasks.owner_route_only` for such a kind, and the task listing reports it as not startable there.

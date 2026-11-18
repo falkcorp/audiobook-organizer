@@ -1,7 +1,7 @@
 // file: core/tasks/perms.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 9cf11d04-c704-493a-9c9a-568cf39ef46a
-// last-edited: 2026-11-10
+// last-edited: 2026-11-18
 
 package tasks
 
@@ -23,6 +23,14 @@ type Permissions struct {
 	// StartableByViewers is a reviewed reason allowing Start to be satisfied by
 	// a view-class scope (05-rbac PermissionSpec.Class). Empty = refused (SEC-9).
 	StartableByViewers string
+
+	// OwnerRouteOnly is a reviewed reason this kind is started only through its
+	// owner's own route, never through the generic POST /definitions/{kind}/runs.
+	// The owner's route enforces gates a definition cannot state (an interactive
+	// session, a refusal answered before a run exists), and the generic route
+	// would enqueue the kind without them. Empty = startable through both. The
+	// definitions listing reports can_start false for such a kind.
+	OwnerRouteOnly string
 }
 
 // Approval says a Live run needs a person's recorded decision first.
