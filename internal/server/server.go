@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.115.10
+// version: 2.115.11
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-11-13
+// last-edited: 2026-11-18
 
 package server
 
@@ -1239,19 +1239,13 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 	}
 
 	// Register file-op recovery handler (a closure over the server, so recovery reaches its metadata service)
-	RegisterFileOpRecovery("apply_metadata", func(bookID string) {
+	registerFileOpRecoveries(func() fileWorkRecoverer {
+		// A nil *metafetch.Service must come back as a nil interface, not a
+		// typed nil the recovery's own nil check would miss.
 		if server.metadataFetchService == nil {
-			slog.Warn("no server instance for apply_metadata recovery of book", "bookID", bookID)
-			return
+			return nil
 		}
-		recoverApplyMetadataFileOp(server.metadataFetchService, bookID)
-	})
-	RegisterFileOpRecovery(autoFetchFileOpType, func(bookID string) {
-		if server.metadataFetchService == nil {
-			slog.Warn("no server instance for auto-fetch file work recovery of book", "bookID", bookID)
-			return
-		}
-		recoverAutoFetchFileOp(server.metadataFetchService, bookID)
+		return server.metadataFetchService
 	})
 
 	// Activity-service fan-out into metafetch / audiobook / scanner now

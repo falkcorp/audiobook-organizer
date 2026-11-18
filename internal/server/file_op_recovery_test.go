@@ -1,7 +1,7 @@
 // file: internal/server/file_op_recovery_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 2b8e5d17-4c6a-49f3-a0e1-7d93c5b28f46
-// last-edited: 2026-10-10
+// last-edited: 2026-11-18
 
 package server
 
@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
 // fakeApplyRecoverer counts tag writes the way FinishApplyFileWork performs
@@ -21,10 +23,12 @@ type fakeApplyRecoverer struct {
 	calls     []string
 	tagWrites int
 	ctxs      []context.Context
+	intents   []metafetch.FetchIntent
 }
 
-func (f *fakeApplyRecoverer) FinishApplyFileWork(ctx context.Context, id, cover string, fileIO, writeTags bool, _ func() error) error {
+func (f *fakeApplyRecoverer) FinishApplyFileWork(ctx context.Context, id, cover string, fileIO, writeTags bool, intent metafetch.FetchIntent, _ func() error) error {
 	f.ctxs = append(f.ctxs, ctx)
+	f.intents = append(f.intents, intent)
 	f.calls = append(f.calls, fmt.Sprintf("%s|%s|%v|%v", id, cover, fileIO, writeTags))
 	if writeTags {
 		f.tagWrites++
@@ -36,12 +40,12 @@ func (f *fakeApplyRecoverer) FinishApplyFileWork(ctx context.Context, id, cover 
 // tagging every file twice under auto_write_tags_on_apply.
 func TestRecoverApplyMetadataFileOp_WritesTagsOnce(t *testing.T) {
 	f := &fakeApplyRecoverer{}
-	recoverApplyMetadataFileOp(f, "b1")
+	recoverApplyMetadataFileOp(f, "b1", metafetch.Unattended)
 
 	assert.Equal(t, []string{"b1||true|true"}, f.calls, "one pass through the shared sequel")
 	assert.Equal(t, 1, f.tagWrites)
 
-	recoverApplyMetadataFileOp(f, "b2")
+	recoverApplyMetadataFileOp(f, "b2", metafetch.Unattended)
 	assert.Equal(t, 2, f.tagWrites)
 }
 
@@ -56,7 +60,7 @@ func TestAutoFetchScheduler_RunsOnPool(t *testing.T) {
 	release := make(chan struct{})
 	done := make(chan struct{})
 	sched := newAutoFetchScheduler(func() *FileIOPool { return pool })
-	sched("b1", func() { <-release; close(done) })
+	sched("b1", metafetch.Unattended, func() { <-release; close(done) })
 
 	var opTypes []string
 	for _, j := range pool.PendingJobs() {
@@ -72,6 +76,6 @@ func TestAutoFetchScheduler_RunsOnPool(t *testing.T) {
 
 	// No pool (test servers): the work runs inline.
 	ran := false
-	newAutoFetchScheduler(func() *FileIOPool { return nil })("b2", func() { ran = true })
+	newAutoFetchScheduler(func() *FileIOPool { return nil })("b2", metafetch.Unattended, func() { ran = true })
 	assert.True(t, ran)
 }

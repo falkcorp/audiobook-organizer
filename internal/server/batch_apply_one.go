@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.45.0
+// version: 1.45.1
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package server
 
@@ -60,10 +60,10 @@ type cachedApplyService interface {
 	// download, file I/O, and a tag write that happens exactly once.
 	// checkpoint, when non-nil, is the caller's scan stand-down check, re-run
 	// before each file-writing step; nil means the caller holds none.
-	FinishApplyFileWork(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error) error
+	FinishApplyFileWork(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, intent metafetch.FetchIntent, checkpoint func() error) error
 	// FinishApplyFileWorkTimed is FinishApplyFileWork recording its phases
 	// into pt and logging the per-book "apply phase durations" line.
-	FinishApplyFileWorkTimed(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error, pt *metafetch.ApplyPhaseTimings) error
+	FinishApplyFileWorkTimed(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, intent metafetch.FetchIntent, checkpoint func() error, pt *metafetch.ApplyPhaseTimings) error
 	// RenamePreflight reports, before anything is written, that the write-back
 	// rename following an apply of candidate is known to fail (wrapping
 	// metafetch.ErrApplyFileWorkWouldFail). See applySkipFileWorkWouldFail.
@@ -913,7 +913,7 @@ func applyCachedCandidateForBookTimed(
 		// downloaded: ApplyMetadataCandidate kept the previous cover_url until
 		// the image is on disk, and until 2026-09-12 nothing on this path ever
 		// fetched it, so a batch-applied book kept its old cover forever.
-		if err := svc.FinishApplyFileWorkTimed(ctx, id, pendingCover, false, false, checkpoint, pt); err != nil {
+		if err := svc.FinishApplyFileWorkTimed(ctx, id, pendingCover, false, false, metafetch.Unattended, checkpoint, pt); err != nil {
 			failWriteBack(err)
 		}
 		return out
@@ -929,7 +929,7 @@ func applyCachedCandidateForBookTimed(
 	// WriteBackFailed is separate from !Applied. The core still writes tags
 	// after a rename failure and reports the rename error first, because
 	// "rename failed" localises the fault better than what it causes.
-	if err := svc.FinishApplyFileWorkTimed(ctx, id, pendingCover, true, true, checkpoint, pt); err != nil {
+	if err := svc.FinishApplyFileWorkTimed(ctx, id, pendingCover, true, true, metafetch.Unattended, checkpoint, pt); err != nil {
 		failWriteBack(err)
 	}
 	return out

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_asin_conflict_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 4a8e2f63-1c9d-4b07-95e3-d6b0c7a1f248
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package metadatahandler_test
 
@@ -146,7 +146,7 @@ func TestApplyAudiobookMetadata_OverrideAppliesAndRecordsIt(t *testing.T) {
 	d.mfs.EXPECT().ApplyMetadataCandidateWithOptions("b1", mock.Anything, []string{"title"},
 		metafetch.ApplyOptions{OwnerReviewed: true, GateOverride: applygate.ReasonASINConflict, AllowRetired: true}).
 		Return(&metafetch.FetchMetadataResponse{Message: "applied", Source: "audible", Book: &database.Book{ID: "b1"}}, nil)
-	d.pool.EXPECT().Submit("b1", mock.Anything).Return(true)
+	d.pool.EXPECT().Submit("b1", metafetch.Interactive, mock.Anything).Return(true)
 	w := doReq(h.ApplyAudiobookMetadata, http.MethodPost, "/audiobooks/b1/apply-metadata", applyBody(cand, " b00newasin "), idParam("b1"))
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
@@ -161,7 +161,7 @@ func TestApplyAudiobookMetadata_NoConflictIsTheOrdinaryApply(t *testing.T) {
 	d.mfs.EXPECT().RenamePreflight("b1", mock.Anything, mock.Anything).Return(nil)
 	d.mfs.EXPECT().ApplyMetadataCandidate("b1", mock.Anything, mock.Anything).
 		Return(&metafetch.FetchMetadataResponse{Message: "applied", Book: &database.Book{ID: "b1"}}, nil)
-	d.pool.EXPECT().Submit("b1", mock.Anything).Return(true)
+	d.pool.EXPECT().Submit("b1", metafetch.Interactive, mock.Anything).Return(true)
 	w := doReq(h.ApplyAudiobookMetadata, http.MethodPost, "/audiobooks/b1/apply-metadata",
 		applyBody(metafetch.MetadataCandidate{Title: "No ASIN"}, "B00NEWASIN"), idParam("b1"))
 	if w.Code != http.StatusOK {
@@ -197,7 +197,7 @@ func TestRunQueuedApply_ChecksASINConflictWhenItRuns(t *testing.T) {
 		d.mfs.EXPECT().ApplyMetadataCandidateWithOptions("b1", mock.Anything, mock.Anything,
 			metafetch.ApplyOptions{BatchID: "apply-queued-own", OwnerReviewed: true, GateOverride: applygate.ReasonASINConflict, AllowRetired: true}).
 			Return(&metafetch.FetchMetadataResponse{}, nil)
-		d.pool.EXPECT().Submit("b1", mock.Anything).Return(true)
+		d.pool.EXPECT().Submit("b1", metafetch.Interactive, mock.Anything).Return(true)
 		if err := h.RunQueuedApply(context.Background(), qo, nil); err != nil {
 			t.Fatalf("RunQueuedApply: %v", err)
 		}

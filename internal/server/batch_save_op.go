@@ -1,7 +1,7 @@
 // file: internal/server/batch_save_op.go
-// version: 1.15.1
+// version: 1.15.2
 // guid: 3f2a1b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 //
 // batch_save_op registers the "metadata.batch-save" v2 OperationDef.
 // The HTTP handler batchWriteBackAudiobooks creates a v1 op record for
@@ -20,6 +20,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
@@ -214,7 +215,7 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 				// and with the book lock now inside the call it would be
 				// path-then-book, the reverse of every apply's order: a deadlock
 				// against an apply of the same book.
-				wroteFiles, wbErr := writeBackBookFiles(s.metadataFetchService, ctx, id)
+				wroteFiles, wbErr := writeBackBookFiles(s.metadataFetchService, ctx, id, metafetch.Unattended)
 				if wbErr != nil {
 					failed.Add(1)
 					detail := wbErr.Error()

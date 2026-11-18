@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_timings_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 2f6a9d13-4c85-4e7b-9b20-6d1e8a3c5f47
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package metafetch
 
@@ -120,7 +120,7 @@ func TestWriteBackForBook_PerFileWritesConcurrentButGateBounded(t *testing.T) {
 	})
 
 	pt := NewApplyPhaseTimings()
-	written, err := svc.writeBackForBook(context.Background(), book.ID, nil, book.ID, pt)
+	written, err := svc.writeBackForBook(context.Background(), book.ID, nil, book.ID, Unattended, pt)
 	if err != nil {
 		t.Fatalf("writeBackForBook: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestWriteBackForBook_BookFileRowsConcurrentExactlyOnce(t *testing.T) {
 		}
 	})
 
-	written, err := svc.writeBackForBook(context.Background(), book.ID, nil, book.ID, nil)
+	written, err := svc.writeBackForBook(context.Background(), book.ID, nil, book.ID, Unattended, nil)
 	if err != nil {
 		t.Fatalf("writeBackForBook: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestWriteBackForBook_NoGateIsSequential(t *testing.T) {
 	cw := &countingWriter{written: map[string]int{}}
 	svc.fileTagWrite = cw.write
 
-	written, err := svc.writeBackForBook(context.Background(), book.ID, nil, book.ID, nil)
+	written, err := svc.writeBackForBook(context.Background(), book.ID, nil, book.ID, Unattended, nil)
 	if err != nil {
 		t.Fatalf("writeBackForBook: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestFinishApplyFileWorkTimed_EmitsPhaseLine(t *testing.T) {
 
 	pt := NewApplyPhaseTimings()
 	pt.Add(PhaseGateWait, 7*time.Millisecond)
-	if err := svc.FinishApplyFileWorkTimed(context.Background(), book.ID, "", false, true, nil, pt); err != nil {
+	if err := svc.FinishApplyFileWorkTimed(context.Background(), book.ID, "", false, true, Unattended, nil, pt); err != nil {
 		t.Fatalf("FinishApplyFileWorkTimed: %v", err)
 	}
 

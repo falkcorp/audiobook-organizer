@@ -1,7 +1,7 @@
 // file: internal/server/file_io_pool_scanlock_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 101aeb15-8f4a-4d7a-8573-0a0671cde076
-// last-edited: 2026-09-30
+// last-edited: 2026-11-18
 
 package server
 
@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/scanlock"
 )
 
@@ -22,7 +23,7 @@ func TestFileIOPool_SubmitMarksTheBookPendingForTheScanner(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	finished := make(chan struct{})
-	if !p.Submit("pool-book-1", func() {
+	if !p.Submit("pool-book-1", metafetch.Unattended, func() {
 		close(started)
 		<-release
 	}) {
@@ -60,7 +61,7 @@ func TestFileIOPool_SubmitMarksTheBookPendingForTheScanner(t *testing.T) {
 func TestFileIOPool_DroppedJobClearsPending(t *testing.T) {
 	p := NewFileIOPool(1)
 	p.Stop()
-	if p.Submit("pool-book-2", func() {}) {
+	if p.Submit("pool-book-2", metafetch.Unattended, func() {}) {
 		t.Fatal("a stopped pool accepted a job")
 	}
 	h, ok := scanlock.Books.TryLockSetIdle([]string{"pool-book-2"})

@@ -1,7 +1,7 @@
 // file: internal/server/file_io_pool.go
-// version: 2.13.1
+// version: 2.13.2
 // guid: c4d5e6f7-a8b9-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-11-10
+// last-edited: 2026-11-18
 //
 // Bounded worker pool for file I/O operations (cover embed, tag write,
 // rename). Tracks pending jobs in PebbleDB so they survive restarts.
@@ -35,6 +35,20 @@ type FileIOJob struct {
 	BookID    string    `json:"book_id"`
 	OpType    string    `json:"op_type"`
 	CreatedAt time.Time `json:"created_at"`
+	// Intent is whether a person asked for this job's file work on this one
+	// book (metafetch.Interactive) or a batch, an op or a replay did
+	// (metafetch.Unattended). It is persisted with the record because the
+	// restart replay re-runs the job from this record alone, and an unattended
+	// job refuses a retired book's files while an attended one writes them: a
+	// replay that forgot the intent would pick one of the two for every book.
+	// A record written before the field existed has none, and replays as
+	// Unattended, the refusing side.
+	//
+	// One record exists per "{bookID}:{opType}" (pendingKey), so when an
+	// attended and an unattended job for the same book and op type are queued
+	// together the last submit's intent is the one a restart replays. The two
+	// jobs would write the same files either way.
+	Intent metafetch.FetchIntent `json:"intent,omitempty"`
 }
 
 // FileIOPool manages a bounded pool of workers for slow file operations.
@@ -83,7 +97,9 @@ var (
 )
 
 // FileOpRecoveryFunc re-runs a specific file-op type for one book.
-type FileOpRecoveryFunc func(bookID string)
+// intent is the persisted FileIOJob.Intent, normalised by the replay to
+// Interactive or Unattended.
+type FileOpRecoveryFunc func(bookID string, intent metafetch.FetchIntent)
 
 // RegisterFileOpRecovery registers a recovery handler for a given op type.
 // Overwrites any previous registration for the same type.
@@ -139,14 +155,14 @@ func (p *FileIOPool) worker(id int) {
 // reports whether fn will run; false means the pool is stopped and the job was
 // dropped, so a caller holding a resource for fn (the scan stand-down) must
 // release it itself.
-func (p *FileIOPool) Submit(bookID string, fn func()) bool {
-	return p.SubmitTyped(bookID, "apply_metadata", fn)
+func (p *FileIOPool) Submit(bookID string, intent metafetch.FetchIntent, fn func()) bool {
+	return p.SubmitTyped(bookID, "apply_metadata", intent, fn)
 }
 
 // SubmitTyped queues a file I/O job with a specific operation type. Its result
 // is Submit's: false when the job was dropped without running.
-func (p *FileIOPool) SubmitTyped(bookID, opType string, fn func()) bool {
-	return p.submitTyped(nil, bookID, opType, fn)
+func (p *FileIOPool) SubmitTyped(bookID, opType string, intent metafetch.FetchIntent, fn func()) bool {
+	return p.submitTyped(nil, bookID, opType, intent, fn)
 }
 
 // submitTyped is SubmitTyped with a way out of the backpressure wait: when
@@ -154,7 +170,7 @@ func (p *FileIOPool) SubmitTyped(bookID, opType string, fn func()) bool {
 // job is dropped and false returned. The pending_file_op row tryQueue
 // persisted stays, so the next start replays it, as for a job dropped by a
 // stopped pool.
-func (p *FileIOPool) submitTyped(stop <-chan struct{}, bookID, opType string, fn func()) bool {
+func (p *FileIOPool) submitTyped(stop <-chan struct{}, bookID, opType string, intent metafetch.FetchIntent, fn func()) bool {
 	// The book has file work queued: a library scan treats it as busy until
 	// the job has run (scanlock.MarkPending), so it cannot read the book's old
 	// tags between the caller's database write and this job's tag write. The
@@ -167,7 +183,7 @@ func (p *FileIOPool) submitTyped(stop <-chan struct{}, bookID, opType string, fn
 		defer clearPending()
 		inner()
 	}
-	if done, accepted := p.tryQueue(bookID, opType, fn); done {
+	if done, accepted := p.tryQueue(bookID, opType, intent, fn); done {
 		if !accepted {
 			clearPending()
 		}
@@ -229,14 +245,14 @@ func (p *FileIOPool) dropPending(bookID, opType string) {
 // the send. done reports whether the caller is finished: true when the job was
 // queued (accepted) or the pool is stopped and the job was dropped (!accepted).
 // done=false means the buffer was full and the caller must take the overflow path.
-func (p *FileIOPool) tryQueue(bookID, opType string, fn func()) (done, accepted bool) {
+func (p *FileIOPool) tryQueue(bookID, opType string, intent metafetch.FetchIntent, fn func()) (done, accepted bool) {
 	p.submitMu.RLock()
 	defer p.submitMu.RUnlock()
 	if p.stopped {
 		slog.Warn("file I/O pool stopped, dropping job for book (op)", "bookID", logger.SanitizeLogValue(bookID), "opType", opType)
 		return true, false
 	}
-	job := FileIOJob{BookID: bookID, OpType: opType, CreatedAt: time.Now()}
+	job := FileIOJob{BookID: bookID, OpType: opType, CreatedAt: time.Now(), Intent: intent}
 	p.pending.Store(pendingKey(bookID, opType), job)
 	p.storePendingFileOp(job)
 
@@ -430,9 +446,18 @@ func recoverInterruptedFileOps(pool *FileIOPool, stop <-chan struct{}) {
 
 		bookID := job.BookID
 		opType := job.OpType
-		slog.Info("re-queuing file I/O for book (type, started)", "bookID", bookID, "opType", opType, "value2", job.CreatedAt.Format(time.RFC3339))
+		// Only a record that says Interactive replays as attended. A record
+		// with no intent (written before the field existed) or any other
+		// value replays as Unattended: refusing a retired book's files is the
+		// safe default, and an attended job that is lost to a restart can be
+		// re-run by the person who asked for it.
+		intent := metafetch.Unattended
+		if job.Intent == metafetch.Interactive {
+			intent = metafetch.Interactive
+		}
+		slog.Info("re-queuing file I/O for book (type, started)", "bookID", bookID, "opType", opType, "intent", intent.String(), "value2", job.CreatedAt.Format(time.RFC3339))
 		if pool != nil {
-			pool.submitTyped(stop, bookID, opType, func() { fn(bookID) })
+			pool.submitTyped(stop, bookID, opType, intent, func() { fn(bookID, intent) })
 		}
 	}
 }
@@ -444,7 +469,7 @@ func recoverInterruptedFileOps(pool *FileIOPool, stop <-chan struct{}) {
 type applyMetadataRecoverer interface {
 	// checkpoint, when non-nil, is the caller's scan stand-down check, re-run
 	// before each file-writing step; nil means the caller holds none.
-	FinishApplyFileWork(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error) error
+	FinishApplyFileWork(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, intent metafetch.FetchIntent, checkpoint func() error) error
 }
 
 // recoverApplyMetadataFileOp replays an interrupted apply's file work through
@@ -455,12 +480,51 @@ type applyMetadataRecoverer interface {
 // pending cover URL was not persisted with the job, so nothing is downloaded.
 // FinishApplyFileWork takes the path lock itself, per write, so the replay is
 // locked exactly like the live job.
-func recoverApplyMetadataFileOp(svc applyMetadataRecoverer, bookID string) {
+//
+// intent is the replayed job's: the persisted FileIOJob.Intent, so a dialog
+// apply interrupted by a restart still writes its (retired) book's files and a
+// batch job's replay still refuses them.
+func recoverApplyMetadataFileOp(svc applyMetadataRecoverer, bookID string, intent metafetch.FetchIntent) {
 	// The restart replay re-runs every interrupted job at once: a bulk write,
 	// so no .bak-* sibling per file (owner decision D69).
-	if err := svc.FinishApplyFileWork(tagger.WithoutBackup(context.Background()), bookID, "", true, true, nil); err != nil {
+	if err := svc.FinishApplyFileWork(tagger.WithoutBackup(context.Background()), bookID, "", true, true, intent, nil); err != nil {
 		slog.Warn("recovery apply file work failed", "bookID", bookID, "err", err)
 	}
+}
+
+// fileWorkRecoverer is the slice of *metafetch.Service both recovery
+// registrations need.
+type fileWorkRecoverer interface {
+	applyMetadataRecoverer
+	autoFetchRecoverer
+}
+
+// registerFileOpRecoveries registers the two replay handlers the server's file
+// jobs persist under: apply_metadata and auto-fetch's own op type. svc yields
+// the metadata service, or nil when the server has none.
+//
+// Each handler passes the replayed job's intent (the persisted
+// FileIOJob.Intent, normalised by recoverInterruptedFileOps) straight to the
+// file work. Dropping it here would replay every job as one fixed intent: an
+// attended dialog apply that lost its retired book's files to a restart, or an
+// unattended batch job's replay writing a retired book's files.
+func registerFileOpRecoveries(svc func() fileWorkRecoverer) {
+	RegisterFileOpRecovery("apply_metadata", func(bookID string, intent metafetch.FetchIntent) {
+		s := svc()
+		if s == nil {
+			lifecycleLog.Warn("no server instance for apply_metadata recovery of book %s", logger.SanitizeLogValue(bookID))
+			return
+		}
+		recoverApplyMetadataFileOp(s, bookID, intent)
+	})
+	RegisterFileOpRecovery(autoFetchFileOpType, func(bookID string, intent metafetch.FetchIntent) {
+		s := svc()
+		if s == nil {
+			lifecycleLog.Warn("no server instance for auto-fetch file work recovery of book %s", logger.SanitizeLogValue(bookID))
+			return
+		}
+		recoverAutoFetchFileOp(s, bookID, intent)
+	})
 }
 
 // autoFetchFileOpType is the file-I/O pool op type for auto-fetch's file work.
@@ -470,16 +534,16 @@ const autoFetchFileOpType = "auto_fetch_file_work"
 
 // autoFetchRecoverer is the slice of *metafetch.Service the auto-fetch replay needs.
 type autoFetchRecoverer interface {
-	FinishAutoFetchFileWork(ctx context.Context, id, pendingCoverURL string, writeTags bool) error
+	FinishAutoFetchFileWork(ctx context.Context, id, pendingCoverURL string, writeTags bool, intent metafetch.FetchIntent) error
 }
 
 // recoverAutoFetchFileOp replays interrupted auto-fetch file work. It is
 // resubmitted on the pool by RecoverInterruptedFileOps and, like the live job,
 // takes no lock here: FinishAutoFetchFileWork locks each write on the path it
 // writes (the library copy's for a protected book).
-func recoverAutoFetchFileOp(svc autoFetchRecoverer, bookID string) {
+func recoverAutoFetchFileOp(svc autoFetchRecoverer, bookID string, intent metafetch.FetchIntent) {
 	// Bulk, like the apply replay above: no .bak-* sibling per file (D69).
-	if err := svc.FinishAutoFetchFileWork(tagger.WithoutBackup(context.Background()), bookID, "", config.AppConfig.WriteBackMetadata); err != nil {
+	if err := svc.FinishAutoFetchFileWork(tagger.WithoutBackup(context.Background()), bookID, "", config.AppConfig.WriteBackMetadata, intent); err != nil {
 		slog.Warn("recovery auto-fetch file work failed", "bookID", bookID, "err", err)
 	}
 }
@@ -496,12 +560,12 @@ func recoverAutoFetchFileOp(svc autoFetchRecoverer, bookID string) {
 // book's path: for a protected book nothing wrote that path, and the tag write
 // ran after the rename under the pre-rename key.
 func newAutoFetchScheduler(pool func() *FileIOPool) metafetch.FileWorkScheduler {
-	return func(bookID string, work func()) {
+	return func(bookID string, intent metafetch.FetchIntent, work func()) {
 		p := pool()
 		if p == nil {
 			work()
 			return
 		}
-		p.SubmitTyped(bookID, autoFetchFileOpType, work)
+		p.SubmitTyped(bookID, autoFetchFileOpType, intent, work)
 	}
 }

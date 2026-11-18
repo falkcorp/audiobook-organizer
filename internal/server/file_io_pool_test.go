@@ -1,7 +1,7 @@
 // file: internal/server/file_io_pool_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 9d4e2a8f-1b6c-4f70-a3d1-7e5b9c2f8a04
-// last-edited: 2026-11-10
+// last-edited: 2026-11-18
 
 package server
 
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
 func TestParsePebbleKey_ModernFormat(t *testing.T) {
@@ -51,7 +52,7 @@ func TestRecoveryDispatch_RegisterAndLookup(t *testing.T) {
 	}()
 
 	var called atomic.Int32
-	RegisterFileOpRecovery(opType, func(string) {
+	RegisterFileOpRecovery(opType, func(string, metafetch.FetchIntent) {
 		called.Add(1)
 	})
 
@@ -59,7 +60,7 @@ func TestRecoveryDispatch_RegisterAndLookup(t *testing.T) {
 	if !ok {
 		t.Fatal("lookupFileOpRecovery returned !ok for registered op type")
 	}
-	fn("book123")
+	fn("book123", metafetch.Unattended)
 	if called.Load() != 1 {
 		t.Fatalf("recovery handler not invoked, called = %d", called.Load())
 	}
@@ -76,8 +77,8 @@ func TestPendingJobs_DistinctOpTypesPerBook(t *testing.T) {
 	defer pool.Stop()
 
 	done := make(chan struct{}, 2)
-	pool.SubmitTyped("book1", "op_a", func() { done <- struct{}{} })
-	pool.SubmitTyped("book1", "op_b", func() { done <- struct{}{} })
+	pool.SubmitTyped("book1", "op_a", metafetch.Unattended, func() { done <- struct{}{} })
+	pool.SubmitTyped("book1", "op_b", metafetch.Unattended, func() { done <- struct{}{} })
 
 	deadline := time.After(2 * time.Second)
 	for range 2 {
@@ -110,7 +111,7 @@ func TestRecoverInterruptedFileOps_EndsAtAStop(t *testing.T) {
 		recoveryDispatchMu.Unlock()
 	})
 	var ran atomic.Int32
-	RegisterFileOpRecovery(opType, func(string) { ran.Add(1) })
+	RegisterFileOpRecovery(opType, func(string, metafetch.FetchIntent) { ran.Add(1) })
 
 	rows := []database.KVPair{
 		{Key: pendingFileOpPrefix + "batman:" + opType, Value: []byte(`{"book_id":"batman","op_type":"` + opType + `"}`)},
@@ -153,7 +154,7 @@ func TestSubmitTyped_StopFreesABlockedOverflowWait(t *testing.T) {
 
 	stop := make(chan struct{})
 	result := make(chan bool, 1)
-	go func() { result <- pool.submitTyped(stop, "joker", "hold", func() {}) }()
+	go func() { result <- pool.submitTyped(stop, "joker", "hold", metafetch.Unattended, func() {}) }()
 	select {
 	case <-result:
 		t.Fatal("submit returned while every slot was taken")
@@ -182,7 +183,7 @@ func TestSubmitTyped_StopFreesABlockedOverflowWait(t *testing.T) {
 func fillPoolForBackpressure(t *testing.T, pool *FileIOPool, release chan struct{}) {
 	t.Helper()
 	started := make(chan struct{})
-	if !pool.SubmitTyped("alfred-0", "hold", func() { close(started); <-release }) {
+	if !pool.SubmitTyped("alfred-0", "hold", metafetch.Unattended, func() { close(started); <-release }) {
 		t.Fatal("submit 0 refused")
 	}
 	select {
@@ -191,7 +192,7 @@ func fillPoolForBackpressure(t *testing.T, pool *FileIOPool, release chan struct
 		t.Fatal("the pool's worker never started the first job")
 	}
 	for i := 1; i < 502; i++ {
-		if !pool.SubmitTyped(fmt.Sprintf("alfred-%d", i), "hold", func() { <-release }) {
+		if !pool.SubmitTyped(fmt.Sprintf("alfred-%d", i), "hold", metafetch.Unattended, func() { <-release }) {
 			t.Fatalf("submit %d refused", i)
 		}
 	}
@@ -218,7 +219,7 @@ func TestSubmitTyped_DropAtStopLeavesNoPendingEntry(t *testing.T) {
 
 	stop := make(chan struct{})
 	result := make(chan bool, 1)
-	go func() { result <- pool.submitTyped(stop, "joker", "hold", func() {}) }()
+	go func() { result <- pool.submitTyped(stop, "joker", "hold", metafetch.Unattended, func() {}) }()
 	deadline := time.Now().Add(5 * time.Second)
 	for !pendingHas(pool, "joker") { // tryQueue recorded it before blocking
 		if time.Now().After(deadline) {
@@ -247,7 +248,7 @@ func TestSubmitTyped_DropByAStoppedPoolLeavesNoPendingEntry(t *testing.T) {
 	fillPoolForBackpressure(t, pool, release)
 
 	result := make(chan bool, 1)
-	go func() { result <- pool.submitTyped(nil, "joker", "hold", func() {}) }()
+	go func() { result <- pool.submitTyped(nil, "joker", "hold", metafetch.Unattended, func() {}) }()
 	deadline := time.Now().Add(5 * time.Second)
 	for !pendingHas(pool, "joker") {
 		if time.Now().After(deadline) {

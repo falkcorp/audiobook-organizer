@@ -1,7 +1,7 @@
 // file: internal/metafetch/rename_path_book_row_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b4e81d6a-2f07-4c39-a5b3-8e1d0c7f9a25
-// last-edited: 2026-09-14
+// last-edited: 2026-11-18
 
 package metafetch
 
@@ -32,7 +32,7 @@ func TestRename_BookRowPathWriteFailureRecordsBookRecord(t *testing.T) {
 	fx.onBookWrite = func() error { return errInjectedBookWrite }
 
 	st := fx.stored
-	err := svc.RunApplyPipelineRenameOnly(context.Background(), "b1", &st)
+	err := svc.RunApplyPipelineRenameOnly(context.Background(), "b1", &st, Unattended)
 	require.ErrorIs(t, err, errInjectedBookWrite)
 
 	mu.Lock()

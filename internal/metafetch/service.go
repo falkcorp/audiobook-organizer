@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.59.3
+// version: 5.59.4
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package metafetch
 
@@ -921,10 +921,10 @@ func virtualBookFiles(id string, book *database.Book) []database.BookFile {
 // The caller's book is not used: it was read before these locks, and a job
 // that held them may have moved the files since. The book is re-read under
 // them instead.
-func (mfs *Service) RunApplyPipelineRenameOnly(ctx context.Context, id string, _ *database.Book) error {
+func (mfs *Service) RunApplyPipelineRenameOnly(ctx context.Context, id string, _ *database.Book, intent FetchIntent) error {
 	releaseBook := mfs.lockBook(id)
 	defer releaseBook()
-	targetID, releaseCopy, err := mfs.lockLibraryCopy(id, createLibraryCopy, nil)
+	targetID, releaseCopy, err := mfs.lockLibraryCopy(id, createLibraryCopy, intent, nil)
 	if err != nil {
 		return err
 	}
@@ -936,7 +936,7 @@ func (mfs *Service) RunApplyPipelineRenameOnly(ctx context.Context, id string, _
 	if book == nil {
 		return fmt.Errorf("rename files: book %s not found", id)
 	}
-	target, err := mfs.fileWorkTarget(book, targetID)
+	target, err := mfs.fileWorkTarget(book, targetID, intent)
 	if err != nil {
 		return fmt.Errorf("rename files: %w", err)
 	}

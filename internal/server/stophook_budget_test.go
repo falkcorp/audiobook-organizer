@@ -1,7 +1,7 @@
 // file: internal/server/stophook_budget_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 877b968e-c9c6-4cac-b2e9-06bc892394d0
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package server
 
@@ -15,6 +15,7 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
@@ -45,7 +46,7 @@ func TestStopHook_WedgedStepsStayWithinTheBudget(t *testing.T) {
 		{"file I/O pool", func(t *testing.T, s *Server, release chan struct{}) {
 			p := NewFileIOPool(1)
 			started := make(chan struct{})
-			p.SubmitTyped("arkham-transfer", "hold", func() {
+			p.SubmitTyped("arkham-transfer", "hold", metafetch.Unattended, func() {
 				close(started)
 				<-release
 			})
@@ -233,7 +234,7 @@ func TestStopHook_NoCleanStopMarkerAfterAnAbandonedStep(t *testing.T) {
 		{name: "file I/O pool", set: func(t *testing.T, s *Server, release chan struct{}) {
 			p := NewFileIOPool(1)
 			started := make(chan struct{})
-			p.SubmitTyped("arkham-transfer", "hold", func() {
+			p.SubmitTyped("arkham-transfer", "hold", metafetch.Unattended, func() {
 				close(started)
 				<-release
 			})

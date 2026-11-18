@@ -1,7 +1,7 @@
 // file: internal/metafetch/rename_path_retry_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2b6f9d14-8a37-4c05-9e21-5d0c7b3a6e98
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package metafetch
 
@@ -64,7 +64,7 @@ func TestRenameRetry_TransientBookFileWriteFailureRecovers(t *testing.T) {
 		return nil
 	}
 	stale := fx.stored
-	require.NoError(t, svc.RunApplyPipelineRenameOnly(context.Background(), "b1", &stale))
+	require.NoError(t, svc.RunApplyPipelineRenameOnly(context.Background(), "b1", &stale, Unattended))
 	require.Empty(t, records(), "a write that succeeded on retry must leave no repair record")
 	for _, f := range fx.files {
 		require.NotContains(t, f.FilePath, "incoming", "book_file %s not repointed", f.ID)
@@ -78,10 +78,10 @@ func TestRenameRetry_PersistentFailureRecordsEachPairAndFails(t *testing.T) {
 		run  func(*Service, *database.Book) error
 	}{
 		{"RunApplyPipelineRenameOnly", func(s *Service, b *database.Book) error {
-			return s.RunApplyPipelineRenameOnly(context.Background(), "b1", b)
+			return s.RunApplyPipelineRenameOnly(context.Background(), "b1", b, Unattended)
 		}},
 		{"runApplyPipeline", func(s *Service, b *database.Book) error {
-			_, err := s.runApplyPipeline(context.Background(), "b1", b, "b1", nil)
+			_, err := s.runApplyPipeline(context.Background(), "b1", b, "b1", Unattended, nil)
 			return err
 		}},
 	} {

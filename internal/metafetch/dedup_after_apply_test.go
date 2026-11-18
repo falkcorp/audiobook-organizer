@@ -1,7 +1,7 @@
 // file: internal/metafetch/dedup_after_apply_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2f6b9a3d-1e48-4c75-9d02-8a3c5e7b1f64
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package metafetch
 
@@ -65,7 +65,7 @@ func TestRenameOnly_DedupViaScheduler_EnqueuesOpAndStartsNoGoroutine(t *testing.
 	checked, enq := applyDedupProbe(t, svc)
 
 	stale := fx.stored
-	require.NoError(t, svc.RunApplyPipelineRenameOnly(context.Background(), "b1", &stale))
+	require.NoError(t, svc.RunApplyPipelineRenameOnly(context.Background(), "b1", &stale, Unattended))
 
 	require.Equal(t, []string{`dedup.check-book {"book_id":"b1"}`}, enq.snapshot())
 	select {
@@ -81,7 +81,7 @@ func TestRenameOnly_DedupFlagOff_RunsGoroutineAndEnqueuesNothing(t *testing.T) {
 	checked, enq := applyDedupProbe(t, svc)
 
 	stale := fx.stored
-	require.NoError(t, svc.RunApplyPipelineRenameOnly(context.Background(), "b1", &stale))
+	require.NoError(t, svc.RunApplyPipelineRenameOnly(context.Background(), "b1", &stale, Unattended))
 
 	select {
 	case id := <-checked:

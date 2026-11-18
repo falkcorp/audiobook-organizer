@@ -5,6 +5,7 @@
 package metadatamocks
 
 import (
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -45,16 +46,16 @@ func (_m *MockFileIOPool) EXPECT() *MockFileIOPool_Expecter {
 }
 
 // Submit provides a mock function for the type MockFileIOPool
-func (_mock *MockFileIOPool) Submit(bookID string, fn func()) bool {
-	ret := _mock.Called(bookID, fn)
+func (_mock *MockFileIOPool) Submit(bookID string, intent metafetch.FetchIntent, fn func()) bool {
+	ret := _mock.Called(bookID, intent, fn)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Submit")
 	}
 
 	var r0 bool
-	if returnFunc, ok := ret.Get(0).(func(string, func()) bool); ok {
-		r0 = returnFunc(bookID, fn)
+	if returnFunc, ok := ret.Get(0).(func(string, metafetch.FetchIntent, func()) bool); ok {
+		r0 = returnFunc(bookID, intent, fn)
 	} else {
 		r0 = ret.Get(0).(bool)
 	}
@@ -68,24 +69,30 @@ type MockFileIOPool_Submit_Call struct {
 
 // Submit is a helper method to define mock.On call
 //   - bookID string
+//   - intent metafetch.FetchIntent
 //   - fn func()
-func (_e *MockFileIOPool_Expecter) Submit(bookID any, fn any) *MockFileIOPool_Submit_Call {
-	return &MockFileIOPool_Submit_Call{Call: _e.mock.On("Submit", bookID, fn)}
+func (_e *MockFileIOPool_Expecter) Submit(bookID any, intent any, fn any) *MockFileIOPool_Submit_Call {
+	return &MockFileIOPool_Submit_Call{Call: _e.mock.On("Submit", bookID, intent, fn)}
 }
 
-func (_c *MockFileIOPool_Submit_Call) Run(run func(bookID string, fn func())) *MockFileIOPool_Submit_Call {
+func (_c *MockFileIOPool_Submit_Call) Run(run func(bookID string, intent metafetch.FetchIntent, fn func())) *MockFileIOPool_Submit_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 string
 		if args[0] != nil {
 			arg0 = args[0].(string)
 		}
-		var arg1 func()
+		var arg1 metafetch.FetchIntent
 		if args[1] != nil {
-			arg1 = args[1].(func())
+			arg1 = args[1].(metafetch.FetchIntent)
+		}
+		var arg2 func()
+		if args[2] != nil {
+			arg2 = args[2].(func())
 		}
 		run(
 			arg0,
 			arg1,
+			arg2,
 		)
 	})
 	return _c
@@ -96,7 +103,7 @@ func (_c *MockFileIOPool_Submit_Call) Return(b bool) *MockFileIOPool_Submit_Call
 	return _c
 }
 
-func (_c *MockFileIOPool_Submit_Call) RunAndReturn(run func(bookID string, fn func()) bool) *MockFileIOPool_Submit_Call {
+func (_c *MockFileIOPool_Submit_Call) RunAndReturn(run func(bookID string, intent metafetch.FetchIntent, fn func()) bool) *MockFileIOPool_Submit_Call {
 	_c.Call.Return(run)
 	return _c
 }
