@@ -1,5 +1,5 @@
 // file: internal/seqnum/range.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 3e8a1d57-4c20-4b9f-a6d3-91f5b0c7e248
 // last-edited: 2026-11-18
 
@@ -41,19 +41,14 @@ const (
 )
 
 var (
-	// rangeNeeds is what every expression below that starts with a range
-	// keyword needs of the text: one of the keyword's words (book, bk, vol) or
-	// the hash.
-	rangeNeeds = hasAny("book", "bk", "vol", "#")
-
 	rangeKeyword   = `(?:\b` + kwWord + `\.?|#)\s*#?\s*`
 	rangeKeywordPl = `\b` + kwPlural + `\.?\s*#?\s*`
 	secondKw       = `(?:` + kwWord + `\.?\s*|#\s*)?`
 
 	// Spans, tried in this order of generality; the earliest match wins.
-	reSpanDigits = guard(rangeKeyword+`(`+anyNum+`)(?:[-–—]|`+connTo+`)`+secondKw+`(`+digitsN+`)\b`, rangeNeeds)
-	reSpanSpaced = guard(rangeKeywordPl+`(`+anyNum+`)\s+[-–—]\s+`+secondKw+`(`+digitsN+`)\b`, rangeNeeds)
-	reSpanWords  = guard(rangeKeyword+`(`+anyNum+`)(?:[-–—]|`+connTo+`)`+secondKw+`(`+wordNum+`)`+terminal, rangeNeeds)
+	reSpanDigits = guard(rangeKeyword + `(` + anyNum + `)(?:[-–—]|` + connTo + `)` + secondKw + `(` + digitsN + `)\b`)
+	reSpanSpaced = guard(rangeKeywordPl + `(` + anyNum + `)\s+[-–—]\s+` + secondKw + `(` + digitsN + `)\b`)
+	reSpanWords  = guard(rangeKeyword + `(` + anyNum + `)(?:[-–—]|` + connTo + `)` + secondKw + `(` + wordNum + `)` + terminal)
 
 	// A span's continuation: ", 5", "& 5", "and 4-6".
 	reSpanTail = regexp.MustCompile(`^` + sepList + `(` + digitsN + `)(?:\s*[-–—]\s*(` + digitsN + `))?\b`)
@@ -63,8 +58,8 @@ var (
 	// An "&" ends a list too: "Books 1-3, 5 & Other Stories" is the list 1-3,5.
 	reTailEnd = regexp.MustCompile(`^(?:` + terminal + `|\s+&\s)`)
 
-	reListDigits = guard(rangeKeyword+`(`+digitsN+`(?:`+sepList+digitsN+`)+)`+terminal, rangeNeeds)
-	reListWords  = guard(rangeKeyword+`(`+anyNum+`(?:`+sepList+anyNum+`)+)`+terminal, rangeNeeds)
+	reListDigits = guard(rangeKeyword + `(` + digitsN + `(?:` + sepList + digitsN + `)+)` + terminal)
+	reListWords  = guard(rangeKeyword + `(` + anyNum + `(?:` + sepList + anyNum + `)+)` + terminal)
 	reListItem   = regexp.MustCompile(anyNum)
 
 	// A position FIELD is only a position, so its span needs no keyword:
