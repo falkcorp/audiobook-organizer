@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/rig_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d82c4a15-9e63-4f07-b1a9-7035e8c6f241
 // last-edited: 2026-11-18
 
@@ -7,6 +7,7 @@ package m4_test
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -174,6 +175,8 @@ type rig struct {
 	// chunk commits, and for what HEAD's reconcile leaves behind (the runner's
 	// own iterator keeps the snapshot it started from).
 	view func(key string) (val []byte, handled bool, err error)
+	// zone is the window clock's zone; the default is gotham.
+	zone *time.Location
 	// reconcileFn, when set, is what HEAD's reconcile does in the rig.
 	reconcileFn func(ctx context.Context) error
 }
@@ -231,6 +234,16 @@ func (r *rig) spec(cut bool) storage.Spec {
 	if retired == 0 {
 		r.t.Fatal("books' storage spec declares no claim under M4's source prefixes")
 	}
+	// The shared setting: family stays read-write; the rows M4 moves are retired
+	// as sub-claims of it (the interval clocks by prefix, the rest by exact key).
+	for _, p := range m4.SourcePrefixes() {
+		if strings.HasPrefix(p, "setting:") {
+			spec.Claims = append(spec.Claims, storage.Claim{Prefix: p, Mode: storage.ClaimRetired, Description: "M4 source: " + p})
+		}
+	}
+	for _, k := range m4.SourceKeys() {
+		spec.Claims = append(spec.Claims, storage.Claim{Key: k, Mode: storage.ClaimRetired, Description: "M4 source: " + k})
+	}
 	return spec
 }
 
@@ -266,6 +279,8 @@ func (r *rig) migration() datamigrate.DataMigration {
 			}
 			return *lr
 		},
+		ScanStandDownKey: scanKey,
+		Location:         cmp.Or(r.zone, gotham),
 		Reconcile: func(ctx context.Context) error {
 			r.reconcil.Add(1)
 			if r.reconcileFn == nil {
@@ -359,6 +374,7 @@ func (r *rig) boot(ctx context.Context, fsys vfs.FS, dm datamigrate.DataMigratio
 // ---- reading a store back ----
 
 type snap struct {
+	legacy     storage.Reader
 	Left       map[string]string // rows still in books' source families
 	Tasks      map[string]string // every row of core's task keyspace
 	Quarantine []quarantined
@@ -374,11 +390,18 @@ func read(ctx context.Context, t testing.TB, db *storage.DB, dm datamigrate.Data
 	t.Helper()
 	s := &snap{Left: map[string]string{}, Tasks: map[string]string{}, db: db}
 	lr, _ := db.Legacy(cutover.BooksOwner)
+	s.legacy = lr
 	// Left is read over the families as the test names them, not over
 	// m4.SourceRanges: a family the step forgot to claim must still show up.
 	for _, rg := range []storage.Range{
 		{Start: []byte("opv3:"), End: []byte("opv3;")},
 		{Start: []byte("opv2:row"), End: []byte("opv2:rox")},
+		{Start: []byte("op:batch:"), End: []byte("op:batch;")},
+		{Start: []byte("setting:scheduled_task_last_tick."), End: []byte("setting:scheduled_task_last_tick/")},
+		{Start: []byte("setting:library_scan_full_last_run"), End: []byte("setting:library_scan_full_last_run\x00")},
+		{Start: []byte("setting:maintenance_window_last_run"), End: []byte("setting:maintenance_window_last_run\x00")},
+		{Start: []byte("setting:registry.operations_paused"), End: []byte("setting:registry.operations_paused\x00")},
+		{Start: []byte("setting:registry.scan_standdown"), End: []byte("setting:registry.scan_standdown\x00")},
 	} {
 		for kv, err := range lr.Scan(ctx, storage.ScanOptions{Start: rg.Start, End: rg.End}) {
 			if err != nil {
@@ -536,6 +559,13 @@ func repoRoot(t testing.TB) string {
 // ---- synthetic runs, written with the store's own row types ----
 
 var epoch = time.Date(2026, 11, 5, 3, 0, 0, 0, time.UTC)
+
+// scanKey is the scan kinds' stand-down key, as the rig's books registration
+// would name it; gotham is the zone the window's date was written in (west of
+// UTC, so reading the date as UTC puts it hours ahead of the window that ran).
+const scanKey tasks.Key = "books.library.scan"
+
+var gotham = time.FixedZone("Gotham", -5*3600)
 
 // runSpec is one synthetic run and what it owns.
 type runSpec struct {
@@ -714,4 +744,42 @@ func withRaw(rows map[string]string) func(*rig) {
 			}
 		}
 	}
+}
+
+// settingRowJSON is a setting: row as HEAD's SetSetting wrote it.
+func settingRowJSON(key, value string) string {
+	raw, err := json.Marshal(store.Setting{Key: key, Value: value, Type: "string"})
+	if err != nil {
+		panic(err)
+	}
+	return string(raw)
+}
+
+// setting is the raw row for withRaw: the key's setting: row holding value.
+func setting(rows map[string]string, key, value string) {
+	rows["setting:"+key] = settingRowJSON(key, value)
+}
+
+// schedRowJSON is an opv3:sched: row as PutSchedV3 wrote it.
+func schedRowJSON(def string, fire, gate *time.Time, missed int64) string {
+	raw, err := json.Marshal(store.SchedState{DefID: def, LastFire: fire, Missed: missed, GateClosedAt: gate})
+	if err != nil {
+		panic(err)
+	}
+	return string(raw)
+}
+
+// batchRowJSON is an op:batch: row as AddToBatchBucket wrote it.
+func batchRowJSON(subType, subID string, at time.Time) string {
+	raw, err := json.Marshal(store.BatchBucketEntry{Sub: store.OpSubject{Type: subType, ID: subID}, AddedAt: at.UnixNano()})
+	if err != nil {
+		panic(err)
+	}
+	return string(raw)
+}
+
+// legacyGet reads one key of books' legacy range after the boot.
+func (s *snap) legacyGet(ctx context.Context, key string) (string, error) {
+	raw, err := s.legacy.Get(ctx, []byte(key))
+	return string(raw), err
 }

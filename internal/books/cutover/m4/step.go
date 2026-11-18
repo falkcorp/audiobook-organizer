@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/step.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a9d5f13e-7c02-4b68-8e41-35b0c6d7e2f8
 // last-edited: 2026-11-18
 
@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
@@ -53,6 +54,17 @@ type Config struct {
 	// step runs it once, before it decodes anything (5T.8.3 order step 1). It is
 	// a parameter because this package cannot import the store.
 	Reconcile func(ctx context.Context) error
+	// ScanStandDownKey is the stand-down key of the converted scan kinds
+	// (books.library.scan and books.library.scan-full share it, 5T.8.2): the
+	// key the imported stand-down marker holds. The step cannot name it: it is
+	// the books tasks registration's (F5-18 and the books kinds' row), not a
+	// value this step may invent.
+	ScanStandDownKey tasks.Key
+	// Location is the zone the scheduler's maintenance window dates were
+	// written in (HEAD wrote the local calendar day, time.Local): the window
+	// clock is that date's midnight in this zone. Required, not defaulted, so a
+	// build can never silently read the date as UTC.
+	Location *time.Location
 	// Logger receives one line per quarantined run (its ID and a fixed class,
 	// never a value). nil discards.
 	Logger *slog.Logger
@@ -67,10 +79,14 @@ type Migration struct {
 	recon  func(ctx context.Context) error
 	logger *slog.Logger
 
+	scanKey tasks.Key
+	loc     *time.Location
+
 	reconMu   sync.Mutex
 	reconDone bool
 
 	runs, runsQuarantined, rowsQuarantined, derived, deferred, orphans atomic.Int64
+	clocks, markers, buckets, dropped                                  atomic.Int64
 }
 
 // New returns the data migration for the step with ID id.
@@ -101,6 +117,10 @@ func New(cfg Config, id string, raisesLevel int, after []storage.StepRef) (datam
 		return datamigrate.DataMigration{}, errors.New("m4: Config.Legacy is books' legacy range")
 	case cfg.Reconcile == nil:
 		return datamigrate.DataMigration{}, errors.New("m4: Config.Reconcile is HEAD's ReconcileOpsV3WithV2 (5T.8.3 order step 1)")
+	case cfg.ScanStandDownKey == "":
+		return datamigrate.DataMigration{}, errors.New("m4: Config.ScanStandDownKey is the scan kinds' stand-down key")
+	case cfg.Location == nil:
+		return datamigrate.DataMigration{}, errors.New("m4: Config.Location is the zone HEAD wrote the maintenance window's date in")
 	case id == "":
 		return datamigrate.DataMigration{}, errors.New("m4: the step ID is required")
 	case raisesLevel <= 0:
@@ -108,7 +128,7 @@ func New(cfg Config, id string, raisesLevel int, after []storage.StepRef) (datam
 	case len(after) == 0:
 		return datamigrate.DataMigration{}, errors.New("m4: after is books' level step")
 	}
-	m := &Migration{imp: cfg.Importer, legacy: cfg.Legacy, recon: cfg.Reconcile, logger: cfg.Logger}
+	m := &Migration{imp: cfg.Importer, legacy: cfg.Legacy, recon: cfg.Reconcile, logger: cfg.Logger, scanKey: cfg.ScanStandDownKey, loc: cfg.Location}
 	if m.logger == nil {
 		m.logger = slog.New(slog.DiscardHandler)
 	}
@@ -162,6 +182,14 @@ func (m *Migration) Step(ctx context.Context, kv storage.KV, w *datamigrate.Step
 		return w.Delete(kv.Key)
 	case family == prefixRun:
 		return m.stepRun(ctx, kv, w, id)
+	case family == prefixSched || family == settingTick || family == keyFullSweep || family == keyWindow:
+		return m.stepClock(ctx, kv, w)
+	case family == keyPause:
+		return m.stepPause(ctx, kv, w)
+	case family == keyStandDown:
+		return m.stepStandDown(ctx, kv, w)
+	case family == prefixBatch:
+		return m.stepBucket(ctx, kv, w)
 	}
 	// A row a run owns, visited before (or without) its run's driver.
 	_, err := m.legacy().Get(ctx, []byte(prefixRun+id))
@@ -305,8 +333,8 @@ func scanRows(ctx context.Context, r storage.Reader, prefix string) ([]storage.K
 // resumed after a crash reports only what it stepped.
 func (m *Migration) Verify(ctx context.Context, r storage.Reader) (datamigrate.VerifyReport, error) {
 	rep := datamigrate.VerifyReport{
-		Read:        m.runs.Load() + m.runsQuarantined.Load(),
-		Written:     m.runs.Load(),
+		Read:        m.runs.Load() + m.runsQuarantined.Load() + m.clocks.Load() + m.markers.Load() + m.buckets.Load() + m.dropped.Load(),
+		Written:     m.runs.Load() + m.clocks.Load() + m.markers.Load() + m.buckets.Load(),
 		Quarantined: m.runsQuarantined.Load() + m.rowsQuarantined.Load() + m.orphans.Load(),
 	}
 	for _, rg := range SourceRanges() {
