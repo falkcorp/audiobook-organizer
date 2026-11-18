@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_fixer.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 0e4c7d58-a1b3-4f26-8c19-6d5a3e7f9b02
 // last-edited: 2026-11-18
 
@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/decisions"
@@ -76,13 +77,27 @@ const (
 // carried by this type; TestMergeCleanupPlanWritesNothing checks it against a
 // store snapshot.
 type mergeCleanupReader interface {
-	GetAllBooksCore(limit int, offset int) ([]database.BookCore, error)
+	// GetAllBooksCoreComplete is the authoritative listing (it falls through to
+	// a Pebble scan when the in-memory index is short); CountAllBooks counts the
+	// in-memory index. The two disagreeing is how a short index is seen.
+	GetAllBooksCoreComplete(limit int, offset int) ([]database.BookCore, error)
+	CountAllBooks() (int, error)
 	GetBookByID(id string) (*database.Book, error)
 	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	BookFilesWithHash(hash string) ([]database.BookFile, error)
 	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
 	GetAuthorByID(id int) (*database.Author, error)
+}
+
+// mcAltTitleReader is the one read outside OpsStore: a book's alternative
+// titles. It is a capability, resolved from the store with
+// database.AsCapability, so OpsStore (and its mock and width ratchet) does not
+// widen for one read of one fixer; a store without it refuses the plan, because
+// a preview that cannot see alternative titles would call a renamed book a
+// different work.
+type mcAltTitleReader interface {
+	GetBookAlternativeTitles(bookID string) ([]database.BookAlternativeTitle, error)
 }
 
 var _ mergeCleanupReader = OpsStore(nil)
@@ -196,6 +211,7 @@ type mcLoaded struct {
 // and a re-plan never reads a stale one.
 type mcRun struct {
 	store   mergeCleanupReader
+	alts    mcAltTitleReader
 	ops     OpsStore
 	vetoes  OwnerVetoReader
 	syncIDs database.SyncIdentityStore
@@ -206,7 +222,7 @@ type mcRun struct {
 	groups   sync.Map // gid -> *onceVal[[]database.Book]
 	loaded   sync.Map // id -> *onceVal[*mcLoaded]
 	hashes   sync.Map // file hash -> *onceVal[int]
-	authors  sync.Map // author id -> *onceVal[string]
+	authors  sync.Map // author id -> *onceVal[mcAuthor]
 	vgGroups sync.Map // gid -> *onceVal[vgRepairGroupReport]
 	members  sync.Map // gid -> *onceVal[[]versionprimary.Member]
 }
@@ -236,7 +252,11 @@ func (f *mergeCleanupFixer) newRun(ctx context.Context, rep registry.Reporter) (
 	if probe == nil {
 		probe = f.vg.prober(func(msg string) { _ = rep.Log(slog.LevelWarn, msg) })
 	}
-	r := &mcRun{store: ops, ops: ops, vetoes: vetoes, syncIDs: database.AsSyncIdentityStore(ops),
+	alts, ok := database.AsCapability[mcAltTitleReader](ops)
+	if !ok {
+		return nil, fmt.Errorf("%s: the store cannot read alternative titles", mergeCleanupFixerID)
+	}
+	r := &mcRun{store: ops, alts: alts, ops: ops, vetoes: vetoes, syncIDs: database.AsSyncIdentityStore(ops),
 		applier: &vgApplier{store: ops, reporter: rep, seriesNames: names, paths: repairs.NewPathResolver()},
 		loader:  versionprimary.Loader{Files: ops, Chapters: vps, RootDir: config.AppConfig.RootDir, Probe: probe}}
 	return r, nil
@@ -281,21 +301,50 @@ func (r *mcRun) hashShare(hash string) (int, error) {
 	})
 }
 
-func (r *mcRun) authorName(id int) (string, error) {
-	return cachedOnce(&r.authors, strconv.Itoa(id), func() (string, error) {
+// mcAuthor is one author row as the credits read it.
+type mcAuthor struct {
+	// name is the normalized name; "" when found is false.
+	name string
+	// found is false for an id with no author row (a dangling credit).
+	found bool
+	// placeholder: the stored name is a placeholder (Unknown ...).
+	placeholder bool
+}
+
+func (r *mcRun) author(id int) (mcAuthor, error) {
+	return cachedOnce(&r.authors, strconv.Itoa(id), func() (mcAuthor, error) {
 		a, err := r.store.GetAuthorByID(id)
-		if err != nil || a == nil {
-			return "", err
+		if err != nil {
+			return mcAuthor{}, err
 		}
-		return dedup.NormalizeAuthorName(a.Name), nil
+		if a == nil {
+			return mcAuthor{}, nil
+		}
+		return mcAuthor{name: dedup.NormalizeAuthorName(a.Name), found: true, placeholder: authorname.IsPlaceholderAuthor(a.Name)}, nil
 	})
 }
 
-// credits is the book's credited names, normalized, in credit order.
-func (r *mcRun) credits(b *database.Book) ([]string, error) {
+// mcCredits is a book's credits as the verdict reads them.
+type mcCredits struct {
+	// names are the credited names, normalized, in credit order, placeholders
+	// and dangling ids left out.
+	names []string
+	// authors are the individual names those credits hold (mcCreditParts).
+	authors []string
+	// placeholder: some credit is a placeholder name.
+	placeholder bool
+	// dangling counts credits whose author id has no author row. A dangling
+	// credit is counted, never dropped: a book whose only credit points at
+	// nothing has unknown authors, not none.
+	dangling int
+}
+
+// credits reads the book's credited names in credit order.
+func (r *mcRun) credits(b *database.Book) (mcCredits, error) {
+	var c mcCredits
 	rows, err := r.store.GetBookAuthors(b.ID)
 	if err != nil {
-		return nil, fmt.Errorf("read credits of %s: %w", b.ID, err)
+		return c, fmt.Errorf("read credits of %s: %w", b.ID, err)
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].Position < rows[j].Position })
 	ids := make([]int, 0, len(rows))
@@ -305,17 +354,48 @@ func (r *mcRun) credits(b *database.Book) ([]string, error) {
 	if len(ids) == 0 && b.AuthorID != nil {
 		ids = append(ids, *b.AuthorID)
 	}
-	var out []string
 	for _, id := range ids {
-		n, err := r.authorName(id)
+		a, err := r.author(id)
 		if err != nil {
-			return nil, fmt.Errorf("read author %d: %w", id, err)
+			return c, fmt.Errorf("read author %d: %w", id, err)
 		}
-		if n != "" {
-			out = append(out, n)
+		switch {
+		case !a.found:
+			c.dangling++
+		case a.placeholder:
+			c.placeholder = true
+		case a.name != "":
+			c.names = append(c.names, a.name)
+			for _, part := range mcCreditParts(a.name) {
+				if !slices.Contains(c.authors, part) {
+					c.authors = append(c.authors, part)
+				}
+			}
 		}
 	}
-	return out, nil
+	return c, nil
+}
+
+// mcOnDiskRuntime is the runtime of the audio that is on disk: the present
+// rows only. Book.Duration may stand in for an unmeasured file only when the
+// book has at most one row in all (ComputeBookRuntime's own rule, applied to
+// every row, not just the present ones): a book with one measured chapter on
+// disk and nine missing is not a book whose Duration is that chapter's. A book
+// with no present row has no on-disk runtime.
+func mcOnDiskRuntime(b *database.Book, files []database.BookFile) database.BookRuntime {
+	var present []database.BookFile
+	for i := range files {
+		if !files[i].Missing {
+			present = append(present, files[i])
+		}
+	}
+	if len(present) == 0 {
+		return database.BookRuntime{Source: database.RuntimeSourceNone}
+	}
+	if len(files) > 1 {
+		b = nil
+	}
+	return database.ComputeBookRuntime(b, present)
 }
 
 // load reads a book, its file rows and the signals' view of it. nil, nil is a
@@ -334,9 +414,19 @@ func (r *mcRun) load(id string) (*mcLoaded, error) {
 		if err != nil {
 			return nil, err
 		}
+		alts, err := r.alts.GetBookAlternativeTitles(id)
+		if err != nil {
+			return nil, fmt.Errorf("read alternative titles of %s: %w", id, err)
+		}
 		l := &mcLoaded{book: b, files: files}
-		l.side = mcSide{ID: id, Title: b.Title, Authors: credits, SeriesID: b.SeriesID, SeriesSeq: b.SeriesSequence,
+		l.side = mcSide{ID: id, Title: b.Title, Credits: credits.names, Authors: credits.authors,
+			CreditsPlaceholder: credits.placeholder, CreditsDangling: credits.dangling,
+			SeriesID: b.SeriesID, SeriesSeq: b.SeriesSequence,
 			ASIN: mcDeref(b.ASIN), GroupID: mcDeref(b.VersionGroupID), Primary: mcPrimary(b.IsPrimaryVersion)}
+		for _, a := range alts {
+			l.side.AltTitles = append(l.side.AltTitles, a.Title)
+		}
+		sort.Strings(l.side.AltTitles)
 		var present []database.BookFile
 		for i := range files {
 			if !files[i].Missing {
@@ -344,12 +434,25 @@ func (r *mcRun) load(id string) (*mcLoaded, error) {
 			}
 		}
 		l.side.Files = len(present)
-		l.side.Runtime = database.ComputeBookRuntime(b, files)
+		// The verdict is made on what is on disk; the runtime with the missing
+		// chapter rows counted rides along for the runtime_includes_missing check.
+		l.side.Runtime = mcOnDiskRuntime(b, files)
 		l.side.TotalBytes, l.side.BytesComplete = l.side.Runtime.TotalBytes, l.side.Runtime.SizesComplete
-		if len(present) == 1 && present[0].FileHash != "" {
-			l.side.HashFile = present[0].FileHash
-			if l.side.HashShare, err = r.hashShare(present[0].FileHash); err != nil {
-				return nil, fmt.Errorf("read the books sharing a file hash with %s: %w", id, err)
+		l.side.RuntimeAll = database.ComputeBookRuntime(b, files)
+		l.side.AllTotalBytes, l.side.AllBytesComplete = l.side.RuntimeAll.TotalBytes, l.side.RuntimeAll.SizesComplete
+		if len(present) == 1 {
+			f := present[0]
+			if f.FileHash != "" {
+				l.side.HashFile = f.FileHash
+				if l.side.HashShare, err = r.hashShare(f.FileHash); err != nil {
+					return nil, fmt.Errorf("read the books sharing a file hash with %s: %w", id, err)
+				}
+			}
+			if f.OriginalFileHash != "" {
+				l.side.HashOrig = f.OriginalFileHash
+				if l.side.HashOrigShare, err = r.hashShare(f.OriginalFileHash); err != nil {
+					return nil, fmt.Errorf("read the books sharing an original file hash with %s: %w", id, err)
+				}
 			}
 		}
 		return l, nil
@@ -797,6 +900,9 @@ func (r *mcRun) gates(ctx context.Context, fa *mcFacts) error {
 	}
 	if fa.verdict != nil && fa.verdict.Skip != "" {
 		fa.hold(fa.verdict.Skip, fa.verdict.Why)
+		for _, x := range fa.verdict.Extra {
+			fa.hold(x.Skip, x.Why)
+		}
 	}
 	switch fa.kind {
 	case mcKindSwap:
@@ -1001,9 +1107,10 @@ func (r *mcRun) buildRow(fa *mcFacts) repairs.Row {
 	cur["loser_primary"] = l.side.Primary
 	cur["loser_files"] = strconv.Itoa(l.side.Files)
 	mcPutRuntime(cur, "loser", l.side)
+	mcPutIdentity(cur, "loser", l.side)
 	row.Members = []repairs.RowMember{{BookID: fa.id, Title: l.book.Title, Role: "loser", Files: l.side.Files, MissingFiles: len(l.files) - l.side.Files}}
 	row.BookIDs = []string{fa.id}
-	fa.fpExtra = append(fa.fpExtra, mcFileSig(l.files))
+	fa.fpExtra = append(fa.fpExtra, mcFileSig(l.files), mcSideSig(l.side))
 
 	for _, h := range fa.chain.Hops {
 		if h.Book == nil {
@@ -1021,9 +1128,10 @@ func (r *mcRun) buildRow(fa *mcFacts) repairs.Row {
 		cur["target_primary"] = t.side.Primary
 		cur["target_files"] = strconv.Itoa(t.side.Files)
 		mcPutRuntime(cur, "target", t.side)
+		mcPutIdentity(cur, "target", t.side)
 		row.Members = append(row.Members, repairs.RowMember{BookID: t.side.ID, Title: t.book.Title, Role: "target",
 			Files: t.side.Files, MissingFiles: len(t.files) - t.side.Files})
-		fa.fpExtra = append(fa.fpExtra, mcFileSig(t.files))
+		fa.fpExtra = append(fa.fpExtra, mcFileSig(t.files), mcSideSig(t.side))
 		if fa.verdict != nil {
 			s := fa.verdict.Signals
 			cur["signals"] = strings.Join(s.Names(), ",")
@@ -1116,6 +1224,8 @@ func mcReason(fa *mcFacts) string {
 	return "nothing proposed"
 }
 
+// mcPutRuntime records the on-disk runtime the verdict was made on and, when
+// chapter rows are off disk, the runtime with them counted beside it.
 func mcPutRuntime(cur map[string]string, side string, s mcSide) {
 	secs, ok := s.Runtime.KnownSeconds()
 	if ok {
@@ -1124,6 +1234,45 @@ func mcPutRuntime(cur map[string]string, side string, s mcSide) {
 		cur[side+"_runtime_seconds"] = ""
 	}
 	cur[side+"_runtime_complete"] = strconv.FormatBool(ok)
+	if s.RuntimeAll.FilesMissingUnmatched > 0 {
+		all, allOK := s.RuntimeAll.KnownSeconds()
+		cur[side+"_runtime_with_missing_seconds"] = ""
+		if allOK {
+			cur[side+"_runtime_with_missing_seconds"] = strconv.Itoa(all)
+		}
+		cur[side+"_missing_chapter_rows"] = strconv.Itoa(s.RuntimeAll.FilesMissingUnmatched)
+	}
+}
+
+// mcPutIdentity records what the owner reads to tell two books apart: credits,
+// series position and ASIN. Everything the verdict's signals read about a side
+// is in Current, so a row can be judged from the row alone.
+func mcPutIdentity(cur map[string]string, side string, s mcSide) {
+	cur[side+"_credits"] = strings.Join(s.Credits, "; ")
+	if s.CreditsDangling > 0 {
+		cur[side+"_credits_dangling"] = strconv.Itoa(s.CreditsDangling)
+	}
+	if s.CreditsPlaceholder {
+		cur[side+"_credits_placeholder"] = "true"
+	}
+	if s.SeriesID != nil {
+		cur[side+"_series_id"] = strconv.Itoa(*s.SeriesID)
+	}
+	if s.SeriesSeq != nil {
+		cur[side+"_series_position"] = strconv.Itoa(*s.SeriesSeq)
+	}
+	cur[side+"_asin"] = s.ASIN
+	if len(s.AltTitles) > 0 {
+		cur[side+"_alternative_titles"] = strings.Join(s.AltTitles, "; ")
+	}
+}
+
+// mcSideSig is every input the verdict reads off a side that Current does not
+// already show, for the fingerprint.
+func mcSideSig(s mcSide) string {
+	return strings.Join([]string{s.ID, strings.Join(s.AltTitles, "\x1f"), strings.Join(s.Credits, "\x1f"),
+		strings.Join(s.Authors, "\x1f"), strconv.FormatBool(s.CreditsPlaceholder), strconv.Itoa(s.CreditsDangling),
+		s.HashFile, strconv.Itoa(s.HashShare), s.HashOrig, strconv.Itoa(s.HashOrigShare)}, "|")
 }
 
 // mcFileSig is every file row's identity, state and measures, so a re-plan
@@ -1136,7 +1285,7 @@ func mcFileSig(files []database.BookFile) string {
 			d = strconv.Itoa(*files[i].Duration)
 		}
 		rows[i] = strings.Join([]string{files[i].ID, strconv.FormatBool(files[i].Missing), d,
-			strconv.FormatInt(files[i].FileSize, 10), files[i].FileHash}, "|")
+			strconv.FormatInt(files[i].FileSize, 10), files[i].FileHash, files[i].OriginalFileHash}, "|")
 	}
 	sort.Strings(rows)
 	return strings.Join(rows, ";")
@@ -1195,6 +1344,17 @@ func mcFingerprint(row *repairs.Row, extra []string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// mcListingShort is the refusal when the in-memory book index holds fewer books
+// than the authoritative listing: nil when it holds all of them.
+func mcListingShort(listed, indexed int) error {
+	if indexed >= listed {
+		return nil
+	}
+	return fmt.Errorf("%s: the in-memory book index holds %d books but the authoritative listing has %d (%d short); "+
+		"per-book reads would call live books missing, so no census is made until the index is rebuilt (restart the server)",
+		mergeCleanupFixerID, indexed, listed, listed-indexed)
+}
+
 // mcAbsentRow is the Replan answer for a book that is no longer a row.
 func mcAbsentRow(id, excluded string) repairs.Row {
 	kind, why := mcSkipGone, "the book is no longer a live merged book with files ("+excluded+")"
@@ -1228,9 +1388,21 @@ func (f *mergeCleanupFixer) plan(ctx context.Context, _ json.RawMessage, rep reg
 	if err != nil {
 		return nil, census, err
 	}
-	cores, err := run.store.GetAllBooksCore(0, 0)
+	cores, err := run.store.GetAllBooksCoreComplete(0, 0)
 	if err != nil {
 		return nil, census, fmt.Errorf("list books: %w", err)
+	}
+	// The listing above is authoritative, but every per-book read after it comes
+	// from the in-memory index. When that index is short, those reads would call
+	// a live book missing: refuse the census, with the counts, rather than
+	// classify against a library that is not whole.
+	indexed, err := run.store.CountAllBooks()
+	if err != nil {
+		return nil, census, fmt.Errorf("count the indexed books: %w", err)
+	}
+	if err := mcListingShort(len(cores), indexed); err != nil {
+		_ = rep.Log(slog.LevelWarn, err.Error())
+		return nil, census, err
 	}
 	type listed struct{ id, title string }
 	var ids []listed
@@ -1337,7 +1509,7 @@ func mcSummary(rows []repairs.Row, c mcCensus) string {
 			flags[fl]++
 		}
 	}
-	return fmt.Sprintf("merge-cleanup preview: %d merged book(s); %d row(s), %d would be written; excluded %d trashed, %d with no live file, %d missing, %d no longer merged; by class %s; by first skip kind %s; by every hold %s; by flag %s",
+	return fmt.Sprintf("merge-cleanup preview: %d merged book(s); %d row(s), %d would propose a repair; excluded %d trashed, %d with no live file, %d missing, %d no longer merged; by class %s; by first skip kind %s; by every hold %s; by flag %s",
 		c.Merged, c.Rows, applicable, c.ExcludedTrashed, c.ExcludedNoFiles, c.ExcludedMissing, c.ExcludedNotMerged,
 		mcCounts(classes), mcCounts(skips), mcCounts(c.HoldsByKind), mcCounts(flags))
 }
