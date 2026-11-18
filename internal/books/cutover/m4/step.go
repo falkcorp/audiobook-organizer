@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/step.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: a9d5f13e-7c02-4b68-8e41-35b0c6d7e2f8
 // last-edited: 2026-11-18
 
@@ -19,6 +19,7 @@ package m4
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -257,6 +258,16 @@ func (m *Migration) stepRun(ctx context.Context, kv storage.KV, w *datamigrate.S
 		return fmt.Errorf("m4: import the data of run %q: %w", id, err)
 	}
 	for _, row := range rr.all() {
+		if rr.op2 != nil && string(row.Key) == string(rr.op2.Key) && !json.Valid(row.Value) {
+			// The v2 operation row is a mirror of the record just imported, but
+			// bytes that are not even JSON are not deleted unseen: set aside.
+			m.logger.Warn("m4: a run's v2 operation row is quarantined", "run", rr.id)
+			m.rowsQuarantined.Add(1)
+			if err := w.Quarantine(row.Key, row.Value, reasonOpV2); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := w.Delete(row.Key); err != nil {
 			return err
 		}
@@ -313,13 +324,19 @@ func (m *Migration) collect(ctx context.Context, id string, run storage.KV) (*ru
 	if rr.ledger, err = one(prefixLedger); err != nil {
 		return nil, err
 	}
+	if rr.op2, err = one(prefixOp2); err != nil {
+		return nil, err
+	}
+	if rr.state2, err = one(prefixState2); err != nil {
+		return nil, err
+	}
 	for _, f := range []struct {
 		prefix string
 		dst    *[]storage.KV
 	}{
 		{prefixEvt, &rr.evt}, {prefixIntent, &rr.intent}, {prefixItem, &rr.item}, {prefixLog, &rr.log},
 		{prefixSnap, &rr.snap}, {prefixMark, &rr.mark}, {prefixRowMark, &rr.rowmark},
-		{prefixRow, &rr.row}, {prefixRowIx, &rr.rowix},
+		{prefixRow, &rr.row}, {prefixRowIx, &rr.rowix}, {prefixLog2, &rr.log2}, {prefixErr2, &rr.err2},
 	} {
 		if *f.dst, err = scanRows(ctx, r, f.prefix+id+":"); err != nil {
 			return nil, err

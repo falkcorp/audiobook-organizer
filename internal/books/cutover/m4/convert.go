@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/convert.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c41d9e07-5a3b-48f2-b6c8-0d7e2f91a354
 // last-edited: 2026-11-18
 
@@ -46,6 +46,8 @@ const (
 	reasonPriority   = "the run's priority is outside 0 to 2"
 	reasonPage       = "a row of the run's trail, intents, items or log does not decode"
 	reasonCkpt       = "the run's checkpoint record does not decode"
+	reasonLogV2      = "a v2 log or error line of the run does not decode"
+	reasonOpV2       = "the run's v2 operation row is not JSON"
 	reasonRowBlob    = "a plan row of the run is not JSON"
 	reasonOrphan     = "the row belongs to no run record"
 	reasonOfRunQuar  = "the row belongs to a run that is quarantined"
@@ -60,17 +62,21 @@ type runRows struct {
 	evt, intent, item, log  []storage.KV
 	snap, mark, rowmark     []storage.KV
 	row, rowix              []storage.KV
+	// The v2 mirror: the operation and resume-state rows, the log and error
+	// lines.
+	op2, state2 *storage.KV
+	log2, err2  []storage.KV
 }
 
 // all lists every row of the run, driver included, for deletion or quarantine.
 func (r *runRows) all() []storage.KV {
 	var out []storage.KV
-	for _, one := range []*storage.KV{r.run, r.prog, r.ckpt, r.ledger} {
+	for _, one := range []*storage.KV{r.run, r.prog, r.ckpt, r.ledger, r.op2, r.state2} {
 		if one != nil {
 			out = append(out, *one)
 		}
 	}
-	for _, many := range [][]storage.KV{r.evt, r.intent, r.item, r.log, r.snap, r.mark, r.rowmark, r.row, r.rowix} {
+	for _, many := range [][]storage.KV{r.evt, r.intent, r.item, r.log, r.snap, r.mark, r.rowmark, r.row, r.rowix, r.log2, r.err2} {
 		out = append(out, many...)
 	}
 	return out
@@ -281,7 +287,75 @@ func (c *converted) pages(rr *runRows) string {
 		}
 		c.data.Pages = append(c.data.Pages, tasks.PageEntry{Page: tasks.PageLog, Seq: seq, Log: tasks.LogLine{At: l.At.UTC(), Level: l.Level, Message: l.Message, Fields: l.Fields}})
 	}
+	return c.pagesV2(rr)
+}
+
+// pagesV2 adds the v2 mirror's log and error lines to the run's log page.
+// HEAD wrote a run's log lines to opv2:log: and its failures to opv2:err:, and
+// the v3 half holds neither, so they are the run's log history (D12 (b)).
+//
+// A v2 log line keeps the sequence its key carries, moved past the v3 lines
+// when the run has both (the two families number their lines independently, and
+// a page is keyed by sequence); an error line is numbered after every line
+// before it, in key (time) order. A line that does not decode quarantines the
+// run: a half-imported log is not history.
+func (c *converted) pagesV2(rr *runRows) string {
+	base := c.maxSeq(tasks.PageLog)
+	last := base
+	for i, kv := range rr.log2 {
+		var l opLogV2
+		if json.Unmarshal(kv.Value, &l) != nil {
+			return reasonLogV2
+		}
+		seq := logSeq(string(kv.Key))
+		if seq == 0 {
+			seq = uint64(i + 1)
+		}
+		seq += base
+		last = max(last, seq)
+		c.data.Pages = append(c.data.Pages, tasks.PageEntry{Page: tasks.PageLog, Seq: seq, Log: tasks.LogLine{At: l.CreatedAt.UTC(), Level: l.Level, Message: l.Message, Fields: attrFields(l.Attrs)}})
+	}
+	for _, kv := range rr.err2 {
+		var e opErrV2
+		if json.Unmarshal(kv.Value, &e) != nil {
+			return reasonLogV2
+		}
+		last++
+		f := attrFields(e.Attrs)
+		for k, v := range map[string]string{"plugin": e.Plugin, "def_id": e.DefID} {
+			if _, taken := f[k]; !taken && v != "" {
+				if f == nil {
+					f = map[string]string{}
+				}
+				f[k] = v
+			}
+		}
+		c.data.Pages = append(c.data.Pages, tasks.PageEntry{Page: tasks.PageLog, Seq: last, Log: tasks.LogLine{At: e.OccurredAt.UTC(), Level: "error", Message: e.Message, Fields: f}})
+	}
 	return ""
+}
+
+// attrFields is a v2 line's Attrs (a JSON object kept as text) as log fields:
+// a string stays itself and any other value is its JSON text. Text that is not
+// a JSON object rides whole under "attrs" rather than being dropped.
+func attrFields(attrs string) map[string]string {
+	if attrs == "" || attrs == "{}" || attrs == "null" {
+		return nil
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal([]byte(attrs), &m) != nil || m == nil {
+		return map[string]string{"attrs": attrs}
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		var s string
+		if json.Unmarshal(v, &s) == nil {
+			out[k] = s
+			continue
+		}
+		out[k] = string(v)
+	}
+	return out
 }
 
 // logSeq is the sequence a log key carries: opv3:log:<id>:<nanos>:<seq>.
@@ -324,6 +398,13 @@ func (c *converted) checkpoints(rr *runRows) string {
 		if len(ck.LegacyState) > 0 {
 			c.data.Checkpoints[CheckpointV1] = bytes.Clone(ck.LegacyState)
 		}
+	}
+	// HEAD copies opv2:state: into the checkpoint row as LegacyState when it
+	// migrates a run (the v1 checkpoint of 5T.8.3, whole row bytes). A run whose
+	// state was written after that copy, or whose checkpoint row is missing,
+	// still has it only here: carry the same bytes under the same name.
+	if _, has := c.data.Checkpoints[CheckpointV1]; !has && rr.state2 != nil {
+		c.data.Checkpoints[CheckpointV1] = bytes.Clone(rr.state2.Value)
 	}
 	if rr.ledger != nil {
 		c.data.Checkpoints[CheckpointLedger] = bytes.Clone(rr.ledger.Value)

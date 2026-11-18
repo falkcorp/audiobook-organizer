@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/rig_test.go
-// version: 1.0.1
+// version: 1.2.0
 // guid: d82c4a15-9e63-4f07-b1a9-7035e8c6f241
 // last-edited: 2026-11-18
 
@@ -52,7 +52,12 @@ const (
 	rigBuildOld = "batcomputer-1"
 	rigBuildNew = "batcomputer-2"
 	ownerTasks  = "core/tasks"
+	corpusRel   = "internal/books/testdata/r2corpus"
 )
+
+// withCorpus seeds the rig from the R2 corpus's store ("stage1": what R0 wrote
+// through its API; "overlay": stage 1 plus the hand-built rows of F2-13).
+func withCorpus(name string) func(*rig) { return func(r *rig) { r.corpus = name } }
 
 func rigDiskUsage() vfs.DiskUsage {
 	return vfs.DiskUsage{AvailBytes: 1 << 40, TotalBytes: 1 << 41, UsedBytes: 1 << 40}
@@ -183,6 +188,9 @@ type rig struct {
 	// and Migrate (Config.Legacy).
 	legacy   atomic.Pointer[storage.LegacyRange]
 	reconcil atomic.Int64
+	// corpus is "stage1" or "overlay" (copied from the R2 corpus), or "" for an
+	// empty store with synthetic rows.
+	corpus string
 	// view, when set, is consulted by every point read the step makes through
 	// Config.Legacy: handled says the value (or err, e.g. storage.ErrNotFound)
 	// is the answer. It stands for what a worker sees while another worker's
@@ -326,6 +334,7 @@ func (r *rig) migration() datamigrate.DataMigration {
 }
 
 // seed writes the pre-cutover store on a fresh crashable filesystem: the
+// corpus's Pebble directory and its sidecar (when r.corpus is set), the
 // pre-freeze build's boot, then r.mutate over books' legacy range.
 func (r *rig) seed(t testing.TB) *vfs.MemFS {
 	t.Helper()
@@ -333,6 +342,14 @@ func (r *rig) seed(t testing.TB) *vfs.MemFS {
 	mem.TestingSetDiskUsage(rigDiskUsage())
 	if err := mem.MkdirAll(rigDir, 0o700); err != nil {
 		t.Fatal(err)
+	}
+	if r.corpus != "" {
+		src := filepath.Join(repoRoot(t), filepath.FromSlash(corpusRel), r.corpus, "db")
+		for _, n := range []string{"audiobooks.pebble", "audiobooks.pebble.storage-format"} {
+			if _, err := vfs.Clone(vfs.Default, mem, filepath.Join(src, n), rigDir+"/"+n); err != nil {
+				t.Fatalf("copy the corpus store %s: %v", n, err)
+			}
+		}
 	}
 	ctx := context.Background()
 	o, err := storage.Open(ctx, storage.OpenOptions{Path: rigStore, FS: storage.FSOf(mem), Owners: r.owners(false), Build: rigBuildOld, FreeSpaceMargin: 1, Clock: crashmatrix.Now})
@@ -426,12 +443,12 @@ func read(ctx context.Context, t testing.TB, db *storage.DB, dm datamigrate.Data
 	}
 	// Left is read over the families as the test names them, not over
 	// m4.SourceRanges: a family the step forgot to claim must still show up.
+	// opv2: and op: are whole families (5S.9.1 rows 11 and 13: the v2 store and
+	// every op: child), so a child nobody listed is still seen.
 	for _, rg := range []storage.Range{
 		{Start: []byte("opv3:"), End: []byte("opv3;")},
-		{Start: []byte("opv2:row"), End: []byte("opv2:rox")},
-		{Start: []byte("op:batch:"), End: []byte("op:batch;")},
-		{Start: []byte("op:completion:"), End: []byte("op:completion;")},
-		{Start: []byte("op:deprev:"), End: []byte("op:deprev;")},
+		{Start: []byte("opv2:"), End: []byte("opv2;")},
+		{Start: []byte("op:"), End: []byte("op;")},
 		{Start: []byte("setting:scheduled_task_last_tick."), End: []byte("setting:scheduled_task_last_tick/")},
 		{Start: []byte("setting:library_scan_full_last_run"), End: []byte("setting:library_scan_full_last_run\x00")},
 		{Start: []byte("setting:maintenance_window_last_run"), End: []byte("setting:maintenance_window_last_run\x00")},
@@ -642,6 +659,10 @@ type runSpec struct {
 	derived                bool
 	noQueued               bool
 	corruptRun, corruptLog bool
+	// v2 mirror rows (opv2:): the operation row, the resume state, log and
+	// error lines, and the indexes HEAD rebuilds from the operation row.
+	v2op, v2state, v2derived bool
+	v2logs, v2errs           int
 	// result and errText fill the run's Result and Error; system makes the
 	// actor HEAD's system actor (no user, auth method "system").
 	result, errText string
@@ -760,6 +781,28 @@ func seedRun(ctx context.Context, t testing.TB, lr storage.LegacyRange, s runSpe
 		put("opv3:q:"+s.id, []byte(nil))
 		put("opv3:def:"+s.def, []byte(`{"id":"`+s.def+`"}`))
 		put("opv3:meta:counts", []byte(`{"queued":1}`))
+	}
+	if s.v2op {
+		put("opv2:op:"+s.id, map[string]any{"ID": s.id, "DefID": s.def, "Status": "completed", "Priority": s.priority})
+	}
+	if s.v2state {
+		put("opv2:state:"+s.id, store.OpStateV2Row{OperationID: s.id, StateBlob: []byte(`{"resume":{"phase":"xml"}}`), SchemaVersion: 2, WrittenAt: s.queued})
+	}
+	for i := 1; i <= s.v2logs; i++ {
+		at := s.queued.Add(time.Duration(i) * time.Millisecond)
+		put(fmt.Sprintf("opv2:log:%s:%020d:%010d", s.id, at.UnixNano(), 10+i), store.OpLogV2Row{OperationID: s.id, Level: "warn", Message: fmt.Sprintf("Arkham intake %d", i), Attrs: `{"phase":"xml","inmates":12}`, CreatedAt: at})
+	}
+	for i := 1; i <= s.v2errs; i++ {
+		at := s.queued.Add(time.Duration(i) * time.Second)
+		put(fmt.Sprintf("opv2:err:%s:%020d", s.id, at.UnixNano()), store.OpErrorV2Row{OperationID: s.id, Plugin: "maintenance", DefID: s.def, Message: fmt.Sprintf("Scarecrow escaped %d", i), Attrs: `{"error":"fear gas"}`, OccurredAt: at})
+	}
+	if s.v2derived {
+		put("opv2:act:"+s.id, []byte(nil))
+		put("opv2:def:"+s.def, []byte(`{"id":"`+s.def+`"}`))
+		put(fmt.Sprintf("opv2:done:%020d:%s", s.queued.UnixNano(), s.id), []byte(nil))
+		put(fmt.Sprintf("opv2:open:%020d:%s", s.queued.UnixNano(), s.id), []byte(nil))
+		put(fmt.Sprintf("opv2:q:%03d:%020d:%s", 999-s.priority, s.queued.UnixNano(), s.id), []byte(nil))
+		put("opv2:wait:"+s.id, []byte(nil))
 	}
 	return wrote
 }

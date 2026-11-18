@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/crash_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 9a3d6e18-f2b4-4c07-85d1-6e0a7b49c2f3
 // last-edited: 2026-11-18
 
@@ -42,6 +42,7 @@ func TestCutover_ResumableCrashMatrix(t *testing.T) {
 		specs = append(specs, runSpec{
 			id: runID(i), def: "library.scan", st: "succeeded", completed: tptr(done),
 			evts: 2, intents: 1, items: 1, logs: 1, ckpt: i%2 == 0, rows: i % 2, rowmarks: i % 2, derived: i == 1,
+			v2op: true, v2state: i%2 == 0, v2logs: 1, v2errs: i % 2, v2derived: i == 1,
 		})
 	}
 	specs = append(specs, runSpec{id: runID(5), def: "library.scan", st: "succeeded", completed: tptr(done), evts: 1, corruptRun: true})
