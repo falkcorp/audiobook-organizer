@@ -25,12 +25,16 @@ func (a act) typ(v string) string {
 	return fmt.Sprintf("act:typ:%s:%s:%s:%s", strings.ReplaceAll(strings.ReplaceAll(v, "%", "%25"), ":", "%3A"), a.tier, a.nanos, a.ulid)
 }
 
+// json is the row as stored. HTML is not escaped, so a test can tell a rewrite
+// that re-escapes the row's text from one that keeps it.
 func (a act) json() string {
-	raw, err := json.Marshal(a.body)
-	if err != nil {
+	var buf strings.Builder
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(a.body); err != nil {
 		panic(err)
 	}
-	return string(raw)
+	return strings.TrimRight(buf.String(), "\n")
 }
 
 // seedAct writes a, its type index entry and the indexes that must stay
