@@ -1,5 +1,5 @@
 // file: internal/server/file_work_intent_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0d7b3c52-9e41-4a68-b1f5-7c2e8a4d6f93
 // last-edited: 2026-11-18
 
@@ -687,6 +687,33 @@ func TestBulkWriteBack_RetiredRefusalFromTheTagWriteIsSkippedNotFailed(t *testin
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	assert.Contains(t, strings.Join(rec.logs, "\n"), "0 written, 0 failed, 1 skipped")
+}
+
+// A book that retires AFTER its rename finished but before its tags were
+// written is not "nothing happened": its files already moved. It is counted
+// failed (the tags the job owed were not written) with a line that says the
+// rename ran, not skipped like a book that was left alone.
+func TestBulkWriteBack_RetiredAfterItsRenameIsFailedNotSkipped(t *testing.T) {
+	s, cleanup := setupTestServer(t)
+	defer cleanup()
+	root := t.TempDir()
+	withRenameConfig(t, root)
+	id, files := renameableBook(t, s, root, "Year One", false)
+	prev := writeBackBookFiles
+	writeBackBookFiles = func(*metafetch.Service, context.Context, string, metafetch.FetchIntent) (int, error) {
+		return 0, fmt.Errorf("book %s is retired: %w", id, metafetch.ErrBookRetired)
+	}
+	t.Cleanup(func() { writeBackBookFiles = prev })
+
+	rec := &resumeRecorder{opID: "op-bulk-retired-after-rename"}
+	require.NoError(t, s.runBulkWriteBack(context.Background(), "op-bulk-retired-after-rename", []string{id}, true, 0, registryProgressAdapter{r: rec}, nil))
+
+	assert.True(t, anyMissing(files), "the rename ran before the book retired")
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	logs := strings.Join(rec.logs, "\n")
+	assert.Contains(t, logs, "0 written, 1 failed, 0 skipped")
+	assert.Contains(t, logs, "retired after its rename")
 }
 
 // A non-retired failure from the tag write is still a failure.
