@@ -1,5 +1,5 @@
 // file: internal/applygate/titlecompare_bench_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3b7d9e14-6a2c-4f58-b0e1-95c8d4a7e362
 // last-edited: 2026-11-18
 
@@ -21,9 +21,12 @@ import (
 //
 //	go test ./internal/applygate -run '^$' -bench CheckTitle -benchmem
 //
-// and again with -race: the regexp and strings.Replacer work a check repeats
-// per text is far dearer there, because sync.Pool drops Puts under the race
-// detector and every pooled matcher is rebuilt.
+// and again with -race: what a check still allocates per text is dearer there,
+// because sync.Pool drops Puts under the race detector and whatever it pools is
+// built again. The check used to run a regexp or a strings.Replacer several
+// times per text, whose matcher state is exactly such a pooled object; it now
+// scans the text by hand (titleTokens, isRomanNumeral, splitSegments), so the
+// -race figure is close to the plain one.
 func BenchmarkCheckTitle(b *testing.B) {
 	series := func(n string) *database.Series { return &database.Series{Name: n} }
 	sub := func(s string) *string { return &s }

@@ -1,5 +1,5 @@
 // file: internal/applygate/titlecompare.go
-// version: 2.5.0
+// version: 2.5.1
 // guid: 8e41c7a2-5d09-4b3f-a6e8-2f9c0d71b5a3
 // last-edited: 2026-11-18
 
@@ -246,13 +246,13 @@ func isRomanNumeral(s string) bool {
 	for tens < len(s) && tens < 3 && s[tens] == 'x' {
 		tens++
 	}
-	// The tens are x{0,3}: any count up to the leading run may be taken, since
-	// the units below may themselves begin with an x ("ix").
-	for n := tens; n >= 0; n-- {
-		switch s[n:] {
-		case "", "ix", "iv", "i", "ii", "iii", "v", "vi", "vii", "viii":
-			return true
-		}
+	// The tens take the whole leading run of x, up to three: the units that
+	// follow ("", i, ii, iii, iv, v, vi, vii, viii, ix) never begin with an x,
+	// so no shorter run of tens could leave a valid rest that the whole run does
+	// not.
+	switch s[tens:] {
+	case "", "ix", "iv", "i", "ii", "iii", "v", "vi", "vii", "viii":
+		return true
 	}
 	return false
 }
