@@ -1,7 +1,7 @@
 // file: core/kernel/storage.go
-// version: 1.1.5
+// version: 1.1.6
 // guid: 129333ce-8ab8-40ac-a70a-ae2c593dfd6c
-// last-edited: 2026-11-11
+// last-edited: 2026-11-18
 
 package kernel
 
@@ -127,6 +127,7 @@ func (k *Kernel) storageOptions(ctx context.Context) (storage.OpenOptions, error
 		ExtendStart:  k.extendStart(coreOwner),
 		Clock:        bootClock(ctx),
 		StateFiles:   slices.Clone(k.cfg.StorageStateFiles),
+		FromRelease:  k.cfg.FromRelease,
 		ClaimsShadow: k.cfg.StorageClaimsShadow,
 	}, nil
 }

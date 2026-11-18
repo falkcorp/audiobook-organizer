@@ -1,12 +1,14 @@
 // file: main.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: 5f6a7b8c-9d0e-1f2a-3b4c-5d6e7f8a9b0c
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package main
 
 import (
+	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -25,7 +27,53 @@ import (
 // version is set at build time via -ldflags "-X main.version=..."
 var version = "dev"
 
+// prefreezeRelease is ci/prefreeze_release.txt (09 §9.2.1): the last
+// production release before F3 merged. HEAD's store records no app version, so
+// the pre-migration checkpoint's from_release is this embedded tag, and the
+// release freeze (no production release between it and R2) makes it exact.
+//
+//go:embed ci/prefreeze_release.txt
+var prefreezeRelease string
+
+// prefreezeTag reads the tag out of ci/prefreeze_release.txt by the one rule
+// the file's other readers share (scripts/ci/fetch_prefreeze_binary.sh
+// --resolve, F3-08): the single line that is neither blank nor starts with
+// '#', trimmed. No such line, or more than one, is an error.
+func prefreezeTag(raw string) (string, error) {
+	tag := ""
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if tag != "" {
+			return "", errors.New("ci/prefreeze_release.txt has more than one tag line")
+		}
+		tag = line
+	}
+	if tag == "" {
+		return "", errors.New("ci/prefreeze_release.txt has no tag line")
+	}
+	return tag, nil
+}
+
+// embeddedPrefreezeTag is the tag the build embeds. The file is a checked-in
+// release input and TestEmbeddedPrefreezeTag fails CI on one that does not
+// parse, so a malformed file is a build-time defect: the panic cannot reach a
+// release binary.
+func embeddedPrefreezeTag() string {
+	tag, err := prefreezeTag(prefreezeRelease)
+	if err != nil {
+		panic(err)
+	}
+	return tag
+}
+
 var executeCmd = cmd.Execute
+
+// setFromRelease hands serve the embedded pre-freeze tag; a variable so the
+// test can see run() hand it over, as executeCmd lets it see Execute run.
+var setFromRelease = cmd.SetFromRelease
 
 // Fast-exit flags of the release tooling (09 §9.4 R1). Like the two above them
 // they are handled before cobra parses and before any store or config opens,
@@ -127,6 +175,7 @@ func fastExitArgs(args []string) []string {
 func run() int {
 	// Set version everywhere
 	cmd.SetVersion(version)
+	setFromRelease(embeddedPrefreezeTag())
 	server.SetVersion(version)
 	telemetry.SetVersion(version)
 	server.SetEmbeddedFS(WebFS)

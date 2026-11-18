@@ -1,7 +1,7 @@
 // file: main_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9c3cc5d7-3d49-4e97-a0c1-9b2e38a9986f
-// last-edited: 2026-11-08
+// last-edited: 2026-11-18
 
 package main
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -209,5 +210,81 @@ func runPrintStorageLevels(t *testing.T, args []string) {
 	}
 	if _, ok := levels["books"]; !ok {
 		t.Fatalf("levels = %v, want a books entry", levels)
+	}
+}
+
+// TestPrefreezeTag pins the one reader rule of ci/prefreeze_release.txt, shared
+// with scripts/ci/fetch_prefreeze_binary.sh --resolve and F3-08: the single
+// line that is neither blank nor starts with '#' is the tag, trimmed; no such
+// line or two of them is an error, never a guess.
+func TestPrefreezeTag(t *testing.T) {
+	const header = "# file: ci/prefreeze_release.txt\n# version: 1.0.0\n# guid: 00000000-0000-4000-8000-000000000000\n# last-edited: 2026-11-18\n"
+	for name, tc := range map[string]struct {
+		in   string
+		want string // "" = must fail
+	}{
+		"f3-08-shape":      {in: header + "# The pre-freeze release; one tag line.\nv0.232.0\n", want: "v0.232.0"},
+		"blank-and-spaces": {in: header + "   \n\t\n  v0.3.0\t\n", want: "v0.3.0"},
+		"no-final-newline": {in: header + "v0.4.0", want: "v0.4.0"},
+		"crlf":             {in: "# c\r\nv0.5.0\r\n", want: "v0.5.0"},
+		"indented-comment": {in: "  # not a tag\nv0.6.0\n", want: "v0.6.0"},
+		"no-tag-line":      {in: header + "\n\n"},
+		"empty":            {in: ""},
+		"two-tags":         {in: header + "v0.1.0\nv0.2.0\n"},
+		"tag-then-junk":    {in: header + "v0.1.0\njunk\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := prefreezeTag(tc.in)
+			if tc.want == "" {
+				if err == nil {
+					t.Fatalf("prefreezeTag = %q, want an error", got)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("prefreezeTag = %q, %v; want %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
+// TestEmbeddedPrefreezeTag: the build embeds ci/prefreeze_release.txt and the
+// tag it reads is the file's tag line, a release tag shape (vX.Y.Z), which is
+// what the checkpoint records as from_release.
+func TestEmbeddedPrefreezeTag(t *testing.T) {
+	raw, err := os.ReadFile("ci/prefreeze_release.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := prefreezeTag(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := embeddedPrefreezeTag(); got != want {
+		t.Fatalf("embedded tag = %q, file's tag = %q", got, want)
+	}
+	if !regexp.MustCompile(`^v\d+\.\d+\.\d+$`).MatchString(want) {
+		t.Fatalf("tag %q is not a vX.Y.Z release tag", want)
+	}
+}
+
+// TestRunHandsServeThePrefreezeTag: run() gives cmd the tag the build embeds
+// before cobra parses, so serve can record it as the checkpoint's from_release.
+func TestRunHandsServeThePrefreezeTag(t *testing.T) {
+	origExecute, origSet := executeCmd, setFromRelease
+	t.Cleanup(func() { executeCmd, setFromRelease = origExecute, origSet })
+	var got []string
+	setFromRelease = func(tag string) { got = append(got, tag) }
+	executeCmd = func() error {
+		if len(got) != 1 {
+			t.Errorf("Execute ran after %d hand-overs of the tag, want 1", len(got))
+		}
+		return nil
+	}
+	if code := run(); code != 0 {
+		t.Fatalf("run() = %d", code)
+	}
+	if len(got) != 1 || got[0] != embeddedPrefreezeTag() {
+		t.Fatalf("hand-overs = %q, want [%q]", got, embeddedPrefreezeTag())
 	}
 }
