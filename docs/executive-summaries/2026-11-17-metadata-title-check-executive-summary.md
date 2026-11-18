@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-17-metadata-title-check-executive-summary.md -->
-<!-- version: 2.2.0 -->
+<!-- version: 2.3.0 -->
 <!-- guid: 3b9d6e21-8c47-4f05-a1d2-6e0f7a4c9b83 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -67,8 +67,12 @@ attempt.
   title and the library book is not marked as a part, the match is refused even
   when the recording lengths agree, because two parts of one book are often
   within 5% of each other's length. Before this change such a pair was applied
-  when the lengths agreed. In the other direction, an old "Disc 2" folder name
-  no longer refuses a book whose recording length already agrees.
+  when the lengths agreed. When the found book names no part, an old "Disc 2"
+  folder name does not refuse a book whose recording length agrees (as before);
+  a part marker left in the library book's own title or its single file's name
+  ("Hush CD1" against the whole book "Hush") does now refuse it, whatever the
+  lengths say. That last case is a new refusal, and in the replay over 4000
+  pairs it changed none.
 - The same title check also guards the automatic metadata upgrade that runs
   without anyone asking (`metabatch/upgrade.go`), so that path is stricter in
   exactly the same way.
@@ -85,6 +89,27 @@ attempt.
   now skips such books, and a queued apply that is skipped for this reason says
   so in the log. Undoing an apply clears the book's "applied" mark (this is
   tested), so a later run can apply it again on purpose.
+- A third review of the rule tightened it in seven places, each started from a
+  failing test:
+  - A found title that is only a few words of a longer library title ("Gotham"
+    against "Gotham Knights Detective Tales") is no longer taken as related
+    unless it shares at least half the words. A found title that adds words to
+    the library title is unchanged.
+  - A library title that ends in one capital letter ("Robin X") is treated as a
+    whole title, so the folder name "Robin" no longer stands in for it.
+  - A volume written in the library book's subtitle ("Batman, Book 2") is now
+    compared with the found book's number, so "Book 2" is not applied from a
+    "Book 3".
+  - A found book whose title is just its own series name ("Batman" in the series
+    "Batman") no longer counts as the same title as a library book called
+    "Batman"; it waits for a matching recording length.
+  - A year in brackets, a year only one title carries and a list number in front
+    ("08 - ") never make two titles different. Two titles that each carry a
+    different year-like number ("Gotham 2033", "Gotham 2034") still do.
+  - "Hush I" is now different from "Hush, Book 2", "Hush #2" and "Hush Volume
+    II", as it already was from "Hush II".
+  - "Third Book" is read as "Book 3", so it matches "Book 3" and differs from
+    "Book 4".
 - What this costs, measured. A read-only replay over 4000 stored book and
   candidate pairs compared three versions. The check as it was applied 276 of
   them. The first rebuilt check applied 203, so it lost too many pairs that are
@@ -95,14 +120,17 @@ attempt.
   5% (they are listed for review in the PR, not judged here). Of the 34, 19 are now refused as "title disagrees" and 15 wait
   because the title is only partly matched and the recording length does not
   confirm it.
-  The count for a real library still has to come from running the read-only
-  preview again before the next bulk apply.
+  The third round changed none of those totals: the same 247 apply, with the
+  same 34 lost and the same 5 gained against the check as it was, and two
+  pairs changed only the reason they wait. The count for a real library still
+  has to come from running the read-only preview again before the next bulk
+  apply.
 - What is still not caught. These pairs are the same as before this change, or
   they are neutral and apply when the lengths agree, so they are open:
   - a sequel whose title only adds a word or a number ("Dark Victory" and "Dark
     Victory Returns", "Hush" and "Hush 2");
-  - titles that differ only in a word-form ordinal ("The Second Robin" and "The
-    Third Robin");
+  - titles that differ only in an ordinal that is no volume's number ("The
+    Second Robin" and "The Third Robin");
   - a long title with one word changed;
   - a candidate that is only a franchise name, with no series recorded for it,
     against a book in that franchise;

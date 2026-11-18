@@ -1,5 +1,5 @@
 // file: internal/applygate/titlecompare_test.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 0b5a7e12-93c4-4d68-a1f7-6e2d9c40b835
 // last-edited: 2026-11-17
 
@@ -1088,12 +1088,14 @@ func TestCheckTitle_CandidateOnlyFieldsOnlyMoveTowardAgree(t *testing.T) {
 	t.Logf("%d moved toward agree, %d unchanged, %d statement pairs", moved, same, statements)
 }
 
-// TestCheckTitle_SeriesCreditsAndPathsNeverChangeAConflict: for a pair whose
-// TITLE fields conflict, no series name (taken from either side's own words),
-// no credit and no file name makes the pair anything but a block. This is the
-// review's BLOCKER-1 and MAJOR-1 as a property: a series named after the other
-// storyline, a credited name as a segment.
-func TestCheckTitle_SeriesCreditsAndPathsNeverChangeAConflict(t *testing.T) {
+// TestCheckTitle_SeriesAndPathsNeverChangeAConflict: for a pair whose TITLE
+// fields conflict, no series name (taken from either side's own words) and no
+// file name makes the pair anything but a block. This is the review's BLOCKER-1
+// as a property: a series named after the other storyline. It says nothing
+// about a credit: the narrator here is one fixed name that no pool title
+// contains, so it can never be a segment of a title. A credit that IS in a title
+// is TestCheckTitle_ACreditNeverMatchesASeries's, by example.
+func TestCheckTitle_SeriesAndPathsNeverChangeAConflict(t *testing.T) {
 	r := rand.New(rand.NewPCG(11, 4688))
 	checked := 0
 	for i := 0; i < scaled(40000) && checked < scaled(2500); i++ {

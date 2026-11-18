@@ -1,5 +1,5 @@
 // file: internal/applygate/sequence_ranges_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4d9c2a71-8e35-4f60-b2a8-17c6e3d05f94
 // last-edited: 2026-11-17
 
@@ -147,18 +147,20 @@ func TestBookNumbers_WeakSources(t *testing.T) {
 // subtitle or a position field would write it.
 func TestCheckSequence_SameCollectedEditionPasses(t *testing.T) {
 	bookForms := map[string]database.Book{
-		"title plural":          {Title: "Knightfall, Books 1-3"},
-		"title singular":        {Title: "Knightfall, Book 1-3"},
-		"title en dash":         {Title: "Knightfall, Vols 1–3"},
-		"title to":              {Title: "Knightfall, Books 1 to 3"},
-		"title list":            {Title: "Knightfall, Books 1, 2 & 3"},
-		"position only":         {Title: "Knightfall", SeriesPositionRaw: new("1-3")},
-		"position en dash":      {Title: "Knightfall", SeriesPositionRaw: new("1–3")},
-		"position and title":    {Title: "Knightfall, Books 1-3", SeriesPositionRaw: new("1-3")},
-		"title with endpoint":   {Title: "Knightfall, Books 1-3", SeriesPositionRaw: new("3")},
-		"title with first end":  {Title: "Knightfall, Book 1-3", SeriesPositionRaw: new("1")},
-		"stored int endpoint":   {Title: "Knightfall, Books 1-3", SeriesSequence: new(3)},
-		"folder range, no else": {Title: "Knightfall", FilePath: "/lib/A/Knightfall, Books 1-3"},
+		"title plural":           {Title: "Knightfall, Books 1-3"},
+		"title singular":         {Title: "Knightfall, Book 1-3"},
+		"title en dash":          {Title: "Knightfall, Vols 1–3"},
+		"title to":               {Title: "Knightfall, Books 1 to 3"},
+		"title list":             {Title: "Knightfall, Books 1, 2 & 3"},
+		"position only":          {Title: "Knightfall", SeriesPositionRaw: new("1-3")},
+		"position en dash":       {Title: "Knightfall", SeriesPositionRaw: new("1–3")},
+		"position and title":     {Title: "Knightfall, Books 1-3", SeriesPositionRaw: new("1-3")},
+		"title with endpoint":    {Title: "Knightfall, Books 1-3", SeriesPositionRaw: new("3")},
+		"title with first end":   {Title: "Knightfall, Book 1-3", SeriesPositionRaw: new("1")},
+		"subtitle with endpoint": {Title: "Knightfall", Subtitle: new("Books 1-3"), SeriesPositionRaw: new("3")},
+		"subtitle with first":    {Title: "Knightfall", Subtitle: new("Books 1-3"), SeriesPositionRaw: new("1")},
+		"stored int endpoint":    {Title: "Knightfall, Books 1-3", SeriesSequence: new(3)},
+		"folder range, no else":  {Title: "Knightfall", FilePath: "/lib/A/Knightfall, Books 1-3"},
 	}
 	candForms := map[string]metafetch.MetadataCandidate{
 		"position":          {Title: "Knightfall", SeriesPosition: "1-3"},
