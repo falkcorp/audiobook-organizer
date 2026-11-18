@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.30.0
+// version: 1.31.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
 // last-edited: 2026-11-18
 //
@@ -1097,6 +1097,8 @@ describe('SKIP_KIND_LABEL', () => {
       'chain_over_cap',
       'cycle_not_head',
       'repoint_ambiguous',
+      'repoint_group_no_primary',
+      'dead_end_shared',
       'handled_by_version_group_repair',
       'retired_shell',
       'cross_group',

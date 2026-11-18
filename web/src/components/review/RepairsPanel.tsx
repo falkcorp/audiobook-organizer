@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.38.0
+// version: 1.39.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-11-18
 
@@ -544,6 +544,8 @@ export const SKIP_KIND_LABEL: Record<string, string> = {
   chain_over_cap: 'Merge chain is longer than 10 books',
   cycle_not_head: 'Part of a merge loop; another book in the loop is handled first',
   repoint_ambiguous: 'Merge target is gone and more than one live book could replace it',
+  repoint_group_no_primary: 'Merge target is gone and its group has live books but no main version to point at',
+  dead_end_shared: 'Several live books are merged into the same missing book; none is chosen to keep',
   handled_by_version_group_repair: 'Handled by "Pick the main version of each book"',
   retired_shell: 'Holds file rows retired from another book',
   cross_group: 'The two books are in different version groups',

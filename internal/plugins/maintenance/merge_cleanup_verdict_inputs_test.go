@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_verdict_inputs_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3b0c6a2e-5d71-4e0f-9a64-c1f2d8e7b905
 // last-edited: 2026-11-18
 
@@ -128,20 +128,52 @@ func TestMergeCleanupTitleAuthorSwappedPairIsHeldNotUnmerged(t *testing.T) {
 		b.ID = "B"
 		require.False(t, mcComputeSignals(a, b).Transposed, "the titles match: nothing is swapped")
 	})
-	t.Run("a title that only matches one of the credits is not enough", func(t *testing.T) {
+	// The production shape is one-directional: the junk "read by ..." title
+	// matches nothing of the twin's, and the real title sits in the author field.
+	// Asking for the mirror as well let exactly that pair through as a wrong-work
+	// merge (TITLE_DIFF and AUTH_DIFF both fire on it).
+	t.Run("a credit that is the other book's title is enough, whichever book is swapped", func(t *testing.T) {
+		junk := mcTestSide("L", "read by Alfred Pennyworth", []string{"hush"}, 7*hour)
+		junk.Credits = []string{"Hush"}
+		twin := mcTestSide("T", "Hush", mcSelina, 9*hour)
+		twin.Credits = []string{"Selina Kyle"}
+		for _, c := range []struct {
+			name string
+			l, t mcSide
+		}{
+			{"the loser is the swapped one", junk, twin},
+			{"the target is the swapped one", twin, junk},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				require.True(t, mcComputeSignals(c.l, c.t).Transposed)
+				v := mcDecide(c.l, c.t)
+				require.Equal(t, mcSkipTitleAuthorSwapped, v.Skip)
+				require.Empty(t, v.Kind, "never an unmerge: the two are one work with a damaged record")
+			})
+		}
+	})
+	t.Run("the other direction, as an earlier version pinned it, is held too", func(t *testing.T) {
 		l := mcTestSide("L", "Bruce Wayne", []string{"selina kyle"}, 7*hour)
 		l.Credits = []string{"Selina Kyle"}
 		tg := mcTestSide("T", "Year One", mcBruce, 7*hour)
 		tg.Credits = []string{"Bruce Wayne"}
-		require.False(t, mcComputeSignals(l, tg).Transposed, "the loser's credit does not match the target's title")
+		require.True(t, mcComputeSignals(l, tg).Transposed, "the target's credit is the loser's title")
+		require.Equal(t, mcSkipTitleAuthorSwapped, mcDecide(l, tg).Skip)
+	})
+	t.Run("no credit of either book is the other's title", func(t *testing.T) {
+		l := mcTestSide("L", "The Long Halloween", mcBruce, 7*hour)
+		l.Credits = []string{"Bruce Wayne"}
+		tg := mcTestSide("T", "Year One", mcSelina, 9*hour)
+		tg.Credits = []string{"Selina Kyle"}
+		require.False(t, mcComputeSignals(l, tg).Transposed)
 	})
 }
 
 func TestMergeCleanupTransposedIgnoresAPlaceholderCredit(t *testing.T) {
 	// "Unknown" is a placeholder author but a real-looking title: a book titled
 	// Unknown beside a book credited to Unknown is not a title/author swap.
-	a := mcTestSide("A", "Unknown", []string{"year one"}, 7*3600)
-	a.Credits = []string{"Year One"}
+	a := mcTestSide("A", "Unknown", []string{"selina kyle"}, 7*3600)
+	a.Credits = []string{"Selina Kyle"}
 	b := mcTestSide("B", "Year One", []string{"unknown"}, 7*3600)
 	b.Credits = []string{"Unknown"}
 	require.False(t, mcTransposed(a, b))

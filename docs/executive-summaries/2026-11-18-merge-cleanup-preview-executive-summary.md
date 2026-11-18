@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-18-merge-cleanup-preview-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: fea71315-0fbe-4b70-a41a-0174fad61b55 -->
 <!-- last-edited: 2026-11-18 -->
 
@@ -31,8 +31,9 @@ no button that does.
   or author, an author record that no longer exists, a file with no measured
   length or no recorded size, or chapters that are listed but no longer on disk
   and would change the answer) the row is listed with its reasons and no proposal.
-  A book whose title and author were swapped is sent to the repair that exists for
-  that, not proposed here.
+  A pair where one book's author is the other book's title (a book whose title and
+  author were swapped, stored either way round) is sent to the repair that exists
+  for that, not proposed here.
 - Rows that belong to the version-group repair, books holding retired file
   versions, and merges that Audiobookshelf clients still follow are listed as
   held, with the reason, so none of them is proposed by accident. A pair the
@@ -41,10 +42,15 @@ no button that does.
   separate them agrees with the refusal, so it is shown, marked with the owner's
   refusal.
 - When a pointer leads to a book that has been set aside, the list follows the
-  trail one step further, to the live book the content went to, and proposes
-  pointing there only if that book really looks like the same work. It says a
-  book should stand on its own only when nothing live could be found around the
-  dead end; if the trail loops or runs on without an end, the row is held.
+  trail one step further, to the live book the content went to (also through a
+  set-aside book that still points on), and proposes pointing there only if that
+  book really looks like the same work. It says a book should stand on its own
+  only when none of the books it looked at leads to a live one and the set-aside
+  book's version group has no live book left. If the group still has a live book
+  but no main version to point at, if the trail loops or runs on without an end,
+  or if several live books are merged into the same set-aside book, the rows are
+  held and nothing is proposed. A set-aside group member that the group lookup
+  does not return is not among the books looked at.
 - The list reports counts: how many rows of each kind, how many were held and for
   which reasons, and how many looked like the earlier automatic merge pass
   (it leaves a recognisable mark) versus some other cause or an unknown one. Every

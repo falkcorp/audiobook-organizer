@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_signals.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 67839bc7-cc2f-4877-afbc-e2646b549e49
 // last-edited: 2026-11-18
 
@@ -81,8 +81,9 @@ const (
 	// that does not exist: the metadata is no evidence either way.
 	mcSkipPlaceholder    = "placeholder_metadata"
 	mcSkipDanglingAuthor = "dangling_author"
-	// The pair is a title/author-swapped book against its correct twin; the
-	// "Fix swapped title and author" fixer owns it.
+	// One book's credit is the other's title: a title/author-swapped book against
+	// its correct twin (either way round); the "Fix swapped title and author"
+	// fixer owns it.
 	mcSkipTitleAuthorSwapped = "title_author_swapped"
 	// The live book a repoint would point at is not, by the signals, the same
 	// work as the loser.
@@ -99,6 +100,12 @@ const (
 	mcSkipChainOverCap     = "chain_over_cap"
 	mcSkipCycleNotHead     = "cycle_not_head"
 	mcSkipRepointAmbiguous = "repoint_ambiguous"
+	// A live, unmerged book of the dead hop's version group exists that no walk
+	// named (the group has no usable primary), so "stands alone" is not shown.
+	mcSkipRepointGroupNoPrimary = "repoint_group_no_primary"
+	// Another live book is merged into the same dead end: each would stand
+	// alone, leaving several live copies of one work.
+	mcSkipDeadEndShared = "dead_end_shared"
 
 	// From the gates (merge_cleanup_fixer.go).
 	mcSkipHandledByVG          = "handled_by_version_group_repair"
@@ -176,8 +183,8 @@ type mcSignals struct {
 	// it never makes two books the same work by itself.
 	TitleAltMatch bool
 	TitleDiff     bool
-	// Transposed: one book's title is the other's credit and its credit the
-	// other's title (a title/author-swapped book against its correct twin).
+	// Transposed: one book's credit is the other's title (a title/author-swapped
+	// book against its correct twin; see mcTransposed).
 	Transposed    bool
 	AuthDiff      bool
 	SeriesPosDiff bool
@@ -316,10 +323,18 @@ func mcSideTitles(s mcSide) (primary string, all []string) {
 	return primary, all
 }
 
-// mcTransposed reports whether a's title is one of b's credits and one of a's
-// credits is b's title: a title/author-swapped book against its correct twin.
-// Two books with the same title are never transposed (a book named after its
-// own author matches itself), and a placeholder on either side is no evidence.
+// mcTransposed reports whether one book's credit is the other's title: the
+// signature of a title/author-swapped book against its correct twin. It looks
+// for one direction, not both. The population "Fix swapped title and author"
+// repairs stores a junk title (a "read by ..." credit) and the book's real
+// title in the author field, so the real title is on the correct twin as its
+// TITLE while the swapped book's own title matches nothing of the twin's;
+// asking for the mirror as well would let exactly that shape through as a
+// wrong-work pair. The question is symmetric (swapping the arguments asks the
+// same thing). Two books with the same title are never transposed (a book named
+// after its own author matches itself), and a placeholder on either side is no
+// evidence. A pair of different works where one's author is the other's title is
+// rare and costs nothing to hold.
 func mcTransposed(a, b mcSide) bool {
 	at, bt := strings.TrimSpace(a.Title), strings.TrimSpace(b.Title)
 	if at == "" || bt == "" || authorname.IsPlaceholderTitle(at) || authorname.IsPlaceholderTitle(bt) {
@@ -336,7 +351,7 @@ func mcTransposed(a, b mcSide) bool {
 		}
 		return false
 	}
-	return matches(at, b) && matches(bt, a)
+	return matches(at, b) || matches(bt, a)
 }
 
 // mcHashEq reports HASH_EQ: both books are one file each, and a hash of one
@@ -589,7 +604,7 @@ func mcDecideOn(l, t mcSide) mcVerdict {
 	}
 
 	if s.Transposed {
-		return skip(mcSkipTitleAuthorSwapped, "one book's title is the other's credit and its credit the other's title: a title/author-swapped book and its correct twin; the \"Fix swapped title and author\" repair owns it, not a merge cleanup")
+		return skip(mcSkipTitleAuthorSwapped, "one book's credit is the other's title: the shape of a title/author-swapped book and its correct twin; the \"Fix swapped title and author\" repair owns it, not a merge cleanup")
 	}
 	if diffs >= 2 {
 		if s.TitleMatch || s.TitleAltMatch || s.HashEq {

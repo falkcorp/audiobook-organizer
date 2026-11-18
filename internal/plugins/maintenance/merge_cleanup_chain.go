@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_chain.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b5cec7d-63b6-41db-ac42-7e4f46aea8ed
 // last-edited: 2026-11-18
 
@@ -78,6 +78,14 @@ func (c mcChain) LastID() string {
 		return ""
 	}
 	return c.Hops[len(c.Hops)-1].ID
+}
+
+// LastState is the state of the last hop read ("" for no hop).
+func (c mcChain) LastState() string {
+	if len(c.Hops) == 0 {
+		return ""
+	}
+	return c.Hops[len(c.Hops)-1].State
 }
 
 // mcWalkChain follows start's MergedIntoBookID pointer, hop by hop.

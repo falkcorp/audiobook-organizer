@@ -1,5 +1,5 @@
 <!-- file: docs/reference/ui-deep-links.md -->
-<!-- version: 2.6.0 -->
+<!-- version: 2.7.0 -->
 <!-- guid: B610EF08-9346-47FD-AAA3-C65958E0127C -->
 <!-- last-edited: 2026-11-18 -->
 
@@ -69,7 +69,8 @@ The `/review` repairs row takes these values for the merge-cleanup preview
 `skipped:runtime_includes_missing`, `skipped:placeholder_metadata`,
 `skipped:dangling_author`, `skipped:title_author_swapped`, `skipped:repoint_target_not_same_work`,
 `skipped:group_needs_handoff`, `skipped:sync_redirect_present`,
-`skipped:sync_redirect_broken`) and `filter=flag:<name>` with one of
+`skipped:sync_redirect_broken`, `skipped:repoint_group_no_primary`,
+`skipped:dead_end_shared`) and `filter=flag:<name>` with one of
 `chain_via_merged`, `chain_via_trashed`, `group_needs_handoff`,
 `sync_redirect_present`, `owner_says_distinct`, `origin_match4`,
 `origin_match4_partial`, `origin_other`, `origin_unknown`, `sync_redirect_broken`. These add no row to the table: the
