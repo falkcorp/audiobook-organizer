@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/store_slices.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 3a142df0-9e5d-4ead-9db6-bb75dbed428f
 // last-edited: 2026-11-18
 
@@ -83,9 +83,12 @@ type retentionFlagStore interface {
 // bookMutator is the read-modify-write slice: change a field on the stored
 // row under its write lock. It deliberately has no GetBookByID/UpdateBook
 // pair, so a whole-row write-back of a pre-read copy (the lost-update shape,
-// audit A1#15) cannot be written against it.
+// audit A1#15) cannot be written against it. It carries the field-lock read
+// beside the write, so a caller changing a user-lockable column goes through
+// database.ModifyBookRespectingLocks and cannot be handed a store that skips it.
 type bookMutator interface {
-	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+	database.BookModifier
+	database.MetadataFieldStateReader
 }
 
 // bookFileMutator is the book-file equivalent of bookMutator.
@@ -137,9 +140,12 @@ type bookSoftDeleter interface {
 }
 
 // seriesBookModifier is the one book write the series cleanup makes: a
-// read-modify-write of a single row under that book's write lock.
+// read-modify-write of a single row under that book's write lock. It carries the
+// field-lock read beside it because the write changes SeriesID, which the user
+// can lock (series_name): see database.ModifyBookRespectingLocks.
 type seriesBookModifier interface {
-	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+	database.BookModifier
+	database.MetadataFieldStateReader
 }
 
 // seriesUnlinker moves books off a series (under each book's write lock) and

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/store_slices.go
-// version: 1.15.1
+// version: 1.16.0
 // guid: 8d3b6f14-2a97-4e51-b0c8-5f7e91d24a63
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -195,6 +195,9 @@ type itunesRegroupStore interface {
 	regroupFileMover
 	itunesBookCreator
 	itunesExternalIDReassigner
+	// The canonical-title write reads the survivor's field locks
+	// (database.ModifyBookRespectingLocks).
+	database.MetadataFieldStateReader
 }
 
 // orphanFileScanner reads every book file and every book — including

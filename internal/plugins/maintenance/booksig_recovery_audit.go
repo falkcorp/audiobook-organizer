@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/booksig_recovery_audit.go
-// version: 1.7.3
+// version: 1.8.0
 // guid: 5f2a7c14-9b3e-4d6a-8e1f-2c0d5a9b7e34
-// last-edited: 2026-11-15
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -207,6 +207,7 @@ func runBookSigRecoveryAuditCore(ctx context.Context, dryRun bool, env t6g2Env) 
 		restoredCount     int // fields actually written back
 		skippedNonEmpty   int // recoverable, but current value was non-empty at write time — skipped
 		restoreErrorCount int // GetBookByID re-read or UpdateBook failures during restore
+		descLockHeld      int // description restore held: the user locked the description
 	)
 
 	// Small ring of recoverable + not-recoverable examples for heartbeat/report.
@@ -229,8 +230,8 @@ func runBookSigRecoveryAuditCore(ctx context.Context, dryRun bool, env t6g2Env) 
 		msg := fmt.Sprintf("Audited %d/%d — desc missing %d (rec %d), sig missing %d (rec %d)",
 			scanned, total, descMissing, descRecoverable, sigMissing, sigRecoverable)
 		if !dryRun {
-			msg += fmt.Sprintf(" — restored %d, skipped-nonempty %d, restore errors %d",
-				restoredCount, skippedNonEmpty, restoreErrorCount)
+			msg += fmt.Sprintf(" — restored %d, skipped-nonempty %d, restore errors %d, description-locked %d",
+				restoredCount, skippedNonEmpty, restoreErrorCount, descLockHeld)
 		}
 		if len(sample) > 0 {
 			msg += " — e.g. " + strings.Join(sample, "; ")
@@ -317,9 +318,10 @@ func runBookSigRecoveryAuditCore(ctx context.Context, dryRun bool, env t6g2Env) 
 		// Book from scratch or from a memdb projection, only mutate a row we
 		// just read Pebble-direct.
 		if !dryRun && (descSnapBook != nil || sigSnapBook != nil) {
-			restored, skipped, rerr := restoreRecoverableFields(env.Writer, id, descSnapBook, sigSnapBook, env.Log)
+			restored, skipped, lockHeld, rerr := restoreRecoverableFields(env.Writer, env.Store, id, descSnapBook, sigSnapBook, env.Log)
 			restoredCount += restored
 			skippedNonEmpty += skipped
+			descLockHeld += lockHeld
 			if rerr != nil {
 				restoreErrorCount++
 				errCount++
@@ -343,8 +345,8 @@ func runBookSigRecoveryAuditCore(ctx context.Context, dryRun bool, env t6g2Env) 
 		descMissing, descRecoverable, descNotRecoverable,
 		sigMissing, sigRecoverable, sigNotRecoverable)
 	if !dryRun {
-		report += fmt.Sprintf(" Restored %d, skipped-nonempty %d, restore errors %d.",
-			restoredCount, skippedNonEmpty, restoreErrorCount)
+		report += fmt.Sprintf(" Restored %d, skipped-nonempty %d, restore errors %d, description-locked %d.",
+			restoredCount, skippedNonEmpty, restoreErrorCount, descLockHeld)
 	}
 	env.Log(slog.LevelInfo, report)
 	env.Progress(total, total, report)
@@ -365,13 +367,21 @@ func runBookSigRecoveryAuditCore(ctx context.Context, dryRun bool, env t6g2Env) 
 // descSnapBook/sigSnapBook are the parsed snapshot Books already known (by
 // the caller) to carry a non-nil Description/BookSigV1 respectively; either
 // may be nil if that field isn't recoverable for this book.
+//
+// The description is a column the user can lock (description), so it is restored
+// only when it is not locked: the lock is read inside the callback, under the
+// book's write lock, and an empty description a user locked stays empty. The
+// booksig columns have no lock, so a locked description does not hold them back;
+// lockHeld counts the books whose description restore was held. A lock set that
+// cannot be read writes nothing for that book (an error, not a guess).
 func restoreRecoverableFields(
 	store t6g2RowWriter,
+	reader database.MetadataFieldStateReader,
 	id string,
 	descSnapBook *database.Book,
 	sigSnapBook *database.Book,
 	log t6g2Log,
-) (restored int, skippedNonEmpty int, err error) {
+) (restored int, skippedNonEmpty int, lockHeld int, err error) {
 	// ModifyBook re-reads the row under its write lock and fills only the
 	// recovered columns that are still empty there, so a column another
 	// writer commits meanwhile is not reverted (audit A1#15).
@@ -379,8 +389,19 @@ func restoreRecoverableFields(
 	changed := false
 	written, uerr := store.ModifyBook(id, func(fresh *database.Book) error {
 		title = fresh.Title
+		descLocked := false
 		if descSnapBook != nil {
-			if fresh.Description != nil {
+			locks, lerr := database.LoadFieldLocks(reader, fresh.ID)
+			if lerr != nil {
+				return fmt.Errorf("book %s NOT restored: %w", fresh.ID, lerr)
+			}
+			descLocked = locks.Locked(database.FieldKeyDescription)
+		}
+		if descSnapBook != nil {
+			if descLocked {
+				lockHeld++
+				log(slog.LevelInfo, fmt.Sprintf("book %s: description left empty, locked by the user", id))
+			} else if fresh.Description != nil {
 				skippedNonEmpty++
 				log(slog.LevelDebug, fmt.Sprintf("book %s: description no longer empty at write time, skipping", id))
 			} else {
@@ -411,18 +432,18 @@ func restoreRecoverableFields(
 	})
 	if uerr != nil {
 		log(slog.LevelWarn, fmt.Sprintf("book %s: UpdateBook restore failed: %v", id, uerr))
-		return 0, skippedNonEmpty, uerr
+		return 0, skippedNonEmpty, lockHeld, uerr
 	}
 	if written == nil {
 		log(slog.LevelWarn, fmt.Sprintf("book %s: restore re-read found no row, skipping", id))
-		return 0, 0, fmt.Errorf("book %s: not found on restore re-read", id)
+		return 0, 0, 0, fmt.Errorf("book %s: not found on restore re-read", id)
 	}
 	if !changed {
-		return 0, skippedNonEmpty, nil
+		return 0, skippedNonEmpty, lockHeld, nil
 	}
 
 	log(slog.LevelDebug, fmt.Sprintf("book %s (%q): restored recovered field(s)", id, title))
-	return 1, skippedNonEmpty, nil
+	return 1, skippedNonEmpty, lockHeld, nil
 }
 
 func t6g2BookSigRecoveryAuditMeta() t6g2Meta {
