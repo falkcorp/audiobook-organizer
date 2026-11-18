@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-18-series-writers-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: f3b8d246-5e19-4a70-8c2d-b41e7a96d058 -->
 <!-- last-edited: 2026-11-18 -->
 
@@ -24,7 +24,14 @@ the undo.
   refuses if not. Books already in that state from older builds stay editable,
   and removing the link is always allowed. Copying a book (splitting a version,
   splitting a file, the audio conversion record) quietly drops a series that was
-  deleted instead of failing the whole copy.
+  deleted instead of failing the whole copy. So do the other places that copy one
+  book's details onto another: refreshing a library copy from its original,
+  merging a duplicate into a book, filling in a split book, and restoring an old
+  version of a book. Each now leaves out the deleted series and carries over
+  everything else. Refreshing a library copy used to fail quietly and fail again
+  on every metadata update; it now reports that the copy is out of date. A
+  metadata import or an edit that names a deleted series is refused for that book
+  alone, with a message that names the series, and the rest still go through.
 - **The Repairs "prune series" fixer now uses that careful delete too.** It used
   to count the books in a series and then delete it as two separate steps, so a
   book linked in between was stranded. It now deletes only when nothing uses the
