@@ -1,5 +1,5 @@
 // file: internal/books/store/series_bookref_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 8f2c14ba-6d97-4e35-b0a1-72e5c9d38a04
 // last-edited: 2026-11-18
 
@@ -236,9 +236,6 @@ func TestSeriesBookRefCount_AgreesWithTheMapOnBothArms(t *testing.T) {
 		fromMem, err := store.mem().GetSeriesBookRefCount(sid)
 		require.NoError(t, err)
 		require.Equal(t, refs[sid], fromMem, "memdb arm, series %d", sid)
-		viaStore, err := SeriesRefCount(&decoratorStore{Store: store}, sid)
-		require.NoError(t, err)
-		require.Equal(t, refs[sid], viaStore, "through the decorator, series %d", sid)
 	}
 
 	// A memdb known to be missing book rows refuses; the store falls through
@@ -252,13 +249,4 @@ func TestSeriesBookRefCount_AgreesWithTheMapOnBothArms(t *testing.T) {
 	got, err = store.GetSeriesBookRefCount(999)
 	require.NoError(t, err)
 	require.Zero(t, got)
-}
-
-// TestSeriesRefCount_FailsClosed: a store without the capability is an
-// error, never a zero (zero authorizes the delete).
-func TestSeriesRefCount_FailsClosed(t *testing.T) {
-	_, err := SeriesRefCount(struct{}{}, 1)
-	require.Error(t, err)
-	_, err = SeriesRefCount(&decoratorNoUnwrap{Store: seedRefStore(t)}, 1)
-	require.Error(t, err, "a decorator without Unwrap must not be reached around")
 }

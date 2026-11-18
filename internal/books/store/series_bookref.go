@@ -1,7 +1,7 @@
 // file: internal/books/store/series_bookref.go
-// version: 1.11.1
+// version: 1.11.2
 // guid: 3b9d7c41-5e02-4a86-9f13-6c8ad20b47e5
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package store
 
@@ -289,17 +289,4 @@ func (p *PebbleStore) GetSeriesBookRefCount(seriesID int) (int, error) {
 		return 0, err
 	}
 	return counts[seriesID], nil
-}
-
-// SeriesRefCount returns how many books reference seriesID in ANY state. It
-// fails CLOSED like SeriesRefCounts: a store that cannot answer the
-// unfiltered per-series question is an error, never a zero. Resolved through
-// AsCapability, so it looks through the decorator chain.
-func SeriesRefCount(store any, seriesID int) (int, error) {
-	c, ok := AsCapability[SeriesBookRefCounter](store)
-	if !ok {
-		return 0, fmt.Errorf("store cannot count unfiltered references to series %d (got %T); "+
-			"refusing to delete it on a guess", seriesID, store)
-	}
-	return c.GetSeriesBookRefCount(seriesID)
 }
