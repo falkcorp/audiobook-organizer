@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.69.4
+// version: 4.69.5
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-11-10
+// last-edited: 2026-11-18
 
 package server
 
@@ -2963,7 +2963,11 @@ func (s *Server) setupRoutes() {
 			protected.GET("/file-ops/pending", s.perm(auth.PermLibraryView), s.handleListPendingFileOps)
 			protected.GET("/operations/:id/results", s.perm(auth.PermLibraryView), s.handleGetOperationResults)
 			protected.GET("/operations/reconcile/preview", s.perm(auth.PermLibraryView), s.reconcilePreview)
-			protected.POST("/operations/reconcile", s.perm(auth.PermScanTrigger), s.startReconcile)
+			// settings.manage is what reconcile.apply declares: the route enforces the
+			// definition's permission (it was scan.trigger, which the seeded editor
+			// holds, so an editor could repoint books here while POST /operations/v2
+			// refused the same op). TestReconcileApplyRoute_NeedsSettingsManage.
+			protected.POST("/operations/reconcile", s.perm(auth.PermSettingsManage), s.startReconcile)
 			protected.POST("/operations/reconcile/scan", s.perm(auth.PermScanTrigger), s.startReconcileScan)
 			protected.GET("/operations/reconcile/scan/latest", s.perm(auth.PermLibraryView), s.latestReconcileScan)
 			protected.POST("/operations/cleanup-version-groups", s.perm(auth.PermSettingsManage), s.cleanupDuplicateVersionGroupsHandler)
