@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.44.5
+# version: 3.45.1
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-11-18
 
@@ -625,8 +625,50 @@ jobs:
             ${{ runner.os }}-go-1.27-
             ${{ runner.os }}-go-
 
-      - name: Install system packages
-        run: scripts/ci/apt_install.sh libtag1-dev
+      # libtag1-dev (cgo) for the Go guards and ffmpeg for the Whisper worker
+      # tests below, in ONE cached install. No live mirror on a warm cache: the
+      # .deb files (the packages and the libraries the image lacks) are cached,
+      # keyed on the runner image version plus the package list, verified against
+      # a sha256 manifest and installed with dpkg. Only a miss (new image, new
+      # package list) goes to the mirror, through the same retrying apt_install.sh
+      # as before. Tuning that script's timeouts alone did not stop the flake:
+      # PRs 4708, 4709 and 4711 each lost this step to a slow mirror.
+      # The package list lives in the aptkey step only; the cache key and the
+      # install both read it from there.
+      # A cache hit removes the mirror dependency; a miss still needs it. Caches
+      # saved on a PR ref are visible only to that PR, so a new PR hits only
+      # entries saved from main (or its own earlier runs).
+      - name: Compute apt cache key (repo-guards)
+        id: aptkey
+        run: |
+          if [ -n "${ImageVersion:-}" ]; then
+            echo "image=${ImageOS:-unknown}-${ImageVersion}" >> "$GITHUB_OUTPUT"
+          fi
+          pkgs="libtag1-dev ffmpeg"
+          echo "pkgs=$pkgs" >> "$GITHUB_OUTPUT"
+          echo "suffix=${pkgs// /_}" >> "$GITHUB_OUTPUT"
+
+      # No ImageVersion (a non-hosted runner): no key, no cache; the install
+      # below then behaves as a plain miss.
+      - name: Restore apt packages cache (repo-guards)
+        if: steps.aptkey.outputs.image != ''
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/apt-debs-repo-guards
+          key: apt-debs-repo-guards-${{ steps.aptkey.outputs.image }}-${{ hashFiles('scripts/ci/apt_cached_install.sh', 'scripts/ci/apt_install.sh') }}-${{ steps.aptkey.outputs.suffix }}
+
+      - name: Install system packages (libtag1-dev, ffmpeg)
+        # Miss path: 3 attempts x 2 calls x (120 s + 10 s) + backoff = 13.5 min
+        # worst case for this step alone, but the 15-minute JOB cap above covers
+        # the whole job (checkout, Go cache, ...), so on a stalled mirror the job
+        # cap fires first and attempt 3 may never start.
+        timeout-minutes: 15
+        env:
+          APT_INSTALL_CALL_TIMEOUT: "120"
+          APT_PKGS: ${{ steps.aptkey.outputs.pkgs }}
+        run: |
+          read -ra pkgs <<<"$APT_PKGS"
+          scripts/ci/apt_cached_install.sh "$HOME/apt-debs-repo-guards" "${pkgs[@]}"
 
       # Fails in BOTH directions against tools/cmd/sdkguard/internal-deps.txt: a
       # new internal package in the SDK's dep tree, or a stale entry that is no
@@ -712,20 +754,11 @@ jobs:
       # only on Windows, in the trial workflow (whisper-windows.yml), against
       # powershell.exe. test_whisper_wire_text_guard is stdlib too and runs here.
       #
-      # The real-ffmpeg tests must RUN here, not skip: the step installs ffmpeg,
-      # sets WHISPER_TESTS_REQUIRE_FFMPEG=1 (a guard test in test_whisper_server_cpu
-      # fails when ffmpeg is missing under it) and passes -rs so any remaining
-      # skip is listed in the log. Green with the ffmpeg tests skipped proves
+      # The real-ffmpeg tests must RUN here, not skip: the job's cached install
+      # step (above) installs ffmpeg, this step sets WHISPER_TESTS_REQUIRE_FFMPEG=1
+      # (a guard test in test_whisper_server_cpu fails when ffmpeg is missing
+      # under it) and passes -rs so any remaining skip is listed in the log. Green with the ffmpeg tests skipped proves
       # nothing about the clip cutter.
-      - name: Install ffmpeg for the Whisper worker tests
-        # Hard cap on the step: a mirror hang held this job ~15 minutes until it was
-        # cancelled. 3 attempts x 2 calls x (120 s + 10 s kill grace) + backoff = 13.5
-        # minutes worst case, under the cap. (60 s per call was tried and is too tight:
-        # a slow-but-working mirror hit it on all 3 attempts in PR 4706's CI.)
-        timeout-minutes: 15
-        env:
-          APT_INSTALL_CALL_TIMEOUT: "120"
-        run: scripts/ci/apt_install.sh ffmpeg
 
       - name: Whisper worker contract tests
         env:
@@ -1268,12 +1301,35 @@ jobs:
       # internal/scanner and internal/server, whose real-audio-file tests
       # skip when exec.LookPath cannot find these tools. Without them this job
       # would report those tests as passing while running none of them.
+      # Cached .deb install, see the Repo Guards install step: a warm cache needs no
+      # apt mirror, and the script finishes an interrupted dpkg first.
+      # The package list lives in the aptkey step only (cache key and install).
+      - name: Compute apt cache key (fixture-system-deps)
+        id: aptkey
+        run: |
+          if [ -n "${ImageVersion:-}" ]; then
+            echo "image=${ImageOS:-unknown}-${ImageVersion}" >> "$GITHUB_OUTPUT"
+          fi
+          pkgs="libtag1-dev ffmpeg libchromaprint-tools"
+          echo "pkgs=$pkgs" >> "$GITHUB_OUTPUT"
+          echo "suffix=${pkgs// /_}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore apt packages cache (fixture-system-deps)
+        if: steps.aptkey.outputs.image != ''
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/apt-debs-fixture-system-deps
+          key: apt-debs-fixture-system-deps-${{ steps.aptkey.outputs.image }}-${{ hashFiles('scripts/ci/apt_cached_install.sh', 'scripts/ci/apt_install.sh') }}-${{ steps.aptkey.outputs.suffix }}
+
       - name: Install system dependencies
-        # 3 x 2 x (180 s + 10 s) + backoff = 19.5 minutes worst case.
+        # Miss path worst case: 3 x 2 x (180 s + 10 s) + backoff = 19.5 minutes.
         timeout-minutes: 20
         env:
           APT_INSTALL_CALL_TIMEOUT: "180"
-        run: scripts/ci/apt_install.sh libtag1-dev ffmpeg libchromaprint-tools
+          APT_PKGS: ${{ steps.aptkey.outputs.pkgs }}
+        run: |
+          read -ra pkgs <<<"$APT_PKGS"
+          scripts/ci/apt_cached_install.sh "$HOME/apt-debs-fixture-system-deps" "${pkgs[@]}"
 
       # internal/books' TestR0OpensR1Store runs the R0 release binary. Restore
       # its archive from cache and fetch it here (gh, retrying, checksum
