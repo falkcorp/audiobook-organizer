@@ -6,6 +6,8 @@
 package books
 
 import (
+	"context"
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -17,6 +19,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/tasks"
@@ -102,20 +106,16 @@ func TestTaskResourceKinds_ArePlainAndUnique(t *testing.T) {
 	}
 }
 
-// TestRegister_JobKindsEffectsAreDeclared: the kernel's P7 rule (core/kernel
-// tasks_checks.go moduleTaskProblems) read directly over jobs.Kinds, the one
-// exported kind list: every resource a kind reads or writes in module books is
-// declared, and every write is to books. This is the predicate the kernel
-// applies, not a boot of the kernel: a boot also needs stores, a ledger,
-// permissions and schedules that are the flip's. The six converted maintenance
-// groups' lists are unexported with their fake dependencies in test files, so
-// they are covered by the vocabulary equality above.
-func TestRegister_JobKindsEffectsAreDeclared(t *testing.T) {
-	declared := registeredResources(t)
-	defs, err := jobs.Kinds(jobs.KindDeps{}, nil)
-	require.NoError(t, err)
-	require.NotEmpty(t, defs, "jobs.Kinds lists no kind: the maintenance jobs are not registered")
-	var wrote int
+// requireEffectsDeclared is the kernel's P7 rule (core/kernel tasks_checks.go
+// moduleTaskProblems) read directly over a kind list: every resource a kind
+// reads or writes in module books is declared, and every write is to books. It
+// is the predicate the kernel applies, not a boot of the kernel: a boot also
+// needs stores, a ledger, permissions and schedules that are the flip's. It
+// returns how many write refs it saw, so a caller can refuse a list that
+// declares none.
+func requireEffectsDeclared(t *testing.T, declared []string, defs []tasks.Definition) (writes int) {
+	t.Helper()
+	require.NotEmpty(t, defs, "the kind list is empty: the check would run over nothing")
 	for _, d := range defs {
 		e := tasks.CommonOf(d).Effects
 		for _, ref := range e.ReadSet() {
@@ -124,10 +124,44 @@ func TestRegister_JobKindsEffectsAreDeclared(t *testing.T) {
 			}
 		}
 		for _, ref := range e.WriteSet() {
-			wrote++
+			writes++
 			require.Equal(t, string(ID), ref.Module, "%s writes %s/%s, another module's resource", d.Kind(), ref.Module, ref.Kind)
 			require.Contains(t, declared, ref.Kind, "%s writes resource kind %q, which books did not declare with Registrar.Resources", d.Kind(), ref.Kind)
 		}
 	}
-	require.NotZero(t, wrote, "no jobs kind writes anything: the check ran over nothing")
+	return writes
+}
+
+// TestRegister_JobKindsEffectsAreDeclared: every kind of jobs.Kinds, an
+// exported kind list, passes the kernel's rule against what Register declared.
+func TestRegister_JobKindsEffectsAreDeclared(t *testing.T) {
+	defs, err := jobs.Kinds(jobs.KindDeps{}, nil)
+	require.NoError(t, err)
+	require.NotZero(t, requireEffectsDeclared(t, registeredResources(t), defs), "no jobs kind writes anything")
+}
+
+// batmanFixer is a repairs.Fixer that plans and applies nothing: the repairs
+// shell declares one Effects value for every fixer (books and series,
+// internal/repairs/kinds.go common), so any fixer shows what a native fixer
+// kind declares.
+type batmanFixer struct{}
+
+func (batmanFixer) ID() string          { return "mend-the-batsignal" }
+func (batmanFixer) Title() string       { return "Mend the bat signal" }
+func (batmanFixer) Description() string { return "Replaces a cracked lens." }
+func (batmanFixer) Meta() repairs.Meta  { return repairs.Meta{} }
+func (batmanFixer) Plan(context.Context, json.RawMessage, registry.Reporter) ([]repairs.Row, error) {
+	return nil, nil
+}
+func (batmanFixer) Replan(context.Context, json.RawMessage, repairs.Row, registry.Reporter) (repairs.Row, error) {
+	return repairs.Row{}, nil
+}
+func (batmanFixer) Apply(context.Context, *repairs.Writer, repairs.Row) error { return nil }
+
+// TestRegister_FixerKindsEffectsAreDeclared: the same rule over repairs.Kinds,
+// the other exported kind list (F5-02's seam note: the definitions write
+// books/books and books/series, which books must declare).
+func TestRegister_FixerKindsEffectsAreDeclared(t *testing.T) {
+	defs := repairs.Kinds([]repairs.Fixer{batmanFixer{}}, repairs.KindDeps{})
+	require.NotZero(t, requireEffectsDeclared(t, registeredResources(t), defs), "no fixer kind writes anything")
 }

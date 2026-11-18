@@ -257,11 +257,7 @@ change the critical path until the flips resume; they do lengthen R2 by the chai
 Decided by the owner on 2026-11-18, approving the split.
 
 1. **O26: decided, run-time fence only (owner 2026-11-18).** F5-18b builds the run-time write fence and no
-   compile-time narrow writer types per kind. The 13-14 files and 150-250 lines of narrow types are not
-   built; `TODO-F5-10-NARROW-WRITER-TYPES` closes on this decision.
+   compile-time narrow writer types per kind.
 2. **F5-18j: decided, retire the legacy author rows before the flip (owner 2026-11-18).** F5-18j stays in the
-   chain (F5-18b -> F5-18j -> F5-18k); the flip does not accept `authors` in every book-write set. The
-   proposal's note still holds: the retirement op needs an owner go before it runs on prod.
-3. **F5-18h: decided, 100 books per batch (owner 2026-11-18).** Each child run of `transcribe-file-intros`,
-   `extract-wav-clips` and `intro-migrate-single-file` (and of `backfill-file-hashes`,
-   `recompute-book-aggregates` and `scan-composer-tags` if F5-18h takes them) covers 100 books.
+   chain; the flip does not accept `authors` in every book-write set.
+3. **F5-18h: decided, 100 books per batch (owner 2026-11-18).**
