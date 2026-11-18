@@ -1,13 +1,12 @@
 // file: internal/server/reconcile.go
-// version: 3.12.1
+// version: 3.12.2
 // guid: e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 // HTTP adapters — all logic in internal/reconcile
 
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,29 +22,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/gin-gonic/gin"
 )
-
-func (s *Server) reconcilePreview(c *gin.Context) {
-	store := s.storeForWiring()
-	if store == nil {
-		httputil.RespondWithInternalError(c, "database not initialized")
-		return
-	}
-
-	// Runs under the request's context: this is a full-library stat, walk and
-	// hash sweep done inline, so a client that disconnects (or a proxy timeout)
-	// must stop it rather than leave it burning disk until it finishes.
-	result, err := reconcile.BuildReconcilePreviewCtx(c.Request.Context(), store, nil, reconcile.ScanHooks{})
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			// The caller is gone; there is no one to send a 500 to and nothing
-			// failed. Not logged as an error for the same reason.
-			return
-		}
-		httputil.InternalError(c, "failed to build reconcile preview", err)
-		return
-	}
-	httputil.RespondWithOK(c, result)
-}
 
 func (s *Server) startReconcileScan(c *gin.Context) {
 	store := s.Ops()

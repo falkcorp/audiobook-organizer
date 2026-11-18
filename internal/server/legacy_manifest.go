@@ -1,5 +1,5 @@
 // file: internal/server/legacy_manifest.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 1f86291c-166f-4f94-92a6-26ebb4bef101
 // last-edited: 2026-11-18
 
@@ -720,7 +720,6 @@ func legacyManifestRows() []legacyRow {
 		{http.MethodPost, "/api/v1/operations/pause", pAtom("settings.manage"), fRated},
 		{http.MethodGet, "/api/v1/operations/recent", pAtom("library.view"), fRated},
 		{http.MethodPost, "/api/v1/operations/reconcile", pAtom("settings.manage"), fRated},
-		{http.MethodGet, "/api/v1/operations/reconcile/preview", pAtom("library.view"), fRated},
 		{http.MethodPost, "/api/v1/operations/reconcile/scan", pAtom("scan.trigger"), fRated},
 		{http.MethodGet, "/api/v1/operations/reconcile/scan/latest", pAtom("library.view"), fRated},
 		{http.MethodPost, "/api/v1/operations/resume", pAtom("settings.manage"), fRated},

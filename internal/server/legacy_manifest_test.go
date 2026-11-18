@@ -1,7 +1,7 @@
 // file: internal/server/legacy_manifest_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e72629cb-5107-4d3a-a859-c970b70f9c17
-// last-edited: 2026-11-14
+// last-edited: 2026-11-18
 
 package server
 
@@ -156,7 +156,7 @@ func TestLegacyManifest_MatchesGinRoutes(t *testing.T) {
 				assert.Equal(t, limited[key], lr.RateClass == httpapi.RateDefault,
 					"%s: RateDefault iff the /api rate limiter is in the chain", key)
 			}
-			assert.Equal(t, 426, atoms, "s.perm routes: the 421 s.perm call sites plus the five worker routes of its one shared s.perm")
+			assert.Equal(t, 425, atoms, "s.perm routes: the 420 s.perm call sites plus the five worker routes of its one shared s.perm")
 		})
 	}
 }
@@ -385,11 +385,11 @@ func TestLegacyManifest_RegistersAsMuxPatterns(t *testing.T) {
 				_, ok := served[gr.Method+" "+gr.Path]
 				assert.True(t, ok, "gin route %s %s is not served by a mux pattern", gr.Method, gr.Path)
 			}
-			want := 495
+			want := 494
 			if abs {
-				want = 574
+				want = 573
 			}
-			assert.Equal(t, want, n, "gin routes besides GET / (496 and 575 with it)")
+			assert.Equal(t, want, n, "gin routes besides GET / (495 and 574 with it)")
 			assert.Len(t, served, n)
 
 			gen, kept := generalised(abs)

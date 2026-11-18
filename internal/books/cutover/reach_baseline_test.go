@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_baseline_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 3b8f1c64-d702-4e95-a6c3-0e47b9d1f258
 // last-edited: 2026-11-18
 
@@ -238,11 +238,11 @@ func reachCountProblems(vd *reachR0Doc, res reachDiffResult) []string {
 	}
 	want := map[string]int{
 		"R0 routes recorded":                     572,
-		"manifest routes compared":               505,
+		"manifest routes compared":               504,
 		"routes delegated to the ABS handler":    68,
-		"routes only R0 has":                     3,
+		"routes only R0 has":                     4,
 		"routes only R2 has":                     1,
-		"cells compared (task pseudo-routes in)": 27145,
+		"cells compared (task pseudo-routes in)": 27108,
 		"cells that differ":                      221,
 	}
 	var keys []string
