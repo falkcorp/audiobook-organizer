@@ -1,5 +1,5 @@
 // file: internal/books/store/pebble_store.go
-// version: 1.240.4
+// version: 1.240.5
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-11-18
 
@@ -3657,6 +3657,9 @@ var ErrBookVersionNotFound = errors.New("version not found")
 // holds the book's write stripe across its read and commit, so the revert is
 // serialized against other writers; it is only the merge that is omitted.
 //
+// A snapshot series that no longer exists is not restored: the row comes back
+// with no series (see the comment at the call), every other column as it was.
+//
 // It refuses (ErrBookIsRetiredShell) a book that is a retired shell, whatever
 // the snapshot holds: the snapshot is a whole row, so it brings back the trash
 // mark the shell carries (an empty book next to the audio it lost) and clears
@@ -3672,6 +3675,16 @@ func (p *PebbleStore) RevertBookToVersion(id string, ts time.Time) (*Book, error
 		return nil, fmt.Errorf("failed to get version: %w", err)
 	}
 	oldBook.ID = id
+	// The snapshot can name a series that was deleted after it was taken (a
+	// cleanup, a prune, a merge). A whole-row restore cannot bring the series
+	// back, and a book write refuses a link to a series that has no row, so left
+	// as is the whole revert would be refused, and an unmerge that reverts
+	// through here could never finish on retry. The restored row gets no series
+	// instead (DropDanglingSeriesRef logs the id), and everything else comes
+	// back. The look is outside the book's stripe, so a delete that lands after
+	// it still refuses the write with ErrSeriesNotFound (fail closed, and the
+	// next call drops the link).
+	DropDanglingSeriesRef(p, oldBook, "RevertBookToVersion")
 	return p.updateBook(id, oldBook, func(*Book) error {
 		n, err := retiredRowsHeld(p, id)
 		if err != nil {
