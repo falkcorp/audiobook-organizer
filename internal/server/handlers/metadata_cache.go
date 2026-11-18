@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.47.0
+// version: 1.48.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -171,10 +171,15 @@ type MetadataCacheFetchService interface {
 	// rename failed. It does NOT mean nothing happened: rows for renames that
 	// did succeed are already persisted, so callers report the database apply
 	// as successful and flag only the file side.
-	ApplyMetadataFileIO(ctx context.Context, id string) error
+	//
+	// intent says whether a person asked for it on this one book
+	// (metafetch.Interactive) or a batch did (metafetch.Unattended): an
+	// unattended job writes none of a retired book's files.
+	ApplyMetadataFileIO(ctx context.Context, id string, intent metafetch.FetchIntent) error
 	// WriteBackMetadataForBook writes the book's current DB metadata into the
 	// audio files themselves and returns the number of files written.
-	WriteBackMetadataForBook(id string, segmentFilter ...[]string) (int, error)
+	// intent is ApplyMetadataFileIO's.
+	WriteBackMetadataForBook(id string, intent metafetch.FetchIntent, segmentFilter ...[]string) (int, error)
 }
 
 // MetadataCacheHandler handles the persistent metadata-cache HTTP endpoints.

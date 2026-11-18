@@ -1,7 +1,7 @@
 // file: internal/server/apply_when_scanned_op.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 4c1f7e2a-9b3d-4e85-a6f0-2d8c5b71e934
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package server
 
@@ -471,11 +471,11 @@ func (s *Server) submitOpResultFileWork(ctx context.Context, bookID, pendingCove
 	}
 	mfs := s.metadataFetchService
 	fileCtx := tagger.WithoutBackup(ctx)
-	submitted := pool.Submit(bookID, func() {
+	submitted := pool.Submit(bookID, metafetch.Unattended, func() {
 		// Logged, not returned: this runs in the pool after the caller has
 		// already answered. The shared sequel: cover download, file I/O, and
 		// the tags exactly once.
-		if err := finishApplyFileWork(mfs, fileCtx, bookID, pendingCover, true, true, nil); err != nil {
+		if err := finishApplyFileWork(mfs, fileCtx, bookID, pendingCover, true, true, metafetch.Unattended, nil); err != nil {
 			batchApplyCandidatesLog.Warn("background apply file work failed for book %s: %s",
 				logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(err.Error()))
 		}

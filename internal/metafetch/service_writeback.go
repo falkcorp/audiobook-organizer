@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.24.4
+// version: 1.24.5
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
 // last-edited: 2026-11-18
 
@@ -508,13 +508,13 @@ func (mfs *Service) writeMovedBookFile(ctx context.Context, bookID string, bf *d
 // runApplyPipeline runs the file rename pipeline after metadata is applied.
 // For protected books (iTunes/import paths), it operates on the library copy
 // instead of the original to avoid moving source files.
-func (mfs *Service) runApplyPipeline(ctx context.Context, id string, book *database.Book, targetID string, pt *ApplyPhaseTimings) (tagWriteResult, error) {
+func (mfs *Service) runApplyPipeline(ctx context.Context, id string, book *database.Book, targetID string, intent FetchIntent, pt *ApplyPhaseTimings) (tagWriteResult, error) {
 	// If the book is in a protected path, run the pipeline on the library copy
 	// instead: targetID, the one its job locked (lockLibraryCopy). A book that
 	// now resolves to anything else is an error, not a switch to a copy the job
 	// does not hold. fileWorkTarget is also what picks the lock key below, so
 	// the lock and the files written cannot name different books.
-	target, err := mfs.fileWorkTarget(book, targetID)
+	target, err := mfs.fileWorkTarget(book, targetID, intent)
 	if err != nil {
 		return tagWriteResult{}, fmt.Errorf("apply pipeline: %w", err)
 	}
@@ -720,7 +720,7 @@ func (mfs *Service) runApplyPipeline(ctx context.Context, id string, book *datab
 		tags.handled = true
 		if !hasCheckpoint(mfs.db, id, phaseTags) {
 			// id is the target's own id here, and targetID names that book.
-			if written, err := mfs.writeTags(ctx, id, targetID, pt); err != nil {
+			if written, err := mfs.writeTags(ctx, id, targetID, intent, pt); err != nil {
 				tags.err = err
 				slog.Warn("tag writing failed for book",
 					"book_id", logger.SanitizeLogValue(id), "book_title", logger.SanitizeLogValue(book.Title),
@@ -754,8 +754,8 @@ func (mfs *Service) runApplyPipeline(ctx context.Context, id string, book *datab
 // key from that table (SetPathLocker) around it; none is reentrant. The
 // internal tag write (writeTags) calls writeBackForBook directly, never this,
 // because it already holds these locks.
-func (mfs *Service) WriteBackMetadataForBook(id string, segmentFilter ...[]string) (int, error) {
-	return mfs.WriteBackMetadataForBookContext(context.Background(), id, segmentFilter...)
+func (mfs *Service) WriteBackMetadataForBook(id string, intent FetchIntent, segmentFilter ...[]string) (int, error) {
+	return mfs.WriteBackMetadataForBookContext(context.Background(), id, intent, segmentFilter...)
 }
 
 // WriteBackMetadataForBookContext is WriteBackMetadataForBook under ctx. The
@@ -763,24 +763,24 @@ func (mfs *Service) WriteBackMetadataForBook(id string, segmentFilter ...[]strin
 // with tagger.WithoutBackup (the bulk write-back ops, owner decision D69)
 // leaves no .bak-* sibling, while a single-book write-back keeps one when
 // create_backups is on. ctx is not used for cancellation here.
-func (mfs *Service) WriteBackMetadataForBookContext(ctx context.Context, id string, segmentFilter ...[]string) (int, error) {
+func (mfs *Service) WriteBackMetadataForBookContext(ctx context.Context, id string, intent FetchIntent, segmentFilter ...[]string) (int, error) {
 	var sf []string
 	if len(segmentFilter) > 0 {
 		sf = segmentFilter[0]
 	}
 	releaseBook := mfs.lockBook(id)
 	defer releaseBook()
-	targetID, releaseCopy, err := mfs.lockLibraryCopy(id, createLibraryCopy, nil)
+	targetID, releaseCopy, err := mfs.lockLibraryCopy(id, createLibraryCopy, intent, nil)
 	if err != nil {
 		return 0, err
 	}
 	defer releaseCopy()
-	releasePath, err := mfs.lockWriteTarget(id, targetID)
+	releasePath, err := mfs.lockWriteTarget(id, targetID, intent)
 	if err != nil {
 		return 0, err
 	}
 	defer releasePath()
-	return mfs.writeBackForBook(ctx, id, sf, targetID, nil)
+	return mfs.writeBackForBook(ctx, id, sf, targetID, intent, nil)
 }
 
 // writeBackForBook is the single tag-write implementation behind
@@ -790,10 +790,16 @@ func (mfs *Service) WriteBackMetadataForBookContext(ctx context.Context, id stri
 // every other apply, so the tags and the row agree.
 //
 // targetID is the book its caller locked (lockLibraryCopy); the files written
-// are that book's, and a book that now resolves elsewhere is an error. A target
-// that is retired (trashed or merged away) is refused with ErrBookRetired
-// whether it is the book itself or its library copy.
-func (mfs *Service) writeBackForBook(ctx context.Context, id string, segmentFilter []string, targetID string, pt *ApplyPhaseTimings) (int, error) {
+// are that book's, and a book that now resolves elsewhere is an error. A
+// retired library COPY is refused for every intent (fileWorkTarget's
+// libraryCopyGone, and the sync below). A retired book that is its own target
+// is refused with ErrBookRetired when intent is Unattended, by fileWorkTarget,
+// the same place that stops the rename and the cover embed; an Interactive
+// write-back (the owner's own action on this one book) writes it. The row is
+// read outside any store lock (tag writing is file I/O and cannot be held
+// under one), so a book retired after that read still has this call's tags
+// written.
+func (mfs *Service) writeBackForBook(ctx context.Context, id string, segmentFilter []string, targetID string, intent FetchIntent, pt *ApplyPhaseTimings) (int, error) {
 	prepStart := time.Now()
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil || book == nil {
@@ -805,22 +811,12 @@ func (mfs *Service) writeBackForBook(ctx context.Context, id string, segmentFilt
 	// metadata for building the tag map, rather than the library copy's stale data.
 	originalBook := book
 	originalID := id
-	libCopy, err := mfs.fileWorkTarget(book, targetID)
+	libCopy, err := mfs.fileWorkTarget(book, targetID, intent)
 	if err != nil {
 		return 0, fmt.Errorf("cannot write back: %w", err)
 	}
 	if libCopy == nil {
 		return 0, fmt.Errorf("cannot write back: no library copy for protected book %s", id)
-	}
-	if libCopy.ID == book.ID && libCopy.IsRetired() {
-		// The book is its own file-work target (under root_dir, or not
-		// protected) and is trashed or merged away: its tags are not written.
-		// A retired library COPY is refused by libraryCopyGone and the sync
-		// below; this is the same refusal for the self case, which had none.
-		// The read above is not under a store lock (writing tags is file I/O
-		// and cannot be), so a book that retires after this check still has
-		// this call's tags written. That window is the length of one write-back.
-		return 0, fmt.Errorf("cannot write back: book %s is retired (trashed or merged away), so no tag was written: %w", id, ErrBookRetired)
 	}
 	if libCopy.ID != book.ID {
 		// Sync metadata from the original book to the library copy so both

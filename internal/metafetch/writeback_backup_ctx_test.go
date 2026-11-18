@@ -1,7 +1,7 @@
 // file: internal/metafetch/writeback_backup_ctx_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: f164b316-5969-47b6-ba84-173a926a536b
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package metafetch
 
@@ -80,7 +80,7 @@ func TestFetchMetadataForBook_BackupOptOutReachesPooledTagWrite(t *testing.T) {
 				wanted = append(wanted, tagger.BackupWanted(ctx))
 				return 1, nil
 			}
-			svc.fileWorkScheduler = func(_ string, work func()) { work() }
+			svc.fileWorkScheduler = func(_ string, _ FetchIntent, work func()) { work() }
 			svc.overrideSources = []metadata.MetadataSource{fakeSource{
 				name:    "Audible",
 				results: []metadata.BookMetadata{{Title: "A Book", Author: "Some Author"}},

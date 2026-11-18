@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_rename_collision_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 9b61d0e4-2f7a-4c38-a5e9-4d1c8f0b7e26
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // End-to-end reproduction of the 2026-09-13 batch-apply failure through
 // runApplyPipeline: a book whose two files carry the same track number (disc 1
@@ -80,7 +80,7 @@ func TestRunApplyPipeline_RepeatedTrackNumbersRenameToDistinctTargets(t *testing
 		},
 	})
 
-	_, err := svc.runApplyPipeline(context.Background(), "b1", book, "b1", nil)
+	_, err := svc.runApplyPipeline(context.Background(), "b1", book, "b1", Unattended, nil)
 	require.NoError(t, err, "a two-disc book must rename cleanly")
 
 	mu.Lock()

@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_files.go
-// version: 1.21.5
+// version: 1.22.0
 // guid: 969b284a-5657-442b-beba-275e325e000b
 // last-edited: 2026-11-18
 
@@ -65,11 +65,11 @@ type tagWriteResult struct {
 // writeTags is the one tag write every apply path goes through, on the files
 // of targetID: the book the job locked (lockLibraryCopy). tagWriter is a test
 // seam that counts it; nil in production.
-func (mfs *Service) writeTags(ctx context.Context, id, targetID string, pt *ApplyPhaseTimings) (int, error) {
+func (mfs *Service) writeTags(ctx context.Context, id, targetID string, intent FetchIntent, pt *ApplyPhaseTimings) (int, error) {
 	if mfs.tagWriter != nil {
 		return mfs.tagWriter(ctx, id)
 	}
-	return mfs.writeBackForBook(ctx, id, nil, targetID, pt)
+	return mfs.writeBackForBook(ctx, id, nil, targetID, intent, pt)
 }
 
 // copyPolicy says whether lockLibraryCopy may create a library copy for a book
@@ -95,8 +95,10 @@ var errFileTargetChanged = errors.New("the book's library copy changed after its
 
 // errLibraryCopyRetired means a protected book's only library copy was merged
 // away, so there is no live copy to write and none is created beside the dead
-// one. The book's metadata is applied; only its file work is skipped.
-var errLibraryCopyRetired = errors.New("the book's library copy was retired")
+// one. The book's metadata is applied; only its file work is skipped. It is
+// only for a MERGED copy: the lookup leaves trashed rows out, so a book whose
+// only copy is in the trash still gets a new one (todo.d).
+var errLibraryCopyRetired = errors.New("the book's only library copy was merged away")
 
 // fileWorkTarget is the book whose audio files a file step writes: book itself,
 // or -- for a book under a protected (iTunes/import) path -- its library copy.
@@ -120,13 +122,28 @@ var errLibraryCopyRetired = errors.New("the book's library copy was retired")
 // was written by a job that did not hold its lock. A disagreement with
 // targetID is now errFileTargetChanged, and nothing is written.
 //
+// intent is who is behind the job (FetchIntent). It is the one place a retired
+// book that is its OWN target is refused: an Unattended job gets
+// ErrBookRetired and writes nothing, whichever step asked, so the rename, the
+// cover embed and the tag write stop together instead of the tags alone. A
+// retired library COPY is refused for every intent (libraryCopyGone). An
+// Interactive job writes a retired book's files like any other's. An intent
+// that is neither constant is an error. The check is on the row its caller
+// read, which is not under a store lock (file I/O cannot be), so a book
+// retired after it still has the step in flight finish.
+//
 // It never creates a copy. It is the ONE resolution both the writers (embed,
 // rename pipeline, tag write) and the path-lock key use: before 2026-09-12
 // auto-fetch locked the original book's path while runApplyPipeline wrote the
 // library copy's, so the lock guarded a path nothing wrote.
-func (mfs *Service) fileWorkTarget(book *database.Book, targetID string) (*database.Book, error) {
+func (mfs *Service) fileWorkTarget(book *database.Book, targetID string, intent FetchIntent) (*database.Book, error) {
 	if book == nil {
 		return nil, nil
+	}
+	if intent != Interactive && intent != Unattended {
+		// Checked before anything is resolved, so a forgotten intent fails the
+		// job whichever branch it would have taken.
+		return nil, checkFileWorkIntent(intent, book, false)
 	}
 	if targetID != "" && targetID != book.ID {
 		cp, err := mfs.db.GetBookByID(targetID)
@@ -147,6 +164,16 @@ func (mfs *Service) fileWorkTarget(book *database.Book, targetID string) (*datab
 	if resolvedID != targetID {
 		return nil, fmt.Errorf("book %s: its file work locked %s but the book now resolves to %s, so nothing was written: %w",
 			book.ID, describeFileTarget(targetID), describeFileTarget(resolvedID), errFileTargetChanged)
+	}
+	if resolved != nil && resolved.ID == book.ID {
+		// The book is its own target (under root_dir, or not protected). An
+		// unattended job does not write a retired book's files: the rename,
+		// the cover embed and the tag write each resolve their target here, so
+		// the three stop together. An Interactive job is the owner working on
+		// this one book and writes as for any other.
+		if err := checkFileWorkIntent(intent, resolved, true); err != nil {
+			return nil, err
+		}
 	}
 	return resolved, nil
 }
@@ -198,14 +225,14 @@ func (mfs *Service) lockPath(path string) func() {
 // moves the files, and a lock on the pre-rename path guards nothing. A
 // resolution that disagrees with targetID is an error, and the caller must not
 // write. The release is never nil.
-func (mfs *Service) lockWriteTarget(id, targetID string) (func(), error) {
+func (mfs *Service) lockWriteTarget(id, targetID string, intent FetchIntent) (func(), error) {
 	noop := func() {}
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil || book == nil {
 		// The write re-reads the book and reports this itself.
 		return noop, nil
 	}
-	target, err := mfs.fileWorkTarget(book, targetID)
+	target, err := mfs.fileWorkTarget(book, targetID, intent)
 	if err != nil {
 		return noop, err
 	}
@@ -363,7 +390,7 @@ func (mfs *Service) lockBook(id string) func() {
 // Making the copy writes rows and files, so the stand-down checkpoint runs
 // first; a failed check returns with nothing created. existingCopyOnly
 // (auto-fetch, and an apply that writes no audio files) never creates one.
-func (mfs *Service) lockLibraryCopy(id string, policy copyPolicy, checkpoint func() error) (string, func(), error) {
+func (mfs *Service) lockLibraryCopy(id string, policy copyPolicy, intent FetchIntent, checkpoint func() error) (string, func(), error) {
 	noop := func() {}
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil {
@@ -375,7 +402,7 @@ func (mfs *Service) lockLibraryCopy(id string, policy copyPolicy, checkpoint fun
 		// Deleted: the file steps re-read it and report that.
 		return "", noop, nil
 	}
-	target, err := mfs.resolveLibraryCopy(id, book, policy, checkpoint)
+	target, err := mfs.resolveLibraryCopy(id, book, policy, intent, checkpoint)
 	if err != nil || target == nil {
 		return "", noop, err
 	}
@@ -389,7 +416,7 @@ func (mfs *Service) lockLibraryCopy(id string, policy copyPolicy, checkpoint fun
 // resolveLibraryCopy is lockLibraryCopy's lookup, and its creation of a copy
 // when there is none, under book's version-group key. The key is released
 // before it returns, so before the copy's book lock is taken.
-func (mfs *Service) resolveLibraryCopy(id string, book *database.Book, policy copyPolicy, checkpoint func() error) (*database.Book, error) {
+func (mfs *Service) resolveLibraryCopy(id string, book *database.Book, policy copyPolicy, intent FetchIntent, checkpoint func() error) (*database.Book, error) {
 	fresh, release, err := mfs.lockVersionGroup(book)
 	defer release()
 	if err != nil {
@@ -411,12 +438,19 @@ func (mfs *Service) resolveLibraryCopy(id string, book *database.Book, policy co
 	if ok || policy != createLibraryCopy {
 		return target, nil
 	}
+	// Making a copy writes a new set of audio files for this book. An
+	// unattended job does not write a retired book's files (fileWorkTarget),
+	// and a copy is the same write by another door, so it makes none.
+	// Interactive: the owner chose this book and gets the copy as for any other.
+	if err := checkFileWorkIntent(intent, fresh, true); err != nil {
+		return nil, fmt.Errorf("apply file work for book %s: no library copy was made: %w", id, err)
+	}
 	// No LIVE copy. The lookup skips a retired one, so a copy merged away looks
 	// exactly like no copy at all; creating a fresh one beside it would give the
 	// book two organized copies once the merge is undone. The metadata is
 	// already applied: say that the file work, and only that, was skipped.
 	if dead := mfs.retiredLibrarySiblingIn(r, fresh); dead != nil {
-		return nil, fmt.Errorf("apply file work for book %s: its only library copy, book %s, was merged away or trashed, so no audio files were written and no new copy was made: %w",
+		return nil, fmt.Errorf("apply file work for book %s: its only library copy, book %s, was merged away, so no audio files were written and no new copy was made: %w",
 			id, dead.ID, errLibraryCopyRetired)
 	}
 	// With the Deluge list unloaded, or the import-path list unreadable, every
@@ -547,15 +581,15 @@ func (mfs *Service) createUsableLibraryCopy(id string, book *database.Book) (*da
 // wrap it so their tag and cover writes keep no .bak-* sibling (owner
 // decision D69); a single-book apply passes a plain ctx and keeps one when
 // create_backups is on.
-func (mfs *Service) FinishApplyFileWork(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error) error {
-	return mfs.FinishApplyFileWorkTimed(ctx, id, pendingCoverURL, fileIO, writeTags, checkpoint, NewApplyPhaseTimings())
+func (mfs *Service) FinishApplyFileWork(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, intent FetchIntent, checkpoint func() error) error {
+	return mfs.FinishApplyFileWorkTimed(ctx, id, pendingCoverURL, fileIO, writeTags, intent, checkpoint, NewApplyPhaseTimings())
 }
 
 // FinishApplyFileWorkTimed is FinishApplyFileWork recording each phase into
 // pt, which the caller may have started earlier (the batch apply records its
 // gate wait and DB apply into the same timer). When it returns it logs the one
 // per-book "apply phase durations" line. A nil pt records and logs nothing.
-func (mfs *Service) FinishApplyFileWorkTimed(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error, pt *ApplyPhaseTimings) error {
+func (mfs *Service) FinishApplyFileWorkTimed(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, intent FetchIntent, checkpoint func() error, pt *ApplyPhaseTimings) error {
 	defer logApplyPhaseTimings(id, pt)
 	lockStart := time.Now()
 	releaseBook := mfs.lockBook(id)
@@ -575,7 +609,7 @@ func (mfs *Service) FinishApplyFileWorkTimed(ctx context.Context, id, pendingCov
 		lockPolicy = createLibraryCopy
 	}
 	copyStart := time.Now()
-	targetID, releaseCopy, err := mfs.lockLibraryCopy(id, lockPolicy, checkpoint)
+	targetID, releaseCopy, err := mfs.lockLibraryCopy(id, lockPolicy, intent, checkpoint)
 	pt.Since(PhaseCopyLock, copyStart)
 	if err != nil {
 		return err
@@ -586,7 +620,7 @@ func (mfs *Service) FinishApplyFileWorkTimed(ctx context.Context, id, pendingCov
 	// the request that queued them has returned, and a file job stopped
 	// part-way leaves renamed files with stale tags; the post-move path-write
 	// retry below stays bounded by its attempt count (0.7s).
-	return mfs.finishFileWork(valuesOnly(ctx), id, targetID, fileIO, writeTags, checkpoint, pt)
+	return mfs.finishFileWork(valuesOnly(ctx), id, targetID, fileIO, writeTags, intent, checkpoint, pt)
 }
 
 // valuesOnly returns ctx stripped of its deadline and cancellation, or
@@ -643,14 +677,14 @@ func standDown(checkpoint func() error, id, step string) error {
 // ctx carries values only (valuesOnly). The per-book Fetch button passes a
 // plain ctx and keeps create_backups siblings; the bulk callers (the iTunes
 // import's enrichment, the restart replay) wrap it with tagger.WithoutBackup.
-func (mfs *Service) FinishAutoFetchFileWork(ctx context.Context, id, pendingCoverURL string, writeTags bool) error {
+func (mfs *Service) FinishAutoFetchFileWork(ctx context.Context, id, pendingCoverURL string, writeTags bool, intent FetchIntent) error {
 	ctx = valuesOnly(ctx)
 	releaseBook := mfs.lockBook(id)
 	defer releaseBook()
 	mfs.downloadAutoFetchCover(id, pendingCoverURL)
 	// existingCopyOnly never creates a copy, so no checkpoint; the error is a
 	// failed read of the book.
-	targetID, releaseCopy, err := mfs.lockLibraryCopy(id, existingCopyOnly, nil)
+	targetID, releaseCopy, err := mfs.lockLibraryCopy(id, existingCopyOnly, intent, nil)
 	if err != nil {
 		return fmt.Errorf("auto-fetch file work: %w", err)
 	}
@@ -666,16 +700,16 @@ func (mfs *Service) FinishAutoFetchFileWork(ctx context.Context, id, pendingCove
 	}
 	// ctx decides the cover embed's create_backups sibling: kept for the
 	// per-book Fetch button, skipped under a bulk caller's WithoutBackup.
-	mfs.embedCover(ctx, id, book, targetID)
+	mfs.embedCover(ctx, id, book, targetID, intent)
 	if !writeTags {
 		return nil
 	}
-	release, err := mfs.lockWriteTarget(id, targetID)
+	release, err := mfs.lockWriteTarget(id, targetID, intent)
 	if err != nil {
 		return fmt.Errorf("auto-fetch file work: %w", err)
 	}
 	defer release()
-	if _, err := mfs.writeTags(ctx, id, targetID, nil); err != nil {
+	if _, err := mfs.writeTags(ctx, id, targetID, intent, nil); err != nil {
 		return fmt.Errorf("auto-fetch file work: write tags for book %s: %w", id, err)
 	}
 	return nil
@@ -686,14 +720,14 @@ func (mfs *Service) FinishAutoFetchFileWork(ctx context.Context, id, pendingCove
 // made and locked any library copy the job needs and returned it as targetID.
 // Every step here writes that target (fileWorkTarget) and none can make or
 // switch to a copy outside that lock.
-func (mfs *Service) finishFileWork(ctx context.Context, id, targetID string, fileIO, writeTags bool, checkpoint func() error, pt *ApplyPhaseTimings) error {
+func (mfs *Service) finishFileWork(ctx context.Context, id, targetID string, fileIO, writeTags bool, intent FetchIntent, checkpoint func() error, pt *ApplyPhaseTimings) error {
 	var tags tagWriteResult
 	var fileErr error
 	if fileIO {
 		if err := standDown(checkpoint, id, "the file I/O"); err != nil {
 			return err
 		}
-		tags, fileErr = mfs.applyMetadataFileIO(ctx, id, targetID, pt)
+		tags, fileErr = mfs.applyMetadataFileIO(ctx, id, targetID, intent, pt)
 	}
 	if writeTags && !tags.handled {
 		if err := standDown(checkpoint, id, "the tag write"); err != nil {
@@ -707,12 +741,12 @@ func (mfs *Service) finishFileWork(ctx context.Context, id, targetID string, fil
 		// Resolved and locked after the pipeline returned (and released its
 		// own locks), so the key is the post-rename path of the files written.
 		lockStart := time.Now()
-		release, err := mfs.lockWriteTarget(id, targetID)
+		release, err := mfs.lockWriteTarget(id, targetID, intent)
 		pt.Since(PhaseLockWait, lockStart)
 		if err != nil {
 			tags.err = err
 		} else {
-			if _, err := mfs.writeTags(ctx, id, targetID, pt); err != nil {
+			if _, err := mfs.writeTags(ctx, id, targetID, intent, pt); err != nil {
 				tags.err = err
 			}
 			release()
@@ -732,11 +766,11 @@ func (mfs *Service) finishFileWork(ctx context.Context, id, targetID string, fil
 // the library copy's, for a protected book), holding the path lock on those
 // files. Slow: ffmpeg. A target that no longer matches is logged and nothing
 // is embedded; the embed reports no error by design (ApplyMetadataFileIO).
-func (mfs *Service) embedCover(ctx context.Context, id string, book *database.Book, targetID string) {
+func (mfs *Service) embedCover(ctx context.Context, id string, book *database.Book, targetID string, intent FetchIntent) {
 	if config.AppConfig.RootDir == "" {
 		return
 	}
-	target, err := mfs.fileWorkTarget(book, targetID)
+	target, err := mfs.fileWorkTarget(book, targetID, intent)
 	if err != nil {
 		slog.Warn("cannot embed cover: the book's file-work target changed after it was locked",
 			"book_id", logger.SanitizeLogValue(id), "error", logger.SanitizeLogValue(err.Error()))
@@ -776,22 +810,22 @@ func (mfs *Service) embedCover(ctx context.Context, id string, book *database.Bo
 //
 // ctx carries values only (valuesOnly), for the bulk tagger.WithoutBackup
 // opt-out.
-func (mfs *Service) ApplyMetadataFileIO(ctx context.Context, id string) error {
+func (mfs *Service) ApplyMetadataFileIO(ctx context.Context, id string, intent FetchIntent) error {
 	releaseBook := mfs.lockBook(id)
 	defer releaseBook()
-	targetID, releaseCopy, err := mfs.lockLibraryCopy(id, createLibraryCopy, nil)
+	targetID, releaseCopy, err := mfs.lockLibraryCopy(id, createLibraryCopy, intent, nil)
 	if err != nil {
 		return err
 	}
 	defer releaseCopy()
-	_, err = mfs.applyMetadataFileIO(valuesOnly(ctx), id, targetID, nil)
+	_, err = mfs.applyMetadataFileIO(valuesOnly(ctx), id, targetID, intent, nil)
 	return err
 }
 
 // applyMetadataFileIO is ApplyMetadataFileIO that also reports what the
 // pipeline did about tags, for FinishApplyFileWork's write-once guard. Its
 // callers have run lockLibraryCopy, and it writes the target that locked.
-func (mfs *Service) applyMetadataFileIO(ctx context.Context, id, targetID string, pt *ApplyPhaseTimings) (tagWriteResult, error) {
+func (mfs *Service) applyMetadataFileIO(ctx context.Context, id, targetID string, intent FetchIntent, pt *ApplyPhaseTimings) (tagWriteResult, error) {
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil {
 		return tagWriteResult{}, fmt.Errorf("apply file I/O: load book %s: %w", id, err)
@@ -805,12 +839,12 @@ func (mfs *Service) applyMetadataFileIO(ctx context.Context, id, targetID string
 	}
 
 	embedStart := time.Now()
-	mfs.embedCover(ctx, id, book, targetID)
+	mfs.embedCover(ctx, id, book, targetID, intent)
 	pt.Since(PhaseEmbed, embedStart)
 
 	// Run file rename + tag write pipeline
 	if config.AppConfig.AutoRenameOnApply || config.AppConfig.AutoWriteTagsOnApply {
-		tags, err := mfs.runApplyPipeline(ctx, id, book, targetID, pt)
+		tags, err := mfs.runApplyPipeline(ctx, id, book, targetID, intent, pt)
 		if err != nil {
 			return tags, fmt.Errorf("apply file I/O: pipeline for book %s: %w", id, err)
 		}

@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_wiring.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 571bfbf4-238b-49cb-a6d8-b302921dd1c4
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package metafetch
 
@@ -147,7 +147,12 @@ func (mfs *Service) ASINBackfillQueue() *ASINBackfillQueue {
 // rename moves it part-way through), so the file work locks for itself
 // through the locker set by SetPathLocker. The server supplies both; metafetch
 // cannot import the pool or the lock table without an import cycle.
-type FileWorkScheduler func(bookID string, work func())
+//
+// intent is who is behind the work (FetchIntent). The scheduler must keep it
+// with the queued job and persist it with the pool's recovery record, so a job
+// replayed after a restart runs under the intent it was queued with and not a
+// default.
+type FileWorkScheduler func(bookID string, intent FetchIntent, work func())
 
 // SetFileWorkScheduler routes auto-fetch's file work through the file-I/O
 // pool, where the manual and batch applies' file work also runs.
