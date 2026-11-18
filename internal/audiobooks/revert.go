@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.101.0
+// version: 1.102.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-11-18
 
@@ -393,9 +393,12 @@ type RevertResult struct {
 	// stamped reverted here too and counted.
 	OrphanMarkers int `json:"orphan_markers,omitempty"`
 	// SeriesKept counts series_create rows whose series the revert did NOT
-	// delete: it was renamed, held, referenced by a book or already gone by the
-	// time the revert reached it. The row counts Restored (a retry could only
-	// delete a series that is somebody else's now); Kept names each one.
+	// delete: it was renamed, held, referenced by a book the operation did not
+	// move in, or already gone by the time the revert reached it. A series still
+	// holding a book the operation's OWN unrestored row moved in is not counted
+	// here: that row stays owed (revertSeriesCreate). A kept row counts Restored
+	// (a retry could only delete a series that is somebody else's now); Kept
+	// names each one.
 	SeriesKept int `json:"series_kept,omitempty"`
 	// BooksLeftOut counts collection and playlist rows of a retire's carry
 	// whose retired book was NOT put back: it was itself a survivor, listed
@@ -469,7 +472,7 @@ func (r *RevertResult) Summary() string {
 		fmt.Fprintf(&b, "; %d list position(s) restored beside books arranged by hand since, where the records could not confirm the slot (see kept)", r.ListsEditedByHand)
 	}
 	if r.SeriesKept > 0 {
-		fmt.Fprintf(&b, "; %d created series kept because they are no longer the operation's to delete (see kept)", r.SeriesKept)
+		fmt.Fprintf(&b, "; %d created series kept: a book it did not move still references it, or it was renamed, held or already deleted (see kept)", r.SeriesKept)
 	}
 	if r.SurvivorsReleased > 0 {
 		fmt.Fprintf(&b, "; %d survivor(s) taken out of a list they were left in (see kept)", r.SurvivorsReleased)
@@ -1174,7 +1177,7 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 	case undo.ChangeTypeSeriesRowDelete:
 		return rs.revertSeriesRowDelete(c)
 	case undo.ChangeTypeSeriesCreate:
-		return rs.revertSeriesCreate(c)
+		return rs.revertSeriesCreate(c, plan)
 	case undo.ChangeTypeBookFileReassign:
 		return rs.revertBookFileReassign(c, plan)
 	case database.ChangeTypeBookFileRepoint:
@@ -2939,9 +2942,14 @@ func (rs *RevertService) revertSeriesRowDelete(c *database.OperationChange) erro
 // by a plain delete would let a book be linked into the series between the two
 // and be left naming a deleted id. A series that is renamed, held, referenced or
 // already gone is somebody else's by now; it is kept, and the row is reported
-// kept (seriesKept) instead of passing silently. A store without the conditional
-// delete fails the row closed rather than fall back to count-then-delete.
-func (rs *RevertService) revertSeriesCreate(c *database.OperationChange) error {
+// kept (seriesKept) instead of passing silently. A series that still holds a
+// book this operation's own series_id row moved in, with that row unrestored in
+// this run, is not somebody else's: the row is owed (a plain error) until the
+// book is back, so the retry removes the series instead of leaving it behind.
+// A hold is not treated that way: it is kept now, and the series is left if the
+// hold is released later. A store without the conditional delete fails the row
+// closed rather than fall back to count-then-delete.
+func (rs *RevertService) revertSeriesCreate(c *database.OperationChange, plan *undo.RevertPlan) error {
 	snap, err := undo.DecodeSeriesCreate(c)
 	if err != nil {
 		return err
@@ -2955,6 +2963,16 @@ func (rs *RevertService) revertSeriesCreate(c *database.OperationChange) error {
 	case err == nil && deleted:
 		return nil
 	case err == nil:
+		if owed := plan.OwedSeriesLinksInto(snap.ID); len(owed) > 0 {
+			// The books still in it are ones THIS operation moved in, whose own
+			// rows are not restored yet (a failure or a refusal). The series is
+			// not somebody else's: it is owed. Stamping the row reverted as kept
+			// would let the retry put those books back and leave this series
+			// behind with no row left to remove it. A plain error keeps the row
+			// owed until they are back.
+			return fmt.Errorf("created series %d (%q) not removed yet: %d of this operation's own book links into it are not restored (first: change %s); retry once they are",
+				snap.ID, snap.Name, len(owed), owed[0].ID)
+		}
 		return &seriesKept{detail: fmt.Sprintf("created series %d (%q) kept: a book still references it", snap.ID, snap.Name)}
 	case errors.Is(err, database.ErrSeriesNotFound):
 		return &seriesKept{detail: fmt.Sprintf("created series %d (%q) kept: it no longer exists", snap.ID, snap.Name)}

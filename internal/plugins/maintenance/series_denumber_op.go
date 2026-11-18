@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_op.go
-// version: 5.3.1
+// version: 5.4.2
 // guid: 3f0b6c84-52d1-4a97-9e35-c8b71d0af426
 // last-edited: 2026-11-18
 
@@ -159,10 +159,18 @@ func (p *Plugin) seriesDenumberDef() sdk.OperationDef {
 		// series rows. The dispatcher's write-set gate keeps ops whose declared
 		// writes intersect from running together (an op that declares none is
 		// invisible to it in both directions), so this is what keeps
-		// dedup.series-prune, series-normalize, series-merge, series-rename,
-		// cleanup-series and repairs.apply off the same rows while it runs. The set
-		// is static per definition, so a dry run holds it too (as credits-backfill's
-		// does); it is read-only and short.
+		// dedup.series-prune, series-normalize, series-merge, series-rename and
+		// repairs.apply, the ops that declare ResSeries, off the same rows while it
+		// runs. It does NOT cover maintenance.cleanup-series or any other
+		// maintenance job: those register with no Writes
+		// (internal/server/maintenance_job_op.go), so the gate cannot see them in
+		// either direction. cleanup-series is only partly protected on its own side:
+		// its book writes (the unlink and the re-home) are compare-and-set on the
+		// series being cleaned, so a book this op has just moved is skipped, not
+		// undone; its series delete is not (see the todo.d fragment on maintenance
+		// job ops), so do not run both at once. The set is static
+		// per definition, so a dry run holds it too (as credits-backfill's does); it
+		// is read-only and short.
 		Writes: []sdk.Resource{sdk.ResBooks, sdk.ResSeries},
 		Run:    p.runSeriesDenumber,
 	}
@@ -1154,7 +1162,7 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 	}
 	states := map[int]*targetState{} // group index -> what the base holds, read at the first write
 	var outcomes []sdn.ReportRow
-	var merged, plansMoving, movedBooks, created, deleted, failed, stayed, refusedByGuard, targetAppeared, heldDelete, goneByOthers int
+	var merged, plansMoving, movedBooks, created, deleted, failed, stayed, refusedByGuard, targetAppeared, heldDelete, failedDelete, goneByOthers int
 	// settled is the plans whose delete branch reached an outcome (deleted, kept,
 	// or already gone). A plan the dry run expected to delete that is not in it
 	// never got there: a book stayed, the plan was skipped, a write failed.
@@ -1490,7 +1498,7 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 			switch {
 			case gerr != nil:
 				failed++
-				heldDelete++
+				failedDelete++
 				log.Warn("series-denumber: not deleting emptied series: it could not be read again", "series", src.ID, "err", gerr)
 				outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: row not readable: " + gerr.Error()})
 			case cur == nil:
@@ -1523,7 +1531,7 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 			default:
 				if refs, rerr := counter.GetSeriesBookRefCount(src.ID); rerr != nil {
 					failed++
-					heldDelete++
+					failedDelete++
 					log.Warn("series-denumber: not deleting emptied series: its references could not be counted", "series", src.ID, "err", rerr)
 					outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: references not countable: " + rerr.Error()})
 				} else if refs != 0 {
@@ -1545,7 +1553,7 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 					case jerr != nil:
 						// Nothing was deleted: the series stays, and the report says so.
 						failed++
-						heldDelete++
+						failedDelete++
 						log.Warn("series-denumber: not deleting emptied series: its undo row was not written", "series", src.ID, "err", jerr)
 						outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: undo row not written: " + jerr.Error()})
 					default:
@@ -1585,7 +1593,7 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 							// write failed): the series stays, the run fails, and the report
 							// says why, as it does for the count above.
 							failed++
-							heldDelete++
+							failedDelete++
 							log.Warn("series-denumber: DeleteSeriesIfUnreferenced failed", "series", src.ID, "err", derr)
 							outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: the delete could not verify the series is unreferenced: " + derr.Error()})
 						case !gone:
@@ -1610,7 +1618,7 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 	}
 
 	// The dry run's "would delete" count, reconciled: every plan it expected to
-	// delete is in exactly one bucket here. deleted, heldDelete and goneByOthers
+	// delete is in exactly one bucket here. deleted, heldDelete, failedDelete and goneByOthers
 	// are the delete branch's outcomes (a plan in settled); the rest never got
 	// there (a book stayed, the plan was skipped, a write failed).
 	expectedDeletes, notEmptied := len(expected), 0
@@ -1623,12 +1631,13 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 	summary := fmt.Sprintf(
 		"series-denumber: %d series scanned, %d of %d selected plans moved at least one book, %d books moved into %d base series "+
 			"(%d base series created, %d emptied series deleted, %d emptied series NOT deleted because a book or a change appeared since the plan, "+
+			"%d emptied series NOT deleted because a read or write failed, "+
 			"%d plans' sources kept by the reference guard, %d plans skipped because the base appeared mid-run, "+
 			"against %d the dry run expected to delete: %d emptied series already deleted by someone else, %d sources not emptied or skipped before their delete, "+
 			"%d books skipped at apply time: %s, failed %d) | held at plan time over every eligible plan, by reason: %s | "+
 			"demoted to low, never applied: %s | undo: revert operation %s",
 		run.scanned, plansMoving, len(run.selected), movedBooks, len(receivedBase),
-		created, deleted, heldDelete, refusedByGuard, targetAppeared,
+		created, deleted, heldDelete, failedDelete, refusedByGuard, targetAppeared,
 		expectedDeletes, goneByOthers, notEmptied,
 		stayed, formatHoldCounts(appliedHeld), failed,
 		formatHoldCounts(heldPlan), run.demotedSummary(), opID)

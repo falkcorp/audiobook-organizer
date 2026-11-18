@@ -1,7 +1,7 @@
 // file: internal/undo/revert_plan.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 7c3e9a51-2f84-4b6d-a0e7-5d1c8b4f2e96
-// last-edited: 2026-11-16
+// last-edited: 2026-11-18
 
 package undo
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
@@ -56,6 +57,11 @@ type RevertPlan struct {
 	// (the newest, voided ones left out), for the series_sequence pairing
 	// (SeriesLinkOf).
 	seriesLinks map[string]*database.OperationChange
+	// seriesLinksInto: this operation's series_id rows that move a book into a
+	// series, by the series id they name as NewValue (decimal), every row
+	// whether reverted or not and the voided ones left out
+	// (OwedSeriesLinksInto).
+	seriesLinksInto map[string][]*database.OperationChange
 	// refusedAuthor: authors whose merge/reclassify delete row was refused, so
 	// the author is not coming back and none of its credits can go back onto it
 	// (Gate refuses them). A delete row that restored the author but not every
@@ -110,7 +116,7 @@ func PlanRevert(rows []*database.OperationChange, files func(bookID string) ([]d
 	}
 	p := &RevertPlan{Stamps: OpSoftDeleteStamps(rows), deps: deps, depIDs: map[string]bool{},
 		restored: map[string]bool{}, refusedBook: map[string]bool{}, handedOff: map[string]bool{}, demoted: map[string]bool{},
-		fieldLocks: map[string][]*database.OperationChange{}, seriesLinks: map[string]*database.OperationChange{},
+		fieldLocks: map[string][]*database.OperationChange{}, seriesLinks: map[string]*database.OperationChange{}, seriesLinksInto: map[string][]*database.OperationChange{},
 		refusedAuthor: map[int]bool{}, restoredSeries: map[int]bool{}, primaries: map[string]*int{},
 		newerMain: newerMainRows(rows), unrestored: map[string]bool{}, heldAfter: map[string]string{},
 		shellRetires: map[string][]string{}, retiredInto: map[string]bool{}}
@@ -375,6 +381,9 @@ func (p *RevertPlan) NoteHandOffs(all []*database.OperationChange) {
 		case "metadata_update":
 			if c.FieldName == "series_id" && !c.Voided {
 				p.seriesLinks[c.BookID] = c
+				if c.NewValue != "" && c.NewValue != c.OldValue {
+					p.seriesLinksInto[c.NewValue] = append(p.seriesLinksInto[c.NewValue], c)
+				}
 			}
 		}
 	}
@@ -414,6 +423,26 @@ func (p *RevertPlan) SeriesLinkOf(c *database.OperationChange) *database.Operati
 		return nil
 	}
 	return p.seriesLinks[c.BookID]
+}
+
+// OwedSeriesLinksInto returns this operation's own series_id rows that moved a
+// book into series id and are not restored: not marked reverted by an earlier
+// run and not recorded restored in this one (Record), whether they failed, were
+// refused or have not run yet. While one is owed, the book it moved is still in
+// the series for the operation's own reason, so the series is not somebody
+// else's to keep (the revert of the row that created it). A nil plan has none
+// (NoteHandOffs collects the rows from every row of the operation).
+func (p *RevertPlan) OwedSeriesLinksInto(id int) []*database.OperationChange {
+	if p == nil {
+		return nil
+	}
+	var owed []*database.OperationChange
+	for _, c := range p.seriesLinksInto[strconv.Itoa(id)] {
+		if c.RevertedAt == nil && !p.restored[c.ID] {
+			owed = append(owed, c)
+		}
+	}
+	return owed
 }
 
 // FieldLocksOf returns this operation's field-lock rows for c's book and
