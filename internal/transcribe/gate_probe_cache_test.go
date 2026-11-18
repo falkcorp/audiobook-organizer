@@ -1,13 +1,14 @@
 // file: internal/transcribe/gate_probe_cache_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: e4ebe594-0334-4c03-8714-f86dd60340ee
-// last-edited: 2026-11-03
+// last-edited: 2026-11-18
 
 package transcribe
 
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -41,6 +42,36 @@ func enableProbeCache(t *testing.T) *fakeGateClock {
 	return c
 }
 
+// startWorkerServer starts a fake worker whose URL carries no history. The cooldown
+// registry (aidispatch.DefaultHealth) is process-wide and keyed by URL, and an
+// ephemeral port is reused: an earlier test that benched 127.0.0.1:P and left it
+// benched hands that bench to whichever later test is given port P. probeForGate
+// never caches an answer from an endpoint in a cooldown, so a cache test that drew
+// such a port failed its own setup ("the probe was not cached") about once a run in
+// a few hundred, and only when the package's other tests had run first. Every fake
+// worker the cache tests probe starts here so that cannot happen; the cooldown is
+// cleared again when the test ends so the next owner of the port inherits nothing.
+func startWorkerServer(t *testing.T, h http.Handler) *httptest.Server {
+	t.Helper()
+	return startWorkerServerOn(t, nil, h)
+}
+
+// startWorkerServerOn is startWorkerServer listening on l (nil: a fresh ephemeral
+// port), so a test can give a server a port whose earlier owner left a cooldown.
+func startWorkerServerOn(t *testing.T, l net.Listener, h http.Handler) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewUnstartedServer(h)
+	if l != nil {
+		_ = srv.Listener.Close()
+		srv.Listener = l
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+	clearCooldown(srv.URL)
+	t.Cleanup(func() { clearCooldown(srv.URL) })
+	return srv
+}
+
 func resetGateProbeCache() {
 	gateProbeCache.mu.Lock()
 	defer gateProbeCache.mu.Unlock()
@@ -69,7 +100,7 @@ func (c *fakeGateClock) Advance(d time.Duration) {
 func countingHealth(t *testing.T, body map[string]any, status int) (*httptest.Server, *atomic.Int64) {
 	t.Helper()
 	var hits atomic.Int64
-	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+	srv := startWorkerServer(t, http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
 		if status != http.StatusOK {
 			http.Error(rw, "down", status)
@@ -77,9 +108,6 @@ func countingHealth(t *testing.T, body map[string]any, status int) (*httptest.Se
 		}
 		_ = json.NewEncoder(rw).Encode(body)
 	}))
-	t.Cleanup(srv.Close)
-	clearCooldown(srv.URL)
-	t.Cleanup(func() { clearCooldown(srv.URL) })
 	return srv, &hits
 }
 
@@ -178,16 +206,13 @@ func TestGateProbeCache_FailureDuringProbeIsNotCached(t *testing.T) {
 		hits   atomic.Int64
 		srvURL atomic.Value // the handler needs the server's own URL
 	)
-	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+	srv := startWorkerServer(t, http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 		if hits.Add(1) == 1 {
 			markEndpointFailure(srvURL.Load().(string))
 		}
 		_ = json.NewEncoder(rw).Encode(pathHealth(nil))
 	}))
-	t.Cleanup(srv.Close)
 	srvURL.Store(srv.URL)
-	clearCooldown(srv.URL)
-	t.Cleanup(func() { clearCooldown(srv.URL) })
 
 	gateCached(t, srv.URL)
 	clearCooldown(srv.URL)
@@ -252,5 +277,48 @@ func TestTranscribeByPathBatch_ReusesGateProbeAcrossBatches(t *testing.T) {
 	clock.Advance(gateProbeTTL + time.Second)
 	if got := run(); got != 1 {
 		t.Fatalf("a batch past the TTL: gate probed /health %d time(s), want 1", got)
+	}
+}
+
+// A fake worker that is given a port an earlier test left benched must still have its
+// clean /health answer cached. This is the flake in TestIdentity_AMismatchDropsTheCachedProbe:
+// the cooldown registry is keyed by URL, ports are reused, and probeForGate does not
+// cache an endpoint that is in a cooldown.
+func TestGateProbeCache_AReusedPortInheritsNoCooldown(t *testing.T) {
+	enableProbeCache(t)
+	// Take an ephemeral port, give it up, and bench the URL its owner had.
+	first, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := first.Addr().String()
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	benched := "http://" + addr
+	markEndpointFailure(benched)
+	t.Cleanup(func() { clearCooldown(benched) })
+	if !endpointInCooldown(benched) {
+		t.Fatal("setup: the earlier owner's cooldown was not recorded")
+	}
+	// The next test is handed the same port.
+	again, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Skipf("the port was taken before it could be reused: %v", err)
+	}
+	srv := startWorkerServerOn(t, again, http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(rw).Encode(pathHealth(nil))
+	}))
+	if srv.URL != benched {
+		t.Fatalf("setup: server at %s, want the reused %s", srv.URL, benched)
+	}
+	if _, ok := probeForGate(context.Background(), srv.URL, true); !ok {
+		t.Fatal("setup: the probe failed")
+	}
+	gateProbeCache.mu.Lock()
+	_, cached := gateProbeCache.m[srv.URL]
+	gateProbeCache.mu.Unlock()
+	if !cached {
+		t.Fatal("the clean probe of a server on a reused port was not cached: it inherited the last owner's cooldown")
 	}
 }
