@@ -1,7 +1,7 @@
 // file: core/internal/taskhttp/definitions.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ea2690a4-bdfc-4cf8-9e01-2a186d69487f
-// last-edited: 2026-11-11
+// last-edited: 2026-11-18
 
 package taskhttp
 
@@ -52,7 +52,7 @@ func definitionView(p *auth.Principal, def tasks.Definition) definitionDTO {
 	c := tasks.CommonOf(def)
 	d := definitionDTO{
 		Kind: string(def.Kind()), Module: def.Kind().Module(), Title: c.Title, Help: c.Help, Shape: def.Shape().String(),
-		ReadOnly: c.Effects.IsReadOnly(), CanStart: p.Perms.Satisfies(c.Perms.Start),
+		ReadOnly: c.Effects.IsReadOnly(), CanStart: p.Perms.Satisfies(c.Perms.Start) && c.Perms.OwnerRouteOnly == "",
 		CanApprove: !c.Perms.Approve.IsZero() && p.Perms.Satisfies(c.Perms.Approve),
 	}
 	if c.Schedule != nil {

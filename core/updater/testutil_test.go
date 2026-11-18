@@ -1,5 +1,5 @@
 // file: core/updater/testutil_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e41b8c07-3d92-4a56-9c1f-0b7a6d25e813
 // last-edited: 2026-11-18
 
@@ -43,16 +43,15 @@ func scriptBinary(body string) []byte { return []byte("#!/bin/sh\n" + body + "\n
 
 // fakeSource is an in-memory release feed that records what was asked of it.
 type fakeSource struct {
-	mu       sync.Mutex
-	latest   map[Channel]string // channel -> tag; absent = no release yet
-	rels     map[string]Release // tag -> release
-	bodies   map[string][]byte  // asset URL -> body
-	sizes    map[string]int64   // asset URL -> advertised size override (absent = real length)
-	latestN  int
-	opened   []string // asset names opened, in order
-	openErr  error
-	midErr   map[string]error // asset URL -> error after half the body
-	noTagAPI bool             // behave as a Source without TagSource
+	mu      sync.Mutex
+	latest  map[Channel]string // channel -> tag; absent = no release yet
+	rels    map[string]Release // tag -> release
+	bodies  map[string][]byte  // asset URL -> body
+	sizes   map[string]int64   // asset URL -> advertised size override (absent = real length)
+	latestN int
+	opened  []string // asset names opened, in order
+	openErr error
+	midErr  map[string]error // asset URL -> error after half the body
 }
 
 func newFakeSource() *fakeSource {

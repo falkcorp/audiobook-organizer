@@ -1,5 +1,5 @@
 // file: core/internal/updaterhttp/routes_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a4f6b12-5c3e-4d70-8b21-e6f0a1c2d3b4
 // last-edited: 2026-11-18
 
@@ -24,6 +24,7 @@ import (
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/tasks"
 	"github.com/falkcorp/mediacore/updater"
 )
 
@@ -467,5 +468,38 @@ func TestUpdaterRoutes_ApplyNeedsBothCollaborators(t *testing.T) {
 	r = newRig(t, func(d *Deps) { d.Starter = nil })
 	if rep := r.do(uhAs(auth.MethodSession, rbac.CoreAdmin), "POST", "/updater/apply", "", ""); rep.status != 503 {
 		t.Errorf("no starter: %d, want 503", rep.status)
+	}
+}
+
+// TestUpdaterTaskStartGatesMatchTheRoutes: each route that starts a task
+// carries a gate the generic task API cannot state, so the task's definition
+// must not be startable there. A route that needs an interactive session maps
+// to a kind with Perms.OwnerRouteOnly set; the check route has no guard beyond
+// its permission, and its kind stays startable through the task API under that
+// same permission. The routes' permissions equal the definitions' Start scopes.
+func TestUpdaterTaskStartGatesMatchTheRoutes(t *testing.T) {
+	kindOf := map[string]tasks.Definition{
+		"checkUpdater":   updater.CheckTask(nil),
+		"applyUpdate":    updater.ApplyTask(nil),
+		"rollbackUpdate": updater.RollbackTask(nil),
+	}
+	seen := 0
+	for _, def := range (&api{}).routeTable() {
+		d, starts := kindOf[def.name]
+		if !starts {
+			continue
+		}
+		seen++
+		perms := tasks.CommonOf(d).Perms
+		if got, want := perms.Start.String(), rbac.Need(def.gate.perm).String(); got != want {
+			t.Errorf("%s: route needs %s but the task's Start is %s", def.name, want, got)
+		}
+		if ownerOnly := perms.OwnerRouteOnly != ""; ownerOnly != def.gate.interactive {
+			t.Errorf("%s: route interactive = %v but the task's OwnerRouteOnly is set = %v; the generic task API would start it without the route's gate",
+				def.name, def.gate.interactive, ownerOnly)
+		}
+	}
+	if seen != len(kindOf) {
+		t.Fatalf("matched %d of %d task-starting routes", seen, len(kindOf))
 	}
 }

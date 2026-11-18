@@ -1,5 +1,5 @@
 // file: core/updater/selftest_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c0e92b5-d814-4a37-8f2a-b3e5719c40d8
 // last-edited: 2026-11-18
 
@@ -98,18 +98,30 @@ func TestSelfTest_BoundsTheRun(t *testing.T) {
 // carries no schedule (5U.4: nothing applies unattended).
 func TestApply_OnlyPathIsManualTask(t *testing.T) {
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, 0)
+	// The package's own non-test files (parser.ParseDir is deprecated: it
+	// ignores build tags, and none of these files is tag-gated).
+	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
 	}
-	pkg := pkgs["updater"]
-	if pkg == nil {
+	var files []*ast.File
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, e.Name(), nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, f)
+	}
+	if len(files) == 0 {
 		t.Fatal("package updater not parsed")
 	}
 	// callers[name] is every function that calls a method or function so named.
 	callers := map[string][]string{}
 	var applyTaskBody *ast.FuncDecl
-	for _, f := range pkg.Files {
+	for _, f := range files {
 		for _, d := range f.Decls {
 			fd, ok := d.(*ast.FuncDecl)
 			if !ok || fd.Body == nil {

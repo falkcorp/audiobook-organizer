@@ -1,5 +1,5 @@
 // file: core/updater/tasks.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8a3c6e21-d594-4f07-b2e8-1f90a7c35d46
 // last-edited: 2026-11-18
 
@@ -138,15 +138,19 @@ func CheckTask(u *Updater) tasks.Definition {
 		sched = sched.When(func() bool { return u.settings().Mode >= ModeCheck })
 	}
 	return tasks.Task(KindCheck, tasks.TaskSpec[Empty, StatusView]{
-		Common: tasks.Common{
-			Title: "Check for updates", Help: "Asks the release source for the newest release and records whether it is newer than the running build. It never installs anything.",
-			Effects: tasks.Writes(resourceUpdater()), Perms: tasks.Permissions{Start: rbac.Need("core:system.manage")}, Resume: tasks.ResumeDrop,
-			Priority: tasks.PrioritySystem, Timeout: 5 * time.Minute,
-			Schedule: sched.Live(), Dedupe: tasks.DedupePolicy{AnyParams: true},
-		},
+		Title: "Check for updates", Help: "Asks the release source for the newest release and records whether it is newer than the running build. It never installs anything.",
+		Effects: tasks.Writes(resourceUpdater()), Perms: tasks.Permissions{Start: rbac.Need("core:system.manage")}, Resume: tasks.ResumeDrop,
+		Priority: tasks.PrioritySystem, Timeout: 5 * time.Minute,
+		Schedule: sched.Live(), Dedupe: tasks.DedupePolicy{AnyParams: true},
 		Run: run,
 	})
 }
+
+// ownerRouteReason is why apply and rollback are not startable through the
+// generic task API: their routes (core/internal/updaterhttp) require an
+// interactive session on top of core:admin, as HEAD's credential-guarded
+// /update/apply does, and the task definition cannot state that.
+const ownerRouteReason = "the updater routes require an interactive session and answer refusals before a run exists"
 
 // ApplyTask is core.updater.apply: HEAD's raw-asset download and rename swap
 // of the running binary, then the restart. It has no Schedule: it runs only
@@ -159,11 +163,9 @@ func ApplyTask(u *Updater) tasks.Definition {
 		run = u.taskApply
 	}
 	return tasks.Task(KindApply, tasks.TaskSpec[ApplyParams, Empty]{
-		Common: tasks.Common{
-			Title: "Install an update", Help: "Downloads a release, checks it runs, replaces the running binary keeping the old one, and restarts. Only an admin starts it.",
-			Effects: tasks.Writes(resourceBinary()), Perms: tasks.Permissions{Start: rbac.Need("core:admin")}, Resume: tasks.ResumeDrop,
-			ConcurrencyKey: taskKey, Cancel: tasks.Cooperative(30 * time.Second), Priority: tasks.PrioritySystem, Timeout: 30 * time.Minute,
-		},
+		Title: "Install an update", Help: "Downloads a release, checks it runs, replaces the running binary keeping the old one, and restarts. Only an admin starts it.",
+		Effects: tasks.Writes(resourceBinary()), Perms: tasks.Permissions{Start: rbac.Need("core:admin"), OwnerRouteOnly: ownerRouteReason}, Resume: tasks.ResumeDrop,
+		ConcurrencyKey: taskKey, Cancel: tasks.Cooperative(30 * time.Second), Priority: tasks.PrioritySystem, Timeout: 30 * time.Minute,
 		Run: run,
 	})
 }
@@ -178,11 +180,9 @@ func RollbackTask(u *Updater) tasks.Definition {
 		run = u.taskRollback
 	}
 	return tasks.Task(KindRollback, tasks.TaskSpec[Empty, Empty]{
-		Common: tasks.Common{
-			Title: "Roll back an update", Help: "Puts the previous binary back after checking that it can still read the data, then restarts.",
-			Effects: tasks.Writes(resourceBinary()), Perms: tasks.Permissions{Start: rbac.Need("core:admin")}, Resume: tasks.ResumeDrop,
-			ConcurrencyKey: taskKey, Cancel: tasks.Cooperative(30 * time.Second), Priority: tasks.PrioritySystem, Timeout: 10 * time.Minute,
-		},
+		Title: "Roll back an update", Help: "Puts the previous binary back after checking that it can still read the data, then restarts.",
+		Effects: tasks.Writes(resourceBinary()), Perms: tasks.Permissions{Start: rbac.Need("core:admin"), OwnerRouteOnly: ownerRouteReason}, Resume: tasks.ResumeDrop,
+		ConcurrencyKey: taskKey, Cancel: tasks.Cooperative(30 * time.Second), Priority: tasks.PrioritySystem, Timeout: 10 * time.Minute,
 		Run: run,
 	})
 }
@@ -240,9 +240,9 @@ func (u *Updater) announce(ctx context.Context, w tasks.Writer, st Status, rel R
 	}
 	subject := entity.Ref{Module: "core", Kind: "updater", ID: seenKey}
 	write := tasks.Write{Name: "core.updater.seen", Resource: resourceUpdater(), Subject: subject}
-	err = w.Do(ctx, write, func(ctx context.Context) ([]tasks.Change, error) {
+	err = w.Do(ctx, write, func(ctx context.Context) (changes []tasks.Change, err error) {
 		b := u.d.Store.NewBatch()
-		defer func() { _ = b.Close() }()
+		defer func() { err = errors.Join(err, b.Close()) }()
 		val, err := json.Marshal(seenRecord{Version: st.Latest, At: u.now().UTC()})
 		if err != nil {
 			return nil, err
