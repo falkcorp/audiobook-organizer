@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-17-retired-books-metadata-apply-executive-summary.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 2e8c5a71-4b93-4d06-9f1a-7c3d0b6e8a52 -->
 <!-- last-edited: 2026-11-18 -->
 
@@ -67,11 +67,22 @@ refuses retired books`.
   stopped. A person's own actions on a single book (the apply dialog, the
   Fetch button, the single-book write-back) still write everything. The whole
   library write-back skips such a book before renaming it and counts it as
-  skipped, not failed. How the skip is reported: for the single-book dialog it
+  skipped, not failed; a book put away after its rename but before its tags
+  is counted as failed instead, because its files had already moved. How the skip is reported: for the single-book dialog it
   is one warning line in the log and the screen shows the apply as a success;
   the whole-library write-back counts it in its skipped total; the batch apply
   counts it with its write-back failures. After a restart, a job that was in
   flight resumes with the same attended or automatic setting it had.
+- What that does not cover, in plain terms. Three things still happen to a book
+  that has been put away. Approving a row on the review page for such a book
+  records the match as applied, but the file step that follows is refused as
+  retired, so the details change and no file is renamed, given a cover or
+  tagged; the write-back shows as failed. A put-away book whose files live in
+  the iTunes folder and that still has a live copy in the library has that live
+  copy written, because the copy is an ordinary book. And the cover download and
+  the stored cover address still happen before the check, so such a book can
+  still gain a cover file and cover address. All three are on the to-do list
+  with the store-level guard.
 - The production-company author fill counts a book that was put away between
   writing its author and rewriting its credits as resolved (its author was
   written while it was live) and reports the untouched credits on a separate
@@ -94,7 +105,7 @@ refuses retired books`.
   selected. A selection that is all retired starts nothing and says why.
 - What did not change: you can still pick a match for one book yourself, on any
   book, including one in the trash; approving a single row on the review page
-  still applies it; and "Search again" on one book still searches it. The
+  still records it as applied (see the three things above that do not stop); and "Search again" on one book still searches it. The
   search job itself now refuses that one-book mode if it is handed more than
   one book, so no other caller can switch it on for a whole list.
 - The one-click "fetch metadata" function is covered as well. Other automatic
