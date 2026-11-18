@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.44 -->
+<!-- version: 10.78.45 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -11,7 +11,7 @@
 <!-- version: 10.78.25 -->
 <!-- version: 10.78.22 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-11-17 -->
+<!-- last-edited: 2026-11-18 -->
 
 # Project TODO — live items only
 
@@ -23,6 +23,121 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **SERIES-DENUMBER-REPAIRS-TAB** Surface the series de-numbering plans that are not
+      applied unattended (the low tier, the plans demoted by the name grammar, the books held
+      back as position_uncorroborated, sibling_run_rejected, source_holds_multiple_books,
+      series_locked, base_under_another_author, target_has_unseen_members or for a position
+      conflict, and the series held as no_author) in the Repairs tab, so an owner can approve them one at a
+      time. Design: a fixer whose trial lists one numbered series with its books, the target base
+      and the position each book would take, and whose apply runs the same per-book move as the
+      operation (`internal/seriesdenumber.Decide` for the position check, `sdn.MoveRows` for the
+      undo rows, `series_create` and `series_row_delete` for the series rows) under the fixer's
+      own operation id. The decision logic is already a pure package, so the fixer needs only the
+      store reads and the Repairs registration. It was not wired in the same change because a
+      fixer also needs its own trial/approve/apply states and an undo path through the Repairs
+      journal, which is more than a contained change.
+
+- [ ] **TITLE-NEUTRAL** Owner decision: may a NEUTRAL title apply on a runtime
+      within 5% alone? The apply gate's title check answers AGREE, DISAGREE or
+      NEUTRAL; a neutral title (one side says more than the other, nothing
+      conflicts) confirms nothing, and `EvidenceVerdict.tally` applies it only
+      when both runtimes are known and within 5%. In the 4000-row replay of the
+      title-rule PR (#4692), 49 of the 61 applies that depend on a neutral
+      title depend on that runtime alone. The PR did not change the policy; it
+      pins today's outcome in `TestUnderOwnerReview_*`
+      (`internal/applygate/title_owner_review_pins_test.go`) for a franchise
+      word added in front of the stored title, a stored subtitle that names the
+      book against a franchise-only candidate (B1b) and a stored
+      franchise-and-book title against the franchise (M1a). For each of those
+      shapes, decide: apply on the runtime alone, need a second witness, or
+      refuse. A change is one deliberate edit to `tally` or `checkTitle` and to
+      its pin, and moves up to 49 replay applies.
+
+      A separate question, M2a, is pinned in the same file: a blank stored
+      title with nothing to compare (only a file name and a series that share no
+      word with the candidate) has an UNKNOWN title leg, and applies at every
+      runtime, with no runtime at all included. No runtime carries that apply.
+      Decide: keep it, or require an agreeing runtime for it as well.
+
+- [ ] **TODO-AUTORESOLVE-LABEL-FALLBACK** Before `dedup.auto_resolve_enabled` is ever switched on, tighten the `dedup.auto-resolve` label fallback (`autoResolveEligible` in `internal/dedup/auto_resolve.go`, the `GetLabeledExample` branch). It admits a pair as eligible when `ex.Label == "true_dup"` and `strings.Contains(ex.LabelReason, "whole-book signatures match")`, so a merge decision rests on a substring of free text. Nothing checks `LabelSource` (`rule|itunes_attr|human|llm_judge`), so a human or an `llm_judge` label carrying the same words is accepted, and `UpsertLabeledExample` takes any reason, and the producer, `internal/dedup/dataset/rules.go` (`return "true_dup", "whole-book signatures match", true`), and this consumer share the phrase only by being typed twice. This predates the dry-run plan work (the line is byte-identical on `origin/main`, added with the op in bee9fa5eb) and was left unchanged on purpose: apply behaviour is out of scope there. The fix is to export one constant for the reason from `dataset`, have the fallback require both that constant (exact match, not `Contains`) and `LabelSource == "rule"` and `SignatureRelation == "match"` on the labelled example, or else drop the fallback and re-check the whole-book signature signal itself at decision time. The dry-run result already shows how much rests on it: `planned_by_guard.corroboration_signature_label` counts every planned merge admitted only by that clause, and each such `plan` entry carries `"guard": "corroboration_signature_label"`. Read that count first; if it is zero the clause can simply be removed.
+- [ ] **TODO-AUTORESOLVE-APPLY-BOUND-TO-PLAN** Before `dedup.auto_resolve_enabled` is ever switched on (the same pre-enable list as the label fallback above), bind an `apply=true` run of `dedup.auto-resolve` to a reviewed dry run. Today apply is not bound to anything: it re-reads the pending CERTAIN candidates when it runs and visits the eligible pairs in plan order, and `max_merges` counts only SUCCESSFUL merges (`internal/dedup/auto_resolve.go`), so a pair it skips (a merge-time re-check, an iTunes refusal, a book an earlier merge soft-deleted) or that fails does not count and apply can merge pairs ranked PAST `max_merges` that nobody saw in the stored plan. The stored plan's `apply_description` says exactly this. The fix is for apply to take the dry-run op id as a parameter, load that op's stored plan, and refuse any pair that is not in it (and stop at `max_merges` entries of it), so what is merged is what was reviewed. Until then the plan is a review aid, not a contract.
+- [ ] **TODO-MERGE-UNDO-BASELINE-RACE** An unrelated write to a book that lands between `MergeBooksJournaled`'s baseline read (`newestSnapshotNanos`) and the merge's first write to that book (`internal/dedup/merge_journaled.go`, outside the merge lock) leaves a snapshot above the baseline, so "the first snapshot above the floor" (`EarliestSnapshotAbove`, what both the prune's pin and the patch use) is that write's before-image, not the merge's, and `UnmergeAuto` then restores the book to its state before that write and discards it. The pin and the patch agree, so nothing is lost to the prune; the undo restores a slightly older state. Predates the snapshot pin work. The fix is to take the baseline under the merge's own version-group lock (so it cannot be raced), or to record the snapshot the merge itself wrote instead of inferring it.
+
+- [ ] **TODO-MERGE-PROVISIONAL-ROW-REPAIR** Release stuck provisional auto-merge
+      journal rows, and tell operators why a trashed book is being kept. A
+      provisional `dedup:automerge:` row (written before a merge, finalized by the
+      post-merge patch) that is never finalized or closed holds all its
+      participants from every trash purge path for as long as it exists, and
+      nothing releases it today. Add a Repairs-tab entry that lists live
+      provisional rows older than the stale window (`provisionalStaleAfter`,
+      `snapshot_pins.go`) and, for each, either FINALIZES it (the merge
+      completed: find the actual winner from book state, then run the same patch
+      the merge would have) or CLOSES it (the merge never wrote), dry run first.
+      A provisional row has no `IntoGroupID` and the live participant is not
+      unique after a failure inside `MergeBooks`, so the winner has to be found
+      from book state, not from the row. Also surface the hold reason: all four
+      purge callers drop the reason string from `undoHold.Holds`
+      (`purge_run.go:188`, `service_single.go:534` and `:648`,
+      `trash_progress.go:814`), and the single-book "discard progress and purge"
+      path ends in `ErrPurgeUndoPossible` (`trash_progress.go:634`), which tells
+      the operator to undo, while `UnmergeAuto` refuses the provisional row.
+
+- [ ] **SERIES-DENUMBER-DELETE-STALE-WRITER-RESIDUE** `maintenance.series-denumber` deletes an emptied numbered series with the store's `DeleteSeriesIfUnreferenced`, which compares the series' name and author and counts its references under every book write lock and the series lock, then deletes. Two things are left outside that call. (1) A book write does not check that the series it names still exists: a writer that read series N before the delete and writes `series_id = N` afterwards strands its own book on a deleted row. Closing it means every writer of `series_id` (the two row writers `createBook` and `updateBookLockedMode`) verifying the series under `nameIdx.series`, which changes the write path of every book edit and the callers that rely on it. (3) The call is atomic only inside one process and only on a store that implements it: another process on the same Pebble database, or a store without `SeriesUnreferencedDeleter` (the apply refuses to start on one), is not covered. Both were left out of the round-3 fix of PR 4698 (item m3) because they are different windows from the one that review item named.
+
+- [ ] **SERIES-PRUNE-FIXER-ATOMIC-DELETE** `series_prune_fixer` counts a series' references and then calls `DeleteSeries`, the same count-then-delete window `maintenance.series-denumber` closed with `DeleteSeriesIfUnreferenced`; move it onto that primitive.
+
+- [ ] **WHISPER-ROUTE-UNREP** Route `path_unrepresentable` deliberately on the Go
+      side — a Windows worker answers it for a book whose file name NTFS cannot
+      hold (`:`, trailing dot, `CON`...), but `PathErrorCode` returns "" for an
+      unknown code, so the book is just retried on whichever worker comes next.
+      Teach `internal/whisper` to recognise the code, skip workers whose `/health`
+      `path_flavor` is `nt` for that book, and record a non-durable status when no
+      worker can take it. The safety rule on the worker is not to be loosened.
+
+- [ ] **WHISPER-WORKER-FOLLOWUPS** Items left from the non-Mac worker review that are
+      not defects in the code as shipped: (1) `install-whisper-supervisor.ps1`
+      registers the scheduled task with `-RestartCount 3`, which may restart a
+      supervisor that deliberately gave up (exit 1) up to three more times, each with
+      a fresh crash streak; decide whether Task Scheduler should restart it at all
+      (needs a real Task Scheduler to observe). (2) `whisper-windows.yml` installs
+      ffmpeg with an unpinned `choco install ffmpeg` and its pytest steps use Python
+      3.12 while production runs 3.14 (the `uv run` smoke covers 3.14); pin the ffmpeg
+      version once one is chosen. (3) On POSIX nothing reaps a decode child stuck in a
+      native call that holds the GIL after its parent dies (the orphan watch is a
+      Python thread); Windows has a Job Object for this, Linux would need
+      `prctl(PR_SET_PDEATHSIG)`. (4) Mac worker `whisper_mlx_server.py` line 65
+      carries a real-looking path example in a comment; reword it in a Mac-worker PR.
+
+- [ ] **WHISPER-ROUND4-FOLLOWUPS** Review items from the non-Mac worker's fourth round that are not fixed in that PR: (1) `manage-whisper-server.py --restart` over WinRM is unverified at runtime: whether a process started with `Start-Process` from a pywinrm shell survives the shell closing needs one try on the target box. (2) The Job Object assignment opens the child by pid (`OpenProcess`), which has a pid-reuse window; the handle multiprocessing already holds would avoid it. (3) Whether the assignment succeeds when the worker already runs inside a job (Task Scheduler, uv, a CI runner) is not established; the `child_unprotected` flag on `/health` now shows the failure but nothing exercises the nested case. (4) The supervisor's health probe accepts any 200 on the port, so another process holding it makes a run that failed to bind count as healthy once it has run 120 s. (5) `whisper-windows.yml` has no `paths:` filter and installs `uv`, `pytest-timeout` and ffmpeg unpinned. (6) Upload bodies are read whole into memory, up to 256 MiB per part times the threadpool's concurrency (bounded by the loopback default). (7) **Do this before the first deployment, not just before merge:** `install-whisper-supervisor.ps1` registers the task without `-ExecutionTimeLimit`, so Task Scheduler's default 72-hour limit may stop the supervisor without a failure that `-RestartCount` would act on; it is a one-line fix (not established on a real machine). (8) `test_whisper_mlx_pins.py` says "The one deliberate change to this pin" although two pins were edited. (9) `Engine.run` waits for a free runner without re-checking the clip deadline, and an unreapable temp directory on Windows is not handled. (10) A crashing clip costs one model load with no worker-side backoff. (11) The start path of a decode child lacks the run path's `except BaseException` guard, so an unpicklable ready message would leave a child alive without a pin check (unreachable with our own child). (12) A stop during a hung decode can wait up to the clip deadline because the child is killed only after the web server returns; uvicorn's graceful-stop behaviour was read from the code, not tried, and `timeout_graceful_shutdown` is not set. (13) The Mac worker (`whisper_mlx_server.py`) does not send the `identity` object yet, so its results are still journalled under the `/health` identity.
+- [ ] **WHISPER-STALE-LOOKUP-WINDOW** The result-journal lookup before a dispatch keys by the cached `/health` probe, so for at most one dispatch inside the 30 s probe TTL after a worker's model changes, a clip already journalled under the old model is served that text and not sent to the new one (the misses are filed under the new identity, so no row is ever mislabelled; `forgetGateProbe` forces a re-probe after the first mismatching answer). The same window existed on main for any model switch.
+- [ ] **WHISPER-IDENTITY-STICKY-WITHIN-A-CALL** Within one call an answer without an `identity` after one that had it keeps the last answer's identity, so a floating address that moves from a CPU worker to a Mac worker mid-call is journalled under the earlier one; the machine-id swap check covers the MLX worker only. Not a regression (it was the probe's identity before), equally wrong.
+- [ ] **WHISPER-NO-REGATE-WITHIN-A-CALL** When an answer shows the worker changed, only the next dispatch re-gates, so a requirement such as `require_gpu` is not re-checked for the remaining chunks of the same call. The journal side is correct.
+
+- [ ] **WHISPER-IDCAPABLE** Go `gatedEndpoint.idCapable()` (`internal/transcribe/workerid.go`)
+      is `Probed && Health.Backend == backendMLX`, so only the MLX worker is ever
+      treated as able to report a machine id. `whisper_server.py` now reports
+      `machine_id` in `/health` like the Mac worker (shared `whisper_machine_id.py`,
+      sent only when the worker has a stable id) and `backend: "faster-whisper"`, but
+      the Go side still treats it as unable to identify itself. Make `idCapable`
+      follow whether `/health` carried a well-formed `machine_id` rather than the
+      backend name, and fix the stale comments that say only the MLX worker has a
+      machine id (`workerid.go`, `canary.go` near line 314, `stuck_test.go`,
+      `canary_resolution_test.go`).
+
+- [ ] **WHISPER-AUTH** Real authentication for both Whisper workers — neither
+      `whisper_mlx_server.py` nor `whisper_server.py` authenticates, and the path
+      routes return transcripts of any file under `WHISPER_PATH_MAP`, so the only
+      protection is binding loopback and the SSH tunnel. Add a shared-secret header
+      checked by the shared module (`scripts/whisper_path_pipeline.py`) on every
+      route except `/health`, with the Go whisper client sending it, so a LAN-bound
+      worker (`-BindHost 0.0.0.0`) is safe to opt into. Rotate the secret without
+      restarting the server.
+
+- [ ] **MAINTENANCE-JOB-OPS-REGISTER-WITHOUT-WRITES** `registerMaintenanceJobOp` (`internal/server/maintenance_job_op.go`, the `OperationDef` at about :147, and the comment at :131) registers the maintenance jobs with no `Writes`, so the dispatcher's write-set gate (Gate 3b) never sees them: `maintenance.cleanup-series` and the rest can run beside `maintenance.series-denumber`, `dedup.series-prune`, `dedup.series-merge`, `dedup.series-normalize`, series rename and `repairs.apply` (the ops that do declare `ResSeries`), and beside each other. Per-job write sets are already derived (`jobWritesFor` in `internal/maintenance/jobs/kinds_writes.go`, checked against the code by `TestJobWrites_TraceMatchesCode`) but they feed only the jobs' `tasks.Effects` (`effectsFor` in `kinds.go`), not `OperationDef.Writes`. Passing them as `Writes` would make every maintenance job serialize against every `ResBooks` / `ResSeries` op, a behaviour change across the whole family (queue time, deferral logging), so it needs its own reviewed PR.
+- [ ] **CLEANUP-SERIES-DELETE-NOT-CONDITIONAL** `maintenance.cleanup-series` now writes books compare-and-set (a book that no longer names the series being cleaned is skipped), but both phases still end in an unconditional `DeleteSeries` (`csUnlinkAndDeleteSeries`, `csMergeSeriesGroup` in `internal/maintenance/jobs/cleanup_series.go`) and phase 2 trusts the reference counts read at the start of the run. A book linked into a series after that read can be left naming a deleted series. Closing it means calling `DeleteSeriesIfUnreferenced` (the atomic count-and-delete the de-numbering operation uses) through a capability, which changes the `seriesUnlinker` and `seriesMerger` interfaces and their fakes.
+
+- [ ] **SERIES-DENUMBER-REVERT-NOT-WRITE-SET-GATED** Reverting a `maintenance.series-denumber` operation runs from the HTTP revert handler, not from the dispatcher, so neither the write-set gate (which now keeps the operation itself off the other series writers) nor the scan stand-down covers it: a revert can run beside `dedup.series-prune`, series merge/rename/normalize or a library scan. Its series deletes are safe on their own (`DeleteSeriesIfUnreferenced` is atomic), but its book and series restores are plain writes. Closing it means the handler refusing, or waiting, while an operation that declares `ResSeries` or `ResBooks` is running, through the same registry check the dispatcher uses; that changes every operation's revert path, not only this one.
 
 - [ ] **TODO-SEQ-RANGE-FOLLOWUPS** Follow-ups left by the apply-gate sequence range fix: (1) re-run the apply measurement against the merged gate and record how many collected-edition false refusals it removed and how many leading-ordinal books now sit in `sequence_unconfirmed` instead of `book_sequence_conflict` (none of them applies unattended: a weak number that disagrees with the stored position is always review) and how many the new `sequence_unconfirmed` and `collected_edition_runtime_unconfirmed` reasons now hold for review; (2) the ASIN backfill's `asin_match.go` `rejectBoxSet` is an unconditional box-set veto that does not know a book can be the same collected edition; (3) a leading-ordinal-only book against a candidate with no number is still refused (ambiguous by design, but worth a measured look); (4) `catalog.ParseSequence` keeps its own dash-range regex beside `seqnum.ParseRange`, and still stores a single number for "1 & 2" (migrating the stored `SeqLo`/`SeqHi` meaning is a separate decision); (5) "Disc 1-3" reads as 3 (unchanged); (6) a title that ends in digit-dash-digit after a plural keyword ("Books 4-5") reads as a range, which is the intended reading and the one residual false reading of a real title.
 

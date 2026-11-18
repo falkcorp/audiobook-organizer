@@ -1,1 +1,0 @@
-- [ ] **SERIES-PRUNE-FIXER-ATOMIC-DELETE** `series_prune_fixer` counts a series' references and then calls `DeleteSeries`, the same count-then-delete window `maintenance.series-denumber` closed with `DeleteSeriesIfUnreferenced`; move it onto that primitive.
