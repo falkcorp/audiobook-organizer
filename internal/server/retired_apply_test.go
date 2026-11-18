@@ -1,7 +1,7 @@
 // file: internal/server/retired_apply_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 3f0c8e52-7a14-4b69-9d27-5c1e6a8b0f43
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package server
 
@@ -123,9 +123,9 @@ func TestRetiredApply_CachedBulkApplyRefusesRetiredBook(t *testing.T) {
 	}
 }
 
-// opResultFixture is a gate-passing op-result candidate for book b1, so a
+// retiredOpResultFixture is a gate-passing op-result candidate for book b1, so a
 // refusal can only come from the retirement check.
-func opResultFixture(retire func(b *database.Book)) (fakeBooks, CandidateResult) {
+func retiredOpResultFixture(retire func(b *database.Book)) (fakeBooks, CandidateResult) {
 	tenHours := 36000
 	b := &database.Book{ID: "b1", Title: "Hush 1", Author: &database.Author{Name: fixtureAuthor}, Duration: &tenHours}
 	if retire != nil {
@@ -140,7 +140,7 @@ func opResultFixture(retire func(b *database.Book)) (fakeBooks, CandidateResult)
 // Control: the live book passes the plan, so the refusals below are the
 // retirement check's doing.
 func TestRetiredApply_ControlOpResultPlanAllowsLiveBook(t *testing.T) {
-	books, cr := opResultFixture(nil)
+	books, cr := retiredOpResultFixture(nil)
 	plan := planOpResultApply(books, "b1", cr, nil)
 	require.Empty(t, plan.Reason, "control refused: %+v err=%v", plan.Reason, plan.Err)
 }
@@ -150,7 +150,7 @@ func TestRetiredApply_ControlOpResultPlanAllowsLiveBook(t *testing.T) {
 func TestRetiredApply_OpResultPlanRefusesRetiredBook(t *testing.T) {
 	for _, shape := range retiredShapes {
 		t.Run(shape.name, func(t *testing.T) {
-			books, cr := opResultFixture(shape.retire)
+			books, cr := retiredOpResultFixture(shape.retire)
 			plan := planOpResultApply(books, "b1", cr, nil)
 			assert.Equal(t, "book_retired", plan.Reason, "the plan would apply a retired book: %+v", plan)
 		})
