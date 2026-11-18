@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-11-17-metadata-title-check-executive-summary.md -->
-<!-- version: 2.3.0 -->
+<!-- version: 2.4.0 -->
 <!-- guid: 3b9d6e21-8c47-4f05-a1d2-6e0f7a4c9b83 -->
-<!-- last-edited: 2026-11-17 -->
+<!-- last-edited: 2026-11-18 -->
 
 # Two parts of one story can no longer be mistaken for each other
 
@@ -49,8 +49,11 @@ attempt.
     number of the same kind (a volume, or a part) and the numbers differ ("Part
     1" and "Part 2", "Hush 1" and "Hush 2", "Part 1 of 3" and "Part 3"). A
     number only one side states is not a difference ("Who Am I" and "Who Am I
-    2"). The match is refused. A series name, a credit, a file name or a year
-    cannot talk the check out of this. Numbers swapped between the pieces
+    2"). The match is refused. A series name, a credit or a file name cannot
+    talk the check out of this, and neither can a year that is written as part
+    of the title: "Gotham 2033" and "Gotham 2034" are different books, and so
+    are "Gotham 2033" and "Gotham 2". (A year in brackets next to a title that
+    has no year of its own is only a release date and is ignored.) Numbers swapped between the pieces
     ("Knightfall 2: Book 3" and "Knightfall 3: Book 2") now count as different;
     an earlier version of this change let them through.
   - **Neutral.** Everything else that is related: one title simply says more
@@ -67,7 +70,10 @@ attempt.
   title and the library book is not marked as a part, the match is refused even
   when the recording lengths agree, because two parts of one book are often
   within 5% of each other's length. Before this change such a pair was applied
-  when the lengths agreed. When the found book names no part, an old "Disc 2"
+  when the lengths agreed. When the library book's own title or file name says which part it is, that is
+  what counts; the folder name is used only when they say nothing, so an old
+  "Part 1" folder over a file called "Part 2" can no longer let a "Part 1" through.
+  When the found book names no part, an old "Disc 2"
   folder name does not refuse a book whose recording length agrees (as before);
   a part marker left in the library book's own title or its single file's name
   ("Hush CD1" against the whole book "Hush") does now refuse it, whatever the
@@ -89,25 +95,36 @@ attempt.
   now skips such books, and a queued apply that is skipped for this reason says
   so in the log. Undoing an apply clears the book's "applied" mark (this is
   tested), so a later run can apply it again on purpose.
-- A third review of the rule tightened it in seven places, each started from a
+- A third and a fourth review of the rule tightened it in seven places, each started from a
   failing test:
   - A found title that is only a few words of a longer library title ("Gotham"
     against "Gotham Knights Detective Tales") is no longer taken as related
     unless it shares at least half the words. A found title that adds words to
     the library title is unchanged.
   - A library title that ends in one capital letter ("Robin X") is treated as a
-    whole title, so the folder name "Robin" no longer stands in for it.
+    whole title, so the folder name "Robin" no longer stands in for it. The same
+    holds when recording details are tacked on ("Robin X [64kbps]"): the details
+    are set aside and what is left is judged.
   - A volume written in the library book's subtitle ("Batman, Book 2") is now
     compared with the found book's number, so "Book 2" is not applied from a
     "Book 3".
   - A found book whose title is just its own series name ("Batman" in the series
     "Batman") no longer counts as the same title as a library book called
-    "Batman"; it waits for a matching recording length.
-  - A year in brackets, a year only one title carries and a list number in front
-    ("08 - ") never make two titles different. Two titles that each carry a
-    different year-like number ("Gotham 2033", "Gotham 2034") still do.
-  - "Hush I" is now different from "Hush, Book 2", "Hush #2" and "Hush Volume
-    II", as it already was from "Hush II".
+    "Batman"; it waits for a matching recording length. The same goes for a library
+    title that is "Batman" with the author's name beside it ("Batman - Bruce
+    Wayne"), and for a file name used in place of an empty title.
+  - A list number in front ("08 - ") never makes two titles different, and a
+    year in brackets does not either unless the other title carries a year too.
+    A year written plainly in a title ("Gotham 2033") is part of its name: it
+    differs from any other year and from any other number ("Gotham 2034",
+    "Gotham 2"). It is ignored only against a title that states no number at all.
+    A fourth review found that the first version of this rule was too generous
+    ("Gotham (2033)" and "Gotham (2034)" were treated as the same book); it now
+    refuses them, at the price of waiting for review on a few titles that carry
+    a plain year, such as "Knightfall 1993" against "Knightfall: Book 1".
+  - "Hush I" is now different from "Hush, Book 2", "Hush, Book #2", "Hush #2",
+    "Hush (Book 2)", "Hush Volume II" and "Hush II (Unabridged)", as it already
+    was from "Hush II".
   - "Third Book" is read as "Book 3", so it matches "Book 3" and differs from
     "Book 4".
 - What this costs, measured. A read-only replay over 4000 stored book and

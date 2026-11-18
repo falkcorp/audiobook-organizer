@@ -1,7 +1,7 @@
 // file: internal/seqnum/stated.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ef7d6ebc-a3a1-4738-bc60-512ed593d8eb
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package seqnum
 
@@ -73,9 +73,13 @@ var (
 	// A numeral closing a text, bare or behind a hash or an opening bracket
 	// ("Hush 2", "Hush #2", "Hush (2)").
 	reTrailingNum = regexp.MustCompile(`(?:^|[\s,:\-#(\[])(?:\d{1,3}(?:\.\d+)?|ii|iii|iv|vi|vii|viii|ix|xi|xii|xiii|xiv|xv|xvi|xvii|xviii|xix|xx)[)\]]?\s*$`)
-	// The marker word and punctuation between a title's words and its numeral
-	// ("Hush, Book 2", "Hush Volume II").
-	reNumeralMarker = regexp.MustCompile(`[\s,:\-]+(?:book|bk|volume|vol|no|number)\.?$`)
+	// The marker word and the punctuation before it, between a title's words
+	// and its numeral ("Hush, Book 2", "Hush Volume II", "Hush (Book 2)"); a
+	// hash after the marker ("Hush, Book #2") leaves a space behind it.
+	reNumeralMarker = regexp.MustCompile(`[\s,:\-(\[]+(?:book|bk|volume|vol|no|number)\.?\s*$`)
+	// A closing note with no number in it ("(Unabridged)", "[Dramatized]"): an
+	// edition label, not a word of the title and not a statement of a number.
+	reClosingNote = regexp.MustCompile(`\s*[(\[][^()\[\]\d]*[)\]]\s*$`)
 )
 
 var ordinalNumbers = map[string]float64{
@@ -115,29 +119,43 @@ func ReadStated(s string) []Stated { return readStated(s, false) }
 // beside "Who Am I 2", where the "I" is a word of the title). On its own it is
 // the pronoun or an initial, which is why Parse never reads it.
 func ReadPair(a, b string) (sa, sb []Stated) {
-	return readStated(a, numeralBeside(a, b)), readStated(b, numeralBeside(b, a))
+	return readStatedIn(a, numeralBeside(a, b), true), readStatedIn(b, numeralBeside(b, a), true)
 }
 
 // numeralBeside reports whether other ends in a numeral whose preceding words
 // are the words that precede the lone "I" ending s. The numeral may be bare
-// ("Hush 2"), behind a volume marker ("Hush, Book 2", "Hush Volume II") or in
-// the usual brackets ("Hush #2", "Hush (2)"): the marker is not one of the
-// words, and "Who Am I: Book 2" still does not match "Who Am I", whose words
-// before the "I" are "who am".
+// ("Hush 2"), behind a volume marker ("Hush, Book 2", "Hush Volume II",
+// "Hush, Book #2") or in the usual brackets ("Hush #2", "Hush (2)", "Hush (Book
+// 2)"): the marker is not one of the words, and "Who Am I: Book 2" still does
+// not match "Who Am I", whose words before the "I" are "who am". A closing
+// edition note on either text ("Hush II (Unabridged)") is not one of the words
+// either, but only when the text does not end in its numeral without it.
 func numeralBeside(s, other string) bool {
 	rest, _ := takeParts(strings.ToLower(strings.ReplaceAll(other, "_", " ")))
 	c := clean(rest)
 	ix := reTrailingNum.FindStringIndex(c)
 	if ix == nil {
-		return false
+		c = withoutClosingNote(c)
+		if ix = reTrailingNum.FindStringIndex(c); ix == nil {
+			return false
+		}
 	}
 	own, _ := takeParts(strings.ToLower(strings.ReplaceAll(s, "_", " ")))
 	oc := clean(own)
 	loc := reLoneRomanI.FindStringIndex(oc)
 	if loc == nil {
-		return false
+		oc = withoutClosingNote(oc)
+		if loc = reLoneRomanI.FindStringIndex(oc); loc == nil {
+			return false
+		}
 	}
 	return wordsBefore(oc[:loc[0]+1]) == wordsBefore(reNumeralMarker.ReplaceAllString(c[:ix[0]], ""))
+}
+
+// withoutClosingNote is s without the closing note that holds no number, if it
+// ends in one.
+func withoutClosingNote(s string) string {
+	return strings.TrimSpace(reClosingNote.ReplaceAllString(s, ""))
 }
 
 // wordsBefore is the words of s with the punctuation that closes them dropped.
@@ -174,7 +192,12 @@ func takeParts(t string) (string, []Stated) {
 	return t, parts
 }
 
-func readStated(s string, loneI bool) []Stated {
+func readStated(s string, loneI bool) []Stated { return readStatedIn(s, loneI, false) }
+
+// readStatedIn is readStated; paired says the text is read beside another
+// (ReadPair), where a closing note with no number ("Hush II (Unabridged)") is
+// set aside when the text states no volume with it in place.
+func readStatedIn(s string, loneI, paired bool) []Stated {
 	t := strings.ToLower(strings.ReplaceAll(s, "_", " "))
 	t, parts := takeParts(t)
 
@@ -199,21 +222,10 @@ func readStated(s string, loneI bool) []Stated {
 		}
 		return " "
 	})
-	if n, ok := ParseRange(t); ok {
-		st := Stated{Kind: KindVolume, Number: n}
-		volume = &st
-	} else if n, ok := trailingSpan(t); ok {
-		st := Stated{Kind: KindVolume, Number: n}
-		volume = &st
-	} else if n, ok := ParseTitle(t); ok {
-		st := Stated{Kind: KindVolume, Number: n}
-		if volume != nil {
-			st = *volume // an "N of M" or an ordinal said it first
-		}
-		volume = &st
-	} else if volume == nil && loneI {
-		if c := clean(t); reLoneRomanI.MatchString(c) {
-			volume = &Stated{Kind: KindVolume, Number: Number{Value: 1, Text: "1", Form: "trailing"}}
+	volume = volumeIn(t, volume, loneI)
+	if volume == nil && paired {
+		if t2 := withoutClosingNote(t); t2 != t {
+			volume = volumeIn(t2, nil, loneI)
 		}
 	}
 	var out []Stated
@@ -221,6 +233,31 @@ func readStated(s string, loneI bool) []Stated {
 		out = append(out, *volume)
 	}
 	return append(out, parts...)
+}
+
+// volumeIn is the volume t states, given the one an ordinal or an "N of M"
+// already said (nil when none did): a range, a bare span, the title's own
+// number, or a lone trailing "I" when loneI says it is a numeral.
+func volumeIn(t string, volume *Stated, loneI bool) *Stated {
+	if n, ok := ParseRange(t); ok {
+		return &Stated{Kind: KindVolume, Number: n}
+	}
+	if n, ok := trailingSpan(t); ok {
+		return &Stated{Kind: KindVolume, Number: n}
+	}
+	if n, ok := ParseTitle(t); ok {
+		st := Stated{Kind: KindVolume, Number: n}
+		if volume != nil {
+			st = *volume // an "N of M" or an ordinal said it first
+		}
+		return &st
+	}
+	if volume == nil && loneI {
+		if c := clean(t); reLoneRomanI.MatchString(c) || reLoneRomanI.MatchString(withoutClosingNote(c)) {
+			return &Stated{Kind: KindVolume, Number: Number{Value: 1, Text: "1", Form: "trailing"}}
+		}
+	}
+	return volume
 }
 
 // reTrailingSpan is a bare range closing a title: "Hush 1-3". Parse reads the

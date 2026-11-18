@@ -1,7 +1,7 @@
 // file: internal/applygate/titleforms.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5c1d7e93-2b48-4a0f-9e36-71d4b8a2c605
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package applygate
 
@@ -37,7 +37,11 @@ import (
 //     non-subtitle): the series name, the position (bare or behind a closed
 //     marker) and the title in the other usual orders, "S N T" and "T S N";
 //     and the title beside a declared author or narrator, "T X", "X T",
-//     "S N T X" and "X S N T" (X is the credit).
+//     "S N T X" and "X S N T" (X is the credit). On a SELF-TITLED candidate
+//     (title = series name) the bare forms and the credit forms "T X", "X T"
+//     say no volume, so checkTitle makes them NEUTRAL, not AGREE, and a file
+//     name never agrees through them either; only the forms that state the
+//     position ("S N T", "T S N", "S N T X", "X S N T") agree.
 //   - for a candidate WITH a real subtitle U: only the forms that say U,
 //     "S N T U" and "U N T" (N is the position, bare or behind a closed marker).
 //     See "A SUBTITLE IS NEVER LEFT OUT" below.
