@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/cleanup_series_conditional_delete_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 11f4d28a-ab07-4fe7-97c6-9d5d2854e15d
 // last-edited: 2026-11-18
 
@@ -45,6 +45,18 @@ type csCondStore struct {
 	// deleteIfErr, when set, is what DeleteSeriesIfUnreferenced returns instead of
 	// looking at the rows.
 	deleteIfErr error
+	// deleteErrFor, when it has the id, is what DeleteSeriesIfUnreferenced returns
+	// for that series alone: a failure about one row, not about the store.
+	deleteErrFor map[int]error
+	// modifyFailOnce, when it has the book id, fails that book's next ModifyBook
+	// with the error and is then consumed: a transient write failure.
+	modifyFailOnce map[string]error
+	// hidden books are the non-primary versions: every row that names the series
+	// still counts as a reference and is in the AllVersions membership, but the
+	// listing getters and the display count do not show them.
+	hidden map[string]bool
+	// trashed books are named in the reference count only: no getter lists them.
+	trashed map[string]bool
 
 	conditionalCalls []int // ids passed to DeleteSeriesIfUnreferenced
 	membershipReads  int
@@ -76,9 +88,20 @@ func (s *csCondStore) refs(id int) int {
 	return n
 }
 
+// booksNaming lists the books the AllVersions membership returns: everything but
+// the trashed rows.
 func (s *csCondStore) booksNaming(id int) []database.BookCore {
+	return s.listNaming(id, false)
+}
+
+// listNaming lists the books naming id; core also drops the hidden (non-primary)
+// versions, as the listing getter does.
+func (s *csCondStore) listNaming(id int, core bool) []database.BookCore {
 	var out []database.BookCore
 	for _, b := range s.books {
+		if s.trashed[b.ID] || (core && s.hidden[b.ID]) {
+			continue
+		}
 		if b.SeriesID != nil && *b.SeriesID == id {
 			out = append(out, database.BookCore{ID: b.ID, SeriesID: b.SeriesID, SeriesSequence: b.SeriesSequence})
 		}
@@ -116,7 +139,19 @@ func (s *csCondStore) GetAllSeries() ([]database.Series, error) {
 	return out, nil
 }
 
+// GetAllSeriesBookCounts is the display count: no trashed or non-primary rows.
 func (s *csCondStore) GetAllSeriesBookCounts() (map[int]int, error) {
+	out := map[int]int{}
+	for id := range s.series {
+		if n := len(s.listNaming(id, true)); n > 0 {
+			out[id] = n
+		}
+	}
+	return out, nil
+}
+
+// GetAllSeriesBookRefCounts is the unfiltered count: every row that names the series.
+func (s *csCondStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
 	out := map[int]int{}
 	for id := range s.series {
 		if n := s.refs(id); n > 0 {
@@ -126,12 +161,8 @@ func (s *csCondStore) GetAllSeriesBookCounts() (map[int]int, error) {
 	return out, nil
 }
 
-func (s *csCondStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
-	return s.GetAllSeriesBookCounts()
-}
-
 func (s *csCondStore) GetBooksBySeriesIDCore(id int) ([]database.BookCore, error) {
-	return s.booksNaming(id), nil
+	return s.listNaming(id, true), nil
 }
 
 func (s *csCondStore) GetBooksBySeriesIDsAllVersions(ids []int) (map[int][]database.BookCore, error) {
@@ -152,6 +183,10 @@ func (s *csCondStore) ModifyBook(id string, fn func(*database.Book) error) (*dat
 	if s.modifyErr != nil {
 		return nil, s.modifyErr
 	}
+	if err, ok := s.modifyFailOnce[id]; ok {
+		delete(s.modifyFailOnce, id)
+		return nil, err
+	}
 	row := s.books[id]
 	if row == nil {
 		return nil, nil
@@ -171,6 +206,9 @@ func (s *csCondStore) DeleteSeriesIfUnreferenced(id int, expectName string, expe
 	s.conditionalCalls = append(s.conditionalCalls, id)
 	if s.deleteIfErr != nil {
 		return false, s.deleteIfErr
+	}
+	if err, ok := s.deleteErrFor[id]; ok {
+		return false, err
 	}
 	row, ok := s.series[id]
 	if !ok {
@@ -299,7 +337,7 @@ func TestCleanupSeriesRun_Phase1FailsClosedWhenTheConditionalDeleteErrors(t *tes
 		[]database.Series{{ID: 7, Name: "The Long Halloween"}},
 		database.Book{ID: "long-halloween-1", SeriesID: intp(7)},
 	)
-	cause := errors.New("memdb is missing rows")
+	cause := csStoreWideErr(database.ErrMemdbIncomplete)
 	store.deleteIfErr = cause
 	rep := &csPhase1Reporter{}
 
@@ -382,7 +420,7 @@ func TestCleanupSeriesRun_Phase2DeletesAnUnchangedMergedFromSeriesThroughTheCond
 
 func TestCleanupSeriesRun_Phase2FailsClosedWhenTheConditionalDeleteErrors(t *testing.T) {
 	store := dupSeriesStore()
-	cause := errors.New("memdb is missing rows")
+	cause := csStoreWideErr(database.ErrMemdbIncomplete)
 	store.deleteIfErr = cause
 	rep := &csPhase1Reporter{}
 
@@ -552,7 +590,7 @@ func TestCsMergeSeriesGroup_AStoreErrorStopsTheGroupAndKeepsTheSeries(t *testing
 		database.Book{ID: "court-of-owls-1", SeriesID: intp(7)},
 		database.Book{ID: "court-of-owls-3", SeriesID: intp(9)},
 	)
-	store.deleteIfErr = errors.New("memdb is missing rows")
+	store.deleteIfErr = csStoreWideErr(database.ErrMemdbIncomplete)
 	members := database.SeriesBooksMap{7: {{ID: "court-of-owls-1"}}, 9: {{ID: "court-of-owls-3"}}}
 
 	res, err := csMergeSeriesGroup(store, 8, []database.Series{store.series[7], store.series[9]}, map[int]int{7: 1, 9: 1}, members)
@@ -568,6 +606,33 @@ func TestCsMergeSeriesGroup_AStoreErrorStopsTheGroupAndKeepsTheSeries(t *testing
 	}
 	if res.Kept.Failed != 1 {
 		t.Fatalf("Kept.Failed = %d, want the failed delete counted", res.Kept.Failed)
+	}
+	if !res.Stopped || res.NotReached != 1 {
+		t.Fatalf("Stopped=%v NotReached=%d, want a store-wide failure to stop the group with the series behind it not reached", res.Stopped, res.NotReached)
+	}
+}
+
+// A failure about one row does not stop the group: the series is counted failed,
+// logged, and the next one is settled.
+func TestCsMergeSeriesGroup_ARowLocalDeleteErrorKeepsTheSeriesAndGoesOn(t *testing.T) {
+	store := newCsCondStore(
+		[]database.Series{{ID: 7, Name: "Court of Owls"}, {ID: 9, Name: "The Court of Owls"}},
+		database.Book{ID: "court-of-owls-1", SeriesID: intp(7)},
+		database.Book{ID: "court-of-owls-3", SeriesID: intp(9)},
+	)
+	store.deleteErrFor = map[int]error{7: errors.New("decode series 7: invalid character")}
+	members := database.SeriesBooksMap{7: {{ID: "court-of-owls-1"}}, 9: {{ID: "court-of-owls-3"}}}
+
+	res, err := csMergeSeriesGroup(store, 8, []database.Series{store.series[7], store.series[9]}, map[int]int{7: 1, 9: 1}, members)
+	if err != nil {
+		t.Fatalf("err = %v, want a row-local failure not to fail the group", err)
+	}
+	if res.Stopped || res.NotReached != 0 || res.Kept.Failed != 1 || res.Merged != 1 {
+		t.Fatalf("Stopped=%v NotReached=%d Failed=%d Merged=%d, want 7 failed, 9 merged, nothing stopped",
+			res.Stopped, res.NotReached, res.Kept.Failed, res.Merged)
+	}
+	if !store.hasSeries(7) || store.hasSeries(9) {
+		t.Fatalf("series 7 kept=%v, series 9 kept=%v", store.hasSeries(7), store.hasSeries(9))
 	}
 }
 
@@ -646,4 +711,10 @@ func TestCleanupSeriesRun_ADryRunDoesNotNeedTheConditionalDelete(t *testing.T) {
 	if err := (&cleanupSeriesJob{}).Run(context.Background(), csNoDeleter{mock}, rep, true); err != nil {
 		t.Fatalf("a dry run writes nothing and must not need the capability: %v", err)
 	}
+}
+
+// csStoreWideErr is what a store that cannot count references to any series
+// returns from the delete, wrapped the way the real one wraps it.
+func csStoreWideErr(sentinel error) error {
+	return fmt.Errorf("count references to series 7: %w", sentinel)
 }

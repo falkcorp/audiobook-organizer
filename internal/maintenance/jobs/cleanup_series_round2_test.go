@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/cleanup_series_round2_test.go
-// version: 1.1.0
+// version: 1.3.0
 // guid: 5c8e2b19-7d34-4a60-9f13-0b6a4e7d2c85
 // last-edited: 2026-11-18
 
@@ -49,6 +49,14 @@ func (b *csSyncBuffer) String() string {
 // returns a func that decodes the job's "Done ..." line from it.
 func csCaptureDone(t *testing.T) func() map[string]any {
 	t.Helper()
+	done, _ := csCaptureLogs(t)
+	return done
+}
+
+// csCaptureLogs is csCaptureDone plus a func returning everything logged, for a
+// test that asserts on an error line's text.
+func csCaptureLogs(t *testing.T) (done func() map[string]any, text func() string) {
+	t.Helper()
 	sink := &csSyncBuffer{}
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(sink, nil)))
@@ -67,7 +75,7 @@ func csCaptureDone(t *testing.T) func() map[string]any {
 		}
 		t.Fatalf("the run logged no Done line; got %q", sink.String())
 		return nil
-	}
+	}, sink.String
 }
 
 func csDoneInt(t *testing.T, done map[string]any, key string) int {
@@ -121,7 +129,7 @@ func csAssertBucketsAddUp(t *testing.T, done map[string]any) {
 	t.Helper()
 	g := func(k string) int { return csDoneInt(t, done, k) }
 	p1 := g("singleApplied") + g("singleRefusedLive") + g("singleKeptChanged") + g("singleAlreadyGone") +
-		g("singleDeleteFailed") + g("singleUnlinkFailed")
+		g("singleDeleteFailed") + g("singleUnlinkFailed") + g("singleNotReached")
 	if p1 != g("singleFound") {
 		t.Errorf("phase 1 buckets sum to %d, singleFound = %d: %v", p1, g("singleFound"), done)
 	}
@@ -207,7 +215,7 @@ func TestCleanupSeriesRun_DoneLineBuckets(t *testing.T) {
 			name: "phase 1 delete the store cannot answer, inside a duplicate group",
 			build: func() *csCondStore {
 				s := csHushStore()
-				s.deleteIfErr = errors.New("memdb is missing rows")
+				s.deleteIfErr = csStoreWideErr(database.ErrMemdbIncomplete)
 				return s
 			},
 			want: want{
@@ -232,6 +240,49 @@ func TestCleanupSeriesRun_DoneLineBuckets(t *testing.T) {
 				ints:       map[string]int{"singleFound": 1, "singleUnlinkFailed": 1, "singleDeleteFailed": 0, "dupMergeFromSeries": 1, "dupNotReached": 1},
 				inWarn:     []string{"1 single-book series could not be unlinked", "1 merged-from series were not processed"},
 				notInWarn:  []string{"could not verify"},
+				keepSeries: []int{7},
+			},
+		},
+		{
+			// n-E. The start-of-run guard in phase 1: a trashed row names the series
+			// too, so the run cannot unlink everything that references it. In
+			// singleSkipped, outside the phase-1 sum.
+			name: "phase 1 start-of-run guard keeps a series holding a trashed row",
+			build: func() *csCondStore {
+				s := newCsCondStore(
+					[]database.Series{{ID: 7, Name: "Batman: Hush"}},
+					database.Book{ID: "hush-1", SeriesID: intp(7)},
+					database.Book{ID: "hush-trashed", SeriesID: intp(7)},
+				)
+				s.trashed = map[string]bool{"hush-trashed": true}
+				return s
+			},
+			want: want{
+				ints:       map[string]int{"singleFound": 0, "singleSkipped": 1, "singleApplied": 0, "dupFound": 0, "dupRefused": 0},
+				inWarn:     []string{"Reference guard kept 1 single-book series and 0 merged-from series"},
+				keepSeries: []int{7},
+			},
+		},
+		{
+			// n-E. The same guard in phase 2: the merged-from series holds a trashed
+			// row the run cannot re-home, so the series row stays. Counted in
+			// dupRefused, one of the phase-2 buckets.
+			// through the bucket it is in.
+			name: "phase 2 start-of-run guard keeps a merged-from series holding a trashed row",
+			build: func() *csCondStore {
+				s := newCsCondStore(
+					[]database.Series{{ID: 7, Name: "Court of Owls"}, {ID: 8, Name: "court of owls"}},
+					database.Book{ID: "court-of-owls-1", SeriesID: intp(7), SeriesSequence: intp(2)},
+					database.Book{ID: "court-of-owls-trashed", SeriesID: intp(7)},
+					database.Book{ID: "night-of-owls-1", SeriesID: intp(8)},
+					database.Book{ID: "night-of-owls-2", SeriesID: intp(8)},
+				)
+				s.trashed = map[string]bool{"court-of-owls-trashed": true}
+				return s
+			},
+			want: want{
+				ints:       map[string]int{"dupFound": 1, "dupRefused": 1, "dupMergeFromSeries": 1, "dupSeriesDeleted": 0, "singleSkipped": 0},
+				inWarn:     []string{"Reference guard kept 0 single-book series and 1 merged-from series"},
 				keepSeries: []int{7},
 			},
 		},
@@ -287,7 +338,7 @@ func TestCleanupSeriesRun_DoneLineBuckets(t *testing.T) {
 			name: "phase 2 delete the store cannot answer",
 			build: func() *csCondStore {
 				s := dupSeriesStore()
-				s.deleteIfErr = errors.New("memdb is missing rows")
+				s.deleteIfErr = csStoreWideErr(database.ErrMemdbIncomplete)
 				return s
 			},
 			want: want{
@@ -302,7 +353,7 @@ func TestCleanupSeriesRun_DoneLineBuckets(t *testing.T) {
 			name: "phase 2 delete the store cannot answer, with another series behind it",
 			build: func() *csCondStore {
 				s := csOwlsTripleStore()
-				s.deleteIfErr = errors.New("memdb is missing rows")
+				s.deleteIfErr = csStoreWideErr(database.ErrMemdbIncomplete)
 				return s
 			},
 			want: want{
@@ -444,86 +495,122 @@ func TestCleanupSeriesRun_RefusesALiveRunWhenTheStoreCannotSayItIsReady(t *testi
 	}
 }
 
+// csStoreWideCauses are the two refusals that say the store cannot count
+// references to any series, so a run stops on them.
+var csStoreWideCauses = []struct {
+	name     string
+	sentinel error
+}{
+	{"memdb missing rows", database.ErrMemdbIncomplete},
+	{"memdb not serving", database.ErrSeriesDeleteMemdbNotServing},
+}
+
 // A store that degrades AFTER the probe: the first delete cannot be answered, and
 // phase 1 must stop there. Before this, it went on to unlink the books of every
-// remaining candidate and fail every delete.
+// remaining candidate and fail every delete. The candidates it did not get to are
+// counted, not dropped.
 func TestCleanupSeriesRun_Phase1StopsAtTheFirstDeleteTheStoreCannotAnswer(t *testing.T) {
-	store := newCsCondStore(
-		[]database.Series{{ID: 7, Name: "Year One"}, {ID: 8, Name: "Zero Year"}, {ID: 9, Name: "Endgame"}},
-		database.Book{ID: "year-one-1", SeriesID: intp(7)},
-		database.Book{ID: "zero-year-1", SeriesID: intp(8)},
-		database.Book{ID: "endgame-1", SeriesID: intp(9)},
-	)
-	cause := errors.New("memdb is missing rows")
-	store.deleteIfErr = cause
-	rep := &csPhase1Reporter{}
-	done := csCaptureDone(t)
+	for _, c := range csStoreWideCauses {
+		t.Run(c.name, func(t *testing.T) {
+			store := newCsCondStore(
+				[]database.Series{{ID: 7, Name: "Year One"}, {ID: 8, Name: "Zero Year"}, {ID: 9, Name: "Endgame"}},
+				database.Book{ID: "year-one-1", SeriesID: intp(7)},
+				database.Book{ID: "zero-year-1", SeriesID: intp(8)},
+				database.Book{ID: "endgame-1", SeriesID: intp(9)},
+			)
+			cause := csStoreWideErr(c.sentinel)
+			store.deleteIfErr = cause
+			rep := &csPhase1Reporter{}
+			done := csCaptureDone(t)
 
-	err := (&cleanupSeriesJob{}).Run(context.Background(), store, rep, false)
-	csRequireStopError(t, err, cause, "phase 1")
-	// The counts are logged before the error returns, so a failed op still says
-	// how far it got.
-	if d := done(); csDoneInt(t, d, "singleFound") != 1 || !csDoneBool(t, d, "stoppedPhase1") {
-		t.Fatalf("Done line must be logged before the stop error returns: %v", d)
-	}
+			err := (&cleanupSeriesJob{}).Run(context.Background(), store, rep, false)
+			csRequireStopError(t, err, cause, "phase 1")
+			// The counts are logged before the error returns, so a failed op still
+			// says how far it got.
+			d := done()
+			if csDoneInt(t, d, "singleFound") != 3 || !csDoneBool(t, d, "stoppedPhase1") {
+				t.Fatalf("Done line must be logged before the stop error returns: %v", d)
+			}
+			if got := csDoneInt(t, d, "singleNotReached"); got != 2 {
+				t.Errorf("singleNotReached = %d, want the 2 candidates behind the failed delete: %v", got, d)
+			}
+			csAssertBucketsAddUp(t, d)
 
-	if len(store.conditionalCalls) != 1 {
-		t.Fatalf("conditional deletes = %v, want exactly the first", store.conditionalCalls)
-	}
-	for _, id := range []string{"zero-year-1", "endgame-1"} {
-		if got := store.books[id].SeriesID; got == nil {
-			t.Errorf("book %s was unlinked after the store had already refused a delete", id)
-		}
-	}
-	if !csLogContains(rep, "stopped in phase 1") {
-		t.Fatalf("the stop must be in the warn line: %v", rep.logs)
+			if len(store.conditionalCalls) != 1 {
+				t.Fatalf("conditional deletes = %v, want exactly the first", store.conditionalCalls)
+			}
+			for _, id := range []string{"zero-year-1", "endgame-1"} {
+				if got := store.books[id].SeriesID; got == nil {
+					t.Errorf("book %s was unlinked after the store had already refused a delete", id)
+				}
+			}
+			if !csLogContains(rep, "stopped in phase 1", "2 single-book series and 0 duplicate groups were not reached") {
+				t.Fatalf("the stop and what it did not reach must be in the warn line: %v", rep.logs)
+			}
+		})
 	}
 }
 
 // Phase 2 re-homes a group's books before it deletes, so it stops the same way.
+// The group it did not get to is counted.
 func TestCleanupSeriesRun_Phase2StopsAtTheFirstDeleteTheStoreCannotAnswer(t *testing.T) {
-	store := newCsCondStore(
-		[]database.Series{
-			{ID: 7, Name: "Court of Owls"}, {ID: 8, Name: "court of owls"},
-			{ID: 9, Name: "Night of Owls"}, {ID: 10, Name: "night of owls"},
-		},
-		database.Book{ID: "court-of-owls-1", SeriesID: intp(7), SeriesSequence: intp(2)},
-		database.Book{ID: "court-of-owls-2", SeriesID: intp(8)},
-		database.Book{ID: "court-of-owls-3", SeriesID: intp(8)},
-		database.Book{ID: "night-of-owls-1", SeriesID: intp(9), SeriesSequence: intp(2)},
-		database.Book{ID: "night-of-owls-2", SeriesID: intp(10)},
-		database.Book{ID: "night-of-owls-3", SeriesID: intp(10)},
-	)
-	cause := errors.New("memdb is missing rows")
-	store.deleteIfErr = cause
-	rep := &csPhase1Reporter{}
-	done := csCaptureDone(t)
+	for _, c := range csStoreWideCauses {
+		t.Run(c.name, func(t *testing.T) {
+			store := newCsCondStore(
+				[]database.Series{
+					{ID: 7, Name: "Court of Owls"}, {ID: 8, Name: "court of owls"},
+					{ID: 9, Name: "Night of Owls"}, {ID: 10, Name: "night of owls"},
+				},
+				database.Book{ID: "court-of-owls-1", SeriesID: intp(7), SeriesSequence: intp(2)},
+				database.Book{ID: "court-of-owls-2", SeriesID: intp(8)},
+				database.Book{ID: "court-of-owls-3", SeriesID: intp(8)},
+				database.Book{ID: "night-of-owls-1", SeriesID: intp(9), SeriesSequence: intp(2)},
+				database.Book{ID: "night-of-owls-2", SeriesID: intp(10)},
+				database.Book{ID: "night-of-owls-3", SeriesID: intp(10)},
+			)
+			cause := csStoreWideErr(c.sentinel)
+			store.deleteIfErr = cause
+			rep := &csPhase1Reporter{}
+			done := csCaptureDone(t)
 
-	err := (&cleanupSeriesJob{}).Run(context.Background(), store, rep, false)
-	csRequireStopError(t, err, cause, "phase 2")
-	if d := done(); csDoneInt(t, d, "dupFound") != 1 || !csDoneBool(t, d, "stoppedPhase2") {
-		t.Fatalf("Done line must be logged before the stop error returns: %v", d)
-	}
+			err := (&cleanupSeriesJob{}).Run(context.Background(), store, rep, false)
+			csRequireStopError(t, err, cause, "phase 2")
+			d := done()
+			if csDoneInt(t, d, "dupFound") != 2 || !csDoneBool(t, d, "stoppedPhase2") {
+				t.Fatalf("Done line must be logged before the stop error returns: %v", d)
+			}
+			// Map order picks which group fails first; either way one is reached and
+			// the other is counted, with its one merged-from series.
+			if got := csDoneInt(t, d, "dupGroupsNotReached"); got != 1 {
+				t.Errorf("dupGroupsNotReached = %d, want the 1 group behind the failed delete: %v", got, d)
+			}
+			if got := csDoneInt(t, d, "dupNotReached"); got != 1 {
+				t.Errorf("dupNotReached = %d, want the 1 merged-from series of that group: %v", got, d)
+			}
+			csAssertBucketsAddUp(t, d)
 
-	if len(store.conditionalCalls) != 1 {
-		t.Fatalf("conditional deletes = %v, want only the first group's", store.conditionalCalls)
-	}
-	rehomed := 0
-	for _, id := range []string{"court-of-owls-1", "night-of-owls-1"} {
-		if got := store.books[id].SeriesID; got != nil && (*got == 8 || *got == 10) {
-			rehomed++
-		}
-	}
-	if rehomed != 1 {
-		t.Fatalf("%d groups re-homed their books, want exactly the one the store failed in", rehomed)
-	}
-	if !csLogContains(rep, "stopped in phase 2") {
-		t.Fatalf("the stop must be in the warn line: %v", rep.logs)
+			if len(store.conditionalCalls) != 1 {
+				t.Fatalf("conditional deletes = %v, want only the first group's", store.conditionalCalls)
+			}
+			rehomed := 0
+			for _, id := range []string{"court-of-owls-1", "night-of-owls-1"} {
+				if got := store.books[id].SeriesID; got != nil && (*got == 8 || *got == 10) {
+					rehomed++
+				}
+			}
+			if rehomed != 1 {
+				t.Fatalf("%d groups re-homed their books, want exactly the one the store failed in", rehomed)
+			}
+			if !csLogContains(rep, "stopped in phase 2", "0 single-book series and 1 duplicate groups were not reached") {
+				t.Fatalf("the stop and what it did not reach must be in the warn line: %v", rep.logs)
+			}
+		})
 	}
 }
 
 // Phase 1 stopped because the store cannot count; phase 2 would re-home an
-// unrelated group's books and then meet the same refusal, so it does not run.
+// unrelated group's books and then meet the same refusal, so it does not run, and
+// its group is counted as not reached.
 func TestCleanupSeriesRun_Phase2DoesNotRunAfterPhase1Stopped(t *testing.T) {
 	store := newCsCondStore(
 		[]database.Series{
@@ -535,12 +622,20 @@ func TestCleanupSeriesRun_Phase2DoesNotRunAfterPhase1Stopped(t *testing.T) {
 		database.Book{ID: "night-of-owls-1", SeriesID: intp(9)},
 		database.Book{ID: "night-of-owls-2", SeriesID: intp(9)},
 	)
-	cause := errors.New("memdb is missing rows")
+	cause := csStoreWideErr(database.ErrMemdbIncomplete)
 	store.deleteIfErr = cause
 	rep := &csPhase1Reporter{}
+	done := csCaptureDone(t)
 
 	err := (&cleanupSeriesJob{}).Run(context.Background(), store, rep, false)
 	csRequireStopError(t, err, cause, "phase 1")
+	d := done()
+	for k, want := range map[string]int{"dupFound": 1, "dupGroupsNotReached": 1, "dupNotReached": 1, "dupMergeFromSeries": 1, "singleNotReached": 0} {
+		if got := csDoneInt(t, d, k); got != want {
+			t.Errorf("Done %s = %d, want %d: %v", k, got, want, d)
+		}
+	}
+	csAssertBucketsAddUp(t, d)
 
 	if len(store.conditionalCalls) != 1 || store.conditionalCalls[0] != 7 {
 		t.Fatalf("conditional deletes = %v, want only phase 1's [7]", store.conditionalCalls)
