@@ -7,17 +7,21 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
 
+	"github.com/falkcorp/mediacore/entity"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 
+	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 // Native books Task kinds for conversion group T7, the internal/server op
@@ -99,6 +103,9 @@ func t7HeadEnv(rep opsregistry.Reporter, live bool) t7Env {
 		OpID:      opsregistry.ReporterOpID(rep),
 		SetResult: func(v any) error { return opsregistry.ReporterSetResult(rep, v) },
 		Touch:     func() { opsregistry.TouchLiveness(rep) },
+		// HEAD's cores that checkpoint write the remaining work, which HEAD's
+		// resume overlays onto the params; they never read it back.
+		Checkpoint: rep.Checkpoint,
 	}
 }
 
@@ -124,6 +131,89 @@ func t7NativeEnv(rc *tasks.RC) t7Env {
 		Touch:      rc.Progress().Tick,
 		Checkpoint: rc.Checkpoint,
 		Restore:    rc.Restore,
+	}
+}
+
+// t7Hold is a scan stand-down held for the rest of a run. A definition's HEAD
+// shell fills it from the acquire HEAD's body used, and its native shell from
+// rc.StandDown; a field a body does not use stays nil.
+type t7Hold struct {
+	// Ctx is the run context rebound to the hold, canceled when the lease is lost
+	// (HEAD's registry hold). Nil leaves the caller's ctx as it is.
+	Ctx context.Context
+	// Progress reports progress and renews the lease (HEAD's hold reporter). Nil
+	// leaves the env's Progress as it is.
+	Progress func(current, total int, msg string)
+	// Check is the per-item beat: it renews the lease and returns an error once
+	// the lease is gone or ctx is canceled.
+	Check func(ctx context.Context) error
+	// Renew renews the lease and reports whether it is still held.
+	Renew func() bool
+	// Finish releases the hold and returns runErr, joined with the lease-lost
+	// cause when the lease lapsed.
+	Finish func(runErr error) error
+}
+
+// t7StandDown is the acquire a body asks of its shell: hold the library scan's
+// stand-down for reason before the first write.
+type t7StandDown func(ctx context.Context, reason string) (t7Hold, error)
+
+// t7Rebind applies a hold to the run: the ctx the hold rebinds, and the env with
+// the hold's lease-renewing progress.
+func t7Rebind(ctx context.Context, env t7Env, h t7Hold) (context.Context, t7Env) {
+	if h.Ctx != nil {
+		ctx = h.Ctx
+	}
+	if h.Progress != nil {
+		env.Progress = h.Progress
+	}
+	return ctx, env
+}
+
+// t7HeadMetadataStandDown is HEAD's acquire for the metadata-applying ops:
+// opsregistry.HoldScanStandDown over the server's scan gate, keyed by the run's
+// own id and renewed on every progress stamp.
+func (s *Server) t7HeadMetadataStandDown(rep opsregistry.Reporter) t7StandDown {
+	return func(ctx context.Context, reason string) (t7Hold, error) {
+		hold, err := s.holdMetadataScanStandDown(ctx, rep, reason)
+		if err != nil {
+			return t7Hold{}, err
+		}
+		return t7Hold{
+			Ctx: hold.Context(),
+			Progress: func(current, total int, msg string) {
+				_ = hold.Reporter().UpdateProgress(current, total, msg)
+			},
+			Check:  opsregistry.ScanStandDownCheckpoint,
+			Renew:  hold.Beat,
+			Finish: hold.Finish,
+		}, nil
+	}
+}
+
+// t7NativeStandDown is the native acquire: rc.StandDown over the scan's key. An
+// empty key refuses, so a live write never runs without the interlock. The
+// kernel fences the run's writer when the lease is lost and cancels its context,
+// which Check and Renew report.
+func t7NativeStandDown(rc *tasks.RC, key tasks.Key) t7StandDown {
+	return func(ctx context.Context, reason string) (t7Hold, error) {
+		if key == "" {
+			return t7Hold{}, fmt.Errorf("no scan stand-down key configured, refusing to %s without it", reason)
+		}
+		h, err := rc.StandDown(key)
+		if err != nil {
+			return t7Hold{}, fmt.Errorf("%s: the library scan did not stand down: %w", reason, err)
+		}
+		return t7Hold{
+			Check: func(c context.Context) error {
+				if c.Err() != nil {
+					return context.Cause(c)
+				}
+				return nil
+			},
+			Renew:  func() bool { return ctx.Err() == nil },
+			Finish: func(runErr error) error { h.Release(); return runErr },
+		}, nil
 	}
 }
 
@@ -173,12 +263,24 @@ func (e t7Env) reporter() t7ProgressReporter { return t7ProgressReporter{env: e}
 // interface-width ratchet allows; the method set is the union.
 type t7Store interface {
 	t7StoreLibrary
+	t7StoreEntities
+}
+
+// t7StoreEntities is the reads of the author and series definitions.
+type t7StoreEntities interface {
+	authorReclassifyStore
 }
 
 // t7StoreLibrary is the reads of the library and batch-metadata definitions.
 type t7StoreLibrary interface {
 	librarySizeRefreshStore
 	batchApplyRefusalsResetStore
+	collectionRefreshStore
+	purgeSoftDeletedStore
+	folderAutoScanStore
+	diagnosticsAIStore
+	aiAuthorReviewStore
+	aiMergeApplyStore
 }
 
 // t7Writer is every write the converted cores make, composed from each
@@ -189,11 +291,42 @@ type t7StoreLibrary interface {
 // call through it is a direct store write.
 type t7Writer interface {
 	t7WriterLibrary
+	t7WriterFiles
+	t7WriterIntegrations
+	t7WriterAI
+	t7WriterEntities
+}
+
+// t7WriterEntities is the writes of the author and series definitions.
+type t7WriterEntities interface {
+	authorReclassifyWriter
 }
 
 // t7WriterLibrary is the writes of the library and batch-metadata definitions.
 type t7WriterLibrary interface {
 	batchApplyRefusalsResetWriter
+	collectionRefreshWriter
+	purgeSoftDeletedWriter
+	folderAutoScanWriter
+	libraryAIParseWriter
+	aiMergeApplyWriter
+}
+
+// t7WriterFiles is the writes of the file-writing definitions.
+type t7WriterFiles interface {
+	bulkWriteBackWriter
+}
+
+// t7WriterAI is the writes of the AI definitions.
+type t7WriterAI interface {
+	aiAuthorScanWriter
+}
+
+// t7WriterIntegrations is the writes of the iTunes and OpenLibrary definitions.
+type t7WriterIntegrations interface {
+	itunesImportWriter
+	olDownloadWriter
+	olImportWriter
 }
 
 // t7Deps is what the native kinds are built from (rule R10 item 4). Every
@@ -202,6 +335,10 @@ type t7WriterLibrary interface {
 type t7Deps struct {
 	// Store is the read side of the library store.
 	Store t7Store
+	// StandDownKey is the concurrency key the library scan kinds run under, which
+	// a native live write holds with rc.StandDown. Empty refuses a live write that
+	// needs the interlock.
+	StandDownKey tasks.Key
 	// NewWriter builds the write side over the run's gated writer. Per run: the
 	// writer it wraps belongs to that run's executor, which is why this is a
 	// constructor and not a field of the store.
@@ -383,6 +520,64 @@ func t7Common(head opsregistry.OperationDef, sched func(tasks.Kind) *tasks.Sched
 	return c
 }
 
+// t7ResAIScans is the AI scan store (ai_scans: phases, chunks, proposals),
+// which pkg/ops has no resource for; the AI author scan is its writer.
+const t7ResAIScans ops.Resource = "ai_scans"
+
+// t7ResDedupCandidates is the dedup candidate store the dedup engine's checks
+// write; pkg/ops has no constant for it.
+const t7ResDedupCandidates ops.Resource = "dedup_candidates"
+
+// t7ResCollections is the dynamic-collection member lists. HEAD's def names it
+// as an informational write; pkg/ops has no constant for it.
+const t7ResCollections ops.Resource = "collections"
+
+// t7ActivityWriter is the activity-log writes the definitions make: the entries
+// a run emits and the flush that closes its batch.
+type t7ActivityWriter interface {
+	// FlushActivityOp flushes the run's buffered activity entries.
+	FlushActivityOp(opID string)
+	// EmitActivityInfo writes one activity entry for the run.
+	EmitActivityInfo(opID, entryType, source, summary string, tags ...string)
+	// LogActivityBatch adds one item to the run's batched activity entry.
+	LogActivityBatch(opID, batchType, source string, item activity.BatchItem)
+}
+
+// headT7Activity is HEAD's activity side: the server's activity writer, each
+// call made as HEAD's body made it. A nil writer drops the call, as HEAD's nil
+// check did (activity.LogBatch also tolerates nil).
+type headT7Activity struct{ w *activity.Writer }
+
+func (a headT7Activity) FlushActivityOp(opID string) {
+	if a.w != nil {
+		activity.FlushOperation(a.w, opID)
+	}
+}
+
+func (a headT7Activity) EmitActivityInfo(opID, entryType, source, summary string, tags ...string) {
+	if a.w != nil {
+		activity.EmitInfo(a.w, opID, entryType, source, summary, tags...)
+	}
+}
+
+func (a headT7Activity) LogActivityBatch(opID, batchType, source string, item activity.BatchItem) {
+	if a.w != nil {
+		activity.LogBatch(a.w, opID, batchType, source, item)
+	}
+}
+
+// t7Res maps HEAD resource names to refs (rule R7: res(s) = tasks.Res("books", s)).
+func t7Res(rs ...ops.Resource) []entity.Ref {
+	out := make([]entity.Ref, 0, len(rs))
+	for _, r := range rs {
+		out = append(out, tasks.Res("books", string(r)))
+	}
+	return out
+}
+
+// t7Writes is the Effects of a kind that writes rs (rule R7).
+func t7Writes(rs ...ops.Resource) tasks.Effects { return tasks.Writes(t7Res(rs...)...) }
+
 // t7KindList is every native kind this file group builds, as a package-level
 // function: tasklint's unregistered-kind rule counts package-level list
 // functions only, and not a method. Rule R9: sched is the owner's schedule
@@ -391,6 +586,19 @@ func t7KindList(s *Server, deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) 
 	return []tasks.Definition{
 		s.librarySizeRefreshNative(deps, sched),
 		s.batchApplyRefusalsResetNative(deps, sched),
+		s.itunesImportNative(deps, sched),
+		s.olDownloadNative(deps, sched),
+		s.olImportNative(deps, sched),
+		s.aiAuthorScanNative(deps, sched),
+		s.collectionRefreshNative(deps, sched),
+		s.authorReclassifyNative(deps, sched),
+		s.bulkWriteBackNative(deps, sched),
+		s.purgeSoftDeletedNative(deps, sched),
+		s.folderAutoScanNative(deps, sched),
+		s.libraryAIParseNative(deps, sched),
+		s.diagnosticsAINative(deps, sched),
+		s.aiAuthorReviewNative(deps, sched),
+		s.aiMergeApplyNative(deps, sched),
 	}
 }
 

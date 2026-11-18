@@ -211,7 +211,7 @@ func (s *Server) RegisterBatchApplyRefusalsResetOp(reg *opsregistry.Registry) er
 func (s *Server) batchApplyRefusalsResetNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	kind := t7KindFor(batchApplyRefusalsResetOpID)
 	c := t7Common(s.batchApplyRefusalsResetDef(), sched)
-	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)))
+	c.Effects = t7Writes(ops.ResBooks)
 	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: c,
 		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {

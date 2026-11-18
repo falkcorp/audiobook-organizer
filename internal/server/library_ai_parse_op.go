@@ -12,11 +12,14 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 // libraryAIParseParams carries one queued batch of books to AI-parse.
@@ -30,17 +33,94 @@ type libraryAIParseParams struct {
 	Books []scanner.AIParseCandidate `json:"books"`
 }
 
-// RegisterLibraryAIParseOp registers the "library.ai-parse" v2 OperationDef and
-// wires the scanner's enqueue hook to it.
-//
-// Registration and wiring live together on purpose. The hook is a package-level
-// variable in internal/scanner, so if it were set anywhere else a future edit
-// could unregister the op and leave the hook pointing at an EnqueueOp call that
-// fails for every scan -- which the scan would absorb by parsing inline, i.e.
-// silently reverting to the blocking behaviour this op exists to remove.
-func (s *Server) RegisterLibraryAIParseOp(reg *opsregistry.Registry) error {
-	if err := reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "library.ai-parse",
+// libraryAIParseOpID is HEAD's def ID for the AI filename parse.
+const libraryAIParseOpID = "library.ai-parse"
+
+// libraryAIParseWriter is the one write the op makes: the AI phase parses the
+// filenames with the configured LLM and fills the empty fields of the candidates'
+// rows.
+type libraryAIParseWriter interface {
+	ParseBooks(ctx context.Context, books []scanner.AIParseCandidate, scanLog logger.Logger) (scanner.AIPhaseSummary, error)
+}
+
+// libraryAIParseEnv is what the shared core takes from its shell (rules R2, R10).
+type libraryAIParseEnv struct {
+	t7Env
+	Writer libraryAIParseWriter
+}
+
+// libraryAIParseCore is the body of the op, shared by HEAD's shell and the native
+// kind.
+func libraryAIParseCore(ctx context.Context, p libraryAIParseParams, env libraryAIParseEnv) error {
+	if len(p.Books) == 0 {
+		env.progress(1, 1, "No books to parse")
+		return nil
+	}
+	env.progress(0, len(p.Books), fmt.Sprintf("Parsing %d filename(s) with the configured LLM...", len(p.Books)))
+	// Bridge the reporter in rather than using logger.New: runAIBatchPhase
+	// stamps progress per LLM batch via log.UpdateProgress, and a bare
+	// StandardLogger sends those stamps to stdout where the registry
+	// cannot see them. The watchdog cancels an op that reports no
+	// progress for ProgressTimeout, and a 200-book batch is ~10 LLM calls
+	// of up to 30s each -- comfortably past it. This phase is already on
+	// record for that failure: it is why library.scan could finish its
+	// entire file walk and still be canceled for inactivity.
+	opLog := operations.LoggerFromReporter(env.reporter())
+	summary, err := env.Writer.ParseBooks(ctx, p.Books, opLog)
+	if err != nil {
+		return err
+	}
+
+	// Report what actually happened, into the OPERATION record.
+	//
+	// Every failure inside the AI phase is a log.Warn and a nil return,
+	// and LoggerFromReporter only overrides UpdateProgress and With --
+	// Info/Warn go to the process log. So without this, a run that
+	// aborted on batch 1 of 10 with a revoked API key finished green,
+	// claiming it had parsed every filename, with the only evidence in
+	// journalctl on the box.
+	level := slog.LevelInfo
+	// Degraded (rows discarded, nothing else wrong) is a warn-level line,
+	// not a failure: the registry has no completed-with-warnings status.
+	if summary.Failed() || summary.Degraded() {
+		level = slog.LevelWarn
+	}
+	env.Log(level, summary.String())
+	// The per-batch detail, one line each, into the operation record.
+	// This is the material that used to exist only at the failure site
+	// in ai_batch_phase.go and die there: WHICH books were in the failed
+	// batch and WHAT the backend said. A run that reports "1 batch
+	// failure(s)" and nothing else cannot be acted on.
+	for _, line := range summary.FailureDetails() {
+		env.Log(slog.LevelWarn, line)
+	}
+	env.progress(summary.BooksParsed+summary.BooksDiscarded, len(p.Books), summary.String())
+
+	// Failing on any failed batch or lost save, not only on an abort.
+	//
+	// Aborted() is AbortedPermanent || AbortedThreshold, and a
+	// single-batch run whose only batch fails trips neither -- so
+	// BatchesOK=0, BatchesTotal=1, BatchesFailed=1 reported COMPLETED
+	// with a full green bar, dozens of times in a row, in the report
+	// that prompted this. See AIPhaseSummary.Failed for why a zero
+	// change count still must NOT be a failure.
+	if summary.Failed() {
+		return fmt.Errorf("AI parsing failed: %s", summary)
+	}
+	return nil
+}
+
+// headLibraryAIParseWriter is HEAD's write: the scanner's RunAIParseForBooks.
+type headLibraryAIParseWriter struct{}
+
+func (headLibraryAIParseWriter) ParseBooks(ctx context.Context, books []scanner.AIParseCandidate, scanLog logger.Logger) (scanner.AIPhaseSummary, error) {
+	return scanner.RunAIParseForBooks(ctx, books, scanLog)
+}
+
+// libraryAIParseDef is HEAD's definition. Its Run is the v2 shell.
+func (s *Server) libraryAIParseDef() opsregistry.OperationDef {
+	return opsregistry.OperationDef{
+		ID:              libraryAIParseOpID,
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "library",
 		DisplayName:     "AI Filename Parsing",
@@ -82,7 +162,7 @@ func (s *Server) RegisterLibraryAIParseOp(reg *opsregistry.Registry) error {
 		// Deliberately NOT "library.scan": sharing that key would make AI
 		// parsing block the next scan, which is the exact coupling being
 		// removed here.
-		ConcurrencyKey: "library.ai-parse",
+		ConcurrencyKey: libraryAIParseOpID,
 		// 4h. One operation is aiParseEnqueueChunk (200) books, split by
 		// ai_batch_phase into calls of ai_backend.parse_batch_size (default 20)
 		// with a 2s delay between them: ~10 calls plus 20s of pacing at the
@@ -112,64 +192,47 @@ func (s *Server) RegisterLibraryAIParseOp(reg *opsregistry.Registry) error {
 					return fmt.Errorf("decode params for library.ai-parse: %w", err)
 				}
 			}
-			if len(p.Books) == 0 {
-				_ = reporter.UpdateProgress(1, 1, "No books to parse")
-				return nil
-			}
-			_ = reporter.UpdateProgress(0, len(p.Books), fmt.Sprintf("Parsing %d filename(s) with the configured LLM...", len(p.Books)))
-			// Bridge the reporter in rather than using logger.New: runAIBatchPhase
-			// stamps progress per LLM batch via log.UpdateProgress, and a bare
-			// StandardLogger sends those stamps to stdout where the registry
-			// cannot see them. The watchdog cancels an op that reports no
-			// progress for ProgressTimeout, and a 200-book batch is ~10 LLM calls
-			// of up to 30s each -- comfortably past it. This phase is already on
-			// record for that failure: it is why library.scan could finish its
-			// entire file walk and still be canceled for inactivity.
-			opLog := operations.LoggerFromReporter(registryProgressAdapter{r: reporter})
-			summary, err := scanner.RunAIParseForBooks(ctx, p.Books, opLog)
-			if err != nil {
-				return err
-			}
-
-			// Report what actually happened, into the OPERATION record.
-			//
-			// Every failure inside the AI phase is a log.Warn and a nil return,
-			// and LoggerFromReporter only overrides UpdateProgress and With --
-			// Info/Warn go to the process log. So without this, a run that
-			// aborted on batch 1 of 10 with a revoked API key finished green,
-			// claiming it had parsed every filename, with the only evidence in
-			// journalctl on the box.
-			level := slog.LevelInfo
-			// Degraded (rows discarded, nothing else wrong) is a warn-level line,
-			// not a failure: the registry has no completed-with-warnings status.
-			if summary.Failed() || summary.Degraded() {
-				level = slog.LevelWarn
-			}
-			_ = reporter.Log(level, summary.String())
-			// The per-batch detail, one line each, into the operation record.
-			// This is the material that used to exist only at the failure site
-			// in ai_batch_phase.go and die there: WHICH books were in the failed
-			// batch and WHAT the backend said. A run that reports "1 batch
-			// failure(s)" and nothing else cannot be acted on.
-			for _, line := range summary.FailureDetails() {
-				_ = reporter.Log(slog.LevelWarn, line)
-			}
-			_ = reporter.UpdateProgress(summary.BooksParsed+summary.BooksDiscarded, len(p.Books), summary.String())
-
-			// Failing on any failed batch or lost save, not only on an abort.
-			//
-			// Aborted() is AbortedPermanent || AbortedThreshold, and a
-			// single-batch run whose only batch fails trips neither -- so
-			// BatchesOK=0, BatchesTotal=1, BatchesFailed=1 reported COMPLETED
-			// with a full green bar, dozens of times in a row, in the report
-			// that prompted this. See AIPhaseSummary.Failed for why a zero
-			// change count still must NOT be a failure.
-			if summary.Failed() {
-				return fmt.Errorf("AI parsing failed: %s", summary)
-			}
-			return nil
+			return libraryAIParseCore(ctx, p, libraryAIParseEnv{t7Env: t7HeadEnv(reporter, true), Writer: headLibraryAIParseWriter{}})
 		},
-	}); err != nil {
+	}
+}
+
+// libraryAIParseNative is the native books.library.ai-parse kind. HEAD runs it
+// only live (no preview, a library-write capability), so a Preview run is
+// refused. It fills the candidates' book rows from the LLM's parse.
+func (s *Server) libraryAIParseNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	kind := t7KindFor(libraryAIParseOpID)
+	c := t7Common(s.libraryAIParseDef(), sched)
+	c.Effects = t7Writes(ops.ResBooks)
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			if err := t7LiveOnly(rc, kind); err != nil {
+				return struct{}{}, err
+			}
+			p, err := t7DecodeNative[libraryAIParseParams](kind, raw)
+			if err != nil {
+				return struct{}{}, err
+			}
+			w, err := t7NewWriter(kind, deps, rc)
+			if err != nil {
+				return struct{}{}, err
+			}
+			return struct{}{}, libraryAIParseCore(rc.Context(), p, libraryAIParseEnv{t7Env: t7NativeEnv(rc), Writer: w})
+		},
+	})
+}
+
+// RegisterLibraryAIParseOp registers the "library.ai-parse" v2 OperationDef and
+// wires the scanner's enqueue hook to it.
+//
+// Registration and wiring live together on purpose. The hook is a package-level
+// variable in internal/scanner, so if it were set anywhere else a future edit
+// could unregister the op and leave the hook pointing at an EnqueueOp call that
+// fails for every scan -- which the scan would absorb by parsing inline, i.e.
+// silently reverting to the blocking behaviour this op exists to remove.
+func (s *Server) RegisterLibraryAIParseOp(reg *opsregistry.Registry) error {
+	if err := reg.RegisterOp(s.libraryAIParseDef()); err != nil {
 		return err
 	}
 
@@ -204,7 +267,7 @@ func (s *Server) RegisterLibraryAIParseOp(reg *opsregistry.Registry) error {
 	scanner.SetEnqueueAIParse(func(_ context.Context, books []scanner.AIParseCandidate) error {
 		enqCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		opID, err := reg.EnqueueOp(enqCtx, "library.ai-parse", libraryAIParseParams{Books: books})
+		opID, err := reg.EnqueueOp(enqCtx, libraryAIParseOpID, libraryAIParseParams{Books: books})
 		if err != nil {
 			return err
 		}

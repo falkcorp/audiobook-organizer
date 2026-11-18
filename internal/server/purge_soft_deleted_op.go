@@ -12,12 +12,15 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 // purgeSoftDeletedOpID is the manual "Purge soft-deleted" operation behind
@@ -57,9 +60,139 @@ func init() {
 	})
 }
 
-// RegisterPurgeSoftDeletedOp registers library.purge-soft-deleted.
-func (s *Server) RegisterPurgeSoftDeletedOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
+// purgeSoftDeletedNativeParams are the native kind's params: HEAD's without the
+// two dry-run spellings, which the run's mode carries.
+type purgeSoftDeletedNativeParams struct {
+	DeleteFiles   bool `json:"delete_files,omitempty"`
+	OlderThanDays *int `json:"older_than_days,omitempty"`
+	// TrashedBefore (RFC 3339) is the instant the preview returned. A live pass
+	// needs it and takes no book trashed after it.
+	TrashedBefore *time.Time `json:"trashed_before,omitempty"`
+}
+
+// purgeSoftDeletedStore is the read the preview makes: the purge's classification
+// pass with DryRun set, which changes nothing.
+type purgeSoftDeletedStore interface {
+	RunPurgePreview(ctx context.Context, opts audiobooks.PurgeOptions) (*audiobooks.PurgeResult, error)
+}
+
+// purgeSoftDeletedWriter is the live purge: it deletes the trashed books that
+// own nothing, and their files when DeleteFiles is set.
+type purgeSoftDeletedWriter interface {
+	RunPurge(ctx context.Context, opts audiobooks.PurgeOptions) (*audiobooks.PurgeResult, error)
+	t7ActivityWriter
+}
+
+// purgeSoftDeletedEnv is what the shared core takes from its shell (rules R2,
+// R10).
+type purgeSoftDeletedEnv struct {
+	t7Env
+	Store  purgeSoftDeletedStore
+	Writer purgeSoftDeletedWriter
+}
+
+// purgeSoftDeletedCore is the body of the op, shared by HEAD's shell and the
+// native kind. It returns the capped result (non-nil whenever the pass reported
+// one, including a refused or stopped pass) and also hands it to env.SetResult
+// where the shell has one, at the point HEAD stored it.
+func purgeSoftDeletedCore(ctx context.Context, p purgeSoftDeletedNativeParams, env purgeSoftDeletedEnv) (*audiobooks.PurgeResult, error) {
+	dryRun := !env.Live
+	if (dryRun && env.Store == nil) || (!dryRun && env.Writer == nil) {
+		return nil, fmt.Errorf("%s: audiobook service not initialized", purgeSoftDeletedOpID)
+	}
+	opID := env.OpID
+
+	verb := "Purging"
+	if dryRun {
+		verb = "Previewing the purge of"
+	}
+	env.progress(0, 0, verb+" soft-deleted books: listing the trash")
+	// The callback runs inside the purge's worker goroutines; the progress hook
+	// is safe for that and the callback keeps no state of its own.
+	opts := audiobooks.PurgeOptions{
+		DeleteFiles:   p.DeleteFiles,
+		OlderThanDays: p.OlderThanDays,
+		TrashedBefore: p.TrashedBefore,
+		DryRun:        dryRun,
+		Progress: func(done, total int) {
+			env.progress(done, total, fmt.Sprintf("%s soft-deleted books: %d of %d decided", verb, done, total))
+		},
+	}
+	var (
+		res *audiobooks.PurgeResult
+		err error
+	)
+	if dryRun {
+		res, err = env.Store.RunPurgePreview(ctx, opts)
+	} else {
+		res, err = env.Writer.RunPurge(ctx, opts)
+	}
+	if err != nil {
+		// A pass that was refused before it began still returns its result
+		// (StoppedEarly, StopReason). Store it so GET /operations/:id/result
+		// says why; the op fails with the error either way.
+		var capped *audiobooks.PurgeResult
+		if res != nil {
+			capped = res.Capped(purgeResultCap)
+			if env.SetResult != nil {
+				if serr := env.SetResult(capped); serr != nil {
+					purgeOpLog.Warn("%s opID=%s: result of the refused pass not stored: %s", purgeSoftDeletedOpID, logger.SanitizeLogValue(opID), logger.SanitizeLogValue(serr.Error()))
+				}
+			}
+		}
+		return capped, fmt.Errorf("%s: %w", purgeSoftDeletedOpID, err)
+	}
+
+	// (c) one summary line, in the server log, the op's own log and the
+	// activity log, with every count the pass kept.
+	msg := res.Summary()
+	purgeOpLog.Info("%s opID=%s deleteFiles=%t", msg, logger.SanitizeLogValue(opID), p.DeleteFiles)
+	env.Log(slog.LevelInfo, msg)
+	if !dryRun && opID != "" {
+		env.Writer.EmitActivityInfo(opID, purgeSoftDeletedOpID, "purge-deleted", msg, activity.AlwaysShow)
+		for _, e := range res.Capped(purgeResultCap).Errors {
+			env.Writer.LogActivityBatch(opID, purgeSoftDeletedOpID, "purge-deleted",
+				activity.BatchItem{Name: e, Detail: "error"})
+		}
+		env.Writer.FlushActivityOp(opID)
+	}
+	if res.StoppedEarly {
+		// RunPurge's last callback reported how many it decided; do not
+		// overwrite that with "all of them".
+		env.progress(res.Decided(), res.Attempted, msg)
+	} else {
+		env.progress(res.Attempted, res.Attempted, msg)
+	}
+
+	// Stored even when the pass stopped early: the counts of the books it did
+	// decide, and stopped_early/stop_reason, are what the operator reads.
+	capped := res.Capped(purgeResultCap)
+	if env.SetResult != nil {
+		if err := env.SetResult(capped); err != nil {
+			return capped, fmt.Errorf("%s: store the result: %w", purgeSoftDeletedOpID, err)
+		}
+	}
+	return capped, purgeStoppedError(ctx, purgeSoftDeletedOpID, res)
+}
+
+// headPurgeSoftDeleted is HEAD's side of both interfaces: the audiobook
+// service's RunPurge, and the server's activity writer.
+type headPurgeSoftDeleted struct {
+	headT7Activity
+	svc *audiobooks.AudiobookService
+}
+
+func (h headPurgeSoftDeleted) RunPurgePreview(ctx context.Context, opts audiobooks.PurgeOptions) (*audiobooks.PurgeResult, error) {
+	return h.svc.RunPurge(ctx, opts)
+}
+
+func (h headPurgeSoftDeleted) RunPurge(ctx context.Context, opts audiobooks.PurgeOptions) (*audiobooks.PurgeResult, error) {
+	return h.svc.RunPurge(ctx, opts)
+}
+
+// purgeSoftDeletedDef is HEAD's definition. Its Run is the v2 shell.
+func (s *Server) purgeSoftDeletedDef() opsregistry.OperationDef {
+	return opsregistry.OperationDef{
 		ID:              purgeSoftDeletedOpID,
 		Preview:         opsregistry.PreviewSpec{Params: PurgeSoftDeletedOpParams{}},
 		Liveness:        opsregistry.LivenessManual,
@@ -76,7 +209,12 @@ func (s *Server) RegisterPurgeSoftDeletedOp(reg *opsregistry.Registry) error {
 		Permissions:    []auth.Permission{auth.PermLibraryDelete},
 		Capabilities:   []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
 		Run:            s.runPurgeSoftDeletedOp,
-	})
+	}
+}
+
+// RegisterPurgeSoftDeletedOp registers library.purge-soft-deleted.
+func (s *Server) RegisterPurgeSoftDeletedOp(reg *opsregistry.Registry) error {
+	return reg.RegisterOp(s.purgeSoftDeletedDef())
 }
 
 func (s *Server) runPurgeSoftDeletedOp(ctx context.Context, raw json.RawMessage, reporter opsregistry.Reporter) error {
@@ -90,67 +228,45 @@ func (s *Server) runPurgeSoftDeletedOp(ctx context.Context, raw json.RawMessage,
 	if err != nil {
 		return err
 	}
-	if s.audiobookService == nil {
-		return fmt.Errorf("%s: audiobook service not initialized", purgeSoftDeletedOpID)
+	env := purgeSoftDeletedEnv{t7Env: t7HeadEnv(reporter, !dryRun)}
+	if s.audiobookService != nil {
+		h := headPurgeSoftDeleted{headT7Activity: headT7Activity{w: s.activityWriter}, svc: s.audiobookService}
+		env.Store, env.Writer = h, h
 	}
-	opID := opsregistry.ReporterOpID(reporter)
+	_, err = purgeSoftDeletedCore(ctx, purgeSoftDeletedNativeParams{
+		DeleteFiles: p.DeleteFiles, OlderThanDays: p.OlderThanDays, TrashedBefore: p.TrashedBefore,
+	}, env)
+	return err
+}
 
-	verb := "Purging"
-	if dryRun {
-		verb = "Previewing the purge of"
-	}
-	_ = reporter.UpdateProgress(0, 0, verb+" soft-deleted books: listing the trash")
-	// The callback runs inside the purge's worker goroutines; the reporter is
-	// safe for that and the callback keeps no state of its own.
-	res, err := s.audiobookService.RunPurge(ctx, audiobooks.PurgeOptions{
-		DeleteFiles:   p.DeleteFiles,
-		OlderThanDays: p.OlderThanDays,
-		TrashedBefore: p.TrashedBefore,
-		DryRun:        dryRun,
-		Progress: func(done, total int) {
-			_ = reporter.UpdateProgress(done, total, fmt.Sprintf("%s soft-deleted books: %d of %d decided", verb, done, total))
+// purgeSoftDeletedNative is the native books.library.purge-soft-deleted kind.
+// Preview classifies the trash through the read side; Live deletes through the
+// writer. It returns the capped result HEAD stored with ReporterSetResult.
+func (s *Server) purgeSoftDeletedNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	kind := t7KindFor(purgeSoftDeletedOpID)
+	c := t7Common(s.purgeSoftDeletedDef(), sched)
+	c.Effects = t7Writes(ops.ResBooks)
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, *audiobooks.PurgeResult]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (*audiobooks.PurgeResult, error) {
+			p, err := t7DecodeNative[purgeSoftDeletedNativeParams](kind, raw)
+			if err != nil {
+				return nil, err
+			}
+			if err := t7NeedStore(kind, deps); err != nil {
+				return nil, err
+			}
+			env := purgeSoftDeletedEnv{t7Env: t7NativeEnv(rc), Store: deps.Store}
+			if env.Live {
+				w, err := t7NewWriter(kind, deps, rc)
+				if err != nil {
+					return nil, err
+				}
+				env.Writer = w
+			}
+			return purgeSoftDeletedCore(rc.Context(), p, env)
 		},
 	})
-	if err != nil {
-		// A pass that was refused before it began still returns its result
-		// (StoppedEarly, StopReason). Store it so GET /operations/:id/result
-		// says why; the op fails with the error either way.
-		if res != nil {
-			if serr := opsregistry.ReporterSetResult(reporter, res.Capped(purgeResultCap)); serr != nil {
-				purgeOpLog.Warn("%s opID=%s: result of the refused pass not stored: %s", purgeSoftDeletedOpID, logger.SanitizeLogValue(opID), logger.SanitizeLogValue(serr.Error()))
-			}
-		}
-		return fmt.Errorf("%s: %w", purgeSoftDeletedOpID, err)
-	}
-
-	// (c) one summary line, in the server log, the op's own log and the
-	// activity log, with every count the pass kept.
-	msg := res.Summary()
-	purgeOpLog.Info("%s opID=%s deleteFiles=%t", msg, logger.SanitizeLogValue(opID), p.DeleteFiles)
-	_ = reporter.Log(slog.LevelInfo, msg)
-	if s.activityWriter != nil && opID != "" {
-		activity.EmitInfo(s.activityWriter, opID, purgeSoftDeletedOpID, "purge-deleted", msg,
-			activity.AlwaysShow)
-		for _, e := range res.Capped(purgeResultCap).Errors {
-			activity.LogBatch(s.activityWriter, opID, purgeSoftDeletedOpID, "purge-deleted",
-				activity.BatchItem{Name: e, Detail: "error"})
-		}
-		activity.FlushOperation(s.activityWriter, opID)
-	}
-	if res.StoppedEarly {
-		// RunPurge's last callback reported how many it decided; do not
-		// overwrite that with "all of them".
-		_ = reporter.UpdateProgress(res.Decided(), res.Attempted, msg)
-	} else {
-		_ = reporter.UpdateProgress(res.Attempted, res.Attempted, msg)
-	}
-
-	// Stored even when the pass stopped early: the counts of the books it did
-	// decide, and stopped_early/stop_reason, are what the operator reads.
-	if err := opsregistry.ReporterSetResult(reporter, res.Capped(purgeResultCap)); err != nil {
-		return fmt.Errorf("%s: store the result: %w", purgeSoftDeletedOpID, err)
-	}
-	return purgeStoppedError(ctx, purgeSoftDeletedOpID, res)
 }
 
 // purgeStoppedError is the error an operation ends with when its purge pass
