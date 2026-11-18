@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize.go
-// version: 1.12.2
+// version: 1.12.3
 // guid: b3c4d5e6-f7a8-9012-bcde-f01234567890
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // Package handlers — OrganizeHandler covers the organize-preview and
 // single-book organize HTTP endpoints.
@@ -153,6 +153,10 @@ func (h *OrganizeHandler) PreviewOrganize(c *gin.Context) {
 
 	preview, err := h.previewSvc.PreviewOrganize(id)
 	if err != nil {
+		if retiredErr, ok := errors.AsType[*organizer.LibraryCopyRetiredError](err); ok {
+			c.JSON(http.StatusConflict, libraryCopyRetiredBody(retiredErr))
+			return
+		}
 		if strings.Contains(err.Error(), "not found") {
 			httputil.RespondWithNotFound(c, "book", id)
 			return
@@ -186,6 +190,19 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 	}
 	defer hold.Release()
 	h.organizeBookCore(c.Request.Context(), ginOrganizeResponder{c}, id, subject)
+}
+
+// libraryCopyRetiredBody is the 409 body of an organize or preview refused
+// because the book's only library copy was merged away.
+func libraryCopyRetiredBody(e *organizer.LibraryCopyRetiredError) gin.H {
+	return gin.H{
+		"error":        "organize declined: this book's only library copy was merged away; revive or un-merge it first",
+		"category":     organizer.CollisionLibraryCopyRetired,
+		"reason":       e.Error(),
+		"book_id":      e.BookID,
+		"copy_book_id": e.CopyID,
+		"copy_path":    e.CopyPath,
+	}
 }
 
 // organizeBookCore is POST /audiobooks/:id/organize after its scan lock is
@@ -226,9 +243,19 @@ func (h *OrganizeHandler) organizeBookCore(ctx context.Context, r organizeRespon
 	// and the organizer's same-hash check reported the book's own copy as a
 	// foreign duplicate -- a 500 and a dedup candidate pairing the book with
 	// itself (2026-09-30). PreviewOrganize resolves with the same function.
+	//
+	// A book whose only library copy was merged away is refused, not organized:
+	// the original would be copied beside the merged row's file. The scan lock
+	// step resolves to the book itself in that case (it has no copy to lock),
+	// so a book that resolved to itself is asked again here, under the lock.
 	book := locked
-	if book == nil {
-		book = organizer.ResolveOrganizeSubject(h.resolveLibraryCopy, requested)
+	if book == nil || book.ID == requested.ID {
+		var rerr error
+		book, rerr = organizer.ResolveOrganizeSubject(h.resolveLibraryCopy, requested)
+		if retiredErr, ok := errors.AsType[*organizer.LibraryCopyRetiredError](rerr); ok {
+			r.json(http.StatusConflict, libraryCopyRetiredBody(retiredErr))
+			return
+		}
 	}
 	originalID := ""
 	if book.ID != requested.ID {

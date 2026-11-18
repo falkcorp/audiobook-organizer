@@ -1,7 +1,7 @@
 // file: internal/organizer/preview.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: f1a2b3c4-d5e6-7890-abcd-ef1234567890
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package organizer
 
@@ -95,7 +95,12 @@ func (ops *PreviewService) PreviewOrganize(bookID string) (*PreviewResponse, err
 	// with a library copy that is the copy: every read below -- file rows,
 	// narrators, the target path -- must use its id, not the requested one,
 	// or the preview shows the copy's path over the original's files.
-	book := ResolveOrganizeSubject(ops.ResolveLibraryCopy, requested)
+	book, rerr := ResolveOrganizeSubject(ops.ResolveLibraryCopy, requested)
+	if rerr != nil {
+		// The apply would refuse the same way; promising a copy here would be
+		// a preview the apply does not keep.
+		return nil, rerr
+	}
 	libraryCopyOf := ""
 	if book.ID != requested.ID {
 		libraryCopyOf = requested.ID

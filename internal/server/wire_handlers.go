@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.64.11
+// version: 2.64.12
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-11-10
+// last-edited: 2026-11-18
 
 package server
 
@@ -814,9 +814,9 @@ func (s *Server) newOrganizeHandler() *handlers.OrganizeHandler {
 // time; nil (metafetch not wired) means every book organizes as itself, as it
 // did before the resolver existed.
 func (s *Server) organizeLibraryCopyResolver() organizer.LibraryCopyResolver {
-	return func(b *database.Book) (*database.Book, bool) {
+	return func(b *database.Book) (*database.Book, bool, *database.Book) {
 		if s.metadataFetchService == nil {
-			return b, true
+			return b, true, nil
 		}
 		return s.metadataFetchService.ExistingLibraryCopyOfFile(b)
 	}

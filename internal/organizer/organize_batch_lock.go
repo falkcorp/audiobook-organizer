@@ -1,7 +1,7 @@
 // file: internal/organizer/organize_batch_lock.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9a4c2e71-3b8d-4f15-a6e0-c5d7b1f3e284
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package organizer
 
@@ -26,7 +26,10 @@ var errBatchBookBusy = errors.New("book busy")
 // to (see Service.ResolveLibraryCopy).
 func (orgSvc *Service) batchLockSet(book *database.Book) []string {
 	ids := []string{book.ID}
-	if subject := ResolveOrganizeSubject(orgSvc.ResolveLibraryCopy, book); subject != nil && subject.ID != book.ID {
+	// A retired-only copy leaves the subject as the book itself, which is the
+	// row the batch organize acts on either way; the error is for the
+	// single-book paths that must refuse.
+	if subject, _ := ResolveOrganizeSubject(orgSvc.ResolveLibraryCopy, book); subject != nil && subject.ID != book.ID {
 		ids = append(ids, subject.ID)
 	}
 	slices.Sort(ids)
