@@ -1,5 +1,5 @@
 // file: internal/server/handlers/organize.go
-// version: 1.12.3
+// version: 1.13.0
 // guid: b3c4d5e6-f7a8-9012-bcde-f01234567890
 // last-edited: 2026-11-18
 
@@ -210,11 +210,13 @@ func libraryCopyRetiredBody(e *organizer.LibraryCopyRetiredError) gin.H {
 // outcome: the handler writes it as the HTTP response, the queued op turns an
 // error status into its failure.
 //
-// locked is the row lockOrganizeSet resolved under the scan lock (the library
-// copy it locked, or the book itself). The core acts on it rather than
-// resolving again, so it writes exactly the copy it holds; nil means the lock
-// step could not resolve, and the core resolves here.
-func (h *OrganizeHandler) organizeBookCore(ctx context.Context, r organizeResponder, id string, locked *database.Book) {
+// locked is what lockOrganizeSet resolved under the scan lock: the row it
+// locked (the library copy, or the book itself) and, for a book whose only
+// library copy was merged away, the refusal. The core acts on that row and
+// answers that refusal; it never swaps in a row resolved later, because a row
+// outside the hold has no scan lock. nil means the lock step could not resolve
+// (no store, or no such book), and the core resolves here.
+func (h *OrganizeHandler) organizeBookCore(ctx context.Context, r organizeResponder, id string, locked *organizeSubject) {
 
 	// Correlation key only — no operations row is created: undo replays the
 	// OperationChange records with a GetOperationChanges prefix scan keyed on
@@ -245,15 +247,31 @@ func (h *OrganizeHandler) organizeBookCore(ctx context.Context, r organizeRespon
 	// itself (2026-09-30). PreviewOrganize resolves with the same function.
 	//
 	// A book whose only library copy was merged away is refused, not organized:
-	// the original would be copied beside the merged row's file. The scan lock
-	// step resolves to the book itself in that case (it has no copy to lock),
-	// so a book that resolved to itself is asked again here, under the lock.
-	book := locked
+	// the original would be copied beside the merged row's file. The lock step
+	// computed that under its hold and hands it over in locked.retired.
+	//
+	// When the lock step resolved to the book itself, the row is asked for once
+	// more here only to check that answer still holds. A copy that appeared
+	// after the lock set settled is a row the hold does not cover: organizing
+	// it would run without its scan lock, so the answer is "unsettled", the same
+	// refusal as a lock set that never settles, and nothing is written. When the
+	// lock step resolved to a library copy, that copy is in the hold and is the
+	// subject as it stands; it is not resolved again.
+	book := locked.bookOrNil()
+	if locked != nil && locked.retired != nil {
+		r.json(http.StatusConflict, libraryCopyRetiredBody(locked.retired))
+		return
+	}
 	if book == nil || book.ID == requested.ID {
-		var rerr error
-		book, rerr = organizer.ResolveOrganizeSubject(h.resolveLibraryCopy, requested)
+		resolved, rerr := organizer.ResolveOrganizeSubject(h.resolveLibraryCopy, requested)
 		if retiredErr, ok := errors.AsType[*organizer.LibraryCopyRetiredError](rerr); ok {
 			r.json(http.StatusConflict, libraryCopyRetiredBody(retiredErr))
+			return
+		}
+		if book == nil {
+			book = resolved
+		} else if resolved == nil || resolved.ID != book.ID {
+			r.json(http.StatusConflict, gin.H{"error": errOrganizeSetUnsettled.Error()})
 			return
 		}
 	}
