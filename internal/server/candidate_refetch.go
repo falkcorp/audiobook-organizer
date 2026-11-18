@@ -1,5 +1,5 @@
 // file: internal/server/candidate_refetch.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 09c23622-3fae-4104-8edc-2fe8860f40fd
 // last-edited: 2026-11-17
 
@@ -163,7 +163,9 @@ func (s *Server) RefetchMetadataCandidates(ctx context.Context, bookID string) (
 	}
 	store := s.storeForWiring()
 	r := s.fetchCandidateForBook(ctx, mfs, store, s.candidateRefetchGate.limiter(), "", bookID, false, false, s.newFolderMemo(store), false)
-	out := maintenanceplugin.CandidateRefetchResult{Status: r.Status, Detail: r.Error}
+	out := maintenanceplugin.CandidateRefetchResult{Status: r.Status, Detail: r.Error,
+		// The fetch's retired skip, as a flag: the caller must not match the text.
+		Retired: r.Status == "skipped" && r.Error == candidateSkipRetired}
 	entry, err := store.GetMetadataCache(bookID)
 	if err != nil {
 		return out, fmt.Errorf("read the refetched cache row: %w", err)

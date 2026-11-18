@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/asin_backfill.go
-// version: 1.12.5
+// version: 1.12.6
 // guid: c4e9a2f7-1d36-4b85-9a0e-6f2b8d31c7a4
 // last-edited: 2026-11-17
 
@@ -611,14 +611,23 @@ func (r *asinBackfillRun) runBookIDs(ctx context.Context, reporter sdk.Reporter,
 	return registry.RunItems(ctx, reporter, books, r.processBook, r.options(0, len(books), workers))
 }
 
+// countRetired adds a retired book to the counter for its shape: trashed or
+// merged. b must already satisfy IsRetired, which is trashed OR merged, so a
+// retired book that is not trashed is merged by the rule itself; nothing is
+// assumed about the merged half beyond that. Both the start-of-run check and the
+// under-lock rechecks (skipRetiredMeanwhile) count through it.
+func (t *asinBackfillTally) countRetired(b *database.Book) {
+	if b.IsSoftDeleted() {
+		t.skippedDeleted.Add(1)
+	} else {
+		t.skippedMerged.Add(1)
+	}
+}
+
 // skipRetiredMeanwhile counts a write refused because the book retired during
 // the request, in the same counter the start-of-run check uses for that shape.
 func (r *asinBackfillRun) skipRetiredMeanwhile(bookID string, retired *database.Book) {
-	if retired.IsSoftDeleted() {
-		r.tally.skippedDeleted.Add(1)
-	} else {
-		r.tally.skippedMerged.Add(1)
-	}
+	r.tally.countRetired(retired)
 	r.log.Info("book retired during the search; left alone: book_id=%s", logger.SanitizeLogValue(bookID))
 }
 
@@ -635,11 +644,8 @@ func (r *asinBackfillRun) processBook(ctx context.Context, b database.Book) erro
 
 	hasASIN := b.ASIN != nil && strings.TrimSpace(*b.ASIN) != ""
 	switch {
-	case b.MarkedForDeletion != nil && *b.MarkedForDeletion:
-		t.skippedDeleted.Add(1)
-		return nil
-	case b.MergedIntoBookID != nil && strings.TrimSpace(*b.MergedIntoBookID) != "":
-		t.skippedMerged.Add(1)
+	case b.IsRetired():
+		t.countRetired(&b)
 		return nil
 	case hasASIN && !bookHasNoISBN(&b):
 		t.skippedHasASIN.Add(1)

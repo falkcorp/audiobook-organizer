@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-17-retired-books-metadata-apply-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 2e8c5a71-4b93-4d06-9f1a-7c3d0b6e8a52 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -39,6 +39,17 @@ refuses retired books`.
   searching it can still be looked up once; its result is not written.
 - The automatic Audible-id backfill checks again under the write lock, so a
   book put away during its Audible request is left alone and counted as such.
+- Three more automatic writers now check again at the moment of writing, so a
+  book put away a moment earlier is left alone: the jobs that fill in a
+  production company as a book's author or publisher, the copy of a book's
+  details that is kept on its library copy after every metadata apply (a copy
+  that was trashed or merged away is refused and the file is not rewritten),
+  and the iTunes import's author fill.
+- The lost-candidates repair now reports a book that was put away between its
+  re-check and its re-search as "changed since it was planned", like the
+  version-twin repair, instead of as a failure. "Search again" now says so when
+  some books were left out as put away and others because they were already
+  being searched.
 - The job that advances a book through identification used to log a retired
   book as "marked no match". It now records its own reason, "retired", so a
   book that was only put away is not described as one with no match.
@@ -57,5 +68,9 @@ refuses retired books`.
   that has been put away is refused and reported as a skip, not a failure, and
   does not stop the run. The single-book button is unchanged.
 - Left for follow-ups, filed in the to-do list: the review page still lists
-  retired books, and about twenty other places in the code each spell out
-  "retired" their own way.
+  retired books, about nineteen other places in the code each spell out
+  "retired" their own way, and a second change will make the store itself refuse
+  to write onto a put-away book, which closes the remaining jobs (fourteen are
+  listed by name) that do not check at all. One known gap stays: a single-book
+  apply a person queued behind a library scan still goes through if the book
+  was trashed or merged while it waited.

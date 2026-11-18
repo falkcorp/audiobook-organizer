@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer_test.go
-// version: 1.3.7
+// version: 1.3.8
 // guid: 7a1e3c95-4d28-4b6f-a0c7-93e2d5b8f146
 // last-edited: 2026-11-17
 
@@ -519,6 +519,26 @@ func TestVersionTwinFixer_PrimaryRetiredBeforeWriteIsChangedSincePlan(t *testing
 			require.Nil(t, p.MetadataReviewStatus, "a retired primary must not be written")
 			require.Empty(t, dcStr(p.Narrator))
 		})
+	}
+}
+
+// "Live" is the one retired rule (BookCore.IsRetired), not a local reading of
+// the merged-into id: a primary whose merged-into id is only whitespace is
+// retired by that rule (it does not trim), so its group is not planned. The old
+// local copy trimmed the id and called such a primary live. No writer produces
+// a blank non-empty id, so this pins agreement with the rule, not a population.
+func TestVersionTwinFixer_PrimaryWithBlankMergedIntoIsRetiredByTheOneRule(t *testing.T) {
+	l := newVTLib(t)
+	l.book("p-live", "g-live", true, nil)
+	l.appliedTwin("t-live", "g-live", vtSaga(), nil)
+	l.book("p-blank", "g-blank", true, func(b *database.Book) { b.MergedIntoBookID = new("   ") })
+	l.appliedTwin("t-blank", "g-blank", vtSaga(), nil)
+	require.True(t, l.get("p-blank").IsRetired(), "fixture: the one rule must call a blank merged-into id retired")
+
+	_, rows := l.plan()
+	require.True(t, rows["g-live"].Applicable(), "control: a live primary's group is planned: %+v", rows["g-live"])
+	if r, ok := rows["g-blank"]; ok {
+		require.False(t, r.Applicable(), "a retired primary's group is not applicable: %+v", r)
 	}
 }
 
