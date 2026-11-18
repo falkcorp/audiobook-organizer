@@ -1,5 +1,5 @@
 // file: internal/applygate/title_rule_examples_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 6d1c58a2-9e04-4b73-8f25-a3e07d94b160
 // last-edited: 2026-11-17
 
@@ -352,7 +352,7 @@ func TestGate_PartMarkerRules(t *testing.T) {
 }
 
 // storedTitleSaysNothing is storedTitleCarriesEvidence's negation except for
-// one shape: a bare trailing capital letter ("Robin X", "Plan B"). The two are
+// one shape: a bare trailing capital letter ("Robin X", "Robin Y"). The two are
 // kept apart on purpose (the first lets a folder name stand in for a title, the
 // second keeps a title conflict out of a transcription's reach), so this pins
 // that the shape is the ONLY difference.
@@ -365,7 +365,7 @@ func TestStoredTitleSaysNothing_DiffersOnlyForTheCapitalLetterShape(t *testing.T
 	for _, title := range []string{
 		"", "   ", "Chapter 3", "Track 07", "Part 1 of 3", "Disc 2", "The Sunrise Lands 1", "Hush 1",
 		"Hush [64kbps]", "Hush (Unabridged)", "Hush", "Hush: Part 2", "Hush: Dark Victory", "Who Am I",
-		"Robin X", "Plan B", "Batman 4", "Gotham 2033", "08 - The Long Halloween", "Hush CD1",
+		"Robin X", "Robin Y", "Batman 4", "Gotham 2033", "08 - The Long Halloween", "Hush CD1",
 	} {
 		says, carries := storedTitleSaysNothing(title), storedTitleCarriesEvidence(title)
 		wantDiffer := !carries && letterShape(title)
@@ -378,6 +378,6 @@ func TestStoredTitleSaysNothing_DiffersOnlyForTheCapitalLetterShape(t *testing.T
 		}
 	}
 	if differ != 3 {
-		t.Fatalf("%d titles are not each other's negation, want exactly the three letter-shape rows (Who Am I, Robin X, Plan B)", differ)
+		t.Fatalf("%d titles are not each other's negation, want exactly the three letter-shape rows (Who Am I, Robin X, Robin Y)", differ)
 	}
 }

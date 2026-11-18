@@ -1,5 +1,5 @@
 // file: internal/applygate/evidence.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
 // last-edited: 2026-11-17
 
@@ -525,7 +525,7 @@ func storedTitleCarriesEvidence(title string) bool {
 // (bookPathForms): blank, a placeholder, a chapter or section heading, a
 // counted part ("Part 1 of 3"), a bare trailing part number ("The Sunrise Lands
 // 1") or rip details. It is storedTitleCarriesEvidence's negation except for one
-// shape: a bare trailing CAPITAL LETTER ("Robin X", "Plan B") is a word of a
+// shape: a bare trailing CAPITAL LETTER ("Robin X", "Robin Y") is a word of a
 // whole book, which metadata.SiblingPartStem's own doc says its shape cannot
 // tell from a part token. That shape still keeps a block against it from a
 // transcription's reach (storedTitleCarriesEvidence), where being wrong costs a
