@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: 30f92b7b-033e-4403-927a-99445211075c
 // last-edited: 2026-11-18
 
@@ -897,6 +897,22 @@ func (s headT6g5Store) BooksLinkingNarrators(ids map[int]bool) (map[string][]dat
 		return nil, err
 	}
 	return database.BooksLinkingNarrators(st, ids)
+}
+
+func (s headT6g5Store) GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error) {
+	st, err := s.opsStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.GetMetadataFieldStates(bookID)
+}
+
+func (s headT6g5Store) GetUserPreference(key string) (*database.UserPreference, error) {
+	st, err := s.opsStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.GetUserPreference(key)
 }
 
 func (s headT6g5Store) GetBookAuthors(bookID string) ([]database.BookAuthor, error) {
