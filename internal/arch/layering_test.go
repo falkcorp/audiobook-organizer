@@ -1,7 +1,7 @@
 // file: internal/arch/layering_test.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 // Package arch holds architecture guard tests. It has no non-test code.
 //
@@ -143,6 +143,12 @@ var layerOf = map[string]int{
 	"internal/tools":                 0, // computed: imports no module package
 	"internal/trackseq":              0, // computed: imports no module package
 	"internal/util":                  0, // table: leaf
+
+	// Layer 0: the kind-rename map and its generator (F5-16, M4's input). The
+	// map imports core only; the generator imports the map (an override below).
+	"internal/books/cutover/kindrename":         0, // computed: imports no module package (core only)
+	"internal/books/cutover/kindrename/gen":     0, // override: imports only kindrename (layer 0)
+	"internal/books/cutover/kindrename/gen/cmd": 0, // override: imports only kindrename/gen (layer 0)
 
 	// Layer 1: config
 	"internal/config": 1, // table: config
@@ -521,6 +527,11 @@ var layerOverride = map[string]int{
 	// no module package (go list -f '{{.Imports}}' on both): the ImportFloor
 	// would put it at 3 for importing one leaf of its own.
 	"internal/books/cutover": 0,
+	// The kind-rename generator imports kindrename, which imports no module
+	// package (go list -f '{{.Imports}}' on both): the ImportFloor would put
+	// each at 3 for importing one leaf of its own.
+	"internal/books/cutover/kindrename/gen":     0,
+	"internal/books/cutover/kindrename/gen/cmd": 0,
 }
 
 // familyLayer returns the layer of a directory family, or false.
