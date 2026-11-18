@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer_enrich_retired_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: e1cf22ab-aed6-46a8-b67a-9f9695f4ac01
 // last-edited: 2026-11-17
 
@@ -8,6 +8,8 @@ package itunesservice
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -120,11 +122,15 @@ func TestEnrichImportedBooks_AuthorJoinIsNotWrittenOntoABookRetiredAfterTheCommi
 				require.NoError(t, err)
 			}}
 			imp := &Importer{store: store, mfs: fetcher, enrichConcurrencyOverride: 1}
+			var out strings.Builder // one worker, so no concurrent writes
+			log := logger.FromSlog(slog.New(slog.NewTextHandler(&out, nil)))
 
-			imp.enrichImportedBooks(context.Background(), []string{id}, &itunesImportStatus{}, logger.New("test-enrich-join-retired"))
+			imp.enrichImportedBooks(context.Background(), []string{id}, &itunesImportStatus{}, log)
 
 			require.Equal(t, []int{placeholderID}, enrichedJoin(t, store, id),
 				"a retired book's author credits must be left as they were")
+			// The run counts it as a skip, not as an enriched book.
+			require.Contains(t, out.String(), "0 books enriched, 1 retired books skipped")
 		})
 	}
 }

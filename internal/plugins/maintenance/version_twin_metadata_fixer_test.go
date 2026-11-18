@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer_test.go
-// version: 1.3.8
+// version: 1.3.9
 // guid: 7a1e3c95-4d28-4b6f-a0c7-93e2d5b8f146
 // last-edited: 2026-11-17
 
@@ -528,16 +528,20 @@ func TestVersionTwinFixer_PrimaryRetiredBeforeWriteIsChangedSincePlan(t *testing
 // local copy trimmed the id and called such a primary live. No writer produces
 // a blank non-empty id, so this pins agreement with the rule, not a population.
 func TestVersionTwinFixer_PrimaryWithBlankMergedIntoIsRetiredByTheOneRule(t *testing.T) {
-	l := newVTLib(t)
-	l.book("p-live", "g-live", true, nil)
-	l.appliedTwin("t-live", "g-live", vtSaga(), nil)
-	l.book("p-blank", "g-blank", true, func(b *database.Book) { b.MergedIntoBookID = new("   ") })
-	l.appliedTwin("t-blank", "g-blank", vtSaga(), nil)
-	require.True(t, l.get("p-blank").IsRetired(), "fixture: the one rule must call a blank merged-into id retired")
+	// Two libraries, not two groups in one: a second group with the same title
+	// and author is a cross-group collision the planner holds on its own.
+	live := newVTLib(t)
+	live.book("p", "g", true, nil)
+	live.appliedTwin("t", "g", vtSaga(), nil)
+	_, liveRows := live.plan()
+	require.True(t, liveRows["g"].Applicable(), "control: a live primary's group is planned: %+v", liveRows["g"])
 
-	_, rows := l.plan()
-	require.True(t, rows["g-live"].Applicable(), "control: a live primary's group is planned: %+v", rows["g-live"])
-	if r, ok := rows["g-blank"]; ok {
+	blank := newVTLib(t)
+	blank.book("p", "g", true, func(b *database.Book) { b.MergedIntoBookID = new("   ") })
+	blank.appliedTwin("t", "g", vtSaga(), nil)
+	require.True(t, blank.get("p").IsRetired(), "fixture: the one rule must call a blank merged-into id retired")
+	_, rows := blank.plan()
+	if r, ok := rows["g"]; ok {
 		require.False(t, r.Applicable(), "a retired primary's group is not applicable: %+v", r)
 	}
 }
