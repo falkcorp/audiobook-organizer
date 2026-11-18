@@ -2508,8 +2508,14 @@
   "files": [
    "core/internal/storagetasks/",
    "core/internal/executor/prune.go",
+   "core/internal/executor/prune_test.go",
    "core/internal/logjournal/prune.go",
+   "core/internal/logjournal/prune_test.go",
+   "core/internal/logjournal/settings.go",
+   "core/internal/archtest_layers_test.go",
+   "core/kernel/core_kinds_schedule_test.go",
    "internal/plugins/maintenance/db.go",
+   "internal/plugins/maintenance/db_aux_store_compact_test.go",
    "internal/plugins/maintenance/db_census_exact.go",
    "internal/plugins/maintenance/db_census_exact_test.go",
    "internal/plugins/maintenance/db_optimize_heartbeat_test.go"
