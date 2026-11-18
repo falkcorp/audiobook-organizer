@@ -1,11 +1,11 @@
 <!-- file: docs/plans/platform-core/F5-18-prep-split-proposal.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7d1e4c52-3b8a-4f60-9a27-c5e0b4d86f13 -->
-<!-- last-edited: 2026-11-17 -->
+<!-- last-edited: 2026-11-18 -->
 
 # F5-18 prep split: proposal
 
-Status: PROPOSAL ONLY. No brief file is created or changed by this document, F5-18's brief
+Status: PROPOSAL, APPROVED by the owner on 2026-11-18 (the three open questions are answered in section 6). No brief file is created or changed by this document, F5-18's brief
 (`docs/agent-tasks/platform-core/F5-18-tasks-flip-engine-deleted.md`) is unchanged, and
 `tools/inventory.json` is unchanged. Approving this means a later PR adds the `F5-18a..` briefs and
 edits F5-18's Depends and Goal.
@@ -252,8 +252,16 @@ F5-18a (M) -> F5-18b (L) -> F5-18c (L) -> { F5-18d (M), F5-18e (M), F5-18f (S), 
 Totals: 13 rows. S x5 (f, g, k, l, m), M x4 (a, d, e, i), L x4 (b, c, h, j). The new rows do not
 change the critical path until the flips resume; they do lengthen R2 by the chain a -> b -> c -> h/j -> k.
 
-## 6. Open questions for the owner
+## 6. Questions for the owner: decided
 
-1. O26: run-time fence only (F5-18b), or the compile-time narrow types as well (13-14 files, 150-250 lines).
-2. F5-18j: retire the legacy author rows before the flip, or accept `authors` in every book-write set.
-3. F5-18h: batch size per job.
+Decided by the owner on 2026-11-18, approving the split.
+
+1. **O26: decided, run-time fence only (owner 2026-11-18).** F5-18b builds the run-time write fence and no
+   compile-time narrow writer types per kind. The 13-14 files and 150-250 lines of narrow types are not
+   built; `TODO-F5-10-NARROW-WRITER-TYPES` closes on this decision.
+2. **F5-18j: decided, retire the legacy author rows before the flip (owner 2026-11-18).** F5-18j stays in the
+   chain (F5-18b -> F5-18j -> F5-18k); the flip does not accept `authors` in every book-write set. The
+   proposal's note still holds: the retirement op needs an owner go before it runs on prod.
+3. **F5-18h: decided, 100 books per batch (owner 2026-11-18).** Each child run of `transcribe-file-intros`,
+   `extract-wav-clips` and `intro-migrate-single-file` (and of `backfill-file-hashes`,
+   `recompute-book-aggregates` and `scan-composer-tags` if F5-18h takes them) covers 100 books.

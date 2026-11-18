@@ -1,7 +1,7 @@
 // file: internal/books/module.go
-// version: 1.3.6
+// version: 1.3.7
 // guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // Package books is ABO's audiobook module and its composition-root glue (04
 // §2.4, 06 §6.11.1 step 2): Module() is the module.Module ABO's main hands
@@ -35,6 +35,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/falkcorp/audiobook-organizer/internal/startup"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/module"
@@ -55,6 +56,45 @@ const minCoreVersion = "0.1.0"
 // The module ships inside ABO's binary, whose build version is not semver
 // ("dev" on a local build), so the module carries its own.
 const moduleVersion = "1.0.0"
+
+// taskResourceKinds are the resource kinds books declares with
+// Registrar.Resources (G8, 05-tasks 5T.3.4): a task definition's Effects may
+// name only these, and the kernel refuses a registration whose kind reads or
+// writes a books resource missing here ("writes resource kind ... which module
+// books did not declare"). It is the whole pkg/ops resource vocabulary, spelled
+// with the constants, never a literal: every native kind names its resources
+// as string(ops.ResX) (the converted maintenance groups, the legacy jobs and
+// the repairs fixers), so declaring all of them covers the kinds registered now
+// and the ones later rows add. TestRegister_DeclaresEveryResourceKind keeps it
+// equal to pkg/ops/effects.go, so a constant added there fails until it is
+// listed here. A fresh slice every call.
+func taskResourceKinds() []string {
+	return []string{
+		string(ops.ResBooks),
+		string(ops.ResBookFiles),
+		string(ops.ResAuthors),
+		string(ops.ResSeries),
+		string(ops.ResReviewItems),
+		string(ops.ResEmbeddings),
+		string(ops.ResOperations),
+		string(ops.ResCatalog),
+		string(ops.ResFingerprintIndex),
+		string(ops.ResSettings),
+		string(ops.ResActivity),
+		string(ops.ResFiles),
+		string(ops.ResExternalIDs),
+		string(ops.ResUserState),
+		string(ops.ResMetadataCache),
+		string(ops.ResFieldStates),
+		string(ops.ResIndexes),
+		string(ops.ResAIJournal),
+		string(ops.ResAuthorityLists),
+		string(ops.ResSyncIdentity),
+		string(ops.ResMetrics),
+		string(ops.ResCoverText),
+		string(ops.ResFileProvenance),
+	}
+}
 
 // absAuthMethod is the compat auth method books registers for its ABS
 // routes (05-authn §3.3); the legacy manifest's OwnAuth rows name it
@@ -228,6 +268,12 @@ func versionSegment(s string) bool {
 func (m *booksModule) Register(r *module.Registrar) error {
 	m.registered.Add(1)
 	m.requestRestart = r.Deps().RequestRestart
+	// The resource kinds task definitions may name in their Effects. Nothing
+	// registers a task yet (F5-18 passes the kind lists to Registrar.Tasks), and
+	// the kernel checks a declaration only against registered tasks, so this
+	// changes no behaviour until then. It comes before the no-storage return:
+	// the declaration does not depend on a store.
+	r.Resources(taskResourceKinds()...)
 	legacy := r.Deps().Storage.Legacy
 	if legacy == (storage.LegacyRange{}) {
 		return nil

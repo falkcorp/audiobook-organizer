@@ -1,0 +1,4 @@
+### Changed
+
+- The books module now declares, at registration, every resource kind a task definition may name in its declared reads and writes (all 23 names in `pkg/ops/effects.go`). Nothing registers a task yet, so this changes no behaviour today. It is the declaration the task system will check each converted maintenance job and repair against when they are registered, which would otherwise be refused with "writes resource kind ... which module books did not declare". A new test keeps the list equal to the `pkg/ops` resource constants, so adding a constant without declaring it fails the build.
+- The F5-18 prep split proposal records the owner's 2026-11-18 decisions: run-time write fence only (no per-kind narrow writer types), retire the legacy author rows before the flip, and 100 books per batch for the long whole-library jobs.
