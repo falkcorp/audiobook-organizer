@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/head.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 3b7e1c94-d2a6-4f08-95b1-6c0e8a47d213
 // last-edited: 2026-11-18
 
@@ -47,7 +47,27 @@ const (
 	prefixQueue    = "opv3:q:"
 	prefixDef      = "opv3:def:"
 	prefixMeta     = "opv3:meta:"
+	prefixStrike   = "opv2:strike:"
+
+	// Clocks: HEAD's v3 schedule state and the scheduler's settings clocks.
+	prefixSched = "opv3:sched:"
+	// The scheduler's interval clock: one setting row per task, setting:<this
+	// prefix><task>. Books' claim over setting: is read-write and shared; the
+	// rows below are retired as sub-claims (5T.8.3 3: of the shared setting:
+	// family only the run keys move).
+	settingTick  = "setting:scheduled_task_last_tick."
+	keyFullSweep = "setting:library_scan_full_last_run"
+	keyWindow    = "setting:maintenance_window_last_run"
+	keyPause     = "setting:registry.operations_paused"
+	keyStandDown = "setting:registry.scan_standdown"
+
+	// Debounce: op:batch:<op type>:<subject type>:<subject id>.
+	prefixBatch = "op:batch:"
 )
+
+// settingKeys are the exact setting: rows the step moves. Every other row of
+// the setting: family is left byte for byte.
+var settingKeys = []string{keyFullSweep, keyWindow, keyPause, keyStandDown}
 
 // runScoped are the families whose rows belong to one run and are keyed
 // <prefix><run id>:... (or <prefix><run id> for the one-row families); the
@@ -60,23 +80,43 @@ var runScoped = []string{
 // derived are the families deleted by rule: indexes HEAD rebuilt from the run
 // record (the native store derives its own), definition rows (registration
 // rebuilds c/tasks/def/) and the census row (native Counts is derived).
-var derived = []string{prefixIxDef, prefixIxDone, prefixIxParent, prefixIxState, prefixQueue, prefixDef, prefixMeta}
+var derived = []string{prefixIxDef, prefixIxDone, prefixIxParent, prefixIxState, prefixQueue, prefixDef, prefixMeta, prefixStrike}
+
+// otherPrefixes are the source families that belong to no run and are not
+// derived: the clock families and the debounce buckets.
+var otherPrefixes = []string{prefixSched, settingTick, prefixBatch}
 
 // SourcePrefixes is every family prefix the step's Source covers, in key
-// order. F5-18 retires exactly these claims.
+// order. F5-18 retires exactly these claims and the sub-claims SourceKeys
+// names.
 func SourcePrefixes() []string {
 	all := append([]string{prefixRun}, runScoped...)
 	all = append(all, derived...)
+	all = append(all, otherPrefixes...)
 	slices.Sort(all)
 	return all
 }
 
-// SourceRanges is the step's Source: one range per family prefix.
+// SourceKeys is every exact key the step's Source covers: the setting: rows
+// that hold a run key of the tasks flip (5T.8.3 step 2). SourcePrefixes holds
+// the prefix of the interval clocks among them.
+func SourceKeys() []string {
+	out := slices.Clone(settingKeys)
+	slices.Sort(out)
+	return out
+}
+
+// SourceRanges is the step's Source: one range per family prefix and one per
+// exact key, in key order.
 func SourceRanges() []storage.Range {
 	var out []storage.Range
 	for _, p := range SourcePrefixes() {
 		out = append(out, storage.Range{Start: []byte(p), End: prefixEnd(p)})
 	}
+	for _, k := range SourceKeys() {
+		out = append(out, storage.Range{Start: []byte(k), End: append([]byte(k), 0)})
+	}
+	slices.SortFunc(out, func(a, b storage.Range) int { return bytes.Compare(a.Start, b.Start) })
 	return out
 }
 
@@ -87,13 +127,20 @@ func prefixEnd(p string) []byte {
 	return end
 }
 
-// familyOf names the family prefix key belongs to and the run ID it carries.
-// ok is false for a key outside the step's Source.
+// familyOf names the family prefix (or exact key) key belongs to and the run ID
+// it carries (empty for a family that is not run-scoped). ok is false for a key
+// outside the step's Source.
 func familyOf(key string) (family, runID string, ok bool) {
+	if slices.Contains(settingKeys, key) {
+		return key, "", true
+	}
 	for _, p := range SourcePrefixes() {
 		rest, found := strings.CutPrefix(key, p)
 		if !found {
 			continue
+		}
+		if !slices.Contains(runScoped, p) && p != prefixRun {
+			return p, "", true
 		}
 		id, _, _ := strings.Cut(rest, ":")
 		return p, id, true
@@ -102,12 +149,7 @@ func familyOf(key string) (family, runID string, ok bool) {
 }
 
 func isDerived(family string) bool {
-	for _, p := range derived {
-		if p == family {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(derived, family)
 }
 
 // runRow is opv3:run: (RunRecord, store.iface_ops_v3.go), without the hot half
