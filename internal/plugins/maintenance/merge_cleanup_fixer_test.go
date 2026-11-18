@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_fixer_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5f0f2a63-1d4e-4b6e-9f55-2f3a7c0b8e14
 // last-edited: 2026-11-18
 
@@ -1169,7 +1169,7 @@ func TestMergeCleanupDeadEndMergedGroupMemberIsFollowedToItsLiveTarget(t *testin
 			r := wantRow(t, x.plan(), "loser", mcKindRepoint, "")
 			require.Equal(t, "dead", r.Current["chain_end"])
 			require.Equal(t, x.ids["z"], r.Proposed["merged_into_book_id"], "the live book the member was merged into")
-			require.Contains(t, r.Evidence[len(r.Evidence)-1], "merged into "+x.ids["z"])
+			require.Contains(t, strings.Join(r.Evidence, " "), "merged into "+x.ids["z"])
 			require.NotContains(t, strings.Join(r.Evidence, " "), "stands alone")
 		})
 	}

@@ -25,6 +25,14 @@
       preview (a narrow read exposed to the maintenance plugin, like the journal
       one), flag the row, and hold an unmerge or swap that contradicts the person's
       call, before any apply path exists.
+- [ ] **TODO-MERGE-CLEANUP-DEAD-END-APPLY-RULES** A dead-end unmerge (the merge chain ends
+      at a trashed or missing book and nothing live is reachable) is not a wrong-work
+      finding: no signals were computed against another book, so nothing said the loser
+      is a different work. The apply PR for unmerge must not write the owner's "not a
+      duplicate" decision for the (loser, dead book) pair and must not apply the
+      leave-the-version-group rule for these rows; it clears the pointer and leaves the
+      loser's group as it is. Rows held as `dead_end_shared` (several live copies of one
+      work behind one dead end) need an owner choice of which copy to keep before any apply.
 - [ ] **TODO-MERGE-CLEANUP-MANUAL-ONLY-GUARDS** PLAN's manual-only skip kinds are not implemented: a
       loser or target whose `itunes_path` is set (the iTunes library is import-only
       and its files are left as they are) and the Doctor Who and Battlestar
