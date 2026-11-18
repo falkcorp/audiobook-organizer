@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_fixer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5f0f2a63-1d4e-4b6e-9f55-2f3a7c0b8e14
 // last-edited: 2026-11-18
 
@@ -48,8 +48,10 @@ type mcFixture struct {
 // mcFile is one book_file row of a fixture book. secs < 0 is a duration that
 // was never measured.
 type mcFile struct {
-	secs    int
-	hash    string
+	secs int
+	hash string
+	// orig is the file's original (pre tag-write) hash.
+	orig    string
 	size    int64
 	missing bool
 }
@@ -66,7 +68,9 @@ type mcSpec struct {
 	asin    string
 	msh     string
 	trashed bool
-	files   []mcFile
+	// dangling adds credit rows naming an author id that has no author row.
+	dangling int
+	files    []mcFile
 }
 
 func newMCFixture(t *testing.T) *mcFixture {
@@ -156,6 +160,9 @@ func (x *mcFixture) mk(name string, s mcSpec) string {
 	for i, n := range s.authors {
 		credits = append(credits, database.BookAuthor{BookID: id, AuthorID: x.author(n), Role: "author", Position: i})
 	}
+	for i := range s.dangling {
+		credits = append(credits, database.BookAuthor{BookID: id, AuthorID: 900000 + i, Role: "author", Position: len(credits)})
+	}
 	if len(credits) > 0 {
 		require.NoError(x.t, x.st.SetBookAuthors(id, credits))
 	}
@@ -164,7 +171,7 @@ func (x *mcFixture) mk(name string, s mcSpec) string {
 		require.NoError(x.t, os.MkdirAll(filepath.Dir(path), 0o755))
 		require.NoError(x.t, os.WriteFile(path, []byte("synthetic "+name), 0o644))
 		bf := &database.BookFile{ID: fmt.Sprintf("bf-%s-%d", name, i), BookID: id, FilePath: path, Format: "m4b",
-			FileSize: f.size, FileHash: f.hash, Missing: f.missing}
+			FileSize: f.size, FileHash: f.hash, OriginalFileHash: f.orig, Missing: f.missing}
 		if f.secs >= 0 {
 			d := f.secs
 			bf.Duration = &d
@@ -1171,6 +1178,41 @@ func (s mcFailFilesStore) GetBookFiles(id string) ([]database.BookFile, error) {
 		return nil, errors.New("synthetic read failure")
 	}
 	return s.Store.GetBookFiles(id)
+}
+
+// mcAltStore answers alternative titles from a map, as the store holds none
+// that a test can write (no production writer exists any more), and shows its
+// inner store's capabilities through Unwrap.
+type mcAltStore struct {
+	database.Store
+	alts map[string][]string
+}
+
+func (s mcAltStore) Unwrap() database.Store { return s.Store }
+func (s mcAltStore) GetBookAlternativeTitles(id string) ([]database.BookAlternativeTitle, error) {
+	var out []database.BookAlternativeTitle
+	for _, t := range s.alts[id] {
+		out = append(out, database.BookAlternativeTitle{BookID: id, Title: t, Source: "user"})
+	}
+	return out, nil
+}
+
+// withAlts rebuilds the fixer over a store that reports these alternative
+// titles, keyed by fixture name. The returned map may be edited between plans.
+func (x *mcFixture) withAlts(byName map[string][]string) map[string][]string {
+	x.t.Helper()
+	byID := map[string][]string{}
+	for name, titles := range byName {
+		byID[x.ids[name]] = titles
+	}
+	x.f = newMergeCleanupFixer(&Plugin{deps: fakeDeps{store: mcAltStore{Store: x.st, alts: byID}, root: x.root, vetoes: x.vetoes}})
+	x.f.vgProbe = func(_ context.Context, path string) (int, error) {
+		if n, ok := x.chapters[path]; ok {
+			return n, nil
+		}
+		return 0, fmt.Errorf("no such file in the stub")
+	}
+	return byID
 }
 
 // mcBareStore hides every capability of the inner store: it has no Unwrap.
