@@ -1,6 +1,7 @@
 // file: internal/server/file_ops_handlers_test.go
 // version: 1.1.1
 // guid: 2c1f8b4d-9e3a-4f50-a7d6-8b1c5e0f9a23
+// last-edited: 2026-11-18
 
 package server
 
