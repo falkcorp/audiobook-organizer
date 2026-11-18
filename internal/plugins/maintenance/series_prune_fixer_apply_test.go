@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_prune_fixer_apply_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 0f6b2d84-93e1-4c57-a8d2-5e17b4c9a3f0
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -23,7 +23,7 @@ import (
 )
 
 // The series prune fixer's apply path, against writers outside the run: the
-// series write-set, the per-series reference re-count before each delete,
+// series write-set, the check-and-delete behind each series delete,
 // journal-first, the existence and hold re-checks, the book checks before
 // and under each write lock, the per-run snapshot and the per-run cache drop.
 
@@ -33,17 +33,25 @@ type spStoreHook struct {
 	*database.PebbleStore
 	beforeDelete func(id int)
 	counts       atomic.Int32
-	// refCountErr fails the per-series reference re-count.
-	refCountErr error
+	// deleteErr fails the store's check-and-delete (DeleteSeriesIfUnreferenced)
+	// the way a store that cannot verify a series is unreferenced does.
+	deleteErr error
 }
 
-func (h *spStoreHook) GetSeriesBookRefCount(id int) (int, error) {
-	if h.refCountErr != nil {
-		return 0, h.refCountErr
+// DeleteSeriesIfUnreferenced is the delete the fixer makes: beforeDelete runs
+// ahead of it, and deleteErr refuses it.
+func (h *spStoreHook) DeleteSeriesIfUnreferenced(id int, expectName string, expectAuthorID *int) (bool, error) {
+	if h.beforeDelete != nil {
+		h.beforeDelete(id)
 	}
-	return h.PebbleStore.GetSeriesBookRefCount(id)
+	if h.deleteErr != nil {
+		return false, h.deleteErr
+	}
+	return h.PebbleStore.DeleteSeriesIfUnreferenced(id, expectName, expectAuthorID)
 }
 
+// DeleteSeries is the plain delete. The fixer no longer calls it; the hook stays
+// so a regression back to it still shows in the order tests.
 func (h *spStoreHook) DeleteSeries(id int) error {
 	if h.beforeDelete != nil {
 		h.beforeDelete(id)
@@ -122,8 +130,9 @@ func TestSeriesPruneFixer_ApplyDeclaresSeriesWriteSet(t *testing.T) {
 }
 
 // An orphan another op points a book at after the re-plan is not deleted:
-// the delete re-counts its one series first. Its journal row is voided.
-func TestSeriesPruneFixer_OrphanDeleteRecountsItsSeries(t *testing.T) {
+// the delete is the store's check-and-delete, which counts that series' rows
+// itself. Its journal row is voided.
+func TestSeriesPruneFixer_OrphanDeleteChecksItsSeriesAtDeleteTime(t *testing.T) {
 	l := newSPLibrary(t)
 	deps := &spCacheDeps{store: l.st}
 	base := newSeriesPruneFixer(&Plugin{deps: deps})
@@ -141,9 +150,9 @@ func TestSeriesPruneFixer_OrphanDeleteRecountsItsSeries(t *testing.T) {
 	assert.Zero(t, deps.series.Load(), "nothing written, nothing invalidated")
 }
 
-// The same re-count on a merge's delete: the books move, the copy another op
+// The same check on a merge's delete: the books move, the copy another op
 // pointed a trashed book at stays, and the row is partially applied.
-func TestSeriesPruneFixer_MergeDeleteRecountsItsSeries(t *testing.T) {
+func TestSeriesPruneFixer_MergeDeleteChecksItsSeriesAtDeleteTime(t *testing.T) {
 	l := newSPLibrary(t)
 	deps := &spCacheDeps{store: l.st}
 	base := newSeriesPruneFixer(&Plugin{deps: deps})
@@ -392,14 +401,14 @@ func TestSeriesPruneFixer_FranchiseSeriesAreOwnerManual(t *testing.T) {
 	assert.Empty(t, spRowFor(t, res, l.s7).Skipped, "an ordinary empty series is still offered")
 }
 
-// A re-count that cannot be read refuses the delete (fail closed): an
-// unreadable count is never a zero.
-func TestSeriesPruneFixer_UnreadableRecountDeletesNothing(t *testing.T) {
+// A delete the store cannot verify refuses (fail closed): an unreadable count
+// is never a zero, and there is no fallback to the plain DeleteSeries.
+func TestSeriesPruneFixer_UnverifiableDeleteDeletesNothing(t *testing.T) {
 	l := newSPLibrary(t)
 	hook := &spStoreHook{PebbleStore: l.st}
 	f := newSeriesPruneFixer(&Plugin{deps: fakeDeps{store: hook}})
 	res := spPlan(t, l, f)
-	hook.refCountErr = errors.New("memdb gone")
+	hook.deleteErr = errors.New("memdb gone")
 
 	out, err := spRun(t, l, f, res, spWriter(l, l.st, "op-unread"), nil, "op-unread", spRowFor(t, res, l.s7).RowID)
 	require.NoError(t, err)
