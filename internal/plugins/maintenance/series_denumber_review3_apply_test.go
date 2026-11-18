@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_review3_apply_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9b3d7e20-4c16-4a58-b1e9-6f0d2a85c734
 // last-edited: 2026-11-18
 
@@ -425,8 +425,8 @@ func TestSeriesDenumber_Round3_M3_AFailingCheckAndDeleteFailsTheRunAndVoidsItsRo
 	if err == nil {
 		t.Fatalf("a failed delete was reported as success")
 	}
-	if !strings.Contains(err.Error(), "1 emptied series NOT deleted") {
-		t.Errorf("the failure summary %q does not count the series that was kept", err)
+	if !strings.Contains(err.Error(), "1 emptied series NOT deleted because a read or write failed") {
+		t.Errorf("the failure summary %q does not count the series that was kept as a failure", err)
 	}
 	rows := seriesRowDeleteRows(l)
 	if len(rows) != 1 || !rows[0].Voided {

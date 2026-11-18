@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_review3b_apply_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b7d2e5a-6c41-4f93-8a1e-d35c9f72b406
 // last-edited: 2026-11-18
 
@@ -132,7 +132,7 @@ func TestSeriesDenumber_Round3b_M2_AFailedVoidOfTheDeleteRowFailsTheRun(t *testi
 
 // The undo row cannot be written, so nothing is deleted. The series stays, the
 // run fails, and the report names the series and says why instead of leaving a
-// gap; the "NOT deleted" count includes it.
+// gap; the "NOT deleted because a read or write failed" count includes it.
 func TestSeriesDenumber_Round3b_M3_AnUndoRowThatCannotBeWrittenIsAReportedKeptSeries(t *testing.T) {
 	l := oneRunLib(t)
 	failSeriesRowDeleteWrites(l, false)
@@ -142,8 +142,8 @@ func TestSeriesDenumber_Round3b_M3_AnUndoRowThatCannotBeWrittenIsAReportedKeptSe
 	if err == nil {
 		t.Fatalf("a failed undo-row write was reported as success")
 	}
-	if !strings.Contains(err.Error(), "1 emptied series NOT deleted") {
-		t.Errorf("the failure summary %q does not count the series that was kept", err)
+	if !strings.Contains(err.Error(), "1 emptied series NOT deleted because a read or write failed") {
+		t.Errorf("the failure summary %q does not count the series that was kept as a failure", err)
 	}
 	if l.deleted[11] {
 		t.Errorf("the series was deleted although its undo row was not written")
@@ -235,7 +235,8 @@ func TestSeriesDenumber_Round3b_N1_EveryExpectedDeleteLandsInOneBucket(t *testin
 			var sum int
 			for _, pat := range []string{
 				`(\d+) emptied series deleted,`,
-				`(\d+) emptied series NOT deleted because`,
+				`(\d+) emptied series NOT deleted because a book or a change appeared since the plan`,
+				`(\d+) emptied series NOT deleted because a read or write failed`,
 				`(\d+) emptied series already deleted by someone else`,
 				`(\d+) sources? not emptied`,
 			} {
@@ -277,5 +278,58 @@ func TestSeriesDenumber_Round3b_N1_AGuardHeldSourceIsNotAnExpectedDelete(t *test
 	}
 	if len(seriesRowDeleteRows(l)) != 0 || l.deleted[11] {
 		t.Errorf("a guard-held source was journaled or deleted")
+	}
+}
+
+// The summary keeps two reasons apart: a series NOT deleted because a book or a
+// change appeared since the plan (somebody else's doing, nothing is wrong), and
+// one NOT deleted because a read or a write failed (the run fails). They were one
+// bucket, and a failure read as "something appeared".
+func TestSeriesDenumber_Round4_N3_FailuresAreCountedApartFromAppearances(t *testing.T) {
+	const appeared = `(\d+) emptied series NOT deleted because a book or a change appeared since the plan`
+	const failedBucket = `(\d+) emptied series NOT deleted because a read or write failed`
+	for _, tc := range []struct {
+		name                  string
+		setup                 func(l *denumberLib)
+		wantAppeared, wantBad int
+	}{
+		{"a book is referenced at delete time", func(l *denumberLib) {
+			l.refsAtDelete = func(int) (int, error) { return 1, nil }
+		}, 1, 0},
+		{"the delete cannot verify the series", func(l *denumberLib) {
+			l.refsAtDelete = func(int) (int, error) { return 0, errors.New("store unavailable") }
+		}, 0, 1},
+		{"the undo row cannot be written", func(l *denumberLib) { failSeriesRowDeleteWrites(l, false) }, 0, 1},
+		{"the series cannot be read again", func(l *denumberLib) {
+			orig := l.store.GetSeriesByIDFunc
+			l.store.GetSeriesByIDFunc = func(id int) (*database.Series, error) {
+				if id == 11 {
+					return nil, errors.New("read failed")
+				}
+				return orig(id)
+			}
+		}, 0, 1},
+		{"the references cannot be counted", func(l *denumberLib) {
+			l.refOverride = func(id int) (int, error) { // runs with the fixture's lock held
+				if id == 11 {
+					return 0, errors.New("count unavailable")
+				}
+				return 0, nil
+			}
+		}, 0, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := oneRunLib(t)
+			tc.setup(l)
+
+			rep, _ := l.run(`{"apply": true}`)
+
+			if got := summaryNumber(t, rep, appeared); got != tc.wantAppeared {
+				t.Errorf("appeared bucket = %d, want %d", got, tc.wantAppeared)
+			}
+			if got := summaryNumber(t, rep, failedBucket); got != tc.wantBad {
+				t.Errorf("failed bucket = %d, want %d", got, tc.wantBad)
+			}
+		})
 	}
 }

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/cleanup_series.go
-// version: 2.11.1
+// version: 2.12.0
 // guid: a1000002-0000-0000-0000-000000000002
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package jobs
 
@@ -90,7 +90,7 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 	reporter.SetTotal(len(allSeries))
 
 	// Phase 1: single-book series
-	var singleApplied, singleFound, singleSkipped int
+	var singleApplied, singleFound, singleSkipped, singleBooksSkipped int
 	deletedIDs := make(map[int]bool)
 
 	for _, ser := range allSeries {
@@ -159,7 +159,9 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 
 		singleFound++
 		if !dryRun {
-			if applyErr := csUnlinkAndDeleteSeries(store, unlink, ser.ID, members); applyErr != nil {
+			skippedHere, applyErr := csUnlinkAndDeleteSeries(store, unlink, ser.ID, members)
+			singleBooksSkipped += skippedHere
+			if applyErr != nil {
 				slog.Error("Failed to remove 1-book series", "seriesID", ser.ID, "seriesName", ser.Name, "err", applyErr)
 			} else {
 				deletedIDs[ser.ID] = true
@@ -179,7 +181,7 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 		normGroups[key] = append(normGroups[key], ser)
 	}
 
-	var dupApplied, dupFound, dupRefused int
+	var dupApplied, dupFound, dupRefused, dupBooksSkipped int
 	for normName, group := range normGroups {
 		if len(group) < 2 {
 			continue
@@ -202,8 +204,9 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 		}
 
 		if !dryRun {
-			merged, refused, mergeErr := csMergeSeriesGroup(store, keeper.ID, mergeIDs, refCounts, members)
+			merged, refused, skippedHere, mergeErr := csMergeSeriesGroup(store, keeper.ID, mergeIDs, refCounts, members)
 			dupRefused += refused
+			dupBooksSkipped += skippedHere
 			switch {
 			case mergeErr != nil:
 				slog.Error("Failed to merge series group", "normName", normName, "err", mergeErr)
@@ -223,8 +226,16 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 				"could not reach (trashed, or counted but unhydratable); rerun once those rows are visible",
 			singleSkipped, dupRefused), nil)
 	}
+	if singleBooksSkipped > 0 || dupBooksSkipped > 0 {
+		reporter.Log("warn", fmt.Sprintf(
+			"Skipped %d books in single-book cleanup and %d books in series merges: "+
+				"each no longer named the series being cleaned when it was written "+
+				"(another writer moved it after this run read membership)",
+			singleBooksSkipped, dupBooksSkipped), nil)
+	}
 	slog.Info("Done single_found single_applied single_skipped dup_groups_found dup_applied dup_refused dryRun",
 		"singleFound", singleFound, "singleApplied", singleApplied, "singleSkipped", singleSkipped,
+		"singleBooksSkipped", singleBooksSkipped, "dupBooksSkipped", dupBooksSkipped,
 		"dupFound", dupFound, "dupApplied", dupApplied, "dupRefused", dupRefused, "dryRun", dryRun)
 	return nil
 }
@@ -251,16 +262,36 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 //
 // members is the job's hoisted membership map; each successful unlink is
 // recorded in it so a partial failure leaves the map matching the store.
-func csUnlinkAndDeleteSeries(store seriesUnlinker, books []database.BookCore, seriesID int, members database.SeriesBooksMap) error {
+//
+// Each write is a compare-and-set on the series the book is being removed from:
+// a book whose row no longer names seriesID (another writer moved it after the
+// membership was read) is left alone, counted in the returned skipped, and
+// recorded in members where it really is. A skipped book does not block the
+// delete: it verifiably does not reference the series.
+func csUnlinkAndDeleteSeries(store seriesUnlinker, books []database.BookCore, seriesID int, members database.SeriesBooksMap) (int, error) {
 	if len(books) == 0 {
 		// Deleting here would be a delete with no unlink at all. The caller
 		// already skips an empty set; this is the second lock on that door.
-		return fmt.Errorf("refusing to delete series %d: no books to unlink", seriesID)
+		return 0, fmt.Errorf("refusing to delete series %d: no books to unlink", seriesID)
 	}
+	skipped := 0
 	for i := range books {
 		id := books[i].ID
+		// Compare-and-set. The books come from membership read once at the start
+		// of the run, so by now another writer may have filed this one in a
+		// different series (series-denumber moves "Batman 03" into "Batman").
+		// Clearing SeriesID then would erase that writer's link. The check
+		// runs on the row ModifyBook just re-read under the book's lock, so it
+		// is not itself a stale read.
+		var movedTo *int
+		stale := false
 		written, err := store.ModifyBook(id, func(current *database.Book) error {
-			if current.SeriesID == nil && current.SeriesSequence == nil {
+			if current.SeriesID == nil || *current.SeriesID != seriesID {
+				stale = true
+				if current.SeriesID != nil {
+					to := *current.SeriesID
+					movedTo = &to
+				}
 				return database.ErrSkipBookWrite
 			}
 			current.SeriesID = nil
@@ -268,17 +299,25 @@ func csUnlinkAndDeleteSeries(store seriesUnlinker, books []database.BookCore, se
 			return nil
 		})
 		if err != nil {
-			return fmt.Errorf("ModifyBook(%s): %w", id, err)
+			return skipped, fmt.Errorf("ModifyBook(%s): %w", id, err)
 		}
 		if written == nil {
-			return fmt.Errorf("book %s not found", id)
+			return skipped, fmt.Errorf("book %s not found", id)
+		}
+		if stale {
+			// Not ours to write. It no longer references seriesID, so it does not
+			// hold the delete back; record where it really is so the hoisted map
+			// still matches the store.
+			skipped++
+			members.Move(id, seriesID, movedTo)
+			continue
 		}
 		members.Move(id, seriesID, nil)
 	}
 	if err := store.DeleteSeries(seriesID); err != nil {
-		return fmt.Errorf("DeleteSeries: %w", err)
+		return skipped, fmt.Errorf("DeleteSeries: %w", err)
 	}
-	return nil
+	return skipped, nil
 }
 
 // csMergeSeriesGroup folds mergeIDs into keepID. refCounts is the UNFILTERED
@@ -288,10 +327,16 @@ func csUnlinkAndDeleteSeries(store seriesUnlinker, books []database.BookCore, se
 // exceeds what was reassigned strands those rows on a series ID that no longer
 // resolves.
 //
-// It returns (merged, refused, err): merged is the number of series rows
-// actually deleted, refused the number kept back by the reference guard. The
-// caller needs both -- a group in which every merge was refused is not a
-// completed merge, and reporting it as one is how a refusal becomes invisible.
+// It returns (merged, refused, skipped, err): merged is the number of series
+// rows actually deleted, refused the number kept back by the reference guard,
+// skipped the number of books left alone because their row no longer names the
+// series they were listed under (another writer moved them since the membership
+// was read; the repoint is a compare-and-set on that series, so it never pulls
+// a book onto the keeper from a third series). A skipped book verifiably does
+// not reference the series, so it counts toward the rows the guard accounts for.
+// The caller needs all of these -- a group in which every merge was refused is
+// not a completed merge, and reporting it as one is how a refusal becomes
+// invisible.
 //
 // members is the caller's hoisted AllVersions membership map
 // (database.SeriesMembershipAllVersions). It replaced a per-fromID
@@ -299,8 +344,8 @@ func csUnlinkAndDeleteSeries(store seriesUnlinker, books []database.BookCore, se
 // once memdb is tainted; seriesMerger no longer carries that method, so a
 // per-series read cannot creep back in here without a compile error. Every
 // successful repoint is recorded with members.Move.
-func csMergeSeriesGroup(store seriesMerger, keepID int, mergeIDs []int, refCounts map[int]int, members database.SeriesBooksMap) (int, int, error) {
-	var merged, refused int
+func csMergeSeriesGroup(store seriesMerger, keepID int, mergeIDs []int, refCounts map[int]int, members database.SeriesBooksMap) (int, int, int, error) {
+	var merged, refused, skipped int
 	for _, fromID := range mergeIDs {
 		// AllVersions, not Core. This loop repoints every row it is handed and
 		// then deletes fromID, so the getter and the refCounts guard below must
@@ -325,27 +370,51 @@ func csMergeSeriesGroup(store seriesMerger, keepID int, mergeIDs []int, refCount
 		// count we could not confirm is what stranded 6,893 series IDs across
 		// 13,322 books. Pinned by
 		// TestCsMergeSeriesGroup_RefusesWhenARowCannotBeHydrated.
-		moved := 0
+		moved, skippedHere := 0, 0
 		for _, book := range books {
 			// Repoint only SeriesID, under the book's write lock, so a column
 			// another writer commits meanwhile is not reverted (audit A1#15).
+			//
+			// Compare-and-set against fromID, on the row ModifyBook re-read under
+			// the book's lock: the membership map is a snapshot from the start of
+			// the run, and a book another writer has since filed in a third series
+			// must not be pulled onto the keeper.
+			var movedTo *int
+			stale := false
 			written, err := store.ModifyBook(book.ID, func(current *database.Book) error {
 				if current.SeriesID != nil && *current.SeriesID == keepID {
+					return database.ErrSkipBookWrite
+				}
+				if current.SeriesID == nil || *current.SeriesID != fromID {
+					stale = true
+					if current.SeriesID != nil {
+						to := *current.SeriesID
+						movedTo = &to
+					}
 					return database.ErrSkipBookWrite
 				}
 				current.SeriesID = &keepID
 				return nil
 			})
 			if err != nil {
-				return merged, refused, fmt.Errorf("ModifyBook(%s): %w", book.ID, err)
+				return merged, refused, skipped, fmt.Errorf("ModifyBook(%s): %w", book.ID, err)
 			}
 			if written == nil {
+				continue
+			}
+			if stale {
+				// Verified, on the live row, not to reference fromID: it cannot be
+				// stranded by deleting it, so it counts toward the accounted rows
+				// below. Record where it really is.
+				skipped++
+				skippedHere++
+				members.Move(book.ID, fromID, movedTo)
 				continue
 			}
 			members.Move(book.ID, fromID, &keepID)
 			moved++
 		}
-		if stranded := refCounts[fromID] - moved; stranded > 0 {
+		if stranded := refCounts[fromID] - moved - skippedHere; stranded > 0 {
 			// Books were still reassigned above -- that is strictly an
 			// improvement and is not rolled back. Only the row removal is
 			// refused, leaving a resolvable series ID for the rows we could
@@ -365,11 +434,11 @@ func csMergeSeriesGroup(store seriesMerger, keepID int, mergeIDs []int, refCount
 			continue
 		}
 		if err := store.DeleteSeries(fromID); err != nil {
-			return merged, refused, fmt.Errorf("DeleteSeries(%d): %w", fromID, err)
+			return merged, refused, skipped, fmt.Errorf("DeleteSeries(%d): %w", fromID, err)
 		}
 		merged++
 	}
-	return merged, refused, nil
+	return merged, refused, skipped, nil
 }
 
 var csNonAlphanumRE = regexp.MustCompile(`[^\p{L}\p{N}\s]+`)
