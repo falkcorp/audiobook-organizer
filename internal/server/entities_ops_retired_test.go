@@ -1,7 +1,7 @@
 // file: internal/server/entities_ops_retired_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7733bb72-345a-4ee6-8a06-e0268bf4721e
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package server
 
@@ -273,4 +273,50 @@ func TestAssignPublisherPreservingRecord_RefusesRetiredRow(t *testing.T) {
 			require.Nil(t, store.stored("b1").Publisher)
 		})
 	}
+}
+
+// B4. The author write goes through ModifyBook (row lock), and the join rewrite
+// used to run after that lock was released: a book merged away in between had
+// its credits rewritten. The join is now rewritten in a second locked pass that
+// rechecks the row. The merge lands once the AuthorID column is already the
+// resolved author's, which is when only the second pass can see it.
+func TestAssignResolvedAuthorPreservingRecord_DoesNotRewriteTheJoinOfABookRetiredAfterTheAuthorWrite(t *testing.T) {
+	prod, resolved := 7, 42
+	store := newLostUpdateBookStore(&database.Book{ID: "b1", Title: "Book", AuthorID: &prod})
+	store.concurrent = func(b *database.Book) {
+		if b.AuthorID != nil && *b.AuthorID == resolved {
+			into := "survivor"
+			b.MergedIntoBookID = &into
+		}
+	}
+	var joinWrites int
+	store.GetBookAuthorsFunc = func(string) ([]database.BookAuthor, error) {
+		return []database.BookAuthor{{BookID: "b1", AuthorID: prod, Role: "author", Position: 0}}, nil
+	}
+	store.SetBookAuthorsFunc = func(string, []database.BookAuthor) error { joinWrites++; return nil }
+
+	err := assignResolvedAuthorPreservingRecord(store, "b1", resolved, prod)
+
+	require.ErrorIs(t, err, errResolveBookRetired, "a book retired before the join pass is a retired skip")
+	require.Zero(t, joinWrites, "the join of a retired book must not be rewritten")
+	require.Equal(t, resolved, *store.stored("b1").AuthorID, "the column was written while the book was live")
+}
+
+// The live control: with no merge in between the join is rewritten, once, onto
+// the resolved author in the production company's slot.
+func TestAssignResolvedAuthorPreservingRecord_LiveBookGetsItsJoinRewrittenOnce(t *testing.T) {
+	prod, resolved := 7, 42
+	store := newLostUpdateBookStore(&database.Book{ID: "b1", Title: "Book", AuthorID: &prod})
+	var written [][]database.BookAuthor
+	store.GetBookAuthorsFunc = func(string) ([]database.BookAuthor, error) {
+		return []database.BookAuthor{{BookID: "b1", AuthorID: prod, Role: "author", Position: 0}}, nil
+	}
+	store.SetBookAuthorsFunc = func(_ string, a []database.BookAuthor) error { written = append(written, a); return nil }
+
+	require.NoError(t, assignResolvedAuthorPreservingRecord(store, "b1", resolved, prod))
+
+	require.Len(t, written, 1)
+	require.Len(t, written[0], 1)
+	require.Equal(t, resolved, written[0][0].AuthorID)
+	require.Equal(t, 0, written[0][0].Position, "the resolved author takes the production company's slot")
 }

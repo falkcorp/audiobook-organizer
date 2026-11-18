@@ -227,6 +227,9 @@ type serverAuthorLinkStore interface {
 	GetAllAuthorBookCounts() (map[int]int, error)
 	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
 	SetBookAuthors(bookID string, authors []database.BookAuthor) error
+	// ModifyBookAuthors: the join rewrite nested in a book's write lock
+	// (assignResolvedAuthorPreservingRecord's second pass).
+	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
 	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
 	// GetBooksByAuthorIDForRelinkCore includes the trash; relink-then-delete
 	// paths only (entities.author-merge, the AI merge apply).

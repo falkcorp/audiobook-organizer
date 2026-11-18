@@ -1,7 +1,7 @@
 // file: internal/server/candidate_refetch_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 74a3c673-3586-4bc4-861e-c56db3fd0ab5
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package server
 
