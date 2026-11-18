@@ -20,7 +20,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
-	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 )
 
@@ -339,7 +338,7 @@ func searchedAuthorPhrase(r CandidateResult) string {
 }
 
 // logCandidateOutcome writes one book's outcome line to the op log.
-func logCandidateOutcome(reporter opsregistry.Reporter, r CandidateResult) {
+func logCandidateOutcome(log func(slog.Level, string, ...slog.Attr), r CandidateResult) {
 	level, msg, attrs := candidateOutcomeLine(r)
-	_ = reporter.Log(level, msg, attrs...)
+	log(level, msg, attrs...)
 }
