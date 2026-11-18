@@ -1,5 +1,5 @@
 // file: core/library/libroot.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 4d8b2f61-a3c7-4e90-b512-9e6f0c1d7a38
 // last-edited: 2026-11-18
 
@@ -100,6 +100,10 @@ func ReportPathNotify(root, explicit, fileName string, onTightened func(dir stri
 type reportEnv struct {
 	chmod func(name string, mode os.FileMode) error
 	euid  func() int
+	// afterCreate, when not nil, runs after an explicit report path's directory
+	// was created and before that directory is checked again. It is the window a
+	// link planted by another process would use, so a test can use it to plant one.
+	afterCreate func(parent string)
 }
 
 // defaultReportEnv returns the real process environment.
@@ -190,6 +194,9 @@ func containedReportPath(reportsDir, explicit string, onTightened func(dir strin
 
 	if err := EnsureDirWritable(path); err != nil {
 		return "", fmt.Errorf("report path %s is not writable: %w", path, err)
+	}
+	if env.afterCreate != nil {
+		env.afterCreate(parent)
 	}
 	// The directory chain now exists: check again against what is really there.
 	realParent, err := filepath.EvalSymlinks(parent)
