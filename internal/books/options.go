@@ -1,7 +1,7 @@
 // file: internal/books/options.go
-// version: 1.2.7
+// version: 1.2.8
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
-// last-edited: 2026-11-10
+// last-edited: 2026-11-18
 
 package books
 
@@ -64,6 +64,9 @@ type ServeInputs struct {
 	// ShutdownBudget is core.shutdown.budget as serve read it from
 	// ABO_CORE_SHUTDOWN_BUDGET (R1-33). Zero is core's default (25s).
 	ShutdownBudget time.Duration
+	// FromRelease is the pre-freeze release's tag main embeds (09 §9.2.1), the
+	// from_release the pre-migration checkpoint records. "" = none embedded.
+	FromRelease string
 	// LogOut is the stream the log pipeline prints to, beside the file when
 	// there is one; nil is os.Stdout, where HEAD's lines went.
 	LogOut io.Writer
@@ -152,6 +155,7 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 		StateDir:              m.stateDir,
 		R1StoragePath:         dbPath,
 		StorageStateFiles:     StateFiles(m.stateDir, dbPath),
+		FromRelease:           in.FromRelease,
 	}, nil
 }
 

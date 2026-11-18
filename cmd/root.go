@@ -1,7 +1,7 @@
 // file: cmd/root.go
-// version: 1.30.3
+// version: 1.30.4
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package cmd
 
@@ -322,9 +322,17 @@ var serveCmd = &cobra.Command{
 		// Public-facing origin for absolute link generation (e.g. temp-login URLs).
 		cfg.ExternalURL = cmd.Flag("external-url").Value.String()
 
-		return runApp(cmd.Context(), books.ServeInputs{Server: cfg, Telemetry: telemetryCfg, ShutdownBudget: shutdownBudget})
+		return runApp(cmd.Context(), books.ServeInputs{Server: cfg, Telemetry: telemetryCfg, ShutdownBudget: shutdownBudget, FromRelease: fromRelease})
 	},
 }
+
+// fromRelease is the pre-freeze release's tag main embeds (09 §9.2.1); serve
+// hands it to books as ServeInputs.FromRelease.
+var fromRelease string
+
+// SetFromRelease records the pre-freeze release's tag. Called from main before
+// Execute, like SetVersion.
+func SetFromRelease(tag string) { fromRelease = tag }
 
 // SetVersion sets the version string on the root command.
 // Called from main before Execute so --version and the version command work.

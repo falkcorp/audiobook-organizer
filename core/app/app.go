@@ -1,7 +1,7 @@
 // file: core/app/app.go
-// version: 1.5.5
+// version: 1.5.6
 // guid: 5afb1db8-55c9-498d-8a73-d5b71909b728
-// last-edited: 2026-11-11
+// last-edited: 2026-11-18
 
 // Package app is core's composition root (06 §6.4.5, 03 §3.3 row app): an
 // app's main builds Options and its modules and calls New, then Run. Signal
@@ -419,6 +419,7 @@ func kernelConfig(opts Options, mods []module.Module) (kernel.Config, error) {
 		LegacyAuthGinUntil:    opts.LegacyAuthGinUntil,
 		Logger:                opts.Logger,
 		Modules:               slices.Clone(mods),
+		FromRelease:           opts.FromRelease,
 	}
 	if f := opts.R1Values; f != nil {
 		c.R1Values = func() kernel.R1Values { return kernel.R1Values(f()) }
