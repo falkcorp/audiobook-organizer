@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/finish_credential_migration.py
-# version: 2.0.2
+# version: 2.0.3
 # guid: 5c8b2e14-9a37-4d06-b8f1-2e74a95c30d8
-# last-edited: 2026-10-20
+# last-edited: 2026-11-18
 
 """Finish the 2026-09-09 credential relocation on a deployed host.
 
@@ -255,14 +255,14 @@ def service_user() -> str:
 
 
 def database_path() -> Path | None:
-    """DATABASE_PATH as the RUNNING service sees it.
+    """ABO_CORE_STORAGE_PATH as the RUNNING service sees it.
 
     Read from the merged unit rather than from any .env or repo file: drop-ins
     override the base unit, and the last Environment= wins. Guessing from a
     checkout is how you end up reasoning about a host you are not on.
     """
     out = unit_property("Environment")
-    for tok in re.findall(r"DATABASE_PATH=(\S+)", out):
+    for tok in re.findall(r"ABO_CORE_STORAGE_PATH=(\S+)", out):
         return Path(tok.strip("'\""))
     return None
 
@@ -393,7 +393,7 @@ def find_migrated_keys(legacy_dir: Path) -> list[Path]:
 def build_plan(binary: Path) -> Plan:
     plan = Plan()
     plan.db_path = database_path()
-    plan.notes.append(f"DATABASE_PATH (from the running unit) = {plan.db_path}")
+    plan.notes.append(f"ABO_CORE_STORAGE_PATH (from the running unit) = {plan.db_path}")
 
     if os.geteuid() != 0:
         plan.notes.append(
@@ -457,7 +457,7 @@ def build_plan(binary: Path) -> Plan:
 
     # ---- the encryption key -------------------------------------------
     if plan.db_path is None:
-        plan.key_blockers.append("DATABASE_PATH is unknown, so the legacy directory is too")
+        plan.key_blockers.append("ABO_CORE_STORAGE_PATH is unknown, so the legacy directory is too")
         return plan
 
     legacy_dir = plan.db_path.parent

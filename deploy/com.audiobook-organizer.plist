@@ -1,13 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- file: deploy/com.jdfalk.audiobook-organizer.plist -->
-<!-- version: 2.0.1 -->
+<!-- version: 2.1.0 -->
 <!-- guid: 1f2e3d4c-5b6a-4789-90ab-cdef12345678 -->
+<!-- last-edited: 2026-11-18 -->
 <!--
   macOS launchd plist for audiobook-organizer
 
   Installation:
-    1. Edit this file and set AUDIOBOOK_ROOT_DIR to your library path
+    1. Edit this file: replace /Users/USERNAME, then set your library root in
+       Settings (the core.library.roots key)
     2. Copy to: ~/Library/LaunchAgents/com.jdfalk.audiobook-organizer.plist
     3. Load: launchctl load ~/Library/LaunchAgents/com.jdfalk.audiobook-organizer.plist
     4. Verify: launchctl list | grep audiobook-organizer
@@ -32,12 +34,10 @@
         <string>serve</string>
     </array>
 
-    <!-- Environment variables (edit AUDIOBOOK_ROOT_DIR for your setup) -->
+    <!-- Environment variables (canonical ABO_ names only) -->
     <key>EnvironmentVariables</key>
     <dict>
-        <key>AUDIOBOOK_ROOT_DIR</key>
-        <string>/Users/USERNAME/Audiobooks</string>
-        <key>DATABASE_PATH</key>
+        <key>ABO_CORE_STORAGE_PATH</key>
         <string>/Users/USERNAME/.audiobook-organizer/db</string>
     </dict>
 
