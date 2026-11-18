@@ -1,7 +1,7 @@
 // file: internal/metafetch/library_copy_locks_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 9c2d6b03-7f18-4a54-b3e6-5d0a91c7e482
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package metafetch
 
@@ -113,7 +113,7 @@ func TestSyncMetadataToLibraryCopy_LockReadErrorSyncsNothing(t *testing.T) {
 	svc := NewService(store)
 	original, libCopy := libCopyPair()
 
-	require.NoError(t, svc.syncMetadataToLibraryCopy(original, libCopy))
+	require.Error(t, svc.syncMetadataToLibraryCopy(original, libCopy), "an unreadable lock set is reported, not swallowed")
 
 	assert.Nil(t, *written, "fail closed: an unreadable lock set must not overwrite the copy")
 	assert.Equal(t, 0, *authorWrites)

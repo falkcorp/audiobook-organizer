@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.57.3
+// version: 1.57.4
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-11-18
 
@@ -388,6 +388,9 @@ func legacyAudioConfirmedMarker(candidate MetadataCandidate, th transcriptionHin
 	return th.author == "" || len(th.author) <= 3 || containsCI(candidate.Author, th.author)
 }
 
+// libraryCopyLog is the subsystem logger for a library copy whose sync failed.
+var libraryCopyLog = logger.New("metafetch.library-copy")
+
 // syncMetadataToLibraryCopy copies metadata fields from the original book to
 // the library copy so that both DB records stay in sync. This is needed because
 // ApplyMetadataCandidate only updates the original book's DB record, leaving
@@ -433,7 +436,11 @@ func legacyAudioConfirmedMarker(candidate MetadataCandidate, th transcriptionHin
 //     files tagged by the caller, because that is file I/O and cannot run under
 //     a store lock; writeBackForBook states the same residual.
 //
-// Every other failure is logged and returns nil, as before.
+// Every other failure is logged and returned too (unreadable locks, a refused
+// write, a vanished copy), so the caller decides how loudly to say so: a
+// write-back that would tag the copy from stale columns fails, the side-effect
+// copy made during an apply logs it at error level and goes on. Only the
+// retired refusals wrap errFileTargetChanged.
 func (mfs *Service) syncMetadataToLibraryCopy(original, libCopy *database.Book) error {
 	var restored []string
 	var lockErr error
@@ -449,6 +456,14 @@ func (mfs *Service) syncMetadataToLibraryCopy(original, libCopy *database.Book) 
 		}
 		restored, lockErr = database.ApplyRespectingLocks(mfs.db, row, func(b *database.Book) {
 			mfs.copyMetadataColumns(original, b)
+			// The original can name a series that was deleted (older builds left
+			// such links, and the library-copy sync used to spread them). A book
+			// write refuses a series that does not exist, which would refuse this
+			// whole sync and leave the copy's other columns stale, so the copy
+			// gets no series rather than a refused write. Dropped here, inside
+			// the mutation, so a locked series_id is still restored by the lock
+			// guard afterwards.
+			database.DropDanglingSeriesRef(mfs.db, b, "metafetch.library-copy-sync")
 		})
 		return lockErr
 	})
@@ -462,14 +477,15 @@ func (mfs *Service) syncMetadataToLibraryCopy(original, libCopy *database.Book) 
 	if lockErr != nil {
 		slog.Warn("not syncing metadata to the library copy: its field locks are unreadable",
 			"libCopyID", libCopy.ID, "error", lockErr)
-		return nil
+		return fmt.Errorf("library copy %s: field locks unreadable: %w", libCopy.ID, lockErr)
 	}
 	switch {
 	case err != nil:
 		slog.Warn("failed to sync metadata to library copy", "id", libCopy.ID, "error", err)
+		return fmt.Errorf("library copy %s: metadata sync refused: %w", libCopy.ID, err)
 	case updated == nil:
 		logger.New("metafetch-library-copy").Warn("library copy %s vanished before the metadata sync", logger.SanitizeLogValue(libCopy.ID))
-		return nil
+		return fmt.Errorf("library copy %s vanished before the metadata sync", libCopy.ID)
 	default:
 		// Keep the caller's struct in step with what was written, as the
 		// in-place mutation did before.
@@ -681,12 +697,19 @@ func (mfs *Service) ensureLibraryCopy(book *database.Book) *database.Book {
 	}
 
 	if err := mfs.syncMetadataToLibraryCopy(book, created); err != nil {
-		// The copy was retired between its creation and the sync (a merge or
-		// trash landed in that window): hand back no copy, so no file work
-		// follows onto it.
-		logger.New("metafetch-library-copy").Warn("not using the library copy just made for %s: %s",
-			logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(err.Error()))
-		return nil
+		if errors.Is(err, errFileTargetChanged) {
+			// The copy was retired between its creation and the sync (a merge or
+			// trash landed in that window): hand back no copy, so no file work
+			// follows onto it.
+			logger.New("metafetch-library-copy").Warn("not using the library copy just made for %s: %s",
+				logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(err.Error()))
+			return nil
+		}
+		// The copy exists and is live, and the file steps work on it, so the
+		// apply goes on; but its columns did not follow the original, and that
+		// is not a debug line: it stays stale until the next apply that syncs.
+		libraryCopyLog.Error("library copy %s of %s created but its metadata is stale: the sync from the original failed: %v",
+			logger.SanitizeLogValue(created.ID), logger.SanitizeLogValue(book.ID), err)
 	}
 
 	slog.Info("created library copy for protected book", "path", created.FilePath, "newBookID", created.ID, "originalBookID", book.ID)

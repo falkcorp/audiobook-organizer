@@ -1,7 +1,7 @@
 // file: internal/dedup/split_book_merge_carry_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: e52db43b-d7f1-4be6-947a-639edb4e616c
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package dedup
 
@@ -289,4 +289,40 @@ func TestMergeSplitBookCluster_SliceProgressMapping(t *testing.T) {
 	pos, err := s.GetUserPosition(u.ID, keep)
 	require.NoError(t, err)
 	require.InDelta(t, 580, pos.PositionSeconds, 0.001)
+}
+
+// The planned series is read off a source book, and a source can name a series
+// that was deleted. The fill used to hand that to the keep, the store refused
+// the link, and the ASIN, narrator and author fills were lost with it (the error
+// went to result.Errors and the journal kept the planned values). Now the series
+// is left out and everything else lands, and the journal records only what was
+// written.
+func TestMergeSplitBookCluster_FillEmptyLeavesOutADeletedSeriesAndFillsTheRest(t *testing.T) {
+	s := carryStore(t)
+	keep, _ := carryBook(t, s, "01 - Knightfall", "/lib/A/Knightfall/01 - Knightfall.mp3", 1)
+	src, _ := carryBook(t, s, "02 - Knightfall", "/lib/A/Knightfall/02 - Knightfall.mp3", 2)
+	author, err := s.CreateAuthor("Alfred Pennyworth")
+	require.NoError(t, err)
+	gone, seq := 4714, 3
+	_, err = s.SeedLegacyBookRowForTest(src, func(b *database.Book) error {
+		b.ASIN = new("B0TESTASIN")
+		b.SeriesID, b.SeriesSequence = &gone, &seq
+		b.AuthorID = &author.ID
+		return nil
+	})
+	require.NoError(t, err)
+	require.NoError(t, s.SetBookAuthors(src, []database.BookAuthor{{BookID: src, AuthorID: author.ID, Role: "author"}}))
+
+	res, err := MergeSplitBookClusterWithOptions(s, keep, []string{src}, "", SplitMergeOptions{FillEmpty: true})
+	require.NoError(t, err)
+	require.Empty(t, res.Errors, "a deleted series on a source must not fail the fill")
+
+	k, err := s.GetBookByID(keep)
+	require.NoError(t, err)
+	require.NotNil(t, k.ASIN, "the rest of the fill must land")
+	require.Equal(t, "B0TESTASIN", *k.ASIN)
+	require.NotNil(t, k.AuthorID)
+	require.Equal(t, author.ID, *k.AuthorID)
+	require.Nil(t, k.SeriesID, "the keep gets no series rather than a link to a deleted one")
+	require.Nil(t, k.SeriesSequence, "a sequence without its series is not carried")
 }
