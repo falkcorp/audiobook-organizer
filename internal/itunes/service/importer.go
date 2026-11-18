@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer.go
-// version: 1.43.0
+// version: 1.43.1
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
 // last-edited: 2026-11-17
 
@@ -123,8 +123,10 @@ type bookWriter interface {
 type contributorWriter interface {
 	CreateAuthor(name string) (*database.Author, error)
 	GetAuthorByName(name string) (*database.Author, error)
-	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
 	SetBookAuthors(bookID string, authors []database.BookAuthor) error
+	// ModifyBookAuthors is the locked read-modify-write of a book's author
+	// credits; enrichment replaces a single credit through it.
+	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
 	CreateSeries(name string, authorID *int) (*database.Series, error)
 	GetSeriesByName(name string, authorID *int) (*database.Series, error)
 }
@@ -1183,11 +1185,16 @@ func (imp *Importer) enrichImportedBooks(ctx context.Context, bookIDs []string, 
 		breakerFails.Store(0)
 
 		if resp.Book != nil && resp.Book.AuthorID != nil {
-			existing, _ := imp.store.GetBookAuthors(book.ID)
-			if len(existing) <= 1 {
-				_ = imp.store.SetBookAuthors(book.ID, []database.BookAuthor{
-					{BookID: book.ID, AuthorID: *resp.Book.AuthorID, Role: "author", Position: 0},
-				})
+			retired, joinErr := imp.replaceSingleAuthorCredit(book.ID, *resp.Book.AuthorID)
+			if joinErr != nil {
+				log.Warn("Could not set the fetched author credit for '%s': %v", book.Title, joinErr)
+			}
+			if retired {
+				// Retired after the fetch committed: the join was left alone.
+				// Not a provider failure, so the breaker is untouched.
+				retiredSkipped.Add(1)
+				log.Debug("Skipped author credit for '%s': retired since the fetch", book.Title)
+				return nil
 			}
 		}
 
@@ -1215,6 +1222,41 @@ func (imp *Importer) enrichImportedBooks(ctx context.Context, bookIDs []string, 
 		return
 	}
 	log.Info("Metadata enrichment complete: %d books enriched", enriched)
+}
+
+// replaceSingleAuthorCredit gives a freshly enriched book the author the fetch
+// resolved, replacing the artist iTunes supplied when that is its only credit
+// (a book already crediting several authors keeps them). It reports true when
+// the book is retired (trashed or merged away), in which case nothing was
+// written; a failed read or write is returned and the book is left as it was.
+//
+// The fetch's own commit refuses a retired book, but this join is written after
+// it, and a trash or merge can land in between. The row is therefore read, and
+// the join read and replaced, inside one ModifyBook: the retire writes the row
+// under the same stripe, so it cannot interleave with the check. The join
+// itself goes through ModifyBookAuthors, which takes the book_authors stripe
+// under the book stripe -- the order the store documents (book, then
+// book_authors), and the one ModifyBookCredits holds. The callback returns
+// ErrSkipBookWrite so the row itself is never rewritten.
+func (imp *Importer) replaceSingleAuthorCredit(bookID string, authorID int) (retired bool, err error) {
+	var joinErr error
+	_, modErr := imp.store.ModifyBook(bookID, func(row *database.Book) error {
+		if row.IsRetired() {
+			retired = true
+			return database.ErrSkipBookWrite
+		}
+		_, joinErr = imp.store.ModifyBookAuthors(bookID, func(existing []database.BookAuthor) ([]database.BookAuthor, error) {
+			if len(existing) > 1 {
+				return nil, database.ErrSkipBookAuthorsWrite
+			}
+			return []database.BookAuthor{{BookID: bookID, AuthorID: authorID, Role: "author", Position: 0}}, nil
+		})
+		return database.ErrSkipBookWrite
+	})
+	if modErr != nil {
+		return retired, modErr
+	}
+	return retired, joinErr
 }
 
 // enrichConcurrency returns the registry.RunItems worker-pool size for
