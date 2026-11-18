@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/kinds.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: a3972df8-a6a8-49ee-b157-c35c462e3c8d
 // last-edited: 2026-11-17
 
@@ -112,7 +112,6 @@ type storeContributorStore interface {
 	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
 	GetAllSeries() ([]database.Series, error)
 	GetAllSeriesBookCounts() (map[int]int, error)
-	DeleteSeries(id int) error
 }
 
 type storeUserStateStore interface {

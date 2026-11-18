@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/cleanup_series_cas_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d2b8f41-7a36-4e09-b1c8-93e4f6a02d75
 // last-edited: 2026-11-18
 
@@ -75,6 +75,9 @@ func (s *casStore) DeleteSeriesIfUnreferenced(id int, _ string, _ *int) (bool, e
 	s.deleted = append(s.deleted, id)
 	return true, nil
 }
+
+// SeriesDeleteReady: casStore can always count (database.SeriesDeleteReadiness).
+func (s *casStore) SeriesDeleteReady() error { return nil }
 
 func (s *casStore) seriesOf(id string) int {
 	if b := s.books[id]; b != nil && b.SeriesID != nil {

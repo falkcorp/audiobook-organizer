@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/lost_update_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3b88da9b-5958-44c8-b57a-183be0ee6123
 // last-edited: 2026-11-18
 
@@ -98,7 +98,6 @@ func newLostUpdateStore(books ...database.Book) (*database.MockStore, *lostUpdat
 		out := cp
 		return &out, nil
 	}
-	m.DeleteSeriesFunc = func(int) error { return nil }
 	return m, r
 }
 

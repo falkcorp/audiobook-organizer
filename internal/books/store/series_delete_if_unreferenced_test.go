@@ -1,7 +1,7 @@
 // file: internal/books/store/series_delete_if_unreferenced_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0b5d7e92-3c4a-4f18-a6d1-52e8c9f03b74
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package store
 
@@ -459,4 +459,48 @@ func TestAsCapability_ResolvesSeriesUnreferencedDeleter(t *testing.T) {
 	d, ok := AsCapability[SeriesUnreferencedDeleter](&decoratorStore{Store: s})
 	require.True(t, ok, "the delete must be reachable through a store decorator")
 	require.NotNil(t, d)
+}
+
+// SeriesDeleteReady is the up-front form of the refusals the delete itself makes:
+// it must agree with them in every state, or a caller that probes first would
+// write and then meet the refusal the probe was meant to head off.
+func TestSeriesDeleteReady_AgreesWithTheDelete(t *testing.T) {
+	t.Run("a healthy store is ready and the delete answers", func(t *testing.T) {
+		s := seedRefStore(t)
+		ser, err := s.CreateSeries("Year One", nil)
+		require.NoError(t, err)
+		require.NoError(t, s.SeriesDeleteReady())
+		deleted, err := s.DeleteSeriesIfUnreferenced(ser.ID, ser.Name, ser.AuthorID)
+		require.NoError(t, err)
+		require.True(t, deleted)
+	})
+	t.Run("a memdb known to be missing book rows", func(t *testing.T) {
+		s := seedRefStore(t)
+		ser, err := s.CreateSeries("Endgame", nil)
+		require.NoError(t, err)
+		s.mem().recordLostRows(memTableBooks, 1)
+		require.ErrorIs(t, s.SeriesDeleteReady(), ErrMemdbIncomplete)
+		_, derr := s.DeleteSeriesIfUnreferenced(ser.ID, ser.Name, ser.AuthorID)
+		require.ErrorIs(t, derr, ErrMemdbIncomplete)
+	})
+	t.Run("a memdb that is not serving", func(t *testing.T) {
+		s := seedRefStore(t)
+		ser, err := s.CreateSeries("Knightfall", nil)
+		require.NoError(t, err)
+		s.memPtr.Store(nil)
+		require.ErrorIs(t, s.SeriesDeleteReady(), errSeriesDeleteMemdbNotServing)
+		_, derr := s.DeleteSeriesIfUnreferenced(ser.ID, ser.Name, ser.AuthorID)
+		require.ErrorIs(t, derr, errSeriesDeleteMemdbNotServing)
+	})
+	t.Run("a store built without a memdb is ready", func(t *testing.T) {
+		s := seedRefStore(t)
+		s.UseMemDB = false
+		require.NoError(t, s.SeriesDeleteReady())
+	})
+	t.Run("resolves through a store decorator", func(t *testing.T) {
+		s := seedRefStore(t)
+		r, ok := AsCapability[SeriesDeleteReadiness](&decoratorStore{Store: s})
+		require.True(t, ok)
+		require.NotNil(t, r)
+	})
 }
