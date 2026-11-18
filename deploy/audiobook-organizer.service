@@ -1,7 +1,7 @@
 # file: deploy/audiobook-organizer.service
-# version: 4.8.0
+# version: 4.9.0
 # guid: f1e2d3c4-b5a6-9870-8765-4321fedcba98
-# last-edited: 2026-11-09
+# last-edited: 2026-11-18
 #
 # systemd service unit for audiobook-organizer on Linux
 #
@@ -93,14 +93,15 @@ TimeoutStartSec=300
 User=audiobook
 Group=audiobook
 
-# Service execution — adjust AUDIOBOOK_ROOT_DIR for your library path
+# Service execution. The library root is the core.library.roots key (set it in
+# Settings, or through its canonical environment variable in local.conf); no
+# environment variable in this unit names it.
 ExecStart=/usr/local/bin/audiobook-organizer serve --host 0.0.0.0 --port 8484
 
 # Working directory and environment configuration
 WorkingDirectory=/var/lib/audiobook-organizer
 Environment="HOME=/var/lib/audiobook-organizer"
-Environment="AUDIOBOOK_ROOT_DIR=/var/lib/audiobooks"
-Environment="DATABASE_PATH=/var/lib/audiobook-organizer/audiobooks.pebble"
+Environment="ABO_CORE_STORAGE_PATH=/var/lib/audiobook-organizer/audiobooks.pebble"
 # Allow heap to grow to 9 GiB before aggressive GC; reduces GC CPU overhead
 # while fingerprint blobs remain in the fast cache (see GOMEMLIMIT refactor TODO).
 Environment="GOMEMLIMIT=9GiB"
@@ -110,7 +111,7 @@ Environment="GOGC=200"
 # Parallel books processed concurrently during fingerprint rescan. Each book
 # runs its files sequentially, so this = concurrent fpcalc calls. 16 suits a
 # dedicated 48-core machine; drop to 4 on a shared server.
-Environment="FP_PARALLEL_WORKERS=16"
+Environment="ABO_BOOKS_FINGERPRINT_FP_PARALLEL_WORKERS=16"
 
 # Restart policy: restart on failure with 5-second delay
 Restart=on-failure
@@ -142,7 +143,7 @@ MemoryMax=12G
 
 # Security hardening — kept minimal to allow reading from various mount points
 # (NFS, external drives, etc). The service needs:
-#   - Read access to audiobook source directories (configured at AUDIOBOOK_ROOT_DIR)
+#   - Read access to audiobook source directories (the core.library.roots key)
 #   - Read/write to /var/lib/audiobook-organizer (database and metadata)
 NoNewPrivileges=yes
 ProtectKernelTunables=yes
