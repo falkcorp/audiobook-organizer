@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_files.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 969b284a-5657-442b-beba-275e325e000b
 // last-edited: 2026-11-18
 
@@ -772,7 +772,14 @@ func (mfs *Service) embedCover(ctx context.Context, id string, book *database.Bo
 	}
 	target, err := mfs.fileWorkTarget(book, targetID, intent)
 	if err != nil {
-		slog.Warn("cannot embed cover: the book's file-work target changed after it was locked",
+		// The refusal has two causes with different remedies, and the embed
+		// reports no error, so this line is all an operator sees: a retired
+		// book refused for an unattended job is policy, not a lock race.
+		why := "the book's file-work target changed after it was locked"
+		if errors.Is(err, ErrBookRetired) {
+			why = "the book is retired and this job is unattended"
+		}
+		slog.Warn("cannot embed cover: "+why,
 			"book_id", logger.SanitizeLogValue(id), "error", logger.SanitizeLogValue(err.Error()))
 		return
 	}

@@ -1,5 +1,5 @@
 // file: internal/metafetch/file_work_intent_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6c1e4b3a-8d27-4f5e-9a0c-3b7d5e2f1a48
 // last-edited: 2026-11-18
 
@@ -12,6 +12,7 @@ package metafetch
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -335,6 +336,30 @@ func TestFetchMetadataForBook_FileWorkJobCarriesTheFetchsIntent(t *testing.T) {
 			require.ErrorIs(t, err, ErrBookRetired)
 			assert.Empty(t, *scheduled, "no file work is scheduled for a refused fetch")
 			assert.Zero(t, countPrefix(*calls, "tags:"))
+		})
+	}
+}
+
+// The embed reports no error by design, so its log line is all an operator has:
+// when an unattended job is refused because the book is retired, the line names
+// that cause. It used to say the file-work target "changed after it was
+// locked", which sent anyone reading it looking for a lock race.
+func TestEmbedCover_UnattendedRetiredBookLogNamesTheRetiredCause(t *testing.T) {
+	for _, shape := range retiredCopyShapes {
+		t.Run(shape.name, func(t *testing.T) {
+			f := newIntentFixture(t, shape.retire)
+			book, _ := f.svc.db.GetBookByID("b1")
+
+			var logs lockedLogBuffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
+			f.svc.embedCover(context.Background(), "b1", book, "b1", Unattended)
+
+			assert.Contains(t, logs.String(), "cannot embed cover")
+			assert.Contains(t, logs.String(), "retired", "the line names the retired cause")
+			assert.NotContains(t, logs.String(), "changed after it was locked", "a retired refusal is not a lock race")
 		})
 	}
 }
