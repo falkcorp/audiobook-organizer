@@ -1,5 +1,5 @@
 // file: core/internal/outboxhttp/routes.go
-// version: 1.0.2
+// version: 1.0.4
 // guid: 53094039-febd-4731-bc69-141f4e2fb456
 // last-edited: 2026-11-19
 
@@ -364,7 +364,7 @@ func (a *api) dead(ctx context.Context, in *httpapi.In[deadReq], action, route s
 		return httpapi.NoContent{}, err
 	}
 	consumer, seq := in.Req.Consumer, in.Req.Seq
-	topic, err := a.deadTopic(ctx, consumer)
+	topic, err := a.deadTopic(ctx, consumer, seq)
 	if err != nil {
 		return httpapi.NoContent{}, err
 	}
@@ -433,22 +433,36 @@ func (a *api) begin(ctx context.Context, p *auth.Principal) (audit.Actor, error)
 	return actorOf(p), nil
 }
 
-// deadTopic is the topic of consumer's dead letters, which the audit record of a
-// retry or discard names: the outbox's operations return none, and the letter is
-// gone once they ran, so it is read first. A consumer reads one topic, so its
-// first letter names it; the read starts just inside the consumer's key range
-// and asks for one letter, whatever the consumer's other letters number. It is
-// "" when the consumer has none (the operation then answers 404).
-func (a *api) deadTopic(ctx context.Context, consumer string) (string, error) {
+// deadTopic is the topic of the dead letter the operation will act on, which the
+// audit record of a retry or discard names: the outbox's operations return none,
+// and the letter is gone once they ran, so it is read first. An operator names
+// the consumer and the seq only, and the outbox finds the letter by walking the
+// consumer's dead letters in key order (topic, then seq) to the first one at that
+// seq; so does this, over the same order, so the topic named is the topic of the
+// letter the operation took even when the consumer has letters on two topics (it
+// changed topics between builds). The read starts just inside the consumer's key
+// range and stops past it. It is "" when there is no such letter (the operation
+// then answers 404).
+func (a *api) deadTopic(ctx context.Context, consumer string, seq uint64) (string, error) {
 	after := base64.RawURLEncoding.EncodeToString(outboxstore.DeadPrefix(consumer))
-	letters, _, err := a.op.ListDead(ctx, after, 1)
-	if err != nil {
-		return "", err
+	for {
+		letters, next, err := a.op.ListDead(ctx, after, maxDeadPage)
+		if err != nil {
+			return "", err
+		}
+		for _, d := range letters {
+			if d.Consumer != consumer { // past the consumer's letters
+				return "", nil
+			}
+			if d.Seq == seq {
+				return d.Topic, nil
+			}
+		}
+		if next == "" {
+			return "", nil
+		}
+		after = next
 	}
-	if len(letters) == 1 && letters[0].Consumer == consumer {
-		return letters[0].Topic, nil
-	}
-	return "", nil
 }
 
 // consumerTopic is the topic a consumer's backlog is on, and whether the status
