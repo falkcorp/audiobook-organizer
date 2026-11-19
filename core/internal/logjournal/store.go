@@ -1,5 +1,5 @@
 // file: core/internal/logjournal/store.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e41b7d08-6a52-4c93-8f1d-3b9a0c5e2d76
 // last-edited: 2026-11-18
 
@@ -307,13 +307,18 @@ func (s *Store) Query(ctx context.Context, q log.JournalQuery) (log.JournalPage,
 		if !q.Until.IsZero() && !r.Time.Before(q.Until) {
 			return false
 		}
-		if text != "" && !strings.Contains(strings.ToLower(r.Message), text) {
-			return false
-		}
-		// Last, so the predicate runs only on records the filters keep. A hidden
-		// record is as good as absent: not counted toward limit, never a cursor.
-		return q.Hide == nil || !q.Hide(r)
+		return text == "" || strings.Contains(strings.ToLower(r.Message), text)
 	}
+	// hidden is asked of every row the scan reaches, whatever the filters say:
+	// a hidden record is as good as absent, so it takes no page slot, is never a
+	// cursor, and does not spend the scan budget either. Were it asked only of
+	// rows the filters keep, a flagged row a filter rejects would still spend
+	// budget and move the cursor, and varying the filter would count them. A
+	// page that ends on the budget therefore ends where it would on a journal
+	// that never held the rows. The price is that a long run of hidden rows is scanned through, not
+	// paged: the cost is the journal's size (retention bounds it) and the
+	// caller's context.
+	hidden := func(r log.Record) bool { return q.Hide != nil && q.Hide(r) }
 
 	var page log.JournalPage
 	var lastReturned, lastExamined []byte
@@ -323,13 +328,16 @@ func (s *Store) Query(ctx context.Context, q log.JournalQuery) (log.JournalPage,
 		if err != nil {
 			return log.JournalPage{}, err
 		}
+		r, ok := s.decode(kv)
+		if ok && hidden(r) {
+			continue
+		}
 		if examined >= scanBudget {
 			more = true // the budget ended the call; resume where it stopped
 			break
 		}
 		examined++
 		lastExamined = append(lastExamined[:0], kv.Key...)
-		r, ok := s.decode(kv)
 		if !ok || !match(r) {
 			continue
 		}
