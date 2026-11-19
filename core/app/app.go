@@ -1,5 +1,5 @@
 // file: core/app/app.go
-// version: 1.5.6
+// version: 1.5.7
 // guid: 5afb1db8-55c9-498d-8a73-d5b71909b728
 // last-edited: 2026-11-18
 
@@ -69,7 +69,7 @@ func New(ctx context.Context, opts Options, mods ...module.Module) (*App, error)
 	if c.StoragePath, c.StateDir, err = storagePath(opts, mods); err != nil {
 		return nil, err
 	}
-	if c.StoragePath != "" {
+	if declaresStorage(mods) {
 		if c.StorageClaimsShadow, err = claimsShadow(opts); err != nil {
 			return nil, err
 		}
@@ -319,9 +319,29 @@ func lookupEnv(env []string, name string) string {
 // ResolveStateDir's, made absolute, resolved once from pre-boot inputs only,
 // even when <EnvPrefix>_CORE_STORAGE_PATH names the store (06 §6.5.1).
 // Describe never calls it.
+//
+// With Options.CoreConfigBoot the layers own both values, so storagePath
+// passes on only what the app compiles in: Options.R1StoragePath (checked
+// absolute) as the store path and "" as the state directory. The kernel's P0
+// resolves the rest from the config layers (kernel.bootCoreConfig, which
+// refuses a compiled path that names another store than a layer does), and
+// an offline command asks kernel.ResolveStorage (offlineStoragePath), so
+// serve and offline cannot disagree. The environment is not read here.
 func storagePath(opts Options, mods []module.Module) (dbPath, stateDir string, err error) {
-	if !slices.ContainsFunc(mods, func(m module.Module) bool { return m != nil && kernel.DeclaresStorage(m.Manifest()) }) {
+	if !declaresStorage(mods) {
 		return "", "", nil
+	}
+	if opts.CoreConfigBoot {
+		if _, err := envPrefix(opts); err != nil {
+			return "", "", err
+		}
+		if r1 := opts.R1StoragePath; r1 != "" {
+			if !filepath.IsAbs(r1) {
+				return "", "", fmt.Errorf("app: Options.R1StoragePath %q is not an absolute path (core.storage.path)", r1)
+			}
+			dbPath = filepath.Clean(r1)
+		}
+		return dbPath, "", nil
 	}
 	prefix, err := envPrefix(opts)
 	if err != nil {
@@ -359,6 +379,12 @@ func storagePath(opts Options, mods []module.Module) (dbPath, stateDir string, e
 		return filepath.Clean(dbPath), stateDir, nil
 	}
 	return filepath.Join(stateDir, "storage", "main.pebble"), stateDir, nil
+}
+
+// declaresStorage reports whether any module of the app declares storage: the
+// condition under which the app has a store, whatever path resolves it.
+func declaresStorage(mods []module.Module) bool {
+	return slices.ContainsFunc(mods, func(m module.Module) bool { return m != nil && kernel.DeclaresStorage(m.Manifest()) })
 }
 
 // claimsShadow is core.storage.claims.mode (05-storage §5S.0 D-S2, §5S.9.4
@@ -420,6 +446,13 @@ func kernelConfig(opts Options, mods []module.Module) (kernel.Config, error) {
 		Logger:                opts.Logger,
 		Modules:               slices.Clone(mods),
 		FromRelease:           opts.FromRelease,
+	}
+	if opts.CoreConfigBoot {
+		// The config boot's operator layers and the state directory's compiled
+		// default; the store path and state directory are P0's (storagePath).
+		c.CoreConfigBoot = true
+		c.ConfigOptions = opts.configOptions()
+		c.StateDirDefault = opts.StateDir
 	}
 	if f := opts.R1Values; f != nil {
 		c.R1Values = func() kernel.R1Values { return kernel.R1Values(f()) }
