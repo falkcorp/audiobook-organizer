@@ -1,5 +1,5 @@
 // file: core/auth/lastadmin_roleguard_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b8e2f61-7a3d-4c90-b1e4-d6a92c0f3e75
 // last-edited: 2026-11-19
 
@@ -144,12 +144,16 @@ func TestLastAdmin_RoleEditAgainstUserWrite(t *testing.T) {
 		t.Run("user write "+name+" commits inside the role edit", func(t *testing.T) {
 			r := newAdminRace(t)
 			write := r.userWrites()[name]
-			// The role edit has read the holders (dick among them) and not
-			// yet committed; the user write lands now.
+			// The role edit has read the holders before and after the edit
+			// (dick among them: bruce's role is the one it strips), guarded
+			// every user it read, and not yet committed; the user write
+			// lands now, in the window between its last holder read (the
+			// second call) and its commit. Its batch's Commit must fail on
+			// the guarded user, and the retry, which reads dick gone, must
+			// refuse: a needed second attempt is what shows the guard held.
 			var userErr error
-			var fired atomic.Bool
-			r.f.holders.setAfterRead(func() {
-				if fired.CompareAndSwap(false, true) {
+			r.f.holders.setAfterRead(func(call int) {
+				if call == 2 {
 					userErr = write()
 				}
 			})
@@ -159,6 +163,9 @@ func TestLastAdmin_RoleEditAgainstUserWrite(t *testing.T) {
 			}
 			if !errors.Is(editErr, rbac.ErrLastAdmin) {
 				t.Fatalf("role edit after the user write took dick's admin: err = %v, want ErrLastAdmin", editErr)
+			}
+			if n := r.f.holders.holderReads(); n < 4 {
+				t.Fatalf("HoldersOf ran %d times, want 4 or more: the first attempt must have failed at its commit and run again", n)
 			}
 			if n := r.activeAdmins(t); n != 1 {
 				t.Fatalf("%d active admins, want 1", n)
