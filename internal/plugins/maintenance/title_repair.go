@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_repair.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 13bedd46-9b61-41a2-b791-36813d7ffcb9
 // last-edited: 2026-11-19
 
@@ -438,7 +438,6 @@ func titleRepairCore(ctx context.Context, apply bool, env titleRepairEnv) error 
 		if d.Action != actionRetitle && d.Reason != "" {
 			env.Log(slog.LevelDebug, fmt.Sprintf("book %s: skip — %s", b.ID, d.Reason))
 		}
-		return nil
 		return nil
 	})
 	if err != nil {
