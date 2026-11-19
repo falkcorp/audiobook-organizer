@@ -390,8 +390,11 @@ type batchApplyRun interface {
 
 // batchApplyWriter is the write side of metadata.batch-apply-cached.
 type batchApplyWriter interface {
-	// OpenBatchApply opens the run's apply state, refusing a server with no
-	// metadata fetch service before any read.
+	// Ready refuses a server with no metadata fetch service. The core asks it
+	// right after the stand-down and before it reports anything, as HEAD did.
+	Ready() error
+	// OpenBatchApply opens the run's apply state (the claim index read, the
+	// refusal ledger, the shared import-path read).
 	OpenBatchApply(ctx context.Context) (batchApplyRun, error)
 }
 
@@ -443,6 +446,11 @@ func batchApplyCore(ctx context.Context, p batchApplyOpParams, env batchApplyEnv
 	}
 	defer func() { retErr = hold.Finish(retErr) }()
 	ctx, env.t7Env = t7Rebind(ctx, env.t7Env, hold)
+	// The metadata service is checked here, after the hold and before anything is
+	// reported, as HEAD did.
+	if err := env.Writer.Ready(); err != nil {
+		return err
+	}
 
 	// bookIDs is what is LEFT. On a resumed run the registry has merged
 	// the checkpoint back into params, so this is already the unfinished
@@ -559,8 +567,7 @@ func batchApplyCore(ctx context.Context, p batchApplyOpParams, env batchApplyEnv
 	// never taken. Its rename already happened, and the rename preflight
 	// still refuses a collision with it.
 	// The run's claim index, refusal ledger and shared import-path read, opened
-	// once (batchApplyRun). The metadata service is checked there, after the hold
-	// and before the first read, as it was.
+	// once (batchApplyRun).
 	run, openErr := env.Writer.OpenBatchApply(ctx)
 	if openErr != nil {
 		return openErr
@@ -913,12 +920,19 @@ func batchApplyCore(ctx context.Context, p batchApplyOpParams, env batchApplyEnv
 // store.
 type headBatchApply struct{ s *Server }
 
+func (h headBatchApply) Ready() error {
+	if h.s.metadataFetchService == nil {
+		return fmt.Errorf("batch-apply-cached: metadata fetch service not initialized")
+	}
+	return nil
+}
+
 func (h headBatchApply) OpenBatchApply(ctx context.Context) (batchApplyRun, error) {
 	s := h.s
-	svc := s.metadataFetchService
-	if svc == nil {
-		return nil, fmt.Errorf("batch-apply-cached: metadata fetch service not initialized")
+	if err := h.Ready(); err != nil {
+		return nil, err
 	}
+	svc := s.metadataFetchService
 	store := s.storeForWiring()
 	// The sibling-part claims need every claim before the first apply: the index
 	// covers EVERY book with cached candidates, not the batch (see the core).

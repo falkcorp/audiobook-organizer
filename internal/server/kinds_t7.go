@@ -23,6 +23,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/errhandling"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
@@ -81,13 +82,6 @@ type t7Env struct {
 	Restore func(v any) (bool, error)
 }
 
-// logf is Log without attributes.
-func (e t7Env) logf(level slog.Level, format string, args ...any) {
-	if e.Log != nil {
-		e.Log(level, fmt.Sprintf(format, args...))
-	}
-}
-
 // progress is Progress behind a nil check.
 func (e t7Env) progress(current, total int, msg string) {
 	if e.Progress != nil {
@@ -105,14 +99,17 @@ func t7HeadEnv(rep opsregistry.Reporter, live bool) t7Env {
 		Progress: func(current, total int, msg string) {
 			_ = rep.UpdateProgress(current, total, msg)
 		},
-		Canceled:  rep.IsCanceled,
+		// Closures, not method values: a method value on a nil Reporter panics when
+		// it is taken, and HEAD's bodies (and their tests) run with a nil reporter
+		// until the first call that needs one.
+		Canceled:  func() bool { return rep.IsCanceled() },
 		OpID:      opsregistry.ReporterOpID(rep),
 		SetResult: func(v any) error { return opsregistry.ReporterSetResult(rep, v) },
 		Items:     t7HeadItems(rep),
 		Touch:     func() { opsregistry.TouchLiveness(rep) },
 		// HEAD's cores that checkpoint write the remaining work, which HEAD's
 		// resume overlays onto the params; they never read it back.
-		Checkpoint: rep.Checkpoint,
+		Checkpoint: func(state any) error { return rep.Checkpoint(state) },
 	}
 }
 
@@ -407,7 +404,7 @@ func (c *t7ScanController) AcquireScanStandDown(ctx context.Context, _ string, r
 	c.mu.Unlock()
 	return func() {
 		if h.Finish != nil {
-			_ = h.Finish(nil)
+			errhandling.MustLog(h.Finish(nil), "scan stand-down lapsed during the run; its lease was lost before release")
 		}
 	}, nil
 }
@@ -703,7 +700,7 @@ func t7DecodeNative[P any](kind tasks.Kind, raw json.RawMessage) (P, error) {
 // t7AtomScopes is the route requirement of each HEAD permission atom
 // (05-rbac 6.1, internal/books.AtomTable). internal/books imports this package
 // through its import graph, so the table cannot be read from here; the external
-// test TestT7ServerKinds_AtomTable fails when the two drift.
+// test TestKindAtomScopes_MatchBooksAtomTable fails when the two drift.
 var t7AtomScopes = map[auth.Permission][]rbac.Permission{
 	auth.PermLibraryView:         {"books:view", "core:tasks.view"},
 	auth.PermLibraryEditMetadata: {"books:edit"},

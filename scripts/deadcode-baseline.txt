@@ -1017,6 +1017,7 @@ internal/scheduler.t7KindList
 internal/scheduler.t7LiveOnly
 internal/scheduler.t7NativeEnv
 internal/scheduler.t7NativeStandDown
+internal/scheduler.t7NeedStore
 internal/scheduler.t7NewWriter
 internal/scheduler.t7Priority
 internal/scheduler.t7Res
@@ -1083,7 +1084,6 @@ internal/server.runIdentificationAdvance
 internal/server.t7ApplyPathWrites
 internal/server.t7Common
 internal/server.t7DecodeNative
-internal/server.t7Env.logf
 internal/server.t7KindFor
 internal/server.t7KindList
 internal/server.t7LiveOnly

@@ -26,6 +26,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/errhandling"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
@@ -142,7 +143,9 @@ func authorReclassifyCore(ctx context.Context, authorID int, env authorReclassif
 	if herr != nil {
 		return "", fmt.Errorf("author-reclassify: %w", herr)
 	}
-	defer func() { _ = hold.Finish(nil) }()
+	defer func() {
+		errhandling.MustLog(hold.Finish(nil), "scan stand-down lapsed during the run; its lease was lost before release")
+	}()
 
 	store := authorReclassifyPair{env.Store, env.Writer}
 	defer env.Writer.InvalidateAuthorCaches()
