@@ -1,5 +1,5 @@
 // file: core/internal/outboxhttp/routes_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b91b2c32-bee4-4aac-a400-6fb0e871d709
 // last-edited: 2026-11-19
 
@@ -606,9 +606,15 @@ func TestOutboxHTTP_ListDeadBadCursor(t *testing.T) {
 	forged := []string{
 		"not base64 !",
 		"",
-		httpapi.EncodeCursor([]byte("c/outbox/in/core.notify.delivery.requested.v1/01J0"), deadCursorHash()),
+		// a real key of every other family: the position a scan would start at
+		httpapi.EncodeCursor(outboxstore.InKey(noticeTopic, "01J0000000000000000BATMN01"), deadCursorHash()),
+		httpapi.EncodeCursor(outboxstore.MsgKey(noticeTopic, 0, 1), deadCursorHash()),
+		httpapi.EncodeCursor(outboxstore.CurKey(consumerDeliver, noticeTopic, 0), deadCursorHash()),
+		httpapi.EncodeCursor(outboxstore.DeadCountKey(consumerDeliver, noticeTopic, 0), deadCursorHash()),
+		httpapi.EncodeCursor(outboxstore.SeqKey(noticeTopic), deadCursorHash()),
 		httpapi.EncodeCursor(nil, deadCursorHash()),
 		httpapi.EncodeCursor(outboxstore.DeadRoot(), deadCursorHash()),
+		httpapi.EncodeCursor(outboxstore.DeadPrefix(consumerDeliver), deadCursorHash()),
 		httpapi.EncodeCursor(append(outboxstore.DeadKey(consumerDeliver, noticeTopic, 1), 0xff), deadCursorHash()),
 		foreign,
 	}
@@ -642,8 +648,7 @@ func TestOutboxHTTP_ListDeadFailures(t *testing.T) {
 	if !errors.Is(err, boom) {
 		t.Errorf("error = %v, want the store's", err)
 	}
-	var he *httpapi.Error
-	if errors.As(err, &he) {
+	if he, ok := errors.AsType[*httpapi.Error](err); ok {
 		t.Errorf("a store failure became the problem %d %s", he.Status, he.Code)
 	}
 }
@@ -685,12 +690,92 @@ func detailInt(t testing.TB, r audit.Record, key string) int {
 	return 0
 }
 
-// TestOutboxHTTP_RetryRedeliversAndAudits: a retried dead letter is gone from
-// the dead rows and staged again for its consumer alone, under the same
-// idempotency key (the relay then delivers it: F6-01's delivery tests), and one
-// audit record names the action, the bound principal, the consumer, the seq and
-// the topic, and never the message.
+// TestOutboxHTTP_RetryRedeliversAndAudits: with the relay running, a retried dead
+// letter is handed to its consumer again, under its old idempotency key and with
+// its own payload, the dead row is gone (the other letter stays), and one audit
+// record names the retry and the bound principal.
 func TestOutboxHTTP_RetryRedeliversAndAudits(t *testing.T) {
+	e := newRelayEnv(t)
+	e.deadLetter(consumerDeliver, noticeTopic, noticeParts, 1, true)
+	e.deadLetter(consumerDeliver, noticeTopic, noticeParts, 2, true)
+	e.startRelay()
+	if n := len(e.got.all()); n != 0 {
+		t.Fatalf("%d deliveries before the retry", n)
+	}
+
+	if _, err := e.api.retry(context.Background(), deadIn(bruce(), consumerDeliver, 1)); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the retried message to be delivered", func() bool { return len(e.got.all()) >= 1 })
+	time.Sleep(50 * time.Millisecond) // a second delivery would arrive by now
+	got := e.got.all()
+	if len(got) != 1 {
+		t.Fatalf("%d deliveries after one retry, want 1: %+v", len(got), got)
+	}
+	m := got[0]
+	if m.IdempotencyKey != "01J0000000000000000BATMN01" || m.Topic != noticeTopic || m.Payload.Villain != "Joker" || m.Payload.Block != 7 || m.Key != "wayne-manor" {
+		t.Errorf("delivery = %+v, want the dead letter's message under its old key", m)
+	}
+	rows := e.deadRows()
+	if len(rows) != 1 || rows[0].Seq != 2 {
+		t.Errorf("dead letters after the retry = %+v, want only seq 2", rows)
+	}
+	r := recordOf(t, e, "core.outbox.dead_retry")
+	if r.Actor.Username != "bruce" || r.Outcome != audit.Success || r.Target.ID != consumerDeliver {
+		t.Errorf("record = %+v", r)
+	}
+	if n := len(e.records()); n != 1 {
+		t.Errorf("%d audit records, want 1", n)
+	}
+}
+
+// TestOutboxHTTP_DeadOperationsNameTheTopicWithoutCursors: a consumer whose
+// cursors expired while its letters stayed (or that never registered here) is
+// unknown to the status read, and the audit record of a retry or discard still
+// names the topic, taken from the letter itself.
+func TestOutboxHTTP_DeadOperationsNameTheTopicWithoutCursors(t *testing.T) {
+	for _, c := range []struct {
+		consumer, topic string
+		parts           int
+	}{
+		{consumerMirror, noticeTopic, noticeParts},
+		{consumerRespond, signalTopic, signalParts},
+	} {
+		for _, kind := range []string{"retry", "discard"} {
+			t.Run(c.consumer+"/"+kind, func(t *testing.T) {
+				e := newEnv(t)
+				// A letter of another consumer sorts before this one's, and one
+				// sorts after it: neither may name the topic.
+				e.deadLetter("core.notify.alpha", "core.notify.delivery.requested.v1", noticeParts, 1, false)
+				e.deadLetter(c.consumer, c.topic, c.parts, 5, false)
+				e.deadLetter("wayne.vault.zeta", signalTopic, signalParts, 1, false)
+				if st := e.consumerStatus(c.consumer); st.Topic != "" {
+					t.Fatalf("the status read names topic %q: the fixture is not the cursorless shape", st.Topic)
+				}
+				var err error
+				if kind == "retry" {
+					_, err = e.api.retry(context.Background(), deadIn(bruce(), c.consumer, 5))
+				} else {
+					_, err = e.api.discard(context.Background(), deadIn(bruce(), c.consumer, 5))
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				recs := e.records()
+				if len(recs) != 1 || recs[0].Details["topic"] != c.topic || detailInt(t, recs[0], "seq") != 5 {
+					t.Errorf("records = %+v, want one naming topic %s and seq 5", recs, c.topic)
+				}
+			})
+		}
+	}
+}
+
+// TestOutboxHTTP_RetryStagesForItsConsumerAlone: with no relay running, a retried
+// dead letter is gone from the dead rows and staged again for its consumer
+// alone, under the same idempotency key, and one audit record names the action,
+// the bound principal, the consumer, the seq and the topic, and never the
+// message.
+func TestOutboxHTTP_RetryStagesForItsConsumerAlone(t *testing.T) {
 	e := newEnv(t)
 	e.deadLetter(consumerDeliver, noticeTopic, noticeParts, 1, true)
 	e.deadLetter(consumerDeliver, noticeTopic, noticeParts, 2, true)
@@ -955,12 +1040,12 @@ func TestOutboxHTTP_RecordsAfterTheOperation(t *testing.T) {
 			_, err := rg.api.retry(context.Background(), deadIn(bruce(), "core.notify.deliver", 4))
 			return err
 		},
-			[]string{"op:status", "op:retry core.notify.deliver/4", "record:core.outbox.dead_retry:success"}},
+			[]string{"op:list", "op:retry core.notify.deliver/4", "record:core.outbox.dead_retry:success"}},
 		{"discard", func(rg *rig) error {
 			_, err := rg.api.discard(context.Background(), deadIn(bruce(), "core.notify.deliver", 4))
 			return err
 		},
-			[]string{"op:status", "op:discard core.notify.deliver/4", "record:core.outbox.dead_discard:success"}},
+			[]string{"op:list", "op:discard core.notify.deliver/4", "record:core.outbox.dead_discard:success"}},
 		{"purge", func(rg *rig) error {
 			_, err := rg.api.purge(context.Background(), purgeIn(bruce(), "core.notify.deliver"))
 			return err
@@ -1062,8 +1147,7 @@ func TestOutboxHTTP_FailedOperationWritesNoRecord(t *testing.T) {
 			if !errors.Is(err, store) {
 				t.Errorf("error = %v, want the store's, unchanged", err)
 			}
-			var he *httpapi.Error
-			if errors.As(err, &he) {
+			if he, ok := errors.AsType[*httpapi.Error](err); ok {
 				t.Errorf("a store failure became the problem %d %s", he.Status, he.Code)
 			}
 			if rec := rg.rec.recorded(); len(rec) != 0 {
@@ -1073,20 +1157,30 @@ func TestOutboxHTTP_FailedOperationWritesNoRecord(t *testing.T) {
 	}
 }
 
-// TestOutboxHTTP_StatusFailureStopsTheOperation: the status read that names the
-// topic runs before the operation, and when it fails nothing is applied.
-func TestOutboxHTTP_StatusFailureStopsTheOperation(t *testing.T) {
-	rg := newRig()
+// TestOutboxHTTP_ReadFailureStopsTheOperation: the read that names the topic runs
+// before the operation (the dead letter list for a retry or discard, the status
+// for a purge), and when it fails nothing is applied or recorded.
+func TestOutboxHTTP_ReadFailureStopsTheOperation(t *testing.T) {
 	boom := errors.New("pebble: the Batcave flooded")
-	rg.op.statusErr = boom
+	rg := newRig()
+	rg.op.listErr = boom
 	if _, err := rg.api.retry(context.Background(), deadIn(bruce(), "core.notify.deliver", 1)); !errors.Is(err, boom) {
 		t.Errorf("retry = %v", err)
 	}
+	if _, err := rg.api.discard(context.Background(), deadIn(bruce(), "core.notify.deliver", 1)); !errors.Is(err, boom) {
+		t.Errorf("discard = %v", err)
+	}
+	if got := rg.j.all(); !slices.Equal(got, []string{"op:list", "op:list"}) {
+		t.Errorf("steps = %v, want only the two list reads", got)
+	}
+
+	rg = newRig()
+	rg.op.statusErr = boom
 	if _, err := rg.api.purge(context.Background(), purgeIn(bruce(), "core.notify.deliver")); !errors.Is(err, boom) {
 		t.Errorf("purge = %v", err)
 	}
-	if got := rg.j.all(); !slices.Equal(got, []string{"op:status", "op:status"}) {
-		t.Errorf("steps = %v, want only the two status reads", got)
+	if got := rg.j.all(); !slices.Equal(got, []string{"op:status"}) {
+		t.Errorf("steps = %v, want only the status read", got)
 	}
 }
 
@@ -1285,15 +1379,15 @@ func TestOutboxHTTP_ConsumersAndTopicsList(t *testing.T) {
 	if mirror.Enabled || !mirror.Declared || mirror.Topic != "" || mirror.Pending != 0 {
 		t.Errorf("a consumer that never ran = %+v", mirror)
 	}
-	if !strings.Contains(toJSON(t, gotham), `"stopped":[]`) {
-		t.Errorf("a consumer with nothing stopped encodes stopped as %s, want an empty array", toJSON(t, gotham))
+	if !strings.Contains(toJSON(t, page), `"stopped":[]`) {
+		t.Errorf("a page with nothing stopped encodes stopped as %s, want an empty array", toJSON(t, page))
 	}
 	var one map[string]any
 	if err := json.Unmarshal([]byte(toJSON(t, deliver)), &one); err != nil {
 		t.Fatal(err)
 	}
 	for _, k := range []string{"name", "module", "topic", "enabled", "declared", "pending", "pending_capped", "retrying", "lag_ms",
-		"dead", "intake_backlog", "intake_capped", "retained_backlog", "stopped"} {
+		"dead", "intake_backlog", "intake_capped", "retained_backlog"} {
 		if _, ok := one[k]; !ok {
 			t.Errorf("the consumer has no %q field: %v", k, one)
 		}
@@ -1343,47 +1437,55 @@ func TestOutboxHTTP_ConsumersAndTopicsList(t *testing.T) {
 	}
 }
 
-// TestOutboxHTTP_ConsumerStopped: what the relay will not work on is named under
-// the consumers it concerns: its own pair with the partition, the counter of its
-// undecodable letters with none, and a stopped topic under every consumer of
-// that topic; another consumer's or topic's is not.
-func TestOutboxHTTP_ConsumerStopped(t *testing.T) {
+// TestOutboxHTTP_ConsumersStoppedList: everything the outbox says the relay will
+// not work on is listed, whole, on every page, whether or not a consumer is
+// involved: a pair with its partition, the counter of a consumer's undecodable
+// letters with none, a topic, and the key families the status read names. A
+// partition is only ever a pair's.
+func TestOutboxHTTP_ConsumersStoppedList(t *testing.T) {
 	rg := newRig()
 	rg.op.status = outbox.Status{
 		Consumers: []outbox.ConsumerStatus{
 			{Name: "core.notify.deliver", Topic: noticeTopic, Lag: 1500 * time.Millisecond},
 			{Name: "core.notify.mirror", Topic: noticeTopic},
-			{Name: "gotham.dispatch.respond", Topic: signalTopic},
-			{Name: "wayne.vault.guard"},
 		},
 		Stopped: []outbox.StoppedStatus{
 			{Consumer: "core.notify.deliver", Topic: noticeTopic, Partition: 1, Cause: "corrupt_row"},
 			{Consumer: "core.notify.deliver", Topic: noticeTopic, Partition: -1, Cause: "corrupt_row"},
+			{Consumer: "gotham.dispatch.respond", Topic: signalTopic, Partition: 0, Cause: "unknown_version"},
 			{Topic: noticeTopic, Cause: "partitions_changed"},
-			{Topic: "", Cause: "corrupt_row"}, // names no topic and no consumer: concerns nobody here
+			{Topic: "dead/", Cause: "corrupt_row"},
+			{Topic: "deadn/", Cause: "corrupt_row"},
 		},
 	}
-	page, err := rg.api.consumers(context.Background(), pageIn(50, 0))
+	want := `[{"cause":"corrupt_row","topic":"` + noticeTopic + `","consumer":"core.notify.deliver","partition":1},` +
+		`{"cause":"corrupt_row","topic":"` + noticeTopic + `","consumer":"core.notify.deliver"},` +
+		`{"cause":"unknown_version","topic":"` + signalTopic + `","consumer":"gotham.dispatch.respond","partition":0},` +
+		`{"cause":"partitions_changed","topic":"` + noticeTopic + `"},` +
+		`{"cause":"corrupt_row","topic":"dead/"},{"cause":"corrupt_row","topic":"deadn/"}]`
+	for _, pg := range []struct{ limit, offset int }{{50, 0}, {1, 1}, {10, 99}} {
+		page, err := rg.api.consumers(context.Background(), pageIn(pg.limit, pg.offset))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := toJSON(t, page.Stopped); got != want {
+			t.Errorf("page %+v stopped = %s\nwant %s", pg, got, want)
+		}
+	}
+	page, _ := rg.api.consumers(context.Background(), pageIn(50, 0))
+	if page.Items[0].LagMS != 1500 {
+		t.Errorf("lag_ms = %d, want 1500", page.Items[0].LagMS)
+	}
+
+	// A real stop: the topic was sequenced over another partition count.
+	e := newEnv(t)
+	e.sequence(noticeTopic, noticeParts+1, 1)
+	real, err := e.api.consumers(context.Background(), pageIn(50, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
-	by := map[string]OutboxConsumer{}
-	for _, c := range page.Items {
-		by[c.Name] = c
-	}
-	if got := toJSON(t, by["core.notify.deliver"].Stopped); got != `[{"cause":"corrupt_row","partition":1},{"cause":"corrupt_row"},{"cause":"partitions_changed"}]` {
-		t.Errorf("deliver stopped = %s", got)
-	}
-	if got := toJSON(t, by["core.notify.mirror"].Stopped); got != `[{"cause":"partitions_changed"}]` {
-		t.Errorf("mirror stopped = %s (a topic's stop concerns every consumer of the topic)", got)
-	}
-	for _, n := range []string{"gotham.dispatch.respond", "wayne.vault.guard"} {
-		if got := toJSON(t, by[n].Stopped); got != "[]" {
-			t.Errorf("%s stopped = %s, want none", n, got)
-		}
-	}
-	if by["core.notify.deliver"].LagMS != 1500 {
-		t.Errorf("lag_ms = %d, want 1500", by["core.notify.deliver"].LagMS)
+	if got := toJSON(t, real.Stopped); got != `[{"cause":"partitions_changed","topic":"`+noticeTopic+`"}]` {
+		t.Errorf("stopped over a changed partition count = %s", got)
 	}
 }
 

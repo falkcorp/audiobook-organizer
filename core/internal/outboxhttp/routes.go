@@ -1,5 +1,5 @@
 // file: core/internal/outboxhttp/routes.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 53094039-febd-4731-bc69-141f4e2fb456
 // last-edited: 2026-11-19
 
@@ -135,7 +135,7 @@ func Register(g *httpapi.Group, op Operator, cat events.Catalog, rec audit.Logge
 	httpapi.Handle(g, httpapi.Route{
 		Method: http.MethodGet, Path: "/outbox/consumers", Name: "listOutboxConsumers", Perm: view, Tags: tags,
 		Summary: "List the outbox's consumers",
-		Doc:     "Every declared consumer, enabled or not, with its lag, pending, retrying and dead counts and its topic's intake backlog. A disabled module's consumer is listed with the backlog the store keeps for it (retained_backlog). A count marked capped is a floor: the store counts at most 1000 per partition. A topic or pair the relay will not work on until an operator acts is named under stopped, with a closed cause token.",
+		Doc:     "Every declared consumer, enabled or not, with its lag, pending, retrying and dead counts and its topic's intake backlog. A disabled module's consumer is listed with the backlog the store keeps for it (retained_backlog). A count marked capped is a floor: the store counts at most 1000 per partition. What the relay will not work on until an operator acts (a topic, a pair, a family of stored keys) is listed under stopped, beside the page and whole on every page, each with a closed cause token.",
 	}, a.consumers)
 	httpapi.Handle(g, httpapi.Route{
 		Method: http.MethodGet, Path: "/events/topics", Name: "listEventTopics", Perm: view, Tags: []string{"events"},
@@ -186,28 +186,43 @@ type OutboxPurgeResult struct {
 // OutboxConsumer is one consumer's status. Lag is the age of the oldest message
 // it has not taken over; a count that is a floor says so in its capped flag.
 type OutboxConsumer struct {
-	Name            string          `json:"name"`
-	Module          string          `json:"module"`
-	Topic           string          `json:"topic"`
-	Enabled         bool            `json:"enabled"`
-	Declared        bool            `json:"declared"`
-	Pending         int             `json:"pending"`
-	PendingCapped   bool            `json:"pending_capped"`
-	Retrying        int             `json:"retrying"`
-	LagMS           int64           `json:"lag_ms"`
-	Dead            int             `json:"dead"`
-	IntakeBacklog   int             `json:"intake_backlog"`
-	IntakeCapped    bool            `json:"intake_capped"`
-	RetainedBacklog int             `json:"retained_backlog"`
-	Stopped         []OutboxStopped `json:"stopped"`
+	Name            string `json:"name"`
+	Module          string `json:"module"`
+	Topic           string `json:"topic"`
+	Enabled         bool   `json:"enabled"`
+	Declared        bool   `json:"declared"`
+	Pending         int    `json:"pending"`
+	PendingCapped   bool   `json:"pending_capped"`
+	Retrying        int    `json:"retrying"`
+	LagMS           int64  `json:"lag_ms"`
+	Dead            int    `json:"dead"`
+	IntakeBacklog   int    `json:"intake_backlog"`
+	IntakeCapped    bool   `json:"intake_capped"`
+	RetainedBacklog int    `json:"retained_backlog"`
 }
 
-// OutboxStopped is something the relay will not work on until an operator acts,
-// as it concerns one consumer: its own pair (Partition set), the counter of its
-// dead letters that do not decode, or its whole topic (Partition absent in both
-// of the last two). Cause is corrupt_row, unknown_version or partitions_changed.
+// OutboxConsumerPage is the offset page of consumers (httpapi.Page's fields) with
+// the outbox's stopped list beside it. Stopped is the whole list on every page:
+// what stopped is not always a consumer's (a topic, a counter family), so it is
+// not split across the consumers it might concern and none of it is left out.
+type OutboxConsumerPage struct {
+	Items   []OutboxConsumer `json:"items"`
+	Count   int              `json:"count"`
+	Limit   int              `json:"limit"`
+	Offset  int              `json:"offset"`
+	Total   int64            `json:"total"`
+	Stopped []OutboxStopped  `json:"stopped"`
+}
+
+// OutboxStopped is something the relay will not work on until an operator acts.
+// Cause is a closed token: corrupt_row, unknown_version, partitions_changed or
+// counters_unbuilt. Topic is the topic it concerns, or, for a family of stored
+// keys, that family's name (dead/, deadn/, a counter subject). Consumer and
+// Partition are set when it is one consumer's pair on one partition.
 type OutboxStopped struct {
 	Cause     string `json:"cause"`
+	Topic     string `json:"topic,omitempty"`
+	Consumer  string `json:"consumer,omitempty"`
 	Partition *int   `json:"partition,omitempty"`
 }
 
@@ -339,8 +354,8 @@ func (a *api) discard(ctx context.Context, in *httpapi.In[deadReq]) (httpapi.NoC
 }
 
 // dead runs one dead-letter operation and audits it: availability and the actor
-// first (nothing is applied that cannot be audited or attributed), the topic
-// next, then the operation, and the record only after the operation committed.
+// first (nothing is applied that cannot be audited or attributed), the letter's
+// topic next (it is gone once the operation ran), then the operation, and the record only after the operation committed.
 func (a *api) dead(ctx context.Context, in *httpapi.In[deadReq], action, route string,
 	do func(ctx context.Context, consumer string, seq uint64) error) (httpapi.NoContent, error) {
 	actor, err := a.begin(ctx, in.Principal)
@@ -348,7 +363,7 @@ func (a *api) dead(ctx context.Context, in *httpapi.In[deadReq], action, route s
 		return httpapi.NoContent{}, err
 	}
 	consumer, seq := in.Req.Consumer, in.Req.Seq
-	topic, _, err := a.topicOf(ctx, consumer)
+	topic, err := a.deadTopic(ctx, consumer)
 	if err != nil {
 		return httpapi.NoContent{}, err
 	}
@@ -370,7 +385,7 @@ func (a *api) purge(ctx context.Context, in *httpapi.In[purgeReq]) (OutboxPurgeR
 		return zero, err
 	}
 	consumer := in.Req.Consumer
-	topic, known, err := a.topicOf(ctx, consumer)
+	topic, known, err := a.consumerTopic(ctx, consumer)
 	if err != nil {
 		return zero, err
 	}
@@ -417,13 +432,30 @@ func (a *api) begin(ctx context.Context, p *auth.Principal) (audit.Actor, error)
 	return actorOf(p), nil
 }
 
-// topicOf is the topic of the consumer's messages, and whether the status read
-// knows the consumer at all. The outbox's operations name no topic, and a
-// consumer is bound to one: the audit record of a dead-letter operation names
-// it, and a purge's 404 says whether the consumer has no backlog. A consumer
-// the read does not list, or lists with no topic (nothing registered it and no
-// cursor of it is left), has none to name.
-func (a *api) topicOf(ctx context.Context, consumer string) (topic string, known bool, err error) {
+// deadTopic is the topic of consumer's dead letters, which the audit record of a
+// retry or discard names: the outbox's operations return none, and the letter is
+// gone once they ran, so it is read first. A consumer reads one topic, so its
+// first letter names it; the read starts just inside the consumer's key range
+// and asks for one letter, whatever the consumer's other letters number. It is
+// "" when the consumer has none (the operation then answers 404).
+func (a *api) deadTopic(ctx context.Context, consumer string) (string, error) {
+	after := base64.RawURLEncoding.EncodeToString(outboxstore.DeadPrefix(consumer))
+	letters, _, err := a.op.ListDead(ctx, after, 1)
+	if err != nil {
+		return "", err
+	}
+	if len(letters) == 1 && letters[0].Consumer == consumer {
+		return letters[0].Topic, nil
+	}
+	return "", nil
+}
+
+// consumerTopic is the topic a consumer's backlog is on, and whether the status
+// read knows the consumer at all: a purge's 404 says whether the consumer has no
+// backlog (it never ran) or does not exist, and its audit record names the
+// topic. A consumer the read lists with no topic has no registration and no
+// cursor, so there is nothing to purge.
+func (a *api) consumerTopic(ctx context.Context, consumer string) (topic string, known bool, err error) {
 	st, err := a.op.Status(ctx)
 	if err != nil {
 		return "", false, err
@@ -523,8 +555,8 @@ type pageReq struct {
 	httpapi.PageParams
 }
 
-func (a *api) consumers(ctx context.Context, in *httpapi.In[pageReq]) (httpapi.Page[OutboxConsumer], error) {
-	var zero httpapi.Page[OutboxConsumer]
+func (a *api) consumers(ctx context.Context, in *httpapi.In[pageReq]) (OutboxConsumerPage, error) {
+	var zero OutboxConsumerPage
 	if a.op == nil {
 		return zero, unavailable()
 	}
@@ -534,33 +566,24 @@ func (a *api) consumers(ctx context.Context, in *httpapi.In[pageReq]) (httpapi.P
 	}
 	all := make([]OutboxConsumer, 0, len(st.Consumers))
 	for _, c := range st.Consumers {
-		all = append(all, consumerView(c, st.Stopped))
+		all = append(all, OutboxConsumer{
+			Name: c.Name, Module: c.Module, Topic: c.Topic, Enabled: c.Enabled, Declared: c.Declared,
+			Pending: c.Pending, PendingCapped: c.PendingCapped, Retrying: c.Retrying, LagMS: c.Lag.Milliseconds(),
+			Dead: c.Dead, IntakeBacklog: c.IntakeBacklog, IntakeCapped: c.IntakeCapped, RetainedBacklog: c.RetainedBacklog,
+		})
 	}
-	return pageOf(all, in.Req.PageParams), nil
-}
-
-// consumerView is c with what stopped about it: its pairs', and its topic's.
-func consumerView(c outbox.ConsumerStatus, stopped []outbox.StoppedStatus) OutboxConsumer {
-	v := OutboxConsumer{
-		Name: c.Name, Module: c.Module, Topic: c.Topic, Enabled: c.Enabled, Declared: c.Declared,
-		Pending: c.Pending, PendingCapped: c.PendingCapped, Retrying: c.Retrying, LagMS: c.Lag.Milliseconds(),
-		Dead: c.Dead, IntakeBacklog: c.IntakeBacklog, IntakeCapped: c.IntakeCapped, RetainedBacklog: c.RetainedBacklog,
-		Stopped: []OutboxStopped{},
-	}
-	for _, s := range stopped {
-		switch {
-		case s.Consumer == c.Name:
-			st := OutboxStopped{Cause: s.Cause}
-			if s.Partition >= 0 { // -1 is the counter of letters that do not decode: no partition
-				p := s.Partition
-				st.Partition = &p
-			}
-			v.Stopped = append(v.Stopped, st)
-		case s.Consumer == "" && s.Topic != "" && s.Topic == c.Topic:
-			v.Stopped = append(v.Stopped, OutboxStopped{Cause: s.Cause})
+	p := pageOf(all, in.Req.PageParams)
+	out := OutboxConsumerPage{Items: p.Items, Count: p.Count, Limit: p.Limit, Offset: p.Offset, Total: p.Total,
+		Stopped: make([]OutboxStopped, 0, len(st.Stopped))}
+	for _, s := range st.Stopped {
+		v := OutboxStopped{Cause: s.Cause, Topic: s.Topic, Consumer: s.Consumer}
+		if s.Consumer != "" && s.Partition >= 0 { // -1 is the counter of letters that do not decode: no partition
+			pp := s.Partition
+			v.Partition = &pp
 		}
+		out.Stopped = append(out.Stopped, v)
 	}
-	return v
+	return out, nil
 }
 
 func (a *api) topics(_ context.Context, in *httpapi.In[pageReq]) (httpapi.Page[EventTopic], error) {
