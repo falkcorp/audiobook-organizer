@@ -1997,6 +1997,7 @@
    "internal/books/cutover/cutoverlist.go",
    "internal/books/cutover/rename_table.go",
    "core/kernel/core_level.go",
+   "core/storage/db.go",
    "core/kernel/core_level_test.go",
    "core/kernel/cutover_importers_test.go",
    "core/kernel/config_check_test.go",
@@ -3329,7 +3330,7 @@
    "core/go.sum",
    "go.sum",
    "core/storage/derived.go",
-   "core/storage/"
+   "core/storage/spec.go"
   ],
   "spec": "05-storage §5S.3.8, §5S.3.9; 03 §3.3 storage/index; 04 §8.1 F7",
   "notes": "Tier: an index contract with generations. Generation, Derived and DerivedIndex live in core/storage/derived.go; Registrar.DerivedIndex and StorageHandles.Indexes and Derived are F7-09's module members. 04 keys: F7 create mediacore/storage/index; F7 create mediacore/internal/bleveindex."
