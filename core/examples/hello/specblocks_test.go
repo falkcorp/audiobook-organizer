@@ -1,7 +1,7 @@
 // file: core/examples/hello/specblocks_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: e51de200-5290-46a4-a134-5fb0ab239104
-// last-edited: 2026-11-11
+// last-edited: 2026-11-18
 
 package hello_test
 
@@ -114,14 +114,11 @@ func TestSpecGoBlocksCompile(t *testing.T) {
 		// PR; the row that lands the last one deletes the entry and the
 		// blocks build.
 		// Sorted; each line names the row that lands the identifier. The
-		// five with no owning row are tracked in TODO.md (todo.d fragment
-		// filed with F2-01).
+		// one with no owning row is tracked in TODO.md (todo.d fragment
+		// filed with F2-01); F3-07 landed module.Setting, module.Settings,
+		// module.SettingsSection and module.Manifest.Settings.
 		helloMissing := []string{
 			"module.Manifest.Permissions", // no owning row yet
-			"module.Manifest.Settings",    // no owning row yet
-			"module.Setting",              // no owning row yet
-			"module.Settings",             // no owning row yet
-			"module.SettingsSection",      // no owning row yet
 			"ui.Bundle",                   // F9-03
 		}
 		wantWaiting := map[string]string{
