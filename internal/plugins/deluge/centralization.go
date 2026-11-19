@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/centralization.go
-// version: 1.11.1
+// version: 1.12.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package deluge
 
@@ -16,14 +16,21 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	delugeclient "github.com/falkcorp/audiobook-organizer/internal/deluge"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
+
+// centralizeKind is rule R3's native kind for deluge.centralize.
+const centralizeKind = tasks.Kind("books.deluge.centralize")
+
+// centralizeHelp is HEAD's Description and the native Help (rule R5).
+const centralizeHelp = "Moves Deluge-sourced audiobooks from protected paths into the main library."
 
 func (p *Plugin) centralizationDef() sdk.OperationDef {
 	return sdk.OperationDef{
@@ -31,7 +38,7 @@ func (p *Plugin) centralizationDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "deluge",
 		DisplayName:     "Centralize Deluge books",
-		Description:     "Moves Deluge-sourced audiobooks from protected paths into the main library.",
+		Description:     centralizeHelp,
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityNormal,
 		ConcurrencyKey:  "deluge.centralize",
@@ -72,14 +79,113 @@ type centralizationCheckpoint struct {
 	LastError string `json:"last_error,omitempty"`
 }
 
-func (p *Plugin) runCentralization(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	cfg := &config.AppConfig
+// orderedCheckpoint writes centralization checkpoints so the stored one only
+// moves forward. Workers take their snapshot under one lock and write it under
+// another, so a snapshot taken earlier can reach put after a later one; put drops
+// it. A named type so a test drives the out-of-order arrival directly.
+type orderedCheckpoint struct {
+	mu    sync.Mutex
+	last  int
+	write func(any) error
+}
 
-	sdk.NewProgress(reporter, 0).Start("Loading Deluge-imported files...")
+// put writes snap if its completion count is past the last one written. A failed
+// write is not retried (the next, later snapshot supersedes it) and not an error:
+// the checkpoint is a liveness record, not a resume position.
+func (o *orderedCheckpoint) put(snap centralizationCheckpoint) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if snap.Completed > o.last {
+		o.last = snap.Completed
+		_ = o.write(snap)
+	}
+}
 
-	pending, err := p.store.GetBookFilesNeedingDelugeImportCore()
+// centralizeStore is the reads the core takes: the pending list, the full row
+// before a copy, the path index, and the retired-row reader that
+// delugeclient.ImportToLibraryWith resolves on the store it is handed
+// (database.BookFileByPathIncludingRetired).
+type centralizeStore interface {
+	GetBookFilesNeedingDelugeImportCore() ([]database.BookFileCore, error)
+	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
+	GetBookFileByPath(filePath string) (*database.BookFile, error)
+	database.RetiredBookFileReader
+}
+
+// centralizeWriter is the writes the core makes: ModifyBookFile (the
+// in-place mark, delugeclient.MarkImportedInPlace) and UpdateBookFile (the
+// whole-row repoint ImportToLibraryWith makes, guarded by ExpectedBookFileID).
+type centralizeWriter interface {
+	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
+	UpdateBookFile(id string, file *database.BookFile) error
+}
+
+// libraryImporter is delugeclient.ImportToLibraryWith with the Deluge client
+// bound inside: the Deluge client is not a store write and stays in the core,
+// reached through this owner-declared interface.
+type libraryImporter interface {
+	ImportToLibrary(cfg *config.Config, store delugeclient.Store, bookFile *database.BookFile, opts delugeclient.ImportOptions) (string, error)
+}
+
+// centralizeEnv is what the core takes from its shell. Protected is the
+// protected-path predicate for in-place marking: the plugin's cache, or an
+// untyped nil when unset (so only cfg's static prefixes apply).
+type centralizeEnv struct {
+	kindEnv
+	Cfg       *config.Config
+	Store     centralizeStore
+	Writer    centralizeWriter
+	Importer  libraryImporter
+	Protected tagger.PathChecker
+}
+
+// centralizeImportStore is the store ImportToLibraryWith is handed: reads from
+// the env's store (so the importer's retired-row capability lookup finds the
+// store's own reader through the embedded interface) and the repoint through the
+// env's writer.
+type centralizeImportStore struct {
+	centralizeStore
+	w centralizeWriter
+}
+
+var (
+	_ delugeclient.Store             = centralizeImportStore{}
+	_ database.RetiredBookFileReader = centralizeImportStore{}
+)
+
+func (s centralizeImportStore) UpdateBookFile(id string, file *database.BookFile) error {
+	return s.w.UpdateBookFile(id, file)
+}
+
+// centralizeResult is the native run's result. HEAD stored none: its counts
+// went to the log and the final progress line.
+type centralizeResult struct {
+	Total                  int   `json:"total"`
+	Groups                 int   `json:"groups"`
+	Succeeded              int64 `json:"succeeded"`
+	AlreadyInLibrary       int64 `json:"already_in_library"`
+	Protected              int64 `json:"protected"`
+	ProtectedListNotLoaded int64 `json:"protected_list_not_loaded"`
+	Skipped                int64 `json:"skipped"`
+	Errors                 int64 `json:"errors"`
+}
+
+// centralizeParallelism is the pool of the group loop (rule R4): HEAD's fixed
+// centralizeConcurrency.
+func centralizeParallelism() tasks.Parallelism {
+	return tasks.Fixed(centralizeConcurrency,
+		"each item is a connected group of pending files doing disk copies, store writes and Deluge RPCs, bounded by what the Deluge daemon and the library disk tolerate")
+}
+
+// centralizeCore is the body of runCentralization, shared by both shells.
+func centralizeCore(ctx context.Context, env centralizeEnv) (centralizeResult, error) {
+	cfg := env.Cfg
+
+	newProgress(env.kindEnv, 0).Start("Loading Deluge-imported files...")
+
+	pending, err := env.Store.GetBookFilesNeedingDelugeImportCore()
 	if err != nil {
-		return fmt.Errorf("load deluge-pending book files: %w", err)
+		return centralizeResult{}, fmt.Errorf("load deluge-pending book files: %w", err)
 	}
 
 	toImport := make([]*database.BookFileCore, 0, len(pending))
@@ -89,8 +195,8 @@ func (p *Plugin) runCentralization(ctx context.Context, _ json.RawMessage, repor
 
 	total := len(toImport)
 	if total == 0 {
-		sdk.NewProgress(reporter, 0).Done("No files to centralize")
-		return nil
+		newProgress(env.kindEnv, 0).Done("No files to centralize")
+		return centralizeResult{}, nil
 	}
 
 	// PARTITION: the pool's unit is a connected group of files, never a lone
@@ -113,7 +219,7 @@ func (p *Plugin) runCentralization(ctx context.Context, _ json.RawMessage, repor
 
 	// Progress counts GROUPS (the pool's unit) from Start to Done; the
 	// checkpoint below counts files.
-	prog := sdk.NewProgress(reporter, len(groups))
+	prog := newProgress(env.kindEnv, len(groups))
 	prog.Start(fmt.Sprintf("Centralizing %d files in %d groups...", total, len(groups)))
 
 	var successCount, skipCount, inPlaceCount, protectedCount, notLoadedCount, errCount atomic.Int64
@@ -122,23 +228,20 @@ func (p *Plugin) runCentralization(ctx context.Context, _ json.RawMessage, repor
 	// (register.go builds it as NewProtectedPathCache(client,
 	// cfg.ProtectedPaths): active torrents' save_paths plus the configured
 	// prefixes), built once per process, not per item. Left an untyped nil
-	// when unset, so only cfg's static prefixes apply.
-	var protected tagger.PathChecker
-	if p.cache != nil {
-		protected = p.cache
-	}
+	// when unset, so only cfg's static prefixes apply (the shell sets
+	// env.Protected only when it has a cache).
+	protected := env.Protected
 
 	// ckptMu guards lastErr and completed. The checkpoint itself is written
 	// OUTSIDE ckptMu (workers recording an error must not wait on a database
 	// write), ordered by the completion count: a snapshot older than one
 	// already written is dropped, so the stored checkpoint only moves forward.
 	var (
-		ckptMu      sync.Mutex
-		lastErr     string
-		completed   int
-		writeMu     sync.Mutex
-		lastWritten int
+		ckptMu    sync.Mutex
+		lastErr   string
+		completed int
 	)
+	ckpt := &orderedCheckpoint{write: env.Checkpoint}
 	setLastError := func(msg string) {
 		ckptMu.Lock()
 		lastErr = msg
@@ -156,18 +259,13 @@ func (p *Plugin) runCentralization(ctx context.Context, _ json.RawMessage, repor
 	// progress numbers alone, and it follows real work (a finished copy or a
 	// failed read), so a genuinely wedged copy still goes quiet.
 	finishFile := func() {
-		registry.TouchLiveness(reporter)
+		env.Touch()
 		ckptMu.Lock()
 		completed++
 		snap := centralizationCheckpoint{Completed: completed, Total: total, LastError: lastErr}
 		ckptMu.Unlock()
 
-		writeMu.Lock()
-		defer writeMu.Unlock()
-		if snap.Completed > lastWritten {
-			lastWritten = snap.Completed
-			_ = reporter.Checkpoint(snap)
-		}
+		ckpt.put(snap)
 	}
 
 	centralizeOne := func(bf *database.BookFileCore) {
@@ -193,21 +291,21 @@ func (p *Plugin) runCentralization(ctx context.Context, _ json.RawMessage, repor
 			// on GetBookFilesNeedingDelugeImportCore and every run lists it
 			// again. A row deluge.link-backfill linked is this case. A
 			// protected path is left pending, as /discovery/import leaves it.
-			outcome, markErr := delugeclient.MarkImportedInPlace(p.store, cfg, protected, bf.BookID, bf.ID, srcPath, time.Now())
+			outcome, markErr := delugeclient.MarkImportedInPlace(env.Writer, cfg, protected, bf.BookID, bf.ID, srcPath, time.Now())
 			switch {
 			case markErr != nil:
 				errCount.Add(1)
 				setLastError(markErr.Error())
-				reporter.Logger().Error("mark in-place file imported failed", "id", bf.ID, "error", markErr)
+				env.Logger.Error("mark in-place file imported failed", "id", bf.ID, "error", markErr)
 			case outcome == delugeclient.InPlaceMarked:
 				inPlaceCount.Add(1)
-				reporter.Logger().Debug("file already in the library; marked imported", "path", srcPath)
+				env.Logger.Debug("file already in the library; marked imported", "path", srcPath)
 			case outcome == delugeclient.InPlaceProtected:
 				protectedCount.Add(1)
-				reporter.Logger().Info("file is its own library destination but protected; left pending", "id", bf.ID, "path", srcPath)
+				env.Logger.Info("file is its own library destination but protected; left pending", "id", bf.ID, "path", srcPath)
 			case outcome == delugeclient.InPlaceListNotLoaded:
 				notLoadedCount.Add(1)
-				reporter.Logger().Info("file is its own library destination and the Deluge protected list has not loaded; left pending", "id", bf.ID, "path", srcPath)
+				env.Logger.Info("file is its own library destination and the Deluge protected list has not loaded; left pending", "id", bf.ID, "path", srcPath)
 			default:
 				// Moved, removed or marked by another writer meanwhile.
 				skipCount.Add(1)
@@ -221,11 +319,11 @@ func (p *Plugin) runCentralization(ctx context.Context, _ json.RawMessage, repor
 		// anything touches the disk, so a failed read leaves no copy behind.
 		// It used to come after the copy: a failed hydrate left an orphan at
 		// dest that refused every later run with EEXIST.
-		full, hydrateErr := p.store.GetBookFileByID(bf.BookID, bf.ID)
+		full, hydrateErr := env.Store.GetBookFileByID(bf.BookID, bf.ID)
 		if hydrateErr != nil || full == nil {
 			errCount.Add(1)
 			setLastError(fmt.Sprintf("hydrate book file %s: %v", bf.ID, hydrateErr))
-			reporter.Logger().Error("hydrate book file failed", "id", bf.ID, "error", hydrateErr)
+			env.Logger.Error("hydrate book file failed", "id", bf.ID, "error", hydrateErr)
 			return
 		}
 
@@ -236,7 +334,7 @@ func (p *Plugin) runCentralization(ctx context.Context, _ json.RawMessage, repor
 		// and repoint them), never overwrites, removes its copy when the row
 		// update fails (so a retry is not refused by an orphan), and asks
 		// Deluge to move the torrent's storage when that is enabled.
-		newPath, importErr := delugeclient.ImportToLibraryWith(cfg, p.client, p.store, full, delugeclient.ImportOptions{
+		newPath, importErr := env.Importer.ImportToLibrary(cfg, centralizeImportStore{centralizeStore: env.Store, w: env.Writer}, full, delugeclient.ImportOptions{
 			Protected:          protected,
 			ExpectedBookFileID: full.ID,
 		})
@@ -244,50 +342,50 @@ func (p *Plugin) runCentralization(ctx context.Context, _ json.RawMessage, repor
 		case errors.Is(importErr, tagger.ErrProtectedListNotLoaded):
 			// Checked before ErrProtectedPathWrite, which it also wraps.
 			notLoadedCount.Add(1)
-			reporter.Logger().Info("file left pending: the Deluge protected list has not loaded", "id", bf.ID, "path", srcPath)
+			env.Logger.Info("file left pending: the Deluge protected list has not loaded", "id", bf.ID, "path", srcPath)
 			return
 		case errors.Is(importErr, tagger.ErrProtectedPathWrite):
 			protectedCount.Add(1)
-			reporter.Logger().Info("file is protected; left pending", "id", bf.ID, "path", srcPath, "reason", importErr)
+			env.Logger.Info("file is protected; left pending", "id", bf.ID, "path", srcPath, "reason", importErr)
 			return
 		case importErr != nil:
 			errCount.Add(1)
 			setLastError(fmt.Sprintf("import %s: %v", srcPath, importErr))
 			if newPath != "" {
-				reporter.Logger().Error("import failed and its copy could not be removed", "id", bf.ID, "src", srcPath, "left_at", newPath, "error", importErr)
+				env.Logger.Error("import failed and its copy could not be removed", "id", bf.ID, "src", srcPath, "left_at", newPath, "error", importErr)
 			} else {
-				reporter.Logger().Error("import failed", "id", bf.ID, "src", srcPath, "dest", dest, "error", importErr)
+				env.Logger.Error("import failed", "id", bf.ID, "src", srcPath, "dest", dest, "error", importErr)
 			}
 			return
 		}
 		dest = newPath
 
 		n := successCount.Add(1)
-		reporter.Logger().Debug("centralized file",
+		env.Logger.Debug("centralized file",
 			"src", srcPath, "dest", dest, "progress", fmt.Sprintf("%d/%d", n, total))
 	}
 
-	runErr := registry.RunItems(ctx, reporter, groups, func(ctx context.Context, group []*database.BookFileCore) error {
-		for _, bf := range group {
+	runErr := env.Items(ctx, centralizeParallelism(), len(groups), kindItemsOptions{
+		Collect: true,
+		// sdk.Progress reserves a start and a done step around the N units
+		// (total = N+2), so the pool reports against the same denominator
+		// and the bar never changes units between Start, the pool and Done.
+		ProgressTotal: len(groups) + 2,
+		// Pure: it reads the item index and len(groups), never a counter.
+		PureLabel: func(i, _ int) string {
+			return fmt.Sprintf("Centralizing group %d/%d", i+1, len(groups))
+		},
+	}, func(ctx context.Context, gi int) error {
+		for _, bf := range groups[gi] {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 			centralizeOne(bf)
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		ErrMode:     registry.ErrModeCollect,
-		Concurrency: centralizeConcurrency,
-		// sdk.Progress reserves a start and a done step around the N units
-		// (total = N+2), so the pool reports against the same denominator
-		// and the bar never changes units between Start, the pool and Done.
-		ProgressTotal: len(groups) + 2,
-		Label: func(i, _ int) string {
-			return fmt.Sprintf("Centralizing group %d/%d", i+1, len(groups))
-		},
 	})
 
-	reporter.Logger().Info("deluge centralization complete",
+	env.Logger.Info("deluge centralization complete",
 		"succeeded", successCount.Load(),
 		"already_in_library", inPlaceCount.Load(),
 		"protected", protectedCount.Load(),
@@ -299,7 +397,34 @@ func (p *Plugin) runCentralization(ctx context.Context, _ json.RawMessage, repor
 			"%d left pending (Deluge protected list not loaded), %d skipped, %d errors",
 			successCount.Load(), inPlaceCount.Load(), protectedCount.Load(), notLoadedCount.Load(), skipCount.Load(), errCount.Load()),
 	)
-	return runErr
+	return centralizeResult{
+		Total:                  total,
+		Groups:                 len(groups),
+		Succeeded:              successCount.Load(),
+		AlreadyInLibrary:       inPlaceCount.Load(),
+		Protected:              protectedCount.Load(),
+		ProtectedListNotLoaded: notLoadedCount.Load(),
+		Skipped:                skipCount.Load(),
+		Errors:                 errCount.Load(),
+	}, runErr
+}
+
+// runCentralization is the v2 shell: HEAD's Run over centralizeCore.
+func (p *Plugin) runCentralization(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+	env := centralizeEnv{
+		kindEnv:  headEnv(reporter, true),
+		Cfg:      &config.AppConfig,
+		Store:    p.headStore(),
+		Writer:   p.headWriter(),
+		Importer: p.headImporter(),
+	}
+	// An untyped nil unless the plugin has a cache, so only cfg's static
+	// prefixes apply otherwise (HEAD's `if p.cache != nil { protected = p.cache }`).
+	if p.cache != nil {
+		env.Protected = p.cache
+	}
+	_, err := centralizeCore(ctx, env)
+	return err
 }
 
 // connectedFileGroups splits files into the connected components of "same book

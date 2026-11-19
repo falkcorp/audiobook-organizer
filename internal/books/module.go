@@ -98,6 +98,7 @@ func taskResourceKinds() []string {
 		string(ops.ResDedupCandidates),
 		string(ops.ResCollections),
 		string(ops.ResSplitBookCandidates),
+		string(ops.ResASINMisses),
 	}
 }
 

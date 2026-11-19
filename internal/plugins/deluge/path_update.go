@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/path_update.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package deluge
 
@@ -13,24 +13,31 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
+// pathUpdateKind is rule R3's native kind for deluge.path-update.
+const pathUpdateKind = tasks.Kind("books.deluge.path-update")
+
+// pathUpdateHelp is HEAD's Description and the native Help (rule R5).
+const pathUpdateHelp = "Updates a torrent's storage path in Deluge after a book is relocated: moves each active version's " +
+	"torrent to the book's folder with core.move_storage (only when deluge_move_enabled is on). " +
+	"dry_run defaults to true: a run that states no mode logs and counts the moves it would make and calls Deluge " +
+	"for none of them. Pass dry_run=false to move."
+
 func (p *Plugin) pathUpdateDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "deluge.path-update",
-		Preview:     sdk.PreviewSpec{Params: pathUpdateParams{}},
-		Liveness:    sdk.LivenessRunItems,
-		Plugin:      "deluge",
-		DisplayName: "Update Deluge torrent path",
-		Description: "Updates a torrent's storage path in Deluge after a book is relocated: moves each active version's " +
-			"torrent to the book's folder with core.move_storage (only when deluge_move_enabled is on). " +
-			"dry_run defaults to true: a run that states no mode logs and counts the moves it would make and calls Deluge " +
-			"for none of them. Pass dry_run=false to move.",
+		ID:              "deluge.path-update",
+		Preview:         sdk.PreviewSpec{Params: pathUpdateParams{}},
+		Liveness:        sdk.LivenessRunItems,
+		Plugin:          "deluge",
+		DisplayName:     "Update Deluge torrent path",
+		Description:     pathUpdateHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityNormal,
 		ConcurrencyKey:  "deluge.path-update",
@@ -92,47 +99,82 @@ func (p *Plugin) handleBookRelocated(ctx context.Context, payload any) error {
 	return nil
 }
 
-func (p *Plugin) runPathUpdate(ctx context.Context, params json.RawMessage, reporter sdk.Reporter) error {
-	cfg := &config.AppConfig
+// pathUpdateStore is the reads the core takes.
+type pathUpdateStore interface {
+	GetBookByID(id string) (*database.Book, error)
+	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
+}
 
-	var args pathUpdateParams
-	if err := json.Unmarshal(params, &args); err != nil {
-		return fmt.Errorf("unmarshal params: %w", err)
-	}
+// storageMover is the one Deluge call the core makes: core.move_storage. It is
+// not a store write; it stays in the core (F5-05 brief).
+type storageMover interface {
+	MoveStorage(torrentIDs []string, destPath string) error
+}
 
-	dryRun, err := opmode.ResolveDryRun("deluge.path-update", args.DryRun, args.DryRunCamel)
-	if err != nil {
-		return err
-	}
+// pathUpdateCoreParams is the core's params: HEAD's pathUpdateParams without
+// the mode switch (the mode is the env's Live).
+type pathUpdateCoreParams struct {
+	BookID string `json:"book_id"`
+}
+
+// pathUpdateEnv is what the core takes from its shell. Mover is nil when Deluge
+// is not configured (HEAD's p.client == nil). There is no Writer: the only
+// effect is the Deluge move, which is the client's.
+type pathUpdateEnv struct {
+	kindEnv
+	Cfg   *config.Config
+	Store pathUpdateStore
+	Mover storageMover
+}
+
+// pathUpdateResult is the native run's result. HEAD stored none.
+type pathUpdateResult struct {
+	BookID  string `json:"book_id"`
+	DryRun  bool   `json:"dry_run"`
+	Planned int64  `json:"planned"`
+	Updated int64  `json:"updated"`
+}
+
+// pathUpdateParallelism is the pool of the version loop: HEAD's runitems:sequential
+// call (one book's versions, a handful).
+func pathUpdateParallelism() tasks.Parallelism {
+	return tasks.Sequential("one book's versions (a handful); sequential by design")
+}
+
+// pathUpdateCore is the body of runPathUpdate after its params and mode are
+// decoded, shared by both shells.
+func pathUpdateCore(ctx context.Context, args pathUpdateCoreParams, env pathUpdateEnv) (pathUpdateResult, error) {
+	cfg := env.Cfg
+	dryRun := !env.Live
 
 	bookID := args.BookID
 	if bookID == "" {
-		return fmt.Errorf("book_id is required")
+		return pathUpdateResult{}, fmt.Errorf("book_id is required")
 	}
 
-	sdk.NewProgress(reporter, 0).Start(fmt.Sprintf("Loading book %s...", bookID))
+	newProgress(env.kindEnv, 0).Start(fmt.Sprintf("Loading book %s...", bookID))
 
-	book, err := p.store.GetBookByID(bookID)
+	book, err := env.Store.GetBookByID(bookID)
 	if err != nil {
-		return fmt.Errorf("load book: %w", err)
+		return pathUpdateResult{}, fmt.Errorf("load book: %w", err)
 	}
 	if book == nil {
-		return fmt.Errorf("book not found")
+		return pathUpdateResult{}, fmt.Errorf("book not found")
 	}
 
-	versions, err := p.store.GetBookVersionsByBookID(bookID)
+	versions, err := env.Store.GetBookVersionsByBookID(bookID)
 	if err != nil {
-		return fmt.Errorf("load versions: %w", err)
+		return pathUpdateResult{}, fmt.Errorf("load versions: %w", err)
 	}
 
-	progress := sdk.NewProgress(reporter, len(versions))
+	progress := newProgress(env.kindEnv, len(versions))
 	if dryRun {
 		progress.Start(fmt.Sprintf("DRY RUN: checking %d version(s) against Deluge, nothing will be moved...", len(versions)))
 	} else {
 		progress.Start(fmt.Sprintf("Updating %d version(s) in Deluge...", len(versions)))
 	}
 
-	// Pre-compute active count so the RunItems closure can reference it without
+	// Pre-compute active count so the item closure can reference it without
 	// iterating versions again on each call.
 	activeCount := 0
 	for _, v := range versions {
@@ -145,7 +187,8 @@ func (p *Plugin) runPathUpdate(ctx context.Context, params json.RawMessage, repo
 	var updated, planned atomic.Int64
 
 	// runitems:sequential one book's versions (a handful); sequential by design
-	if err := registry.RunItems(ctx, reporter, versions, func(ctx context.Context, v database.BookVersion) error {
+	if err := env.Items(ctx, pathUpdateParallelism(), len(versions), kindItemsOptions{Collect: true}, func(ctx context.Context, i int) error {
+		v := versions[i]
 		if v.TorrentHash == "" || v.Status != database.BookVersionStatusActive {
 			return nil // skip non-Deluge or inactive versions
 		}
@@ -157,33 +200,58 @@ func (p *Plugin) runPathUpdate(ctx context.Context, params json.RawMessage, repo
 			dir = filepath.Join(primaryDir, ".versions", v.ID)
 		}
 
-		if cfg.DelugeMoveEnabled && p.client != nil {
+		if cfg.DelugeMoveEnabled && env.Mover != nil {
 			if dryRun {
-				reporter.Logger().Info("would move_storage",
+				env.Logger.Info("would move_storage",
 					"hash", v.TorrentHash, "path", dir)
 				planned.Add(1)
 				return nil
 			}
-			if err := p.client.MoveStorage([]string{v.TorrentHash}, dir); err != nil {
-				reporter.Logger().Error("move_storage failed",
+			if err := env.Mover.MoveStorage([]string{v.TorrentHash}, dir); err != nil {
+				env.Logger.Error("move_storage failed",
 					"hash", v.TorrentHash, "path", dir, "error", err)
 				return nil // non-fatal: log but continue
 			}
-			reporter.Logger().Info("move_storage succeeded",
+			env.Logger.Info("move_storage succeeded",
 				"hash", v.TorrentHash, "path", dir)
 			updated.Add(1)
 		}
 		return nil
-	}, registry.RunItemsOptions{ErrMode: registry.ErrModeCollect}); err != nil {
-		return err
+	}); err != nil {
+		return pathUpdateResult{}, err
 	}
 
-	reporter.Logger().Info("deluge path-update complete",
+	env.Logger.Info("deluge path-update complete",
 		"book_id", bookID, "dry_run", dryRun, "planned", planned.Load(), "updated", updated.Load())
 	mode := "APPLY"
 	if dryRun {
 		mode = "DRY RUN"
 	}
 	progress.Done(fmt.Sprintf("%s: %d move_storage planned, %d updated", mode, planned.Load(), updated.Load()))
-	return nil
+	return pathUpdateResult{BookID: bookID, DryRun: dryRun, Planned: planned.Load(), Updated: updated.Load()}, nil
+}
+
+// runPathUpdate is the v2 shell: HEAD's Run (params, the dry_run/dryRun
+// switch) over pathUpdateCore.
+func (p *Plugin) runPathUpdate(ctx context.Context, params json.RawMessage, reporter sdk.Reporter) error {
+	var args pathUpdateParams
+	if err := json.Unmarshal(params, &args); err != nil {
+		return fmt.Errorf("unmarshal params: %w", err)
+	}
+
+	dryRun, err := opmode.ResolveDryRun("deluge.path-update", args.DryRun, args.DryRunCamel)
+	if err != nil {
+		return err
+	}
+
+	env := pathUpdateEnv{
+		kindEnv: headEnv(reporter, !dryRun),
+		Cfg:     &config.AppConfig,
+		Store:   p.headStore(),
+	}
+	if c := p.headClient(); c != nil {
+		env.Mover = c
+	}
+	_, err = pathUpdateCore(ctx, pathUpdateCoreParams{BookID: args.BookID}, env)
+	return err
 }

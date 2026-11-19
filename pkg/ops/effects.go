@@ -101,6 +101,12 @@ const (
 	// keyspace with the embedding rows but are not ResEmbeddings (dedup pair
 	// candidates and labels).
 	ResSplitBookCandidates Resource = "split_book_candidates"
+	// ResASINMisses is the ASIN backfill's lookup-miss markers
+	// (asinbackfill:miss:<book id> and asinbackfill:isbnmiss:<book id> rows,
+	// internal/plugins/metafetch): one row per book whose Audible lookup came back
+	// empty, written so the next run skips it. They are not ResMetadataCache (the
+	// cached lookup responses, pcache: rows) and not ResExternalIDs (a found ASIN).
+	ResASINMisses Resource = "asin_misses"
 )
 
 // deletePrefix marks a Resource built by Deletes.
