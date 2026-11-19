@@ -1,3 +1,7 @@
 ### Added
 
 - The system-log journal gains a live tail, kept dark: `core/internal/logjournal` declares the bus topic `core.log.recorded.v1` (`TailSpec`) and publishes every record the journal keeps on it (`StartTail`, a second log tap with its own queue, so the journal's write path is untouched and a slow bus never blocks a log call). The payload is the same record view the `GET /api/core/v1/system/logs` route returns, so the stream and the query agree. Realtime delivers it only to a principal holding `core:system.manage`; with authentication off nobody holds it, so the tail delivers nothing. A subscriber without `core:users.view` is not sent a record the module-registered other-user predicate flags and sees `user_id` blank on the rest, on replay after `Last-Event-ID` as on live delivery. Nothing in the application's boot declares the topic or starts the tail yet (the kernel does at F6-03), so no running install changes; the log view keeps polling the query route.
+
+### Changed
+
+- The module-registered other-user log predicate (`log.OtherUserPredicate`) is now handed the same record on the journal query route and on the live tail: `log.PredicateInput` normalises it to text-only attribute values, sorted by key, with the last value of a repeated key winning. Before, the route passed the store's typed, ordered record, so a predicate that switched on a value's kind could classify a record differently on the two surfaces. No predicate is registered by any module yet, so no behaviour changes today.
