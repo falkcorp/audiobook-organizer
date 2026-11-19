@@ -657,6 +657,15 @@ internal/operations/registry.ShutdownAllForStore
 internal/opsmetrics.ActiveInflightCallbacks
 internal/organizer.LoadApplyRenameFailure
 internal/organizer.MoveBookFile
+internal/plugins/dedup.Plugin.applyBandThresholds
+internal/plugins/dedup.Plugin.computeRebuildDiff
+internal/plugins/dedup.Plugin.isFlagSet
+internal/plugins/dedup.Plugin.scanOrphanEmbeddings
+internal/plugins/dedup.builderAdapter.GetBook
+internal/plugins/dedup.builderAdapter.GetBookFiles
+internal/plugins/dedup.collectCalibrationPairs
+internal/plugins/dedup.scanReembedCandidates
+internal/plugins/dedup.windowIndexBuildConcurrency
 internal/plugins/itunes.NewLoggerWrapper
 internal/plugins/itunes.loggerWrapper.ChangeCounters
 internal/plugins/itunes.loggerWrapper.Debug
