@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_phantom_repair_test.go
-// version: 1.4.5
+// version: 1.4.6
 // guid: baa66b78-fd15-4fb8-87c8-2892d296df6e
 // last-edited: 2026-11-18
 
