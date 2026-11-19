@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.18.1
+// version: 1.19.0
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
 // last-edited: 2026-11-19
 
@@ -12,11 +12,16 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
@@ -635,6 +640,68 @@ func (s t6g1RelinkStore) CreateOperationChange(change *database.OperationChange)
 	return s.w.RecordOperationChange(change)
 }
 
+// authorStripPreviewParallelism is the report-only pool's size: the cores, never
+// fewer than four. The reads are mostly memdb lookups (CPU-bound), but a store
+// that falls back to a Pebble scan blocks on I/O, so a one- or two-core host
+// still overlaps a few of them.
+func authorStripPreviewParallelism() int {
+	return max(runtime.NumCPU(), 4)
+}
+
+// authorStripPreview is what a report-only run learned about one plan: the
+// results the apply's loop would have used, read ahead of it.
+type authorStripPreview struct {
+	// n, held and lockHeld are unlinkAndDeleteAuthorVia's results (delete plans).
+	n              int
+	held, lockHeld []string
+	// err is the dry run's error, for a merge plan or a delete plan.
+	err error
+}
+
+// previewAuthorStripPlans walks every plan the way the apply would, as a dry run,
+// on a bounded pool. A report-only run lists a person's books, reads each
+// book's locks and credits for every plan, and doing that one plan at a time
+// over a whole library is the single-core shape CLAUDE.md rules out.
+//
+// The work is partitioned so no two workers can touch the same state: each
+// plan is one unit with its own results slot (out[i], written by that unit
+// alone), the dry runs write nothing to the store, and the maps they read
+// (doomed, relinked) are only read here. The caller folds the results into
+// the report serially, in plan order, so the counts, the sample and the log
+// lines are exactly what the sequential loop produced. The apply is not pooled:
+// its writes keep the plan order the undo ledger and the held counts depend on.
+func previewAuthorStripPlans(ctx context.Context, env authorStripMergeEnv, plans []authorStripPlan, doomed map[int]bool, relinked map[string]bool, skip *database.Author, log *slog.Logger) []authorStripPreview {
+	out := make([]authorStripPreview, len(plans))
+	var g errgroup.Group
+	g.SetLimit(authorStripPreviewParallelism())
+	var done atomic.Int64
+	var progressMu sync.Mutex // env.Progress is the run's, not safe to call from two workers at once
+	for i := range plans {
+		if ctx.Err() != nil {
+			break // the caller's loop sees the cancellation before it reads a slot
+		}
+		pl := plans[i]
+		if skip != nil && pl.from.ID == skip.ID {
+			continue // the loop skips the fallback row too
+		}
+		g.Go(func() error {
+			if pl.into != nil {
+				_, _, out[i].err = mergeAuthorIntoVia(ctx, env.Store, env.Writer, pl.from, *pl.into, true, "", log)
+			} else {
+				out[i].n, out[i].held, out[i].lockHeld, out[i].err = unlinkAndDeleteAuthorVia(ctx, env.Store, env.Writer, pl.from, doomed, relinked, true, log)
+			}
+			if n := done.Add(1); n%25 == 0 {
+				progressMu.Lock()
+				env.Progress(int(n), len(plans), "Previewing author repairs…")
+				progressMu.Unlock()
+			}
+			return nil
+		})
+	}
+	_ = g.Wait() // the units return nil: each keeps its own error in its slot
+	return out
+}
+
 // authorStripMergeCore is the body of runAuthorStripMerge from the start log on.
 // env.Live is the apply switch: it overrides params.Apply, so the mode a run was
 // started in is the one it writes in.
@@ -940,6 +1007,13 @@ func authorStripMergeCore(ctx context.Context, params authorStripMergeParams, en
 	heldBooks := map[string]struct{}{}
 	lockedBooks := map[string]struct{}{}
 
+	// A report-only run reads every plan ahead of the loop, on a pool; the loop
+	// below only folds those results in. The apply reads and writes in the loop.
+	var previews []authorStripPreview
+	if !params.Apply {
+		previews = previewAuthorStripPlans(ctx, env, plans, doomed, relinkedBooks, canonicalUnknown, log)
+	}
+
 	for i, pl := range plans {
 		if ctx.Err() != nil {
 			// A destructive op that stops at 700/812 must say where it
@@ -980,7 +1054,7 @@ func authorStripMergeCore(ctx context.Context, params authorStripMergeParams, en
 			// will hold. It writes nothing and counts neither merged nor
 			// books-touched, which stay the apply's.
 			if !params.Apply {
-				_, _, err := mergeAuthorIntoVia(ctx, store, env.Writer, pl.from, *pl.into, true, "", log)
+				err := previews[i].err
 				switch {
 				case errors.Is(err, errAuthorMergeUserLocked):
 					report.MergesHeldUserLocked++
@@ -1024,8 +1098,19 @@ func authorStripMergeCore(ctx context.Context, params authorStripMergeParams, en
 		// Deletes go through the same function in both modes: with dryRun
 		// set it reads every credit and reports what it WOULD do, so the
 		// authorless count in a report-only run is the apply's own number
-		// rather than a second estimate that could drift from it.
-		n, held, lockHeld, err := unlinkAndDeleteAuthorVia(ctx, store, env.Writer, pl.from, doomed, relinkedBooks, !params.Apply, log)
+		// rather than a second estimate that could drift from it. The
+		// report-only call was made ahead of this loop, on the pool
+		// (previewAuthorStripPlans).
+		var (
+			n              int
+			held, lockHeld []string
+			err            error
+		)
+		if params.Apply {
+			n, held, lockHeld, err = unlinkAndDeleteAuthorVia(ctx, store, env.Writer, pl.from, doomed, relinkedBooks, false, log)
+		} else {
+			n, held, lockHeld, err = previews[i].n, previews[i].held, previews[i].lockHeld, previews[i].err
+		}
 		// Partial counts are still real work (or real prediction): a row that
 		// failed on its third book did rewrite two, and the report must not
 		// shrink because of it.
