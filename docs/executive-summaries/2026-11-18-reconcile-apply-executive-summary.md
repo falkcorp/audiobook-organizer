@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-18-reconcile-apply-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: e2bdcb58-8b1a-4c4d-bccb-3f57448befa9 -->
 <!-- last-edited: 2026-11-18 -->
 
@@ -79,3 +79,32 @@ alone).
 
 Verified with 18 mutation checks on the new logic (18 caught), the permission
 and reach tests, and a real undo round trip.
+
+## Follow-up: finishing a half-done match, and the hashes
+
+**Date:** 18 November 2026. A second change on the same action, from the review of
+the first.
+
+- When a match is left half done (the file record moved, the book did not) and a
+  later run finishes it, the first run's entries in the undo history used to stay
+  live. Undoing the later run, applying the match again, and then undoing the
+  first run would have reversed that second, successful run. The finishing run
+  now hands the first run's entries over, so undoing the first run leaves the book
+  alone. This is best effort and is logged if it cannot be done.
+- If the book's update reports a failure but the book is in fact at the new
+  location, the match is now counted as done instead of being rolled back into a
+  state a rerun cannot finish. If the book cannot be read at all, nothing is undone.
+- A book moved to the trash while the apply runs is refused at the moment of the
+  write, with its own message.
+- A book with several file records is no longer pointed at a single file just
+  because one of its records already sits there, unless an earlier run's history
+  shows it left the record there.
+- The apply checks again, at the moment of writing, that no other record has
+  taken the found file. A very small window remains, and is filed.
+- The apply now knows how a file was matched. Only a match by hash keeps the
+  stored hashes; any other match clears the book's two hashes along with the file
+  record's, recorded so an undo puts them back.
+- Not fixed, and now written down: a crash in the middle of an apply can leave
+  undo entries for changes that never happened, and nothing removes them. Filed as
+  its own item.
+

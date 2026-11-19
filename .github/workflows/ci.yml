@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.46.0
+# version: 3.45.1
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-11-18
 
@@ -650,31 +650,18 @@ jobs:
 
       # No ImageVersion (a non-hosted runner): no key, no cache; the install
       # below then behaves as a plain miss.
-      # Restore and save are separate steps so the save runs right after the
-      # install, not at the end of the job (actions/cache's post step). The
-      # post step never ran for a run that was cancelled or failed later, and
-      # pushes to main cancel each other (concurrency, per ref), so main kept
-      # losing the cache save and PRs and merge-queue runs, which can read only
-      # main's caches, never had a warm cache. restore-keys falls back to a
-      # set saved on another runner image: its manifest still has to verify and
-      # dpkg has to accept it, otherwise the script goes to the mirror, and a
-      # successful install is saved under this image's exact key.
       - name: Restore apt packages cache (repo-guards)
-        id: aptcache
         if: steps.aptkey.outputs.image != ''
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/apt-debs-repo-guards
-          key: apt-debs-repo-guards-${{ hashFiles('scripts/ci/apt_cached_install.sh', 'scripts/ci/apt_install.sh', 'scripts/ci/apt_watchdog.py') }}-${{ steps.aptkey.outputs.suffix }}-${{ steps.aptkey.outputs.image }}
-          restore-keys: |
-            apt-debs-repo-guards-${{ hashFiles('scripts/ci/apt_cached_install.sh', 'scripts/ci/apt_install.sh', 'scripts/ci/apt_watchdog.py') }}-${{ steps.aptkey.outputs.suffix }}-
+          key: apt-debs-repo-guards-${{ steps.aptkey.outputs.image }}-${{ hashFiles('scripts/ci/apt_cached_install.sh', 'scripts/ci/apt_install.sh') }}-${{ steps.aptkey.outputs.suffix }}
 
       - name: Install system packages (libtag1-dev, ffmpeg)
-        # Miss path: apt_install.sh rotates mirrors and kills a trickling
-        # download on a throughput floor, so a slow mirror costs tens of
-        # seconds, not a full cap. The theoretical worst case (every call to its
-        # 120 s cap) is longer than the 15-minute JOB cap above, so the job cap
-        # fires first and the last attempt may never start.
+        # Miss path: 3 attempts x 2 calls x (120 s + 10 s) + backoff = 13.5 min
+        # worst case for this step alone, but the 15-minute JOB cap above covers
+        # the whole job (checkout, Go cache, ...), so on a stalled mirror the job
+        # cap fires first and attempt 3 may never start.
         timeout-minutes: 15
         env:
           APT_INSTALL_CALL_TIMEOUT: "120"
@@ -682,13 +669,6 @@ jobs:
         run: |
           read -ra pkgs <<<"$APT_PKGS"
           scripts/ci/apt_cached_install.sh "$HOME/apt-debs-repo-guards" "${pkgs[@]}"
-
-      - name: Save apt packages cache (repo-guards)
-        if: steps.aptkey.outputs.image != '' && steps.aptcache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/apt-debs-repo-guards
-          key: apt-debs-repo-guards-${{ hashFiles('scripts/ci/apt_cached_install.sh', 'scripts/ci/apt_install.sh', 'scripts/ci/apt_watchdog.py') }}-${{ steps.aptkey.outputs.suffix }}-${{ steps.aptkey.outputs.image }}
 
       # Fails in BOTH directions against tools/cmd/sdkguard/internal-deps.txt: a
       # new internal package in the SDK's dep tree, or a stale entry that is no
@@ -1334,24 +1314,15 @@ jobs:
           echo "pkgs=$pkgs" >> "$GITHUB_OUTPUT"
           echo "suffix=${pkgs// /_}" >> "$GITHUB_OUTPUT"
 
-      # Separate restore and save steps, restore-keys fallback across runner
-      # images: see the Repo Guards cache steps for why.
       - name: Restore apt packages cache (fixture-system-deps)
-        id: aptcache
         if: steps.aptkey.outputs.image != ''
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/apt-debs-fixture-system-deps
-          key: apt-debs-fixture-system-deps-${{ hashFiles('scripts/ci/apt_cached_install.sh', 'scripts/ci/apt_install.sh', 'scripts/ci/apt_watchdog.py') }}-${{ steps.aptkey.outputs.suffix }}-${{ steps.aptkey.outputs.image }}
-          restore-keys: |
-            apt-debs-fixture-system-deps-${{ hashFiles('scripts/ci/apt_cached_install.sh', 'scripts/ci/apt_install.sh', 'scripts/ci/apt_watchdog.py') }}-${{ steps.aptkey.outputs.suffix }}-
+          key: apt-debs-fixture-system-deps-${{ steps.aptkey.outputs.image }}-${{ hashFiles('scripts/ci/apt_cached_install.sh', 'scripts/ci/apt_install.sh') }}-${{ steps.aptkey.outputs.suffix }}
 
       - name: Install system dependencies
-        # Miss path: apt_install.sh rotates mirrors and kills a trickling
-        # download on a throughput floor (see its header); the 180 s cap is
-        # only the last attempt's bound. Theoretical worst case 3 x 3 x
-        # (180 s + 10 s) + backoff is longer than this step cap, which then
-        # fires first.
+        # Miss path worst case: 3 x 2 x (180 s + 10 s) + backoff = 19.5 minutes.
         timeout-minutes: 20
         env:
           APT_INSTALL_CALL_TIMEOUT: "180"
@@ -1359,13 +1330,6 @@ jobs:
         run: |
           read -ra pkgs <<<"$APT_PKGS"
           scripts/ci/apt_cached_install.sh "$HOME/apt-debs-fixture-system-deps" "${pkgs[@]}"
-
-      - name: Save apt packages cache (fixture-system-deps)
-        if: steps.aptkey.outputs.image != '' && steps.aptcache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/apt-debs-fixture-system-deps
-          key: apt-debs-fixture-system-deps-${{ hashFiles('scripts/ci/apt_cached_install.sh', 'scripts/ci/apt_install.sh', 'scripts/ci/apt_watchdog.py') }}-${{ steps.aptkey.outputs.suffix }}-${{ steps.aptkey.outputs.image }}
 
       # internal/books' TestR0OpensR1Store runs the R0 release binary. Restore
       # its archive from cache and fetch it here (gh, retrying, checksum

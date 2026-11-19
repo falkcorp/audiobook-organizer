@@ -95,13 +95,16 @@ core/internal/configstore.Store.Load
 core/internal/configstore.Store.Stage
 core/internal/configstore.actor
 core/internal/configstore.decodeEnvelope
+core/internal/executor.PruneDefinition
 core/internal/executor.Reconfigure
 core/internal/executor.cpuBudget.resize
+core/internal/executor.pruneRuns
 core/internal/instancestore.StorageSpec
 core/internal/logjournal.Importer.Import
 core/internal/logjournal.New
 core/internal/logjournal.NewImporter
 core/internal/logjournal.ParseLevel
+core/internal/logjournal.PruneDefinition
 core/internal/logjournal.StartTap
 core/internal/logjournal.StorageSpec
 core/internal/logjournal.Store.Append
@@ -130,6 +133,8 @@ core/internal/logjournal.makeULID
 core/internal/logjournal.msOf
 core/internal/logjournal.parseCursor
 core/internal/logjournal.parseULID
+core/internal/logjournal.pruneJournal
+core/internal/logjournal.retentionCutoff
 core/internal/logjournal.row.record
 core/internal/logjournal.rowCodec
 core/internal/logjournal.toRow
@@ -764,6 +769,11 @@ internal/plugins/maintenance.authorityBuildNativeParams.UnmarshalJSON
 internal/plugins/maintenance.authorityBuildParallelism
 internal/plugins/maintenance.autoMatchTranscribedNativeParams.UnmarshalJSON
 internal/plugins/maintenance.autoMatchTranscribedParallelism
+internal/plugins/maintenance.auxRunReporter.Log
+internal/plugins/maintenance.auxRunReporter.SetCurrentItem
+internal/plugins/maintenance.auxStoreCompactDef
+internal/plugins/maintenance.auxStoreCompactDefEvery
+internal/plugins/maintenance.auxStoreCompactKindList
 internal/plugins/maintenance.consolidationLeftoversFixer.newSource
 internal/plugins/maintenance.creditCensusParallelism
 internal/plugins/maintenance.creditsBackfillParallelism

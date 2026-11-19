@@ -1,7 +1,7 @@
 // file: core/internal/archtest_layers_test.go
-// version: 1.0.18
+// version: 1.0.19
 // guid: 2d3bc73d-ccb4-47c7-92d8-0d5c18bcfb8a
-// last-edited: 2026-11-12
+// last-edited: 2026-11-18
 
 // Package internal holds core's R4 layer guard (03 §3.5.1 item 2), the
 // redesigned successor of ABO's internal/arch/layering_test.go for core. It
@@ -73,6 +73,10 @@ var coreLayerOf = map[string]int{
 	"integrations": 4, "backup": 4, "backup/journal": 4, "updater": 4,
 	"health": 4, "health/diagnostics": 4,
 	"internal/storagemigrate": 4, "internal/logjournal": 4,
+	// internal/storagetasks bridges storage (L1) and tasks (L4): it declares
+	// core.storage.compact and core.storage.census over storage.Admin (F5-03,
+	// 05-storage §5S.4), so it takes tasks' layer (R4).
+	"internal/storagetasks": 4,
 	// internal/rbacstore implements rbac's role Store over c/rbac/ (F4-01,
 	// 05-rbac §6.3), so it takes rbac's layer (R4).
 	"internal/rbacstore": 4,

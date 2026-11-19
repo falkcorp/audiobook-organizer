@@ -1,5 +1,5 @@
 // file: internal/reconcile/apply_file_rows_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c2e84b17-5d93-4a06-b8f1-7e3a90d4c625
 // last-edited: 2026-11-18
 
@@ -486,6 +486,14 @@ type failingStore struct {
 	// unsyncedRowCalls are the ModifyBookFile call indexes (0 is the first) that
 	// write for real and then report ErrBookFileDurabilityUnknown.
 	unsyncedRowCalls map[int]bool
+	// failMark fails every MarkOperationChangesReverted: the hand-off's write.
+	failMark bool
+	// failBookReadAfterWrite fails GetBookByID once ModifyBook has been called:
+	// the read-back of the book after a book write that reported a failure.
+	failBookReadAfterWrite bool
+	// keyOwner, when set, is what GetBookFileByPathIncludingRetired answers for
+	// every path: a row that holds the single-owner path key.
+	keyOwner *database.BookFile
 }
 
 var errInjected = errors.New("injected store failure")
@@ -539,6 +547,30 @@ func (s *failingStore) CreateOperationChange(c *database.OperationChange) error 
 		return errInjected
 	}
 	return s.PebbleStore.CreateOperationChange(c)
+}
+
+func (s *failingStore) MarkOperationChangesReverted(operationID string, changeIDs []string) error {
+	if s.failMark {
+		return errInjected
+	}
+	return s.PebbleStore.MarkOperationChangesReverted(operationID, changeIDs)
+}
+
+func (s *failingStore) GetBookByID(id string) (*database.Book, error) {
+	s.mu.Lock()
+	fail := s.failBookReadAfterWrite && s.bookCalls > 0
+	s.mu.Unlock()
+	if fail {
+		return nil, errInjected
+	}
+	return s.PebbleStore.GetBookByID(id)
+}
+
+func (s *failingStore) GetBookFileByPathIncludingRetired(path string) (*database.BookFile, error) {
+	if s.keyOwner != nil {
+		return s.keyOwner, nil
+	}
+	return s.PebbleStore.GetBookFileByPathIncludingRetired(path)
 }
 
 func (s *failingStore) heal() {
@@ -773,29 +805,6 @@ func TestExecuteReconcile_ABookWithNoRowsVoidsItsJournalRowWhenTheBookWriteFails
 		t.Errorf("book path = %q, want %q", got, old)
 	}
 	f.requireRows("op-1", 1, 0)
-}
-
-// ModifyBook's error alone cannot tell a failure from a write that landed. When
-// the book turns out to hold the matched path, nothing is voided: the rows
-// describe a write that happened, and a revert must be able to undo it.
-func TestExecuteReconcile_ABookWriteThatLandedButReportedAnErrorKeepsItsRows(t *testing.T) {
-	f := newApplyFixture(t)
-	old := f.missingPath("Year One.m4b")
-	id := f.book("Batman: Year One", old)
-	f.row(id, old)
-	store := &failingStore{PebbleStore: f.ps, bookLandsThenErr: true, failRowAfter: -1}
-
-	res, err := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
-	if err == nil || res.Applied != 0 || res.Skipped != 1 {
-		t.Fatalf("err = %v, result %+v, want reported as failed", err, res)
-	}
-	if len(res.Errors) != 1 || !strings.Contains(res.Errors[0], "could not be confirmed unwritten") {
-		t.Errorf("errors = %q, want the unconfirmed state named", res.Errors)
-	}
-	if got := f.bookPath(id); got != f.newPath {
-		t.Fatalf("book path = %q, want the write that landed, %q", got, f.newPath)
-	}
-	f.requireRows("op-1", 2, 2)
 }
 
 // A row write that landed but whose fsync failed is applied, not failed: the

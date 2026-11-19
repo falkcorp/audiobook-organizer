@@ -2508,11 +2508,22 @@
   "files": [
    "core/internal/storagetasks/",
    "core/internal/executor/prune.go",
+   "core/internal/executor/prune_test.go",
    "core/internal/logjournal/prune.go",
+   "core/internal/logjournal/prune_internal_test.go",
+   "core/internal/logjournal/prune_test.go",
+   "core/internal/logjournal/settings.go",
+   "core/internal/archtest_layers_test.go",
+   "core/archtest/tasklint/core_test.go",
+   "core/kernel/core_kinds_schedule_test.go",
+   "internal/books/module.go",
+   "internal/books/resources_test.go",
    "internal/plugins/maintenance/db.go",
+   "internal/plugins/maintenance/db_aux_store_compact_test.go",
    "internal/plugins/maintenance/db_census_exact.go",
    "internal/plugins/maintenance/db_census_exact_test.go",
-   "internal/plugins/maintenance/db_optimize_heartbeat_test.go"
+   "internal/plugins/maintenance/db_optimize_heartbeat_test.go",
+   "pkg/ops/effects.go"
   ],
   "spec": "05-tasks §5T.8.2 (T4 row and the 'generic ops' table); 05-storage §5S.4 (Task kinds); 03 §3.5 R4",
   "notes": "Tier: core kinds over core state only, in a new L4 package; a wrong owner reaches a module writer. storage (L1) cannot import tasks, so the storage kinds live in core/internal/storagetasks (L4), dark until F5-18 registers them; core.window.nightly is F2-04's. Adds the prune cases of TestJournal_BatchAndRetention beside F5-15's batching cases. Its kinds are core's, so it has no exemption entry file; the files that still hold HEAD's T4 definitions are in F5-18's entry until F5-18 deletes them. 04 keys: F5 create mediacore/internal/storagetasks; F5 move internal/plugins/maintenance -> mediacore/internal/storagetasks."
