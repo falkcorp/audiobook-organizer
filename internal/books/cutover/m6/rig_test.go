@@ -352,6 +352,8 @@ type rig struct {
 func newRig(t testing.TB, opts ...func(*rig)) *rig {
 	t.Helper()
 	r := &rig{t: t, chunkItems: 1, logs: &lockedBuffer{}, secrets: newSecrets(), cfg: &configDouble{}, audit: &auditDouble{}, report: &m6.Report{}}
+	// The secrets M2 left in the store: every test starts from the full set.
+	maps.Copy(r.secrets.seed, secretValues)
 	for _, o := range opts {
 		o(r)
 	}

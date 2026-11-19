@@ -18,6 +18,7 @@ import (
 
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/integrations"
+	"github.com/falkcorp/mediacore/integrations/ai"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -482,6 +483,12 @@ func (m *Migration) aiInstance(raw json.RawMessage, i int, set secretSet) (*pend
 		p.copyKey = secretName(ref, "api_key")
 		delete(settings, "api_key")
 	}
+	// HEAD calls any endpoint with an auth_ref cloud whatever its host
+	// (aidispatch/locality.go:43-70); native auto would judge by URL and could
+	// let a private-address cloud proxy hold local-only work.
+	if ep.AuthRef != "" {
+		settings["locality"] = string(ai.LocalityCloud)
+	}
 	name := ep.Label
 	p.inst = integrations.StoredInstance{Config: integrations.InstanceConfig{
 		Ref: ref, Adapter: adapter, Name: name, Enabled: ep.Enabled, Priority: ep.Priority, Settings: settings,
@@ -544,6 +551,9 @@ func (m *Migration) openAIInstance(base string, set secretSet) *pending {
 	settings["url"] = clean
 	settings["concurrency"] = 4
 	settings["features"] = []string{"batch_api", "vision"}
+	// HEAD's openai row carries auth_ref openai_api_key, and HEAD's locality
+	// heuristic calls any endpoint with an auth_ref cloud (aidispatch/locality.go).
+	settings["locality"] = string(ai.LocalityCloud)
 	p.inst = integrations.StoredInstance{Config: integrations.InstanceConfig{
 		Ref: ref, Adapter: "core.openai_compat", Name: "OpenAI (migrated from openai_api_key)", Enabled: true, Priority: 20, Settings: settings,
 	}}
