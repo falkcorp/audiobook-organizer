@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.176.4
+// version: 1.177.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package config
 
@@ -2011,6 +2011,18 @@ func KeptSweepApplyEnabled() bool {
 // Mutate applies fn to AppConfig under a write lock.
 // ALL write sites (startup init, update service, test setups) must use this.
 func Mutate(fn func(*Config)) {
+	if f := Current(); f != nil {
+		if err := f.Mutate(fn); err != nil {
+			mutateRefused(err)
+		}
+		return
+	}
+	mutateLocal(fn)
+}
+
+// mutateLocal is Mutate on the process-wide Config: what runs with no Facade
+// installed, and what Project uses to publish the Facade's projection.
+func mutateLocal(fn func(*Config)) {
 	mu.Lock()
 	defer mu.Unlock()
 	// Deferred after the Unlock defer so it runs first, still under the lock:
@@ -2367,6 +2379,9 @@ var flagLockedSettings = map[string]string{
 // whose saved value is overwritten on the next boot — the edit appears to take, and
 // then quietly does not. A control the operator cannot actually change must say so.
 func EnvLockedSettings() []string {
+	if f := Current(); f != nil {
+		return f.EnvLocked()
+	}
 	locked := make([]string, 0, len(envLockedSettings)+len(flagLockedSettings))
 	for key, envVar := range envLockedSettings {
 		if envSupplied(envVar) || configFileSupplied(key) {
@@ -2391,6 +2406,9 @@ func EnvLockedSettings() []string {
 // The UI uses it to say WHY a field is disabled; "locked" with no reason is a
 // support ticket.
 func SettingLockedBy(key string) string {
+	if f := Current(); f != nil {
+		return f.Locks()[key]
+	}
 	if envVar, ok := envLockedSettings[key]; ok && envSupplied(envVar) {
 		return envVar
 	}
