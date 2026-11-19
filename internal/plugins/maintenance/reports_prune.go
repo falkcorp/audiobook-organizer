@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reports_prune.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 6f0c5b0e-2d57-4a39-9a41-3c8e1f7a52d4
-// last-edited: 2026-11-07
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -19,11 +19,13 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
-	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/library"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // ReportsPruneDefID is the def the reports_prune scheduler task enqueues.
@@ -84,6 +86,10 @@ type ReportsPruneResult struct {
 	Failed         int    `json:"failed"`
 }
 
+// reportsPruneHelp is the def's Description, which the native kind carries as
+// its Help.
+const reportsPruneHelp = "Removes old per-run TSV reports from the library's .reports directory, keeping the newest 3 per op kind and anything younger than 14 days (keep_per_kind, max_age_days). Previews (counts only) unless dry_run is false."
+
 // reportsPruneDef removes old per-run TSV reports from {RootDir}/.reports.
 //
 // WHY. backfill-file-hashes writes one report per run named for its op id (about
@@ -109,7 +115,7 @@ func (p *Plugin) reportsPruneDef() sdk.OperationDef {
 		ProgressTimeout: time.Hour, // LivenessNone requires an explicit budget
 		Plugin:          "maintenance",
 		DisplayName:     "Prune old op reports",
-		Description:     "Removes old per-run TSV reports from the library's .reports directory, keeping the newest 3 per op kind and anything younger than 14 days (keep_per_kind, max_age_days). Previews (counts only) unless dry_run is false.",
+		Description:     reportsPruneHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  ReportsPruneDefID,
@@ -132,30 +138,99 @@ func (p *Plugin) runReportsPrune(ctx context.Context, raw json.RawMessage, repor
 	if err != nil {
 		return err
 	}
-	keep, ageDays := reportsPruneDefaultKeep, reportsPruneDefaultAgeDays
-	if params.KeepPerKind != nil {
-		keep = *params.KeepPerKind
+	env := reportsPruneEnv{t6g7Env: t6g7HeadEnv(reporter, !dryRun), RootDir: p.deps.RootDir}
+	if queue := p.deps.OperationQueueStore(); queue != nil {
+		env.Store = queue
 	}
-	if params.MaxAgeDays != nil {
-		ageDays = *params.MaxAgeDays
+	_, err = reportsPruneCore(ctx, params.KeepPerKind, params.MaxAgeDays, dryRun, env)
+	return err
+}
+
+// reportsPruneKind is rule R3's kind for the def above.
+const reportsPruneKind = tasks.Kind("books.maintenance.reports-prune")
+
+// reportsPruneStore is the one read the prune makes: the operations whose
+// reports it must leave alone.
+type reportsPruneStore interface {
+	ListActiveOperationsV2() ([]database.OperationV2Row, error)
+}
+
+// reportsPruneEnv is what the core takes from its shell. The prune deletes
+// report files from disk and writes no store row, so it has no writer: the
+// deletion is the kind's declared `files` effect.
+type reportsPruneEnv struct {
+	t6g7Env
+	Store reportsPruneStore
+	// RootDir is the library root (HEAD: deps.RootDir()).
+	RootDir func() string
+}
+
+// reportsPruneNativeParams are the native run's params: HEAD's without the
+// dry-run switches, which the run's mode decides.
+type reportsPruneNativeParams struct {
+	KeepPerKind *int `json:"keep_per_kind,omitempty"`
+	MaxAgeDays  *int `json:"max_age_days,omitempty"`
+}
+
+// reportsPruneNative is the native kind. Preview counts what a live run would
+// remove; Live removes it.
+func (p *Plugin) reportsPruneNative(deps t6g7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g7Common(reportsPruneKind, sched)
+	c.Title = "Prune old op reports"
+	c.Help = reportsPruneHelp
+	// The prune os.Remove-s report files under {root}/.reports and writes no row.
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResFiles)))
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books." + ReportsPruneDefID)
+	c.Timeout = time.Hour
+	c.ProgressTimeout = time.Hour
+	return tasks.Task(reportsPruneKind, tasks.TaskSpec[json.RawMessage, ReportsPruneResult]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (ReportsPruneResult, error) {
+			in, err := t6g7DecodeNative[reportsPruneNativeParams](reportsPruneKind, raw)
+			if err != nil {
+				return ReportsPruneResult{}, err
+			}
+			if err := t6g7NeedDep(reportsPruneKind, "RootDir", deps.RootDir != nil); err != nil {
+				return ReportsPruneResult{}, err
+			}
+			live := rc.Mode() == tasks.ModeLive
+			env := reportsPruneEnv{t6g7Env: t6g7NativeEnv(rc), RootDir: deps.RootDir}
+			if deps.Store != nil {
+				env.Store = deps.Store
+			}
+			return reportsPruneCore(rc.Context(), in.KeepPerKind, in.MaxAgeDays, !live, env)
+		},
+	})
+}
+
+// reportsPruneCore is the body of runReportsPrune: the retention floors, the live
+// set, the prune and the report. It returns the result even alongside an error.
+func reportsPruneCore(ctx context.Context, keepParam, ageParam *int, dryRun bool, env reportsPruneEnv) (ReportsPruneResult, error) {
+	keep, ageDays := reportsPruneDefaultKeep, reportsPruneDefaultAgeDays
+	if keepParam != nil {
+		keep = *keepParam
+	}
+	if ageParam != nil {
+		ageDays = *ageParam
 	}
 	// Floors: keep 0 or age 0 would let a report of a run that is paused or
 	// awaiting resume (not in the active queue) be removed.
 	if keep < 1 {
-		return fmt.Errorf("reports-prune: keep_per_kind must be at least 1, got %d", keep)
+		return ReportsPruneResult{}, fmt.Errorf("reports-prune: keep_per_kind must be at least 1, got %d", keep)
 	}
 	if ageDays < 1 || ageDays > reportsPruneMaxAgeDays {
-		return fmt.Errorf("reports-prune: max_age_days must be between 1 and %d, got %d", reportsPruneMaxAgeDays, ageDays)
+		return ReportsPruneResult{}, fmt.Errorf("reports-prune: max_age_days must be between 1 and %d, got %d", reportsPruneMaxAgeDays, ageDays)
 	}
 
-	root := p.deps.RootDir()
-	queue := p.deps.OperationQueueStore()
-	if queue == nil {
-		return errors.New("reports-prune: cannot verify which operations are running; refusing")
+	root := env.RootDir()
+	if env.Store == nil {
+		return ReportsPruneResult{}, errors.New("reports-prune: cannot verify which operations are running; refusing")
 	}
-	active, err := queue.ListActiveOperationsV2()
+	active, err := env.Store.ListActiveOperationsV2()
 	if err != nil {
-		return fmt.Errorf("reports-prune: cannot list active operations; refusing: %w", err)
+		return ReportsPruneResult{}, fmt.Errorf("reports-prune: cannot list active operations; refusing: %w", err)
 	}
 	live := make(map[string]struct{}, len(active))
 	for _, op := range active {
@@ -169,21 +244,24 @@ func (p *Plugin) runReportsPrune(ctx context.Context, raw json.RawMessage, repor
 		Now:    time.Now(),
 		DryRun: dryRun,
 		Logf: func(format string, args ...any) {
-			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(format, args...))
+			env.Log(slog.LevelInfo, fmt.Sprintf(format, args...))
 		},
 	})
 	res.KeepPerKind, res.MaxAgeDays = keep, ageDays
-	if setErr := opsregistry.ReporterSetResult(reporter, res); setErr != nil && perr == nil {
-		perr = fmt.Errorf("reports-prune: persist result: %w", setErr)
+	// HEAD persists the result through the op registry; a native run returns it.
+	if env.SetResult != nil {
+		if setErr := env.SetResult(res); setErr != nil && perr == nil {
+			perr = fmt.Errorf("reports-prune: persist result: %w", setErr)
+		}
 	}
 	verb := "Removed"
 	if dryRun {
 		verb = "Preview: would remove"
 	}
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("%s %d report(s), %d bytes, from %s (scanned %d; kept %d newest, %d young; skipped %d live, %d pending, %d symlink, %d other; %d failed)",
+	env.Log(slog.LevelInfo, fmt.Sprintf("%s %d report(s), %d bytes, from %s (scanned %d; kept %d newest, %d young; skipped %d live, %d pending, %d symlink, %d other; %d failed)",
 		verb, res.Removed, res.BytesFreed, logger.SanitizeLogValue(res.Dir), res.Scanned,
 		res.KeptNewest, res.KeptYoung, res.SkippedLive, res.SkippedPending, res.SkippedSymlink, res.SkippedOther, res.Failed))
-	return perr
+	return res, perr
 }
 
 type reportsPruneOpts struct {
