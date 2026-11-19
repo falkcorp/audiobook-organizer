@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-18-merge-cleanup-preview-executive-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: fea71315-0fbe-4b70-a41a-0174fad61b55 -->
 <!-- last-edited: 2026-11-19 -->
 
@@ -43,8 +43,10 @@ no button that does.
   refusal.
 - When a pointer leads to a book that has been set aside, the list follows the
   trail further, to the live book the content went to. It looks at every book on
-  the trail that was itself merged away, whether or not it was set aside, at the
-  books holding that book's old file versions, and at the other books in its
+  the trail that was itself merged away, whether or not it was set aside, and at
+  every other book merged into the same missing book (set aside or not, with or
+  without a file), together with the books on their trails. For each of them it
+  looks at the books holding its old file versions and at the other books in its
   version group, including group members that were set aside but still point on.
   It proposes pointing at a live book only if that book really looks like the
   same work. A live book that was also merged into a missing book is counted as
