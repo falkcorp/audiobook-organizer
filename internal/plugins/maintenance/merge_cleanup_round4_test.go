@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_round4_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5c0d9e3a-6f21-4b7d-9a84-2e1f7b3c8d56
 // last-edited: 2026-11-19
 
@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -362,6 +363,21 @@ func TestMergeCleanupDeadEndIndexIsNotCachedFromACancelledCaller(t *testing.T) {
 	cancel()
 	_, err = run.deadEndIndex(dead)
 	require.ErrorIs(t, err, context.Canceled)
+	idx, err := run.deadEndIndex(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{x.ids["loser"]}, idx[x.ids["dead"]])
+}
+
+// An expired deadline is a caller's own stop too, not a fact about the library.
+func TestMergeCleanupDeadEndIndexIsNotCachedFromAnExpiredCaller(t *testing.T) {
+	x := newMCFixture(t)
+	mcDeadEnd(x, "dead", "loser", mcHushSpec(30000))
+	run, err := x.f.newRun(context.Background(), &fakeReporter{})
+	require.NoError(t, err)
+	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	_, err = run.deadEndIndex(expired)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 	idx, err := run.deadEndIndex(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, []string{x.ids["loser"]}, idx[x.ids["dead"]])
