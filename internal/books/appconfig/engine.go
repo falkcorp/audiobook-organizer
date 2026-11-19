@@ -55,7 +55,9 @@ type Engine struct {
 	locks      map[string]string
 	unreadable map[string]bool // secret rows whose record cannot be decrypted
 	missing    map[string]bool // rows whose canonical key the store does not register
-	gen        atomic.Uint64   // projections published
+	unrep      map[string]bool // rows whose canonical value HEAD cannot hold
+	base       func() config.Config
+	gen        atomic.Uint64 // projections published
 }
 
 var _ config.Facade = (*Engine)(nil)
@@ -86,6 +88,7 @@ type Store interface {
 	Secret(ctx context.Context, name secrets.Name) (secrets.Value, secrets.Meta, error)
 	PutSecret(ctx context.Context, name secrets.Name, v secrets.Value, by string) (secrets.Meta, error)
 	DeleteSecret(ctx context.Context, name secrets.Name, by string) error
+	ListSecrets(ctx context.Context, prefix string) ([]secrets.Meta, error)
 }
 
 // New builds an Engine over acc. publish receives every projection (production:
@@ -93,7 +96,7 @@ type Store interface {
 // is what a test of the Engine wants.
 func New(acc Store, publish func(config.Config), opts ...Option) *Engine {
 	e := &Engine{acc: acc, publish: publish, log: logger.New("appconfig"),
-		locks: map[string]string{}, unreadable: map[string]bool{}, missing: map[string]bool{}}
+		locks: map[string]string{}, unreadable: map[string]bool{}, missing: map[string]bool{}, unrep: map[string]bool{}}
 	for _, o := range opts {
 		o(e)
 	}
@@ -152,6 +155,9 @@ func plan(tab *cutover.RenameTable, residual bool) []projRow {
 			continue
 		}
 		if r.Class == cutover.ClassInput {
+			if foldsIntoRoots(r) {
+				continue // root_dir and path_aliases come from core.library.roots
+			}
 			if segs := strings.Split(r.Head, "."); residual && concrete(r.Head) && hasField(segs) {
 				out = append(out, projRow{row: r, segs: segs, residual: true})
 			}
@@ -194,27 +200,57 @@ func (e *Engine) Rebuild(ctx context.Context) error {
 }
 
 func (e *Engine) rebuildLocked(ctx context.Context) error {
-	cfg, locks, unreadable, missing, err := e.project(ctx)
+	p, err := e.project(ctx)
 	if err != nil {
 		return err
 	}
-	e.cur, e.locks, e.unreadable, e.missing = cfg, locks, unreadable, missing
+	e.cur, e.locks, e.unreadable, e.missing, e.unrep = p.cfg, p.locks, p.unreadable, p.missing, p.unrep
 	e.gen.Add(1)
 	if e.publish != nil {
-		e.publish(cfg)
+		e.publish(p.cfg)
 	}
 	return nil
 }
 
-// project reads every projected row and builds the Config.
-func (e *Engine) project(ctx context.Context) (cfg config.Config, locks map[string]string, unreadable, missing map[string]bool, err error) {
-	locks, unreadable, missing = map[string]string{}, map[string]bool{}, map[string]bool{}
+// projection is one build of the Config and what it learned on the way.
+type projection struct {
+	cfg        config.Config
+	locks      map[string]string
+	unreadable map[string]bool // secrets that cannot be decrypted
+	missing    map[string]bool // rows whose key the store does not register
+	unrep      map[string]bool // rows whose canonical value HEAD cannot hold
+}
+
+// project reads every projected row and builds the Config: the base (what no row
+// stores), the rows in table order (holders first), then the two folds.
+func (e *Engine) project(ctx context.Context) (*projection, error) {
+	out := &projection{locks: map[string]string{}, unreadable: map[string]bool{}, missing: map[string]bool{}, unrep: map[string]bool{}}
+	if e.base != nil {
+		out.cfg = e.base()
+	}
 	pass := maps.Collect(e.acc.PassthroughValues())
 	var resv map[string]json.RawMessage
 	if e.res != nil {
-		if resv, err = e.res.Load(ctx); err != nil {
-			return cfg, nil, nil, nil, fmt.Errorf("appconfig: reading the residual settings: %w", err)
+		heads := make([]string, 0, len(e.rows))
+		for _, p := range e.rows {
+			if p.residual {
+				heads = append(heads, p.row.Head)
+			}
 		}
+		var err error
+		if resv, err = e.res.Load(ctx, heads); err != nil {
+			return nil, fmt.Errorf("appconfig: reading the residual settings: %w", err)
+		}
+	}
+	set := func(head string, val json.RawMessage) error {
+		f, ok := fieldAt(&out.cfg, strings.Split(head, "."))
+		if !ok {
+			return fmt.Errorf("appconfig: row %s names no field of Config", head)
+		}
+		if err := json.Unmarshal(val, f.Addr().Interface()); err != nil {
+			return fmt.Errorf("appconfig: row %s: %q does not fit %s: %w", head, val, f.Type(), err)
+		}
+		return nil
 	}
 	for _, p := range e.rows {
 		var (
@@ -231,31 +267,110 @@ func (e *Engine) project(ctx context.Context) (cfg config.Config, locks map[stri
 		} else {
 			val, by, state, rerr = e.read(ctx, p, pass)
 		}
+		switch {
+		case errors.Is(rerr, cutover.ErrNotRepresentable):
+			e.noteUnrepresentable(out, p.row.Head, rerr)
+			continue
+		case errors.Is(rerr, cutover.ErrNotApplicable):
+			continue // never stored: the base holds it
+		case rerr != nil:
+			return nil, fmt.Errorf("appconfig: row %s: %w", p.row.Head, rerr)
+		}
 		switch state {
 		case readMissing:
-			missing[p.row.Head] = true
+			out.missing[p.row.Head] = true
 			continue
 		case readUnreadable:
-			unreadable[p.row.Head] = true
+			out.unreadable[p.row.Head] = true
 			continue
 		case readUnset:
 			continue
 		}
-		if rerr != nil {
-			return cfg, nil, nil, nil, fmt.Errorf("appconfig: row %s: %w", p.row.Head, rerr)
-		}
 		if by != "" {
-			locks[p.row.Head] = by
+			out.locks[p.row.Head] = by
 		}
-		f, ok := fieldAt(&cfg, p.segs)
-		if !ok {
-			return cfg, nil, nil, nil, fmt.Errorf("appconfig: row %s names no field of Config", p.row.Head)
-		}
-		if err := json.Unmarshal(val, f.Addr().Interface()); err != nil {
-			return cfg, nil, nil, nil, fmt.Errorf("appconfig: row %s: %q does not fit %s: %w", p.row.Head, val, f.Type(), err)
+		if err := set(p.row.Head, val); err != nil {
+			return nil, err
 		}
 	}
-	return cfg, locks, unreadable, missing, nil
+	if err := e.projectFolds(out, set); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// The two list keys whose entries fold several HEAD fields (the rows with a
+// fold or entry target): core's OIDC providers and library roots.
+const (
+	oidcProvidersKey = "core.auth.oidc.providers"
+	libraryRootsKey  = "core.library.roots"
+)
+
+// projectFolds unfolds the OIDC providers into the oauth_* fields and the
+// library roots into root_dir and path_aliases, with the inverse functions of M2's
+// planner (cutover.UnfoldOIDC, UnfoldRoots).
+func (e *Engine) projectFolds(out *projection, set func(string, json.RawMessage) error) error {
+	if st, ok := e.acc.Lookup(oidcProvidersKey); !ok {
+		out.missing["oauth_enabled"] = true
+	} else if len(st.Effective) > 0 {
+		heads, err := cutover.UnfoldOIDC(st.Effective)
+		switch {
+		case errors.Is(err, cutover.ErrNotRepresentable):
+			e.noteUnrepresentable(out, "oauth_enabled", err)
+		case err != nil:
+			return fmt.Errorf("appconfig: %s: %w", oidcProvidersKey, err)
+		default:
+			for _, h := range slices.Sorted(maps.Keys(heads)) {
+				if err := set(h, heads[h]); err != nil {
+					return err
+				}
+				if st.LockedBy != "" {
+					out.locks[h] = st.LockedBy
+				}
+			}
+		}
+	}
+	if st, ok := e.acc.Lookup(libraryRootsKey); !ok {
+		out.missing["root_dir"] = true
+	} else if len(st.Effective) > 0 {
+		rootDir, aliases, err := cutover.UnfoldRoots(st.Effective)
+		switch {
+		case errors.Is(err, cutover.ErrNotRepresentable):
+			e.noteUnrepresentable(out, "root_dir", err)
+		case err != nil:
+			return fmt.Errorf("appconfig: %s: %w", libraryRootsKey, err)
+		default:
+			if err := set("root_dir", mustMarshal(rootDir)); err != nil {
+				return err
+			}
+			if len(aliases) > 0 && string(aliases) != "null" {
+				if err := set("path_aliases", aliases); err != nil {
+					return err
+				}
+			}
+			if st.LockedBy != "" {
+				out.locks["root_dir"], out.locks["path_aliases"] = st.LockedBy, st.LockedBy
+			}
+		}
+	}
+	return nil
+}
+
+// noteUnrepresentable records a row whose canonical value HEAD cannot hold: the
+// field keeps its base value and the fault is logged once per rebuild. The
+// operator wrote something core accepts; refusing to publish any projection over
+// it would freeze every other setting.
+func (e *Engine) noteUnrepresentable(out *projection, head string, err error) {
+	out.unrep[head] = true
+	e.log.Error("appconfig: %s: %s; the setting keeps its default until the value is one HEAD can hold", head, logger.SanitizeLogErr(err))
+}
+
+// Unrepresentable lists the settings whose canonical value HEAD cannot hold,
+// sorted.
+func (e *Engine) Unrepresentable() []string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return slices.Sorted(maps.Keys(e.unrep))
 }
 
 // readState is what read found.
@@ -290,14 +405,14 @@ func (e *Engine) read(ctx context.Context, p projRow, pass map[coreconfig.Path]c
 		if !ok {
 			return nil, "", readUnset, nil
 		}
-		out, err := unconvert(t.Convert, ov.Value)
+		out, err := cutover.Unconvert(t.Convert, ov.Value)
 		return out, ov.By, readOK, err
 	default:
 		st, ok := e.acc.Lookup(coreconfig.Path(t.Path))
 		if !ok {
 			return nil, "", readMissing, nil
 		}
-		out, err := unconvert(t.Convert, st.Effective)
+		out, err := cutover.Unconvert(t.Convert, st.Effective)
 		return out, st.LockedBy, readOK, err
 	}
 }
@@ -308,15 +423,6 @@ func secretLock(m secrets.Meta) string {
 		return "env"
 	}
 	return ""
-}
-
-// unconvert turns a canonical value back into HEAD's. Identity until the
-// inverses of the table's converters land.
-func unconvert(name string, in json.RawMessage) (json.RawMessage, error) {
-	if name != "" {
-		return nil, fmt.Errorf("converter %q has no inverse yet", name)
-	}
-	return in, nil
 }
 
 // own is the field of cfg that p's row stores, with the fields of the rows
@@ -432,4 +538,15 @@ func hasField(segs []string) bool {
 	var c config.Config
 	_, ok := fieldAt(&c, segs)
 	return ok
+}
+
+// foldsIntoRoots reports whether a row is one of the HEAD fields that live in
+// core's library roots (an entry target of that list).
+func foldsIntoRoots(r *cutover.Row) bool {
+	for _, t := range r.Targets {
+		if t.Kind == cutover.TargetEntry && t.List == libraryRootsKey {
+			return true
+		}
+	}
+	return false
 }

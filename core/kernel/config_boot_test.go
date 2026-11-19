@@ -1,5 +1,5 @@
 // file: core/kernel/config_boot_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d2618bbb-991d-4090-bcf6-a00ef3f98c75
 // last-edited: 2026-11-19
 
@@ -422,6 +422,49 @@ func TestConfigBoot_DepsConfigSecretsAreTheDeclaredNames(t *testing.T) {
 	none := &appConfigAccess{store: lucius.Config.(*appConfigAccess).store, secrets: lucius.Config.(*appConfigAccess).secrets}
 	if _, _, err := none.Secret(ctx, in); !errors.Is(err, secrets.ErrOutOfScope) {
 		t.Errorf("Secret with no admit func: %v, want ErrOutOfScope", err)
+	}
+	if _, err := none.ListSecrets(ctx, "integrations."); !errors.Is(err, secrets.ErrOutOfScope) {
+		t.Errorf("ListSecrets with no admit func: %v, want ErrOutOfScope", err)
+	}
+}
+
+// TestConfigBoot_DepsConfigListSecrets: ListSecrets returns the set, admitted
+// secrets under a prefix, sorted, as Meta without a value; a record outside the
+// declaration is not listed even when it matches the prefix, a deleted one is
+// gone, and the prefix narrows.
+func TestConfigBoot_DepsConfigListSecrets(t *testing.T) {
+	_, _, lucius := appConfigHost(t, true)
+	ctx := t.Context()
+	acc := lucius.Config.(*appConfigAccess)
+	for _, n := range []secrets.Name{"integrations.batcave.zeta", "integrations.batcave.alpha", "integrations.batcave.gone"} {
+		if _, err := lucius.Config.PutSecret(ctx, n, secrets.NewValue(secretsFixture), "user:alfred"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := lucius.Config.DeleteSecret(ctx, "integrations.batcave.gone", "user:alfred"); err != nil {
+		t.Fatal(err)
+	}
+	// A record the declaration does not admit, stored through the store itself.
+	if _, err := acc.secrets.Put(ctx, "modules.bane.venom", secrets.NewValue(secretsFixture), "test"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := lucius.Config.ListSecrets(ctx, "")
+	if err != nil {
+		t.Fatalf("ListSecrets: %v", err)
+	}
+	var names []secrets.Name
+	for _, m := range got {
+		names = append(names, m.Name)
+		if m.Set != true {
+			t.Errorf("%s listed with Set false", m.Name)
+		}
+	}
+	want := []secrets.Name{"integrations.batcave.alpha", "integrations.batcave.zeta"}
+	if !slices.Equal(names, want) {
+		t.Fatalf("ListSecrets(\"\") = %v, want %v (admitted, set, sorted; not modules.bane.venom, not the deleted one)", names, want)
+	}
+	if got, _ := lucius.Config.ListSecrets(ctx, "integrations.batcave.z"); len(got) != 1 || got[0].Name != "integrations.batcave.zeta" {
+		t.Errorf("prefix narrowing: %v", got)
 	}
 }
 

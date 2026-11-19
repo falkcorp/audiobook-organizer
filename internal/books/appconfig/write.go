@@ -159,6 +159,10 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 			return
 		}
 		out, _, err := cutover.Convert(p.target.Convert, raw)
+		if errors.Is(err, cutover.ErrNotStaged) {
+			readOnly = append(readOnly, head)
+			return
+		}
 		if err != nil {
 			invalid = append(invalid, &coreconfig.FieldError{Path: path, Err: err})
 			return

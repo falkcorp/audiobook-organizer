@@ -461,3 +461,90 @@ func TestEngine_AHolderRowNeverCarriesTheSecretInsideIt(t *testing.T) {
 		t.Fatalf("projection: %+v", e.Snapshot().DownloadClient)
 	}
 }
+
+// TestEngine_ConvertersAndBase: canonical values come back as HEAD's through the
+// inverse converters, a value HEAD cannot hold keeps the base value and is
+// reported (the rest of the projection still publishes), a never-stored row
+// keeps the base, and fields no row stores start from the base.
+func TestEngine_ConvertersAndBase(t *testing.T) {
+	f := newFake()
+	f.vals["core.tasks.history_retention"] = json.RawMessage(`"720h"`) // 30 days
+	f.vals["core.auth.mode"] = json.RawMessage(`"required"`)
+	f.vals["core.log.journal.retention_days"] = json.RawMessage(`0`) // keep forever; HEAD says -1
+	f.vals["core.http.trusted_proxies"] = json.RawMessage(`["192.0.2.1","192.0.2.2"]`)
+	f.vals["core.log.level"] = json.RawMessage(`"info"`)
+	f.vals["core.storage.path"] = json.RawMessage(`"/ignored"`)
+	e := New(f, nil, WithBase(func() config.Config {
+		return config.Config{DatabaseType: "pebble", DatabasePath: "/var/lib/gotham/db", OperationLogRetentionDays: 7}
+	}))
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got := e.Snapshot()
+	if got.OperationLogRetentionDays != 30 || !got.EnableAuth || got.LogRetentionDays != -1 || got.TunnelConnectorAddrs != "192.0.2.1,192.0.2.2" {
+		t.Fatalf("inverse converters: retention=%d auth=%v log=%d csv=%q", got.OperationLogRetentionDays, got.EnableAuth, got.LogRetentionDays, got.TunnelConnectorAddrs)
+	}
+	if got.DatabaseType != "pebble" || got.DatabasePath != "/var/lib/gotham/db" {
+		t.Fatalf("base: type=%q path=%q (a never-stored row must not overwrite it)", got.DatabaseType, got.DatabasePath)
+	}
+	// 36 hours is not a whole number of days: keep the base (7) and report it.
+	f.vals["core.tasks.history_retention"] = json.RawMessage(`"36h"`)
+	if err := e.Rebuild(t.Context()); err != nil {
+		t.Fatalf("an unrepresentable value failed the whole rebuild: %v", err)
+	}
+	if e.Snapshot().OperationLogRetentionDays != 7 || !slices.Equal(e.Unrepresentable(), []string{"operation_log_retention_days"}) {
+		t.Fatalf("unrepresentable: retention=%d list=%v", e.Snapshot().OperationLogRetentionDays, e.Unrepresentable())
+	}
+	if e.Snapshot().LogLevel != "info" {
+		t.Fatal("the other rows were not projected")
+	}
+}
+
+// TestEngine_FoldsProject: the OIDC providers list unfolds into the oauth_*
+// fields (the allow-list the Cloudflare key also holds is overridden by the
+// fold), library roots into root_dir and path_aliases; with no providers
+// sign-in is off.
+func TestEngine_FoldsProject(t *testing.T) {
+	f := newFake()
+	f.vals["core.auth.oidc.providers"] = json.RawMessage(`[]`)
+	f.vals["core.library.roots"] = json.RawMessage(`[]`)
+	f.vals["modules.books.cfaccess.allowed_emails"] = json.RawMessage(`"cf@example.test"`)
+	e := New(f, nil)
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.Snapshot(); got.OAuthEnabled || got.OAuthAllowedEmails != "cf@example.test" || got.RootDir != "" {
+		t.Fatalf("no providers, no roots: enabled=%v emails=%q root=%q", got.OAuthEnabled, got.OAuthAllowedEmails, got.RootDir)
+	}
+	f.vals["core.auth.oidc.providers"] = json.RawMessage(`[
+	  {"id":"github","client_id":"gh-id","allowed_emails":["bruce@example.test","alfred@example.test"],"default_role":"viewer"},
+	  {"id":"google","client_id":"goog-id","allowed_emails":["bruce@example.test","alfred@example.test"],"default_role":"viewer"}]`)
+	f.locked["core.auth.oidc.providers"] = "env ABO_CORE_AUTH_OIDC_PROVIDERS"
+	f.vals["core.library.roots"] = json.RawMessage(`[{"id":"books-library","path":"/srv/library","aliases":[{"windows":"Z:\\\\library","unc":"","smb_url":""}]}]`)
+	if err := e.Rebuild(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got := e.Snapshot()
+	if !got.OAuthEnabled || got.OAuthGithubClientID != "gh-id" || got.OAuthGoogleClientID != "goog-id" ||
+		got.OAuthAllowedEmails != "bruce@example.test,alfred@example.test" || got.OAuthDefaultRole != "viewer" {
+		t.Fatalf("oidc unfold: %+v", struct {
+			E          bool
+			G, O, M, R string
+		}{got.OAuthEnabled, got.OAuthGithubClientID, got.OAuthGoogleClientID, got.OAuthAllowedEmails, got.OAuthDefaultRole})
+	}
+	if got.RootDir != "/srv/library" || len(got.PathAliases) != 1 || got.PathAliases[0].Root != "/srv/library" {
+		t.Fatalf("roots unfold: root=%q aliases=%+v", got.RootDir, got.PathAliases)
+	}
+	if e.Locks()["oauth_enabled"] == "" || e.Locks()["oauth_default_role"] == "" {
+		t.Fatalf("the providers key's lock did not reach its fields: %v", e.Locks())
+	}
+	// Two providers that disagree on the role are not HEAD's shape: reported, the fields keep the base.
+	f.vals["core.auth.oidc.providers"] = json.RawMessage(`[
+	  {"id":"github","client_id":"a","default_role":"viewer"},{"id":"google","client_id":"b","default_role":"admin"}]`)
+	if err := e.Rebuild(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(e.Unrepresentable(), []string{"oauth_enabled"}) || e.Snapshot().OAuthEnabled {
+		t.Fatalf("disagreeing providers: unrep=%v enabled=%v", e.Unrepresentable(), e.Snapshot().OAuthEnabled)
+	}
+}

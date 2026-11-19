@@ -1,5 +1,5 @@
 // file: core/kernel/config_boot.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0e3db6c6-c5ae-4f54-adaf-6fd7b728c89e
 // last-edited: 2026-11-19
 
@@ -496,6 +496,22 @@ func (a *appConfigAccess) PutSecret(ctx context.Context, name secrets.Name, v se
 		return secrets.Meta{}, err
 	}
 	return a.secrets.Put(ctx, name, v, by)
+}
+
+func (a *appConfigAccess) ListSecrets(ctx context.Context, prefix string) ([]secrets.Meta, error) {
+	if a.secrets == nil || a.admit == nil {
+		return nil, secrets.ErrOutOfScope
+	}
+	var out []secrets.Meta
+	for m, err := range a.secrets.All(ctx) {
+		if err != nil {
+			return nil, err
+		}
+		if m.Set && strings.HasPrefix(string(m.Name), prefix) && a.admit(m.Name) {
+			out = append(out, m)
+		}
+	}
+	return out, nil
 }
 
 func (a *appConfigAccess) DeleteSecret(ctx context.Context, name secrets.Name, by string) error {

@@ -1,5 +1,5 @@
 // file: core/module/deps.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 04c2ba0c-0bfa-4d6b-9e91-bc7ba2db6894
 // last-edited: 2026-11-19
 
@@ -101,6 +101,13 @@ type ConfigAccess interface {
 	Secret(ctx context.Context, name secrets.Name) (secrets.Value, secrets.Meta, error)
 	PutSecret(ctx context.Context, name secrets.Name, v secrets.Value, by string) (secrets.Meta, error)
 	DeleteSecret(ctx context.Context, name secrets.Name, by string) error
+	// ListSecrets is the Meta (never a value) of every set secret whose name
+	// starts with prefix and that Manifest.AppConfig.Secrets admits, sorted by
+	// name. A name the gate refuses is left out, not reported, so the list can
+	// never reveal that a record exists outside the declaration. It lets a module
+	// find the secrets of an entry it cannot enumerate by name (the credentials of
+	// a metadata source).
+	ListSecrets(ctx context.Context, prefix string) ([]secrets.Meta, error)
 }
 
 // StorageHandles is what Deps.Storage carries (06 §6.4.4). It lives in

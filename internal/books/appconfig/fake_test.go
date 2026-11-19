@@ -11,6 +11,7 @@ import (
 	"errors"
 	"iter"
 	"slices"
+	"strings"
 	"sync"
 
 	coreconfig "github.com/falkcorp/mediacore/config"
@@ -184,7 +185,7 @@ func newFakeResidual() *fakeResidual {
 	return &fakeResidual{vals: map[string]json.RawMessage{}, redact: map[string]bool{}}
 }
 
-func (r *fakeResidual) Load(context.Context) (map[string]json.RawMessage, error) {
+func (r *fakeResidual) Load(_ context.Context, _ []string) (map[string]json.RawMessage, error) {
 	if r.loadEr != nil {
 		return nil, r.loadEr
 	}
@@ -214,4 +215,16 @@ func (r *fakeResidual) Redact(head string, v json.RawMessage) json.RawMessage {
 		return json.RawMessage(`"********"`)
 	}
 	return v
+}
+
+func (f *fakeAccess) ListSecrets(_ context.Context, prefix string) ([]secrets.Meta, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []secrets.Meta
+	for _, n := range slices.Sorted(mapKeys(f.secrets)) {
+		if strings.HasPrefix(string(n), prefix) {
+			out = append(out, secrets.Meta{Name: n, Set: true})
+		}
+	}
+	return out, nil
 }

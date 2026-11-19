@@ -47,10 +47,11 @@ func TestPlan_ConfigFieldsNoRowProjects(t *testing.T) {
 	walk(bv, nil)
 	// The fields no row projects, and why: the table drops them (class x: Pebble
 	// only, read and ignored, folded into ai_endpoints) or folds them into core's
-	// OIDC provider list (the e2u inverse fills them). A new Config field with no
+	// OIDC provider list and library roots (projectFolds fills them, TestEngine_FoldsProject). A new Config field with no
 	// row lands here and fails the test: give it a row or name it.
 	want := []string{"ai_backend", "ai_endpoints_routing", "auto_update.window_end", "auto_update.window_start",
-		"database_type", "oauth_default_role", "oauth_enabled", "oauth_github_client_id", "oauth_google_client_id"}
+		"database_type", "oauth_default_role", "oauth_enabled", "oauth_github_client_id", "oauth_google_client_id",
+		"path_aliases", "root_dir"}
 	slices.Sort(gaps)
 	if !slices.Equal(gaps, want) {
 		t.Fatalf("Config fields no row projects = %v, want %v", gaps, want)
