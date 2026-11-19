@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/auto_resolve.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3a7c1f08-9d24-4e6b-8b15-2c9f0a5d7e61
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package dedup
 
@@ -11,9 +11,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -54,56 +55,109 @@ func (p *Plugin) autoResolveDef() sdk.OperationDef {
 	}
 }
 
+// autoResolveKind is rule R3's native kind for dedup.auto-resolve.
+const autoResolveKind = tasks.Kind("books.dedup.auto-resolve")
+
+// autoResolveEngine is the one engine call the core makes.
+type autoResolveEngine interface {
+	AutoResolveCertain(ctx context.Context, apply bool, maxMerges, sampleCap int) (dedupengine.AutoResolveResult, error)
+}
+
+// autoResolveNativeParams are the native params: HEAD's Apply is the run's mode.
+type autoResolveNativeParams struct {
+	MaxMerges int `json:"max_merges"`
+	SampleCap int `json:"sample_cap"`
+}
+
+// autoResolveEnv is what the core takes from its shell. Live is HEAD's apply=true;
+// Enabled is the dedup.auto_resolve_enabled kill switch, read by the shell.
+type autoResolveEnv struct {
+	kindEnv
+	Engine    autoResolveEngine
+	MaxMerges int
+	SampleCap int
+	Enabled   bool
+}
+
+// autoResolveResult is the native run's result. Report is the dry run's
+// reviewable plan: HEAD stores it through SetResult, a native run returns it.
+type autoResolveResult struct {
+	DryRun     bool                                 `json:"dry_run"`
+	Checked    int                                  `json:"checked"`
+	Eligible   int                                  `json:"eligible"`
+	Merged     int                                  `json:"merged"`
+	SkippedCap int                                  `json:"skipped_cap"`
+	Report     *dedupengine.AutoResolveDryRunReport `json:"report,omitempty"`
+}
+
+// autoResolveCore is the body of runAutoResolve, shared by both shells.
+//
+// Concurrency: the pass is one Engine.AutoResolveCertain call whose merge loop
+// (internal/dedup/auto_resolve.go) is sequential by design: candidates are
+// snapshotted once, a book shared by two CERTAIN pairs would otherwise be
+// merged twice, and the max_merges cap is loop-carried. No worker pool exists
+// here, so no two workers can touch one book.
+func autoResolveCore(ctx context.Context, env autoResolveEnv) (autoResolveResult, error) {
+	// Fail fast at the op boundary too (the engine also enforces this) so a
+	// misconfigured apply=true request is rejected before any candidate scan.
+	if env.Live && !env.Enabled {
+		return autoResolveResult{}, fmt.Errorf("auto-resolve apply=true requires dedup.auto_resolve_enabled=true (owner greenlight); refusing")
+	}
+	mode := "dry-run"
+	if env.Live {
+		mode = "APPLY"
+	}
+	env.Progress(0, 1, fmt.Sprintf("Scanning CERTAIN candidates for Tier-1 auto-resolution (%s)…", mode))
+	env.Logger.Info("dedup auto-resolve start",
+		"apply", env.Live, "max_merges", env.MaxMerges, "sample_cap", env.SampleCap)
+
+	res, err := env.Engine.AutoResolveCertain(ctx, env.Live, env.MaxMerges, env.SampleCap)
+	if err != nil {
+		env.Logger.Error("dedup auto-resolve error", "error", err)
+		return autoResolveResult{}, fmt.Errorf("auto-resolve: %w", err)
+	}
+
+	env.Progress(1, 1, fmt.Sprintf(
+		"Auto-resolve complete (%s) — checked %d, eligible %d, merged %d, skipped(cap) %d",
+		mode, res.Checked, res.Eligible, res.Merged, res.SkippedCap))
+	env.Logger.Info("dedup auto-resolve complete",
+		"dry_run", res.DryRun, "checked", res.Checked, "eligible", res.Eligible,
+		"merged", res.Merged, "skipped_cap", res.SkippedCap, "samples", len(res.Samples),
+		"plan", len(res.Plan), "plan_truncated", res.PlanTruncated)
+
+	out := autoResolveResult{DryRun: res.DryRun, Checked: res.Checked, Eligible: res.Eligible, Merged: res.Merged, SkippedCap: res.SkippedCap}
+	// A dry run's only product is the list of pairs a run would merge, so it is
+	// stored as the op result and a failure to store it fails the op. An apply
+	// run stores nothing: it already did its work.
+	if !env.Live {
+		report := dedupengine.NewAutoResolveDryRunReport(res)
+		out.Report = &report
+		if env.SetResult != nil {
+			if err := env.SetResult(report); err != nil {
+				return autoResolveResult{}, fmt.Errorf("auto-resolve: store the dry-run plan: %w", err)
+			}
+		}
+	}
+	return out, nil
+}
+
+// runAutoResolve is the v2 shell: HEAD's Run over autoResolveCore.
 func (p *Plugin) runAutoResolve(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 	if p.engine == nil {
 		return fmt.Errorf("dedup engine not available")
 	}
-
 	var params autoResolveParams
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &params); err != nil {
 			return fmt.Errorf("parse auto-resolve params: %w", err)
 		}
 	}
-
-	// Fail fast at the op boundary too (the engine also enforces this) so a
-	// misconfigured apply=true request is rejected before any candidate scan.
-	if params.Apply && !config.AppConfig.Dedup.AutoResolveEnabled {
-		return fmt.Errorf("auto-resolve apply=true requires dedup.auto_resolve_enabled=true (owner greenlight); refusing")
-	}
-
-	mode := "dry-run"
-	if params.Apply {
-		mode = "APPLY"
-	}
-	_ = reporter.UpdateProgress(0, 1,
-		fmt.Sprintf("Scanning CERTAIN candidates for Tier-1 auto-resolution (%s)…", mode))
-	reporter.Logger().Info("dedup auto-resolve start",
-		"apply", params.Apply, "max_merges", params.MaxMerges, "sample_cap", params.SampleCap)
-
-	res, err := p.engine.AutoResolveCertain(ctx, params.Apply, params.MaxMerges, params.SampleCap)
-	if err != nil {
-		reporter.Logger().Error("dedup auto-resolve error", "error", err)
-		return fmt.Errorf("auto-resolve: %w", err)
-	}
-
-	_ = reporter.UpdateProgress(1, 1, fmt.Sprintf(
-		"Auto-resolve complete (%s) — checked %d, eligible %d, merged %d, skipped(cap) %d",
-		mode, res.Checked, res.Eligible, res.Merged, res.SkippedCap))
-	reporter.Logger().Info("dedup auto-resolve complete",
-		"dry_run", res.DryRun, "checked", res.Checked, "eligible", res.Eligible,
-		"merged", res.Merged, "skipped_cap", res.SkippedCap, "samples", len(res.Samples),
-		"plan", len(res.Plan), "plan_truncated", res.PlanTruncated)
-
-	// A dry run's only product is the list of pairs a run would merge, so it is
-	// stored as the op result (GET /operations/:id/result) and a failure to store
-	// it fails the op: a plan nobody can read back is the silent shape this
-	// replaces. An apply run stores nothing: it already did its work, and this op
-	// adds no write to it.
-	if !params.Apply {
-		if err := registry.ReporterSetResult(reporter, dedupengine.NewAutoResolveDryRunReport(res)); err != nil {
-			return fmt.Errorf("auto-resolve: store the dry-run plan: %w", err)
-		}
-	}
-	return nil
+	_, err := autoResolveCore(ctx, autoResolveEnv{
+		kindEnv:   headEnv(reporter, params.Apply),
+		Engine:    p.engine,
+		MaxMerges: params.MaxMerges,
+		SampleCap: params.SampleCap,
+		Enabled:   config.AppConfig.Dedup.AutoResolveEnabled,
+	})
+	return err
 }

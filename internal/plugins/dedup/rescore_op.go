@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/rescore_op.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: 5c1a9f38-7b62-4d0e-9a15-6e3b8c07d24f
-// last-edited: 2026-10-18
+// last-edited: 2026-11-18
 
 // dedup.rescore — re-band every pending dedup candidate under the CURRENT
 // score ladder, and the config-PUT sink that queues it.
@@ -28,6 +28,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/falkcorp/mediacore/tasks"
 
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
@@ -134,6 +136,72 @@ func (p *Plugin) rescoreDef() sdk.OperationDef {
 	}
 }
 
+// rescoreKind is rule R3's native kind for dedup.rescore.
+const rescoreKind = tasks.Kind("books.dedup.rescore")
+
+// rescoreEngine is the one engine call the core makes.
+type rescoreEngine interface {
+	Rescore(ctx context.Context, apply bool) (dedupengine.RescoreResult, error)
+}
+
+// rescoreNativeParams are the native params: HEAD's Apply is the run's mode.
+// LadderFingerprint is only a dedupe discriminator (see RescoreParams).
+type rescoreNativeParams struct {
+	Reason            string `json:"reason,omitempty"`
+	LadderFingerprint string `json:"ladder_fingerprint,omitempty"`
+}
+
+// rescoreEnv is what the core takes from its shell. Live is HEAD's apply.
+type rescoreEnv struct {
+	kindEnv
+	Engine rescoreEngine
+	Reason string
+}
+
+// rescoreResult is the native run's result.
+type rescoreResult struct {
+	Inspected   int            `json:"inspected"`
+	Changed     int            `json:"changed"`
+	Written     int            `json:"written"`
+	Skipped     int            `json:"skipped"`
+	WriteErrors int            `json:"write_errors"`
+	BandDeltas  map[string]int `json:"band_deltas,omitempty"`
+}
+
+// rescoreCore is the body of runRescore, shared by both shells. The pass is one
+// engine call (Engine.Rescore hosts its own pool).
+func rescoreCore(ctx context.Context, env rescoreEnv) (rescoreResult, error) {
+	env.Progress(0, 1, "Re-banding pending dedup candidates under the current score ladder…")
+	res, err := env.Engine.Rescore(ctx, env.Live)
+	if err != nil {
+		env.Logger.Error("dedup rescore failed", "error", err,
+			"inspected", res.Inspected, "changed", res.Changed,
+			"written", res.Written, "write_errors", res.WriteErrors)
+		return rescoreResult{}, fmt.Errorf("dedup rescore: %w", err)
+	}
+	env.Logger.Info("dedup rescore complete",
+		"apply", env.Live, "reason", env.Reason,
+		"inspected", res.Inspected, "changed", res.Changed,
+		"written", res.Written,
+		"skipped_no_breakdown", res.Skipped, "write_errors", res.WriteErrors,
+		"band_deltas", res.BandDeltas)
+	out := rescoreResult{Inspected: res.Inspected, Changed: res.Changed, Written: res.Written,
+		Skipped: res.Skipped, WriteErrors: res.WriteErrors, BandDeltas: res.BandDeltas}
+	// WriteErrors is a partial failure, not a success with a footnote: those
+	// rows still carry the previous ladder's band, and AutoResolveCertain acts
+	// on that band. Fail the op so it is red in the bell, not green.
+	if res.WriteErrors > 0 {
+		env.Progress(1, 1, fmt.Sprintf(
+			"Re-band incomplete — %d of %d changed rows could not be written", res.WriteErrors, res.Changed))
+		return out, fmt.Errorf("dedup rescore: %d of %d changed candidate rows could not be re-banded; they still carry the previous ladder's band", res.WriteErrors, res.Changed)
+	}
+	env.Progress(1, 1, fmt.Sprintf(
+		"Re-banded %d of %d pending candidates (%d skipped: no stored signals)",
+		res.Changed, res.Inspected, res.Skipped))
+	return out, nil
+}
+
+// runRescore is the v2 shell: HEAD's Run over rescoreCore.
 func (p *Plugin) runRescore(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 	if p.engine == nil {
 		return fmt.Errorf("dedup engine not available")
@@ -147,32 +215,8 @@ func (p *Plugin) runRescore(ctx context.Context, raw json.RawMessage, reporter s
 			return fmt.Errorf("dedup.rescore: parse params: %w", err)
 		}
 	}
-	_ = reporter.UpdateProgress(0, 1, "Re-banding pending dedup candidates under the current score ladder…")
-	res, err := p.engine.Rescore(ctx, params.Apply)
-	if err != nil {
-		reporter.Logger().Error("dedup rescore failed", "error", err,
-			"inspected", res.Inspected, "changed", res.Changed,
-			"written", res.Written, "write_errors", res.WriteErrors)
-		return fmt.Errorf("dedup rescore: %w", err)
-	}
-	reporter.Logger().Info("dedup rescore complete",
-		"apply", params.Apply, "reason", params.Reason,
-		"inspected", res.Inspected, "changed", res.Changed,
-		"written", res.Written,
-		"skipped_no_breakdown", res.Skipped, "write_errors", res.WriteErrors,
-		"band_deltas", res.BandDeltas)
-	// WriteErrors is a partial failure, not a success with a footnote: those
-	// rows still carry the previous ladder's band, and AutoResolveCertain acts
-	// on that band. Fail the op so it is red in the bell, not green.
-	if res.WriteErrors > 0 {
-		_ = reporter.UpdateProgress(1, 1, fmt.Sprintf(
-			"Re-band incomplete — %d of %d changed rows could not be written", res.WriteErrors, res.Changed))
-		return fmt.Errorf("dedup rescore: %d of %d changed candidate rows could not be re-banded; they still carry the previous ladder's band", res.WriteErrors, res.Changed)
-	}
-	_ = reporter.UpdateProgress(1, 1, fmt.Sprintf(
-		"Re-banded %d of %d pending candidates (%d skipped: no stored signals)",
-		res.Changed, res.Inspected, res.Skipped))
-	return nil
+	_, err := rescoreCore(ctx, rescoreEnv{kindEnv: headEnv(reporter, params.Apply), Engine: p.engine, Reason: params.Reason})
+	return err
 }
 
 // dedupScoreSink is what the config UpdateService calls after it has persisted

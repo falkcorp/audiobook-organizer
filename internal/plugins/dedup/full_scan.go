@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/full_scan.go
-// version: 2.2.3
+// version: 2.3.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // T018: full_scan.go enforces phase ordering for the full dedup scan:
 //
@@ -23,6 +23,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/falkcorp/mediacore/tasks"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -84,31 +86,53 @@ func (p *Plugin) fullScanDef() sdk.OperationDef {
 	}
 }
 
-func (p *Plugin) runFullScan(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	if p.engine == nil {
-		return fmt.Errorf("dedup engine not available")
-	}
+// fullScanKind is rule R3's native kind for dedup.full-scan.
+const fullScanKind = tasks.Kind("books.dedup.full-scan")
 
+// fullScanEngine is the engine surface the core takes. FullScan hosts the
+// bounded worker pools (Layer-1 and the unified-scoring pass, both
+// registry.RunItems at runtime.NumCPU(), internal/dedup/engine.go), so this core
+// has no item loop of its own.
+type fullScanEngine interface {
+	purgeStaleEngine
+	FullScan(ctx context.Context, progress func(phase string, done, total int)) error
+}
+
+// fullScanStore is the reads the core takes.
+type fullScanStore interface {
+	// LSHIndexBuilt reports whether the LSH index is built and whether the store
+	// carries that flag at all (available).
+	LSHIndexBuilt() (built, available bool)
+	// ListCandidates is the candidate count read for the completion message.
+	ListCandidates(f database.CandidateFilter) ([]database.DedupCandidate, int, error)
+}
+
+// fullScanEnv is what the core takes from its shell.
+type fullScanEnv struct {
+	kindEnv
+	Engine fullScanEngine
+	Store  fullScanStore
+}
+
+// fullScanResult is the native run's result.
+type fullScanResult struct {
+	PendingCandidates int `json:"pending_candidates"`
+}
+
+// fullScanCore is the body of runFullScan, shared by both shells.
+func fullScanCore(ctx context.Context, env fullScanEnv) (fullScanResult, error) {
 	// Phase 1 — Hygiene: purge stale candidates before the scan so the
 	// index phase starts with a clean candidate table.
-	startProg := sdk.NewProgress(reporter, 0)
+	startProg := newProgress(env.kindEnv, 0)
 	startProg.Start("Purging stale candidates...")
-	if deleted, err := p.engine.PurgeStaleCandidates(ctx); err != nil {
-		reporter.Logger().Error("purge stale candidates error", "error", err)
+	if deleted, err := env.Engine.PurgeStaleCandidates(ctx); err != nil {
+		env.Logger.Error("purge stale candidates error", "error", err)
 	} else if deleted > 0 {
-		reporter.Logger().Info("purged stale candidates before scan", "count", deleted)
+		env.Logger.Info("purged stale candidates before scan", "count", deleted)
 	}
 
-	// Phase 2 — Index + score: run exact + embedding collectors for every
-	// primary book ("scan" phase), then compose the unified score for every
-	// book ("score" phase). FullScan reports progress via a callback
-	// (phase, done, total) — both phases iterate over all books and used to
-	// report independently, but the "score" phase previously reported
-	// nothing at all, leaving the operation log silent for the CPU-heavy
-	// composite-scoring pass (observed: 25+ minutes silent on a ~29K-book
-	// library). Build a separate *sdk.Progress tracker per phase, lazily on
-	// that phase's first callback, same pattern as the original single
-	// tracker.
+	// Phase 2 — Index + score. FullScan reports (phase, done, total); one
+	// *sdk.Progress per phase, built lazily on that phase's first callback.
 	var (
 		prog      *sdk.Progress
 		scoreProg *sdk.Progress
@@ -116,21 +140,21 @@ func (p *Plugin) runFullScan(ctx context.Context, _ json.RawMessage, reporter sd
 		scanStart  time.Time
 		scoreStart time.Time
 	)
-	fullScanErr := p.engine.FullScan(ctx, func(phase string, done, total int) {
+	fullScanErr := env.Engine.FullScan(ctx, func(phase string, done, total int) {
 		if total <= 0 {
 			return
 		}
 		switch phase {
 		case "scan":
 			if prog == nil {
-				prog = sdk.NewProgress(reporter, total)
+				prog = newProgress(env.kindEnv, total)
 				prog.Start(fmt.Sprintf("Scanning books: 0 / %d", total))
 				scanStart = time.Now()
 			}
 			prog.StepN(done, fmt.Sprintf("Scanning books: %d / %d%s", done, total, etaSuffix(scanStart, done, total)))
 		case "score":
 			if scoreProg == nil {
-				scoreProg = sdk.NewProgress(reporter, total)
+				scoreProg = newProgress(env.kindEnv, total)
 				scoreProg.Start(fmt.Sprintf("Composing scores: 0 / %d", total))
 				scoreStart = time.Now()
 			}
@@ -138,48 +162,50 @@ func (p *Plugin) runFullScan(ctx context.Context, _ json.RawMessage, reporter sd
 		}
 	})
 	if fullScanErr != nil {
-		reporter.Logger().Error("FullScan error", "error", fullScanErr)
-		return fmt.Errorf("dedup scan: %w", fullScanErr)
+		env.Logger.Error("FullScan error", "error", fullScanErr)
+		return fullScanResult{}, fmt.Errorf("dedup scan: %w", fullScanErr)
 	}
 
 	if prog == nil {
-		prog = sdk.NewProgress(reporter, 0)
+		prog = newProgress(env.kindEnv, 0)
 		prog.Start("Scanning books: 0 / 0")
 	}
 	if scoreProg == nil {
-		scoreProg = sdk.NewProgress(reporter, 0)
+		scoreProg = newProgress(env.kindEnv, 0)
 		scoreProg.Start("Composing scores: 0 / 0")
 	}
 	scoreProg.Finalize("scoring complete")
 	scoreProg.Done("Composing scores complete")
 
-	// Phase 3 — LSH candidates: assert that the LSH index has been built
-	// before the engine's CollectLSHAcoustID collector runs. The collector
-	// already self-gates (it calls IsLSHIndexBuilt() internally), but we
-	// surface the skip reason here so it appears in the operation log and
-	// is visible to operators.
-	// AsCapability, not a bare assertion: p.store is the server's
-	// search-indexing decorator, which does not carry IsLSHIndexBuilt.
-	if flagStore, ok := database.AsCapability[LSHFlagStore](p.store); ok {
-		if !flagStore.IsLSHIndexBuilt() {
-			reporter.Logger().Info(
-				"full-scan: LSH phase skipped — index not yet built",
-				"hint", "run dedup.lsh-index-build to enable sub-linear AcoustID matching",
-			)
-		}
-		// If built, no-op: the engine's FullScan already invoked the LSH
-		// collector via runUnifiedScoringForBook for each book.
+	// Phase 3 — LSH candidates: surface the skip reason in the operation log.
+	// The collector already self-gates; the engine's FullScan invoked it when
+	// the index is built.
+	if built, ok := env.Store.LSHIndexBuilt(); ok && !built {
+		env.Logger.Info(
+			"full-scan: LSH phase skipped — index not yet built",
+			"hint", "run dedup.lsh-index-build to enable sub-linear AcoustID matching",
+		)
 	}
 
-	// Fetch final candidate counts for the completion message.
 	pendingCount := 0
-	if p.embeddingStore != nil {
-		filter := database.CandidateFilter{EntityType: "book", Status: "pending", Limit: 1}
-		if _, total, listErr := p.embeddingStore.ListCandidates(filter); listErr == nil {
-			pendingCount = total
-		}
+	filter := database.CandidateFilter{EntityType: "book", Status: "pending", Limit: 1}
+	if _, total, listErr := env.Store.ListCandidates(filter); listErr == nil {
+		pendingCount = total
 	}
 	prog.Finalize("writing results...")
 	prog.Done(fmt.Sprintf("Dedup scan complete — %d pending candidates", pendingCount))
-	return nil
+	return fullScanResult{PendingCandidates: pendingCount}, nil
+}
+
+// runFullScan is the v2 shell: HEAD's Run over fullScanCore.
+func (p *Plugin) runFullScan(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+	if p.engine == nil {
+		return fmt.Errorf("dedup engine not available")
+	}
+	_, err := fullScanCore(ctx, fullScanEnv{
+		kindEnv: headEnv(reporter, true),
+		Engine:  p.engine,
+		Store:   headScoringReads{store: p.store, emb: p.embeddingStore},
+	})
+	return err
 }

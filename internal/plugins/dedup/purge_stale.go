@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/purge_stale.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7f3e1b2c-4a8d-4e1f-9c2a-3e5b8d0a1c47
 // last-edited: 2026-11-18
 
@@ -58,7 +58,12 @@ const purgeStaleKind = tasks.Kind("books.dedup.purge-stale")
 // through a receiver.
 type purgeStaleEnv struct {
 	kindEnv
-	Engine scoringEngine
+	Engine purgeStaleEngine
+}
+
+// purgeStaleEngine is the one engine call the core makes.
+type purgeStaleEngine interface {
+	PurgeStaleCandidates(ctx context.Context) (int, error)
 }
 
 // purgeStaleResult is the native run's result: how many stale candidates went.
