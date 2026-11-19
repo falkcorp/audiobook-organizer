@@ -4,4 +4,4 @@
 
 ### Changed
 
-- server: the bodies of those definitions moved into shared cores that take their store and writer through narrow interfaces; the existing shells call them. `sdk.NewProgress` takes a two-method `ProgressSink` instead of the full reporter interface.
+- server: the bodies of those definitions moved into shared cores that take their store and writer through narrow interfaces; the existing shells call them. `sdk.NewProgress` takes a one-method `ProgressSink` (`UpdateProgress`) instead of the full reporter interface.

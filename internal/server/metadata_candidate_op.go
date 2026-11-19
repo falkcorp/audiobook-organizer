@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.23.0
+// version: 3.24.0
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 //
 // Registers the metadata.candidate-fetch v2 OperationDef. Pure params
 // type moved to internal/metabatch.FetchOpParams.
@@ -188,6 +188,19 @@ type candidateFetchEnv struct {
 	t7Env
 	Store  candidateFetchReads
 	Writer candidateFetchWriter
+	// LogOutcome writes one book's outcome line. HEAD's shell sets it to
+	// logCandidateOutcome over its reporter; nil means logCandidateOutcomeVia over
+	// the env's Log, which is what the native shell uses.
+	LogOutcome func(CandidateResult)
+}
+
+// logOutcome writes one book's outcome line to the op log.
+func (e candidateFetchEnv) logOutcome(r CandidateResult) {
+	if e.LogOutcome != nil {
+		e.LogOutcome(r)
+		return
+	}
+	logCandidateOutcomeVia(e.Log, r)
 }
 
 // candidateFetchSelect resolves an Unfetched run's books and logs what it found.
@@ -406,7 +419,7 @@ func candidateFetchCore(ctx context.Context, p metadataCandidateFetchOpParams, e
 					continue
 				}
 				tally.record(result)
-				logCandidateOutcome(env.Log, result)
+				env.logOutcome(result)
 				if err := env.Writer.CreateOperationResult(&database.OperationResult{
 					OperationID: opID,
 					BookID:      bookID,
@@ -473,7 +486,10 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 		}
 	}
 	h := headCandidateFetch{s: s}
-	return candidateFetchCore(ctx, p, candidateFetchEnv{t7Env: t7HeadCheckpointing(t7HeadEnv(reporter, true), reporter), Store: h, Writer: h})
+	return candidateFetchCore(ctx, p, candidateFetchEnv{
+		t7Env: t7HeadCheckpointing(t7HeadEnv(reporter, true), reporter), Store: h, Writer: h,
+		LogOutcome: func(r CandidateResult) { logCandidateOutcome(reporter, r) },
+	})
 }
 
 // headCandidateFetch is HEAD's side of both interfaces: the server's store and

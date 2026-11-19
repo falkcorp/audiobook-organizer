@@ -1,7 +1,7 @@
 // file: internal/server/ai_scan_apply_op.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2d9f4b80-7a13-4c65-8e0b-5f31a6c92d74
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 // ai_scan_apply_op registers ai.author-scan-apply: the op behind "Apply selected"
 // in the Authors & series lane's AI scans sub-view. Until 2026-10-13 that button
@@ -660,7 +660,7 @@ type aiScanApplyNativeParams struct {
 func (s *Server) aiScanApplyNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	kind := t7KindFor(handlers.AIScanApplyDefID)
 	c := t7Common(s.aiScanApplyDef(), sched)
-	c.Effects = t7Writes(ops.ResBooks, ops.ResAuthors, ops.ResOperations, t7ResAIScans)
+	c.Effects = t7Writes(ops.ResBooks, ops.ResAuthors, ops.ResOperations, ops.ResAIScans)
 	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, scanApplyReport]{
 		Common: c,
 		Run: func(rc *tasks.RC, raw json.RawMessage) (scanApplyReport, error) {

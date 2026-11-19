@@ -1,7 +1,7 @@
 // file: internal/server/identification_advance_op.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 96facb01-98fa-4ebd-b06d-1422569abedd
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 //
 // Registers identification.advance (spec 02 PR 14): the v2 ADAPTER around
 // the v3-shaped driver body in internal/identification.
@@ -318,20 +318,35 @@ func identFetchResultOf(res CandidateResult, skipStatus func() string) identific
 	return out
 }
 
-// identAdvanceItemsOptions builds the pool options for one page.
+// identAdvanceRunOptions builds the RunItems options for one page.
 //
-// Concurrency is set explicitly: RunItems defaults to 1. The label reads only
-// the item (page[i], which nothing writes while the pool runs), never a shared
+// Concurrency is set explicitly: RunItems defaults to 1. Label reads only the
+// item (page[i], which nothing writes while RunItems runs), never a shared
 // counter, so it is race-free in the worker goroutines that call it.
-// ProgressBase/ProgressTotal make the bar count the books advanced so far
+// ProgressOffset/ProgressTotal make the bar count the books advanced so far
 // in this run; the set's size is unknown until it is drained.
+func identAdvanceRunOptions(adv identification.Advance, page []identification.Mark, done int) opsregistry.RunItemsOptions {
+	return opsregistry.RunItemsOptions{
+		Concurrency:    adv.Concurrency,
+		ErrMode:        opsregistry.ErrModeCollect,
+		ProgressOffset: done,
+		ProgressTotal:  done + len(page),
+		Label:          func(i, _ int) string { return adv.Label(page[i]) },
+	}
+}
+
+// identAdvanceItemsOptions is identAdvanceRunOptions for the shared core's pool:
+// the same options, read back into t7ItemsOptions, so that the worker count, the
+// error mode and the progress bounds have one source. Label becomes PureLabel
+// because it is pure: it reads only page[i].
 func identAdvanceItemsOptions(adv identification.Advance, page []identification.Mark, done int) t7ItemsOptions {
+	o := identAdvanceRunOptions(adv, page, done)
 	return t7ItemsOptions{
-		Concurrency:   adv.Concurrency,
-		CollectErrors: true,
-		ProgressBase:  done,
-		ProgressTotal: done + len(page),
-		PureLabel:     func(i, _ int) string { return adv.Label(page[i]) },
+		Concurrency:   o.Concurrency,
+		CollectErrors: o.ErrMode == opsregistry.ErrModeCollect,
+		ProgressBase:  o.ProgressOffset,
+		ProgressTotal: o.ProgressTotal,
+		PureLabel:     o.Label,
 	}
 }
 

@@ -1,7 +1,7 @@
 // file: internal/books/module.go
-// version: 1.3.7
+// version: 1.3.8
 // guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 // Package books is ABO's audiobook module and its composition-root glue (04
 // §2.4, 06 §6.11.1 step 2): Module() is the module.Module ABO's main hands
@@ -93,6 +93,9 @@ func taskResourceKinds() []string {
 		string(ops.ResMetrics),
 		string(ops.ResCoverText),
 		string(ops.ResFileProvenance),
+		string(ops.ResAIScans),
+		string(ops.ResDedupCandidates),
+		string(ops.ResCollections),
 	}
 }
 
