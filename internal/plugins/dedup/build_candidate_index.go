@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/build_candidate_index.go
-// version: 1.1.3
+// version: 1.2.0
 // guid: 87487445-8923-477d-866c-b8153fd7755b
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // Package dedup — op dedup.build-candidate-status-index (INIT-2 T4).
 //
@@ -30,13 +30,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"runtime"
 	"sync"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -54,14 +54,11 @@ const candidateStatusIndexScanLimit = 2_000_000
 // dedup.build-candidate-status-index op (INIT-2 T4).
 func (p *Plugin) buildCandidateStatusIndexDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "dedup.build-candidate-status-index",
-		Liveness:    sdk.LivenessRunItems,
-		Plugin:      "dedup",
-		DisplayName: "Build candidate status secondary index",
-		Description: "Backfills the dedup:s: status secondary index over dedup candidates, " +
-			"enabling ListCandidates to serve status-filtered queries (e.g. the triage default " +
-			"pending) from an O(k) indexed scan instead of the O(N) dedup:r: full-table scan. " +
-			"Idempotent — safe to re-run.",
+		ID:              "dedup.build-candidate-status-index",
+		Liveness:        sdk.LivenessRunItems,
+		Plugin:          "dedup",
+		DisplayName:     "Build candidate status secondary index",
+		Description:     buildCandidateStatusIndexHelp,
 		ResumePolicy:    sdk.ResumeRequeue,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "dedup.build-candidate-status-index",
@@ -76,51 +73,67 @@ func (p *Plugin) buildCandidateStatusIndexDef() sdk.OperationDef {
 	}
 }
 
-// runBuildCandidateStatusIndex implements dedup.build-candidate-status-index.
-//
-// Algorithm (mirrors lsh_index_build.go's shape — collect once, then fan the
-// per-item writes out over a bounded worker pool per the CLAUDE.md
-// whole-library-concurrency mandate; a plain for-range loop writing one
-// index row per candidate at ~387k rows is exactly the shape that caused the
-// 2026-07-05 single-core `dedup.full-scan` stall):
-//
-//  1. Load every candidate via ListCandidates with no status filter (always
-//     the full dedup:r: scan path — see embedding_store.go's Fallback
-//     semantics doc comment) up to candidateStatusIndexScanLimit.
-//  2. Fan the candidates out over registry.RunItems (Concurrency=runtime.NumCPU()).
-//     Each worker writes one dedup:s: row via WriteCandidateStatusIndexRow — a
-//     single-key Pebble Set using candidateWriteOpts (NoSync), never a shared
-//     batch or lock, so workers never serialize behind an fsync (PR #1855 /
-//     issue #19 lesson — see candidateWriteOpts's doc comment).
-//  3. On successful completion (no cancellation, no run error), set the
-//     dedup_candidate_status_index_v1_done flag so ListCandidates switches to
-//     the indexed read path. A partial/cancelled run leaves the flag unset,
-//     so the fail-open full-scan path stays authoritative until a clean
-//     re-run — re-running is always safe (idempotent presence-only writes).
-func (p *Plugin) runBuildCandidateStatusIndex(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	if p.embeddingStore == nil {
-		return fmt.Errorf("embedding store not available")
-	}
+// buildCandidateStatusIndexKind is rule R3's native kind for
+// dedup.build-candidate-status-index.
+const buildCandidateStatusIndexKind = tasks.Kind("books.dedup.build-candidate-status-index")
 
+// buildCandidateStatusIndexHelp is HEAD's Description and the native Help.
+const buildCandidateStatusIndexHelp = "Backfills the dedup:s: status secondary index over dedup candidates, " +
+	"enabling ListCandidates to serve status-filtered queries (e.g. the triage default " +
+	"pending) from an O(k) indexed scan instead of the O(N) dedup:r: full-table scan. " +
+	"Idempotent — safe to re-run."
+
+// buildCandidateStatusIndexStore is the one read the core makes.
+type buildCandidateStatusIndexStore interface {
+	ListCandidates(f database.CandidateFilter) ([]database.DedupCandidate, int, error)
+}
+
+// buildCandidateStatusIndexWriter is the writes the core makes: one presence-only
+// index row per candidate and the completion flag.
+type buildCandidateStatusIndexWriter interface {
+	WriteCandidateStatusIndexRow(id int64, status string) error
+	SetCandidateStatusIndexBuilt() error
+}
+
+// buildCandidateStatusIndexEnv is what the core takes from its shell.
+type buildCandidateStatusIndexEnv struct {
+	kindEnv
+	Store  buildCandidateStatusIndexStore
+	Writer buildCandidateStatusIndexWriter
+}
+
+// buildCandidateStatusIndexResult is the native run's result. HEAD stored none.
+type buildCandidateStatusIndexResult struct {
+	Total   int `json:"total"`
+	Written int `json:"written"`
+	Skipped int `json:"skipped"`
+	Errors  int `json:"errors"`
+}
+
+// buildCandidateStatusIndexCore is the body of runBuildCandidateStatusIndex,
+// shared by both shells. Its per-item Label reads running counters, which the
+// native pool cannot carry (the kernel's label is pure), so it is passed as
+// Label: HEAD's pool shows it, the native run drops it.
+func buildCandidateStatusIndexCore(ctx context.Context, env buildCandidateStatusIndexEnv) (buildCandidateStatusIndexResult, error) {
 	logger.InfoCtx(ctx, "build-candidate-status-index: starting")
-	loadProg := sdk.NewProgress(reporter, 0)
+	loadProg := newProgress(env.kindEnv, 0)
 	loadProg.Start("Loading dedup candidates…")
 
-	candidates, _, err := p.embeddingStore.ListCandidates(database.CandidateFilter{
+	candidates, _, err := env.Store.ListCandidates(database.CandidateFilter{
 		Limit: candidateStatusIndexScanLimit,
 	})
 	if err != nil {
-		return fmt.Errorf("build-candidate-status-index: list candidates: %w", err)
+		return buildCandidateStatusIndexResult{}, fmt.Errorf("build-candidate-status-index: list candidates: %w", err)
 	}
 	total := len(candidates)
 	if total == 0 {
 		loadProg.Done("No candidates found — nothing to index")
 		logger.InfoCtx(ctx, "build-candidate-status-index: no candidates, exiting")
-		return nil
+		return buildCandidateStatusIndexResult{}, nil
 	}
 	logger.InfoCtx(ctx, "build-candidate-status-index: loaded candidates", "total", total)
 
-	prog := sdk.NewProgress(reporter, total)
+	prog := newProgress(env.kindEnv, total)
 	prog.Start(fmt.Sprintf("Indexing candidate status: 0 / %d", total))
 
 	var mu sync.Mutex
@@ -128,8 +141,17 @@ func (p *Plugin) runBuildCandidateStatusIndex(ctx context.Context, _ json.RawMes
 	const logInterval = 15 * time.Second
 	lastLog := time.Now()
 
-	runErr := registry.RunItems(ctx, reporter, candidates, func(ctx context.Context, c database.DedupCandidate) error {
-		if reporter.IsCanceled() {
+	runErr := env.Items(ctx, tasks.CPU(), total, kindItemsOptions{
+		Label: func(i, t int) string {
+			mu.Lock()
+			curWritten, curSkipped, curErrs := written, skipped, errs
+			mu.Unlock()
+			return fmt.Sprintf("Indexing candidate status: %d/%d (written=%d skipped=%d errors=%d)",
+				i+1, t, curWritten, curSkipped, curErrs)
+		},
+	}, func(ctx context.Context, i int) error {
+		c := candidates[i]
+		if env.Canceled() {
 			return context.Canceled
 		}
 		if c.Status == "" {
@@ -142,8 +164,8 @@ func (p *Plugin) runBuildCandidateStatusIndex(ctx context.Context, _ json.RawMes
 			mu.Unlock()
 			return nil
 		}
-		if err := p.embeddingStore.WriteCandidateStatusIndexRow(c.ID, c.Status); err != nil {
-			reporter.Logger().Error("build-candidate-status-index: write error",
+		if err := env.Writer.WriteCandidateStatusIndexRow(c.ID, c.Status); err != nil {
+			env.Logger.Error("build-candidate-status-index: write error",
 				"candidate_id", c.ID, "error", err)
 			mu.Lock()
 			errs++
@@ -164,25 +186,16 @@ func (p *Plugin) runBuildCandidateStatusIndex(ctx context.Context, _ json.RawMes
 				"written", curWritten, "skipped", curSkipped, "errors", curErrs, "total", total)
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: runtime.NumCPU(),
-		Label: func(i, t int) string {
-			mu.Lock()
-			curWritten, curSkipped, curErrs := written, skipped, errs
-			mu.Unlock()
-			return fmt.Sprintf("Indexing candidate status: %d/%d (written=%d skipped=%d errors=%d)",
-				i+1, t, curWritten, curSkipped, curErrs)
-		},
 	})
 	if runErr != nil {
 		logger.InfoCtx(ctx, "build-candidate-status-index: stopped", "written", written, "error", runErr)
-		return runErr
+		return buildCandidateStatusIndexResult{}, runErr
 	}
 
 	prog.Finalize("writing completion flag…")
 
-	if flagErr := p.embeddingStore.SetCandidateStatusIndexBuilt(); flagErr != nil {
-		reporter.Logger().Error("build-candidate-status-index: failed to set completion flag", "error", flagErr)
+	if flagErr := env.Writer.SetCandidateStatusIndexBuilt(); flagErr != nil {
+		env.Logger.Error("build-candidate-status-index: failed to set completion flag", "error", flagErr)
 		// Non-fatal: the index rows are written even if the flag write
 		// fails. ListCandidates simply keeps using the full scan until a
 		// subsequent run successfully sets the flag.
@@ -194,5 +207,20 @@ func (p *Plugin) runBuildCandidateStatusIndex(ctx context.Context, _ json.RawMes
 	prog.Done(summary)
 	logger.InfoCtx(ctx, "build-candidate-status-index: complete",
 		"written", written, "skipped", skipped, "errors", errs, "total", total)
-	return nil
+	return buildCandidateStatusIndexResult{Total: total, Written: written, Skipped: skipped, Errors: errs}, nil
+}
+
+// runBuildCandidateStatusIndex is the v2 shell: HEAD's Run over
+// buildCandidateStatusIndexCore. The embedding store is both the read store and
+// the writer, as at HEAD.
+func (p *Plugin) runBuildCandidateStatusIndex(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+	if p.embeddingStore == nil {
+		return fmt.Errorf("embedding store not available")
+	}
+	_, err := buildCandidateStatusIndexCore(ctx, buildCandidateStatusIndexEnv{
+		kindEnv: headEnv(reporter, true),
+		Store:   p.embeddingStore,
+		Writer:  p.embeddingStore,
+	})
+	return err
 }
