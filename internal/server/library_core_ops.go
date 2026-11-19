@@ -1,7 +1,7 @@
 // file: internal/server/library_core_ops.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 // library_core_ops registers the scan, organize, and transcode OperationDefs
 // that previously went through the legacy BridgeQueue.
@@ -291,7 +291,7 @@ type libraryScanNativeParams struct {
 // updates, the files its organize hook moves, its activity entries and the
 // dedup candidates it files.
 func libraryScanEffects() tasks.Effects {
-	return t7Writes(ops.ResBooks, ops.ResBookFiles, ops.ResAuthors, ops.ResSeries, ops.ResFiles, ops.ResActivity, t7ResDedupCandidates)
+	return t7Writes(ops.ResBooks, ops.ResBookFiles, ops.ResAuthors, ops.ResSeries, ops.ResFiles, ops.ResActivity, ops.ResDedupCandidates)
 }
 
 // libraryScanRun is the native shells' shared Run: restore the scan's

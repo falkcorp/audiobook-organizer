@@ -1,7 +1,7 @@
 // file: internal/plugins/runitems_concurrency_lint_test.go
-// version: 2.0.1
+// version: 2.1.0
 // guid: 6b0f7a3e-2c9d-4d58-8e41-a7c5d9f1b2e3
-// last-edited: 2026-10-16
+// last-edited: 2026-11-19
 
 package plugins
 
@@ -56,6 +56,12 @@ const (
 //   - any composite literal whose TYPE is RunItemsOptions (including elided
 //     elements of []RunItemsOptions and []*RunItemsOptions) that has no
 //     Concurrency key, or whose Concurrency is the constant 0;
+//   - the same for a composite literal of t7ItemsOptions, the options the
+//     server's shared cores hand their pool (internal/server kinds_t7.go).
+//     That pool turns them into the one RunItemsOptions literal the check above
+//     sees, whose Concurrency is the variable o.Concurrency, which satisfies it
+//     for every core. Without this rule a core that omitted the field would pass
+//     and run on one core;
 //   - a RunItems call with no options argument;
 //   - a RunItems call whose options argument cannot be traced to such a
 //     literal: a spread (`opts...`), a function parameter, a variable that is
@@ -270,10 +276,19 @@ func lintRunItems(t *testing.T, pkgs []*packages.Package, root string, read func
 				return true
 			})
 
-			// Pass 2: every composite literal of the options type.
+			// Pass 2: every composite literal of an options type: the registry's
+			// and the shared cores' t7ItemsOptions.
 			ast.Inspect(f, func(n ast.Node) bool {
 				lit, ok := n.(*ast.CompositeLit)
-				if !ok || !isOptionsType(info.TypeOf(lit)) {
+				if !ok {
+					return true
+				}
+				typeName := "RunItemsOptions"
+				switch {
+				case isOptionsType(info.TypeOf(lit)):
+				case isT7OptionsType(info.TypeOf(lit)):
+					typeName = t7OptionsTypeName
+				default:
 					return true
 				}
 				if setsConcurrency(lit, info) {
@@ -286,7 +301,7 @@ func lintRunItems(t *testing.T, pkgs []*packages.Package, root string, read func
 				if cl, ok := ownerLine[lit]; ok && covered(cl) {
 					return true
 				}
-				flag(lit.Pos(), "RunItemsOptions has no non-zero Concurrency (clamps to one core)")
+				flag(lit.Pos(), typeName+" has no non-zero Concurrency (clamps to one core)")
 				return true
 			})
 
@@ -360,6 +375,27 @@ func isOptionsType(t types.Type) bool {
 	named, ok := t.(*types.Named)
 	return ok && named.Obj().Pkg() != nil && named.Obj().Pkg().Path() == runItemsImportPath &&
 		named.Obj().Name() == "RunItemsOptions"
+}
+
+// t7OptionsTypeName is the shared cores' options type (internal/server and
+// internal/scheduler kinds_t7.go). It is matched by name within this module
+// because the type is unexported and each package keeps its own copy.
+const t7OptionsTypeName = "t7ItemsOptions"
+
+// isT7OptionsType reports whether t is t7ItemsOptions or a pointer to it,
+// declared in this module's internal tree.
+func isT7OptionsType(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	t = types.Unalias(t)
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = types.Unalias(ptr.Elem())
+	}
+	named, ok := t.(*types.Named)
+	return ok && named.Obj().Pkg() != nil &&
+		strings.HasPrefix(named.Obj().Pkg().Path(), modulePath+"/internal/") &&
+		named.Obj().Name() == t7OptionsTypeName
 }
 
 // constZero reports whether e is a constant expression equal to zero.
@@ -596,6 +632,15 @@ var _ = RunItemsOptions{Concurrency: 1}
 		{"slice element missing key", header, "var o = []rg.RunItemsOptions{{ErrMode: 1}}", 1},
 		{"slice element with key", header, "var o = []rg.RunItemsOptions{{Concurrency: 4}}", 0},
 		{"map value missing key", header, "var o = map[string]rg.RunItemsOptions{\"a\": {ErrMode: 1}}", 1},
+
+		// The shared cores' options type: same rule, matched by name.
+		{"t7 options omitted key", header, "type t7ItemsOptions struct{ Concurrency int; ProgressTotal int }\nvar o = t7ItemsOptions{ProgressTotal: 3}", 1},
+		{"t7 options with key", header, "type t7ItemsOptions struct{ Concurrency int; ProgressTotal int }\nvar o = t7ItemsOptions{Concurrency: 4}", 0},
+		{"t7 options explicit zero", header, "type t7ItemsOptions struct{ Concurrency int }\nvar o = t7ItemsOptions{Concurrency: 0}", 1},
+		{"t7 options pointer elided element", header, "type t7ItemsOptions struct{ Concurrency int }\nvar o = []*t7ItemsOptions{{}}", 1},
+		{"t7 options key from a variable", header, "type t7ItemsOptions struct{ Concurrency int }\nfunc f(n int) t7ItemsOptions { return t7ItemsOptions{Concurrency: n} }", 0},
+		{"t7 options with marker", header, "type t7ItemsOptions struct{ Concurrency int }\n// runitems:sequential one book at a time\nvar o = t7ItemsOptions{}", 0},
+		{"an unrelated options type", header, "type t7Other struct{ Concurrency int }\nvar o = t7Other{}", 0},
 
 		// RunItems used other than as a call hides the call.
 		{"function value", header, "var run = rg.RunItems[int]", 1},

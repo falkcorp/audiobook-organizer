@@ -1,7 +1,7 @@
 // file: internal/server/kinds_t7.go
 // version: 1.0.0
 // guid: ba45c850-618b-4422-bad7-ac5f79b66d47
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package server
 
@@ -116,7 +116,10 @@ func t7HeadEnv(rep opsregistry.Reporter, live bool) t7Env {
 // which HEAD's resume overlays onto the params, and never read it back. It is
 // not part of t7HeadEnv because internal/arch's TestResumeRestartDefsCheckpoint
 // reads a def whose Run can reach a Checkpoint call as one that resumes, and the
-// restart-by-design defs (listed in restartWithoutCheckpoint) must not.
+// restart-by-design defs (listed in restartWithoutCheckpoint) must not. HEAD has
+// five checkpointing defs: this serves four (library.scan, batch-apply-cached,
+// bulk-write-back, candidate-fetch). The fifth, catalog.harvest-authors, sets
+// env.Checkpoint itself in its shell, because what it saves is HEAD's params.
 func t7HeadCheckpointing(e t7Env, rep opsregistry.Reporter) t7Env {
 	e.Checkpoint = func(state any) error { return rep.Checkpoint(state) }
 	return e
@@ -818,18 +821,6 @@ func t7Common(head opsregistry.OperationDef, sched func(tasks.Kind) *tasks.Sched
 	}
 	return c
 }
-
-// t7ResAIScans is the AI scan store (ai_scans: phases, chunks, proposals),
-// which pkg/ops has no resource for; the AI author scan is its writer.
-const t7ResAIScans ops.Resource = "ai_scans"
-
-// t7ResDedupCandidates is the dedup candidate store the dedup engine's checks
-// write; pkg/ops has no constant for it.
-const t7ResDedupCandidates ops.Resource = "dedup_candidates"
-
-// t7ResCollections is the dynamic-collection member lists. HEAD's def names it
-// as an informational write; pkg/ops has no constant for it.
-const t7ResCollections ops.Resource = "collections"
 
 // t7ActivityWriter is the activity-log writes the definitions make: the entries
 // a run emits and the flush that closes its batch.
