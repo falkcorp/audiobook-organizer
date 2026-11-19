@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/kinds_chain.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: ca58ea3e-cc42-4a27-b1be-b532eb5a7b6e
 // last-edited: 2026-11-19
 
@@ -163,9 +163,9 @@ func nativeChildDriver(rc *tasks.RC) childDriver {
 			return string(ref.ID), err
 		},
 		Wait: func(ctx context.Context, id string, reattach bool, observe func(childObservation)) (childEnd, error) {
-			if !reattach {
-				observe(childObservation{Event: childWaiting})
-			}
+			// Reported for a re-attach too (it is the only frame the wait has):
+			// the bar would otherwise read "Starting at step N" for the whole wait.
+			observe(childObservation{Event: childWaiting})
 			out, err := awaitRun(ctx, rc, id)
 			if err != nil {
 				if reattach && ctx.Err() == nil {
@@ -278,7 +278,7 @@ func (p *Plugin) labelRefinementNative(_ ChainKindDeps, sched func(tasks.Kind) *
 				return LabelRefinementResult{}, err
 			}
 			base := nativeEnv(rc)
-			return labelRefinementCore(rc.Context(), labelRefinementEnv{kindEnv: base, Children: nativeChildDriver(rc), Phase: nativePhase(base)})
+			return labelRefinementCore(rc.Context(), labelRefinementEnv{kindEnv: base, Children: nativeChildDriver(rc), Phase: nativePhase(base), StepFrame: true})
 		},
 	})
 }

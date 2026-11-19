@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/run_all.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 428d4a76-207e-4f6e-8b0a-5f4d939690f2
 // last-edited: 2026-11-19
 
@@ -416,7 +416,7 @@ func runAllCore(ctx context.Context, env runAllEnv, st runAllState, resuming boo
 				save(e)
 			}
 			return runChainChild(ctx, chainEnv{kindEnv: e, Children: env.Children}, chainChild{
-				Label: step.Label, DefID: step.DefID, Head: head,
+				Label: step.Label, DefID: step.DefID, StepID: step.ID, Head: head,
 				Base: i * runAllStepUnits, Total: total, Units: runAllStepUnits,
 				Mode: childLive, Chain: "dedup.run-all",
 			}, &st.ChildOpID, record)

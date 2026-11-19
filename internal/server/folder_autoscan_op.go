@@ -1,5 +1,5 @@
 // file: internal/server/folder_autoscan_op.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 7b3e9f2a-4c1d-4e85-a6b8-2f0d5c8e1a93
 // last-edited: 2026-11-19
 //
@@ -267,7 +267,7 @@ func (s *Server) RegisterFolderAutoScanOp(reg *opsregistry.Registry) error {
 func (s *Server) folderAutoScanNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	kind := t7KindFor(folderAutoScanOpID)
 	c := t7Common(s.folderAutoScanDef(), sched)
-	c.Effects = t7Writes(ops.ResBooks, ops.ResBookFiles, ops.ResAuthors, ops.ResSeries, ops.ResFiles, ops.ResSettings, ops.ResActivity, ops.ResDedupCandidates)
+	c.Effects = t7Writes(ops.ResBooks, ops.ResBookFiles, ops.ResAuthors, ops.ResSeries, ops.ResFiles, ops.ResSettings, ops.ResActivity, ops.ResEmbeddings)
 	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: c,
 		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
