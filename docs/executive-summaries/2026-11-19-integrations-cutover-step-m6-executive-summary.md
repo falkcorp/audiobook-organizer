@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-19-integrations-cutover-step-m6-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 7c0e5a39-b4d2-4f86-a1e3-92d57b6c08f4 -->
 <!-- last-edited: 2026-11-19 -->
 
@@ -33,8 +33,19 @@ work.
   counters, and a webhook's "requires auth" flag. The step lists each of these
   in its report instead of dropping them quietly. A web address that does not
   parse is kept as stored and flagged as misconfigured.
-- **A preview mode.** A dry run says, kind by kind, what would move and what
-  would be set aside, and writes nothing.
+- **A preview that cannot get in the way.** A separate preview function says,
+  kind by kind, what would move and what would be set aside, and writes nothing
+  at all, not even the bookkeeping a real run keeps. An earlier version ran the
+  preview through the real machinery, which would have made the real start-up
+  that followed skip every row.
+- **Saved keys stay usable on the first start.** For each connection the step
+  works out the address it will really use, so an address an administrator set in
+  the server's environment (the Deluge one, for example) counts, and a saved key
+  is not held back until someone re-saves the connection.
+- **Settings the new storage refuses are set aside, not fatal.** If the new
+  storage rejects a list of library folders, mappings or protected paths, the
+  rows that fed that list are quarantined with their original bytes and the start
+  carries on.
 - **Why it matters.** This is a one-way change to the data of a library with a
   lot of history. The step was checked against a real-shaped sample of the old
   data (with invented names) and against a simulated power cut at every chunk.

@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/F7-08-books-integrations-step-m6.md -->
-<!-- version: 1.1.4 -->
+<!-- version: 1.1.5 -->
 <!-- guid: 32e12309-4e58-4518-9d85-0a690231a661 -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-19 -->
 
 # F7-08 — Books' integrations step M6 built dark: instances with secret refs, the config blob deleted, aijob rows, the webhook instances and rule, import roots into core.library.roots with IDs kept, dirty set and holds deleted
 
@@ -71,14 +71,14 @@ HEAD's rows are decoded only here (books' read-only decoders); core never sees a
 - **I4. Byte identity elsewhere**: outside the sub-prefixes M6 drains and the `rootscan:` family it writes, every
   range is byte-identical (`TestCutoverLeavesOtherFamiliesByteIdentical`, F2-15's, which excludes exactly
   `rootscan:`).
-- **I5. Re-running is a no-op** after completion; a dry run writes nothing and reports per kind.
+- **I5. Re-running is a no-op** after completion; `m6.Plan` (the dry run) writes nothing, never touches the runner's records, and reports per kind (a real boot after a Plan steps every row).
 - **I6. Dark**: the step is not registered in this PR.
 
 ## Files
 
 | Action | Path |
 |---|---|
-| create | `internal/books/cutover/m6/` (the step, its decoders for HEAD's rows, the chunk logic, the dry-run report, tests) |
+| create | `internal/books/cutover/m6/` (the step, its decoders for HEAD's rows, the chunk logic, `Plan` and its report, tests) |
 | create | `internal/books/testdata/r2corpus/m6/` (expected outputs for the corpus; any M6-specific overlay additions) |
 | create | one `changelog.d/` fragment (headerless) |
 
@@ -117,7 +117,7 @@ left it) lacks a family M6 drains.
    loop does real work per row, per CLAUDE.md and 09 §9.9); `ExtendStart` per chunk group.
 4. Quarantine: an undecodable row, an unmappable iTunes mapping and an importer rejection are quarantined with raw
    bytes (sealed with the keyring for secret-bearing families), counted, and the step goes on.
-5. Dry-run mode: per kind, the instances, IDs, carried trust and every row it would quarantine (05-metadata M1.10).
+5. A dry run as a function, not a mode: `m6.Plan(ctx, legacy, cfg) (*Report, error)` reads books' legacy range and reports, per kind, the instances, IDs, carried trust and every row it would quarantine (05-metadata M1.10), through the step's own code over importers that accept everything and a writer that keeps nothing. It never goes through the runner (a runner-driven dry run leaves a plan and a running state, and the next boot never steps a row), and `Config` has no `DryRun`. Trust is signed from the effective destinations (stored plus the operator overlay, `Config.Effective`), not the stored ones: `seams.d/F7-08.md` records that `seams.d/F7-01` rows 17 and 22 win over M1.10's "stored origins".
 6. Register crash-point labels for every chunk and extend `TestCutoverCrashAtEveryChunk` and
    `TestBootCrashMatrix_ABO` with M6's cells (09 §9.3: a boot writer extends the matrix in its own PR).
 7. Leave `internal/books/cutover/steps.go` and `internal/books/cutover/stepids.go` untouched (F7-09 registers M6, adds a
