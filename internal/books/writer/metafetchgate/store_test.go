@@ -1,11 +1,12 @@
 // file: internal/books/writer/metafetchgate/store_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b60f3d92-14e7-4a85-9c2d-7e1a58f4c036
 // last-edited: 2026-11-19
 
 package metafetchgate_test
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"slices"
@@ -132,6 +133,15 @@ func TestNoGatedMethodReachesTheStoreWhenTheWriterRefuses(t *testing.T) {
 			require.ErrorIs(t, err, tasks.ErrOutsideEffects, "%s was not refused", m)
 			require.Empty(t, w.Writes())
 			require.NotEmpty(t, w.Refusals(), "%s never asked the writer", m)
+			// The write is stamped with the method it is: a copy-pasted name
+			// would fence one method against another's row. A raw write is
+			// qualified by its key family.
+			name := w.Refusals()[0].Write.Name
+			if strings.HasPrefix(m, "SetRaw") || strings.HasPrefix(m, "DeleteRaw") {
+				require.Equal(t, "books."+m+"/pcache", name)
+			} else {
+				require.Equal(t, "books."+m, name)
+			}
 		})
 	}
 }
@@ -174,4 +184,128 @@ func TestRawFamiliesStampTheirResource(t *testing.T) {
 			require.True(t, strings.HasPrefix(w.Refusals()[0].Write.Name, "books."+m+"/"), w.Refusals()[0].Write.Name)
 		}
 	}
+}
+
+// ctxProbe is a writer that records the context it was handed and runs fn.
+type ctxProbe struct {
+	tasks.Writer
+	got context.Context
+}
+
+func (p *ctxProbe) Do(ctx context.Context, _ tasks.Write, fn func(context.Context) ([]tasks.Change, error)) error {
+	p.got = ctx
+	_, err := fn(ctx)
+	return err
+}
+
+type ctxKey struct{}
+
+// recordingStore is a metafetch.Store that answers only the one write the
+// tests below make, recording it.
+type recordingStore struct {
+	metafetch.Store
+	batches [][]string
+}
+
+func (r *recordingStore) DeleteRawBatch(keys []string) error {
+	r.batches = append(r.batches, keys)
+	return nil
+}
+
+// The run's context reaches the writer: the fence checks it (a stopped run's
+// writes are refused), so a decorator that handed it a different one would
+// leave a cancelled run writing.
+func TestWrapPassesTheRunContextToTheWriter(t *testing.T) {
+	rows, err := metafetchgate.Rows()
+	require.NoError(t, err)
+	probe := &ctxProbe{}
+	ctx := context.WithValue(t.Context(), ctxKey{}, "run")
+	g := metafetchgate.Wrap(ctx, &recordingStore{}, writer.New(probe, rows))
+	require.NoError(t, g.DeleteRawBatch([]string{"pcache:a"}))
+	require.NotNil(t, probe.got, "the writer was never asked")
+	require.Equal(t, "run", probe.got.Value(ctxKey{}))
+}
+
+// A batch with no keys writes nothing, so it is not stamped and not refused;
+// it still reaches the store (a no-op there) and a one-key batch goes through
+// the gate like any other.
+func TestEmptyRawBatchWritesNothingAndIsNotStamped(t *testing.T) {
+	rows, err := metafetchgate.Rows()
+	require.NoError(t, err)
+	w := writertest.ForSet("books.f518b", nil, tasks.ModeLive)
+	inner := &recordingStore{}
+	g := metafetchgate.Wrap(t.Context(), inner, writer.New(w, rows))
+	require.NoError(t, g.DeleteRawBatch(nil))
+	require.Equal(t, [][]string{nil}, inner.batches)
+	require.Empty(t, w.Writes())
+	require.Empty(t, w.Refusals())
+
+	require.ErrorIs(t, g.DeleteRawBatch([]string{"pcache:a"}), tasks.ErrOutsideEffects, "one key is a stamped write")
+	require.Len(t, inner.batches, 1, "the refused batch never reached the store")
+}
+
+// subjectOf names, for each gated method that takes its row's id as a string,
+// the resource kind of the subject it stamps and which string argument is the
+// id. The methods whose subject comes from a struct argument (CreateBook,
+// CreateBookFile, ...) and the raw writes are covered below and by the nil
+// guards.
+var subjectOf = map[string]struct {
+	kind string
+	arg  int
+}{
+	"UpdateBook": {"books", 0}, "ModifyBook": {"books", 0}, "DeleteBook": {"books", 0},
+	"FlagMetadataHashDuplicate": {"books", 1}, "SetLastWrittenAt": {"books", 0}, "MarkNeedsRescan": {"books", 0},
+	"AddBookTagWithSource": {"books", 0}, "RemoveBookTagsByPrefix": {"books", 0}, "SetBookNarrators": {"books", 0},
+	"CreateAuthor": {"authors", 0}, "SetBookAuthors": {"books", 0}, "ModifyBookAuthors": {"books", 0},
+	"CreateSeries": {"series", 0}, "UpdateBookFile": {"book_files", 0}, "UpdateBookFileHashes": {"book_files", 1},
+	"PatchBookFileFields": {"book_files", 1}, "DeleteMetadataCache": {"books", 0}, "DeleteMetadataFieldState": {"books", 0},
+	"DeleteOperationState": {"operations", 0}, "SetUserPreference": {"user_state", 0}, "DeleteUserPreference": {"user_state", 0},
+	"SetUserPreferenceForUser": {"user_state", 1},
+}
+
+// The subject a write is stamped with is the row it is about: the right kind of
+// resource and the id the caller passed, not another argument's and not empty.
+func TestGatedMethodsStampTheSubjectTheyAreAbout(t *testing.T) {
+	for m, want := range subjectOf {
+		t.Run(m, func(t *testing.T) {
+			g, w := refuseAll(t)
+			fn := reflect.ValueOf(g).MethodByName(m)
+			require.True(t, fn.IsValid())
+			args := zeroArgs(fn)
+			for i := range args {
+				if fn.Type().In(i).Kind() == reflect.String {
+					args[i] = reflect.ValueOf(fmt.Sprintf("arg%d", i))
+				}
+			}
+			require.NotPanics(t, func() { fn.Call(args) })
+			require.Len(t, w.Refusals(), 1)
+			subj := w.Refusals()[0].Write.Subject
+			require.Equal(t, writer.Module, subj.Module)
+			require.Equal(t, want.kind, subj.Kind)
+			require.Equal(t, fmt.Sprintf("arg%d", want.arg), subj.ID)
+		})
+	}
+	// Every gated method is either in the table, takes a struct (nil here, so
+	// an empty id) or is a raw write.
+	structArg := map[string]bool{"CreateBook": true, "CreateBookFile": true, "BatchCreateBookFiles": true, "RecordPathChange": true,
+		"PutMetadataCache": true, "UpsertMetadataFieldState": true, "RecordMetadataChange": true, "CreateOperationChange": true,
+		"SetRaw": true, "DeleteRaw": true, "DeleteRawBatch": true}
+	for _, m := range gatedMethods {
+		_, listed := subjectOf[m]
+		require.True(t, listed || structArg[m], "%s: say which argument is its subject", m)
+	}
+}
+
+// A raw key is classified by the family it STARTS with: a key that merely
+// contains a family's prefix is in no family and is refused.
+func TestRawKeyFamilyIsAPrefixNotASubstring(t *testing.T) {
+	g, w := refuseAll(t)
+	for name, err := range map[string]error{
+		"SetRaw":         g.SetRaw("x-pcache:1", nil),
+		"DeleteRaw":      g.DeleteRaw("x-metadata_fetch_cache:1"),
+		"DeleteRawBatch": g.DeleteRawBatch([]string{"x-metadata_rejection:1"}),
+	} {
+		require.ErrorIs(t, err, writer.ErrNoRow, name)
+	}
+	require.Empty(t, w.Refusals())
 }

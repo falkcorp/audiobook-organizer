@@ -1,5 +1,5 @@
 // file: internal/books/writer/gate_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0d6e48b2-7a95-4c13-b8f0-52e1c9a7d340
 // last-edited: 2026-11-19
 
@@ -228,4 +228,26 @@ func TestGate_ConcurrentCalls(t *testing.T) {
 	require.Equal(t, 32, refused)
 	require.Len(t, w.Writes(), 32)
 	require.Len(t, w.Refusals(), 32)
+}
+
+// TestMetafetchApplyRows_ModifyBookRulePinned: THE RULE of the shared table is
+// that a row lists everything its method CAN write through its whole call
+// chain, not what one closure happens to touch. The local rows of the methods
+// that are a ModifyBook call say so in their doc comment; the real store cannot
+// tell a narrowed row apart (SetLastWrittenAt's closure sets one field, and ModifyBook writes
+// the index and cache keys only when the fields they derive from change), so this pins
+// the rule itself: each is at least ModifyBook's row, and the two that touch a
+// file row add book_files and nothing else.
+func TestMetafetchApplyRows_ModifyBookRulePinned(t *testing.T) {
+	shared := writer.SharedRows()
+	local := writer.MetafetchApplyRows()
+	modify := shared["ModifyBook"]
+	require.NotEmpty(t, modify)
+	for _, m := range []string{"FlagMetadataHashDuplicate", "SetLastWrittenAt"} {
+		require.ElementsMatch(t, modify, local[m], "%s is a ModifyBook call", m)
+	}
+	withFile := append([]ops.Resource{ops.ResBookFiles}, modify...)
+	for _, m := range []string{"MarkNeedsRescan", "PatchBookFileFields"} {
+		require.ElementsMatch(t, withFile, local[m], "%s is a ModifyBook call and a file-row write", m)
+	}
 }
