@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.78.57 -->
+<!-- version: 10.78.56 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -649,16 +650,17 @@ into one of the curated sections below, is a normal direct edit.
 - [ ] **Settle `stopping{watchdog}`: `failed` (reason watchdog) or `timed_out`** 05-tasks §5T.8.3 maps a run left stopping with StopReason watchdog to `failed` with reason watchdog; R0's own `StopTerminal` ends it `timed_out`. F2-13's `run-stopping-watchdog` records the spec's mapping (`expected` and `imported_as: {"state": "failed", "reason": "watchdog"}` in `internal/books/testdata/r2corpus/manifest.json`). Confirm the spec or change it; if it changes, update `IMPORTED_AS` in `scripts/r2corpus/overlay/build_overlay.py` and its pinned table in `scripts/tests/test_build_overlay.py` (seams.d/F2-13.md).
   - Owner: 05-tasks' owner, before F5's M4 lands.
 
-- [ ] **F4-02-ROLE-GUARD** Guard role definitions in core auth's last-admin rule
-      before anything implements `rbac.Holders`. `core/auth`'s `keepAnAdmin`
-      guards the other admin holder's user record but only reads the role
-      definitions: `rbac.Store` cannot stage an Expect on a role into auth's
-      batch, so an rbac edit that takes `core:admin` from that holder's role and
-      commits between auth's read and commit is not seen. Add an optional
-      role-guard interface on the role store (F4-01's `ImportSealer` pattern) and
-      an `rbac.Service` method auth calls inside its batch, with a concurrent
-      test (about 100 lines across `rbac`, `rbacstore` and tests). Hard
-      prerequisite of F4-08's `rbac.Holders` (see
+- [x] **F4-02-ROLE-GUARD** (done 2026-11-19, this PR: `rbac.RoleGuarder` is the optional
+      role-store interface (`ImportSealer`'s pattern), `core/internal/rbacstore` implements it,
+      `rbac.Service.GuardRole` is what auth calls, and `keepAnAdmin` guards the role definition that
+      makes the other holder an admin, as the very value it decided on, in the same batch as the
+      user write. A store with no guard fails closed (`rbac.ErrNoRoleGuard`). Pinned by
+      `TestLastAdmin_RoleEditAgainstUserWrite` in both commit orders for a demotion, a
+      deactivation and a delete, plus a free-running `-race` variant. Not closed here:
+      bootstrap's admin pick (`adminHolds` in `bootstrap.go`) still reads role definitions without
+      the guard; it issues a key and is a different problem from the last-admin rule.) Guard role
+      definitions in core auth's last-admin rule before anything implements `rbac.Holders`.
+      Hard prerequisite of F4-08's `rbac.Holders` (see
       `docs/agent-tasks/platform-core/seams.d/F4-02.md`, "F4-08 must know").
 
 - [ ] **PLATFORM-CORE-R1-25-ABO-SWAP-BACK-FIXTURE** ABO's boot crash matrix

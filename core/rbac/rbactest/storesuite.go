@@ -1,7 +1,7 @@
 // file: core/rbac/rbactest/storesuite.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 3a7e5c1d-94b2-4f68-8d0e-2b6f1a9c7e43
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 // Package rbactest is the conformance kit of rbac.Store and rbac.Importer
 // (05-rbac §3.4, R4-1; 04 §8.1 F4): StoreSuite runs every case an
@@ -61,7 +61,8 @@ func Catalog(t testing.TB) *rbac.Catalog {
 	return cat
 }
 
-// StoreSuite runs the conformance cases of rbac.Store and rbac.Importer.
+// StoreSuite runs the conformance cases of rbac.Store and rbac.Importer, and
+// of rbac.ImportSealer and rbac.RoleGuarder when the store implements them.
 func StoreSuite(t *testing.T, h Harness) {
 	t.Helper()
 	if h.New == nil {
@@ -85,6 +86,7 @@ func StoreSuite(t *testing.T, h Harness) {
 		{"ImportRejectedStagesNothing", importStagesNothing},
 		{"ImportWithoutCatalogRefuses", importNoCatalog},
 		{"ImportRefusedOnceSealed", importSealed},
+		{"GuardRoleExpectsTheReadVersion", guardRole},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { c.run(t, h) })
@@ -546,4 +548,71 @@ func importSealed(t *testing.T, h Harness) {
 		t.Errorf("a sealed import is readable: %v", err)
 	}
 	get(t, fx, "custom.alfred")
+}
+
+// guardRole: a store that implements rbac.RoleGuarder stages an Expect that a
+// role is still stored at the version the caller read, and writes nothing. A
+// role edit or delete that commits first fails the guarding batch's Commit
+// with storage.ErrConflict; a guard over a version that is no longer stored,
+// or over a role that is gone, is refused with storage.ErrConflict at once.
+// A store that does not implement it skips the case (rbac.Service.GuardRole
+// then answers ErrNoRoleGuard).
+func guardRole(t *testing.T, h Harness) {
+	fx := h.New(t, Catalog(t))
+	guarder, ok := fx.Store.(rbac.RoleGuarder)
+	if !ok {
+		t.Skip("the store does not implement rbac.RoleGuarder")
+	}
+	put(t, fx, custom("custom.wayne", 1, "core:admin"))
+	read := get(t, fx, "custom.wayne")
+
+	if err := commit(t, fx, func(b *storage.Batch) error { return guarder.GuardRole(b, read) }); err != nil {
+		t.Fatalf("a guard over the stored version: %v", err)
+	}
+	if got := get(t, fx, "custom.wayne"); got.Version != 1 {
+		t.Errorf("a guard wrote the role: version %d", got.Version)
+	}
+
+	t.Run("an edit committed first", func(t *testing.T) {
+		b := fx.NewBatch()
+		defer func() { _ = b.Close() }()
+		if err := guarder.GuardRole(b, read); err != nil {
+			t.Fatal(err)
+		}
+		put(t, fx, custom("custom.wayne", 2, "core:self"))
+		if err := b.Commit(context.Background(), storage.Sync); !errors.Is(err, storage.ErrConflict) {
+			t.Errorf("Commit of a guard over an edited role = %v, want storage.ErrConflict", err)
+		}
+	})
+
+	t.Run("a stale version", func(t *testing.T) {
+		b := fx.NewBatch()
+		defer func() { _ = b.Close() }()
+		if err := guarder.GuardRole(b, read); !errors.Is(err, storage.ErrConflict) {
+			t.Errorf("GuardRole over version 1 with 2 stored = %v, want storage.ErrConflict", err)
+		}
+	})
+
+	t.Run("a delete committed first", func(t *testing.T) {
+		cur := get(t, fx, "custom.wayne")
+		b := fx.NewBatch()
+		defer func() { _ = b.Close() }()
+		if err := guarder.GuardRole(b, cur); err != nil {
+			t.Fatal(err)
+		}
+		if err := commit(t, fx, func(db *storage.Batch) error { return fx.Store.DeleteRole(db, cur) }); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.Commit(context.Background(), storage.Sync); !errors.Is(err, storage.ErrConflict) {
+			t.Errorf("Commit of a guard over a deleted role = %v, want storage.ErrConflict", err)
+		}
+	})
+
+	t.Run("an absent role", func(t *testing.T) {
+		b := fx.NewBatch()
+		defer func() { _ = b.Close() }()
+		if err := guarder.GuardRole(b, custom("custom.wayne", 2, "core:self")); !errors.Is(err, storage.ErrConflict) {
+			t.Errorf("GuardRole of a deleted role = %v, want storage.ErrConflict", err)
+		}
+	})
 }

@@ -1,7 +1,7 @@
 // file: core/rbac/service.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 9d2b7e41-5c3a-4f86-b0e9-1a6c8f3d5e27
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package rbac
 
@@ -70,6 +70,11 @@ var (
 	ErrFrozen = errors.New("rbac: the catalog is frozen")
 	// ErrNotFrozen is a call that needs the frozen catalog before Freeze.
 	ErrNotFrozen = errors.New("rbac: the catalog is not frozen yet")
+	// ErrNoRoleGuard is GuardRole over a Deps.Store that does not implement
+	// RoleGuarder: the role cannot be guarded in another owner's batch, so
+	// the caller (auth's last-admin rule) refuses rather than decide on a
+	// definition a role edit may change before it commits.
+	ErrNoRoleGuard = errors.New("rbac: the role store cannot guard a role in another owner's batch")
 )
 
 // DefaultCacheSize is core.rbac.cache_size's default (05-rbac §10).
@@ -519,6 +524,27 @@ func (s *Service) Roles(ctx context.Context) iter.Seq2[*Role, error] {
 // Role reads one stored role (ErrUnknownRole when absent).
 func (s *Service) Role(ctx context.Context, id RoleName) (*Role, error) {
 	return s.deps.Store.GetRole(ctx, id)
+}
+
+// GuardRole stages into b, a batch another owner opened, an Expect that the
+// role r is still stored at r.Version, where r is a role this caller read
+// with Role. auth's last-admin rule calls it inside its own batch for the
+// role definition that makes the other admin a holder, so a UpdateRole or
+// DeleteRole that changes that definition and commits before auth's write
+// fails auth's Commit with storage.ErrConflict, and auth decides again on the
+// new definition. rbac's own writes need no such call: they stage an Expect
+// on every role they replace and read the holders through their batch.
+//
+// A role stored at another version, or no longer stored, wraps
+// storage.ErrConflict and stages nothing. A Deps.Store that does not
+// implement RoleGuarder answers ErrNoRoleGuard (fail closed). r must be the
+// value Role returned, not a copy with an edited Version.
+func (s *Service) GuardRole(b *storage.Batch, r *Role) error {
+	g, ok := s.deps.Store.(RoleGuarder)
+	if !ok {
+		return ErrNoRoleGuard
+	}
+	return g.GuardRole(b, r)
 }
 
 // CreateRole creates the custom role in.Name (custom.<slug>) holding
