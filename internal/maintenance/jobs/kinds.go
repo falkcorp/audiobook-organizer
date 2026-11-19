@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/kinds.go
-// version: 1.4.3
+// version: 1.5.0
 // guid: a3972df8-a6a8-49ee-b157-c35c462e3c8d
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package jobs
 
@@ -217,10 +217,17 @@ const (
 // kind is returned then, because a list that silently lacks one job's writes
 // would register it as declaring none.
 func Kinds(deps KindDeps, sched func(tasks.Kind) *tasks.Schedule) ([]tasks.Definition, error) {
+	return kindsWith(jobWritesFor, deps, sched)
+}
+
+// kindsWith is Kinds over the given write-set derivation. The derivation is a
+// parameter, not a package variable a test swaps, so a test that makes it fail
+// cannot be seen by another test building the kinds beside it (t.Parallel).
+func kindsWith(writes writesDeriver, deps KindDeps, sched func(tasks.Kind) *tasks.Schedule) ([]tasks.Definition, error) {
 	jobs := maintenance.All()
 	out := make([]tasks.Definition, 0, len(jobs))
 	for _, job := range jobs {
-		d, err := kindFor(job, deps, sched)
+		d, err := kindForWith(writes, job, deps, sched)
 		if err != nil {
 			return nil, err
 		}
@@ -249,8 +256,13 @@ var _ = kindsRoot
 
 // kindFor builds one job's native kind.
 func kindFor(job maintenance.MaintenanceJob, deps KindDeps, sched func(tasks.Kind) *tasks.Schedule) (tasks.Definition, error) {
+	return kindForWith(jobWritesFor, job, deps, sched)
+}
+
+// kindForWith is kindFor over the given write-set derivation.
+func kindForWith(writes writesDeriver, job maintenance.MaintenanceJob, deps KindDeps, sched func(tasks.Kind) *tasks.Schedule) (tasks.Definition, error) {
 	id := job.ID()
-	fx, err := effectsFor(id)
+	fx, err := effectsWith(writes, id)
 	if err != nil {
 		return nil, fmt.Errorf("maintenance job %s: %w", id, err)
 	}
@@ -354,7 +366,12 @@ func startRequirement(job maintenance.MaintenanceJob) rbac.Requirement {
 //
 // Resource kinds (tasks.Res("books", kind)) are the pkg/ops constants.
 func effectsFor(jobID string) (tasks.Effects, error) {
-	all, err := jobWritesFor()
+	return effectsWith(jobWritesFor, jobID)
+}
+
+// effectsWith is effectsFor over the given write-set derivation.
+func effectsWith(writes writesDeriver, jobID string) (tasks.Effects, error) {
+	all, err := writes()
 	if err != nil {
 		return tasks.Effects{}, err
 	}
