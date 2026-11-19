@@ -665,7 +665,6 @@ internal/organizer.MoveBookFile
 internal/plugins/dedup.Plugin.applyBandThresholds
 internal/plugins/dedup.Plugin.computeRebuildDiff
 internal/plugins/dedup.Plugin.scanOrphanEmbeddings
-internal/plugins/dedup.collectCalibrationPairs
 internal/plugins/dedup.scanReembedCandidates
 internal/plugins/dedup.windowIndexBuildConcurrency
 internal/plugins/itunes.NewLoggerWrapper
