@@ -1,7 +1,7 @@
 // file: cmd/offline.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: deab4331-88da-46d1-b820-c48adf25a336
-// last-edited: 2026-11-08
+// last-edited: 2026-11-19
 
 package cmd
 
@@ -34,10 +34,11 @@ var offlineOptions = books.OfflineOptions
 // before the flags were set), so an offline command names the same store
 // serve would. The list is read twice: here, for the names and the help,
 // with ABO's identity only; and when a command runs, with the store path
-// and state directory config resolves.
-func addOfflineCommands(root *cobra.Command, mods func() []module.Module) {
+// and state directory config resolves, and the module built over them
+// (books.OfflineModule), so the plan carries the same steps serve's does.
+func addOfflineCommands(root *cobra.Command, mods func(app.Options) []module.Module) {
 	parents := map[string]*cobra.Command{}
-	for _, c := range app.OfflineCommands(app.Options{AppID: books.AppID}, mods()...) {
+	for _, c := range app.OfflineCommands(app.Options{AppID: books.AppID}, mods(app.Options{AppID: books.AppID})...) {
 		path := strings.Fields(c.Name)
 		if len(path) == 0 {
 			continue
@@ -77,7 +78,7 @@ func addOfflineCommands(root *cobra.Command, mods func() []module.Module) {
 						return err
 					}
 				}
-				for _, oc := range app.OfflineCommands(opts, mods()...) {
+				for _, oc := range app.OfflineCommands(opts, mods(opts)...) {
 					if oc.Name == name {
 						return oc.Run(cmd.Context(), own, cmd.OutOrStdout())
 					}
