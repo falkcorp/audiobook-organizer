@@ -186,7 +186,7 @@ func newStripPlugin(authors []database.Author, calls *stripMergeCalls) *Plugin {
 		}
 		return nil, false
 	})
-	return &Plugin{deps: &fakeDeps{store: store}}
+	return &Plugin{deps: &fakeDeps{store: withCredits(store)}}
 }
 
 // summaryReporter is a fakeReporter whose logger is captured, so a test can
@@ -410,7 +410,7 @@ func TestAuthorStripMerge_DeleteUnmatchedDryRunReportsWithoutWriting(t *testing.
 func TestAuthorStripMerge_PrimaryRewriteFailureKeepsAuthorRow(t *testing.T) {
 	calls := &stripMergeCalls{}
 	p := newStripPlugin(stripFixture(), calls)
-	store := p.deps.OpsStore().(*database.MockStore)
+	store := mockStoreOf(p.deps.OpsStore())
 	store.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
 		if id == "bk-co1" {
 			return nil, context.DeadlineExceeded
@@ -441,7 +441,7 @@ func TestAuthorStripMerge_PrimaryRewriteFailureKeepsAuthorRow(t *testing.T) {
 func TestAuthorStripMerge_PartialWorkOnErroringRowIsReported(t *testing.T) {
 	calls := &stripMergeCalls{}
 	p := newStripPlugin(stripFixture(), calls)
-	store := p.deps.OpsStore().(*database.MockStore)
+	store := mockStoreOf(p.deps.OpsStore())
 	store.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
 		if id == "bk-co2" && !containsInt(calls.deleted, 10) {
 			return nil, context.DeadlineExceeded
@@ -514,7 +514,7 @@ func runPlaceholderStripMerge(t *testing.T, params string, canonical *database.A
 	t.Helper()
 	calls := &stripMergeCalls{}
 	p := newStripPlugin(placeholderFixture(), calls)
-	store := p.deps.(*fakeDeps).store.(*database.MockStore)
+	store := mockStoreOf(p.deps.(*fakeDeps).store)
 	store.GetAuthorByNameFunc = func(name string) (*database.Author, error) {
 		if name == database.UnknownAuthorName && canonical != nil {
 			c := *canonical
@@ -830,7 +830,7 @@ func newTitleAsAuthorPlugin(calls *stripMergeCalls) *Plugin {
 // are not the book's primary.
 func newTitleAsAuthorPluginWith(calls *stripMergeCalls, authors []database.Author, books []database.BookCore, junctionOnly map[int][]string) *Plugin {
 	p := newStripPlugin(authors, calls)
-	store := p.deps.(*fakeDeps).store.(*database.MockStore)
+	store := mockStoreOf(p.deps.(*fakeDeps).store)
 
 	store.GetAllBooksCoreFunc = func(limit, offset int) ([]database.BookCore, error) { return books, nil }
 	store.GetAllSeriesFunc = func() ([]database.Series, error) {
@@ -1105,7 +1105,7 @@ func titleTwinRun(t *testing.T, params string, extra []database.Author, extraBoo
 	}, extraBooks...)
 	p := newTitleAsAuthorPluginWith(calls, authors, books, nil)
 	if creditErr != nil {
-		store := p.deps.(*fakeDeps).store.(*database.MockStore)
+		store := mockStoreOf(p.deps.(*fakeDeps).store)
 		inner := store.GetBooksByAuthorIDForRelinkFunc
 		store.GetBooksByAuthorIDForRelinkFunc = func(authorID int) ([]database.BookCore, error) {
 			if authorID == 100 {

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_split_locks_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a7e2c19-8d04-4b63-9f1a-c60e3b2d7a85
 // last-edited: 2026-11-18
 
@@ -66,7 +66,7 @@ func authorIDOf(t *testing.T, st *database.PebbleStore, id string) int {
 // book credited to the same composite is split as usual, so the hold is per book.
 func TestAuthorSplitScanOp_UserLockedAuthorBookIsLeftAlone(t *testing.T) {
 	st := newSplitRelinkStore(t)
-	composite, err := st.CreateAuthor("Alice Smith & Bob Jones")
+	composite, err := st.CreateAuthor("Selina Kyle & Harvey Dent")
 	require.NoError(t, err)
 	lockedID := mkSplitBook(t, st, "The Court of Owls", composite.ID)
 	openID := mkSplitBook(t, st, "Night of the Owls", composite.ID)
@@ -82,10 +82,10 @@ func TestAuthorSplitScanOp_UserLockedAuthorBookIsLeftAlone(t *testing.T) {
 	require.Len(t, credits, 1)
 	require.Equal(t, composite.ID, credits[0].AuthorID, "the locked book's credit list was rewritten")
 
-	alice, err := st.GetAuthorByName("Alice Smith")
+	selina, err := st.GetAuthorByName("Selina Kyle")
 	require.NoError(t, err)
-	require.NotNil(t, alice, "control: the unlocked book was not split; logs %v", rep.logs)
-	require.Equal(t, alice.ID, authorIDOf(t, st, openID), "control book not repointed")
+	require.NotNil(t, selina, "control: the unlocked book was not split; logs %v", rep.logs)
+	require.Equal(t, selina.ID, authorIDOf(t, st, openID), "control book not repointed")
 
 	kept, err := st.GetAuthorByID(composite.ID)
 	require.NoError(t, err)
@@ -108,7 +108,7 @@ func TestAuthorSplitScanOp_UserLockedAuthorBookIsLeftAlone(t *testing.T) {
 // A lock set that cannot be read writes nothing for that book and counts an error.
 func TestAuthorSplitScanOp_UnreadableLocksRelinkNothing(t *testing.T) {
 	st := newSplitRelinkStore(t)
-	composite, err := st.CreateAuthor("Alice Smith & Bob Jones")
+	composite, err := st.CreateAuthor("Selina Kyle & Harvey Dent")
 	require.NoError(t, err)
 	badID := mkSplitBook(t, st, "Court of Owls", composite.ID)
 
@@ -137,7 +137,7 @@ func TestAuthorSplitScanOp_UnreadableLocksRelinkNothing(t *testing.T) {
 // the hold is counted, not written over.
 func TestAuthorSplitScanOp_LockSavedAfterThePreCheckHoldsThePrimaryWrite(t *testing.T) {
 	st := newSplitRelinkStore(t)
-	composite, err := st.CreateAuthor("Alice Smith & Bob Jones")
+	composite, err := st.CreateAuthor("Selina Kyle & Harvey Dent")
 	require.NoError(t, err)
 	id := mkSplitBook(t, st, "The Court of Owls", composite.ID)
 	var calls atomic.Int64

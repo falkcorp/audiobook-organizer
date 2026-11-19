@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_relink_locks_test.go
-// version: 1.0.1
+// version: 1.2.0
 // guid: 0c4f8a36-b2d9-4e71-8a05-7d3e9b1f6c42
 // last-edited: 2026-11-18
 
@@ -19,12 +19,28 @@ import (
 
 const relinkAllParams = `{"apply":true,"relink_title_as_author":true,"delete_title_as_author":true}`
 
-// lockedRelinkFixture is the Arcane Chef shape with both books named by their
-// provider, so each would be relinked to the existing real author.
-func lockedRelinkFixture() *relinkFixture {
-	f := newRelinkFixture()
-	f.fetched["bk-t"] = "T.J. Ward"
-	f.fetched["bk-s"] = "T.J. Ward"
+// batmanRelinkFixture is the title-as-author shape in Gotham: the junk row T 100
+// "Hush 2" credits only its self-titled book, its numbered twin S 200 "01 Hush 2"
+// strips to T's name, and the real author Alfred Pennyworth (300) already has a
+// row. Both junk books are named by their provider, so each would be relinked to
+// Alfred. Fixtures here are Batman storylines and characters only.
+func batmanRelinkFixture() *relinkFixture {
+	f := &relinkFixture{
+		books: []database.BookCore{
+			{ID: "bk-t", Title: "Hush 2: A Gotham Adventure", AuthorID: new(100), FilePath: "/lib/Hush 2/Hush 2"},
+			{ID: "bk-s", Title: "Hush 2", AuthorID: new(200), FilePath: "/lib/01 Hush 2/Hush 2"},
+			{ID: "bk-real", Title: "Hush", AuthorID: new(300), FilePath: "/lib/Alfred Pennyworth/Hush"},
+		},
+		files:   map[string][]database.BookFile{},
+		fetched: map[string]string{},
+		authors: []database.Author{
+			{ID: 100, Name: "Hush 2"},
+			{ID: 200, Name: "01 Hush 2"},
+			{ID: 300, Name: "Alfred Pennyworth"},
+		},
+	}
+	f.fetched["bk-t"] = "Alfred Pennyworth"
+	f.fetched["bk-s"] = "Alfred Pennyworth"
 	return f
 }
 
@@ -33,8 +49,23 @@ func requireBookUntouched(t *testing.T, f *relinkFixture, calls *stripMergeCalls
 	require.Nil(t, calls.setAuthors[id], "the credits of %s were rewritten", id)
 	_, ok := calls.updated[id]
 	require.False(t, ok, "the primary author of %s was rewritten", id)
+	requireJournalVoided(t, f, id)
+}
+
+// requireJournalVoided: a row journaled before a write that did not happen must
+// be voided (the journal is written first, so a held or failed book has rows;
+// they must describe nothing). Voiding rewrites the row under its own id, so the
+// last row seen per id is the one that stands.
+func requireJournalVoided(t *testing.T, f *relinkFixture, id string) {
+	t.Helper()
+	last := map[string]database.OperationChange{}
 	for _, c := range f.journal {
-		require.NotEqual(t, id, c.BookID, "a journal row was written for the held book %s", id)
+		if c.BookID == id {
+			last[c.ID] = c
+		}
+	}
+	for rowID, c := range last {
+		require.True(t, c.Voided, "journal row %s (%s) of the untouched book %s stands: it describes a write that did not happen", rowID, c.ChangeType, id)
 	}
 }
 
@@ -42,7 +73,7 @@ func requireBookUntouched(t *testing.T, f *relinkFixture, calls *stripMergeCalls
 // created author; its junk row stays because a book still credits it. The
 // unlocked book beside it is relinked, so the hold is per book.
 func TestAuthorStripMerge_RelinkUserLockedAuthorIsLeftAlone(t *testing.T) {
-	f := lockedRelinkFixture()
+	f := batmanRelinkFixture()
 	f.locked = map[string]bool{"bk-t": true}
 	calls, summary := f.run(t, relinkAllParams)
 
@@ -58,11 +89,7 @@ func TestAuthorStripMerge_RelinkUserLockedAuthorIsLeftAlone(t *testing.T) {
 // rewrite its credits and promote its primary (the AuthorID column the lock
 // covers). It is held like a sole-credit book is: untouched, and the row kept.
 func TestAuthorStripMerge_UnlinkLeavesAUserLockedBookWithACoAuthorAlone(t *testing.T) {
-	f := lockedRelinkFixture()
-	f.extra = []database.Author{{ID: 400, Name: "Harley Quinn"}}
-	f.coCredits = map[string][]database.BookAuthor{
-		"bk-t": {{BookID: "bk-t", AuthorID: 400, Role: "author", Position: 1}},
-	}
+	f := deleteOnlyCoAuthorFixture()
 	f.locked = map[string]bool{"bk-t": true}
 	calls, summary := f.run(t, relinkAllParams)
 
@@ -76,7 +103,7 @@ const deleteOnlyParams = `{"apply":true,"delete_title_as_author":true}`
 // deleteOnlyCoAuthorFixture is the same shape with the relink off, so the delete
 // reaches the unlink itself: bk-t credits the junk row beside a real co-author.
 func deleteOnlyCoAuthorFixture() *relinkFixture {
-	f := newRelinkFixture()
+	f := batmanRelinkFixture()
 	f.extra = []database.Author{{ID: 400, Name: "Harley Quinn"}}
 	f.coCredits = map[string][]database.BookAuthor{
 		"bk-t": {{BookID: "bk-t", AuthorID: 400, Role: "author", Position: 1}},
@@ -84,8 +111,8 @@ func deleteOnlyCoAuthorFixture() *relinkFixture {
 	return f
 }
 
-// Control for the two tests below: with no lock the unlink rewrites the credits
-// and the row is deleted, so they are exercising a path that does run.
+// Control for the tests below: with no lock the unlink rewrites the credits and
+// the row is deleted, so they are exercising a path that does run.
 func TestAuthorStripMerge_UnlinkUnlockedCoAuthorBookIsUnlinkedAndRowDeleted(t *testing.T) {
 	f := deleteOnlyCoAuthorFixture()
 	calls, _ := f.run(t, deleteOnlyParams)
@@ -105,26 +132,35 @@ func TestAuthorStripMerge_UnlinkUnreadableLocksWriteNothingAndKeepTheRow(t *test
 	wantSummary(t, summary, "failed=1 ")
 }
 
-// A lock the user saves after the unlink's check but before its primary-author
-// write puts the credits back: the book credits the junk row and the survivor as
-// it did, the primary is unchanged, the row stays.
-func TestAuthorStripMerge_UnlinkLockSavedBeforePrimaryWriteRestoresTheCredits(t *testing.T) {
+// A lock the user saves after every earlier check and before the unlink's one
+// commit holds the book: the whole write is refused, so there is nothing to put
+// back. (Round 1 wrote the credits and then the primary and restored the credits
+// when the second write was held; that code is gone, and so is its window.)
+func TestAuthorStripMerge_UnlinkLockSavedBeforeTheCommitHoldsTheBook(t *testing.T) {
 	f := deleteOnlyCoAuthorFixture()
-	// Reads: the unlink's check is the first, the helper's own is the second.
-	f.lockFlipAt = map[string]int{"bk-t": 2}
+	f.lockAtWrite = map[string]bool{"bk-t": true}
 	calls, summary := f.run(t, deleteOnlyParams)
 
-	got := credits(calls, "bk-t")
-	require.True(t, containsInt(got, 100) && containsInt(got, 400) && len(got) == 2, "the credits were not restored: %v", got)
-	_, rewritten := calls.updated["bk-t"]
-	require.False(t, rewritten, "the primary author was rewritten although the book was locked mid-write")
-	require.NotContains(t, calls.deleted, 100, "the junk row was deleted although the book was locked mid-write")
+	requireBookUntouched(t, f, calls, "bk-t")
+	require.NotContains(t, calls.deleted, 100, "the junk row was deleted although the book was locked before the commit")
 	wantSummary(t, summary, "books-held-user-locked=1 ", "rows-held-user-locked=1 ", "deleted=0 ", "failed=0 ")
+}
+
+// A lock set that cannot be read inside the commit is a failure, not a hold, and
+// writes nothing.
+func TestAuthorStripMerge_UnlinkUnreadableLocksInsideTheCommitWriteNothing(t *testing.T) {
+	f := deleteOnlyCoAuthorFixture()
+	f.lockErrAtWrite = map[string]error{"bk-t": errors.New("field states for bk-t: store closed")}
+	calls, summary := f.run(t, deleteOnlyParams)
+
+	requireBookUntouched(t, f, calls, "bk-t")
+	require.NotContains(t, calls.deleted, 100, "the junk row was deleted although a lock read failed")
+	wantSummary(t, summary, "failed=1 ", "books-held-user-locked=0 ")
 }
 
 // A lock set that cannot be read fails the book: nothing is written for it.
 func TestAuthorStripMerge_RelinkUnreadableLocksWriteNothing(t *testing.T) {
-	f := lockedRelinkFixture()
+	f := batmanRelinkFixture()
 	f.lockErr = map[string]error{"bk-t": fmt.Errorf("field states for bk-t: store closed")}
 	calls, summary := f.run(t, relinkAllParams)
 
@@ -133,80 +169,29 @@ func TestAuthorStripMerge_RelinkUnreadableLocksWriteNothing(t *testing.T) {
 	wantSummary(t, summary, "relink-failed=1 ", "relink-skipped-user-locked=0 ")
 }
 
-// The first field-state reads are the advisory check and the candidate names;
-// the third is relinkBookCredit's own check before it writes. A lock saved
-// between them holds the whole move: no credit and no primary is written.
-func TestAuthorStripMerge_RelinkLockSavedBeforeTheWriteHoldsTheCredits(t *testing.T) {
-	f := lockedRelinkFixture()
-	f.lockFlipAt = map[string]int{"bk-t": 3}
+// A lock saved after the relink's earlier checks and before its one commit holds
+// the whole move: no credit and no primary is written, because they are one
+// write. The held book's rows (journal included) are voided, not left standing.
+func TestAuthorStripMerge_RelinkLockSavedBeforeTheCommitHoldsTheBook(t *testing.T) {
+	f := batmanRelinkFixture()
+	f.lockAtWrite = map[string]bool{"bk-t": true}
 	calls, summary := f.run(t, relinkAllParams)
 
-	require.Nil(t, calls.setAuthors["bk-t"], "the credits were written although the author was locked before the write")
-	_, ok := calls.updated["bk-t"]
-	require.False(t, ok, "the primary was written although the author was locked before the write")
-	wantSummary(t, summary, "relink-skipped-user-locked=1 ", "relinked=1 ")
-}
-
-// The fourth read is the primary-author write's own, under the book's write lock.
-// A lock saved after the credits were written still holds the primary write.
-func TestAuthorStripMerge_RelinkLockSavedBeforeThePrimaryWriteHoldsIt(t *testing.T) {
-	f := lockedRelinkFixture()
-	f.lockFlipAt = map[string]int{"bk-t": 4}
-	calls, summary := f.run(t, relinkAllParams)
-
-	_, ok := calls.updated["bk-t"]
-	require.False(t, ok, "the primary was written although the author was locked before the primary write")
-	// The credits had already moved when the lock landed; they are put back, or
-	// the book would credit the new author while its primary names the old row.
-	require.NotContains(t, credits(calls, "bk-t"), 300, "the credits stayed moved after the primary write was held")
-	require.NotNil(t, calls.setAuthors["bk-t"], "the credit write was not rolled back")
+	requireBookUntouched(t, f, calls, "bk-t")
+	require.Equal(t, []int{300}, credits(calls, "bk-s"), "control: the other book was not relinked")
 	require.NotContains(t, calls.deleted, 100, "the junk row was deleted although the locked book still has it as its primary")
-	wantSummary(t, summary, "relink-skipped-user-locked=1 ", "relinked=1 ")
+	wantSummary(t, summary, "relink-skipped-user-locked=1 ", "relinked=1 ", "relink-failed=0 ")
 }
 
-// Each of the three lock reads a relink makes for one book is its own check and
-// each fails closed on its own. Failing only the n-th read (the first read is
-// the advisory one, the third is relinkBookCredit's check before it writes, the
-// fourth is the primary-author write's own) shows no later read hides the error.
-func TestAuthorStripMerge_RelinkEachLockReadFailsClosedOnItsOwn(t *testing.T) {
-	for _, tc := range []struct {
-		name         string
-		failRead     int
-		wantCredits  bool // the credit write ran and was rolled back
-		wantNoUpdate bool
-	}{
-		{"advisory read", 1, false, true},
-		{"read before the credit write", 3, false, true},
-		{"read under the primary write", 4, true, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := lockedRelinkFixture()
-			f.lockErrAt = map[string]int{"bk-t": tc.failRead}
-			calls, summary := f.run(t, relinkAllParams)
+// The lock read inside the commit fails closed on its own: an error there is a
+// failure (not a hold), and nothing was written for the book.
+func TestAuthorStripMerge_RelinkUnreadableLocksInsideTheCommitWriteNothing(t *testing.T) {
+	f := batmanRelinkFixture()
+	f.lockErrAtWrite = map[string]error{"bk-t": errors.New("field states for bk-t: store closed")}
+	calls, summary := f.run(t, relinkAllParams)
 
-			require.NotContains(t, credits(calls, "bk-t"), 300, "the credits of the book stayed moved")
-			if tc.wantCredits {
-				require.NotNil(t, calls.setAuthors["bk-t"], "the credit write was not rolled back")
-			} else {
-				require.Nil(t, calls.setAuthors["bk-t"], "credits were written although the lock read failed first")
-			}
-			_, ok := calls.updated["bk-t"]
-			require.False(t, ok, "the primary was written although a lock read failed")
-			require.NotContains(t, calls.deleted, 100, "the junk row was deleted although a book still has it")
-			wantSummary(t, summary, "relink-failed=1 ", "relink-skipped-user-locked=0 ", "relinked=1 ")
-		})
-	}
-}
-
-// A lock saved between the two writes puts the credits back; when that restore
-// itself fails, the book is a failure (credits and primary now disagree), not a
-// quiet "left alone".
-func TestAuthorStripMerge_RelinkFailedCreditRestoreIsAFailureNotAHold(t *testing.T) {
-	f := lockedRelinkFixture()
-	f.lockFlipAt = map[string]int{"bk-t": 4}
-	f.setErrAt = map[string]int{"bk-t": 2}
-	_, summary := f.run(t, relinkAllParams)
-
+	requireBookUntouched(t, f, calls, "bk-t")
+	require.NotContains(t, calls.deleted, 100, "the junk row was deleted although a book still has it")
 	wantSummary(t, summary, "relink-failed=1 ", "relink-skipped-user-locked=0 ")
 }
 
@@ -251,10 +236,11 @@ func requireMergeHeld(t *testing.T, w *mergeUndoWorld, heldBook, movedBook strin
 	require.Equal(t, w.from.Name, kept.Name)
 }
 
-// An author merge leaves a book whose author the user locked alone and keeps
-// the author row (the book still credits it), reporting the hold as an error
-// that names the cause; the unlocked book is merged.
-func TestMergeAuthorInto_UserLockedAuthorBookIsLeftAndAuthorKept(t *testing.T) {
+// An author merge is all or nothing per author: one book whose author the user
+// locked holds the whole merge BEFORE any book moves, so the author is never left
+// half merged. The held merge reports errAuthorMergeUserLocked (callers count it
+// as held, not failed), moves no book, and keeps the author row.
+func TestMergeAuthorInto_UserLockedAuthorBookHoldsTheWholeMerge(t *testing.T) {
 	w := newMergeUndoWorld(t, "Undo Lock From", "Undo Lock Into", 0)
 	lockAuthor(t, w.st, w.books[0])
 
@@ -262,8 +248,58 @@ func TestMergeAuthorInto_UserLockedAuthorBookIsLeftAndAuthorKept(t *testing.T) {
 
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errAuthorMergeUserLocked), "err = %v", err)
-	require.Equal(t, 1, n, "the unlocked book was not moved")
-	requireMergeHeld(t, w, w.books[0], w.books[1])
+	require.Equal(t, 0, n, "a held author moved a book")
+	requireMergeHeld(t, w, w.books[0], "")
+	requireMergeHeld(t, w, w.books[1], "")
+}
+
+// The co-author-only book is held by the author lock too: the junk credit is not
+// its primary, but the credit list is part of what author_name locks.
+func TestMergeAuthorInto_ALockedCoAuthorBookHoldsTheWholeMerge(t *testing.T) {
+	w := newMergeUndoWorld(t, "Undo Lock Co From", "Undo Lock Co Into", 0)
+	lockAuthor(t, w.st, w.books[1])
+
+	n, _, err := mergeAuthorIntoVia(context.Background(), t6g1HeadStore{w.st}, t6g1HeadWriter{w.st}, w.from, w.into, false, "op-merge-lock-co", slog.Default())
+
+	require.True(t, errors.Is(err, errAuthorMergeUserLocked), "err = %v", err)
+	require.Equal(t, 0, n)
+	requireMergeHeld(t, w, w.books[0], "")
+	requireMergeHeld(t, w, w.books[1], "")
+}
+
+// lateLockStore saves the user's lock on one book part-way through a merge: its
+// first lock read (the merge's pre-scan) sees the book unlocked and every later
+// read (the one inside the write) sees the lock the user saved in between.
+type lateLockStore struct {
+	t6g1HeadStore
+	book  string
+	reads *int
+}
+
+func (s lateLockStore) GetMetadataFieldStates(id string) ([]database.MetadataFieldState, error) {
+	if id != s.book {
+		return s.t6g1HeadStore.GetMetadataFieldStates(id)
+	}
+	*s.reads++
+	if *s.reads == 1 {
+		return s.t6g1HeadStore.GetMetadataFieldStates(id)
+	}
+	return []database.MetadataFieldState{{BookID: id, Field: database.FieldKeyAuthorName, OverrideLocked: true}}, nil
+}
+
+// A lock saved after the pre-scan holds that one book at the write: the books
+// before it moved (and are counted so the caller invalidates its caches), the
+// held book keeps its credits and primary, and the author row stays.
+func TestMergeAuthorInto_ALockSavedMidRunHoldsThatBookAndCountsTheMovedOnes(t *testing.T) {
+	w := newMergeUndoWorld(t, "Undo Lock Late From", "Undo Lock Late Into", 0)
+	reads := 0
+	store := lateLockStore{t6g1HeadStore: t6g1HeadStore{w.st}, book: w.books[1], reads: &reads}
+
+	n, _, err := mergeAuthorIntoVia(context.Background(), store, t6g1HeadWriter{w.st}, w.from, w.into, false, "op-merge-lock-late", slog.Default())
+
+	require.True(t, errors.Is(err, errAuthorMergeUserLocked), "err = %v", err)
+	require.Equal(t, 1, n, "the book before the held one was not counted as moved")
+	requireMergeHeld(t, w, w.books[1], w.books[0])
 }
 
 // A preview reports the same hold, so it does not promise a merge the apply

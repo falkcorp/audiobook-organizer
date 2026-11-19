@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
 // last-edited: 2026-11-18
 
@@ -216,8 +216,11 @@ type authorSplitRun struct {
 // (database.ModifyBookRespectingLocks), which is the check that decides there:
 // a lock saved between the two writes leaves the credits split and the primary on
 // the composite, the same state a failure between them leaves, and a rerun
-// settles it once the user unlocks the author. A lock that cannot be read writes
-// nothing and counts as an error.
+// settles it once the user unlocks the author. That late hold is counted as held,
+// and its composite is kept without an error (heldComposites), like a book held
+// before either write; the split does not write the two as one commit (the credit
+// swap spans several composites), so it does not put the credits back. A lock that
+// cannot be read writes nothing and counts as an error.
 func (r *authorSplitRun) relinkBook(it *authorSplitItem) {
 	book := it.book
 
@@ -334,7 +337,11 @@ func (r *authorSplitRun) relinkBook(it *authorSplitItem) {
 	})
 	switch {
 	case len(held) > 0:
+		// The credits already moved and the primary still names the composite, so
+		// step 4 must keep the composite (VerifyAuthorUnlinked would refuse it and
+		// count an error for a book that is merely held).
 		r.held.Add(1)
+		r.heldComposites.Store(composite.ID, struct{}{})
 		r.env.Log(slog.LevelInfo, fmt.Sprintf("author split: book %s primary author left on %q, locked by the user after its credits were relinked", book.ID, composite.Name))
 	case err != nil:
 		r.errCount.Add(1)

@@ -94,7 +94,7 @@ func newConjRepairPlugin(
 		},
 	}
 	store.GetBooksByAuthorIDForRelinkFunc = relinkAwareBooks(store.GetBooksByAuthorIDWithRoleFunc, w.setBookAuthors, writtenIDs(func() []string { return w.updatedBooks }))
-	return New(&fakeDeps{store: store})
+	return New(&fakeDeps{store: withCredits(store)})
 }
 
 // newConjRepairPluginWithDeps is newConjRepairPlugin with invalidation counting.
@@ -154,7 +154,7 @@ func newConjRepairPluginWithDeps(
 			return b, nil
 		},
 	}
-	deps.fakeDeps = fakeDeps{store: store}
+	deps.fakeDeps = fakeDeps{store: withCredits(store)}
 	store.GetBooksByAuthorIDForRelinkFunc = relinkAwareBooks(store.GetBooksByAuthorIDWithRoleFunc, w.setBookAuthors, writtenIDs(func() []string { return w.updatedBooks }))
 	return New(deps)
 }
