@@ -698,6 +698,13 @@ func relinkBookCredit(store interface {
 			return true, fmt.Errorf("book %s: author locked mid-write and its credits could not be restored: %w", book.ID, rbErr), nil
 		}
 		return true, nil, nil
+	case errors.Is(mErr, database.ErrFieldLocksUnavailable):
+		// The locks could not be read under the book's write lock, so the primary
+		// was not written; the credits above were, and go back for the same reason.
+		if rbErr := store.SetBookAuthors(book.ID, bookAuthors); rbErr != nil {
+			return false, fmt.Errorf("rewrite primary author of %s: %w (and its credits could not be restored: %v)", book.ID, mErr, rbErr), nil
+		}
+		return false, fmt.Errorf("rewrite primary author of %s: %w", book.ID, mErr), nil
 	case mErr != nil:
 		return false, fmt.Errorf("rewrite primary author of %s: %w", book.ID, mErr), nil
 	case written == nil:
