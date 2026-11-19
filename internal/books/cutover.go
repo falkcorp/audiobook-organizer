@@ -1,5 +1,5 @@
 // file: internal/books/cutover.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5a82d1c7-3e94-4f60-b7a8-0c19e6d4f253
 // last-edited: 2026-11-19
 
@@ -42,12 +42,14 @@ var flipDeclared = false
 // declared: the retired env names and file keys (HEAD's names are retired only
 // when core config replaces them: until then HEAD still reads them, and a
 // config check that called them retired would be wrong) and the OPENAI
-// ecosystem bindings. Both nil while the flip is dark.
-func flipConfigNames(declared bool) (retired []coreconfig.RetiredName, bindings []coreconfig.EnvName) {
+// ecosystem bindings, with the predicate that lets core config place those
+// bindings (and the integrations values M2 stages) onto paths no registered
+// section owns (cutover.ConfigPassthrough). All nil while the flip is dark.
+func flipConfigNames(declared bool) (retired []coreconfig.RetiredName, bindings []coreconfig.EnvName, passthrough func(coreconfig.Path) bool) {
 	if !declared {
-		return nil, nil
+		return nil, nil, nil
 	}
-	return cutover.RetiredConfigNames(), cutover.ConfigEnvBindings()
+	return cutover.RetiredConfigNames(), cutover.ConfigEnvBindings(), cutover.ConfigPassthrough
 }
 
 // booksLevelStepVersion is the version books.level-1 takes: books' next

@@ -1,5 +1,5 @@
 // file: core/app/offline_config_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 26a3e540-e2ae-454a-95cb-b251137091ff
 // last-edited: 2026-11-19
 
@@ -204,8 +204,12 @@ func TestOptions_ConfigOptionsCopies(t *testing.T) {
 		Env:                []string{"GCPD_CORE_LOG_JOURNAL_RETENTION_DAYS=7"},
 		RetiredConfigNames: []config.RetiredName{{Name: "GCPD_DAYS", Canonical: "core.log.journal.retention_days"}},
 		ConfigEnvBindings:  []config.EnvName{{Name: "OTEL_EXPORTER_OTLP_ENDPOINT", Path: "core.tracing.otlp.endpoint"}},
+		ConfigPassthrough:  func(p config.Path) bool { return p == "integrations.ai.penguin.api_key" },
 	}
 	o := opts.configOptions()
+	if o.Passthrough == nil || !o.Passthrough("integrations.ai.penguin.api_key") || o.Passthrough("integrations.ai.riddler.api_key") {
+		t.Fatal("configOptions does not carry ConfigPassthrough into config.Options.Passthrough")
+	}
 	if o.AppID != "gotham" || o.EnvPrefix != "GCPD" || o.FilePath != "/etc/gotham.yaml" || o.Logger == nil ||
 		!slices.Equal(o.Environ, opts.Env) || !slices.Equal(o.Retired, opts.RetiredConfigNames) ||
 		!slices.Equal(o.EnvBindings, opts.ConfigEnvBindings) {
