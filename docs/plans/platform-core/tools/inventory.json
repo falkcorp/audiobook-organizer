@@ -2848,7 +2848,12 @@
    "F4-02"
   ],
   "files": [
-   "core/internal/loghttp/"
+   "core/internal/loghttp/",
+   "core/internal/logjournal/store.go",
+   "core/log/journal.go",
+   "core/log/journal_test.go",
+   "core/log/logtest/journal.go",
+   "core/log/logtest/journal_test.go"
   ],
   "spec": "05-logging §5 (Query, auth-off reach, when the surface lands), §10; 03 §3.5 R4 (an L6 package mounts it)",
   "notes": "Tier: a permission-checked query route over the journal with the other-user rule. Package name coined here. Unmounted until F5-18, which deletes HEAD's GET /api/v1/system/logs in the same PR and moves the SPA; F6-05 adds the test's event half. limit: default 50, cap 1000, clamped (05-logging §5, G20). 04 keys: F5 create mediacore/internal/loghttp (name coined here). Owns gate tests: TestJournal_RequiresSystemManage; TestJournal_OtherUsersLinesNeedUsersView."

@@ -1,7 +1,7 @@
 // file: core/log/journal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8a2d4c71-9e03-4f6b-b5d8-1c7e3a09f642
-// last-edited: 2026-11-13
+// last-edited: 2026-11-18
 
 package log_test
 
@@ -73,7 +73,7 @@ func TestJournalSDK_Shape(t *testing.T) {
 		want []string
 	}{
 		{"ImportedRecord", log.ImportedRecord{}, []string{"Record log.Record", "SourceID string"}},
-		{"JournalQuery", log.JournalQuery{}, []string{"MinLevel slog.Level", "Module string", "Since time.Time", "Until time.Time", "Text string", "Cursor string", "Limit int"}},
+		{"JournalQuery", log.JournalQuery{}, []string{"MinLevel slog.Level", "Module string", "Since time.Time", "Until time.Time", "Text string", "Cursor string", "Limit int", "Hide func(log.Record) bool"}},
 		{"JournalPage", log.JournalPage{}, []string{"Records []log.Record", "Next string"}},
 	}
 	for _, c := range cases {
