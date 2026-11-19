@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/kinds.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 48e96a47-de87-48f6-99f6-85b864845dd6
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package dedup
 
@@ -22,7 +22,7 @@ import (
 // T5): the plugin's v2 definitions, each as a tasks.Task kind named
 // "books." + the HEAD def ID. They are DARK: nothing registers them before the
 // tasks flip (F5-18), which also removes HEAD's v2 shells. No kinds*.go file
-// imports pkg/plugin/sdk (the T5 gate); the sdk-facing half of the shells
+// imports the plugin SDK package (the T5 gate); the SDK-facing half of the shells
 // (HEAD's Reporter, the progress sink) is in env.go.
 //
 // Every definition has one shared core and two shells over it: HEAD's Run (the

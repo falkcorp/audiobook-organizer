@@ -749,7 +749,6 @@ internal/plugins/dedup.Plugin.applyBandThresholds
 internal/plugins/dedup.Plugin.computeRebuildDiff
 internal/plugins/dedup.Plugin.scanOrphanEmbeddings
 internal/plugins/dedup.scanReembedCandidates
-internal/plugins/dedup.windowIndexBuildConcurrency
 internal/plugins/itunes.NewLoggerWrapper
 internal/plugins/itunes.loggerWrapper.ChangeCounters
 internal/plugins/itunes.loggerWrapper.Debug

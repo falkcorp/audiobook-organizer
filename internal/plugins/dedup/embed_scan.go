@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/embed_scan.go
-// version: 2.6.0
+// version: 2.6.1
 // guid: e2f3a4b5-c6d7-8901-bcde-f12345678901
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 // T018: embed_scan.go is the canonical implementation for both
 // dedup.embed-scan (sync) and dedup.embed-async (async/batch API).
@@ -228,6 +228,9 @@ func embedScanCore(ctx context.Context, env embedScanEnv) (embedScanResult, erro
 	env.Logger.Info("embed-scan workers", "workers", workers)
 
 	runErr := env.Items(ctx, embedScanParallelism(workers), total, kindItemsOptions{
+		// HEAD's own count: it applied no upper bound, and Fixed's ceiling must not
+		// narrow a routed pool above it.
+		HeadWorkers: workers,
 		Label: func(i, t int) string {
 			return fmt.Sprintf("Embedding books: %d / %d (new=%d cached=%d skipped=%d errors=%d)",
 				i+1, t, embedded.Load(), cached.Load(), skipped.Load(), errs.Load())

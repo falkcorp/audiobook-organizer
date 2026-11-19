@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/kinds_env_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8e3b6a17-2c54-4d90-b1f7-0a9d5c3e6b82
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package dedup
 
@@ -11,7 +11,9 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/stretchr/testify/require"
@@ -69,6 +71,30 @@ func TestDedupEnv_HeadItemsLabelFallsBackToThePureLabel(t *testing.T) {
 	})
 	require.True(t, anyMessageContains(both, "counter-1"))
 	require.False(t, anyMessageContains(both, "pure-"), "Label wins over PureLabel")
+}
+
+// HEAD's pool runs the worker count HEAD passed to RunItems, which tasks.Fixed
+// would have clamped to its ceiling: HeadWorkers carries it, above MaxFixed too.
+func TestDedupEnv_HeadItemsHonoursHeadWorkersAboveTheFixedCeiling(t *testing.T) {
+	n := tasks.MaxFixed + 16
+	var arrived atomic.Int64
+	allIn := make(chan struct{})
+	err := headItems(&envRecorder{})(context.Background(), tasks.Fixed(n, "test"), n, kindItemsOptions{HeadWorkers: n},
+		func(ctx context.Context, _ int) error {
+			if arrived.Add(1) == int64(n) {
+				close(allIn)
+			}
+			select {
+			case <-allIn:
+				return nil
+			case <-time.After(10 * time.Second):
+				return fmt.Errorf("only %d workers ran at once, want %d", arrived.Load(), n)
+			}
+		})
+	require.NoError(t, err)
+
+	// Without it the pool is the Parallelism's own, clamped.
+	require.Equal(t, tasks.MaxFixed, tasks.Fixed(n, "test").Workers())
 }
 
 // The native pool's label closes over the total HEAD's label saw: n, or the
