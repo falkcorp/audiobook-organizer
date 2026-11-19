@@ -1,7 +1,7 @@
 // file: core/internal/rbacstore/store.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6f1c9a3e-28d4-4b7e-a5f0-93e1d27c4b85
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 // Package rbacstore is core's one implementation of rbac.Store and
 // rbac.Importer (05-rbac §3.4, §6.3 "Native store"): roles kept in the core
@@ -79,6 +79,7 @@ var (
 	_ rbac.Store        = (*Store)(nil)
 	_ rbac.Importer     = (*Store)(nil)
 	_ rbac.ImportSealer = (*Store)(nil)
+	_ rbac.RoleGuarder  = (*Store)(nil)
 )
 
 // New returns the store over ks, which must be Owner's keyspace.
@@ -232,6 +233,42 @@ func (s *Store) DeleteRole(b *storage.Batch, r *rbac.Role) error {
 		return fmt.Errorf("%w: %s is at version %d, the delete names %d", rbac.ErrVersionMismatch, r.Name, stored.Version, r.Version)
 	}
 	return s.stage(b, key, committed, nil)
+}
+
+// GuardRole stages into b an Expect that role r.Name is stored exactly as it
+// was read at r.Version (rbac.RoleGuarder). b is the caller's batch, which
+// belongs to another owner (auth's last-admin rule guards the role that makes
+// the other admin a holder); the Expect binds this keyspace into it, so a
+// role write that commits first, an edit or a delete, fails the caller's
+// Commit with storage.ErrConflict. An absent role, or one at another version,
+// wraps storage.ErrConflict and stages nothing. Nothing is written.
+func (s *Store) GuardRole(b *storage.Batch, r *rbac.Role) error {
+	if b == nil {
+		return errors.New("rbacstore: GuardRole needs the caller's batch")
+	}
+	if r == nil || r.Name == "" {
+		return errors.New("rbacstore: GuardRole of a role with no name")
+	}
+	key := roleKey(r.Name)
+	committed, err := s.committed(key)
+	if err != nil {
+		return err
+	}
+	if committed == nil {
+		return fmt.Errorf("%w: role %s is gone", storage.ErrConflict, r.Name)
+	}
+	stored, err := decode(r.Name, committed)
+	if err != nil {
+		return err
+	}
+	if stored.Version != r.Version {
+		return fmt.Errorf("%w: role %s is at version %d, guarded %d", storage.ErrConflict, r.Name, stored.Version, r.Version)
+	}
+	b.Bind(s.ks)
+	if err := b.Expect(s.ks, key, committed); err != nil {
+		return fmt.Errorf("rbacstore: expect %q: %w", key, err)
+	}
+	return nil
 }
 
 // ImportRole stores r as a custom role (05-rbac §3.4, §6.3): Origin

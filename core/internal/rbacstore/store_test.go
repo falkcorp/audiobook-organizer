@@ -1,7 +1,7 @@
 // file: core/internal/rbacstore/store_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 23a85290-0088-42d7-b522-d7086e7dcf49
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package rbacstore
 
@@ -153,5 +153,72 @@ func TestStore_StaleWantIsAConflictNotADoubleWrite(t *testing.T) {
 	}
 	if err := b.Commit(context.Background(), storage.Sync); !errors.Is(err, storage.ErrConflict) {
 		t.Errorf("commit over a stale read: %v, want storage.ErrConflict", err)
+	}
+}
+
+// TestStore_GuardRoleWritesNothingAndBindsTheKeyspace: GuardRole is a
+// precondition, not a write. Into a batch of another keyspace (here an
+// indexed batch over the role keyspace stands for auth's), it commits when
+// the role is untouched and fails with ErrConflict once the role was
+// replaced; a guard over a stale version or a missing role is refused before
+// anything is staged; the nil cases are errors, not panics.
+func TestStore_GuardRoleWritesNothingAndBindsTheKeyspace(t *testing.T) {
+	st := newStore(t)
+	seed := st.NewBatch()
+	if err := st.PutRole(seed, role("Trustee", 1)); err != nil {
+		t.Fatal(err)
+	}
+	commit(t, seed)
+	read, err := st.GetRole(context.Background(), "custom.trustee")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b := st.NewBatch()
+	if err := st.GuardRole(b, read); err != nil {
+		t.Fatalf("GuardRole: %v", err)
+	}
+	if n := b.Count(); n != 0 {
+		t.Errorf("a guard staged %d writes", n)
+	}
+	commit(t, b)
+	if got, _ := st.GetRole(context.Background(), "custom.trustee"); got == nil || got.Version != 1 || got.Title != "Trustee" {
+		t.Fatalf("the guard changed the role: %+v", got)
+	}
+
+	b = st.NewBatch()
+	if err := st.GuardRole(b, read); err != nil {
+		t.Fatal(err)
+	}
+	other := st.NewBatch()
+	if err := st.PutRole(other, role("Warden", 2)); err != nil {
+		t.Fatal(err)
+	}
+	commit(t, other)
+	if err := b.Commit(context.Background(), storage.Sync); !errors.Is(err, storage.ErrConflict) {
+		t.Errorf("Commit of a guard over a replaced role: %v, want storage.ErrConflict", err)
+	}
+	_ = b.Close()
+
+	for name, tc := range map[string]*rbac.Role{
+		"a stale version": read,
+		"a missing role":  {Name: "custom.ghost", Version: 1},
+	} {
+		sb := st.NewBatch()
+		if err := st.GuardRole(sb, tc); !errors.Is(err, storage.ErrConflict) {
+			t.Errorf("GuardRole of %s: %v, want storage.ErrConflict", name, err)
+		}
+		_ = sb.Close()
+	}
+	if err := st.GuardRole(nil, read); err == nil {
+		t.Error("GuardRole without a batch succeeded")
+	}
+	nb := st.NewBatch()
+	defer func() { _ = nb.Close() }()
+	if err := st.GuardRole(nb, nil); err == nil {
+		t.Error("GuardRole of a nil role succeeded")
+	}
+	if err := st.GuardRole(nb, &rbac.Role{}); err == nil {
+		t.Error("GuardRole of a nameless role succeeded")
 	}
 }

@@ -145,6 +145,7 @@ core/internal/rbacstore.New
 core/internal/rbacstore.StorageSpec
 core/internal/rbacstore.Store.DeleteRole
 core/internal/rbacstore.Store.GetRole
+core/internal/rbacstore.Store.GuardRole
 core/internal/rbacstore.Store.ImportRole
 core/internal/rbacstore.Store.NewBatch
 core/internal/rbacstore.Store.PutRole
