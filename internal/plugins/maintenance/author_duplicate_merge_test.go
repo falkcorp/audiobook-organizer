@@ -138,7 +138,7 @@ func newAuthorDupPlugin(
 		},
 	}
 	store.GetBooksByAuthorIDForRelinkFunc = relinkAwareBooks(store.GetBooksByAuthorIDWithRoleFunc, w.setBookAuthors, writtenIDs(func() []string { return w.updatedBooks }))
-	return New(&fakeDeps{store: store})
+	return New(&fakeDeps{store: withCredits(store)})
 }
 
 func runAuthorDup(t *testing.T, params string, w *authorDupWrites) {

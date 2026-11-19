@@ -1,13 +1,14 @@
 // file: internal/plugins/maintenance/author_duplicate_merge.go
-// version: 1.5.3
+// version: 1.6.0
 // guid: eb7daa4e-b1e4-4a15-92c5-b89e53cc6be3
-// last-edited: 2026-11-15
+// last-edited: 2026-11-18
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -63,7 +64,11 @@ const (
 	authorDupRowMerged     = "merged_into_canonical"
 	authorDupRowWouldMerge = "would_merge_into_canonical"
 	authorDupRowHeldRefs   = "held_still_referenced"
-	authorDupRowFailed     = "failed"
+	// authorDupRowHeldUserLocked: a book of the row has its author locked by the
+	// user, so the row was not merged (all or nothing per author). Held, not
+	// failed: the lock is doing its job.
+	authorDupRowHeldUserLocked = "held_user_locked_author"
+	authorDupRowFailed         = "failed"
 )
 
 // authorDuplicateMergeParams are the JSON parameters accepted by the op.
@@ -468,6 +473,16 @@ func authorDuplicateMergeCore(ctx context.Context, names []string, env authorDup
 			// books it moved journaled, and the revert engine can undo the lot.
 			relinked, undoRows, err := mergeAuthorIntoVia(ctx, store, env.Writer, src, canonical, dryRun, opID, log)
 			ledgerRows += undoRows
+			// Books that moved are counted whatever the outcome: a merge held or
+			// failed part-way did move them, and the cache below must follow.
+			booksRelinked += relinked
+			if errors.Is(err, errAuthorMergeUserLocked) {
+				rowOutcomes[authorDupRowHeldUserLocked]++
+				log.Info("author-duplicate-merge: merge held, a book has its author locked by the user",
+					"from_id", src.ID, "from", src.Name,
+					"into_id", canonical.ID, "into", canonical.Name, "books_moved", relinked, "reason", err)
+				continue
+			}
 			if err != nil {
 				rowOutcomes[authorDupRowFailed]++
 				log.Warn("author-duplicate-merge: merge failed",
@@ -475,7 +490,6 @@ func authorDuplicateMergeCore(ctx context.Context, names []string, env authorDup
 					"into_id", canonical.ID, "into", canonical.Name, "err", err)
 				continue
 			}
-			booksRelinked += relinked
 			if dryRun {
 				rowOutcomes[authorDupRowWouldMerge]++
 			} else {
@@ -491,10 +505,12 @@ func authorDuplicateMergeCore(ctx context.Context, names []string, env authorDup
 	// Drop the cached author list, but only when this run actually wrote. A dry
 	// run changed nothing and dropping a warm cache costs something for nothing --
 	// the same guard as author_conjunction_repair.go:263.
-	if !dryRun && rowOutcomes[authorDupRowMerged] > 0 {
+	// A merge held or failed part-way still moved books, so books relinked counts
+	// as a write alongside the merged rows.
+	if !dryRun && (rowOutcomes[authorDupRowMerged] > 0 || booksRelinked > 0) {
 		env.InvalidateAuthorsCache()
 		env.InvalidateDedupCache()
-		log.Info("author-duplicate-merge: invalidated author caches", "rows_written", rowOutcomes[authorDupRowMerged])
+		log.Info("author-duplicate-merge: invalidated author caches", "rows_written", rowOutcomes[authorDupRowMerged], "books_relinked", booksRelinked)
 	}
 
 	summary := fmt.Sprintf(

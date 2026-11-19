@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_strip_merge_relink_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 9444cf3d-482c-4380-9243-4bcfd66af5ee
 // last-edited: 2026-11-18
 
@@ -9,8 +9,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -42,18 +42,18 @@ type relinkFixture struct {
 	// tagErr fails GetBookTagsDetailed for a book.
 	tagErr map[string]error
 	// locked marks a book's author as user-locked (author_name); lockErr fails
-	// every field-state read of a book; lockFlipAt[id] = n makes the n-th and
-	// later field-state reads of the book report the author locked, a lock the
-	// user saves part-way through the run. stateReads counts the reads.
-	locked     map[string]bool
-	lockErr    map[string]error
-	lockFlipAt map[string]int
-	// lockErrAt[id] = n fails only the n-th field-state read of the book, so a
-	// test can fail one specific check; setErrAt[id] = n fails the n-th
-	// SetBookAuthors of the book (a rollback that cannot be written).
-	lockErrAt  map[string]int
-	setErrAt   map[string]int
-	stateReads map[string]int
+	// every field-state read of a book.
+	locked  map[string]bool
+	lockErr map[string]error
+	// lockAtWrite[id] makes the author of the book locked from the moment the
+	// store enters its one credits-and-row write (ModifyBookCredits) and before
+	// that write's callback runs: a lock the user saves after every earlier check
+	// and before the commit. lockErrAtWrite[id] fails the lock read from that
+	// moment instead. Neither depends on how many reads preceded it.
+	lockAtWrite    map[string]bool
+	lockErrAtWrite map[string]error
+	// authors replaces the default author list (T 100, S 200, the real author 300).
+	authors []database.Author
 	store      *database.MockStore
 }
 
@@ -77,9 +77,12 @@ func (f *relinkFixture) run(t *testing.T, params string) (*stripMergeCalls, stri
 		{ID: 200, Name: "01 Arcane Chef 2"},
 		{ID: 300, Name: "T.J. Ward"},
 	}
+	if f.authors != nil {
+		authors = slices.Clone(f.authors)
+	}
 	authors = append(authors, f.extra...)
 	p := newTitleAsAuthorPluginWith(calls, authors, f.books, nil)
-	store := p.deps.(*fakeDeps).store.(*database.MockStore)
+	store := mockStoreOf(p.deps.(*fakeDeps).store)
 	store.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) { return f.files[bookID], nil }
 	store.GetBookTagsDetailedFunc = func(bookID string) ([]database.BookTag, error) {
 		if err := f.tagErr[bookID]; err != nil {
@@ -87,18 +90,27 @@ func (f *relinkFixture) run(t *testing.T, params string) (*stripMergeCalls, stri
 		}
 		return f.tags[bookID], nil
 	}
-	if f.stateReads == nil {
-		f.stateReads = map[string]int{}
+	if cm, ok := p.deps.(*fakeDeps).store.(*creditsMock); ok {
+		cm.beforeCallback = func(bookID string) {
+			if f.lockAtWrite[bookID] {
+				if f.locked == nil {
+					f.locked = map[string]bool{}
+				}
+				f.locked[bookID] = true
+			}
+			if err := f.lockErrAtWrite[bookID]; err != nil {
+				if f.lockErr == nil {
+					f.lockErr = map[string]error{}
+				}
+				f.lockErr[bookID] = err
+			}
+		}
 	}
 	store.GetMetadataFieldStatesFunc = func(bookID string) ([]database.MetadataFieldState, error) {
-		f.stateReads[bookID]++
 		if err := f.lockErr[bookID]; err != nil {
 			return nil, err
 		}
-		if f.lockErrAt[bookID] == f.stateReads[bookID] {
-			return nil, fmt.Errorf("field states for %s: store closed at read %d", bookID, f.stateReads[bookID])
-		}
-		lock := f.locked[bookID] || (f.lockFlipAt[bookID] > 0 && f.stateReads[bookID] >= f.lockFlipAt[bookID])
+		lock := f.locked[bookID]
 		v, ok := f.fetched[bookID]
 		if !ok && !lock {
 			return nil, nil
@@ -110,16 +122,6 @@ func (f *relinkFixture) run(t *testing.T, params string) (*stripMergeCalls, stri
 			st.FetchedValue = &s
 		}
 		return []database.MetadataFieldState{st}, nil
-	}
-	if len(f.setErrAt) > 0 {
-		inner, setN := store.SetBookAuthorsFunc, map[string]int{}
-		store.SetBookAuthorsFunc = func(bookID string, as []database.BookAuthor) error {
-			setN[bookID]++
-			if f.setErrAt[bookID] == setN[bookID] {
-				return fmt.Errorf("simulated credit write failure for %s", bookID)
-			}
-			return inner(bookID, as)
-		}
 	}
 	store.GetAuthorByNameFunc = func(name string) (*database.Author, error) {
 		for _, a := range authors {

@@ -272,7 +272,7 @@ func TestAuthorDuplicateMerge_DanglingRefsDoNotHoldBack(t *testing.T) {
 	authors, books, joins, counts, _ := authorDupFixture()
 	var w authorDupWrites
 	p := newAuthorDupPlugin(authors, books, joins, counts, nil, &w)
-	store := p.deps.OpsStore().(*database.MockStore)
+	store := mockStoreOf(p.deps.OpsStore())
 	store.GetAllAuthorBookRefCountsFunc = nil
 	store.GetAllAuthorBookRefBucketsFunc = func() (map[int]database.AuthorRefBuckets, error) {
 		return map[int]database.AuthorRefBuckets{
@@ -291,7 +291,7 @@ func TestAuthorDuplicateMerge_UnmovableTrashedRefStillHoldsBack(t *testing.T) {
 	authors, books, joins, counts, _ := authorDupFixture()
 	var w authorDupWrites
 	p := newAuthorDupPlugin(authors, books, joins, counts, nil, &w)
-	store := p.deps.OpsStore().(*database.MockStore)
+	store := mockStoreOf(p.deps.OpsStore())
 	store.GetAllAuthorBookRefCountsFunc = nil
 	store.GetAllAuthorBookRefBucketsFunc = func() (map[int]database.AuthorRefBuckets, error) {
 		return map[int]database.AuthorRefBuckets{1: {Live: 2}, 2: {Live: 1, Trashed: 1}}, nil

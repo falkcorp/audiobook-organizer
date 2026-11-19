@@ -1,7 +1,7 @@
 // file: internal/authormerge/authormerge.go
-// version: 1.8.2
+// version: 1.9.0
 // guid: 7d3e9a51-2c84-4b6f-a0e7-5f19c3d82b46
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // Package authormerge is the journaled write path every author merge shares:
 // moving one book's credits off the merged author, and removing the merged author
@@ -82,7 +82,22 @@ type CreditMove struct {
 	// PrimaryBefore is the book's primary AuthorID as the caller read it. The
 	// primary is repointed only when it names FromID.
 	PrimaryBefore *int
+	// Locks, when set, makes the write respect the user's field locks: the book's
+	// locks are read inside the one commit that writes its credits and primary
+	// (database.ModifyBookCreditsRespectingLocks), and a book whose author the
+	// user locked is left exactly as it is (its row voided, ErrBookLocked
+	// returned). Opt-in, because the Authors view merge is a human act and must
+	// not be blocked by a lock; the maintenance merges set it. With Locks set
+	// every write goes through the store's ModifyBookCredits, whatever the move
+	// changes (a co-author's credit with no primary repoint included), and a
+	// store without that capability is refused before anything is journaled:
+	// there is no fallback to a separate credit write with a window before it.
+	Locks database.MetadataFieldStateReader
 }
+
+// ErrBookLocked: a move with CreditMove.Locks set left the book alone because the
+// user locked its author. Nothing was written and the move's row was voided.
+var ErrBookLocked = errors.New("book left as it is: its author is locked by the user")
 
 // MoveResult reports a MoveCredits that wrote the junction.
 type MoveResult struct {
@@ -123,10 +138,18 @@ func MoveCredits(store CreditsStore, opID string, m CreditMove) (MoveResult, err
 	var res MoveResult
 	primaryChanged := m.PrimaryBefore != nil && *m.PrimaryBefore == m.FromID
 	after := slices.Clone(m.After)
-	modifier, atomic := database.AsCapability[database.BookCreditsModifier](store)
-	atomic = atomic && primaryChanged
+	modifier, canModify := database.AsCapability[database.BookCreditsModifier](store)
+	guarded := m.Locks != nil
+	if guarded && !canModify {
+		return res, fmt.Errorf("move credits of book %s: %w: store is %T", m.BookID, database.ErrBookCreditsUnsupported, store)
+	}
+	// A guarded move writes through ModifyBookCredits whatever it changes: its
+	// lock check and its write must be one commit. A guarded move that changes
+	// nothing (the junction never credited FromID and the primary is not its)
+	// writes nothing, as an unguarded one does not.
+	atomic := canModify && (primaryChanged || (guarded && !undo.SameJunction(m.Before, after)))
 	withKeep := after
-	if atomic && !slices.ContainsFunc(after, func(ba database.BookAuthor) bool { return ba.AuthorID == m.IntoID }) {
+	if canModify && primaryChanged && !slices.ContainsFunc(after, func(ba database.BookAuthor) bool { return ba.AuthorID == m.IntoID }) {
 		withKeep = append(slices.Clone(after), database.BookAuthor{BookID: m.BookID, AuthorID: m.IntoID, Role: "author", Position: len(after)})
 	}
 	// Journaled as the write is expected to land (keep credited, primary
@@ -178,9 +201,23 @@ func MoveCredits(store CreditsStore, opID string, m CreditMove) (MoveResult, err
 
 	wrote := false
 	if atomic {
-		book, _, merr := modifier.ModifyBookCredits(m.BookID, func(cur *database.Book, credits *database.BookCreditsEdit) error {
+		creditsOnly := false
+		mutate := func(cur *database.Book, credits *database.BookCreditsEdit) error {
+			if !primaryChanged {
+				// A co-author's credit: the junction moves, the primary is not touched.
+				creditsOnly = true
+				credits.Authors = slices.Clone(after)
+				return nil
+			}
 			if cur.AuthorID == nil || *cur.AuthorID != m.FromID {
-				return errPrimaryMoved
+				if !guarded {
+					return errPrimaryMoved
+				}
+				// The primary moved off FromID meanwhile: the credits move alone,
+				// in this same commit, without the keep author the repoint brings.
+				creditsOnly = true
+				credits.Authors = slices.Clone(after)
+				return nil
 			}
 			id := m.IntoID
 			cur.AuthorID = &id
@@ -191,8 +228,24 @@ func MoveCredits(store CreditsStore, opID string, m CreditMove) (MoveResult, err
 			}
 			credits.Authors = slices.Clone(withKeep)
 			return nil
-		})
+		}
+		var (
+			book *database.Book
+			held []string
+			merr error
+		)
+		if guarded {
+			book, held, merr = database.ModifyBookCreditsRespectingLocks(modifier, m.Locks, m.BookID, mutate)
+		} else {
+			book, _, merr = modifier.ModifyBookCredits(m.BookID, mutate)
+		}
 		switch {
+		case len(held) > 0:
+			// Left as it is: the row describes nothing.
+			return refused("move credits and primary author", ErrBookLocked)
+		case merr == nil && book != nil && creditsOnly:
+			wrote = true
+			notRepointed()
 		case merr == nil && book != nil:
 			wrote = true
 			res.PrimaryRepointed = true
@@ -217,7 +270,7 @@ func MoveCredits(store CreditsStore, opID string, m CreditMove) (MoveResult, err
 	if stored, gerr := store.GetBookAuthors(m.BookID); gerr == nil && !undo.SameJunction(stored, journaled) {
 		journaled = append(journaled[:0], stored...)
 		rewrite("to the stored credits")
-	} else if atomic && !wrote {
+	} else if atomic && primaryChanged && !res.PrimaryRepointed {
 		rewrite("after its primary author was not repointed")
 	}
 	if !primaryChanged || atomic {
