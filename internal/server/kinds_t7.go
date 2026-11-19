@@ -468,6 +468,12 @@ type t7Store interface {
 	t7StoreLibrary
 	t7StoreEntities
 	t7StoreDedup
+	t7StoreReconcile
+}
+
+// t7StoreReconcile is the reads of the reconcile scan definition.
+type t7StoreReconcile interface {
+	reconcileScanStore
 }
 
 // t7StoreDedup is the reads of the dedup definitions.
@@ -534,6 +540,12 @@ type t7Writer interface {
 	t7WriterAI
 	t7WriterEntities
 	t7WriterDedup
+	t7WriterReconcile
+}
+
+// t7WriterReconcile is the writes of the reconcile apply definition.
+type t7WriterReconcile interface {
+	reconcileApplyWriter
 }
 
 // t7WriterDedup is the writes of the dedup definitions.
@@ -824,6 +836,18 @@ type t7ActivityWriter interface {
 	LogActivityBatch(opID, batchType, source string, item activity.BatchItem)
 }
 
+// t7Announce closes a run's activity batch and writes its one summary row, as
+// HEAD's bodies did after their work. A nil writer or an empty op id writes
+// nothing: the native shells hold no activity writer (the kernel's own run log
+// replaces the row), and an empty id would file the row under no run.
+func t7Announce(a t7ActivityWriter, opID, entryType, source, summary string) {
+	if a == nil || opID == "" {
+		return
+	}
+	a.FlushActivityOp(opID)
+	a.EmitActivityInfo(opID, entryType, source, summary, activity.AlwaysShow)
+}
+
 // headT7Activity is HEAD's activity side: the server's activity writer, each
 // call made as HEAD's body made it. A nil writer drops the call, as HEAD's nil
 // check did (activity.LogBatch also tolerates nil).
@@ -908,6 +932,8 @@ func t7KindList(s *Server, deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) 
 		s.seriesPruneNative(deps, sched),
 		s.seriesMergeNative(deps, sched),
 		s.seriesNormalizeNative(deps, sched),
+		s.reconcileScanNative(deps, sched),
+		s.reconcileApplyNative(deps, sched),
 	}
 }
 
