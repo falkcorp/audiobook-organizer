@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/bookfile_seg_sweep.go
-// version: 1.0.5
+// version: 1.1.0
 // guid: 7a3b5c8e-d1f2-4e9a-b6c0-3d7f1a2e5b8c
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // Package dedup — op dedup.bookfile-seg-drop (T020, SPEC 3 §6 item 2).
 //
@@ -32,6 +32,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/falkcorp/mediacore/tasks"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -76,15 +78,12 @@ type bookfileSegDropParams struct {
 // bookfileSegDropDef returns the OperationDef for dedup.bookfile-seg-drop.
 func (p *Plugin) bookfileSegDropDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "dedup.bookfile-seg-drop",
-		Preview:     sdk.PreviewSpec{Params: bookfileSegDropParams{}},
-		Liveness:    sdk.LivenessManual,
-		Plugin:      "dedup",
-		DisplayName: "Drop AcoustID segment fields from BookFile values",
-		Description: "Rewrites Pebble book_file: rows that still carry AcoustIDSeg0..6 values, " +
-			"removing those deprecated fields and their secondary index entries. " +
-			"Saves ~200–400 MB disk. Dry-run by default (pass apply=true to execute). " +
-			"Idempotent: a versioned flag prevents re-running after completion.",
+		ID:              "dedup.bookfile-seg-drop",
+		Preview:         sdk.PreviewSpec{Params: bookfileSegDropParams{}},
+		Liveness:        sdk.LivenessManual,
+		Plugin:          "dedup",
+		DisplayName:     "Drop AcoustID segment fields from BookFile values",
+		Description:     bookfileSegDropHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "dedup.bookfile-seg-drop",
@@ -99,7 +98,150 @@ func (p *Plugin) bookfileSegDropDef() sdk.OperationDef {
 	}
 }
 
-// runBookfileSegDrop implements the bookfile-seg-drop op.
+// bookfileSegDropKind is rule R3's native kind for dedup.bookfile-seg-drop.
+const bookfileSegDropKind = tasks.Kind("books.dedup.bookfile-seg-drop")
+
+// bookfileSegDropHelp is HEAD's Description and the native Help (rule R5).
+const bookfileSegDropHelp = "Rewrites Pebble book_file: rows that still carry AcoustIDSeg0..6 values, " +
+	"removing those deprecated fields and their secondary index entries. " +
+	"Saves ~200–400 MB disk. Dry-run by default (pass apply=true to execute). " +
+	"Idempotent: a versioned flag prevents re-running after completion."
+
+// bookfileSegDropStore is the reads the core takes. The sweep is scan and
+// write in one store call, so a dry run reaches it through SweepBookFileSegDropDry
+// (HEAD: SweepBookFileSegDrop with dryRun=true), which writes nothing.
+type bookfileSegDropStore interface {
+	SweepBookFileSegDropDry(ctx context.Context, batchSize int, progress func(rewrite, total int)) (database.SweepBookFileSegDropResult, error)
+	GetSetting(key string) (*database.Setting, error)
+}
+
+// bookfileSegDropWriter is the writes the core makes: the live sweep and the
+// completion flag.
+type bookfileSegDropWriter interface {
+	SweepBookFileSegDrop(ctx context.Context, batchSize int, progress func(rewrite, total int)) (database.SweepBookFileSegDropResult, error)
+	SetSetting(key, value, dataType string, internal bool) error
+}
+
+// bookfileSegDropEnv is what the core takes from its shell. Live is HEAD's
+// apply=true; a dry run never calls Writer, which may then be nil.
+type bookfileSegDropEnv struct {
+	kindEnv
+	Store  bookfileSegDropStore
+	Writer bookfileSegDropWriter
+}
+
+// bookfileSegDropResult is the native run's result. HEAD stored none.
+type bookfileSegDropResult struct {
+	Total       int  `json:"total"`
+	Rewrite     int  `json:"rewrite"`
+	Skipped     int  `json:"skipped"`
+	Errors      int  `json:"errors"`
+	Conflicts   int  `json:"conflicts"`
+	AlreadyDone bool `json:"already_done,omitempty"`
+}
+
+// headBookfileSegDrop is HEAD's store for the core: the capability the sweep
+// lives on, as both the read store (dry) and the writer (live).
+type headBookfileSegDrop struct{ s BookfileSegDropStore }
+
+func (h headBookfileSegDrop) SweepBookFileSegDropDry(ctx context.Context, batchSize int, progress func(rewrite, total int)) (database.SweepBookFileSegDropResult, error) {
+	return h.s.SweepBookFileSegDrop(ctx, true, batchSize, progress)
+}
+func (h headBookfileSegDrop) SweepBookFileSegDrop(ctx context.Context, batchSize int, progress func(rewrite, total int)) (database.SweepBookFileSegDropResult, error) {
+	return h.s.SweepBookFileSegDrop(ctx, false, batchSize, progress)
+}
+func (h headBookfileSegDrop) GetSetting(key string) (*database.Setting, error) {
+	return h.s.GetSetting(key)
+}
+func (h headBookfileSegDrop) SetSetting(key, value, dataType string, internal bool) error {
+	return h.s.SetSetting(key, value, dataType, internal)
+}
+
+// bookfileSegDropCore is the body of runBookfileSegDrop, shared by both shells.
+func bookfileSegDropCore(ctx context.Context, env bookfileSegDropEnv) (bookfileSegDropResult, error) {
+	env.Logger.Info("bookfile-seg-drop: start", "apply", env.Live)
+
+	// Guard: skip if already completed with apply=true.
+	if env.Live {
+		if done, err := isFlagSetStore(env.Store, bookfileSegDropDoneFlag); err != nil {
+			env.Logger.Warn("bookfile-seg-drop: flag check error (proceeding)", "error", err)
+		} else if done {
+			env.Logger.Info("bookfile-seg-drop: already completed; skipping",
+				"flag", bookfileSegDropDoneFlag)
+			env.Progress(1, 1, "Already completed (flag set); nothing to do.")
+			return bookfileSegDropResult{AlreadyDone: true}, nil
+		}
+	}
+
+	mode := "dry-run"
+	if env.Live {
+		mode = "apply"
+	}
+	env.Progress(0, 2, fmt.Sprintf("Scanning book_file: rows (%s)…", mode))
+
+	progressFn := func(rewrite, total int) {
+		env.Progress(1, 2, fmt.Sprintf(
+			"Sweeping: %d / %d rows rewritten so far…", rewrite, total))
+		env.Logger.Info("bookfile-seg-drop: progress",
+			"rewrite", rewrite, "total", total, "apply", env.Live)
+	}
+
+	var (
+		res database.SweepBookFileSegDropResult
+		err error
+	)
+	if env.Live {
+		res, err = env.Writer.SweepBookFileSegDrop(ctx, bookfileSegDropBatchSize, progressFn)
+	} else {
+		res, err = env.Store.SweepBookFileSegDropDry(ctx, bookfileSegDropBatchSize, progressFn)
+	}
+	if err != nil {
+		return bookfileSegDropResult{}, fmt.Errorf("bookfile-seg-drop: sweep: %w", err)
+	}
+	out := bookfileSegDropResult{Total: res.Total, Rewrite: res.Rewrite, Skipped: res.Skipped, Errors: res.Errors, Conflicts: res.Conflicts}
+
+	env.Logger.Info("bookfile-seg-drop: sweep complete",
+		"total", res.Total,
+		"rewrite", res.Rewrite,
+		"skipped", res.Skipped,
+		"errors", res.Errors,
+		"conflicts", res.Conflicts,
+		"apply", env.Live)
+
+	if !env.Live {
+		summary := fmt.Sprintf(
+			"Dry-run complete — %d of %d rows would be rewritten (%d already clean, %d errors, %d busy). "+
+				"Pass apply=true to execute.",
+			res.Rewrite, res.Total, res.Skipped, res.Errors, res.Conflicts)
+		env.Progress(2, 2, summary)
+		return out, nil
+	}
+
+	// A row the sweep gave up on because other writers kept changing it was left
+	// exactly as stored, with its legacy segment columns. Marking the sweep done
+	// would hide it from every later run, so the flag stays unset and the next
+	// run (which skips already-clean rows) picks those rows up.
+	if res.Conflicts > 0 {
+		env.Logger.Warn("bookfile-seg-drop: not setting done flag: rows kept changing under the sweep",
+			"conflicts", res.Conflicts, "flag", bookfileSegDropDoneFlag)
+	} else if err := env.Writer.SetSetting(bookfileSegDropDoneFlag, "true", "bool", false); err != nil {
+		env.Logger.Warn("bookfile-seg-drop: could not set done flag",
+			"flag", bookfileSegDropDoneFlag, "error", err)
+	} else {
+		env.Logger.Info("bookfile-seg-drop: set done flag", "flag", bookfileSegDropDoneFlag)
+	}
+
+	summary := fmt.Sprintf(
+		"Complete — %d rows rewritten, %d already clean, %d errors, %d left as stored because other writers kept changing them (of %d total rows).",
+		res.Rewrite, res.Skipped, res.Errors, res.Conflicts, res.Total)
+	env.Progress(2, 2, summary)
+	env.Logger.Info("bookfile-seg-drop: complete",
+		"rewrite", res.Rewrite, "skipped", res.Skipped, "errors", res.Errors, "conflicts", res.Conflicts, "total", res.Total)
+	return out, nil
+}
+
+// runBookfileSegDrop is the v2 shell: HEAD's Run (capability resolution, params)
+// over bookfileSegDropCore.
 func (p *Plugin) runBookfileSegDrop(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	// Resolve the narrow interface through any decorator chain — only
 	// *PebbleStore satisfies it, and the registry hands this plugin the server's
@@ -119,81 +261,16 @@ func (p *Plugin) runBookfileSegDrop(ctx context.Context, rawParams json.RawMessa
 		}
 	}
 
-	reporter.Logger().Info("bookfile-seg-drop: start", "apply", params.Apply)
-
-	// Guard: skip if already completed with apply=true.
-	if params.Apply {
-		if done, err := isFlagSetStore(sweepStore, bookfileSegDropDoneFlag); err != nil {
-			reporter.Logger().Warn("bookfile-seg-drop: flag check error (proceeding)", "error", err)
-		} else if done {
-			reporter.Logger().Info("bookfile-seg-drop: already completed; skipping",
-				"flag", bookfileSegDropDoneFlag)
-			_ = reporter.UpdateProgress(1, 1, "Already completed (flag set); nothing to do.")
-			return nil
-		}
-	}
-
-	mode := "dry-run"
-	if params.Apply {
-		mode = "apply"
-	}
-	_ = reporter.UpdateProgress(0, 2, fmt.Sprintf("Scanning book_file: rows (%s)…", mode))
-
-	progressFn := func(rewrite, total int) {
-		_ = reporter.UpdateProgress(1, 2, fmt.Sprintf(
-			"Sweeping: %d / %d rows rewritten so far…", rewrite, total))
-		reporter.Logger().Info("bookfile-seg-drop: progress",
-			"rewrite", rewrite, "total", total, "apply", params.Apply)
-	}
-
-	res, err := sweepStore.SweepBookFileSegDrop(ctx, !params.Apply, bookfileSegDropBatchSize, progressFn)
-	if err != nil {
-		return fmt.Errorf("bookfile-seg-drop: sweep: %w", err)
-	}
-
-	reporter.Logger().Info("bookfile-seg-drop: sweep complete",
-		"total", res.Total,
-		"rewrite", res.Rewrite,
-		"skipped", res.Skipped,
-		"errors", res.Errors,
-		"conflicts", res.Conflicts,
-		"apply", params.Apply)
-
-	if !params.Apply {
-		summary := fmt.Sprintf(
-			"Dry-run complete — %d of %d rows would be rewritten (%d already clean, %d errors, %d busy). "+
-				"Pass apply=true to execute.",
-			res.Rewrite, res.Total, res.Skipped, res.Errors, res.Conflicts)
-		_ = reporter.UpdateProgress(2, 2, summary)
-		return nil
-	}
-
-	// A row the sweep gave up on because other writers kept changing it was left
-	// exactly as stored, with its legacy segment columns. Marking the sweep done
-	// would hide it from every later run, so the flag stays unset and the next
-	// run (which skips already-clean rows) picks those rows up.
-	if res.Conflicts > 0 {
-		reporter.Logger().Warn("bookfile-seg-drop: not setting done flag: rows kept changing under the sweep",
-			"conflicts", res.Conflicts, "flag", bookfileSegDropDoneFlag)
-	} else if err := sweepStore.SetSetting(bookfileSegDropDoneFlag, "true", "bool", false); err != nil {
-		reporter.Logger().Warn("bookfile-seg-drop: could not set done flag",
-			"flag", bookfileSegDropDoneFlag, "error", err)
-	} else {
-		reporter.Logger().Info("bookfile-seg-drop: set done flag", "flag", bookfileSegDropDoneFlag)
-	}
-
-	summary := fmt.Sprintf(
-		"Complete — %d rows rewritten, %d already clean, %d errors, %d left as stored because other writers kept changing them (of %d total rows).",
-		res.Rewrite, res.Skipped, res.Errors, res.Conflicts, res.Total)
-	_ = reporter.UpdateProgress(2, 2, summary)
-	reporter.Logger().Info("bookfile-seg-drop: complete",
-		"rewrite", res.Rewrite, "skipped", res.Skipped, "errors", res.Errors, "conflicts", res.Conflicts, "total", res.Total)
-	return nil
+	h := headBookfileSegDrop{s: sweepStore}
+	_, err := bookfileSegDropCore(ctx, bookfileSegDropEnv{kindEnv: headEnv(reporter, params.Apply), Store: h, Writer: h})
+	return err
 }
 
 // isFlagSetStore checks whether the named Settings key holds "true"
-// using a BookfileSegDropStore (which provides GetSetting).
-func isFlagSetStore(store BookfileSegDropStore, key string) (bool, error) {
+// using any store that provides GetSetting.
+func isFlagSetStore(store interface {
+	GetSetting(key string) (*database.Setting, error)
+}, key string) (bool, error) {
 	setting, err := store.GetSetting(key)
 	if err != nil {
 		return false, err
