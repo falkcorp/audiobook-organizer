@@ -1,5 +1,5 @@
 // file: internal/maintenance/resources/resources_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 7b3c9e52-1d84-4a6f-9c07-e5a2f81d3b46
 // last-edited: 2026-11-19
 
@@ -44,6 +44,7 @@ var rowsPinned = map[string]string{
 	"CreateBookFile":                      "authors book_files books indexes metadata_cache",
 	"CreateNarrator":                      "books",
 	"CreateOperationChange":               "operations",
+	"CreateSeries":                        "series",
 	"DedupTriageApply":                    "embeddings",
 	"DeleteAuthor":                        "authors books indexes metadata_cache",
 	"DeleteBook":                          "books authors field_states embeddings metadata_cache user_state indexes",
