@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/activity_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8e43c7a1-2f95-4b60-a8d3-5c71b9e0f246
 // last-edited: 2026-11-18
 
@@ -92,6 +92,9 @@ func kindReferencesSynthetic(t *testing.T) {
 			"tags": []string{"def:repairs.apply"}}},
 		{"audit", n(12), "01HBAT0012", map[string]any{"type": "repairs.plan", "level": "info", "source": "scanner", "summary": "wrong kind", "operation_id": "01HBATSCAN",
 			"details": map[string]any{"def_id": "repairs.plan"}}},
+		// The same, with nothing but the type to resolve: the held decision must
+		// come from the first lookup, not from a later one hitting the cache.
+		{"audit", n(15), "01HBAT0015", map[string]any{"type": "repairs.apply", "level": "info", "source": "scanner", "summary": "pruned run, type only", "operation_id": "01HBATGONE"}},
 		{"debug", n(5), "01HBAT0005", map[string]any{"type": "operations.backfill-legacy-status", "level": "info", "source": "scanner", "summary": "retired",
 			"details": map[string]any{"def_id": "operations.backfill-legacy-status"}}},
 		{"batch", n(6), "01HBAT0006", map[string]any{"type": "dedup.book-scan", "level": "info", "source": "scanner", "summary": "no details, no tags"}},
@@ -108,6 +111,11 @@ func kindReferencesSynthetic(t *testing.T) {
 			"details": map[string]any{"date": "2026-11-04", "items": []map[string]any{
 				{"type": "repairs.plan", "summary": "p", "tags": []string{"def:repairs.plan", "op:01HBATREPAIRS1"}},
 				{"type": "scan_complete", "summary": "s"},
+			}}}},
+		// A digest item naming two operations has no single run to take its kind from.
+		{"digest", n(16), "01HBAT0016", map[string]any{"type": "daily_digest", "level": "info", "source": "compaction", "summary": "Daily digest",
+			"details": map[string]any{"date": "2026-11-06", "items": []map[string]any{
+				{"type": "repairs.plan", "summary": "two operations", "tags": []string{"def:repairs.plan", "op:01HBATREPAIRS1", "op:01HBATREPAIRS2"}},
 			}}}},
 		{"digest", n(14), "01HBAT0014", map[string]any{"type": "daily_digest", "level": "info", "source": "compaction", "summary": "Daily digest",
 			"details": map[string]any{"date": "2026-11-05", "items": []map[string]any{
@@ -141,8 +149,8 @@ func kindReferencesSynthetic(t *testing.T) {
 	// held is every row that must stay exactly as stored, with its reason: the
 	// repairs rows no run can name a fixer for, and the digest holding such an item.
 	held := map[string]bool{}
-	for _, i := range []int{10, 11, 12, 14} {
-		held[act{tier: map[bool]string{true: "digest", false: "audit"}[i == 14], nanos: n(i), ulid: fmt.Sprintf("01HBAT%04d", i)}.key()] = true
+	for _, i := range []int{10, 11, 12, 14, 15, 16} {
+		held[act{tier: map[bool]string{true: "digest", false: "audit"}[i == 14 || i == 16], nanos: n(i), ulid: fmt.Sprintf("01HBAT%04d", i)}.key()] = true
 	}
 
 	kind := map[string]string{"dedup.book-scan": "books.dedup.book-scan", "maintenance.itunes-heal": "books.itunes.heal", "operations.backfill-legacy-status": "books.retired.operations.backfill-legacy-status"}
@@ -274,9 +282,9 @@ func kindReferencesSynthetic(t *testing.T) {
 			t.Errorf("%s = %q, want the held row untouched (%q)", k, s.Act[k], before[k])
 		}
 	}
-	// Two rows that do not decode and four repairs rows no run names a fixer for.
-	if s.Verify.Held != 6 || len(s.Quarantine) != 0 {
-		t.Errorf("held %d, quarantined %d; want 6 held, none quarantined: %+v", s.Verify.Held, len(s.Quarantine), s.Verify)
+	// Two rows that do not decode and six repairs rows no run names a fixer for.
+	if s.Verify.Held != 8 || len(s.Quarantine) != 0 {
+		t.Errorf("held %d, quarantined %d; want 8 held, none quarantined: %+v", s.Verify.Held, len(s.Quarantine), s.Verify)
 	}
 	// No HEAD def ID is left in a def:, type or def_id position of any feed row.
 	for k, v := range s.Act {
