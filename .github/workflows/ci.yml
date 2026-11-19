@@ -669,6 +669,11 @@ jobs:
           restore-keys: |
             apt-debs-repo-guards-${{ hashFiles('scripts/ci/apt_cached_install.sh', 'scripts/ci/apt_install.sh', 'scripts/ci/apt_watchdog.py') }}-${{ steps.aptkey.outputs.suffix }}-
 
+      - name: PROOF show apt sources before install
+        run: |
+          cat /etc/apt/sources.list.d/ubuntu.sources | grep -v '^#'
+          cat /etc/apt/apt-mirrors.txt
+
       - name: Install system packages (libtag1-dev, ffmpeg)
         # Miss path: apt_install.sh rotates mirrors and kills a trickling
         # download on a throughput floor, so a slow mirror costs tens of
@@ -678,10 +683,15 @@ jobs:
         timeout-minutes: 15
         env:
           APT_INSTALL_CALL_TIMEOUT: "120"
+          APT_INSTALL_TEST_DL_LIMIT_KIB: "100" # THROWAWAY PROOF ONLY
           APT_PKGS: ${{ steps.aptkey.outputs.pkgs }}
         run: |
           read -ra pkgs <<<"$APT_PKGS"
           scripts/ci/apt_cached_install.sh "$HOME/apt-debs-repo-guards" "${pkgs[@]}"
+
+      - name: PROOF show apt sources after install
+        if: always()
+        run: grep -v '^#' /etc/apt/sources.list.d/ubuntu.sources
 
       - name: Save apt packages cache (repo-guards)
         if: steps.aptkey.outputs.image != '' && steps.aptcache.outputs.cache-hit != 'true'
