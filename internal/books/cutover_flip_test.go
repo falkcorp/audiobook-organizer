@@ -1,5 +1,5 @@
 // file: internal/books/cutover_flip_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b94e07d2-6a1c-4c35-8d7f-2e0a5f3c9b18
 // last-edited: 2026-11-19
 
@@ -106,12 +106,21 @@ func TestManifest_FlipDeclaresM2M7M8(t *testing.T) {
 	}
 }
 
+// nextBooksVersion is the version the next versioned books step must take: one
+// above the last of the R1 steps. It lives in the tests, not in the store
+// package, because nothing in production needs it: the level step's version is
+// pinned (booksLevelStepVersion) and these tests check the pin against it.
+func nextBooksVersion() int {
+	ms := database.BooksSpec(nil).Migrations
+	return ms[len(ms)-1].Version + 1
+}
+
 // TestManifest_FlipPinsBooksNextVersion: the level step's pinned version is
 // books' next contiguous one. A versioned step added ahead of the level step
-// moves database.NextMigrationVersion and fails here before it renumbers a step
+// moves nextBooksVersion and fails here before it renumbers a step
 // that may already have run.
 func TestManifest_FlipPinsBooksNextVersion(t *testing.T) {
-	if got := database.NextMigrationVersion(); got != booksLevelStepVersion {
+	if got := nextBooksVersion(); got != booksLevelStepVersion {
 		t.Fatalf("books' next contiguous version is %d but books.level-1 is pinned at %d", got, booksLevelStepVersion)
 	}
 }

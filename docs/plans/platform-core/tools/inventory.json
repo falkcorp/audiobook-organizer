@@ -1994,7 +1994,6 @@
    "core/module/settings.go",
    "internal/books/cutover.go",
    "internal/books/cutover_flip_test.go",
-   "internal/books/store/booksspec.go",
    "internal/books/cutover/cutoverlist.go",
    "internal/books/cutover/rename_table.go",
    "core/kernel/core_level.go",

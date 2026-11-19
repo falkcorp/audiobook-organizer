@@ -1,5 +1,5 @@
 // file: internal/books/cutover.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5a82d1c7-3e94-4f60-b7a8-0c19e6d4f253
 // last-edited: 2026-11-19
 
@@ -52,7 +52,7 @@ func flipConfigNames(declared bool) (retired []coreconfig.RetiredName, bindings 
 
 // booksLevelStepVersion is the version books.level-1 takes: books' next
 // contiguous one, pinned. The cutover-list cell fails when
-// database.NextMigrationVersion drifts from it, which is a versioned step added
+// nextBooksVersion (the tests' count of the R1 steps) drifts from it, which is a versioned step added
 // ahead of the level step that has already shipped.
 const booksLevelStepVersion = database.LegacyCap + 3
 
