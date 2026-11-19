@@ -1,7 +1,7 @@
 // file: core/log/logtest/journal.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5d7c1e94-0b3a-4e68-a2f7-9c4b8d6e1a30
-// last-edited: 2026-11-13
+// last-edited: 2026-11-18
 
 // Package logtest is the test kit for implementations of package log's journal
 // interfaces: JournalStoreSuite, the contract of log.JournalStore and its
@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +36,7 @@ const (
 	CaseNewestFirst       = "newest_first_equal_time_reverse_append"
 	CaseFilters           = "filters"
 	CaseCursor            = "cursor_pages_without_gap_or_repeat"
+	CaseHide              = "hide_is_as_if_the_record_were_absent"
 	CaseCursorWithFilter  = "cursor_with_filter"
 	CasePrune             = "prune_bounded_oldest_first"
 	CasePruneBoundary     = "prune_before_is_exclusive"
@@ -59,6 +61,10 @@ const (
 //     exclusive (each judged on the record's own Time, to the microsecond, not
 //     on a rounded one), MinLevel and Module and Text filter, and a cursor pages the
 //     result without a gap or a repeat, filtered or not;
+//   - JournalQuery.Hide makes a record as good as absent: pages stay full,
+//     Next names only records that are served (a query that matches only hidden
+//     records answers an empty page and an empty Next, exactly as one that
+//     matches nothing), and a long run of hidden records is skipped, not paged;
 //   - Prune deletes at most limit records older than before (exclusive),
 //     oldest first, and reports whether older ones remain;
 //   - Import writes each record once however often it is repeated: importing
@@ -110,6 +116,7 @@ func runSuite(tt tester, open func(tester) Subject) {
 		{CaseFilters, caseFilters},
 		{CaseCursor, caseCursor},
 		{CaseCursorWithFilter, caseCursorWithFilter},
+		{CaseHide, caseHide},
 		{CasePrune, casePrune},
 		{CasePruneBoundary, casePruneBoundary},
 		{CaseSinceUntilInMs, caseSinceUntilInMs},
@@ -428,6 +435,108 @@ func caseCursorWithFilter(tt tester, ctx context.Context, s Subject) {
 	q.Limit = 3
 	wantMessages(tt, "text r1 paged by 3", drain(tt, ctx, s.Store, q),
 		newestFirst(in, func(r log.Record) bool { return strings.Contains(r.Message, "r1") })...)
+}
+
+// caseHide: of pageSet's r00 to r24 the even ones are hidden, so 12 odd records
+// are served.
+func caseHide(tt tester, ctx context.Context, s Subject) {
+	tt.Helper()
+	in := pageSet()
+	if err := s.Store.Append(ctx, in); err != nil {
+		tt.Errorf("Append: %v", err)
+		return
+	}
+	hideEven := func(r log.Record) bool {
+		n, err := strconv.Atoi(strings.TrimPrefix(r.Message, "r"))
+		return err == nil && n%2 == 0
+	}
+	served := newestFirst(in, func(r log.Record) bool { return !hideEven(r) })
+
+	// Pages are full and join to exactly the served records.
+	q := all()
+	q.Hide = hideEven
+	q.Limit = 5
+	var sizes []int
+	var got []string
+	for range 10 {
+		p, err := s.Store.Query(ctx, q)
+		if err != nil {
+			tt.Errorf("Query: %v", err)
+			return
+		}
+		sizes = append(sizes, len(p.Records))
+		got = append(got, messages(p.Records)...)
+		if p.Next == "" {
+			break
+		}
+		q.Cursor = p.Next
+	}
+	if !sameStrings(got, served) {
+		tt.Errorf("hidden run paged by 5: got %q, want %q", got, served)
+	}
+	if len(sizes) != 3 || sizes[0] != 5 || sizes[1] != 5 || sizes[2] != 2 {
+		tt.Errorf("page sizes = %v, want [5 5 2]: a hidden record took a slot", sizes)
+	}
+
+	// With limit 1 every page serves one record, and the last Next is empty
+	// even though hidden records match the filter beyond it (r00 is hidden and
+	// older than r01).
+	q = all()
+	q.Hide = hideEven
+	q.Text = "r0"
+	q.Limit = 1
+	var one []string
+	for range 12 {
+		p, err := s.Store.Query(ctx, q)
+		if err != nil {
+			tt.Errorf("Query: %v", err)
+			return
+		}
+		if len(p.Records) != 1 {
+			tt.Errorf("limit 1, text r0: a page of %d records (next %q), want 1: a hidden record leaked as an empty page", len(p.Records), p.Next)
+			return
+		}
+		one = append(one, p.Records[0].Message)
+		if p.Next == "" {
+			break
+		}
+		q.Cursor = p.Next
+	}
+	if !sameStrings(one, []string{"r09", "r07", "r05", "r03", "r01"}) {
+		tt.Errorf("limit 1, text r0: got %q, want r09 r07 r05 r03 r01 and then no next", one)
+	}
+
+	// A query that matches only hidden records is the empty page, with no Next,
+	// exactly like one that matches nothing.
+	hidden, err1 := s.Store.Query(ctx, log.JournalQuery{MinLevel: log.LevelTrace, Limit: 1, Text: "r00", Hide: func(log.Record) bool { return true }})
+	none, err2 := s.Store.Query(ctx, log.JournalQuery{MinLevel: log.LevelTrace, Limit: 1, Text: "no such line"})
+	if err1 != nil || err2 != nil || len(hidden.Records) != 0 || hidden.Next != "" || len(none.Records) != 0 || none.Next != "" {
+		tt.Errorf("only-hidden vs no match: %d records next %q (%v) vs %d records next %q (%v), want both empty and no next",
+			len(hidden.Records), hidden.Next, err1, len(none.Records), none.Next, err2)
+	}
+
+	// A long run of hidden records: 300 hidden, then one served, then more
+	// hidden; limit 1 serves the one record and ends.
+	var run []log.Record
+	for i := range 300 {
+		run = append(run, rec(time.Hour+time.Duration(i)*time.Millisecond*10, log.LevelInfo, "core", "", fmt.Sprintf("secret %03d", i)))
+	}
+	run = append(run, rec(time.Hour-time.Minute, log.LevelInfo, "core", "", "plain line"))
+	run = append(run, rec(time.Hour-2*time.Minute, log.LevelInfo, "core", "", "secret old"))
+	if err := s.Store.Append(ctx, run); err != nil {
+		tt.Errorf("Append: %v", err)
+		return
+	}
+	p, err := s.Store.Query(ctx, log.JournalQuery{MinLevel: log.LevelTrace, Limit: 1, Text: "line", Hide: func(r log.Record) bool { return strings.HasPrefix(r.Message, "secret") }})
+	if err != nil || len(p.Records) != 1 || p.Records[0].Message != "plain line" || p.Next != "" {
+		tt.Errorf("one served line among hidden ones: %v records, next %q, err %v; want [plain line] and no next", messages(p.Records), p.Next, err)
+	}
+	p, err = s.Store.Query(ctx, log.JournalQuery{MinLevel: log.LevelTrace, Limit: 1, Hide: func(r log.Record) bool {
+		return strings.HasPrefix(r.Message, "secret") || strings.HasPrefix(r.Message, "r")
+	}})
+	if err != nil || len(p.Records) != 1 || p.Records[0].Message != "plain line" || p.Next != "" {
+		tt.Errorf("a run of 300 hidden records ahead of the served one: %v records, next %q, err %v; want [plain line] and no next", messages(p.Records), p.Next, err)
+	}
 }
 
 func casePrune(tt tester, ctx context.Context, s Subject) {

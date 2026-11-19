@@ -1,7 +1,7 @@
 // file: core/log/journal.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f0b6d9e-52c1-4a8e-9b47-6c1e0d2a7f58
-// last-edited: 2026-11-13
+// last-edited: 2026-11-18
 
 package log
 
@@ -57,6 +57,15 @@ type JournalQuery struct {
 	Text         string    // case-insensitive substring of the message
 	Cursor       string    // opaque, from JournalPage.Next
 	Limit        int       // capped by the query route
+	// Hide, when non-nil, is asked about every record that passes the filters
+	// above, and a record it reports true for is skipped as if the journal did
+	// not hold it: it counts toward neither Limit nor the cursor, so a page
+	// stays full and Next never names a hidden record. A route that must not
+	// show a caller some records (the other-user rule, 05-logging §5) filters
+	// here, never after the query, where the page length and Next would still
+	// betray what was dropped. It must be pure, fast and safe for the store to
+	// call from the goroutine running Query; the zero value hides nothing.
+	Hide func(Record) bool
 }
 
 // JournalPage is one page of a query's result.

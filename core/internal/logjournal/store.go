@@ -1,7 +1,7 @@
 // file: core/internal/logjournal/store.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e41b7d08-6a52-4c93-8f1d-3b9a0c5e2d76
-// last-edited: 2026-11-13
+// last-edited: 2026-11-18
 
 // Package logjournal is core's native system-log journal (05-logging §5): the
 // one implementation of log.JournalStore and log.Importer, the batching tap
@@ -307,7 +307,12 @@ func (s *Store) Query(ctx context.Context, q log.JournalQuery) (log.JournalPage,
 		if !q.Until.IsZero() && !r.Time.Before(q.Until) {
 			return false
 		}
-		return text == "" || strings.Contains(strings.ToLower(r.Message), text)
+		if text != "" && !strings.Contains(strings.ToLower(r.Message), text) {
+			return false
+		}
+		// Last, so the predicate runs only on records the filters keep. A hidden
+		// record is as good as absent: not counted toward limit, never a cursor.
+		return q.Hide == nil || !q.Hide(r)
 	}
 
 	var page log.JournalPage

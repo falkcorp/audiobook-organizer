@@ -1,5 +1,5 @@
 // file: core/internal/loghttp/env_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 86a49c71-ec1f-4b7c-8b6a-18524058a32b
 // last-edited: 2026-11-18
 
@@ -106,8 +106,8 @@ func mustCall(t testing.TB, a *api, p *auth.Principal, req queryRequest) pageVie
 }
 
 func messages(v pageView) []string {
-	out := make([]string, len(v.Records))
-	for i, r := range v.Records {
+	out := make([]string, len(v.Items))
+	for i, r := range v.Items {
 		out[i] = r.Message
 	}
 	return out
@@ -136,6 +136,11 @@ func (f *fakeJournal) queries() []log.JournalQuery {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.calls)
+}
+
+// paged is the cursor and limit params of a request.
+func paged(limit int, cursor string) httpapi.CursorParams {
+	return httpapi.CursorParams{Limit: limit, Cursor: cursor}
 }
 
 func newAPI(j log.JournalStore, pred log.OtherUserPredicate) *api {

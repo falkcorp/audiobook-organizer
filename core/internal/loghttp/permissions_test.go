@@ -1,5 +1,5 @@
 // file: core/internal/loghttp/permissions_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: fcea5e18-897d-4f58-8688-b96d12f281ea
 // last-edited: 2026-11-18
 
@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/httpapi"
@@ -53,7 +54,7 @@ func TestJournal_RequiresSystemManage(t *testing.T) {
 		if !slices.Equal(messages(v), []string{"alarm"}) {
 			t.Errorf("records = %v", messages(v))
 		}
-		if r := v.Records[0]; r.Level != "warn" || r.Module != "core" || !r.Time.Equal(at(0)) || r.Attrs == nil {
+		if r := v.Items[0]; r.Level != "warn" || r.Module != "core" || !r.Time.Equal(at(0)) || r.Attrs == nil {
 			t.Errorf("record on the wire = %+v, want level warn (lower case), module core, its time, a non-nil attrs", r)
 		}
 	})
@@ -112,7 +113,7 @@ func seedUserLines(t testing.TB, st *logjournal.Store) {
 
 func byMessage(v pageView) map[string]recordView {
 	m := map[string]recordView{}
-	for _, r := range v.Records {
+	for _, r := range v.Items {
 		m[r.Message] = r
 	}
 	return m
@@ -135,8 +136,8 @@ func TestJournal_OtherUsersLinesNeedUsersView(t *testing.T) {
 				t.Errorf("%q (flagged) was served", flagged)
 			}
 		}
-		if len(v.Records) != 4 {
-			t.Fatalf("%d records %v, want 4", len(v.Records), messages(v))
+		if len(v.Items) != 4 {
+			t.Fatalf("%d records %v, want 4", len(v.Items), messages(v))
 		}
 		for msg, key := range map[string]string{"imported scan done": "user_id", "scan finished": "user_id", "grouped attribute": "ctx.user_id"} {
 			val, ok := got[msg].Attrs[key]
@@ -154,13 +155,13 @@ func TestJournal_OtherUsersLinesNeedUsersView(t *testing.T) {
 
 	t.Run("with_users_view", func(t *testing.T) {
 		v := mustCall(t, a, principal("u-bruce", permManage, permUsers), queryRequest{})
-		if len(v.Records) != 6 {
-			t.Fatalf("%d records %v, want all 6", len(v.Records), messages(v))
+		if len(v.Items) != 6 {
+			t.Fatalf("%d records %v, want all 6", len(v.Items), messages(v))
 		}
 		got := byMessage(v)
 		if got["imported scan done"].Attrs["user_id"] != "u-dick" || got["scan finished"].Attrs["user_id"] != "u-bruce" ||
 			got["grouped attribute"].Attrs["ctx.user_id"] != "u-alfred" || got["selina's password was reset"].Attrs["user_id"] != "u-selina" {
-			t.Errorf("user_id changed for a viewer holding users.view: %+v", v.Records)
+			t.Errorf("user_id changed for a viewer holding users.view: %+v", v.Items)
 		}
 	})
 
@@ -174,10 +175,10 @@ func TestJournal_OtherUsersLinesNeedUsersView(t *testing.T) {
 
 	t.Run("no_predicate_registered_blanks_without_omitting", func(t *testing.T) {
 		v := mustCall(t, newAPI(st, nil), principal("u-bruce", permManage), queryRequest{})
-		if len(v.Records) != 6 {
-			t.Fatalf("%d records, want 6 (nothing to flag)", len(v.Records))
+		if len(v.Items) != 6 {
+			t.Fatalf("%d records, want 6 (nothing to flag)", len(v.Items))
 		}
-		for _, r := range v.Records {
+		for _, r := range v.Items {
 			for k, val := range r.Attrs {
 				if (k == "user_id" || strings.HasSuffix(k, ".user_id")) && val != "" {
 					t.Errorf("%q: %s = %q not blanked", r.Message, k, val)
@@ -196,6 +197,120 @@ func TestJournal_OtherUsersLinesNeedUsersView(t *testing.T) {
 			if r.Message == "scan finished" && r.Attrs[0].Value.String() != "u-bruce" {
 				t.Errorf("blanking wrote through to the store: %v", r.Attrs)
 			}
+		}
+	})
+}
+
+// walk pages through the route with limit, following next_cursor, and returns
+// each page's messages and cursor, so two walks can be compared page by page.
+func walk(t testing.TB, a *api, p *auth.Principal, req queryRequest, limit int) (pages [][]string, cursors []string) {
+	t.Helper()
+	cursor := ""
+	for range 400 {
+		req.CursorParams = paged(limit, cursor)
+		v := mustCall(t, a, p, req)
+		pages = append(pages, messages(v))
+		cursors = append(cursors, v.NextCursor)
+		if v.NextCursor == "" {
+			return pages, cursors
+		}
+		cursor = v.NextCursor
+	}
+	t.Fatal("a walk did not end in 400 pages")
+	return nil, nil
+}
+
+// TestJournal_HiddenRecordsLeaveNoTrace (the other-user rule, 05-logging §5):
+// the caller who may not read another user's lines cannot tell from a page, its
+// length or its next_cursor that one exists. Each case is the reviewer's trace
+// on the fixture of seedUserLines.
+func TestJournal_HiddenRecordsLeaveNoTrace(t *testing.T) {
+	st := openJournal(t)
+	seedUserLines(t, st)
+	a := newAPI(st, namesSelina)
+	bruce := principal("u-bruce", permManage)
+
+	t.Run("a_query_matching_only_hidden_lines_is_a_query_matching_nothing", func(t *testing.T) {
+		hidden := mustCall(t, a, bruce, queryRequest{Q: "selina", CursorParams: paged(1, "")})
+		none := mustCall(t, a, bruce, queryRequest{Q: "no such line", CursorParams: paged(1, "")})
+		if len(hidden.Items) != 0 || hidden.NextCursor != "" {
+			t.Errorf("q=selina&limit=1: %d items, next_cursor %q; want none and no cursor", len(hidden.Items), hidden.NextCursor)
+		}
+		if len(none.Items) != 0 || none.NextCursor != "" {
+			t.Fatalf("a query matching nothing: %d items, next_cursor %q", len(none.Items), none.NextCursor)
+		}
+	})
+
+	t.Run("a_trailing_hidden_match_does_not_set_next_cursor", func(t *testing.T) {
+		// "user selina renamed" also matches q=user and is the oldest match.
+		v := mustCall(t, a, bruce, queryRequest{Q: "user", CursorParams: paged(1, "")})
+		if !slices.Equal(messages(v), []string{"no user at all"}) || v.NextCursor != "" {
+			t.Errorf("q=user&limit=1: %v next_cursor %q; want [no user at all] and no cursor", messages(v), v.NextCursor)
+		}
+	})
+
+	t.Run("a_walk_with_hidden_lines_equals_a_walk_without_them", func(t *testing.T) {
+		clean := openJournal(t)
+		seedUserLines(t, clean)
+		// The same journal minus the two lines the predicate flags.
+		visibleOnly := openJournal(t)
+		all, err := clean.Query(context.Background(), log.JournalQuery{MinLevel: log.LevelTrace, Limit: 1000})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range slices.Backward(all.Records) {
+			if !namesSelina(r, "u-bruce") {
+				if err := visibleOnly.Append(context.Background(), []log.Record{r}); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		for _, limit := range []int{1, 2, 3} {
+			withP, withC := walk(t, a, bruce, queryRequest{}, limit)
+			wo, woC := walk(t, newAPI(visibleOnly, namesSelina), bruce, queryRequest{}, limit)
+			if !slices.EqualFunc(withP, wo, slices.Equal[[]string]) {
+				t.Errorf("limit %d: pages differ with the hidden lines present:\n%v\n%v", limit, withP, wo)
+			}
+			if len(withC) != len(woC) || (len(withC) > 0 && (withC[len(withC)-1] != "" || woC[len(woC)-1] != "")) {
+				t.Errorf("limit %d: cursors %v vs %v", limit, withC, woC)
+			}
+		}
+	})
+
+	t.Run("a_full_page_holds_served_lines_only", func(t *testing.T) {
+		// Newest first: no user at all, grouped attribute, scan finished, (hidden),
+		// imported scan done, (hidden). limit 3 is three served lines.
+		v := mustCall(t, a, bruce, queryRequest{CursorParams: paged(3, "")})
+		if !slices.Equal(messages(v), []string{"no user at all", "grouped attribute", "scan finished"}) {
+			t.Fatalf("page = %v", messages(v))
+		}
+		next := mustCall(t, a, bruce, queryRequest{CursorParams: paged(3, v.NextCursor)})
+		if !slices.Equal(messages(next), []string{"imported scan done"}) || next.NextCursor != "" {
+			t.Errorf("second page = %v next_cursor %q, want [imported scan done] and no cursor", messages(next), next.NextCursor)
+		}
+	})
+
+	t.Run("a_long_run_of_hidden_lines_is_skipped", func(t *testing.T) {
+		long := openJournal(t)
+		var in []log.Record
+		in = append(in, log.Record{Time: at(0), Level: log.LevelInfo, Module: "core", Message: "the one served line"})
+		for i := range 2500 {
+			in = append(in, log.Record{Time: at(time.Duration(i+1) * time.Second), Level: log.LevelInfo, Module: "core",
+				Message: "selina signed in"})
+		}
+		if err := long.Append(context.Background(), in); err != nil {
+			t.Fatal(err)
+		}
+		v := mustCall(t, newAPI(long, namesSelina), bruce, queryRequest{CursorParams: paged(1, "")})
+		if !slices.Equal(messages(v), []string{"the one served line"}) || v.NextCursor != "" {
+			t.Errorf("one served line behind 2500 hidden: %v next_cursor %q", messages(v), v.NextCursor)
+		}
+	})
+
+	t.Run("users_view_sees_everything_and_the_cursor_names_real_lines", func(t *testing.T) {
+		v := mustCall(t, a, principal("u-bruce", permManage, permUsers), queryRequest{Q: "selina", CursorParams: paged(1, "")})
+		if len(v.Items) != 1 || v.NextCursor == "" {
+			t.Errorf("with users.view: %d items next_cursor %q, want 1 and a cursor", len(v.Items), v.NextCursor)
 		}
 	})
 }

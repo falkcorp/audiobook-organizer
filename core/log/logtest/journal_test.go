@@ -1,7 +1,7 @@
 // file: core/log/logtest/journal_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c4e9a7d2-6f18-4b53-8e0a-2d5b7c9f1e64
-// last-edited: 2026-11-13
+// last-edited: 2026-11-18
 
 package logtest
 
@@ -62,6 +62,8 @@ const (
 	bugTimeToMillis     refBug = "time-truncated-to-millis"
 	bugNextAlwaysSet    refBug = "next-set-on-last-page"
 	bugFilterAfterLimit refBug = "filter-applied-after-limit"
+	bugHideIgnored      refBug = "hide-ignored"
+	bugHideTakesSlot    refBug = "hidden-record-takes-a-slot-and-names-the-cursor"
 )
 
 func (s *refStore) ctxErr(ctx context.Context) error {
@@ -222,6 +224,7 @@ func (s *refStore) Query(ctx context.Context, q log.JournalQuery) (log.JournalPa
 	var page log.JournalPage
 	var lastKey string
 	scanned := 0
+	hiddenTaken := 0
 	for i, it := range ord {
 		if q.Cursor != "" {
 			if s.bug == bugCursorRepeats {
@@ -239,15 +242,23 @@ func (s *refStore) Query(ctx context.Context, q log.JournalQuery) (log.JournalPa
 		if !match(it.rec) {
 			continue
 		}
-		if len(page.Records) == limit {
+		hid := s.bug != bugHideIgnored && q.Hide != nil && q.Hide(it.rec)
+		if hid && s.bug != bugHideTakesSlot {
+			continue
+		}
+		if len(page.Records)+hiddenTaken == limit {
 			page.Next = lastKey
 			if s.bug == bugCursorSkips && i+1 < len(ord) {
 				page.Next = ord[i].key
 			}
 			return page, nil
 		}
-		page.Records = append(page.Records, it.rec)
 		lastKey = it.key
+		if hid { // only the bug: a hidden record fills a slot without being served
+			hiddenTaken++
+			continue
+		}
+		page.Records = append(page.Records, it.rec)
 	}
 	if s.bug == bugNextAlwaysSet && len(page.Records) > 0 && len(page.Records) == limit {
 		page.Next = lastKey
@@ -378,6 +389,8 @@ func TestJournalStoreSuite_CatchesEachBrokenStore(t *testing.T) {
 		{bugTimeToMillis, CaseRoundTrip},
 		{bugNextAlwaysSet, CaseCursor},
 		{bugFilterAfterLimit, CaseCursorWithFilter},
+		{bugHideIgnored, CaseHide},
+		{bugHideTakesSlot, CaseHide},
 	}
 	for _, c := range cases {
 		t.Run(string(c.bug)+"/"+c.want, func(t *testing.T) {
@@ -394,8 +407,8 @@ func TestJournalStoreSuite_CatchesEachBrokenStore(t *testing.T) {
 func TestJournalStoreSuite_NeedsStoreAndImporter(t *testing.T) {
 	r := newRecorder()
 	runSuite(r, func(tester) Subject { return Subject{Store: &refStore{}} })
-	if got := failedCases(*r.fails); len(got) != 15 {
-		t.Fatalf("a Subject without an Importer failed %d cases, want all 15: %v", len(got), *r.fails)
+	if got := failedCases(*r.fails); len(got) != 16 {
+		t.Fatalf("a Subject without an Importer failed %d cases, want all 16: %v", len(got), *r.fails)
 	}
 }
 
