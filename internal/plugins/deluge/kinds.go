@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/kinds.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 907863ad-572b-4999-a2fe-90db4ad476a6
 // last-edited: 2026-11-19
 
@@ -38,9 +38,6 @@ import (
 // kindEnv.
 
 const (
-	// kindPrefix is rule R3: tasks.Kind("books." + <HEAD def ID>).
-	kindPrefix = "books."
-
 	// signalMemDB is the readiness component every kind waits for (HEAD's
 	// NoWarmupWait false).
 	signalMemDB tasks.ReadySignal = "books.memdb"

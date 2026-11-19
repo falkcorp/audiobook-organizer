@@ -26,5 +26,5 @@ func linkRunOptions(workers int, total int, tally *linkTally) registry.RunItemsO
 	}
 }
 
-// kindFor is the kind name rule R3 gives a HEAD def ID.
-func kindFor(headID string) tasks.Kind { return tasks.Kind(kindPrefix + headID) }
+// kindFor is the kind name rule R3 gives a HEAD def ID: "books." + the ID.
+func kindFor(headID string) tasks.Kind { return tasks.Kind("books." + headID) }
