@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_relink_locks_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0c4f8a36-b2d9-4e71-8a05-7d3e9b1f6c42
 // last-edited: 2026-11-18
 
@@ -50,6 +50,76 @@ func TestAuthorStripMerge_RelinkUserLockedAuthorIsLeftAlone(t *testing.T) {
 	require.Equal(t, []int{300}, credits(calls, "bk-s"), "control: the unlocked book was not relinked")
 	require.NotContains(t, calls.deleted, 100, "the junk row was deleted although a locked book still credits it")
 	wantSummary(t, summary, "relink-skipped-user-locked=1 ", "relinked=1 ", "relink-failed=0 ")
+}
+
+// The same op then deletes the junk row, and a book that still credits it is
+// unlinked first. A locked book that has another author beside the junk row is
+// not "held as a sole credit": without its own lock check the unlink would
+// rewrite its credits and promote its primary (the AuthorID column the lock
+// covers). It is held like a sole-credit book is: untouched, and the row kept.
+func TestAuthorStripMerge_UnlinkLeavesAUserLockedBookWithACoAuthorAlone(t *testing.T) {
+	f := lockedRelinkFixture()
+	f.extra = []database.Author{{ID: 400, Name: "Harley Quinn"}}
+	f.coCredits = map[string][]database.BookAuthor{
+		"bk-t": {{BookID: "bk-t", AuthorID: 400, Role: "author", Position: 1}},
+	}
+	f.locked = map[string]bool{"bk-t": true}
+	calls, summary := f.run(t, relinkAllParams)
+
+	requireBookUntouched(t, f, calls, "bk-t")
+	require.NotContains(t, calls.deleted, 100, "the junk row was deleted although a locked book still credits it")
+	wantSummary(t, summary, "relink-skipped-user-locked=1 ", "books-held-user-locked=1 ", "rows-held-user-locked=1 ", "failed=0 ")
+}
+
+const deleteOnlyParams = `{"apply":true,"delete_title_as_author":true}`
+
+// deleteOnlyCoAuthorFixture is the same shape with the relink off, so the delete
+// reaches the unlink itself: bk-t credits the junk row beside a real co-author.
+func deleteOnlyCoAuthorFixture() *relinkFixture {
+	f := newRelinkFixture()
+	f.extra = []database.Author{{ID: 400, Name: "Harley Quinn"}}
+	f.coCredits = map[string][]database.BookAuthor{
+		"bk-t": {{BookID: "bk-t", AuthorID: 400, Role: "author", Position: 1}},
+	}
+	return f
+}
+
+// Control for the two tests below: with no lock the unlink rewrites the credits
+// and the row is deleted, so they are exercising a path that does run.
+func TestAuthorStripMerge_UnlinkUnlockedCoAuthorBookIsUnlinkedAndRowDeleted(t *testing.T) {
+	f := deleteOnlyCoAuthorFixture()
+	calls, _ := f.run(t, deleteOnlyParams)
+
+	require.Equal(t, []int{400}, credits(calls, "bk-t"), "control: the junk credit was not removed")
+	require.Contains(t, calls.deleted, 100, "control: the junk row was not deleted")
+}
+
+// An unreadable lock set stops the unlink before it writes or deletes anything.
+func TestAuthorStripMerge_UnlinkUnreadableLocksWriteNothingAndKeepTheRow(t *testing.T) {
+	f := deleteOnlyCoAuthorFixture()
+	f.lockErr = map[string]error{"bk-t": errors.New("field-state store unavailable")}
+	calls, summary := f.run(t, deleteOnlyParams)
+
+	requireBookUntouched(t, f, calls, "bk-t")
+	require.NotContains(t, calls.deleted, 100, "the junk row was deleted although a lock read failed")
+	wantSummary(t, summary, "failed=1 ")
+}
+
+// A lock the user saves after the unlink's check but before its primary-author
+// write puts the credits back: the book credits the junk row and the survivor as
+// it did, the primary is unchanged, the row stays.
+func TestAuthorStripMerge_UnlinkLockSavedBeforePrimaryWriteRestoresTheCredits(t *testing.T) {
+	f := deleteOnlyCoAuthorFixture()
+	// Reads: the unlink's check is the first, the helper's own is the second.
+	f.lockFlipAt = map[string]int{"bk-t": 2}
+	calls, summary := f.run(t, deleteOnlyParams)
+
+	got := credits(calls, "bk-t")
+	require.True(t, containsInt(got, 100) && containsInt(got, 400) && len(got) == 2, "the credits were not restored: %v", got)
+	_, rewritten := calls.updated["bk-t"]
+	require.False(t, rewritten, "the primary author was rewritten although the book was locked mid-write")
+	require.NotContains(t, calls.deleted, 100, "the junk row was deleted although the book was locked mid-write")
+	wantSummary(t, summary, "books-held-user-locked=1 ", "rows-held-user-locked=1 ", "deleted=0 ", "failed=0 ")
 }
 
 // A lock set that cannot be read fails the book: nothing is written for it.
