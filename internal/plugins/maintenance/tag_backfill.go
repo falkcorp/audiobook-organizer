@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_backfill.go
-// version: 2.9.2
+// version: 2.10.0
 // guid: 1f6b3d28-9a47-4c50-8e21-7b0c4a9d6e35
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 // Package maintenance — op maintenance.tag-backfill.
 //
@@ -42,9 +42,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/library"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // tagBackfillWriteBatchSize is the row count at which pending rows are flushed
@@ -188,19 +188,26 @@ func judgeTagPositions(bookID string, full []database.BookFile, readings map[str
 	return metadata.JudgeTagPositions(keys, placements)
 }
 
+// tagBackfillHelp is the def's Description, which the native kind carries as its
+// Help.
+const tagBackfillHelp = "Reads each BookFile's audio tags and backfills the lossless RawTags map (and an " +
+	"empty title) for rows imported before lossless capture. Tag track/disc numbers replace the " +
+	"stored ones only when they are distinct across every file of the book and either every file " +
+	"or no file carries a disc number, and then for every file of that book. Files missing on " +
+	"disk are skipped. Default dry-run previews counts; set " +
+	"dryRun=false to apply."
+
+// tagBackfillKind is rule R3's kind for the def below.
+const tagBackfillKind = tasks.Kind("books.maintenance.tag-backfill")
+
 func (p *Plugin) tagBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "maintenance.tag-backfill",
-		Preview:     sdk.PreviewSpec{Params: tagBackfillParams{}},
-		Liveness:    sdk.LivenessRunItems,
-		Plugin:      "maintenance",
-		DisplayName: "Backfill lossless file tags (RawTags + track/disc)",
-		Description: "Reads each BookFile's audio tags and backfills the lossless RawTags map (and an " +
-			"empty title) for rows imported before lossless capture. Tag track/disc numbers replace the " +
-			"stored ones only when they are distinct across every file of the book and either every file " +
-			"or no file carries a disc number, and then for every file of that book. Files missing on " +
-			"disk are skipped. Default dry-run previews counts; set " +
-			"dryRun=false to apply.",
+		ID:              "maintenance.tag-backfill",
+		Preview:         sdk.PreviewSpec{Params: tagBackfillParams{}},
+		Liveness:        sdk.LivenessRunItems,
+		Plugin:          "maintenance",
+		DisplayName:     "Backfill lossless file tags (RawTags + track/disc)",
+		Description:     tagBackfillHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.tag-backfill",
@@ -223,21 +230,91 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 	if err != nil {
 		return err
 	}
-	store := p.deps.OpsStore()
-	if store == nil {
+	env := tagBackfillEnv{t6g7Env: t6g7HeadEnv(reporter, !dryRun)}
+	if store := p.deps.OpsStore(); store != nil {
+		env.Store = store
+		env.Writer = store
+	}
+	return tagBackfillCore(ctx, dryRun, params, env)
+}
+
+// tagBackfillStore is the reads the pass makes.
+type tagBackfillStore interface {
+	GetAllBookFilesCore() ([]database.BookFileCore, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+}
+
+// tagBackfillWriter is the one write: a batch of file rows.
+type tagBackfillWriter interface {
+	BatchUpsertBookFiles(files []*database.BookFile) error
+}
+
+// tagBackfillEnv is what the core takes from its shell.
+type tagBackfillEnv struct {
+	t6g7Env
+	Store  tagBackfillStore
+	Writer tagBackfillWriter
+}
+
+// tagBackfillParallelism is the op's concurrency: tag reads wait on the disk, so
+// four workers per core, as HEAD's pool ran. Each worker takes a whole book, so
+// no two touch the same rows; the row writes are batched behind one lock.
+func tagBackfillParallelism() tasks.Parallelism {
+	return tasks.Fixed(runtime.NumCPU()*4, "tag reads wait on the disk, so four workers per core; each worker takes a whole book and the row writes are batched behind one lock")
+}
+
+// tagBackfillNative is the native kind. Preview is the dry run HEAD's default
+// was; Live writes the rows. force and limit stay params.
+func (p *Plugin) tagBackfillNative(deps t6g7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g7Common(tagBackfillKind, sched)
+	c.Title = "Backfill lossless file tags (RawTags + track/disc)"
+	c.Help = tagBackfillHelp
+	c.Effects = tasks.Writes(t6g7Res(t6WriterResources["BatchUpsertBookFiles"]...)...)
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.tag-backfill")
+	c.Timeout = 120 * time.Minute
+	return tasks.Task(tagBackfillKind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			params, err := t6g7DecodeNative[tagBackfillParams](tagBackfillKind, raw)
+			if err != nil {
+				return struct{}{}, err
+			}
+			if err := t6g7NeedDep(tagBackfillKind, "Store", deps.Store != nil); err != nil {
+				return struct{}{}, err
+			}
+			live := rc.Mode() == tasks.ModeLive
+			env := tagBackfillEnv{t6g7Env: t6g7NativeEnv(rc), Store: deps.Store}
+			if live {
+				w, err := t6g7NewWriter(tagBackfillKind, deps, rc)
+				if err != nil {
+					return struct{}{}, err
+				}
+				env.Writer = w
+			}
+			return struct{}{}, tagBackfillCore(rc.Context(), !live, params, env)
+		},
+	})
+}
+
+// tagBackfillCore is the body of runTagBackfill; dryRun is the mode, decided by
+// the shell, and only params.Force and params.Limit are read from params.
+func tagBackfillCore(ctx context.Context, dryRun bool, params tagBackfillParams, env tagBackfillEnv) error {
+	if env.Store == nil {
 		return fmt.Errorf("database not initialized")
 	}
 	if dryRun {
-		_ = reporter.Log(slog.LevelInfo, "DRY RUN — no changes will be written")
+		env.Log(slog.LevelInfo, "DRY RUN — no changes will be written")
 	}
 	if n := tagReadsAbandoned.Load(); n > 0 {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+		env.Log(slog.LevelWarn, fmt.Sprintf(
 			"%d tag reads abandoned by earlier runs are still running (goroutines held until they return or the process restarts); this run starts its own cap at 0", n))
 	}
 	// runAbandoned is this run's count for the tagReadMaxAbandoned cap.
 	var runAbandoned atomic.Int64
 
-	files, err := store.GetAllBookFilesCore()
+	files, err := env.Store.GetAllBookFilesCore()
 	if err != nil {
 		return fmt.Errorf("GetAllBookFilesCore: %w", err)
 	}
@@ -273,7 +350,7 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 		}
 		books[i].rows = append(books[i].rows, f)
 	}
-	_ = reporter.UpdateProgress(0, len(books), fmt.Sprintf("Reading tags: %d files examined, %d books with rows to check…", examined, len(books)))
+	env.Progress(0, len(books), fmt.Sprintf("Reading tags: %d files examined, %d books with rows to check…", examined, len(books)))
 
 	// Counters and examples: written by every worker and read by Label (which
 	// run_items.go calls inside worker goroutines), so all access holds mu.
@@ -325,7 +402,7 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 		// call holds a bounded number of file stripes instead of ~160 of 256.
 		for len(pending) > 0 {
 			n := tagBackfillWriteChunk(pending, tagBackfillMaxRowsPerWrite)
-			if err := store.BatchUpsertBookFiles(pending[:n]); err != nil {
+			if err := env.Writer.BatchUpsertBookFiles(pending[:n]); err != nil {
 				// One deleted book refuses only its own rows; the rest of the
 				// batch IS written. Count both and keep going.
 				if refused, ok := errors.AsType[*database.BookFileRowsRefusedError](err); ok {
@@ -339,7 +416,7 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 					if errors.Is(err, database.ErrBookFileConflict) {
 						cause = "other writers kept changing the row while it was being written (it still exists; the next run picks it up)"
 					}
-					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+					env.Log(slog.LevelWarn, fmt.Sprintf(
 						"%d row(s) not written: %s (missing books %v, reason by row %v); %d rows of the batch written",
 						len(refused.RefusedFileIDs), cause, refused.MissingBookIDs, refused.Reasons, refused.Committed))
 					pending = pending[n:]
@@ -376,7 +453,18 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 	// including the sibling rows an accepted book renumbers.
 	// Per-book work is I/O bound (stat + tag read per file), so the pool is sized
 	// like path_repair_resolver.go: NumCPU()*4.
-	runErr := registry.RunItems(ctx, reporter, books, func(ctx context.Context, b tagBackfillBook) error {
+	runErr := env.Items(ctx, tagBackfillParallelism(), len(books), t6g7ItemsOptions{
+		ProgressTotal: len(books),
+		// The label reads the running tallies, so only HEAD's pool carries it.
+		Label: func(i, t int) string {
+			mu.Lock()
+			defer mu.Unlock()
+			return fmt.Sprintf("book %d/%d (%d files examined) — %d rows judged (%d read took tag tracks, %d read RawTags-only, %d siblings renumbered), books refused %d dup / %d missing-number / %d mixed-disc, %d missing, %d read-err",
+				i, t, examined, readTagTracks+readRawOnly+siblingsRenumbered, readTagTracks, readRawOnly, siblingsRenumbered,
+				refusedDup, refusedMissing, refusedMix, missing, readErr)
+		},
+	}, func(ctx context.Context, i int) error {
+		b := books[i]
 		readings := make(map[string]metadata.Metadata, len(b.rows))
 		var bMissing, bReadErr int
 		// Candidates skipped as missing on disk (true) or unreadable (false). With
@@ -402,11 +490,11 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 			// real read (each bounded by tagReadTimeout), so a genuinely wedged
 			// book still goes quiet and still gets caught.
 			if j > 0 {
-				registry.TouchLiveness(reporter)
+				env.Touch()
 			}
 			// Zero DB writes (Reporter.SetCurrentItem), so per file is fine: it
 			// shows which file of which book a long book is on.
-			reporter.SetCurrentItem(fmt.Sprintf("book %s: file %d/%d %s",
+			env.SetItem(fmt.Sprintf("book %s: file %d/%d %s",
 				b.bookID, j+1, len(b.rows), filepath.Base(f.FilePath)))
 			if err := ctx.Err(); err != nil {
 				// The book is abandoned unjudged, but the rows already found
@@ -442,7 +530,7 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 				bReadErr++
 				skipped[f.ID] = false
 				if timedOut {
-					_ = reporter.Log(slog.LevelWarn,
+					env.Log(slog.LevelWarn,
 						fmt.Sprintf("stat+tag read of %s exceeded %v; counted as a read error, book continues (read abandoned, still running)",
 							logger.SanitizeLogValue(path), tagReadTimeout),
 						slog.String("book_id", b.bookID), slog.String("file_id", f.ID))
@@ -462,7 +550,7 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 			}
 			readings[f.ID] = meta
 		}
-		registry.TouchLiveness(reporter) // the last file's read finished
+		env.Touch() // the last file's read finished
 		if len(readings) == 0 {
 			countBook()
 			return nil
@@ -475,8 +563,8 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 		// on that guard for correctness. See
 		// docs/audits/2026-07-05-updatebookfile-memdb-writeback-fingerprint-wipe.md.
 		// The same list is the distinctness denominator: every file of the book.
-		full, herr := store.GetBookFiles(b.bookID)
-		registry.TouchLiveness(reporter) // a whole book's rows hydrated
+		full, herr := env.Store.GetBookFiles(b.bookID)
+		env.Touch() // a whole book's rows hydrated
 		if herr != nil {
 			mu.Lock()
 			missing += bMissing
@@ -564,16 +652,6 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 			return nil
 		}
 		return enqueue(updates)
-	}, registry.RunItemsOptions{
-		Concurrency:   runtime.NumCPU() * 4,
-		ProgressTotal: len(books),
-		Label: func(i, t int) string {
-			mu.Lock()
-			defer mu.Unlock()
-			return fmt.Sprintf("book %d/%d (%d files examined) — %d rows judged (%d read took tag tracks, %d read RawTags-only, %d siblings renumbered), books refused %d dup / %d missing-number / %d mixed-disc, %d missing, %d read-err",
-				i, t, examined, readTagTracks+readRawOnly+siblingsRenumbered, readTagTracks, readRawOnly, siblingsRenumbered,
-				refusedDup, refusedMissing, refusedMix, missing, readErr)
-		},
 	})
 
 	// RunItems has returned, so every worker has finished (run_items.go waits on
@@ -603,7 +681,7 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 			if writeFailed {
 				stopNote += fmt.Sprintf(", %d judged rows not written after a write error", notWrittenNow)
 			}
-			_ = reporter.Log(slog.LevelWarn, "tag backfill stopping early:"+stopNote)
+			env.Log(slog.LevelWarn, "tag backfill stopping early:"+stopNote)
 		}
 		if runErr == nil && ferr != nil {
 			runErr = ferr
@@ -625,8 +703,8 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 		refusedDup, refusedMissing, refusedMix, missing, readErr,
 		strings.Join(examples, ", "), strings.Join(refusedExamples, ", "), stopNote)
 	mu.Unlock()
-	_ = reporter.Log(slog.LevelInfo, summary)
-	_ = reporter.UpdateProgress(len(books), len(books), summary)
+	env.Log(slog.LevelInfo, summary)
+	env.Progress(len(books), len(books), summary)
 	if runErr != nil {
 		return fmt.Errorf("parallel tag backfill: %w", runErr)
 	}
