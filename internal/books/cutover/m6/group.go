@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/group.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9a7f3c52-6e0d-4d89-bb54-0e8f4b1d2c77
 // last-edited: 2026-11-19
 
@@ -211,10 +211,10 @@ func (g *groupRun) instances(ctx context.Context) error {
 	return nil
 }
 
-// deluge converts deluge_web_url to download/deluge, and keeps the daemon RPC
-// fields (type, host, port, username) HEAD stored beside it, which the native
-// instance has no field for, as one quarantine record: the password is in the
-// store already, so the record never holds it.
+// deluge converts deluge_web_url to download/deluge. The daemon RPC fields
+// (type, host, port, username) HEAD stored beside it have no native field and
+// are reported as dropped; the daemon password is in the secrets store already
+// and rides on the instance as daemon_password.
 func (g *groupRun) deluge(ctx context.Context) error {
 	m := g.m
 	if raw, ok := g.top["deluge_web_url"]; ok {
@@ -258,11 +258,12 @@ func (g *groupRun) deluge(ctx context.Context) error {
 	if d.Type == "" && d.Deluge.Host == "" && d.Deluge.Port == 0 && d.Deluge.Username == "" {
 		return nil
 	}
-	kept, err := json.Marshal(dc)
-	if err != nil {
-		return fmt.Errorf("m6: encode the daemon fields: %w", err)
-	}
-	return g.quarantineMember("download_client.torrent", kept, reasonUnrepresentable)
+	// Reported, not quarantined: the native Web UI connects to its daemon with
+	// the host entry it already stores (core/integrations/download/deluge
+	// Settings), so these fields are superseded rather than unreadable, and the
+	// corpus' quarantine report is exactly the rows that failed to import.
+	g.m.report(Entry{Kind: "note", ID: "download/deluge", Detail: "download_client.torrent daemon fields (type, host, port, username) are not carried: the native Web UI uses the host entry it stores"})
+	return nil
 }
 
 // leftovers quarantines every top-level blob member no part of M6 reads that

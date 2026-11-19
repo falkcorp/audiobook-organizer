@@ -14,6 +14,8 @@ import (
 	"iter"
 	"log/slog"
 	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
@@ -62,6 +64,31 @@ const (
 	ownerSecrets = "core/secrets"
 	ownerAudit   = "core/audit"
 )
+
+const corpusRel = "internal/books/testdata/r2corpus"
+
+func repoRoot(t testing.TB) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			if _, err := os.Stat(filepath.Join(dir, "internal", "books")); err == nil {
+				return dir
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("no module root above the test's directory")
+		}
+		dir = parent
+	}
+}
+
+// fromCorpus seeds the store from the R2 corpus's stage1 or overlay copy.
+func fromCorpus(name string) func(*rig) { return func(r *rig) { r.corpus = name } }
 
 var errKilled = errors.New("the process was killed here")
 
@@ -332,8 +359,11 @@ type rig struct {
 	// parallelism overrides the step's declaration.
 	parallelism func(*datamigrate.DataMigration)
 	dryRun      bool
-	report      *m6.Report
-	logs        *lockedBuffer
+	// corpus is "stage1" or "overlay" (copied from the R2 corpus), or "" for an
+	// empty store the test fills.
+	corpus string
+	report *m6.Report
+	logs   *lockedBuffer
 
 	secrets *secretsDouble
 	cfg     *configDouble
@@ -454,6 +484,15 @@ func (r *rig) seed(t testing.TB) *vfs.MemFS {
 	mem.TestingSetDiskUsage(rigDiskUsage())
 	if err := mem.MkdirAll(rigDir, 0o700); err != nil {
 		t.Fatal(err)
+	}
+	if r.corpus != "" {
+		src := filepath.Join(repoRoot(t), filepath.FromSlash(corpusRel), r.corpus, "db")
+		// The search index sits beside the store; M6 must leave it alone.
+		for _, n := range []string{"audiobooks.pebble", "audiobooks.pebble.storage-format", "library.bleve"} {
+			if _, err := vfs.Clone(vfs.Default, mem, filepath.Join(src, n), rigDir+"/"+n); err != nil {
+				t.Fatalf("copy the corpus %s: %v", n, err)
+			}
+		}
 	}
 	ctx := context.Background()
 	o, err := storage.Open(ctx, storage.OpenOptions{Path: rigStore, FS: storage.FSOf(mem), Owners: r.owners(false), Build: rigBuildOld, FreeSpaceMargin: 1, Clock: crashmatrix.Now})

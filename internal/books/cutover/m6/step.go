@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/step.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ff3e2f5f-1fc0-4835-b579-944568abeb07
 // last-edited: 2026-11-19
 
@@ -105,7 +105,6 @@ const (
 	reasonUnmappable       = "the iTunes mapping's To is under no library root"
 	reasonUnknownRow       = "a row of a family M6 drains that no decoder reads"
 	reasonUnprovenURL      = "a credential cannot be ruled out of the URL"
-	reasonUnrepresentable  = "a HEAD field with no field in the native instance"
 	reasonInstanceConflict = "core already holds a different instance under this ID"
 	reasonAliasNoRoot      = "the path alias names no root M6 registers"
 	reasonRootPath         = "the root path is not an absolute host path"

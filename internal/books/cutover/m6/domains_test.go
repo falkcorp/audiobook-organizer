@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/domains_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 94d1a6f0-3c7e-4b58-a0e9-12f6b8c35d7a
 // last-edited: 2026-11-19
 
@@ -236,9 +236,9 @@ func TestWebhookMigration_SecretByValue(t *testing.T) {
 
 // TestDelugeMigration_InstanceAndPassword (05-download section 10): deluge_web_url
 // becomes download/deluge with both passwords by ref; the daemon fields have no
-// native home and are quarantined (without the password).
+// native home and are reported as dropped (never quarantined, never with a value).
 func TestDelugeMigration_InstanceAndPassword(t *testing.T) {
-	_, s := runFixture(t)
+	r, s := runFixture(t)
 	row := instances(t, s)["download/deluge"]
 	st := settingsOf(row)
 	if row["adapter"] != "core.deluge" || st["url"] != "http://192.0.2.20:8112" {
@@ -247,20 +247,22 @@ func TestDelugeMigration_InstanceAndPassword(t *testing.T) {
 	if refName(st, "password") != "integrations.download.deluge.password" || refName(st, "daemon_password") != "integrations.download.deluge.daemon_password" {
 		t.Errorf("deluge refs %v", st)
 	}
-	found := false
 	for _, q := range s.Quarantine {
-		if q.Key == "setting:config_blob#download_client.torrent" {
-			found = true
-			if strings.Contains(q.Value, "password") || strings.Contains(q.Value, secretValues["integrations.download.deluge.daemon_password"]) {
-				t.Errorf("the daemon quarantine record holds a password: %s", q.Value)
-			}
-			if !strings.Contains(q.Value, "alfred") {
-				t.Error("the daemon username was not kept in the quarantine record")
+		if strings.Contains(q.Key, "download_client") {
+			t.Errorf("the daemon fields were quarantined: %s", q.Key)
+		}
+	}
+	noted := false
+	for _, e := range r.report.Entries() {
+		if e.Kind == "note" && e.ID == "download/deluge" {
+			noted = true
+			if strings.Contains(e.Detail, "alfred") || strings.Contains(e.Detail, secretValues["integrations.download.deluge.daemon_password"]) {
+				t.Errorf("the note holds a username or password: %s", e.Detail)
 			}
 		}
 	}
-	if !found {
-		t.Error("the daemon fields were not quarantined")
+	if !noted {
+		t.Error("the dropped daemon fields were not reported")
 	}
 }
 

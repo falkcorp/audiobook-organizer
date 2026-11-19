@@ -1,0 +1,459 @@
+{
+  "rows": {
+    "core/audit": {
+      "core.integration.create|ai/local-uv": {
+        "action": "core.integration.create",
+        "details": {
+          "adapter": "books.whisper_local",
+          "instance": "ai/local-uv",
+          "origin": "migration"
+        }
+      },
+      "core.integration.create|ai/openai": {
+        "action": "core.integration.create",
+        "details": {
+          "adapter": "core.openai_compat",
+          "instance": "ai/openai",
+          "origin": "migration"
+        }
+      },
+      "core.integration.create|download/deluge": {
+        "action": "core.integration.create",
+        "details": {
+          "adapter": "core.deluge",
+          "instance": "download/deluge",
+          "origin": "migration"
+        }
+      },
+      "core.integration.create|metadata/audible": {
+        "action": "core.integration.create",
+        "details": {
+          "adapter": "books.audible",
+          "instance": "metadata/audible",
+          "origin": "migration"
+        }
+      },
+      "core.integration.create|metadata/audnexus": {
+        "action": "core.integration.create",
+        "details": {
+          "adapter": "books.audnexus",
+          "instance": "metadata/audnexus",
+          "origin": "migration"
+        }
+      },
+      "core.integration.create|metadata/google-books": {
+        "action": "core.integration.create",
+        "details": {
+          "adapter": "books.google-books",
+          "instance": "metadata/google-books",
+          "origin": "migration"
+        }
+      },
+      "core.integration.create|metadata/hardcover": {
+        "action": "core.integration.create",
+        "details": {
+          "adapter": "books.hardcover",
+          "instance": "metadata/hardcover",
+          "origin": "migration"
+        }
+      },
+      "core.integration.create|metadata/openlibrary": {
+        "action": "core.integration.create",
+        "details": {
+          "adapter": "books.openlibrary",
+          "instance": "metadata/openlibrary",
+          "origin": "migration"
+        }
+      },
+      "core.integration.create|metadata/wikipedia": {
+        "action": "core.integration.create",
+        "details": {
+          "adapter": "books.wikipedia",
+          "instance": "metadata/wikipedia",
+          "origin": "migration"
+        }
+      },
+      "core.integration.create|notify/webhook-1": {
+        "action": "core.integration.create",
+        "details": {
+          "adapter": "core.webhook",
+          "instance": "notify/webhook-1",
+          "origin": "migration"
+        }
+      },
+      "core.integration.local_migrated|ai/openai": {
+        "action": "core.integration.local_migrated",
+        "details": {
+          "instance": "ai/openai",
+          "local_origin": "url=https://api.openai.com:443"
+        }
+      },
+      "core.integration.local_migrated|download/deluge": {
+        "action": "core.integration.local_migrated",
+        "details": {
+          "instance": "download/deluge",
+          "local_origin": "url=http://deluge.invalid:8112"
+        }
+      },
+      "core.integration.local_migrated|notify/webhook-1": {
+        "action": "core.integration.local_migrated",
+        "details": {
+          "instance": "notify/webhook-1",
+          "local_origin": "url=http://webhook.invalid:80"
+        }
+      }
+    },
+    "core/config": {
+      "core.library.roots": [
+        {
+          "app_dir": ".mediacore",
+          "id": "books-library",
+          "min_free": 0,
+          "owner": "books",
+          "path": "/tmp/r2corpus/stage1/library",
+          "quarantine": ".failed",
+          "role": "library",
+          "sentinel": "bootstrap",
+          "watch": "off"
+        },
+        {
+          "id": "import-1",
+          "min_free": -1,
+          "name": "Gotham Archive",
+          "owner": "books",
+          "path": "/tmp/r2corpus/stage1/import",
+          "role": "import",
+          "sentinel": "bootstrap",
+          "watch": "auto"
+        }
+      ]
+    },
+    "core/integrations": {
+      "instances/ai/local-uv/": {
+        "adapter": "books.whisper_local",
+        "enabled": true,
+        "instance": "local-uv",
+        "kind": "ai",
+        "name": "Local uv/openai-whisper",
+        "origin": "migration",
+        "priority": 100,
+        "settings": {
+          "capabilities": [
+            "books.transcribe_intro_clip",
+            "books.transcribe_batch"
+          ],
+          "concurrency": 1,
+          "url": "local:uv-openai-whisper"
+        },
+        "updated": "0001-01-01T00:00:00Z",
+        "v": 1,
+        "version": 1
+      },
+      "instances/ai/openai/": {
+        "adapter": "core.openai_compat",
+        "enabled": true,
+        "instance": "openai",
+        "kind": "ai",
+        "local": true,
+        "local_origin": "url=https://api.openai.com:443",
+        "name": "OpenAI (migrated from openai_api_key)",
+        "operator_secret_origin": {
+          "url": "https://api.openai.com:443"
+        },
+        "origin": "migration",
+        "priority": 20,
+        "secrets_origin": "url=https://api.openai.com:443",
+        "settings": {
+          "api_key": {
+            "secret": "integrations.ai.openai.api_key"
+          },
+          "capabilities": [
+            "books.filename_parse",
+            "books.audiobook_parse",
+            "books.cover_art_vision",
+            "books.author_review",
+            "books.author_discovery",
+            "books.author_dedup_batch",
+            "books.diagnostics",
+            "books.transcribe_intro_clip",
+            "books.embed_text",
+            "books.embed_text_batch"
+          ],
+          "capability_models": {
+            "books.audiobook_parse": "gpt-5-mini",
+            "books.cover_art_vision": "gpt-5-mini",
+            "books.dedup_review": "gpt-5-mini",
+            "books.filename_parse": "gpt-5-mini",
+            "books.metadata_rerank": "gpt-5-mini"
+          },
+          "concurrency": 4,
+          "embed_model": "text-embedding-3-large",
+          "features": [
+            "batch_api",
+            "vision"
+          ],
+          "locality": "cloud",
+          "text_model": "gpt-5-mini",
+          "url": "https://api.openai.com/v1"
+        },
+        "updated": "0001-01-01T00:00:00Z",
+        "v": 1,
+        "version": 1
+      },
+      "instances/download/deluge/": {
+        "adapter": "core.deluge",
+        "enabled": true,
+        "instance": "deluge",
+        "kind": "download",
+        "local": true,
+        "local_origin": "url=http://deluge.invalid:8112",
+        "name": "Deluge",
+        "operator_secret_origin": {
+          "url": "http://deluge.invalid:8112"
+        },
+        "origin": "migration",
+        "secrets_origin": "url=http://deluge.invalid:8112",
+        "settings": {
+          "daemon_password": {
+            "secret": "integrations.download.deluge.daemon_password"
+          },
+          "url": "http://deluge.invalid:8112"
+        },
+        "updated": "0001-01-01T00:00:00Z",
+        "v": 1,
+        "version": 1
+      },
+      "instances/metadata/audible/": {
+        "adapter": "books.audible",
+        "enabled": true,
+        "instance": "audible",
+        "kind": "metadata",
+        "name": "Audible",
+        "origin": "migration",
+        "priority": 1,
+        "updated": "0001-01-01T00:00:00Z",
+        "v": 1,
+        "version": 1
+      },
+      "instances/metadata/audnexus/": {
+        "adapter": "books.audnexus",
+        "enabled": false,
+        "instance": "audnexus",
+        "kind": "metadata",
+        "name": "Audnexus",
+        "origin": "migration",
+        "priority": 3,
+        "updated": "0001-01-01T00:00:00Z",
+        "v": 1,
+        "version": 1
+      },
+      "instances/metadata/google-books/": {
+        "adapter": "books.google-books",
+        "enabled": false,
+        "instance": "google-books",
+        "kind": "metadata",
+        "name": "Google Books",
+        "origin": "migration",
+        "priority": 4,
+        "secrets_origin": "adapter-default",
+        "settings": {
+          "api_key": {
+            "secret": "integrations.metadata.google-books.api_key"
+          }
+        },
+        "updated": "0001-01-01T00:00:00Z",
+        "v": 1,
+        "version": 1
+      },
+      "instances/metadata/hardcover/": {
+        "adapter": "books.hardcover",
+        "enabled": true,
+        "instance": "hardcover",
+        "kind": "metadata",
+        "name": "Hardcover",
+        "origin": "migration",
+        "priority": 5,
+        "secrets_origin": "adapter-default",
+        "settings": {
+          "api_token": {
+            "secret": "integrations.metadata.hardcover.api_token"
+          },
+          "credentials.apiKey": {
+            "secret": "integrations.metadata.hardcover.credentials.apiKey"
+          }
+        },
+        "updated": "0001-01-01T00:00:00Z",
+        "v": 1,
+        "version": 1
+      },
+      "instances/metadata/openlibrary/": {
+        "adapter": "books.openlibrary",
+        "enabled": true,
+        "instance": "openlibrary",
+        "kind": "metadata",
+        "name": "Open Library",
+        "origin": "migration",
+        "priority": 2,
+        "updated": "0001-01-01T00:00:00Z",
+        "v": 1,
+        "version": 1
+      },
+      "instances/metadata/wikipedia/": {
+        "adapter": "books.wikipedia",
+        "enabled": false,
+        "instance": "wikipedia",
+        "kind": "metadata",
+        "name": "Wikipedia",
+        "origin": "migration",
+        "priority": 6,
+        "updated": "0001-01-01T00:00:00Z",
+        "v": 1,
+        "version": 1
+      },
+      "instances/notify/webhook-1/": {
+        "adapter": "core.webhook",
+        "enabled": true,
+        "instance": "webhook-1",
+        "kind": "notify",
+        "local": true,
+        "local_origin": "url=http://webhook.invalid:80",
+        "name": "Webhook 1",
+        "origin": "migration",
+        "secrets_origin": "url=http://webhook.invalid:80",
+        "settings": {
+          "method": "POST",
+          "secret": {
+            "secret": "integrations.notify.webhook-1.secret"
+          },
+          "url": "http://webhook.invalid/gotham"
+        },
+        "updated": "0001-01-01T00:00:00Z",
+        "v": 1,
+        "version": 1
+      }
+    },
+    "core/notify": {
+      "rules/webhooks/": {
+        "enabled": true,
+        "id": "webhooks",
+        "instances": [
+          "notify/webhook-1"
+        ],
+        "min_severity": "info",
+        "topics": [
+          "books.book.imported.v1",
+          "books.book.deleted.v1",
+          "books.metadata.applied.v1",
+          "books.tags.written.v1",
+          "books.file.organized.v1",
+          "books.dedup.detected.v1",
+          "books.dedup.merged.v1",
+          "books.cover.changed.v1",
+          "books.read-status.changed.v1",
+          "books.scan.completed.v1"
+        ],
+        "v": 1
+      }
+    }
+  },
+  "removed_legacy_keys": [
+    "counter:import_path",
+    "import_path:1",
+    "import_path:path:/tmp/r2corpus/stage1/import",
+    "setting:config_blob"
+  ],
+  "quarantined": null,
+  "report": [
+    {
+      "Kind": "root",
+      "ID": "books-library",
+      "Detail": "library"
+    },
+    {
+      "Kind": "root",
+      "ID": "import-1",
+      "Detail": "import"
+    },
+    {
+      "Kind": "instance",
+      "ID": "metadata/audible",
+      "Detail": "books.audible"
+    },
+    {
+      "Kind": "instance",
+      "ID": "metadata/openlibrary",
+      "Detail": "books.openlibrary"
+    },
+    {
+      "Kind": "instance",
+      "ID": "metadata/audnexus",
+      "Detail": "books.audnexus"
+    },
+    {
+      "Kind": "instance",
+      "ID": "metadata/google-books",
+      "Detail": "books.google-books"
+    },
+    {
+      "Kind": "instance",
+      "ID": "metadata/hardcover",
+      "Detail": "books.hardcover"
+    },
+    {
+      "Kind": "instance",
+      "ID": "metadata/wikipedia",
+      "Detail": "books.wikipedia"
+    },
+    {
+      "Kind": "instance",
+      "ID": "ai/openai",
+      "Detail": "core.openai_compat"
+    },
+    {
+      "Kind": "trust",
+      "ID": "ai/openai",
+      "Detail": "Local, origin url=https://api.openai.com:443"
+    },
+    {
+      "Kind": "instance",
+      "ID": "ai/local-uv",
+      "Detail": "books.whisper_local"
+    },
+    {
+      "Kind": "instance",
+      "ID": "download/deluge",
+      "Detail": "core.deluge"
+    },
+    {
+      "Kind": "trust",
+      "ID": "download/deluge",
+      "Detail": "Local, origin url=http://deluge.invalid:8112"
+    },
+    {
+      "Kind": "note",
+      "ID": "download/deluge",
+      "Detail": "download_client.torrent daemon fields (type, host, port, username) are not carried: the native Web UI uses the host entry it stores"
+    },
+    {
+      "Kind": "instance",
+      "ID": "notify/webhook-1",
+      "Detail": "core.webhook"
+    },
+    {
+      "Kind": "trust",
+      "ID": "notify/webhook-1",
+      "Detail": "Local, origin url=http://webhook.invalid:80"
+    },
+    {
+      "Kind": "rule",
+      "ID": "webhooks",
+      "Detail": "10 topics, 1 instances"
+    }
+  ],
+  "verify": {
+    "Read": 4,
+    "Written": 4,
+    "Held": 0,
+    "Quarantined": 0
+  }
+}

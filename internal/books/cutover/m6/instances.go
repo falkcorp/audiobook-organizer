@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/instances.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b6a74f6-b7ad-4baf-bb70-c1f2c5ccb49b
 // last-edited: 2026-11-19
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net/url"
 	"slices"
@@ -239,6 +240,14 @@ func (m *Migration) writeInstance(ctx context.Context, c *chunk, p *pending, qua
 	m.report(Entry{Kind: "instance", ID: ref.String(), Detail: detail})
 	if p.inst.Config.Local {
 		m.report(Entry{Kind: "trust", ID: ref.String(), Detail: "Local, origin " + p.inst.LocalOrigin})
+	}
+	for _, field := range slices.Sorted(maps.Keys(p.urls)) {
+		if u, err := url.Parse(p.urls[field]); err != nil || u.Scheme == "" || u.Host == "" {
+			// Kept as stored and never granted trust: the instance's own health
+			// reports it misconfigured until an admin corrects it (05-metadata
+			// M1.10), not a row M6 can decline.
+			m.report(Entry{Kind: "note", ID: ref.String(), Detail: "misconfigured: the " + field + " does not parse as a URL; kept as stored"})
+		}
 	}
 	if m.cfg.DryRun {
 		return true, nil
