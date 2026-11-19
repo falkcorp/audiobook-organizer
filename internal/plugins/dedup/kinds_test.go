@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/kinds_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 74d898af-e4c2-4b28-9fc7-5a2b749513d4
 // last-edited: 2026-11-19
 
@@ -472,6 +472,8 @@ func allProbes(t *testing.T) []writeProbe {
 func TestDedupKinds_WritesThroughShell(t *testing.T) {
 	defs := (&Plugin{}).Kinds(fakeKindDeps(t), nil)
 	probed := map[tasks.Kind]bool{}
+	writerOracle := oracleWriters(t)
+	usedWriterWords := map[string]bool{}
 	for _, pr := range allProbes(t) {
 		t.Run(string(pr.Kind), func(t *testing.T) {
 			require.False(t, probed[pr.Kind], "two probes for %s", pr.Kind)
@@ -485,7 +487,17 @@ func TestDedupKinds_WritesThroughShell(t *testing.T) {
 				require.Same(t, w, got, "the factory must be handed this run's rc.Writer()")
 			}
 			require.NotEmpty(t, pr.Calls(), "no write reached the recording writer")
+			// The oracle (kinds_oracle_test.go): what the run actually wrote is
+			// inside what the kind declares.
+			observed, words := observedWrites(t, pr, writerOracle)
+			requireDeclaredCoversObserved(t, pr.Def, pr.Kind, observed)
+			for _, w := range words {
+				usedWriterWords[w] = true
+			}
 		})
+	}
+	for word := range writerOracle {
+		require.True(t, usedWriterWords[word], "oracleWriters entry %q is recorded by no probe: stale", word)
 	}
 	// Every kind that declares writes has a probe, and no read-only kind has one.
 	for _, d := range defs {
