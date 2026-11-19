@@ -1,5 +1,5 @@
 // file: core/internal/outboxhttp/routes.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 53094039-febd-4731-bc69-141f4e2fb456
 // last-edited: 2026-11-19
 
@@ -355,7 +355,8 @@ func (a *api) discard(ctx context.Context, in *httpapi.In[deadReq]) (httpapi.NoC
 
 // dead runs one dead-letter operation and audits it: availability and the actor
 // first (nothing is applied that cannot be audited or attributed), the letter's
-// topic next (it is gone once the operation ran), then the operation, and the record only after the operation committed.
+// topic next (it is gone once the operation ran), then the operation, and the
+// record only after the operation committed.
 func (a *api) dead(ctx context.Context, in *httpapi.In[deadReq], action, route string,
 	do func(ctx context.Context, consumer string, seq uint64) error) (httpapi.NoContent, error) {
 	actor, err := a.begin(ctx, in.Principal)
