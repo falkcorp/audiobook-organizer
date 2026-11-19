@@ -1,5 +1,5 @@
 // file: core/kernel/config_boot.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 0e3db6c6-c5ae-4f54-adaf-6fd7b728c89e
 // last-edited: 2026-11-19
 
@@ -328,6 +328,7 @@ func (k *Kernel) bindCoreStores(ctx context.Context) error {
 	}
 	cb.store.SetImportSecrets(ks.store)
 	k.importerCfg, k.importerSec = cb.store.Importer(), ks.store.Importer()
+	k.importerAllowRegen = allowRegen
 	return nil
 }
 
