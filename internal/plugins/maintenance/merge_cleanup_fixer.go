@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/merge_cleanup_fixer.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 0e4c7d58-a1b3-4f26-8c19-6d5a3e7f9b02
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -30,6 +30,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
+	"golang.org/x/sync/errgroup"
 )
 
 // mergeCleanupFixerID is the Repairs-lane id of the merge-cleanup fixer. By the
@@ -105,6 +106,15 @@ type mergeCleanupReader interface {
 // different work.
 type mcAltTitleReader interface {
 	GetBookAlternativeTitles(bookID string) ([]database.BookAlternativeTitle, error)
+}
+
+// mcTrashReader is the second read outside OpsStore's narrow slice for this
+// fixer: the trash. GetBooksByVersionGroup leaves a soft-deleted book out, so a
+// trashed member of a dead hop's version group that still points on to a live
+// book is found only through this listing. A capability, for the same reason as
+// mcAltTitleReader.
+type mcTrashReader interface {
+	ListSoftDeletedBooks(limit int, offset int, olderThan *time.Time) ([]database.Book, error)
 }
 
 var _ mergeCleanupReader = OpsStore(nil)
@@ -222,6 +232,7 @@ type mcLoaded struct {
 type mcRun struct {
 	store   mergeCleanupReader
 	alts    mcAltTitleReader
+	trash   mcTrashReader
 	ops     OpsStore
 	vetoes  OwnerVetoReader
 	syncIDs database.SyncIdentityStore
@@ -235,6 +246,9 @@ type mcRun struct {
 	authors  sync.Map // author id -> *onceVal[mcAuthor]
 	vgGroups sync.Map // gid -> *onceVal[vgRepairGroupReport]
 	members  sync.Map // gid -> *onceVal[[]versionprimary.Member]
+	// trashedMerged is the one-entry index (key "") of the trashed books that
+	// carry a merge pointer, by version group, read once per run.
+	trashedMerged sync.Map // "" -> *onceVal[map[string][]database.Book]
 	// deadEnds is the one-entry index of where every merged book's chain ends
 	// (key ""), built the first time a row needs it.
 	deadEnds sync.Map // "" -> *onceVal[map[string][]string]
@@ -272,7 +286,11 @@ func (f *mergeCleanupFixer) newRun(ctx context.Context, rep registry.Reporter) (
 	if !ok {
 		return nil, fmt.Errorf("%s: the store cannot read alternative titles", mergeCleanupFixerID)
 	}
-	r := &mcRun{store: ops, alts: alts, ops: ops, vetoes: vetoes, syncIDs: database.AsSyncIdentityStore(ops),
+	trash, ok := database.AsCapability[mcTrashReader](ops)
+	if !ok {
+		return nil, fmt.Errorf("%s: the store cannot list the trash", mergeCleanupFixerID)
+	}
+	r := &mcRun{store: ops, alts: alts, trash: trash, ops: ops, vetoes: vetoes, syncIDs: database.AsSyncIdentityStore(ops),
 		applier: &vgApplier{store: ops, reporter: rep, seriesNames: names, paths: repairs.NewPathResolver()},
 		loader:  versionprimary.Loader{Files: ops, Chapters: vps, RootDir: config.AppConfig.RootDir, Probe: probe}}
 	return r, nil
@@ -300,6 +318,34 @@ func (r *mcRun) groupMembers(ctx context.Context, gid string) ([]versionprimary.
 		}
 		return r.loader.LoadMembers(ctx, books, vgStoreAlive(r.ops))
 	})
+}
+
+// trashedMergedMembers are the trashed books of version group gid that carry a
+// merge pointer. The group read leaves a soft-deleted book out, and such a book
+// keeps its group id and its pointer, so it is read from the trash, once per run
+// for the whole library.
+func (r *mcRun) trashedMergedMembers(gid string) ([]database.Book, error) {
+	idx, err := cachedOnce(&r.trashedMerged, "", func() (map[string][]database.Book, error) {
+		books, err := r.trash.ListSoftDeletedBooks(0, 0, nil)
+		if err != nil {
+			return nil, fmt.Errorf("list the trash for merged version-group members: %w", err)
+		}
+		out := map[string][]database.Book{}
+		for i := range books {
+			b := &books[i]
+			if g := mcDeref(b.VersionGroupID); g != "" && mcHasPointer(b) {
+				out[g] = append(out[g], *b)
+			}
+		}
+		for g := range out {
+			sort.Slice(out[g], func(i, j int) bool { return out[g][i].ID < out[g][j].ID })
+		}
+		return out, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return idx[gid], nil
 }
 
 // hashShare is how many distinct books carry a file with this hash.
@@ -531,7 +577,13 @@ func vgWrittenBooks(g vgRepairGroupReport) []string {
 // deadEndIndex maps the id of each dead book (trashed or missing) that some
 // merge chain ends at to the live merged books whose chain ends there. Built
 // once per run from the merge pointers alone (every read is cached).
-func (r *mcRun) deadEndIndex() (map[string][]string, error) {
+//
+// Every merged book costs a store read and a chain walk, so the walk is fanned
+// out over a bounded pool sized to the CPUs. Each worker writes only its own
+// ends[i] slot, so no two workers touch one entry and no lock is needed; the
+// index is folded together afterwards in listing order, so the result does not
+// depend on which worker finished first.
+func (r *mcRun) deadEndIndex(ctx context.Context) (map[string][]string, error) {
 	return cachedOnce(&r.deadEnds, "", func() (map[string][]string, error) {
 		ids := r.merged
 		if ids == nil {
@@ -546,21 +598,38 @@ func (r *mcRun) deadEndIndex() (map[string][]string, error) {
 				}
 			}
 		}
+		ends := make([]string, len(ids))
+		var g errgroup.Group
+		g.SetLimit(max(1, runtime.NumCPU()))
+		for i := range ids {
+			g.Go(func() error {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				b, err := r.book(ids[i])
+				if err != nil {
+					return fmt.Errorf("read %s for the dead-end index: %w", ids[i], err)
+				}
+				if b == nil || database.IsInTrash(b) || !mcHasPointer(b) {
+					return nil
+				}
+				chain, err := mcWalkChain(b, r.book)
+				if err != nil {
+					return err
+				}
+				if chain.End == mcEndDead {
+					ends[i] = chain.LastID()
+				}
+				return nil
+			})
+		}
+		if err := g.Wait(); err != nil {
+			return nil, err
+		}
 		out := map[string][]string{}
-		for _, id := range ids {
-			b, err := r.book(id)
-			if err != nil {
-				return nil, fmt.Errorf("read %s for the dead-end index: %w", id, err)
-			}
-			if b == nil || database.IsInTrash(b) || !mcHasPointer(b) {
-				continue
-			}
-			chain, err := mcWalkChain(b, r.book)
-			if err != nil {
-				return nil, err
-			}
-			if chain.End == mcEndDead {
-				out[chain.LastID()] = append(out[chain.LastID()], id)
+		for i, end := range ends {
+			if end != "" {
+				out[end] = append(out[end], ids[i])
 			}
 		}
 		return out, nil
@@ -569,8 +638,8 @@ func (r *mcRun) deadEndIndex() (map[string][]string, error) {
 
 // deadEndMates are the other live merged books, with files, whose chain ends at
 // the same dead book as fa's: the other losers of one dead end. Sorted.
-func (r *mcRun) deadEndMates(fa *mcFacts) ([]string, error) {
-	idx, err := r.deadEndIndex()
+func (r *mcRun) deadEndMates(ctx context.Context, fa *mcFacts) ([]string, error) {
+	idx, err := r.deadEndIndex(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -911,49 +980,63 @@ func (r *mcRun) cycleHead(members []string) (string, error) {
 type mcReach struct {
 	// live maps each live, unmerged book reached to how it was reached.
 	live map[string]string
-	// dead are anchors that were walked (or looked at) and lead nowhere live.
+	// dead are anchors that were walked (or looked at) and lead nowhere live: a
+	// missing book, a trashed book with no pointer or whose chain ends dead, and
+	// a merged book with no file of its own whose chain ends dead.
 	dead []string
+	// liveCopies are anchors that are not in the trash, have a file of their
+	// own, and carry a merge pointer whose own chain ends dead: a live copy of
+	// the work around this dead end that is not the loser, so the loser is not
+	// the only one left.
+	liveCopies []string
 	// unproven are anchors whose merge chain loops or is longer than the cap:
 	// where they lead is not known, so they prove nothing either way.
 	unproven []string
 	// seen are the anchors already followed: an anchor named by two routes is
 	// walked and listed once.
 	seen map[string]bool
-	// adds counts every live book a walk reached, a repeat included, so a route
-	// can tell whether it reached one.
-	adds int
+	// outcome is, for each anchor followed, the live book it led to ("" when it
+	// led to none). A route that names an anchor another route already followed
+	// reads the answer from here, so "did this route reach a live book" does not
+	// depend on which route got there first.
+	outcome map[string]string
 	// groupLive are the live, unmerged books (other than the loser) of a dead
-	// hop's version group that the group's own routes did not reach, each with
+	// hop's version group that the group's primary did not lead to, each with
 	// its group: books a repoint could plausibly name that nothing walked to.
 	groupLive map[string]string
 }
 
 func (rc *mcReach) add(id, via string) {
-	rc.adds++
 	if _, ok := rc.live[id]; !ok {
 		rc.live[id] = via
 	}
 }
 
 // follow says where one anchor book (a holder of the dead hop's retired
-// versions, or the primary or a merged-away member of its version group) leads.
+// versions, or the primary or a merged-away member of its version group) leads,
+// and returns the live book it led to ("" when it led to none).
 // An anchor that is a live, unmerged book is itself a place to repoint. An
 // anchor that carries a merge pointer is followed along its own chain to the
 // live book it was merged into: that book is where the loser's content went,
 // and it is a place to repoint. That holds whether the anchor is in the trash or
 // not: the loser's own chain walks through a trashed hop that still points on
 // (mcWalkChain), and so does this. An anchor that is missing, or in the trash
-// with no pointer, or whose chain ends dead, leads nowhere. An anchor whose
-// chain loops or never ends proves nothing, and is kept apart so "no live book
-// is reachable" is never claimed over it.
-func (r *mcRun) follow(fa *mcFacts, rc *mcReach, id, via string) error {
-	if id == "" || id == fa.id || rc.seen[id] {
-		return nil
+// with no pointer, or in the trash with a chain that ends dead, leads nowhere.
+// An anchor that is not in the trash, has a file and whose chain ends dead is a
+// live copy of the work (liveCopies), not nothing: the loser is not the only
+// copy left. An anchor whose chain loops or never ends proves nothing, and is
+// kept apart so "no live book is reachable" is never claimed over it.
+func (r *mcRun) follow(fa *mcFacts, rc *mcReach, id, via string) (string, error) {
+	if id == "" || id == fa.id {
+		return "", nil
+	}
+	if rc.seen[id] {
+		return rc.outcome[id], nil
 	}
 	rc.seen[id] = true
 	b, err := r.book(id)
 	if err != nil {
-		return fmt.Errorf("read candidate %s: %w", id, err)
+		return "", fmt.Errorf("read candidate %s: %w", id, err)
 	}
 	trashed := b != nil && database.IsInTrash(b)
 	switch {
@@ -964,11 +1047,12 @@ func (r *mcRun) follow(fa *mcFacts, rc *mcReach, id, via string) error {
 			rc.dead = append(rc.dead, id)
 		} else {
 			rc.add(id, via)
+			rc.outcome[id] = id
 		}
 	default:
 		chain, err := mcWalkChain(b, r.book)
 		if err != nil {
-			return err
+			return "", err
 		}
 		switch chain.End {
 		case mcEndLive:
@@ -977,13 +1061,26 @@ func (r *mcRun) follow(fa *mcFacts, rc *mcReach, id, via string) error {
 				state = "in the trash and merged"
 			}
 			rc.add(chain.EndID, via+", which is "+state+" into "+chain.EndID)
+			rc.outcome[id] = chain.EndID
 		case mcEndDead:
-			rc.dead = append(rc.dead, id)
+			if trashed {
+				rc.dead = append(rc.dead, id)
+				break
+			}
+			l, err := r.load(id)
+			if err != nil {
+				return "", err
+			}
+			if l != nil && l.side.Files > 0 {
+				rc.liveCopies = append(rc.liveCopies, id)
+			} else {
+				rc.dead = append(rc.dead, id)
+			}
 		default:
 			rc.unproven = append(rc.unproven, id)
 		}
 	}
-	return nil
+	return rc.outcome[id], nil
 }
 
 // onChain reports whether id is a book on the loser's own merge chain.
@@ -1003,7 +1100,7 @@ func (fa *mcFacts) onChain(id string) bool {
 // every walk proved it, the loser stands alone; with two, or with a walk that
 // could not prove it, it is held and never guessed.
 func (r *mcRun) settleDead(ctx context.Context, fa *mcFacts) error {
-	rc := &mcReach{live: map[string]string{}, seen: map[string]bool{}, groupLive: map[string]string{}}
+	rc := &mcReach{live: map[string]string{}, seen: map[string]bool{}, outcome: map[string]string{}, groupLive: map[string]string{}}
 	ret, haveRet := database.AsCapability[database.RetiredBookFileReader](r.ops)
 	for _, h := range fa.chain.Hops {
 		if h.State != mcHopTrashed || h.Book == nil {
@@ -1017,7 +1114,7 @@ func (r *mcRun) settleDead(ctx context.Context, fa *mcFacts) error {
 			return fmt.Errorf("read the retired versions of %s: %w", h.ID, err)
 		}
 		for _, v := range versions {
-			if err := r.follow(fa, rc, v.BookID, "holds the retired versions of "+h.ID); err != nil {
+			if _, err := r.follow(fa, rc, v.BookID, "holds the retired versions of "+h.ID); err != nil {
 				return err
 			}
 		}
@@ -1037,36 +1134,53 @@ func (r *mcRun) settleDead(ctx context.Context, fa *mcFacts) error {
 			if readErr != nil {
 				return readErr
 			}
-			addsBefore := rc.adds
+			// Only the group's primary decides whether the group is accounted for
+			// (a live non-primary member beside a primary is that primary's
+			// sibling, not a book the walk missed). What any other route reached
+			// does not stand in for it: a live member beside a merged member's
+			// live end, or beside a holder's, is still a second place the loser
+			// may belong, whichever route found the first.
+			primaryReached := false
 			if inc != nil {
-				if err := r.follow(fa, rc, inc.ID, "is the primary of version group "+gid); err != nil {
+				got, err := r.follow(fa, rc, inc.ID, "is the primary of version group "+gid)
+				if err != nil {
 					return err
 				}
+				primaryReached = got != ""
 			}
 			// A member that carries a merge pointer (trashed or not) took the
-			// group's content to the live book it points on to: follow it. A
-			// live, unmerged member is not a place to repoint to unless it is the
-			// group's primary, but it is a live book of the group.
+			// group's content to the live book it points on to: follow it. The
+			// group read leaves out a soft-deleted member, so the trashed ones
+			// are read from the trash. A live, unmerged member is not a place to
+			// repoint to unless it is the group's primary, but it is a live book
+			// of the group.
+			trashedMembers, err := r.trashedMergedMembers(gid)
+			if err != nil {
+				return err
+			}
+			all := append(slices.Clone(members), trashedMembers...)
 			var liveMembers []string
-			for i := range members {
-				m := &members[i]
-				if m.ID == fa.id || fa.onChain(m.ID) {
+			seenMember := map[string]bool{}
+			for i := range all {
+				m := &all[i]
+				if seenMember[m.ID] || m.ID == fa.id || fa.onChain(m.ID) {
 					continue
 				}
+				seenMember[m.ID] = true
 				if mcHasPointer(m) {
-					if err := r.follow(fa, rc, m.ID, "is a member of version group "+gid+" that is merged away"); err != nil {
+					if _, err := r.follow(fa, rc, m.ID, "is a member of version group "+gid+" that is merged away"); err != nil {
 						return err
 					}
 				} else if !database.IsInTrash(m) {
 					liveMembers = append(liveMembers, m.ID)
 				}
 			}
-			// With no primary to follow (none elected, two unflagged, or the
-			// primary is the loser itself) and nothing else the group's routes
-			// reached, its live members are books the loser may belong with. They
-			// are not named a candidate (which of them would be a guess), and the
-			// loser is not said to stand alone beside them.
-			if rc.adds == addsBefore {
+			// With no primary that led to a live book (none elected, two
+			// unflagged, the primary is the loser itself, or it leads nowhere),
+			// its live members are books the loser may belong with. They are not
+			// named a candidate (which of them would be a guess), and the loser is
+			// not said to stand alone beside them.
+			if !primaryReached {
 				for _, id := range liveMembers {
 					rc.groupLive[id] = gid
 				}
@@ -1078,6 +1192,7 @@ func (r *mcRun) settleDead(ctx context.Context, fa *mcFacts) error {
 	}
 	sort.Strings(fa.candidates)
 	sort.Strings(rc.dead)
+	sort.Strings(rc.liveCopies)
 	sort.Strings(rc.unproven)
 	for id := range rc.groupLive {
 		// Another route may have reached it (a holder that is also a member).
@@ -1104,20 +1219,30 @@ func (r *mcRun) settleDead(ctx context.Context, fa *mcFacts) error {
 		checked := "no holder of its retired versions and no live book of its version group exists"
 		switch {
 		case len(rc.dead) > 0:
-			checked = "every holder of its retired versions and book of its version group that could be followed (" + strings.Join(rc.dead, ", ") + ") is in the trash, missing or merged into a dead end, and no live book of its version group is left"
+			checked = "every holder of its retired versions and book of its version group that could be followed (" + strings.Join(rc.dead, ", ") + ") is missing, in the trash, or a merged book with no file of its own, and no live book of its version group is left"
 		case fa.chain.LastState() == mcHopMissing:
 			checked = "the book it points at no longer exists, so it has no retired versions or version group to read"
 		}
 		fa.evidence = append(fa.evidence, "the merge chain ends at "+end+", which is "+fa.deadWhy()+"; "+checked+", so no live book is reachable: the book stands alone")
-		mates, err := r.deadEndMates(fa)
+		mates, err := r.deadEndMates(ctx, fa)
 		if err != nil {
 			return err
 		}
+		// Other live copies of the work around this dead end: the books whose
+		// chain ends at the same dead book, and the holders and group members
+		// that are themselves merged books whose chain ends at a dead one.
+		others := mcUnique(append(slices.Clone(mates), rc.liveCopies...))
+		sort.Strings(others)
 		if len(mates) > 0 {
 			fa.cur["dead_end_other_losers"] = strings.Join(mates, ",")
+		}
+		if len(rc.liveCopies) > 0 {
+			fa.cur["dead_end_live_copies"] = strings.Join(rc.liveCopies, ",")
+		}
+		if len(others) > 0 {
 			fa.chainHold = mcSkipDeadEndShared
-			fa.chainHoldWhy = "the merge chain ends at " + end + ", which is " + fa.deadWhy() + ", and " + strconv.Itoa(len(mates)) +
-				" other live merged book(s) (" + strings.Join(mates, ", ") + ") end at the same book; each standing alone would leave several live copies of one work, and nothing here says they are different works"
+			fa.chainHoldWhy = "the merge chain ends at " + end + ", which is " + fa.deadWhy() + ", and " + strconv.Itoa(len(others)) +
+				" other live merged book(s) with files (" + strings.Join(others, ", ") + ") lead to a dead end too, at the same book or from its retired versions or version group; each standing alone would leave several live copies of one work, and nothing here says they are different works"
 		}
 	case len(fa.candidates) == 1:
 		fa.kind, fa.class = mcKindRepoint, mcKindRepoint
@@ -1530,8 +1655,14 @@ func (r *mcRun) proposeWrites(fa *mcFacts, _ *repairs.Row) {
 	switch fa.kind {
 	case mcKindUnmerge:
 		p["merged_into_book_id"] = ""
-		switch fa.groupEffect {
-		case "stays_in_group":
+		switch {
+		case fa.target == nil:
+			// A dead-end unmerge says nothing against another book, so the apply
+			// clears the pointer and leaves the loser's group as it is
+			// (todo.d TODO-MERGE-CLEANUP-DEAD-END-APPLY-RULES): the preview shows
+			// what will be written.
+			p["is_primary_version"], p["version_group_id"] = "unchanged", "unchanged"
+		case fa.groupEffect == "stays_in_group":
 			p["is_primary_version"], p["version_group_id"] = "unchanged", "unchanged"
 		default:
 			p["is_primary_version"], p["version_group_id"] = "unset", ""
