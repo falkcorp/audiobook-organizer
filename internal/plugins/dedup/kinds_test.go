@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/kinds_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 74d898af-e4c2-4b28-9fc7-5a2b749513d4
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package dedup
 
@@ -303,6 +303,13 @@ func (h *kindHost) Note(s string) {
 	h.mu.Lock()
 	h.notes = append(h.notes, s)
 	h.mu.Unlock()
+}
+
+// allNotes is every progress note, in order.
+func (h *kindHost) allNotes() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.notes...)
 }
 
 // lastNote is the last progress note, or "".

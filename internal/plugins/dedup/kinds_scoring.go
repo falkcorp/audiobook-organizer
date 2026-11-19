@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/kinds_scoring.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 87767b32-a764-471a-bc6d-1b845dc5a45d
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package dedup
 
@@ -450,16 +450,8 @@ func (p *Plugin) quarantineChapterArtifactsNative(d ScoringKindDeps, sched func(
 			if err != nil {
 				return quarantineChapterArtifactsResult{}, err
 			}
-			// HEAD's defaults for an omitted threshold are 5, 1200 and 10.
-			if in.MinTitleCollisions == 0 {
-				in.MinTitleCollisions = 5
-			}
-			if in.MaxDurationSec == 0 {
-				in.MaxDurationSec = 1200
-			}
-			if in.MinTitleCollisionsUnscanned == 0 {
-				in.MinTitleCollisionsUnscanned = 10
-			}
+			// An omitted (zero) threshold takes HEAD's defaults (5, 1200, 10) in
+			// normalizeQuarantineSettings below, the one place they are applied.
 			st, err := scoringStoreFor(quarantineChapterArtifactsKind, d)
 			if err != nil {
 				return quarantineChapterArtifactsResult{}, err
