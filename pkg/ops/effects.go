@@ -1,7 +1,7 @@
 // file: pkg/ops/effects.go
-// version: 1.4.5
+// version: 1.4.6
 // guid: 56bbb3ad-7cb3-4962-a476-26ea63bdc9ba
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package ops
 
@@ -82,6 +82,12 @@ const (
 	// them. It is not ResMetadataCache, which is the cached lookup rows, nor the
 	// main store's own resources.
 	ResAuxStores Resource = "aux_stores"
+	// ResASINMisses is the ASIN backfill's lookup-miss markers
+	// (asinbackfill:miss:<book id> and asinbackfill:isbnmiss:<book id> rows,
+	// internal/plugins/metafetch): one row per book whose Audible lookup came back
+	// empty, written so the next run skips it. They are not ResMetadataCache (the
+	// cached lookup responses, pcache: rows) and not ResExternalIDs (a found ASIN).
+	ResASINMisses Resource = "asin_misses"
 )
 
 // deletePrefix marks a Resource built by Deletes.
