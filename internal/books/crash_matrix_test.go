@@ -1,7 +1,7 @@
 // file: internal/books/crash_matrix_test.go
-// version: 1.0.9
+// version: 1.0.10
 // guid: 1a6f3d82-9c4e-4b17-8e25-7d0b5c9a2f61
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package books
 
@@ -267,21 +267,30 @@ func aboUnreachedLabels() map[string]string {
 			"hello's data-migration cells break the writer through the kernel's entry point until then"
 		noM8 = "books registers no store rewrite (M8) until F3-07, and the boot call that runs one is F2-16's; " +
 			"hello's m8-rewrite cells break the writer through the kernel's entry point and restoreswap's P0a until then"
+		// F3-07 slice (a6): the config boot's writers. ABO boots with
+		// app.Options.CoreConfigBoot off until slice (e) deletes the gate,
+		// so no ABO boot runs P0's config step or P4b's secrets.Open.
+		noConfigBoot = "ABO boots with app.Options.CoreConfigBoot off until F3-07's slice (e); hello's TestBootCrashMatrix breaks the config boot's writers"
 	)
 	return map[string]string{
-		"storage.levelstep.sidecars": "books declares no level step at R1 (Level 0; raising one is an R1-23 STOP condition)",
-		"storage.levelstep.rollback": "books declares no level step at R1",
-		"storage.dm.plan":            noDataMigration,
-		"storage.dm.chunk":           noDataMigration,
-		"storage.dm.state":           noDataMigration,
-		"storage.rewrite.state":      noM8,
-		"storage.rewrite.compact":    noM8,
-		"storage.rewrite.copy":       noM8,
-		"storage.rewrite.close":      noM8,
-		"storage.rewrite.reopen":     noM8,
-		"storage.rewrite.checkpoint": noM8,
-		"swap.rewrite.stage":         noM8,
-		"swap.rewrite.delete":        noM8,
+		"config.statedir.mkdir":        noConfigBoot,
+		"config.bootrecord.quarantine": noConfigBoot,
+		"secrets.keyring.stale":        noConfigBoot,
+		"secrets.keyring":              noConfigBoot,
+		"secrets.meta":                 noConfigBoot,
+		"storage.levelstep.sidecars":   "books declares no level step at R1 (Level 0; raising one is an R1-23 STOP condition)",
+		"storage.levelstep.rollback":   "books declares no level step at R1",
+		"storage.dm.plan":              noDataMigration,
+		"storage.dm.chunk":             noDataMigration,
+		"storage.dm.state":             noDataMigration,
+		"storage.rewrite.state":        noM8,
+		"storage.rewrite.compact":      noM8,
+		"storage.rewrite.copy":         noM8,
+		"storage.rewrite.close":        noM8,
+		"storage.rewrite.reopen":       noM8,
+		"storage.rewrite.checkpoint":   noM8,
+		"swap.rewrite.stage":           noM8,
+		"swap.rewrite.delete":          noM8,
 		// F2-16 wires the definition snapshot writer, but books registers no
 		// task kind until F5, so no ABO boot has a definition to upsert.
 		// hello registers hello.count, and its matrix breaks the writer.
