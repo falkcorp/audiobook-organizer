@@ -45,8 +45,12 @@ var t7SchedulerRows = []t7SchedulerRow{
 // test expects it panics.
 type t7FakeWriter struct{ t7Writer }
 
+// t7FakeStore is the same for the read side.
+type t7FakeStore struct{ t7Store }
+
 func t7TestDeps() t7Deps {
 	return t7Deps{
+		Store:        t7FakeStore{},
 		StandDownKey: tasks.Key("books.library.scan"),
 		NewWriter:    func(tasks.Writer) t7Writer { return t7FakeWriter{} },
 	}
@@ -268,6 +272,7 @@ func (h *upgradeCoreHarness) env() metadataUpgradeEnv {
 			Log:      func(_ slog.Level, msg string, _ ...slog.Attr) { h.notes = append(h.notes, msg) },
 			Progress: func(_, _ int, msg string) { h.notes = append(h.notes, "progress: "+msg) },
 		},
+		Store:  h.w,
 		Writer: h.w,
 		StandDown: func(ctx context.Context, reason string) (t7Hold, error) {
 			h.acquired = append(h.acquired, reason)
@@ -397,6 +402,7 @@ func TestMetadataUpgradeNative_RunsTheSweepUnderTheScanStandDown(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w := &fakeUpgradeWriter{res: &metabatch.UpgradeResult{Checked: 3, Upgraded: 1}, runErr: tc.runErr}
 			deps := t7TestDeps()
+			deps.Store = w
 			deps.NewWriter = func(tasks.Writer) t7Writer { return w }
 			d := t7SchedulerByKind(t, t7SchedulerDefs(deps), t7KindFor(metadataUpgradeOpID))
 
@@ -470,4 +476,26 @@ func TestStartRequirement_Rules(t *testing.T) {
 func TestCommon_ClampsTheTimeout(t *testing.T) {
 	c := t7Common(opsregistry.OperationDef{ID: "gotham.vigil", Timeout: 25 * time.Hour}, nil)
 	require.Equal(t, tasks.MaxTimeout, c.Timeout)
+}
+
+// The native shell refuses a run whose owner left the store unset, before the
+// core dereferences it and before a writer is built.
+func TestMetadataUpgradeNative_RefusesWithoutAStore(t *testing.T) {
+	deps := t7TestDeps()
+	deps.Store = nil
+	built := false
+	deps.NewWriter = func(tasks.Writer) t7Writer { built = true; return t7FakeWriter{} }
+	d := t7SchedulerByKind(t, t7SchedulerDefs(deps), t7KindFor(metadataUpgradeOpID))
+	_, err := t7RunKind(t, d, tasks.ModeLive, &t7GateWriter{name: "live"}, `{}`)
+	require.ErrorContains(t, err, "t7Deps.Store is not set")
+	require.False(t, built)
+}
+
+// HEAD's body only touches its Reporter when it first needs it, so building the
+// env over a nil one must not panic.
+func TestHeadEnv_BuildsOverANilReporter(t *testing.T) {
+	require.NotPanics(t, func() {
+		e := t7HeadEnv(nil)
+		require.NotNil(t, e.Canceled)
+	})
 }

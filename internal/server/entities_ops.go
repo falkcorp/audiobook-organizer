@@ -25,6 +25,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/errhandling"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -135,7 +136,9 @@ func authorMergeCore(ctx context.Context, p authorMergeOpParams, env authorMerge
 	if herr != nil {
 		return fmt.Errorf("author-merge: %w", herr)
 	}
-	defer func() { _ = hold.Finish(nil) }()
+	defer func() {
+		errhandling.MustLog(hold.Finish(nil), "scan stand-down lapsed during the run; its lease was lost before release")
+	}()
 
 	env.Log(slog.LevelInfo, fmt.Sprintf("Merging %d author(s) into %q", len(mergeIDs), p.KeepName))
 	env.progress(0, len(mergeIDs), "Starting author merge...")

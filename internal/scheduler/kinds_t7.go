@@ -31,7 +31,7 @@ import (
 // This is the scheduler's own copy of the small foundation internal/server's
 // kinds_t7.go holds (this package cannot import internal/server, which imports
 // it). The derivation of a kind's Common block from HEAD's definition is the same
-// rule (R5, R6) in both; each package's TestT7*KindsMatchHEADDefs states its rows
+// rule (R5, R6) in both; each package's TestT7ServerKinds_MatchHEADDefs and TestT7SchedulerKinds_MatchHEADDefs state their rows
 // by hand, so a drift in either copy fails there.
 
 const (
@@ -76,7 +76,9 @@ func t7HeadEnv(rep opsregistry.Reporter) t7Env {
 		Progress: func(current, total int, msg string) {
 			_ = rep.UpdateProgress(current, total, msg)
 		},
-		Canceled: rep.IsCanceled,
+		// A closure, not a method value: taking one from a nil Reporter panics, and
+		// HEAD's body only touches the reporter when it first needs it.
+		Canceled: func() bool { return rep.IsCanceled() },
 	}
 }
 
@@ -196,6 +198,12 @@ func t7NativeStandDown(rc *tasks.RC, key tasks.Key) t7StandDown {
 	}
 }
 
+// t7Store is every read the converted cores make, declared beside each core. A
+// method that writes is never on it.
+type t7Store interface {
+	metadataUpgradeStore
+}
+
 // t7Writer is every write the converted cores make, declared beside each core.
 // The native shell builds it with t7Deps.NewWriter over the run's kernel-gated
 // tasks.Writer, so every write goes through the gate (and is recorded, not
@@ -207,12 +215,23 @@ type t7Writer interface {
 // t7Deps is what the native kinds are built from (rule R10 item 4). Every field
 // is set once, by the F5-18 registration; tests pass a recording fake.
 type t7Deps struct {
+	// Store is the read side the cores run over.
+	Store t7Store
 	// StandDownKey is the concurrency key the library scan kinds run under, which
 	// a native live write holds with rc.StandDown. Empty refuses a live write.
 	StandDownKey tasks.Key
 	// NewWriter builds the write side over the run's gated writer. Per run: the
 	// writer it wraps belongs to that run's executor.
 	NewWriter func(tasks.Writer) t7Writer
+}
+
+// t7NeedStore refuses a native run whose owner left the store unset, before the
+// core dereferences it.
+func t7NeedStore(kind tasks.Kind, deps t7Deps) error {
+	if deps.Store == nil {
+		return fmt.Errorf("%s: t7Deps.Store is not set", kind)
+	}
+	return nil
 }
 
 // t7NewWriter builds the run's writer over its kernel-gated tasks.Writer,
@@ -272,7 +291,7 @@ func t7DecodeNative[P any](kind tasks.Kind, raw json.RawMessage) (P, error) {
 // t7AtomScopes is the route requirement of each HEAD permission atom
 // (05-rbac 6.1, internal/books.AtomTable), as in internal/server's kinds_t7.go.
 // internal/books imports this package through its import graph, so the table
-// cannot be read from here; the external test TestSchedulerKindsAtomTableDrift
+// cannot be read from here; the external test TestKindAtomScopes_MatchBooksAtomTable
 // fails when the two drift.
 var t7AtomScopes = map[auth.Permission][]rbac.Permission{
 	auth.PermLibraryView:         {"books:view", "core:tasks.view"},
