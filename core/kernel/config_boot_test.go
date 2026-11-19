@@ -1,7 +1,7 @@
 // file: core/kernel/config_boot_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: d2618bbb-991d-4090-bcf6-a00ef3f98c75
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package kernel
 
@@ -19,6 +19,7 @@ import (
 
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/health"
+	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/internal/configstore"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/secrets"
@@ -654,7 +655,7 @@ func TestResolveStorage_AgreesWithTheServeBoot(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			h := newSwapHost(t)
 			c := h.resolvable(env...)
-			db, state, err := ResolveStorage(h.ctx, c)
+			db, state, err := ResolveStorage(h.ctx, c, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -672,12 +673,124 @@ func TestResolveStorage_AgreesWithTheServeBoot(t *testing.T) {
 	}
 }
 
+// TestResolveStorage_RelativeDefaultAgreesWithTheServeBoot: a relative
+// compiled default (hello's "hello-state") resolves to one absolute
+// directory for ResolveStorage and for the boot of the same Config.
+func TestResolveStorage_RelativeDefaultAgreesWithTheServeBoot(t *testing.T) {
+	h := newSwapHost(t)
+	t.Chdir(filepath.Dir(h.state))
+	c := h.resolvable()
+	c.StateDirDefault = filepath.Base(h.state)
+	db, state, err := ResolveStorage(h.ctx, c, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(state) || state != h.state {
+		t.Fatalf("ResolveStorage state directory = %q, want %q (absolute)", state, h.state)
+	}
+	k := h.mustBoot(c)
+	if db != k.cfg.StoragePath || state != k.cfg.StateDir {
+		t.Fatalf("ResolveStorage = %q, %q; the boot opened %q, %q", db, state, k.cfg.StoragePath, k.cfg.StateDir)
+	}
+}
+
+// TestResolveStorage_RefusesANonOwnerBeforeAnything (05-config §1.7 step 0,
+// seams.d/F3-07.md): a command that writes, run as a user that does not own
+// the existing state directory, is refused by ResolveStorage itself. When
+// that candidate exists but is no directory, step 0 would fall back and
+// create the store's directory; the refusal comes first and nothing is
+// made. ResolveStorage never reads the boot record (no Boot), so an
+// unparsable one is neither set aside as .bad nor touched, whoever runs it.
+// A state directory that does not exist yet has no owner, and is created
+// (the open question recorded in seams.d/F3-07.md).
+func TestResolveStorage_RefusesANonOwnerBeforeAnything(t *testing.T) {
+	h := newSwapHost(t)
+	beside := filepath.Join(t.TempDir(), "elsewhere")
+	if err := os.MkdirAll(h.state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	record := filepath.Join(h.state, "config.boot.json")
+	garbage := []byte(`{"version": 1, "modules": [`)
+	if err := os.WriteFile(record, garbage, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stranger := os.Geteuid() + 1
+	ctx := bootseam.With(t.Context(), &bootseam.Seams{BuildID: swapBuild, Euid: func() int { return stranger }})
+	c := h.resolvable("GOTHAM_CORE_STORAGE_PATH=" + filepath.Join(beside, "main.pebble"))
+
+	_, _, err := ResolveStorage(ctx, c, "storage reset")
+	if !errors.Is(err, storage.ErrNotStateDirOwner) || !strings.Contains(err.Error(), "storage reset") {
+		t.Fatalf("ResolveStorage as a stranger = %v, want storage.ErrNotStateDirOwner naming the command", err)
+	}
+	if _, err := os.Stat(beside); !os.IsNotExist(err) {
+		t.Fatalf("the refused resolve fell back beside the store: %v", err)
+	}
+	// A read-only command is not refused, and reads no boot record either.
+	if _, state, err := ResolveStorage(ctx, c, ""); err != nil || state != h.state {
+		t.Fatalf("a read-only ResolveStorage as a stranger = %q, %v; want %q", state, err, h.state)
+	}
+	if b, err := os.ReadFile(record); err != nil || !bytes.Equal(b, garbage) {
+		t.Fatalf("the boot record = %q, %v; want it untouched", b, err)
+	}
+	if m, _ := filepath.Glob(record + ".bad*"); len(m) != 0 {
+		t.Fatalf("ResolveStorage set the boot record aside: %v", m)
+	}
+
+	// The default exists and is a file: without the refusal, step 0 would
+	// fall back beside the store and create that directory.
+	notDir := newSwapHost(t)
+	if err := os.MkdirAll(filepath.Dir(notDir.state), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(notDir.state, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c = notDir.resolvable("GOTHAM_CORE_STORAGE_PATH=" + filepath.Join(beside, "main.pebble"))
+	if _, _, err := ResolveStorage(ctx, c, "storage reset"); !errors.Is(err, storage.ErrNotStateDirOwner) {
+		t.Fatalf("ResolveStorage of a stranger's unusable default = %v, want storage.ErrNotStateDirOwner", err)
+	}
+	if _, err := os.Stat(beside); !os.IsNotExist(err) {
+		t.Fatalf("the refused resolve created the fallback beside the store: %v", err)
+	}
+
+	fresh := newSwapHost(t)
+	c = fresh.resolvable()
+	if _, state, err := ResolveStorage(ctx, c, "storage reset"); err != nil || state != fresh.state {
+		t.Fatalf("ResolveStorage of an absent state directory as a stranger = %q, %v; want it created", state, err)
+	}
+	if fi, err := os.Stat(fresh.state); err != nil || !fi.IsDir() {
+		t.Fatalf("the absent state directory was not created: %v", err)
+	}
+}
+
+// TestResolveStorage_WarnsOnStandardErrorWithNoLogger: with no Config.Logger
+// the fallback beside the store is still reported, on Config.LogOutput (an
+// offline command's standard error).
+func TestResolveStorage_WarnsOnStandardErrorWithNoLogger(t *testing.T) {
+	h := newSwapHost(t)
+	blocker := filepath.Join(t.TempDir(), "arkham")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	beside := filepath.Join(t.TempDir(), "elsewhere")
+	c := h.resolvable("GOTHAM_CORE_STORAGE_PATH=" + filepath.Join(beside, "main.pebble"))
+	c.StateDirDefault = filepath.Join(blocker, "state") // under a file: cannot be created
+	var out bytes.Buffer
+	c.Logger, c.LogOutput = nil, &out
+	if _, state, err := ResolveStorage(h.ctx, c, ""); err != nil || state != beside {
+		t.Fatalf("ResolveStorage = %q, %v; want the fallback %q", state, err, beside)
+	}
+	if !strings.Contains(out.String(), "keeping state files beside the database") {
+		t.Fatalf("the fallback warning did not reach LogOutput: %q", out.String())
+	}
+}
+
 // TestResolveStorage_GateOffPassesThrough: with the gate off the Config's own
 // paths come back and nothing is created.
 func TestResolveStorage_GateOffPassesThrough(t *testing.T) {
 	h := newSwapHost(t)
 	c := h.config(nil)
-	db, state, err := ResolveStorage(h.ctx, c)
+	db, state, err := ResolveStorage(h.ctx, c, "")
 	if err != nil || db != h.db || state != h.state {
 		t.Fatalf("ResolveStorage gate off = %q, %q, %v", db, state, err)
 	}
@@ -691,7 +804,7 @@ func TestResolveStorage_NoStorageIsEmpty(t *testing.T) {
 	h := newSwapHost(t)
 	c := testConfig(t, mod("alfred", nil))
 	c.CoreConfigBoot, c.ConfigOptions, c.StateDirDefault = true, config.Options{Environ: []string{}}, h.state
-	db, state, err := ResolveStorage(h.ctx, c)
+	db, state, err := ResolveStorage(h.ctx, c, "")
 	if err != nil || db != "" || state != "" {
 		t.Fatalf("ResolveStorage with no storage = %q, %q, %v", db, state, err)
 	}
@@ -703,7 +816,7 @@ func TestResolveStorage_RefusesTwoStores(t *testing.T) {
 	h := newSwapHost(t)
 	c := h.resolvable("GOTHAM_CORE_STORAGE_PATH=" + filepath.Join(t.TempDir(), "a", "main.pebble"))
 	c.StoragePath = filepath.Join(t.TempDir(), "b", "main.pebble")
-	if _, _, err := ResolveStorage(h.ctx, c); err == nil || !strings.Contains(err.Error(), "different stores") {
+	if _, _, err := ResolveStorage(h.ctx, c, ""); err == nil || !strings.Contains(err.Error(), "different stores") {
 		t.Fatalf("ResolveStorage with two stores = %v", err)
 	}
 }

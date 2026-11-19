@@ -1,7 +1,7 @@
 // file: core/kernel/config_boot.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 0e3db6c6-c5ae-4f54-adaf-6fd7b728c89e
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package kernel
 
@@ -10,14 +10,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
+	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/health"
+	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/internal/restoreswap"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/secrets"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // The config phases of 06 section 6.5.1 as labels on
@@ -54,58 +59,133 @@ const disabledByConfig = "config"
 // they are: with no store there is nothing to swap and no keyring to keep, and
 // the config store is the operator layers and the boot record.
 func (k *Kernel) bootCoreConfig(ctx context.Context) error {
-	o := k.cfg.ConfigOptions
-	cb, err := bootConfig(ctx, configInput{
-		AppID: k.cfg.AppID, EnvPrefix: o.EnvPrefix, Environ: o.Environ, FilePath: o.FilePath, Flags: o.Flags,
-		StateDirDefault: k.cfg.StateDirDefault, Modules: k.cfg.Modules, Passthrough: o.Passthrough,
-		EnvBindings: o.EnvBindings, Retired: o.Retired, OwnerSet: o.OwnerSet,
-		Logger: k.coreLog("config"), Now: bootClock(ctx),
-	})
+	cb, err := bootConfig(ctx, k.configInput(ctx))
 	if err != nil {
 		return err
 	}
 	k.cfgBoot = cb
 	if k.declaresStorage() {
-		path, err := k.gatedStoragePath(cb)
+		path, stateDir, err := k.storagePaths(cb.dbPath, cb.stateDir)
 		if err != nil {
 			return err
 		}
-		if sd := k.cfg.StateDir; sd != "" && filepath.Clean(sd) != cb.stateDir {
-			return fmt.Errorf("kernel: config: the app resolved the state directory %q, step 0 of the config boot %q: one resolver must own it", sd, cb.stateDir)
-		}
-		k.cfg.StoragePath, k.cfg.StateDir = path, cb.stateDir
+		k.cfg.StoragePath, k.cfg.StateDir = path, stateDir
 	}
 	k.applyBootEnabled(cb)
 	return nil
 }
 
+// configInput is what bootConfig and ResolveStorage read from Config.
+func (k *Kernel) configInput(ctx context.Context) configInput {
+	o := k.cfg.ConfigOptions
+	return configInput{
+		AppID: k.cfg.AppID, EnvPrefix: o.EnvPrefix, Environ: o.Environ, FilePath: o.FilePath, Flags: o.Flags,
+		StateDirDefault: k.cfg.StateDirDefault, Modules: k.cfg.Modules, Passthrough: o.Passthrough,
+		EnvBindings: o.EnvBindings, Retired: o.Retired, OwnerSet: o.OwnerSet,
+		Logger: k.coreLog("config"), Now: bootClock(ctx),
+	}
+}
+
+// storagePaths is the store path and the state directory P0 hands on, from
+// core.storage.path as the operator layers give it (layer) and step 0's
+// state directory: gatedStoragePath, and a refusal when the app resolved
+// another state directory itself.
+func (k *Kernel) storagePaths(layer, stateDir string) (dbPath, dir string, err error) {
+	path, err := k.gatedStoragePath(layer, stateDir)
+	if err != nil {
+		return "", "", err
+	}
+	if sd := k.cfg.StateDir; sd != "" && filepath.Clean(sd) != stateDir {
+		return "", "", fmt.Errorf("kernel: config: the app resolved the state directory %q, step 0 of the config boot %q: one resolver must own it", sd, stateDir)
+	}
+	return path, stateDir, nil
+}
+
 // ResolveStorage is P0's resolution of the store path and the state directory
 // for a caller that has no kernel to boot: an offline command (the app's
 // storage, restore, reset and secrets commands, prune-checkpoints and the
-// keyring export). With Config.CoreConfigBoot set it runs bootConfig's step 0
-// and the boot record over the same layers a serve boot reads, so serve and
-// every offline command open one store and one state directory. It returns
-// "" and "" for an app with no storage, and c.StoragePath, c.StateDir as they
-// are with the gate off. It has the side effects P0 has: the state directory
-// is created when it does not exist, and an unparsable boot record is set
-// aside as .bad (05-config 1.5).
-func ResolveStorage(ctx context.Context, c Config) (dbPath, stateDir string, err error) {
+// keyring export). With Config.CoreConfigBoot set it runs step 0 alone over
+// the operator layers a serve boot reads, so serve and every offline command
+// open one store and one state directory; with the gate off it returns
+// c.StoragePath and c.StateDir as they are. An app with no storage resolves
+// nothing and gets them back too ("" and "" from the app).
+//
+// It reads no boot record (so it never sets one aside as .bad) and creates
+// nothing before owner, when set, has been checked: owner names the command
+// (the string storage.RefuseNotStateDirOwner reports) for every command that
+// writes the store or the state directory, "" for a read-only one. Each
+// state directory candidate step 0 would create is refused, before it is
+// created, when it exists and this process is not its owner, and that
+// refusal is returned whatever step 0 then resolves, so a refused default
+// never falls back beside the store. A candidate that does not exist has no
+// owner to compare and is created, as serve creates it (seams.d/F3-07.md).
+// Its warnings (the fallback beside the store) go to Config.Logger, else to
+// a text logger on Config.LogOutput, else on standard error.
+func ResolveStorage(ctx context.Context, c Config, owner string) (dbPath, stateDir string, err error) {
 	if !c.CoreConfigBoot {
 		return c.StoragePath, c.StateDir, nil
+	}
+	if c.Logger == nil {
+		w := c.LogOutput
+		if w == nil {
+			w = os.Stderr
+		}
+		c.Logger = slog.New(slog.NewTextHandler(w, nil))
 	}
 	k := &Kernel{cfg: c, lifecycle: newLifecycle()}
 	if err := k.catalog(false); err != nil {
 		return "", "", err
 	}
-	defer func() {
-		if cerr := k.cfgBoot.close(context.WithoutCancel(ctx)); cerr != nil {
-			err = errors.Join(err, fmt.Errorf("kernel: config: close the boot store: %w", cerr))
+	if !k.declaresStorage() {
+		return c.StoragePath, c.StateDir, nil
+	}
+	in := k.configInput(ctx)
+	var refused error
+	create := in.mkdir(ctx)
+	in.Mkdir = func(d string) error {
+		if refused != nil {
+			// The refused candidate's fallback is not created either: the
+			// command stops at the refusal with nothing made.
+			return refused
 		}
-	}()
-	if err := k.bootCoreConfig(ctx); err != nil {
+		if owner != "" {
+			if err := refuseExistingNonOwner(ctx, d, owner); err != nil {
+				refused = err
+				return err
+			}
+		}
+		return create(d)
+	}
+	st, _, err := newStep0Store(in, nil)
+	if err != nil {
 		return "", "", err
 	}
-	return k.cfg.StoragePath, k.cfg.StateDir, nil
+	defer func() {
+		if cerr := st.Close(context.WithoutCancel(ctx)); cerr != nil {
+			err = errors.Join(err, fmt.Errorf("kernel: config: close the step 0 store: %w", cerr))
+		}
+	}()
+	s0, err := step0(ctx, st, in, in.Mkdir)
+	if refused != nil {
+		return "", "", refused
+	}
+	if err != nil {
+		return "", "", err
+	}
+	return k.storagePaths(s0.dbPath, s0.stateDir)
+}
+
+// refuseExistingNonOwner is storage.RefuseNotStateDirOwner for a state
+// directory candidate that exists on the boot's filesystem; one that does
+// not exist has no owner yet and is not refused.
+func refuseExistingNonOwner(ctx context.Context, dir, what string) error {
+	switch _, err := bootseam.FS(ctx).Stat(dir); {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return fmt.Errorf("kernel: %s: the state directory %s: %w", what, dir, err)
+	}
+	return storage.RefuseNotStateDirOwner(ctx, dir, what)
 }
 
 // declaresStorage reports whether any module of the app declares storage,
@@ -122,8 +202,8 @@ func (k *Kernel) declaresStorage() bool {
 // gatedStoragePath is the store's path under the config boot: core.storage.path
 // from the pre-boot layers, else the compiled default (Config.StoragePath),
 // else <state dir>/storage/main.pebble.
-func (k *Kernel) gatedStoragePath(cb *configBoot) (string, error) {
-	layer, compiled := cb.dbPath, k.cfg.StoragePath
+func (k *Kernel) gatedStoragePath(layer, stateDir string) (string, error) {
+	compiled := k.cfg.StoragePath
 	for what, p := range map[string]string{"core.storage.path": layer, "the app's compiled database path": compiled} {
 		if p != "" && !filepath.IsAbs(p) {
 			return "", fmt.Errorf("kernel: config: %s %q is not an absolute path", what, p)
@@ -137,7 +217,7 @@ func (k *Kernel) gatedStoragePath(cb *configBoot) (string, error) {
 	case compiled != "":
 		return filepath.Clean(compiled), nil
 	}
-	return filepath.Join(cb.stateDir, "storage", "main.pebble"), nil
+	return filepath.Join(stateDir, "storage", "main.pebble"), nil
 }
 
 // applyBootEnabled sets each module's enablement from core.modules.<id>.enabled

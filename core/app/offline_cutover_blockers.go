@@ -1,7 +1,7 @@
 // file: core/app/offline_cutover_blockers.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c41e7a58-9d2b-4f63-b805-27e1a9d6c3f0
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package app
 
@@ -101,7 +101,7 @@ func cutoverBlockersCommand(opts Options, mods []module.Module) Command {
 
 // openBlockers is kernel.OpenCutoverBlockers over the app's configuration.
 func openBlockers(ctx context.Context, opts Options, mods []module.Module, readOnly bool) (*kernel.CutoverBlockers, error) {
-	c, err := offlineConfig(ctx, opts, mods)
+	c, err := offlineConfig(ctx, opts, mods, readWriteOwner(readOnly))
 	if err != nil {
 		return nil, err
 	}

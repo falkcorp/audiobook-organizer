@@ -1,7 +1,7 @@
 // file: core/app/offline_storage.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 8fbea565-1376-4d4b-a491-c6078aa8e4db
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package app
 
@@ -91,7 +91,7 @@ func migrateCommand(opts Options, mods []module.Module) Command {
 			if *estimate && *archive != "" {
 				return errors.New("storage migrate: --estimate counts over the live store; it does not take --from-archive")
 			}
-			c, err := offlineConfig(ctx, opts, mods)
+			c, err := offlineConfig(ctx, opts, mods, "") // kernel.DryRun checks no owner
 			if err != nil {
 				return err
 			}
@@ -229,7 +229,7 @@ func quarantinePurgeCommand(opts Options, mods []module.Module) Command {
 
 // openKernelOffline is kernel.OpenOffline over the app's configuration.
 func openKernelOffline(ctx context.Context, opts Options, mods []module.Module, readOnly bool) (*kernel.Offline, error) {
-	c, err := offlineConfig(ctx, opts, mods)
+	c, err := offlineConfig(ctx, opts, mods, readWriteOwner(readOnly))
 	if err != nil {
 		return nil, err
 	}
