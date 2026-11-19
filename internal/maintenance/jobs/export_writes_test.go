@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/export_writes_test.go
-// version: 3.0.0
+// version: 3.0.1
 // guid: 1f6e2b94-7c03-4d58-a9e1-5b8d3c70f2a6
 // last-edited: 2026-11-19
 
@@ -45,5 +45,5 @@ func DeriveWrites(traces map[string][]string, table map[string][]ops.Resource) (
 // would have seen the failure, and the swap and the read raced. Nothing global
 // changes here.
 func KindsWithFailingWrites(err error) ([]tasks.Definition, error) {
-	return kindsWith(func() (map[string][]ops.Resource, error) { return nil, err }, KindDeps{}, nil)
+	return Kinds(KindDeps{writes: func() (map[string][]ops.Resource, error) { return nil, err }}, nil)
 }
