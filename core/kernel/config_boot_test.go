@@ -1,5 +1,5 @@
 // file: core/kernel/config_boot_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: d2618bbb-991d-4090-bcf6-a00ef3f98c75
 // last-edited: 2026-11-18
 
@@ -632,5 +632,78 @@ func TestConfigBoot_AttachRefusesAnOpenStoreWithNoSecrets(t *testing.T) {
 	}
 	if err := (&Kernel{}).attachCoreConfig(h.ctx); err != nil {
 		t.Fatalf("attachCoreConfig with no store = %v, want nil", err)
+	}
+}
+
+// resolvable is the gated config an app hands ResolveStorage: no path, no
+// state directory, so step 0 chooses both.
+func (h *swapHost) resolvable(env ...string) Config {
+	c := h.gatedConfig(nil, env...)
+	c.StoragePath, c.StateDir = "", ""
+	return c
+}
+
+// TestResolveStorage_AgreesWithTheServeBoot: the paths ResolveStorage returns
+// are the paths the same Config boots on, whether the operator layers name
+// core.storage.path or not.
+func TestResolveStorage_AgreesWithTheServeBoot(t *testing.T) {
+	for name, env := range map[string][]string{
+		"default":  nil,
+		"env path": {"GOTHAM_CORE_STORAGE_PATH=" + filepath.Join(t.TempDir(), "elsewhere", "main.pebble")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newSwapHost(t)
+			c := h.resolvable(env...)
+			db, state, err := ResolveStorage(h.ctx, c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			k := h.mustBoot(c)
+			if db != k.cfg.StoragePath || state != k.cfg.StateDir {
+				t.Fatalf("ResolveStorage = %q, %q; the boot opened %q, %q", db, state, k.cfg.StoragePath, k.cfg.StateDir)
+			}
+			if len(env) == 0 && db != filepath.Join(h.state, "storage", "main.pebble") {
+				t.Fatalf("default store path = %q", db)
+			}
+			if len(env) > 0 && db != filepath.Clean(strings.TrimPrefix(env[0], "GOTHAM_CORE_STORAGE_PATH=")) {
+				t.Fatalf("env store path not used: %q", db)
+			}
+		})
+	}
+}
+
+// TestResolveStorage_GateOffPassesThrough: with the gate off the Config's own
+// paths come back and nothing is created.
+func TestResolveStorage_GateOffPassesThrough(t *testing.T) {
+	h := newSwapHost(t)
+	c := h.config(nil)
+	db, state, err := ResolveStorage(h.ctx, c)
+	if err != nil || db != h.db || state != h.state {
+		t.Fatalf("ResolveStorage gate off = %q, %q, %v", db, state, err)
+	}
+	if _, err := os.Stat(h.state); !os.IsNotExist(err) {
+		t.Fatalf("a gate-off resolve created the state directory: %v", err)
+	}
+}
+
+// TestResolveStorage_NoStorageIsEmpty: an app with no storage resolves to "".
+func TestResolveStorage_NoStorageIsEmpty(t *testing.T) {
+	h := newSwapHost(t)
+	c := testConfig(t, mod("alfred", nil))
+	c.CoreConfigBoot, c.ConfigOptions, c.StateDirDefault = true, config.Options{Environ: []string{}}, h.state
+	db, state, err := ResolveStorage(h.ctx, c)
+	if err != nil || db != "" || state != "" {
+		t.Fatalf("ResolveStorage with no storage = %q, %q, %v", db, state, err)
+	}
+}
+
+// TestResolveStorage_RefusesTwoStores: a compiled path and a layer naming two
+// stores fails the resolve, as it fails the boot, and nothing is left open.
+func TestResolveStorage_RefusesTwoStores(t *testing.T) {
+	h := newSwapHost(t)
+	c := h.resolvable("GOTHAM_CORE_STORAGE_PATH=" + filepath.Join(t.TempDir(), "a", "main.pebble"))
+	c.StoragePath = filepath.Join(t.TempDir(), "b", "main.pebble")
+	if _, _, err := ResolveStorage(h.ctx, c); err == nil || !strings.Contains(err.Error(), "different stores") {
+		t.Fatalf("ResolveStorage with two stores = %v", err)
 	}
 }
