@@ -1,5 +1,5 @@
 // file: internal/books/cutover_flip_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b94e07d2-6a1c-4c35-8d7f-2e0a5f3c9b18
 // last-edited: 2026-11-19
 
@@ -244,7 +244,7 @@ func TestFlipConfigNames_DarkUntilDeclared(t *testing.T) {
 // recorded: the predicate is what makes the bindings bootable.
 func TestFlipConfigNames_BootsWithTheOpenAIBindings(t *testing.T) {
 	retired, bindings, passthrough := flipConfigNames(true)
-	env := []string{"OPENAI_API_KEY=gotham-signal-0001", "OPENAI_BASE_URL=https://api.gotham.invalid/v1"}
+	env := []string{"OPENAI_API_KEY=bane", "OPENAI_BASE_URL=https://api.gotham.invalid/v1"}
 	boot := func(pt func(coreconfig.Path) bool) error {
 		a, err := app.New(t.Context(), app.Options{
 			AppID: AppID, StateDir: t.TempDir(), CoreConfigBoot: true,
