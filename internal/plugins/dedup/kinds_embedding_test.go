@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/kinds_embedding_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 985da553-5e06-479c-8367-c003bdb6d793
 // last-edited: 2026-11-19
 
@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -625,6 +626,54 @@ func TestDedupEmbedding_EmbedScanLiveEmbedsEveryBookThroughTheEngine(t *testing.
 	require.Equal(t, []tasks.Writer{w}, spy.seenWriters())
 	require.Equal(t, []int{embedScanConcurrency}, declared)
 	require.Contains(t, h.lastNote(), "Embedding complete — 2 new, 0 cached, 0 skipped, 1 errors (of 3 books)")
+}
+
+// wideEmbedEngine is a routed pool wider than tasks.Fixed's ceiling whose
+// EmbedBook blocks until every book is in flight at once.
+type wideEmbedEngine struct {
+	width   int
+	arrived atomic.Int64
+	allIn   chan struct{}
+}
+
+func (e *wideEmbedEngine) EmbedBook(context.Context, string) (dedupengine.EmbedStatus, error) {
+	if e.arrived.Add(1) == int64(e.width) {
+		close(e.allIn)
+	}
+	select {
+	case <-e.allIn:
+		return dedupengine.EmbedStatusEmbedded, nil
+	case <-time.After(10 * time.Second):
+		return dedupengine.EmbedStatusSkippedEmptyTitle, fmt.Errorf("only %d books in flight, want %d", e.arrived.Load(), e.width)
+	}
+}
+
+func (e *wideEmbedEngine) EmbedBooksAsync(context.Context) (string, int, error) { return "", 0, nil }
+func (e *wideEmbedEngine) EmbedConcurrency(int) int                             { return e.width }
+
+type wideEmbedStore struct{ books []database.BookCore }
+
+// GetAllBooksCore(0, 0) is "every book", the only call the embed core makes.
+func (s wideEmbedStore) GetAllBooksCore(int, int) ([]database.BookCore, error) { return s.books, nil }
+
+// HEAD applied no upper bound to its routed embed pool; tasks.Fixed clamps at 64,
+// so HEAD's shell must still run every worker the engine asks for (n1).
+func TestDedupEmbedding_EmbedScanHeadShellKeepsAPoolWiderThanTheFixedCeiling(t *testing.T) {
+	width := tasks.MaxFixed + 16
+	books := make([]database.BookCore, width)
+	for i := range books {
+		books[i] = database.BookCore{ID: "dark-knight-" + strconv.Itoa(i), Title: "The Dark Knight Returns"}
+	}
+	eng := &wideEmbedEngine{width: width, allIn: make(chan struct{})}
+	res, err := embedScanCore(context.Background(), embedScanEnv{
+		kindEnv: headEnv(&mockReporter{}, true),
+		Store:   wideEmbedStore{books: books},
+		Engine:  eng,
+	})
+	require.NoError(t, err)
+	require.Equal(t, width, res.Embedded, "every book was in flight at once")
+	require.Zero(t, res.Errors)
+	require.Equal(t, tasks.MaxFixed, embedScanParallelism(width).Workers(), "the native pool keeps the kernel's ceiling")
 }
 
 // async=true under an OpenAI backend submits one batch instead of embedding.

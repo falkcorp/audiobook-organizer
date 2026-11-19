@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/kinds_scoring.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 87767b32-a764-471a-bc6d-1b845dc5a45d
 // last-edited: 2026-11-19
 
@@ -198,11 +198,12 @@ func scoringKinds(p *Plugin, d ScoringKindDeps, sched func(tasks.Kind) *tasks.Sc
 
 // mergeWrites is what a candidate merge (merge.Service.MergeBooks through
 // Engine.MergeJournaled, plus EnsureSingletonBookTag and the candidate cleanup)
-// writes, per internal/maintenance/resources Table rows "MergeBooks" and
-// "DeleteBook": ModifyBook/SoftDeleteBook on every member (books, authors,
-// metadata_cache, indexes), the losers' external ids, listening state and sync
-// ids (external_ids, user_state, sync_identity), the undo journal (operations)
-// and the candidate rows (embeddings).
+// writes: internal/maintenance/resources Table row "MergeBooks" (ModifyBook on
+// every member: books, authors, metadata_cache, indexes; the losers' external
+// ids, listening state and sync ids: external_ids, user_state, sync_identity;
+// the undo journal: operations), plus the candidate rows the cleanup rewrites
+// (embeddings). No merge path hard-deletes a book (the losers are soft-deleted
+// through ModifyBook), so Table row "DeleteBook" does not apply.
 var mergeWrites = []ops.Resource{
 	ops.ResBooks, ops.ResAuthors, ops.ResMetadataCache, ops.ResIndexes,
 	ops.ResExternalIDs, ops.ResUserState, ops.ResSyncIdentity, ops.ResOperations,
@@ -545,7 +546,9 @@ func (p *Plugin) splitBookBulkMergeNative(d ScoringKindDeps, sched func(tasks.Ki
 	// reassigns external ids, listening state and sync ids (external_ids,
 	// user_state, sync_identity) and journals the undo under the run's id
 	// (operations); the merged candidate's row is deleted (split_book_candidates).
-	// HEAD declared only books and book_files.
+	// HEAD declared only books and book_files. The wider set is deliberate (a row
+	// errs wide, resources.go) and the coordinator signed off on it for F5-04 as a
+	// deviation from rule R7's verbatim mapping.
 	c.Effects = tasks.Writes(res(ops.ResBooks, ops.ResBookFiles, ops.ResAuthors, ops.ResMetadataCache,
 		ops.ResIndexes, ops.ResExternalIDs, ops.ResUserState, ops.ResSyncIdentity, ops.ResOperations,
 		ops.ResSplitBookCandidates)...)

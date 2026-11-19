@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/env.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 64bede01-c260-409b-9b20-f7e73920ae55
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package dedup
 
@@ -77,6 +77,12 @@ type kindItemsOptions struct {
 	// atomically.
 	PureLabel func(i, total int) string
 	Label     func(i, total int) string
+	// HeadWorkers is HEAD's own worker count for a pool whose Parallelism cannot
+	// carry it: tasks.Fixed clamps to [1, MaxFixed], and a count HEAD passed to
+	// RunItems unbounded must not be narrowed in HEAD's shell. HEAD's pool uses it
+	// when it is above zero; the native pool ignores it and runs the declared
+	// Parallelism (with the kernel's ceiling).
+	HeadWorkers int
 }
 
 // kindItemsFunc runs fn over the indexes 0..n-1 on the shell's pool with the
@@ -100,10 +106,14 @@ func headItems(rep sdk.Reporter) kindItemsFunc {
 		if lbl == nil {
 			lbl = o.PureLabel
 		}
+		workers := par.Workers()
+		if o.HeadWorkers > 0 {
+			workers = o.HeadWorkers
+		}
 		return opsregistry.RunItems(ctx, rep, idx, func(ctx context.Context, i int) error {
 			return fn(ctx, i)
 		}, opsregistry.RunItemsOptions{
-			Concurrency:    par.Workers(),
+			Concurrency:    workers,
 			ErrMode:        mode,
 			ProgressOffset: o.ProgressBase,
 			ProgressTotal:  o.ProgressTotal,
