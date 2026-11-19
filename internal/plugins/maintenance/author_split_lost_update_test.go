@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_split_lost_update_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: ce15c0ee-2b3c-4527-89e3-b2998eb307a7
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -14,38 +14,28 @@ import (
 )
 
 // splitLostUpdateStore is a real PebbleStore with the OTHER writer wired in:
-// it commits Duration=4242 on the row right after every raw GetBookByID and
-// right before every ModifyBook takes the row lock, which is where a real
-// concurrent write of another column lands in production. A site that reads
-// the row and writes the WHOLE row back reverts it; ModifyBook keeps it.
+// it commits Duration=4242 on the row right before the split's one commit
+// (ModifyBookCredits) takes the row lock, which is where a real concurrent write
+// of another column lands in production. A site that reads the row and writes
+// the WHOLE row back reverts it; the commit hydrates the row it finds and keeps it.
 type splitLostUpdateStore struct {
 	*database.PebbleStore
 }
 
-func (s splitLostUpdateStore) landDuration(id string) {
+func (s splitLostUpdateStore) ModifyBookCredits(id string, fn func(*database.Book, *database.BookCreditsEdit) error) (*database.Book, database.BookCreditsEdit, error) {
 	_, _ = s.PebbleStore.ModifyBook(id, func(b *database.Book) error {
 		d := 4242
 		b.Duration = &d
 		return nil
 	})
-}
-
-func (s splitLostUpdateStore) GetBookByID(id string) (*database.Book, error) {
-	b, err := s.PebbleStore.GetBookByID(id)
-	s.landDuration(id)
-	return b, err
-}
-
-func (s splitLostUpdateStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
-	s.landDuration(id)
-	return s.PebbleStore.ModifyBook(id, fn)
+	return s.PebbleStore.ModifyBookCredits(id, fn)
 }
 
 // TestAuthorSplitScanOp_PrimaryAuthorWriteDoesNotRevertConcurrentColumns pins
 // (against a real store; it moved here from internal/scheduler with the op,
 // 04-P4e) the lost-update fix on the split's primary-author write (audit A1#15): it
 // must set only AuthorID/Author, so a Duration another writer commits between
-// its read and its write survives. Against the old GetBookByID ->
+// the listing and the commit survives. Against the old GetBookByID ->
 // UpdateBook(whole row) it fails with "Duration reverted".
 func TestAuthorSplitScanOp_PrimaryAuthorWriteDoesNotRevertConcurrentColumns(t *testing.T) {
 	st := newSplitRelinkStore(t)

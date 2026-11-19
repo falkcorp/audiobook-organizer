@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_split_locks_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5a7e2c19-8d04-4b63-9f1a-c60e3b2d7a85
 // last-edited: 2026-11-19
 
@@ -8,7 +8,6 @@ package maintenance
 import (
 	"fmt"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -21,19 +20,11 @@ import (
 type splitLockStore struct {
 	*database.PebbleStore
 	unreadable map[string]bool
-	// lockAfter, when non-nil, is the number of lock reads that answer from the
-	// real store; every later read of lockBook reports its author locked. It
-	// models a lock the user saves after the run's first look.
-	lockAfter *atomic.Int64
-	lockBook  string
 }
 
 func (s splitLockStore) GetMetadataFieldStates(id string) ([]database.MetadataFieldState, error) {
 	if s.unreadable[id] {
 		return nil, fmt.Errorf("field states for %s: store closed", id)
-	}
-	if s.lockAfter != nil && id == s.lockBook && s.lockAfter.Add(-1) < 0 {
-		return []database.MetadataFieldState{{BookID: id, Field: database.FieldKeyAuthorName, OverrideLocked: true}}, nil
 	}
 	return s.PebbleStore.GetMetadataFieldStates(id)
 }
@@ -131,33 +122,27 @@ func TestAuthorSplitScanOp_UnreadableLocksRelinkNothing(t *testing.T) {
 	require.NotContains(t, summary, "(0 errors,", "the unreadable lock read was not counted: %s", summary)
 }
 
-// The run's first lock read is the advisory pre-check; the write itself reads
-// the locks again under the book's write lock. A lock saved between the two
-// still holds the primary-author write: the book keeps the composite primary and
-// the hold is counted, not written over.
-func TestAuthorSplitScanOp_LockSavedAfterThePreCheckHoldsThePrimaryWrite(t *testing.T) {
+// A lock saved after the book was listed and before its commit holds the WHOLE
+// book: the lock is read inside the one commit, so neither the credits nor the
+// primary author are written, and the book is counted held, not failed. (Before
+// the split wrote one commit per book, such a lock left the credits split and the
+// primary on the composite.)
+func TestAuthorSplitScanOp_LockSavedBeforeTheCommitHoldsTheWholeBook(t *testing.T) {
 	st := newSplitRelinkStore(t)
 	composite, err := st.CreateAuthor("Selina Kyle & Harvey Dent")
 	require.NoError(t, err)
 	id := mkSplitBook(t, st, "The Court of Owls", composite.ID)
-	var calls atomic.Int64
-	calls.Store(1) // the pre-check reads unlocked; every later read sees the lock
+	db := splitFaultStore{PebbleStore: st, beforeCommit: func(bookID string) { lockBookAuthor(t, st, bookID) }}
 
-	rep := runSplitScanOp(t, splitLockStore{PebbleStore: st, lockAfter: &calls, lockBook: id})
+	rep := runSplitScanOp(t, db)
 
-	require.Equal(t, composite.ID, authorIDOf(t, st, id), "a lock saved after the pre-check did not hold the write; logs %v", rep.logs)
-	var held bool
-	for _, l := range rep.logs {
-		if strings.Contains(l, "locked by the user after its credits were relinked") {
-			held = true
-		}
-	}
-	require.True(t, held, "the late hold was not reported; logs %v", rep.logs)
+	require.Equal(t, composite.ID, authorIDOf(t, st, id), "a lock saved before the commit did not hold the write; logs %v", rep.logs)
+	require.Equal(t, map[int]int{composite.ID: 1}, creditCounts(t, st, id), "the credits were written under a lock saved before the commit; logs %v", rep.logs)
 
-	// The late hold is counted as held, like a book held before either write: the
-	// composite is kept for it (heldComposites) and the run reports no error. Left
-	// out of heldComposites, the delete of the composite was attempted, refused
-	// because the book still names it, and counted as an error.
+	// The hold is counted as held, like a book locked before the run: the composite
+	// is kept for it (heldComposites) and the run reports no error. Left out of
+	// heldComposites, the delete of the composite was attempted, refused because the
+	// book still names it, and counted as an error.
 	var summary string
 	for _, l := range rep.logs {
 		if strings.HasPrefix(l, "Split ") && strings.Contains(l, "composite authors,") {
@@ -165,9 +150,8 @@ func TestAuthorSplitScanOp_LockSavedAfterThePreCheckHoldsThePrimaryWrite(t *test
 		}
 	}
 	require.Contains(t, summary, "1 books left alone: author locked by the user", "the late hold was not counted as held")
-	require.Contains(t, summary, "(0 errors,", "a book locked mid-write was counted as an error")
+	require.Contains(t, summary, "(0 errors,", "a book locked before its commit was counted as an error")
 	kept, err := st.GetAuthorByID(composite.ID)
 	require.NoError(t, err)
 	require.NotNil(t, kept, "the composite was deleted while a locked book still names it")
-	require.Equal(t, composite.ID, kept.ID)
 }
