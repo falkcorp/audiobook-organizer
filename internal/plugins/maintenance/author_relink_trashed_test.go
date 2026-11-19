@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_relink_trashed_test.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: c5e8a1f4-2d67-4b93-8f0c-6a9d3e71b254
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package maintenance
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_mock_shim_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3b7d9e12-58a4-4f0c-9c61-2e8a5d704b13
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -103,3 +103,19 @@ func (c *creditsMock) ModifyBookNarrators(bookID string, fn func([]database.Book
 }
 
 var _ database.BookCreditsModifier = (*creditsMock)(nil)
+
+// listedBookRows answers GetBookByID for every book a fixture lists under an
+// author: the real store lists only books that have a row, so a fixture that lists
+// a book gives it one (a guarded credit move refuses a book with no row).
+func listedBookRows(byAuthor map[int][]database.BookCore) func(string) (*database.Book, error) {
+	return func(id string) (*database.Book, error) {
+		for _, books := range byAuthor {
+			for _, b := range books {
+				if b.ID == id {
+					return &database.Book{ID: id, Title: id, AuthorID: b.AuthorID}, nil
+				}
+			}
+		}
+		return nil, nil
+	}
+}

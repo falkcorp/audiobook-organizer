@@ -1,5 +1,5 @@
 // file: internal/authormerge/authormerge_locks_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6f0d3b7e-2c91-4a58-b3e6-91d84a07c5f2
 // last-edited: 2026-11-19
 
@@ -261,5 +261,87 @@ func TestMoveCredits_LocksAPrimaryThatMovedMeanwhileStillHonoursALateLock(t *tes
 	}
 	if !f.only(t).Voided {
 		t.Fatal("the row of a held move must be voided")
+	}
+}
+
+// A guarded move writes After only over the credits it was decided on. A person
+// who edited the credits after the caller read them (and has not locked the
+// author, or has not saved the lock yet) keeps their edit: the move is refused
+// with ErrCreditsChanged, writes nothing, and its row is voided.
+func TestMoveCredits_LocksRefuseWhenTheCreditsChangedSinceTheyWereRead(t *testing.T) {
+	f, _, m := lockedWorld()
+	m.Locks = &lockReader{}
+	edited := []database.BookAuthor{credit("b", 2, 0), credit("b", 7, 1)}
+	f.beforeCallback = func() { f.junction["b"] = slices.Clone(edited) }
+	_, err := MoveCredits(f, "op", m)
+	if !errors.Is(err, ErrCreditsChanged) {
+		t.Fatalf("err = %v, want ErrCreditsChanged", err)
+	}
+	if errors.Is(err, ErrBookLocked) {
+		t.Fatalf("a changed list was reported as a lock hold: %v", err)
+	}
+	if !undo.SameJunction(f.junction["b"], edited) {
+		t.Fatalf("the person's edit was overwritten: %+v", f.junction["b"])
+	}
+	if f.books["b"].AuthorID == nil || *f.books["b"].AuthorID != 2 {
+		t.Fatalf("the primary moved on a refused move: %+v", f.books["b"].AuthorID)
+	}
+	if !f.only(t).Voided {
+		t.Fatal("the row of a refused move must be voided")
+	}
+}
+
+// The co-author-only shape is guarded the same way: no primary is repointed, and
+// the changed list is still refused.
+func TestMoveCredits_LocksRefuseAChangedListOnACoAuthorMove(t *testing.T) {
+	f := &creditsFake{fakeStore: newFake()}
+	nine := 9
+	f.books["b"] = &database.Book{ID: "b", AuthorID: &nine}
+	before := []database.BookAuthor{credit("b", 9, 0), credit("b", 2, 1)}
+	f.junction["b"] = slices.Clone(before)
+	edited := []database.BookAuthor{credit("b", 9, 0), credit("b", 2, 1), credit("b", 7, 2)}
+	f.beforeCallback = func() { f.junction["b"] = slices.Clone(edited) }
+	_, err := MoveCredits(f, "op", CreditMove{BookID: "b", FromID: 2, IntoID: 1, Before: before,
+		After: []database.BookAuthor{credit("b", 9, 0), credit("b", 1, 1)}, PrimaryBefore: &nine, Locks: &lockReader{}})
+	if !errors.Is(err, ErrCreditsChanged) {
+		t.Fatalf("err = %v, want ErrCreditsChanged", err)
+	}
+	if !undo.SameJunction(f.junction["b"], edited) || !f.only(t).Voided {
+		t.Fatalf("junction %+v, row voided %v", f.junction["b"], f.only(t).Voided)
+	}
+}
+
+// A guarded move on a book whose row is gone is refused and its row voided; it
+// does not fall back to writing the junction on its own (SetBookAuthors), which
+// would be a credit write with no commit, no lock check and no row to protect.
+func TestMoveCredits_LocksRefuseABookWhoseRowIsGone(t *testing.T) {
+	f, _, m := lockedWorld()
+	m.Locks = &lockReader{}
+	delete(f.books, "b")
+	_, err := MoveCredits(f, "op", m)
+	if !errors.Is(err, ErrBookGone) {
+		t.Fatalf("err = %v, want ErrBookGone", err)
+	}
+	if f.sets != 0 {
+		t.Fatalf("%d SetBookAuthors writes after a refused move", f.sets)
+	}
+	if !undo.SameJunction(f.junction["b"], m.Before) {
+		t.Fatalf("the junction moved: %+v", f.junction["b"])
+	}
+	if !f.only(t).Voided {
+		t.Fatal("the row of a refused move must be voided")
+	}
+}
+
+// The control: an unguarded move (the Authors-view merge, author-id-repair) on a
+// ghost book (a junction with no book row) still moves the credits alone.
+func TestMoveCredits_WithoutLocksAGhostBooksCreditsStillMove(t *testing.T) {
+	f, _, m := lockedWorld()
+	delete(f.books, "b")
+	if _, err := MoveCredits(f, "op", m); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if f.sets != 1 || !undo.SameJunction(f.junction["b"], m.After) {
+		t.Fatalf("sets %d junction %+v: the ghost's credits did not move", f.sets, f.junction["b"])
 	}
 }
