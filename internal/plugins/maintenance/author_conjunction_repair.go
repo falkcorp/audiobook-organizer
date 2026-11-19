@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_conjunction_repair.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 2f8a41c6-9d73-4e05-b18a-6c4f2e93d70b
 // last-edited: 2026-11-18
 
@@ -102,7 +102,11 @@ const (
 	// checks under the author-name lock). Renaming would have taken that
 	// author's name entry over; the row is left as it is and its undo row voided.
 	conjRepairSkipNameTaken = "skip_name_taken"
-	conjRepairFailed        = "failed"
+	// conjRepairHeldUserLocked: a book of the row has its author locked by the
+	// user, so the row was not merged (all or nothing per author). Held is not
+	// failed: the lock is doing its job, and the row is retried once it is lifted.
+	conjRepairHeldUserLocked = "held_user_locked_author"
+	conjRepairFailed         = "failed"
 )
 
 // authorConjunctionRepairHelp is the def's Description, which the native kind
@@ -342,13 +346,20 @@ func authorConjunctionRepairCore(ctx context.Context, skipAuthorIDs []int, env a
 
 		if twin != nil && twin.ID != author.ID {
 			relinked, _, err := mergeAuthorIntoVia(ctx, store, env.Writer, author, *twin, dryRun, opID, log)
-			if err != nil {
+			// Books that moved are counted whatever the outcome: a merge held or
+			// failed part-way did move them, and the cache below must follow.
+			booksRelinked += relinked
+			if errors.Is(err, errAuthorMergeUserLocked) {
+				outcomes[conjRepairHeldUserLocked]++
+				log.Info("author-conjunction-repair: merge held, a book has its author locked by the user",
+					"from_id", author.ID, "from", author.Name,
+					"into_id", twin.ID, "into", twin.Name, "books_moved", relinked, "reason", err)
+			} else if err != nil {
 				outcomes[conjRepairFailed]++
 				log.Warn("author-conjunction-repair: merge failed",
 					"from_id", author.ID, "from", author.Name,
 					"into_id", twin.ID, "into", twin.Name, "err", err)
 			} else {
-				booksRelinked += relinked
 				if dryRun {
 					outcomes[conjRepairWouldMerge]++
 				} else {
@@ -392,11 +403,13 @@ func authorConjunctionRepairCore(ctx context.Context, skipAuthorIDs []int, env a
 	// names -- the one page anyone would check to confirm the repair. A dry
 	// run must NOT invalidate: it changed nothing, and dropping a warm cache
 	// is a real cost to pay for no reason.
+	// A merge held or failed part-way still moved books, so books relinked counts
+	// as a write alongside the merged and renamed rows.
 	wrote := outcomes[conjRepairMerged] + outcomes[conjRepairRenamed]
-	if !dryRun && wrote > 0 {
+	if !dryRun && (wrote > 0 || booksRelinked > 0) {
 		env.InvalidateAuthorsCache()
 		env.InvalidateDedupCache()
-		log.Info("author-conjunction-repair: invalidated author caches", "rows_written", wrote)
+		log.Info("author-conjunction-repair: invalidated author caches", "rows_written", wrote, "books_relinked", booksRelinked)
 	}
 
 	summary := fmt.Sprintf(
@@ -454,33 +467,47 @@ func mergeAuthorIntoVia(ctx context.Context, store t6g1MergeReader, writer t6g1M
 	// A book carrying two role rows for the author comes back once per row; its
 	// credits move (and are journaled) once.
 	seen := make(map[string]struct{}, len(books))
-	held := 0
+	distinct := make([]database.BookCore, 0, len(books))
 	for _, book := range books {
-		if ctx.Err() != nil {
-			return relinked, undoRows, ctx.Err()
-		}
 		if _, dup := seen[book.ID]; dup {
 			continue
 		}
 		seen[book.ID] = struct{}{}
+		distinct = append(distinct, book)
+	}
 
-		// A book whose author the user locked keeps its credits and primary
-		// author. The check runs in a preview too, so a preview does not promise a
-		// merge the apply cannot finish. A lock set that cannot be read stops the
-		// merge like a failed move does: the delete below is not reached.
+	// All or nothing per author. Every book's lock is read BEFORE the first book
+	// moves: a merge that moved the unlocked books and left the locked ones would
+	// leave the author half merged (the books on `into`, `from` surviving with
+	// only the held ones), which no run reports as a state. One locked book holds
+	// the whole author, in a preview too, so a preview does not promise a merge
+	// the apply cannot finish. A lock set that cannot be read stops the merge
+	// before anything is written, like a failed move does.
+	held := 0
+	for _, book := range distinct {
+		if ctx.Err() != nil {
+			return 0, 0, ctx.Err()
+		}
 		locks, lerr := database.LoadFieldLocks(store, book.ID)
 		if lerr != nil {
-			return relinked, undoRows, fmt.Errorf("book %s NOT moved: %w", book.ID, lerr)
+			return 0, 0, fmt.Errorf("book %s NOT moved: %w", book.ID, lerr)
 		}
 		if locks.Locked(database.FieldKeyAuthorName) {
 			held++
 			if log != nil {
-				log.Info("author merge: book left as it is, its author is locked by the user",
+				log.Info("author merge: author held, a book that credits it has its author locked",
 					"book_id", book.ID, "from_id", from.ID, "into_id", into.ID)
 			}
-			continue
 		}
+	}
+	if held > 0 {
+		return 0, 0, fmt.Errorf("author %d not merged into %d, nothing moved: %d book(s) have their author locked: %w", from.ID, into.ID, held, errAuthorMergeUserLocked)
+	}
 
+	for _, book := range distinct {
+		if ctx.Err() != nil {
+			return relinked, undoRows, ctx.Err()
+		}
 		before, err := store.GetBookAuthors(book.ID)
 		if err != nil {
 			return relinked, undoRows, fmt.Errorf("get book authors for %s: %w", book.ID, err)
@@ -496,7 +523,15 @@ func mergeAuthorIntoVia(ctx context.Context, store t6g1MergeReader, writer t6g1M
 			BookID: book.ID, FromID: from.ID, IntoID: into.ID, Into: &into,
 			Before: before, After: creditsMovedOnto(book.ID, before, from.ID, into.ID),
 			PrimaryBefore: book.AuthorID,
+			// The lock is read again inside the commit that writes this book: a lock
+			// saved after the scan above holds this book. The books before it have
+			// moved (relinked says how many), the author stays, and a re-run holds
+			// the whole author until the user unlocks it.
+			Locks: store,
 		})
+		if errors.Is(err, authormerge.ErrBookLocked) {
+			return relinked, undoRows, fmt.Errorf("author %d not merged into %d: book %s was locked after %d book(s) moved: %w", from.ID, into.ID, book.ID, relinked, errAuthorMergeUserLocked)
+		}
 		if err != nil {
 			// Do NOT fall through to the delete after this: dropping the row
 			// while a book still points at it orphans that book's author
@@ -513,10 +548,6 @@ func mergeAuthorIntoVia(ctx context.Context, store t6g1MergeReader, writer t6g1M
 		relinked++
 	}
 
-	if held > 0 {
-		// The author is not deleted: the held books still credit it.
-		return relinked, undoRows, fmt.Errorf("author %d not merged into %d: %d book(s): %w", from.ID, into.ID, held, errAuthorMergeUserLocked)
-	}
 	if dryRun {
 		return relinked, undoRows, nil
 	}
@@ -538,9 +569,13 @@ func mergeAuthorIntoVia(ctx context.Context, store t6g1MergeReader, writer t6g1M
 	return relinked, undoRows, nil
 }
 
-// errAuthorMergeUserLocked: a merge left books alone because the user locked their
-// author. The author row stays: those books still credit it.
-var errAuthorMergeUserLocked = errors.New("books with a user-locked author were left as they are")
+// errAuthorMergeUserLocked: an author merge was held because the user locked the
+// author of one of its books. Callers read it with errors.Is and count it as
+// held, never as failed: nothing is wrong, a lock is doing its job. The author row
+// stays, and the books the merge returned a count for (relinked) are the ones that
+// DID move before a lock saved mid-run held the next, so a caller adds that count
+// and invalidates its caches whenever it is above zero.
+var errAuthorMergeUserLocked = errors.New("author merge held by a user-locked author")
 
 // errRenameNameTaken: another live author holds the name a rename would write.
 var errRenameNameTaken = errors.New("another author holds the name")
@@ -629,86 +664,45 @@ func creditsMovedOnto(bookID string, bookAuthors []database.BookAuthor, fromID, 
 // the denormalized primary AuthorID.
 //
 // The link that matters is the junction, not Book.AuthorID (see
-// mergeAuthorInto). The primary is rewritten under the book's write lock
-// (ModifyBook, audit A1#15) on the hydrated row, not the BookCore projection
-// (STOREFID W5d-1), and a primary already moved off from meanwhile is left
-// alone.
+// mergeAuthorInto). Both are written as ONE commit (ModifyBookCredits): the new
+// credits are derived from the credits the book has at the write, under the
+// book's write lock and credit locks, never from a list read earlier, and the
+// primary moves only when the fresh row still names from (STOREFID W5d-1: the
+// full row is written, not the BookCore projection).
 //
-// dryRun reads the junction and writes nothing.
+// A book whose author the user locked keeps its credits and its primary:
+// held is true and nothing was written. The lock is read inside that commit
+// (database.ModifyBookCreditsRespectingLocks), so there is no write to put
+// back, no stale list to restore and no window between a credit write and a
+// primary write; a co-author's credit is held by the same lock as the primary.
+// A lock set that cannot be read, or a store that cannot make the one commit,
+// is an error and writes nothing.
 //
-// err is a junction failure: nothing about the credit changed that a re-run
-// would not redo. primaryErr is a failed primary rewrite AFTER the junction
-// was written; the caller decides whether that is fatal. Its caller is
-// author-strip-merge's title-as-author relink (one book at a time), which
-// journals the move itself (titleRelinkJournal). mergeAuthorInto computes the
-// same credits (creditsMovedOnto) but writes them through authormerge, which
-// journals each book before its write.
+// err means the book was not relinked. Its caller is author-strip-merge's
+// title-as-author relink (one book at a time), which journals the move itself
+// (titleRelinkJournal) before the write and voids that row when the write did
+// not happen. mergeAuthorInto computes the same credits (creditsMovedOnto) but
+// writes them through authormerge, which journals each book before its write.
 func relinkBookCredit(store interface {
 	database.MetadataFieldStateReader
-	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
-	SetBookAuthors(bookID string, authors []database.BookAuthor) error
-	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
-}, book database.BookCore, from, into database.Author, dryRun bool) (held bool, primaryErr, err error) {
-	bookAuthors, err := store.GetBookAuthors(book.ID)
-	if err != nil {
-		return false, nil, fmt.Errorf("get book authors for %s: %w", book.ID, err)
-	}
-
-	updated := creditsMovedOnto(book.ID, bookAuthors, from.ID, into.ID)
-	if dryRun {
-		// The junction read above still ran, so a dry run surfaces the same
-		// read failure the apply would hit.
-		return false, nil, nil
-	}
-	// A book whose author the user locked keeps its credits and its primary
-	// author: held is true and nothing was written. A lock set that cannot be
-	// read is an error, not "not locked".
-	locks, lerr := database.LoadFieldLocks(store, book.ID)
-	if lerr != nil {
-		return false, nil, fmt.Errorf("book %s NOT relinked: %w", book.ID, lerr)
-	}
-	if locks.Locked(database.FieldKeyAuthorName) {
-		return true, nil, nil
-	}
-	if err := store.SetBookAuthors(book.ID, updated); err != nil {
-		return false, nil, fmt.Errorf("set book authors for %s: %w", book.ID, err)
-	}
-
-	if book.AuthorID == nil || *book.AuthorID != from.ID {
-		return false, nil, nil
-	}
+	database.BookCreditsRowModifier
+}, book database.BookCore, from, into database.Author) (held bool, err error) {
 	target := into
-	// The write asks for the locks again under the book's write lock, so a lock
-	// saved after the check above still holds the primary-author write.
-	written, heldKeys, mErr := database.ModifyBookRespectingLocks(store, store, book.ID, func(full *database.Book) error {
-		if full.AuthorID == nil || *full.AuthorID != from.ID {
-			return database.ErrSkipBookWrite
+	written, heldKeys, err := database.ModifyBookCreditsRespectingLocks(store, store, book.ID, func(cur *database.Book, credits *database.BookCreditsEdit) error {
+		credits.Authors = creditsMovedOnto(book.ID, credits.Authors, from.ID, into.ID)
+		if cur.AuthorID != nil && *cur.AuthorID == from.ID {
+			cur.AuthorID = &target.ID
+			cur.Author = &target
 		}
-		full.AuthorID = &target.ID
-		full.Author = &target
 		return nil
 	})
 	switch {
 	case len(heldKeys) > 0:
-		// A lock saved between the credit write above and this one: the credits
-		// already moved, so put them back. Leaving them moved would give the book
-		// credits naming the new author and a primary still naming the old one,
-		// and the old row would then be deleted out from under that primary.
-		if rbErr := store.SetBookAuthors(book.ID, bookAuthors); rbErr != nil {
-			return true, fmt.Errorf("book %s: author locked mid-write and its credits could not be restored: %w", book.ID, rbErr), nil
-		}
-		return true, nil, nil
-	case errors.Is(mErr, database.ErrFieldLocksUnavailable):
-		// The locks could not be read under the book's write lock, so the primary
-		// was not written; the credits above were, and go back for the same reason.
-		if rbErr := store.SetBookAuthors(book.ID, bookAuthors); rbErr != nil {
-			return false, fmt.Errorf("rewrite primary author of %s: %w (and its credits could not be restored: %v)", book.ID, mErr, rbErr), nil
-		}
-		return false, fmt.Errorf("rewrite primary author of %s: %w", book.ID, mErr), nil
-	case mErr != nil:
-		return false, fmt.Errorf("rewrite primary author of %s: %w", book.ID, mErr), nil
+		return true, nil
+	case err != nil:
+		return false, fmt.Errorf("relink book %s: %w", book.ID, err)
 	case written == nil:
-		return false, fmt.Errorf("rewrite primary author of %s: book gone", book.ID), nil
+		return false, fmt.Errorf("relink book %s: book gone", book.ID)
 	}
-	return false, nil, nil
+	return false, nil
 }
