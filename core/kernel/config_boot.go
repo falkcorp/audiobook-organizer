@@ -1,5 +1,5 @@
 // file: core/kernel/config_boot.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 0e3db6c6-c5ae-4f54-adaf-6fd7b728c89e
 // last-edited: 2026-11-19
 
@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/health"
@@ -117,8 +118,10 @@ func (k *Kernel) storagePaths(layer, stateDir string) (dbPath, dir string, err e
 // state directory candidate step 0 would create is refused, before it is
 // created, when it exists and this process is not its owner, and that
 // refusal is returned whatever step 0 then resolves, so a refused default
-// never falls back beside the store. A candidate that does not exist has no
-// owner to compare and is created, as serve creates it (seams.d/F3-07.md).
+// never falls back beside the store. A candidate that does not exist yet is
+// compared with the owner of its nearest existing ancestor, however many
+// levels are missing, and refused the same way before any level is created
+// (05-config section 1.7, seams.d/F3-07.md "Absent state directory").
 // Its warnings (the fallback beside the store) go to Config.Logger, else to
 // a text logger on Config.LogOutput, else on standard error.
 func ResolveStorage(ctx context.Context, c Config, owner string) (dbPath, stateDir string, err error) {
@@ -149,7 +152,7 @@ func ResolveStorage(ctx context.Context, c Config, owner string) (dbPath, stateD
 			return refused
 		}
 		if owner != "" {
-			if err := refuseExistingNonOwner(ctx, d, owner); err != nil {
+			if err := refuseNonOwner(ctx, d, owner); err != nil {
 				refused = err
 				return err
 			}
@@ -175,17 +178,37 @@ func ResolveStorage(ctx context.Context, c Config, owner string) (dbPath, stateD
 	return k.storagePaths(s0.dbPath, s0.stateDir)
 }
 
-// refuseExistingNonOwner is storage.RefuseNotStateDirOwner for a state
-// directory candidate that exists on the boot's filesystem; one that does
-// not exist has no owner yet and is not refused.
-func refuseExistingNonOwner(ctx context.Context, dir, what string) error {
-	switch _, err := bootseam.FS(ctx).Stat(dir); {
-	case errors.Is(err, fs.ErrNotExist):
-		return nil
-	case err != nil:
-		return fmt.Errorf("kernel: %s: the state directory %s: %w", what, dir, err)
+// refuseNonOwner is storage.RefuseNotStateDirOwner for a state directory
+// candidate. One that exists is compared with its own owner. One that does
+// not exist yet has no owner, so it is compared with the owner of its nearest
+// existing ancestor: the directory step 0 would create it in, and the owner
+// the new directory would have to share with the service that runs as it. The
+// walk passes any number of missing levels, and a level that cannot exist
+// because a file sits above it (ENOTDIR), so the check stays one decision made
+// before anything is created. Run as root under a root-owned ancestor it
+// passes, as it does for an existing root-owned directory.
+func refuseNonOwner(ctx context.Context, dir, what string) error {
+	bfs := bootseam.FS(ctx)
+	probe := dir
+	for {
+		_, err := bfs.Stat(probe)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
+			return fmt.Errorf("kernel: %s: the state directory %s: %w", what, probe, err)
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return nil // nothing on the path exists: there is no owner to compare
+		}
+		probe = parent
 	}
-	return storage.RefuseNotStateDirOwner(ctx, dir, what)
+	err := storage.RefuseNotStateDirOwner(ctx, probe, what)
+	if err != nil && probe != dir {
+		return fmt.Errorf("kernel: %s: the state directory %s does not exist yet and would be created under %s: %w", what, dir, probe, err)
+	}
+	return err
 }
 
 // declaresStorage reports whether any module of the app declares storage,

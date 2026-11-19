@@ -1,5 +1,5 @@
 // file: core/app/config_boot_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5d0c7b3e-2a41-4f9a-8c66-91e4b7a2d3f8
 // last-edited: 2026-11-19
 
@@ -141,8 +141,8 @@ func TestCoreConfigBoot_ClaimsModeIsStillRead(t *testing.T) {
 // TestCoreConfigBoot_OfflineWritesRefuseANonOwnerFirst (F3-07 a6,
 // seams.d/F3-07.md): with the gate on, each offline command that writes
 // names itself to kernel.ResolveStorage, which refuses a state directory
-// candidate that exists and that this user does not own before step 0
-// creates anything. The compiled default here exists and cannot be used as
+// candidate that this user does not own (or, if it is absent, whose nearest
+// existing ancestor this user does not own) before step 0 creates anything. The compiled default here exists and cannot be used as
 // a directory (a regular file), so without the check step 0 would fall back
 // and create the store's directory beside it before the command's own owner
 // check refused; with it nothing is made. A read-only open is not refused.
@@ -205,4 +205,61 @@ func TestCoreConfigBoot_OfflineWritesRefuseANonOwnerFirst(t *testing.T) {
 	if _, err := OpenOffline(ctx, opts, true, keeper); errors.Is(err, storage.ErrNotStateDirOwner) {
 		t.Fatalf("a read-only OpenOffline as a stranger was refused as a non-owner: %v", err)
 	}
+}
+
+// TestCoreConfigBoot_RestoreOfflineOnABlankHost (F3-07 b, seams.d/F3-07.md
+// "Absent state directory"): storage restore-offline gets no exemption from
+// the owner rule on a host with no state directory yet. A blank host here is
+// a state directory four levels below a directory that exists. Run as the
+// user who owns that directory, the command's resolve creates the chain and
+// the restore goes on to fail for want of a checkpoint (not as a non-owner).
+// Run as another user it is refused as a non-owner, naming the command, and
+// not one level of the chain is created.
+func TestCoreConfigBoot_RestoreOfflineOnABlankHost(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("files carry no owner storage.StateDirOwner reads")
+	}
+	keeper := offlineKeeper()
+	args := []string{"--checkpoint", "joker"}
+	chain := func(t *testing.T) (top, state string, opts Options) {
+		base := t.TempDir()
+		top = filepath.Join(base, "wayne", "manor")
+		state = filepath.Join(top, "batcave", "state")
+		opts = offlineOpts(t)
+		opts.CoreConfigBoot = true
+		opts.StateDir = state
+		return top, state, opts
+	}
+	restore := func(ctx context.Context, opts Options) error {
+		return secretsCmd(t, OfflineCommands(opts, keeper), "storage restore-offline").Run(ctx, args, &bytes.Buffer{})
+	}
+
+	t.Run("this user owns the nearest existing ancestor", func(t *testing.T) {
+		top, state, opts := chain(t)
+		err := restore(t.Context(), opts)
+		if errors.Is(err, storage.ErrNotStateDirOwner) {
+			t.Fatalf("restore-offline as the ancestor's owner was refused as a non-owner: %v", err)
+		}
+		if err == nil {
+			t.Fatal("restore-offline of a checkpoint that does not exist succeeded")
+		}
+		if fi, serr := os.Stat(state); serr != nil || !fi.IsDir() {
+			t.Fatalf("the blank host's state directory %s was not created (%v) after: %v", state, serr, err)
+		}
+		if _, serr := os.Stat(top); serr != nil {
+			t.Fatalf("the missing levels were not created: %v", serr)
+		}
+	})
+	t.Run("another user owns it", func(t *testing.T) {
+		top, _, opts := chain(t)
+		stranger := os.Geteuid() + 1
+		ctx := bootseam.With(t.Context(), &bootseam.Seams{Euid: func() int { return stranger }})
+		err := restore(ctx, opts)
+		if !errors.Is(err, storage.ErrNotStateDirOwner) || !strings.Contains(err.Error(), "storage restore-offline") {
+			t.Fatalf("restore-offline onto a blank host as a stranger = %v, want storage.ErrNotStateDirOwner naming the command", err)
+		}
+		if _, serr := os.Stat(filepath.Dir(top)); !os.IsNotExist(serr) {
+			t.Fatalf("the refused restore-offline created a level of the chain: %v", serr)
+		}
+	})
 }
