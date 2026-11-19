@@ -457,6 +457,7 @@ type t7StoreLibrary interface {
 	batchSaveReads
 	bulkApplyPreviewStore
 	identAdvanceStore
+	bulkFetchOpStore
 }
 
 // t7Writer is every write the converted cores make, composed from each
@@ -496,6 +497,7 @@ type t7WriterLibrary interface {
 	whenScannedWriter
 	batchApplyWriter
 	identAdvanceWriter
+	bulkFetchOpWriter
 }
 
 // t7WriterFiles is the writes of the file-writing definitions.
@@ -799,6 +801,7 @@ func t7KindList(s *Server, deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) 
 		s.authorMergeNative(deps, sched),
 		s.resolveProductionAuthorNative(deps, sched),
 		s.identificationAdvanceNative(deps, sched),
+		s.bulkMetadataFetchNative(deps, sched),
 	}
 }
 
