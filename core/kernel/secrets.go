@@ -1,7 +1,7 @@
 // file: core/kernel/secrets.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 77d1e3c5-0f7d-4832-9d4c-79a5db3dd150
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package kernel
 
@@ -17,6 +17,7 @@ import (
 
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/health"
+	"github.com/falkcorp/mediacore/internal/statefs"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
@@ -84,11 +85,12 @@ type secretsInput struct {
 	Now           func() time.Time
 }
 
-// kernelSecrets is the open secret store with the state directory root it
-// reads the keyring through; the kernel closes both at shutdown.
+// kernelSecrets is the open secret store with the state directory it reads
+// the keyring through (the labelled state filesystem, statefs); the kernel
+// closes both at shutdown.
 type kernelSecrets struct {
 	store *secrets.Store
-	root  *os.Root
+	root  *statefs.Dir
 }
 
 // close closes the store (wiping its key material), then the root.
@@ -97,7 +99,8 @@ func (s *kernelSecrets) close() error {
 }
 
 // openSecrets is P4b's secrets step (05-config §2.4 step 1; 06 §6.5.1): it
-// opens the state directory as an os.Root and calls secrets.Open over the
+// opens the state directory through statefs (an os.Root in production, the
+// crash matrix's filesystem under its seam) and calls secrets.Open over the
 // c/secrets/ keyspace with the store's install marker, so the keyring header
 // carries it (and a reset boot rewrites it). It must run after the P4a
 // checkpoint: Open writes c/secrets/meta and, on a first run, the keyring.
@@ -112,7 +115,7 @@ func openSecrets(ctx context.Context, in secretsInput) (*kernelSecrets, error) {
 	if !ok {
 		return nil, fmt.Errorf("kernel: secrets: owner %s has no keyspace: append secretsOwnerSpec() to storageOwners (F3-07)", secretsOwnerID)
 	}
-	root, err := os.OpenRoot(in.StateDir)
+	root, err := statefs.Open(ctx, in.StateDir)
 	if err != nil {
 		return nil, fmt.Errorf("kernel: secrets: open the state directory: %w", err)
 	}

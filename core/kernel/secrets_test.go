@@ -1,7 +1,7 @@
 // file: core/kernel/secrets_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 3f0c9a52-6e1b-4d7a-8c25-b94e1f6a0d37
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package kernel
 
@@ -153,9 +153,7 @@ func TestExportKeyring_ClearsHealthWarning(t *testing.T) {
 	s := openTestSecrets(t, db, state, nil)
 	export := func() {
 		t.Helper()
-		if _, err := secrets.ExportKeyring(s.root, "", filepath.Join(t.TempDir(), "keyring.export"), time.Now()); err != nil {
-			t.Fatal(err)
-		}
+		exportFrom(t, state)
 	}
 
 	r := secretsHealth(ctx, s.store)
@@ -170,8 +168,8 @@ func TestExportKeyring_ClearsHealthWarning(t *testing.T) {
 	if err := s.close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := secrets.RotateDerive(s.root, "", time.Hour, time.Now()); err == nil {
-		t.Fatal("RotateDerive through a closed root succeeded")
+	if _, err := s.root.Lstat("."); err == nil {
+		t.Fatal("close left the state directory open")
 	}
 	root, err := os.OpenRoot(state)
 	if err != nil {
@@ -195,6 +193,20 @@ func TestExportKeyring_ClearsHealthWarning(t *testing.T) {
 	}
 }
 
+// exportFrom runs secrets export-keyring's engine over the state directory
+// state, as the offline command opens it.
+func exportFrom(t *testing.T, state string) {
+	t.Helper()
+	root, err := os.OpenRoot(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	if _, err := secrets.ExportKeyring(root, "", filepath.Join(t.TempDir(), "keyring.export"), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestSecretsHealth_Tokens covers the kernel half of
 // TestStageUnreadable_ReadsReenter (05-config §2.9) and the precedence of the
 // core.secrets tokens: a fresh keyring raises secrets_keyring_not_exported, an
@@ -214,9 +226,7 @@ func TestSecretsHealth_Tokens(t *testing.T) {
 	if rep.r.Status != health.StatusDegraded || rep.r.Reason != reasonKeyringNotExported || !strings.Contains(rep.r.Detail, "d1") {
 		t.Fatalf("fresh keyring: %+v, want degraded %s naming d1", rep.r, reasonKeyringNotExported)
 	}
-	if _, err := secrets.ExportKeyring(s.root, "", filepath.Join(t.TempDir(), "keyring.export"), time.Now()); err != nil {
-		t.Fatal(err)
-	}
+	exportFrom(t, state)
 	if r := secretsHealth(ctx, s.store); r.Status != health.StatusUp || r.Reason != "" {
 		t.Fatalf("after the export: %+v, want Up", r)
 	}

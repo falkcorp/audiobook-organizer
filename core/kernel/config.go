@@ -1,7 +1,7 @@
 // file: core/kernel/config.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 1f6c9e2a-7b40-4d85-9a3e-5c2b8d7f0e14
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package kernel
 
@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -21,6 +20,7 @@ import (
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/internal/configstore"
+	"github.com/falkcorp/mediacore/internal/statefs"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/secrets"
@@ -46,6 +46,11 @@ const (
 	// healthUnknownModule is raised on core.config when the boot record
 	// names a module this binary does not compile (06 §6.10, COR-14).
 	healthUnknownModule = "config_unknown_module_in_boot_record"
+
+	// labelStateDirMkdir is the crash-point label of P0's creation of a
+	// state directory candidate (06 §6.5.1's writer table; name coined by
+	// F3-07).
+	labelStateDirMkdir = "config.statedir.mkdir"
 )
 
 // configOwnerSpec is c/config/'s storage owner (05-config §1.3.3).
@@ -74,7 +79,8 @@ type configInput struct {
 	OwnerSet      func() bool
 	Logger        *slog.Logger
 	Now           func() time.Time
-	// Mkdir creates a state directory candidate; nil = os.MkdirAll(d, 0o700).
+	// Mkdir creates a state directory candidate; nil = MkdirAll(d, 0o700)
+	// through the boot's filesystem (statefs), labelled labelStateDirMkdir.
 	Mkdir func(string) error
 }
 
@@ -116,13 +122,13 @@ func bootConfig(ctx context.Context, in configInput) (cb *configBoot, err error)
 	cb = &configBoot{prefix: prefix, log: log}
 	mkdir := in.Mkdir
 	if mkdir == nil {
-		mkdir = func(d string) error { return os.MkdirAll(d, 0o700) }
+		mkdir = func(d string) error { return statefs.MkdirAll(ctx, labelStateDirMkdir, d, 0o700) }
 	}
 	st, err := config.NewStore(config.Options{
 		AppID: in.AppID, EnvPrefix: in.EnvPrefix, Environ: in.Environ, FilePath: in.FilePath, Flags: in.Flags,
 		Passthrough: in.Passthrough, EnvBindings: in.EnvBindings, Retired: in.Retired,
 		Logger: log, Now: in.Now, OwnerSet: in.OwnerSet,
-		BootRecordRoot: cb.bootRoot,
+		BootRecordRoot: func(dir string) (config.StateFiles, error) { return cb.bootRoot(ctx, dir) },
 	})
 	if err != nil {
 		return nil, fmt.Errorf("kernel: config store: %w", err)
@@ -311,12 +317,14 @@ func CheckConfig(ctx context.Context, c ConfigCheck) (uses []config.RetiredUse, 
 // bootRoot is Options.BootRecordRoot. Boot hands back core.paths.state_dir
 // as the layers resolve it; it must be the directory step 0 chose, or two
 // resolvers disagree about where state lives and the boot record would land
-// in a third place.
-func (cb *configBoot) bootRoot(dir string) (*os.Root, error) {
+// in a third place. The directory is opened through statefs, so under the
+// crash matrix's seam the record is read from, and set aside on, the boot's
+// filesystem.
+func (cb *configBoot) bootRoot(ctx context.Context, dir string) (config.StateFiles, error) {
 	if got := filepath.Clean(strings.TrimSpace(dir)); got != cb.stateDir {
 		return nil, fmt.Errorf("kernel: config: Boot resolved the state directory %q, the pre-boot resolver %q", got, cb.stateDir)
 	}
-	return os.OpenRoot(cb.stateDir)
+	return statefs.Open(ctx, cb.stateDir)
 }
 
 // pathOf is a config.Section's path, whatever its type parameter.

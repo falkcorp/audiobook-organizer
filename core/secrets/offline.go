@@ -1,7 +1,7 @@
 // file: core/secrets/offline.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: ea65355e-8977-4406-a748-63dd510dc8d8
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package secrets
 
@@ -19,6 +19,8 @@ import (
 	"slices"
 	"strconv"
 	"time"
+
+	"github.com/falkcorp/mediacore/internal/statefs"
 )
 
 // The keyring file's offline operations behind the three core commands
@@ -78,7 +80,7 @@ func (r *exportRecord) maxIDNumber() int {
 
 // readExportRecord reads the export record name under root (fs.ErrNotExist
 // when absent). It must be a regular file of at most maxKeyringBytes.
-func readExportRecord(root *os.Root, name string) (*exportRecord, error) {
+func readExportRecord(root StateFiles, name string) (*exportRecord, error) {
 	fi, err := root.Lstat(name)
 	if err != nil {
 		return nil, err
@@ -134,7 +136,8 @@ func ExportKeyring(stateDir *os.Root, keyFile, out string, now time.Time) (Expor
 		return ExportResult{}, err
 	}
 	recordName := exportedRecordName(keyFile)
-	raw, f, err := readKeyringBytes(stateDir, keyFile)
+	files := statefs.FromRoot(stateDir)
+	raw, f, err := readKeyringBytes(files, keyFile)
 	if err != nil {
 		return ExportResult{}, err
 	}
@@ -149,7 +152,7 @@ func ExportKeyring(stateDir *os.Root, keyFile, out string, now time.Time) (Expor
 	}
 	err = checkExportTarget(stateDir, keyFile, recordName, outRoot, base, abs)
 	if err == nil {
-		err = writeFileAtomic(outRoot, base, raw)
+		err = writeFileAtomic(statefs.FromRoot(outRoot), labelExport, base, raw)
 	}
 	// A failed close fails the export before its record is written, so the
 	// health warning stays raised; a re-run may overwrite the 0600 copy.
@@ -171,7 +174,7 @@ func ExportKeyring(stateDir *os.Root, keyFile, out string, now time.Time) (Expor
 	if err != nil {
 		return ExportResult{}, err
 	}
-	if err := writeFileAtomic(stateDir, recordName, append(rec, '\n')); err != nil {
+	if err := writeFileAtomic(files, labelExport, recordName, append(rec, '\n')); err != nil {
 		return ExportResult{}, fmt.Errorf("secrets: the keyring was exported to %s but the export record was not written: %w", abs, err)
 	}
 	return ExportResult{Out: abs, Record: recordName, KeyIDs: ids, InstallID: f.InstallID}, nil
@@ -179,7 +182,7 @@ func ExportKeyring(stateDir *os.Root, keyFile, out string, now time.Time) (Expor
 
 // readKeyringBytes reads keyFile under root and validates it, returning the
 // bytes and the decoded file.
-func readKeyringBytes(root *os.Root, keyFile string) ([]byte, *keyringFile, error) {
+func readKeyringBytes(root StateFiles, keyFile string) ([]byte, *keyringFile, error) {
 	fi, err := root.Lstat(keyFile)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil, fmt.Errorf("secrets: there is no keyring %s in the state directory: %w", keyFile, err)
@@ -261,7 +264,7 @@ func RotateDerive(stateDir *os.Root, keyFile string, window time.Duration, now t
 	if window < 0 {
 		return RotateResult{}, fmt.Errorf("secrets: rotate-derive window %v is negative", window)
 	}
-	keyFile, f, err := loadOffline(stateDir, keyFile)
+	files, keyFile, f, err := loadOffline(stateDir, keyFile)
 	if err != nil {
 		return RotateResult{}, err
 	}
@@ -292,7 +295,7 @@ func RotateDerive(stateDir *os.Root, keyFile string, window time.Duration, now t
 		}
 	}
 	f.Keys = append(f.Keys, nk)
-	if err := writeKeyring(stateDir, keyFile, f); err != nil {
+	if err := writeKeyring(files, keyFile, f); err != nil {
 		return RotateResult{}, err
 	}
 	return RotateResult{Old: old, New: newID, RetireAfter: ra}, nil
@@ -307,7 +310,7 @@ func SetInstallID(stateDir *os.Root, keyFile, id string) (old string, err error)
 	if !validInstallID(id) {
 		return "", errors.New("secrets: --install-id must be 1 to 128 printable characters without spaces")
 	}
-	keyFile, f, err := loadOffline(stateDir, keyFile)
+	files, keyFile, f, err := loadOffline(stateDir, keyFile)
 	if err != nil {
 		return "", err
 	}
@@ -316,32 +319,34 @@ func SetInstallID(stateDir *os.Root, keyFile, id string) (old string, err error)
 		return old, nil
 	}
 	f.InstallID = id
-	if err := writeKeyring(stateDir, keyFile, f); err != nil {
+	if err := writeKeyring(files, keyFile, f); err != nil {
 		return "", err
 	}
 	return old, nil
 }
 
 // loadOffline resolves keyFile and reads the keyring for an offline
-// rewrite: its mode fixed to 0600 or ErrKeyfileInsecure, a missing keyring
+// rewrite through root (statefs.FromRoot, unlabelled: an offline command is
+// no boot writer): its mode fixed to 0600 or ErrKeyfileInsecure, a missing keyring
 // refused.
-func loadOffline(stateDir *os.Root, keyFile string) (string, *keyringFile, error) {
-	if stateDir == nil {
-		return "", nil, errors.New("secrets: the offline command needs the state directory")
+func loadOffline(root *os.Root, keyFile string) (*statefs.Dir, string, *keyringFile, error) {
+	if root == nil {
+		return nil, "", nil, errors.New("secrets: the offline command needs the state directory")
 	}
+	stateDir := statefs.FromRoot(root)
 	keyFile, err := cleanKeyFile(keyFile)
 	if err != nil {
-		return "", nil, err
+		return nil, "", nil, err
 	}
 	if _, err := checkMode(stateDir, keyFile); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return "", nil, fmt.Errorf("secrets: there is no keyring %s in the state directory: %w", keyFile, err)
+			return nil, "", nil, fmt.Errorf("secrets: there is no keyring %s in the state directory: %w", keyFile, err)
 		}
-		return "", nil, err
+		return nil, "", nil, err
 	}
 	f, err := readKeyring(stateDir, keyFile)
 	if err != nil {
-		return "", nil, fmt.Errorf("secrets: the keyring %s cannot be read: %w", keyFile, err)
+		return nil, "", nil, fmt.Errorf("secrets: the keyring %s cannot be read: %w", keyFile, err)
 	}
-	return keyFile, f, nil
+	return stateDir, keyFile, f, nil
 }
