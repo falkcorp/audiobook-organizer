@@ -1,5 +1,5 @@
 // file: internal/maintenance/resources/resources.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 511262bb-c287-4138-a7ee-7566c9543e3b
 // last-edited: 2026-11-19
 
@@ -367,6 +367,15 @@ func addComposites(rows map[string][]ops.Resource) {
 	rows["DeleteAuthor"] = Union([]ops.Resource{ops.ResAuthors}, rows["ModifyBook"])
 	rows["MergeDeleteAuthor"] = Union([]ops.Resource{ops.ResAuthors, ops.ResOperations}, rows["ModifyBook"])
 	rows["MoveCredits"] = Union([]ops.Resource{ops.ResOperations}, rows["ModifyBookCredits"], rows["SetBookAuthors"])
+	// RunBulkWriteBack (server.runBulkWriteBack, delegated through
+	// maintenance.Deps) is one opaque pass per book: the rename step moves the
+	// files (files) and repoints their rows through the book write (the
+	// ModifyBook and UpdateBookFile rows), the tag write stamps the provenance
+	// ledger (file_provenance), the batch is logged (activity) and the resume
+	// checkpoint is an operation-state row (operations).
+	rows["RunBulkWriteBack"] = Union(
+		[]ops.Resource{ops.ResFiles, ops.ResFileProvenance, ops.ResActivity, ops.ResOperations},
+		rows["ModifyBook"], rows["UpdateBookFile"])
 	// F5-07's boot-time writers.
 	rows["StripMovementAtoms"] = Union(
 		[]ops.Resource{ops.ResFiles, ops.ResSettings, ops.ResFileProvenance}, rows["UpdateBookFile"])
