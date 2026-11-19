@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler_test.go
-// version: 1.11.4
+// version: 1.12.0
 // guid: af6670e5-d640-4339-b0b2-3b0cf1596ce7
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 // Unit tests for the system-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (config mask-secrets path,
@@ -351,130 +351,6 @@ func TestGetSystemActivityLog_OK(t *testing.T) {
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, float64(1), resp["data"].(map[string]any)["count"])
-}
-
-// --- GetConfig ---
-
-func TestGetConfig_OK(t *testing.T) {
-	h, d := newTestHandler(t)
-	d.cfgUpd.EXPECT().MaskSecrets(mock.Anything).Return(config.Config{})
-	w := run(http.MethodGet, "/config", "/config", nil, func(r *gin.Engine) {
-		r.GET("/config", h.GetConfig)
-	})
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.NotNil(t, resp["data"].(map[string]any)["config"])
-}
-
-// TestGetConfigIncludesPathAliases confirms /config exposes config.Config's
-// PathAliases field. GetConfig marshals config.Config wholesale (via
-// MaskSecrets) rather than copying named fields into a bespoke response
-// struct, so the json:"path_aliases" tag on config.Config already exposes it
-// — this test only guards against that tag (or the marshal-wholesale shape)
-// regressing. MaskSecrets is mocked in this suite, so the returned
-// config.Config (not config.AppConfig) is what the handler actually
-// marshals.
-func TestGetConfigIncludesPathAliases(t *testing.T) {
-	h, d := newTestHandler(t)
-	d.cfgUpd.EXPECT().MaskSecrets(mock.Anything).Return(config.Config{
-		PathAliases: []config.PathAlias{
-			{Root: "/library/books", Windows: "W:", UNC: `\\host\books`, SMBURL: "smb://host/books"},
-		},
-	})
-
-	w := run(http.MethodGet, "/config", "/config", nil, func(r *gin.Engine) {
-		r.GET("/config", h.GetConfig)
-	})
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	// Decode PathAliases as untyped maps, not []config.PathAlias, so the
-	// assertions below pin the actual wire field names ("windows", "smb_url")
-	// against a struct-tag rename that both encode and decode would otherwise
-	// absorb silently (the frontend mirror in web/src/services/api.ts has no
-	// compiler tying it to Go's json tags).
-	var resp struct {
-		Data struct {
-			Config struct {
-				PathAliases []map[string]any `json:"path_aliases"`
-			} `json:"config"`
-		} `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	require.Len(t, resp.Data.Config.PathAliases, 1)
-	assert.Equal(t, "/library/books", resp.Data.Config.PathAliases[0]["root"])
-	assert.Equal(t, "W:", resp.Data.Config.PathAliases[0]["windows"])
-	assert.Equal(t, `\\host\books`, resp.Data.Config.PathAliases[0]["unc"])
-	assert.Equal(t, "smb://host/books", resp.Data.Config.PathAliases[0]["smb_url"])
-}
-
-func TestGetConfig_MasksAllSecrets(t *testing.T) {
-	h, d := newTestHandler(t)
-	// MaskSecrets is called with whatever Snapshot() returns; we verify the
-	// handler uses MaskSecrets (not manual per-field masking) by confirming the
-	// mock is called exactly once.
-	d.cfgUpd.EXPECT().MaskSecrets(mock.Anything).Return(config.Config{
-		OpenAIAPIKey:      "sk-****",
-		AcoustIDAPIKey:    "ac-****",
-		GoogleBooksAPIKey: "gb-****",
-		HardcoverAPIToken: "hc-****",
-		BasicAuthPassword: "****",
-	})
-	w := run(http.MethodGet, "/config", "/config", nil, func(r *gin.Engine) {
-		r.GET("/config", h.GetConfig)
-	})
-	assert.Equal(t, http.StatusOK, w.Code)
-}
-
-// --- UpdateConfig ---
-
-func TestUpdateConfig_MaskSecretsHappyPath(t *testing.T) {
-	h, d := newTestHandler(t)
-	d.cfgUpd.EXPECT().UpdateConfig(mock.Anything, mock.Anything).Return(http.StatusOK, map[string]any{})
-	d.cfgUpd.EXPECT().MaskSecrets(mock.Anything).Return(config.Config{})
-
-	w := run(http.MethodPut, "/config", "/config", []byte(`{"root_dir":"/x"}`), func(r *gin.Engine) {
-		r.PUT("/config", h.UpdateConfig)
-	})
-	assert.Equal(t, http.StatusOK, w.Code)
-}
-
-func TestUpdateConfig_ServiceError(t *testing.T) {
-	h, d := newTestHandler(t)
-	d.cfgUpd.EXPECT().UpdateConfig(mock.Anything, mock.Anything).Return(http.StatusBadRequest, map[string]any{"error": "bad"})
-
-	w := run(http.MethodPut, "/config", "/config", []byte(`{"x":1}`), func(r *gin.Engine) {
-		r.PUT("/config", h.UpdateConfig)
-	})
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-// TestUpdateConfig_UnknownKeysReachResponse pins the pass-through: the update
-// service reports refused keys as unknown_keys, and the 400 body must carry
-// them next to the standard envelope rather than dropping everything but the
-// error string.
-func TestUpdateConfig_UnknownKeysReachResponse(t *testing.T) {
-	h, d := newTestHandler(t)
-	d.cfgUpd.EXPECT().UpdateConfig(mock.Anything, mock.Anything).Return(http.StatusBadRequest, map[string]any{
-		"error":        "unknown config keys: dedup.auto_merge_enabld",
-		"unknown_keys": []string{"dedup.auto_merge_enabld"},
-	})
-
-	w := run(http.MethodPut, "/config", "/config", []byte(`{"dedup":{"auto_merge_enabld":false}}`), func(r *gin.Engine) {
-		r.PUT("/config", h.UpdateConfig)
-	})
-	require.Equal(t, http.StatusBadRequest, w.Code)
-	var body struct {
-		Error       string   `json:"error"`
-		Code        string   `json:"code"`
-		Status      int      `json:"status"`
-		UnknownKeys []string `json:"unknown_keys"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
-	assert.Equal(t, []string{"dedup.auto_merge_enabld"}, body.UnknownKeys)
-	assert.Contains(t, body.Error, "dedup.auto_merge_enabld")
-	assert.Equal(t, "CONFIG_ERROR", body.Code)
-	assert.Equal(t, http.StatusBadRequest, body.Status)
 }
 
 // --- HandleEvents ---

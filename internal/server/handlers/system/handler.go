@@ -20,14 +20,11 @@
 package system
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"net/http"
 	"os"
 	"slices"
@@ -41,7 +38,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
-	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
@@ -62,10 +58,19 @@ type Handler struct {
 	// pre-swap store and miss the mock's expectations. The provider closure
 	// performs the typed-nil guard. Mirrors the operations handler's getScheduler
 	// and this handler's getHub seams.
-	getStore     func() SystemStore
-	systemSvc    SystemService
+	getStore  func() SystemStore
+	systemSvc SystemService
+	// configUpdate is dead since F3-07 e3: GET and PUT /config run over the
+	// config Facade (config_handler.go). It stays only so New's signature, and
+	// its caller in wire_handlers.go, do not change in this slice; the slice
+	// that edits the caller deletes it.
 	configUpdate ConfigUpdateService
 	plugins      PluginHealthChecker
+	// configFacade resolves the config Facade at request time; nil is
+	// config.Current. configAtoms is Actor.Can's atom lookup; nil holds no
+	// section permission. See WithConfigFacade and WithConfigAtoms.
+	configFacade func() config.Facade
+	configAtoms  ConfigPermissionAtoms
 	opLogs       OperationLogsProvider
 
 	// getHub resolves the SSE event hub lazily, at request time. The original
@@ -656,121 +661,6 @@ func (h *Handler) GetSystemActivityLog(c *gin.Context) {
 		logs = readable
 	}
 	httputil.RespondWithOK(c, gin.H{"items": logs, "count": len(logs)})
-}
-
-// GetConfig implements GET /config.
-func (h *Handler) GetConfig(c *gin.Context) {
-	httputil.RespondWithOK(c, gin.H{"config": withEnvLocks(h.configUpdate.MaskSecrets(config.Snapshot()))})
-}
-
-// withEnvLocks returns the config as a map carrying an extra read-only "env_locked"
-// key: the settings the environment is currently forcing.
-//
-// It is grafted onto the config object rather than sent as a sibling of it because
-// the client reads `data.config` and discards everything beside it, and because the
-// alternative — a field on config.Config — would be persisted into the config blob,
-// where a snapshot of one host's environment would then be restored onto another.
-//
-// On a marshal failure the plain config is returned. That is a deliberate fail-open:
-// losing the annotation degrades the Settings page to its previous behaviour, while
-// failing the request would take the whole page down over an advisory hint.
-func withEnvLocks(cfg config.Config) any {
-	raw, err := json.Marshal(cfg)
-	if err != nil {
-		return cfg
-	}
-	// UseNumber, not a plain Unmarshal. Decoding into map[string]any turns every
-	// number into a float64, and re-encoding one loses precision above 2^53 —
-	// measured: 1234567890123456789 comes back as 1234567890123456800. Config's
-	// two int64 fields are byte counts, so nothing is corrupt at today's values,
-	// but this function re-encodes the WHOLE config on the primary read path, and
-	// a field added later holding a nanosecond timestamp or an ID would be
-	// silently mangled. json.Number keeps the original digits verbatim.
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-	var flat map[string]any
-	if err := dec.Decode(&flat); err != nil {
-		return cfg
-	}
-	flat["env_locked"] = config.EnvLockedSettings()
-	// Same membership as env_locked, with WHY attached: an environment variable
-	// name, or a command-line flag. A field disabled with no reason, or with the
-	// wrong reason, sends the operator to edit the wrong half of the unit file.
-	flat["setting_locks"] = config.SettingLocks()
-	// The placeholders a folder/file naming pattern may use, straight from the
-	// resolver, so the Settings help text cannot advertise one BuildPath rejects.
-	flat["naming_pattern_tokens"] = organizer.NamingPatternTokens()
-	return flat
-}
-
-// UpdateConfig implements PUT /config.
-func (h *Handler) UpdateConfig(c *gin.Context) {
-	var payload map[string]any
-	if err := c.ShouldBindJSON(&payload); err != nil {
-		httputil.RespondWithBadRequest(c, err.Error())
-		return
-	}
-
-	// Protected settings (sign-in, executables, database and server paths)
-	// are refused for an API key inside UpdateService, on the decoded config,
-	// so the check cannot disagree with the decoder about which key was meant.
-	status, resp := h.configUpdate.UpdateConfig(c.Request.Context(), payload)
-	if status >= 400 {
-		// No rollback here: UpdateService owns the in-memory/persisted state
-		// on every failure it reports. A 400 changed nothing; a save failure
-		// was already rolled back (to a deep copy); and a 500 with
-		// resp["saved"]==true means the config IS saved and in effect but the
-		// dedup re-band hand-off failed — rolling memory back to previousConfig
-		// there (as this handler used to on every >=400) would put memory on
-		// the old ladder while the blob and the engine keep the new one.
-		// previousConfig is also a SHALLOW Snapshot, so it could never restore
-		// map contents anyway.
-		errMsg, _ := resp["error"].(string)
-		// A refused unknown key is named in errMsg, and also returned as a list
-		// so a client can point at the exact setting without parsing prose.
-		if unknown, ok := resp["unknown_keys"].([]string); ok && len(unknown) > 0 {
-			httputil.RespondWithErrorFields(c, status, errMsg, "CONFIG_ERROR",
-				map[string]any{"unknown_keys": unknown})
-			return
-		}
-		if refused, ok := resp["refused_keys"].([]string); ok && len(refused) > 0 {
-			servermiddleware.LogCredentialChangeRefusal(c)
-			httputil.RespondWithErrorFields(c, status, errMsg, "FORBIDDEN",
-				map[string]any{"refused_keys": refused})
-			return
-		}
-		httputil.RespondWithError(c, status, errMsg, "CONFIG_ERROR")
-		return
-	}
-
-	// No Validate-and-roll-back here any more. It used to run AFTER
-	// UpdateConfig had already persisted, and undid the change in memory only —
-	// leaving the blob, and the dedup engine, holding a config that memory had
-	// just reverted. UpdateService now validates the CANDIDATE before the swap
-	// and returns 400 with nothing written, so there is nothing to undo.
-
-	// Same env_locked annotation the GET carries, so a client that refreshes its
-	// view from the save response sees the identical shape it got from the GET
-	// rather than a config that has quietly lost the annotation. (Today's web
-	// client re-reads only openai_api_key here, so nothing depends on it yet —
-	// the point is that the two endpoints do not disagree about the schema.)
-	maskedConfig := withEnvLocks(h.configUpdate.MaskSecrets(config.Snapshot()))
-	response := gin.H{"config": maskedConfig}
-	if opID, ok := resp["dedup_rescore_op_id"].(string); ok && opID != "" {
-		// The dedup ladder changed; the stored-candidate re-band was queued as
-		// an operation. Surface its id so the caller can follow it.
-		response["dedup_rescore_op_id"] = opID
-	}
-	// Historically this re-marshalled the config and decoded it back into a map to
-	// mirror every field at the response's top level. withEnvLocks already returns
-	// that map, so copy it directly: a second round-trip would re-run the float64
-	// widening its json.Number decoding exists to avoid. The fail-open branch of
-	// withEnvLocks hands back a plain Config, which has no top-level mirror to make
-	// — the nested "config" key above still carries it.
-	if flat, ok := maskedConfig.(map[string]any); ok {
-		maps.Copy(response, flat)
-	}
-	httputil.RespondWithOK(c, response)
 }
 
 // HandleEvents handles Server-Sent Events (SSE) for real-time updates.
