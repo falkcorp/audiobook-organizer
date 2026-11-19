@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_split_locks_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5a7e2c19-8d04-4b63-9f1a-c60e3b2d7a85
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -153,4 +153,21 @@ func TestAuthorSplitScanOp_LockSavedAfterThePreCheckHoldsThePrimaryWrite(t *test
 		}
 	}
 	require.True(t, held, "the late hold was not reported; logs %v", rep.logs)
+
+	// The late hold is counted as held, like a book held before either write: the
+	// composite is kept for it (heldComposites) and the run reports no error. Left
+	// out of heldComposites, the delete of the composite was attempted, refused
+	// because the book still names it, and counted as an error.
+	var summary string
+	for _, l := range rep.logs {
+		if strings.HasPrefix(l, "Split ") && strings.Contains(l, "composite authors,") {
+			summary = l
+		}
+	}
+	require.Contains(t, summary, "1 books left alone: author locked by the user", "the late hold was not counted as held")
+	require.Contains(t, summary, "(0 errors,", "a book locked mid-write was counted as an error")
+	kept, err := st.GetAuthorByID(composite.ID)
+	require.NoError(t, err)
+	require.NotNil(t, kept, "the composite was deleted while a locked book still names it")
+	require.Equal(t, composite.ID, kept.ID)
 }

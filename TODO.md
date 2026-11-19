@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.51 -->
+<!-- version: 10.78.52 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -11,7 +11,7 @@
 <!-- version: 10.78.25 -->
 <!-- version: 10.78.22 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-11-18 -->
+<!-- last-edited: 2026-11-19 -->
 
 # Project TODO — live items only
 
@@ -6562,8 +6562,9 @@ generate-on-behalf should force a short expiry / first-use rotation for safety.
   junk-row unlink `unlinkAndDeleteAuthorVia` in `author_strip_merge.go` that the same op
   runs after the relink (a locked book is left as it is and keeps the row from being
   deleted; summary keys `books-held-user-locked` / `rows-held-user-locked`).
-  Checked, no code change: `fs_regroup_xml.go` `updateSurvivor` already read the title
-  lock fail-closed (characterization test added); `repair_junk_titles.go` no longer exists
+  `fs_regroup_xml.go` `updateSurvivor` read the title lock fail-closed but OUTSIDE the
+  write; round 2 moved the read inside `ModifyBook`'s callback (a test saves the lock
+  after the first read). Checked, no code change: `repair_junk_titles.go` no longer exists
   (absorbed into `junk_title_fixer.go`, which checks `FieldKeyTitle`); `intro_transcribe.go`
   writes only transcribe columns, none of them in `UserLockableFields` (a test pins it, so
   the earlier "should be guarded" note does not apply).
@@ -6571,15 +6572,27 @@ generate-on-behalf should force a short expiry / first-use rotation for safety.
   `title_repair.go`, `series_denumber_op.go`, `internal/server/entities_ops.go`,
   `internal/server/server_metadata.go`, `internal/server/handlers/entities/handler.go`,
   `internal/server/duplicates_helpers.go`. **Found on the way, not touched:** the
-  `author_id_repair` / `author_duplicate_merge` merge paths still rewrite credits and
-  primary authors without a lock check, and other callers of `authormerge.MoveCredits` are
-  unguarded. `mergeAuthorIntoVia` re-checks nothing at its `MoveCredits` write (only an
-  advisory pre-check), so a lock saved in that window is not honoured.
-  The title-as-author relink journals a book's credits (`journalCredits`) before the
-  guarded write, so a lock saved between the pre-check and the write leaves a journal row
-  for a book that was then held (and, as before this change, for a book whose write
-  failed). Its revert would refuse that book (`ReasonChangedSince`), not damage it; voiding
-  the row means `journalCredits` returning a void func like `authormerge.Step`.
+  `author_id_repair` merge path (`authorIDMergeOneVia`, `MoveCredits` at
+  `author_id_repair.go:901`) still rewrites credits and primary authors without a lock
+  check, and so do the other callers of `authormerge.MoveCredits`: the Authors-view merge
+  (`server/entities_ops.go`, a human act, deliberately unguarded) and
+  `server/ai_author_reassign.go`. `author_duplicate_merge` is NOT in that list: it goes
+  through `mergeAuthorIntoVia`, which round 2 made all-or-nothing per author (every
+  book's lock is read before any book moves; `errAuthorMergeUserLocked`, counted as held,
+  never failed) and which passes `CreditMove.Locks`, so the lock is read inside the one
+  `ModifyBookCredits` commit that writes each book.
+  Round 2 also made the unlink and the title-as-author relink one `ModifyBookCredits`
+  commit per book with the lock read inside it (no restore code, so no stale-list
+  write-back), and `journalCredits` and the create-author row return void funcs that a
+  held or failed book calls, so no journal row stands for a write that did not happen.
+  **Known residuals:** (1) the author split stays two writes (credits, then primary): a
+  lock saved between them leaves the credits split and the primary on the composite, now
+  counted as held, not as an error; making it one commit means the credit swap across
+  several composites in one `ModifyBookCredits`. (2) Lock writers take `LockMetadataState`,
+  not the book stripe, so a lock saved while a commit's callback is running can still lose;
+  the window is one batch wide (todo.d `2026-11-18-lock-metadata-state-order-audit.md`).
+  (3) `refetch_missing_authors.go` can create author rows before its decisive check and
+  runs its co-author `ModifyBookAuthors` after the primary write with no re-check.
 
 - [ ] **Field-lock LOW items deferred from PR #3054's round-2 review** — none of these
   lose data; they are clarity and drift risks the review (L1–L4) named:
