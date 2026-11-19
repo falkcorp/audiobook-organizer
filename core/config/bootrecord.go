@@ -1,7 +1,7 @@
 // file: core/config/bootrecord.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 56fd5d59-8302-4fc6-8fb4-699e2671afa9
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package config
 
@@ -10,20 +10,25 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 )
 
 // The boot record (05-config §1.3.5): the UI-made values of ReloadBoot keys,
 // needed before storage opens, in <state_dir>/config.boot.json, written
-// atomically through the os.Root that Options.BootRecordRoot returns. Unknown
-// paths (a module this binary lacks) are retained on every rewrite. No other
-// component writes the file.
+// atomically through the StateFiles that Options.BootRecordRoot returns.
+// Unknown paths (a module this binary lacks) are retained on every rewrite.
+// No other component writes the file.
 
 const (
 	bootRecordName   = "config.boot.json"
 	bootRecordTemp   = "config.boot.json.tmp"
 	bootRecordBad    = "config.boot.json.bad"
 	bootRecordFormat = "mediacore-boot/1"
+
+	// The crash-point labels of the record's writes (06 §6.5.1; names coined
+	// by F3-07). The quarantine is P0's one write; a rewrite comes from
+	// Apply, after readiness, and is labelled all the same.
+	labelBootQuarantine = "config.bootrecord.quarantine"
+	labelBootWrite      = "config.bootrecord.write"
 )
 
 // bootRecordFile is the record's JSON form.
@@ -37,7 +42,7 @@ type bootRecordFile struct {
 // set, runs between the temp file's fsync and the rename (tests: a crash
 // there must leave the previous record intact).
 type bootRecordIO struct {
-	root       *os.Root
+	root       StateFiles
 	renameHook func() error
 }
 
@@ -72,10 +77,10 @@ func parseBootRecord(b []byte) (bootRecordFile, error) {
 // quarantine renames an unparsable record to config.boot.json.bad, replacing
 // an older one.
 func (r bootRecordIO) quarantine() error {
-	if err := r.root.Rename(bootRecordName, bootRecordBad); err != nil {
+	if err := r.root.Rename(labelBootQuarantine, bootRecordName, bootRecordBad); err != nil {
 		return fmt.Errorf("config: quarantine the boot record: %w", err)
 	}
-	return r.syncDir()
+	return r.syncDir(labelBootQuarantine)
 }
 
 // write replaces the record atomically: a new temp file (0600), fsync,
@@ -97,63 +102,47 @@ func (r bootRecordIO) writeBytes(b []byte) error {
 	if err := r.removeTemp(); err != nil {
 		return fmt.Errorf("config: remove a leftover boot record temp file: %w", err)
 	}
-	f, err := r.root.OpenFile(bootRecordTemp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return fmt.Errorf("config: boot record temp file: %w", err)
-	}
-	_, werr := f.Write(b)
-	if werr == nil {
-		werr = f.Sync()
-	}
-	if cerr := f.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr != nil {
-		return fmt.Errorf("config: write the boot record: %w", errors.Join(werr, r.removeTemp()))
+	if err := r.root.WriteNew(labelBootWrite, bootRecordTemp, b, 0o600); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return fmt.Errorf("config: boot record temp file: %w", err)
+		}
+		return fmt.Errorf("config: write the boot record: %w", errors.Join(err, r.removeTemp()))
 	}
 	if r.renameHook != nil {
 		if err := r.renameHook(); err != nil {
 			return fmt.Errorf("config: write the boot record: %w", err)
 		}
 	}
-	if err := r.root.Rename(bootRecordTemp, bootRecordName); err != nil {
+	if err := r.root.Rename(labelBootWrite, bootRecordTemp, bootRecordName); err != nil {
 		return fmt.Errorf("config: install the boot record: %w", errors.Join(err, r.removeTemp()))
 	}
-	return r.syncDir()
+	return r.syncDir(labelBootWrite)
 }
 
 // restore puts back the record's previous bytes (nil: it did not exist).
 func (r bootRecordIO) restore(prev []byte) error {
 	if prev == nil {
-		err := r.root.Remove(bootRecordName)
+		err := r.root.Remove(labelBootWrite, bootRecordName)
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("config: remove the boot record: %w", err)
 		}
-		return r.syncDir()
+		return r.syncDir(labelBootWrite)
 	}
 	return r.writeBytes(prev)
 }
 
 // removeTemp deletes a leftover temp file.
 func (r bootRecordIO) removeTemp() error {
-	if err := r.root.Remove(bootRecordTemp); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err := r.root.Remove(labelBootWrite, bootRecordTemp); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 	return nil
 }
 
 // syncDir fsyncs the record's directory so a rename survives a crash.
-func (r bootRecordIO) syncDir() error {
-	d, err := r.root.Open(".")
-	if err != nil {
-		return fmt.Errorf("config: open the state directory: %w", err)
-	}
-	serr := d.Sync()
-	if cerr := d.Close(); serr == nil {
-		serr = cerr
-	}
-	if serr != nil {
-		return fmt.Errorf("config: sync the state directory: %w", serr)
+func (r bootRecordIO) syncDir(label string) error {
+	if err := r.root.SyncDir(label, "."); err != nil {
+		return fmt.Errorf("config: sync the state directory: %w", err)
 	}
 	return nil
 }

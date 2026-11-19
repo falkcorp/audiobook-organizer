@@ -1,7 +1,7 @@
 // file: core/config/helpers_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: b5d04556-252d-45d5-96bd-ee0c3a1729aa
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package config_test
 
@@ -18,6 +18,7 @@ import (
 
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/config/configtest"
+	"github.com/falkcorp/mediacore/internal/statefs"
 )
 
 // Fixture keys.
@@ -157,9 +158,9 @@ func newRig(t *testing.T, ro rigOpts) *rig {
 		o.Logger = slog.New(r.logs)
 	}
 	if !ro.noRecord {
-		o.BootRecordRoot = func(d string) (*os.Root, error) {
+		o.BootRecordRoot = func(d string) (config.StateFiles, error) {
 			r.roots = append(r.roots, d)
-			return os.OpenRoot(r.dir)
+			return statefs.Open(context.Background(), r.dir)
 		}
 	}
 	st, err := config.NewStore(o)

@@ -1,7 +1,7 @@
 // file: core/secrets/open_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 5543ef2e-3564-4e6b-a213-df11eb05e442
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package secrets
 
@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/mediacore/internal/statefs"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -79,7 +80,7 @@ func TestOpen_FirstRunKeyring(t *testing.T) {
 	if di.Mode().Perm() != 0o700 {
 		t.Errorf("keyring directory mode %v, want 0700", di.Mode().Perm())
 	}
-	f, err := readKeyring(e.root, "keys/secrets.keyring")
+	f, err := readKeyring(statefs.FromRoot(e.root), "keys/secrets.keyring")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +429,7 @@ func TestOpen_ResetBootRewritesInstallID(t *testing.T) {
 		}
 	}
 
-	if _, err := Open(context.Background(), Options{StateDir: e.root, Keyspace: e.ks, AppID: testAppID, ResetBoot: true}); err == nil {
+	if _, err := Open(context.Background(), Options{StateDir: statefs.FromRoot(e.root), Keyspace: e.ks, AppID: testAppID, ResetBoot: true}); err == nil {
 		t.Error("a reset boot without the install ID was accepted")
 	}
 }
@@ -529,7 +530,7 @@ func TestKeyring_Invariants(t *testing.T) {
 	e := newEnv(t)
 	bad := valid()
 	bad.Keys = append(bad.Keys, mk("k2", useData, statusActive))
-	if err := writeKeyring(e.root, defaultKeyFile, bad); err == nil {
+	if err := writeKeyring(statefs.FromRoot(e.root), defaultKeyFile, bad); err == nil {
 		t.Error("writeKeyring wrote a keyring with two active data keys")
 	}
 }
