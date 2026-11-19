@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/step.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: ff3e2f5f-1fc0-4835-b579-944568abeb07
 // last-edited: 2026-11-19
 
@@ -162,7 +162,6 @@ type Migration struct {
 	read   int64
 	out    map[string]int64
 	quar   int64
-	count  map[string]int64
 }
 
 // SourceRanges is the step's Source: the retired claims M6 drains, in key order.
@@ -204,7 +203,7 @@ func New(cfg Config, id string, raisesLevel int, after []storage.StepRef) (datam
 	case len(after) == 0:
 		return datamigrate.DataMigration{}, errors.New("m6: after is books' level step")
 	}
-	m := &Migration{cfg: cfg, by: id, logger: cfg.Logger, out: map[string]int64{}, count: map[string]int64{}, pulled: map[string]bool{}}
+	m := &Migration{cfg: cfg, by: id, logger: cfg.Logger, out: map[string]int64{}, pulled: map[string]bool{}}
 	if m.logger == nil {
 		m.logger = slog.New(slog.DiscardHandler)
 	}
@@ -280,9 +279,6 @@ func (c *chunk) note(outcome string) {
 	if !c.m.cfg.DryRun {
 		c.w.Count(outcome)
 	}
-	c.m.mu.Lock()
-	c.m.count[outcome]++
-	c.m.mu.Unlock()
 }
 
 func (m *Migration) markPulled(key string) {
@@ -311,30 +307,16 @@ func (m *Migration) tally(outcome string) {
 
 // tallyQuarantine records a quarantined key. A synthetic member key of the blob
 // ("setting:config_blob#<member>") is a derived record, not a source row, so it
-// is counted apart from the balance.
+// is not counted: the runner counts the quarantine record itself, and the
+// balance is over source rows.
 func (m *Migration) tallyQuarantine(key string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if strings.Contains(key, "#") {
-		m.count["quarantined-member"]++
 		return
 	}
-	m.read++
-	m.quar++
-}
-
-// Counts is the step's own accounting of derived outcomes, for tests.
-func (m *Migration) Counts() map[string]int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := map[string]int64{}
-	for k, v := range m.count {
-		out[k] = v
-	}
-	for k, v := range m.out {
-		out[k] = v
-	}
-	return out
+	m.read++
+	m.quar++
 }
 
 // Step handles one row. A row is read once: by the visit the shard pays it, or by
