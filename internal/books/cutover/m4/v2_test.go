@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/v2_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4a9c61d8-e307-4b25-8f1a-b2d05e73c9f6
 // last-edited: 2026-11-18
 
@@ -40,8 +40,8 @@ func TestCutover_V2MirrorFolded(t *testing.T) {
 			t.Fatalf("left %v, quarantined %+v\n%s", keysOf(s.Left), s.Quarantine, r.logs)
 		}
 
-		// One page, numbered 1..n in merged time order (family breaks a tie: v3,
-		// then v2): the v3 and mirror lines interleave by the millisecond they
+		// One page, numbered 1..n in merged time order (family breaks a tie as HEAD's
+		// log cursor does: v2, then v3): the v3 and mirror lines interleave by the millisecond they
 		// were written at, and the two errors (a second apart) follow them.
 		got := logLines(t, ctx, s, withCkpt.id)
 		var order []string
@@ -51,11 +51,11 @@ func TestCutover_V2MirrorFolded(t *testing.T) {
 			}
 			order = append(order, l.Log.Message)
 		}
-		want := []string{"Knightfall fingerprinted", "Arkham intake 1", "Knightfall fingerprinted", "Arkham intake 2", "Arkham intake 3", "Scarecrow escaped 1", "Scarecrow escaped 2"}
+		want := []string{"Arkham intake 1", "Knightfall fingerprinted", "Arkham intake 2", "Knightfall fingerprinted", "Arkham intake 3", "Scarecrow escaped 1", "Scarecrow escaped 2"}
 		if !reflect.DeepEqual(order, want) {
 			t.Fatalf("log lines %q, want %q", order, want)
 		}
-		v2first := got[1].Log
+		v2first := got[0].Log
 		if v2first.Level != "warn" || v2first.Fields["phase"] != "xml" || v2first.Fields["inmates"] != "12" {
 			t.Errorf("first v2 line = %+v", v2first)
 		}

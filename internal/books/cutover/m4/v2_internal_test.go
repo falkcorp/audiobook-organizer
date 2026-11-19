@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/v2_internal_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 91d6c3a7-5e08-4b4f-a2d9-17c8e0f35b64
 // last-edited: 2026-11-18
 
@@ -121,7 +121,8 @@ func TestLogs_RepeatedSequenceNumbersAcrossBoots(t *testing.T) {
 	}
 }
 
-// TestLogs_FamilyTieBreak: lines of one instant order v3, v2 log, v2 error, v1.
+// TestLogs_FamilyTieBreak: lines of one instant order v2 log, v3, v2 error, v1
+// (HEAD's logCursor puts the v2 log before the v3 log).
 func TestLogs_FamilyTieBreak(t *testing.T) {
 	at := "2026-11-05T03:00:00Z"
 	rr := &runRows{
@@ -138,8 +139,8 @@ func TestLogs_FamilyTieBreak(t *testing.T) {
 	for _, p := range c.data.Pages {
 		got += p.Log.Message + " "
 	}
-	if got != "v3 v2 err v1 " {
-		t.Errorf("order %q, want v3 v2 err v1", got)
+	if got != "v2 v3 err v1 " {
+		t.Errorf("order %q, want v2 v3 err v1", got)
 	}
 }
 
@@ -249,5 +250,40 @@ func TestCheckpoints_LosersAreCarried(t *testing.T) {
 		if !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: checkpoints %v, want %v", name, got, c.want)
 		}
+	}
+}
+
+// TestLogs_SameNanosecondOrderIsHeads: lines stamped the same nanosecond are
+// ordered as HEAD's merged log cursor orders them, (time, family, sequence):
+// the v2 log before the v3 log, and (after the two HEAD families) v2 errors and
+// then v1 lines. Lines of different times keep time order whatever their family.
+func TestLogs_SameNanosecondOrderIsHeads(t *testing.T) {
+	const ts = "2026-11-03T10:00:00.000000007Z"
+	v3 := func(seq int, msg string) storage.KV {
+		return storage.KV{Key: []byte("opv3:log:x:7:" + strconv.Itoa(seq)), Value: []byte(`{"at":"` + ts + `","level":"info","message":"` + msg + `"}`)}
+	}
+	v2 := func(seq int, msg string) storage.KV {
+		return storage.KV{Key: []byte("opv2:log:x:7:" + strconv.Itoa(seq)), Value: []byte(`{"Level":"info","Message":"` + msg + `","CreatedAt":"` + ts + `"}`)}
+	}
+	e2 := storage.KV{Key: []byte("opv2:err:x:7:1"), Value: []byte(`{"Message":"v2 error","OccurredAt":"` + ts + `"}`)}
+	l1 := storage.KV{Key: []byte("op:log:x:1"), Value: []byte(`{"level":"info","message":"v1","created_at":"` + ts + `"}`)}
+	early := storage.KV{Key: []byte("opv3:log:x:1:9"), Value: []byte(`{"at":"2026-11-03T10:00:00.000000001Z","level":"info","message":"early v3"}`)}
+	cv := &converted{}
+	rr := &runRows{
+		log:  []storage.KV{v3(2, "v3 seq 2"), v3(1, "v3 seq 1"), early},
+		log2: []storage.KV{v2(5, "v2 seq 5"), v2(3, "v2 seq 3")},
+		err2: []storage.KV{e2},
+		log1: []storage.KV{l1},
+	}
+	if reason := cv.logs(rr); reason != "" {
+		t.Fatal(reason)
+	}
+	var got []string
+	for _, p := range cv.data.Pages {
+		got = append(got, p.Log.Message)
+	}
+	want := []string{"early v3", "v2 seq 3", "v2 seq 5", "v3 seq 1", "v3 seq 2", "v2 error", "v1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("log order = %q, want %q", got, want)
 	}
 }

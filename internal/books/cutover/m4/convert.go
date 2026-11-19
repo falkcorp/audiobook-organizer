@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/convert.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c41d9e07-5a3b-48f2-b6c8-0d7e2f91a354
 // last-edited: 2026-11-18
 
@@ -377,7 +377,7 @@ func (c *converted) items(rr *runRows) string {
 // logEntry is one log line of any family, before the run's lines are numbered.
 type logEntry struct {
 	line tasks.LogLine
-	rank int    // family: v3, v2 log, v2 error, v1
+	rank int    // family: v2 log, v3, v2 error, v1
 	src  uint64 // the family's own sequence number
 	n    int    // arrival order, the last tie-break
 }
@@ -388,9 +388,10 @@ type logEntry struct {
 // process start (the key stays unique only through its timestamp), and the v3,
 // v2 and v1 families number independently, so a key's own number is not unique
 // within a run: two lines from different boots would share a page key and one
-// would replace the other. The order is HEAD's ListLogV3 order (time, then the
-// source sequence) with the family as the tie-break between families: v3 lines,
-// v2 lines, v2 errors, v1 lines. A line that does not decode quarantines the
+// would replace the other. The order is HEAD's merged log order (its logCursor:
+// time, then the family, then the source sequence), the family ranked v2 lines,
+// v3 lines, then the two families HEAD's cursor does not cover, v2 errors and v1
+// lines. A line that does not decode quarantines the
 // run: a half-imported log is not history.
 func (c *converted) logs(rr *runRows) string {
 	var all []logEntry
@@ -403,14 +404,14 @@ func (c *converted) logs(rr *runRows) string {
 		if json.Unmarshal(kv.Value, &l) != nil {
 			return reasonPage
 		}
-		add(l.At, 0, kv.Key, tasks.LogLine{Level: l.Level, Message: l.Message, Fields: l.Fields})
+		add(l.At, 1, kv.Key, tasks.LogLine{Level: l.Level, Message: l.Message, Fields: l.Fields})
 	}
 	for _, kv := range rr.log2 {
 		var l opLogV2
 		if json.Unmarshal(kv.Value, &l) != nil {
 			return reasonLogV2
 		}
-		add(l.CreatedAt, 1, kv.Key, tasks.LogLine{Level: l.Level, Message: l.Message, Fields: attrFields(l.Attrs)})
+		add(l.CreatedAt, 0, kv.Key, tasks.LogLine{Level: l.Level, Message: l.Message, Fields: attrFields(l.Attrs)})
 	}
 	for _, kv := range rr.err2 {
 		var e opErrV2
