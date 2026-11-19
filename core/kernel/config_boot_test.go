@@ -1,5 +1,5 @@
 // file: core/kernel/config_boot_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: d2618bbb-991d-4090-bcf6-a00ef3f98c75
 // last-edited: 2026-11-19
 
@@ -746,8 +746,10 @@ func TestResolveStorage_RefusesANonOwnerBeforeAnything(t *testing.T) {
 		t.Fatal(err)
 	}
 	c = notDir.resolvable("GOTHAM_CORE_STORAGE_PATH=" + filepath.Join(beside, "main.pebble"))
-	if _, _, err := ResolveStorage(ctx, c, "storage reset"); !errors.Is(err, storage.ErrNotStateDirOwner) {
-		t.Fatalf("ResolveStorage of a stranger's unusable default = %v, want storage.ErrNotStateDirOwner", err)
+	// The refusal is returned as itself, not as step 0's "cannot be
+	// created" over it: the operator is told who to run as.
+	if _, _, err := ResolveStorage(ctx, c, "storage reset"); !errors.Is(err, storage.ErrNotStateDirOwner) || strings.Contains(err.Error(), "cannot be") {
+		t.Fatalf("ResolveStorage of a stranger's unusable default = %v, want storage.ErrNotStateDirOwner alone", err)
 	}
 	if _, err := os.Stat(beside); !os.IsNotExist(err) {
 		t.Fatalf("the refused resolve created the fallback beside the store: %v", err)
