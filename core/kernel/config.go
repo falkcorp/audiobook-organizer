@@ -1,5 +1,5 @@
 // file: core/kernel/config.go
-// version: 1.1.6
+// version: 1.1.7
 // guid: 1f6c9e2a-7b40-4d85-9a3e-5c2b8d7f0e14
 // last-edited: 2026-11-19
 
@@ -315,16 +315,18 @@ func registerPathsAndModules(st *config.Store, stateDir string, mods []module.Mo
 // ConfigCheck is what CheckConfig reads (name coined by F3-02): the app's
 // config.Options (its AppID, EnvPrefix, Environ, FilePath, Flags,
 // Passthrough, EnvBindings, Retired and Logger; BootRecordRoot, Metrics and
-// Secrets are ignored), the compiled default of core.paths.state_dir, the
-// app's modules, and the config.Define values of the modules' sections.
-// Until F3-07 hands module sections to the kernel nothing lists them, so a
-// caller passes none and a retired name of a module key is Unchecked (the
-// seam F3-07 fills, from app's config check).
+// Secrets are ignored), the compiled default of core.paths.state_dir and the
+// app's modules. The module sections come from Modules: CheckConfig registers
+// every compiled module's Manifest.Settings, enabled or not (F3-07 d,
+// coordinator decision 2026-11-19), so a disabled module's keys stay
+// recognised and a retired name of one is judged, not left Unchecked. A start
+// registers only the enabled modules' sections (P3); config check is the
+// stricter reader, because an operator converting a unit file must convert a
+// disabled module's names too.
 type ConfigCheck struct {
 	Config          config.Options
 	StateDirDefault string
 	Modules         []module.Module
-	ModuleSections  []any
 }
 
 // CheckConfig is the engine of the offline command config check (05-config
@@ -333,9 +335,9 @@ type ConfigCheck struct {
 // store, reads no boot record and creates no directory. It returns every
 // retired name set; err is a *config.RetiredNameError when one would refuse
 // boot, or the operator layers' own error (a value that does not decode, an
-// unreadable file). A retired name of a key of a module with no section in
-// c.ModuleSections is reported Unchecked (its class is unknown); one of a
-// module with sections there is judged as a start judges it. bootConfig also
+// unreadable file). A retired name of a key of a module that declares no
+// section is reported Unchecked (its class is unknown); one of a module with
+// sections, enabled or not, is judged as a start judges it. bootConfig also
 // runs it, before step 0, so a refused boot creates no directory.
 func CheckConfig(ctx context.Context, c ConfigCheck) (uses []config.RetiredUse, err error) {
 	o := c.Config
@@ -356,8 +358,13 @@ func CheckConfig(ctx context.Context, c ConfigCheck) (uses []config.RetiredUse, 
 	if _, _, _, err := registerPathsAndModules(st, c.StateDirDefault, c.Modules); err != nil {
 		return nil, err
 	}
-	if _, err := config.RegisterSections(st.Registry(), c.ModuleSections...); err != nil {
-		return nil, fmt.Errorf("kernel: config check: register the module sections: %w", err)
+	for _, m := range c.Modules {
+		man := m.Manifest()
+		for _, sec := range man.Settings {
+			if _, err := sec.Register(st.Registry()); err != nil {
+				return nil, fmt.Errorf("kernel: config check: register %s's section %s: %w", man.ID, sec.Path(), err)
+			}
+		}
 	}
 	lerr := st.Load(ctx)
 	return st.RetiredSet(), lerr
