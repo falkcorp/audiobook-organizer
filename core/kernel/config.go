@@ -1,5 +1,5 @@
 // file: core/kernel/config.go
-// version: 1.1.5
+// version: 1.1.6
 // guid: 1f6c9e2a-7b40-4d85-9a3e-5c2b8d7f0e14
 // last-edited: 2026-11-19
 
@@ -101,9 +101,9 @@ type configBoot struct {
 	instrSet bool
 }
 
-// bootConfig is 06 P0 for config: step 0 reads core.paths.state_dir (env and
-// flags only) and core.storage.path (every pre-boot layer) before anything
-// else; ResolveStateDir picks the state directory once; the core sections
+// bootConfig is 06 P0 for config: step 0 (step0) reads core.paths.state_dir
+// (env and flags only) and core.storage.path (every operator layer) before
+// anything else and resolves the state directory once; the core sections
 // register with core.paths defaulting to that directory and core.modules to
 // each manifest's DefaultEnabled; Boot reads the boot record from exactly
 // that directory. It touches no storage.
@@ -111,27 +111,10 @@ func bootConfig(ctx context.Context, in configInput) (cb *configBoot, err error)
 	if in.OwnerVerifier && in.OwnerSet == nil {
 		return nil, errors.New("kernel: config: an owner verifier is configured and config.Options.OwnerSet is nil: ProtectOwner keys would be checked as ProtectAdmin; the app must say whether an owner is set")
 	}
-	prefix := in.EnvPrefix
-	if prefix == "" {
-		prefix = strings.ToUpper(in.AppID)
-	}
-	log := in.Logger
-	if log == nil {
-		log = slog.New(slog.DiscardHandler)
-	}
-	cb = &configBoot{prefix: prefix, log: log}
-	mkdir := in.Mkdir
-	if mkdir == nil {
-		mkdir = func(d string) error { return statefs.MkdirAll(ctx, labelStateDirMkdir, d, 0o700) }
-	}
-	st, err := config.NewStore(config.Options{
-		AppID: in.AppID, EnvPrefix: in.EnvPrefix, Environ: in.Environ, FilePath: in.FilePath, Flags: in.Flags,
-		Passthrough: in.Passthrough, EnvBindings: in.EnvBindings, Retired: in.Retired,
-		Logger: log, Now: in.Now, OwnerSet: in.OwnerSet,
-		BootRecordRoot: func(dir string) (config.StateFiles, error) { return cb.bootRoot(ctx, dir) },
-	})
+	cb = &configBoot{prefix: in.prefix(), log: in.logger()}
+	st, handles, err := newStep0Store(in, func(dir string) (config.StateFiles, error) { return cb.bootRoot(ctx, dir) })
 	if err != nil {
-		return nil, fmt.Errorf("kernel: config store: %w", err)
+		return nil, err
 	}
 	cb.store = st
 	defer func() {
@@ -139,73 +122,13 @@ func bootConfig(ctx context.Context, in configInput) (cb *configBoot, err error)
 			err = errors.Join(err, st.Close(ctx))
 		}
 	}()
-
-	rest, err := coreSectionsButPathsAndModules()
+	s0, err := step0(ctx, st, in, in.mkdir(ctx))
 	if err != nil {
 		return nil, err
 	}
-	// core.storage registers first so step 0 reads its path canonically.
-	handles, err := config.RegisterSections(st.Registry(), rest...)
-	if err != nil {
-		return nil, fmt.Errorf("kernel: config: register the core sections: %w", err)
-	}
+	cb.stateDir, cb.fellBack, cb.dbPath = s0.stateDir, s0.fellBack, s0.dbPath
 
-	// A retired name that refuses boot is judged before step 0, which may
-	// create the state directory: a refused boot creates nothing (05-config
-	// §1.3.6). The judgement runs on a scratch store over the same operator
-	// layers (the real one cannot judge core.paths before step 0 registers
-	// it); the real Boot judges again and warns.
-	if _, err := CheckConfig(ctx, ConfigCheck{
-		Config: config.Options{
-			AppID: in.AppID, EnvPrefix: in.EnvPrefix, Environ: in.Environ, FilePath: in.FilePath, Flags: in.Flags,
-			Passthrough: in.Passthrough, EnvBindings: in.EnvBindings, Retired: in.Retired,
-			Logger: slog.New(slog.DiscardHandler), Now: in.Now, OwnerSet: in.OwnerSet,
-		},
-		StateDirDefault: in.StateDirDefault, Modules: in.Modules,
-	}); err != nil {
-		if rerr, refused := errors.AsType[*config.RetiredNameError](err); refused {
-			return nil, fmt.Errorf("kernel: config boot: %w", rerr)
-		}
-		// Any other operator-layer error is the real store's to report, in
-		// its own words, below.
-	}
-
-	// Step 0 (05-config §1.7, OPS5-13).
-	explicit, err := operatorString(st, stateDirKey)
-	if err != nil {
-		return nil, err
-	}
-	if cb.dbPath, err = operatorString(st, storagePathKey); err != nil {
-		return nil, err
-	}
-	stateVar := prefix + "_CORE_PATHS_STATE_DIR"
-	dir, fellBack, err := config.ResolveStateDir(explicit, in.StateDirDefault, cb.dbPath, mkdir)
-	if err != nil {
-		if strings.TrimSpace(explicit) != "" {
-			return nil, fmt.Errorf("kernel: config: the state directory %q (%s) cannot be used: %w", dir, stateVar, err)
-		}
-		// With no default, config's error already says so; it is not repeated.
-		what := fmt.Errorf("the default state directory %q cannot be created (%w)", dir, err)
-		if strings.TrimSpace(in.StateDirDefault) == "" {
-			what = err
-		}
-		return nil, fmt.Errorf("kernel: config: %w, and core.storage.path %q gives no absolute directory that can be created to keep state beside; set %s to a directory that can be created",
-			what, cb.dbPath, stateVar)
-	}
-	// Absolute, as app.storagePath makes the state directory with the gate
-	// off: a relative compiled default (hello's "hello-state") would
-	// otherwise reach P0a, the swap journal and the keyring relative to
-	// whatever the working directory is at each use.
-	if dir, err = filepath.Abs(dir); err != nil {
-		return nil, fmt.Errorf("kernel: config: the state directory: %w", err)
-	}
-	cb.stateDir, cb.fellBack = dir, fellBack
-	if fellBack {
-		log.Warn("kernel: the default state directory cannot be created; keeping state files beside the database",
-			"default", in.StateDirDefault, "using", dir, "choose_with", stateVar)
-	}
-
-	ph, mh, known, err := registerPathsAndModules(st, dir, in.Modules)
+	ph, mh, known, err := registerPathsAndModules(st, s0.stateDir, in.Modules)
 	if err != nil {
 		return nil, err
 	}
@@ -221,6 +144,125 @@ func bootConfig(ctx context.Context, in configInput) (cb *configBoot, err error)
 		return nil, err
 	}
 	return cb, nil
+}
+
+// prefix is the app's environment prefix, strings.ToUpper(AppID) by default.
+func (in configInput) prefix() string {
+	if in.EnvPrefix != "" {
+		return in.EnvPrefix
+	}
+	return strings.ToUpper(in.AppID)
+}
+
+// logger is in.Logger, or a discarding one.
+func (in configInput) logger() *slog.Logger {
+	if in.Logger != nil {
+		return in.Logger
+	}
+	return slog.New(slog.DiscardHandler)
+}
+
+// mkdir is in.Mkdir, or MkdirAll(d, 0o700) through the boot's filesystem
+// (statefs) under labelStateDirMkdir.
+func (in configInput) mkdir(ctx context.Context) func(string) error {
+	if in.Mkdir != nil {
+		return in.Mkdir
+	}
+	return func(d string) error { return statefs.MkdirAll(ctx, labelStateDirMkdir, d, 0o700) }
+}
+
+// newStep0Store is the config store step 0 reads: the operator layers, the
+// boot record through bootRecord (nil = none: an offline resolve never reads
+// it), and every core section but core.paths and core.modules, so
+// core.storage.path is read canonically.
+func newStep0Store(in configInput, bootRecord func(string) (config.StateFiles, error)) (*config.Store, []any, error) {
+	st, err := config.NewStore(config.Options{
+		AppID: in.AppID, EnvPrefix: in.EnvPrefix, Environ: in.Environ, FilePath: in.FilePath, Flags: in.Flags,
+		Passthrough: in.Passthrough, EnvBindings: in.EnvBindings, Retired: in.Retired,
+		Logger: in.logger(), Now: in.Now, OwnerSet: in.OwnerSet,
+		BootRecordRoot: bootRecord,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("kernel: config store: %w", err)
+	}
+	rest, err := coreSectionsButPathsAndModules()
+	if err == nil {
+		var handles []any
+		if handles, err = config.RegisterSections(st.Registry(), rest...); err == nil {
+			return st, handles, nil
+		}
+		err = fmt.Errorf("kernel: config: register the core sections: %w", err)
+	}
+	return nil, nil, errors.Join(err, st.Close(context.Background()))
+}
+
+// step0Result is what step 0 resolved.
+type step0Result struct {
+	stateDir string // absolute and clean
+	fellBack bool   // beside the database, the default being uncreatable
+	dbPath   string // core.storage.path from the operator layers, "" = unset
+}
+
+// step0 is 05-config §1.7's step 0 (OPS5-13) over st, a store holding the
+// operator layers: a retired name that refuses boot is judged first, so a
+// refused boot creates nothing (§1.3.6); then core.paths.state_dir (env and
+// flags) and core.storage.path (file, env and flags) are read and
+// config.ResolveStateDir picks the state directory, creating it with mkdir,
+// made absolute. bootConfig runs it before Boot reads the boot record, and
+// ResolveStorage runs it alone.
+func step0(ctx context.Context, st *config.Store, in configInput, mkdir func(string) error) (step0Result, error) {
+	// The judgement runs on a scratch store over the same operator layers
+	// (st cannot judge core.paths before step 0 registers it); the real Boot
+	// judges again and warns.
+	if _, err := CheckConfig(ctx, ConfigCheck{
+		Config: config.Options{
+			AppID: in.AppID, EnvPrefix: in.EnvPrefix, Environ: in.Environ, FilePath: in.FilePath, Flags: in.Flags,
+			Passthrough: in.Passthrough, EnvBindings: in.EnvBindings, Retired: in.Retired,
+			Logger: slog.New(slog.DiscardHandler), Now: in.Now, OwnerSet: in.OwnerSet,
+		},
+		StateDirDefault: in.StateDirDefault, Modules: in.Modules,
+	}); err != nil {
+		if rerr, refused := errors.AsType[*config.RetiredNameError](err); refused {
+			return step0Result{}, fmt.Errorf("kernel: config boot: %w", rerr)
+		}
+		// Any other operator-layer error is the real store's to report, in
+		// its own words.
+	}
+	explicit, err := operatorString(st, stateDirKey)
+	if err != nil {
+		return step0Result{}, err
+	}
+	var r step0Result
+	if r.dbPath, err = operatorString(st, storagePathKey); err != nil {
+		return step0Result{}, err
+	}
+	stateVar := in.prefix() + "_CORE_PATHS_STATE_DIR"
+	dir, fellBack, err := config.ResolveStateDir(explicit, in.StateDirDefault, r.dbPath, mkdir)
+	if err != nil {
+		if strings.TrimSpace(explicit) != "" {
+			return step0Result{}, fmt.Errorf("kernel: config: the state directory %q (%s) cannot be used: %w", dir, stateVar, err)
+		}
+		// With no default, config's error already says so; it is not repeated.
+		what := fmt.Errorf("the default state directory %q cannot be created (%w)", dir, err)
+		if strings.TrimSpace(in.StateDirDefault) == "" {
+			what = err
+		}
+		return step0Result{}, fmt.Errorf("kernel: config: %w, and core.storage.path %q gives no absolute directory that can be created to keep state beside; set %s to a directory that can be created",
+			what, r.dbPath, stateVar)
+	}
+	// Absolute, as app.storagePath makes the state directory with the gate
+	// off: a relative compiled default (hello's "hello-state") would
+	// otherwise reach P0a, the swap journal and the keyring relative to
+	// whatever the working directory is at each use.
+	if r.stateDir, err = filepath.Abs(dir); err != nil {
+		return step0Result{}, fmt.Errorf("kernel: config: the state directory: %w", err)
+	}
+	r.fellBack = fellBack
+	if fellBack {
+		in.logger().Warn("kernel: the default state directory cannot be created; keeping state files beside the database",
+			"default", in.StateDirDefault, "using", r.stateDir, "choose_with", stateVar)
+	}
+	return r, nil
 }
 
 // coreSectionsButPathsAndModules is coreSections without core.paths and

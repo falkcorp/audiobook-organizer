@@ -1,7 +1,7 @@
 // file: core/app/offline_open.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 03c6ad3e-f450-45b0-af00-36a0b6576dd6
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package app
 
@@ -27,7 +27,7 @@ import (
 // store a serve boot refuses. readOnly opens Pebble read-only and writes
 // nothing. Logs go to standard error: standard output is the command's.
 func OpenOffline(ctx context.Context, opts Options, readOnly bool, mods ...module.Module) (*Offline, error) {
-	c, err := offlineConfig(ctx, opts, mods)
+	c, err := offlineConfig(ctx, opts, mods, readWriteOwner(readOnly))
 	if err != nil {
 		return nil, err
 	}
@@ -50,14 +50,17 @@ func (o *Offline) Close() error { return o.o.Close() }
 
 // offlineConfig is the kernel's view of opts for an offline command: New's,
 // with the store path and the state directory, the R1 swap seams, and logs
-// on standard error instead of the service's stream or file.
-func offlineConfig(ctx context.Context, opts Options, mods []module.Module) (kernel.Config, error) {
+// on standard error instead of the service's stream or file. owner is
+// kernel.ResolveStorage's: the command's name, as the kernel's own
+// storage.RefuseNotStateDirOwner check reports it, for a command that writes
+// the store or the state directory, "" for a read-only one.
+func offlineConfig(ctx context.Context, opts Options, mods []module.Module, owner string) (kernel.Config, error) {
 	c, err := kernelConfig(opts, mods)
 	if err != nil {
 		return kernel.Config{}, err
 	}
 	c.StorageFS = opts.StorageFS
-	if c.StoragePath, c.StateDir, err = offlineStoragePath(ctx, opts, c, mods); err != nil {
+	if c.StoragePath, c.StateDir, err = offlineStoragePath(ctx, opts, c, mods, owner); err != nil {
 		return kernel.Config{}, err
 	}
 	if declaresStorage(mods) {
@@ -116,11 +119,20 @@ func absPath(p string) (string, error) {
 // opens: storagePath's with Options.CoreConfigBoot off, and with it on the
 // ones kernel.ResolveStorage reads through P0 over c (kernelConfig's), so an
 // offline command opens the store a serve boot opens. Both are "" for an app
-// with no storage.
-func offlineStoragePath(ctx context.Context, opts Options, c kernel.Config, mods []module.Module) (dbPath, stateDir string, err error) {
+// with no storage. owner is ResolveStorage's (offlineConfig's).
+func offlineStoragePath(ctx context.Context, opts Options, c kernel.Config, mods []module.Module, owner string) (dbPath, stateDir string, err error) {
 	if dbPath, stateDir, err = storagePath(opts, mods); err != nil || !opts.CoreConfigBoot {
 		return dbPath, stateDir, err
 	}
 	c.StoragePath, c.StateDir = dbPath, stateDir
-	return kernel.ResolveStorage(ctx, c)
+	return kernel.ResolveStorage(ctx, c, owner)
+}
+
+// readWriteOwner is offlineConfig's owner for an open that writes only when
+// it is not read-only: the kernel's own check's name for it.
+func readWriteOwner(readOnly bool) string {
+	if readOnly {
+		return ""
+	}
+	return "a read-write offline open"
 }
