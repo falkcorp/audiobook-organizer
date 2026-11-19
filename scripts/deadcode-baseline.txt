@@ -159,7 +159,6 @@ core/internal/rbacstore.roleCodec
 core/internal/rbacstore.roleKey
 core/internal/rbacstore.rolePrefix
 core/internal/rbacstore.sortedUnique
-core/kernel.CoreKeys
 core/kernel.CutoverPreflight
 core/kernel.ExitCode
 core/kernel.NewQuarantineGauge
