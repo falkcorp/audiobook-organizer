@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/rig_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 7be2c0d4-8a51-4c3e-b0a6-2f1d94c7e6a3
 // last-edited: 2026-11-19
 
@@ -389,7 +389,11 @@ type rig struct {
 	mutate func(ctx context.Context, t testing.TB, lr storage.LegacyRange)
 	// parallelism overrides the step's declaration.
 	parallelism func(*datamigrate.DataMigration)
-	dryRun      bool
+	// effective is the operator overlay the step's Effective answers, by
+	// instance ref ("download/deluge"): URL field to the URL as supplied.
+	effective map[string]map[string]string
+	// effectiveErr makes Effective fail.
+	effectiveErr error
 	// corpus is "stage1" or "overlay" (copied from the R2 corpus), or "" for an
 	// empty store the test fills.
 	corpus string
@@ -498,15 +502,28 @@ func (r *rig) logger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(r.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
-// migration is M6 over this rig, built the way F7-09 builds it.
-func (r *rig) migration() datamigrate.DataMigration {
-	dm, err := m6.New(m6.Config{
+// config is the step's Config over this rig, built the way F7-09 builds it.
+func (r *rig) config() m6.Config {
+	return m6.Config{
 		Integrations: lazyInteg{r}, AI: lazyAI{r}, Notify: lazyNotify{r}, Config: r.cfg, Secrets: r.secrets,
 		SecretNames: r.secrets.names, SecretValue: r.secrets.value,
-		Legacy: r.legacy,
-		DryRun: r.dryRun, Report: r.report,
+		Legacy: r.legacy, Effective: r.overlay,
+		Report: r.report,
 		Logger: r.logger(),
-	}, cutover.IntegrationsCutoverID, cutover.BooksCutoverLevel, []storage.StepRef{cutover.BooksLevelStepRef(r.levelVersion())})
+	}
+}
+
+// overlay is Config.Effective: the operator's URLs the test set for ref.
+func (r *rig) overlay(_ context.Context, ref integrations.Ref) (map[string]string, error) {
+	if r.effectiveErr != nil {
+		return nil, r.effectiveErr
+	}
+	return maps.Clone(r.effective[ref.String()]), nil
+}
+
+// migration is M6 over this rig.
+func (r *rig) migration() datamigrate.DataMigration {
+	dm, err := m6.New(r.config(), cutover.IntegrationsCutoverID, cutover.BooksCutoverLevel, []storage.StepRef{cutover.BooksLevelStepRef(r.levelVersion())})
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -514,6 +531,41 @@ func (r *rig) migration() datamigrate.DataMigration {
 		r.parallelism(&dm)
 	}
 	return dm
+}
+
+// withStore opens fsys as the cutover build, prepared and with the doubles bound
+// but not migrated, runs fn, and closes it: the state of a boot between Prepare
+// and Migrate, which is where F7-09's dry run runs Plan.
+func (r *rig) withStore(t testing.TB, fsys vfs.FS, fn func(ctx context.Context, db *storage.DB) error) error {
+	t.Helper()
+	ctx := context.Background()
+	o, err := r.open(ctx, fsys, []datamigrate.DataMigration{r.migration()})
+	if err != nil {
+		return err
+	}
+	db, err := o.Prepare(ctx)
+	if err != nil {
+		return errors.Join(err, o.Close())
+	}
+	r.bind(db)
+	return errors.Join(fn(ctx, db), db.Close())
+}
+
+// dump is every row of every keyspace of the open store, including books' legacy
+// range and core's own bookkeeping, keyed by keyspace.
+func (r *rig) dump(ctx context.Context, t testing.TB, db *storage.DB) map[string]map[string][]byte {
+	t.Helper()
+	out := map[string]map[string][]byte{}
+	lr, _ := db.Legacy(cutover.BooksOwner)
+	out["legacy"] = scanAll(ctx, t, lr)
+	for _, o := range []storage.Owner{ownerInteg, ownerAI, ownerNotify, ownerConfig, ownerSecrets, ownerAudit, "core/storage"} {
+		ks, ok := db.Keyspace(o)
+		if !ok {
+			t.Fatalf("no keyspace for %s", o)
+		}
+		out[string(o)] = scanAll(ctx, t, ks)
+	}
+	return out
 }
 
 // legacy is books' legacy range of the open store; valid between Prepare and

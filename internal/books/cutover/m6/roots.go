@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/roots.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5c6b9d2a-5df4-4e1e-9d64-7a0f3a1c1b52
 // last-edited: 2026-11-19
 
@@ -273,14 +273,12 @@ func (g *groupRun) roots(ctx context.Context, rows, index []storage.KV, counter 
 		if p.scan == nil {
 			continue
 		}
-		if !m.cfg.DryRun {
-			val, err := json.Marshal(p.scan)
-			if err != nil {
-				return fmt.Errorf("m6: encode the scan record of %s: %w", p.spec.ID, err)
-			}
-			if err := c.w.Set([]byte(PrefixRootScan+string(p.spec.ID)), val); err != nil {
-				return err
-			}
+		val, err := json.Marshal(p.scan)
+		if err != nil {
+			return fmt.Errorf("m6: encode the scan record of %s: %w", p.spec.ID, err)
+		}
+		if err := c.w.Set([]byte(PrefixRootScan+string(p.spec.ID)), val); err != nil {
+			return err
 		}
 		if err := c.consume(p.key, OutcomeRoot); err != nil {
 			return err
@@ -301,9 +299,9 @@ func (g *groupRun) roots(ctx context.Context, rows, index []storage.KV, counter 
 }
 
 // stage writes one config list through config.Importer; skipped when there is
-// nothing to write or in a dry run.
+// nothing to write.
 func (g *groupRun) stage(p config.Path, v any, want bool) error {
-	if !want || g.m.cfg.DryRun {
+	if !want {
 		return nil
 	}
 	raw, err := json.Marshal(v)

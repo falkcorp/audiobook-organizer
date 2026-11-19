@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/group.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9a7f3c52-6e0d-4d89-bb54-0e8f4b1d2c77
 // last-edited: 2026-11-19
 
@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/falkcorp/mediacore/integrations"
 	"github.com/falkcorp/mediacore/storage"
@@ -128,6 +129,7 @@ func (m *Migration) importPathRows(ctx context.Context) (rows, index []storage.K
 			return nil, nil, fmt.Errorf("m6: scan import_path: %w", serr)
 		}
 		kv = kv.Clone()
+		m.read(string(kv.Key))
 		if bytes.HasPrefix(kv.Key, []byte(PrefixImportPath+"path:")) {
 			index = append(index, kv)
 		} else {
@@ -150,9 +152,9 @@ func (g *groupRun) instances(ctx context.Context) error {
 			}
 		}
 		for i, er := range entries {
-			p, bad := m.metadataInstance(er, i, g.set)
+			p, bad, why := m.metadataInstance(er, i, g.set)
 			if p == nil {
-				if err := g.quarantineMember(bad, er, reasonBlobUndecodable); err != nil {
+				if err := g.quarantineMember(bad, er, why); err != nil {
 					return err
 				}
 				continue
@@ -172,9 +174,9 @@ func (g *groupRun) instances(ctx context.Context) error {
 			}
 		}
 		for i, er := range entries {
-			p, bad := m.aiInstance(er, i, g.set)
+			p, bad, why := m.aiInstance(er, i, g.set)
 			if p == nil {
-				if err := g.quarantineMember(bad, er, reasonBlobUndecodable); err != nil {
+				if err := g.quarantineMember(bad, er, why); err != nil {
 					return err
 				}
 				continue
@@ -198,7 +200,13 @@ func (g *groupRun) instances(ctx context.Context) error {
 				}
 			}
 		}
-		if p := m.openAIInstance(base, g.set); p != nil {
+		p, proven := m.openAIInstance(base, g.set)
+		switch {
+		case !proven:
+			if err := g.quarantineMember("openai_base_url", []byte(base), reasonUnprovenURL); err != nil {
+				return err
+			}
+		default:
 			if err := g.instance(ctx, p); err != nil {
 				return err
 			}
@@ -215,26 +223,55 @@ func (g *groupRun) instances(ctx context.Context) error {
 // (type, host, port, username) HEAD stored beside it have no native field and
 // are reported as dropped; the daemon password is in the secrets store already
 // and rides on the instance as daemon_password.
+//
+// The URL is HEAD's effective one, not the blob's: Deluge's web URL is
+// environment-or-config-file authoritative at HEAD over the stored blob,
+// including a stored empty value (internal/config applyEnvAuthoritativeConfig),
+// so on an install that pins it that way the blob's is empty or stale. Config.
+// Effective answers the operator's URL for download/deluge, and the blob's is
+// the fallback. With neither there is no destination and no instance, which the
+// report says.
 func (g *groupRun) deluge(ctx context.Context) error {
 	m := g.m
+	ref := integrations.Ref{Kind: integrations.KindDownload, Instance: instanceDeluge}
+	eff, err := m.cfg.Effective(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("m6: the effective destinations of %s: %w", ref, err)
+	}
+	operatorURL := strings.TrimSpace(eff["url"])
+
+	var web string
+	blobDecodes := true
 	if raw, ok := g.top["deluge_web_url"]; ok {
-		var web string
 		if err := json.Unmarshal(raw, &web); err != nil {
+			blobDecodes = false
 			if err := g.quarantineMember("deluge_web_url", raw, reasonBlobUndecodable); err != nil {
 				return err
 			}
-		} else {
-			p, proven := m.delugeInstance(web, g.set)
-			switch {
-			case !proven:
-				if err := g.quarantineMember("deluge_web_url", []byte(web), reasonUnprovenURL); err != nil {
-					return err
-				}
-			case p != nil:
-				if err := g.instance(ctx, p); err != nil {
-					return err
-				}
+		}
+	}
+	if blobDecodes {
+		use := web
+		if operatorURL != "" {
+			use = operatorURL
+			if strings.TrimSpace(web) != "" && web != operatorURL {
+				// HEAD ignored the stored value; so does the migrated instance. Said,
+				// without either URL.
+				m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the stored deluge_web_url is superseded by the operator's (environment or config file) and is not carried"})
 			}
+		}
+		p, proven := m.delugeInstance(use, web, g.set)
+		switch {
+		case !proven:
+			if err := g.quarantineMember("deluge_web_url", []byte(web), reasonUnprovenURL); err != nil {
+				return err
+			}
+		case p != nil:
+			if err := g.instance(ctx, p); err != nil {
+				return err
+			}
+		default:
+			m.report(Entry{Kind: "note", ID: ref.String(), Detail: "no web URL is stored and none is supplied by the environment or config file: no download/deluge instance is created"})
 		}
 	}
 	raw, ok := g.top["download_client"]
