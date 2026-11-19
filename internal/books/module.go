@@ -1,5 +1,5 @@
 // file: internal/books/module.go
-// version: 1.3.10
+// version: 1.3.11
 // guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
 // last-edited: 2026-11-19
 
