@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -32,16 +33,23 @@ import (
 type dedupCallLog struct {
 	calls   []string
 	emitted []string // "<opID>|<entryType>|<summary>"
+	sources []string // the source of each emitted row, in order
 	flushed []string
+	order   []string // "flush" and "emit" in call order
 }
 
 func (l *dedupCallLog) add(format string, args ...any) {
 	l.calls = append(l.calls, fmt.Sprintf(format, args...))
 }
 
-func (l *dedupCallLog) FlushActivityOp(opID string) { l.flushed = append(l.flushed, opID) }
-func (l *dedupCallLog) EmitActivityInfo(opID, entryType, _ string, summary string, _ ...string) {
+func (l *dedupCallLog) FlushActivityOp(opID string) {
+	l.flushed = append(l.flushed, opID)
+	l.order = append(l.order, "flush")
+}
+func (l *dedupCallLog) EmitActivityInfo(opID, entryType, source string, summary string, _ ...string) {
 	l.emitted = append(l.emitted, opID+"|"+entryType+"|"+summary)
+	l.sources = append(l.sources, source)
+	l.order = append(l.order, "emit")
 }
 func (l *dedupCallLog) LogActivityBatch(string, string, string, activity.BatchItem) {}
 
@@ -698,7 +706,7 @@ func dedupHasCall(ss []string, s string) bool {
 
 // ---- native scan controller ------------------------------------------------
 
-func TestT7ScanController_AcquireRenewRelease(t *testing.T) {
+func TestScanController_AcquireRenewRelease(t *testing.T) {
 	var finished []error
 	renews := 0
 	alive := true
@@ -737,4 +745,25 @@ func TestT7ScanController_AcquireRenewRelease(t *testing.T) {
 	if denied.RenewScanStandDown("op") {
 		t.Fatal("renewed after a refused acquire")
 	}
+}
+
+// t7Announce is the one place a run's activity row is written: nothing without a
+// writer or a run id, otherwise the batch is flushed and then the row emitted
+// under the caller's source.
+func TestAnnounceActivity(t *testing.T) {
+	t.Run("a nil writer is tolerated", func(t *testing.T) {
+		t7Announce(nil, "op-1", "x.y", "src", "done")
+	})
+	t.Run("an empty run id writes nothing", func(t *testing.T) {
+		l := &dedupCallLog{}
+		t7Announce(l, "", "x.y", "src", "done")
+		require.Empty(t, l.order)
+	})
+	t.Run("flushes first, then emits under the source", func(t *testing.T) {
+		l := &dedupCallLog{}
+		t7Announce(l, "op-1", "x.y", "src", "done")
+		require.Equal(t, []string{"flush", "emit"}, l.order)
+		require.Equal(t, []string{"op-1|x.y|done"}, l.emitted)
+		require.Equal(t, []string{"src"}, l.sources)
+	})
 }

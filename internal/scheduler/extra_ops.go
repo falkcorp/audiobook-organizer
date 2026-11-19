@@ -1,7 +1,7 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
-// last-edited: 2026-10-14
+// last-edited: 2026-11-18
 
 // extra_ops registers the OperationDef for the scheduler task that previously
 // used the legacy triggerOperation / triggerOperationWithID helpers.  The def
@@ -18,13 +18,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"time"
+
+	"github.com/falkcorp/mediacore/tasks"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -50,31 +53,6 @@ func NewExtraOpsRegistrar(store metabatch.Store, deps ExtraOpsDeps) *ExtraOpsReg
 	return &ExtraOpsRegistrar{Store: store, Deps: deps}
 }
 
-// extraOpsProgressAdapter bridges opsregistry.Reporter → operations.ProgressReporter
-// so the run* helpers can be called from a v2 op Run function without changes.
-type extraOpsProgressAdapter struct{ r opsregistry.Reporter }
-
-func (a extraOpsProgressAdapter) UpdateProgress(current, total int, message string) error {
-	return a.r.UpdateProgress(current, total, message)
-}
-func (a extraOpsProgressAdapter) Log(level, message string, details *string) error {
-	l := slog.LevelInfo
-	switch level {
-	case "warn", "warning":
-		l = slog.LevelWarn
-	case "error":
-		l = slog.LevelError
-	case "debug":
-		l = slog.LevelDebug
-	}
-	var attrs []slog.Attr
-	if details != nil {
-		attrs = append(attrs, slog.String("details", *details))
-	}
-	return a.r.Log(l, message, attrs...)
-}
-func (a extraOpsProgressAdapter) IsCanceled() bool { return a.r.IsCanceled() }
-
 // --- metadata-upgrade ---
 
 // RegisterMetadataUpgradeOp registers the scheduler.metadata-upgrade OperationDef.
@@ -86,8 +64,18 @@ func (a extraOpsProgressAdapter) IsCanceled() bool { return a.r.IsCanceled() }
 // named the maintenance ID; it stays reachable as a FormerID, so an old
 // operations_v2 row or an API enqueue by that ID resolves to this def.
 func (r *ExtraOpsRegistrar) RegisterMetadataUpgradeOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "scheduler.metadata-upgrade",
+	return reg.RegisterOp(r.metadataUpgradeDef())
+}
+
+// metadataUpgradeOpID is the id of the metadata upgrade definition.
+const metadataUpgradeOpID = "scheduler.metadata-upgrade"
+
+// metadataUpgradeDef is HEAD's definition of scheduler.metadata-upgrade. Its Run
+// is the v2 shell over metadataUpgradeCore; the native books.* kind is
+// metadataUpgradeNative.
+func (r *ExtraOpsRegistrar) metadataUpgradeDef() opsregistry.OperationDef {
+	return opsregistry.OperationDef{
+		ID:              metadataUpgradeOpID,
 		FormerIDs:       []string{"maintenance.metadata-upgrade"},
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "scheduler",
@@ -106,40 +94,125 @@ func (r *ExtraOpsRegistrar) RegisterMetadataUpgradeOp(reg *opsregistry.Registry)
 			opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite,
 			opsregistry.CapNetworkAudible, opsregistry.CapNetworkGeneric, opsregistry.CapNetworkOpenAI,
 		},
-		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) (retErr error) {
-			// Metadata is never applied during a library scan: hold the scan
-			// stand-down before the first write. A running scan does not make
-			// the op refuse: the acquire quiesces it and waits for it to park
-			// (bounded by the lease), and the op fails only if it never parks.
-			hold, sdErr := opsregistry.HoldScanStandDown(ctx, r.Deps.ScanStandDown, reporter, "scheduler.metadata-upgrade apply")
-			if sdErr != nil {
-				return sdErr
-			}
-			defer func() { retErr = hold.Finish(retErr) }()
-			ctx, reporter = hold.Context(), hold.Reporter()
+		Run: func(ctx context.Context, _ json.RawMessage, reporter opsregistry.Reporter) error {
+			_, err := metadataUpgradeCore(ctx, metadataUpgradeEnv{
+				t7Env:     t7HeadEnv(reporter),
+				Writer:    headMetadataUpgrade{r: r},
+				StandDown: t7HeadStandDown(r.Deps.ScanStandDown, reporter),
+			})
+			return err
+		},
+	}
+}
 
-			progress := extraOpsProgressAdapter{r: reporter}
-			p := sdk.NewProgress(reporter, 0)
-			p.Start("Scanning for books with upgradeable metadata sources...")
-			if r.Deps.MetadataFetchService == nil {
-				return fmt.Errorf("metadata fetch service not initialized")
+// metadataUpgradeWriter is the writes of scheduler.metadata-upgrade: the upgrade
+// sweep itself (re-fetch each eligible book's candidates and apply the winner's
+// metadata through the bulk-apply gate; metabatch.MetadataUpgradeService), and
+// the check that the fetch service it runs over exists.
+type metadataUpgradeWriter interface {
+	// Ready reports whether the upgrade can run at all (a metadata fetch service
+	// is wired).
+	Ready() error
+	// RunUpgrade sweeps up to limit books, reporting progress as it goes.
+	RunUpgrade(ctx context.Context, limit int, progress operations.ProgressReporter) (*metabatch.UpgradeResult, error)
+}
+
+// metadataUpgradeEnv is what the shared core takes from its shell (rules R2, R10).
+type metadataUpgradeEnv struct {
+	t7Env
+	Writer metadataUpgradeWriter
+	// StandDown holds the scan stand-down for the run: metadata is never applied
+	// during a library scan.
+	StandDown t7StandDown
+}
+
+// metadataUpgradeCore is the body of scheduler.metadata-upgrade, shared by HEAD's
+// shell and the native kind. It returns the sweep's result (nil when the sweep did
+// not run).
+func metadataUpgradeCore(ctx context.Context, env metadataUpgradeEnv) (res *metabatch.UpgradeResult, retErr error) {
+	// Metadata is never applied during a library scan: hold the scan
+	// stand-down before the first write. A running scan does not make
+	// the op refuse: the acquire quiesces it and waits for it to park
+	// (bounded by the lease), and the op fails only if it never parks.
+	hold, sdErr := env.StandDown(ctx, "scheduler.metadata-upgrade apply")
+	if sdErr != nil {
+		return nil, sdErr
+	}
+	defer func() { retErr = hold.Finish(retErr) }()
+	ctx, env.t7Env = t7Rebind(ctx, env.t7Env, hold)
+
+	progress := env.reporter()
+	p := sdk.NewProgress(progress, 0)
+	p.Start("Scanning for books with upgradeable metadata sources...")
+	if err := env.Writer.Ready(); err != nil {
+		return nil, err
+	}
+	_ = progress.Log("info", "Scanning for books with upgradeable metadata sources...", nil)
+	// M7 (2026-07 error-correction sweep): thread progress through so
+	// this 4-hour-timeout op reports books processed/total every 25
+	// books instead of going silent between start and result.
+	result, err := env.Writer.RunUpgrade(ctx, 200, progress)
+	if err != nil {
+		return nil, err
+	}
+	msg := fmt.Sprintf("Metadata upgrade complete: checked %d, upgraded %d, skipped %d, "+
+		"owner-manual-only %d (Doctor Who / Big Finish / Torchwood), errors %d; sweep after %q -> %q (wrapped %v)",
+		result.Checked, result.Upgraded, result.Skipped, result.OwnerManualOnly, result.Errors,
+		result.CursorStart, result.CursorEnd, result.Wrapped)
+	_ = progress.Log("info", msg, nil)
+	p.Done(msg)
+	return result, nil
+}
+
+// metadataUpgradeNative is the native books.scheduler.metadata-upgrade kind. HEAD
+// declares no Writes, no Preview and a library write capability, so a Preview run
+// is refused. Its write set is inferred from what the sweep writes: the books it
+// applies metadata to (with their authors and series and the metadata cache) and
+// the sweep cursor it saves as operation state.
+func (r *ExtraOpsRegistrar) metadataUpgradeNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	kind := t7KindFor(metadataUpgradeOpID)
+	c := t7Common(r.metadataUpgradeDef(), sched)
+	c.Effects = t7Writes(ops.ResBooks, ops.ResAuthors, ops.ResSeries, ops.ResMetadataCache, ops.ResOperations)
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, metabatch.UpgradeResult]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (metabatch.UpgradeResult, error) {
+			if err := t7LiveOnly(rc, kind); err != nil {
+				return metabatch.UpgradeResult{}, err
 			}
-			svc := metabatch.NewMetadataUpgradeService(r.Store, r.Deps.MetadataFetchService)
-			_ = progress.Log("info", "Scanning for books with upgradeable metadata sources...", nil)
-			// M7 (2026-07 error-correction sweep): thread progress through so
-			// this 4-hour-timeout op reports books processed/total every 25
-			// books instead of going silent between start and result.
-			result, err := svc.RunUpgrade(ctx, 200, progress)
+			// HEAD's body takes no params; a mode key is still refused.
+			if _, err := t7DecodeNative[struct{}](kind, raw); err != nil {
+				return metabatch.UpgradeResult{}, err
+			}
+			w, err := t7NewWriter(kind, deps, rc)
 			if err != nil {
-				return err
+				return metabatch.UpgradeResult{}, err
 			}
-			msg := fmt.Sprintf("Metadata upgrade complete: checked %d, upgraded %d, skipped %d, "+
-				"owner-manual-only %d (Doctor Who / Big Finish / Torchwood), errors %d; sweep after %q -> %q (wrapped %v)",
-				result.Checked, result.Upgraded, result.Skipped, result.OwnerManualOnly, result.Errors,
-				result.CursorStart, result.CursorEnd, result.Wrapped)
-			_ = progress.Log("info", msg, nil)
-			p.Done(msg)
-			return nil
+			res, err := metadataUpgradeCore(rc.Context(), metadataUpgradeEnv{
+				t7Env:     t7NativeEnv(rc),
+				Writer:    w,
+				StandDown: t7NativeStandDown(rc, deps.StandDownKey),
+			})
+			if res == nil {
+				return metabatch.UpgradeResult{}, err
+			}
+			return *res, err
 		},
 	})
+}
+
+// headMetadataUpgrade is HEAD's side of the writer: the fetch service the
+// registrar was built with and its store, passed to the upgrade as HEAD's body
+// passed them.
+type headMetadataUpgrade struct{ r *ExtraOpsRegistrar }
+
+func (h headMetadataUpgrade) Ready() error {
+	if h.r.Deps.MetadataFetchService == nil {
+		return fmt.Errorf("metadata fetch service not initialized")
+	}
+	return nil
+}
+
+func (h headMetadataUpgrade) RunUpgrade(ctx context.Context, limit int, progress operations.ProgressReporter) (*metabatch.UpgradeResult, error) {
+	svc := metabatch.NewMetadataUpgradeService(h.r.Store, h.r.Deps.MetadataFetchService)
+	return svc.RunUpgrade(ctx, limit, progress)
 }
