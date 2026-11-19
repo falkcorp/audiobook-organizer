@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_round4_test.go
-// version: 1.2.0
+// version: 1.2.2
 // guid: 5c0d9e3a-6f21-4b7d-9a84-2e1f7b3c8d56
 // last-edited: 2026-11-19
 
