@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_phantom_repair.go
-// version: 1.4.3
+// version: 1.4.4
 // guid: 7c2dfefe-ccbe-4a60-b69b-5baee504d537
 // last-edited: 2026-11-18
 
@@ -11,8 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"sort"
@@ -27,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // maintenance.series-phantom-repair — SERIES-PHANTOM-REPAIR (TODO.md).
@@ -110,8 +109,9 @@ type seriesPhantomRepairParams struct {
 	Limit int `json:"limit,omitempty"`
 	// ReportPath, when set, writes every phantom id and every holder as TSV so
 	// the decision between null and recreate can be made from the whole list. It
-	// must lie inside {root_dir}/.reports (a relative path is taken relative to
-	// that directory); anything that resolves outside it is refused.
+	// must be a file name directly in {root_dir}/.reports (a bare name, or an
+	// absolute path whose directory is that one); a name with a directory in it,
+	// or a path anywhere else, is refused.
 	ReportPath string `json:"report_path,omitempty"`
 }
 
@@ -667,11 +667,6 @@ func formatHolderHistogram(h map[string]int) string {
 // writeRepointReport is: the file exists to be sorted and grepped by a person
 // deciding which repair to run.
 func writeSeriesPhantomReport(path string, groups []*seriesPhantomGroup) error {
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o775); err != nil {
-			return err
-		}
-	}
 	clean := strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace
 	var b strings.Builder
 	b.WriteString("series_id\tref_count\tlive\ttrashed\tunseen\tbook_id\ttitle\tbook_trashed\tauthor_id\n")
@@ -689,5 +684,5 @@ func writeSeriesPhantomReport(path string, groups []*seriesPhantomGroup) error {
 				g.SeriesID, g.RefCount, g.Live, g.Trashed, g.Unseen, h.BookID, clean(h.Title), h.Trashed, author)
 		}
 	}
-	return os.WriteFile(path, []byte(b.String()), 0o664)
+	return library.WriteReportFile(path, []byte(b.String()), library.FileMode)
 }

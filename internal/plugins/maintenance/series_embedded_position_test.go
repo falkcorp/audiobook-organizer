@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_embedded_position_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7c41ba05-3e92-4d18-b6a7-51fd0e93c284
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -290,7 +290,7 @@ func TestSeriesDenumber_AssignsTiersAndGatesTheApplySet(t *testing.T) {
 // It must therefore list EVERY candidate — including the held ones, which are
 // exactly what an operator is deciding about.
 func TestWriteSeriesDenumberReport_ListsHeldCandidatesToo(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nested", "report.tsv")
+	path := filepath.Join(t.TempDir(), "report.tsv")
 	plans := []SeriesMergePlan{
 		{FromID: 1, FromName: "Evil Genius: Book 4: X", IntoName: "Evil Genius", Position: 4,
 			Books: 3, Shape: ShapeEmbeddedKeyword, Confidence: ConfidenceHigh, Reason: "embedded position keyword"},

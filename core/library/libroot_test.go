@@ -1,5 +1,5 @@
 // file: core/library/libroot_test.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 8e1c5a73-d2b4-4f69-a0e8-3b7f9d1c6a25
 // last-edited: 2026-11-18
 
@@ -88,9 +88,13 @@ func TestReportPathNotify(t *testing.T) {
 		t.Fatalf("the write probe must be removed, found %d entries", len(ents))
 	}
 
-	explicit := filepath.Join(root, ReportDirName, "sub", "r.tsv")
+	explicit := filepath.Join(root, ReportDirName, "r.tsv")
 	if got, err := ReportPathNotify(root, explicit, "ignored.tsv", nil); err != nil || got != explicit {
-		t.Fatalf("explicit path under the report directory: got %q, %v", got, err)
+		t.Fatalf("explicit path directly in the report directory: got %q, %v", got, err)
+	}
+	nested := filepath.Join(root, ReportDirName, "sub", "r.tsv")
+	if got, err := ReportPathNotify(root, nested, "ignored.tsv", nil); err == nil {
+		t.Fatalf("a path in a subdirectory of the report directory must be refused, got %q", got)
 	}
 
 	if _, err := ReportPathNotify("", "", "r.tsv", nil); err == nil {
@@ -329,19 +333,18 @@ func reportRootFor(t *testing.T) (root, reports string) {
 	return root, filepath.Join(root, ReportDirName)
 }
 
-// An explicit report path is confined to {root}/.reports: a relative one is
-// taken relative to that directory, an absolute one must already be inside it,
-// and the accepted path is what the caller gets back, with its parent created.
+// An explicit report path is confined to {root}/.reports: it is a bare file
+// name in that directory, or an absolute path whose directory is that directory,
+// and the accepted path is what the caller gets back.
 func TestReportPathNotifyExplicitAcceptedInsideReports(t *testing.T) {
 	root, reports := reportRootFor(t)
 	cases := []struct {
 		name, explicit, want string
 	}{
-		{"relative file", "r.tsv", filepath.Join(reports, "r.tsv")},
-		{"relative nested", filepath.Join("batman", "r.tsv"), filepath.Join(reports, "batman", "r.tsv")},
-		{"relative that stays inside after dot-dot", filepath.Join("a", "..", "r.tsv"), filepath.Join(reports, "r.tsv")},
-		{"absolute inside", filepath.Join(reports, "r.tsv"), filepath.Join(reports, "r.tsv")},
-		{"absolute nested inside", filepath.Join(reports, "x", "y", "r.tsv"), filepath.Join(reports, "x", "y", "r.tsv")},
+		{"bare file name", "r.tsv", filepath.Join(reports, "r.tsv")},
+		{"bare name with a dot in it", "batman.returns.tsv", filepath.Join(reports, "batman.returns.tsv")},
+		{"absolute, directly in the report directory", filepath.Join(reports, "r.tsv"), filepath.Join(reports, "r.tsv")},
+		{"absolute with a redundant separator", reports + string(filepath.Separator) + string(filepath.Separator) + "r.tsv", filepath.Join(reports, "r.tsv")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -377,6 +380,14 @@ func TestReportPathNotifyExplicitRefusedOutsideReports(t *testing.T) {
 		{"the filesystem root", string(filepath.Separator)},
 		{"dot-dot after a nested directory", filepath.Join(reports, "..", "escaped.tsv")},
 		{"NUL byte", "bad\x00.tsv"},
+		{"relative name with a directory", filepath.Join("batman", "r.tsv")},
+		{"relative name with a directory that dot-dot leads back out of", "a" + string(filepath.Separator) + ".." + string(filepath.Separator) + "r.tsv"},
+		{"relative name with a leading dot segment", "." + string(filepath.Separator) + "r.tsv"},
+		{"relative name with a trailing separator", "r.tsv" + string(filepath.Separator)},
+		{"absolute path in a subdirectory of the report directory", filepath.Join(reports, "x", "y", "r.tsv")},
+		{"absolute path in one subdirectory of the report directory", filepath.Join(reports, "x", "r.tsv")},
+		{"dot", "."},
+		{"dot-dot", ".."},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -455,41 +466,6 @@ func TestReportPathNotifyExplicitRefusesSymlinkEscapes(t *testing.T) {
 	}
 }
 
-// A directory swapped for a symlink out of the report directory after the first
-// check, while the path's directories are being created, is caught by the check
-// that follows the creation, including when the link leads to a sibling whose
-// name only starts with the report directory's name.
-func TestReportPathNotifyExplicitRechecksAfterCreatingTheDirectories(t *testing.T) {
-	for _, name := range []string{"a directory elsewhere", "a sibling sharing the report directory's name"} {
-		t.Run(name, func(t *testing.T) {
-			root, reports := reportRootFor(t) // a fresh root, so no earlier run's link is in the way
-			target := t.TempDir()
-			if strings.HasPrefix(name, "a sibling") {
-				target = reports + "-other"
-				if err := os.Mkdir(target, 0o755); err != nil {
-					t.Fatal(err)
-				}
-			}
-			env := defaultReportEnv()
-			env.afterCreate = func(parent string) {
-				if err := os.Remove(parent); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Symlink(target, parent); err != nil {
-					t.Fatal(err)
-				}
-			}
-			got, err := reportPathNotify(root, filepath.Join("sub", "r.tsv"), "ignored.tsv", nil, env)
-			if err == nil {
-				t.Fatalf("a directory swapped for a symlink out must be refused, got %q", got)
-			}
-			if got != "" {
-				t.Fatalf("a refusal must return no path, got %q", got)
-			}
-		})
-	}
-}
-
 // A NUL byte is refused by name, not left to whichever system call trips on it.
 func TestReportPathNotifyExplicitNamesANULByte(t *testing.T) {
 	root, _ := reportRootFor(t)
@@ -498,9 +474,9 @@ func TestReportPathNotifyExplicitNamesANULByte(t *testing.T) {
 	}
 }
 
-// A symlink that stays inside the report directory is not an escape for a
-// parent directory (the check is where the path ends up, not whether a link was
-// used), but is still refused as the file itself, because the writer follows it.
+// A symlink that stays inside the report directory is refused both as a
+// directory in the path (no path with a directory in it is accepted) and as the
+// file itself (the writer refuses to follow a link).
 func TestReportPathNotifyExplicitSymlinkInsideReports(t *testing.T) {
 	root, reports := reportRootFor(t)
 	if _, err := ReportPathNotify(root, "", "seed.tsv", nil); err != nil {
@@ -513,8 +489,8 @@ func TestReportPathNotifyExplicitSymlinkInsideReports(t *testing.T) {
 	if err := os.Symlink(real, filepath.Join(reports, "alias")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReportPathNotify(root, filepath.Join("alias", "r.tsv"), "ignored.tsv", nil); err != nil {
-		t.Fatalf("a parent that is a symlink to another directory inside the report directory is contained: %v", err)
+	if _, err := ReportPathNotify(root, filepath.Join("alias", "r.tsv"), "ignored.tsv", nil); err == nil {
+		t.Fatal("a path through a directory symlink must be refused, even one that stays inside the report directory")
 	}
 	if err := os.WriteFile(filepath.Join(real, "f.tsv"), nil, 0o644); err != nil {
 		t.Fatal(err)

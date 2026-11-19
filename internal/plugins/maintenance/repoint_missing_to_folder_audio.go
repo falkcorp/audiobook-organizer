@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_missing_to_folder_audio.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 5169412c-6469-4f70-9073-b544025dd08e
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // Package maintenance — maintenance.repoint-missing-to-folder-audio.
 //
@@ -113,6 +113,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/library"
 )
 
 const (
@@ -1305,11 +1306,6 @@ func finishRFReport(report *rfReport, results []rfBookResult) {
 // one line) as TSV: the result lists at most rfMaxChangesPerBook rows per
 // book, and a 330-chapter book's full list belongs in a file.
 func writeRFReport(path string, books []rfBookResult) error {
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o775); err != nil {
-			return err
-		}
-	}
 	clean := strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace
 	var b strings.Builder
 	b.WriteString("book_id\tdecision\treason\toutcome\tfile_id\taction\told_path\tnew_path\told_itunes_path\tnew_itunes_path\n")
@@ -1337,7 +1333,7 @@ func writeRFReport(path string, books []rfBookResult) error {
 				id, action, clean(old), clean(newPath), clean(oldIT), clean(newIT))
 		}
 	}
-	return os.WriteFile(path, []byte(b.String()), 0o664)
+	return library.WriteReportFile(path, []byte(b.String()), library.FileMode)
 }
 
 // Every method rfStore needs is on database.Store, so a

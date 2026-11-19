@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_op.go
-// version: 5.4.4
+// version: 5.4.5
 // guid: 3f0b6c84-52d1-4a97-9e35-c8b71d0af426
 // last-edited: 2026-11-18
 
@@ -11,8 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -28,6 +26,7 @@ import (
 	sdn "github.com/falkcorp/audiobook-organizer/internal/seriesdenumber"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // SeriesDenumberParams are the JSON parameters for the series de-numbering.
@@ -55,9 +54,10 @@ type SeriesDenumberParams struct {
 	// decision as TSV before a single row is touched, and the outcomes of an apply
 	// to ReportPath + ".applied". REQUIRED to apply: the undo journal is the way
 	// back, and the report is what a person audits an apply against, so an apply
-	// that leaves no report is refused. A dry run may omit it. It must lie inside
-	// {root_dir}/.reports (a relative path is taken relative to that directory);
-	// anything that resolves outside it is refused before any work.
+	// that leaves no report is refused. A dry run may omit it. It must be a file name
+	// directly in {root_dir}/.reports (a bare name, or an absolute path whose
+	// directory is that one); a name with a directory in it, or a path anywhere else, is
+	// refused before any work.
 	ReportPath string `json:"reportPath,omitempty"`
 }
 
@@ -101,12 +101,7 @@ func writeSeriesDenumberReport(path string, plans []SeriesMergePlan, bookRows []
 }
 
 func writeReportRows(path string, rows []sdn.ReportRow) error {
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o775); err != nil {
-			return err
-		}
-	}
-	return os.WriteFile(path, []byte(sdn.RenderReport(rows)), 0o664)
+	return library.WriteReportFile(path, []byte(sdn.RenderReport(rows)), library.FileMode)
 }
 
 func (p *Plugin) seriesDenumberDef() sdk.OperationDef {
@@ -137,7 +132,10 @@ func (p *Plugin) seriesDenumberDef() sdk.OperationDef {
 			"the scanner down while it writes. Every change is journaled, so an apply can be undone from the " +
 			"operation's change log. Dry-run by default; pass {\"apply\": true, " +
 			"\"reportPath\": \"...\"} to merge (the report is required to apply), and {\"limit\": N, " +
-			"\"minBooks\": N, \"baseName\": \"...\"} to canary.",
+			"\"minBooks\": N, \"baseName\": \"...\"} to canary. reportPath is a file name directly in the " +
+			"library's .reports directory (root_dir/.reports); the outcomes of an apply are written beside it " +
+			"as <reportPath>.applied. A path anywhere else, or with a directory in it, is refused before " +
+			"anything is read.",
 		// RESUME AUDIT 2026-09-11 (b): ResumeDrop, was ResumeRestart with no
 		// checkpoint. A from-zero restart recomputes the plan from the current
 		// series table, and the already-merged series are gone from it, so the

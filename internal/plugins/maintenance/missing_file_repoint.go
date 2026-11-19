@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repoint.go
-// version: 1.15.3
+// version: 1.15.4
 // guid: 9f4c1e02-7b56-4d38-a1c9-05e6b7d3428f
-// last-edited: 2026-11-15
+// last-edited: 2026-11-18
 
 // Package maintenance — REPOINT repair for book_file rows whose FilePath no longer
 // resolves but whose bytes are still on disk under a different name.
@@ -33,7 +33,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -43,6 +42,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/library"
 	"github.com/falkcorp/mediacore/tasks"
 )
 
@@ -767,11 +767,6 @@ func (p *repointPlan) record(d repointDecision) {
 // do. A report containing only the rows that would change cannot answer "what
 // about the other 57,515?", which is the question that actually gates the run.
 func writeRepointReport(path string, decisions []repointDecision) error {
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o775); err != nil {
-			return err
-		}
-	}
 	// A path with a tab or newline in it would shift every later column silently.
 	clean := strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace
 	var b strings.Builder
@@ -780,5 +775,5 @@ func writeRepointReport(path string, decisions []repointDecision) error {
 		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			d.Bucket, d.FileID, d.BookID, clean(d.OldPath), clean(d.NewPath), clean(d.Reason))
 	}
-	return os.WriteFile(path, []byte(b.String()), 0o664)
+	return library.WriteReportFile(path, []byte(b.String()), library.FileMode)
 }

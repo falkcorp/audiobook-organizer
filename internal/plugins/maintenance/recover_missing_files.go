@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recover_missing_files.go
-// version: 1.15.4
+// version: 1.15.5
 // guid: 4e8b1d27-9a3c-4f60-bb15-7c2e9d84a013
-// last-edited: 2026-11-15
+// last-edited: 2026-11-18
 
 // Package maintenance — RECOVER missing book_file rows by matching their recorded
 // FileSize to real files on disk, for the rows that maintenance.missing-file-repoint
@@ -78,6 +78,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // recoverDefaultMax bounds how many rows one run will repoint, so a first production run
@@ -1167,11 +1168,6 @@ func t6g6PlanRecoverVia(ctx context.Context, env recoverMissingFilesEnv, rootDir
 // whether to apply can read and grep it by bucket — including the rows that were NOT
 // repointed, which is the population the "run the apply?" decision actually turns on.
 func writeRecoverReport(path string, decisions []recoverDecision) error {
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o775); err != nil {
-			return err
-		}
-	}
 	clean := strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace
 	var b strings.Builder
 	b.WriteString("bucket\tfile_id\tbook_id\tsize\told_path\tnew_path\tcand_seen\treason\n")
@@ -1179,5 +1175,5 @@ func writeRecoverReport(path string, decisions []recoverDecision) error {
 		fmt.Fprintf(&b, "%s\t%s\t%s\t%d\t%s\t%s\t%d\t%s\n",
 			d.Bucket, d.FileID, d.BookID, d.Size, clean(d.OldPath), clean(d.NewPath), d.CandSeen, clean(d.Reason))
 	}
-	return os.WriteFile(path, []byte(b.String()), 0o664)
+	return library.WriteReportFile(path, []byte(b.String()), library.FileMode)
 }

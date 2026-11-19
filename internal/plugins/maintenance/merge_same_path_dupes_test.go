@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes_test.go
-// version: 1.1.7
+// version: 1.1.8
 // guid: 5d2e8a41-9c3b-4f7e-8a10-2b6c4d9e1f30
-// last-edited: 2026-11-14
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -273,14 +273,21 @@ func TestMergeSamePath_CappedGroupsAreReportedNotDropped(t *testing.T) {
 // A merge (soft-delete) must not proceed on an apply run when its audit report
 // cannot be written: preflightReportPath fails, and the caller refuses.
 func TestPreflightReportPath_RefusesUnwritablePath(t *testing.T) {
-	// Parent is a FILE, so MkdirAll of the "directory" fails.
+	// Parent is a FILE, so the report directory cannot be inspected or opened.
 	blocker := filepath.Join(t.TempDir(), "not-a-dir")
 	require.NoError(t, os.WriteFile(blocker, []byte("x"), 0o644))
 	err := preflightReportPath(filepath.Join(blocker, "report.tsv"))
 	require.Error(t, err, "a report path whose parent is a file must fail preflight")
 
-	// A normal path under a temp dir preflights cleanly and leaves a file behind.
-	ok := filepath.Join(t.TempDir(), "sub", "report.tsv")
+	// A plain name in an existing directory preflights cleanly and leaves a file
+	// behind. A directory that is not there is refused, not created: the report
+	// directory is the resolver's to make.
+	missing := filepath.Join(t.TempDir(), "sub", "report.tsv")
+	require.Error(t, preflightReportPath(missing))
+	_, missErr := os.Stat(filepath.Dir(missing))
+	require.True(t, os.IsNotExist(missErr), "preflight must not create directories")
+
+	ok := filepath.Join(t.TempDir(), "report.tsv")
 	require.NoError(t, preflightReportPath(ok))
 	_, statErr := os.Stat(ok)
 	require.NoError(t, statErr, "preflight should have created the file")

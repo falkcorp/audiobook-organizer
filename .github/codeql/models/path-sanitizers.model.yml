@@ -1,7 +1,7 @@
 # file: .github/codeql/models/path-sanitizers.model.yml
-# version: 0.3.2
+# version: 0.3.3
 # guid: 07edd0c5-64fa-4d57-8830-fbfaa513c052
-# last-edited: 2026-11-07
+# last-edited: 2026-11-18
 
 extensions:
   - addsTo:
@@ -15,6 +15,12 @@ extensions:
       # library.CleanAbsolutePath: validates and returns the cleaned absolute path.
       # Signature: func CleanAbsolutePath(path string) (string, error)
       - ["github.com/falkcorp/mediacore/library", "", false, "CleanAbsolutePath", "", "", "ReturnValue[0]", "path-injection", "manual"]
+
+      # library.ReportPathNotify: the returned path is {root}/.reports/<bare file
+      # name>: any explicit path is refused unless it names a file directly in the
+      # report directory, and an existing file at it is vetted.
+      # Signature: func ReportPathNotify(root, explicit, fileName string, onTightened func(string, fs.FileMode)) (string, error)
+      - ["github.com/falkcorp/mediacore/library", "", false, "ReportPathNotify", "", "", "ReturnValue[0]", "path-injection", "manual"]
 
       # library.SecureJoin: joins root with user parts, returns sanitized path.
       # Signature: func SecureJoin(root string, parts ...string) (string, error)

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.13.8
+// version: 1.13.9
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
-// last-edited: 2026-11-16
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -20,6 +20,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/library"
 	"github.com/falkcorp/mediacore/tasks"
 )
 
@@ -1133,11 +1134,6 @@ func (p *Plugin) runDedupeBookFileRowsCore(ctx context.Context, params DedupeBoo
 // that. Zero rows still writes the header, so "ran and found nothing" is
 // distinguishable from "did not run". Shaped after writeReapReport.
 func writeDupeRowsReport(path string, rows []dupeReportRow) error {
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o775); err != nil {
-			return err
-		}
-	}
 	// Titles are user data; a tab or newline would silently shift columns.
 	clean := strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace
 	var b strings.Builder
@@ -1146,7 +1142,7 @@ func writeDupeRowsReport(path string, rows []dupeReportRow) error {
 		fmt.Fprintf(&b, "%s\t%s\t%d\t%d\t%d\t%t\n",
 			clean(r.BookID), clean(r.Title), r.Rows, r.Distinct, r.DupRows, r.DupHasFP)
 	}
-	return os.WriteFile(path, []byte(b.String()), 0o664)
+	return library.WriteReportFile(path, []byte(b.String()), library.FileMode)
 }
 
 // shortPath trims a long path to its last two segments for log readability.

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/rewrite_path_prefix.go
-// version: 2.6.3
+// version: 2.6.4
 // guid: 584360e3-4976-406c-b4d1-80bbe47ed390
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // Package maintenance — REWRITE a stored path PREFIX across every row that
 // records a location under it, after a directory was renamed or moved on disk.
@@ -104,6 +104,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // rewritePathPrefixDefaultMax bounds how many BOOKS one run will rewrite, so a
@@ -1184,11 +1185,6 @@ func (p *rewritePathPrefixPlan) recordBook(bp *rewriteBookPlan) {
 // file exists to be read by a person deciding whether to run the apply, and
 // grepped by bucket while they do.
 func writeRewritePathPrefixReport(path string, decisions []rewriteDecision) error {
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o775); err != nil {
-			return err
-		}
-	}
 	// A path with a tab or newline in it would shift every later column silently.
 	clean := strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace
 	var b strings.Builder
@@ -1197,5 +1193,5 @@ func writeRewritePathPrefixReport(path string, decisions []rewriteDecision) erro
 		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			d.Bucket, d.BookID, d.Field, d.RowID, clean(d.Old), clean(d.New), clean(d.Reason))
 	}
-	return os.WriteFile(path, []byte(b.String()), 0o664)
+	return library.WriteReportFile(path, []byte(b.String()), library.FileMode)
 }

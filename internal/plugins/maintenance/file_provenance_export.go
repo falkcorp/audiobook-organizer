@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_provenance_export.go
-// version: 1.2.5
+// version: 1.2.6
 // guid: 08ef35af-5704-459a-aeec-e88245abde52
-// last-edited: 2026-11-15
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -40,9 +39,14 @@ const fileProvenanceExportKind tasks.Kind = "books.maintenance.file-provenance-e
 
 // fileProvExportParams configures one export run.
 type fileProvExportParams struct {
-	// Path is the JSONL file to append to. Required, absolute, no traversal.
-	// There is deliberately no default: an export that picks its own
-	// destination is an export nobody can find afterwards.
+	// Path is the JSONL file to append to. Required. It is held to the same rule
+	// as every maintenance report: a file name directly in {root_dir}/.reports
+	// (a bare name, or an absolute path whose directory is that one). A name with
+	// a directory in it, a path anywhere else, and any path when root_dir is not
+	// configured are refused before the ledger is read. There is deliberately no
+	// default: an export that picks its own destination is an export nobody can
+	// find afterwards. reports-prune removes only "<known kind>-<id>.tsv" files,
+	// so a .jsonl ledger is not aged out of the directory.
 	Path string `json:"path"`
 	// Apply writes. Default false: report what would be exported, touch nothing.
 	Apply bool `json:"apply"`
@@ -60,13 +64,20 @@ type syncWriteCloser interface {
 	Sync() error
 }
 
-// openExportFile is a seam. The single most important property of this op is
+// openExportFile opens the export file for appending. The default opens it the
+// way every report is opened (library.OpenReportFile, ReportAppend): relative to a
+// handle on the report directory, never following a symlink, and refusing a file
+// that is not a regular file owned by this user with one link. The export is the
+// one report that appends rather than replaces, and it is the ledger's only copy
+// outside the database, so a link planted at its name must not redirect it.
+//
+// It is also a seam. The single most important property of this op is
 // that the cursor advances only AFTER the bytes are durable, and the only way
 // to test that is to open successfully and then fail the write or the sync —
 // which no real filesystem will do on demand. Tests substitute this; nothing
 // else does.
 var openExportFile = func(path string) (syncWriteCloser, error) {
-	return os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	return library.OpenReportFile(path, 0o644, library.ReportAppend)
 }
 
 // fileProvExportLine is one JSONL record.
@@ -128,8 +139,10 @@ func (p *Plugin) fileProvenanceExportDef() sdk.OperationDef {
 		Description: "Appends every provenance event newer than the durable export " +
 			"cursor to a JSONL file, so the ledger survives corruption of the database " +
 			"it lives in. Never rewrites what it has written. Reports sequence gaps and " +
-			"missing rows as deletion evidence. Path is required; default dry-run, pass " +
-			"{\"apply\": true} to write.",
+			"missing rows as deletion evidence. Path is required: a file name in the library's " +
+			".reports directory (root_dir/.reports), such as ledger.jsonl; a path anywhere " +
+			"else, or one with a directory in it, is refused. Default dry-run (it reads the " +
+			"ledger and checks the path, and appends nothing), pass {\"apply\": true} to write.",
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.file-provenance-export",
 		// ResumeDrop: the cursor is durable, so a dropped run loses no ground —
@@ -187,8 +200,10 @@ func (p *Plugin) fileProvenanceExportKind(deps t6g4Deps, sched *tasks.Schedule) 
 			Help: "Appends every provenance event newer than the durable export " +
 				"cursor to a JSONL file, so the ledger survives corruption of the database " +
 				"it lives in. Never rewrites what it has written. Reports sequence gaps and " +
-				"missing rows as deletion evidence. Path is required; a preview (the default) " +
-				"writes nothing, start in live mode to write.",
+				"missing rows as deletion evidence. Path is required: a file name in the library's " +
+				".reports directory (root_dir/.reports), such as ledger.jsonl; a path anywhere " +
+				"else, or one with a directory in it, is refused. A preview (the default) " +
+				"appends nothing, start in live mode to write.",
 			// Appends the ledger to a JSONL file on disk (files) and moves the export
 			// cursor in the provenance keyspace, declared as t6g4ResProvenance.
 			Effects:        tasks.Writes(t6g4Res(t6g4ResProvenance, ops.ResFiles)...),
@@ -277,10 +292,12 @@ func (p *Plugin) exportFileProvenanceCore(ctx context.Context, params fileProvEx
 	if params.Path == "" {
 		return fileProvExportResult{}, fmt.Errorf("file-provenance-export: path is required")
 	}
-	// Absolute, cleaned, no traversal. Declared as a path-injection barrier in
-	// .github/codeql/models/path-sanitizers.model.yml, which is this repo's
-	// convention for a validated path rather than an inline suppression.
-	outPath, err := library.CleanAbsolutePath(params.Path)
+	// Confined to {root_dir}/.reports like every other report: a name that would
+	// land anywhere else, or with no root_dir to keep it inside, is refused here,
+	// before the ledger is read. ReportPathNotify is declared as a path-injection
+	// barrier in .github/codeql/models/path-sanitizers.model.yml, which is this
+	// repo's convention for a validated path rather than an inline suppression.
+	outPath, err := t6g4ReportPath(env.Store, params.Path, "file-provenance-export.jsonl")
 	if err != nil {
 		return fileProvExportResult{}, fmt.Errorf("file-provenance-export: path: %w", err)
 	}

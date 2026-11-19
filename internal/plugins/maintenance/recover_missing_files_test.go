@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recover_missing_files_test.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: c1f6a2d8-7b40-4e93-9a5c-6d81e0f4b72a
-// last-edited: 2026-11-14
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -427,7 +427,7 @@ func TestRecover_UpdateFailureCountsError(t *testing.T) {
 
 // The TSV must round-trip: one header + one line per decision, tabs intact.
 func TestRecover_WriteReportRoundTrips(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nested", "report.tsv")
+	path := filepath.Join(t.TempDir(), "report.tsv")
 	decisions := []recoverDecision{
 		{Bucket: "repointable", FileID: "f1", BookID: "b1", Size: 10, OldPath: "/a/gone.mp3", NewPath: "/a/real.mp3", CandSeen: 1, Reason: "unique in-tree size match"},
 		{Bucket: "nowhere", FileID: "f2", BookID: "b2", Size: 20, OldPath: "/a/weird\tname.mp3", Reason: "no file of this size"},

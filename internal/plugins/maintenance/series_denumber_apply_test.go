@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_apply_test.go
-// version: 4.2.1
+// version: 4.2.2
 // guid: 4c93e07a-1d62-4b8e-a5f3-90b7c1de2846
 // last-edited: 2026-11-18
 
@@ -1267,7 +1267,7 @@ func TestRunSeriesDenumber_MinBooksAndBaseNameScopeTheApply(t *testing.T) {
 
 func TestRunSeriesDenumber_TheReportCoversEveryPlanWhateverTheCanarySelects(t *testing.T) {
 	l := canaryLib(t)
-	path := filepath.Join(l.root, ".reports", "nested", "report.tsv")
+	path := filepath.Join(l.root, ".reports", "report.tsv")
 
 	l.mustRun(fmt.Sprintf(`{"apply": true, "limit": 1, "reportPath": %q}`, path))
 

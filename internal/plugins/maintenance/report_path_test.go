@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/report_path_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: b7314ebb-e6db-49d3-af82-37738df6214a
 // last-edited: 2026-11-18
 
@@ -36,9 +36,13 @@ func TestResolveReportPath_DefaultsUnderRootReports(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, explicit, got, "an explicit reportPath inside the report directory is used verbatim")
 
-	got, err = p.resolveReportPath("sub/chosen.tsv", "some-op-x.tsv")
+	got, err = p.resolveReportPath("chosen.tsv", "some-op-x.tsv")
 	require.NoError(t, err)
-	require.Equal(t, filepath.Join(root, ".reports", "sub", "chosen.tsv"), got, "a relative reportPath is relative to the report directory")
+	require.Equal(t, explicit, got, "a bare file name is a file in the report directory")
+
+	got, err = p.resolveReportPath("sub/chosen.tsv", "some-op-x.tsv")
+	require.Error(t, err, "a name with a directory in it is refused: there are no subdirectories of the report directory")
+	require.Empty(t, got)
 }
 
 // outsideReportPaths builds the caller-supplied report paths a library root must
@@ -58,6 +62,8 @@ func outsideReportPaths(t *testing.T, root string) (cases map[string]string, out
 		"symlinked parent, relative":   filepath.Join("linked", "nested", "escaped.tsv"),
 		"traversal past a nested dir":  filepath.Join(reports, "a", "..", "..", "escaped.tsv"),
 		"report directory as the file": reports,
+		"relative, in a subdirectory":  filepath.Join("mine", "chosen.tsv"),
+		"absolute, in a subdirectory":  filepath.Join(reports, "mine", "chosen.tsv"),
 	}, outside
 }
 
@@ -147,22 +153,74 @@ type reportOpCase struct {
 	name string
 	run  func(*Plugin, context.Context, json.RawMessage, sdk.Reporter) error
 	file string // expected default report name with a reporter that has no op ID
+	// base is params the op needs before it gets as far as its report path
+	// (required fields), merged into every run of it.
+	base map[string]any
+	// live is how the op is told to write; nil means the sibling ops' {"apply": true}.
+	// The ops that default to a dry run and refuse unknown keys say it the other way.
+	live map[string]any
+	// pathKey is the JSON key the op reads its report path from; most spell it
+	// "reportPath", rewrite-path-prefix spells it "report_path". Naming the wrong
+	// key would make every refusal below a strict-decode error and pass for the
+	// wrong reason, so the positive test proves the key by writing a report.
+	pathKey string
+	// writesOnlyWithRows is true for an op that writes no report when it plans no
+	// rows (the fixture store is empty). Its default-location and explicit-path
+	// landing checks are skipped here; writing is covered per writer by
+	// TestReportWriters_*, and its refusals by the apply tests, which need no rows.
+	writesOnlyWithRows bool
+}
+
+// key is the params key for the report path.
+func (c reportOpCase) key() string {
+	if c.pathKey != "" {
+		return c.pathKey
+	}
+	return "reportPath"
+}
+
+// raw is the op's params JSON: base, plus the live switch when live is true, plus extra.
+func (c reportOpCase) raw(t *testing.T, live bool, extra map[string]any) json.RawMessage {
+	t.Helper()
+	m := map[string]any{}
+	for k, v := range c.base {
+		m[k] = v
+	}
+	if live {
+		sw := c.live
+		if sw == nil {
+			sw = map[string]any{"apply": true}
+		}
+		for k, v := range sw {
+			m[k] = v
+		}
+	}
+	for k, v := range extra {
+		m[k] = v
+	}
+	raw, err := json.Marshal(m)
+	require.NoError(t, err)
+	return raw
 }
 
 // reportOpCases lists every maintenance op that writes a per-row report with a
 // default location. A new report-writing op belongs here.
 func reportOpCases() []reportOpCase {
 	return []reportOpCase{
-		{"metadata-cache-reap", (*Plugin).runMetadataCacheReap, "metadata-cache-reap-unknown-op.tsv"},
-		{"merge-same-path-dupes", (*Plugin).runMergeSamePathDupes, "merge-same-path-dupes-unknown-op.tsv"},
-		{"missing-file-repoint", (*Plugin).runMissingFileRepoint, "missing-file-repoint-unknown-op.tsv"},
-		{"mark-missing-files", (*Plugin).runMarkMissingFiles, "mark-missing-files-unknown-op.tsv"},
-		{"recover-missing-files", (*Plugin).runRecoverMissingFiles, "recover-missing-files-unknown-op.tsv"},
-		{"dedupe-book-file-rows", (*Plugin).runDedupeBookFileRows, "dedupe-book-file-rows-dryrun.tsv"},
+		{"metadata-cache-reap", (*Plugin).runMetadataCacheReap, "metadata-cache-reap-unknown-op.tsv", nil, nil, "", false},
+		{"merge-same-path-dupes", (*Plugin).runMergeSamePathDupes, "merge-same-path-dupes-unknown-op.tsv", nil, nil, "", false},
+		{"missing-file-repoint", (*Plugin).runMissingFileRepoint, "missing-file-repoint-unknown-op.tsv", nil, nil, "", false},
+		{"mark-missing-files", (*Plugin).runMarkMissingFiles, "mark-missing-files-unknown-op.tsv", nil, nil, "", false},
+		{"recover-missing-files", (*Plugin).runRecoverMissingFiles, "recover-missing-files-unknown-op.tsv", nil, nil, "", false},
+		{"dedupe-book-file-rows", (*Plugin).runDedupeBookFileRows, "dedupe-book-file-rows-dryrun.tsv", nil, nil, "", false},
 		// book-shape-report has no apply mode at all, so the apply-refusal case
 		// below is passing it a parameter it ignores -- what it proves for this op
 		// is that an unusable report directory is refused BEFORE the store is read.
-		{"book-shape-report", (*Plugin).runBookShapeReport, "book-shape-report-unknown-op.tsv"},
+		{"book-shape-report", (*Plugin).runBookShapeReport, "book-shape-report-unknown-op.tsv", nil, nil, "", false},
+		{"rewrite-path-prefix", (*Plugin).runRewritePathPrefix, "rewrite-path-prefix-unknown-op.tsv",
+			map[string]any{"old_prefix": "/batcave/old", "new_prefix": "/batcave/new"}, map[string]any{"dry_run": false}, "report_path", false},
+		{"repoint-missing-to-folder-audio", (*Plugin).runRepointMissingToFolderAudio, "repoint-missing-to-folder-audio-unknown-op.tsv",
+			nil, map[string]any{"dry_run": false}, "", true},
 	}
 }
 
@@ -176,7 +234,7 @@ func runApplyAgainstNoTouchStore(t *testing.T, c reportOpCase, root string) erro
 			t.Fatalf("%s reached the store before refusing, so an apply would have run: %v", c.name, r)
 		}
 	}()
-	return c.run(p, context.Background(), json.RawMessage(`{"apply":true}`), &fakeReporter{})
+	return c.run(p, context.Background(), c.raw(t, true, nil), &fakeReporter{})
 }
 
 // Every report-writing op refuses an apply, before touching the store, when its
@@ -224,7 +282,10 @@ func TestReportOps_DefaultReportLandsUnderRoot(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			root := t.TempDir()
 			p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: s}, root: root}}
-			require.NoError(t, c.run(p, context.Background(), nil, &fakeReporter{}))
+			require.NoError(t, c.run(p, context.Background(), c.raw(t, false, nil), &fakeReporter{}))
+			if c.writesOnlyWithRows {
+				t.Skip("this op writes no report when it plans no rows")
+			}
 			_, statErr := os.Stat(filepath.Join(root, ".reports", c.file))
 			require.NoError(t, statErr, "the report must be at {root}/.reports/%s", c.file)
 		})
@@ -244,8 +305,7 @@ func TestReportOps_RefuseAReportPathOutsideTheReportDir(t *testing.T) {
 			cases, outside := outsideReportPaths(t, root)
 			for name, explicit := range cases {
 				p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: noTouchStore{}}, root: root}}
-				raw, err := json.Marshal(map[string]any{"apply": true, "reportPath": explicit})
-				require.NoError(t, err)
+				raw := c.raw(t, true, map[string]any{c.key(): explicit})
 				func() {
 					defer func() {
 						if r := recover(); r != nil {
@@ -275,10 +335,12 @@ func TestReportOps_ExplicitReportPathInsideTheReportDirIsUsed(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			root := t.TempDir()
 			p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: s}, root: root}}
-			raw, err := json.Marshal(map[string]any{"reportPath": filepath.Join("mine", "chosen.tsv")})
-			require.NoError(t, err)
+			raw := c.raw(t, false, map[string]any{c.key(): "chosen.tsv"})
 			require.NoError(t, c.run(p, context.Background(), raw, &fakeReporter{}))
-			_, statErr := os.Stat(filepath.Join(root, ".reports", "mine", "chosen.tsv"))
+			if c.writesOnlyWithRows {
+				t.Skip("this op writes no report when it plans no rows")
+			}
+			_, statErr := os.Stat(filepath.Join(root, ".reports", "chosen.tsv"))
 			require.NoError(t, statErr, "%s must write its report at the path it was given", c.name)
 		})
 	}

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_report_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 5e3b8c71-2d94-4f0a-a6c7-91b4e2d0f358
 // last-edited: 2026-11-18
 
@@ -36,7 +36,7 @@ func readDupeReport(t *testing.T, path string) (string, [][]string) {
 }
 
 func TestWriteDupeRowsReport_HeaderAndRows(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nested", "r.tsv") // parent dir must be created
+	path := filepath.Join(t.TempDir(), "r.tsv")
 	err := writeDupeRowsReport(path, []dupeReportRow{
 		{BookID: "b1", Title: "One", Rows: 4, Distinct: 1, DupRows: 3, DupHasFP: true},
 		{BookID: "b2", Title: "Two", Rows: 2, Distinct: 1, DupRows: 1},
