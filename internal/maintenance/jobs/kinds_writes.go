@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/kinds_writes.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 6d1a4e9c-2b7f-4c35-9e80-a3f5c7d1b284
 // last-edited: 2026-11-19
 
@@ -154,6 +154,6 @@ type writesDeriver func() (map[string][]ops.Resource, error)
 // jobWritesFor is every job's declared write set, derived on first use and not at
 // package init: nothing reads it until the kinds are built (Kinds, which F5-18
 // registers), so a binary that merely links this package does no work and cannot
-// fail here. It is never reassigned: a test that needs a failing derivation hands
-// one to kindsWith instead of swapping this (see export_writes_test.go).
+// fail here. It is never reassigned: a test that needs a failing derivation sets
+// KindDeps.writes instead of swapping this (see export_writes_test.go).
 var jobWritesFor writesDeriver = sync.OnceValues(deriveJobWrites)
