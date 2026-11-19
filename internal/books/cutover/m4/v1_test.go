@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/v1_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d27b5e81-3c94-4a60-9f18-6e0a41c7b952
 // last-edited: 2026-11-18
 
@@ -104,6 +104,7 @@ func TestCutover_V1HistoryImported(t *testing.T) {
 		{id: runID(5), typ: "dedup.book-scan", status: "timed_out", done: &done, result: "plain text"},
 		{id: runID(6), typ: "dedup.book-scan", status: "cancelled", done: &done},
 		{id: runID(7), typ: "dedup.book-scan", status: "queued", logs: 1, started: &late},
+		{id: runID(8), typ: "dedup.book-scan", status: "in_progress", logs: 1},
 	}
 	raw := map[string]string{}
 	for _, o := range ops {
@@ -169,10 +170,13 @@ func TestCutover_V1HistoryImported(t *testing.T) {
 		if g := get(7); g.State != tasks.StateInterruptedDropped || !g.Finished.Equal(late) {
 			t.Errorf("run 7 = state %q finished %v, want interrupted_dropped finished at its start %v", g.State, g.Finished, late)
 		}
+		if h := get(8); h.State != tasks.StateInterruptedDropped || h.Reason != "v1_unfinished" {
+			t.Errorf("run 8 (v1 in_progress) = state %q reason %q, want interrupted_dropped, v1_unfinished", h.State, h.Reason)
+		}
 		if e := get(5); e.State != tasks.StateTimedOut || string(e.Result) != `"plain text"` {
 			t.Errorf("run 5 state %q result %s", e.State, e.Result)
 		}
-		if s.Verify.Written != 7 || len(s.Verify.Failures) != 0 {
+		if s.Verify.Written != 8 || len(s.Verify.Failures) != 0 {
 			t.Errorf("verify = %+v", s.Verify)
 		}
 	})

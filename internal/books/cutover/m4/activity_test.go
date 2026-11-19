@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/activity_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8e43c7a1-2f95-4b60-a8d3-5c71b9e0f246
 // last-edited: 2026-11-18
 
@@ -16,6 +16,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover/kindrename"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // act is one activity row and its index keys, as the feed's store writes them.
@@ -65,8 +66,9 @@ func decodeAct(t *testing.T, raw string) map[string]any {
 // kindReferencesSynthetic is the synthetic half of TestCutover_KindReferencesRewritten: every activity row that stored a HEAD def
 // ID names the renamed kind afterwards in type, details.def_id and its def: tag;
 // act:typ: holds the re-keyed entry and not the old one; the digest's items are
-// renamed; a type that is no def ID (and the repairs defs, whose kind needs a
-// run's fixer) stay as stored; every other index and every other field is
+// renamed; a type that is no def ID stays as stored; a repairs def is renamed to
+// its run's books.repairs.<fixer_id> kind, and held (as stored) when no run says
+// the fixer; every other index and every other field is
 // untouched; a row that does not decode is held in place.
 func kindReferencesSynthetic(t *testing.T) {
 	raw := map[string]string{}
@@ -78,8 +80,18 @@ func kindReferencesSynthetic(t *testing.T) {
 			"tags": []string{"def:maintenance.itunes-heal"}, "details": map[string]any{"def_id": "maintenance.itunes-heal"}}},
 		{"system", n(3), "01HBAT0003", map[string]any{"type": "scan_complete", "level": "info", "source": "scanner", "summary": "not a def id",
 			"tags": []string{"def:dedup.book-scan", "source:scan"}, "details": map[string]any{"def_id": "scan_complete"}}},
-		{"audit", n(4), "01HBAT0004", map[string]any{"type": "repairs.plan", "level": "info", "source": "scanner", "summary": "repairs",
+		{"audit", n(4), "01HBAT0004", map[string]any{"type": "repairs.plan", "level": "info", "source": "scanner", "summary": "repairs", "operation_id": "01HBATREPAIRS1",
 			"tags": []string{"def:repairs.plan"}, "details": map[string]any{"def_id": "repairs.plan"}}},
+		{"audit", n(9), "01HBAT0009", map[string]any{"type": "repairs.apply", "level": "info", "source": "scanner", "summary": "repairs apply", "operation_id": "01HBATREPAIRS2",
+			"tags": []string{"def:repairs.apply", "action:apply"}, "details": map[string]any{"def_id": "repairs.apply"}}},
+		// Held, as stored: no operation_id, a run the task store does not hold, and
+		// a run whose kind is no repairs kind.
+		{"audit", n(10), "01HBAT0010", map[string]any{"type": "repairs.plan", "level": "info", "source": "scanner", "summary": "no operation",
+			"tags": []string{"def:repairs.plan"}, "details": map[string]any{"def_id": "repairs.plan"}}},
+		{"audit", n(11), "01HBAT0011", map[string]any{"type": "repairs.apply", "level": "info", "source": "scanner", "summary": "pruned run", "operation_id": "01HBATGONE",
+			"tags": []string{"def:repairs.apply"}}},
+		{"audit", n(12), "01HBAT0012", map[string]any{"type": "repairs.plan", "level": "info", "source": "scanner", "summary": "wrong kind", "operation_id": "01HBATSCAN",
+			"details": map[string]any{"def_id": "repairs.plan"}}},
 		{"debug", n(5), "01HBAT0005", map[string]any{"type": "operations.backfill-legacy-status", "level": "info", "source": "scanner", "summary": "retired",
 			"details": map[string]any{"def_id": "operations.backfill-legacy-status"}}},
 		{"batch", n(6), "01HBAT0006", map[string]any{"type": "dedup.book-scan", "level": "info", "source": "scanner", "summary": "no details, no tags"}},
@@ -90,6 +102,18 @@ func kindReferencesSynthetic(t *testing.T) {
 					{"type": "scan_complete", "summary": "b"},
 					{"type": "maintenance.itunes-heal", "summary": "c", "tags": []string{"def:maintenance.itunes-heal"}},
 				}}}},
+		// A digest item of a repairs def takes its kind from its op: tag; one with
+		// no operation holds the whole row.
+		{"digest", n(13), "01HBAT0013", map[string]any{"type": "daily_digest", "level": "info", "source": "compaction", "summary": "Daily digest",
+			"details": map[string]any{"date": "2026-11-04", "items": []map[string]any{
+				{"type": "repairs.plan", "summary": "p", "tags": []string{"def:repairs.plan", "op:01HBATREPAIRS1"}},
+				{"type": "scan_complete", "summary": "s"},
+			}}}},
+		{"digest", n(14), "01HBAT0014", map[string]any{"type": "daily_digest", "level": "info", "source": "compaction", "summary": "Daily digest",
+			"details": map[string]any{"date": "2026-11-05", "items": []map[string]any{
+				{"type": "dedup.book-scan", "summary": "a", "tags": []string{"def:dedup.book-scan"}},
+				{"type": "repairs.apply", "summary": "no operation", "tags": []string{"def:repairs.apply"}},
+			}}}},
 	}
 	for _, a := range rows {
 		seedAct(raw, a)
@@ -101,22 +125,43 @@ func kindReferencesSynthetic(t *testing.T) {
 		before[k] = v
 	}
 
+	// The runs the task store holds, by operation: two repairs runs with
+	// different fixers, and a scan run (a kind that is no repairs kind).
+	repairsKinds := map[string]string{"01HBATREPAIRS1": "books.repairs.two-face-asins", "01HBATREPAIRS2": "books.repairs.hush-credits"}
 	r := newRig(t, withRaw(raw))
+	r.actRuns = map[string]tasks.Kind{"01HBATSCAN": "books.dedup.book-scan"}
+	for id, k := range repairsKinds {
+		r.actRuns[id] = tasks.Kind(k)
+	}
 	s, err := r.runWith(t, r.seed(t), r.activity())
 	if err != nil {
 		t.Fatalf("%v\n%s", err, r.logs)
 	}
 
+	// held is every row that must stay exactly as stored, with its reason: the
+	// repairs rows no run can name a fixer for, and the digest holding such an item.
+	held := map[string]bool{}
+	for _, i := range []int{10, 11, 12, 14} {
+		held[act{tier: map[bool]string{true: "digest", false: "audit"}[i == 14], nanos: n(i), ulid: fmt.Sprintf("01HBAT%04d", i)}.key()] = true
+	}
+
 	kind := map[string]string{"dedup.book-scan": "books.dedup.book-scan", "maintenance.itunes-heal": "books.itunes.heal", "operations.backfill-legacy-status": "books.retired.operations.backfill-legacy-status"}
-	rename := func(v any) any {
+	// rename is the kind a def ID is renamed to; op is the operation the
+	// reference belongs to, which names a repairs def's run.
+	rename := func(v any, op string) any {
 		if s, ok := v.(string); ok {
 			if k, ok := kind[s]; ok {
 				return k
 			}
+			if s == "repairs.plan" || s == "repairs.apply" {
+				if k, ok := repairsKinds[op]; ok {
+					return k
+				}
+			}
 		}
 		return v
 	}
-	renameTags := func(in any) any {
+	renameTags := func(in any, op string) any {
 		tags, ok := in.([]any)
 		if !ok {
 			return in
@@ -126,33 +171,57 @@ func kindReferencesSynthetic(t *testing.T) {
 			out[i] = tg
 			if s, ok := tg.(string); ok {
 				if id, ok := strings.CutPrefix(s, "def:"); ok {
-					out[i] = "def:" + fmt.Sprint(rename(id))
+					out[i] = "def:" + fmt.Sprint(rename(id, op))
 				}
 			}
 		}
 		return out
 	}
+	opOfItem := func(m map[string]any) string {
+		tags, _ := m["tags"].([]any)
+		for _, tg := range tags {
+			if s, ok := tg.(string); ok {
+				if id, ok := strings.CutPrefix(s, "op:"); ok {
+					return id
+				}
+			}
+		}
+		return ""
+	}
 
 	for _, a := range rows {
 		got := decodeAct(t, s.Act[a.key()])
 		want := decodeAct(t, a.json())
-		if a.tier != "digest" {
-			want["type"] = rename(want["type"])
-			if d, ok := want["details"].(map[string]any); ok {
-				d["def_id"] = rename(d["def_id"]) // the top-level def_id only: a nested one is the row's own data
+		op, _ := a.body["operation_id"].(string)
+		switch {
+		case held[a.key()]:
+			// Held: as stored, whole (a digest holding one unresolvable item keeps its
+			// resolvable items' old IDs too, rather than half a rename).
+			if s.Act[a.key()] != before[a.key()] {
+				t.Errorf("%s: a held row was written: %s", a.key(), s.Act[a.key()])
 			}
-		} else {
+			want = decodeAct(t, a.json())
+		case a.tier != "digest":
+			want["type"] = rename(want["type"], op)
+			if d, ok := want["details"].(map[string]any); ok {
+				d["def_id"] = rename(d["def_id"], op) // the top-level def_id only: a nested one is the row's own data
+			}
+			if tg, ok := want["tags"]; ok {
+				want["tags"] = renameTags(tg, op)
+			}
+		default:
 			d := want["details"].(map[string]any)
 			for _, it := range d["items"].([]any) {
 				m := it.(map[string]any)
-				m["type"] = rename(m["type"])
+				io := opOfItem(m)
+				m["type"] = rename(m["type"], io)
 				if tg, ok := m["tags"]; ok {
-					m["tags"] = renameTags(tg)
+					m["tags"] = renameTags(tg, io)
 				}
 			}
-		}
-		if tg, ok := want["tags"]; ok {
-			want["tags"] = renameTags(tg)
+			if tg, ok := want["tags"]; ok {
+				want["tags"] = renameTags(tg, "")
+			}
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("%s:\n got  %v\n want %v", a.key(), got, want)
@@ -186,9 +255,15 @@ func kindReferencesSynthetic(t *testing.T) {
 	if got := decodeAct(t, s.Act[rows[0].key()]); got["summary"] != "<Gotham> scan & sweep" || got["details"].(map[string]any)["nested"].(map[string]any)["def_id"] != "dedup.book-scan" {
 		t.Errorf("row 1 lost data in the rewrite: %v", got)
 	}
+	var digestRow act
+	for _, a := range rows {
+		if a.ulid == "01HBAT0007" {
+			digestRow = a
+		}
+	}
 	// The digest's own counts are not part of the rename (5T.8.2 names the
 	// items); they keep the stored type keys.
-	if d := decodeAct(t, s.Act[rows[6].key()])["details"].(map[string]any); !reflect.DeepEqual(d["counts"], map[string]any{"dedup.book-scan": float64(2)}) {
+	if d := decodeAct(t, s.Act[digestRow.key()])["details"].(map[string]any); !reflect.DeepEqual(d["counts"], map[string]any{"dedup.book-scan": float64(2)}) {
 		t.Errorf("digest counts = %v", d["counts"])
 	}
 
@@ -199,8 +274,9 @@ func kindReferencesSynthetic(t *testing.T) {
 			t.Errorf("%s = %q, want the held row untouched (%q)", k, s.Act[k], before[k])
 		}
 	}
-	if s.Verify.Held != 2 || len(s.Quarantine) != 0 {
-		t.Errorf("held %d, quarantined %d; want 2 held, none quarantined: %+v", s.Verify.Held, len(s.Quarantine), s.Verify)
+	// Two rows that do not decode and four repairs rows no run names a fixer for.
+	if s.Verify.Held != 6 || len(s.Quarantine) != 0 {
+		t.Errorf("held %d, quarantined %d; want 6 held, none quarantined: %+v", s.Verify.Held, len(s.Quarantine), s.Verify)
 	}
 	// No HEAD def ID is left in a def:, type or def_id position of any feed row.
 	for k, v := range s.Act {
@@ -217,8 +293,8 @@ func kindReferencesSynthetic(t *testing.T) {
 			}
 		}
 	}
-	if s.Verify.Written != 6 {
-		t.Errorf("the report wrote %d rows, want 6 (the rows that named a def ID): %+v", s.Verify.Written, s.Verify)
+	if s.Verify.Written != 9 {
+		t.Errorf("the report wrote %d rows, want 9 (the rows that named a def ID, held ones excluded): %+v", s.Verify.Written, s.Verify)
 	}
 }
 
@@ -370,7 +446,8 @@ func kindReferencesCorpus(t *testing.T) {
 		case strings.HasPrefix(id, "books.") || strings.HasPrefix(id, "core."):
 			// A kind already.
 		case known && tg.Kind == "":
-			// A repairs def: the kind needs a run's fixer, so the feed keeps the def ID.
+			// A repairs def: the kind needs a run's fixer; this feed (activity step alone,
+			// no runs in the task store) holds such rows, so the feed keeps the def ID.
 		case known:
 			t.Errorf("STOP: %d feed positions still name the HEAD def ID %q, which the table renames to %q", n, id, tg.Kind)
 		default:

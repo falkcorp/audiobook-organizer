@@ -1,7 +1,7 @@
 // file: internal/server/op_id_aliases_test.go
-// version: 1.19.2
+// version: 1.19.3
 // guid: 2a7c5e93-1d4b-4f60-8e2a-b9c3d7f15e48
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // Guard tests for operation-ID renames.
 //
@@ -258,6 +258,14 @@ func TestOpIDs_EveryAliasResolves(t *testing.T) {
 // use the canonical ID, or the deprecation metric can never reach zero and the
 // alias can never be removed. Test files are exempt (the alias tests name them
 // on purpose), as are FormerIDs declarations and comments.
+//
+// One package is exempt as a whole, by path: internal/books/cutover/kindrename.
+// Its generated map (map_gen.go) must name every stored alias, because rule 3 of
+// 05-tasks 5T.8.2 maps each alias a HEAD store may still hold (an operation row,
+// an activity entry, a scheduler clock) to the kind its canonical ID maps to. That
+// is input from outside the build, which is exactly what this test allows
+// aliases for. Emitting FormerIDs on each generated line instead would make that
+// escape hatch mean something it does not.
 func TestOpIDs_CodeNeverNamesAnAlias(t *testing.T) {
 	_, _, aliases := bootRegisteredOpIDs(t)
 	root := filepath.Join("..", "..")
@@ -276,6 +284,9 @@ func TestOpIDs_CodeNeverNamesAnAlias(t *testing.T) {
 			if e.IsDir() {
 				if e.Name() == "node_modules" || e.Name() == "testdata" {
 					return filepath.SkipDir
+				}
+				if strings.HasSuffix(filepath.ToSlash(path), "internal/books/cutover/kindrename") {
+					return filepath.SkipDir // the kind-rename map names every alias on purpose (see above)
 				}
 				return nil
 			}

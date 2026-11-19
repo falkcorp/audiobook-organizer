@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/rig_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d82c4a15-9e63-4f07-b1a9-7035e8c6f241
 // last-edited: 2026-11-18
 
@@ -201,6 +201,24 @@ type rig struct {
 	zone *time.Location
 	// reconcileFn, when set, is what HEAD's reconcile does in the rig.
 	reconcileFn func(ctx context.Context) error
+	// actRuns, when set, is the run reader the activity step gets: the kind of
+	// each run it names (ActivityConfig.Runs). Unset, the activity step reads
+	// the booted task store, which holds whatever M4 imported in the boot.
+	actRuns map[string]tasks.Kind
+	// runs is the booted task store's run reader, bound between Prepare and
+	// Migrate.
+	runs atomic.Pointer[tasks.RunStore]
+}
+
+// fakeRuns is ActivityConfig.Runs over a fixed map of run ID to kind.
+type fakeRuns map[string]tasks.Kind
+
+func (f fakeRuns) Get(_ context.Context, id tasks.RunID) (tasks.RunRecord, error) {
+	k, ok := f[string(id)]
+	if !ok {
+		return tasks.RunRecord{}, fmt.Errorf("%w: %s", tasks.ErrRunNotFound, id)
+	}
+	return tasks.RunRecord{ID: id, Kind: k}, nil
 }
 
 // viewReader is a storage.Reader whose point reads go through view first.
@@ -290,7 +308,7 @@ func (r *rig) owners(cut bool) []storage.OwnerSpec {
 // activity is the activity rewrite over this rig, built the way F5-18 builds
 // it (after the flip's level step).
 func (r *rig) activity() datamigrate.DataMigration {
-	dm, err := m4.NewActivity(m4.ActivityConfig{Logger: slog.New(slog.NewTextHandler(r.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))},
+	dm, err := m4.NewActivity(r.activityConfig(),
 		cutover.TasksCutoverID+"-activity", cutover.BooksCutoverLevel, []storage.StepRef{cutover.BooksLevelStepRef(r.levelVersion())})
 	if err != nil {
 		r.t.Fatal(err)
@@ -329,6 +347,23 @@ func (r *rig) config() m4.Config {
 func m4Config(r *rig) m4.Config { return r.config() }
 
 // migration is M4 over this rig, built the way F5-18 builds it.
+// activityConfig is ActivityConfig over this rig (see rig.actRuns).
+func (r *rig) activityConfig() m4.ActivityConfig {
+	return m4.ActivityConfig{
+		Logger: slog.New(slog.NewTextHandler(r.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Runs: func() m4.RunReader {
+			if r.actRuns != nil {
+				return fakeRuns(r.actRuns)
+			}
+			rs := r.runs.Load()
+			if rs == nil {
+				r.t.Fatal("the run reader is read before the store is open")
+			}
+			return *rs
+		},
+	}
+}
+
 func (r *rig) migration() datamigrate.DataMigration {
 	dm, err := m4.New(r.config(), cutover.TasksCutoverID, cutover.BooksCutoverLevel, []storage.StepRef{cutover.BooksLevelStepRef(r.levelVersion())})
 	if err != nil {
@@ -402,7 +437,12 @@ func (r *rig) open(ctx context.Context, fsys vfs.FS, migs []datamigrate.DataMigr
 
 // boot is one boot of the cutover build over fsys with dm (P2, P4a, P4b).
 func (r *rig) boot(ctx context.Context, fsys vfs.FS, dm datamigrate.DataMigration, observe func(ctx context.Context, db *storage.DB) error) error {
-	o, err := r.open(ctx, fsys, []datamigrate.DataMigration{dm})
+	return r.bootAll(ctx, fsys, []datamigrate.DataMigration{dm}, observe)
+}
+
+// bootAll is boot with several steps in one boot (M4's two, from m4.Steps).
+func (r *rig) bootAll(ctx context.Context, fsys vfs.FS, dms []datamigrate.DataMigration, observe func(ctx context.Context, db *storage.DB) error) error {
+	o, err := r.open(ctx, fsys, dms)
 	if err != nil {
 		return err
 	}
@@ -412,6 +452,8 @@ func (r *rig) boot(ctx context.Context, fsys vfs.FS, dm datamigrate.DataMigratio
 	}
 	ks, _ := db.Keyspace(ownerTasks)
 	r.imp.bind(ks)
+	runs := tasks.NativeStores(ks).Runs
+	r.runs.Store(&runs)
 	lr, _ := db.Legacy(cutover.BooksOwner)
 	r.legacy.Store(&lr)
 	err = db.Migrate(ctx)
@@ -540,6 +582,29 @@ func (r *rig) runWith(t testing.TB, fsys vfs.FS, dm datamigrate.DataMigration) (
 	return s, err
 }
 
+// runSteps boots a fresh seeded store with M4's two steps (m4.Steps: the run
+// families, then the activity rewrite after them) and returns the snapshot, with
+// Stores readable, taken against the activity step.
+func (r *rig) runSteps(t testing.TB) *snap {
+	t.Helper()
+	cfg := r.config()
+	ids := m4.StepIDs{Runs: cutover.TasksCutoverID, Activity: cutover.TasksCutoverID + "-activity"}
+	dms, err := m4.Steps(cfg, r.activityConfig(), ids, cutover.BooksCutoverLevel, []storage.StepRef{cutover.BooksLevelStepRef(r.levelVersion())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s *snap
+	err = r.bootAll(context.Background(), r.seed(t), dms, func(ctx context.Context, db *storage.DB) error {
+		var err error
+		s, err = read(ctx, t, db, dms[1])
+		return err
+	})
+	if err != nil {
+		t.Fatalf("boot: %v\n%s", err, r.logs)
+	}
+	return s
+}
+
 // runObserve boots a fresh seeded store and hands observe the booted store's
 // snapshot, with Stores readable.
 func (r *rig) runObserve(t testing.TB, observe func(ctx context.Context, s *snap)) {
@@ -663,6 +728,8 @@ type runSpec struct {
 	// actor HEAD's system actor (no user, auth method "system").
 	result, errText string
 	system          bool
+	// mutateRec edits the v3 record before it is written.
+	mutateRec func(*store.RunRecord)
 }
 
 func tptr(t time.Time) *time.Time { return &t }
@@ -712,6 +779,9 @@ func seedRun(ctx context.Context, t testing.TB, lr storage.LegacyRange, s runSpe
 	}
 	if s.noQueued {
 		rec.QueuedAt = nil
+	}
+	if s.mutateRec != nil {
+		s.mutateRec(&rec)
 	}
 	if s.result != "" {
 		rec.Result = json.RawMessage(s.result)
