@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_report.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 3f8b1d64-9c2e-4a57-b0d3-6e41a9c8f215
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -16,6 +16,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // --- version-group-primary-report ---
@@ -157,17 +158,21 @@ func formatVGPrimaryGroup(g vgPrimaryGroup) string {
 		g.GroupID, g.EffectivePrimary, g.ExplicitPrimaries, strings.Join(parts, "; "))
 }
 
+// versionGroupPrimaryReportHelp is the def's Description, which the native kind
+// carries as its Help.
+const versionGroupPrimaryReportHelp = "REPORT ONLY — changes nothing. Counts version groups with more than one " +
+	"effective primary member (is_primary_version true or unset), split into groups with " +
+	"two or more explicit trues and groups that are double only because of an unset flag, " +
+	"plus groups with no primary at all. Logs up to 200 double-primary groups with each " +
+	"member's stored flag. Sizes the VG-DOUBLE-PRIMARY repair."
+
 func (p *Plugin) versionGroupPrimaryReportDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "maintenance.version-group-primary-report",
-		Liveness:    sdk.LivenessManual,
-		Plugin:      "maintenance",
-		DisplayName: "Version-group primary report",
-		Description: "REPORT ONLY — changes nothing. Counts version groups with more than one " +
-			"effective primary member (is_primary_version true or unset), split into groups with " +
-			"two or more explicit trues and groups that are double only because of an unset flag, " +
-			"plus groups with no primary at all. Logs up to 200 double-primary groups with each " +
-			"member's stored flag. Sizes the VG-DOUBLE-PRIMARY repair.",
+		ID:              "maintenance.version-group-primary-report",
+		Liveness:        sdk.LivenessManual,
+		Plugin:          "maintenance",
+		DisplayName:     "Version-group primary report",
+		Description:     versionGroupPrimaryReportHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.version-group-primary-report",
@@ -185,32 +190,81 @@ func (p *Plugin) runVersionGroupPrimaryReport(ctx context.Context, _ json.RawMes
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	_ = reporter.Log(slog.LevelInfo, "Starting version-group primary report (report only)")
-	_ = reporter.UpdateProgress(0, 2, "Listing books…")
+	_, err := versionGroupPrimaryReportCore(ctx, versionGroupPrimaryReportEnv{t6g7Env: t6g7HeadEnv(reporter, false), Store: store})
+	return err
+}
+
+// versionGroupPrimaryReportKind is rule R3's kind for the def above.
+const versionGroupPrimaryReportKind = tasks.Kind("books.maintenance.version-group-primary-report")
+
+// versionGroupPrimaryReportStore is the one read the census makes.
+type versionGroupPrimaryReportStore interface {
+	// GetAllBooksCoreComplete is one consistent snapshot that refuses a memdb known
+	// to be missing rows.
+	GetAllBooksCoreComplete(limit, offset int) ([]database.BookCore, error)
+}
+
+// versionGroupPrimaryReportEnv is what the core takes from its shell. It has no
+// writer: the census writes nothing.
+type versionGroupPrimaryReportEnv struct {
+	t6g7Env
+	Store versionGroupPrimaryReportStore
+}
+
+// versionGroupPrimaryReportNative is the native kind. It is ReadOnly, so its
+// Preview and Live runs are the same and the kernel hands it no writer.
+func (p *Plugin) versionGroupPrimaryReportNative(deps t6g7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g7Common(versionGroupPrimaryReportKind, sched)
+	c.Title = "Version-group primary report"
+	c.Help = versionGroupPrimaryReportHelp
+	c.Effects = tasks.ReadOnly()
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.version-group-primary-report")
+	c.Timeout = 10 * time.Minute
+	return tasks.Task(versionGroupPrimaryReportKind, tasks.TaskSpec[struct{}, vgPrimaryReport]{
+		Common: c,
+		Run: func(rc *tasks.RC, _ struct{}) (vgPrimaryReport, error) {
+			env := versionGroupPrimaryReportEnv{t6g7Env: t6g7NativeEnv(rc)}
+			if deps.Store != nil {
+				env.Store = deps.Store
+			}
+			return versionGroupPrimaryReportCore(rc.Context(), env)
+		},
+	})
+}
+
+// versionGroupPrimaryReportCore is the census both shells run.
+func versionGroupPrimaryReportCore(ctx context.Context, env versionGroupPrimaryReportEnv) (vgPrimaryReport, error) {
+	if env.Store == nil {
+		return vgPrimaryReport{}, fmt.Errorf("database not initialized")
+	}
+	env.Log(slog.LevelInfo, "Starting version-group primary report (report only)")
+	env.Progress(0, 2, "Listing books…")
 
 	// One limit-0 read = one consistent snapshot (offset pages over the async
 	// memdb can skip or repeat rows, #2443). The Complete variant refuses a
 	// memdb known to be missing rows: a census that silently undercounts is
 	// the artifact someone would later cite to size a repair.
-	books, err := store.GetAllBooksCoreComplete(0, 0)
+	books, err := env.Store.GetAllBooksCoreComplete(0, 0)
 	if err != nil {
-		return fmt.Errorf("list books: %w", err)
+		return vgPrimaryReport{}, fmt.Errorf("list books: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return vgPrimaryReport{}, err
 	}
 
-	_ = reporter.UpdateProgress(1, 2, fmt.Sprintf("Grouping %d books by version group…", len(books)))
+	env.Progress(1, 2, fmt.Sprintf("Grouping %d books by version group…", len(books)))
 	report := findVersionGroupPrimaryViolations(books, vgPrimarySampleLimit)
 
 	summary := report.summary()
-	_ = reporter.Log(slog.LevelInfo, summary)
+	env.Log(slog.LevelInfo, summary)
 	for _, g := range report.Sample {
-		_ = reporter.Log(slog.LevelInfo, formatVGPrimaryGroup(g),
+		env.Log(slog.LevelInfo, formatVGPrimaryGroup(g),
 			slog.String("version_group", g.GroupID),
 			slog.Int("effective_primaries", g.EffectivePrimary),
 			slog.Int("explicit_true", g.ExplicitPrimaries))
 	}
-	_ = reporter.UpdateProgress(2, 2, summary)
-	return nil
+	env.Progress(2, 2, summary)
+	return report, nil
 }

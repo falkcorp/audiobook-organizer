@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/unknown_author_audit.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 730dab79-4f62-426a-9ab9-ac727bf31a58
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // --- unknown-author-audit ---
@@ -100,15 +101,19 @@ type unknownAuthorAuditStore interface {
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 }
 
+// unknownAuthorAuditHelp is the def's Description, which the native kind carries
+// as its Help.
+const unknownAuthorAuditHelp = "Counts books whose organized FilePath already has the \"" + authorname.Placeholder +
+	"\" placeholder baked in as a directory segment, and lists a capped sample (book ID, " +
+	"title, path) for review. REPORT-ONLY: takes no action and modifies nothing."
+
 func (p *Plugin) unknownAuthorAuditDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "maintenance.unknown-author-audit",
-		Liveness:    sdk.LivenessManual,
-		Plugin:      "maintenance",
-		DisplayName: "Unknown Author path census",
-		Description: "Counts books whose organized FilePath already has the \"" + authorname.Placeholder +
-			"\" placeholder baked in as a directory segment, and lists a capped sample (book ID, " +
-			"title, path) for review. REPORT-ONLY: takes no action and modifies nothing.",
+		ID:              "maintenance.unknown-author-audit",
+		Liveness:        sdk.LivenessManual,
+		Plugin:          "maintenance",
+		DisplayName:     "Unknown Author path census",
+		Description:     unknownAuthorAuditHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.unknown-author-audit",
@@ -134,21 +139,64 @@ func (p *Plugin) runUnknownAuthorAudit(ctx context.Context, rawParams json.RawMe
 		}
 	}
 
-	report, err := buildUnknownAuthorAudit(ctx, store, params, reporter)
+	env := unknownAuthorAuditEnv{t6g7Env: t6g7HeadEnv(reporter, false), Store: store}
+	report, err := unknownAuthorAuditCore(ctx, params, env)
 	if err != nil {
 		return err
 	}
+	unknownAuthorAuditLog(env.t6g7Env, report)
+	return nil
+}
 
-	log := reporter.Logger()
+// unknownAuthorAuditKind is rule R3's kind for the def above.
+const unknownAuthorAuditKind = tasks.Kind("books.maintenance.unknown-author-audit")
+
+// unknownAuthorAuditEnv is what the core takes from its shell. It has no writer:
+// the census reads one snapshot and writes nothing.
+type unknownAuthorAuditEnv struct {
+	t6g7Env
+	Store unknownAuthorAuditStore
+}
+
+// unknownAuthorAuditNative is the native kind. It is ReadOnly, so its Preview and
+// Live runs are the same and the kernel hands it no writer.
+func (p *Plugin) unknownAuthorAuditNative(deps t6g7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g7Common(unknownAuthorAuditKind, sched)
+	c.Title = "Unknown Author path census"
+	c.Help = unknownAuthorAuditHelp
+	c.Effects = tasks.ReadOnly()
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.unknown-author-audit")
+	c.Timeout = 30 * time.Minute
+	return tasks.Task(unknownAuthorAuditKind, tasks.TaskSpec[unknownAuthorAuditParams, unknownAuthorAuditReport]{
+		Common: c,
+		Run: func(rc *tasks.RC, params unknownAuthorAuditParams) (unknownAuthorAuditReport, error) {
+			env := unknownAuthorAuditEnv{t6g7Env: t6g7NativeEnv(rc)}
+			if deps.Store != nil {
+				env.Store = deps.Store
+			}
+			report, err := unknownAuthorAuditCore(rc.Context(), params, env)
+			if err != nil {
+				return unknownAuthorAuditReport{}, err
+			}
+			unknownAuthorAuditLog(env.t6g7Env, report)
+			return report, nil
+		},
+	})
+}
+
+// unknownAuthorAuditLog lists the flagged sample and the totals: the part of
+// HEAD's shell both shells share.
+func unknownAuthorAuditLog(env t6g7Env, report unknownAuthorAuditReport) {
 	for _, s := range report.Sample {
-		log.Info("unknown-author-audit: placeholder baked into path",
+		env.Logger.Info("unknown-author-audit: placeholder baked into path",
 			"book_id", s.BookID, "title", s.Title, "file_path", s.FilePath)
 	}
-	log.Info("unknown-author-audit complete",
+	env.Logger.Info("unknown-author-audit complete",
 		"total_books", report.TotalBooks, "soft_deleted", report.SoftDeleted,
 		"empty_file_path", report.EmptyFilePath, "placeholder_in_path", report.PlaceholderInPath,
 		"sampled", len(report.Sample))
-	return nil
 }
 
 // pathHasPlaceholderAuthorDir reports whether any DIRECTORY segment of path is
@@ -197,11 +245,21 @@ func pathHasPlaceholderAuthorDir(path string) bool {
 // If a future edit adds a per-book store read (e.g. hydrating for
 // HasResolvedAuthor), it must move to registry.RunItems WITH Concurrency set.
 func buildUnknownAuthorAudit(ctx context.Context, store unknownAuthorAuditStore, params unknownAuthorAuditParams, reporter sdk.Reporter) (unknownAuthorAuditReport, error) {
+	return unknownAuthorAuditCore(ctx, params, unknownAuthorAuditEnv{t6g7Env: t6g7HeadEnv(reporter, false), Store: store})
+}
+
+// unknownAuthorAuditCore is the sweep both shells run; it reads through env.Store
+// and reports through the env's hooks.
+func unknownAuthorAuditCore(ctx context.Context, params unknownAuthorAuditParams, env unknownAuthorAuditEnv) (unknownAuthorAuditReport, error) {
+	store := env.Store
+	if store == nil {
+		return unknownAuthorAuditReport{}, fmt.Errorf("database not initialized")
+	}
 	sampleLimit := params.SampleLimit
 	if sampleLimit <= 0 {
 		sampleLimit = unknownAuthorAuditSampleLimit
 	}
-	reporter.Logger().Info("unknown-author-audit start", "sample_limit", sampleLimit)
+	env.Logger.Info("unknown-author-audit start", "sample_limit", sampleLimit)
 
 	// One limit-0 call = one consistent snapshot. Paging with offset across
 	// multiple calls can skip or repeat rows if the memdb snapshot swaps
@@ -210,7 +268,7 @@ func buildUnknownAuthorAudit(ctx context.Context, store unknownAuthorAuditStore,
 	if err != nil {
 		return unknownAuthorAuditReport{}, fmt.Errorf("GetAllBooksCore: %w", err)
 	}
-	_ = reporter.UpdateProgress(0, len(books),
+	env.Progress(0, len(books),
 		fmt.Sprintf("Scanning %d book(s) for a baked-in %q path segment…", len(books), authorname.Placeholder))
 
 	report := unknownAuthorAuditReport{TotalBooks: len(books)}
@@ -250,6 +308,6 @@ func buildUnknownAuthorAudit(ctx context.Context, store unknownAuthorAuditStore,
 	}
 	report.Sample = flagged
 
-	_ = reporter.UpdateProgress(len(books), len(books), "REPORT ONLY (nothing modified) — "+report.summary())
+	env.Progress(len(books), len(books), "REPORT ONLY (nothing modified) — "+report.summary())
 	return report, nil
 }

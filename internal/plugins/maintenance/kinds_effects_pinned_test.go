@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_effects_pinned_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: bbc0869b-3caf-4c34-96f7-b5383fa30423
 // last-edited: 2026-11-19
 
@@ -127,6 +127,9 @@ var t6KindEffectsPinned = map[tasks.Kind]t6EffectsPin{
 	"books.maintenance.transcribe-book-intros":             {writes: "ai_journal authors book_files books files indexes metadata_cache", reads: "", deletes: ""},
 	"books.maintenance.transcribe-file-intros":             {writes: "authors book_files books indexes metadata_cache", reads: "", deletes: ""},
 	"books.maintenance.trash-cleanup":                      {writes: "books files settings", reads: "", deletes: ""},
+	"books.maintenance.unknown-author-audit":               {writes: "", reads: "", deletes: ""},
+	"books.maintenance.version-group-primary-report":       {writes: "", reads: "", deletes: ""},
+	"books.maintenance.reports-prune":                      {writes: "files", reads: "", deletes: ""},
 }
 
 // t6PinnedNames is the sorted resource names of refs, which must be in module

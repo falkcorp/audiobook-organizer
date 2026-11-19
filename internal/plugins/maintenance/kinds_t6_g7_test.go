@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g7_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4c7e1a92-6b3d-4f58-8a0e-2d9c5b71e3f6
 // last-edited: 2026-11-19
 
@@ -128,6 +128,23 @@ type t6g7TestStore struct {
 	t6g7Store
 
 	reviewIndex database.ReviewStatusIndexRepair
+	// cores is what GetAllBooksCore answers.
+	cores []database.BookCore
+	// active are the ids of the operations ListActiveOperationsV2 answers.
+	active []string
+}
+
+func (s *t6g7TestStore) ListActiveOperationsV2() ([]database.OperationV2Row, error) {
+	rows := make([]database.OperationV2Row, 0, len(s.active))
+	for _, id := range s.active {
+		rows = append(rows, database.OperationV2Row{ID: id})
+	}
+	return rows, nil
+}
+
+func (s *t6g7TestStore) GetAllBooksCore(int, int) ([]database.BookCore, error) { return s.cores, nil }
+func (s *t6g7TestStore) GetAllBooksCoreComplete(int, int) ([]database.BookCore, error) {
+	return s.cores, nil
 }
 
 func (s *t6g7TestStore) ReviewStatusIndexReport() (database.ReviewStatusIndexRepair, error) {
@@ -142,11 +159,12 @@ type t6g7Probe struct {
 
 	rec   *t6g7Recorder
 	store t6g7Store
+	root  string
 }
 
 func newT6G7Probe(t *testing.T) *t6g7Probe {
 	t.Helper()
-	return &t6g7Probe{rec: &t6g7Recorder{}, store: &t6g7TestStore{}}
+	return &t6g7Probe{rec: &t6g7Recorder{}, store: &t6g7TestStore{}, root: t.TempDir()}
 }
 
 func (p *t6g7Probe) deps() t6g7Deps {
@@ -159,6 +177,7 @@ func (p *t6g7Probe) deps() t6g7Deps {
 			p.given = w
 			return p.rec
 		},
+		RootDir: func() string { return p.root },
 	}
 }
 
@@ -198,6 +217,8 @@ type t6g7Host struct {
 	mu         sync.Mutex
 	standDowns []tasks.Key
 	released   bool
+	// result is the run's encoded result document.
+	result json.RawMessage
 	// caps are the worker counts the run's item loops declared (CapWorkers is
 	// handed the declared count before every loop).
 	caps []int
@@ -243,7 +264,7 @@ func runT6G7Kind(t *testing.T, d tasks.Definition, mode tasks.Mode, w tasks.Writ
 	p, err := decode(raw)
 	require.NoError(t, err)
 	h := &t6g7Host{FakeRun: taskstest.NewFakeRun(context.Background(), d.Kind()), mode: mode, w: w}
-	_, err = task.Run(tasks.NewRC(h), p)
+	h.result, err = task.Run(tasks.NewRC(h), p)
 	return h, err
 }
 
@@ -285,6 +306,8 @@ func t6g7KindWritersBuild() map[tasks.Kind]t6g7KindWrite {
 	m := map[tasks.Kind]t6g7KindWrite{}
 	add := func(head sdk.OperationDef, kw t6g7KindWrite) { m[tasks.Kind("books."+head.ID)] = kw }
 	add(p.reviewStatusIndexRepairDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[reviewStatusIndexRepairWriter]()}})
+	// reports-prune os.Remove-s report files and writes no row: files only.
+	add(p.reportsPruneDef(), t6g7KindWrite{outside: []ops.Resource{ops.ResFiles}})
 	return m
 }
 
@@ -346,7 +369,7 @@ func TestT6G7Resources_TableCoversEveryWriterMethod(t *testing.T) {
 func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 	p := &Plugin{}
 	defs := p.t6g7Kinds(fakeT6G7Deps(t), nil)
-	require.Len(t, defs, 1, "grows to 15 as the group's definitions land")
+	require.Len(t, defs, 4, "grows to 15 as the group's definitions land")
 
 	// Every expected value below is written out by hand from the HEAD def and
 	// the coordinator's rulings, never derived from the code under test.
@@ -361,6 +384,9 @@ func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 	}
 	rows := []row{
 		{head: p.reviewStatusIndexRepairDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
+		{head: p.unknownAuthorAuditDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
+		{head: p.versionGroupPrimaryReportDef(), resume: tasks.ResumeDrop, timeout: 10 * time.Minute},
+		{head: p.reportsPruneDef(), resume: tasks.ResumeDrop, timeout: time.Hour},
 	}
 
 	seen := map[tasks.Kind]bool{}
@@ -498,7 +524,7 @@ func TestT6G7Kinds_WritesThroughShell(t *testing.T) {
 // case, before it builds a writer or touches the store: the run's mode comes
 // from the start request, never from params (coordinator ruling 3).
 func TestT6G7Kinds_WritingShellsRefuseModeKeys(t *testing.T) {
-	kinds := []tasks.Kind{reviewStatusIndexRepairKind}
+	kinds := []tasks.Kind{reviewStatusIndexRepairKind, reportsPruneKind}
 	keys := []string{"dry_run", "dryRun", "DRY_RUN", "DryRun", "apply", "Apply", "APPLY"}
 	gate := &t6g7GateWriter{name: "gotham"}
 	for _, kind := range kinds {
@@ -514,4 +540,122 @@ func TestT6G7Kinds_WritingShellsRefuseModeKeys(t *testing.T) {
 			})
 		}
 	}
+}
+
+// The census is ReadOnly: it runs the same in Preview and Live, builds no writer,
+// and its result is the report HEAD logged.
+func TestT6G7Kinds_UnknownAuthorAuditReportsAndWritesNothing(t *testing.T) {
+	for _, mode := range []tasks.Mode{tasks.ModePreview, tasks.ModeLive} {
+		p := newT6G7Probe(t)
+		p.store = &t6g7TestStore{cores: []database.BookCore{
+			{ID: "01BATBOOK00000000000000F1", Title: "Year One", FilePath: "/lib/Unknown Author/Year One/01.m4b"},
+			{ID: "01BATBOOK00000000000000F2", Title: "Dark Victory", FilePath: "/lib/Bruce Wayne/Dark Victory/01.m4b"},
+			{ID: "01BATBOOK00000000000000F3", Title: "Hush"},
+		}}
+		def := t6g7ByKind(t, (&Plugin{}).t6g7Kinds(p.deps(), nil), unknownAuthorAuditKind)
+		require.True(t, tasks.CommonOf(def).Effects.IsReadOnly())
+		h, err := runT6G7Kind(t, def, mode, nil, `{"sample_limit": 5}`)
+		require.NoError(t, err, "%v", mode)
+		var rep unknownAuthorAuditReport
+		require.NoError(t, json.Unmarshal(h.result, &rep))
+		require.Equal(t, 3, rep.TotalBooks)
+		require.Equal(t, 1, rep.EmptyFilePath)
+		require.Equal(t, 1, rep.PlaceholderInPath)
+		require.Equal(t, []unknownAuthorAuditSample{{
+			BookID: "01BATBOOK00000000000000F1", Title: "Year One", FilePath: "/lib/Unknown Author/Year One/01.m4b",
+		}}, rep.Sample)
+		require.Zero(t, p.writerCalls(), "a ReadOnly kind built a writer")
+		require.Empty(t, p.rec.snapshot())
+	}
+}
+
+// The primary census is ReadOnly: Preview and Live are the same, no writer is
+// built, and the result is the report HEAD logged (a double of two explicit
+// trues, a double that is only a nil flag, and a group with no primary).
+func TestT6G7Kinds_VersionGroupPrimaryReportCountsAndWritesNothing(t *testing.T) {
+	yes, no := true, false
+	vg := func(s string) *string { return &s }
+	for _, mode := range []tasks.Mode{tasks.ModePreview, tasks.ModeLive} {
+		p := newT6G7Probe(t)
+		p.store = &t6g7TestStore{cores: []database.BookCore{
+			{ID: "01BATBOOK00000000000000G1", VersionGroupID: vg("vg-explicit"), IsPrimaryVersion: &yes},
+			{ID: "01BATBOOK00000000000000G2", VersionGroupID: vg("vg-explicit"), IsPrimaryVersion: &yes},
+			{ID: "01BATBOOK00000000000000G3", VersionGroupID: vg("vg-nil"), IsPrimaryVersion: &yes},
+			{ID: "01BATBOOK00000000000000G4", VersionGroupID: vg("vg-nil")},
+			{ID: "01BATBOOK00000000000000G5", VersionGroupID: vg("vg-none"), IsPrimaryVersion: &no},
+			{ID: "01BATBOOK00000000000000G6", VersionGroupID: vg("vg-fine"), IsPrimaryVersion: &yes},
+			{ID: "01BATBOOK00000000000000G7"},
+		}}
+		def := t6g7ByKind(t, (&Plugin{}).t6g7Kinds(p.deps(), nil), versionGroupPrimaryReportKind)
+		require.True(t, tasks.CommonOf(def).Effects.IsReadOnly())
+		h, err := runT6G7Kind(t, def, mode, nil, "")
+		require.NoError(t, err, "%v", mode)
+		var rep vgPrimaryReport
+		require.NoError(t, json.Unmarshal(h.result, &rep))
+		require.Equal(t, 7, rep.TotalBooks)
+		require.Equal(t, 4, rep.Groups)
+		require.Equal(t, 2, rep.DoubleGroups)
+		require.Equal(t, 1, rep.DoubleExplicit)
+		require.Equal(t, 1, rep.DoubleNilOnly)
+		require.Equal(t, 4, rep.BooksInDoubles)
+		require.Equal(t, 1, rep.ZeroPrimary)
+		require.Len(t, rep.Sample, 2)
+		require.Zero(t, p.writerCalls(), "a ReadOnly kind built a writer")
+		require.Empty(t, p.rec.snapshot())
+	}
+}
+
+// reports-prune deletes files from disk through no writer: Live removes the
+// stale report and leaves the live run's, Preview counts and removes nothing, the
+// retention floors refuse, and a missing queue refuses before anything goes.
+func TestT6G7Kinds_ReportsPruneRemovesOnlyWhenLive(t *testing.T) {
+	run := func(t *testing.T, mode tasks.Mode, params string, active ...string) (root, doomed string, res ReportsPruneResult, err error) {
+		root, doomed = seedOpFixture(t)
+		p := newT6G7Probe(t)
+		p.root = root
+		p.store = &t6g7TestStore{active: active}
+		def := t6g7ByKind(t, (&Plugin{}).t6g7Kinds(p.deps(), nil), reportsPruneKind)
+		h, err := runT6G7Kind(t, def, mode, nil, params)
+		if h != nil && len(h.result) > 0 {
+			require.NoError(t, json.Unmarshal(h.result, &res))
+		}
+		require.Zero(t, p.writerCalls(), "reports-prune writes through no writer")
+		return root, doomed, res, err
+	}
+
+	_, doomed, res, err := run(t, tasks.ModeLive, `{}`)
+	require.NoError(t, err)
+	require.False(t, exists(doomed), "a live run removes the stale report")
+	require.False(t, res.DryRun)
+	require.Equal(t, 1, res.Removed)
+	require.EqualValues(t, 4, res.BytesFreed)
+
+	_, doomed, res, err = run(t, tasks.ModePreview, `{}`)
+	require.NoError(t, err)
+	require.True(t, exists(doomed), "a preview removed a report")
+	require.True(t, res.DryRun)
+	require.Equal(t, 1, res.Removed, "a preview counts what a live run would remove")
+
+	_, doomed, res, err = run(t, tasks.ModeLive, `{}`, "4")
+	require.NoError(t, err)
+	require.True(t, exists(doomed), "the report of a running operation was removed")
+	require.Equal(t, 1, res.SkippedLive)
+
+	_, doomed, _, err = run(t, tasks.ModeLive, `{"keep_per_kind": 0}`)
+	require.ErrorContains(t, err, "keep_per_kind must be at least 1")
+	require.True(t, exists(doomed))
+	_, doomed, _, err = run(t, tasks.ModeLive, `{"max_age_days": 0}`)
+	require.ErrorContains(t, err, "max_age_days must be between 1 and")
+	require.True(t, exists(doomed))
+
+	// No queue to ask which operations run: refuse, remove nothing.
+	root, doomed := seedOpFixture(t)
+	p := newT6G7Probe(t)
+	p.root = root
+	deps := p.deps()
+	deps.Store = nil
+	def := t6g7ByKind(t, (&Plugin{}).t6g7Kinds(deps, nil), reportsPruneKind)
+	_, err = runT6G7Kind(t, def, tasks.ModeLive, nil, `{}`)
+	require.ErrorContains(t, err, "cannot verify which operations are running")
+	require.True(t, exists(doomed))
 }
