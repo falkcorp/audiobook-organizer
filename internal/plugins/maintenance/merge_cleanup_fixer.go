@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_fixer.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 0e4c7d58-a1b3-4f26-8c19-6d5a3e7f9b02
 // last-edited: 2026-11-19
 
@@ -583,7 +583,19 @@ func vgWrittenBooks(g vgRepairGroupReport) []string {
 // ends[i] slot, so no two workers touch one entry and no lock is needed; the
 // index is folded together afterwards in listing order, so the result does not
 // depend on which worker finished first.
+//
+// The result is cached for the run, but a build stopped by its caller's own
+// cancelled context is not: that error says nothing about the library, and
+// caching it would hand it to every later caller whose context is live.
 func (r *mcRun) deadEndIndex(ctx context.Context) (map[string][]string, error) {
+	idx, err := r.buildDeadEndIndex(ctx)
+	if err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		r.deadEnds.Delete("")
+	}
+	return idx, err
+}
+
+func (r *mcRun) buildDeadEndIndex(ctx context.Context) (map[string][]string, error) {
 	return cachedOnce(&r.deadEnds, "", func() (map[string][]string, error) {
 		ids := r.merged
 		if ids == nil {
@@ -1103,7 +1115,11 @@ func (r *mcRun) settleDead(ctx context.Context, fa *mcFacts) error {
 	rc := &mcReach{live: map[string]string{}, seen: map[string]bool{}, outcome: map[string]string{}, groupLive: map[string]string{}}
 	ret, haveRet := database.AsCapability[database.RetiredBookFileReader](r.ops)
 	for _, h := range fa.chain.Hops {
-		if h.State != mcHopTrashed || h.Book == nil {
+		// Every hop that took content on (a pointer-carrying one, live or in
+		// the trash) is a source of books the loser's content may have moved
+		// to: its holders and its version group. A live merged hop with no
+		// file of its own is no less a source than a trashed one.
+		if h.Book == nil || (h.State != mcHopTrashed && h.State != mcHopMerged) {
 			continue
 		}
 		if !haveRet {
@@ -1223,7 +1239,6 @@ func (r *mcRun) settleDead(ctx context.Context, fa *mcFacts) error {
 		case fa.chain.LastState() == mcHopMissing:
 			checked = "the book it points at no longer exists, so it has no retired versions or version group to read"
 		}
-		fa.evidence = append(fa.evidence, "the merge chain ends at "+end+", which is "+fa.deadWhy()+"; "+checked+", so no live book is reachable: the book stands alone")
 		mates, err := r.deadEndMates(ctx, fa)
 		if err != nil {
 			return err
@@ -1238,6 +1253,13 @@ func (r *mcRun) settleDead(ctx context.Context, fa *mcFacts) error {
 		}
 		if len(rc.liveCopies) > 0 {
 			fa.cur["dead_end_live_copies"] = strings.Join(rc.liveCopies, ",")
+		}
+		// The "stands alone" sentence is only said of a loser that is held by
+		// no other live copy; beside one, the hold below says what is left.
+		if len(others) == 0 {
+			fa.evidence = append(fa.evidence, "the merge chain ends at "+end+", which is "+fa.deadWhy()+"; "+checked+", so no live book is reachable: the book stands alone")
+		} else {
+			fa.evidence = append(fa.evidence, "the merge chain ends at "+end+", which is "+fa.deadWhy()+", and no live book is reachable from it")
 		}
 		if len(others) > 0 {
 			fa.chainHold = mcSkipDeadEndShared
@@ -1441,7 +1463,10 @@ func (r *mcRun) unmergeGroupGate(fa *mcFacts) {
 	switch {
 	case gid == "":
 		fa.groupEffect = "group_less"
-	case fa.chainHasGroup(gid):
+	case fa.target != nil && fa.chainHasGroup(gid):
+		// Only an unmerge that names a book (a wrong-work unmerge) takes the
+		// loser out of that book's group. A dead end or a loop has no such
+		// book: the loser stays in its group, so the group must keep a primary.
 		fa.groupEffect = "leaves_group"
 	default:
 		fa.groupEffect = "stays_in_group"
