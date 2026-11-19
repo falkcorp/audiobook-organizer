@@ -1,5 +1,5 @@
 // file: core/kernel/kernel.go
-// version: 1.0.22
+// version: 1.0.23
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
 // last-edited: 2026-11-18
 
@@ -503,6 +503,8 @@ func (k *Kernel) catalog(describe bool) error {
 	// known while the module is disabled (06 §6.4.2).
 	probs = append(probs, ledgerProblems(k.entries)...)
 	probs = append(probs, dataMigrationProblems(k.entries)...)
+	probs = append(probs, settingsProblems(k.entries)...)
+	probs = append(probs, rewriteProblems(k.entries)...)
 	return joined(probs)
 }
 
@@ -558,6 +560,7 @@ func (k *Kernel) register(ctx context.Context) error {
 			Deps:          deps,
 			HTTP:          k.router.ModuleGroup(string(id)),
 			LegacyAuthGin: k.cfg.LegacyAuthGinUntil != "" && id == k.cfg.LegacyAuthGinUntil,
+			Settings:      declaredSettings(e.man, nil),
 			// Err is read once, below: a call after Close (from a goroutine
 			// Register started, against 06 §6.4.1) would otherwise vanish.
 			AfterClose: func(p module.Problem) {
