@@ -1,7 +1,7 @@
 // file: internal/books/store/booksspec.go
-// version: 1.1.0
+// version: 1.0.4
 // guid: 8d814793-7285-4757-ae8a-aabc89f7a006
-// last-edited: 2026-11-19
+// last-edited: 2026-11-09
 
 package store
 
@@ -151,16 +151,6 @@ func booksMigrations() []storage.Migration {
 			Up:      backfillOpChangeListIndexStep,
 		},
 	}
-}
-
-// NextMigrationVersion is the version the next versioned books step must take:
-// one above the last of booksMigrations. F3's level step (books.level-1) is
-// registered at a version the module pins, and the cutover-list cell checks the
-// two agree, so a versioned step added before the flip lands moves this and
-// fails the check instead of silently renumbering a step that may have run.
-func NextMigrationVersion() int {
-	ms := booksMigrations()
-	return ms[len(ms)-1].Version + 1
 }
 
 // migrateImportPathKeysStep is HEAD's migrateImportPathKeys as a versioned
