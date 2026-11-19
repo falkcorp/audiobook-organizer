@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/build_isbn_index.go
-// version: 1.5.3
+// version: 1.6.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // Package dedup — op dedup.build-isbn-index.
 //
@@ -30,6 +30,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -44,15 +46,12 @@ type buildISBNIndexParams struct {
 // buildISBNIndexDef returns the OperationDef for dedup.build-isbn-index.
 func (p *Plugin) buildISBNIndexDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "dedup.build-isbn-index",
-		Preview:     sdk.PreviewSpec{Params: buildISBNIndexParams{}},
-		Liveness:    sdk.LivenessManual,
-		Plugin:      "dedup",
-		DisplayName: "Build ISBN/ASIN secondary index",
-		Description: "Backfills the book:isbn10:, book:isbn13:, and book:asin: secondary " +
-			"indexes for all books. Dry-run by default (pass apply=true to execute). " +
-			"Sets book_isbn_index_v1_done on completion, enabling O(1) ISBN dedup lookups. " +
-			"Idempotent — safe to re-run.",
+		ID:              "dedup.build-isbn-index",
+		Preview:         sdk.PreviewSpec{Params: buildISBNIndexParams{}},
+		Liveness:        sdk.LivenessManual,
+		Plugin:          "dedup",
+		DisplayName:     "Build ISBN/ASIN secondary index",
+		Description:     buildISBNIndexHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityHigh,
 		ConcurrencyKey:  "dedup.build-isbn-index",
@@ -67,45 +66,76 @@ func (p *Plugin) buildISBNIndexDef() sdk.OperationDef {
 	}
 }
 
-// runBuildISBNIndex implements the build-isbn-index op.
-func (p *Plugin) runBuildISBNIndex(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
-	if p.store == nil {
-		return fmt.Errorf("main store not available")
-	}
+// buildISBNIndexKind is rule R3's native kind for dedup.build-isbn-index.
+const buildISBNIndexKind = tasks.Kind("books.dedup.build-isbn-index")
 
-	// --- Resolve the typed ISBN index interface ---
-	// The store must implement ISBNIndexStore so the op can write index rows
-	// and set/read the completion flag without going through the generic
-	// SetSetting path (which uses a different key from IsISBNIndexBuilt).
-	//
-	// Resolved through the decorator chain rather than asserted on p.store
-	// directly -- see resolveISBNIndexStore below for why a bare assertion is
-	// fragile here.
-	isbnStore := resolveISBNIndexStore(p.store)
-	if isbnStore == nil {
-		return fmt.Errorf("store does not provide the ISBNIndexStore capability " +
-			"(WriteISBNIndexForBook, IsISBNIndexBuilt, SetISBNIndexBuilt)")
-	}
+// buildISBNIndexHelp is HEAD's Description and the native Help (rule R5).
+const buildISBNIndexHelp = "Backfills the book:isbn10:, book:isbn13:, and book:asin: secondary " +
+	"indexes for all books. Dry-run by default (pass apply=true to execute). " +
+	"Sets book_isbn_index_v1_done on completion, enabling O(1) ISBN dedup lookups. " +
+	"Idempotent — safe to re-run."
 
-	// --- Parse params ---
-	var params buildISBNIndexParams
-	if len(rawParams) > 0 {
-		if err := json.Unmarshal(rawParams, &params); err != nil {
-			return fmt.Errorf("parse params: %w", err)
-		}
-	}
+// buildISBNIndexStore is the reads the core takes: the paged book scan and the
+// completion flag.
+type buildISBNIndexStore interface {
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	IsISBNIndexBuilt() bool
+}
 
-	reporter.Logger().Info("build-isbn-index start", "apply", params.Apply)
+// buildISBNIndexWriter is the writes the core makes: one index-row batch per
+// book and the completion flag.
+type buildISBNIndexWriter interface {
+	WriteISBNIndexForBook(bookID, isbn10, isbn13, asin string) error
+	SetISBNIndexBuilt() error
+}
+
+// buildISBNIndexEnv is what the core takes from its shell. Live is HEAD's
+// apply=true; a dry run never calls Writer, which may then be nil.
+type buildISBNIndexEnv struct {
+	kindEnv
+	Store  buildISBNIndexStore
+	Writer buildISBNIndexWriter
+}
+
+// buildISBNIndexResult is the native run's result. HEAD stored none.
+type buildISBNIndexResult struct {
+	TotalBooks    int `json:"total_books"`
+	BooksWithISBN int `json:"books_with_isbn"`
+	IndexRows     int `json:"index_rows"`
+	Written       int `json:"written"`
+	Failed        int `json:"failed"`
+}
+
+// headBuildISBNIndex is HEAD's reads and writes for the core: the plugin's main
+// store for the scan and the ISBNIndexStore capability for the rows and flag.
+type headBuildISBNIndex struct {
+	books pluginBookReader
+	isbn  ISBNIndexStore
+}
+
+func (h headBuildISBNIndex) GetAllBooksCore(limit, offset int) ([]database.BookCore, error) {
+	return h.books.GetAllBooksCore(limit, offset)
+}
+func (h headBuildISBNIndex) IsISBNIndexBuilt() bool { return h.isbn.IsISBNIndexBuilt() }
+func (h headBuildISBNIndex) WriteISBNIndexForBook(bookID, isbn10, isbn13, asin string) error {
+	return h.isbn.WriteISBNIndexForBook(bookID, isbn10, isbn13, asin)
+}
+func (h headBuildISBNIndex) SetISBNIndexBuilt() error { return h.isbn.SetISBNIndexBuilt() }
+
+// buildISBNIndexCore is the body of runBuildISBNIndex, shared by both shells.
+func buildISBNIndexCore(ctx context.Context, env buildISBNIndexEnv) (buildISBNIndexResult, error) {
+	env.Logger.Info("build-isbn-index start", "apply", env.Live)
 
 	// --- Check if already complete ---
-	if isbnStore.IsISBNIndexBuilt() && params.Apply {
-		reporter.Logger().Info("build-isbn-index: already completed; re-running to ensure consistency")
+	if env.Store.IsISBNIndexBuilt() && env.Live {
+		env.Logger.Info("build-isbn-index: already completed; re-running to ensure consistency")
 	}
 
 	// --- Load all books ---
-	_ = reporter.UpdateProgress(0, 3, "Loading all books…")
+	env.Progress(0, 3, "Loading all books…")
 
-	// Use GetAllBooks in batches so we don't materialise 50K books at once.
+	// The scan pages GetAllBooksCore by offset, so it is sequential by nature:
+	// each page's offset depends on the previous page's length.
 	const batchSize = 500
 	var (
 		totalBooks    int
@@ -124,18 +154,18 @@ func (p *Plugin) runBuildISBNIndex(ctx context.Context, rawParams json.RawMessag
 
 	offset := 0
 	for {
-		if reporter.IsCanceled() {
-			return context.Canceled
+		if env.Canceled() {
+			return buildISBNIndexResult{}, context.Canceled
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return buildISBNIndexResult{}, ctx.Err()
 		default:
 		}
 
-		batch, err := p.store.GetAllBooksCore(batchSize, offset)
+		batch, err := env.Store.GetAllBooksCore(batchSize, offset)
 		if err != nil {
-			return fmt.Errorf("get all books at offset %d: %w", offset, err)
+			return buildISBNIndexResult{}, fmt.Errorf("get all books at offset %d: %w", offset, err)
 		}
 		if len(batch) == 0 {
 			break
@@ -178,45 +208,46 @@ func (p *Plugin) runBuildISBNIndex(ctx context.Context, rawParams json.RawMessag
 		offset += batchSize
 	}
 
-	reporter.Logger().Info("build-isbn-index: scan complete",
+	env.Logger.Info("build-isbn-index: scan complete",
 		"total_books", totalBooks,
 		"books_with_isbn", booksWithISBN,
 		"index_rows", indexRows,
-		"apply", params.Apply)
+		"apply", env.Live)
 
+	res := buildISBNIndexResult{TotalBooks: totalBooks, BooksWithISBN: booksWithISBN, IndexRows: indexRows}
 	summary := fmt.Sprintf(
 		"Scan: %d books total, %d with ISBN/ASIN, %d index rows to write",
 		totalBooks, booksWithISBN, indexRows,
 	)
 
-	if !params.Apply {
-		_ = reporter.UpdateProgress(3, 3,
+	if !env.Live {
+		env.Progress(3, 3,
 			fmt.Sprintf("Dry-run complete — %d index rows would be written. Pass apply=true to execute.", indexRows))
-		reporter.Logger().Info("build-isbn-index: dry-run only; no changes written", "would_write", indexRows)
-		return nil
+		env.Logger.Info("build-isbn-index: dry-run only; no changes written", "would_write", indexRows)
+		return res, nil
 	}
 
 	// --- Apply: write index rows via the store's typed write path ---
-	// Row writes go through ISBNIndexStore.WriteISBNIndexForBook (a dedicated
-	// single-book batch write, idempotent, no UpdateBook overhead).
-	// The completion flag is set only when ALL books were written successfully
-	// (written == booksWithISBN), covering both per-book write failures and
-	// mid-run cancellation.
-	_ = reporter.UpdateProgress(1, 3, fmt.Sprintf("Writing %d index rows…", indexRows))
+	// The write tail stays sequential, as HEAD ran it: each write is one
+	// single-book batch on rows keyed by that book, the completion flag below
+	// depends on the exact written count, and a mid-run cancel must stop with a
+	// prefix written. (A pool here is a candidate follow-up: the rows are
+	// disjoint per book; see the F5-04 report.)
+	env.Progress(1, 3, fmt.Sprintf("Writing %d index rows…", indexRows))
 
 	var written, failed int
 	for _, e := range toWrite {
-		if reporter.IsCanceled() {
+		if env.Canceled() {
 			break
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return res, ctx.Err()
 		default:
 		}
 
-		if err := isbnStore.WriteISBNIndexForBook(e.bookID, e.isbn10, e.isbn13, e.asin); err != nil {
-			reporter.Logger().Error("build-isbn-index: write error",
+		if err := env.Writer.WriteISBNIndexForBook(e.bookID, e.isbn10, e.isbn13, e.asin); err != nil {
+			env.Logger.Error("build-isbn-index: write error",
 				"book_id", e.bookID, "error", err)
 			// Continue — partial progress is better than aborting; the op is idempotent.
 			failed++
@@ -224,30 +255,63 @@ func (p *Plugin) runBuildISBNIndex(ctx context.Context, rawParams json.RawMessag
 			written++
 		}
 	}
+	res.Written, res.Failed = written, failed
 
-	reporter.Logger().Info("build-isbn-index: write complete",
+	env.Logger.Info("build-isbn-index: write complete",
 		"written", written, "failed", failed, "intended", booksWithISBN)
 
 	// --- Set completion flag only on a complete, error-free backfill ---
-	// written == booksWithISBN guards against both write errors (failed > 0)
-	// and mid-run cancellation (written + failed < booksWithISBN).
 	if written == booksWithISBN {
-		if err := isbnStore.SetISBNIndexBuilt(); err != nil {
-			reporter.Logger().Warn("build-isbn-index: could not set done flag", "error", err)
+		if err := env.Writer.SetISBNIndexBuilt(); err != nil {
+			env.Logger.Warn("build-isbn-index: could not set done flag", "error", err)
 		} else {
-			reporter.Logger().Info("build-isbn-index: set done flag")
+			env.Logger.Info("build-isbn-index: set done flag")
 		}
 	} else {
-		reporter.Logger().Warn("build-isbn-index: done flag NOT set — backfill incomplete",
+		env.Logger.Warn("build-isbn-index: done flag NOT set — backfill incomplete",
 			"written", written, "failed", failed, "intended", booksWithISBN,
 			"action", "re-run with apply=true to complete")
 	}
 
-	_ = reporter.UpdateProgress(3, 3,
+	env.Progress(3, 3,
 		fmt.Sprintf("Complete — %d/%d books indexed (%d failed). %s", written, booksWithISBN, failed, summary))
-	reporter.Logger().Info("build-isbn-index: complete",
+	env.Logger.Info("build-isbn-index: complete",
 		"written", written, "failed", failed, "intended", booksWithISBN)
-	return nil
+	return res, nil
+}
+
+// runBuildISBNIndex is the v2 shell: HEAD's Run (nil checks, capability
+// resolution, params) over buildISBNIndexCore.
+func (p *Plugin) runBuildISBNIndex(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
+	if p.store == nil {
+		return fmt.Errorf("main store not available")
+	}
+
+	// --- Resolve the typed ISBN index interface ---
+	// The store must implement ISBNIndexStore so the op can write index rows
+	// and set/read the completion flag without going through the generic
+	// SetSetting path (which uses a different key from IsISBNIndexBuilt).
+	//
+	// Resolved through the decorator chain rather than asserted on p.store
+	// directly -- see resolveISBNIndexStore below for why a bare assertion is
+	// fragile here.
+	isbnStore := resolveISBNIndexStore(p.store)
+	if isbnStore == nil {
+		return fmt.Errorf("store does not provide the ISBNIndexStore capability " +
+			"(WriteISBNIndexForBook, IsISBNIndexBuilt, SetISBNIndexBuilt)")
+	}
+
+	// --- Parse params ---
+	var params buildISBNIndexParams
+	if len(rawParams) > 0 {
+		if err := json.Unmarshal(rawParams, &params); err != nil {
+			return fmt.Errorf("parse params: %w", err)
+		}
+	}
+
+	h := headBuildISBNIndex{books: p.store, isbn: isbnStore}
+	_, err := buildISBNIndexCore(ctx, buildISBNIndexEnv{kindEnv: headEnv(reporter, params.Apply), Store: h, Writer: h})
+	return err
 }
 
 // ISBNIndexStore is the narrow typed interface the build-isbn-index op uses.

@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/window_index_build.go
-// version: 1.1.4
+// version: 1.2.0
 // guid: 7e2b9d51-0c46-4f83-a1d7-5b8e3c9f6a20
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package dedup
 
@@ -14,13 +14,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -89,7 +90,7 @@ func (p *Plugin) windowIndexBuildDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "dedup",
 		DisplayName:     "Build window-print index",
-		Description:     "Builds the fpwinidx: band index over stored window fingerprints so the window_acoustid dedup signal and the fragment fixer's containment evidence can find matching files without a full scan. Preview by default; reads stored prints only.",
+		Description:     windowIndexBuildHelp,
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "dedup.window-index",
@@ -102,27 +103,61 @@ func (p *Plugin) windowIndexBuildDef() sdk.OperationDef {
 	}
 }
 
-func (p *Plugin) runWindowIndexBuild(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
-	var params windowIndexBuildParams
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &params); err != nil {
-			return fmt.Errorf("%s: invalid params: %w", windowIndexBuildOpID, err)
-		}
-	}
-	dryRun, err := opmode.ResolveDryRun(windowIndexBuildOpID, params.DryRun, params.DryRunCamel)
-	if err != nil {
-		return err
-	}
-	store, ok := database.AsCapability[WindowIndexStore](p.store)
-	if !ok {
-		return fmt.Errorf("%s: store has no window index (PebbleDB required)", windowIndexBuildOpID)
-	}
+// windowIndexBuildKind is rule R3's native kind for dedup.window-index-build.
+const windowIndexBuildKind = tasks.Kind("books." + windowIndexBuildOpID)
 
-	loadProg := sdk.NewProgress(reporter, 0)
+// windowIndexBuildHelp is HEAD's Description and the native Help (rule R5).
+const windowIndexBuildHelp = "Builds the fpwinidx: band index over stored window fingerprints so the window_acoustid dedup signal and the fragment fixer's containment evidence can find matching files without a full scan. Preview by default; reads stored prints only."
+
+// windowIndexBuildStore is the reads the core takes.
+type windowIndexBuildStore interface {
+	ListWindowIndexFiles() ([]string, error)
+	WindowIndexMembers(fileID string) ([]fingerprint.WindowBand, bool, error)
+}
+
+// windowIndexBuildWriter is the writes the core makes: one file's rows and the
+// completion flag.
+type windowIndexBuildWriter interface {
+	PutWindowIndex(fileID string) (int, error)
+	SetWindowIndexBuilt() error
+}
+
+// windowIndexBuildEnv is what the core takes from its shell. Live is
+// dry_run=false (HEAD) or a Live run (native); a preview never calls Writer,
+// which may then be nil.
+type windowIndexBuildEnv struct {
+	kindEnv
+	Store  windowIndexBuildStore
+	Writer windowIndexBuildWriter
+	// Fence is HEAD's 05-PR3 write fence, checked right before each file's
+	// write: a stopped run's permit is revoked before its context is canceled.
+	// Nil in a native shell, whose writer is the kernel's gated tasks.Writer
+	// and refuses a stopped run's write itself.
+	Fence func(ctx context.Context) error
+}
+
+// windowIndexBuildResult is the native run's result. HEAD stored none.
+type windowIndexBuildResult struct {
+	Total    int `json:"total"`
+	Indexed  int `json:"indexed"`
+	Already  int `json:"already_indexed"`
+	Pending  int `json:"pending"`
+	BandKeys int `json:"band_keys"`
+	Errors   int `json:"errors"`
+}
+
+// windowIndexBuildCore is the body of runWindowIndexBuild, shared by both
+// shells. The per-item Label reads atomic counters, which the native pool cannot
+// carry (the kernel's label is pure), so it is passed as Label: HEAD's pool
+// shows it, the native run drops it.
+func windowIndexBuildCore(ctx context.Context, env windowIndexBuildEnv) (windowIndexBuildResult, error) {
+	dryRun := !env.Live
+	store := env.Store
+	loadProg := newProgress(env.kindEnv, 0)
 	loadProg.Start("Listing files with stored windows…")
 	ids, err := store.ListWindowIndexFiles()
 	if err != nil {
-		return fmt.Errorf("%s: list files: %w", windowIndexBuildOpID, err)
+		return windowIndexBuildResult{}, fmt.Errorf("%s: list files: %w", windowIndexBuildOpID, err)
 	}
 	total := len(ids)
 	windowIndexLog.Info("starting: %d file(s) with stored windows, dry_run=%v", total, dryRun)
@@ -132,8 +167,15 @@ func (p *Plugin) runWindowIndexBuild(ctx context.Context, raw json.RawMessage, r
 	var errMu sync.Mutex
 	var firstErr error
 
-	runErr := registry.RunItems(ctx, reporter, ids, func(ctx context.Context, fileID string) error {
-		if reporter.IsCanceled() {
+	runErr := env.Items(ctx, tasks.CPU(), total, kindItemsOptions{
+		// Label runs in worker goroutines: every counter it reads is atomic.
+		Label: func(i, t int) string {
+			return fmt.Sprintf("Window index: %d/%d files (indexed=%d already=%d errors=%d)",
+				processed.Load(), total, indexed.Load(), already.Load(), errs.Load())
+		},
+	}, func(ctx context.Context, i int) error {
+		fileID := ids[i]
+		if env.Canceled() {
 			return context.Canceled
 		}
 		if err := ctx.Err(); err != nil {
@@ -142,7 +184,7 @@ func (p *Plugin) runWindowIndexBuild(ctx context.Context, raw json.RawMessage, r
 		defer processed.Add(1)
 		_, has, err := store.WindowIndexMembers(fileID)
 		if err != nil {
-			reporter.Logger().Error("window-index-build: read member list", "file_id", fileID, "error", err)
+			env.Logger.Error("window-index-build: read member list", "file_id", fileID, "error", err)
 			errs.Add(1)
 			errMu.Lock()
 			if firstErr == nil {
@@ -161,10 +203,12 @@ func (p *Plugin) runWindowIndexBuild(ctx context.Context, raw json.RawMessage, r
 		}
 		// 05-PR3: a stopped run's permit is revoked before its context is
 		// canceled; check it right before the write.
-		if err := opswriter.FenceFromContext(ctx).Check(); err != nil {
-			return err
+		if env.Fence != nil {
+			if err := env.Fence(ctx); err != nil {
+				return err
+			}
 		}
-		n, err := store.PutWindowIndex(fileID)
+		n, err := env.Writer.PutWindowIndex(fileID)
 		if err != nil {
 			errs.Add(1)
 			errMu.Lock()
@@ -172,44 +216,67 @@ func (p *Plugin) runWindowIndexBuild(ctx context.Context, raw json.RawMessage, r
 				firstErr = err
 			}
 			errMu.Unlock()
-			reporter.Logger().Error("window-index-build: index file", "file_id", fileID, "error", err)
+			env.Logger.Error("window-index-build: index file", "file_id", fileID, "error", err)
 			return nil
 		}
 		indexed.Add(1)
 		bandKeys.Add(int64(n))
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: windowIndexBuildConcurrency(),
-		// Label runs in worker goroutines: every counter it reads is atomic.
-		Label: func(i, t int) string {
-			return fmt.Sprintf("Window index: %d/%d files (indexed=%d already=%d errors=%d)",
-				processed.Load(), total, indexed.Load(), already.Load(), errs.Load())
-		},
 	})
+	res := func() windowIndexBuildResult {
+		return windowIndexBuildResult{Total: total, Indexed: int(indexed.Load()), Already: int(already.Load()),
+			Pending: int(pending.Load()), BandKeys: int(bandKeys.Load()), Errors: int(errs.Load())}
+	}
 	if runErr != nil {
 		windowIndexLog.Info("stopped after %d of %d file(s), %d indexed: %v", processed.Load(), total, indexed.Load(), runErr)
-		return runErr
+		return res(), runErr
 	}
 
-	prog := sdk.NewProgress(reporter, total)
+	prog := newProgress(env.kindEnv, total)
 	if dryRun {
 		summary := fmt.Sprintf("Preview: %d file(s) with stored windows, %d already indexed, %d to index. %s Run with dry_run=false to build.",
 			total, already.Load(), pending.Load(), windowIndexSizing(total))
 		prog.Done(summary)
 		windowIndexLog.Info("preview: %d file(s), %d already indexed, %d to index", total, already.Load(), pending.Load())
-		return nil
+		return res(), nil
 	}
 	if n := errs.Load(); n > 0 {
-		return fmt.Errorf("%s: %d of %d file(s) failed (first: %v); index NOT marked built, rerun to finish", windowIndexBuildOpID, n, total, firstErr)
+		return res(), fmt.Errorf("%s: %d of %d file(s) failed (first: %v); index NOT marked built, rerun to finish", windowIndexBuildOpID, n, total, firstErr)
 	}
-	if err := store.SetWindowIndexBuilt(); err != nil {
-		return fmt.Errorf("%s: index built but the completion flag failed to write: %w", windowIndexBuildOpID, err)
+	if err := env.Writer.SetWindowIndexBuilt(); err != nil {
+		return res(), fmt.Errorf("%s: index built but the completion flag failed to write: %w", windowIndexBuildOpID, err)
 	}
 	summary := fmt.Sprintf("Window index built: %d file(s) indexed now (%d band keys), %d already indexed, of %d.",
 		indexed.Load(), bandKeys.Load(), already.Load(), total)
 	prog.Done(summary)
 	windowIndexLog.Info("complete: %d file(s) indexed now (%d band keys), %d already indexed, of %d", indexed.Load(), bandKeys.Load(), already.Load(), total)
-	return nil
+	return res(), nil
+}
+
+// runWindowIndexBuild is the v2 shell: HEAD's Run (params, the dry_run
+// resolution, the capability lookup) over windowIndexBuildCore.
+func (p *Plugin) runWindowIndexBuild(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
+	var params windowIndexBuildParams
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return fmt.Errorf("%s: invalid params: %w", windowIndexBuildOpID, err)
+		}
+	}
+	dryRun, err := opmode.ResolveDryRun(windowIndexBuildOpID, params.DryRun, params.DryRunCamel)
+	if err != nil {
+		return err
+	}
+	store, ok := database.AsCapability[WindowIndexStore](p.store)
+	if !ok {
+		return fmt.Errorf("%s: store has no window index (PebbleDB required)", windowIndexBuildOpID)
+	}
+	_, err = windowIndexBuildCore(ctx, windowIndexBuildEnv{
+		kindEnv: headEnv(reporter, !dryRun),
+		Store:   store,
+		Writer:  store,
+		Fence:   func(ctx context.Context) error { return opswriter.FenceFromContext(ctx).Check() },
+	})
+	return err
 }
 
 // windowIndexBuildConcurrency is the build op's worker count: one per CPU,
