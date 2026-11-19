@@ -322,8 +322,17 @@ func catalogHarvestCore(ctx context.Context, p catalogHarvestNativeParams, env c
 
 // headCatalogHarvest is HEAD's side of both interfaces: the engine's own
 // wiring, exactly as HEAD built it.
+// headHarvestStore is what HEAD's adapter reads from the server's store: the
+// scope's reads and the author-to-books lookup the identification hook uses. The
+// value stays the server's own store, so database.AsCapability still finds the
+// authority scanner on it.
+type headHarvestStore interface {
+	authorBooksLister
+	catalog.ScopeReader
+}
+
 type headCatalogHarvest struct {
-	store     database.Store
+	store     headHarvestStore
 	cat       *database.CatalogStore
 	lister    metadata.AuthorLister
 	throttles *metadata.ThrottleRegistry

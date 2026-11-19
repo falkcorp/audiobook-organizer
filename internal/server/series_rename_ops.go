@@ -311,7 +311,7 @@ func seriesRenameCore(p seriesRenameOpParams, env seriesRenameEnv) error {
 // (s.store, not s.Ops(): ServerOpsStore does not carry the series writers, and the
 // synchronous handlers wrote through the same full store) and its series caches.
 type headSeriesRename struct {
-	database.Store
+	seriesRenameStore
 	s *Server
 }
 
@@ -350,7 +350,7 @@ func (s *Server) seriesRenameDef() opsregistry.OperationDef {
 			if err := json.Unmarshal(rawParams, &p); err != nil {
 				return fmt.Errorf("series-rename: decode params: %w", err)
 			}
-			h := headSeriesRename{Store: s.storeForWiring(), s: s}
+			h := headSeriesRename{seriesRenameStore: s.storeForWiring(), s: s}
 			return seriesRenameCore(p, seriesRenameEnv{t7Env: t7HeadEnv(reporter, true), Store: h, Writer: h})
 		},
 	}

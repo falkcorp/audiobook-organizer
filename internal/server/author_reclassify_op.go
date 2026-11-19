@@ -103,6 +103,14 @@ type authorReclassifyStore interface {
 // undo journal row under the op's id, and the two caches the lists are served
 // from.
 type authorReclassifyWriter interface {
+	authorReclassifyStoreWrites
+	// InvalidateAuthorCaches drops the author-duplicates and authors list caches.
+	InvalidateAuthorCaches()
+}
+
+// authorReclassifyStoreWrites is the store-side half of the writer: the methods
+// HEAD's adapter takes from the ops store.
+type authorReclassifyStoreWrites interface {
 	CreateAuthor(name string) (*database.Author, error)
 	DeleteAuthor(id int) error
 	CreateNarrator(name string) (*database.Narrator, error)
@@ -110,8 +118,6 @@ type authorReclassifyWriter interface {
 	SetBookNarrators(bookID string, narrators []database.BookNarrator) error
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	CreateOperationChange(change *database.OperationChange) error
-	// InvalidateAuthorCaches drops the author-duplicates and authors list caches.
-	InvalidateAuthorCaches()
 }
 
 // authorReclassifyEnv is what the shared core takes from its shell (rules R2,
@@ -166,7 +172,7 @@ func authorReclassifyCore(ctx context.Context, authorID int, env authorReclassif
 // headAuthorReclassifyWriter is HEAD's write side: the ops store's own methods,
 // and the server's two caches, each called as HEAD's body called them.
 type headAuthorReclassifyWriter struct {
-	database.Store
+	authorReclassifyStoreWrites
 	s *Server
 }
 
@@ -182,7 +188,7 @@ func (s *Server) runAuthorReclassify(ctx context.Context, opID string, authorID 
 	env := authorReclassifyEnv{
 		t7Env:  t7Env{Live: true, OpID: opID},
 		Store:  store,
-		Writer: headAuthorReclassifyWriter{Store: store, s: s},
+		Writer: headAuthorReclassifyWriter{authorReclassifyStoreWrites: store, s: s},
 		StandDown: func(ctx context.Context, reason string) (t7Hold, error) {
 			release, err := s.holdReclassifyStandDown(ctx, opID, reason)
 			if err != nil {

@@ -206,7 +206,7 @@ func (s *Server) runBulkWriteBackOp(ctx context.Context, rawParams json.RawMessa
 		}
 	}
 	return bulkWriteBackCore(ctx, p, bulkWriteBackEnv{
-		t7Env:     t7HeadEnv(reporter, true),
+		t7Env:     t7HeadCheckpointing(t7HeadEnv(reporter, true), reporter),
 		Writer:    headBulkWriteBackWriter{headT7Activity: headT7Activity{w: s.activityWriter}, s: s},
 		StandDown: s.t7HeadMetadataStandDown(reporter),
 	})
