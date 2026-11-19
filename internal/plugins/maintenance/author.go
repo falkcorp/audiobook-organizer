@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -169,6 +170,9 @@ type authorSplitRun struct {
 	// (author_name); their credits and primary were not touched.
 	held     atomic.Int64
 	errCount atomic.Int64
+	// heldComposites is the set of composite author ids (int) that a held book
+	// still credits, so step 4 leaves them in place without counting an error.
+	heldComposites sync.Map
 	// wrote records that any author or book row changed, so the dedup cache is
 	// dropped even when the apply stops early.
 	wrote atomic.Bool
@@ -227,6 +231,9 @@ func (r *authorSplitRun) relinkBook(it *authorSplitItem) {
 	}
 	if locks.Locked(database.FieldKeyAuthorName) {
 		r.held.Add(1)
+		for _, pl := range it.plans {
+			r.heldComposites.Store(pl.composite.ID, struct{}{})
+		}
 		r.env.Log(slog.LevelInfo, fmt.Sprintf("author split: book %s left as it is, its author is locked by the user", book.ID))
 		return
 	}
@@ -629,6 +636,13 @@ func authorSplitScanCore(ctx context.Context, env authorSplitEnv) (retErr error)
 		}
 		if cerr := hold.Checkpoint(); cerr != nil {
 			return fmt.Errorf("author-split-scan stopped before deleting composite %q: %w", pl.composite.Name, cerr)
+		}
+		// A book the user locked still credits the composite, on purpose: that is
+		// the expected state, not an error. Splitting it later is one run after
+		// the user unlocks the author.
+		if _, held := run.heldComposites.Load(pl.composite.ID); held {
+			env.Log(slog.LevelInfo, fmt.Sprintf("Composite author %q left in place: a book credited to it has its author locked by the user", pl.composite.Name))
+			continue
 		}
 		if verr := database.VerifyAuthorUnlinked(store, pl.composite.ID); verr != nil {
 			env.Log(slog.LevelWarn, fmt.Sprintf("Composite author %q NOT deleted: %v", pl.composite.Name, verr))
