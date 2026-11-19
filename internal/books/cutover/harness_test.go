@@ -1,5 +1,5 @@
 // file: internal/books/cutover/harness_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 2f6d7b3a-71c4-4a7c-b6a3-1e4f2b9c0d05
 // last-edited: 2026-11-19
 
@@ -484,11 +484,6 @@ func copyTree(src, dst string) error {
 		}
 		return nil
 	})
-}
-
-// settingRows are the four encrypted rows and the blob, the keys M2 reads.
-func settingRows() []string {
-	return []string{"setting:" + blobRowName, "setting:basic_auth_password", "setting:google_books_api_key", "setting:hardcover_api_token", "setting:openai_api_key"}
 }
 
 // spec is books' storage spec for the build: the pre-cutover one (the four rows
