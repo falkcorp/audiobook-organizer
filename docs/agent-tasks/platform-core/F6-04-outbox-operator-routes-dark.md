@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F6-04-outbox-operator-routes-dark.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 939e1586-1e99-43dd-b555-319f2d5b85cb -->
 <!-- last-edited: 2026-11-19 -->
 
@@ -154,7 +154,7 @@ grep -rn 'type Logger interface' core/audit/ | wc -l                            
    `listEventTopics`; names coined here). The topics route reads `cat`; the consumers route reads `op`.
 5. Handlers: path values `{consumer}` (a declared consumer name) and `{seq}` (decimal `uint64`; 400 on a bad value).
    A retry or discard reads the topic of its letter with `Operator.DeadTopic` first (404 problem when there is none,
-   with nothing recorded); a purge reads the consumer's topic from the status. Then **record first** (the backuphttp
+   with nothing recorded); a purge reads the consumer's topic from the status and answers 404 the same way, with nothing recorded, when the status lists no topic for the consumer (unknown, or never ran). Before the first record, a request whose context is already done answers 503 without calling the audit logger. Then **record first** (the backuphttp
    pattern): write the audit record of the request with the route's action (`core.outbox.dead_retry`,
    `core.outbox.dead_discard`, `core.outbox.backlog_purge`), `Outcome: audit.Success`, `Target` naming the consumer,
    `Details` the topic and seq (purge: the topic; never the payload: 05-rbac §7.7), and only when `Record` returned nil
@@ -181,7 +181,7 @@ Permission, guard and 401 cells: each test is a table whose every cell calls `t.
 PR (see Goal, "No stage 13 yet"); F6-03 un-skips them when it mounts the package.
 
 The bodies of the cells are written in this PR (each is one `wantStage13(stage13Do(...))` call over the full matrix
-below, placed after the `t.Skip`); F6-03 removes the `t.Skip` lines and changes nothing else.
+below, placed after the `t.Skip`); F6-03 removes the `t.Skip` lines and also wires `stage13Do` (it builds its router with `Deps{Log}` only, which `Build` refuses once F4-08 adds the auth requirement) to F4-08's auth, RBAC and audit `Deps`, authenticating the caller the way stage 12 does.
 
 - `TestOutboxHTTP_DeadLetterRoutesNeedSystemManage` (list, retry, discard): no principal → 401; `core:system.view` only
   → 403; `core:system.manage` → let through.
