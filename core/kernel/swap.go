@@ -1,7 +1,7 @@
 // file: core/kernel/swap.go
-// version: 1.0.13
+// version: 1.0.14
 // guid: 2fd2ee78-9c6b-4e9f-82de-80def73f26d5
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package kernel
 
@@ -74,6 +74,11 @@ func (k *Kernel) storageOwners() []storage.OwnerSpec {
 		// Every reader of the owners reads this one function: P0a's swapper, the
 		// P2 open, the offline opens and the dry run.
 		owners = append(owners, configOwnerSpec(), secretsOwnerSpec())
+	}
+	if k.declaresCutover() {
+		// Core's half of M7 (core_level.go): registered when a manifest declares
+		// a cutover, so a build with none raises no level.
+		owners = append(owners, coreLevelOwnerSpec())
 	}
 	for _, e := range k.entries {
 		if DeclaresStorage(e.man) {
