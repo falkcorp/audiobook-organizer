@@ -1,5 +1,5 @@
 // file: core/internal/outboxhttp/env_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8a716b84-f689-41d2-9003-16a075efcb08
 // last-edited: 2026-11-19
 
@@ -8,6 +8,7 @@ package outboxhttp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -292,6 +293,21 @@ func (e *env) deadLetter(consumer, topic string, parts int, seq uint64, withCurs
 	if withCursors {
 		e.cursors(consumer, topic, parts)
 	}
+}
+
+// putRaw writes raw under key whatever it is, as a bad build or a corrupted disk
+// would: the dead-letter families are guarded, so the key is read for update
+// first.
+func (e *env) putRaw(key, raw []byte) {
+	e.t.Helper()
+	ctx := context.Background()
+	b := e.ks.NewIndexedBatch()
+	defer b.Close()
+	if _, err := b.GetForUpdate(ctx, e.ks, key); err != nil && !errors.Is(err, storage.ErrNotFound) {
+		e.t.Fatal(err)
+	}
+	mustDo(e.t, b.Set(key, raw))
+	mustDo(e.t, b.Commit(ctx, storage.Sync))
 }
 
 // cursors gives consumer a cursor on every partition of topic, at 0.

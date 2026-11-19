@@ -1,7 +1,7 @@
 // file: core/outbox/export_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: c3f2f7d8-6a5e-4c61-b8a8-0b2d0b9c4e11
-// last-edited: 2026-11-15
+// last-edited: 2026-11-19
 
 package outbox
 
@@ -20,6 +20,9 @@ type TestHooks struct {
 	BeforeFailCommit   func(consumer string, seq uint64)
 	AfterFailCommit    func(consumer string, seq uint64)
 	BeforeDeadCommit   func(consumer string, seq uint64)
+	// BeforePurgeCommit runs with one partition of a backlog purge staged, before
+	// its batch commits.
+	BeforePurgeCommit func(consumer string, pp int)
 	// BeforeRetentionBatch runs after a sweep decided what to delete, before the
 	// batch re-reads the cursors the decision rests on.
 	BeforeRetentionBatch func(topic string, pp int)
@@ -43,6 +46,7 @@ func (o *Outbox) SetTestHooks(h TestHooks) {
 	o.hooks.beforeFailCommit = h.BeforeFailCommit
 	o.hooks.afterFailCommit = h.AfterFailCommit
 	o.hooks.beforeDeadCommit = h.BeforeDeadCommit
+	o.hooks.beforePurgeCommit = h.BeforePurgeCommit
 	o.hooks.beforeRetentionBatch = h.BeforeRetentionBatch
 	o.hooks.afterDeadRead = h.AfterDeadRead
 	o.hooks.seedDeadCounts = h.SeedDeadCounts

@@ -1,7 +1,7 @@
 // file: core/outbox/operators_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 79b776b8-4d28-4cfd-addc-c1ac58312a45
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 package outbox_test
 
@@ -68,8 +68,8 @@ func seedDead(t testing.TB, r *rig, consumer string, seq uint64, withCursor bool
 func TestOutbox_ConcurrentDeadOperatorsActOnce(t *testing.T) {
 	type op func(ob *outbox.Outbox) error
 	const seq = 7
-	retry := func(ob *outbox.Outbox) error { return ob.RetryDead(context.Background(), consumerN, seq) }
-	discard := func(ob *outbox.Outbox) error { return ob.DiscardDead(context.Background(), consumerN, seq) }
+	retry := func(ob *outbox.Outbox) error { _, err := ob.RetryDead(context.Background(), consumerN, seq); return err }
+	discard := func(ob *outbox.Outbox) error { _, err := ob.DiscardDead(context.Background(), consumerN, seq); return err }
 	for _, shape := range []struct {
 		name       string
 		withCursor bool
@@ -149,9 +149,9 @@ func TestOutbox_DeadOperatorThatKeepsLosingGetsAClearConflict(t *testing.T) {
 	self.Store(r)
 	seedDead(t, r, consumerN, seq, true)
 
-	err := r.ob.RetryDead(context.Background(), consumerN, seq)
-	if !errors.Is(err, outbox.ErrDeadConflict) {
-		t.Fatalf("RetryDead = %v, want ErrDeadConflict", err)
+	topic, err := r.ob.RetryDead(context.Background(), consumerN, seq)
+	if !errors.Is(err, outbox.ErrDeadConflict) || topic != "" {
+		t.Fatalf("RetryDead = %q, %v, want no topic and ErrDeadConflict", topic, err)
 	}
 	if calls.Load() < 2 {
 		t.Fatalf("%d commit attempts, want the operator to have retried", calls.Load())
@@ -275,5 +275,88 @@ func TestOutbox_RefreshStatusFailureKeepsTheLastHealth(t *testing.T) {
 	r.ob.RefreshStatus(ctx)
 	if h := r.healthOf(); h.Status != health.StatusDegraded || h.Reason != "dead_letters" {
 		t.Fatalf("health after a failed refresh = %v %q, want it unchanged (degraded, dead_letters)", h.Status, h.Reason)
+	}
+}
+
+// seedDeadOn writes one dead letter of consumer on topic (no cursors).
+func seedDeadOn(t testing.TB, r *rig, consumer, topic string, seq uint64) {
+	t.Helper()
+	ctx := context.Background()
+	st := outboxstore.New(r.outKS)
+	now := time.Now()
+	b := st.OpenBatch()
+	defer b.Close()
+	must(t, st.StageDead(ctx, b, consumer, topic, seq, outboxstore.Dead{
+		Msg:  outboxstore.Msg{ID: "01J0000000000000000000BAT1", Key: "wayne-manor", Payload: rawJSON(t, Dispatch{Villain: "Joker"}), StagedAt: now, Producer: "core"},
+		Part: outboxstore.Partition("wayne-manor", 2), Token: "error", Attempts: 3, At: now,
+	}))
+	must(t, b.Commit(ctx, storage.Sync))
+}
+
+// DeadTopic names the letter the operations act on, and the operations answer
+// the topic of the letter they took: a consumer that changed topics between
+// builds can hold two letters at one seq, the operations take the first in key
+// order (topic, then seq), and all three agree on which that is.
+func TestOutbox_DeadOperationsNameTheTopicOfTheLetterTheyTake(t *testing.T) {
+	ctx := context.Background()
+	for _, kind := range []string{"retry", "discard"} {
+		t.Run(kind, func(t *testing.T) {
+			r := newRig(t, rigOpts{noExec: true, register: consumeInto(&recorder{}, consumerN)})
+			const seq = 5
+			seedDeadOn(t, r, consumerN, signalName, seq)
+			seedDeadOn(t, r, consumerN, noticeName, seq)
+			seedDeadOn(t, r, consumerN, noticeName, seq+1)
+			if signalName < noticeName {
+				t.Fatal("the fixture's topics sort the other way round")
+			}
+			// A letter of another consumer, and an undecodable one of this one at
+			// another seq, do not matter: DeadTopic reads keys and decodes only
+			// the letter it names.
+			seedDead(t, r, consumerN2, seq, false)
+			r.putRaw(outboxstore.DeadKey(consumerN, noticeName, seq+2), []byte(`j{"v":1,"id":`))
+
+			first, err := r.ob.DeadTopic(ctx, consumerN, seq)
+			must(t, err)
+			if first != noticeName {
+				t.Fatalf("DeadTopic = %q, want the first topic in key order, %q", first, noticeName)
+			}
+			var taken string
+			if kind == "retry" {
+				taken, err = r.ob.RetryDead(ctx, consumerN, seq)
+			} else {
+				taken, err = r.ob.DiscardDead(ctx, consumerN, seq)
+			}
+			must(t, err)
+			if taken != first {
+				t.Fatalf("%s took the letter of topic %q, DeadTopic named %q", kind, taken, first)
+			}
+			next, err := r.ob.DeadTopic(ctx, consumerN, seq)
+			must(t, err)
+			if next != signalName {
+				t.Fatalf("after the first letter went, DeadTopic = %q, want %q", next, signalName)
+			}
+		})
+	}
+}
+
+// DeadTopic refuses what the operations refuse: an unknown consumer and a
+// consumer with no letter at the seq are the two 404s.
+func TestOutbox_DeadTopicRefusals(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t, rigOpts{noExec: true, register: consumeInto(&recorder{}, consumerN)})
+	seedDead(t, r, consumerN, 1, true)
+	if _, err := r.ob.DeadTopic(ctx, "core.notify.nobody", 1); !errors.Is(err, outbox.ErrUnknownConsumer) {
+		t.Fatalf("DeadTopic for an unknown consumer = %v, want ErrUnknownConsumer", err)
+	}
+	if topic, err := r.ob.DeadTopic(ctx, consumerN, 2); !errors.Is(err, outbox.ErrDeadNotFound) || topic != "" {
+		t.Fatalf("DeadTopic for a missing seq = %q, %v, want ErrDeadNotFound", topic, err)
+	}
+	for _, op := range []func() (string, error){
+		func() (string, error) { return r.ob.RetryDead(ctx, consumerN, 2) },
+		func() (string, error) { return r.ob.DiscardDead(ctx, consumerN, 2) },
+	} {
+		if topic, err := op(); !errors.Is(err, outbox.ErrDeadNotFound) || topic != "" {
+			t.Fatalf("an operation on a missing seq = %q, %v, want no topic and ErrDeadNotFound", topic, err)
+		}
 	}
 }

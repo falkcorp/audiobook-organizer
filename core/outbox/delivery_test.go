@@ -1,7 +1,7 @@
 // file: core/outbox/delivery_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0c7d3a52-71f3-4d8b-a1de-6b9f42d0e5a3
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 package outbox_test
 
@@ -333,13 +333,17 @@ func TestOutbox_RetryDeadLetter(t *testing.T) {
 	})
 	fixed.Store(true)
 
-	if err := r.ob.RetryDead(context.Background(), "core.notify.nobody", dead.Seq); !errors.Is(err, outbox.ErrUnknownConsumer) {
+	if _, err := r.ob.RetryDead(context.Background(), "core.notify.nobody", dead.Seq); !errors.Is(err, outbox.ErrUnknownConsumer) {
 		t.Fatalf("retry for an unknown consumer: %v, want ErrUnknownConsumer", err)
 	}
-	if err := r.ob.RetryDead(context.Background(), consumerN, dead.Seq+99); !errors.Is(err, outbox.ErrDeadNotFound) {
+	if _, err := r.ob.RetryDead(context.Background(), consumerN, dead.Seq+99); !errors.Is(err, outbox.ErrDeadNotFound) {
 		t.Fatalf("retry of a missing dead letter: %v, want ErrDeadNotFound", err)
 	}
-	must(t, r.ob.RetryDead(context.Background(), consumerN, dead.Seq))
+	retried, err := r.ob.RetryDead(context.Background(), consumerN, dead.Seq)
+	must(t, err)
+	if retried != noticeName {
+		t.Fatalf("RetryDead named topic %q, want %q", retried, noticeName)
+	}
 	eventually(t, "the retried delivery", func() bool { return rn.count() == 1 })
 	got := rn.all()[0]
 	if got.ID != dead.IdempotencyKey || got.Villain != "Joker" || got.Attempt != 1 {
@@ -355,7 +359,7 @@ func TestOutbox_RetryDeadLetter(t *testing.T) {
 		t.Fatalf("dead letters after retry: %+v", l)
 	}
 	eventually(t, "core.outbox to recover", func() bool { return r.healthOf().Status == health.StatusUp })
-	if err := r.ob.RetryDead(context.Background(), consumerN, dead.Seq); !errors.Is(err, outbox.ErrDeadNotFound) {
+	if _, err := r.ob.RetryDead(context.Background(), consumerN, dead.Seq); !errors.Is(err, outbox.ErrDeadNotFound) {
 		t.Fatalf("second retry of the same dead letter: %v, want ErrDeadNotFound", err)
 	}
 }
@@ -385,10 +389,14 @@ func TestOutbox_DiscardDead(t *testing.T) {
 		}
 		return len(l) == 1
 	})
-	if err := r.ob.DiscardDead(context.Background(), consumerN, dead.Seq+1); !errors.Is(err, outbox.ErrDeadNotFound) {
+	if _, err := r.ob.DiscardDead(context.Background(), consumerN, dead.Seq+1); !errors.Is(err, outbox.ErrDeadNotFound) {
 		t.Fatalf("discard of a missing dead letter: %v", err)
 	}
-	must(t, r.ob.DiscardDead(context.Background(), consumerN, dead.Seq))
+	discarded, err := r.ob.DiscardDead(context.Background(), consumerN, dead.Seq)
+	must(t, err)
+	if discarded != noticeName {
+		t.Fatalf("DiscardDead named topic %q, want %q", discarded, noticeName)
+	}
 	l, _, err := r.ob.ListDead(context.Background(), "", 5)
 	must(t, err)
 	if len(l) != 0 {
