@@ -1,5 +1,5 @@
 // file: core/internal/outboxhttp/routes_test.go
-// version: 1.0.2
+// version: 1.0.4
 // guid: b91b2c32-bee4-4aac-a400-6fb0e871d709
 // last-edited: 2026-11-19
 
@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"iter"
 	"net/http"
 	"net/http/httptest"
@@ -65,6 +66,7 @@ type fakeOp struct {
 	letters  []outbox.DeadLetter
 	listNext string
 	listErr  error
+	pages    [][]outbox.DeadLetter // when set: the n-th ListDead call answers pages[n], with a next token but on the last
 
 	mu        sync.Mutex
 	gotAfter  string
@@ -76,8 +78,19 @@ func (f *fakeOp) ListDead(_ context.Context, after string, limit int) ([]outbox.
 	f.j.add("op:list")
 	f.mu.Lock()
 	f.gotAfter, f.gotLimit = after, limit
+	n := f.listCalls
 	f.listCalls++
 	f.mu.Unlock()
+	if f.pages != nil {
+		if n >= len(f.pages) {
+			return nil, "", nil
+		}
+		next := ""
+		if n < len(f.pages)-1 {
+			next = fmt.Sprintf("page-%d", n+1)
+		}
+		return f.pages[n], next, f.listErr
+	}
 	return f.letters, f.listNext, f.listErr
 }
 
@@ -1662,5 +1675,105 @@ func TestOutboxHTTP_TopicsAreSortedByName(t *testing.T) {
 	}
 	if want := []string{noticeTopic, signalTopic, busTopic}; !slices.Equal(names, want) {
 		t.Errorf("topics = %v, want %v", names, want)
+	}
+}
+
+// TestOutboxHTTP_DeadOperationsFindTheLetterBySeq: an operator names the consumer
+// and the seq, and the audit record names the topic of the letter the operation
+// took, not of the consumer's first letter: with letters on two topics (a
+// consumer that changed topics between builds) and the same seq on both, the
+// outbox takes the first in key order and so does the record.
+func TestOutboxHTTP_DeadOperationsFindTheLetterBySeq(t *testing.T) {
+	e := newEnv(t)
+	e.deadLetter(consumerMirror, noticeTopic, noticeParts, 3, false)
+	e.deadLetter(consumerMirror, signalTopic, signalParts, 7, false)
+	e.deadLetter(consumerMirror, noticeTopic, noticeParts, 5, false)
+	e.deadLetter(consumerMirror, signalTopic, signalParts, 5, false)
+	for _, c := range []struct {
+		seq   uint64
+		topic string
+	}{{7, signalTopic}, {3, noticeTopic}, {5, noticeTopic}} {
+		if _, err := e.api.discard(context.Background(), deadIn(bruce(), consumerMirror, c.seq)); err != nil {
+			t.Fatal(err)
+		}
+		var hit []audit.Record
+		for _, r := range e.records() {
+			if detailInt(t, r, "seq") == int(c.seq) {
+				hit = append(hit, r)
+			}
+		}
+		if len(hit) != 1 || hit[0].Details["topic"] != c.topic {
+			t.Errorf("discard of seq %d recorded %+v, want one naming topic %s", c.seq, hit, c.topic)
+		}
+	}
+	// The seq both topics held went from the first topic: the other is what is left.
+	rows := e.deadRows()
+	if len(rows) != 1 || rows[0].Topic != signalTopic || rows[0].Seq != 5 {
+		t.Errorf("dead letters left = %+v, want only %s seq 5", rows, signalTopic)
+	}
+}
+
+// TestOutboxHTTP_DeadTopicReadsEveryPage: the letter may be past the first page of
+// the consumer's letters, and the walk stops at the end of the pages and at the
+// first letter of another consumer.
+func TestOutboxHTTP_DeadTopicReadsEveryPage(t *testing.T) {
+	const consumer = "core.notify.deliver"
+	mine := func(topic string, seq uint64) outbox.DeadLetter {
+		return outbox.DeadLetter{Consumer: consumer, Topic: topic, Seq: seq}
+	}
+	rg := newRig()
+	rg.op.pages = [][]outbox.DeadLetter{{mine(noticeTopic, 1), mine(noticeTopic, 2)}, {mine(signalTopic, 9)}}
+	if _, err := rg.api.retry(context.Background(), deadIn(bruce(), consumer, 9)); err != nil {
+		t.Fatal(err)
+	}
+	if recs := rg.rec.recorded(); len(recs) != 1 || recs[0].Details["topic"] != signalTopic {
+		t.Errorf("records = %+v, want the topic of the letter on page two", recs)
+	}
+	if rg.op.listCalls != 2 {
+		t.Errorf("%d list reads, want 2", rg.op.listCalls)
+	}
+	if rg.op.gotAfter != "page-1" || rg.op.gotLimit != maxDeadPage {
+		t.Errorf("the second read asked after %q for %d, want the store's token and a full page", rg.op.gotAfter, rg.op.gotLimit)
+	}
+
+	// A letter of another consumer ends the walk: nothing past it is this one's.
+	rg = newRig()
+	rg.op.pages = [][]outbox.DeadLetter{{mine(noticeTopic, 1), {Consumer: "core.notify.zeta", Topic: noticeTopic, Seq: 9}}, {mine(signalTopic, 9)}}
+	if _, err := rg.api.discard(context.Background(), deadIn(bruce(), consumer, 9)); err != nil {
+		t.Fatal(err)
+	}
+	if recs := rg.rec.recorded(); len(recs) != 1 || recs[0].Details["topic"] != nil {
+		t.Errorf("records = %+v, want no topic", recs)
+	}
+	if rg.op.listCalls != 1 {
+		t.Errorf("%d list reads, want 1 (the walk stops at another consumer's letter)", rg.op.listCalls)
+	}
+
+	// The pages end without the seq.
+	rg = newRig()
+	rg.op.pages = [][]outbox.DeadLetter{{mine(noticeTopic, 1)}, {mine(noticeTopic, 2)}}
+	if _, err := rg.api.discard(context.Background(), deadIn(bruce(), consumer, 9)); err != nil {
+		t.Fatal(err)
+	}
+	if rg.op.listCalls != 2 {
+		t.Errorf("%d list reads, want 2", rg.op.listCalls)
+	}
+}
+
+// TestOutboxHTTP_CursorFilterHashIsPinned: a cursor is handed to a client and
+// comes back on a later request, possibly to the next build, so what makes a
+// cursor this route's (the FNV-1a hash of the route's name) is part of the wire
+// contract. A cursor minted here, from the documented name and independently of
+// the route's own helper, is accepted.
+func TestOutboxHTTP_CursorFilterHashIsPinned(t *testing.T) {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte("core.outbox.dead"))
+	key := outboxstore.DeadKey(consumerDeliver, noticeTopic, 3)
+	rg := newRig()
+	if _, err := rg.api.listDead(context.Background(), listIn(10, httpapi.EncodeCursor(key, h.Sum64()))); err != nil {
+		t.Fatalf("a cursor of the route's documented hash was refused: %v", err)
+	}
+	if want := base64.RawURLEncoding.EncodeToString(key); rg.op.gotAfter != want {
+		t.Errorf("went on after %q, want %q", rg.op.gotAfter, want)
 	}
 }
