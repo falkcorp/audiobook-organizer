@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_split_apply_test.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 4e8a1c73-b5d2-49f6-8a0e-d37c9f12b6a5
 // last-edited: 2026-11-19
 
@@ -524,4 +524,55 @@ func TestAuthorSplitScan_ApplyStopsBeforeListingWhenLeaseIsLost(t *testing.T) {
 	_, releases, inv := d.snapshot()
 	require.Equal(t, 1, releases)
 	require.Equal(t, 1, inv, "the parts were created before the stop; the cache must be dropped")
+}
+
+// A store that cannot write a book's credits and row as one commit is refused
+// ONCE, before anything is written: no part of any composite is created, no lock
+// is taken and no composite is touched. Refusing per book would first create every
+// part author and then fail each book, leaving rows nothing credits.
+func TestAuthorSplitScan_ApplyOnAStoreWithoutTheCreditsCommitIsRefusedBeforeAnyWrite(t *testing.T) {
+	st := newSplitRelinkStore(t)
+	c1, err := st.CreateAuthor("Bruce Wayne & Dick Grayson")
+	require.NoError(t, err)
+	c2, err := st.CreateAuthor("Selina Kyle & Tim Drake")
+	require.NoError(t, err)
+	mkSplitBooks(t, st, c1.ID, 2)
+	mkSplitBooks(t, st, c2.ID, 1)
+	before, err := st.GetAllAuthors()
+	require.NoError(t, err)
+	d := newSplitDeps(noCreditsStore{Store: st, pebble: st})
+
+	rep, err := runSplit(t, d, `{"dry_run":false}`)
+
+	require.ErrorIs(t, err, database.ErrBookCreditsUnsupported)
+	require.ErrorContains(t, err, "author-split-scan")
+	after, gerr := st.GetAllAuthors()
+	require.NoError(t, gerr)
+	require.Len(t, after, len(before), "an author row was created before the refusal")
+	for _, name := range []string{"Bruce Wayne", "Dick Grayson", "Selina Kyle", "Tim Drake"} {
+		part, perr := st.GetAuthorByName(name)
+		require.NoError(t, perr)
+		require.Nil(t, part, "part %q was created by a run that could not credit it", name)
+	}
+	for _, c := range []*database.Author{c1, c2} {
+		kept, perr := st.GetAuthorByID(c.ID)
+		require.NoError(t, perr)
+		require.NotNil(t, kept)
+	}
+	acquires, _, invalidations := d.snapshot()
+	require.Empty(t, acquires, "the scan stand-down was taken for a run that refused")
+	require.Zero(t, invalidations, "the duplicate-author cache was dropped though nothing was written; logs: %v", rep.logs)
+}
+
+// The refusal belongs to the apply: a dry run only reads and still lists the
+// composites on a store without the credits commit.
+func TestAuthorSplitScan_DryRunOnAStoreWithoutTheCreditsCommitStillPreviews(t *testing.T) {
+	st := newSplitRelinkStore(t)
+	c, err := st.CreateAuthor("Bruce Wayne & Dick Grayson")
+	require.NoError(t, err)
+	mkSplitBooks(t, st, c.ID, 1)
+
+	_, err = runSplit(t, newSplitDeps(noCreditsStore{Store: st, pebble: st}), `{"dry_run":true}`)
+
+	require.NoError(t, err)
 }
