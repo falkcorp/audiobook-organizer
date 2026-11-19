@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill.go
-// version: 1.8.3
+// version: 1.9.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/titleutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 type titleBackfillParams struct {
@@ -36,6 +37,10 @@ type pendingUpdate struct {
 	newTitle string
 }
 
+// titleBackfillHelp is the def's Description, which the native kind carries as
+// its Help.
+const titleBackfillHelp = "Scans all books and removes leading chapter/track markers from Book.Title (e.g. '(76/85) Tarkin' → 'Tarkin'). Default dry-run previews changes; set dryRun=false to apply."
+
 func (p *Plugin) titleBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.title-backfill",
@@ -43,7 +48,7 @@ func (p *Plugin) titleBackfillDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Strip chapter prefixes from book titles",
-		Description:     "Scans all books and removes leading chapter/track markers from Book.Title (e.g. '(76/85) Tarkin' → 'Tarkin'). Default dry-run previews changes; set dryRun=false to apply.",
+		Description:     titleBackfillHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.title-backfill",
@@ -68,13 +73,86 @@ func (p *Plugin) runTitleBackfill(ctx context.Context, raw json.RawMessage, repo
 		return err
 	}
 
-	store := p.deps.OpsStore()
+	env := titleBackfillEnv{t6g7Env: t6g7HeadEnv(reporter, !dryRun)}
+	if store := p.deps.OpsStore(); store != nil {
+		env.Store = store
+		env.Writer = store
+	}
+	return titleBackfillCore(ctx, dryRun, env)
+}
+
+// titleBackfillKind is rule R3's kind for the def above.
+const titleBackfillKind = tasks.Kind("books.maintenance.title-backfill")
+
+// titleBackfillStore is the reads the scan makes.
+type titleBackfillStore interface {
+	// CountPrimaryBooks is the O(1) counter that gives the progress bar its total.
+	CountPrimaryBooks() (int, error)
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+}
+
+// titleBackfillWriter is the one write: the title, under the book's write lock.
+type titleBackfillWriter interface {
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+}
+
+// titleBackfillEnv is what the core takes from its shell.
+type titleBackfillEnv struct {
+	t6g7Env
+	Store  titleBackfillStore
+	Writer titleBackfillWriter
+}
+
+// titleBackfillNative is the native kind. Preview is the dry run HEAD's default
+// was; Live writes the stripped titles.
+//
+// The retitle loop is sequential, as HEAD's was: one ModifyBook per book that
+// needs a new title, in listing order. Parallelism is Sequential to keep R4's
+// 1:1; a pool over disjoint books is the follow-up in todo.d.
+func (p *Plugin) titleBackfillNative(deps t6g7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g7Common(titleBackfillKind, sched)
+	c.Title = "Strip chapter prefixes from book titles"
+	c.Help = titleBackfillHelp
+	// ModifyBook writes the whole row: books, the metadata cache stamp, the ident
+	// rows and the author join (the shared row, kinds_resources.go).
+	c.Effects = tasks.Writes(t6g7Res(t6WriterResources["ModifyBook"]...)...)
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.title-backfill")
+	c.Timeout = 30 * time.Minute
+	return tasks.Task(titleBackfillKind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			// HEAD's only params are the dry-run switches, which the run's mode decides.
+			if err := t6g7RefuseModeKeys(titleBackfillKind, raw); err != nil {
+				return struct{}{}, err
+			}
+			live := rc.Mode() == tasks.ModeLive
+			env := titleBackfillEnv{t6g7Env: t6g7NativeEnv(rc)}
+			if deps.Store != nil {
+				env.Store = deps.Store
+			}
+			if live {
+				w, err := t6g7NewWriter(titleBackfillKind, deps, rc)
+				if err != nil {
+					return struct{}{}, err
+				}
+				env.Writer = w
+			}
+			return struct{}{}, titleBackfillCore(rc.Context(), !live, env)
+		},
+	})
+}
+
+// titleBackfillCore is the body of runTitleBackfill.
+func titleBackfillCore(ctx context.Context, dryRun bool, env titleBackfillEnv) error {
+	store := env.Store
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
 
 	if dryRun {
-		_ = reporter.Log(slog.LevelInfo, "DRY RUN — no changes will be written")
+		env.Log(slog.LevelInfo, "DRY RUN — no changes will be written")
 	}
 
 	// Phase 1: get real total upfront — O(1) counter lookup in PebbleDB.
@@ -83,7 +161,7 @@ func (p *Plugin) runTitleBackfill(ctx context.Context, raw json.RawMessage, repo
 	if countErr != nil || totalBooks <= 0 {
 		totalBooks = 0
 	}
-	_ = reporter.UpdateProgress(0, totalBooks, "Phase 1/2: scanning titles…")
+	env.Progress(0, totalBooks, "Phase 1/2: scanning titles…")
 
 	var scanned, skipped int
 	var toUpdate []pendingUpdate
@@ -105,7 +183,7 @@ func (p *Plugin) runTitleBackfill(ctx context.Context, raw json.RawMessage, repo
 		case cleaned == book.Title:
 			skipped++
 		case cleaned == "":
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+			env.Log(slog.LevelWarn, fmt.Sprintf(
 				"book %s: title %q stripped to empty, skipping", book.ID, book.Title))
 			skipped++
 		default:
@@ -118,7 +196,7 @@ func (p *Plugin) runTitleBackfill(ctx context.Context, raw json.RawMessage, repo
 		if total == 0 {
 			total = scanned
 		}
-		_ = reporter.UpdateProgress(scanned, total,
+		env.Progress(scanned, total,
 			fmt.Sprintf("Phase 1/2: scanned %d/%d — %d titles to fix", scanned, total, len(toUpdate)))
 	}
 
@@ -131,12 +209,12 @@ func (p *Plugin) runTitleBackfill(ctx context.Context, raw json.RawMessage, repo
 			suffix = " (dry run)"
 		}
 		result := fmt.Sprintf("Scanned %d books: 0 titles need updating, %d skipped%s", scanned, skipped, suffix)
-		_ = reporter.Log(slog.LevelInfo, result)
-		_ = reporter.UpdateProgress(1, 1, result)
+		env.Log(slog.LevelInfo, result)
+		env.Progress(1, 1, result)
 		return nil
 	}
 
-	_ = reporter.UpdateProgress(0, toChange,
+	env.Progress(0, toChange,
 		fmt.Sprintf("Phase 2/2: updating %d titles…", toChange))
 
 	var changed, changedUnder, errCount int
@@ -145,28 +223,28 @@ func (p *Plugin) runTitleBackfill(ctx context.Context, raw json.RawMessage, repo
 			return ctx.Err()
 		}
 
-		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+		env.Log(slog.LevelInfo, fmt.Sprintf(
 			"book %s: %q → %q", u.book.ID, u.book.Title, u.newTitle))
 
 		if !dryRun {
 			// u.book is Core (slim); retitleBook re-reads the full row and
 			// writes only Title, so nothing else on the row is disturbed.
-			if err := retitleBook(store, u.book.ID, u.book.Title, u.newTitle); err != nil {
+			if err := retitleBook(env.Writer, u.book.ID, u.book.Title, u.newTitle); err != nil {
 				if errors.Is(err, errRetitleChangedUnderneath) {
 					changedUnder++
-					_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+					env.Log(slog.LevelInfo, fmt.Sprintf(
 						"book %s: title changed underneath, not retitled: %v", u.book.ID, err))
 					continue
 				}
 				errCount++
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+				env.Log(slog.LevelWarn, fmt.Sprintf(
 					"book %s: retitle failed: %v", u.book.ID, err))
 				continue
 			}
 		}
 		changed++
 
-		_ = reporter.UpdateProgress(i+1, toChange,
+		env.Progress(i+1, toChange,
 			fmt.Sprintf("Phase 2/2: updated %d/%d titles", i+1, toChange))
 	}
 
@@ -176,8 +254,8 @@ func (p *Plugin) runTitleBackfill(ctx context.Context, raw json.RawMessage, repo
 	}
 	result := fmt.Sprintf("Scanned %d books: %d titles updated, %d skipped, %d changed underneath, %d errors%s",
 		scanned, changed, skipped, changedUnder, errCount, suffix)
-	_ = reporter.Log(slog.LevelInfo, result)
-	_ = reporter.UpdateProgress(toChange, toChange, result)
+	env.Log(slog.LevelInfo, result)
+	env.Progress(toChange, toChange, result)
 
 	if errCount > 0 {
 		return fmt.Errorf("%d retitle errors (see op log for details)", errCount)
