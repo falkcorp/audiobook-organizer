@@ -1,7 +1,7 @@
 // file: internal/server/identification_advance_op.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 96facb01-98fa-4ebd-b06d-1422569abedd
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 //
 // Registers identification.advance (spec 02 PR 14): the v2 ADAPTER around
 // the v3-shaped driver body in internal/identification.

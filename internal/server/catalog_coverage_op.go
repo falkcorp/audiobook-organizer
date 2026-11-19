@@ -1,7 +1,7 @@
 // file: internal/server/catalog_coverage_op.go
-// version: 1.1.3
+// version: 1.2.0
 // guid: 5b8e2c61-0d7f-4a93-b1c4-e9a3f6d82b07
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 //
 // Registers catalog.coverage-report, the read-only measurement that precedes
 // the local-catalog matching stage (02-filter-identification-pipeline.md

@@ -1,7 +1,7 @@
 // file: internal/server/catalog_harvest_op.go
-// version: 1.8.4
+// version: 1.9.0
 // guid: 3e6b9d24-7a1c-4f85-b2e0-5c8d1a4f7e93
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 //
 // Registers catalog.harvest-authors, phase P1 of the author catalog design
 // (.claude/notes/catalog-wanted-requests-design-2026-10-01.md, Draft 3).

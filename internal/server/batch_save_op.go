@@ -1,5 +1,5 @@
 // file: internal/server/batch_save_op.go
-// version: 1.15.2
+// version: 1.16.0
 // guid: 3f2a1b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
 // last-edited: 2026-11-18
 //

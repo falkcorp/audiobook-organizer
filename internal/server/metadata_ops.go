@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops.go
-// version: 1.44.1
+// version: 1.45.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
 // last-edited: 2026-11-18
 //

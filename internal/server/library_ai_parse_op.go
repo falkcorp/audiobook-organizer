@@ -1,7 +1,7 @@
 // file: internal/server/library_ai_parse_op.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: 60e01771-b827-4cf4-b3db-0b4b00bc9389
-// last-edited: 2026-11-07
+// last-edited: 2026-11-18
 
 package server
 

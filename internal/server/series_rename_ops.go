@@ -1,7 +1,7 @@
 // file: internal/server/series_rename_ops.go
-// version: 1.8.5
+// version: 1.9.0
 // guid: f9b6a9b0-62cc-40eb-8c93-e281b6dce050
-// last-edited: 2026-11-16
+// last-edited: 2026-11-18
 
 // series_rename_ops registers entities.series-rename, the queued operation
 // behind PUT /series/:id/name and PATCH /series/:id. Both endpoints used to
