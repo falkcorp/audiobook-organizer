@@ -1,5 +1,5 @@
 // file: core/kernel/config_boot.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0e3db6c6-c5ae-4f54-adaf-6fd7b728c89e
 // last-edited: 2026-11-18
 
@@ -7,19 +7,25 @@ package kernel
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/health"
+	"github.com/falkcorp/mediacore/internal/restoreswap"
 	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/secrets"
 )
 
 // The config phases of 06 section 6.5.1 as labels on
 // <namespace>_kernel_boot_phase_seconds. They exist only when
 // Config.CoreConfigBoot is set (06 section 6.9's one label set lists them).
 const (
-	phaseP0 = "P0"
-	phaseP3 = "P3"
+	phaseP0  = "P0"
+	phaseP3  = "P3"
+	phaseP4d = "P4d"
 )
 
 // disabledByConfig is ModuleState.Disabled for a module that a layer other
@@ -147,4 +153,148 @@ func (cb *configBoot) close(ctx context.Context) error {
 		return nil
 	}
 	return cb.store.Close(ctx)
+}
+
+// bindCoreStores is the start of P4b under Config.CoreConfigBoot (06 section
+// 6.5.1), before the migration list can run a Cutover step:
+//
+//  1. secrets.Open (05-config 2.4 step 1): the keyring is read or created beside
+//     the state directory and its header carries the store's install marker;
+//     ResetBoot is set on the reset boot of a factory reset only (the journal
+//     reads set_aside, not applied), so the header is rewritten exactly once;
+//  2. that reset boot's journal is marked applied right after, not after P4a:
+//     a crash between the fresh install and the keyring leaves set_aside, and
+//     the next boot repeats both (DATA7-17; swapAfter skips P4a under the gate);
+//  3. the native config store over c/config/ becomes the config importer's
+//     target, and the secret store its secret stager, so M2's writes reach both;
+//  4. the two Importers P4b hands every Cutover func are bound.
+func (k *Kernel) bindCoreStores(ctx context.Context) error {
+	cb, db := k.cfgBoot, k.store.db
+	keyFile, allowRegen, err := cb.secretsSettings()
+	if err != nil {
+		return err
+	}
+	ks, err := openSecrets(ctx, secretsInput{
+		DB: db, StateDir: k.cfg.StateDir, AppID: k.cfg.AppID,
+		ResetBoot: k.swap != nil && k.swap.out.Boot == restoreswap.BootReset,
+		KeyFile:   keyFile, AllowKeyRegen: allowRegen,
+		Logger: k.coreLog("secrets"), Now: bootClock(ctx),
+	})
+	if err != nil {
+		return err
+	}
+	k.sec = ks
+	if k.swap != nil && k.swap.out.Boot == restoreswap.BootReset {
+		if err := k.swap.s.ResetApplied(ctx, k.swap.out.ID); err != nil {
+			return fmt.Errorf("kernel: swap journal %s after secrets.Open: %w", k.swap.out.ID, err)
+		}
+	}
+	if _, err := cb.buildConfigStore(db); err != nil {
+		return err
+	}
+	cb.store.SetImportSecrets(ks.store)
+	k.importerCfg, k.importerSec = cb.store.Importer(), ks.store.Importer()
+	return nil
+}
+
+// secretsSettings is core.secrets.key_file and core.secrets.allow_key_regen as
+// the layers resolve them (both reload "restart": read once, here).
+func (cb *configBoot) secretsSettings() (keyFile string, allowRegen bool, err error) {
+	for p, dst := range map[config.Path]any{"core.secrets.key_file": &keyFile, "core.secrets.allow_key_regen": &allowRegen} {
+		ks, ok := cb.store.Lookup(p)
+		if !ok {
+			return "", false, fmt.Errorf("kernel: config: %s is not declared", p)
+		}
+		if err := json.Unmarshal(ks.Effective, dst); err != nil {
+			return "", false, fmt.Errorf("kernel: config: %s: %w", p, err)
+		}
+	}
+	return keyFile, allowRegen, nil
+}
+
+// attachCoreConfig is P4d (06 section 6.5.1) for config: the secret resolver
+// binds, then Attach reads the DB layer once. It runs only for a boot that
+// opened a store; the audit store the committer records to was built at P4a.
+func (k *Kernel) attachCoreConfig(ctx context.Context) error {
+	if k.sec == nil {
+		return nil
+	}
+	if _, err := k.cfgBoot.attachConfig(ctx, k.audit, k.sec.store, k.sec.store); err != nil {
+		return err
+	}
+	k.reportConfigHealth()
+	return nil
+}
+
+// registerCoreStoreHealth is P4c's part of the gate: core.secrets reports the
+// store's real state (it starts Up in buildHealth), and core.config registers
+// push-only; its tokens are pushed once P4d attached the DB layer.
+func (k *Kernel) registerCoreStoreHealth(ctx context.Context) error {
+	if k.sec != nil {
+		reportSecretsHealth(ctx, k.reporters.Secrets, k.sec.store)
+	}
+	if k.cfgBoot == nil {
+		return nil
+	}
+	rep, err := k.healthReg.Register(health.Check{ID: componentConfig, Title: "Configuration"})
+	if err != nil {
+		return fmt.Errorf("kernel: health: %w", err)
+	}
+	k.reporters.Config = rep
+	rep.Report(health.Result{Status: health.StatusUp})
+	return nil
+}
+
+// reportConfigHealth pushes core.config's tokens (configBoot.HealthTokens: the
+// store's and the kernel's): Up with none, else Degraded with the first as the
+// Reason and all of them in the Detail (a Result carries one Reason, as
+// core.secrets' does).
+func (k *Kernel) reportConfigHealth() {
+	if k.reporters.Config == nil {
+		return
+	}
+	tokens := k.cfgBoot.HealthTokens()
+	if len(tokens) == 0 {
+		k.reporters.Config.Report(health.Result{Status: health.StatusUp})
+		return
+	}
+	k.reporters.Config.Report(health.Result{Status: health.StatusDegraded, Reason: tokens[0], Detail: strings.Join(tokens, ", ")})
+}
+
+// coreStoreMetrics registers the config and secrets instruments on core's
+// scopes once P5 built the Provider (05-config 1.8, 2.8).
+func (k *Kernel) coreStoreMetrics() error {
+	if k.cfgBoot != nil {
+		if _, err := k.cfgBoot.configMetrics(k.provider); err != nil {
+			return err
+		}
+	}
+	if k.sec != nil {
+		if _, err := secretsMetrics(k.provider, k.sec.store); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// secretsScope is a module's Deps.Secrets: names under modules.<id>.; the zero
+// scope, which refuses every name, where no secret store is open.
+func (k *Kernel) secretsScope(id module.ID) secrets.Scope {
+	if k.sec == nil {
+		return secrets.Scope{}
+	}
+	return k.sec.store.Scope("modules." + string(id) + ".")
+}
+
+// closeSecrets closes the secret store before the store it writes through.
+func (k *Kernel) closeSecrets() error {
+	if k.sec == nil {
+		return nil
+	}
+	s := k.sec
+	k.sec = nil
+	if err := s.close(); err != nil {
+		return fmt.Errorf("kernel: secrets close: %w", err)
+	}
+	return nil
 }

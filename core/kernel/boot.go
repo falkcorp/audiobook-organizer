@@ -1,5 +1,5 @@
 // file: core/kernel/boot.go
-// version: 1.0.17
+// version: 1.0.18
 // guid: 0c2d259d-1f0d-46d8-a42f-e27deea9ec56
 // last-edited: 2026-11-18
 
@@ -111,6 +111,12 @@ func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 		if err := k.phase(phaseP4c, func() error { return k.buildStores(ctx) }); err != nil {
 			return nil, err
 		}
+		// P4d (06 §6.5.1): the config store reads its DB layer once.
+		if k.cfgBoot != nil {
+			if err := k.phase(phaseP4d, func() error { return k.attachCoreConfig(ctx) }); err != nil {
+				return nil, err
+			}
+		}
 	}
 	// The fake migration of the unit-lifecycle job (fakemigration_hook.go):
 	// no step exists in any build without the unitlifecycle tag. It runs
@@ -125,6 +131,9 @@ func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 		return nil, err
 	}
 	if err := k.storageMetrics(ctx); err != nil {
+		return nil, err
+	}
+	if err := k.coreStoreMetrics(); err != nil {
 		return nil, err
 	}
 	// The audit store's instruments, once P5 built the Provider the store
@@ -583,5 +592,8 @@ func (k *Kernel) buildStores(ctx context.Context) error {
 		return err
 	}
 	k.healthReg, k.reporters = reg, rep
+	if err := k.registerCoreStoreHealth(ctx); err != nil {
+		return err
+	}
 	return k.buildTaskStores(ctx)
 }

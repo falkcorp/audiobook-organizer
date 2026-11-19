@@ -1,5 +1,5 @@
 // file: core/kernel/config.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 1f6c9e2a-7b40-4d85-9a3e-5c2b8d7f0e14
 // last-edited: 2026-11-18
 
@@ -27,14 +27,15 @@ import (
 	"github.com/falkcorp/mediacore/storage"
 )
 
-// The kernel's config wiring (05-config §1.4, 06 P0/P3/P4b-d). It is DARK:
-// nothing in boot calls it, and storageOwners does not list
-// configOwnerSpec, so ABO's boot reads no DB layer through core and writes no
-// c/config/ row. F3-07 wires it; the gate is the presence of that wiring, not
-// a flag (09 §9.2.8). The operator layers that reach it are the file, the
-// environment and the explicitly set flags (F3-02). CheckConfig, the engine
-// of the offline config check, is the one exported entry: it registers the
-// same core sections and reads only the operator layers.
+// The kernel's config wiring (05-config §1.4, 06 P0/P3/P4b-d), run by boot.go
+// behind Config.CoreConfigBoot (config_boot.go: P0 bootCoreConfig, P3
+// loadCoreConfig, P4b bindCoreStores, P4d attachCoreConfig). The gate is off
+// for ABO, so its boot reads no DB layer through core and writes no c/config/
+// row; slice (e) of F3-07 deletes the gate with R1Values (09 §9.2.8). The
+// operator layers that reach it are the file, the environment and the
+// explicitly set flags (F3-02). CheckConfig, the engine of the offline config
+// check, is the one exported entry: it registers the same core sections and
+// reads only the operator layers.
 
 const (
 	stateDirKey    config.Path = "core.paths.state_dir"
@@ -63,9 +64,16 @@ type configInput struct {
 	Passthrough     func(config.Path) bool
 	EnvBindings     []config.EnvName
 	Retired         []config.RetiredName
-	OwnerSet        func() bool
-	Logger          *slog.Logger
-	Now             func() time.Time
+	// OwnerVerifier is true when the app configured an owner-proof verifier
+	// (F4's app.Options.Authenticators; nothing sets it before then). OwnerSet
+	// is then required: config checks ProtectOwner with Actor.Owner only once an
+	// owner is set, and a nil OwnerSet means none is, so ProtectOwner keys would
+	// be guarded as ProtectAdmin while the app believes owner proof protects them
+	// (F3-01's seam item 2).
+	OwnerVerifier bool
+	OwnerSet      func() bool
+	Logger        *slog.Logger
+	Now           func() time.Time
 	// Mkdir creates a state directory candidate; nil = os.MkdirAll(d, 0o700).
 	Mkdir func(string) error
 }
@@ -94,6 +102,9 @@ type configBoot struct {
 // each manifest's DefaultEnabled; Boot reads the boot record from exactly
 // that directory. It touches no storage.
 func bootConfig(ctx context.Context, in configInput) (cb *configBoot, err error) {
+	if in.OwnerVerifier && in.OwnerSet == nil {
+		return nil, errors.New("kernel: config: an owner verifier is configured and config.Options.OwnerSet is nil: ProtectOwner keys would be checked as ProtectAdmin; the app must say whether an owner is set")
+	}
 	prefix := in.EnvPrefix
 	if prefix == "" {
 		prefix = strings.ToUpper(in.AppID)
