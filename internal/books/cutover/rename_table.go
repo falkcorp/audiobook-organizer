@@ -1,7 +1,7 @@
 // file: internal/books/cutover/rename_table.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5f0dc15e-6a07-4d86-8d7f-28b5bd6aa771
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package cutover
 
@@ -803,6 +803,17 @@ func RetiredConfigNames() []config.RetiredName {
 		}
 	}
 	return out
+}
+
+// ConfigEnvBindings is the list app.Options.ConfigEnvBindings takes (F3-07
+// wires it): the two OPENAI ecosystem names the app binds onto the ai/openai
+// instance's passthrough paths (05-config section 1.12.4). The four OTEL names
+// are bound by core's own metrics and tracing sections, so they are not here.
+func ConfigEnvBindings() []config.EnvName {
+	return []config.EnvName{
+		{Name: "OPENAI_API_KEY", Path: "integrations.ai.openai.api_key"},
+		{Name: "OPENAI_BASE_URL", Path: "integrations.ai.openai.base_url"},
+	}
 }
 
 // CanonicalEnvNames is every canonical env name the deploy files may set

@@ -120,7 +120,7 @@ var errNotBooks = errors.New("books: not the module books.Module returned")
 // applyEnvAuthoritativeConfig), and Register refuses a boot whose stored
 // settings turn it the other way (errABSFlagDrift).
 func Module() module.Module {
-	return &booksModule{abs: config.AppConfig.ABSAPIEnabled}
+	return &booksModule{abs: config.AppConfig.ABSAPIEnabled, flip: flipDeclared}
 }
 
 // booksModule is books' module.Module.
