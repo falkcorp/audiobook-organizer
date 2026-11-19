@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_repair.go
-// version: 1.5.3
+// version: 1.6.0
 // guid: 13bedd46-9b61-41a2-b791-36813d7ffcb9
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -20,8 +20,8 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // titleRepairParams controls maintenance.title-repair. Dry-run is the default:
@@ -141,6 +141,10 @@ func decideTitleRepair(in titleRepairBook, agreedFn func(dirPath string) (agreed
 	return titleRepairDecision{Action: actionRetitle, DirPath: dir, MixedDir: mixed, NewTitle: agreed}
 }
 
+// titleRepairHelp is the def's Description, which the native kind carries as its
+// Help.
+const titleRepairHelp = "Re-derives each multi-file book's title via the CONS-17b all-chapters-agree check and repairs stored titles that are per-chapter tag residue (e.g. 'Big Finish Ident'). Skips single-file books and any title with override/fetched provenance. Default dry-run previews old→new; set apply=true to write."
+
 func (p *Plugin) titleRepairDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.title-repair",
@@ -148,7 +152,7 @@ func (p *Plugin) titleRepairDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Repair leaked chapter-tag titles (CONS-17b)",
-		Description:     "Re-derives each multi-file book's title via the CONS-17b all-chapters-agree check and repairs stored titles that are per-chapter tag residue (e.g. 'Big Finish Ident'). Skips single-file books and any title with override/fetched provenance. Default dry-run previews old→new; set apply=true to write.",
+		Description:     titleRepairHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.title-repair",
@@ -203,6 +207,12 @@ func titleRepairWorkers() int {
 	return n
 }
 
+// titleRepairParallelism is the op's concurrency: the RunItems pool of
+// titleRepairWorkers() workers.
+func titleRepairParallelism() tasks.Parallelism {
+	return tasks.Fixed(titleRepairWorkers(), "per-book work is disk-IO and tag-read bound, so more than 8 workers just thrashes the disk; each worker takes a disjoint book, so no two touch the same row")
+}
+
 func (p *Plugin) runTitleRepair(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 	var params titleRepairParams // Apply=false → dry-run (safe default)
 	if len(raw) > 0 {
@@ -211,13 +221,93 @@ func (p *Plugin) runTitleRepair(ctx context.Context, raw json.RawMessage, report
 		}
 	}
 
-	store := p.deps.OpsStore()
+	env := titleRepairEnv{
+		t6g7Env: t6g7HeadEnv(reporter, params.Apply),
+		AgreedTitle: func(dir string) (string, bool) {
+			return metadata.AgreedChapterTitle(dir, config.AppConfig.SupportedExtensions)
+		},
+	}
+	if store := p.deps.OpsStore(); store != nil {
+		env.Store = store
+		env.Writer = store
+	}
+	return titleRepairCore(ctx, params.Apply, env)
+}
+
+// titleRepairKind is rule R3's kind for the def above.
+const titleRepairKind = tasks.Kind("books.maintenance.title-repair")
+
+// titleRepairStore is the reads the sweep makes.
+type titleRepairStore interface {
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
+}
+
+// titleRepairWriter is the one write: the title, under the book's write lock.
+type titleRepairWriter interface {
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+}
+
+// titleRepairEnv is what the core takes from its shell.
+type titleRepairEnv struct {
+	t6g7Env
+	Store  titleRepairStore
+	Writer titleRepairWriter
+	// AgreedTitle is the CONS-17b all-chapters-agree read of a directory's tags
+	// (HEAD: metadata.AgreedChapterTitle over the configured extensions).
+	AgreedTitle func(dir string) (agreed string, multi bool)
+}
+
+// titleRepairNative is the native kind. Preview is the dry run HEAD's default
+// was; Live writes the repaired titles.
+func (p *Plugin) titleRepairNative(deps t6g7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g7Common(titleRepairKind, sched)
+	c.Title = "Repair leaked chapter-tag titles (CONS-17b)"
+	c.Help = titleRepairHelp
+	// ModifyBook writes the whole row: books, the metadata cache stamp, the ident
+	// rows and the author join (the shared row, kinds_resources.go).
+	c.Effects = tasks.Writes(t6g7Res(t6WriterResources["ModifyBook"]...)...)
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.title-repair")
+	c.Timeout = 4 * time.Hour
+	return tasks.Task(titleRepairKind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			// HEAD's only param is apply, which the run's mode decides.
+			if err := t6g7RefuseModeKeys(titleRepairKind, raw); err != nil {
+				return struct{}{}, err
+			}
+			if err := t6g7NeedDep(titleRepairKind, "AgreedChapterTitle", deps.AgreedChapterTitle != nil); err != nil {
+				return struct{}{}, err
+			}
+			live := rc.Mode() == tasks.ModeLive
+			env := titleRepairEnv{t6g7Env: t6g7NativeEnv(rc), AgreedTitle: deps.AgreedChapterTitle}
+			if deps.Store != nil {
+				env.Store = deps.Store
+			}
+			if live {
+				w, err := t6g7NewWriter(titleRepairKind, deps, rc)
+				if err != nil {
+					return struct{}{}, err
+				}
+				env.Writer = w
+			}
+			return struct{}{}, titleRepairCore(rc.Context(), live, env)
+		},
+	})
+}
+
+// titleRepairCore is the body of runTitleRepair.
+func titleRepairCore(ctx context.Context, apply bool, env titleRepairEnv) error {
+	store := env.Store
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
 
-	if !params.Apply {
-		_ = reporter.Log(slog.LevelInfo, "DRY RUN — no changes will be written (set apply=true to write)")
+	if !apply {
+		env.Log(slog.LevelInfo, "DRY RUN — no changes will be written (set apply=true to write)")
 	}
 
 	// Load the full book list up front (Core rows are slim). Paged — no
@@ -230,29 +320,34 @@ func (p *Plugin) runTitleRepair(ctx context.Context, raw json.RawMessage, report
 	}
 
 	total := len(books)
-	exts := config.AppConfig.SupportedExtensions
-	workers := titleRepairWorkers()
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
-		"title-repair starting: %d books, %d workers, apply=%v", total, workers, params.Apply))
+	par := titleRepairParallelism()
+	env.Log(slog.LevelInfo, fmt.Sprintf(
+		"title-repair starting: %d books, %d workers, apply=%v", total, par.Workers(), apply))
 	if total == 0 {
-		_ = reporter.UpdateProgress(1, 1, "title-repair: 0 books — nothing to do")
+		env.Progress(1, 1, "title-repair: 0 books — nothing to do")
 		return nil
 	}
 
-	// Counters are atomics — the RunItems pool below is concurrent. Each
+	// Counters are atomics — the pool below is concurrent. Each
 	// worker touches a disjoint book, so writes never collide on a row, but
 	// counters are shared.
 	var examined, retitled, skipSingle, skipNoAgree, skipProv, skipTitleOK, skipDeleted, mixedDir, changedUnder, errs atomic.Int64
 
 	verb := "would retitle"
-	if params.Apply {
+	if apply {
 		verb = "retitled"
 	}
 
-	err = registry.RunItems(ctx, reporter, books, func(ctx context.Context, b database.BookCore) error {
+	err = env.Items(ctx, par, total, t6g7ItemsOptions{
+		// The label reads the running counters, so only HEAD's pool carries it.
+		Label: func(i, t int) string {
+			return fmt.Sprintf("Books %d/%d (%s=%d err=%d)", i+1, t, verb, retitled.Load(), errs.Load())
+		},
+	}, func(ctx context.Context, i int) error {
+		b := books[i]
 		n := examined.Add(1)
 		if n%500 == 0 {
-			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+			env.Log(slog.LevelInfo, fmt.Sprintf(
 				"title-repair progress: %d/%d examined, %d %s, %d errors", n, total, retitled.Load(), verb, errs.Load()))
 		}
 
@@ -262,10 +357,10 @@ func (p *Plugin) runTitleRepair(ctx context.Context, raw json.RawMessage, report
 			return nil
 		}
 
-		files, ferr := store.GetBookFiles(b.ID)
+		files, ferr := env.Store.GetBookFiles(b.ID)
 		if ferr != nil {
 			errs.Add(1)
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: GetBookFiles failed: %v", b.ID, ferr))
+			env.Log(slog.LevelWarn, fmt.Sprintf("book %s: GetBookFiles failed: %v", b.ID, ferr))
 			return nil // non-fatal: keep sweeping
 		}
 		paths := make([]string, 0, len(files))
@@ -276,10 +371,10 @@ func (p *Plugin) runTitleRepair(ctx context.Context, raw json.RawMessage, report
 		}
 
 		var titleState *database.MetadataFieldState
-		states, serr := store.GetMetadataFieldStates(b.ID)
+		states, serr := env.Store.GetMetadataFieldStates(b.ID)
 		if serr != nil {
 			errs.Add(1)
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: GetMetadataFieldStates failed: %v", b.ID, serr))
+			env.Log(slog.LevelWarn, fmt.Sprintf("book %s: GetMetadataFieldStates failed: %v", b.ID, serr))
 			return nil
 		}
 		for i := range states {
@@ -301,13 +396,11 @@ func (p *Plugin) runTitleRepair(ctx context.Context, raw json.RawMessage, report
 			MetadataSource:    metaSource,
 			TitleState:        titleState,
 			FilePaths:         paths,
-		}, func(dir string) (string, bool) {
-			return metadata.AgreedChapterTitle(dir, exts)
-		})
+		}, env.AgreedTitle)
 
 		if d.MixedDir {
 			mixedDir.Add(1)
-			_ = reporter.Log(slog.LevelDebug, fmt.Sprintf(
+			env.Log(slog.LevelDebug, fmt.Sprintf(
 				"book %s: files span multiple directories; using majority dir %s", b.ID, d.DirPath))
 		}
 
@@ -323,49 +416,45 @@ func (p *Plugin) runTitleRepair(ctx context.Context, raw json.RawMessage, report
 		case actionSkipProvenance:
 			skipProv.Add(1)
 		case actionRetitle:
-			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+			env.Log(slog.LevelInfo, fmt.Sprintf(
 				"book %s: %s %q → %q", b.ID, verb, b.Title, d.NewTitle))
-			if params.Apply {
+			if apply {
 				// retitleBook patches ONLY Title under the book's write lock,
 				// and only while the stored title is still the one the
 				// decision above was made against.
-				if uerr := retitleBook(store, b.ID, b.Title, d.NewTitle); uerr != nil {
+				if uerr := retitleBook(env.Writer, b.ID, b.Title, d.NewTitle); uerr != nil {
 					if errors.Is(uerr, errRetitleChangedUnderneath) {
 						changedUnder.Add(1)
-						_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("book %s: title changed underneath, not retitled: %v", b.ID, uerr))
+						env.Log(slog.LevelInfo, fmt.Sprintf("book %s: title changed underneath, not retitled: %v", b.ID, uerr))
 						return nil
 					}
 					errs.Add(1)
-					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: retitle failed: %v", b.ID, uerr))
+					env.Log(slog.LevelWarn, fmt.Sprintf("book %s: retitle failed: %v", b.ID, uerr))
 					return nil
 				}
 			}
 			retitled.Add(1)
 		}
 		if d.Action != actionRetitle && d.Reason != "" {
-			_ = reporter.Log(slog.LevelDebug, fmt.Sprintf("book %s: skip — %s", b.ID, d.Reason))
+			env.Log(slog.LevelDebug, fmt.Sprintf("book %s: skip — %s", b.ID, d.Reason))
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: workers,
-		Label: func(i, t int) string {
-			return fmt.Sprintf("Books %d/%d (%s=%d err=%d)", i+1, t, verb, retitled.Load(), errs.Load())
-		},
+		return nil
 	})
 	if err != nil {
 		return err
 	}
 
 	suffix := ""
-	if !params.Apply {
+	if !apply {
 		suffix = " (dry run — no writes)"
 	}
 	result := fmt.Sprintf(
 		"title-repair complete: examined=%d %s=%d skipped_single_file=%d skipped_no_agreement=%d skipped_provenance=%d skipped_title_ok=%d skipped_deleted=%d mixed_dir=%d changed_underneath=%d errors=%d%s",
 		examined.Load(), strings.ReplaceAll(verb, " ", "_"), retitled.Load(), skipSingle.Load(), skipNoAgree.Load(),
 		skipProv.Load(), skipTitleOK.Load(), skipDeleted.Load(), mixedDir.Load(), changedUnder.Load(), errs.Load(), suffix)
-	_ = reporter.Log(slog.LevelInfo, result)
-	_ = reporter.UpdateProgress(total, total, result)
+	env.Log(slog.LevelInfo, result)
+	env.Progress(total, total, result)
 
 	if errs.Load() > 0 {
 		return fmt.Errorf("%d per-book errors (see op log for details)", errs.Load())
