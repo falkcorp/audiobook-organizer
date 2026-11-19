@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/fixtures_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c4d1e7a9-3b52-4f08-9e61-5a2c8d0b7f13
 // last-edited: 2026-11-19
 
@@ -7,7 +7,6 @@ package m6_test
 
 import (
 	"encoding/json"
-	"strconv"
 	"testing"
 	"time"
 
@@ -147,6 +146,5 @@ func headRows(t testing.TB) map[string][]byte {
 		}
 	}
 	// Seven jobs: 7 aijob + 7 payload + 6 batch rows.
-	_ = strconv.Itoa
 	return rows
 }

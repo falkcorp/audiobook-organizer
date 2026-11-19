@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/instances.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8b6a74f6-b7ad-4baf-bb70-c1f2c5ccb49b
 // last-edited: 2026-11-19
 
@@ -104,24 +104,36 @@ func refsFor(set secretSet, ref integrations.Ref) map[string]any {
 
 // instanceID is the InstanceID of a HEAD ID: kept when it already matches, else
 // lower-cased with _ as - and reported (05-metadata M1.10, last paragraph before
-// "Trust carried over"). ok is false when even that does not match.
+// "Trust carried over"), and prefixed with "id-" when it then starts with a digit.
+// ok is false when even that does not match (too long, or a character core's
+// grammar has no place for).
 func instanceID(head string) (id integrations.InstanceID, renamed, ok bool) {
 	if integrations.InstanceID(head).Validate() == nil {
 		return integrations.InstanceID(head), false, true
 	}
 	n := integrations.InstanceID(strings.ToLower(strings.ReplaceAll(head, "_", "-")))
+	// core's grammar starts with a letter (a secret name's segment must, 05-config
+	// 2.3), which the spec's own grammar does not require: an ID that starts with a
+	// digit gets a letter prefix, and its secrets are written under the new name
+	// (seams.d/F7-01.md, "InstanceID grammar").
+	if n != "" && n[0] >= '0' && n[0] <= '9' {
+		n = digitPrefix + n
+	}
 	if n.Validate() != nil {
 		return "", false, false
 	}
 	return n, true, true
 }
 
+// digitPrefix is the letter prefix an instance ID that starts with a digit gets.
+const digitPrefix = "id-"
+
 // splitUserinfo removes the userinfo of a URL setting (a credential belongs in a
 // secret, never in a stored URL: core's checkURL refuses one). It returns the
 // clean URL and the userinfo, and proven false when a credential cannot be ruled
 // out. This is M2's splitter (internal/books/cutover/config_plan.go
 // splitURLUserinfo) for the five URL fields M2 leaves in the blob for M6,
-// pinned by a test against the same inputs.
+// pinned by TestSplitUserinfo against the cases F3-06 documents.
 func splitUserinfo(s string) (clean, info string, proven bool) {
 	if !strings.Contains(s, "@") {
 		return s, "", true
