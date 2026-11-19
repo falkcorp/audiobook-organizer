@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.53 -->
+<!-- version: 10.78.54 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -6591,10 +6591,12 @@ generate-on-behalf should force a short expiry / first-use rotation for safety.
   commit per book with the lock read inside it (no restore code, so no stale-list
   write-back), and `journalCredits` and the create-author row return void funcs that a
   held or failed book calls, so no journal row stands for a write that did not happen.
-  **Known residuals:** (1) the author split stays two writes (credits, then primary): a
-  lock saved between them leaves the credits split and the primary on the composite, now
-  counted as held, not as an error; making it one commit means the credit swap across
-  several composites in one `ModifyBookCredits`. (2) Lock writers take `LockMetadataState`,
+  Round 3 made the author split one commit per book too (`ModifyBookCreditsRespectingLocks`
+  inside `relinkBook`, credit swap across every composite the book names plus the primary
+  repoint), so a lock saved after the listing holds the whole book and a failed commit
+  leaves it exactly as it was.
+  **Known residuals:** (1) closed in round 3 (the author split is one commit per book).
+  (2) Lock writers take `LockMetadataState`,
   not the book stripe, so a lock saved while a commit's callback is running can still lose;
   the window is one batch wide (todo.d `2026-11-18-lock-metadata-state-order-audit.md`).
   (3) `refetch_missing_authors.go` can create author rows before its decisive check and

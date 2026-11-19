@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_split_apply_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 4e8a1c73-b5d2-49f6-8a0e-d37c9f12b6a5
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -272,7 +272,7 @@ func TestAuthorSplitScan_ApplyRelinksConcurrently(t *testing.T) {
 	both := make(chan struct{})
 	var closeOnce sync.Once
 	store := splitFaultStore{PebbleStore: st}
-	store.beforeModifyBookAuthors = func(string) {
+	store.beforeCommit = func(string) {
 		n := inFlight.Add(1)
 		defer inFlight.Add(-1)
 		for {
@@ -302,6 +302,45 @@ func TestAuthorSplitScan_ApplyRelinksConcurrently(t *testing.T) {
 	for _, id := range books {
 		require.Equal(t, 1, creditCounts(t, st, id)[alice.ID])
 	}
+}
+
+// splitWriteCounter counts the per-book writes the split makes through the store
+// it is handed: the apply must make exactly one, ModifyBookCredits, for each book.
+type splitWriteCounter struct {
+	*database.PebbleStore
+	credits, authors, rows atomic.Int64
+}
+
+func (c *splitWriteCounter) ModifyBookCredits(id string, fn func(*database.Book, *database.BookCreditsEdit) error) (*database.Book, database.BookCreditsEdit, error) {
+	c.credits.Add(1)
+	return c.PebbleStore.ModifyBookCredits(id, fn)
+}
+
+func (c *splitWriteCounter) ModifyBookAuthors(id string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error) {
+	c.authors.Add(1)
+	return c.PebbleStore.ModifyBookAuthors(id, fn)
+}
+
+func (c *splitWriteCounter) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	c.rows.Add(1)
+	return c.PebbleStore.ModifyBook(id, fn)
+}
+
+// Each book is written once: its credits and its primary author are the same
+// commit, so no lock or crash can find the book between the two.
+func TestAuthorSplitScan_WritesEachBookInOneCommit(t *testing.T) {
+	st := newSplitRelinkStore(t)
+	composite, err := st.CreateAuthor("Alice Smith & Bob Jones")
+	require.NoError(t, err)
+	books := mkSplitBooks(t, st, composite.ID, 4)
+	counter := &splitWriteCounter{PebbleStore: st}
+
+	_, err = runSplit(t, newSplitDeps(counter), `{"dry_run":false}`)
+	require.NoError(t, err)
+
+	require.EqualValues(t, len(books), counter.credits.Load(), "one commit per book")
+	require.Zero(t, counter.authors.Load(), "a separate credits write per book")
+	require.Zero(t, counter.rows.Load(), "a separate primary-author write per book")
 }
 
 // A book credited to two composites is one work item, and a part the composites
@@ -353,11 +392,11 @@ func TestAuthorSplitScan_BookUnderTwoCompositesAndSharedPart(t *testing.T) {
 	}
 }
 
-// The credit swap is a single ModifyBookAuthors, so a book another writer moved
-// off the composite between the listing and the write is left as that writer
-// left it: no parts are resurrected on it and its new credit survives. Here the
-// other writer re-credits the book to a different author and repoints its
-// primary just before the split's primary write.
+// The split decides on the fresh row and credit list inside its one commit, so a
+// book another writer moved off the composite between the listing and the commit
+// is left as that writer left it: no parts are resurrected on it and its new
+// credit survives. Here the other writer re-credits the book to a different
+// author and repoints its primary just before the split's commit.
 func TestAuthorSplitScan_LeavesBookAnotherWriterMovedOffTheComposite(t *testing.T) {
 	st := newSplitRelinkStore(t)
 	composite, err := st.CreateAuthor("Alice Smith & Bob Jones")
@@ -368,7 +407,7 @@ func TestAuthorSplitScan_LeavesBookAnotherWriterMovedOffTheComposite(t *testing.
 	moved, kept := books[0], books[1]
 
 	store := splitFaultStore{PebbleStore: st}
-	store.beforeModifyBookAuthors = func(id string) {
+	store.beforeCommit = func(id string) {
 		if id != moved {
 			return
 		}
@@ -401,73 +440,64 @@ func TestAuthorSplitScan_LeavesBookAnotherWriterMovedOffTheComposite(t *testing.
 }
 
 // A book that credits the composite only through Book.AuthorID (no junction row,
-// the default shape CreateBook leaves) or through both, with either of the two
-// per-book writes failing on the first pass. Nothing may be lost: the composite
-// survives the first pass because the book is still listed under it, and a
-// healthy rerun credits both parts exactly once, repoints the primary and only
-// then deletes the composite. The credits are written first on purpose: the
-// legacy AuthorID is the only evidence of the composite on a legacy-only book,
-// and repointing it before the credits were safe let the composite be deleted
-// with parts[1:] never credited.
-func TestAuthorSplitScan_NoCreditLostWhenEitherWriteFails(t *testing.T) {
+// the default shape CreateBook leaves) or through both, whose one commit fails on
+// the first pass. Nothing may be lost or half moved: the book is left exactly as
+// it was (still credited to and pointing at the composite), the composite
+// survives because the book is still listed under it, and a healthy rerun
+// credits both parts exactly once, repoints the primary and only then deletes the
+// composite.
+func TestAuthorSplitScan_NoCreditLostWhenTheCommitFails(t *testing.T) {
 	for _, shape := range []string{"legacy-only", "junction-and-legacy"} {
-		for _, failing := range []string{"credits", "primary"} {
-			t.Run(shape+"/fail-"+failing, func(t *testing.T) {
-				st := newSplitRelinkStore(t)
-				composite, err := st.CreateAuthor("Gina Rowe & Hal Pike")
-				require.NoError(t, err)
-				b, err := st.CreateBook(&database.Book{
-					Title:            "split-crash-safe",
-					FilePath:         "/split-crash-safe/book.m4b",
-					AuthorID:         new(composite.ID),
-					IsPrimaryVersion: new(true),
-				})
-				require.NoError(t, err)
-				if shape == "junction-and-legacy" {
-					require.NoError(t, st.SetBookAuthors(b.ID, []database.BookAuthor{{BookID: b.ID, AuthorID: composite.ID, Role: "author"}}))
-				}
-
-				faulty := splitFaultStore{PebbleStore: st}
-				if failing == "credits" {
-					faulty.failCredits = b.ID
-				} else {
-					faulty.failPrimary = b.ID
-				}
-				rep, err := runSplit(t, newSplitDeps(faulty), `{"dry_run":false}`)
-				require.NoError(t, err)
-
-				kept, gerr := st.GetAuthorByID(composite.ID)
-				require.NoError(t, gerr)
-				require.NotNil(t, kept, "the composite was deleted while the book was only half split; logs: %v", rep.logs)
-				gina, gerr := st.GetAuthorByName("Gina Rowe")
-				require.NoError(t, gerr)
-				require.NotNil(t, gina)
-				hal, gerr := st.GetAuthorByName("Hal Pike")
-				require.NoError(t, gerr)
-				require.NotNil(t, hal)
-				mid, gerr := st.GetBookByID(b.ID)
-				require.NoError(t, gerr)
-				require.NotNil(t, mid.AuthorID)
-				if failing == "credits" {
-					require.Equal(t, composite.ID, *mid.AuthorID, "the primary moved although the credits write failed")
-				} else {
-					// The credits landed first, so both parts are already credited.
-					require.Equal(t, map[int]int{gina.ID: 1, hal.ID: 1}, creditCounts(t, st, b.ID))
-				}
-
-				_, err = runSplit(t, newSplitDeps(st), `{"dry_run":false}`)
-				require.NoError(t, err)
-
-				gone, gerr := st.GetAuthorByID(composite.ID)
-				require.NoError(t, gerr)
-				require.Nil(t, gone, "the rerun should finish the split")
-				require.Equal(t, map[int]int{gina.ID: 1, hal.ID: 1}, creditCounts(t, st, b.ID))
-				full, gerr := st.GetBookByID(b.ID)
-				require.NoError(t, gerr)
-				require.NotNil(t, full.AuthorID)
-				require.Equal(t, gina.ID, *full.AuthorID)
+		t.Run(shape, func(t *testing.T) {
+			st := newSplitRelinkStore(t)
+			composite, err := st.CreateAuthor("Gina Rowe & Hal Pike")
+			require.NoError(t, err)
+			b, err := st.CreateBook(&database.Book{
+				Title:            "split-crash-safe",
+				FilePath:         "/split-crash-safe/book.m4b",
+				AuthorID:         new(composite.ID),
+				IsPrimaryVersion: new(true),
 			})
-		}
+			require.NoError(t, err)
+			before := creditCounts(t, st, b.ID)
+			if shape == "junction-and-legacy" {
+				require.NoError(t, st.SetBookAuthors(b.ID, []database.BookAuthor{{BookID: b.ID, AuthorID: composite.ID, Role: "author"}}))
+				before = creditCounts(t, st, b.ID)
+			}
+
+			rep, err := runSplit(t, newSplitDeps(splitFaultStore{PebbleStore: st, failCommit: b.ID}), `{"dry_run":false}`)
+			require.NoError(t, err)
+			// Two errors: the book whose commit failed, and the composite the run
+			// refused to delete while that book still names it.
+			require.Contains(t, strings.Join(rep.logs, "\n"), "(2 errors, 1 books not relinked due to credit-list errors,", "the failed commit was not counted against the book")
+
+			kept, gerr := st.GetAuthorByID(composite.ID)
+			require.NoError(t, gerr)
+			require.NotNil(t, kept, "the composite was deleted while the book was not split; logs: %v", rep.logs)
+			gina, gerr := st.GetAuthorByName("Gina Rowe")
+			require.NoError(t, gerr)
+			require.NotNil(t, gina)
+			hal, gerr := st.GetAuthorByName("Hal Pike")
+			require.NoError(t, gerr)
+			require.NotNil(t, hal)
+			mid, gerr := st.GetBookByID(b.ID)
+			require.NoError(t, gerr)
+			require.NotNil(t, mid.AuthorID)
+			require.Equal(t, composite.ID, *mid.AuthorID, "the primary moved although the commit failed")
+			require.Equal(t, before, creditCounts(t, st, b.ID), "the credits moved although the commit failed")
+
+			_, err = runSplit(t, newSplitDeps(st), `{"dry_run":false}`)
+			require.NoError(t, err)
+
+			gone, gerr := st.GetAuthorByID(composite.ID)
+			require.NoError(t, gerr)
+			require.Nil(t, gone, "the rerun should finish the split")
+			require.Equal(t, map[int]int{gina.ID: 1, hal.ID: 1}, creditCounts(t, st, b.ID))
+			full, gerr := st.GetBookByID(b.ID)
+			require.NoError(t, gerr)
+			require.NotNil(t, full.AuthorID)
+			require.Equal(t, gina.ID, *full.AuthorID)
+		})
 	}
 }
 

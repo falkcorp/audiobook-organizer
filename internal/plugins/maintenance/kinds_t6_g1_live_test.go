@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_live_test.go
-// version: 1.0.13
+// version: 1.0.14
 // guid: 5e2a9c71-0d3b-4f68-b1a4-7c8e6f2d9a13
 // last-edited: 2026-11-19
 
@@ -362,7 +362,8 @@ func t6g1LiveCases() []t6g1LiveCase {
 				return p.deps(st), func(t *testing.T, _ *t6g1Host, _ json.RawMessage) {
 					require.Equal(t, 1, p.cw.count("DeleteAuthor"), "the composite row went through the writer")
 					require.Positive(t, p.cw.count("CreateAuthor"))
-					require.Positive(t, p.cw.count("ModifyBookAuthors")+p.cw.count("ModifyBook"))
+					require.Equal(t, len(ids), p.cw.count("ModifyBookCredits"), "one commit per book")
+					require.Zero(t, p.cw.count("ModifyBookAuthors")+p.cw.count("ModifyBook"), "no second write per book")
 					for _, id := range ids {
 						require.Zero(t, creditCounts(t, st, id)[composite.ID], "book %s still credits the composite", id)
 					}

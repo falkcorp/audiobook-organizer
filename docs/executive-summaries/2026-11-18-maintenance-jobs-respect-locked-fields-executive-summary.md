@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-18-maintenance-jobs-respect-locked-fields-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 5b3c0b30-3329-45c7-8ab5-ff4e0d328316 -->
 <!-- last-edited: 2026-11-19 -->
 
@@ -44,10 +44,11 @@ the real library with this change.
   fix and the leftover-row clean-up now do both in a single save, so those two
   never leave a book half moved (credited to the new author while still pointing
   at the old one), and nothing has to be put back if a lock turns up. The author
-  split still saves in two steps: a lock saved between them leaves that book's
-  credits split while its main author is unchanged, the run counts the book as
-  held rather than as an error, and a later run finishes it once the lock is
-  lifted.
+  split now does the same: each book is saved in a single step (its credits and
+  its main author together), so a lock that turns up after the book was looked at
+  holds the whole book, the run counts it as held rather than as an error, and a
+  later run finishes it once the lock is lifted. A step that fails leaves the
+  book exactly as it was.
 - Merging two authors is all or nothing for each author. If any one of the
   author's books has its author locked, none of that author's books move, the
   job reports the author as held (not as failed), and the author stays. If a

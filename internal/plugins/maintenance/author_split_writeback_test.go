@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_split_writeback_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 4b7e1d92-8c6a-4f3b-9a02-1e5c7d8f0a3b
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -98,7 +98,7 @@ func TestAuthorSplit_WritesFreshAuthorNotStaleOrNil(t *testing.T) {
 			return nil, false
 		})
 
-	p := New(fakeDeps{store: store})
+	p := New(fakeDeps{store: withCredits(store)})
 	if err := p.runAuthorSplitScan(context.Background(), json.RawMessage(`{"dry_run":false}`), &fakeReporter{}); err != nil {
 		t.Fatalf("runAuthorSplitScan: %v", err)
 	}
