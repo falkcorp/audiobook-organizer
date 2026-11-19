@@ -21,11 +21,14 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
+	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // errText renders an error for a log attribute, tolerating nil. The callers
@@ -310,8 +313,16 @@ func mergeBatchApplyQueuedParams(existing, incoming json.RawMessage) (json.RawMe
 // ctx that cancels, a progress stream the UI can poll, and the registry
 // watchdog. The handler now returns an op id in milliseconds.
 func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "metadata.batch-apply-cached",
+	return reg.RegisterOp(s.batchApplyDef())
+}
+
+// batchApplyCachedOpID is metadata.batch-apply-cached.
+const batchApplyCachedOpID = "metadata.batch-apply-cached"
+
+// batchApplyDef is HEAD's definition of metadata.batch-apply-cached.
+func (s *Server) batchApplyDef() opsregistry.OperationDef {
+	return opsregistry.OperationDef{
+		ID:              batchApplyCachedOpID,
 		Liveness:        opsregistry.LivenessRunItems,
 		Plugin:          "metadata",
 		DisplayName:     "Apply Cached Metadata",
@@ -324,525 +335,695 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 		// Non-zero is REQUIRED alongside ResumeRestart, not optional decoration
 		// — see the constant.
 		MinCheckpointInterval: batchApplyMinCheckpointInterval,
-		ConcurrencyKey:        "metadata.batch-apply-cached",
+		ConcurrencyKey:        batchApplyCachedOpID,
 		MergeQueuedParams:     mergeBatchApplyQueuedParams,
 		SummarizeQueued:       summarizeBatchApplyQueued,
 		Permissions:           []auth.Permission{auth.PermLibraryEditMetadata},
 		Capabilities:          []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
-		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) (retErr error) {
+		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p batchApplyOpParams
 			if len(rawParams) > 0 {
 				if err := json.Unmarshal(rawParams, &p); err != nil {
 					return fmt.Errorf("batch-apply-cached: decode params: %w", err)
 				}
 			}
-
-			// Fail-safe cap, checked HERE and not only at the HTTP handler: this
-			// op can be dispatched directly through /operations/v2 with any
-			// book_ids list, and a resumed/merged run never passed through the
-			// handler. Refusal, not truncation — zero applies happen. It sits
-			// before the dependency checks because it is pure params
-			// validation, which also lets batch_apply_cap_test.go exercise it
-			// on a zero-value Server.
-			if err := applycap.Check("metadata.batch-apply-cached", len(p.BookIDs), config.AppConfig.BulkApplyMaxItems); err != nil {
-				return err
-			}
-			// The bulk mode is params validation too: an unknown value (a
-			// hand-written /operations/v2 call) is refused before any write
-			// rather than guessed at.
-			mode, modeOK := metafetch.NormalizeBulkApplyMode(p.Mode)
-			if !modeOK {
-				return fmt.Errorf("batch-apply-cached: unknown mode %q (want %q or %q)", p.Mode, metafetch.BulkApplyModeFill, metafetch.BulkApplyModeReplace)
-			}
-			p.Mode = mode
-			// A row-origin pin is one reviewer's look at one book. The HTTP
-			// route refuses it beside other books; this op can also be
-			// dispatched directly (/operations/v2), so Run holds the same
-			// line before any write.
-			if len(p.BookIDs) > 1 {
-				if id, bad := metafetch.RowPinnedBook(p.Pins); bad {
-					return fmt.Errorf("batch-apply-cached: a row-origin pin (book %s) is only valid for a single-book apply; got %d books", id, len(p.BookIDs))
-				}
-			}
-
-			// Metadata is never applied during a library scan: hold the scan stand-down
-			// before the first write (fails the op if the scan does not park).
-			hold, sdErr := s.holdMetadataScanStandDown(ctx, reporter, "metadata.batch-apply-cached apply")
-			if sdErr != nil {
-				return sdErr
-			}
-			defer func() { retErr = hold.Finish(retErr) }()
-			ctx, reporter = hold.Context(), hold.Reporter()
-
-			svc := s.metadataFetchService
-			if svc == nil {
-				return fmt.Errorf("batch-apply-cached: metadata fetch service not initialized")
-			}
-
-			progress := registryProgressAdapter{r: reporter}
-			// bookIDs is what is LEFT. On a resumed run the registry has merged
-			// the checkpoint back into params, so this is already the unfinished
-			// tail and the run needs no resume branch of its own.
-			bookIDs := p.BookIDs
-			total := len(bookIDs)
-			priorDone := p.completed()
-			// Denominator the USER recognises, so a resumed run continues the
-			// count instead of appearing to start a smaller job.
-			originalTotal := priorDone + total
-			if priorDone > 0 {
-				reporter.Log(slog.LevelInfo, "resuming metadata apply",
-					slog.Int("remaining", total),
-					slog.Int("already_applied_by_earlier_attempts", priorDone),
-					slog.Int("total", originalTotal))
-			}
-			_ = progress.UpdateProgress(priorDone, originalTotal, "starting metadata apply")
-
-			var applied, noCandidates, decodeFailed, applyFailed, writeFailed, gateBlocked, bookMissing, fileWorkBlocked atomic.Int64
-			// ownerReviewed counts books APPLIED on an owner review over a
-			// refusing gate; staleCandidate counts pinned books whose cached
-			// candidate changed after the owner looked at it.
-			var ownerReviewed, staleCandidate atomic.Int64
-			// ownerReplaced counts books APPLIED with the bulk toggle on
-			// "Replace existing" that overwrote (Mode replace + review_bulk pin).
-			var ownerReplaced atomic.Int64
-			// markedNoMatch counts books left alone because their owner
-			// marked them "no match" and did not approve this row.
-			var markedNoMatch atomic.Int64
-			// alreadyApplied counts books skipped because their metadata was
-			// already applied and no single-row approval asked to re-apply
-			// (applySkipAlreadyApplied).
-			var alreadyApplied atomic.Int64
-			// retired counts books left alone because they are retired (in
-			// the trash, or merged into another book) and the owner did not
-			// approve them on their own review row (applySkipBookRetired).
-			var retired atomic.Int64
-			// refusalSkipped counts books left out WITHOUT being evaluated because
-			// an earlier run refused them for a structural reason and nothing the
-			// gate reads has changed since (applyRefusalLedger). Never counted for
-			// a pinned book.
-			var refusalSkipped atomic.Int64
-			// authorsUnreadable counts books refused because their live
-			// author credits could not be read (the gate would otherwise have
-			// judged them authorless, which loosens it).
-			var authorsUnreadable atomic.Int64
-			// historyFailed counts owner-reviewed books written without their
-			// change history (the only record of the override).
-			var historyFailed atomic.Int64
-			// gateDeferred holds the IDS — not a count — of books never
-			// ATTEMPTED because the write-back gate stayed saturated past this
-			// item's own timeout. Kept separate from writeFailed: nothing was
-			// applied for these, not even the database half, so the summary must
-			// not let them read as partial successes.
-			//
-			// It is a list rather than a counter because these books are still
-			// OWED. A count could only be reported; the IDs can be retried at the
-			// end of the run and carried in the checkpoint across a restart. Gate
-			// saturation is a load condition affecting the whole batch, so
-			// deferring is expected under load and must not quietly drop work.
-			var gateDeferredMu sync.Mutex
-			var gateDeferred []string
-			noteGateDeferred := func(id string) {
-				gateDeferredMu.Lock()
-				gateDeferred = append(gateDeferred, id)
-				gateDeferredMu.Unlock()
-			}
-			snapshotGateDeferred := func() []string {
-				gateDeferredMu.Lock()
-				defer gateDeferredMu.Unlock()
-				return slices.Clone(gateDeferred)
-			}
-			takeGateDeferred := func() []string {
-				gateDeferredMu.Lock()
-				defer gateDeferredMu.Unlock()
-				out := gateDeferred
-				gateDeferred = nil
-				return out
-			}
-			// skippedLocked counts BOOKS where at least one user-locked field was
-			// left alone. It is not subtracted from applied: the unlocked fields
-			// landed. It exists so the summary cannot read "applied 500 of 500"
-			// while 200 of those kept a curated title the user would otherwise
-			// go looking for in the op log.
-			var skippedLocked atomic.Int64
-			// notApplied counts every book this attempt examined and did not
-			// apply, whatever the reason; the progress label reports it next to
-			// applied and write-back failed.
-			var notApplied atomic.Int64
-			label := newBatchApplyLabel(func() string {
-				return fmt.Sprintf("applying cached metadata — applied %d, not applied %d, write-back failed %d",
-					applied.Load(), notApplied.Load(), writeFailed.Load())
+			return batchApplyCore(ctx, p, batchApplyEnv{
+				t7Env:     t7HeadEnv(reporter, true),
+				Writer:    headBatchApply{s: s},
+				StandDown: s.t7HeadMetadataStandDown(reporter),
 			})
+		},
+	}
+}
 
-			// The file work runs inline in the op's own worker, NOT via
-			// fileIOPool.Submit as the old handler did. That is deliberate and is
-			// the whole point of the change: Submit returns immediately, so an op
-			// using it would report 100% complete while tags were still being
-			// written to disk — which defeats the status the op exists to provide.
-			// Running it here makes the progress bar mean what it says, and brings
-			// the work under the same path lock the batch-save op uses.
-			//
-			// Concurrency is writeBackWorkers() (disk/TagLib-bound), NOT the old
-			// batchApplyConcurrency=4, because this loop now does the file I/O
-			// rather than delegating it.
-			// The certainty gate's partial_book check needs every sibling claim
-			// before the first apply. The index covers EVERY book with cached
-			// candidates, not bookIDs, so a subset batch or a resumed run (whose
-			// bookIDs is the unfinished tail) sees the same siblings the preview
-			// saw. An applied book stays in the index (an apply keeps its cached
-			// candidates since 2026-10-05) but claims the ASIN it already holds,
-			// not its top candidate (cachedClaimLoader): it owns that ASIN, and
-			// the apply skips it (already_applied), so its top candidate is
-			// never taken. Its rename already happened, and the rename preflight
-			// still refuses a collision with it.
-			claims, claimErr := cachedClaimIndex(ctx, svc, s.store)
-			if claimErr != nil {
-				return fmt.Errorf("batch-apply-cached: %w", claimErr)
-			}
-			if n := claims.Unreadable(); n > 0 {
-				_ = reporter.Log(slog.LevelWarn, "sibling-part index could not read some books; rows in a related folder or with the same ASIN are blocked for manual review",
-					slog.Int("unreadable", n))
-			}
-			// One import-path read shared by every book of this call
-			// (withCachedImportPaths), not one per resolver call per book.
-			applyBooks := withCachedImportPaths(s.store)
-			// Fail open: a server with no raw KV store simply remembers nothing.
-			var refusals *applyRefusalLedger
-			if s.store != nil {
-				refusals = newApplyRefusalLedger(s.store)
-			}
-			runOne := func(ctx context.Context, id string) error {
-				// A book an earlier run refused for a structural reason, whose
-				// gate inputs are unchanged, is not evaluated again. Checked
-				// before the write-back gate so a skipped book never holds a
-				// file-write slot (applyRefusalLedger.Skip: a pinned book is
-				// never skipped).
-				pin := p.pinOf(id)
-				prior, hadPrior, skip := refusals.Skip(svc, applyBooks, id, pin)
-				if skip {
-					refusalSkipped.Add(1)
-					notApplied.Add(1)
-					_ = reporter.Log(slog.LevelDebug, fmt.Sprintf("skipped: book %s — refused as %s on %s with unchanged inputs",
-						opLogQuoted(id), prior.Reason, prior.RecordedAt.Format(time.DateOnly)),
-						slog.String("book_id", logger.SanitizeLogValue(id)),
-						slog.String("reason", "unchanged_structural_refusal"),
-						slog.String("gate_reason", prior.Reason),
-						slog.String("detail", logger.SanitizeLogValue(prior.Detail)))
-					return nil
-				}
-				// One timer per book, from before the gate wait to the end of
-				// its file work; FinishApplyFileWorkTimed logs it as the
-				// "apply phase durations" line.
-				pt := metafetch.NewApplyPhaseTimings()
-				if p.WriteBack {
-					gateStart := time.Now()
-					releaseFileWrite, gateErr := writeBackFileGate.acquire(ctx)
-					pt.Since(metafetch.PhaseGateWait, gateStart)
-					if gateErr != nil {
-						// ctx here is the PER-ITEM context (PerItemTimeout: 3m),
-						// not the run context, so gateErr is DeadlineExceeded
-						// whenever the write-back gate stays saturated for three
-						// minutes. That is a load condition affecting the whole
-						// batch, not a property of this book.
-						//
-						// Returning it would end the run: ErrModeCollect still
-						// joins per-item errors and RunItems returns the join, so
-						// ONE gate timeout out of 699 books marks the op failed
-						// and terminal, and the summary naming every successful
-						// apply never prints. Record it as a per-book outcome
-						// instead — but as an ID, not a count, because unlike the
-						// other non-apply reasons this book still needs applying.
-						//
-						// Genuine cancellation is unaffected: RunItems checks the
-						// RUN context itself and stops the loop, so swallowing
-						// this per-item deadline cannot make a cancelled batch
-						// look like a completed one.
-						noteGateDeferred(id)
-						// Not read yet, so the book is named by its id.
-						_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("deferred: book %s — write-back gate unavailable, retried at the end of the run: %s",
-							opLogQuoted(id), logger.SanitizeLogValue(gateErr.Error())),
-							slog.String("book_id", logger.SanitizeLogValue(id)),
-							slog.String("reason", "write-back gate unavailable"),
-							slog.String("error", logger.SanitizeLogValue(gateErr.Error())))
-						return nil
-					}
-					defer releaseFileWrite()
-				}
-				out := applyCachedCandidateForBookTimed(ctx, svc, applyBooks, id, p.WriteBack,
-					func() error { return opsregistry.ScanStandDownCheckpoint(ctx) }, pt, claims, pin, p.Mode)
-				refusals.Settle(id, out, hadPrior, pin)
+// batchApplyArgs is what one book's apply needs beyond its id.
+type batchApplyArgs struct {
+	// WriteBack also writes the applied metadata into the audio files.
+	WriteBack bool
+	// Check is the scan stand-down beat, re-run before each file-writing step.
+	Check func() error
+	// Timings records the apply's phases (the "apply phase durations" line).
+	Timings *metafetch.ApplyPhaseTimings
+	// Pin is the owner's review of this book's candidate, nil when none.
+	Pin *metafetch.CandidatePin
+	// Mode is the bulk toggle (fill or replace).
+	Mode string
+	// HadPrior says the refusal ledger held a record for the book when Skip looked.
+	HadPrior bool
+}
 
-				if out.OwnerReviewed && out.Gate != nil {
-					// The gate refused and the owner's review overrode it. The
-					// full verdict goes on the op log at Info, applied or not,
-					// so every override is visible next to the refusal it
-					// replaced.
-					verdict, _ := json.Marshal(out.Gate)
-					reporter.Log(slog.LevelInfo, "owner-reviewed apply: certainty gate overridden",
-						slog.String("book_id", id),
-						slog.String("overridden", out.Gate.OverrideSummary()),
-						slog.Bool("applied", out.Applied),
-						slog.String("gate_verdict", string(verdict)))
-				}
+// batchApplyRun is one run's apply state: the sibling-claim index, the
+// structural-refusal ledger and the import-path read every book of the run
+// shares. It is opened once per run, which is why the reads that share that
+// state (Skip, Unreadable) sit beside the apply that writes through it.
+type batchApplyRun interface {
+	// Unreadable is how many books the sibling-part index could not read.
+	Unreadable() int
+	// Skip reports whether an earlier run refused the book for a structural
+	// reason with nothing changed since, so it is not evaluated again.
+	Skip(id string, pin *metafetch.CandidatePin) (rec applyRefusalRecord, had, skip bool)
+	// Apply applies the book's cached candidate and settles the refusal ledger
+	// with the verdict. Every per-book outcome is the returned applyOutcome;
+	// none is an error.
+	Apply(ctx context.Context, id string, a batchApplyArgs) applyOutcome
+}
 
-				if !out.Applied {
-					switch out.Reason {
-					case applySkipNoCachedCandidates:
-						noCandidates.Add(1)
-					case applySkipDecodeFailed:
-						decodeFailed.Add(1)
-					case applySkipApplyFailed:
-						applyFailed.Add(1)
-					case applySkipBookNotFound:
-						bookMissing.Add(1)
-					case applySkipGateBlocked:
-						// The certainty gate refused (score floor, stale cache
-						// identity, or a volume-number mismatch). Nothing was
-						// written; the book stays for manual review.
-						gateBlocked.Add(1)
-					case applySkipFileWorkWouldFail:
-						// The rename after the apply was known to fail, so the
-						// apply was refused before any write: the database and
-						// the files still agree.
-						fileWorkBlocked.Add(1)
-					case applySkipStaleCandidate:
-						// The owner reviewed a candidate the cache has since
-						// replaced; nothing was written.
-						staleCandidate.Add(1)
-					case applySkipMarkedNoMatch:
-						// The owner rejected every match; nothing was written.
-						markedNoMatch.Add(1)
-					case applySkipAuthorsUnreadable:
-						// The live author read failed; nothing was written.
-						authorsUnreadable.Add(1)
-					case applySkipAlreadyApplied:
-						// Applied before; nobody asked to re-apply it.
-						alreadyApplied.Add(1)
-					case applySkipBookRetired:
-						// Trashed or merged away; nobody confirmed this book.
-						retired.Add(1)
-					}
-					notApplied.Add(1)
-					attrs := []slog.Attr{
-						slog.String("book_id", logger.SanitizeLogValue(id)),
-						slog.String("reason", out.Reason),
-						slog.String("error", logger.SanitizeLogValue(errText(out.Err))),
-					}
-					if out.Gate != nil {
-						attrs = append(attrs, slog.String("gate_reason", out.Gate.Reason), slog.Float64("score", out.Gate.Score))
-					}
-					_ = reporter.Log(slog.LevelWarn, batchApplyRefusedLine(id, out), attrs...)
-					return nil
-				}
+// batchApplyWriter is the write side of metadata.batch-apply-cached.
+type batchApplyWriter interface {
+	// OpenBatchApply opens the run's apply state, refusing a server with no
+	// metadata fetch service before any read.
+	OpenBatchApply(ctx context.Context) (batchApplyRun, error)
+}
 
-				applied.Add(1)
-				if out.OwnerReviewed {
-					ownerReviewed.Add(1)
-				}
-				if out.OwnerReplace {
-					ownerReplaced.Add(1)
-				}
-				if len(out.SkippedLocked) > 0 {
-					skippedLocked.Add(1)
-				}
-				// One line per applied book: which book took which candidate,
-				// plus the owner-replace and kept-locked-fields facts that used
-				// to be separate lines.
-				appliedAttrs := []slog.Attr{slog.String("book_id", logger.SanitizeLogValue(id))}
-				if len(out.SkippedLocked) > 0 {
-					appliedAttrs = append(appliedAttrs, slog.Any("skipped_locked", out.SkippedLocked))
-				}
-				_ = reporter.Log(slog.LevelInfo, batchApplyAppliedLine(id, out), appliedAttrs...)
-				// Each line logs its own error (HistoryErr / WriteBackErr), not
-				// the joined Err: a book can hit both, and each line should say
-				// exactly what it is about.
-				if out.HistoryFailed {
-					historyFailed.Add(1)
-					_ = reporter.Log(slog.LevelError, fmt.Sprintf("history not recorded: %s — owner-reviewed apply written but change history not recorded: %s",
-						batchApplyBookLabel(id, out), logger.SanitizeLogValue(errText(out.HistoryErr))),
-						slog.String("book_id", logger.SanitizeLogValue(id)))
-				}
-				if out.WriteBackFailed {
-					// Counted separately and logged, but NOT subtracted from
-					// applied: the database change is real and durable. Reporting
-					// it as unapplied would send someone re-applying work that
-					// succeeded.
-					writeFailed.Add(1)
-					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("write-back failed: %s — applied to database but writing the files failed: %s",
-						batchApplyBookLabel(id, out), logger.SanitizeLogValue(errText(out.WriteBackErr))),
-						slog.String("book_id", logger.SanitizeLogValue(id)))
-				}
+// batchApplyEnv is what the shared core takes from its shell (rules R2, R10).
+type batchApplyEnv struct {
+	t7Env
+	Writer    batchApplyWriter
+	StandDown t7StandDown
+}
+
+// batchApplyCore is the body of metadata.batch-apply-cached, shared by HEAD's
+// shell and the native kind. p is the work remaining: a resumed run's params
+// already hold the checkpoint (HEAD's registry merged it; the native shell
+// overlays rc.Restore, batchApplyOverlay).
+func batchApplyCore(ctx context.Context, p batchApplyOpParams, env batchApplyEnv) (retErr error) {
+	// Fail-safe cap, checked HERE and not only at the HTTP handler: this
+	// op can be dispatched directly through /operations/v2 with any
+	// book_ids list, and a resumed/merged run never passed through the
+	// handler. Refusal, not truncation — zero applies happen. It sits
+	// before the dependency checks because it is pure params
+	// validation, which also lets batch_apply_cap_test.go exercise it
+	// on a zero-value Server.
+	if err := applycap.Check("metadata.batch-apply-cached", len(p.BookIDs), config.AppConfig.BulkApplyMaxItems); err != nil {
+		return err
+	}
+	// The bulk mode is params validation too: an unknown value (a
+	// hand-written /operations/v2 call) is refused before any write
+	// rather than guessed at.
+	mode, modeOK := metafetch.NormalizeBulkApplyMode(p.Mode)
+	if !modeOK {
+		return fmt.Errorf("batch-apply-cached: unknown mode %q (want %q or %q)", p.Mode, metafetch.BulkApplyModeFill, metafetch.BulkApplyModeReplace)
+	}
+	p.Mode = mode
+	// A row-origin pin is one reviewer's look at one book. The HTTP
+	// route refuses it beside other books; this op can also be
+	// dispatched directly (/operations/v2), so Run holds the same
+	// line before any write.
+	if len(p.BookIDs) > 1 {
+		if id, bad := metafetch.RowPinnedBook(p.Pins); bad {
+			return fmt.Errorf("batch-apply-cached: a row-origin pin (book %s) is only valid for a single-book apply; got %d books", id, len(p.BookIDs))
+		}
+	}
+
+	// Metadata is never applied during a library scan: hold the scan stand-down
+	// before the first write (fails the op if the scan does not park).
+	hold, sdErr := env.StandDown(ctx, "metadata.batch-apply-cached apply")
+	if sdErr != nil {
+		return sdErr
+	}
+	defer func() { retErr = hold.Finish(retErr) }()
+	ctx, env.t7Env = t7Rebind(ctx, env.t7Env, hold)
+
+	// bookIDs is what is LEFT. On a resumed run the registry has merged
+	// the checkpoint back into params, so this is already the unfinished
+	// tail and the run needs no resume branch of its own.
+	bookIDs := p.BookIDs
+	total := len(bookIDs)
+	priorDone := p.completed()
+	// Denominator the USER recognises, so a resumed run continues the
+	// count instead of appearing to start a smaller job.
+	originalTotal := priorDone + total
+	if priorDone > 0 {
+		env.Log(slog.LevelInfo, "resuming metadata apply",
+			slog.Int("remaining", total),
+			slog.Int("already_applied_by_earlier_attempts", priorDone),
+			slog.Int("total", originalTotal))
+	}
+	env.progress(priorDone, originalTotal, "starting metadata apply")
+
+	var applied, noCandidates, decodeFailed, applyFailed, writeFailed, gateBlocked, bookMissing, fileWorkBlocked atomic.Int64
+	// ownerReviewed counts books APPLIED on an owner review over a
+	// refusing gate; staleCandidate counts pinned books whose cached
+	// candidate changed after the owner looked at it.
+	var ownerReviewed, staleCandidate atomic.Int64
+	// ownerReplaced counts books APPLIED with the bulk toggle on
+	// "Replace existing" that overwrote (Mode replace + review_bulk pin).
+	var ownerReplaced atomic.Int64
+	// markedNoMatch counts books left alone because their owner
+	// marked them "no match" and did not approve this row.
+	var markedNoMatch atomic.Int64
+	// alreadyApplied counts books skipped because their metadata was
+	// already applied and no single-row approval asked to re-apply
+	// (applySkipAlreadyApplied).
+	var alreadyApplied atomic.Int64
+	// retired counts books left alone because they are retired (in
+	// the trash, or merged into another book) and the owner did not
+	// approve them on their own review row (applySkipBookRetired).
+	var retired atomic.Int64
+	// refusalSkipped counts books left out WITHOUT being evaluated because
+	// an earlier run refused them for a structural reason and nothing the
+	// gate reads has changed since (applyRefusalLedger). Never counted for
+	// a pinned book.
+	var refusalSkipped atomic.Int64
+	// authorsUnreadable counts books refused because their live
+	// author credits could not be read (the gate would otherwise have
+	// judged them authorless, which loosens it).
+	var authorsUnreadable atomic.Int64
+	// historyFailed counts owner-reviewed books written without their
+	// change history (the only record of the override).
+	var historyFailed atomic.Int64
+	// gateDeferred holds the IDS — not a count — of books never
+	// ATTEMPTED because the write-back gate stayed saturated past this
+	// item's own timeout. Kept separate from writeFailed: nothing was
+	// applied for these, not even the database half, so the summary must
+	// not let them read as partial successes.
+	//
+	// It is a list rather than a counter because these books are still
+	// OWED. A count could only be reported; the IDs can be retried at the
+	// end of the run and carried in the checkpoint across a restart. Gate
+	// saturation is a load condition affecting the whole batch, so
+	// deferring is expected under load and must not quietly drop work.
+	var gateDeferredMu sync.Mutex
+	var gateDeferred []string
+	noteGateDeferred := func(id string) {
+		gateDeferredMu.Lock()
+		gateDeferred = append(gateDeferred, id)
+		gateDeferredMu.Unlock()
+	}
+	snapshotGateDeferred := func() []string {
+		gateDeferredMu.Lock()
+		defer gateDeferredMu.Unlock()
+		return slices.Clone(gateDeferred)
+	}
+	takeGateDeferred := func() []string {
+		gateDeferredMu.Lock()
+		defer gateDeferredMu.Unlock()
+		out := gateDeferred
+		gateDeferred = nil
+		return out
+	}
+	// skippedLocked counts BOOKS where at least one user-locked field was
+	// left alone. It is not subtracted from applied: the unlocked fields
+	// landed. It exists so the summary cannot read "applied 500 of 500"
+	// while 200 of those kept a curated title the user would otherwise
+	// go looking for in the op log.
+	var skippedLocked atomic.Int64
+	// notApplied counts every book this attempt examined and did not
+	// apply, whatever the reason; the progress label reports it next to
+	// applied and write-back failed.
+	var notApplied atomic.Int64
+	label := newBatchApplyLabel(func() string {
+		return fmt.Sprintf("applying cached metadata — applied %d, not applied %d, write-back failed %d",
+			applied.Load(), notApplied.Load(), writeFailed.Load())
+	})
+
+	// The file work runs inline in the op's own worker, NOT via
+	// fileIOPool.Submit as the old handler did. That is deliberate and is
+	// the whole point of the change: Submit returns immediately, so an op
+	// using it would report 100% complete while tags were still being
+	// written to disk — which defeats the status the op exists to provide.
+	// Running it here makes the progress bar mean what it says, and brings
+	// the work under the same path lock the batch-save op uses.
+	//
+	// Concurrency is writeBackWorkers() (disk/TagLib-bound), NOT the old
+	// batchApplyConcurrency=4, because this loop now does the file I/O
+	// rather than delegating it.
+	// The certainty gate's partial_book check needs every sibling claim
+	// before the first apply. The index covers EVERY book with cached
+	// candidates, not bookIDs, so a subset batch or a resumed run (whose
+	// bookIDs is the unfinished tail) sees the same siblings the preview
+	// saw. An applied book stays in the index (an apply keeps its cached
+	// candidates since 2026-10-05) but claims the ASIN it already holds,
+	// not its top candidate (cachedClaimLoader): it owns that ASIN, and
+	// the apply skips it (already_applied), so its top candidate is
+	// never taken. Its rename already happened, and the rename preflight
+	// still refuses a collision with it.
+	// The run's claim index, refusal ledger and shared import-path read, opened
+	// once (batchApplyRun). The metadata service is checked there, after the hold
+	// and before the first read, as it was.
+	run, openErr := env.Writer.OpenBatchApply(ctx)
+	if openErr != nil {
+		return openErr
+	}
+	if n := run.Unreadable(); n > 0 {
+		env.Log(slog.LevelWarn, "sibling-part index could not read some books; rows in a related folder or with the same ASIN are blocked for manual review",
+			slog.Int("unreadable", n))
+	}
+	runOne := func(ctx context.Context, id string) error {
+		// A book an earlier run refused for a structural reason, whose
+		// gate inputs are unchanged, is not evaluated again. Checked
+		// before the write-back gate so a skipped book never holds a
+		// file-write slot (applyRefusalLedger.Skip: a pinned book is
+		// never skipped).
+		pin := p.pinOf(id)
+		prior, hadPrior, skip := run.Skip(id, pin)
+		if skip {
+			refusalSkipped.Add(1)
+			notApplied.Add(1)
+			env.Log(slog.LevelDebug, fmt.Sprintf("skipped: book %s — refused as %s on %s with unchanged inputs",
+				opLogQuoted(id), prior.Reason, prior.RecordedAt.Format(time.DateOnly)),
+				slog.String("book_id", logger.SanitizeLogValue(id)),
+				slog.String("reason", "unchanged_structural_refusal"),
+				slog.String("gate_reason", prior.Reason),
+				slog.String("detail", logger.SanitizeLogValue(prior.Detail)))
+			return nil
+		}
+		// One timer per book, from before the gate wait to the end of
+		// its file work; FinishApplyFileWorkTimed logs it as the
+		// "apply phase durations" line.
+		pt := metafetch.NewApplyPhaseTimings()
+		if p.WriteBack {
+			gateStart := time.Now()
+			releaseFileWrite, gateErr := writeBackFileGate.acquire(ctx)
+			pt.Since(metafetch.PhaseGateWait, gateStart)
+			if gateErr != nil {
+				// ctx here is the PER-ITEM context (PerItemTimeout: 3m),
+				// not the run context, so gateErr is DeadlineExceeded
+				// whenever the write-back gate stays saturated for three
+				// minutes. That is a load condition affecting the whole
+				// batch, not a property of this book.
+				//
+				// Returning it would end the run: ErrModeCollect still
+				// joins per-item errors and RunItems returns the join, so
+				// ONE gate timeout out of 699 books marks the op failed
+				// and terminal, and the summary naming every successful
+				// apply never prints. Record it as a per-book outcome
+				// instead — but as an ID, not a count, because unlike the
+				// other non-apply reasons this book still needs applying.
+				//
+				// Genuine cancellation is unaffected: RunItems checks the
+				// RUN context itself and stops the loop, so swallowing
+				// this per-item deadline cannot make a cancelled batch
+				// look like a completed one.
+				noteGateDeferred(id)
+				// Not read yet, so the book is named by its id.
+				env.Log(slog.LevelWarn, fmt.Sprintf("deferred: book %s — write-back gate unavailable, retried at the end of the run: %s",
+					opLogQuoted(id), logger.SanitizeLogValue(gateErr.Error())),
+					slog.String("book_id", logger.SanitizeLogValue(id)),
+					slog.String("reason", "write-back gate unavailable"),
+					slog.String("error", logger.SanitizeLogValue(gateErr.Error())))
 				return nil
 			}
+			defer releaseFileWrite()
+		}
+		out := run.Apply(ctx, id, batchApplyArgs{
+			WriteBack: p.WriteBack,
+			Check:     func() error { return hold.Check(ctx) },
+			Timings:   pt,
+			Pin:       pin,
+			Mode:      p.Mode,
+			HadPrior:  hadPrior,
+		})
 
-			// RunItems reports progress after EVERY item, which is what resets the
-			// registry stuck-op watchdog. This def sets Timeout: 4h but no explicit
-			// ProgressTimeout, so it inherits the 5-minute default. PerItemTimeout
-			// is 3 minutes — deliberately BELOW that 5-minute watchdog, so a single
-			// wedged book fails its own item and lets the loop report progress
-			// again, rather than starving the watchdog and killing the whole op.
-			// That is precisely how the UA-purge census died: no progress for
-			// 5m18s against a 5m0s timeout.
-			//
-			// ErrModeCollect, NOT the default ErrModeFail: the loop this replaces
-			// recorded every per-book failure as a skip and carried on, and
-			// ErrModeFail would cancel the whole batch on the first bad book.
-			//
-			// The Label is deliberately COARSE and constant: reporter_db.go writes
-			// one op_logs_v2 row per DISTINCT progress message, so a label carrying
-			// the book id would write one DB row per book.
-			//
-			// CHECKPOINTING. runOne returns nil for every per-book outcome
-			// (failures land in the counters), and RunItems only advances the
-			// watermark on a nil return — so every book examined here leaves the
-			// remaining set, whether it applied or was skipped. That is
-			// deliberate and is the user's requirement verbatim: "don't let one
-			// bad item constantly make it fail." A book with no cached candidate
-			// would otherwise be retried on every restart, forever.
-			//
-			// The cost is accepted knowingly: a book whose write-back failed on a
-			// transient fault (a NAS blip) also leaves the set and is not retried
-			// by the resume. It is not lost — the database apply is durable and
-			// the failure is counted and logged as writeFailed — but recovering
-			// the file write needs a fresh apply, not this checkpoint. Note this
-			// inverts RunItems' documented default rationale ("a FAILED item never
-			// advances the watermark"), which is why it is spelled out here rather
-			// than left to read as an oversight.
-			runErr := opsregistry.RunItems(ctx, reporter, bookIDs, runOne, opsregistry.RunItemsOptions{
-				Concurrency:    writeBackWorkers(),
-				PerItemTimeout: 3 * time.Minute,
-				ErrMode:        opsregistry.ErrModeCollect,
-				// Carries the running counts, rebuilt only every
-				// batchApplyLabelEvery books: reporter_db.go writes one op log
-				// row per DISTINCT progress message, and the per-book outcome
-				// lines above are the ones worth the rows.
-				Label: func(int, int) string { return label.get(applied.Load() + notApplied.Load()) },
-				// Absolute position in the batch the user started, not in this
-				// attempt's remainder.
-				ProgressOffset:  priorDone,
-				ProgressTotal:   originalTotal,
-				CheckpointEvery: batchApplyCheckpointEvery,
-				// The watermark is the contiguous completed PREFIX, so
-				// bookIDs[watermark:] is exactly the work still owed — including
-				// any book a faster worker finished out of order past a gap,
-				// which is re-applied rather than skipped. Storing the remaining
-				// IDs, rather than the watermark index the chapters-backfill
-				// precedent stores, is what makes this safe against the set
-				// changing between attempts: MergeQueuedParams can union new
-				// books into a queued row, and an index into a list that has
-				// since grown would silently skip whatever sorted below it. That
-				// is the 2026-08-21 production incident shape (registry/types.go)
-				// — new books discarded while the run reported success.
-				//
-				// Every field is carried, deliberately, even though today's
-				// merge would not strictly require it. Checkpoint JSON is
-				// OVERLAID on the resumed params by mergeJSONParams, which is a
-				// maps.Copy: a key absent from the overlay keeps the base
-				// params' value rather than reverting to a zero value. So
-				// omitting WriteBack would currently be survivable — but only by
-				// accident of the base row still holding it, and only while no
-				// `omitempty` sits on the field. Writing the full state keeps
-				// the checkpoint self-describing and independent of that.
-				//
-				// The direction that DOES bite is the opposite one: an
-				// `omitempty` on BookIDs would drop an empty remaining-set from
-				// the overlay and let the base params' original 699 IDs show
-				// through, re-applying the entire batch. That is why BookIDs
-				// carries no omitempty and OriginalTotal does.
-				CheckpointStateFn: func(_ context.Context, watermark int) error {
-					st := batchApplyCheckpointState(
-						bookIDs, p.WriteBack, originalTotal, watermark,
-						snapshotGateDeferred(), p.Pins, p.Mode)
-					return reporter.Checkpoint(st)
-				},
-			})
-			// Return BEFORE the "complete" row, so a canceled batch does not report
-			// success on its way out.
-			//
-			// runOne returns nil on EVERY path — every per-book outcome, including
-			// a write-back gate timeout, lands in a counter instead. That is load
-			// bearing rather than incidental: ErrModeCollect does not suppress
-			// errors, it joins them and RunItems returns the join, so any non-nil
-			// return from runOne would fail the whole op. With that invariant,
-			// runErr is exactly the run context's cancellation error and nothing
-			// else. If a future edit adds an error return to runOne, it must
-			// either be a genuine whole-batch abort or go in a counter.
-			if runErr != nil {
-				return runErr
-			}
+		if out.OwnerReviewed && out.Gate != nil {
+			// The gate refused and the owner's review overrode it. The
+			// full verdict goes on the op log at Info, applied or not,
+			// so every override is visible next to the refusal it
+			// replaced.
+			verdict, _ := json.Marshal(out.Gate)
+			env.Log(slog.LevelInfo, "owner-reviewed apply: certainty gate overridden",
+				slog.String("book_id", id),
+				slog.String("overridden", out.Gate.OverrideSummary()),
+				slog.Bool("applied", out.Applied),
+				slog.String("gate_verdict", string(verdict)))
+		}
 
-			// Second pass over the books the gate deferred. Without it the
-			// checkpoint carry above only helps a run that gets RESTARTED: a run
-			// that finishes normally reaches terminal success, its checkpoint
-			// becomes moot, and the deferred books are never applied by anything.
-			//
-			// This is not a generic retry loop and must not become one — it
-			// exists because gate saturation is a property of the MOMENT, not of
-			// the book, and the biggest consumer of that gate is this op's own
-			// workers, which have now finished. So the second look is the one
-			// most likely to succeed, and one is enough: a book deferred twice is
-			// contending with something outside this batch, which another lap
-			// here would not resolve.
-			//
-			// Same concurrency as the main pass, deliberately: the worst case is
-			// that the retry takes as long as the portion of the batch it covers
-			// would have, which is the cost of the work rather than an extra one.
-			// No CheckpointEvery — a restart during this pass resumes from the
-			// checkpoint the main pass already wrote, which still owes these
-			// books because CheckpointStateFn folded them back in.
-			if deferred := takeGateDeferred(); len(deferred) > 0 {
-				reporter.Log(slog.LevelInfo, "retrying books the write-back gate deferred",
-					slog.Int("count", len(deferred)))
-				retryErr := opsregistry.RunItems(ctx, reporter, deferred, runOne, opsregistry.RunItemsOptions{
-					Concurrency:    writeBackWorkers(),
-					PerItemTimeout: 3 * time.Minute,
-					ErrMode:        opsregistry.ErrModeCollect,
-					Label:          func(int, int) string { return "retrying deferred books" },
-					// Progress stays pinned at the batch's own end: these books
-					// were already counted as examined by the main pass, so
-					// letting this pass advance the bar would drive it past 100%.
-					ProgressOffset: originalTotal,
-					ProgressTotal:  originalTotal,
-				})
-				if retryErr != nil {
-					return retryErr
-				}
+		if !out.Applied {
+			switch out.Reason {
+			case applySkipNoCachedCandidates:
+				noCandidates.Add(1)
+			case applySkipDecodeFailed:
+				decodeFailed.Add(1)
+			case applySkipApplyFailed:
+				applyFailed.Add(1)
+			case applySkipBookNotFound:
+				bookMissing.Add(1)
+			case applySkipGateBlocked:
+				// The certainty gate refused (score floor, stale cache
+				// identity, or a volume-number mismatch). Nothing was
+				// written; the book stays for manual review.
+				gateBlocked.Add(1)
+			case applySkipFileWorkWouldFail:
+				// The rename after the apply was known to fail, so the
+				// apply was refused before any write: the database and
+				// the files still agree.
+				fileWorkBlocked.Add(1)
+			case applySkipStaleCandidate:
+				// The owner reviewed a candidate the cache has since
+				// replaced; nothing was written.
+				staleCandidate.Add(1)
+			case applySkipMarkedNoMatch:
+				// The owner rejected every match; nothing was written.
+				markedNoMatch.Add(1)
+			case applySkipAuthorsUnreadable:
+				// The live author read failed; nothing was written.
+				authorsUnreadable.Add(1)
+			case applySkipAlreadyApplied:
+				// Applied before; nobody asked to re-apply it.
+				alreadyApplied.Add(1)
+			case applySkipBookRetired:
+				// Trashed or merged away; nobody confirmed this book.
+				retired.Add(1)
 			}
-
-			// The counters cover THIS attempt only; they are not carried across a
-			// restart. So the resumed wording reports them against the books this
-			// attempt examined and names the earlier work separately, rather than
-			// printing "applied 120 of 699" — which would read as 579 failures.
-			// Read AFTER the retry pass: whatever is still here was deferred
-			// twice, so this counts books that genuinely need a fresh apply,
-			// not books that merely waited once.
-			stillDeferred := len(snapshotGateDeferred())
-			summary := fmt.Sprintf(
-				"applied %d of %d (owner-reviewed over the certainty gate %d, refused by certainty gate %d, reviewed candidate changed since it was shown %d, marked no match %d, already applied %d, retired %d, skipped because an earlier run refused them for a structural reason and nothing changed %d, authors unreadable %d, refused because the rename could not land %d, no candidates %d, book not found %d, decode failed %d, apply failed %d, write-back failed %d, owner-reviewed change history not recorded %d, gate unavailable %d, kept user-locked fields on %d, sibling-part index could not read %d books)",
-				applied.Load(), total, ownerReviewed.Load(), gateBlocked.Load(), staleCandidate.Load(), markedNoMatch.Load(), alreadyApplied.Load(), retired.Load(), refusalSkipped.Load(), authorsUnreadable.Load(), fileWorkBlocked.Load(), noCandidates.Load(), bookMissing.Load(), decodeFailed.Load(),
-				applyFailed.Load(), writeFailed.Load(), historyFailed.Load(), stillDeferred,
-				skippedLocked.Load(), claims.Unreadable())
-			if n := refusalSkipped.Load(); n > 0 {
-				_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("skipped %d books with unchanged structural refusals (their files, path, tags and candidate are what they were when an earlier run refused them; %s forgets these)", n, batchApplyRefusalsResetOpID),
-					slog.Int64("skipped", n))
+			notApplied.Add(1)
+			attrs := []slog.Attr{
+				slog.String("book_id", logger.SanitizeLogValue(id)),
+				slog.String("reason", out.Reason),
+				slog.String("error", logger.SanitizeLogValue(errText(out.Err))),
 			}
-			if p.Mode == metafetch.BulkApplyModeReplace {
-				summary = fmt.Sprintf("%s; replace mode: owner replace overwrote existing values on %d", summary, ownerReplaced.Load())
+			if out.Gate != nil {
+				attrs = append(attrs, slog.String("gate_reason", out.Gate.Reason), slog.Float64("score", out.Gate.Score))
 			}
-			if priorDone > 0 {
-				// State the known ambiguity rather than implying a clean count.
-				// The watermark is the contiguous completed PREFIX, so a resumed
-				// attempt re-examines any book a faster worker finished past a
-				// gap. An apply that recorded the match leaves the book "matched",
-				// so on the second look it lands in "already applied", next to
-				// books applied long before this batch. The number cannot be
-				// recovered here; saying so beats a count that reads as failures.
-				summary = fmt.Sprintf(
-					"%s; %d more were completed by earlier attempts before a restart, %d in the batch overall"+
-						" (some of this attempt's \"already applied\" may be books an earlier attempt applied)",
-					summary, priorDone, originalTotal)
-			}
-			_ = progress.UpdateProgress(originalTotal, originalTotal, "complete: "+summary)
+			env.Log(slog.LevelWarn, batchApplyRefusedLine(id, out), attrs...)
 			return nil
+		}
+
+		applied.Add(1)
+		if out.OwnerReviewed {
+			ownerReviewed.Add(1)
+		}
+		if out.OwnerReplace {
+			ownerReplaced.Add(1)
+		}
+		if len(out.SkippedLocked) > 0 {
+			skippedLocked.Add(1)
+		}
+		// One line per applied book: which book took which candidate,
+		// plus the owner-replace and kept-locked-fields facts that used
+		// to be separate lines.
+		appliedAttrs := []slog.Attr{slog.String("book_id", logger.SanitizeLogValue(id))}
+		if len(out.SkippedLocked) > 0 {
+			appliedAttrs = append(appliedAttrs, slog.Any("skipped_locked", out.SkippedLocked))
+		}
+		env.Log(slog.LevelInfo, batchApplyAppliedLine(id, out), appliedAttrs...)
+		// Each line logs its own error (HistoryErr / WriteBackErr), not
+		// the joined Err: a book can hit both, and each line should say
+		// exactly what it is about.
+		if out.HistoryFailed {
+			historyFailed.Add(1)
+			env.Log(slog.LevelError, fmt.Sprintf("history not recorded: %s — owner-reviewed apply written but change history not recorded: %s",
+				batchApplyBookLabel(id, out), logger.SanitizeLogValue(errText(out.HistoryErr))),
+				slog.String("book_id", logger.SanitizeLogValue(id)))
+		}
+		if out.WriteBackFailed {
+			// Counted separately and logged, but NOT subtracted from
+			// applied: the database change is real and durable. Reporting
+			// it as unapplied would send someone re-applying work that
+			// succeeded.
+			writeFailed.Add(1)
+			env.Log(slog.LevelWarn, fmt.Sprintf("write-back failed: %s — applied to database but writing the files failed: %s",
+				batchApplyBookLabel(id, out), logger.SanitizeLogValue(errText(out.WriteBackErr))),
+				slog.String("book_id", logger.SanitizeLogValue(id)))
+		}
+		return nil
+	}
+
+	// RunItems reports progress after EVERY item, which is what resets the
+	// registry stuck-op watchdog. This def sets Timeout: 4h but no explicit
+	// ProgressTimeout, so it inherits the 5-minute default. PerItemTimeout
+	// is 3 minutes — deliberately BELOW that 5-minute watchdog, so a single
+	// wedged book fails its own item and lets the loop report progress
+	// again, rather than starving the watchdog and killing the whole op.
+	// That is precisely how the UA-purge census died: no progress for
+	// 5m18s against a 5m0s timeout.
+	//
+	// ErrModeCollect, NOT the default ErrModeFail: the loop this replaces
+	// recorded every per-book failure as a skip and carried on, and
+	// ErrModeFail would cancel the whole batch on the first bad book.
+	//
+	// The Label is deliberately COARSE and constant: reporter_db.go writes
+	// one op_logs_v2 row per DISTINCT progress message, so a label carrying
+	// the book id would write one DB row per book.
+	//
+	// CHECKPOINTING. runOne returns nil for every per-book outcome
+	// (failures land in the counters), and RunItems only advances the
+	// watermark on a nil return — so every book examined here leaves the
+	// remaining set, whether it applied or was skipped. That is
+	// deliberate and is the user's requirement verbatim: "don't let one
+	// bad item constantly make it fail." A book with no cached candidate
+	// would otherwise be retried on every restart, forever.
+	//
+	// The cost is accepted knowingly: a book whose write-back failed on a
+	// transient fault (a NAS blip) also leaves the set and is not retried
+	// by the resume. It is not lost — the database apply is durable and
+	// the failure is counted and logged as writeFailed — but recovering
+	// the file write needs a fresh apply, not this checkpoint. Note this
+	// inverts RunItems' documented default rationale ("a FAILED item never
+	// advances the watermark"), which is why it is spelled out here rather
+	// than left to read as an oversight.
+	runErr := t7ForEach(ctx, env.t7Env, bookIDs, t7ItemsOptions{
+		Concurrency:   writeBackWorkers(),
+		ItemTimeout:   3 * time.Minute,
+		CollectErrors: true,
+		// Carries the running counts, rebuilt only every
+		// batchApplyLabelEvery books: reporter_db.go writes one op log
+		// row per DISTINCT progress message, and the per-book outcome
+		// lines above are the ones worth the rows.
+		Label: func(int, int) string { return label.get(applied.Load() + notApplied.Load()) },
+		// Absolute position in the batch the user started, not in this
+		// attempt's remainder.
+		ProgressBase:    priorDone,
+		ProgressTotal:   originalTotal,
+		CheckpointEvery: batchApplyCheckpointEvery,
+		// The watermark is the contiguous completed PREFIX, so
+		// bookIDs[watermark:] is exactly the work still owed — including
+		// any book a faster worker finished out of order past a gap,
+		// which is re-applied rather than skipped. Storing the remaining
+		// IDs, rather than the watermark index the chapters-backfill
+		// precedent stores, is what makes this safe against the set
+		// changing between attempts: MergeQueuedParams can union new
+		// books into a queued row, and an index into a list that has
+		// since grown would silently skip whatever sorted below it. That
+		// is the 2026-08-21 production incident shape (registry/types.go)
+		// — new books discarded while the run reported success.
+		//
+		// Every field is carried, deliberately, even though today's
+		// merge would not strictly require it. Checkpoint JSON is
+		// OVERLAID on the resumed params by mergeJSONParams, which is a
+		// maps.Copy: a key absent from the overlay keeps the base
+		// params' value rather than reverting to a zero value. So
+		// omitting WriteBack would currently be survivable — but only by
+		// accident of the base row still holding it, and only while no
+		// `omitempty` sits on the field. Writing the full state keeps
+		// the checkpoint self-describing and independent of that.
+		//
+		// The direction that DOES bite is the opposite one: an
+		// `omitempty` on BookIDs would drop an empty remaining-set from
+		// the overlay and let the base params' original 699 IDs show
+		// through, re-applying the entire batch. That is why BookIDs
+		// carries no omitempty and OriginalTotal does.
+		CheckpointState: func(_ context.Context, watermark int) error {
+			st := batchApplyCheckpointState(
+				bookIDs, p.WriteBack, originalTotal, watermark,
+				snapshotGateDeferred(), p.Pins, p.Mode)
+			return env.Checkpoint(st)
+		},
+	}, runOne)
+	// Return BEFORE the "complete" row, so a canceled batch does not report
+	// success on its way out.
+	//
+	// runOne returns nil on EVERY path — every per-book outcome, including
+	// a write-back gate timeout, lands in a counter instead. That is load
+	// bearing rather than incidental: ErrModeCollect does not suppress
+	// errors, it joins them and RunItems returns the join, so any non-nil
+	// return from runOne would fail the whole op. With that invariant,
+	// runErr is exactly the run context's cancellation error and nothing
+	// else. If a future edit adds an error return to runOne, it must
+	// either be a genuine whole-batch abort or go in a counter.
+	if runErr != nil {
+		return runErr
+	}
+
+	// Second pass over the books the gate deferred. Without it the
+	// checkpoint carry above only helps a run that gets RESTARTED: a run
+	// that finishes normally reaches terminal success, its checkpoint
+	// becomes moot, and the deferred books are never applied by anything.
+	//
+	// This is not a generic retry loop and must not become one — it
+	// exists because gate saturation is a property of the MOMENT, not of
+	// the book, and the biggest consumer of that gate is this op's own
+	// workers, which have now finished. So the second look is the one
+	// most likely to succeed, and one is enough: a book deferred twice is
+	// contending with something outside this batch, which another lap
+	// here would not resolve.
+	//
+	// Same concurrency as the main pass, deliberately: the worst case is
+	// that the retry takes as long as the portion of the batch it covers
+	// would have, which is the cost of the work rather than an extra one.
+	// No CheckpointEvery — a restart during this pass resumes from the
+	// checkpoint the main pass already wrote, which still owes these
+	// books because CheckpointStateFn folded them back in.
+	if deferred := takeGateDeferred(); len(deferred) > 0 {
+		env.Log(slog.LevelInfo, "retrying books the write-back gate deferred",
+			slog.Int("count", len(deferred)))
+		retryErr := t7ForEach(ctx, env.t7Env, deferred, t7ItemsOptions{
+			Concurrency:   writeBackWorkers(),
+			ItemTimeout:   3 * time.Minute,
+			CollectErrors: true,
+			Label:         func(int, int) string { return "retrying deferred books" },
+			// Progress stays pinned at the batch's own end: these books
+			// were already counted as examined by the main pass, so
+			// letting this pass advance the bar would drive it past 100%.
+			ProgressBase:  originalTotal,
+			ProgressTotal: originalTotal,
+		}, runOne)
+		if retryErr != nil {
+			return retryErr
+		}
+	}
+
+	// The counters cover THIS attempt only; they are not carried across a
+	// restart. So the resumed wording reports them against the books this
+	// attempt examined and names the earlier work separately, rather than
+	// printing "applied 120 of 699" — which would read as 579 failures.
+	// Read AFTER the retry pass: whatever is still here was deferred
+	// twice, so this counts books that genuinely need a fresh apply,
+	// not books that merely waited once.
+	stillDeferred := len(snapshotGateDeferred())
+	summary := fmt.Sprintf(
+		"applied %d of %d (owner-reviewed over the certainty gate %d, refused by certainty gate %d, reviewed candidate changed since it was shown %d, marked no match %d, already applied %d, retired %d, skipped because an earlier run refused them for a structural reason and nothing changed %d, authors unreadable %d, refused because the rename could not land %d, no candidates %d, book not found %d, decode failed %d, apply failed %d, write-back failed %d, owner-reviewed change history not recorded %d, gate unavailable %d, kept user-locked fields on %d, sibling-part index could not read %d books)",
+		applied.Load(), total, ownerReviewed.Load(), gateBlocked.Load(), staleCandidate.Load(), markedNoMatch.Load(), alreadyApplied.Load(), retired.Load(), refusalSkipped.Load(), authorsUnreadable.Load(), fileWorkBlocked.Load(), noCandidates.Load(), bookMissing.Load(), decodeFailed.Load(),
+		applyFailed.Load(), writeFailed.Load(), historyFailed.Load(), stillDeferred,
+		skippedLocked.Load(), run.Unreadable())
+	if n := refusalSkipped.Load(); n > 0 {
+		env.Log(slog.LevelInfo, fmt.Sprintf("skipped %d books with unchanged structural refusals (their files, path, tags and candidate are what they were when an earlier run refused them; %s forgets these)", n, batchApplyRefusalsResetOpID),
+			slog.Int64("skipped", n))
+	}
+	if p.Mode == metafetch.BulkApplyModeReplace {
+		summary = fmt.Sprintf("%s; replace mode: owner replace overwrote existing values on %d", summary, ownerReplaced.Load())
+	}
+	if priorDone > 0 {
+		// State the known ambiguity rather than implying a clean count.
+		// The watermark is the contiguous completed PREFIX, so a resumed
+		// attempt re-examines any book a faster worker finished past a
+		// gap. An apply that recorded the match leaves the book "matched",
+		// so on the second look it lands in "already applied", next to
+		// books applied long before this batch. The number cannot be
+		// recovered here; saying so beats a count that reads as failures.
+		summary = fmt.Sprintf(
+			"%s; %d more were completed by earlier attempts before a restart, %d in the batch overall"+
+				" (some of this attempt's \"already applied\" may be books an earlier attempt applied)",
+			summary, priorDone, originalTotal)
+	}
+	env.progress(originalTotal, originalTotal, "complete: "+summary)
+	return nil
+}
+
+// headBatchApply is HEAD's write side: the server's metadata fetch service and
+// store.
+type headBatchApply struct{ s *Server }
+
+func (h headBatchApply) OpenBatchApply(ctx context.Context) (batchApplyRun, error) {
+	s := h.s
+	svc := s.metadataFetchService
+	if svc == nil {
+		return nil, fmt.Errorf("batch-apply-cached: metadata fetch service not initialized")
+	}
+	store := s.storeForWiring()
+	// The sibling-part claims need every claim before the first apply: the index
+	// covers EVERY book with cached candidates, not the batch (see the core).
+	claims, err := cachedClaimIndex(ctx, svc, store)
+	if err != nil {
+		return nil, fmt.Errorf("batch-apply-cached: %w", err)
+	}
+	r := &headBatchApplyRun{
+		svc:    svc,
+		claims: claims,
+		// One import-path read shared by every book of this call
+		// (withCachedImportPaths), not one per resolver call per book.
+		books: withCachedImportPaths(store),
+	}
+	// Fail open: a server with no raw KV store simply remembers nothing.
+	if store != nil {
+		r.refusals = newApplyRefusalLedger(store)
+	}
+	return r, nil
+}
+
+type headBatchApplyRun struct {
+	svc      cachedApplyService
+	claims   *applygate.ClaimIndex
+	books    bookReader
+	refusals *applyRefusalLedger
+}
+
+func (r *headBatchApplyRun) Unreadable() int { return r.claims.Unreadable() }
+
+func (r *headBatchApplyRun) Skip(id string, pin *metafetch.CandidatePin) (applyRefusalRecord, bool, bool) {
+	return r.refusals.Skip(r.svc, r.books, id, pin)
+}
+
+func (r *headBatchApplyRun) Apply(ctx context.Context, id string, a batchApplyArgs) applyOutcome {
+	out := applyCachedCandidateForBookTimed(ctx, r.svc, r.books, id, a.WriteBack, a.Check, a.Timings, r.claims, a.Pin, a.Mode)
+	r.refusals.Settle(id, out, a.HadPrior, a.Pin)
+	return out
+}
+
+// batchApplyOverlay is what HEAD's registry does with a checkpoint: the keys the
+// checkpoint carries replace the params'. batchApplyCheckpointState always
+// writes the remaining books and write_back; the total, pins and mode only when
+// non-empty (omitempty), so an absent key leaves the params' value standing.
+func batchApplyOverlay(p, ck batchApplyOpParams) batchApplyOpParams {
+	p.BookIDs, p.WriteBack = ck.BookIDs, ck.WriteBack
+	if ck.OriginalTotal != 0 {
+		p.OriginalTotal = ck.OriginalTotal
+	}
+	if len(ck.Pins) > 0 {
+		p.Pins = ck.Pins
+	}
+	if ck.Mode != "" {
+		p.Mode = ck.Mode
+	}
+	return p
+}
+
+// t7ApplyPathWrites is the write set of a cached-candidate apply: the book's
+// fields, authors and series, the files it renames and tags, the candidate cache
+// row an identity change drops, and the change history. Shared by every kind
+// that runs the apply path.
+func t7ApplyPathWrites() tasks.Effects {
+	return t7Writes(ops.ResBooks, ops.ResBookFiles, ops.ResAuthors, ops.ResSeries, ops.ResFiles, ops.ResMetadataCache, ops.ResActivity)
+}
+
+// batchApplyNative is the native books.metadata.batch-apply-cached kind. HEAD
+// runs it only live (no preview), so a Preview run is refused. The pool is
+// HEAD's file-write worker count; the checkpoint is HEAD's, restored and
+// overlaid on the params as HEAD's registry would.
+func (s *Server) batchApplyNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	kind := t7KindFor(batchApplyCachedOpID)
+	c := t7Common(s.batchApplyDef(), sched)
+	c.Resume = t7Resume(opsregistry.ResumeRestart, true)
+	c.Effects = t7ApplyPathWrites()
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			if err := t7LiveOnly(rc, kind); err != nil {
+				return struct{}{}, err
+			}
+			p, err := t7DecodeNative[batchApplyOpParams](kind, raw)
+			if err != nil {
+				return struct{}{}, err
+			}
+			if err := t7NeedStore(kind, deps); err != nil {
+				return struct{}{}, err
+			}
+			var ck batchApplyOpParams
+			if ok, rerr := rc.Restore(&ck); rerr != nil {
+				return struct{}{}, fmt.Errorf("batch-apply-cached: restore checkpoint: %w", rerr)
+			} else if ok {
+				p = batchApplyOverlay(p, ck)
+			}
+			w, err := t7NewWriter(kind, deps, rc)
+			if err != nil {
+				return struct{}{}, err
+			}
+			env := t7NativeEnv(rc)
+			env.Items = t7NativeItems(rc, tasks.Fixed(writeBackWorkers(), "HEAD's file-write worker count (metadata_scoring.write_back_workers, capped): disk and TagLib bound"))
+			return struct{}{}, batchApplyCore(rc.Context(), p, batchApplyEnv{
+				t7Env:     env,
+				Writer:    w,
+				StandDown: t7NativeStandDown(rc, deps.StandDownKey),
+			})
 		},
 	})
 }
