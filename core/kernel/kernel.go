@@ -1,5 +1,5 @@
 // file: core/kernel/kernel.go
-// version: 1.0.23
+// version: 1.0.24
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
 // last-edited: 2026-11-18
 
@@ -42,6 +42,7 @@ import (
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/ui"
 	"github.com/falkcorp/mediacore/version"
@@ -263,8 +264,16 @@ type Kernel struct {
 	reporters    kernelReporters
 	tasks        *kernelTasks
 	dataMig      *DataMigrations
-	swap         *kernelSwap // P0a on; nil when P0a did not run (swap.go)
-	build        string      // the binary ID, once computed (swap.go)
+	// imp are the importers Manifest.Cutover receives, bound at the start of
+	// P4b once the stores they write through are open (cutover_importers.go).
+	// importerCfg and importerSec are what P4b binds: nil until the config
+	// boot and the secrets store are wired (F3-07), so every Cutover step
+	// still refuses with module.ErrImporterNotBound.
+	imp         *lateImporters
+	importerCfg config.Importer
+	importerSec secrets.Importer
+	swap        *kernelSwap // P0a on; nil when P0a did not run (swap.go)
+	build       string      // the binary ID, once computed (swap.go)
 	// swapLock is the swap lock this kernel holds (exclusive through P0a
 	// and shared from its end, storage.LockSwapShared for an offline open,
 	// storage.LockSwapExclusive for an offline swap), released by closeCore
@@ -433,6 +442,15 @@ func (k *Kernel) document(owner, ver string) ([]byte, error) {
 	return doc.JSON()
 }
 
+// importers returns the kernel's late-bound Cutover importers, built on
+// first use.
+func (k *Kernel) importers() *lateImporters {
+	if k.imp == nil {
+		k.imp = &lateImporters{}
+	}
+	return k.imp
+}
+
 // catalog is P1: every manifest, enabled or not; IDs against the reserved
 // names; MinCoreVersion against version.Version; enablement (06 §6.5.1 P1).
 // Static checks only. The legacy-claims collision check of 06 §6.4.6 is
@@ -502,7 +520,7 @@ func (k *Kernel) catalog(describe bool) error {
 	// Every manifest's TaskLedger and DataMigrations, enabled or not: they stay
 	// known while the module is disabled (06 §6.4.2).
 	probs = append(probs, ledgerProblems(k.entries)...)
-	probs = append(probs, dataMigrationProblems(k.entries)...)
+	probs = append(probs, dataMigrationProblems(k.entries, k.importers().values())...)
 	probs = append(probs, settingsProblems(k.entries)...)
 	probs = append(probs, rewriteProblems(k.entries)...)
 	return joined(probs)

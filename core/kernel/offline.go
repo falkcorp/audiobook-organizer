@@ -1,7 +1,7 @@
 // file: core/kernel/offline.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 299eb4da-a345-4039-9962-8ce819af3f0f
-// last-edited: 2026-11-12
+// last-edited: 2026-11-18
 
 package kernel
 
@@ -284,7 +284,7 @@ func (k *Kernel) swapper(ctx context.Context) (*restoreswap.Swapper, error) {
 		return nil, err
 	}
 	return restoreswap.New(restoreswap.Options{FS: fs, StateDir: k.cfg.StateDir, BuildID: build, Clock: bootClock(ctx),
-		Owners: k.storageOwners(), Probe: bootProbe(ctx, fs), Logger: k.coreLog("restoreswap")})
+		Owners: k.storageOwners(), Probe: bootProbe(ctx, fs), Logger: k.coreLog("restoreswap"), RewriteStep: k.rewriteID()})
 }
 
 // liveStore opens the live store read-only (best effort) for what an
