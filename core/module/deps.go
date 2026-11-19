@@ -1,5 +1,5 @@
 // file: core/module/deps.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 04c2ba0c-0bfa-4d6b-9e91-bc7ba2db6894
 // last-edited: 2026-11-19
 
@@ -89,11 +89,15 @@ type ConfigAccess interface {
 	// generation (config.Store.OnCommit): the hook an App-wide projection
 	// rebuilds on, whoever wrote.
 	OnCommit(fn func(gen uint64))
+	// PassthroughValues are the operator-layer values of passthrough paths
+	// (integrations.<kind>.<instance>.<field>), raw and sorted by path.
+	PassthroughValues() iter.Seq2[config.Path, config.OperatorValue]
 	// Secret, PutSecret and DeleteSecret reach the secret store by name, for
-	// names Manifest.AppConfig.Secrets admits and that are not themselves
-	// registered config keys (those are read through Lookup and written
-	// through Apply, so their audit and protection hold). Any other name is
-	// refused with secrets.ErrOutOfScope.
+	// names Manifest.AppConfig.Secrets admits; any other name is refused with
+	// secrets.ErrOutOfScope. A name that is a registered config key is
+	// readable (the key's Lookup carries only metadata) but not writable here:
+	// PutSecret and DeleteSecret refuse it, because Apply writes it and so
+	// keeps its audit, protection and lock.
 	Secret(ctx context.Context, name secrets.Name) (secrets.Value, secrets.Meta, error)
 	PutSecret(ctx context.Context, name secrets.Name, v secrets.Value, by string) (secrets.Meta, error)
 	DeleteSecret(ctx context.Context, name secrets.Name, by string) error

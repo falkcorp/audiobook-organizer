@@ -1,5 +1,5 @@
 // file: core/kernel/config_boot.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0e3db6c6-c5ae-4f54-adaf-6fd7b728c89e
 // last-edited: 2026-11-19
 
@@ -460,10 +460,23 @@ func (a *appConfigAccess) Apply(ctx context.Context, p config.Patch, act config.
 	return a.store.Apply(ctx, p, act)
 }
 
-// allowed is the secret methods' gate.
+func (a *appConfigAccess) PassthroughValues() iter.Seq2[config.Path, config.OperatorValue] {
+	return a.store.PassthroughValues()
+}
+
+// allowed is the read gate: the declaration admits the name.
 func (a *appConfigAccess) allowed(name secrets.Name) error {
 	if a.secrets == nil || a.admit == nil || !a.admit(name) {
 		return secrets.ErrOutOfScope
+	}
+	return nil
+}
+
+// allowedWrite is the write gate: admitted, and not a registered config key
+// (Apply writes those).
+func (a *appConfigAccess) allowedWrite(name secrets.Name) error {
+	if err := a.allowed(name); err != nil {
+		return err
 	}
 	if _, registered := a.store.Lookup(config.Path(name)); registered {
 		return fmt.Errorf("%w: %q is a registered config key; use Apply", secrets.ErrOutOfScope, name)
@@ -479,14 +492,14 @@ func (a *appConfigAccess) Secret(ctx context.Context, name secrets.Name) (secret
 }
 
 func (a *appConfigAccess) PutSecret(ctx context.Context, name secrets.Name, v secrets.Value, by string) (secrets.Meta, error) {
-	if err := a.allowed(name); err != nil {
+	if err := a.allowedWrite(name); err != nil {
 		return secrets.Meta{}, err
 	}
 	return a.secrets.Put(ctx, name, v, by)
 }
 
 func (a *appConfigAccess) DeleteSecret(ctx context.Context, name secrets.Name, by string) error {
-	if err := a.allowed(name); err != nil {
+	if err := a.allowedWrite(name); err != nil {
 		return err
 	}
 	return a.secrets.Delete(ctx, name, by)

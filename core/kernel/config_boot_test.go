@@ -1,5 +1,5 @@
 // file: core/kernel/config_boot_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d2618bbb-991d-4090-bcf6-a00ef3f98c75
 // last-edited: 2026-11-19
 
@@ -278,12 +278,13 @@ func TestConfigBoot_P4bOpensTheSecretStore(t *testing.T) {
 // appConfigHost boots two modules over a gate-on kernel: alfred, which
 // declares no AppConfig, and lucius, which does and admits only names under
 // "integrations.batcave.". It returns each module's Deps.
-func appConfigHost(t *testing.T, gateOn bool) (k *Kernel, alfred, lucius module.Deps) {
+func appConfigHost(t *testing.T, gateOn bool, env ...string) (k *Kernel, alfred, lucius module.Deps) {
 	t.Helper()
 	h := newSwapHost(t)
 	c := h.config(&alfred)
 	if gateOn {
-		c = h.gatedConfig(&alfred)
+		c = h.gatedConfig(&alfred, env...)
+		c.ConfigOptions.Passthrough = func(p config.Path) bool { return p == "integrations.batcave.alfred.host" }
 	}
 	c.Modules = append(c.Modules, mod("lucius", func(r *module.Registrar) error {
 		lucius = r.Deps()
@@ -348,6 +349,22 @@ func TestConfigBoot_DepsConfigIsTheLayeredStore(t *testing.T) {
 	}
 }
 
+// TestConfigBoot_DepsConfigPassthroughValues: an operator value of a passthrough
+// path reaches the module raw, with where it came from.
+func TestConfigBoot_DepsConfigPassthroughValues(t *testing.T) {
+	_, _, lucius := appConfigHost(t, true, "GOTHAM_INTEGRATIONS_BATCAVE_ALFRED_HOST=bat.example.test")
+	var got config.OperatorValue
+	var found bool
+	for p, v := range lucius.Config.PassthroughValues() {
+		if p == "integrations.batcave.alfred.host" {
+			got, found = v, true
+		}
+	}
+	if !found || string(got.Value) != `"bat.example.test"` || got.Src != config.SourceEnv {
+		t.Fatalf("passthrough value = %+v (found %v), want the env's host", got, found)
+	}
+}
+
 // TestConfigBoot_DepsConfigSecretsAreTheDeclaredNames: Secret, PutSecret and
 // DeleteSecret work on a name the declaration admits and refuse, with
 // ErrOutOfScope, a name outside it, a name that is a registered config key
@@ -385,11 +402,21 @@ func TestConfigBoot_DepsConfigSecretsAreTheDeclaredNames(t *testing.T) {
 			break
 		}
 	}
-	if registered != "" {
+	if registered == "" {
+		t.Fatal("the boot registers no secret config key: the registered-key refusals below would be vacuous")
+	}
+	{
 		wide := &appConfigAccess{store: lucius.Config.(*appConfigAccess).store, secrets: lucius.Config.(*appConfigAccess).secrets,
 			admit: func(secrets.Name) bool { return true }}
-		if _, _, err := wide.Secret(ctx, registered); !errors.Is(err, secrets.ErrOutOfScope) {
-			t.Errorf("Secret(%s), a registered key: %v, want ErrOutOfScope", registered, err)
+		if _, err := wide.PutSecret(ctx, registered, secrets.NewValue(secretsFixture), "user:alfred"); !errors.Is(err, secrets.ErrOutOfScope) {
+			t.Errorf("PutSecret(%s), a registered key: %v, want ErrOutOfScope", registered, err)
+		}
+		if err := wide.DeleteSecret(ctx, registered, "user:alfred"); !errors.Is(err, secrets.ErrOutOfScope) {
+			t.Errorf("DeleteSecret(%s), a registered key: %v, want ErrOutOfScope", registered, err)
+		}
+		// Reading a registered key's secret is allowed: Lookup carries only metadata.
+		if _, _, err := wide.Secret(ctx, registered); errors.Is(err, secrets.ErrOutOfScope) {
+			t.Errorf("Secret(%s), a registered key, was refused as out of scope", registered)
 		}
 	}
 	none := &appConfigAccess{store: lucius.Config.(*appConfigAccess).store, secrets: lucius.Config.(*appConfigAccess).secrets}
