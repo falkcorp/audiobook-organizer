@@ -1,5 +1,5 @@
 // file: core/internal/outboxhttp/routes_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: b91b2c32-bee4-4aac-a400-6fb0e871d709
 // last-edited: 2026-11-19
 
@@ -2407,5 +2407,26 @@ func TestOutboxHTTP_IsRefusalBounds(t *testing.T) {
 		if got := isRefusal(c.err); got != c.want {
 			t.Errorf("isRefusal(%v) = %v, want %v", c.err, got, c.want)
 		}
+	}
+}
+
+// TestOutboxHTTP_CloneWithCopies: the copy has the base's entries and the extra
+// ones (extra wins), whether or not there is a base, and writing to it never
+// reaches the base, which every copy of an event shares.
+func TestOutboxHTTP_CloneWithCopies(t *testing.T) {
+	base := map[string]any{"seq": 4, "topic": "gotham.signal.raised.v1"}
+	got := cloneWith(base, map[string]any{"skipped": 2, "topic": "gotham.notice.v1"})
+	if len(got) != 3 || got["seq"] != 4 || got["skipped"] != 2 || got["topic"] != "gotham.notice.v1" {
+		t.Errorf("cloneWith = %v", got)
+	}
+	got["extra"] = true
+	if len(base) != 2 || base["topic"] != "gotham.signal.raised.v1" {
+		t.Errorf("the base changed: %v", base)
+	}
+	if got := cloneWith(nil, map[string]any{"skipped": 2}); len(got) != 1 || got["skipped"] != 2 {
+		t.Errorf("cloneWith over no base = %v", got)
+	}
+	if got := cloneWith(nil, nil); got == nil {
+		t.Error("cloneWith over nothing = nil, want a map that can be written to")
 	}
 }
