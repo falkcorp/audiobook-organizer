@@ -52,6 +52,13 @@ class TooSlowTest(unittest.TestCase):
     def test_inside_grace_never_slow(self):
         self.assertFalse(wd.too_slow([(0, 0), (5, 0)], 5, 0, 1000, 10, 20))
 
+    def test_slow_inside_grace_is_not_killed_but_is_after_it(self):
+        # A full window of flat history (rate 0 < floor) at t=15: inside a 20 s
+        # grace it is left alone, at t=25 under the same samples it is not.
+        flat = [(0, 5), (15, 5)]
+        self.assertFalse(wd.too_slow(flat, 15, 0, 1000, 10, 20))
+        self.assertTrue(wd.too_slow([(0, 5), (25, 5)], 25, 0, 1000, 10, 20))
+
     def test_needs_a_full_window_of_history(self):
         self.assertFalse(wd.too_slow([(20, 0), (25, 0)], 25, 0, 1000, 10, 20))
 
@@ -385,6 +392,7 @@ class AptInstallTest(unittest.TestCase):
         lst = self.tmp / "classic.list"
         lst.write_text(
             "# deb http://old.archive.ubuntu.com/ubuntu resolute main\n"
+            "# deb mirror+file:/etc/apt/apt-mirrors.txt resolute main\n"
             "deb mirror+file:/etc/apt/apt-mirrors.txt resolute main\n"
             "deb [arch=amd64] https://us-east-2.ec2.archive.ubuntu.com/ubuntu resolute-updates main\n"
             "deb mirror://mirrors.ubuntu.com/mirrors.txt resolute-backports main\n"
@@ -397,12 +405,26 @@ class AptInstallTest(unittest.TestCase):
         self.assertEqual(
             lst.read_text(),
             "# deb http://old.archive.ubuntu.com/ubuntu resolute main\n"
+            "# deb mirror+file:/etc/apt/apt-mirrors.txt resolute main\n"
             "deb http://fast.archive.ubuntu.com/ubuntu/ resolute main\n"
             "deb [arch=amd64] https://fast.archive.ubuntu.com/ubuntu resolute-updates main\n"
             "deb http://fast.archive.ubuntu.com/ubuntu/ resolute-backports main\n"
             "deb http://security.ubuntu.com/ubuntu resolute-security main\n"
             "deb http://ports.ubuntu.com/ubuntu-ports resolute main\n",
         )
+
+    def test_only_security_and_ports_sources_are_not_a_hit(self):
+        # No Ubuntu archive source here: the call must say so and change nothing,
+        # not claim a rotation because "ubuntu.com" appears.
+        lst = self.tmp / "sec.list"
+        text = ("deb http://security.ubuntu.com/ubuntu resolute-security main\n"
+                "deb http://ports.ubuntu.com/ubuntu-ports resolute main\n")
+        lst.write_text(text)
+        _exe(self.bin / "apt-get", "exit 1\n")
+        r = self.run_script(slow_hosts="", attempts=2, sources=[lst])
+        self.assertIn("keeping the configured mirror", r.stderr)
+        self.assertNotIn("archive mirror is now", r.stderr)
+        self.assertEqual(lst.read_text(), text)
 
     def test_rotating_to_the_host_already_in_use_still_counts_as_rotated(self):
         # archive.ubuntu.com -> archive.ubuntu.com must not log "no source".
