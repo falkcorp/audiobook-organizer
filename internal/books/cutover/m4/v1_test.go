@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/v1_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d27b5e81-3c94-4a60-9f18-6e0a41c7b952
 // last-edited: 2026-11-18
 
@@ -313,6 +313,62 @@ func TestCutover_V1OperationRowsSetAside(t *testing.T) {
 			if _, err := s.Stores.Runs.Get(ctx, tasks.RunID(runID(i))); err == nil {
 				t.Errorf("run %d was imported", i)
 			}
+		}
+	})
+}
+
+// TestCutover_V1StrayRowsQuarantineTheOperation: a v1 operation is the only
+// record of its ID, so a v3 or v2 row that names the same ID with no v3 run
+// record (a progress row, a feed event, a v2 state or item row) cannot be
+// imported under it. The operation row is quarantined with the stray reason,
+// every row it owns with the run-quarantine reason, nothing is imported and
+// nothing is left in the source; the same operation without the stray row
+// imports.
+func TestCutover_V1StrayRowsQuarantineTheOperation(t *testing.T) {
+	done := tptr(epoch.Add(time.Hour))
+	raw := map[string]string{}
+	for i, stray := range []string{
+		"opv3:prog:" + runID(1),
+		"opv3:evt:" + runID(2) + ":00000000000000000001",
+		"opv2:state:" + runID(3),
+		"opv2:row:" + runID(4) + ":book-1",
+	} {
+		id := runID(i + 1)
+		v1Op{id: id, typ: "dedup.book-scan", status: "completed", done: done, logs: 1}.put(raw)
+		raw[stray] = `{"Gotham":"Year One"}`
+	}
+	v1Op{id: runID(5), typ: "dedup.book-scan", status: "completed", done: done, logs: 1}.put(raw) // no stray row
+	r := newRig(t, withRaw(raw))
+	r.runObserve(t, func(ctx context.Context, s *snap) {
+		got := map[string]string{}
+		for _, q := range s.Quarantine {
+			got[q.Key] = q.Reason
+		}
+		for i := 1; i <= 4; i++ {
+			op := "operation:" + runID(i)
+			if !strings.Contains(got[op], "no v3 run record to import them under") {
+				t.Errorf("%s: reason %q, want the stray-row reason", op, got[op])
+			}
+			if _, ok := got[fmt.Sprintf("operationlog:%s:%d:1", runID(i), epoch.Add(time.Second).UnixNano())]; !ok {
+				t.Errorf("run %d: the operation's own log line was not set aside with it: %v", i, got)
+			}
+			if _, err := s.Stores.Runs.Get(ctx, tasks.RunID(runID(i))); err == nil {
+				t.Errorf("run %d was imported over its stray row", i)
+			}
+		}
+		for _, k := range []string{
+			"opv3:prog:" + runID(1), "opv3:evt:" + runID(2) + ":00000000000000000001",
+			"opv2:state:" + runID(3), "opv2:row:" + runID(4) + ":book-1",
+		} {
+			if _, ok := got[k]; !ok {
+				t.Errorf("stray row %s is not in the quarantine: %v", k, got)
+			}
+		}
+		if rec, err := s.Stores.Runs.Get(ctx, tasks.RunID(runID(5))); err != nil || rec.State != tasks.StateSucceeded {
+			t.Errorf("the operation with no stray row = %+v, %v", rec, err)
+		}
+		if len(s.Left) != 0 {
+			t.Errorf("left %v", keysOf(s.Left))
 		}
 	})
 }
