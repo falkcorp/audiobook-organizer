@@ -1,5 +1,5 @@
 // file: core/internal/storagetasks/kinds_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 2a99dbbf-d3e7-4586-b768-b26eb0d5d60c
 // last-edited: 2026-11-18
 
@@ -183,11 +183,7 @@ func fastOptions() Options {
 
 func kindsOf(t *testing.T, s Surface, sink CensusSink) (compact, census tasks.Definition) {
 	t.Helper()
-	defs := Kinds(s, sink, fastOptions())
-	if len(defs) != 2 {
-		t.Fatalf("Kinds returned %d definitions, want 2", len(defs))
-	}
-	return defs[0], defs[1]
+	return CompactTask(s, fastOptions()), CensusTask(s, sink, fastOptions())
 }
 
 // Both kinds pass the shared conformance suite (invariant 9).
@@ -266,7 +262,7 @@ func TestStorageKinds_CensusDeclaration(t *testing.T) {
 // A surface that is nil yields definitions with no body, which registration
 // refuses (fail closed).
 func TestStorageKinds_NilSurfaceFailsClosed(t *testing.T) {
-	for _, d := range Kinds(nil, nil, Options{}) {
+	for _, d := range []tasks.Definition{CompactTask(nil, Options{}), CensusTask(nil, nil, Options{})} {
 		if len(tasks.Problems(d)) == 0 {
 			t.Errorf("%s: no problem reported for a nil surface", d.Kind())
 		}
@@ -367,12 +363,12 @@ func TestCompact_PropagatesCompactError(t *testing.T) {
 
 func TestCompact_ReturnsImmediatelyWhenCompactionIsFast(t *testing.T) {
 	// An interval far longer than the call: the sampler must not delay the return.
-	defs := Kinds(&fakeSurface{}, &memSink{}, Options{Interval: time.Hour})
+	compactDef := CompactTask(&fakeSurface{}, Options{Interval: time.Hour})
 	h := newHost(t.Context(), KindCompact)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		if _, err := runKind[CompactResult](t, defs[0], h); err != nil {
+		if _, err := runKind[CompactResult](t, compactDef, h); err != nil {
 			t.Error(err)
 		}
 	}()
@@ -547,8 +543,8 @@ func TestCensus_CountsEveryKeyOnceIntoTheStore(t *testing.T) {
 		want++
 	}
 	store := NewCensusStore(ks)
-	defs := Kinds(admin, store, fastOptions())
-	res, err := runKind[CensusResult](t, defs[1], newHost(ctx, KindCensus))
+	censusDef := CensusTask(admin, store, fastOptions())
+	res, err := runKind[CensusResult](t, censusDef, newHost(ctx, KindCensus))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -571,7 +567,7 @@ func TestCensus_CountsEveryKeyOnceIntoTheStore(t *testing.T) {
 	}
 	// A second pass counts its predecessor's record: the record is one row,
 	// overwritten, never accumulated.
-	res2, err := runKind[CensusResult](t, defs[1], newHost(ctx, KindCensus))
+	res2, err := runKind[CensusResult](t, censusDef, newHost(ctx, KindCensus))
 	if err != nil {
 		t.Fatal(err)
 	}

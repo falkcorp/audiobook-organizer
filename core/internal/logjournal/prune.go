@@ -1,5 +1,5 @@
 // file: core/internal/logjournal/prune.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5d0c7e32-8a41-4f6b-9b13-2e7a4c1d8f90
 // last-edited: 2026-11-18
 
@@ -34,9 +34,11 @@ const (
 
 // MaxRetentionDays bounds core.log.journal.retention_days (100 years). It is
 // the schema maximum of Settings.RetentionDays, and the prune task enforces it
-// again at run time, because a value past about 106,000 days overflows a
-// time.Duration and a wrapped cutoff in the future would delete the whole
-// journal. A value above it fails the run and deletes nothing.
+// again at run time so that a value that got past the schema (a stored value
+// older than the cap, a direct write) never reaches the date arithmetic: a day
+// count near the int range wraps time.AddDate to a cutoff at or after now,
+// which would delete the whole journal. A value above it fails the run and
+// deletes nothing.
 const MaxRetentionDays = 36500
 
 // PruneParams is empty: each pass reads the settings afresh.
