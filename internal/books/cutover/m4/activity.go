@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/activity.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5b1f8d36-c4a7-4e09-9d52-0a63e7b1c8f4
 // last-edited: 2026-11-18
 
@@ -50,6 +50,12 @@ func ActivitySourceRanges() []storage.Range {
 const (
 	OutcomeActivityRewritten = "activity-rewritten"
 	OutcomeActivityKept      = "activity-unchanged"
+	// OutcomeActivityItemsHeld counts, once per item, the digest items left as
+	// stored inside a row that was otherwise written (or kept): the item is a
+	// repairs reference no run can resolve to one fixer. The row is not held (a
+	// held row would leave its resolvable items under their HEAD def IDs too),
+	// so each such item is counted here and logged instead.
+	OutcomeActivityItemsHeld = "activity-items-held"
 
 	reasonActivityKey  = "the activity row's key does not decode"
 	reasonActivityBody = "the activity row does not decode"
@@ -61,6 +67,11 @@ const (
 	// repairs kind. It stays as stored, listed, rather than naming a def ID
 	// the task store no longer has.
 	reasonActivityRepairs = "a repairs row whose run is not in the task store as a repairs run, so its fixer is unknown"
+	// reasonActivityItem and reasonActivityItemAmbiguous are the same decision
+	// taken for one digest item, which stays as stored while the digest's other
+	// items are renamed.
+	reasonActivityItem          = "a digest item of a repairs def whose operation is not in the task store as a repairs run, so its fixer is unknown"
+	reasonActivityItemAmbiguous = "a digest item of a repairs def whose operations are runs of different fixers, so it has no single kind"
 )
 
 // RunReader is the task store's read of one run record: tasks.RunStore.Get.
@@ -90,6 +101,7 @@ type Activity struct {
 	logger                *slog.Logger
 	runs                  func() RunReader
 	rewritten, kept, held atomic.Int64
+	itemsHeld             atomic.Int64
 }
 
 // NewActivity returns the in-place activity rewrite with ID id.
@@ -159,6 +171,10 @@ func kindOf(id string) (kind string, repairs, ok bool) {
 // errNoRepairsKind says a repairs reference could not be resolved to a kind.
 var errNoRepairsKind = errors.New("m4: a repairs reference has no run to take its kind from")
 
+// errAmbiguousRepairsKind says a repairs reference names several runs that do
+// not share one kind. It is an errNoRepairsKind: the reference stays as stored.
+var errAmbiguousRepairsKind = fmt.Errorf("%w: its runs are of different kinds", errNoRepairsKind)
+
 // kinds resolves the def IDs of one feed row. opID is the operation the
 // reference belongs to (the row's operation_id; a digest item's op: tag).
 type kinds struct {
@@ -167,6 +183,37 @@ type kinds struct {
 	// cache holds the kind each run resolved to, so a digest of many items of
 	// one run reads it once.
 	cache map[string]string
+	// heldItems holds the reason of each digest item the row's rewrite left as
+	// stored because its repairs reference could not be resolved. The caller
+	// counts and logs them.
+	heldItems []string
+}
+
+// kindForOps is kind for a reference that names ops: none (as kind with no
+// operation), one, or several. With several, every run must resolve to the same
+// kind, else errAmbiguousRepairsKind (errNoRepairsKind if any one cannot be
+// resolved). A def that is no repairs def ignores ops, as kind does.
+func (k *kinds) kindForOps(def string, ops []string) (string, bool, error) {
+	if len(ops) <= 1 {
+		op := ""
+		if len(ops) == 1 {
+			op = ops[0]
+		}
+		return k.kind(def, op)
+	}
+	var first string
+	for i, op := range ops {
+		kind, found, err := k.kind(def, op)
+		switch {
+		case err != nil || !found:
+			return "", false, err
+		case i == 0:
+			first = kind
+		case kind != first:
+			return "", false, errAmbiguousRepairsKind
+		}
+	}
+	return first, true, nil
 }
 
 // kind is the kind def is renamed to, found false when def is no def ID. A
@@ -215,7 +262,8 @@ func (a *Activity) Step(ctx context.Context, kv storage.KV, w *datamigrate.StepW
 	if json.Unmarshal(kv.Value, &row) != nil || row == nil {
 		return a.hold(kv, w, reasonActivityBody)
 	}
-	oldType, newType, changed, ok, err := rewriteEntry(tier, row, &kinds{ctx: ctx, runs: a.runs(), cache: map[string]string{}})
+	ks := &kinds{ctx: ctx, runs: a.runs(), cache: map[string]string{}}
+	oldType, newType, changed, ok, err := rewriteEntry(tier, row, ks)
 	switch {
 	case errors.Is(err, errNoRepairsKind):
 		return a.hold(kv, w, reasonActivityRepairs)
@@ -223,6 +271,11 @@ func (a *Activity) Step(ctx context.Context, kv storage.KV, w *datamigrate.StepW
 		return err
 	case !ok:
 		return a.hold(kv, w, reasonActivityBody)
+	}
+	for _, reason := range ks.heldItems {
+		a.logger.Warn("m4: a digest item is left as stored", "reason", reason, "key_prefix", keyPrefixOf(kv.Key))
+		a.itemsHeld.Add(1)
+		w.Count(OutcomeActivityItemsHeld)
 	}
 	if !changed {
 		a.kept.Add(1)
@@ -318,7 +371,7 @@ func rewriteEntry(tier string, row map[string]json.RawMessage, ks *kinds) (oldTy
 			changed = true
 		}
 	}
-	tags, c, good, err := renameTags(row["tags"], opID, ks)
+	tags, c, good, err := renameTags(row["tags"], opsOf(opID), ks)
 	if err != nil {
 		return "", "", false, false, err
 	}
@@ -373,9 +426,17 @@ func rewriteEntry(tier string, row map[string]json.RawMessage, ks *kinds) (oldTy
 	return oldType, newType, changed, true, nil
 }
 
+// opsOf is the operations a row's own operation_id names: none or one.
+func opsOf(opID string) []string {
+	if opID == "" {
+		return nil
+	}
+	return []string{opID}
+}
+
 // renameTags rewrites the def:<id> tags of a tags array (nil or null: none).
-// opID is the operation the tags belong to, for a repairs def.
-func renameTags(raw json.RawMessage, opID string, ks *kinds) (out json.RawMessage, changed, ok bool, err error) {
+// ops are the operations the tags belong to, for a repairs def.
+func renameTags(raw json.RawMessage, ops []string, ks *kinds) (out json.RawMessage, changed, ok bool, err error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return raw, false, true, nil
 	}
@@ -385,7 +446,7 @@ func renameTags(raw json.RawMessage, opID string, ks *kinds) (out json.RawMessag
 	}
 	for i, t := range tags {
 		if id, has := strings.CutPrefix(t, "def:"); has {
-			k, found, err := ks.kind(id, opID)
+			k, found, err := ks.kindForOps(id, ops)
 			if err != nil {
 				return nil, false, false, err
 			}
@@ -402,28 +463,41 @@ func renameTags(raw json.RawMessage, opID string, ks *kinds) (out json.RawMessag
 	return enc, err == nil, err == nil, nil
 }
 
-// opOfTags is the operation a digest item's tags name: its one op:<id> tag. ""
-// when it has none or several, so a repairs item with no single operation is
-// held rather than guessed.
-func opOfTags(raw json.RawMessage) string {
+// opsOfTags is the operations a digest item's tags name: each op:<id> tag, in
+// order (a repeated one resolves from the run cache and agrees with itself). A Summarize item that spans several operations has several.
+func opsOfTags(raw json.RawMessage) []string {
 	var tags []string
 	if json.Unmarshal(raw, &tags) != nil {
-		return ""
+		return nil
 	}
-	id := ""
+	var ids []string
 	for _, t := range tags {
 		if v, has := strings.CutPrefix(t, "op:"); has && v != "" {
-			if id != "" && id != v {
-				return ""
-			}
-			id = v
+			ids = append(ids, v)
 		}
 	}
-	return id
+	return ids
+}
+
+// itemOps is the operations a digest item belongs to: its op: tags, else its
+// own operation_id (digest items written before 2026-05-20 carry no tags), else
+// none.
+func itemOps(it map[string]json.RawMessage) []string {
+	if ids := opsOfTags(it["tags"]); len(ids) > 0 {
+		return ids
+	}
+	var opID string
+	if raw, has := it["operation_id"]; has && json.Unmarshal(raw, &opID) != nil {
+		opID = "" // a non-string operation_id names no run
+	}
+	return opsOf(opID)
 }
 
 // renameDigestItems renames the type and def: tags of each item of a daily
-// digest's details. An item's operation is its op: tag.
+// digest's details. An item's operations are itemOps. An item whose repairs
+// reference cannot be resolved (errNoRepairsKind) stays exactly as stored, whole,
+// and its reason is added to ks.heldItems; the other items are still renamed. ok
+// is false when an item does not decode.
 func renameDigestItems(det map[string]json.RawMessage, ks *kinds) (changed, ok bool, err error) {
 	raw, has := det["items"]
 	if !has || string(raw) == "null" {
@@ -434,36 +508,20 @@ func renameDigestItems(det map[string]json.RawMessage, ks *kinds) (changed, ok b
 		return false, false, nil
 	}
 	for _, it := range items {
-		opID := opOfTags(it["tags"])
-		if tr, has := it["type"]; has {
-			var s string
-			if json.Unmarshal(tr, &s) != nil {
-				return false, false, nil
-			}
-			k, found, err := ks.kind(s, opID)
-			if err != nil {
-				return false, false, err
-			}
-			if found {
-				enc, err := json.Marshal(k)
-				if err != nil {
-					return false, false, fmt.Errorf("m4: encode kind %q: %w", k, err)
-				}
-				it["type"] = enc
-				changed = true
-			}
-		}
-		tags, c, good, err := renameTags(it["tags"], opID, ks)
-		if err != nil {
+		c, good, err := renameDigestItem(it, ks)
+		switch {
+		case errors.Is(err, errAmbiguousRepairsKind):
+			ks.heldItems = append(ks.heldItems, reasonActivityItemAmbiguous)
+			continue
+		case errors.Is(err, errNoRepairsKind):
+			ks.heldItems = append(ks.heldItems, reasonActivityItem)
+			continue
+		case err != nil:
 			return false, false, err
-		}
-		if !good {
+		case !good:
 			return false, false, nil
 		}
-		if c {
-			it["tags"] = tags
-			changed = true
-		}
+		changed = changed || c
 	}
 	if !changed {
 		return false, true, nil
@@ -474,6 +532,44 @@ func renameDigestItems(det map[string]json.RawMessage, ks *kinds) (changed, ok b
 	}
 	det["items"] = out
 	return true, true, nil
+}
+
+// renameDigestItem renames one item's type and def: tags, or none of them: the
+// item is changed only when everything it names resolved.
+func renameDigestItem(it map[string]json.RawMessage, ks *kinds) (changed, ok bool, err error) {
+	ops := itemOps(it)
+	var newType json.RawMessage
+	if tr, has := it["type"]; has {
+		var s string
+		if json.Unmarshal(tr, &s) != nil {
+			return false, false, nil
+		}
+		k, found, err := ks.kindForOps(s, ops)
+		if err != nil {
+			return false, false, err
+		}
+		if found {
+			if newType, err = json.Marshal(k); err != nil {
+				return false, false, fmt.Errorf("m4: encode kind %q: %w", k, err)
+			}
+		}
+	}
+	tags, c, good, err := renameTags(it["tags"], ops, ks)
+	if err != nil {
+		return false, false, err
+	}
+	if !good {
+		return false, false, nil
+	}
+	if newType != nil {
+		it["type"] = newType
+		changed = true
+	}
+	if c {
+		it["tags"] = tags
+		changed = true
+	}
+	return changed, true, nil
 }
 
 // encode is json.Marshal without HTML escaping, so a rewritten row's other
