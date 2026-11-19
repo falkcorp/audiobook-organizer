@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
 // last-edited: 2026-11-18
 
@@ -8,6 +8,7 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -362,8 +363,13 @@ type authorStripMergeReport struct {
 	// RowsHeldSoleCredit counts junk rows kept (not deleted) because at least
 	// one book they credit was held.
 	RowsHeldSoleCredit int
-	Failed             int
-	Sample             []string
+	// BooksHeldUserLocked counts books left as they are because the user locked
+	// their author (author_name): not unlinked from the junk row, whatever other
+	// credits they have. RowsHeldUserLocked counts the junk rows kept for it.
+	BooksHeldUserLocked int
+	RowsHeldUserLocked  int
+	Failed              int
+	Sample              []string
 
 	// Title-as-author relink (author_strip_merge_relink.go). RelinkPlanned
 	// books have exactly one real author; RelinkNoCandidate and
@@ -395,11 +401,11 @@ type authorStripMergeReport struct {
 
 func (r authorStripMergeReport) summary() string {
 	return fmt.Sprintf(
-		"authors=%d junk=%d title-as-author=%d title-as-author-unverified=%d mergeable=%d ambiguous=%d target-is-junk=%d target-unverified=%d merge-target-removed=%d stripped-no-target=%d out-of-scope=%d placeholders=%d placeholders-no-canonical=%d canonical-unknown-id=%d merged=%d deleted=%d books-touched=%d books-held-sole-credit=%d rows-held-sole-credit=%d failed=%d relink-planned=%d relink-no-candidate=%d relink-conflict=%d relink-skipped-itunes=%d relink-skipped-owner-manual=%d relink-skipped-user-locked=%d relink-failed=%d relink-ambiguous=%d relink-deferred=%d relinked=%d relink-new-authors=%d relink-journal-rows=%d twin-deletes=%d",
+		"authors=%d junk=%d title-as-author=%d title-as-author-unverified=%d mergeable=%d ambiguous=%d target-is-junk=%d target-unverified=%d merge-target-removed=%d stripped-no-target=%d out-of-scope=%d placeholders=%d placeholders-no-canonical=%d canonical-unknown-id=%d merged=%d deleted=%d books-touched=%d books-held-sole-credit=%d rows-held-sole-credit=%d books-held-user-locked=%d rows-held-user-locked=%d failed=%d relink-planned=%d relink-no-candidate=%d relink-conflict=%d relink-skipped-itunes=%d relink-skipped-owner-manual=%d relink-skipped-user-locked=%d relink-failed=%d relink-ambiguous=%d relink-deferred=%d relinked=%d relink-new-authors=%d relink-journal-rows=%d twin-deletes=%d",
 		r.TotalAuthors, r.Junk, r.TitleAsAuthor, r.TitleAsAuthorUnverified, r.Mergeable, r.Ambiguous, r.TargetIsJunk, r.TargetUnverified, r.MergeTargetRemoved,
 		r.StrippedNoTarget, r.OutOfScope, r.Placeholders, r.PlaceholdersNoCanonical,
 		r.CanonicalUnknownID, r.Merged, r.Deleted, r.BooksTouched,
-		r.BooksHeldSoleCredit, r.RowsHeldSoleCredit, r.Failed,
+		r.BooksHeldSoleCredit, r.RowsHeldSoleCredit, r.BooksHeldUserLocked, r.RowsHeldUserLocked, r.Failed,
 		r.RelinkPlanned, r.RelinkNoCandidate, r.RelinkConflict, r.RelinkSkippedITunes, r.RelinkSkippedOwnerManual, r.RelinkSkippedUserLocked, r.RelinkFailed, r.RelinkAmbiguous, r.RelinkDeferred, r.Relinked, r.RelinkNewAuthors, r.RelinkJournalRows, r.TwinDeletes)
 }
 
@@ -909,6 +915,7 @@ func authorStripMergeCore(ctx context.Context, params authorStripMergeParams, en
 		}
 	}
 	heldBooks := map[string]struct{}{}
+	lockedBooks := map[string]struct{}{}
 
 	for i, pl := range plans {
 		if ctx.Err() != nil {
@@ -971,12 +978,15 @@ func authorStripMergeCore(ctx context.Context, params authorStripMergeParams, en
 		// set it reads every credit and reports what it WOULD do, so the
 		// authorless count in a report-only run is the apply's own number
 		// rather than a second estimate that could drift from it.
-		n, held, err := unlinkAndDeleteAuthorVia(ctx, store, env.Writer, pl.from, doomed, relinkedBooks, !params.Apply, log)
+		n, held, lockHeld, err := unlinkAndDeleteAuthorVia(ctx, store, env.Writer, pl.from, doomed, relinkedBooks, !params.Apply, log)
 		// Partial counts are still real work (or real prediction): a row that
 		// failed on its third book did rewrite two, and the report must not
 		// shrink because of it.
 		for _, id := range held {
 			heldBooks[id] = struct{}{}
+		}
+		for _, id := range lockHeld {
+			lockedBooks[id] = struct{}{}
 		}
 		if params.Apply {
 			report.BooksTouched += n
@@ -987,6 +997,11 @@ func authorStripMergeCore(ctx context.Context, params authorStripMergeParams, en
 				"author_id", pl.from.ID, "name", pl.from.Name, "reason", pl.reason, "err", err)
 			continue
 		}
+		if len(lockHeld) > 0 {
+			report.RowsHeldUserLocked++
+			log.Info("author-strip-merge: junk row kept, a book that credits it has its author locked by the user",
+				"author_id", pl.from.ID, "name", pl.from.Name, "locked_books", len(lockHeld))
+		}
 		if len(held) > 0 {
 			// The row still credits books it is the only author of: kept.
 			report.RowsHeldSoleCredit++
@@ -994,11 +1009,15 @@ func authorStripMergeCore(ctx context.Context, params authorStripMergeParams, en
 				"author_id", pl.from.ID, "name", pl.from.Name, "held_books", len(held))
 			continue
 		}
+		if len(lockHeld) > 0 {
+			continue
+		}
 		if params.Apply {
 			report.Deleted++
 		}
 	}
 	report.BooksHeldSoleCredit = len(heldBooks)
+	report.BooksHeldUserLocked = len(lockedBooks)
 
 	env.Progress(len(plans), len(plans), report.summary())
 	log.Info("author-strip-merge done", "summary", report.summary())
@@ -1099,27 +1118,47 @@ func isRealAuthor(store interface {
 // relinked holds books the title-as-author relink gives a real author in this
 // same run (a dry run has not written them yet), which are not at risk.
 //
+// A book whose author the user locked (author_name) is left exactly as it is,
+// whatever other credits it has, and is returned in lockHeld; like a held book it
+// keeps the row from being deleted. The check runs in a dry run too. A lock set
+// that cannot be read is an error before that book is written or the row is
+// deleted. The primary-author rewrite asks again under the book's write lock, and
+// a lock saved after the credits were written puts them back.
+//
 // It takes a reader and a writer, so the native kind reaches it through its run's
 // gated writer and HEAD's shell through the plugin's store.
-func unlinkAndDeleteAuthorVia(ctx context.Context, store authorStripMergeStore, writer authorStripMergeWriter, from database.Author, doomed map[int]bool, relinked map[string]bool, dryRun bool, log *slog.Logger) (unlinked int, held []string, err error) {
+func unlinkAndDeleteAuthorVia(ctx context.Context, store authorStripMergeStore, writer authorStripMergeWriter, from database.Author, doomed map[int]bool, relinked map[string]bool, dryRun bool, log *slog.Logger) (unlinked int, held, lockHeld []string, err error) {
 
 	// ForRelink, not WithRole: the trash is included, because DeleteAuthor
 	// below sweeps the author out of trashed books' junction rows too.
 	books, err := store.GetBooksByAuthorIDForRelinkCore(from.ID)
 	if err != nil {
-		return 0, nil, fmt.Errorf("get books for author %d: %w", from.ID, err)
+		return 0, nil, nil, fmt.Errorf("get books for author %d: %w", from.ID, err)
 	}
 
 	for _, book := range books {
 		if ctx.Err() != nil {
-			return unlinked, held, ctx.Err()
+			return unlinked, held, lockHeld, ctx.Err()
 		}
 		bookAuthors, err := store.GetBookAuthors(book.ID)
 		if err != nil {
 			// Do NOT fall through to DeleteAuthor after this: dropping the row
 			// while a book still credits it is precisely the orphaning this
 			// function exists to avoid.
-			return unlinked, held, fmt.Errorf("get book authors for %s: %w", book.ID, err)
+			return unlinked, held, lockHeld, fmt.Errorf("get book authors for %s: %w", book.ID, err)
+		}
+
+		// The user's lock comes before anything about this book is decided or
+		// written. Locked: the book keeps every credit and its primary, and the
+		// row stays (the book still names it). Unreadable: the run stops here,
+		// before this book is written and before the row is deleted.
+		locks, lerr := database.LoadFieldLocks(store, book.ID)
+		if lerr != nil {
+			return unlinked, held, lockHeld, fmt.Errorf("book %s NOT unlinked: %w", book.ID, lerr)
+		}
+		if locks.Locked(database.FieldKeyAuthorName) {
+			lockHeld = append(lockHeld, book.ID)
+			continue
 		}
 
 		var remaining []database.BookAuthor
@@ -1156,7 +1195,7 @@ func unlinkAndDeleteAuthorVia(ctx context.Context, store authorStripMergeStore, 
 			continue
 		}
 		if err := writer.SetBookAuthors(book.ID, remaining); err != nil {
-			return unlinked, held, fmt.Errorf("set book authors for %s: %w", book.ID, err)
+			return unlinked, held, lockHeld, fmt.Errorf("set book authors for %s: %w", book.ID, err)
 		}
 
 		// Move the denormalized primary off the row being deleted: promote the
@@ -1176,7 +1215,7 @@ func unlinkAndDeleteAuthorVia(ctx context.Context, store authorStripMergeStore, 
 			if len(remaining) > 0 {
 				survivor, err := store.GetAuthorByID(remaining[0].AuthorID)
 				if err != nil {
-					return unlinked, held, fmt.Errorf("load surviving author %d for %s: %w", remaining[0].AuthorID, book.ID, err)
+					return unlinked, held, lockHeld, fmt.Errorf("load surviving author %d for %s: %w", remaining[0].AuthorID, book.ID, err)
 				}
 				promoted = survivor
 			}
@@ -1184,7 +1223,7 @@ func unlinkAndDeleteAuthorVia(ctx context.Context, store authorStripMergeStore, 
 			// (ModifyBook), so a column another writer commits meanwhile is
 			// not reverted (audit A1#15). The fresh row decides: a book whose
 			// primary already moved off the deleted author is left alone.
-			written, err := writer.ModifyBook(book.ID, func(full *database.Book) error {
+			written, heldKeys, err := database.ModifyBookRespectingLocks(writer, store, book.ID, func(full *database.Book) error {
 				if full.AuthorID == nil || *full.AuthorID != from.ID {
 					return database.ErrSkipBookWrite
 				}
@@ -1197,24 +1236,38 @@ func unlinkAndDeleteAuthorVia(ctx context.Context, store authorStripMergeStore, 
 				}
 				return nil
 			})
+			if len(heldKeys) > 0 || errors.Is(err, database.ErrFieldLocksUnavailable) {
+				// A lock saved after the check above (or a lock set that cannot be
+				// read now): the primary was not written, so the credits written
+				// above go back, or the book would credit the survivors while its
+				// primary still names the row.
+				if rbErr := writer.SetBookAuthors(book.ID, bookAuthors); rbErr != nil {
+					return unlinked, held, lockHeld, fmt.Errorf("book %s: author locked mid-write and its credits could not be restored: %w", book.ID, rbErr)
+				}
+				if err != nil {
+					return unlinked, held, lockHeld, fmt.Errorf("rewrite primary author of %s: %w", book.ID, err)
+				}
+				lockHeld = append(lockHeld, book.ID)
+				continue
+			}
 			if err != nil {
-				return unlinked, held, fmt.Errorf("rewrite primary author of %s: %w", book.ID, err)
+				return unlinked, held, lockHeld, fmt.Errorf("rewrite primary author of %s: %w", book.ID, err)
 			}
 			if written == nil {
-				return unlinked, held, fmt.Errorf("hydrate book %s for primary rewrite: not found", book.ID)
+				return unlinked, held, lockHeld, fmt.Errorf("hydrate book %s for primary rewrite: not found", book.ID)
 			}
 		}
 		unlinked++
 	}
 
-	if dryRun || len(held) > 0 {
-		return unlinked, held, nil
+	if dryRun || len(held) > 0 || len(lockHeld) > 0 {
+		return unlinked, held, lockHeld, nil
 	}
 	if err := store.VerifyAuthorUnlinked(from.ID); err != nil {
-		return unlinked, held, err
+		return unlinked, held, lockHeld, err
 	}
 	if err := writer.DeleteAuthor(from.ID); err != nil {
-		return unlinked, held, fmt.Errorf("delete author %d: %w", from.ID, err)
+		return unlinked, held, lockHeld, fmt.Errorf("delete author %d: %w", from.ID, err)
 	}
-	return unlinked, held, nil
+	return unlinked, held, lockHeld, nil
 }

@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.47 -->
+<!-- version: 10.78.48 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -6559,7 +6559,10 @@ generate-on-behalf should force a short expiry / first-use rotation for safety.
   `plugins/maintenance/author.go` (:233/:242; the `extra_ops.go` half is part 2),
   `itunes_regroup.go`, `booksig_recovery_audit.go`, `author_conjunction_repair.go`
   (the primary-author rewrite, the title-as-author relink in `author_strip_merge_relink.go`,
-  and the author merge, which now keeps an author a locked book still credits).
+  and the author merge, which now keeps an author a locked book still credits), and the
+  junk-row unlink `unlinkAndDeleteAuthorVia` in `author_strip_merge.go` that the same op
+  runs after the relink (a locked book is left as it is and keeps the row from being
+  deleted; summary keys `books-held-user-locked` / `rows-held-user-locked`).
   Checked, no code change: `fs_regroup_xml.go` `updateSurvivor` already read the title
   lock fail-closed (characterization test added); `repair_junk_titles.go` no longer exists
   (absorbed into `junk_title_fixer.go`, which checks `FieldKeyTitle`); `intro_transcribe.go`
@@ -6568,10 +6571,16 @@ generate-on-behalf should force a short expiry / first-use rotation for safety.
   **Part 2, still open:** `internal/scheduler/extra_ops.go`, `title_backfill.go`,
   `title_repair.go`, `series_denumber_op.go`, `internal/server/entities_ops.go`,
   `internal/server/server_metadata.go`, `internal/server/handlers/entities/handler.go`,
-  `internal/server/duplicates_helpers.go`. **Found on the way, not touched:**
-  `unlinkAndDeleteAuthorVia` (`author_strip_merge.go`) and the `author_id_repair` /
-  `author_duplicate_merge` merge paths still rewrite credits and primary authors without a
-  lock check, and other callers of `authormerge.MoveCredits` are unguarded.
+  `internal/server/duplicates_helpers.go`. **Found on the way, not touched:** the
+  `author_id_repair` / `author_duplicate_merge` merge paths still rewrite credits and
+  primary authors without a lock check, and other callers of `authormerge.MoveCredits` are
+  unguarded. `mergeAuthorIntoVia` re-checks nothing at its `MoveCredits` write (only an
+  advisory pre-check), so a lock saved in that window is not honoured.
+  The title-as-author relink journals a book's credits (`journalCredits`) before the
+  guarded write, so a lock saved between the pre-check and the write leaves a journal row
+  for a book that was then held (and, as before this change, for a book whose write
+  failed). Its revert would refuse that book (`ReasonChangedSince`), not damage it; voiding
+  the row means `journalCredits` returning a void func like `authormerge.Step`.
 
 - [ ] **Field-lock LOW items deferred from PR #3054's round-2 review** — none of these
   lose data; they are clarity and drift risks the review (L1–L4) named:
