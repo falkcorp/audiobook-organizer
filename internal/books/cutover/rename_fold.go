@@ -1,5 +1,5 @@
 // file: internal/books/cutover/rename_fold.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3e8c5a17-9b24-4d6f-8f1a-0c7d2b95e6a3
 // last-edited: 2026-11-19
 
@@ -34,20 +34,35 @@ var oidcFoldNames = []string{oauthEnabled, "oauth_github_client_id", "oauth_goog
 //
 // The entries are built by the planner's own fold (planner.foldValue and
 // fold), so M2 and this cannot disagree about what an entry holds. A name
-// absent from values keeps what prev says (the same reading UnfoldOIDC gives
-// it); prev being empty means sign-in off.
+// absent from values means "keep": it takes what prev says (the reading
+// UnfoldOIDC gives prev), and prev being empty means sign-in off. The
+// allow-list and the default role are access policy, so an existing entry's
+// allowed_emails and default_role are never touched unless values names
+// oauth_allowed_emails or oauth_default_role: a write of one client id keeps
+// both.
 //
 // Merging into prev: an entry for a provider that stays keeps its own fields
 // (kind, issuer, client_secret reference, anything else) and takes the new
-// client_id, allowed_emails and default_role; a provider the values no longer
-// name (empty client id, or sign-in off) is removed; a provider that is new
-// gets the fold's entry, which carries no client_secret reference (the secret
-// is set by name, and the caller adds the reference); an entry whose id HEAD
-// does not know (neither github nor google) is carried over untouched, in its
-// place. With nothing to fold the result is the empty list.
+// client_id; a provider the values no longer name (empty client id, or sign-in
+// off) is removed; a provider that is new gets the fold's entry, which carries
+// no client_secret reference (the secret is set by name, and the caller adds
+// the reference) and takes the allow-list and role from the values, else from
+// prev's other entries; an entry whose id HEAD does not know (neither github
+// nor google) is carried over untouched, in its place. With nothing to fold
+// the result is the empty list.
+//
+// An explicitly empty oauth_allowed_emails keeps HEAD's meaning, which is
+// "no OAuth logins allowed" (config.OAuthAllowedEmails), and the canonical
+// resolver admits nobody from an empty list either (core/auth/oidc admitted):
+// it clears an existing allow-list to "allowed_emails": [] (written out, not
+// dropped) and writes [] on a new entry. An entry that never had the key
+// already admits nobody, so it is left as it is. Neither fails open.
 //
 // A name that is not an oauth_* fold name, or a value of the wrong type, is
-// ErrConvertInput.
+// ErrConvertInput. A prev that is not a list, or whose HEAD providers
+// UnfoldOIDC refuses (they disagree on the allow-list or role), is an error
+// returned as it is: the flat names cannot say how to merge into it, and
+// guessing would change who may sign in.
 func FoldOIDC(values map[string]json.RawMessage, prev json.RawMessage) (json.RawMessage, error) {
 	bad := func(what string) error { return fmt.Errorf("%w: oidc-fold: %s", ErrConvertInput, what) }
 	old, err := decodeEntryList(prev, "oidc-fold")
@@ -55,9 +70,15 @@ func FoldOIDC(values map[string]json.RawMessage, prev json.RawMessage) (json.Raw
 		return nil, err
 	}
 	// Split prev into the entries HEAD can express and the rest.
+	for _, e := range old {
+		var v string
+		if raw, has := e["id"]; has && json.Unmarshal(raw, &v) != nil {
+			return nil, bad("a provider's id is not a string")
+		}
+	}
 	headID := func(e map[string]json.RawMessage) string {
 		var id string
-		_ = json.Unmarshal(e["id"], &id)
+		_ = json.Unmarshal(e["id"], &id) // validated above
 		for _, p := range oidcProviders {
 			if p.id == id {
 				return id
@@ -74,12 +95,16 @@ func FoldOIDC(values map[string]json.RawMessage, prev json.RawMessage) (json.Raw
 	// What prev says, then what the values override.
 	merged := map[string]any{}
 	if len(head) > 0 {
-		if base, err := UnfoldOIDC(mustJSON(head)); err == nil {
-			for k, v := range base {
-				var x any
-				_ = json.Unmarshal(v, &x)
-				merged[k] = x
+		base, err := UnfoldOIDC(mustJSON(head))
+		if err != nil {
+			return nil, fmt.Errorf("the existing providers: %w", err)
+		}
+		for k, v := range base {
+			var x any
+			if err := json.Unmarshal(v, &x); err != nil {
+				return nil, bad("an existing provider does not unfold to JSON")
 			}
+			merged[k] = x
 		}
 	}
 	for k, v := range values {
@@ -107,19 +132,6 @@ func FoldOIDC(values map[string]json.RawMessage, prev json.RawMessage) (json.Raw
 
 	// The planner's own fold.
 	pl := &planner{p: &plan{Counts: map[string]int{}}, imported: map[secrets.Name]bool{}}
-	for _, e := range old {
-		for _, p := range oidcProviders {
-			if headID(e) != p.id {
-				continue
-			}
-			var ref struct {
-				Secret string `json:"secret"`
-			}
-			if json.Unmarshal(e["client_secret"], &ref) == nil && ref.Secret == p.secret {
-				pl.imported[secrets.Name(p.secret)] = true
-			}
-		}
-	}
 	names := make([]string, 0, len(merged))
 	for k := range merged {
 		names = append(names, k)
@@ -158,17 +170,31 @@ func FoldOIDC(values map[string]json.RawMessage, prev json.RawMessage) (json.Raw
 		}
 		placed[id] = true
 		e["client_id"] = b["client_id"]
-		for _, k := range []string{"allowed_emails", "default_role"} {
-			if v, has := b[k]; has {
-				e[k] = v
+		// Access policy changes only when the caller named it.
+		if _, named := values[oauthEmails]; named {
+			if v, has := b["allowed_emails"]; has {
+				e["allowed_emails"] = v
+			} else if _, had := e["allowed_emails"]; had {
+				// Clearing: spell the empty list out rather than drop the key.
+				e["allowed_emails"] = json.RawMessage(`[]`)
+			}
+		}
+		if _, named := values[oauthDefaultRole]; named {
+			if v, has := b["default_role"]; has {
+				e["default_role"] = v
 			} else {
-				delete(e, k)
+				delete(e, "default_role")
 			}
 		}
 		out = append(out, e)
 	}
 	for _, p := range oidcProviders {
 		if b, ok := built[p.id]; ok && !placed[p.id] {
+			if _, named := values[oauthEmails]; named {
+				if _, has := b["allowed_emails"]; !has {
+					b["allowed_emails"] = json.RawMessage(`[]`)
+				}
+			}
 			out = append(out, b)
 		}
 	}
@@ -211,9 +237,12 @@ func decodeEntryList(in json.RawMessage, what string) ([]map[string]json.RawMess
 //
 // Merging into prev: an existing books-library entry keeps every field but
 // path and aliases (an operator may have tuned min_free or watch); a root_dir
-// of "" removes it; every other entry is carried over untouched except that
-// the aliases of the HEAD-derived roots (books-library, import-<n>) are
-// replaced by the ones path_aliases gives (an alias list is HEAD's whole list).
+// of "" is HEAD's "no root" and removes it (a partial write passes the current
+// root_dir, which UnfoldRoots returns); every other entry is carried over
+// untouched. An aliases of nil or empty (no JSON at all) means "keep": every
+// entry's aliases stay as prev has them. Any JSON list, null and [] included,
+// is HEAD's whole path_aliases: the aliases of the HEAD-derived roots
+// (books-library, import-<n>) are replaced by exactly those it names.
 // A new books-library entry goes first, as in M6's plan order.
 //
 // What M6 quarantines this refuses with ErrNotRepresentable, since a write
@@ -227,19 +256,29 @@ func FoldRoots(rootDir string, aliases json.RawMessage, prev json.RawMessage) (j
 		return nil, err
 	}
 	var heads []headPathAlias
-	if len(aliases) > 0 {
+	if len(aliases) > 0 { // none at all: keep prev's aliases
 		if err := json.Unmarshal(aliases, &heads); err != nil {
 			return nil, fmt.Errorf("%w: library roots: want a list of path aliases", ErrConvertInput)
 		}
 	}
+	// An id or a path that is present and not a string is a corrupt prev: refuse
+	// it rather than read it as "" and treat the root as foreign.
+	for _, e := range old {
+		for _, k := range []string{"id", "path"} {
+			var v string
+			if raw, has := e[k]; has && json.Unmarshal(raw, &v) != nil {
+				return nil, fmt.Errorf("%w: library roots: a root's %s is not a string", ErrConvertInput, k)
+			}
+		}
+	}
 	idOf := func(e map[string]json.RawMessage) string {
 		var id string
-		_ = json.Unmarshal(e["id"], &id)
+		_ = json.Unmarshal(e["id"], &id) // validated above
 		return id
 	}
 	pathOf := func(e map[string]json.RawMessage) string {
 		var p string
-		_ = json.Unmarshal(e["path"], &p)
+		_ = json.Unmarshal(e["path"], &p) // validated above
 		return p
 	}
 
@@ -277,6 +316,9 @@ func FoldRoots(rootDir string, aliases json.RawMessage, prev json.RawMessage) (j
 		}
 	}
 
+	if len(aliases) == 0 {
+		return mustJSON(nonNilRoots(roots)), nil
+	}
 	for _, e := range roots {
 		if headDerivedRoot(idOf(e)) {
 			delete(e, "aliases")
@@ -299,10 +341,15 @@ func FoldRoots(rootDir string, aliases json.RawMessage, prev json.RawMessage) (j
 	for i, list := range attached {
 		roots[i]["aliases"] = mustJSON(list)
 	}
+	return mustJSON(nonNilRoots(roots)), nil
+}
+
+// nonNilRoots makes the empty list encode as [] and not null.
+func nonNilRoots(roots []map[string]json.RawMessage) []map[string]json.RawMessage {
 	if roots == nil {
-		roots = []map[string]json.RawMessage{}
+		return []map[string]json.RawMessage{}
 	}
-	return mustJSON(roots), nil
+	return roots
 }
 
 // booksLibraryEntry is the entry M6 stages for root_dir, as the JSON object core

@@ -1,5 +1,5 @@
 // file: internal/books/cutover/rename_fold_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 91c4e7b2-5d38-4a6e-b0f3-7e2a1d8c4f56
 // last-edited: 2026-11-19
 
@@ -137,18 +137,15 @@ func TestFoldOIDC_AbsentNamesComeFromPrev(t *testing.T) {
 func TestFoldOIDC_ClearsAllowListAndRole(t *testing.T) {
 	prev := `[` + ghEntry + `,` + goEntry + `]`
 	got := foldOK(t, vals(t, map[string]any{"oauth_allowed_emails": "", "oauth_default_role": ""}), prev)
-	wantJSON(t, got, `[{"id":"github","kind":"github","client_id":"gh-batman"},{"id":"google","kind":"oidc","issuer":"https://accounts.google.com","client_id":"go-robin"}]`)
+	// The allow-list is cleared to an explicit empty list (HEAD: no OAuth logins),
+	// never dropped; the role, which has no empty meaning, is removed.
+	wantJSON(t, got, `[{"id":"github","kind":"github","client_id":"gh-batman","allowed_emails":[]},{"id":"google","kind":"oidc","issuer":"https://accounts.google.com","client_id":"go-robin","allowed_emails":[]}]`)
 }
 
 func TestFoldOIDC_Lossy(t *testing.T) {
 	// Spacing and empties in the allow-list are normalised on the way in.
 	got := foldOK(t, vals(t, map[string]any{"oauth_enabled": true, "oauth_github_client_id": "gh-batman", "oauth_allowed_emails": " bruce@batcave.example , ,alfred@batcave.example"}), ``)
 	wantJSON(t, got, `[{"id":"github","kind":"github","client_id":"gh-batman","allowed_emails":["bruce@batcave.example","alfred@batcave.example"]}]`)
-	// A prev whose providers disagree on the allow-list cannot seed absent names:
-	// the values alone decide.
-	prev := `[{"id":"github","kind":"github","client_id":"a","allowed_emails":["x@batcave.example"]},{"id":"google","kind":"oidc","client_id":"b","allowed_emails":["y@batcave.example"]}]`
-	got = foldOK(t, vals(t, map[string]any{"oauth_enabled": true, "oauth_github_client_id": "a", "oauth_google_client_id": "b"}), prev)
-	wantJSON(t, got, `[{"id":"github","kind":"github","client_id":"a"},{"id":"google","kind":"oidc","client_id":"b"}]`)
 }
 
 func TestFoldOIDC_Refusals(t *testing.T) {
@@ -330,5 +327,113 @@ func TestFoldRoots_AliasOrderWithinARoot(t *testing.T) {
 	}
 	if err := json.Unmarshal(got, &list); err != nil || len(list) != 1 || len(list[0].Aliases) != 2 || list[0].Aliases[0].SMBURL == "" || list[0].Aliases[1].Windows == "" {
 		t.Errorf("got %s, %v", got, err)
+	}
+}
+
+// The access policy is never dropped by a write that does not name it.
+func TestFoldOIDC_PartialWriteKeepsPolicy(t *testing.T) {
+	prev := `[` + ghEntry + `,` + goEntry + `]`
+	// Only a client id: both the allow-list and the role stay.
+	got := foldOK(t, vals(t, map[string]any{"oauth_github_client_id": "gh-nightwing"}), prev)
+	wantJSON(t, got, `[{"id":"github","kind":"github","client_id":"gh-nightwing","allowed_emails":["bruce@batcave.example"],"default_role":"editor"},`+goEntry+`]`)
+	// Only sign-in on: nothing changes.
+	wantJSON(t, foldOK(t, vals(t, map[string]any{"oauth_enabled": true}), prev), prev)
+	// Only the allow-list named: the role stays.
+	got = foldOK(t, vals(t, map[string]any{"oauth_allowed_emails": "alfred@batcave.example"}), prev)
+	wantJSON(t, got, `[{"id":"github","kind":"github","client_id":"gh-batman","allowed_emails":["alfred@batcave.example"],"default_role":"editor"},{"id":"google","kind":"oidc","issuer":"https://accounts.google.com","client_id":"go-robin","allowed_emails":["alfred@batcave.example"],"default_role":"editor"}]`)
+	// Only the role named: the allow-list stays.
+	got = foldOK(t, vals(t, map[string]any{"oauth_default_role": "viewer"}), prev)
+	wantJSON(t, got, `[{"id":"github","kind":"github","client_id":"gh-batman","allowed_emails":["bruce@batcave.example"],"default_role":"viewer"},{"id":"google","kind":"oidc","issuer":"https://accounts.google.com","client_id":"go-robin","allowed_emails":["bruce@batcave.example"],"default_role":"viewer"}]`)
+	// A provider added by a partial write takes the allow-list and role prev holds.
+	got = foldOK(t, vals(t, map[string]any{"oauth_google_client_id": "go-robin"}), `[`+ghEntry+`]`)
+	wantJSON(t, got, `[`+ghEntry+`,`+goEntry+`]`)
+}
+
+// An explicit empty allow-list means no OAuth logins, as HEAD does, and is
+// written out so the meaning never rests on an absent key.
+func TestFoldOIDC_EmptyAllowListKeepsHEADMeaning(t *testing.T) {
+	got := foldOK(t, vals(t, map[string]any{"oauth_allowed_emails": ""}), `[`+ghEntry+`]`)
+	var list []struct {
+		Emails *[]string `json:"allowed_emails"`
+	}
+	if err := json.Unmarshal(got, &list); err != nil || len(list) != 1 || list[0].Emails == nil || len(*list[0].Emails) != 0 {
+		t.Fatalf("got %s, %v; want allowed_emails written as []", got, err)
+	}
+	// Spaces and commas alone are empty too.
+	got = foldOK(t, vals(t, map[string]any{"oauth_allowed_emails": " , "}), `[`+ghEntry+`]`)
+	if err := json.Unmarshal(got, &list); err != nil || list[0].Emails == nil || len(*list[0].Emails) != 0 {
+		t.Errorf("got %s, %v", got, err)
+	}
+	// A new entry carries the empty list too.
+	got = foldOK(t, vals(t, map[string]any{"oauth_enabled": true, "oauth_github_client_id": "gh-batman", "oauth_allowed_emails": ""}), ``)
+	wantJSON(t, got, `[{"id":"github","kind":"github","client_id":"gh-batman","allowed_emails":[]}]`)
+	// The round trip keeps the meaning: Unfold reads "" back.
+	flat, err := UnfoldOIDC(got)
+	if err != nil || string(flat["oauth_allowed_emails"]) != `""` {
+		t.Errorf("unfold = %v, %v", flat, err)
+	}
+}
+
+// A prev the flat names cannot be read from is an error, never a guess.
+func TestFoldOIDC_CorruptPrevIsAnError(t *testing.T) {
+	disagree := `[{"id":"github","kind":"github","client_id":"a","allowed_emails":["x@batcave.example"]},{"id":"google","kind":"oidc","client_id":"b","allowed_emails":["y@batcave.example"]}]`
+	for _, values := range []map[string]any{
+		{"oauth_github_client_id": "a"},
+		{"oauth_allowed_emails": "z@batcave.example"},
+		{},
+	} {
+		got, err := FoldOIDC(vals(t, values), json.RawMessage(disagree))
+		if err == nil || got != nil {
+			t.Errorf("FoldOIDC(%v) = %s, %v; want an error", values, got, err)
+		}
+		if !errors.Is(err, ErrNotRepresentable) {
+			t.Errorf("FoldOIDC(%v): %v; want ErrNotRepresentable", values, err)
+		}
+	}
+	// A client id that is not a string, or a role that is not, in prev.
+	for _, prev := range []string{
+		`[{"id":"github","client_id":3}]`,
+		`[{"id":"github","client_id":"a","allowed_emails":"x"}]`,
+		`[{"id":"github","client_id":"a","default_role":4}]`,
+	} {
+		if got, err := FoldOIDC(vals(t, map[string]any{}), json.RawMessage(prev)); err == nil || got != nil {
+			t.Errorf("FoldOIDC(prev %s) = %s, %v; want an error", prev, got, err)
+		}
+	}
+}
+
+// No aliases at all means keep; any JSON list is HEAD's whole list.
+func TestFoldRoots_AbsentAliasesKeepPrev(t *testing.T) {
+	prev := `[` + tunedBook + `,` + importOne + `,` + dropbox + `]`
+	for _, none := range []string{``} {
+		got, err := FoldRoots("/gotham/archive", json.RawMessage(none), json.RawMessage(prev))
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantJSON(t, got, prev)
+	}
+	// An explicit empty list or null clears the HEAD-derived roots' aliases only.
+	for _, clear := range []string{`[]`, `null`} {
+		got := rootsOK(t, "/gotham/archive", clear, prev)
+		wantJSON(t, got, `[{"id":"books-library","path":"/gotham/archive","role":"library","owner":"books","watch":"auto","min_free":5000,"quarantine":".failed"},`+importOne+`,`+dropbox+`]`)
+	}
+}
+
+// A root whose id or path is not a string is a corrupt prev, an error.
+func TestFoldRoots_CorruptEntryFieldsAreErrors(t *testing.T) {
+	for _, prev := range []string{
+		`[{"id":3,"path":"/gotham/archive"}]`,
+		`[{"id":"books-library","path":["/gotham/archive"]}]`,
+		`[{"id":"import-1","path":null,"role":"import"},{"id":"x","path":7}]`,
+	} {
+		if got, err := FoldRoots("/gotham/archive", nil, json.RawMessage(prev)); !errors.Is(err, ErrConvertInput) || got != nil {
+			t.Errorf("FoldRoots(prev %s) = %s, %v; want ErrConvertInput", prev, got, err)
+		}
+	}
+}
+
+func TestFoldOIDC_NonStringIDIsAnError(t *testing.T) {
+	if got, err := FoldOIDC(vals(t, map[string]any{}), json.RawMessage(`[{"id":7,"client_id":"a"}]`)); !errors.Is(err, ErrConvertInput) || got != nil {
+		t.Errorf("= %s, %v", got, err)
 	}
 }
