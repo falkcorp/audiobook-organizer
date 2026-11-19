@@ -1,5 +1,5 @@
 // file: internal/maintenance/resources/resources.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 511262bb-c287-4138-a7ee-7566c9543e3b
 // last-edited: 2026-11-19
 
@@ -197,8 +197,12 @@ func Table() map[string][]ops.Resource {
 		// writes no book row: the books resource is not in its row.
 		"DeleteSeriesIfUnreferenced": {ops.ResSeries},
 		// --- book_file rows -----------------------------------------------------
-		"CreateBookFile":          fileRow,
-		"UpdateBookFile":          fileRow,
+		"CreateBookFile": fileRow,
+		"UpdateBookFile": fileRow,
+		// BatchUpsertBookFiles stages each row's book_files write and invalidates
+		// the aggregates of the books it touches (batchUpsertBookFilesStaged), so it
+		// is the whole file-row write, like UpdateBookFile.
+		"BatchUpsertBookFiles":    fileRow,
 		"UpdateBookFiles":         fileRow,
 		"ModifyBookFile":          fileRow,
 		"SetBookFileHash":         fileRow,

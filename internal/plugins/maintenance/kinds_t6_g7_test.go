@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g7_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 4c7e1a92-6b3d-4f58-8a0e-2d9c5b71e3f6
 // last-edited: 2026-11-19
 
@@ -25,6 +25,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
@@ -135,6 +136,16 @@ func (r *t6g7Recorder) RebuildReviewStatusIndex(apply bool) (database.ReviewStat
 	return r.reviewIndex, nil
 }
 
+func (r *t6g7Recorder) BatchUpsertBookFiles(files []*database.BookFile) error {
+	parts := make([]string, len(files))
+	for i, f := range files {
+		parts[i] = fmt.Sprintf("%s:trk%d", f.ID, f.TrackNumber)
+	}
+	sort.Strings(parts)
+	r.rec("BatchUpsertBookFiles " + strings.Join(parts, ","))
+	return nil
+}
+
 func (r *t6g7Recorder) ApplyUserMerge(_ context.Context, req usermerge.ApplyRequest, _ usermerge.Progress) (*usermerge.Journal, error) {
 	r.rec(fmt.Sprintf("ApplyUserMerge actor=%s survivor=%s absorbed=%s", req.ActorID, req.SurvivorID, req.AbsorbedID))
 	return &usermerge.Journal{ID: "01BATJRNL000000000000000A1", Status: "done"}, nil
@@ -187,6 +198,8 @@ type t6g7TestStore struct {
 	cores []database.BookCore
 	// active are the ids of the operations ListActiveOperationsV2 answers.
 	active []string
+	// allFiles is what GetAllBookFilesCore answers.
+	allFiles []database.BookFileCore
 	// admin is the one user id ActorIsAdmin answers true for.
 	admin string
 	// files and states are what GetBookFiles and GetMetadataFieldStates answer.
@@ -195,6 +208,10 @@ type t6g7TestStore struct {
 }
 
 func (s *t6g7TestStore) GetBookFiles(id string) ([]database.BookFile, error) { return s.files[id], nil }
+
+func (s *t6g7TestStore) GetAllBookFilesCore() ([]database.BookFileCore, error) {
+	return s.allFiles, nil
+}
 func (s *t6g7TestStore) GetMetadataFieldStates(id string) ([]database.MetadataFieldState, error) {
 	return s.states[id], nil
 }
@@ -398,6 +415,7 @@ func t6g7KindWritersBuild() map[tasks.Kind]t6g7KindWrite {
 	m := map[tasks.Kind]t6g7KindWrite{}
 	add := func(head sdk.OperationDef, kw t6g7KindWrite) { m[tasks.Kind("books."+head.ID)] = kw }
 	add(p.reviewStatusIndexRepairDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[reviewStatusIndexRepairWriter]()}})
+	add(p.tagBackfillDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[tagBackfillWriter]()}})
 	add(p.userMergeDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[userMergeWriter]()}})
 	add(p.bulkWriteBackDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[bulkWriteBackWriter]()}})
 	add(p.titleRepairDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[titleRepairWriter]()}})
@@ -465,7 +483,7 @@ func TestT6G7Resources_TableCoversEveryWriterMethod(t *testing.T) {
 func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 	p := &Plugin{}
 	defs := p.t6g7Kinds(fakeT6G7Deps(t), nil)
-	require.Len(t, defs, 8, "grows to 15 as the group's definitions land")
+	require.Len(t, defs, 9, "grows to 15 as the group's definitions land")
 
 	// Every expected value below is written out by hand from the HEAD def and
 	// the coordinator's rulings, never derived from the code under test.
@@ -479,6 +497,7 @@ func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 		wantPar string
 	}
 	titleRepairPar := titleRepairParallelism()
+	tagBackfillPar := tagBackfillParallelism()
 	rows := []row{
 		{head: p.reviewStatusIndexRepairDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
 		{head: p.unknownAuthorAuditDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
@@ -487,6 +506,8 @@ func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 		{head: p.titleBackfillDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
 		{head: p.bulkWriteBackDef(), resume: tasks.ResumeAsk, timeout: 240 * time.Minute},
 		{head: p.userMergeDef(), resume: tasks.ResumeDrop, timeout: 2 * time.Hour},
+		{head: p.tagBackfillDef(), resume: tasks.ResumeDrop, timeout: 120 * time.Minute,
+			par: &tagBackfillPar, wantPar: fmt.Sprintf("fixed(%d): ", runtime.NumCPU()*4)},
 		{head: p.titleRepairDef(), resume: tasks.ResumeDrop, timeout: 4 * time.Hour,
 			par: &titleRepairPar, wantPar: fmt.Sprintf("fixed(%d): ", max(min(runtime.NumCPU(), 8), 1))},
 	}
@@ -563,6 +584,30 @@ type t6g7WriteCase struct {
 
 func t6g7WriteCases() []t6g7WriteCase {
 	return []t6g7WriteCase{
+		{
+			kind: tagBackfillKind,
+			setup: func(t *testing.T, p *t6g7Probe) {
+				// One book of two files whose tags carry the opposite track order:
+				// distinct across the book, so the tag positions are taken for both.
+				book := "01BATBOOK00000000000000T1"
+				f1, f2 := "01BATFILE00000000000000T11", "01BATFILE00000000000000T12"
+				rows := []database.BookFile{
+					{ID: f1, BookID: book, FilePath: filepath.Join(p.root, f1+".mp3"), TrackNumber: 2},
+					{ID: f2, BookID: book, FilePath: filepath.Join(p.root, f2+".mp3"), TrackNumber: 1},
+				}
+				for _, r := range rows {
+					mustWriteFile(t, r.FilePath)
+				}
+				metadata.SetMetadataExtractor(&mapTagExtractor{byBase: map[string]metadata.Metadata{
+					f1 + ".mp3": tagMeta(1, 2, 0, 0), f2 + ".mp3": tagMeta(2, 2, 0, 0)}})
+				t.Cleanup(func() { drainAbandonedTagReads(t); metadata.SetMetadataExtractor(nil) })
+				p.store = &t6g7TestStore{
+					allFiles: []database.BookFileCore{rows[0].Core(), rows[1].Core()},
+					files:    map[string][]database.BookFile{book: rows},
+				}
+			},
+			live: []string{"BatchUpsertBookFiles 01BATFILE00000000000000T11:trk1,01BATFILE00000000000000T12:trk2"},
+		},
 		{
 			kind:       t6g7KindFor("maintenance.bulk-write-back"),
 			params:     `{"book_ids":["01BATBOOK00000000000000K1","01BATBOOK00000000000000K2"],"rename":true,"start_idx":1}`,
@@ -668,7 +713,7 @@ func TestT6G7Kinds_WritesThroughShell(t *testing.T) {
 // case, before it builds a writer or touches the store: the run's mode comes
 // from the start request, never from params (coordinator ruling 3).
 func TestT6G7Kinds_WritingShellsRefuseModeKeys(t *testing.T) {
-	kinds := []tasks.Kind{reviewStatusIndexRepairKind, reportsPruneKind, titleBackfillKind, titleRepairKind, t6g7KindFor("maintenance.bulk-write-back"), t6g7KindFor("maintenance.user-merge")}
+	kinds := []tasks.Kind{reviewStatusIndexRepairKind, reportsPruneKind, titleBackfillKind, titleRepairKind, t6g7KindFor("maintenance.bulk-write-back"), t6g7KindFor("maintenance.user-merge"), tagBackfillKind}
 	keys := []string{"dry_run", "dryRun", "DRY_RUN", "DryRun", "apply", "Apply", "APPLY"}
 	gate := &t6g7GateWriter{name: "gotham"}
 	for _, kind := range kinds {
