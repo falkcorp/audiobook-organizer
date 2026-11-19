@@ -1,7 +1,7 @@
 // file: core/internal/logjournal/store_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1f6d2b84-9c37-4a05-8e1b-d5a7c3f0e962
-// last-edited: 2026-11-13
+// last-edited: 2026-11-19
 
 package logjournal_test
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"log/slog"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -304,4 +305,160 @@ func TestNativeJournalStore_RoundTrip(t *testing.T) {
 		}
 		wantMessages(t, "needle", found, "needle")
 	})
+}
+
+// TestQuery_HiddenRowsDoNotMoveTheScanBudget: a page that ends on the scan
+// budget inside or just before a run of hidden rows answers exactly as it does
+// on a journal that never held those rows, so neither the cursor's time nor the
+// moment the budget runs out counts or dates a hidden row.
+func TestQuery_HiddenRowsDoNotMoveTheScanBudget(t *testing.T) {
+	const budget = 20_000 // scanBudget: rows one Query examines
+	ctx := context.Background()
+	zero := func(b []byte) error { clear(b); return nil } // equal rows get equal keys in both journals
+	secret := func(r log.Record) bool { return strings.HasPrefix(r.Message, "x secret") }
+
+	fill := func(t *testing.T, rows []log.Record) *logjournal.Store {
+		t.Helper()
+		st, _ := openStore(t, logjournal.Options{Entropy: zero})
+		for i := 0; i < len(rows); i += 1000 {
+			if err := st.Append(ctx, rows[i:min(i+1000, len(rows))]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return st
+	}
+	ms := func(i int) time.Time { return epoch.Add(time.Duration(i) * time.Millisecond) }
+	noise := func(i int) log.Record {
+		return log.Record{Time: ms(i), Level: log.LevelInfo, Module: "core", Message: "noise"}
+	}
+	hid := func(i int) log.Record {
+		return log.Record{Time: ms(i), Level: log.LevelInfo, Module: "core", Message: "x secret"}
+	}
+	// walk follows the cursor to the end and returns every page.
+	walk := func(t *testing.T, st *logjournal.Store, hide func(log.Record) bool) (pages [][]string, nexts []string) {
+		t.Helper()
+		q := log.JournalQuery{MinLevel: log.LevelTrace, Text: "x", Limit: 50, Hide: hide}
+		for range 20 {
+			p, err := st.Query(ctx, q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pages = append(pages, messages(p.Records))
+			nexts = append(nexts, p.Next)
+			if p.Next == "" {
+				return pages, nexts
+			}
+			q.Cursor = p.Next
+		}
+		t.Fatal("a walk did not end")
+		return nil, nil
+	}
+	same := func(t *testing.T, a, b *logjournal.Store) {
+		t.Helper()
+		ap, an := walk(t, a, secret)
+		bp, bn := walk(t, b, secret)
+		if !slices.EqualFunc(ap, bp, slices.Equal[[]string]) || !slices.Equal(an, bn) {
+			t.Errorf("with hidden rows:    pages %v cursors %q\nwithout hidden rows: pages %v cursors %q", ap, an, bp, bn)
+		}
+	}
+
+	t.Run("the_page_ends_on_the_budget_inside_a_hidden_run", func(t *testing.T) {
+		// Newest first: 25000 rows the text filter rejects, each followed by an
+		// older hidden row (at odd milliseconds); oldest, one served row.
+		var with, without []log.Record
+		without = append(without, log.Record{Time: ms(0), Level: log.LevelInfo, Module: "core", Message: "x served"})
+		with = append(with, without[0])
+		for i := 1; i <= 25_000; i++ {
+			without = append(without, noise(2*i))
+			with = append(with, noise(2*i), hid(2*i-1)) // a hidden row just older than each: one precedes the budget's last row
+		}
+		w, wo := fill(t, with), fill(t, without)
+		p, err := wo.Query(ctx, log.JournalQuery{MinLevel: log.LevelTrace, Text: "x", Limit: 50, Hide: secret})
+		if err != nil || len(p.Records) != 0 || p.Next == "" {
+			t.Fatalf("setup: the journal without hidden rows did not end its page on the budget: %d records, next %q, %v", len(p.Records), p.Next, err)
+		}
+		same(t, w, wo)
+	})
+
+	t.Run("hidden_rows_just_past_the_budget_do_not_set_a_cursor", func(t *testing.T) {
+		// Exactly budget rows the filter rejects, then older hidden rows: the scan
+		// ends, so there is no cursor. A hidden row must not be the one that finds
+		// the budget spent.
+		var with, without []log.Record
+		for i := range 500 {
+			with = append(with, hid(i))
+		}
+		for i := range budget {
+			r := noise(1000 + i)
+			with, without = append(with, r), append(without, r)
+		}
+		w, wo := fill(t, with), fill(t, without)
+		p, err := wo.Query(ctx, log.JournalQuery{MinLevel: log.LevelTrace, Text: "x", Limit: 50, Hide: secret})
+		if err != nil || len(p.Records) != 0 || p.Next != "" {
+			t.Fatalf("setup: %d records, next %q, %v; want an exhausted scan", len(p.Records), p.Next, err)
+		}
+		same(t, w, wo)
+	})
+
+	t.Run("a_hidden_row_is_never_the_cursor", func(t *testing.T) {
+		// Served rows interleaved with hidden ones, limit 1: each cursor is a
+		// served row's, so the cursors are the ones a journal without the hidden
+		// rows issues.
+		var with, without []log.Record
+		for i := range 30 {
+			s := log.Record{Time: ms(10 * i), Level: log.LevelInfo, Module: "core", Message: "x served"}
+			with, without = append(with, s), append(without, s)
+			with = append(with, hid(10*i+5))
+		}
+		w, wo := fill(t, with), fill(t, without)
+		for _, limit := range []int{1, 2, 7} {
+			q := log.JournalQuery{MinLevel: log.LevelTrace, Text: "x", Limit: limit, Hide: secret}
+			qo := q
+			for range 40 {
+				pw, e1 := w.Query(ctx, q)
+				po, e2 := wo.Query(ctx, qo)
+				if e1 != nil || e2 != nil || pw.Next != po.Next || len(pw.Records) != len(po.Records) {
+					t.Fatalf("limit %d: %d records next %q vs %d records next %q (%v %v)", limit, len(pw.Records), pw.Next, len(po.Records), po.Next, e1, e2)
+				}
+				if pw.Next == "" {
+					break
+				}
+				q.Cursor, qo.Cursor = pw.Next, po.Next
+			}
+		}
+	})
+}
+
+// TestQuery_HiddenRowsAreHiddenWhateverTheFilter: a flagged row the filters
+// reject must not spend scan budget or move the cursor either, or varying the
+// filter would count the flagged rows.
+func TestQuery_HiddenRowsAreHiddenWhateverTheFilter(t *testing.T) {
+	ctx := context.Background()
+	zero := func(b []byte) error { clear(b); return nil }
+	flagged := func(r log.Record) bool { return r.Module == "secret" }
+	build := func(t *testing.T, withFlagged bool) *logjournal.Store {
+		t.Helper()
+		st, _ := openStore(t, logjournal.Options{Entropy: zero})
+		var rows []log.Record
+		for i := range 21_000 {
+			rows = append(rows, log.Record{Time: epoch.Add(time.Duration(2*i) * time.Millisecond), Level: log.LevelInfo, Module: "core", Message: "noise"})
+			if withFlagged {
+				rows = append(rows, log.Record{Time: epoch.Add(time.Duration(2*i+1) * time.Millisecond), Level: log.LevelInfo, Module: "secret", Message: "noise"})
+			}
+		}
+		for i := 0; i < len(rows); i += 1000 {
+			if err := st.Append(ctx, rows[i:min(i+1000, len(rows))]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return st
+	}
+	// Module "books" matches no row, so the flagged rows are filter-rejected
+	// too; the scan runs to its budget either way.
+	q := log.JournalQuery{MinLevel: log.LevelTrace, Module: "books", Limit: 10, Hide: flagged}
+	pw, e1 := build(t, true).Query(ctx, q)
+	po, e2 := build(t, false).Query(ctx, q)
+	if e1 != nil || e2 != nil || len(pw.Records) != 0 || po.Next == "" || pw.Next != po.Next {
+		t.Errorf("flagged rows the filter rejects moved the scan: next %q vs %q (%v %v)", pw.Next, po.Next, e1, e2)
+	}
 }

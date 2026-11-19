@@ -57,10 +57,11 @@ type JournalQuery struct {
 	Text         string    // case-insensitive substring of the message
 	Cursor       string    // opaque, from JournalPage.Next
 	Limit        int       // capped by the query route
-	// Hide, when non-nil, is asked about every record that passes the filters
-	// above, and a record it reports true for is skipped as if the journal did
-	// not hold it: it counts toward neither Limit nor the cursor, so a page
-	// stays full and Next never names a hidden record. A route that must not
+	// Hide, when non-nil, is asked about every record the scan reaches, whatever
+	// the filters above say, and a record it reports true for is skipped as if
+	// the journal did not hold it: it counts toward neither Limit, the scan's
+	// own bound nor the cursor, so a page stays full and Next never names a
+	// hidden record (nor, by where a bounded scan stops, counts one). A route that must not
 	// show a caller some records (the other-user rule, 05-logging §5) filters
 	// here, never after the query, where the page length and Next would still
 	// betray what was dropped. It must be pure, fast and safe for the store to
