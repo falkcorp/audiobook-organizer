@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_round4_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5c0d9e3a-6f21-4b7d-9a84-2e1f7b3c8d56
 // last-edited: 2026-11-19
 
@@ -188,6 +188,20 @@ func TestMergeCleanupDeadEndUnmergePreviewShowsTheGroupUnchanged(t *testing.T) {
 			require.Equal(t, "", r.Proposed["merged_into_book_id"])
 			require.Equal(t, "unchanged", r.Proposed["version_group_id"])
 			require.Equal(t, "unchanged", r.Proposed["is_primary_version"])
+			// The loser stays in its group, so the group gate reads it that way
+			// (R4-m1): a loser that would be its group's only live member with no
+			// primary is held for a hand-off, and is never said to leave.
+			if group == "" {
+				require.Equal(t, "group_less", r.Current["group_effect"])
+				return
+			}
+			require.Equal(t, "stays_in_group", r.Current["group_effect"])
+			require.Contains(t, r.Flags, mcFlagGroupNeedsHandoff)
+			hold := false
+			for _, h := range r.Holds {
+				hold = hold || h.Kind == mcSkipGroupNeedsHandoff
+			}
+			require.True(t, hold, "%+v", r.Holds)
 		})
 	}
 	t.Run("a wrong-work unmerge still leaves its group", func(t *testing.T) {
@@ -241,4 +255,114 @@ func TestMergeCleanupDeadEndIndexStopsOnACancelledContext(t *testing.T) {
 	cancel()
 	_, err = run.deadEndIndex(ctx)
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+// ---- R4-m1: a loop's head stays in its group too ----
+
+func TestMergeCleanupCycleHeadStaysInItsGroup(t *testing.T) {
+	x := newMCFixture(t)
+	x.mk("a", mcHush("g", mcFalse()))
+	x.mk("b", mcHush("g", mcFalse()))
+	x.point("a", "b")
+	x.point("b", "a")
+	// Only the head is unmerged; the other member waits for a re-plan.
+	rows := x.plan()
+	head := rows["a"].Current["cycle_head"]
+	name := "a"
+	if head == x.ids["b"] {
+		name = "b"
+	}
+	r := rows[name]
+	require.Equal(t, mcKindUnmerge, r.Class, name)
+	require.Equal(t, "stays_in_group", r.Current["group_effect"])
+	require.Contains(t, r.Flags, mcFlagGroupNeedsHandoff)
+}
+
+// ---- R4-M1: a live merged hop on the chain is a source of anchors too ----
+
+// L -> B -> T. B is live, merged into the trashed T, has no file of its own,
+// and sits in group G beside the live primary A. L's content went to B, and B's
+// group holds the live copy A of the same work, so the loser does not stand
+// alone: it repoints to A.
+func TestMergeCleanupDeadEndFilelessLiveHopWhoseGroupHoldsALiveBookIsFollowed(t *testing.T) {
+	x := newMCFixture(t)
+	x.mk("t", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+	x.mk("b", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, group: "g", primary: mcFalse()})
+	x.point("b", "t")
+	x.mk("a", mcHush("g", mcTrue()))
+	x.mk("loser", mcHushSpec(30000))
+	x.point("loser", "b")
+	r := x.plan()["loser"]
+	require.Equal(t, mcKindRepoint, r.Class, "%s", r.SkipReason)
+	require.Equal(t, x.ids["a"], r.Proposed["merged_into_book_id"])
+	require.NotContains(t, strings.Join(r.Evidence, " "), "stands alone")
+}
+
+// The same hop with no usable primary in its group holds the loser.
+func TestMergeCleanupDeadEndFilelessLiveHopWhoseGroupHasNoPrimaryHolds(t *testing.T) {
+	x := newMCFixture(t)
+	x.mk("t", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+	x.mk("b", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, group: "g", primary: mcFalse()})
+	x.point("b", "t")
+	x.mk("a", mcHush("g", mcFalse()))
+	x.mk("loser", mcHushSpec(30000))
+	x.point("loser", "b")
+	r := wantRow(t, x.plan(), "loser", mcKindRepoint, mcSkipRepointGroupNoPrimary)
+	require.Contains(t, r.SkipReason, x.ids["a"])
+}
+
+// L -> B -> T. B is live and merged, has no file because its files were retired
+// onto the live holder H. The holder is read from B, not only from trashed hops.
+func TestMergeCleanupDeadEndFilelessLiveHopWhoseFilesWereRetiredOntoALiveHolder(t *testing.T) {
+	x := newMCFixture(t)
+	x.mk("t", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+	x.mk("b", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}})
+	x.point("b", "t")
+	x.mk("h", mcHushSpec(30000))
+	retireRowOnto(t, x.st, x.ids["b"], x.ids["h"], "rb", filepath.Join(x.root, "retired", "b.m4b"))
+	x.mk("loser", mcHushSpec(30000))
+	x.point("loser", "b")
+	r := x.plan()["loser"]
+	require.Equal(t, mcKindRepoint, r.Class, "%s", r.SkipReason)
+	require.Equal(t, x.ids["h"], r.Proposed["merged_into_book_id"])
+}
+
+// With nothing behind the file-less hop (no group, no holder) the loser really
+// does stand alone: the control that the new reads do not hold every chain.
+func TestMergeCleanupDeadEndFilelessLiveHopWithNothingBehindItStillStandsAlone(t *testing.T) {
+	x := newMCFixture(t)
+	x.mk("t", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+	x.mk("b", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}})
+	x.point("b", "t")
+	x.mk("loser", mcHushSpec(30000))
+	x.point("loser", "b")
+	r := wantRow(t, x.plan(), "loser", mcKindUnmerge, "")
+	require.Contains(t, strings.Join(r.Evidence, " "), "stands alone")
+}
+
+// A dead end held by another live copy does not also say the loser stands alone.
+func TestMergeCleanupDeadEndHeldBesideALiveCopyDoesNotSayItStandsAlone(t *testing.T) {
+	x := newMCFixture(t)
+	mcDeadEnd(x, "dead", "loser", mcHushSpec(30000))
+	x.mk("gone", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+	x.mk("holder", mcHushSpec(30000))
+	x.point("holder", "gone")
+	retireRowOnto(t, x.st, x.ids["dead"], x.ids["holder"], "rd", filepath.Join(x.root, "retired", "d.m4b"))
+	r := wantRow(t, x.plan(), "loser", mcKindUnmerge, mcSkipDeadEndShared)
+	require.NotContains(t, strings.Join(r.Evidence, " "), "stands alone")
+}
+
+// A cancelled caller does not poison the index for the callers after it.
+func TestMergeCleanupDeadEndIndexIsNotCachedFromACancelledCaller(t *testing.T) {
+	x := newMCFixture(t)
+	mcDeadEnd(x, "dead", "loser", mcHushSpec(30000))
+	run, err := x.f.newRun(context.Background(), &fakeReporter{})
+	require.NoError(t, err)
+	dead, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = run.deadEndIndex(dead)
+	require.ErrorIs(t, err, context.Canceled)
+	idx, err := run.deadEndIndex(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{x.ids["loser"]}, idx[x.ids["dead"]])
 }

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/merge_cleanup_fixer_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 5f0f2a63-1d4e-4b6e-9f55-2f3a7c0b8e14
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -1633,22 +1633,24 @@ func TestMergeCleanupGroupReadFailures(t *testing.T) {
 	})
 }
 
-// A dead hop in the loser's own group means the unmerge takes it out of that
-// group, so the group is not left without a primary by it.
-func TestMergeCleanupUnmergeLeavesTheGroupOfADeadHop(t *testing.T) {
+// A dead hop in the loser's own group does not take the loser out of it: a dead
+// end names no book to leave for, so the loser stays and the group must keep a
+// primary. Here the loser would be the group's only live member with none, so
+// the unmerge is held for a hand-off.
+func TestMergeCleanupUnmergeOfADeadEndStaysInTheGroupOfItsDeadHop(t *testing.T) {
 	x := newMCFixture(t)
 	x.mk("dead", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, group: "g-x", primary: mcFalse(), trashed: true})
 	x.mk("loser", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000), group: "g-x"})
 	x.point("loser", "dead")
-	// The version-group fixer owns this group (it would elect in it), so the row
-	// carries that hold; what is under test is the unmerge gate's own reading.
 	r := x.plan()["loser"]
 	require.Equal(t, mcKindUnmerge, r.Class, "%+v", r.Holds)
-	require.Equal(t, "leaves_group", r.Current["group_effect"])
-	require.NotContains(t, r.Flags, mcFlagGroupNeedsHandoff)
+	require.Equal(t, "stays_in_group", r.Current["group_effect"])
+	require.Contains(t, r.Flags, mcFlagGroupNeedsHandoff)
+	hold := false
 	for _, h := range r.Holds {
-		require.NotEqual(t, mcSkipGroupNeedsHandoff, h.Kind)
+		hold = hold || h.Kind == mcSkipGroupNeedsHandoff
 	}
+	require.True(t, hold, "%+v", r.Holds)
 }
 
 // ---- the owner's rejects, each way they can answer ----
