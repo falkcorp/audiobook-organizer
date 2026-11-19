@@ -1,5 +1,5 @@
 // file: core/kernel/config_boot.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0e3db6c6-c5ae-4f54-adaf-6fd7b728c89e
 // last-edited: 2026-11-18
 
@@ -77,6 +77,35 @@ func (k *Kernel) bootCoreConfig(ctx context.Context) error {
 	}
 	k.applyBootEnabled(cb)
 	return nil
+}
+
+// ResolveStorage is P0's resolution of the store path and the state directory
+// for a caller that has no kernel to boot: an offline command (the app's
+// storage, restore, reset and secrets commands, prune-checkpoints and the
+// keyring export). With Config.CoreConfigBoot set it runs bootConfig's step 0
+// and the boot record over the same layers a serve boot reads, so serve and
+// every offline command open one store and one state directory. It returns
+// "" and "" for an app with no storage, and c.StoragePath, c.StateDir as they
+// are with the gate off. It has the side effects P0 has: the state directory
+// is created when it does not exist, and an unparsable boot record is set
+// aside as .bad (05-config 1.5).
+func ResolveStorage(ctx context.Context, c Config) (dbPath, stateDir string, err error) {
+	if !c.CoreConfigBoot {
+		return c.StoragePath, c.StateDir, nil
+	}
+	k := &Kernel{cfg: c, lifecycle: newLifecycle()}
+	if err := k.catalog(false); err != nil {
+		return "", "", err
+	}
+	defer func() {
+		if cerr := k.cfgBoot.close(context.WithoutCancel(ctx)); cerr != nil {
+			err = errors.Join(err, fmt.Errorf("kernel: config: close the boot store: %w", cerr))
+		}
+	}()
+	if err := k.bootCoreConfig(ctx); err != nil {
+		return "", "", err
+	}
+	return k.cfg.StoragePath, k.cfg.StateDir, nil
 }
 
 // declaresStorage reports whether any module of the app declares storage,

@@ -1,5 +1,5 @@
 // file: core/app/options.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 55e09ad5-34c8-4d0f-b8d5-117718ebf0ed
 // last-edited: 2026-11-18
 
@@ -106,6 +106,17 @@ type Options struct {
 	// paths fails New. "" = core's rule alone. Release R1 only: F3's config
 	// carries the renamed key (05-config's rename table) and deletes it.
 	R1StoragePath string
+	// CoreConfigBoot turns on core's own config and secrets boot (F3-07 slice
+	// a): the layered config store at P0 and P3 (operator layers, the boot
+	// record, core.modules.<id>.enabled), the secret store at P4b, the stored
+	// values attached at P4d. With it set, core.storage.path and the state
+	// directory come from the config layers at P0 and not from storagePath's
+	// environment read: only R1StoragePath is the compiled path, and an offline
+	// command resolves them through the same P0 (kernel.ResolveStorage). The
+	// shipped ABO binary leaves it false and behaves as before. Release R1
+	// only: slice (e) of F3-07 deletes the field with R1Values and the boot
+	// is always on.
+	CoreConfigBoot bool
 	// StorageStateFiles is the state-file table (05-config §2.4): the files
 	// the pre-migration checkpoint copies beside the store, each by its label
 	// and resolved absolute path; one that does not exist is skipped. The app
