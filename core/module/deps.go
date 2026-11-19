@@ -1,7 +1,7 @@
 // file: core/module/deps.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 04c2ba0c-0bfa-4d6b-9e91-bc7ba2db6894
-// last-edited: 2026-11-08
+// last-edited: 2026-11-18
 
 package module
 
@@ -10,6 +10,7 @@ import (
 	"log/slog"
 
 	"github.com/falkcorp/mediacore/metrics"
+	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -47,6 +48,13 @@ type Deps struct {
 	// (R8). Both are zero values, whose every method fails, when the module
 	// declared no keyspace or no claims.
 	Storage StorageHandles
+
+	// Secrets is the module's secret scope: names under "modules.<ID>.",
+	// values never logged (06 §6.4.4, 05-config Part 2). It is the zero
+	// secrets.Scope, which refuses every name (secrets.ErrOutOfScope),
+	// where no secret store is open: app.Describe, and a boot without core
+	// config.
+	Secrets secrets.Scope
 }
 
 // StorageHandles is what Deps.Storage carries (06 §6.4.4). It lives in

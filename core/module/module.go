@@ -1,16 +1,16 @@
 // file: core/module/module.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3e79e4b4-4709-49f9-9193-d1023779795d
-// last-edited: 2026-11-07
+// last-edited: 2026-11-18
 
 // Package module is what an app's module implements and what the kernel
 // hands it (06 §6.4.1-§6.4.4, §6.4.7): the Module interface, its Manifest,
 // the Registrar of Register and the module-scoped Deps. It is layer L7.
 //
-// This is the R1 surface (06 §6.4.10 R1 row) minus the members whose package
-// lands later, which are absent, not stubbed: Manifest.Settings (config, F3),
-// Manifest.Storage and Manifest.ResetHook (storage, R1-20/R1-25) and
-// Deps.Storage (R1-20). Every later member is added additively.
+// This is the surface of 06 §6.4.10 up to the config flip (F3: Manifest.Settings,
+// Cutover and Rewrite, Importers, Deps.Secrets), minus the members whose
+// package lands later, which are absent, not stubbed (Permissions and Roles,
+// Library, Requires and the rest). Every later member is added additively.
 package module
 
 import (
