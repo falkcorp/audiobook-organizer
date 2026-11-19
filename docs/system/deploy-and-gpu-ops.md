@@ -1,5 +1,5 @@
 <!-- file: docs/system/deploy-and-gpu-ops.md -->
-<!-- version: 1.21.0 -->
+<!-- version: 1.22.0 -->
 <!-- guid: d5e7f9a1-b3c5-4d7e-9f1a-3b5c7d9e1f3a -->
 <!-- last-edited: 2026-11-18 -->
 
@@ -331,15 +331,20 @@ path. `scripts/deploy_rollback.py restore` runs it, in order:
      hand. Once the source is read, the **current** binary runs
      `updater fetch-release --version <tag> --out <stage_bin>` on the host as
      the deploy user (05-updater §5U.4): it downloads that release's binary
-     for this platform from the app's release source (HTTPS only: no checksum
-     or signature is checked in this build), runs it once with
+     for this platform from the app's release source (https only, a redirect to
+     http is refused too; no checksum or signature is checked in this build; the
+     download is cut off after 30 s without data or 15 min in all, and the
+     recipe gives the whole fetch `DEPLOY_FETCH_TIMEOUT` seconds, default 1200),
+     runs it once with
      `--version-json` to check it is this app at that release, and renames it
      into place; it reads no store, so it runs with a scratch state directory
      and the service can stay up. The fetched file's
      `--print-storage-levels` must then **equal** the source's levels, exactly
      as for `.prev`. Only when they do does `install-staged prev` install it as
-     `$(DEPLOY_BIN).prev`, **replacing any `.prev`**, and delete the staged
-     copy. Any refusal before that (the fetch failed, an unknown tag, other
+     `$(DEPLOY_BIN).prev`, **replacing any `.prev`**; the recipe then deletes
+     the staged copy and reads `.prev`'s levels once more, refusing before the
+     stop if they changed in between (a `make deploy` upload landing in
+     `stage_bin`). Any refusal before the install (the fetch failed, an unknown tag, other
      levels, an earlier restore still running) deletes the staged copy and
      leaves `.prev` as it was. `RELEASE` must be a version tag
      (`v1.2.3`; `latest`, a URL or a path is refused), and `stage_bin` must be
@@ -453,7 +458,7 @@ root-owned config:
 | `restore-offline` | root, the restore as the service user | `checkpoint NAME`, `archive FILE`, `into-check FILE` | `storage restore-offline` in a transient unit |
 | `unit-type` | root | `simple` or `notify` | writes or removes the fixed `Type=simple` drop-in, `daemon-reload` |
 | `swap-prev` | root | none | `.prev` installed atomically, the old binary kept |
-| `install-staged` | root | `binary`, `prev`, `unit` or `local-conf` | installs `stage_bin` as the binary (atomically, the old one kept as `.prev`) or, with `prev`, as `.prev` alone (`make rollback-restore RELEASE=`; the binary is not touched); copies the bundle's root-owned `audiobook-organizer.service` as the unit; or renders the `[Service]` and `Environment=` lines of `stage_local_conf` as the `local.conf` drop-in; then `daemon-reload` |
+| `install-staged` | root | `binary`, `prev`, `unit` or `local-conf` | installs `stage_bin` as the binary (atomically, the old one kept as `.prev`) or, with `prev`, as `.prev` alone (`make rollback-restore RELEASE=`; the binary is not touched); copies the bundle's root-owned `audiobook-organizer.service` as the unit; or renders the `[Service]` and `Environment=` lines of `stage_local_conf` as the `local.conf` drop-in; `binary`, `unit` and `local-conf` then run `daemon-reload` (`prev` reloads nothing and does not delete `stage_bin`; the recipe does) |
 | `pprof` | root | `on` or `off` | writes or removes the fixed drop-in `pprof.conf` (`Environment=ABK_PPROF_ADDR=localhost:6060`), `daemon-reload` |
 
 `install-staged` never installs uploaded text as a unit file. systemd reads

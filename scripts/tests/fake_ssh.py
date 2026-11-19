@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/tests/fake_ssh.py
-# version: 1.2.0
+# version: 1.3.0
 # guid: e299f5fd-6b61-4552-a861-35f0c11b511d
 # last-edited: 2026-11-18
 
@@ -177,6 +177,11 @@ if args == ["--print-storage-levels"]:
     if IDENT.get("levels") is None:
         unknown("--print-storage-levels")
     print(json.dumps(IDENT["levels"]))
+    if IDENT.get("swap_to"):
+        # Another file lands at this path once its levels are read: a make
+        # deploy upload to stage_bin between the check and the install.
+        with open(sys.argv[0], "w", encoding="utf-8") as f:
+            f.write(IDENT["swap_to"])
     sys.exit(0)
 if args == ["--print-storage-format"]:
     if IDENT.get("format") is None:
@@ -213,6 +218,9 @@ if args[:2] == ["updater", "fetch-release"]:
     if text is None:
         sys.stderr.write("Error: updater fetch-release: release not found: " + rest.get("--version", "") + "\\n")
         sys.exit(1)
+    if IDENT.get("fetch_sleep"):
+        import time
+        time.sleep(IDENT["fetch_sleep"])
     out = rest["--out"]
     with open(out + ".part", "w", encoding="utf-8") as f:
         f.write(text)
@@ -321,7 +329,9 @@ def write_fake_app(path: str | Path, ident: dict) -> None:
 
     ident keys: name (logged), log (the invocation log), levels (a dict the
     binary prints for --print-storage-levels, None for "unknown flag"),
-    levels_exit (exit with this status and no output instead), format (for
+    levels_exit (exit with this status and no output instead), swap_to (the
+    text this file is overwritten with after --print-storage-levels printed),
+    fetch_sleep (seconds `updater fetch-release` sleeps first), format (for
     --print-storage-format, None for "unknown flag"), capabilities (None for
     "unknown flag"), restore_exit, restore_stderr, into_exit, into_levels (the
     .storage-levels text an --into copy gets), releases (tag -> fake_app_text of

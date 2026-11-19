@@ -1,5 +1,5 @@
 // file: core/updater/updater.go
-// version: 2.0.1
+// version: 2.1.0
 // guid: 2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d
 // last-edited: 2026-11-18
 
@@ -130,6 +130,10 @@ type Updater struct {
 	// until F8-04 deletes that path (LegacySkipSelfTest).
 	skipSelfTest bool
 
+	// idleTimeout and maxDuration bound one download (DownloadIdleTimeout and
+	// DownloadMaxDuration; tests shorten them).
+	idleTimeout, maxDuration time.Duration
+
 	status atomic.Pointer[Status]
 }
 
@@ -209,7 +213,7 @@ func New(opts Options, d Deps, with ...Option) (*Updater, error) {
 	if opts.AssetName == nil {
 		opts.AssetName = RawBinary(opts.BinaryName)
 	}
-	u := &Updater{opts: opts, d: d, log: d.Log, now: time.Now}
+	u := &Updater{opts: opts, d: d, log: d.Log, now: time.Now, idleTimeout: DownloadIdleTimeout, maxDuration: DownloadMaxDuration}
 	for _, w := range with {
 		w(u)
 	}

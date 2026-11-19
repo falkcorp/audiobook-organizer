@@ -1,5 +1,5 @@
 // file: internal/books/options.go
-// version: 1.2.8
+// version: 1.3.0
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
 // last-edited: 2026-11-18
 
@@ -201,7 +201,7 @@ func OfflineOptions() (app.Options, error) {
 	if err != nil {
 		return app.Options{}, err
 	}
-	coreOpts := updater.CoreOptions()
+	coreOpts := updater.FetchOptions()
 	return app.Options{
 		AppID: AppID,
 		// serve's Version: the binary ID a staged swap records hashes it, so
@@ -230,7 +230,8 @@ func OfflineOptions() (app.Options, error) {
 		// prune-checkpoints logs each deletion beside its stdout report.
 		Logger: logger.FromContext(context.Background()).With("subsystem", "offline"),
 		// updater fetch-release: the release source of this app's own
-		// releases, which F8-04 hands to the kernel as well.
+		// releases, with the asset name they publish (FetchOptions); F8-04
+		// hands the kernel the same.
 		Updater: &coreOpts,
 	}, nil
 }

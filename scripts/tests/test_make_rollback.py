@@ -1,5 +1,5 @@
 # file: scripts/tests/test_make_rollback.py
-# version: 1.4.0
+# version: 1.5.0
 # guid: 17d15b8e-ad9f-4804-af7c-e1f0e4b72b13
 # last-edited: 2026-11-18
 
@@ -36,6 +36,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -865,6 +866,73 @@ class RollbackRestoreTest(unittest.TestCase):
         self.assertFalse(any("install-staged prev" in c for c in host.ssh()))
         self.assertEqual(fake_ssh.fake_app_name(host.prev), "prev")
 
+    def test_a_stage_bin_swapped_after_the_check_is_caught_after_the_install(self) -> None:
+        """F8-02 review m2: the levels are read from stage_bin and root copies
+        what stage_bin holds when it runs. A deploy upload in between would
+        install a binary at other levels as .prev; it is read again and
+        refused before the stop."""
+        deployed = fake_ssh.fake_app_text(
+            {
+                "name": "deployed",
+                "levels": R2,
+                "format": 1,
+                "capabilities": "sd_notify",
+                "log": os.devnull,
+            }
+        )
+        host = FakeHost(self, prev={"levels": R2}, releases={"v0.41.0": {"swap_to": deployed}})
+        p = host.make("rollback-restore", RELEASE="v0.41.0")
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertEqual(fake_ssh.fake_app_name(host.prev), "deployed", ".prev is the swapped file")
+        self.assertIn("after the install", out(p))
+        self.assertIn("books: 1, core: 1", out(p))
+        self.assertIn("replaced", out(p), "says the old .prev is gone")
+        self.assertEqual(host.changes(), [], "nothing stopped, restored or swapped")
+        self.assertEqual(host.installed(), "current")
+        self.assertFalse(host.stage.exists())
+
+    def test_refusals_after_the_install_say_prev_was_replaced(self) -> None:
+        """F8-02 review n2: once install-staged prev ran, the old .prev is
+        gone, and a later refusal must not say .prev is untouched."""
+        host = FakeHost(
+            self,
+            prev={"levels": R2},
+            releases={"v0.41.0": {}},
+            rules=[{"match": "unit-type", "responses": [{"exit": 1, "stderr": "no\n"}]}],
+        )
+        p = host.make("rollback-restore", RELEASE="v0.41.0")
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertIn("matching the unit type failed", out(p))
+        self.assertIn("release v0.41.0's binary", out(p))
+        self.assertIn("replaced", out(p))
+        self.assertEqual(fake_ssh.fake_app_name(host.prev), "fetched-v0.41.0")
+
+    def test_a_fetch_that_runs_past_the_time_limit_is_refused_and_prev_kept(self) -> None:
+        host = FakeHost(
+            self,
+            prev={"levels": R2},
+            current={"fetch_sleep": 3},
+            releases={"v0.41.0": {}},
+        )
+        # Without the limit this fetch would finish and the restore succeed.
+        p = host.make("rollback-restore", RELEASE="v0.41.0", DEPLOY_FETCH_TIMEOUT="0.5")
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertIn("did not finish", out(p))
+        self.assertEqual(host.changes(), [])
+        self.assertFalse(any("install-staged prev" in c for c in host.ssh()))
+        # (The fake's fetch outlives the killed ssh and writes stage_bin a moment
+        # later, as a real host's orphaned fetch could; the file only ever
+        # reaches .prev through install-staged, which was not run.)
+        self.assertEqual(fake_ssh.fake_app_name(host.prev), "prev")
+
+    def test_a_bad_fetch_time_limit_is_refused(self) -> None:
+        host = FakeHost(self, releases={"v0.41.0": {}})
+        for bad in ("soon", "0", "-3"):
+            p = host.make("rollback-restore", RELEASE="v0.41.0", DEPLOY_FETCH_TIMEOUT=bad)
+            self.assertNotEqual(p.returncode, 0, bad)
+            self.assertIn("DEPLOY_FETCH_TIMEOUT", out(p), bad)
+            self.assertEqual(host.changes(), [], bad)
+
     def test_a_release_that_is_not_a_tag_is_refused_before_any_ssh(self) -> None:
         for bad in ("latest", "dev", "v1.0.0; touch /tmp/pwned-f802", "../x", "v1 2", "1.2.3\nrm"):
             host = FakeHost(self, releases={"v0.41.0": {}})
@@ -1272,11 +1340,17 @@ class MutationProbes(unittest.TestCase):
         self.assertNotEqual(host.changes(), [])
 
     def test_release_equality_removed(self) -> None:
-        """RELEASE's fetched binary is held to the source's levels too."""
+        """RELEASE's fetched binary is held to the source's levels too. With
+        the guard's check removed the recipe's second look at .prev (after the
+        install, F8-02 review m2) still refuses before the stop; that look is
+        what keeps a restore from going ahead on the install's own result."""
         host = FakeHost(self, releases={"v0.42.0": {"levels": R2}})
         m = mutant(self, "    diff = differs(src.levels, prev)\n", "    diff = []\n")
-        self.assertEqual(host.make("rollback-restore", guard=m, RELEASE="v0.42.0").returncode, 0)
+        p = host.make("rollback-restore", guard=m, RELEASE="v0.42.0")
+        self.assertNotEqual(p.returncode, 0, out(p))
         self.assertTrue(any("install-staged prev" in c for c in host.ssh()))
+        self.assertIn("after the install", out(p))
+        self.assertEqual(host.changes(), [])
 
     def test_release_tag_check_removed(self) -> None:
         """The tag goes into a remote shell line: only the charset guards it."""

@@ -1,5 +1,5 @@
 // file: core/updater/testutil_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: e41b8c07-3d92-4a56-9c1f-0b7a6d25e813
 // last-edited: 2026-11-18
 
@@ -52,12 +52,14 @@ type fakeSource struct {
 	opened  []string // asset names opened, in order
 	openErr error
 	midErr  map[string]error // asset URL -> error after half the body
+	stall   map[string]bool  // asset URL -> half the body, then nothing until the context ends
+	hang    map[string]bool  // asset URL -> no byte at all until the context ends
 }
 
 func newFakeSource() *fakeSource {
 	return &fakeSource{
 		latest: map[Channel]string{}, rels: map[string]Release{},
-		bodies: map[string][]byte{}, sizes: map[string]int64{}, midErr: map[string]error{},
+		bodies: map[string][]byte{}, sizes: map[string]int64{}, midErr: map[string]error{}, stall: map[string]bool{}, hang: map[string]bool{},
 	}
 }
 
@@ -92,7 +94,7 @@ func (f *fakeSource) Latest(_ context.Context, ch Channel) (Release, error) {
 	return f.rels[tag], nil
 }
 
-func (f *fakeSource) Open(_ context.Context, a Asset) (io.ReadCloser, int64, error) {
+func (f *fakeSource) Open(ctx context.Context, a Asset) (io.ReadCloser, int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.opened = append(f.opened, a.Name)
@@ -110,7 +112,22 @@ func (f *fakeSource) Open(_ context.Context, a Asset) (io.ReadCloser, int64, err
 	if err, ok := f.midErr[a.URL]; ok {
 		return io.NopCloser(io.MultiReader(bytes.NewReader(body[:len(body)/2]), &errReader{err})), size, nil
 	}
+	if f.hang[a.URL] {
+		return io.NopCloser(&ctxReader{ctx}), size, nil
+	}
+	if f.stall[a.URL] {
+		return io.NopCloser(io.MultiReader(bytes.NewReader(body[:len(body)/2]), &ctxReader{ctx})), size, nil
+	}
 	return io.NopCloser(bytes.NewReader(body)), size, nil
+}
+
+// ctxReader blocks until its context ends, as a body whose peer went quiet
+// does (net/http's body read returns the context's error the same way).
+type ctxReader struct{ ctx context.Context }
+
+func (c *ctxReader) Read([]byte) (int, error) {
+	<-c.ctx.Done()
+	return 0, context.Cause(c.ctx)
 }
 
 type errReader struct{ err error }
