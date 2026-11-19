@@ -1,5 +1,5 @@
 // file: internal/books/cutover_suite_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6a1f3c8e-2d47-4b95-8e0a-7c5d9b2f4e16
 // last-edited: 2026-11-19
 
@@ -1505,7 +1505,7 @@ func TestCutoverList_BooksFlipIsValid(t *testing.T) {
 	man := m.Manifest()
 	list := cutover.CutoverList{
 		Target:       storage.Levels{"books": man.Storage.Level, "core": kernel.CoreCutoverLevel},
-		FirstVersion: storage.Levels{"books": database.NextMigrationVersion(), "core": 1},
+		FirstVersion: storage.Levels{"books": nextBooksVersion(), "core": 1},
 		Entries:      flipListEntries(m),
 	}
 	if err := cutover.ValidateCutoverList(list); err != nil {
@@ -1514,7 +1514,7 @@ func TestCutoverList_BooksFlipIsValid(t *testing.T) {
 
 	t.Run("a drifted books level version is reported", func(t *testing.T) {
 		drifted := list
-		drifted.FirstVersion = storage.Levels{"books": database.NextMigrationVersion() + 1, "core": 1}
+		drifted.FirstVersion = storage.Levels{"books": nextBooksVersion() + 1, "core": 1}
 		var lerr *cutover.CutoverListError
 		if err := cutover.ValidateCutoverList(drifted); !errors.As(err, &lerr) {
 			t.Fatalf("a first level version off by one passed: %v", err)
