@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g7_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 4c7e1a92-6b3d-4f58-8a0e-2d9c5b71e3f6
 // last-edited: 2026-11-19
 
@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
+	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
@@ -134,6 +135,21 @@ func (r *t6g7Recorder) RebuildReviewStatusIndex(apply bool) (database.ReviewStat
 	return r.reviewIndex, nil
 }
 
+func (r *t6g7Recorder) ApplyUserMerge(_ context.Context, req usermerge.ApplyRequest, _ usermerge.Progress) (*usermerge.Journal, error) {
+	r.rec(fmt.Sprintf("ApplyUserMerge actor=%s survivor=%s absorbed=%s", req.ActorID, req.SurvivorID, req.AbsorbedID))
+	return &usermerge.Journal{ID: "01BATJRNL000000000000000A1", Status: "done"}, nil
+}
+
+func (r *t6g7Recorder) ResumeUserMerge(_ context.Context, id string, _ usermerge.Progress) (*usermerge.Journal, error) {
+	r.rec("ResumeUserMerge " + id)
+	return &usermerge.Journal{ID: id, Status: "done"}, nil
+}
+
+func (r *t6g7Recorder) UndoUserMerge(_ context.Context, req usermerge.UndoRequest, _ usermerge.Progress) (*usermerge.Journal, error) {
+	r.rec("UndoUserMerge " + req.JournalID)
+	return &usermerge.Journal{ID: req.JournalID, Status: "undone"}, nil
+}
+
 func (r *t6g7Recorder) RunBulkWriteBack(ctx context.Context, opID string, ids []string, rename bool, start int, progress operations.ProgressReporter) error {
 	if opID == "" {
 		return errors.New("RunBulkWriteBack got no op id")
@@ -171,6 +187,8 @@ type t6g7TestStore struct {
 	cores []database.BookCore
 	// active are the ids of the operations ListActiveOperationsV2 answers.
 	active []string
+	// admin is the one user id ActorIsAdmin answers true for.
+	admin string
 	// files and states are what GetBookFiles and GetMetadataFieldStates answer.
 	files  map[string][]database.BookFile
 	states map[string][]database.MetadataFieldState
@@ -187,6 +205,16 @@ func (s *t6g7TestStore) ListActiveOperationsV2() ([]database.OperationV2Row, err
 		rows = append(rows, database.OperationV2Row{ID: id})
 	}
 	return rows, nil
+}
+
+func (s *t6g7TestStore) ActorIsAdmin(id string) (bool, error) { return id == s.admin, nil }
+
+func (s *t6g7TestStore) BuildPlan(context.Context, usermerge.PlanRequest) (*usermerge.Plan, error) {
+	return &usermerge.Plan{Ops: 3}, nil
+}
+
+func (s *t6g7TestStore) LoadJournal(id string) (*usermerge.Journal, error) {
+	return &usermerge.Journal{ID: id, Status: "interrupted"}, nil
 }
 
 func (s *t6g7TestStore) CountPrimaryBooks() (int, error) { return len(s.cores), nil }
@@ -264,8 +292,11 @@ func (h t6g7TestHold) Release() { *h.released = true }
 // (FakeRun is pinned to ModeLive with no writer, and refuses a stand-down).
 type t6g7Host struct {
 	*taskstest.FakeRun
-	mode tasks.Mode
-	w    tasks.Writer
+	mode  tasks.Mode
+	w     tasks.Writer
+	actor tasks.Actor
+	// resumed is what the run reports for Resumed.
+	resumed bool
 
 	mu         sync.Mutex
 	standDowns []tasks.Key
@@ -291,6 +322,8 @@ func (h *t6g7Host) workerCaps() []int {
 	return append([]int(nil), h.caps...)
 }
 
+func (h *t6g7Host) Actor() tasks.Actor   { return h.actor }
+func (h *t6g7Host) Resumed() bool        { return h.resumed }
 func (h *t6g7Host) Mode() tasks.Mode     { return h.mode }
 func (h *t6g7Host) Writer() tasks.Writer { return h.w }
 func (h *t6g7Host) Log() *slog.Logger    { return slog.New(slog.DiscardHandler) }
@@ -304,6 +337,12 @@ func (h *t6g7Host) StandDown(k tasks.Key) (tasks.Hold, error) {
 // runT6G7Kind runs d's own Run, the function the executor would call.
 func runT6G7Kind(t *testing.T, d tasks.Definition, mode tasks.Mode, w tasks.Writer, params string) (*t6g7Host, error) {
 	t.Helper()
+	return runT6G7KindAs(t, d, mode, w, params, tasks.Actor{})
+}
+
+// runT6G7KindAs is runT6G7Kind started by actor.
+func runT6G7KindAs(t *testing.T, d tasks.Definition, mode tasks.Mode, w tasks.Writer, params string, actor tasks.Actor) (*t6g7Host, error) {
+	t.Helper()
 	r, ok := d.(interface {
 		ExecutorRunners() (func(json.RawMessage) (any, error), *tasks.TaskSpec[any, json.RawMessage], *tasks.BatchSpec[any, any, json.RawMessage], *tasks.FixerSpec[any, any])
 	})
@@ -316,7 +355,7 @@ func runT6G7Kind(t *testing.T, d tasks.Definition, mode tasks.Mode, w tasks.Writ
 	}
 	p, err := decode(raw)
 	require.NoError(t, err)
-	h := &t6g7Host{FakeRun: taskstest.NewFakeRun(context.Background(), d.Kind()), mode: mode, w: w}
+	h := &t6g7Host{FakeRun: taskstest.NewFakeRun(context.Background(), d.Kind()), mode: mode, w: w, actor: actor}
 	h.result, err = task.Run(tasks.NewRC(h), p)
 	return h, err
 }
@@ -359,6 +398,7 @@ func t6g7KindWritersBuild() map[tasks.Kind]t6g7KindWrite {
 	m := map[tasks.Kind]t6g7KindWrite{}
 	add := func(head sdk.OperationDef, kw t6g7KindWrite) { m[tasks.Kind("books."+head.ID)] = kw }
 	add(p.reviewStatusIndexRepairDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[reviewStatusIndexRepairWriter]()}})
+	add(p.userMergeDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[userMergeWriter]()}})
 	add(p.bulkWriteBackDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[bulkWriteBackWriter]()}})
 	add(p.titleRepairDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[titleRepairWriter]()}})
 	add(p.titleBackfillDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[titleBackfillWriter]()}})
@@ -425,7 +465,7 @@ func TestT6G7Resources_TableCoversEveryWriterMethod(t *testing.T) {
 func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 	p := &Plugin{}
 	defs := p.t6g7Kinds(fakeT6G7Deps(t), nil)
-	require.Len(t, defs, 7, "grows to 15 as the group's definitions land")
+	require.Len(t, defs, 8, "grows to 15 as the group's definitions land")
 
 	// Every expected value below is written out by hand from the HEAD def and
 	// the coordinator's rulings, never derived from the code under test.
@@ -446,6 +486,7 @@ func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 		{head: p.reportsPruneDef(), resume: tasks.ResumeDrop, timeout: time.Hour},
 		{head: p.titleBackfillDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
 		{head: p.bulkWriteBackDef(), resume: tasks.ResumeAsk, timeout: 240 * time.Minute},
+		{head: p.userMergeDef(), resume: tasks.ResumeDrop, timeout: 2 * time.Hour},
 		{head: p.titleRepairDef(), resume: tasks.ResumeDrop, timeout: 4 * time.Hour,
 			par: &titleRepairPar, wantPar: fmt.Sprintf("fixed(%d): ", max(min(runtime.NumCPU(), 8), 1))},
 	}
@@ -627,7 +668,7 @@ func TestT6G7Kinds_WritesThroughShell(t *testing.T) {
 // case, before it builds a writer or touches the store: the run's mode comes
 // from the start request, never from params (coordinator ruling 3).
 func TestT6G7Kinds_WritingShellsRefuseModeKeys(t *testing.T) {
-	kinds := []tasks.Kind{reviewStatusIndexRepairKind, reportsPruneKind, titleBackfillKind, titleRepairKind, t6g7KindFor("maintenance.bulk-write-back")}
+	kinds := []tasks.Kind{reviewStatusIndexRepairKind, reportsPruneKind, titleBackfillKind, titleRepairKind, t6g7KindFor("maintenance.bulk-write-back"), t6g7KindFor("maintenance.user-merge")}
 	keys := []string{"dry_run", "dryRun", "DRY_RUN", "DryRun", "apply", "Apply", "APPLY"}
 	gate := &t6g7GateWriter{name: "gotham"}
 	for _, kind := range kinds {
@@ -810,4 +851,98 @@ func TestBulkWriteBackCore_FinishDecidesTheError(t *testing.T) {
 	err = bulkWriteBackCore(context.Background(), BulkWriteBackParams{BookIDs: []string{"b"}}, env)
 	require.ErrorContains(t, err, "disk full")
 	require.Equal(t, 2, finished, "a failed write did not release the hold")
+}
+
+const t6g7MergeActor = "01BATUSER00000000000000AD1"
+
+func t6g7MergeGrant(t *testing.T, g usermerge.Grant) string {
+	t.Helper()
+	g.ActorID = t6g7MergeActor
+	tok, err := usermerge.DefaultGrants.Issue(g)
+	require.NoError(t, err)
+	return tok
+}
+
+func t6g7UserMergeDef(t *testing.T, p *t6g7Probe) tasks.Definition {
+	t.Helper()
+	return t6g7ByKind(t, (&Plugin{}).t6g7Kinds(p.deps(), nil), t6g7KindFor("maintenance.user-merge"))
+}
+
+// A live apply redeems the grant the Users page minted for this actor, then
+// applies through the run's writer: the actor is the run's own, never a param.
+func TestT6G7Kinds_UserMergeAppliesWithAGrantForTheRunsActor(t *testing.T) {
+	p := newT6G7Probe(t)
+	p.store = &t6g7TestStore{admin: t6g7MergeActor}
+	g := usermerge.Grant{Action: usermerge.ActionApply, SurvivorID: "01BATUSER00000000000000S01", AbsorbedID: "01BATUSER00000000000000A01", Digest: "d1"}
+	tok := t6g7MergeGrant(t, g)
+	params := `{"survivor_id":"` + g.SurvivorID + `","absorbed_id":"` + g.AbsorbedID + `","digest":"d1","grant":"` + tok + `"}`
+	h, err := runT6G7KindAs(t, t6g7UserMergeDef(t, p), tasks.ModeLive, &t6g7GateWriter{name: "gotham"}, params, tasks.Actor{UserID: t6g7MergeActor})
+	require.NoError(t, err)
+	require.Equal(t, []string{"ApplyUserMerge actor=" + t6g7MergeActor + " survivor=" + g.SurvivorID + " absorbed=" + g.AbsorbedID}, p.rec.snapshot())
+	require.Contains(t, string(h.result), "01BATJRNL000000000000000A1", "the run's result is the journal's redacted form")
+}
+
+// Without the grant the Users page mints, a live run writes nothing, and it
+// builds no writer: the kernel path is no way around the route's checks.
+func TestT6G7Kinds_UserMergeLiveWithoutAGrantWritesNothing(t *testing.T) {
+	p := newT6G7Probe(t)
+	p.store = &t6g7TestStore{admin: t6g7MergeActor}
+	_, err := runT6G7KindAs(t, t6g7UserMergeDef(t, p), tasks.ModeLive, &t6g7GateWriter{name: "gotham"},
+		`{"survivor_id":"s","absorbed_id":"a","digest":"d1","grant":"forged"}`, tasks.Actor{UserID: t6g7MergeActor})
+	require.Error(t, err)
+	require.Empty(t, p.rec.snapshot())
+}
+
+// A grant is bound to the actor it was minted for.
+func TestT6G7Kinds_UserMergeGrantIsBoundToTheActor(t *testing.T) {
+	p := newT6G7Probe(t)
+	p.store = &t6g7TestStore{admin: "01BATUSER00000000000000AD2"}
+	tok := t6g7MergeGrant(t, usermerge.Grant{Action: usermerge.ActionApply, SurvivorID: "s", AbsorbedID: "a", Digest: "d1"})
+	_, err := runT6G7KindAs(t, t6g7UserMergeDef(t, p), tasks.ModeLive, &t6g7GateWriter{name: "gotham"},
+		`{"survivor_id":"s","absorbed_id":"a","digest":"d1","grant":"`+tok+`"}`, tasks.Actor{UserID: "01BATUSER00000000000000AD2"})
+	require.Error(t, err)
+	require.Empty(t, p.rec.snapshot())
+}
+
+// An actor who is not an active admin is refused, in preview too: a preview reads
+// two accounts' data.
+func TestT6G7Kinds_UserMergeRefusesAnActorWhoIsNotAnAdmin(t *testing.T) {
+	for _, mode := range []tasks.Mode{tasks.ModePreview, tasks.ModeLive} {
+		p := newT6G7Probe(t)
+		p.store = &t6g7TestStore{admin: "someone-else"}
+		_, err := runT6G7KindAs(t, t6g7UserMergeDef(t, p), mode, &t6g7GateWriter{name: "gotham"}, `{}`, tasks.Actor{UserID: t6g7MergeActor})
+		require.ErrorContains(t, err, "not an active admin", "mode %v", mode)
+		require.Empty(t, p.rec.snapshot())
+	}
+}
+
+// Preview is the default: it reports the plan and writes nothing, building no
+// writer.
+func TestT6G7Kinds_UserMergePreviewReportsThePlanAndWritesNothing(t *testing.T) {
+	p := newT6G7Probe(t)
+	p.store = &t6g7TestStore{admin: t6g7MergeActor}
+	h, err := runT6G7KindAs(t, t6g7UserMergeDef(t, p), tasks.ModePreview, nil, `{"survivor_id":"s","absorbed_id":"a"}`, tasks.Actor{UserID: t6g7MergeActor})
+	require.NoError(t, err)
+	require.Empty(t, p.rec.snapshot())
+	require.Zero(t, p.writerCalls())
+	require.NotEmpty(t, h.result, "the plan summary is the result")
+}
+
+// A run that was resumed is not fresh: a merge never runs twice from one click.
+func TestT6G7Kinds_UserMergeRefusesAResumedRun(t *testing.T) {
+	p := newT6G7Probe(t)
+	p.store = &t6g7TestStore{admin: t6g7MergeActor}
+	tok := t6g7MergeGrant(t, usermerge.Grant{Action: usermerge.ActionResume, JournalID: "01BATJRNL000000000000000A2"})
+	d := t6g7UserMergeDef(t, p)
+	r, ok := d.(interface {
+		ExecutorRunners() (func(json.RawMessage) (any, error), *tasks.TaskSpec[any, json.RawMessage], *tasks.BatchSpec[any, any, json.RawMessage], *tasks.FixerSpec[any, any])
+	})
+	require.True(t, ok)
+	decode, task, _, _ := r.ExecutorRunners()
+	params, err := decode(json.RawMessage(`{"action":"resume","journal_id":"01BATJRNL000000000000000A2","grant":"` + tok + `"}`))
+	require.NoError(t, err)
+	h := &t6g7Host{FakeRun: taskstest.NewFakeRun(context.Background(), d.Kind()), mode: tasks.ModeLive, w: &t6g7GateWriter{name: "gotham"}, actor: tasks.Actor{UserID: t6g7MergeActor}, resumed: true}
+	_, err = task.Run(tasks.NewRC(h), params)
+	require.ErrorContains(t, err, "never retried in place")
+	require.Empty(t, p.rec.snapshot())
 }
