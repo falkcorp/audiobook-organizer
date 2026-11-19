@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/kinds_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 95f5ec58-0c87-4403-b2aa-b306523e06bd
-// last-edited: 2026-11-16
+// last-edited: 2026-11-19
 
 package jobs
 
@@ -516,7 +516,7 @@ func TestKindShell_EffectsTable(t *testing.T) {
 			t.Errorf("%s has no jobWrites row", job.ID())
 			continue
 		}
-		fx, err := effectsFor(job.ID())
+		fx, err := effectsFor(jobWritesFor, job.ID())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -546,7 +546,7 @@ func TestKindShell_EffectsTable(t *testing.T) {
 	if !slices.Equal(readOnly, want) {
 		t.Errorf("ReadOnly jobs = %v, want %v", readOnly, want)
 	}
-	if fx, err := effectsFor("not-a-job"); err != nil || fx.Declared() {
+	if fx, err := effectsFor(jobWritesFor, "not-a-job"); err != nil || fx.Declared() {
 		t.Errorf("an unknown job got declared effects %v (err %v)", fx, err)
 	}
 }
