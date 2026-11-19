@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -47,6 +48,11 @@ type relinkFixture struct {
 	locked     map[string]bool
 	lockErr    map[string]error
 	lockFlipAt map[string]int
+	// lockErrAt[id] = n fails only the n-th field-state read of the book, so a
+	// test can fail one specific check; setErrAt[id] = n fails the n-th
+	// SetBookAuthors of the book (a rollback that cannot be written).
+	lockErrAt  map[string]int
+	setErrAt   map[string]int
 	stateReads map[string]int
 	store      *database.MockStore
 }
@@ -89,6 +95,9 @@ func (f *relinkFixture) run(t *testing.T, params string) (*stripMergeCalls, stri
 		if err := f.lockErr[bookID]; err != nil {
 			return nil, err
 		}
+		if f.lockErrAt[bookID] == f.stateReads[bookID] {
+			return nil, fmt.Errorf("field states for %s: store closed at read %d", bookID, f.stateReads[bookID])
+		}
 		lock := f.locked[bookID] || (f.lockFlipAt[bookID] > 0 && f.stateReads[bookID] >= f.lockFlipAt[bookID])
 		v, ok := f.fetched[bookID]
 		if !ok && !lock {
@@ -101,6 +110,16 @@ func (f *relinkFixture) run(t *testing.T, params string) (*stripMergeCalls, stri
 			st.FetchedValue = &s
 		}
 		return []database.MetadataFieldState{st}, nil
+	}
+	if len(f.setErrAt) > 0 {
+		inner, setN := store.SetBookAuthorsFunc, map[string]int{}
+		store.SetBookAuthorsFunc = func(bookID string, as []database.BookAuthor) error {
+			setN[bookID]++
+			if f.setErrAt[bookID] == setN[bookID] {
+				return fmt.Errorf("simulated credit write failure for %s", bookID)
+			}
+			return inner(bookID, as)
+		}
 	}
 	store.GetAuthorByNameFunc = func(name string) (*database.Author, error) {
 		for _, a := range authors {

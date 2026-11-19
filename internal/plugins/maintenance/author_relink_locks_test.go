@@ -94,6 +94,52 @@ func TestAuthorStripMerge_RelinkLockSavedBeforeThePrimaryWriteHoldsIt(t *testing
 	wantSummary(t, summary, "relink-skipped-user-locked=1 ", "relinked=1 ")
 }
 
+// Each of the three lock reads a relink makes for one book is its own check and
+// each fails closed on its own. Failing only the n-th read (the first read is
+// the advisory one, the third is relinkBookCredit's check before it writes, the
+// fourth is the primary-author write's own) shows no later read hides the error.
+func TestAuthorStripMerge_RelinkEachLockReadFailsClosedOnItsOwn(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		failRead     int
+		wantCredits  bool // the credit write ran and was rolled back
+		wantNoUpdate bool
+	}{
+		{"advisory read", 1, false, true},
+		{"read before the credit write", 3, false, true},
+		{"read under the primary write", 4, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := lockedRelinkFixture()
+			f.lockErrAt = map[string]int{"bk-t": tc.failRead}
+			calls, summary := f.run(t, relinkAllParams)
+
+			require.NotContains(t, credits(calls, "bk-t"), 300, "the credits of the book stayed moved")
+			if tc.wantCredits {
+				require.NotNil(t, calls.setAuthors["bk-t"], "the credit write was not rolled back")
+			} else {
+				require.Nil(t, calls.setAuthors["bk-t"], "credits were written although the lock read failed first")
+			}
+			_, ok := calls.updated["bk-t"]
+			require.False(t, ok, "the primary was written although a lock read failed")
+			require.NotContains(t, calls.deleted, 100, "the junk row was deleted although a book still has it")
+			wantSummary(t, summary, "relink-failed=1 ", "relink-skipped-user-locked=0 ", "relinked=1 ")
+		})
+	}
+}
+
+// A lock saved between the two writes puts the credits back; when that restore
+// itself fails, the book is a failure (credits and primary now disagree), not a
+// quiet "left alone".
+func TestAuthorStripMerge_RelinkFailedCreditRestoreIsAFailureNotAHold(t *testing.T) {
+	f := lockedRelinkFixture()
+	f.lockFlipAt = map[string]int{"bk-t": 4}
+	f.setErrAt = map[string]int{"bk-t": 2}
+	_, summary := f.run(t, relinkAllParams)
+
+	wantSummary(t, summary, "relink-failed=1 ", "relink-skipped-user-locked=0 ")
+}
+
 type mergeLockStore struct {
 	t6g1HeadStore
 	unreadable map[string]bool
