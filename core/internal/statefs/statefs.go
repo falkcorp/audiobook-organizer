@@ -1,5 +1,5 @@
 // file: core/internal/statefs/statefs.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1089300d-225c-4ffd-861d-6d728bb11303
 // last-edited: 2026-11-19
 
@@ -104,6 +104,18 @@ func MkdirAll(ctx context.Context, label, dir string, perm fs.FileMode) error {
 	if mem == nil {
 		return os.MkdirAll(dir, perm)
 	}
+	return memMkdirAll(mem, dir, perm)
+}
+
+// memMkdirAll is os.MkdirAll's rule on the in-memory filesystem: a
+// directory that exists is done with no operation. os.MkdirAll stats first
+// and never calls mkdir(2) on one, so no crash or error can strike there in
+// production, and the kit must not record one (MemFS's MkdirAll is an
+// operation the recorder sees whether or not it creates anything).
+func memMkdirAll(mem vfs.FS, dir string, perm fs.FileMode) error {
+	if fi, err := mem.Stat(dir); err == nil && fi.IsDir() {
+		return nil
+	}
 	return mem.MkdirAll(dir, perm)
 }
 
@@ -117,9 +129,6 @@ func memOf(s *bootseam.Seams) (vfs.FS, error) {
 	}
 	return nil, fmt.Errorf("statefs: the boot filesystem %T is neither the real one nor in memory", vfs.Root(s.FS))
 }
-
-// Name is the directory's path.
-func (d *Dir) Name() string { return d.path }
 
 // Close releases the directory: the root Open opened. A Dir from FromRoot
 // leaves its root to the caller, and an in-memory one holds nothing.
@@ -239,7 +248,7 @@ func (d *Dir) MkdirAll(label, name string, perm fs.FileMode) error {
 	if err != nil {
 		return err
 	}
-	return d.mem.MkdirAll(p, perm)
+	return memMkdirAll(d.mem, p, perm)
 }
 
 // WriteNew creates name, which must not exist, with perm (os.O_EXCL), writes
