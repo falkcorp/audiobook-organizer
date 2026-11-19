@@ -1,7 +1,7 @@
 // file: core/internal/executor/writer.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b36bdb50-f432-4165-bf9a-e3cd86723c0a
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package executor
 
@@ -40,8 +40,9 @@ func (a *attempt) writable() error {
 
 // Do refuses with ErrFenced once the run no longer holds its permit
 // (5T.3.5: canceled, abandoned, timed out or a stand-down hold lost; see
-// writable), with ErrOutsideEffects for a resource the definition did not
-// declare; in Preview it records the intent and returns ErrPreview without
+// writable), with ErrOutsideEffects when any resource the write names
+// (Write.Stamps) is one the definition did not declare, or it names none
+// (tasks.CheckWrite, before the intent and before fn); in Preview it records the intent and returns ErrPreview without
 // calling fn; in Live it records a write-ahead intent, calls fn, and hands
 // the changes to the module's ChangeSink. The permit is checked again after
 // the intent, just before fn, so a stop that lands while the intent is
@@ -51,8 +52,8 @@ func (w *writer) Do(ctx context.Context, wr tasks.Write, fn func(ctx context.Con
 	if err := a.writable(); err != nil {
 		return err
 	}
-	if !declared(a.d.writes, wr.Resource) {
-		return fmt.Errorf("%w: %s writes %s", tasks.ErrOutsideEffects, a.d.kind, tasks.FormatRef(wr.Resource))
+	if err := tasks.CheckWrite(a.d.kind, a.d.writes, wr); err != nil {
+		return err
 	}
 	if err := a.e.renewHolds(ctx, a); err != nil {
 		return fmt.Errorf("%w: %v", tasks.ErrFenced, err)

@@ -332,14 +332,7 @@ func (e *executor) writeSet(d *def, params json.RawMessage) ([]entity.Ref, error
 
 // declared reports whether r is inside a declared write set: a declared
 // kind-wide ref covers every ID of its kind; an ID ref covers only itself.
-func declared(set []entity.Ref, r entity.Ref) bool {
-	for _, w := range set {
-		if w.Module == r.Module && w.Kind == r.Kind && (w.ID == "" || w.ID == r.ID) {
-			return true
-		}
-	}
-	return false
-}
+func declared(set []entity.Ref, r entity.Ref) bool { return tasks.Covers(set, r) }
 
 // checkPlan is the Approval rule for a Live Fixer start (5T.3.7, SEC-24):
 // with PlanRequired, PlanRef must name a succeeded Preview run of the same
