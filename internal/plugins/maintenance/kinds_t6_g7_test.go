@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g7_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 4c7e1a92-6b3d-4f58-8a0e-2d9c5b71e3f6
 // last-edited: 2026-11-19
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -188,11 +189,32 @@ func (r *t6g7Recorder) ModifyBook(id string, fn func(*database.Book) error) (*da
 		return nil, err
 	}
 	line := "ModifyBook " + id + " title=" + cur.Title
+	if fmt.Sprint(cur.SeriesID) != fmt.Sprint(b.SeriesID) {
+		line += " series=" + t6g7IntPtr(cur.SeriesID)
+	}
 	if cur.FilePath != b.FilePath {
 		line += " path=" + filepath.Base(cur.FilePath)
 	}
 	r.rec(line)
 	return &cur, nil
+}
+
+// t6g7IntPtr is n, or "nil".
+func t6g7IntPtr(n *int) string {
+	if n == nil {
+		return "nil"
+	}
+	return fmt.Sprint(*n)
+}
+
+func (r *t6g7Recorder) CreateSeries(name string, authorID *int) (*database.Series, error) {
+	r.rec(fmt.Sprintf("CreateSeries %s author=%s", name, t6g7IntPtr(authorID)))
+	return &database.Series{ID: 9001, Name: name, AuthorID: authorID}, nil
+}
+
+func (r *t6g7Recorder) CreateOperationChange(c *database.OperationChange) error {
+	r.rec(fmt.Sprintf("CreateOperationChange %s %s %s->%s", c.BookID, c.FieldName, c.OldValue, c.NewValue))
+	return nil
 }
 
 func (r *t6g7Recorder) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
@@ -240,7 +262,22 @@ type t6g7TestStore struct {
 	// books is what GetBookByID answers; bookAt, LiveBookIDsAtPath by path.
 	books  map[string]*database.Book
 	bookAt map[string][]string
+	// refCounts, series, trashed and seriesByName are the series census reads.
+	refCounts    map[int]int
+	series       []database.Series
+	trashed      []database.Book
+	seriesByName map[string]*database.Series
 }
+
+func (s *t6g7TestStore) GetAllSeriesBookRefCounts() (map[int]int, error) { return s.refCounts, nil }
+func (s *t6g7TestStore) GetAllSeries() ([]database.Series, error)        { return s.series, nil }
+func (s *t6g7TestStore) ListSoftDeletedBooks(int, int, *time.Time) ([]database.Book, error) {
+	return s.trashed, nil
+}
+func (s *t6g7TestStore) GetSeriesByName(name string, _ *int) (*database.Series, error) {
+	return s.seriesByName[name], nil
+}
+func (s *t6g7TestStore) GetUserPreference(string) (*database.UserPreference, error) { return nil, nil }
 
 func (s *t6g7TestStore) GetAllPreferencesForUser(string) ([]database.UserPreferenceKV, error) {
 	return s.prefs, nil
@@ -248,7 +285,16 @@ func (s *t6g7TestStore) GetAllPreferencesForUser(string) ([]database.UserPrefere
 
 func (s *t6g7TestStore) LiveBookIDsAtPath(path string) ([]string, error) { return s.bookAt[path], nil }
 
-func (s *t6g7TestStore) GetBookByID(id string) (*database.Book, error) { return s.books[id], nil }
+// GetBookByID answers a copy: the series repoint applies its edit to the row it
+// read (to test the field locks), which must not reach the stored row.
+func (s *t6g7TestStore) GetBookByID(id string) (*database.Book, error) {
+	b := s.books[id]
+	if b == nil {
+		return nil, nil
+	}
+	cp := *b
+	return &cp, nil
+}
 
 func (s *t6g7TestStore) GetBookFileByID(bookID, fileID string) (*database.BookFile, error) {
 	for i := range s.files[bookID] {
@@ -311,6 +357,8 @@ type t6g7Probe struct {
 	rec   *t6g7Recorder
 	store t6g7Store
 	root  string
+	// seriesInvalidated counts InvalidateSeriesCache calls.
+	seriesInvalidated int
 }
 
 func newT6G7Probe(t *testing.T) *t6g7Probe {
@@ -330,6 +378,14 @@ func (p *t6g7Probe) deps() t6g7Deps {
 		},
 		RootDir:      func() string { return p.root },
 		StandDownKey: "books.gotham-watch",
+		// A report lands in the run's root under the file name the kind derived.
+		ResolveReportPath: func(explicit, fileName string) (string, error) {
+			if explicit != "" {
+				return filepath.Join(p.root, explicit), nil
+			}
+			return filepath.Join(p.root, fileName), nil
+		},
+		InvalidateSeriesCache: func() { p.mu.Lock(); p.seriesInvalidated++; p.mu.Unlock() },
 		// A directory "agrees" on the title its name carries, so a test seeds the
 		// tags by naming the folder.
 		AgreedChapterTitle: func(dir string) (string, bool) { return filepath.Base(dir), true },
@@ -472,6 +528,8 @@ func t6g7KindWritersBuild() map[tasks.Kind]t6g7KindWrite {
 	m := map[tasks.Kind]t6g7KindWrite{}
 	add := func(head sdk.OperationDef, kw t6g7KindWrite) { m[tasks.Kind("books."+head.ID)] = kw }
 	add(p.reviewStatusIndexRepairDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[reviewStatusIndexRepairWriter]()}})
+	// series-phantom-repair also writes its report TSV: a file.
+	add(p.seriesPhantomRepairDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[seriesPhantomWriter]()}, outside: []ops.Resource{ops.ResFiles}})
 	add(p.repointUnrecordedRenamesDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[unrecordedRenameWriter]()}})
 	add(p.tagBackfillDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[tagBackfillWriter]()}})
 	add(p.userMergeDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[userMergeWriter]()}})
@@ -541,7 +599,7 @@ func TestT6G7Resources_TableCoversEveryWriterMethod(t *testing.T) {
 func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 	p := &Plugin{}
 	defs := p.t6g7Kinds(fakeT6G7Deps(t), nil)
-	require.Len(t, defs, 10, "grows to 15 as the group's definitions land")
+	require.Len(t, defs, 11, "grows to 15 as the group's definitions land")
 
 	// Every expected value below is written out by hand from the HEAD def and
 	// the coordinator's rulings, never derived from the code under test.
@@ -557,6 +615,7 @@ func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 	titleRepairPar := titleRepairParallelism()
 	tagBackfillPar := tagBackfillParallelism()
 	repointPar := repointUnrecordedRenamesParallelism()
+	seriesPhantomPar := seriesPhantomRepairParallelism()
 	rows := []row{
 		{head: p.reviewStatusIndexRepairDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
 		{head: p.unknownAuthorAuditDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
@@ -565,6 +624,9 @@ func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 		{head: p.titleBackfillDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
 		{head: p.bulkWriteBackDef(), resume: tasks.ResumeAsk, timeout: 240 * time.Minute},
 		{head: p.userMergeDef(), resume: tasks.ResumeDrop, timeout: 2 * time.Hour},
+		// HEAD ran ResumeRestart and reads no checkpoint on restart: from zero.
+		{head: p.seriesPhantomRepairDef(), resume: tasks.ResumeFromZero, timeout: 2 * time.Hour,
+			par: &seriesPhantomPar, wantPar: "cpu"},
 		// HEAD's loop is four workers over units of records that share a
 		// destination path.
 		{head: p.repointUnrecordedRenamesDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute,
@@ -714,6 +776,18 @@ func t6g7WriteCases() []t6g7WriteCase {
 			live: []string{"ModifyBook 01BATBOOK00000000000000H1 title=Tarkin"},
 		},
 		{
+			kind:       seriesPhantomRepairKind,
+			params:     `{"mode":"null"}`,
+			standsDown: true,
+			setup: func(t *testing.T, p *t6g7Probe) {
+				seedSeriesPhantomRig(p, 7)
+			},
+			live: []string{
+				"CreateOperationChange 01BATBOOK00000000000000S1 series_id 7->",
+				"ModifyBook 01BATBOOK00000000000000S1 title=The Killing Joke series=nil",
+			},
+		},
+		{
 			kind: repointUnrecordedRenamesKind,
 			setup: func(t *testing.T, p *t6g7Probe) {
 				seedRepointRig(t, p, "01BATBOOK00000000000000R1", "01BATFILE00000000000000R11", true)
@@ -786,7 +860,7 @@ func TestT6G7Kinds_WritesThroughShell(t *testing.T) {
 // case, before it builds a writer or touches the store: the run's mode comes
 // from the start request, never from params (coordinator ruling 3).
 func TestT6G7Kinds_WritingShellsRefuseModeKeys(t *testing.T) {
-	kinds := []tasks.Kind{reviewStatusIndexRepairKind, reportsPruneKind, titleBackfillKind, titleRepairKind, t6g7KindFor("maintenance.bulk-write-back"), t6g7KindFor("maintenance.user-merge"), tagBackfillKind, repointUnrecordedRenamesKind}
+	kinds := []tasks.Kind{reviewStatusIndexRepairKind, reportsPruneKind, titleBackfillKind, titleRepairKind, t6g7KindFor("maintenance.bulk-write-back"), t6g7KindFor("maintenance.user-merge"), tagBackfillKind, repointUnrecordedRenamesKind, seriesPhantomRepairKind}
 	keys := []string{"dry_run", "dryRun", "DRY_RUN", "DryRun", "apply", "Apply", "APPLY"}
 	gate := &t6g7GateWriter{name: "gotham"}
 	for _, kind := range kinds {
@@ -1167,4 +1241,109 @@ func TestT6G7Kinds_RepointUnrecordedRenamesLiveNeedsAWriter(t *testing.T) {
 	def := t6g7ByKind(t, (&Plugin{}).t6g7Kinds(deps, nil), repointUnrecordedRenamesKind)
 	_, err := runT6G7Kind(t, def, tasks.ModeLive, &t6g7GateWriter{name: "gotham"}, `{}`)
 	require.ErrorContains(t, err, "NewWriter is not set")
+}
+
+// seedSeriesPhantomRig seeds one book holding phantom series id phantom (no
+// series row has it): the census sees it through the store, the recorder can
+// write it.
+func seedSeriesPhantomRig(p *t6g7Probe, phantom int) {
+	id := "01BATBOOK00000000000000S1"
+	author := 5
+	core := database.BookCore{ID: id, Title: "The Killing Joke", AuthorID: &author, SeriesID: &phantom}
+	book := &database.Book{ID: id, Title: "The Killing Joke", AuthorID: &author, SeriesID: &phantom}
+	p.store = &t6g7TestStore{
+		refCounts: map[int]int{phantom: 1},
+		cores:     []database.BookCore{core},
+		books:     map[string]*database.Book{id: book},
+	}
+	p.rec.books = map[string]*database.Book{id: book}
+}
+
+func runSeriesPhantomKind(t *testing.T, p *t6g7Probe, mode tasks.Mode, params string) (*seriesPhantomRepairResult, error) {
+	t.Helper()
+	def := t6g7ByKind(t, (&Plugin{}).t6g7Kinds(p.deps(), nil), seriesPhantomRepairKind)
+	h, err := runT6G7Kind(t, def, mode, &t6g7GateWriter{name: "gotham"}, params)
+	var res *seriesPhantomRepairResult
+	if h != nil && len(h.result) > 0 {
+		require.NoError(t, json.Unmarshal(h.result, &res))
+	}
+	return res, err
+}
+
+// Mode "report" only reports: a Live run of it is refused before any writer or
+// stand-down exists, as HEAD's start check refused it; a Preview run reports the
+// census and writes its TSV, and nothing else.
+func TestT6G7Kinds_SeriesPhantomReportModeReportsAndNeverWrites(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedSeriesPhantomRig(p, 7)
+	_, err := runSeriesPhantomKind(t, p, tasks.ModeLive, `{}`)
+	require.ErrorContains(t, err, "needs mode")
+	require.Zero(t, p.writerCalls(), "a refused run built a writer")
+
+	res, err := runSeriesPhantomKind(t, p, tasks.ModePreview, `{"report_path":"phantoms.tsv"}`)
+	require.NoError(t, err)
+	require.Equal(t, seriesPhantomModeReport, res.Mode)
+	require.True(t, res.DryRun)
+	require.Equal(t, 1, res.PhantomSeries)
+	require.Equal(t, 1, res.BooksLive)
+	require.Equal(t, filepath.Join(p.root, "phantoms.tsv"), res.ReportPath)
+	raw, rerr := os.ReadFile(res.ReportPath)
+	require.NoError(t, rerr)
+	require.Contains(t, string(raw), "\t01BATBOOK00000000000000S1\tThe Killing Joke\tfalse\t5\n")
+	require.Zero(t, p.writerCalls())
+	require.Empty(t, p.rec.snapshot())
+	require.Zero(t, p.seriesInvalidated)
+}
+
+// A Live "null" run clears the id through the writer and drops the series
+// caches once; a Preview of it counts what it would clear and touches nothing.
+func TestT6G7Kinds_SeriesPhantomNullClearsThroughTheWriterAndInvalidatesCaches(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedSeriesPhantomRig(p, 7)
+	res, err := runSeriesPhantomKind(t, p, tasks.ModePreview, `{"mode":"null"}`)
+	require.NoError(t, err)
+	require.True(t, res.DryRun)
+	require.Equal(t, 1, res.Nulled, "a preview counts what a live run would clear")
+	require.Empty(t, p.rec.snapshot())
+	require.Zero(t, p.seriesInvalidated)
+
+	res, err = runSeriesPhantomKind(t, p, tasks.ModeLive, `{"mode":"null"}`)
+	require.NoError(t, err)
+	require.False(t, res.DryRun)
+	require.Equal(t, 1, res.Nulled)
+	require.Equal(t, 1, p.seriesInvalidated)
+}
+
+// "recreate" creates the named series under the holders' majority author and
+// repoints the holders to it; a phantom id with no name is skipped and counted.
+func TestT6G7Kinds_SeriesPhantomRecreateNamesTheSeriesAndSkipsTheUnnamed(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedSeriesPhantomRig(p, 7)
+	st := p.store.(*t6g7TestStore)
+	// A second phantom id, held by one book, that nobody gave a name.
+	other := 8
+	st.refCounts[other] = 1
+	st.cores = append(st.cores, database.BookCore{ID: "01BATBOOK00000000000000S2", Title: "Year Two", SeriesID: &other})
+	res, err := runSeriesPhantomKind(t, p, tasks.ModeLive, `{"mode":"recreate","names":{"7":"Year One"}}`)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.SeriesRecreated)
+	require.Equal(t, 1, res.Repointed)
+	require.Equal(t, 1, res.Skipped["no_name"], "the unnamed phantom id's holder is skipped and counted")
+	require.Equal(t, []string{
+		"CreateSeries Year One author=5",
+		"CreateOperationChange 01BATBOOK00000000000000S1 series_id 7->9001",
+		"ModifyBook 01BATBOOK00000000000000S1 title=The Killing Joke series=9001",
+	}, p.rec.snapshot())
+}
+
+// A live run that cannot be fenced (no stand-down key) refuses to write.
+func TestT6G7Kinds_SeriesPhantomLiveNeedsTheScanStandDown(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedSeriesPhantomRig(p, 7)
+	deps := p.deps()
+	deps.StandDownKey = ""
+	def := t6g7ByKind(t, (&Plugin{}).t6g7Kinds(deps, nil), seriesPhantomRepairKind)
+	_, err := runT6G7Kind(t, def, tasks.ModeLive, &t6g7GateWriter{name: "gotham"}, `{"mode":"null"}`)
+	require.ErrorContains(t, err, "stand")
+	require.Empty(t, p.rec.snapshot())
 }
