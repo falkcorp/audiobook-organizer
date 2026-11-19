@@ -1476,6 +1476,12 @@ type t6g2HeadStore struct {
 }
 
 func (s t6g2HeadStore) ListBookIDs() ([]string, error) { return s.f.store.ListBookIDs() }
+func (s t6g2HeadStore) GetMetadataFieldStates(id string) ([]database.MetadataFieldState, error) {
+	return s.f.store.GetMetadataFieldStates(id)
+}
+func (s t6g2HeadStore) GetUserPreference(key string) (*database.UserPreference, error) {
+	return s.f.store.GetUserPreference(key)
+}
 func (s t6g2HeadStore) GetBookByID(id string) (*database.Book, error) {
 	return s.f.store.GetBookByID(id)
 }
