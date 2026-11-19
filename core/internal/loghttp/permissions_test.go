@@ -1,5 +1,5 @@
 // file: core/internal/loghttp/permissions_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: fcea5e18-897d-4f58-8688-b96d12f281ea
 // last-edited: 2026-11-19
 
@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -376,7 +377,7 @@ func realPrincipal(t testing.TB, id string, perms ...rbac.Permission) *auth.Prin
 	}
 	return &auth.Principal{
 		User: &auth.User{ID: auth.UserID(id), Username: strings.TrimPrefix(id, "u-")}, Method: auth.MethodSession,
-		Perms:      authz.Compile(rbac.CompileInput{CheckerInput: rbac.CheckerInput{Interactive: true}, RolePatterns: perms}, cat),
+		Perms:      authz.Compile(rbac.CompileInput{Interactive: true, RolePatterns: perms}, cat),
 		ClientAddr: netip.MustParseAddr("192.0.2.10"), CredentialID: "sess-" + id,
 	}
 }
@@ -621,5 +622,76 @@ func TestJournalTail_SameViewAsQuery(t *testing.T) {
 	wantSorted, _ := json.Marshal(wantNorm)
 	if string(got) != string(wantSorted) {
 		t.Errorf("tail and query disagree:\n tail  %s\n query %s", got, wantSorted)
+	}
+}
+
+// attrSeq is the (key, kind, value) sequence of rec's attributes, as a
+// predicate reading them would see them.
+func attrSeq(rec log.Record) []string {
+	out := make([]string, 0, len(rec.Attrs))
+	for _, a := range rec.Attrs {
+		out = append(out, a.Key+"|"+a.Value.Kind().String()+"|"+a.Value.String())
+	}
+	return out
+}
+
+// TestJournalTail_PredicateSeesSameRecordAsQuery (05-logging §5): the
+// module's other-user predicate is handed the same record on the query route
+// and on the live tail, for a record that carries typed attributes, a repeated
+// key and an unsorted key order. The expected sequence is written out (text
+// kinds, sorted keys, the last repeat wins), so a drift on either surface
+// fails this test, not just a disagreement between them.
+func TestJournalTail_PredicateSeesSameRecordAsQuery(t *testing.T) {
+	var mu sync.Mutex
+	seen := map[string][][]string{}
+	pred := func(rec log.Record, viewer string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		seen[rec.Message] = append(seen[rec.Message], attrSeq(rec))
+		return false
+	}
+	rig := newTailRig(t, pred)
+	rig.sign("u-bruce", permManage) // no users.view: the predicate runs on both surfaces
+	s, status, code := rig.open("u-bruce", "/?topic="+logjournal.TailTopicName)
+	if s == nil {
+		t.Fatalf("open: %d %s", status, code)
+	}
+	attrs := []any{
+		slog.String("zeta", "z"), slog.Int("status", 204), slog.Bool("hit", true),
+		slog.String("dup", "first"), slog.Float64("arc", 0.25), slog.String("dup", "last"),
+	}
+	want := []string{"arc|String|0.25", "dup|String|last", "hit|String|true", "status|String|204", "zeta|String|z"}
+	// Enough keys that a map's iteration order (the tail decodes a JSON object)
+	// cannot happen to come out sorted.
+	for i := range 14 {
+		k := fmt.Sprintf("k%02d", i)
+		attrs = append(attrs, slog.Int(k, i))
+		want = append(want, fmt.Sprintf("%s|String|%d", k, i))
+	}
+	slices.Sort(want) // keys are not prefixes of one another, so this is key order
+	rig.l.Module("core").Info("a signal was lit", attrs...)
+	s.next(t)
+	var served pageView
+	for range 100 { // the journal tap writes in its own time
+		_ = rig.tap.Flush(context.Background())
+		served = mustCall(t, rig.api, realPrincipal(t, "u-bruce", permManage), queryRequest{})
+		if len(served.Items) > 0 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if len(served.Items) != 1 {
+		t.Fatalf("the query route returned %d records, want 1", len(served.Items))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	got := seen["a signal was lit"]
+	if len(got) != 2 {
+		t.Fatalf("predicate called %d times for the record, want 2 (tail, query): %v", len(got), got)
+	}
+	for i, surface := range []string{"tail", "query"} {
+		if !slices.Equal(got[i], want) {
+			t.Errorf("%s: predicate saw %v, want %v", surface, got[i], want)
+		}
 	}
 }

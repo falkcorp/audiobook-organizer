@@ -1,5 +1,5 @@
 // file: core/internal/logjournal/tail_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0d9e5b73-2c64-4a18-b7f1-93a60e4d2c85
 // last-edited: 2026-11-19
 
@@ -55,7 +55,7 @@ func checkerOf(t testing.TB, perms ...rbac.Permission) rbac.Checker {
 		t.Fatal(err)
 	}
 	return authz.Compile(rbac.CompileInput{
-		CheckerInput: rbac.CheckerInput{Interactive: true}, RolePatterns: perms,
+		Interactive: true, RolePatterns: perms,
 	}, cat)
 }
 

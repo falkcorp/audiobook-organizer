@@ -1,7 +1,7 @@
 // file: core/internal/loghttp/routes.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2b8e41d6-7c05-4f93-a1e8-5d3f09c6b7a4
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 // Package loghttp serves the system-log journal's query route (05-logging §5):
 // GET /api/core/v1/system/logs over log.JournalStore.Query, registered on
@@ -171,7 +171,8 @@ func (a *api) list(ctx context.Context, in *httpapi.In[queryRequest]) (pageView,
 	}
 	mayRead := rbac.Can(ctx, permUsers)
 	if !mayRead && a.otherUser != nil {
-		q.Hide = func(rec log.Record) bool { return a.otherUser(rec, viewer) }
+		// The predicate is shown log.PredicateInput(rec), as the live tail shows it.
+		q.Hide = func(rec log.Record) bool { return a.otherUser(log.PredicateInput(rec), viewer) }
 	}
 	page, err := a.journal.Query(ctx, q)
 	if err != nil {

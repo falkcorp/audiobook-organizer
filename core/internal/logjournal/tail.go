@@ -1,5 +1,5 @@
 // file: core/internal/logjournal/tail.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4f1c7d92-8a3e-4b65-9d02-e7a5c3b81f46
 // last-edited: 2026-11-19
 
@@ -10,8 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"maps"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -126,7 +124,7 @@ func tailVisible(otherUser log.OtherUserPredicate) events.VisibleFunc {
 		if p, ok := auth.PrincipalFrom(ctx); ok && p.User != nil {
 			viewer = string(p.User.ID)
 		}
-		return !otherUser(rec, viewer)
+		return !otherUser(log.PredicateInput(rec), viewer)
 	}
 }
 
@@ -154,8 +152,8 @@ func tailRedact(who rbac.Checker, payload json.RawMessage) json.RawMessage {
 	return out
 }
 
-// record is v as the log.Record a predicate is asked about. Attributes are
-// text, in key order. ok is false for a level name that does not parse.
+// record is v as a log.Record, ready for log.PredicateInput (the query route
+// applies the same one). ok is false for a level name that does not parse.
 func (v RecordView) record() (log.Record, bool) {
 	var lv slog.Level
 	if lv.UnmarshalText([]byte(v.Level)) != nil {
@@ -165,8 +163,8 @@ func (v RecordView) record() (log.Record, bool) {
 		Time: v.Time, Level: lv, Module: v.Module, Subsystem: v.Subsystem,
 		Message: v.Message, TraceID: v.TraceID, SpanID: v.SpanID,
 	}
-	for _, k := range slices.Sorted(maps.Keys(v.Attrs)) {
-		rec.Attrs = append(rec.Attrs, slog.String(k, v.Attrs[k]))
+	for k, val := range v.Attrs {
+		rec.Attrs = append(rec.Attrs, slog.String(k, val))
 	}
 	return rec, true
 }
