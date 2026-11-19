@@ -1,5 +1,5 @@
 // file: core/updater/github/github_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b8f1d62-9e07-4a45-b6c3-d70e5a14f928
 // last-edited: 2026-11-18
 
@@ -73,6 +73,8 @@ func (f *forge) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (f *forge) requests() int { return len(f.paths()) }
+
 func (f *forge) paths() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -85,7 +87,7 @@ func (f *forge) paths() []string {
 
 func TestGithubSource_ParameterisedSlugAndBaseURL(t *testing.T) {
 	f := newForge(t, "v0.224.0")
-	src := github.New("wayne", "batcave", github.BaseURL(f.srv.URL+"/"))
+	src := github.New("wayne", "batcave", github.BaseURL(f.srv.URL+"/"), github.AllowInsecureHTTP())
 
 	rel, err := src.Latest(t.Context(), updater.ChannelStable)
 	if err != nil {
@@ -102,7 +104,7 @@ func TestGithubSource_ParameterisedSlugAndBaseURL(t *testing.T) {
 	}
 
 	// Another slug and base answer to their own paths: nothing is hard-wired.
-	other := github.New("joker", "arkham", github.BaseURL(f.srv.URL))
+	other := github.New("joker", "arkham", github.BaseURL(f.srv.URL), github.AllowInsecureHTTP())
 	if _, err := other.Latest(t.Context(), updater.ChannelStable); !errors.Is(err, updater.ErrReleaseNotFound) {
 		t.Errorf("another repository's latest = %v, want ErrReleaseNotFound from its own path", err)
 	}
@@ -110,7 +112,7 @@ func TestGithubSource_ParameterisedSlugAndBaseURL(t *testing.T) {
 
 func TestGithubSource_PrereleaseChannelAndTags(t *testing.T) {
 	f := newForge(t, "v0.224.0")
-	src := github.New("wayne", "batcave", github.BaseURL(f.srv.URL))
+	src := github.New("wayne", "batcave", github.BaseURL(f.srv.URL), github.AllowInsecureHTTP())
 
 	rel, err := src.Latest(t.Context(), updater.ChannelPrerelease)
 	if err != nil || rel.Version != "0.225.0-rc.1" || rel.Channel != updater.ChannelPrerelease {
@@ -174,7 +176,7 @@ func TestGithubSource_BoundClientHeadersAndToken(t *testing.T) {
 			return "batarang", nil
 		},
 	}
-	src := github.New("wayne", "batcave", github.BaseURL(f.srv.URL), github.TokenSecret("gotham/forge-token"))
+	src := github.New("wayne", "batcave", github.BaseURL(f.srv.URL), github.AllowInsecureHTTP(), github.TokenSecret("gotham/forge-token"))
 	b, ok := src.(updater.Binder)
 	if !ok {
 		t.Fatal("the github source is not a Binder")
@@ -237,7 +239,7 @@ func TestGithubSource_BoundClientHeadersAndToken(t *testing.T) {
 
 func TestGithubSource_OpenRefusesNonHTTPAndBadStatus(t *testing.T) {
 	f := newForge(t)
-	src := github.New("wayne", "batcave", github.BaseURL(f.srv.URL))
+	src := github.New("wayne", "batcave", github.BaseURL(f.srv.URL), github.AllowInsecureHTTP())
 	for _, u := range []string{"file:///etc/passwd", "ftp://example.invalid/x", "/relative", ""} {
 		if _, _, err := src.Open(t.Context(), updater.Asset{URL: u}); err == nil {
 			t.Errorf("Open(%q) succeeded", u)
@@ -251,7 +253,7 @@ func TestGithubSource_OpenRefusesNonHTTPAndBadStatus(t *testing.T) {
 func TestGithubSource_NotFoundLatestIsNotAnError(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(srv.Close)
-	src := github.New("wayne", "batcave", github.BaseURL(srv.URL))
+	src := github.New("wayne", "batcave", github.BaseURL(srv.URL), github.AllowInsecureHTTP())
 	if _, err := src.Latest(t.Context(), updater.ChannelStable); !errors.Is(err, updater.ErrReleaseNotFound) {
 		t.Errorf("err = %v, want ErrReleaseNotFound", err)
 	}
@@ -260,7 +262,74 @@ func TestGithubSource_NotFoundLatestIsNotAnError(t *testing.T) {
 	}
 	srv5 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }))
 	t.Cleanup(srv5.Close)
-	if _, err := github.New("wayne", "batcave", github.BaseURL(srv5.URL)).Latest(t.Context(), updater.ChannelStable); err == nil || errors.Is(err, updater.ErrReleaseNotFound) {
+	if _, err := github.New("wayne", "batcave", github.BaseURL(srv5.URL), github.AllowInsecureHTTP()).Latest(t.Context(), updater.ChannelStable); err == nil || errors.Is(err, updater.ErrReleaseNotFound) {
 		t.Errorf("a 500 = %v, want a real error", err)
 	}
+}
+
+// TestGithubSource_OnlyHTTPSUnlessAllowed (F8-02 review m3): an http base URL,
+// an http asset URL and a redirect from https to http are refused; the test
+// option admits them for a local server.
+func TestGithubSource_OnlyHTTPSUnlessAllowed(t *testing.T) {
+	f := newForge(t, "v0.224.0") // an http server
+	plain := github.New("wayne", "batcave", github.BaseURL(f.srv.URL))
+	if _, err := plain.Latest(t.Context(), updater.ChannelStable); err == nil || !strings.Contains(err.Error(), "https") {
+		t.Errorf("an http BaseURL: %v, want a refusal naming https", err)
+	}
+	if got := f.requests(); got != 0 {
+		t.Errorf("an http BaseURL reached the network (%d requests)", got)
+	}
+
+	// An https source is refused an http asset URL, whatever the API said.
+	secure := newTLSForge(t)
+	src := github.New("wayne", "batcave", github.BaseURL(secure.URL)).(updater.Binder).Bind(updater.Env{HTTP: secure.Client()})
+	if _, _, err := src.Open(t.Context(), updater.Asset{URL: f.srv.URL + "/asset"}); err == nil || !strings.Contains(err.Error(), "https") {
+		t.Errorf("an http asset URL: %v, want a refusal naming https", err)
+	}
+
+	// An https asset URL that redirects to http is refused at the hop, not
+	// followed, and the plain server never sees the request.
+	before := f.requests()
+	if _, _, err := src.Open(t.Context(), updater.Asset{URL: secure.URL + "/downgrade?to=" + f.srv.URL + "/asset"}); err == nil || !strings.Contains(err.Error(), "only https is followed") {
+		t.Errorf("an https to http redirect: %v, want it refused", err)
+	}
+	if got := f.requests() - before; got != 0 {
+		t.Errorf("the downgraded request reached the plain server (%d requests)", got)
+	}
+
+	// An https to https redirect is followed, and a client's own redirect
+	// policy still runs after the scheme check.
+	rc, _, err := src.Open(t.Context(), updater.Asset{URL: secure.URL + "/downgrade?to=" + secure.URL + "/asset"})
+	if err != nil {
+		t.Fatalf("an https redirect: %v", err)
+	}
+	_ = rc.Close()
+	own := errors.New("the client's own policy")
+	c := secure.Client()
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return own }
+	bound := github.New("wayne", "batcave", github.BaseURL(secure.URL)).(updater.Binder).Bind(updater.Env{HTTP: c})
+	if _, _, err := bound.Open(t.Context(), updater.Asset{URL: secure.URL + "/downgrade?to=" + secure.URL + "/asset"}); !errors.Is(err, own) {
+		t.Errorf("the bound client's own CheckRedirect did not run: %v", err)
+	}
+
+	// The test option admits all of it.
+	allowed := github.New("wayne", "batcave", github.BaseURL(f.srv.URL), github.AllowInsecureHTTP())
+	if _, err := allowed.Latest(t.Context(), updater.ChannelStable); err != nil {
+		t.Errorf("AllowInsecureHTTP: %v", err)
+	}
+}
+
+// newTLSForge is an https server: /asset answers 200, /downgrade redirects to
+// the "to" query value.
+func newTLSForge(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/downgrade" {
+			http.Redirect(w, r, r.URL.Query().Get("to"), http.StatusFound)
+			return
+		}
+		_, _ = io.WriteString(w, "binary")
+	}))
+	t.Cleanup(srv.Close)
+	return srv
 }

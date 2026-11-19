@@ -1,5 +1,5 @@
 // file: internal/updater/adapter.go
-// version: 2.0.1
+// version: 2.1.0
 // guid: 6f1c2d3e-4a5b-4c6d-8e7f-9a0b1c2d3e4f
 // last-edited: 2026-11-18
 
@@ -57,8 +57,9 @@ const (
 	// the core updater's self-test holds a downloaded binary to it. The gin
 	// path never self-tests (LegacySkipSelfTest) but core's New requires one.
 	AppID = "abo"
-	// BinaryName is the raw release asset's prefix ("<BinaryName>-<goos>-<goarch>")
-	// and the user agent's product.
+	// BinaryName is the raw release asset's prefix ("<BinaryName>-<goos>-<goarch>"
+	// on the gin path, "<BinaryName>_<Os>_<arch>" in a published release) and the
+	// user agent's product.
 	BinaryName = "audiobook-organizer"
 )
 
@@ -82,19 +83,53 @@ var errDevelopApply = errors.New("develop channel binary downloads require CI-pu
 // IsLocalBuild reports whether version carries a git describe suffix.
 func IsLocalBuild(version string) bool { return coreupdater.IsLocalBuild(version) }
 
-// CoreOptions is the core updater's Options for this app: the source, the
-// binary name and the app ID its self-test holds a downloaded binary to. It is
-// what app.Options.Updater carries: `updater fetch-release` reads it now, and
-// F8-04 hands the same value to the kernel.
+// CoreOptions is the core updater's Options for this app on the gin path: the
+// source, the binary name and the app ID its self-test holds a downloaded
+// binary to, and HEAD's asset name "audiobook-organizer-<goos>-<goarch>"
+// (core's RawBinary default). That name is what the live /api/v1/update/apply
+// asks for, as it did before the move; no release publishes it (see
+// ReleasedAsset), which is why FetchOptions, not this, is what the offline
+// fetch gets.
 func CoreOptions() coreupdater.Options {
 	return coreupdater.Options{AppID: AppID, BinaryName: BinaryName, Source: NewSource(), DefaultMode: coreupdater.ModeCheck}
 }
 
+// FetchOptions is the core updater's Options for `updater fetch-release`
+// (app.Options.Updater): CoreOptions with the asset name releases really
+// publish. The gin apply keeps CoreOptions' HEAD name until F8-04 replaces it
+// with the core apply task, which inherits this choice (todo.d, F8-04).
+func FetchOptions() coreupdater.Options {
+	o := CoreOptions()
+	o.AssetName = ReleasedAsset
+	return o
+}
+
+// ReleasedAsset is the raw-binary asset of a published release for goos and
+// goarch, as .goreleaser.yml names it: "{{ .ProjectName }}_{{ title .Os }}_"
+// then x86_64 for amd64, i386 for 386 and the architecture as it is
+// otherwise, such as audiobook-organizer_Linux_x86_64. TestReleasedAssetMatchesGoreleaser
+// holds it to the file. (The Arm suffix goreleaser adds for goarm is not
+// built: the matrix is linux and darwin on amd64 and arm64.)
+func ReleasedAsset(_ coreupdater.Release, goos, goarch string) string {
+	arch := goarch
+	switch goarch {
+	case "amd64":
+		arch = "x86_64"
+	case "386":
+		arch = "i386"
+	}
+	osName := goos
+	if osName != "" {
+		osName = strings.ToUpper(osName[:1]) + osName[1:]
+	}
+	return BinaryName + "_" + osName + "_" + arch
+}
+
 // NewSource is the release source the core updater is built with for this
-// app: GitHub releases of falkcorp/audiobook-organizer, the raw asset
-// "audiobook-organizer-<goos>-<goarch>". F8-04 passes it as
-// coreupdater.Options.Source (with BinaryName and AppID above) when it wires
-// the core updater into main.
+// app: GitHub releases of falkcorp/audiobook-organizer. The asset looked for in
+// a release is the Options' AssetName (CoreOptions, FetchOptions). F8-04
+// passes it as coreupdater.Options.Source when it wires the core updater into
+// main.
 func NewSource(opts ...github.Option) coreupdater.Source { return github.New(Owner, Repo, opts...) }
 
 // UpdateInfo holds the result of an update check.
@@ -133,8 +168,9 @@ type Updater struct {
 	lastCheck *UpdateInfo
 
 	// Seams, all defaulted when zero.
-	apiBase    string       // GitHub API root; github.DefaultBaseURL
-	httpClient *http.Client // nil: the source's own client; develop uses a 30 s one
+	apiBase    string        // GitHub API root; github.DefaultBaseURL
+	httpClient *http.Client  // nil: a 30 s client (R0's), for the checks and the apply's download alike
+	timeout    time.Duration // 0: checkTimeout (WithRequestTimeoutForTest)
 	exit       func(code int)
 
 	stateDir string
@@ -156,6 +192,10 @@ func WithAPIBaseForTest(base string) Option {
 
 // WithHTTPClientForTest replaces the HTTP client (a test server's client).
 func WithHTTPClientForTest(c *http.Client) Option { return func(u *Updater) { u.httpClient = c } }
+
+// WithRequestTimeoutForTest replaces the 30 s the default client gives every
+// request (a test cannot wait 30 s for a download that never arrives).
+func WithRequestTimeoutForTest(d time.Duration) Option { return func(u *Updater) { u.timeout = d } }
 
 // WithExecutableForTest replaces the function that names the running
 // executable, which is the file an apply replaces.
@@ -179,14 +219,18 @@ func NewUpdater(currentVersion string, opts ...Option) *Updater {
 	}
 	var gh []github.Option
 	if u.apiBase != "" {
-		gh = append(gh, github.BaseURL(u.apiBase))
+		// Only a test points the API root elsewhere (WithAPIBaseForTest), and
+		// at a local http server.
+		gh = append(gh, github.BaseURL(u.apiBase), github.AllowInsecureHTTP())
 	}
 	src := NewSource(gh...)
 	// The source is bound here, with the user agent HEAD sent, so core's New
 	// (which binds a source that implements Binder again, replacing the
 	// environment) finds one that does not: recordingSource only forwards.
 	if b, ok := src.(coreupdater.Binder); ok {
-		src = b.Bind(coreupdater.Env{HTTP: u.httpClient, UserAgent: BinaryName + "/" + currentVersion})
+		// R0 sent every request, the asset download included, through a client
+		// with a 30 s timeout: the apply's download keeps that bound here.
+		src = b.Bind(coreupdater.Env{HTTP: u.client(), UserAgent: BinaryName + "/" + currentVersion})
 	}
 	u.rec = &recordingSource{Source: src}
 
@@ -353,7 +397,11 @@ func (u *Updater) client() *http.Client {
 	if u.httpClient != nil {
 		return u.httpClient
 	}
-	return &http.Client{Timeout: checkTimeout}
+	timeout := checkTimeout
+	if u.timeout > 0 {
+		timeout = u.timeout
+	}
+	return &http.Client{Timeout: timeout}
 }
 
 // checkDevelop is HEAD's develop channel: the latest commit on main, which

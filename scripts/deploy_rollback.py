@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/deploy_rollback.py
-# version: 1.2.0
+# version: 1.3.0
 # guid: 0d519d12-853d-4902-8896-8d5744a32cbd
 # last-edited: 2026-11-18
 
@@ -38,8 +38,10 @@ restore (make rollback-restore):
      scratch state directory (it reads no store); its levels must EQUAL the
      source's, and only then does the install-staged helper install it as
      `<bin>.prev` (replacing any `.prev`, which is the point of the flag).
-     Any refusal before that deletes the fetched file and leaves `.prev` as
-     it was.
+     The fetch runs under a time limit (DEPLOY_FETCH_TIMEOUT, 1200 s). Any
+     refusal before the install deletes the fetched file and leaves `.prev` as
+     it was; after the install `.prev`'s levels are read again and held to the
+     source's before anything is stopped.
   2. Match the unit type to `.prev` and read the InvocationID, still before
      the stop.
   3. Stop the unit; check it stays stopped; probe again.
@@ -71,6 +73,25 @@ from types import ModuleType
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import deploy_wait_ready  # noqa: E402
+
+# How long `updater fetch-release` may run on the host before the recipe gives
+# up on it (DEPLOY_FETCH_TIMEOUT overrides, in seconds). The command bounds its
+# own download (30 s without data, 15 min in all), so this is the ceiling for
+# the ssh session around it: connection, download, self-test.
+DEFAULT_FETCH_TIMEOUT = 1200.0
+
+
+def fetch_timeout() -> float:
+    raw = os.environ.get("DEPLOY_FETCH_TIMEOUT", "").strip()
+    try:
+        value = float(raw) if raw else DEFAULT_FETCH_TIMEOUT
+    except ValueError:
+        raise SystemExit(
+            f"deploy_rollback: DEPLOY_FETCH_TIMEOUT {raw!r} is not a number of seconds"
+        )
+    if value <= 0:
+        raise SystemExit("deploy_rollback: DEPLOY_FETCH_TIMEOUT must be above zero")
+    return value
 
 
 def load_guard(path: str) -> ModuleType:
@@ -109,6 +130,11 @@ class Run:
         # RELEASE's file in stage_bin: fetched and not yet installed as .prev,
         # so every refusal in between deletes it.
         self.fetched = False
+        # The source decide_restore read, kept when RELEASE fetches so that
+        # .prev's levels can be held to it again after the install.
+        self.src = None
+        # True once install-staged prev has replaced <bin>.prev.
+        self.installed = False
 
     def say(self, *lines: str, err: bool = False) -> None:
         for line in lines:
@@ -184,7 +210,16 @@ class Run:
         # A file left in stage_bin is the caller's from now on: a refusal
         # deletes it, whatever state the fetch left it in.
         self.fetched = True
-        r = self.act("fetch_release", stream=True, timeout=None)
+        limit = fetch_timeout()
+        r = self.act("fetch_release", stream=True, timeout=limit)
+        if r.rc == 255:
+            return [
+                f"REFUSING: `{o.bin} updater fetch-release --version {o.release}` did not finish: the ssh "
+                f"connection failed or the fetch ran past {limit:g}s (the command's own download "
+                "bounds are 30 s without data and 15 min in all). Nothing was changed; "
+                f"{o.bin}.prev is as it was.",
+                f"Run it by hand to see why: {self.ssh_line('fetch_release')}",
+            ]
         if r.rc != 0:
             return [
                 f"REFUSING: `{o.bin} updater fetch-release --version {o.release}` failed (exit {r.rc}; its "
@@ -193,7 +228,18 @@ class Run:
                 f"{o.bin} must be a build that has `updater fetch-release`.",
             ]
         o.prev_path = o.stage_bin
+        self.src = src
         return []
+
+    def prev_note(self) -> str:
+        """RELEASE: after the install the old .prev is gone; every refusal
+        from then on says so."""
+        if not (self.o.release and self.installed):
+            return ""
+        return (
+            f" {self.o.bin}.prev is now release {self.o.release}'s binary: the .prev that was there before is "
+            "replaced."
+        )
 
     def install_fetched(self) -> int:
         """RELEASE: install the fetched file, whose levels equal the source's,
@@ -211,8 +257,25 @@ class Run:
         # Installed: the staged copy has done its job (a deploy uploads a
         # fresh one), and the levels read from it are now read from .prev.
         self.discard_fetched()
+        self.installed = True
         for key in ("prev_levels", "prev_format", "prev_caps"):
             self.get.cache.pop(key, None)
+        # The levels were measured on stage_bin, and root copied whatever
+        # stage_bin held when it ran (a make deploy upload can land in
+        # between): measure .prev itself and hold it to the source again,
+        # still before anything is stopped.
+        prev, how = self.g.prev_vector(o, self.get)
+        src = self.src
+        if prev is None or (src is not None and self.g.differs(src.levels, prev)):
+            seen = f"serves {self.g.fmt(prev)}" if prev is not None else f"cannot be read ({how})"
+            want = f", the {src.describe} is at {self.g.fmt(src.levels)}" if src is not None else ""
+            return self.refuse(
+                f"REFUSING: after the install, {o.bin}.prev {seen}{want}. The file in stage_bin changed between "
+                f"the check and the install (a make deploy upload?). Nothing was stopped or restored; "
+                f"{o.bin}.prev is now that file and the .prev that was there before is replaced.",
+                f"Run make rollback-restore RELEASE={o.release} again (it fetches and checks again), or install "
+                f"the release you want as {o.bin}.prev by hand.",
+            )
         return 0
 
     def match_unit_type(self) -> int:
@@ -232,7 +295,7 @@ class Run:
         if r.rc != 0:
             return self.refuse(
                 f"REFUSING: matching the unit type failed ({self.g._cause(r)}). Nothing was stopped, restored "
-                "or swapped.",
+                f"or swapped.{self.prev_note()}",
                 f"It runs `{self.cmd('unit_type_' + kind)}`: check the unit-type helper and its sudoers line "
                 f"({self.g.DOCS}).",
             )
@@ -344,10 +407,10 @@ def restore(run: Run) -> int:
     if previous is None:
         return run.refuse(
             f"REFUSING: cannot read {o.unit}'s InvocationID ({err}). Nothing was stopped or restored; the unit "
-            f"type now matches {o.bin}.prev.",
+            f"type now matches {o.bin}.prev.{run.prev_note()}",
             *run.start_current_lines(),
         )
-    unit_type_note = f"the unit type matches {o.bin}.prev"
+    unit_type_note = f"the unit type matches {o.bin}.prev" + run.prev_note()
     run.say(f"→ Stopping {o.unit}...")
     stop = run.act("stop")
     if stop.rc != 0:
