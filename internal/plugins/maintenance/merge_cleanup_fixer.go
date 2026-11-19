@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_fixer.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 0e4c7d58-a1b3-4f26-8c19-6d5a3e7f9b02
 // last-edited: 2026-11-19
 
@@ -760,8 +760,84 @@ func (r *mcRun) deadEndMates(ctx context.Context, fa *mcFacts) ([]string, error)
 	return mates, nil
 }
 
+// mcHolderReadAttempts bounds the re-read of a source's holders when a retired
+// version changes holder while its rows are being read.
+const mcHolderReadAttempts = 3
+
+// mcRowHolders are the books that still hold at least one retired row of a
+// version made from src, in the order the versions list them. A version record
+// alone does not make a holder: GetRetiredVersionsFromBook reads version
+// records and never looks at rows, and a record can outlive its rows (a retire
+// cut off after the version was created, or a row revert whose version delete
+// was refused or has not run). A holder that holds nothing of src's is not where
+// src's content went, so naming it would offer a repoint on the strength of an
+// empty version. Like database.RetiredRowsHeldFor it fails closed: the versions
+// are listed again after the rows are read, and a version that moved to another
+// holder in between (RehomeRetiredVersion) is read again rather than counted as
+// holding nothing.
+func mcRowHolders(ret database.RetiredBookFileReader, src string) ([]string, error) {
+	for attempt := 0; attempt < mcHolderReadAttempts; attempt++ {
+		versions, err := ret.GetRetiredVersionsFromBook(src)
+		if err != nil {
+			return nil, fmt.Errorf("read the retired versions of %s: %w", src, err)
+		}
+		if len(versions) == 0 {
+			return nil, nil
+		}
+		held := map[string]map[string]bool{} // holder -> versions with a row there
+		for i := range versions {
+			holder := versions[i].BookID
+			if _, done := held[holder]; done {
+				continue
+			}
+			rows, err := ret.GetRetiredBookFiles(holder)
+			if err != nil {
+				return nil, fmt.Errorf("read the retired rows held by %s: %w", holder, err)
+			}
+			ids := map[string]bool{}
+			for j := range rows {
+				ids[rows[j].VersionID] = true
+			}
+			held[holder] = ids
+		}
+		after, err := ret.GetRetiredVersionsFromBook(src)
+		if err != nil {
+			return nil, fmt.Errorf("read the retired versions of %s: %w", src, err)
+		}
+		if !mcSameVersionHolders(versions, after) {
+			continue
+		}
+		var holders []string
+		for i := range versions {
+			if held[versions[i].BookID][versions[i].ID] {
+				holders = append(holders, versions[i].BookID)
+			}
+		}
+		return holders, nil
+	}
+	return nil, fmt.Errorf("the retired versions of %s kept changing holder while their rows were read; refusing rather than guessing", src)
+}
+
+// mcSameVersionHolders reports whether two reads of a source's retired versions
+// name the same versions under the same holders.
+func mcSameVersionHolders(a, b []database.BookVersion) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	holder := make(map[string]string, len(a))
+	for i := range a {
+		holder[a[i].ID] = a[i].BookID
+	}
+	for i := range b {
+		if h, ok := holder[b[i].ID]; !ok || h != b[i].BookID {
+			return false
+		}
+	}
+	return true
+}
+
 // mcSourceInfo is what one anchor source leads to, read once per run: the
-// books holding its retired versions, and its version group.
+// books holding its retired rows, and its version group.
 type mcSourceInfo struct {
 	holders []string
 	gid     string
@@ -787,12 +863,8 @@ func (r *mcRun) sourceInfo(src string) (*mcSourceInfo, error) {
 		if !ok {
 			return nil, fmt.Errorf("repoint candidates for %s: %w", src, database.ErrRetiredReaderUnavailable)
 		}
-		versions, err := ret.GetRetiredVersionsFromBook(src)
-		if err != nil {
-			return nil, fmt.Errorf("read the retired versions of %s: %w", src, err)
-		}
-		for _, v := range versions {
-			info.holders = append(info.holders, v.BookID)
+		if info.holders, err = mcRowHolders(ret, src); err != nil {
+			return nil, err
 		}
 		gid := mcDeref(b.VersionGroupID)
 		if gid == "" {
