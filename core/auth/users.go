@@ -1,5 +1,5 @@
 // file: core/auth/users.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 41d0b787-5ce8-4a3f-9d8e-8c7b8380e2f0
 // last-edited: 2026-11-19
 
@@ -667,82 +667,40 @@ func (s *Service) SetRoles(ctx context.Context, actor *Principal, id UserID, rol
 // rbac.GrantsAdmin (an unknown role grants nothing). Each role is read once
 // per returned function.
 func (s *Service) adminHolds(ctx context.Context) func(roles []rbac.RoleName, st UserStatus) (bool, error) {
-	holds := s.adminRoleOf(ctx)
-	return func(roles []rbac.RoleName, st UserStatus) (bool, error) {
-		r, err := holds(roles, st)
-		return r != nil, err
-	}
-}
-
-// adminRoleOf is adminHolds returning the role that makes the user a holder:
-// the first of roles, in the order given, whose permissions grant core:admin,
-// nil when the user holds none (not active, or no such role). The last-admin
-// rule guards that role (rbac.Service.GuardRole), so it must be the very
-// value the decision was made on: each role is read once per returned
-// function, and a second user holding the same role gets the same value.
-func (s *Service) adminRoleOf(ctx context.Context) func(roles []rbac.RoleName, st UserStatus) (*rbac.Role, error) {
-	holds := holdingRoleWith(ctx, func(ctx context.Context, name rbac.RoleName) (*rbac.Role, bool, error) {
+	return adminHoldsWith(ctx, func(ctx context.Context, name rbac.RoleName) (bool, error) {
 		r, err := s.d.RBAC.Role(ctx, name)
 		switch {
 		case errors.Is(err, rbac.ErrUnknownRole):
-			return nil, false, nil
+			return false, nil
 		case err != nil:
-			return nil, false, err
+			return false, err
 		}
-		return r, rbac.GrantsAdmin(r.Permissions()), nil
+		return rbac.GrantsAdmin(r.Permissions()), nil
 	})
-	return func(roles []rbac.RoleName, st UserStatus) (*rbac.Role, error) {
-		r, _, err := holds(roles, st)
-		return r, err
-	}
 }
 
 // adminHoldsWith is adminHolds over any role reader: BootWrites runs before
 // rbac.Service exists and reads roles through RestoreDeps.RoleGrantsAdmin.
 func adminHoldsWith(ctx context.Context, roleGrants func(context.Context, rbac.RoleName) (bool, error)) func(roles []rbac.RoleName, st UserStatus) (bool, error) {
-	holds := holdingRoleWith(ctx, func(ctx context.Context, name rbac.RoleName) (struct{}, bool, error) {
-		g, err := roleGrants(ctx, name)
-		return struct{}{}, g, err
-	})
+	grants := map[rbac.RoleName]bool{}
 	return func(roles []rbac.RoleName, st UserStatus) (bool, error) {
-		_, held, err := holds(roles, st)
-		return held, err
-	}
-}
-
-// holdingRoleWith is the one holder predicate behind adminHolds, adminRoleOf
-// and adminHoldsWith, so they cannot disagree: a user holds core:admin when
-// its status is active and one of its roles is one read reports as granting
-// it, and the first such role, in the order given, is returned with true. The
-// zero R and false come back for a user that holds none. read is called at
-// most once per role name per returned function; its R is kept for the
-// repeats.
-func holdingRoleWith[R any](ctx context.Context, read func(context.Context, rbac.RoleName) (R, bool, error)) func(roles []rbac.RoleName, st UserStatus) (R, bool, error) {
-	type verdict struct {
-		role   R
-		grants bool
-	}
-	seen := map[rbac.RoleName]verdict{}
-	return func(roles []rbac.RoleName, st UserStatus) (R, bool, error) {
-		var none R
 		if st != StatusActive {
-			return none, false, nil
+			return false, nil
 		}
 		for _, name := range roles {
-			v, ok := seen[name]
-			if !ok {
-				r, grants, err := read(ctx, name)
-				if err != nil {
-					return none, false, fmt.Errorf("auth: admin check: read role %s: %w", name, err)
+			g, seen := grants[name]
+			if !seen {
+				var err error
+				if g, err = roleGrants(ctx, name); err != nil {
+					return false, fmt.Errorf("auth: admin check: read role %s: %w", name, err)
 				}
-				v = verdict{role: r, grants: grants}
-				seen[name] = v
+				grants[name] = g
 			}
-			if v.grants {
-				return v.role, true, nil
+			if g {
+				return true, nil
 			}
 		}
-		return none, false, nil
+		return false, nil
 	}
 }
 
@@ -762,26 +720,45 @@ func holdingRoleWith[R any](ctx context.Context, read func(context.Context, rbac
 // record holds nothing (auth refuses it, §6). SignInRestricted does not
 // matter: a restore-restricted last admin is still the holder (05-rbac §7.1).
 //
-// The role definition that makes the other holder one is guarded too
-// (rbac.Service.GuardRole, F4-02-ROLE-GUARD), as the very value this read
-// decided on: an rbac role edit that takes core:admin from it and commits
-// between this read and this commit fails this commit with storage.ErrConflict,
-// and the retry reads the new definition. rbac's own rule reads holders
-// through its batch, so the reverse order, the user write committing first,
-// is caught there. Only the exit that scans for another holder guards a role:
-// the two exits before it (the user did not hold core:admin, or still holds it)
-// decide on role definitions that nothing guards yet, so a role edit committed
-// inside the window is not seen there (the F4-02-ROLE-GUARD round-2 findings).
-// A store that cannot guard a role (rbac.ErrNoRoleGuard) refuses the write: the rule
-// cannot be shown to hold.
+// Every role definition this decision reads is guarded as one set, not role
+// by role (F4-02-ROLE-GUARD): the first thing the rule does is read the role
+// set's generation (rbac.Service.RoleSetGeneration, a counter every role write
+// bumps in its own batch) and stage an Expect on it in b
+// (rbac.Service.GuardRoleSet), before any role is read. A role edit, delete,
+// create or import that commits after that read changes the generation, so it
+// fails this commit with storage.ErrConflict and the retry decides again on
+// the new definitions. That one Expect covers all three exits: the user did
+// not hold core:admin (every role it holds was read as granting nothing, an
+// absent role name included), the user still holds it, and the other holder
+// found below; and a role deleted and created again under the same name
+// between the read and the commit, which no per-role version check can tell
+// from an untouched one. The generation is read before the roles, from the
+// same store, so a role definition read afterwards is at that generation or
+// newer, and a newer one fails the Expect. rbac's own rule reads holders
+// through its batch (Holders.HoldersOf guards each user it reports), so the
+// reverse order, the user write committing first, is caught there. A store
+// that cannot guard the role set (rbac.ErrNoRoleGuard) refuses the write, for
+// every user it would run on, whether or not the user holds core:admin: the
+// rule cannot be shown to hold. The other holder's user record is guarded as
+// before (Store.GuardUser).
 func (s *Service) keepAnAdmin(ctx context.Context, b *storage.Batch, u *User, after []rbac.RoleName, afterStatus UserStatus) error {
-	adminRole := s.adminRoleOf(ctx)
-	was, err := adminRole(u.Roles, u.Status)
-	if err != nil || was == nil {
+	gen, err := s.d.RBAC.RoleSetGeneration(ctx)
+	switch {
+	case errors.Is(err, rbac.ErrNoRoleGuard):
+		return err
+	case err != nil:
+		return fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
+	}
+	if err := s.d.RBAC.GuardRoleSet(b, gen); err != nil {
 		return err
 	}
-	still, err := adminRole(after, afterStatus)
-	if err != nil || still != nil {
+	isAdmin := s.adminHolds(ctx)
+	was, err := isAdmin(u.Roles, u.Status)
+	if err != nil || !was {
+		return err
+	}
+	still, err := isAdmin(after, afterStatus)
+	if err != nil || still {
 		return err
 	}
 	for other, err := range s.d.Store.ScanUsers(ctx) {
@@ -794,14 +771,11 @@ func (s *Service) keepAnAdmin(ctx context.Context, b *storage.Batch, u *User, af
 		if other.ID == u.ID {
 			continue
 		}
-		role, err := adminRole(other.Roles, other.Status)
+		ok, err := isAdmin(other.Roles, other.Status)
 		if err != nil {
 			return err
 		}
-		if role != nil {
-			if err := s.d.RBAC.GuardRole(b, role); err != nil {
-				return err
-			}
+		if ok {
 			return s.d.Store.GuardUser(b, other)
 		}
 	}
