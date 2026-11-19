@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/kinds_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 12a92dd8-393d-4645-83f1-f2143d4d0e31
 // last-edited: 2026-11-19
 
@@ -454,7 +454,6 @@ type fakeCache struct {
 	refreshes int
 	err       error
 	protected map[string]bool
-	notLoaded bool
 }
 
 func (c *fakeCache) Refresh() error {

@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/env.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 12973561-d1ec-48c5-a942-90c2e29ae2de
 // last-edited: 2026-11-19
 
@@ -477,14 +477,26 @@ func (d FingerprintDeps) hooks() hostHooks {
 }
 
 // kindStore is the reads every core takes (rule R10): the nine read methods of
-// pluginStore, measured by splitting that interface. Nothing in it writes.
+// pluginStore, measured by splitting that interface, in two focused halves.
+// Nothing in it writes.
 type kindStore interface {
+	kindBookReads
+	kindFingerprintReads
+}
+
+// kindBookReads is the book and book_file reads of kindStore.
+type kindBookReads interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error)
 	CountAllBooks() (int, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
 	GetAllBookFilesCore() ([]database.BookFileCore, error)
+}
+
+// kindFingerprintReads is the fingerprint reads of kindStore: the zero-duration
+// sweep and the per-file window rows and failures.
+type kindFingerprintReads interface {
 	GetFilesWithZeroDurationFingerprint(limit, offset int) ([]database.BookFile, int64, error)
 	GetFingerprintWindows(ref database.FingerprintWindowRef) ([]database.FingerprintWindow, error)
 	GetFingerprintWindowFailure(ref database.FingerprintWindowRef) (*database.FingerprintWindowFailure, error)

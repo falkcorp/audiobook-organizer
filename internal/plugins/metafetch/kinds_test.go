@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/kinds_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b1d7e92-0c4a-4f68-a3d1-8e27c9f40b15
 // last-edited: 2026-11-19
 
@@ -187,12 +187,6 @@ func (h *kindHost) bars() []barFrame {
 // Log is a logger over the host's own buffer, so a test can read it.
 func (h *kindHost) Log() *slog.Logger {
 	return slog.New(slog.NewTextHandler(&lockedWriter{mu: &h.mu, w: &h.logs}, nil))
-}
-
-func (h *kindHost) logged() string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.logs.String()
 }
 
 type lockedWriter struct {
