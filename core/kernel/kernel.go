@@ -1,5 +1,5 @@
 // file: core/kernel/kernel.go
-// version: 1.0.24
+// version: 1.0.25
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
 // last-edited: 2026-11-18
 
@@ -167,6 +167,25 @@ type Config struct {
 	// core.storage.swap.reset_hook_timeout); 0 = defaultResetHookTimeout.
 	// Tests only until config lands (F3).
 	ResetHookTimeout time.Duration
+	// CoreConfigBoot turns on core's own config and secrets boot (F3-07 slice
+	// a5; 06 §6.5.1 P0, P3, P4b and P4d): the layered config store built from
+	// ConfigOptions, the secrets store opened at the start of P4b, and both
+	// owners claimed in the store. false, the default, boots as before: no
+	// config layer is read through core, no keyring is created and no
+	// c/config/ or c/secrets/ row is written. It is one explicit bool, not
+	// the presence of the wiring, so a build without it is byte-for-byte the
+	// old boot; slice (e) of F3-07 deletes it with R1Values. ABO leaves it
+	// off.
+	CoreConfigBoot bool
+	// ConfigOptions are the operator layers of the config boot: the app's
+	// Environ, FilePath, Flags, Passthrough, EnvBindings and Retired
+	// (app.Options.configOptions); the kernel adds AppID, the logger, the
+	// clock, the boot-record root and the secrets. Read only when
+	// CoreConfigBoot is set.
+	ConfigOptions config.Options
+	// StateDirDefault is app.Options.StateDir: the compiled default of
+	// core.paths.state_dir. Read only when CoreConfigBoot is set.
+	StateDirDefault string
 }
 
 // R1Values mirrors app.R1Values field for field (05-config §1.12.1), so app
@@ -272,8 +291,15 @@ type Kernel struct {
 	imp         *lateImporters
 	importerCfg config.Importer
 	importerSec secrets.Importer
-	swap        *kernelSwap // P0a on; nil when P0a did not run (swap.go)
-	build       string      // the binary ID, once computed (swap.go)
+	// cfgBoot is the layered config store (Config.CoreConfigBoot): built at
+	// P0, loaded at P3, bound to the DB layer at P4b and attached at P4d. nil
+	// when the gate is off, which is every boot of ABO.
+	cfgBoot *configBoot
+	// settingHandles are the live handles of the enabled modules' declared
+	// sections, by path, registered at P3 (RegistrarConfig.Settings).
+	settingHandles map[config.Path]any
+	swap           *kernelSwap // P0a on; nil when P0a did not run (swap.go)
+	build          string      // the binary ID, once computed (swap.go)
 	// swapLock is the swap lock this kernel holds (exclusive through P0a
 	// and shared from its end, storage.LockSwapShared for an offline open,
 	// storage.LockSwapExclusive for an offline swap), released by closeCore
@@ -299,8 +325,11 @@ type entry struct {
 	mod     module.Module
 	man     module.Manifest
 	enabled bool
-	held    string               // ModuleState.Disabled when storage holds an enabled module (storage.go)
-	rec     module.Registrations // P6, enabled modules only
+	held    string // ModuleState.Disabled when storage holds an enabled module (storage.go)
+	// disabledBy is ModuleState.Disabled for a module a config layer turned off
+	// (config_boot.go applyBootEnabled); "" = the manifest default.
+	disabledBy string
+	rec        module.Registrations // P6, enabled modules only
 }
 
 // New runs the boot phases that exist (P1, P5, P6, P7, P8). It starts no
@@ -402,6 +431,9 @@ func (k *Kernel) Modules() []ModuleState {
 		s := ModuleState{ID: e.man.ID, Version: e.man.Version, Enabled: e.enabled}
 		if !e.enabled {
 			s.Disabled = disabledByDefault
+			if e.disabledBy != "" {
+				s.Disabled = e.disabledBy
+			}
 			if e.held != "" {
 				s.Disabled = e.held
 			}
@@ -578,7 +610,7 @@ func (k *Kernel) register(ctx context.Context) error {
 			Deps:          deps,
 			HTTP:          k.router.ModuleGroup(string(id)),
 			LegacyAuthGin: k.cfg.LegacyAuthGinUntil != "" && id == k.cfg.LegacyAuthGinUntil,
-			Settings:      declaredSettings(e.man, nil),
+			Settings:      declaredSettings(e.man, k.settingHandles),
 			// Err is read once, below: a call after Close (from a goroutine
 			// Register started, against 06 §6.4.1) would otherwise vanish.
 			AfterClose: func(p module.Problem) {
