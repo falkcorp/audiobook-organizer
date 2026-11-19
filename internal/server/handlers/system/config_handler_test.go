@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/config_handler_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c2d7e41-0b58-4f36-8a1d-3e6f5a90c274
 // last-edited: 2026-11-19
 
@@ -279,13 +279,53 @@ func TestUpdateConfig_ErrorMapping(t *testing.T) {
 func TestUpdateConfig_ProtectedMessages(t *testing.T) {
 	put := func(need coreconfig.Protection) string {
 		f := &stubFacade{err: &coreconfig.ProtectedError{Path: "database_path", Need: need}}
-		_, body := configHandler(t, f)(http.MethodPut, `{"set":{"database_path":"/srv/cave.db"}}`)
+		_, body := configHandler(t, f, asUser("user-ace", []string{"editor"}, auth.MethodSession, ""))(http.MethodPut, `{"set":{"database_path":"/srv/cave.db"}}`)
 		return body["error"].(string)
 	}
 	assert.Equal(t, auth.CredentialChangeRefusedMessage, put(coreconfig.ProtectInteractive),
-		"an API key keeps the wording every credential refusal uses")
+		"the credential wording every credential refusal uses")
 	assert.Contains(t, put(coreconfig.ProtectAdmin), "admin role")
 	assert.Contains(t, put(coreconfig.ProtectOwner), "owner")
+}
+
+// The refusal says what the caller can act on. A caller that may not change
+// credentials at all (an API key, an ABS token) gets the credential-change
+// wording for any key that needs a session or the admin role, as the update
+// service gave it; an interactive caller who merely lacks the admin role is
+// told that.
+func TestUpdateConfig_NonInteractiveCallerGetsTheCredentialWording(t *testing.T) {
+	put := func(need coreconfig.Protection, pre gin.HandlerFunc) string {
+		f := &stubFacade{err: &coreconfig.ProtectedError{Path: "root_dir", Need: need}}
+		code, body := configHandler(t, f, pre)(http.MethodPut, `{"set":{"root_dir":"/srv/cave"}}`)
+		require.Equal(t, http.StatusForbidden, code)
+		return body["error"].(string)
+	}
+	key := asUser("user-alfred", []string{"admin"}, auth.MethodAPIKey, "")
+	session := asUser("user-ace", []string{"editor"}, auth.MethodSession, "")
+	assert.Equal(t, auth.CredentialChangeRefusedMessage, put(coreconfig.ProtectAdmin, key))
+	assert.Equal(t, auth.CredentialChangeRefusedMessage, put(coreconfig.ProtectInteractive, key))
+	assert.Contains(t, put(coreconfig.ProtectAdmin, session), "admin role")
+	assert.NotEqual(t, auth.CredentialChangeRefusedMessage, put(coreconfig.ProtectAdmin, session))
+}
+
+func TestUpdateConfig_OperatorOnlyKeyPointsAtTheHost(t *testing.T) {
+	f := &stubFacade{err: &coreconfig.ProtectedError{Path: "owner_email", Need: coreconfig.ProtectOperator}}
+	code, body := configHandler(t, f, asUser("user-robin", []string{"admin"}, auth.MethodSession, ""))(http.MethodPut, `{"set":{"owner_email":"x@wayne.example"}}`)
+	require.Equal(t, http.StatusForbidden, code)
+	assert.Contains(t, body["error"], "only on the server")
+	assert.Contains(t, body["error"], "owner_email")
+}
+
+// Every refused key is named, not the first of a join.
+func TestUpdateConfig_ProtectedNamesEveryKey(t *testing.T) {
+	err := errors.Join(
+		&coreconfig.ProtectedError{Path: "root_dir", Need: coreconfig.ProtectAdmin},
+		&coreconfig.ProtectedError{Path: "enable_auth", Need: coreconfig.ProtectAdmin},
+	)
+	f := &stubFacade{err: err}
+	code, body := configHandler(t, f)(http.MethodPut, `{"set":{"root_dir":"/a","enable_auth":true}}`)
+	require.Equal(t, http.StatusForbidden, code)
+	assert.ElementsMatch(t, []any{"root_dir", "enable_auth"}, body["refused_keys"].([]any))
 }
 
 func TestUpdateConfig_OwnerRefusalSaysWhyTheProofFailed(t *testing.T) {

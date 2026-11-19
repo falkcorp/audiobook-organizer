@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/config_handler.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b8e1c63-2f47-4d90-a6c1-7e3d09b4f825
 // last-edited: 2026-11-19
 
@@ -138,9 +138,10 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 		return
 	}
 
-	res, err := f.Update(c.Request.Context(), h.configActor(c, f), upd)
+	actor := h.configActor(c, f)
+	res, err := f.Update(c.Request.Context(), actor, upd)
 	if err != nil {
-		h.respondConfigUpdateError(c, err)
+		h.respondConfigUpdateError(c, err, actor)
 		return
 	}
 	if res.PostCommit != nil {
@@ -280,7 +281,7 @@ func (h *Handler) configCan(c *gin.Context) func(string) bool {
 // two cases the update service never had are a key an operator layer sets
 // (409, the request is fine but the key's state refuses it) and a value that
 // failed validation (422, with each field named).
-func (h *Handler) respondConfigUpdateError(c *gin.Context, err error) {
+func (h *Handler) respondConfigUpdateError(c *gin.Context, err error, actor config.Actor) {
 	var (
 		locked    *coreconfig.LockedError
 		protected *coreconfig.ProtectedError
@@ -295,7 +296,7 @@ func (h *Handler) respondConfigUpdateError(c *gin.Context, err error) {
 		// with HEAD's names; the handler does not parse prose back into a list.
 		httputil.RespondWithError(c, http.StatusBadRequest, err.Error(), configCodeError)
 	case errors.As(err, &protected):
-		h.respondProtected(c, protected)
+		h.respondProtected(c, err, protected, actor)
 	case errors.Is(err, coreconfig.ErrForbidden):
 		httputil.RespondWithError(c, http.StatusForbidden, err.Error(), configCodeForbidden)
 	case errors.As(err, &locked):
@@ -311,27 +312,60 @@ func (h *Handler) respondConfigUpdateError(c *gin.Context, err error) {
 	}
 }
 
-// respondProtected answers a key whose protection the caller does not meet.
-// An interactive-session refusal keeps the update service's wording and its
-// credential-change audit line; an owner refusal says why the proof failed.
-func (h *Handler) respondProtected(c *gin.Context, p *coreconfig.ProtectedError) {
-	msg := p.Error()
-	switch p.Need {
-	case coreconfig.ProtectInteractive:
-		servermiddleware.LogCredentialChangeRefusal(c)
-		msg = auth.CredentialChangeRefusedMessage
-	case coreconfig.ProtectAdmin:
-		msg = "the admin role is required to change " + string(p.Path)
-	case coreconfig.ProtectOwner:
-		msg = "the owner's sign-in is required to change " + string(p.Path)
+// respondProtected answers a key whose protection the caller does not meet,
+// naming every refused key (core joins one error per key; first is the one
+// whose protection words the message). A caller that may not change
+// credentials at all (an API key) is told so, in the wording and with the
+// audit line every credential refusal uses, whether the key needed a session
+// or the admin role. An interactive caller short of the admin role is told
+// that; an owner refusal says why the proof failed; an operator-only key points
+// at the host.
+func (h *Handler) respondProtected(c *gin.Context, err error, first *coreconfig.ProtectedError, actor config.Actor) {
+	msg := first.Error()
+	switch {
+	case first.Need == coreconfig.ProtectOwner:
+		msg = "the owner's sign-in is required to change " + string(first.Path)
 		if f := h.facade(); f != nil {
 			if why := auth.OwnerProofWhyNot(c.Request.Context(), f.Snapshot().OwnerEmail, ""); why != "" {
-				msg = why + " (" + string(p.Path) + ")"
+				msg = why + " (" + string(first.Path) + ")"
 			}
 		}
+	case first.Need == coreconfig.ProtectOperator:
+		msg = string(first.Path) + " can be set only on the server: in the host environment or config file, then restart"
+	case !actor.Interactive:
+		servermiddleware.LogCredentialChangeRefusal(c)
+		msg = auth.CredentialChangeRefusedMessage
+	case first.Need == coreconfig.ProtectInteractive:
+		servermiddleware.LogCredentialChangeRefusal(c)
+		msg = auth.CredentialChangeRefusedMessage
+	case first.Need == coreconfig.ProtectAdmin:
+		msg = "the admin role is required to change " + string(first.Path)
+	}
+	var keys []string
+	var walk func(error)
+	walk = func(e error) {
+		if e == nil {
+			return
+		}
+		if pe, ok := e.(*coreconfig.ProtectedError); ok {
+			keys = append(keys, string(pe.Path))
+			return
+		}
+		switch u := e.(type) {
+		case interface{ Unwrap() []error }:
+			for _, w := range u.Unwrap() {
+				walk(w)
+			}
+		case interface{ Unwrap() error }:
+			walk(u.Unwrap())
+		}
+	}
+	walk(err)
+	if len(keys) == 0 {
+		keys = []string{string(first.Path)}
 	}
 	httputil.RespondWithErrorFields(c, http.StatusForbidden, msg, configCodeForbidden,
-		map[string]any{"refused_keys": []string{string(p.Path)}})
+		map[string]any{"refused_keys": keys})
 }
 
 // configFieldError is one entry of a 422's "fields": the key, in HEAD's name,
