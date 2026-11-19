@@ -75,11 +75,9 @@ func (k *Kernel) storageOwners() []storage.OwnerSpec {
 		// P2 open, the offline opens and the dry run.
 		owners = append(owners, configOwnerSpec(), secretsOwnerSpec())
 	}
-	if k.declaresCutover() {
-		// Core's half of M7 (core_level.go): registered when a manifest declares
-		// a cutover, so a build with none raises no level.
-		owners = append(owners, coreLevelOwnerSpec())
-	}
+	// Core's half of M7 (core_level.go): registered when a manifest declares a
+	// cutover, so a build with none raises no level.
+	owners = append(owners, k.coreOwners()...)
 	for _, e := range k.entries {
 		if DeclaresStorage(e.man) {
 			owners = append(owners, storage.OwnerSpec{Owner: storage.Owner(e.man.ID), Spec: e.man.Storage, Enabled: e.enabled})

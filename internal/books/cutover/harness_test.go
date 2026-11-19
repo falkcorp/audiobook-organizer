@@ -1,5 +1,5 @@
 // file: internal/books/cutover/harness_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 2f6d7b3a-71c4-4a7c-b6a3-1e4f2b9c0d05
 // last-edited: 2026-11-19
 
@@ -499,15 +499,8 @@ func (r *rig) spec(cutover bool) storage.Spec {
 	if !cutover {
 		return spec
 	}
-	spec.Level = BooksCutoverLevel
-	spec.Migrations = append(spec.Migrations, BooksLevelStep(r.levelVersion(), BooksCutoverLevel))
-	for i := range spec.Claims {
-		k := spec.Claims[i].Key
-		if k != "" && k != "setting:"+blobRowName && slices.Contains(settingRows(), k) {
-			spec.Claims[i].Mode = storage.ClaimRetired
-		}
-	}
-	return spec
+	// The shipped manifest's own function, so the rig cannot drift from it.
+	return Flip{Level: BooksLevelStep(r.levelVersion(), BooksCutoverLevel)}.Spec(spec)
 }
 
 // levelVersion is books' next contiguous version after its versioned steps.

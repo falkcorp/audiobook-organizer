@@ -1,7 +1,7 @@
 // file: internal/books/cutover_suite_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 6a1f3c8e-2d47-4b95-8e0a-7c5d9b2f4e16
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package books
 
@@ -32,9 +32,12 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/mediacore/app"
+	"github.com/falkcorp/mediacore/kernel"
+	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -1475,4 +1478,62 @@ func cutoverSuiteCleanup() {
 		_ = os.RemoveAll(d)
 	}
 	cutoverRuns.Unlock()
+}
+
+// flipListEntries is F3's cutover list as the build registers it: the kernel's
+// half (core's level steps, from kernel.CoreOwners over the build's modules)
+// then books' (Flip.Entries over the very Flip the manifest registers). The cell
+// below validates this, so the check cannot drift from what ships.
+func flipListEntries(m *booksModule) []cutover.ListEntry {
+	var core []cutover.ListEntry
+	for _, o := range kernel.CoreOwners(m) {
+		for _, s := range o.Spec.Migrations {
+			core = append(core, cutover.LevelEntry(o.Owner, s))
+		}
+	}
+	return m.flipSteps(module.Importers{}).Entries(core...)
+}
+
+// TestCutoverList_BooksFlipIsValid is the cutover-list cell (F3-07 d; F3-04's
+// "Flip mechanism"; 05-storage 5S.3.13 "The list"): the list the books manifest
+// registers with the kernel's core half passes ValidateCutoverList against the
+// levels the build declares. It fails when a level step is missing or out of
+// order, M2 does not name its level step, M8 is not last or books' pinned level
+// version drifts from its next contiguous one.
+func TestCutoverList_BooksFlipIsValid(t *testing.T) {
+	m := flipOn()
+	man := m.Manifest()
+	list := cutover.CutoverList{
+		Target:       storage.Levels{"books": man.Storage.Level, "core": kernel.CoreCutoverLevel},
+		FirstVersion: storage.Levels{"books": database.NextMigrationVersion(), "core": 1},
+		Entries:      flipListEntries(m),
+	}
+	if err := cutover.ValidateCutoverList(list); err != nil {
+		t.Fatalf("the books manifest's cutover list is invalid: %v", err)
+	}
+
+	t.Run("a drifted books level version is reported", func(t *testing.T) {
+		drifted := list
+		drifted.FirstVersion = storage.Levels{"books": database.NextMigrationVersion() + 1, "core": 1}
+		var lerr *cutover.CutoverListError
+		if err := cutover.ValidateCutoverList(drifted); !errors.As(err, &lerr) {
+			t.Fatalf("a first level version off by one passed: %v", err)
+		}
+	})
+	t.Run("a list without core's half is reported", func(t *testing.T) {
+		noCore := list
+		noCore.Entries = m.flipSteps(module.Importers{}).Entries()
+		if err := cutover.ValidateCutoverList(noCore); err == nil {
+			t.Fatal("a list with no core level step passed although core is raised to 1")
+		}
+	})
+	t.Run("M8 is last", func(t *testing.T) {
+		swapped := list
+		swapped.Entries = slices.Clone(list.Entries)
+		n := len(swapped.Entries)
+		swapped.Entries[n-1], swapped.Entries[n-2] = swapped.Entries[n-2], swapped.Entries[n-1]
+		if err := cutover.ValidateCutoverList(swapped); err == nil {
+			t.Fatal("a list with M8 before M2 passed")
+		}
+	})
 }

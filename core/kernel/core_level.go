@@ -1,11 +1,12 @@
 // file: core/kernel/core_level.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3d9a52c1-7e84-4b06-a1f3-c58e0d27b946
 // last-edited: 2026-11-19
 
 package kernel
 
 import (
+	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -59,25 +60,39 @@ func coreLevelOwnerSpec() storage.OwnerSpec {
 	}
 }
 
-// CoreCutoverOwner is the storage owner core's level steps are registered on
-// and the steps themselves, in version order, for the cutover-list check an app
-// runs over the list it registers (internal/books/cutover.ValidateCutoverList:
-// core's half sits next to books' in the list it validates). The values are
-// what a build that declares a cutover registers; one that declares none
-// registers neither.
-func CoreCutoverOwner() (storage.Owner, []storage.Migration) {
-	return coreLevelsOwner, coreLevelSteps()
-}
-
-// declaresCutover reports whether any compiled module's manifest declares R2
-// cutover steps (Manifest.Cutover), enabled or not: a disabled module's
-// cutover still runs (a disabled module's migration blocks its owner's later
-// steps, 05-storage 5S.3.5), so core's level rises with it.
-func (k *Kernel) declaresCutover() bool {
-	for _, e := range k.entries {
-		if e.man.Cutover != nil {
-			return true
+// CoreOwners are the storage owners core registers beside the modules' own, for
+// the build mods compose: core/levels when any manifest declares a cutover
+// (Manifest.Cutover, enabled or not: a disabled module's cutover still runs, so
+// core's level rises with it), none otherwise. One source for the kernel's open
+// (storageOwners), the --print-storage-levels fast exit (core's level in the
+// vector make rollback's guard compares) and the cutover-list cell an app runs
+// over the list it registers (core's level step is in its Migrations).
+func CoreOwners(mods ...module.Module) []storage.OwnerSpec {
+	mans := make([]module.Manifest, 0, len(mods))
+	for _, m := range mods {
+		if m != nil {
+			mans = append(mans, m.Manifest())
 		}
 	}
-	return false
+	return coreOwnersOf(mans)
+}
+
+// coreOwnersOf is CoreOwners over manifests the caller already read.
+func coreOwnersOf(mans []module.Manifest) []storage.OwnerSpec {
+	for _, man := range mans {
+		if man.Cutover != nil {
+			return []storage.OwnerSpec{coreLevelOwnerSpec()}
+		}
+	}
+	return nil
+}
+
+// coreOwners is coreOwnersOf over the kernel's compiled modules' manifests as
+// P1 read them.
+func (k *Kernel) coreOwners() []storage.OwnerSpec {
+	mans := make([]module.Manifest, 0, len(k.entries))
+	for _, e := range k.entries {
+		mans = append(mans, e.man)
+	}
+	return coreOwnersOf(mans)
 }
