@@ -1,13 +1,14 @@
 // file: core/kernel/taskconfig.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5b0c9d52-6f3a-4a8e-9c47-2e1d8b7a4f60
-// last-edited: 2026-11-12
+// last-edited: 2026-11-18
 
 package kernel
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -34,9 +35,16 @@ import (
 // It performs no I/O: it is built at P7 by Kernel.coreConfig, and only when
 // the tasks wiring reads it (a registered definition, or the start rule
 // holding), also for Describe, and closed by closeCore.
+//
+// With Config.CoreConfigBoot the store is the booted, layered one (cfgBoot's)
+// and the section handles are the ones P0 registered, so every adapter below
+// reads the environment, file, boot-record and stored values through the same
+// Handle.Get; shared then marks a store the config boot owns, which close
+// leaves alone.
 type coreConfig struct {
-	store *config.Store
-	tasks *config.Handle[tasksSettings]
+	store  *config.Store
+	shared bool
+	tasks  *config.Handle[tasksSettings]
 	// leaves is every key of the core sections by dotted path, for the
 	// schedule-key declaration check (ValidateSchedules' declared function).
 	leaves map[string]cfgLeaf
@@ -49,8 +57,9 @@ type cfgLeaf struct {
 	read     func() tasks.ScheduleConfig
 }
 
-// coreConfig is the defaults-only core config, built on the first call and
-// kept. Boot calls it at P7, which is single-threaded, from the two places
+// coreConfig is the core config, built on the first call and kept: the layered
+// store when Config.CoreConfigBoot booted one, else the defaults-only one. Boot
+// calls it at P7, which is single-threaded, from the two places
 // that read it: taskProblems when a definition exists (the schedule keys it
 // declares) and constructTasks when the start rule held (the executor's and
 // the scheduler's settings). A boot that registers no kind and finds no run
@@ -58,7 +67,16 @@ type cfgLeaf struct {
 // the store only when it was built.
 func (k *Kernel) coreConfig() (*coreConfig, error) {
 	if k.coreCfg == nil {
-		c, err := newCoreConfig(k.cfg.AppID, k.sectionCache)
+		var c *coreConfig
+		var err error
+		if cb := k.cfgBoot; cb != nil {
+			c, err = coreConfigOver(cb.store, cb.handles)
+			if c != nil {
+				c.shared = true
+			}
+		} else {
+			c, err = newCoreConfig(k.cfg.AppID, k.sectionCache)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -83,6 +101,16 @@ func newCoreConfig(appID string, cache *config.SectionCache) (*coreConfig, error
 	if err != nil {
 		return nil, fmt.Errorf("kernel: core config: register the core sections: %w", err)
 	}
+	c, err := coreConfigOver(st, handles)
+	if err != nil {
+		return nil, errors.Join(err, st.Close(context.Background()))
+	}
+	return c, nil
+}
+
+// coreConfigOver is the core config over st and the handles of the core
+// sections registered on it: the tasks section and every key of every section.
+func coreConfigOver(st *config.Store, handles []any) (*coreConfig, error) {
 	c := &coreConfig{store: st, leaves: map[string]cfgLeaf{}}
 	for _, h := range handles {
 		if th, ok := h.(*config.Handle[tasksSettings]); ok {
@@ -98,7 +126,7 @@ func newCoreConfig(appID string, cache *config.SectionCache) (*coreConfig, error
 
 // close releases the store.
 func (c *coreConfig) close(ctx context.Context) error {
-	if c == nil {
+	if c == nil || c.shared {
 		return nil
 	}
 	return c.store.Close(ctx)
