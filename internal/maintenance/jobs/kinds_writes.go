@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/kinds_writes.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: 6d1a4e9c-2b7f-4c35-9e80-a3f5c7d1b284
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package jobs
 
@@ -90,7 +90,7 @@ var jobTraces = map[string]jobTrace{"backfill-book-files": {Methods: []string{"B
 		"SaveOperationState", "SaveOperationSummaryLog",
 	}},
 	"recompute-itunes-paths":   {Methods: []string{"UpdateBookFile"}},
-	"refetch-missing-authors":  {Methods: []string{"CreateAuthor", "ModifyBook", "ModifyBookAuthors"}},
+	"refetch-missing-authors":  {Methods: []string{"CreateAuthor", "ModifyBookCredits"}},
 	"relink-missing-to-itunes": {Methods: []string{"ModifyBook", "UpdateBookFile"}},
 	"relink-report":            {},
 	"repoint-version-primary":  {Methods: []string{"ModifyBook"}},

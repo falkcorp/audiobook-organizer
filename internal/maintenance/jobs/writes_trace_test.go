@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/writes_trace_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: c58e1d07-3a92-4f64-b0d3-7e49a2f6c815
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package jobs_test
 
@@ -85,6 +85,10 @@ var traceAliases = map[string]string{
 	// without this the call reads as an unlisted write named after the helper and
 	// the ModifyBook the job's trace lists reads as unreached.
 	"STOREFN.ModifyBookRespectingLocks": "ModifyBook",
+	// database.ModifyBookCreditsRespectingLocks is the same kind of helper for the
+	// one commit that writes a book's row and its credit lists: its one write is
+	// the ModifyBookCredits it makes under the book's locks.
+	"STOREFN.ModifyBookCreditsRespectingLocks": "ModifyBookCredits",
 }
 
 // traceWriteName is the store method a call key stands for, and whether it is a

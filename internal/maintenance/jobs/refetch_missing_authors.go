@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/refetch_missing_authors.go
-// version: 2.14.0
+// version: 2.15.0
 // guid: a1000012-0000-0000-0000-000000000012
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package jobs
 
@@ -40,6 +40,8 @@ func (j *refetchMissingAuthorsJob) CanResume() bool    { return true }
 
 func (j *refetchMissingAuthorsJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	opID := maintenance.OperationIDFromCtx(ctx)
+
+	var linker tagAuthorStore // resolved at the first book that is written
 
 	// Load all books without an author. Core-typed: the filter/lookup below
 	// only needs AuthorID/ID/Title/FilePath, all Core-safe fields; the actual
@@ -174,7 +176,18 @@ func (j *refetchMissingAuthorsJob) Run(ctx context.Context, store maintenance.Jo
 			continue
 		}
 
-		switch outcome, lerr := linkTagAuthors(store, b.ID, authorName); outcome {
+		// The primary author and the co-author credits are written in ONE commit
+		// (linkTagAuthors), so a store that cannot make it is refused here, once,
+		// before the first resolve could create an author row for a book that
+		// then fails, and not after hours of per-book failures. A preview and a
+		// run with nothing to write never reach this and need no capability.
+		if linker == nil {
+			var cerr error
+			if linker, cerr = tagAuthorStoreFor(store); cerr != nil {
+				return cerr
+			}
+		}
+		switch outcome, lerr := linkTagAuthors(linker, b.ID, authorName); outcome {
 		case tagAuthorsCombined:
 			logger.New("refetch-missing-authors").Warn("book %s: tag author %q joins existing authors the splitter will not split; leaving it authorless",
 				b.ID, logger.SanitizeLogValue(authorName))
@@ -188,9 +201,6 @@ func (j *refetchMissingAuthorsJob) Run(ctx context.Context, store maintenance.Jo
 			slog.Error("failed to set author for book", "authorName", authorName, "bookID", b.ID, "err", lerr)
 			errors++
 			continue
-		case tagAuthorsPartial:
-			slog.Error("failed to credit co-authors", "b", b.ID, "err", lerr)
-			errors++
 		}
 
 		slog.Info("refetch-missing-authors set author on book", "opID", opID, "authorName", authorName, "bookID", b.ID, "bookTitle", b.Title)
@@ -211,17 +221,35 @@ const (
 	tagAuthorsFailed   = "failed"
 	// tagAuthorsHeld: the user locked the book's author, so none was linked.
 	tagAuthorsHeld = "held"
-	// tagAuthorsPartial: the primary was set but the co-authors were not
-	// credited.
-	tagAuthorsPartial = "partial"
 )
 
-// tagAuthorStore is what linkTagAuthors reads and writes.
+// tagAuthorStore is what linkTagAuthors reads and writes. The one write it
+// makes to a book is ModifyBookCredits, which commits the row and the credit
+// lists together; the author rows it may create go through authorcredit.Store.
 type tagAuthorStore interface {
 	authorcredit.Store
-	database.BookModifier
 	database.MetadataFieldStateReader
-	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
+	database.BookCreditsRowModifier
+}
+
+// tagAuthorWriter is a job's store plus the credits commit it may or may not
+// offer (maintenance.JobStore does not list ModifyBookCredits).
+type tagAuthorWriter struct {
+	authorcredit.Store
+	database.MetadataFieldStateReader
+	database.BookCreditsRowModifier
+}
+
+// tagAuthorStoreFor adapts a job's store for linkTagAuthors, or refuses with
+// database.ErrBookCreditsUnsupported when neither the store nor anything in its
+// decorator chain can write a book's row and credits as one commit. There is no
+// two-write fallback: that fallback is the window this exists to close.
+func tagAuthorStoreFor(store maintenance.JobStore) (tagAuthorStore, error) {
+	m, ok := database.AsCapability[database.BookCreditsModifier](store)
+	if !ok {
+		return nil, fmt.Errorf("refetch-missing-authors: %w: store is %T", database.ErrBookCreditsUnsupported, store)
+	}
+	return tagAuthorWriter{Store: store, MetadataFieldStateReader: store, BookCreditsRowModifier: m}, nil
 }
 
 // linkTagAuthors finds or creates the author records a tag names and links
@@ -230,18 +258,31 @@ type tagAuthorStore interface {
 // up and created when missing, as before. A combined tag whose pieces are all
 // different existing authors is no author (tagAuthorsCombined).
 //
-// The primary goes through ModifyBook: it re-reads the full row under the
-// book's write lock and sets only AuthorID, so a column another writer
-// commits while the tags were being read from disk is not reverted (audit
-// A1#15). "Still has no author" is decided on the fresh row: one filled
-// meanwhile is kept, and then no co-author is added either.
+// The primary and the co-author credits are ONE commit
+// (database.ModifyBookCreditsRespectingLocks): it re-reads the full row and the
+// credit lists under the book's write lock and sets only AuthorID, Author and the
+// credit list, so a column another writer commits while the tags were being read
+// from disk is not reverted (audit A1#15). "Still has no author" is decided on
+// the fresh row: one filled meanwhile is kept, and then no co-author is added
+// either. A failure or crash leaves the book exactly as it was, authorless with
+// no credits, so a rerun finds it again; with two commits a book could be left
+// with a primary and no co-authors, which no later run repairs because it no
+// longer looks authorless.
 //
 // A book whose author the user locked is tagAuthorsHeld and is left authorless.
 // The lock is read BEFORE the resolve, because the resolve can create author
 // rows and a refused link would leave them behind; the same lock is read again
-// under the book's write lock (database.ModifyBookRespectingLocks), which is
-// the check that decides, since the first read is only advisory. A lock read
-// that fails is tagAuthorsFailed with nothing written.
+// inside the commit, which is the check that decides, since the first read is
+// only advisory. A lock read that fails is tagAuthorsFailed with nothing written.
+//
+// KNOWN RESIDUAL: the resolve can still create one author row (authorcredit's
+// MintAuthor, its step 5) before the commit. If the commit is then held by a lock
+// saved after the advisory read, skipped because the book got an author
+// meanwhile, or fails, that row stays, credited to nothing. Deleting it is not
+// safe with the store's primitives: DeleteAuthor removes credits and repoints
+// books, so it could strip a credit a concurrent writer gave the same row. Closing
+// it needs a store primitive that deletes an author only while nothing references
+// it; see TODO.md.
 func linkTagAuthors(store tagAuthorStore, bookID, authorName string) (string, error) {
 	locks, lerr := database.LoadFieldLocks(store, bookID)
 	if lerr != nil {
@@ -260,12 +301,21 @@ func linkTagAuthors(store tagAuthorStore, bookID, authorName string) (string, er
 	if len(authors) == 0 {
 		return tagAuthorsFailed, fmt.Errorf("no author resolved from %q", authorName)
 	}
-	authorID := authors[0].ID
-	full, held, err := database.ModifyBookRespectingLocks(store, store, bookID, func(cur *database.Book) error {
+	primary := authors[0]
+	full, held, err := database.ModifyBookCreditsRespectingLocks(store, store, bookID, func(cur *database.Book, credits *database.BookCreditsEdit) error {
 		if cur.AuthorID != nil {
 			return database.ErrSkipBookWrite
 		}
-		cur.AuthorID = &authorID
+		id := primary.ID
+		cur.AuthorID = &id
+		cur.Author = &primary
+		if len(authors) > 1 {
+			// Add-only: the credits are the fresh ones the commit read.
+			next, changed := authorcredit.AddCredits(credits.Authors, bookID, cur.AuthorID, authors)
+			if changed {
+				credits.Authors = next
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -276,17 +326,6 @@ func linkTagAuthors(store tagAuthorStore, bookID, authorName string) (string, er
 	}
 	if full == nil {
 		return tagAuthorsFailed, fmt.Errorf("book vanished before author update")
-	}
-	if len(authors) > 1 && full.AuthorID != nil && *full.AuthorID == authorID {
-		if _, cerr := store.ModifyBookAuthors(bookID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
-			next, changed := authorcredit.AddCredits(cur, bookID, full.AuthorID, authors)
-			if !changed {
-				return nil, database.ErrSkipBookAuthorsWrite
-			}
-			return next, nil
-		}); cerr != nil {
-			return tagAuthorsPartial, cerr
-		}
 	}
 	return tagAuthorsLinked, nil
 }
