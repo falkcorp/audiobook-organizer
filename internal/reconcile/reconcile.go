@@ -1,5 +1,5 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.28.1
+// version: 1.29.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-11-18
 
@@ -135,10 +135,15 @@ type ReconcileApplyRequest struct {
 	Matches []ReconcileApplyItem `json:"matches"`
 }
 
-// ReconcileApplyItem is a single match the user confirmed.
+// ReconcileApplyItem is a single match the user confirmed. MatchType is the scan's
+// ReconcileMatch.MatchType for it ("hash", "original_hash", "filename"). Only
+// "hash" keeps the book's and its file row's hashes; anything else, including an
+// item that carries none, clears them (keepsHashes). It is the confirming
+// caller's claim about the scan's match: the apply does not re-derive it.
 type ReconcileApplyItem struct {
-	BookID  string `json:"book_id"`
-	NewPath string `json:"new_path"`
+	BookID    string `json:"book_id"`
+	NewPath   string `json:"new_path"`
+	MatchType string `json:"match_type,omitempty"`
 }
 
 // ReconcileApplyResult reports what was done.
@@ -812,7 +817,8 @@ func FindUntrackedFiles(ctx context.Context, store Store, knownPaths map[string]
 //
 // Per match (applyMatch), in this order: read and check everything with no write
 // (the book is not in the trash, the matched path is a regular file, planFileRow
-// finds exactly one row to repoint), journal the book's path change and the row's
+// finds exactly one row to repoint), journal the book's path change, the hash
+// clears of a match that does not prove the content (keepsHashes) and the row's
 // repoint, repoint the row, then write the book's path. A refusal before the
 // first journal row leaves the match untouched. If a later step fails, the match
 // is taken back: the row is put back when it had moved, and the journal rows are
@@ -821,7 +827,22 @@ func FindUntrackedFiles(ctx context.Context, store Store, knownPaths map[string]
 // fails is reported by name in the result's errors, and nothing is voided (the
 // row is at the matched file while the book is at the old path; a rerun of the
 // match finishes it, and journals the row's repoint again so the rerun reverts on
-// its own). A match that is skipped or fails is never counted as applied.
+// its own, and hands the earlier operation's rows over so reverting THAT
+// operation no longer undoes the rerun). A match that is skipped or fails is
+// never counted as applied.
+//
+// CRASH RESIDUAL. All of the above covers failures the process survives. The
+// journal rows are written BEFORE the writes they describe, and a process that
+// dies between them (or is killed mid-apply) leaves live rows for writes that
+// never landed; nothing voids them, because reconcile.apply is ResumeDrop (no
+// run picks the match up again). Such an operation can still be reverted, and a
+// revert reads the values of a LATER, successful apply of the same match as
+// current and undoes it: apply, crash, apply again, revert the crashed operation.
+// Finishing a stranded match closes this for that state only (the hand-off); a
+// crash before any write leaves rows nothing hands over. Closing it needs the
+// journal rows and the writes to land together, or a startup sweep that voids the
+// rows of a dropped reconcile.apply whose values are not current (todo.d,
+// RECONCILE-APPLY-CRASH-RESIDUAL).
 func ExecuteReconcile(ctx context.Context, store Store, operationID string, saveResult SaveResultFunc, matches []ReconcileApplyItem, log logger.Logger) error {
 	result := &ReconcileApplyResult{
 		Errors: []string{},
