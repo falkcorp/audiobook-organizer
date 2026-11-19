@@ -247,27 +247,30 @@ var layerOf = map[string]int{
 	"pkg/ops":                           3, // computed: max of imports=3 (auth, undo), floored at 3
 
 	// Layer 4: jobs
-	"internal/authority/authoritybuild": 4, // computed: max of imports=4, floored at 3
-	"internal/catalog":                  4, // computed: max of imports=4, floored at 3
-	"internal/importer":                 4, // computed: max of imports=4, floored at 3
-	"internal/maintenance":              4, // computed: max of imports=4, floored at 3
-	"internal/maintenance/jobs":         4, // family: jobs
-	"internal/maintenance/resources":    3, // computed: max of imports=3 (pkg/ops), floored at 3; the method-to-resource table both native-kind families read
-	"internal/metabatch":                4, // computed: max of imports=4, floored at 3
-	"internal/operations/registry":      4, // table: jobs
-	"internal/opscatalog":               4, // computed: max of imports=4 (registry, internal/plugins/*); the one list of op bundles (05-PR7)
-	"internal/plugins":                  4, // family: internal/plugins/* is jobs
-	"internal/plugins/acoustid":         4, // family: internal/plugins/* is jobs
-	"internal/plugins/dedup":            4, // family: internal/plugins/* is jobs
-	"internal/plugins/deluge":           4, // family: internal/plugins/* is jobs
-	"internal/plugins/itunes":           4, // family: internal/plugins/* is jobs
-	"internal/plugins/maintenance":      4, // family: internal/plugins/* is jobs
-	"internal/plugins/metafetch":        4, // family: internal/plugins/* is jobs
-	"internal/plugins/webhook":          4, // family: internal/plugins/* is jobs
-	"internal/scheduler":                4, // table: jobs
-	"internal/testutil":                 4, // computed: max of imports=4, floored at 3
-	"pkg/ops/opstest":                   4, // computed: max of imports=4 (registry); a test harness, imported by tests only
-	"pkg/plugin/sdk":                    4, // computed: max of imports=4, floored at 3
+	"internal/authority/authoritybuild":   4, // computed: max of imports=4, floored at 3
+	"internal/catalog":                    4, // computed: max of imports=4, floored at 3
+	"internal/importer":                   4, // computed: max of imports=4, floored at 3
+	"internal/maintenance":                4, // computed: max of imports=4, floored at 3
+	"internal/maintenance/jobs":           4, // family: jobs
+	"internal/maintenance/resources":      3, // computed: max of imports=3 (pkg/ops), floored at 3; the method-to-resource table both native-kind families read
+	"internal/books/writer":               3, // computed: max of imports=3 (internal/maintenance/resources, pkg/ops), floored at 3; the books module's gated write path (F5-18b)
+	"internal/books/writer/metafetchgate": 3, // computed: max of imports=3 (internal/metafetch, internal/books/writer, internal/books/store=2), floored at 3
+	"internal/books/writer/writertest":    0, // computed: imports no module package; the Effects-enforcing writer double (F5-18b)
+	"internal/metabatch":                  4, // computed: max of imports=4, floored at 3
+	"internal/operations/registry":        4, // table: jobs
+	"internal/opscatalog":                 4, // computed: max of imports=4 (registry, internal/plugins/*); the one list of op bundles (05-PR7)
+	"internal/plugins":                    4, // family: internal/plugins/* is jobs
+	"internal/plugins/acoustid":           4, // family: internal/plugins/* is jobs
+	"internal/plugins/dedup":              4, // family: internal/plugins/* is jobs
+	"internal/plugins/deluge":             4, // family: internal/plugins/* is jobs
+	"internal/plugins/itunes":             4, // family: internal/plugins/* is jobs
+	"internal/plugins/maintenance":        4, // family: internal/plugins/* is jobs
+	"internal/plugins/metafetch":          4, // family: internal/plugins/* is jobs
+	"internal/plugins/webhook":            4, // family: internal/plugins/* is jobs
+	"internal/scheduler":                  4, // table: jobs
+	"internal/testutil":                   4, // computed: max of imports=4, floored at 3
+	"pkg/ops/opstest":                     4, // computed: max of imports=4 (registry); a test harness, imported by tests only
+	"pkg/plugin/sdk":                      4, // computed: max of imports=4, floored at 3
 
 	// Layer 5: transport
 	"internal/itunes/service":                   5, // computed: max of imports=5, floored at 3
