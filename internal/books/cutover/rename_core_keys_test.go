@@ -1,119 +1,121 @@
 // file: internal/books/cutover/rename_core_keys_test.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: 3a9d05c7-e218-4b6f-9d40-5f81c7a2b6e3
 // last-edited: 2026-11-18
 
 package cutover
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/falkcorp/mediacore/config"
-	"github.com/falkcorp/mediacore/kernel"
 )
 
-// dynamicCoreRows are the rename-table targets whose canonical path is not
-// a registered key or a container with keys below it: the members of a map
-// key (core.tasks.windows.<name>.{enabled,start,end}), matched by prefix
-// against the registry. Each entry is a reviewed prefix, and the test
-// requires a registered key at or under it, so a typo here, or a section
-// dropped from core, fails. An entry no row needs is dead and does not
-// belong (core.updater.* is an ordinary container, found by keys below it).
-var dynamicCoreRows = []config.Path{
-	"core.tasks.windows",
-}
+// coreContractPath is the contract fixture the rename table projects onto
+// core: every core canonical path the table names, which of them it coins, and
+// the verdict it gives a retired name of each. Core's own tests
+// (core/kernel/rename_contract_test.go, the core half of
+// TestRenameTable_EveryKeyRegistered) read it against coreSections(); core
+// holds no app name (03 R1), so the fixture carries canonical core paths and
+// verdicts only, never a HEAD name. It replaces the kernel.CoreKeys export,
+// which existed only so this package could see core's unexported section
+// list.
+const coreContractPath = "../../../core/kernel/testdata/rename_core_targets.golden"
 
-// coreRegistered reports whether canonical path p is served by core's
-// registry: itself a key, a container with keys below it, or a reviewed
-// dynamic row with keys at or under its prefix.
-func coreRegistered(keys map[config.Path]config.KeyState, p config.Path) bool {
-	if _, ok := keys[p]; ok {
-		return true
-	}
-	under := func(prefix config.Path) bool {
-		for k := range keys {
-			if k == prefix || strings.HasPrefix(string(k), string(prefix)+".") {
-				return true
-			}
-		}
-		return false
-	}
-	if under(p) {
-		return true
-	}
-	if _, ok := keys["core.auth.oidc.providers"]; ok && oidcSecretName(p) {
-		return true
-	}
-	for _, d := range dynamicCoreRows {
-		if (p == d || strings.HasPrefix(string(p), string(d)+".")) && under(d) {
-			return true
-		}
-	}
-	return false
-}
-
-// oidcSecretName matches core.auth.oidc.<id>.client_secret, the secret of one
-// provider entry of the list key core.auth.oidc.providers (secret:"bind"):
-// the name exists per entry at runtime, so only its list key is registered.
-func oidcSecretName(p config.Path) bool {
-	rest, ok := strings.CutPrefix(string(p), "core.auth.oidc.")
-	id, leaf, cut := strings.Cut(rest, ".")
-	return ok && cut && id != "" && !strings.Contains(leaf, ".") && leaf == "client_secret"
-}
-
+// coreScopedPath reports a path core owns.
 func coreScopedPath(p config.Path) bool { return strings.HasPrefix(string(p), "core.") }
 
-// coreKeys returns core's registry; the books half of "every key registered"
-// is F3-07's books-sections slice.
-func coreKeys(t *testing.T) map[config.Path]config.KeyState {
-	t.Helper()
-	keys, err := kernel.CoreKeys()
-	if err != nil {
-		t.Fatalf("kernel.CoreKeys: %v", err)
-	}
-	if len(keys) == 0 {
-		t.Fatal("kernel.CoreKeys returned no keys")
-	}
-	return keys
-}
-
-// TestRenameTable_CoreKeysRegistered (the core half of F3-07's
-// TestRenameTable_EveryKeyRegistered; 05-config §1.12.3, IMPL-1): every core
-// canonical path a key, secret, entry or fold target names is registered in
-// core's own registry, so M2 never stages into a path core does not know.
-func TestRenameTable_CoreKeysRegistered(t *testing.T) {
-	keys := coreKeys(t)
-	checked := 0
-	var missing []string
+// coreProjection renders the table's core-scoped targets and verdicts in the
+// fixture's format: sorted, deduplicated, one fact per line.
+func coreProjection() string {
+	targets := map[string]bool{}
+	coined := map[string]bool{}
+	verdicts := map[string]bool{}
 	for _, r := range Table().Rows {
 		for _, tg := range r.Targets {
 			p := tg.ConfigPath()
 			if p == "" || !coreScopedPath(p) {
 				continue
 			}
-			checked++
-			if !coreRegistered(keys, p) {
-				missing = append(missing, string(p)+" (row "+r.Head+")")
+			targets[string(p)] = true
+			if tg.Coined {
+				coined[string(p)] = true
 			}
 		}
+		for _, re := range r.Retired {
+			c := re.Canonical
+			if c == "" || !coreScopedPath(c) || re.Verdict == VerdictKept {
+				continue
+			}
+			verdicts[fmt.Sprintf("%s %s", c, re.Verdict)] = true
+		}
 	}
-	sort.Strings(missing)
-	for _, m := range missing {
-		t.Errorf("core path %s is a rename-table target but no core section declares it", m)
+	var b strings.Builder
+	b.WriteString("# file: core/kernel/testdata/rename_core_targets.golden\n")
+	b.WriteString("# version: 1.0.0\n")
+	b.WriteString("# guid: 5d2f8a14-0c97-4b63-b1e5-7a40d93c6e28\n")
+	b.WriteString("# last-edited: 2026-11-18\n")
+	b.WriteString("#\n")
+	b.WriteString("# The rename table's projection onto core (05-config section 1.12.3): the core canonical\n")
+	b.WriteString("# paths its rows target, the ones it coins, and the verdict it gives a retired name of\n")
+	b.WriteString("# each. Generated by internal/books/cutover (TestRenameTable_CoreProjectionMatchesFixture);\n")
+	b.WriteString("# regenerate: go test ./internal/books/cutover -run TestRenameTable_CoreProjection -update\n")
+	b.WriteString("# Read by core/kernel's TestRenameTable_Core* tests against coreSections().\n")
+	for _, kind := range []struct {
+		word string
+		set  map[string]bool
+	}{{"target", targets}, {"coined", coined}, {"verdict", verdicts}} {
+		keys := make([]string, 0, len(kind.set))
+		for k := range kind.set {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Fprintf(&b, "%s %s\n", kind.word, k)
+		}
 	}
-	if checked == 0 {
-		t.Fatal("the rename table names no core path: the test checked nothing")
-	}
+	return b.String()
 }
 
-// TestRenameTable_CoreCoinedRowsDeclared pins the two rows 05-config §1.12.3
-// coins and no owner table declared (seams.d/F2-09.md "Not declared"): the
-// declaration, its class and its type, so dropping a section fails here and
-// in the registry test above.
-func TestRenameTable_CoreCoinedRowsDeclared(t *testing.T) {
-	keys := coreKeys(t)
+// TestRenameTable_CoreProjectionMatchesFixture is the app half of the core
+// contract: the fixture core's tests read is exactly what this table projects.
+// A row that retargets a core key, coins one or changes a verdict fails here
+// until the fixture is regenerated, and the regenerated fixture then has to
+// pass core's tests, which is the check against core's registry.
+func TestRenameTable_CoreProjectionMatchesFixture(t *testing.T) {
+	got := coreProjection()
+	if *update {
+		if err := os.WriteFile(filepath.FromSlash(coreContractPath), []byte(got), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	want, err := os.ReadFile(filepath.FromSlash(coreContractPath))
+	if err != nil {
+		t.Fatalf("read the core contract fixture: %v (run with -update to create it)", err)
+	}
+	if string(want) != got {
+		t.Fatalf("the rename table's projection onto core differs from %s (regenerate with -update, then run core's kernel tests):\n%s",
+			coreContractPath, firstDiff(string(want), got))
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(line, "target ") {
+			return
+		}
+	}
+	t.Fatal("the rename table names no core path: the projection is empty")
+}
+
+// TestRenameTable_CoinedCoreRowsMarked pins the two rows 05-config section
+// 1.12.3 coins and no owner table declared (seams.d/F2-09.md "Not declared"):
+// each is a row of the table with its target marked coined. That the target is
+// a key core declares is core's TestRenameTable_CoreCoinedRowsDeclared.
+func TestRenameTable_CoinedCoreRowsMarked(t *testing.T) {
 	for head, want := range map[string]config.Path{
 		"ai_journal_retention_days": "core.ai.journal_retention",
 		"public_base_url":           "core.http.public_base_url",
@@ -134,48 +136,5 @@ func TestRenameTable_CoreCoinedRowsDeclared(t *testing.T) {
 		if !found {
 			t.Errorf("row %s has no target %s", head, want)
 		}
-		if _, ok := keys[want]; !ok {
-			t.Errorf("%s is not a core key", want)
-		}
-	}
-}
-
-// TestRenameTable_RefuseVerdictsMatchConfig (F3-06's seam item, owner F3-07):
-// a retired name whose canonical path is a core key refuses when config
-// itself would refuse it, a ProtectAdmin-or-higher or secret key anywhere
-// under the path, and warns otherwise. The golden generates its verdicts
-// from the table's own admin column; this compares them with the registry's.
-func TestRenameTable_RefuseVerdictsMatchConfig(t *testing.T) {
-	keys := coreKeys(t)
-	compared := 0
-	for _, r := range Table().Rows {
-		for _, re := range r.Retired {
-			c := re.Canonical
-			if c == "" || !coreScopedPath(c) || re.Verdict == VerdictKept {
-				continue
-			}
-			var under []config.KeyState
-			for k, ks := range keys {
-				if k == c || strings.HasPrefix(string(k), string(c)+".") {
-					under = append(under, ks)
-				}
-			}
-			if len(under) == 0 {
-				continue // the registered-path test reports it
-			}
-			wantRefuse := false
-			for _, ks := range under {
-				if ks.Protection >= config.ProtectAdmin || ks.Secret != nil {
-					wantRefuse = true
-				}
-			}
-			compared++
-			if got := re.Verdict == VerdictRefuse; got != wantRefuse {
-				t.Errorf("row %s retired name %s -> %s: golden verdict %q, config refuses = %v", r.Head, re.Name, c, re.Verdict, wantRefuse)
-			}
-		}
-	}
-	if compared == 0 {
-		t.Fatal("no retired name of a core key was compared")
 	}
 }
