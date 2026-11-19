@@ -350,7 +350,7 @@ func (s *Server) seriesRenameDef() opsregistry.OperationDef {
 			if err := json.Unmarshal(rawParams, &p); err != nil {
 				return fmt.Errorf("series-rename: decode params: %w", err)
 			}
-			h := headSeriesRename{Store: s.store, s: s}
+			h := headSeriesRename{Store: s.storeForWiring(), s: s}
 			return seriesRenameCore(p, seriesRenameEnv{t7Env: t7HeadEnv(reporter, true), Store: h, Writer: h})
 		},
 	}
