@@ -1,5 +1,5 @@
 // file: core/secrets/store.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: be9e243c-f9df-4ff7-930d-10a5b90f2f49
 // last-edited: 2026-11-19
 
@@ -18,6 +18,7 @@ import (
 	"iter"
 	"log/slog"
 	"maps"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/internal/keyedmutex"
+	"github.com/falkcorp/mediacore/internal/statefs"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/keys"
@@ -41,11 +43,23 @@ const writeAttempts = 5
 // and one that leaves it is refused, as os.Root refuses it. Each mutating
 // call takes the crash-point label of its operation (06 §6.5.1's writer
 // table). The interface replaces 05-config §2.3's *os.Root (coined by
-// F3-07).
+// F3-07). RootStateFiles is the one over a plain *os.Root.
 type StateFiles interface {
+	StateReader
+	StateWriter
+}
+
+// StateReader is StateFiles' reading half. Reads take no label: the crash
+// matrix breaks writes only.
+type StateReader interface {
 	Lstat(name string) (fs.FileInfo, error)
 	Open(name string) (io.ReadCloser, error)
 	ReadDir(name string) ([]fs.DirEntry, error)
+}
+
+// StateWriter is StateFiles' writing half; each call takes its operation's
+// crash-point label.
+type StateWriter interface {
 	Chmod(label, name string, mode fs.FileMode) error
 	MkdirAll(label, name string, perm fs.FileMode) error
 	// WriteNew creates name exclusively with perm, writes data, fsyncs and
@@ -56,6 +70,13 @@ type StateFiles interface {
 	Remove(label, name string) error
 	SyncDir(label, name string) error
 }
+
+// RootStateFiles is StateFiles over root with no crash seam: os.Root's
+// refusals (a name that escapes, a symlink on the path) and its O_EXCL and
+// link semantics, with every label ignored. The offline commands use it, and
+// so may any caller that opened the state directory itself. The caller keeps
+// root and closes it.
+func RootStateFiles(root *os.Root) StateFiles { return statefs.FromRoot(root) }
 
 // The crash-point labels of the secret store's boot writes (06 §6.5.1, P4b
 // first; coretest/crashmatrix's writer table). Names coined by F3-07.
