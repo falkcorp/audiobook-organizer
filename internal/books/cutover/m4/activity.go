@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/activity.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5b1f8d36-c4a7-4e09-9d52-0a63e7b1c8f4
 // last-edited: 2026-11-18
 
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 
@@ -52,9 +53,12 @@ const (
 	OutcomeActivityKept      = "activity-unchanged"
 	// OutcomeActivityItemsHeld counts, once per item, the digest items left as
 	// stored inside a row that was otherwise written (or kept): the item is a
-	// repairs reference no run can resolve to one fixer. The row is not held (a
-	// held row would leave its resolvable items under their HEAD def IDs too),
-	// so each such item is counted here and logged instead.
+	// repairs reference no run can resolve to one fixer. The row's other items
+	// are still renamed (holding the row would leave them under their HEAD def
+	// IDs too), so each such item is counted here and logged, and the row is
+	// also recorded once through Hold, with its items' reasons, so it can be
+	// found after the boot. The runner's own "held" outcome therefore counts
+	// such a row as well as the rewritten or unchanged outcome it also gets.
 	OutcomeActivityItemsHeld = "activity-items-held"
 
 	reasonActivityKey  = "the activity row's key does not decode"
@@ -72,7 +76,27 @@ const (
 	// items are renamed.
 	reasonActivityItem          = "a digest item of a repairs def whose operation is not in the task store as a repairs run, so its fixer is unknown"
 	reasonActivityItemAmbiguous = "a digest item of a repairs def whose operations are runs of different fixers, so it has no single kind"
+	// reasonActivityItemSampled holds an item whose op: tags may be a sample.
+	reasonActivityItemSampled = "a digest item of a repairs def from a Summarize row whose operation list may be a sample, so its fixer cannot be known"
 )
+
+// digestOpSampleMax is how many op: tags a Summarize row keeps, and so the most
+// a digest item built from one can carry. It is a pinned copy of
+// summarizeOpSampleMax in internal/books/store/activity_types.go (introduced at
+// 20 by ed93cd5f0, 2026-09-19, never changed): m4 sits at layer 0 and cannot
+// import the store, and the constant is unexported there.
+// TestDigestOpSampleMax_MatchesSummarize fails if the two diverge.
+//
+// Summarize groups change-tier rows by (day, type, source), not by operation,
+// and keeps the lowest summarizeOpSampleMax operation IDs as op: tags. Its
+// distinct_ops and op_ids_truncated live in the summary's Details, which a
+// DigestItem does not carry. An item with this many op: tags may therefore be
+// missing the operations of other fixers, so resolving its fixer from the tags
+// it has could rename it wrongly, and the rename cannot be undone. The only
+// marker a DigestItem has is the op: tags themselves (DigestItemSource); its
+// Summary text ("Summary: N <type> entries ...") could narrow the exactly-20
+// case but is display text, not a contract, so it is not parsed.
+const digestOpSampleMax = 20
 
 // RunReader is the task store's read of one run record: tasks.RunStore.Get.
 // It returns an error wrapping tasks.ErrRunNotFound for a run it does not hold.
@@ -101,7 +125,10 @@ type Activity struct {
 	logger                *slog.Logger
 	runs                  func() RunReader
 	rewritten, kept, held atomic.Int64
-	itemsHeld             atomic.Int64
+	// itemRows counts the rows that were written or kept with at least one
+	// digest item left as stored. Each is also recorded through Hold, so Verify
+	// reports it as held, but it is one of rewritten or kept for Read.
+	itemRows atomic.Int64
 }
 
 // NewActivity returns the in-place activity rewrite with ID id.
@@ -142,11 +169,14 @@ func NewActivity(cfg ActivityConfig, id string, raisesLevel int, after []storage
 		After:           append([]storage.StepRef(nil), after...),
 		RewritesInPlace: true,
 		Step:            a.Step,
+		// Read counts every row once, however many items of it were left as
+		// stored; Held also counts the rows written or kept with such items,
+		// which are recorded through Hold.
 		Verify: func(context.Context, storage.Reader) (datamigrate.VerifyReport, error) {
 			return datamigrate.VerifyReport{
 				Read:    a.rewritten.Load() + a.kept.Load() + a.held.Load(),
 				Written: a.rewritten.Load(),
-				Held:    a.held.Load(),
+				Held:    a.held.Load() + a.itemRows.Load(),
 			}, nil
 		},
 	}, nil
@@ -175,6 +205,18 @@ var errNoRepairsKind = errors.New("m4: a repairs reference has no run to take it
 // not share one kind. It is an errNoRepairsKind: the reference stays as stored.
 var errAmbiguousRepairsKind = fmt.Errorf("%w: its runs are of different kinds", errNoRepairsKind)
 
+// errSampledRepairsKind says a repairs reference's operation list may be a
+// Summarize sample (digestOpSampleMax). It is an errNoRepairsKind too.
+var errSampledRepairsKind = fmt.Errorf("%w: its operation list may be a sample", errNoRepairsKind)
+
+// opRefs is the operations a reference belongs to. sampled is set when ids came
+// from a digest item's op: tags and there are digestOpSampleMax or more of them,
+// so the list may be cut.
+type opRefs struct {
+	ids     []string
+	sampled bool
+}
+
 // kinds resolves the def IDs of one feed row. opID is the operation the
 // reference belongs to (the row's operation_id; a digest item's op: tag).
 type kinds struct {
@@ -193,7 +235,11 @@ type kinds struct {
 // operation), one, or several. With several, every run must resolve to the same
 // kind, else errAmbiguousRepairsKind (errNoRepairsKind if any one cannot be
 // resolved). A def that is no repairs def ignores ops, as kind does.
-func (k *kinds) kindForOps(def string, ops []string) (string, bool, error) {
+func (k *kinds) kindForOps(def string, refs opRefs) (string, bool, error) {
+	if _, repairs, _ := kindOf(def); repairs && refs.sampled {
+		return "", false, errSampledRepairsKind
+	}
+	ops := refs.ids
 	if len(ops) <= 1 {
 		op := ""
 		if len(ops) == 1 {
@@ -274,8 +320,19 @@ func (a *Activity) Step(ctx context.Context, kv storage.KV, w *datamigrate.StepW
 	}
 	for _, reason := range ks.heldItems {
 		a.logger.Warn("m4: a digest item is left as stored", "reason", reason, "key_prefix", keyPrefixOf(kv.Key))
-		a.itemsHeld.Add(1)
 		w.Count(OutcomeActivityItemsHeld)
+	}
+	if len(ks.heldItems) > 0 {
+		// The row is written (or kept) too: Hold only leaves a durable record of
+		// the full key, which the log line above does not carry.
+		a.itemRows.Add(1)
+		var distinct []string // each reason once, in the order first met
+		for _, r := range ks.heldItems {
+			if !slices.Contains(distinct, r) {
+				distinct = append(distinct, r)
+			}
+		}
+		w.Hold(kv.Key, fmt.Sprintf("%d digest item(s) left as stored: %s", len(ks.heldItems), strings.Join(distinct, "; ")))
 	}
 	if !changed {
 		a.kept.Add(1)
@@ -427,16 +484,16 @@ func rewriteEntry(tier string, row map[string]json.RawMessage, ks *kinds) (oldTy
 }
 
 // opsOf is the operations a row's own operation_id names: none or one.
-func opsOf(opID string) []string {
+func opsOf(opID string) opRefs {
 	if opID == "" {
-		return nil
+		return opRefs{}
 	}
-	return []string{opID}
+	return opRefs{ids: []string{opID}}
 }
 
 // renameTags rewrites the def:<id> tags of a tags array (nil or null: none).
 // ops are the operations the tags belong to, for a repairs def.
-func renameTags(raw json.RawMessage, ops []string, ks *kinds) (out json.RawMessage, changed, ok bool, err error) {
+func renameTags(raw json.RawMessage, ops opRefs, ks *kinds) (out json.RawMessage, changed, ok bool, err error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return raw, false, true, nil
 	}
@@ -479,12 +536,12 @@ func opsOfTags(raw json.RawMessage) []string {
 	return ids
 }
 
-// itemOps is the operations a digest item belongs to: its op: tags, else its
-// own operation_id (digest items written before 2026-05-20 carry no tags), else
-// none.
-func itemOps(it map[string]json.RawMessage) []string {
+// itemOps is the operations a digest item belongs to: its op: tags (sampled
+// when there are digestOpSampleMax or more), else its own operation_id (digest
+// items written before 2026-05-20 carry no tags), else none.
+func itemOps(it map[string]json.RawMessage) opRefs {
 	if ids := opsOfTags(it["tags"]); len(ids) > 0 {
-		return ids
+		return opRefs{ids: ids, sampled: len(ids) >= digestOpSampleMax}
 	}
 	var opID string
 	if raw, has := it["operation_id"]; has && json.Unmarshal(raw, &opID) != nil {
@@ -495,9 +552,11 @@ func itemOps(it map[string]json.RawMessage) []string {
 
 // renameDigestItems renames the type and def: tags of each item of a daily
 // digest's details. An item's operations are itemOps. An item whose repairs
-// reference cannot be resolved (errNoRepairsKind) stays exactly as stored, whole,
-// and its reason is added to ks.heldItems; the other items are still renamed. ok
-// is false when an item does not decode.
+// reference cannot be resolved (errNoRepairsKind) keeps its values as stored,
+// whole, and its reason is added to ks.heldItems; the other items are still
+// renamed. When any item is renamed the items array is re-encoded, so every
+// item's values are preserved but its keys are written in sorted order. ok is
+// false when an item does not decode.
 func renameDigestItems(det map[string]json.RawMessage, ks *kinds) (changed, ok bool, err error) {
 	raw, has := det["items"]
 	if !has || string(raw) == "null" {
@@ -510,6 +569,9 @@ func renameDigestItems(det map[string]json.RawMessage, ks *kinds) (changed, ok b
 	for _, it := range items {
 		c, good, err := renameDigestItem(it, ks)
 		switch {
+		case errors.Is(err, errSampledRepairsKind):
+			ks.heldItems = append(ks.heldItems, reasonActivityItemSampled)
+			continue
 		case errors.Is(err, errAmbiguousRepairsKind):
 			ks.heldItems = append(ks.heldItems, reasonActivityItemAmbiguous)
 			continue
