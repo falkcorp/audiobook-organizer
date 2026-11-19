@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/activity.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b1f8d36-c4a7-4e09-9d52-0a63e7b1c8f4
 // last-edited: 2026-11-18
 
@@ -293,7 +293,9 @@ func typeIndexKey(typ, tier, nanos, ulid string) []byte {
 func rewriteEntry(tier string, row map[string]json.RawMessage, ks *kinds) (oldType, newType string, changed, ok bool, err error) {
 	var opID string
 	if raw, has := row["operation_id"]; has {
-		_ = json.Unmarshal(raw, &opID) // a non-string operation_id names no run
+		if json.Unmarshal(raw, &opID) != nil {
+			opID = "" // a non-string operation_id names no run
+		}
 	}
 	if raw, has := row["type"]; has {
 		if json.Unmarshal(raw, &oldType) != nil {
@@ -307,8 +309,12 @@ func rewriteEntry(tier string, row map[string]json.RawMessage, ks *kinds) (oldTy
 			return "", "", false, false, err
 		}
 		if found {
+			enc, err := json.Marshal(k)
+			if err != nil {
+				return "", "", false, false, fmt.Errorf("m4: encode kind %q: %w", k, err)
+			}
 			newType = k
-			row["type"], _ = json.Marshal(k)
+			row["type"] = enc
 			changed = true
 		}
 	}
@@ -346,7 +352,11 @@ func rewriteEntry(tier string, row map[string]json.RawMessage, ks *kinds) (oldTy
 					return "", "", false, false, err
 				}
 				if found {
-					det["def_id"], _ = json.Marshal(k)
+					enc, err := json.Marshal(k)
+					if err != nil {
+						return "", "", false, false, fmt.Errorf("m4: encode kind %q: %w", k, err)
+					}
+					det["def_id"] = enc
 					dc = true
 				}
 			}
@@ -435,7 +445,11 @@ func renameDigestItems(det map[string]json.RawMessage, ks *kinds) (changed, ok b
 				return false, false, err
 			}
 			if found {
-				it["type"], _ = json.Marshal(k)
+				enc, err := json.Marshal(k)
+				if err != nil {
+					return false, false, fmt.Errorf("m4: encode kind %q: %w", k, err)
+				}
+				it["type"] = enc
 				changed = true
 			}
 		}

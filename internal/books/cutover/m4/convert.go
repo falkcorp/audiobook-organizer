@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/convert.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c41d9e07-5a3b-48f2-b6c8-0d7e2f91a354
 // last-edited: 2026-11-18
 
@@ -588,7 +588,9 @@ func (c *converted) rows(rr *runRows) string {
 	ixPrefix := prefixRowIx + rr.id + ":"
 	for _, kv := range rr.rowix {
 		var ix rowIndex
-		_ = json.Unmarshal(kv.Value, &ix) // the index is a summary: an unreadable one leaves Class empty
+		if json.Unmarshal(kv.Value, &ix) != nil {
+			ix = rowIndex{} // the index is a summary: an unreadable one leaves Class empty
+		}
 		index[strings.TrimPrefix(string(kv.Key), ixPrefix)] = ix.Class
 	}
 	rowPrefix := prefixRow + rr.id + ":"
