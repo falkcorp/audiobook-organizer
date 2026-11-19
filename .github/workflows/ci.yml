@@ -606,13 +606,13 @@ jobs:
       - name: DEBUG mirror speed comparison
         run: |
           set +e
-          for h in us-east-2.ec2.archive.ubuntu.com us-west-2.ec2.archive.ubuntu.com us-east-1.ec2.archive.ubuntu.com archive.ubuntu.com azure.archive.ubuntu.com; do
-            for scheme in http; do
-              curl -s -o /dev/null --max-time 20 -w "$h $scheme speed=%{speed_download} B/s bytes=%{size_download} code=%{http_code} connect=%{time_connect}\n" "$scheme://$h/ubuntu/dists/resolute/universe/Contents-amd64.gz"
+          sudo apt-get update >/dev/null 2>&1
+          path=$(apt-get install --print-uris -y --no-install-recommends ffmpeg 2>/dev/null | grep -o "/ubuntu/pool[^']*libavcodec62[^']*" | head -1)
+          echo "probe path: $path"
+          for pass in 1 2; do
+            for h in us-east-2.ec2.archive.ubuntu.com us-west-2.ec2.archive.ubuntu.com archive.ubuntu.com azure.archive.ubuntu.com; do
+              curl -s -o /dev/null --max-time 15 -w "pass$pass $h speed=%{speed_download} B/s bytes=%{size_download} code=%{http_code} connect=%{time_connect}\n" "http://$h$path"
             done
-          done
-          for h in us-east-2.ec2.archive.ubuntu.com archive.ubuntu.com; do
-            curl -s -o /dev/null --max-time 20 -w "second pass $h speed=%{speed_download} B/s bytes=%{size_download}\n" "http://$h/ubuntu/dists/resolute/universe/Contents-amd64.gz"
           done
           exit 1
 
