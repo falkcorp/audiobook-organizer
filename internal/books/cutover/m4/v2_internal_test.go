@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/v2_internal_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 91d6c3a7-5e08-4b4f-a2d9-17c8e0f35b64
 // last-edited: 2026-11-18
 
@@ -140,6 +140,25 @@ func TestLogs_FamilyTieBreak(t *testing.T) {
 	}
 	if got != "v3 v2 err v1 " {
 		t.Errorf("order %q, want v3 v2 err v1", got)
+	}
+}
+
+// TestLogs_SourceSequenceBreaksATimeTie: two lines of one family at one instant
+// order by the sequence number HEAD gave them, not by the order their keys
+// happen to scan in (the key's timestamp comes first, so here the lower number
+// scans second).
+func TestLogs_SourceSequenceBreaksATimeTie(t *testing.T) {
+	at := "2026-11-05T03:00:00Z"
+	rr := &runRows{log: []storage.KV{
+		{Key: []byte("opv3:log:x:00000000000000000100:0000000002"), Value: []byte(`{"at":"` + at + `","message":"second"}`)},
+		{Key: []byte("opv3:log:x:00000000000000000200:0000000001"), Value: []byte(`{"at":"` + at + `","message":"first"}`)},
+	}}
+	c := &converted{}
+	if reason := c.logs(rr); reason != "" {
+		t.Fatal(reason)
+	}
+	if len(c.data.Pages) != 2 || c.data.Pages[0].Log.Message != "first" || c.data.Pages[1].Log.Message != "second" {
+		t.Errorf("pages = %+v, want first then second", c.data.Pages)
 	}
 }
 
