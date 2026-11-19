@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_guards.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 5b0f3e7a-9c41-4d2e-8f6a-2d7c1e4b9a63
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -42,7 +42,9 @@ const (
 // check is repairs.GuardBookPathsWith, the same one the Repairs framework runs on
 // every row, so the two can never disagree about a book. res memoizes symlink
 // resolution per folder across the run's groups (nil: fresh per book).
-func vgGroupGuard(store OpsStore, seriesNames map[int]string, res *repairs.PathResolver, members []database.Book) (kind, reason string, err error) {
+func vgGroupGuard(store interface {
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+}, seriesNames map[int]string, res *repairs.PathResolver, members []database.Book) (kind, reason string, err error) {
 	for i := range members {
 		b := &members[i]
 		if b.IsSoftDeleted() {
