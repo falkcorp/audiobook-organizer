@@ -19,7 +19,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authormerge"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // The maintenance author jobs write a book's credits and its primary author in
@@ -197,6 +199,74 @@ func TestUnlink_ALockAndAnEditTogetherWriteNothing(t *testing.T) {
 	require.Equal(t, []int{junk.ID, other.ID}, creditIDs(t, s, book), "the user's edit was overwritten")
 }
 
+// A book whose junction credits only the junk row but whose primary is a real
+// third author is not held (the primary keeps it an author). If another writer
+// clears that primary after the read, the junk credit is the only thing left and
+// removing it would leave the book with no author at all. The commit compares the
+// WHOLE primary, not just whether it names the junk row, so it refuses: credits
+// and primary stay as the other writer left them and the row is kept.
+func TestUnlink_APrimaryClearedBeforeTheCommitIsNotLeftAuthorless(t *testing.T) {
+	s := newRelinkTrashedStore(t)
+	junk, err := s.CreateAuthor("Crime Alley Junk")
+	require.NoError(t, err)
+	third, err := s.CreateAuthor("Selina Kyle")
+	require.NoError(t, err)
+	book := mkRelinkTrashedBook(t, s, "Year One", junk.ID, false)
+	// The junction credits only the junk row; the primary names a third author.
+	_, err = s.ModifyBook(book, func(b *database.Book) error {
+		b.AuthorID = &third.ID
+		return nil
+	})
+	require.NoError(t, err)
+	db := commitHookDB{PebbleStore: s, beforeCommit: func(id string) {
+		_, merr := s.ModifyBook(id, func(b *database.Book) error {
+			b.AuthorID = nil
+			b.Author = nil
+			return nil
+		})
+		require.NoError(t, merr)
+	}}
+
+	n, held, lockHeld, err := runUnlink(t, db, *junk)
+
+	require.ErrorIs(t, err, errUnlinkInputsChanged)
+	require.Zero(t, n)
+	require.Empty(t, held, "the book has a living primary at the read, it is not a sole-credit hold")
+	require.Empty(t, lockHeld)
+	require.Equal(t, []int{junk.ID}, creditIDs(t, s, book), "the junk credit was removed over a primary that was cleared meanwhile")
+	got, err := s.GetBookByID(book)
+	require.NoError(t, err)
+	require.Nil(t, got.AuthorID, "the other writer's cleared primary was overwritten")
+	row, err := s.GetAuthorByID(junk.ID)
+	require.NoError(t, err)
+	require.NotNil(t, row, "the junk row was deleted though the book was not unlinked")
+}
+
+// The control: the same book with no meanwhile writer unlinks, and its third
+// author stays the primary.
+func TestUnlink_AThirdAuthorPrimaryIsKeptWhenNothingChanged(t *testing.T) {
+	s := newRelinkTrashedStore(t)
+	junk, err := s.CreateAuthor("Crime Alley Junk")
+	require.NoError(t, err)
+	third, err := s.CreateAuthor("Selina Kyle")
+	require.NoError(t, err)
+	book := mkRelinkTrashedBook(t, s, "Year One", junk.ID, false)
+	_, err = s.ModifyBook(book, func(b *database.Book) error {
+		b.AuthorID = &third.ID
+		return nil
+	})
+	require.NoError(t, err)
+
+	n, held, lockHeld, err := runUnlink(t, s, *junk)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	require.Empty(t, held)
+	require.Empty(t, lockHeld)
+	require.Empty(t, creditIDs(t, s, book))
+	require.Equal(t, third.ID, primaryOf(t, s, book))
+}
+
 // An edit to a field the lock does not cover, made after the read, survives the
 // unlink: the commit hydrates the row it finds, it does not write a stale copy.
 func TestUnlink_AnEditToAnotherFieldBeforeTheCommitSurvives(t *testing.T) {
@@ -366,6 +436,43 @@ func TestRelinkBookCredit_AStoreWithoutTheCreditsCommitIsRefused(t *testing.T) {
 	require.Equal(t, []int{junk.ID, co.ID}, creditIDs(t, s, book.ID))
 }
 
+// A book another writer re-credited meanwhile, so that neither its junction nor
+// its primary names the junk row any more, is not given the survivor: the relink
+// refuses with an error (its caller voids the journal row it wrote first) and the
+// writer's credits stand.
+func TestRelinkBookCredit_ABookThatLeftTheJunkRowIsRefused(t *testing.T) {
+	s, junk, into, co, book := relinkWorld(t)
+	db := commitHookDB{PebbleStore: s, beforeCommit: func(id string) {
+		require.NoError(t, s.SetBookAuthors(id, []database.BookAuthor{{BookID: id, AuthorID: co.ID, Role: "author", Position: 0}}))
+		_, merr := s.ModifyBook(id, func(b *database.Book) error {
+			b.AuthorID = &co.ID
+			return nil
+		})
+		require.NoError(t, merr)
+	}}
+
+	held, err := relinkBookCredit(db, book, junk, into)
+
+	require.ErrorIs(t, err, errRelinkSourceGone)
+	require.False(t, held)
+	require.Equal(t, []int{co.ID}, creditIDs(t, s, book.ID), "the survivor was credited on a book that had left the junk row")
+	require.Equal(t, co.ID, primaryOf(t, s, book.ID))
+}
+
+// A book that still credits the junk row only through its primary (no junction
+// row names it) is still relinked: either link is enough.
+func TestRelinkBookCredit_ABookCreditedOnlyThroughItsPrimaryIsRelinked(t *testing.T) {
+	s, junk, into, co, book := relinkWorld(t)
+	require.NoError(t, s.SetBookAuthors(book.ID, []database.BookAuthor{{BookID: book.ID, AuthorID: co.ID, Role: "author", Position: 0}}))
+
+	held, err := relinkBookCredit(s, book, junk, into)
+
+	require.NoError(t, err)
+	require.False(t, held)
+	require.Equal(t, into.ID, primaryOf(t, s, book.ID))
+	require.Contains(t, creditIDs(t, s, book.ID), into.ID)
+}
+
 // creditsRefused answers ModifyBookCredits the way t6g1HeadWriter does for a
 // store without the capability.
 type creditsRefused struct{ *database.PebbleStore }
@@ -388,6 +495,60 @@ func TestMergeAuthorInto_AStoreWithoutTheCreditsCommitIsRefused(t *testing.T) {
 	require.Zero(t, n)
 	requireMergeHeld(t, w, w.books[0], "")
 	requireMergeHeld(t, w, w.books[1], "")
+}
+
+// voidedCreditsRows is the author_merge_credits rows an op journaled for a book:
+// rows[i].Voided says whether the write they describe did not happen.
+func voidedCreditsRows(t *testing.T, st *database.PebbleStore, opID, bookID string) []*database.OperationChange {
+	t.Helper()
+	all, err := st.GetOperationChanges(opID)
+	require.NoError(t, err)
+	var rows []*database.OperationChange
+	for _, c := range all {
+		if c.BookID == bookID && c.ChangeType == undo.ChangeTypeAuthorMergeCredits {
+			rows = append(rows, c)
+		}
+	}
+	return rows
+}
+
+// A person's credit edit that lands after the merge read the book's credits and
+// before its commit is never written over: the commit compares the credits it
+// finds with the ones the merge decided on (authormerge.ErrCreditsChanged),
+// refuses, voids the row it journaled for the book, and the merge stops with the
+// author kept. It is not reported as a lock hold: no lock was saved.
+func TestMergeAuthorInto_ACreditEditBeforeTheCommitSurvivesAndVoidsItsRow(t *testing.T) {
+	w := newMergeUndoWorld(t, "Joker Edit From", "Joker Edit Into", 0)
+	extra, err := w.st.CreateAuthor("Barbara Gordon")
+	require.NoError(t, err)
+	var edited string
+	var want []database.BookAuthor
+	db := commitHookDB{PebbleStore: w.st, beforeCommit: func(id string) {
+		if edited != "" {
+			return
+		}
+		edited = id
+		cur, gerr := w.st.GetBookAuthors(id)
+		require.NoError(t, gerr)
+		want = append(cur, database.BookAuthor{BookID: id, AuthorID: extra.ID, Role: "author", Position: len(cur)})
+		require.NoError(t, w.st.SetBookAuthors(id, want))
+	}}
+
+	n, _, err := mergeAuthorIntoVia(context.Background(), t6g1HeadStore{w.st}, t6g1HeadWriter{db}, w.from, w.into, false, "op-merge-edit", slog.Default())
+
+	require.ErrorIs(t, err, authormerge.ErrCreditsChanged)
+	require.False(t, errors.Is(err, errAuthorMergeUserLocked), "a changed list was reported as a lock hold: %v", err)
+	require.Zero(t, n)
+	got, gerr := w.st.GetBookAuthors(edited)
+	require.NoError(t, gerr)
+	require.Equal(t, want, got, "the person's credit edit was overwritten by a list read before it")
+	rows := voidedCreditsRows(t, w.st, "op-merge-edit", edited)
+	require.Len(t, rows, 1)
+	require.True(t, rows[0].Voided, "the row of a refused move stands")
+	kept, err := w.st.GetAuthorByID(w.from.ID)
+	require.NoError(t, err)
+	require.NotNil(t, kept)
+	require.Equal(t, w.from.ID, kept.ID, "the author was merged away over an edited book")
 }
 
 // ---- the held bucket across the three callers ----
@@ -682,6 +843,40 @@ func TestAuthorStripMerge_UnlockedNumberedRowMerges(t *testing.T) {
 	summary := runStripMergeOnStore(t, w.st)
 
 	wantSummary(t, summary, "merged=1 ", "merges-held-user-locked=0 ", "failed=0 ", "books-touched=2 ")
+}
+
+func runStripMergePreview(t *testing.T, st database.Store) string {
+	t.Helper()
+	rep := &summaryReporter{}
+	require.NoError(t, New(&fakeDeps{store: st}).runAuthorStripMerge(context.Background(), []byte(`{"apply":false}`), rep))
+	return rep.summary(t)
+}
+
+// The report-only run checks merge locks as the apply does: a numbered row with a
+// locked book is counted merges-held-user-locked, so the preview does not promise
+// a merge the apply will hold, and it writes nothing.
+func TestAuthorStripMerge_PreviewCountsAMergeHeldByALockedBook(t *testing.T) {
+	w := newHeldMergeWorld(t, "001-147 Selina Kyle", "Selina Kyle", 1)
+	lockBookAuthor(t, w.st, w.locked)
+
+	summary := runStripMergePreview(t, w.st)
+
+	wantSummary(t, summary, "merges-held-user-locked=1 ", "failed=0 ", "merged=0 ", "books-touched=0 ")
+	w.requireBookAsItWas(t, w.open)
+	w.requireBookAsItWas(t, w.locked)
+	w.requireFromKept(t)
+}
+
+// The control: with no lock the preview holds nothing and still writes nothing.
+func TestAuthorStripMerge_PreviewOfAnUnlockedMergeHoldsNothingAndWritesNothing(t *testing.T) {
+	w := newHeldMergeWorld(t, "001-147 Selina Kyle", "Selina Kyle", 1)
+
+	summary := runStripMergePreview(t, w.st)
+
+	wantSummary(t, summary, "merges-held-user-locked=0 ", "failed=0 ", "merged=0 ", "books-touched=0 ", "mergeable=1 ")
+	w.requireBookAsItWas(t, w.open)
+	w.requireBookAsItWas(t, w.locked)
+	w.requireFromKept(t)
 }
 
 // ---- journal rows of a relink that did not write are voided (m2) ----

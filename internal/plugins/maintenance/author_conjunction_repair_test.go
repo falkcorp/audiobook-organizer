@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_conjunction_repair_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 8e35b7d2-1c40-4f96-a2e7-5b9d0c68a341
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -67,6 +67,7 @@ func newConjRepairPlugin(
 		GetBooksByAuthorIDWithRoleFunc: func(authorID int) ([]database.BookCore, error) {
 			return booksByAuthor[authorID], nil
 		},
+		GetBookByIDFunc: listedBookRows(booksByAuthor),
 		GetBookAuthorsFunc: func(bookID string) ([]database.BookAuthor, error) {
 			w.getBookAuthorsN++
 			return joins[bookID], nil
@@ -129,6 +130,7 @@ func newConjRepairPluginWithDeps(
 		GetBooksByAuthorIDWithRoleFunc: func(authorID int) ([]database.BookCore, error) {
 			return booksByAuthor[authorID], nil
 		},
+		GetBookByIDFunc: listedBookRows(booksByAuthor),
 		GetBookAuthorsFunc: func(bookID string) ([]database.BookAuthor, error) {
 			return joins[bookID], nil
 		},

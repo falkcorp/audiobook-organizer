@@ -664,6 +664,10 @@ func creditsMovedOnto(bookID string, bookAuthors []database.BookAuthor, fromID, 
 	return updated
 }
 
+// errRelinkSourceGone: a title relink found, inside its commit, that the book no
+// longer credits the row it was moving the credit off.
+var errRelinkSourceGone = errors.New("book no longer credits the author the relink moves it off")
+
 // relinkBookCredit moves one book's credit from `from` to `into`: the
 // book_authors junction (keeping the role the from row carried, and not
 // duplicating into when the book already credits it) and, when it named from,
@@ -681,8 +685,9 @@ func creditsMovedOnto(bookID string, bookAuthors []database.BookAuthor, fromID, 
 // (database.ModifyBookCreditsRespectingLocks), so there is no write to put
 // back, no stale list to restore and no window between a credit write and a
 // primary write; a co-author's credit is held by the same lock as the primary.
-// A lock set that cannot be read, or a store that cannot make the one commit,
-// is an error and writes nothing.
+// A lock set that cannot be read, a store that cannot make the one commit, or a
+// book that no longer credits from when the commit runs (errRelinkSourceGone) is
+// an error and writes nothing.
 //
 // err means the book was not relinked. Its caller is author-strip-merge's
 // title-as-author relink (one book at a time), which journals the move itself
@@ -695,6 +700,16 @@ func relinkBookCredit(store interface {
 }, book database.BookCore, from, into database.Author) (held bool, err error) {
 	target := into
 	written, heldKeys, err := database.ModifyBookCreditsRespectingLocks(store, store, book.ID, func(cur *database.Book, credits *database.BookCreditsEdit) error {
+		// Decided on the fresh state: a book that no longer credits from (junction
+		// and primary both) was re-credited by someone since the relink chose it, so
+		// adding into to their list would be a write nobody decided. Refused with an
+		// error, which the caller reads as "nothing written" and voids its journal
+		// row for.
+		namesFrom := slices.ContainsFunc(credits.Authors, func(ba database.BookAuthor) bool { return ba.AuthorID == from.ID }) ||
+			(cur.AuthorID != nil && *cur.AuthorID == from.ID)
+		if !namesFrom {
+			return errRelinkSourceGone
+		}
 		credits.Authors = creditsMovedOnto(book.ID, credits.Authors, from.ID, into.ID)
 		if cur.AuthorID != nil && *cur.AuthorID == from.ID {
 			cur.AuthorID = &target.ID
