@@ -8,6 +8,7 @@ package appconfig
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"iter"
 	"slices"
 	"sync"
@@ -26,6 +27,9 @@ type fakeAccess struct {
 	regSecret map[coreconfig.Path]bool // registered secret keys
 	secrets   map[secrets.Name]string  // the secret store
 	unreadble map[secrets.Name]bool
+	secretErr map[secrets.Name]error // a bare error Secret returns, with no Meta.Err
+	envSecret map[secrets.Name]bool
+	putFail   map[secrets.Name]bool
 	pass      map[coreconfig.Path]coreconfig.OperatorValue
 	gen       uint64
 	hooks     []func(uint64)
@@ -38,7 +42,7 @@ type fakeAccess struct {
 
 func newFake() *fakeAccess {
 	return &fakeAccess{vals: map[coreconfig.Path]json.RawMessage{}, locked: map[coreconfig.Path]string{},
-		regSecret: map[coreconfig.Path]bool{}, secrets: map[secrets.Name]string{}, unreadble: map[secrets.Name]bool{},
+		regSecret: map[coreconfig.Path]bool{}, secrets: map[secrets.Name]string{}, unreadble: map[secrets.Name]bool{}, secretErr: map[secrets.Name]error{}, envSecret: map[secrets.Name]bool{}, putFail: map[secrets.Name]bool{},
 		pass: map[coreconfig.Path]coreconfig.OperatorValue{}}
 }
 
@@ -132,16 +136,26 @@ func (f *fakeAccess) Secret(_ context.Context, n secrets.Name) (secrets.Value, s
 	if f.unreadble[n] {
 		return secrets.Value{}, secrets.Meta{Name: n, Set: true, Err: secrets.ErrCorrupt}, secrets.ErrCorrupt
 	}
+	if err := f.secretErr[n]; err != nil {
+		return secrets.Value{}, secrets.Meta{Name: n, Set: true}, err
+	}
 	v, ok := f.secrets[n]
 	if !ok {
 		return secrets.Value{}, secrets.Meta{Name: n}, secrets.ErrNotSet
 	}
-	return secrets.NewValue(v), secrets.Meta{Name: n, Set: true, Source: secrets.SourceStored, Fingerprint: "abcd1234"}, nil
+	src := secrets.SourceStored
+	if f.envSecret[n] {
+		src = secrets.SourceEnv
+	}
+	return secrets.NewValue(v), secrets.Meta{Name: n, Set: true, Source: src, Fingerprint: "abcd1234"}, nil
 }
 
 func (f *fakeAccess) PutSecret(_ context.Context, n secrets.Name, v secrets.Value, by string) (secrets.Meta, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.putFail[n] {
+		return secrets.Meta{}, errors.New("secret store is read-only")
+	}
 	f.secrets[n] = v.Reveal()
 	f.puts = append(f.puts, n)
 	f.by = append(f.by, by)

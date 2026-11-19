@@ -333,8 +333,9 @@ func TestEngine_ResidualFieldsRoundTrip(t *testing.T) {
 	if _, err := e.Update(t.Context(), adminActor, config.Update{Set: map[string]json.RawMessage{"protected_paths": json.RawMessage(`"not a list"`)}}); !errors.Is(err, coreconfig.ErrInvalid) {
 		t.Fatalf("a value of the wrong shape: %v", err)
 	}
-	if _, err := e.Update(t.Context(), adminActor, config.Update{Unset: []string{"protected_paths"}}); err != nil {
-		t.Fatal(err)
+	unres, err := e.Update(t.Context(), adminActor, config.Update{Unset: []string{"protected_paths"}})
+	if err != nil || !slices.Equal(unres.Applied, []string{"protected_paths"}) {
+		t.Fatalf("unset: err=%v applied=%v", err, unres.Applied)
 	}
 	if _, still := res.vals["protected_paths"]; still || len(e.Snapshot().ProtectedPaths) != 0 {
 		t.Fatalf("unset left protected_paths = %v", res.vals["protected_paths"])
@@ -348,5 +349,115 @@ func TestEngine_ResidualFieldsRoundTrip(t *testing.T) {
 	bare := New(newFake(), nil)
 	if err := bare.Mutate(func(c *config.Config) { c.OpenAIBaseURL = "x" }); !errors.Is(err, coreconfig.ErrUnknownKey) {
 		t.Fatalf("no Residual: err=%v", err)
+	}
+}
+
+// TestEngine_SecretStatesAndMissingKeys: an unset secret is simply empty; a key
+// the store does not register is reported by Missing; a secret the key cannot
+// decrypt (corrupt record, or no key) is unreadable, not projected; an
+// env-supplied secret is locked.
+func TestEngine_SecretStatesAndMissingKeys(t *testing.T) {
+	e, f, _ := engineOver(t)
+	if m := e.Missing(); !slices.Contains(m, "log_format") && len(m) == 0 {
+		t.Fatalf("Missing() = %v: the fake registers only two keys, the rest are missing", m)
+	}
+	if slices.Contains(e.Missing(), "log_level") || slices.Contains(e.Missing(), "openai_api_key") {
+		t.Fatalf("Missing() lists a registered key or an unset secret: %v", e.Missing())
+	}
+	for _, c := range []struct {
+		name string
+		err  error
+	}{{"corrupt", secrets.ErrCorrupt}, {"no key", secrets.ErrKeyUnavailable}} {
+		f.secrets["integrations.ai.openai.api_key"] = "x"
+		f.secretErr["integrations.ai.openai.api_key"] = c.err
+		if err := e.Rebuild(t.Context()); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		unreadable := false
+		for _, kv := range e.View().Keys {
+			if kv.Name == "openai_api_key" && kv.Secret != nil && kv.Secret.Unreadable {
+				unreadable = true
+			}
+		}
+		if !unreadable || e.Snapshot().OpenAIAPIKey != "" {
+			t.Errorf("%s: unreadable=%v key=%q", c.name, unreadable, e.Snapshot().OpenAIAPIKey)
+		}
+	}
+	delete(f.secretErr, "integrations.ai.openai.api_key")
+	f.envSecret["integrations.ai.openai.api_key"] = true
+	if err := e.Rebuild(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if e.Locks()["openai_api_key"] != "env" || e.Snapshot().OpenAIAPIKey != "x" {
+		t.Errorf("env secret: locks=%v key=%q", e.Locks(), e.Snapshot().OpenAIAPIKey)
+	}
+}
+
+// TestEngine_RebuildErrorsKeepTheProjection: a residual that cannot be read fails
+// the rebuild and the previous projection stays; a no-change Mutate publishes
+// nothing; a secret write that fails after another committed still re-projects
+// what committed.
+func TestEngine_RebuildErrorsKeepTheProjection(t *testing.T) {
+	f := newFake()
+	f.vals["core.log.level"] = json.RawMessage(`"warn"`)
+	res := newFakeResidual()
+	e := New(f, nil, WithResidual(res))
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	res.loadEr = errors.New("blob unreadable")
+	f.vals["core.log.level"] = json.RawMessage(`"debug"`)
+	if err := e.Rebuild(t.Context()); err == nil || e.Snapshot().LogLevel != "warn" {
+		t.Fatalf("Rebuild with an unreadable residual: err=%v level=%q (want the old projection)", err, e.Snapshot().LogLevel)
+	}
+	res.loadEr = nil
+	if err := e.Rebuild(t.Context()); err != nil || e.Snapshot().LogLevel != "debug" {
+		t.Fatalf("Rebuild: %v %q", err, e.Snapshot().LogLevel)
+	}
+	g := e.Generation()
+	if err := e.Mutate(func(*config.Config) {}); err != nil || e.Generation() != g {
+		t.Fatalf("no-op Mutate moved the generation %d -> %d (err %v)", g, e.Generation(), err)
+	}
+	f.putFail["integrations.ai.openai.api_key"] = true // hardcover sorts first, so it commits before this fails
+	_, err := e.Update(t.Context(), adminActor, config.Update{Set: map[string]json.RawMessage{
+		"openai_api_key": json.RawMessage(`"joker"`), "hardcover_api_token": json.RawMessage(`"penguin"`)}})
+	if err == nil {
+		t.Fatal("expected openai_api_key's failure")
+	}
+	if got := e.Snapshot().OpenAIAPIKey + "/" + e.Snapshot().HardcoverAPIToken; got != "/penguin" {
+		t.Fatalf("after a half-applied secret write the projection is %q, want /penguin (what committed)", got)
+	}
+}
+
+// TestEngine_AHolderRowNeverCarriesTheSecretInsideIt: download_client is a class-i
+// row whose struct holds the Deluge password, a secret row of its own. The
+// residual gets the struct without the password, the password goes to the
+// secret store, and the view of download_client shows no password.
+func TestEngine_AHolderRowNeverCarriesTheSecretInsideIt(t *testing.T) {
+	f := newFake()
+	res := newFakeResidual()
+	e := New(f, nil, WithResidual(res))
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	err := e.Mutate(func(c *config.Config) {
+		c.DownloadClient.Torrent.Deluge.Host = "192.0.2.20"
+		c.DownloadClient.Torrent.Deluge.Password = "ra's-al-ghul"
+	})
+	if err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	if strings.Contains(string(res.vals["download_client"]), "ra's-al-ghul") || strings.Contains(string(res.vals["download_client.torrent.deluge.host"]), "ra's") {
+		t.Fatalf("the residual holds the password: %v", res.vals)
+	}
+	if f.secrets["integrations.download.deluge.daemon_password"] != "ra's-al-ghul" {
+		t.Fatalf("the password did not reach the secret store: %v", f.secrets)
+	}
+	bs, _ := json.Marshal(e.View())
+	if strings.Contains(string(bs), "ra's-al-ghul") {
+		t.Fatal("the view carries the password")
+	}
+	if e.Snapshot().DownloadClient.Torrent.Deluge.Password != "ra's-al-ghul" || e.Snapshot().DownloadClient.Torrent.Deluge.Host != "192.0.2.20" {
+		t.Fatalf("projection: %+v", e.Snapshot().DownloadClient)
 	}
 }

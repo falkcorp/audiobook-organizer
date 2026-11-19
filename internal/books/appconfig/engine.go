@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"iter"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -28,10 +29,14 @@ import (
 // of HEAD's flat Config and rebuilds it, through the rename table, whenever a
 // core Apply commits.
 type Engine struct {
-	acc     Store
-	tab     *cutover.RenameTable
-	rows    []projRow
-	byHead  map[string]projRow
+	acc    Store
+	tab    *cutover.RenameTable
+	rows   []projRow
+	byHead map[string]projRow
+	// below is, for a row whose field holds other rows' fields (download_client
+	// holds the Deluge password, a secret row of its own), their paths: the
+	// holder's own value leaves them out, so a secret never lands in the residual.
+	below   map[string][][]string
 	res     Residual
 	publish func(config.Config)
 	log     *logger.StandardLogger
@@ -99,6 +104,14 @@ func New(acc Store, publish func(config.Config), opts ...Option) *Engine {
 		byHead[p.row.Head] = p
 	}
 	e.tab, e.rows, e.byHead = tab, rows, byHead
+	e.below = map[string][][]string{}
+	for _, p := range rows {
+		for _, q := range rows {
+			if len(q.segs) > len(p.segs) && slices.Equal(q.segs[:len(p.segs)], p.segs) {
+				e.below[p.row.Head] = append(e.below[p.row.Head], q.segs)
+			}
+		}
+	}
 	return e
 }
 
@@ -162,6 +175,9 @@ func plan(tab *cutover.RenameTable, residual bool) []projRow {
 			}
 		}
 	}
+	// Holders before the rows inside them, so a nested row's value is the last
+	// word on its field.
+	slices.SortStableFunc(out, func(a, b projRow) int { return len(a.segs) - len(b.segs) })
 	return out
 }
 
@@ -275,9 +291,6 @@ func (e *Engine) read(ctx context.Context, p projRow, pass map[coreconfig.Path]c
 			return nil, "", readUnset, nil
 		}
 		out, err := unconvert(t.Convert, ov.Value)
-		if errors.Is(err, cutover.ErrNotStaged) {
-			return nil, "", readUnset, nil
-		}
 		return out, ov.By, readOK, err
 	default:
 		st, ok := e.acc.Lookup(coreconfig.Path(t.Path))
@@ -285,9 +298,6 @@ func (e *Engine) read(ctx context.Context, p projRow, pass map[coreconfig.Path]c
 			return nil, "", readMissing, nil
 		}
 		out, err := unconvert(t.Convert, st.Effective)
-		if errors.Is(err, cutover.ErrNotStaged) {
-			return nil, "", readUnset, nil
-		}
 		return out, st.LockedBy, readOK, err
 	}
 }
@@ -309,11 +319,31 @@ func unconvert(name string, in json.RawMessage) (json.RawMessage, error) {
 	return in, nil
 }
 
+// own is the field of cfg that p's row stores, with the fields of the rows
+// inside it zeroed on a private copy of cfg.
+func (e *Engine) own(cfg config.Config, p projRow) (reflect.Value, bool) {
+	for _, segs := range e.below[p.row.Head] {
+		if f, ok := fieldAt(&cfg, segs); ok {
+			f.SetZero()
+		}
+	}
+	return fieldAt(&cfg, p.segs)
+}
+
 // Snapshot is the projection as a value copy.
 func (e *Engine) Snapshot() config.Config {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.cur
+}
+
+// Missing lists the rows whose canonical key the core store does not register,
+// sorted: a wiring fault (the table names a key no section declares), reported
+// here and by the oracle test rather than projected as a silent zero.
+func (e *Engine) Missing() []string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return slices.Sorted(maps.Keys(e.missing))
 }
 
 // Generation counts published projections.
@@ -344,7 +374,7 @@ func (e *Engine) View() config.View {
 		kv := config.KeyView{Name: p.row.Head, Class: config.KeyClass(p.row.Class), LockedBy: locks[p.row.Head], Admin: p.row.Admin}
 		switch {
 		case p.residual:
-			if f, ok := fieldAt(&cur, p.segs); ok {
+			if f, ok := e.own(cur, p); ok {
 				if raw, err := json.Marshal(f.Interface()); err == nil {
 					kv.Value = e.res.Redact(p.row.Head, raw)
 				}
@@ -352,7 +382,7 @@ func (e *Engine) View() config.View {
 		case p.target.Kind == cutover.TargetSecret:
 			kv.Secret = e.secretMeta(p, unreadable[p.row.Head])
 		default:
-			if f, ok := fieldAt(&cur, p.segs); ok {
+			if f, ok := e.own(cur, p); ok {
 				if raw, err := json.Marshal(f.Interface()); err == nil {
 					kv.Value = raw
 				}

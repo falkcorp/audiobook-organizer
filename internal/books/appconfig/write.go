@@ -74,8 +74,8 @@ func (e *Engine) diff(before, after config.Config) (map[string]json.RawMessage, 
 		for i := 1; i < len(p.segs); i++ {
 			below[strings.Join(p.segs[:i], ".")] = true
 		}
-		bf, ok1 := fieldAt(&before, p.segs)
-		af, ok2 := fieldAt(&after, p.segs)
+		bf, ok1 := e.own(before, p)
+		af, ok2 := e.own(after, p)
 		if !ok1 || !ok2 || reflect.DeepEqual(bf.Interface(), af.Interface()) {
 			continue
 		}
