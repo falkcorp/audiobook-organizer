@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.210.2
+// version: 2.211.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-11-18
 
@@ -6381,8 +6381,15 @@ export interface ReconcilePreview {
   unmatched_books: ReconcileBrokenRecord[];
 }
 
+// match_type is the scan's ReconcileMatch.match_type for the item. The server
+// keeps the stored hashes only for 'hash'; an item that omits it, or carries
+// another type, has them cleared.
 export async function startReconcile(
-  matches: Array<{ book_id: string; new_path: string }>
+  matches: Array<{
+    book_id: string;
+    new_path: string;
+    match_type?: ReconcileMatch['match_type'];
+  }>
 ): Promise<Operation> {
   return wrapTrigger('library.reconcile', async () => {
     const response = await apiFetch(`${API_BASE}/operations/reconcile`, {
