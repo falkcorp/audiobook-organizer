@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/jobs.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8f23f612-3a1b-415d-8bc4-11836c3c671e
 // last-edited: 2026-11-19
 
@@ -38,12 +38,14 @@ type aiJob struct {
 	LastApplyAt   time.Time `json:"last_apply_at"`
 }
 
-// jobLossy are the aijob fields StoredJob has no field for (05-ai section 10
-// maps the row onto StoredJob, which keeps identity, state, handle, attempts,
-// payload and times): custom_id_prefix, item_count, success_count, error_count,
-// row_errors, error_msg, applied, last_apply_error. A terminal job's counts and
-// error text are history that does not survive the cutover; an open job's are
-// recomputed by the native poll and apply, which HEAD's replay does too.
+// jobLossy are the aijob fields StoredJob has no field for (05-ai section 10 maps
+// the row onto StoredJob, which keeps identity, state, handle, attempts, payload
+// and times). A terminal job's counts and error text are history that does not
+// survive the cutover; an open job's are recomputed by the native poll and
+// apply, which HEAD's replay does too. TestFrozenDecoders_CoverHEADFields holds
+// aiJob and this list to HEAD's AIJob, so a field HEAD adds before the freeze is
+// a failing test and not a silent drop.
+var jobLossy = []string{"custom_id_prefix", "item_count", "success_count", "error_count", "row_errors", "error_msg", "applied", "last_apply_error"}
 
 // jobState is the table of 05-ai section 10: HEAD's status to the native state.
 func jobState(status string) (ai.JobState, bool) {
@@ -68,6 +70,10 @@ func jobState(status string) (ai.JobState, bool) {
 func (m *Migration) job(ctx context.Context, c *chunk, kv storage.KV) error {
 	key := string(kv.Key)
 	id := key[len(PrefixAIJob):]
+	if id == "" {
+		// "aijob:" names no job, and core refuses a job with no ID.
+		return c.quarantine(key, kv.Value, reasonJobKey)
+	}
 	var row aiJob
 	if err := json.Unmarshal(kv.Value, &row); err != nil {
 		return c.quarantine(key, kv.Value, reasonJobUndecodable)
@@ -88,6 +94,7 @@ func (m *Migration) job(ctx context.Context, c *chunk, kv storage.KV) error {
 	// row under the same batch ID that names another is another job's, or an
 	// orphan, and is quarantined when the shard reaches it.
 	var batchKey string
+	var batchRaw []byte
 	if row.BatchID != "" {
 		batchKey = PrefixAIJobBatch + row.BatchID
 		raw, err := m.get(ctx, batchKey)
@@ -96,6 +103,8 @@ func (m *Migration) job(ctx context.Context, c *chunk, kv storage.KV) error {
 		}
 		if raw == nil || string(raw) != id {
 			batchKey = ""
+		} else {
+			batchRaw = raw
 		}
 	}
 
@@ -128,8 +137,22 @@ func (m *Migration) job(ctx context.Context, c *chunk, kv storage.KV) error {
 	m.report(Entry{Kind: "job", ID: id, Detail: state.String()})
 	switch err := m.cfg.AI.ImportJob(ctx, c.batch(), job); {
 	case err == nil:
-	case errors.Is(err, storage.ErrImportConflict):
-		return c.quarantine(key, kv.Value, reasonJobConflict)
+	case errors.Is(err, storage.ErrImportConflict), errors.Is(err, ai.ErrJobConflict):
+		// Core holds a different job under this ID, or one in a state an import
+		// cannot replace. The job's own payload and batch index rows go aside with
+		// it under their own reason: they are not orphans, their job existed.
+		if err := c.quarantine(key, kv.Value, reasonJobConflict); err != nil {
+			return err
+		}
+		if payload != nil {
+			if err := c.quarantine(payloadKey, payload, reasonJobConflictOwned); err != nil {
+				return err
+			}
+		}
+		if batchKey != "" {
+			return c.quarantine(batchKey, batchRaw, reasonJobConflictOwned)
+		}
+		return nil
 	default:
 		return errors.Join(errors.New("m6: import job "+id), err)
 	}

@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/rig_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 7be2c0d4-8a51-4c3e-b0a6-2f1d94c7e6a3
 // last-edited: 2026-11-19
 
@@ -37,7 +37,6 @@ import (
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
 	"github.com/falkcorp/mediacore/storage/keys"
-	"github.com/falkcorp/mediacore/tasks"
 )
 
 // The M6 test rig: books' store (an empty one with synthetic Batman-shaped HEAD
@@ -387,8 +386,6 @@ type rig struct {
 	chunkItems int
 	// mutate edits books' legacy range after the pre-freeze boot.
 	mutate func(ctx context.Context, t testing.TB, lr storage.LegacyRange)
-	// parallelism overrides the step's declaration.
-	parallelism func(*datamigrate.DataMigration)
 	// effective is the operator overlay the step's Effective answers, by
 	// instance ref ("download/deluge"): URL field to the URL as supplied.
 	effective map[string]map[string]string
@@ -491,9 +488,6 @@ func (r *rig) owners(cut bool) []storage.OwnerSpec {
 	}
 }
 
-// fixedOne is the step's own declaration: one shard, key order.
-func fixedOne() tasks.Parallelism { return tasks.Sequential("test: one shard in key order") }
-
 // logger is the step's logger: the rig's buffer, or none.
 func (r *rig) logger() *slog.Logger {
 	if r.noLogger {
@@ -526,9 +520,6 @@ func (r *rig) migration() datamigrate.DataMigration {
 	dm, err := m6.New(r.config(), cutover.IntegrationsCutoverID, cutover.BooksCutoverLevel, []storage.StepRef{cutover.BooksLevelStepRef(r.levelVersion())})
 	if err != nil {
 		r.t.Fatal(err)
-	}
-	if r.parallelism != nil {
-		r.parallelism(&dm)
 	}
 	return dm
 }

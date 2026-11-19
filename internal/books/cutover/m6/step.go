@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/step.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: ff3e2f5f-1fc0-4835-b579-944568abeb07
 // last-edited: 2026-11-19
 
@@ -98,6 +98,7 @@ const (
 	reasonJobState         = "the aijob row's status is not one HEAD wrote"
 	reasonJobKey           = "the aijob row's id is not its key"
 	reasonJobConflict      = "core already holds a different job under this ID"
+	reasonJobConflictOwned = "the aijob row this row belongs to was not imported: core already holds a different job under its ID"
 	reasonOrphanPayload    = "the aijob_payload row has no aijob row"
 	reasonOrphanBatch      = "the aijob_batch index row names no aijob row that holds it"
 	reasonBlobUndecodable  = "the settings blob does not decode"
@@ -107,6 +108,7 @@ const (
 	reasonUnmappable       = "the iTunes mapping's To is under no library root"
 	reasonUnknownRow       = "a row of a family M6 drains that no decoder reads"
 	reasonUnprovenURL      = "a credential cannot be ruled out of the URL"
+	reasonListRefused      = "core refused the config list this row feeds"
 	reasonInstanceConflict = "core already holds a different instance under this ID"
 	reasonAliasNoRoot      = "the path alias names no root M6 registers"
 	reasonRootPath         = "the root path is not an absolute host path"

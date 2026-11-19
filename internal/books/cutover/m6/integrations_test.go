@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/integrations_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0b7c39d5-6a18-4e2f-9d40-c85a1f2e7b63
 // last-edited: 2026-11-19
 
@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/cutover/m6"
 	"github.com/falkcorp/mediacore/secrets"
 )
 
@@ -286,5 +287,87 @@ func TestIntegrationsMigration_DigitLeadingIDNormalized(t *testing.T) {
 	}
 	if !quarantinedBad {
 		t.Error("an ID no rename makes valid (a space) was not quarantined")
+	}
+}
+
+// renamedSource adds a metadata source whose HEAD ID core's grammar renames
+// (batcave_db becomes batcave-db), with the credential M2 stored under HEAD's ID.
+func renamedSource(r *rig) {
+	tree := blobTree()
+	tree["metadata_sources"] = append(tree["metadata_sources"].([]any),
+		map[string]any{"id": "batcave_db", "name": "Batcave DB", "enabled": true, "priority": 4})
+	withRows(map[string][]byte{m6.KeyBlob: blobRow(r.t, tree)})(r)
+	r.secrets.seed["integrations.metadata.batcave_db.credentials.api_key"] = "fixture-batcave-db-key-lucius"
+}
+
+// TestIntegrationsMigration_RenamedSourceKeepsItsCredential: M2 stores a source's
+// credentials under the ID HEAD gave it, so the instance under the renamed ID
+// would otherwise lose its refs and the secret would be orphaned. The credential is
+// carried to the name under the new ID, the instance refs it, and the report says
+// so without the value.
+func TestIntegrationsMigration_RenamedSourceKeepsItsCredential(t *testing.T) {
+	r, s := runFixture(t, renamedSource)
+	row, ok := instances(t, s)["metadata/batcave-db"]
+	if !ok {
+		t.Fatalf("the renamed source was not imported: %v", slices.Sorted(maps.Keys(instances(t, s))))
+	}
+	const to = "integrations.metadata.batcave-db.credentials.api_key"
+	if g := refName(settingsOf(row), "credentials.api_key"); g != to {
+		t.Errorf("the renamed instance refs %q, want %q", g, to)
+	}
+	if v := s.Rows[string(ownerSecrets)][to]; string(v) != "fixture-batcave-db-key-lucius" {
+		t.Errorf("the carried secret holds %q", v)
+	}
+	if row["secrets_origin"] == nil || row["secrets_origin"] == "" {
+		t.Error("the instance holds a secret ref with no secrets_origin")
+	}
+	carried := false
+	for _, e := range r.report.Entries() {
+		if strings.Contains(e.Detail, "fixture-batcave-db-key") {
+			t.Errorf("the report holds the secret value: %v", e)
+		}
+		carried = carried || e.Kind == "note" && e.ID == "metadata/batcave-db" && strings.Contains(e.Detail, "carried to the renamed source")
+	}
+	if !carried {
+		t.Error("the carry is not reported")
+	}
+}
+
+// TestIntegrationsMigration_RenamedSourceUnreadableCredential: an unreadable
+// credential under the old name is not carried (M6 writes no unreadable marker),
+// no ref is invented, and the report says to re-enter it.
+func TestIntegrationsMigration_RenamedSourceUnreadableCredential(t *testing.T) {
+	const from = "integrations.metadata.batcave_db.credentials.api_key"
+	r, s := runFixture(t, renamedSource, func(r *rig) {
+		delete(r.secrets.seed, from)
+		r.secrets.unreadable[from] = true
+	})
+	row := instances(t, s)["metadata/batcave-db"]
+	if g := refName(settingsOf(row), "credentials.api_key"); g != "" {
+		t.Errorf("an unreadable credential was given the ref %q", g)
+	}
+	if _, ok := s.Rows[string(ownerSecrets)]["integrations.metadata.batcave-db.credentials.api_key"]; ok {
+		t.Error("a secret was written for an unreadable credential")
+	}
+	noted := false
+	for _, e := range r.report.Entries() {
+		noted = noted || e.Kind == "note" && e.ID == "metadata/batcave-db" && strings.Contains(e.Detail, "re-enter it")
+	}
+	if !noted {
+		t.Error("the unreadable credential is not reported")
+	}
+}
+
+// TestIntegrationsMigration_RenamedSourceNewNameWins: a secret already stored under
+// the new ID is the instance's, and the old name's is not copied over it.
+func TestIntegrationsMigration_RenamedSourceNewNameWins(t *testing.T) {
+	const to = "integrations.metadata.batcave-db.credentials.api_key"
+	_, s := runFixture(t, renamedSource, func(r *rig) { r.secrets.seed[to] = "fixture-batcave-db-key-newer" })
+	if v := s.Rows[string(ownerSecrets)][to]; v != nil {
+		t.Errorf("the carry wrote %q over a secret already under the new name", v)
+	}
+	row := instances(t, s)["metadata/batcave-db"]
+	if g := refName(settingsOf(row), "credentials.api_key"); g != to {
+		t.Errorf("ref %q, want %q", g, to)
 	}
 }

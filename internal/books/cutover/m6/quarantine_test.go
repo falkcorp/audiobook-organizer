@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/quarantine_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6c1f8e30-9b27-4d54-a083-e5d2b7c1f946
 // last-edited: 2026-11-19
 
@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover/m6"
+	"github.com/falkcorp/mediacore/integrations/ai"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -23,6 +24,8 @@ const (
 	rJobState         = "the aijob row's status is not one HEAD wrote"
 	rJobKey           = "the aijob row's id is not its key"
 	rJobConflict      = "core already holds a different job under this ID"
+	rJobConflictOwned = "the aijob row this row belongs to was not imported: core already holds a different job under its ID"
+	rListRefused      = "core refused the config list this row feeds"
 	rOrphanPayload    = "the aijob_payload row has no aijob row"
 	rOrphanBatch      = "the aijob_batch index row names no aijob row that holds it"
 	rBlobUndecodable  = "the settings blob does not decode"
@@ -115,9 +118,26 @@ func TestQuarantine_Cases(t *testing.T) {
 		{
 			name: "core already holds a different job",
 			opts: []func(*rig){conflict("job", "01JKNIGHTFALL")},
-			// The job's payload and index rows stay behind when the job is
-			// refused and are quarantined as the orphans they now are, never lost.
-			want: map[string]string{"aijob:01JKNIGHTFALL": rJobConflict, "aijob_payload:01JKNIGHTFALL": rOrphanPayload, "aijob_batch:batch-knightfall": rOrphanBatch},
+			// The job's payload and index rows go aside with it under their own
+			// reason: they are not orphans, their job existed. Never lost.
+			want: map[string]string{"aijob:01JKNIGHTFALL": rJobConflict, "aijob_payload:01JKNIGHTFALL": rJobConflictOwned, "aijob_batch:batch-knightfall": rJobConflictOwned},
+		},
+		{
+			name: "core's job is in a state an import cannot replace",
+			opts: []func(*rig){func(r *rig) {
+				r.refuse = func(k, i string) error {
+					if k == "job" && i == "01JKNIGHTFALL" {
+						return fmt.Errorf("an open job: %w", ai.ErrJobConflict)
+					}
+					return nil
+				}
+			}},
+			want: map[string]string{"aijob:01JKNIGHTFALL": rJobConflict, "aijob_payload:01JKNIGHTFALL": rJobConflictOwned, "aijob_batch:batch-knightfall": rJobConflictOwned},
+		},
+		{
+			name: "aijob row with no id in its key",
+			opts: []func(*rig){withRows(map[string][]byte{"aijob:": []byte(`{"id":"","type":"dedup_review","status":"pending"}`)})},
+			want: map[string]string{"aijob:": rJobKey},
 		},
 		{
 			name: "import_path row is torn",
@@ -172,6 +192,28 @@ func TestQuarantine_Cases(t *testing.T) {
 			})},
 			want: map[string]string{memberPrefix + "plugins.webhook.urls.2": rUnprovenURL},
 			raw:  map[string]string{memberPrefix + "plugins.webhook.urls.2": "http://bat%zz@192.0.2.9/hook"},
+		},
+		{
+			name: "metadata source URL whose userinfo cannot be ruled out",
+			opts: []func(*rig){withBlob(func(tree map[string]any) {
+				tree["metadata_sources"] = append(tree["metadata_sources"].([]any),
+					map[string]any{"id": "oracle-feed", "name": "Oracle", "enabled": true, "base_url": "http://bat%zz@192.0.2.9/feed"})
+			})},
+			want: map[string]string{memberPrefix + "metadata_sources.3": rUnprovenURL},
+		},
+		{
+			name: "AI endpoint URL whose userinfo cannot be ruled out",
+			opts: []func(*rig){withBlob(func(tree map[string]any) {
+				tree["ai_endpoints"] = append(tree["ai_endpoints"].([]any),
+					map[string]any{"id": "drake", "protocol": "openai_compat", "url": "http://bat%zz@192.0.2.9/v1"})
+			})},
+			want: map[string]string{memberPrefix + "ai_endpoints.2": rUnprovenURL},
+		},
+		{
+			name: "synthesised openai URL whose userinfo cannot be ruled out",
+			opts: []func(*rig){withBlob(func(tree map[string]any) { tree["openai_base_url"] = "http://bat%zz@192.0.2.9/v1" })},
+			want: map[string]string{memberPrefix + "openai_base_url": rUnprovenURL},
+			raw:  map[string]string{memberPrefix + "openai_base_url": "http://bat%zz@192.0.2.9/v1"},
 		},
 		{
 			name: "core already holds a different instance",

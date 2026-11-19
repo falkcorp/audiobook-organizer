@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/domains_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 94d1a6f0-3c7e-4b58-a0e9-12f6b8c35d7a
 // last-edited: 2026-11-19
 
@@ -7,9 +7,12 @@ package m6_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // TestAIEndpointMigration_AuthRefKeyCopy (05-ai section 10): a row with
@@ -326,5 +329,43 @@ func TestRootsCutover_FromHEADFixture(t *testing.T) {
 	}
 	if !unmapped {
 		t.Error("the unresolvable iTunes mapping is not reported")
+	}
+}
+
+// TestWebhookMigration_RuleNamesOnlyWhatWasImported: a webhook instance core
+// conflicts on or refuses is quarantined and left out of the rule, which names
+// only the instances that exist; with none left there is no rule at all.
+func TestWebhookMigration_RuleNamesOnlyWhatWasImported(t *testing.T) {
+	_, s := runFixture(t, conflict("instance", "notify/webhook-1"))
+	got := instances(t, s)
+	if _, ok := got["notify/webhook-1"]; ok {
+		t.Error("the conflicting webhook instance was written")
+	}
+	rules := keysWithPrefix(s, string(ownerNotify), "")
+	if len(rules) != 1 {
+		t.Fatalf("rules %q, want exactly one", rules)
+	}
+	rule := decodeRow(t, s.Rows[string(ownerNotify)][rules[0]])
+	if g := strs(rule["instances"]); !slices.Equal(g, []string{"notify/webhook-2"}) {
+		t.Errorf("the rule's instances %v, want only notify/webhook-2", g)
+	}
+	quarantinedFirst := false
+	for _, q := range s.Quarantine {
+		quarantinedFirst = quarantinedFirst || q.Reason == rInstanceConflict && strings.HasPrefix(q.Key, memberPrefix+"plugins.webhook.urls.")
+	}
+	if !quarantinedFirst {
+		t.Errorf("the conflicting webhook URL was not quarantined: %v", s.Quarantine)
+	}
+
+	_, none := runFixture(t, func(r *rig) {
+		r.refuse = func(kind, id string) error {
+			if kind == "instance" && strings.HasPrefix(id, "notify/") {
+				return fmt.Errorf("a different one is stored: %w", storage.ErrImportConflict)
+			}
+			return nil
+		}
+	})
+	if rules := keysWithPrefix(none, string(ownerNotify), ""); len(rules) != 0 {
+		t.Errorf("a rule %q was written though no webhook instance was", rules)
 	}
 }
