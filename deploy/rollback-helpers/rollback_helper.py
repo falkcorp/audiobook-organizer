@@ -1,6 +1,6 @@
 #!/usr/bin/python3 -I
 # file: deploy/rollback-helpers/rollback_helper.py
-# version: 1.12.0
+# version: 1.13.0
 # guid: 1d8f47fb-8f03-4fc9-af45-4b16e6ef75aa
 # last-edited: 2026-11-18
 
@@ -1276,6 +1276,19 @@ def _install_prev(b: str, src: str) -> int:
             ) from e
     finally:
         os.close(fd)
+    # The rename is durable only once the directory is. It has happened, so a
+    # failure here is a warning, not a refusal: .prev is replaced.
+    try:
+        dfd = os.open(os.path.dirname(prev), os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError as e:
+        print(
+            f"warning: {prev} is installed but its directory could not be synced ({e})",
+            file=sys.stderr,
+        )
     print(f"installed {src} as {prev}")
     return 0
 

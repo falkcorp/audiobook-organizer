@@ -1,5 +1,5 @@
 # file: scripts/tests/test_rollback_helper.py
-# version: 1.13.0
+# version: 1.14.0
 # guid: 9609b377-57c2-454a-9130-320303c2815e
 # last-edited: 2026-11-18
 
@@ -2010,6 +2010,41 @@ class InstallStaged(unittest.TestCase):
         self.assertFalse(Path(f"{b}.rolled-back").exists())
         self.assertIn(f"{b}.prev", out)
         self.assertEqual(h.tools(), [], "nothing is reloaded or restarted")
+
+    def test_prev_syncs_the_bin_directory_after_the_rename(self):
+        """F8-02 review n4: the rename of .prev is durable only once the bin
+        directory is synced; a failed sync is a warning, not a refusal."""
+        h, b = self.bin_host()
+        (self.stage / "audiobook-organizer").write_text("fetched")
+        bin_ino = os.stat(b.parent).st_ino
+        real_fsync = os.fsync
+        synced: list[int] = []
+
+        def is_bin_dir(fd: int) -> bool:
+            st = os.fstat(fd)
+            return stat.S_ISDIR(st.st_mode) and st.st_ino == bin_ino
+
+        def recording(fd):
+            if is_bin_dir(fd):
+                synced.append(fd)
+            return real_fsync(fd)
+
+        def failing(fd):
+            if is_bin_dir(fd):
+                raise OSError(5, "I/O error")
+            return real_fsync(fd)
+
+        with unittest.mock.patch("os.fsync", recording):
+            code, _, err = h.run("install", "prev")
+        self.assertEqual(code, 0, err)
+        self.assertTrue(synced, "the bin directory was not synced")
+
+        (self.stage / "audiobook-organizer").write_text("fetched again")
+        with unittest.mock.patch("os.fsync", failing):
+            code, out, err = h.run("install", "prev")
+        self.assertEqual(code, 0, err)
+        self.assertIn("could not be synced", err)
+        self.assertEqual(Path(f"{b}.prev").read_text(), "fetched again")
 
     def test_prev_with_no_current_binary_or_no_prev_installs_one(self):
         h, b = self.bin_host()

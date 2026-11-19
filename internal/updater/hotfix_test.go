@@ -1,5 +1,5 @@
 // file: internal/updater/hotfix_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 55cb52f7-49f0-4844-881d-0df9ba6269f3
 // last-edited: 2026-11-18
 
@@ -23,6 +23,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // fakeReleases serves the GitHub release API subset the updater reads.
@@ -37,6 +38,11 @@ type fakeReleases struct {
 	latestHits atomic.Int32
 	assetHits  atomic.Int32
 	commitHits atomic.Int32
+
+	// stallAssets makes an asset request hang until the client gives up (or
+	// the test ends: unstall is closed first in cleanup).
+	stallAssets atomic.Bool
+	unstall     chan struct{}
 }
 
 func newFakeReleases(t *testing.T, latest string, tags ...string) *fakeReleases {
@@ -48,8 +54,10 @@ func newFakeReleases(t *testing.T, latest string, tags ...string) *fakeReleases 
 	if latest != "" {
 		f.tags[latest] = true
 	}
+	f.unstall = make(chan struct{})
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
+	t.Cleanup(func() { close(f.unstall) }) // runs before srv.Close
 	return f
 }
 
@@ -104,6 +112,13 @@ func (f *fakeReleases) serve(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(raw)
 	case strings.HasPrefix(p, "/assets/"):
 		f.assetHits.Add(1)
+		if f.stallAssets.Load() {
+			select {
+			case <-r.Context().Done():
+			case <-f.unstall:
+			}
+			return
+		}
 		parts := strings.Split(strings.TrimPrefix(p, "/assets/"), "/")
 		if len(parts) != 2 || parts[1] != assetName() {
 			http.NotFound(w, r)
@@ -191,6 +206,48 @@ func TestApply_RestartExits75(t *testing.T) {
 	if RestartExitCode != 75 {
 		t.Fatalf("RestartExitCode = %d, want 75", RestartExitCode)
 	}
+}
+
+// TestApply_DownloadIsBoundedByTheClientTimeout (F8-02 review m1): R0 sent the
+// asset download through a client with a 30 s timeout, so a body that never
+// arrives ends the gin apply instead of holding the handler for ever. The
+// adapter's default client is that one (here shortened), bound into the source.
+func TestApply_DownloadIsBoundedByTheClientTimeout(t *testing.T) {
+	if got := NewUpdater("v0.223.0").client().Timeout; got != 30*time.Second || checkTimeout != 30*time.Second {
+		t.Errorf("the default client's timeout = %v (checkTimeout %v), want R0's 30 s", got, checkTimeout)
+	}
+	f := newFakeReleases(t, "v0.224.0")
+	f.stallAssets.Store(true)
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "audiobook-organizer")
+	if err := os.WriteFile(exe, []byte(oldBinary), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// No WithHTTPClientForTest: the client under test is the adapter's own.
+	u := NewUpdater("v0.223.0",
+		WithAPIBaseForTest(f.srv.URL),
+		WithRequestTimeoutForTest(300*time.Millisecond),
+		WithExecutableForTest(func() (string, error) { return exe, nil }),
+		WithStateDir(t.TempDir()),
+	)
+	info, err := u.CheckForUpdate("stable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- u.DownloadAndReplace(info) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a download that never arrived was applied")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the stalled download was never given up: the apply's client has no timeout")
+	}
+	if got := readFile(t, exe); got != oldBinary {
+		t.Errorf("the running binary = %q after a failed download", got)
+	}
+	assertAbsent(t, exe+".new")
 }
 
 func TestApply_SwapAtomicAndPrevKept(t *testing.T) {
