@@ -1,5 +1,5 @@
 // file: core/internal/outboxhttp/routes.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 53094039-febd-4731-bc69-141f4e2fb456
 // last-edited: 2026-11-19
 
@@ -585,8 +585,10 @@ func detached(ctx context.Context, d time.Duration) (context.Context, context.Ca
 // cloneWith is a copy of m with the entries of extra added: an event's details
 // are shared by every copy of the event.
 func cloneWith(m, extra map[string]any) map[string]any {
-	out := make(map[string]any, len(m)+len(extra))
-	maps.Copy(out, m)
+	out := maps.Clone(m)
+	if out == nil {
+		out = make(map[string]any, len(extra))
+	}
 	maps.Copy(out, extra)
 	return out
 }
