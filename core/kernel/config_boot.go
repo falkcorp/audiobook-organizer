@@ -1,5 +1,5 @@
 // file: core/kernel/config_boot.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0e3db6c6-c5ae-4f54-adaf-6fd7b728c89e
 // last-edited: 2026-11-18
 
@@ -8,6 +8,7 @@ package kernel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -160,8 +161,9 @@ func (cb *configBoot) close(ctx context.Context) error {
 //
 //  1. secrets.Open (05-config 2.4 step 1): the keyring is read or created beside
 //     the state directory and its header carries the store's install marker;
-//     ResetBoot is set on the reset boot of a factory reset only (the journal
-//     reads set_aside, not applied), so the header is rewritten exactly once;
+//     ResetBoot is set on the reset boot of a KindReset journal only (it reads
+//     set_aside, not applied; store and factory resets alike, which is the
+//     swapper's one BootReset), so the header is rewritten exactly once;
 //  2. that reset boot's journal is marked applied right after, not after P4a:
 //     a crash between the fresh install and the keyring leaves set_aside, and
 //     the next boot repeats both (DATA7-17; swapAfter skips P4a under the gate);
@@ -216,8 +218,11 @@ func (cb *configBoot) secretsSettings() (keyFile string, allowRegen bool, err er
 // binds, then Attach reads the DB layer once. It runs only for a boot that
 // opened a store; the audit store the committer records to was built at P4a.
 func (k *Kernel) attachCoreConfig(ctx context.Context) error {
-	if k.sec == nil {
+	if k.store == nil || k.store.db == nil {
 		return nil
+	}
+	if k.sec == nil {
+		return errors.New("kernel: config: a store is open and the secret store is not: P4b did not run bindCoreStores")
 	}
 	if _, err := k.cfgBoot.attachConfig(ctx, k.audit, k.sec.store, k.sec.store); err != nil {
 		return err
