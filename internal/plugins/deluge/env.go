@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/env.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: ef303b12-eeca-4ad8-bd87-b34265d15f21
 // last-edited: 2026-11-19
 
@@ -151,21 +151,31 @@ func nativeItems(rc *tasks.RC) kindItemsFunc {
 	}
 }
 
-// headEnv fills the env from HEAD's Reporter.
+// headEnv fills the env from HEAD's Reporter, Checkpoint included. Only a def
+// whose core calls env.Checkpoint uses it.
 func headEnv(rep opsregistry.Reporter, live bool) kindEnv {
+	e := headEnvBase(rep, live)
+	e.Checkpoint = rep.Checkpoint
+	return e
+}
+
+// headEnvBase is headEnv without a Checkpoint: for a def whose core never
+// checkpoints (link-backfill resumes through its start_after cursor). Leaving
+// the hook unbound keeps that visible to TestResumeRestartDefsCheckpoint, which
+// would otherwise read a shared binding as a checkpoint the run never writes.
+func headEnvBase(rep opsregistry.Reporter, live bool) kindEnv {
 	return kindEnv{
 		Live: live,
 		Progress: func(current, total int, msg string) {
 			_ = rep.UpdateProgress(current, total, msg)
 		},
-		Log:        func(level slog.Level, msg string) { _ = rep.Log(level, msg) },
-		Canceled:   rep.IsCanceled,
-		Logger:     rep.Logger(),
-		Items:      headItems(rep),
-		SetResult:  func(v any) error { return opsregistry.ReporterSetResult(rep, v) },
-		Reporter:   rep,
-		Checkpoint: rep.Checkpoint,
-		Touch:      func() { opsregistry.TouchLiveness(rep) },
+		Log:       func(level slog.Level, msg string) { _ = rep.Log(level, msg) },
+		Canceled:  rep.IsCanceled,
+		Logger:    rep.Logger(),
+		Items:     headItems(rep),
+		SetResult: func(v any) error { return opsregistry.ReporterSetResult(rep, v) },
+		Reporter:  rep,
+		Touch:     func() { opsregistry.TouchLiveness(rep) },
 	}
 }
 

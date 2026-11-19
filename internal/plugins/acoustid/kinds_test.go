@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/kinds_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7fde7363-424f-4234-80ee-914af5f156bd
 // last-edited: 2026-11-19
 
@@ -166,7 +166,6 @@ type kit struct {
 	writers []tasks.Writer
 	rec     *recWriter
 	eng     *recEngine
-	wipe    int
 }
 
 func newKit() *kit {

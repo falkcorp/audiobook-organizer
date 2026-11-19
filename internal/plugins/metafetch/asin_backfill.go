@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/asin_backfill.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: c4e9a2f7-1d36-4b85-9a0e-6f2b8d31c7a4
 // last-edited: 2026-11-19
 
@@ -237,16 +237,28 @@ var _ asinBackfillStore = (database.Store)(nil)
 // guard's tags and series, the owner's rejections) and the raw reads (the
 // no-match markers and the shared answer cache). It has no write method.
 type asinBackfillReads interface {
+	asinBackfillHelperReads
+	asinBackfillBookWalk
+	GetRaw(key string) ([]byte, error)
+}
+
+// asinBackfillHelperReads is the readers the shared helpers take: field locks,
+// authors, files, the owner-manual guard's tags and the owner's rejections.
+type asinBackfillHelperReads interface {
 	database.MetadataFieldStateReader
 	database.BookAuthorReader
 	database.BookFilesGetter
 	applygate.ManualOnlyTagReader
 	metafetch.RejectedCandidateReader
+}
+
+// asinBackfillBookWalk is the book walk: the paged read, the by-id read, the
+// series read and the count the progress bar needs.
+type asinBackfillBookWalk interface {
 	GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error)
 	GetBookByID(id string) (*database.Book, error)
 	GetSeriesByID(id int) (*database.Series, error)
 	CountAllBooks() (int, error)
-	GetRaw(key string) ([]byte, error)
 }
 
 // asinBackfillWriter is every write the core makes (rule R10), each named for

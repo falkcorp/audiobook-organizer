@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/link_backfill.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 7101d385-7f6e-4a95-bd2e-11760d0fed02
 // last-edited: 2026-11-19
 
@@ -1035,7 +1035,7 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 		reporter.Logger().Error("dry_run and dryRun disagree; previewing", "error", modeErr)
 	}
 	env := linkBackfillEnv{
-		kindEnv:      headEnv(reporter, !dry),
+		kindEnv:      headEnvBase(reporter, !dry),
 		Store:        p.headStore(),
 		Writer:       p.headWriter(),
 		DefaultLabel: config.AppConfig.DelugeDiscoveryLabel,

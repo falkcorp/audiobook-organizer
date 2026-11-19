@@ -1,7 +1,7 @@
 // file: internal/arch/filtered_getter_callers_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 6c2f9d04-1b8e-4a73-85d6-e0a47b31c9f2
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package arch
 
@@ -59,6 +59,7 @@ var reviewedFilteredGetterCallers = map[string]string{
 	"internal/books/store/retired_mock_store.go|MockStore.GetBookFileByPIDIncludingRetired|GetBookFileByPID":           "MockStore holds no retired rows, so its live reader is its including-retired reader.",
 	"internal/books/store/retired_mock_store.go|MockStore.GetBookFileByPathIncludingRetired|GetBookFileByPath":         "MockStore holds no retired rows, so its live reader is its including-retired reader.",
 	"pkg/ops/opstest/fakes.go|FakeBooks.GetBookFileByPath|GetBookFileByPath":                                           "Test fake delegating to its own in-memory store.",
+	"internal/plugins/deluge/env.go|headKindStore.GetBookFileByPath|GetBookFileByPath":                                 "Forwarding adapter: it only satisfies internal/deluge.Store (the importer's store interface). Every gate the importer puts on a path goes through database.BookFileByPathIncludingRetired on this same adapter (GetBookFileByPathIncludingRetired, internal/deluge/import.go and importer_adapter.go), so a retired holder is never read as \"free\" here.",
 	"pkg/ops/opstest/store.go|worldStore.GetBookFileByPath|GetBookFileByPath":                                          "Test fake delegating to its own in-memory store.",
 
 	// --- Deliberately live after the retired check.
