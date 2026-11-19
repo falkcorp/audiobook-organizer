@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/llm_review.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-10-14
+// last-edited: 2026-11-18
 
 package dedup
 
@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/falkcorp/mediacore/tasks"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -30,7 +32,7 @@ func (p *Plugin) llmReviewDef() sdk.OperationDef {
 		Liveness:     sdk.LivenessManual,
 		Plugin:       "dedup",
 		DisplayName:  "LLM review of candidates",
-		Description:  "Runs LLM review pass over ambiguous embedding-layer candidates.",
+		Description:  llmReviewHelp,
 		ResumePolicy: sdk.ResumeDrop,
 		// The retired scheduler def was cancellable; this one declared no value,
 		// which the registry reads as "reject Cancel" (04-P14b). RunLLMReviewWithHooks
@@ -65,17 +67,45 @@ func (p *Plugin) llmReviewDef() sdk.OperationDef {
 	}
 }
 
-func (p *Plugin) runLLMReview(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	if p.engine == nil {
-		return fmt.Errorf("dedup engine not available")
+// llmReviewKind is rule R3's native kind for dedup.llm-review. HEAD's FormerIDs
+// (maintenance.dedup-llm-review, scheduler.dedup-llm-review) resolve to it
+// through the seams file, not through this const.
+const llmReviewKind = tasks.Kind("books.dedup.llm-review")
+
+// llmReviewHelp is HEAD's Description and the native Help (rule R5).
+const llmReviewHelp = "Runs LLM review pass over ambiguous embedding-layer candidates."
+
+// llmReviewEngine is the engine surface the core reaches: the configured check
+// and the review pass (which lists candidates, builds the batch and submits it).
+type llmReviewEngine interface {
+	LLMReviewConfigured() bool
+	RunLLMReviewWithHooks(ctx context.Context, hooks dedupengine.LLMReviewHooks) error
+}
+
+// llmReviewEnv is what the core takes from its shell. HEAD has no dry run, so
+// there is no Live: the native kind is live-only.
+type llmReviewEnv struct {
+	kindEnv
+	Engine llmReviewEngine
+}
+
+// llmReviewResult is the native run's result. HEAD stored none.
+type llmReviewResult struct {
+	// Skipped is true when the LLM parser was not configured.
+	Skipped bool `json:"skipped,omitempty"`
+	// Submitted is true when the review pass reported progress (it built a
+	// batch); false when it found no ambiguous candidates.
+	Submitted bool `json:"submitted"`
+}
+
+// llmReviewCore is the body of runLLMReview, shared by both shells.
+func llmReviewCore(ctx context.Context, env llmReviewEnv) (llmReviewResult, error) {
+	if !env.Engine.LLMReviewConfigured() {
+		env.Progress(1, 1, "LLM review skipped: LLM parser not configured")
+		return llmReviewResult{Skipped: true}, nil
 	}
 
-	if !p.engine.LLMReviewConfigured() {
-		_ = reporter.UpdateProgress(1, 1, "LLM review skipped: LLM parser not configured")
-		return nil
-	}
-
-	_ = reporter.UpdateProgress(0, 1, "Starting LLM review of ambiguous candidates...")
+	env.Progress(0, 1, "Starting LLM review of ambiguous candidates...")
 
 	// H9 (2026-07 error-correction sweep): the total pair count isn't known
 	// until RunLLMReviewWithHooks lists ambiguous candidates internally, so the
@@ -93,27 +123,37 @@ func (p *Plugin) runLLMReview(ctx context.Context, _ json.RawMessage, reporter s
 	hooks := dedupengine.LLMReviewHooks{
 		Progress: func(current, total int, message string) {
 			if prog == nil {
-				prog = sdk.NewProgress(reporter, total)
+				prog = newProgress(env.kindEnv, total)
 				prog.Start(message)
 			}
 			prog.StepN(current, message)
 		},
-		Heartbeat: func(string) { registry.TouchLiveness(reporter) },
+		Heartbeat: func(string) { registry.TouchLiveness(env.Reporter) },
 	}
 
-	if err := p.engine.RunLLMReviewWithHooks(ctx, hooks); err != nil {
+	if err := env.Engine.RunLLMReviewWithHooks(ctx, hooks); err != nil {
 		if errors.Is(err, context.Canceled) {
-			reporter.Logger().Info("LLM review canceled", "error", err)
+			env.Logger.Info("LLM review canceled", "error", err)
 		} else {
-			reporter.Logger().Error("LLM review error", "error", err)
+			env.Logger.Error("LLM review error", "error", err)
 		}
-		return fmt.Errorf("LLM review: %w", err)
+		return llmReviewResult{}, fmt.Errorf("LLM review: %w", err)
 	}
 	if prog != nil {
 		prog.Finalize("writing results...")
 		prog.Done("LLM review complete")
 	} else {
-		_ = reporter.UpdateProgress(1, 1, "LLM review complete (no ambiguous candidates)")
+		env.Progress(1, 1, "LLM review complete (no ambiguous candidates)")
 	}
-	return nil
+	return llmReviewResult{Submitted: prog != nil}, nil
+}
+
+// runLLMReview is the v2 shell: HEAD's Run (the engine nil check) over
+// llmReviewCore.
+func (p *Plugin) runLLMReview(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+	if p.engine == nil {
+		return fmt.Errorf("dedup engine not available")
+	}
+	_, err := llmReviewCore(ctx, llmReviewEnv{kindEnv: headEnv(reporter, true), Engine: p.engine})
+	return err
 }
