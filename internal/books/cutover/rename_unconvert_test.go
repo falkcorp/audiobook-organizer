@@ -43,6 +43,7 @@ var roundTripCases = []roundTrip{
 	{name: "days 90", conv: ConvertDaysToDuration, head: `90`},
 	{name: "mib", conv: ConvertMiBToBytes, head: `4`},
 	{name: "mib zero", conv: ConvertMiBToBytes, head: `0`},
+	{name: "mib large", conv: ConvertMiBToBytes, head: `1024`},
 	{name: "log retention keeps", conv: ConvertLogRetention, head: `30`},
 	{name: "log retention keep-forever", conv: ConvertLogRetention, head: `-1`},
 	{name: "log retention other negative", conv: ConvertLogRetention, head: `-5`, back: `-1`,
@@ -232,6 +233,7 @@ func TestUnconvert_LossyCases(t *testing.T) {
 		refused(t, ConvertUpdaterCheck, `{"enabled":true}`, ErrNotRepresentable)
 		refused(t, ConvertUpdaterCheck, `{"enabled":true,"every":"90s"}`, ErrNotRepresentable)
 		refused(t, ConvertUpdaterCheck, `{"enabled":true,"every":"-1h"}`, ErrNotRepresentable)
+		refused(t, ConvertUpdaterCheck, `{"enabled":false,"every":"-1h"}`, ErrNotRepresentable)
 		refused(t, ConvertUpdaterCheck, `{"enabled":true,"daily_at":"03:00"}`, ErrNotRepresentable)
 		refused(t, ConvertUpdaterCheck, `{"enabled":true,"cron":"0 3 * * *"}`, ErrNotRepresentable)
 		refused(t, ConvertUpdaterCheck, `{"enabled":true,"window":"night"}`, ErrNotRepresentable)
@@ -262,6 +264,7 @@ func TestUnconvert_LossyCases(t *testing.T) {
 			refused(t, conv, `{"enabled":true,"window":"night"}`, ErrNotRepresentable)
 			refused(t, conv, `{"enabled":true,"every":"1h","order":1}`, ErrNotRepresentable)
 			refused(t, conv, `{"enabled":true,"every":"-1h"}`, ErrNotRepresentable)
+			refused(t, conv, `{"enabled":false,"every":"-1h"}`, ErrNotRepresentable)
 			refused(t, conv, `{"enabled":true,"nope":1}`, ErrConvertInput)
 			refused(t, conv, `true`, ErrConvertInput)
 		}
@@ -306,6 +309,7 @@ func TestUnconvert_LossyCases(t *testing.T) {
 		}
 		refused(t, ConvertDaysToDuration, `"36h"`, ErrNotRepresentable)
 		refused(t, ConvertDaysToDuration, `"1h"`, ErrNotRepresentable)
+		refused(t, ConvertDaysToDuration, `"-24h"`, ErrNotRepresentable)
 		refused(t, ConvertDaysToDuration, `"24h1s"`, ErrNotRepresentable)
 		refused(t, ConvertDaysToDuration, `"soon"`, ErrConvertInput)
 		refused(t, ConvertDaysToDuration, `7`, ErrConvertInput)
@@ -319,6 +323,11 @@ func TestUnconvert_LossyCases(t *testing.T) {
 		refused(t, ConvertMiBToBytes, `8388609`, ErrNotRepresentable)
 		refused(t, ConvertMiBToBytes, `1048575`, ErrNotRepresentable)
 		refused(t, ConvertMiBToBytes, `1.5`, ErrNotRepresentable)
+		refused(t, ConvertMiBToBytes, `1048576.5`, ErrNotRepresentable) // truncates to a whole MiB
+		refused(t, ConvertMiBToBytes, `-1048576`, ErrNotRepresentable)
+		refused(t, ConvertMiBToBytes, `9007199254740994`, ErrNotRepresentable) // beyond what a float holds exactly
+		refused(t, ConvertMiBToBytes, `1e30`, ErrNotRepresentable)
+		ok(t, ConvertMiBToBytes, `1073741824`, `1024`)
 		refused(t, ConvertMiBToBytes, `"8"`, ErrConvertInput)
 	})
 	t.Run("auth and updater mode: only the two values HEAD has", func(t *testing.T) {
@@ -492,6 +501,16 @@ func TestUnfoldOIDC_Refusals(t *testing.T) {
 	}
 }
 
+func TestUnfoldOIDC_AllowListsCompareTrimmed(t *testing.T) {
+	got, err := UnfoldOIDC(json.RawMessage(`[{"id":"github","client_id":"a","allowed_emails":["x@batcave.example"]},{"id":"google","client_id":"b","allowed_emails":[" x@batcave.example "]}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got[oauthEmails]) != `"x@batcave.example"` {
+		t.Errorf("emails = %s", got[oauthEmails])
+	}
+}
+
 func TestUnfoldOIDC_ExtrasAreIgnored(t *testing.T) {
 	// kind, issuer and the client_secret reference carry nothing HEAD holds in an
 	// oauth_* field (the secret itself is class s and moves by name).
@@ -604,6 +623,29 @@ func TestUnfoldRoots_RoundTripsThroughTheRootsEntry(t *testing.T) {
 				t.Errorf("aliases is JSON null, want a list")
 			}
 		})
+	}
+}
+
+func TestUnfoldRoots_OnlyHEADRootsHoldHEADAliases(t *testing.T) {
+	// A root created after the cutover (any ID but books-library and import-<n>)
+	// has no home in HEAD's path_aliases.
+	entries := json.RawMessage(`[
+	  {"id":"books-library","path":"/gotham/archive","aliases":[{"windows":"W:"}]},
+	  {"id":"import-7","path":"/gotham/imports/seven","aliases":[{"windows":"X:"}]},
+	  {"id":"import-07","path":"/gotham/imports/leading-zero","aliases":[{"windows":"Y:"}]},
+	  {"id":"import-x","path":"/gotham/imports/text","aliases":[{"windows":"Z:"}]},
+	  {"id":"dropbox-2","path":"/gotham/dropbox","aliases":[{"windows":"V:"}]}]`)
+	_, aliases, err := UnfoldRoots(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []headPathAlias
+	if err := json.Unmarshal(aliases, &got); err != nil {
+		t.Fatal(err)
+	}
+	want := []headPathAlias{{Root: "/gotham/archive", Windows: "W:"}, {Root: "/gotham/imports/seven", Windows: "X:"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("aliases = %+v, want %+v", got, want)
 	}
 }
 
