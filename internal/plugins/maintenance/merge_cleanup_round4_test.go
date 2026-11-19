@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_round4_test.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 5c0d9e3a-6f21-4b7d-9a84-2e1f7b3c8d56
 // last-edited: 2026-11-19
 
@@ -7,13 +7,18 @@ package maintenance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // Round 4 of the merge-cleanup review: a trashed group member is read from the
@@ -366,7 +371,7 @@ func TestMergeCleanupDeadEndIndexIsNotCachedFromACancelledCaller(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	idx, err := run.deadEndIndex(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, []string{x.ids["loser"]}, idx[x.ids["dead"]])
+	require.Equal(t, []string{x.ids["loser"]}, mcCoLoserIDs(idx[x.ids["dead"]]))
 }
 
 // An expired deadline is a caller's own stop too, not a fact about the library.
@@ -381,5 +386,217 @@ func TestMergeCleanupDeadEndIndexIsNotCachedFromAnExpiredCaller(t *testing.T) {
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	idx, err := run.deadEndIndex(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, []string{x.ids["loser"]}, idx[x.ids["dead"]])
+	require.Equal(t, []string{x.ids["loser"]}, mcCoLoserIDs(idx[x.ids["dead"]]))
+}
+
+func mcCoLoserIDs(cs []mcCoLoser) []string {
+	var out []string
+	for _, c := range cs {
+		out = append(out, c.id)
+	}
+	return out
+}
+
+// ---- R5-M1: every other book that enters the dead end is a source too ----
+
+// L2 -> T beside B -> T, where B is live, has no file and sits in group G with
+// the live primary P. L2 and B were merged into the same dead book, so B's group
+// holds the live copy of L2's work: L2 repoints to P rather than standing alone.
+func TestMergeCleanupDeadEndFilelessCoLoserWhoseGroupHoldsALivePrimaryIsFollowed(t *testing.T) {
+	x := newMCFixture(t)
+	x.mk("t", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+	x.mk("b", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, group: "g", primary: mcFalse()})
+	x.point("b", "t")
+	x.mk("p", mcHush("g", mcTrue()))
+	x.mk("l2", mcHushSpec(30000))
+	x.point("l2", "t")
+	r := x.plan()["l2"]
+	require.Equal(t, mcKindRepoint, r.Class, "%s", r.SkipReason)
+	require.Equal(t, x.ids["p"], r.Proposed["merged_into_book_id"])
+	require.NotContains(t, strings.Join(r.Evidence, " "), "stands alone")
+}
+
+// The same co-loser whose files were retired onto a live holder: the holder is
+// read from the co-loser.
+func TestMergeCleanupDeadEndFilelessCoLoserWhoseFilesWereRetiredOntoALiveHolder(t *testing.T) {
+	x := newMCFixture(t)
+	x.mk("t", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+	x.mk("b", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}})
+	x.point("b", "t")
+	x.mk("h", mcHushSpec(30000))
+	retireRowOnto(t, x.st, x.ids["b"], x.ids["h"], "rb", filepath.Join(x.root, "retired", "b.m4b"))
+	x.mk("l2", mcHushSpec(30000))
+	x.point("l2", "t")
+	r := x.plan()["l2"]
+	require.Equal(t, mcKindRepoint, r.Class, "%s", r.SkipReason)
+	require.Equal(t, x.ids["h"], r.Proposed["merged_into_book_id"])
+}
+
+// A co-loser in the trash (a library state and a soft delete are both tried):
+// it took content to the dead book too, and its group's live primary holds it.
+func TestMergeCleanupDeadEndTrashedCoLoserWhoseGroupHoldsALivePrimaryIsFollowed(t *testing.T) {
+	for _, soft := range []bool{false, true} {
+		name := "library state"
+		if soft {
+			name = "soft deleted"
+		}
+		t.Run(name, func(t *testing.T) {
+			x := newMCFixture(t)
+			x.mk("t", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+			x.mk("x", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, group: "g", primary: mcFalse(), trashed: !soft})
+			x.point("x", "t")
+			if soft {
+				mcTrash(t, x, "x")
+			}
+			x.mk("p", mcHush("g", mcTrue()))
+			x.mk("loser", mcHushSpec(30000))
+			x.point("loser", "t")
+			r := x.plan()["loser"]
+			require.Equal(t, mcKindRepoint, r.Class, "%s", r.SkipReason)
+			require.Equal(t, x.ids["p"], r.Proposed["merged_into_book_id"])
+		})
+	}
+}
+
+// L -> T beside L3 -> X -> T, where L3 is live with no file and X is trashed in
+// a group with the live primary P: the trashed hop on a co-loser's chain is a
+// source.
+func TestMergeCleanupDeadEndTrashedHopOnACoLosersChainIsASource(t *testing.T) {
+	x := newMCFixture(t)
+	x.mk("t", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+	x.mk("x", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, group: "g", primary: mcFalse(), trashed: true})
+	x.point("x", "t")
+	x.mk("l3", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}})
+	x.point("l3", "x")
+	x.mk("p", mcHush("g", mcTrue()))
+	x.mk("loser", mcHushSpec(30000))
+	x.point("loser", "t")
+	r := x.plan()["loser"]
+	require.Equal(t, mcKindRepoint, r.Class, "%s", r.SkipReason)
+	require.Equal(t, x.ids["p"], r.Proposed["merged_into_book_id"])
+}
+
+// A co-loser in the loser's OWN group does not turn the loser into a repoint at
+// its group's primary: the loser stays in its group and the hand-off gate owns it.
+func TestMergeCleanupDeadEndCoLoserInTheLosersOwnGroupIsNotReadThroughTheGroup(t *testing.T) {
+	x := newMCFixture(t)
+	x.mk("t", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+	x.mk("b", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, group: "g", primary: mcFalse()})
+	x.point("b", "t")
+	x.mk("p", mcHush("g", mcTrue()))
+	x.mk("loser", mcHush("g", mcFalse()))
+	x.point("loser", "t")
+	r := x.plan()["loser"]
+	require.Equal(t, mcKindUnmerge, r.Class, "%s", r.SkipReason)
+	require.Empty(t, r.Proposed["merged_into_book_id"])
+}
+
+// A file-less, group-less, holder-less co-loser contributes nothing.
+func TestMergeCleanupDeadEndBareFilelessCoLoserStillLeavesTheLoserAlone(t *testing.T) {
+	x := newMCFixture(t)
+	x.mk("t", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+	x.mk("b", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}})
+	x.point("b", "t")
+	x.mk("loser", mcHushSpec(30000))
+	x.point("loser", "t")
+	wantRow(t, x.plan(), "loser", mcKindUnmerge, "")
+}
+
+// The sources of one dead book are computed once and shared by every loser.
+func TestMergeCleanupDeadEndSourcesAreComputedOncePerDeadBook(t *testing.T) {
+	x := newMCFixture(t)
+	x.mk("t", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+	for i := 0; i < 5; i++ {
+		n := fmt.Sprintf("l%d", i)
+		x.mk(n, mcHushSpec(30000+i))
+		x.point(n, "t")
+	}
+	run, err := x.f.newRun(context.Background(), &fakeReporter{})
+	require.NoError(t, err)
+	a, err := run.deadEndSources(context.Background(), x.ids["t"])
+	require.NoError(t, err)
+	b, err := run.deadEndSources(context.Background(), x.ids["t"])
+	require.NoError(t, err)
+	require.Len(t, a, 5)
+	require.Same(t, &a[0], &b[0], "the second call reads the cached list")
+}
+
+// ---- R5-m1: the loser's own flag counts at the hand-off gate ----
+
+func TestMergeCleanupDeadEndLoserThatIsItsGroupsPrimaryIsNotHeldForAHandoff(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		flag *bool
+		held bool
+	}{
+		{"nil flag reads as primary", nil, false},
+		{"explicit true flag", mcTrue(), false},
+		{"explicit false flag", mcFalse(), true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			x := newMCFixture(t)
+			x.mk("dead", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+			x.mk("loser", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000), group: "g", primary: c.flag})
+			x.pointRaw("loser", "dead")
+			r := x.plan()["loser"]
+			require.Equal(t, mcKindUnmerge, r.Class, "%+v", r.Holds)
+			require.Equal(t, "stays_in_group", r.Current["group_effect"])
+			held := false
+			for _, h := range r.Holds {
+				held = held || h.Kind == mcSkipGroupNeedsHandoff
+			}
+			require.Equal(t, c.held, held, "%+v", r.Holds)
+			require.Equal(t, c.held, slices.Contains(r.Flags, mcFlagGroupNeedsHandoff))
+		})
+	}
+}
+
+// ---- R5-n1 / R5-n2: the dead-end index and its failures ----
+
+// failOnceStore fails the first full listing and answers every later one.
+type failOnceStore struct {
+	mergeCleanupReader
+	calls atomic.Int32
+}
+
+func (s *failOnceStore) GetAllBooksCoreComplete(limit, offset int) ([]database.BookCore, error) {
+	if s.calls.Add(1) == 1 {
+		return nil, errors.New("the listing is unavailable")
+	}
+	return s.mergeCleanupReader.GetAllBooksCoreComplete(limit, offset)
+}
+
+// A build that fails for a reason other than the caller's context is the run's
+// snapshot answer: every later row reports the same error, it is not retried.
+func TestMergeCleanupDeadEndIndexFailureIsCachedForTheRun(t *testing.T) {
+	x := newMCFixture(t)
+	mcDeadEnd(x, "dead", "loser", mcHushSpec(30000))
+	run, err := x.f.newRun(context.Background(), &fakeReporter{})
+	require.NoError(t, err)
+	run.merged = nil
+	run.store = &failOnceStore{mergeCleanupReader: run.store}
+	_, err = run.deadEndIndex(context.Background())
+	require.ErrorContains(t, err, "the listing is unavailable")
+	_, err = run.deadEndIndex(context.Background())
+	require.ErrorContains(t, err, "the listing is unavailable", "the failed build is not retried")
+}
+
+// A caller waiting on a build that another caller's cancel stopped retries with
+// its own context.
+func TestMergeCleanupDeadEndIndexWaiterOfACancelledBuildRetriesWithItsOwnContext(t *testing.T) {
+	x := newMCFixture(t)
+	mcDeadEnd(x, "dead", "loser", mcHushSpec(30000))
+	run, err := x.f.newRun(context.Background(), &fakeReporter{})
+	require.NoError(t, err)
+	// A build that the first caller's cancel already stopped, still in the cache.
+	cancelled := &onceVal[map[string][]mcCoLoser]{}
+	cancelled.once.Do(func() { cancelled.err = context.Canceled })
+	run.deadEnds.Store("", cancelled)
+	idx, err := run.deadEndIndex(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{x.ids["loser"]}, mcCoLoserIDs(idx[x.ids["dead"]]))
+	// And the stale entry was replaced, not left to fail the next caller.
+	idx, err = run.deadEndIndex(context.Background())
+	require.NoError(t, err)
+	require.Len(t, idx[x.ids["dead"]], 1)
 }
