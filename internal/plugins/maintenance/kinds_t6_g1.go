@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g1.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4494039c-1a79-4b3b-9872-ecea118f76ad
 // last-edited: 2026-11-18
 
@@ -645,6 +645,18 @@ func (w t6g1HeadWriter) AIJournalPruner(kind string) (t6g1JournalPruner, error) 
 // RecordOperationChange journals one change on the undo ledger.
 func (w t6g1HeadWriter) RecordOperationChange(change *database.OperationChange) error {
 	return database.RecordOperationChange(w.OpsStore, change)
+}
+
+// ModifyBookCredits writes a book's row and its credit lists in one commit, or
+// refuses with database.ErrBookCreditsUnsupported: the writes that use it hold a
+// lock check and a credit write together, and a store that cannot make them one
+// write gets no fallback to two.
+func (w t6g1HeadWriter) ModifyBookCredits(bookID string, fn func(book *database.Book, credits *database.BookCreditsEdit) error) (*database.Book, database.BookCreditsEdit, error) {
+	m, ok := database.AsCapability[database.BookCreditsModifier](w.OpsStore)
+	if !ok {
+		return nil, database.BookCreditsEdit{}, fmt.Errorf("%w: store is %T", database.ErrBookCreditsUnsupported, w.OpsStore)
+	}
+	return m.ModifyBookCredits(bookID, fn)
 }
 
 // t6g1MergeReader is the reads an author merge makes beyond the library lists.

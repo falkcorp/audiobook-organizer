@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_strip_merge_relink.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 771dc90a-8f91-40e6-93bc-60611ebe58b5
 // last-edited: 2026-11-18
 
@@ -15,12 +15,12 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
+	"github.com/falkcorp/audiobook-organizer/internal/authormerge"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
-	"github.com/oklog/ulid/v2"
 )
 
 // --- author-strip-merge: title-as-author relink ---
@@ -261,8 +261,9 @@ type titleRelinkStore interface {
 	// The field-state read for the candidate names, and the user's locks.
 	database.MetadataFieldStateReader
 	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
-	SetBookAuthors(bookID string, authors []database.BookAuthor) error
-	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+	// ModifyBookCredits is the one write the relink makes to a book: its credits
+	// and primary author in one commit (relinkBookCredit).
+	database.BookCreditsRowModifier
 	GetBookByID(id string) (*database.Book, error)
 	CreateOperationChange(change *database.OperationChange) error
 }
@@ -274,44 +275,58 @@ type titleRelinkJournal struct {
 	rows  int
 }
 
-func (j *titleRelinkJournal) write(bookID, changeType, field, oldValue, newValue string) error {
-	if err := database.RecordOperationChange(j.store, &database.OperationChange{
-		ID:          ulid.Make().String(),
-		OperationID: j.opID,
-		BookID:      bookID,
-		ChangeType:  changeType,
-		FieldName:   field,
-		OldValue:    oldValue,
-		NewValue:    newValue,
-	}); err != nil {
-		return err
+// write records one journal row BEFORE the change it describes and returns the
+// function that voids it when that change does not happen (authormerge.Step), so
+// a row that stands always describes a write that landed. A row that was
+// voided no longer counts in rows.
+func (j *titleRelinkJournal) write(bookID, changeType, field, oldValue, newValue string) (void func() error, err error) {
+	row := &database.OperationChange{
+		BookID:     bookID,
+		ChangeType: changeType,
+		FieldName:  field,
+		OldValue:   oldValue,
+		NewValue:   newValue,
+	}
+	voidRow, err := authormerge.Step(j.store, j.opID, row)
+	if err != nil {
+		return nil, err
 	}
 	j.rows++
-	return nil
+	return func() error {
+		if verr := voidRow(); verr != nil {
+			return verr
+		}
+		j.rows--
+		return nil
+	}, nil
 }
 
 // journalCredits records book's current credits (junction in order, and the
-// primary) before its credit moves from `from` to `into`.
-func (j *titleRelinkJournal) journalCredits(bookID string, from, into int) error {
+// primary) before its credit moves from `from` to `into`, and returns the
+// function that voids the row. A book the move did not change (held by a lock,
+// or a write that failed) voids it: a revert of a row that stands reads no field
+// lock and would write the junk credit back over whatever the user has since
+// set.
+func (j *titleRelinkJournal) journalCredits(bookID string, from, into int) (void func() error, err error) {
 	credits, err := j.store.GetBookAuthors(bookID)
 	if err != nil {
-		return fmt.Errorf("read credits for journal: %w", err)
+		return nil, fmt.Errorf("read credits for journal: %w", err)
 	}
 	full, err := j.store.GetBookByID(bookID)
 	if err != nil {
-		return fmt.Errorf("read book for journal: %w", err)
+		return nil, fmt.Errorf("read book for journal: %w", err)
 	}
 	if full == nil {
-		return fmt.Errorf("read book for journal: %s not found", bookID)
+		return nil, fmt.Errorf("read book for journal: %s not found", bookID)
 	}
 	snap := undo.TitleRelinkCreditsSnapshot{AuthorID: full.AuthorID, Credits: credits}
 	oldJSON, err := json.Marshal(snap)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	newJSON, err := json.Marshal(undo.TitleRelinkCreditsMove{FromAuthorID: from, IntoAuthorID: into})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	return j.write(bookID, ChangeTypeTitleRelinkCredits, "book_authors", string(oldJSON), string(newJSON))
 }
@@ -517,13 +532,20 @@ func relinkOneTitleBook(store titleRelinkStore, mo applygate.ManualOnlyReaders, 
 		// journaled before it happens.
 		a, _, err := creator.resolveOrCreate(chosen.name, allowCreate && !write)
 		if err == nil && a.ID <= 0 && write && allowCreate {
-			if jErr := journal.write(book.ID, ChangeTypeTitleRelinkAuthorCreate, "author_name", "", chosen.name); jErr != nil {
+			voidCreate, jErr := journal.write(book.ID, ChangeTypeTitleRelinkAuthorCreate, "author_name", "", chosen.name)
+			if jErr != nil {
 				r.Outcome = titleRelinkOutcomeFailed
 				log.Warn("author-strip-merge relink: journal write failed; author not created, book skipped",
 					"book_id", book.ID, "name", chosen.name, "err", jErr)
 				return r
 			}
 			a, _, err = creator.resolveOrCreate(chosen.name, true)
+			if err != nil || a.ID <= 0 {
+				// No author was created, so the row describes nothing. A row
+				// whose author WAS created stands even if the book is held
+				// afterwards: the author exists, and the undo removes it.
+				voidJournalRow(log, voidCreate, book.ID, ChangeTypeTitleRelinkAuthorCreate)
+			}
 		}
 		if err != nil {
 			r.Outcome = titleRelinkOutcomeFailed
@@ -547,20 +569,22 @@ func relinkOneTitleBook(store titleRelinkStore, mo applygate.ManualOnlyReaders, 
 	if !write {
 		return r
 	}
-	if jErr := journal.journalCredits(book.ID, junk.ID, author.ID); jErr != nil {
+	voidCredits, jErr := journal.journalCredits(book.ID, junk.ID, author.ID)
+	if jErr != nil {
 		r.Outcome = titleRelinkOutcomeFailed
 		log.Warn("author-strip-merge relink: journal write failed; book skipped",
 			"book_id", book.ID, "from_id", junk.ID, "into_id", author.ID, "err", jErr)
 		return r
 	}
-	held, primaryErr, err := relinkBookCredit(store, book, junk, author, false)
-	if err == nil {
-		err = primaryErr
+	held, err := relinkBookCredit(store, book, junk, author)
+	if err != nil || held {
+		// Nothing was written for this book (one commit, or none), so the
+		// journal row describes a move that did not happen: void it.
+		voidJournalRow(log, voidCredits, book.ID, ChangeTypeTitleRelinkCredits)
 	}
 	if err == nil && held {
-		// A lock saved after the check above: nothing (or only the credits, when
-		// it landed between the two writes) was moved, and the book is counted as
-		// held, not relinked.
+		// A lock saved after the check above: the commit did not run and the
+		// book is counted as held, not relinked.
 		r.Outcome = titleRelinkOutcomeUserLocked
 		return r
 	}
@@ -569,6 +593,19 @@ func relinkOneTitleBook(store titleRelinkStore, mo applygate.ManualOnlyReaders, 
 		log.Warn("author-strip-merge relink: write failed", "book_id", book.ID, "from_id", junk.ID, "into_id", author.ID, "err", err)
 	}
 	return r
+}
+
+// voidJournalRow voids a journal row whose write did not happen. A row that
+// cannot be voided is logged: it stands, and a revert of it is guarded only by
+// the revert's own current-state check.
+func voidJournalRow(log *slog.Logger, void func() error, bookID, changeType string) {
+	if void == nil {
+		return
+	}
+	if err := void(); err != nil {
+		log.Warn("author-strip-merge relink: journal row could not be voided",
+			"book_id", bookID, "change_type", changeType, "err", err)
+	}
 }
 
 func sortedKeys(m map[string]bool) []string {

@@ -1,7 +1,7 @@
 // file: internal/authormerge/authormerge_test.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: 8a1e4c62-9d37-4b05-b6f8-2e7a5c0d9f13
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package authormerge
 
@@ -84,12 +84,18 @@ type creditsFake struct {
 	*fakeStore
 	creditsErr error
 	calls      int
+	// beforeCallback runs after ModifyBookCredits is entered and before its
+	// callback: the moment a lock saved "just now" must still be seen.
+	beforeCallback func()
 }
 
 func (f *creditsFake) ModifyBookCredits(id string, fn func(*database.Book, *database.BookCreditsEdit) error) (*database.Book, database.BookCreditsEdit, error) {
 	f.calls++
 	if f.creditsErr != nil {
 		return nil, database.BookCreditsEdit{}, f.creditsErr
+	}
+	if f.beforeCallback != nil {
+		f.beforeCallback()
 	}
 	b := f.books[id]
 	if b == nil {
