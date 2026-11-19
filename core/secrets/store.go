@@ -1,7 +1,7 @@
 // file: core/secrets/store.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: be9e243c-f9df-4ff7-930d-10a5b90f2f49
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package secrets
 
@@ -13,17 +13,18 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"iter"
 	"log/slog"
 	"maps"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/internal/keyedmutex"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/storage"
@@ -33,9 +34,41 @@ import (
 // writeAttempts bounds Put's and Delete's storage.RetryOnConflict.
 const writeAttempts = 5
 
+// StateFiles is the state directory as secrets reads and writes it: the
+// labelled state filesystem the kernel opens on core.paths.state_dir
+// (core/internal/statefs: an *os.Root in production, the crash matrix's
+// filesystem under its seam, COR10-7). Names are relative to the directory,
+// and one that leaves it is refused, as os.Root refuses it. Each mutating
+// call takes the crash-point label of its operation (06 §6.5.1's writer
+// table). The interface replaces 05-config §2.3's *os.Root (coined by
+// F3-07).
+type StateFiles interface {
+	Lstat(name string) (fs.FileInfo, error)
+	Open(name string) (io.ReadCloser, error)
+	ReadDir(name string) ([]fs.DirEntry, error)
+	Chmod(label, name string, mode fs.FileMode) error
+	MkdirAll(label, name string, perm fs.FileMode) error
+	// WriteNew creates name exclusively with perm, writes data, fsyncs and
+	// closes it; after a failed write the caller removes the file.
+	WriteNew(label, name string, data []byte, perm fs.FileMode) error
+	Link(label, oldname, newname string) error
+	Rename(label, oldname, newname string) error
+	Remove(label, name string) error
+	SyncDir(label, name string) error
+}
+
+// The crash-point labels of the secret store's boot writes (06 §6.5.1, P4b
+// first; coretest/crashmatrix's writer table). Names coined by F3-07.
+const (
+	labelMeta      = "secrets.meta"          // c/secrets/meta's batch
+	labelKeyring   = "secrets.keyring"       // the keyring file: created, its mode fixed, its header rewritten
+	labelStaleTemp = "secrets.keyring.stale" // a stale keyring temporary file removed
+	labelExport    = "secrets.export"        // export-keyring's copy and record (offline, never a boot)
+)
+
 // Options configures Open (05-config §2.3).
 type Options struct {
-	StateDir *os.Root // opened by the kernel on core.paths.state_dir
+	StateDir StateFiles // opened by the kernel on core.paths.state_dir
 	// KeyFile is the keyring file, relative to StateDir; "" is the default
 	// "secrets.keyring" (core.secrets.key_file). A dry run passes a path
 	// inside its scratch directory (§2.4 step 1).
@@ -77,7 +110,7 @@ type Store struct {
 	ks      storage.Keyspace
 	appID   string
 	keyFile string
-	root    *os.Root
+	root    StateFiles
 	log     *slog.Logger
 	now     func() time.Time
 
@@ -218,7 +251,9 @@ func (s *Store) recordKeyNumbers(ctx context.Context, m *storeMeta, old []byte, 
 	if err := b.Set(metaKey(), raw); err != nil {
 		return fmt.Errorf("secrets: write c/secrets/meta: %w", err)
 	}
+	exit := bootseam.Region(ctx, labelMeta)
 	err = b.Commit(ctx, storage.Sync)
+	exit()
 	if errors.Is(err, storage.ErrConflict) {
 		// Another Open wrote meta first: accepted when it names this app
 		// and records at least n.
@@ -258,7 +293,7 @@ func (s *Store) removeStaleTemps() {
 	if dir == "" {
 		dir = "."
 	}
-	entries, err := fs.ReadDir(s.root.FS(), filepath.ToSlash(filepath.Clean(dir)))
+	entries, err := s.root.ReadDir(dir)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			s.log.Warn("secrets: could not list the keyring directory for stale temporary files", "key_file", s.keyFile, "error", err)
@@ -271,7 +306,7 @@ func (s *Store) removeStaleTemps() {
 			continue
 		}
 		name := filepath.Join(dir, e.Name())
-		if err := s.root.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if err := s.root.Remove(labelStaleTemp, name); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			s.log.Warn("secrets: could not remove a stale keyring temporary file", "file", name, "error", err)
 			continue
 		}
