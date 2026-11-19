@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/book_shape_report.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 3f0c5a71-8d4e-4a92-9b16-2c7e5d40ab31
 // last-edited: 2026-11-18
 
@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/chaptershape"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/library"
 	"github.com/falkcorp/mediacore/tasks"
 )
 
@@ -227,9 +228,9 @@ type bookShapeReportParams struct {
 	SampleLimit int `json:"sampleLimit,omitempty"`
 
 	// ReportPath overrides where the per-finding TSV is written, but only inside
-	// {RootDir}/.reports: a relative path is taken relative to that directory, and
-	// one that resolves outside it (absolute, "..", or through a symlink) is
-	// refused before the store is read. Empty =
+	// {RootDir}/.reports, as a bare file name in that directory (or an absolute path
+	// whose directory is that one); a name with a directory in it, or a path
+	// anywhere else, is refused before the store is read. Empty =
 	// {RootDir}/.reports/book-shape-report-<opID>.tsv.
 	ReportPath string `json:"reportPath,omitempty"`
 
@@ -1161,11 +1162,6 @@ func joinPrimary(g bookShapeGroup) string {
 // writeBookShapeReport writes the per-finding TSV. This is the op's ONLY write
 // of any kind, and it lands in the app-owned {RootDir}/.reports directory.
 func writeBookShapeReport(path string, findings []bookShapeFinding) error {
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o775); err != nil {
-			return err
-		}
-	}
 	clean := strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace
 	var b strings.Builder
 	b.WriteString("shape\tdir\tbook_ids\tpath_kind\tlibrary_state\tis_primary_version\towned_rows\tdisk_files\tdetail\trecommendation\n")
@@ -1175,7 +1171,7 @@ func writeBookShapeReport(path string, findings []bookShapeFinding) error {
 			clean(f.LibraryState), f.IsPrimary, f.OwnedRows, f.DiskFiles,
 			clean(f.Detail), clean(f.Recommendation))
 	}
-	return os.WriteFile(path, []byte(b.String()), 0o664)
+	return library.WriteReportFile(path, []byte(b.String()), library.FileMode)
 }
 
 // t6g2StageProgress is sdk.Progress over an env: the same frames (Start at

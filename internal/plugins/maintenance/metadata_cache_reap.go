@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/metadata_cache_reap.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 6b1f9d47-3c82-4e05-9a71-d84c2f60e5b3
-// last-edited: 2026-11-15
+// last-edited: 2026-11-18
 
 // Package maintenance — REAPER for metadata_cache rows whose book is gone.
 //
@@ -44,8 +44,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -54,6 +52,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/library"
 	"github.com/falkcorp/mediacore/tasks"
 )
 
@@ -543,11 +542,6 @@ func (p *reapPlan) restampApplyOutcomes(outcomes map[string]reapDecision) {
 // reap set, and a reader auditing afterwards needs the book_ids to know what to
 // re-fetch.
 func writeReapReport(path string, decisions []reapDecision) error {
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o775); err != nil {
-			return err
-		}
-	}
 	// A reason with a tab or newline in it would shift every later column
 	// silently — store errors are interpolated into reason, so this is real.
 	clean := strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace
@@ -556,5 +550,5 @@ func writeReapReport(path string, decisions []reapDecision) error {
 	for _, d := range decisions {
 		fmt.Fprintf(&b, "%s\t%s\t%d\t%s\n", d.Bucket, clean(d.BookID), d.Candidates, clean(d.Reason))
 	}
-	return os.WriteFile(path, []byte(b.String()), 0o664)
+	return library.WriteReportFile(path, []byte(b.String()), library.FileMode)
 }

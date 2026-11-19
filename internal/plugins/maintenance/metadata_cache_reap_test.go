@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/metadata_cache_reap_test.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 2f7a5c81-9de3-4b06-8c14-a35f7e290bd6
 // last-edited: 2026-11-18
 
@@ -316,7 +316,7 @@ func TestMetadataCacheReap_ReportListsEveryScannedRow(t *testing.T) {
 	}
 	plan := runReapPlan(t, cache, books, metadataCacheReapParams{Max: 2})
 
-	path := filepath.Join(t.TempDir(), "nested", "reap.tsv")
+	path := filepath.Join(t.TempDir(), "reap.tsv")
 	require.NoError(t, writeReapReport(path, plan.all))
 
 	raw, err := os.ReadFile(path)

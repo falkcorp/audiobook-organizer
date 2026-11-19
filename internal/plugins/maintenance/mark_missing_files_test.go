@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/mark_missing_files_test.go
-// version: 1.6.4
+// version: 1.6.5
 // guid: 8b2e4f61-9c73-45a0-8d1e-2f6a7c904b3d
-// last-edited: 2026-11-14
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -374,7 +374,7 @@ func TestMarkMissing_ReportRecordsFlipsAndUnreadableOnly(t *testing.T) {
 
 // The TSV must round-trip: one header + one line per decision, tabs intact.
 func TestMarkMissing_WriteReportRoundTrips(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nested", "report.tsv")
+	path := filepath.Join(t.TempDir(), "report.tsv")
 	decisions := []markDecision{
 		{Bucket: "mark-missing", FileID: "f1", BookID: "b1", Path: "/a/gone.mp3", Reason: "bytes gone → set Missing=true"},
 		{Bucket: "unreadable", FileID: "f2", BookID: "b1", Path: "/a/weird\tname.mp3", Reason: "stat failed"},

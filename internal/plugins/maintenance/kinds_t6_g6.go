@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g6.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: d78a6104-de76-4b10-ab6f-1cf177912760
-// last-edited: 2026-11-15
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -549,6 +549,13 @@ type t6g6Deps struct {
 	RootDir func() string
 	// ResolveReportPath resolves where a per-run report file goes (the plugin's
 	// resolveReportPath: explicit path, or fileName under the root's report dir).
+	//
+	// An implementation MUST be Plugin.resolveReportPath (library.ReportPathNotify),
+	// not a pass-through: it is the only check that confines a caller-supplied
+	// reportPath to {root_dir}/.reports and vets an existing file at it. The report
+	// writers then open the returned path without following links, but they cannot
+	// tell whether the directory is the right one. Tests may stub it with a fixed
+	// path; production wiring must not.
 	ResolveReportPath func(explicit, fileName string) (string, error)
 	// ITunesRoots resolves the protected iTunes roots (merge.ITunesProtectedRoots
 	// over the configured iTunes settings).

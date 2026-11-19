@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g2_test.go
-// version: 1.3.10
+// version: 1.3.11
 // guid: 7d3c1e58-2b94-4a6f-9e07-c5a18f2d4b63
 // last-edited: 2026-11-18
 
@@ -1683,7 +1683,7 @@ func t6g2ReadOnlySubtests(t *testing.T) {
 		_ = h
 
 		// An explicit reportPath param wins over the resolved directory.
-		explicit := filepath.Join(t.TempDir(), "nested", "shapes.tsv")
+		explicit := filepath.Join(t.TempDir(), "shapes.tsv")
 		f2 := newT6G2Fakes(t)
 		t6g2ShapeFixture(t, f2)
 		def := t6g2KindByName(t, (&Plugin{}).t6g2Kinds(f2.deps(), nil), r.kind)

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_crossfolder.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 65b43ad1-649a-4077-856f-593cb93f5cbd
-// last-edited: 2026-11-15
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -21,6 +21,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // This file holds the two explicitly-scoped deletion modes of
@@ -354,11 +355,6 @@ func decisionsReportPath(bookReport string) string {
 // writeRowDecisionsReport dumps every cross_folder / remove_row decision as a
 // TSV, sorted for diffability. Zero rows still writes the header.
 func writeRowDecisionsReport(path string, rows []bookFileRowDecision) error {
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o775); err != nil {
-			return err
-		}
-	}
 	out := append([]bookFileRowDecision(nil), rows...)
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].BookID != out[j].BookID {
@@ -374,7 +370,7 @@ func writeRowDecisionsReport(path string, rows []bookFileRowDecision) error {
 			r.Mode, r.Action, clean(r.BookID), clean(r.RowID), clean(r.Path), r.Size,
 			clean(r.TwinRowID), clean(r.TwinPath), clean(r.Reason))
 	}
-	return os.WriteFile(path, []byte(b.String()), 0o664)
+	return library.WriteReportFile(path, []byte(b.String()), library.FileMode)
 }
 
 // emitRowDecisions logs every decision as its own line — the preview IS this
