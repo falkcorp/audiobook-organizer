@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/interfaces.go
-// version: 1.8.3
+// version: 1.9.0
 // guid: 7a91ad40-5c96-4423-ad24-715acb791cf8
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 // Narrow dependency interfaces for the system domain handlers (health, status,
 // announcements, storage, logs, activity-log, config
@@ -18,7 +18,6 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
 	"github.com/gin-gonic/gin"
 )
@@ -109,10 +108,13 @@ type SystemService interface {
 	CollectSystemLogs(level, search string, limit, offset int, mayRead sysinfo.LogReadCheck) ([]sysinfo.SystemLogEntry, int, error)
 }
 
-// ConfigUpdateService is the narrow *config.UpdateService subset used by
-// updateConfig.
+// ConfigUpdateService is the *config.UpdateService write the settings route
+// used before F3-07 e3. GET and PUT /config now run over the config Facade
+// (config_handler.go), nothing calls this, and the secret masking that used to
+// sit beside it is gone: a secret is write-only. It stays one slice, as New's
+// parameter type, because New's caller is outside that slice; the slice that
+// edits the caller deletes the interface, its mock and New's parameter.
 type ConfigUpdateService interface {
-	MaskSecrets(cfg config.Config) config.Config
 	UpdateConfig(ctx context.Context, payload map[string]any) (int, map[string]any)
 }
 
