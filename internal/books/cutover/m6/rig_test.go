@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/rig_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7be2c0d4-8a51-4c3e-b0a6-2f1d94c7e6a3
 // last-edited: 2026-11-19
 
@@ -159,6 +159,11 @@ func newSecrets() *secretsDouble {
 }
 
 func (s *secretsDouble) ImportSecret(ctx context.Context, b *storage.Batch, w secrets.Write) error {
+	// The real store refuses a name no secret can have; the double must too, or a
+	// stand-in that spells one wrong is never caught.
+	if err := w.Name.Validate(); err != nil {
+		return fmt.Errorf("the secrets store refuses the name %q: %w", w.Name, err)
+	}
 	s.mu.Lock()
 	s.imports = append(s.imports, w.Name)
 	s.mu.Unlock()
@@ -191,6 +196,13 @@ func (s *secretsDouble) names(ctx context.Context) ([]secrets.Name, error) {
 		set[n] = true
 	}
 	s.mu.Unlock()
+	// A name in the store was written through ImportSecret, which validates; one
+	// placed by a test's seed is held to the same rule.
+	for n := range set {
+		if err := n.Validate(); err != nil {
+			return nil, fmt.Errorf("the rig's seed holds the name %q, which the secrets store would refuse: %w", n, err)
+		}
+	}
 	if ks := s.get(); ks.Prefix() != "" {
 		for kv, err := range ks.Scan(ctx, storage.ScanOptions{}) {
 			if err != nil {

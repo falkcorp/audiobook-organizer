@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/corpus_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 3f9e1b64-2c07-4a85-8d13-b6e0a7c45d92
 // last-edited: 2026-11-19
 
@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -60,90 +59,77 @@ func TestCorpus_ClassInputMembersArePinned(t *testing.T) {
 	}
 }
 
-// m2Residual is the blob as M2 leaves it: the class-i members only, with the
-// secrets of metadata_sources[].credentials, the deluge password and the webhook
-// secret moved out into the secrets store under the names the rename table
-// gives them. It returns the new envelope and the secrets M2 would have stored.
+// m2Residual is the blob as M2 leaves it, and the secrets M2 moves out of it,
+// from M2's own planner (cutover.PlanBlobResidual runs buildPlan, the code M2's
+// step applies): the class-i members stay, every credential, the Deluge daemon
+// password and the webhook secret go to the secrets store under the names M2
+// gives them, and a member M2 quarantines is gone. Run on the stand-in's own
+// rules this was a copy of M2's naming, and it spelled a credential key
+// "apiKey" where M2 writes api_key, a name the secrets store refuses.
 func m2Residual(t testing.TB, raw []byte) ([]byte, map[secrets.Name]string) {
 	t.Helper()
-	var env map[string]any
-	if err := json.Unmarshal(raw, &env); err != nil {
-		t.Fatalf("blob envelope: %v", err)
+	res, err := cutover.PlanBlobResidual(raw)
+	if err != nil {
+		t.Fatalf("M2's planner over the corpus blob: %v", err)
 	}
-	var top map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(env["value"].(string)), &top); err != nil {
-		t.Fatalf("blob value: %v", err)
-	}
-	stored := map[secrets.Name]string{}
-	keep := map[string]json.RawMessage{}
-	for _, name := range classInputMembers() {
-		if v, ok := top[name]; ok {
-			keep[name] = v
-		}
-	}
-	if raw, ok := keep["metadata_sources"]; ok {
-		var srcs []map[string]any
-		if err := json.Unmarshal(raw, &srcs); err != nil {
-			t.Fatalf("metadata_sources: %v", err)
-		}
-		for _, s := range srcs {
-			creds, _ := s["credentials"].(map[string]any)
-			for k, v := range creds {
-				if str, _ := v.(string); str != "" {
-					stored[secrets.Name("integrations.metadata."+s["id"].(string)+".credentials."+k)] = str
-				}
-			}
-			delete(s, "credentials")
-		}
-		keep["metadata_sources"] = mustJSON(t, srcs)
-	}
-	if raw, ok := keep["download_client"]; ok {
-		var dc map[string]any
-		if err := json.Unmarshal(raw, &dc); err != nil {
-			t.Fatalf("download_client: %v", err)
-		}
-		if tor, _ := dc["torrent"].(map[string]any); tor != nil {
-			if d, _ := tor["deluge"].(map[string]any); d != nil {
-				if pw, _ := d["password"].(string); pw != "" {
-					stored["integrations.download.deluge.daemon_password"] = pw
-				}
-				delete(d, "password")
-			}
-		}
-		keep["download_client"] = mustJSON(t, dc)
-	}
-	if raw, ok := keep["plugins"]; ok {
-		var pl map[string]any
-		if err := json.Unmarshal(raw, &pl); err != nil {
-			t.Fatalf("plugins: %v", err)
-		}
-		if wh, _ := pl["webhook"].(map[string]any); wh != nil {
-			if st, _ := wh["settings"].(map[string]any); st != nil {
-				if sec, _ := st["secret"].(string); sec != "" {
-					n := 0
-					for _, u := range strings.Split(st["urls"].(string), ",") {
-						if strings.TrimSpace(u) == "" {
-							continue
-						}
-						n++
-						stored[secrets.Name("integrations.notify.webhook-"+strconv.Itoa(n)+".secret")] = sec
-					}
-				}
-				delete(st, "secret")
-			}
-		}
-		keep["plugins"] = mustJSON(t, pl)
-	}
-	env["value"] = string(mustJSON(t, keep))
-	return mustJSON(t, env), stored
+	return res.Row, res.Secrets
 }
 
 // headSecretRows are HEAD's encrypted setting rows M2 moves into the secrets
-// store (class s, stored as a row), with the name each lands under.
-var headSecretRows = map[string]secrets.Name{
-	"setting:hardcover_api_token":  "integrations.metadata.hardcover.api_token",
-	"setting:google_books_api_key": "integrations.metadata.google-books.api_key",
-	"setting:openai_api_key":       "integrations.ai.openai.api_key",
+// store (class s, stored as a row), with the name each lands under: read from
+// the rename table M2's planner walks, not typed here.
+func headSecretRows(t testing.TB) map[string]secrets.Name {
+	t.Helper()
+	out := map[string]secrets.Name{}
+	for _, row := range cutover.Table().Rows {
+		if row.Top && row.Class == cutover.ClassSecret && row.Stored == cutover.StoredRow {
+			out["setting:"+row.Head] = secrets.Name(row.Targets[0].Path)
+		}
+	}
+	if len(out) != 4 {
+		t.Fatalf("the rename table has %d top-level secret rows, the stand-in expects HEAD's four encrypted settings", len(out))
+	}
+	return out
+}
+
+// TestRig_SecretsDoubleRefusesWhatTheStoreWould: the double holds a name to
+// secrets.Name.Validate on both paths into it (an import and a test's seed), so a
+// stand-in that spells a name the store cannot hold fails instead of recording it.
+func TestRig_SecretsDoubleRefusesWhatTheStoreWould(t *testing.T) {
+	bad := secrets.Name("integrations.metadata.hardcover.credentials.apiKey")
+	s := newSecrets()
+	if err := s.ImportSecret(context.Background(), nil, secrets.Write{Name: bad, Value: secrets.NewValue("x"), By: "test"}); err == nil {
+		t.Error("an import under an invalid name was accepted")
+	}
+	s.seed[bad] = "x"
+	if _, err := s.names(context.Background()); err == nil {
+		t.Error("a seeded invalid name was listed")
+	}
+}
+
+// TestCorpus_M2NamesTheCredentialsInSnakeCase: M2's planner writes a metadata
+// source's camel-case credential key as a snake-case secret name, and M6 refers
+// to it under that name. This is the name F7-09's M2-then-M6 boot produces.
+func TestCorpus_M2NamesTheCredentialsInSnakeCase(t *testing.T) {
+	tree := map[string]any{"metadata_sources": []any{
+		map[string]any{"id": "hardcover", "name": "Hardcover", "enabled": true, "credentials": map[string]any{"apiKey": "fixture-token-robin"}},
+	}}
+	res, err := cutover.PlanBlobResidual(blobRow(t, tree))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := secrets.Name("integrations.metadata.hardcover.credentials.api_key")
+	if res.Secrets[want] != "fixture-token-robin" || len(res.Secrets) != 1 {
+		t.Errorf("M2 imports %v, want exactly %s", res.Secrets, want)
+	}
+	for n := range res.Secrets {
+		if err := n.Validate(); err != nil {
+			t.Errorf("M2 imports an invalid name: %v", err)
+		}
+	}
+	if strings.Contains(string(res.Row), "fixture-token-robin") {
+		t.Error("the residual blob still holds the credential")
+	}
 }
 
 // afterM2 shapes a corpus rig as the store M2 leaves: the residual blob, and the
@@ -166,7 +152,7 @@ func afterM2(r *rig) {
 		for n, v := range stored {
 			r.secrets.seed[n] = v
 		}
-		for key, name := range headSecretRows {
+		for key, name := range headSecretRows(t) {
 			if _, err := lr.Get(ctx, []byte(key)); err == nil {
 				r.secrets.seed[name] = "m2-moved-" + string(name)
 			}

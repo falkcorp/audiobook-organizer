@@ -1,7 +1,7 @@
 # file: .gitattributes
-# version: 1.2.0
+# version: 1.2.1
 # guid: 76fde732-3fdf-4034-94f3-6cc208a767b3
-# last-edited: 2026-11-10
+# last-edited: 2026-11-19
 
 # Git LFS was retired on 2026-09-22.
 #
@@ -39,3 +39,6 @@ internal/books/testdata/r2corpus/manifest.json -text diff
 # F2-14's P1 counts: JSON a reviewer checks against the owner's recorded numbers.
 internal/books/testdata/r2corpus/p1_counts.json -text diff
 internal/books/testdata/r2corpus/answers/*.json -text diff
+# F7-08's M6 goldens (internal/books/cutover/m6 corpus tests) are test output, not
+# corpus bytes: a change to them is a behaviour change a reviewer must read.
+internal/books/testdata/r2corpus/m6/*.golden.json -text diff

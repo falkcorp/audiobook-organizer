@@ -428,8 +428,8 @@
           "api_token": {
             "secret": "integrations.metadata.hardcover.api_token"
           },
-          "credentials.apiKey": {
-            "secret": "integrations.metadata.hardcover.credentials.apiKey"
+          "credentials.api_key": {
+            "secret": "integrations.metadata.hardcover.credentials.api_key"
           }
         },
         "updated": "0001-01-01T00:00:00Z",
