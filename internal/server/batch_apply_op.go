@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.29.0
+// version: 1.30.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 //
 // batch_apply_op registers the "metadata.batch-apply-cached" v2 OperationDef.
 // The HTTP handler BatchApplyFromCache enqueues this and returns the op id

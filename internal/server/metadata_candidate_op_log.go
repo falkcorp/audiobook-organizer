@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op_log.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 17ed77c1-1759-4abb-947e-4de2acc4000c
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 //
 // Per-book outcome lines and running outcome counts for the
 // metadata.candidate-fetch op log.

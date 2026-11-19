@@ -1,7 +1,7 @@
 // file: internal/server/diagnostics_ai_ops.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c8f2a91-3d6e-4b07-9e14-8a2f7c0d3b56
-// last-edited: 2026-09-19
+// last-edited: 2026-11-18
 
 // diagnostics_ai_ops registers the diagnostics.ai-analyze OperationDef, which
 // replaces the bare goroutine in handlers.SubmitAI that used to mint a legacy

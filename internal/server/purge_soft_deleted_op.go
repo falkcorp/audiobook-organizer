@@ -1,7 +1,7 @@
 // file: internal/server/purge_soft_deleted_op.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e7a9c41-5d08-4b63-8f1a-6c3d0b9e4a72
-// last-edited: 2026-10-26
+// last-edited: 2026-11-18
 
 package server
 

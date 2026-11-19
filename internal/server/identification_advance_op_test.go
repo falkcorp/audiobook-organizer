@@ -1,7 +1,7 @@
 // file: internal/server/identification_advance_op_test.go
-// version: 1.0.5
+// version: 1.1.0
 // guid: e7a545a5-fab9-47d7-9f05-5851bcf6cdb8
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 
 package server
 

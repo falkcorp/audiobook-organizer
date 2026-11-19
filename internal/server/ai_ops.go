@@ -1,7 +1,7 @@
 // file: internal/server/ai_ops.go
-// version: 1.11.1
+// version: 1.12.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // ai_ops registers the ai.author-review and ai.author-merge-apply
 // OperationDefs that previously went through the legacy BridgeQueue.
