@@ -215,6 +215,7 @@ var defTargets = map[string]Target{
 	"maintenance.repair-merged-user-state":           {Kind: "books.maintenance.repair-merged-user-state", Rule: RuleBooks},
 	"maintenance.repair-missing-files":               {Kind: "books.retired.maintenance.repair-missing-files", Rule: RuleRetired},
 	"maintenance.repair-transcribe-status":           {Kind: "books.maintenance.repair-transcribe-status", Rule: RuleBooks},
+	"maintenance.reparse-file-intros":                {Kind: "books.maintenance.reparse-file-intros", Rule: RuleBooks},
 	"maintenance.repoint-book-file-rows":             {Kind: "books.maintenance.repoint-book-file-rows", Rule: RuleBooks},
 	"maintenance.repoint-missing-to-folder-audio":    {Kind: "books.maintenance.repoint-missing-to-folder-audio", Rule: RuleBooks},
 	"maintenance.repoint-unrecorded-renames":         {Kind: "books.maintenance.repoint-unrecorded-renames", Rule: RuleBooks},
