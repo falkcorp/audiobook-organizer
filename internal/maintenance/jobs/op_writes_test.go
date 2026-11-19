@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/op_writes_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8e3b5f21-6d94-4c07-b1a8-2f7c9e0d4a53
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package jobs
 
@@ -96,10 +96,12 @@ func TestOpWrites_EveryRegisteredJobDeclaresWritesOrIsReadOnly(t *testing.T) {
 	}
 }
 
-// TestOpWrites_IsTheDerivedSetAndSorted: the OperationDef set is exactly the
-// Effects set, name for name, in a stable order, and a job the table does not
-// know is an error rather than an empty set.
-func TestOpWrites_IsTheDerivedSetAndSorted(t *testing.T) {
+// TestOpWrites_ConversionKeepsNamesAndOrder pins only the conversion: opWrites is
+// a cast of jobWritesFor, so comparing the two shows the cast keeps every name in
+// a sorted order and that an unknown job is an error, nothing more. What a job
+// DECLARES is checked by the allowlist test above (a writer cannot pass for a
+// read-only job) and by TestOpWrites_SeriesAndBooksWritersSeeTheSeriesOps.
+func TestOpWrites_ConversionKeepsNamesAndOrder(t *testing.T) {
 	derived, err := jobWritesFor()
 	if err != nil {
 		t.Fatal(err)
