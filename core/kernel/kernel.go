@@ -1,5 +1,5 @@
 // file: core/kernel/kernel.go
-// version: 1.0.25
+// version: 1.0.26
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
 // last-edited: 2026-11-18
 
@@ -295,6 +295,9 @@ type Kernel struct {
 	// P0, loaded at P3, bound to the DB layer at P4b and attached at P4d. nil
 	// when the gate is off, which is every boot of ABO.
 	cfgBoot *configBoot
+	// sec is the open secret store (Config.CoreConfigBoot, a store open): opened
+	// at the start of P4b, closed before the store (storage.go closeStorage).
+	sec *kernelSecrets
 	// settingHandles are the live handles of the enabled modules' declared
 	// sections, by path, registered at P3 (RegistrarConfig.Settings).
 	settingHandles map[config.Path]any
@@ -604,7 +607,7 @@ func (k *Kernel) register(ctx context.Context) error {
 			continue
 		}
 		deps := module.Deps{Module: id, Log: k.moduleLog(id), Metrics: scope, ExtendStart: k.extendStart(id),
-			RequestRestart: k.lifecycle.RequestRestart, Storage: k.storageHandles(id)}
+			RequestRestart: k.lifecycle.RequestRestart, Storage: k.storageHandles(id), Secrets: k.secretsScope(id)}
 		r := module.NewRegistrar(module.RegistrarConfig{
 			Context:       regCtx,
 			Deps:          deps,
