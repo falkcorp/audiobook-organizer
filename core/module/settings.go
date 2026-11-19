@@ -1,7 +1,7 @@
 // file: core/module/settings.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b0f4d8e-2c79-4a6e-9d13-8e7b6f1a0c42
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package module
 
@@ -14,6 +14,7 @@ import (
 
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/secrets"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // SettingsSection wraps a config.Section[T] so a Manifest can list sections
@@ -152,6 +153,22 @@ func defaultsHandle[T any](s config.Section[T]) *config.Handle[T] {
 type Importers struct {
 	Config  config.Importer  // F3
 	Secrets secrets.Importer // F3; encrypts with the keyring in the state directory
+
+	// Legacy hands owner's legacy-range reader, the rows its cutover steps plan
+	// from. The runner steps a step once per source key and gives it no range,
+	// so a step that plans from more than its own source (books' M2 reads the
+	// whole settings family) reads it here. It returns nil until the kernel
+	// binds it (after Prepare, at the start of P4b) and for an owner that
+	// declared no claims; a step treats nil as "the store is not open yet" and
+	// fails. Never nil as a func. Added by F3-07 slice d for M2; removed with
+	// M2 by the cleanup that deletes the cutover steps (seams.d/F3-07.md).
+	Legacy func(owner storage.Owner) storage.Reader
+	// AllowKeyRegen reports core.secrets.allow_key_regen as the layers resolved
+	// it for this boot: true lets M2 go on without HEAD's settings key and mark
+	// the rows it cannot decrypt unreadable. False until bound, and false on a
+	// boot whose config store is not wired. Never nil as a func. Added and
+	// removed with Legacy.
+	AllowKeyRegen func() bool
 }
 
 // ErrImporterNotBound is what a late-bound importer returns before the

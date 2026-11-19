@@ -1,7 +1,7 @@
 // file: core/kernel/storage.go
-// version: 1.1.8
+// version: 1.1.9
 // guid: 129333ce-8ab8-40ac-a70a-ae2c593dfd6c
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package kernel
 
@@ -266,6 +266,9 @@ func (k *Kernel) migrateStorage(ctx context.Context) error {
 	// P4b); with no config or secrets store wired (the gate off) they stay
 	// unbound and a step that reaches one fails with module.ErrImporterNotBound.
 	k.importers().bind(k.importerCfg, k.importerSec)
+	// Importers.Legacy and AllowKeyRegen bind with them: the legacy ranges exist
+	// as soon as Prepare returned the DB, gate or no gate.
+	k.importers().bindLegacy(db, k.importerAllowRegen)
 	if err := db.Migrate(ctx); err != nil {
 		return fmt.Errorf("kernel: migrate storage (P4b): %w", err)
 	}

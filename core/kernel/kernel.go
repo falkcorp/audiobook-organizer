@@ -1,7 +1,7 @@
 // file: core/kernel/kernel.go
-// version: 1.0.26
+// version: 1.0.27
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 // Package kernel is core's boot machinery (06 §6.4.6): the boot-phase runner
 // of 06 §6.5.1, the Registrar and Deps of each module, the collision checks
@@ -291,6 +291,10 @@ type Kernel struct {
 	imp         *lateImporters
 	importerCfg config.Importer
 	importerSec secrets.Importer
+	// importerAllowRegen is core.secrets.allow_key_regen as bindCoreStores read
+	// it; false until then. P4b binds it, with the Legacy reader, into the
+	// Importers a Cutover func holds (Importers.AllowKeyRegen).
+	importerAllowRegen bool
 	// cfgBoot is the layered config store (Config.CoreConfigBoot): built at
 	// P0, loaded at P3, bound to the DB layer at P4b and attached at P4d. nil
 	// when the gate is off, which is every boot of ABO.
