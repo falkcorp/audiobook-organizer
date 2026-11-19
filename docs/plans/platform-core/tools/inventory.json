@@ -1989,7 +1989,14 @@
    "core/kernel/perimeter.go",
    "core/kernel/supervisor.go",
    "internal/books/options.go",
-   "internal/books/cutover/deployfiles_test.go"
+   "internal/books/cutover/deployfiles_test.go",
+   "core/module/settings.go",
+   "core/module/module.go",
+   "core/kernel/core_sections.go",
+   "core/kernel/config_keys.go",
+   "core/kernel/module_settings.go",
+   "internal/books/cutover/rename_data.go",
+   "internal/books/cutover/testdata/rename_table.golden"
   ],
   "spec": "09 §9.4 R2 flips table F3, §9.2.1 (freeze from F3's merge; the pre-freeze release), §9.2.5, §9.6 rows 6-8; 03 §3.8 F3; 05-config §1.12.1 item 2, 'Between the config flip and the identity flip'; 05-http-api §8.1 F3 row; 06 §6.4.10 F3",
   "notes": "Tier: a flip PR carrying a one-way migration and every deploy-file rename. F3-08 starts the freeze and records ci/prefreeze_release.txt; this PR embeds that tag in the cutover build. The names nothing reads (AUDIOBOOK_ROOT_DIR, AO_DIR, AO_DB, OLLAMA_BASE_URL) leave the deploy files. A secret is write-only from here (secrets.Meta). Every PR from here runs the cutover suite in extraction-gates. Embeds F3-08's ci/prefreeze_release.txt. Wires secrets at P4b and Attach at P4d, binds F3-04's sealer, F3-05's password resolver and F3-03's keyring, adds Manifest.Cutover, Importers.Config, Importers.Secrets and Deps.Secrets, the F3 offline commands, and storage's refusal to create a store while a retired database-path name is set; deletes configupdate's ServiceDef (06 §6.11.1 step 4). internal/books/config.go is books' config section (path coined here). Before merge: RELEASE_FREEZE still reads R2 and no prerelease.yml or release-prod.yml run is unfinished; otherwise STOP and report. 04 keys: F3 move internal/server/middleware (basicauth.go) -> mediacore/httpapi. Owns gate tests: TestRenameTable_EveryKeyRegistered; TestDeployFilesUseCanonicalNamesOnly (the deploy-files test); TestBasicGate_ExemptSetGolden; TestBasicGate_MoreRestrictiveWins (the compose cell of TestPerimeterHonoursBlobOnlyValues); TestConfigCutover_NoPlaintextSecretOnDisk; TestCutoverRefusedByOlderBuilds. Flip PR: one atomic PR (09 §9.2.1)."
