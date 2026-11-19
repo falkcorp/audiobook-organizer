@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/kinds_chain_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6d01f54f-d1e9-4cf7-8def-037dd38e3e04
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package dedup
 
@@ -367,6 +367,69 @@ func TestDedupChain_RunAllReenqueuesAChildTheKernelNoLongerKnows(t *testing.T) {
 	}
 	require.NoError(t, runKindOn(t, def, h, ""))
 	require.Equal(t, []tasks.Kind{kindFor("dedup.llm-review")}, enqueuedKinds(h))
+}
+
+// HEAD's resume restarts a recorded child that a restart interrupted. The
+// llm-review child is ResumeDrop, so after a restart the kernel drops it: the
+// step starts it again instead of failing the run (review m1).
+func TestDedupChain_RunAllRestartsARecordedChildTheKernelDropped(t *testing.T) {
+	for _, state := range []tasks.RunState{tasks.StateInterruptedDropped, tasks.StateInterrupted, tasks.StateInterruptedQuiesced} {
+		t.Run(string(state), func(t *testing.T) {
+			setEmbeddings(t, true)
+			_, d := newChainSpy()
+			def := (&Plugin{}).runAllNative(d, nil)
+			h := newKindHost(def, tasks.ModeLive, &sentinelWriter{})
+			require.NoError(t, h.FakeRun.SetCheckpoint("", runAllState{
+				Plan:      []string{"ai-review"},
+				StepIndex: 0, ChildOpID: "child-dropped",
+			}))
+			h.onAwait = func(ref tasks.RunRef) (tasks.Outcome, error) {
+				if ref.ID == "child-dropped" {
+					return tasks.Outcome{State: state}, nil
+				}
+				return tasks.Outcome{State: tasks.StateSucceeded}, nil
+			}
+			require.NoError(t, runKindOn(t, def, h, ""))
+			require.Equal(t, []tasks.Kind{kindFor("dedup.llm-review")}, enqueuedKinds(h), "the step starts again")
+			require.Contains(t, h.logged(), "was interrupted by a restart ("+string(state)+"); starting it again")
+		})
+	}
+}
+
+// A recorded child that ENDED badly (failed, canceled, timed out) is not
+// restarted: the run stops, as HEAD's does.
+func TestDedupChain_RunAllStopsAtARecordedChildThatEndedBadly(t *testing.T) {
+	for _, state := range []tasks.RunState{tasks.StateFailed, tasks.StateCanceled, tasks.StateTimedOut} {
+		t.Run(string(state), func(t *testing.T) {
+			setEmbeddings(t, true)
+			_, d := newChainSpy()
+			def := (&Plugin{}).runAllNative(d, nil)
+			h := newKindHost(def, tasks.ModeLive, &sentinelWriter{})
+			require.NoError(t, h.FakeRun.SetCheckpoint("", runAllState{
+				Plan:      []string{"ai-review"},
+				StepIndex: 0, ChildOpID: "child-bad",
+			}))
+			h.onAwait = func(tasks.RunRef) (tasks.Outcome, error) { return tasks.Outcome{State: state, Err: "boom"}, nil }
+			err := runKindOn(t, def, h, "")
+			require.ErrorContains(t, err, `(child-bad) ended as "`+string(state)+`": boom`)
+			require.Empty(t, enqueuedKinds(h), "nothing starts again")
+		})
+	}
+}
+
+// A child this run started that is interrupted DURING the live wait is not a
+// restart (the run would have stopped with it): the step fails.
+func TestDedupChain_RunAllFailsAChildInterruptedDuringTheLiveWait(t *testing.T) {
+	setEmbeddings(t, true)
+	_, d := newChainSpy()
+	def := (&Plugin{}).runAllNative(d, nil)
+	h := newKindHost(def, tasks.ModeLive, &sentinelWriter{})
+	h.onAwait = func(tasks.RunRef) (tasks.Outcome, error) {
+		return tasks.Outcome{State: tasks.StateInterruptedDropped}, nil
+	}
+	err := runKindOn(t, def, h, "")
+	require.ErrorContains(t, err, `ended as "interrupted_dropped"`)
+	require.Len(t, h.enqueuedRuns(), 1, "the failed step is not started a second time")
 }
 
 func TestDedupChain_RunAllRefusesACorruptCheckpointPlan(t *testing.T) {
