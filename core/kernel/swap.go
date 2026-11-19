@@ -1,5 +1,5 @@
 // file: core/kernel/swap.go
-// version: 1.0.12
+// version: 1.0.13
 // guid: 2fd2ee78-9c6b-4e9f-82de-80def73f26d5
 // last-edited: 2026-11-18
 
@@ -276,7 +276,10 @@ func (k *Kernel) swapAfter(ctx context.Context, phase string) error {
 		err = s.Opened(ctx, out.ID)
 	case out.Boot == restoreswap.BootRestore && phase == phaseP4b:
 		err = s.RestoreApplied(ctx, out.ID)
-	case out.Boot == restoreswap.BootReset && phase == phaseP4a:
+	case out.Boot == restoreswap.BootReset && phase == phaseP4a && !k.cfg.CoreConfigBoot:
+		// Under Config.CoreConfigBoot applied is journalled after secrets.Open
+		// instead (bindCoreStores): the keyring header is the last thing the reset
+		// rewrites, and the swap is not applied until it has.
 		err = s.ResetApplied(ctx, out.ID)
 	case (out.Boot == restoreswap.BootReset || out.Boot == restoreswap.BootResetApplied) && phase == phaseP4b:
 		if out.Intent.Reset == restorejournal.ResetFactory && k.resetEntry() != nil {
