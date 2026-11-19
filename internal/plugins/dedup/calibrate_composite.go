@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/calibrate_composite.go
-// version: 1.7.4
+// version: 1.8.0
 // guid: 4c2f7a91-8d3b-4e6a-9f10-5b7c2d1e8a34
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // Package dedup — op dedup.calibrate-composite (INIT-1 T5).
 //
@@ -97,6 +97,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
 	"golang.org/x/sync/errgroup"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -151,18 +152,12 @@ type calibrateCompositeParams struct {
 // calibrateCompositeDef returns the OperationDef for dedup.calibrate-composite.
 func (p *Plugin) calibrateCompositeDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "dedup.calibrate-composite",
-		Preview:     sdk.PreviewSpec{Params: calibrateCompositeParams{}},
-		Liveness:    sdk.LivenessManual,
-		Plugin:      "dedup",
-		DisplayName: "Calibrate composite scorer (report; apply gated)",
-		Description: "Replays each labeled pair's stored ScoreBreakdown signals through " +
-			"unified.ComposeScore under coordinate-wise config variants against the " +
-			"pair-deduped gold set, and recommends noisy-OR band thresholds hitting a target " +
-			"precision. Per-signal confidence bounds are swept ADVISORY-only (no config-blob " +
-			"surface). Dry-run by default; apply=true persists dedup.signals.* band thresholds AND reloads them into " +
-			"the live engine (no restart) — " +
-			"operator-gated, refuses partial/target-not-met recommendations.",
+		ID:              "dedup.calibrate-composite",
+		Preview:         sdk.PreviewSpec{Params: calibrateCompositeParams{}},
+		Liveness:        sdk.LivenessManual,
+		Plugin:          "dedup",
+		DisplayName:     "Calibrate composite scorer (report; apply gated)",
+		Description:     calibrateCompositeHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityNormal,
 		ConcurrencyKey:  "dedup.calibrate-composite",
@@ -335,25 +330,106 @@ type confSuggestion struct {
 	HighRecall    float64 `json:"high_recall_after"`
 }
 
-// runCalibrateComposite implements the op. Dry-run reports; apply (operator-gated,
-// all tunable bands met) persists band thresholds only.
-func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
-	if p.embeddingStore == nil {
-		return fmt.Errorf("embedding store not available")
-	}
-	// The baseline is the LIVE engine's config and apply reloads into it, so
-	// there is nothing meaningful this op can do without one. Register only
-	// registers ops when p.engine != nil, so this guards direct callers.
-	if p.engine == nil {
-		return fmt.Errorf("dedup engine not available; calibrate-composite sweeps around and reloads the live engine's score config")
-	}
+// calibrateCompositeKind is rule R3's native kind for dedup.calibrate-composite.
+// dedup.label-refinement starts it as a child: in Preview mode with no apply key
+// (the dry run), since the native params drop apply and take the mode instead.
+const calibrateCompositeKind = tasks.Kind("books.dedup.calibrate-composite")
 
-	var params calibrateCompositeParams
-	if len(rawParams) > 0 {
-		if err := json.Unmarshal(rawParams, &params); err != nil {
-			return fmt.Errorf("parse params: %w", err)
-		}
-	}
+// calibrateCompositeHelp is HEAD's Description and the native Help (rule R5).
+const calibrateCompositeHelp = "Replays each labeled pair's stored ScoreBreakdown signals through " +
+	"unified.ComposeScore under coordinate-wise config variants against the " +
+	"pair-deduped gold set, and recommends noisy-OR band thresholds hitting a target " +
+	"precision. Per-signal confidence bounds are swept ADVISORY-only (no config-blob " +
+	"surface). Dry-run by default; apply=true persists dedup.signals.* band thresholds AND reloads them into " +
+	"the live engine (no restart) — " +
+	"operator-gated, refuses partial/target-not-met recommendations."
+
+// calibrateCompositeStore is the reads the core takes.
+type calibrateCompositeStore interface {
+	ListLabeledExamples(f database.LabeledExampleFilter) ([]database.LabeledExample, error)
+	GetCandidateByID(id int64) (*database.DedupCandidate, error)
+}
+
+// calibrateCompositeBaseline is the live engine's score config, read-only: the
+// config the sweep runs around.
+type calibrateCompositeBaseline interface {
+	ScoreConfig() unified.ScoreConfig
+}
+
+// calibrateCompositeWriter is the writes the apply path makes, in order: persist
+// the bands through the config update service, read the persisted settings back
+// as a score config, and reload that into the live engine (re-banding the
+// stored candidates).
+type calibrateCompositeWriter interface {
+	ApplyConfigUpdates(ctx context.Context, payload map[string]any) error
+	PersistedScoreConfig() (unified.ScoreConfig, error)
+	ReloadScoreConfig(ctx context.Context, cfg unified.ScoreConfig) (dedupengine.RescoreResult, error)
+}
+
+// calibrateCompositeEnv is what the core takes from its shell. Live is HEAD's
+// apply=true; a dry run never calls Writer, which may then be nil.
+type calibrateCompositeEnv struct {
+	kindEnv
+	Store    calibrateCompositeStore
+	Baseline calibrateCompositeBaseline
+	Writer   calibrateCompositeWriter
+}
+
+// calibrateCompositeNativeParams are the native run's parameters: HEAD's, minus
+// apply (the run's mode is the dry/apply switch).
+type calibrateCompositeNativeParams struct {
+	TargetPrecisionCertain float64 `json:"target_precision_certain"`
+	TargetPrecisionHigh    float64 `json:"target_precision_high"`
+	MinScoredPairs         int     `json:"min_scored_pairs"`
+}
+
+// calibrateCompositeResult is the native run's result. HEAD stored none.
+type calibrateCompositeResult struct {
+	// Status is "insufficient-coverage", "dry-run", "refused" (apply requested,
+	// a target not met) or "applied".
+	Status             string `json:"status"`
+	ScoredTrueDup      int    `json:"scored_true_dup"`
+	ScoredNotDup       int    `json:"scored_not_dup"`
+	SkippedNoBreakdown int    `json:"skipped_no_breakdown"`
+	AllTargetsMet      bool   `json:"all_targets_met"`
+	Applied            bool   `json:"applied"`
+}
+
+// headCalibrateComposite is HEAD's reads and writes for the core: the embedding
+// store, the live engine and the config update service over the main store.
+type headCalibrateComposite struct {
+	emb    *database.EmbeddingStore
+	engine *dedupengine.Engine
+	store  pluginStore
+}
+
+func (h headCalibrateComposite) ListLabeledExamples(f database.LabeledExampleFilter) ([]database.LabeledExample, error) {
+	return h.emb.ListLabeledExamples(f)
+}
+func (h headCalibrateComposite) GetCandidateByID(id int64) (*database.DedupCandidate, error) {
+	return h.emb.GetCandidateByID(id)
+}
+func (h headCalibrateComposite) ScoreConfig() unified.ScoreConfig { return h.engine.ScoreConfig() }
+func (h headCalibrateComposite) ApplyConfigUpdates(ctx context.Context, payload map[string]any) error {
+	return config.NewUpdateService(h.store).ApplyUpdates(ctx, payload)
+}
+func (h headCalibrateComposite) PersistedScoreConfig() (unified.ScoreConfig, error) {
+	return config.Snapshot().Dedup.Signals.ScoreConfig()
+}
+func (h headCalibrateComposite) ReloadScoreConfig(ctx context.Context, cfg unified.ScoreConfig) (dedupengine.RescoreResult, error) {
+	return h.engine.ReloadScoreConfig(ctx, cfg)
+}
+
+// calibrateCompositeCore is the body of runCalibrateComposite, shared by both
+// shells. Dry-run reports; Live (operator-gated, all tunable bands met)
+// persists band thresholds only.
+//
+// The two sweeps below (sweepBandParallel, sweepConfidenceAdvisory) are bounded
+// errgroup pools over a small in-memory grid (tens of cut-points or variants),
+// each worker scoring the shared read-only pair slice: pure compute with no
+// per-item store call, so they stay as they were rather than moving onto the
+// run's item pool.
+func calibrateCompositeCore(ctx context.Context, env calibrateCompositeEnv, params calibrateCompositeNativeParams) (calibrateCompositeResult, error) {
 	targetCertain := params.TargetPrecisionCertain
 	if targetCertain <= 0 {
 		targetCertain = defaultTargetPrecisionCertain
@@ -367,29 +443,30 @@ func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMe
 		minScored = defaultMinScoredPairs
 	}
 
-	log := reporter.Logger()
+	log := env.Logger
+	var res calibrateCompositeResult
 	log.Info("calibrate-composite start",
-		"apply", params.Apply,
+		"apply", env.Live,
 		"target_precision_certain", targetCertain,
 		"target_precision_high", targetHigh,
 		"min_scored_pairs", minScored)
 
 	// --- Load labeled examples (both classes) ---
-	_ = reporter.UpdateProgress(0, 4, "Loading labeled examples…")
-	trueDup, err := p.embeddingStore.ListLabeledExamples(database.LabeledExampleFilter{Label: "true_dup", Limit: 1_000_000})
+	env.Progress(0, 4, "Loading labeled examples…")
+	trueDup, err := env.Store.ListLabeledExamples(database.LabeledExampleFilter{Label: "true_dup", Limit: 1_000_000})
 	if err != nil {
-		return fmt.Errorf("list true_dup examples: %w", err)
+		return calibrateCompositeResult{}, fmt.Errorf("list true_dup examples: %w", err)
 	}
-	notDup, err := p.embeddingStore.ListLabeledExamples(database.LabeledExampleFilter{Label: "not_dup", Limit: 1_000_000})
+	notDup, err := env.Store.ListLabeledExamples(database.LabeledExampleFilter{Label: "not_dup", Limit: 1_000_000})
 	if err != nil {
-		return fmt.Errorf("list not_dup examples: %w", err)
+		return calibrateCompositeResult{}, fmt.Errorf("list not_dup examples: %w", err)
 	}
-	if reporter.IsCanceled() {
-		return context.Canceled
+	if env.Canceled() {
+		return calibrateCompositeResult{}, context.Canceled
 	}
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return calibrateCompositeResult{}, ctx.Err()
 	default:
 	}
 
@@ -398,7 +475,7 @@ func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMe
 	examples = append(examples, notDup...)
 
 	// --- Collapse to one row per canonical pair, then recover signals ---
-	_ = reporter.UpdateProgress(1, 4, "Collapsing to unique pairs + parsing breakdowns…")
+	env.Progress(1, 4, "Collapsing to unique pairs + parsing breakdowns…")
 	rowsIn := len(examples)
 	deduped := dataset.DedupeByPair(examples)
 	pairsOut := len(deduped)
@@ -428,7 +505,7 @@ func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMe
 			// data of the IDENTICAL kind as the examples that already parse (same
 			// *models.UnifiedDedupScore the collectors persisted), so it introduces no
 			// heterogeneity and no scorer fork — it is a pure read-mismatch repair.
-			sigs, ok = p.candidateBreakdownSignals(ex.CandidateID)
+			sigs, ok = candidateBreakdownSignalsVia(env.Store, ex.CandidateID)
 			if ok {
 				joinedFromCandidate++
 			}
@@ -464,20 +541,21 @@ func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMe
 			"joined_from_candidate", joinedFromCandidate,
 			"skipped_no_breakdown", skippedNoBreakdown,
 			"min_scored_pairs", minScored)
-		_ = reporter.UpdateProgress(4, 4, fmt.Sprintf(
+		env.Progress(4, 4, fmt.Sprintf(
 			"insufficient-coverage — scored true_dup=%d not_dup=%d < min %d; recommending nothing.",
 			scoredTrue, scoredNot, minScored))
-		return nil
+		res.Status = "insufficient-coverage"
+		return res, nil
 	}
 
 	// --- Baseline config: what the live engine is scoring with right now ---
 	// (a Clone — the sweep's variants never touch live scoring).
-	baseCfg := p.engine.ScoreConfig()
+	baseCfg := env.Baseline.ScoreConfig()
 	totalTrue := scoredTrue
 
 	// Baseline scores under production confidences — computed ONCE and shared
 	// read-only across the parallel band sweep.
-	_ = reporter.UpdateProgress(2, 4, "Scoring pairs at baseline + sweeping bands…")
+	env.Progress(2, 4, "Scoring pairs at baseline + sweeping bands…")
 	baseScores := scoreAll(pairs, baseCfg)
 
 	baselineCertain := cumulativeBandStat(baseScores, pairs, baseCfg.BandCertainMin, totalTrue)
@@ -498,7 +576,7 @@ func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMe
 	highHi := minf(baseCfg.BandCertainMin-bandSweepStep, baseCfg.BandHighMin+bandSweepSpan)
 	highRec, err := sweepBandParallel(ctx, baseScores, pairs, totalTrue, highLo, highHi, targetHigh)
 	if err != nil {
-		return err
+		return calibrateCompositeResult{}, err
 	}
 	highRec.Baseline = baselineHigh
 
@@ -515,7 +593,7 @@ func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMe
 	certainHi := minf(100, baseCfg.BandCertainMin+bandSweepSpan)
 	certainRec, err := sweepBandParallel(ctx, baseScores, pairs, totalTrue, certainLo, certainHi, targetCertain)
 	if err != nil {
-		return err
+		return calibrateCompositeResult{}, err
 	}
 	certainRec.Baseline = baselineCertain
 
@@ -533,12 +611,12 @@ func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMe
 	// a band was not met). Never persisted; never gates the band apply.
 	certainBandForConf := recOrBaselineMin(certainRec, baseCfg.BandCertainMin)
 	highBandForConf := recOrBaselineMin(highRec, baseCfg.BandHighMin)
-	_ = reporter.UpdateProgress(3, 4, "Sweeping per-kind confidence bounds (advisory)…")
+	env.Progress(3, 4, "Sweeping per-kind confidence bounds (advisory)…")
 	confSuggestions, err := sweepConfidenceAdvisory(
 		ctx, pairs, baseCfg, totalTrue,
 		certainBandForConf, targetCertain, highBandForConf, targetHigh)
 	if err != nil {
-		return err
+		return calibrateCompositeResult{}, err
 	}
 
 	// --- Recommended config being considered for APPLY: baseline confidences +
@@ -557,6 +635,9 @@ func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMe
 
 	baselineJSON, _ := json.Marshal(baseCfg)
 	recJSON, _ := json.Marshal(recCfg)
+
+	res.ScoredTrueDup, res.ScoredNotDup, res.SkippedNoBreakdown = scoredTrue, scoredNot, skippedNoBreakdown
+	res.AllTargetsMet = allTargetsMet
 
 	// --- Report ---
 	fields := []any{
@@ -622,28 +703,61 @@ func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMe
 		describeBandRec(certainRec, orderingConflict), describeBandRec(highRec, orderingConflict), len(confSuggestions))
 
 	// --- Apply path (operator-gated; bands only; all tunable targets met) ---
-	if !params.Apply {
-		_ = reporter.UpdateProgress(4, 4, "Dry-run — "+summary+
+	if !env.Live {
+		env.Progress(4, 4, "Dry-run — "+summary+
 			". Bands are report-only until apply=true (operator-gated); confidence suggestions require a config.yaml edit.")
 		log.Info("calibrate-composite: dry-run only; nothing written")
-		return nil
+		res.Status = "dry-run"
+		return res, nil
 	}
 	if !allTargetsMet {
 		log.Warn("calibrate-composite: apply requested but not every tunable band met its target — writing nothing",
 			"certain_met", certainRec.Met, "high_met", highRec.Met, "ordering_conflict", orderingConflict)
-		_ = reporter.UpdateProgress(4, 4, "Apply requested but target(s) not met — refused, nothing written. "+summary)
-		return nil
+		env.Progress(4, 4, "Apply requested but target(s) not met — refused, nothing written. "+summary)
+		res.Status = "refused"
+		return res, nil
 	}
 
-	rescore, err := p.applyBandThresholds(ctx, recCfg, baseCfg, log)
+	rescore, err := applyBandThresholdsVia(ctx, env.Writer, recCfg, baseCfg, log)
 	if err != nil {
-		return err
+		return calibrateCompositeResult{}, err
 	}
-	_ = reporter.UpdateProgress(4, 4, fmt.Sprintf(
+	env.Progress(4, 4, fmt.Sprintf(
 		"Applied band thresholds certain=%.2f high=%.2f (previous certain=%.2f high=%.2f — rollback record); live engine reloaded and stored candidates re-banded (inspected=%d changed=%d skipped_no_breakdown=%d). %s",
 		recCfg.BandCertainMin, recCfg.BandHighMin, baseCfg.BandCertainMin, baseCfg.BandHighMin,
 		rescore.Inspected, rescore.Changed, rescore.Skipped, summary))
-	return nil
+	res.Status, res.Applied = "applied", true
+	return res, nil
+}
+
+// runCalibrateComposite is the v2 shell: HEAD's Run (nil checks, params) over
+// calibrateCompositeCore. dedup.label-refinement starts it as a child.
+func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
+	if p.embeddingStore == nil {
+		return fmt.Errorf("embedding store not available")
+	}
+	// The baseline is the LIVE engine's config and apply reloads into it, so
+	// there is nothing meaningful this op can do without one. Register only
+	// registers ops when p.engine != nil, so this guards direct callers.
+	if p.engine == nil {
+		return fmt.Errorf("dedup engine not available; calibrate-composite sweeps around and reloads the live engine's score config")
+	}
+
+	var params calibrateCompositeParams
+	if len(rawParams) > 0 {
+		if err := json.Unmarshal(rawParams, &params); err != nil {
+			return fmt.Errorf("parse params: %w", err)
+		}
+	}
+	h := headCalibrateComposite{emb: p.embeddingStore, engine: p.engine, store: p.store}
+	_, err := calibrateCompositeCore(ctx, calibrateCompositeEnv{
+		kindEnv: headEnv(reporter, params.Apply), Store: h, Baseline: h, Writer: h,
+	}, calibrateCompositeNativeParams{
+		TargetPrecisionCertain: params.TargetPrecisionCertain,
+		TargetPrecisionHigh:    params.TargetPrecisionHigh,
+		MinScoredPairs:         params.MinScoredPairs,
+	})
+	return err
 }
 
 // applyBandThresholds validates, persists and LIVE-LOADS the recommended band
@@ -673,10 +787,7 @@ func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMe
 // avoids re-banding the whole backlog twice.
 //
 // Returns the RescoreResult so the caller can report how many rows moved.
-func (p *Plugin) applyBandThresholds(ctx context.Context, recCfg, prevCfg unified.ScoreConfig, log *slog.Logger) (dedupengine.RescoreResult, error) {
-	if p.store == nil {
-		return dedupengine.RescoreResult{}, fmt.Errorf("main store not available; cannot persist config")
-	}
+func applyBandThresholdsVia(ctx context.Context, w calibrateCompositeWriter, recCfg, prevCfg unified.ScoreConfig, log *slog.Logger) (dedupengine.RescoreResult, error) {
 	if err := recCfg.Validate(); err != nil {
 		return dedupengine.RescoreResult{}, fmt.Errorf("calibrate-composite APPLY refused: the recommended ladder certain=%.2f high=%.2f medium=%.2f review=%.2f is not a valid score config, nothing written: %w",
 			recCfg.BandCertainMin, recCfg.BandHighMin, recCfg.BandMediumMin, recCfg.BandReviewMin, err)
@@ -698,8 +809,7 @@ func (p *Plugin) applyBandThresholds(ctx context.Context, recCfg, prevCfg unifie
 			},
 		},
 	}
-	svc := config.NewUpdateService(p.store)
-	if err := svc.ApplyUpdates(ctx, payload); err != nil {
+	if err := w.ApplyConfigUpdates(ctx, payload); err != nil {
 		return dedupengine.RescoreResult{}, fmt.Errorf("persist band thresholds: %w", err)
 	}
 	log.Info("calibrate-composite APPLY: band thresholds persisted (survives restart via config blob)")
@@ -712,11 +822,11 @@ func (p *Plugin) applyBandThresholds(ctx context.Context, recCfg, prevCfg unifie
 	// candidate rows) are still on the old ones. A restart would pick the
 	// persisted ladder up for the ENGINE, but never re-bands the rows —
 	// only dedup.rescore does that — so the message says both.
-	liveCfg, err := config.Snapshot().Dedup.Signals.ScoreConfig()
+	liveCfg, err := w.PersistedScoreConfig()
 	if err != nil {
 		return dedupengine.RescoreResult{}, fmt.Errorf("band thresholds persisted but converting the persisted settings back into a score config failed — the live engine and the stored candidate bands are still on the previous ladder; fix the persisted dedup.signals via PUT /api/v1/config, then "+dedupengine.RescoreRemedy+": %w", err)
 	}
-	res, err := p.engine.ReloadScoreConfig(ctx, liveCfg)
+	res, err := w.ReloadScoreConfig(ctx, liveCfg)
 	if err != nil {
 		return res, fmt.Errorf("band thresholds persisted but loading them into the live engine / re-banding stored candidates failed — "+dedupengine.RescoreRemedy+" to finish re-banding (a restart alone reloads the engine but leaves the stored bands stale): %w", err)
 	}
@@ -726,6 +836,16 @@ func (p *Plugin) applyBandThresholds(ctx context.Context, recCfg, prevCfg unifie
 		"inspected", res.Inspected, "changed", res.Changed, "skipped_no_breakdown", res.Skipped,
 		"band_deltas", res.BandDeltas)
 	return res, nil
+}
+
+// applyBandThresholds is the v2 entry to applyBandThresholdsVia: HEAD's main
+// store nil check, then the apply over the plugin's own config service and live
+// engine.
+func (p *Plugin) applyBandThresholds(ctx context.Context, recCfg, prevCfg unified.ScoreConfig, log *slog.Logger) (dedupengine.RescoreResult, error) {
+	if p.store == nil {
+		return dedupengine.RescoreResult{}, fmt.Errorf("main store not available; cannot persist config")
+	}
+	return applyBandThresholdsVia(ctx, headCalibrateComposite{emb: p.embeddingStore, engine: p.engine, store: p.store}, recCfg, prevCfg, log)
 }
 
 // recOrBaselineMin returns the recommended band minimum when met, else the baseline.
@@ -751,11 +871,11 @@ func describeBandRec(r bandRec, orderingConflict bool) string {
 // Returns ok=false for a zero/missing CandidateID, a read/unmarshal error, an
 // absent candidate, or a candidate whose breakdown carries no signals — every
 // un-scorable case is skipped+counted upstream, never treated as a zero score.
-func (p *Plugin) candidateBreakdownSignals(candidateID int64) ([]models.Signal, bool) {
-	if candidateID == 0 || p.embeddingStore == nil {
+func candidateBreakdownSignalsVia(store calibrateCompositeStore, candidateID int64) ([]models.Signal, bool) {
+	if candidateID == 0 || store == nil {
 		return nil, false
 	}
-	cand, err := p.embeddingStore.GetCandidateByID(candidateID)
+	cand, err := store.GetCandidateByID(candidateID)
 	if err != nil || cand == nil || cand.ScoreBreakdown == nil {
 		return nil, false
 	}

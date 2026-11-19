@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/rebuild_gold_labels.go
-// version: 1.2.3
+// version: 1.3.0
 // guid: 74b6de83-de1b-4231-8edc-6920a2f7b91c
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // Package dedup — op dedup.rebuild-gold-labels.
 //
@@ -30,6 +30,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/falkcorp/mediacore/tasks"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
@@ -94,16 +96,12 @@ func (r rebuildReport) summary() string {
 
 func (p *Plugin) rebuildGoldLabelsDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "dedup.rebuild-gold-labels",
-		Preview:     sdk.PreviewSpec{Params: rebuildGoldLabelsParams{}},
-		Liveness:    sdk.LivenessManual,
-		Plugin:      "dedup",
-		DisplayName: "Rebuild mechanically-derived gold labels",
-		Description: "Re-derives label_source=rule and label_source=auto_high_conf gold labels against " +
-			"current candidate/book/embedding state and reports a changed/unchanged/unlabelable diff. " +
-			"Dry-run by default; pass apply=true to delete and reinsert the freshly computed rule/" +
-			"auto_high_conf rows. label_source=human rows are always passed through, never deleted or " +
-			"modified. Idempotent: re-running apply against unchanged state yields the same counts.",
+		ID:              "dedup.rebuild-gold-labels",
+		Preview:         sdk.PreviewSpec{Params: rebuildGoldLabelsParams{}},
+		Liveness:        sdk.LivenessManual,
+		Plugin:          "dedup",
+		DisplayName:     "Rebuild mechanically-derived gold labels",
+		Description:     rebuildGoldLabelsHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityNormal,
 		ConcurrencyKey:  "dedup.rebuild-gold-labels",
@@ -114,6 +112,149 @@ func (p *Plugin) rebuildGoldLabelsDef() sdk.OperationDef {
 	}
 }
 
+// rebuildGoldLabelsKind is rule R3's native kind for dedup.rebuild-gold-labels.
+// dedup.label-refinement starts it as a child.
+const rebuildGoldLabelsKind = tasks.Kind("books.dedup.rebuild-gold-labels")
+
+// rebuildGoldLabelsHelp is HEAD's Description and the native Help (rule R5).
+const rebuildGoldLabelsHelp = "Re-derives label_source=rule and label_source=auto_high_conf gold labels against " +
+	"current candidate/book/embedding state and reports a changed/unchanged/unlabelable diff. " +
+	"Dry-run by default; pass apply=true to delete and reinsert the freshly computed rule/" +
+	"auto_high_conf rows. label_source=human rows are always passed through, never deleted or " +
+	"modified. Idempotent: re-running apply against unchanged state yields the same counts."
+
+// rebuildGoldLabelsStore is the reads the core takes.
+type rebuildGoldLabelsStore interface {
+	ListLabeledExamples(f database.LabeledExampleFilter) ([]database.LabeledExample, error)
+	GetCandidateByID(id int64) (*database.DedupCandidate, error)
+	labelBookReader
+}
+
+// rebuildGoldLabelsWriter is the writes the core makes: the wipe of the
+// mechanical labels and the reinsert of the fresh set.
+type rebuildGoldLabelsWriter interface {
+	DeleteLabeledExamplesBySource(sources ...string) (int, error)
+	UpsertLabeledExample(ex database.LabeledExample) error
+}
+
+// rebuildGoldLabelsEnv is what the core takes from its shell. Live is HEAD's
+// apply=true; a dry run never calls Writer, which may then be nil.
+type rebuildGoldLabelsEnv struct {
+	kindEnv
+	Store  rebuildGoldLabelsStore
+	Writer rebuildGoldLabelsWriter
+}
+
+// rebuildGoldLabelsResult is the native run's result. HEAD stored none.
+type rebuildGoldLabelsResult struct {
+	RuleChanged      int `json:"rule_changed"`
+	AutoChanged      int `json:"auto_high_conf_changed"`
+	Unlabelable      int `json:"unlabelable"`
+	HumanPassthrough int `json:"human_passthrough"`
+	OtherUntouched   int `json:"other_untouched"`
+	Deleted          int `json:"deleted"`
+	Written          int `json:"written"`
+	WriteErrors      int `json:"write_errors"`
+}
+
+// headRebuildGoldLabels is HEAD's reads and writes for the core: the embedding
+// store for labels and candidates and the main store for books.
+type headRebuildGoldLabels struct {
+	emb   *database.EmbeddingStore
+	store pluginStore
+}
+
+func (h headRebuildGoldLabels) ListLabeledExamples(f database.LabeledExampleFilter) ([]database.LabeledExample, error) {
+	return h.emb.ListLabeledExamples(f)
+}
+func (h headRebuildGoldLabels) GetCandidateByID(id int64) (*database.DedupCandidate, error) {
+	return h.emb.GetCandidateByID(id)
+}
+func (h headRebuildGoldLabels) GetBookByID(id string) (*database.Book, error) {
+	return h.store.GetBookByID(id)
+}
+func (h headRebuildGoldLabels) GetBookFiles(id string) ([]database.BookFile, error) {
+	return h.store.GetBookFiles(id)
+}
+func (h headRebuildGoldLabels) DeleteLabeledExamplesBySource(sources ...string) (int, error) {
+	return h.emb.DeleteLabeledExamplesBySource(sources...)
+}
+func (h headRebuildGoldLabels) UpsertLabeledExample(ex database.LabeledExample) error {
+	return h.emb.UpsertLabeledExample(ex)
+}
+
+// rebuildGoldLabelsCore is the body of runRebuildGoldLabels, shared by both
+// shells.
+func rebuildGoldLabelsCore(ctx context.Context, env rebuildGoldLabelsEnv) (rebuildGoldLabelsResult, error) {
+	env.Logger.Info("rebuild-gold-labels start", "apply", env.Live)
+
+	env.Progress(0, 3, "Loading existing labeled examples…")
+	existing, err := env.Store.ListLabeledExamples(database.LabeledExampleFilter{Limit: 0})
+	if err != nil {
+		return rebuildGoldLabelsResult{}, fmt.Errorf("list labeled examples: %w", err)
+	}
+	env.Logger.Info("rebuild-gold-labels: existing examples loaded", "count", len(existing))
+
+	env.Progress(1, 3, fmt.Sprintf("Re-deriving %d existing examples…", len(existing)))
+	report, err := rebuildGoldLabelsDiff(ctx, env, existing)
+	if err != nil {
+		return rebuildGoldLabelsResult{}, err
+	}
+
+	env.Logger.Info("rebuild-gold-labels: rule bucket", "stats", report.Rule.String())
+	env.Logger.Info("rebuild-gold-labels: auto_high_conf bucket", "stats", report.Auto.String())
+	env.Logger.Info("rebuild-gold-labels: pass-through", "human", report.HumanCount, "other_untouched", report.OtherCount)
+	for _, s := range report.Sample {
+		env.Logger.Info("rebuild-gold-labels: sample",
+			"candidate_id", s.CandidateID, "source", s.Source,
+			"old_label", s.OldLabel, "new_label", s.NewLabel, "unlabelable", s.Unlabelable)
+	}
+
+	summary := report.summary()
+	res := rebuildGoldLabelsResult{
+		RuleChanged: report.Rule.Changed, AutoChanged: report.Auto.Changed,
+		Unlabelable:      report.Rule.Unlabelable + report.Auto.Unlabelable,
+		HumanPassthrough: report.HumanCount, OtherUntouched: report.OtherCount,
+	}
+
+	if !env.Live {
+		env.Progress(3, 3, fmt.Sprintf(
+			"Dry-run — %d rule + %d auto_high_conf would change, %d would become unlabelable. %s. Pass apply=true to write.",
+			report.Rule.Changed, report.Auto.Changed, report.Rule.Unlabelable+report.Auto.Unlabelable, summary))
+		env.Logger.Info("rebuild-gold-labels: dry-run only; nothing written")
+		return res, nil
+	}
+
+	env.Progress(2, 3, fmt.Sprintf("Applying — deleting %d rule/auto_high_conf rows…", report.Rule.Examined+report.Auto.Examined))
+	deleted, err := env.Writer.DeleteLabeledExamplesBySource("rule", "auto_high_conf")
+	if err != nil {
+		return rebuildGoldLabelsResult{}, fmt.Errorf("delete rule/auto_high_conf examples: %w", err)
+	}
+	env.Logger.Info("rebuild-gold-labels: deleted stale mechanical labels", "deleted", deleted)
+
+	// The reinsert stays sequential: it runs right after the wipe above and
+	// before the run reports, each upsert is one keyed row, and HEAD ran it
+	// serially. (A pool is a candidate follow-up; the rows are disjoint by
+	// candidate id. See the F5-04 report.)
+	var written, writeErrs int
+	for _, ex := range report.Fresh {
+		if err := env.Writer.UpsertLabeledExample(ex); err != nil {
+			writeErrs++
+			env.Logger.Error("rebuild-gold-labels: upsert error", "candidate_id", ex.CandidateID, "error", err)
+			continue
+		}
+		written++
+	}
+	res.Deleted, res.Written, res.WriteErrors = deleted, written, writeErrs
+
+	env.Progress(3, 3, fmt.Sprintf(
+		"Complete — deleted %d, wrote %d fresh (%d errors). %s", deleted, written, writeErrs, summary))
+	env.Logger.Info("rebuild-gold-labels complete", "deleted", deleted, "written", written, "write_errs", writeErrs, "summary", summary)
+	return res, nil
+}
+
+// runRebuildGoldLabels is the v2 shell: HEAD's Run (nil checks, params) over
+// rebuildGoldLabelsCore. dedup.label-refinement starts it as a child.
 func (p *Plugin) runRebuildGoldLabels(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	if p.embeddingStore == nil {
 		return fmt.Errorf("embedding store not available")
@@ -128,78 +269,39 @@ func (p *Plugin) runRebuildGoldLabels(ctx context.Context, rawParams json.RawMes
 			return fmt.Errorf("parse params: %w", err)
 		}
 	}
-	reporter.Logger().Info("rebuild-gold-labels start", "apply", params.Apply)
-
-	_ = reporter.UpdateProgress(0, 3, "Loading existing labeled examples…")
-	existing, err := p.embeddingStore.ListLabeledExamples(database.LabeledExampleFilter{Limit: 0})
-	if err != nil {
-		return fmt.Errorf("list labeled examples: %w", err)
-	}
-	reporter.Logger().Info("rebuild-gold-labels: existing examples loaded", "count", len(existing))
-
-	_ = reporter.UpdateProgress(1, 3, fmt.Sprintf("Re-deriving %d existing examples…", len(existing)))
-	report, err := p.computeRebuildDiff(ctx, reporter, existing)
-	if err != nil {
-		return err
-	}
-
-	reporter.Logger().Info("rebuild-gold-labels: rule bucket", "stats", report.Rule.String())
-	reporter.Logger().Info("rebuild-gold-labels: auto_high_conf bucket", "stats", report.Auto.String())
-	reporter.Logger().Info("rebuild-gold-labels: pass-through", "human", report.HumanCount, "other_untouched", report.OtherCount)
-	for _, s := range report.Sample {
-		reporter.Logger().Info("rebuild-gold-labels: sample",
-			"candidate_id", s.CandidateID, "source", s.Source,
-			"old_label", s.OldLabel, "new_label", s.NewLabel, "unlabelable", s.Unlabelable)
-	}
-
-	summary := report.summary()
-
-	if !params.Apply {
-		_ = reporter.UpdateProgress(3, 3, fmt.Sprintf(
-			"Dry-run — %d rule + %d auto_high_conf would change, %d would become unlabelable. %s. Pass apply=true to write.",
-			report.Rule.Changed, report.Auto.Changed, report.Rule.Unlabelable+report.Auto.Unlabelable, summary))
-		reporter.Logger().Info("rebuild-gold-labels: dry-run only; nothing written")
-		return nil
-	}
-
-	_ = reporter.UpdateProgress(2, 3, fmt.Sprintf("Applying — deleting %d rule/auto_high_conf rows…", report.Rule.Examined+report.Auto.Examined))
-	deleted, err := p.embeddingStore.DeleteLabeledExamplesBySource("rule", "auto_high_conf")
-	if err != nil {
-		return fmt.Errorf("delete rule/auto_high_conf examples: %w", err)
-	}
-	reporter.Logger().Info("rebuild-gold-labels: deleted stale mechanical labels", "deleted", deleted)
-
-	var written, writeErrs int
-	for _, ex := range report.Fresh {
-		if err := p.embeddingStore.UpsertLabeledExample(ex); err != nil {
-			writeErrs++
-			reporter.Logger().Error("rebuild-gold-labels: upsert error", "candidate_id", ex.CandidateID, "error", err)
-			continue
-		}
-		written++
-	}
-
-	_ = reporter.UpdateProgress(3, 3, fmt.Sprintf(
-		"Complete — deleted %d, wrote %d fresh (%d errors). %s", deleted, written, writeErrs, summary))
-	reporter.Logger().Info("rebuild-gold-labels complete", "deleted", deleted, "written", written, "write_errs", writeErrs, "summary", summary)
-	return nil
+	h := headRebuildGoldLabels{emb: p.embeddingStore, store: p.store}
+	_, err := rebuildGoldLabelsCore(ctx, rebuildGoldLabelsEnv{kindEnv: headEnv(reporter, params.Apply), Store: h, Writer: h})
+	return err
 }
 
-// computeRebuildDiff is the pure(ish) core of the op: it re-derives every
-// rule/auto_high_conf example against current state and returns the full
-// diff — per-bucket stats, pass-through counts, the freshly computed rows
-// ready to write on apply, and a bounded sample of changed/unlabelable
-// candidates. Split out from runRebuildGoldLabels so the diff itself (the
-// deliverable of dry-run) is directly unit-testable, not just observable via
-// log lines. The only side effects are reads (GetCandidateByID, GetBook,
-// GetBookFiles via adapter) — no writes happen here.
+// computeRebuildDiff is the v2 entry to the diff for the unit tests: the diff
+// itself (the deliverable of dry-run) is directly testable, not just
+// observable via log lines. Its only side effects are reads.
 func (p *Plugin) computeRebuildDiff(ctx context.Context, reporter sdk.Reporter, existing []database.LabeledExample) (rebuildReport, error) {
-	adapter := builderAdapter{store: p.store}
+	h := headRebuildGoldLabels{emb: p.embeddingStore, store: p.store}
+	return rebuildGoldLabelsDiff(ctx, rebuildGoldLabelsEnv{kindEnv: headEnv(reporter, false), Store: h}, existing)
+}
+
+// rebuildGoldLabelsDiff is the pure(ish) core of the op: it re-derives every
+// rule/auto_high_conf example against current state and returns the full diff:
+// per-bucket stats, pass-through counts, the freshly computed rows ready to
+// write on apply, and a bounded sample of changed/unlabelable candidates. The
+// only side effects are reads (GetCandidateByID, GetBook, GetBookFiles via the
+// adapter), no writes happen here.
+//
+// The scan stays a plain loop, as HEAD ran it. Its output is order-dependent
+// (the report's Fresh slice and the first rebuildSampleLimit samples are in
+// listing order) and it folds into one shared report. (A pool that computes each
+// row's outcome in parallel and folds in order is a candidate follow-up; it
+// would change the v2 path's pool shape and progress cadence. See the F5-04
+// report.)
+func rebuildGoldLabelsDiff(ctx context.Context, env rebuildGoldLabelsEnv, existing []database.LabeledExample) (rebuildReport, error) {
+	adapter := labelBookAdapter{r: env.Store}
 
 	var report rebuildReport
 
 	for i := range existing {
-		if reporter.IsCanceled() {
+		if env.Canceled() {
 			return rebuildReport{}, context.Canceled
 		}
 		select {
@@ -210,21 +312,21 @@ func (p *Plugin) computeRebuildDiff(ctx context.Context, reporter sdk.Reporter, 
 
 		old := existing[i]
 		if (i+1)%1000 == 0 {
-			_ = reporter.UpdateProgress(1, 3, fmt.Sprintf("Re-derived %d/%d…", i+1, len(existing)))
+			env.Progress(1, 3, fmt.Sprintf("Re-derived %d/%d…", i+1, len(existing)))
 		}
 
 		switch old.LabelSource {
 		case "human":
 			report.HumanCount++
 		case "rule":
-			ex, unlabelable, changed := p.rebuildRuleExample(adapter, old)
+			ex, unlabelable, changed := rebuildRuleExample(env.Store, adapter, old)
 			report.applyBucketResult(&report.Rule, "rule", old, ex, unlabelable, changed)
 		case "auto_high_conf":
-			ex, unlabelable, changed := p.rebuildAutoHighConfExample(adapter, old)
+			ex, unlabelable, changed := rebuildAutoHighConfExample(env.Store, adapter, old)
 			report.applyBucketResult(&report.Auto, "auto_high_conf", old, ex, unlabelable, changed)
 		default:
 			// Unlabeled backfill rows (LabelSource=="") and any unrecognized
-			// source are left entirely alone — out of scope for this op.
+			// source are left entirely alone: out of scope for this op.
 			report.OtherCount++
 		}
 	}
@@ -270,8 +372,8 @@ func (r *rebuildReport) applyBucketResult(bucket *rebuildBucketStats, source str
 // LabeledExample for the same candidate. Returns the fresh example, whether it
 // is now unlabelable (candidate gone or Classify no longer fires), and whether
 // the label changed relative to old.
-func (p *Plugin) rebuildRuleExample(adapter builderAdapter, old database.LabeledExample) (ex database.LabeledExample, unlabelable, changed bool) {
-	cand, err := p.embeddingStore.GetCandidateByID(old.CandidateID)
+func rebuildRuleExample(store rebuildGoldLabelsStore, adapter labelBookAdapter, old database.LabeledExample) (ex database.LabeledExample, unlabelable, changed bool) {
+	cand, err := store.GetCandidateByID(old.CandidateID)
 	if err != nil || cand == nil {
 		return database.LabeledExample{}, true, false
 	}
@@ -298,8 +400,8 @@ func (p *Plugin) rebuildRuleExample(adapter builderAdapter, old database.Labeled
 // dataset.MineHighConfidenceDup() on the candidate's current books/files.
 // Returns the fresh example, whether it is now unlabelable (candidate gone or
 // the heuristic no longer fires), and whether the label changed.
-func (p *Plugin) rebuildAutoHighConfExample(adapter builderAdapter, old database.LabeledExample) (ex database.LabeledExample, unlabelable, changed bool) {
-	cand, err := p.embeddingStore.GetCandidateByID(old.CandidateID)
+func rebuildAutoHighConfExample(store rebuildGoldLabelsStore, adapter labelBookAdapter, old database.LabeledExample) (ex database.LabeledExample, unlabelable, changed bool) {
+	cand, err := store.GetCandidateByID(old.CandidateID)
 	if err != nil || cand == nil {
 		return database.LabeledExample{}, true, false
 	}
