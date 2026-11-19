@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.48 -->
+<!-- version: 10.78.49 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -609,7 +609,7 @@ into one of the curated sections below, is a normal direct edit.
 - [ ] **Vet `./kernel/` with `-tags unitlifecycle` in core's `ci` target** 03 §3.5.1 item 4 says core's `ci` target vets `./kernel/` with the `unitlifecycle` tag so every PR compiles the fake-migration hook. R1-28 added the hook (`core/kernel/fakemigration_hook.go`) and the tag-set entry, but `core/Makefile` is R1-30's file in the same wave, so the one `go vet -tags unitlifecycle ./kernel/` line was left out. Until it lands only the `unit-lifecycle` job (when its triggers fire, and `core/kernel/**` is one) compiles the tagged build.
   - Owner: whoever lands R1-30 (`core/Makefile`), or a follow-up row after it.
 
-- [ ] **No platform-core row owns five core identifiers 06's hello blocks need** `TestSpecGoBlocksCompile` (`core/examples/hello/specblocks_test.go`) pins what 06's hello blocks are still missing from core. Five pinned identifiers have no owning row: `module.Setting`, `module.Settings`, `module.SettingsSection`, `module.Manifest.Permissions` and `module.Manifest.Settings`. Assign each one to a row, or amend 06 so the hello blocks stop using it. Until then the hello blocks cannot compile or boot, whatever else lands. The row that adds an identifier also removes it from `helloMissing` in the same PR.
+- [ ] **No platform-core row owns `module.Manifest.Permissions`, which 06's hello blocks need** `TestSpecGoBlocksCompile` (`core/examples/hello/specblocks_test.go`) pins what 06's hello blocks are still missing from core. F3-07 landed `module.Setting`, `module.Settings`, `module.SettingsSection` and `module.Manifest.Settings` (slice a1) and removed them from `helloMissing`; `module.Manifest.Permissions` still has no owning row. Assign it to a row, or amend 06 so the hello blocks stop using it. Until then (and until `ui.Bundle`, F9-03, lands) the hello blocks cannot compile or boot. The row that adds an identifier also removes it from `helloMissing` in the same PR.
   - Owner: coordinator (assign rows). Found by the F2-01 review (#4547).
 
 - [ ] **PLATFORM-CORE-F3-GATE-STATUS** When F3 moves the Basic gate into
