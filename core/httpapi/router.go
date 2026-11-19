@@ -1,7 +1,7 @@
 // file: core/httpapi/router.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 592b4b18-11e9-41ab-b2a5-23b0c23383c2
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package httpapi
 
@@ -211,6 +211,10 @@ type LegacyMount struct {
 	SPAShared         []string                   // top-level segments shared with SPA pages, excluded from NonSPA (§3.5, SEC3-16)
 	BuildID           string                     // stage 5's X-App-Build until the shell flip (FE3-2, FE4-1, R5-7)
 	BasicExemptAssets func(path string) bool     // stage 8 exempts these paths while the mount owns "/" (COR4-9)
+	// BasicGate is stage 8's inputs: when set, Build puts the Basic gate
+	// around the whole router, between stages 7 and 9 (basicGateStage). At
+	// most one mount carries it; nil is no gate.
+	BasicGate *BasicGateOptions
 }
 
 // LegacyRoute is one entry of a legacy mount's manifest (05-http-api §8.2).
@@ -678,6 +682,11 @@ func (r *Router) Build() (http.Handler, error) {
 		return nil, err
 	}
 	r.built, r.gateMux, r.gateAssets = true, mux, r.rootAssets()
+	gate, err := r.basicGateStage()
+	if err != nil {
+		r.built, r.gateMux, r.gateAssets = false, nil, nil
+		return nil, err
+	}
 	root := r.rootHandler()
 	d := &dispatcher{
 		mux:            mux,
@@ -690,7 +699,7 @@ func (r *Router) Build() (http.Handler, error) {
 		chain:          r.chain,
 		log:            r.deps.Log,
 	}
-	return r.chain.Outer(d), nil
+	return r.chain.OuterGated(d, gate), nil
 }
 
 // newChain builds the perimeter for this Build from the router's options and
