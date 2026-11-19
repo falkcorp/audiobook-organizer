@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_fixer.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: 0e4c7d58-a1b3-4f26-8c19-6d5a3e7f9b02
 // last-edited: 2026-11-19
 
@@ -940,9 +940,10 @@ func (r *mcRun) readSource(fa *mcFacts, rc *mcReach, src string, throughCoLoser 
 	// it: a live member beside a merged member's live end, or beside a holder's,
 	// is still a second place the loser may belong, whichever route found the
 	// first.
+	inGroup := "version group " + info.gid + " of " + src
 	primaryReached := false
 	if info.incumbent != "" {
-		got, err := r.follow(fa, rc, info.incumbent, "is the primary of version group "+info.gid)
+		got, err := r.follow(fa, rc, info.incumbent, "is the primary of "+inGroup)
 		if err != nil {
 			return err
 		}
@@ -952,7 +953,7 @@ func (r *mcRun) readSource(fa *mcFacts, rc *mcReach, src string, throughCoLoser 
 		if id == fa.id || fa.onChain(id) {
 			continue
 		}
-		if _, err := r.follow(fa, rc, id, "is a member of version group "+info.gid+" that is merged away"); err != nil {
+		if _, err := r.follow(fa, rc, id, "is a member of "+inGroup+" that is merged away"); err != nil {
 			return err
 		}
 	}
@@ -963,7 +964,9 @@ func (r *mcRun) readSource(fa *mcFacts, rc *mcReach, src string, throughCoLoser 
 	// them.
 	if !primaryReached {
 		for _, id := range info.liveMembers {
-			rc.groupLive[id] = info.gid
+			if _, ok := rc.groupLive[id]; !ok {
+				rc.groupLive[id] = inGroup
+			}
 		}
 	}
 	return nil
@@ -1297,7 +1300,9 @@ type mcReach struct {
 	// the only one left.
 	liveCopies []string
 	// unproven are anchors whose merge chain loops or is longer than the cap:
-	// where they lead is not known, so they prove nothing either way.
+	// where they lead is not known, so they prove nothing either way. Each entry
+	// is the anchor's id and, in brackets, how it was reached (whose retired
+	// versions it holds, or whose version group it belongs to).
 	unproven []string
 	// seen are the anchors already followed: an anchor named by two routes is
 	// walked and listed once.
@@ -1307,9 +1312,10 @@ type mcReach struct {
 	// reads the answer from here, so "did this route reach a live book" does not
 	// depend on which route got there first.
 	outcome map[string]string
-	// groupLive are the live, unmerged books (other than the loser) of a dead
-	// hop's version group that the group's primary did not lead to, each with
-	// its group: books a repoint could plausibly name that nothing walked to.
+	// groupLive are the live, unmerged books (other than the loser) of a source's
+	// version group that the group's primary did not lead to, each with where
+	// it was read ("version group G of S"): books a repoint could plausibly name
+	// that nothing walked to.
 	groupLive map[string]string
 }
 
@@ -1384,7 +1390,7 @@ func (r *mcRun) follow(fa *mcFacts, rc *mcReach, id, via string) (string, error)
 				rc.dead = append(rc.dead, id)
 			}
 		default:
-			rc.unproven = append(rc.unproven, id)
+			rc.unproven = append(rc.unproven, id+" ("+via+")")
 		}
 	}
 	return rc.outcome[id], nil
@@ -1401,11 +1407,14 @@ func (fa *mcFacts) onChain(id string) bool {
 }
 
 // settleDead: the chain ends at a trashed or missing book. A live book
-// reachable another way (the dead hop's version group, or the holder of the
-// dead hop's retired versions, followed on to the live book it was merged into
-// when it is merged itself) is where the pointer is repointed; with none, and
-// every walk proved it, the loser stands alone; with two, or with a walk that
-// could not prove it, it is held and never guessed.
+// reachable another way (the version group of a source, or the holder of a
+// source's retired rows, followed on to the live book it was merged into when
+// it is merged itself; the sources are the books whose chain enters the dead
+// book, the loser's own hops among them, never the loser) is where the pointer
+// is repointed; with none, and every walk proved it, the loser stands alone;
+// with two, or with a walk that could not prove it, it is held and never
+// guessed. A hold names the source an anchor or a group was read from, because
+// that is often a co-loser, not the dead book.
 func (r *mcRun) settleDead(ctx context.Context, fa *mcFacts) error {
 	rc := &mcReach{live: map[string]string{}, seen: map[string]bool{}, outcome: map[string]string{}, groupLive: map[string]string{}}
 	// The sources of anchors, stated once. A source is a book, other than the
@@ -1458,19 +1467,23 @@ func (r *mcRun) settleDead(ctx context.Context, fa *mcFacts) error {
 		}
 	}
 	sort.Strings(fa.orphans)
+	orphanNotes := make([]string, len(fa.orphans))
+	for i, id := range fa.orphans {
+		orphanNotes[i] = id + " (in " + rc.groupLive[id] + ")"
+	}
 	end := fa.chain.LastID()
 	switch {
 	case len(rc.unproven) > 0:
 		fa.class = mcKindRepoint
 		fa.chainHold = mcSkipRepointAmbiguous
-		fa.chainHoldWhy = "the merge chain ends at " + end + ", which is " + fa.deadWhy() + ", but " + strings.Join(rc.unproven, ", ") +
-			" (a holder of its retired versions or the primary of its version group) sits on a merge loop or a chain longer than " +
+		fa.chainHoldWhy = "the merge chain ends at " + end + ", which is " + fa.deadWhy() + ", and the walk reached " + strings.Join(rc.unproven, ", ") +
+			", each of which sits on a merge loop or a chain longer than " +
 			strconv.Itoa(mcMaxHops) + " books, so whether a live book is reachable cannot be shown; never guessed"
 	case len(fa.orphans) > 0:
 		fa.class = mcKindRepoint
 		fa.chainHold = mcSkipRepointGroupNoPrimary
-		fa.chainHoldWhy = "the merge chain ends at " + end + ", which is " + fa.deadWhy() + ", and its version group holds live book(s) " +
-			strings.Join(fa.orphans, ", ") + " that no walk reached because the group has no usable primary; whether the loser stands alone or belongs with one of them cannot be shown, so it is never guessed"
+		fa.chainHoldWhy = "the merge chain ends at " + end + ", which is " + fa.deadWhy() + ", and live book(s) " +
+			strings.Join(orphanNotes, ", ") + " were not reached by any walk, because that group has no usable primary; whether the loser stands alone or belongs with one of them cannot be shown, so it is never guessed"
 	case len(fa.candidates) == 0:
 		fa.kind, fa.class = mcKindUnmerge, mcKindUnmerge
 		checked := "no holder of its retired versions and no live book of its version group exists"
@@ -1505,7 +1518,7 @@ func (r *mcRun) settleDead(ctx context.Context, fa *mcFacts) error {
 		if len(others) > 0 {
 			fa.chainHold = mcSkipDeadEndShared
 			fa.chainHoldWhy = "the merge chain ends at " + end + ", which is " + fa.deadWhy() + ", and " + strconv.Itoa(len(others)) +
-				" other live merged book(s) with files (" + strings.Join(others, ", ") + ") lead to a dead end too, at the same book or from its retired versions or version group; each standing alone would leave several live copies of one work, and nothing here says they are different works"
+				" other live merged book(s) with files (" + strings.Join(others, ", ") + ") lead to a dead end too, at the same book or through the retired versions or version group of a book that was merged into it; each standing alone would leave several live copies of one work, and nothing here says they are different works"
 		}
 	case len(fa.candidates) == 1:
 		fa.kind, fa.class = mcKindRepoint, mcKindRepoint

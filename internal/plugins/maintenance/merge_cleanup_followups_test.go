@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_followups_test.go
-// version: 1.0.1
+// version: 1.0.3
 // guid: d4f5094a-01a4-4706-8a50-b3d083766896
 // last-edited: 2026-11-19
 
@@ -7,6 +7,7 @@ package maintenance
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -176,4 +177,104 @@ func TestMcRowHoldersReadsAgainWhenAVersionChangesHolderMidRead(t *testing.T) {
 	got, err = mcRowHolders(none, "src")
 	require.NoError(t, err)
 	require.Empty(t, got)
+}
+
+// ---- R6-n3: a hold reason names the book the anchor was read from ----
+
+// A holder that loops, reached from a co-loser's retired versions: the hold says
+// whose retired versions it holds, not "its", which a reader takes for the dead
+// book's.
+func TestMergeCleanupAmbiguousHoldNamesTheSourceOfAnUnprovenAnchor(t *testing.T) {
+	x := newMCFixture(t)
+	x.mk("t", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+	x.mk("b", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}})
+	x.point("b", "t")
+	x.mk("holder-a", mcHushSpec(30000))
+	x.mk("holder-b", mcHushSpec(30000))
+	x.point("holder-a", "holder-b")
+	x.point("holder-b", "holder-a")
+	retireRowOnto(t, x.st, x.ids["b"], x.ids["holder-a"], "rl", filepath.Join(x.root, "retired", "l.m4b"))
+	x.mk("loser", mcHushSpec(30000))
+	x.point("loser", "t")
+	r := wantRow(t, x.plan(), "loser", mcKindRepoint, mcSkipRepointAmbiguous)
+	require.Contains(t, r.SkipReason, x.ids["holder-a"])
+	require.Contains(t, r.SkipReason, "holds the retired versions of "+x.ids["b"], "the source is named")
+	require.NotContains(t, r.SkipReason, "its retired versions", "'its' reads as the dead book's")
+	require.NotContains(t, r.SkipReason, "its version group")
+}
+
+// A live book of a co-loser's version group that no walk reached: the hold names
+// the group and the co-loser it was read from, not "its version group".
+func TestMergeCleanupGroupNoPrimaryHoldNamesTheGroupAndItsSource(t *testing.T) {
+	x := newMCFixture(t)
+	x.mk("t", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+	x.mk("b", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, group: "g", primary: mcFalse()})
+	x.point("b", "t")
+	x.mk("a", mcHush("g", mcFalse()))
+	x.mk("loser", mcHushSpec(30000))
+	x.point("loser", "t")
+	r := wantRow(t, x.plan(), "loser", mcKindRepoint, mcSkipRepointGroupNoPrimary)
+	require.Contains(t, r.SkipReason, x.ids["a"])
+	require.Contains(t, r.SkipReason, "version group g", "the group is named")
+	require.Contains(t, r.SkipReason, x.ids["b"], "the book the group was read from is named")
+	require.NotContains(t, r.SkipReason, "its version group", "'its' reads as the dead book's")
+}
+
+// The same hold for the loser's own dead hop keeps naming that hop's group.
+func TestMergeCleanupGroupNoPrimaryHoldNamesTheDeadHopsOwnGroup(t *testing.T) {
+	x := newMCFixture(t)
+	mcGroupedDeadEnd(x, "g", mcFalse())
+	x.mk("sibling", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000), group: "g", primary: mcFalse()})
+	r := wantRow(t, x.plan(), "loser", mcKindRepoint, mcSkipRepointGroupNoPrimary)
+	require.Contains(t, r.SkipReason, x.ids["sibling"])
+	require.Contains(t, r.SkipReason, "version group g")
+	require.Contains(t, r.SkipReason, x.ids["dead"], "the dead book the group was read from is named")
+}
+
+// Several live copies around one dead end: the reason says where the copies come
+// from without calling it the dead book's own group.
+func TestMergeCleanupDeadEndSharedHoldSaysWhoseVersionsAndGroupTheCopiesCameThrough(t *testing.T) {
+	x := newMCFixture(t)
+	mcDeadEnd(x, "dead", "loser", mcHushSpec(30000))
+	x.mk("mate", mcHushSpec(30000))
+	x.point("mate", "dead")
+	r := wantRow(t, x.plan(), "loser", mcKindUnmerge, mcSkipDeadEndShared)
+	require.Contains(t, r.SkipReason, "through the retired versions or version group of a book that was merged into it")
+	require.NotContains(t, r.SkipReason, "from its retired versions or version group")
+}
+
+// A group read from two sources is named for the first one in the walk's fixed
+// order (the sorted ids), so the same plan always reads the same.
+func TestMergeCleanupGroupNoPrimaryHoldNamesTheFirstSourceOfASharedGroup(t *testing.T) {
+	x := newMCFixture(t)
+	x.mk("t", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+	for _, n := range []string{"b1", "b2"} {
+		x.mk(n, mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, group: "g", primary: mcFalse()})
+		x.point(n, "t")
+	}
+	x.mk("a", mcHush("g", mcFalse()))
+	x.mk("loser", mcHushSpec(30000))
+	x.point("loser", "t")
+	first, second := x.ids["b1"], x.ids["b2"]
+	if second < first {
+		first, second = second, first
+	}
+	r := wantRow(t, x.plan(), "loser", mcKindRepoint, mcSkipRepointGroupNoPrimary)
+	require.Contains(t, r.SkipReason, "in version group g of "+first)
+	require.NotContains(t, r.SkipReason, "in version group g of "+second)
+}
+
+// A live primary reached through a co-loser's group is reported with that group
+// and the co-loser it was read from.
+func TestMergeCleanupRepointEvidenceNamesTheGroupAndSourceItWasReadFrom(t *testing.T) {
+	x := newMCFixture(t)
+	x.mk("t", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+	x.mk("b", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, group: "g", primary: mcFalse()})
+	x.point("b", "t")
+	x.mk("p", mcHush("g", mcTrue()))
+	x.mk("loser", mcHushSpec(30000))
+	x.point("loser", "t")
+	r := x.plan()["loser"]
+	require.Equal(t, mcKindRepoint, r.Class, "%s", r.SkipReason)
+	require.Contains(t, strings.Join(r.Evidence, " "), "is the primary of version group g of "+x.ids["b"])
 }
