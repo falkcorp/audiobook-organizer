@@ -1,5 +1,5 @@
 // file: core/internal/outboxhttp/routes_test.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: b91b2c32-bee4-4aac-a400-6fb0e871d709
 // last-edited: 2026-11-19
 
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"iter"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -52,12 +53,32 @@ func (j *journal) all() []string {
 	return slices.Clone(j.steps)
 }
 
+// ctxInfo is what a collaborator saw of the context it was handed: whether it
+// was still live, and how long until its deadline (zero when it had none).
+type ctxInfo struct {
+	alive     bool
+	remaining time.Duration
+}
+
+func ctxOf(ctx context.Context) ctxInfo {
+	c := ctxInfo{alive: ctx.Err() == nil}
+	if d, ok := ctx.Deadline(); ok {
+		c.remaining = time.Until(d)
+	}
+	return c
+}
+
 // fakeOp is an Operator that answers what the test set and logs every call.
 type fakeOp struct {
 	j *journal
 
 	status    outbox.Status
 	statusErr error
+
+	// topic is what DeadTopic answers (noticeTopic when empty) and taken what
+	// RetryDead and DiscardDead answer (the topic read when empty).
+	topic, taken string
+	topicErr     error
 
 	retryErr, discardErr error
 	purgeSkipped         int
@@ -72,6 +93,7 @@ type fakeOp struct {
 	gotAfter  string
 	gotLimit  int
 	listCalls int
+	opCtx     []ctxInfo // the context of each RetryDead, DiscardDead and PurgeBacklog
 }
 
 func (f *fakeOp) ListDead(_ context.Context, after string, limit int) ([]outbox.DeadLetter, string, error) {
@@ -94,18 +116,55 @@ func (f *fakeOp) ListDead(_ context.Context, after string, limit int) ([]outbox.
 	return f.letters, f.listNext, f.listErr
 }
 
-func (f *fakeOp) RetryDead(_ context.Context, consumer string, seq uint64) error {
+func (f *fakeOp) readTopic() string {
+	if f.topic != "" {
+		return f.topic
+	}
+	return noticeTopic
+}
+
+func (f *fakeOp) takenTopic() string {
+	if f.taken != "" {
+		return f.taken
+	}
+	return f.readTopic()
+}
+
+func (f *fakeOp) sawCtx(ctx context.Context) {
+	f.mu.Lock()
+	f.opCtx = append(f.opCtx, ctxOf(ctx))
+	f.mu.Unlock()
+}
+
+func (f *fakeOp) DeadTopic(_ context.Context, consumer string, seq uint64) (string, error) {
+	f.j.add(fmt.Sprintf("op:topic %s/%d", consumer, seq))
+	if f.topicErr != nil {
+		return "", f.topicErr
+	}
+	return f.readTopic(), nil
+}
+
+func (f *fakeOp) RetryDead(ctx context.Context, consumer string, seq uint64) (string, error) {
 	f.j.add(fmt.Sprintf("op:retry %s/%d", consumer, seq))
-	return f.retryErr
+	f.sawCtx(ctx)
+	if f.retryErr != nil {
+		return "", f.retryErr
+	}
+	return f.takenTopic(), nil
 }
 
-func (f *fakeOp) DiscardDead(_ context.Context, consumer string, seq uint64) error {
+func (f *fakeOp) DiscardDead(ctx context.Context, consumer string, seq uint64) (string, error) {
 	f.j.add(fmt.Sprintf("op:discard %s/%d", consumer, seq))
-	return f.discardErr
+	f.sawCtx(ctx)
+	if f.discardErr != nil {
+		return "", f.discardErr
+	}
+	return f.takenTopic(), nil
 }
 
-func (f *fakeOp) PurgeBacklog(_ context.Context, consumer string) (int, error) {
+func (f *fakeOp) PurgeBacklog(ctx context.Context, consumer string) (int, error) {
 	f.j.add("op:purge " + consumer)
+	f.sawCtx(ctx)
 	return f.purgeSkipped, f.purgeErr
 }
 
@@ -117,24 +176,43 @@ func (f *fakeOp) Status(context.Context) (outbox.Status, error) {
 // fakeRec is an audit.Logger that keeps what it is given and can fail.
 type fakeRec struct {
 	j   *journal
-	err error
+	err error // fails every Record
 
-	mu       sync.Mutex
-	events   []audit.Event
-	ctxAlive []bool // whether the context of each Record was still live
+	// errOn fails the Records it returns an error for, after keeping them.
+	errOn func(audit.Event) error
+	// onRecord runs after the n-th Record (1-based) was kept.
+	onRecord func(n int)
+
+	mu     sync.Mutex
+	events []audit.Event
+	ctxs   []ctxInfo // the context of each Record
 }
 
 func (f *fakeRec) Record(ctx context.Context, e audit.Event) error {
-	f.j.add("record:" + e.Action + ":" + string(e.Outcome))
+	step := "record:" + e.Action + ":" + string(e.Outcome)
+	if e.Reason != "" {
+		step += "/" + e.Reason
+	}
+	f.j.add(step)
 	f.mu.Lock()
 	f.events = append(f.events, e)
-	f.ctxAlive = append(f.ctxAlive, ctx.Err() == nil)
+	f.ctxs = append(f.ctxs, ctxOf(ctx))
+	n := len(f.events)
 	f.mu.Unlock()
-	return f.err
+	if f.onRecord != nil {
+		f.onRecord(n)
+	}
+	if f.err != nil {
+		return f.err
+	}
+	if f.errOn != nil {
+		return f.errOn(e)
+	}
+	return nil
 }
 
 func (f *fakeRec) RecordIn(context.Context, *storage.Batch, audit.Event) error {
-	panic("outboxhttp records synchronously after the operation, never into a batch")
+	panic("outboxhttp records synchronously, never into a batch")
 }
 
 func (f *fakeRec) Emit(context.Context, audit.Event) { panic("outboxhttp never emits asynchronously") }
@@ -145,18 +223,26 @@ func (f *fakeRec) recorded() []audit.Event {
 	return slices.Clone(f.events)
 }
 
+func (f *fakeRec) seen() []ctxInfo {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.ctxs)
+}
+
 // rig is the fakes over one api.
 type rig struct {
-	j   *journal
-	op  *fakeOp
-	rec *fakeRec
-	api *api
+	j    *journal
+	op   *fakeOp
+	rec  *fakeRec
+	api  *api
+	logs *lockedBuffer
 }
 
 func newRig() *rig {
 	j := &journal{}
-	op, rec := &fakeOp{j: j}, &fakeRec{j: j}
-	return &rig{j: j, op: op, rec: rec, api: newAPI("/api/core/v1", op, nil, rec, WithLogger(discardLogger()))}
+	op, rec, logs := &fakeOp{j: j}, &fakeRec{j: j}, &lockedBuffer{}
+	return &rig{j: j, op: op, rec: rec, logs: logs,
+		api: newAPI("/api/core/v1", op, nil, rec, WithLogger(slog.New(slog.NewTextHandler(logs, nil))))}
 }
 
 // ---- helpers ----------------------------------------------------------------
@@ -411,51 +497,169 @@ func TestOutboxHTTP_SeqBinding(t *testing.T) {
 
 // ---- the permission, guard and 401 tables (stage 13: F4-08) -----------------
 
-// TestOutboxHTTP_ListDeadNeedsSystemManage: core:system.view alone is refused
-// (403) on the dead-letter list and on both dead-letter writes; core:system.manage
-// is let through. Route permission (stage 13) arrives at F4-08, so each cell
-// skips; F6-03, which mounts the package, un-skips them.
-func TestOutboxHTTP_ListDeadNeedsSystemManage(t *testing.T) {
-	for _, c := range []struct{ name, method, path string }{
+// stage13Caller is who a stage-13 cell calls as. The zero value is no
+// principal at all.
+type stage13Caller struct {
+	name      string
+	anonymous bool
+	method    auth.Method
+	scopes    []rbac.Permission
+}
+
+// held is the rbac.Checker of a caller that holds exactly the scopes given: what
+// Service.Compile builds from roles at F4-08, as far as these routes can tell.
+type held []rbac.Permission
+
+func (h held) Has(s rbac.Permission) bool { return slices.Contains(h, s) }
+
+func (h held) Satisfies(r rbac.Requirement) bool {
+	switch r.Kind() {
+	case rbac.KindAuthenticated:
+		return true
+	case rbac.KindAllOf:
+		return !slices.ContainsFunc(r.Permissions(), func(p rbac.Permission) bool { return !h.Has(p) })
+	case rbac.KindAnyOf:
+		return slices.ContainsFunc(r.Permissions(), h.Has)
+	}
+	return false
+}
+
+func (h held) Confined() bool              { return false }
+func (h held) Concrete() []rbac.Permission { return slices.Clone(h) }
+
+func (c stage13Caller) principal() *auth.Principal {
+	p := bruce()
+	p.Method, p.Perms = c.method, held(c.scopes)
+	return p
+}
+
+var (
+	noCaller   = stage13Caller{name: "no principal", anonymous: true}
+	viewer     = stage13Caller{name: "view only", method: auth.MethodSession, scopes: []rbac.Permission{permView}}
+	manager    = stage13Caller{name: "manage", method: auth.MethodSession, scopes: []rbac.Permission{permManage}}
+	managerKey = stage13Caller{name: "manage by api key", method: auth.MethodAPIKey, scopes: []rbac.Permission{permManage}}
+	managerABS = stage13Caller{name: "manage by delegated session", method: auth.MethodSessionDelegated, scopes: []rbac.Permission{permManage}}
+	managerOff = stage13Caller{name: "manage with auth off", method: auth.MethodAuthDisabled, scopes: []rbac.Permission{permManage}}
+)
+
+// letThrough is the want of a cell the route lets through: neither 401 nor 403,
+// whatever the handler then answers (these cells name consumers that need not exist).
+const letThrough = 0
+
+// stage13Do serves one request to the real routes, built into a router over a
+// live outbox, as caller. It is the body of every stage-13 cell: Build refuses
+// non-Public routes until F4-08 brings the auth service, so no cell reaches it
+// before then, and a cell that is un-skipped before then fails here, on Build.
+func stage13Do(t *testing.T, method, path string, c stage13Caller) *httptest.ResponseRecorder {
+	t.Helper()
+	e := newEnv(t)
+	r := httpapi.NewRouter(httpapi.Options{}, httpapi.Deps{Log: discardLogger()})
+	Register(r.CoreGroup(), e.ob, e.cat, e.aud, WithLogger(discardLogger()))
+	h, err := r.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	req := httptest.NewRequest(method, "/api/core/v1"+path, nil)
+	if !c.anonymous {
+		req = req.WithContext(auth.WithPrincipal(req.Context(), c.principal()))
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func wantStage13(t *testing.T, rec *httptest.ResponseRecorder, want int) {
+	t.Helper()
+	switch {
+	case want == letThrough && (rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden):
+		t.Errorf("status = %d (%s), want the route to let the caller through", rec.Code, rec.Body.String())
+	case want != letThrough && rec.Code != want:
+		t.Errorf("status = %d (%s), want %d", rec.Code, rec.Body.String(), want)
+	}
+}
+
+// TestOutboxHTTP_DeadLetterRoutesNeedSystemManage: the dead-letter list and both
+// dead-letter writes answer 401 with no principal, 403 to a holder of
+// core:system.view alone, and let a holder of core:system.manage through; the
+// purge's own table (it also has the interactive guard) is
+// TestOutboxHTTP_PurgeNeedsInteractive. Route permission (stage 13) arrives at
+// F4-08, so each cell skips; F6-03, which mounts the package, un-skips them with
+// no other change (the bodies are written).
+func TestOutboxHTTP_DeadLetterRoutesNeedSystemManage(t *testing.T) {
+	for _, c := range []struct {
+		name, method, path string
+	}{
 		{"list", http.MethodGet, "/outbox/dead"},
 		{"retry", http.MethodPost, "/outbox/dead/core.notify.deliver/1/retry"},
 		{"discard", http.MethodDelete, "/outbox/dead/core.notify.deliver/1"},
-		{"purge", http.MethodDelete, "/outbox/consumers/core.notify.deliver/backlog"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Skip("needs stage 13: F4-08")
+			for _, cell := range []struct {
+				caller stage13Caller
+				want   int
+			}{
+				{noCaller, http.StatusUnauthorized},
+				{viewer, http.StatusForbidden},
+				{manager, letThrough},
+			} {
+				t.Run(cell.caller.name, func(t *testing.T) {
+					wantStage13(t, stage13Do(t, c.method, c.path, cell.caller), cell.want)
+				})
+			}
 		})
 	}
 }
 
-// TestOutboxHTTP_PurgeNeedsInteractive: an API-key principal holding
-// core:system.manage is refused by the interactive guard; an interactive
-// session is let through. Skipped until stage 13 (F4-08).
+// TestOutboxHTTP_PurgeNeedsInteractive: the purge answers 401 with no principal,
+// 403 to a holder of core:system.view alone, 403 to a holder of
+// core:system.manage whose credential is not an interactive one (an API key, a
+// delegated session, the auth-off principal: Guards.Interactive), and lets an
+// interactive session holding core:system.manage through. Skipped until stage 13
+// (F4-08).
 func TestOutboxHTTP_PurgeNeedsInteractive(t *testing.T) {
-	for _, c := range []struct {
-		name   string
-		method auth.Method
+	const path = "/outbox/consumers/core.notify.deliver/backlog"
+	for _, cell := range []struct {
+		caller stage13Caller
 		want   int
 	}{
-		{"api key", auth.MethodAPIKey, http.StatusForbidden},
-		{"session", auth.MethodSession, http.StatusOK},
+		{noCaller, http.StatusUnauthorized},
+		{viewer, http.StatusForbidden},
+		{managerKey, http.StatusForbidden},
+		{managerABS, http.StatusForbidden},
+		{managerOff, http.StatusForbidden},
+		{manager, letThrough},
 	} {
-		t.Run(c.name, func(t *testing.T) {
+		t.Run(cell.caller.name, func(t *testing.T) {
 			t.Skip("needs stage 13: F4-08")
+			wantStage13(t, stage13Do(t, http.MethodDelete, path, cell.caller), cell.want)
 		})
 	}
 }
 
 // TestOutboxHTTP_ConsumersAndTopicsNeedSystemView: both read routes answer 401
-// with no principal and 200 to a holder of core:system.view. Skipped until
-// stage 13 (F4-08).
+// with no principal, 403 to a caller holding neither scope, and let a holder of
+// core:system.view through. Skipped until stage 13 (F4-08).
 func TestOutboxHTTP_ConsumersAndTopicsNeedSystemView(t *testing.T) {
+	nothing := stage13Caller{name: "no scope", method: auth.MethodSession}
 	for _, c := range []struct{ name, path string }{
 		{"consumers", "/outbox/consumers"},
 		{"topics", "/events/topics"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Skip("needs stage 13: F4-08")
+			for _, cell := range []struct {
+				caller stage13Caller
+				want   int
+			}{
+				{noCaller, http.StatusUnauthorized},
+				{nothing, http.StatusForbidden},
+				{viewer, letThrough},
+			} {
+				t.Run(cell.caller.name, func(t *testing.T) {
+					wantStage13(t, stage13Do(t, http.MethodGet, c.path, cell.caller), cell.want)
+				})
+			}
 		})
 	}
 }
@@ -694,6 +898,8 @@ func detailInt(t testing.TB, r audit.Record, key string) int {
 		return v
 	case int64:
 		return int(v)
+	case uint64:
+		return int(v)
 	case json.Number:
 		n, err := v.Int64()
 		if err != nil {
@@ -721,8 +927,12 @@ func TestOutboxHTTP_RetryRedeliversAndAudits(t *testing.T) {
 	if _, err := e.api.retry(context.Background(), deadIn(bruce(), consumerDeliver, 1)); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the retried message to be delivered", func() bool { return len(e.got.all()) >= 1 })
-	time.Sleep(50 * time.Millisecond) // a second delivery would arrive by now
+	// The retry staged exactly one message, so once the relay has drained it (the
+	// intake is empty and the consumer has nothing pending) a second delivery has
+	// nothing left to come from: the check needs no wait for one that never arrives.
+	eventually(t, "the retried message to be delivered and the stream drained", func() bool {
+		return len(e.got.all()) >= 1 && len(e.intake(noticeTopic)) == 0 && e.consumerStatus(consumerDeliver).Pending == 0
+	})
 	got := e.got.all()
 	if len(got) != 1 {
 		t.Fatalf("%d deliveries after one retry, want 1: %+v", len(got), got)
@@ -952,13 +1162,32 @@ func TestOutboxHTTP_PurgeAdvancesCursorsAndAudits(t *testing.T) {
 		t.Errorf("a second purge = %+v, %v; want 0 skipped", again, err)
 	}
 
-	recs := e.records()
-	if len(recs) != 2 {
-		t.Fatalf("%d audit records after two purges, want 2", len(recs))
+	// Each purge is recorded twice: as requested before it ran (its count is not
+	// known yet) and as completed with the count after.
+	var requested, completed []audit.Record
+	for _, r := range e.records() {
+		switch r.Reason {
+		case reasonRequested:
+			requested = append(requested, r)
+		case reasonCompleted:
+			completed = append(completed, r)
+		default:
+			t.Errorf("record with reason %q: %+v", r.Reason, r.Event)
+		}
 	}
-	first := recs[1] // newest first
+	if len(requested) != 2 || len(completed) != 2 {
+		t.Fatalf("%d requested and %d completed records after two purges, want 2 and 2", len(requested), len(completed))
+	}
+	for _, r := range requested {
+		if r.Action != "core.outbox.backlog_purge" || r.Outcome != audit.Success || r.Actor.Username != "bruce" ||
+			r.Target.ID != consumerRespond || r.Details["topic"] != signalTopic || len(r.Details) != 1 {
+			t.Errorf("request record = %+v, want the action, the actor, the consumer and the topic with no count", r.Event)
+		}
+	}
+	slices.SortFunc(completed, func(x, y audit.Record) int { return detailInt(t, y, "skipped") - detailInt(t, x, "skipped") })
+	first, second := completed[0], completed[1]
 	if first.Action != "core.outbox.backlog_purge" || first.Outcome != audit.Success || first.Actor.Username != "bruce" {
-		t.Errorf("record = %+v", first)
+		t.Errorf("record = %+v", first.Event)
 	}
 	if first.Route != "DELETE /api/core/v1/outbox/consumers/{consumer}/backlog" || first.Target.ID != consumerRespond {
 		t.Errorf("route/target = %q / %+v", first.Route, first.Target)
@@ -966,23 +1195,25 @@ func TestOutboxHTTP_PurgeAdvancesCursorsAndAudits(t *testing.T) {
 	if detailInt(t, first, "skipped") != 5 || first.Details["topic"] != signalTopic || len(first.Details) != 2 {
 		t.Errorf("details = %+v, want skipped and topic only", first.Details)
 	}
-	if detailInt(t, recs[0], "skipped") != 0 {
-		t.Errorf("the second purge's details = %+v", recs[0].Details)
+	if detailInt(t, second, "skipped") != 0 {
+		t.Errorf("the second purge's details = %+v", second.Details)
 	}
 }
 
 // ---- audit failure ----------------------------------------------------------
 
-// TestOutboxHTTP_AuditFailureFailsRequest: with the audit store's writes failing,
-// each state change answers 500 audit_write_failed saying the operation was
-// applied and not audited, the failure is counted on the sync path, and the
-// operation did commit (no record was written before it).
-func TestOutboxHTTP_AuditFailureFailsRequest(t *testing.T) {
+// TestOutboxHTTP_AuditFailureMeansNotApplied: with the audit store's writes
+// failing, each state change answers 503 and the operation is NOT applied (05-rbac
+// §3.5 and §8: a sync audit write that fails fails the operation, closed). Over
+// the real outbox, the letter is still there, nothing was staged and the
+// cursors have not moved; the failure is counted on the sync path, and the log
+// line names who tried what.
+func TestOutboxHTTP_AuditFailureMeansNotApplied(t *testing.T) {
 	type cell struct {
-		name    string
-		seed    func(e *env)
-		run     func(e *env) error
-		applied func(t *testing.T, e *env)
+		name      string
+		seed      func(e *env)
+		run       func(e *env) error
+		untouched func(t *testing.T, e *env)
 	}
 	cells := []cell{
 		{"retry",
@@ -992,11 +1223,11 @@ func TestOutboxHTTP_AuditFailureFailsRequest(t *testing.T) {
 				return err
 			},
 			func(t *testing.T, e *env) {
-				if rows := e.deadRows(); len(rows) != 0 {
-					t.Errorf("dead letters = %+v, want the retry applied", rows)
+				if rows := e.deadRows(); len(rows) != 1 || rows[0].Seq != 1 {
+					t.Errorf("dead letters = %+v, want the letter still there", rows)
 				}
-				if rows := e.intake(noticeTopic); len(rows) != 1 {
-					t.Errorf("intake = %+v, want the retried message", rows)
+				if rows := e.intake(noticeTopic); len(rows) != 0 {
+					t.Errorf("intake = %+v, want nothing re-staged", rows)
 				}
 			}},
 		{"discard",
@@ -1006,8 +1237,8 @@ func TestOutboxHTTP_AuditFailureFailsRequest(t *testing.T) {
 				return err
 			},
 			func(t *testing.T, e *env) {
-				if rows := e.deadRows(); len(rows) != 0 {
-					t.Errorf("dead letters = %+v, want the discard applied", rows)
+				if rows := e.deadRows(); len(rows) != 1 || rows[0].Seq != 1 {
+					t.Errorf("dead letters = %+v, want the letter still there", rows)
 				}
 			}},
 		{"purge",
@@ -1020,8 +1251,8 @@ func TestOutboxHTTP_AuditFailureFailsRequest(t *testing.T) {
 				return err
 			},
 			func(t *testing.T, e *env) {
-				if c := e.consumerStatus(consumerRespond); c.Pending != 0 {
-					t.Errorf("pending = %d, want the purge applied", c.Pending)
+				if c := e.consumerStatus(consumerRespond); c.Pending != 3 {
+					t.Errorf("pending = %d, want the cursors where they were (3)", c.Pending)
 				}
 			}},
 	}
@@ -1033,9 +1264,9 @@ func TestOutboxHTTP_AuditFailureFailsRequest(t *testing.T) {
 			before := e.auditWriteErrors()
 
 			err := c.run(e)
-			he := wantProblem(t, err, http.StatusInternalServerError, "audit_write_failed")
-			if !strings.Contains(he.Detail, "applied") || !strings.Contains(he.Detail, "audit") {
-				t.Errorf("detail = %q, want it to say the operation was applied and not audited", he.Detail)
+			he := wantProblem(t, err, http.StatusServiceUnavailable, "unavailable")
+			if !strings.Contains(he.Detail, "nothing was changed") {
+				t.Errorf("detail = %q, want it to say nothing was changed", he.Detail)
 			}
 			if he.Err == nil {
 				t.Error("the cause of the failed audit write was dropped")
@@ -1043,20 +1274,56 @@ func TestOutboxHTTP_AuditFailureFailsRequest(t *testing.T) {
 			if got := e.auditWriteErrors(); got != before+1 {
 				t.Errorf("audit_write_errors_total{sync} = %v, want %v (one more)", got, before+1)
 			}
-			c.applied(t, e)
-			if log := e.logBuf.String(); !strings.Contains(log, "could not be written") {
-				t.Errorf("the failure was not logged: %q", log)
+			c.untouched(t, e)
+			log := e.logBuf.String()
+			for _, want := range []string{"was not run", "actor_username=bruce", "actor_user_id=u-bruce", "request_id=req-batmobile", "client_addr=192.0.2.10"} {
+				if !strings.Contains(log, want) {
+					t.Errorf("the failure log lacks %q: %q", want, log)
+				}
+			}
+			if c.name != "purge" && !strings.Contains(log, "consumer="+consumerDeliver) {
+				t.Errorf("the failure log does not name the consumer: %q", log)
 			}
 		})
 	}
 }
 
-// ---- order and mapping, over fakes ------------------------------------------
+// TestOutboxHTTP_AuditFailureStopsBeforeTheOperation: over fakes, a first record
+// that cannot be written stops every route before it calls the operation.
+func TestOutboxHTTP_AuditFailureStopsBeforeTheOperation(t *testing.T) {
+	for _, kind := range []string{"retry", "discard", "purge"} {
+		t.Run(kind, func(t *testing.T) {
+			rg := newRig()
+			rg.rec.err = errors.New("audit: the disk is full")
+			var err error
+			switch kind {
+			case "retry":
+				_, err = rg.api.retry(context.Background(), deadIn(bruce(), "core.notify.deliver", 4))
+			case "discard":
+				_, err = rg.api.discard(context.Background(), deadIn(bruce(), "core.notify.deliver", 4))
+			case "purge":
+				_, err = rg.api.purge(context.Background(), purgeIn(bruce(), "core.notify.deliver"))
+			}
+			wantProblem(t, err, http.StatusServiceUnavailable, "unavailable")
+			for _, step := range rg.j.all() {
+				if strings.HasPrefix(step, "op:retry") || strings.HasPrefix(step, "op:discard") || strings.HasPrefix(step, "op:purge") {
+					t.Errorf("the operation ran after its record failed: %v", rg.j.all())
+				}
+			}
+			if recs := rg.rec.recorded(); len(recs) != 1 {
+				t.Errorf("%d records written, want the one that failed", len(recs))
+			}
+		})
+	}
+}
 
-// TestOutboxHTTP_RecordsAfterTheOperation: the audit record is written only
-// after the operation ran and committed, with Outcome success, and from a
-// context that survives the request's cancellation.
-func TestOutboxHTTP_RecordsAfterTheOperation(t *testing.T) {
+// ---- order, contexts and mapping, over fakes --------------------------------
+
+// TestOutboxHTTP_RecordsBeforeTheOperation: the audit record is written before
+// the operation runs (and so before anything is applied), with outcome success;
+// a purge adds a record of what it skipped after it ran, which is not known
+// before.
+func TestOutboxHTTP_RecordsBeforeTheOperation(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		run  func(rg *rig) error
@@ -1066,17 +1333,19 @@ func TestOutboxHTTP_RecordsAfterTheOperation(t *testing.T) {
 			_, err := rg.api.retry(context.Background(), deadIn(bruce(), "core.notify.deliver", 4))
 			return err
 		},
-			[]string{"op:list", "op:retry core.notify.deliver/4", "record:core.outbox.dead_retry:success"}},
+			[]string{"op:topic core.notify.deliver/4", "record:core.outbox.dead_retry:success", "op:retry core.notify.deliver/4"}},
 		{"discard", func(rg *rig) error {
 			_, err := rg.api.discard(context.Background(), deadIn(bruce(), "core.notify.deliver", 4))
 			return err
 		},
-			[]string{"op:list", "op:discard core.notify.deliver/4", "record:core.outbox.dead_discard:success"}},
+			[]string{"op:topic core.notify.deliver/4", "record:core.outbox.dead_discard:success", "op:discard core.notify.deliver/4"}},
 		{"purge", func(rg *rig) error {
+			rg.op.purgeSkipped = 2
 			_, err := rg.api.purge(context.Background(), purgeIn(bruce(), "core.notify.deliver"))
 			return err
 		},
-			[]string{"op:status", "op:purge core.notify.deliver", "record:core.outbox.backlog_purge:success"}},
+			[]string{"op:status", "record:core.outbox.backlog_purge:success/requested", "op:purge core.notify.deliver",
+				"record:core.outbox.backlog_purge:success/completed"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			rg := newRig()
@@ -1088,37 +1357,104 @@ func TestOutboxHTTP_RecordsAfterTheOperation(t *testing.T) {
 			}
 		})
 	}
+}
 
-	// A client that hangs up after the commit still gets its record.
-	rg := newRig()
-	ctx, cancel := context.WithCancel(context.Background())
-	rg.op.purgeSkipped = 2
-	rg.api.op = &cancelingOp{fakeOp: rg.op, cancel: cancel}
-	if _, err := rg.api.purge(ctx, purgeIn(bruce(), "core.notify.deliver")); err != nil {
-		t.Fatal(err)
+// TestOutboxHTTP_OperationAndRecordsOutliveAHangUp: a client that hangs up once
+// its request is recorded cannot cancel the operation (a purge split between its
+// partitions is half done) or the records after it, and each of those runs on a
+// context with a bound of its own, because a detached context has no deadline.
+// The first record keeps the request's context (a client that left before it has
+// nothing to be recorded for) with a bound.
+func TestOutboxHTTP_OperationAndRecordsOutliveAHangUp(t *testing.T) {
+	for _, kind := range []string{"retry", "discard", "purge"} {
+		t.Run(kind, func(t *testing.T) {
+			rg := newRig()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			rg.op.purgeSkipped = 2
+			rg.op.taken = "gotham.signal.raised.v1" // the follow-up record of a retry or discard
+			rg.rec.onRecord = func(n int) {
+				if n == 1 {
+					cancel() // the client hangs up once the request is recorded
+				}
+			}
+			var err error
+			switch kind {
+			case "retry":
+				_, err = rg.api.retry(ctx, deadIn(bruce(), "core.notify.deliver", 4))
+			case "discard":
+				_, err = rg.api.discard(ctx, deadIn(bruce(), "core.notify.deliver", 4))
+			case "purge":
+				_, err = rg.api.purge(ctx, purgeIn(bruce(), "core.notify.deliver"))
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rg.op.opCtx) != 1 {
+				t.Fatalf("%d operation calls, want 1", len(rg.op.opCtx))
+			}
+			if o := rg.op.opCtx[0]; !o.alive || o.remaining <= 0 || o.remaining > opTimeout {
+				t.Errorf("the operation's context: %+v, want alive with a deadline within %v", o, opTimeout)
+			}
+			recs := rg.rec.seen()
+			if len(recs) != 2 {
+				t.Fatalf("%d records, want the request's and one follow-up", len(recs))
+			}
+			if first := recs[0]; !first.alive || first.remaining <= 0 || first.remaining > auditTimeout {
+				t.Errorf("the first record's context: %+v, want the request's, live, with a deadline within %v", first, auditTimeout)
+			}
+			if after := recs[1]; !after.alive || after.remaining <= 0 || after.remaining > auditTimeout {
+				t.Errorf("the follow-up record's context: %+v, want a live one with a deadline within %v after the hang-up", after, auditTimeout)
+			}
+		})
 	}
-	if rec := rg.rec.recorded(); len(rec) != 1 || !rg.rec.ctxAlive[0] {
-		t.Errorf("records = %d, live context = %v; the audit write must outlive the request", len(rec), rg.rec.ctxAlive)
-	}
 }
 
-// cancelingOp cancels the request's context as its purge returns.
-type cancelingOp struct {
-	*fakeOp
-	cancel context.CancelFunc
-}
-
-func (c *cancelingOp) PurgeBacklog(ctx context.Context, consumer string) (int, error) {
-	n, err := c.fakeOp.PurgeBacklog(ctx, consumer)
-	c.cancel()
-	return n, err
-}
-
-// TestOutboxHTTP_FailedOperationWritesNoRecord: an operation that is refused or
-// fails changes nothing and so records nothing, and its refusal maps by
+// TestOutboxHTTP_FailedOperationIsRecordedAsFailed: an operation that is
+// refused or fails after its request was recorded gets a second record (outcome
+// failure for a refusal, error for anything else) and its refusal maps by
 // sentinel to the status a client acts on.
-func TestOutboxHTTP_FailedOperationWritesNoRecord(t *testing.T) {
+func TestOutboxHTTP_FailedOperationIsRecordedAsFailed(t *testing.T) {
 	store := errors.New("pebble: the Batcave flooded")
+	run := func(rg *rig, kind string) error {
+		var err error
+		switch kind {
+		case "retry":
+			_, err = rg.api.retry(context.Background(), deadIn(bruce(), "core.notify.deliver", 1))
+		case "discard":
+			_, err = rg.api.discard(context.Background(), deadIn(bruce(), "core.notify.deliver", 1))
+		case "purge":
+			_, err = rg.api.purge(context.Background(), purgeIn(bruce(), "core.notify.deliver"))
+		}
+		return err
+	}
+	inject := func(rg *rig, kind string, err error) {
+		switch kind {
+		case "retry":
+			rg.op.retryErr = err
+		case "discard":
+			rg.op.discardErr = err
+		case "purge":
+			rg.op.purgeErr = err
+		}
+	}
+	wantRecords := func(t *testing.T, rg *rig, kind string, outcome audit.Outcome, reason string) {
+		t.Helper()
+		recs := rg.rec.recorded()
+		if len(recs) != 2 {
+			t.Fatalf("%d records, want the request's and the failure's: %+v", len(recs), recs)
+		}
+		first, second := recs[0], recs[1]
+		if first.Outcome != audit.Success || second.Action != first.Action || second.Outcome != outcome || second.Reason != reason {
+			t.Errorf("records = %+v and %+v, want the request (success) and a %s/%s one", first, second, outcome, reason)
+		}
+		if second.Actor.Username != "bruce" || second.Target.ID != "core.notify.deliver" || second.RequestID != "req-batmobile" {
+			t.Errorf("the failure record does not carry the request's attribution: %+v", second)
+		}
+		if kind != "purge" && detailInt(t, audit.Record{Event: second}, "seq") != 1 {
+			t.Errorf("the failure record's details = %+v, want the seq", second.Details)
+		}
+	}
 	for _, c := range []struct {
 		name   string
 		err    error
@@ -1136,68 +1472,57 @@ func TestOutboxHTTP_FailedOperationWritesNoRecord(t *testing.T) {
 		for _, kind := range []string{"retry", "discard", "purge"} {
 			t.Run(c.name+"/"+kind, func(t *testing.T) {
 				rg := newRig()
-				var err error
-				switch kind {
-				case "retry":
-					rg.op.retryErr = c.err
-					_, err = rg.api.retry(context.Background(), deadIn(bruce(), "core.notify.deliver", 1))
-				case "discard":
-					rg.op.discardErr = c.err
-					_, err = rg.api.discard(context.Background(), deadIn(bruce(), "core.notify.deliver", 1))
-				case "purge":
-					rg.op.purgeErr = c.err
-					_, err = rg.api.purge(context.Background(), purgeIn(bruce(), "core.notify.deliver"))
-				}
-				wantProblem(t, err, c.status, c.code)
-				if rec := rg.rec.recorded(); len(rec) != 0 {
-					t.Errorf("a refused operation was recorded: %+v", rec)
-				}
+				inject(rg, kind, c.err)
+				wantProblem(t, run(rg, kind), c.status, c.code)
+				wantRecords(t, rg, kind, audit.Failure, reasonRefused)
 			})
 		}
 	}
 	for _, kind := range []string{"retry", "discard", "purge"} {
 		t.Run("store failure/"+kind, func(t *testing.T) {
 			rg := newRig()
-			var err error
-			switch kind {
-			case "retry":
-				rg.op.retryErr = store
-				_, err = rg.api.retry(context.Background(), deadIn(bruce(), "core.notify.deliver", 1))
-			case "discard":
-				rg.op.discardErr = store
-				_, err = rg.api.discard(context.Background(), deadIn(bruce(), "core.notify.deliver", 1))
-			case "purge":
-				rg.op.purgeErr = store
-				_, err = rg.api.purge(context.Background(), purgeIn(bruce(), "core.notify.deliver"))
-			}
+			inject(rg, kind, store)
+			err := run(rg, kind)
 			if !errors.Is(err, store) {
 				t.Errorf("error = %v, want the store's, unchanged", err)
 			}
 			if he, ok := errors.AsType[*httpapi.Error](err); ok {
 				t.Errorf("a store failure became the problem %d %s", he.Status, he.Code)
 			}
-			if rec := rg.rec.recorded(); len(rec) != 0 {
-				t.Errorf("a failed operation was recorded: %+v", rec)
-			}
+			wantRecords(t, rg, kind, audit.Error, reasonFailed)
 		})
 	}
 }
 
 // TestOutboxHTTP_ReadFailureStopsTheOperation: the read that names the topic runs
-// before the operation (the dead letter list for a retry or discard, the status
-// for a purge), and when it fails nothing is applied or recorded.
+// before the record and the operation (DeadTopic for a retry or discard, the
+// status for a purge), and when it fails nothing is applied or recorded. A letter
+// that is not there is a 404 with nothing to record.
 func TestOutboxHTTP_ReadFailureStopsTheOperation(t *testing.T) {
 	boom := errors.New("pebble: the Batcave flooded")
 	rg := newRig()
-	rg.op.listErr = boom
+	rg.op.topicErr = boom
 	if _, err := rg.api.retry(context.Background(), deadIn(bruce(), "core.notify.deliver", 1)); !errors.Is(err, boom) {
 		t.Errorf("retry = %v", err)
 	}
 	if _, err := rg.api.discard(context.Background(), deadIn(bruce(), "core.notify.deliver", 1)); !errors.Is(err, boom) {
 		t.Errorf("discard = %v", err)
 	}
-	if got := rg.j.all(); !slices.Equal(got, []string{"op:list", "op:list"}) {
-		t.Errorf("steps = %v, want only the two list reads", got)
+	if got := rg.j.all(); !slices.Equal(got, []string{"op:topic core.notify.deliver/1", "op:topic core.notify.deliver/1"}) {
+		t.Errorf("steps = %v, want only the two topic reads", got)
+	}
+
+	for _, gone := range []error{outbox.ErrDeadNotFound, outbox.ErrUnknownConsumer} {
+		rg = newRig()
+		rg.op.topicErr = fmt.Errorf("outbox: %w", gone)
+		_, err := rg.api.discard(context.Background(), deadIn(bruce(), "core.notify.deliver", 1))
+		wantProblem(t, err, http.StatusNotFound, "not_found")
+		if recs := rg.rec.recorded(); len(recs) != 0 {
+			t.Errorf("a request for a letter that is not there was recorded: %+v", recs)
+		}
+		if got := rg.j.all(); len(got) != 1 {
+			t.Errorf("steps = %v, want only the topic read", got)
+		}
 	}
 
 	rg = newRig()
@@ -1210,10 +1535,11 @@ func TestOutboxHTTP_ReadFailureStopsTheOperation(t *testing.T) {
 	}
 }
 
-// TestOutboxHTTP_PartialPurgeIsRecorded: a purge that fails after one partition
-// advanced has discarded messages, so it records what it skipped as the error it
-// ended in and still answers its own error; one that skipped nothing records
-// nothing.
+// TestOutboxHTTP_PartialPurgeIsRecorded: a purge that fails after some
+// partitions committed has discarded messages, so its failure record carries what
+// it skipped (the outbox counts committed partitions only) as the error
+// "partial"; one that skipped nothing records the plain failure. The error is
+// answered even when the failure record cannot be written.
 func TestOutboxHTTP_PartialPurgeIsRecorded(t *testing.T) {
 	boom := errors.New("pebble: the Batcave flooded")
 	rg := newRig()
@@ -1224,30 +1550,230 @@ func TestOutboxHTTP_PartialPurgeIsRecorded(t *testing.T) {
 		t.Fatalf("error = %v, want the store's", err)
 	}
 	recs := rg.rec.recorded()
-	if len(recs) != 1 {
-		t.Fatalf("%d records, want 1", len(recs))
+	if len(recs) != 2 {
+		t.Fatalf("%d records, want the request's and the failure's", len(recs))
 	}
-	r := recs[0]
-	if r.Action != "core.outbox.backlog_purge" || r.Outcome != audit.Error || r.Reason != "partial" ||
+	if recs[0].Reason != reasonRequested || recs[0].Outcome != audit.Success || recs[0].Details["skipped"] != nil {
+		t.Errorf("first record = %+v, want the request, with no count", recs[0])
+	}
+	r := recs[1]
+	if r.Action != "core.outbox.backlog_purge" || r.Outcome != audit.Error || r.Reason != reasonPartial ||
 		r.Details["skipped"] != 3 || r.Details["topic"] != noticeTopic || r.Actor.Username != "bruce" {
-		t.Errorf("record = %+v", r)
+		t.Errorf("failure record = %+v", r)
 	}
 
-	// The error is answered even when the partial record cannot be written.
-	rg = newRig()
-	rg.op.purgeSkipped, rg.op.purgeErr = 3, boom
-	rg.rec.err = errors.New("audit: the disk is full")
-	if _, err := rg.api.purge(context.Background(), purgeIn(bruce(), "core.notify.deliver")); !errors.Is(err, boom) {
-		t.Errorf("error = %v, want the purge's, not the audit's", err)
-	}
-
+	// A purge that skipped nothing is the plain failure, whatever the count's type.
 	rg = newRig()
 	rg.op.purgeErr = boom
 	if _, err := rg.api.purge(context.Background(), purgeIn(bruce(), "core.notify.deliver")); !errors.Is(err, boom) {
 		t.Errorf("error = %v", err)
 	}
-	if recs := rg.rec.recorded(); len(recs) != 0 {
-		t.Errorf("a purge that skipped nothing recorded %+v", recs)
+	if recs := rg.rec.recorded(); len(recs) != 2 || recs[1].Reason != reasonFailed || recs[1].Outcome != audit.Error {
+		t.Errorf("records = %+v, want the request and a failed/error one", recs)
+	}
+}
+
+// TestOutboxHTTP_WhatCannotBeRecordedAfterwardsIsLogged: the records after the
+// first are written once the operation ran or failed, so the answer is the
+// operation's either way and a write that fails is logged, with who did what to
+// which consumer, seq, topic and count, in which request.
+func TestOutboxHTTP_WhatCannotBeRecordedAfterwardsIsLogged(t *testing.T) {
+	boom := errors.New("pebble: the Batcave flooded")
+	disk := errors.New("audit: the disk is full")
+	notFirst := func(e audit.Event) error {
+		if e.Outcome == audit.Success && e.Reason != reasonCompleted && e.Reason != reasonTopicDiffer {
+			return nil // the request's record
+		}
+		return disk
+	}
+	for _, c := range []struct {
+		name    string
+		prepare func(rg *rig)
+		run     func(rg *rig) error
+		want    []string
+		wantErr error
+	}{
+		{"failed retry", func(rg *rig) { rg.op.retryErr = boom },
+			func(rg *rig) error {
+				_, err := rg.api.retry(context.Background(), deadIn(bruce(), "core.notify.deliver", 6))
+				return err
+			},
+			[]string{"core.outbox.dead_retry", "consumer=core.notify.deliver", "seq=6", "topic=" + noticeTopic, "outcome=error", "reason=failed"}, boom},
+		{"partial purge", func(rg *rig) { rg.op.purgeSkipped, rg.op.purgeErr = 4, boom },
+			func(rg *rig) error {
+				_, err := rg.api.purge(context.Background(), purgeIn(bruce(), "core.notify.deliver"))
+				return err
+			},
+			[]string{"core.outbox.backlog_purge", "consumer=core.notify.deliver", "skipped=4", "reason=partial"}, boom},
+		{"completed purge", func(rg *rig) { rg.op.purgeSkipped = 7 },
+			func(rg *rig) error {
+				_, err := rg.api.purge(context.Background(), purgeIn(bruce(), "core.notify.deliver"))
+				return err
+			},
+			[]string{"core.outbox.backlog_purge", "skipped=7", "reason=completed"}, nil},
+		{"topic taken differs", func(rg *rig) { rg.op.taken = "gotham.signal.raised.v1" },
+			func(rg *rig) error {
+				_, err := rg.api.discard(context.Background(), deadIn(bruce(), "core.notify.deliver", 6))
+				return err
+			},
+			[]string{"core.outbox.dead_discard", "seq=6", "topic=gotham.signal.raised.v1", "reason=topic_differs"}, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rg := newRig()
+			rg.rec.errOn = notFirst
+			c.prepare(rg)
+			err := c.run(rg)
+			if c.wantErr != nil && !errors.Is(err, c.wantErr) {
+				t.Errorf("error = %v, want the operation's, not the audit's", err)
+			}
+			if c.wantErr == nil && err != nil {
+				t.Errorf("error = %v, want the operation's success", err)
+			}
+			log := rg.logs.String()
+			for _, want := range append([]string{"actor_username=bruce", "actor_user_id=u-bruce", "actor_method=session",
+				"actor_credential_id=sess-batcave", "client_addr=192.0.2.10", "request_id=req-batmobile", "the disk is full"}, c.want...) {
+				if !strings.Contains(log, want) {
+					t.Errorf("the log lacks %q: %q", want, log)
+				}
+			}
+		})
+	}
+}
+
+// TestOutboxHTTP_TopicTakenThatDiffersIsRecorded: the operation answers the topic
+// of the letter its batch took. When that is not the topic the first record
+// named (the letters of the consumer changed between the read and the batch) a
+// second record names the letter actually taken, with the same seq; when it is,
+// there is no second record.
+func TestOutboxHTTP_TopicTakenThatDiffersIsRecorded(t *testing.T) {
+	for _, kind := range []string{"retry", "discard"} {
+		t.Run(kind, func(t *testing.T) {
+			rg := newRig()
+			rg.op.topic, rg.op.taken = noticeTopic, signalTopic
+			var err error
+			if kind == "retry" {
+				_, err = rg.api.retry(context.Background(), deadIn(bruce(), "core.notify.deliver", 8))
+			} else {
+				_, err = rg.api.discard(context.Background(), deadIn(bruce(), "core.notify.deliver", 8))
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			recs := rg.rec.recorded()
+			if len(recs) != 2 {
+				t.Fatalf("%d records, want the request's and the correction", len(recs))
+			}
+			if recs[0].Details["topic"] != noticeTopic || recs[0].Reason != "" {
+				t.Errorf("first record = %+v, want the topic read first", recs[0])
+			}
+			c := recs[1]
+			if c.Action != recs[0].Action || c.Outcome != audit.Success || c.Reason != reasonTopicDiffer ||
+				c.Details["topic"] != signalTopic || c.Details["seq"] != uint64(8) || c.Actor.Username != "bruce" || c.RequestID != "req-batmobile" {
+				t.Errorf("correction = %+v, want the letter actually taken", c)
+			}
+			if recs[0].Details["topic"] != noticeTopic {
+				t.Error("the correction rewrote the first record's details")
+			}
+
+			rg = newRig()
+			rg.op.topic, rg.op.taken = noticeTopic, noticeTopic
+			if kind == "retry" {
+				_, err = rg.api.retry(context.Background(), deadIn(bruce(), "core.notify.deliver", 8))
+			} else {
+				_, err = rg.api.discard(context.Background(), deadIn(bruce(), "core.notify.deliver", 8))
+			}
+			if err != nil || len(rg.rec.recorded()) != 1 {
+				t.Errorf("a letter of the topic named: err = %v, %d records, want one", err, len(rg.rec.recorded()))
+			}
+		})
+	}
+}
+
+// hangupOp cancels the request's context as its operation starts, the shape of a
+// client that disconnects once its request was recorded, over the real outbox.
+type hangupOp struct {
+	*outbox.Outbox
+	cancel context.CancelFunc
+}
+
+func (h *hangupOp) RetryDead(ctx context.Context, consumer string, seq uint64) (string, error) {
+	h.cancel()
+	return h.Outbox.RetryDead(ctx, consumer, seq)
+}
+
+func (h *hangupOp) DiscardDead(ctx context.Context, consumer string, seq uint64) (string, error) {
+	h.cancel()
+	return h.Outbox.DiscardDead(ctx, consumer, seq)
+}
+
+func (h *hangupOp) PurgeBacklog(ctx context.Context, consumer string) (int, error) {
+	h.cancel()
+	return h.Outbox.PurgeBacklog(ctx, consumer)
+}
+
+// TestOutboxHTTP_HangUpDoesNotSplitAPurge: over the real outbox and the real
+// audit store, a client that hangs up once its purge is recorded does not leave a
+// consumer half purged (partitions 0..k advanced, the rest not): every partition
+// advances, and the record of what it skipped is written after the hang-up.
+func TestOutboxHTTP_HangUpDoesNotSplitAPurge(t *testing.T) {
+	e := newEnv(t)
+	e.cursors(consumerRespond, signalTopic, signalParts)
+	e.sequence(signalTopic, signalParts, 12)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.api.op = &hangupOp{Outbox: e.ob, cancel: cancel}
+
+	out, err := e.api.purge(ctx, purgeIn(bruce(), consumerRespond))
+	if err != nil {
+		t.Fatalf("a purge whose client hung up once it was recorded: %v", err)
+	}
+	if out.Skipped != 12 {
+		t.Errorf("skipped = %d, want all 12", out.Skipped)
+	}
+	if c := e.consumerStatus(consumerRespond); c.Pending != 0 {
+		t.Errorf("pending = %d after the purge, want every partition advanced", c.Pending)
+	}
+	var requested, completed int
+	for _, r := range e.records() {
+		switch r.Reason {
+		case reasonRequested:
+			requested++
+		case reasonCompleted:
+			completed++
+			if detailInt(t, r, "skipped") != 12 {
+				t.Errorf("the completion record's details = %+v", r.Details)
+			}
+		}
+	}
+	if requested != 1 || completed != 1 {
+		t.Errorf("%d request and %d completion records, want one of each: %+v", requested, completed, e.records())
+	}
+}
+
+// TestOutboxHTTP_HangUpDoesNotCancelARetryOrDiscard: the same for a retry and a
+// discard over the real outbox: the operation completes and is recorded once.
+func TestOutboxHTTP_HangUpDoesNotCancelARetryOrDiscard(t *testing.T) {
+	for _, kind := range []string{"retry", "discard"} {
+		t.Run(kind, func(t *testing.T) {
+			e := newEnv(t)
+			e.deadLetter(consumerDeliver, noticeTopic, noticeParts, 1, true)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			e.api.op = &hangupOp{Outbox: e.ob, cancel: cancel}
+			var err error
+			if kind == "retry" {
+				_, err = e.api.retry(ctx, deadIn(bruce(), consumerDeliver, 1))
+			} else {
+				_, err = e.api.discard(ctx, deadIn(bruce(), consumerDeliver, 1))
+			}
+			if err != nil {
+				t.Fatalf("%s after the client hung up: %v", kind, err)
+			}
+			if rows := e.deadRows(); len(rows) != 0 {
+				t.Errorf("dead letters = %+v, want the operation applied", rows)
+			}
+			recordOf(t, e, "core.outbox.dead_"+kind)
+		})
 	}
 }
 
@@ -1324,8 +1850,11 @@ func TestOutboxHTTP_RefusesWhatItCannotAudit(t *testing.T) {
 
 // TestOutboxHTTP_UnknownConsumerOrSeq404: an unknown consumer, or a known
 // consumer with no dead letter at that seq, is a 404 on all three writes, over
-// the real outbox, and changes nothing and records nothing. A consumer that is
-// declared but never ran has no backlog, and the purge says so.
+// the real outbox, and changes nothing. The two dead-letter writes name their
+// letter before they record anything, so a letter that is not there records
+// nothing; a purge cannot know a consumer has no backlog until the outbox has
+// looked, so its request is recorded and then closed as refused. A consumer that
+// is declared but never ran has no backlog, and the purge says so.
 func TestOutboxHTTP_UnknownConsumerOrSeq404(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
@@ -1358,8 +1887,25 @@ func TestOutboxHTTP_UnknownConsumerOrSeq404(t *testing.T) {
 	if rows := e.deadRows(); len(rows) != 1 {
 		t.Errorf("dead letters = %+v, want the one untouched", rows)
 	}
-	if recs := e.records(); len(recs) != 0 {
-		t.Errorf("refused requests were recorded: %+v", recs)
+	// Only the two purges were recorded, each as requested and then refused.
+	recs := e.records()
+	if len(recs) != 4 {
+		t.Fatalf("%d records, want the two purges' requests and refusals: %+v", len(recs), recs)
+	}
+	var requested, refused int
+	for _, r := range recs {
+		if r.Action != "core.outbox.backlog_purge" {
+			t.Errorf("a request for a letter that is not there was recorded: %+v", r.Event)
+		}
+		switch {
+		case r.Reason == reasonRequested && r.Outcome == audit.Success:
+			requested++
+		case r.Reason == reasonRefused && r.Outcome == audit.Failure:
+			refused++
+		}
+	}
+	if requested != 2 || refused != 2 {
+		t.Errorf("%d requested and %d refused records, want 2 and 2: %+v", requested, refused, recs)
 	}
 }
 
@@ -1561,40 +2107,32 @@ func TestOutboxHTTP_RegisterTakesNilCollaborators(t *testing.T) {
 	}
 }
 
-// TestOutboxHTTP_TopicDetailOnlyWhenKnown: the audit record of a retry or
-// discard takes the topic from the consumer's dead letter and never from the
-// status read, a purge takes it from the status read, and when the outbox does
-// not know it the key is left out rather than empty. A letter of another
-// consumer, the nearest the list finds, names nothing.
+// TestOutboxHTTP_TopicDetailOnlyWhenKnown: the first audit record of a retry or
+// discard names the topic DeadTopic read from the consumer's letter and never
+// the status read's (the status read is not consulted at all), and a purge's
+// records take the topic from the status read, leaving the key out rather than
+// empty when the outbox does not name one.
 func TestOutboxHTTP_TopicDetailOnlyWhenKnown(t *testing.T) {
 	const consumer = "core.notify.deliver"
-	letter := func(c string) []outbox.DeadLetter {
-		return []outbox.DeadLetter{{Consumer: c, Topic: noticeTopic, Seq: 1}}
-	}
 	status := func(topic string) []outbox.ConsumerStatus {
 		return []outbox.ConsumerStatus{{Name: consumer, Topic: topic}}
 	}
 	for _, c := range []struct {
 		name      string
-		letters   []outbox.DeadLetter
 		consumers []outbox.ConsumerStatus
-		wantDead  string // "" is no topic key at all
-		wantPurge string
+		wantPurge string // "" is no topic key at all
 	}{
-		{"both known", letter(consumer), status(signalTopic), noticeTopic, signalTopic},
-		{"letter only", letter(consumer), nil, noticeTopic, ""},
-		{"status only", nil, status(noticeTopic), "", noticeTopic},
-		{"neither", nil, nil, "", ""},
-		{"consumer without a topic", nil, status(""), "", ""},
-		{"nearest letter is another consumer's", letter("core.notify.zeta"), nil, "", ""},
+		{"status names a topic", status(signalTopic), signalTopic},
+		{"consumer unknown to the status", nil, ""},
+		{"consumer without a topic", status(""), ""},
 	} {
 		for _, kind := range []string{"retry", "discard", "purge"} {
 			t.Run(c.name+"/"+kind, func(t *testing.T) {
 				rg := newRig()
-				rg.op.letters = c.letters
+				rg.op.topic = noticeTopic
 				rg.op.status = outbox.Status{Consumers: c.consumers}
 				var err error
-				want := c.wantDead
+				want, wantRecs := noticeTopic, 1
 				switch kind {
 				case "retry":
 					_, err = rg.api.retry(context.Background(), deadIn(bruce(), consumer, 1))
@@ -1602,21 +2140,26 @@ func TestOutboxHTTP_TopicDetailOnlyWhenKnown(t *testing.T) {
 					_, err = rg.api.discard(context.Background(), deadIn(bruce(), consumer, 1))
 				case "purge":
 					_, err = rg.api.purge(context.Background(), purgeIn(bruce(), consumer))
-					want = c.wantPurge
+					want, wantRecs = c.wantPurge, 2 // the request and the count
 				}
 				if err != nil {
 					t.Fatal(err)
 				}
 				recs := rg.rec.recorded()
-				if len(recs) != 1 {
-					t.Fatalf("%d records, want 1", len(recs))
+				if len(recs) != wantRecs {
+					t.Fatalf("%d records, want %d", len(recs), wantRecs)
 				}
-				got, has := recs[0].Details["topic"]
-				switch {
-				case want == "" && has:
-					t.Errorf("details name topic %q, want no topic key: %v", got, recs[0].Details)
-				case want != "" && got != want:
-					t.Errorf("details topic = %v, want %q", got, want)
+				for _, r := range recs {
+					got, has := r.Details["topic"]
+					switch {
+					case want == "" && has:
+						t.Errorf("details name topic %q, want no topic key: %v", got, r.Details)
+					case want != "" && got != want:
+						t.Errorf("details topic = %v, want %q", got, want)
+					}
+				}
+				if kind != "purge" && slices.Contains(rg.j.all(), "op:status") {
+					t.Errorf("a dead-letter operation read the status: %v", rg.j.all())
 				}
 			})
 		}
@@ -1713,53 +2256,6 @@ func TestOutboxHTTP_DeadOperationsFindTheLetterBySeq(t *testing.T) {
 	}
 }
 
-// TestOutboxHTTP_DeadTopicReadsEveryPage: the letter may be past the first page of
-// the consumer's letters, and the walk stops at the end of the pages and at the
-// first letter of another consumer.
-func TestOutboxHTTP_DeadTopicReadsEveryPage(t *testing.T) {
-	const consumer = "core.notify.deliver"
-	mine := func(topic string, seq uint64) outbox.DeadLetter {
-		return outbox.DeadLetter{Consumer: consumer, Topic: topic, Seq: seq}
-	}
-	rg := newRig()
-	rg.op.pages = [][]outbox.DeadLetter{{mine(noticeTopic, 1), mine(noticeTopic, 2)}, {mine(signalTopic, 9)}}
-	if _, err := rg.api.retry(context.Background(), deadIn(bruce(), consumer, 9)); err != nil {
-		t.Fatal(err)
-	}
-	if recs := rg.rec.recorded(); len(recs) != 1 || recs[0].Details["topic"] != signalTopic {
-		t.Errorf("records = %+v, want the topic of the letter on page two", recs)
-	}
-	if rg.op.listCalls != 2 {
-		t.Errorf("%d list reads, want 2", rg.op.listCalls)
-	}
-	if rg.op.gotAfter != "page-1" || rg.op.gotLimit != maxDeadPage {
-		t.Errorf("the second read asked after %q for %d, want the store's token and a full page", rg.op.gotAfter, rg.op.gotLimit)
-	}
-
-	// A letter of another consumer ends the walk: nothing past it is this one's.
-	rg = newRig()
-	rg.op.pages = [][]outbox.DeadLetter{{mine(noticeTopic, 1), {Consumer: "core.notify.zeta", Topic: noticeTopic, Seq: 9}}, {mine(signalTopic, 9)}}
-	if _, err := rg.api.discard(context.Background(), deadIn(bruce(), consumer, 9)); err != nil {
-		t.Fatal(err)
-	}
-	if recs := rg.rec.recorded(); len(recs) != 1 || recs[0].Details["topic"] != nil {
-		t.Errorf("records = %+v, want no topic", recs)
-	}
-	if rg.op.listCalls != 1 {
-		t.Errorf("%d list reads, want 1 (the walk stops at another consumer's letter)", rg.op.listCalls)
-	}
-
-	// The pages end without the seq.
-	rg = newRig()
-	rg.op.pages = [][]outbox.DeadLetter{{mine(noticeTopic, 1)}, {mine(noticeTopic, 2)}}
-	if _, err := rg.api.discard(context.Background(), deadIn(bruce(), consumer, 9)); err != nil {
-		t.Fatal(err)
-	}
-	if rg.op.listCalls != 2 {
-		t.Errorf("%d list reads, want 2", rg.op.listCalls)
-	}
-}
-
 // TestOutboxHTTP_CursorFilterHashIsPinned: a cursor is handed to a client and
 // comes back on a later request, possibly to the next build, so what makes a
 // cursor this route's (the FNV-1a hash of the route's name) is part of the wire
@@ -1775,5 +2271,53 @@ func TestOutboxHTTP_CursorFilterHashIsPinned(t *testing.T) {
 	}
 	if want := base64.RawURLEncoding.EncodeToString(key); rg.op.gotAfter != want {
 		t.Errorf("went on after %q, want %q", rg.op.gotAfter, want)
+	}
+}
+
+// ---- the topic of the letter, and the neighbours the operation does not read --
+
+// TestOutboxHTTP_DeadOperationsIgnoreUnreadableNeighbours: the outbox finds the
+// letter by its key and decodes only that one, so a row beside it that does not
+// decode (another letter of the same consumer, a later consumer's letter or a
+// stray key among them) must not fail a retry or a discard the outbox itself
+// carries out. An operator acts at the moment these rows exist.
+func TestOutboxHTTP_DeadOperationsIgnoreUnreadableNeighbours(t *testing.T) {
+	const later = "wayne.vault.zeta"
+	stray := outboxstore.DeadKey(later, noticeTopic, 1)
+	stray = stray[:len(stray)-3]
+	if _, _, _, err := outboxstore.ParseDeadKey(stray); err == nil {
+		t.Fatal("the fixture's stray key parses as a dead letter key")
+	}
+	for _, c := range []struct {
+		name string
+		key  []byte
+	}{
+		{"an undecodable letter at another seq of the same consumer", outboxstore.DeadKey(consumerDeliver, noticeTopic, 2)},
+		{"an undecodable letter of a later consumer", outboxstore.DeadKey(later, signalTopic, 1)},
+		{"a stray key among a later consumer's letters", stray},
+	} {
+		for _, kind := range []string{"retry", "discard"} {
+			t.Run(c.name+"/"+kind, func(t *testing.T) {
+				e := newEnv(t)
+				e.deadLetter(consumerDeliver, noticeTopic, noticeParts, 1, true)
+				e.putRaw(c.key, []byte(`j{"v":1,"id":`))
+				var err error
+				if kind == "retry" {
+					_, err = e.api.retry(context.Background(), deadIn(bruce(), consumerDeliver, 1))
+				} else {
+					_, err = e.api.discard(context.Background(), deadIn(bruce(), consumerDeliver, 1))
+				}
+				if err != nil {
+					t.Fatalf("%s failed over a row the outbox does not read: %v", kind, err)
+				}
+				r := recordOf(t, e, "core.outbox.dead_"+kind)
+				if r.Details["topic"] != noticeTopic || detailInt(t, r, "seq") != 1 {
+					t.Errorf("record details = %+v, want the letter's topic and seq", r.Details)
+				}
+				if rows := e.intake(noticeTopic); (kind == "retry") != (len(rows) == 1) {
+					t.Errorf("intake = %+v after a %s", rows, kind)
+				}
+			})
+		}
 	}
 }

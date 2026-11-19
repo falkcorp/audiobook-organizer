@@ -1,7 +1,7 @@
 // file: core/outbox/outbox.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 5b3c4366-8534-4dc4-870f-850dfab2b120
-// last-edited: 2026-11-15
+// last-edited: 2026-11-19
 
 // Package outbox is core's durable, at-least-once event delivery (05-events
 // §5E.1, §5E.4, §5E.5.2, §5E.5.3). A producer stages a message into its own
@@ -423,6 +423,9 @@ type hooks struct {
 	// BeforeDeadCommit runs with an operator's retry or discard of a dead letter
 	// staged, before it commits.
 	beforeDeadCommit func(consumer string, seq uint64)
+	// BeforePurgeCommit runs with one partition of an operator's backlog purge
+	// staged, before its batch commits.
+	beforePurgeCommit func(consumer string, pp int)
 	// BeforeRetentionBatch runs once a retention sweep decided what to delete and
 	// before the batch that deletes it re-reads the cursors it rests on (pp is -1
 	// for an orphan cursor dropped on its own).
@@ -441,7 +444,7 @@ func (h *hooks) get() hooks {
 	return hooks{beforeIntakeCommit: h.beforeIntakeCommit, afterIntakeCommit: h.afterIntakeCommit,
 		afterHandler: h.afterHandler, beforeAckCommit: h.beforeAckCommit, afterAckCommit: h.afterAckCommit,
 		beforeFailCommit: h.beforeFailCommit, afterFailCommit: h.afterFailCommit,
-		beforeDeadCommit: h.beforeDeadCommit, beforeRetentionBatch: h.beforeRetentionBatch,
+		beforeDeadCommit: h.beforeDeadCommit, beforePurgeCommit: h.beforePurgeCommit, beforeRetentionBatch: h.beforeRetentionBatch,
 		afterDeadRead: h.afterDeadRead, seedDeadCounts: h.seedDeadCounts}
 }
 

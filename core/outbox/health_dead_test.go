@@ -1,7 +1,7 @@
 // file: core/outbox/health_dead_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: b584e6da-2910-4648-aa3d-af25cc239b55
-// last-edited: 2026-11-15
+// last-edited: 2026-11-19
 
 package outbox_test
 
@@ -65,7 +65,7 @@ func TestOutbox_HealthRecoversWhenARetryBeatsTheDeadCount(t *testing.T) {
 					return
 				}
 				fixed.Store(true)
-				if err := self.Load().ob.RetryDead(context.Background(), consumerN, seq); err != nil {
+				if _, err := self.Load().ob.RetryDead(context.Background(), consumerN, seq); err != nil {
 					t.Errorf("retry the dead letter from inside the gap: %v", err)
 				}
 			}
@@ -240,12 +240,12 @@ func TestOutbox_DeadCountersAreBuiltFromLettersThatPredateThem(t *testing.T) {
 	if n := r.count(outboxstore.DeadCountRoot()); n != 2 {
 		t.Fatalf("%d counters after the first read, want 2 (one per partition that holds a letter)", n)
 	}
-	must(t, r.ob.RetryDead(ctx, consumerN, 8))
+	mustTopic(t)(r.ob.RetryDead(ctx, consumerN, 8))
 	if st, err = r.ob.Status(ctx); err != nil || deadOf(st, consumerN) != 2 {
 		t.Fatalf("after a retry Status counts %d (%v), want 2", deadOf(st, consumerN), err)
 	}
-	must(t, r.ob.DiscardDead(ctx, consumerN, 9))
-	must(t, r.ob.DiscardDead(ctx, consumerN, 7))
+	mustTopic(t)(r.ob.DiscardDead(ctx, consumerN, 9))
+	mustTopic(t)(r.ob.DiscardDead(ctx, consumerN, 7))
 	if st, err = r.ob.Status(ctx); err != nil || deadOf(st, consumerN) != 0 {
 		t.Fatalf("with every letter gone Status counts %d (%v), want 0", deadOf(st, consumerN), err)
 	}

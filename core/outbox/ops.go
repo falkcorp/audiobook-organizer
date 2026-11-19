@@ -1,7 +1,7 @@
 // file: core/outbox/ops.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: 4b1a1f7a-0a62-4d4e-8f1d-8d2a0b5f7c33
-// last-edited: 2026-11-15
+// last-edited: 2026-11-19
 
 package outbox
 
@@ -21,7 +21,10 @@ import (
 // Each is one guarded batch (the pair's cursor read with GetForUpdate and
 // rewritten, so a delivery racing the operator, or a second operator, fails
 // the commit and is retried against fresh state) and none audits: the route
-// writes its own audit record after the operation returns.
+// writes its own audit record before the operation (05-rbac §3.5, fail-closed:
+// nothing is applied that could not be recorded) and a second one when the
+// operation fails or turns out to have acted on something other than what the
+// first named.
 
 // DeadLetter is one dead-lettered message as an operator sees it. The payload
 // is the message's own; the token names why it died (permanent, schema,
@@ -120,28 +123,46 @@ func (o *Outbox) changed(ctx context.Context) {
 	o.RefreshStatus(ctx)
 }
 
+// DeadTopic is the topic of the dead letter RetryDead or DiscardDead would act
+// on for (consumer, seq): the first letter of the consumer at that seq in key
+// order, found as the operations find it, by the consumer's keys alone and
+// decoding only that letter. ErrUnknownConsumer or ErrDeadNotFound when there is
+// none. A route calls it to name the letter before the operation runs; the
+// operation returns the topic of the letter it actually took.
+func (o *Outbox) DeadTopic(ctx context.Context, consumer string, seq uint64) (string, error) {
+	topic, _, found, err := o.store.FindDead(ctx, consumer, seq)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", o.missingDead(ctx, consumer)
+	}
+	return topic, nil
+}
+
 // RetryDead puts one dead letter back into the stream for its consumer alone:
 // the dead row is deleted and the message re-staged into intake in the same
 // batch, keeping its IdempotencyKey, addressed to the consumer (every other
 // consumer of the topic acks it without running). It is delivered at the end
 // of the stream under a new seq, so it does not return to its key's original
 // position. ErrUnknownConsumer or ErrDeadNotFound when there is nothing to
-// retry.
-func (o *Outbox) RetryDead(ctx context.Context, consumer string, seq uint64) error {
-	err := o.mutateDead(ctx, consumer, seq, true)
+// retry. It returns the topic of the letter it took, read in the batch that
+// took it.
+func (o *Outbox) RetryDead(ctx context.Context, consumer string, seq uint64) (topic string, err error) {
+	topic, err = o.mutateDead(ctx, consumer, seq, true)
 	if err == nil {
 		o.changed(ctx)
 	}
-	return err
+	return topic, err
 }
 
-// DiscardDead deletes one dead letter for good.
-func (o *Outbox) DiscardDead(ctx context.Context, consumer string, seq uint64) error {
-	err := o.mutateDead(ctx, consumer, seq, false)
+// DiscardDead deletes one dead letter for good and returns its topic.
+func (o *Outbox) DiscardDead(ctx context.Context, consumer string, seq uint64) (topic string, err error) {
+	topic, err = o.mutateDead(ctx, consumer, seq, false)
 	if err == nil {
 		o.changed(ctx)
 	}
-	return err
+	return topic, err
 }
 
 // mutateDead is RetryDead and DiscardDead. The letter is read through the
@@ -154,17 +175,19 @@ func (o *Outbox) DiscardDead(ctx context.Context, consumer string, seq uint64) e
 // letter of the same pair too; that loser re-reads as well, and only repeated
 // losses become ErrDeadConflict. Nothing here depends on the pair still having
 // a cursor row.
-func (o *Outbox) mutateDead(ctx context.Context, consumer string, seq uint64, restage bool) error {
+//
+// The topic returned is the letter's, and only when the operation committed.
+func (o *Outbox) mutateDead(ctx context.Context, consumer string, seq uint64, restage bool) (string, error) {
 	topic, _, found, err := o.store.FindDead(ctx, consumer, seq)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if !found {
-		return o.missingDead(ctx, consumer)
+		return "", o.missingDead(ctx, consumer)
 	}
 	if restage {
 		if _, err := o.topic(topic); err != nil {
-			return fmt.Errorf("outbox: cannot retry into %s: %w", topic, err)
+			return "", fmt.Errorf("outbox: cannot retry into %s: %w", topic, err)
 		}
 	}
 	err = storage.RetryOnConflict(ctx, settleAttempts, func(ctx context.Context) (err error) {
@@ -203,9 +226,12 @@ func (o *Outbox) mutateDead(ctx context.Context, consumer string, seq uint64, re
 		return b.Commit(ctx, storage.Sync)
 	})
 	if errors.Is(err, storage.ErrConflict) {
-		return fmt.Errorf("%w: %s at seq %d", ErrDeadConflict, consumer, seq)
+		return "", fmt.Errorf("%w: %s at seq %d", ErrDeadConflict, consumer, seq)
 	}
-	return err
+	if err != nil {
+		return "", err
+	}
+	return topic, nil
 }
 
 // PurgeBacklog advances every cursor of consumer to its topic's head and
@@ -266,6 +292,10 @@ func (o *Outbox) consumerTopic(ctx context.Context, consumer string) (string, er
 	return "", fmt.Errorf("%w: %s has no backlog (it never ran)", ErrUnknownConsumer, consumer)
 }
 
+// purgePair advances one partition's cursor to the topic's head. The count it
+// returns is what a committed batch skipped: it is set only after Commit
+// returned, so a pair that failed (a canceled request, a lost race, a store
+// error) reports none and a caller can trust the count of a failed purge.
 func (o *Outbox) purgePair(ctx context.Context, p outboxstore.Pair) (int, error) {
 	hi, _, err := o.store.ReadHigh(ctx, p.Topic)
 	if err != nil {
@@ -280,7 +310,6 @@ func (o *Outbox) purgePair(ctx context.Context, p outboxstore.Pair) (int, error)
 			return err
 		}
 		if !st.Has {
-			skipped = 0
 			return nil
 		}
 		below := 0
@@ -293,8 +322,8 @@ func (o *Outbox) purgePair(ctx context.Context, p outboxstore.Pair) (int, error)
 		if err != nil {
 			return err
 		}
-		skipped = n + below
-		if skipped == 0 && len(st.Try.Entries) == 0 {
+		pending := n + below
+		if pending == 0 && len(st.Try.Entries) == 0 {
 			return nil
 		}
 		st.Cur.Seq = max(st.Cur.Seq, hi.High)
@@ -302,7 +331,14 @@ func (o *Outbox) purgePair(ctx context.Context, p outboxstore.Pair) (int, error)
 		if err := o.store.StagePair(b, p, st, o.now()); err != nil {
 			return err
 		}
-		return b.Commit(ctx, storage.Sync)
+		if h := o.hooks.get(); h.beforePurgeCommit != nil {
+			h.beforePurgeCommit(p.Consumer, p.PP)
+		}
+		if err := b.Commit(ctx, storage.Sync); err != nil {
+			return err
+		}
+		skipped = pending
+		return nil
 	})
 	if errors.Is(err, storage.ErrConflict) {
 		return 0, fmt.Errorf("outbox: purge of %s/%02d kept losing races with delivery: %w", p.Topic, p.PP, err)

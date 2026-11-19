@@ -1,7 +1,7 @@
 // file: core/outbox/harness_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 1e7fbb59-5fbb-4c44-9df0-2d6b9f8a1c70
-// last-edited: 2026-11-15
+// last-edited: 2026-11-19
 
 package outbox_test
 
@@ -193,6 +193,15 @@ func must(t testing.TB, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// mustTopic is must for an operation that also answers a topic, which the
+// caller here does not look at.
+func mustTopic(t testing.TB) func(string, error) {
+	return func(_ string, err error) {
+		t.Helper()
+		must(t, err)
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: core/internal/outboxhttp/routes.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: 53094039-febd-4731-bc69-141f4e2fb456
 // last-edited: 2026-11-19
 
@@ -11,14 +11,24 @@
 // events.Catalog and an audit.Logger.
 //
 // Every state change is audited with core:system.manage, synchronously and
-// after the operation: the outbox operations commit in a batch of their own, so
-// the record is a second write (05-rbac §7.1 "sync"). A record that cannot be
-// written does not undo the operation; the route answers 500 audit_write_failed,
-// which says the operation was applied, and the failure is counted by the audit
-// store (mediacore_audit_write_errors_total{path="sync"}). A route mounted
-// without its audit logger refuses before the operation runs. The purge is the
-// one route that also needs an interactive sign-in (httpapi.Guards.Interactive),
-// as it is the only way a disabled module's retained messages are discarded.
+// before the operation (05-rbac §3.5 and §8: a sync audit write that fails fails
+// the operation, closed): the outbox operations commit in a batch of their own,
+// so the record is a separate write that has to precede them. A record that
+// cannot be written stops the request with the operation not taken (503, counted
+// by the audit store in mediacore_audit_write_errors_total{path="sync"}). When
+// the operation then fails, or turns out to have acted on another letter than
+// the one the record named, a second record says so (outcome failure for a
+// refusal, error for anything else; a purge that failed after some partitions
+// committed says how many messages it skipped), and a purge that succeeds adds a
+// record with the count it skipped, which is not known before it ran. A crash
+// between the record and the operation leaves a record of an operation that
+// never ran: over-recording is the direction the spec chose. The operation runs
+// on a context that outlives the client's hang-up (bounded by opTimeout), so a
+// disconnect cannot split a purge between its partitions, and the records after
+// it are written the same way (bounded by auditTimeout). A route mounted without
+// its audit logger refuses before anything happens. The purge is the one route
+// that also needs an interactive sign-in (httpapi.Guards.Interactive), as it is
+// the only way a disabled module's retained messages are discarded.
 //
 // Nothing here hides a row from a caller who may reach the route: the dead
 // letter list, the consumer status and the catalog are the same for every holder
@@ -40,6 +50,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log/slog"
+	"maps"
 	"net/http"
 	"slices"
 	"time"
@@ -67,9 +78,24 @@ const (
 	actionPurge   = "core.outbox.backlog_purge"
 )
 
-// codeAuditWriteFailed is the problem code of an operation that was applied
-// and could not be audited.
-const codeAuditWriteFailed = "audit_write_failed"
+// opTimeout bounds an operation and auditTimeout each audit write. Both run on
+// a context detached from the request's cancellation (an operation must not be
+// split by a hang-up, and a record must outlive one), which drops its deadline
+// too, so each carries its own.
+const (
+	opTimeout    = 2 * time.Minute
+	auditTimeout = 10 * time.Second
+)
+
+// The reasons of the records after the first, and of a purge's first and last.
+const (
+	reasonRequested   = "requested"     // a purge's first record: the count is not known yet
+	reasonCompleted   = "completed"     // a purge's record of what it skipped
+	reasonPartial     = "partial"       // a purge failed after some partitions committed
+	reasonRefused     = "refused"       // the operation was refused (404, 409)
+	reasonFailed      = "failed"        // the operation failed
+	reasonTopicDiffer = "topic_differs" // the letter taken was on another topic than the first record named
+)
 
 // maxDeadPage is the most dead letters one request returns: outbox.ListDead's
 // own bound, below httpapi's limit of 1000.
@@ -79,8 +105,9 @@ const maxDeadPage = 500
 // package *outbox.Outbox and nothing wider (03 §3.3).
 type Operator interface {
 	ListDead(ctx context.Context, after string, limit int) (letters []outbox.DeadLetter, next string, err error)
-	RetryDead(ctx context.Context, consumer string, seq uint64) error
-	DiscardDead(ctx context.Context, consumer string, seq uint64) error
+	DeadTopic(ctx context.Context, consumer string, seq uint64) (topic string, err error)
+	RetryDead(ctx context.Context, consumer string, seq uint64) (topic string, err error)
+	DiscardDead(ctx context.Context, consumer string, seq uint64) (topic string, err error)
 	PurgeBacklog(ctx context.Context, consumer string) (skipped int, err error)
 	Status(ctx context.Context) (outbox.Status, error)
 }
@@ -119,18 +146,18 @@ func Register(g *httpapi.Group, op Operator, cat events.Catalog, rec audit.Logge
 	httpapi.Handle(g, httpapi.Route{
 		Method: http.MethodPost, Path: "/outbox/dead/{consumer}/{seq}/retry", Name: "retryDeadLetter", Perm: manage, Tags: tags,
 		Summary: "Retry one dead letter",
-		Doc:     "Hands the message back to its consumer alone, at the end of the stream under a new seq, and deletes the dead letter. Audited as core.outbox.dead_retry after the retry commits: when the record cannot be written the answer is 500 audit_write_failed and the retry stands. 404 when the consumer is unknown or has no dead letter at seq; 409 when the letter changed under the operation (list it again).",
+		Doc:     "Hands the message back to its consumer alone, at the end of the stream under a new seq, and deletes the dead letter. Audited as core.outbox.dead_retry before the retry runs: when the record cannot be written the answer is 503 and nothing was retried; a retry that then fails is recorded as the failure it was. 404 when the consumer is unknown or has no dead letter at seq; 409 when the letter changed under the operation (list it again).",
 	}, a.retry)
 	httpapi.Handle(g, httpapi.Route{
 		Method: http.MethodDelete, Path: "/outbox/dead/{consumer}/{seq}", Name: "discardDeadLetter", Perm: manage, Tags: tags,
 		Summary: "Discard one dead letter",
-		Doc:     "Deletes the dead letter for good. Audited as core.outbox.dead_discard after the delete commits: when the record cannot be written the answer is 500 audit_write_failed and the discard stands. 404 and 409 as for a retry.",
+		Doc:     "Deletes the dead letter for good. Audited as core.outbox.dead_discard before the delete runs: when the record cannot be written the answer is 503 and nothing was discarded; a discard that then fails is recorded as the failure it was. 404 and 409 as for a retry.",
 	}, a.discard)
 	httpapi.Handle(g, httpapi.Route{
 		Method: http.MethodDelete, Path: "/outbox/consumers/{consumer}/backlog", Name: "purgeConsumerBacklog", Perm: manage, Tags: tags,
 		Guards:  httpapi.Guards{Interactive: true},
 		Summary: "Purge a consumer's backlog",
-		Doc:     "Advances every cursor of the consumer to the head of its topic and clears its retries, discarding the messages it has not taken over; answers how many it skipped. Dead letters stay, and messages sequenced after the purge are delivered normally. It is the only way a disabled module's retained messages are discarded. Needs an interactive sign-in (not an API key). Audited as core.outbox.backlog_purge after the purge commits: when the record cannot be written the answer is 500 audit_write_failed and the purge stands. 404 when the consumer is unknown or has no backlog (it never ran); 409 when the topic is not available to this build or its partition count changed.",
+		Doc:     "Advances every cursor of the consumer to the head of its topic and clears its retries, discarding the messages it has not taken over; answers how many it skipped. Dead letters stay, and messages sequenced after the purge are delivered normally. It is the only way a disabled module's retained messages are discarded. Needs an interactive sign-in (not an API key). Audited as core.outbox.backlog_purge before the purge runs: when the record cannot be written the answer is 503 and nothing was purged; the purge then records how many messages it skipped, or the failure it ended in. The purge runs to its end even if the client hangs up. 404 when the consumer is unknown or has no backlog (it never ran); 409 when the topic is not available to this build or its partition count changed.",
 	}, a.purge)
 	httpapi.Handle(g, httpapi.Route{
 		Method: http.MethodGet, Path: "/outbox/consumers", Name: "listOutboxConsumers", Perm: view, Tags: tags,
@@ -341,44 +368,60 @@ type purgeReq struct {
 // and evaluating a method value of a nil interface panics.
 func (a *api) retry(ctx context.Context, in *httpapi.In[deadReq]) (httpapi.NoContent, error) {
 	return a.dead(ctx, in, actionRetry, "POST "+a.base+"/outbox/dead/{consumer}/{seq}/retry",
-		func(ctx context.Context, consumer string, seq uint64) error {
+		func(ctx context.Context, consumer string, seq uint64) (string, error) {
 			return a.op.RetryDead(ctx, consumer, seq)
 		})
 }
 
 func (a *api) discard(ctx context.Context, in *httpapi.In[deadReq]) (httpapi.NoContent, error) {
 	return a.dead(ctx, in, actionDiscard, "DELETE "+a.base+"/outbox/dead/{consumer}/{seq}",
-		func(ctx context.Context, consumer string, seq uint64) error {
+		func(ctx context.Context, consumer string, seq uint64) (string, error) {
 			return a.op.DiscardDead(ctx, consumer, seq)
 		})
 }
 
 // dead runs one dead-letter operation and audits it: availability and the actor
 // first (nothing is applied that cannot be audited or attributed), the letter's
-// topic next (it is gone once the operation ran), then the operation, and the
-// record only after the operation committed.
+// topic next (a read of the consumer's keys that changes nothing, so a letter
+// that is not there is a 404 with nothing to record), then the record, and only
+// then the operation. The operation answers the topic of the letter it took; it
+// differs from the one the record named only when the set of letters changed in
+// between, and then a second record names the letter actually taken.
 func (a *api) dead(ctx context.Context, in *httpapi.In[deadReq], action, route string,
-	do func(ctx context.Context, consumer string, seq uint64) error) (httpapi.NoContent, error) {
+	do func(ctx context.Context, consumer string, seq uint64) (string, error)) (httpapi.NoContent, error) {
 	actor, err := a.begin(ctx, in.Principal)
 	if err != nil {
 		return httpapi.NoContent{}, err
 	}
 	consumer, seq := in.Req.Consumer, in.Req.Seq
-	topic, err := a.deadTopic(ctx, consumer, seq)
+	gone := deadLetterGone(consumer, seq)
+	topic, err := a.op.DeadTopic(ctx, consumer, seq)
 	if err != nil {
-		return httpapi.NoContent{}, err
-	}
-	if err := do(ctx, consumer, seq); err != nil {
-		return httpapi.NoContent{}, mapError(err, deadLetterGone(consumer, seq))
+		return httpapi.NoContent{}, mapError(err, gone)
 	}
 	ev := a.event(in.RequestID, action, route, actor, consumer)
-	ev.Details = map[string]any{"seq": seq}
-	if topic != "" {
-		ev.Details["topic"] = topic
+	ev.Details = map[string]any{"seq": seq, "topic": topic}
+	if err := a.recordFirst(ctx, ev); err != nil {
+		return httpapi.NoContent{}, err
 	}
-	return httpapi.NoContent{}, a.record(ctx, ev)
+	opCtx, cancel := detached(ctx, opTimeout)
+	defer cancel()
+	taken, err := do(opCtx, consumer, seq)
+	if err != nil {
+		mapped := mapError(err, gone)
+		a.recordFailure(ctx, ev, mapped, err)
+		return httpapi.NoContent{}, mapped
+	}
+	if taken != topic {
+		a.recordFollowUp(ctx, ev, reasonTopicDiffer, map[string]any{"topic": taken})
+	}
+	return httpapi.NoContent{}, nil
 }
 
+// purge records the request first (its count is not known yet), purges on a
+// context a hang-up cannot cancel, and then records what it skipped, or the
+// failure it ended in with what it had skipped by then (the count of committed
+// partitions only: the outbox reports nothing for a partition that did not commit).
 func (a *api) purge(ctx context.Context, in *httpapi.In[purgeReq]) (OutboxPurgeResult, error) {
 	var zero OutboxPurgeResult
 	actor, err := a.begin(ctx, in.Principal)
@@ -391,29 +434,27 @@ func (a *api) purge(ctx context.Context, in *httpapi.In[purgeReq]) (OutboxPurgeR
 		return zero, err
 	}
 	route := "DELETE " + a.base + "/outbox/consumers/{consumer}/backlog"
-	skipped, err := a.op.PurgeBacklog(ctx, consumer)
-	if err != nil {
-		// A purge works partition by partition: one that fails after another
-		// advanced has discarded messages, and that is recorded as the error it
-		// ended in, with what it skipped.
-		if skipped > 0 {
-			a.recordPartial(ctx, a.purgeEvent(in.RequestID, route, actor, consumer, topic, skipped), err)
-		}
-		return zero, mapError(err, noBacklog(consumer, known))
-	}
-	if err := a.record(ctx, a.purgeEvent(in.RequestID, route, actor, consumer, topic, skipped)); err != nil {
-		return zero, err
-	}
-	return OutboxPurgeResult{Skipped: skipped}, nil
-}
-
-func (a *api) purgeEvent(requestID, route string, actor audit.Actor, consumer, topic string, skipped int) audit.Event {
-	ev := a.event(requestID, actionPurge, route, actor, consumer)
-	ev.Details = map[string]any{"skipped": skipped}
+	ev := a.event(in.RequestID, actionPurge, route, actor, consumer)
+	ev.Reason = reasonRequested
+	ev.Details = map[string]any{}
 	if topic != "" {
 		ev.Details["topic"] = topic
 	}
-	return ev
+	if err := a.recordFirst(ctx, ev); err != nil {
+		return zero, err
+	}
+	opCtx, cancel := detached(ctx, opTimeout)
+	defer cancel()
+	skipped, err := a.op.PurgeBacklog(opCtx, consumer)
+	if err != nil {
+		mapped := mapError(err, noBacklog(consumer, known))
+		failure := ev
+		failure.Details = cloneWith(ev.Details, map[string]any{"skipped": skipped})
+		a.recordFailure(ctx, failure, mapped, err)
+		return zero, mapped
+	}
+	a.recordFollowUp(ctx, ev, reasonCompleted, map[string]any{"skipped": skipped})
+	return OutboxPurgeResult{Skipped: skipped}, nil
 }
 
 // begin is the first thing a state change does: it refuses when the route has
@@ -431,38 +472,6 @@ func (a *api) begin(ctx context.Context, p *auth.Principal) (audit.Actor, error)
 		return audit.Actor{}, &httpapi.Error{Status: http.StatusUnauthorized, Code: "authentication_required", Detail: "authentication is required"}
 	}
 	return actorOf(p), nil
-}
-
-// deadTopic is the topic of the dead letter the operation will act on, which the
-// audit record of a retry or discard names: the outbox's operations return none,
-// and the letter is gone once they ran, so it is read first. An operator names
-// the consumer and the seq only, and the outbox finds the letter by walking the
-// consumer's dead letters in key order (topic, then seq) to the first one at that
-// seq; so does this, over the same order, so the topic named is the topic of the
-// letter the operation took even when the consumer has letters on two topics (it
-// changed topics between builds). The read starts just inside the consumer's key
-// range and stops past it. It is "" when there is no such letter (the operation
-// then answers 404).
-func (a *api) deadTopic(ctx context.Context, consumer string, seq uint64) (string, error) {
-	after := base64.RawURLEncoding.EncodeToString(outboxstore.DeadPrefix(consumer))
-	for {
-		letters, next, err := a.op.ListDead(ctx, after, maxDeadPage)
-		if err != nil {
-			return "", err
-		}
-		for _, d := range letters {
-			if d.Consumer != consumer { // past the consumer's letters
-				return "", nil
-			}
-			if d.Seq == seq {
-				return d.Topic, nil
-			}
-		}
-		if next == "" {
-			return "", nil
-		}
-		after = next
-	}
 }
 
 // consumerTopic is the topic a consumer's backlog is on, and whether the status
@@ -483,7 +492,7 @@ func (a *api) consumerTopic(ctx context.Context, consumer string) (topic string,
 	return "", false, nil
 }
 
-// event is the audit record of a state change that succeeded.
+// event is the audit record of a state change, as requested (outcome success).
 func (a *api) event(requestID, action, route string, actor audit.Actor, consumer string) audit.Event {
 	return audit.Event{
 		Action: action, Outcome: audit.Success, Actor: actor, Permission: string(permManage), Route: route,
@@ -492,29 +501,101 @@ func (a *api) event(requestID, action, route string, actor audit.Actor, consumer
 	}
 }
 
-// record writes ev after its operation committed. The write is detached from
-// the request's cancellation: a client that hangs up after the commit must not
-// leave the change without its record. A failure cannot undo the operation, so
-// the answer says it was applied.
-func (a *api) record(ctx context.Context, ev audit.Event) error {
-	if err := a.rec.Record(context.WithoutCancel(ctx), ev); err != nil {
-		a.log.ErrorContext(ctx, "outboxhttp: the operation was applied and its audit record could not be written",
-			slog.String("action", ev.Action), slog.Any("error", err))
-		return &httpapi.Error{Status: http.StatusInternalServerError, Code: codeAuditWriteFailed,
-			Detail: "the operation was applied but could not be audited", Err: err}
+// recordFirst writes the record of an operation before it runs. A write that
+// fails stops the request with the operation not taken (05-rbac §3.5, §8). The
+// write is bounded, and keeps the request's own cancellation: a client that has
+// hung up before it has nothing to be recorded for.
+func (a *api) recordFirst(ctx context.Context, ev audit.Event) error {
+	wctx, cancel := context.WithTimeout(ctx, auditTimeout)
+	defer cancel()
+	if err := a.rec.Record(wctx, ev); err != nil {
+		a.log.ErrorContext(ctx, "outboxhttp: the audit record could not be written, so the operation was not run",
+			a.attribution(ev, "error", err)...)
+		return (&httpapi.Error{Status: http.StatusServiceUnavailable, Code: "unavailable",
+			Detail: "the audit log is not available; nothing was changed", Err: err}).WithRetryAfter(5 * time.Second)
 	}
 	return nil
 }
 
-// recordPartial writes the record of an operation that failed after changing
-// something. The caller answers the operation's error either way, so a failed
-// write here is only logged.
-func (a *api) recordPartial(ctx context.Context, ev audit.Event, cause error) {
-	ev.Outcome, ev.Reason = audit.Error, "partial"
-	if err := a.rec.Record(context.WithoutCancel(ctx), ev); err != nil {
-		a.log.ErrorContext(ctx, "outboxhttp: a partly applied operation could not be audited",
-			slog.String("action", ev.Action), slog.Any("error", err), slog.Any("operation_error", cause))
+// recordFailure writes the second record of an operation recorded as requested
+// that was then refused (outcome failure) or failed (outcome error); a purge
+// that failed after skipping messages is the error "partial". The request
+// answers the operation's error either way, so a write that fails here is only
+// logged, with everything that says who did what: the first record stands, and
+// this log line is then all that tells the operation's end.
+func (a *api) recordFailure(ctx context.Context, ev audit.Event, answered, cause error) {
+	ev.Outcome, ev.Reason = audit.Error, reasonFailed
+	if isRefusal(answered) {
+		ev.Outcome, ev.Reason = audit.Failure, reasonRefused
 	}
+	if n, _ := ev.Details["skipped"].(int); n > 0 {
+		ev.Outcome, ev.Reason = audit.Error, reasonPartial
+	}
+	a.writeDetached(ctx, ev, "outboxhttp: the outcome of a recorded operation could not be audited", cause)
+}
+
+// recordFollowUp writes a record after an operation that ran: a purge's count,
+// or the topic of the letter an operation took when it was not the one the first
+// record named. The operation is applied and recorded by then, so a failed write
+// is only logged.
+func (a *api) recordFollowUp(ctx context.Context, first audit.Event, reason string, extra map[string]any) {
+	ev := first
+	ev.Outcome, ev.Reason = audit.Success, reason
+	ev.Details = cloneWith(first.Details, extra)
+	a.writeDetached(ctx, ev, "outboxhttp: a follow-up audit record could not be written", nil)
+}
+
+// writeDetached writes ev on a context that outlives the request's cancellation
+// (a hang-up is the likeliest reason an operation failed) and is bounded.
+func (a *api) writeDetached(ctx context.Context, ev audit.Event, msg string, cause error) {
+	wctx, cancel := detached(ctx, auditTimeout)
+	defer cancel()
+	if err := a.rec.Record(wctx, ev); err != nil {
+		attrs := a.attribution(ev, "error", err)
+		if cause != nil {
+			attrs = append(attrs, slog.Any("operation_error", cause))
+		}
+		a.log.ErrorContext(ctx, msg, attrs...)
+	}
+}
+
+// attribution is the log attributes that say who did what to what: the actor,
+// the target, the numbers the record carries and the request. Never a message.
+func (a *api) attribution(ev audit.Event, errKey string, err error) []any {
+	attrs := []any{
+		slog.String("action", ev.Action), slog.String("outcome", string(ev.Outcome)), slog.String("reason", ev.Reason),
+		slog.String("actor_user_id", ev.Actor.UserID), slog.String("actor_username", ev.Actor.Username),
+		slog.String("actor_method", ev.Actor.Method), slog.String("actor_credential_id", ev.Actor.CredentialID),
+		slog.String("client_addr", ev.Actor.ClientAddr), slog.String("consumer", ev.Target.ID),
+		slog.String("request_id", ev.RequestID),
+	}
+	for _, k := range []string{"seq", "topic", "skipped"} {
+		if v, ok := ev.Details[k]; ok {
+			attrs = append(attrs, slog.Any(k, v))
+		}
+	}
+	return append(attrs, slog.Any(errKey, err))
+}
+
+// detached is ctx without its cancellation and deadline, bounded by d.
+func detached(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), d)
+}
+
+// cloneWith is a copy of m with the entries of extra added: an event's details
+// are shared by every copy of the event.
+func cloneWith(m, extra map[string]any) map[string]any {
+	out := make(map[string]any, len(m)+len(extra))
+	maps.Copy(out, m)
+	maps.Copy(out, extra)
+	return out
+}
+
+// isRefusal reports whether err is one of the answers a client acts on (a 4xx
+// problem) rather than a failure of the system.
+func isRefusal(err error) bool {
+	he, ok := errors.AsType[*httpapi.Error](err)
+	return ok && he.Status >= 400 && he.Status < 500
 }
 
 // actorOf is the audit actor of p, for a context no middleware bound one to.

@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/F6-03-events-flip-realtime-spa-client.md -->
-<!-- version: 1.1.5 -->
+<!-- version: 1.1.6 -->
 <!-- guid: c4bebd8c-0dc9-4e78-a620-116332cca63d -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-19 -->
 
 # F6-03 — F6 flip, one PR: outbox and realtime wired, books publishers on typed topics, hub A and `/api/events` deleted, the SPA's `eventSourceManager` rewritten onto `/api/core/v1/events`, the Activity page on the stream
 
@@ -78,7 +78,7 @@ routes F6-04 built), §5E.13 (table and "Order" item (3)); 05-logging §5 (live 
 | hub A and its callers | `internal/realtime/` (deleted), `internal/server/`, `internal/itunes/service/` |
 | SPA | `web/src/services/eventSourceManager.ts`, `web/src/` |
 | move bookkeeping | `internal/arch/layering_test.go` (`internal/realtime` leaves `layerOf`), `scripts/ci/short_test_weights.json` |
-| F6-04's skipped cells | `core/internal/outboxhttp/routes_test.go` (un-skip only: remove the `t.Skip("needs stage 13: F4-08")` calls; no other change) |
+| F6-04's skipped cells | `core/internal/outboxhttp/routes_test.go` (un-skip only: remove the `t.Skip("needs stage 13: F4-08")` calls; no other change: F6-04 already wrote every cell's body, the 401, 403 and interactive-guard matrix, after its `t.Skip`) |
 
 The producer list was computed at the plan's base. F5-18 moves or deletes much of `internal/plugins/` before this PR,
 so re-grep at BASE (below): every non-test file that names the path-update follow-up is this PR's file, wherever F5-18
@@ -147,7 +147,7 @@ grep -rn 'OutboxConsumers\|OutboxHandler' core/module/ | wc -l               # 0
   `opaqueredirect` raises `ApiAuthRedirectError`; reset triggers the resync handlers; closed reconnects; the stream closes
   when the tab is hidden.
 - The event half of `TestJournal_RequiresSystemManage` (F6-05's) and F6-04's route tests now run on ABO's mounted
-  routes and topics, the un-skipped cells of `TestOutboxHTTP_ListDeadNeedsSystemManage`,
+  routes and topics, the un-skipped cells of `TestOutboxHTTP_DeadLetterRoutesNeedSystemManage`,
   `TestOutboxHTTP_PurgeNeedsInteractive` and `TestOutboxHTTP_ConsumersAndTopicsNeedSystemView` among them (403, the
   interactive guard and 401 enforced by stage 13).
 - `TestDisabledModuleOutboxRetained` (06 §6.10, COR-12): a message for a disabled module's declared consumer survives

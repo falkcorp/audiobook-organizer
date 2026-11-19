@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/F6-04-outbox-operator-routes-dark.md -->
-<!-- version: 1.0.5 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 939e1586-1e99-43dd-b555-319f2d5b85cb -->
-<!-- last-edited: 2026-11-17 -->
+<!-- last-edited: 2026-11-19 -->
 
 # F6-04 — Outbox operator routes, dark: `GET /api/core/v1/outbox/dead`, a dead letter's retry and discard, and a consumer's backlog purge, all audited with `core:system.manage`, the purge also interactive
 
@@ -107,7 +107,10 @@ permission or guard check inside a handler: enforcement stays the router's.
 | create | one `changelog.d/` fragment (headerless) |
 
 Touch nothing else. If `core/outbox/` or `core/internal/outboxstore/` lacks an operation this package needs, STOP
-(condition 2): F6-01 owns those files.
+(condition 2): F6-01 owns those files. One edit of F6-01's `core/outbox/ops.go` is part of this PR (approved at
+review round 2): `DeadTopic(consumer, seq)` (a keys-only read of the topic of the letter an operation would take) and
+`RetryDead` / `DiscardDead` returning the topic they took, with F6-01's own tests and `seams.d/F6-01.md` updated, and
+`PurgeBacklog` reporting only the messages of partitions that committed.
 
 ## Re-verify at BASE
 
@@ -131,9 +134,10 @@ grep -rn 'type Logger interface' core/audit/ | wc -l                            
    head, or list the consumers' status (the re-verify grep above shows one of the five missing): report which is
    missing; do not edit `core/outbox/` or `core/internal/outboxstore/`.
 3. A route would register with a zero `Perm`, or the purge without `Guards.Interactive`.
-4. A state-changing route could answer 2xx while its audit record fails to write (`audit.Logger.Record` is
-   fail-closed: 05-rbac §3.5, "the caller must fail the operation"), or a handler would write the audit record before
-   the operation runs.
+4. A state-changing route could run its operation after the audit record of the request failed to write, or answer 2xx
+   for an operation whose first record failed (`audit.Logger.Record` is fail-closed: 05-rbac §3.5, §8, "the caller must
+   fail the operation": nothing is applied that could not be recorded), or a handler would write the audit record only
+   after the operation (the record comes first, the backuphttp pattern, `core/internal/backuphttp/routes.go`).
 5. Anything in ABO's boot imports or mounts `outboxhttp` in this PR.
 
 ## Steps
@@ -141,23 +145,34 @@ grep -rn 'type Logger interface' core/audit/ | wc -l                            
 1. Step 0.
 2. Write the tests below first.
 3. Declare in `outboxhttp` the narrow consumer interface the routes call (name coined here: `Operator`), with one
-   method per operation F6-01 exposed (list dead letters with a cursor and limit, retry one, discard one, purge a
-   consumer's backlog, list the consumers' status), so the kernel hands the package F6-01's implementation and nothing wider (03 §3.3: route
+   method per operation F6-01 exposed (list dead letters with a cursor and limit, the topic of one, retry one, discard
+   one, purge a consumer's backlog, list the consumers' status), so the kernel hands the package F6-01's implementation and nothing wider (03 §3.3: route
    packages receive interfaces from the kernel, as `modulehttp` receives `ModulesView`).
 4. `func Register(g *httpapi.Group, op Operator, cat events.Catalog, audit audit.Logger)` (name coined here) registers
    the six routes with `httpapi.Handle` and the `Route` values of the Goal table (`Name`s lowerCamel and unique, e.g.
    `listDeadLetters`, `retryDeadLetter`, `discardDeadLetter`, `purgeConsumerBacklog`, `listOutboxConsumers`,
    `listEventTopics`; names coined here). The topics route reads `cat`; the consumers route reads `op`.
-5. Handlers: path values `{consumer}` (a declared consumer name) and `{seq}` (decimal `uint64`; 400 on a bad value);
-   404 problem when the dead letter or the consumer does not exist; on success write the audit record with the route's action
-   (`core.outbox.dead_retry`, `core.outbox.dead_discard`, `core.outbox.backlog_purge`), `Outcome: audit.Success`,
-   `Target` naming the consumer, `Details` the topic and seq (purge: the number of messages advanced past; never the
-   payload: 05-rbac §7.7), and only then answer (retry and discard 204; purge 200 with the number of messages skipped).
-   The write path is "sync" (05-rbac §7.1 `core.outbox.*` row), not "sync (in batch)": the operation commits first and
-   the record is a separate write after it. Never record before the operation. When `Record` fails after the
-   operation committed, answer 500 with a problem body saying the operation was applied but not audited (problem code
-   coined here: `audit_write_failed`); the failure is counted in `mediacore_audit_write_errors_total{path="sync"}`
-   (05-rbac §11) by F2-07's logger. Do not retry or undo the operation.
+5. Handlers: path values `{consumer}` (a declared consumer name) and `{seq}` (decimal `uint64`; 400 on a bad value).
+   A retry or discard reads the topic of its letter with `Operator.DeadTopic` first (404 problem when there is none,
+   with nothing recorded); a purge reads the consumer's topic from the status. Then **record first** (the backuphttp
+   pattern): write the audit record of the request with the route's action (`core.outbox.dead_retry`,
+   `core.outbox.dead_discard`, `core.outbox.backlog_purge`), `Outcome: audit.Success`, `Target` naming the consumer,
+   `Details` the topic and seq (purge: the topic; never the payload: 05-rbac §7.7), and only when `Record` returned nil
+   run the operation. When the first record fails, answer 503 (`unavailable`, "nothing was changed"), log it, and do
+   not call the operation (05-rbac §3.5, §8: fail closed). The write path is "sync" (05-rbac §7.1 `core.outbox.*` row),
+   not "sync (in batch)". The operation runs on a context detached from the request's cancellation (a hang-up must not
+   split a purge between its partitions) and bounded by a timeout of its own. Then:
+   - the operation fails: write a second record, outcome `failure` (reason `refused`) for a 404 or 409 and outcome
+     `error` (reason `failed`) for anything else, `error` / `partial` for a purge that had skipped messages, and answer
+     the operation's own error. A write that fails here is logged with who did what and does not change the answer;
+   - a retry or discard answers the topic of the letter it took (`RetryDead` / `DiscardDead` return it); when it is not
+     the topic the first record named, write a second record, reason `topic_differs`, naming the topic taken;
+   - a purge writes a second record, reason `completed`, carrying `skipped` (the count is not known before the run);
+   - success answers retry and discard 204, purge 200 with the number of messages skipped.
+   Every audit write has its own bound: the first keeps the request's context with a timeout; the later ones are
+   detached and bounded, since `context.WithoutCancel` drops the deadline too. Every logged failure carries the actor,
+   consumer, seq, topic, skipped and request id. Over-recording after a crash (a first record whose operation never ran)
+   is the fail-closed direction and is accepted.
 6. Headers, the fragment, Acceptance.
 
 ## Tests first (names coined here)
@@ -165,10 +180,16 @@ grep -rn 'type Logger interface' core/audit/ | wc -l                            
 Permission, guard and 401 cells: each test is a table whose every cell calls `t.Skip("needs stage 13: F4-08")` in this
 PR (see Goal, "No stage 13 yet"); F6-03 un-skips them when it mounts the package.
 
-- `TestOutboxHTTP_ListDeadNeedsSystemManage`: `core:system.view` only → 403; `core:system.manage` → 200.
-- `TestOutboxHTTP_PurgeNeedsInteractive`: an API-key principal holding `core:system.manage` → refused by the guard; an
-  interactive session → 200.
-- `TestOutboxHTTP_ConsumersAndTopicsNeedSystemView`: no principal → 401; `core:system.view` → 200 on both read routes.
+The bodies of the cells are written in this PR (each is one `wantStage13(stage13Do(...))` call over the full matrix
+below, placed after the `t.Skip`); F6-03 removes the `t.Skip` lines and changes nothing else.
+
+- `TestOutboxHTTP_DeadLetterRoutesNeedSystemManage` (list, retry, discard): no principal → 401; `core:system.view` only
+  → 403; `core:system.manage` → let through.
+- `TestOutboxHTTP_PurgeNeedsInteractive`: no principal → 401; `core:system.view` only → 403; `core:system.manage` by API
+  key, by a delegated session or as the auth-off principal → 403 (the interactive guard); an interactive session →
+  let through.
+- `TestOutboxHTTP_ConsumersAndTopicsNeedSystemView`: no principal → 401; no scope → 403; `core:system.view` → let
+  through, on both read routes.
 
 Handler logic, running in this PR (a principal from `authtest`'s helpers bound with `auth.WithPrincipal`):
 
@@ -182,10 +203,18 @@ Handler logic, running in this PR (a principal from `authtest`'s helpers bound w
 - `TestOutboxHTTP_PurgeAdvancesCursorsAndAudits`: an interactive principal → 200 with the number of messages skipped,
   the consumer's cursors at the head, a disabled module's retained backlog gone, one audit record with action
   `core.outbox.backlog_purge`.
-- `TestOutboxHTTP_AuditFailureFailsRequest`: F2-07's `audit.Logger` over a store whose audit write fails, on retry,
-  discard and purge → 500 with the `audit_write_failed` problem saying the operation was applied but not audited,
-  `mediacore_audit_write_errors_total{path="sync"}` up by one, and the operation applied (no record was written
-  before it).
+- `TestOutboxHTTP_AuditFailureMeansNotApplied`: F2-07's `audit.Logger` over a store whose audit write fails, on retry,
+  discard and purge → 503 `unavailable` saying nothing was changed, `mediacore_audit_write_errors_total{path="sync"}`
+  up by one, and the operation NOT applied (the letter is still there, nothing was staged, the cursors have not
+  moved); `TestOutboxHTTP_AuditFailureStopsBeforeTheOperation` pins the same over fakes (the operation is never
+  called).
+- `TestOutboxHTTP_RecordsBeforeTheOperation`, `TestOutboxHTTP_FailedOperationIsRecordedAsFailed`,
+  `TestOutboxHTTP_TopicTakenThatDiffersIsRecorded`, `TestOutboxHTTP_PartialPurgeIsRecorded`,
+  `TestOutboxHTTP_OperationAndRecordsOutliveAHangUp` and `TestOutboxHTTP_HangUpDoesNotSplitAPurge`: the order of the
+  records and the operation, the second record on a refusal or failure, the `topic_differs` and `completed` records,
+  and the detached, bounded contexts, over fakes and over the real outbox.
+- `TestOutboxHTTP_DeadOperationsIgnoreUnreadableNeighbours`: an undecodable letter at another seq, and a bad row of a
+  later consumer, do not fail a retry or discard.
 - `TestOutboxHTTP_UnknownConsumerOrSeq404`: an unknown consumer or seq → 404; a non-decimal seq → 400.
 - `TestOutboxHTTP_ConsumersAndTopicsList`: the consumers view lists a disabled module's consumer with its retained
   backlog, and lag, pending, dead count and intake backlog as `Operator` returns them; the topics view lists the
