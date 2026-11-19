@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/kinds_embedding.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6209a7e9-41c2-4ab7-bf95-030d41c7eef1
 // last-edited: 2026-11-18
 
@@ -22,15 +22,26 @@ import (
 // embedding each definition's own narrow interface (the F5-11 precedent): a core
 // takes only its own piece, the composition is what EmbeddingKindDeps carries.
 type embeddingKindStore interface {
+	embeddingCleanupStore
+	embeddingScanStore
+}
+
+// embeddingCleanupStore and embeddingScanStore split embeddingKindStore so each
+// piece stays under the repo's interface width limit; the method set of the
+// composition is unchanged.
+type embeddingCleanupStore interface {
 	cleanupOrphanEmbeddingsStore
 	cleanupOrphanAuthorEmbeddingsStore
-	embedScanStore
+	embReencodeStore
 	reembedEmbeddingsStore
+}
+
+type embeddingScanStore interface {
+	embedScanStore
 	calibrateEmbeddingThresholdsStore
 	calibrateBookReader
 	breakdownBackfillReads
 	datasetBackfillReads
-	embReencodeStore
 }
 
 // embeddingKindWriter is the writes the embedding group's cores make, composed
