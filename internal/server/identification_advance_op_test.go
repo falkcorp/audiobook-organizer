@@ -197,7 +197,7 @@ func TestAdvance_ReMarkDuringItemSurvives(t *testing.T) {
 // is the "sequential loop wearing a worker-pool API" guard. That the call
 // site passes exactly these options is proven by
 // internal/plugins TestRunItemsCallsDeclareConcurrency, which traces the
-// direct RunItems call to identAdvanceRunOptions.
+// direct RunItems call to t7HeadItems.
 func TestAdvance_RunItemsConcurrencySetExplicitly(t *testing.T) {
 	prevCfg := config.AppConfig.MetadataCandidateFetchWorkers
 	config.AppConfig.MetadataCandidateFetchWorkers = 0
@@ -208,7 +208,7 @@ func TestAdvance_RunItemsConcurrencySetExplicitly(t *testing.T) {
 	cf := &countingFetch{}
 	adv := testAdvance(ps, cf.fetch, identificationAdvanceWorkers(budget), nil)
 	page := []identification.Mark{{BookID: "book-a", Epoch: 1}, {BookID: "book-b", Epoch: 1}}
-	opts := identAdvanceRunOptions(adv, page, 0)
+	opts := identAdvanceItemsOptions(adv, page, 0)
 
 	want := candidateFetchWorkers(budget, 0)
 	t.Logf("concurrency passed to RunItems: %d (candidateFetchWorkers for 8 rps = %d)", opts.Concurrency, want)

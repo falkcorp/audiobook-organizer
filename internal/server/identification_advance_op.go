@@ -19,6 +19,8 @@ import (
 
 	"golang.org/x/time/rate"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -69,7 +71,12 @@ func init() {
 
 // RegisterIdentificationAdvanceOp registers identification.advance.
 func (s *Server) RegisterIdentificationAdvanceOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
+	return reg.RegisterOp(s.identificationAdvanceDef())
+}
+
+// identificationAdvanceDef is HEAD's definition of identification.advance.
+func (s *Server) identificationAdvanceDef() opsregistry.OperationDef {
+	return opsregistry.OperationDef{
 		ID:          identificationAdvanceOpID,
 		Preview:     opsregistry.PreviewSpec{Params: identificationAdvanceParams{}},
 		Liveness:    opsregistry.LivenessRunItems,
@@ -99,7 +106,7 @@ func (s *Server) RegisterIdentificationAdvanceOp(reg *opsregistry.Registry) erro
 		Permissions:  []auth.Permission{auth.PermSettingsManage},
 		Capabilities: []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkGeneric},
 		Run:          s.runIdentificationAdvanceOp,
-	})
+	}
 }
 
 // identificationAdvanceConcurrencyBasis names how the worker count is
@@ -132,20 +139,96 @@ func (s *Server) runIdentificationAdvanceOp(ctx context.Context, raw json.RawMes
 	if err != nil {
 		return err
 	}
-	store := s.storeForWiring()
-	ist, ok := database.AsCapability[identAdvanceItemStore](store)
-	if !ok {
-		return fmt.Errorf("%s: store has no identification dirty set (store is not Pebble-backed)", identificationAdvanceOpID)
+	h := headIdentAdvance{s: s}
+	return identificationAdvanceCore(ctx, identAdvanceEnv{
+		t7Env:  t7HeadEnv(reporter, !dryRun),
+		Pool:   func(int) t7ItemsFunc { return t7HeadItems(reporter) },
+		Store:  h,
+		Writer: h,
+	})
+}
+
+// identAdvanceStore is the reads of identification.advance.
+type identAdvanceStore interface {
+	// IdentDirtySource is the dirty set the run drains, refusing a store that has
+	// none (one that is not Pebble-backed).
+	IdentDirtySource() (identification.Source, error)
+}
+
+// identAdvanceWriter is the writes of identification.advance: the per-book
+// pipeline clears a book's mark, records its reason and fills the candidate cache.
+type identAdvanceWriter interface {
+	// OpenAdvance builds the driver over source: the per-book pipeline (the
+	// existing candidate fetch, under the per-book claim), the worker count from
+	// the enabled providers' rate budgets, and finish as the run's last word. It
+	// refuses a server with no metadata service. Live runs only.
+	OpenAdvance(source identification.Source, opID string, finish func(identification.Summary)) (identification.Advance, error)
+}
+
+// identAdvanceEnv is what the shared core takes from its shell (rules R2, R10).
+// Live is false for the dry run, which only counts the dirty set. Pool builds the
+// shell's pool at the driver's worker count, which is only known once the driver
+// is open (it comes from the providers' budgets).
+type identAdvanceEnv struct {
+	t7Env
+	Pool   func(workers int) t7ItemsFunc
+	Store  identAdvanceStore
+	Writer identAdvanceWriter
+}
+
+// identificationAdvanceCore is the body of identification.advance, shared by
+// HEAD's shell and the native kind.
+func identificationAdvanceCore(ctx context.Context, env identAdvanceEnv) error {
+	source, err := env.Store.IdentDirtySource()
+	if err != nil {
+		return err
 	}
-	source := identification.DirtySet{Store: ist}
-	if dryRun {
-		return identAdvanceDryRun(ctx, reporter, source)
+	if !env.Live {
+		return identAdvanceDryRun(ctx, env.t7Env, source)
+	}
+	finish := func(sum identification.Summary) {
+		msg := "identification advance: " + sum.String()
+		env.Log(slog.LevelInfo, msg)
+		identAdvanceLog.Info("%s opID=%s", msg, logger.SanitizeLogValue(env.OpID))
+	}
+	adv, err := env.Writer.OpenAdvance(source, env.OpID, finish)
+	if err != nil {
+		return err
+	}
+	return identificationAdvanceRun(ctx, env, adv, &identification.Tally{})
+}
+
+// headIdentAdvance is HEAD's side of both interfaces: the server's store and the
+// existing per-book candidate fetch.
+type headIdentAdvance struct{ s *Server }
+
+func (h headIdentAdvance) itemStore() (identAdvanceItemStore, error) {
+	ist, ok := database.AsCapability[identAdvanceItemStore](h.s.storeForWiring())
+	if !ok {
+		return nil, fmt.Errorf("%s: store has no identification dirty set (store is not Pebble-backed)", identificationAdvanceOpID)
+	}
+	return ist, nil
+}
+
+func (h headIdentAdvance) IdentDirtySource() (identification.Source, error) {
+	ist, err := h.itemStore()
+	if err != nil {
+		return nil, err
+	}
+	return identification.DirtySet{Store: ist}, nil
+}
+
+func (h headIdentAdvance) OpenAdvance(source identification.Source, opID string, finish func(identification.Summary)) (identification.Advance, error) {
+	s := h.s
+	store := s.storeForWiring()
+	ist, err := h.itemStore()
+	if err != nil {
+		return identification.Advance{}, err
 	}
 	mfs := s.metadataFetchService
 	if mfs == nil {
-		return fmt.Errorf("%s: metadata service not initialized", identificationAdvanceOpID)
+		return identification.Advance{}, fmt.Errorf("%s: metadata service not initialized", identificationAdvanceOpID)
 	}
-	opID := opsregistry.ReporterOpID(reporter)
 	budget := metafetch.EnabledSourcesBudget()
 	limiter := candidateFetchLimiter(budget.RPS, budget.Burst)
 	folderMemo := s.newFolderMemo(store)
@@ -158,18 +241,12 @@ func (s *Server) runIdentificationAdvanceOp(ctx context.Context, raw json.RawMes
 		Store:    ist,
 		FetchOne: s.identFetchOne(mfs, store, limiter, opID, folderMemo),
 	})
-	finish := func(sum identification.Summary) {
-		msg := "identification advance: " + sum.String()
-		_ = reporter.Log(slog.LevelInfo, msg)
-		identAdvanceLog.Info("%s opID=%s", msg, logger.SanitizeLogValue(opID))
-	}
-	adv := identification.New(source, item, finish, workers, identificationAdvanceConcurrencyBasis)
-	return runIdentificationAdvance(ctx, reporter, adv, &identification.Tally{})
+	return identification.New(source, item, finish, workers, identificationAdvanceConcurrencyBasis), nil
 }
 
 // identAdvanceDryRun counts the dirty set a page at a time and writes
 // nothing.
-func identAdvanceDryRun(ctx context.Context, reporter opsregistry.Reporter, source identification.Source) error {
+func identAdvanceDryRun(ctx context.Context, env t7Env, source identification.Source) error {
 	n, after := 0, ""
 	for {
 		page, next, err := source.Pages(ctx, after, identification.PageSize)
@@ -183,8 +260,8 @@ func identAdvanceDryRun(ctx context.Context, reporter opsregistry.Reporter, sour
 		after = next
 	}
 	msg := fmt.Sprintf("dry run: %d books marked for identification (nothing fetched; dry_run=false advances them)", n)
-	_ = reporter.Log(slog.LevelInfo, msg)
-	_ = reporter.UpdateProgress(1, 1, msg)
+	env.Log(slog.LevelInfo, msg)
+	env.progress(1, 1, msg)
 	return nil
 }
 
@@ -241,30 +318,39 @@ func identFetchResultOf(res CandidateResult, skipStatus func() string) identific
 	return out
 }
 
-// identAdvanceRunOptions builds the RunItems options for one page.
+// identAdvanceItemsOptions builds the pool options for one page.
 //
-// Concurrency is set explicitly: RunItems defaults to 1. Label reads only the
-// item (page[i], which nothing writes while RunItems runs), never a shared
+// Concurrency is set explicitly: RunItems defaults to 1. The label reads only
+// the item (page[i], which nothing writes while the pool runs), never a shared
 // counter, so it is race-free in the worker goroutines that call it.
-// ProgressOffset/ProgressTotal make the bar count the books advanced so far
+// ProgressBase/ProgressTotal make the bar count the books advanced so far
 // in this run; the set's size is unknown until it is drained.
-func identAdvanceRunOptions(adv identification.Advance, page []identification.Mark, done int) opsregistry.RunItemsOptions {
-	return opsregistry.RunItemsOptions{
-		Concurrency:    adv.Concurrency,
-		ErrMode:        opsregistry.ErrModeCollect,
-		ProgressOffset: done,
-		ProgressTotal:  done + len(page),
-		Label:          func(i, _ int) string { return adv.Label(page[i]) },
+func identAdvanceItemsOptions(adv identification.Advance, page []identification.Mark, done int) t7ItemsOptions {
+	return t7ItemsOptions{
+		Concurrency:   adv.Concurrency,
+		CollectErrors: true,
+		ProgressBase:  done,
+		ProgressTotal: done + len(page),
+		PureLabel:     func(i, _ int) string { return adv.Label(page[i]) },
 	}
 }
 
-// runIdentificationAdvance is the v2 adapter: Pages -> RunItems per page ->
-// next page, until a page is empty, then Finish. It owns nothing else: no
-// chunk leasing, no ledger, no status of its own (RunItems reports items
-// done and the book each worker is on). PartitionBy is the book id and a
-// page's keys are unique, so a page's workers never share a book; pages run
-// one after another.
+// runIdentificationAdvance is HEAD's seam over identificationAdvanceRun: the
+// driver on the registry's pool.
 func runIdentificationAdvance(ctx context.Context, reporter opsregistry.Reporter, adv identification.Advance, tally *identification.Tally) error {
+	return identificationAdvanceRun(ctx, identAdvanceEnv{
+		t7Env: t7HeadEnv(reporter, true),
+		Pool:  func(int) t7ItemsFunc { return t7HeadItems(reporter) },
+	}, adv, tally)
+}
+
+// identificationAdvanceRun is the adapter: Pages -> the pool per page -> next
+// page, until a page is empty, then Finish. It owns nothing else: no chunk
+// leasing, no ledger, no status of its own (the pool reports items done and the
+// book each worker is on). PartitionBy is the book id and a page's keys are
+// unique, so a page's workers never share a book; pages run one after another.
+func identificationAdvanceRun(ctx context.Context, env identAdvanceEnv, adv identification.Advance, tally *identification.Tally) error {
+	env.Items = env.Pool(adv.Concurrency)
 	after := ""
 	var runErr error
 	for {
@@ -278,7 +364,7 @@ func runIdentificationAdvance(ctx context.Context, reporter opsregistry.Reporter
 		if len(page) == 0 {
 			break
 		}
-		err = opsregistry.RunItems(ctx, reporter, page, func(ctx context.Context, m identification.Mark) error {
+		err = t7ForEach(ctx, env.t7Env, page, identAdvanceItemsOptions(adv, page, int(tally.Done())), func(ctx context.Context, m identification.Mark) error {
 			o, err := adv.Item(ctx, m)
 			tally.Record(o)
 			if err != nil {
@@ -287,11 +373,11 @@ func runIdentificationAdvance(ctx context.Context, reporter opsregistry.Reporter
 				}
 				// One book's failure is counted and logged; it never stops
 				// the others.
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: %s", m.BookID, logger.SanitizeLogValue(err.Error())),
+				env.Log(slog.LevelWarn, fmt.Sprintf("book %s: %s", m.BookID, logger.SanitizeLogValue(err.Error())),
 					slog.String("book_id", logger.SanitizeLogValue(m.BookID)), slog.String("outcome", string(o)))
 			}
 			return nil
-		}, identAdvanceRunOptions(adv, page, int(tally.Done())))
+		})
 		if ctx.Err() != nil {
 			break
 		}
@@ -307,4 +393,37 @@ func runIdentificationAdvance(ctx context.Context, reporter opsregistry.Reporter
 		return ctx.Err()
 	}
 	return runErr
+}
+
+// identificationAdvanceNative is the native books.identification.advance kind.
+// The mode is the start request's: Preview counts the dirty set (HEAD's default,
+// dry_run true), Live advances it. The pool is the driver's worker count, from
+// the enabled providers' budgets, chosen when the driver opens.
+func (s *Server) identificationAdvanceNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	kind := t7KindFor(identificationAdvanceOpID)
+	c := t7Common(s.identificationAdvanceDef(), sched)
+	c.Effects = t7Writes(ops.ResMetadataCache, ops.ResIndexes)
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			if _, err := t7DecodeNative[struct{}](kind, raw); err != nil {
+				return struct{}{}, err
+			}
+			if err := t7NeedStore(kind, deps); err != nil {
+				return struct{}{}, err
+			}
+			w, err := t7NewWriter(kind, deps, rc)
+			if err != nil {
+				return struct{}{}, err
+			}
+			return struct{}{}, identificationAdvanceCore(rc.Context(), identAdvanceEnv{
+				t7Env: t7NativeEnv(rc),
+				Pool: func(n int) t7ItemsFunc {
+					return t7NativeItems(rc, tasks.Fixed(n, identificationAdvanceConcurrencyBasis))
+				},
+				Store:  deps.Store,
+				Writer: w,
+			})
+		},
+	})
 }
