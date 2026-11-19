@@ -8,6 +8,7 @@ package dedup
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
@@ -88,12 +89,12 @@ type kindRow struct {
 // kindHeadPriority maps HEAD's three priorities onto the native ones.
 func kindHeadPriority(p registry.Priority) tasks.Priority {
 	switch p {
-	case registry.PriorityLow:
-		return tasks.PriorityLow
 	case registry.PriorityHigh:
 		return tasks.PriorityHigh
-	default:
+	case registry.PriorityNormal:
 		return tasks.PriorityNormal
+	default: // registry.PriorityLow is the zero value: a def that sets none is Low
+		return tasks.PriorityLow
 	}
 }
 
@@ -241,7 +242,8 @@ type kindHost struct {
 	onAwait func(ref tasks.RunRef) (tasks.Outcome, error)
 	// enqueueErr, when set, fails rc.Enqueue.
 	enqueueErr error
-	notes []string
+	notes      []string
+	awaited    []string
 	// capObserver, when set, sees every worker count a run's pool declared.
 	capObserver func(declared int)
 }
@@ -275,12 +277,17 @@ func (h *kindHost) CapWorkers(declared int) int {
 type enqueuedRun struct {
 	Kind   tasks.Kind
 	Params json.RawMessage
+	// Mode is what the start options stated for the child (ModeRequestUnset when
+	// none did, which the kernel resolves to the parent's mode).
+	Mode tasks.ModeRequest
+	// ID is the run id the host answered.
+	ID string
 }
 
 func (h *kindHost) Mode() tasks.Mode     { return h.mode }
 func (h *kindHost) Writer() tasks.Writer { return h.w }
 
-func (h *kindHost) Enqueue(k tasks.Kind, params any, _ ...tasks.StartOption) (tasks.RunRef, error) {
+func (h *kindHost) Enqueue(k tasks.Kind, params any, opts ...tasks.StartOption) (tasks.RunRef, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.enqueueErr != nil {
@@ -290,15 +297,31 @@ func (h *kindHost) Enqueue(k tasks.Kind, params any, _ ...tasks.StartOption) (ta
 	if err != nil {
 		return tasks.RunRef{}, err
 	}
-	h.enqueued = append(h.enqueued, enqueuedRun{Kind: k, Params: raw})
-	return tasks.RunRef{}, nil
+	var req tasks.StartRequest
+	for _, o := range opts {
+		o(&req)
+	}
+	id := fmt.Sprintf("child-%d", len(h.enqueued)+1)
+	h.enqueued = append(h.enqueued, enqueuedRun{Kind: k, Params: raw, Mode: req.Mode, ID: id})
+	return tasks.RunRef{ID: tasks.RunID(id)}, nil
 }
 
 func (h *kindHost) Await(ref tasks.RunRef) (tasks.Outcome, error) {
-	if h.onAwait != nil {
-		return h.onAwait(ref)
+	h.mu.Lock()
+	h.awaited = append(h.awaited, string(ref.ID))
+	fn := h.onAwait
+	h.mu.Unlock()
+	if fn != nil {
+		return fn(ref)
 	}
-	return tasks.Outcome{}, nil
+	return tasks.Outcome{State: tasks.StateSucceeded}, nil
+}
+
+// awaitedIDs are the run ids the run waited on, in order.
+func (h *kindHost) awaitedIDs() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.awaited)
 }
 
 func (h *kindHost) enqueuedRuns() []enqueuedRun {

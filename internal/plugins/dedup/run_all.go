@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/run_all.go
-// version: 1.3.3
+// version: 1.4.0
 // guid: 428d4a76-207e-4f6e-8b0a-5f4d939690f2
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // dedup.run-all is the Review page's one-button "Find all duplicates" run: every
 // duplicate check, in order, as ONE server-side operation. Until 2026-09-28 the
@@ -124,10 +124,17 @@ import (
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // RunAllDefID is the def id the Review page's one-button run enqueues.
 const RunAllDefID = "dedup.run-all"
+
+// runAllKind is rule R3's native kind for dedup.run-all.
+const runAllKind = tasks.Kind("books.dedup.run-all")
+
+// runAllHelp is HEAD's Description, shared with the native kind (rule R5).
+const runAllHelp = "Runs every duplicate check in order (similarity data, audio fingerprints, find and score, AI review) as child operations, then previews how many waiting pairs would score differently. Preview by default: {} runs only the read-only score check and lists the steps a live run ({\"dry_run\":false}) would start. Resumes at the step it was on after a restart."
 
 // runAllStepUnits is how many progress units each step spans. The parent's
 // progress is (step index * units + the running child's share of units) over
@@ -241,7 +248,7 @@ func (p *Plugin) runAllDef() sdk.OperationDef {
 		Liveness:     sdk.LivenessManual,
 		Plugin:       "dedup",
 		DisplayName:  "Find all duplicates",
-		Description:  "Runs every duplicate check in order (similarity data, audio fingerprints, find and score, AI review) as child operations, then previews how many waiting pairs would score differently. Preview by default: {} runs only the read-only score check and lists the steps a live run ({\"dry_run\":false}) would start. Resumes at the step it was on after a restart.",
+		Description:  runAllHelp,
 		ResumePolicy: sdk.ResumeRestart,
 		// One run at a time. No DedupeQueuedRuns: see DEDUPE in the file comment.
 		ConcurrencyKey:  RunAllDefID,
@@ -391,16 +398,25 @@ func (p *Plugin) runRunAll(ctx context.Context, raw json.RawMessage, reporter sd
 	return nil
 }
 
-// previewRunAll is the dry run: no child op is enqueued, the read-only rescore
-// preview runs if it is in the plan, and every op step is reported as skipped.
-// Writes nothing but the op's own state and result.
+// previewRunAll is the v2 shell of the dry run: runAllPreviewCore over HEAD's
+// reporter and rescore.
 func (p *Plugin) previewRunAll(ctx context.Context, st runAllState, reporter sdk.Reporter) error {
+	_, err := runAllPreviewCore(ctx, headEnv(reporter, false), st, p.rescorePreview)
+	return err
+}
+
+// runAllPreviewCore is the dry run, shared by both shells: no child op is
+// enqueued, the read-only rescore preview runs if it is in the plan, and every
+// op step is reported as skipped. Writes nothing but the op's own state and
+// result (env.SetResult is HEAD's result store; the native shell returns the
+// result instead).
+func runAllPreviewCore(ctx context.Context, env kindEnv, st runAllState, rescore func(context.Context) (dedupengine.RescoreResult, error)) (RunAllResult, error) {
 	total := len(st.Plan)
 	result := RunAllResult{DryRun: true, PreviewSkipped: []RunAllPreviewSkip{}, Steps: []RunAllStepRecord{}, Skipped: st.Skipped}
-	_ = reporter.UpdateProgress(0, total, "Preview: nothing will be changed")
+	env.Progress(0, total, "Preview: nothing will be changed")
 	for i, id := range st.Plan {
 		if err := ctx.Err(); err != nil {
-			return err
+			return RunAllResult{}, err
 		}
 		step, _ := lookupRunAllStep(id)
 		if step.DefID != "" {
@@ -408,27 +424,29 @@ func (p *Plugin) previewRunAll(ctx context.Context, st runAllState, reporter sdk
 				ID: step.ID, Label: step.Label, DefID: step.DefID,
 				Reason: "has no preview mode, so a preview cannot run it without writing; a live run starts it",
 			})
-			_ = reporter.UpdateProgress(i+1, total, fmt.Sprintf("Preview: %s would run %s (skipped)", step.Label, step.DefID))
+			env.Progress(i+1, total, fmt.Sprintf("Preview: %s would run %s (skipped)", step.Label, step.DefID))
 			continue
 		}
-		res, err := p.rescorePreview(ctx)
+		res, err := rescore(ctx)
 		if err != nil {
-			return fmt.Errorf("%s: %w", step.Label, err)
+			return RunAllResult{}, fmt.Errorf("%s: %w", step.Label, err)
 		}
 		result.RescorePreview = &res
 		result.Steps = append(result.Steps, RunAllStepRecord{ID: step.ID, Label: step.Label})
-		_ = reporter.UpdateProgress(i+1, total, fmt.Sprintf("Preview: %s done", step.Label))
+		env.Progress(i+1, total, fmt.Sprintf("Preview: %s done", step.Label))
 	}
-	if err := opsregistry.ReporterSetResult(reporter, result); err != nil {
-		reporter.Logger().Warn("dedup.run-all: could not store preview result", "error", err)
+	if env.SetResult != nil {
+		if err := env.SetResult(result); err != nil {
+			env.Logger.Warn("dedup.run-all: could not store preview result", "error", err)
+		}
 	}
 	msg := fmt.Sprintf("Preview finished: %d step(s) would start child operations; nothing was changed", len(result.PreviewSkipped))
 	if result.RescorePreview != nil {
 		msg += fmt.Sprintf("; %d of %d waiting pairs would score differently", result.RescorePreview.Changed, result.RescorePreview.Inspected)
 	}
-	_ = reporter.UpdateProgress(total, total, msg)
-	_ = reporter.Log(slog.LevelInfo, msg)
-	return nil
+	env.Progress(total, total, msg)
+	env.Log(slog.LevelInfo, msg)
+	return result, nil
 }
 
 // validateRunAllPlan rejects a plan this build cannot run: an unknown or

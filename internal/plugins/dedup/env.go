@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/env.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 64bede01-c260-409b-9b20-f7e73920ae55
 // last-edited: 2026-11-18
 
@@ -35,6 +35,9 @@ type kindEnv struct {
 	Logger *slog.Logger
 	// Progress reports current out of total (total <= 0 is unknown) with a note.
 	Progress func(current, total int, msg string)
+	// Log writes one line to the run's log: HEAD's Reporter.Log (the operation's
+	// own log, which the Operations page shows), or the run's logger natively.
+	Log func(level slog.Level, msg string)
 	// Canceled reports whether the run was canceled (HEAD: Reporter.IsCanceled).
 	Canceled func() bool
 	// OpID is the id of the run: HEAD's operation id ("" when the reporter cannot
@@ -156,6 +159,7 @@ func headEnv(rep opsregistry.Reporter, live bool) kindEnv {
 		Progress: func(current, total int, msg string) {
 			_ = rep.UpdateProgress(current, total, msg)
 		},
+		Log:       func(level slog.Level, msg string) { _ = rep.Log(level, msg) },
 		Canceled:  rep.IsCanceled,
 		Logger:    rep.Logger(),
 		OpID:      opsregistry.ReporterOpID(rep),
@@ -178,6 +182,9 @@ func nativeEnv(rc *tasks.RC) kindEnv {
 			if msg != "" {
 				rc.Progress().Note(msg)
 			}
+		},
+		Log: func(level slog.Level, msg string) {
+			rc.Log().Log(rc.Context(), level, msg)
 		},
 		Canceled:   rc.Canceled,
 		Logger:     rc.Log(),
