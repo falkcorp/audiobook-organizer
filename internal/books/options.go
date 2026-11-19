@@ -1,7 +1,7 @@
 // file: internal/books/options.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package books
 
@@ -304,9 +304,13 @@ func StateFiles(stateDir, dbPath string) []storage.StateFile {
 	}
 	return []storage.StateFile{
 		{Label: "encryption_key", Path: database.EncryptionKeyPath(keyDir)},
-		{Label: "gap_fill", Path: filepath.Join(filepath.Dir(dbPath), "config.yaml")},
+		{Label: "gap_fill", Path: gapFillPath(dbPath)},
 	}
 }
+
+// gapFillPath is HEAD's config.yaml beside the database (config.ConfigFilePath):
+// the file the checkpoint copies and M2 imports the gap-fill values of.
+func gapFillPath(dbPath string) string { return filepath.Join(filepath.Dir(dbPath), "config.yaml") }
 
 // r1Values maps serve's flags and the effective config onto R1Values (05-config
 // §1.12.1): HEAD's --host/--port and TLS flags, ALLOWED_PEER_CIDRS,

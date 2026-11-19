@@ -1,5 +1,5 @@
 // file: internal/books/module.go
-// version: 1.3.9
+// version: 1.4.0
 // guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
 // last-edited: 2026-11-19
 
@@ -122,6 +122,12 @@ func Module() module.Module {
 // booksModule is books' module.Module.
 type booksModule struct {
 	abs bool
+	// flip is the one switch that makes books declare F3's cutover (cutover.go):
+	// the level step on its storage spec, M2 in Manifest.Cutover and M8 in
+	// Manifest.Rewrite. Module() leaves it off, so the shipped manifest is the
+	// pre-flip one; slice (e) of F3-07 turns it on together with the config
+	// boot gate (app.Options.CoreConfigBoot) the steps need. Tests set it.
+	flip bool
 
 	// steps is serve's startup runner and stateDir the secure state
 	// directory, both set by Options before app.New, whose Register reads
@@ -177,7 +183,7 @@ func (m *booksModule) Manifest() module.Manifest {
 		// (05-storage §5S.3.4, §5S.9.3; internal/books/store booksspec.go).
 		// The first step discards the HNSW clean-stop marker and marks this
 		// boot migrated (beforeMigration).
-		Storage: database.BooksSpec(m.beforeMigration),
+		Storage: m.storageSpec(),
 		// HEAD's factory-reset file effects (the Open Library dumps and,
 		// only on request, the library folder's contents), run at the boot
 		// that applies a ResetFactory swap (reset_hook.go).
@@ -186,6 +192,9 @@ func (m *booksModule) Manifest() module.Manifest {
 		// when the config boot is on (F3-07 b); a boot without it never
 		// reads them.
 		Settings: booksSettings(),
+		// F3's cutover, when the flip switch is on (cutover.go).
+		Cutover: m.cutoverSteps(),
+		Rewrite: m.rewriteStep(),
 		// No native route yet, so no public one (the gin mount's public
 		// routes are the legacy manifest's Public rows).
 	}

@@ -1,7 +1,7 @@
 // file: core/app/fastexit.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: b77f70ae-262e-4c32-83d0-514fc4d5b9be
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package app
 
@@ -71,6 +71,9 @@ func printStorageLevels(stdout io.Writer, mods []module.Module) error {
 			owners = append(owners, storage.OwnerSpec{Owner: storage.Owner(man.ID), Spec: man.Storage})
 		}
 	}
+	// Core's own owners (kernel.CoreOwners): core's level rises with a flip, and
+	// the vector rollback's guard compares must carry it.
+	owners = append(owners, kernel.CoreOwners(mods...)...)
 	line, err := json.Marshal(storage.Supported(owners))
 	if err != nil {
 		return fmt.Errorf("app: %s: %w", printStorageLevelsFlag, err)
