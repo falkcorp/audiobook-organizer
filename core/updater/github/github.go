@@ -1,5 +1,5 @@
 // file: core/updater/github/github.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: b27e4d90-5a13-4c68-8f0e-93d1c7a6e254
 // last-edited: 2026-11-18
 
@@ -32,6 +32,7 @@ const maxAPIBody = 8 << 20
 type config struct {
 	baseURL     string
 	tokenSecret string
+	allowHTTP   bool
 }
 
 // Option configures New.
@@ -39,6 +40,13 @@ type Option func(*config)
 
 // BaseURL points the source at a GitHub Enterprise or API-compatible forge.
 func BaseURL(u string) Option { return func(c *config) { c.baseURL = strings.TrimRight(u, "/") } }
+
+// AllowInsecureHTTP lets the source use http URLs: a base URL, an asset URL and
+// a redirect target. Without it only https is spoken, which is the one
+// integrity check a downloaded binary has in this build (no checksum or
+// signature). It exists for tests against a local server; no configuration
+// reaches it.
+func AllowInsecureHTTP() Option { return func(c *config) { c.allowHTTP = true } }
 
 // TokenSecret names a core/secrets entry whose value is sent as a bearer token
 // to the API host (never to another host, and never as a value in config).
@@ -73,11 +81,16 @@ func New(owner, repo string, opts ...Option) updater.Source {
 		s.cfgErr = errors.New("github source: owner and repository must be non-empty names of letters, digits, '.', '_' and '-'")
 	default:
 		u, err := url.Parse(c.baseURL)
-		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-			s.cfgErr = errors.New("github source: BaseURL must be an absolute http(s) URL")
+		if err != nil || !c.schemeOK(u.Scheme) || u.Host == "" {
+			s.cfgErr = errors.New("github source: BaseURL must be an absolute https URL")
 		}
 	}
 	return s
+}
+
+// schemeOK reports whether the source may speak scheme.
+func (c config) schemeOK(scheme string) bool {
+	return scheme == "https" || (c.allowHTTP && scheme == "http")
 }
 
 func slugPart() *regexp.Regexp { return regexp.MustCompile(`^[A-Za-z0-9._-]+$`) }
@@ -96,11 +109,30 @@ func (s *source) Bind(env updater.Env) updater.Source {
 	return &c
 }
 
+// httpClient is the client a request goes through: the bound one, else the
+// source's own, as a copy that refuses a redirect to a scheme the source may
+// not speak (an https to http downgrade) before the client's own redirect
+// policy, or net/http's ten hops, is applied.
 func (s *source) httpClient() *http.Client {
+	c := s.client
 	if s.env.HTTP != nil {
-		return s.env.HTTP
+		c = s.env.HTTP
 	}
-	return s.client
+	guarded := *c
+	own := c.CheckRedirect
+	guarded.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if !s.cfg.schemeOK(req.URL.Scheme) {
+			return fmt.Errorf("refusing a redirect to %s://%s: only https is followed", req.URL.Scheme, req.URL.Host)
+		}
+		if own != nil {
+			return own(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+	return &guarded
 }
 
 // defaultClient is the client of a source nothing bound: no overall Timeout (a
@@ -266,8 +298,8 @@ func (s *source) Open(ctx context.Context, a updater.Asset) (io.ReadCloser, int6
 	if s.cfgErr != nil {
 		return nil, -1, s.cfgErr
 	}
-	if u, err := url.Parse(a.URL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-		return nil, -1, errors.New("the asset URL is not an absolute http(s) URL")
+	if u, err := url.Parse(a.URL); err != nil || !s.cfg.schemeOK(u.Scheme) || u.Host == "" {
+		return nil, -1, errors.New("the asset URL is not an absolute https URL")
 	}
 	req, err := s.request(ctx, a.URL, "application/octet-stream")
 	if err != nil {

@@ -1,5 +1,5 @@
 // file: core/updater/apply.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0e5b7d94-2a16-4c83-9f0d-b8a43c61e7d5
 // last-edited: 2026-11-18
 
@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -54,16 +55,61 @@ func (u *Updater) assetFor(rel Release) (Asset, error) {
 	return Asset{}, fmt.Errorf("%w (looking for %s)", ErrNoAsset, u.opts.AssetName(rel, goos(), goarch()))
 }
 
+// Bounds on one download. DownloadIdleTimeout is how long the transfer may
+// make no progress (from the request, then between reads) before it is
+// abandoned; DownloadMaxDuration bounds the whole transfer, sized so the
+// 512 MiB cap can still arrive over a slow link. HEAD's 30 s whole-request
+// client timeout is not what bounds a download here: the gin adapter binds
+// that client itself, and everything else is bounded by these two.
+const (
+	DownloadIdleTimeout = 30 * time.Second
+	DownloadMaxDuration = 15 * time.Minute
+)
+
+// errStalled is the cause a download is cancelled with when no byte arrived
+// within the idle timeout.
+var errStalled = errors.New("no data received within the idle timeout")
+
+// idleReader resets timer on every read that returns data, so a body that
+// keeps arriving is never cut off and one that stalls is cancelled.
+type idleReader struct {
+	r     io.Reader
+	timer *time.Timer
+	idle  time.Duration
+}
+
+func (i *idleReader) Read(p []byte) (int, error) {
+	n, err := i.r.Read(p)
+	if n > 0 {
+		i.timer.Reset(i.idle)
+	}
+	return n, err
+}
+
 // download streams asset into path (mode 0755) capped at limit bytes and
 // returns the bytes written. An oversize or short transfer, or any failure,
-// deletes path (HEAD also deleted `.new` on a failed write).
+// deletes path (HEAD also deleted `.new` on a failed write). The transfer runs
+// under DownloadMaxDuration and DownloadIdleTimeout: a source's Open and body
+// reads must honour the context they are given, as net/http's do.
 func (u *Updater) download(ctx context.Context, a Asset, path string, limit int64) (int64, error) {
 	if a.Size > limit {
 		return 0, fmt.Errorf("%w: the asset is %d bytes, the cap is %d", ErrOversize, a.Size, limit)
 	}
+	ctx, cancelTotal := context.WithTimeout(ctx, u.maxDuration)
+	defer cancelTotal()
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	idle := time.AfterFunc(u.idleTimeout, func() { cancel(errStalled) })
+	defer idle.Stop()
+	fail := func(err error) error {
+		if errors.Is(context.Cause(ctx), errStalled) {
+			err = fmt.Errorf("%w (%w after %s)", err, errStalled, u.idleTimeout)
+		}
+		return fmt.Errorf("%w: %w", ErrDownloadFailed, err)
+	}
 	rc, size, err := u.source.Open(ctx, a)
 	if err != nil {
-		return 0, fmt.Errorf("%w: %w", ErrDownloadFailed, err)
+		return 0, fail(err)
 	}
 	defer func() { _ = rc.Close() }()
 	if size > limit {
@@ -71,9 +117,10 @@ func (u *Updater) download(ctx context.Context, a Asset, path string, limit int6
 	}
 	// One byte past the cap is read so a body that runs over is told apart from
 	// one that ends exactly at it.
-	n, err := writeExecutable(path, io.LimitReader(rc, limit+1))
+	body := &idleReader{r: io.LimitReader(rc, limit+1), timer: idle, idle: u.idleTimeout}
+	n, err := writeExecutable(path, body)
 	if err != nil {
-		return n, fmt.Errorf("%w: %w", ErrDownloadFailed, err)
+		return n, fail(err)
 	}
 	switch {
 	case n > limit:
