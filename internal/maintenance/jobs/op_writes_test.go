@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/op_writes_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8e3b5f21-6d94-4c07-b1a8-2f7c9e0d4a53
 // last-edited: 2026-11-18
 
@@ -25,6 +25,14 @@ var readOnlyJobReasons = map[string]string{
 	"scan-duplicate-files":    "reports duplicate file groups as its result and writes no row",
 	"scan-duration-mismatch":  "reports books whose stored duration disagrees with their files and writes no row",
 	"scan-metadata-hash-dups": "reports books sharing a metadata hash and writes no row",
+}
+
+// opWritesFitOperationDef is a compile-time proof that OpWrites returns exactly
+// the type OperationDef.Writes holds, so wiring it into registerMaintenanceJobOp
+// is a one-field change with no conversion.
+var _ = func() opsregistry.OperationDef {
+	writes, _ := OpWrites("cleanup-series")
+	return opsregistry.OperationDef{Writes: writes}
 }
 
 // TestOpWrites_EveryRegisteredJobDeclaresWritesOrIsReadOnly: no registered

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe_lock_columns_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d4a82f16-7b39-4e05-9c61-3f0e8b2a5d79
 // last-edited: 2026-11-18
 
@@ -49,7 +49,7 @@ func TestIntroTranscribeWritersChangeNoUserLockableColumn(t *testing.T) {
 			Title:              "Batman: Year One",
 			Narrator:           new("Selina Kyle"),
 			Description:        new("A rookie captain arrives in Gotham."),
-			IntroTranscription: new("Batman Year One Written by Frank Miller Performed by Alfred Pennyworth"),
+			IntroTranscription: new("Batman Year One Written by Lucius Fox Performed by Alfred Pennyworth"),
 		}
 	}
 
@@ -77,8 +77,8 @@ func TestIntroTranscribeWritersChangeNoUserLockableColumn(t *testing.T) {
 		before.IntroTranscription = nil
 		store := newReparseStore(before)
 		p := &Plugin{}
-		fields := transcribe.IntroFields{Title: "Batman: Year One", Author: "Frank Miller", Narrator: "Alfred Pennyworth"}
-		if !p.writeOutcome(store, slog.Default(), before, statusOK, "", "Batman Year One Written by Frank Miller", fields, time.Now(), false) {
+		fields := transcribe.IntroFields{Title: "Batman: Year One", Author: "Lucius Fox", Narrator: "Alfred Pennyworth"}
+		if !p.writeOutcome(store, slog.Default(), before, statusOK, "", "Batman Year One Written by Lucius Fox", fields, time.Now(), false) {
 			t.Fatal("the outcome was not written")
 		}
 		after := store.books[before.ID]
