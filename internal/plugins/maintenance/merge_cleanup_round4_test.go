@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_round4_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5c0d9e3a-6f21-4b7d-9a84-2e1f7b3c8d56
 // last-edited: 2026-11-19
 
@@ -112,6 +112,45 @@ func TestMergeCleanupDeadEndHolderThatIsTheGroupsPrimaryBesideASiblingRepoints(t
 	for _, h := range r.Holds {
 		require.NotEqual(t, mcSkipRepointGroupNoPrimary, h.Kind, "the group has a usable primary")
 	}
+}
+
+// The group's primary is itself a merged book: it is accounted for by where its
+// own chain ends, so a live end means the group has a usable primary and its
+// live sibling is that end's neighbour, not a book the walk missed.
+func TestMergeCleanupDeadEndPrimaryThatIsMergedIntoALiveBookAccountsForTheGroup(t *testing.T) {
+	x := newMCFixture(t)
+	x.mk("z", mcHushSpec(30000))
+	x.mk("dead", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000), group: "g", primary: mcFalse(), trashed: true})
+	// The primary's survivor is in the trash and points on, so the primary can
+	// still be elected, and its chain ends at the live book z.
+	x.mk("mid", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+	x.point("mid", "z")
+	x.mk("heir", mcHush("g", mcTrue()))
+	x.pointRaw("heir", "mid")
+	x.mk("sibling", mcHush("g", mcFalse()))
+	x.mk("loser", mcHushSpec(30000))
+	x.point("loser", "dead")
+	r := x.plan()["loser"]
+	require.Equal(t, mcKindRepoint, r.Class, r.SkipReason)
+	require.Equal(t, x.ids["z"], r.Proposed["merged_into_book_id"], "the primary's own live end is the one candidate: %s", r.SkipReason)
+	for _, h := range r.Holds {
+		require.NotEqual(t, mcSkipRepointGroupNoPrimary, h.Kind)
+	}
+}
+
+// A primary that leads nowhere live does not account for the group: its live
+// sibling is still a place the loser may belong.
+func TestMergeCleanupDeadEndPrimaryThatLeadsNowhereLeavesItsSiblingUnaccountedFor(t *testing.T) {
+	x := newMCFixture(t)
+	x.mk("dead", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000), group: "g", primary: mcFalse(), trashed: true})
+	x.mk("dead2", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+	x.mk("heir", mcHush("g", mcTrue()))
+	x.pointRaw("heir", "dead2")
+	x.mk("sibling", mcHush("g", mcFalse()))
+	x.mk("loser", mcHushSpec(30000))
+	x.point("loser", "dead")
+	r := wantRow(t, x.plan(), "loser", mcKindRepoint, mcSkipRepointGroupNoPrimary)
+	require.Contains(t, r.SkipReason, x.ids["sibling"])
 }
 
 // ---- R3-n2: both routes treat a live member the same ----
