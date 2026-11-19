@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/writes_oracle_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 40eadd67-76ac-419f-a3fe-7d1ed5e586e2
-// last-edited: 2026-11-16
+// last-edited: 2026-11-18
 
 package jobs_test
 
@@ -58,6 +58,18 @@ var oracleFileWriters = map[string]bool{
 	"Remove": true, "RemoveAll": true, "Rename": true, "WriteFile": true, "Chmod": true,
 	"Chown": true, "Chtimes": true, "Mkdir": true, "MkdirAll": true, "Create": true,
 	"OpenFile": true, "Truncate": true, "Symlink": true, "Link": true,
+}
+
+// oracleOutsideFileWriters are functions outside the module that create or
+// write a file, keyed by package path. The walk never follows a call out of the
+// module, so a job that writes its report through core's confined openers
+// (library.OpenReportFile and its siblings, which use openat under the
+// .reports root rather than os.OpenFile) would otherwise read as writing no
+// files on disk.
+var oracleOutsideFileWriters = map[string]map[string]bool{
+	"github.com/falkcorp/mediacore/library": {
+		"OpenReportFile": true, "WriteReportFile": true, "PreflightReportFile": true,
+	},
 }
 
 // oracleResource names the resource kind an interface write touches, from the
@@ -199,6 +211,9 @@ func derivedWrites(prog *ssa.Program, runFn *ssa.Function) (kinds []string, evid
 				}
 				if callee.Pkg != nil && callee.Pkg.Pkg.Path() == "os" && oracleFileWriters[callee.Name()] {
 					note("files", "os."+callee.Name()+" in "+f.String())
+				}
+				if callee.Pkg != nil && oracleOutsideFileWriters[callee.Pkg.Pkg.Path()][callee.Name()] {
+					note("files", callee.Pkg.Pkg.Path()+"."+callee.Name()+" in "+f.String())
 				}
 				if callee.Pkg != nil && strings.Contains(callee.Pkg.Pkg.Path(), "/internal/books/store") {
 					key := "STOREFN." + callee.Name()
