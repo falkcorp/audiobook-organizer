@@ -7,6 +7,7 @@ package jobs_test
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"slices"
 	"sort"
@@ -338,13 +339,43 @@ func TestJobWrites_BadTraceIsAnErrorNotAPanic(t *testing.T) {
 	}
 
 	boom := errors.New("trace names a method without a row")
-	defer jobs.FailJobWritesWith(boom)()
-	defs, kerr := jobs.Kinds(jobs.KindDeps{}, nil)
+	defs, kerr := jobs.KindsWithFailingWrites(boom)
 	if !errors.Is(kerr, boom) {
 		t.Fatalf("Kinds error = %v, want it to wrap %v", kerr, boom)
 	}
 	if defs != nil {
 		t.Errorf("Kinds returned %d definitions beside an error; a list that lacks one job's writes registers it as declaring none", len(defs))
+	}
+}
+
+// TestJobWrites_FailingDerivationIsNotSharedAcrossParallelTests: a test that makes
+// the derivation fail does not change what a test building the kinds beside it
+// sees. FailJobWritesWith swapped the package variable Kinds reads, so under
+// t.Parallel a parallel Kinds call could return the failing test's error (and the
+// swap and the read were a data race). Run with -race; the subtests interleave
+// failing and real builds on purpose.
+func TestJobWrites_FailingDerivationIsNotSharedAcrossParallelTests(t *testing.T) {
+	boom := errors.New("trace names a method without a row")
+	for i := 0; i < 4; i++ {
+		t.Run(fmt.Sprintf("failing-%d", i), func(t *testing.T) {
+			t.Parallel()
+			for n := 0; n < 25; n++ {
+				if _, err := jobs.KindsWithFailingWrites(boom); !errors.Is(err, boom) {
+					t.Errorf("KindsWithFailingWrites error = %v, want it to wrap %v", err, boom)
+					return
+				}
+			}
+		})
+		t.Run(fmt.Sprintf("real-%d", i), func(t *testing.T) {
+			t.Parallel()
+			for n := 0; n < 25; n++ {
+				defs, err := jobs.Kinds(jobs.KindDeps{}, nil)
+				if err != nil || len(defs) == 0 {
+					t.Errorf("Kinds beside a failing derivation = %d definitions, %v; want the real kinds", len(defs), err)
+					return
+				}
+			}
+		})
 	}
 }
 
