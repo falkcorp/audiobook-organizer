@@ -37,8 +37,8 @@ import (
 //     closed until Bind opened it. The state directory's keyring, its install
 //     ID and its export record are neither read nor written (05-config §2.4).
 //   - With the gate off the live boot has no config or secret store, so none
-//     is built and the importers stay unbound; the sealer, with no store to
-//     read, fails closed on a sensitive row as the live boot's nil one does.
+//     is built and the importers stay unbound; Sealer stays nil, as the live
+//     boot's quarantine writer is.
 //   - Either way Bind binds the importers' Legacy ranges and AllowKeyRegen
 //     (migrateStorage's two bind calls). AllowKeyRegen is
 //     core.secrets.allow_key_regen as the operator layers resolve it, false
@@ -64,7 +64,12 @@ func WireDryRun(ctx context.Context, c Config, opt DryRunOptions) (DryRunOptions
 		migs = append(migs, manifestMigrations(e.man, w.imp.values())...)
 	}
 	opt.Migrations, opt.Rewrite = migs, k.rewriteStep()
-	opt.Sealer, opt.Bind, opt.Release = w.sealer, w.bind(ctx), w.release
+	opt.Sealer, opt.Bind, opt.Release = nil, w.bind(ctx), w.release
+	if c.CoreConfigBoot {
+		// The live boot seals into the secret store only under the gate
+		// (storageOptions); gate off it has no quarantine writer.
+		opt.Sealer = w.sealer
+	}
 	return opt, nil
 }
 

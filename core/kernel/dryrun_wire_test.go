@@ -469,3 +469,33 @@ func TestWireDryRun_ImporterDeletesEntrySecretsThroughTheStager(t *testing.T) {
 		t.Errorf("the step did not run to the end: %+v", st)
 	}
 }
+
+// With the gate off the live boot has no quarantine writer, so a step that
+// quarantines a row fails; the dry run must not seal into a store of its own
+// that the live boot would not have. The failure names the missing writer, not
+// a closed secret store.
+func TestWireDryRun_GateOffHasNoQuarantineSealer(t *testing.T) {
+	h, _ := dryRunHost(t, map[string]string{wireProbeKey: wireProbeRow})
+	m := gcpdMod(storage.ClaimRetired).with(func(m *module.Manifest) {
+		m.Cutover = func(module.Importers) []datamigrate.DataMigration {
+			return []datamigrate.DataMigration{{
+				ID: "gcpd.vault", Owner: "gcpd", Description: "quarantine a sensitive row",
+				Source:      []storage.Range{{Start: []byte("case:"), End: []byte("case;")}},
+				Parallelism: tasks.Fixed(1, "test: one shard"), Mode: datamigrate.BootBlocking,
+				Compat: storage.Breaking, Cutover: true, Sensitive: []string{"case:"},
+				Step: func(_ context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
+					return w.Quarantine(kv.Key, kv.Value, "a credential the importer does not carry")
+				},
+			}}
+		}
+	})
+	c := testConfig(t, m)
+	c.StoragePath, c.StateDir = h.db, h.state
+	rep, _, err := wireRun(t, h, c, DryRunOptions{})
+	if err == nil {
+		t.Fatalf("a gate-off dry run sealed a sensitive row: %+v", rep)
+	}
+	if !strings.Contains(err.Error(), "no sealer wired") {
+		t.Errorf("the gate-off dry run's failure = %v, want the live boot's: no sealer wired", err)
+	}
+}
