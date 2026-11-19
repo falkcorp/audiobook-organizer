@@ -1,7 +1,7 @@
 // file: internal/authormerge/authormerge_locks_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f0d3b7e-2c91-4a58-b3e6-91d84a07c5f2
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package authormerge
 
@@ -235,5 +235,31 @@ func TestMoveCredits_LocksAMoveThatChangesNothingWritesNothing(t *testing.T) {
 	}
 	if f.calls != 0 || reader.reads != 0 {
 		t.Fatalf("calls %d reads %d: there was nothing to write or to hold", f.calls, reader.reads)
+	}
+}
+
+// A guarded move whose primary moved off FromID AND whose book is then locked is
+// held like any other: the credits-alone branch is inside the same guarded
+// commit, so a lock saved before it holds the credits too. An unguarded
+// fallback write for this case would move the credits of a locked book.
+func TestMoveCredits_LocksAPrimaryThatMovedMeanwhileStillHonoursALateLock(t *testing.T) {
+	f, _, m := lockedWorld()
+	nine := 9
+	f.books["b"].AuthorID = &nine
+	m.After = []database.BookAuthor{credit("b", 5, 0)}
+	reader := &lockReader{}
+	m.Locks = reader
+	f.beforeCallback = func() { reader.locked = true }
+	if _, err := MoveCredits(f, "op", m); !errors.Is(err, ErrBookLocked) {
+		t.Fatalf("err = %v, want ErrBookLocked", err)
+	}
+	if !undo.SameJunction(f.junction["b"], m.Before) {
+		t.Fatalf("the locked book's credits moved: %+v", f.junction["b"])
+	}
+	if *f.books["b"].AuthorID != 9 {
+		t.Fatalf("primary = %d", *f.books["b"].AuthorID)
+	}
+	if !f.only(t).Voided {
+		t.Fatal("the row of a held move must be voided")
 	}
 }
