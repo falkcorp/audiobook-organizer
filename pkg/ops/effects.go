@@ -1,5 +1,5 @@
 // file: pkg/ops/effects.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 56bbb3ad-7cb3-4962-a476-26ea63bdc9ba
 // last-edited: 2026-11-19
 
@@ -94,6 +94,13 @@ const (
 	// collections.refresh-relative-dynamic rebuilds. HEAD's def named it as a
 	// literal; F5-13 gives it a constant.
 	ResCollections Resource = "collections"
+	// ResSplitBookCandidates is the split-book candidate store
+	// (split_book_candidate:<id> rows, internal/dedup/split_book_storage.go): the
+	// clusters of one-book-per-chapter books the split-book scan saves and the
+	// bulk merge deletes once a cluster is merged. They share the main Pebble
+	// keyspace with the embedding rows but are not ResEmbeddings (dedup pair
+	// candidates and labels).
+	ResSplitBookCandidates Resource = "split_book_candidates"
 )
 
 // deletePrefix marks a Resource built by Deletes.
