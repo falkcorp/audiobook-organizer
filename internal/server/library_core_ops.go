@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -27,7 +28,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/transcode"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	logging "github.com/falkcorp/mediacore/log"
+	"github.com/falkcorp/mediacore/tasks"
 	ulid "github.com/oklog/ulid/v2"
 )
 
@@ -50,8 +53,26 @@ type libraryTranscodeParams struct {
 
 // RegisterLibraryScanOp registers the "library.scan" v2 OperationDef.
 func (s *Server) RegisterLibraryScanOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "library.scan",
+	return reg.RegisterOp(s.libraryScanDef())
+}
+
+// Op ids of the library core definitions.
+const (
+	libraryScanOpID      = "library.scan"
+	libraryImportOpID    = "library.import"
+	libraryOrganizeOpID  = "library.organize"
+	libraryTranscodeOpID = "library.transcode"
+)
+
+// libraryScanFullKind is the one native kind with no HEAD definition: the full
+// sweep HEAD's library_scan_full task enqueues as library.scan with force_update
+// and include_root_dir set (internal/scheduler/full_sweep.go).
+const libraryScanFullKind = tasks.Kind("books.library.scan-full")
+
+// libraryScanDef is HEAD's definition of library.scan. Its Run is the v2 shell.
+func (s *Server) libraryScanDef() opsregistry.OperationDef {
+	return opsregistry.OperationDef{
+		ID:              libraryScanOpID,
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "library",
 		DisplayName:     "Library Scan",
@@ -119,100 +140,230 @@ func (s *Server) RegisterLibraryScanOp(reg *opsregistry.Registry) error {
 					return fmt.Errorf("library.scan: decode params: %w", err)
 				}
 			}
+			_, err := libraryScanCore(ctx, p, libraryScanEnv{
+				t7Env:  t7HeadEnv(reporter, true),
+				Writer: headLibraryScan{s: s},
+			})
+			return err
+		},
+	}
+}
 
-			// Create operation context for structured logging
-			op := &opContext{
-				ID:     ulid.Make().String(),
-				Type:   "library.scan",
-				Status: "pending",
-			}
-			ctx = logging.WithAttrs(ctx, slog.Any("", op))
+// libraryScanWriter is the writes of library.scan and library.import: the scan
+// pipeline creates and updates books, files, authors and series, and runs the
+// post-scan organize hook. It is the server's scan service.
+type libraryScanWriter interface {
+	// PerformScan scans req's folders (or the library) and records what it finds.
+	PerformScan(ctx context.Context, req *scanner.ScanRequest, log logger.Logger) error
+}
 
-			folderPath := ""
-			if p.FolderPath != nil {
-				folderPath = *p.FolderPath
-			}
-			logger.InfoCtx(ctx, "library scan starting", "folder_path", folderPath)
+// libraryScanEnv is what the shared scan core takes from its shell (rules R2,
+// R10). Checkpoint is the scan's own resume save: HEAD's reporter or the run's.
+type libraryScanEnv struct {
+	t7Env
+	Writer libraryScanWriter
+}
 
-			if p.ResumeFolderIdx > 0 || p.ResumeItemOffset > 0 {
-				logger.InfoCtx(ctx, "library scan resuming from checkpoint",
-					"folder_idx", p.ResumeFolderIdx, "item_offset", p.ResumeItemOffset)
-			}
+// headLibraryScan is HEAD's scan side: the server's scan service, called as
+// HEAD's body called it.
+type headLibraryScan struct{ s *Server }
 
-			// SetResult REPLACES the result payload and two callbacks below write
-			// to it (file failures, organize outcomes), so both go through one
-			// merged map and neither erases the other.
-			var resultMu sync.Mutex
-			result := map[string]any{}
-			setResult := func(kv map[string]any) error {
-				resultMu.Lock()
-				defer resultMu.Unlock()
-				maps.Copy(result, kv)
-				return opsregistry.ReporterSetResult(reporter, maps.Clone(result))
-			}
+func (h headLibraryScan) PerformScan(ctx context.Context, req *scanner.ScanRequest, log logger.Logger) error {
+	return h.s.scanService.PerformScan(ctx, req, log)
+}
 
-			scanReq := &scanner.ScanRequest{
-				FolderPath:       p.FolderPath,
-				ForceUpdate:      p.ForceUpdate,
-				IncludeRootDir:   p.IncludeRootDir,
-				ResumeFolderIdx:  p.ResumeFolderIdx,
-				ResumeItemOffset: p.ResumeItemOffset,
-				Checkpoint: func(folderIdx, itemOffset int) {
-					// Errors are deliberately swallowed: a checkpoint is an
-					// optimisation for the NEXT run, and failing the scan
-					// because we could not record where it got to would trade a
-					// working scan for a lost one.
-					_ = reporter.Checkpoint(scanner.LibraryScanCheckpoint{
-						ResumeFolderIdx:  folderIdx,
-						ResumeItemOffset: itemOffset,
-					})
-				},
-				// SF-02: a fully-aborted inline AI-parse phase (revoked API key,
-				// exhausted quota, 3+ batch failures) used to leave library.scan
-				// reporting COMPLETED with nothing but a journalctl line as
-				// evidence. reporter.Log writes into this run's own op record
-				// (distinct from UpdateProgress, so it cannot clobber the
-				// progress bar's current/total -- see AIPhaseSummary.ReportTo),
-				// deliberately non-fatal: an LLM outage must not fail an
-				// otherwise-good scan chunk (scanner.ProcessBooksParallel keeps
-				// returning nil either way).
-				OnAIPhaseWarning: func(msg string) {
-					_ = reporter.Log(slog.LevelWarn, msg)
-				},
-				// Per-file failures are already in this op's log (a bounded
-				// sample plus a summary with the total). Persisting them as the
-				// result too makes a finished scan's failures machine-readable.
-				// Non-fatal for the same reason as OnAIPhaseWarning: a few
-				// unreadable files must not fail -- and so retry -- a scan.
-				OnFileFailures: func(total int, sample []scanner.FileFailure) {
-					if err := setResult(map[string]any{
-						"files_failed":        total,
-						"files_failed_sample": sample,
-					}); err != nil {
-						_ = reporter.Log(slog.LevelWarn, "library.scan: could not persist the file-failure result",
-							slog.String("error", err.Error()), slog.Int("files_failed", total))
-					}
-				},
-				// Post-scan auto-organize outcome counts (adopted, suffixed,
-				// fragment_collapse, ...). Organize runs as a hook inside this op,
-				// so without this they would exist only as log lines.
-				OnOrganizeTally: func(counts map[string]int) {
-					if err := setResult(map[string]any{"organize_outcomes": counts}); err != nil {
-						_ = reporter.Log(slog.LevelWarn, "library.scan: could not persist the organize outcome counts",
-							slog.String("error", err.Error()))
-					}
-				},
-			}
-			progress := registryProgressAdapter{r: reporter}
-			err := s.scanService.PerformScan(ctx, scanReq, operations.LoggerFromReporter(progress))
-			if err != nil {
-				op.SetStatus("failed")
-				logger.ErrorCtx(ctx, "library scan failed", "err", err)
-				return err
-			}
-			op.SetStatus("success")
-			logger.InfoCtx(ctx, "library scan complete")
+// libraryScanCore is the body of library.scan, shared by HEAD's shell and the
+// native kinds (books.library.scan and books.library.scan-full). It returns the
+// merged result map; a shell with SetResult also gets it persisted as the scan
+// goes, exactly as HEAD did.
+func libraryScanCore(ctx context.Context, p scanner.LibraryScanParams, env libraryScanEnv) (map[string]any, error) {
+	// Create operation context for structured logging
+	op := &opContext{
+		ID:     ulid.Make().String(),
+		Type:   "library.scan",
+		Status: "pending",
+	}
+	ctx = logging.WithAttrs(ctx, slog.Any("", op))
+
+	folderPath := ""
+	if p.FolderPath != nil {
+		folderPath = *p.FolderPath
+	}
+	logger.InfoCtx(ctx, "library scan starting", "folder_path", folderPath)
+
+	if p.ResumeFolderIdx > 0 || p.ResumeItemOffset > 0 {
+		logger.InfoCtx(ctx, "library scan resuming from checkpoint",
+			"folder_idx", p.ResumeFolderIdx, "item_offset", p.ResumeItemOffset)
+	}
+
+	// SetResult REPLACES the result payload and two callbacks below write
+	// to it (file failures, organize outcomes), so both go through one
+	// merged map and neither erases the other.
+	var resultMu sync.Mutex
+	result := map[string]any{}
+	setResult := func(kv map[string]any) error {
+		resultMu.Lock()
+		defer resultMu.Unlock()
+		maps.Copy(result, kv)
+		if env.SetResult == nil {
 			return nil
+		}
+		return env.SetResult(maps.Clone(result))
+	}
+
+	scanReq := &scanner.ScanRequest{
+		FolderPath:       p.FolderPath,
+		ForceUpdate:      p.ForceUpdate,
+		IncludeRootDir:   p.IncludeRootDir,
+		ResumeFolderIdx:  p.ResumeFolderIdx,
+		ResumeItemOffset: p.ResumeItemOffset,
+		Checkpoint: func(folderIdx, itemOffset int) {
+			// Errors are deliberately swallowed: a checkpoint is an
+			// optimisation for the NEXT run, and failing the scan
+			// because we could not record where it got to would trade a
+			// working scan for a lost one.
+			if env.Checkpoint != nil {
+				_ = env.Checkpoint(scanner.LibraryScanCheckpoint{
+					ResumeFolderIdx:  folderIdx,
+					ResumeItemOffset: itemOffset,
+				})
+			}
+		},
+		// SF-02: a fully-aborted inline AI-parse phase (revoked API key,
+		// exhausted quota, 3+ batch failures) used to leave library.scan
+		// reporting COMPLETED with nothing but a journalctl line as
+		// evidence. The run log writes into this run's own op record
+		// (distinct from UpdateProgress, so it cannot clobber the
+		// progress bar's current/total -- see AIPhaseSummary.ReportTo),
+		// deliberately non-fatal: an LLM outage must not fail an
+		// otherwise-good scan chunk (scanner.ProcessBooksParallel keeps
+		// returning nil either way).
+		OnAIPhaseWarning: func(msg string) {
+			env.Log(slog.LevelWarn, msg)
+		},
+		// Per-file failures are already in this op's log (a bounded
+		// sample plus a summary with the total). Persisting them as the
+		// result too makes a finished scan's failures machine-readable.
+		// Non-fatal for the same reason as OnAIPhaseWarning: a few
+		// unreadable files must not fail -- and so retry -- a scan.
+		OnFileFailures: func(total int, sample []scanner.FileFailure) {
+			if err := setResult(map[string]any{
+				"files_failed":        total,
+				"files_failed_sample": sample,
+			}); err != nil {
+				env.Log(slog.LevelWarn, "library.scan: could not persist the file-failure result",
+					slog.String("error", err.Error()), slog.Int("files_failed", total))
+			}
+		},
+		// Post-scan auto-organize outcome counts (adopted, suffixed,
+		// fragment_collapse, ...). Organize runs as a hook inside this op,
+		// so without this they would exist only as log lines.
+		OnOrganizeTally: func(counts map[string]int) {
+			if err := setResult(map[string]any{"organize_outcomes": counts}); err != nil {
+				env.Log(slog.LevelWarn, "library.scan: could not persist the organize outcome counts",
+					slog.String("error", err.Error()))
+			}
+		},
+	}
+	err := env.Writer.PerformScan(ctx, scanReq, operations.LoggerFromReporter(env.reporter()))
+	resultMu.Lock()
+	out := maps.Clone(result)
+	resultMu.Unlock()
+	if err != nil {
+		op.SetStatus("failed")
+		logger.ErrorCtx(ctx, "library scan failed", "err", err)
+		return out, err
+	}
+	op.SetStatus("success")
+	logger.InfoCtx(ctx, "library scan complete")
+	return out, nil
+}
+
+// libraryScanNativeParams are books.library.scan's params: HEAD's without the
+// resume offsets, which a checkpoint carries (rc.Restore), and without any mode.
+type libraryScanNativeParams struct {
+	FolderPath     *string `json:"folder_path,omitempty"`
+	ForceUpdate    *bool   `json:"force_update,omitempty"`
+	IncludeRootDir *bool   `json:"include_root_dir,omitempty"`
+}
+
+// libraryScanEffects is what a scan writes: the library rows it creates and
+// updates, the files its organize hook moves, its activity entries and the
+// dedup candidates it files.
+func libraryScanEffects() tasks.Effects {
+	return t7Writes(ops.ResBooks, ops.ResBookFiles, ops.ResAuthors, ops.ResSeries, ops.ResFiles, ops.ResActivity, t7ResDedupCandidates)
+}
+
+// libraryScanRun is the native shells' shared Run: restore the scan's
+// checkpoint into the params as HEAD's registry merged it, then run the shared
+// core. A scan has no preview (HEAD's def has none and writes), so Preview is
+// refused.
+func libraryScanRun(rc *tasks.RC, kind tasks.Kind, deps t7Deps, p scanner.LibraryScanParams) (map[string]any, error) {
+	if err := t7LiveOnly(rc, kind); err != nil {
+		return nil, err
+	}
+	if err := t7NeedStore(kind, deps); err != nil {
+		return nil, err
+	}
+	var ck scanner.LibraryScanCheckpoint
+	if ok, rerr := rc.Restore(&ck); rerr != nil {
+		return nil, fmt.Errorf("%s: restore checkpoint: %w", kind, rerr)
+	} else if ok {
+		p.ResumeFolderIdx, p.ResumeItemOffset = ck.ResumeFolderIdx, ck.ResumeItemOffset
+	}
+	w, err := t7NewWriter(kind, deps, rc)
+	if err != nil {
+		return nil, err
+	}
+	return libraryScanCore(rc.Context(), p, libraryScanEnv{t7Env: t7NativeEnv(rc), Writer: w})
+}
+
+// libraryScanNative is the native books.library.scan kind. It continues from the
+// scan's own checkpoint (one chunk of books or one folder), as HEAD's
+// ResumeRestart does.
+func (s *Server) libraryScanNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	kind := t7KindFor(libraryScanOpID)
+	c := t7Common(s.libraryScanDef(), sched)
+	c.Resume = t7Resume(opsregistry.ResumeRestart, true)
+	c.Effects = libraryScanEffects()
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, map[string]any]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (map[string]any, error) {
+			np, err := t7DecodeNative[libraryScanNativeParams](kind, raw)
+			if err != nil {
+				return nil, err
+			}
+			return libraryScanRun(rc, kind, deps, scanner.LibraryScanParams{
+				FolderPath:     np.FolderPath,
+				ForceUpdate:    np.ForceUpdate,
+				IncludeRootDir: np.IncludeRootDir,
+			})
+		},
+	})
+}
+
+// libraryScanFullNative is books.library.scan-full: the full sweep, over the same
+// shared core as books.library.scan with force_update and include_root_dir fixed
+// true (the params HEAD's library_scan_full task enqueues). It shares scan's
+// ConcurrencyKey and the scan stand-down key, so the two never run at once. It
+// takes no params.
+func (s *Server) libraryScanFullNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t7Common(s.libraryScanDef(), nil)
+	c.Title = "Full Library Scan"
+	c.Help = "Scan the whole library root and every import path, re-hashing every file: the periodic full sweep. Never runs beside a regular library scan."
+	c.Resume = t7Resume(opsregistry.ResumeRestart, true)
+	c.Effects = libraryScanEffects()
+	if sched != nil {
+		c.Schedule = sched(libraryScanFullKind)
+	}
+	return tasks.Task(libraryScanFullKind, tasks.TaskSpec[json.RawMessage, map[string]any]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (map[string]any, error) {
+			if _, err := t7DecodeNative[struct{}](libraryScanFullKind, raw); err != nil {
+				return nil, err
+			}
+			force, root := true, true
+			return libraryScanRun(rc, libraryScanFullKind, deps, scanner.LibraryScanParams{ForceUpdate: &force, IncludeRootDir: &root})
 		},
 	})
 }
@@ -239,8 +390,13 @@ type libraryImportParams struct {
 // single file), so a manual import goes through the exact same assembly + dedup +
 // create pipeline as a scan — including (once wired) the import circuit breaker.
 func (s *Server) RegisterLibraryImportOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "library.import",
+	return reg.RegisterOp(s.libraryImportDef())
+}
+
+// libraryImportDef is HEAD's definition of library.import. Its Run is the v2 shell.
+func (s *Server) libraryImportDef() opsregistry.OperationDef {
+	return opsregistry.OperationDef{
+		ID:              libraryImportOpID,
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "library",
 		DisplayName:     "Manual Import",
@@ -261,43 +417,109 @@ func (s *Server) RegisterLibraryImportOp(reg *opsregistry.Registry) error {
 					return fmt.Errorf("parse import params: %w", err)
 				}
 			}
-			if p.Path == "" {
-				return fmt.Errorf("path is required")
-			}
+			h := headLibraryScan{s: s}
+			return libraryImportCore(ctx, p, libraryImportEnv{
+				t7Env:  t7HeadEnv(reporter, true),
+				Store:  headLibraryImport{s: s},
+				Writer: h,
+			})
+		},
+	}
+}
 
-			// Security: the path is user-supplied. Validate + canonicalize it
-			// against the configured import paths before touching the filesystem.
-			cleanPath, err := fileops.ValidateUserPath(s.storeForWiring(), p.Path)
+// libraryImportStore is the reads of library.import: the configured import
+// paths the user-supplied path is validated against.
+type libraryImportStore interface {
+	// ValidateImportPath canonicalizes path and refuses one outside the
+	// configured import paths (the SEC-AUDIT path-injection guard).
+	ValidateImportPath(path string) (string, error)
+}
+
+// libraryImportEnv is what the shared import core takes from its shell.
+type libraryImportEnv struct {
+	t7Env
+	Store  libraryImportStore
+	Writer libraryScanWriter
+}
+
+// headLibraryImport is HEAD's import side: the store's import paths, read
+// through fileops exactly as HEAD's body read them.
+type headLibraryImport struct{ s *Server }
+
+func (h headLibraryImport) ValidateImportPath(path string) (string, error) {
+	return fileops.ValidateUserPath(h.s.storeForWiring(), path)
+}
+
+// libraryImportCore is the body of library.import, shared by HEAD's shell and
+// the native kind.
+func libraryImportCore(ctx context.Context, p libraryImportParams, env libraryImportEnv) error {
+	if p.Path == "" {
+		return fmt.Errorf("path is required")
+	}
+
+	// Security: the path is user-supplied. Validate + canonicalize it
+	// against the configured import paths before touching the filesystem.
+	cleanPath, err := env.Store.ValidateImportPath(p.Path)
+	if err != nil {
+		return fmt.Errorf("import path rejected: %w", err)
+	}
+
+	op := &opContext{
+		ID:     ulid.Make().String(),
+		Type:   "library.import",
+		Status: "pending",
+	}
+	ctx = logging.WithAttrs(ctx, slog.Any("", op))
+	logger.InfoCtx(ctx, "manual import starting", "path", cleanPath)
+
+	scanReq := &scanner.ScanRequest{FolderPath: &cleanPath}
+	if err := env.Writer.PerformScan(ctx, scanReq, operations.LoggerFromReporter(env.reporter())); err != nil {
+		op.SetStatus("failed")
+		logger.ErrorCtx(ctx, "manual import failed", "path", cleanPath, "err", err)
+		return err
+	}
+	op.SetStatus("success")
+	logger.InfoCtx(ctx, "manual import complete", "path", cleanPath)
+	return nil
+}
+
+// libraryImportNative is the native books.library.import kind. HEAD has no
+// preview and the import writes, so a Preview run is refused.
+func (s *Server) libraryImportNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	kind := t7KindFor(libraryImportOpID)
+	c := t7Common(s.libraryImportDef(), sched)
+	c.Effects = libraryScanEffects()
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			if err := t7LiveOnly(rc, kind); err != nil {
+				return struct{}{}, err
+			}
+			p, err := t7DecodeNative[libraryImportParams](kind, raw)
 			if err != nil {
-				return fmt.Errorf("import path rejected: %w", err)
+				return struct{}{}, err
 			}
-
-			op := &opContext{
-				ID:     ulid.Make().String(),
-				Type:   "library.import",
-				Status: "pending",
+			if err := t7NeedStore(kind, deps); err != nil {
+				return struct{}{}, err
 			}
-			ctx = logging.WithAttrs(ctx, slog.Any("", op))
-			logger.InfoCtx(ctx, "manual import starting", "path", cleanPath)
-
-			scanReq := &scanner.ScanRequest{FolderPath: &cleanPath}
-			progress := registryProgressAdapter{r: reporter}
-			if err := s.scanService.PerformScan(ctx, scanReq, operations.LoggerFromReporter(progress)); err != nil {
-				op.SetStatus("failed")
-				logger.ErrorCtx(ctx, "manual import failed", "path", cleanPath, "err", err)
-				return err
+			w, err := t7NewWriter(kind, deps, rc)
+			if err != nil {
+				return struct{}{}, err
 			}
-			op.SetStatus("success")
-			logger.InfoCtx(ctx, "manual import complete", "path", cleanPath)
-			return nil
+			return struct{}{}, libraryImportCore(rc.Context(), p, libraryImportEnv{t7Env: t7NativeEnv(rc), Store: deps.Store, Writer: w})
 		},
 	})
 }
 
 // RegisterLibraryOrganizeOp registers the "library.organize" v2 OperationDef.
 func (s *Server) RegisterLibraryOrganizeOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "library.organize",
+	return reg.RegisterOp(s.libraryOrganizeDef())
+}
+
+// libraryOrganizeDef is HEAD's definition of library.organize. Its Run is the v2 shell.
+func (s *Server) libraryOrganizeDef() opsregistry.OperationDef {
+	return opsregistry.OperationDef{
+		ID:              libraryOrganizeOpID,
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "library",
 		DisplayName:     "Organize Library",
@@ -317,64 +539,126 @@ func (s *Server) RegisterLibraryOrganizeOp(reg *opsregistry.Registry) error {
 					return fmt.Errorf("library.organize: decode params: %w", err)
 				}
 			}
-			opID := ulid.Make().String()
+			return libraryOrganizeCore(ctx, p, libraryOrganizeEnv{
+				t7Env:  t7HeadEnv(reporter, true),
+				Writer: headLibraryOrganize{s: s},
+			})
+		},
+	}
+}
 
-			// Create operation context for structured logging
-			op := &opContext{
-				ID:     opID,
-				Type:   "library.organize",
-				Status: "pending",
-			}
-			ctx = logging.WithAttrs(ctx, slog.Any("", op))
+// libraryOrganizeWriter is the writes of library.organize: it moves audiobook
+// files into the canonical layout and updates the rows that point at them. It is
+// the server's organize service.
+type libraryOrganizeWriter interface {
+	// PerformOrganize organizes req's books (or the library).
+	PerformOrganize(ctx context.Context, req *OrganizeRequest, log logger.Logger) error
+}
 
-			op.AddEntity("books", p.BookIDs...)
-			folderPath := ""
-			if p.FolderPath != nil {
-				folderPath = *p.FolderPath
-			}
-			logger.InfoCtx(ctx, "library organize starting",
-				"book_count", len(p.BookIDs),
-				"folder_path", folderPath,
-				"fetch_metadata_first", p.FetchMetadataFirst)
+// libraryOrganizeEnv is what the shared organize core takes from its shell.
+type libraryOrganizeEnv struct {
+	t7Env
+	Writer libraryOrganizeWriter
+}
 
-			progress := registryProgressAdapter{r: reporter}
-			organizeReq := &OrganizeRequest{
-				FolderPath:         p.FolderPath,
-				BookIDs:            p.BookIDs,
-				FetchMetadataFirst: p.FetchMetadataFirst,
-				OperationID:        opID,
-				// Per-book scan lock: a running scan never reads a book while
-				// this organize moves it (organizer.organizeBooksOpts).
-				LockBooksAgainstScan: true,
+// headLibraryOrganize is HEAD's organize side: the server's organize service.
+type headLibraryOrganize struct{ s *Server }
+
+func (h headLibraryOrganize) PerformOrganize(ctx context.Context, req *OrganizeRequest, log logger.Logger) error {
+	return h.s.organizeService.PerformOrganize(ctx, req, log)
+}
+
+// libraryOrganizeCore is the body of library.organize, shared by HEAD's shell
+// and the native kind.
+func libraryOrganizeCore(ctx context.Context, p libraryOrganizeParams, env libraryOrganizeEnv) error {
+	opID := ulid.Make().String()
+
+	// Create operation context for structured logging
+	op := &opContext{
+		ID:     opID,
+		Type:   "library.organize",
+		Status: "pending",
+	}
+	ctx = logging.WithAttrs(ctx, slog.Any("", op))
+
+	op.AddEntity("books", p.BookIDs...)
+	folderPath := ""
+	if p.FolderPath != nil {
+		folderPath = *p.FolderPath
+	}
+	logger.InfoCtx(ctx, "library organize starting",
+		"book_count", len(p.BookIDs),
+		"folder_path", folderPath,
+		"fetch_metadata_first", p.FetchMetadataFirst)
+
+	organizeReq := &OrganizeRequest{
+		FolderPath:         p.FolderPath,
+		BookIDs:            p.BookIDs,
+		FetchMetadataFirst: p.FetchMetadataFirst,
+		OperationID:        opID,
+		// Per-book scan lock: a running scan never reads a book while
+		// this organize moves it (organizer.organizeBooksOpts).
+		LockBooksAgainstScan: true,
+	}
+	err := env.Writer.PerformOrganize(ctx, organizeReq, operations.LoggerFromReporter(env.reporter()))
+	// A cancelled run is not a failed one. PerformOrganize returns an
+	// error for both now (it used to return nil unconditionally, so a
+	// total failure was recorded as success), and marking a deliberate
+	// cancel "failed" would just swap one misreport for another. The v2
+	// registry worker already distinguishes these — it checks ctxCanceled
+	// before runErr — so this only aligns the logged op status with it.
+	if errors.Is(err, organizer.ErrOrganizeCanceled) {
+		op.SetStatus("canceled")
+		logger.InfoCtx(ctx, "library organize canceled", "err", err)
+		return err
+	}
+	if err != nil {
+		op.SetStatus("failed")
+		logger.ErrorCtx(ctx, "library organize failed", "err", err)
+		return err
+	}
+	op.SetStatus("success")
+	logger.InfoCtx(ctx, "library organize complete", "book_count", len(p.BookIDs))
+	return nil
+}
+
+// libraryOrganizeNative is the native books.library.organize kind. HEAD has no
+// preview and the organize moves files, so a Preview run is refused.
+func (s *Server) libraryOrganizeNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	kind := t7KindFor(libraryOrganizeOpID)
+	c := t7Common(s.libraryOrganizeDef(), sched)
+	c.Effects = t7Writes(ops.ResBooks, ops.ResBookFiles, ops.ResAuthors, ops.ResSeries, ops.ResFiles, ops.ResMetadataCache, ops.ResActivity)
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			if err := t7LiveOnly(rc, kind); err != nil {
+				return struct{}{}, err
 			}
-			err := s.organizeService.PerformOrganize(ctx, organizeReq, operations.LoggerFromReporter(progress))
-			// A cancelled run is not a failed one. PerformOrganize returns an
-			// error for both now (it used to return nil unconditionally, so a
-			// total failure was recorded as success), and marking a deliberate
-			// cancel "failed" would just swap one misreport for another. The v2
-			// registry worker already distinguishes these — it checks ctxCanceled
-			// before runErr — so this only aligns the logged op status with it.
-			if errors.Is(err, organizer.ErrOrganizeCanceled) {
-				op.SetStatus("canceled")
-				logger.InfoCtx(ctx, "library organize canceled", "err", err)
-				return err
-			}
+			p, err := t7DecodeNative[libraryOrganizeParams](kind, raw)
 			if err != nil {
-				op.SetStatus("failed")
-				logger.ErrorCtx(ctx, "library organize failed", "err", err)
-				return err
+				return struct{}{}, err
 			}
-			op.SetStatus("success")
-			logger.InfoCtx(ctx, "library organize complete", "book_count", len(p.BookIDs))
-			return nil
+			if err := t7NeedStore(kind, deps); err != nil {
+				return struct{}{}, err
+			}
+			w, err := t7NewWriter(kind, deps, rc)
+			if err != nil {
+				return struct{}{}, err
+			}
+			return struct{}{}, libraryOrganizeCore(rc.Context(), p, libraryOrganizeEnv{t7Env: t7NativeEnv(rc), Writer: w})
 		},
 	})
 }
 
 // RegisterLibraryTranscodeOp registers the "library.transcode" v2 OperationDef.
 func (s *Server) RegisterLibraryTranscodeOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "library.transcode",
+	return reg.RegisterOp(s.libraryTranscodeDef())
+}
+
+// libraryTranscodeDef is HEAD's definition of library.transcode. Its Run is the v2 shell.
+func (s *Server) libraryTranscodeDef() opsregistry.OperationDef {
+	return opsregistry.OperationDef{
+		ID:              libraryTranscodeOpID,
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "library",
 		DisplayName:     "Transcode to M4B",
@@ -394,73 +678,150 @@ func (s *Server) RegisterLibraryTranscodeOp(reg *opsregistry.Registry) error {
 					return fmt.Errorf("transcode: decode params: %w", err)
 				}
 			}
-			if p.BookID == "" {
-				return fmt.Errorf("transcode: book_id is required")
+			h := headLibraryTranscode{s: s}
+			return libraryTranscodeCore(ctx, p, libraryTranscodeEnv{
+				t7Env:  t7HeadEnv(reporter, true),
+				Store:  h,
+				Writer: h,
+			})
+		},
+	}
+}
+
+// libraryTranscodeStore is the reads of library.transcode.
+type libraryTranscodeStore interface {
+	GetBookByID(id string) (*database.Book, error)
+}
+
+// libraryTranscodeWriter is the writes of library.transcode: the ffmpeg run
+// that writes the output file, and the rows that record it as a new version.
+type libraryTranscodeWriter interface {
+	// Transcode writes the M4B output and returns its path.
+	Transcode(ctx context.Context, opts transcode.TranscodeOpts, progress operations.ProgressReporter) (string, error)
+	// RecordVersion records the output as a new version of original and decides
+	// the group's primary (recordTranscodedVersion).
+	RecordVersion(ctx context.Context, original *database.Book, outputPath string, bitrate int, rootDir string, logf func(level, msg string)) (newBook *database.Book, inPlace bool, err error)
+}
+
+// libraryTranscodeEnv is what the shared transcode core takes from its shell.
+type libraryTranscodeEnv struct {
+	t7Env
+	Store  libraryTranscodeStore
+	Writer libraryTranscodeWriter
+}
+
+// headLibraryTranscode is HEAD's side of both interfaces: the server's store
+// (s.Ops()), called as HEAD's body called it.
+type headLibraryTranscode struct{ s *Server }
+
+func (h headLibraryTranscode) GetBookByID(id string) (*database.Book, error) {
+	return h.s.Ops().GetBookByID(id)
+}
+
+func (h headLibraryTranscode) Transcode(ctx context.Context, opts transcode.TranscodeOpts, progress operations.ProgressReporter) (string, error) {
+	return transcode.Transcode(ctx, opts, h.s.Ops(), progress)
+}
+
+func (h headLibraryTranscode) RecordVersion(ctx context.Context, original *database.Book, outputPath string, bitrate int, rootDir string, logf func(level, msg string)) (*database.Book, bool, error) {
+	return recordTranscodedVersion(ctx, h.s.Ops(), original, outputPath, bitrate, rootDir, logf)
+}
+
+// libraryTranscodeCore is the body of library.transcode, shared by HEAD's shell
+// and the native kind.
+func libraryTranscodeCore(ctx context.Context, p libraryTranscodeParams, env libraryTranscodeEnv) error {
+	if p.BookID == "" {
+		return fmt.Errorf("transcode: book_id is required")
+	}
+
+	// Create operation context for structured logging
+	op := &opContext{
+		ID:     ulid.Make().String(),
+		Type:   "library.transcode",
+		Status: "pending",
+	}
+	op.AddEntity("books", p.BookID)
+	ctx = logging.WithAttrs(ctx, slog.Any("", op))
+	logger.InfoCtx(ctx, "transcode starting",
+		"book_id", p.BookID,
+		"output_format", p.OutputFormat,
+		"bitrate", p.Bitrate,
+		"keep_original", p.KeepOriginal)
+
+	progress := env.reporter()
+
+	opts := transcode.TranscodeOpts{
+		BookID:       p.BookID,
+		OutputFormat: p.OutputFormat,
+		Bitrate:      p.Bitrate,
+		KeepOriginal: p.KeepOriginal,
+	}
+
+	outputPath, err := env.Writer.Transcode(ctx, opts, progress)
+	if err != nil {
+		op.SetStatus("failed")
+		logger.ErrorCtx(ctx, "transcode failed", "book_id", p.BookID, "err", err)
+		return err
+	}
+
+	originalBook, err := env.Store.GetBookByID(p.BookID)
+	if err != nil {
+		op.SetStatus("failed")
+		logger.ErrorCtx(ctx, "transcode: failed to get original book", "book_id", p.BookID, "err", err)
+		return fmt.Errorf("failed to get original book: %w", err)
+	}
+	if originalBook == nil {
+		op.SetStatus("failed")
+		logger.ErrorCtx(ctx, "transcode: original book no longer exists", "book_id", p.BookID, "output", outputPath)
+		return fmt.Errorf("failed to get original book: %s not found", p.BookID)
+	}
+
+	bitrateVal := opts.Bitrate
+	if bitrateVal <= 0 {
+		bitrateVal = 128
+	}
+	// Records the output as a new version and decides the group's
+	// primary with versionprimary; see recordTranscodedVersion.
+	newBook, inPlace, err := env.Writer.RecordVersion(ctx, originalBook, outputPath, bitrateVal,
+		config.AppConfig.RootDir, func(level, msg string) { progress.Log(level, msg, nil) })
+	if err != nil {
+		return err
+	}
+	if inPlace {
+		return nil
+	}
+
+	op.AddEntity("books", newBook.ID)
+	progress.Log("info", fmt.Sprintf("Created M4B version %s (group %s) of %s", newBook.ID, *newBook.VersionGroupID, p.BookID), nil)
+
+	op.SetStatus("success")
+	logger.InfoCtx(ctx, "transcode complete", "book_id", p.BookID, "new_book_id", newBook.ID, "output_path", outputPath)
+	return nil
+}
+
+// libraryTranscodeNative is the native books.library.transcode kind. HEAD has no
+// preview and the transcode writes a file and rows, so a Preview run is refused.
+func (s *Server) libraryTranscodeNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	kind := t7KindFor(libraryTranscodeOpID)
+	c := t7Common(s.libraryTranscodeDef(), sched)
+	c.Effects = t7Writes(ops.ResBooks, ops.ResBookFiles, ops.ResFiles)
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			if err := t7LiveOnly(rc, kind); err != nil {
+				return struct{}{}, err
 			}
-
-			// Create operation context for structured logging
-			op := &opContext{
-				ID:     ulid.Make().String(),
-				Type:   "library.transcode",
-				Status: "pending",
-			}
-			op.AddEntity("books", p.BookID)
-			ctx = logging.WithAttrs(ctx, slog.Any("", op))
-			logger.InfoCtx(ctx, "transcode starting",
-				"book_id", p.BookID,
-				"output_format", p.OutputFormat,
-				"bitrate", p.Bitrate,
-				"keep_original", p.KeepOriginal)
-
-			progress := registryProgressAdapter{r: reporter}
-
-			opts := transcode.TranscodeOpts{
-				BookID:       p.BookID,
-				OutputFormat: p.OutputFormat,
-				Bitrate:      p.Bitrate,
-				KeepOriginal: p.KeepOriginal,
-			}
-
-			outputPath, err := transcode.Transcode(ctx, opts, s.Ops(), progress)
+			p, err := t7DecodeNative[libraryTranscodeParams](kind, raw)
 			if err != nil {
-				op.SetStatus("failed")
-				logger.ErrorCtx(ctx, "transcode failed", "book_id", p.BookID, "err", err)
-				return err
+				return struct{}{}, err
 			}
-
-			originalBook, err := s.Ops().GetBookByID(p.BookID)
+			if err := t7NeedStore(kind, deps); err != nil {
+				return struct{}{}, err
+			}
+			w, err := t7NewWriter(kind, deps, rc)
 			if err != nil {
-				op.SetStatus("failed")
-				logger.ErrorCtx(ctx, "transcode: failed to get original book", "book_id", p.BookID, "err", err)
-				return fmt.Errorf("failed to get original book: %w", err)
+				return struct{}{}, err
 			}
-			if originalBook == nil {
-				op.SetStatus("failed")
-				logger.ErrorCtx(ctx, "transcode: original book no longer exists", "book_id", p.BookID, "output", outputPath)
-				return fmt.Errorf("failed to get original book: %s not found", p.BookID)
-			}
-
-			bitrateVal := opts.Bitrate
-			if bitrateVal <= 0 {
-				bitrateVal = 128
-			}
-			// Records the output as a new version and decides the group's
-			// primary with versionprimary; see recordTranscodedVersion.
-			newBook, inPlace, err := recordTranscodedVersion(ctx, s.Ops(), originalBook, outputPath, bitrateVal,
-				config.AppConfig.RootDir, func(level, msg string) { progress.Log(level, msg, nil) })
-			if err != nil {
-				return err
-			}
-			if inPlace {
-				return nil
-			}
-
-			op.AddEntity("books", newBook.ID)
-			progress.Log("info", fmt.Sprintf("Created M4B version %s (group %s) of %s", newBook.ID, *newBook.VersionGroupID, p.BookID), nil)
-
-			op.SetStatus("success")
-			logger.InfoCtx(ctx, "transcode complete", "book_id", p.BookID, "new_book_id", newBook.ID, "output_path", outputPath)
-			return nil
+			return struct{}{}, libraryTranscodeCore(rc.Context(), p, libraryTranscodeEnv{t7Env: t7NativeEnv(rc), Store: deps.Store, Writer: w})
 		},
 	})
 }
