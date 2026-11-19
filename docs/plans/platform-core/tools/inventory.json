@@ -2006,6 +2006,13 @@
    "core/kernel/config_boot.go",
    "core/kernel/config_boot_test.go",
    "core/kernel/quarantine_sealer.go",
+   "core/app/config_boot_test.go",
+   "core/app/offline_reset.go",
+   "core/app/offline_prune.go",
+   "core/app/offline_secrets.go",
+   "core/app/offline_cutover_blockers.go",
+   "core/app/offline_restore.go",
+   "core/app/offline_storage.go",
    "core/kernel/rename_contract_test.go",
    "core/kernel/testdata/rename_core_targets.golden",
    "internal/books/cutover/rename_core_keys_test.go"
