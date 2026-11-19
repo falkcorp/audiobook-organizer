@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_test.go
-// version: 1.0.13
+// version: 1.0.14
 // guid: 8b0c5c2e-6a54-4c27-9d0e-3f1a7d52e0b4
 // last-edited: 2026-11-19
 
@@ -349,7 +349,7 @@ func t6g1OpsVocabulary(t *testing.T) map[string]bool {
 	return valid
 }
 
-// t6AllNativeKinds is every native kind of the package, from the six group
+// t6AllNativeKinds is every native kind of the package, from the seven group
 // lists (the package's registry until F5-18's Registrar.Tasks replaces it), by
 // kind. A kind listed in two groups, or a group that lists none, fails the test:
 // the vocabulary check below is only as wide as this list.
@@ -371,9 +371,10 @@ func t6AllNativeKinds(t *testing.T) []tasks.Definition {
 		"g4": g4,
 		"g5": p.t6g5Kinds(fakeT6G5Deps(t), nil),
 		"g6": p.t6g6Kinds(fakeT6G6Deps(t), nil),
+		"g7": p.t6g7Kinds(fakeT6G7Deps(t), nil),
 	}
 	seen := map[tasks.Kind]string{}
-	for _, name := range []string{"g1", "g2", "g3", "g4", "g5", "g6"} {
+	for _, name := range []string{"g1", "g2", "g3", "g4", "g5", "g6", "g7"} {
 		require.NotEmpty(t, groups[name], "group %s lists no native kind", name)
 		for _, d := range groups[name] {
 			if prev, dup := seen[d.Kind()]; dup {
