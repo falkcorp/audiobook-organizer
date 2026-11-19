@@ -1,5 +1,5 @@
 // file: internal/books/options.go
-// version: 1.3.4
+// version: 1.4.0
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
 // last-edited: 2026-11-19
 
@@ -246,6 +246,21 @@ func OfflineOptions() (app.Options, error) {
 		// hands the kernel the same.
 		Updater: &coreOpts,
 	}, nil
+}
+
+// OfflineModule is the books module core's offline commands run over
+// (app.OfflineCommands' mods): Module() with the database and state directory
+// opts names (OfflineOptions' R1StoragePath, StateDir and Version). An offline
+// command reads the module's Manifest to plan the same migration list serve
+// boots with, and the flip's steps (the level step, M2, M8, the retired claims)
+// are declared only for a module that knows its database (declaresFlip), so a
+// module built without it would plan none of them and `storage migrate
+// --dry-run` would report a list serve does not run. With opts that name no
+// database (the help listing's identity-only Options) it is Module().
+func OfflineModule(opts app.Options) module.Module {
+	m := Module().(*booksModule)
+	m.dbPath, m.stateDir, m.version = opts.R1StoragePath, opts.StateDir, opts.Version
+	return m
 }
 
 // swapVoidReason is why a boot must not trust the HNSW clean-stop marker

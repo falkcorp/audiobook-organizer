@@ -1,5 +1,5 @@
 // file: internal/books/cutover_flip_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: b94e07d2-6a1c-4c35-8d7f-2e0a5f3c9b18
 // last-edited: 2026-11-19
 
@@ -232,6 +232,44 @@ func TestFlipConfigNames_DarkUntilDeclared(t *testing.T) {
 	}
 	if Module().(*booksModule).flip != true {
 		t.Error("Module() did not copy the switch")
+	}
+}
+
+// TestOfflineModule_PlansTheFlipOnlyOverADatabase: the module core's offline
+// commands plan from carries the flip's steps exactly when it was built over
+// the database OfflineOptions names. Built the way the help listing builds it
+// (identity-only Options) or by Module() it plans none, so a dry run over it
+// would report a list serve does not run; built over OfflineOptions' paths it
+// plans what Options' module does.
+func TestOfflineModule_PlansTheFlipOnlyOverADatabase(t *testing.T) {
+	old := flipDeclared
+	flipDeclared = true
+	t.Cleanup(func() { flipDeclared = old })
+	withConfig(t, config.Config{DatabasePath: filepath.Join(t.TempDir(), "gotham.pebble")})
+	opts, err := OfflineOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		mod  module.Module
+		want bool
+	}{
+		{"module with no database", Module(), false},
+		{"offline module over identity-only options", OfflineModule(app.Options{AppID: AppID}), false},
+		{"offline module over OfflineOptions", OfflineModule(opts), true},
+	}
+	for _, c := range cases {
+		man := c.mod.Manifest()
+		if got := man.Cutover != nil && man.Rewrite != nil; got != c.want {
+			t.Errorf("%s: declares cutover+rewrite = %t, want %t", c.name, got, c.want)
+		}
+		if got := man.Storage.Level != 0; got != c.want {
+			t.Errorf("%s: storage level declared = %t, want %t", c.name, got, c.want)
+		}
+	}
+	if m := OfflineModule(opts).(*booksModule); m.dbPath != opts.R1StoragePath || m.stateDir != opts.StateDir || m.version != opts.Version {
+		t.Errorf("OfflineModule carries db=%q state=%q version=%q, want %q %q %q", m.dbPath, m.stateDir, m.version, opts.R1StoragePath, opts.StateDir, opts.Version)
 	}
 }
 
