@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/purge_stale.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 7f3e1b2c-4a8d-4e1f-9c2a-3e5b8d0a1c47
-// last-edited: 2026-10-10
+// last-edited: 2026-11-18
 
 package dedup
 
@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/falkcorp/mediacore/tasks"
 
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -48,19 +50,41 @@ func (p *Plugin) purgeStaleDef() sdk.OperationDef {
 	}
 }
 
+// purgeStaleKind is rule R3's native kind for dedup.purge-stale.
+const purgeStaleKind = tasks.Kind("books.dedup.purge-stale")
+
+// purgeStaleEnv is what the purge-stale core takes from its shell (rules R2 and
+// R10): the run's hooks, and the engine it reaches through the shell, never
+// through a receiver.
+type purgeStaleEnv struct {
+	kindEnv
+	Engine scoringEngine
+}
+
+// purgeStaleResult is the native run's result: how many stale candidates went.
+// HEAD stored no result for this definition, so its shell drops it.
+type purgeStaleResult struct {
+	Deleted int `json:"deleted"`
+}
+
+// purgeStaleCore is the body of runPurgeStale, shared by both shells.
+func purgeStaleCore(ctx context.Context, env purgeStaleEnv) (purgeStaleResult, error) {
+	env.Progress(0, 1, "Scanning pending candidates for stale rows…")
+	deleted, err := env.Engine.PurgeStaleCandidates(ctx)
+	if err != nil {
+		env.Logger.Error("purge stale candidates error", "error", err)
+		return purgeStaleResult{}, fmt.Errorf("purge stale candidates: %w", err)
+	}
+	env.Progress(1, 1, fmt.Sprintf("Cleanup complete — %d stale candidate(s) removed", deleted))
+	env.Logger.Info("purged stale candidates", "deleted", deleted)
+	return purgeStaleResult{Deleted: deleted}, nil
+}
+
+// runPurgeStale is the v2 shell: HEAD's Run over purgeStaleCore.
 func (p *Plugin) runPurgeStale(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	if p.engine == nil {
 		return fmt.Errorf("dedup engine not available")
 	}
-
-	_ = reporter.UpdateProgress(0, 1, "Scanning pending candidates for stale rows…")
-	deleted, err := p.engine.PurgeStaleCandidates(ctx)
-	if err != nil {
-		reporter.Logger().Error("purge stale candidates error", "error", err)
-		return fmt.Errorf("purge stale candidates: %w", err)
-	}
-	_ = reporter.UpdateProgress(1, 1,
-		fmt.Sprintf("Cleanup complete — %d stale candidate(s) removed", deleted))
-	reporter.Logger().Info("purged stale candidates", "deleted", deleted)
-	return nil
+	_, err := purgeStaleCore(ctx, purgeStaleEnv{kindEnv: headEnv(reporter, true), Engine: p.engine})
+	return err
 }
