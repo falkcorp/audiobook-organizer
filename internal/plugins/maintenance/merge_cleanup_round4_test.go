@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_round4_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5c0d9e3a-6f21-4b7d-9a84-2e1f7b3c8d56
 // last-edited: 2026-11-19
 
@@ -351,6 +351,7 @@ func TestMergeCleanupDeadEndHeldBesideALiveCopyDoesNotSayItStandsAlone(t *testin
 	retireRowOnto(t, x.st, x.ids["dead"], x.ids["holder"], "rd", filepath.Join(x.root, "retired", "d.m4b"))
 	r := wantRow(t, x.plan(), "loser", mcKindUnmerge, mcSkipDeadEndShared)
 	require.NotContains(t, strings.Join(r.Evidence, " "), "stands alone")
+	require.Contains(t, strings.Join(r.Evidence, " "), "no live book is reachable from it")
 }
 
 // A cancelled caller does not poison the index for the callers after it.
