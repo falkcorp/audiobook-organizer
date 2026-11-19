@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g7_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 4c7e1a92-6b3d-4f58-8a0e-2d9c5b71e3f6
 // last-edited: 2026-11-19
 
@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -52,6 +53,8 @@ type t6g7Recorder struct {
 	books map[string]*database.Book
 	// bulkErr is what RunBulkWriteBack answers.
 	bulkErr error
+	// bookFiles lets ModifyBookFile run the caller's fn on a copy, by file id.
+	bookFiles map[string]*database.BookFile
 }
 
 // t6g7WriterResource maps every writer method the spy can record to the FULL set
@@ -184,8 +187,35 @@ func (r *t6g7Recorder) ModifyBook(id string, fn func(*database.Book) error) (*da
 		}
 		return nil, err
 	}
-	r.rec("ModifyBook " + id + " title=" + cur.Title)
+	line := "ModifyBook " + id + " title=" + cur.Title
+	if cur.FilePath != b.FilePath {
+		line += " path=" + filepath.Base(cur.FilePath)
+	}
+	r.rec(line)
 	return &cur, nil
+}
+
+func (r *t6g7Recorder) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	r.mu.Lock()
+	f := r.bookFiles[fileID]
+	r.mu.Unlock()
+	if f == nil {
+		return nil, nil
+	}
+	cur := *f
+	if err := fn(&cur); err != nil {
+		if errors.Is(err, database.ErrSkipBookFileWrite) {
+			return &cur, nil
+		}
+		return nil, err
+	}
+	r.rec(fmt.Sprintf("ModifyBookFile %s path=%s itunes=%s", fileID, filepath.Base(cur.FilePath), cur.ITunesPath))
+	return &cur, nil
+}
+
+func (r *t6g7Recorder) SetUserPreferenceForUser(userID, key, value string) error {
+	r.rec(fmt.Sprintf("SetUserPreferenceForUser %s %s=%q", userID, key, value))
+	return nil
 }
 
 // t6g7TestStore is the read side: whatever a test does not seed answers empty;
@@ -205,6 +235,33 @@ type t6g7TestStore struct {
 	// files and states are what GetBookFiles and GetMetadataFieldStates answer.
 	files  map[string][]database.BookFile
 	states map[string][]database.MetadataFieldState
+	// prefs are the _system preference rows GetAllPreferencesForUser answers.
+	prefs []database.UserPreferenceKV
+	// books is what GetBookByID answers; bookAt, LiveBookIDsAtPath by path.
+	books  map[string]*database.Book
+	bookAt map[string][]string
+}
+
+func (s *t6g7TestStore) GetAllPreferencesForUser(string) ([]database.UserPreferenceKV, error) {
+	return s.prefs, nil
+}
+
+func (s *t6g7TestStore) LiveBookIDsAtPath(path string) ([]string, error) { return s.bookAt[path], nil }
+
+func (s *t6g7TestStore) GetBookByID(id string) (*database.Book, error) { return s.books[id], nil }
+
+func (s *t6g7TestStore) GetBookFileByID(bookID, fileID string) (*database.BookFile, error) {
+	for i := range s.files[bookID] {
+		if s.files[bookID][i].ID == fileID {
+			f := s.files[bookID][i]
+			return &f, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *t6g7TestStore) GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
+	return s.allFiles, nil
 }
 
 func (s *t6g7TestStore) GetBookFiles(id string) ([]database.BookFile, error) { return s.files[id], nil }
@@ -415,6 +472,7 @@ func t6g7KindWritersBuild() map[tasks.Kind]t6g7KindWrite {
 	m := map[tasks.Kind]t6g7KindWrite{}
 	add := func(head sdk.OperationDef, kw t6g7KindWrite) { m[tasks.Kind("books."+head.ID)] = kw }
 	add(p.reviewStatusIndexRepairDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[reviewStatusIndexRepairWriter]()}})
+	add(p.repointUnrecordedRenamesDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[unrecordedRenameWriter]()}})
 	add(p.tagBackfillDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[tagBackfillWriter]()}})
 	add(p.userMergeDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[userMergeWriter]()}})
 	add(p.bulkWriteBackDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[bulkWriteBackWriter]()}})
@@ -483,7 +541,7 @@ func TestT6G7Resources_TableCoversEveryWriterMethod(t *testing.T) {
 func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 	p := &Plugin{}
 	defs := p.t6g7Kinds(fakeT6G7Deps(t), nil)
-	require.Len(t, defs, 9, "grows to 15 as the group's definitions land")
+	require.Len(t, defs, 10, "grows to 15 as the group's definitions land")
 
 	// Every expected value below is written out by hand from the HEAD def and
 	// the coordinator's rulings, never derived from the code under test.
@@ -498,6 +556,7 @@ func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 	}
 	titleRepairPar := titleRepairParallelism()
 	tagBackfillPar := tagBackfillParallelism()
+	repointPar := repointUnrecordedRenamesParallelism()
 	rows := []row{
 		{head: p.reviewStatusIndexRepairDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
 		{head: p.unknownAuthorAuditDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
@@ -506,6 +565,10 @@ func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 		{head: p.titleBackfillDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
 		{head: p.bulkWriteBackDef(), resume: tasks.ResumeAsk, timeout: 240 * time.Minute},
 		{head: p.userMergeDef(), resume: tasks.ResumeDrop, timeout: 2 * time.Hour},
+		// HEAD's loop is four workers over units of records that share a
+		// destination path.
+		{head: p.repointUnrecordedRenamesDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute,
+			par: &repointPar, wantPar: "fixed(4): "},
 		{head: p.tagBackfillDef(), resume: tasks.ResumeDrop, timeout: 120 * time.Minute,
 			par: &tagBackfillPar, wantPar: fmt.Sprintf("fixed(%d): ", runtime.NumCPU()*4)},
 		{head: p.titleRepairDef(), resume: tasks.ResumeDrop, timeout: 4 * time.Hour,
@@ -651,6 +714,16 @@ func t6g7WriteCases() []t6g7WriteCase {
 			live: []string{"ModifyBook 01BATBOOK00000000000000H1 title=Tarkin"},
 		},
 		{
+			kind: repointUnrecordedRenamesKind,
+			setup: func(t *testing.T, p *t6g7Probe) {
+				seedRepointRig(t, p, "01BATBOOK00000000000000R1", "01BATFILE00000000000000R11", true)
+			},
+			live: []string{
+				"ModifyBookFile 01BATFILE00000000000000R11 path=new-01.mp3 itunes=file:///gotham/new-01.mp3",
+				`SetUserPreferenceForUser _system ` + organizer.RenamePathWriteFailureKey("01BATBOOK00000000000000R1", "01BATFILE00000000000000R11") + `=""`,
+			},
+		},
+		{
 			kind: reviewStatusIndexRepairKind,
 			// A Live run rebuilds through the gated writer; a Preview run reads the
 			// report through the store and writes nothing.
@@ -713,7 +786,7 @@ func TestT6G7Kinds_WritesThroughShell(t *testing.T) {
 // case, before it builds a writer or touches the store: the run's mode comes
 // from the start request, never from params (coordinator ruling 3).
 func TestT6G7Kinds_WritingShellsRefuseModeKeys(t *testing.T) {
-	kinds := []tasks.Kind{reviewStatusIndexRepairKind, reportsPruneKind, titleBackfillKind, titleRepairKind, t6g7KindFor("maintenance.bulk-write-back"), t6g7KindFor("maintenance.user-merge"), tagBackfillKind}
+	kinds := []tasks.Kind{reviewStatusIndexRepairKind, reportsPruneKind, titleBackfillKind, titleRepairKind, t6g7KindFor("maintenance.bulk-write-back"), t6g7KindFor("maintenance.user-merge"), tagBackfillKind, repointUnrecordedRenamesKind}
 	keys := []string{"dry_run", "dryRun", "DRY_RUN", "DryRun", "apply", "Apply", "APPLY"}
 	gate := &t6g7GateWriter{name: "gotham"}
 	for _, kind := range kinds {
@@ -990,4 +1063,108 @@ func TestT6G7Kinds_UserMergeRefusesAResumedRun(t *testing.T) {
 	_, err = task.Run(tasks.NewRC(h), params)
 	require.ErrorContains(t, err, "never retried in place")
 	require.Empty(t, p.rec.snapshot())
+}
+
+// seedRepointRig seeds one unrecorded rename of one book_file row: the file
+// moved from old-01.mp3 to new-01.mp3 (the new one on disk, the old one gone),
+// and the row still holds the old path. The probe's store and recorder both see
+// the row.
+func seedRepointRig(t *testing.T, p *t6g7Probe, bookID, fileID string, rowAtOld bool) (oldPath, newPath, key string) {
+	t.Helper()
+	prev := config.Snapshot()
+	config.Mutate(func(c *config.Config) { c.ITunes = config.ITunesConfig{} })
+	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = prev }) })
+	oldPath, newPath = filepath.Join(p.root, "old-01.mp3"), filepath.Join(p.root, "new-01.mp3")
+	mustWriteFile(t, newPath)
+	held := oldPath
+	if !rowAtOld {
+		held = filepath.Join(p.root, "elsewhere-01.mp3")
+	}
+	row := database.BookFile{ID: fileID, BookID: bookID, FilePath: held}
+	rec := organizer.RenamePathWriteFailure{BookID: bookID, BookFileID: fileID, OldPath: oldPath, NewPath: newPath,
+		NewITunesPath: "file:///gotham/new-01.mp3", RecordedAt: "2026-11-19T00:00:00Z"}
+	body, err := json.Marshal(rec)
+	require.NoError(t, err)
+	key = organizer.RenamePathWriteFailureKey(bookID, fileID)
+	p.store = &t6g7TestStore{
+		prefs:    []database.UserPreferenceKV{{UserID: "_system", Key: key, Value: string(body)}},
+		files:    map[string][]database.BookFile{bookID: {row}},
+		allFiles: []database.BookFileCore{row.Core()},
+	}
+	p.rec.bookFiles = map[string]*database.BookFile{fileID: &row}
+	return oldPath, newPath, key
+}
+
+func runRepointKind(t *testing.T, p *t6g7Probe, mode tasks.Mode) (repointUnrecordedRenamesResult, error) {
+	t.Helper()
+	def := t6g7ByKind(t, (&Plugin{}).t6g7Kinds(p.deps(), nil), repointUnrecordedRenamesKind)
+	h, err := runT6G7Kind(t, def, mode, &t6g7GateWriter{name: "gotham"}, `{}`)
+	var res repointUnrecordedRenamesResult
+	if h != nil && len(h.result) > 0 {
+		require.NoError(t, json.Unmarshal(h.result, &res))
+	}
+	return res, err
+}
+
+// A Preview run reports what a Live run would repoint and takes no writer: the
+// decision is made on a read of the row, and no record is cleared.
+func TestT6G7Kinds_RepointUnrecordedRenamesPreviewDecidesOnARead(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedRepointRig(t, p, "01BATBOOK00000000000000R2", "01BATFILE00000000000000R21", true)
+	res, err := runRepointKind(t, p, tasks.ModePreview)
+	require.NoError(t, err)
+	require.False(t, res.Apply)
+	require.Equal(t, 1, res.Records)
+	require.Equal(t, map[string]int{repointOutcomeWouldRepoint: 1}, res.Outcomes)
+	require.Zero(t, p.writerCalls(), "a preview built a writer")
+	require.Empty(t, p.rec.snapshot())
+}
+
+// A row that no longer holds the recorded old path is left alone and its record
+// kept, in a Live run and in a Preview alike; a row already at the new path
+// counts as repointed-already and its record is cleared (live only).
+func TestT6G7Kinds_RepointUnrecordedRenamesLeavesAChangedRowAndItsRecord(t *testing.T) {
+	for _, mode := range []tasks.Mode{tasks.ModeLive, tasks.ModePreview} {
+		p := newT6G7Probe(t)
+		seedRepointRig(t, p, "01BATBOOK00000000000000R3", "01BATFILE00000000000000R31", false)
+		res, err := runRepointKind(t, p, mode)
+		require.NoError(t, err)
+		require.Equal(t, map[string]int{repointOutcomeRowChanged: 1}, res.Outcomes, fmt.Sprint(mode))
+		require.Empty(t, p.rec.snapshot(), "nothing is written or cleared for a changed row (%s)", mode)
+	}
+}
+
+// A record whose old path is still on disk (the files may have been moved back)
+// is skipped and kept.
+func TestT6G7Kinds_RepointUnrecordedRenamesKeepsARecordWhoseOldPathStillExists(t *testing.T) {
+	p := newT6G7Probe(t)
+	oldPath, _, _ := seedRepointRig(t, p, "01BATBOOK00000000000000R4", "01BATFILE00000000000000R41", true)
+	mustWriteFile(t, oldPath)
+	res, err := runRepointKind(t, p, tasks.ModeLive)
+	require.NoError(t, err)
+	require.Equal(t, map[string]int{repointOutcomeOldPresent: 1}, res.Outcomes)
+	require.Empty(t, p.rec.snapshot())
+}
+
+// The destination another book_file already holds is never taken.
+func TestT6G7Kinds_RepointUnrecordedRenamesRefusesAClaimedDestination(t *testing.T) {
+	p := newT6G7Probe(t)
+	_, newPath, _ := seedRepointRig(t, p, "01BATBOOK00000000000000R5", "01BATFILE00000000000000R51", true)
+	st := p.store.(*t6g7TestStore)
+	st.allFiles = append(st.allFiles, database.BookFileCore{ID: "01BATFILE00000000000000R59", BookID: "01BATBOOK00000000000000R6", FilePath: newPath})
+	res, err := runRepointKind(t, p, tasks.ModeLive)
+	require.NoError(t, err)
+	require.Equal(t, map[string]int{repointOutcomeNewClaimed: 1}, res.Outcomes)
+	require.Empty(t, p.rec.snapshot())
+}
+
+// A Live run without a writer factory refuses before it reads a record.
+func TestT6G7Kinds_RepointUnrecordedRenamesLiveNeedsAWriter(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedRepointRig(t, p, "01BATBOOK00000000000000R7", "01BATFILE00000000000000R71", true)
+	deps := p.deps()
+	deps.NewWriter = nil
+	def := t6g7ByKind(t, (&Plugin{}).t6g7Kinds(deps, nil), repointUnrecordedRenamesKind)
+	_, err := runT6G7Kind(t, def, tasks.ModeLive, &t6g7GateWriter{name: "gotham"}, `{}`)
+	require.ErrorContains(t, err, "NewWriter is not set")
 }
