@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/state.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f20a8d3-91c5-4be7-a3d0-2e5b7c19f486
 // last-edited: 2026-11-18
 
@@ -9,48 +9,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/falkcorp/mediacore/tasks"
 )
-
-// StateCase is one row of 05-tasks 5T.8.3's state table: a HEAD v3 state with
-// the qualifier the row depends on, and what the run is imported as.
-type StateCase struct {
-	State          state.V3
-	WaitReason     string
-	StopReason     string
-	InterruptedWhy string
-	Want           tasks.RunState
-	// Reason is the fixed token the imported run carries ("" for none).
-	Reason string
-}
-
-// StateTable is the table of 5T.8.3, copied here as data so the test walks
-// every row the spec lists. MapState is the code that must agree with it.
-//
-// "queued (WaitReason "", ready, pause)" imports as queued and "queued with
-// WaitReason deps" as waiting_deps; a v1 status goes through its own
-// conversion (v1.go), not this table.
-func StateTable() []StateCase {
-	return []StateCase{
-		{State: state.V3Queued, WaitReason: "", Want: tasks.StateQueued},
-		{State: state.V3Queued, WaitReason: state.WaitReady, Want: tasks.StateQueued},
-		{State: state.V3Queued, WaitReason: state.WaitPause, Want: tasks.StateQueued},
-		{State: state.V3Queued, WaitReason: state.WaitDeps, Want: tasks.StateWaitingDeps},
-		{State: state.V3Running, Want: tasks.StateInterrupted, Reason: "crash"},
-		{State: state.V3Stopping, StopReason: state.StopShutdown, Want: tasks.StateInterrupted, Reason: state.StopShutdown},
-		{State: state.V3Stopping, StopReason: state.StopUser, Want: tasks.StateCanceled, Reason: state.StopUser},
-		{State: state.V3Stopping, StopReason: state.StopQuiesce, Want: tasks.StateInterruptedQuiesced, Reason: state.StopQuiesce},
-		{State: state.V3Stopping, StopReason: state.StopTimeout, Want: tasks.StateTimedOut, Reason: state.StopTimeout},
-		{State: state.V3Stopping, StopReason: state.StopWatchdog, Want: tasks.StateFailed, Reason: state.StopWatchdog},
-		{State: state.V3Interrupted, InterruptedWhy: state.WhyCrash, Want: tasks.StateInterrupted, Reason: state.WhyCrash},
-		{State: state.V3Interrupted, InterruptedWhy: state.WhyLegacy, Want: tasks.StateInterrupted, Reason: state.WhyLegacy},
-		{State: state.V3Interrupted, InterruptedWhy: state.WhyQuiesced, Want: tasks.StateInterruptedQuiesced, Reason: state.WhyQuiesced},
-		{State: state.V3AwaitingDecision, Want: tasks.StateAwaitingDecision},
-		{State: state.V3Succeeded, Want: tasks.StateSucceeded},
-		{State: state.V3Failed, Want: tasks.StateFailed},
-		{State: state.V3TimedOut, Want: tasks.StateTimedOut},
-		{State: state.V3Canceled, Want: tasks.StateCanceled},
-		{State: state.V3Dropped, Want: tasks.StateInterruptedDropped},
-	}
-}
 
 // MapState is the imported state of a HEAD v3 run, its reason token, and
 // whether HEAD's state is one the table knows (a state it does not know is

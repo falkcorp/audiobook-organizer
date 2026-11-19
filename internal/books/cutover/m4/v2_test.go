@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/v2_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4a9c61d8-e307-4b25-8f1a-b2d05e73c9f6
 // last-edited: 2026-11-18
 
@@ -7,6 +7,7 @@ package m4_test
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -39,35 +40,27 @@ func TestCutover_V2MirrorFolded(t *testing.T) {
 			t.Fatalf("left %v, quarantined %+v\n%s", keysOf(s.Left), s.Quarantine, r.logs)
 		}
 
-		// v3 lines (seq 1 and 2) first, then the mirror's three (key sequences 11
-		// to 13, moved past the v3 lines), then the two errors after every line.
+		// One page, numbered 1..n in merged time order (family breaks a tie: v3,
+		// then v2): the v3 and mirror lines interleave by the millisecond they
+		// were written at, and the two errors (a second apart) follow them.
 		got := logLines(t, ctx, s, withCkpt.id)
-		var seqs []uint64
-		for _, l := range got {
-			seqs = append(seqs, l.Seq)
-		}
-		if len(got) != 7 {
-			t.Fatalf("%d log lines %v, want 2 v3 + 3 v2 + 2 errors", len(got), seqs)
-		}
-		bySeq := map[uint64]tasks.LogLine{}
-		for _, l := range got {
-			if _, dup := bySeq[l.Seq]; dup {
-				t.Fatalf("two log lines share sequence %d: %v", l.Seq, seqs)
+		var order []string
+		for i, l := range got {
+			if l.Seq != uint64(i+1) {
+				t.Fatalf("log line %d has sequence %d, want %d", i, l.Seq, i+1)
 			}
-			bySeq[l.Seq] = l.Log
+			order = append(order, l.Log.Message)
 		}
-		if l := bySeq[1]; l.Message != "Knightfall fingerprinted" {
-			t.Errorf("v3 line 1 = %+v", l)
+		want := []string{"Knightfall fingerprinted", "Arkham intake 1", "Knightfall fingerprinted", "Arkham intake 2", "Arkham intake 3", "Scarecrow escaped 1", "Scarecrow escaped 2"}
+		if !reflect.DeepEqual(order, want) {
+			t.Fatalf("log lines %q, want %q", order, want)
 		}
-		v2first := bySeq[2+11]
-		if v2first.Message != "Arkham intake 1" || v2first.Level != "warn" || v2first.Fields["phase"] != "xml" || v2first.Fields["inmates"] != "12" {
+		v2first := got[1].Log
+		if v2first.Level != "warn" || v2first.Fields["phase"] != "xml" || v2first.Fields["inmates"] != "12" {
 			t.Errorf("first v2 line = %+v", v2first)
 		}
-		if bySeq[2+13].Message != "Arkham intake 3" {
-			t.Errorf("last v2 line = %+v", bySeq[2+13])
-		}
-		e1, e2 := bySeq[2+13+1], bySeq[2+13+2]
-		if e1.Message != "Scarecrow escaped 1" || e2.Message != "Scarecrow escaped 2" || e1.Level != "error" {
+		e1, e2 := got[5].Log, got[6].Log
+		if e1.Level != "error" || e2.Level != "error" {
 			t.Errorf("error lines = %+v / %+v", e1, e2)
 		}
 		if e1.Fields["error"] != "fear gas" || e1.Fields["plugin"] != "maintenance" || e1.Fields["def_id"] != "dedup.book-scan" {
@@ -77,8 +70,8 @@ func TestCutover_V2MirrorFolded(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if rec.Seq.Log != 2+13+2 {
-			t.Errorf("the run's log sequence is %d, want %d", rec.Seq.Log, 2+13+2)
+		if rec.Seq.Log != 7 {
+			t.Errorf("the run's log sequence is %d, want 7", rec.Seq.Log)
 		}
 
 		// The checkpoint row's own LegacyState wins over the mirror's state row.
@@ -94,8 +87,8 @@ func TestCutover_V2MirrorFolded(t *testing.T) {
 		if _, ok, _ := s.Stores.Runs.Checkpoint(ctx, tasks.RunID(v2Only.id), "v1"); ok {
 			t.Error("a run with no state row has a v1 checkpoint")
 		}
-		// The mirror-only lines keep the sequence their keys carry.
-		if got := logLines(t, ctx, s, v2Only.id); len(got) != 1 || got[0].Seq != 11 || got[0].Log.Message != "Arkham intake 1" {
+		// A mirror-only run's lines are numbered from 1 like any other.
+		if got := logLines(t, ctx, s, v2Only.id); len(got) != 1 || got[0].Seq != 1 || got[0].Log.Message != "Arkham intake 1" {
 			t.Errorf("v2-only run log = %+v", got)
 		}
 	})

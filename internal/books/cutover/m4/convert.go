@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/convert.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c41d9e07-5a3b-48f2-b6c8-0d7e2f91a354
 // last-edited: 2026-11-18
 
@@ -8,6 +8,7 @@ package m4
 import (
 	"bytes"
 	"encoding/json"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -31,6 +32,17 @@ const (
 	// description's open item on chunk mapping).
 	CheckpointLedger     = "head-ledger"
 	CheckpointSnapPrefix = "head-snap:"
+	// CheckpointLegacyState and CheckpointV2State carry the v1-checkpoint
+	// candidates that lost the precedence (opstate, then LegacyState, then
+	// opv2:state), whole, so none of the three is discarded.
+	CheckpointLegacyState = "head-legacy-state"
+	CheckpointV2State     = "head-v2-state"
+	// CheckpointItemSupersededPrefix carries an item outcome that lost to
+	// another outcome of the same item key (see items).
+	CheckpointItemSupersededPrefix = "head-item-superseded:"
+	// CheckpointRunExtras is the JSON of the v3 record's fields the native run
+	// record has no home for (see runExtras).
+	CheckpointRunExtras = "head-run-extras"
 )
 
 // Quarantine reasons: fixed classes, never a decoder's text (a JSON error
@@ -56,6 +68,8 @@ const (
 	reasonV1Status   = "the v1 operation's status is not one 5T.8.3's v1 table lists"
 	reasonV1Log      = "a v1 log line of the operation does not decode"
 	reasonV1Params   = "opstate:<id>:params is the backfill-file-hashes chunk journal, a live record that no import consumes"
+	reasonDuplicate  = "two rows of the run would import to the same page key, so one would silently replace the other"
+	reasonV1Stray    = "the v1 operation has v3 or v2 rows but no v3 run record to import them under"
 )
 
 // CheckpointV1Result and CheckpointV1Summary carry HEAD's per-book result rows
@@ -111,6 +125,9 @@ func (r *runRows) all() []storage.KV {
 type converted struct {
 	rec  tasks.RunRecord
 	data tasks.RunData
+	// superseded is how many item outcomes were carried as checkpoints because
+	// another outcome of the same item won the item page (see items).
+	superseded int
 }
 
 // convert builds the importer's record and data for a run, or the reason the
@@ -190,6 +207,9 @@ func convert(rr *runRows) (*converted, string) {
 		return nil, err
 	}
 	if err := out.rows(rr); err != "" {
+		return nil, err
+	}
+	if err := out.runExtras(rr); err != "" {
 		return nil, err
 	}
 
@@ -297,61 +317,106 @@ func (c *converted) pages(rr *runRows) string {
 		}
 		c.data.Pages = append(c.data.Pages, tasks.PageEntry{Page: tasks.PageIntents, Seq: in.Seq, Write: w, Changes: ch})
 	}
+	if reason := c.items(rr); reason != "" {
+		return reason
+	}
+	if reason := c.logs(rr); reason != "" {
+		return reason
+	}
+	return c.unique()
+}
+
+// items imports the run's item outcomes. HEAD keys a row by outcome and item
+// (opv3:item:<id>:<outcome>:<key>) and never removes the other outcome's row,
+// so one item can hold a failed row and a skipped one; a native item page is
+// keyed by the item alone. The rule: the outcome of the highest chunk is the
+// item's (a later chunk is later processing: HEAD stamps no time on an outcome),
+// and on a tie the greater outcome string wins, so "skipped:<reason>" follows
+// "failed" (a failed attempt, then a skip on resume). Every other outcome of
+// the item rides whole as a head-item-superseded:<outcome>:<key> checkpoint and
+// is counted, so no outcome is lost.
+func (c *converted) items(rr *runRows) string {
+	byKey := map[string][]itemRow{}
+	raw := map[[2]string][]byte{}
+	var order []string
 	for _, kv := range rr.item {
 		var it itemRow
 		if json.Unmarshal(kv.Value, &it) != nil {
 			return reasonPage
 		}
-		c.data.Pages = append(c.data.Pages, tasks.PageEntry{Page: tasks.PageItems, Key: it.Key, Item: tasks.ItemOutcome{Key: it.Key, Outcome: it.Outcome, Error: it.Error, Chunk: it.Chunk}})
+		if _, seen := byKey[it.Key]; !seen {
+			order = append(order, it.Key)
+		}
+		byKey[it.Key] = append(byKey[it.Key], it)
+		raw[[2]string{it.Key, it.Outcome}] = kv.Value
 	}
-	for i, kv := range rr.log {
+	for _, key := range order {
+		rows := byKey[key]
+		win := 0
+		for i, it := range rows {
+			if it.Chunk > rows[win].Chunk || (it.Chunk == rows[win].Chunk && it.Outcome > rows[win].Outcome) {
+				win = i
+			}
+		}
+		w := rows[win]
+		c.data.Pages = append(c.data.Pages, tasks.PageEntry{Page: tasks.PageItems, Key: w.Key, Item: tasks.ItemOutcome{Key: w.Key, Outcome: w.Outcome, Error: w.Error, Chunk: w.Chunk}})
+		for i, it := range rows {
+			if i == win {
+				continue
+			}
+			if c.data.Checkpoints == nil {
+				c.data.Checkpoints = map[string][]byte{}
+			}
+			c.data.Checkpoints[CheckpointItemSupersededPrefix+it.Outcome+":"+it.Key] = bytes.Clone(raw[[2]string{it.Key, it.Outcome}])
+			c.superseded++
+		}
+	}
+	return ""
+}
+
+// logEntry is one log line of any family, before the run's lines are numbered.
+type logEntry struct {
+	line tasks.LogLine
+	rank int    // family: v3, v2 log, v2 error, v1
+	src  uint64 // the family's own sequence number
+	n    int    // arrival order, the last tie-break
+}
+
+// logs imports every log line of the run, from the v3 log, the v2 mirror's log
+// and error lines and the v1 log, as one page numbered 1..n in HEAD's merged
+// order. HEAD numbers a line from an in-memory counter that restarts at 1 every
+// process start (the key stays unique only through its timestamp), and the v3,
+// v2 and v1 families number independently, so a key's own number is not unique
+// within a run: two lines from different boots would share a page key and one
+// would replace the other. The order is HEAD's ListLogV3 order (time, then the
+// source sequence) with the family as the tie-break between families: v3 lines,
+// v2 lines, v2 errors, v1 lines. A line that does not decode quarantines the
+// run: a half-imported log is not history.
+func (c *converted) logs(rr *runRows) string {
+	var all []logEntry
+	add := func(at time.Time, rank int, key []byte, line tasks.LogLine) {
+		line.At = at.UTC()
+		all = append(all, logEntry{line: line, rank: rank, src: logSeq(string(key)), n: len(all)})
+	}
+	for _, kv := range rr.log {
 		var l logRow
 		if json.Unmarshal(kv.Value, &l) != nil {
 			return reasonPage
 		}
-		seq := logSeq(string(kv.Key))
-		if seq == 0 {
-			seq = uint64(i + 1)
-		}
-		c.data.Pages = append(c.data.Pages, tasks.PageEntry{Page: tasks.PageLog, Seq: seq, Log: tasks.LogLine{At: l.At.UTC(), Level: l.Level, Message: l.Message, Fields: l.Fields}})
+		add(l.At, 0, kv.Key, tasks.LogLine{Level: l.Level, Message: l.Message, Fields: l.Fields})
 	}
-	if reason := c.pagesV2(rr); reason != "" {
-		return reason
-	}
-	return c.pagesV1(rr)
-}
-
-// pagesV2 adds the v2 mirror's log and error lines to the run's log page.
-// HEAD wrote a run's log lines to opv2:log: and its failures to opv2:err:, and
-// the v3 half holds neither, so they are the run's log history (D12 (b)).
-//
-// A v2 log line keeps the sequence its key carries, moved past the v3 lines
-// when the run has both (the two families number their lines independently, and
-// a page is keyed by sequence); an error line is numbered after every line
-// before it, in key (time) order. A line that does not decode quarantines the
-// run: a half-imported log is not history.
-func (c *converted) pagesV2(rr *runRows) string {
-	base := c.maxSeq(tasks.PageLog)
-	last := base
-	for i, kv := range rr.log2 {
+	for _, kv := range rr.log2 {
 		var l opLogV2
 		if json.Unmarshal(kv.Value, &l) != nil {
 			return reasonLogV2
 		}
-		seq := logSeq(string(kv.Key))
-		if seq == 0 {
-			seq = uint64(i + 1)
-		}
-		seq += base
-		last = max(last, seq)
-		c.data.Pages = append(c.data.Pages, tasks.PageEntry{Page: tasks.PageLog, Seq: seq, Log: tasks.LogLine{At: l.CreatedAt.UTC(), Level: l.Level, Message: l.Message, Fields: attrFields(l.Attrs)}})
+		add(l.CreatedAt, 1, kv.Key, tasks.LogLine{Level: l.Level, Message: l.Message, Fields: attrFields(l.Attrs)})
 	}
 	for _, kv := range rr.err2 {
 		var e opErrV2
 		if json.Unmarshal(kv.Value, &e) != nil {
 			return reasonLogV2
 		}
-		last++
 		f := attrFields(e.Attrs)
 		for k, v := range map[string]string{"plugin": e.Plugin, "def_id": e.DefID} {
 			if _, taken := f[k]; !taken && v != "" {
@@ -361,7 +426,54 @@ func (c *converted) pagesV2(rr *runRows) string {
 				f[k] = v
 			}
 		}
-		c.data.Pages = append(c.data.Pages, tasks.PageEntry{Page: tasks.PageLog, Seq: last, Log: tasks.LogLine{At: e.OccurredAt.UTC(), Level: "error", Message: e.Message, Fields: f}})
+		add(e.OccurredAt, 2, kv.Key, tasks.LogLine{Level: "error", Message: e.Message, Fields: f})
+	}
+	for _, kv := range rr.log1 {
+		var l opLog1Row
+		if json.Unmarshal(kv.Value, &l) != nil {
+			return reasonV1Log
+		}
+		var fields map[string]string
+		if l.Details != nil {
+			fields = attrFields(*l.Details)
+		}
+		add(l.CreatedAt, 3, kv.Key, tasks.LogLine{Level: l.Level, Message: l.Message, Fields: fields})
+	}
+	sort.SliceStable(all, func(i, j int) bool {
+		a, b := all[i], all[j]
+		switch {
+		case !a.line.At.Equal(b.line.At):
+			return a.line.At.Before(b.line.At)
+		case a.rank != b.rank:
+			return a.rank < b.rank
+		case a.src != b.src:
+			return a.src < b.src
+		}
+		return a.n < b.n
+	})
+	for i, e := range all {
+		c.data.Pages = append(c.data.Pages, tasks.PageEntry{Page: tasks.PageLog, Seq: uint64(i + 1), Log: e.line})
+	}
+	return ""
+}
+
+// unique refuses a run whose pages would collide: two events or intents with one
+// sequence number, two items with one key, two log lines with one number. An
+// import writes a page with a plain put, so the second would replace the first
+// without a trace; a run that gets here is quarantined whole instead.
+func (c *converted) unique() string {
+	type pageKey struct {
+		page tasks.PageKind
+		seq  uint64
+		key  string
+	}
+	seen := map[pageKey]bool{}
+	for _, p := range c.data.Pages {
+		k := pageKey{page: p.Page, seq: p.Seq, key: p.Key}
+		if seen[k] {
+			return reasonDuplicate
+		}
+		seen[k] = true
 	}
 	return ""
 }
@@ -417,7 +529,10 @@ func subjectRef(s string) entity.Ref {
 
 // checkpoints carries HEAD's checkpoint, ledger and snapshot bytes.
 func (c *converted) checkpoints(rr *runRows, open bool) string {
-	c.data.Checkpoints = map[string][]byte{}
+	if c.data.Checkpoints == nil { // items may already have carried superseded outcomes
+		c.data.Checkpoints = map[string][]byte{}
+	}
+	var legacy []byte
 	if rr.ckpt != nil {
 		var ck ckptRow
 		if json.Unmarshal(rr.ckpt.Value, &ck) != nil {
@@ -426,24 +541,32 @@ func (c *converted) checkpoints(rr *runRows, open bool) string {
 		if len(ck.State) > 0 && !bytes.Equal(ck.State, []byte("null")) {
 			c.data.Checkpoints[CheckpointHead] = bytes.Clone(ck.State)
 		}
-		if len(ck.LegacyState) > 0 {
-			c.data.Checkpoints[CheckpointV1] = bytes.Clone(ck.LegacyState)
-		}
+		legacy = ck.LegacyState
 	}
-	// HEAD copies opv2:state: into the checkpoint row as LegacyState when it
-	// migrates a run (the v1 checkpoint of 5T.8.3, whole row bytes). A run whose
-	// state was written after that copy, or whose checkpoint row is missing,
-	// still has it only here: carry the same bytes under the same name.
-	if _, has := c.data.Checkpoints[CheckpointV1]; !has && rr.state2 != nil {
-		c.data.Checkpoints[CheckpointV1] = bytes.Clone(rr.state2.Value)
-	}
-	// HEAD's v1 checkpoint proper (operations.SaveCheckpoint's opstate:<id>) is
-	// the run's checkpoint named v1 while the run is open, and wins over the
-	// staged copies above: it is what the converted kind's Restore reads
-	// (5T.8.3). A finished run has no use for it, and it is deleted with the
-	// run.
-	if open && rr.state1 != nil {
+	// The run's checkpoint named v1 (5T.8.3), by precedence: HEAD's own v1
+	// checkpoint (operations.SaveCheckpoint's opstate:<id>) while the run is
+	// open, since it is what the converted kind's Restore reads; else the copy
+	// of opv2:state: an opv3:ckpt: row kept as LegacyState (whole row bytes);
+	// else opv2:state: itself, for a run whose state was written after that copy
+	// or whose checkpoint row is missing. A candidate that loses is carried whole
+	// under its own name, never discarded. A finished run's opstate: has nothing
+	// to resume and is deleted with it.
+	switch {
+	case open && rr.state1 != nil:
 		c.data.Checkpoints[CheckpointV1] = bytes.Clone(rr.state1.Value)
+		if len(legacy) > 0 {
+			c.data.Checkpoints[CheckpointLegacyState] = bytes.Clone(legacy)
+		}
+		if rr.state2 != nil {
+			c.data.Checkpoints[CheckpointV2State] = bytes.Clone(rr.state2.Value)
+		}
+	case len(legacy) > 0:
+		c.data.Checkpoints[CheckpointV1] = bytes.Clone(legacy)
+		if rr.state2 != nil {
+			c.data.Checkpoints[CheckpointV2State] = bytes.Clone(rr.state2.Value)
+		}
+	case rr.state2 != nil:
+		c.data.Checkpoints[CheckpointV1] = bytes.Clone(rr.state2.Value)
 	}
 	c.v1Extras(rr)
 	if rr.ledger != nil {
@@ -498,30 +621,6 @@ func (c *converted) rows(rr *runRows) string {
 	return ""
 }
 
-// pagesV1 adds the v1 log lines (operationlog:<id>:<nanos>:<seq>) to the run's
-// log page, after every line before it: the v1 family numbers its lines
-// independently of the v3 and v2 ones. A line that does not decode quarantines
-// the run.
-func (c *converted) pagesV1(rr *runRows) string {
-	base := c.maxSeq(tasks.PageLog)
-	for i, kv := range rr.log1 {
-		var l opLog1Row
-		if json.Unmarshal(kv.Value, &l) != nil {
-			return reasonV1Log
-		}
-		seq := logSeq(string(kv.Key))
-		if seq == 0 {
-			seq = uint64(i + 1)
-		}
-		var fields map[string]string
-		if l.Details != nil {
-			fields = attrFields(*l.Details)
-		}
-		c.data.Pages = append(c.data.Pages, tasks.PageEntry{Page: tasks.PageLog, Seq: base + seq, Log: tasks.LogLine{At: l.CreatedAt.UTC(), Level: l.Level, Message: l.Message, Fields: fields}})
-	}
-	return ""
-}
-
 // v1Extras carries the v1 result rows and the summary row under their
 // checkpoint names, byte for byte, so no byte of a v1 operation's output is
 // dropped.
@@ -551,7 +650,7 @@ func v1Status(s string) (st tasks.RunState, why string, ok bool) {
 		return tasks.StateTimedOut, "", true
 	case "canceled", "cancelled":
 		return tasks.StateCanceled, "", true
-	case "pending", "queued", "running", "processing", "paused", "interrupted":
+	case "pending", "queued", "running", "processing", "in_progress", "paused", "interrupted":
 		return tasks.StateInterruptedDropped, V1Unfinished, true
 	}
 	return "", "", false
@@ -606,8 +705,23 @@ func convertV1(rr *runRows) (*converted, string) {
 		}
 		rec.Params = raw
 	}
+	// A v1 operation is the only record of its ID, so no v3 or v2 row can be
+	// imported under it; any such row is a stray the whole run is set aside for.
+	for _, fam := range [][]storage.KV{rr.evt, rr.intent, rr.item, rr.log, rr.snap, rr.mark, rr.rowmark, rr.row, rr.rowix, rr.log2, rr.err2} {
+		if len(fam) > 0 {
+			return nil, reasonV1Stray
+		}
+	}
+	for _, one := range []*storage.KV{rr.prog, rr.ckpt, rr.ledger, rr.state2} {
+		if one != nil {
+			return nil, reasonV1Stray
+		}
+	}
 	out.data.Checkpoints = map[string][]byte{}
-	if reason := out.pagesV1(rr); reason != "" {
+	if reason := out.logs(rr); reason != "" {
+		return nil, reason
+	}
+	if reason := out.unique(); reason != "" {
 		return nil, reason
 	}
 	out.v1Extras(rr)
@@ -658,4 +772,32 @@ func jsonOrString(s string) (json.RawMessage, error) {
 		return json.RawMessage(s), nil
 	}
 	return json.Marshal(s)
+}
+
+// runExtras carries the v3 record's fields the native run record has no field
+// for, as one JSON checkpoint (head-run-extras): the approval (its note exists
+// nowhere else), the count of item outcomes HEAD refused past its cap (so an
+// imported run still says its item list was truncated) and the pipeline stage,
+// idempotency key, successor, trace and span identifiers. A run that has none
+// carries nothing.
+func (c *converted) runExtras(rr *runRows) string {
+	var x runExtrasRow
+	if json.Unmarshal(rr.run.Value, &x) != nil {
+		return reasonRun
+	}
+	if x.ItemOutcomes != nil && x.ItemOutcomes.Dropped == 0 {
+		x.ItemOutcomes = nil // a run that stored every outcome has nothing to say
+	}
+	if x.empty() {
+		return ""
+	}
+	raw, err := json.Marshal(x)
+	if err != nil {
+		return reasonRun
+	}
+	if c.data.Checkpoints == nil {
+		c.data.Checkpoints = map[string][]byte{}
+	}
+	c.data.Checkpoints[CheckpointRunExtras] = raw
+	return ""
 }

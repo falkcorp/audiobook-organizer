@@ -1,16 +1,36 @@
 // file: internal/books/cutover/m4/activity_internal_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c20d6f94-1b7a-4e85-a3f0-7d92e51b4c68
 // last-edited: 2026-11-18
 
 package m4
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/falkcorp/mediacore/tasks"
 )
+
+// noRuns is a resolver over no runs: every repairs reference fails.
+func noRuns(t *testing.T) *kinds {
+	return &kinds{ctx: context.Background(), runs: runsOf(nil), cache: map[string]string{}}
+}
+
+// runsOf is a RunReader over a map of run ID to kind.
+type runsOf map[string]tasks.Kind
+
+func (m runsOf) Get(_ context.Context, id tasks.RunID) (tasks.RunRecord, error) {
+	k, ok := m[string(id)]
+	if !ok {
+		return tasks.RunRecord{}, fmt.Errorf("%w: %s", tasks.ErrRunNotFound, id)
+	}
+	return tasks.RunRecord{ID: id, Kind: k}, nil
+}
 
 // TestActivityRewrite_SecondPassChangesNothing: a row the rewrite already
 // renamed names a kind, which is no def ID, so a second pass (a resumed boot
@@ -25,8 +45,8 @@ func TestActivityRewrite_SecondPassChangesNothing(t *testing.T) {
 		if err := json.Unmarshal([]byte(body), &row); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, changed, ok := rewriteEntry(tier, row); !ok || !changed {
-			t.Fatalf("%s: the first pass changed=%v ok=%v", tier, changed, ok)
+		if _, _, changed, ok, err := rewriteEntry(tier, row, noRuns(t)); err != nil || !ok || !changed {
+			t.Fatalf("%s: the first pass changed=%v ok=%v err=%v", tier, changed, ok, err)
 		}
 		out, err := encode(row)
 		if err != nil {
@@ -36,8 +56,8 @@ func TestActivityRewrite_SecondPassChangesNothing(t *testing.T) {
 		if err := json.Unmarshal(out, &again); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, changed, ok := rewriteEntry(tier, again); !ok || changed {
-			t.Errorf("%s: the second pass changed=%v ok=%v over %s", tier, changed, ok, out)
+		if _, _, changed, ok, err := rewriteEntry(tier, again, noRuns(t)); err != nil || !ok || changed {
+			t.Errorf("%s: the second pass changed=%v ok=%v err=%v over %s", tier, changed, ok, err, out)
 		}
 	}
 }
@@ -65,7 +85,7 @@ func TestActivityKinds_NoKindIsADefID(t *testing.T) {
 		t.Fatalf("read %d ids from the registry dump, want the whole registry", len(ids))
 	}
 	for _, id := range ids {
-		k, ok := kindOf(id)
+		k, _, ok := kindOf(id)
 		if !ok {
 			continue
 		}
@@ -76,7 +96,7 @@ func TestActivityKinds_NoKindIsADefID(t *testing.T) {
 				}
 			}
 		}
-		if _, again := kindOf(k); again {
+		if _, _, again := kindOf(k); again {
 			t.Errorf("kind %q is itself a def ID: a second pass would rename it again", k)
 		}
 	}

@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/step.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a9d5f13e-7c02-4b68-8e41-35b0c6d7e2f8
 // last-edited: 2026-11-18
 
@@ -40,6 +40,9 @@ const (
 	OutcomeDeferred    = "dependent-deferred"   // a run-owned row visited before its run's driver; the driver pulls it
 	OutcomeOrphan      = "orphan-quarantined"   // a run-owned row of no run record
 	OutcomeRunQuarRows = "run-rows-quarantined" // the rows of a quarantined run, quarantined with it
+	// OutcomeItemSuperseded counts item outcomes carried whole as a checkpoint
+	// because another outcome of the same item won the item page.
+	OutcomeItemSuperseded = "item-outcome-superseded"
 )
 
 // Config is what the step needs besides its declaration.
@@ -321,6 +324,14 @@ func (m *Migration) stepRun(ctx context.Context, kv storage.KV, w *datamigrate.S
 	}
 	if err := m.imp.RunData(ctx, b, c.rec.ID, c.data); err != nil {
 		return fmt.Errorf("m4: import the data of run %q: %w", id, err)
+	}
+	if c.superseded > 0 {
+		// Counted as an outcome of its own, once per outcome carried, so the report
+		// says how many items had two outcomes.
+		for range c.superseded {
+			w.Count(OutcomeItemSuperseded)
+		}
+		m.logger.Info("m4: item outcomes carried as superseded", "run", id, "count", c.superseded)
 	}
 	for _, row := range rr.all() {
 		if strings.HasPrefix(string(row.Key), prefixOpState1) && strings.HasSuffix(string(row.Key), ":params") {

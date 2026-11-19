@@ -578,7 +578,6 @@ internal/books/cutover/m4.NewActivity
 internal/books/cutover/m4.SourceKeys
 internal/books/cutover/m4.SourcePrefixes
 internal/books/cutover/m4.SourceRanges
-internal/books/cutover/m4.StateTable
 internal/books/cutover/m4.Steps
 internal/books/cutover/m4.attrFields
 internal/books/cutover/m4.batchOpType
