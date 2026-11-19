@@ -1,5 +1,5 @@
 // file: core/internal/outboxhttp/routes_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: b91b2c32-bee4-4aac-a400-6fb0e871d709
 // last-edited: 2026-11-19
 
@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
+	"github.com/falkcorp/mediacore/events"
 	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/internal/outboxstore"
@@ -479,7 +481,7 @@ func TestOutboxHTTP_ListDeadLetters(t *testing.T) {
 	}
 	d := whole.Items[0]
 	if d.Partition != outboxstore.Partition("wayne-manor", noticeParts) || d.Attempts != 3 || d.Error != "permanent" ||
-		d.IdempotencyKey != "01J0000000000000000BATMN01" || d.Producer != "core" || d.StagedAt.IsZero() || d.DeadAt.IsZero() {
+		d.IdempotencyKey != "01J0000000000000000BATMN01" || d.Producer != "core" || d.StagedAt.IsZero() || d.DeadAt.Sub(d.StagedAt) < 59*time.Minute || d.DeadAt.Sub(d.StagedAt) > 61*time.Minute {
 		t.Errorf("letter = %+v", d)
 	}
 	raw := toJSON(t, whole)
@@ -835,6 +837,17 @@ func TestOutboxHTTP_RetryActorFromContext(t *testing.T) {
 	if r := recordOf(t, e, "core.outbox.dead_retry"); r.Actor != bound {
 		t.Errorf("actor = %+v, want the bound %+v", r.Actor, bound)
 	}
+
+	// With a principal too, the actor the router bound still wins: it is the one
+	// every other audit record of the request names.
+	e2 := newEnv(t)
+	e2.deadLetter(consumerDeliver, noticeTopic, noticeParts, 1, true)
+	if _, err := e2.api.retry(ctx, deadIn(bruce(), consumerDeliver, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if r := recordOf(t, e2, "core.outbox.dead_retry"); r.Actor != bound {
+		t.Errorf("actor with a principal = %+v, want the bound %+v", r.Actor, bound)
+	}
 }
 
 // TestOutboxHTTP_DiscardDeletesAndAudits: a discarded letter is gone, nothing is
@@ -1103,7 +1116,7 @@ func TestOutboxHTTP_FailedOperationWritesNoRecord(t *testing.T) {
 		{"unknown consumer", fmt.Errorf("%w: gotham.dispatch.nobody", outbox.ErrUnknownConsumer), http.StatusNotFound, "not_found"},
 		{"changed under the operation", fmt.Errorf("%w: x at seq 1", outbox.ErrDeadConflict), http.StatusConflict, "conflict"},
 		{"topic not declared", fmt.Errorf("cannot retry: %w", outbox.ErrUnknownTopic), http.StatusConflict, "conflict"},
-		{"topic not durable", fmt.Errorf("%w: %w", outbox.ErrUnknownTopic, outbox.ErrNotDurable), http.StatusConflict, "conflict"},
+		{"topic not durable", fmt.Errorf("cannot retry: %w", outbox.ErrNotDurable), http.StatusConflict, "conflict"},
 		{"bad partitions", fmt.Errorf("%w: x declares 0", outbox.ErrBadPartitions), http.StatusConflict, "conflict"},
 		{"partitions changed", fmt.Errorf("cannot purge: %w", outboxstore.ErrPartitionsChanged), http.StatusConflict, "conflict"},
 	} {
@@ -1532,5 +1545,122 @@ func TestOutboxHTTP_RegisterTakesNilCollaborators(t *testing.T) {
 	}
 	if _, err := r.OpenAPI("core"); err != nil {
 		t.Errorf("OpenAPI: %v", err)
+	}
+}
+
+// TestOutboxHTTP_TopicDetailOnlyWhenKnown: the audit record of a retry or
+// discard takes the topic from the consumer's dead letter and never from the
+// status read, a purge takes it from the status read, and when the outbox does
+// not know it the key is left out rather than empty. A letter of another
+// consumer, the nearest the list finds, names nothing.
+func TestOutboxHTTP_TopicDetailOnlyWhenKnown(t *testing.T) {
+	const consumer = "core.notify.deliver"
+	letter := func(c string) []outbox.DeadLetter {
+		return []outbox.DeadLetter{{Consumer: c, Topic: noticeTopic, Seq: 1}}
+	}
+	status := func(topic string) []outbox.ConsumerStatus {
+		return []outbox.ConsumerStatus{{Name: consumer, Topic: topic}}
+	}
+	for _, c := range []struct {
+		name      string
+		letters   []outbox.DeadLetter
+		consumers []outbox.ConsumerStatus
+		wantDead  string // "" is no topic key at all
+		wantPurge string
+	}{
+		{"both known", letter(consumer), status(signalTopic), noticeTopic, signalTopic},
+		{"letter only", letter(consumer), nil, noticeTopic, ""},
+		{"status only", nil, status(noticeTopic), "", noticeTopic},
+		{"neither", nil, nil, "", ""},
+		{"consumer without a topic", nil, status(""), "", ""},
+		{"nearest letter is another consumer's", letter("core.notify.zeta"), nil, "", ""},
+	} {
+		for _, kind := range []string{"retry", "discard", "purge"} {
+			t.Run(c.name+"/"+kind, func(t *testing.T) {
+				rg := newRig()
+				rg.op.letters = c.letters
+				rg.op.status = outbox.Status{Consumers: c.consumers}
+				var err error
+				want := c.wantDead
+				switch kind {
+				case "retry":
+					_, err = rg.api.retry(context.Background(), deadIn(bruce(), consumer, 1))
+				case "discard":
+					_, err = rg.api.discard(context.Background(), deadIn(bruce(), consumer, 1))
+				case "purge":
+					_, err = rg.api.purge(context.Background(), purgeIn(bruce(), consumer))
+					want = c.wantPurge
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				recs := rg.rec.recorded()
+				if len(recs) != 1 {
+					t.Fatalf("%d records, want 1", len(recs))
+				}
+				got, has := recs[0].Details["topic"]
+				switch {
+				case want == "" && has:
+					t.Errorf("details name topic %q, want no topic key: %v", got, recs[0].Details)
+				case want != "" && got != want:
+					t.Errorf("details topic = %v, want %q", got, want)
+				}
+			})
+		}
+	}
+}
+
+// TestOutboxHTTP_UnavailableAsksToRetry: a route mounted before the outbox is
+// there answers 503 unavailable with Retry-After, through the router's own writer.
+func TestOutboxHTTP_UnavailableAsksToRetry(t *testing.T) {
+	a := newAPI("/api/core/v1", nil, nil, nil)
+	r := httpapi.NewRouter(httpapi.Options{}, httpapi.Deps{Log: discardLogger()})
+	httpapi.Handle(r.CoreGroup(), httpapi.Route{
+		Method: http.MethodGet, Path: "/probe/{consumer}/{seq}", Name: "probeUnavailable", Perm: rbac.Public,
+	}, func(ctx context.Context, in *httpapi.In[deadReq]) (httpapi.NoContent, error) { return a.retry(ctx, in) })
+	h, err := r.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/core/v1/probe/core.notify.deliver/1", nil))
+	if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), `"code":"unavailable"`) {
+		t.Errorf("answer = %d %s, want 503 unavailable", rr.Code, rr.Body.String())
+	}
+	if got := rr.Header().Get("Retry-After"); got != "5" {
+		t.Errorf("Retry-After = %q, want 5", got)
+	}
+}
+
+// listedCatalog is a Catalog that lists its topics in the order it was given,
+// as the interface does not promise a sorted one.
+type listedCatalog []events.TopicSpec
+
+func (c listedCatalog) Lookup(name string) (events.TopicSpec, bool) {
+	for _, s := range c {
+		if s.Name == name {
+			return s, true
+		}
+	}
+	return events.TopicSpec{}, false
+}
+
+func (c listedCatalog) All() iter.Seq[events.TopicSpec] { return slices.Values(c) }
+
+// TestOutboxHTTP_TopicsAreSortedByName: the route orders the catalog itself, so
+// a page boundary never moves with the catalog's own listing order.
+func TestOutboxHTTP_TopicsAreSortedByName(t *testing.T) {
+	cat := listedCatalog{{Name: signalTopic}, {Name: busTopic}, {Name: noticeTopic}}
+	a := newAPI("/api/core/v1", nil, cat, nil)
+	page, err := a.topics(context.Background(), pageIn(50, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, tp := range page.Items {
+		names = append(names, tp.Name)
+	}
+	if want := []string{noticeTopic, signalTopic, busTopic}; !slices.Equal(names, want) {
+		t.Errorf("topics = %v, want %v", names, want)
 	}
 }
