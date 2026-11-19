@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/dataset_backfill.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 2d6f8a13-7c40-4e92-8b15-9a3e5c7d2f64
 // last-edited: 2026-11-18
 
@@ -73,20 +73,6 @@ func (p *Plugin) datasetBackfillDef() sdk.OperationDef {
 	}
 }
 
-// builderAdapter satisfies dataset.BuilderStore using the plugin's main store.
-// dataset.BuilderStore requires GetBook(id string) and GetBookFiles(id string).
-// pluginStore exposes GetBookByID (not GetBook), so the adapter bridges the
-// name mismatch while keeping the interface names canonical.
-type builderAdapter struct{ store pluginStore }
-
-func (b builderAdapter) GetBook(id string) (*database.Book, error) {
-	return b.store.GetBookByID(id)
-}
-
-func (b builderAdapter) GetBookFiles(id string) ([]database.BookFile, error) {
-	return b.store.GetBookFiles(id)
-}
-
 // bookLookupResult is a memoized GetBook outcome (both the book and any error
 // are cached, so a candidate row referencing a not-found/errored book isn't
 // re-queried on every repeat occurrence either).
@@ -95,7 +81,7 @@ type bookLookupResult struct {
 	err  error
 }
 
-// memoizedBuilderAdapter wraps a builderAdapter with a mutex-guarded
+// memoizedBuilderAdapter wraps a dataset.BuilderStore with a mutex-guarded
 // book-lookup cache (CONC-8): dedup.mine-gold-labels and dedup.dataset-backfill
 // both iterate pending candidates where the same book can appear in many rows,
 // and previously re-read that book from the store every time. Mirrors the
@@ -105,7 +91,7 @@ type bookLookupResult struct {
 // now use — a plain map would race under -race.
 //
 // Only GetBook is memoized, matching the referenced bookCache patterns;
-// GetBookFiles passes straight through to the inner adapter.
+// GetBookFiles passes straight through to the inner store.
 type memoizedBuilderAdapter struct {
 	inner dataset.BuilderStore
 	mu    sync.Mutex
