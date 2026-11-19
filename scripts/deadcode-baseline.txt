@@ -702,7 +702,6 @@ internal/books/cutover/m6.resolve
 internal/books/cutover/m6.rootSpecs
 internal/books/cutover/m6.secretName
 internal/books/cutover/m6.signature
-internal/books/cutover/m6.sortedKeys
 internal/books/cutover/m6.splitUserinfo
 internal/books/cutover/m6.unknownJobType
 internal/books/cutover/m6.windowsForm

@@ -1,12 +1,11 @@
 // file: internal/books/cutover/m6/maps.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ae55952e-4dad-4774-a3ae-22d7a560ba34
 // last-edited: 2026-11-19
 
 package m6
 
 import (
-	"sort"
 	"strings"
 
 	"github.com/falkcorp/mediacore/integrations"
@@ -102,14 +101,4 @@ var jobTypes = map[string]jobTypeRow{
 func unknownJobType(t string) jobTypeRow {
 	name := strings.ToLower(strings.NewReplacer("_", "-", ".", "-", ":", "-").Replace(t))
 	return jobTypeRow{Capability: "books." + t, ApplyKind: "books.ai.batch-apply." + name}
-}
-
-// sortedKeys is the keys of m in byte order.
-func sortedKeys[V any](m map[string]V) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }
