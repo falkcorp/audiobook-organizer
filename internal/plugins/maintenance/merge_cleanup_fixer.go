@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_fixer.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 0e4c7d58-a1b3-4f26-8c19-6d5a3e7f9b02
 // last-edited: 2026-11-19
 
@@ -608,9 +608,6 @@ type mcCoLoser struct {
 	// trashed is true for a book in the trash. Such a book is a source of
 	// anchors but is never itself a live copy of the work.
 	trashed bool
-	// hops are the pointer-carrying books on its chain after it (live merged
-	// ones and trashed ones), the way a loser's own hops are read.
-	hops []string
 }
 
 // deadEndIndex maps the id of each dead book that some merge chain ends at to
@@ -697,13 +694,7 @@ func (r *mcRun) buildDeadEndIndex(ctx context.Context) (map[string][]mcCoLoser, 
 			if chain.End != mcEndDead {
 				return nil
 			}
-			c := &mcCoLoser{id: all[i], trashed: database.IsInTrash(b)}
-			for _, h := range chain.Hops {
-				if h.Book != nil && mcHasPointer(h.Book) {
-					c.hops = append(c.hops, h.ID)
-				}
-			}
-			slots[i], ends[i] = c, chain.LastID()
+			slots[i], ends[i] = &mcCoLoser{id: all[i], trashed: database.IsInTrash(b)}, chain.LastID()
 			return nil
 		})
 	}
@@ -719,11 +710,12 @@ func (r *mcRun) buildDeadEndIndex(ctx context.Context) (map[string][]mcCoLoser, 
 	return out, nil
 }
 
-// deadEndSources are the books, other than any one loser, whose merge chain
-// enters dead book d, and the pointer-carrying hops on their chains: every
-// book whose content may have gone on from d. Sorted, and computed once per
-// dead book, so each loser at one dead end subtracts itself from the same list
-// instead of walking every co-loser again.
+// deadEndSources are the books whose merge chain enters dead book d: every
+// book whose content may have gone on from d. The pointer-carrying hops on a
+// co-loser's chain need no separate entry, because each of them is itself a
+// book whose chain enters d and so is in the index (live, or in the trash).
+// Sorted, and computed once per dead book, so each loser at one dead end
+// subtracts itself from the same list instead of walking every co-loser again.
 func (r *mcRun) deadEndSources(ctx context.Context, d string) ([]string, error) {
 	idx, err := r.deadEndIndex(ctx)
 	if err != nil {
@@ -733,9 +725,6 @@ func (r *mcRun) deadEndSources(ctx context.Context, d string) ([]string, error) 
 		set := map[string]bool{}
 		for _, c := range idx[d] {
 			set[c.id] = true
-			for _, h := range c.hops {
-				set[h] = true
-			}
 		}
 		out := make([]string, 0, len(set))
 		for id := range set {
@@ -902,9 +891,7 @@ func (r *mcRun) readSource(fa *mcFacts, rc *mcReach, src string, throughCoLoser 
 	// them.
 	if !primaryReached {
 		for _, id := range info.liveMembers {
-			if id != fa.id && !fa.onChain(id) {
-				rc.groupLive[id] = info.gid
-			}
+			rc.groupLive[id] = info.gid
 		}
 	}
 	return nil
@@ -1354,8 +1341,8 @@ func (r *mcRun) settleDead(ctx context.Context, fa *mcFacts) error {
 	//   - the pointer-carrying hops on the loser's own chain (live merged ones
 	//     as well as trashed ones; the loser itself is not one);
 	//   - every other book whose chain enters D, with or without a file, in the
-	//     trash or not (the co-losers), and every pointer-carrying hop on their
-	//     chains, trashed ones included.
+	//     trash or not (the co-losers); that includes every pointer-carrying hop
+	//     on their chains, trashed ones, since each is such a book itself.
 	// For each source its retired-version holders and its version group are
 	// read, and each anchor found is followed along its OWN chain. An anchor's
 	// own holders and group are never expanded: the walk is sources, anchors,
