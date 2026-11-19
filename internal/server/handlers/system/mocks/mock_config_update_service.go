@@ -7,7 +7,6 @@ package systemmocks
 import (
 	"context"
 
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -45,57 +44,6 @@ type MockConfigUpdateService_Expecter struct {
 
 func (_m *MockConfigUpdateService) EXPECT() *MockConfigUpdateService_Expecter {
 	return &MockConfigUpdateService_Expecter{mock: &_m.Mock}
-}
-
-// MaskSecrets provides a mock function for the type MockConfigUpdateService
-func (_mock *MockConfigUpdateService) MaskSecrets(cfg config.Config) config.Config {
-	ret := _mock.Called(cfg)
-
-	if len(ret) == 0 {
-		panic("no return value specified for MaskSecrets")
-	}
-
-	var r0 config.Config
-	if returnFunc, ok := ret.Get(0).(func(config.Config) config.Config); ok {
-		r0 = returnFunc(cfg)
-	} else {
-		r0 = ret.Get(0).(config.Config)
-	}
-	return r0
-}
-
-// MockConfigUpdateService_MaskSecrets_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'MaskSecrets'
-type MockConfigUpdateService_MaskSecrets_Call struct {
-	*mock.Call
-}
-
-// MaskSecrets is a helper method to define mock.On call
-//   - cfg config.Config
-func (_e *MockConfigUpdateService_Expecter) MaskSecrets(cfg any) *MockConfigUpdateService_MaskSecrets_Call {
-	return &MockConfigUpdateService_MaskSecrets_Call{Call: _e.mock.On("MaskSecrets", cfg)}
-}
-
-func (_c *MockConfigUpdateService_MaskSecrets_Call) Run(run func(cfg config.Config)) *MockConfigUpdateService_MaskSecrets_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 config.Config
-		if args[0] != nil {
-			arg0 = args[0].(config.Config)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockConfigUpdateService_MaskSecrets_Call) Return(config1 config.Config) *MockConfigUpdateService_MaskSecrets_Call {
-	_c.Call.Return(config1)
-	return _c
-}
-
-func (_c *MockConfigUpdateService_MaskSecrets_Call) RunAndReturn(run func(cfg config.Config) config.Config) *MockConfigUpdateService_MaskSecrets_Call {
-	_c.Call.Return(run)
-	return _c
 }
 
 // UpdateConfig provides a mock function for the type MockConfigUpdateService
