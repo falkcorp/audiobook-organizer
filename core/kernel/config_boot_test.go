@@ -1,5 +1,5 @@
 // file: core/kernel/config_boot_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: d2618bbb-991d-4090-bcf6-a00ef3f98c75
 // last-edited: 2026-11-19
 
@@ -701,8 +701,8 @@ func TestResolveStorage_RelativeDefaultAgreesWithTheServeBoot(t *testing.T) {
 // create the store's directory; the refusal comes first and nothing is
 // made. ResolveStorage never reads the boot record (no Boot), so an
 // unparsable one is neither set aside as .bad nor touched, whoever runs it.
-// A state directory that does not exist yet has no owner, and is created
-// (the open question recorded in seams.d/F3-07.md).
+// A state directory that does not exist yet is compared with its nearest
+// existing ancestor (TestResolveStorage_AbsentStateDirComparesTheNearestAncestor).
 func TestResolveStorage_RefusesANonOwnerBeforeAnything(t *testing.T) {
 	h := newSwapHost(t)
 	beside := filepath.Join(t.TempDir(), "elsewhere")
@@ -750,19 +750,100 @@ func TestResolveStorage_RefusesANonOwnerBeforeAnything(t *testing.T) {
 	// created" over it: the operator is told who to run as.
 	if _, _, err := ResolveStorage(ctx, c, "storage reset"); !errors.Is(err, storage.ErrNotStateDirOwner) || strings.Contains(err.Error(), "cannot be") {
 		t.Fatalf("ResolveStorage of a stranger's unusable default = %v, want storage.ErrNotStateDirOwner alone", err)
+	} else if strings.Contains(err.Error(), "does not exist yet") {
+		t.Fatalf("an existing candidate's refusal talks of an absent directory: %v", err)
 	}
 	if _, err := os.Stat(beside); !os.IsNotExist(err) {
 		t.Fatalf("the refused resolve created the fallback beside the store: %v", err)
 	}
+}
 
-	fresh := newSwapHost(t)
-	c = fresh.resolvable()
-	if _, state, err := ResolveStorage(ctx, c, "storage reset"); err != nil || state != fresh.state {
-		t.Fatalf("ResolveStorage of an absent state directory as a stranger = %q, %v; want it created", state, err)
+// absentChain is a state directory several levels below one that exists: the
+// first three levels do not exist, so a rule that looks only at the parent
+// finds nothing to compare.
+func absentChain(base string) (top, state string) {
+	top = filepath.Join(base, "wayne", "manor")
+	return top, filepath.Join(top, "batcave", "state")
+}
+
+// TestResolveStorage_AbsentStateDirComparesTheNearestAncestor (05-config
+// section 1.7, seams.d/F3-07.md "Absent state directory"): a state directory
+// that does not exist has no owner, so a command that writes is compared
+// with the owner of the nearest existing ancestor, however many levels are
+// missing. An ancestor this user owns: every level is created, as serve
+// creates them. An ancestor another user owns: refused, with nothing created
+// at any level.
+func TestResolveStorage_AbsentStateDirComparesTheNearestAncestor(t *testing.T) {
+	stranger := os.Geteuid() + 1
+	as := func(euid int) context.Context {
+		return bootseam.With(t.Context(), &bootseam.Seams{BuildID: swapBuild, Euid: func() int { return euid }})
 	}
-	if fi, err := os.Stat(fresh.state); err != nil || !fi.IsDir() {
-		t.Fatalf("the absent state directory was not created: %v", err)
-	}
+	t.Run("ancestor owned by this user: created", func(t *testing.T) {
+		h := newSwapHost(t)
+		top, state := absentChain(t.TempDir())
+		c := h.resolvable()
+		c.StateDirDefault = state
+		got, err := mustResolve(as(os.Geteuid()), t, c, "storage reset")
+		if err != nil || got != state {
+			t.Fatalf("ResolveStorage under an ancestor this user owns = %q, %v; want %q created", got, err, state)
+		}
+		if fi, err := os.Stat(state); err != nil || !fi.IsDir() {
+			t.Fatalf("the absent state directory %s was not created: %v", state, err)
+		}
+		if _, err := os.Stat(top); err != nil {
+			t.Fatalf("the missing levels above it were not created: %v", err)
+		}
+	})
+	t.Run("ancestor owned by another user: refused, nothing created", func(t *testing.T) {
+		h := newSwapHost(t)
+		base := t.TempDir()
+		top, state := absentChain(base)
+		c := h.resolvable()
+		c.StateDirDefault = state
+		_, _, err := ResolveStorage(as(stranger), c, "storage reset")
+		if !errors.Is(err, storage.ErrNotStateDirOwner) || !strings.Contains(err.Error(), "storage reset") || !strings.Contains(err.Error(), base) {
+			t.Fatalf("ResolveStorage under a stranger's ancestor = %v, want storage.ErrNotStateDirOwner naming the command and the ancestor %s", err, base)
+		}
+		if _, err := os.Stat(filepath.Dir(top)); !os.IsNotExist(err) {
+			t.Fatalf("the refused resolve created a level of the chain: %v", err)
+		}
+	})
+	t.Run("read-only command under a stranger's ancestor: not the rule's", func(t *testing.T) {
+		h := newSwapHost(t)
+		_, state := absentChain(t.TempDir())
+		c := h.resolvable()
+		c.StateDirDefault = state
+		if got, err := mustResolve(as(stranger), t, c, ""); err != nil || got != state {
+			t.Fatalf("a read-only ResolveStorage as a stranger = %q, %v; want %q", got, err, state)
+		}
+	})
+	t.Run("an unusable default falls back beside the store, checked the same way", func(t *testing.T) {
+		h := newSwapHost(t)
+		base := t.TempDir()
+		blocker := filepath.Join(base, "arkham")
+		if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		beside := filepath.Join(base, "elsewhere", "deeper")
+		c := h.resolvable("GOTHAM_CORE_STORAGE_PATH=" + filepath.Join(beside, "main.pebble"))
+		c.StateDirDefault = filepath.Join(blocker, "state") // under a file: cannot be created
+		// As this user the walk passes the file (ENOTDIR) to an ancestor this
+		// user owns, the default fails to be created, and the fallback is an
+		// absent chain compared the same way.
+		if got, err := mustResolve(as(os.Geteuid()), t, c, "storage reset"); err != nil || got != beside {
+			t.Fatalf("ResolveStorage with an unusable default = %q, %v; want the fallback %q", got, err, beside)
+		}
+		if fi, err := os.Stat(beside); err != nil || !fi.IsDir() {
+			t.Fatalf("the fallback was not created: %v", err)
+		}
+	})
+}
+
+// mustResolve is ResolveStorage's state directory, or its error.
+func mustResolve(ctx context.Context, t *testing.T, c Config, owner string) (string, error) {
+	t.Helper()
+	_, state, err := ResolveStorage(ctx, c, owner)
+	return state, err
 }
 
 // TestResolveStorage_WarnsOnStandardErrorWithNoLogger: with no Config.Logger
