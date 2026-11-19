@@ -1,5 +1,5 @@
 // file: internal/books/module.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
 // last-edited: 2026-11-19
 
@@ -119,7 +119,7 @@ var errNotBooks = errors.New("books: not the module books.Module returned")
 // applyEnvAuthoritativeConfig), and Register refuses a boot whose stored
 // settings turn it the other way (errABSFlagDrift).
 func Module() module.Module {
-	return &booksModule{abs: config.AppConfig.ABSAPIEnabled}
+	return &booksModule{abs: config.AppConfig.ABSAPIEnabled, flip: flipDeclared}
 }
 
 // booksModule is books' module.Module.

@@ -1,5 +1,5 @@
 // file: internal/books/cutover.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5a82d1c7-3e94-4f60-b7a8-0c19e6d4f253
 // last-edited: 2026-11-19
 
@@ -11,6 +11,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	coreconfig "github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
@@ -29,6 +30,25 @@ import (
 // unbound importers, and a books level step runs on any boot through the
 // versioned path, so the switch is books-side and single: slice (e) turns it on
 // with the gate.
+
+// flipDeclared is the one switch: Module() copies it into booksModule.flip, and
+// Options and OfflineOptions read it for the config lists below. false until
+// slice (e) of F3-07, which sets it with app.Options.CoreConfigBoot and deletes
+// both. Tests that need the flip build the module with flip set, or set this
+// for the length of the test.
+var flipDeclared = false
+
+// flipConfigNames are the config lists app.Options carries once the flip is
+// declared: the retired env names and file keys (HEAD's names are retired only
+// when core config replaces them: until then HEAD still reads them, and a
+// config check that called them retired would be wrong) and the OPENAI
+// ecosystem bindings. Both nil while the flip is dark.
+func flipConfigNames(declared bool) (retired []coreconfig.RetiredName, bindings []coreconfig.EnvName) {
+	if !declared {
+		return nil, nil
+	}
+	return cutover.RetiredConfigNames(), cutover.ConfigEnvBindings()
+}
 
 // booksLevelStepVersion is the version books.level-1 takes: books' next
 // contiguous one, pinned. The cutover-list cell fails when
