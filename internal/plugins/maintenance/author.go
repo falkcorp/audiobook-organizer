@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.19.1
+// version: 1.20.0
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
 // last-edited: 2026-11-19
 
@@ -87,7 +87,9 @@ import (
 // skips a book that no longer names the composite
 // (TestAuthorSplitScan_NoCreditLostWhenTheCommitFails,
 // TestAuthorSplitScan_RequeueAfterPartialApply). A store that cannot make the one
-// commit is refused, with no two-write fallback.
+// commit is refused, with no two-write fallback, and refused once up front
+// (checked on the store) before the stand-down or any part is created
+// (TestAuthorSplitScan_ApplyOnAStoreWithoutTheCreditsCommitIsRefusedBeforeAnyWrite).
 // authorSplitScanHelp is the def's Description, which the native kind carries as
 // its Help.
 const authorSplitScanHelp = "Finds and splits composite author names (e.g. 'Smith, J. & Jones, A.'). " +
@@ -450,6 +452,18 @@ func authorSplitScanCore(ctx context.Context, env authorSplitEnv) (retErr error)
 		env.Log(slog.LevelInfo, resultMsg)
 		prog.Done(resultMsg)
 		return nil
+	}
+
+	// A store that cannot commit a book's credits and row together would refuse
+	// every book AFTER step 1 had created each composite's parts, leaving author
+	// rows nothing credits. Ask once, before the stand-down is taken and before
+	// any write, so the run refuses with nothing to undo. The capability is the
+	// store's: the writer's ModifyBookCredits delegates to this same store
+	// (t6g1HeadWriter), and a probe method on the writer interface is not an
+	// option because that interface lists writes only
+	// (TestT6G1Kinds_WriterResourceMapCoversEveryWriterMethod).
+	if _, ok := database.AsCapability[database.BookCreditsModifier](store); !ok {
+		return fmt.Errorf("author-split-scan apply refused before writing anything: %w: store is %T", database.ErrBookCreditsUnsupported, store)
 	}
 
 	// The apply rewrites author and book rows, so the library scan stands down
