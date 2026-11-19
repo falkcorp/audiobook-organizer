@@ -74,8 +74,9 @@ type t7Env struct {
 	Items t7ItemsFunc
 	// Touch stamps the run's liveness clock without reporting progress.
 	Touch func()
-	// Checkpoint saves state for the run's resume (rc.Checkpoint). Nil in a
-	// HEAD shell, whose cores that checkpoint do so through their own helper.
+	// Checkpoint saves state for the run's resume (rc.Checkpoint). In a HEAD shell
+	// it is set only for the cores that checkpoint (t7HeadCheckpointing); nil
+	// otherwise.
 	Checkpoint func(state any) error
 	// Restore loads the state Checkpoint saved into v and reports whether there
 	// was any (rc.Restore). Nil in a HEAD shell.
@@ -107,10 +108,18 @@ func t7HeadEnv(rep opsregistry.Reporter, live bool) t7Env {
 		SetResult: func(v any) error { return opsregistry.ReporterSetResult(rep, v) },
 		Items:     t7HeadItems(rep),
 		Touch:     func() { opsregistry.TouchLiveness(rep) },
-		// HEAD's cores that checkpoint write the remaining work, which HEAD's
-		// resume overlays onto the params; they never read it back.
-		Checkpoint: func(state any) error { return rep.Checkpoint(state) },
 	}
+}
+
+// t7HeadCheckpointing adds the reporter's Checkpoint to a HEAD env. Only the
+// shells whose cores checkpoint call it: HEAD's cores write the remaining work,
+// which HEAD's resume overlays onto the params, and never read it back. It is
+// not part of t7HeadEnv because internal/arch's TestResumeRestartDefsCheckpoint
+// reads a def whose Run can reach a Checkpoint call as one that resumes, and the
+// restart-by-design defs (listed in restartWithoutCheckpoint) must not.
+func t7HeadCheckpointing(e t7Env, rep opsregistry.Reporter) t7Env {
+	e.Checkpoint = func(state any) error { return rep.Checkpoint(state) }
+	return e
 }
 
 // t7NativeEnv fills the env from the native run.

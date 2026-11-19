@@ -473,7 +473,7 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 		}
 	}
 	h := headCandidateFetch{s: s}
-	return candidateFetchCore(ctx, p, candidateFetchEnv{t7Env: t7HeadEnv(reporter, true), Store: h, Writer: h})
+	return candidateFetchCore(ctx, p, candidateFetchEnv{t7Env: t7HeadCheckpointing(t7HeadEnv(reporter, true), reporter), Store: h, Writer: h})
 }
 
 // headCandidateFetch is HEAD's side of both interfaces: the server's store and

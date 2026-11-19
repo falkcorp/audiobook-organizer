@@ -348,7 +348,7 @@ func (s *Server) batchApplyDef() opsregistry.OperationDef {
 				}
 			}
 			return batchApplyCore(ctx, p, batchApplyEnv{
-				t7Env:     t7HeadEnv(reporter, true),
+				t7Env:     t7HeadCheckpointing(t7HeadEnv(reporter, true), reporter),
 				Writer:    headBatchApply{s: s},
 				StandDown: s.t7HeadMetadataStandDown(reporter),
 			})

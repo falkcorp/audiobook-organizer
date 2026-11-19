@@ -1,7 +1,7 @@
 // file: internal/arch/resume_restart_guard_test.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: 87f31afd-8f18-4eed-8095-a44c9e9c30bf
-// last-edited: 2026-11-15
+// last-edited: 2026-11-18
 
 package arch
 
@@ -243,10 +243,10 @@ var restartWithoutCheckpoint = map[string]string{
 	"internal/server/purge_soft_deleted_op.go purgeSoftDeletedOpID":          "the next run reclassifies the trash; a purged book is gone from it",
 
 	// Ledger-anchored: the operation's own result rows say what is done.
-	"internal/server/metadata_ops.go library.bulk-metadata-fetch": "books with an OperationResult row under the fetch chain's ledger key are skipped on resume (metadata_ops.go runBulkMetadataFetchAll)",
+	"internal/server/metadata_ops.go bulkMetadataFetchOpID": "books with an OperationResult row under the fetch chain's ledger key are skipped on resume (metadata_ops.go runBulkMetadataFetchAll)",
 
 	// Re-attach, not re-do.
-	"internal/server/aiscan_op.go ai.author-scan": "RESUME AUDIT 2026-09-11 (c): decideResume reads persisted phase rows and re-attaches to a started OpenAI batch; nothing is billed twice",
+	"internal/server/aiscan_op.go aiAuthorScanOpID": "RESUME AUDIT 2026-09-11 (c): decideResume reads persisted phase rows and re-attaches to a started OpenAI batch; nothing is billed twice",
 
 	// Read-only or cheap and side-effect free.
 	"internal/server/catalog_coverage_op.go catalogCoverageOpID":     "a read-only report; a restart simply runs it again",
