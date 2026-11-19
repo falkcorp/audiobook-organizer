@@ -385,6 +385,41 @@ func t7NativeStandDown(rc *tasks.RC, key tasks.Key) t7StandDown {
 	}
 }
 
+// t7ScanController is a dedup.ScanStandDownController over a t7StandDown: the
+// engines that stand the scan down themselves (dedup.DedupSeries,
+// dedup.MergeSeries) acquire and renew through it. HEAD passes the server, which
+// is the controller; a native run passes this over rc.StandDown.
+type t7ScanController struct {
+	acquire t7StandDown
+	mu      sync.Mutex
+	hold    t7Hold
+	held    bool
+}
+
+// AcquireScanStandDown takes the hold for reason; release gives it back.
+func (c *t7ScanController) AcquireScanStandDown(ctx context.Context, _ string, reason string) (func(), error) {
+	h, err := c.acquire(ctx, reason)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	c.hold, c.held = h, true
+	c.mu.Unlock()
+	return func() {
+		if h.Finish != nil {
+			_ = h.Finish(nil)
+		}
+	}, nil
+}
+
+// RenewScanStandDown reports whether the hold is still held.
+func (c *t7ScanController) RenewScanStandDown(string) bool {
+	c.mu.Lock()
+	h, held := c.hold, c.held
+	c.mu.Unlock()
+	return held && h.Renew != nil && h.Renew()
+}
+
 // t7ProgressReporter is the operations.ProgressReporter (and AttrReporter) the
 // shared helpers that take one are handed. It is registryProgressAdapter over
 // the env's hooks: HEAD's hooks reach the Reporter, a native run's reach the
@@ -432,6 +467,14 @@ func (e t7Env) reporter() t7ProgressReporter { return t7ProgressReporter{env: e}
 type t7Store interface {
 	t7StoreLibrary
 	t7StoreEntities
+	t7StoreDedup
+}
+
+// t7StoreDedup is the reads of the dedup definitions.
+type t7StoreDedup interface {
+	dedupScanStore
+	seriesDedupStore
+	seriesNormalizeStore
 }
 
 // t7StoreEntities is the reads of the author and series definitions.
@@ -442,16 +485,33 @@ type t7StoreEntities interface {
 
 // t7StoreLibrary is the reads of the library and batch-metadata definitions.
 type t7StoreLibrary interface {
+	t7StoreLibraryFiles
+	t7StoreLibraryAI
+	t7StoreLibraryBatch
+}
+
+// t7StoreLibraryFiles is the reads of the library file, import and collection definitions.
+type t7StoreLibraryFiles interface {
 	librarySizeRefreshStore
-	batchApplyRefusalsResetStore
-	collectionRefreshStore
 	purgeSoftDeletedStore
 	folderAutoScanStore
+	libraryImportStore
+	libraryTranscodeStore
+	collectionRefreshStore
+}
+
+// t7StoreLibraryAI is the reads of the AI review and coverage definitions.
+type t7StoreLibraryAI interface {
 	diagnosticsAIStore
 	aiAuthorReviewStore
 	aiMergeApplyStore
 	aiScanApplyStore
 	catalogCoverageStore
+}
+
+// t7StoreLibraryBatch is the reads of the batch-metadata definitions.
+type t7StoreLibraryBatch interface {
+	batchApplyRefusalsResetStore
 	seriesRenameReads
 	candidateFetchReads
 	batchSaveReads
@@ -459,8 +519,6 @@ type t7StoreLibrary interface {
 	identAdvanceStore
 	bulkFetchOpStore
 	catalogHarvestStore
-	libraryImportStore
-	libraryTranscodeStore
 }
 
 // t7Writer is every write the converted cores make, composed from each
@@ -475,6 +533,17 @@ type t7Writer interface {
 	t7WriterIntegrations
 	t7WriterAI
 	t7WriterEntities
+	t7WriterDedup
+}
+
+// t7WriterDedup is the writes of the dedup definitions.
+type t7WriterDedup interface {
+	bookMergeWriter
+	bookCombineWriter
+	seriesDedupWriter
+	seriesPruneWriter
+	seriesMergeWriter
+	seriesNormalizeWriter
 }
 
 // t7WriterEntities is the writes of the author and series definitions.
@@ -486,13 +555,33 @@ type t7WriterEntities interface {
 
 // t7WriterLibrary is the writes of the library and batch-metadata definitions.
 type t7WriterLibrary interface {
-	batchApplyRefusalsResetWriter
+	t7WriterLibraryFiles
+	t7WriterLibraryAI
+	t7WriterLibraryBatch
+}
+
+// t7WriterLibraryFiles is the writes of the library file, import and collection definitions.
+type t7WriterLibraryFiles interface {
 	collectionRefreshWriter
 	purgeSoftDeletedWriter
 	folderAutoScanWriter
+	libraryScanWriter
+	libraryOrganizeWriter
+	libraryTranscodeWriter
+}
+
+// t7WriterLibraryAI is the writes of the AI and harvest definitions.
+type t7WriterLibraryAI interface {
 	libraryAIParseWriter
 	aiMergeApplyWriter
 	aiScanApplyWriter
+	bulkFetchOpWriter
+	catalogHarvestWriter
+}
+
+// t7WriterLibraryBatch is the writes of the batch-metadata definitions.
+type t7WriterLibraryBatch interface {
+	batchApplyRefusalsResetWriter
 	seriesRenameWriter
 	candidateFetchWriter
 	batchSaveWriter
@@ -500,11 +589,6 @@ type t7WriterLibrary interface {
 	whenScannedWriter
 	batchApplyWriter
 	identAdvanceWriter
-	bulkFetchOpWriter
-	catalogHarvestWriter
-	libraryScanWriter
-	libraryOrganizeWriter
-	libraryTranscodeWriter
 }
 
 // t7WriterFiles is the writes of the file-writing definitions.
@@ -815,6 +899,15 @@ func t7KindList(s *Server, deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) 
 		s.libraryImportNative(deps, sched),
 		s.libraryOrganizeNative(deps, sched),
 		s.libraryTranscodeNative(deps, sched),
+		s.bookDedupScanNative(deps, sched),
+		s.bookMergeNative(deps, sched),
+		s.bookCombineNative(deps, sched),
+		s.authorDedupScanNative(deps, sched),
+		s.seriesDedupScanNative(deps, sched),
+		s.seriesDedupNative(deps, sched),
+		s.seriesPruneNative(deps, sched),
+		s.seriesMergeNative(deps, sched),
+		s.seriesNormalizeNative(deps, sched),
 	}
 }
 

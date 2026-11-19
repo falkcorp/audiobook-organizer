@@ -1,7 +1,7 @@
 // file: pkg/plugin/sdk/progress.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b3a9c1e-2d4f-4e6a-8b9c-1a2b3c4d5e6f
-// last-edited: 2026-05-30
+// last-edited: 2026-11-18
 
 package sdk
 
@@ -24,16 +24,23 @@ import "fmt"
 //	step N+1         "Finalizing …"         (N+1, N+2)
 //	step N+2         "Done"                 (N+2, N+2)
 type Progress struct {
-	r     Reporter
+	r     ProgressSink
 	n     int // number of real units of work
 	total int // n + 2
 	cur   int // most recently reported current
 }
 
+// ProgressSink is the one Reporter method Progress uses. Taking it rather than
+// the whole Reporter lets a caller that holds only a progress callback (a native
+// task's RC) use the helper too; every Reporter satisfies it.
+type ProgressSink interface {
+	UpdateProgress(current, total int, message string) error
+}
+
 // NewProgress returns a helper that reserves a start + n + finalize + done
 // step schedule. Negative n is clamped to 0, so the worst case still has
 // total == 2 — never 0/0.
-func NewProgress(r Reporter, n int) *Progress {
+func NewProgress(r ProgressSink, n int) *Progress {
 	if n < 0 {
 		n = 0
 	}
