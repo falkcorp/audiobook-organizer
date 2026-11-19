@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g7.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8e3a5d17-2c94-4b60-a1f8-6d07c9e4b352
 // last-edited: 2026-11-19
 
@@ -453,6 +453,9 @@ func t6g7NewWriter(kind tasks.Kind, deps t6g7Deps, rc *tasks.RC) (t6g7Writer, er
 // signature, so the embeds overlap cleanly. Nothing here writes.
 type t6g7Store interface {
 	reviewStatusIndexRepairStore
+	unknownAuthorAuditStore
+	versionGroupPrimaryReportStore
+	reportsPruneStore
 }
 
 // t6g7Writer is every write the 15 definitions make, composed from each
@@ -472,6 +475,8 @@ type t6g7Deps struct {
 	// writer it wraps belongs to that run's executor, which is why this is a
 	// constructor and not a field of the store (conversion rule 3).
 	NewWriter func(tasks.Writer) t6g7Writer
+	// RootDir is the library root.
+	RootDir func() string
 }
 
 // t6g7Kinds returns the 15 native definitions of group 7 in file order. sched
@@ -487,6 +492,9 @@ func (p *Plugin) t6g7Kinds(deps t6g7Deps, sched func(tasks.Kind) *tasks.Schedule
 func t6g7KindList(p *Plugin, deps t6g7Deps, sched func(tasks.Kind) *tasks.Schedule) []tasks.Definition {
 	return []tasks.Definition{
 		p.reviewStatusIndexRepairNative(deps, sched),
+		p.unknownAuthorAuditNative(deps, sched),
+		p.versionGroupPrimaryReportNative(deps, sched),
+		p.reportsPruneNative(deps, sched),
 	}
 }
 
