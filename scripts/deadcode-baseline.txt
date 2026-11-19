@@ -100,6 +100,7 @@ core/internal/executor.Reconfigure
 core/internal/executor.cpuBudget.resize
 core/internal/executor.pruneRuns
 core/internal/instancestore.StorageSpec
+core/internal/logjournal.BlankUserIDs
 core/internal/logjournal.Importer.Import
 core/internal/logjournal.New
 core/internal/logjournal.NewImporter
@@ -127,6 +128,7 @@ core/internal/logjournal.Tap.arm
 core/internal/logjournal.Tap.flush
 core/internal/logjournal.Tap.flushInBackground
 core/internal/logjournal.Tap.offer
+core/internal/logjournal.ViewOf
 core/internal/logjournal.attrValue
 core/internal/logjournal.cursorOf
 core/internal/logjournal.discard
@@ -136,6 +138,7 @@ core/internal/logjournal.importULID
 core/internal/logjournal.increment
 core/internal/logjournal.journalBounds
 core/internal/logjournal.journalKey
+core/internal/logjournal.liveView
 core/internal/logjournal.makeULID
 core/internal/logjournal.mayReadUsers
 core/internal/logjournal.msOf
@@ -149,7 +152,6 @@ core/internal/logjournal.tailRedact
 core/internal/logjournal.tailVisible
 core/internal/logjournal.toRow
 core/internal/logjournal.ulidOfKey
-core/internal/logjournal.viewOf
 core/internal/outboxstore.SerializedPrefixes
 core/internal/outboxstore.StorageSpec
 core/internal/rbacstore.New

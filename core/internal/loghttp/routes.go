@@ -1,5 +1,5 @@
 // file: core/internal/loghttp/routes.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2b8e41d6-7c05-4f93-a1e8-5d3f09c6b7a4
 // last-edited: 2026-11-19
 
@@ -36,7 +36,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/falkcorp/mediacore/auth"
@@ -106,19 +105,9 @@ type queryRequest struct {
 	Q      string    `query:"q"`      // JournalQuery.Text
 }
 
-type recordView struct { // one journal record on the wire
-	Time      time.Time         `json:"time"`
-	Level     string            `json:"level"` // slog level name, lower case
-	Module    string            `json:"module"`
-	Subsystem string            `json:"subsystem"`
-	Message   string            `json:"message"`
-	Attrs     map[string]string `json:"attrs"` // dotted keys, as the native store flattens them
-	TraceID   string            `json:"trace_id,omitempty"`
-	SpanID    string            `json:"span_id,omitempty"`
-}
-
-// pageView is the response: records newest first, and next_cursor when more remain.
-type pageView = httpapi.CursorPage[recordView]
+// pageView is the response: records newest first (logjournal.RecordView, the
+// live tail's payload type too), and next_cursor when more remain.
+type pageView = httpapi.CursorPage[logjournal.RecordView]
 
 // parse maps the request onto a JournalQuery, or answers 422 for every
 // parameter that is malformed (the same status httpapi's binder gives an
@@ -182,28 +171,21 @@ func (a *api) list(ctx context.Context, in *httpapi.In[queryRequest]) (pageView,
 		// A plain error: httpapi logs it and answers 500 without echoing it.
 		return pageView{}, fmt.Errorf("loghttp: querying the journal: %w", err)
 	}
-	out := pageView{Items: make([]recordView, 0, len(page.Records)), NextCursor: page.Next}
+	out := pageView{Items: make([]logjournal.RecordView, 0, len(page.Records)), NextCursor: page.Next}
 	for _, rec := range page.Records {
 		out.Items = append(out.Items, viewOf(rec, !mayRead))
 	}
 	return out, nil
 }
 
-// viewOf is rec on the wire. Attributes are flat (dotted keys) and rendered as
-// text; a repeated key keeps its last value. With blank, every user_id
-// attribute, whether top-level or inside a group (".user_id"), is present and
-// empty.
-func viewOf(rec log.Record, blank bool) recordView {
-	v := recordView{
-		Time: rec.Time, Level: strings.ToLower(rec.Level.String()), Module: rec.Module, Subsystem: rec.Subsystem,
-		Message: rec.Message, Attrs: make(map[string]string, len(rec.Attrs)), TraceID: rec.TraceID, SpanID: rec.SpanID,
-	}
-	for _, a := range rec.Attrs {
-		val := a.Value.Resolve().String()
-		if blank && (a.Key == log.KeyUserID || strings.HasSuffix(a.Key, "."+log.KeyUserID)) {
-			val = ""
-		}
-		v.Attrs[a.Key] = val
+// viewOf is rec on the wire (logjournal.ViewOf: attributes flat, as text, a
+// repeated key keeping its last value). With blank, every user_id attribute,
+// top level or inside a group, is present and empty (logjournal.BlankUserIDs),
+// as on the live tail.
+func viewOf(rec log.Record, blank bool) logjournal.RecordView {
+	v := logjournal.ViewOf(rec)
+	if blank {
+		logjournal.BlankUserIDs(v.Attrs)
 	}
 	return v
 }

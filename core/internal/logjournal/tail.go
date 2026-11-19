@@ -1,5 +1,5 @@
 // file: core/internal/logjournal/tail.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 4f1c7d92-8a3e-4b65-9d02-e7a5c3b81f46
 // last-edited: 2026-11-19
 
@@ -50,21 +50,21 @@ const (
 	// mediacore_log_dropped_total{sink="journal-tail"}.
 	TailTapName = "journal-tail"
 
-	// PermSystemManage is the permission that opens the tail and the query
+	// permSystemManage is the permission that opens the tail and the query
 	// route (05-logging §5). It is AuthRequired, so with authentication off
 	// nobody holds it and the tail delivers nothing (05-logging §5, "Auth-off
 	// reach": a deliberate tightening).
-	PermSystemManage rbac.Permission = "core:system.manage"
-	// PermUsersView lifts the other-user rule: it is the read side of user data
+	permSystemManage rbac.Permission = "core:system.manage"
+	// permUsersView lifts the other-user rule: it is the read side of user data
 	// (05-rbac §6.1, the successor of HEAD's users.manage gate).
-	PermUsersView rbac.Permission = "core:users.view"
+	permUsersView rbac.Permission = "core:users.view"
 )
 
-// RecordView is one journal record on the wire, the payload of
-// core.log.recorded.v1. It is the same view the query route returns for a
-// record (loghttp's recordView: same members, same names), so REST and the
-// stream agree: attributes are flat, under their dotted keys, and rendered as
-// text, with a repeated key keeping its last value.
+// RecordView is one journal record on the wire: the payload of
+// core.log.recorded.v1 and the item type of the query route's pages (loghttp),
+// so REST and the stream carry one type. Attributes are flat, under their
+// dotted keys, and rendered as text, with a repeated key keeping its last
+// value (ViewOf).
 type RecordView struct {
 	Time      time.Time         `json:"time"`
 	Level     string            `json:"level"` // slog level name, lower case
@@ -89,7 +89,7 @@ func TailTopic() events.Topic[RecordView] { return events.NewTopic[RecordView](T
 // registered one, so nothing is flagged and only the blanking applies.
 func TailSpec(otherUser log.OtherUserPredicate) events.TopicSpec {
 	return TailTopic().Spec(events.TopicSpec{
-		Permission: rbac.Need(PermSystemManage),
+		Permission: rbac.Need(permSystemManage),
 		Visible:    tailVisible(otherUser),
 		Redact:     tailRedact,
 		Realtime:   &events.RealtimeMeta{},
@@ -99,7 +99,7 @@ func TailSpec(otherUser log.OtherUserPredicate) events.TopicSpec {
 // mayReadUsers is rbac.Can's rule on a checker: the scope is held and the
 // requirement satisfied. A nil checker holds nothing.
 func mayReadUsers(who rbac.Checker) bool {
-	return who != nil && who.Has(PermUsersView) && who.Satisfies(rbac.Need(PermUsersView))
+	return who != nil && who.Has(permUsersView) && who.Satisfies(rbac.Need(permUsersView))
 }
 
 // tailVisible is TopicSpec.Visible: the query route's Hide, applied per
@@ -140,11 +140,7 @@ func tailRedact(who rbac.Checker, payload json.RawMessage) json.RawMessage {
 	if json.Unmarshal(payload, &v) != nil {
 		return nil
 	}
-	for k := range v.Attrs {
-		if k == log.KeyUserID || strings.HasSuffix(k, "."+log.KeyUserID) {
-			v.Attrs[k] = ""
-		}
-	}
+	BlankUserIDs(v.Attrs)
 	out, err := json.Marshal(v)
 	if err != nil {
 		return nil
@@ -169,11 +165,38 @@ func (v RecordView) record() (log.Record, bool) {
 	return rec, true
 }
 
-// viewOf is r as the query route would return it once the journal had stored
+// ViewOf is rec, a record as the journal stores it (flat attributes), on the
+// wire: attributes rendered as text under their dotted keys, a repeated key
+// keeping its last value. The query route and the live tail both build their
+// view here, so they cannot drift. user_id is untouched; see BlankUserIDs.
+func ViewOf(rec log.Record) RecordView {
+	v := RecordView{
+		Time: rec.Time, Level: strings.ToLower(rec.Level.String()), Module: rec.Module, Subsystem: rec.Subsystem,
+		Message: rec.Message, Attrs: make(map[string]string, len(rec.Attrs)), TraceID: rec.TraceID, SpanID: rec.SpanID,
+	}
+	for _, a := range rec.Attrs {
+		v.Attrs[a.Key] = a.Value.Resolve().String()
+	}
+	return v
+}
+
+// BlankUserIDs makes every user_id attribute of a view, top level or inside a
+// group (".user_id"), present and empty: what a viewer without core:users.view
+// sees. The query route and the live tail both blank here.
+func BlankUserIDs(attrs map[string]string) {
+	for k := range attrs {
+		if k == log.KeyUserID || strings.HasSuffix(k, "."+log.KeyUserID) {
+			attrs[k] = ""
+		}
+	}
+}
+
+// liveView is r as the query route would return it once the journal had stored
 // it: r goes through the store's own row encoding (attributes flattened, a
-// zero time replaced, a time the store refuses refused), so the two views
-// cannot drift. user_id is untouched: it is blanked per subscriber, at send.
-func viewOf(r log.Record, now time.Time) (RecordView, bool) {
+// zero time replaced, a time the store refuses refused) and then ViewOf, so
+// the two views cannot drift. user_id is untouched: it is blanked per
+// subscriber, at send.
+func liveView(r log.Record, now time.Time) (RecordView, bool) {
 	t := r.Time
 	if t.IsZero() {
 		t = now
@@ -189,18 +212,16 @@ func viewOf(r log.Record, now time.Time) (RecordView, bool) {
 	if err != nil {
 		return RecordView{}, false
 	}
-	v := RecordView{
-		Time: rec.Time, Level: strings.ToLower(rec.Level.String()), Module: rec.Module, Subsystem: rec.Subsystem,
-		Message: rec.Message, Attrs: make(map[string]string, len(rec.Attrs)), TraceID: rec.TraceID, SpanID: rec.SpanID,
-	}
-	for _, a := range rec.Attrs {
-		v.Attrs[a.Key] = a.Value.Resolve().String()
-	}
-	return v, true
+	return ViewOf(rec), true
 }
 
 // ErrNoPublisher is StartTail's refusal of a nil publisher.
 var ErrNoPublisher = errors.New("logjournal: the live tail needs an events publisher")
+
+// ErrTailStarted is StartTail's refusal of a second enabled tail on a Logging:
+// two would share the journal-tail drop counter and publish every record
+// twice.
+var ErrTailStarted = errors.New("logjournal: a live tail was already started on this logger")
 
 // TailCounters are the tail's own counters.
 type TailCounters struct {
@@ -228,6 +249,12 @@ type Tail struct {
 // and the least severe record published is s.MinLevel, so the tail carries
 // exactly what the journal keeps. Records are published whether or not the
 // journal's store write succeeds.
+//
+// One tail per Logging: a second enabled StartTail on the same logger is
+// refused with ErrTailStarted, also after the first was stopped (the tap's drop
+// counter, which records that the name was taken, lives as long as the logger).
+// The check and the registration are not one atomic step, so it guards a
+// sequential second call, not two racing ones; the kernel starts the tail once.
 func StartTail(l *log.Logging, pub events.Publisher, s Settings) (*Tail, error) {
 	if pub == nil {
 		return nil, ErrNoPublisher
@@ -240,13 +267,16 @@ func StartTail(l *log.Logging, pub events.Publisher, s Settings) (*Tail, error) 
 	if !s.Enabled {
 		return t, nil
 	}
+	if _, taken := l.Counters().Dropped[TailTapName]; taken {
+		return nil, ErrTailStarted
+	}
 	t.stopTap = l.Tap(TailTapName, level, max(s.QueueSize, minQueue), t.offer)
 	return t, nil
 }
 
 // offer runs on the tap's goroutine: it never blocks (events.Publish does not).
 func (t *Tail) offer(ctx context.Context, r log.Record) {
-	v, ok := viewOf(r, t.now())
+	v, ok := liveView(r, t.now())
 	if !ok {
 		t.skipped.Add(1)
 		return

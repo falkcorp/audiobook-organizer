@@ -5,3 +5,4 @@
 ### Changed
 
 - The module-registered other-user log predicate (`log.OtherUserPredicate`) is now handed the same record on the journal query route and on the live tail: `log.PredicateInput` normalises it to text-only attribute values, sorted by key, with the last value of a repeated key winning. Before, the route passed the store's typed, ordered record, so a predicate that switched on a value's kind could classify a record differently on the two surfaces. No predicate is registered by any module yet, so no behaviour changes today.
+- The system-log query route's page items are now `logjournal.RecordView`, the same type the live tail publishes, and both build a record's wire view and blank `user_id` through the same two functions (`logjournal.ViewOf`, `logjournal.BlankUserIDs`). The JSON is unchanged.
