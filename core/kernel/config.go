@@ -1,5 +1,5 @@
 // file: core/kernel/config.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 1f6c9e2a-7b40-4d85-9a3e-5c2b8d7f0e14
 // last-edited: 2026-11-19
 
@@ -192,6 +192,13 @@ func bootConfig(ctx context.Context, in configInput) (cb *configBoot, err error)
 		return nil, fmt.Errorf("kernel: config: %w, and core.storage.path %q gives no absolute directory that can be created to keep state beside; set %s to a directory that can be created",
 			what, cb.dbPath, stateVar)
 	}
+	// Absolute, as app.storagePath makes the state directory with the gate
+	// off: a relative compiled default (hello's "hello-state") would
+	// otherwise reach P0a, the swap journal and the keyring relative to
+	// whatever the working directory is at each use.
+	if dir, err = filepath.Abs(dir); err != nil {
+		return nil, fmt.Errorf("kernel: config: the state directory: %w", err)
+	}
 	cb.stateDir, cb.fellBack = dir, fellBack
 	if fellBack {
 		log.Warn("kernel: the default state directory cannot be created; keeping state files beside the database",
@@ -321,8 +328,9 @@ func CheckConfig(ctx context.Context, c ConfigCheck) (uses []config.RetiredUse, 
 // crash matrix's seam the record is read from, and set aside on, the boot's
 // filesystem.
 func (cb *configBoot) bootRoot(ctx context.Context, dir string) (config.StateFiles, error) {
-	if got := filepath.Clean(strings.TrimSpace(dir)); got != cb.stateDir {
-		return nil, fmt.Errorf("kernel: config: Boot resolved the state directory %q, the pre-boot resolver %q", got, cb.stateDir)
+	got, err := filepath.Abs(strings.TrimSpace(dir))
+	if err != nil || got != cb.stateDir {
+		return nil, errors.Join(fmt.Errorf("kernel: config: Boot resolved the state directory %q, the pre-boot resolver %q", got, cb.stateDir), err)
 	}
 	return statefs.Open(ctx, cb.stateDir)
 }

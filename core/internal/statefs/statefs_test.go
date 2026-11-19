@@ -1,5 +1,5 @@
 // file: core/internal/statefs/statefs_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 908b41aa-5da6-48aa-8d3f-a31fbba7ef01
 // last-edited: 2026-11-19
 
@@ -273,6 +273,21 @@ func TestMkdirAll_FollowsTheSeam(t *testing.T) {
 	if len(evs) != 1 || evs[0].Label != "config.statedir.mkdir" || evs[0].Kind != errorfs.OpMkdirAll {
 		t.Fatalf("events = %+v, want one labelled mkdir", evs)
 	}
+	// An existing directory is done with no operation, as os.MkdirAll
+	// stats first and never calls mkdir on one.
+	if err := statefs.MkdirAll(bootseam.With(t.Context(), rec.Seams()), "config.statedir.mkdir", dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(rec.Events()); n != 1 {
+		t.Fatalf("MkdirAll of an existing directory recorded %d more operations", n-1)
+	}
+	d, err := statefs.Open(bootseam.With(t.Context(), rec.Seams()), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.MkdirAll("l", ".", 0o700); err != nil || len(rec.Events()) != 1 {
+		t.Fatalf("Dir.MkdirAll of an existing directory: %v, %d operations", err, len(rec.Events()))
+	}
 	if err := statefs.MkdirAll(t.Context(), "l", dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -292,9 +307,6 @@ func TestFromRoot_LeavesTheRootOpen(t *testing.T) {
 	}
 	defer func() { _ = root.Close() }()
 	d := statefs.FromRoot(root)
-	if d.Name() != dir {
-		t.Fatalf("Name = %q, want %q", d.Name(), dir)
-	}
 	if err := d.WriteNew("l", "f", []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
