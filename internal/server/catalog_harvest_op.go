@@ -18,6 +18,8 @@ import (
 
 	"golang.org/x/time/rate"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -29,6 +31,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 const catalogHarvestOpID = "catalog.harvest-authors"
@@ -78,7 +81,13 @@ func init() {
 func (s *Server) RegisterCatalogHarvestOp(reg *opsregistry.Registry) error {
 	catalogHarvestLog.Info("startup: catalog.enabled=%v (author catalog op and /catalog routes are %s)",
 		config.AppConfig.Catalog.Enabled, map[bool]string{true: "live", false: "refusing"}[config.AppConfig.Catalog.Enabled])
-	return reg.RegisterOp(opsregistry.OperationDef{
+	return reg.RegisterOp(s.catalogHarvestDef())
+}
+
+// catalogHarvestDef is HEAD's definition of catalog.harvest-authors. Its Run is
+// the v2 shell.
+func (s *Server) catalogHarvestDef() opsregistry.OperationDef {
+	return opsregistry.OperationDef{
 		ID:          catalogHarvestOpID,
 		Preview:     opsregistry.PreviewSpec{Params: catalogHarvestParams{}},
 		Liveness:    opsregistry.LivenessRunItems,
@@ -122,7 +131,7 @@ func (s *Server) RegisterCatalogHarvestOp(reg *opsregistry.Registry) error {
 		Permissions:  []auth.Permission{auth.PermSettingsManage},
 		Capabilities: []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkAudible},
 		Run:          s.runCatalogHarvestOp,
-	})
+	}
 }
 
 // catalogHarvestRPS is the harvest's sub-limiter rate: a fraction of
@@ -140,9 +149,8 @@ var errCatalogDisabled = errors.New("catalog.harvest-authors: catalog.enabled is
 
 func (s *Server) runCatalogHarvestOp(ctx context.Context, raw json.RawMessage, reporter opsregistry.Reporter) error {
 	cfg := config.AppConfig.Catalog
-	catalogHarvestLog.Info("op start: catalog.enabled=%v language=%q marketplace=%q", cfg.Enabled, cfg.Language, cfg.Marketplace)
-	if !cfg.Enabled {
-		return errCatalogDisabled
+	if err := catalogHarvestStart(cfg); err != nil {
+		return err
 	}
 	var p catalogHarvestParams
 	if len(raw) > 0 {
@@ -162,6 +170,16 @@ func (s *Server) runCatalogHarvestOp(ctx context.Context, raw json.RawMessage, r
 	return runCatalogHarvest(ctx, reporter, store, cat, metadata.NewAudibleClient(), metadata.DefaultThrottleRegistry(), p, dryRun, cfg)
 }
 
+// catalogHarvestStart logs the run's start and refuses it while catalog.enabled
+// is off. Both shells call it before reading params.
+func catalogHarvestStart(cfg config.CatalogConfig) error {
+	catalogHarvestLog.Info("op start: catalog.enabled=%v language=%q marketplace=%q", cfg.Enabled, cfg.Language, cfg.Marketplace)
+	if !cfg.Enabled {
+		return errCatalogDisabled
+	}
+	return nil
+}
+
 // runCatalogHarvest is the op body with its dependencies injected, so the
 // tests can drive it with a fixture lister, a real Pebble store and a private
 // throttle registry. Production passes metadata.DefaultThrottleRegistry(), the
@@ -169,9 +187,86 @@ func (s *Server) runCatalogHarvestOp(ctx context.Context, raw json.RawMessage, r
 // the harvest both reads that registry (a hold stands the whole run down) and
 // writes to it (a provider error records one), so a hold left by any earlier
 // test in the binary failed the run.
+//
+// It is HEAD's shell over catalogHarvestCore.
 func runCatalogHarvest(ctx context.Context, reporter opsregistry.Reporter, store database.Store, cat *database.CatalogStore,
 	lister metadata.AuthorLister, throttles *metadata.ThrottleRegistry, p catalogHarvestParams, dryRun bool, cfg config.CatalogConfig) error {
-	authors, census, err := catalog.BuildScope(ctx, store, store)
+	h := headCatalogHarvest{store: store, cat: cat, lister: lister, throttles: throttles, reporter: reporter}
+	env := catalogHarvestEnv{t7Env: t7HeadEnv(reporter, !dryRun), Store: h, Writer: h}
+	// The checkpoint is HEAD's own params, exactly what HEAD saved; nothing
+	// restores it (resume is by per-author state), it is the liveness save.
+	env.Checkpoint = func(any) error { return reporter.Checkpoint(p) }
+	return catalogHarvestCore(ctx, catalogHarvestNativeParams{
+		Authors:               p.Authors,
+		ReharvestIntervalDays: p.ReharvestIntervalDays,
+		Concurrency:           p.Concurrency,
+		SampleAuthors:         p.SampleAuthors,
+	}, env, cfg)
+}
+
+// catalogHarvestNativeParams are the native kind's params: HEAD's without the
+// two dry-run spellings, which the run's mode carries.
+type catalogHarvestNativeParams struct {
+	Authors               []string `json:"authors,omitempty"`
+	ReharvestIntervalDays int      `json:"reharvest_interval_days,omitempty"`
+	Concurrency           int      `json:"concurrency,omitempty"`
+	SampleAuthors         *int     `json:"sample_authors,omitempty"`
+}
+
+// catalogHarvestOpen is what the harvester is built from: the run's settings
+// that are computed from the params and config, not the engine's own wiring.
+type catalogHarvestOpen struct {
+	Cfg         config.CatalogConfig
+	RPS         float64
+	Interval    time.Duration
+	Concurrency int
+	OpID        string
+}
+
+// catalogHarvestStore is the reads of catalog.harvest-authors.
+type catalogHarvestStore interface {
+	// CatalogReady refuses a store that has no author catalog (one that is not
+	// Pebble-backed).
+	CatalogReady() error
+	// CatalogScope is the in-scope authors and the census of how they were chosen.
+	CatalogScope(ctx context.Context) ([]catalog.ScopeAuthor, catalog.ScopeCensus, error)
+	// NewHarvester builds the harvester: the provider client, its sub-limiter
+	// and throttle hold. SelectDue and EstimateRun only read the catalog's
+	// per-author state; the run's writes go through catalogHarvestWriter.
+	NewHarvester(open catalogHarvestOpen) *catalog.Harvester
+}
+
+// catalogHarvestWriter is the writes of catalog.harvest-authors (resource
+// catalog; never books or files): the harvest's per-author listing and state
+// writes, the marks it leaves for identification.advance, the gauges and the
+// alias backfill.
+type catalogHarvestWriter interface {
+	// RunHarvest harvests the due authors, calling checkpoint as the run's
+	// liveness save, and marks the books of an author whose catalog changed for
+	// identification. It returns the tally and the run's error.
+	RunHarvest(ctx context.Context, h *catalog.Harvester, due []catalog.ScopeAuthor, checkpoint func() error) (*catalog.Tally, error)
+	// FinishHarvest publishes the catalog gauges and files the author alias
+	// rows. A failure is logged, never fails the run.
+	FinishHarvest(ctx context.Context)
+}
+
+// catalogHarvestEnv is what the shared core takes from its shell (rules R2, R10).
+// Live is false for the dry run, which samples and writes nothing. The
+// harvester runs its own worker pool (HEAD's RunItems at p.Concurrency), so the
+// env carries none.
+type catalogHarvestEnv struct {
+	t7Env
+	Store  catalogHarvestStore
+	Writer catalogHarvestWriter
+}
+
+// catalogHarvestCore is the body of catalog.harvest-authors, shared by HEAD's
+// shell and the native kind.
+func catalogHarvestCore(ctx context.Context, p catalogHarvestNativeParams, env catalogHarvestEnv, cfg config.CatalogConfig) error {
+	if err := env.Store.CatalogReady(); err != nil {
+		return err
+	}
+	authors, census, err := env.Store.CatalogScope(ctx)
 	if err != nil {
 		return err
 	}
@@ -191,30 +286,17 @@ func runCatalogHarvest(ctx context.Context, reporter opsregistry.Reporter, store
 	if p.ReharvestIntervalDays > 0 {
 		interval = time.Duration(p.ReharvestIntervalDays) * 24 * time.Hour
 	}
-	h := catalog.NewHarvester(lister, cat, catalog.Settings{
-		Provider:          metadata.SourceIDAudible,
-		Marketplace:       cfg.Marketplace,
-		Language:          cfg.Language,
-		MaxProducts:       cfg.MaxProductsPerAuthor,
-		ReharvestInterval: interval,
-		Concurrency:       p.Concurrency,
-		Limiter:           rate.NewLimiter(rate.Limit(rps), 1),
-		Throttled:         func() bool { return throttles.Throttled(metadata.SourceIDAudible) },
-		OnProviderError: func(err error) {
-			throttles.RecordFailure(metadata.SourceIDAudible, err)
-		},
-		OpID: opsregistry.ReporterOpID(reporter),
-	})
+	h := env.Store.NewHarvester(catalogHarvestOpen{Cfg: cfg, RPS: rps, Interval: interval, Concurrency: p.Concurrency, OpID: env.OpID})
 	due, err := h.SelectDue(authors, force)
 	if err != nil {
 		return err
 	}
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("scope: %d authors (%d with an ASIN-tagged book; skipped: %d junk, %d publisher-shaped, %d role-marked; %d role-marked credit lists split), %d books in scope, %d without an author; %d due (interval %s); dry_run=%v; harvest rate %.2f req/s (fraction %.2f of audible), concurrency %d",
+	env.Log(slog.LevelInfo, fmt.Sprintf("scope: %d authors (%d with an ASIN-tagged book; skipped: %d junk, %d publisher-shaped, %d role-marked; %d role-marked credit lists split), %d books in scope, %d without an author; %d due (interval %s); dry_run=%v; harvest rate %.2f req/s (fraction %.2f of audible), concurrency %d",
 		census.Authors, census.AuthorsWithASIN, census.JunkAuthorsSkipped, census.PublisherShapedSkipped,
 		census.RoleMarkedSkipped, census.RoleMarkedSplit, census.BooksInScope, census.BooksNoAuthor,
-		len(due), interval, dryRun, rps, cfg.HarvestRateFraction, h.Cfg.Concurrency))
+		len(due), interval, !env.Live, rps, cfg.HarvestRateFraction, h.Cfg.Concurrency))
 
-	if dryRun {
+	if !env.Live {
 		sampleN := 5
 		if p.SampleAuthors != nil {
 			sampleN = max(*p.SampleAuthors, 0)
@@ -224,26 +306,109 @@ func runCatalogHarvest(ctx context.Context, reporter opsregistry.Reporter, store
 		if err != nil {
 			return fmt.Errorf("%s: encode census: %w", catalogHarvestOpID, err)
 		}
-		_ = reporter.Log(slog.LevelInfo, "dry run census (nothing written): "+string(b))
+		env.Log(slog.LevelInfo, "dry run census (nothing written): "+string(b))
 		catalogHarvestLog.Info("dry run census: %s", string(b))
-		_ = reporter.UpdateProgress(1, 1, fmt.Sprintf("dry run: %d authors due, ~%d requests, ~%d entries", est.AuthorsDue, est.EstimatedRequests, est.EstimatedEntries))
+		env.progress(1, 1, fmt.Sprintf("dry run: %d authors due, ~%d requests, ~%d entries", est.AuthorsDue, est.EstimatedRequests, est.EstimatedEntries))
 		return nil
 	}
 
-	tally, runErr := h.Run(ctx, reporter, due, catalog.RunOptions{
-		Checkpoint:   func() error { return reporter.Checkpoint(p) },
-		OnAuthorDone: harvestMarksIdentDirty(store),
-	})
-	publishCatalogGauges(cat)
-	var scanner authority.Scanner
-	if sc, ok := database.AsCapability[authority.Scanner](store); ok {
-		scanner = sc
-	}
-	backfillCatalogAliases(ctx, reporter, cat, scanner)
+	tally, runErr := env.Writer.RunHarvest(ctx, h, due, func() error { return env.Checkpoint(p) })
+	env.Writer.FinishHarvest(ctx)
 	summary := fmt.Sprintf("harvested %d/%d authors — %s", tally.Done.Load(), len(due), tally.Summary())
-	_ = reporter.Log(slog.LevelInfo, summary)
+	env.Log(slog.LevelInfo, summary)
 	catalogHarvestLog.Info("%s", summary)
 	return runErr
+}
+
+// headCatalogHarvest is HEAD's side of both interfaces: the engine's own
+// wiring, exactly as HEAD built it.
+type headCatalogHarvest struct {
+	store     database.Store
+	cat       *database.CatalogStore
+	lister    metadata.AuthorLister
+	throttles *metadata.ThrottleRegistry
+	reporter  opsregistry.Reporter
+}
+
+func (h headCatalogHarvest) CatalogReady() error {
+	if h.cat == nil {
+		return fmt.Errorf("%s: catalog store unavailable (store is not Pebble-backed)", catalogHarvestOpID)
+	}
+	return nil
+}
+
+func (h headCatalogHarvest) CatalogScope(ctx context.Context) ([]catalog.ScopeAuthor, catalog.ScopeCensus, error) {
+	return catalog.BuildScope(ctx, h.store, h.store)
+}
+
+func (h headCatalogHarvest) NewHarvester(o catalogHarvestOpen) *catalog.Harvester {
+	throttles := h.throttles
+	return catalog.NewHarvester(h.lister, h.cat, catalog.Settings{
+		Provider:          metadata.SourceIDAudible,
+		Marketplace:       o.Cfg.Marketplace,
+		Language:          o.Cfg.Language,
+		MaxProducts:       o.Cfg.MaxProductsPerAuthor,
+		ReharvestInterval: o.Interval,
+		Concurrency:       o.Concurrency,
+		Limiter:           rate.NewLimiter(rate.Limit(o.RPS), 1),
+		Throttled:         func() bool { return throttles.Throttled(metadata.SourceIDAudible) },
+		OnProviderError: func(err error) {
+			throttles.RecordFailure(metadata.SourceIDAudible, err)
+		},
+		OpID: o.OpID,
+	})
+}
+
+func (h headCatalogHarvest) RunHarvest(ctx context.Context, hv *catalog.Harvester, due []catalog.ScopeAuthor, checkpoint func() error) (*catalog.Tally, error) {
+	return hv.Run(ctx, h.reporter, due, catalog.RunOptions{
+		Checkpoint:   checkpoint,
+		OnAuthorDone: harvestMarksIdentDirty(h.store),
+	})
+}
+
+func (h headCatalogHarvest) FinishHarvest(ctx context.Context) {
+	publishCatalogGauges(h.cat)
+	var scanner authority.Scanner
+	if sc, ok := database.AsCapability[authority.Scanner](h.store); ok {
+		scanner = sc
+	}
+	backfillCatalogAliases(ctx, h.reporter, h.cat, scanner)
+}
+
+// catalogHarvestNative is the native books.catalog.harvest-authors kind. The mode
+// is the start request's: Preview is HEAD's default dry run (a census from a
+// small page-0 sample), Live harvests. It writes the author catalog only
+// (resource catalog). The harvester runs its own pool at p.Concurrency.
+func (s *Server) catalogHarvestNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	kind := t7KindFor(catalogHarvestOpID)
+	c := t7Common(s.catalogHarvestDef(), sched)
+	c.Effects = t7Writes(ops.ResCatalog)
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			cfg := config.AppConfig.Catalog
+			p, err := t7DecodeNative[catalogHarvestNativeParams](kind, raw)
+			if err != nil {
+				return struct{}{}, err
+			}
+			if err := t7NeedStore(kind, deps); err != nil {
+				return struct{}{}, err
+			}
+			env := catalogHarvestEnv{t7Env: t7NativeEnv(rc), Store: deps.Store}
+			// A Preview run writes nothing, so it builds no writer.
+			if env.Live {
+				w, err := t7NewWriter(kind, deps, rc)
+				if err != nil {
+					return struct{}{}, err
+				}
+				env.Writer = w
+			}
+			if err := catalogHarvestStart(cfg); err != nil {
+				return struct{}{}, err
+			}
+			return struct{}{}, catalogHarvestCore(rc.Context(), p, env, cfg)
+		},
+	})
 }
 
 // identStateReader is the store capability harvestMarksIdentDirty reads.
