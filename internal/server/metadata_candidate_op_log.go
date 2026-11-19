@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op_log.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 17ed77c1-1759-4abb-947e-4de2acc4000c
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 //
 // Per-book outcome lines and running outcome counts for the
 // metadata.candidate-fetch op log.
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 )
 
@@ -338,7 +339,15 @@ func searchedAuthorPhrase(r CandidateResult) string {
 }
 
 // logCandidateOutcome writes one book's outcome line to the op log.
-func logCandidateOutcome(log func(slog.Level, string, ...slog.Attr), r CandidateResult) {
+func logCandidateOutcome(reporter opsregistry.Reporter, r CandidateResult) {
+	logCandidateOutcomeVia(func(level slog.Level, msg string, attrs ...slog.Attr) {
+		_ = reporter.Log(level, msg, attrs...)
+	}, r)
+}
+
+// logCandidateOutcomeVia is logCandidateOutcome over a log function, which is
+// what the shared core has (t7Env.Log).
+func logCandidateOutcomeVia(log func(slog.Level, string, ...slog.Attr), r CandidateResult) {
 	level, msg, attrs := candidateOutcomeLine(r)
 	log(level, msg, attrs...)
 }

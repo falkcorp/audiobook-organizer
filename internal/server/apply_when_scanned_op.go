@@ -1,7 +1,7 @@
 // file: internal/server/apply_when_scanned_op.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 4c1f7e2a-9b3d-4e85-a6f0-2d8c5b71e934
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package server
 
@@ -268,8 +268,12 @@ func (s *Server) whenScannedDef(opID, plugin, display, desc string, perm auth.Pe
 
 // whenScannedNative is one native kind of the pair. The params are the queued
 // apply alone: the mode is the start request's, so the dry-run keys applyWhenScannedParams
-// carries are dropped. The def's write set is what its queued change writes; HEAD
-// declared none on purpose, so that the op runs while a scan does (seams.d/F5-13.md).
+// carries are dropped. The def's write set is what its queued change writes (rule
+// R7). HEAD declared none on purpose, so that the op runs while a scan does; the
+// kernel cannot express that (Effects is required, and the write-set gate holds a
+// kind whose writes overlap a running scan's), so natively the op waits for the
+// scan. That is decision 5 in seams.d/F5-13.md, "Scheduling the kernel cannot
+// express".
 func (s *Server) whenScannedNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule, def opsregistry.OperationDef, accepts func(kind string) bool) tasks.Definition {
 	kind := t7KindFor(def.ID)
 	c := t7Common(def, sched)

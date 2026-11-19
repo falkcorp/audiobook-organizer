@@ -1,7 +1,7 @@
 // file: internal/server/aiscan_op.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4f7a2c91-8d63-4e05-b1a7-9c3e5d80f624
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 // aiscan_op registers the ai.author-scan OperationDef. Before 2026-08-22 the
 // multi-pass AI author dedup pipeline was the last subsystem with no
@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/aiscan"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 // aiAuthorScanParams holds the serializable parameters for the ai.author-scan op.
@@ -147,7 +148,7 @@ func (s *Server) RegisterAIAuthorScanOp(reg *opsregistry.Registry) error {
 func (s *Server) aiAuthorScanNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	kind := t7KindFor(aiAuthorScanOpID)
 	c := t7Common(s.aiAuthorScanDef(), sched)
-	c.Effects = t7Writes(t7ResAIScans)
+	c.Effects = t7Writes(ops.ResAIScans)
 	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: c,
 		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {

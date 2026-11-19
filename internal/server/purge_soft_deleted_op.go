@@ -1,7 +1,7 @@
 // file: internal/server/purge_soft_deleted_op.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2e7a9c41-5d08-4b63-8f1a-6c3d0b9e4a72
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package server
 
@@ -148,7 +148,10 @@ func purgeSoftDeletedCore(ctx context.Context, p purgeSoftDeletedNativeParams, e
 	msg := res.Summary()
 	purgeOpLog.Info("%s opID=%s deleteFiles=%t", msg, logger.SanitizeLogValue(opID), p.DeleteFiles)
 	env.Log(slog.LevelInfo, msg)
-	if !dryRun && opID != "" {
+	// HEAD wrote the row on a dry run too (its shell sets Writer in both modes),
+	// so the gate is the writer, not the run mode: the native Preview builds no
+	// writer and so writes nothing.
+	if env.Writer != nil && opID != "" {
 		env.Writer.EmitActivityInfo(opID, purgeSoftDeletedOpID, "purge-deleted", msg, activity.AlwaysShow)
 		for _, e := range res.Capped(purgeResultCap).Errors {
 			env.Writer.LogActivityBatch(opID, purgeSoftDeletedOpID, "purge-deleted",

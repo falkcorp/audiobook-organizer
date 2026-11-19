@@ -1,7 +1,7 @@
 // file: internal/server/collection_refresh_op.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 0c8d3b61-7e94-4a25-b3f0-9d1a6e2c5b47
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package server
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 // collectionRefreshOpID is the op the hourly collections_refresh task
@@ -196,7 +197,7 @@ func (s *Server) runCollectionRefreshOp(ctx context.Context, raw json.RawMessage
 func (s *Server) collectionRefreshNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	kind := t7KindFor(collectionRefreshOpID)
 	c := t7Common(s.collectionRefreshDef(), sched)
-	c.Effects = t7Writes(t7ResCollections)
+	c.Effects = t7Writes(ops.ResCollections)
 	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: c,
 		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {

@@ -1,7 +1,7 @@
 // file: pkg/ops/effects.go
-// version: 1.4.5
+// version: 1.5.0
 // guid: 56bbb3ad-7cb3-4962-a476-26ea63bdc9ba
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package ops
 
@@ -82,6 +82,18 @@ const (
 	// them. It is not ResMetadataCache, which is the cached lookup rows, nor the
 	// main store's own resources.
 	ResAuxStores Resource = "aux_stores"
+	// ResAIScans is the AI scan store (ai_scans: the phases, chunks and
+	// proposals of an author scan); the AI author scan writes it and the
+	// scan-apply op consumes it. F5-13 coined it for the two server kinds.
+	ResAIScans Resource = "ai_scans"
+	// ResDedupCandidates is the dedup candidate store the dedup engine's checks
+	// file (a library scan, a folder auto-scan and a book merge write it).
+	// F5-13 coined it for those kinds.
+	ResDedupCandidates Resource = "dedup_candidates"
+	// ResCollections is the dynamic-collection member lists that
+	// collections.refresh-relative-dynamic rebuilds. HEAD's def named it as a
+	// literal; F5-13 gives it a constant.
+	ResCollections Resource = "collections"
 )
 
 // deletePrefix marks a Resource built by Deletes.
