@@ -1,14 +1,16 @@
 // file: internal/plugins/dedup/kinds_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 74d898af-e4c2-4b28-9fc7-5a2b749513d4
 // last-edited: 2026-11-18
 
 package dedup
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sort"
 	"strings"
@@ -244,8 +246,56 @@ type kindHost struct {
 	enqueueErr error
 	notes      []string
 	awaited    []string
+	logs       bytes.Buffer
+	bar        []barFrame
 	// capObserver, when set, sees every worker count a run's pool declared.
 	capObserver func(declared int)
+}
+
+// barFrame is one progress-bar report: a run's rc.Progress().Set.
+type barFrame struct {
+	Done, Total int64
+	Known       bool
+}
+
+// ReportProgress records the bar frames (FakeRun drops them).
+func (h *kindHost) ReportProgress(done int64, total tasks.Total) {
+	n, known := total.Value()
+	h.mu.Lock()
+	h.bar = append(h.bar, barFrame{Done: done, Total: n, Known: known})
+	h.mu.Unlock()
+}
+
+// bars is every bar frame the run reported, in order.
+func (h *kindHost) bars() []barFrame {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]barFrame(nil), h.bar...)
+}
+
+// Log is a logger over the host's own buffer (FakeRun discards), so a test can
+// read what the run logged with logged().
+func (h *kindHost) Log() *slog.Logger {
+	return slog.New(slog.NewTextHandler(&lockedWriter{mu: &h.mu, w: &h.logs}, nil))
+}
+
+// logged is everything the run logged.
+func (h *kindHost) logged() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.logs.String()
+}
+
+// lockedWriter serialises writes to the host's log buffer.
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  *bytes.Buffer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }
 
 // Note records the run's progress notes (FakeRun drops them).

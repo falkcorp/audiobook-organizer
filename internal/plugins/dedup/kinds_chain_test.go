@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/kinds_chain_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6d01f54f-d1e9-4cf7-8def-037dd38e3e04
 // last-edited: 2026-11-18
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -465,4 +466,123 @@ func TestDedupChain_LabelRefinementResultNamesTheChildren(t *testing.T) {
 	out, err := task.Run(tasks.NewRC(h), nil)
 	require.NoError(t, err)
 	require.JSONEq(t, `{"dry_run":true,"rebuild_op":"child-1","calibrate_op":"child-2"}`, string(out))
+}
+
+// --- exact progress, logs and result shapes (mutation survivors of the first run) ---
+
+// barsOf is the bar frames a chain run is expected to report: Known totals of
+// total, with the given done values in order.
+func barsOf(total int64, dones ...int64) []barFrame {
+	out := make([]barFrame, len(dones))
+	for i, d := range dones {
+		out[i] = barFrame{Done: d, Total: total, Known: true}
+	}
+	return out
+}
+
+// A Live run-all reports 1000 units a step: the step's start, one unit once its
+// child is recorded and awaited, and the step's end; the rescore step has no
+// child, so no waiting frame.
+func TestDedupChain_RunAllLiveReportsExactProgressAndNotes(t *testing.T) {
+	setEmbeddings(t, true)
+	_, d := newChainSpy()
+	def := (&Plugin{}).runAllNative(d, nil)
+	h, out, err := runKindResult(t, def, tasks.ModeLive, &sentinelWriter{}, "")
+	require.NoError(t, err)
+	require.Equal(t, barsOf(5000,
+		0,                                                                // starting
+		0, 1, 1000, 1000, 1001, 2000, 2000, 2001, 3000, 3000, 3001, 4000, // four child steps
+		4000, 5000, // the rescore step
+		5000, // finished
+	), h.bars())
+	h.mu.Lock()
+	notes := strings.Join(h.notes, "\n")
+	h.mu.Unlock()
+	for _, want := range []string{"Starting at step 1 of 5", "Step 1 of 5: ", "Step 5 of 5: ", " — done", " — waiting for "} {
+		require.Contains(t, notes, want)
+	}
+	var res RunAllResult
+	require.NoError(t, json.Unmarshal(out, &res))
+	require.Len(t, res.Steps, 5, "the result lists every finished step")
+	require.NotContains(t, h.logged(), "checkpoint failed")
+	require.NotContains(t, h.logged(), "Resuming")
+}
+
+// A resumed run-all reports from the recorded step, says so, and does not
+// announce skipped steps.
+func TestDedupChain_RunAllResumeReportsFromTheRecordedStep(t *testing.T) {
+	setEmbeddings(t, true)
+	_, d := newChainSpy()
+	def := (&Plugin{}).runAllNative(d, nil)
+	h := newKindHost(def, tasks.ModeLive, &sentinelWriter{})
+	require.NoError(t, h.FakeRun.SetCheckpoint("", runAllState{
+		Plan:      []string{"embeddings", "acoustic", "find", "ai-review", "rescore-preview"},
+		StepIndex: 2, ChildOpID: "child-find",
+		Finished: []RunAllStepRecord{{ID: "embeddings"}, {ID: "acoustic"}},
+	}))
+	require.NoError(t, runKindOn(t, def, h, ""))
+	require.Equal(t, barFrame{Done: 2000, Total: 5000, Known: true}, h.bars()[0])
+	require.Contains(t, h.notes[0], "Starting at step 3 of 5")
+	require.Contains(t, h.logged(), "Resuming at step 3 of 5")
+	require.Equal(t, barsOf(5000, 2000, 2000, 3000), h.bars()[:3], "a recorded child that already finished moves the bar a whole step")
+}
+
+// A checkpoint with no plan is not a resume: the plan is built fresh and a
+// step turned off in Settings is announced.
+func TestDedupChain_RunAllEmptyCheckpointIsNotAResume(t *testing.T) {
+	setEmbeddings(t, false)
+	_, d := newChainSpy()
+	def := (&Plugin{}).runAllNative(d, nil)
+	h := newKindHost(def, tasks.ModeLive, &sentinelWriter{})
+	require.NoError(t, h.FakeRun.SetCheckpoint("", runAllState{}))
+	require.NoError(t, runKindOn(t, def, h, ""))
+	require.NotContains(t, h.logged(), "Resuming")
+	require.Contains(t, h.logged(), "Skipping step")
+}
+
+// A failed checkpoint save is logged and the run goes on.
+func TestDedupChain_RunAllCheckpointFailureIsLoggedNotFatal(t *testing.T) {
+	setEmbeddings(t, true)
+	_, d := newChainSpy()
+	def := (&Plugin{}).runAllNative(d, nil)
+	h := newKindHost(def, tasks.ModeLive, &sentinelWriter{})
+	h.FakeRun.FailCheckpoints(errors.New("pebble closed"))
+	require.NoError(t, runKindOn(t, def, h, ""))
+	require.Contains(t, h.logged(), "checkpoint failed")
+}
+
+// label-refinement reports 1000 units a step: the step's start, one unit while
+// its child runs, then the closing frame.
+func TestDedupChain_LabelRefinementReportsExactProgress(t *testing.T) {
+	_, d := newChainSpy()
+	def := (&Plugin{}).labelRefinementNative(d, nil)
+	h, err := runKind(t, def, tasks.ModeLive, &sentinelWriter{}, "")
+	require.NoError(t, err)
+	require.Equal(t, barsOf(2000, 0, 1, 1000, 1001, 2000), h.bars())
+}
+
+// The two chain parents declare a 15 minute progress timeout (a child wait with
+// no row progress must not trip the watchdog sooner).
+func TestDedupChain_ParentsDeclareAFifteenMinuteProgressTimeout(t *testing.T) {
+	_, d := newChainSpy()
+	p := &Plugin{}
+	require.Equal(t, 15*time.Minute, tasks.CommonOf(p.runAllNative(d, nil)).ProgressTimeout)
+	require.Equal(t, 15*time.Minute, tasks.CommonOf(p.labelRefinementNative(d, nil)).ProgressTimeout)
+}
+
+// A panic in the wait on a child is the wait's error, not a hung run.
+func TestDedupChain_AwaitPanicIsReportedAsTheWaitsError(t *testing.T) {
+	setEmbeddings(t, true)
+	_, d := newChainSpy()
+	def := (&Plugin{}).runAllNative(d, nil)
+	h := newKindHost(def, tasks.ModeLive, &sentinelWriter{})
+	h.onAwait = func(tasks.RunRef) (tasks.Outcome, error) { panic("kernel gone") }
+	done := make(chan error, 1)
+	go func() { done <- runKindOn(t, def, h, "") }()
+	select {
+	case err := <-done:
+		require.ErrorContains(t, err, "panicked: kernel gone")
+	case <-time.After(10 * time.Second):
+		t.Fatal("a panic in Await left the run waiting")
+	}
 }

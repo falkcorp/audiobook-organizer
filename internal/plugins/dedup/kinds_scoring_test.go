@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/kinds_scoring_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a002cdf7-aa0e-4499-b278-7610e743dccf
 // last-edited: 2026-11-18
 
@@ -67,6 +67,19 @@ type scoringSpy struct {
 	modifyErr  map[string]error
 	primaryErr error
 	setErr     error
+
+	// split-book kinds
+	splitCands []dedupengine.SplitBookCandidate
+	detectErr  error
+	saved      [][]dedupengine.SplitBookCandidate
+	saveErr    error
+	recheck    map[string][]string // first book id of the cluster -> reasons
+	recheckErr map[string]error
+	mergeRes   map[string]*dedupengine.SplitBookMergeResult // keep id -> result
+	mergeErr   map[string]error
+	merged     []string // "keep<-opID"
+	deleted    []string
+	deleteErr  error
 }
 
 func (s *scoringSpy) rec(call string) {
@@ -199,6 +212,58 @@ func (s *scoringSpy) EnsureSinglePrimary(_ context.Context, group string) error 
 	return s.primaryErr
 }
 
+// split-book reads and writes
+
+func (s *scoringSpy) DetectSplitBookCandidates(_ context.Context, progress func(loaded int)) ([]dedupengine.SplitBookCandidate, error) {
+	s.rec("DetectSplitBookCandidates")
+	if progress != nil {
+		progress(1000)
+	}
+	return s.splitCands, s.detectErr
+}
+
+func (s *scoringSpy) RecheckSplitBookMembers(ids []string, _ int) ([]string, error) {
+	s.rec("RecheckSplitBookMembers " + ids[0])
+	return s.recheck[ids[0]], s.recheckErr[ids[0]]
+}
+
+func (s *scoringSpy) SaveAll(c []dedupengine.SplitBookCandidate) error {
+	s.recWrite(fmt.Sprintf("SaveAll n=%d", len(c)))
+	s.mu.Lock()
+	s.saved = append(s.saved, c)
+	s.mu.Unlock()
+	return s.saveErr
+}
+
+func (s *scoringSpy) Delete(id string) error {
+	s.recWrite("DeleteCandidate " + id)
+	s.mu.Lock()
+	s.deleted = append(s.deleted, id)
+	s.mu.Unlock()
+	return s.deleteErr
+}
+
+func (s *scoringSpy) MergeSplitBookClusterRechecked(ids []string, keepID, _, opID string) (*dedupengine.SplitBookMergeResult, error) {
+	s.recWrite("MergeSplitBookClusterRechecked " + keepID)
+	s.mu.Lock()
+	s.merged = append(s.merged, keepID+"<-"+opID)
+	s.mu.Unlock()
+	if err := s.mergeErr[keepID]; err != nil {
+		return nil, err
+	}
+	if r, ok := s.mergeRes[keepID]; ok {
+		return r, nil
+	}
+	return &dedupengine.SplitBookMergeResult{KeepID: keepID, MergedSrcCount: len(ids) - 1}, nil
+}
+
+func (s *scoringSpy) splitWriterFactory(w tasks.Writer) splitBookKindWriter {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.writers = append(s.writers, w)
+	return s
+}
+
 func (s *scoringSpy) engineFactory(w tasks.Writer) scoringEngine {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -236,11 +301,15 @@ func (s *scoringSpy) written() []string {
 // shape) and one real book.
 func newScoringSpy() (*scoringSpy, ScoringKindDeps) {
 	s := &scoringSpy{
-		settings:  map[string]string{},
-		modifyErr: map[string]error{},
-		fileErr:   map[string]error{},
-		files:     map[string][]database.BookFile{},
-		drainRes:  &dedupengine.DrainStaleResult{Inspected: 5, WouldPurge: 2, Kept: 3, ReasonCounts: map[string]int{"title_leak": 2}},
+		settings:   map[string]string{},
+		modifyErr:  map[string]error{},
+		fileErr:    map[string]error{},
+		files:      map[string][]database.BookFile{},
+		recheck:    map[string][]string{},
+		recheckErr: map[string]error{},
+		mergeRes:   map[string]*dedupengine.SplitBookMergeResult{},
+		mergeErr:   map[string]error{},
+		drainRes:   &dedupengine.DrainStaleResult{Inspected: 5, WouldPurge: 2, Kept: 3, ReasonCounts: map[string]int{"title_leak": 2}},
 	}
 	for _, id := range []string{"year-one-1", "year-one-2", "year-one-3", "year-one-4", "year-one-5"} {
 		s.books = append(s.books, database.BookCore{ID: id, Title: "Batman: Year One"})
@@ -248,7 +317,8 @@ func newScoringSpy() (*scoringSpy, ScoringKindDeps) {
 	}
 	s.books = append(s.books, database.BookCore{ID: "hush", Title: "Hush"})
 	s.files["hush"] = []database.BookFile{{ID: "hush-f", AcoustIDFingerprintDurationSec: 30}}
-	return s, ScoringKindDeps{Store: s, NewEngine: s.engineFactory, NewWriter: s.writerFactory}
+	return s, ScoringKindDeps{Store: s, NewEngine: s.engineFactory, NewWriter: s.writerFactory,
+		SplitReads: s, NewSplitWriter: s.splitWriterFactory}
 }
 
 func scoringFakeDeps(t *testing.T) ScoringKindDeps {
@@ -308,6 +378,23 @@ func scoringRows() []kindRow {
 			Reads:  []ops.Resource{ops.ResBookFiles}, HeadKey: "dedup.quarantine-chapter-artifacts",
 			Par: []string{"cpu", "cpu"}, ParGot: []tasks.Parallelism{quarantineScanPar(), quarantineApplyPar()},
 		},
+		{
+			HeadID: "dedup.split-book-scan", Title: "Split-book backfill scan",
+			HeadResume: sdk.ResumeRequeue, Resume: tasks.ResumeFromZero,
+			Priority: tasks.PriorityLow, Timeout: 60 * time.Minute,
+			Writes: []ops.Resource{ops.ResSplitBookCandidates},
+			Reads:  []ops.Resource{ops.ResAuthors, ops.ResBooks}, HeadKey: "dedup.split-book-scan",
+		},
+		{
+			HeadID: "dedup.split-book-bulk-merge", Title: "Merge reviewed split-book candidates",
+			HeadResume: sdk.ResumeAsk, Resume: tasks.ResumeAsk,
+			Priority: tasks.PriorityLow, Timeout: 60 * time.Minute,
+			Writes: []ops.Resource{
+				ops.ResAuthors, ops.ResBookFiles, ops.ResBooks, ops.ResExternalIDs, ops.ResIndexes,
+				ops.ResMetadataCache, ops.ResOperations, ops.ResSplitBookCandidates, ops.ResSyncIdentity, ops.ResUserState,
+			},
+			HeadKey: "dedup.split-book-merge",
+		},
 	}
 }
 
@@ -337,6 +424,8 @@ func scoringWriteProbes(t *testing.T) []writeProbe {
 		scoringProbe(t, func(p *Plugin, d ScoringKindDeps) tasks.Definition { return p.bookSignatureScanNative(d, nil) }, "", nil),
 		scoringProbe(t, func(p *Plugin, d ScoringKindDeps) tasks.Definition { return p.drainStaleNative(d, nil) }, "", nil),
 		scoringProbe(t, func(p *Plugin, d ScoringKindDeps) tasks.Definition { return p.quarantineChapterArtifactsNative(d, nil) }, "", nil),
+		scoringProbe(t, func(p *Plugin, d ScoringKindDeps) tasks.Definition { return p.splitBookScanNative(d, nil) }, "", nil),
+		scoringProbe(t, func(p *Plugin, d ScoringKindDeps) tasks.Definition { return p.splitBookBulkMergeNative(d, nil) }, splitBulkParams, nil),
 	}
 }
 
