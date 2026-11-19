@@ -1,7 +1,7 @@
 // file: internal/authormerge/authormerge.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 7d3e9a51-2c84-4b6f-a0e7-5f19c3d82b46
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 // Package authormerge is the journaled write path every author merge shares:
 // moving one book's credits off the merged author, and removing the merged author
@@ -92,12 +92,28 @@ type CreditMove struct {
 	// changes (a co-author's credit with no primary repoint included), and a
 	// store without that capability is refused before anything is journaled:
 	// there is no fallback to a separate credit write with a window before it.
+	//
+	// A guarded move is also a compare-and-set: it writes After only if the
+	// book's credits, read inside the commit, are still Before (author, role and
+	// position of every credit), and refuses with ErrCreditsChanged otherwise, so
+	// it never writes back a list a person edited since the caller read it. A
+	// book whose row is gone is refused with ErrBookGone: there is no row for a
+	// lock to protect and nothing the caller decided on.
 	Locks database.MetadataFieldStateReader
 }
 
 // ErrBookLocked: a move with CreditMove.Locks set left the book alone because the
 // user locked its author. Nothing was written and the move's row was voided.
 var ErrBookLocked = errors.New("book left as it is: its author is locked by the user")
+
+// ErrCreditsChanged: a move with CreditMove.Locks set found the book's credits
+// different from CreditMove.Before inside the commit, so what the caller decided
+// no longer describes the book. Nothing was written and the move's row was voided.
+var ErrCreditsChanged = errors.New("book credits changed since they were read")
+
+// ErrBookGone: a move with CreditMove.Locks set found no book row inside the
+// commit. Nothing was written and the move's row was voided.
+var ErrBookGone = errors.New("book no longer exists")
 
 // MoveResult reports a MoveCredits that wrote the junction.
 type MoveResult struct {
@@ -203,6 +219,11 @@ func MoveCredits(store CreditsStore, opID string, m CreditMove) (MoveResult, err
 	if atomic {
 		creditsOnly := false
 		mutate := func(cur *database.Book, credits *database.BookCreditsEdit) error {
+			if guarded && !undo.SameJunction(credits.Authors, m.Before) {
+				// The caller built After from Before. The credits it finds are someone
+				// else's now, and After over them is a write nobody decided.
+				return ErrCreditsChanged
+			}
 			if !primaryChanged {
 				// A co-author's credit: the junction moves, the primary is not touched.
 				creditsOnly = true
@@ -252,9 +273,14 @@ func MoveCredits(store CreditsStore, opID string, m CreditMove) (MoveResult, err
 		case merr != nil && !errors.Is(merr, errPrimaryMoved):
 			// One write: nothing moved, so the row describes nothing.
 			return refused("move credits and primary author", merr)
+		case guarded && merr == nil && book == nil:
+			// A guarded move is refused for a book with no row, not written through
+			// SetBookAuthors below: the commit it was promised never happened.
+			return refused("move credits and primary author", ErrBookGone)
 		default:
-			// The primary moved off FromID meanwhile, or the book row is gone
-			// (a ghost's junction outlives it): the credits move alone.
+			// Unguarded only (a guarded move never reaches here): the primary moved
+			// off FromID meanwhile, or the book row is gone (a ghost's junction
+			// outlives it): the credits move alone.
 			notRepointed()
 		}
 	}

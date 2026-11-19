@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.18.0
+// version: 1.18.1
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -540,6 +540,15 @@ type authorStripMergeEnv struct {
 	ManualOnly applygate.ManualOnlyReaders
 }
 
+// samePrimary reports whether two primary-author ids are the same: both unset, or
+// both set to the same author.
+func samePrimary(a, b *int) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
 // errUnlinkInputsChanged: the credits or primary author of a book changed
 // between the unlink's read and its write, so the write the unlink decided on
 // would no longer be the one it makes.
@@ -965,7 +974,23 @@ func authorStripMergeCore(ctx context.Context, params authorStripMergeParams, en
 		}
 
 		if pl.into != nil {
+			// A report-only run walks the merge as a dry run: it reads the credits
+			// and the user's locks the apply reads, so merges-held-user-locked is the
+			// apply's own number and the preview does not promise a merge the apply
+			// will hold. It writes nothing and counts neither merged nor
+			// books-touched, which stay the apply's.
 			if !params.Apply {
+				_, _, err := mergeAuthorIntoVia(ctx, store, env.Writer, pl.from, *pl.into, true, "", log)
+				switch {
+				case errors.Is(err, errAuthorMergeUserLocked):
+					report.MergesHeldUserLocked++
+					log.Info("author-strip-merge: merge would be held, a book has its author locked by the user",
+						"from_id", pl.from.ID, "from", pl.from.Name, "into", pl.into.Name, "reason", err)
+				case err != nil:
+					report.Failed++
+					log.Warn("author-strip-merge: merge would fail",
+						"from_id", pl.from.ID, "from", pl.from.Name, "into", pl.into.Name, "err", err)
+				}
 				continue
 			}
 			// mergeAuthorInto rewrites the book_authors junction, moves the
@@ -1250,7 +1275,11 @@ func unlinkAndDeleteAuthorVia(ctx context.Context, store authorStripMergeStore, 
 		// on a re-run. Deleting anyway would leave a book naming a row that no
 		// longer exists, the 2026-08-24 mechanism, while the summary said failed=0.
 		written, heldKeys, err := database.ModifyBookCreditsRespectingLocks(writer, store, book.ID, func(cur *database.Book, credits *database.BookCreditsEdit) error {
-			if !slices.Equal(credits.Authors, bookAuthors) || (cur.AuthorID != nil && *cur.AuthorID == from.ID) != primaryNamesFrom {
+			// The whole primary is compared, not whether it names from: a primary that
+			// was a third author and is nil now (or another author) names from in
+			// neither read, yet the write below, decided on the first, would leave
+			// the book with no author at all.
+			if !slices.Equal(credits.Authors, bookAuthors) || !samePrimary(cur.AuthorID, book.AuthorID) {
 				return errUnlinkInputsChanged
 			}
 			credits.Authors = slices.Clone(remaining)

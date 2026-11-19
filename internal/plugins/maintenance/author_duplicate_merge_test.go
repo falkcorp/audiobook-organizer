@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_duplicate_merge_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 47ea834f-d1ec-4c9f-a8c5-e26626311d2e
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -114,6 +114,7 @@ func newAuthorDupPlugin(
 		GetAllAuthorBookCountsFunc:     func() (map[int]int, error) { return bookCounts, nil },
 		GetAllAuthorBookRefCountsFunc:  func() (map[int]int, error) { return refCounts, nil },
 		GetBooksByAuthorIDWithRoleFunc: func(id int) ([]database.BookCore, error) { return booksByAuthor[id], nil },
+		GetBookByIDFunc:                listedBookRows(booksByAuthor),
 		GetBookAuthorsFunc: func(bookID string) ([]database.BookAuthor, error) {
 			if written, ok := w.setBookAuthors[bookID]; ok {
 				return written, nil

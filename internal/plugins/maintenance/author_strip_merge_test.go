@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge_test.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 8f5723a5-46b7-409b-901e-e791fdd71228
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package maintenance
 
