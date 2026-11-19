@@ -1,7 +1,7 @@
 // file: core/kernel/swap.go
-// version: 1.0.10
+// version: 1.0.11
 // guid: 2fd2ee78-9c6b-4e9f-82de-80def73f26d5
-// last-edited: 2026-11-11
+// last-edited: 2026-11-18
 
 package kernel
 
@@ -177,7 +177,7 @@ func (k *Kernel) runP0a(ctx context.Context) error {
 	}
 	clock := bootClock(ctx)
 	sw, err := restoreswap.New(restoreswap.Options{FS: fs, StateDir: k.cfg.StateDir, BuildID: build, Clock: clock,
-		Owners: k.storageOwners(), Probe: bootProbe(ctx, fs), Logger: k.coreLog("restoreswap")})
+		Owners: k.storageOwners(), Probe: bootProbe(ctx, fs), Logger: k.coreLog("restoreswap"), RewriteStep: k.rewriteID()})
 	if err != nil {
 		return fmt.Errorf("kernel: pre-boot swap (P0a): %w", err)
 	}
