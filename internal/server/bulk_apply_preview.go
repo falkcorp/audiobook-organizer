@@ -1,7 +1,7 @@
 // file: internal/server/bulk_apply_preview.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 6a2e9c15-4f70-4b3d-8e21-d5c7a0f9b384
-// last-edited: 2026-11-17
+// last-edited: 2026-11-18
 //
 // The bulk-apply DRY RUN: "metadata.bulk-apply-preview".
 //

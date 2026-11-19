@@ -1,5 +1,5 @@
 // file: internal/server/entities_ops.go
-// version: 1.18.3
+// version: 1.19.0
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
 // last-edited: 2026-11-18
 
