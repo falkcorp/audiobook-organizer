@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/merge_cleanup_repoint_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b4e1c7d2-9a35-4f08-8c6e-d3a05f1b72e9
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -45,18 +45,35 @@ func TestMergeCleanupDeadEndHolderThatLoopsIsHeldNotStandAlone(t *testing.T) {
 	require.NotContains(t, strings.Join(r.Evidence, " "), "no live book is reachable")
 }
 
-func TestMergeCleanupDeadEndHolderWhoseChainIsDeadLetsTheLoserStandAlone(t *testing.T) {
+// A holder that is itself a live book with a file, merged into a book that is
+// also in the trash, is a live copy of the work: the loser is not the only one
+// left, so it is held rather than said to stand alone (R3-M2).
+func TestMergeCleanupDeadEndLiveHolderWhoseChainIsDeadIsALiveCopyAndHolds(t *testing.T) {
 	x := newMCFixture(t)
 	mcDeadEnd(x, "dead", "loser", mcHushSpec(30000))
-	// The holder was merged into a book that is also in the trash: it leads nowhere.
 	x.mk("gone", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
 	x.mk("holder", mcHushSpec(30000))
 	x.point("holder", "gone")
 	retireRowOnto(t, x.st, x.ids["dead"], x.ids["holder"], "rd", filepath.Join(x.root, "retired", "d.m4b"))
+	r := wantRow(t, x.plan(), "loser", mcKindUnmerge, mcSkipDeadEndShared)
+	require.Contains(t, r.SkipReason, x.ids["holder"], "the live copy is named")
+	require.Equal(t, x.ids["holder"], r.Current["dead_end_live_copies"])
+	require.Empty(t, r.Current["dead_end_other_losers"], "it is not a loser of the same dead end")
+}
+
+// A live holder with no file of its own is not a copy of the work: it leads
+// nowhere, as before.
+func TestMergeCleanupDeadEndLiveHolderWithNoFileWhoseChainIsDeadLeadsNowhere(t *testing.T) {
+	x := newMCFixture(t)
+	mcDeadEnd(x, "dead", "loser", mcHushSpec(30000))
+	x.mk("gone", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+	x.mk("holder", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}})
+	x.point("holder", "gone")
+	retireRowOnto(t, x.st, x.ids["dead"], x.ids["holder"], "rdn", filepath.Join(x.root, "retired", "dn.m4b"))
 	r := wantRow(t, x.plan(), "loser", mcKindUnmerge, "")
 	ev := strings.Join(r.Evidence, " ")
-	require.Contains(t, ev, "no live book is reachable")
-	require.Contains(t, ev, x.ids["holder"], "the holder that was followed is named")
+	require.Contains(t, ev, x.ids["holder"])
+	require.Contains(t, ev, "a merged book with no file of its own")
 }
 
 func TestMergeCleanupRepointToADifferentWorkIsHeld(t *testing.T) {

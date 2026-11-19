@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/merge_cleanup_round3_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 7e985540-891e-4d66-9ce1-fd86d2879faa
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -184,8 +184,11 @@ func TestMergeCleanupDeadEndAnchorNamedByTwoRoutesIsListedOnce(t *testing.T) {
 	x.mk("holder", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000), group: "g", primary: mcFalse()})
 	x.point("holder", "gone")
 	retireRowOnto(t, x.st, x.ids["dead"], x.ids["holder"], "rt3", filepath.Join(x.root, "retired", "t3.m4b"))
-	r := wantRow(t, x.plan(), "loser", mcKindUnmerge, "")
-	require.Equal(t, 1, strings.Count(strings.Join(r.Evidence, " "), x.ids["holder"]))
+	// The holder is a live book with a file whose own chain ends dead, so it is a
+	// live copy, held; naming it twice lists it once.
+	r := wantRow(t, x.plan(), "loser", mcKindUnmerge, mcSkipDeadEndShared)
+	require.Equal(t, x.ids["holder"], r.Current["dead_end_live_copies"])
+	require.Equal(t, 1, strings.Count(r.SkipReason, x.ids["holder"]))
 }
 
 func TestMergeCleanupDeadEndTrashedHolderWithNoPointerLeadsNowhere(t *testing.T) {
