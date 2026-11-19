@@ -1,7 +1,7 @@
 // file: internal/arch/layering_test.go
-// version: 1.6.4
+// version: 1.6.5
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 // Package arch holds architecture guard tests. It has no non-test code.
 //
@@ -96,6 +96,7 @@ var layerOf = map[string]int{
 	"internal/books/cutover/m3":      0, // computed: imports no module package (core only; a leaf under cutover that names no books package)
 	"internal/books/cutover/m5":      0, // computed: imports no module package (core only; a leaf under cutover that names no books package)
 	"internal/books/cutover/m4":      0, // override: imports the layer-0 leaves kindrename and operations/state (see layerOverride)
+	"internal/books/cutover/m6":      0, // computed: imports no module package (core only; a leaf under cutover that names no books package)
 	"internal/cache":                 0, // table: leaf
 	"internal/cfaccesspolicy":        0, // computed: imports no module package
 	"internal/cfservicetoken":        0, // computed: imports no module package

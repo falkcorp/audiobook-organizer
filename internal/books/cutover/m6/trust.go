@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/trust.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b642edd7-1075-46b6-9cf4-5e4ca7ea0ad8
 // last-edited: 2026-11-19
 
@@ -21,8 +21,10 @@ import (
 // and books cannot import them, so the two are copied here. Copying is safe
 // because the real importer validates what is written with them
 // (checkImport's wellFormedSignature refuses any signature core would not have
-// rendered), and TestTrust_SignatureAcceptedByTheRealImporter pins the copy
-// against that check instead of against a second copy of the rule.
+// rendered), and TestIntegrationsMigration_TrustCarried pins the copy
+// against that check (every signature it asserts went through the real importer)
+// instead of against a second copy of the rule, and TestTrust_OriginAndSignature
+// pins the renderings.
 
 // defaultDestinations is the signature of an instance with no destination set
 // (core/integrations/fields.go defaultDestinations).

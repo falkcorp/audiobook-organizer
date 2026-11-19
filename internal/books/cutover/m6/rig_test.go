@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/rig_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7be2c0d4-8a51-4c3e-b0a6-2f1d94c7e6a3
 // last-edited: 2026-11-19
 
@@ -329,6 +329,9 @@ type lazyAI struct{ r *rig }
 type lazyNotify struct{ r *rig }
 
 func (l lazyInteg) ImportInstance(ctx context.Context, b *storage.Batch, i integrations.StoredInstance) error {
+	if err := l.r.refused("instance", i.Config.Ref.String()); err != nil {
+		return err
+	}
 	l.r.mu.Lock()
 	imp := l.r.integ
 	l.r.mu.Unlock()
@@ -336,6 +339,9 @@ func (l lazyInteg) ImportInstance(ctx context.Context, b *storage.Batch, i integ
 }
 
 func (l lazyAI) ImportJob(ctx context.Context, b *storage.Batch, j ai.StoredJob) error {
+	if err := l.r.refused("job", string(j.ID)); err != nil {
+		return err
+	}
 	l.r.mu.Lock()
 	imp := l.r.ai
 	l.r.mu.Unlock()
@@ -347,6 +353,19 @@ func (l lazyNotify) ImportRule(ctx context.Context, b *storage.Batch, ru notify.
 	imp := l.r.notify
 	l.r.mu.Unlock()
 	return imp.ImportRule(ctx, b, ru)
+}
+
+// refused is the error the test makes an importer return for (kind, id): what a
+// store that already holds a different row under the ID answers. nil when no
+// test asked for one.
+func (r *rig) refused(kind, id string) error {
+	r.mu.Lock()
+	h := r.refuse
+	r.mu.Unlock()
+	if h == nil {
+		return nil
+	}
+	return h(kind, id)
 }
 
 // ---- the rig ----
@@ -374,6 +393,10 @@ type rig struct {
 	integ  integrations.Importer
 	ai     ai.Importer
 	notify notify.Importer
+
+	// refuse makes an importer refuse (kind "instance" or "job", id as the
+	// importer names it) with the error it returns.
+	refuse func(kind, id string) error
 
 	// aiCatalog and noCatalog shape the AI importer's catalog.
 	noCatalog bool

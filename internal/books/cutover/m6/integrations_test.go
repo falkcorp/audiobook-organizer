@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/integrations_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0b7c39d5-6a18-4e2f-9d40-c85a1f2e7b63
 // last-edited: 2026-11-19
 
@@ -246,5 +246,45 @@ func TestIntegrationsMigration_HEADRowsGone(t *testing.T) {
 		if seen == 0 {
 			t.Errorf("the fixture has no %s row to remove", family)
 		}
+	}
+}
+
+// TestIntegrationsMigration_DigitLeadingIDNormalized: core's instance ID starts
+// with a letter, so a HEAD ID that starts with a digit is imported under an
+// "id-" prefix (seams.d/F7-01.md), reported renamed, and one that cannot be made
+// valid is quarantined whole instead of dropped.
+func TestIntegrationsMigration_DigitLeadingIDNormalized(t *testing.T) {
+	r, s := runFixture(t, withBlob(func(tree map[string]any) {
+		eps := tree["ai_endpoints"].([]any)
+		tree["ai_endpoints"] = append(eps,
+			map[string]any{"id": "9Lives_Cat", "protocol": "openai_compat", "url": "http://192.0.2.12:8080/v1", "chat_model": "selina-7b"},
+			map[string]any{"id": "Bat Cave", "protocol": "openai_compat", "url": "http://192.0.2.13:8080/v1"},
+		)
+	}))
+	got := instances(t, s)
+	row, ok := got["ai/id-9lives-cat"]
+	if !ok {
+		t.Fatalf("the digit-leading ID was not imported under id-9lives-cat; instances %v", slices.Sorted(maps.Keys(got)))
+	}
+	if settingsOf(row)["text_model"] != "selina-7b" {
+		t.Errorf("row %v", row)
+	}
+	renamed := false
+	for _, e := range r.report.Entries() {
+		if e.Kind == "instance" && e.ID == "ai/id-9lives-cat" && strings.Contains(e.Detail, "9Lives_Cat") {
+			renamed = true
+		}
+	}
+	if !renamed {
+		t.Error("the rename is not reported")
+	}
+	quarantinedBad := false
+	for _, q := range s.Quarantine {
+		if q.Key == memberPrefix+"ai_endpoints.3" {
+			quarantinedBad = true
+		}
+	}
+	if !quarantinedBad {
+		t.Error("an ID no rename makes valid (a space) was not quarantined")
 	}
 }
