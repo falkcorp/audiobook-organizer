@@ -489,6 +489,8 @@ type t7WriterLibrary interface {
 	candidateFetchWriter
 	batchSaveWriter
 	previewReportWriter
+	whenScannedWriter
+	batchApplyWriter
 }
 
 // t7WriterFiles is the writes of the file-writing definitions.
@@ -786,6 +788,9 @@ func t7KindList(s *Server, deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) 
 		s.candidateFetchNative(deps, sched),
 		s.batchSaveNative(deps, sched),
 		s.bulkApplyPreviewNative(deps, sched),
+		s.applyWhenScannedNative(deps, sched),
+		s.organizeWhenScannedNative(deps, sched),
+		s.batchApplyNative(deps, sched),
 	}
 }
 

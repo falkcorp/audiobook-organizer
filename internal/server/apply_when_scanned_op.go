@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/scanlock"
 	metadatahandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
+	"github.com/falkcorp/mediacore/tasks"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -103,17 +104,127 @@ func (s *Server) EnqueueApplyWhenScanned(ctx context.Context, q metadatahandler.
 	return s.opRegistry.EnqueueOp(ctx, applyWhenScannedOpID, applyWhenScannedParams{QueuedApply: q, DryRun: &live})
 }
 
+// applyWhenScannedDisplay and organizeWhenScannedDisplay are the two defs'
+// titles and helps, verbatim.
+const (
+	applyWhenScannedTitle = "Apply Metadata After Scan"
+	applyWhenScannedHelp  = "Applies a metadata change to one book as soon as the running library scan has finished reading that book."
+
+	organizeWhenScannedTitle = "Organize After Scan"
+	organizeWhenScannedHelp  = "Organizes one book as soon as the running library scan has finished reading that book."
+)
+
+// acceptsApplyKind is the kinds metadata.apply-when-scanned runs: everything but
+// organize.
+func acceptsApplyKind(kind string) bool { return kind != metadatahandler.QueuedOrganize }
+
+// acceptsOrganizeKind is the one kind library.organize-when-scanned runs.
+func acceptsOrganizeKind(kind string) bool { return kind == metadatahandler.QueuedOrganize }
+
+// applyWhenScannedDef is metadata.apply-when-scanned.
+func (s *Server) applyWhenScannedDef() opsregistry.OperationDef {
+	return s.whenScannedDef(applyWhenScannedOpID, "metadata", applyWhenScannedTitle, applyWhenScannedHelp,
+		auth.PermLibraryEditMetadata, acceptsApplyKind)
+}
+
+// organizeWhenScannedDef is library.organize-when-scanned.
+func (s *Server) organizeWhenScannedDef() opsregistry.OperationDef {
+	return s.whenScannedDef(organizeWhenScannedOpID, "library", organizeWhenScannedTitle, organizeWhenScannedHelp,
+		auth.PermLibraryOrganize, acceptsOrganizeKind)
+}
+
 // RegisterApplyWhenScannedOp registers metadata.apply-when-scanned and
 // library.organize-when-scanned.
 func (s *Server) RegisterApplyWhenScannedOp(reg *opsregistry.Registry) error {
-	if err := reg.RegisterOp(s.whenScannedDef(applyWhenScannedOpID, "metadata", "Apply Metadata After Scan",
-		"Applies a metadata change to one book as soon as the running library scan has finished reading that book.",
-		auth.PermLibraryEditMetadata, func(kind string) bool { return kind != metadatahandler.QueuedOrganize })); err != nil {
+	if err := reg.RegisterOp(s.applyWhenScannedDef()); err != nil {
 		return err
 	}
-	return reg.RegisterOp(s.whenScannedDef(organizeWhenScannedOpID, "library", "Organize After Scan",
-		"Organizes one book as soon as the running library scan has finished reading that book.",
-		auth.PermLibraryOrganize, func(kind string) bool { return kind == metadatahandler.QueuedOrganize }))
+	return reg.RegisterOp(s.organizeWhenScannedDef())
+}
+
+// whenScannedWriter is the writes of the queued-behind-the-scan defs. Each runs one
+// queued change once the scan has read the book, and writes whatever that change
+// writes (an apply: book rows, tags, files; an organize: the move and its rows).
+type whenScannedWriter interface {
+	// RunQueuedOpResultCandidate applies one candidate-fetch result row.
+	RunQueuedOpResultCandidate(ctx context.Context, q metadatahandler.QueuedApply, beat func(msg string)) error
+	// RunQueuedOrganize organizes one book.
+	RunQueuedOrganize(ctx context.Context, bookID string, beat func(msg string)) error
+	// RunQueuedApply runs every other queued apply kind.
+	RunQueuedApply(ctx context.Context, q metadatahandler.QueuedApply, beat func(msg string)) error
+}
+
+// whenScannedEnv is what the shared core takes from its shell (rules R2, R10).
+// Live resolves the mode at the point HEAD resolved its dry-run params: after the
+// book-id and kind checks.
+type whenScannedEnv struct {
+	t7Env
+	Live   func() (bool, error)
+	Writer whenScannedWriter
+}
+
+// whenScannedCore is the body of both defs, shared by HEAD's shells and the native
+// kinds. defID is the def's own id (its messages name it); accepts says which kinds
+// this def runs, so the def's permission always matches what it does.
+func whenScannedCore(ctx context.Context, defID string, q metadatahandler.QueuedApply, accepts func(kind string) bool, env whenScannedEnv) error {
+	if q.BookID == "" {
+		return fmt.Errorf("%s: no book id", defID)
+	}
+	if !accepts(q.Kind) {
+		return fmt.Errorf("%s does not run kind %q", defID, q.Kind)
+	}
+	live, err := env.Live()
+	if err != nil {
+		return err
+	}
+	if !live {
+		env.progress(1, 1, fmt.Sprintf("preview: would apply %s to book %s once the library scan has read it; nothing written", q.Kind, q.BookID))
+		return nil
+	}
+	beat := func(msg string) { env.progress(0, 1, msg) }
+	beat("waiting for the library scan to finish reading book " + q.BookID)
+	switch q.Kind {
+	case metadatahandler.QueuedOpResultCandidate:
+		err = env.Writer.RunQueuedOpResultCandidate(ctx, q, beat)
+	case metadatahandler.QueuedOrganize:
+		err = env.Writer.RunQueuedOrganize(ctx, q.BookID, beat)
+	default:
+		err = env.Writer.RunQueuedApply(ctx, q, beat)
+	}
+	if errors.Is(err, metadatahandler.ErrQueuedAlreadyApplied) {
+		// A re-run after the apply landed (ResumeRequeue after a
+		// restart): complete, write nothing, no second history row.
+		env.progress(1, 1, "book "+q.BookID+": "+err.Error()+"; nothing written")
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	env.progress(1, 1, "applied to book "+q.BookID)
+	return nil
+}
+
+// headWhenScanned is HEAD's write side: the server's queued-apply runners.
+type headWhenScanned struct{ s *Server }
+
+func (h headWhenScanned) RunQueuedOpResultCandidate(ctx context.Context, q metadatahandler.QueuedApply, beat func(msg string)) error {
+	return h.s.runQueuedOpResultCandidate(ctx, q, beat)
+}
+
+func (h headWhenScanned) RunQueuedOrganize(ctx context.Context, bookID string, beat func(msg string)) error {
+	r := h.s.queuedOrganizeRunner
+	if r == nil {
+		return errors.New("apply-when-scanned: the organize handler is not wired")
+	}
+	return r.RunQueuedOrganize(ctx, bookID, beat)
+}
+
+func (h headWhenScanned) RunQueuedApply(ctx context.Context, q metadatahandler.QueuedApply, beat func(msg string)) error {
+	hd := h.s.applyWhenScannedHandler
+	if hd == nil {
+		return errors.New("apply-when-scanned: the metadata handler is not wired")
+	}
+	return hd.RunQueuedApply(ctx, q, beat)
 }
 
 // whenScannedDef is one of the two queued-behind-the-scan defs. accepts says
@@ -143,52 +254,56 @@ func (s *Server) whenScannedDef(opID, plugin, display, desc string, perm auth.Pe
 			if err := json.Unmarshal(raw, &p); err != nil {
 				return fmt.Errorf("%s: decode params: %w", opID, err)
 			}
-			q := p.QueuedApply
-			if q.BookID == "" {
-				return fmt.Errorf("%s: no book id", opID)
-			}
-			if !accepts(q.Kind) {
-				return fmt.Errorf("%s does not run kind %q", opID, q.Kind)
-			}
-			dryRun, err := opmode.ResolveDryRun(opID, p.DryRun, p.DryRunCamel)
-			if err != nil {
-				return err
-			}
-			if dryRun {
-				_ = reporter.UpdateProgress(1, 1, fmt.Sprintf("preview: would apply %s to book %s once the library scan has read it; nothing written", q.Kind, q.BookID))
-				return nil
-			}
-			beat := func(msg string) { _ = reporter.UpdateProgress(0, 1, msg) }
-			beat("waiting for the library scan to finish reading book " + q.BookID)
-			switch q.Kind {
-			case metadatahandler.QueuedOpResultCandidate:
-				err = s.runQueuedOpResultCandidate(ctx, q, beat)
-			case metadatahandler.QueuedOrganize:
-				r := s.queuedOrganizeRunner
-				if r == nil {
-					return errors.New("apply-when-scanned: the organize handler is not wired")
-				}
-				err = r.RunQueuedOrganize(ctx, q.BookID, beat)
-			default:
-				h := s.applyWhenScannedHandler
-				if h == nil {
-					return errors.New("apply-when-scanned: the metadata handler is not wired")
-				}
-				err = h.RunQueuedApply(ctx, q, beat)
-			}
-			if errors.Is(err, metadatahandler.ErrQueuedAlreadyApplied) {
-				// A re-run after the apply landed (ResumeRequeue after a
-				// restart): complete, write nothing, no second history row.
-				_ = reporter.UpdateProgress(1, 1, "book "+q.BookID+": "+err.Error()+"; nothing written")
-				return nil
-			}
-			if err != nil {
-				return err
-			}
-			_ = reporter.UpdateProgress(1, 1, "applied to book "+q.BookID)
-			return nil
+			return whenScannedCore(ctx, opID, p.QueuedApply, accepts, whenScannedEnv{
+				t7Env: t7HeadEnv(reporter, true),
+				Live: func() (bool, error) {
+					dryRun, err := opmode.ResolveDryRun(opID, p.DryRun, p.DryRunCamel)
+					return !dryRun, err
+				},
+				Writer: headWhenScanned{s: s},
+			})
 		},
 	}
+}
+
+// whenScannedNative is one native kind of the pair. The params are the queued
+// apply alone: the mode is the start request's, so the dry-run keys applyWhenScannedParams
+// carries are dropped. The def's write set is what its queued change writes; HEAD
+// declared none on purpose, so that the op runs while a scan does (seams.d/F5-13.md).
+func (s *Server) whenScannedNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule, def opsregistry.OperationDef, accepts func(kind string) bool) tasks.Definition {
+	kind := t7KindFor(def.ID)
+	c := t7Common(def, sched)
+	c.Effects = t7ApplyPathWrites()
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			q, err := t7DecodeNative[metadatahandler.QueuedApply](kind, raw)
+			if err != nil {
+				return struct{}{}, err
+			}
+			if err := t7NeedStore(kind, deps); err != nil {
+				return struct{}{}, err
+			}
+			w, err := t7NewWriter(kind, deps, rc)
+			if err != nil {
+				return struct{}{}, err
+			}
+			return struct{}{}, whenScannedCore(rc.Context(), def.ID, q, accepts, whenScannedEnv{
+				t7Env:  t7NativeEnv(rc),
+				Live:   func() (bool, error) { return rc.Mode() == tasks.ModeLive, nil },
+				Writer: w,
+			})
+		},
+	})
+}
+
+// applyWhenScannedNative and organizeWhenScannedNative are the pair's two kinds.
+func (s *Server) applyWhenScannedNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	return s.whenScannedNative(deps, sched, s.applyWhenScannedDef(), acceptsApplyKind)
+}
+
+func (s *Server) organizeWhenScannedNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	return s.whenScannedNative(deps, sched, s.organizeWhenScannedDef(), acceptsOrganizeKind)
 }
 
 func init() {
