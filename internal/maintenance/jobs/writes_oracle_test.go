@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/writes_oracle_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 40eadd67-76ac-419f-a3fe-7d1ed5e586e2
 // last-edited: 2026-11-19
 
@@ -618,6 +618,7 @@ func loadOracleJobs() (map[string]oracleJob, error) {
 	if err != nil {
 		return nil, err
 	}
+	oracleJobsProg = op
 	prog, jp := op.prog, op.roots[0]
 	out := map[string]oracleJob{}
 	for _, m := range jp.Members {
@@ -640,6 +641,10 @@ func loadOracleJobs() (map[string]oracleJob, error) {
 	return out, nil
 }
 
+// oracleJobsProg is the program loadOracleJobs walked, for the tests that ask
+// about code the jobs reach beyond the jobs themselves.
+var oracleJobsProg *oracleProgram
+
 var (
 	oracleOnce   sync.Once
 	oracleResult map[string]oracleJob
@@ -654,6 +659,13 @@ func oracleJobs(t *testing.T) map[string]oracleJob {
 		t.Fatal(oracleErr)
 	}
 	return oracleResult
+}
+
+// oracleJobsProgram is the program the oracle walked the jobs in.
+func oracleJobsProgram(t *testing.T) *oracleProgram {
+	t.Helper()
+	oracleJobs(t)
+	return oracleJobsProg
 }
 
 // oracleKinds is every job's native kind, built with the real write sets.
