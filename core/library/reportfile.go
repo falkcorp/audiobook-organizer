@@ -1,5 +1,5 @@
 // file: core/library/reportfile.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8339ca84-a951-46b8-8fb2-5a3b65f59b65
 // last-edited: 2026-11-18
 
@@ -39,6 +39,12 @@ const (
 	// ReportTouch creates the report if it is absent and otherwise leaves it as
 	// it is. It proves a later ReportTruncate or ReportAppend can open the file.
 	ReportTouch
+	// ReportReadAppend creates the report if it is absent and opens it for reading
+	// and writing at positions the caller chooses (O_RDWR, no O_APPEND), without
+	// truncating it. It is for a job that reads its own earlier report back, cuts
+	// a half-written last line off and carries on writing (backfill-file-hashes'
+	// resume). It is vetted exactly like the other modes.
+	ReportReadAppend
 )
 
 // WriteReportFile writes data as the report at path and closes it. path must be
@@ -76,8 +82,12 @@ func PreflightReportFile(path string, perm fs.FileMode) error {
 //
 // The directory is opened as a handle (an os.Root, then a directory descriptor),
 // after it has been looked at with Lstat: it must be a real directory, not a
-// symlink, and owned by the user this process runs as, and the handle must be the
-// same directory Lstat saw, so a swap in between is refused. The file is then
+// symlink, and owned by the user this process runs as. The handle is then compared
+// with what Lstat saw (os.SameFile), which catches a swap of the directory for
+// something else between the two calls. It does not prove anything about the
+// directory beyond that: the checks above are what say it is a directory this user
+// owns, and the file checks below are what keep a link planted in it from
+// mattering. The file is then
 // opened relative to that descriptor with openat, O_NOFOLLOW and O_CLOEXEC, so
 // the kernel never resolves a path again and a link planted at the name is not
 // followed. What was opened is checked through its descriptor: it must be a
@@ -88,7 +98,11 @@ func PreflightReportFile(path string, perm fs.FileMode) error {
 //
 // path must be absolute and name a file directly in its directory; the directory
 // is never created here (ReportPathNotify creates and checks it). On platforms
-// without directory handles this refuses every path rather than write unchecked.
+// without directory handles (anything but unix) every call fails, with an error
+// that is NOT ErrReportFileUnsafe (it comes from the missing capability, not from
+// what is at the name), rather than write unchecked; the same is true of the
+// vetting ReportPathNotify does, so on those platforms no report path resolves at
+// all. The maintenance reports are a unix feature.
 func OpenReportFile(path string, perm fs.FileMode, mode ReportOpenMode) (*os.File, error) {
 	return openReportFile(path, perm, mode, defaultReportOpenEnv())
 }
@@ -125,8 +139,11 @@ func openReportFile(path string, perm fs.FileMode, mode ReportOpenMode, env repo
 	defer closeDir()
 
 	flag := os.O_WRONLY | os.O_CREATE
-	if mode == ReportAppend {
+	switch mode {
+	case ReportAppend:
 		flag |= os.O_APPEND
+	case ReportReadAppend:
+		flag = os.O_RDWR | os.O_CREATE
 	}
 	f, err := libfs.OpenFileAt(d, name, flag, perm)
 	if err != nil {

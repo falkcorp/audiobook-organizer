@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_provenance_export.go
-// version: 1.2.6
+// version: 1.2.7
 // guid: 08ef35af-5704-459a-aeec-e88245abde52
 // last-edited: 2026-11-18
 
@@ -39,14 +39,17 @@ const fileProvenanceExportKind tasks.Kind = "books.maintenance.file-provenance-e
 
 // fileProvExportParams configures one export run.
 type fileProvExportParams struct {
-	// Path is the JSONL file to append to. Required. It is held to the same rule
-	// as every maintenance report: a file name directly in {root_dir}/.reports
-	// (a bare name, or an absolute path whose directory is that one). A name with
-	// a directory in it, a path anywhere else, and any path when root_dir is not
-	// configured are refused before the ledger is read. There is deliberately no
-	// default: an export that picks its own destination is an export nobody can
-	// find afterwards. reports-prune removes only "<known kind>-<id>.tsv" files,
-	// so a .jsonl ledger is not aged out of the directory.
+	// Path is the JSONL file to append to. Required. It is a file name directly in
+	// {root_dir}/.ledger (a bare name, or an absolute path whose directory is that
+	// one), the ledger directory that report writers and reports-prune never use:
+	// every report op truncates the file it is given and the pruner deletes by name,
+	// so a ledger kept among the reports is one wrong report name from being emptied.
+	// A name with a directory in it, a path anywhere else (.reports included), and
+	// any path when root_dir is not configured or not mounted are refused before the
+	// ledger is read. The file must be one this service made: a regular file owned by
+	// the account it runs as, with one link (a ledger copied in by another account is
+	// refused until its owner is changed). There is deliberately no default: an
+	// export that picks its own destination is an export nobody can find afterwards.
 	Path string `json:"path"`
 	// Apply writes. Default false: report what would be exported, touch nothing.
 	Apply bool `json:"apply"`
@@ -66,10 +69,10 @@ type syncWriteCloser interface {
 
 // openExportFile opens the export file for appending. The default opens it the
 // way every report is opened (library.OpenReportFile, ReportAppend): relative to a
-// handle on the report directory, never following a symlink, and refusing a file
-// that is not a regular file owned by this user with one link. The export is the
-// one report that appends rather than replaces, and it is the ledger's only copy
-// outside the database, so a link planted at its name must not redirect it.
+// handle on its directory, never following a symlink, and refusing a file that is
+// not a regular file owned by this user with one link. The export appends rather
+// than replaces, and it is the ledger's only copy outside the database, so a link
+// planted at its name must not redirect it.
 //
 // It is also a seam. The single most important property of this op is
 // that the cursor advances only AFTER the bytes are durable, and the only way
@@ -140,9 +143,11 @@ func (p *Plugin) fileProvenanceExportDef() sdk.OperationDef {
 			"cursor to a JSONL file, so the ledger survives corruption of the database " +
 			"it lives in. Never rewrites what it has written. Reports sequence gaps and " +
 			"missing rows as deletion evidence. Path is required: a file name in the library's " +
-			".reports directory (root_dir/.reports), such as ledger.jsonl; a path anywhere " +
-			"else, or one with a directory in it, is refused. Default dry-run (it reads the " +
-			"ledger and checks the path, and appends nothing), pass {\"apply\": true} to write.",
+			"ledger directory (root_dir/.ledger), such as ledger.jsonl; a path anywhere " +
+			"else, or one with a directory in it, is refused, and the library volume must be " +
+			"mounted. The directory is created if it is missing, on a dry run too. Default " +
+			"dry-run (it reads the ledger and checks the path, and appends nothing), pass " +
+			"{\"apply\": true} to write.",
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.file-provenance-export",
 		// ResumeDrop: the cursor is durable, so a dropped run loses no ground —
@@ -201,9 +206,10 @@ func (p *Plugin) fileProvenanceExportKind(deps t6g4Deps, sched *tasks.Schedule) 
 				"cursor to a JSONL file, so the ledger survives corruption of the database " +
 				"it lives in. Never rewrites what it has written. Reports sequence gaps and " +
 				"missing rows as deletion evidence. Path is required: a file name in the library's " +
-				".reports directory (root_dir/.reports), such as ledger.jsonl; a path anywhere " +
-				"else, or one with a directory in it, is refused. A preview (the default) " +
-				"appends nothing, start in live mode to write.",
+				"ledger directory (root_dir/.ledger), such as ledger.jsonl; a path anywhere " +
+				"else, or one with a directory in it, is refused, and the library volume must be " +
+				"mounted. The directory is created if it is missing, on a preview too. A preview " +
+				"(the default) appends nothing, start in live mode to write.",
 			// Appends the ledger to a JSONL file on disk (files) and moves the export
 			// cursor in the provenance keyspace, declared as t6g4ResProvenance.
 			Effects:        tasks.Writes(t6g4Res(t6g4ResProvenance, ops.ResFiles)...),
@@ -292,12 +298,24 @@ func (p *Plugin) exportFileProvenanceCore(ctx context.Context, params fileProvEx
 	if params.Path == "" {
 		return fileProvExportResult{}, fmt.Errorf("file-provenance-export: path is required")
 	}
-	// Confined to {root_dir}/.reports like every other report: a name that would
-	// land anywhere else, or with no root_dir to keep it inside, is refused here,
-	// before the ledger is read. ReportPathNotify is declared as a path-injection
-	// barrier in .github/codeql/models/path-sanitizers.model.yml, which is this
-	// repo's convention for a validated path rather than an inline suppression.
-	outPath, err := t6g4ReportPath(env.Store, params.Path, "file-provenance-export.jsonl")
+	// The ledger lands on the library volume, so the volume must be there: with an
+	// unmounted share the mountpoint is a writable directory on the underlying
+	// filesystem, the ledger would be appended there and the cursor advanced, and
+	// the lines would be hidden once the share is mounted over them, a gap nobody
+	// would see. Checked before the path is resolved (resolving creates the ledger
+	// directory) and on a preview too. library.Mounted is a coarse check, not proof
+	// of a healthy mount.
+	root := env.Store.RootDir()
+	if merr := library.Mounted(root); merr != nil {
+		return fileProvExportResult{}, fmt.Errorf("file-provenance-export: refusing to run: %w", merr)
+	}
+	// Confined to {root_dir}/.ledger: a name that would land anywhere else is
+	// refused here, before the ledger is read. LedgerPathNotify is declared as a
+	// path-injection barrier in .github/codeql/models/path-sanitizers.model.yml,
+	// which is this repo's convention for a validated path rather than an inline
+	// suppression. Resolving prepares the directory (creates it, removes world
+	// write, writes and removes a probe file), so it does that on a preview too.
+	outPath, err := t6g4LedgerPath(env.Store, params.Path, "file-provenance-export.jsonl")
 	if err != nil {
 		return fileProvExportResult{}, fmt.Errorf("file-provenance-export: path: %w", err)
 	}

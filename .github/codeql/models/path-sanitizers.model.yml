@@ -1,5 +1,5 @@
 # file: .github/codeql/models/path-sanitizers.model.yml
-# version: 0.3.3
+# version: 0.3.4
 # guid: 07edd0c5-64fa-4d57-8830-fbfaa513c052
 # last-edited: 2026-11-18
 
@@ -17,10 +17,15 @@ extensions:
       - ["github.com/falkcorp/mediacore/library", "", false, "CleanAbsolutePath", "", "", "ReturnValue[0]", "path-injection", "manual"]
 
       # library.ReportPathNotify: the returned path is {root}/.reports/<bare file
-      # name>: any explicit path is refused unless it names a file directly in the
-      # report directory, and an existing file at it is vetted.
+      # name>: a default file name that is not a single plain name is refused, any
+      # explicit path is refused unless it names a file directly in the report
+      # directory, and an existing file at it is vetted.
       # Signature: func ReportPathNotify(root, explicit, fileName string, onTightened func(string, fs.FileMode)) (string, error)
       - ["github.com/falkcorp/mediacore/library", "", false, "ReportPathNotify", "", "", "ReturnValue[0]", "path-injection", "manual"]
+
+      # library.LedgerPathNotify: ReportPathNotify's checks over {root}/.ledger.
+      # Signature: func LedgerPathNotify(root, explicit, fileName string, onTightened func(string, fs.FileMode)) (string, error)
+      - ["github.com/falkcorp/mediacore/library", "", false, "LedgerPathNotify", "", "", "ReturnValue[0]", "path-injection", "manual"]
 
       # library.SecureJoin: joins root with user parts, returns sanitized path.
       # Signature: func SecureJoin(root string, parts ...string) (string, error)

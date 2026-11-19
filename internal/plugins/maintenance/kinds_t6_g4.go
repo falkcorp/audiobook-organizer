@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4.go
-// version: 1.0.20
+// version: 1.0.21
 // guid: a6f18f0f-9e00-4b3a-a135-2ea70c56209f
 // last-edited: 2026-11-18
 
@@ -377,6 +377,15 @@ type t6g4DurationWrites interface {
 type t6g4View struct {
 	t6g4Store
 	t6g4Writer
+}
+
+// t6g4LedgerPath is t6g4ReportPath for a ledger kept outside the reports: the
+// same confinement over {RootDir}/.ledger (library.LedgerPathNotify), a directory
+// no report writer resolves into and reports-prune never looks in.
+func t6g4LedgerPath(store t6g4PathReads, explicit, fileName string) (string, error) {
+	return library.LedgerPathNotify(store.RootDir(), explicit, fileName, func(dir string, was fs.FileMode) {
+		logger.New("maintenance").Warn("removed world write from the ledger directory, its mode was %o dir=%s", was, logger.SanitizeLogValue(dir))
+	})
 }
 
 // t6g4ReportPath is the report-path resolution Plugin.resolveReportPath makes,

@@ -1,5 +1,5 @@
 // file: core/library/libroot.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 4d8b2f61-a3c7-4e90-b512-9e6f0c1d7a38
 // last-edited: 2026-11-18
 
@@ -66,6 +66,40 @@ func Mounted(root string) error {
 // under `go test` is the package source directory.
 const ReportDirName = ".reports"
 
+// LedgerDirName is the directory, under the library root, that holds append-only
+// ledgers the application keeps a copy of outside its database (today the file
+// provenance export). It is separate from ReportDirName on purpose: every report
+// writer truncates the file it is given and reports-prune deletes by name, so a
+// ledger kept among the reports is one wrong report name away from being emptied.
+// Nothing that resolves a report path can reach this directory, and no report
+// pruner looks in it. It is dot-prefixed like ReportDirName, so Mounted ignores it
+// and directory walkers skip it.
+const LedgerDirName = ".ledger"
+
+// confinedDir names one of the application-owned directories under the library
+// root that ReportPathNotify and LedgerPathNotify confine a file to, and the word
+// its refusals use for what is kept there.
+type confinedDir struct {
+	name string // directory name under the root
+	noun string // "report" or "ledger"
+}
+
+// reportDir and ledgerDir return the two confined directories. Functions, not
+// package-level values, so there is no mutable package state to reassign.
+func reportDir() confinedDir { return confinedDir{name: ReportDirName, noun: "report"} }
+func ledgerDir() confinedDir { return confinedDir{name: LedgerDirName, noun: "ledger"} }
+
+// LedgerPathNotify is ReportPathNotify for a ledger: the same confinement, the
+// same checks on an existing file, the same directory preparation, over
+// {root}/.ledger instead of {root}/.reports. A path that names a file in
+// {root}/.reports is refused here, and a path in {root}/.ledger is refused by
+// ReportPathNotify, so the two kinds of file cannot be pointed at each other. The
+// returned path is written with OpenReportFile (ReportAppend); see there for the
+// write-time checks.
+func LedgerPathNotify(root, explicit, fileName string, onTightened func(dir string, was fs.FileMode)) (string, error) {
+	return confinedPathNotify(ledgerDir(), root, explicit, fileName, onTightened, defaultReportEnv())
+}
+
 // ReportPathNotify returns where an op writes its report: the caller's explicit
 // path when one was given, otherwise {root}/.reports/<fileName>. It proves the
 // report directory exists and is writable before returning, so an op can call it
@@ -99,6 +133,14 @@ func ReportPathNotify(root, explicit, fileName string, onTightened func(dir stri
 	return reportPathNotify(root, explicit, fileName, onTightened, defaultReportEnv())
 }
 
+// isSingleComponent reports whether name is one plain file name: not empty, not
+// "." or "..", with no separator and nothing that makes it a path. It is what a
+// default file name must be for a directory join to stay inside that directory.
+func isSingleComponent(name string) bool {
+	return name != "" && name != "." && name != ".." && filepath.Base(name) == name && filepath.IsLocal(name) &&
+		!strings.ContainsRune(name, 0)
+}
+
 // reportEnv is the process state ReportPathNotify reads: how a directory's mode
 // is changed and which user ID owns what this process may trust. It is passed
 // down rather than held in package variables so a test can stand in for another
@@ -114,31 +156,40 @@ func defaultReportEnv() reportEnv {
 }
 
 func reportPathNotify(root, explicit, fileName string, onTightened func(dir string, was fs.FileMode), env reportEnv) (string, error) {
+	return confinedPathNotify(reportDir(), root, explicit, fileName, onTightened, env)
+}
+
+func confinedPathNotify(kind confinedDir, root, explicit, fileName string, onTightened func(dir string, was fs.FileMode), env reportEnv) (string, error) {
 	root = strings.TrimSpace(root)
 	if root == "" {
 		if explicit != "" {
-			return "", fmt.Errorf("report path %q refused: root_dir is not configured, so there is no "+
-				"report directory to keep it inside", explicit)
+			return "", fmt.Errorf("%s path %q refused: root_dir is not configured, so there is no "+
+				"%s directory to keep it inside", kind.noun, explicit, kind.noun)
 		}
-		return "", fmt.Errorf("no report path: root_dir is not configured, so there is no default "+
-			"report directory; configure an absolute root_dir (report %s)", fileName)
+		return "", fmt.Errorf("no %s path: root_dir is not configured, so there is no default "+
+			"%s directory; configure an absolute root_dir (%s %s)", kind.noun, kind.noun, kind.noun, fileName)
 	}
 	if !filepath.IsAbs(root) {
 		if explicit != "" {
-			return "", fmt.Errorf("report path %q refused: root_dir %q is not absolute, so the report "+
-				"directory it must stay inside would depend on the process working directory", explicit, root)
+			return "", fmt.Errorf("%s path %q refused: root_dir %q is not absolute, so the %s "+
+				"directory it must stay inside would depend on the process working directory", kind.noun, explicit, root, kind.noun)
 		}
-		return "", fmt.Errorf("no report path: root_dir %q is not absolute, so the default report "+
+		return "", fmt.Errorf("no %s path: root_dir %q is not absolute, so the default %s "+
 			"directory would depend on the process working directory; configure an absolute root_dir "+
-			"(report %s)", root, fileName)
+			"(%s %s)", kind.noun, root, kind.noun, kind.noun, fileName)
 	}
-	reportsDir := filepath.Join(root, ReportDirName)
+	reportsDir := filepath.Join(root, kind.name)
 	if explicit != "" {
-		return containedReportPath(reportsDir, explicit, onTightened, env)
+		return containedReportPath(kind, reportsDir, explicit, onTightened, env)
+	}
+	// The default name is joined onto the directory, so it must not be able to
+	// leave it: one plain file name, never a path.
+	if !isSingleComponent(fileName) {
+		return "", fmt.Errorf("default %s name %q is not a single file name", kind.noun, fileName)
 	}
 	path := filepath.Join(reportsDir, fileName)
 	if err := ensureReportsDir(reportsDir, onTightened, env); err != nil {
-		return "", fmt.Errorf("report path %s is not writable: %w", path, err)
+		return "", fmt.Errorf("%s path %s is not writable: %w", kind.noun, path, err)
 	}
 	if err := checkExistingReportFile(path, reportOpenEnv{euid: env.euid()}); err != nil {
 		return "", err
@@ -159,15 +210,15 @@ func reportPathNotify(root, explicit, fileName string, onTightened func(dir stri
 // spelling. An existing file at that name is vetted the way the writer vets it, so
 // a symlink, a directory, a file owned by someone else or a hard link is refused
 // now, before any work.
-func containedReportPath(reportsDir, explicit string, onTightened func(dir string, was fs.FileMode), env reportEnv) (string, error) {
+func containedReportPath(kind confinedDir, reportsDir, explicit string, onTightened func(dir string, was fs.FileMode), env reportEnv) (string, error) {
 	refuse := func(why string) (string, error) {
-		return "", fmt.Errorf("report path %q refused: %s (a report must be a file directly in %s)", explicit, why, reportsDir)
+		return "", fmt.Errorf("%s path %q refused: %s (a %s must be a file directly in %s)", kind.noun, explicit, why, kind.noun, reportsDir)
 	}
 	if strings.ContainsRune(explicit, 0) {
 		return refuse("it contains a NUL byte")
 	}
 	if err := ensureReportsDir(reportsDir, onTightened, env); err != nil {
-		return "", fmt.Errorf("report directory %s is not usable: %w", reportsDir, err)
+		return "", fmt.Errorf("%s directory %s is not usable: %w", kind.noun, reportsDir, err)
 	}
 
 	name := explicit
