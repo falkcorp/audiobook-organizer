@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/breakdown_backfill.go
-// version: 1.5.3
+// version: 1.6.0
 // guid: ec0f5e9d-2f6d-485d-9f24-ad3d917d1834
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // Package dedup — op dedup.breakdown-backfill.
 //
@@ -87,16 +87,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -186,7 +186,20 @@ type breakdownBackfillParams struct {
 // on the listed snapshot; that check alone leaves the whole scoring pass as a
 // window for a pin.
 type candidateBackfillStore interface {
+	breakdownBackfillReads
+	breakdownBackfillWriter
+}
+
+// breakdownBackfillReads is the read the core takes (rule R10): the pending
+// backlog listing.
+type breakdownBackfillReads interface {
 	ListCandidates(f database.CandidateFilter) ([]database.DedupCandidate, int, error)
+}
+
+// breakdownBackfillWriter is the writes the core makes (HEAD: the same two
+// EmbeddingStore methods): the guarded bulk score write and the one durability
+// sync after it.
+type breakdownBackfillWriter interface {
 	UpdateCandidateScores(updates []database.CandidateScoreUpdate) (applied int, failed []int64, err error)
 	SyncCandidateWrites() error
 }
@@ -238,20 +251,27 @@ type breakdownBackfillReport struct {
 	CertainSignalSets map[string]int `json:"certain_signal_sets"`
 }
 
+// breakdownBackfillKind is rule R3's native kind for dedup.breakdown-backfill.
+const breakdownBackfillKind = tasks.Kind("books.dedup.breakdown-backfill")
+
+// breakdownBackfillHelp is the definition's description, HEAD's and the native
+// kind's Help (rule R5: verbatim).
+const breakdownBackfillHelp = "Recomputes the unified signal set + composed score for every pending dedup " +
+	"candidate with no ScoreBreakdown (pre-T015 rows) using the engine's existing scorer, " +
+	"and persists it via UpdateCandidateScores so Engine.Rescore and " +
+	"maintenance.dedup-exact-triage can act on the whole backlog. Writes ONLY " +
+	"ScoreBreakdown/Band/FormulaVersion — never status, layer, or similarity. " +
+	"Dry-run by default; apply=true writes."
+
 // breakdownBackfillDef returns the OperationDef for dedup.breakdown-backfill.
 func (p *Plugin) breakdownBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "dedup.breakdown-backfill",
-		Preview:     sdk.PreviewSpec{Params: breakdownBackfillParams{}},
-		Liveness:    sdk.LivenessRunItems,
-		Plugin:      "dedup",
-		DisplayName: "Backfill ScoreBreakdowns onto pre-T015 pending candidates",
-		Description: "Recomputes the unified signal set + composed score for every pending dedup " +
-			"candidate with no ScoreBreakdown (pre-T015 rows) using the engine's existing scorer, " +
-			"and persists it via UpdateCandidateScores so Engine.Rescore and " +
-			"maintenance.dedup-exact-triage can act on the whole backlog. Writes ONLY " +
-			"ScoreBreakdown/Band/FormulaVersion — never status, layer, or similarity. " +
-			"Dry-run by default; apply=true writes.",
+		ID:              "dedup.breakdown-backfill",
+		Preview:         sdk.PreviewSpec{Params: breakdownBackfillParams{}},
+		Liveness:        sdk.LivenessRunItems,
+		Plugin:          "dedup",
+		DisplayName:     "Backfill ScoreBreakdowns onto pre-T015 pending candidates",
+		Description:     breakdownBackfillHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityNormal,
 		ConcurrencyKey:  "dedup.breakdown-backfill",
@@ -261,6 +281,19 @@ func (p *Plugin) breakdownBackfillDef() sdk.OperationDef {
 		Run:             p.runBreakdownBackfill,
 	}
 }
+
+// breakdownBackfillEnv is what the core takes from its shell (rules R2 and R10).
+// Live is HEAD's apply=true; a dry run never calls Writer, which may then be nil.
+type breakdownBackfillEnv struct {
+	kindEnv
+	Scorer pairScorer
+	Store  breakdownBackfillReads
+	Writer breakdownBackfillWriter
+}
+
+// breakdownBackfillParallelism is the group pool (rule R4): HEAD's
+// runtime.NumCPU() workers over disjoint A-groups.
+func breakdownBackfillParallelism() tasks.Parallelism { return tasks.CPU() }
 
 // runBreakdownBackfill wires the plugin's engine + store into the testable
 // runner.
@@ -292,13 +325,8 @@ type backfillGroup struct {
 	refs []backfillRef
 }
 
-// runBreakdownBackfillWith is the testable core: it lists pending candidates,
-// keeps the nil/empty-breakdown ones, groups them by EntityAID, scores each
-// group through the engine's real scorer in a bounded worker pool
-// (registry.RunItems, NumCPU workers — DB-read + CPU scoring over ~10K+
-// pairs), and (apply=true) persists each group's recomputed breakdowns via
-// one UpdateCandidateScores batch, then makes them durable with one
-// SyncCandidateWrites.
+// runBreakdownBackfillWith is the v2 shell around breakdownBackfillCore: params
+// over the given scorer and store (the testable seam).
 func runBreakdownBackfillWith(
 	ctx context.Context,
 	scorer pairScorer,
@@ -312,19 +340,36 @@ func runBreakdownBackfillWith(
 			return fmt.Errorf("parse params: %w", err)
 		}
 	}
+	_, err := breakdownBackfillCore(ctx, breakdownBackfillEnv{
+		kindEnv: headEnv(reporter, params.Apply),
+		Scorer:  scorer,
+		Store:   store,
+		Writer:  store,
+	})
+	return err
+}
 
-	log := reporter.Logger()
+// breakdownBackfillCore is the body: it lists pending candidates, keeps the
+// nil/empty-breakdown ones, groups them by EntityAID, scores each group through
+// the engine's real scorer in a bounded worker pool (NumCPU workers — DB-read +
+// CPU scoring over ~10K+ pairs), and (Live) persists each group's recomputed
+// breakdowns via one UpdateCandidateScores batch, then makes them durable with
+// one SyncCandidateWrites. Shared by both shells.
+func breakdownBackfillCore(ctx context.Context, env breakdownBackfillEnv) (breakdownBackfillReport, error) {
+	live := env.Live
+	scorer := env.Scorer
+	log := env.Logger
 
 	// --- Load the whole pending backlog (book pairs only — author-pair
 	// candidates have no Book rows for the scorer to load) ---
-	_ = reporter.UpdateProgress(0, 3, "Loading pending candidates…")
-	cands, _, err := store.ListCandidates(database.CandidateFilter{
+	env.Progress(0, 3, "Loading pending candidates…")
+	cands, _, err := env.Store.ListCandidates(database.CandidateFilter{
 		EntityType: "book",
 		Status:     "pending",
 		Limit:      breakdownBackfillCandidateLimit,
 	})
 	if err != nil {
-		return fmt.Errorf("list pending candidates: %w", err)
+		return breakdownBackfillReport{}, fmt.Errorf("list pending candidates: %w", err)
 	}
 	// No silent caps: hitting the limit exactly means an unknown tail of
 	// pending candidates was NOT listed — say so.
@@ -332,8 +377,8 @@ func runBreakdownBackfillWith(
 		log.Warn("breakdown-backfill: candidate list truncated at limit — some pending candidates were not inspected",
 			"limit", breakdownBackfillCandidateLimit)
 	}
-	if reporter.IsCanceled() {
-		return context.Canceled
+	if env.Canceled() {
+		return breakdownBackfillReport{}, context.Canceled
 	}
 
 	// --- Partition: already-scored rows are skipped, the rest are targets ---
@@ -387,17 +432,17 @@ func runBreakdownBackfillWith(
 	}
 
 	log.Info("breakdown-backfill start",
-		"apply", params.Apply,
+		"apply", live,
 		"total_pending", len(cands),
 		"skipped_has_breakdown", skippedHasBreakdown,
 		"skipped_manual", skippedManual,
 		"targets", targets,
 		"a_groups", len(groups),
-		"workers", runtime.NumCPU(),
+		"workers", breakdownBackfillParallelism().Workers(),
 	)
 
 	// --- Score + (apply) persist, sharded across disjoint A-groups ---
-	_ = reporter.UpdateProgress(1, 3, fmt.Sprintf("Scoring %d nil-breakdown candidates across %d A-groups…", targets, len(groups)))
+	env.Progress(1, 3, fmt.Sprintf("Scoring %d nil-breakdown candidates across %d A-groups…", targets, len(groups)))
 
 	var (
 		mu               sync.Mutex
@@ -417,8 +462,13 @@ func runBreakdownBackfillWith(
 		samples          []string
 	)
 
-	err = registry.RunItems(ctx, reporter, groups, func(ctx context.Context, g backfillGroup) error {
-		if reporter.IsCanceled() {
+	err = env.Items(ctx, breakdownBackfillParallelism(), len(groups), kindItemsOptions{
+		PureLabel: func(i, total int) string {
+			return fmt.Sprintf("Scored %d/%d A-groups…", i+1, total)
+		},
+	}, func(ctx context.Context, gi int) error {
+		g := groups[gi]
+		if env.Canceled() {
 			return context.Canceled
 		}
 
@@ -508,7 +558,7 @@ func runBreakdownBackfillWith(
 			}
 			mu.Unlock()
 
-			if !params.Apply {
+			if !live {
 				mu.Lock()
 				wouldBackfill++
 				mu.Unlock()
@@ -524,7 +574,7 @@ func runBreakdownBackfillWith(
 		if len(updates) == 0 {
 			return nil
 		}
-		applied, failed, uErr := store.UpdateCandidateScores(updates)
+		applied, failed, uErr := env.Writer.UpdateCandidateScores(updates)
 		if uErr != nil {
 			mu.Lock()
 			updateErrs += len(updates)
@@ -548,31 +598,26 @@ func runBreakdownBackfillWith(
 			log.Info("breakdown-backfill: left rows pinned since the list unscored", "a_id", g.aID, "rows", pinned)
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: runtime.NumCPU(),
-		Label: func(i, total int) string {
-			return fmt.Sprintf("Scored %d/%d A-groups…", i+1, total)
-		},
 	})
 	if err != nil {
-		return err
+		return breakdownBackfillReport{}, err
 	}
 	// The batches above commit NoSync (candidateWriteOpts); one WAL fsync
 	// makes all of them durable.
-	if params.Apply && backfilled > 0 {
-		if sErr := store.SyncCandidateWrites(); sErr != nil {
-			return fmt.Errorf("sync candidate writes after %d backfilled rows: %w", backfilled, sErr)
+	if live && backfilled > 0 {
+		if sErr := env.Writer.SyncCandidateWrites(); sErr != nil {
+			return breakdownBackfillReport{}, fmt.Errorf("sync candidate writes after %d backfilled rows: %w", backfilled, sErr)
 		}
 	}
 
 	// --- Report ---
-	_ = reporter.UpdateProgress(2, 3, "Summarizing…")
+	env.Progress(2, 3, "Summarizing…")
 	for _, s := range samples {
 		log.Info("breakdown-backfill sample", "pair", s)
 	}
 
 	report := breakdownBackfillReport{
-		Apply:                params.Apply,
+		Apply:                live,
 		TotalPending:         len(cands),
 		SkippedHasBreakdown:  skippedHasBreakdown,
 		SkippedManual:        skippedManual,
@@ -594,9 +639,9 @@ func runBreakdownBackfillWith(
 		CertainSignalSets:        certainSets,
 	}
 	reportJSON, _ := json.Marshal(report)
-	_ = reporter.Log(slog.LevelInfo, "Breakdown-backfill report (JSON)", slog.String("report", string(reportJSON)))
+	_ = env.Reporter.Log(slog.LevelInfo, "Breakdown-backfill report (JSON)", slog.String("report", string(reportJSON)))
 	log.Info("breakdown-backfill complete",
-		"apply", params.Apply,
+		"apply", live,
 		"total_pending", len(cands),
 		"skipped_has_breakdown", skippedHasBreakdown,
 		"targets", targets,
@@ -637,10 +682,10 @@ func runBreakdownBackfillWith(
 	summary.WriteString(fmt.Sprintf(" certain_1sig=%d certain_primary[0]=%d certain_primary[1]=%d certain_primary[2+]=%d",
 		certainSigsEq1, certainPrimaries["0"], certainPrimaries["1"], certainPrimaries["2+"]))
 
-	if !params.Apply {
-		_ = reporter.UpdateProgress(3, 3, "Dry-run — "+summary.String()+". Pass apply=true to persist ScoreBreakdowns.")
+	if !live {
+		env.Progress(3, 3, "Dry-run — "+summary.String()+". Pass apply=true to persist ScoreBreakdowns.")
 	} else {
-		_ = reporter.UpdateProgress(3, 3, "Complete — "+summary.String()+".")
+		env.Progress(3, 3, "Complete — "+summary.String()+".")
 	}
-	return nil
+	return report, nil
 }

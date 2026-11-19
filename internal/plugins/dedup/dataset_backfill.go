@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/dataset_backfill.go
-// version: 1.6.3
+// version: 1.7.0
 // guid: 2d6f8a13-7c40-4e92-8b15-9a3e5c7d2f64
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // Package dedup — op dedup.dataset-backfill (spec C4 backfill).
 //
@@ -28,13 +28,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"runtime"
 	"sync"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -45,17 +45,24 @@ type datasetBackfillParams struct {
 	Apply bool `json:"apply"`
 }
 
+// datasetBackfillKind is rule R3's native kind for dedup.dataset-backfill.
+const datasetBackfillKind = tasks.Kind("books.dedup.dataset-backfill")
+
+// datasetBackfillHelp is the definition's description, HEAD's and the native
+// kind's Help (rule R5: verbatim).
+const datasetBackfillHelp = "Builds a labeled example per pending candidate, runs deterministic catchers, " +
+	"and (apply=true) suppresses rule-labeled not_dup candidates (status → dismissed). " +
+	"Dry-run by default."
+
 // datasetBackfillDef returns the OperationDef for dedup.dataset-backfill.
 func (p *Plugin) datasetBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "dedup.dataset-backfill",
-		Preview:     sdk.PreviewSpec{Params: datasetBackfillParams{}},
-		Liveness:    sdk.LivenessRunItems,
-		Plugin:      "dedup",
-		DisplayName: "Backfill dedup tuning dataset",
-		Description: "Builds a labeled example per pending candidate, runs deterministic catchers, " +
-			"and (apply=true) suppresses rule-labeled not_dup candidates (status → dismissed). " +
-			"Dry-run by default.",
+		ID:              "dedup.dataset-backfill",
+		Preview:         sdk.PreviewSpec{Params: datasetBackfillParams{}},
+		Liveness:        sdk.LivenessRunItems,
+		Plugin:          "dedup",
+		DisplayName:     "Backfill dedup tuning dataset",
+		Description:     datasetBackfillHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityNormal,
 		ConcurrencyKey:  "dedup.dataset-backfill",
@@ -100,14 +107,14 @@ type bookLookupResult struct {
 // Only GetBook is memoized, matching the referenced bookCache patterns;
 // GetBookFiles passes straight through to the inner adapter.
 type memoizedBuilderAdapter struct {
-	inner builderAdapter
+	inner dataset.BuilderStore
 	mu    sync.Mutex
 	cache map[string]bookLookupResult
 }
 
 // newMemoizedBuilderAdapter returns a memoizedBuilderAdapter ready for
 // concurrent use across a registry.RunItems worker pool.
-func newMemoizedBuilderAdapter(inner builderAdapter) *memoizedBuilderAdapter {
+func newMemoizedBuilderAdapter(inner dataset.BuilderStore) *memoizedBuilderAdapter {
 	return &memoizedBuilderAdapter{inner: inner, cache: make(map[string]bookLookupResult)}
 }
 
@@ -146,6 +153,86 @@ type datasetBackfillEmbeddingStore interface {
 	ReclassifyCandidate(id int64, fromStatus, toStatus string) error
 }
 
+// datasetBackfillReads is the reads the core takes (rule R10): the pending
+// backlog listing and the book and file lookups the example builder makes.
+type datasetBackfillReads interface {
+	ListCandidates(f database.CandidateFilter) ([]database.DedupCandidate, int, error)
+	GetBookByID(id string) (*database.Book, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+}
+
+// datasetBackfillWriter is the writes the core makes (HEAD: the same two
+// EmbeddingStore methods): the labeled-example upsert and the guarded status
+// flip that suppresses a catcher-confirmed not_dup candidate.
+type datasetBackfillWriter interface {
+	UpsertLabeledExample(ex database.LabeledExample) error
+	// ReclassifyCandidate is the guarded automated status write: it re-checks
+	// the row under the manual-pin lock (see its doc).
+	ReclassifyCandidate(id int64, fromStatus, toStatus string) error
+}
+
+// datasetBackfillEnv is what the core takes from its shell (rules R2 and R10).
+// Live is HEAD's apply=true; a dry run never calls Writer, which may then be nil.
+type datasetBackfillEnv struct {
+	kindEnv
+	Store  datasetBackfillReads
+	Writer datasetBackfillWriter
+}
+
+// datasetBackfillResult is the native run's result: the counters HEAD folded
+// into its summary line. HEAD stored no result, so its shell drops it.
+type datasetBackfillResult struct {
+	Examined   int `json:"examined"`
+	NotDup     int `json:"not_dup"`
+	TrueDup    int `json:"true_dup"`
+	Labeled    int `json:"labeled"`
+	Suppressed int `json:"suppressed"`
+	BuildErrs  int `json:"build_errors"`
+	UpsertErrs int `json:"upsert_errors"`
+}
+
+// datasetBackfillParallelism is the candidate pool (rule R4): HEAD's
+// runtime.NumCPU() workers. Each candidate's reads and writes touch only its own
+// rows (the only shared state is the mutex-guarded book memo and counters).
+func datasetBackfillParallelism() tasks.Parallelism { return tasks.CPU() }
+
+// headDatasetReads is HEAD's reads for the core: the embedding store's candidate
+// listing and the main store's book lookups.
+type headDatasetReads struct {
+	emb   datasetBackfillCandidateLister
+	books interface {
+		GetBookByID(id string) (*database.Book, error)
+		GetBookFiles(bookID string) ([]database.BookFile, error)
+	}
+}
+
+// datasetBackfillCandidateLister is the listing half of
+// datasetBackfillEmbeddingStore.
+type datasetBackfillCandidateLister interface {
+	ListCandidates(f database.CandidateFilter) ([]database.DedupCandidate, int, error)
+}
+
+func (h headDatasetReads) ListCandidates(f database.CandidateFilter) ([]database.DedupCandidate, int, error) {
+	return h.emb.ListCandidates(f)
+}
+func (h headDatasetReads) GetBookByID(id string) (*database.Book, error) {
+	return h.books.GetBookByID(id)
+}
+func (h headDatasetReads) GetBookFiles(bookID string) ([]database.BookFile, error) {
+	return h.books.GetBookFiles(bookID)
+}
+
+// datasetBookAdapter bridges the core's GetBookByID to dataset.BuilderStore's
+// GetBook name.
+type datasetBookAdapter struct{ store datasetBackfillReads }
+
+func (b datasetBookAdapter) GetBook(id string) (*database.Book, error) {
+	return b.store.GetBookByID(id)
+}
+func (b datasetBookAdapter) GetBookFiles(id string) ([]database.BookFile, error) {
+	return b.store.GetBookFiles(id)
+}
+
 // runDatasetBackfill implements the dedup.dataset-backfill op.
 func (p *Plugin) runDatasetBackfill(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	if p.embeddingStore == nil {
@@ -157,9 +244,8 @@ func (p *Plugin) runDatasetBackfill(ctx context.Context, rawParams json.RawMessa
 	return runDatasetBackfillWith(ctx, p.embeddingStore, p.store, rawParams, reporter)
 }
 
-// runDatasetBackfillWith is the testable core: it lists pending candidates,
-// classifies each with the deterministic catchers, and (apply=true)
-// writes/dismisses through the given embStore.
+// runDatasetBackfillWith is the v2 shell around datasetBackfillCore: params over
+// the given embStore and mainStore (the testable seam).
 func runDatasetBackfillWith(
 	ctx context.Context,
 	embStore datasetBackfillEmbeddingStore,
@@ -174,26 +260,37 @@ func runDatasetBackfillWith(
 			return fmt.Errorf("parse params: %w", err)
 		}
 	}
+	_, err := datasetBackfillCore(ctx, datasetBackfillEnv{
+		kindEnv: headEnv(reporter, params.Apply),
+		Store:   headDatasetReads{emb: embStore, books: mainStore},
+		Writer:  embStore,
+	})
+	return err
+}
 
-	reporter.Logger().Info("dataset-backfill start", "apply", params.Apply)
+// datasetBackfillCore is the body: it lists pending candidates, classifies each
+// with the deterministic catchers, and (Live) writes/dismisses through the
+// env's writer. Shared by both shells.
+func datasetBackfillCore(ctx context.Context, env datasetBackfillEnv) (datasetBackfillResult, error) {
+	env.Logger.Info("dataset-backfill start", "apply", env.Live)
 
 	// --- Load all pending candidates ---
-	_ = reporter.UpdateProgress(0, 2, "Loading pending candidates…")
+	env.Progress(0, 2, "Loading pending candidates…")
 	filter := database.CandidateFilter{
 		Status: "pending",
 		Limit:  1_000_000,
 	}
-	cands, _, err := embStore.ListCandidates(filter)
+	cands, _, err := env.Store.ListCandidates(filter)
 	if err != nil {
-		return fmt.Errorf("list candidates: %w", err)
+		return datasetBackfillResult{}, fmt.Errorf("list candidates: %w", err)
 	}
 
-	reporter.Logger().Info("dataset-backfill: candidates loaded", "count", len(cands))
+	env.Logger.Info("dataset-backfill: candidates loaded", "count", len(cands))
 
 	// Book-lookup memoization (CONC-8): see memoizedBuilderAdapter doc comment.
 	// The cache is mutex-guarded because it's shared across the RunItems
 	// worker pool below.
-	adapter := newMemoizedBuilderAdapter(builderAdapter{store: mainStore})
+	adapter := newMemoizedBuilderAdapter(datasetBookAdapter{store: env.Store})
 
 	// statsMu guards the counters below, which every worker goroutine
 	// increments. Each candidate's own store reads/writes are independent and
@@ -209,10 +306,15 @@ func runDatasetBackfillWith(
 		upsertErrs int
 	)
 
-	_ = reporter.UpdateProgress(1, 2, fmt.Sprintf("Processing %d candidates…", len(cands)))
+	env.Progress(1, 2, fmt.Sprintf("Processing %d candidates…", len(cands)))
 
-	err = registry.RunItems(ctx, reporter, cands, func(ctx context.Context, c database.DedupCandidate) error {
-		if reporter.IsCanceled() {
+	err = env.Items(ctx, datasetBackfillParallelism(), len(cands), kindItemsOptions{
+		PureLabel: func(i, total int) string {
+			return fmt.Sprintf("Processed %d/%d candidates…", i+1, total)
+		},
+	}, func(ctx context.Context, ci int) error {
+		c := cands[ci]
+		if env.Canceled() {
 			return context.Canceled
 		}
 
@@ -226,7 +328,7 @@ func runDatasetBackfillWith(
 			statsMu.Lock()
 			buildErrs++
 			statsMu.Unlock()
-			reporter.Logger().Warn("dataset-backfill: build error",
+			env.Logger.Warn("dataset-backfill: build error",
 				"candidate_id", c.ID,
 				"entity_a", c.EntityAID,
 				"entity_b", c.EntityBID,
@@ -254,11 +356,11 @@ func runDatasetBackfillWith(
 		// If no catcher fired, ex.Label remains "" — example is unlabeled, written
 		// as-is so features are captured for future human/ML labeling.
 
-		if params.Apply {
+		if env.Live {
 			// Write the labeled (or unlabeled) example to the store.
 			upsertOK := false
-			if err := embStore.UpsertLabeledExample(ex); err != nil {
-				reporter.Logger().Error("dataset-backfill: upsert error",
+			if err := env.Writer.UpsertLabeledExample(ex); err != nil {
+				env.Logger.Error("dataset-backfill: upsert error",
 					"candidate_id", c.ID, "error", err)
 				statsMu.Lock()
 				upsertErrs++
@@ -280,13 +382,13 @@ func runDatasetBackfillWith(
 			if upsertOK && ex.Label == "not_dup" && !database.IsManualCandidate(c) {
 				// ReclassifyCandidate re-checks at write time: a pair a human
 				// pinned or decided since the list was read is left alone.
-				err := embStore.ReclassifyCandidate(c.ID, "pending", "dismissed")
+				err := env.Writer.ReclassifyCandidate(c.ID, "pending", "dismissed")
 				switch {
 				case errors.Is(err, database.ErrManualCandidateProtected), errors.Is(err, database.ErrCandidateStatusChanged):
-					reporter.Logger().Info("dataset-backfill: left a row changed since the list",
+					env.Logger.Info("dataset-backfill: left a row changed since the list",
 						"candidate_id", c.ID, "reason", err)
 				case err != nil:
-					reporter.Logger().Error("dataset-backfill: suppress error",
+					env.Logger.Error("dataset-backfill: suppress error",
 						"candidate_id", c.ID, "error", err)
 				default:
 					statsMu.Lock()
@@ -296,29 +398,27 @@ func runDatasetBackfillWith(
 			}
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: runtime.NumCPU(),
-		Label: func(i, total int) string {
-			return fmt.Sprintf("Processed %d/%d candidates…", i+1, total)
-		},
 	})
 	if err != nil {
-		return err
+		return datasetBackfillResult{}, err
 	}
 
 	summary := fmt.Sprintf(
 		"examined=%d not_dup=%d true_dup=%d labeled=%d suppressed=%d build_errs=%d upsert_errs=%d (apply=%v)",
-		examined, notDup, trueDup, labeled, suppressed, buildErrs, upsertErrs, params.Apply,
+		examined, notDup, trueDup, labeled, suppressed, buildErrs, upsertErrs, env.Live,
 	)
-	reporter.Logger().Info("dataset-backfill complete", "summary", summary)
+	env.Logger.Info("dataset-backfill complete", "summary", summary)
 
-	if !params.Apply {
-		_ = reporter.UpdateProgress(2, 2,
+	if !env.Live {
+		env.Progress(2, 2,
 			fmt.Sprintf("Dry-run complete — %d not_dup, %d true_dup of %d examined. Pass apply=true to write.", notDup, trueDup, examined))
 	} else {
-		_ = reporter.UpdateProgress(2, 2,
+		env.Progress(2, 2,
 			fmt.Sprintf("Complete — %d/%d labeled, %d suppressed. %s", labeled, examined, suppressed, summary))
 	}
 
-	return nil
+	return datasetBackfillResult{
+		Examined: examined, NotDup: notDup, TrueDup: trueDup, Labeled: labeled,
+		Suppressed: suppressed, BuildErrs: buildErrs, UpsertErrs: upsertErrs,
+	}, nil
 }
