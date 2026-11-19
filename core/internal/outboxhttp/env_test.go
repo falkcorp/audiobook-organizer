@@ -1,5 +1,5 @@
 // file: core/internal/outboxhttp/env_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8a716b84-f689-41d2-9003-16a075efcb08
 // last-edited: 2026-11-19
 
@@ -24,11 +24,14 @@ import (
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/events"
 	"github.com/falkcorp/mediacore/health"
+	"github.com/falkcorp/mediacore/internal/executor"
 	"github.com/falkcorp/mediacore/internal/outboxstore"
+	"github.com/falkcorp/mediacore/internal/taskstore"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/outbox"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // The tests open their stores with storage.Open/Prepare/Migrate over MemFS,
@@ -76,6 +79,26 @@ type env struct {
 	cat    events.Catalog
 	api    *api
 	logBuf *lockedBuffer
+	got    *received
+	taskKS storage.Keyspace // the task keyspace of a relay env
+}
+
+// received is what the registered consumer was handed, in order.
+type received struct {
+	mu   sync.Mutex
+	list []outbox.Message[Dispatch]
+}
+
+func (r *received) add(m outbox.Message[Dispatch]) {
+	r.mu.Lock()
+	r.list = append(r.list, m)
+	r.mu.Unlock()
+}
+
+func (r *received) all() []outbox.Message[Dispatch] {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]outbox.Message[Dispatch](nil), r.list...)
 }
 
 // lockedBuffer is a log sink the handlers may write from any goroutine.
@@ -138,11 +161,25 @@ func mustDo(t testing.TB, err error) {
 	}
 }
 
-func newEnv(t testing.TB) *env {
+// newEnv is the outbox with no relay: staging, the operator operations and the
+// status read only, so nothing moves a row but the test and the handlers.
+func newEnv(t testing.TB) *env { return newEnvWith(t, false) }
+
+// newRelayEnv is the outbox with a task keyspace, so that startRelay can run the
+// relay on an executor and a message staged or retried is sequenced and delivered
+// to the registered consumer. The relay does not run until startRelay: a test
+// that plants rows by hand beside a running relay races it.
+func newRelayEnv(t testing.TB) *env { return newEnvWith(t, true) }
+
+func newEnvWith(t testing.TB, relay bool) *env {
 	t.Helper()
 	ctx := context.Background()
 
-	outDB := bootDB(t, "outbox", storage.OwnerSpec{Owner: outboxstore.Owner, Spec: outboxstore.StorageSpec(), Enabled: true})
+	owners := []storage.OwnerSpec{{Owner: outboxstore.Owner, Spec: outboxstore.StorageSpec(), Enabled: true}}
+	if relay {
+		owners = append(owners, storage.OwnerSpec{Owner: taskstore.Owner, Spec: taskstore.StorageSpec(), Enabled: true})
+	}
+	outDB := bootDB(t, "outbox", owners...)
 	ks := keyspaceOf(t, outDB, outboxstore.Owner)
 
 	bus, err := events.NewBus(events.BusOptions{})
@@ -163,12 +200,24 @@ func newEnv(t testing.TB) *env {
 	ob, err := outbox.New(outbox.Options{
 		Keyspace: ks, Catalog: bus.Catalog(), Health: rep,
 		CoreConsumers: []string{consumerDeliver, consumerMirror},
+		Config: func() outbox.Config {
+			return outbox.Config{
+				MaxAttempts: 3, BackoffMin: time.Millisecond, BackoffMax: 4 * time.Millisecond, RelayWorkers: 4,
+				RelayRotate: time.Hour, RelayEnabled: true, HandlerTimeout: 5 * time.Second, IntakePoll: 5 * time.Millisecond,
+				UnorderedParallelism: 4, OrphanRetention: 7 * 24 * time.Hour,
+			}
+		},
 	})
 	mustDo(t, err)
 	mustDo(t, ob.DeclareConsumers("gotham", consumerRespond))
+	got := &received{}
 	mustDo(t, ob.Register("core", outbox.Consume(notice(), consumerDeliver,
-		func(context.Context, outbox.Message[Dispatch]) error { return nil })))
+		func(_ context.Context, m outbox.Message[Dispatch]) error { got.add(m); return nil })))
 	mustDo(t, ob.Freeze())
+	var taskKS storage.Keyspace
+	if relay {
+		taskKS = keyspaceOf(t, outDB, taskstore.Owner)
+	}
 
 	audDB := bootDB(t, "audit", storage.OwnerSpec{Owner: auditOwner, Spec: storage.Spec{Keyspace: true}, Enabled: true})
 	aks := keyspaceOf(t, audDB, auditOwner)
@@ -181,9 +230,44 @@ func newEnv(t testing.TB) *env {
 	mustDo(t, err)
 
 	logBuf := &lockedBuffer{}
-	e := &env{t: t, ob: ob, st: outboxstore.New(ks), ks: ks, reg: reg, aud: aud, audDB: audDB, prov: prov, cat: bus.Catalog(), logBuf: logBuf}
+	e := &env{t: t, ob: ob, st: outboxstore.New(ks), ks: ks, reg: reg, aud: aud, audDB: audDB, prov: prov, cat: bus.Catalog(), logBuf: logBuf, got: got, taskKS: taskKS}
 	e.api = newAPI("/api/core/v1", ob, bus.Catalog(), aud, WithLogger(slog.New(slog.NewTextHandler(logBuf, nil))))
 	return e
+}
+
+// startRelay runs the core.outbox.relay task kind on an executor over the task
+// keyspace, as the kernel does (the shape of outbox's own test harness), and
+// returns once the run is started (a test waits for what the relay does).
+func (e *env) startRelay() {
+	t, ob, taskKS := e.t, e.ob, e.taskKS
+	t.Helper()
+	ctx := context.Background()
+	cat, err := rbac.NewCatalog(rbac.CoreScopes()...)
+	mustDo(t, err)
+	x, err := executor.New(executor.Options{
+		Stores: tasks.NativeStores(taskKS), Keyspace: &taskKS, Definitions: []tasks.Definition{ob.RelayDefinition()},
+		InstrumentsOff: true, Catalog: cat, Logger: discardLogger(),
+		Config: executor.Config{DispatchTick: 20 * time.Millisecond, WatchdogInterval: time.Hour,
+			ProgressInterval: time.Nanosecond, MinCheckpointInterval: time.Nanosecond},
+	})
+	mustDo(t, err)
+	ob.BindRuns(x)
+	mustDo(t, x.Run(ctx))
+	t.Cleanup(func() { _ = x.Shutdown(context.Background()) })
+	_, err = x.Start(ctx, outbox.RelayKind, tasks.StartRequest{Mode: tasks.ModeRequestLive})
+	mustDo(t, err)
+}
+
+// eventually polls cond for up to ten seconds.
+func eventually(t testing.TB, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 }
 
 // ---- seeding ----------------------------------------------------------------
@@ -327,8 +411,8 @@ func (e *env) consumerStatus(name string) outbox.ConsumerStatus {
 
 // ---- principals -------------------------------------------------------------
 
-// bruce is an interactive session; clark an API key. The handlers read no
-// permission: the router's stage 13 does, and the principal only names the actor.
+// bruce is an interactive session. The handlers read no permission: the router's
+// stage 13 does, and the principal only names the actor.
 func bruce() *auth.Principal {
 	return &auth.Principal{
 		User: &auth.User{ID: "u-bruce", Username: "bruce"}, Method: auth.MethodSession,
