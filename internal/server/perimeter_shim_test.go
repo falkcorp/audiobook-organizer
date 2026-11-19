@@ -1,7 +1,7 @@
 // file: internal/server/perimeter_shim_test.go
-// version: 1.1.5
+// version: 1.2.0
 // guid: 9e2c5a17-6f4b-4d83-b1a0-3c7e8f2d4b56
-// last-edited: 2026-11-08
+// last-edited: 2026-11-19
 
 package server
 
@@ -47,7 +47,7 @@ func perimeterStacks(t *testing.T, f *credGuardFixture, altSvc string) (router *
 	// keeps the timestamp in the comparison, equal on both sides, with every
 	// other field still compared exactly.
 	f.srv.systemHandler.WithClock(func() time.Time { return time.Unix(1794193930, 0) })
-	return router, newPeerAllowListHandler(headPerimeter(f.srv.router)), f.srv.perimeterShim(mounted, altSvc)
+	return router, newPeerAllowListHandler(headPerimeter(withHeadBasicGate(f.srv.router))), f.srv.perimeterShim(mounted, altSvc)
 }
 
 // perimeterCase is one request of the parity table.
@@ -239,6 +239,18 @@ func TestPerimeter_ParityWithHEAD(t *testing.T) {
 		config.AppConfig.BasicAuthPassword = "synthetic-wayne-manor-gate"
 		for _, c := range perimeterCases() {
 			c.name = "gated: " + c.name
+			if strings.Contains(c.name, "unmatched method") {
+				// The one deliberate difference of stage 8 (COR4-9): the exempt
+				// set is per route, so DELETE /api/v1/health, a method the
+				// manifest does not list for the health path, is gated. HEAD's
+				// path test exempted it into gin's 404. Signed in, the two
+				// answer alike (the "signed in" loop below).
+				assert.Equal(t, http.StatusNotFound, serveCase(head, c).Code, "%s: HEAD exempted the path", c.name)
+				w := serveCase(r1, c)
+				assert.Equal(t, http.StatusUnauthorized, w.Code, "%s: stage 8 gates the unlisted method", c.name)
+				assert.NotEmpty(t, w.Header().Get("WWW-Authenticate"), "%s", c.name)
+				continue
+			}
 			perimeterParity(t, head, r1, c)
 		}
 		authed := withHeader(perimeterCases(), "gated, signed in: ", "Authorization", basicCredentials())
@@ -340,62 +352,13 @@ func TestPerimeterShim_AltSvcOnUnroutedAnswers(t *testing.T) {
 	assert.Equal(t, altSvc, w.Header().Get("Alt-Svc"), "a kernel-written 404 lacks Alt-Svc")
 }
 
-// TestPerimeterShim_GatesEveryCoreAnswer: with the Basic gate on, an
-// answer core writes itself (gin never ran) is refused whatever its status,
-// a native 200 included, so a core route added later cannot skip the gate;
-// the stages' own refusals pass ungated, and a request gin served is left
-// to gin's own gate.
-func TestPerimeterShim_GatesEveryCoreAnswer(t *testing.T) {
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
-	config.AppConfig.BasicAuthEnabled = true
-	config.AppConfig.BasicAuthUsername = "alfred"
-	config.AppConfig.BasicAuthPassword = "synthetic-wayne-manor-gate"
-	srv := &Server{}
-	for _, c := range []struct {
-		status int
-		gin    bool
-		want   int
-	}{
-		{http.StatusOK, false, http.StatusUnauthorized},
-		{http.StatusCreated, false, http.StatusUnauthorized},
-		{http.StatusNoContent, false, http.StatusUnauthorized},
-		{http.StatusMovedPermanently, false, http.StatusUnauthorized},
-		{http.StatusNotFound, false, http.StatusUnauthorized},
-		{http.StatusMethodNotAllowed, false, http.StatusUnauthorized},
-		{http.StatusGone, false, http.StatusUnauthorized},
-		{http.StatusForbidden, false, http.StatusForbidden},
-		{http.StatusRequestEntityTooLarge, false, http.StatusRequestEntityTooLarge},
-		{http.StatusTooEarly, false, http.StatusTooEarly},
-		{http.StatusTooManyRequests, false, http.StatusTooManyRequests},
-		{http.StatusInternalServerError, false, http.StatusInternalServerError},
-		{http.StatusOK, true, http.StatusOK}, // gin served it: its own gate decided
-	} {
-		kernel := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if c.gin {
-				r.Context().Value(perimeterKey{}).(*perimeterState).gin.Store(true)
-			}
-			w.Header().Set("Content-Type", "text/plain")
-			w.WriteHeader(c.status)
-			_, _ = w.Write([]byte("Riddler's answer"))
-		})
-		w := httptest.NewRecorder()
-		srv.perimeterShim(kernel, "").ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/core/v1/riddles", nil))
-		assert.Equal(t, c.want, w.Code, "core status %d (gin ran: %v)", c.status, c.gin)
-		if c.want == http.StatusUnauthorized {
-			assert.NotEmpty(t, w.Header().Get("WWW-Authenticate"), "core status %d", c.status)
-			assert.Empty(t, w.Body.String(), "core status %d: the refusal carries core's body", c.status)
-		}
-	}
-}
-
 // TestPerimeterShim_HandlerOwn401KeepsNoVary: past the Basic gate, a
 // handler's own 401 (the API's "authentication required", with a body) gets
 // no Vary under gzip. HEAD's gzip middleware ran after the gate and deleted
 // every Vary value from an error it wrote a body for, as stage 9 does; only
-// the gate's own 401 kept CORS's Vary: Origin. The shim restores Origin on
-// the gate's 401 alone, told apart by perimeterGatePassed's mark.
-// headPerimeter does not compress, so it is no reference here.
+// the gate's own 401 kept CORS's Vary: Origin, which stage 8 sits before
+// stage 9 to keep (core's chain order, no shim involved). headPerimeter does
+// not compress, so it is no reference here.
 func TestPerimeterShim_HandlerOwn401KeepsNoVary(t *testing.T) {
 	f := legacyEngine(t, false, false)
 	_, _, r1 := perimeterStacks(t, f, "")
@@ -436,7 +399,7 @@ func TestPerimeterShim_FlushErrorCrossesTheShim(t *testing.T) {
 		r.Context().Value(perimeterKey{}).(*perimeterState).gin.Store(true) // gin served it
 		got = http.NewResponseController(w).Flush()
 	})
-	(&Server{}).perimeterShim(kernel, "").ServeHTTP(flushErrWriter{httptest.NewRecorder(), want},
+	(&Server{}).perimeterShim(kernel, `h3=":8443"; ma=2592000`).ServeHTTP(flushErrWriter{httptest.NewRecorder(), want},
 		httptest.NewRequest(http.MethodGet, "/api/v1/events", nil))
 	if !errors.Is(got, want) {
 		t.Fatalf("flush error = %v, want %v", got, want)

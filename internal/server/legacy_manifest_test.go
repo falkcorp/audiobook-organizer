@@ -1,7 +1,7 @@
 // file: internal/server/legacy_manifest_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: e72629cb-5107-4d3a-a859-c970b70f9c17
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package server
 
@@ -323,22 +323,38 @@ func (s *Server) ownerCredRoute() { _ = s.ownerGateWhenOwnerSet() }
 // (LegacyPrefixes, LegacyTopSegments, LegacySPAShared, LegacyRedirects).
 func booksMount(t *testing.T, f *credGuardFixture) (*httpapi.Router, http.Handler) {
 	t.Helper()
-	manifest, err := f.srv.LegacyManifest()
+	return mountBooks(t, f.srv)
+}
+
+// mountBooks is books' legacy mount over srv's engine, as books.Module
+// registers it: the manifest, the perimeter values and stage 8's inputs
+// (BasicGate, BasicExemptAssets), built into the kernel's root handler.
+func mountBooks(t *testing.T, srv *Server) (*httpapi.Router, http.Handler) {
+	t.Helper()
+	return mountBooksWith(t, srv, httpapi.Deps{})
+}
+
+// mountBooksWith is mountBooks with the router's dependencies, for a test
+// that reads what the stages log.
+func mountBooksWith(t *testing.T, srv *Server, deps httpapi.Deps) (*httpapi.Router, http.Handler) {
+	t.Helper()
+	manifest, err := srv.LegacyManifest()
 	require.NoError(t, err)
-	r := httpapi.NewRouter(httpapi.Options{}, httpapi.Deps{})
+	r := httpapi.NewRouter(httpapi.Options{}, deps)
 	r.CoreGroup()
 	for _, c := range LegacyPrefixes(config.AppConfig.ABSAPIEnabled) {
 		require.NoError(t, r.Claim("books", c))
 	}
 	r.AllowAuthMethods("books", absAuthMethod)
-	csp, report, build := f.srv.LegacyPerimeter()
+	csp, report, build := srv.LegacyPerimeter()
 	require.NoError(t, r.MountLegacy(httpapi.LegacyMount{
-		Owner: "books", Handler: f.srv.router, Auth: httpapi.LegacyAuthGin, ServesSPA: true,
+		Owner: "books", Handler: srv.router, Auth: httpapi.LegacyAuthGin, ServesSPA: true,
 		Routes:      slices.Values(manifest),
-		Redirects:   f.srv.LegacyRedirects(),
+		Redirects:   srv.LegacyRedirects(),
 		TopSegments: LegacyTopSegments(),
 		SPAShared:   LegacySPAShared(),
 		DefaultCSP:  csp, CSPReport: report, BuildID: build,
+		BasicGate: LegacyBasicGate(), BasicExemptAssets: LegacyBasicExemptAssets,
 	}))
 	h, err := r.Build()
 	require.NoError(t, err)

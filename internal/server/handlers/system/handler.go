@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -307,13 +307,18 @@ type readinessSource interface {
 // list while the in-memory read layer is still warming.
 const DegradedMemdbWarming = "memdb_warming"
 
+// DegradedBasicGateNoPassword is the machine token for an enabled Basic gate
+// with no effective password (05-health §5H.3.1). It is core's
+// httpapi.BasicGateNoPasswordToken; internal/server asserts they stay equal.
+const DegradedBasicGateNoPassword = "basic_gate_no_password"
+
 // unauthenticatedToken reports whether tok is in 05-health §5H.3.1's fixed
 // set, the only tokens /health may carry: memdb_warming, the token of a
 // startup step classified Degraded (startup.Table) and
 // basic_gate_no_password. Every other token is a posture token, reported on
 // GET /system/status only. Pinned by TestHealth_UnauthenticatedTokenSetGolden.
 func unauthenticatedToken(tok string) bool {
-	if tok == DegradedMemdbWarming || tok == servermiddleware.BasicGateNoPasswordToken {
+	if tok == DegradedMemdbWarming || tok == DegradedBasicGateNoPassword {
 		return true
 	}
 	return slices.ContainsFunc(startup.Table, func(st startup.Step) bool {
