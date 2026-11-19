@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-11-18-merge-cleanup-preview-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: fea71315-0fbe-4b70-a41a-0174fad61b55 -->
-<!-- last-edited: 2026-11-18 -->
+<!-- last-edited: 2026-11-19 -->
 
 # A new review list shows which merges look mistaken, and changes nothing
 
@@ -42,15 +42,21 @@ no button that does.
   separate them agrees with the refusal, so it is shown, marked with the owner's
   refusal.
 - When a pointer leads to a book that has been set aside, the list follows the
-  trail one step further, to the live book the content went to (also through a
-  set-aside book that still points on), and proposes pointing there only if that
-  book really looks like the same work. It says a book should stand on its own
-  only when none of the books it looked at leads to a live one and the set-aside
-  book's version group has no live book left. If the group still has a live book
-  but no main version to point at, if the trail loops or runs on without an end,
-  or if several live books are merged into the same set-aside book, the rows are
-  held and nothing is proposed. A set-aside group member that the group lookup
-  does not return is not among the books looked at.
+  trail further, to the live book the content went to. It looks at every book on
+  the trail that was itself merged away, whether or not it was set aside, at the
+  books holding that book's old file versions, and at the other books in its
+  version group, including group members that were set aside but still point on.
+  It proposes pointing at a live book only if that book really looks like the
+  same work. A live book that was also merged into a missing book is counted as
+  another live copy of the work, not as nothing. A book is said to stand on its
+  own only when none of this leads to a live book, no other live copy is left
+  behind the same missing book, and the version group has no live book left. If
+  the group still has a live book but no main version to point at, if the trail
+  loops or runs on without an end, or if several live copies lead to the same
+  missing book, the rows are held and nothing is proposed. A separation of that
+  kind keeps the book in its version group, so a book that would be left as its
+  group's only live member with no main version is held for a main-version
+  hand-off.
 - The list reports counts: how many rows of each kind, how many were held and for
   which reasons, and how many looked like the earlier automatic merge pass
   (it leaves a recognisable mark) versus some other cause or an unknown one. Every

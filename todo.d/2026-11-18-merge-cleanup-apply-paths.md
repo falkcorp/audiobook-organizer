@@ -31,7 +31,7 @@
       is a different work. The apply PR for unmerge must not write the owner's "not a
       duplicate" decision for the (loser, dead book) pair and must not apply the
       leave-the-version-group rule for these rows; it clears the pointer and leaves the
-      loser's group as it is. Rows held as `dead_end_shared` (several live copies of one
+      loser's group as it is (a cycle head is treated the same way: it names no book to leave for). Rows held as `dead_end_shared` (several live copies of one
       work behind one dead end) need an owner choice of which copy to keep before any apply.
 - [ ] **TODO-MERGE-CLEANUP-MANUAL-ONLY-GUARDS** PLAN's manual-only skip kinds are not implemented: a
       loser or target whose `itunes_path` is set (the iTunes library is import-only
