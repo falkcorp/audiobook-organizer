@@ -1,7 +1,7 @@
 // file: core/kernel/core_sections.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4514c014-7c87-4abb-836c-8bd6c5fa7b0b
-// last-edited: 2026-11-13
+// last-edited: 2026-11-18
 
 package kernel
 
@@ -78,6 +78,7 @@ func coreSections() []any {
 			BatchParallelism:      2,
 			BatchMaxApplyAttempts: 5,
 			LogNoCapableEvery:     dur(time.Minute),
+			JournalRetention:      dur(30 * 24 * time.Hour),
 			Schedules:             aiSchedules{BatchPoll: scheduleEvery(5 * time.Minute)},
 		}),
 
@@ -411,7 +412,14 @@ type aiSettings struct {
 	BatchParallelism      int             `json:"batch_parallelism" schema:"minimum=1"`
 	BatchMaxApplyAttempts int             `json:"batch_max_apply_attempts"`
 	LogNoCapableEvery     config.Duration `json:"log_no_capable_every"`
-	Schedules             aiSchedules     `json:"schedules"`
+	// JournalRetention is how long an AI result stays in the books-owned
+	// result journal before the nightly prune deletes it; 0 keeps entries
+	// forever. HEAD's ai_journal_retention_days (default 30, bounded to 100
+	// years) as a duration (05-config §1.12.3: coined row, class k, "days ->
+	// duration"; F3-07 declares it). core/ai has no journal (05-ai §4 step 5):
+	// the books module reads the value through its handle on this section.
+	JournalRetention config.Duration `json:"journal_retention"`
+	Schedules        aiSchedules     `json:"schedules"`
 }
 
 // aiSchedules is core.ai.schedules (05-ai §7).
@@ -656,10 +664,17 @@ type diagnosticsSchedules struct {
 // ---- core.http (05-http-api §10) ----
 
 type httpSettings struct {
-	Listen            string          `json:"listen" reload:"restart" protect:"admin"`
-	PeerAllowlist     []string        `json:"peer_allowlist" protect:"admin"`  // CIDRs
-	TrustedProxies    []string        `json:"trusted_proxies" protect:"admin"` // CIDRs or addresses with an optional IPv6 zone
-	ClientIPHeader    string          `json:"client_ip_header" protect:"admin"`
+	Listen         string   `json:"listen" reload:"restart" protect:"admin"`
+	PeerAllowlist  []string `json:"peer_allowlist" protect:"admin"`  // CIDRs
+	TrustedProxies []string `json:"trusted_proxies" protect:"admin"` // CIDRs or addresses with an optional IPv6 zone
+	ClientIPHeader string   `json:"client_ip_header" protect:"admin"`
+	// PublicBaseURL is the origin invitation links point at; empty falls back
+	// to core.auth.oidc.redirect_base_url, then the request's own origin.
+	// HEAD's public_base_url (05-config §1.12.3: coined row, class o). The
+	// tables give it no class; ProtectAdmin follows its sibling
+	// core.auth.oidc.redirect_base_url, because the value decides where a
+	// link that signs someone in lands (F3-07 reading, seams.d/F3-07.md).
+	PublicBaseURL     string          `json:"public_base_url" protect:"admin" schema:"format=uri"`
 	CORS              httpCORS        `json:"cors"`
 	Body              httpBody        `json:"body"`
 	RateLimit         httpRateLimit   `json:"rate_limit"`

@@ -1,7 +1,7 @@
 # file: internal/books/cutover/testdata/rename_table.golden
-# version: 1.2.0
+# version: 1.3.0
 # guid: 7024f723-334e-4210-95d6-bcd11fc9cd7d
-# last-edited: 2026-11-11
+# last-edited: 2026-11-18
 #
 # Rename table (05-config §1.12.3), generated from the frozen HEAD Config by rename_table.go.
 # Regenerate: go test ./internal/books/cutover -run TestRenameTable_Golden -update
@@ -1146,10 +1146,11 @@ retired file smtp_from -> integrations.notify.email.from warn
 retired env SMTP_FROM -> integrations.notify.email.from warn
 
 ## public_base_url
-top=true stored=env/file class=o blob=- admin=false fail-closed=false url=true
+top=true stored=env/file class=o blob=- admin=true fail-closed=false url=true
 target key core.http.public_base_url convert=- coined env=ABO_CORE_HTTP_PUBLIC_BASE_URL
-retired file public_base_url -> core.http.public_base_url warn
-retired env PUBLIC_BASE_URL -> core.http.public_base_url warn
+note HEAD's file-only key becomes a storable key; ProtectAdmin like its sibling core.auth.oidc.redirect_base_url (F3-07)
+retired file public_base_url -> core.http.public_base_url refuse
+retired env PUBLIC_BASE_URL -> core.http.public_base_url refuse
 
 ## cf_account_id
 top=true stored=env/file class=o blob=- admin=false fail-closed=false url=false
