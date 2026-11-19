@@ -7,11 +7,13 @@ package maintenance
 
 import (
 	"testing"
+	"time"
 
 	"github.com/falkcorp/mediacore/entity"
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/books/writer"
 	"github.com/falkcorp/audiobook-organizer/internal/books/writer/metafetchgate"
 	"github.com/falkcorp/audiobook-organizer/internal/books/writer/writertest"
@@ -125,4 +127,87 @@ func TestF518b_OneTagPerWriteAdmitsWhatTheWholeRowRefuses(t *testing.T) {
 		require.Contains(t, err.Error(), "books/"+missing)
 	}
 	require.Empty(t, w.Writes())
+}
+
+// TestF518b_LocalRowsCoverWhatTheStoreWrites: THE RULE of the shared table is
+// that a row lists everything the method CAN write. The rows this PR keeps
+// beside the table (writer.MetafetchApplyRows) are traced by hand, so each is
+// checked against the real store: call the method directly, diff the store's
+// keys, and require every resource that changed to be in the row.
+func TestF518b_LocalRowsCoverWhatTheStoreWrites(t *testing.T) {
+	now := time.Now()
+	type call struct {
+		method string
+		setup  func(t *testing.T, s *database.PebbleStore)
+		do     func(s *database.PebbleStore) error
+		// mustWrite names resources the call has to change (a row that
+		// over-claims is allowed, one that under-claims is not).
+		mustWrite []string
+	}
+	tag := func(s *database.PebbleStore) error { return s.AddBookTagWithSource("bk", "mood:dark", "system") }
+	fieldState := func(s *database.PebbleStore) error {
+		v := `"Year One"`
+		return s.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: "bk", Field: "title", FetchedValue: &v, UpdatedAt: now})
+	}
+	withFile := func(t *testing.T, s *database.PebbleStore) {
+		require.NoError(t, s.CreateBookFile(&database.BookFile{ID: "bf1", BookID: "bk", FilePath: "/lib/bk/1.m4b"}))
+	}
+	cases := []call{
+		{"AddBookTagWithSource", nil, tag, []string{"books"}},
+		{"RemoveBookTagsByPrefix", func(t *testing.T, s *database.PebbleStore) { require.NoError(t, tag(s)) },
+			func(s *database.PebbleStore) error { return s.RemoveBookTagsByPrefix("bk", "mood:", "system") }, []string{"books"}},
+		{"CreateSeries", nil, func(s *database.PebbleStore) error { _, err := s.CreateSeries("Gotham Chronicles", nil); return err }, []string{"series"}},
+		{"UpsertMetadataFieldState", nil, fieldState, []string{"field_states"}},
+		{"DeleteMetadataFieldState", func(t *testing.T, s *database.PebbleStore) { require.NoError(t, fieldState(s)) },
+			func(s *database.PebbleStore) error { return s.DeleteMetadataFieldState("bk", "title") }, []string{"field_states"}},
+		{"RecordMetadataChange", nil, func(s *database.PebbleStore) error {
+			return s.RecordMetadataChange(&database.MetadataChangeRecord{BookID: "bk", Field: "title", ChangeType: "fetched", ChangedAt: now})
+		}, []string{"operations"}},
+		{"PutMetadataCache", nil, func(s *database.PebbleStore) error {
+			return s.PutMetadataCache(&database.MetadataCandidateCache{BookID: "bk", FetchedAt: now, SourceHash: "h"})
+		}, []string{"metadata_cache"}},
+		{"RecordPathChange", nil, func(s *database.PebbleStore) error {
+			return s.RecordPathChange(&database.BookPathChange{BookID: "bk", OldPath: "/lib/a", NewPath: "/lib/b", ChangeType: "rename", CreatedAt: now})
+		}, []string{"books"}},
+		{"FlagMetadataHashDuplicate", func(t *testing.T, s *database.PebbleStore) { repairBook(t, s, "bk2", nil) },
+			func(s *database.PebbleStore) error { return s.FlagMetadataHashDuplicate("bk", "bk2") }, nil},
+		{"SetLastWrittenAt", nil, func(s *database.PebbleStore) error { return s.SetLastWrittenAt("bk", now) }, []string{"books"}},
+		{"MarkNeedsRescan", withFile, func(s *database.PebbleStore) error { return s.MarkNeedsRescan("bk") }, []string{"books"}},
+		{"PatchBookFileFields", withFile, func(s *database.PebbleStore) error {
+			n := 3
+			_, _, err := s.PatchBookFileFields("bk", "bf1", database.BookFileFieldPatch{TrackNumber: &n})
+			return err
+		}, []string{"book_files"}},
+		{"SetUserPreference", nil, func(s *database.PebbleStore) error { return s.SetUserPreference("f518b_pref", "v") }, []string{"user_state"}},
+		{"DeleteUserPreference", func(t *testing.T, s *database.PebbleStore) {
+			require.NoError(t, s.SetUserPreference("f518b_pref", "v"))
+		},
+			func(s *database.PebbleStore) error { return s.DeleteUserPreference("f518b_pref") }, []string{"user_state"}},
+	}
+	local := writer.MetafetchApplyRows()
+	require.Len(t, cases, len(local), "every local row has a case: add the new row's method here")
+	for _, c := range cases {
+		t.Run(c.method, func(t *testing.T) {
+			row, ok := local[c.method]
+			require.True(t, ok, "no local row %s", c.method)
+			s := newRepairPebble(t)
+			repairBook(t, s, "bk", nil)
+			if c.setup != nil {
+				c.setup(t, s)
+			}
+			before := t6g5Snapshot(t, s)
+			require.NoError(t, c.do(s))
+			changed := f518bChangedResources(t, before, t6g5Snapshot(t, s))
+			inRow := map[string]bool{}
+			for _, r := range row {
+				inRow[string(r)] = true
+			}
+			for r, key := range changed {
+				require.True(t, inRow[r], "%s changed %s (key %s) but its row %v does not list it", c.method, r, key, row)
+			}
+			for _, r := range c.mustWrite {
+				require.Contains(t, changed, r, "%s was expected to write %s: the case does not exercise the row", c.method, r)
+			}
+		})
+	}
 }

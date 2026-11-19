@@ -188,12 +188,14 @@ func TestF518b_EveryStampedResourceIsLoadBearing(t *testing.T) {
 // f518bExtraFamilies are key families the apply writes that the store-diff
 // helper has no resource for (kinds_t6_g5_storediff_test.go is another row's
 // file): the history rows of RecordMetadataChange (operations, as F5-06 filed
-// them) and the series rows CreateSeries writes.
-var f518bExtraFamilies = map[string]string{"metadata_change:": "operations", "series:": "series"}
+// them), the series rows CreateSeries writes and the global preference rows
+// SetUserPreference writes (user_state, as the shared table has
+// SetUserPreferenceForUser).
+var f518bExtraFamilies = map[string]string{"metadata_change:": "operations", "series:": "series", "preference:": "user_state"}
 
-// f518bRequireDiffStamped requires every resource the keys changed between two
-// snapshots belong to to be one a gated write was stamped with.
-func f518bRequireDiffStamped(t *testing.T, before, after map[string]string, stamped map[string]bool) {
+// f518bChangedResources are the resources the keys changed between two
+// snapshots belong to, each with one changed key as evidence.
+func f518bChangedResources(t *testing.T, before, after map[string]string) map[string]string {
 	t.Helper()
 	skip := make([]string, 0, len(f518bExtraFamilies))
 	for prefix := range f518bExtraFamilies {
@@ -206,13 +208,23 @@ func f518bRequireDiffStamped(t *testing.T, before, after map[string]string, stam
 		resources[r] = diff.sample[r]
 	}
 	changed := func(k string) bool { old, ok := before[k]; return !ok || old != after[k] }
-	for k := range after {
-		for prefix, res := range f518bExtraFamilies {
-			if strings.HasPrefix(k, prefix) && changed(k) {
-				resources[res] = k
+	for _, snap := range []map[string]string{before, after} {
+		for k := range snap {
+			for prefix, res := range f518bExtraFamilies {
+				if strings.HasPrefix(k, prefix) && changed(k) {
+					resources[res] = k
+				}
 			}
 		}
 	}
+	return resources
+}
+
+// f518bRequireDiffStamped requires every resource the keys changed between two
+// snapshots belong to to be one a gated write was stamped with.
+func f518bRequireDiffStamped(t *testing.T, before, after map[string]string, stamped map[string]bool) {
+	t.Helper()
+	resources := f518bChangedResources(t, before, after)
 	require.NotEmpty(t, resources, "the run changed nothing in the store")
 	for r, key := range resources {
 		require.True(t, stamped[r], "the store diff shows %s changed but no gated write was stamped with it (sample key %s)", r, key)
