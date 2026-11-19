@@ -31,6 +31,8 @@ import (
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // authorMergeOpParams holds the parameters for the entities.author-merge op. It is
@@ -45,10 +47,18 @@ type resolveProductionAuthorOpParams struct {
 	ProdAuthorName string `json:"prod_author_name"`
 }
 
+// authorMergeOpID is entities.author-merge.
+const authorMergeOpID = "entities.author-merge"
+
 // RegisterAuthorMergeOp registers the "entities.author-merge" v2 OperationDef.
 func (s *Server) RegisterAuthorMergeOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "entities.author-merge",
+	return reg.RegisterOp(s.authorMergeDef())
+}
+
+// authorMergeDef is HEAD's definition of entities.author-merge.
+func (s *Server) authorMergeDef() opsregistry.OperationDef {
+	return opsregistry.OperationDef{
+		ID:              authorMergeOpID,
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "entities",
 		DisplayName:     "Author Merge",
@@ -70,7 +80,7 @@ func (s *Server) RegisterAuthorMergeOp(reg *opsregistry.Registry) error {
 		// about, and the loop is seconds long, so an interrupted merge is
 		// surfaced as interrupted_dropped for the user to re-issue deliberately.
 		ResumePolicy:   opsregistry.ResumeDrop,
-		ConcurrencyKey: "entities.author-merge",
+		ConcurrencyKey: authorMergeOpID,
 		Permissions:    []auth.Permission{auth.PermLibraryEditMetadata},
 		Capabilities:   []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
@@ -80,77 +90,144 @@ func (s *Server) RegisterAuthorMergeOp(reg *opsregistry.Registry) error {
 					return fmt.Errorf("author-merge: decode params: %w", err)
 				}
 			}
-
-			store := s.Ops()
-			// The op change ledger (opchange:<opID>:<changeID>) keys by this id.
-			// It is an independent prefix keyspace with no parent row, and undo
-			// reads it per-book, so moving both sides to the v2 id is safe.
-			opID := opsregistry.ReporterOpID(reporter)
-			keepID := p.KeepID
-			mergeIDs := p.MergeIDs
-
-			progress := registryProgressAdapter{r: reporter}
-
-			// Stand the library scanner down for the whole merge, before the first
-			// write: a concurrent library.scan rewrites book_authors on the rows
-			// this loop repoints. Nothing is written when this refuses, so there is
-			// nothing to invalidate.
-			release, herr := s.holdAuthorMergeStandDown(ctx, opID, "author-merge apply")
-			if herr != nil {
-				return fmt.Errorf("author-merge: %w", herr)
-			}
-			defer release()
-
-			_ = progress.Log("info", fmt.Sprintf("Merging %d author(s) into %q", len(mergeIDs), p.KeepName), nil)
-			_ = progress.UpdateProgress(0, len(mergeIDs), "Starting author merge...")
-
-			out, cancelled := mergeAuthorsInto(ctx, store, opID, authorMergeSpec{
-				KeepID:   keepID,
-				MergeIDs: mergeIDs,
-				// Locks are honoured unless the caller says otherwise: the Authors
-				// view's request carries no such field, and a merge of many groups
-				// from one click must not move a book whose author the owner pinned.
-				HonorLocks: p.HonorLocks == nil || *p.HonorLocks,
-				Scan:       s.scanGate(),
-			}, progress.IsCanceled, func(done, total int) {
-				_ = progress.UpdateProgress(done, total, fmt.Sprintf("Merged %d/%d authors", done, total))
+			h := headEntities{s: s}
+			return authorMergeCore(ctx, p, authorMergeEnv{
+				t7Env:     t7HeadEnv(reporter, true),
+				Writer:    h,
+				StandDown: s.t7HeadAuthorStandDown(opsregistry.ReporterOpID(reporter)),
 			})
-			if cancelled {
-				// The ids that DID merge before the cancel are gone.
-				s.dedupCache.InvalidateAll()
-				s.authorsCache.InvalidateAll()
-				return fmt.Errorf("cancelled")
-			}
+		},
+	}
+}
 
-			resultMsg := fmt.Sprintf("Author merge complete: merged %d, %d errors", out.Merged, len(out.Errors))
-			_ = progress.Log("info", resultMsg, nil)
-			if len(out.Errors) > 0 {
-				errDetail := strings.Join(out.Errors[:min(len(out.Errors), 10)], "; ")
-				_ = progress.Log("warn", fmt.Sprintf("Errors: %s", errDetail), nil)
+// authorMergeWriter is the writes of entities.author-merge.
+type authorMergeWriter interface {
+	// MergeAuthors folds spec.MergeIDs into spec.KeepID (mergeAuthorsInto: relink,
+	// journal for undo, merge-delete, tombstone).
+	MergeAuthors(ctx context.Context, opID string, spec authorMergeSpec, canceled func() bool, step func(done, total int)) (authorMergeOutcome, bool)
+	// AuthorMergeDone drops the caches the merge leaves stale: the duplicate-author
+	// and author-list caches. Called after every merge, partial or not.
+	AuthorMergeDone()
+}
+
+// authorMergeEnv is what the shared core takes from its shell (rules R2, R10).
+type authorMergeEnv struct {
+	t7Env
+	Writer    authorMergeWriter
+	StandDown t7StandDown
+}
+
+// authorMergeCore is the body of entities.author-merge, shared by HEAD's shell
+// and the native kind.
+func authorMergeCore(ctx context.Context, p authorMergeOpParams, env authorMergeEnv) error {
+	// The op change ledger (opchange:<opID>:<changeID>) keys by this id.
+	// It is an independent prefix keyspace with no parent row, and undo
+	// reads it per-book, so moving both sides to the v2 id is safe.
+	opID := env.OpID
+	keepID := p.KeepID
+	mergeIDs := p.MergeIDs
+
+	// Stand the library scanner down for the whole merge, before the first
+	// write: a concurrent library.scan rewrites book_authors on the rows
+	// this loop repoints. Nothing is written when this refuses, so there is
+	// nothing to invalidate.
+	hold, herr := env.StandDown(ctx, "author-merge apply")
+	if herr != nil {
+		return fmt.Errorf("author-merge: %w", herr)
+	}
+	defer func() { _ = hold.Finish(nil) }()
+
+	env.Log(slog.LevelInfo, fmt.Sprintf("Merging %d author(s) into %q", len(mergeIDs), p.KeepName))
+	env.progress(0, len(mergeIDs), "Starting author merge...")
+
+	out, cancelled := env.Writer.MergeAuthors(ctx, opID, authorMergeSpec{
+		KeepID:   keepID,
+		MergeIDs: mergeIDs,
+		// Locks are honoured unless the caller says otherwise: the Authors
+		// view's request carries no such field, and a merge of many groups
+		// from one click must not move a book whose author the owner pinned.
+		HonorLocks: p.HonorLocks == nil || *p.HonorLocks,
+		Scan:       scanLeaseFunc(hold.Renew),
+	}, env.Canceled, func(done, total int) {
+		env.progress(done, total, fmt.Sprintf("Merged %d/%d authors", done, total))
+	})
+	if cancelled {
+		// The ids that DID merge before the cancel are gone.
+		env.Writer.AuthorMergeDone()
+		return fmt.Errorf("cancelled")
+	}
+
+	resultMsg := fmt.Sprintf("Author merge complete: merged %d, %d errors", out.Merged, len(out.Errors))
+	env.Log(slog.LevelInfo, resultMsg)
+	if len(out.Errors) > 0 {
+		errDetail := strings.Join(out.Errors[:min(len(out.Errors), 10)], "; ")
+		env.Log(slog.LevelWarn, fmt.Sprintf("Errors: %s", errDetail))
+	}
+	// Invalidate even on a partial failure: the ids that DID merge are gone.
+	env.Writer.AuthorMergeDone()
+	// A lost stand-down lease stops the loop part way, so it fails the op even
+	// when the ids it never reached were all already merged: the run did not
+	// finish under the gate.
+	if failed := unmergedAuthorIDs(mergeIDs, keepID, out.MergedIDs); len(failed) > 0 || out.Aborted != "" {
+		// Report failure rather than completing: the op used to return nil
+		// here, so the UI treated a merge that left authors behind as done
+		// and dropped the whole group. The id list is in a fixed form
+		// (AuthorMergeFailedIDsPrefix) so the client can keep exactly the
+		// variants that remain.
+		detail := ""
+		switch {
+		case out.Aborted != "":
+			detail = ": " + out.Aborted
+		case len(out.Errors) > 0:
+			detail = ": " + strings.Join(out.Errors[:min(len(out.Errors), 3)], "; ")
+		}
+		return fmt.Errorf("%s%s] of %d not merged, %d merged%s",
+			AuthorMergeFailedIDsPrefix, joinInts(failed), len(mergeIDs), out.Merged, detail)
+	}
+	return nil
+}
+
+// headEntities is HEAD's write side for the author definitions: the server's
+// store and caches.
+type headEntities struct{ s *Server }
+
+func (h headEntities) MergeAuthors(ctx context.Context, opID string, spec authorMergeSpec, canceled func() bool, step func(done, total int)) (authorMergeOutcome, bool) {
+	return mergeAuthorsInto(ctx, h.s.Ops(), opID, spec, canceled, step)
+}
+
+func (h headEntities) AuthorMergeDone() {
+	h.s.dedupCache.InvalidateAll()
+	h.s.authorsCache.InvalidateAll()
+}
+
+// authorMergeNative is the native books.entities.author-merge kind. HEAD runs it
+// only live (no preview), under the scan stand-down keyed by the run id.
+func (s *Server) authorMergeNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	kind := t7KindFor(authorMergeOpID)
+	c := t7Common(s.authorMergeDef(), sched)
+	c.Effects = t7Writes(ops.ResBooks, ops.ResAuthors, ops.ResOperations)
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			if err := t7LiveOnly(rc, kind); err != nil {
+				return struct{}{}, err
 			}
-			// Invalidate even on a partial failure: the ids that DID merge are gone.
-			s.dedupCache.InvalidateAll()
-			s.authorsCache.InvalidateAll()
-			// A lost stand-down lease stops the loop part way, so it fails the op even
-			// when the ids it never reached were all already merged: the run did not
-			// finish under the gate.
-			if failed := unmergedAuthorIDs(mergeIDs, keepID, out.MergedIDs); len(failed) > 0 || out.Aborted != "" {
-				// Report failure rather than completing: the op used to return nil
-				// here, so the UI treated a merge that left authors behind as done
-				// and dropped the whole group. The id list is in a fixed form
-				// (AuthorMergeFailedIDsPrefix) so the client can keep exactly the
-				// variants that remain.
-				detail := ""
-				switch {
-				case out.Aborted != "":
-					detail = ": " + out.Aborted
-				case len(out.Errors) > 0:
-					detail = ": " + strings.Join(out.Errors[:min(len(out.Errors), 3)], "; ")
-				}
-				return fmt.Errorf("%s%s] of %d not merged, %d merged%s",
-					AuthorMergeFailedIDsPrefix, joinInts(failed), len(mergeIDs), out.Merged, detail)
+			p, err := t7DecodeNative[authorMergeOpParams](kind, raw)
+			if err != nil {
+				return struct{}{}, err
 			}
-			return nil
+			if err := t7NeedStore(kind, deps); err != nil {
+				return struct{}{}, err
+			}
+			w, err := t7NewWriter(kind, deps, rc)
+			if err != nil {
+				return struct{}{}, err
+			}
+			return struct{}{}, authorMergeCore(rc.Context(), p, authorMergeEnv{
+				t7Env:     t7NativeEnv(rc),
+				Writer:    w,
+				StandDown: t7NativeStandDown(rc, deps.StandDownKey),
+			})
 		},
 	})
 }
@@ -520,11 +597,20 @@ func joinInts(ids []int) string {
 	return strings.Join(parts, " ")
 }
 
+// resolveProductionAuthorOpID is entities.resolve-production-author.
+const resolveProductionAuthorOpID = "entities.resolve-production-author"
+
 // RegisterResolveProductionAuthorOp registers the
 // "entities.resolve-production-author" v2 OperationDef.
 func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "entities.resolve-production-author",
+	return reg.RegisterOp(s.resolveProductionAuthorDef())
+}
+
+// resolveProductionAuthorDef is HEAD's definition of
+// entities.resolve-production-author.
+func (s *Server) resolveProductionAuthorDef() opsregistry.OperationDef {
+	return opsregistry.OperationDef{
+		ID:              resolveProductionAuthorOpID,
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "entities",
 		DisplayName:     "Resolve Production Author",
@@ -542,7 +628,7 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 		// second pass. There is no stable item list to checkpoint. Drop, and
 		// let the user re-run against whatever is left.
 		ResumePolicy:   opsregistry.ResumeDrop,
-		ConcurrencyKey: "entities.resolve-production-author",
+		ConcurrencyKey: resolveProductionAuthorOpID,
 		Permissions:    []auth.Permission{auth.PermLibraryEditMetadata},
 		Capabilities:   []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapNetworkGeneric},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
@@ -552,171 +638,275 @@ func (s *Server) RegisterResolveProductionAuthorOp(reg *opsregistry.Registry) er
 					return fmt.Errorf("resolve-production-author: decode params: %w", err)
 				}
 			}
+			h := headEntities{s: s}
+			return resolveProductionAuthorCore(ctx, p, resolveProductionAuthorEnv{
+				t7Env: t7HeadEnv(reporter, true), Store: h, Writer: h,
+			})
+		},
+	}
+}
 
-			store := s.Ops()
-			authorID := p.AuthorID
-			prodAuthorName := p.ProdAuthorName
+// resolveProductionAuthorStore is the reads of entities.resolve-production-author.
+type resolveProductionAuthorStore interface {
+	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
+	GetAuthorByID(id int) (*database.Author, error)
+	GetAuthorByName(name string) (*database.Author, error)
+	GetBookByID(id string) (*database.Book, error)
+}
 
-			progress := registryProgressAdapter{r: reporter}
+// resolveProductionAuthorWriter is the writes of entities.resolve-production-author.
+type resolveProductionAuthorWriter interface {
+	// FetchBookByTitle looks the book up by title alone and applies what it finds
+	// (Unattended: a retired book is refused with metafetch.ErrBookRetired).
+	FetchBookByTitle(ctx context.Context, bookID string) (*metafetch.FetchMetadataResponse, error)
+	// CreateAuthor creates the author a cover analysis found.
+	CreateAuthor(name string) (*database.Author, error)
+	// AssignPublisher reclassifies the production company as the book's publisher
+	// (assignPublisherPreservingRecord).
+	AssignPublisher(bookID, publisher string) error
+	// AssignResolvedAuthor writes the discovered author (assignResolvedAuthorPreservingRecord).
+	AssignResolvedAuthor(bookID string, resolvedAuthorID, prodAuthorID int) error
+	// AuthorsResolved drops the caches the run leaves stale.
+	AuthorsResolved()
+}
 
-			books, err := store.GetBooksByAuthorIDWithRoleCore(authorID)
-			if err != nil {
-				return fmt.Errorf("failed to get books: %w", err)
+// resolveProductionAuthorEnv is what the shared core takes from its shell.
+type resolveProductionAuthorEnv struct {
+	t7Env
+	Store  resolveProductionAuthorStore
+	Writer resolveProductionAuthorWriter
+}
+
+// resolveProductionAuthorCore is the body of entities.resolve-production-author,
+// shared by HEAD's shell and the native kind. The loop is sequential at HEAD (a
+// metadata lookup and a paid vision call per book against daily quotas), and so
+// it is here.
+func resolveProductionAuthorCore(ctx context.Context, p resolveProductionAuthorOpParams, env resolveProductionAuthorEnv) error {
+	authorID := p.AuthorID
+	prodAuthorName := p.ProdAuthorName
+
+	books, err := env.Store.GetBooksByAuthorIDWithRoleCore(authorID)
+	if err != nil {
+		return fmt.Errorf("failed to get books: %w", err)
+	}
+	env.Log(slog.LevelInfo, fmt.Sprintf("Resolving %d books for production company %q", len(books), prodAuthorName))
+
+	resolved := 0
+	failed := 0
+	hydrateSkipped := 0
+	retiredSkipped := 0
+	// joinLeftAlone counts books whose author WAS resolved (the column
+	// write landed while they were live) and that were then retired
+	// before the join pass: they are resolved books, not skipped ones;
+	// only the join was left alone.
+	joinLeftAlone := 0
+	for i, book := range books {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		env.progress(i, len(books), fmt.Sprintf("Processing %d/%d: %s", i+1, len(books), book.Title))
+
+		// Try metadata fetch by title only. The op loops over every book
+		// credited to the production company and nobody picks one:
+		// Unattended, so a retired book is refused.
+		resp, fetchErr := env.Writer.FetchBookByTitle(ctx, book.ID)
+		if errors.Is(fetchErr, metafetch.ErrBookRetired) {
+			// Skipped outright: the AI cover analysis below would
+			// otherwise assign an author to the retired book too.
+			retiredSkipped++
+			continue
+		}
+		if fetchErr == nil && resp != nil && resp.Book != nil && resp.Book.AuthorID != nil {
+			// Check if the found author is different from the production company
+			newAuthor, _ := env.Store.GetAuthorByID(*resp.Book.AuthorID)
+			if newAuthor != nil && !dedup.IsProductionCompany(newAuthor.Name) {
+				env.Log(slog.LevelInfo, fmt.Sprintf("Resolved %q → author %q (source: %s)", book.Title, newAuthor.Name, resp.Source))
+				// Reclassify production company as publisher. Hydrate the
+				// full stored row before the write (see
+				// assignPublisherPreservingRecord) so the full-replace
+				// UpdateBook cannot wipe Title/FilePath/ratings/etc.
+				if book.Publisher == nil || *book.Publisher == "" {
+					if err := env.Writer.AssignPublisher(book.ID, prodAuthorName); err != nil {
+						if errors.Is(err, errResolveBookRetired) {
+							// Merged or trashed since the fetch: the
+							// closure read the row under its lock and
+							// refused, so nothing was written.
+							retiredSkipped++
+							continue
+						}
+						env.Log(slog.LevelWarn, fmt.Sprintf("Skipped publisher reclassify for %q (hydrate failed, record left intact): %v", book.Title, err))
+						hydrateSkipped++
+					}
+				}
+				resolved++
+				continue
 			}
-			_ = progress.Log("info", fmt.Sprintf("Resolving %d books for production company %q", len(books), prodAuthorName), nil)
+		}
 
-			resolved := 0
-			failed := 0
-			hydrateSkipped := 0
-			retiredSkipped := 0
-			// joinLeftAlone counts books whose author WAS resolved (the column
-			// write landed while they were live) and that were then retired
-			// before the join pass: they are resolved books, not skipped ones;
-			// only the join was left alone.
-			joinLeftAlone := 0
-			for i, book := range books {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				_ = progress.UpdateProgress(i, len(books), fmt.Sprintf("Processing %d/%d: %s", i+1, len(books), book.Title))
-
-				// Try metadata fetch by title only. The op loops over every book
-				// credited to the production company and nobody picks one:
-				// Unattended, so a retired book is refused.
-				resp, fetchErr := s.metadataFetchService.FetchMetadataForBookByTitle(ctx, book.ID, metafetch.Unattended)
-				if errors.Is(fetchErr, metafetch.ErrBookRetired) {
-					// Skipped outright: the AI cover analysis below would
-					// otherwise assign an author to the retired book too.
-					retiredSkipped++
-					continue
-				}
-				if fetchErr == nil && resp != nil && resp.Book != nil && resp.Book.AuthorID != nil {
-					// Check if the found author is different from the production company
-					newAuthor, _ := store.GetAuthorByID(*resp.Book.AuthorID)
-					if newAuthor != nil && !dedup.IsProductionCompany(newAuthor.Name) {
-						_ = progress.Log("info", fmt.Sprintf("Resolved %q → author %q (source: %s)", book.Title, newAuthor.Name, resp.Source), nil)
-						// Reclassify production company as publisher. Hydrate the
-						// full stored row before the write (see
-						// assignPublisherPreservingRecord) so the full-replace
-						// UpdateBook cannot wipe Title/FilePath/ratings/etc.
-						if book.Publisher == nil || *book.Publisher == "" {
-							if err := assignPublisherPreservingRecord(store, book.ID, prodAuthorName); err != nil {
-								if errors.Is(err, errResolveBookRetired) {
-									// Merged or trashed since the fetch: the
-									// closure read the row under its lock and
-									// refused, so nothing was written.
-									retiredSkipped++
-									continue
-								}
-								_ = progress.Log("warn", fmt.Sprintf("Skipped publisher reclassify for %q (hydrate failed, record left intact): %v", book.Title, err), nil)
-								hydrateSkipped++
+		// If metadata failed and AI is enabled, try cover art analysis
+		aiParser := newAIParser(config.AppConfig.OpenAIAPIKey, config.AppConfig.EnableAIParsing)
+		if aiParser.IsEnabled() && book.FilePath != "" {
+			// The fetch above can take seconds, and a fetch that finds
+			// nothing never reaches its own retired guard (that runs
+			// at commit). Read the row again before the paid vision
+			// call: a book merged or trashed meanwhile costs nothing.
+			// The write closure below rechecks under the lock for the
+			// window that remains after this read.
+			current, curErr := env.Store.GetBookByID(book.ID)
+			if curErr != nil || current == nil {
+				failed++
+				env.Log(slog.LevelWarn, fmt.Sprintf("Skipped cover analysis for %q (could not re-read the book: %v)", book.Title, curErr))
+				continue
+			}
+			if current.IsRetired() {
+				retiredSkipped++
+				continue
+			}
+			imgData, mime, imgErr := metadata.ExtractCoverArtBytes(book.FilePath)
+			if imgErr == nil && len(imgData) > 0 {
+				parsed, aiErr := aiParser.ParseCoverArt(ctx, imgData, mime)
+				if aiErr == nil && parsed != nil && parsed.Author != "" && parsed.Confidence != "low" {
+					env.Log(slog.LevelInfo, fmt.Sprintf("AI cover analysis for %q found author: %q (confidence: %s)", book.Title, parsed.Author, parsed.Confidence))
+					// Look up or create the discovered author. The
+					// shared creation gate runs first: a junk AI
+					// answer is no answer, and an existing junk row
+					// must not be linked either.
+					//
+					// Known residual: the author row is created here,
+					// before the locked write below can refuse a book
+					// retired in the meantime. Creating it inside the
+					// book's lock would nest an author write in a book
+					// stripe for a window of microseconds, so it is not
+					// done: a book retired in that window leaves one
+					// author row, created from the AI's answer and linked
+					// to nothing. No write lands on the book itself.
+					var existing *database.Author
+					if aiAuthor, why := personname.PrepareAuthorNameForCreation(parsed.Author); why == "" {
+						existing, _ = env.Store.GetAuthorByName(aiAuthor)
+						if existing == nil {
+							existing, _ = env.Writer.CreateAuthor(aiAuthor)
+						}
+					}
+					if existing != nil {
+						// Assign the discovered author. Hydrate the full
+						// stored row before the AuthorID write (see
+						// assignResolvedAuthorPreservingRecord) so the
+						// full-replace UpdateBook cannot wipe the record.
+						// Fail-closed: on hydrate error nothing is written
+						// (neither the Book row nor the join), leaving the
+						// book consistently attributed to the production
+						// company rather than half-resolved or wiped.
+						if err := env.Writer.AssignResolvedAuthor(book.ID, existing.ID, authorID); err != nil {
+							if errors.Is(err, errResolveJoinRetired) {
+								// The author column was written while the
+								// book was live; it was retired before the
+								// join pass and only the join was left
+								// alone. Resolved, with the skipped join
+								// counted on its own line.
+								resolved++
+								joinLeftAlone++
+								continue
 							}
+							if errors.Is(err, errResolveBookRetired) {
+								// Retired between the re-read above and
+								// one of the two locked passes: refused
+								// under the lock, so nothing is written
+								// after it retired. A skip, not a failure.
+								retiredSkipped++
+								continue
+							}
+							env.Log(slog.LevelWarn, fmt.Sprintf("Skipped author resolve for %q (hydrate failed, record left intact): %v", book.Title, err))
+							hydrateSkipped++
+							failed++
+							continue
 						}
 						resolved++
 						continue
 					}
 				}
-
-				// If metadata failed and AI is enabled, try cover art analysis
-				aiParser := newAIParser(config.AppConfig.OpenAIAPIKey, config.AppConfig.EnableAIParsing)
-				if aiParser.IsEnabled() && book.FilePath != "" {
-					// The fetch above can take seconds, and a fetch that finds
-					// nothing never reaches its own retired guard (that runs
-					// at commit). Read the row again before the paid vision
-					// call: a book merged or trashed meanwhile costs nothing.
-					// The write closure below rechecks under the lock for the
-					// window that remains after this read.
-					current, curErr := store.GetBookByID(book.ID)
-					if curErr != nil || current == nil {
-						failed++
-						_ = progress.Log("warn", fmt.Sprintf("Skipped cover analysis for %q (could not re-read the book: %v)", book.Title, curErr), nil)
-						continue
-					}
-					if current.IsRetired() {
-						retiredSkipped++
-						continue
-					}
-					imgData, mime, imgErr := metadata.ExtractCoverArtBytes(book.FilePath)
-					if imgErr == nil && len(imgData) > 0 {
-						parsed, aiErr := aiParser.ParseCoverArt(ctx, imgData, mime)
-						if aiErr == nil && parsed != nil && parsed.Author != "" && parsed.Confidence != "low" {
-							_ = progress.Log("info", fmt.Sprintf("AI cover analysis for %q found author: %q (confidence: %s)", book.Title, parsed.Author, parsed.Confidence), nil)
-							// Look up or create the discovered author. The
-							// shared creation gate runs first: a junk AI
-							// answer is no answer, and an existing junk row
-							// must not be linked either.
-							//
-							// Known residual: the author row is created here,
-							// before the locked write below can refuse a book
-							// retired in the meantime. Creating it inside the
-							// book's lock would nest an author write in a book
-							// stripe for a window of microseconds, so it is not
-							// done: a book retired in that window leaves one
-							// author row, created from the AI's answer and linked
-							// to nothing. No write lands on the book itself.
-							var existing *database.Author
-							if aiAuthor, why := personname.PrepareAuthorNameForCreation(parsed.Author); why == "" {
-								existing, _ = store.GetAuthorByName(aiAuthor)
-								if existing == nil {
-									existing, _ = store.CreateAuthor(aiAuthor)
-								}
-							}
-							if existing != nil {
-								// Assign the discovered author. Hydrate the full
-								// stored row before the AuthorID write (see
-								// assignResolvedAuthorPreservingRecord) so the
-								// full-replace UpdateBook cannot wipe the record.
-								// Fail-closed: on hydrate error nothing is written
-								// (neither the Book row nor the join), leaving the
-								// book consistently attributed to the production
-								// company rather than half-resolved or wiped.
-								if err := assignResolvedAuthorPreservingRecord(store, book.ID, existing.ID, authorID); err != nil {
-									if errors.Is(err, errResolveJoinRetired) {
-										// The author column was written while the
-										// book was live; it was retired before the
-										// join pass and only the join was left
-										// alone. Resolved, with the skipped join
-										// counted on its own line.
-										resolved++
-										joinLeftAlone++
-										continue
-									}
-									if errors.Is(err, errResolveBookRetired) {
-										// Retired between the re-read above and
-										// one of the two locked passes: refused
-										// under the lock, so nothing is written
-										// after it retired. A skip, not a failure.
-										retiredSkipped++
-										continue
-									}
-									_ = progress.Log("warn", fmt.Sprintf("Skipped author resolve for %q (hydrate failed, record left intact): %v", book.Title, err), nil)
-									hydrateSkipped++
-									failed++
-									continue
-								}
-								resolved++
-								continue
-							}
-						}
-					}
-				}
-
-				failed++
-				_ = progress.Log("debug", fmt.Sprintf("Could not resolve author for %q", book.Title), nil)
 			}
+		}
 
-			if s.dedupCache != nil {
-				s.dedupCache.Invalidate("author-duplicates")
-			}
-			s.authorsCache.InvalidateAll()
+		failed++
+		env.Log(slog.LevelDebug, fmt.Sprintf("Could not resolve author for %q", book.Title))
+	}
 
-			resultMsg := fmt.Sprintf("Resolved %d/%d books for %q (%d unresolved, %d skipped on hydrate error, %d retired books skipped)", resolved, len(books), prodAuthorName, failed, hydrateSkipped, retiredSkipped)
-			if joinLeftAlone > 0 {
-				resultMsg += fmt.Sprintf("; %d of the resolved books were retired after their author was written, so their author credits were left alone", joinLeftAlone)
+	env.Writer.AuthorsResolved()
+
+	resultMsg := fmt.Sprintf("Resolved %d/%d books for %q (%d unresolved, %d skipped on hydrate error, %d retired books skipped)", resolved, len(books), prodAuthorName, failed, hydrateSkipped, retiredSkipped)
+	if joinLeftAlone > 0 {
+		resultMsg += fmt.Sprintf("; %d of the resolved books were retired after their author was written, so their author credits were left alone", joinLeftAlone)
+	}
+	env.Log(slog.LevelInfo, resultMsg)
+	env.progress(len(books), len(books), resultMsg)
+	return nil
+}
+
+func (h headEntities) FetchBookByTitle(ctx context.Context, bookID string) (*metafetch.FetchMetadataResponse, error) {
+	return h.s.metadataFetchService.FetchMetadataForBookByTitle(ctx, bookID, metafetch.Unattended)
+}
+
+func (h headEntities) CreateAuthor(name string) (*database.Author, error) {
+	return h.s.Ops().CreateAuthor(name)
+}
+
+func (h headEntities) AssignPublisher(bookID, publisher string) error {
+	return assignPublisherPreservingRecord(h.s.Ops(), bookID, publisher)
+}
+
+func (h headEntities) AssignResolvedAuthor(bookID string, resolvedAuthorID, prodAuthorID int) error {
+	return assignResolvedAuthorPreservingRecord(h.s.Ops(), bookID, resolvedAuthorID, prodAuthorID)
+}
+
+func (h headEntities) AuthorsResolved() {
+	if h.s.dedupCache != nil {
+		h.s.dedupCache.Invalidate("author-duplicates")
+	}
+	h.s.authorsCache.InvalidateAll()
+}
+
+func (h headEntities) GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error) {
+	return h.s.Ops().GetBooksByAuthorIDWithRoleCore(authorID)
+}
+
+func (h headEntities) GetAuthorByID(id int) (*database.Author, error) {
+	return h.s.Ops().GetAuthorByID(id)
+}
+
+func (h headEntities) GetAuthorByName(name string) (*database.Author, error) {
+	return h.s.Ops().GetAuthorByName(name)
+}
+
+func (h headEntities) GetBookByID(id string) (*database.Book, error) {
+	return h.s.Ops().GetBookByID(id)
+}
+
+// resolveProductionAuthorNative is the native books.entities.resolve-production-author
+// kind. HEAD runs it only live (no preview).
+func (s *Server) resolveProductionAuthorNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	kind := t7KindFor(resolveProductionAuthorOpID)
+	c := t7Common(s.resolveProductionAuthorDef(), sched)
+	c.Effects = t7ApplyPathWrites()
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			if err := t7LiveOnly(rc, kind); err != nil {
+				return struct{}{}, err
 			}
-			_ = progress.Log("info", resultMsg, nil)
-			_ = progress.UpdateProgress(len(books), len(books), resultMsg)
-			return nil
+			p, err := t7DecodeNative[resolveProductionAuthorOpParams](kind, raw)
+			if err != nil {
+				return struct{}{}, err
+			}
+			if err := t7NeedStore(kind, deps); err != nil {
+				return struct{}{}, err
+			}
+			w, err := t7NewWriter(kind, deps, rc)
+			if err != nil {
+				return struct{}{}, err
+			}
+			return struct{}{}, resolveProductionAuthorCore(rc.Context(), p, resolveProductionAuthorEnv{
+				t7Env: t7NativeEnv(rc), Store: deps.Store, Writer: w,
+			})
 		},
 	})
 }
