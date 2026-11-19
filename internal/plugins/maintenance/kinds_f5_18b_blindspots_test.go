@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_f5_18b_blindspots_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d2a8f419-6c70-4e35-b1a2-0f94e7c3a561
 // last-edited: 2026-11-19
 
@@ -149,8 +149,17 @@ func TestF518b_LocalRowsCoverWhatTheStoreWrites(t *testing.T) {
 		v := `"Year One"`
 		return s.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: "bk", Field: "title", FetchedValue: &v, UpdatedAt: now})
 	}
+	// withFile gives the book one file row at the book's own path (what
+	// repairBook sets), the shape MarkNeedsRescan mirrors its flag onto.
 	withFile := func(t *testing.T, s *database.PebbleStore) {
-		require.NoError(t, s.CreateBookFile(&database.BookFile{ID: "bf1", BookID: "bk", FilePath: "/lib/bk/1.m4b"}))
+		require.NoError(t, s.CreateBookFile(&database.BookFile{ID: "bf1", BookID: "bk", FilePath: "/lib/bk.m4b", FileSize: 1000}))
+	}
+	// withStaleAggregate is withFile with the book's size aggregate knocked out
+	// of step with its file, so the patch's recompute has a book write to make.
+	withStaleAggregate := func(t *testing.T, s *database.PebbleStore) {
+		withFile(t, s)
+		_, err := s.ModifyBook("bk", func(b *database.Book) error { b.FileSize = nil; return nil })
+		require.NoError(t, err)
 	}
 	cases := []call{
 		{"AddBookTagWithSource", nil, tag, []string{"books"}},
@@ -172,12 +181,12 @@ func TestF518b_LocalRowsCoverWhatTheStoreWrites(t *testing.T) {
 		{"FlagMetadataHashDuplicate", func(t *testing.T, s *database.PebbleStore) { repairBook(t, s, "bk2", nil) },
 			func(s *database.PebbleStore) error { return s.FlagMetadataHashDuplicate("bk", "bk2") }, nil},
 		{"SetLastWrittenAt", nil, func(s *database.PebbleStore) error { return s.SetLastWrittenAt("bk", now) }, []string{"books"}},
-		{"MarkNeedsRescan", withFile, func(s *database.PebbleStore) error { return s.MarkNeedsRescan("bk") }, []string{"books"}},
-		{"PatchBookFileFields", withFile, func(s *database.PebbleStore) error {
+		{"MarkNeedsRescan", withFile, func(s *database.PebbleStore) error { return s.MarkNeedsRescan("bk") }, []string{"books", "book_files"}},
+		{"PatchBookFileFields", withStaleAggregate, func(s *database.PebbleStore) error {
 			n := 3
 			_, _, err := s.PatchBookFileFields("bk", "bf1", database.BookFileFieldPatch{TrackNumber: &n})
 			return err
-		}, []string{"book_files"}},
+		}, []string{"book_files", "books"}},
 		{"SetUserPreference", nil, func(s *database.PebbleStore) error { return s.SetUserPreference("f518b_pref", "v") }, []string{"user_state"}},
 		{"DeleteUserPreference", func(t *testing.T, s *database.PebbleStore) {
 			require.NoError(t, s.SetUserPreference("f518b_pref", "v"))
