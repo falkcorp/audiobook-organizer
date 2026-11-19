@@ -371,7 +371,7 @@ func requirePreviewWritesNothing(t *testing.T, spy *scoringSpy) {
 	}
 }
 
-func requireModeKeysRefused(t *testing.T, build func(*Plugin, ScoringKindDeps) tasks.Definition) {
+func requireScoringModeKeysRefused(t *testing.T, build func(*Plugin, ScoringKindDeps) tasks.Definition) {
 	t.Helper()
 	for _, params := range []string{`{"dry_run":true}`, `{"dryRun":false}`, `{"Apply":true}`} {
 		spy, d := newScoringSpy()
@@ -494,7 +494,7 @@ func TestDedupScoring_AutoResolvePreviewReportsAndWritesNothing(t *testing.T) {
 }
 
 func TestDedupScoring_AutoResolveRefusesModeKeysInParams(t *testing.T) {
-	requireModeKeysRefused(t, autoResolveBuild)
+	requireScoringModeKeysRefused(t, autoResolveBuild)
 }
 
 // An engine error fails the run with HEAD's wrapping; a Live run with the kill
@@ -549,7 +549,7 @@ func TestDedupScoring_FullScanPreviewIsRefused(t *testing.T) {
 }
 
 func TestDedupScoring_FullScanRefusesModeKeysInParams(t *testing.T) {
-	requireModeKeysRefused(t, fullScanBuild)
+	requireScoringModeKeysRefused(t, fullScanBuild)
 }
 
 // A FullScan error fails the run; a failed purge does not.
@@ -607,7 +607,7 @@ func TestDedupScoring_RescorePreviewIsTheDryRun(t *testing.T) {
 }
 
 func TestDedupScoring_RescoreRefusesModeKeysInParams(t *testing.T) {
-	requireModeKeysRefused(t, rescoreBuild)
+	requireScoringModeKeysRefused(t, rescoreBuild)
 }
 
 // A partial write failure fails the run and still returns the counts.
@@ -661,7 +661,7 @@ func TestDedupScoring_BookSignatureScanPreviewIsRefused(t *testing.T) {
 }
 
 func TestDedupScoring_BookSignatureScanRefusesModeKeysInParams(t *testing.T) {
-	requireModeKeysRefused(t, bookSigBuild)
+	requireScoringModeKeysRefused(t, bookSigBuild)
 }
 
 func TestDedupScoring_BookSignatureScanErrorPath(t *testing.T) {
@@ -719,7 +719,7 @@ func TestDedupScoring_DrainStalePreviewWritesNothing(t *testing.T) {
 }
 
 func TestDedupScoring_DrainStaleRefusesModeKeysInParams(t *testing.T) {
-	requireModeKeysRefused(t, drainBuild)
+	requireScoringModeKeysRefused(t, drainBuild)
 }
 
 // An engine error fails the run; a set flag skips the engine; read errors keep
@@ -801,7 +801,7 @@ func TestDedupScoring_QuarantinePreviewWritesNothing(t *testing.T) {
 }
 
 func TestDedupScoring_QuarantineRefusesModeKeysInParams(t *testing.T) {
-	requireModeKeysRefused(t, quarantineBuild)
+	requireScoringModeKeysRefused(t, quarantineBuild)
 }
 
 // A failed write and an unreadable file list fail the run (counted, not logged
