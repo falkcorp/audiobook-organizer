@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/pins_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 21b7d4e8-0c95-4a36-8f1d-7e5a39c0b264
 // last-edited: 2026-11-19
 
@@ -7,6 +7,7 @@ package m6
 
 import (
 	"maps"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -62,6 +63,43 @@ func TestMetadataLimits_BuiltinTableMatchesProviderhttp(t *testing.T) {
 		}
 		if want := base.RPS * tier.Multiplier(); l == nil || l.RPS != want {
 			t.Errorf("tier %q: RPS %v, want %v", tier, l, want)
+		}
+	}
+	// Burst follows the tier by the same rounding, for a provider whose burst is
+	// above one and for one whose burst is one, and an unlisted provider uses the
+	// fallback's.
+	for _, id := range []string{"google-books", "hardcover", "a-provider-nobody-registered"} {
+		base := providerhttp.BuiltinLimitsFor(id)
+		for _, tier := range []config.RateLimitTier{config.RateLimitTierLow, config.RateLimitTierMedium, config.RateLimitTierHigh} {
+			src := headMetadataSource{}
+			src.RateLimit.Tier = string(tier)
+			l := metadataLimits(id, src)
+			want := base.Burst
+			if tier != config.RateLimitTierMedium {
+				if scaled := int(math.Round(float64(base.Burst) * tier.Multiplier())); scaled >= 1 {
+					want = scaled
+				}
+			}
+			if l == nil || l.Burst != want || l.MaxRetries != base.MaxRetries || l.Timeout != base.Timeout {
+				t.Errorf("%s at tier %s: %+v, want burst %d, retries %d, timeout %v", id, tier, l, want, base.MaxRetries, base.Timeout)
+			}
+		}
+	}
+	// Each explicit field alone replaces only itself.
+	base := providerhttp.BuiltinLimitsFor("google-books")
+	for name, c := range map[string]struct {
+		set  func(src *headMetadataSource)
+		want integrations.Limits
+	}{
+		"rps":     {func(s *headMetadataSource) { s.RateLimit.RPS = 1.5 }, integrations.Limits{RPS: 1.5, Burst: base.Burst, MaxRetries: base.MaxRetries, Timeout: base.Timeout}},
+		"burst":   {func(s *headMetadataSource) { s.RateLimit.Burst = 7 }, integrations.Limits{RPS: base.RPS, Burst: 7, MaxRetries: base.MaxRetries, Timeout: base.Timeout}},
+		"retries": {func(s *headMetadataSource) { s.RateLimit.MaxRetries = 9 }, integrations.Limits{RPS: base.RPS, Burst: base.Burst, MaxRetries: 9, Timeout: base.Timeout}},
+		"timeout": {func(s *headMetadataSource) { s.RateLimit.TimeoutSeconds = 5 }, integrations.Limits{RPS: base.RPS, Burst: base.Burst, MaxRetries: base.MaxRetries, Timeout: 5 * time.Second}},
+	} {
+		src := headMetadataSource{}
+		c.set(&src)
+		if l := metadataLimits("google-books", src); l == nil || !sameLimits(*l, c.want) {
+			t.Errorf("explicit %s: %+v, want %+v", name, l, c.want)
 		}
 	}
 	// An explicit field wins over the tier.
@@ -212,6 +250,8 @@ func TestInstanceID(t *testing.T) {
 		{"hardcover", "hardcover", false, true},
 		{"Local_LLM", "local-llm", true, true},
 		{"9Lives_Cat", "id-9lives-cat", true, true},
+		{"0Day_Cape", "id-0day-cape", true, true}, // both ends of the digit range
+		{"9_Lives", "id-9-lives", true, true},
 		{"Bat Cave", "", false, false},
 		{"", "", false, false},
 		{strings.Repeat("a", 33), "", false, false},
@@ -222,4 +262,10 @@ func TestInstanceID(t *testing.T) {
 			t.Errorf("instanceID(%q) = %q, %v, %v; want %q, %v, %v", c.in, got, renamed, ok, c.want, c.renamed, c.ok)
 		}
 	}
+}
+
+// sameLimits compares the four fields M6 sets (Limits itself holds a slice and is
+// not comparable).
+func sameLimits(a, b integrations.Limits) bool {
+	return a.RPS == b.RPS && a.Burst == b.Burst && a.MaxRetries == b.MaxRetries && a.Timeout == b.Timeout
 }

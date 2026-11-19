@@ -67,8 +67,11 @@ func TestStep_ImporterErrorFailsAndResumes(t *testing.T) {
 		t.Fatalf("the clean run: %v", err)
 	}
 
-	for _, c := range []struct{ kind, id string }{{"job", "01JKNIGHTFALL"}, {"instance", "metadata/hardcover"}} {
-		t.Run(c.kind, func(t *testing.T) {
+	for _, c := range []struct{ kind, id string }{
+		{"job", "01JKNIGHTFALL"}, {"instance", "metadata/hardcover"}, {"instance", "ai/local-llm"},
+		{"instance", "ai/openai"}, {"instance", "download/deluge"}, {"instance", "notify/webhook-1"},
+	} {
+		t.Run(c.kind+" "+c.id, func(t *testing.T) {
 			boom := errors.New("the store is closed")
 			r := newRig(t, withRows(headRows(t)), func(r *rig) {
 				r.refuse = func(k, i string) error {
