@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-18-maintenance-jobs-respect-locked-fields-executive-summary.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.2 -->
 <!-- guid: 5b3c0b30-3329-45c7-8ab5-ff4e0d328316 -->
 <!-- last-edited: 2026-11-18 -->
 
@@ -56,7 +56,7 @@ the real library with this change.
 - A separate to-do item stays open too: the cleanup jobs are not yet known to
   the system that stops two conflicting jobs from running at once, so a
   cleanup job can still run beside a series operation. The list of what each
-  job writes is now available, and a test fails if a job is missing one, but
+  job writes is now worked out in a test, which fails if a job is missing one, but
   connecting it changes how every cleanup job queues, so it needs its own
   review.
 
