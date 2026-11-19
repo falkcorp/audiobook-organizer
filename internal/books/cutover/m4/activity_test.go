@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/activity_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8e43c7a1-2f95-4b60-a8d3-5c71b9e0f246
 // last-edited: 2026-11-18
 
@@ -106,7 +106,7 @@ func kindReferencesSynthetic(t *testing.T) {
 					{"type": "maintenance.itunes-heal", "summary": "c", "tags": []string{"def:maintenance.itunes-heal"}},
 				}}}},
 		// A digest item of a repairs def takes its kind from its op: tag; one with
-		// no operation holds the whole row.
+		// no operation stays as stored, and the digest's other items are renamed.
 		{"digest", n(13), "01HBAT0013", map[string]any{"type": "daily_digest", "level": "info", "source": "compaction", "summary": "Daily digest",
 			"details": map[string]any{"date": "2026-11-04", "items": []map[string]any{
 				{"type": "repairs.plan", "summary": "p", "tags": []string{"def:repairs.plan", "op:01HBATREPAIRS1"}},
@@ -123,6 +123,29 @@ func kindReferencesSynthetic(t *testing.T) {
 				{"type": "repairs.apply", "summary": "no operation", "tags": []string{"def:repairs.apply"}},
 			}}}},
 	}
+	rows = append(rows,
+		// Digest items before 2026-05-20 carry no tags: the item's own
+		// operation_id names its run.
+		act{"digest", n(17), "01HBAT0017", map[string]any{"type": "daily_digest", "level": "info", "source": "compaction", "summary": "Daily digest",
+			"details": map[string]any{"date": "2026-05-01", "items": []map[string]any{
+				{"type": "repairs.plan", "summary": "tagless", "operation_id": "01HBATREPAIRS1"},
+				{"type": "dedup.book-scan", "summary": "tagless scan", "operation_id": "01HBATSCAN"},
+			}}}},
+		// One item spanning several operations of one kind resolves.
+		act{"digest", n(18), "01HBAT0018", map[string]any{"type": "daily_digest", "level": "info", "source": "compaction", "summary": "Daily digest",
+			"details": map[string]any{"date": "2026-11-07", "items": []map[string]any{
+				{"type": "repairs.apply", "summary": "summarized", "tags": []string{"def:repairs.apply", "op:01HBATREPAIRS1", "op:01HBATREPAIRS3"}},
+			}}}},
+		// A mixed row: what resolves is renamed, and only the items that cannot
+		// be (an absent run; operations of two fixers) stay as stored.
+		act{"digest", n(19), "01HBAT0019", map[string]any{"type": "daily_digest", "level": "info", "source": "compaction", "summary": "Daily digest",
+			"details": map[string]any{"date": "2026-11-08", "items": []map[string]any{
+				{"type": "repairs.plan", "summary": "by operation_id", "operation_id": "01HBATREPAIRS2"},
+				{"type": "repairs.apply", "summary": "pruned", "operation_id": "01HBATGONE"},
+				{"type": "repairs.plan", "summary": "two fixers", "tags": []string{"op:01HBATREPAIRS1", "op:01HBATREPAIRS2"}},
+				{"type": "maintenance.itunes-heal", "summary": "plain", "tags": []string{"def:maintenance.itunes-heal"}},
+			}}}},
+	)
 	for _, a := range rows {
 		seedAct(raw, a)
 	}
@@ -135,7 +158,7 @@ func kindReferencesSynthetic(t *testing.T) {
 
 	// The runs the task store holds, by operation: two repairs runs with
 	// different fixers, and a scan run (a kind that is no repairs kind).
-	repairsKinds := map[string]string{"01HBATREPAIRS1": "books.repairs.two-face-asins", "01HBATREPAIRS2": "books.repairs.hush-credits"}
+	repairsKinds := map[string]string{"01HBATREPAIRS1": "books.repairs.two-face-asins", "01HBATREPAIRS2": "books.repairs.hush-credits", "01HBATREPAIRS3": "books.repairs.two-face-asins"}
 	r := newRig(t, withRaw(raw))
 	r.actRuns = map[string]tasks.Kind{"01HBATSCAN": "books.dedup.book-scan"}
 	for id, k := range repairsKinds {
@@ -147,10 +170,11 @@ func kindReferencesSynthetic(t *testing.T) {
 	}
 
 	// held is every row that must stay exactly as stored, with its reason: the
-	// repairs rows no run can name a fixer for, and the digest holding such an item.
+	// repairs rows no run can name a fixer for. A digest holding such an item is
+	// not held: the item stays as stored and the rest of the row is renamed.
 	held := map[string]bool{}
-	for _, i := range []int{10, 11, 12, 14, 15, 16} {
-		held[act{tier: map[bool]string{true: "digest", false: "audit"}[i == 14 || i == 16], nanos: n(i), ulid: fmt.Sprintf("01HBAT%04d", i)}.key()] = true
+	for _, i := range []int{10, 11, 12, 15} {
+		held[act{tier: "audit", nanos: n(i), ulid: fmt.Sprintf("01HBAT%04d", i)}.key()] = true
 	}
 
 	kind := map[string]string{"dedup.book-scan": "books.dedup.book-scan", "maintenance.itunes-heal": "books.itunes.heal", "operations.backfill-legacy-status": "books.retired.operations.backfill-legacy-status"}
@@ -185,16 +209,39 @@ func kindReferencesSynthetic(t *testing.T) {
 		}
 		return out
 	}
-	opOfItem := func(m map[string]any) string {
+	// opsOfItem is the operations a digest item names: its op: tags, else its
+	// operation_id.
+	opsOfItem := func(m map[string]any) []string {
+		var ops []string
 		tags, _ := m["tags"].([]any)
 		for _, tg := range tags {
 			if s, ok := tg.(string); ok {
 				if id, ok := strings.CutPrefix(s, "op:"); ok {
-					return id
+					ops = append(ops, id)
 				}
 			}
 		}
-		return ""
+		if id, ok := m["operation_id"].(string); ok && len(ops) == 0 {
+			ops = append(ops, id)
+		}
+		return ops
+	}
+	// itemKind renames v for an item of ops: a repairs def resolves when every
+	// operation is a repairs run of one kind. ok is false when it cannot.
+	itemKind := func(v any, ops []string) (any, bool) {
+		s, _ := v.(string)
+		if s != "repairs.plan" && s != "repairs.apply" {
+			return rename(v, ""), true
+		}
+		kind := ""
+		for _, op := range ops {
+			k, found := repairsKinds[op]
+			if !found || (kind != "" && k != kind) {
+				return v, false
+			}
+			kind = k
+		}
+		return rename(v, ops[0]), kind != ""
 	}
 
 	for _, a := range rows {
@@ -221,10 +268,35 @@ func kindReferencesSynthetic(t *testing.T) {
 			d := want["details"].(map[string]any)
 			for _, it := range d["items"].([]any) {
 				m := it.(map[string]any)
-				io := opOfItem(m)
-				m["type"] = rename(m["type"], io)
-				if tg, ok := m["tags"]; ok {
-					m["tags"] = renameTags(tg, io)
+				ops := opsOfItem(m)
+				if len(ops) == 0 {
+					ops = []string{""}
+				}
+				// An item whose repairs reference does not resolve stays whole.
+				whole := true
+				if _, ok := itemKind(m["type"], ops); !ok {
+					whole = false
+				}
+				if tg, ok := m["tags"].([]any); ok {
+					for _, t := range tg {
+						if id, ok := strings.CutPrefix(fmt.Sprint(t), "def:"); ok {
+							if _, ok := itemKind(id, ops); !ok {
+								whole = false
+							}
+						}
+					}
+				}
+				if !whole {
+					continue
+				}
+				m["type"], _ = itemKind(m["type"], ops)
+				if tg, ok := m["tags"].([]any); ok {
+					for i, t := range tg {
+						if id, ok := strings.CutPrefix(fmt.Sprint(t), "def:"); ok {
+							k, _ := itemKind(id, ops)
+							tg[i] = "def:" + fmt.Sprint(k)
+						}
+					}
 				}
 			}
 			if tg, ok := want["tags"]; ok {
@@ -282,9 +354,15 @@ func kindReferencesSynthetic(t *testing.T) {
 			t.Errorf("%s = %q, want the held row untouched (%q)", k, s.Act[k], before[k])
 		}
 	}
-	// Two rows that do not decode and six repairs rows no run names a fixer for.
-	if s.Verify.Held != 8 || len(s.Quarantine) != 0 {
-		t.Errorf("held %d, quarantined %d; want 8 held, none quarantined: %+v", s.Verify.Held, len(s.Quarantine), s.Verify)
+	// Two rows that do not decode and four repairs rows no run names a fixer for.
+	if s.Verify.Held != 6 || len(s.Quarantine) != 0 {
+		t.Errorf("held %d, quarantined %d; want 6 held, none quarantined: %+v", s.Verify.Held, len(s.Quarantine), s.Verify)
+	}
+	// The digest items that stay as stored are logged, one line each: row 14's
+	// operation-less item, row 16's item of two fixers, and row 19's pruned run
+	// and two fixers.
+	if got := strings.Count(r.logs.String(), "a digest item is left as stored"); got != 4 {
+		t.Errorf("%d item-held log lines, want 4:\n%s", got, r.logs)
 	}
 	// No HEAD def ID is left in a def:, type or def_id position of any feed row.
 	for k, v := range s.Act {
@@ -301,8 +379,8 @@ func kindReferencesSynthetic(t *testing.T) {
 			}
 		}
 	}
-	if s.Verify.Written != 9 {
-		t.Errorf("the report wrote %d rows, want 9 (the rows that named a def ID, held ones excluded): %+v", s.Verify.Written, s.Verify)
+	if s.Verify.Written != 13 {
+		t.Errorf("the report wrote %d rows, want 13 (the rows that named a def ID, held ones excluded): %+v", s.Verify.Written, s.Verify)
 	}
 }
 
