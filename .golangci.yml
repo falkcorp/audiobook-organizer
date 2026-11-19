@@ -1,7 +1,7 @@
 # file: .golangci.yml
-# version: 1.6.2
+# version: 1.7.0
 # guid: 8d2a1f47-6c93-4b0e-a15d-7f3e28c9b604
-# last-edited: 2026-11-09
+# last-edited: 2026-11-18
 
 # Wave 0 of the silent-failure sweep.
 # See docs/audits/2026-08-11-silent-failure-error-discards.md
@@ -89,8 +89,15 @@ linters:
         - (github.com/falkcorp/audiobook-organizer/internal/dedup.ProgressReporter).Log
         - (github.com/falkcorp/audiobook-organizer/internal/dedup.ProgressReporter).UpdateProgress
         # Concrete adapters that wrap a Reporter; same benign shape.
-        - (github.com/falkcorp/audiobook-organizer/internal/scheduler.extraOpsProgressAdapter).Log
-        - (github.com/falkcorp/audiobook-organizer/internal/scheduler.extraOpsProgressAdapter).UpdateProgress
+        # t7ProgressReporter (one per package, kinds_t7.go) is the F5-13 cores'
+        # progress handle over the run's progress callback: both methods return
+        # nil unconditionally. sdk.ProgressSink is the one Reporter method
+        # sdk.NewProgress calls, so the sdk helper's discards stay in this bucket.
+        - (github.com/falkcorp/audiobook-organizer/internal/scheduler.t7ProgressReporter).Log
+        - (github.com/falkcorp/audiobook-organizer/internal/scheduler.t7ProgressReporter).UpdateProgress
+        - (github.com/falkcorp/audiobook-organizer/internal/server.t7ProgressReporter).Log
+        - (github.com/falkcorp/audiobook-organizer/internal/server.t7ProgressReporter).UpdateProgress
+        - (github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk.ProgressSink).UpdateProgress
         - (github.com/falkcorp/audiobook-organizer/internal/server.registryProgressAdapter).Log
         - (github.com/falkcorp/audiobook-organizer/internal/server.registryProgressAdapter).UpdateProgress
 

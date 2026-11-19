@@ -25,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/aiscan"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/errhandling"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -393,7 +394,9 @@ func aiScanApplyCore(ctx context.Context, p handlers.AIScanApplyOpParams, dryRun
 		if herr != nil {
 			return nil, fmt.Errorf("ai.author-scan-apply: %w", herr)
 		}
-		defer func() { _ = hold.Finish(nil) }()
+		defer func() {
+			errhandling.MustLog(hold.Finish(nil), "scan stand-down lapsed during the run; its lease was lost before release")
+		}()
 		lease = scanLeaseFunc(hold.Renew)
 	}
 	// Claim the scan before the first merge: a nightly run that supersedes it

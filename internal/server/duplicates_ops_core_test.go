@@ -68,7 +68,6 @@ func dedupTestEnv(live bool, opID string, results *[]any) t7Env {
 // ---- scans -----------------------------------------------------------------
 
 type fakeDedupScanStore struct {
-	userPreferenceReader
 	log     *dedupCallLog
 	series  dedup.SeriesScanResult
 	books   dedup.BookScanResult
@@ -765,5 +764,16 @@ func TestAnnounceActivity(t *testing.T) {
 		require.Equal(t, []string{"flush", "emit"}, l.order)
 		require.Equal(t, []string{"op-1|x.y|done"}, l.emitted)
 		require.Equal(t, []string{"src"}, l.sources)
+	})
+}
+
+// HEAD's bodies, and their tests, run with a nil Reporter until the first call
+// that needs one (a refusal that comes before any reporting). Building the env
+// must not touch it.
+func TestHeadEnv_BuildsOverANilReporter(t *testing.T) {
+	require.NotPanics(t, func() {
+		e := t7HeadEnv(nil, true)
+		require.NotNil(t, e.Canceled)
+		require.NotNil(t, e.Checkpoint)
 	})
 }

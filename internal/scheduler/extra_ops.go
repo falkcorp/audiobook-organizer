@@ -97,6 +97,7 @@ func (r *ExtraOpsRegistrar) metadataUpgradeDef() opsregistry.OperationDef {
 		Run: func(ctx context.Context, _ json.RawMessage, reporter opsregistry.Reporter) error {
 			_, err := metadataUpgradeCore(ctx, metadataUpgradeEnv{
 				t7Env:     t7HeadEnv(reporter),
+				Store:     headMetadataUpgrade{r: r},
 				Writer:    headMetadataUpgrade{r: r},
 				StandDown: t7HeadStandDown(r.Deps.ScanStandDown, reporter),
 			})
@@ -105,14 +106,18 @@ func (r *ExtraOpsRegistrar) metadataUpgradeDef() opsregistry.OperationDef {
 	}
 }
 
-// metadataUpgradeWriter is the writes of scheduler.metadata-upgrade: the upgrade
-// sweep itself (re-fetch each eligible book's candidates and apply the winner's
-// metadata through the bulk-apply gate; metabatch.MetadataUpgradeService), and
-// the check that the fetch service it runs over exists.
-type metadataUpgradeWriter interface {
+// metadataUpgradeStore is the reads of scheduler.metadata-upgrade: whether the
+// metadata fetch service the sweep runs over exists.
+type metadataUpgradeStore interface {
 	// Ready reports whether the upgrade can run at all (a metadata fetch service
 	// is wired).
 	Ready() error
+}
+
+// metadataUpgradeWriter is the writes of scheduler.metadata-upgrade: the upgrade
+// sweep itself (re-fetch each eligible book's candidates and apply the winner's
+// metadata through the bulk-apply gate; metabatch.MetadataUpgradeService).
+type metadataUpgradeWriter interface {
 	// RunUpgrade sweeps up to limit books, reporting progress as it goes.
 	RunUpgrade(ctx context.Context, limit int, progress operations.ProgressReporter) (*metabatch.UpgradeResult, error)
 }
@@ -120,6 +125,7 @@ type metadataUpgradeWriter interface {
 // metadataUpgradeEnv is what the shared core takes from its shell (rules R2, R10).
 type metadataUpgradeEnv struct {
 	t7Env
+	Store  metadataUpgradeStore
 	Writer metadataUpgradeWriter
 	// StandDown holds the scan stand-down for the run: metadata is never applied
 	// during a library scan.
@@ -144,7 +150,7 @@ func metadataUpgradeCore(ctx context.Context, env metadataUpgradeEnv) (res *meta
 	progress := env.reporter()
 	p := sdk.NewProgress(progress, 0)
 	p.Start("Scanning for books with upgradeable metadata sources...")
-	if err := env.Writer.Ready(); err != nil {
+	if err := env.Store.Ready(); err != nil {
 		return nil, err
 	}
 	_ = progress.Log("info", "Scanning for books with upgradeable metadata sources...", nil)
@@ -183,12 +189,16 @@ func (r *ExtraOpsRegistrar) metadataUpgradeNative(deps t7Deps, sched func(tasks.
 			if _, err := t7DecodeNative[struct{}](kind, raw); err != nil {
 				return metabatch.UpgradeResult{}, err
 			}
+			if err := t7NeedStore(kind, deps); err != nil {
+				return metabatch.UpgradeResult{}, err
+			}
 			w, err := t7NewWriter(kind, deps, rc)
 			if err != nil {
 				return metabatch.UpgradeResult{}, err
 			}
 			res, err := metadataUpgradeCore(rc.Context(), metadataUpgradeEnv{
 				t7Env:     t7NativeEnv(rc),
+				Store:     deps.Store,
 				Writer:    w,
 				StandDown: t7NativeStandDown(rc, deps.StandDownKey),
 			})
@@ -200,7 +210,7 @@ func (r *ExtraOpsRegistrar) metadataUpgradeNative(deps t7Deps, sched func(tasks.
 	})
 }
 
-// headMetadataUpgrade is HEAD's side of the writer: the fetch service the
+// headMetadataUpgrade is HEAD's side of the store and the writer: the fetch service the
 // registrar was built with and its store, passed to the upgrade as HEAD's body
 // passed them.
 type headMetadataUpgrade struct{ r *ExtraOpsRegistrar }
