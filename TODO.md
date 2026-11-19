@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.46 -->
+<!-- version: 10.78.47 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -135,6 +135,7 @@ into one of the curated sections below, is a normal direct edit.
       restarting the server.
 
 - [ ] **MAINTENANCE-JOB-OPS-REGISTER-WITHOUT-WRITES** `registerMaintenanceJobOp` (`internal/server/maintenance_job_op.go`, the `OperationDef` at about :147, and the comment at :131) registers the maintenance jobs with no `Writes`, so the dispatcher's write-set gate (Gate 3b) never sees them: `maintenance.cleanup-series` and the rest can run beside `maintenance.series-denumber`, `dedup.series-prune`, `dedup.series-merge`, `dedup.series-normalize`, series rename and `repairs.apply` (the ops that do declare `ResSeries`), and beside each other. Per-job write sets are already derived (`jobWritesFor` in `internal/maintenance/jobs/kinds_writes.go`, checked against the code by `TestJobWrites_TraceMatchesCode`) but they feed only the jobs' `tasks.Effects` (`effectsFor` in `kinds.go`), not `OperationDef.Writes`. Passing them as `Writes` would make every maintenance job serialize against every `ResBooks` / `ResSeries` op, a behaviour change across the whole family (queue time, deferral logging), so it needs its own reviewed PR.
+  **Partly done 2026-11-18 (PR_NUM), item stays open:** `jobs.OpWrites(jobID)` (`internal/maintenance/jobs/op_writes.go`) returns each job's derived set in the form `OperationDef.Writes` takes (a plain cast of the same `jobWritesFor` set the `tasks.Effects` carry; an unknown job is an error, never an empty set), and `TestOpWrites_*` fails when a registered maintenance job has no Writes unless it is in the reasoned read-only list (`relink-report`, `scan-chapter-groups`, `scan-duplicate-files`, `scan-duration-mismatch`, `scan-metadata-hash-dups`). **Not done:** `registerMaintenanceJobOp` does not call it, because `internal/server/maintenance_job_op.go` was outside that PR's file fence. The wiring is one call before `reg.RegisterOp(...)` (`writes, err := jobs.OpWrites(job.ID())`, return the error, then `Writes: writes` in the `OperationDef`), plus a registry test that a maintenance def declares what `OpWrites` returns. Before enabling it, review the queue effect: the `operations` bookkeeping resource and any op that waits on a `maintenance.<job>` child must not now serialize against the job that spawned them.
 - [x] **CLEANUP-SERIES-DELETE-NOT-CONDITIONAL** (done 2026-11-18, #4709 and its re-cut: both phases delete through `DeleteSeriesIfUnreferenced`) `maintenance.cleanup-series` now writes books compare-and-set (a book that no longer names the series being cleaned is skipped), but both phases still end in an unconditional `DeleteSeries` (`csUnlinkAndDeleteSeries`, `csMergeSeriesGroup` in `internal/maintenance/jobs/cleanup_series.go`) and phase 2 trusts the reference counts read at the start of the run. A book linked into a series after that read can be left naming a deleted series. Closing it means calling `DeleteSeriesIfUnreferenced` (the atomic count-and-delete the de-numbering operation uses) through a capability, which changes the `seriesUnlinker` and `seriesMerger` interfaces and their fakes.
 
 - [ ] **SERIES-DENUMBER-REVERT-NOT-WRITE-SET-GATED** Reverting a `maintenance.series-denumber` operation runs from the HTTP revert handler, not from the dispatcher, so neither the write-set gate (which now keeps the operation itself off the other series writers) nor the scan stand-down covers it: a revert can run beside `dedup.series-prune`, series merge/rename/normalize or a library scan. Its series deletes are safe on their own (`DeleteSeriesIfUnreferenced` is atomic), but its book and series restores are plain writes. Closing it means the handler refusing, or waiting, while an operation that declares `ResSeries` or `ResBooks` is running, through the same registry check the dispatcher uses; that changes every operation's revert path, not only this one.
@@ -6544,6 +6545,28 @@ generate-on-behalf should force a short expiry / first-use rotation for safety.
   different value, assert the stored value did not move AND that an unlocked sibling
   field did — an all-locked fixture cannot tell a working guard from an op that writes
   nothing.
+
+  **Part 1 done 2026-11-18 (PR_NUM), item stays open for part 2.** Done through the new
+  `database.ModifyBookRespectingLocks` (locks read fail-closed under the book's write
+  lock; a covered column restores and nothing is written; the held keys come back),
+  each with red-first tests: `cleanup_series.go` (unlink and merge, :240/:301),
+  `fix_read_by_narrator.go`, `fix_author_narrator_swap.go`, `refetch_missing_authors.go`,
+  `plugins/maintenance/author.go` (:233/:242; the `extra_ops.go` half is part 2),
+  `itunes_regroup.go`, `booksig_recovery_audit.go`, `author_conjunction_repair.go`
+  (the primary-author rewrite, the title-as-author relink in `author_strip_merge_relink.go`,
+  and the author merge, which now keeps an author a locked book still credits).
+  Checked, no code change: `fs_regroup_xml.go` `updateSurvivor` already read the title
+  lock fail-closed (characterization test added); `repair_junk_titles.go` no longer exists
+  (absorbed into `junk_title_fixer.go`, which checks `FieldKeyTitle`); `intro_transcribe.go`
+  writes only transcribe columns, none of them in `UserLockableFields` (a test pins it, so
+  the earlier "should be guarded" note does not apply).
+  **Part 2, still open:** `internal/scheduler/extra_ops.go`, `title_backfill.go`,
+  `title_repair.go`, `series_denumber_op.go`, `internal/server/entities_ops.go`,
+  `internal/server/server_metadata.go`, `internal/server/handlers/entities/handler.go`,
+  `internal/server/duplicates_helpers.go`. **Found on the way, not touched:**
+  `unlinkAndDeleteAuthorVia` (`author_strip_merge.go`) and the `author_id_repair` /
+  `author_duplicate_merge` merge paths still rewrite credits and primary authors without a
+  lock check, and other callers of `authormerge.MoveCredits` are unguarded.
 
 - [ ] **Field-lock LOW items deferred from PR #3054's round-2 review** — none of these
   lose data; they are clarity and drift risks the review (L1–L4) named:
