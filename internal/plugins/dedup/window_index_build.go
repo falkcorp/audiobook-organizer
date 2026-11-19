@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/window_index_build.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7e2b9d51-0c46-4f83-a1d7-5b8e3c9f6a20
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package dedup
 
@@ -167,7 +167,9 @@ func windowIndexBuildCore(ctx context.Context, env windowIndexBuildEnv) (windowI
 	var errMu sync.Mutex
 	var firstErr error
 
-	runErr := env.Items(ctx, tasks.CPU(), total, kindItemsOptions{
+	runErr := env.Items(ctx, windowIndexBuildParallelism(), total, kindItemsOptions{
+		// HEAD's own count: Fixed's ceiling must not narrow HEAD's pool.
+		HeadWorkers: windowIndexBuildConcurrency(),
 		// Label runs in worker goroutines: every counter it reads is atomic.
 		Label: func(i, t int) string {
 			return fmt.Sprintf("Window index: %d/%d files (indexed=%d already=%d errors=%d)",
@@ -283,6 +285,13 @@ func (p *Plugin) runWindowIndexBuild(ctx context.Context, raw json.RawMessage, r
 // and never the sequential default RunItems falls back to.
 func windowIndexBuildConcurrency() int {
 	return max(runtime.NumCPU(), 2)
+}
+
+// windowIndexBuildParallelism is the build's pool (rule R4): HEAD's own count,
+// max(NumCPU, 2), which is not tasks.CPU()'s max(NumCPU, 1) (a single-CPU host
+// ran two workers), so it is a Fixed count, not CPU.
+func windowIndexBuildParallelism() tasks.Parallelism {
+	return tasks.Fixed(windowIndexBuildConcurrency(), "one worker per CPU and never fewer than two, never the sequential default RunItems falls back to")
 }
 
 // windowIndexSizing is the step-3 arithmetic for files files, as an upper

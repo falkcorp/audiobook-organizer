@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/kinds_index_test.go
-// version: 1.1.0
+// version: 1.1.2
 // guid: 37db46af-5d7a-4d7a-9acd-1cd87ae9dd07
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package dedup
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -218,10 +219,12 @@ func indexRows() []kindRow {
 		},
 		{
 			HeadID: "dedup.window-index-build", Title: "Build window-print index",
-			HeadResume: sdk.ResumeRestart, Resume: tasks.ResumeFromZero,
+			HeadResume: sdk.ResumeRestart, Resume: tasks.ResumeContinue,
 			Priority: tasks.PriorityLow, Timeout: 180 * time.Minute,
 			Writes: []ops.Resource{ops.ResFingerprintIndex, ops.ResSettings},
-			Par:    []string{"cpu"}, ParGot: []tasks.Parallelism{tasks.CPU()},
+			Par: []string{fmt.Sprintf("fixed(%d): one worker per CPU and never fewer than two, never the sequential default RunItems falls back to",
+				min(max(runtime.NumCPU(), 2), tasks.MaxFixed))},
+			ParGot:  []tasks.Parallelism{windowIndexBuildParallelism()},
 			HeadKey: "dedup.window-index",
 		},
 	}
@@ -521,14 +524,17 @@ func TestDedupIndex_WindowRefusesModeKeysAndUnwiredDeps(t *testing.T) {
 	require.ErrorContains(t, err, "Index.Store is not set")
 }
 
-func TestDedupIndex_WindowUsesTheCPUPool(t *testing.T) {
+// HEAD passed max(NumCPU, 2) workers (never one), which is not tasks.CPU()'s
+// max(NumCPU, 1): the native pool declares HEAD's count, not CPU.
+func TestDedupIndex_WindowUsesHEADsWorkerCount(t *testing.T) {
 	_, d := newIndexSpy()
 	def := indexNative(d)["window"]
 	h := newKindHost(def, tasks.ModePreview, &sentinelWriter{})
 	var declared []int
 	h.capObserver = func(n int) { declared = append(declared, n) }
 	require.NoError(t, runKindOn(t, def, h, ""))
-	require.Equal(t, []int{tasks.CPU().Workers()}, declared)
+	require.Equal(t, []int{min(max(runtime.NumCPU(), 2), tasks.MaxFixed)}, declared)
+	require.False(t, windowIndexBuildParallelism().UsesCPUBudget(), "HEAD's pool took no CPU slot")
 }
 
 func TestDedupIndex_WindowKindIsTheHeadIDWithTheBooksPrefix(t *testing.T) {

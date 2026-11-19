@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/kinds_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 74d898af-e4c2-4b28-9fc7-5a2b749513d4
 // last-edited: 2026-11-19
 
@@ -51,6 +51,22 @@ func fakeKindDeps(t *testing.T) KindDeps {
 	}
 }
 
+// kindResumeFor is rule R5's ResumePolicy table, written out once here so a
+// definition that drifts from it fails whatever its row says.
+func kindResumeFor(p sdk.ResumePolicy) tasks.ResumePolicy {
+	switch p {
+	case sdk.ResumeRestart:
+		return tasks.ResumeContinue
+	case sdk.ResumeRequeue:
+		return tasks.ResumeFromZero
+	case sdk.ResumeDrop:
+		return tasks.ResumeDrop
+	case sdk.ResumeAsk:
+		return tasks.ResumeAsk
+	}
+	return 0
+}
+
 // kindRow is one definition's expected shape, spelled out literally (rule R8):
 // the native kind is compared with this and HEAD's definition is compared with
 // the same row, so a drift of either fails.
@@ -60,9 +76,9 @@ type kindRow struct {
 	HeadID string
 	// Title is HEAD's DisplayName, Help its Description (rule R5: verbatim).
 	Title string
-	// HeadResume is HEAD's ResumePolicy; Resume the native one (rule R5 and the
-	// F5-11 standing ruling: Restart maps to Continue only if HEAD reads its
-	// checkpoint on restart, else FromZero; Requeue FromZero; Drop Drop; Ask Ask).
+	// HeadResume is HEAD's ResumePolicy; Resume the native one, which must be
+	// kindResumeFor(HeadResume) (rule R5: Restart Continue, Requeue FromZero, Drop
+	// Drop, Ask Ask).
 	HeadResume sdk.ResumePolicy
 	Resume     tasks.ResumePolicy
 	// Priority is the native priority; HEAD's DefaultPriority must map to it.
@@ -159,6 +175,7 @@ func TestDedupKinds_MatchHEADDefs(t *testing.T) {
 			require.Equal(t, r.Title, c.Title)
 			require.Equal(t, r.HeadResume, head.ResumePolicy, "row's HEAD resume is HEAD's")
 			require.Equal(t, r.Resume, c.Resume)
+			require.Equal(t, kindResumeFor(head.ResumePolicy), c.Resume, "HEAD's resume policy maps to the native one by rule R5")
 			require.Equal(t, r.Priority, c.Priority)
 			require.Equal(t, kindHeadPriority(head.DefaultPriority), c.Priority, "HEAD's priority maps to the native one")
 			require.Equal(t, head.Timeout, c.Timeout, "timeout is carried unchanged")
