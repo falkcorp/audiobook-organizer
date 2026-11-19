@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/instances.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 8b6a74f6-b7ad-4baf-bb70-c1f2c5ccb49b
 // last-edited: 2026-11-19
 
@@ -440,7 +440,7 @@ func (m *Migration) metadataInstance(raw json.RawMessage, i int, set secretSet) 
 				continue
 			}
 			to := secretName(ref, field)
-			if _, taken := settings[field]; taken || set[to] {
+			if set[to] {
 				continue // already under the new ID: that one wins
 			}
 			p.carry = append(p.carry, carriedSecret{from: n, to: to, field: field})

@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/gates_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d8a24c71-5e30-4b96-a1f7-0c93e6b2d845
 // last-edited: 2026-11-19
 
@@ -210,6 +210,43 @@ func TestPlan_IsTheRealRunsReport(t *testing.T) {
 	}
 	if d := diff(got, want); d != "" {
 		t.Errorf("Plan's report differs from the real run's:\n%s", d)
+	}
+}
+
+// TestPlan_ReportsAQuarantinedPulledForwardRowOnce: the config group quarantines
+// every torn import_path row when it reads the whole group, and the walk then
+// reaches the next such key. The runner skips it (it is in the shard's written
+// set); Plan must too, or the group runs again over rows that are still there and
+// the plan reports each quarantine twice, unlike the real run.
+func TestPlan_ReportsAQuarantinedPulledForwardRowOnce(t *testing.T) {
+	rows := map[string][]byte{"import_path:7": []byte(`{"id":7,"path":`), "import_path:8": []byte(`{"id":8,"path":`)}
+	r := newRig(t, withRows(rows))
+	fsys := r.seed(t)
+	live := newRig(t, withRows(rows))
+	if _, err := live.runOn(t, crashClone(fsys)); err != nil {
+		t.Fatalf("the real run: %v", err)
+	}
+	var rep *m6.Report
+	if err := r.withStore(t, fsys, func(ctx context.Context, db *storage.DB) error {
+		lr, _ := db.Legacy(cutover.BooksOwner)
+		var err error
+		rep, err = m6.Plan(ctx, lr, r.config())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for key := range rows {
+		count := func(rp *m6.Report) (n int) {
+			for _, e := range rp.Entries() {
+				if e.Kind == "quarantine" && e.ID == key {
+					n++
+				}
+			}
+			return n
+		}
+		if got, want := count(rep), count(live.report); got != 1 || want != 1 {
+			t.Errorf("quarantine entries for %s: plan %d, real run %d, want 1 each", key, got, want)
+		}
 	}
 }
 
