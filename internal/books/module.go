@@ -185,6 +185,10 @@ func (m *booksModule) Manifest() module.Manifest {
 		// only on request, the library folder's contents), run at the boot
 		// that applies a ResetFactory swap (reset_hook.go).
 		ResetHook: m.resetHook(),
+		// Books' config sections (config.go), registered by the kernel at P3
+		// when the config boot is on (F3-07 b); a boot without it never
+		// reads them.
+		Settings: booksSettings(),
 		// No native route yet, so no public one (the gin mount's public
 		// routes are the legacy manifest's Public rows).
 	}

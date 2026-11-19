@@ -1,7 +1,7 @@
 // file: core/kernel/taskconfig.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 5b0c9d52-6f3a-4a8e-9c47-2e1d8b7a4f60
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package kernel
 
@@ -12,7 +12,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -45,15 +47,18 @@ type coreConfig struct {
 	store  *config.Store
 	shared bool
 	tasks  *config.Handle[tasksSettings]
-	// leaves is every key of the core sections by dotted path, for the
+	// leaves is every key of the core sections (and, with the config boot on,
+	// of the enabled modules' sections) by dotted path, for the
 	// schedule-key declaration check (ValidateSchedules' declared function).
 	leaves map[string]cfgLeaf
 }
 
-// cfgLeaf is one key of a core section: whether its type is
-// tasks.ScheduleConfig and, when it is, how to read its current value.
+// cfgLeaf is one key of a core or module section: whether its type is
+// tasks.ScheduleConfig and, when it is, how to read its current value, and
+// the owner its namespace names ("core", or the module ID of modules.<id>).
 type cfgLeaf struct {
 	schedule bool
+	owner    string
 	read     func() tasks.ScheduleConfig
 }
 
@@ -70,7 +75,11 @@ func (k *Kernel) coreConfig() (*coreConfig, error) {
 		var c *coreConfig
 		var err error
 		if cb := k.cfgBoot; cb != nil {
-			c, err = coreConfigOver(cb.store, cb.handles)
+			// The core sections' handles and the enabled modules' declared
+			// sections (P3's live handles), so a module kind's schedule key
+			// is declared by the section its module registered: a module's
+			// settings arrive with Manifest.Settings (F3-07 b).
+			c, err = coreConfigOver(cb.store, slices.Concat(cb.handles, slices.Collect(maps.Values(k.settingHandles))))
 			if c != nil {
 				c.shared = true
 			}
@@ -108,8 +117,9 @@ func newCoreConfig(appID string, cache *config.SectionCache) (*coreConfig, error
 	return c, nil
 }
 
-// coreConfigOver is the core config over st and the handles of the core
-// sections registered on it: the tasks section and every key of every section.
+// coreConfigOver is the core config over st and the handles of the sections
+// registered on it (core's, and with the config boot on the enabled modules'):
+// the tasks section and every key of every section.
 func coreConfigOver(st *config.Store, handles []any) (*coreConfig, error) {
 	c := &coreConfig{store: st, leaves: map[string]cfgLeaf{}}
 	for _, h := range handles {
@@ -140,18 +150,19 @@ func cfgWalkLeaves(out map[string]cfgLeaf, handle any) {
 	if !ok {
 		return
 	}
+	owner := leafOwner(string(p.Path()))
 	get := reflect.ValueOf(handle).MethodByName("Get")
 	if !get.IsValid() {
 		return
 	}
 	root := func() reflect.Value { return get.Call(nil)[0].Elem() }
-	cfgWalkType(out, string(p.Path()), root, nil, reflect.TypeOf(root().Interface()))
+	cfgWalkType(out, owner, string(p.Path()), root, nil, reflect.TypeOf(root().Interface()))
 }
 
 // cfgWalkType recurses over t (a section's value type) and records its keys.
-func cfgWalkType(out map[string]cfgLeaf, base string, root func() reflect.Value, idx []int, t reflect.Type) {
+func cfgWalkType(out map[string]cfgLeaf, owner, base string, root func() reflect.Value, idx []int, t reflect.Type) {
 	if t.Kind() != reflect.Struct || t == reflect.TypeFor[tasks.ScheduleConfig]() || selfEncoding(t) {
-		leaf := cfgLeaf{}
+		leaf := cfgLeaf{owner: owner}
 		if t == reflect.TypeFor[tasks.ScheduleConfig]() {
 			leaf.schedule = true
 			leaf.read = func() tasks.ScheduleConfig {
@@ -174,7 +185,7 @@ func cfgWalkType(out map[string]cfgLeaf, base string, root func() reflect.Value,
 		if name == "" {
 			name = f.Name
 		}
-		cfgWalkType(out, base+"."+name, root, append(append([]int(nil), idx...), i), f.Type)
+		cfgWalkType(out, owner, base+"."+name, root, append(append([]int(nil), idx...), i), f.Type)
 	}
 }
 
@@ -184,17 +195,29 @@ func selfEncoding(t reflect.Type) bool {
 	return t.Implements(reflect.TypeFor[json.Marshaler]()) || reflect.PointerTo(t).Implements(reflect.TypeFor[json.Marshaler]())
 }
 
+// leafOwner is the owner a section path names: the module ID of
+// modules.<id>[.…], else "core". It is schedspec.KeyOwner's reading of a key's
+// namespace, applied to the section the key lives in.
+func leafOwner(path string) string {
+	if rest, ok := strings.CutPrefix(path, "modules."); ok {
+		id, _, _ := strings.Cut(rest, ".")
+		return id
+	}
+	return "core"
+}
+
 // declared is scheduler.ValidateSchedules' declaration oracle: whether key is a
-// declared core key, whether its type is tasks.ScheduleConfig, and its owner.
-// Only core's keys are declared at F2: a module's settings arrive with
-// Manifest.Settings (F3), so a modules.<id>... schedule key is not declared
-// and ValidateSchedules refuses it.
+// declared key, whether its type is tasks.ScheduleConfig, and its owner. With
+// the config boot off only core's keys are declared (no module section is
+// registered, so a modules.<id>... schedule key is refused); with it on the
+// enabled modules' Manifest.Settings sections are declared too, each owned by
+// its module ID.
 func (c *coreConfig) declared(key string) (isSchedule bool, owner string, ok bool) {
 	l, ok := c.leaves[key]
 	if !ok {
 		return false, "", false
 	}
-	return l.schedule, "core", true
+	return l.schedule, l.owner, true
 }
 
 // schedule is scheduler.Config.Schedule: the current value of a schedule key.

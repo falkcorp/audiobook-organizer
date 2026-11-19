@@ -1,5 +1,5 @@
 // file: core/kernel/config_boot_test.go
-// version: 1.0.6
+// version: 1.1.0
 // guid: d2618bbb-991d-4090-bcf6-a00ef3f98c75
 // last-edited: 2026-11-19
 
@@ -902,4 +902,90 @@ func TestResolveStorage_RefusesTwoStores(t *testing.T) {
 	if _, _, err := ResolveStorage(h.ctx, c, ""); err == nil || !strings.Contains(err.Error(), "different stores") {
 		t.Fatalf("ResolveStorage with two stores = %v", err)
 	}
+}
+
+// rooftopSchedules and rooftops are a module's own section holding schedule
+// keys: modules.gotham.tasks.schedules.patrol is a tasks.ScheduleConfig,
+// ...schedules.note is a string.
+type rooftopSchedules struct {
+	Patrol tasks.ScheduleConfig `json:"patrol"`
+	Note   string               `json:"note"`
+}
+
+type rooftops struct {
+	Schedules rooftopSchedules `json:"schedules"`
+}
+
+var rooftopSection = config.Define("modules.gotham.tasks", rooftops{
+	Schedules: rooftopSchedules{Patrol: tasks.ScheduleConfig{Enabled: true, Every: dur(time.Hour)}, Note: "signal"},
+})
+
+// TestScheduleKeys_ModuleKeysDeclared (F3-07 b, the a5 seam): with the config
+// boot on, a module kind's ScheduleFromConfig key is declared by the section
+// its own Manifest.Settings registered, owned by the module ID, so P7's
+// ValidateSchedules accepts it and the scheduler reads its stored value. A key
+// no section declares, a key of a non-schedule type, and a key in another
+// module's namespace are still refused, and with the gate off no module
+// section is registered, so the key stays refused (ABO's boot).
+func TestScheduleKeys_ModuleKeysDeclared(t *testing.T) {
+	const patrolKey = "modules.gotham.tasks.schedules.patrol"
+	withKey := func(key string) tasks.Definition {
+		return patrol(func(s *tasks.TaskSpec[struct{}, struct{}]) { s.Schedule = tasks.ScheduleFromConfig(key) })
+	}
+	gothamWith := func(key string) testModule {
+		return gotham([]tasks.Kind{patrolKind}, withKey(key)).with(func(m *module.Manifest) {
+			m.Settings = []module.SettingsSection{module.Settings(rooftopSection)}
+		})
+	}
+	boot := func(t *testing.T, key string) (*Kernel, error) {
+		h := newSwapHost(t)
+		c := h.gatedConfig(nil)
+		c.Modules = append(c.Modules, gothamWith(key))
+		return h.boot(c)
+	}
+
+	t.Run("a declared schedule key is accepted and read", func(t *testing.T) {
+		k, err := boot(t, patrolKey)
+		if err != nil {
+			t.Fatalf("New = %v, want the module's declared key accepted", err)
+		}
+		cfg, err := k.coreConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if isSched, owner, ok := cfg.declared(patrolKey); !ok || !isSched || owner != "gotham" {
+			t.Errorf("declared(%s) = %v %q %v, want a schedule key owned by gotham", patrolKey, isSched, owner, ok)
+		}
+		if isSched, owner, ok := cfg.declared("modules.gotham.tasks.schedules.note"); !ok || isSched || owner != "gotham" {
+			t.Errorf("declared(note) = %v %q %v, want a declared non-schedule key owned by gotham", isSched, owner, ok)
+		}
+		got, err := cfg.schedule(patrolKey)
+		if err != nil || !got.Enabled || time.Duration(got.Every) != time.Hour {
+			t.Errorf("schedule(%s) = %+v, %v; want the section's default, every hour", patrolKey, got, err)
+		}
+		if isSched, owner, ok := cfg.declared("core.backup.schedules.create"); !ok || !isSched || owner != "core" {
+			t.Errorf("a core key = %v %q %v, want core's", isSched, owner, ok)
+		}
+	})
+	for _, tc := range []struct{ name, key, want string }{
+		{"a key no section declares", "modules.gotham.tasks.schedules.stakeout", "is not declared"},
+		{"a declared key of a non-schedule type", "modules.gotham.tasks.schedules.note", "not of type tasks.ScheduleConfig"},
+		{"a key in another module's namespace", "modules.arkham.tasks.schedules.patrol", "belongs to module arkham"},
+	} {
+		t.Run(tc.name+" is refused", func(t *testing.T) {
+			_, err := boot(t, tc.key)
+			if !hasKind(err, module.ProblemInvalidRegistration) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("New = %v, want an invalid registration naming %q", err, tc.want)
+			}
+		})
+	}
+	t.Run("the gate off declares no module key", func(t *testing.T) {
+		h := newSwapHost(t)
+		c := h.config(nil)
+		c.Modules = append(c.Modules, gothamWith(patrolKey))
+		_, err := New(h.ctx, c)
+		if !hasKind(err, module.ProblemInvalidRegistration) || !strings.Contains(err.Error(), "is not declared") {
+			t.Fatalf("New = %v, want the key refused as undeclared", err)
+		}
+	})
 }
