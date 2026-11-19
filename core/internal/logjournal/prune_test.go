@@ -1,5 +1,5 @@
 // file: core/internal/logjournal/prune_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 740b55f6-69cc-4f61-abda-08b91342f365
 // last-edited: 2026-11-18
 
@@ -210,9 +210,9 @@ func TestJournal_PruneNegativeRetentionKeepsEverything(t *testing.T) {
 	}
 }
 
-// A retention past the maximum overflowed time.Duration arithmetic into a
-// cutoff in the future, which prunes the whole journal. It now fails the run
-// before the store is touched.
+// A retention past the maximum fails the run before the store is touched. Day
+// counts near the int range wrap time.AddDate to a cutoff at or after now,
+// which would prune the whole journal.
 func TestJournal_PruneRefusesRetentionPastTheMaximum(t *testing.T) {
 	for _, days := range []int{logjournal.MaxRetentionDays + 1, 106_752, 1 << 40, math.MaxInt} {
 		s := &scriptStore{steps: []step{{10_000, true, nil}}}

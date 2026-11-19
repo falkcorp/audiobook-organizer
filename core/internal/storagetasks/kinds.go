@@ -1,5 +1,5 @@
 // file: core/internal/storagetasks/kinds.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 451daab0-74d7-4793-a071-0a041b865144
 // last-edited: 2026-11-18
 
@@ -106,14 +106,11 @@ type CensusResult struct {
 	Bytes      uint64 `json:"bytes"`
 }
 
-// Kinds returns the definitions in registration order: compact, then census.
+// CompactTask returns core.storage.compact over s. A nil s yields a definition
+// whose Run is nil, which tasks.Problems reports, so registration fails closed.
 //
 //tasklint:constructor the kernel passes the result to Registrar.Tasks when the tasks flip F5 registers core kinds (F5-18); this package registers nothing
-func Kinds(s Surface, sink CensusSink, o Options) []tasks.Definition {
-	return []tasks.Definition{compactKind(s, o), censusKind(s, sink, o)}
-}
-
-func compactKind(s Surface, o Options) tasks.Definition {
+func CompactTask(s Surface, o Options) tasks.Definition {
 	var run func(rc *tasks.RC, _ CompactParams) (CompactResult, error)
 	if s != nil {
 		run = func(rc *tasks.RC, _ CompactParams) (CompactResult, error) {
@@ -181,7 +178,11 @@ func (r runReporter) Log(level slog.Level, message string, attrs ...slog.Attr) e
 
 func (runReporter) SetCurrentItem(string) {}
 
-func censusKind(s Surface, sink CensusSink, o Options) tasks.Definition {
+// CensusTask returns core.storage.census over s, recording into sink. A nil s
+// or sink yields a definition with no body, which registration refuses.
+//
+//tasklint:constructor the kernel passes the result to Registrar.Tasks when the tasks flip F5 registers core kinds (F5-18); this package registers nothing
+func CensusTask(s Surface, sink CensusSink, o Options) tasks.Definition {
 	var run func(rc *tasks.RC, _ CensusParams) (CensusResult, error)
 	if s != nil && sink != nil {
 		now := o.Now
@@ -269,12 +270,13 @@ type CensusStore struct{ ks storage.Keyspace }
 func NewCensusStore(ks storage.Keyspace) *CensusStore { return &CensusStore{ks: ks} }
 
 // Put overwrites the latest census.
-func (c *CensusStore) Put(ctx context.Context, rec Census) error {
+func (c *CensusStore) Put(ctx context.Context, rec Census) (err error) {
 	raw, err := censusCodec().Encode(rec)
 	if err != nil {
 		return err
 	}
 	b := c.ks.NewBatch()
+	defer func() { err = errors.Join(err, b.Close()) }() // releases the batch when Set fails; a no-op after Commit
 	if err := b.Set(censusKey(), raw); err != nil {
 		return err
 	}

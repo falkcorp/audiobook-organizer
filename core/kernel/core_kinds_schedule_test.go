@@ -1,5 +1,5 @@
 // file: core/kernel/core_kinds_schedule_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b2f06d97-3c41-4a58-8e7d-61a9c0f3e254
 // last-edited: 2026-11-18
 
@@ -31,7 +31,9 @@ func TestCoreKinds_ScheduleKeysDeclared(t *testing.T) {
 		executor.PruneDefinition(nil, nil, nil),
 		logjournal.PruneDefinition(nil, nil, nil),
 	}
-	defs = append(defs, storagetasks.Kinds(nil, nil, storagetasks.Options{})...)
+	defs = append(defs,
+		storagetasks.CompactTask(nil, storagetasks.Options{}),
+		storagetasks.CensusTask(nil, nil, storagetasks.Options{}))
 	seen := 0
 	for _, d := range defs {
 		s := tasks.CommonOf(d).Schedule
