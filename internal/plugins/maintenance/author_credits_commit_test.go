@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_credits_commit_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 8d2f6a40-1b73-4c95-a6e8-35f0c9b24d71
 // last-edited: 2026-11-19
 
@@ -960,4 +960,41 @@ func TestRelinkJournal_AFailedCreationVoidsItsRow(t *testing.T) {
 	_, credited := lastJournal(f, "bk-t", ChangeTypeTitleRelinkCredits)
 	require.False(t, credited, "a credits row was journaled for a book whose author was never created")
 	wantSummary(t, summary, "relink-failed=1 ", "relink-new-authors=0 ", "relink-journal-rows=0 ")
+}
+
+// A book with no primary author at the read and none at the commit is not
+// "changed": the compare-and-set treats nil and nil as the same primary, so the
+// junk credit is removed and the book keeps its co-author and no primary.
+func TestUnlink_ABookWithNoPrimaryUnlinksAndStaysWithoutOne(t *testing.T) {
+	s, junk, keep, _, book := unlinkWorld(t)
+	_, err := s.ModifyBook(book, func(b *database.Book) error {
+		b.AuthorID = nil
+		b.Author = nil
+		return nil
+	})
+	require.NoError(t, err)
+
+	n, held, lockHeld, err := runUnlink(t, s, junk)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	require.Empty(t, held)
+	require.Empty(t, lockHeld)
+	require.Equal(t, []int{keep.ID}, creditIDs(t, s, book))
+	got, err := s.GetBookByID(book)
+	require.NoError(t, err)
+	require.Nil(t, got.AuthorID, "the unlink invented a primary")
+}
+
+// A preview that cannot read a book's locks reports the merge as failed, as the
+// apply does; it is not counted held, and nothing is written.
+func TestAuthorStripMerge_PreviewCountsAnUnreadableLockAsFailedNotHeld(t *testing.T) {
+	w := newHeldMergeWorld(t, "001-147 Selina Kyle", "Selina Kyle", 1)
+
+	summary := runStripMergePreview(t, splitLockStore{PebbleStore: w.st, unreadable: map[string]bool{w.locked: true}})
+
+	wantSummary(t, summary, "failed=1 ", "merges-held-user-locked=0 ", "merged=0 ", "books-touched=0 ")
+	w.requireBookAsItWas(t, w.open)
+	w.requireBookAsItWas(t, w.locked)
+	w.requireFromKept(t)
 }
