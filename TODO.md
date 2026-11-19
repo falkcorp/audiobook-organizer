@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.48 -->
+<!-- version: 10.78.49 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -690,7 +690,7 @@ into one of the curated sections below, is a normal direct edit.
         `VolumeName(cleaned)+sep`. Run CodeQL locally (2.27.4, go-queries 1.6.14, `TaintedPath`
         and `ZipSlip`) on the whole module before and after. Then remove those two
         restatements and the comments that explain them.
-      - **Callers.** `CleanAbsolutePath`, 11 production calls (`file_provenance_export.go` left this list when its ledger path was confined to the report directory on 2026-11-18):
+      - **Callers.** `CleanAbsolutePath`, 11 production calls (`file_provenance_export.go` left this list when its ledger path was confined to its own `{root_dir}/.ledger` directory on 2026-11-18):
         - `internal/mediainfo/mediainfo.go`
         - `internal/plugins/maintenance/duration_backfill_unknown_rows.go` (2)
         - `internal/plugins/maintenance/folder_books_fixer.go`
@@ -2153,8 +2153,9 @@ into one of the curated sections below, is a normal direct edit.
       subdirectories), every report is written through
       `library.WriteReportFile`, which opens it relative to a handle on the
       directory without following links and refuses a file that is not a regular
-      file owned by this user with one link, and `file-provenance-export`'s
-      ledger is confined and opened the same way)
+      file owned by this user with one link, `file-provenance-export`'s ledger
+      is confined to its own `{root_dir}/.ledger` and opened the same way, and
+      `backfill-file-hashes` opens its report through the same helper)
       `maintenance.book-shape-report`'s `reportPath`
       param is used as the report destination with no containment check
       (`resolveReportPath`, `internal/plugins/maintenance/report_path.go`), so a

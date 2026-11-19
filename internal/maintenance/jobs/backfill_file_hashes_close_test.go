@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_close_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 0c6d4a82-91e7-4b35-8f2a-d3a7b5e1c649
 // last-edited: 2026-11-09
 
@@ -18,6 +18,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
+	"github.com/falkcorp/mediacore/library"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -47,8 +48,8 @@ func TestBackfillFileHashes_CloseFailureAfterSuccessFailsTheWholeRun(t *testing.
 	config.AppConfig.RootDir = root
 	t.Cleanup(func() { config.AppConfig.RootDir = prev })
 	prevOpen := hbOpenFile
-	hbOpenFile = func(name string, flag int, perm os.FileMode) (hbFile, error) {
-		f, err := prevOpen(name, flag, perm)
+	hbOpenFile = func(name string, mode library.ReportOpenMode, perm os.FileMode) (hbFile, error) {
+		f, err := prevOpen(name, mode, perm)
 		if err != nil {
 			return nil, err
 		}
@@ -101,8 +102,8 @@ func TestBackfillFileHashes_ReportWriteFailureStopsTheRun(t *testing.T) {
 	config.AppConfig.RootDir = root
 	t.Cleanup(func() { config.AppConfig.RootDir = prev })
 	prevOpen := hbOpenFile
-	hbOpenFile = func(name string, flag int, perm os.FileMode) (hbFile, error) {
-		f, err := prevOpen(name, flag, perm)
+	hbOpenFile = func(name string, mode library.ReportOpenMode, perm os.FileMode) (hbFile, error) {
+		f, err := prevOpen(name, mode, perm)
 		if err != nil {
 			return nil, err
 		}
@@ -160,6 +161,79 @@ func TestOpenHashBackfillReport_RefusesASymlink(t *testing.T) {
 	}
 }
 
+// A fresh run opens the report without truncating it (the open vets it, then the
+// run empties it after its own check); a resumed run opens it read-write without
+// truncating (it reads the earlier rows back and appends). Pinned through the
+// seam so a swap of the two cannot slip through: they differ only in whether the
+// descriptor can be read, which a fresh run never needs.
+func TestOpenHashBackfillReport_OpensWithTheModeEachRunNeeds(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		var got []library.ReportOpenMode
+		prev := hbOpenFile
+		hbOpenFile = func(name string, mode library.ReportOpenMode, perm os.FileMode) (hbFile, error) {
+			got = append(got, mode)
+			return prev(name, mode, perm)
+		}
+		path := filepath.Join(t.TempDir(), "report.tsv")
+		rep, _, _, err := openHashBackfillReport(path, existing)
+		hbOpenFile = prev
+		require.NoError(t, err, "existing=%v", existing)
+		require.NotNil(t, rep)
+		_ = rep.f.Close()
+		want := library.ReportTouch
+		if existing {
+			want = library.ReportReadAppend
+		}
+		assert.Equal(t, []library.ReportOpenMode{want}, got, "existing=%v", existing)
+	}
+}
+
+// A hard link to another file is not a symlink, so a bare O_NOFOLLOW open lets it
+// through and a resumed run would then trim and append to that other file (it is
+// opened read-write). The open refuses it, for a resumable report and a fresh one,
+// and the file keeps its bytes (a fresh run must not empty it before refusing).
+func TestOpenHashBackfillReport_RefusesAHardLinkAndLeavesItIntact(t *testing.T) {
+	for _, existing := range []bool{true, false} {
+		dir := t.TempDir()
+		victim := filepath.Join(dir, "precious.txt")
+		require.NoError(t, os.WriteFile(victim, []byte("precious"), 0o600))
+		link := filepath.Join(dir, "report.tsv")
+		if err := os.Link(victim, link); err != nil {
+			t.Skipf("hard links are not available here: %v", err)
+		}
+
+		rep, _, _, err := openHashBackfillReport(link, existing)
+
+		require.Error(t, err, "existing=%v", existing)
+		assert.ErrorIs(t, err, library.ErrReportFileUnsafe, "existing=%v", existing)
+		assert.Nil(t, rep)
+		for _, p := range []string{victim, link} {
+			got, rerr := os.ReadFile(p)
+			require.NoError(t, rerr)
+			assert.Equal(t, "precious", string(got), "%s existing=%v", p, existing)
+		}
+	}
+}
+
+// The default open really is the confined one: a report path whose DIRECTORY is a
+// symlink is refused, which O_NOFOLLOW on the last component alone would follow.
+func TestOpenHashBackfillReport_RefusesAReportDirectoryThatIsASymlink(t *testing.T) {
+	for _, existing := range []bool{true, false} {
+		base := t.TempDir()
+		real := filepath.Join(base, "real")
+		require.NoError(t, os.Mkdir(real, 0o755))
+		link := filepath.Join(base, "link")
+		require.NoError(t, os.Symlink(real, link))
+
+		rep, _, _, err := openHashBackfillReport(filepath.Join(link, "report.tsv"), existing)
+
+		require.Error(t, err, "existing=%v", existing)
+		assert.Nil(t, rep)
+		_, statErr := os.Stat(filepath.Join(real, "report.tsv"))
+		assert.True(t, os.IsNotExist(statErr), "a report was created through the symlinked directory (existing=%v)", existing)
+	}
+}
+
 // foreignOwnerFile reports a different owner than this process, the way a report
 // file another user made would.
 type foreignOwnerFile struct{ hbFile }
@@ -192,8 +266,8 @@ func (f notRegularFile) Stat() (os.FileInfo, error) {
 func hbWithOpenWrapper(t *testing.T, wrap func(hbFile) hbFile) {
 	t.Helper()
 	prev := hbOpenFile
-	hbOpenFile = func(name string, flag int, perm os.FileMode) (hbFile, error) {
-		f, err := prev(name, flag, perm)
+	hbOpenFile = func(name string, mode library.ReportOpenMode, perm os.FileMode) (hbFile, error) {
+		f, err := prev(name, mode, perm)
 		if err != nil {
 			return nil, err
 		}

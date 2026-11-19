@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_provenance_export_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: d61df6f5-c2e0-47ab-b028-44d97b64001c
 // last-edited: 2026-11-18
 //
@@ -30,14 +30,16 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
-// exportPlugin is a plugin over prov whose library root is a fresh temp dir, and
-// the ledger path the export is allowed to write there: a file directly in
-// {root}/.reports, the only place the op will write.
+// exportPlugin is a plugin over prov whose library root is a fresh temp dir with
+// library content in it (the export refuses an empty root), and the ledger path
+// the export is allowed to write there: a file directly in {root}/.ledger, the
+// only place the op will write.
 func exportPlugin(t *testing.T, prov database.FileProvenanceStore) (*Plugin, string) {
 	t.Helper()
 	root := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(root, ".reports"), 0o755))
-	return New(provDeps{fakeDeps: fakeDeps{root: root}, prov: prov}), filepath.Join(root, ".reports", "ledger.jsonl")
+	require.NoError(t, os.Mkdir(filepath.Join(root, "Gotham"), 0o755))
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".ledger"), 0o755))
+	return New(provDeps{fakeDeps: fakeDeps{root: root}, prov: prov}), filepath.Join(root, ".ledger", "ledger.jsonl")
 }
 
 func newExportFixture(t *testing.T) (*Plugin, *database.PebbleStore, string) {
@@ -138,9 +140,9 @@ func TestFileProvenanceExportRequiresAPath(t *testing.T) {
 	assert.Contains(t, err.Error(), "path")
 }
 
-// The ledger is held to the same rule as every report: a file directly in
-// {root_dir}/.reports. A bare name is that file; a name with a directory in it,
-// traversal, a path anywhere else, and a symlink that leads out are refused, and
+// The ledger is confined to its own directory, {root_dir}/.ledger: a bare name is
+// a file there; a name with a directory in it, traversal, a path anywhere else
+// (the report directory included) and a symlink that leads out are refused, and
 // nothing is created where they pointed. Refusal comes before the ledger is read,
 // so a rejected apply moves no cursor.
 func TestFileProvenanceExportConfinesThePathToTheReportDir(t *testing.T) {
@@ -148,15 +150,17 @@ func TestFileProvenanceExportConfinesThePathToTheReportDir(t *testing.T) {
 	seedEvents(t, store, 2)
 	root := filepath.Dir(filepath.Dir(out))
 	outside := t.TempDir()
-	require.NoError(t, os.Symlink(outside, filepath.Join(root, ".reports", "linked")))
+	require.NoError(t, os.Symlink(outside, filepath.Join(root, ".ledger", "linked")))
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".reports"), 0o755))
 
 	for name, bad := range map[string]string{
 		"outside the root":           filepath.Join(outside, "ledger.jsonl"),
-		"in the root, not .reports":  filepath.Join(root, "ledger.jsonl"),
+		"in the root, not .ledger":   filepath.Join(root, "ledger.jsonl"),
+		"in the report directory":    filepath.Join(root, ".reports", "ledger.jsonl"),
 		"traversal":                  filepath.Join("..", "ledger.jsonl"),
 		"subdirectory":               filepath.Join("sub", "ledger.jsonl"),
 		"through a symlinked parent": filepath.Join("linked", "ledger.jsonl"),
-		"the report directory":       filepath.Join(root, ".reports"),
+		"the ledger directory":       filepath.Join(root, ".ledger"),
 	} {
 		raw, mErr := json.Marshal(map[string]any{"path": bad, "apply": true})
 		require.NoError(t, mErr)
@@ -170,7 +174,7 @@ func TestFileProvenanceExportConfinesThePathToTheReportDir(t *testing.T) {
 	require.NoError(t, cErr)
 	assert.Zero(t, cur, "a refused path moved the cursor")
 
-	// The bare name lands in the report directory.
+	// The bare name lands in the ledger directory.
 	res := runExport(t, p, map[string]any{"path": "ledger.jsonl", "apply": true})
 	assert.Equal(t, 2, res.Written)
 	_, statErr := os.Stat(out)
@@ -246,7 +250,87 @@ func TestFileProvenanceExportOpenRefusesALinkPlantedAfterTheResolve(t *testing.T
 	assert.Equal(t, "keep me", string(v))
 }
 
-// With no root_dir there is no report directory to keep the ledger inside.
+// A report op that names the ledger file cannot touch it: the report writers
+// resolve into {root}/.reports, the ledger lives in {root}/.ledger, and no spelling
+// of a report path reaches across. Every report op that truncates is pointed at the
+// ledger's name, by bare name and by absolute path to the ledger, and the ledger's
+// bytes are the same afterwards.
+func TestFileProvenanceExportLedgerIsOutOfReachOfReportOps(t *testing.T) {
+	p, store, out := newExportFixture(t)
+	seedEvents(t, store, 2)
+	res := runExport(t, p, map[string]any{"path": "ledger.jsonl", "apply": true})
+	require.Equal(t, 2, res.Written)
+	before, err := os.ReadFile(out)
+	require.NoError(t, err)
+	require.NotEmpty(t, before)
+
+	root := filepath.Dir(filepath.Dir(out))
+	reports := filepath.Join(root, ".reports")
+	opStore, err := database.NewPebbleStoreInMemory(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = opStore.Close() })
+	opStore.WaitForWarmup()
+	rp := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: opStore}, root: root}}
+	for _, c := range reportOpCases() {
+		// By bare name the op writes {root}/.reports/ledger.jsonl, a different file.
+		_ = c.run(rp, context.Background(), c.raw(t, false, map[string]any{c.key(): "ledger.jsonl"}), &fakeReporter{})
+		// By the ledger's own path it is refused outright.
+		err := c.run(rp, context.Background(), c.raw(t, true, map[string]any{c.key(): out}), &fakeReporter{})
+		require.Error(t, err, "%s: the ledger's path must be refused as a report path", c.name)
+
+		after, rerr := os.ReadFile(out)
+		require.NoError(t, rerr)
+		require.Equal(t, string(before), string(after), "%s changed the ledger", c.name)
+	}
+	// At least one op wrote a report under the ledger's name, in the report directory.
+	_, statErr := os.Stat(filepath.Join(reports, "ledger.jsonl"))
+	require.NoError(t, statErr, "the bare name should have landed in .reports")
+	same := os.SameFile(mustStat(t, out), mustStat(t, filepath.Join(reports, "ledger.jsonl")))
+	require.False(t, same, "the report and the ledger are the same file")
+}
+
+func mustStat(t *testing.T, path string) os.FileInfo {
+	t.Helper()
+	fi, err := os.Stat(path)
+	require.NoError(t, err)
+	return fi
+}
+
+// The ledger is written to the library volume, so the volume must be there. An
+// unmounted share leaves an empty (or dot-only) mountpoint; the export refuses it,
+// on a preview too, and creates nothing in it.
+func TestFileProvenanceExportRefusesAnUnmountedLibraryRoot(t *testing.T) {
+	store, err := database.NewPebbleStoreInMemory(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	seedEvents(t, store, 2)
+	root := t.TempDir() // empty: the share is not mounted
+	p := New(provDeps{fakeDeps: fakeDeps{root: root}, prov: store})
+
+	for _, apply := range []bool{true, false} {
+		raw, mErr := json.Marshal(map[string]any{"path": "ledger.jsonl", "apply": apply})
+		require.NoError(t, mErr)
+		_, err = exportFileProvenanceHEAD(p, context.Background(), raw)
+		require.Error(t, err, "apply=%v", apply)
+		assert.Contains(t, err.Error(), "not mounted", "apply=%v", apply)
+	}
+	entries, err := os.ReadDir(root)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "the export created something on an unmounted root")
+	cur, cErr := store.GetFileProvExportCursor()
+	require.NoError(t, cErr)
+	assert.Zero(t, cur)
+
+	// A mountpoint that holds only dot-prefixed state (a .reports from an earlier
+	// run) is still not mounted.
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".reports"), 0o755))
+	raw, mErr := json.Marshal(map[string]any{"path": "ledger.jsonl", "apply": true})
+	require.NoError(t, mErr)
+	_, err = exportFileProvenanceHEAD(p, context.Background(), raw)
+	require.Error(t, err)
+}
+
+// With no root_dir there is no ledger directory to keep the ledger inside.
 func TestFileProvenanceExportNeedsARootDir(t *testing.T) {
 	store, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)

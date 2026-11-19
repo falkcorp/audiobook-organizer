@@ -1,5 +1,7 @@
+//go:build unix
+
 // file: core/library/reportfile_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d0c7b0e-3f4a-4b7e-9a52-6c1e8d2f7a14
 // last-edited: 2026-11-18
 
@@ -14,6 +16,9 @@ import (
 	"testing"
 	"time"
 )
+
+// allReportModes is every ReportOpenMode: each one must vet the file the same way.
+var allReportModes = []ReportOpenMode{ReportTruncate, ReportAppend, ReportTouch, ReportReadAppend}
 
 // reportsDirFor makes a library root with a prepared {root}/.reports (made the
 // way an op makes it, by ReportPathNotify) and returns the report directory.
@@ -112,7 +117,7 @@ func TestWriteReportFile_RefusesAPlantedSymlink(t *testing.T) {
 		{"to a file inside the report directory", inside},
 	}
 	for _, tc := range cases {
-		for _, mode := range []ReportOpenMode{ReportTruncate, ReportAppend, ReportTouch} {
+		for _, mode := range allReportModes {
 			t.Run(tc.name, func(t *testing.T) {
 				link := filepath.Join(reports, "link.tsv")
 				_ = os.Remove(link)
@@ -144,7 +149,7 @@ func TestWriteReportFile_RefusesAHardLinkAndLeavesTheFileIntact(t *testing.T) {
 	if err := os.Link(victim, link); err != nil {
 		t.Skipf("hard links are not available here: %v", err)
 	}
-	for _, mode := range []ReportOpenMode{ReportTruncate, ReportAppend, ReportTouch} {
+	for _, mode := range allReportModes {
 		f, err := OpenReportFile(link, FileMode, mode)
 		if f != nil {
 			f.Close()
@@ -390,4 +395,216 @@ func TestReportPathNotify_RefusesAnUnwritableExistingReportUpFront(t *testing.T)
 		t.Fatalf("the default path must be vetted too, got %q", got)
 	}
 	mustUnchanged(t, victim, "keep me")
+}
+
+// ReportReadAppend opens for reading and writing at chosen positions, never
+// truncates, and creates when absent: what a job needs to read its earlier report
+// back, cut off a half-written last line and carry on.
+func TestOpenReportFile_ReadAppendReadsSeeksAndNeverTruncates(t *testing.T) {
+	reports := reportsDirFor(t)
+	path := filepath.Join(reports, "resume.tsv")
+	if err := os.WriteFile(path, []byte("row1\nrow2\npartial"), FileMode); err != nil {
+		t.Fatal(err)
+	}
+	f, err := OpenReportFile(path, FileMode, ReportReadAppend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 64)
+	n, err := f.Read(buf)
+	if err != nil || string(buf[:n]) != "row1\nrow2\npartial" {
+		t.Fatalf("could not read the earlier report back: %q %v", buf[:n], err)
+	}
+	if err := f.Truncate(10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Seek(10, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("row3\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	mustUnchanged(t, path, "row1\nrow2\nrow3\n")
+
+	// It is not an append-mode descriptor: a positioned write over earlier bytes
+	// works (O_APPEND would make WriteAt fail, and a Seek would be ignored).
+	w, err := OpenReportFile(path, FileMode, ReportReadAppend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.WriteAt([]byte("ROW1"), 0); err != nil {
+		t.Fatalf("ReportReadAppend must allow a positioned write: %v", err)
+	}
+	w.Close()
+	mustUnchanged(t, path, "ROW1\nrow2\nrow3\n")
+	if err := os.WriteFile(path, []byte("row1\nrow2\nrow3\n"), FileMode); err != nil {
+		t.Fatal(err)
+	}
+
+	// Opening again does not empty it, and a fresh name is created empty.
+	g, err := OpenReportFile(path, FileMode, ReportReadAppend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.Close()
+	mustUnchanged(t, path, "row1\nrow2\nrow3\n")
+	fresh := filepath.Join(reports, "fresh-resume.tsv")
+	h, err := OpenReportFile(fresh, FileMode, ReportReadAppend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Close()
+	if st, err := os.Stat(fresh); err != nil || st.Size() != 0 || !st.Mode().IsRegular() {
+		t.Fatalf("a missing report must be created empty: %v", err)
+	}
+}
+
+// ReportReadAppend is vetted like the others: a hard link to another file is
+// refused with that file's bytes intact (O_RDWR, so a vetting after a truncating
+// open would be too late), and a directory at the name is refused.
+func TestOpenReportFile_ReadAppendRefusesALinkAndADirectory(t *testing.T) {
+	reports := reportsDirFor(t)
+	victim := victimFile(t)
+	hard := filepath.Join(reports, "hard.tsv")
+	if err := os.Link(victim, hard); err != nil {
+		t.Skipf("hard links are not available here: %v", err)
+	}
+	f, err := OpenReportFile(hard, FileMode, ReportReadAppend)
+	if f != nil {
+		f.Close()
+	}
+	mustRefuse(t, err, "hard links")
+	sym := filepath.Join(reports, "sym.tsv")
+	if err := os.Symlink(victim, sym); err != nil {
+		t.Fatal(err)
+	}
+	f, err = OpenReportFile(sym, FileMode, ReportReadAppend)
+	if f != nil {
+		f.Close()
+	}
+	mustRefuse(t, err, "symlink")
+	dir := filepath.Join(reports, "adir")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err = OpenReportFile(dir, FileMode, ReportReadAppend)
+	if f != nil {
+		f.Close()
+	}
+	if err == nil {
+		t.Fatal("a directory at the report name was opened")
+	}
+	mustUnchanged(t, victim, "keep me")
+}
+
+// The ledger has a directory of its own. A path in .reports is refused as a
+// ledger path, a path in .ledger is refused as a report path, and a bare name goes
+// to the right directory, so a report cannot be pointed at a ledger by any name.
+func TestLedgerPathNotify_IsSeparateFromReports(t *testing.T) {
+	root, reports := reportRootFor(t)
+	ledger := filepath.Join(root, LedgerDirName)
+
+	got, err := LedgerPathNotify(root, "ledger.jsonl", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != filepath.Join(ledger, "ledger.jsonl") {
+		t.Fatalf("ledger path = %q", got)
+	}
+	if st, err := os.Stat(ledger); err != nil || !st.IsDir() {
+		t.Fatalf("the ledger directory was not created: %v", err)
+	}
+	if _, err := os.Stat(reports); err == nil {
+		t.Fatal("resolving a ledger path created the report directory")
+	}
+
+	// Each directory refuses the other's files, spelled any way.
+	if _, err := ReportPathNotify(root, "x", "x", nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{
+		filepath.Join(reports, "ledger.jsonl"),
+		filepath.Join("..", LedgerDirName, "ledger.jsonl"),
+		filepath.Join(root, "ledger.jsonl"),
+	} {
+		if g, err := LedgerPathNotify(root, p, "", nil); err == nil {
+			t.Fatalf("ledger path %q was accepted as %q", p, g)
+		}
+	}
+	for _, p := range []string{
+		filepath.Join(ledger, "ledger.jsonl"),
+		filepath.Join("..", LedgerDirName, "ledger.jsonl"),
+	} {
+		if g, err := ReportPathNotify(root, p, "", nil); err == nil {
+			t.Fatalf("report path %q was accepted as %q", p, g)
+		}
+	}
+
+	// A ledger written, then a report named like it: the ledger is untouched.
+	if err := WriteReportFile(got, []byte("history\n"), FileMode); err != nil {
+		t.Fatal(err)
+	}
+	rp, err := ReportPathNotify(root, "ledger.jsonl", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteReportFile(rp, []byte("report\n"), FileMode); err != nil {
+		t.Fatal(err)
+	}
+	mustUnchanged(t, got, "history\n")
+
+	// The ledger directory does not count as library content, so it cannot make a
+	// bare mountpoint look mounted.
+	bare := t.TempDir()
+	if _, err := LedgerPathNotify(bare, "l.jsonl", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := Mounted(bare); err == nil {
+		t.Fatal("a ledger directory made an empty root look mounted")
+	}
+}
+
+// A refusal about a ledger says ledger, not report.
+func TestLedgerPathNotify_RefusalsNameTheLedger(t *testing.T) {
+	root, _ := reportRootFor(t)
+	_, err := LedgerPathNotify(root, filepath.Join("a", "b.jsonl"), "", nil)
+	if err == nil || !strings.Contains(err.Error(), "ledger") || strings.Contains(err.Error(), "report") {
+		t.Fatalf("refusal should speak of the ledger: %v", err)
+	}
+	if _, err := LedgerPathNotify("", "l.jsonl", "", nil); err == nil || !strings.Contains(err.Error(), "ledger") {
+		t.Fatalf("no-root refusal should speak of the ledger: %v", err)
+	}
+}
+
+// The default file name is joined onto the directory, so a name that is a path
+// would walk out of it. Only a single plain file name is accepted.
+func TestReportPathNotify_RefusesADefaultNameThatIsNotAFileName(t *testing.T) {
+	root, _ := reportRootFor(t)
+	outside := filepath.Join(filepath.Dir(root), "escaped.tsv")
+	for _, name := range []string{
+		"", ".", "..", "../escaped.tsv", "a/b.tsv", "/abs.tsv", "a" + string(filepath.Separator) + "b",
+		"nul\x00.tsv", "../../" + filepath.Base(root) + "/x.tsv",
+	} {
+		// The refusal must come from the file-name check itself, not from whatever
+		// the later existing-file vet happens to say about a path that does not exist.
+		if got, err := ReportPathNotify(root, "", name, nil); err == nil {
+			t.Errorf("default name %q was accepted as %q", name, got)
+		} else if !strings.Contains(err.Error(), "not a single file name") {
+			t.Errorf("default name %q was refused for another reason: %v", name, err)
+		}
+		if got, err := LedgerPathNotify(root, "", name, nil); err == nil {
+			t.Errorf("default ledger name %q was accepted as %q", name, got)
+		} else if !strings.Contains(err.Error(), "not a single file name") {
+			t.Errorf("default ledger name %q was refused for another reason: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(outside); err == nil {
+		t.Fatal("a default name escaped the report directory")
+	}
+	if got, err := ReportPathNotify(root, "", "plain-1.tsv", nil); err != nil || filepath.Base(got) != "plain-1.tsv" {
+		t.Fatalf("a plain default name must still work: %q %v", got, err)
+	}
 }

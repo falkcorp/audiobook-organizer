@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/report_write_confine_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 593d32e1-8cd4-406f-8acf-a3afb9fa890b
 // last-edited: 2026-11-18
 
@@ -117,6 +117,41 @@ func TestReportOps_RefuseAPlantedReportBeforeTouchingTheStore(t *testing.T) {
 					require.Error(t, err, "%s: a planted report %s must be refused", c.name, name)
 				}()
 			}
+			b, err := os.ReadFile(victim)
+			require.NoError(t, err)
+			require.Equal(t, "keep me", string(b))
+		})
+	}
+}
+
+// dedupe-book-file-rows writes a second file, "<report>-decisions.tsv", beside the
+// report. A link planted at THAT name is refused before any work, like the report
+// itself, not found after an apply.
+func TestDedupeBookFileRows_RefusesAPlantedDecisionsFileBeforeTouchingTheStore(t *testing.T) {
+	for _, kind := range []string{"symlink", "hardlink"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			reports := filepath.Join(root, ".reports")
+			require.NoError(t, os.Mkdir(reports, 0o775))
+			victim := filepath.Join(t.TempDir(), "victim.tsv")
+			require.NoError(t, os.WriteFile(victim, []byte("keep me"), 0o644))
+			planted := filepath.Join(reports, "dedupe-book-file-rows-apply-decisions.tsv")
+			if kind == "symlink" {
+				require.NoError(t, os.Symlink(victim, planted))
+			} else if err := os.Link(victim, planted); err != nil {
+				t.Skipf("hard links are not available here: %v", err)
+			}
+			p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: noTouchStore{}}, root: root}}
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Fatalf("the op reached the store with a planted decisions file: %v", r)
+					}
+				}()
+				err := p.runDedupeBookFileRows(t.Context(), []byte(`{"apply":true}`), &fakeReporter{})
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "decisions")
+			}()
 			b, err := os.ReadFile(victim)
 			require.NoError(t, err)
 			require.Equal(t, "keep me", string(b))

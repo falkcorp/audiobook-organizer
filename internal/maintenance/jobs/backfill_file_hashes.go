@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 4.6.4
+// version: 4.6.5
 // guid: a1000014-0000-0000-0000-000000000014
 // last-edited: 2026-11-12
 
@@ -261,11 +261,20 @@ func hbCheckReportFile(f hbFile) error {
 }
 
 // hbOpenFile opens the report file. A variable so a test can inject a Close or
-// Write failure; production always uses os.OpenFile. Callers pass
-// syscall.O_NOFOLLOW, so a symlink planted at the report's path is refused
-// instead of followed.
-var hbOpenFile = func(name string, flag int, perm os.FileMode) (hbFile, error) {
-	return os.OpenFile(name, flag, perm)
+// Write failure; production always uses library.OpenReportFile, the same confined
+// open every other report gets: relative to a handle on the report directory,
+// never following a symlink (in the last component or any other), and refusing a
+// file that is not a regular file owned by this user with one link, which a bare
+// O_NOFOLLOW open does not. A refused file is left as it was. mode is
+// library.ReportTouch for a fresh run (created if absent, truncated by the caller
+// after its own check) and library.ReportReadAppend for a resumed one (read back,
+// trimmed, appended to).
+var hbOpenFile = func(name string, mode library.ReportOpenMode, perm os.FileMode) (hbFile, error) {
+	f, err := library.OpenReportFile(name, perm, mode)
+	if err != nil {
+		return nil, err // not f: a nil *os.File inside the interface is not a nil interface
+	}
+	return f, nil
 }
 
 // hashBackfillReport streams the run's per-row outcomes to a TSV (bucket,
@@ -324,9 +333,10 @@ func (r *hashBackfillReport) has(fileID string) bool {
 // starts the file fresh.
 func openHashBackfillReport(path string, existing bool) (rep *hashBackfillReport, seeded hashBackfillCounts, prior bool, err error) {
 	if !existing {
-		// No O_TRUNC at open: the file is vetted first (a file somebody else made is
-		// refused, not emptied), then truncated.
-		f, oerr := hbOpenFile(path, os.O_WRONLY|os.O_CREATE|syscall.O_NOFOLLOW, hbReportPerm)
+		// Opened without truncating (ReportTouch): the open vets the file (a file
+		// somebody else made, or a link, is refused, not emptied), hbCheckReportFile
+		// vets it again, and only then is it truncated.
+		f, oerr := hbOpenFile(path, library.ReportTouch, hbReportPerm)
 		if oerr != nil {
 			return nil, seeded, false, oerr
 		}
@@ -342,7 +352,7 @@ func openHashBackfillReport(path string, existing bool) (rep *hashBackfillReport
 		_, rep.err = rep.w.WriteString(hbReportHeader)
 		return rep, seeded, false, rep.err
 	}
-	f, oerr := hbOpenFile(path, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, hbReportPerm)
+	f, oerr := hbOpenFile(path, library.ReportReadAppend, hbReportPerm)
 	if oerr != nil {
 		return nil, seeded, false, oerr
 	}
