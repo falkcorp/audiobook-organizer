@@ -1,5 +1,5 @@
 // file: core/kernel/config_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 8b2e5f7c-3a19-4d06-b8e4-2f9c6a1d7e53
 // last-edited: 2026-11-19
 
@@ -180,14 +180,23 @@ func TestStateDir_KernelAgreesWithTheResolver(t *testing.T) {
 		{"padded default", "  " + filepath.Join(root, "tower") + " ", nil},
 		{"padded explicit", filepath.Join(root, "unused"), map[config.Path]string{stateDirKey: "  " + filepath.Join(root, "arkham", "..", "arkham") + "/ "}},
 		{"fallback beside the database", filepath.Join(blocker, "state"), map[config.Path]string{storagePathKey: filepath.Join(dbDir, "main.pebble")}},
+		// A relative compiled default (hello's "hello-state") or explicit
+		// value is made absolute against the working directory, as
+		// app.storagePath does with the gate off.
+		{"relative default", "wayne-state", nil},
+		{"relative explicit", filepath.Join(root, "unused"), map[config.Path]string{stateDirKey: "./gcpd/../gcpd-state"}},
 	}
+	t.Chdir(root)
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
 			in := configIn(t)
 			in.StateDirDefault, in.Flags = r.def, r.flags
 			cb := bootCfg(t, in)
 			want, fellBack, err := config.ResolveStateDir(r.flags[stateDirKey], r.def, r.flags[storagePathKey], func(d string) error { return os.MkdirAll(d, 0o700) })
-			if err != nil || cb.stateDir != want || cb.fellBack != fellBack {
+			if err == nil {
+				want, err = filepath.Abs(want)
+			}
+			if err != nil || cb.stateDir != want || cb.fellBack != fellBack || !filepath.IsAbs(cb.stateDir) {
 				t.Fatalf("kernel %q (fell back %v), resolver %q (fell back %v, %v)", cb.stateDir, cb.fellBack, want, fellBack, err)
 			}
 			if cb.stateDir != filepath.Clean(cb.stateDir) {

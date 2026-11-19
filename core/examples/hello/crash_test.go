@@ -1,7 +1,7 @@
 // file: core/examples/hello/crash_test.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: d2573b3f-2985-4783-baa2-5b0ee3888984
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package hello_test
 
@@ -65,10 +65,12 @@ type dataMigrationCell struct {
 // (hello's storage spec, plus the synthetic family's claim), with the
 // synthetic cutover migration of crashmatrix (2 400 rows, tasks.Fixed(4)):
 // it kills at that writer, boots again through the same entry point and
-// asserts no row lost or doubled and the migration done. These cells
-// exercise the entry point, not a full boot, until a manifest declares a
-// data migration (F3-07 registers M2, whose TestBootCrashMatrix_ABO cells
-// cover the boot path).
+// asserts no row lost or doubled and the migration done. hello's own boots
+// run the config boot (CoreConfigBoot, F3-07 a6), so P0's and P4b's config
+// and secrets writers are broken by the scenarios above; these cells still
+// exercise the entry point, not a full boot, because hello declares no data
+// migration (F3-07's slice (d) registers books' M2, whose
+// TestBootCrashMatrix_ABO cells cover the boot path).
 func dataMigrationCells() []dataMigrationCell {
 	var out []dataMigrationCell
 	for _, l := range crashmatrix.DataMigrationLabels() {
@@ -83,8 +85,10 @@ func dataMigrationCells() []dataMigrationCell {
 		out = append(out, dataMigrationCell{label: l, ChunkScenario: s})
 	}
 	// M8 (F3-04): a kill at every write of the store rewrite, over hello's
-	// storage spec, booted as F3-07's boot will run it (restoreswap's P0a
-	// with the Swapper serving M8, then the DAG with M8 last).
+	// storage spec, booted as the kernel's boot runs a manifest's
+	// Manifest.Rewrite since F3-07 a4 (restoreswap's P0a with the Swapper
+	// serving M8, then the DAG with M8 last). hello declares no M8, so the
+	// cells drive that path directly.
 	// The second cell starts after one swap-back: M8's one restart. Two
 	// consecutive swap-backs refuse the boot (storage.ErrRewriteSwappedBack,
 	// exit 78), which no cell of a completing boot can hold;
@@ -135,6 +139,14 @@ func unreachedLabels() map[string]string {
 		// mtime, so no scratch entry is 7 days old at a kit boot. Storage's
 		// TestDryRunScratchModeAndSweep deletes one on a fake clock.
 		"storage.sweeper.scratch": "a copied fixture file's mtime is the host's clock, never 7 days before the kit's fixed clock",
+		// statefs.MkdirAll performs no operation on a directory that exists,
+		// as os.MkdirAll stats first and never calls mkdir(2) on one, and
+		// the kit creates every fixture's state directory before the boot
+		// (crashmatrix's load): no fixture boots without one. A kill before
+		// the mkdir of an absent state directory leaves nothing; an error
+		// there is config.ResolveStateDir's HEAD fallback, beside the store,
+		// which config's TestStateDirFallbackMatchesHEAD rows cover.
+		"config.statedir.mkdir": "every fixture's state directory exists before its boot (crashmatrix's load creates it), and P0's mkdir of an existing directory is no operation",
 	}
 }
 
@@ -182,6 +194,8 @@ func crashScenarios(t *testing.T) []namedScenario {
 		checkpointReused(t),
 		attemptStranded(t),
 		checkpointsToSweep(t),
+		bootRecordUnparsable(t),
+		keyringStaleTemp(t),
 	}
 	dag := refused(restore(t, "restore-checkpoint-dag-fails", restorejournal.KindCheckpoint, false, withTag("poisoned")))
 	return []namedScenario{
@@ -194,7 +208,7 @@ func crashScenarios(t *testing.T) []namedScenario {
 // build boots mod as the crash matrix's Build.
 func build(mod module.Module) func(testing.TB, *crashmatrix.Injector) error {
 	return func(_ testing.TB, inj *crashmatrix.Injector) error {
-		_, err := inj.New(context.Background(), app.Options{AppID: "hello", Logger: slog.New(slog.DiscardHandler)}, mod)
+		_, err := inj.New(context.Background(), app.Options{AppID: "hello", CoreConfigBoot: true, Logger: slog.New(slog.DiscardHandler)}, mod)
 		return err
 	}
 }
@@ -429,6 +443,33 @@ func undecodable(t *testing.T) crashmatrix.Fixture {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(pending, []byte(`{"id": "r-riddler", "kind": `), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// bootRecordUnparsable is a served store whose boot record does not decode:
+// P0 sets it aside as config.boot.json.bad and boots on the operator layers
+// (05-config §1.5; config.bootrecord.quarantine).
+func bootRecordUnparsable(t *testing.T) crashmatrix.Fixture {
+	f := crashmatrix.Fixture{Name: "boot-record-unparsable", StateDir: t.TempDir()}
+	boot(t, f, hello.New())
+	if err := os.WriteFile(filepath.Join(f.StateDir, "config.boot.json"), []byte(`{"format": "mediacore-boot/1", "values": `), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// keyringStaleTemp is a served store beside a keyring temporary file a
+// crashed keyring write left (its directory entry made durable): secrets.Open
+// removes it before it resolves the keyring (secrets.keyring.stale).
+func keyringStaleTemp(t *testing.T) crashmatrix.Fixture {
+	f := crashmatrix.Fixture{Name: "keyring-stale-temp", StateDir: t.TempDir()}
+	boot(t, f, hello.New())
+	if _, err := os.Stat(filepath.Join(f.StateDir, "secrets.keyring")); err != nil {
+		t.Fatalf("the gated fixture boot wrote no keyring: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(f.StateDir, "secrets.keyring.tmp-0123456789ab"), []byte("half a keyring"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return f
