@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g7.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8e3a5d17-2c94-4b60-a1f8-6d07c9e4b352
 // last-edited: 2026-11-19
 
@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/mediacore/tasks"
 
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -448,6 +449,15 @@ func t6g7NewWriter(kind tasks.Kind, deps t6g7Deps, rc *tasks.RC) (t6g7Writer, er
 	return w, nil
 }
 
+// t6g7Res is the Effects refs of a row of t6WriterResources, in module "books".
+func t6g7Res(rs ...ops.Resource) []tasks.Resource {
+	out := make([]tasks.Resource, len(rs))
+	for i, r := range rs {
+		out[i] = tasks.Res("books", string(r))
+	}
+	return out
+}
+
 // t6g7Store is every read the 15 definitions make, composed from each
 // definition's own narrow interface. A method two definitions share has one
 // signature, so the embeds overlap cleanly. Nothing here writes.
@@ -456,6 +466,8 @@ type t6g7Store interface {
 	unknownAuthorAuditStore
 	versionGroupPrimaryReportStore
 	reportsPruneStore
+	titleBackfillStore
+	titleRepairStore
 }
 
 // t6g7Writer is every write the 15 definitions make, composed from each
@@ -464,6 +476,8 @@ type t6g7Store interface {
 // goes through the gate (and is recorded, not executed, in a Preview run).
 type t6g7Writer interface {
 	reviewStatusIndexRepairWriter
+	titleBackfillWriter
+	titleRepairWriter
 }
 
 // t6g7Deps is what the native kinds are built from. Every field is set once, by
@@ -477,6 +491,10 @@ type t6g7Deps struct {
 	NewWriter func(tasks.Writer) t6g7Writer
 	// RootDir is the library root.
 	RootDir func() string
+	// AgreedChapterTitle is the CONS-17b all-chapters-agree read of a directory's
+	// tags: metadata.AgreedChapterTitle over the configured supported extensions.
+	// F5-18 sets it.
+	AgreedChapterTitle func(dir string) (agreed string, multi bool)
 }
 
 // t6g7Kinds returns the 15 native definitions of group 7 in file order. sched
@@ -495,6 +513,8 @@ func t6g7KindList(p *Plugin, deps t6g7Deps, sched func(tasks.Kind) *tasks.Schedu
 		p.unknownAuthorAuditNative(deps, sched),
 		p.versionGroupPrimaryReportNative(deps, sched),
 		p.reportsPruneNative(deps, sched),
+		p.titleBackfillNative(deps, sched),
+		p.titleRepairNative(deps, sched),
 	}
 }
 

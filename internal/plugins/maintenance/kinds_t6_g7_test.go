@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g7_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4c7e1a92-6b3d-4f58-8a0e-2d9c5b71e3f6
 // last-edited: 2026-11-19
 
@@ -8,8 +8,12 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -38,6 +42,9 @@ type t6g7Recorder struct {
 	calls []string
 	// reviewIndex is what the status-index rebuild answers.
 	reviewIndex database.ReviewStatusIndexRepair
+	// books lets ModifyBook run the caller's fn on a copy, so the test sees the
+	// row the write would have produced.
+	books map[string]*database.Book
 }
 
 // t6g7WriterResource maps every writer method the spy can record to the FULL set
@@ -122,6 +129,24 @@ func (r *t6g7Recorder) RebuildReviewStatusIndex(apply bool) (database.ReviewStat
 	return r.reviewIndex, nil
 }
 
+func (r *t6g7Recorder) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	r.mu.Lock()
+	b := r.books[id]
+	r.mu.Unlock()
+	if b == nil {
+		return nil, nil
+	}
+	cur := *b
+	if err := fn(&cur); err != nil {
+		if errors.Is(err, database.ErrSkipBookWrite) {
+			return &cur, nil
+		}
+		return nil, err
+	}
+	r.rec("ModifyBook " + id + " title=" + cur.Title)
+	return &cur, nil
+}
+
 // t6g7TestStore is the read side: whatever a test does not seed answers empty;
 // whatever it does not model panics.
 type t6g7TestStore struct {
@@ -132,6 +157,14 @@ type t6g7TestStore struct {
 	cores []database.BookCore
 	// active are the ids of the operations ListActiveOperationsV2 answers.
 	active []string
+	// files and states are what GetBookFiles and GetMetadataFieldStates answer.
+	files  map[string][]database.BookFile
+	states map[string][]database.MetadataFieldState
+}
+
+func (s *t6g7TestStore) GetBookFiles(id string) ([]database.BookFile, error) { return s.files[id], nil }
+func (s *t6g7TestStore) GetMetadataFieldStates(id string) ([]database.MetadataFieldState, error) {
+	return s.states[id], nil
 }
 
 func (s *t6g7TestStore) ListActiveOperationsV2() ([]database.OperationV2Row, error) {
@@ -141,6 +174,8 @@ func (s *t6g7TestStore) ListActiveOperationsV2() ([]database.OperationV2Row, err
 	}
 	return rows, nil
 }
+
+func (s *t6g7TestStore) CountPrimaryBooks() (int, error) { return len(s.cores), nil }
 
 func (s *t6g7TestStore) GetAllBooksCore(int, int) ([]database.BookCore, error) { return s.cores, nil }
 func (s *t6g7TestStore) GetAllBooksCoreComplete(int, int) ([]database.BookCore, error) {
@@ -178,6 +213,9 @@ func (p *t6g7Probe) deps() t6g7Deps {
 			return p.rec
 		},
 		RootDir: func() string { return p.root },
+		// A directory "agrees" on the title its name carries, so a test seeds the
+		// tags by naming the folder.
+		AgreedChapterTitle: func(dir string) (string, bool) { return filepath.Base(dir), true },
 	}
 }
 
@@ -306,6 +344,8 @@ func t6g7KindWritersBuild() map[tasks.Kind]t6g7KindWrite {
 	m := map[tasks.Kind]t6g7KindWrite{}
 	add := func(head sdk.OperationDef, kw t6g7KindWrite) { m[tasks.Kind("books."+head.ID)] = kw }
 	add(p.reviewStatusIndexRepairDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[reviewStatusIndexRepairWriter]()}})
+	add(p.titleRepairDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[titleRepairWriter]()}})
+	add(p.titleBackfillDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[titleBackfillWriter]()}})
 	// reports-prune os.Remove-s report files and writes no row: files only.
 	add(p.reportsPruneDef(), t6g7KindWrite{outside: []ops.Resource{ops.ResFiles}})
 	return m
@@ -369,7 +409,7 @@ func TestT6G7Resources_TableCoversEveryWriterMethod(t *testing.T) {
 func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 	p := &Plugin{}
 	defs := p.t6g7Kinds(fakeT6G7Deps(t), nil)
-	require.Len(t, defs, 4, "grows to 15 as the group's definitions land")
+	require.Len(t, defs, 6, "grows to 15 as the group's definitions land")
 
 	// Every expected value below is written out by hand from the HEAD def and
 	// the coordinator's rulings, never derived from the code under test.
@@ -382,11 +422,15 @@ func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 		par     *tasks.Parallelism
 		wantPar string
 	}
+	titleRepairPar := titleRepairParallelism()
 	rows := []row{
 		{head: p.reviewStatusIndexRepairDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
 		{head: p.unknownAuthorAuditDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
 		{head: p.versionGroupPrimaryReportDef(), resume: tasks.ResumeDrop, timeout: 10 * time.Minute},
 		{head: p.reportsPruneDef(), resume: tasks.ResumeDrop, timeout: time.Hour},
+		{head: p.titleBackfillDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
+		{head: p.titleRepairDef(), resume: tasks.ResumeDrop, timeout: 4 * time.Hour,
+			par: &titleRepairPar, wantPar: fmt.Sprintf("fixed(%d): ", max(min(runtime.NumCPU(), 8), 1))},
 	}
 
 	seen := map[tasks.Kind]bool{}
@@ -462,6 +506,34 @@ type t6g7WriteCase struct {
 func t6g7WriteCases() []t6g7WriteCase {
 	return []t6g7WriteCase{
 		{
+			kind: titleRepairKind,
+			setup: func(t *testing.T, p *t6g7Probe) {
+				id := "01BATBOOK00000000000000J1"
+				p.store = &t6g7TestStore{
+					cores: []database.BookCore{{ID: id, Title: "Chapter 01"}},
+					files: map[string][]database.BookFile{id: {
+						{BookID: id, FilePath: "/lib/The Long Halloween/01.mp3"},
+						{BookID: id, FilePath: "/lib/The Long Halloween/02.mp3"},
+					}},
+				}
+				p.rec.books = map[string]*database.Book{id: {ID: id, Title: "Chapter 01"}}
+			},
+			live: []string{"ModifyBook 01BATBOOK00000000000000J1 title=The Long Halloween"},
+		},
+		{
+			kind: titleBackfillKind,
+			setup: func(t *testing.T, p *t6g7Probe) {
+				p.store = &t6g7TestStore{cores: []database.BookCore{
+					{ID: "01BATBOOK00000000000000H1", Title: "(76/85) Tarkin"},
+					{ID: "01BATBOOK00000000000000H2", Title: "Year One"},
+				}}
+				p.rec.books = map[string]*database.Book{
+					"01BATBOOK00000000000000H1": {ID: "01BATBOOK00000000000000H1", Title: "(76/85) Tarkin"},
+				}
+			},
+			live: []string{"ModifyBook 01BATBOOK00000000000000H1 title=Tarkin"},
+		},
+		{
 			kind: reviewStatusIndexRepairKind,
 			// A Live run rebuilds through the gated writer; a Preview run reads the
 			// report through the store and writes nothing.
@@ -524,7 +596,7 @@ func TestT6G7Kinds_WritesThroughShell(t *testing.T) {
 // case, before it builds a writer or touches the store: the run's mode comes
 // from the start request, never from params (coordinator ruling 3).
 func TestT6G7Kinds_WritingShellsRefuseModeKeys(t *testing.T) {
-	kinds := []tasks.Kind{reviewStatusIndexRepairKind, reportsPruneKind}
+	kinds := []tasks.Kind{reviewStatusIndexRepairKind, reportsPruneKind, titleBackfillKind, titleRepairKind}
 	keys := []string{"dry_run", "dryRun", "DRY_RUN", "DryRun", "apply", "Apply", "APPLY"}
 	gate := &t6g7GateWriter{name: "gotham"}
 	for _, kind := range kinds {
@@ -658,4 +730,16 @@ func TestT6G7Kinds_ReportsPruneRemovesOnlyWhenLive(t *testing.T) {
 	_, err = runT6G7Kind(t, def, tasks.ModeLive, nil, `{}`)
 	require.ErrorContains(t, err, "cannot verify which operations are running")
 	require.True(t, exists(doomed))
+}
+
+// title-backfill writes only a title that is still the one it derived the new
+// title from: a book retitled meanwhile is left alone and counted, not failed.
+func TestT6G7Kinds_TitleBackfillLeavesATitleChangedUnderneath(t *testing.T) {
+	p := newT6G7Probe(t)
+	p.store = &t6g7TestStore{cores: []database.BookCore{{ID: "01BATBOOK00000000000000H3", Title: "(1/9) Hush"}}}
+	p.rec.books = map[string]*database.Book{"01BATBOOK00000000000000H3": {ID: "01BATBOOK00000000000000H3", Title: "Hush (curated)"}}
+	def := t6g7ByKind(t, (&Plugin{}).t6g7Kinds(p.deps(), nil), titleBackfillKind)
+	_, err := runT6G7Kind(t, def, tasks.ModeLive, &t6g7GateWriter{name: "gotham"}, "")
+	require.NoError(t, err)
+	require.Empty(t, p.rec.snapshot(), "a title changed underneath was overwritten")
 }
