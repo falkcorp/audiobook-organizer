@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/env.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ef303b12-eeca-4ad8-bd87-b34265d15f21
 // last-edited: 2026-11-19
 
@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/falkcorp/mediacore/tasks"
 
@@ -437,6 +436,3 @@ func (p *Plugin) headStore() kindStore {
 
 // headWriter is the env's writer over the plugin's store.
 func (p *Plugin) headWriter() kindWriter { return headKindWriter{s: p.store} }
-
-// timeNow is what a core reads the clock through when its env names none.
-func timeNow() time.Time { return time.Now() }

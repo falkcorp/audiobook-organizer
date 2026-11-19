@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/kinds_env_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c27a6e90-4b18-4d53-a6f1-0e9d83b52c47
 // last-edited: 2026-11-19
 
@@ -252,7 +252,6 @@ func TestDelugeEnv_HeadAdaptersNilWhenUnset(t *testing.T) {
 	require.Nil(t, (&Plugin{client: typedNil}).headClient())
 	require.NotNil(t, p.headImporter(), "the importer adapter is always present: a nil client never moves storage")
 	require.NotNil(t, p.headWriter())
-	require.False(t, timeNow().IsZero())
 }
 
 // The HEAD writer forwards both methods to the store with the same arguments.

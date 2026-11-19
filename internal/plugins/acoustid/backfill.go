@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/backfill.go
-// version: 2.7.0
+// version: 2.7.1
 // guid: f6a7b8c9-d0e1-2345-def0-123456789abc
 // last-edited: 2026-11-19
 
@@ -24,7 +24,6 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -174,26 +173,6 @@ var (
 	fileSegmentsFn          = fingerprint.FileSegments
 )
 
-// backfillBook fingerprints the eligible files of one book, each in its own
-// goroutine, and then refreshes the book signature once.
-//
-// The BOOK stays the unit RunItems schedules, because synthesizeBookSignatureForBook
-// is a read-modify-write of the Book row and must run once, after every file of
-// that book is done. The FILES fan out underneath it, bounded by fpSem — one
-// semaphore shared by every book in the run, so total in-flight fpcalc stays at
-// cap(fpSem) whether that is sixteen books with one file each or one book with
-// a hundred chapters. Before 2026-09-12 a book's files ran sequentially inside
-// one worker, so a many-chapter book pinned the run to a single fpcalc and
-// parallelism collapsed near the end of a run (fingerprint timing note §6).
-// Files of one book never share a row, so their UpdateBookFile writes are
-// disjoint.
-//
-// Returns ctx.Err() when canceled so the page is not checkpointed; otherwise
-// nil — one unreadable book must not abort a whole-library pass.
-func (p *Plugin) backfillBook(ctx context.Context, b database.Book, tally *backfillTally, fpSem chan struct{}, logger *slog.Logger) error {
-	return backfillBookVia(ctx, p.store, b, tally, fpSem, logger)
-}
-
 // backfillBookVia is backfillBook over the store it is handed: a view joining
 // the run's read store and writer, so the fingerprint and signature writes reach
 // the writer and nothing else (rule R10).
@@ -247,15 +226,6 @@ func backfillBookVia(ctx context.Context, store pluginStore, b database.Book, ta
 		}
 	}
 	return nil
-}
-
-// backfillRunOptions builds the RunItems options for one page.
-//
-// A named function rather than a literal at the call site so that a test runs
-// the real options instead of a hand-written copy of them: dropping Concurrency
-// here is exactly the regression that made this op sequential for months.
-func backfillRunOptions(offset, total int, tally *backfillTally) registry.RunItemsOptions {
-	return registryItemsOptions(backfillParallelism(backfillWorkers()), backfillItemsOptions(offset, total, tally))
 }
 
 // backfillItemsOptions is the per-page loop's settings in the engine-neutral
@@ -430,14 +400,6 @@ func backfillCore(ctx context.Context, params json.RawMessage, env backfillEnv) 
 	}, nil
 }
 
-// backfillPages walks the book table one page at a time from the resume
-// cursor, running each page through a RunItems pool and checkpointing the
-// cursor once the page has fully drained. Split out of runBackfill so tests can
-// drive it without a dedup engine or an fpcalc binary.
-func (p *Plugin) backfillPages(ctx context.Context, reporter sdk.Reporter, state BackfillParams, tally *backfillTally) error {
-	return backfillPagesCore(ctx, state, tally, p.headBackfillEnv(reporter))
-}
-
 // backfillPagesCore is backfillPages over the env it is handed.
 func backfillPagesCore(ctx context.Context, state BackfillParams, tally *backfillTally, env backfillEnv) error {
 	logger := env.Logger
@@ -505,13 +467,6 @@ func backfillPagesCore(ctx context.Context, state BackfillParams, tally *backfil
 
 	prog.Done("Acoustid backfill complete: " + tally.summary())
 	return nil
-}
-
-// cursorIsStale reports whether the resume cursor names a book that no longer
-// exists. A lookup error counts as stale, so the caller restarts (redoing
-// work) instead of finishing (skipping it).
-func (p *Plugin) cursorIsStale(cursor string) bool {
-	return cursorIsStaleVia(p.store, cursor)
 }
 
 // cursorIsStaleVia is cursorIsStale over the read store it is handed.

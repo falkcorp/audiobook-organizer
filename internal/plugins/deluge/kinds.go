@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/kinds.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 907863ad-572b-4999-a2fe-90db4ad476a6
 // last-edited: 2026-11-19
 
@@ -45,9 +45,6 @@ const (
 	// NoWarmupWait false).
 	signalMemDB tasks.ReadySignal = "books.memdb"
 )
-
-// kindFor is the kind name rule R3 gives a HEAD def ID.
-func kindFor(headID string) tasks.Kind { return tasks.Kind(kindPrefix + headID) }
 
 // settingsManageScopes is the route requirement of HEAD's settings.manage atom
 // (internal/books/atoms.go); the empty Permissions list of three of the four

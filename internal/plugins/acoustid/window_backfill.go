@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/window_backfill.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: bd9433cb-2459-4d4f-b9cf-4989dfb527de
 // last-edited: 2026-11-19
 
@@ -29,7 +29,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -797,19 +796,6 @@ func fillWindowResult(res *windowRunResult, t *windowTally) {
 	res.deferred = t.deferredByReason()
 }
 
-// windowRunOptions builds the RunItems options for one tier. A named function
-// so a test runs the real options: an omitted Concurrency is exactly the
-// regression that left acoustid.backfill on one core for months.
-//
-// capMark lowers the watermark below any item a remote worker still owes
-// (WorkerHub.checkpointMark): the server lane passes a leased item by skipping
-// it, so the raw watermark can run ahead of work that is not done.
-func windowRunOptions(workers, done, total, tier int, items []windowItem, params WindowBackfillParams,
-	reporter sdk.Reporter, tally *windowTally, capMark func(int) int) registry.RunItemsOptions {
-	return registryItemsOptions(windowParallelism(workers), windowItemsOptions(done, total, tier, items, params,
-		func(state any) error { return reporter.Checkpoint(state) }, tally, capMark))
-}
-
 // windowItemsOptions is the pool-neutral half of windowRunOptions: the settings
 // both shells hand their pool. The Label reads the tally's counters, so only
 // HEAD's pool carries it (the kernel's label is pure; a seam in seams.d).
@@ -864,10 +850,6 @@ const (
 	windowCurrent
 	windowTombstoned
 )
-
-func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, versions *fingerprint.ToolVersionInfo) (*windowPlan, error) {
-	return planWindowBackfillVia(ctx, p.store, headItems(reporter), p.windowHooks(WindowKindDeps{}), versions)
-}
 
 // planWindowBackfillVia is planWindowBackfill over the env's read store, pool and
 // host hooks (rule R10).
@@ -1003,11 +985,6 @@ func planWindowBackfillVia(ctx context.Context, store kindStore, items kindItems
 	return plan, nil
 }
 
-// planOne classifies one tracked row.
-func (p *Plugin) planOne(ctx context.Context, f database.BookFileCore, versions *fingerprint.ToolVersionInfo, probed, probeFailed *atomic.Int64) (windowPlanRow, error) {
-	return planOneVia(ctx, p.store, p.windowHooks(WindowKindDeps{}), f, versions, probed, probeFailed)
-}
-
 // planOneVia is planOne over the env's read store and host hooks.
 func planOneVia(ctx context.Context, store kindStore, host windowHooks, f database.BookFileCore, versions *fingerprint.ToolVersionInfo, probed, probeFailed *atomic.Int64) (windowPlanRow, error) {
 	switch {
@@ -1077,23 +1054,6 @@ func planOneVia(ctx context.Context, store kindStore, host windowHooks, f databa
 		return windowPlanRow{}, err
 	}
 	return windowPlanRow{present: true, state: state, exact: exact, anyExact: anyExact, item: it}, nil
-}
-
-// windowStateOf decides whether a file's stored windows (or tombstone) still
-// describe the file as it is. Stored rows only: the virtual legacy head from
-// WindowsForFile must never look like a current window.
-//
-// Current means: a non-empty set, every row made by this pipeline and window
-// set from these exact bytes (size and mtime), by these tool versions when
-// known, and covering the slots the plan would cut today when the duration is
-// known from the row. A tombstone is current under the same bytes/pipeline/
-// set/tool rule, so a new ffmpeg retries a file the old one could not read.
-//
-// exact reports, for a current file, that every stored window was cut with
-// exactly *versions (not merely an equivalent pair); anyExact, that at least
-// one stored window was, current or not.
-func (p *Plugin) windowStateOf(it windowItem, versions *fingerprint.ToolVersionInfo) (state windowState, exact, anyExact bool, err error) {
-	return windowStateOfVia(p.store, it, versions)
 }
 
 // windowStateOfVia is windowStateOf over a read store.
@@ -1607,13 +1567,6 @@ type windowProvenance struct {
 	leaseID string
 }
 
-// storeWindows writes one file's windows; both lanes write through it. The
-// outcome is tallied here; the error is returned for the remote lane, which
-// answers the worker with it.
-func (p *Plugin) storeWindows(it windowItem, prints []*fingerprint.WindowPrint, prov windowProvenance, t *windowTally) error {
-	return storeWindowsVia(headKindWriter{store: p.store}, it, prints, prov, t)
-}
-
 // storeWindowsVia is storeWindows over a writer (rule R10): the run's gated
 // writer natively, the plugin's store in HEAD.
 func storeWindowsVia(w kindWriter, it windowItem, prints []*fingerprint.WindowPrint, prov windowProvenance, t *windowTally) error {
@@ -1654,10 +1607,6 @@ func storeWindowsVia(w kindWriter, it windowItem, prints []*fingerprint.WindowPr
 	return nil
 }
 
-func (p *Plugin) storeFailure(it windowItem, slot int, dur fingerprint.DurationUsed, werr error, wt fingerprint.WindowTools, host string, t *windowTally) {
-	storeFailureVia(headKindWriter{store: p.store}, it, slot, dur, werr, wt, host, t)
-}
-
 // storeFailureVia is storeFailure over a writer.
 func storeFailureVia(w kindWriter, it windowItem, slot int, dur fingerprint.DurationUsed, werr error, wt fingerprint.WindowTools, host string, t *windowTally) {
 	detail := werr.Error()
@@ -1687,14 +1636,6 @@ func storeFailureVia(w kindWriter, it windowItem, slot int, dur fingerprint.Dura
 		return
 	}
 	t.failed.Add(1)
-}
-
-// countWriteErr separates a row deleted mid-run from a real write failure,
-// which fails the run at the end rather than passing as success. The store
-// resolves the row by FILE ID and says so with ErrFingerprintWindowRowGone, so
-// a row that moved to another book is never mistaken for a gone one.
-func (p *Plugin) countWriteErr(it windowItem, err error, t *windowTally) {
-	countWriteErrVia(it, err, t)
 }
 
 // countWriteErrVia is countWriteErr; it reads nothing from the plugin.

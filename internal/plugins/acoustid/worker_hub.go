@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/worker_hub.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: b2279415-b876-42b0-97f0-bea586ad4923
 // last-edited: 2026-11-19
 
@@ -344,16 +344,6 @@ func versionsAllowed(allowed []workerapi.ToolVersions, fp, ff string) bool {
 }
 
 // ---- op side ----
-
-// attach makes run the live run the endpoints serve and starts the sweeper.
-// The op's ConcurrencyKey guarantees one live run at a time.
-//
-// In a remote-only run wt carries only Versions, the reference pair: the
-// equivalence class and the lease allowlist are built from it, and the
-// server's own pair (never resolved) is in neither.
-func (h *WorkerHub) attach(ctx context.Context, p *Plugin, wt fingerprint.WindowTools, tally *windowTally, calib []windowItem, mode hubMode) {
-	h.attachVia(ctx, hubRunDeps{store: p.store, writer: headKindWriter{store: p.store}, probe: p.currentScanProbe()}, wt, tally, calib, mode)
-}
 
 // hubRunDeps is what a run hands the hub besides its tools (rule R10): the read
 // store, the writer remote results are stored through, and the scan probe.

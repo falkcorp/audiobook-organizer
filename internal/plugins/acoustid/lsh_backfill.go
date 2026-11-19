@@ -1,5 +1,5 @@
 // file: internal/plugins/acoustid/lsh_backfill.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 2c4d6e80-3b5a-4f9c-9b1d-7e8f0a2b4c6d
 // last-edited: 2026-11-19
 
@@ -104,14 +104,6 @@ func (p *Plugin) lshBackfillDef() sdk.OperationDef {
 		Run: p.runLSHBackfill,
 	}
 }
-
-// lshBackfillConcurrency is the size of the worker pool the core hands its
-// item loop. One row per item and the work is a DB read plus a DB write
-// (CPU for the index hook), so the pool is sized to the cores. It is a function,
-// not an inline expression, so the cancel test can derive its guaranteed bound
-// (cancel point + in-flight workers) from the same value the op uses: it reads
-// the declared parallelism, runtime.NumCPU() for tasks.CPU().
-func lshBackfillConcurrency() int { return lshBackfillParallelism().Workers() }
 
 func (p *Plugin) runLSHBackfill(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	_, err := lshBackfillCore(ctx, p.headLSHBackfillEnv(reporter))

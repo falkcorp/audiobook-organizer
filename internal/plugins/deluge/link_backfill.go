@@ -1,5 +1,5 @@
 // file: internal/plugins/deluge/link_backfill.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 7101d385-7f6e-4a95-bd2e-11760d0fed02
 // last-edited: 2026-11-19
 
@@ -28,7 +28,6 @@ import (
 	delugeclient "github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -360,19 +359,6 @@ func linkWorkers(requested int) int {
 		return linkDefaultWorkers()
 	}
 	return min(requested, linkMaxWorkers)
-}
-
-// linkRunOptions builds the RunItems options for both worker phases.
-//
-// A named function so a test runs the real options rather than a copy: an
-// omitted Concurrency is clamped to 1 by run_items.go, which is how other
-// full-library ops ended up sequential behind a worker-pool API.
-func linkRunOptions(workers int, total int, tally *linkTally) registry.RunItemsOptions {
-	return registry.RunItemsOptions{
-		Concurrency:   linkWorkers(workers),
-		ProgressTotal: total,
-		Label:         linkCounterLabel(tally),
-	}
 }
 
 // linkCounterLabel is the progress label of both worker phases at HEAD: the
@@ -1237,14 +1223,6 @@ func (r *linkRun) enterWindow(t *linkTorrent) {
 	r.tally.emptyFiles.Add(t.emptyFiles)
 }
 
-// resolveRound resolves, on the worker pool, every file not yet resolved of
-// every window torrent, and the files of the other torrents whose size
-// equals a window file's size. Each worker writes only its own torrent's
-// results.
-func (r *linkRun) resolveRound(ctx context.Context, reporter sdk.Reporter, ts []*linkTorrent, workers int) error {
-	return r.resolveRoundVia(ctx, headEnv(reporter, true), ts, workers)
-}
-
 // resolveRoundVia is resolveRound on the env's pool and progress (rule R10:
 // the core hands its shell's hooks, not a Reporter).
 func (r *linkRun) resolveRoundVia(ctx context.Context, env kindEnv, ts []*linkTorrent, workers int) error {
@@ -1673,14 +1651,6 @@ func (r *linkRun) decide(resolutions []torrentResolution, live map[string]bool) 
 	}
 	sort.Slice(plan, func(i, j int) bool { return plan[i].hash < plan[j].hash })
 	return plan, stats
-}
-
-// relinkStates reads, on the worker pool, the versions of every book with a
-// planned row that names no version, once per run (r.relink), and records
-// its relinkState. A failed read is counted in errors and recorded as
-// readErr, which holdBack treats as unsettled.
-func (r *linkRun) relinkStates(ctx context.Context, reporter sdk.Reporter, plan []torrentWrites, workers int) error {
-	return r.relinkStatesVia(ctx, headEnv(reporter, true), plan, workers)
 }
 
 // relinkStatesVia is relinkStates on the env's pool (rule R10).

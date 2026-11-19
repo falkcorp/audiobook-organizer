@@ -1,5 +1,5 @@
 // file: internal/plugins/metafetch/calibrate_scoring.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 4e1c8b2a-6d90-4f37-9b1a-2c3d4e5f6a70
 // last-edited: 2026-11-19
 
@@ -1119,14 +1119,6 @@ func calibrateScoringCore(ctx context.Context, params calibrateScoringParams, en
 	return rep, nil
 }
 
-// applyOrigin classifies a book's apply origin: "manual" when the book carries
-// any manual metadata-field override (recorded with source "manual" in the
-// metadata-field-state store — i.e. a non-nil OverrideValue), else "auto".
-// A field-state read error is treated as "auto" (fail-open, never fatal).
-func (p *Plugin) applyOrigin(book *database.Book) string {
-	return applyOriginVia(p.store, book)
-}
-
 // fieldStateReader is the one read applyOriginVia takes.
 type fieldStateReader interface {
 	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
@@ -1144,12 +1136,6 @@ func applyOriginVia(store fieldStateReader, book *database.Book) string {
 		}
 	}
 	return "auto"
-}
-
-// logReport emits the report as structured log fields plus a JSON blob (the
-// sdk.Reporter has no result sink, so the report travels via the operation log).
-func (p *Plugin) logReport(log *slog.Logger, rep calibrationReport) {
-	logCalibrationReport(log, rep)
 }
 
 // logCalibrationReport is logReport as a function the core can call without a
