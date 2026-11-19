@@ -1,5 +1,5 @@
 // file: core/httpapi/basicgate_mount_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d3a7c1e-92b4-4f08-a6d1-7e0c2b9f4a13
 // last-edited: 2026-11-19
 
@@ -178,5 +178,42 @@ func TestBuild_BasicGateInputsAreChecked(t *testing.T) {
 	}
 	if err := build(good(), good()); !errors.Is(err, errBasicGateInput) {
 		t.Errorf("two mounts with a BasicGate: err = %v", err)
+	}
+}
+
+// TestBuild_BasicGateRefusalOfARedirectedPathCarriesTheMountsPolicy: a path a
+// mount's Redirects cover is answered by the dispatcher with the mount's
+// policy (a 301 under its CSP), but stage 8 refuses it first, so stage 5
+// must already know the owner. HEAD's gin chain wrote one set of headers on
+// the refusal and on the redirect; a refusal under core's default CSP is the
+// difference the F3-07 parity table caught.
+func TestBuild_BasicGateRefusalOfARedirectedPathCarriesTheMountsPolicy(t *testing.T) {
+	const csp = "default-src 'self'; img-src 'self' data:"
+	r := NewRouter(Options{}, Deps{})
+	routes := gcpdBasicRoutes()
+	for _, c := range []string{"/api/health", "/api/v1/", "/api/v2/", "/ping", "/status", "/login"} {
+		if err := r.Claim("gcpd", c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.AllowAuthMethods("gcpd", "gcpd.signal")
+	if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin(ginRoutesOf(routes)...), Auth: LegacyAuthGin,
+		ServesSPA: true, TopSegments: []string{"ping", "status"}, SPAShared: []string{"login"},
+		DefaultCSP: func(*http.Request) string { return csp }, BasicExemptAssets: headBasicAssets, Routes: manifestOf(routes...),
+		BasicGate: &BasicGateOptions{Settings: settingsOf(true, "bwayne"), Password: gatePW("Wayne-Manor", nil), Realm: headRealm},
+		Redirects: []LegacyRedirect{{Prefix: "/api/old/", Location: func(*http.Request) (string, bool) { return "/new", true }}}}); err != nil {
+		t.Fatal(err)
+	}
+	h := mustBuild(t, r)
+	rec := basicRequest(h, http.MethodGet, "/api/old/cowl", "")
+	if !refused(t, rec) {
+		t.Fatalf("GET /api/old/cowl without credentials = %d, want the gate's 401", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Security-Policy"); got != csp {
+		t.Errorf("the refusal's CSP = %q, want the mount's %q", got, csp)
+	}
+	signed := basicRequest(h, http.MethodGet, "/api/old/cowl", "bwayne:Wayne-Manor")
+	if signed.Code != http.StatusMovedPermanently || signed.Header().Get("Content-Security-Policy") != csp {
+		t.Errorf("signed in: %d, CSP %q; want the 301 under the mount's CSP", signed.Code, signed.Header().Get("Content-Security-Policy"))
 	}
 }

@@ -1,5 +1,5 @@
 // file: core/httpapi/router.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 592b4b18-11e9-41ab-b2a5-23b0c23383c2
 // last-edited: 2026-11-19
 
@@ -764,6 +764,10 @@ func (r *Router) policyOf() func(*http.Request) *httpmw.Policy {
 	if _, owner := r.rootOwner(); owner != "" && owner != "core" {
 		root = policies[owner]
 	}
+	// A path a mount's Redirects cover is that mount's answer too: stage 8
+	// refuses it before the dispatcher labels the redirect (HEAD's gin chain
+	// wrote the same headers on the refusal as on the 301).
+	redirect, redirectPolicy := r.legacyRedirect(), r.redirectPolicy()
 	of := func(owner string) *httpmw.Policy {
 		if p := policies[owner]; p != nil {
 			return p
@@ -775,6 +779,11 @@ func (r *Router) policyOf() func(*http.Request) *httpmw.Policy {
 		for _, c := range claims {
 			if p == strings.TrimSuffix(c.prefix, "/") || (strings.HasSuffix(c.prefix, "/") && strings.HasPrefix(p, c.prefix)) || p == c.prefix {
 				return of(c.owner)
+			}
+		}
+		if redirect != nil {
+			if _, covered := redirect(req); covered {
+				return redirectPolicy
 			}
 		}
 		if root != nil && firstSegment(p) != "api" {
