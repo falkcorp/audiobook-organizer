@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.14.1 -->
+<!-- version: 1.14.2 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
-<!-- last-edited: 2026-11-11 -->
+<!-- last-edited: 2026-11-19 -->
 
 # 05 — Config and secrets (`core/config`, `core/secrets`)
 
@@ -273,8 +273,9 @@ type Options struct {
 	Flags       map[Path]string   // ONLY flags the operator explicitly set (FromFlagSet / app adapter)
 	// BootRecordRoot is called by Boot with core.paths.state_dir as ResolveStateDir resolved it (env, flags,
 	// compiled default, HEAD's fallback; never the file or the record it locates, §1.7); the kernel opens
-	// and returns the os.Root that holds config.boot.json (§1.3.5).
-	BootRecordRoot func(stateDir string) (*os.Root, error)
+	// and returns the directory that holds config.boot.json (§1.3.5): config.StateFiles, an *os.Root-backed
+	// labelled view in production (internal/statefs; F3-07 a6) so the crash matrix can break its writes.
+	BootRecordRoot func(stateDir string) (StateFiles, error)
 	// Passthrough reports the operator-layer paths config reads raw and does not own: the
 	// integrations.<kind>.<instance>.<field> paths of 05-metadata M1 (C11).
 	Passthrough func(Path) bool
@@ -1797,7 +1798,7 @@ type Write struct { // staged by config.Store.Apply into Committer.Commit
 }
 
 type Options struct {
-	StateDir      *os.Root          // opened by the kernel on core.paths.state_dir
+	StateDir      StateFiles        // opened by the kernel on core.paths.state_dir: *os.Root-backed (internal/statefs; F3-07 a6)
 	KeyFile       string            // relative to StateDir; default "secrets.keyring"
 	Keyspace      storage.Keyspace  // c/secrets/
 	AppID         string            // app.Options.AppID: a compiled constant of the app's main, bound into AAD

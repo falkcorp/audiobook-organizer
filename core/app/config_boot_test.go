@@ -1,19 +1,23 @@
 // file: core/app/config_boot_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d0c7b3e-2a41-4f9a-8c66-91e4b7a2d3f8
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package app
 
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // With Options.CoreConfigBoot storagePath passes on only the compiled path: the
@@ -131,5 +135,74 @@ func TestCoreConfigBoot_ClaimsModeIsStillRead(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "claims mode") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+// TestCoreConfigBoot_OfflineWritesRefuseANonOwnerFirst (F3-07 a6,
+// seams.d/F3-07.md): with the gate on, each offline command that writes
+// names itself to kernel.ResolveStorage, which refuses a state directory
+// candidate that exists and that this user does not own before step 0
+// creates anything. The compiled default here exists and cannot be used as
+// a directory (a regular file), so without the check step 0 would fall back
+// and create the store's directory beside it before the command's own owner
+// check refused; with it nothing is made. A read-only open is not refused.
+// The resolver never reads the boot record, so none is set aside as .bad
+// (kernel's TestResolveStorage_RefusesANonOwnerBeforeAnything).
+func TestCoreConfigBoot_OfflineWritesRefuseANonOwnerFirst(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("files carry no owner storage.StateDirOwner reads")
+	}
+	root := t.TempDir()
+	state, data := filepath.Join(root, "st"), filepath.Join(root, "data")
+	if err := os.WriteFile(state, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opts := offlineOpts(t)
+	opts.CoreConfigBoot = true
+	opts.StateDir = state // the compiled default: exists, not a directory
+	opts.Env = []string{"GOTHAM_CORE_STORAGE_PATH=" + filepath.Join(data, "main.pebble")}
+	keeper := offlineKeeper()
+	stranger := os.Geteuid() + 1
+	ctx := bootseam.With(t.Context(), &bootseam.Seams{Euid: func() int { return stranger }})
+	cmds := OfflineCommands(opts, keeper)
+
+	for _, tc := range []struct {
+		name, what string
+		run        func() error
+	}{
+		{"storage prune-checkpoints", "storage prune-checkpoints", nil},
+		{"storage reset", "storage reset", nil},
+		{"storage restore-offline", "storage restore-offline", nil},
+		{"secrets export-keyring", "secrets export-keyring", nil},
+		{"secrets rotate-derive", "secrets rotate-derive", nil},
+		{"secrets set-install-id", "secrets set-install-id", nil},
+		{"storage quarantine purge", "a read-write offline open", nil},
+		{"OpenOffline read-write", "a read-write offline open", func() error {
+			_, err := OpenOffline(ctx, opts, false, keeper)
+			return err
+		}},
+	} {
+		args := map[string][]string{
+			"storage reset":            {"--confirm", "RESET"},
+			"secrets export-keyring":   {"--out", filepath.Join(t.TempDir(), "keyring.export")},
+			"secrets set-install-id":   {"--install-id", "wayne-manor"},
+			"storage quarantine purge": {"--step", "joker", "--confirm"},
+		}[tc.name]
+		run := tc.run
+		if run == nil {
+			run = func() error { return secretsCmd(t, cmds, tc.name).Run(ctx, args, &bytes.Buffer{}) }
+		}
+		err := run()
+		if !errors.Is(err, storage.ErrNotStateDirOwner) || !strings.Contains(err.Error(), tc.what) {
+			t.Errorf("%s as a stranger = %v, want storage.ErrNotStateDirOwner naming %q", tc.name, err, tc.what)
+		}
+		if _, err := os.Stat(data); !os.IsNotExist(err) {
+			t.Fatalf("%s as a stranger created the store's directory (the fallback): %v", tc.name, err)
+		}
+	}
+	// A read-only open is not the owner rule's: it falls back beside the
+	// store, as serve would, and is not refused as a non-owner.
+	if _, err := OpenOffline(ctx, opts, true, keeper); errors.Is(err, storage.ErrNotStateDirOwner) {
+		t.Fatalf("a read-only OpenOffline as a stranger was refused as a non-owner: %v", err)
 	}
 }

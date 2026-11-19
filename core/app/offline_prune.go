@@ -1,7 +1,7 @@
 // file: core/app/offline_prune.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 7435e2a1-aaaa-450e-96a6-35082ffd5d60
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package app
 
@@ -85,7 +85,7 @@ func pruneCheckpoints(ctx context.Context, opts Options, mods []module.Module, i
 	if err != nil {
 		return err
 	}
-	dbPath, stateDir, err := offlineStoragePath(ctx, opts, c, mods)
+	dbPath, stateDir, err := offlineStoragePath(ctx, opts, c, mods, "storage prune-checkpoints")
 	if err != nil {
 		return err
 	}
