@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g7.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 8e3a5d17-2c94-4b60-a1f8-6d07c9e4b352
 // last-edited: 2026-11-19
 
@@ -82,6 +82,12 @@ type t6g7Env struct {
 	// SetResult persists a result document: HEAD's ReporterSetResult. Nil in a
 	// native shell, whose Task returns the result instead.
 	SetResult func(v any) error
+	// SetItem names the item the run is on (HEAD: Reporter.SetCurrentItem; native:
+	// a progress note). Nil is a no-op for a shell that has no current-item line.
+	SetItem func(label string)
+	// Touch tells the liveness watchdog the run is alive without moving the bar
+	// (HEAD: registry.TouchLiveness; native: rc.Progress().Tick()).
+	Touch func()
 	// Reporter is the sdk.Reporter the shared helpers that take one (the batch
 	// writer's liveness stamps, the pre-write heartbeat) are handed: HEAD's own
 	// Reporter, or a sink over Progress for a native run (whose executor stamps
@@ -216,6 +222,8 @@ func t6g7HeadEnv(rep opsregistry.Reporter, live bool) t6g7Env {
 		OpID:      opsregistry.ReporterOpID(rep),
 		Items:     t6g7HeadItems(rep),
 		SetResult: func(v any) error { return opsregistry.ReporterSetResult(rep, v) },
+		SetItem:   rep.SetCurrentItem,
+		Touch:     func() { opsregistry.TouchLiveness(rep) },
 		Reporter:  rep,
 	}
 }
@@ -241,6 +249,8 @@ func t6g7NativeEnv(rc *tasks.RC) t6g7Env {
 		Logger:     rc.Log(),
 		OpID:       string(rc.RunID()),
 		Items:      t6g7NativeItems(rc),
+		SetItem:    func(label string) { rc.Progress().Note(label) },
+		Touch:      func() { rc.Progress().Tick() },
 		Checkpoint: rc.Checkpoint,
 		Restore:    rc.Restore,
 	}
@@ -550,6 +560,7 @@ type t6g7Store interface {
 	titleBackfillStore
 	titleRepairStore
 	userMergeStore
+	tagBackfillStore
 }
 
 // t6g7Writer is every write the 15 definitions make, composed from each
@@ -560,6 +571,7 @@ type t6g7Writer interface {
 	reviewStatusIndexRepairWriter
 	titleBackfillWriter
 	titleRepairWriter
+	tagBackfillWriter
 	bulkWriteBackWriter
 	userMergeWriter
 }
@@ -605,6 +617,7 @@ func t6g7KindList(p *Plugin, deps t6g7Deps, sched func(tasks.Kind) *tasks.Schedu
 		p.titleRepairNative(deps, sched),
 		p.bulkWriteBackNative(deps, sched),
 		p.userMergeNative(deps, sched),
+		p.tagBackfillNative(deps, sched),
 	}
 }
 
