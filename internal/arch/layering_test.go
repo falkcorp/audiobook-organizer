@@ -1,7 +1,7 @@
 // file: internal/arch/layering_test.go
-// version: 1.6.4
+// version: 1.6.5
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 // Package arch holds architecture guard tests. It has no non-test code.
 //
@@ -160,6 +160,7 @@ var layerOf = map[string]int{
 	"internal/search":      2, // table: storage
 
 	// Layer 3: domain
+	"internal/books/appconfig":          3, // computed: the config Facade's projection engine; imports internal/config (1), the layer-0 cutover table and logger, and core only; internal/books wires it
 	"internal/activity":                 3, // computed: max of imports=3, floored at 3
 	"internal/ai":                       3, // computed: max of imports=3, floored at 3
 	"internal/ai/aijobs":                3, // computed: max of imports=2, floored at 3

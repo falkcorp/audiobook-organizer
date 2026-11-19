@@ -1,0 +1,158 @@
+// file: internal/books/appconfig/fake_test.go
+// version: 1.0.0
+// guid: 2a6d8f14-7c39-4e51-9b0a-e3f5c1d7a862
+// last-edited: 2026-11-19
+
+package appconfig
+
+import (
+	"context"
+	"encoding/json"
+	"iter"
+	"slices"
+	"sync"
+
+	coreconfig "github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/secrets"
+)
+
+// fakeAccess is a module.ConfigAccess over maps: just enough of core's store to
+// drive the Engine without booting a kernel. Apply writes the values, bumps the
+// generation and fires the OnCommit hooks, as core does.
+type fakeAccess struct {
+	mu        sync.Mutex
+	vals      map[coreconfig.Path]json.RawMessage // effective values of registered keys
+	locked    map[coreconfig.Path]string
+	regSecret map[coreconfig.Path]bool // registered secret keys
+	secrets   map[secrets.Name]string  // the secret store
+	unreadble map[secrets.Name]bool
+	pass      map[coreconfig.Path]coreconfig.OperatorValue
+	gen       uint64
+	hooks     []func(uint64)
+	applyErr  error
+	applied   []coreconfig.Patch
+	puts      []secrets.Name
+	dels      []secrets.Name
+	by        []string
+}
+
+func newFake() *fakeAccess {
+	return &fakeAccess{vals: map[coreconfig.Path]json.RawMessage{}, locked: map[coreconfig.Path]string{},
+		regSecret: map[coreconfig.Path]bool{}, secrets: map[secrets.Name]string{}, unreadble: map[secrets.Name]bool{},
+		pass: map[coreconfig.Path]coreconfig.OperatorValue{}}
+}
+
+func (f *fakeAccess) Lookup(p coreconfig.Path) (coreconfig.KeyState, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.regSecret[p] {
+		_, set := f.secrets[secrets.Name(p)]
+		return coreconfig.KeyState{Path: p, Secret: &secrets.Meta{Name: secrets.Name(p), Set: set}}, true
+	}
+	v, ok := f.vals[p]
+	if !ok {
+		return coreconfig.KeyState{}, false
+	}
+	return coreconfig.KeyState{Path: p, Effective: v, LockedBy: f.locked[p]}, true
+}
+
+func (f *fakeAccess) Keys() iter.Seq2[coreconfig.Path, coreconfig.KeyState] {
+	return func(func(coreconfig.Path, coreconfig.KeyState) bool) {}
+}
+
+func (f *fakeAccess) Apply(_ context.Context, p coreconfig.Patch, _ coreconfig.Actor) (coreconfig.Result, error) {
+	f.mu.Lock()
+	if f.applyErr != nil {
+		f.mu.Unlock()
+		return coreconfig.Result{}, f.applyErr
+	}
+	f.applied = append(f.applied, p)
+	var applied []coreconfig.Path
+	for k, v := range p.Set {
+		if f.regSecret[k] {
+			var plain string
+			_ = json.Unmarshal(v, &plain)
+			f.secrets[secrets.Name(k)] = plain
+		} else {
+			f.vals[k] = v
+		}
+		applied = append(applied, k)
+	}
+	for _, k := range p.Unset {
+		delete(f.secrets, secrets.Name(k))
+		applied = append(applied, k)
+	}
+	slices.Sort(applied)
+	f.gen++
+	gen, hooks := f.gen, slices.Clone(f.hooks)
+	f.mu.Unlock()
+	for _, h := range hooks {
+		h(gen)
+	}
+	return coreconfig.Result{Generation: gen, Applied: applied}, nil
+}
+
+func (f *fakeAccess) Generation() uint64 { f.mu.Lock(); defer f.mu.Unlock(); return f.gen }
+
+func (f *fakeAccess) OnCommit(fn func(uint64)) {
+	f.mu.Lock()
+	f.hooks = append(f.hooks, fn)
+	f.mu.Unlock()
+}
+
+func (f *fakeAccess) PassthroughValues() iter.Seq2[coreconfig.Path, coreconfig.OperatorValue] {
+	f.mu.Lock()
+	cp := map[coreconfig.Path]coreconfig.OperatorValue{}
+	for k, v := range f.pass {
+		cp[k] = v
+	}
+	f.mu.Unlock()
+	return func(yield func(coreconfig.Path, coreconfig.OperatorValue) bool) {
+		for _, k := range slices.Sorted(mapKeys(cp)) {
+			if !yield(k, cp[k]) {
+				return
+			}
+		}
+	}
+}
+
+func mapKeys[K comparable, V any](m map[K]V) iter.Seq[K] {
+	return func(yield func(K) bool) {
+		for k := range m {
+			if !yield(k) {
+				return
+			}
+		}
+	}
+}
+
+func (f *fakeAccess) Secret(_ context.Context, n secrets.Name) (secrets.Value, secrets.Meta, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.unreadble[n] {
+		return secrets.Value{}, secrets.Meta{Name: n, Set: true, Err: secrets.ErrCorrupt}, secrets.ErrCorrupt
+	}
+	v, ok := f.secrets[n]
+	if !ok {
+		return secrets.Value{}, secrets.Meta{Name: n}, secrets.ErrNotSet
+	}
+	return secrets.NewValue(v), secrets.Meta{Name: n, Set: true, Source: secrets.SourceStored, Fingerprint: "abcd1234"}, nil
+}
+
+func (f *fakeAccess) PutSecret(_ context.Context, n secrets.Name, v secrets.Value, by string) (secrets.Meta, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.secrets[n] = v.Reveal()
+	f.puts = append(f.puts, n)
+	f.by = append(f.by, by)
+	return secrets.Meta{Name: n, Set: true}, nil
+}
+
+func (f *fakeAccess) DeleteSecret(_ context.Context, n secrets.Name, by string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.secrets, n)
+	f.dels = append(f.dels, n)
+	f.by = append(f.by, by)
+	return nil
+}

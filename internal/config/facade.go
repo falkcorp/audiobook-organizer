@@ -1,5 +1,5 @@
 // file: internal/config/facade.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d1f6a0e-7b52-4c39-9e8a-2a6c0b5d7e13
 // last-edited: 2026-11-19
 
@@ -130,9 +130,22 @@ type UpdateResult struct {
 	Applied        []string
 	RestartPending []string
 	// PostCommit is non-nil when the write committed and an after-commit hook
-	// failed (a *coreconfig.PostCommitError): report it, do not roll back.
+	// failed (a *coreconfig.PostCommitError): report it, do not roll back. It
+	// joins core's own hook failures with those of the UpdateHooks.
 	PostCommit error
+	// Ops is what the UpdateHooks started, response key to operation id:
+	// "dedup_rescore_op_id" when a dedup weight change queued a re-band. A
+	// handler copies each pair into the response body under the same key.
+	Ops map[string]string
 }
+
+// UpdateHook runs once after an Update commits and the projection has been
+// rebuilt, with the projection before and after. It starts whatever the change
+// implies (the dedup re-band when the score ladder moved) and returns the
+// operations it started by response key. A hook that errs does not undo the
+// write: the error lands in UpdateResult.PostCommit. Mutate does not run hooks;
+// only the API write does, as the update service's sinks did.
+type UpdateHook func(ctx context.Context, before, after Config) (ops map[string]string, err error)
 
 // Facade is the per-App configuration value. The exported package names
 // delegate to the installed one. Every method is safe for concurrent use.
