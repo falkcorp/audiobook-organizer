@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/kinds_split_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d2c8e41-7b09-4f36-a8d5-3e91c0b7f264
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package dedup
 
@@ -9,11 +9,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/stretchr/testify/require"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
@@ -189,4 +191,73 @@ func TestDedupSplit_BulkMergeHeadShellRefusals(t *testing.T) {
 	require.ErrorContains(t, err, "no candidate snapshots")
 	err = p.runSplitBookBulkMerge(context.Background(), json.RawMessage(splitBulkParams), &mockReporter{})
 	require.ErrorContains(t, err, "split-book bulk merge: store unavailable")
+}
+
+// notesContain reports whether any progress note holds sub.
+func notesContain(notes []string, sub string) bool {
+	for _, n := range notes {
+		if strings.Contains(n, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// Each candidate's progress line counts from one against the batch size.
+func TestDedupSplit_BulkMergeLiveProgressCountsCandidates(t *testing.T) {
+	spy, d := newScoringSpy()
+	spy.mergeErr["yo-1"] = merge.ErrITunesProtected
+	spy.mergeErr["hu-1"] = dedupengine.ErrSplitBookRefused
+	spy.mergeRes["hf-1"] = &dedupengine.SplitBookMergeResult{KeepID: "hf-1", MergedSrcCount: 1}
+	items := `{"items":[` +
+		`{"candidate_id":"c-ok","book_ids":["ok-1","ok-2"],"keep_id":"ok-1"},` +
+		`{"candidate_id":"c-yo","book_ids":["yo-1","yo-2"],"keep_id":"yo-1"},` +
+		`{"candidate_id":"c-hu","book_ids":["hu-1","hu-2"],"keep_id":"hu-1"},` +
+		`{"candidate_id":"c-half","book_ids":["hf-1","hf-2","hf-3"],"keep_id":"hf-1"}]}`
+	h, _, err := runKindResult(t, splitMergeBuild(&Plugin{}, d), tasks.ModeLive, &sentinelWriter{}, items)
+	require.NoError(t, err)
+	notes := h.allNotes()
+	for _, want := range []string{
+		"Merged candidate: 1 / 4", "Refused (iTunes library): 2 / 4",
+		"Refused (not chapters): 3 / 4", "Retained incomplete candidate: 4 / 4",
+	} {
+		require.True(t, notesContain(notes, want), "%q missing from %v", want, notes)
+	}
+}
+
+// A dry run's progress lines count from one too, for all three recheck answers.
+func TestDedupSplit_BulkMergePreviewProgressCountsCandidates(t *testing.T) {
+	spy, d := newScoringSpy()
+	spy.recheck["hu-1"] = []string{"a member is 90 minutes long"}
+	h, _, err := runKindResult(t, splitMergeBuild(&Plugin{}, d), tasks.ModePreview, &sentinelWriter{}, splitBulkParams)
+	require.NoError(t, err)
+	require.True(t, notesContain(h.allNotes(), "Dry-run ready: 1 / 2"), "%v", h.allNotes())
+	require.True(t, notesContain(h.allNotes(), "Dry-run would refuse (not chapters): 2 / 2"), "%v", h.allNotes())
+
+	spy, d = newScoringSpy()
+	spy.recheckErr["yo-1"] = errors.New("book gone")
+	h, _, err = runKindResult(t, splitMergeBuild(&Plugin{}, d), tasks.ModePreview, &sentinelWriter{}, splitBulkParams)
+	require.NoError(t, err)
+	require.True(t, notesContain(h.allNotes(), "Dry-run would retain (unreadable): 1 / 2"), "%v", h.allNotes())
+	require.Contains(t, h.logged(), "recheck could not read a member")
+}
+
+// The detector's loaded-count callback updates the progress line each time, and
+// the op log only on every ten-thousandth book.
+func TestDedupSplit_ScanLoadProgressAndLogCadence(t *testing.T) {
+	spy, d := newScoringSpy()
+	spy.loadSteps = []int{1000, 10000, 10500}
+	h, _, err := runKindResult(t, splitScanBuild(&Plugin{}, d), tasks.ModeLive, &sentinelWriter{}, "")
+	require.NoError(t, err)
+	require.True(t, notesContain(h.allNotes(), "Loading books: 1000 loaded..."), "%v", h.allNotes())
+	require.True(t, notesContain(h.allNotes(), "Loading books: 10500 loaded..."), "%v", h.allNotes())
+	require.Equal(t, 1, strings.Count(h.logged(), "split-book scan: loading books"), h.logged())
+	require.Contains(t, h.logged(), "loaded=10000")
+}
+
+// headScoringReads without an embedding store answers ListCandidates with an
+// error the callers read as "no count".
+func TestDedupSplit_HeadReadsWithoutEmbeddingStoreRefuseListCandidates(t *testing.T) {
+	_, _, err := headScoringReads{}.ListCandidates(database.CandidateFilter{})
+	require.Error(t, err)
 }

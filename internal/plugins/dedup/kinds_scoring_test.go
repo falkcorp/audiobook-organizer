@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/kinds_scoring_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: a002cdf7-aa0e-4499-b278-7610e743dccf
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package dedup
 
@@ -70,6 +70,8 @@ type scoringSpy struct {
 
 	// split-book kinds
 	splitCands []dedupengine.SplitBookCandidate
+	// loadSteps are the loaded-book counts the detector reports; nil is {1000}.
+	loadSteps  []int
 	detectErr  error
 	saved      [][]dedupengine.SplitBookCandidate
 	saveErr    error
@@ -217,7 +219,13 @@ func (s *scoringSpy) EnsureSinglePrimary(_ context.Context, group string) error 
 func (s *scoringSpy) DetectSplitBookCandidates(_ context.Context, progress func(loaded int)) ([]dedupengine.SplitBookCandidate, error) {
 	s.rec("DetectSplitBookCandidates")
 	if progress != nil {
-		progress(1000)
+		steps := s.loadSteps
+		if steps == nil {
+			steps = []int{1000}
+		}
+		for _, n := range steps {
+			progress(n)
+		}
 	}
 	return s.splitCands, s.detectErr
 }
