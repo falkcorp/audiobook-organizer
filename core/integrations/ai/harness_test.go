@@ -1,7 +1,7 @@
 // file: core/integrations/ai/harness_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3a6f9c18-d4e2-4b75-8e01-c7b25f6a9d34
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 package ai_test
 
@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/mediacore/integrations/ai"
 	"github.com/falkcorp/mediacore/integrations/integrationstest"
 	"github.com/falkcorp/mediacore/internal/instancestore"
+	"github.com/falkcorp/mediacore/internal/statefs"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
@@ -269,7 +270,7 @@ func newHarness(t testing.TB, opts ...harnessOption) *harness {
 	t.Cleanup(func() { _ = root.Close() })
 	clk := newClock()
 	h := &harness{t: t, clk: clk, stager: &fakeStager{}, backends: map[integrations.InstanceID]ai.Backend{}}
-	sec, err := secrets.Open(ctx, secrets.Options{StateDir: root, Keyspace: keyspaceOf(t, db, secretsOwner), AppID: "gotham", Now: clk.Now})
+	sec, err := secrets.Open(ctx, secrets.Options{StateDir: statefs.FromRoot(root), Keyspace: keyspaceOf(t, db, secretsOwner), AppID: "gotham", Now: clk.Now})
 	if err != nil {
 		t.Fatalf("open secrets: %v", err)
 	}

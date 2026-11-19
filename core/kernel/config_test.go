@@ -1,7 +1,7 @@
 // file: core/kernel/config_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8b2e5f7c-3a19-4d06-b8e4-2f9c6a1d7e53
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package kernel
 
@@ -195,14 +195,14 @@ func TestStateDir_KernelAgreesWithTheResolver(t *testing.T) {
 			}
 			// Boot opened the record's root at step 0's directory; the same
 			// directory spelled differently is still accepted.
-			rt, err := cb.bootRoot(cb.stateDir + "/")
+			rt, err := cb.bootRoot(t.Context(), cb.stateDir+"/")
 			if err != nil {
 				t.Fatalf("bootRoot(step 0's directory) = %v", err)
 			}
 			if err := rt.Close(); err != nil {
 				t.Fatal(err)
 			}
-			if rt, err := cb.bootRoot(filepath.Join(root, "elsewhere")); err == nil {
+			if rt, err := cb.bootRoot(t.Context(), filepath.Join(root, "elsewhere")); err == nil {
 				if cerr := rt.Close(); cerr != nil {
 					t.Error(cerr)
 				}
