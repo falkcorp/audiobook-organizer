@@ -1,5 +1,5 @@
 // file: internal/books/cutover_flip_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: b94e07d2-6a1c-4c35-8d7f-2e0a5f3c9b18
 // last-edited: 2026-11-19
 
@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
@@ -199,11 +200,11 @@ func TestFlipConfigNames_DarkUntilDeclared(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opts.RetiredConfigNames != nil || opts.ConfigEnvBindings != nil {
-		t.Errorf("OfflineOptions carries retired=%d bindings=%d while the flip is dark", len(opts.RetiredConfigNames), len(opts.ConfigEnvBindings))
+	if opts.RetiredConfigNames != nil || opts.ConfigEnvBindings != nil || opts.ConfigPassthrough != nil {
+		t.Errorf("OfflineOptions carries retired=%d bindings=%d passthrough=%t while the flip is dark", len(opts.RetiredConfigNames), len(opts.ConfigEnvBindings), opts.ConfigPassthrough != nil)
 	}
-	if r, b := flipConfigNames(false); r != nil || b != nil {
-		t.Errorf("flipConfigNames(false) = %v, %v, want nothing", r, b)
+	if r, b, pt := flipConfigNames(false); r != nil || b != nil || pt != nil {
+		t.Errorf("flipConfigNames(false) = %v, %v, %t, want nothing", r, b, pt != nil)
 	}
 
 	old := flipDeclared
@@ -226,35 +227,49 @@ func TestFlipConfigNames_DarkUntilDeclared(t *testing.T) {
 	if !slices.Equal(opts.ConfigEnvBindings, want) {
 		t.Errorf("bindings = %v, want %v", opts.ConfigEnvBindings, want)
 	}
+	if opts.ConfigPassthrough == nil || !opts.ConfigPassthrough("integrations.ai.openai.api_key") {
+		t.Error("a declared flip's OfflineOptions has no passthrough predicate for the OPENAI bindings")
+	}
 	if Module().(*booksModule).flip != true {
 		t.Error("Module() did not copy the switch")
 	}
 }
 
-// TestFlipConfigNames_RetiredListAcceptedByCoreConfig: core config accepts the
-// books retired list at boot (a name listed twice or a malformed entry would
-// refuse it). The OPENAI bindings are deliberately not booted here: core config
-// places an env binding only onto a path some section owns or Options.Passthrough
-// accepts, and nothing sets Passthrough yet, so booting them with OPENAI_API_KEY
-// set fails "no registered section owns integrations.ai.openai.api_key". Slice (e)
-// or the integrations store (F7-08) must supply it before the switch flips
-// (todo.d/2026-11-19-f3-07-passthrough-for-openai-bindings.md).
-func TestFlipConfigNames_RetiredListAcceptedByCoreConfig(t *testing.T) {
-	retired, _ := flipConfigNames(true)
-	a, err := app.New(t.Context(), app.Options{
-		AppID: AppID, StateDir: t.TempDir(), CoreConfigBoot: true,
-		Args: []string{}, Env: []string{}, RetiredConfigNames: retired,
-	}, oracleModule{})
-	if err != nil {
-		t.Fatalf("app.New with the books retired list: %v", err)
+// TestFlipConfigNames_BootsWithTheOpenAIBindings: the whole F3 config list the
+// books module hands app.Options (retired names, the two OPENAI bindings and the
+// passthrough predicate) is accepted by core config's boot with both ecosystem
+// names set, and the value an operator supplies through OPENAI_API_KEY is what
+// the integrations path reads. Without the predicate the same boot is refused
+// ("no registered section owns"), which is what the todo.d fragment of slice (d)
+// recorded: the predicate is what makes the bindings bootable.
+func TestFlipConfigNames_BootsWithTheOpenAIBindings(t *testing.T) {
+	retired, bindings, passthrough := flipConfigNames(true)
+	env := []string{"OPENAI_API_KEY=gotham-signal-0001", "OPENAI_BASE_URL=https://api.gotham.invalid/v1"}
+	boot := func(pt func(coreconfig.Path) bool) error {
+		a, err := app.New(t.Context(), app.Options{
+			AppID: AppID, StateDir: t.TempDir(), CoreConfigBoot: true,
+			Args: []string{}, Env: env, RetiredConfigNames: retired,
+			ConfigEnvBindings: bindings, ConfigPassthrough: pt,
+		}, oracleModule{})
+		if err != nil {
+			return err
+		}
+		return a.Close(t.Context())
 	}
-	if err := a.Close(t.Context()); err != nil {
-		t.Fatal(err)
+	if err := boot(passthrough); err != nil {
+		t.Fatalf("app.New with the books config lists and both OPENAI names set: %v", err)
+	}
+	err := boot(nil)
+	if err == nil {
+		t.Fatal("the bindings booted with no passthrough predicate; the predicate is not what makes them bootable")
+	}
+	if !strings.Contains(err.Error(), "no registered section owns") {
+		t.Errorf("without the predicate the boot failed for another reason: %v", err)
 	}
 }
 
 // TestOptions_CarriesTheConfigListsOnlyWithTheSwitch: serve's Options hands the
-// retired names and OPENAI bindings to app.Options exactly when the module it
+// retired names, OPENAI bindings and passthrough predicate to app.Options exactly when the module it
 // is given declares the flip; Module() as shipped hands neither.
 func TestOptions_CarriesTheConfigListsOnlyWithTheSwitch(t *testing.T) {
 	for _, on := range []bool{false, true} {
@@ -268,8 +283,8 @@ func TestOptions_CarriesTheConfigListsOnlyWithTheSwitch(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := len(opts.RetiredConfigNames) > 0 && len(opts.ConfigEnvBindings) == 2; got != on {
-				t.Errorf("Options carries retired=%d bindings=%d", len(opts.RetiredConfigNames), len(opts.ConfigEnvBindings))
+			if got := len(opts.RetiredConfigNames) > 0 && len(opts.ConfigEnvBindings) == 2 && opts.ConfigPassthrough != nil; got != on {
+				t.Errorf("Options carries retired=%d bindings=%d passthrough=%t", len(opts.RetiredConfigNames), len(opts.ConfigEnvBindings), opts.ConfigPassthrough != nil)
 			}
 		})
 	}

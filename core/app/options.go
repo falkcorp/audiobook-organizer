@@ -1,7 +1,7 @@
 // file: core/app/options.go
-// version: 1.6.2
+// version: 1.7.0
 // guid: 55e09ad5-34c8-4d0f-b8d5-117718ebf0ed
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package app
 
@@ -76,6 +76,15 @@ type Options struct {
 	// config.Options.EnvBindings; core and module keys declare theirs with
 	// config.EnvBinding (05-config §1.3.1). From F3; ABO passes it from F3-07.
 	ConfigEnvBindings []config.EnvName
+	// ConfigPassthrough reports the operator-layer paths config reads raw and
+	// owns no section for (ABO: the integrations.<kind>.<instance>.<field>
+	// paths its rename table stages, 05-metadata M1), handed to
+	// config.Options.Passthrough. Core places an env binding only onto a path
+	// a registered section owns or this accepts, so an app that lists a
+	// ConfigEnvBindings entry for an integrations path must set it too: with
+	// the binding's env name set and no predicate, boot fails "which no
+	// registered section owns". nil accepts no path. From F3-07.
+	ConfigPassthrough func(config.Path) bool
 	// Args/Env feed the flag and env layers; nil means
 	// os.Args[1:]/os.Environ(). At R1's skeleton only ResolveStateDir reads
 	// Env; the flag layer arrives with config (F3).
