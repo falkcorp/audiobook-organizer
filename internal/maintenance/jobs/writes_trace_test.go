@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/writes_trace_test.go
-// version: 2.1.0
+// version: 3.0.0
 // guid: c58e1d07-3a92-4f64-b0d3-7e49a2f6c815
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package jobs_test
 
@@ -41,25 +41,35 @@ var traceVerb = regexp.MustCompile(oracleVerb.String() + `|^(Import|Repoint|Drop
 // change nothing durable: each edits a value in memory, takes an in-process lock
 // or reads. The row of the file or book they feed is written by the store method
 // that follows them, which is in the trace.
+//
+// Each is keyed by the call key the oracle records, "<receiver>.<method>"
+// (STOREFN.<name> for a function of the store package, STORECONCRETE.<type>.<method>
+// for a method called on a concrete store type), as traceAliases is. It used to
+// be keyed by the bare method name, which exempted a method of that name on ANY
+// receiver: a future write named Move or Locked on another type would have been
+// ignored without a word.
 var traceInert = map[string]string{
-	"SetMeasuredDuration":        "sets a field on the in-memory BookFile; the row is written by the file-row method that follows",
-	"RecordDurationProbeFailure": "sets fields on the in-memory BookFile; the row is written by the file-row method that follows",
-	"LockUserBookState":          "takes an in-process mutex",
-	"LockUserBookStates":         "takes in-process mutexes",
-	"LockUserBookStatePair":      "takes in-process mutexes",
-	"Move":                       "SeriesBooksMap.Move edits a map in memory",
-	"DropDanglingSeriesRef":      "clears SeriesID on the in-memory book; the ModifyBook that follows writes it",
-	"ApplyRespectingLocks":       "runs the mutate closure on the in-memory book and restores the locked fields",
-	"RetiredClaimOnPath":         "reads book_file rows",
-	"Locked":                     "FieldLocks.Locked reads a lock flag",
-	"StoredAggregateSec":         "BookRuntime.StoredAggregateSec reads a stored value",
+	"STORECONCRETE.*store.BookFile.SetMeasuredDuration":        "sets a field on the in-memory BookFile; the row is written by the file-row method that follows",
+	"STORECONCRETE.*store.BookFile.RecordDurationProbeFailure": "sets fields on the in-memory BookFile; the row is written by the file-row method that follows",
+	"STOREFN.LockUserBookState":                                "takes an in-process mutex",
+	"STOREFN.LockUserBookStates":                               "takes in-process mutexes",
+	"STOREFN.LockUserBookStatePair":                            "takes in-process mutexes",
+	"STORECONCRETE.store.SeriesBooksMap.Move":                  "SeriesBooksMap.Move edits a map in memory",
+	"STOREFN.DropDanglingSeriesRef":                            "clears SeriesID on the in-memory book; the ModifyBook that follows writes it",
+	"STOREFN.ApplyRespectingLocks":                             "runs the mutate closure on the in-memory book and restores the locked fields",
+	"STOREFN.RetiredClaimOnPath":                               "reads book_file rows",
+	"STORECONCRETE.store.FieldLocks.Locked":                    "FieldLocks.Locked reads a lock flag",
+	"STORECONCRETE.store.BookRuntime.StoredAggregateSec":       "BookRuntime.StoredAggregateSec reads a stored value",
 }
 
 // traceAliases name a call by its full "<receiver>.<method>" key when its method
-// name is not the table key it stands for: the method on a receiver that is a
-// different store method than its name says (an interface whose implementation
-// writes through another method), or a raw-key method whose key family only the
-// receiver knows (SetRaw and DeleteRaw are qualified in the table).
+// name is not the table key it stands for: a raw-key method whose key family only
+// the receiver knows (SetRaw and DeleteRaw are qualified in the table), or a
+// function of the store package whose own body is not walked and whose one write
+// is another method. An interface call whose implementations are all module code
+// needs no entry: the walk follows it into them, and the writes are the ones their
+// bodies make (tagger.LibraryImporter.ImportPath and jobs.checkpointer.Save were
+// entries until the walk followed interface calls).
 var traceAliases = map[string]string{
 	// merge-chapter-groups' raw keys. WriteCombineJournal writes the
 	// merge:combine-journal: row (the undo journal: operations); putPendingRepair
@@ -73,12 +83,10 @@ var traceAliases = map[string]string{
 	"jobs.retentionKVStore.DeleteRaw": "DeleteRaw/dead_book_index",
 	// The checkpoint interface of backfill-file-hashes and recompute-book-aggregates
 	// stores its blob through SaveOperationState (checkpointerFrom).
-	"jobs.checkpointer.Save": "SaveOperationState",
 	// tagger.LibraryImporter has one implementation, deluge.LibraryImporterAdapter,
 	// whose ImportPath ends in ImportToLibraryWith and so in Store.UpdateBookFile
 	// (internal/deluge/importer_adapter.go:94), the call bulk-deluge-import makes.
 	// The oracle does not follow an interface call into its implementation.
-	"tagger.LibraryImporter.ImportPath": "UpdateBookFile",
 	// database.ModifyBookRespectingLocks is a function in the store package, whose
 	// bodies the oracle does not walk, and its one write is the ModifyBook it
 	// makes under the book's lock. A job that calls it is a ModifyBook caller;
@@ -98,13 +106,67 @@ func traceWriteName(table map[string][]string, key string) (string, bool) {
 	if oracleNotAWrite.MatchString(recv) {
 		return "", false
 	}
-	if _, ok := traceInert[name]; ok {
+	if _, ok := traceInert[key]; ok {
 		return "", false
 	}
 	if _, ok := table[name]; ok || traceVerb.MatchString(name) {
 		return name, true
 	}
 	return "", false
+}
+
+// TestTraceWriteName_InertIsKeyedByReceiver: an inert entry exempts one
+// "<receiver>.<method>", not every method of that name. A write named Move or
+// SetMeasuredDuration on any other receiver is a write the trace must account for.
+func TestTraceWriteName_InertIsKeyedByReceiver(t *testing.T) {
+	table := sharedTable()
+	for key, why := range traceInert {
+		if name, isWrite := traceWriteName(table, key); isWrite {
+			t.Errorf("%s is inert (%s) but classified as write %s", key, why, name)
+		}
+		i := strings.LastIndex(key, ".")
+		other := "jobs.someOtherType." + key[i+1:]
+		if _, exempt := traceInert[other]; exempt {
+			t.Fatalf("%s is in traceInert; pick another receiver for the probe", other)
+		}
+		// Whether the bare name reads as a write at all decides what the probe
+		// can show: only a name with a write verb (or a table row) is classified.
+		name := key[i+1:]
+		_, inTable := table[name]
+		wantWrite := traceVerb.MatchString(name) || inTable
+		if _, isWrite := traceWriteName(table, other); isWrite != wantWrite {
+			t.Errorf("%s: classified as write = %v, want %v (the bare name %s must not exempt other receivers)", other, isWrite, wantWrite, name)
+		}
+	}
+	// The two the doc comment names must be live probes, not vacuous ones.
+	for _, name := range []string{"Move", "SetMeasuredDuration"} {
+		if _, isWrite := traceWriteName(table, "jobs.someOtherType."+name); !isWrite {
+			t.Errorf("a %s on an unrelated receiver is not classified as a write", name)
+		}
+	}
+}
+
+// TestJobWrites_ClassificationTablesAreLive: every traceInert and traceAliases
+// key is a call some job's code makes. An entry the oracle no longer sees keeps
+// excluding for nothing, and a key that does not match what the oracle records
+// (a bare method name, a receiver that was renamed) would silently stop applying.
+func TestJobWrites_ClassificationTablesAreLive(t *testing.T) {
+	seen := map[string]bool{}
+	for _, j := range oracleJobs(t) {
+		for key := range j.calls {
+			seen[key] = true
+		}
+	}
+	for key := range traceInert {
+		if !seen[key] {
+			t.Errorf("traceInert has %q, which no job's code calls", key)
+		}
+	}
+	for key := range traceAliases {
+		if !seen[key] {
+			t.Errorf("traceAliases has %q, which no job's code calls", key)
+		}
+	}
 }
 
 // sharedTable is resources.Table with its rows as sorted strings.
