@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/label_refinement.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4b8e2d7a-91c3-4f05-b6a8-3d0e5c7f1a92
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 // dedup.label-refinement is the parent op behind the scheduled label_refinement
 // task. It runs dedup.rebuild-gold-labels and then dedup.calibrate-composite as
@@ -37,8 +37,6 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"
-	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -107,6 +105,14 @@ func (p *Plugin) labelRefinementDef() sdk.OperationDef {
 	}
 }
 
+// labelRefinementEnv is what the label-refinement core takes from its shell.
+type labelRefinementEnv struct {
+	kindEnv
+	Children childDriver
+	Phase    phaseFunc
+}
+
+// runLabelRefinement is HEAD's v2 shell over labelRefinementCore.
 func (p *Plugin) runLabelRefinement(ctx context.Context, _ json.RawMessage, rep sdk.Reporter) error {
 	if p.registry == nil {
 		return fmt.Errorf("%s: operation registry not available", LabelRefinementDefID)
@@ -114,81 +120,38 @@ func (p *Plugin) runLabelRefinement(ctx context.Context, _ json.RawMessage, rep 
 	if p.opStatus == nil {
 		return fmt.Errorf("%s: operation store not available; cannot follow child operations", LabelRefinementDefID)
 	}
-
-	total := len(labelRefinementSteps) * labelRefinementStepUnits
-	childIDs := make([]string, len(labelRefinementSteps))
-	parentID := opsregistry.ReporterOpID(rep)
-	for i, step := range labelRefinementSteps {
-		// One phase per step, as dedup.run-all does, so the Operations page
-		// shows which step is running.
-		err := rep.RunPhase(ctx, step.DefID, func(ctx context.Context, _ opsregistry.Reporter) error {
-			var opts []sdk.EnqueueOption
-			if parentID != "" {
-				// Lineage only: children show under this run in Operations.
-				opts = append(opts, sdk.WithParent(parentID))
-			}
-			childID, err := p.registry.EnqueueOp(ctx, step.DefID, labelRefinementChildParams{}, opts...)
-			if err != nil {
-				return fmt.Errorf("%s: could not start %s: %w", step.Label, step.DefID, err)
-			}
-			if childID == "" {
-				return fmt.Errorf("%s: the registry returned no operation id for %s", step.Label, step.DefID)
-			}
-			childIDs[i] = childID
-			_ = rep.Log(slog.LevelInfo, fmt.Sprintf("%s: started %s (%s)", step.Label, step.DefID, childID))
-			return p.followLabelRefinementChild(ctx, rep, step, childID, i*labelRefinementStepUnits, total)
-		})
-		if err != nil {
-			return err
-		}
-	}
-
-	_ = rep.UpdateProgress(total, total, "Finished (report only, nothing written)")
-	_ = opsregistry.ReporterSetResult(rep, LabelRefinementResult{DryRun: true, RebuildOp: childIDs[0], CalibrateOp: childIDs[1]})
-	_ = rep.Log(slog.LevelInfo, fmt.Sprintf("label refinement chain complete (report only, nothing written): rebuild %s, calibrate %s", childIDs[0], childIDs[1]))
-	return nil
+	env := headEnv(rep, true)
+	_, err := labelRefinementCore(ctx, labelRefinementEnv{kindEnv: env, Children: p.headChildDriver(env.OpID), Phase: headPhase(rep)})
+	return err
 }
 
-// followLabelRefinementChild follows one child to a terminal status, mirroring
-// its progress onto this op (see LIVENESS in run_all.go: Follow reports a
-// running child only when its row changed, so a wedged child leaves this op
-// silent too). A child that is not completed ends the chain with an error.
-func (p *Plugin) followLabelRefinementChild(ctx context.Context, rep sdk.Reporter, step labelRefinementStep, childID string, base, total int) error {
-	// A recorded child counts as one unit before it reports any, so a queued
-	// child does not leave the parent at progress 0.
-	share := 1
-	row, err := childop.Follow(ctx, p.opStatus, childID, childop.Options{
-		Interval: p.runAllPoll(),
-		Paused:   p.operationsPaused,
-		OnObserve: func(o childop.Observation) {
-			switch o.Event {
-			case childop.EventQueued:
-				_ = rep.UpdateProgress(base+share, total, step.Label+" — waiting to start (queued behind other work)")
-			case childop.EventPaused:
-				_ = rep.UpdateProgress(base+share, total, step.Label+" — paused by an operator")
-			default:
-				if o.Row.ProgressTotal > 0 {
-					if s := min(o.Row.ProgressCurrent*labelRefinementStepUnits/o.Row.ProgressTotal, labelRefinementStepUnits-1); s > share {
-						share = s
-					}
-				}
-				msg := step.Label
-				if o.Row.ProgressMessage != "" {
-					msg += " — " + o.Row.ProgressMessage
-				}
-				_ = rep.UpdateProgress(base+share, total, msg)
-			}
-		},
-	})
-	if err != nil {
-		return err
-	}
-	if row.Status != "completed" {
-		why := ""
-		if row.ErrorMessage != nil && *row.ErrorMessage != "" {
-			why = ": " + *row.ErrorMessage
+// labelRefinementCore is the label-refinement body, shared by both shells: each
+// step's child runs report-only and is followed to the end, in HEAD's order, and
+// a child that does not complete ends the chain (the one child driver, chain.go).
+func labelRefinementCore(ctx context.Context, env labelRefinementEnv) (LabelRefinementResult, error) {
+	total := len(labelRefinementSteps) * labelRefinementStepUnits
+	childIDs := make([]string, len(labelRefinementSteps))
+	for i, step := range labelRefinementSteps {
+		env.Progress(i*labelRefinementStepUnits, total, step.Label)
+		// One phase per step, as dedup.run-all does, so the Operations page
+		// shows which step is running.
+		err := env.Phase(ctx, step.DefID, func(ctx context.Context, e kindEnv) error {
+			return runChainChild(ctx, chainEnv{kindEnv: e, Children: env.Children}, chainChild{
+				Label: step.Label, DefID: step.DefID, Head: step.Label,
+				Base: i * labelRefinementStepUnits, Total: total, Units: labelRefinementStepUnits,
+				Mode: childReportOnly, StopNote: "; label refinement stopped", Chain: "dedup.label-refinement",
+			}, &childIDs[i], nil)
+		})
+		if err != nil {
+			return LabelRefinementResult{}, err
 		}
-		return fmt.Errorf("%s (%s) ended as %q%s; label refinement stopped", step.Label, row.ID, row.Status, why)
 	}
-	return nil
+
+	env.Progress(total, total, "Finished (report only, nothing written)")
+	result := LabelRefinementResult{DryRun: true, RebuildOp: childIDs[0], CalibrateOp: childIDs[1]}
+	if env.SetResult != nil {
+		_ = env.SetResult(result)
+	}
+	env.Log(slog.LevelInfo, fmt.Sprintf("label refinement chain complete (report only, nothing written): rebuild %s, calibrate %s", childIDs[0], childIDs[1]))
+	return result, nil
 }

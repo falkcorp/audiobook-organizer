@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/run_all.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 428d4a76-207e-4f6e-8b0a-5f4d939690f2
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 // dedup.run-all is the Review page's one-button "Find all duplicates" run: every
 // duplicate check, in order, as ONE server-side operation. Until 2026-09-28 the
@@ -290,6 +290,24 @@ func (p *Plugin) rescorePreview(ctx context.Context) (dedupengine.RescoreResult,
 	return p.engine.Rescore(ctx, false)
 }
 
+// runAllEnv is what the run-all core takes from its shell (rules R2 and R10): the
+// run's env, the driver that starts and waits for a child, the phase wrapper, and
+// the read-only rescore preview. HEAD's shell resolves the dry-run switch from the
+// params (ResolveLive); the native shell's mode is the start request's, which is
+// already in kindEnv.Live.
+type runAllEnv struct {
+	kindEnv
+	Children childDriver
+	Phase    phaseFunc
+	Rescore  func(context.Context) (dedupengine.RescoreResult, error)
+	// ResolveLive, when set, decides live-or-preview from the plan-validated state
+	// (HEAD: opmode.ResolveDryRun over dry_run/dryRun). It runs after the plan is
+	// validated, as HEAD's did.
+	ResolveLive func(st runAllState) (bool, error)
+}
+
+// runRunAll is HEAD's v2 shell: decode the params and hand runAllCore the run's
+// reporter, the registry-backed child driver and the rescore preview.
 func (p *Plugin) runRunAll(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 	if p.registry == nil {
 		return fmt.Errorf("%s: operation registry not available", RunAllDefID)
@@ -304,105 +322,138 @@ func (p *Plugin) runRunAll(ctx context.Context, raw json.RawMessage, reporter sd
 			return fmt.Errorf("%s: decode params: %w", RunAllDefID, err)
 		}
 	}
-	resuming := len(st.Plan) > 0
+	env := headEnv(reporter, true)
+	env.Checkpoint = reporter.Checkpoint
+	_, err := runAllCore(ctx, runAllEnv{
+		kindEnv:  env,
+		Children: p.headChildDriver(env.OpID),
+		Phase:    headPhase(reporter),
+		Rescore:  p.rescorePreview,
+		ResolveLive: func(st runAllState) (bool, error) {
+			dryRun, err := opmode.ResolveDryRun(RunAllDefID, st.DryRun, st.DryRunCamel)
+			return !dryRun, err
+		},
+	}, st, len(st.Plan) > 0)
+	return err
+}
+
+// runAllCore is the run-all body, shared by HEAD's v2 shell and the native kind
+// (the one driver of the live loop: see chain.go). st is the checkpoint the run
+// resumes from, resuming says whether it names a plan; a run that is not resuming
+// builds the plan from Settings.
+func runAllCore(ctx context.Context, env runAllEnv, st runAllState, resuming bool) (RunAllResult, error) {
 	if !resuming {
 		st.Plan, st.Skipped = runAllPlan()
 		st.StepIndex, st.ChildOpID, st.Finished = 0, "", nil
 	}
 	if err := validateRunAllPlan(st); err != nil {
-		return err
+		return RunAllResult{}, err
 	}
-	dryRun, err := opmode.ResolveDryRun(RunAllDefID, st.DryRun, st.DryRunCamel)
-	if err != nil {
-		return err
+	if env.ResolveLive != nil {
+		live, err := env.ResolveLive(st)
+		if err != nil {
+			return RunAllResult{}, err
+		}
+		env.Live = live
 	}
-	if dryRun {
-		return p.previewRunAll(ctx, st, reporter)
+	if !env.Live {
+		return runAllPreviewCore(ctx, env.kindEnv, st, env.Rescore)
 	}
 
-	opID := opsregistry.ReporterOpID(reporter)
 	total := len(st.Plan) * runAllStepUnits
-	log := reporter.Logger()
+	log := env.Logger
 	if resuming {
 		log.Info("dedup.run-all: resuming", "step_index", st.StepIndex, "plan", strings.Join(st.Plan, ","), "child_op_id", st.ChildOpID)
-		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Resuming at step %d of %d", st.StepIndex+1, len(st.Plan)))
+		env.Log(slog.LevelInfo, fmt.Sprintf("Resuming at step %d of %d", st.StepIndex+1, len(st.Plan)))
 	} else {
 		for _, s := range st.Skipped {
-			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Skipping step %q: turned off in Settings", s))
+			env.Log(slog.LevelInfo, fmt.Sprintf("Skipping step %q: turned off in Settings", s))
 		}
 	}
 	// Report before the first checkpoint: Checkpoint records the reporter's
 	// current progress as high_water_progress, which the boot-loop guard reads.
-	_ = reporter.UpdateProgress(st.StepIndex*runAllStepUnits, total,
+	env.Progress(st.StepIndex*runAllStepUnits, total,
 		fmt.Sprintf("Starting at step %d of %d", st.StepIndex+1, len(st.Plan)))
+	save := func(e kindEnv) {
+		if err := e.Checkpoint(st); err != nil {
+			e.Logger.Warn("dedup.run-all: checkpoint failed", "error", err)
+		}
+	}
 	// Freeze the plan before any child exists, so a restart during the first
 	// enqueue resumes the same plan rather than re-reading config.
-	if err := reporter.Checkpoint(st); err != nil {
-		log.Warn("dedup.run-all: checkpoint failed", "error", err)
-	}
+	save(env.kindEnv)
 
 	var preview *dedupengine.RescoreResult
 	for st.StepIndex < len(st.Plan) {
 		if err := ctx.Err(); err != nil {
-			return err
+			return RunAllResult{}, err
 		}
 		i := st.StepIndex
 		step, _ := lookupRunAllStep(st.Plan[i])
 		head := fmt.Sprintf("Step %d of %d: %s", i+1, len(st.Plan), step.Label)
-		_ = reporter.UpdateProgress(i*runAllStepUnits, total, head)
-		_ = reporter.Log(slog.LevelInfo, head)
+		env.Progress(i*runAllStepUnits, total, head)
+		env.Log(slog.LevelInfo, head)
 
-		err := reporter.RunPhase(ctx, step.ID, func(ctx context.Context, rep opsregistry.Reporter) error {
+		err := env.Phase(ctx, step.ID, func(ctx context.Context, e kindEnv) error {
 			if step.DefID == "" {
-				res, err := p.rescorePreview(ctx)
+				res, err := env.Rescore(ctx)
 				if err != nil {
 					return fmt.Errorf("%s: %w", step.Label, err)
 				}
 				preview = &res
 				return nil
 			}
-			return p.runAllChild(ctx, rep, &st, step, opID, head, total)
+			// The checkpoint a running child's progress triggers is throttled to one
+			// a minute (runAllCheckpointEvery); the one after its enqueue is not.
+			var last time.Time
+			record := func(force bool) {
+				if !force {
+					if time.Since(last) < runAllCheckpointEvery {
+						return
+					}
+					last = time.Now()
+				}
+				save(e)
+			}
+			return runChainChild(ctx, chainEnv{kindEnv: e, Children: env.Children}, chainChild{
+				Label: step.Label, DefID: step.DefID, Head: head,
+				Base: i * runAllStepUnits, Total: total, Units: runAllStepUnits,
+				Mode: childLive, Chain: "dedup.run-all",
+			}, &st.ChildOpID, record)
 		})
 		if err != nil {
 			// A canceled context is the registry's to classify (restart vs.
 			// user cancel), so hand it back untouched and do NOT checkpoint:
 			// the last checkpoint already names this step and its child.
 			if ctx.Err() != nil {
-				return ctx.Err()
+				return RunAllResult{}, ctx.Err()
 			}
-			return err
+			return RunAllResult{}, err
 		}
 
 		st.Finished = append(st.Finished, RunAllStepRecord{ID: step.ID, Label: step.Label, ChildOpID: st.ChildOpID})
 		st.StepIndex++
 		st.ChildOpID = ""
-		_ = reporter.UpdateProgress(st.StepIndex*runAllStepUnits, total, fmt.Sprintf("%s — done", head))
-		if err := reporter.Checkpoint(st); err != nil {
-			log.Warn("dedup.run-all: checkpoint failed", "error", err)
-		}
+		env.Progress(st.StepIndex*runAllStepUnits, total, fmt.Sprintf("%s — done", head))
+		save(env.kindEnv)
 	}
 
 	result := RunAllResult{PreviewSkipped: []RunAllPreviewSkip{}, Steps: st.Finished, Skipped: st.Skipped, RescorePreview: preview}
 	if st.Finished == nil {
 		result.Steps = []RunAllStepRecord{}
 	}
-	if err := opsregistry.ReporterSetResult(reporter, result); err != nil {
-		log.Warn("dedup.run-all: could not store result", "error", err)
+	if env.SetResult != nil {
+		if err := env.SetResult(result); err != nil {
+			log.Warn("dedup.run-all: could not store result", "error", err)
+		}
 	}
 	done := fmt.Sprintf("Finished %d of %d steps", len(st.Finished), len(st.Plan))
 	if preview != nil {
 		done += fmt.Sprintf("; %d of %d waiting pairs would score differently (nothing changed)", preview.Changed, preview.Inspected)
 	}
-	_ = reporter.UpdateProgress(total, total, done)
-	_ = reporter.Log(slog.LevelInfo, done)
-	return nil
-}
-
-// previewRunAll is the v2 shell of the dry run: runAllPreviewCore over HEAD's
-// reporter and rescore.
-func (p *Plugin) previewRunAll(ctx context.Context, st runAllState, reporter sdk.Reporter) error {
-	_, err := runAllPreviewCore(ctx, headEnv(reporter, false), st, p.rescorePreview)
-	return err
+	env.Progress(total, total, done)
+	env.Log(slog.LevelInfo, done)
+	return result, nil
 }
 
 // runAllPreviewCore is the dry run, shared by both shells: no child op is
@@ -472,121 +523,84 @@ func validateRunAllPlan(st runAllState) error {
 	return nil
 }
 
-// runAllChild runs one op step: resume the recorded child if there is one,
-// otherwise enqueue it, then follow it to a terminal status.
-func (p *Plugin) runAllChild(ctx context.Context, rep sdk.Reporter, st *runAllState, step runAllStep, parentID, head string, total int) error {
-	if st.ChildOpID != "" {
-		row, err := p.opStatus.GetOperationV2(st.ChildOpID)
-		switch {
-		case err != nil || row == nil:
-			// Unreadable or gone: start the step again (the enqueue collapses
-			// onto a live run of the same def if there is one).
-			rep.Logger().Warn("dedup.run-all: recorded child unreadable; re-enqueueing step",
-				"step", step.ID, "child_op_id", st.ChildOpID, "error", err)
-			st.ChildOpID = ""
-		case row.Status == "completed":
-			return nil
-		case row.Status == "failed" || row.Status == "canceled":
-			return childEndedError(step, row)
-		case state.IsInterrupted(row.Status):
-			_ = rep.Log(slog.LevelInfo, fmt.Sprintf("%s was interrupted by a restart (%s); starting it again", step.Label, row.Status))
-			st.ChildOpID = ""
-		}
-	}
-
-	if st.ChildOpID == "" {
-		var opts []sdk.EnqueueOption
-		if parentID != "" {
-			// Lineage only: children show under this run in Operations.
-			opts = append(opts, sdk.WithParent(parentID))
-		}
-		// Live, explicitly: see MODE in the file comment.
-		childID, err := p.registry.EnqueueOp(ctx, step.DefID, opmode.DryRunParams{DryRun: opmode.Live()}, opts...)
-		if err != nil {
-			return fmt.Errorf("%s: could not start %s: %w", step.Label, step.DefID, err)
-		}
-		if childID == "" {
-			return fmt.Errorf("%s: the registry returned no operation id for %s", step.Label, step.DefID)
-		}
-		st.ChildOpID = childID
-		if err := rep.Checkpoint(*st); err != nil {
-			rep.Logger().Warn("dedup.run-all: checkpoint failed", "error", err)
-		}
-		_ = rep.Log(slog.LevelInfo, fmt.Sprintf("%s: started %s (%s)", step.Label, step.DefID, childID))
-	}
-	return p.waitRunAllChild(ctx, rep, st, step, head, total)
-}
-
-func childEndedError(step runAllStep, row *database.OperationV2Row) error {
-	why := ""
-	if row.ErrorMessage != nil && *row.ErrorMessage != "" {
-		why = ": " + *row.ErrorMessage
-	}
-	return fmt.Errorf("%s (%s) ended as %q%s", step.Label, row.ID, row.Status, why)
-}
-
-// waitRunAllChild follows the child with childop.Follow until it is terminal,
-// mirroring its progress onto the parent. See LIVENESS in the file comment:
-// Follow reports a running child only when its row changed, and a queued or
-// operator-paused child on every poll, so this op's watchdog sees exactly
-// what the child shows and a wedged child leaves this op silent too.
-func (p *Plugin) waitRunAllChild(ctx context.Context, rep sdk.Reporter, st *runAllState, step runAllStep, head string, total int) error {
-	base := st.StepIndex * runAllStepUnits
-	// A recorded child counts as one unit of progress before it reports any.
-	// Without it a run whose step-0 child sits queued (acoustid.scan behind a
-	// fingerprint rescan) checkpoints high_water_progress=0, and the registry's
-	// boot-loop guard force-drops a ResumeRestart op after three restarts at 0.
-	share := 1
-	var lastCkpt time.Time
-	checkpoint := func() {
-		if time.Since(lastCkpt) < runAllCheckpointEvery {
-			return
-		}
-		lastCkpt = time.Now()
-		if err := rep.Checkpoint(*st); err != nil {
-			rep.Logger().Warn("dedup.run-all: checkpoint failed", "error", err)
-		}
-	}
-	row, err := childop.Follow(ctx, p.opStatus, st.ChildOpID, childop.Options{
-		Interval: p.runAllPoll(),
-		Paused:   p.operationsPaused,
-		OnObserve: func(o childop.Observation) {
-			switch o.Event {
-			case childop.EventQueued:
-				_ = rep.UpdateProgress(base+share, total, head+" — waiting to start (queued behind other work)")
-				checkpoint()
-			case childop.EventPaused:
-				// The operator pause parks a RunItems child between items and
-				// keeps only ITS in-memory liveness clock stamped; its row does
-				// not change. Mirror the gate so a long pause does not get this
-				// op reaped.
-				_ = rep.UpdateProgress(base+share, total, head+" — paused by an operator")
-			default: // the running child's row changed
-				if o.Row.ProgressTotal > 0 {
-					// Monotonic within the step: full-scan runs two 0..N
-					// phases, and a bar that jumps back reads as a restart.
-					// The message carries the child's real phase and counts.
-					if s := min(o.Row.ProgressCurrent*runAllStepUnits/o.Row.ProgressTotal, runAllStepUnits-1); s > share {
-						share = s
-					}
-				}
-				msg := head
-				if o.Row.ProgressMessage != "" {
-					msg += " — " + o.Row.ProgressMessage
-				}
-				_ = rep.UpdateProgress(base+share, total, msg)
-				checkpoint()
+// headChildDriver is HEAD's child driver: a child is started with
+// registry.EnqueueOp under the run's operation (lineage only: children show under
+// it in Operations) and followed by polling its operation row with
+// childop.Follow. See LIVENESS in this file's comment: Follow reports a running
+// child only when its row changed, and a queued or operator-paused child on every
+// poll, so this op's watchdog sees exactly what the child shows and a wedged
+// child leaves this op silent too.
+func (p *Plugin) headChildDriver(parentID string) childDriver {
+	return childDriver{
+		NoID: "the registry returned no operation id",
+		Start: func(ctx context.Context, defID string, mode childMode) (string, error) {
+			var opts []sdk.EnqueueOption
+			if parentID != "" {
+				opts = append(opts, sdk.WithParent(parentID))
 			}
+			// Live, explicitly, for run-all (see MODE in the file comment); the
+			// report-only chain enqueues with empty params, which each child reads
+			// as its own dry-run default.
+			var params any = labelRefinementChildParams{}
+			if mode == childLive {
+				params = opmode.DryRunParams{DryRun: opmode.Live()}
+			}
+			return p.registry.EnqueueOp(ctx, defID, params, opts...)
 		},
-	})
-	if err != nil {
-		return err
+		Wait: func(ctx context.Context, id string, reattach bool, observe func(childObservation)) (childEnd, error) {
+			if reattach {
+				row, err := p.opStatus.GetOperationV2(id)
+				if err != nil || row == nil {
+					return childEnd{}, childGoneError{cause: err}
+				}
+				switch {
+				case row.Status == "completed" || row.Status == "failed" || row.Status == "canceled":
+					return headChildEnd(row, false), nil
+				case state.IsInterrupted(row.Status):
+					return headChildEnd(row, true), nil
+				}
+			}
+			row, err := childop.Follow(ctx, p.opStatus, id, childop.Options{
+				Interval: p.runAllPoll(),
+				Paused:   p.operationsPaused,
+				OnObserve: func(o childop.Observation) {
+					switch o.Event {
+					case childop.EventQueued:
+						observe(childObservation{Event: childQueued})
+					case childop.EventPaused:
+						observe(childObservation{Event: childPaused})
+					default:
+						observe(childObservation{Event: childRunning, Current: o.Row.ProgressCurrent, Total: o.Row.ProgressTotal, Message: o.Row.ProgressMessage})
+					}
+				},
+			})
+			if err != nil {
+				return childEnd{}, err
+			}
+			// A child that was alive and then ends interrupted is the registry
+			// force-dropping it, not a restart: this op would have been stopped too.
+			return headChildEnd(row, false), nil
+		},
 	}
-	if row.Status == "completed" {
-		return nil
+}
+
+// headChildEnd reads how a child's operation row ended.
+func headChildEnd(row *database.OperationV2Row, interrupted bool) childEnd {
+	why := ""
+	if row.ErrorMessage != nil {
+		why = *row.ErrorMessage
 	}
-	// failed, canceled, or interrupted_*. During a LIVE wait an interrupted
-	// child is not a restart (this op would have been stopped too); it is the
-	// registry force-dropping the child.
-	return childEndedError(step, row)
+	return childEnd{Status: row.Status, Why: why, Completed: row.Status == "completed", Interrupted: interrupted}
+}
+
+// headPhase is HEAD's phase wrapper: Reporter.RunPhase, so the Operations page
+// shows which step is running, with the env over that phase's reporter.
+func headPhase(reporter sdk.Reporter) phaseFunc {
+	return func(ctx context.Context, id string, fn func(ctx context.Context, env kindEnv) error) error {
+		return reporter.RunPhase(ctx, id, func(ctx context.Context, rep opsregistry.Reporter) error {
+			env := headEnv(rep, true)
+			env.Checkpoint = rep.Checkpoint
+			return fn(ctx, env)
+		})
+	}
 }
