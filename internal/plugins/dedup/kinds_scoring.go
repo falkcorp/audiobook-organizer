@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/kinds_scoring.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 87767b32-a764-471a-bc6d-1b845dc5a45d
 // last-edited: 2026-11-18
 
@@ -58,6 +58,25 @@ type ScoringKindDeps struct {
 	Store     scoringKindStore
 	NewEngine func(tasks.Writer) scoringEngine
 	NewWriter func(tasks.Writer) scoringKindWriter
+	// SplitReads and NewSplitWriter serve the two split-book kinds: the detector
+	// and recheck reads over the main store, and the candidate-row and merge
+	// writes behind the run's gated writer (F5-18 wires both).
+	SplitReads     splitBookKindReads
+	NewSplitWriter func(tasks.Writer) splitBookKindWriter
+}
+
+// splitBookKindReads is the reads the split-book cores take, composed of each
+// definition's own narrow interface (rule R2).
+type splitBookKindReads interface {
+	splitBookScanReads
+	splitBookBulkMergeReads
+}
+
+// splitBookKindWriter is the writes the split-book cores make, composed the same
+// way.
+type splitBookKindWriter interface {
+	splitBookScanWriter
+	splitBookBulkMergeWriter
 }
 
 // scoringWriterOf is the writer a shell hands the factories: the run's gated
@@ -160,10 +179,9 @@ func (h headScoringWriter) EnsureSinglePrimary(ctx context.Context, groupID stri
 	return err
 }
 
-// scoringKinds lists the scoring group's native kinds in HEAD file order. Two
-// HEAD definitions of the group are not converted: dedup.split-book-scan and
-// dedup.split-book-bulk-merge write split_book_candidate: rows, a key family no
-// pkg/ops resource names (R7: STOP, seams.d).
+// scoringKinds lists the scoring group's native kinds in HEAD file order. The
+// two split-book kinds write split_book_candidate: rows, which ops.ResSplitBookCandidates
+// names.
 func scoringKinds(p *Plugin, d ScoringKindDeps, sched func(tasks.Kind) *tasks.Schedule) []tasks.Definition {
 	return []tasks.Definition{
 		p.purgeStaleNative(d, sched),
@@ -173,6 +191,8 @@ func scoringKinds(p *Plugin, d ScoringKindDeps, sched func(tasks.Kind) *tasks.Sc
 		p.bookSignatureScanNative(d, sched),
 		p.drainStaleNative(d, sched),
 		p.quarantineChapterArtifactsNative(d, sched),
+		p.splitBookScanNative(d, sched),
+		p.splitBookBulkMergeNative(d, sched),
 	}
 }
 
@@ -455,6 +475,111 @@ func (p *Plugin) quarantineChapterArtifactsNative(d ScoringKindDeps, sched func(
 				}
 			}
 			return quarantineChapterArtifactsCore(rc.Context(), env)
+		},
+	})
+}
+
+// splitReadsFor refuses a run whose owner left the split-book reads unset.
+func splitReadsFor(kind tasks.Kind, d ScoringKindDeps) (splitBookKindReads, error) {
+	if err := errNeed(kind, "Scoring.SplitReads", d.SplitReads != nil); err != nil {
+		return nil, err
+	}
+	return d.SplitReads, nil
+}
+
+// splitWriterFor builds the run's split-book writer; only a live run calls it.
+func splitWriterFor(kind tasks.Kind, d ScoringKindDeps, rc *tasks.RC) (splitBookKindWriter, error) {
+	if err := errNeed(kind, "Scoring.NewSplitWriter", d.NewSplitWriter != nil); err != nil {
+		return nil, err
+	}
+	w := d.NewSplitWriter(rc.Writer())
+	if w == nil {
+		return nil, errNeedWriter(kind)
+	}
+	return w, nil
+}
+
+// splitBookScanNative is the native dedup.split-book-scan kind. HEAD runs it live
+// only (no Preview), so a native Preview run is refused. Resume FromZero: HEAD's
+// Requeue.
+func (p *Plugin) splitBookScanNative(d ScoringKindDeps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := kindCommon(splitBookScanKind, sched, false)
+	c.Title = "Split-book backfill scan"
+	c.Help = splitBookScanHelp
+	// Writes found: SplitBookStore.SaveAll replaces the split_book_candidate: rows
+	// (split_book_candidates). Reads: the detector loads every book and reads
+	// each book's author name (books, authors).
+	c.Effects = tasks.Writes(res(ops.ResSplitBookCandidates)...).
+		AlsoReads(res(ops.ResBooks, ops.ResAuthors)...)
+	c.Resume = tasks.ResumeFromZero
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.dedup.split-book-scan")
+	c.Timeout = 60 * time.Minute
+	return tasks.Task(splitBookScanKind, tasks.TaskSpec[json.RawMessage, splitBookScanResult]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (splitBookScanResult, error) {
+			if err := kindLiveOnly(rc, splitBookScanKind); err != nil {
+				return splitBookScanResult{}, err
+			}
+			if err := refuseKindModeKeys(splitBookScanKind, raw); err != nil {
+				return splitBookScanResult{}, err
+			}
+			reads, err := splitReadsFor(splitBookScanKind, d)
+			if err != nil {
+				return splitBookScanResult{}, err
+			}
+			writer, err := splitWriterFor(splitBookScanKind, d, rc)
+			if err != nil {
+				return splitBookScanResult{}, err
+			}
+			return splitBookScanCore(rc.Context(), splitBookScanEnv{
+				kindEnv:    nativeEnv(rc),
+				Reads:      reads,
+				OpenWriter: func() (splitBookScanWriter, error) { return writer, nil },
+			})
+		},
+	})
+}
+
+// splitBookBulkMergeNative is the native dedup.split-book-bulk-merge kind.
+// Preview is HEAD's dry_run (recheck only). Resume Ask: HEAD's ResumeAsk.
+func (p *Plugin) splitBookBulkMergeNative(d ScoringKindDeps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := kindCommon(splitBookBulkMergeKind, sched, false)
+	c.Title = "Merge reviewed split-book candidates"
+	c.Help = splitBookBulkMergeHelp
+	// Writes found: MergeSplitBookClusterRechecked moves the sources' files onto
+	// the keep (book_files), soft-deletes the sources and fills the keep through
+	// ModifyBook (books, authors, metadata_cache, indexes: Table "ModifyBook"),
+	// reassigns external ids, listening state and sync ids (external_ids,
+	// user_state, sync_identity) and journals the undo under the run's id
+	// (operations); the merged candidate's row is deleted (split_book_candidates).
+	// HEAD declared only books and book_files.
+	c.Effects = tasks.Writes(res(ops.ResBooks, ops.ResBookFiles, ops.ResAuthors, ops.ResMetadataCache,
+		ops.ResIndexes, ops.ResExternalIDs, ops.ResUserState, ops.ResSyncIdentity, ops.ResOperations,
+		ops.ResSplitBookCandidates)...)
+	c.Resume = tasks.ResumeAsk
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.dedup.split-book-merge")
+	c.Timeout = 60 * time.Minute
+	return tasks.Task(splitBookBulkMergeKind, tasks.TaskSpec[json.RawMessage, splitBookBulkMergeResult]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (splitBookBulkMergeResult, error) {
+			params, err := decodeNativeParams[splitBookBulkMergeParams](splitBookBulkMergeKind, raw)
+			if err != nil {
+				return splitBookBulkMergeResult{}, err
+			}
+			if len(params.Items) == 0 {
+				return splitBookBulkMergeResult{}, errSplitBookNoItems
+			}
+			env := splitBookBulkMergeEnv{kindEnv: nativeEnv(rc), Items: params.Items}
+			if env.Live {
+				if env.Writer, err = splitWriterFor(splitBookBulkMergeKind, d, rc); err != nil {
+					return splitBookBulkMergeResult{}, err
+				}
+			} else if env.Reads, err = splitReadsFor(splitBookBulkMergeKind, d); err != nil {
+				return splitBookBulkMergeResult{}, err
+			}
+			return splitBookBulkMergeCore(rc.Context(), env)
 		},
 	})
 }
