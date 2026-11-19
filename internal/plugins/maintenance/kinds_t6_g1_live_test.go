@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_live_test.go
-// version: 1.0.12
+// version: 1.0.13
 // guid: 5e2a9c71-0d3b-4f68-b1a4-7c8e6f2d9a13
-// last-edited: 2026-11-15
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -98,6 +98,11 @@ func (w *t6g1CountWriter) ModifyBookAuthors(bookID string, fn func([]database.Bo
 func (w *t6g1CountWriter) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
 	w.note("ModifyBook")
 	return w.OpsStore.ModifyBook(id, fn)
+}
+
+func (w *t6g1CountWriter) ModifyBookCredits(bookID string, fn func(book *database.Book, credits *database.BookCreditsEdit) error) (*database.Book, database.BookCreditsEdit, error) {
+	w.note("ModifyBookCredits")
+	return w.t6g1HeadWriter.ModifyBookCredits(bookID, fn)
 }
 
 func (w *t6g1CountWriter) DeleteAuthor(id int) error {

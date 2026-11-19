@@ -1,7 +1,7 @@
 // file: internal/books/store/modify_book_respecting_locks.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e45633de-67fc-4a94-9870-20fcc2b9cc16
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package store
 
@@ -47,7 +47,7 @@ type BookModifier interface {
 // narrows that window to one batch; it does not close it. Closing it needs the
 // helper to take LockMetadataState around the write, which needs an audit of
 // every LockMetadataState holder's lock order first (todo.d fragment
-// 20261118_lock-metadata-state-order-audit.md).
+// 2026-11-18-lock-metadata-state-order-audit.md).
 func ModifyBookRespectingLocks(modifier BookModifier, reader MetadataFieldStateReader, id string, mutate func(*Book) error) (written *Book, held []string, err error) {
 	written, err = modifier.ModifyBook(id, func(cur *Book) error {
 		locks, lerr := LoadFieldLocks(reader, cur.ID)

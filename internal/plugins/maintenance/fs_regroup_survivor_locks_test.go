@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_survivor_locks_test.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 6b1d9e47-2c85-4f30-a7d1-0e93b5c8f264
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -95,4 +95,85 @@ func TestUpdateSurvivor_UnreadableLocksKeepTheTitle(t *testing.T) {
 	require.Equal(t, "Gotham Fragment 1", got.Title, "an unreadable lock set was treated as not locked")
 	require.Equal(t, "/relink-trashed/survivor/new", got.FilePath)
 	require.EqualValues(t, 1, a.titleKept.Load())
+}
+
+// survivorHookStore runs a hook once updateSurvivor has read the book and entered
+// the write, before the write's callback: a lock the user saves in between.
+type survivorHookStore struct {
+	*database.PebbleStore
+	beforeWrite func()
+}
+
+func (s survivorHookStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	if s.beforeWrite != nil {
+		s.beforeWrite()
+	}
+	return s.PebbleStore.ModifyBook(id, fn)
+}
+
+// The title's lock is read inside the write, not before it: a lock saved after
+// updateSurvivor's first read still holds the title, and the path (which no lock
+// covers) still moves. Read before the write, this lock was missed and the user's
+// title was replaced.
+func TestUpdateSurvivor_ALockSavedAfterTheReadStillHoldsTheTitle(t *testing.T) {
+	st, id, g := survivorFixture(t)
+	db := survivorHookStore{PebbleStore: st, beforeWrite: func() {
+		require.NoError(t, st.UpsertMetadataFieldState(&database.MetadataFieldState{
+			BookID: id, Field: database.FieldKeyTitle, OverrideLocked: true,
+		}))
+	}}
+	a := &fsApplier{store: db, opID: "op-survivor-late", reporter: &fakeReporter{}}
+
+	a.updateSurvivor(g)
+
+	got, err := st.GetBookByID(id)
+	require.NoError(t, err)
+	require.Equal(t, "Gotham Fragment 1", got.Title, "a lock saved after the read did not hold the title")
+	require.Equal(t, "/relink-trashed/survivor/new", got.FilePath)
+	require.EqualValues(t, 1, a.titleKept.Load())
+	require.Equal(t, map[string]int{"file_path": 1}, journalFields(t, st, "op-survivor-late"))
+}
+
+// A held title with no path to move writes nothing at all, and is still counted.
+func TestUpdateSurvivor_ALateLockWithNoPathToMoveWritesNothing(t *testing.T) {
+	st, id, g := survivorFixture(t)
+	g.BookFolder = ""
+	db := survivorHookStore{PebbleStore: st, beforeWrite: func() {
+		require.NoError(t, st.UpsertMetadataFieldState(&database.MetadataFieldState{
+			BookID: id, Field: database.FieldKeyTitle, OverrideLocked: true,
+		}))
+	}}
+	a := &fsApplier{store: db, opID: "op-survivor-late-nopath", reporter: &fakeReporter{}}
+
+	a.updateSurvivor(g)
+
+	got, err := st.GetBookByID(id)
+	require.NoError(t, err)
+	require.Equal(t, "Gotham Fragment 1", got.Title)
+	require.Equal(t, "/relink-trashed/survivor/old", got.FilePath)
+	require.EqualValues(t, 1, a.titleKept.Load())
+	require.Empty(t, journalFields(t, st, "op-survivor-late-nopath"))
+}
+
+// A survivor retitled by someone else after the read is left as it is: nothing is
+// written and the lock decision is not counted (it was never made).
+func TestUpdateSurvivor_ASurvivorRetitledAfterTheReadIsLeftAlone(t *testing.T) {
+	st, id, g := survivorFixture(t)
+	db := survivorHookStore{PebbleStore: st, beforeWrite: func() {
+		b, err := st.GetBookByID(id)
+		require.NoError(t, err)
+		b.Title = "Gotham Fragment 1 (user edit)"
+		_, err = st.UpdateBook(id, b)
+		require.NoError(t, err)
+	}}
+	a := &fsApplier{store: db, opID: "op-survivor-retitled", reporter: &fakeReporter{}}
+
+	a.updateSurvivor(g)
+
+	got, err := st.GetBookByID(id)
+	require.NoError(t, err)
+	require.Equal(t, "Gotham Fragment 1 (user edit)", got.Title, "the user's retitle was overwritten")
+	require.Equal(t, "/relink-trashed/survivor/old", got.FilePath)
+	require.Zero(t, a.titleKept.Load())
+	require.Empty(t, journalFields(t, st, "op-survivor-retitled"))
 }
