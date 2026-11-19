@@ -1,7 +1,7 @@
 // file: internal/books/cutover/kindrename/map_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f9d5b30-71e8-4a6c-8c03-b4e1d7a95c28
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package kindrename_test
 
@@ -229,14 +229,14 @@ func TestKindRenameMap_RuleTallies(t *testing.T) {
 		tally[tg.Rule]++
 	}
 	want := map[kindrename.Rule]int{
-		kindrename.RuleCore: 6, kindrename.RuleRepairs: 2, kindrename.RuleAlias: 19, kindrename.RuleBooks: 225, kindrename.RuleRetired: 17,
+		kindrename.RuleCore: 6, kindrename.RuleRepairs: 2, kindrename.RuleAlias: 19, kindrename.RuleBooks: 226, kindrename.RuleRetired: 17,
 	}
 	for r, n := range want {
 		if tally[r] != n {
 			t.Errorf("rule %v: %d entries, want %d", r, tally[r], n)
 		}
 	}
-	if len(tb.Defs) != 269 {
-		t.Errorf("%d entries, want 269 (the ledger's lines)", len(tb.Defs))
+	if len(tb.Defs) != 270 {
+		t.Errorf("%d entries, want 270 (the ledger's lines)", len(tb.Defs))
 	}
 }

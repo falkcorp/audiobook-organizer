@@ -209,6 +209,7 @@ id maintenance.relink-unlinked-books
 id maintenance.repair-library-state
 id maintenance.repair-merged-user-state
 id maintenance.repair-transcribe-status
+id maintenance.reparse-file-intros
 id maintenance.repoint-book-file-rows
 id maintenance.repoint-missing-to-folder-audio
 id maintenance.repoint-unrecorded-renames
