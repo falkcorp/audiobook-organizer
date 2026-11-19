@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_provenance_export_test.go
-// version: 1.0.4
+// version: 1.1.1
 // guid: d61df6f5-c2e0-47ab-b028-44d97b64001c
-// last-edited: 2026-11-15
+// last-edited: 2026-11-18
 //
 // The export is what turns "we can detect that history was destroyed" into
 // "history was not destroyed". The chain proves a row was rewritten; only a
@@ -30,12 +30,23 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
+// exportPlugin is a plugin over prov whose library root is a fresh temp dir, and
+// the ledger path the export is allowed to write there: a file directly in
+// {root}/.reports, the only place the op will write.
+func exportPlugin(t *testing.T, prov database.FileProvenanceStore) (*Plugin, string) {
+	t.Helper()
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".reports"), 0o755))
+	return New(provDeps{fakeDeps: fakeDeps{root: root}, prov: prov}), filepath.Join(root, ".reports", "ledger.jsonl")
+}
+
 func newExportFixture(t *testing.T) (*Plugin, *database.PebbleStore, string) {
 	t.Helper()
 	store, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	return New(provDeps{prov: store}), store, filepath.Join(t.TempDir(), "ledger.jsonl")
+	p, out := exportPlugin(t, store)
+	return p, store, out
 }
 
 // stubProvStore serves canned sequence rows so a test can present deletion
@@ -127,12 +138,123 @@ func TestFileProvenanceExportRequiresAPath(t *testing.T) {
 	assert.Contains(t, err.Error(), "path")
 }
 
-// A relative path or one with traversal is refused rather than resolved
-// against whatever the process happens to consider its working directory.
-func TestFileProvenanceExportRejectsANonAbsolutePath(t *testing.T) {
-	p, _, _ := newExportFixture(t)
-	_, err := exportFileProvenanceHEAD(p, context.Background(),
-		json.RawMessage(`{"path":"ledger.jsonl"}`))
+// The ledger is held to the same rule as every report: a file directly in
+// {root_dir}/.reports. A bare name is that file; a name with a directory in it,
+// traversal, a path anywhere else, and a symlink that leads out are refused, and
+// nothing is created where they pointed. Refusal comes before the ledger is read,
+// so a rejected apply moves no cursor.
+func TestFileProvenanceExportConfinesThePathToTheReportDir(t *testing.T) {
+	p, store, out := newExportFixture(t)
+	seedEvents(t, store, 2)
+	root := filepath.Dir(filepath.Dir(out))
+	outside := t.TempDir()
+	require.NoError(t, os.Symlink(outside, filepath.Join(root, ".reports", "linked")))
+
+	for name, bad := range map[string]string{
+		"outside the root":           filepath.Join(outside, "ledger.jsonl"),
+		"in the root, not .reports":  filepath.Join(root, "ledger.jsonl"),
+		"traversal":                  filepath.Join("..", "ledger.jsonl"),
+		"subdirectory":               filepath.Join("sub", "ledger.jsonl"),
+		"through a symlinked parent": filepath.Join("linked", "ledger.jsonl"),
+		"the report directory":       filepath.Join(root, ".reports"),
+	} {
+		raw, mErr := json.Marshal(map[string]any{"path": bad, "apply": true})
+		require.NoError(t, mErr)
+		_, err := exportFileProvenanceHEAD(p, context.Background(), raw)
+		require.Error(t, err, name)
+	}
+	entries, err := os.ReadDir(outside)
+	require.NoError(t, err)
+	require.Len(t, entries, 0, "a refused path created something where it pointed")
+	cur, cErr := store.GetFileProvExportCursor()
+	require.NoError(t, cErr)
+	assert.Zero(t, cur, "a refused path moved the cursor")
+
+	// The bare name lands in the report directory.
+	res := runExport(t, p, map[string]any{"path": "ledger.jsonl", "apply": true})
+	assert.Equal(t, 2, res.Written)
+	_, statErr := os.Stat(out)
+	require.NoError(t, statErr)
+}
+
+// The ledger is appended to, so a link planted at its name is the case that
+// matters: the open refuses a symlink or a hard link rather than appending
+// through it, and the cursor does not move past lines that were not written.
+func TestFileProvenanceExportRefusesALinkAtTheLedgerName(t *testing.T) {
+	for _, kind := range []string{"symlink", "hardlink"} {
+		t.Run(kind, func(t *testing.T) {
+			p, store, out := newExportFixture(t)
+			seedEvents(t, store, 2)
+			victim := filepath.Join(t.TempDir(), "victim")
+			require.NoError(t, os.WriteFile(victim, []byte("keep me"), 0o644))
+			if kind == "symlink" {
+				require.NoError(t, os.Symlink(victim, out))
+			} else if err := os.Link(victim, out); err != nil {
+				t.Skipf("hard links are not available here: %v", err)
+			}
+
+			raw, mErr := json.Marshal(map[string]any{"path": out, "apply": true})
+			require.NoError(t, mErr)
+			_, err := exportFileProvenanceHEAD(p, context.Background(), raw)
+			require.Error(t, err)
+
+			b, rErr := os.ReadFile(victim)
+			require.NoError(t, rErr)
+			assert.Equal(t, "keep me", string(b), "the export appended through a planted link")
+			cur, cErr := store.GetFileProvExportCursor()
+			require.NoError(t, cErr)
+			assert.Zero(t, cur)
+		})
+	}
+}
+
+// The open itself refuses a link, independent of the resolver's earlier look at
+// the name: a link planted AFTER the path was approved (the window the resolver
+// cannot close) must not be appended through. This calls the default open
+// directly, which is the call a late plant would reach, and checks that an
+// ordinary name still appends, so a refusal is not just a broken open.
+func TestFileProvenanceExportOpenRefusesALinkPlantedAfterTheResolve(t *testing.T) {
+	reports := filepath.Join(t.TempDir(), ".reports")
+	require.NoError(t, os.Mkdir(reports, 0o755))
+	victim := filepath.Join(t.TempDir(), "victim")
+	require.NoError(t, os.WriteFile(victim, []byte("keep me"), 0o644))
+
+	ok := filepath.Join(reports, "ledger.jsonl")
+	for i := 0; i < 2; i++ {
+		w, err := openExportFile(ok)
+		require.NoError(t, err)
+		_, err = w.Write([]byte("line\n"))
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+	}
+	b, err := os.ReadFile(ok)
+	require.NoError(t, err)
+	assert.Equal(t, "line\nline\n", string(b), "the ledger is appended to, not replaced")
+
+	sym := filepath.Join(reports, "sym.jsonl")
+	require.NoError(t, os.Symlink(victim, sym))
+	_, err = openExportFile(sym)
+	require.Error(t, err, "a symlink at the ledger name must be refused")
+
+	hard := filepath.Join(reports, "hard.jsonl")
+	if lerr := os.Link(victim, hard); lerr == nil {
+		_, err = openExportFile(hard)
+		require.Error(t, err, "a hard link at the ledger name must be refused")
+	}
+	v, err := os.ReadFile(victim)
+	require.NoError(t, err)
+	assert.Equal(t, "keep me", string(v))
+}
+
+// With no root_dir there is no report directory to keep the ledger inside.
+func TestFileProvenanceExportNeedsARootDir(t *testing.T) {
+	store, err := database.NewPebbleStoreInMemory(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	p := New(provDeps{fakeDeps: fakeDeps{root: "relative/library"}, prov: store})
+	raw, mErr := json.Marshal(map[string]any{"path": filepath.Join(t.TempDir(), "ledger.jsonl"), "apply": true})
+	require.NoError(t, mErr)
+	_, err = exportFileProvenanceHEAD(p, context.Background(), raw)
 	require.Error(t, err)
 }
 
@@ -233,8 +355,7 @@ func TestFileProvenanceExportRecordsAMissingRowAsEvidence(t *testing.T) {
 		{Seq: 2}, // the row this slot pointed at is gone
 		{Seq: 3, Event: database.FileEvent{Kind: database.FileEventObserved, Path: "/a"}},
 	}}
-	p := New(provDeps{prov: stub})
-	out := filepath.Join(t.TempDir(), "ledger.jsonl")
+	p, out := exportPlugin(t, stub)
 
 	res := runExport(t, p, map[string]any{"path": out, "apply": true})
 
@@ -253,8 +374,7 @@ func TestFileProvenanceExportReportsSequenceGaps(t *testing.T) {
 		// seq 2 and 3 have no index entry at all
 		{Seq: 4, Event: database.FileEvent{Kind: database.FileEventObserved, Path: "/a"}},
 	}}
-	p := New(provDeps{prov: stub})
-	out := filepath.Join(t.TempDir(), "ledger.jsonl")
+	p, out := exportPlugin(t, stub)
 
 	res := runExport(t, p, map[string]any{"path": out, "apply": true})
 
@@ -264,9 +384,9 @@ func TestFileProvenanceExportReportsSequenceGaps(t *testing.T) {
 }
 
 func TestFileProvenanceExportFailsWithoutAProvenanceStore(t *testing.T) {
-	p := New(provDeps{prov: nil})
+	p, _ := exportPlugin(t, nil)
 	_, err := exportFileProvenanceHEAD(p, context.Background(),
-		json.RawMessage(`{"path":"/tmp/x.jsonl"}`))
+		json.RawMessage(`{"path":"x.jsonl"}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not initialized")
 }
@@ -281,11 +401,12 @@ func TestFileProvenanceExportFailsWithoutAProvenanceStore(t *testing.T) {
 // cursor-advance code at all — a test that only covers the open path proves
 // nothing about the ordering.
 func TestFileProvenanceExportLeavesTheCursorWhenTheFileCannotBeOpened(t *testing.T) {
-	p, store, _ := newExportFixture(t)
+	p, store, out := newExportFixture(t)
 	seedEvents(t, store, 2)
 
-	// A directory cannot be opened for appending.
-	raw, mErr := json.Marshal(map[string]any{"path": t.TempDir(), "apply": true})
+	// A directory at the ledger's name cannot be opened for appending.
+	require.NoError(t, os.Mkdir(out, 0o755))
+	raw, mErr := json.Marshal(map[string]any{"path": out, "apply": true})
 	require.NoError(t, mErr)
 	_, err := exportFileProvenanceHEAD(p, context.Background(), raw)
 	require.Error(t, err)
@@ -402,9 +523,9 @@ func TestFileProvenanceExportReportsABrokenChain(t *testing.T) {
 		rows:    []database.FileEventSeqRow{{Seq: 1, Event: good}, {Seq: 2, Event: tampered}},
 		history: map[string][]database.FileEvent{"bf1": {good, tampered}},
 	}
-	p := New(provDeps{prov: stub})
+	p, out := exportPlugin(t, stub)
 
-	res := runExport(t, p, map[string]any{"path": filepath.Join(t.TempDir(), "l.jsonl"), "apply": true})
+	res := runExport(t, p, map[string]any{"path": out, "apply": true})
 
 	assert.Equal(t, 1, res.ChainsBroken)
 	assert.Equal(t, []string{"bf1"}, res.BrokenChains)
@@ -420,9 +541,9 @@ func TestFileProvenanceExportDoesNotCallPreChainEventsBroken(t *testing.T) {
 		rows:    []database.FileEventSeqRow{{Seq: 1, Event: legacy}},
 		history: map[string][]database.FileEvent{"bf1": {legacy}},
 	}
-	p := New(provDeps{prov: stub})
+	p, out := exportPlugin(t, stub)
 
-	res := runExport(t, p, map[string]any{"path": filepath.Join(t.TempDir(), "l.jsonl"), "apply": true})
+	res := runExport(t, p, map[string]any{"path": out, "apply": true})
 
 	assert.Equal(t, 1, res.ChainsVerified)
 	assert.Zero(t, res.ChainsBroken, "pre-chain events were reported as tampering")

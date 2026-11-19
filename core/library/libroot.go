@@ -1,5 +1,5 @@
 // file: core/library/libroot.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 4d8b2f61-a3c7-4e90-b512-9e6f0c1d7a38
 // last-edited: 2026-11-18
 
@@ -68,22 +68,28 @@ const ReportDirName = ".reports"
 
 // ReportPathNotify returns where an op writes its report: the caller's explicit
 // path when one was given, otherwise {root}/.reports/<fileName>. It proves the
-// path's directory exists and is writable before returning, so an op can call
-// it BEFORE doing any work and fail with nothing done rather than apply and
-// then lose its record. It returns an error, rather than guessing, when root is
-// unset or not absolute: with no default there is nowhere to write, and with an
+// report directory exists and is writable before returning, so an op can call it
+// BEFORE doing any work and fail with nothing done rather than apply and then
+// lose its record. It returns an error, rather than guessing, when root is unset
+// or not absolute: with no default there is nowhere to write, and with an
 // explicit path there is no report directory to confine it to.
 //
-// An explicit path is never trusted as given. It must end up inside
-// {root}/.reports: a relative path is taken relative to that directory, and an
-// absolute one must already lie inside it. ".." segments and symlinks (in the
-// path's directories, or as the file itself) that would carry the report
-// elsewhere are refused, and nothing is created outside the report directory
-// when one is. The report directory itself is checked and prepared exactly as
-// for the default path (see ensureReportsDir). The checks run against the
-// filesystem as it is when this is called; a later write that does not itself
-// refuse symlinks can still be redirected by a link planted afterwards, which
-// is why the report directory must be one only this user can write.
+// An explicit path is never trusted as given. It must name a file directly in
+// {root}/.reports: either a bare file name ("r.tsv"), or an absolute path whose
+// directory is that report directory (spelled through the root or through its
+// real location). A name with a directory in it, in any form ("sub/r.tsv",
+// "./r.tsv", "../r.tsv"), is refused, so there are no subdirectories for a
+// report to be created in and nothing is created outside the report directory.
+// A report file that already exists must pass the same checks the writer makes
+// (see OpenReportFile): not a symlink, not a directory, a regular file owned by
+// this user with one link. The report directory itself is checked and prepared
+// exactly as for the default path (see ensureReportsDir).
+//
+// This is the decision, made when it is called; it is not a lock. The file is
+// written later, by WriteReportFile or OpenReportFile, and those repeat the
+// checks on the descriptor they open, which is what stops a link planted between
+// this call and the write. Writing the returned path with anything else (os.Create,
+// os.WriteFile) follows a symlink planted there and gets none of that.
 //
 // onTightened, when not nil, is called when the report directory already
 // existed with world write and that bit was removed: it gets the directory and
@@ -100,10 +106,6 @@ func ReportPathNotify(root, explicit, fileName string, onTightened func(dir stri
 type reportEnv struct {
 	chmod func(name string, mode os.FileMode) error
 	euid  func() int
-	// afterCreate, when not nil, runs after an explicit report path's directory
-	// was created and before that directory is checked again. It is the window a
-	// link planted by another process would use, so a test can use it to plant one.
-	afterCreate func(parent string)
 }
 
 // defaultReportEnv returns the real process environment.
@@ -119,7 +121,7 @@ func reportPathNotify(root, explicit, fileName string, onTightened func(dir stri
 				"report directory to keep it inside", explicit)
 		}
 		return "", fmt.Errorf("no report path: root_dir is not configured, so there is no default "+
-			"report directory; pass reportPath explicitly (report %s)", fileName)
+			"report directory; configure an absolute root_dir (report %s)", fileName)
 	}
 	if !filepath.IsAbs(root) {
 		if explicit != "" {
@@ -127,7 +129,7 @@ func reportPathNotify(root, explicit, fileName string, onTightened func(dir stri
 				"directory it must stay inside would depend on the process working directory", explicit, root)
 		}
 		return "", fmt.Errorf("no report path: root_dir %q is not absolute, so the default report "+
-			"directory would depend on the process working directory; pass reportPath explicitly "+
+			"directory would depend on the process working directory; configure an absolute root_dir "+
 			"(report %s)", root, fileName)
 	}
 	reportsDir := filepath.Join(root, ReportDirName)
@@ -138,26 +140,28 @@ func reportPathNotify(root, explicit, fileName string, onTightened func(dir stri
 	if err := ensureReportsDir(reportsDir, onTightened, env); err != nil {
 		return "", fmt.Errorf("report path %s is not writable: %w", path, err)
 	}
+	if err := checkExistingReportFile(path, reportOpenEnv{euid: env.euid()}); err != nil {
+		return "", err
+	}
 	return path, nil
 }
 
 // containedReportPath resolves a caller-chosen report path and refuses it unless
-// the file would be created inside reportsDir. A relative path is joined onto
-// reportsDir. The path that is checked is the path that is returned (cleaned, so
-// no ".." is left for the kernel to resolve against a symlink the check did not
-// see), and it is checked after symlinks are resolved: the parent's real
-// location, with the first existing ancestor resolved when the parent does not
-// exist yet, must be reportsDir's real location or below it. The file itself
-// must not be a symlink (Lstat, so a dangling link that EvalSymlinks would call
-// "does not exist" is still seen) and must not be a directory.
+// it names a file directly in reportsDir. A bare file name is joined onto
+// reportsDir. An absolute path is accepted only when its directory is reportsDir:
+// lexically, or, for a caller who spelled the root another way (a symlinked mount
+// point), when the directory resolves to reportsDir's real location. Anything with
+// a directory component is refused before the filesystem is consulted, so no "..",
+// no symlinked subdirectory and no not-yet-created subdirectory can carry the
+// report out, and nothing is created here except reportsDir itself (ensureReportsDir).
 //
-// Nothing outside reportsDir is created before the check passes. The parent
-// directory is created afterwards and the check is made again against what now
-// exists, so a link planted between the first check and the creation is not
-// followed out.
+// The path returned is reportsDir joined with the bare name, never the caller's
+// spelling. An existing file at that name is vetted the way the writer vets it, so
+// a symlink, a directory, a file owned by someone else or a hard link is refused
+// now, before any work.
 func containedReportPath(reportsDir, explicit string, onTightened func(dir string, was fs.FileMode), env reportEnv) (string, error) {
 	refuse := func(why string) (string, error) {
-		return "", fmt.Errorf("report path %q refused: %s (reports must stay inside %s)", explicit, why, reportsDir)
+		return "", fmt.Errorf("report path %q refused: %s (a report must be a file directly in %s)", explicit, why, reportsDir)
 	}
 	if strings.ContainsRune(explicit, 0) {
 		return refuse("it contains a NUL byte")
@@ -165,46 +169,29 @@ func containedReportPath(reportsDir, explicit string, onTightened func(dir strin
 	if err := ensureReportsDir(reportsDir, onTightened, env); err != nil {
 		return "", fmt.Errorf("report directory %s is not usable: %w", reportsDir, err)
 	}
-	realReports, err := filepath.EvalSymlinks(reportsDir)
-	if err != nil {
-		return "", fmt.Errorf("report directory %s cannot be resolved: %w", reportsDir, err)
-	}
-	realReports = filepath.Clean(realReports)
 
-	path := explicit
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(reportsDir, path)
-	}
-	path = filepath.Clean(path)
-	parent := filepath.Dir(path)
-
-	if !isWithinRoot(resolveExistingPrefix(parent), realReports) {
-		return refuse("it resolves outside that directory")
-	}
-	if info, lerr := os.Lstat(path); lerr == nil {
-		switch {
-		case info.Mode()&os.ModeSymlink != 0:
-			return refuse("the report file is a symlink")
-		case info.IsDir():
-			return refuse("it is a directory, not a file")
+	name := explicit
+	if filepath.IsAbs(explicit) {
+		clean := filepath.Clean(explicit)
+		dir := filepath.Dir(clean)
+		if dir != reportsDir {
+			realDir, derr := filepath.EvalSymlinks(dir)
+			realReports, rerr := filepath.EvalSymlinks(reportsDir)
+			if derr != nil || rerr != nil || filepath.Clean(realDir) != filepath.Clean(realReports) {
+				return refuse("it is not directly inside that directory")
+			}
 		}
-	} else if !errors.Is(lerr, fs.ErrNotExist) {
-		return "", fmt.Errorf("report path %s cannot be inspected: %w", path, lerr)
+		name = filepath.Base(clean)
+	} else if strings.ContainsRune(name, '/') || strings.ContainsRune(name, filepath.Separator) {
+		return refuse("it has a directory in it")
+	}
+	if name == "" || name == "." || name == ".." || name == string(filepath.Separator) {
+		return refuse("it does not name a file")
 	}
 
-	if err := EnsureDirWritable(path); err != nil {
-		return "", fmt.Errorf("report path %s is not writable: %w", path, err)
-	}
-	if env.afterCreate != nil {
-		env.afterCreate(parent)
-	}
-	// The directory chain now exists: check again against what is really there.
-	realParent, err := filepath.EvalSymlinks(parent)
-	if err != nil {
-		return "", fmt.Errorf("report path %s cannot be resolved: %w", path, err)
-	}
-	if !isWithinRoot(filepath.Clean(realParent), realReports) {
-		return refuse("it resolves outside that directory")
+	path := filepath.Join(reportsDir, name)
+	if err := checkExistingReportFile(path, reportOpenEnv{euid: env.euid()}); err != nil {
+		return "", err
 	}
 	return path, nil
 }
@@ -223,9 +210,14 @@ func containedReportPath(reportsDir, explicit string, onTightened func(dir strin
 // DirMode), so clearing group write would silently strip the write access of
 // every named user and group the operator granted, and the setgid bit keeps new
 // files in the share's group. The directory is refused only when it is not ours,
-// is not a directory, or the chmod fails. There is a small window between this
-// check and the later file open; the open itself refuses a symlink (O_NOFOLLOW)
-// and checks the file's owner.
+// is not a directory, or the chmod fails.
+//
+// The directory stays group-writable by design, so another user in the group can
+// plant a symlink or a hard link at a report's name at any time. This function
+// cannot prevent that and does not try: the writers (WriteReportFile and
+// OpenReportFile) re-open the directory by handle and open the file with
+// O_NOFOLLOW relative to it, and refuse a file that is not a regular file owned by
+// this user with a single link.
 func ensureReportsDir(dir string, onTightened func(dir string, was fs.FileMode), env reportEnv) error {
 	info, err := os.Lstat(dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -261,18 +253,6 @@ func ensureReportsDir(dir string, onTightened func(dir string, was fs.FileMode),
 
 // worldWrite is the "other" write permission bit.
 const worldWrite fs.FileMode = 0o002
-
-// EnsureDirWritable creates the directory that will hold path and proves a
-// file can be created in it, by creating and removing a probe file. MkdirAll
-// alone succeeds on an existing read-only directory, so it is not proof the
-// later write will land.
-func EnsureDirWritable(path string) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, DirMode); err != nil {
-		return err
-	}
-	return probeWritable(dir)
-}
 
 // probeWritable proves a file can be created in dir.
 func probeWritable(dir string) error {

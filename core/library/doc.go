@@ -1,7 +1,7 @@
 // file: core/library/doc.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f270ac67-f593-4ab0-a2f5-42435176815e
-// last-edited: 2026-11-11
+// last-edited: 2026-11-18
 
 // Package library is the media core's library roots and safe filesystem access
 // (05-library). A module never names a host path: it names a Path (a root ID and
@@ -11,8 +11,8 @@
 // The package holds, beside the path-safety leaves it began with (SafeJoin,
 // WithinRoot, SecureJoin, SecureJoinResolved, CleanAbsolutePath,
 // SanitizeFilename, IsDangerousRoot, SafePath, Mounted, ReportPathNotify,
-// EnsureDirWritable, Call, Stats and the DirMode, FileMode and SecretFileMode
-// constants):
+// WriteReportFile, OpenReportFile, PreflightReportFile, Call, Stats and the
+// DirMode, FileMode and SecretFileMode constants):
 //
 //   - the roots: RootSpec, Role, the registry (New, Reload, Bind), overlap and
 //     sentinel checks, and Root with its confined RootFS (os.Root underneath);

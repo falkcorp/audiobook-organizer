@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes.go
-// version: 1.6.7
+// version: 1.6.8
 // guid: 31a21313-3b7f-41b3-919c-9fd48feebd6e
-// last-edited: 2026-11-15
+// last-edited: 2026-11-18
 
 // Package maintenance — MERGE repair for duplicate book records that point at the
 // exact same audio file.
@@ -38,7 +38,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -47,6 +46,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/library"
 	"github.com/falkcorp/mediacore/tasks"
 )
 
@@ -596,29 +596,18 @@ func planMergeSamePathDupesVia(ctx context.Context, store mergeSamePathStore, me
 }
 
 // preflightReportPath proves the report can be written before any destructive
-// work: it creates the parent directory and touches the file. Any failure
-// (relative dir under a read-only working directory, permission denied) surfaces
+// work: it opens the file the way the writer will (relative to a handle on its
+// directory, never following a link, requiring a regular file this user owns with
+// one link) and creates it if it is not there. It creates no directory: the report
+// directory is made and checked by resolveReportPath before this runs. Any failure
+// (directory missing, permission denied, a link planted at the name) surfaces
 // here, where the caller can refuse to apply, rather than after the merges when
 // the loser IDs would already be gone from the DB and unrecordable.
 func preflightReportPath(path string) error {
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o775); err != nil {
-			return err
-		}
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o664)
-	if err != nil {
-		return err
-	}
-	return f.Close()
+	return library.PreflightReportFile(path, library.FileMode)
 }
 
 func writeMergeReport(path string, decisions []mergeGroupDecision) error {
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o775); err != nil {
-			return err
-		}
-	}
 	clean := strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace
 	var b strings.Builder
 	b.WriteString("bucket\tpath\tprimary_id\tloser_ids\treason\n")
@@ -626,5 +615,5 @@ func writeMergeReport(path string, decisions []mergeGroupDecision) error {
 		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\n",
 			d.Bucket, clean(d.Path), d.PrimaryID, strings.Join(d.LoserIDs, ","), clean(d.Reason))
 	}
-	return os.WriteFile(path, []byte(b.String()), 0o664)
+	return library.WriteReportFile(path, []byte(b.String()), library.FileMode)
 }

@@ -1,12 +1,13 @@
 <!-- file: docs/executive-summaries/2026-11-18-report-path-containment-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 0b6f2c1e-7a34-4d58-9e21-c5a8d3f40b97 -->
 <!-- last-edited: 2026-11-18 -->
 
 # Maintenance reports can only be written into the report folder
 
 **Date:** 18 November 2026. A fix to the maintenance operations that write a
-report file, found while reviewing the shape-report operation.
+report file, found while reviewing the shape-report operation, and tightened the
+same day after its review.
 
 ## Executive Summary
 
@@ -18,38 +19,70 @@ report file, found while reviewing the shape-report operation.
   the server is able to write, and the operation would write its report over it.
   The report is plain text, so the damage depends on which file was named, but
   an overwritten file the server relies on would be lost.
-- Now a report may only be written inside the reports folder. A name without a
-  folder is placed there; a full path is accepted only if it already points
-  inside it. A path that climbs out with ".." is refused, and so is a path that
-  goes through a shortcut (a symbolic link) leading elsewhere, a report file that
-  is itself such a shortcut, and a path that names a folder instead of a file.
-  A refused path creates nothing. With no library folder configured there is
-  nothing to keep a named report inside, so a named report is refused.
-- The check sits in the one helper that nine of the operations already use to
-  find their report file. Two operations (the series clean-up and the series
-  phantom repair) skipped that helper and wrote the named path directly; they
-  now go through it and are checked before they read the library or write
-  anything.
+- Now a report may only be a file directly inside the reports folder. A plain
+  file name is placed there; a full path is accepted only if its folder is the
+  reports folder. A name with a folder in it is refused: there are no subfolders
+  of the reports folder any more, so nothing is created inside it either. A path
+  that climbs out with "..", one that goes through a shortcut (a symbolic link)
+  leading elsewhere, a report file that is itself such a shortcut, and a path
+  that names a folder instead of a file are all refused. A refused path creates
+  nothing. With no library folder configured there is nothing to keep a named
+  report inside, so a named report is refused.
+- The check at the start of a run was not enough on its own, because the run
+  checks the name first and writes the report later, and a shortcut can be put at
+  the name in between. Every report is now also written in a way that cannot be
+  redirected at that moment: the file is opened inside the reports folder
+  without following a shortcut, and is used only if it is an ordinary file owned
+  by the account running the server and with no second name pointing at it. A
+  file that fails that test is left exactly as it was, not emptied, and the
+  operation reports the refusal. This covers all the operations that write a
+  report, the extra "decisions" file one of them writes beside its report, and
+  the ".applied" file the series de-numbering writes.
+- The provenance export, which appends a ledger of file history to a file the
+  person names, had the same flaw and an unusual one: it accepted any full path,
+  and it adds to a file instead of replacing it. It now follows the same rule
+  (a file directly in the reports folder) and the same safe open.
 - What changes for the person using them: a report named outside the reports
-  folder is now refused with a message naming the folder. Naming a file inside
-  it, or just a file name, works as before.
-- Tests cover climbing out with "..", an absolute path elsewhere, a shortcut
-  inside the reports folder that leads out of it (whether its target exists or
-  not), a report file that is a shortcut, and a path that is accepted; they run
-  against the helper and against every operation that writes a report.
+  folder, or with a folder in its name, is now refused with a message that says
+  so. A plain file name, or a full path whose folder is the reports folder,
+  works. Before this tightening, a name with a folder in it, such as
+  "mine/chosen.tsv", was accepted and the folder created; that no longer works,
+  so use "chosen.tsv". Anyone who has been exporting file history to a file
+  outside the reports folder needs to start a new ledger file inside it: the
+  export remembers how far it got, so the new file begins at that point and
+  the earlier lines stay in the old file, which should be kept with it.
+- Tests cover climbing out with "..", an absolute path elsewhere, a path with a
+  folder in it, a shortcut inside the reports folder that leads out of it
+  (whether its target exists or not), a report file that is a shortcut, a
+  second name pointing at an existing file, a file owned by another account, a
+  folder where the file should be, and a path that is accepted. They run against
+  the shared helper, against every operation that writes a report, and against
+  every report-writing function on its own. The checking logic was also broken on
+  purpose 21 ways to confirm the tests notice each break; all 21 were caught.
 
 ## What it was
 
 A report path supplied by the caller was trusted. Only the default path, built
-by the program, had its folder checked.
+by the program, had its folder checked. After the first fix, the name was
+checked when the run started but the file was opened later by name, which left a
+short window in which a shortcut could be swapped in.
 
 ## Why it mattered
 
 An operation started with a chosen report path could overwrite a file outside
-the library's report folder, with report text.
+the library's report folder, with report text, and the provenance export could
+append to one.
 
 ## The fix
 
-The caller's path is resolved first (following any shortcuts in its folders) and
-accepted only if it ends up inside the reports folder, before anything is
-created or written.
+The caller's path is resolved first and accepted only if it is a file directly
+inside the reports folder, before anything is created or written. When the file
+is written, it is opened relative to the reports folder itself, without following
+shortcuts, and checked as an ordinary single-name file owned by the server's
+account before a byte is written.
+
+## What was not changed
+
+One other job, the file-hash backfill, writes its report with its own
+shortcut-refusing open and only to its default location; it was left as it was
+and is filed as a follow-up.

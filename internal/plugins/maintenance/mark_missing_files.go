@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/mark_missing_files.go
-// version: 1.11.4
+// version: 1.11.5
 // guid: 3d7a9c14-6e28-4f5b-b0a3-1c9e5d827f46
-// last-edited: 2026-11-15
+// last-edited: 2026-11-18
 
 // Package maintenance — MARK missing book_file rows by reconciling the stored
 // book_file.Missing flag with what is actually on disk.
@@ -46,7 +46,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -56,6 +55,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/library"
 	"github.com/falkcorp/mediacore/tasks"
 )
 
@@ -713,11 +713,6 @@ func planMarkMissingFilesVia(ctx context.Context, store markMissingReader, write
 // writeMarkMissingReport dumps every scanned row's decision, TSV, so a person
 // deciding whether to apply can read and grep it by bucket.
 func writeMarkMissingReport(path string, decisions []markDecision) error {
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o775); err != nil {
-			return err
-		}
-	}
 	clean := strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace
 	var b strings.Builder
 	b.WriteString("bucket\tfile_id\tbook_id\tpath\treason\n")
@@ -725,5 +720,5 @@ func writeMarkMissingReport(path string, decisions []markDecision) error {
 		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\n",
 			d.Bucket, d.FileID, d.BookID, clean(d.Path), clean(d.Reason))
 	}
-	return os.WriteFile(path, []byte(b.String()), 0o664)
+	return library.WriteReportFile(path, []byte(b.String()), library.FileMode)
 }

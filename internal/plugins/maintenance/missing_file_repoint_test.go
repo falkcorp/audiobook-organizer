@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repoint_test.go
-// version: 1.8.3
+// version: 1.8.4
 // guid: b6d0f39c-4a17-4e82-95c1-70fe2a8b31d4
-// last-edited: 2026-11-14
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -343,7 +343,7 @@ func TestRepoint_ReportAccountsForEveryMissingRow(t *testing.T) {
 
 // The TSV must round-trip: one header + one line per decision, tabs intact.
 func TestRepoint_WriteReportRoundTrips(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nested", "report.tsv")
+	path := filepath.Join(t.TempDir(), "report.tsv")
 	decisions := []repointDecision{
 		{Bucket: "repointable", FileID: "f1", BookID: "b1", OldPath: "/a/x - 2/35.mp3", NewPath: "/a/x - 02.mp3", Reason: "would repoint"},
 		{Bucket: "no-shape", FileID: "f2", BookID: "b1", OldPath: "/a/weird\tname.mp3", Reason: "path does not match the track-slash shape"},

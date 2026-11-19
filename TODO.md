@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.47 -->
+<!-- version: 10.78.48 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -690,10 +690,9 @@ into one of the curated sections below, is a normal direct edit.
         `VolumeName(cleaned)+sep`. Run CodeQL locally (2.27.4, go-queries 1.6.14, `TaintedPath`
         and `ZipSlip`) on the whole module before and after. Then remove those two
         restatements and the comments that explain them.
-      - **Callers.** `CleanAbsolutePath`, 12 production calls:
+      - **Callers.** `CleanAbsolutePath`, 11 production calls (`file_provenance_export.go` left this list when its ledger path was confined to the report directory on 2026-11-18):
         - `internal/mediainfo/mediainfo.go`
         - `internal/plugins/maintenance/duration_backfill_unknown_rows.go` (2)
-        - `internal/plugins/maintenance/file_provenance_export.go`
         - `internal/plugins/maintenance/folder_books_fixer.go`
         - `internal/server/handlers/audiobooks/handler_files.go` (2)
         - `internal/server/handlers/filesystem.go`
@@ -2149,7 +2148,13 @@ into one of the curated sections below, is a normal direct edit.
 - [x] **05-PR9 follow-up** (done 2026-11-18: `library.ReportPathNotify` confines
       an explicit report path to `{root_dir}/.reports/`, which covers every op
       that resolves one, and `series-denumber` and `series-phantom-repair`, which
-      wrote the caller's path directly, now resolve it first)
+      wrote the caller's path directly, now resolve it first. Follow-up the same
+      day: the resolver accepts only a file name directly in that directory (no
+      subdirectories), every report is written through
+      `library.WriteReportFile`, which opens it relative to a handle on the
+      directory without following links and refuses a file that is not a regular
+      file owned by this user with one link, and `file-provenance-export`'s
+      ledger is confined and opened the same way)
       `maintenance.book-shape-report`'s `reportPath`
       param is used as the report destination with no containment check
       (`resolveReportPath`, `internal/plugins/maintenance/report_path.go`), so a
