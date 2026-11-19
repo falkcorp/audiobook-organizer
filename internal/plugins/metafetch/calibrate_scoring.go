@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/calibrate_scoring.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 4e1c8b2a-6d90-4f37-9b1a-2c3d4e5f6a70
-// last-edited: 2026-11-16
+// last-edited: 2026-11-19
 
 // Package metafetch — op metafetch.calibrate-scoring (INIT-3-T1).
 //
@@ -67,20 +67,29 @@ import (
 	"log/slog"
 	"math"
 	"regexp"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
 const (
+	// calibrateScoringKind is rule R3's native kind for metafetch.calibrate-scoring.
+	calibrateScoringKind = tasks.Kind("books.metafetch.calibrate-scoring")
+
+	// calibrateScoringHelp is HEAD's Description and the native Help (rule R5).
+	calibrateScoringHelp = "Read-only INIT-3-T1 harness: replays persisted metadata-candidate caches " +
+		"against applied books (MetadataSourceHash ground truth), sweeps the TASK-02 scoring " +
+		"knobs one-factor-at-a-time, and reports top-1 accuracy per sweep point. Writes " +
+		"nothing — applying a knob change is an owner-gated config edit."
+
 	// defaultSampleLimit bounds how many applied books are pulled into the
 	// evaluation set. 0 = no limit (evaluate every applied book).
 	defaultSampleLimit = 5000
@@ -118,14 +127,11 @@ type calibrateScoringParams struct {
 // calibrateScoringDef returns the OperationDef for metafetch.calibrate-scoring.
 func (p *Plugin) calibrateScoringDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "metafetch.calibrate-scoring",
-		Liveness:    sdk.LivenessRunItems,
-		Plugin:      "metafetch",
-		DisplayName: "Calibrate metadata scoring (report only)",
-		Description: "Read-only INIT-3-T1 harness: replays persisted metadata-candidate caches " +
-			"against applied books (MetadataSourceHash ground truth), sweeps the TASK-02 scoring " +
-			"knobs one-factor-at-a-time, and reports top-1 accuracy per sweep point. Writes " +
-			"nothing — applying a knob change is an owner-gated config edit.",
+		ID:              "metafetch.calibrate-scoring",
+		Liveness:        sdk.LivenessRunItems,
+		Plugin:          "metafetch",
+		DisplayName:     "Calibrate metadata scoring (report only)",
+		Description:     calibrateScoringHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityNormal,
 		ConcurrencyKey:  "metafetch.calibrate-scoring",
@@ -916,9 +922,43 @@ type appliedBook struct {
 	origin  string
 }
 
-// runCalibrateScoring implements the op. READ-ONLY: it enumerates books, reads
-// their caches and metadata-field-state override provenance, replays the
-// scorer, and reports. It never calls any store mutation.
+// calibrateCandidates is the persisted candidate-cache read the core takes: the
+// metafetch.Service's GetCachedCandidates, which reads the cache row and filters
+// a legacy entry in memory and writes nothing.
+type calibrateCandidates interface {
+	GetCachedCandidates(bookID string) (*database.MetadataCandidateCache, bool, error)
+}
+
+// calibrateScoringEnv is what the core takes from its shell (rule R10). The op
+// is read-only, so there is no Writer: Store carries every read (the book walk,
+// field states, book files) and Candidates the cache read. Scoring is the
+// process's metadata-scoring config, resolved by the shell (HEAD: config.AppConfig).
+type calibrateScoringEnv struct {
+	kindEnv
+	Store      pluginStore
+	Candidates calibrateCandidates
+	Scoring    func() config.MetadataScoringConfig
+}
+
+// calibrateScoringSample is HEAD's params defaulting and clamping: the sample
+// limit and the sweep steps the run uses.
+func calibrateScoringSample(params calibrateScoringParams) (sampleLimit, steps int) {
+	sampleLimit = max(params.SampleLimit, 0)
+	if sampleLimit == 0 {
+		sampleLimit = defaultSampleLimit
+	}
+	steps = params.SweepSteps
+	if steps <= 0 {
+		steps = defaultSweepSteps
+	}
+	if steps > maxSweepSteps {
+		steps = maxSweepSteps
+	}
+	return sampleLimit, steps
+}
+
+// runCalibrateScoring is the v2 shell: HEAD's Run (nil checks, params) over
+// calibrateScoringCore.
 func (p *Plugin) runCalibrateScoring(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	if p.store == nil {
 		return fmt.Errorf("database store not available")
@@ -933,20 +973,24 @@ func (p *Plugin) runCalibrateScoring(ctx context.Context, rawParams json.RawMess
 			return fmt.Errorf("parse params: %w", err)
 		}
 	}
-	sampleLimit := max(params.SampleLimit, 0)
-	if sampleLimit == 0 {
-		sampleLimit = defaultSampleLimit
-	}
-	steps := params.SweepSteps
-	if steps <= 0 {
-		steps = defaultSweepSteps
-	}
-	if steps > maxSweepSteps {
-		steps = maxSweepSteps
-	}
+	_, err := calibrateScoringCore(ctx, params, calibrateScoringEnv{
+		kindEnv:    headEnv(reporter, false),
+		Store:      p.store,
+		Candidates: p.mfs,
+		Scoring:    func() config.MetadataScoringConfig { return config.AppConfig.MetadataScoring },
+	})
+	return err
+}
 
-	log := reporter.Logger()
-	current := knobsFromConfig(config.AppConfig.MetadataScoring)
+// calibrateScoringCore implements the op, shared by both shells. READ-ONLY: it
+// enumerates books, reads their caches and metadata-field-state override
+// provenance, replays the scorer, and reports. It never calls any store
+// mutation. It returns the report it logs; HEAD stored none.
+func calibrateScoringCore(ctx context.Context, params calibrateScoringParams, env calibrateScoringEnv) (calibrationReport, error) {
+	sampleLimit, steps := calibrateScoringSample(params)
+
+	log := env.Logger
+	current := knobsFromConfig(env.Scoring())
 	grid := buildSweepGrid(current, steps)
 	log.Info("calibrate-scoring start", "sample_limit", sampleLimit, "sweep_steps", steps, "sweep_configs", len(grid))
 
@@ -959,23 +1003,23 @@ func (p *Plugin) runCalibrateScoring(ctx context.Context, rawParams json.RawMess
 	}
 
 	// --- Enumerate applied books + read caches (sequential store I/O) ---
-	prog := sdk.NewProgress(reporter, 0)
+	prog := newProgress(env.kindEnv, 0)
 	prog.Start("Collecting applied books with candidate caches…")
 
 	var work []appliedBook
 	cursor := ""
 	for {
-		if reporter.IsCanceled() {
-			return context.Canceled
+		if env.Canceled() {
+			return calibrationReport{}, context.Canceled
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return calibrationReport{}, ctx.Err()
 		default:
 		}
-		page, err := p.store.GetAllBooksFullFrom(cursor, enumPageSize)
+		page, err := env.Store.GetAllBooksFullFrom(cursor, enumPageSize)
 		if err != nil {
-			return fmt.Errorf("enumerate books: %w", err)
+			return calibrationReport{}, fmt.Errorf("enumerate books: %w", err)
 		}
 		if len(page) == 0 {
 			break
@@ -986,7 +1030,7 @@ func (p *Plugin) runCalibrateScoring(ctx context.Context, rawParams json.RawMess
 			if b.MetadataSourceHash == nil || *b.MetadataSourceHash == "" {
 				continue // not an applied book — silently skip (not counted)
 			}
-			entry, _, cerr := p.mfs.GetCachedCandidates(b.ID)
+			entry, _, cerr := env.Candidates.GetCachedCandidates(b.ID)
 			if cerr != nil {
 				countSkip("cache_read_error")
 				continue
@@ -1016,12 +1060,12 @@ func (p *Plugin) runCalibrateScoring(ctx context.Context, rawParams json.RawMess
 			// Runtime read here, on the enumerating goroutine, like every
 			// other store read (see appliedBook). A read error leaves it
 			// unknown (0), never Book.Duration.
-			rt, _ := database.LoadBookRuntime(p.store, &bookCopy)
+			rt, _ := database.LoadBookRuntime(env.Store, &bookCopy)
 			work = append(work, appliedBook{
 				book:    &bookCopy,
 				runtime: rt,
 				cands:   cands,
-				origin:  p.applyOrigin(&bookCopy),
+				origin:  applyOriginVia(env.Store, &bookCopy),
 			})
 			if sampleLimit > 0 && len(work) >= sampleLimit {
 				break
@@ -1038,19 +1082,22 @@ func (p *Plugin) runCalibrateScoring(ctx context.Context, rawParams json.RawMess
 	sampleSize := len(work)
 	if sampleSize == 0 {
 		rep := buildReport(nil, grid, skips, 0, steps)
-		p.logReport(log, rep)
+		logCalibrationReport(log, rep)
 		prog.Done("calibrate-scoring: no applied books with usable caches found")
-		return nil
+		return rep, nil
 	}
 
 	// --- Replay under a bounded pool (CPU-bound → NumCPU) ---
-	prog = sdk.NewProgress(reporter, sampleSize)
+	prog = newProgress(env.kindEnv, sampleSize)
 	prog.Start(fmt.Sprintf("Replaying %d applied books across %d sweep configs…", sampleSize, len(grid)))
 
 	var mu sync.Mutex
 	evals := make([]*bookEval, 0, sampleSize)
 
-	err := registry.RunItems(ctx, reporter, work, func(_ context.Context, item appliedBook) error {
+	err := env.Items(ctx, tasks.CPU(), len(work), kindItemsOptions{
+		PureLabel: func(i, t int) string { return fmt.Sprintf("Books %d/%d", i+1, t) },
+	}, func(_ context.Context, i int) error {
+		item := work[i]
 		ev, skip := evaluateBook(item.book, item.runtime, item.cands, item.origin, current, grid)
 		if skip != "" {
 			countSkip(skip)
@@ -1060,21 +1107,16 @@ func (p *Plugin) runCalibrateScoring(ctx context.Context, rawParams json.RawMess
 		evals = append(evals, ev)
 		mu.Unlock()
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: runtime.NumCPU(),
-		Label: func(i, t int) string {
-			return fmt.Sprintf("Books %d/%d", i+1, t)
-		},
 	})
 	if err != nil {
-		return err
+		return calibrationReport{}, err
 	}
 
 	rep := buildReport(evals, grid, skips, sampleSize, steps)
-	p.logReport(log, rep)
+	logCalibrationReport(log, rep)
 	prog.Done(fmt.Sprintf("calibrate-scoring report complete: evaluated=%d current_top1=%.3f manual_segment=%t (report-only, no writes)",
 		rep.Evaluated, rep.CurrentKnobTop1Accuracy, rep.ManualSegmentDetermined))
-	return nil
+	return rep, nil
 }
 
 // applyOrigin classifies a book's apply origin: "manual" when the book carries
@@ -1082,7 +1124,17 @@ func (p *Plugin) runCalibrateScoring(ctx context.Context, rawParams json.RawMess
 // metadata-field-state store — i.e. a non-nil OverrideValue), else "auto".
 // A field-state read error is treated as "auto" (fail-open, never fatal).
 func (p *Plugin) applyOrigin(book *database.Book) string {
-	states, err := p.store.GetMetadataFieldStates(book.ID)
+	return applyOriginVia(p.store, book)
+}
+
+// fieldStateReader is the one read applyOriginVia takes.
+type fieldStateReader interface {
+	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
+}
+
+// applyOriginVia is applyOrigin over the store the core was handed (rule R10).
+func applyOriginVia(store fieldStateReader, book *database.Book) string {
+	states, err := store.GetMetadataFieldStates(book.ID)
 	if err != nil {
 		return "auto"
 	}
@@ -1097,6 +1149,12 @@ func (p *Plugin) applyOrigin(book *database.Book) string {
 // logReport emits the report as structured log fields plus a JSON blob (the
 // sdk.Reporter has no result sink, so the report travels via the operation log).
 func (p *Plugin) logReport(log *slog.Logger, rep calibrationReport) {
+	logCalibrationReport(log, rep)
+}
+
+// logCalibrationReport is logReport as a function the core can call without a
+// Plugin receiver.
+func logCalibrationReport(log *slog.Logger, rep calibrationReport) {
 	blob, err := json.Marshal(rep)
 	if err != nil {
 		log.Error("calibrate-scoring report marshal", "error", err)

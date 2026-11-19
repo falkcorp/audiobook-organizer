@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/pcache_sweep.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: 1817dbb3-1b63-474d-af55-ff93d468ae1b
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package metafetch
 
@@ -40,7 +40,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/sync/errgroup"
+	"github.com/falkcorp/mediacore/tasks"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -52,6 +52,17 @@ import (
 
 const (
 	pcacheSweepOpID = "metafetch.pcache-sweep"
+
+	// pcacheSweepKind is rule R3's native kind for metafetch.pcache-sweep.
+	pcacheSweepKind = tasks.Kind("books.metafetch.pcache-sweep")
+
+	// pcacheSweepHelp is HEAD's Description and the native Help (rule R5).
+	pcacheSweepHelp = "Deletes shared provider-answer cache rows (pcache:) that are dead: question and product " +
+		"answers past their TTL (the same rule a read applies: metadata_fetch_cache_ttl_days for a found " +
+		"answer, the provider's metadata_fetch.negative_ttl_days for an empty one), empty answers kept while " +
+		"negative caching is off, rows that do not decode, and per-book pointer rows whose book no longer " +
+		"exists (only the pointer row; the shared answers it lists are left to their own TTL). Never touches " +
+		"the per-book metadata_fetch_cache rows. Defaults to a dry run; dry_run=false deletes."
 
 	// pcacheSweepPageSize bounds memory: one page of rows is read, judged and
 	// (on apply) deleted in one batch before the next is read.
@@ -73,6 +84,36 @@ type pcacheSweepParams struct {
 type pcacheSweepStore interface {
 	database.RawKVStore
 	GetBookByID(id string) (*database.Book, error)
+}
+
+// pcacheSweepReads is the reads the core takes (rule R10): the walk, the
+// delete-time re-check and the pointer rows' book lookup. It has no write.
+type pcacheSweepReads interface {
+	CountPrefix(prefix string) (int64, error)
+	ScanPrefixPage(prefix, after string, limit int) ([]database.KVPair, string, error)
+	GetRaw(key string) ([]byte, error)
+	GetBookByID(id string) (*database.Book, error)
+}
+
+// pcacheSweepWriter is the one write the core makes: a batch delete of pcache:
+// rows. A dry run never calls it, so its Writer may be nil.
+type pcacheSweepWriter interface {
+	DeleteRawBatch(keys []string) error
+}
+
+// pcacheSweepEnv is what the core takes from its shell. Live is HEAD's
+// dry_run=false.
+type pcacheSweepEnv struct {
+	kindEnv
+	Store  pcacheSweepReads
+	Writer pcacheSweepWriter
+}
+
+// headPCacheSweepWriter is HEAD's write for the core: the raw store's batch delete.
+type headPCacheSweepWriter struct{ store pcacheSweepStore }
+
+func (h headPCacheSweepWriter) DeleteRawBatch(keys []string) error {
+	return h.store.DeleteRawBatch(keys)
 }
 
 // pcacheSweepResult is the run's accounting, persisted as the op result.
@@ -113,16 +154,11 @@ func (r pcacheSweepResult) summary() string {
 
 func (p *Plugin) pcacheSweepDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          pcacheSweepOpID,
-		Preview:     sdk.PreviewSpec{Params: pcacheSweepParams{}},
-		Plugin:      "metafetch",
-		DisplayName: "Sweep the shared metadata answer cache",
-		Description: "Deletes shared provider-answer cache rows (pcache:) that are dead: question and product " +
-			"answers past their TTL (the same rule a read applies: metadata_fetch_cache_ttl_days for a found " +
-			"answer, the provider's metadata_fetch.negative_ttl_days for an empty one), empty answers kept while " +
-			"negative caching is off, rows that do not decode, and per-book pointer rows whose book no longer " +
-			"exists (only the pointer row; the shared answers it lists are left to their own TTL). Never touches " +
-			"the per-book metadata_fetch_cache rows. Defaults to a dry run; dry_run=false deletes.",
+		ID:              pcacheSweepOpID,
+		Preview:         sdk.PreviewSpec{Params: pcacheSweepParams{}},
+		Plugin:          "metafetch",
+		DisplayName:     "Sweep the shared metadata answer cache",
+		Description:     pcacheSweepHelp,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  pcacheSweepOpID,
 		// ResumeDrop: a delete pass interrupted midway is not picked back up;
@@ -141,8 +177,10 @@ func (p *Plugin) pcacheSweepDef() sdk.OperationDef {
 // pcacheSweepRun is one run's state. Counters are atomic: the pointer-row
 // lookups of a page run on a bounded pool.
 type pcacheSweepRun struct {
-	store    pcacheSweepStore
-	reporter sdk.Reporter
+	store    pcacheSweepReads
+	writer   pcacheSweepWriter
+	progress func(current, total int, msg string)
+	items    kindItemsFunc
 	log      logger.LevelLogger
 	dry      bool
 	now      time.Time
@@ -157,6 +195,8 @@ type pcacheSweepRun struct {
 	byReason map[string]int64 // touched only by the sequential page loop
 }
 
+// runPCacheSweep is the v2 shell: HEAD's Run (params, the store assertion, the
+// result row) over pcacheSweepCore.
 func (p *Plugin) runPCacheSweep(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 	var params pcacheSweepParams
 	if len(raw) > 0 {
@@ -172,19 +212,33 @@ func (p *Plugin) runPCacheSweep(ctx context.Context, raw json.RawMessage, report
 	if !ok || store == nil {
 		return fmt.Errorf("%s: store does not support the shared cache sweep", pcacheSweepOpID)
 	}
+	env := pcacheSweepEnv{kindEnv: headEnv(reporter, !dry), Store: store, Writer: headPCacheSweepWriter{store: store}}
+	// HEAD's pointer pages ran on a plain errgroup, not registry.RunItems.
+	env.Items = headErrgroupItems()
+	res, err := pcacheSweepCore(ctx, env)
+	if err != nil {
+		return err
+	}
+	if err := registry.ReporterSetResult(reporter, res); err != nil {
+		logger.New("pcache-sweep").Warn("%s: persisting the result failed: %v", pcacheSweepOpID, err)
+	}
+	return nil
+}
+
+// pcacheSweepCore is the body of runPCacheSweep, shared by both shells: it
+// walks and (when env.Live) deletes, logs the summary and returns the result.
+func pcacheSweepCore(ctx context.Context, env pcacheSweepEnv) (pcacheSweepResult, error) {
 	run := &pcacheSweepRun{
-		store: store, reporter: reporter, log: logger.New("pcache-sweep"), dry: dry,
+		store: env.Store, writer: env.Writer, progress: env.Progress, items: env.Items,
+		log: logger.New("pcache-sweep"), dry: !env.Live,
 		now: time.Now(), rule: metafetch.PCacheTTLFor, byReason: map[string]int64{},
 	}
 	res, err := run.sweep(ctx)
 	if err != nil {
-		return err
+		return pcacheSweepResult{}, err
 	}
 	run.log.Info("%s complete: %s", pcacheSweepOpID, res.summary())
-	if err := registry.ReporterSetResult(reporter, res); err != nil {
-		run.log.Warn("%s: persisting the result failed: %v", pcacheSweepOpID, err)
-	}
-	return nil
+	return res, nil
 }
 
 // sweep walks the question rows, the product rows and the pointer rows, in
@@ -227,7 +281,7 @@ func (r *pcacheSweepRun) walk(ctx context.Context, prefix string, fn func(contex
 		}
 		done := r.done.Add(int64(len(pairs)))
 		total := max(r.total.Load(), done)
-		_ = r.reporter.UpdateProgress(int(done), int(total), fmt.Sprintf("Swept %d/%d shared cache rows (expired=%d orphan pointers=%d)",
+		r.progress(int(done), int(total), fmt.Sprintf("Swept %d/%d shared cache rows (expired=%d orphan pointers=%d)",
 			done, total, r.expired.Load(), r.orphans.Load()))
 		if next == "" {
 			return nil
@@ -286,15 +340,19 @@ func (r *pcacheSweepRun) sweepAnswerPage(_ context.Context, pairs []database.KVP
 // bounded pool and, on apply, deletes the rows whose book is absent.
 func (r *pcacheSweepRun) sweepPointerPage(ctx context.Context, pairs []database.KVPair) error {
 	orphan := make([]bool, len(pairs))
-	g, _ := errgroup.WithContext(ctx)
-	g.SetLimit(pcacheSweepResolveConcurrency)
+	var work []int // the pairs that are pointer rows
 	for i, kv := range pairs {
 		if database.PCacheKindOf(kv.Key) != database.PCacheKindPointer {
 			continue
 		}
 		r.pointers.Add(1)
-		bookID := strings.TrimPrefix(kv.Key, database.PCacheBookPrefix)
-		g.Go(func() error {
+		work = append(work, i)
+	}
+	// Each worker writes only its own orphan[i]: the pairs are disjoint.
+	err := r.items(ctx, tasks.Fixed(pcacheSweepResolveConcurrency, "store-bound point-gets; the metadata-cache reaper's resolve figure"),
+		len(work), kindItemsOptions{}, func(_ context.Context, w int) error {
+			i := work[w]
+			bookID := strings.TrimPrefix(pairs[i].Key, database.PCacheBookPrefix)
 			if strings.TrimSpace(bookID) == "" {
 				r.lookupErrs.Add(1) // cannot be resolved, so never deleted
 				return nil
@@ -310,8 +368,7 @@ func (r *pcacheSweepRun) sweepPointerPage(ctx context.Context, pairs []database.
 			}
 			return nil
 		})
-	}
-	if err := g.Wait(); err != nil {
+	if err != nil {
 		return err
 	}
 	if r.dry {
@@ -343,7 +400,7 @@ func (r *pcacheSweepRun) deleteBatch(keys []string, ok *atomic.Int64) {
 		}
 	}
 	sort.Strings(keys)
-	if err := r.store.DeleteRawBatch(keys); err != nil {
+	if err := r.writer.DeleteRawBatch(keys); err != nil {
 		r.delErrs.Add(int64(len(keys)))
 		r.log.Warn("batch delete of %d rows failed: %v", len(keys), err)
 		return

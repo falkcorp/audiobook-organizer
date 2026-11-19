@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/link_backfill.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 7101d385-7f6e-4a95-bd2e-11760d0fed02
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package deluge
 
@@ -20,6 +20,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -33,6 +35,9 @@ import (
 
 // linkBackfillOpID is the op's canonical ID (internal/server/testdata/op_ids.golden).
 const linkBackfillOpID = "deluge.link-backfill"
+
+// linkBackfillKind is rule R3's native kind for deluge.link-backfill.
+const linkBackfillKind = tasks.Kind("books." + linkBackfillOpID)
 
 // linkMaxWorkers caps the worker pool. Each worker hashes at most 20 MB of a
 // file at a time (filehash.BookFileHash reads head and tail above 100 MB, the
@@ -125,36 +130,39 @@ type linkVersionReader interface {
 	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
 }
 
+// linkBackfillHelp is HEAD's Description and the native Help (rule R5).
+const linkBackfillHelp = "For each torrent under the discovery label, finds the library book file holding the same audio, " +
+	"verifies it by content hash, and records the torrent hash on that file. Writes only BookFile.DelugeHash; " +
+	"removes, moves and repoints nothing. A torrent file whose verified files belong to more than one book, " +
+	"and a file two torrents both verify, are left unlinked as ambiguous. Defaults to a preview; " +
+	"dry_run=false applies. Files of a book maintenance.relink-pre-fix-imports has not settled (the file " +
+	"names no version and the book has an active or alt version with no torrent hash that no file names) " +
+	"are held back and counted held_for_relink, in the preview too: setting their DelugeHash first would " +
+	"turn them into that fixer's report-only hash_mismatch class. Apply the fixer, then run this op; " +
+	"include_unsettled_relink=true writes them anyway (relink_fixer_would_link then counts the ones the " +
+	"fixer would have linked). Params: dry_run, label (default: the discovery label), limit (0 = all: " +
+	"caps the torrents written, counted after the hold-back; torrents are hashed in batches, torrents no " +
+	"file carries yet first, until that many have writes, and the rest of the listing only for files " +
+	"whose size equals one in the batches, for the cross-seed check. The batches grow past held, " +
+	"unmatched and already-linked torrents; deferred_by_limit counts the torrents left for a later " +
+	"run), max_hashed_files (the most torrent files a run hashes, cross-seed checks included: no more " +
+	"torrents are admitted once the files of the next one would pass it, so a limited run cannot hash " +
+	"most of the listing while torrents are held; default limit x 50, 100000 with no limit; the first " +
+	"torrent is always examined; deferred_by_hash_budget counts the torrents left), start_after " +
+	"(a torrent hash: begin the torrent order after it, wrapping round; a run that left torrents " +
+	"unexamined reports next_start_after, so held or unmatched torrents at the front of the order " +
+	"cannot starve the rest), include_unsettled_relink, workers (default: CPUs, max 8). Torrents are " +
+	"hashed in bounded rounds; as the op's timeout nears a run admits no more, decides and writes what " +
+	"it examined, and reports deferred_by_deadline and next_start_after to continue from."
+
 func (p *Plugin) linkBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          linkBackfillOpID,
-		Preview:     sdk.PreviewSpec{Params: linkBackfillParams{}},
-		Liveness:    sdk.LivenessRunItems,
-		Plugin:      "deluge",
-		DisplayName: "Link Deluge torrents to library files",
-		Description: "For each torrent under the discovery label, finds the library book file holding the same audio, " +
-			"verifies it by content hash, and records the torrent hash on that file. Writes only BookFile.DelugeHash; " +
-			"removes, moves and repoints nothing. A torrent file whose verified files belong to more than one book, " +
-			"and a file two torrents both verify, are left unlinked as ambiguous. Defaults to a preview; " +
-			"dry_run=false applies. Files of a book maintenance.relink-pre-fix-imports has not settled (the file " +
-			"names no version and the book has an active or alt version with no torrent hash that no file names) " +
-			"are held back and counted held_for_relink, in the preview too: setting their DelugeHash first would " +
-			"turn them into that fixer's report-only hash_mismatch class. Apply the fixer, then run this op; " +
-			"include_unsettled_relink=true writes them anyway (relink_fixer_would_link then counts the ones the " +
-			"fixer would have linked). Params: dry_run, label (default: the discovery label), limit (0 = all: " +
-			"caps the torrents written, counted after the hold-back; torrents are hashed in batches, torrents no " +
-			"file carries yet first, until that many have writes, and the rest of the listing only for files " +
-			"whose size equals one in the batches, for the cross-seed check. The batches grow past held, " +
-			"unmatched and already-linked torrents; deferred_by_limit counts the torrents left for a later " +
-			"run), max_hashed_files (the most torrent files a run hashes, cross-seed checks included: no more " +
-			"torrents are admitted once the files of the next one would pass it, so a limited run cannot hash " +
-			"most of the listing while torrents are held; default limit x 50, 100000 with no limit; the first " +
-			"torrent is always examined; deferred_by_hash_budget counts the torrents left), start_after " +
-			"(a torrent hash: begin the torrent order after it, wrapping round; a run that left torrents " +
-			"unexamined reports next_start_after, so held or unmatched torrents at the front of the order " +
-			"cannot starve the rest), include_unsettled_relink, workers (default: CPUs, max 8). Torrents are " +
-			"hashed in bounded rounds; as the op's timeout nears a run admits no more, decides and writes what " +
-			"it examined, and reports deferred_by_deadline and next_start_after to continue from.",
+		ID:              linkBackfillOpID,
+		Preview:         sdk.PreviewSpec{Params: linkBackfillParams{}},
+		Liveness:        sdk.LivenessRunItems,
+		Plugin:          "deluge",
+		DisplayName:     "Link Deluge torrents to library files",
+		Description:     linkBackfillHelp,
 		ResumePolicy:    sdk.ResumeRestart, // idempotent: a linked row is skipped as already_linked
 		DefaultPriority: sdk.PriorityNormal,
 		ConcurrencyKey:  linkBackfillOpID,
@@ -363,13 +371,29 @@ func linkRunOptions(workers int, total int, tally *linkTally) registry.RunItemsO
 	return registry.RunItemsOptions{
 		Concurrency:   linkWorkers(workers),
 		ProgressTotal: total,
-		Label: func(i, t int) string {
-			// Runs inside a worker goroutine: read the tally through atomics only.
-			return fmt.Sprintf("Torrents %d/%d (files=%d linked=%d already_linked=%d unverified=%d ambiguous=%d conflict=%d errors=%d)",
-				i+1, t, tally.files.Load(), tally.linked.Load(), tally.alreadyLinked.Load(),
-				tally.unverified.Load(), tally.ambiguous.Load(), tally.conflict.Load(), tally.errors.Load())
-		},
+		Label:         linkCounterLabel(tally),
 	}
+}
+
+// linkCounterLabel is the progress label of both worker phases at HEAD: the
+// item index plus the running tally. It runs inside a worker goroutine
+// (run_items.go invokes Label there), so it reads the tally through atomics
+// only. It reads counters, so only HEAD's pool carries it (the kernel's label
+// is pure): a native run shows the kernel's default label instead.
+func linkCounterLabel(tally *linkTally) func(i, t int) string {
+	return func(i, t int) string {
+		return fmt.Sprintf("Torrents %d/%d (files=%d linked=%d already_linked=%d unverified=%d ambiguous=%d conflict=%d errors=%d)",
+			i+1, t, tally.files.Load(), tally.linked.Load(), tally.alreadyLinked.Load(),
+			tally.unverified.Load(), tally.ambiguous.Load(), tally.conflict.Load(), tally.errors.Load())
+	}
+}
+
+// linkParallelism is the pool of every worker phase (rule R4): HEAD's
+// linkWorkers(requested), min(NumCPU, linkMaxWorkers) when the request names
+// none.
+func linkParallelism(requested int) tasks.Parallelism {
+	return tasks.Fixed(linkWorkers(requested),
+		"each worker hashes at most 20 MB of a torrent file at a time, so the count bounds disk pressure on the download volume (max 8)")
 }
 
 // linkCandidate is the part of a book_file row the op reads, as it stood when
@@ -551,7 +575,8 @@ type relinkState struct {
 // prov, audio and hash are read-only after setup; the caches (live, asked,
 // relink) are touched only between worker phases, by the run goroutine.
 type linkRun struct {
-	store    linkBackfillStore
+	store    linkReadStore
+	writer   linkWriter // the only write path: link's ModifyBookFile (rule R10)
 	versions linkVersionReader
 	prov     database.FileProvenanceStore // nil: rule (c) and the provenance arm are skipped
 	idx      *linkLibraryIndex
@@ -565,27 +590,85 @@ type linkRun struct {
 	relink map[string]relinkState
 }
 
-func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
-	log := reporter.Logger()
+// linkReadStore is the reads the core takes: linkBackfillStore without its
+// write, plus the version read of the relink hold-back.
+type linkReadStore interface {
+	GetAllBookFilesCoreComplete() ([]database.BookFileCore, error)
+	BookFilesWithHash(hash string) ([]database.BookFile, error)
+	BookFilesAtPath(path string) ([]database.BookFile, error)
+	GetBooksByIDs(ids []string) ([]database.Book, error)
+	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
+}
 
-	var params linkBackfillParams
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &params); err != nil {
-			return fmt.Errorf("%s: decode params: %w", linkBackfillOpID, err)
+// linkWriter is the one write the core makes: link's under-lock re-check and
+// DelugeHash write.
+type linkWriter interface {
+	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
+}
+
+// torrentLister is the one Deluge call the core makes. It is not a store write;
+// it stays in the core (F5-05 brief).
+type torrentLister interface {
+	ListTorrentDetailsByLabel(label string) ([]delugeclient.TorrentDetail, error)
+}
+
+// linkBackfillCoreParams is the core's params: HEAD's linkBackfillParams
+// without the mode pair (the mode is the env's Live).
+type linkBackfillCoreParams struct {
+	Label                  string `json:"label,omitempty"`
+	Limit                  int    `json:"limit,omitempty"`
+	Workers                int    `json:"workers,omitempty"`
+	MaxHashedFiles         int    `json:"max_hashed_files,omitempty"`
+	StartAfter             string `json:"start_after,omitempty"`
+	IncludeUnsettledRelink bool   `json:"include_unsettled_relink,omitempty"`
+}
+
+// linkBackfillEnv is what the core takes from its shell. Client, Root and Store
+// are checked in HEAD's order before anything runs (Client nil: Deluge is not
+// configured). Prov is nil when the store exposes no FileProvenanceStore.
+// Writer is nil in a Preview run: only the write phase uses it, and a dry run
+// skips that.
+type linkBackfillEnv struct {
+	kindEnv
+	Client torrentLister
+	Store  linkReadStore
+	Writer linkWriter
+	Prov   database.FileProvenanceStore
+	// DefaultLabel is the label a request that names none lists
+	// (config.DelugeDiscoveryLabel); Root is config.RootDir.
+	DefaultLabel string
+	Root         string
+	// Hash, Now and RoundFiles are test seams, each with HEAD's default when
+	// unset (filehash.BookFileHash, time.Now, linkRoundHashFiles).
+	Hash       func(path string) (string, error)
+	Now        func() time.Time
+	RoundFiles int
+	// ModeErr is HEAD's dry_run/dryRun disagreement: the run previews and the
+	// result's notes carry it. A native run has none.
+	ModeErr error
+}
+
+// linkBackfillCore is the body of runLinkBackfill after its params and mode are
+// decoded, shared by both shells. It returns the result it persisted through
+// env.SetResult (HEAD) so a native Task can return it.
+func linkBackfillCore(ctx context.Context, params linkBackfillCoreParams, env linkBackfillEnv) (linkBackfillResult, error) {
+	log := env.Logger
+	dry := !env.Live
+	modeErr := env.ModeErr
+	// persist is HEAD's registry.ReporterSetResult; a native run has no hook
+	// (its Task returns the result).
+	persist := func(res linkBackfillResult) error {
+		if env.SetResult == nil {
+			return nil
 		}
-	}
-	dry, modeErr := opmode.ResolveDryRun(linkBackfillOpID, params.DryRun, params.DryRunCamel)
-	if modeErr != nil {
-		// ResolveDryRun pairs the error with true: the run previews, and the
-		// result's notes carry the error so the caller sees why.
-		log.Error("dry_run and dryRun disagree; previewing", "error", modeErr)
+		return env.SetResult(res)
 	}
 
 	label := strings.TrimSpace(params.Label)
 	if label == "" {
-		label = config.AppConfig.DelugeDiscoveryLabel
+		label = env.DefaultLabel
 	}
-	root := config.AppConfig.RootDir
+	root := env.Root
 	workers := linkWorkers(params.Workers)
 	limit := max(params.Limit, 0)
 	budget := linkHashBudget(limit, params.MaxHashedFiles)
@@ -593,25 +676,28 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 	if s := strings.TrimSpace(params.StartAfter); s != "" {
 		norm, err := delugeclient.NormalizeTorrentID(s)
 		if err != nil {
-			return fmt.Errorf("%s: start_after %q is not a torrent hash: %w; nothing was written", linkBackfillOpID, s, err)
+			return linkBackfillResult{}, fmt.Errorf("%s: start_after %q is not a torrent hash: %w; nothing was written", linkBackfillOpID, s, err)
 		}
 		startAfter = norm
 	}
 
-	if p.client == nil {
-		return fmt.Errorf("%s: deluge is not configured; nothing was written", linkBackfillOpID)
+	if env.Client == nil {
+		return linkBackfillResult{}, fmt.Errorf("%s: deluge is not configured; nothing was written", linkBackfillOpID)
 	}
 	if root == "" {
-		return fmt.Errorf("%s: root_dir is not set, so no row can be shown to be in the library; nothing was written", linkBackfillOpID)
+		return linkBackfillResult{}, fmt.Errorf("%s: root_dir is not set, so no row can be shown to be in the library; nothing was written", linkBackfillOpID)
 	}
-	if p.store == nil {
-		return fmt.Errorf("%s: store not available; nothing was written", linkBackfillOpID)
+	if env.Store == nil {
+		return linkBackfillResult{}, fmt.Errorf("%s: store not available; nothing was written", linkBackfillOpID)
+	}
+	if !dry && env.Writer == nil {
+		return linkBackfillResult{}, fmt.Errorf("%s: writer not available; nothing was written", linkBackfillOpID)
 	}
 
-	sdk.NewProgress(reporter, 0).Start(fmt.Sprintf("Listing Deluge torrents (label %q)...", label))
-	details, err := p.client.ListTorrentDetailsByLabel(label)
+	newProgress(env.kindEnv, 0).Start(fmt.Sprintf("Listing Deluge torrents (label %q)...", label))
+	details, err := env.Client.ListTorrentDetailsByLabel(label)
 	if err != nil {
-		return fmt.Errorf("%s: list torrents from deluge (label %q): %w; nothing was written", linkBackfillOpID, label, err)
+		return linkBackfillResult{}, fmt.Errorf("%s: list torrents from deluge (label %q): %w; nothing was written", linkBackfillOpID, label, err)
 	}
 
 	tally := &linkTally{}
@@ -629,24 +715,25 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 		notes = append(notes, fmt.Sprintf("no_torrents: Deluge lists no torrent under label %q; nothing to link", label))
 		res := tally.result(dry, label, notes)
 		res.NextStartAfter = startAfter
-		if err := registry.ReporterSetResult(reporter, res); err != nil {
-			return fmt.Errorf("%s: persist result: %w", linkBackfillOpID, err)
+		if err := persist(res); err != nil {
+			return linkBackfillResult{}, fmt.Errorf("%s: persist result: %w", linkBackfillOpID, err)
 		}
 		log.Info("finished: no torrents under the label", "dry_run", dry, "label", label)
-		sdk.NewProgress(reporter, 0).Done(fmt.Sprintf("No torrents under label %q", label))
-		return nil
+		newProgress(env.kindEnv, 0).Done(fmt.Sprintf("No torrents under label %q", label))
+		return res, nil
 	}
 
-	rows, err := p.store.GetAllBookFilesCoreComplete()
+	rows, err := env.Store.GetAllBookFilesCoreComplete()
 	if err != nil {
-		return fmt.Errorf("%s: load book files: %w; nothing was written", linkBackfillOpID, err)
+		return linkBackfillResult{}, fmt.Errorf("%s: load book files: %w; nothing was written", linkBackfillOpID, err)
 	}
 	run := &linkRun{
-		store:    p.store,
-		versions: p.store,
+		store:    env.Store,
+		writer:   env.Writer,
+		versions: env.Store,
 		idx:      buildLinkLibraryIndex(root, rows),
 		audio:    delugeclient.AudioExtensions(),
-		hash:     p.linkHash,
+		hash:     env.Hash,
 		tally:    tally,
 		log:      log,
 		live:     make(map[string]bool),
@@ -656,18 +743,18 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 	if run.hash == nil {
 		run.hash = filehash.BookFileHash
 	}
-	now := p.linkNow
+	now := env.Now
 	if now == nil {
 		now = time.Now
 	}
-	roundFiles := int64(p.linkRoundFiles)
+	roundFiles := int64(env.RoundFiles)
 	if roundFiles <= 0 {
 		roundFiles = linkRoundHashFiles
 	}
 	cutoff := linkCutoff(ctx, now())
 
-	if prov, ok := database.AsCapability[database.FileProvenanceStore](p.store); ok {
-		run.prov = prov
+	if env.Prov != nil {
+		run.prov = env.Prov
 	} else {
 		tally.provenanceUnavailable.Store(1)
 		notes = append(notes, "provenance_unavailable: the store does not expose the file provenance chain; "+
@@ -751,7 +838,7 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 
 		// Phase 2b: hold back the rows of books the relink fixer has not
 		// settled, before limit counts the plan.
-		if err := run.relinkStates(ctx, reporter, plan, workers); err != nil {
+		if err := run.relinkStatesVia(ctx, env.kindEnv, plan, workers); err != nil {
 			return err
 		}
 		plan, stats.held, stats.fixerWouldLink = run.holdBack(plan, params.IncludeUnsettledRelink)
@@ -785,13 +872,13 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 		window += admitted
 
 		started := now()
-		if err := run.resolveRound(ctx, reporter, torrents, workers); err != nil {
-			return err
+		if err := run.resolveRoundVia(ctx, env.kindEnv, torrents, workers); err != nil {
+			return linkBackfillResult{}, err
 		}
 		decided = false
 		if limit > 0 {
 			if err := decideWindow(); err != nil {
-				return err
+				return linkBackfillResult{}, err
 			}
 		}
 		// The whole round, decide included, is what the next one is
@@ -809,7 +896,7 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 	}
 	if !decided {
 		if err := decideWindow(); err != nil {
-			return err
+			return linkBackfillResult{}, err
 		}
 	}
 	run.countWindow(torrents)
@@ -895,8 +982,12 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 			tally.linked.Add(int64(len(w.rows)))
 		}
 	} else if len(plan) > 0 {
-		sdk.NewProgress(reporter, len(plan)).Start(fmt.Sprintf("Linking %d torrent(s)...", len(plan)))
-		if err := registry.RunItems(ctx, reporter, plan, func(ctx context.Context, w torrentWrites) error {
+		newProgress(env.kindEnv, len(plan)).Start(fmt.Sprintf("Linking %d torrent(s)...", len(plan)))
+		if err := env.Items(ctx, linkParallelism(params.Workers), len(plan), kindItemsOptions{
+			ProgressTotal: len(plan),
+			Label:         linkCounterLabel(tally),
+		}, func(ctx context.Context, pi int) error {
+			w := plan[pi]
 			for _, c := range w.rows {
 				if err := ctx.Err(); err != nil {
 					return err
@@ -904,7 +995,7 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 				run.link(w.hash, c)
 			}
 			return nil
-		}, linkRunOptions(workers, len(plan), tally)); err != nil {
+		}); err != nil {
 			// Interrupted while writing: the rows linked so far are written,
 			// so persist what was done (and the cursor) before failing.
 			// next_start_after stays the one this run computed: a rerun from
@@ -914,17 +1005,19 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 			notes = append(notes, fmt.Sprintf("interrupted: writing stopped (%v) after %d row(s) linked", err, tally.linked.Load()))
 			res := tally.result(dry, label, notes)
 			res.NextStartAfter = nextAfter
-			if setErr := registry.ReporterSetResult(reporter, res); setErr != nil {
+			if setErr := persist(res); setErr != nil {
 				log.Error("persist the partial result failed", "error", setErr)
 			}
-			return err
+			// A native Task that fails drops its result (the kernel keeps only
+			// a successful run's), so the partial result is HEAD's alone.
+			return res, err
 		}
 	}
 
 	res := tally.result(dry, label, notes)
 	res.NextStartAfter = nextAfter
-	if err := registry.ReporterSetResult(reporter, res); err != nil {
-		return fmt.Errorf("%s: persist result: %w", linkBackfillOpID, err)
+	if err := persist(res); err != nil {
+		return linkBackfillResult{}, fmt.Errorf("%s: persist result: %w", linkBackfillOpID, err)
 	}
 	log.Info("finished", "dry_run", dry, "summary", tally.summary(dry),
 		"torrents", res.Torrents, "files", res.Files, "non_audio", res.NonAudio,
@@ -936,8 +1029,53 @@ func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, repor
 		"next_start_after", res.NextStartAfter,
 		"relink_fixer_would_link", res.RelinkFixerWouldLink,
 		"provenance_unavailable", res.ProvenanceUnavailable)
-	sdk.NewProgress(reporter, len(details)).Done(tally.summary(dry))
-	return nil
+	newProgress(env.kindEnv, len(details)).Done(tally.summary(dry))
+	return res, nil
+}
+
+// runLinkBackfill is the v2 shell: HEAD's Run (params, the dry_run/dryRun
+// switch) over linkBackfillCore.
+func (p *Plugin) runLinkBackfill(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
+	var params linkBackfillParams
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return fmt.Errorf("%s: decode params: %w", linkBackfillOpID, err)
+		}
+	}
+	dry, modeErr := opmode.ResolveDryRun(linkBackfillOpID, params.DryRun, params.DryRunCamel)
+	if modeErr != nil {
+		// ResolveDryRun pairs the error with true: the run previews, and the
+		// result's notes carry the error so the caller sees why.
+		reporter.Logger().Error("dry_run and dryRun disagree; previewing", "error", modeErr)
+	}
+	env := linkBackfillEnv{
+		kindEnv:      headEnv(reporter, !dry),
+		Store:        p.headStore(),
+		Writer:       p.headWriter(),
+		DefaultLabel: config.AppConfig.DelugeDiscoveryLabel,
+		Root:         config.AppConfig.RootDir,
+		Hash:         p.linkHash,
+		Now:          p.linkNow,
+		RoundFiles:   p.linkRoundFiles,
+		ModeErr:      modeErr,
+	}
+	if c := p.headClient(); c != nil {
+		env.Client = c
+	}
+	if p.store != nil {
+		if prov, ok := database.AsCapability[database.FileProvenanceStore](p.store); ok {
+			env.Prov = prov
+		}
+	}
+	_, err := linkBackfillCore(ctx, linkBackfillCoreParams{
+		Label:                  params.Label,
+		Limit:                  params.Limit,
+		Workers:                params.Workers,
+		MaxHashedFiles:         params.MaxHashedFiles,
+		StartAfter:             params.StartAfter,
+		IncludeUnsettledRelink: params.IncludeUnsettledRelink,
+	}, env)
+	return err
 }
 
 // prepare reads one listed torrent without I/O: its normalized hash and the
@@ -1104,6 +1242,12 @@ func (r *linkRun) enterWindow(t *linkTorrent) {
 // equals a window file's size. Each worker writes only its own torrent's
 // results.
 func (r *linkRun) resolveRound(ctx context.Context, reporter sdk.Reporter, ts []*linkTorrent, workers int) error {
+	return r.resolveRoundVia(ctx, headEnv(reporter, true), ts, workers)
+}
+
+// resolveRoundVia is resolveRound on the env's pool and progress (rule R10:
+// the core hands its shell's hooks, not a Reporter).
+func (r *linkRun) resolveRoundVia(ctx context.Context, env kindEnv, ts []*linkTorrent, workers int) error {
 	sizes := make(map[int64]bool)
 	for _, t := range ts {
 		if t.inWindow {
@@ -1124,8 +1268,12 @@ func (r *linkRun) resolveRound(ctx context.Context, reporter sdk.Reporter, ts []
 	if len(work) == 0 {
 		return nil
 	}
-	sdk.NewProgress(reporter, len(work)).Start(fmt.Sprintf("Resolving %d torrent(s)...", len(work)))
-	return registry.RunItems(ctx, reporter, work, func(ctx context.Context, t *linkTorrent) error {
+	newProgress(env, len(work)).Start(fmt.Sprintf("Resolving %d torrent(s)...", len(work)))
+	return env.Items(ctx, linkParallelism(workers), len(work), kindItemsOptions{
+		ProgressTotal: len(work),
+		Label:         linkCounterLabel(r.tally),
+	}, func(ctx context.Context, wi int) error {
+		t := work[wi]
 		for i, f := range t.files {
 			if t.results[i].done || (!t.inWindow && !sizes[f.size]) {
 				continue
@@ -1142,7 +1290,7 @@ func (r *linkRun) resolveRound(ctx context.Context, reporter sdk.Reporter, ts []
 			}
 		}
 		return nil
-	}, linkRunOptions(workers, len(work), r.tally))
+	})
 }
 
 // countWindow puts the per-file outcomes of every window torrent into the
@@ -1532,6 +1680,11 @@ func (r *linkRun) decide(resolutions []torrentResolution, live map[string]bool) 
 // its relinkState. A failed read is counted in errors and recorded as
 // readErr, which holdBack treats as unsettled.
 func (r *linkRun) relinkStates(ctx context.Context, reporter sdk.Reporter, plan []torrentWrites, workers int) error {
+	return r.relinkStatesVia(ctx, headEnv(reporter, true), plan, workers)
+}
+
+// relinkStatesVia is relinkStates on the env's pool (rule R10).
+func (r *linkRun) relinkStatesVia(ctx context.Context, env kindEnv, plan []torrentWrites, workers int) error {
 	var books []string
 	seen := make(map[string]bool)
 	for _, w := range plan {
@@ -1553,9 +1706,12 @@ func (r *linkRun) relinkStates(ctx context.Context, reporter sdk.Reporter, plan 
 	for i, id := range books {
 		pos[id] = i
 	}
-	opts := linkRunOptions(workers, len(books), r.tally)
-	opts.Label = func(i, t int) string { return fmt.Sprintf("Checking relink order: book %d/%d", i+1, t) }
-	err := registry.RunItems(ctx, reporter, books, func(_ context.Context, bookID string) error {
+	err := env.Items(ctx, linkParallelism(workers), len(books), kindItemsOptions{
+		ProgressTotal: len(books),
+		// Pure: it reads the item index and the total, never a counter.
+		PureLabel: func(i, t int) string { return fmt.Sprintf("Checking relink order: book %d/%d", i+1, t) },
+	}, func(_ context.Context, bi int) error {
+		bookID := books[bi]
 		st := &states[pos[bookID]] // each worker owns one slot
 		vers, err := r.versions.GetBookVersionsByBookID(bookID)
 		if err != nil {
@@ -1572,7 +1728,7 @@ func (r *linkRun) relinkStates(ctx context.Context, reporter sdk.Reporter, plan 
 			}
 		}
 		return nil
-	}, opts)
+	})
 	if err != nil {
 		return err
 	}
@@ -1647,7 +1803,7 @@ func (r *linkRun) link(torrentHash string, c linkCandidate) {
 		outMoved
 	)
 	var got outcome
-	row, err := r.store.ModifyBookFile(c.BookID, c.ID, func(bf *database.BookFile) error {
+	row, err := r.writer.ModifyBookFile(c.BookID, c.ID, func(bf *database.BookFile) error {
 		switch {
 		case bf.FilePath != c.FilePath, bf.FileHash != c.FileHash,
 			bf.OriginalFileHash != c.OriginalFileHash, bf.OriginalFileHashKind != c.OriginalFileHashKind:
