@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/activity_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8e43c7a1-2f95-4b60-a8d3-5c71b9e0f246
 // last-edited: 2026-11-18
 
@@ -354,9 +354,16 @@ func kindReferencesSynthetic(t *testing.T) {
 			t.Errorf("%s = %q, want the held row untouched (%q)", k, s.Act[k], before[k])
 		}
 	}
-	// Two rows that do not decode and four repairs rows no run names a fixer for.
-	if s.Verify.Held != 6 || len(s.Quarantine) != 0 {
-		t.Errorf("held %d, quarantined %d; want 6 held, none quarantined: %+v", s.Verify.Held, len(s.Quarantine), s.Verify)
+	// Two rows that do not decode, four repairs rows no run names a fixer for, and
+	// the three digest rows (14, 16, 19) written or kept with an item left as
+	// stored, each recorded once however many items it holds.
+	if s.Verify.Held != 9 || len(s.Quarantine) != 0 {
+		t.Errorf("held %d, quarantined %d; want 9 held, none quarantined: %+v", s.Verify.Held, len(s.Quarantine), s.Verify)
+	}
+	// Read counts each primary row once: the seeded rows and the two that do not
+	// decode, the rows with held items among them.
+	if want := int64(len(rows) + 2); s.Verify.Read != want {
+		t.Errorf("Read = %d, want %d (one per primary row)", s.Verify.Read, want)
 	}
 	// The digest items that stay as stored are logged, one line each: row 14's
 	// operation-less item, row 16's item of two fixers, and row 19's pruned run

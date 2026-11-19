@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/activity_internal_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c20d6f94-1b7a-4e85-a3f0-7d92e51b4c68
 // last-edited: 2026-11-18
 
@@ -13,8 +13,15 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/vfs"
+	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/datamigrate"
 	"github.com/falkcorp/mediacore/tasks"
+
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // noRuns is a resolver over no runs: every repairs reference fails.
@@ -191,5 +198,174 @@ func TestRenameDigestItems_ResolvesPerItem(t *testing.T) {
 				t.Errorf("changed = %v, but the items %s", changed, map[bool]string{true: "differ", false: "are the same"}[!reflect.DeepEqual(before, want)])
 			}
 		})
+	}
+}
+
+// opTagsOf is n op: tags, OP00..OP<n-1>, as a JSON array fragment.
+func opTagsOf(n int) string {
+	tags := make([]string, n)
+	for i := range tags {
+		tags[i] = fmt.Sprintf(`"op:OP%02d"`, i)
+	}
+	return strings.Join(tags, ",")
+}
+
+// TestRenameDigestItems_SummarizeSampleIsHeld: a Summarize digest item keeps at
+// most digestOpSampleMax op: tags, so an item with that many may be missing the
+// operations of another fixer. It stays as stored (a rename cannot be undone);
+// one with fewer tags has its whole list and is renamed.
+func TestRenameDigestItems_SummarizeSampleIsHeld(t *testing.T) {
+	runs := runsOf{}
+	for i := range 40 {
+		runs[fmt.Sprintf("OP%02d", i)] = "books.repairs.two-face-asins"
+	}
+	for _, c := range []struct {
+		name string
+		ops  int
+		held []string
+	}{
+		{"one op under the cap is renamed", digestOpSampleMax - 1, nil},
+		{"the cap's worth of ops is held", digestOpSampleMax, []string{reasonActivityItemSampled}},
+		{"more than the cap is held", digestOpSampleMax + 1, []string{reasonActivityItemSampled}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tags := `"def:repairs.plan",` + opTagsOf(c.ops)
+			det := map[string]json.RawMessage{"items": json.RawMessage(`[{"type":"repairs.plan","tags":[` + tags + `]},{"type":"scan_complete","tags":[` + opTagsOf(c.ops) + `]}]`)}
+			ks := &kinds{ctx: context.Background(), runs: runs, cache: map[string]string{}}
+			changed, ok, err := renameDigestItems(det, ks)
+			if err != nil || !ok {
+				t.Fatalf("ok=%v err=%v", ok, err)
+			}
+			if !reflect.DeepEqual(ks.heldItems, c.held) {
+				t.Errorf("held items = %q, want %q", ks.heldItems, c.held)
+			}
+			var items []struct {
+				Type string `json:"type"`
+				Tags []string
+			}
+			if err := json.Unmarshal(det["items"], &items); err != nil {
+				t.Fatal(err)
+			}
+			wantType, wantChanged := "books.repairs.two-face-asins", true
+			if c.held != nil {
+				wantType, wantChanged = "repairs.plan", false
+			}
+			if items[0].Type != wantType || changed != wantChanged {
+				t.Errorf("the repairs item is %q (changed %v), want %q (changed %v)", items[0].Type, changed, wantType, wantChanged)
+			}
+			if items[1].Type != "scan_complete" {
+				t.Errorf("an item of no repairs def changed: %q", items[1].Type)
+			}
+		})
+	}
+	t.Run("a tagless item with an operation_id is never sampled", func(t *testing.T) {
+		det := map[string]json.RawMessage{"items": json.RawMessage(`[{"type":"repairs.plan","operation_id":"OP00"}]`)}
+		ks := &kinds{ctx: context.Background(), runs: runs, cache: map[string]string{}}
+		if changed, _, err := renameDigestItems(det, ks); err != nil || !changed || len(ks.heldItems) != 0 {
+			t.Errorf("changed=%v err=%v held=%q", changed, err, ks.heldItems)
+		}
+	})
+}
+
+// TestDigestOpSampleMax_MatchesSummarize: digestOpSampleMax is a pinned copy of
+// the store's unexported summarizeOpSampleMax (m4 cannot import the store), so
+// run a real Summarize over more operations than any cap and count the op: tags
+// of the row it writes. A store that changed its cap fails here.
+func TestDigestOpSampleMax_MatchesSummarize(t *testing.T) {
+	db, err := pebble.Open("test.pebble", &pebble.Options{FS: vfs.NewMem()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	s := store.NewPebbleActivityStore(store.NewGatedDB(db))
+	day := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
+	const ops = 200
+	for i := range ops {
+		if _, err := s.Record(store.ActivityEntry{Tier: "change", Type: "repairs.plan", Level: "info", Source: "maintenance",
+			OperationID: fmt.Sprintf("OP%03d", i), Summary: "planned", Timestamp: day.Add(time.Duration(i) * time.Second)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.Summarize(context.Background(), day.Add(48*time.Hour), "change"); err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err := s.Query(context.Background(), store.ActivityFilter{Tier: "change", Limit: 10})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("summary rows = %d, err %v; want 1", len(rows), err)
+	}
+	n := 0
+	for _, tag := range rows[0].Tags {
+		if strings.HasPrefix(tag, "op:") {
+			n++
+		}
+	}
+	if n != digestOpSampleMax {
+		t.Errorf("Summarize kept %d op: tags, digestOpSampleMax = %d: update the pinned copy", n, digestOpSampleMax)
+	}
+}
+
+// recSink is a datamigrate.Sink that records what Step does with a row.
+type recSink struct {
+	sets   int
+	holds  map[string]string
+	counts map[string]int
+}
+
+func (r *recSink) Set(_, _ []byte) error               { r.sets++; return nil }
+func (r *recSink) Delete([]byte) error                 { return nil }
+func (r *recSink) SetIfAbsent(_, _ []byte) error       { return nil }
+func (r *recSink) SetIfUnchanged(_, _, _ []byte) error { return nil }
+func (r *recSink) DeleteIfUnchanged(_, _ []byte) error { return nil }
+func (r *recSink) Hold(key []byte, reason string)      { r.holds[string(key)] = reason }
+func (r *recSink) Count(outcome string)                { r.counts[outcome]++ }
+
+// TestActivityStep_ItemsHeldAreCountedAndRecorded: a digest row with
+// unresolvable items is written (or kept) like any other, counts one
+// activity-items-held per item, is recorded once through Hold with its reasons,
+// and is one row for Read however many items it holds.
+func TestActivityStep_ItemsHeldAreCountedAndRecorded(t *testing.T) {
+	runs := runsOf{"R1": "books.repairs.two-face-asins"}
+	dm, err := NewActivity(ActivityConfig{Runs: func() RunReader { return runs }}, "activity-test", 1, []storage.StepRef{{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := func(key, items string) *recSink {
+		sink := &recSink{holds: map[string]string{}, counts: map[string]int{}}
+		row := `{"type":"daily_digest","details":{"items":` + items + `}}`
+		err := dm.Step(context.Background(), storage.KV{Key: []byte(key), Value: []byte(row)}, datamigrate.NewStepWriter(sink, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sink
+	}
+	const k1 = "act:digest:00000000000000000001:01HBATROW1"
+	const k2 = "act:digest:00000000000000000002:01HBATROW2"
+	const k3 = "act:digest:00000000000000000003:01HBATROW3"
+	// Written: one item resolves, two cannot (no operation, absent run).
+	w := step(k1, `[{"type":"repairs.plan","operation_id":"R1"},{"type":"repairs.plan"},{"type":"repairs.apply","operation_id":"GONE"}]`)
+	if w.sets != 1 || w.counts[OutcomeActivityRewritten] != 1 || w.counts[OutcomeActivityItemsHeld] != 2 {
+		t.Errorf("written row: sets %d, counts %v; want 1 write, rewritten 1, items-held 2", w.sets, w.counts)
+	}
+	if got := w.holds[k1]; got != "2 digest item(s) left as stored: "+reasonActivityItem {
+		t.Errorf("hold reason = %q", got)
+	}
+	// Kept: its only item cannot resolve, so nothing changes.
+	w = step(k2, `[{"type":"repairs.plan"}]`)
+	if w.sets != 0 || w.counts[OutcomeActivityKept] != 1 || w.counts[OutcomeActivityItemsHeld] != 1 || w.holds[k2] == "" {
+		t.Errorf("kept row: sets %d, counts %v, holds %v", w.sets, w.counts, w.holds)
+	}
+	// A row whose items all resolve is not held.
+	w = step(k3, `[{"type":"repairs.plan","operation_id":"R1"}]`)
+	if len(w.holds) != 0 || w.counts[OutcomeActivityItemsHeld] != 0 {
+		t.Errorf("a fully resolved row was held: %v %v", w.holds, w.counts)
+	}
+	// Two rows held for items, one row clean: Read counts the three rows once
+	// each, and Verify reports the two as held.
+	rep, err := dm.Verify(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Read != 3 || rep.Written != 2 || rep.Held != 2 {
+		t.Errorf("verify = %+v; want Read 3, Written 2, Held 2", rep)
 	}
 }
