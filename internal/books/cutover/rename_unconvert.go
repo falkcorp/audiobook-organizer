@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -100,7 +101,7 @@ func Unconvert(name string, in json.RawMessage) (json.RawMessage, error) {
 		if err != nil {
 			return nil, bad("want a number of bytes")
 		}
-		if n != math.Trunc(n) || math.Abs(n) > maxExactFloatInt {
+		if n != math.Trunc(n) || n < 0 || n > maxExactFloatInt {
 			return nil, unrep("HEAD counts whole MiB")
 		}
 		if int64(n)%bytesPerMiB != 0 {
@@ -368,12 +369,28 @@ func UnfoldOIDC(entries json.RawMessage) (map[string]json.RawMessage, error) {
 // m6.BooksLibraryRoot, which this package cannot import).
 const booksLibraryRootID = "books-library"
 
+// headDerivedRoot reports whether id is a root M6 makes from HEAD's blob:
+// books-library or import-<n> (m6.RootID's output, n canonical decimal). Only
+// those hold HEAD's path_aliases.
+func headDerivedRoot(id string) bool {
+	if id == booksLibraryRootID {
+		return true
+	}
+	rest, ok := strings.CutPrefix(id, "import-")
+	if !ok {
+		return false
+	}
+	n, err := strconv.Atoi(rest)
+	return err == nil && n >= 0 && strconv.Itoa(n) == rest
+}
+
 // UnfoldRoots is the inverse of the roots entries M6 stages: root_dir (the
 // books-library entry's path, "" when there is none) and HEAD's path_aliases
 // (a JSON list of {root, windows, unc, smb_url}). M6 attaches each HEAD alias
 // to the root whose path is the alias's root, so the aliases come back from
-// every root's entry, grouped by root in list order, each with the root's own
-// path as its root.
+// the entries of books-library and import-<n> (the roots HEAD's blob made),
+// grouped by root in list order, each with the root's own path as its root. A
+// root created after the cutover has no home in path_aliases.
 //
 // Lost on the way in, so not recoverable: an alias's own spelling of its root
 // (a trailing slash comes back as the root's path), the order of aliases
@@ -411,6 +428,9 @@ func UnfoldRoots(entries json.RawMessage) (rootDir string, aliases json.RawMessa
 			}
 			seen = true
 			rootDir = e.Path
+		}
+		if !headDerivedRoot(e.ID) {
+			continue
 		}
 		for _, a := range e.Aliases {
 			out = append(out, alias{Root: e.Path, Windows: a.Windows, UNC: a.UNC, SMBURL: a.SMBURL})
