@@ -1,5 +1,5 @@
 // file: internal/books/options.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
 // last-edited: 2026-11-19
 
@@ -139,7 +139,10 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 	// Before app.New runs P0a: whether it may swap the store, which voids
 	// the HNSW clean-stop marker Register takes (swapVoidReason).
 	m.swapVoid = swapVoidReason(m.stateDir)
+	retired, bindings := flipConfigNames(m.flip)
 	return app.Options{
+		RetiredConfigNames:    retired,
+		ConfigEnvBindings:     bindings,
 		AppID:                 AppID,
 		MetricNamespace:       metricNamespace,
 		ServiceName:           serviceName,
@@ -206,8 +209,11 @@ func OfflineOptions() (app.Options, error) {
 		return app.Options{}, err
 	}
 	coreOpts := updater.FetchOptions()
+	retired, bindings := flipConfigNames(flipDeclared)
 	return app.Options{
-		AppID: AppID,
+		RetiredConfigNames: retired,
+		ConfigEnvBindings:  bindings,
+		AppID:              AppID,
 		// serve's Version: the binary ID a staged swap records hashes it, so
 		// a reset or restore staged offline must carry the one the serve
 		// boot computes, or its P0a rejects the intent as another binary's.

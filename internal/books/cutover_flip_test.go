@@ -7,12 +7,17 @@ package books
 
 import (
 	"maps"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/server"
+	"github.com/falkcorp/mediacore/app"
+	coreconfig "github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/coretest"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
@@ -162,5 +167,101 @@ func TestFlipOptions_WireTheKernelsSeams(t *testing.T) {
 	}
 	if un := m.flipOptions(module.Importers{}).Config; un.Legacy != nil || (un.AllowKeyRegen != nil && un.AllowKeyRegen()) {
 		t.Error("an unbound Importers produced a Legacy reader or a true AllowKeyRegen")
+	}
+}
+
+// oracleModule is a module with no storage and no settings: the smallest module
+// an app.New boot needs to exercise core config with the books lists.
+type oracleModule struct{}
+
+func (oracleModule) Manifest() module.Manifest {
+	return module.Manifest{ID: "oracle", Version: "1.0.0", MinCoreVersion: "0.1.0", DefaultEnabled: true}
+}
+func (oracleModule) Register(*module.Registrar) error { return nil }
+
+// TestFlipConfigNames_DarkUntilDeclared: the retired names and the OPENAI
+// bindings reach app.Options only with the flip declared. Dark, Options and
+// OfflineOptions carry neither, so `config check` never calls a name HEAD still
+// reads "retired". Declared, the lists are the rename table's: the retired names
+// exclude the ecosystem names, and the bindings are exactly the two OPENAI ones.
+func TestFlipConfigNames_DarkUntilDeclared(t *testing.T) {
+	withConfig(t, config.Config{DatabasePath: filepath.Join(t.TempDir(), "gotham.pebble")})
+	opts, err := OfflineOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.RetiredConfigNames != nil || opts.ConfigEnvBindings != nil {
+		t.Errorf("OfflineOptions carries retired=%d bindings=%d while the flip is dark", len(opts.RetiredConfigNames), len(opts.ConfigEnvBindings))
+	}
+	if r, b := flipConfigNames(false); r != nil || b != nil {
+		t.Errorf("flipConfigNames(false) = %v, %v, want nothing", r, b)
+	}
+
+	old := flipDeclared
+	flipDeclared = true
+	t.Cleanup(func() { flipDeclared = old })
+	opts, err = OfflineOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(opts.RetiredConfigNames) == 0 {
+		t.Error("a declared flip's OfflineOptions has no retired names")
+	}
+	for _, r := range opts.RetiredConfigNames {
+		if r.Name == "OPENAI_API_KEY" || r.Name == "OPENAI_BASE_URL" {
+			t.Errorf("%s is an ecosystem binding, not a retired name", r.Name)
+		}
+	}
+	want := []coreconfig.EnvName{{Name: "OPENAI_API_KEY", Path: "integrations.ai.openai.api_key"},
+		{Name: "OPENAI_BASE_URL", Path: "integrations.ai.openai.base_url"}}
+	if !slices.Equal(opts.ConfigEnvBindings, want) {
+		t.Errorf("bindings = %v, want %v", opts.ConfigEnvBindings, want)
+	}
+	if Module().(*booksModule).flip != true {
+		t.Error("Module() did not copy the switch")
+	}
+}
+
+// TestFlipConfigNames_RetiredListAcceptedByCoreConfig: core config accepts the
+// books retired list at boot (a name listed twice or a malformed entry would
+// refuse it). The OPENAI bindings are deliberately not booted here: core config
+// places an env binding only onto a path some section owns or Options.Passthrough
+// accepts, and nothing sets Passthrough yet, so booting them with OPENAI_API_KEY
+// set fails "no registered section owns integrations.ai.openai.api_key". Slice (e)
+// or the integrations store (F7-08) must supply it before the switch flips
+// (todo.d/2026-11-19-f3-07-passthrough-for-openai-bindings.md).
+func TestFlipConfigNames_RetiredListAcceptedByCoreConfig(t *testing.T) {
+	retired, _ := flipConfigNames(true)
+	a, err := app.New(t.Context(), app.Options{
+		AppID: AppID, StateDir: t.TempDir(), CoreConfigBoot: true,
+		Args: []string{}, Env: []string{}, RetiredConfigNames: retired,
+	}, oracleModule{})
+	if err != nil {
+		t.Fatalf("app.New with the books retired list: %v", err)
+	}
+	if err := a.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestOptions_CarriesTheConfigListsOnlyWithTheSwitch: serve's Options hands the
+// retired names and OPENAI bindings to app.Options exactly when the module it
+// is given declares the flip; Module() as shipped hands neither.
+func TestOptions_CarriesTheConfigListsOnlyWithTheSwitch(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		t.Run("flip="+strconv.FormatBool(on), func(t *testing.T) {
+			initConfigForTest(t)
+			sandboxStateDir(t)
+			config.AppConfig.DatabasePath = filepath.Join(tempDir(t), "gotham.pebble")
+			mod := Module().(*booksModule)
+			mod.flip = on
+			opts, err := Options(mod, ServeInputs{Server: server.GetDefaultServerConfig(), Telemetry: config.Snapshot()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := len(opts.RetiredConfigNames) > 0 && len(opts.ConfigEnvBindings) == 2; got != on {
+				t.Errorf("Options carries retired=%d bindings=%d", len(opts.RetiredConfigNames), len(opts.ConfigEnvBindings))
+			}
+		})
 	}
 }
