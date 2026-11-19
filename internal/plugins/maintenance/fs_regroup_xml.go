@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.23.6
+// version: 2.24.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-11-15
+// last-edited: 2026-11-19
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -1499,6 +1499,15 @@ func (a *fsApplier) renumberFragmentTracks(ctx context.Context, survivorID, fold
 // updateSurvivor sets the survivor's title (unless the user locked it; fails
 // closed on an unreadable lock set) and its folder path, and journals both.
 // The caller holds merge.LockMergeRMW.
+//
+// The title's lock is read INSIDE the write (ModifyBook's callback runs under the
+// book's write stripe), next to the compare against the title and path read
+// above: a lock saved after that first read, but before the write takes the book,
+// still holds the title. The lock writers (RecordUserOverrides) take
+// LockMetadataState, not the book stripe, so a lock saved while the callback
+// itself is running can still lose; the window is one batch, not none (see
+// todo.d/2026-11-18-lock-metadata-state-order-audit.md). The path is not lockable
+// and moves either way.
 func (a *fsApplier) updateSurvivor(g fsRepairGroup) {
 	folder := logger.SanitizeLogValue(g.BookFolder)
 	b, err := a.store.GetBookByID(g.SurvivorID)
@@ -1509,33 +1518,44 @@ func (a *fsApplier) updateSurvivor(g fsRepairGroup) {
 		return
 	}
 	oldTitle, oldPath := b.Title, b.FilePath
-	newTitle, newPath := oldTitle, oldPath
-	if g.Title != "" && g.Title != b.Title {
-		locks, lerr := database.LoadFieldLocks(a.store, b.ID)
-		switch {
-		case lerr != nil:
-			a.titleKept.Add(1)
-			a.log(slog.LevelWarn, "fragments %q: title not changed, field locks unreadable: %v", folder, lerr)
-		case locks.Locked(database.FieldKeyTitle):
-			a.titleKept.Add(1)
-		default:
-			newTitle = g.Title
-		}
-	}
-	if g.BookFolder != "" {
-		newPath = g.BookFolder
-	}
-	if newTitle == oldTitle && newPath == oldPath {
+	wantTitle := g.Title != "" && g.Title != oldTitle
+	wantPath := g.BookFolder != "" && g.BookFolder != oldPath
+	if !wantTitle && !wantPath {
 		return
 	}
 	// Write only Title and FilePath, under the book's write lock (ModifyBook),
 	// so a column another writer commits meanwhile is not reverted (audit
-	// A1#15). The plan and the lock check above were made against the title
-	// and path read above; a survivor retitled or moved meanwhile is left as
-	// it is.
-	changed := false
+	// A1#15). The plan was made against the title and path read above; a
+	// survivor retitled or moved meanwhile is left as it is, and nothing is
+	// written for it.
+	var (
+		changed                bool
+		newTitle, newPath      string
+		titleKept, locksUnread bool
+		lockErr                error
+	)
 	written, err := a.store.ModifyBook(b.ID, func(cur *database.Book) error {
+		changed, titleKept, locksUnread, lockErr = false, false, false, nil
 		if cur.Title != oldTitle || cur.FilePath != oldPath {
+			return database.ErrSkipBookWrite
+		}
+		newTitle, newPath = cur.Title, cur.FilePath
+		if wantTitle {
+			locks, lerr := database.LoadFieldLocks(a.store, cur.ID)
+			switch {
+			case lerr != nil:
+				titleKept, locksUnread, lockErr = true, true, lerr
+			case locks.Locked(database.FieldKeyTitle):
+				titleKept = true
+			default:
+				newTitle = g.Title
+			}
+		}
+		if wantPath {
+			newPath = g.BookFolder
+		}
+		if newTitle == cur.Title && newPath == cur.FilePath {
+			// The title is held and there is no path to move: nothing to write.
 			return database.ErrSkipBookWrite
 		}
 		cur.Title, cur.FilePath = newTitle, newPath
@@ -1552,8 +1572,16 @@ func (a *fsApplier) updateSurvivor(g fsRepairGroup) {
 		a.log(slog.LevelWarn, "fragments %q: update survivor %s: book gone", folder, b.ID)
 		return
 	}
+	if titleKept {
+		a.titleKept.Add(1)
+		if locksUnread {
+			a.log(slog.LevelWarn, "fragments %q: title not changed, field locks unreadable: %v", folder, lockErr)
+		}
+	}
 	if !changed {
-		a.log(slog.LevelWarn, "fragments %q: survivor %s retitled or moved underneath; title and path left as they are", folder, b.ID)
+		if !titleKept {
+			a.log(slog.LevelWarn, "fragments %q: survivor %s retitled or moved underneath; title and path left as they are", folder, b.ID)
+		}
 		return
 	}
 	if newTitle != oldTitle {

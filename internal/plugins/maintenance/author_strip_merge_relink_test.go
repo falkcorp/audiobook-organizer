@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge_relink_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 9444cf3d-482c-4380-9243-4bcfd66af5ee
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -52,9 +52,11 @@ type relinkFixture struct {
 	// moment instead. Neither depends on how many reads preceded it.
 	lockAtWrite    map[string]bool
 	lockErrAtWrite map[string]error
+	// createErr fails the author creation the relink makes for a name with no row.
+	createErr error
 	// authors replaces the default author list (T 100, S 200, the real author 300).
 	authors []database.Author
-	store      *database.MockStore
+	store   *database.MockStore
 }
 
 func newRelinkFixture() *relinkFixture {
@@ -160,6 +162,9 @@ func (f *relinkFixture) run(t *testing.T, params string) (*stripMergeCalls, stri
 	}
 	f.store = store
 	store.CreateAuthorFunc = func(name string) (*database.Author, error) {
+		if f.createErr != nil {
+			return nil, f.createErr
+		}
 		f.events = append(f.events, "create:"+name)
 		f.created = append(f.created, name)
 		a := database.Author{ID: 900 + len(f.created), Name: name}
