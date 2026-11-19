@@ -141,7 +141,7 @@ func (s *Server) libraryScanDef() opsregistry.OperationDef {
 				}
 			}
 			_, err := libraryScanCore(ctx, p, libraryScanEnv{
-				t7Env:  t7HeadEnv(reporter, true),
+				t7Env:  t7HeadCheckpointing(t7HeadEnv(reporter, true), reporter),
 				Writer: headLibraryScan{s: s},
 			})
 			return err
