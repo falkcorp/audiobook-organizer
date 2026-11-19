@@ -1,7 +1,7 @@
 // file: core/kernel/config.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 1f6c9e2a-7b40-4d85-9a3e-5c2b8d7f0e14
-// last-edited: 2026-11-11
+// last-edited: 2026-11-18
 
 package kernel
 
@@ -428,13 +428,36 @@ func (cb *configBoot) loadConfig(ctx context.Context, moduleSections ...any) ([]
 	if err != nil {
 		return nil, fmt.Errorf("kernel: config: register the module sections: %w", err)
 	}
-	if err := cb.store.Load(ctx); err != nil {
-		return nil, fmt.Errorf("kernel: config load: %w", err)
-	}
-	if err := cb.checkStoragePath(); err != nil {
+	if err := cb.seal(ctx); err != nil {
 		return nil, err
 	}
 	return hs, nil
+}
+
+// loadSettings is loadConfig for the sections modules declare in
+// Manifest.Settings (module.SettingsSection): each registers with the store,
+// and the live handles come back by path.
+func (cb *configBoot) loadSettings(ctx context.Context, secs []module.SettingsSection) (map[config.Path]any, error) {
+	live := make(map[config.Path]any, len(secs))
+	for _, s := range secs {
+		h, err := s.Register(cb.store.Registry())
+		if err != nil {
+			return nil, fmt.Errorf("kernel: config: register the module section %s: %w", s.Path(), err)
+		}
+		live[s.Path()] = h
+	}
+	if err := cb.seal(ctx); err != nil {
+		return nil, err
+	}
+	return live, nil
+}
+
+// seal loads the registered sections and checks core.storage.path once more.
+func (cb *configBoot) seal(ctx context.Context) error {
+	if err := cb.store.Load(ctx); err != nil {
+		return fmt.Errorf("kernel: config load: %w", err)
+	}
+	return cb.checkStoragePath()
 }
 
 // buildConfigStore is 06 P4b for config: the native store over c/config/,
