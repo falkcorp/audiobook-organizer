@@ -50,7 +50,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	logging "github.com/falkcorp/mediacore/log"
+	"github.com/falkcorp/mediacore/tasks"
 	ulid "github.com/oklog/ulid/v2"
 	"golang.org/x/sync/errgroup"
 )
@@ -737,8 +739,18 @@ func refuseUnscopedPerUserTerms(f operations.FilterSpec) error {
 // OperationDef so that POST /api/v1/operations/v2 with def_id "bulk_metadata_fetch"
 // shows in the bell, is resumable, and can be cancelled.
 func (s *Server) RegisterBulkMetadataFetchOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "library.bulk-metadata-fetch",
+	return reg.RegisterOp(s.bulkMetadataFetchDef(reg))
+}
+
+// bulkMetadataFetchOpID is library.bulk-metadata-fetch.
+const bulkMetadataFetchOpID = "library.bulk-metadata-fetch"
+
+// bulkMetadataFetchDef is HEAD's definition of library.bulk-metadata-fetch. reg is
+// the registry a continuation is queued on; the native kind never runs HEAD's Run,
+// so it passes nil.
+func (s *Server) bulkMetadataFetchDef(reg *opsregistry.Registry) opsregistry.OperationDef {
+	return opsregistry.OperationDef{
+		ID:              bulkMetadataFetchOpID,
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "library",
 		DisplayName:     "Bulk Metadata Fetch",
@@ -748,7 +760,7 @@ func (s *Server) RegisterBulkMetadataFetchOp(reg *opsregistry.Registry) error {
 		Isolate:         false,
 		Timeout:         6 * time.Hour,
 		ResumePolicy:    opsregistry.ResumeRestart,
-		ConcurrencyKey:  "library.bulk-metadata-fetch",
+		ConcurrencyKey:  bulkMetadataFetchOpID,
 		// A selection with a per-user filter (read_status, progress_pct, last_played)
 		// is judged by the rows of the user who enqueued the run (opActor). The
 		// ConcurrencyKey dedupe folds a byte-identical request into the active run,
@@ -757,121 +769,227 @@ func (s *Server) RegisterBulkMetadataFetchOp(reg *opsregistry.Registry) error {
 		DedupeSameActorOnly: true,
 		Permissions:         []auth.Permission{auth.PermLibraryEditMetadata},
 		Capabilities:        []opsregistry.Capability{opsregistry.CapNetworkGeneric, opsregistry.CapLibraryRead},
-		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) (retErr error) {
+		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p bulkMetadataFetchV2Params
 			if len(rawParams) > 0 {
 				if err := json.Unmarshal(rawParams, &p); err != nil {
 					return fmt.Errorf("bulk_metadata_fetch: decode params: %w", err)
 				}
 			}
-			// Metadata is never applied during a library scan: hold the scan stand-down
-			// before the first write (fails the op if the scan does not park).
-			hold, sdErr := s.holdMetadataScanStandDown(ctx, reporter, "library.bulk-metadata-fetch apply")
-			if sdErr != nil {
-				return sdErr
-			}
-			defer func() { retErr = hold.Finish(retErr) }()
-			ctx, reporter = hold.Context(), hold.Reporter()
-
-			store := s.storeForWiring()
-			if store == nil {
-				return fmt.Errorf("bulk_metadata_fetch: database not initialized")
-			}
-
-			// The ledger key for this fetch CHAIN. Every OperationResult row is
-			// written under it and every continuation carries it forward, so a
-			// successor reads the same ledger its predecessor wrote.
-			//
-			// This was ulid.Make() until 2026-09-02 -- random on every run,
-			// directly beneath a comment asserting it was deterministic "so
-			// OperationResult rows survive restarts". They never did:
-			// GetOperationResults(opID) always missed, the `done` map was always
-			// empty, and this operation has never once resumed anything.
-			runKey := strings.TrimSpace(p.RunKey)
-			if runKey == "" {
-				runKey = ulid.Make().String()
-			}
-			opID := runKey
-
-			if p.Continuation > maxBulkFetchContinuations {
-				return fmt.Errorf("bulk_metadata_fetch: chain %s exceeded %d continuations; refusing to queue another",
-					runKey, maxBulkFetchContinuations)
-			}
-
-			fetchParams := operations.BulkMetadataFetchParams{
-				PreferAudible: p.PreferAudible,
-				SkipCached:    p.ResolveSkipCached(),
-			}
-
-			progress := registryProgressAdapter{r: reporter}
-
-			// The user this run acts for, read off the operation row (stamped from the
-			// verified request at enqueue, never from params a caller could write). A
-			// selection that carries a per-user filter is judged against that user's
-			// listening rows; without one it is refused (resolveFilterToBookIDs).
-			actor, actorErr := s.opActor(opsregistry.ReporterOpID(reporter))
-			bookIDs, err := operations.ResolveBookIDs(p.Selection, func(f operations.FilterSpec) ([]string, error) {
-				ids, rerr := retryWhileSearchBusy(ctx, func() ([]string, error) { return s.resolveFilterToBookIDs(ctx, f, actor.userID) })
-				if rerr != nil && actorErr != nil {
-					rerr = fmt.Errorf("%w (the requesting user could not be read from the operation row: %v)", rerr, actorErr)
-				}
-				return ids, rerr
+			h := headBulkFetch{s: s, reg: reg}
+			return bulkMetadataFetchCore(ctx, p, bulkMetadataFetchEnv{
+				t7Env:     t7HeadEnv(reporter, true),
+				Store:     h,
+				Writer:    h,
+				StandDown: s.t7HeadMetadataStandDown(reporter),
 			})
-			if err != nil {
-				return fmt.Errorf("bulk_metadata_fetch: resolve selection: %w", err)
-			}
+		},
+	}
+}
 
-			var incomplete bool
-			switch {
-			case len(bookIDs) > 0:
-				incomplete, err = s.runBulkMetadataFetchForBookIDs(ctx, opID, bookIDs, fetchParams, store, progress)
-			case bulkFetchSelectionIsWholeLibrary(p.Selection):
-				incomplete, err = s.runBulkMetadataFetchAll(ctx, opID, fetchParams, store, progress)
-			default:
-				// A selection WAS given and it resolved to nothing (a filter nobody
-				// matches, a per-user filter that matches none of this user's books).
-				// That is a finished run over zero books, not a request for the whole
-				// library: falling through to runBulkMetadataFetchAll here widened the
-				// op to every book.
-				_ = reporter.Log(slog.LevelInfo, "bulk_metadata_fetch: the selection resolved to no books; nothing to fetch")
-				_ = reporter.UpdateProgress(0, 0, "selection resolved to no books")
-				return nil
-			}
-			if err != nil {
-				return err
-			}
-			if !incomplete {
-				return nil
-			}
+// bulkFetchOpStore is the reads of library.bulk-metadata-fetch.
+type bulkFetchOpStore interface {
+	// Ready reports whether the library store is initialized.
+	Ready() bool
+	// OpActor is the user the run acts for, read off its operation row.
+	OpActor(opID string) (opActorIdentity, error)
+	// ResolveFilter resolves a selection's filter to book ids for viewerID.
+	ResolveFilter(ctx context.Context, f operations.FilterSpec, viewerID string) ([]string, error)
+}
 
-			// Work was left behind because the timeout was approaching. Queue the
-			// next link. ctx.Err() guards the case where the run stopped because
-			// the USER canceled it -- continuing that chain would resurrect work
-			// somebody deliberately killed.
-			if ctx.Err() != nil {
-				return nil
+// bulkFetchOpWriter is the writes of library.bulk-metadata-fetch. The two
+// engines read the library and the provider caches and write the chain's
+// OperationResult ledger and the metadata cache rows; they are the server's
+// resumable fetch cores, handed the run's progress reporter.
+type bulkFetchOpWriter interface {
+	// FetchForBookIDs fetches and caches metadata for the given books
+	// (runBulkMetadataFetchForBookIDs).
+	FetchForBookIDs(ctx context.Context, opID string, bookIDs []string, params operations.BulkMetadataFetchParams, progress operations.ProgressReporter) (incomplete bool, err error)
+	// FetchAll fetches the whole library (runBulkMetadataFetchAll).
+	FetchAll(ctx context.Context, opID string, params operations.BulkMetadataFetchParams, progress operations.ProgressReporter) (incomplete bool, err error)
+	// EnqueueContinuation queues the chain's next link, acting for the same user.
+	EnqueueContinuation(ctx context.Context, next bulkMetadataFetchV2Params, actor opActorIdentity) (string, error)
+}
+
+// bulkMetadataFetchEnv is what the shared core takes from its shell (rules R2, R10).
+type bulkMetadataFetchEnv struct {
+	t7Env
+	Store     bulkFetchOpStore
+	Writer    bulkFetchOpWriter
+	StandDown t7StandDown
+}
+
+// bulkMetadataFetchCore is the body of library.bulk-metadata-fetch, shared by
+// HEAD's shell and the native kind.
+func bulkMetadataFetchCore(ctx context.Context, p bulkMetadataFetchV2Params, env bulkMetadataFetchEnv) (retErr error) {
+	// Metadata is never applied during a library scan: hold the scan stand-down
+	// before the first write (fails the op if the scan does not park).
+	hold, sdErr := env.StandDown(ctx, "library.bulk-metadata-fetch apply")
+	if sdErr != nil {
+		return sdErr
+	}
+	defer func() { retErr = hold.Finish(retErr) }()
+	ctx, env.t7Env = t7Rebind(ctx, env.t7Env, hold)
+
+	if !env.Store.Ready() {
+		return fmt.Errorf("bulk_metadata_fetch: database not initialized")
+	}
+
+	// The ledger key for this fetch CHAIN. Every OperationResult row is
+	// written under it and every continuation carries it forward, so a
+	// successor reads the same ledger its predecessor wrote.
+	//
+	// This was ulid.Make() until 2026-09-02 -- random on every run,
+	// directly beneath a comment asserting it was deterministic "so
+	// OperationResult rows survive restarts". They never did:
+	// GetOperationResults(opID) always missed, the `done` map was always
+	// empty, and this operation has never once resumed anything.
+	runKey := strings.TrimSpace(p.RunKey)
+	if runKey == "" {
+		runKey = ulid.Make().String()
+	}
+	opID := runKey
+
+	if p.Continuation > maxBulkFetchContinuations {
+		return fmt.Errorf("bulk_metadata_fetch: chain %s exceeded %d continuations; refusing to queue another",
+			runKey, maxBulkFetchContinuations)
+	}
+
+	fetchParams := operations.BulkMetadataFetchParams{
+		PreferAudible: p.PreferAudible,
+		SkipCached:    p.ResolveSkipCached(),
+	}
+
+	progress := env.reporter()
+
+	// The user this run acts for, read off the operation row (stamped from the
+	// verified request at enqueue, never from params a caller could write). A
+	// selection that carries a per-user filter is judged against that user's
+	// listening rows; without one it is refused (resolveFilterToBookIDs).
+	actor, actorErr := env.Store.OpActor(env.OpID)
+	bookIDs, err := operations.ResolveBookIDs(p.Selection, func(f operations.FilterSpec) ([]string, error) {
+		ids, rerr := retryWhileSearchBusy(ctx, func() ([]string, error) { return env.Store.ResolveFilter(ctx, f, actor.userID) })
+		if rerr != nil && actorErr != nil {
+			rerr = fmt.Errorf("%w (the requesting user could not be read from the operation row: %v)", rerr, actorErr)
+		}
+		return ids, rerr
+	})
+	if err != nil {
+		return fmt.Errorf("bulk_metadata_fetch: resolve selection: %w", err)
+	}
+
+	var incomplete bool
+	switch {
+	case len(bookIDs) > 0:
+		incomplete, err = env.Writer.FetchForBookIDs(ctx, opID, bookIDs, fetchParams, progress)
+	case bulkFetchSelectionIsWholeLibrary(p.Selection):
+		incomplete, err = env.Writer.FetchAll(ctx, opID, fetchParams, progress)
+	default:
+		// A selection WAS given and it resolved to nothing (a filter nobody
+		// matches, a per-user filter that matches none of this user's books).
+		// That is a finished run over zero books, not a request for the whole
+		// library: falling through to runBulkMetadataFetchAll here widened the
+		// op to every book.
+		env.Log(slog.LevelInfo, "bulk_metadata_fetch: the selection resolved to no books; nothing to fetch")
+		env.progress(0, 0, "selection resolved to no books")
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !incomplete {
+		return nil
+	}
+
+	// Work was left behind because the timeout was approaching. Queue the
+	// next link. ctx.Err() guards the case where the run stopped because
+	// the USER canceled it -- continuing that chain would resurrect work
+	// somebody deliberately killed.
+	if ctx.Err() != nil {
+		return nil
+	}
+	next := nextContinuationParams(p, runKey)
+	// The continuation re-resolves the same selection, so it must act for the
+	// same user: an op enqueued with no actor would refuse a per-user filter
+	// on its second link.
+	nextID, eerr := env.Writer.EnqueueContinuation(ctx, next, actor)
+	if eerr != nil {
+		// Not fatal to THIS run -- the books it did fetch are cached and
+		// ledgered -- but it does end the chain, so say so loudly rather
+		// than reporting a clean finish.
+		logger.ErrorCtx(ctx, "bulk-metadata-fetch: could not queue continuation; chain ends here",
+			"run_key", runKey, "continuation", next.Continuation, "err", eerr)
+		return fmt.Errorf("bulk_metadata_fetch: queue continuation %d: %w", next.Continuation, eerr)
+	}
+	if nextID == "" {
+		return fmt.Errorf("bulk_metadata_fetch: continuation %d returned an empty op id", next.Continuation)
+	}
+	logger.InfoCtx(ctx, "bulk-metadata-fetch: queued continuation",
+		"run_key", runKey, "continuation", next.Continuation, "next_op_id", nextID)
+	env.Log(slog.LevelInfo, "stopped before timeout; queued continuation",
+		slog.String("next_op_id", nextID), slog.Int("continuation", next.Continuation))
+	return nil
+}
+
+// headBulkFetch is HEAD's side of both interfaces: the server's store and fetch
+// cores.
+type headBulkFetch struct {
+	s   *Server
+	reg *opsregistry.Registry
+}
+
+func (h headBulkFetch) Ready() bool { return h.s.storeForWiring() != nil }
+
+func (h headBulkFetch) OpActor(opID string) (opActorIdentity, error) { return h.s.opActor(opID) }
+
+func (h headBulkFetch) ResolveFilter(ctx context.Context, f operations.FilterSpec, viewerID string) ([]string, error) {
+	return h.s.resolveFilterToBookIDs(ctx, f, viewerID)
+}
+
+func (h headBulkFetch) FetchForBookIDs(ctx context.Context, opID string, bookIDs []string, params operations.BulkMetadataFetchParams, progress operations.ProgressReporter) (bool, error) {
+	return h.s.runBulkMetadataFetchForBookIDs(ctx, opID, bookIDs, params, h.s.storeForWiring(), progress)
+}
+
+func (h headBulkFetch) FetchAll(ctx context.Context, opID string, params operations.BulkMetadataFetchParams, progress operations.ProgressReporter) (bool, error) {
+	return h.s.runBulkMetadataFetchAll(ctx, opID, params, h.s.storeForWiring(), progress)
+}
+
+func (h headBulkFetch) EnqueueContinuation(ctx context.Context, next bulkMetadataFetchV2Params, actor opActorIdentity) (string, error) {
+	return h.reg.EnqueueOp(ctx, bulkMetadataFetchOpID, next, actor.options()...)
+}
+
+// bulkMetadataFetchNative is the native books.library.bulk-metadata-fetch kind.
+// HEAD has no preview, so a Preview run is refused. It writes the chain's result
+// ledger and the metadata cache, not the book rows. The engines run their own
+// worker pools (bulkFetchWorkers), so the shell hands them no pool.
+func (s *Server) bulkMetadataFetchNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	kind := t7KindFor(bulkMetadataFetchOpID)
+	c := t7Common(s.bulkMetadataFetchDef(nil), sched)
+	c.Resume = t7Resume(opsregistry.ResumeRestart, false)
+	c.Effects = t7Writes(ops.ResOperations, ops.ResMetadataCache)
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			if err := t7LiveOnly(rc, kind); err != nil {
+				return struct{}{}, err
 			}
-			next := nextContinuationParams(p, runKey)
-			// The continuation re-resolves the same selection, so it must act for the
-			// same user: an op enqueued with no actor would refuse a per-user filter
-			// on its second link.
-			nextID, eerr := reg.EnqueueOp(ctx, "library.bulk-metadata-fetch", next, actor.options()...)
-			if eerr != nil {
-				// Not fatal to THIS run -- the books it did fetch are cached and
-				// ledgered -- but it does end the chain, so say so loudly rather
-				// than reporting a clean finish.
-				logger.ErrorCtx(ctx, "bulk-metadata-fetch: could not queue continuation; chain ends here",
-					"run_key", runKey, "continuation", next.Continuation, "err", eerr)
-				return fmt.Errorf("bulk_metadata_fetch: queue continuation %d: %w", next.Continuation, eerr)
+			p, err := t7DecodeNative[bulkMetadataFetchV2Params](kind, raw)
+			if err != nil {
+				return struct{}{}, err
 			}
-			if nextID == "" {
-				return fmt.Errorf("bulk_metadata_fetch: continuation %d returned an empty op id", next.Continuation)
+			if err := t7NeedStore(kind, deps); err != nil {
+				return struct{}{}, err
 			}
-			logger.InfoCtx(ctx, "bulk-metadata-fetch: queued continuation",
-				"run_key", runKey, "continuation", next.Continuation, "next_op_id", nextID)
-			_ = reporter.Log(slog.LevelInfo, "stopped before timeout; queued continuation",
-				slog.String("next_op_id", nextID), slog.Int("continuation", next.Continuation))
-			return nil
+			w, err := t7NewWriter(kind, deps, rc)
+			if err != nil {
+				return struct{}{}, err
+			}
+			return struct{}{}, bulkMetadataFetchCore(rc.Context(), p, bulkMetadataFetchEnv{
+				t7Env:     t7NativeEnv(rc),
+				Store:     deps.Store,
+				Writer:    w,
+				StandDown: t7NativeStandDown(rc, deps.StandDownKey),
+			})
 		},
 	})
 }
