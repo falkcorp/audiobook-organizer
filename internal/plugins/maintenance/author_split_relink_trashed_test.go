@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_split_relink_trashed_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 3b8d5e72-0c4f-4a91-9e26-d71f84a3c6b0
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -26,36 +26,25 @@ import (
 // out of EVERY book_authors row, trashed books included, so a relink list that
 // skipped the trash erased a trashed book's credit. Real store throughout.
 
-// splitFaultStore is a real PebbleStore that can fail the split's two per-book
-// writes for chosen books and run a hook just before either write, which is
-// where another writer's change lands in production. Methods not overridden are
-// the real store's.
+// splitFaultStore is a real PebbleStore that can fail the split's one per-book
+// commit (credits and primary author together) for a chosen book and run a hook
+// just before it, which is where another writer's change lands in production.
+// Methods not overridden are the real store's. Its ModifyBookCredits is the
+// capability the split's writer resolves, so every book goes through it.
 type splitFaultStore struct {
 	*database.PebbleStore
-	failCredits             string // ModifyBookAuthors fails for this book
-	failPrimary             string // ModifyBook fails for this book
-	beforeModifyBook        func(bookID string)
-	beforeModifyBookAuthors func(bookID string)
+	failCommit   string // ModifyBookCredits fails for this book
+	beforeCommit func(bookID string)
 }
 
-func (f splitFaultStore) ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error) {
-	if f.beforeModifyBookAuthors != nil {
-		f.beforeModifyBookAuthors(bookID)
+func (f splitFaultStore) ModifyBookCredits(id string, fn func(*database.Book, *database.BookCreditsEdit) error) (*database.Book, database.BookCreditsEdit, error) {
+	if f.beforeCommit != nil {
+		f.beforeCommit(id)
 	}
-	if bookID == f.failCredits {
-		return nil, errors.New("injected ModifyBookAuthors failure")
+	if id == f.failCommit {
+		return nil, database.BookCreditsEdit{}, errors.New("injected ModifyBookCredits failure")
 	}
-	return f.PebbleStore.ModifyBookAuthors(bookID, fn)
-}
-
-func (f splitFaultStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
-	if f.beforeModifyBook != nil {
-		f.beforeModifyBook(id)
-	}
-	if id == f.failPrimary {
-		return nil, errors.New("injected ModifyBook failure")
-	}
-	return f.PebbleStore.ModifyBook(id, fn)
+	return f.PebbleStore.ModifyBookCredits(id, fn)
 }
 
 func newSplitRelinkStore(t *testing.T) *database.PebbleStore {
@@ -133,7 +122,7 @@ func TestAuthorSplitScanOp_KeepsCompositeWhileTrashedBookStillCredits(t *testing
 	require.NoError(t, err)
 	trashed := mkSplitTrashedBook(t, st, composite.ID)
 
-	rep := runSplitScanOp(t, splitFaultStore{PebbleStore: st, failCredits: trashed})
+	rep := runSplitScanOp(t, splitFaultStore{PebbleStore: st, failCommit: trashed})
 
 	kept, err := st.GetAuthorByID(composite.ID)
 	require.NoError(t, err)
@@ -155,10 +144,10 @@ func TestAuthorSplitScanOp_KeepsCompositeWhileTrashedBookStillCredits(t *testing
 }
 
 // ResumeRequeue is safe because an interrupted apply can be run again. The first
-// pass here dies on one book's primary-author write after that book's credits
-// were already relinked: the book is still listed through its legacy AuthorID,
-// so the composite must survive; the second, healthy pass is the requeue, and it
-// repoints the primary, deletes the composite and credits nobody twice.
+// pass here fails one book's commit: that book is left exactly as it was (credits
+// and primary both still on the composite), so the composite must survive; the
+// second, healthy pass is the requeue, and it splits the book, deletes the
+// composite and credits nobody twice.
 func TestAuthorSplitScan_RequeueAfterPartialApply(t *testing.T) {
 	st := newSplitRelinkStore(t)
 	composite, err := st.CreateAuthor("Erin Gray & Finn Green")
@@ -166,7 +155,7 @@ func TestAuthorSplitScan_RequeueAfterPartialApply(t *testing.T) {
 	done := mkSplitTrashedBook(t, st, composite.ID)
 	stuck := mkSplitTrashedBook(t, st, composite.ID)
 
-	runSplitScanOp(t, splitFaultStore{PebbleStore: st, failPrimary: stuck})
+	runSplitScanOp(t, splitFaultStore{PebbleStore: st, failCommit: stuck})
 
 	kept, err := st.GetAuthorByID(composite.ID)
 	require.NoError(t, err)
@@ -180,7 +169,8 @@ func TestAuthorSplitScan_RequeueAfterPartialApply(t *testing.T) {
 	half, err := st.GetBookByID(stuck)
 	require.NoError(t, err)
 	require.NotNil(t, half.AuthorID)
-	require.Equal(t, composite.ID, *half.AuthorID, "the failed primary write must not have landed")
+	require.Equal(t, composite.ID, *half.AuthorID, "the failed commit must not have moved the primary")
+	require.Equal(t, map[int]int{composite.ID: 1}, creditCounts(t, st, stuck), "the failed commit must not have moved the credits")
 	finished, err := st.GetBookByID(done)
 	require.NoError(t, err)
 	require.NotNil(t, finished.AuthorID)

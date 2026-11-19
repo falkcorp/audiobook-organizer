@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/lost_update_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6c1f0b7e-2d94-4a58-9e3b-7f2a5c8d1b04
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -100,6 +101,50 @@ func newLostUpdateStore(land func(*database.Book), books ...database.Book) (*dat
 		return &out, nil
 	}
 	return m, r
+}
+
+// lostUpdateCredits gives the lost-update MockStore the ONE commit the author
+// split writes (ModifyBookCredits), made the way the mock's ModifyBook is: the
+// other writer's column lands first, then the callback runs on the row as it
+// stands under the lock, so a write that sets only what it decided on keeps it.
+type lostUpdateCredits struct {
+	*creditsMock
+	rows *lostUpdateRows
+}
+
+func (c lostUpdateCredits) ModifyBookCredits(id string, fn func(*database.Book, *database.BookCreditsEdit) error) (*database.Book, database.BookCreditsEdit, error) {
+	authors, err := c.GetBookAuthors(id)
+	if err != nil {
+		return nil, database.BookCreditsEdit{}, err
+	}
+	narrators, err := c.GetBookNarrators(id)
+	if err != nil {
+		return nil, database.BookCreditsEdit{}, err
+	}
+	r := c.rows
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.landOn(id)
+	b := r.rows[id]
+	if b == nil {
+		return nil, database.BookCreditsEdit{}, nil
+	}
+	cp := *b
+	edit := database.BookCreditsEdit{Authors: slices.Clone(authors), Narrators: slices.Clone(narrators)}
+	if err := fn(&cp, &edit); err != nil {
+		if errors.Is(err, database.ErrSkipBookWrite) {
+			return b, database.BookCreditsEdit{Authors: authors, Narrators: narrators}, nil
+		}
+		return nil, database.BookCreditsEdit{}, err
+	}
+	if !slices.Equal(edit.Authors, authors) {
+		if err := c.SetBookAuthors(id, edit.Authors); err != nil {
+			return nil, database.BookCreditsEdit{}, err
+		}
+	}
+	r.rows[id] = &cp
+	out := cp
+	return &out, edit, nil
 }
 
 func assertDurationKept(t *testing.T, site string, got *database.Book) {
@@ -204,7 +249,7 @@ func TestAuthorSplit_DoesNotRevertConcurrentColumns(t *testing.T) {
 			return b.AuthorID, true
 		})
 
-	p := New(fakeDeps{store: store})
+	p := New(fakeDeps{store: lostUpdateCredits{creditsMock: withCredits(store), rows: rows}})
 	if err := p.runAuthorSplitScan(context.Background(), json.RawMessage(`{"dry_run":false}`), &fakeReporter{}); err != nil {
 		t.Fatalf("runAuthorSplitScan: %v", err)
 	}

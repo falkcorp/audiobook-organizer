@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.19.0
+// version: 1.19.1
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -78,17 +78,16 @@ import (
 // split an author twice or lose a credit. A composite is deleted only after
 // VerifyAuthorUnlinked passes, and that check re-reads
 // GetBooksByAuthorIDForRelinkCore, which lists a book by its junction row OR its
-// legacy AuthorID, in any state including the trash. Each book takes its two
-// writes in an order that keeps that evidence until the credits are safe: the
-// parts are credited FIRST (the composite stays listed through the primary
-// AuthorID, or the junction row not yet removed), and only then is the primary
-// repointed. A failure or crash between the writes leaves the book still listed
-// under the composite, so the composite survives, and the rerun finds the parts
-// already credited, repoints the primary and deletes the composite. A part that
-// already exists is found by name rather than created again, an already-linked
-// part is not linked again, and both writes skip a book that no longer names the
-// composite (TestAuthorSplitScan_NoCreditLostWhenEitherWriteFails,
-// TestAuthorSplitScan_RequeueAfterPartialApply).
+// legacy AuthorID, in any state including the trash. Each book is written in ONE
+// commit (ModifyBookCreditsRespectingLocks): its credits and its primary author
+// move together, or not at all. A failure or crash leaves the book exactly as it
+// was, still listed under the composite, so the composite survives and the rerun
+// starts from the same state. A part that already exists is found by name rather
+// than created again, an already-linked part is not linked again, and the commit
+// skips a book that no longer names the composite
+// (TestAuthorSplitScan_NoCreditLostWhenTheCommitFails,
+// TestAuthorSplitScan_RequeueAfterPartialApply). A store that cannot make the one
+// commit is refused, with no two-write fallback.
 // authorSplitScanHelp is the def's Description, which the native kind carries as
 // its Help.
 const authorSplitScanHelp = "Finds and splits composite author names (e.g. 'Smith, J. & Jones, A.'). " +
@@ -178,74 +177,46 @@ type authorSplitRun struct {
 	wrote atomic.Bool
 }
 
-// relinkBook applies every substitution of one book, in two writes whose ORDER
-// is the crash-safety argument.
+// relinkBook applies every substitution of one book in ONE commit: its credits
+// and its primary author are written together by ModifyBookCreditsRespectingLocks,
+// and the user's author lock is read inside that commit, under the book's write
+// lock and both credit locks.
 //
-// First the credits: the composite is replaced by its parts inside
-// ModifyBookAuthors, so a credit list another writer changes meanwhile is not
-// reverted and a book that no longer carries the composite is skipped. The
-// composite counts as credited if the junction names it OR the fresh row's
-// AuthorID does: a book credited only through its legacy AuthorID (the default
-// shape CreateBook leaves) has no junction row, and its parts must still be
-// credited. The fresh row is read inside the callback with GetBookByID, which
-// takes no lock on the Pebble store (the callback runs under the book_authors
-// stripe, and setBookAuthorsLocked already makes the same read there), so the
-// decision sees what a writer committed after the listing. Credits go first
-// because the legacy AuthorID is the only evidence of the composite on such a
-// book: while it is unchanged, GetBooksByAuthorIDForRelinkCore keeps listing the
-// book, VerifyAuthorUnlinked refuses to delete the composite, and a failure or
-// crash after this write loses nothing.
+// The commit hands mutate the FRESH row and credit list, so nothing decided on
+// the listing is written back: a credit list another writer changed meanwhile is
+// not reverted, a book that no longer carries a composite is skipped for it, and
+// a column another writer committed is not overwritten. The composite counts as
+// credited if the junction names it OR the fresh row's AuthorID does: a book
+// credited only through its legacy AuthorID (the default shape CreateBook leaves)
+// has no junction row, and its parts must still be credited. `book` is a
+// BookCore (heavy fields nil), so its ToBook() projection is never written: the
+// commit re-reads the full stored row and mutate sets BOTH the new AuthorID and a
+// fresh denormalized Author, so the row stays consistent (Author.ID == AuthorID),
+// not preserved-stale (STOREFID W5d-1 / #1887). The primary is repointed only if
+// the fresh row still names one of this book's composites; a primary moved off
+// them meanwhile is left alone.
 //
-// Then the primary author, only if the credits write did not fail: ModifyBook
-// repoints AuthorID, deciding on the FRESH row. `book` is a BookCore (heavy
-// fields nil), so its ToBook() projection is never written: it carries nil
-// Author/Series AND, because this op changes AuthorID, the guard-preserved
-// Author would be STALE (it still names the composite). ModifyBook re-reads the
-// full stored row under its write lock and sets BOTH the new AuthorID and a
-// fresh denormalized Author, so the row stays consistent (Author.ID ==
-// AuthorID), not preserved-stale (STOREFID W5d-1 / #1887), and a column another
-// writer commits meanwhile is not reverted (audit A1#15). A primary moved off
-// the composite meanwhile is left alone.
+// A book whose user locked its author (author_name) is held WHOLE: the lock
+// helper refuses the commit when the credits or the primary changed under a lock,
+// so neither is written and no credit is ever put back. A lock saved after the
+// listing and before the commit holds the book the same way as one saved before
+// the run. Both count as held and keep every composite the book names
+// (heldComposites), without an error, and a rerun settles the book once the user
+// unlocks the author. A lock that cannot be read writes nothing and counts as an
+// error.
 //
-// A book whose user locked its author (author_name) is left alone WHOLE, before
-// either write. Holding only the primary would still rewrite the credits, and a
-// book whose credits name the parts while its locked AuthorID names the composite
-// is neither what the user chose nor what the split intended; the composite then
-// stays (VerifyAuthorUnlinked refuses it while that book names it). The lock is
-// read again under the book's write lock by the primary write
-// (database.ModifyBookRespectingLocks), which is the check that decides there:
-// a lock saved between the two writes leaves the credits split and the primary on
-// the composite, the same state a failure between them leaves, and a rerun
-// settles it once the user unlocks the author. That late hold is counted as held,
-// and its composite is kept without an error (heldComposites), like a book held
-// before either write; the split does not write the two as one commit (the credit
-// swap spans several composites), so it does not put the credits back. A lock that
-// cannot be read writes nothing and counts as an error.
+// Because the write is one commit, a failure or crash leaves the book exactly as
+// it was: still credited to its composites, still listed under them by
+// GetBooksByAuthorIDForRelinkCore, so VerifyAuthorUnlinked refuses to delete a
+// composite while the book names it and a rerun starts from the same state. A
+// store that cannot make the one commit is refused (ErrBookCreditsUnsupported),
+// with no two-write fallback.
 func (r *authorSplitRun) relinkBook(it *authorSplitItem) {
 	book := it.book
 
-	locks, lerr := database.LoadFieldLocks(r.store, book.ID)
-	if lerr != nil {
-		r.relinkErrs.Add(1)
-		r.errCount.Add(1)
-		r.env.Log(slog.LevelWarn, fmt.Sprintf("author split: book %s NOT relinked, its locks cannot be read: %v", book.ID, lerr))
-		authorSplitLog.Warn("author split: book %s NOT relinked, its locks cannot be read: %s", logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(lerr.Error()))
-		return
-	}
-	if locks.Locked(database.FieldKeyAuthorName) {
-		r.held.Add(1)
-		for _, pl := range it.plans {
-			r.heldComposites.Store(pl.composite.ID, struct{}{})
-		}
-		r.env.Log(slog.LevelInfo, fmt.Sprintf("author split: book %s left as it is, its author is locked by the user", book.ID))
-		return
-	}
-
-	wroteCredits := false
-	_, err := r.writer.ModifyBookAuthors(book.ID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
-		var fresh *database.Book
-		freshRead := false
-		updated := cur
+	applied, primaryMoved := false, false
+	written, held, err := database.ModifyBookCreditsRespectingLocks(r.writer, r.store, book.ID, func(full *database.Book, credits *database.BookCreditsEdit) error {
+		updated := credits.Authors
 		changed := false
 		for _, pl := range it.plans {
 			credited := false
@@ -256,17 +227,8 @@ func (r *authorSplitRun) relinkBook(it *authorSplitItem) {
 					break
 				}
 			}
-			if !credited {
-				if !freshRead {
-					var gerr error
-					if fresh, gerr = r.store.GetBookByID(book.ID); gerr != nil {
-						return nil, fmt.Errorf("read book %s for its primary author: %w", book.ID, gerr)
-					}
-					freshRead = true
-				}
-				if fresh == nil || fresh.AuthorID == nil || *fresh.AuthorID != pl.composite.ID {
-					continue // the composite left this book meanwhile
-				}
+			if !credited && (full.AuthorID == nil || *full.AuthorID != pl.composite.ID) {
+				continue // the composite left this book meanwhile
 			}
 			var next []database.BookAuthor
 			for _, ba := range updated {
@@ -290,72 +252,49 @@ func (r *authorSplitRun) relinkBook(it *authorSplitItem) {
 			if credited {
 				changed = true
 			}
+			// The primary follows the composite the fresh row names.
+			if full.AuthorID != nil && *full.AuthorID == pl.composite.ID {
+				first := pl.newAuthors[0]
+				id := first.ID
+				full.AuthorID = &id
+				full.Author = &first
+				changed, primaryMoved = true, true
+			}
 			updated = next
 		}
 		if !changed {
-			return nil, database.ErrSkipBookAuthorsWrite
-		}
-		wroteCredits = true
-		return updated, nil
-	})
-	if err != nil {
-		r.relinkErrs.Add(1)
-		r.errCount.Add(1)
-		r.env.Log(slog.LevelWarn, fmt.Sprintf("author split: credits of book %s not relinked: %v", book.ID, err))
-		authorSplitLog.Warn("author split: credits of book %s not relinked: %s", logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(err.Error()))
-		return // the primary stays on the composite, which keeps the book listed under it
-	}
-	if wroteCredits {
-		r.wrote.Store(true)
-	}
-
-	// The one plan, if any, whose composite the listed row names as primary.
-	var primaryPlan *authorSplitPlan
-	if book.AuthorID != nil {
-		for _, cand := range it.plans {
-			if cand.composite.ID == *book.AuthorID {
-				primaryPlan = cand
-				break
-			}
-		}
-	}
-	if primaryPlan == nil {
-		return
-	}
-	composite := primaryPlan.composite
-	newPrimary := primaryPlan.newAuthors[0]
-	firstID := newPrimary.ID
-	applied := false
-	written, held, err := database.ModifyBookRespectingLocks(r.writer, r.store, book.ID, func(full *database.Book) error {
-		if full.AuthorID == nil || *full.AuthorID != composite.ID {
 			return database.ErrSkipBookWrite
 		}
+		credits.Authors = updated
 		applied = true
-		full.AuthorID = &firstID
-		full.Author = &newPrimary
 		return nil
 	})
 	switch {
 	case len(held) > 0:
-		// The credits already moved and the primary still names the composite, so
-		// step 4 must keep the composite (VerifyAuthorUnlinked would refuse it and
-		// count an error for a book that is merely held).
+		// Nothing was written, and the book still names every composite, so step 4
+		// must keep them (VerifyAuthorUnlinked would refuse them and count an error
+		// for a book that is merely held).
 		r.held.Add(1)
-		r.heldComposites.Store(composite.ID, struct{}{})
-		r.env.Log(slog.LevelInfo, fmt.Sprintf("author split: book %s primary author left on %q, locked by the user after its credits were relinked", book.ID, composite.Name))
+		for _, pl := range it.plans {
+			r.heldComposites.Store(pl.composite.ID, struct{}{})
+		}
+		r.env.Log(slog.LevelInfo, fmt.Sprintf("author split: book %s left as it is, its author is locked by the user", book.ID))
 	case err != nil:
+		r.relinkErrs.Add(1)
 		r.errCount.Add(1)
-		r.env.Log(slog.LevelWarn, fmt.Sprintf("author split: failed to update primary author on book %s: %v", book.ID, err))
-		authorSplitLog.Warn("author split: primary author write failed: book=%s author=%q err=%s",
-			logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(composite.Name), logger.SanitizeLogValue(err.Error()))
+		r.env.Log(slog.LevelWarn, fmt.Sprintf("author split: book %s NOT relinked: %v", book.ID, err))
+		authorSplitLog.Warn("author split: book %s NOT relinked: %s", logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(err.Error()))
 	case written == nil:
+		r.relinkErrs.Add(1)
 		r.errCount.Add(1)
-		r.env.Log(slog.LevelWarn, fmt.Sprintf("author split: book %s no longer exists, primary author not updated", book.ID))
+		r.env.Log(slog.LevelWarn, fmt.Sprintf("author split: book %s no longer exists, not relinked", book.ID))
 	case !applied:
-		r.env.Log(slog.LevelInfo, fmt.Sprintf("author split: book %s left author %q meanwhile, primary author not updated", book.ID, composite.Name))
+		r.env.Log(slog.LevelInfo, fmt.Sprintf("author split: book %s left its composite authors meanwhile, not relinked", book.ID))
 	default:
-		r.booksUpdated.Add(1)
 		r.wrote.Store(true)
+		if primaryMoved {
+			r.booksUpdated.Add(1)
+		}
 	}
 }
 
@@ -373,7 +312,7 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, raw json.RawMessage, re
 	// A nil OpsStore stays a nil interface in env.Store, which the core reports
 	// as "database not initialized".
 	if store := p.deps.OpsStore(); store != nil {
-		env.Store, env.Writer = store, store
+		env.Store, env.Writer = store, t6g1HeadWriter{store}
 	}
 	return authorSplitScanCore(ctx, env)
 }
@@ -386,16 +325,15 @@ type authorSplitStore interface {
 	database.MetadataFieldStateReader
 	GetAllAuthors() ([]database.Author, error)
 	GetAuthorByName(name string) (*database.Author, error)
-	GetBookByID(id string) (*database.Book, error)
 	GetBooksByAuthorIDForRelinkCore(authorID int) ([]database.BookCore, error)
 }
 
-// authorSplitWriter is the writes the op makes: the parts it creates, the two
-// per-book writes and the composite's delete.
+// authorSplitWriter is the writes the op makes: the parts it creates, the ONE
+// per-book commit (credits and primary author together) and the composite's
+// delete.
 type authorSplitWriter interface {
 	CreateAuthor(name string) (*database.Author, error)
-	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
-	database.BookModifier
+	database.BookCreditsRowModifier
 	DeleteAuthor(id int) error
 }
 
@@ -433,7 +371,8 @@ func (p *Plugin) authorSplitScanNative(deps t6g1Deps, sched func(tasks.Kind) *ta
 	c.Title = "Author split scan"
 	c.Help = authorSplitScanHelp
 	// metadata_cache and indexes: every path of this kind re-authors books through
-	// ModifyBook (directly or inside DeleteAuthor, MergeDeleteAuthor and MoveCredits),
+	// ModifyBookCredits (the per-book commit) or ModifyBook (inside DeleteAuthor,
+	// MergeDeleteAuthor and MoveCredits),
 	// whose shared row (kinds_resources.go) also stamps the metadata cache stale on an
 	// identity change and stages the ident: rows (`indexes`).
 	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResIndexes)))
