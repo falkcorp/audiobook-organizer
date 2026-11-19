@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_effects_pinned_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: bbc0869b-3caf-4c34-96f7-b5383fa30423
-// last-edited: 2026-11-16
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -119,6 +119,7 @@ var t6KindEffectsPinned = map[tasks.Kind]t6EffectsPin{
 	"books.maintenance.repair-transcribe-status":           {writes: "authors books indexes metadata_cache", reads: "", deletes: ""},
 	"books.maintenance.repoint-book-file-rows":             {writes: "authors book_files books indexes metadata_cache operations", reads: "", deletes: ""},
 	"books.maintenance.resolve-production-authors":         {writes: "authors book_files books field_states indexes metadata_cache operations series", reads: "", deletes: ""},
+	"books.maintenance.review-status-index-repair":         {writes: "review_items", reads: "", deletes: ""},
 	"books.maintenance.split-joined-narrators":             {writes: "books operations", reads: "", deletes: ""},
 	"books.maintenance.temp-file-cleanup":                  {writes: "activity files", reads: "", deletes: ""},
 	"books.maintenance.tombstone-cleanup":                  {writes: "authors", reads: "", deletes: ""},
