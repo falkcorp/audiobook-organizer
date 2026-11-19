@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_split_apply_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 4e8a1c73-b5d2-49f6-8a0e-d37c9f12b6a5
 // last-edited: 2026-11-19
 
@@ -122,7 +122,7 @@ func creditCounts(t *testing.T, st database.Store, bookID string) map[int]int {
 // must not park the scan.
 func TestAuthorSplitScan_PreviewTakesNoStandDown(t *testing.T) {
 	st := newSplitRelinkStore(t)
-	composite, err := st.CreateAuthor("Alice Smith & Bob Jones")
+	composite, err := st.CreateAuthor("Bruce Wayne & Dick Grayson")
 	require.NoError(t, err)
 	mkSplitBooks(t, st, composite.ID, 2)
 	d := newSplitDeps(st)
@@ -140,7 +140,7 @@ func TestAuthorSplitScan_PreviewTakesNoStandDown(t *testing.T) {
 // An apply that finds nothing to split must not park a running scan.
 func TestAuthorSplitScan_ApplyWithNothingToSplitTakesNoStandDown(t *testing.T) {
 	st := newSplitRelinkStore(t)
-	_, err := st.CreateAuthor("Alice Smith")
+	_, err := st.CreateAuthor("Bruce Wayne")
 	require.NoError(t, err)
 	d := newSplitDeps(st)
 
@@ -156,9 +156,9 @@ func TestAuthorSplitScan_ApplyWithNothingToSplitTakesNoStandDown(t *testing.T) {
 // releases it, and drops the dedup cache exactly once.
 func TestAuthorSplitScan_ApplyHoldsStandDownAndInvalidatesOnce(t *testing.T) {
 	st := newSplitRelinkStore(t)
-	c1, err := st.CreateAuthor("Alice Smith & Bob Jones")
+	c1, err := st.CreateAuthor("Bruce Wayne & Dick Grayson")
 	require.NoError(t, err)
-	c2, err := st.CreateAuthor("Cara Reed & Dan Black")
+	c2, err := st.CreateAuthor("Selina Kyle & Tim Drake")
 	require.NoError(t, err)
 	mkSplitBooks(t, st, c1.ID, 3)
 	mkSplitBooks(t, st, c2.ID, 3)
@@ -176,7 +176,7 @@ func TestAuthorSplitScan_ApplyHoldsStandDownAndInvalidatesOnce(t *testing.T) {
 // A scan that does not park fails the apply before its first write.
 func TestAuthorSplitScan_ApplyRefusesWhenScanDoesNotStandDown(t *testing.T) {
 	st := newSplitRelinkStore(t)
-	composite, err := st.CreateAuthor("Alice Smith & Bob Jones")
+	composite, err := st.CreateAuthor("Bruce Wayne & Dick Grayson")
 	require.NoError(t, err)
 	books := mkSplitBooks(t, st, composite.ID, 2)
 	d := newSplitDeps(st)
@@ -187,9 +187,9 @@ func TestAuthorSplitScan_ApplyRefusesWhenScanDoesNotStandDown(t *testing.T) {
 	require.Contains(t, err.Error(), "a library scan is running")
 	require.Contains(t, err.Error(), "maintenance.author-split-scan apply")
 
-	alice, gerr := st.GetAuthorByName("Alice Smith")
+	bruce, gerr := st.GetAuthorByName("Bruce Wayne")
 	require.NoError(t, gerr)
-	require.Nil(t, alice, "a part was created without the stand-down")
+	require.Nil(t, bruce, "a part was created without the stand-down")
 	kept, gerr := st.GetAuthorByID(composite.ID)
 	require.NoError(t, gerr)
 	require.NotNil(t, kept)
@@ -203,9 +203,9 @@ func TestAuthorSplitScan_ApplyRefusesWhenScanDoesNotStandDown(t *testing.T) {
 // parts were written, so the cache is still dropped.
 func TestAuthorSplitScan_ApplyStopsBeforeNextCompositeWhenLeaseIsLost(t *testing.T) {
 	st := newSplitRelinkStore(t)
-	c1, err := st.CreateAuthor("Alice Smith & Bob Jones")
+	c1, err := st.CreateAuthor("Bruce Wayne & Dick Grayson")
 	require.NoError(t, err)
-	c2, err := st.CreateAuthor("Cara Reed & Dan Black")
+	c2, err := st.CreateAuthor("Selina Kyle & Tim Drake")
 	require.NoError(t, err)
 	mkSplitBooks(t, st, c1.ID, 1)
 	mkSplitBooks(t, st, c2.ID, 1)
@@ -216,9 +216,9 @@ func TestAuthorSplitScan_ApplyStopsBeforeNextCompositeWhenLeaseIsLost(t *testing
 	require.ErrorIs(t, err, registry.ErrScanStandDownLost)
 	require.ErrorContains(t, err, "stopped before creating the parts of")
 
-	dan, gerr := st.GetAuthorByName("Dan Black")
+	tim, gerr := st.GetAuthorByName("Tim Drake")
 	require.NoError(t, gerr)
-	require.Nil(t, dan, "a part of the second composite was created after the lease was lost")
+	require.Nil(t, tim, "a part of the second composite was created after the lease was lost")
 	for _, c := range []*database.Author{c1, c2} {
 		kept, gerr := st.GetAuthorByID(c.ID)
 		require.NoError(t, gerr)
@@ -234,7 +234,7 @@ func TestAuthorSplitScan_ApplyStopsBeforeNextCompositeWhenLeaseIsLost(t *testing
 // far the apply got.
 func TestAuthorSplitScan_ApplyStopsInPoolWhenLeaseIsLost(t *testing.T) {
 	st := newSplitRelinkStore(t)
-	composite, err := st.CreateAuthor("Alice Smith & Bob Jones")
+	composite, err := st.CreateAuthor("Bruce Wayne & Dick Grayson")
 	require.NoError(t, err)
 	books := mkSplitBooks(t, st, composite.ID, 24)
 	d := newSplitDeps(st)
@@ -264,7 +264,7 @@ func TestAuthorSplitScan_ApplyStopsInPoolWhenLeaseIsLost(t *testing.T) {
 // closure and the fakes are shared across workers.
 func TestAuthorSplitScan_ApplyRelinksConcurrently(t *testing.T) {
 	st := newSplitRelinkStore(t)
-	composite, err := st.CreateAuthor("Alice Smith & Bob Jones")
+	composite, err := st.CreateAuthor("Bruce Wayne & Dick Grayson")
 	require.NoError(t, err)
 	books := mkSplitBooks(t, st, composite.ID, 16)
 
@@ -296,11 +296,11 @@ func TestAuthorSplitScan_ApplyRelinksConcurrently(t *testing.T) {
 	require.GreaterOrEqual(t, peak.Load(), int64(2), "the apply relinked one book at a time")
 	require.LessOrEqual(t, peak.Load(), int64(authorSplitScanWorkers), "the pool must stay bounded")
 	require.Contains(t, strings.Join(rep.logs, "\n"), "Split 1 composite authors, updated 16 books")
-	alice, err := st.GetAuthorByName("Alice Smith")
+	bruce, err := st.GetAuthorByName("Bruce Wayne")
 	require.NoError(t, err)
-	require.NotNil(t, alice)
+	require.NotNil(t, bruce)
 	for _, id := range books {
-		require.Equal(t, 1, creditCounts(t, st, id)[alice.ID])
+		require.Equal(t, 1, creditCounts(t, st, id)[bruce.ID])
 	}
 }
 
@@ -330,7 +330,7 @@ func (c *splitWriteCounter) ModifyBook(id string, fn func(*database.Book) error)
 // commit, so no lock or crash can find the book between the two.
 func TestAuthorSplitScan_WritesEachBookInOneCommit(t *testing.T) {
 	st := newSplitRelinkStore(t)
-	composite, err := st.CreateAuthor("Alice Smith & Bob Jones")
+	composite, err := st.CreateAuthor("Bruce Wayne & Dick Grayson")
 	require.NoError(t, err)
 	books := mkSplitBooks(t, st, composite.ID, 4)
 	counter := &splitWriteCounter{PebbleStore: st}
@@ -348,9 +348,9 @@ func TestAuthorSplitScan_WritesEachBookInOneCommit(t *testing.T) {
 // composite it named, and each person is credited once.
 func TestAuthorSplitScan_BookUnderTwoCompositesAndSharedPart(t *testing.T) {
 	st := newSplitRelinkStore(t)
-	c1, err := st.CreateAuthor("Alice Smith & Bob Jones")
+	c1, err := st.CreateAuthor("Bruce Wayne & Dick Grayson")
 	require.NoError(t, err)
-	c2, err := st.CreateAuthor("Alice Smith & Cara Reed")
+	c2, err := st.CreateAuthor("Bruce Wayne & Selina Kyle")
 	require.NoError(t, err)
 	only1 := mkSplitBooks(t, st, c1.ID, 3)
 	only2 := mkSplitBooks(t, st, c2.ID, 3)
@@ -373,22 +373,22 @@ func TestAuthorSplitScan_BookUnderTwoCompositesAndSharedPart(t *testing.T) {
 	for _, a := range all {
 		byName[a.Name]++
 	}
-	require.Equal(t, map[string]int{"Alice Smith": 1, "Bob Jones": 1, "Cara Reed": 1}, byName,
+	require.Equal(t, map[string]int{"Bruce Wayne": 1, "Dick Grayson": 1, "Selina Kyle": 1}, byName,
 		"each part exists exactly once and both composites are gone")
-	alice, _ := st.GetAuthorByName("Alice Smith")
-	bob, _ := st.GetAuthorByName("Bob Jones")
-	cara, _ := st.GetAuthorByName("Cara Reed")
+	bruce, _ := st.GetAuthorByName("Bruce Wayne")
+	dick, _ := st.GetAuthorByName("Dick Grayson")
+	barbara, _ := st.GetAuthorByName("Selina Kyle")
 
-	require.Equal(t, map[int]int{alice.ID: 1, bob.ID: 1, cara.ID: 1}, creditCounts(t, st, both.ID))
+	require.Equal(t, map[int]int{bruce.ID: 1, dick.ID: 1, barbara.ID: 1}, creditCounts(t, st, both.ID))
 	full, err := st.GetBookByID(both.ID)
 	require.NoError(t, err)
 	require.NotNil(t, full.AuthorID)
-	require.Equal(t, alice.ID, *full.AuthorID)
+	require.Equal(t, bruce.ID, *full.AuthorID)
 	for _, id := range only1 {
-		require.Equal(t, map[int]int{alice.ID: 1, bob.ID: 1}, creditCounts(t, st, id))
+		require.Equal(t, map[int]int{bruce.ID: 1, dick.ID: 1}, creditCounts(t, st, id))
 	}
 	for _, id := range only2 {
-		require.Equal(t, map[int]int{alice.ID: 1, cara.ID: 1}, creditCounts(t, st, id))
+		require.Equal(t, map[int]int{bruce.ID: 1, barbara.ID: 1}, creditCounts(t, st, id))
 	}
 }
 
@@ -399,7 +399,7 @@ func TestAuthorSplitScan_BookUnderTwoCompositesAndSharedPart(t *testing.T) {
 // author and repoints its primary just before the split's commit.
 func TestAuthorSplitScan_LeavesBookAnotherWriterMovedOffTheComposite(t *testing.T) {
 	st := newSplitRelinkStore(t)
-	composite, err := st.CreateAuthor("Alice Smith & Bob Jones")
+	composite, err := st.CreateAuthor("Bruce Wayne & Dick Grayson")
 	require.NoError(t, err)
 	other, err := st.CreateAuthor("Zed Other")
 	require.NoError(t, err)
@@ -428,12 +428,12 @@ func TestAuthorSplitScan_LeavesBookAnotherWriterMovedOffTheComposite(t *testing.
 	require.NotNil(t, full.AuthorID)
 	require.Equal(t, other.ID, *full.AuthorID)
 
-	alice, err := st.GetAuthorByName("Alice Smith")
+	bruce, err := st.GetAuthorByName("Bruce Wayne")
 	require.NoError(t, err)
-	require.NotNil(t, alice)
-	bob, err := st.GetAuthorByName("Bob Jones")
+	require.NotNil(t, bruce)
+	dick, err := st.GetAuthorByName("Dick Grayson")
 	require.NoError(t, err)
-	require.Equal(t, map[int]int{alice.ID: 1, bob.ID: 1}, creditCounts(t, st, kept))
+	require.Equal(t, map[int]int{bruce.ID: 1, dick.ID: 1}, creditCounts(t, st, kept))
 	gone, err := st.GetAuthorByID(composite.ID)
 	require.NoError(t, err)
 	require.Nil(t, gone, "nothing credits the composite any more, so it is deleted")
@@ -450,7 +450,7 @@ func TestAuthorSplitScan_NoCreditLostWhenTheCommitFails(t *testing.T) {
 	for _, shape := range []string{"legacy-only", "junction-and-legacy"} {
 		t.Run(shape, func(t *testing.T) {
 			st := newSplitRelinkStore(t)
-			composite, err := st.CreateAuthor("Gina Rowe & Hal Pike")
+			composite, err := st.CreateAuthor("Jason Todd & Damian Wayne")
 			require.NoError(t, err)
 			b, err := st.CreateBook(&database.Book{
 				Title:            "split-crash-safe",
@@ -474,12 +474,12 @@ func TestAuthorSplitScan_NoCreditLostWhenTheCommitFails(t *testing.T) {
 			kept, gerr := st.GetAuthorByID(composite.ID)
 			require.NoError(t, gerr)
 			require.NotNil(t, kept, "the composite was deleted while the book was not split; logs: %v", rep.logs)
-			gina, gerr := st.GetAuthorByName("Gina Rowe")
+			jason, gerr := st.GetAuthorByName("Jason Todd")
 			require.NoError(t, gerr)
-			require.NotNil(t, gina)
-			hal, gerr := st.GetAuthorByName("Hal Pike")
+			require.NotNil(t, jason)
+			damian, gerr := st.GetAuthorByName("Damian Wayne")
 			require.NoError(t, gerr)
-			require.NotNil(t, hal)
+			require.NotNil(t, damian)
 			mid, gerr := st.GetBookByID(b.ID)
 			require.NoError(t, gerr)
 			require.NotNil(t, mid.AuthorID)
@@ -492,11 +492,11 @@ func TestAuthorSplitScan_NoCreditLostWhenTheCommitFails(t *testing.T) {
 			gone, gerr := st.GetAuthorByID(composite.ID)
 			require.NoError(t, gerr)
 			require.Nil(t, gone, "the rerun should finish the split")
-			require.Equal(t, map[int]int{gina.ID: 1, hal.ID: 1}, creditCounts(t, st, b.ID))
+			require.Equal(t, map[int]int{jason.ID: 1, damian.ID: 1}, creditCounts(t, st, b.ID))
 			full, gerr := st.GetBookByID(b.ID)
 			require.NoError(t, gerr)
 			require.NotNil(t, full.AuthorID)
-			require.Equal(t, gina.ID, *full.AuthorID)
+			require.Equal(t, jason.ID, *full.AuthorID)
 		})
 	}
 }
@@ -507,7 +507,7 @@ func TestAuthorSplitScan_NoCreditLostWhenTheCommitFails(t *testing.T) {
 // the composite, and deletes nothing.
 func TestAuthorSplitScan_ApplyStopsBeforeListingWhenLeaseIsLost(t *testing.T) {
 	st := newSplitRelinkStore(t)
-	composite, err := st.CreateAuthor("Alice Smith & Bob Jones")
+	composite, err := st.CreateAuthor("Bruce Wayne & Dick Grayson")
 	require.NoError(t, err)
 	books := mkSplitBooks(t, st, composite.ID, 2)
 	d := newSplitDeps(st)
@@ -515,7 +515,7 @@ func TestAuthorSplitScan_ApplyStopsBeforeListingWhenLeaseIsLost(t *testing.T) {
 
 	_, err = runSplit(t, d, `{"dry_run":false}`)
 	require.ErrorIs(t, err, registry.ErrScanStandDownLost)
-	require.ErrorContains(t, err, `stopped before listing books of "Alice Smith & Bob Jones"`)
+	require.ErrorContains(t, err, `stopped before listing books of "Bruce Wayne & Dick Grayson"`)
 
 	kept, gerr := st.GetAuthorByID(composite.ID)
 	require.NoError(t, gerr)
