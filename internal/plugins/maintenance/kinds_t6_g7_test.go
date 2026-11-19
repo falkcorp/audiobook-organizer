@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g7_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4c7e1a92-6b3d-4f58-8a0e-2d9c5b71e3f6
 // last-edited: 2026-11-19
 
@@ -24,6 +24,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/operations"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
@@ -45,6 +48,8 @@ type t6g7Recorder struct {
 	// books lets ModifyBook run the caller's fn on a copy, so the test sees the
 	// row the write would have produced.
 	books map[string]*database.Book
+	// bulkErr is what RunBulkWriteBack answers.
+	bulkErr error
 }
 
 // t6g7WriterResource maps every writer method the spy can record to the FULL set
@@ -127,6 +132,15 @@ func (r *t6g7Recorder) RebuildReviewStatusIndex(apply bool) (database.ReviewStat
 		r.rec("RebuildReviewStatusIndex dry")
 	}
 	return r.reviewIndex, nil
+}
+
+func (r *t6g7Recorder) RunBulkWriteBack(ctx context.Context, opID string, ids []string, rename bool, start int, progress operations.ProgressReporter) error {
+	if opID == "" {
+		return errors.New("RunBulkWriteBack got no op id")
+	}
+	r.rec(fmt.Sprintf("RunBulkWriteBack ids=%v rename=%v start=%d backup=%v", ids, rename, start, tagger.BackupWanted(ctx)))
+	_ = progress.UpdateProgress(len(ids), len(ids), "wrote")
+	return r.bulkErr
 }
 
 func (r *t6g7Recorder) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
@@ -212,7 +226,8 @@ func (p *t6g7Probe) deps() t6g7Deps {
 			p.given = w
 			return p.rec
 		},
-		RootDir: func() string { return p.root },
+		RootDir:      func() string { return p.root },
+		StandDownKey: "books.gotham-watch",
 		// A directory "agrees" on the title its name carries, so a test seeds the
 		// tags by naming the folder.
 		AgreedChapterTitle: func(dir string) (string, bool) { return filepath.Base(dir), true },
@@ -344,6 +359,7 @@ func t6g7KindWritersBuild() map[tasks.Kind]t6g7KindWrite {
 	m := map[tasks.Kind]t6g7KindWrite{}
 	add := func(head sdk.OperationDef, kw t6g7KindWrite) { m[tasks.Kind("books."+head.ID)] = kw }
 	add(p.reviewStatusIndexRepairDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[reviewStatusIndexRepairWriter]()}})
+	add(p.bulkWriteBackDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[bulkWriteBackWriter]()}})
 	add(p.titleRepairDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[titleRepairWriter]()}})
 	add(p.titleBackfillDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[titleBackfillWriter]()}})
 	// reports-prune os.Remove-s report files and writes no row: files only.
@@ -409,7 +425,7 @@ func TestT6G7Resources_TableCoversEveryWriterMethod(t *testing.T) {
 func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 	p := &Plugin{}
 	defs := p.t6g7Kinds(fakeT6G7Deps(t), nil)
-	require.Len(t, defs, 6, "grows to 15 as the group's definitions land")
+	require.Len(t, defs, 7, "grows to 15 as the group's definitions land")
 
 	// Every expected value below is written out by hand from the HEAD def and
 	// the coordinator's rulings, never derived from the code under test.
@@ -429,6 +445,7 @@ func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 		{head: p.versionGroupPrimaryReportDef(), resume: tasks.ResumeDrop, timeout: 10 * time.Minute},
 		{head: p.reportsPruneDef(), resume: tasks.ResumeDrop, timeout: time.Hour},
 		{head: p.titleBackfillDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
+		{head: p.bulkWriteBackDef(), resume: tasks.ResumeAsk, timeout: 240 * time.Minute},
 		{head: p.titleRepairDef(), resume: tasks.ResumeDrop, timeout: 4 * time.Hour,
 			par: &titleRepairPar, wantPar: fmt.Sprintf("fixed(%d): ", max(min(runtime.NumCPU(), 8), 1))},
 	}
@@ -505,6 +522,20 @@ type t6g7WriteCase struct {
 
 func t6g7WriteCases() []t6g7WriteCase {
 	return []t6g7WriteCase{
+		{
+			kind:       t6g7KindFor("maintenance.bulk-write-back"),
+			params:     `{"book_ids":["01BATBOOK00000000000000K1","01BATBOOK00000000000000K2"],"rename":true,"start_idx":1}`,
+			liveOnly:   true,
+			standsDown: true,
+			setup: func(t *testing.T, p *t6g7Probe) {
+				// Bulk write-back keeps no .bak sibling (D69): the ctx the writer gets
+				// must opt out even when create_backups is on.
+				prev := config.Snapshot()
+				config.Mutate(func(c *config.Config) { c.CreateBackups = true })
+				t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = prev }) })
+			},
+			live: []string{"RunBulkWriteBack ids=[01BATBOOK00000000000000K1 01BATBOOK00000000000000K2] rename=true start=1 backup=false"},
+		},
 		{
 			kind: titleRepairKind,
 			setup: func(t *testing.T, p *t6g7Probe) {
@@ -596,7 +627,7 @@ func TestT6G7Kinds_WritesThroughShell(t *testing.T) {
 // case, before it builds a writer or touches the store: the run's mode comes
 // from the start request, never from params (coordinator ruling 3).
 func TestT6G7Kinds_WritingShellsRefuseModeKeys(t *testing.T) {
-	kinds := []tasks.Kind{reviewStatusIndexRepairKind, reportsPruneKind, titleBackfillKind, titleRepairKind}
+	kinds := []tasks.Kind{reviewStatusIndexRepairKind, reportsPruneKind, titleBackfillKind, titleRepairKind, t6g7KindFor("maintenance.bulk-write-back")}
 	keys := []string{"dry_run", "dryRun", "DRY_RUN", "DryRun", "apply", "Apply", "APPLY"}
 	gate := &t6g7GateWriter{name: "gotham"}
 	for _, kind := range kinds {
@@ -742,4 +773,41 @@ func TestT6G7Kinds_TitleBackfillLeavesATitleChangedUnderneath(t *testing.T) {
 	_, err := runT6G7Kind(t, def, tasks.ModeLive, &t6g7GateWriter{name: "gotham"}, "")
 	require.NoError(t, err)
 	require.Empty(t, p.rec.snapshot(), "a title changed underneath was overwritten")
+}
+
+// No books, no hold: HEAD returned before taking the scan stand-down, so a run
+// with nothing to write never parks the scan.
+func TestT6G7Kinds_BulkWriteBackWithNoBooksTakesNoHold(t *testing.T) {
+	p := newT6G7Probe(t)
+	def := t6g7ByKind(t, (&Plugin{}).t6g7Kinds(p.deps(), nil), t6g7KindFor("maintenance.bulk-write-back"))
+	h, err := runT6G7Kind(t, def, tasks.ModeLive, &t6g7GateWriter{name: "gotham"}, `{"book_ids":[]}`)
+	require.NoError(t, err)
+	require.Empty(t, h.standDowns, "an empty run parked the scan")
+	require.Empty(t, p.rec.snapshot())
+}
+
+// A failed write releases the hold, and the hold's Finish decides the error the
+// run ends with (a lost lease turns a clean pass into a failure).
+func TestBulkWriteBackCore_FinishDecidesTheError(t *testing.T) {
+	var finished int
+	env0 := t6g7Env{OpID: "op-1", Log: func(slog.Level, string, ...slog.Attr) {}, Progress: func(int, int, string) {}}
+	hold := func(ctx context.Context, _ string) (t6g7Held, error) {
+		return t6g7Held{Ctx: ctx, Progress: t6g7OpsProgress{env: env0}, Finish: func(err error) error {
+			finished++
+			if err == nil {
+				return errors.New("scan stand-down lease lost")
+			}
+			return err
+		}}, nil
+	}
+	rec := &t6g7Recorder{}
+	env := bulkWriteBackEnv{t6g7Env: env0, Writer: rec, Hold: hold}
+	err := bulkWriteBackCore(context.Background(), BulkWriteBackParams{BookIDs: []string{"b"}}, env)
+	require.ErrorContains(t, err, "lease lost")
+	require.Equal(t, 1, finished)
+
+	rec.bulkErr = errors.New("disk full")
+	err = bulkWriteBackCore(context.Background(), BulkWriteBackParams{BookIDs: []string{"b"}}, env)
+	require.ErrorContains(t, err, "disk full")
+	require.Equal(t, 2, finished, "a failed write did not release the hold")
 }
