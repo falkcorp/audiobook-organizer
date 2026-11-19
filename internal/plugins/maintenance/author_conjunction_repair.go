@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_conjunction_repair.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: 2f8a41c6-9d73-4e05-b18a-6c4f2e93d70b
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -475,6 +476,11 @@ func mergeAuthorIntoVia(ctx context.Context, store t6g1MergeReader, writer t6g1M
 		seen[book.ID] = struct{}{}
 		distinct = append(distinct, book)
 	}
+	// The store lists a person's books in no fixed order (memdb gathers their ids
+	// in a map). Sorted by id, the pre-scan, the moves and the point a mid-run
+	// lock stops the merge at are the same on every run, and a re-run resumes in
+	// the same order.
+	slices.SortFunc(distinct, func(a, b database.BookCore) int { return strings.Compare(a.ID, b.ID) })
 
 	// All or nothing per author. Every book's lock is read BEFORE the first book
 	// moves: a merge that moved the unlocked books and left the locked ones would

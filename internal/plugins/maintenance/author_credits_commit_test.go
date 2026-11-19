@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_credits_commit_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8d2f6a40-1b73-4c95-a6e8-35f0c9b24d71
 // last-edited: 2026-11-19
 
@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -376,7 +377,7 @@ func (creditsRefused) ModifyBookCredits(string, func(*database.Book, *database.B
 // A merge on a store that cannot write credits and row together is refused at the
 // first book: no credit moves and the author is kept.
 func TestMergeAuthorInto_AStoreWithoutTheCreditsCommitIsRefused(t *testing.T) {
-	w := newMergeUndoWorld(t, "Undo Cap From", "Undo Cap Into", 0)
+	w := newMergeUndoWorld(t, "Harley Quinn Cap", "Edward Nygma Cap", 0)
 	hidden := noCreditsStore{Store: w.st, pebble: w.st}
 
 	n, _, err := mergeAuthorIntoVia(context.Background(), t6g1HeadStore{hidden}, t6g1HeadWriter{hidden}, w.from, w.into, false, "op-merge-cap", slog.Default())
@@ -468,28 +469,49 @@ func (w *heldMergeWorld) requireFromKept(t *testing.T) {
 	require.Equal(t, w.from.ID, got.ID, "the author was merged away though a locked book still credits it")
 }
 
-// midRunLock is a store whose lock read of one book sees it unlocked once (the
-// merge's pre-scan) and locked from then on (the read inside the write): the
-// user saved the lock in between.
-func midRunLock(st *database.PebbleStore, book string) lateLockDB {
-	return lateLockDB{PebbleStore: st, book: book, reads: new(int)}
+// lockAtSecondCommit is a store whose second credits-and-row commit is preceded
+// by the user saving an author lock on that very book: the lock lands after the
+// merge's pre-scan (which saw no lock) and before the write, which reads it
+// inside the commit. Whichever book the merge reaches second is the one held, so
+// no test needs to know the order the store lists a person's books in. The
+// returned func names the held book once the run is over ("" if the merge never
+// reached a second commit).
+func lockAtSecondCommit(t *testing.T, st *database.PebbleStore) (commitHookDB, func() string) {
+	t.Helper()
+	var (
+		mu      sync.Mutex
+		commits int
+		held    string
+	)
+	db := commitHookDB{PebbleStore: st, beforeCommit: func(id string) {
+		mu.Lock()
+		defer mu.Unlock()
+		commits++
+		if commits == 2 {
+			held = id
+			lockBookAuthor(t, st, id)
+		}
+	}}
+	return db, func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return held
+	}
 }
 
-type lateLockDB struct {
-	*database.PebbleStore
-	book  string
-	reads *int
-}
-
-func (d lateLockDB) GetMetadataFieldStates(id string) ([]database.MetadataFieldState, error) {
-	if id != d.book {
-		return d.PebbleStore.GetMetadataFieldStates(id)
+// requireOneMovedOneHeld: the book the mid-run lock held is exactly as it was,
+// and the other book of the world moved. It does not assume which of the two
+// books the merge reached first.
+func (w *heldMergeWorld) requireOneMovedOneHeld(t *testing.T, held string) {
+	t.Helper()
+	require.Contains(t, []string{w.open, w.locked}, held, "the mid-run lock was never saved: the merge did not reach a second commit")
+	for _, id := range []string{w.open, w.locked} {
+		if id == held {
+			w.requireBookAsItWas(t, id)
+		} else {
+			w.requireBookMoved(t, id)
+		}
 	}
-	*d.reads++
-	if *d.reads == 1 {
-		return d.PebbleStore.GetMetadataFieldStates(id)
-	}
-	return []database.MetadataFieldState{{BookID: id, Field: database.FieldKeyAuthorName, OverrideLocked: true}}, nil
 }
 
 func outcomeCount(t *testing.T, line, key string) int {
@@ -542,15 +564,15 @@ func TestAuthorConjunctionRepair_AUserLockedBookHoldsTheAuthorAndIsNotAFailure(t
 // counts it and DOES drop the author cache even though no row was merged.
 func TestAuthorConjunctionRepair_AMidRunLockCountsTheMovedBooksAndInvalidatesTheCache(t *testing.T) {
 	w := newHeldMergeWorld(t, "& Selina Kyle", "Selina Kyle", 0)
+	db, held := lockAtSecondCommit(t, w.st)
 
-	rep, deps := runConjRepair(t, midRunLock(w.st, w.locked))
+	rep, deps := runConjRepair(t, db)
 
 	done := rep.line(t, "author-conjunction-repair: done")
 	require.Equal(t, 1, outcomeCount(t, done, conjRepairHeldUserLocked), "outcomes: %s", done)
 	require.Zero(t, outcomeCount(t, done, conjRepairFailed), "outcomes: %s", done)
 	require.Equal(t, 1, counter(t, done, "books_relinked"))
-	w.requireBookMoved(t, w.open)
-	w.requireBookAsItWas(t, w.locked)
+	w.requireOneMovedOneHeld(t, held())
 	w.requireFromKept(t)
 	require.Equal(t, 1, deps.authorsInvalidated, "books moved but the author cache was not dropped")
 	require.Equal(t, 1, deps.dedupInvalidated)
@@ -597,15 +619,15 @@ func TestAuthorDuplicateMerge_AUserLockedBookHoldsTheRowAndIsNotAFailure(t *test
 
 func TestAuthorDuplicateMerge_AMidRunLockCountsTheMovedBooksAndInvalidatesTheCache(t *testing.T) {
 	w := newHeldMergeWorld(t, "EDWARD NYGMA", "Edward Nygma", 3)
+	db, held := lockAtSecondCommit(t, w.st)
 
-	rep, deps := runDupMerge(t, midRunLock(w.st, w.locked))
+	rep, deps := runDupMerge(t, db)
 
 	done := rep.line(t, "author-duplicate-merge: done")
 	require.Equal(t, 1, outcomeCount(t, done, authorDupRowHeldUserLocked), "row outcomes: %s", done)
 	require.Zero(t, outcomeCount(t, done, authorDupRowFailed), "row outcomes: %s", done)
 	require.Equal(t, 1, counter(t, done, "books_relinked"))
-	w.requireBookMoved(t, w.open)
-	w.requireBookAsItWas(t, w.locked)
+	w.requireOneMovedOneHeld(t, held())
 	w.requireFromKept(t)
 	require.Equal(t, 1, deps.authorsInvalidated, "books moved but the author cache was not dropped")
 }
@@ -645,12 +667,12 @@ func TestAuthorStripMerge_AUserLockedBookHoldsTheNumberedRowAndIsNotAFailure(t *
 
 func TestAuthorStripMerge_AMidRunLockCountsTheMovedBooksAsTouched(t *testing.T) {
 	w := newHeldMergeWorld(t, "001-147 Selina Kyle", "Selina Kyle", 1)
+	db, held := lockAtSecondCommit(t, w.st)
 
-	summary := runStripMergeOnStore(t, midRunLock(w.st, w.locked))
+	summary := runStripMergeOnStore(t, db)
 
 	wantSummary(t, summary, "merges-held-user-locked=1 ", "failed=0 ", "merged=0 ", "books-touched=1 ")
-	w.requireBookMoved(t, w.open)
-	w.requireBookAsItWas(t, w.locked)
+	w.requireOneMovedOneHeld(t, held())
 	w.requireFromKept(t)
 }
 

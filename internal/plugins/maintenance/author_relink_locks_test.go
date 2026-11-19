@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_relink_locks_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0c4f8a36-b2d9-4e71-8a05-7d3e9b1f6c42
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -241,7 +243,7 @@ func requireMergeHeld(t *testing.T, w *mergeUndoWorld, heldBook, movedBook strin
 // half merged. The held merge reports errAuthorMergeUserLocked (callers count it
 // as held, not failed), moves no book, and keeps the author row.
 func TestMergeAuthorInto_UserLockedAuthorBookHoldsTheWholeMerge(t *testing.T) {
-	w := newMergeUndoWorld(t, "Undo Lock From", "Undo Lock Into", 0)
+	w := newMergeUndoWorld(t, "Joker Lock From", "Joker Lock Into", 0)
 	lockAuthor(t, w.st, w.books[0])
 
 	n, _, err := mergeAuthorIntoVia(context.Background(), t6g1HeadStore{w.st}, t6g1HeadWriter{w.st}, w.from, w.into, false, "op-merge-lock", slog.Default())
@@ -256,7 +258,7 @@ func TestMergeAuthorInto_UserLockedAuthorBookHoldsTheWholeMerge(t *testing.T) {
 // The co-author-only book is held by the author lock too: the junk credit is not
 // its primary, but the credit list is part of what author_name locks.
 func TestMergeAuthorInto_ALockedCoAuthorBookHoldsTheWholeMerge(t *testing.T) {
-	w := newMergeUndoWorld(t, "Undo Lock Co From", "Undo Lock Co Into", 0)
+	w := newMergeUndoWorld(t, "Joker Lock Co From", "Joker Lock Co Into", 0)
 	lockAuthor(t, w.st, w.books[1])
 
 	n, _, err := mergeAuthorIntoVia(context.Background(), t6g1HeadStore{w.st}, t6g1HeadWriter{w.st}, w.from, w.into, false, "op-merge-lock-co", slog.Default())
@@ -267,45 +269,56 @@ func TestMergeAuthorInto_ALockedCoAuthorBookHoldsTheWholeMerge(t *testing.T) {
 	requireMergeHeld(t, w, w.books[1], "")
 }
 
-// lateLockStore saves the user's lock on one book part-way through a merge: its
-// first lock read (the merge's pre-scan) sees the book unlocked and every later
-// read (the one inside the write) sees the lock the user saved in between.
-type lateLockStore struct {
-	t6g1HeadStore
-	book  string
-	reads *int
-}
-
-func (s lateLockStore) GetMetadataFieldStates(id string) ([]database.MetadataFieldState, error) {
-	if id != s.book {
-		return s.t6g1HeadStore.GetMetadataFieldStates(id)
-	}
-	*s.reads++
-	if *s.reads == 1 {
-		return s.t6g1HeadStore.GetMetadataFieldStates(id)
-	}
-	return []database.MetadataFieldState{{BookID: id, Field: database.FieldKeyAuthorName, OverrideLocked: true}}, nil
-}
-
-// A lock saved after the pre-scan holds that one book at the write: the books
-// before it moved (and are counted so the caller invalidates its caches), the
-// held book keeps its credits and primary, and the author row stays.
+// A lock saved after the pre-scan holds that one book at the write: the book
+// before it moved (and is counted so the caller invalidates its caches), the held
+// book keeps its credits and primary, and the author row stays. Which of the two
+// books is held is whichever the merge reaches second (lockAtSecondCommit), so the
+// test does not depend on the order the store lists them in.
 func TestMergeAuthorInto_ALockSavedMidRunHoldsThatBookAndCountsTheMovedOnes(t *testing.T) {
-	w := newMergeUndoWorld(t, "Undo Lock Late From", "Undo Lock Late Into", 0)
-	reads := 0
-	store := lateLockStore{t6g1HeadStore: t6g1HeadStore{w.st}, book: w.books[1], reads: &reads}
+	w := newMergeUndoWorld(t, "Joker Late From", "Joker Late Into", 0)
+	db, held := lockAtSecondCommit(t, w.st)
 
-	n, _, err := mergeAuthorIntoVia(context.Background(), store, t6g1HeadWriter{w.st}, w.from, w.into, false, "op-merge-lock-late", slog.Default())
+	n, _, err := mergeAuthorIntoVia(context.Background(), t6g1HeadStore{w.st}, t6g1HeadWriter{db}, w.from, w.into, false, "op-merge-lock-late", slog.Default())
 
 	require.True(t, errors.Is(err, errAuthorMergeUserLocked), "err = %v", err)
 	require.Equal(t, 1, n, "the book before the held one was not counted as moved")
-	requireMergeHeld(t, w, w.books[1], w.books[0])
+	heldID := held()
+	require.Contains(t, w.books, heldID, "the mid-run lock was never saved")
+	moved := w.books[0]
+	if heldID == moved {
+		moved = w.books[1]
+	}
+	requireMergeHeld(t, w, heldID, moved)
+}
+
+// descendingListing lists a person's books by DESCENDING id, the order the sort in
+// mergeAuthorIntoVia must undo.
+type descendingListing struct{ t6g1HeadStore }
+
+func (d descendingListing) GetBooksByAuthorIDForRelinkCore(authorID int) ([]database.BookCore, error) {
+	books, err := d.t6g1HeadStore.GetBooksByAuthorIDForRelinkCore(authorID)
+	slices.SortFunc(books, func(a, b database.BookCore) int { return strings.Compare(b.ID, a.ID) })
+	return books, err
+}
+
+// The merge visits a person's books in id order whatever order the store lists
+// them in, so what a mid-run lock stops the merge at is the same on every run.
+func TestMergeAuthorInto_MovesBooksInIDOrderWhateverTheListingOrder(t *testing.T) {
+	w := newMergeUndoWorld(t, "Joker Order From", "Joker Order Into", 0)
+	var order []string
+	db := commitHookDB{PebbleStore: w.st, beforeCommit: func(id string) { order = append(order, id) }}
+
+	_, _, err := mergeAuthorIntoVia(context.Background(), descendingListing{t6g1HeadStore{w.st}}, t6g1HeadWriter{db}, w.from, w.into, false, "op-merge-order", slog.Default())
+
+	require.NoError(t, err)
+	require.Len(t, order, 2)
+	require.Equal(t, slices.Sorted(slices.Values(w.books)), order, "the books were moved in the store's listing order, not id order")
 }
 
 // A preview reports the same hold, so it does not promise a merge the apply
 // cannot finish, and writes nothing.
 func TestMergeAuthorInto_PreviewReportsTheUserLockedBook(t *testing.T) {
-	w := newMergeUndoWorld(t, "Undo Lock Prev From", "Undo Lock Prev Into", 0)
+	w := newMergeUndoWorld(t, "Joker Lock Prev From", "Joker Lock Prev Into", 0)
 	lockAuthor(t, w.st, w.books[0])
 
 	_, _, err := mergeAuthorIntoVia(context.Background(), t6g1HeadStore{w.st}, t6g1HeadWriter{w.st}, w.from, w.into, true, "", slog.Default())
@@ -322,7 +335,7 @@ func TestMergeAuthorInto_PreviewReportsTheUserLockedBook(t *testing.T) {
 // A lock set that cannot be read stops the merge before that book is moved and
 // before the delete, like a failed credit move does.
 func TestMergeAuthorInto_UnreadableLocksMoveNothingAndKeepTheAuthor(t *testing.T) {
-	w := newMergeUndoWorld(t, "Undo Lock Err From", "Undo Lock Err Into", 0)
+	w := newMergeUndoWorld(t, "Joker Lock Err From", "Joker Lock Err Into", 0)
 	store := mergeLockStore{t6g1HeadStore: t6g1HeadStore{w.st}, unreadable: map[string]bool{w.books[0]: true}}
 
 	_, _, err := mergeAuthorIntoVia(context.Background(), store, t6g1HeadWriter{w.st}, w.from, w.into, false, "op-merge-lock-err", slog.Default())
