@@ -1,7 +1,7 @@
 // file: core/httpapi/basicgate.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 49fa9648-7658-42df-8e5f-edbfdb58bbf8
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package httpapi
 
@@ -24,9 +24,10 @@ import (
 )
 
 // Stage 8, the optional HTTP Basic perimeter gate (05-http-api §4.2 stage 8,
-// F3-05). It is built and tested here but not inserted into any chain: F3-07,
-// the config flip, puts it at position 8 of the outer chain for the legacy
-// mount, binds its inputs and deletes gin's basicauth.go in the same PR.
+// F3-05). A legacy mount carries its inputs as LegacyMount.BasicGate and
+// Build puts the gate at position 8 of the outer chain, between stage 7 and
+// stage 9, around the whole router (basicGateStage): F3-07 slice e4, which
+// deleted gin's basicauth.go.
 //
 // The gate reads three keys, each through core config, never by itself:
 //   - core.http.basic_gate.enabled: the effective value. Core config resolves
@@ -91,6 +92,17 @@ type BasicGateSettings struct {
 // the stored row reads; the resolver, not the gate, applies that lock.
 type BasicGatePassword interface {
 	BasicGatePassword(ctx context.Context) (secrets.Value, error)
+}
+
+// BasicGatePasswordFunc is a BasicGatePassword that is a function: the
+// app's closure over wherever the effective password lives (F3-07 e4 binds
+// HEAD's saved password and its BASIC_AUTH_PASSWORD recovery; the config
+// flip rebinds it to the secret store). An error or a zero Value refuses.
+type BasicGatePasswordFunc func(ctx context.Context) (secrets.Value, error)
+
+// BasicGatePassword calls f.
+func (f BasicGatePasswordFunc) BasicGatePassword(ctx context.Context) (secrets.Value, error) {
+	return f(ctx)
 }
 
 // BasicGateOptions are stage 8's inputs other than the route facts, which
@@ -470,4 +482,38 @@ func (r *Router) rootAssets() func(string) bool {
 		}
 	}
 	return nil
+}
+
+// basicGateStage is the stage-8 wrapper of this Build's chain, from the
+// BasicGate the legacy mounts carry; nil when none does. At most one mount may
+// carry one: the gate is the perimeter of the whole router, so two mounts
+// would disagree about it. The gate reads the route facts of this Build
+// (basicGateRoutes), so it is built after the mux and before the chain wraps
+// it; r.mu is held and r.built is true.
+func (r *Router) basicGateStage() (func(http.Handler) http.Handler, error) {
+	var owners []string
+	var opts *BasicGateOptions
+	for _, m := range r.mounts {
+		if m.BasicGate != nil {
+			opts = m.BasicGate
+			owners = append(owners, m.Owner)
+		}
+	}
+	switch len(owners) {
+	case 0:
+		return nil, nil
+	case 1:
+	default:
+		return nil, fmt.Errorf("%w: mounts %s each carry a BasicGate; the gate is the router's, one mount owns it",
+			errBasicGateInput, strings.Join(owners, ", "))
+	}
+	exempt, err := r.basicGateRoutes()
+	if err != nil {
+		return nil, err
+	}
+	g, err := newBasicGate(*opts, exempt)
+	if err != nil {
+		return nil, err
+	}
+	return g.wrap, nil
 }
