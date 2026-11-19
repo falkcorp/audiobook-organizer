@@ -650,15 +650,9 @@ into one of the curated sections below, is a normal direct edit.
 - [ ] **Settle `stopping{watchdog}`: `failed` (reason watchdog) or `timed_out`** 05-tasks §5T.8.3 maps a run left stopping with StopReason watchdog to `failed` with reason watchdog; R0's own `StopTerminal` ends it `timed_out`. F2-13's `run-stopping-watchdog` records the spec's mapping (`expected` and `imported_as: {"state": "failed", "reason": "watchdog"}` in `internal/books/testdata/r2corpus/manifest.json`). Confirm the spec or change it; if it changes, update `IMPORTED_AS` in `scripts/r2corpus/overlay/build_overlay.py` and its pinned table in `scripts/tests/test_build_overlay.py` (seams.d/F2-13.md).
   - Owner: 05-tasks' owner, before F5's M4 lands.
 
-- [x] **F4-02-ROLE-GUARD** (done 2026-11-19, this PR: `rbac.RoleGuarder` is the optional
-      role-store interface (`ImportSealer`'s pattern), `core/internal/rbacstore` implements it,
-      `rbac.Service.GuardRole` is what auth calls, and `keepAnAdmin` guards the role definition that
-      makes the other holder an admin, as the very value it decided on, in the same batch as the
-      user write. A store with no guard fails closed (`rbac.ErrNoRoleGuard`). Pinned by
-      `TestLastAdmin_RoleEditAgainstUserWrite` in both commit orders for a demotion, a
-      deactivation and a delete, plus a free-running `-race` variant. Not closed here:
-      bootstrap's admin pick (`adminHolds` in `bootstrap.go`) still reads role definitions without
-      the guard; it issues a key and is a different problem from the last-admin rule.) Guard role
+- [ ] **F4-02-ROLE-GUARD** (in progress, PR #4771 round 2: round 1 guarded only the role of
+      the other holder, which leaves two exits of `keepAnAdmin` and `DeleteRole` open; not done
+      until both are closed.) Guard role
       definitions in core auth's last-admin rule before anything implements `rbac.Holders`.
       Hard prerequisite of F4-08's `rbac.Holders` (see
       `docs/agent-tasks/platform-core/seams.d/F4-02.md`, "F4-08 must know").

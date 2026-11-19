@@ -1,5 +1,5 @@
 // file: core/auth/users.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 41d0b787-5ce8-4a3f-9d8e-8c7b8380e2f0
 // last-edited: 2026-11-19
 
@@ -768,10 +768,11 @@ func holdingRoleWith[R any](ctx context.Context, read func(context.Context, rbac
 // between this read and this commit fails this commit with storage.ErrConflict,
 // and the retry reads the new definition. rbac's own rule reads holders
 // through its batch, so the reverse order, the user write committing first,
-// is caught there. One guarded role is enough for the same reason one guarded
-// user is: of the writes that would together leave no holder, the one
-// committing last guarded a record another of them changed. A store that
-// cannot guard a role (rbac.ErrNoRoleGuard) refuses the write: the rule
+// is caught there. Only the exit that scans for another holder guards a role:
+// the two exits before it (the user did not hold core:admin, or still holds it)
+// decide on role definitions that nothing guards yet, so a role edit committed
+// inside the window is not seen there (the F4-02-ROLE-GUARD round-2 findings).
+// A store that cannot guard a role (rbac.ErrNoRoleGuard) refuses the write: the rule
 // cannot be shown to hold.
 func (s *Service) keepAnAdmin(ctx context.Context, b *storage.Batch, u *User, after []rbac.RoleName, afterStatus UserStatus) error {
 	adminRole := s.adminRoleOf(ctx)
