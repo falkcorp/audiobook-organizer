@@ -1,5 +1,5 @@
 // file: core/module/deps.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 04c2ba0c-0bfa-4d6b-9e91-bc7ba2db6894
 // last-edited: 2026-11-19
 
@@ -18,8 +18,9 @@ import (
 )
 
 // Deps are the handles a module may use (06 §6.4.4). Every handle is scoped
-// to the module and safe for concurrent use; none is nil. These are the R1
-// fields; the rest arrive with their subsystems' R2 flips (06 §6.4.10).
+// to the module and safe for concurrent use; none is nil except Config. These
+// are the R1 fields; the rest arrive with their subsystems' R2 flips (06
+// §6.4.10).
 type Deps struct {
 	Module ID
 
@@ -60,15 +61,14 @@ type Deps struct {
 	Secrets secrets.Scope
 
 	// Config is the App's layered config store (05-config): every key of
-	// core and of every module, read and written as the caller's Actor. It is
-	// nil where no core config is wired: app.Describe, and a boot without
-	// kernel.Config.CoreConfigBoot. It is for the module that is the App's own
-	// configuration surface (ABO's internal/config Facade projects HEAD's flat
-	// Config over it); a module reads its own section through the handle its
-	// Manifest.Settings registered, and writes through the settings API, not
-	// through this. Apply authorizes per key against the Actor the caller
-	// passes, so the handle grants no authority the Actor lacks; it does let a
-	// module name any Actor, which is why only the App's own module takes it.
+	// core and of every module, read and written as the caller's Actor, plus
+	// the secrets Manifest.AppConfig names. It is nil unless the module
+	// declares Manifest.AppConfig and a core config boot ran (not in
+	// app.Describe, nor without kernel.Config.CoreConfigBoot), so it is the one
+	// Deps handle a module must nil-check. Apply authorizes per key against the
+	// Actor the caller passes, so the handle grants no authority the Actor
+	// lacks; it does let the module name any Actor, which is why only a module
+	// the App's manifest review admits takes it.
 	Config ConfigAccess
 }
 
@@ -85,6 +85,18 @@ type ConfigAccess interface {
 	Apply(ctx context.Context, p config.Patch, a config.Actor) (config.Result, error)
 	// Generation moves on every commit and on Attach.
 	Generation() uint64
+	// OnCommit registers fn to run after every committed Apply with the new
+	// generation (config.Store.OnCommit): the hook an App-wide projection
+	// rebuilds on, whoever wrote.
+	OnCommit(fn func(gen uint64))
+	// Secret, PutSecret and DeleteSecret reach the secret store by name, for
+	// names Manifest.AppConfig.Secrets admits and that are not themselves
+	// registered config keys (those are read through Lookup and written
+	// through Apply, so their audit and protection hold). Any other name is
+	// refused with secrets.ErrOutOfScope.
+	Secret(ctx context.Context, name secrets.Name) (secrets.Value, secrets.Meta, error)
+	PutSecret(ctx context.Context, name secrets.Name, v secrets.Value, by string) (secrets.Meta, error)
+	DeleteSecret(ctx context.Context, name secrets.Name, by string) error
 }
 
 // StorageHandles is what Deps.Storage carries (06 §6.4.4). It lives in

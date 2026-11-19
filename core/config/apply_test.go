@@ -1,7 +1,7 @@
 // file: core/config/apply_test.go
-// version: 1.0.7
+// version: 1.1.0
 // guid: 5f60ccc8-90a9-456e-8065-47814de5ed19
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package config_test
 
@@ -149,6 +149,62 @@ func TestApply_RefusesUnknownKey(t *testing.T) {
 		}
 	}
 	refused(t, r, before, 0)
+}
+
+// TestOnCommit_FiresOncePerCommitWithTheGeneration: a store-level hook sees
+// every committed Apply once, with the new generation and after the
+// generation moved, and never a refused or no-op Apply. A hook may read the
+// store (the Facade rebuilds its projection from it).
+func TestOnCommit_FiresOncePerCommitWithTheGeneration(t *testing.T) {
+	r := started(t, rigOpts{})
+	var mu sync.Mutex
+	var got []uint64
+	var seen []uint64
+	r.st.OnCommit(func(gen uint64) {
+		mu.Lock()
+		defer mu.Unlock()
+		got = append(got, gen)
+		seen = append(seen, r.st.Generation())
+	})
+	res, err := r.apply(admin(), map[config.Path]string{kLevel: `"debug"`})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	mu.Lock()
+	if !slices.Equal(got, []uint64{res.Generation}) || !slices.Equal(seen, []uint64{res.Generation}) {
+		t.Fatalf("hook generations %v (store read %v), want exactly [%d]", got, seen, res.Generation)
+	}
+	mu.Unlock()
+	// A no-op Apply (the same value) and a refused one fire nothing.
+	if _, err := r.apply(admin(), map[config.Path]string{kLevel: `"debug"`}); err != nil {
+		t.Fatalf("no-op Apply: %v", err)
+	}
+	if _, err := r.apply(admin(), map[config.Path]string{"core.batcave.utility_belt": `"x"`}); err == nil {
+		t.Fatal("unknown key accepted")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 {
+		t.Fatalf("hook fired for a no-op or refused Apply: %v", got)
+	}
+}
+
+// TestOnCommit_APanickingHookDoesNotFailTheApplyOrSkipTheNext: the commit
+// stands, and the later hook still runs.
+func TestOnCommit_APanickingHookDoesNotFailTheApplyOrSkipTheNext(t *testing.T) {
+	r := started(t, rigOpts{})
+	var after atomic.Int32
+	r.st.OnCommit(func(uint64) { panic("joker was here") })
+	r.st.OnCommit(func(uint64) { after.Add(1) })
+	if _, err := r.apply(admin(), map[config.Path]string{kLevel: `"debug"`}); err != nil {
+		t.Fatalf("Apply after a panicking hook: %v", err)
+	}
+	if after.Load() != 1 {
+		t.Fatalf("the hook after the panicking one ran %d times, want 1", after.Load())
+	}
+	if ks, _ := r.st.Lookup(kLevel); string(ks.Effective) != `"debug"` {
+		t.Fatalf("the commit did not stand: %s", ks.Effective)
+	}
 }
 
 // TestApply_RefusesInvalid: a value failing the schema, the type or the

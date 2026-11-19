@@ -275,50 +275,126 @@ func TestConfigBoot_P4bOpensTheSecretStore(t *testing.T) {
 	}
 }
 
-// TestConfigBoot_DepsConfigIsTheLayeredStore: a gate-on boot hands each module
-// the layered config store as Deps.Config, attached (a read sees the effective
-// value, a write commits and moves the generation), and a gate-off boot hands
-// none. The Facade (ABO's internal/config) is built over it.
-func TestConfigBoot_DepsConfigIsTheLayeredStore(t *testing.T) {
+// appConfigHost boots two modules over a gate-on kernel: alfred, which
+// declares no AppConfig, and lucius, which does and admits only names under
+// "integrations.batcave.". It returns each module's Deps.
+func appConfigHost(t *testing.T, gateOn bool) (k *Kernel, alfred, lucius module.Deps) {
+	t.Helper()
 	h := newSwapHost(t)
-	var off module.Deps
-	h.mustBoot(h.config(&off))
-	if off.Config != nil {
-		t.Fatalf("a gate-off boot handed a module a config store: %T", off.Config)
+	c := h.config(&alfred)
+	if gateOn {
+		c = h.gatedConfig(&alfred)
 	}
+	c.Modules = append(c.Modules, mod("lucius", func(r *module.Registrar) error {
+		lucius = r.Deps()
+		return nil
+	}).with(func(m *module.Manifest) {
+		m.AppConfig = &module.AppConfigSpec{Secrets: func(n secrets.Name) bool {
+			return strings.HasPrefix(string(n), "integrations.batcave.")
+		}}
+	}))
+	return h.mustBoot(c), alfred, lucius
+}
 
-	h = newSwapHost(t)
-	var deps module.Deps
-	k := h.mustBoot(h.gatedConfig(&deps))
-	if deps.Config == nil {
-		t.Fatal("a gate-on boot handed a module no config store")
+// TestConfigBoot_DepsConfigNeedsTheManifestLine: a module that does not
+// declare Manifest.AppConfig gets a nil Deps.Config under a gate-on boot, so
+// the ambient reach is nil, and a gate-off boot hands even the declaring
+// module none.
+func TestConfigBoot_DepsConfigNeedsTheManifestLine(t *testing.T) {
+	_, alfred, lucius := appConfigHost(t, true)
+	if alfred.Config != nil {
+		t.Fatalf("a module with no AppConfig got a config store: %T", alfred.Config)
 	}
-	if deps.Config != module.ConfigAccess(k.cfgBoot.store) {
-		t.Fatal("Deps.Config is not the kernel's layered store")
+	if lucius.Config == nil {
+		t.Fatal("the module declaring AppConfig got no config store")
 	}
+	_, alfred, lucius = appConfigHost(t, false)
+	if alfred.Config != nil || lucius.Config != nil {
+		t.Fatalf("a gate-off boot handed out a config store: alfred=%v lucius=%v", alfred.Config, lucius.Config)
+	}
+}
+
+// TestConfigBoot_DepsConfigIsTheLayeredStore: the declaring module's
+// Deps.Config reads the effective value, lists the keys, and its Apply
+// commits, moves the generation and fires OnCommit once with it.
+func TestConfigBoot_DepsConfigIsTheLayeredStore(t *testing.T) {
+	_, _, lucius := appConfigHost(t, true)
+	cfg := lucius.Config
 	const key config.Path = "core.shutdown.budget"
-	st, ok := deps.Config.Lookup(key)
-	if !ok {
-		t.Fatalf("Lookup(%s): not registered", key)
-	}
-	if len(st.Effective) == 0 {
-		t.Fatalf("Lookup(%s): no effective value", key)
+	st, ok := cfg.Lookup(key)
+	if !ok || len(st.Effective) == 0 {
+		t.Fatalf("Lookup(%s) = %+v, %v", key, st, ok)
 	}
 	var seen int
-	for range deps.Config.Keys() {
+	for range cfg.Keys() {
 		seen++
 	}
 	if seen == 0 {
 		t.Fatal("Keys is empty")
 	}
-	before := deps.Config.Generation()
-	res, err := deps.Config.Apply(t.Context(), config.Patch{Set: map[config.Path]json.RawMessage{key: json.RawMessage(`"45s"`)}},
+	var fired []uint64
+	cfg.OnCommit(func(gen uint64) { fired = append(fired, gen) })
+	before := cfg.Generation()
+	res, err := cfg.Apply(t.Context(), config.Patch{Set: map[config.Path]json.RawMessage{key: json.RawMessage(`"45s"`)}},
 		config.Actor{Subject: "user:alfred", Interactive: true, Can: func(string) bool { return true }})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if res.Generation <= before || deps.Config.Generation() != res.Generation {
-		t.Fatalf("generation %d -> %d, result %d", before, deps.Config.Generation(), res.Generation)
+	if res.Generation <= before || cfg.Generation() != res.Generation {
+		t.Fatalf("generation %d -> %d, result %d", before, cfg.Generation(), res.Generation)
+	}
+	if len(fired) != 1 || fired[0] != res.Generation {
+		t.Fatalf("OnCommit fired %v, want exactly [%d]", fired, res.Generation)
+	}
+}
+
+// TestConfigBoot_DepsConfigSecretsAreTheDeclaredNames: Secret, PutSecret and
+// DeleteSecret work on a name the declaration admits and refuse, with
+// ErrOutOfScope, a name outside it, a name that is a registered config key
+// (Apply's), and everything for a module that declares no Secrets func.
+func TestConfigBoot_DepsConfigSecretsAreTheDeclaredNames(t *testing.T) {
+	_, _, lucius := appConfigHost(t, true)
+	ctx := t.Context()
+	const in secrets.Name = "integrations.batcave.signal_key"
+	if _, err := lucius.Config.PutSecret(ctx, in, secrets.NewValue(secretsFixture), "user:alfred"); err != nil {
+		t.Fatalf("PutSecret of an admitted name: %v", err)
+	}
+	v, meta, err := lucius.Config.Secret(ctx, in)
+	if err != nil || !meta.Set || v.Reveal() != secretsFixture {
+		t.Fatalf("Secret = %v, %+v, %v", v, meta, err)
+	}
+	if err := lucius.Config.DeleteSecret(ctx, in, "user:alfred"); err != nil {
+		t.Fatalf("DeleteSecret: %v", err)
+	}
+	for _, out := range []secrets.Name{"modules.bane.venom", "core.auth.oidc.google.client_secret", "integrations.bane.venom"} {
+		if _, _, err := lucius.Config.Secret(ctx, out); !errors.Is(err, secrets.ErrOutOfScope) {
+			t.Errorf("Secret(%s) outside the declaration: %v, want ErrOutOfScope", out, err)
+		}
+		if _, err := lucius.Config.PutSecret(ctx, out, secrets.NewValue(secretsFixture), "user:alfred"); !errors.Is(err, secrets.ErrOutOfScope) {
+			t.Errorf("PutSecret(%s) outside the declaration: %v, want ErrOutOfScope", out, err)
+		}
+		if err := lucius.Config.DeleteSecret(ctx, out, "user:alfred"); !errors.Is(err, secrets.ErrOutOfScope) {
+			t.Errorf("DeleteSecret(%s) outside the declaration: %v, want ErrOutOfScope", out, err)
+		}
+	}
+	// Admitted by the func but a registered key: refused, Apply owns it.
+	var registered secrets.Name
+	for p, st := range lucius.Config.Keys() {
+		if st.Secret != nil {
+			registered = secrets.Name(p)
+			break
+		}
+	}
+	if registered != "" {
+		wide := &appConfigAccess{store: lucius.Config.(*appConfigAccess).store, secrets: lucius.Config.(*appConfigAccess).secrets,
+			admit: func(secrets.Name) bool { return true }}
+		if _, _, err := wide.Secret(ctx, registered); !errors.Is(err, secrets.ErrOutOfScope) {
+			t.Errorf("Secret(%s), a registered key: %v, want ErrOutOfScope", registered, err)
+		}
+	}
+	none := &appConfigAccess{store: lucius.Config.(*appConfigAccess).store, secrets: lucius.Config.(*appConfigAccess).secrets}
+	if _, _, err := none.Secret(ctx, in); !errors.Is(err, secrets.ErrOutOfScope) {
+		t.Errorf("Secret with no admit func: %v, want ErrOutOfScope", err)
 	}
 }
 

@@ -1,11 +1,12 @@
 // file: core/module/manifest.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f5448853-c265-4559-bf8c-4cb61f16fa24
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package module
 
 import (
+	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
 	"github.com/falkcorp/mediacore/tasks"
@@ -129,6 +130,25 @@ type Manifest struct {
 	// declares none, and a reset then deletes no file and refuses
 	// DeleteLibraryFiles. A ResetStore reset runs no hook.
 	ResetHook *storage.ResetHook
+
+	// AppConfig makes the module the App's own configuration surface: only a
+	// module that declares it receives Deps.Config (the layered store's reads,
+	// its one Apply and an OnCommit hook) and, through it, the secrets the
+	// declaration names. nil = the module gets neither (Deps.Config is nil).
+	// ABO's books module declares it for the Facade that projects HEAD's flat
+	// Config over core keys; a module that only reads its own sections has no
+	// use for it, so the access is a reviewed manifest line, never ambient.
+	AppConfig *AppConfigSpec
+}
+
+// AppConfigSpec is a module's declaration of App-wide config access.
+type AppConfigSpec struct {
+	// Secrets says which secret names Deps.Config.Secret, PutSecret and
+	// DeleteSecret may touch: names outside it are refused with
+	// secrets.ErrOutOfScope, so the module reaches exactly the secrets its
+	// own table maps (for books, derived from the rename table), not the
+	// whole store. nil = no secret access.
+	Secrets func(name secrets.Name) bool
 }
 
 // UIDescriptor lists the IDs of client-side contributions (07 §7.4.2).

@@ -1,5 +1,5 @@
 // file: core/kernel/config_boot.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0e3db6c6-c5ae-4f54-adaf-6fd7b728c89e
 // last-edited: 2026-11-19
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"iter"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -424,14 +425,71 @@ func (k *Kernel) secretsScope(id module.ID) secrets.Scope {
 	return k.sec.store.Scope("modules." + string(id) + ".")
 }
 
-// configAccess is a module's Deps.Config: the layered store, nil where no core
-// config boot ran (the interface is left nil, not a typed nil pointer, so a
-// module's nil check holds).
-func (k *Kernel) configAccess() module.ConfigAccess {
-	if k.cfgBoot == nil {
+// configAccess is a module's Deps.Config: the layered store, with the secrets
+// its Manifest.AppConfig names, for a module that declares one; nil for every
+// other module, and where no core config boot ran (the interface is left nil,
+// not a typed nil pointer, so a module's nil check holds).
+func (k *Kernel) configAccess(man module.Manifest) module.ConfigAccess {
+	if k.cfgBoot == nil || man.AppConfig == nil {
 		return nil
 	}
-	return k.cfgBoot.store
+	a := &appConfigAccess{store: k.cfgBoot.store, admit: man.AppConfig.Secrets}
+	if k.sec != nil {
+		a.secrets = k.sec.store
+	}
+	return a
+}
+
+// appConfigAccess is module.ConfigAccess over the layered store and the
+// secret store. The store's own methods pass through; the secret methods
+// admit a name only when the module's declaration names it and it is not a
+// registered config key (those go through Apply, which audits and protects).
+type appConfigAccess struct {
+	store   *config.Store
+	secrets *secrets.Store
+	admit   func(secrets.Name) bool
+}
+
+var _ module.ConfigAccess = (*appConfigAccess)(nil)
+
+func (a *appConfigAccess) Lookup(p config.Path) (config.KeyState, bool)  { return a.store.Lookup(p) }
+func (a *appConfigAccess) Keys() iter.Seq2[config.Path, config.KeyState] { return a.store.Keys() }
+func (a *appConfigAccess) Generation() uint64                            { return a.store.Generation() }
+func (a *appConfigAccess) OnCommit(fn func(gen uint64))                  { a.store.OnCommit(fn) }
+func (a *appConfigAccess) Apply(ctx context.Context, p config.Patch, act config.Actor) (config.Result, error) {
+	return a.store.Apply(ctx, p, act)
+}
+
+// allowed is the secret methods' gate.
+func (a *appConfigAccess) allowed(name secrets.Name) error {
+	if a.secrets == nil || a.admit == nil || !a.admit(name) {
+		return secrets.ErrOutOfScope
+	}
+	if _, registered := a.store.Lookup(config.Path(name)); registered {
+		return fmt.Errorf("%w: %q is a registered config key; use Apply", secrets.ErrOutOfScope, name)
+	}
+	return nil
+}
+
+func (a *appConfigAccess) Secret(ctx context.Context, name secrets.Name) (secrets.Value, secrets.Meta, error) {
+	if err := a.allowed(name); err != nil {
+		return secrets.Value{}, secrets.Meta{}, err
+	}
+	return a.secrets.Get(ctx, name)
+}
+
+func (a *appConfigAccess) PutSecret(ctx context.Context, name secrets.Name, v secrets.Value, by string) (secrets.Meta, error) {
+	if err := a.allowed(name); err != nil {
+		return secrets.Meta{}, err
+	}
+	return a.secrets.Put(ctx, name, v, by)
+}
+
+func (a *appConfigAccess) DeleteSecret(ctx context.Context, name secrets.Name, by string) error {
+	if err := a.allowed(name); err != nil {
+		return err
+	}
+	return a.secrets.Delete(ctx, name, by)
 }
 
 // closeSecrets closes the secret store before the store it writes through.
