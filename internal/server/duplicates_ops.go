@@ -34,7 +34,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -77,11 +76,7 @@ func (s *Server) dedupStoreReady(id string) error {
 // nil a (a native env, or a HEAD server with no activity writer) and an empty
 // opID write nothing, as HEAD's own guard did.
 func dedupAnnounce(a t7ActivityWriter, opID, opType, summary string) {
-	if a == nil || opID == "" {
-		return
-	}
-	a.FlushActivityOp(opID)
-	a.EmitActivityInfo(opID, opType, "dedup", summary, activity.AlwaysShow)
+	t7Announce(a, opID, opType, "dedup", summary)
 }
 
 // dedupCacheSink is the server's dedup list cache, which the HTTP handlers serve
