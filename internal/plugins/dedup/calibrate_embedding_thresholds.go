@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/calibrate_embedding_thresholds.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 6f1d2e3a-4b5c-4d6e-8f90-1a2b3c4d5e6f
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // Package dedup — op dedup.calibrate-embedding-thresholds (DEDUP-2/3).
 //
@@ -54,6 +54,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -105,18 +107,26 @@ type calibrateEmbeddingThresholdsParams struct {
 	TargetPrecisionLow float64 `json:"target_precision_low"`
 }
 
+// calibrateEmbeddingThresholdsKind is rule R3's native kind for
+// dedup.calibrate-embedding-thresholds.
+const calibrateEmbeddingThresholdsKind = tasks.Kind("books.dedup.calibrate-embedding-thresholds")
+
+// calibrateEmbeddingThresholdsHelp is the definition's description, HEAD's and
+// the native kind's Help (rule R5: verbatim).
+const calibrateEmbeddingThresholdsHelp = "Read-only DEDUP-2/3 harness: scores the labeled gold dataset with the " +
+	"stored embeddings for a target model, sweeps candidate cosine cut-points, and " +
+	"reports precision-targeted high/low threshold recommendations. Writes nothing — " +
+	"applying the recommendation and running full-scan is an owner-gated follow-up."
+
 // calibrateEmbeddingThresholdsDef returns the OperationDef for
 // dedup.calibrate-embedding-thresholds.
 func (p *Plugin) calibrateEmbeddingThresholdsDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "dedup.calibrate-embedding-thresholds",
-		Liveness:    sdk.LivenessManual,
-		Plugin:      "dedup",
-		DisplayName: "Calibrate embedding thresholds (report only)",
-		Description: "Read-only DEDUP-2/3 harness: scores the labeled gold dataset with the " +
-			"stored embeddings for a target model, sweeps candidate cosine cut-points, and " +
-			"reports precision-targeted high/low threshold recommendations. Writes nothing — " +
-			"applying the recommendation and running full-scan is an owner-gated follow-up.",
+		ID:              "dedup.calibrate-embedding-thresholds",
+		Liveness:        sdk.LivenessManual,
+		Plugin:          "dedup",
+		DisplayName:     "Calibrate embedding thresholds (report only)",
+		Description:     calibrateEmbeddingThresholdsHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityNormal,
 		ConcurrencyKey:  "dedup.calibrate-embedding-thresholds",
@@ -169,38 +179,108 @@ func collectCalibrationPairs(
 	getter embeddingGetter,
 	model string,
 ) (pairs []calibrationPair, skippedMissing, skippedMismatch, rowsIn, pairsOut int) {
+	// A plain in-order loop: the sequential shape this function always had, for
+	// callers with no run to hand the pool to.
+	env := kindEnv{
+		Canceled: func() bool { return false },
+		Items: func(ctx context.Context, _ tasks.Parallelism, n int, _ kindItemsOptions, fn func(context.Context, int) error) error {
+			for i := range n {
+				if err := fn(ctx, i); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	}
+	// The callback never fails here (no cancel, no per-pair error), so neither
+	// does the pass.
+	pairs, skippedMissing, skippedMismatch, rowsIn, pairsOut, _ = collectCalibrationPairsVia(context.Background(), env, examples, getter, model)
+	return pairs, skippedMissing, skippedMismatch, rowsIn, pairsOut
+}
+
+// calibrationScoreParallelism is the scoring pass's pool (rule R4): one
+// embedding-store point-get pair plus a cosine over the vectors per labeled
+// example, thousands of them, so CPU-wide. HEAD ran it on one core.
+func calibrationScoreParallelism() tasks.Parallelism { return tasks.CPU() }
+
+// calibrationVerdict is the per-example outcome of one scoring step.
+type calibrationVerdict uint8
+
+const (
+	calibrationScored calibrationVerdict = iota
+	calibrationMissing
+	calibrationMismatch
+)
+
+// collectCalibrationPairsVia is collectCalibrationPairs over the env's pool, so
+// both shells share it. Workers never share mutable state: each writes only its
+// own slot (a disjoint partition by index) and the pairs are assembled from the
+// slots afterwards in input order, so the result is identical to the sequential
+// loop's whichever worker finished first.
+func collectCalibrationPairsVia(
+	ctx context.Context,
+	env kindEnv,
+	examples []database.LabeledExample,
+	getter embeddingGetter,
+	model string,
+) (pairs []calibrationPair, skippedMissing, skippedMismatch, rowsIn, pairsOut int, err error) {
 	rowsIn = len(examples)
 	deduped := dataset.DedupeByPair(examples)
 	pairsOut = len(deduped)
-	for i := range deduped {
+
+	verdicts := make([]calibrationVerdict, len(deduped))
+	scored := make([]calibrationPair, len(deduped))
+	err = env.Items(ctx, calibrationScoreParallelism(), len(deduped), kindItemsOptions{
+		PureLabel: func(i, total int) string {
+			return fmt.Sprintf("Scoring labeled pair %d/%d…", i+1, total)
+		},
+	}, func(_ context.Context, i int) error {
+		if env.Canceled() {
+			return context.Canceled
+		}
 		ex := deduped[i]
 		a, aErr := getter.Get("book", ex.EntityAID)
 		if aErr != nil || a == nil {
-			skippedMissing++
-			continue
+			verdicts[i] = calibrationMissing
+			return nil
 		}
 		b, bErr := getter.Get("book", ex.EntityBID)
 		if bErr != nil || b == nil {
-			skippedMissing++
-			continue
+			verdicts[i] = calibrationMissing
+			return nil
 		}
-		if a.Model != model || b.Model != model {
-			skippedMismatch++
-			continue
+		if a.Model != model || b.Model != model || len(a.Vector) != len(b.Vector) {
+			verdicts[i] = calibrationMismatch
+			return nil
 		}
-		if len(a.Vector) != len(b.Vector) {
-			skippedMismatch++
-			continue
-		}
-		cos := float64(database.CosineSimilarity(a.Vector, b.Vector))
-		pairs = append(pairs, calibrationPair{
+		scored[i] = calibrationPair{
 			label:     ex.Label,
-			cosine:    cos,
+			cosine:    float64(database.CosineSimilarity(a.Vector, b.Vector)),
 			entityAID: ex.EntityAID,
 			entityBID: ex.EntityBID,
-		})
+		}
+		return nil
+	})
+	if err != nil {
+		// The callback only fails for cancellation; hand back the bare sentinel.
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		} else if env.Canceled() {
+			err = context.Canceled
+		}
+		return nil, 0, 0, rowsIn, pairsOut, err
 	}
-	return pairs, skippedMissing, skippedMismatch, rowsIn, pairsOut
+	for i, v := range verdicts {
+		switch v {
+		case calibrationMissing:
+			skippedMissing++
+		case calibrationMismatch:
+			skippedMismatch++
+		default:
+			pairs = append(pairs, scored[i])
+		}
+	}
+	return pairs, skippedMissing, skippedMismatch, rowsIn, pairsOut, nil
 }
 
 // bandRecommendation is the sweep result for one band.
@@ -322,8 +402,48 @@ func notDupHighCosineSample(pairs []calibrationPair, limit int) []calibrationPai
 	return notDup
 }
 
-// runCalibrateEmbeddingThresholds implements the op. It is read-only: it reads
-// the labeled dataset and the embedding store and reports; it never writes.
+// calibrateEmbeddingThresholdsStore is the reads the core takes (rule R10): the
+// labeled gold dataset and the per-book embedding lookup. Neither writes.
+type calibrateEmbeddingThresholdsStore interface {
+	ListLabeledExamples(f database.LabeledExampleFilter) ([]database.LabeledExample, error)
+	embeddingGetter
+}
+
+// calibrateBookReader is the optional title lookup for the diagnostic sample
+// (HEAD: p.store.GetBookByID; the sample logs no titles when HEAD had no store).
+type calibrateBookReader interface {
+	GetBookByID(id string) (*database.Book, error)
+}
+
+// calibrateEmbeddingThresholdsEnv is what the core takes from its shell (rules R2
+// and R10). The run is read-only, so there is no Writer. Books may be nil.
+// DefaultModel resolves the target model when the param is empty (HEAD:
+// p.engine.EmbeddingModel); nil means no engine is wired.
+type calibrateEmbeddingThresholdsEnv struct {
+	kindEnv
+	Params       calibrateEmbeddingThresholdsParams
+	Store        calibrateEmbeddingThresholdsStore
+	Books        calibrateBookReader
+	DefaultModel func() string
+}
+
+// calibrateEmbeddingThresholdsResult is the native run's result: the report HEAD
+// only logged. HEAD stored no result, so its shell drops it.
+type calibrateEmbeddingThresholdsResult struct {
+	Model          string             `json:"model"`
+	RowsIn         int                `json:"rows_in"`
+	PairsOut       int                `json:"pairs_out"`
+	SampleTrueDup  int                `json:"sample_true_dup"`
+	SampleNotDup   int                `json:"sample_not_dup"`
+	SkippedDim     int                `json:"skipped_dimension_mismatch"`
+	SkippedMissing int                `json:"skipped_missing_embedding"`
+	High           bandRecommendation `json:"high"`
+	Low            bandRecommendation `json:"low"`
+}
+
+// runCalibrateEmbeddingThresholds is the v2 shell: HEAD's nil check and params
+// over calibrateEmbeddingThresholdsCore. It is read-only: it reads the labeled
+// dataset and the embedding store and reports; it never writes.
 func (p *Plugin) runCalibrateEmbeddingThresholds(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	if p.embeddingStore == nil {
 		return fmt.Errorf("embedding store not available")
@@ -336,15 +456,34 @@ func (p *Plugin) runCalibrateEmbeddingThresholds(ctx context.Context, rawParams 
 			return fmt.Errorf("parse params: %w", err)
 		}
 	}
+	env := calibrateEmbeddingThresholdsEnv{
+		kindEnv: headEnv(reporter, false),
+		Params:  params,
+		Store:   headEmbeddingReads{emb: p.embeddingStore, books: p.store},
+	}
+	if p.store != nil {
+		env.Books = p.store
+	}
+	if p.engine != nil {
+		env.DefaultModel = p.engine.EmbeddingModel
+	}
+	_, err := calibrateEmbeddingThresholdsCore(ctx, env)
+	return err
+}
+
+// calibrateEmbeddingThresholdsCore is the body of runCalibrateEmbeddingThresholds,
+// shared by both shells.
+func calibrateEmbeddingThresholdsCore(ctx context.Context, env calibrateEmbeddingThresholdsEnv) (calibrateEmbeddingThresholdsResult, error) {
+	params := env.Params
 	model := params.Model
 	if model == "" {
-		if p.engine == nil {
-			return fmt.Errorf("model param empty and dedup engine not available to resolve default")
+		if env.DefaultModel == nil {
+			return calibrateEmbeddingThresholdsResult{}, fmt.Errorf("model param empty and dedup engine not available to resolve default")
 		}
-		model = p.engine.EmbeddingModel()
+		model = env.DefaultModel()
 	}
 	if model == "" {
-		return fmt.Errorf("could not resolve a target embedding model (no param, no wired embed client)")
+		return calibrateEmbeddingThresholdsResult{}, fmt.Errorf("could not resolve a target embedding model (no param, no wired embed client)")
 	}
 	targetHigh := params.TargetPrecision
 	if targetHigh <= 0 {
@@ -355,28 +494,28 @@ func (p *Plugin) runCalibrateEmbeddingThresholds(ctx context.Context, rawParams 
 		targetLow = defaultTargetPrecisionLow
 	}
 
-	log := reporter.Logger()
+	log := env.Logger
 	log.Info("calibrate-embedding-thresholds start",
 		"model", model,
 		"target_precision_high", targetHigh,
 		"target_precision_low", targetLow)
 
 	// --- Load labeled dataset (both classes) ---
-	_ = reporter.UpdateProgress(0, 3, "Loading labeled examples…")
-	trueDup, err := p.embeddingStore.ListLabeledExamples(database.LabeledExampleFilter{Label: "true_dup", Limit: 1_000_000})
+	env.Progress(0, 3, "Loading labeled examples…")
+	trueDup, err := env.Store.ListLabeledExamples(database.LabeledExampleFilter{Label: "true_dup", Limit: 1_000_000})
 	if err != nil {
-		return fmt.Errorf("list true_dup examples: %w", err)
+		return calibrateEmbeddingThresholdsResult{}, fmt.Errorf("list true_dup examples: %w", err)
 	}
-	notDup, err := p.embeddingStore.ListLabeledExamples(database.LabeledExampleFilter{Label: "not_dup", Limit: 1_000_000})
+	notDup, err := env.Store.ListLabeledExamples(database.LabeledExampleFilter{Label: "not_dup", Limit: 1_000_000})
 	if err != nil {
-		return fmt.Errorf("list not_dup examples: %w", err)
+		return calibrateEmbeddingThresholdsResult{}, fmt.Errorf("list not_dup examples: %w", err)
 	}
-	if reporter.IsCanceled() {
-		return context.Canceled
+	if env.Canceled() {
+		return calibrateEmbeddingThresholdsResult{}, context.Canceled
 	}
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return calibrateEmbeddingThresholdsResult{}, ctx.Err()
 	default:
 	}
 
@@ -385,8 +524,11 @@ func (p *Plugin) runCalibrateEmbeddingThresholds(ctx context.Context, rawParams 
 	examples = append(examples, notDup...)
 
 	// --- Score pairs (same-model, same-dim only) ---
-	_ = reporter.UpdateProgress(1, 3, fmt.Sprintf("Scoring %d labeled pairs…", len(examples)))
-	pairs, skippedMissing, skippedMismatch, rowsIn, pairsOut := collectCalibrationPairs(examples, p.embeddingStore, model)
+	env.Progress(1, 3, fmt.Sprintf("Scoring %d labeled pairs…", len(examples)))
+	pairs, skippedMissing, skippedMismatch, rowsIn, pairsOut, err := collectCalibrationPairsVia(ctx, env.kindEnv, examples, env.Store, model)
+	if err != nil {
+		return calibrateEmbeddingThresholdsResult{}, err
+	}
 
 	// Observability for the INIT-1 T3 pair-collapse: rowsIn is the number of
 	// labeled rows loaded, pairsOut the count after collapsing to one per
@@ -406,7 +548,7 @@ func (p *Plugin) runCalibrateEmbeddingThresholds(ctx context.Context, rawParams 
 	}
 
 	// --- Sweep both bands ---
-	_ = reporter.UpdateProgress(2, 3, "Sweeping candidate thresholds…")
+	env.Progress(2, 3, "Sweeping candidate thresholds…")
 	high := sweepThreshold(pairs, targetHigh)
 	low := sweepThreshold(pairs, targetLow)
 
@@ -422,11 +564,11 @@ func (p *Plugin) runCalibrateEmbeddingThresholds(ctx context.Context, rawParams 
 			"count", len(notDupSample), "limit", notDupSampleLimit)
 		for i, pr := range notDupSample {
 			var titleA, titleB string
-			if p.store != nil {
-				if bookA, err := p.store.GetBookByID(pr.entityAID); err == nil && bookA != nil {
+			if env.Books != nil {
+				if bookA, err := env.Books.GetBookByID(pr.entityAID); err == nil && bookA != nil {
 					titleA = bookA.Title
 				}
-				if bookB, err := p.store.GetBookByID(pr.entityBID); err == nil && bookB != nil {
+				if bookB, err := env.Books.GetBookByID(pr.entityBID); err == nil && bookB != nil {
 					titleB = bookB.Title
 				}
 			}
@@ -493,9 +635,14 @@ func (p *Plugin) runCalibrateEmbeddingThresholds(ctx context.Context, rawParams 
 		describeBand(high), describeBand(low),
 	)
 	log.Info("calibrate-embedding-thresholds complete", "summary", summary)
-	_ = reporter.UpdateProgress(3, 3, "Calibration report complete — "+summary+
+	env.Progress(3, 3, "Calibration report complete — "+summary+
 		". Recommendation is report-only; applying thresholds + full-scan is owner-gated.")
-	return nil
+	return calibrateEmbeddingThresholdsResult{
+		Model: model, RowsIn: rowsIn, PairsOut: pairsOut,
+		SampleTrueDup: sampleTrue, SampleNotDup: sampleNot,
+		SkippedDim: skippedMismatch, SkippedMissing: skippedMissing,
+		High: high, Low: low,
+	}, nil
 }
 
 // describeBand renders a band recommendation for the human-readable summary.

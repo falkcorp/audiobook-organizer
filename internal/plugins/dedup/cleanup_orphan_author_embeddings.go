@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/cleanup_orphan_author_embeddings.go
-// version: 1.1.3
+// version: 1.2.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // Package dedup — op dedup.cleanup-orphan-author-embeddings.
 //
@@ -50,6 +50,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -88,22 +90,30 @@ func (r cleanupOrphanAuthorReport) summary() string {
 	return fmt.Sprintf("total=%d orphaned=%d live=%d", r.Total, r.Orphaned, r.Live)
 }
 
+// cleanupOrphanAuthorEmbeddingsKind is rule R3's native kind for
+// dedup.cleanup-orphan-author-embeddings.
+const cleanupOrphanAuthorEmbeddingsKind = tasks.Kind("books.dedup.cleanup-orphan-author-embeddings")
+
+// cleanupOrphanAuthorEmbeddingsHelp is the definition's description, HEAD's and
+// the native kind's Help (rule R5: verbatim).
+const cleanupOrphanAuthorEmbeddingsHelp = "Author-side counterpart to dedup.cleanup-orphan-embeddings (books): finds " +
+	"emb:v:author:* rows whose author ID no longer exists as a live author (merged into " +
+	"another author or hard-deleted) and reports them. Existence is checked against " +
+	"GetAllAuthors(), not GetAuthorByID, because GetAuthorByID follows tombstone redirects " +
+	"for merged authors and would misreport a merged-away ID as live. Dry-run by default; " +
+	"pass apply=true to delete only the confirmed-orphaned rows. Idempotent: re-running " +
+	"apply after a clean pass finds nothing left to delete."
+
 // cleanupOrphanAuthorEmbeddingsDef returns the OperationDef for
 // dedup.cleanup-orphan-author-embeddings.
 func (p *Plugin) cleanupOrphanAuthorEmbeddingsDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "dedup.cleanup-orphan-author-embeddings",
-		Preview:     sdk.PreviewSpec{Params: cleanupOrphanAuthorEmbeddingsParams{}},
-		Liveness:    sdk.LivenessManual,
-		Plugin:      "dedup",
-		DisplayName: "Clean up orphaned author embeddings",
-		Description: "Author-side counterpart to dedup.cleanup-orphan-embeddings (books): finds " +
-			"emb:v:author:* rows whose author ID no longer exists as a live author (merged into " +
-			"another author or hard-deleted) and reports them. Existence is checked against " +
-			"GetAllAuthors(), not GetAuthorByID, because GetAuthorByID follows tombstone redirects " +
-			"for merged authors and would misreport a merged-away ID as live. Dry-run by default; " +
-			"pass apply=true to delete only the confirmed-orphaned rows. Idempotent: re-running " +
-			"apply after a clean pass finds nothing left to delete.",
+		ID:              "dedup.cleanup-orphan-author-embeddings",
+		Preview:         sdk.PreviewSpec{Params: cleanupOrphanAuthorEmbeddingsParams{}},
+		Liveness:        sdk.LivenessManual,
+		Plugin:          "dedup",
+		DisplayName:     "Clean up orphaned author embeddings",
+		Description:     cleanupOrphanAuthorEmbeddingsHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityNormal,
 		ConcurrencyKey:  "dedup.cleanup-orphan-author-embeddings",
@@ -114,8 +124,40 @@ func (p *Plugin) cleanupOrphanAuthorEmbeddingsDef() sdk.OperationDef {
 	}
 }
 
-// runCleanupOrphanAuthorEmbeddings implements the
-// cleanup-orphan-author-embeddings op.
+// cleanupOrphanAuthorEmbeddingsStore is the reads the core takes (rule R10): the
+// author embeddings and the literal-key author enumeration. Neither writes.
+type cleanupOrphanAuthorEmbeddingsStore interface {
+	ListByType(entityType string) ([]database.Embedding, error)
+	GetAllAuthors() ([]database.Author, error)
+}
+
+// cleanupOrphanAuthorEmbeddingsWriter is the one write the core makes: a
+// point-delete of an orphaned embedding row (HEAD: EmbeddingStore.Delete).
+type cleanupOrphanAuthorEmbeddingsWriter interface {
+	Delete(entityType, entityID string) error
+}
+
+// cleanupOrphanAuthorEmbeddingsEnv is what the core takes from its shell (rules
+// R2 and R10). Live is HEAD's apply=true; a dry run never calls Writer, which
+// may then be nil.
+type cleanupOrphanAuthorEmbeddingsEnv struct {
+	kindEnv
+	Store  cleanupOrphanAuthorEmbeddingsStore
+	Writer cleanupOrphanAuthorEmbeddingsWriter
+}
+
+// cleanupOrphanAuthorEmbeddingsResult is the native run's result. HEAD stored no
+// result, so its shell drops it.
+type cleanupOrphanAuthorEmbeddingsResult struct {
+	Total      int `json:"total"`
+	Orphaned   int `json:"orphaned"`
+	Live       int `json:"live"`
+	Deleted    int `json:"deleted"`
+	DeleteErrs int `json:"delete_errors"`
+}
+
+// runCleanupOrphanAuthorEmbeddings is the v2 shell: HEAD's nil checks and params
+// over cleanupOrphanAuthorEmbeddingsCore.
 func (p *Plugin) runCleanupOrphanAuthorEmbeddings(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	if p.embeddingStore == nil {
 		return fmt.Errorf("embedding store not available")
@@ -130,66 +172,85 @@ func (p *Plugin) runCleanupOrphanAuthorEmbeddings(ctx context.Context, rawParams
 			return fmt.Errorf("parse params: %w", err)
 		}
 	}
-	reporter.Logger().Info("cleanup-orphan-author-embeddings start", "apply", params.Apply)
+	_, err := cleanupOrphanAuthorEmbeddingsCore(ctx, cleanupOrphanAuthorEmbeddingsEnv{
+		kindEnv: headEnv(reporter, params.Apply),
+		Store:   headEmbeddingReads{emb: p.embeddingStore, books: p.store},
+		Writer:  headEmbeddingWriter{emb: p.embeddingStore},
+	})
+	return err
+}
 
-	_ = reporter.UpdateProgress(0, 3, "Listing author embeddings…")
-	embeddings, err := p.embeddingStore.ListByType("author")
+// cleanupOrphanAuthorEmbeddingsCore is the body of
+// runCleanupOrphanAuthorEmbeddings, shared by both shells.
+func cleanupOrphanAuthorEmbeddingsCore(ctx context.Context, env cleanupOrphanAuthorEmbeddingsEnv) (cleanupOrphanAuthorEmbeddingsResult, error) {
+	env.Logger.Info("cleanup-orphan-author-embeddings start", "apply", env.Live)
+
+	env.Progress(0, 3, "Listing author embeddings…")
+	embeddings, err := env.Store.ListByType("author")
 	if err != nil {
-		return fmt.Errorf("list author embeddings: %w", err)
+		return cleanupOrphanAuthorEmbeddingsResult{}, fmt.Errorf("list author embeddings: %w", err)
 	}
 
-	_ = reporter.UpdateProgress(1, 3, "Loading live author IDs…")
-	authors, err := p.store.GetAllAuthors()
+	env.Progress(1, 3, "Loading live author IDs…")
+	authors, err := env.Store.GetAllAuthors()
 	if err != nil {
-		return fmt.Errorf("get all authors: %w", err)
+		return cleanupOrphanAuthorEmbeddingsResult{}, fmt.Errorf("get all authors: %w", err)
 	}
 	liveIDs := make(map[string]struct{}, len(authors))
 	for _, a := range authors {
 		liveIDs[strconv.Itoa(a.ID)] = struct{}{}
 	}
 
-	_ = reporter.UpdateProgress(2, 3, fmt.Sprintf(
+	env.Progress(2, 3, fmt.Sprintf(
 		"Checking %d embeddings against %d live authors…", len(embeddings), len(liveIDs)))
+	// The scan is a pure in-memory map lookup per row (no DB read, no network),
+	// so it takes no pool: fanning it out would cost more than the lookups.
 	report := scanOrphanAuthorEmbeddings(embeddings, liveIDs)
+	res := cleanupOrphanAuthorEmbeddingsResult{Total: report.Total, Orphaned: report.Orphaned, Live: report.Live}
 
-	reporter.Logger().Info("cleanup-orphan-author-embeddings: scan complete", "stats", report.summary())
+	env.Logger.Info("cleanup-orphan-author-embeddings: scan complete", "stats", report.summary())
 	for _, s := range report.Sample {
-		reporter.Logger().Info("cleanup-orphan-author-embeddings: sample orphan", "entity_id", s.EntityID, "model", s.Model)
+		env.Logger.Info("cleanup-orphan-author-embeddings: sample orphan", "entity_id", s.EntityID, "model", s.Model)
 	}
 
-	if !params.Apply {
-		_ = reporter.UpdateProgress(3, 3, fmt.Sprintf(
+	if !env.Live {
+		env.Progress(3, 3, fmt.Sprintf(
 			"Dry-run — %d orphaned author embeddings found (%d live, %d total). Pass apply=true to delete.",
 			report.Orphaned, report.Live, report.Total))
-		reporter.Logger().Info("cleanup-orphan-author-embeddings: dry-run only; nothing deleted")
-		return nil
+		env.Logger.Info("cleanup-orphan-author-embeddings: dry-run only; nothing deleted")
+		return res, nil
 	}
 
-	_ = reporter.UpdateProgress(2, 3, fmt.Sprintf("Applying — deleting %d orphaned embeddings…", len(report.OrphanIDs)))
+	env.Progress(2, 3, fmt.Sprintf("Applying — deleting %d orphaned embeddings…", len(report.OrphanIDs)))
+	// The delete loop stays sequential on purpose, as the book op's does: each
+	// iteration is one Pebble point-delete on a row this op already proved
+	// orphaned, so it is bounded by write throughput, not CPU or read latency,
+	// and fanning it out would only interleave writes into one keyspace.
 	var deleted, deleteErrs int
 	for _, id := range report.OrphanIDs {
-		if reporter.IsCanceled() {
+		if env.Canceled() {
 			break
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return res, ctx.Err()
 		default:
 		}
-		if err := p.embeddingStore.Delete("author", id); err != nil {
+		if err := env.Writer.Delete("author", id); err != nil {
 			deleteErrs++
-			reporter.Logger().Error("cleanup-orphan-author-embeddings: delete error", "entity_id", id, "error", err)
+			env.Logger.Error("cleanup-orphan-author-embeddings: delete error", "entity_id", id, "error", err)
 			continue
 		}
 		deleted++
 	}
+	res.Deleted, res.DeleteErrs = deleted, deleteErrs
 
-	_ = reporter.UpdateProgress(3, 3, fmt.Sprintf(
+	env.Progress(3, 3, fmt.Sprintf(
 		"Complete — deleted %d/%d orphaned embeddings (%d errors). %s",
 		deleted, len(report.OrphanIDs), deleteErrs, report.summary()))
-	reporter.Logger().Info("cleanup-orphan-author-embeddings complete",
+	env.Logger.Info("cleanup-orphan-author-embeddings complete",
 		"deleted", deleted, "delete_errs", deleteErrs, "summary", report.summary())
-	return nil
+	return res, nil
 }
 
 // scanOrphanAuthorEmbeddings is the pure core of the op: for every given
