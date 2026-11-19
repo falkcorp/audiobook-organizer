@@ -64,6 +64,7 @@ var t7ServerRows = []t7Row{
 	{id: batchApplyCachedOpID, liveOnly: true},
 	{id: authorMergeOpID, liveOnly: true},
 	{id: resolveProductionAuthorOpID, liveOnly: true},
+	{id: identificationAdvanceOpID},
 }
 
 // t7ScanFullKind is the one native kind with no HEAD definition.
