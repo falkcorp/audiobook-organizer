@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.14.2 -->
+<!-- version: 1.14.3 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-19 -->
 
@@ -884,6 +884,13 @@ keys at all (C11).
    directories and the variable that chooses one deliberately (`state_dir.go:118-155`). Otherwise boot fails.
    The updater marker's `db_path` is not an input: the marker lives inside the directory being resolved, and
    its `db_path` is only `ReaderCheck`'s DB path (05-updater; OPS4-8).
+
+**A state directory that does not exist yet (F3-07 b).** Step 2 and step 3 create it, and a command that writes
+(restore, reset, the secrets commands, prune-checkpoints, a read-write offline open) must run as the user the service
+runs as (05-storage, the owner rule). An absent directory has no owner to compare, so the command compares the owner of
+the **nearest existing ancestor**, walking up through any number of missing levels, and is refused, with nothing
+created at any level, when that is another user. `storage restore-offline` onto a blank host has no exemption. Root
+under a root-owned ancestor creates it; read-only commands and `storage migrate --dry-run` check nothing.
 
 **`core.storage.path` is a kernel pre-boot key (COR4-20).** Step 3 reads it before storage opens; 05-storage's
 `storage` section declares it without changing its name or default. **One resolver (OPS4-8, OPS5-13).** HEAD's
