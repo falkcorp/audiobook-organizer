@@ -1,5 +1,5 @@
 // file: core/secrets/offline.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: ea65355e-8977-4406-a748-63dd510dc8d8
 // last-edited: 2026-11-19
 
@@ -19,8 +19,6 @@ import (
 	"slices"
 	"strconv"
 	"time"
-
-	"github.com/falkcorp/mediacore/internal/statefs"
 )
 
 // The keyring file's offline operations behind the three core commands
@@ -136,7 +134,7 @@ func ExportKeyring(stateDir *os.Root, keyFile, out string, now time.Time) (Expor
 		return ExportResult{}, err
 	}
 	recordName := exportedRecordName(keyFile)
-	files := statefs.FromRoot(stateDir)
+	files := RootStateFiles(stateDir)
 	raw, f, err := readKeyringBytes(files, keyFile)
 	if err != nil {
 		return ExportResult{}, err
@@ -152,7 +150,7 @@ func ExportKeyring(stateDir *os.Root, keyFile, out string, now time.Time) (Expor
 	}
 	err = checkExportTarget(stateDir, keyFile, recordName, outRoot, base, abs)
 	if err == nil {
-		err = writeFileAtomic(statefs.FromRoot(outRoot), labelExport, base, raw)
+		err = writeFileAtomic(RootStateFiles(outRoot), labelExport, base, raw)
 	}
 	// A failed close fails the export before its record is written, so the
 	// health warning stays raised; a re-run may overwrite the 0600 copy.
@@ -326,14 +324,14 @@ func SetInstallID(stateDir *os.Root, keyFile, id string) (old string, err error)
 }
 
 // loadOffline resolves keyFile and reads the keyring for an offline
-// rewrite through root (statefs.FromRoot, unlabelled: an offline command is
+// rewrite through root (RootStateFiles, unlabelled: an offline command is
 // no boot writer): its mode fixed to 0600 or ErrKeyfileInsecure, a missing keyring
 // refused.
-func loadOffline(root *os.Root, keyFile string) (*statefs.Dir, string, *keyringFile, error) {
+func loadOffline(root *os.Root, keyFile string) (StateFiles, string, *keyringFile, error) {
 	if root == nil {
 		return nil, "", nil, errors.New("secrets: the offline command needs the state directory")
 	}
-	stateDir := statefs.FromRoot(root)
+	stateDir := RootStateFiles(root)
 	keyFile, err := cleanKeyFile(keyFile)
 	if err != nil {
 		return nil, "", nil, err
