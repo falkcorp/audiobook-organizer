@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_missing_test.go
-// version: 9.0.2
+// version: 9.0.3
 // guid: 5e1c7a42-93b8-4d06-a7f1-2c84e0b9d315
 // last-edited: 2026-11-09
 
@@ -1379,7 +1379,29 @@ func TestBackfillFileHashes_ReportSymlinkIsNotFollowed(t *testing.T) {
 	_, err := hbRunJob(t, h.store(), hbRun{opID: opID})
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "open report")
+	assert.ErrorIs(t, err, library.ErrReportFileUnsafe, "the resolver refuses a link at the name before the run starts")
+	assert.Contains(t, err.Error(), "symlink")
+	got, rerr := os.ReadFile(victim)
+	require.NoError(t, rerr)
+	assert.Equal(t, "precious", string(got))
+}
+
+// A hard link planted at the report's name is refused too: the resumed run would
+// otherwise trim and append to the file it names.
+func TestBackfillFileHashes_ReportHardLinkIsRefusedAndLeftIntact(t *testing.T) {
+	root := hbLibrary(t)
+	h := newHBStore(t, database.BookFileCore{ID: "f1", BookID: "b1", FilePath: hbPath(root, "gone.m4b")})
+	const opID = "01HARDLINKREPORT"
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".reports"), 0o755))
+	victim := filepath.Join(t.TempDir(), "precious.txt")
+	require.NoError(t, os.WriteFile(victim, []byte("precious"), 0o600))
+	if err := os.Link(victim, filepath.Join(root, ".reports", "backfill-file-hashes-"+opID+".tsv")); err != nil {
+		t.Skipf("hard links are not available here: %v", err)
+	}
+
+	_, err := hbRunJob(t, h.store(), hbRun{opID: opID})
+
+	require.Error(t, err)
 	got, rerr := os.ReadFile(victim)
 	require.NoError(t, rerr)
 	assert.Equal(t, "precious", string(got))

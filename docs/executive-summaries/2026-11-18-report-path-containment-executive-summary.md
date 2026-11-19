@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-18-report-path-containment-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 0b6f2c1e-7a34-4d58-9e21-c5a8d3f40b97 -->
 <!-- last-edited: 2026-11-18 -->
 
@@ -40,22 +40,41 @@ same day after its review.
   the ".applied" file the series de-numbering writes.
 - The provenance export, which appends a ledger of file history to a file the
   person names, had the same flaw and an unusual one: it accepted any full path,
-  and it adds to a file instead of replacing it. It now follows the same rule
-  (a file directly in the reports folder) and the same safe open.
+  and it adds to a file instead of replacing it. It follows the same safe open
+  now, and it gets a folder of its own, ".ledger" inside the library, instead of
+  sharing the reports folder. A review caught why: every report operation
+  empties the file it is given, and the cleanup job deletes by name, so a ledger
+  kept among the reports could be wiped by naming a report after it, and the
+  export would never refill it. Nothing that writes a report can reach the
+  ledger folder, and a report named after the ledger lands in the reports
+  folder as a different file. The export also refuses to run, on a preview too,
+  when the library volume does not look mounted, so an unmounted share's empty
+  mountpoint never receives the ledger, where it would be hidden once the share
+  came back.
+- The file-hash backfill job wrote its report with an older open that followed a
+  shortcut in any folder above the file and did not notice a second name
+  pointing at the file. It now uses the same safe open as the rest.
 - What changes for the person using them: a report named outside the reports
   folder, or with a folder in its name, is now refused with a message that says
   so. A plain file name, or a full path whose folder is the reports folder,
   works. Before this tightening, a name with a folder in it, such as
   "mine/chosen.tsv", was accepted and the folder created; that no longer works,
   so use "chosen.tsv". Anyone who has been exporting file history to a file
-  outside the reports folder needs to start a new ledger file inside it: the
-  export remembers how far it got, so the new file begins at that point and
-  the earlier lines stay in the old file, which should be kept with it.
+  elsewhere needs to start a new ledger file inside ".ledger": the export
+  remembers how far it got, so the new file begins at that point and the
+  earlier lines stay in the old file, which should be kept with it. A ledger
+  copied in must be an ordinary file owned by the account the server runs as
+  and with a single name; one copied in with administrator rights belongs to
+  the administrator and is refused until its owner is changed. The same test is
+  now made when a report name is chosen, so an old file at a report's fixed
+  name that another account owns stops that operation up front, with a message
+  naming the file.
 - Tests cover climbing out with "..", an absolute path elsewhere, a path with a
   folder in it, a shortcut inside the reports folder that leads out of it
   (whether its target exists or not), a report file that is a shortcut, a
   second name pointing at an existing file, a file owned by another account, a
-  folder where the file should be, and a path that is accepted. They run against
+  folder where the file should be, and a path that is accepted, a report named after
+  the ledger, and an unmounted library volume. They run against
   the shared helper, against every operation that writes a report, and against
   every report-writing function on its own. The checking logic was also broken on
   purpose 21 ways to confirm the tests notice each break; all 21 were caught.
@@ -80,9 +99,3 @@ inside the reports folder, before anything is created or written. When the file
 is written, it is opened relative to the reports folder itself, without following
 shortcuts, and checked as an ordinary single-name file owned by the server's
 account before a byte is written.
-
-## What was not changed
-
-One other job, the file-hash backfill, writes its report with its own
-shortcut-refusing open and only to its default location; it was left as it was
-and is filed as a follow-up.

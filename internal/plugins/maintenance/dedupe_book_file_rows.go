@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.13.9
+// version: 1.13.10
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
 // last-edited: 2026-11-18
 
@@ -404,6 +404,12 @@ func (p *Plugin) runDedupeBookFileRowsCore(ctx context.Context, params DedupeBoo
 	reportPath, rpErr := t6g4ReportPath(env.Store, params.ReportPath, "dedupe-book-file-rows-"+reportMode+".tsv")
 	if rpErr != nil {
 		return dedupeBookFileRowsResult{}, fmt.Errorf("dedupe-book-file-rows: %w", rpErr)
+	}
+	// The "-decisions.tsv" file is written beside the report, so it is held to the
+	// same rule before any work: a link planted at its name is refused here, not
+	// found after an apply.
+	if _, rpErr = t6g4ReportPath(env.Store, decisionsReportPath(reportPath), ""); rpErr != nil {
+		return dedupeBookFileRowsResult{}, fmt.Errorf("dedupe-book-file-rows: decisions report: %w", rpErr)
 	}
 	log := env.Logger()
 	scope := params.bookScope()
