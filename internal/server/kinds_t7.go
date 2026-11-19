@@ -437,6 +437,7 @@ type t7Store interface {
 // t7StoreEntities is the reads of the author and series definitions.
 type t7StoreEntities interface {
 	authorReclassifyStore
+	resolveProductionAuthorStore
 }
 
 // t7StoreLibrary is the reads of the library and batch-metadata definitions.
@@ -474,6 +475,8 @@ type t7Writer interface {
 // t7WriterEntities is the writes of the author and series definitions.
 type t7WriterEntities interface {
 	authorReclassifyWriter
+	authorMergeWriter
+	resolveProductionAuthorWriter
 }
 
 // t7WriterLibrary is the writes of the library and batch-metadata definitions.
@@ -791,6 +794,8 @@ func t7KindList(s *Server, deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) 
 		s.applyWhenScannedNative(deps, sched),
 		s.organizeWhenScannedNative(deps, sched),
 		s.batchApplyNative(deps, sched),
+		s.authorMergeNative(deps, sched),
+		s.resolveProductionAuthorNative(deps, sched),
 	}
 }
 
