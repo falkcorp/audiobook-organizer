@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/kinds_embedding_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 985da553-5e06-479c-8367-c003bdb6d793
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package dedup
 
@@ -441,8 +441,8 @@ func embeddingRows() []kindRow {
 			HeadID: "dedup.calibrate-embedding-thresholds", Title: "Calibrate embedding thresholds (report only)",
 			HeadResume: sdk.ResumeDrop, Resume: tasks.ResumeDrop,
 			Priority: tasks.PriorityNormal, Timeout: 30 * time.Minute,
+			// No Par: HEAD scored the pairs in one plain loop, which stays one (R4).
 			ReadOnly: true, Reads: []ops.Resource{ops.ResBooks, ops.ResEmbeddings},
-			Par: []string{"cpu"}, ParGot: []tasks.Parallelism{tasks.CPU()},
 			HeadKey: "dedup.calibrate-embedding-thresholds",
 		},
 		{
@@ -962,7 +962,8 @@ func TestDedupEmbedding_CleanupOrphanAuthorHeadShellKeepsItsNilChecks(t *testing
 func TestDedupEmbedding_CalibrateReportsWithoutAWriter(t *testing.T) {
 	spy, d := newEmbeddingSpy()
 	def := (&Plugin{}).calibrateEmbeddingThresholdsNative(d, nil)
-	require.Equal(t, []int{tasks.CPU().Workers()}, embeddingWorkerCounts(t, def, tasks.ModeLive, ""))
+	// The scoring pass is HEAD's plain loop: it starts no pool (R4).
+	require.Empty(t, embeddingWorkerCounts(t, def, tasks.ModeLive, ""))
 	h, err := embeddingRun(t, def, tasks.ModeLive, "")
 	require.NoError(t, err)
 	require.Empty(t, spy.recorded())
@@ -1011,32 +1012,44 @@ func TestDedupEmbedding_CalibrateRefusesUnwiredDeps(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// The pooled scoring pass returns exactly what the in-order loop did, in the same
-// order, whichever worker finished first.
-func TestDedupEmbedding_CalibrateParallelScoringMatchesTheSequentialLoop(t *testing.T) {
+// frameReporter is a reporter that records every progress frame it is handed.
+type frameReporter struct {
+	mockReporter
+	mu     sync.Mutex
+	frames []string
+}
+
+func (r *frameReporter) UpdateProgress(cur, total int, msg string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.frames = append(r.frames, fmt.Sprintf("%d/%d %s", cur, total, msg))
+	return nil
+}
+
+// calibrate-embedding-thresholds ran its scoring pass as a plain loop on one core
+// at HEAD, so the HEAD shell reports exactly the four phase frames and nothing
+// between them: no per-pair frame, no pool. A parallelism or progress change is a
+// separate PR (05-tasks 5T.8.2, rule R4), so this pins HEAD's output.
+func TestDedupEmbedding_CalibrateHeadShellReportsOnlyItsPhaseFrames(t *testing.T) {
 	spy, _ := newEmbeddingSpy()
-	var examples []database.LabeledExample
-	for i := range 400 {
+	for i := range 40 {
 		a, b := fmt.Sprintf("issue-%03d", i), fmt.Sprintf("annual-%03d", i)
 		spy.stored["book/"+a] = embeddingVec(a, "bge-m3", 1, float32(i%7), 0.5)
-		if i%11 != 0 { // every eleventh partner has no embedding: a skipped pair
-			spy.stored["book/"+b] = embeddingVec(b, "bge-m3", float32(i%5), 1, 0.25)
-		}
-		label := "not_dup"
-		if i%3 == 0 {
-			label = "true_dup"
-		}
-		examples = append(examples, database.LabeledExample{CandidateID: int64(i), EntityAID: a, EntityBID: b, Label: label})
+		spy.stored["book/"+b] = embeddingVec(b, "bge-m3", float32(i%5), 1, 0.25)
+		spy.examples = append(spy.examples, database.LabeledExample{CandidateID: int64(i), EntityAID: a, EntityBID: b, Label: "true_dup"})
 	}
-	seq, seqMissing, seqMismatch, seqIn, seqOut := collectCalibrationPairs(examples, spy, "bge-m3")
-
-	env := headEnv(&mockReporter{}, false)
-	par, parMissing, parMismatch, parIn, parOut, err := collectCalibrationPairsVia(context.Background(), env, examples, spy, "bge-m3")
+	rep := &frameReporter{}
+	_, err := calibrateEmbeddingThresholdsCore(context.Background(), calibrateEmbeddingThresholdsEnv{
+		kindEnv: headEnv(rep, false),
+		Params:  calibrateEmbeddingThresholdsParams{Model: "bge-m3"},
+		Store:   spy,
+	})
 	require.NoError(t, err)
-	require.Equal(t, seq, par)
-	require.Equal(t, []int{seqMissing, seqMismatch, seqIn, seqOut}, []int{parMissing, parMismatch, parIn, parOut})
-	require.NotEmpty(t, par)
-	require.NotZero(t, parMissing)
+	require.Len(t, rep.frames, 4, "one frame per phase: %v", rep.frames)
+	require.Equal(t, "0/3 Loading labeled examples…", rep.frames[0])
+	require.Equal(t, fmt.Sprintf("1/3 Scoring %d labeled pairs…", len(spy.examples)), rep.frames[1])
+	require.Equal(t, "2/3 Sweeping candidate thresholds…", rep.frames[2])
+	require.True(t, strings.HasPrefix(rep.frames[3], "3/3 Calibration report complete"), rep.frames[3])
 }
 
 func TestDedupEmbedding_CalibrateHeadShellKeepsItsNilCheck(t *testing.T) {

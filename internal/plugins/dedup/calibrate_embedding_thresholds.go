@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/calibrate_embedding_thresholds.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 6f1d2e3a-4b5c-4d6e-8f90-1a2b3c4d5e6f
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 // Package dedup — op dedup.calibrate-embedding-thresholds (DEDUP-2/3).
 //
@@ -179,108 +179,38 @@ func collectCalibrationPairs(
 	getter embeddingGetter,
 	model string,
 ) (pairs []calibrationPair, skippedMissing, skippedMismatch, rowsIn, pairsOut int) {
-	// A plain in-order loop: the sequential shape this function always had, for
-	// callers with no run to hand the pool to.
-	env := kindEnv{
-		Canceled: func() bool { return false },
-		Items: func(ctx context.Context, _ tasks.Parallelism, n int, _ kindItemsOptions, fn func(context.Context, int) error) error {
-			for i := range n {
-				if err := fn(ctx, i); err != nil {
-					return err
-				}
-			}
-			return nil
-		},
-	}
-	// The callback never fails here (no cancel, no per-pair error), so neither
-	// does the pass.
-	pairs, skippedMissing, skippedMismatch, rowsIn, pairsOut, _ = collectCalibrationPairsVia(context.Background(), env, examples, getter, model)
-	return pairs, skippedMissing, skippedMismatch, rowsIn, pairsOut
-}
-
-// calibrationScoreParallelism is the scoring pass's pool (rule R4): one
-// embedding-store point-get pair plus a cosine over the vectors per labeled
-// example, thousands of them, so CPU-wide. HEAD ran it on one core.
-func calibrationScoreParallelism() tasks.Parallelism { return tasks.CPU() }
-
-// calibrationVerdict is the per-example outcome of one scoring step.
-type calibrationVerdict uint8
-
-const (
-	calibrationScored calibrationVerdict = iota
-	calibrationMissing
-	calibrationMismatch
-)
-
-// collectCalibrationPairsVia is collectCalibrationPairs over the env's pool, so
-// both shells share it. Workers never share mutable state: each writes only its
-// own slot (a disjoint partition by index) and the pairs are assembled from the
-// slots afterwards in input order, so the result is identical to the sequential
-// loop's whichever worker finished first.
-func collectCalibrationPairsVia(
-	ctx context.Context,
-	env kindEnv,
-	examples []database.LabeledExample,
-	getter embeddingGetter,
-	model string,
-) (pairs []calibrationPair, skippedMissing, skippedMismatch, rowsIn, pairsOut int, err error) {
 	rowsIn = len(examples)
 	deduped := dataset.DedupeByPair(examples)
 	pairsOut = len(deduped)
-
-	verdicts := make([]calibrationVerdict, len(deduped))
-	scored := make([]calibrationPair, len(deduped))
-	err = env.Items(ctx, calibrationScoreParallelism(), len(deduped), kindItemsOptions{
-		PureLabel: func(i, total int) string {
-			return fmt.Sprintf("Scoring labeled pair %d/%d…", i+1, total)
-		},
-	}, func(_ context.Context, i int) error {
-		if env.Canceled() {
-			return context.Canceled
-		}
+	for i := range deduped {
 		ex := deduped[i]
 		a, aErr := getter.Get("book", ex.EntityAID)
 		if aErr != nil || a == nil {
-			verdicts[i] = calibrationMissing
-			return nil
+			skippedMissing++
+			continue
 		}
 		b, bErr := getter.Get("book", ex.EntityBID)
 		if bErr != nil || b == nil {
-			verdicts[i] = calibrationMissing
-			return nil
+			skippedMissing++
+			continue
 		}
-		if a.Model != model || b.Model != model || len(a.Vector) != len(b.Vector) {
-			verdicts[i] = calibrationMismatch
-			return nil
+		if a.Model != model || b.Model != model {
+			skippedMismatch++
+			continue
 		}
-		scored[i] = calibrationPair{
+		if len(a.Vector) != len(b.Vector) {
+			skippedMismatch++
+			continue
+		}
+		cos := float64(database.CosineSimilarity(a.Vector, b.Vector))
+		pairs = append(pairs, calibrationPair{
 			label:     ex.Label,
-			cosine:    float64(database.CosineSimilarity(a.Vector, b.Vector)),
+			cosine:    cos,
 			entityAID: ex.EntityAID,
 			entityBID: ex.EntityBID,
-		}
-		return nil
-	})
-	if err != nil {
-		// The callback only fails for cancellation; hand back the bare sentinel.
-		if ctx.Err() != nil {
-			err = ctx.Err()
-		} else if env.Canceled() {
-			err = context.Canceled
-		}
-		return nil, 0, 0, rowsIn, pairsOut, err
+		})
 	}
-	for i, v := range verdicts {
-		switch v {
-		case calibrationMissing:
-			skippedMissing++
-		case calibrationMismatch:
-			skippedMismatch++
-		default:
-			pairs = append(pairs, scored[i])
-		}
-	}
-	return pairs, skippedMissing, skippedMismatch, rowsIn, pairsOut, nil
+	return pairs, skippedMissing, skippedMismatch, rowsIn, pairsOut
 }
 
 // bandRecommendation is the sweep result for one band.
@@ -525,10 +455,10 @@ func calibrateEmbeddingThresholdsCore(ctx context.Context, env calibrateEmbeddin
 
 	// --- Score pairs (same-model, same-dim only) ---
 	env.Progress(1, 3, fmt.Sprintf("Scoring %d labeled pairs…", len(examples)))
-	pairs, skippedMissing, skippedMismatch, rowsIn, pairsOut, err := collectCalibrationPairsVia(ctx, env.kindEnv, examples, env.Store, model)
-	if err != nil {
-		return calibrateEmbeddingThresholdsResult{}, err
-	}
+	// HEAD scored the pairs in one plain in-order loop on one core, with no
+	// per-pair progress frame and no cancel check; both shells keep exactly that.
+	// A pool here would be a parallelism change, which is its own PR (todo.d).
+	pairs, skippedMissing, skippedMismatch, rowsIn, pairsOut := collectCalibrationPairs(examples, env.Store, model)
 
 	// Observability for the INIT-1 T3 pair-collapse: rowsIn is the number of
 	// labeled rows loaded, pairsOut the count after collapsing to one per
