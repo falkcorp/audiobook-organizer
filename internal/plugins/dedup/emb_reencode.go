@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/emb_reencode.go
-// version: 1.1.7
+// version: 1.2.0
 // guid: 9f4e2a1c-d7b3-4e8f-b5c0-2a1d9e4f7b3c
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // Package dedup — op dedup.emb-reencode (T021, SPEC 3 §3).
 //
@@ -36,6 +36,8 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/falkcorp/mediacore/tasks"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -58,18 +60,25 @@ type embReencodeParams struct {
 	Apply bool `json:"apply"`
 }
 
+// embReencodeKind is rule R3's native kind for dedup.emb-reencode.
+const embReencodeKind = tasks.Kind("books.dedup.emb-reencode")
+
+// embReencodeHelp is the definition's description, HEAD's and the native kind's
+// Help (rule R5: verbatim).
+const embReencodeHelp = "Rewrites all emb:v: blobs from legacy float32 (v0) to float16+zstd (v1), " +
+	"saving ~3.5–4× disk space (~450 MB at 50K books × 3072 dims). " +
+	"Dry-run by default (pass apply=true to execute). " +
+	"Idempotent: v1 rows are skipped; a versioned flag prevents double-runs."
+
 // embReencodeDef returns the OperationDef for dedup.emb-reencode.
 func (p *Plugin) embReencodeDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "dedup.emb-reencode",
-		Preview:     sdk.PreviewSpec{Params: embReencodeParams{}},
-		Liveness:    sdk.LivenessManual,
-		Plugin:      "dedup",
-		DisplayName: "Re-encode embeddings to float16+zstd (T021)",
-		Description: "Rewrites all emb:v: blobs from legacy float32 (v0) to float16+zstd (v1), " +
-			"saving ~3.5–4× disk space (~450 MB at 50K books × 3072 dims). " +
-			"Dry-run by default (pass apply=true to execute). " +
-			"Idempotent: v1 rows are skipped; a versioned flag prevents double-runs.",
+		ID:              "dedup.emb-reencode",
+		Preview:         sdk.PreviewSpec{Params: embReencodeParams{}},
+		Liveness:        sdk.LivenessManual,
+		Plugin:          "dedup",
+		DisplayName:     "Re-encode embeddings to float16+zstd (T021)",
+		Description:     embReencodeHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow, // background maintenance
 		ConcurrencyKey:  "dedup.emb-reencode",
@@ -85,7 +94,109 @@ func (p *Plugin) embReencodeDef() sdk.OperationDef {
 	}
 }
 
-// runEmbReencode implements the dedup.emb-reencode op.
+// embReencodeStore is the reads the core takes (rule R10): the done-flag setting
+// and a scan over the raw emb:v: rows. Neither writes.
+type embReencodeStore interface {
+	GetSetting(key string) (*database.Setting, error)
+	// ScanEmbeddingRows calls fn with every emb:v: row in key order. The key and
+	// value are only valid during the call (the iterator's own buffers): fn
+	// copies what it keeps. An error from fn stops the scan and comes back
+	// unchanged.
+	ScanEmbeddingRows(fn func(key, value []byte) error) error
+}
+
+// embReencodeWriter is the two writes the core makes: an atomic batch rewrite of
+// re-encoded rows (HEAD: reencodeChunkOn over the embedding store's gated DB) and
+// the done-flag setting (HEAD: p.store.SetSetting).
+type embReencodeWriter interface {
+	ReencodeRows(chunk []reencodeTarget) error
+	SetSetting(key, value, typ string, isSecret bool) error
+}
+
+// embReencodeEnv is what the core takes from its shell (rules R2 and R10). Live
+// is HEAD's apply=true (native: a Live run); a dry run never calls Writer, which
+// may then be nil.
+type embReencodeEnv struct {
+	kindEnv
+	Store  embReencodeStore
+	Writer embReencodeWriter
+}
+
+// embReencodeResult is the native run's result. HEAD stored no result, so its
+// shell drops it.
+type embReencodeResult struct {
+	TotalRows        int     `json:"total_rows"`
+	V0Rows           int     `json:"v0_rows"`
+	V1Rows           int     `json:"v1_rows"`
+	Written          int     `json:"written"`
+	CompressionRatio float64 `json:"compression_ratio"`
+	// AlreadyDone is a live run that found the done flag set and did nothing.
+	AlreadyDone bool `json:"already_done"`
+}
+
+// headReencodeStore is HEAD's reads for the core: the embedding store's raw rows
+// and the done-flag setting from the main store.
+type headReencodeStore struct {
+	emb      *database.EmbeddingStore
+	settings interface {
+		GetSetting(key string) (*database.Setting, error)
+	}
+}
+
+func (h headReencodeStore) GetSetting(key string) (*database.Setting, error) {
+	return h.settings.GetSetting(key)
+}
+
+func (h headReencodeStore) ScanEmbeddingRows(fn func(key, value []byte) error) error {
+	db := h.emb.PebbleDB()
+	if db == nil {
+		return fmt.Errorf("embedding store PebbleDB handle is nil")
+	}
+	const embVecPfx = "emb:v:" // mirrors the const in embedding_store.go
+	prefix := []byte(embVecPfx)
+	upper := pebbleUpperBound(prefix)
+
+	iter, err := db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
+	if err != nil {
+		return fmt.Errorf("emb-reencode: open iterator: %w", err)
+	}
+	for iter.First(); iter.Valid(); iter.Next() {
+		if err := fn(iter.Key(), iter.Value()); err != nil {
+			iter.Close()
+			return err
+		}
+	}
+	if err := iter.Error(); err != nil {
+		iter.Close()
+		return fmt.Errorf("emb-reencode: scan error: %w", err)
+	}
+	iter.Close()
+	return nil
+}
+
+// headReencodeWriter is HEAD's writes for the core: each method calls exactly
+// what the HEAD body called.
+type headReencodeWriter struct {
+	emb      *database.EmbeddingStore
+	settings interface {
+		SetSetting(key, value, typ string, isSecret bool) error
+	}
+}
+
+func (h headReencodeWriter) ReencodeRows(chunk []reencodeTarget) error {
+	db := h.emb.PebbleDB()
+	if db == nil {
+		return fmt.Errorf("embedding store PebbleDB handle is nil")
+	}
+	return reencodeChunkOn(db, chunk)
+}
+
+func (h headReencodeWriter) SetSetting(key, value, typ string, isSecret bool) error {
+	return h.settings.SetSetting(key, value, typ, isSecret)
+}
+
+// runEmbReencode is the v2 shell: HEAD's nil checks and params over
+// embReencodeCore.
 func (p *Plugin) runEmbReencode(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	if p.embeddingStore == nil {
 		return fmt.Errorf("embedding store not available")
@@ -101,39 +212,33 @@ func (p *Plugin) runEmbReencode(ctx context.Context, rawParams json.RawMessage, 
 			return fmt.Errorf("parse params: %w", err)
 		}
 	}
+	_, err := embReencodeCore(ctx, embReencodeEnv{
+		kindEnv: headEnv(reporter, params.Apply),
+		Store:   headReencodeStore{emb: p.embeddingStore, settings: p.store},
+		Writer:  headReencodeWriter{emb: p.embeddingStore, settings: p.store},
+	})
+	return err
+}
 
-	reporter.Logger().Info("emb-reencode start", "apply", params.Apply, "flag", embReencodeDoneFlag)
+// embReencodeCore is the body of runEmbReencode, shared by both shells.
+func embReencodeCore(ctx context.Context, env embReencodeEnv) (embReencodeResult, error) {
+	env.Logger.Info("emb-reencode start", "apply", env.Live, "flag", embReencodeDoneFlag)
 
 	// --- Guard: skip if already completed with apply=true ---
-	if params.Apply {
-		if done, err := p.isFlagSet(embReencodeDoneFlag); err != nil {
-			reporter.Logger().Warn("emb-reencode: flag check error (proceeding)", "error", err)
+	if env.Live {
+		if done, err := isSettingTrue(env.Store, embReencodeDoneFlag); err != nil {
+			env.Logger.Warn("emb-reencode: flag check error (proceeding)", "error", err)
 		} else if done {
-			reporter.Logger().Info("emb-reencode: already completed; skipping (flag set)",
+			env.Logger.Info("emb-reencode: already completed; skipping (flag set)",
 				"flag", embReencodeDoneFlag)
-			_ = reporter.UpdateProgress(1, 1, "Already completed (flag set); nothing to do.")
-			return nil
+			env.Progress(1, 1, "Already completed (flag set); nothing to do.")
+			return embReencodeResult{AlreadyDone: true}, nil
 		}
 	}
 
-	db := p.embeddingStore.PebbleDB()
-	if db == nil {
-		return fmt.Errorf("embedding store PebbleDB handle is nil")
-	}
-
-	_ = reporter.UpdateProgress(0, 3, "Scanning emb:v: keys…")
+	env.Progress(0, 3, "Scanning emb:v: keys…")
 
 	// --- Scan and re-encode ---
-	const embVecPfx = "emb:v:" // mirrors the const in embedding_store.go
-
-	prefix := []byte(embVecPfx)
-	upper := pebbleUpperBound(prefix)
-
-	iter, err := db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
-	if err != nil {
-		return fmt.Errorf("emb-reencode: open iterator: %w", err)
-	}
-
 	var (
 		totalRows    int
 		v0Rows       int
@@ -153,44 +258,40 @@ func (p *Plugin) runEmbReencode(ctx context.Context, rawParams json.RawMessage, 
 	}
 	var rows []rowInfo
 
-	for iter.First(); iter.Valid(); iter.Next() {
+	// embRec is JSON; unmarshal to get the vector blob.
+	type embRecPartial struct {
+		V []byte `json:"v"`
+	}
+	if err := env.Store.ScanEmbeddingRows(func(key, value []byte) error {
 		select {
 		case <-ctx.Done():
-			iter.Close()
 			return ctx.Err()
 		default:
 		}
-		if reporter.IsCanceled() {
-			iter.Close()
+		if env.Canceled() {
 			return context.Canceled
 		}
 
-		// embRec is JSON; unmarshal to get the vector blob.
-		type embRecPartial struct {
-			V []byte `json:"v"`
-		}
 		var rec embRecPartial
-		if err := json.Unmarshal(iter.Value(), &rec); err != nil {
-			logger.WarnCtx(ctx, "emb-reencode: skip malformed row", "key", string(iter.Key()), "error", err)
-			continue
+		if err := json.Unmarshal(value, &rec); err != nil {
+			logger.WarnCtx(ctx, "emb-reencode: skip malformed row", "key", string(key), "error", err)
+			return nil
 		}
 
-		keyCopy := make([]byte, len(iter.Key()))
-		copy(keyCopy, iter.Key())
+		keyCopy := make([]byte, len(key))
+		copy(keyCopy, key)
 		blobCopy := make([]byte, len(rec.V))
 		copy(blobCopy, rec.V)
 
 		rows = append(rows, rowInfo{key: keyCopy, oldVBlob: blobCopy})
+		return nil
+	}); err != nil {
+		return embReencodeResult{}, err
 	}
-	if err := iter.Error(); err != nil {
-		iter.Close()
-		return fmt.Errorf("emb-reencode: scan error: %w", err)
-	}
-	iter.Close()
 
 	totalRows = len(rows)
-	reporter.Logger().Info("emb-reencode: scan complete", "total_rows", totalRows)
-	_ = reporter.UpdateProgress(1, 3, fmt.Sprintf("Scanned %d emb:v: rows; preparing re-encode…", totalRows))
+	env.Logger.Info("emb-reencode: scan complete", "total_rows", totalRows)
+	env.Progress(1, 3, fmt.Sprintf("Scanned %d emb:v: rows; preparing re-encode…", totalRows))
 
 	// --- Build re-encode targets ---
 	for _, row := range rows {
@@ -230,13 +331,13 @@ func (p *Plugin) runEmbReencode(ctx context.Context, rawParams json.RawMessage, 
 		}
 	}
 
-	reporter.Logger().Info("emb-reencode: analysis",
+	env.Logger.Info("emb-reencode: analysis",
 		"total_rows", totalRows,
 		"v0_rows", v0Rows,
 		"already_v1_rows", v1Rows,
 		"compression_ratio", fmt.Sprintf("%.2f×", ratio),
 		"v0_bytes_total", totalV0Bytes,
-		"apply", params.Apply,
+		"apply", env.Live,
 	)
 
 	// v1BytesForV0 is the total compressed size of the newly-encoded v1 blobs
@@ -252,55 +353,77 @@ func (p *Plugin) runEmbReencode(ctx context.Context, rawParams json.RawMessage, 
 		safeDiv(totalV0Bytes, int64(max1(v0Rows))),
 		safeDiv(v1BytesForV0, int64(max1(v0Rows))),
 	)
+	res := embReencodeResult{TotalRows: totalRows, V0Rows: v0Rows, V1Rows: v1Rows, CompressionRatio: ratio}
 
-	if !params.Apply {
-		_ = reporter.UpdateProgress(3, 3,
+	if !env.Live {
+		env.Progress(3, 3,
 			fmt.Sprintf("Dry-run complete — %d v0 rows would be re-encoded (%.2f× ratio). "+
 				"Pass apply=true to execute.", v0Rows, ratio))
-		reporter.Logger().Info("emb-reencode: dry-run only; no changes written", "would_reencode", v0Rows)
-		return nil
+		env.Logger.Info("emb-reencode: dry-run only; no changes written", "would_reencode", v0Rows)
+		return res, nil
 	}
 
 	// --- Apply: write re-encoded rows in batches ---
-	_ = reporter.UpdateProgress(2, 3, fmt.Sprintf("Re-encoding %d v0 rows…", v0Rows))
+	env.Progress(2, 3, fmt.Sprintf("Re-encoding %d v0 rows…", v0Rows))
 
+	// Sequential on purpose: each batch is one atomic Pebble commit (fsync'd) over
+	// a disjoint key range of rows this pass already collected, and a crash
+	// loses at most embReencodeBatchSize rewrites; fanning the commits out would
+	// only interleave fsyncs into the same keyspace for no wall-clock gain on a
+	// ~5-second op.
 	written := 0
 	for batchStart := 0; batchStart < len(batch); batchStart += embReencodeBatchSize {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return res, ctx.Err()
 		default:
 		}
-		if reporter.IsCanceled() {
-			return context.Canceled
+		if env.Canceled() {
+			return res, context.Canceled
 		}
 
 		end := min(batchStart+embReencodeBatchSize, len(batch))
 		chunk := batch[batchStart:end]
 
-		if err := p.reencodeChunk(db, chunk); err != nil {
-			reporter.Logger().Error("emb-reencode: batch write error", "batch_start", batchStart, "error", err)
-			return fmt.Errorf("emb-reencode: batch write: %w", err)
+		if err := env.Writer.ReencodeRows(chunk); err != nil {
+			env.Logger.Error("emb-reencode: batch write error", "batch_start", batchStart, "error", err)
+			return res, fmt.Errorf("emb-reencode: batch write: %w", err)
 		}
 		written += len(chunk)
-		reporter.Logger().Debug("emb-reencode: batch committed",
+		env.Logger.Debug("emb-reencode: batch committed",
 			"written_so_far", written, "total_v0", v0Rows)
 	}
+	res.Written = written
 
 	// --- Set versioned completion flag ---
-	if err := p.store.SetSetting(embReencodeDoneFlag, "true", "bool", false); err != nil {
-		reporter.Logger().Warn("emb-reencode: could not set done flag", "flag", embReencodeDoneFlag, "error", err)
+	if err := env.Writer.SetSetting(embReencodeDoneFlag, "true", "bool", false); err != nil {
+		env.Logger.Warn("emb-reencode: could not set done flag", "flag", embReencodeDoneFlag, "error", err)
 	} else {
-		reporter.Logger().Info("emb-reencode: set done flag", "flag", embReencodeDoneFlag)
+		env.Logger.Info("emb-reencode: set done flag", "flag", embReencodeDoneFlag)
 	}
 
-	_ = reporter.UpdateProgress(3, 3,
+	env.Progress(3, 3,
 		fmt.Sprintf("Complete — %d/%d v0 rows re-encoded to v1 (ratio %.2f×). %s",
 			written, v0Rows, ratio, dryRunSummary))
-	reporter.Logger().Info("emb-reencode: complete",
+	env.Logger.Info("emb-reencode: complete",
 		"reencoded", written, "intended", v0Rows,
 		"compression_ratio", fmt.Sprintf("%.2f×", ratio))
-	return nil
+	return res, nil
+}
+
+// isSettingTrue reports whether the named setting holds "true" (the done-flag
+// check, over the core's narrow store).
+func isSettingTrue(store interface {
+	GetSetting(key string) (*database.Setting, error)
+}, key string) (bool, error) {
+	setting, err := store.GetSetting(key)
+	if err != nil {
+		return false, err
+	}
+	if setting == nil {
+		return false, nil
+	}
+	return setting.Value == "true", nil
 }
 
 // reencodeTarget is a single row to re-encode.
@@ -309,10 +432,10 @@ type reencodeTarget struct {
 	newV []byte
 }
 
-// reencodeChunk writes a batch of re-encoded rows atomically.
+// reencodeChunkOn writes a batch of re-encoded rows atomically.
 // Each row's JSON is read fresh, the vector blob replaced, and the updated
 // JSON written back.  Rows that can't be read are skipped with a warning.
-func (p *Plugin) reencodeChunk(db *database.GatedDB, chunk []reencodeTarget) error {
+func reencodeChunkOn(db *database.GatedDB, chunk []reencodeTarget) error {
 	b := db.NewBatch()
 	defer b.Close()
 
