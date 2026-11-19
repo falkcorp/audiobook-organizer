@@ -1,5 +1,5 @@
 // file: core/auth/service_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 298429ba-81c3-4473-ac04-17d50cc5f897
 // last-edited: 2026-11-19
 
@@ -288,18 +288,30 @@ func (f *fx) key(id string) *auth.APIKey {
 type holders struct {
 	st *authstore.Store
 
-	mu sync.Mutex
+	mu    sync.Mutex
+	calls int
 	// afterRead, when set, runs once the holders are read and guarded and
-	// before they are returned: the role edit's batch is staged but not
-	// committed, so a test can land a user write in that window.
-	afterRead func()
+	// before they are returned, with the number of HoldersOf calls so far
+	// (counted from 1 since the hook was set). A role edit reads the holders
+	// of the admin roles before and after the edit, so its last read of an
+	// attempt is the second call; the edit's batch is staged but not
+	// committed there, and a test can land a user write in that window.
+	afterRead func(call int)
 }
 
-// setAfterRead installs (or, with nil, clears) the hook.
-func (h *holders) setAfterRead(fn func()) {
+// setAfterRead installs (or, with nil, clears) the hook and restarts the
+// count.
+func (h *holders) setAfterRead(fn func(call int)) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.afterRead = fn
+	h.afterRead, h.calls = fn, 0
+}
+
+// holderReads is how many times HoldersOf has run since setAfterRead.
+func (h *holders) holderReads() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.calls
 }
 
 func (h *holders) HoldersOf(ctx context.Context, b *storage.Batch, roles []rbac.RoleName) ([]rbac.Holder, error) {
@@ -319,10 +331,11 @@ func (h *holders) HoldersOf(ctx context.Context, b *storage.Batch, roles []rbac.
 		}
 	}
 	h.mu.Lock()
-	hook := h.afterRead
+	h.calls++
+	call, hook := h.calls, h.afterRead
 	h.mu.Unlock()
 	if hook != nil {
-		hook()
+		hook(call)
 	}
 	return out, nil
 }
