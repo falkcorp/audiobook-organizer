@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/drain_stale.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: a6103a90-d68c-4db5-ace4-e2a9fb2a51e1
-// last-edited: 2026-10-18
+// last-edited: 2026-11-18
 
 // Package dedup — op dedup.drain-stale (DEDUP-1 / CONS-16 / CONS-17).
 //
@@ -33,6 +33,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -89,6 +93,134 @@ func (p *Plugin) drainStaleDef() sdk.OperationDef {
 	}
 }
 
+// drainStaleKind is rule R3's native kind for dedup.drain-stale.
+const drainStaleKind = tasks.Kind("books.dedup.drain-stale")
+
+// drainStaleEngine is the one engine call the core makes. The engine checkpoints
+// its apply scan under the constant drainStaleCheckpointID (not the run id).
+type drainStaleEngine interface {
+	DrainStaleCandidates(ctx context.Context, opID string, apply bool, progress dedupengine.DrainStaleProgressFunc) (*dedupengine.DrainStaleResult, error)
+}
+
+// drainStaleStore is the read of the versioned done-flag.
+type drainStaleStore interface {
+	GetSetting(key string) (*database.Setting, error)
+}
+
+// drainStaleWriter is the one write the core makes: the done-flag.
+type drainStaleWriter interface {
+	SetSetting(key, value, typ string, secret bool) error
+}
+
+// drainStaleEnv is what the core takes from its shell. Live is HEAD's apply; a
+// dry run reads no flag and never calls Writer, which may then be nil.
+type drainStaleEnv struct {
+	kindEnv
+	Engine drainStaleEngine
+	Store  drainStaleStore
+	Writer drainStaleWriter
+}
+
+// drainStaleResult is the native run's result.
+type drainStaleResult struct {
+	AlreadyDone  bool           `json:"already_done,omitempty"`
+	Inspected    int            `json:"inspected"`
+	WouldPurge   int            `json:"would_purge"`
+	Kept         int            `json:"kept"`
+	LookupErrors int            `json:"lookup_errors"`
+	ReasonCounts map[string]int `json:"reason_counts,omitempty"`
+	FlagSet      bool           `json:"flag_set"`
+}
+
+// isDrainFlagSet is the done-flag read (HEAD: Plugin.isFlagSet).
+func isDrainFlagSet(st drainStaleStore, key string) (bool, error) {
+	setting, err := st.GetSetting(key)
+	if err != nil {
+		return false, err
+	}
+	return setting != nil && setting.Value == "true", nil
+}
+
+// drainStaleCore is the body of runDrainStale, shared by both shells. The scan
+// and its worker pool live in the engine.
+func drainStaleCore(ctx context.Context, env drainStaleEnv) (drainStaleResult, error) {
+	env.Logger.Info("dedup.drain-stale start", "apply", env.Live)
+
+	// Guard: skip the apply path if it has already completed once.
+	if env.Live {
+		if done, err := isDrainFlagSet(env.Store, drainStaleDoneFlag); err != nil {
+			env.Logger.Warn("drain-stale: flag check error (proceeding)", "error", err)
+		} else if done {
+			env.Logger.Info("drain-stale: already completed; skipping (flag set)", "flag", drainStaleDoneFlag)
+			env.Progress(1, 1, "Already completed (flag set); nothing to do.")
+			return drainStaleResult{AlreadyDone: true}, nil
+		}
+	}
+
+	env.Progress(0, 1, "Counting pending exact candidates…")
+
+	result, err := env.Engine.DrainStaleCandidates(ctx, drainStaleCheckpointID, env.Live,
+		func(done, total int, message string) {
+			env.Progress(done, total, message)
+		})
+	if err != nil {
+		return drainStaleResult{}, fmt.Errorf("drain-stale: %w", err)
+	}
+
+	// Log the full reason breakdown (deterministic order) plus totals.
+	reasons := make([]string, 0, len(result.ReasonCounts))
+	for r := range result.ReasonCounts {
+		reasons = append(reasons, r)
+	}
+	sort.Strings(reasons)
+	for _, r := range reasons {
+		env.Logger.Info("drain-stale: reason breakdown", "reason", r, "count", result.ReasonCounts[r])
+	}
+	env.Logger.Info("drain-stale: scan complete",
+		"inspected", result.Inspected,
+		"would_purge", result.WouldPurge,
+		"kept", result.Kept,
+		"lookup_errors", result.LookupErrors,
+		"apply", env.Live)
+
+	out := drainStaleResult{Inspected: result.Inspected, WouldPurge: result.WouldPurge, Kept: result.Kept,
+		LookupErrors: result.LookupErrors, ReasonCounts: result.ReasonCounts}
+	summary := fmt.Sprintf("inspected=%d would_purge=%d kept=%d lookup_errors=%d reasons=%s",
+		result.Inspected, result.WouldPurge, result.Kept, result.LookupErrors, formatReasonCounts(result.ReasonCounts, reasons))
+
+	if !env.Live {
+		env.Progress(1, 1, fmt.Sprintf(
+			"Dry-run — %d candidate(s) would be reclassified stale-drain. %s. Review counts/samples, then pass apply=true (owner greenlight required).",
+			result.WouldPurge, summary))
+		env.Logger.Info("drain-stale: dry-run only; nothing written", "would_purge", result.WouldPurge)
+		return out, nil
+	}
+
+	// Pairs kept because a book/file read FAILED were never evaluated. Setting
+	// the done-flag would make every later apply a no-op and strand them
+	// pending, so leave it unset: a re-run re-scans (phase 1 is read-only).
+	if result.LookupErrors > 0 {
+		env.Logger.Warn("drain-stale: not setting done flag; some pairs were kept on read errors and need a re-run",
+			"flag", drainStaleDoneFlag, "lookup_errors", result.LookupErrors)
+		env.Progress(1, 1, fmt.Sprintf(
+			"Applied — %d candidate(s) reclassified stale-drain, but %d pair(s) were kept on book read errors; done flag NOT set, re-run apply to cover them. %s",
+			result.WouldPurge, result.LookupErrors, summary))
+		return out, nil
+	}
+
+	// Apply completed — set the versioned done-flag so a second apply is a no-op.
+	if err := env.Writer.SetSetting(drainStaleDoneFlag, "true", "bool", false); err != nil {
+		env.Logger.Warn("drain-stale: could not set done flag", "flag", drainStaleDoneFlag, "error", err)
+	} else {
+		out.FlagSet = true
+		env.Logger.Info("drain-stale: set done flag", "flag", drainStaleDoneFlag)
+	}
+
+	env.Progress(1, 1, fmt.Sprintf("Complete — %d candidate(s) reclassified stale-drain. %s", result.WouldPurge, summary))
+	return out, nil
+}
+
+// runDrainStale is the v2 shell: HEAD's Run over drainStaleCore.
 func (p *Plugin) runDrainStale(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	if p.engine == nil {
 		return fmt.Errorf("dedup engine not available")
@@ -106,84 +238,13 @@ func (p *Plugin) runDrainStale(ctx context.Context, rawParams json.RawMessage, r
 			return fmt.Errorf("parse params: %w", err)
 		}
 	}
-
-	reporter.Logger().Info("dedup.drain-stale start", "apply", params.Apply)
-
-	// Guard: skip the apply path if it has already completed once.
-	if params.Apply {
-		if done, err := p.isFlagSet(drainStaleDoneFlag); err != nil {
-			reporter.Logger().Warn("drain-stale: flag check error (proceeding)", "error", err)
-		} else if done {
-			reporter.Logger().Info("drain-stale: already completed; skipping (flag set)", "flag", drainStaleDoneFlag)
-			_ = reporter.UpdateProgress(1, 1, "Already completed (flag set); nothing to do.")
-			return nil
-		}
-	}
-
-	// This first report covers the up-front count of pending exact
-	// candidates; from then on the engine reports after every scanned page
-	// and periodically while marking, so the registry watchdog (5 minutes
-	// without an UpdateProgress call) never sees a silent op.
-	_ = reporter.UpdateProgress(0, 1, "Counting pending exact candidates…")
-
-	result, err := p.engine.DrainStaleCandidates(ctx, drainStaleCheckpointID, params.Apply,
-		func(done, total int, message string) {
-			_ = reporter.UpdateProgress(done, total, message)
-		})
-	if err != nil {
-		return fmt.Errorf("drain-stale: %w", err)
-	}
-
-	// Log the full reason breakdown (deterministic order) plus totals.
-	reasons := make([]string, 0, len(result.ReasonCounts))
-	for r := range result.ReasonCounts {
-		reasons = append(reasons, r)
-	}
-	sort.Strings(reasons)
-	for _, r := range reasons {
-		reporter.Logger().Info("drain-stale: reason breakdown", "reason", r, "count", result.ReasonCounts[r])
-	}
-	reporter.Logger().Info("drain-stale: scan complete",
-		"inspected", result.Inspected,
-		"would_purge", result.WouldPurge,
-		"kept", result.Kept,
-		"lookup_errors", result.LookupErrors,
-		"apply", params.Apply)
-
-	summary := fmt.Sprintf("inspected=%d would_purge=%d kept=%d lookup_errors=%d reasons=%s",
-		result.Inspected, result.WouldPurge, result.Kept, result.LookupErrors, formatReasonCounts(result.ReasonCounts, reasons))
-
-	if !params.Apply {
-		_ = reporter.UpdateProgress(1, 1, fmt.Sprintf(
-			"Dry-run — %d candidate(s) would be reclassified stale-drain. %s. Review counts/samples, then pass apply=true (owner greenlight required).",
-			result.WouldPurge, summary))
-		reporter.Logger().Info("drain-stale: dry-run only; nothing written", "would_purge", result.WouldPurge)
-		return nil
-	}
-
-	// Pairs kept because a book/file read FAILED were never evaluated. Setting
-	// the done-flag would make every later apply a no-op and strand them
-	// pending, so leave it unset: a re-run re-scans (phase 1 is read-only),
-	// drains what it now can, and an already-drained row is refused as no
-	// longer pending.
-	if result.LookupErrors > 0 {
-		reporter.Logger().Warn("drain-stale: not setting done flag; some pairs were kept on read errors and need a re-run",
-			"flag", drainStaleDoneFlag, "lookup_errors", result.LookupErrors)
-		_ = reporter.UpdateProgress(1, 1, fmt.Sprintf(
-			"Applied — %d candidate(s) reclassified stale-drain, but %d pair(s) were kept on book read errors; done flag NOT set, re-run apply to cover them. %s",
-			result.WouldPurge, result.LookupErrors, summary))
-		return nil
-	}
-
-	// Apply completed — set the versioned done-flag so a second apply is a no-op.
-	if err := p.store.SetSetting(drainStaleDoneFlag, "true", "bool", false); err != nil {
-		reporter.Logger().Warn("drain-stale: could not set done flag", "flag", drainStaleDoneFlag, "error", err)
-	} else {
-		reporter.Logger().Info("drain-stale: set done flag", "flag", drainStaleDoneFlag)
-	}
-
-	_ = reporter.UpdateProgress(1, 1, fmt.Sprintf("Complete — %d candidate(s) reclassified stale-drain. %s", result.WouldPurge, summary))
-	return nil
+	_, err := drainStaleCore(ctx, drainStaleEnv{
+		kindEnv: headEnv(reporter, params.Apply),
+		Engine:  p.engine,
+		Store:   headScoringReads{store: p.store, emb: p.embeddingStore},
+		Writer:  headScoringWriter{store: p.store},
+	})
+	return err
 }
 
 // formatReasonCounts renders the reason buckets in the given (sorted) order as a
