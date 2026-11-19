@@ -1,5 +1,5 @@
 // file: internal/reconcile/apply_file_rows_followup_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b0e7c3a-91d4-4f62-a8c7-3e1d6b9f0a24
 // last-edited: 2026-11-18
 
@@ -116,6 +116,28 @@ func TestExecuteReconcile_FinishingAStrandedMatchHandsOffTheEarlierOperationsRow
 		t.Errorf("reverting op-1 undid op-3: the book is at %q, want %q", got, f.newPath)
 	}
 	f.requireRepointedRow(id, row)
+}
+
+// A rerun under the SAME operation id (a stranded match finished by the operation
+// that stranded it) owns the rows already in its journal: the hand-off marks only
+// OTHER operations' rows, or reverting the operation would skip its own writes.
+func TestExecuteReconcile_ARerunUnderTheSameOperationKeepsItsOwnRowsLive(t *testing.T) {
+	f := newApplyFixture(t)
+	old := f.missingPath("Year One.m4b")
+	id := f.book("Batman: Year One", old)
+	f.row(id, old)
+	item := ReconcileApplyItem{BookID: id, NewPath: f.newPath}
+	f.strand("op-1", item)
+
+	if res, err := f.apply(f.ps, "op-1", item); err != nil || res.Applied != 1 {
+		t.Fatalf("the rerun: %v, result %+v", err, res)
+	}
+	f.requireRows("op-1", 3, 3) // book path, row repoint, book path again
+	f.requireLive("op-1", 3)    // none handed off: they are this operation's own
+	f.revertOp("op-1")
+	if got := f.bookPath(id); got != old {
+		t.Errorf("after reverting op-1 the book is at %q, want %q", got, old)
+	}
 }
 
 // Only the rows that describe this match go: another writer's rows (Source set),
@@ -348,6 +370,25 @@ func TestExecuteReconcile_ABookTrashedUnderTheApplyIsRefusedAtTheWrite(t *testin
 		}
 		if !strings.Contains(res.Errors[0], "to the trash") || strings.Contains(res.Errors[0], "another writer") {
 			t.Errorf("errors = %q, want the trash named and no other writer blamed", res.Errors)
+		}
+		f.requireUntouched(id, old, before)
+		f.requireRows("op-1", 2, 0)
+	})
+	t.Run("a refusal needs no read-back to be rolled back and voided", func(t *testing.T) {
+		// The callback saw the trashed book under its lock and wrote nothing, so the
+		// refusal itself proves the write did not land: a book that then cannot be
+		// read must not leave the row at the found file and the rows live.
+		f := newApplyFixture(t)
+		old := f.missingPath("Year One.m4b")
+		id := f.book("Batman: Year One", old)
+		f.row(id, old)
+		before := f.rows(id)
+		store := &failingStore{PebbleStore: f.ps, failRowAfter: -1, failBookReadAfterWrite: true}
+		store.beforeBookCall = trash(f, id)
+
+		res, err := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+		if err == nil || len(res.Errors) != 1 || strings.Contains(res.Errors[0], "read back") {
+			t.Fatalf("err = %v, result %+v, want one refused match that never needed the read-back", err, res)
 		}
 		f.requireUntouched(id, old, before)
 		f.requireRows("op-1", 2, 0)
