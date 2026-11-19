@@ -603,27 +603,18 @@ jobs:
         with:
           submodules: recursive
 
-      - name: DEBUG apt layout and real download behaviour
+      - name: DEBUG mirror speed comparison
         run: |
           set +e
-          for f in /etc/apt/sources.list /etc/apt/sources.list.d/*; do echo "=== $f"; cat "$f"; done
-          echo "=== /etc/apt/apt-mirrors.txt"; cat /etc/apt/apt-mirrors.txt
-          echo "=== apt-config"; apt-config dump | grep -i -E 'Dir::Cache|Dir::State::lists|Dir::Etc::sourc'
-          sudo apt-get update >/dev/null 2>&1
-          d=$HOME/apt-dbg; sudo rm -rf $d; sudo mkdir -p $d
-          ( while :; do
-              printf '%s total=%s\n' "$(date +%T)" "$(sudo du -sb $d | cut -f1)"
-              sudo find $d -type f -printf '   %p %s\n' | tail -3
-              sleep 2
-            done ) &
-          samp=$!
-          start=$(date +%s)
-          sudo apt-get -o Dir::Cache::archives=$d -o Acquire::Retries=3 install -y --no-install-recommends --download-only libtag1-dev ffmpeg 2>&1 | tail -5
-          echo "download took $(( $(date +%s) - start )) s"
-          kill $samp
-          echo "=== layout"; sudo find $d | head -20
-          sudo du -sb $d
-          sudo rm -rf $d
+          for h in us-east-2.ec2.archive.ubuntu.com us-west-2.ec2.archive.ubuntu.com us-east-1.ec2.archive.ubuntu.com archive.ubuntu.com azure.archive.ubuntu.com; do
+            for scheme in http; do
+              curl -s -o /dev/null --max-time 20 -w "$h $scheme speed=%{speed_download} B/s bytes=%{size_download} code=%{http_code} connect=%{time_connect}\n" "$scheme://$h/ubuntu/dists/resolute/universe/Contents-amd64.gz"
+            done
+          done
+          for h in us-east-2.ec2.archive.ubuntu.com archive.ubuntu.com; do
+            curl -s -o /dev/null --max-time 20 -w "second pass $h speed=%{speed_download} B/s bytes=%{size_download}\n" "http://$h/ubuntu/dists/resolute/universe/Contents-amd64.gz"
+          done
+          exit 1
 
       - name: Set up Go (no built-in cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
