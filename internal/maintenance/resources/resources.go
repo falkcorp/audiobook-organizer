@@ -1,5 +1,5 @@
 // file: internal/maintenance/resources/resources.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 511262bb-c287-4138-a7ee-7566c9543e3b
 // last-edited: 2026-11-19
 
@@ -376,6 +376,14 @@ func addComposites(rows map[string][]ops.Resource) {
 	rows["RunBulkWriteBack"] = Union(
 		[]ops.Resource{ops.ResFiles, ops.ResFileProvenance, ops.ResActivity, ops.ResOperations},
 		rows["ModifyBook"], rows["UpdateBookFile"])
+	// The user-merge service's three writes (internal/usermerge): the key writes
+	// of the merge ops are listening state (ubs:, upos:, idx:ubs:) and
+	// preferences (pref:), and the journal records them. The closest resource is
+	// user_state; the user rows, credentials and journal have no resource of
+	// their own yet (seams.d/F5-12.md).
+	rows["ApplyUserMerge"] = []ops.Resource{ops.ResUserState}
+	rows["ResumeUserMerge"] = []ops.Resource{ops.ResUserState}
+	rows["UndoUserMerge"] = []ops.Resource{ops.ResUserState}
 	// F5-07's boot-time writers.
 	rows["StripMovementAtoms"] = Union(
 		[]ops.Resource{ops.ResFiles, ops.ResSettings, ops.ResFileProvenance}, rows["UpdateBookFile"])

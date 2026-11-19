@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/user_merge_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: d9e3a5f0-7b14-4c82-8a6d-2f1c0b9e4573
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -56,7 +56,7 @@ func newUserMergeRig(t *testing.T) *userMergeRig {
 
 func (r *userMergeRig) env() userMergeEnv {
 	return userMergeEnv{
-		Service: r.svc, Grants: r.grants,
+		Store: r.svc, Writer: userMergeHeadWriter{svc: r.svc}, Grants: r.grants,
 		Actor:     func() (string, bool, error) { return r.actor, r.fresh, nil },
 		SetResult: func(v any) error { r.result = v; return nil },
 		Progress:  func(int, int, string) {},
