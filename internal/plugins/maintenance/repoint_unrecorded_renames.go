@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_unrecorded_renames.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 5a0e7c38-2d94-4b1f-8e63-c4f9b2a17d05
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 // Repoints rows whose file a rename MOVED ON DISK but whose new path the
 // rename could not write to the database, even after retrying.
@@ -42,11 +42,12 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance/resources"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
-	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // repointUnrecordedRenamesConcurrency: the set is normally tiny (writes that
@@ -93,6 +94,18 @@ type repointUnrecordedRenamesResult struct {
 	Rows     []repointUnrecordedRenameRow `json:"rows"`
 }
 
+// repointUnrecordedRenamesHelp is the def's Description, which the native kind
+// carries as its Help.
+const repointUnrecordedRenamesHelp = "Repairs rows whose file a rename moved on disk but whose new path could not be written " +
+	"to the database. Reads the records the rename pipelines leave, and for each one writes new_path " +
+	"into the book_file row (or the book row) only when new_path exists on disk and the row still holds " +
+	"old_path, as one atomic compare-and-write; anything else is skipped and its record kept. Dry-run by " +
+	"default; apply=true writes and clears each record after its repoint succeeds. Never moves files, " +
+	"never deletes rows, skips iTunes paths."
+
+// repointUnrecordedRenamesKind is rule R3's kind for the def below.
+const repointUnrecordedRenamesKind = tasks.Kind("books.maintenance.repoint-unrecorded-renames")
+
 func (p *Plugin) repointUnrecordedRenamesDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.repoint-unrecorded-renames",
@@ -101,12 +114,7 @@ func (p *Plugin) repointUnrecordedRenamesDef() sdk.OperationDef {
 		ProgressTimeout: 10 * time.Minute,
 		Plugin:          "maintenance",
 		DisplayName:     "Repoint unrecorded renames",
-		Description: "Repairs rows whose file a rename moved on disk but whose new path could not be written " +
-			"to the database. Reads the records the rename pipelines leave, and for each one writes new_path " +
-			"into the book_file row (or the book row) only when new_path exists on disk and the row still holds " +
-			"old_path, as one atomic compare-and-write; anything else is skipped and its record kept. Dry-run by " +
-			"default; apply=true writes and clears each record after its repoint succeeds. Never moves files, " +
-			"never deletes rows, skips iTunes paths.",
+		Description:     repointUnrecordedRenamesHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.repoint-unrecorded-renames",
@@ -134,22 +142,133 @@ func (p *Plugin) runRepointUnrecordedRenames(ctx context.Context, rawParams json
 	if store == nil {
 		return fmt.Errorf("repoint-unrecorded-renames: no store")
 	}
-	// Fail closed: an iTunes sync with no configured roots is an error here,
-	// as it is for every merge-family write (merge.GuardITunesProtected).
+	env := repointUnrecordedRenamesEnv{
+		t6g7Env: t6g7HeadEnv(reporter, params.Apply),
+		Store:   repointUnrecordedRenamesHeadStore{store},
+		Writer:  store,
+	}
+	res, runErr := repointUnrecordedRenamesCore(ctx, params.Apply, env)
+	if res.Outcomes != nil {
+		if err := env.SetResult(res); err != nil {
+			env.Log(slog.LevelWarn, fmt.Sprintf("could not persist result data: %v", err))
+		}
+	}
+	return runErr
+}
+
+// repointUnrecordedRenamesHeadStore is HEAD's reads: the retired-aware list of
+// book_file rows resolves through the store's capability (it fails closed).
+type repointUnrecordedRenamesHeadStore struct {
+	repointHeadReads
+}
+
+// repointHeadReads is the calls HEAD's store answers directly.
+type repointHeadReads interface {
+	GetAllPreferencesForUser(userID string) ([]database.UserPreferenceKV, error)
+	LiveBookIDsAtPath(path string) ([]string, error)
+	GetBookByID(id string) (*database.Book, error)
+	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
+}
+
+// GetBookFileByID reads the row the way HEAD's dry run always did: through the
+// row's own compare-and-write with a callback that skips the write, so the row
+// is read under its stripe and nothing is written.
+func (s repointUnrecordedRenamesHeadStore) GetBookFileByID(bookID, fileID string) (*database.BookFile, error) {
+	var got *database.BookFile
+	_, err := s.ModifyBookFile(bookID, fileID, func(bf *database.BookFile) error {
+		c := *bf
+		got = &c
+		return database.ErrSkipBookFileWrite
+	})
+	return got, err
+}
+
+func (s repointUnrecordedRenamesHeadStore) GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
+	return database.AllBookFilesCoreIncludingRetired(s.repointHeadReads)
+}
+
+// unrecordedRenameBase is the reads the core takes.
+type unrecordedRenameBase interface {
+	GetAllPreferencesForUser(userID string) ([]database.UserPreferenceKV, error)
+	LiveBookIDsAtPath(path string) ([]string, error)
+	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
+	GetBookByID(id string) (*database.Book, error)
+}
+
+// repointUnrecordedRenamesEnv is what the core takes from its shell.
+type repointUnrecordedRenamesEnv struct {
+	t6g7Env
+	Store unrecordedRenameStore
+	// Writer is nil in a dry run: a dry run reads the rows and decides, it never
+	// takes a row's write lock.
+	Writer unrecordedRenameWriter
+}
+
+// repointUnrecordedRenamesNative is the native kind. Preview is the dry run
+// HEAD's default was; Live repoints and clears the records. The result is the
+// per-record report HEAD stored on the op row.
+func (p *Plugin) repointUnrecordedRenamesNative(deps t6g7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g7Common(repointUnrecordedRenamesKind, sched)
+	c.Title = "Repoint unrecorded renames"
+	c.Help = repointUnrecordedRenamesHelp
+	c.Effects = tasks.Writes(t6g7Res(resources.Union(t6WriterResources["ModifyBookFile"],
+		t6WriterResources["ModifyBook"], t6WriterResources["SetUserPreferenceForUser"])...)...)
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.repoint-unrecorded-renames")
+	c.Timeout = 30 * time.Minute
+	c.ProgressTimeout = 10 * time.Minute
+	return tasks.Task(repointUnrecordedRenamesKind, tasks.TaskSpec[json.RawMessage, repointUnrecordedRenamesResult]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (repointUnrecordedRenamesResult, error) {
+			// HEAD's only param is apply, which the run's mode decides.
+			if err := t6g7RefuseModeKeys(repointUnrecordedRenamesKind, raw); err != nil {
+				return repointUnrecordedRenamesResult{}, err
+			}
+			if err := t6g7NeedDep(repointUnrecordedRenamesKind, "Store", deps.Store != nil); err != nil {
+				return repointUnrecordedRenamesResult{}, err
+			}
+			live := rc.Mode() == tasks.ModeLive
+			env := repointUnrecordedRenamesEnv{t6g7Env: t6g7NativeEnv(rc), Store: deps.Store}
+			if live {
+				w, err := t6g7NewWriter(repointUnrecordedRenamesKind, deps, rc)
+				if err != nil {
+					return repointUnrecordedRenamesResult{}, err
+				}
+				env.Writer = w
+			}
+			return repointUnrecordedRenamesCore(rc.Context(), live, env)
+		},
+	})
+}
+
+// repointUnrecordedRenamesParallelism is the op's concurrency, as HEAD's pool:
+// units of records that share one new path run in one worker, so no two workers
+// ever decide about the same destination.
+func repointUnrecordedRenamesParallelism() tasks.Parallelism {
+	return tasks.Fixed(repointUnrecordedRenamesConcurrency, "units of records that share a destination path run in one worker, so no two workers decide about the same new path; the writes are row-locked compare-and-writes")
+}
+
+// repointUnrecordedRenamesCore is the body of runRepointUnrecordedRenames.
+func repointUnrecordedRenamesCore(ctx context.Context, apply bool, env repointUnrecordedRenamesEnv) (repointUnrecordedRenamesResult, error) {
+	store := env.Store
+	if store == nil {
+		return repointUnrecordedRenamesResult{}, fmt.Errorf("repoint-unrecorded-renames: no store")
+	}
+	if apply && env.Writer == nil {
+		return repointUnrecordedRenamesResult{}, fmt.Errorf("repoint-unrecorded-renames: no writer for a live run")
+	}
 	roots, err := merge.ITunesProtectedRoots(config.Snapshot().ITunes)
 	if err != nil {
-		return fmt.Errorf("repoint-unrecorded-renames: %w", err)
+		return repointUnrecordedRenamesResult{}, fmt.Errorf("repoint-unrecorded-renames: %w", err)
 	}
 
-	// The preference store has no list-by-prefix read, so this loads the
-	// `_system` keyspace and filters, as clear-apply-rename-failures does.
 	prefs, err := store.GetAllPreferencesForUser("_system")
 	if err != nil {
-		return fmt.Errorf("list _system preferences: %w", err)
+		return repointUnrecordedRenamesResult{}, fmt.Errorf("list _system preferences: %w", err)
 	}
 	var records []repointRecord
 	for _, pref := range prefs {
-		// A blank value is an already-cleared record.
 		if !strings.HasPrefix(pref.Key, organizer.RenamePathWriteFailurePrefix) || strings.TrimSpace(pref.Value) == "" {
 			continue
 		}
@@ -161,10 +280,10 @@ func (p *Plugin) runRepointUnrecordedRenames(ctx context.Context, rawParams json
 
 	claims, err := bookFileClaims(store, records)
 	if err != nil {
-		return fmt.Errorf("repoint-unrecorded-renames: %w", err)
+		return repointUnrecordedRenamesResult{}, fmt.Errorf("repoint-unrecorded-renames: %w", err)
 	}
 
-	res := repointUnrecordedRenamesResult{Apply: params.Apply, Records: len(records), Outcomes: map[string]int{}}
+	res := repointUnrecordedRenamesResult{Apply: apply, Records: len(records), Outcomes: map[string]int{}}
 	var mu sync.Mutex
 	add := func(row repointUnrecordedRenameRow) {
 		mu.Lock()
@@ -173,34 +292,25 @@ func (p *Plugin) runRepointUnrecordedRenames(ctx context.Context, rawParams json
 		res.Rows = append(res.Rows, row)
 	}
 
-	// Records are grouped so that every record aiming at one new path, for one
-	// row kind, runs on ONE worker in key order. Different units therefore name
-	// different rows (a record's key is its row) AND different new paths, so two
-	// workers can neither write the same row nor both pass the (d) claim check
-	// for the same new path; within a unit, the record after a repoint sees the
-	// path as claimed.
-	runErr := opsregistry.RunItems(ctx, reporter, groupRepointRecords(records), func(ctx context.Context, unit repointUnit) error {
+	units := groupRepointRecords(records)
+	runErr := env.Items(ctx, repointUnrecordedRenamesParallelism(), len(units), t6g7ItemsOptions{Collect: true}, func(ctx context.Context, i int) error {
 		claimedBy := ""
-		for _, r := range unit {
-			row := repointOne(ctx, store, roots, r, params, claims, claimedBy)
+		for _, r := range units[i] {
+			row := repointOne(ctx, store, env.Writer, roots, r, apply, claims, claimedBy)
 			if claimedBy == "" && (row.Outcome == repointOutcomeRepointed || row.Outcome == repointOutcomeWouldRepoint || row.Outcome == repointOutcomeAlreadyAtNew) {
 				claimedBy = repointRowID(r.rec)
 			}
 			add(row)
 		}
 		return nil
-	}, opsregistry.RunItemsOptions{Concurrency: repointUnrecordedRenamesConcurrency, ErrMode: opsregistry.ErrModeCollect})
+	})
 
 	sort.Slice(res.Rows, func(i, j int) bool { return res.Rows[i].Key < res.Rows[j].Key })
-	summary := fmt.Sprintf("Unrecorded renames: %d records, outcomes %v (apply=%t)", res.Records, res.Outcomes, params.Apply)
-	_ = reporter.Log(slog.LevelInfo, summary)
-	if err := opsregistry.ReporterSetResult(reporter, res); err != nil {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("could not persist result data: %v", err))
-	}
-	return runErr
+	summary := fmt.Sprintf("Unrecorded renames: %d records, outcomes %v (apply=%t)", res.Records, res.Outcomes, apply)
+	env.Log(slog.LevelInfo, summary)
+	return res, runErr
 }
 
-// repointUnit is the records one worker processes in order.
 type repointUnit []repointRecord
 
 // groupRepointRecords puts every readable record with the same row kind and
@@ -263,7 +373,7 @@ func bookFileClaims(store unrecordedRenameStore, records []repointRecord) (map[s
 	if len(want) == 0 {
 		return nil, nil
 	}
-	files, err := database.AllBookFilesCoreIncludingRetired(store)
+	files, err := store.GetAllBookFilesCoreIncludingRetired()
 	if err != nil {
 		return nil, fmt.Errorf("list book files: %w", err)
 	}
@@ -299,8 +409,13 @@ func underITunes(p string, roots []string) bool {
 
 // unrecordedRenameStore is what one run needs of OpsStore.
 type unrecordedRenameStore interface {
-	GetAllBookFilesCore() ([]database.BookFileCore, error)
-	LiveBookIDsAtPath(path string) ([]string, error)
+	unrecordedRenameBase
+	GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error)
+}
+
+// unrecordedRenameWriter is the three writes: the compare-and-write of a
+// book_file row's path, of a book row's path, and the clearing of a record.
+type unrecordedRenameWriter interface {
 	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	SetUserPreferenceForUser(userID string, key string, value string) error
@@ -319,7 +434,7 @@ func newPathKindOK(rec organizer.RenamePathWriteFailure, fi fs.FileInfo) bool {
 	return fi.Mode().IsRegular() || fi.IsDir()
 }
 
-func repointOne(ctx context.Context, store unrecordedRenameStore, roots []string, r repointRecord, params repointUnrecordedRenamesParams, claims map[string][]string, claimedBy string) repointUnrecordedRenameRow {
+func repointOne(ctx context.Context, store unrecordedRenameStore, w unrecordedRenameWriter, roots []string, r repointRecord, apply bool, claims map[string][]string, claimedBy string) repointUnrecordedRenameRow {
 	row := repointUnrecordedRenameRow{
 		Key: r.key, BookID: r.rec.BookID, BookFileID: r.rec.BookFileID, OldPath: r.rec.OldPath, NewPath: r.rec.NewPath,
 	}
@@ -349,14 +464,14 @@ func repointOne(ctx context.Context, store unrecordedRenameStore, roots []string
 		// which runs under the store's write lock and could re-enter it. Its
 		// error is applied only to a row that still holds old_path.
 		chk.bookIDs, chk.bookIDsErr = store.LiveBookIDsAtPath(r.rec.NewPath)
-		row = repointBookRow(store, r, row, chk, params.Apply)
+		row = repointBookRow(store, w, r, row, chk, apply)
 	} else {
-		row = repointBookFileRow(store, r, row, chk, params.Apply)
+		row = repointBookFileRow(store, w, r, row, chk, apply)
 	}
 	// Clear only after a successful write, or when the row already holds
 	// new_path (a write that committed but reported failure). Never in a dry run.
-	if params.Apply && (row.Outcome == repointOutcomeRepointed || row.Outcome == repointOutcomeAlreadyAtNew) {
-		if err := organizer.ClearRenamePathWriteFailure(store, r.rec.BookID, r.rec.BookFileID); err != nil {
+	if apply && (row.Outcome == repointOutcomeRepointed || row.Outcome == repointOutcomeAlreadyAtNew) {
+		if err := organizer.ClearRenamePathWriteFailure(w, r.rec.BookID, r.rec.BookFileID); err != nil {
 			row.Detail = strings.TrimSpace(row.Detail + " record could not be cleared: " + err.Error())
 		} else {
 			row.Cleared = true
@@ -471,40 +586,32 @@ func oldPathPresent(rec organizer.RenamePathWriteFailure) (bool, string, error) 
 	return false, "", nil
 }
 
-// repointBookFileRow is one atomic compare-and-write under the row's
-// book_file stripe: the old_path compare is made on the row as stored at write
-// time, never on an earlier read, and the preconditions are checked only once
-// it has passed.
-func repointBookFileRow(store unrecordedRenameStore, r repointRecord, row repointUnrecordedRenameRow, chk repointCheck, apply bool) repointUnrecordedRenameRow {
-	ran := false
-	_, err := store.ModifyBookFile(r.rec.BookID, r.rec.BookFileID, func(bf *database.BookFile) error {
-		ran = true
-		switch {
-		case bf.FilePath == r.rec.NewPath:
-			row.Outcome = repointOutcomeAlreadyAtNew
-			return database.ErrSkipBookFileWrite
-		case bf.FilePath != r.rec.OldPath:
-			row.Outcome, row.Detail = repointOutcomeRowChanged, "row holds "+bf.FilePath
-			return database.ErrSkipBookFileWrite
-		}
-		if blk, err := chk.blockers(); err != nil {
-			row.Outcome, row.Detail = repointOutcomeError, err.Error()
-			return database.ErrSkipBookFileWrite
-		} else if blk.outcome != "" {
-			row.Outcome, row.Detail = blk.outcome, blk.detail
-			return database.ErrSkipBookFileWrite
-		}
-		if !apply {
-			row.Outcome = repointOutcomeWouldRepoint
-			return database.ErrSkipBookFileWrite
-		}
-		bf.FilePath = r.rec.NewPath
-		if r.rec.NewITunesPath != "" {
-			bf.ITunesPath = r.rec.NewITunesPath
-		}
-		row.Outcome = repointOutcomeRepointed
-		return nil
-	})
+// repointStep is the decision both a live write and a dry run make about one
+// row, given the path the row holds NOW: it records the outcome and reports
+// stop when the row must not be written.
+func repointStep(r repointRecord, row *repointUnrecordedRenameRow, chk repointCheck, held string) (stop bool) {
+	switch {
+	case held == r.rec.NewPath:
+		row.Outcome = repointOutcomeAlreadyAtNew
+		return true
+	case held != r.rec.OldPath:
+		row.Outcome, row.Detail = repointOutcomeRowChanged, "row holds "+held
+		return true
+	}
+	blk, err := chk.blockers()
+	if err != nil {
+		row.Outcome, row.Detail = repointOutcomeError, err.Error()
+		return true
+	}
+	if blk.outcome != "" {
+		row.Outcome, row.Detail = blk.outcome, blk.detail
+		return true
+	}
+	return false
+}
+
+// repointFinish folds a row write's (or dry read's) result into the row.
+func repointFinish(row repointUnrecordedRenameRow, ran bool, err error) repointUnrecordedRenameRow {
 	switch {
 	case err != nil:
 		row.Outcome, row.Detail = repointOutcomeError, err.Error()
@@ -514,39 +621,59 @@ func repointBookFileRow(store unrecordedRenameStore, r repointRecord, row repoin
 	return row
 }
 
-// repointBookRow is the book-row twin, under the book's write stripe.
-func repointBookRow(store unrecordedRenameStore, r repointRecord, row repointUnrecordedRenameRow, chk repointCheck, apply bool) repointUnrecordedRenameRow {
-	ran := false
-	_, err := store.ModifyBook(r.rec.BookID, func(fresh *database.Book) error {
-		ran = true
-		switch {
-		case fresh.FilePath == r.rec.NewPath:
-			row.Outcome = repointOutcomeAlreadyAtNew
-			return database.ErrSkipBookWrite
-		case fresh.FilePath != r.rec.OldPath:
-			row.Outcome, row.Detail = repointOutcomeRowChanged, "row holds "+fresh.FilePath
-			return database.ErrSkipBookWrite
+// repointBookFileRow is one atomic compare-and-write under the row's
+// book_file stripe: the old_path compare is made on the row as stored at write
+// time, never on an earlier read, and the preconditions are checked only once
+// it has passed. A dry run (no writer) decides the same way on a read of the
+// row and takes no lock.
+func repointBookFileRow(store unrecordedRenameStore, w unrecordedRenameWriter, r repointRecord, row repointUnrecordedRenameRow, chk repointCheck, apply bool) repointUnrecordedRenameRow {
+	if !apply {
+		bf, err := store.GetBookFileByID(r.rec.BookID, r.rec.BookFileID)
+		if err != nil || bf == nil {
+			return repointFinish(row, bf != nil, err)
 		}
-		if blk, err := chk.blockers(); err != nil {
-			row.Outcome, row.Detail = repointOutcomeError, err.Error()
-			return database.ErrSkipBookWrite
-		} else if blk.outcome != "" {
-			row.Outcome, row.Detail = blk.outcome, blk.detail
-			return database.ErrSkipBookWrite
-		}
-		if !apply {
+		if !repointStep(r, &row, chk, bf.FilePath) {
 			row.Outcome = repointOutcomeWouldRepoint
+		}
+		return row
+	}
+	ran := false
+	_, err := w.ModifyBookFile(r.rec.BookID, r.rec.BookFileID, func(bf *database.BookFile) error {
+		ran = true
+		if repointStep(r, &row, chk, bf.FilePath) {
+			return database.ErrSkipBookFileWrite
+		}
+		bf.FilePath = r.rec.NewPath
+		if r.rec.NewITunesPath != "" {
+			bf.ITunesPath = r.rec.NewITunesPath
+		}
+		row.Outcome = repointOutcomeRepointed
+		return nil
+	})
+	return repointFinish(row, ran, err)
+}
+
+// repointBookRow is the book-row twin, under the book's write stripe.
+func repointBookRow(store unrecordedRenameStore, w unrecordedRenameWriter, r repointRecord, row repointUnrecordedRenameRow, chk repointCheck, apply bool) repointUnrecordedRenameRow {
+	if !apply {
+		b, err := store.GetBookByID(r.rec.BookID)
+		if err != nil || b == nil {
+			return repointFinish(row, b != nil, err)
+		}
+		if !repointStep(r, &row, chk, b.FilePath) {
+			row.Outcome = repointOutcomeWouldRepoint
+		}
+		return row
+	}
+	ran := false
+	_, err := w.ModifyBook(r.rec.BookID, func(fresh *database.Book) error {
+		ran = true
+		if repointStep(r, &row, chk, fresh.FilePath) {
 			return database.ErrSkipBookWrite
 		}
 		fresh.FilePath = r.rec.NewPath
 		row.Outcome = repointOutcomeRepointed
 		return nil
 	})
-	switch {
-	case err != nil:
-		row.Outcome, row.Detail = repointOutcomeError, err.Error()
-	case !ran:
-		row.Outcome = repointOutcomeRowGone
-	}
-	return row
+	return repointFinish(row, ran, err)
 }

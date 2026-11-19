@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g7.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 8e3a5d17-2c94-4b60-a1f8-6d07c9e4b352
 // last-edited: 2026-11-19
 
@@ -561,6 +561,7 @@ type t6g7Store interface {
 	titleRepairStore
 	userMergeStore
 	tagBackfillStore
+	unrecordedRenameStore
 }
 
 // t6g7Writer is every write the 15 definitions make, composed from each
@@ -574,6 +575,7 @@ type t6g7Writer interface {
 	tagBackfillWriter
 	bulkWriteBackWriter
 	userMergeWriter
+	unrecordedRenameWriter
 }
 
 // t6g7Deps is what the native kinds are built from. Every field is set once, by
@@ -618,6 +620,7 @@ func t6g7KindList(p *Plugin, deps t6g7Deps, sched func(tasks.Kind) *tasks.Schedu
 		p.bulkWriteBackNative(deps, sched),
 		p.userMergeNative(deps, sched),
 		p.tagBackfillNative(deps, sched),
+		p.repointUnrecordedRenamesNative(deps, sched),
 	}
 }
 
