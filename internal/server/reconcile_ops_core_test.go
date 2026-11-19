@@ -62,6 +62,7 @@ func TestReconcileScanCore(t *testing.T) {
 		require.Equal(t, 1, touches, "the engine's heartbeat must stamp the run's liveness")
 		require.Equal(t, []string{"op-scan"}, act.flushed)
 		require.Equal(t, []string{"op-scan|reconcile.scan|Reconcile scan completed"}, act.emitted)
+		require.Equal(t, []string{"reconcile"}, act.sources)
 	})
 
 	t.Run("a failure is wrapped, keeps the partial result and says failed", func(t *testing.T) {
@@ -144,6 +145,7 @@ func TestReconcileApplyCore(t *testing.T) {
 		require.NotNil(t, w.gotLog)
 		require.Equal(t, []string{"op-apply"}, w.flushed)
 		require.Equal(t, []string{"op-apply|reconcile.apply|Reconcile apply completed: 2 matches applied"}, w.emitted)
+		require.Equal(t, []string{"reconcile"}, w.sources)
 	})
 
 	t.Run("a failure is returned unwrapped and announced", func(t *testing.T) {
