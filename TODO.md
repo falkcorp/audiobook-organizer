@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.78.57 -->
+<!-- version: 10.78.56 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -297,7 +298,7 @@ into one of the curated sections below, is a normal direct edit.
       this changes behaviour today). Two oracle gaps in
       `internal/maintenance/jobs/writes_oracle_test.go` and
       `writes_trace_test.go`, and three F5-18 preparation items.
-      - Rewrite the SSA walk on `golang.org/x/tools/go/callgraph/vta` (or
+      - **Done 2026-11-19 (F5-18m, #4768):** Rewrite the SSA walk on `golang.org/x/tools/go/callgraph/vta` (or
         `cha`) over the same program. It follows an interface call into its
         implementations, which removes the hand alias for
         `tagger.LibraryImporter.ImportPath`, and it follows functions passed as
@@ -305,7 +306,7 @@ into one of the curated sections below, is a normal direct edit.
         through a non-store name (for example `dedup.dedupBookWriter.RevertBookToVersion`)
         is dropped silently, because only names that start with a write verb or
         have a table row are classified.
-      - Key `traceInert` by `"<receiver>.<method>"`, as `traceAliases` already is.
+      - **Done 2026-11-19 (F5-18m, #4768):** Key `traceInert` by `"<receiver>.<method>"`, as `traceAliases` already is.
         It matches a bare method name on any receiver, so a future write named
         `Move` or `Locked` on another type would be ignored.
       - Make write-set deferral visible before the flip: surface the deferral
@@ -322,11 +323,11 @@ into one of the curated sections below, is a normal direct edit.
         locking (a per-book resource ID through `RunItems`) instead of a
         whole-kind write set, so a scheduled kind waits for one batch and not for
         a job's 4h timeout.
-      - No test checks that `taglib_cgo.go` and `taglib_support.go` reach the
+      - **Done 2026-11-19 (F5-18m, #4768, `TestTaglibVariants_ReachTheSameWriteHelpers`):** No test checks that `taglib_cgo.go` and `taglib_support.go` reach the
         same write helpers. The write-set oracle walks the non-cgo variant;
         production ships the cgo one (`native_taglib`), which cannot be loaded
         without cgo and the vendored libraries.
-      - `FailJobWritesWith` (in `export_writes_test.go`) swaps a package
+      - **Done 2026-11-19 (F5-18m, #4768, replaced by `KindsWithFailingWrites` over `KindDeps.writes`):** `FailJobWritesWith` (in `export_writes_test.go`) swaps a package
         variable, so it is unsafe under `t.Parallel`.
 
 - [ ] **TODO-CHECKTITLE-SHARED-SEGMENT** `applygate.checkTitle` (`internal/applygate/evidence.go`, the variant loop at lines 335-366) agrees on a SHARED TITLE SEGMENT: it compares the candidate's whole title and its part before ":" or a spaced dash against the book's whole title and each of the book's segments, and `best >= 0.85` is an agree. Two volumes of one storyline share the segment before the colon, so the title check agrees for the wrong volume. Measured against `origin/main` (not the sequence work): with the leading list number stripped from the stored title and file name and a stale stored position, main APPLIES four of five pairs: stored "Hush: Part 1" with file "Hush: Part 1.m4b" and stale position 2 against candidate "Hush: Part 2" #2; stored "Hush: Part 2" and stale position 1 against "Hush: Part 1" #1; stored "Hush: Part I" with file "Hush Part I.m4b" and stale position 2 against "Hush: Part II" #2; stored "Batman: Dark Victory" and stale position 1 against "Batman: The Long Halloween" with subtitle "The Prelude to Dark Victory" #1 (runtime within 5% on every pair). The fifth, stored "Batman: Year 2" and position 1 against "Batman: Year One" #1, is refused by main as a book sequence conflict (the title's own 2 against position 1). The fix belongs to its own PR: a title check that also requires the candidate's whole `Title` field (not only its main part, and not the subtitle) to be covered by the book's title, with roman numerals, digits and number words folded and single-letter numerals kept. Related gap, also on main: the `already_applied` skip exists only in `planCachedApply` (`internal/server/batch_apply_one.go:444-447`); `planOpResultApply` (same file, lines 568-615, used by the candidate-batch route and `apply_when_scanned_op.go`) has no `MetadataApplied` check, so an applied book gets a fresh fetch and is gated again on that path.
