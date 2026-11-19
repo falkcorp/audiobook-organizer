@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge_relink_test.go
-// version: 1.6.2
+// version: 1.7.0
 // guid: 9444cf3d-482c-4380-9243-4bcfd66af5ee
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -40,7 +40,15 @@ type relinkFixture struct {
 	tags map[string][]database.BookTag
 	// tagErr fails GetBookTagsDetailed for a book.
 	tagErr map[string]error
-	store  *database.MockStore
+	// locked marks a book's author as user-locked (author_name); lockErr fails
+	// every field-state read of a book; lockFlipAt[id] = n makes the n-th and
+	// later field-state reads of the book report the author locked, a lock the
+	// user saves part-way through the run. stateReads counts the reads.
+	locked     map[string]bool
+	lockErr    map[string]error
+	lockFlipAt map[string]int
+	stateReads map[string]int
+	store      *database.MockStore
 }
 
 func newRelinkFixture() *relinkFixture {
@@ -73,14 +81,26 @@ func (f *relinkFixture) run(t *testing.T, params string) (*stripMergeCalls, stri
 		}
 		return f.tags[bookID], nil
 	}
+	if f.stateReads == nil {
+		f.stateReads = map[string]int{}
+	}
 	store.GetMetadataFieldStatesFunc = func(bookID string) ([]database.MetadataFieldState, error) {
+		f.stateReads[bookID]++
+		if err := f.lockErr[bookID]; err != nil {
+			return nil, err
+		}
+		lock := f.locked[bookID] || (f.lockFlipAt[bookID] > 0 && f.stateReads[bookID] >= f.lockFlipAt[bookID])
 		v, ok := f.fetched[bookID]
-		if !ok {
+		if !ok && !lock {
 			return nil, nil
 		}
-		raw, _ := json.Marshal(v)
-		s := string(raw)
-		return []database.MetadataFieldState{{BookID: bookID, Field: "author_name", FetchedValue: &s}}, nil
+		st := database.MetadataFieldState{BookID: bookID, Field: "author_name", OverrideLocked: lock}
+		if ok {
+			raw, _ := json.Marshal(v)
+			s := string(raw)
+			st.FetchedValue = &s
+		}
+		return []database.MetadataFieldState{st}, nil
 	}
 	store.GetAuthorByNameFunc = func(name string) (*database.Author, error) {
 		for _, a := range authors {

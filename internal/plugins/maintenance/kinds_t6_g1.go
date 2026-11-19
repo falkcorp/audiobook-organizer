@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g1.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 4494039c-1a79-4b3b-9872-ecea118f76ad
-// last-edited: 2026-11-15
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -649,6 +649,9 @@ func (w t6g1HeadWriter) RecordOperationChange(change *database.OperationChange) 
 
 // t6g1MergeReader is the reads an author merge makes beyond the library lists.
 type t6g1MergeReader interface {
+	// The user's field locks: a merge leaves a book whose author the user locked
+	// alone (mergeAuthorIntoVia).
+	database.MetadataFieldStateReader
 	GetBooksByAuthorIDForRelinkCore(authorID int) ([]database.BookCore, error)
 	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
 	// CanMergeDelete reports whether the store merge-deletes an author (moving its

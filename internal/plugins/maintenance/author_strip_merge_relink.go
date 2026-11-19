@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge_relink.go
-// version: 1.3.4
+// version: 1.4.0
 // guid: 771dc90a-8f91-40e6-93bc-60611ebe58b5
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -95,7 +95,10 @@ const (
 	titleRelinkOutcomeConflict    = "conflict"
 	titleRelinkOutcomeITunes      = "skipped-itunes"
 	titleRelinkOutcomeOwnerManual = "skipped-owner-manual"
-	titleRelinkOutcomeFailed      = "failed"
+	// titleRelinkOutcomeUserLocked: the user locked the book's author
+	// (author_name); the book keeps its credits and primary author.
+	titleRelinkOutcomeUserLocked = "skipped-user-locked"
+	titleRelinkOutcomeFailed     = "failed"
 	// titleRelinkOutcomeAmbiguous: the one answer names two or more existing
 	// author rows (duplicate rows normalize to one name). Picking one would
 	// be a guess, the same reason the op reports an ambiguous merge.
@@ -255,7 +258,8 @@ func acceptableRelinkName(name string, book database.BookCore, junk database.Aut
 type titleRelinkStore interface {
 	GetBooksByAuthorIDForRelinkCore(authorID int) ([]database.BookCore, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
-	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
+	// The field-state read for the candidate names, and the user's locks.
+	database.MetadataFieldStateReader
 	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
 	SetBookAuthors(bookID string, authors []database.BookAuthor) error
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
@@ -431,6 +435,21 @@ func relinkOneTitleBook(store titleRelinkStore, mo applygate.ManualOnlyReaders, 
 		return r
 	}
 
+	// The user's lock on the author comes before anything is created or
+	// journaled for this book: a held book writes nothing. A lock set that cannot
+	// be read fails the book, never reads as "not locked". relinkBookCredit asks
+	// again at the write, under the book's write lock.
+	locks, err := database.LoadFieldLocks(store, book.ID)
+	if err != nil {
+		r.Outcome = titleRelinkOutcomeFailed
+		log.Warn("author-strip-merge relink: the book's field locks cannot be read; book skipped", "book_id", book.ID, "err", err)
+		return r
+	}
+	if locks.Locked(database.FieldKeyAuthorName) {
+		r.Outcome = titleRelinkOutcomeUserLocked
+		return r
+	}
+
 	states, err := store.GetMetadataFieldStates(book.ID)
 	if err != nil {
 		r.Outcome = titleRelinkOutcomeFailed
@@ -534,9 +553,16 @@ func relinkOneTitleBook(store titleRelinkStore, mo applygate.ManualOnlyReaders, 
 			"book_id", book.ID, "from_id", junk.ID, "into_id", author.ID, "err", jErr)
 		return r
 	}
-	primaryErr, err := relinkBookCredit(store, book, junk, author, false)
+	held, primaryErr, err := relinkBookCredit(store, book, junk, author, false)
 	if err == nil {
 		err = primaryErr
+	}
+	if err == nil && held {
+		// A lock saved after the check above: nothing (or only the credits, when
+		// it landed between the two writes) was moved, and the book is counted as
+		// held, not relinked.
+		r.Outcome = titleRelinkOutcomeUserLocked
+		return r
 	}
 	if err != nil {
 		r.Outcome = titleRelinkOutcomeFailed
