@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/kinds_chain_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6d01f54f-d1e9-4cf7-8def-037dd38e3e04
 // last-edited: 2026-11-19
 
@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -430,6 +431,66 @@ func TestDedupChain_RunAllFailsAChildInterruptedDuringTheLiveWait(t *testing.T) 
 	err := runKindOn(t, def, h, "")
 	require.ErrorContains(t, err, `ended as "interrupted_dropped"`)
 	require.Len(t, h.enqueuedRuns(), 1, "the failed step is not started a second time")
+}
+
+// A child the kernel starts without an id is an error worded for the kernel, and
+// no wait follows it. HEAD's shell words the same case for the registry.
+func TestDedupChain_ARunWithNoIDIsRefusedInEachShellsWords(t *testing.T) {
+	setEmbeddings(t, true)
+	_, d := newChainSpy()
+	for name, mk := range map[string]func() tasks.Definition{
+		"run-all":          func() tasks.Definition { return (&Plugin{}).runAllNative(d, nil) },
+		"label-refinement": func() tasks.Definition { return (&Plugin{}).labelRefinementNative(d, nil) },
+	} {
+		t.Run("native "+name, func(t *testing.T) {
+			def := mk()
+			h := newKindHost(def, tasks.ModeLive, &sentinelWriter{})
+			h.emptyRunID = true
+			err := runKindOn(t, def, h, "")
+			require.ErrorContains(t, err, "the kernel returned no run id for ")
+			require.Empty(t, h.awaitedIDs(), "nothing is awaited")
+		})
+	}
+
+	p, _, _, _ := newRunAllPlugin(t, true)
+	p.registry = noIDRegistry{}
+	err := p.runRunAll(context.Background(), liveJSON, &runAllReporter{})
+	require.ErrorContains(t, err, "the registry returned no operation id for dedup.embed-scan")
+	err = p.runLabelRefinement(context.Background(), nil, &runAllReporter{})
+	require.ErrorContains(t, err, "the registry returned no operation id for dedup.rebuild-gold-labels")
+}
+
+// noIDRegistry accepts every enqueue and returns no operation id.
+type noIDRegistry struct{ *runAllRegistry }
+
+func (noIDRegistry) EnqueueOp(context.Context, string, any, ...sdk.EnqueueOption) (string, error) {
+	return "", nil
+}
+
+// While a child runs, the parent saves its position at most once a minute
+// (runAllCheckpointEvery), not on every row change: a burst of progress adds one
+// save (the first, which stamps a non-zero high-water mark) and no more.
+func TestDedupChain_RunAllThrottlesTheCheckpointWhileAChildRuns(t *testing.T) {
+	saves := func(rows []database.OperationV2Row) int {
+		p, _, ops, _ := newRunAllPlugin(t, true)
+		ops.byDef["dedup.full-scan"] = rows
+		rep := &runAllReporter{}
+		params := mustJSON(t, runAllState{DryRun: opmode.Live(), Plan: []string{"find"}})
+		require.NoError(t, p.runRunAll(context.Background(), params, rep))
+		rep.mu.Lock()
+		defer rep.mu.Unlock()
+		return len(rep.checkpoints)
+	}
+	quiet := saves([]database.OperationV2Row{{Status: "completed"}})
+	busy := saves([]database.OperationV2Row{
+		{Status: "running", ProgressCurrent: 1, ProgressTotal: 100, ProgressMessage: "a"},
+		{Status: "running", ProgressCurrent: 2, ProgressTotal: 100, ProgressMessage: "b"},
+		{Status: "running", ProgressCurrent: 3, ProgressTotal: 100, ProgressMessage: "c"},
+		{Status: "running", ProgressCurrent: 4, ProgressTotal: 100, ProgressMessage: "d"},
+		{Status: "running", ProgressCurrent: 5, ProgressTotal: 100, ProgressMessage: "e"},
+		{Status: "completed"},
+	})
+	require.Equal(t, quiet+1, busy, "five row changes cost one extra save, not five")
 }
 
 func TestDedupChain_RunAllRefusesACorruptCheckpointPlan(t *testing.T) {

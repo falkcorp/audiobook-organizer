@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/kinds_test.go
-// version: 1.1.3
+// version: 1.2.0
 // guid: 74d898af-e4c2-4b28-9fc7-5a2b749513d4
 // last-edited: 2026-11-19
 
@@ -261,6 +261,8 @@ type kindHost struct {
 	onAwait func(ref tasks.RunRef) (tasks.Outcome, error)
 	// enqueueErr, when set, fails rc.Enqueue.
 	enqueueErr error
+	// emptyRunID, when set, makes rc.Enqueue return a ref with no id.
+	emptyRunID bool
 	notes      []string
 	awaited    []string
 	logs       bytes.Buffer
@@ -376,6 +378,9 @@ func (h *kindHost) Enqueue(k tasks.Kind, params any, opts ...tasks.StartOption) 
 		o(&req)
 	}
 	id := fmt.Sprintf("child-%d", len(h.enqueued)+1)
+	if h.emptyRunID {
+		return tasks.RunRef{}, nil
+	}
 	h.enqueued = append(h.enqueued, enqueuedRun{Kind: k, Params: raw, Mode: req.Mode, ID: id})
 	return tasks.RunRef{ID: tasks.RunID(id)}, nil
 }
