@@ -1,5 +1,5 @@
 // file: core/kernel/config_keys.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c2e4a90-3b1d-4f68-8a15-d09e6b3f2c71
 // last-edited: 2026-11-18
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 
 	"github.com/falkcorp/mediacore/config"
 )
@@ -41,10 +42,7 @@ func CoreKeys() (map[config.Path]config.KeyState, error) {
 	if err := st.Load(ctx); err != nil {
 		return nil, fmt.Errorf("kernel: core keys: load: %w", err)
 	}
-	out := map[config.Path]config.KeyState{}
-	for p, ks := range st.Keys() {
-		out[p] = ks
-	}
+	out := maps.Collect(st.Keys())
 	if err := st.Close(ctx); err != nil {
 		return nil, fmt.Errorf("kernel: core keys: close: %w", err)
 	}
