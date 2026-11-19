@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/state_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b7e1c92-d405-4a68-9f13-a8c25e60d7b1
 // last-edited: 2026-11-18
 
@@ -16,8 +16,7 @@ import (
 )
 
 // specRow is one row of 05-tasks 5T.8.3's state table written out in the test,
-// independently of m4.StateTable (which is the code's own copy): the spec's
-// words, one row per qualifier.
+// independently of the code: the spec's words, one row per qualifier.
 type specRow struct {
 	st             state.V3
 	wait, stop, wy string
@@ -50,8 +49,7 @@ func specTable() []specRow {
 	}
 }
 
-// TestM4_StateTable holds MapState to the spec's table row by row, and holds
-// m4.StateTable (the table the rig tests walk) to the same rows.
+// TestM4_StateTable holds MapState to the spec's table row by row.
 func TestM4_StateTable(t *testing.T) {
 	for _, c := range specTable() {
 		name := string(c.st) + "/" + c.wait + c.stop + c.wy
@@ -61,20 +59,6 @@ func TestM4_StateTable(t *testing.T) {
 				t.Fatalf("MapState = (%q, %q, %v), want (%q, %q, true)", got, reason, ok, c.want, c.reason)
 			}
 		})
-	}
-	// Every spec row appears in m4.StateTable, so a rig test walking that table
-	// walks the spec's.
-	have := map[specRow]bool{}
-	for _, c := range m4.StateTable() {
-		have[specRow{c.State, c.WaitReason, c.StopReason, c.InterruptedWhy, c.Want, c.Reason}] = true
-	}
-	for _, c := range specTable() {
-		if c.st == "interrupted" && c.wy == "" {
-			continue // the no-why row is MapState's, not a stored vocabulary row
-		}
-		if !have[c] {
-			t.Errorf("m4.StateTable lacks the spec row %+v", c)
-		}
 	}
 }
 

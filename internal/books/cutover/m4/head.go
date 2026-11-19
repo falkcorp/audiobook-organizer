@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/head.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3b7e1c94-d2a6-4f08-95b1-6c0e8a47d213
 // last-edited: 2026-11-18
 
@@ -213,6 +213,29 @@ type runRow struct {
 	CompletedAt    *time.Time      `json:"completed_at"`
 	Priority       int             `json:"priority"`
 	EventSeq       uint64          `json:"evt_seq"`
+}
+
+// runExtrasRow is the part of opv3:run: that has no native home (store.RunRecord's
+// Approval, ItemOutcomes, PipelineStage, IdemKey, SuccessorID, TraceID and
+// SpanID), carried as it was read.
+type runExtrasRow struct {
+	Approval      json.RawMessage `json:"approval,omitempty"`
+	ItemOutcomes  *itemCounts     `json:"item_outcomes,omitempty"`
+	PipelineStage string          `json:"pipeline_stage,omitempty"`
+	IdemKey       string          `json:"idem_key,omitempty"`
+	SuccessorID   string          `json:"successor_id,omitempty"`
+	TraceID       string          `json:"trace_id,omitempty"`
+	SpanID        string          `json:"span_id,omitempty"`
+}
+
+// itemCounts is store.ItemOutcomeCounts.
+type itemCounts struct {
+	Stored  int64 `json:"stored"`
+	Dropped int64 `json:"dropped"`
+}
+
+func (x runExtrasRow) empty() bool {
+	return (len(x.Approval) == 0 || string(x.Approval) == "null") && x.ItemOutcomes == nil && x.PipelineStage == "" && x.IdemKey == "" && x.SuccessorID == "" && x.TraceID == "" && x.SpanID == ""
 }
 
 type headActor struct {

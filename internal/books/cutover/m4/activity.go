@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m4/activity.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5b1f8d36-c4a7-4e09-9d52-0a63e7b1c8f4
 // last-edited: 2026-11-18
 
@@ -53,13 +53,32 @@ const (
 
 	reasonActivityKey  = "the activity row's key does not decode"
 	reasonActivityBody = "the activity row does not decode"
+	// reasonActivityRepairs holds a repairs row (type, details.def_id or def:
+	// tag repairs.plan or repairs.apply) whose kind cannot be found: its kind
+	// is books.repairs.<fixer_id>, and only the run it belongs to knows the
+	// fixer. The row has no operation_id, or the run is not in the task store
+	// (never imported, quarantined or pruned), or the run's kind is not a
+	// repairs kind. It stays as stored, listed, rather than naming a def ID
+	// the task store no longer has.
+	reasonActivityRepairs = "a repairs row whose run is not in the task store as a repairs run, so its fixer is unknown"
 )
+
+// RunReader is the task store's read of one run record: tasks.RunStore.Get.
+// It returns an error wrapping tasks.ErrRunNotFound for a run it does not hold.
+type RunReader interface {
+	Get(ctx context.Context, id tasks.RunID) (tasks.RunRecord, error)
+}
 
 // activityKey is act:<tier>:<20 digit unix nano>:<ulid>.
 var activityKey = regexp.MustCompile(`^act:([a-z]+):([0-9]{20}):([^:]+)$`)
 
 // ActivityConfig is what the rewrite needs besides its declaration.
 type ActivityConfig struct {
+	// Runs is the task store's run reader, bound by the runner after the store
+	// is open (like Config.Legacy), over the runs M4 imported: a repairs row
+	// (repairs.plan, repairs.apply) is renamed to its run's kind,
+	// books.repairs.<fixer_id>, and only the run knows the fixer. Required.
+	Runs func() RunReader
 	// Logger receives one line per held row (its key's class, never a
 	// value). nil discards.
 	Logger *slog.Logger
@@ -69,6 +88,7 @@ type ActivityConfig struct {
 // independent (the runner steps shards concurrently).
 type Activity struct {
 	logger                *slog.Logger
+	runs                  func() RunReader
 	rewritten, kept, held atomic.Int64
 }
 
@@ -91,7 +111,10 @@ func NewActivity(cfg ActivityConfig, id string, raisesLevel int, after []storage
 	case len(after) == 0:
 		return datamigrate.DataMigration{}, errors.New("m4: after holds books' level step and M4")
 	}
-	a := &Activity{logger: cfg.Logger}
+	if cfg.Runs == nil {
+		return datamigrate.DataMigration{}, errors.New("m4: ActivityConfig.Runs is the task store's run reader (a repairs row's kind comes from its run)")
+	}
+	a := &Activity{logger: cfg.Logger, runs: cfg.Runs}
 	if a.logger == nil {
 		a.logger = slog.New(slog.DiscardHandler)
 	}
@@ -120,18 +143,69 @@ func NewActivity(cfg ActivityConfig, id string, raisesLevel int, after []storage
 // kindOf is the kind a stored HEAD def ID is renamed to: the generated entry's,
 // by Lookup, not Resolve, so a type that is no def ID (a feed type like
 // scan_complete) is never turned into a retired kind. ok is false for such a
-// type, and for repairs.plan and repairs.apply, whose kind needs a run's
-// fixer_id an activity row does not carry: those stay as stored.
-func kindOf(id string) (string, bool) {
-	t, ok := kindrename.Lookup(id)
-	if !ok || t.Kind == "" {
-		return "", false
+// type. repairs.plan and repairs.apply have a Marker and no Kind (the fixer
+// names it per run): they report repairs true, and the caller asks the run.
+func kindOf(id string) (kind string, repairs, ok bool) {
+	t, found := kindrename.Lookup(id)
+	if !found {
+		return "", false, false
 	}
-	return string(t.Kind), true
+	if t.Kind == "" {
+		return "", t.Marker == kindrename.MarkerRepairsPlan || t.Marker == kindrename.MarkerRepairsApply, false
+	}
+	return string(t.Kind), false, true
+}
+
+// errNoRepairsKind says a repairs reference could not be resolved to a kind.
+var errNoRepairsKind = errors.New("m4: a repairs reference has no run to take its kind from")
+
+// kinds resolves the def IDs of one feed row. opID is the operation the
+// reference belongs to (the row's operation_id; a digest item's op: tag).
+type kinds struct {
+	ctx  context.Context
+	runs RunReader
+	// cache holds the kind each run resolved to, so a digest of many items of
+	// one run reads it once.
+	cache map[string]string
+}
+
+// kind is the kind def is renamed to, found false when def is no def ID. A
+// repairs def is resolved from the run opID names; errNoRepairsKind when there
+// is none, the run is absent or its kind is not books.repairs.<fixer_id>, and
+// any other error from the reader as it is (the step fails and is retried).
+func (k *kinds) kind(def, opID string) (string, bool, error) {
+	kind, repairs, ok := kindOf(def)
+	switch {
+	case ok:
+		return kind, true, nil
+	case !repairs:
+		return "", false, nil
+	case opID == "":
+		return "", false, errNoRepairsKind
+	}
+	if got, hit := k.cache[opID]; hit {
+		if got == "" {
+			return "", false, errNoRepairsKind
+		}
+		return got, true, nil
+	}
+	rec, err := k.runs.Get(k.ctx, tasks.RunID(opID))
+	switch {
+	case errors.Is(err, tasks.ErrRunNotFound):
+		k.cache[opID] = ""
+		return "", false, errNoRepairsKind
+	case err != nil:
+		return "", false, fmt.Errorf("m4: read run %q for an activity row: %w", opID, err)
+	case !strings.HasPrefix(string(rec.Kind), kindrename.RepairsKindPrefix):
+		k.cache[opID] = ""
+		return "", false, errNoRepairsKind
+	}
+	k.cache[opID] = string(rec.Kind)
+	return string(rec.Kind), true, nil
 }
 
 // Step rewrites one primary row.
-func (a *Activity) Step(_ context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
+func (a *Activity) Step(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
 	m := activityKey.FindStringSubmatch(string(kv.Key))
 	if m == nil {
 		return a.hold(kv, w, reasonActivityKey)
@@ -141,8 +215,13 @@ func (a *Activity) Step(_ context.Context, kv storage.KV, w *datamigrate.StepWri
 	if json.Unmarshal(kv.Value, &row) != nil || row == nil {
 		return a.hold(kv, w, reasonActivityBody)
 	}
-	oldType, newType, changed, ok := rewriteEntry(tier, row)
-	if !ok {
+	oldType, newType, changed, ok, err := rewriteEntry(tier, row, &kinds{ctx: ctx, runs: a.runs(), cache: map[string]string{}})
+	switch {
+	case errors.Is(err, errNoRepairsKind):
+		return a.hold(kv, w, reasonActivityRepairs)
+	case err != nil:
+		return err
+	case !ok:
 		return a.hold(kv, w, reasonActivityBody)
 	}
 	if !changed {
@@ -208,43 +287,65 @@ func typeIndexKey(typ, tier, nanos, ulid string) []byte {
 // rewriteEntry renames the def IDs in one decoded row in place. changed is
 // whether any field changed; oldType and newType are the entry's own type
 // before and after (the digest tier's own type, daily_digest, never changes).
-// ok is false for a row whose renamed fields do not decode.
-func rewriteEntry(tier string, row map[string]json.RawMessage) (oldType, newType string, changed, ok bool) {
+// ok is false for a row whose renamed fields do not decode. err is
+// errNoRepairsKind for a repairs reference with no kind to take, or a reader
+// error; the row is then not to be written (it may be half renamed).
+func rewriteEntry(tier string, row map[string]json.RawMessage, ks *kinds) (oldType, newType string, changed, ok bool, err error) {
+	var opID string
+	if raw, has := row["operation_id"]; has {
+		_ = json.Unmarshal(raw, &opID) // a non-string operation_id names no run
+	}
 	if raw, has := row["type"]; has {
 		if json.Unmarshal(raw, &oldType) != nil {
-			return "", "", false, false
+			return "", "", false, false, nil
 		}
 	}
 	newType = oldType
 	if tier != "digest" {
-		if k, found := kindOf(oldType); found {
+		k, found, err := ks.kind(oldType, opID)
+		if err != nil {
+			return "", "", false, false, err
+		}
+		if found {
 			newType = k
 			row["type"], _ = json.Marshal(k)
 			changed = true
 		}
 	}
-	if tags, c, good := renameTags(row["tags"]); !good {
-		return "", "", false, false
-	} else if c {
+	tags, c, good, err := renameTags(row["tags"], opID, ks)
+	if err != nil {
+		return "", "", false, false, err
+	}
+	if !good {
+		return "", "", false, false, nil
+	}
+	if c {
 		row["tags"] = tags
 		changed = true
 	}
 	if raw, has := row["details"]; has && string(raw) != "null" {
 		var det map[string]json.RawMessage
 		if json.Unmarshal(raw, &det) != nil {
-			return "", "", false, false
+			return "", "", false, false, nil
 		}
 		dc := false
 		if tier == "digest" {
-			c, good := renameDigestItems(det)
+			c, good, err := renameDigestItems(det, ks)
+			if err != nil {
+				return "", "", false, false, err
+			}
 			if !good {
-				return "", "", false, false
+				return "", "", false, false, nil
 			}
 			dc = c
 		} else if id, has := det["def_id"]; has {
 			var s string
 			if json.Unmarshal(id, &s) == nil {
-				if k, found := kindOf(s); found {
+				k, found, err := ks.kind(s, opID)
+				if err != nil {
+					return "", "", false, false, err
+				}
+				if found {
 					det["def_id"], _ = json.Marshal(k)
 					dc = true
 				}
@@ -253,65 +354,97 @@ func rewriteEntry(tier string, row map[string]json.RawMessage) (oldType, newType
 		if dc {
 			out, err := encode(det)
 			if err != nil {
-				return "", "", false, false
+				return "", "", false, false, nil
 			}
 			row["details"] = out
 			changed = true
 		}
 	}
-	return oldType, newType, changed, true
+	return oldType, newType, changed, true, nil
 }
 
 // renameTags rewrites the def:<id> tags of a tags array (nil or null: none).
-func renameTags(raw json.RawMessage) (json.RawMessage, bool, bool) {
+// opID is the operation the tags belong to, for a repairs def.
+func renameTags(raw json.RawMessage, opID string, ks *kinds) (out json.RawMessage, changed, ok bool, err error) {
 	if len(raw) == 0 || string(raw) == "null" {
-		return raw, false, true
+		return raw, false, true, nil
 	}
 	var tags []string
 	if json.Unmarshal(raw, &tags) != nil {
-		return nil, false, false
+		return nil, false, false, nil
 	}
-	changed := false
 	for i, t := range tags {
-		if id, ok := strings.CutPrefix(t, "def:"); ok {
-			if k, found := kindOf(id); found {
+		if id, has := strings.CutPrefix(t, "def:"); has {
+			k, found, err := ks.kind(id, opID)
+			if err != nil {
+				return nil, false, false, err
+			}
+			if found {
 				tags[i] = "def:" + k
 				changed = true
 			}
 		}
 	}
 	if !changed {
-		return raw, false, true
+		return raw, false, true, nil
 	}
-	out, err := encode(tags)
-	return out, err == nil, err == nil
+	enc, err := encode(tags)
+	return enc, err == nil, err == nil, nil
+}
+
+// opOfTags is the operation a digest item's tags name: its one op:<id> tag. ""
+// when it has none or several, so a repairs item with no single operation is
+// held rather than guessed.
+func opOfTags(raw json.RawMessage) string {
+	var tags []string
+	if json.Unmarshal(raw, &tags) != nil {
+		return ""
+	}
+	id := ""
+	for _, t := range tags {
+		if v, has := strings.CutPrefix(t, "op:"); has && v != "" {
+			if id != "" && id != v {
+				return ""
+			}
+			id = v
+		}
+	}
+	return id
 }
 
 // renameDigestItems renames the type and def: tags of each item of a daily
-// digest's details.
-func renameDigestItems(det map[string]json.RawMessage) (changed, ok bool) {
+// digest's details. An item's operation is its op: tag.
+func renameDigestItems(det map[string]json.RawMessage, ks *kinds) (changed, ok bool, err error) {
 	raw, has := det["items"]
 	if !has || string(raw) == "null" {
-		return false, true
+		return false, true, nil
 	}
 	var items []map[string]json.RawMessage
 	if json.Unmarshal(raw, &items) != nil {
-		return false, false
+		return false, false, nil
 	}
 	for _, it := range items {
+		opID := opOfTags(it["tags"])
 		if tr, has := it["type"]; has {
 			var s string
 			if json.Unmarshal(tr, &s) != nil {
-				return false, false
+				return false, false, nil
 			}
-			if k, found := kindOf(s); found {
+			k, found, err := ks.kind(s, opID)
+			if err != nil {
+				return false, false, err
+			}
+			if found {
 				it["type"], _ = json.Marshal(k)
 				changed = true
 			}
 		}
-		tags, c, good := renameTags(it["tags"])
+		tags, c, good, err := renameTags(it["tags"], opID, ks)
+		if err != nil {
+			return false, false, err
+		}
 		if !good {
-			return false, false
+			return false, false, nil
 		}
 		if c {
 			it["tags"] = tags
@@ -319,14 +452,14 @@ func renameDigestItems(det map[string]json.RawMessage) (changed, ok bool) {
 		}
 	}
 	if !changed {
-		return false, true
+		return false, true, nil
 	}
 	out, err := encode(items)
 	if err != nil {
-		return false, false
+		return false, false, nil
 	}
 	det["items"] = out
-	return true, true
+	return true, true, nil
 }
 
 // encode is json.Marshal without HTML escaping, so a rewritten row's other
