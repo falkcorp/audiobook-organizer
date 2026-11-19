@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/asin_backfill.go
-// version: 1.12.6
+// version: 1.13.0
 // guid: c4e9a2f7-1d36-4b85-9a0e-6f2b8d31c7a4
-// last-edited: 2026-11-17
+// last-edited: 2026-11-19
 
 package metafetch
 
@@ -62,6 +62,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -75,6 +77,20 @@ import (
 
 const (
 	asinBackfillOpID = "metafetch.asin-backfill"
+
+	// asinBackfillKind is rule R3's native kind for metafetch.asin-backfill.
+	asinBackfillKind = tasks.Kind("books.metafetch.asin-backfill")
+
+	// asinBackfillHelp is HEAD's Description and the native Help (rule R5).
+	asinBackfillHelp = "Walks every book with no ASIN and searches Audible ONLY (never Google Books or Open Library) " +
+		"by title+author and, when the book has an ISBN, by that ISBN. Writes an ASIN only when exactly one Audible " +
+		"product passes the gate: equal title or a one-sided subtitle difference (volume numbers reject), a matching " +
+		"author, no series-position or runtime conflict, and at least one corroboration (audiobook ISBN, runtime within " +
+		"10%, or series name+position). Fills only empty, unlocked ASINs and records history per book. A no-match is " +
+		"remembered for retry_after_days (default 30). Also fills the audiobook ISBN-13 from Audible: alongside a matched " +
+		"ASIN, and for books that already have an ASIN but no ISBN by looking that ASIN up directly. An ISBN is written " +
+		"only when the book has none and ISBN-13 is unlocked. Defaults to a dry run; dry_run=false applies. Params: dry_run, " +
+		"book_ids, retry_after_days, limit, workers (default 4)."
 
 	// asinBackfillDefaultWorkers is the book pool. Audible's bucket is the real
 	// throttle (8 req/s configured); four workers keep it full while a worker
@@ -216,6 +232,109 @@ type asinBackfillStore interface {
 
 var _ asinBackfillStore = (database.Store)(nil)
 
+// asinBackfillReads is every read the core takes (rule R10): the book walk, the
+// readers the shared helpers take (field locks, authors, files, the owner-manual
+// guard's tags and series, the owner's rejections) and the raw reads (the
+// no-match markers and the shared answer cache). It has no write method.
+type asinBackfillReads interface {
+	database.MetadataFieldStateReader
+	database.BookAuthorReader
+	database.BookFilesGetter
+	applygate.ManualOnlyTagReader
+	metafetch.RejectedCandidateReader
+	GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error)
+	GetBookByID(id string) (*database.Book, error)
+	GetSeriesByID(id int) (*database.Series, error)
+	CountAllBooks() (int, error)
+	GetRaw(key string) ([]byte, error)
+}
+
+// asinBackfillWriter is every write the core makes (rule R10), each named for
+// the HEAD store method it wraps. SetRawASINMiss and SetRawPCache are the same
+// store method (SetRaw) on two key families, so a writer can tell them apart:
+// the no-match markers (asinbackfill:miss:, asinbackfill:isbnmiss:, resource
+// asin_misses) and the shared provider-answer cache (pcache:, metadata_cache).
+// A dry run never calls any of them, so its Writer may be nil.
+type asinBackfillWriter interface {
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+	RecordMetadataChange(record *database.MetadataChangeRecord) error
+	SetRawASINMiss(key string, value []byte) error
+	SetRawPCache(key string, value []byte) error
+}
+
+// asinBackfillEnv is what the core takes from its shell. Live is HEAD's
+// dry_run=false. NewClient builds the Audible client per book.
+type asinBackfillEnv struct {
+	kindEnv
+	Store     asinBackfillReads
+	Writer    asinBackfillWriter
+	NewClient func() audibleIdentitySearcher
+}
+
+// headASINBackfillWriter is HEAD's writes for the core: the store's ModifyBook,
+// RecordMetadataChange and SetRaw (both key families).
+type headASINBackfillWriter struct{ store asinBackfillStore }
+
+func (h headASINBackfillWriter) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	return h.store.ModifyBook(id, fn)
+}
+func (h headASINBackfillWriter) RecordMetadataChange(record *database.MetadataChangeRecord) error {
+	return h.store.RecordMetadataChange(record)
+}
+func (h headASINBackfillWriter) SetRawASINMiss(key string, value []byte) error {
+	return h.store.SetRaw(key, value)
+}
+func (h headASINBackfillWriter) SetRawPCache(key string, value []byte) error {
+	return h.store.SetRaw(key, value)
+}
+
+// asinPCacheView is the database.PCacheStore the shared answer cache is handed:
+// reads come from the run's reads, writes from its writer (a dry run reads only).
+type asinPCacheView struct {
+	reads interface {
+		GetRaw(key string) ([]byte, error)
+	}
+	writer asinBackfillWriter
+}
+
+func (v asinPCacheView) GetRaw(key string) ([]byte, error) { return v.reads.GetRaw(key) }
+func (v asinPCacheView) SetRaw(key string, value []byte) error {
+	if v.writer == nil {
+		return errors.New("shared answer cache write in a run with no writer")
+	}
+	return v.writer.SetRawPCache(key, value)
+}
+
+// asinBackfillNativeParams is asinBackfillParams without the dry_run keys: the
+// native run's mode comes from the start request (05-tasks 5T.3.7).
+type asinBackfillNativeParams struct {
+	BookIDs        []string `json:"book_ids,omitempty"`
+	RetryAfterDays *int     `json:"retry_after_days,omitempty"`
+	Limit          int      `json:"limit,omitempty"`
+	Workers        int      `json:"workers,omitempty"`
+	AfterBookID    string   `json:"after_book_id,omitempty"`
+}
+
+// headParams is the params struct the core takes (the dry_run keys unset).
+func (n asinBackfillNativeParams) headParams() asinBackfillParams {
+	return asinBackfillParams{BookIDs: n.BookIDs, RetryAfterDays: n.RetryAfterDays, Limit: n.Limit, Workers: n.Workers, AfterBookID: n.AfterBookID}
+}
+
+// asinBackfillWorkers is HEAD's worker-count rule: default 4, clamped 1..8.
+func asinBackfillWorkers(params asinBackfillParams) int {
+	workers := params.Workers
+	if workers <= 0 {
+		workers = asinBackfillDefaultWorkers
+	}
+	return min(workers, asinBackfillMaxWorkers)
+}
+
+// asinBackfillParallelism is the book pool's parallelism (rule R4): HEAD's
+// RunItemsOptions.Concurrency, the workers param.
+func asinBackfillParallelism(workers int) tasks.Parallelism {
+	return tasks.Fixed(workers, "Audible's token bucket is the throttle; workers param, default 4, clamped 1..8")
+}
+
 func (p *Plugin) asinBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          asinBackfillOpID,
@@ -223,15 +342,7 @@ func (p *Plugin) asinBackfillDef() sdk.OperationDef {
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "metafetch",
 		DisplayName: "Backfill missing ASINs and ISBNs from Audible",
-		Description: "Walks every book with no ASIN and searches Audible ONLY (never Google Books or Open Library) " +
-			"by title+author and, when the book has an ISBN, by that ISBN. Writes an ASIN only when exactly one Audible " +
-			"product passes the gate: equal title or a one-sided subtitle difference (volume numbers reject), a matching " +
-			"author, no series-position or runtime conflict, and at least one corroboration (audiobook ISBN, runtime within " +
-			"10%, or series name+position). Fills only empty, unlocked ASINs and records history per book. A no-match is " +
-			"remembered for retry_after_days (default 30). Also fills the audiobook ISBN-13 from Audible: alongside a matched " +
-			"ASIN, and for books that already have an ASIN but no ISBN by looking that ASIN up directly. An ISBN is written " +
-			"only when the book has none and ISBN-13 is unlocked. Defaults to a dry run; dry_run=false applies. Params: dry_run, " +
-			"book_ids, retry_after_days, limit, workers (default 4).",
+		Description: asinBackfillHelp,
 		// ResumeRestart with a page cursor: a resumed run restarts at the
 		// last fully drained page. Books before it that still lack an ASIN
 		// were searched (marker written) or skipped, so even a from-zero
@@ -466,17 +577,22 @@ func (t *asinBackfillTally) result(dry bool, historyFailed int) asinBackfillResu
 
 // asinBackfillRun is one run's resolved state.
 type asinBackfillRun struct {
-	store     asinBackfillStore
-	newClient func() audibleIdentitySearcher
-	writer    *repairs.Writer
-	log       logger.LevelLogger
-	tally     *asinBackfillTally
-	dry       bool
-	retry     time.Duration // 0 = ignore markers
-	limit     int64
-	now       func() time.Time
+	store      asinBackfillReads
+	raw        asinBackfillWriter // nil in a dry run: markers and cache rows are live-only
+	newClient  func() audibleIdentitySearcher
+	items      kindItemsFunc
+	checkpoint func(state any) error
+	writer     *repairs.Writer
+	log        logger.LevelLogger
+	tally      *asinBackfillTally
+	dry        bool
+	retry      time.Duration // 0 = ignore markers
+	limit      int64
+	now        func() time.Time
 }
 
+// runASINBackfill is the v2 shell: HEAD's Run (params, the store assertion, the
+// Audible client factory, the result row) over asinBackfillCore.
 func (p *Plugin) runASINBackfill(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 	var params asinBackfillParams
 	if len(raw) > 0 {
@@ -503,63 +619,99 @@ func (p *Plugin) runASINBackfill(ctx context.Context, raw json.RawMessage, repor
 		newClient = func() audibleIdentitySearcher { return metadata.NewAudibleClient() }
 	}
 
+	res, runErr := asinBackfillCore(ctx, params, asinBackfillEnv{
+		kindEnv: headEnv(reporter, !dry), Store: store, Writer: headASINBackfillWriter{store: store}, NewClient: newClient,
+	})
+	if err := registry.ReporterSetResult(reporter, res); err != nil {
+		logger.New("asin-backfill").Warn("persisting the result failed: %s", logger.SanitizeLogValue(err.Error()))
+	}
+	return runErr
+}
+
+// asinBackfillCore is the body of runASINBackfill, shared by both shells. It
+// returns the result even when the run failed: HEAD persisted it either way.
+func asinBackfillCore(ctx context.Context, params asinBackfillParams, env asinBackfillEnv) (asinBackfillResult, error) {
+	dry := !env.Live
 	retryDays := asinBackfillDefaultRetryDays
 	if params.RetryAfterDays != nil {
 		retryDays = max(*params.RetryAfterDays, 0)
 	}
-	workers := params.Workers
-	if workers <= 0 {
-		workers = asinBackfillDefaultWorkers
-	}
-	workers = min(workers, asinBackfillMaxWorkers)
+	workers := asinBackfillWorkers(params)
 
 	run := &asinBackfillRun{
-		store:     store,
-		newClient: newClient,
-		writer:    repairs.NewWriter(store, store, asinHistorySource, asinHistoryChangeType, asinHistoryBatch),
-		log:       logger.New("asin-backfill"),
-		tally:     newASINBackfillTally(),
-		dry:       dry,
-		retry:     time.Duration(retryDays) * 24 * time.Hour,
-		limit:     int64(max(params.Limit, 0)),
-		now:       time.Now,
+		store:      env.Store,
+		newClient:  env.NewClient,
+		items:      env.Items,
+		checkpoint: env.Checkpoint,
+		log:        logger.New("asin-backfill"),
+		tally:      newASINBackfillTally(),
+		dry:        dry,
+		retry:      time.Duration(retryDays) * 24 * time.Hour,
+		limit:      int64(max(params.Limit, 0)),
+		now:        time.Now,
+	}
+	if env.Live {
+		run.raw = env.Writer
+		run.writer = repairs.NewWriter(env.Writer, env.Writer, asinHistorySource, asinHistoryChangeType, asinHistoryBatch)
+	}
+	cursor := params.AfterBookID
+	if len(params.BookIDs) == 0 && env.Restore != nil {
+		// A native resume: HEAD's registry overlays the checkpoint onto the
+		// params before Run (a key present in the checkpoint wins); here the
+		// run reads its own checkpoint, decoded from HEAD's bytes. A failed
+		// read starts from the params, as a failed merge did.
+		var cp asinBackfillCheckpoint
+		if ok, rerr := env.Restore(&cp); rerr != nil {
+			run.log.Warn("reading the checkpoint failed; starting from the params: %s", logger.SanitizeLogValue(rerr.Error()))
+		} else if ok {
+			cursor = cp.AfterBookID
+		}
 	}
 	run.log.Info("starting: dry_run=%t workers=%d retry_after_days=%d limit=%d book_ids=%d resume_after=%s",
-		dry, workers, retryDays, params.Limit, len(params.BookIDs), logger.SanitizeLogValue(params.AfterBookID))
+		dry, workers, retryDays, params.Limit, len(params.BookIDs), logger.SanitizeLogValue(cursor))
 
 	var runErr error
 	if len(params.BookIDs) > 0 {
-		runErr = run.runBookIDs(ctx, reporter, params.BookIDs, workers)
+		runErr = run.runBookIDs(ctx, params.BookIDs, workers)
 	} else {
-		runErr = run.runLibrary(ctx, reporter, params.AfterBookID, workers)
+		runErr = run.runLibrary(ctx, cursor, workers)
 	}
 
-	res := run.tally.result(dry, run.writer.HistoryFailed())
-	if err := registry.ReporterSetResult(reporter, res); err != nil {
-		run.log.Warn("persisting the result failed: %s", logger.SanitizeLogValue(err.Error()))
+	historyFailed := 0
+	if run.writer != nil {
+		historyFailed = run.writer.HistoryFailed()
 	}
+	res := run.tally.result(dry, historyFailed)
 	run.log.Info("finished (dry_run=%t): %s; rejects=%v evidence=%v asin_suspect=%d %v asin_unverified=%d %v manual_only=%d merged=%d load_failed=%d proposals_kept=%d proposals_dropped_by_cap=%d err=%v",
 		dry, run.tally.summary(dry), res.RejectReasons, res.Evidence, res.ASINSuspect, res.SuspectReasons,
 		res.ASINUnverified, res.UnverifiedReasons, res.SkippedManualOnly, res.SkippedMerged, res.LoadFailed,
 		len(res.Proposals), res.ProposalsDropped, runErr)
-	return runErr
+	return res, runErr
 }
 
-func (r *asinBackfillRun) options(offset, total, workers int) registry.RunItemsOptions {
-	return registry.RunItemsOptions{
-		Concurrency:    workers,
-		ProgressOffset: offset,
-		ProgressTotal:  total,
-		// Runs inside the workers: reads only atomics (summary).
+// itemsOptions is the progress placement and label of one page of books.
+func (r *asinBackfillRun) itemsOptions(offset, total int) kindItemsOptions {
+	return kindItemsOptions{
+		ProgressBase:  offset,
+		ProgressTotal: total,
+		// Reads the tally's counters, so only HEAD's pool carries it (a counter
+		// label cannot be native: the kernel's label is pure). It runs inside
+		// the workers and reads only atomics (summary).
 		Label: func(i, t int) string {
 			return fmt.Sprintf("Books %d/%d (%s)", offset+i+1, t, r.tally.summary(r.dry))
 		},
 	}
 }
 
+// runBooks runs processBook over books on the shell's pool, asinBackfillParallelism(workers) wide.
+func (r *asinBackfillRun) runBooks(ctx context.Context, books []database.Book, offset, total, workers int) error {
+	return r.items(ctx, asinBackfillParallelism(workers), len(books), r.itemsOptions(offset, total),
+		func(ctx context.Context, i int) error { return r.processBook(ctx, books[i]) })
+}
+
 // runLibrary walks the whole library one page at a time from the cursor,
 // checkpointing after each fully drained page.
-func (r *asinBackfillRun) runLibrary(ctx context.Context, reporter sdk.Reporter, cursor string, workers int) error {
+func (r *asinBackfillRun) runLibrary(ctx context.Context, cursor string, workers int) error {
 	total, err := r.store.CountAllBooks()
 	if err != nil {
 		r.log.Warn("counting books failed; progress is unsized: %s", logger.SanitizeLogValue(err.Error()))
@@ -577,12 +729,12 @@ func (r *asinBackfillRun) runLibrary(ctx context.Context, reporter sdk.Reporter,
 		if len(page) == 0 {
 			return nil
 		}
-		if err := registry.RunItems(ctx, reporter, page, r.processBook, r.options(done, max(total, done+len(page)), workers)); err != nil {
+		if err := r.runBooks(ctx, page, done, max(total, done+len(page)), workers); err != nil {
 			return err
 		}
 		done += len(page)
 		cursor = page[len(page)-1].ID
-		if err := reporter.Checkpoint(asinBackfillCheckpoint{AfterBookID: cursor}); err != nil {
+		if err := r.checkpoint(asinBackfillCheckpoint{AfterBookID: cursor}); err != nil {
 			r.log.Warn("checkpoint at %s failed: %s", logger.SanitizeLogValue(cursor), logger.SanitizeLogValue(err.Error()))
 		}
 		if r.limit > 0 && r.tally.searched.Load() >= r.limit {
@@ -592,7 +744,7 @@ func (r *asinBackfillRun) runLibrary(ctx context.Context, reporter sdk.Reporter,
 }
 
 // runBookIDs processes exactly the named books.
-func (r *asinBackfillRun) runBookIDs(ctx context.Context, reporter sdk.Reporter, ids []string, workers int) error {
+func (r *asinBackfillRun) runBookIDs(ctx context.Context, ids []string, workers int) error {
 	books := make([]database.Book, 0, len(ids))
 	for _, id := range ids {
 		b, err := r.store.GetBookByID(strings.TrimSpace(id))
@@ -608,7 +760,7 @@ func (r *asinBackfillRun) runBookIDs(ctx context.Context, reporter sdk.Reporter,
 		}
 		books = append(books, *b)
 	}
-	return registry.RunItems(ctx, reporter, books, r.processBook, r.options(0, len(books), workers))
+	return r.runBooks(ctx, books, 0, len(books), workers)
 }
 
 // countRetired adds a retired book to the counter for its shape: trashed or
@@ -855,7 +1007,7 @@ func (r *asinBackfillRun) search(ctx context.Context, bookID string, f asinBookF
 	client := r.newClient()
 	use := metafetch.IdentitySearchCache{Refresh: refresh, ReadOnly: r.dry}
 	ask := func(q metadata.AudibleIdentityQuery) ([]metadata.AudibleIdentity, error) {
-		return metafetch.CachedIdentitySearch(ctx, r.store, bookID, client, q, use)
+		return metafetch.CachedIdentitySearch(ctx, asinPCacheView{reads: r.store, writer: r.raw}, bookID, client, q, use)
 	}
 	var out []metadata.AudibleIdentity
 	seenISBN := map[string]bool{}
@@ -1064,7 +1216,7 @@ func (r *asinBackfillRun) markRaw(key string, m asinMissMarker) {
 	}
 	data, err := json.Marshal(m)
 	if err == nil {
-		err = r.store.SetRaw(key, data)
+		err = r.raw.SetRawASINMiss(key, data)
 	}
 	if err != nil {
 		r.log.Warn("recording the no-match marker failed (book will be looked at again next run): key=%s err=%s",

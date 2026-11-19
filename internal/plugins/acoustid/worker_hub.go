@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/worker_hub.go
-// version: 1.14.2
+// version: 1.15.1
 // guid: b2279415-b876-42b0-97f0-bea586ad4923
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package acoustid
 
@@ -179,8 +179,12 @@ type workerJob struct {
 // hubRun is one attached live run. Every field below mu-guarded is only
 // touched with WorkerHub.mu held.
 type hubRun struct {
-	p     *Plugin
-	tally *windowTally
+	// store reads a ref's stored windows (the calibration build and the repost
+	// check); writer is how a remote worker's accepted result is stored: the
+	// run's own writer, so natively it is gated like the server lane's writes.
+	store  kindStore
+	writer kindWriter
+	tally  *windowTally
 	// server is the pair the run's windows are judged against: the server's
 	// own tools, or in a remote-only run the configured reference pair.
 	server  fingerprint.ToolVersionInfo
@@ -341,16 +345,20 @@ func versionsAllowed(allowed []workerapi.ToolVersions, fp, ff string) bool {
 
 // ---- op side ----
 
-// attach makes run the live run the endpoints serve and starts the sweeper.
-// The op's ConcurrencyKey guarantees one live run at a time.
-//
-// In a remote-only run wt carries only Versions, the reference pair: the
-// equivalence class and the lease allowlist are built from it, and the
-// server's own pair (never resolved) is in neither.
-func (h *WorkerHub) attach(ctx context.Context, p *Plugin, wt fingerprint.WindowTools, tally *windowTally, calib []windowItem, mode hubMode) {
+// hubRunDeps is what a run hands the hub besides its tools (rule R10): the read
+// store, the writer remote results are stored through, and the scan probe.
+type hubRunDeps struct {
+	store  kindStore
+	writer kindWriter
+	probe  libraryScanProbe
+}
+
+// attachVia is attach with the run's own store, writer and probe.
+func (h *WorkerHub) attachVia(ctx context.Context, env hubRunDeps, wt fingerprint.WindowTools, tally *windowTally, calib []windowItem, mode hubMode) {
 	sctx, cancel := context.WithCancel(ctx)
 	r := &hubRun{
-		p:          p,
+		store:      env.store,
+		writer:     env.writer,
 		tally:      tally,
 		server:     wt.Versions,
 		allowed:    allowedToolVersions(wt.Versions),
@@ -365,7 +373,7 @@ func (h *WorkerHub) attach(ctx context.Context, p *Plugin, wt fingerprint.Window
 		// bootstrapped/pendingSeen are guarded by calibMu/mu respectively.
 		bootstrapped: map[string]int{},
 		pendingSeen:  map[string]pendingWorker{},
-		probe:        p.currentScanProbe(),
+		probe:        env.probe,
 		cancel:       cancel,
 		sweepDone:    make(chan struct{}),
 		changed:      make(chan struct{}, 1),
@@ -1180,7 +1188,7 @@ func (r *hubRun) buildCalibration(cands []windowItem) []workerapi.CalibrationFil
 		if !ok || perRoot[root] >= calibrationFiles {
 			continue
 		}
-		stored, err := r.p.store.GetFingerprintWindows(database.FileWindowRef(it.FileID))
+		stored, err := r.store.GetFingerprintWindows(database.FileWindowRef(it.FileID))
 		if err != nil {
 			continue
 		}
@@ -1745,7 +1753,7 @@ func (r *hubRun) writeResult(j *workerJob, res workerapi.JobResult, it windowIte
 		return resultDecision{status: workerapi.StatusStale, reason: "changed_on_server", next: qPending}
 	}
 	it.Size, it.MtimeUnix = j.size, j.mtime
-	err = r.p.storeWindows(it, prints, windowProvenance{host: workerHostPrefix + j.worker, leaseID: j.lease}, r.tally)
+	err = storeWindowsVia(r.writer, it, prints, windowProvenance{host: workerHostPrefix + j.worker, leaseID: j.lease}, r.tally)
 	switch {
 	case err == nil:
 		return resultDecision{status: workerapi.StatusAccepted, next: qDone, written: true}
@@ -1768,7 +1776,7 @@ func (r *hubRun) repostOfStored(res workerapi.JobResult) (string, string) {
 	if !strings.HasPrefix(res.Ref, "f:") || len(res.Windows) == 0 {
 		return workerapi.StatusStale, "unknown_job"
 	}
-	stored, err := r.p.store.GetFingerprintWindows(database.FingerprintWindowRef(res.Ref))
+	stored, err := r.store.GetFingerprintWindows(database.FingerprintWindowRef(res.Ref))
 	if err != nil {
 		return workerapi.StatusStale, "unknown_job"
 	}
