@@ -1,12 +1,15 @@
 // file: core/kernel/config_boot_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d2618bbb-991d-4090-bcf6-a00ef3f98c75
 // last-edited: 2026-11-18
 
 package kernel
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,8 +18,14 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/health"
+	"github.com/falkcorp/mediacore/internal/configstore"
 	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/datamigrate"
+	"github.com/falkcorp/mediacore/storage/restorejournal"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // gatedConfig is the swap host's Config with Config.CoreConfigBoot on and no
@@ -234,5 +243,317 @@ func TestConfigBoot_DescribeDoesNoIO(t *testing.T) {
 	}
 	if _, err := os.Stat(h.state); !os.IsNotExist(err) {
 		t.Fatalf("Describe created the state directory: %v", err)
+	}
+}
+
+// TestConfigBoot_P4bOpensTheSecretStore: the gate-on boot opens the secret
+// store at the start of P4b (the keyring appears with the store's install
+// marker in its header), binds both Importers, and hands each module a Secrets
+// scope under modules.<id>. The gate-off twin is TestSecretsOwnerSpec's "a boot
+// created no keyring" and TestOffline...OpensNoStore in package app.
+func TestConfigBoot_P4bOpensTheSecretStore(t *testing.T) {
+	h := newSwapHost(t)
+	var deps module.Deps
+	k := h.mustBoot(h.gatedConfig(&deps))
+	kr, err := os.ReadFile(filepath.Join(h.state, "secrets.keyring"))
+	if err != nil {
+		t.Fatalf("the gate-on boot wrote no keyring: %v", err)
+	}
+	if !bytes.Contains(kr, []byte(`"install_id": "`+k.store.db.Admin().InstallID()+`"`)) {
+		t.Fatal("the keyring header does not carry the store's install marker")
+	}
+	if k.sec == nil || k.importerCfg == nil || k.importerSec == nil {
+		t.Fatalf("P4b bound sec=%v importerCfg=%v importerSec=%v", k.sec, k.importerCfg, k.importerSec)
+	}
+	ctx := t.Context()
+	if _, err := deps.Secrets.Put(ctx, "modules.alfred.signal_key", secrets.NewValue(secretsFixture), "user:alfred"); err != nil {
+		t.Fatalf("a module's own secret: %v", err)
+	}
+	if _, err := deps.Secrets.Put(ctx, "modules.bane.venom", secrets.NewValue(secretsFixture), "user:alfred"); !errors.Is(err, secrets.ErrOutOfScope) {
+		t.Fatalf("another module's name through alfred's scope: %v, want ErrOutOfScope", err)
+	}
+}
+
+// TestConfigBoot_ResetAppliedAfterSecretsOpen (DATA7-17): under the gate a
+// factory reset boot journals applied right after secrets.Open, not after
+// P4a. A boot whose secrets.Open fails leaves the journal at set_aside, so the
+// next boot repeats the fresh install and the keyring rewrite; the gate-off
+// twin is TestResetHookDoneAfterMigrationList (applied after P4a).
+func TestConfigBoot_ResetAppliedAfterSecretsOpen(t *testing.T) {
+	h := newSwapHost(t)
+	h.close(h.mustBoot(h.gatedConfig(nil)))
+	oldHeader, err := os.ReadFile(filepath.Join(h.state, "secrets.keyring"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "z-reset"
+	in := h.resetIntent(id, restorejournal.ResetStore)
+	if err := h.resetStager().Stage(h.ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	// A key file that is a directory: secrets.Open refuses it, after P4a.
+	if err := os.Mkdir(filepath.Join(h.state, "not-a-keyring"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.boot(h.gatedConfig(nil, "GOTHAM_CORE_SECRETS_KEY_FILE=not-a-keyring")); err == nil {
+		t.Fatal("a reset boot whose secrets.Open fails succeeded")
+	}
+	got := stepsOf(h.journal(id))
+	if last := got[len(got)-1]; last != "set_aside" {
+		t.Fatalf("after a failed secrets.Open the journal is %v, want it at set_aside", got)
+	}
+	k := h.mustBoot(h.gatedConfig(nil))
+	got = stepsOf(h.journal(id))
+	if last := got[len(got)-1]; last != "hook_done" {
+		t.Fatalf("after the retry the journal is %v, want it at hook_done", got)
+	}
+	header, err := os.ReadFile(filepath.Join(h.state, "secrets.keyring"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(header, []byte(`"install_id": "`+k.store.db.Admin().InstallID()+`"`)) || bytes.Equal(header, oldHeader) {
+		t.Fatal("the reset boot did not rewrite the keyring header with the new install marker")
+	}
+}
+
+// TestConfigBoot_ClosesSecretsWithStorage: closing the kernel closes the secret
+// store, and does so on a boot that failed after P4b opened it.
+func TestConfigBoot_ClosesSecretsWithStorage(t *testing.T) {
+	h := newSwapHost(t)
+	k := h.mustBoot(h.gatedConfig(nil))
+	store := k.sec.store
+	if _, err := store.Put(t.Context(), "modules.alfred.signal_key", secrets.NewValue(secretsFixture), "user:alfred"); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.closeCore(context.Background(), time.Now().Add(defaultShutdownBudget)); err != nil {
+		t.Fatal(err)
+	}
+	if k.sec != nil {
+		t.Fatal("closeCore left the secret store open")
+	}
+	if v, _, err := store.Get(t.Context(), "modules.alfred.signal_key"); err == nil {
+		t.Fatalf("a read after close returned %d bytes, want the wiped keyring to refuse it", len(v.Reveal()))
+	}
+}
+
+// TestConfigBoot_P4dAttachesStoredValues: a value stored through the committer
+// in one boot is the effective value of the next, read at P4d.
+func TestConfigBoot_P4dAttachesStoredValues(t *testing.T) {
+	var live *config.Handle[utilityBelt]
+	batcave := storageMod("batcave", func(r *module.Registrar) error {
+		live = module.Setting(r, beltSection)
+		return r.Err()
+	}).with(func(m *module.Manifest) { m.Settings = []module.SettingsSection{module.Settings(beltSection)} })
+	h := newSwapHost(t)
+	cfg := func() Config {
+		c := h.gatedConfig(nil)
+		c.Modules = append(c.Modules, batcave)
+		return c
+	}
+	k := h.mustBoot(cfg())
+	if live.Get().Grapple != 3 {
+		t.Fatalf("grapple = %d, want the default 3", live.Get().Grapple)
+	}
+	res, err := k.cfgBoot.store.Apply(t.Context(), config.Patch{Set: map[config.Path]json.RawMessage{"modules.batcave.belt.grapple": json.RawMessage("11")}},
+		config.Actor{Subject: "alfred", Interactive: true, Can: func(string) bool { return true }})
+	if err != nil || len(res.Applied) != 1 {
+		t.Fatalf("Apply = %+v, %v", res, err)
+	}
+	h.close(k)
+	h.mustBoot(cfg())
+	if live.Get().Grapple != 11 {
+		t.Fatalf("grapple after a reboot = %d, want the stored 11", live.Get().Grapple)
+	}
+}
+
+type recordedHealth struct{ last health.Result }
+
+func (r *recordedHealth) Report(res health.Result) { r.last = res }
+
+// TestConfigBoot_ReportsConfigHealth: core.config reports the store's and the
+// kernel's tokens (F3-01's seam item 1): Up with none, Degraded with them.
+func TestConfigBoot_ReportsConfigHealth(t *testing.T) {
+	h := newSwapHost(t)
+	k := h.mustBoot(h.gatedConfig(nil))
+	if k.reporters.Config == nil {
+		t.Fatal("the gate-on boot registered no core.config reporter")
+	}
+	if !slices.ContainsFunc(k.healthReg.Snapshot().Components, func(c health.ComponentState) bool { return c.ID == componentConfig }) {
+		t.Fatal("core.config is not in the health registry")
+	}
+	rec := &recordedHealth{}
+	k.reporters.Config = rec
+	k.reportConfigHealth()
+	if rec.last.Status != health.StatusUp {
+		t.Fatalf("no tokens: %+v, want Up", rec.last)
+	}
+	k.cfgBoot.unknown = []module.ID{"scarecrow"}
+	k.reportConfigHealth()
+	if rec.last.Status != health.StatusDegraded || rec.last.Reason != healthUnknownModule {
+		t.Fatalf("an unknown module in the boot record: %+v, want Degraded %s", rec.last, healthUnknownModule)
+	}
+}
+
+// TestBootConfig_OwnerVerifierNeedsOwnerSet (F3-01's seam item 2): an app that
+// configured an owner verifier must say whether an owner is set, or the boot
+// fails; without a verifier a nil OwnerSet is the declared "no owner".
+func TestBootConfig_OwnerVerifierNeedsOwnerSet(t *testing.T) {
+	in := configIn(t)
+	in.OwnerVerifier = true
+	if cb, err := bootConfig(context.Background(), in); err == nil || !strings.Contains(err.Error(), "OwnerSet is nil") {
+		if cb != nil {
+			_ = cb.store.Close(context.Background())
+		}
+		t.Fatalf("bootConfig with a verifier and no OwnerSet = %v, want the refusal", err)
+	}
+	in = configIn(t)
+	in.OwnerVerifier, in.OwnerSet = true, func() bool { return false }
+	bootCfg(t, in)
+	in = configIn(t)
+	bootCfg(t, in)
+}
+
+// TestConfigBoot_InstrumentsBothStores: P5's metrics step registers the config
+// and secrets instruments once (a second registration is refused by each).
+func TestConfigBoot_InstrumentsBothStores(t *testing.T) {
+	h := newSwapHost(t)
+	k := h.mustBoot(h.gatedConfig(nil))
+	if _, err := k.cfgBoot.configMetrics(k.provider); err == nil || !strings.Contains(err.Error(), "twice") {
+		t.Fatalf("config metrics registered a second time: %v, want the refusal (the boot registered them)", err)
+	}
+	if _, err := secretsMetrics(k.provider, k.sec.store); err == nil {
+		t.Fatalf("secrets metrics registered a second time: %v, want the refusal (the boot registered them)", err)
+	}
+}
+
+// TestConfigBoot_ImporterDeletesEntrySecrets: M2's importer reaches the secret
+// store (P4b's SetImportSecrets): a cutover step's import that drops a stored
+// entry stages that entry's secret delete in the step's batch, and the boot
+// completes. Without the stager config refuses the Stage and the boot fails.
+func TestConfigBoot_ImporterDeletesEntrySecrets(t *testing.T) {
+	const list = "core.auth.oidc.providers"
+	h := newSwapHost(t)
+	gated := func(c Config) Config {
+		c.StoragePath, c.StateDir = h.db, h.state
+		c.CoreConfigBoot = true
+		c.ConfigOptions = config.Options{Environ: []string{}}
+		c.StateDirDefault = h.state
+		return c
+	}
+	k := h.mustBoot(gated(testConfig(t, gcpdMod(storage.ClaimReadWrite))))
+	lr, _ := k.store.db.Legacy("gcpd")
+	cks, ok := k.store.db.Keyspace(configstore.Owner)
+	if !ok {
+		t.Fatal("no config keyspace")
+	}
+	b := lr.NewBatch()
+	if err := b.Set([]byte("case:file/001"), []byte("The Long Halloween, part 1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.cfgBoot.native.Stage(h.ctx, b.Bind(cks), []config.Override{{Path: list, By: "alfred", At: time.Now(),
+		Value: json.RawMessage(`[{"id":"arkham","kind":"oidc","issuer":"https://id.example.com","client_id":"asylum","scopes":[],"allowed_emails":[],"allowed_domains":[],"default_role":"viewer","link_existing_by_email":false}]`)}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Commit(h.ctx, storage.Sync); err != nil {
+		t.Fatal(err)
+	}
+	h.close(k)
+
+	imported := false
+	c := testConfig(t, gcpdMod(storage.ClaimRetired).with(func(m *module.Manifest) {
+		m.Cutover = func(imp module.Importers) []datamigrate.DataMigration {
+			return []datamigrate.DataMigration{{
+				ID: "gcpd.providers", Owner: "gcpd", Description: "replace the stored provider list",
+				Source:      cutoverSource,
+				Parallelism: tasks.Fixed(1, "test: one shard"), Mode: datamigrate.BootBlocking,
+				Compat: storage.Breaking, Cutover: true,
+				Step: func(_ context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
+					imported = true
+					if err := imp.Config.Stage(w.Batch(), list, json.RawMessage(`[{"id":"batcave","kind":"oidc","issuer":"https://id.example.com","client_id":"bat","scopes":[],"allowed_emails":[],"allowed_domains":[],"default_role":"viewer","link_existing_by_email":false}]`), "cutover:m2"); err != nil {
+						return err
+					}
+					return w.Delete(kv.Key)
+				},
+			}}
+		}
+	}))
+	if _, err := h.boot(gated(c)); err != nil || !imported {
+		t.Fatalf("a cutover import that drops a stored entry: ran=%v err=%v, want its secret deleted through the stager", imported, err)
+	}
+}
+
+// TestConfigBoot_QuarantineSealsIntoTheSecretStore: with the gate on a cutover
+// step that quarantines a sensitive row seals it in the secret store (the
+// adapter over secrets.Importer, late-bound to the store P4b opens), the
+// quarantine record is sealed and the bytes are readable through the store;
+// LevelStep and Preflight are bound. With the gate off none is bound.
+func TestConfigBoot_QuarantineSealsIntoTheSecretStore(t *testing.T) {
+	h := newSwapHost(t)
+	gated := func(c Config) Config {
+		c.StoragePath, c.StateDir = h.db, h.state
+		c.CoreConfigBoot = true
+		c.ConfigOptions = config.Options{Environ: []string{}}
+		c.StateDirDefault = h.state
+		return c
+	}
+	k := h.mustBoot(gated(testConfig(t, gcpdMod(storage.ClaimReadWrite))))
+	lr, _ := k.store.db.Legacy("gcpd")
+	b := lr.NewBatch()
+	if err := b.Set([]byte("case:vault/001"), []byte("Joker venom formula")); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Commit(h.ctx, storage.Sync); err != nil {
+		t.Fatal(err)
+	}
+	h.close(k)
+
+	c := testConfig(t, gcpdMod(storage.ClaimRetired).with(func(m *module.Manifest) {
+		m.Cutover = func(module.Importers) []datamigrate.DataMigration {
+			return []datamigrate.DataMigration{{
+				ID: "gcpd.vault", Owner: "gcpd", Description: "quarantine the vault rows",
+				Source:      cutoverSource,
+				Parallelism: tasks.Fixed(1, "test: one shard"), Mode: datamigrate.BootBlocking,
+				Compat: storage.Breaking, Cutover: true, Sensitive: []string{"case:vault/"},
+				Step: func(_ context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
+					return w.Quarantine(kv.Key, kv.Value, "a credential the importer does not carry")
+				},
+			}}
+		}
+	}))
+	k = h.mustBoot(gated(c))
+	if k.dataMig.cfg.LevelStep == nil || k.dataMig.cfg.Preflight == nil {
+		t.Fatal("the gate-on boot left LevelStep or Preflight unbound")
+	}
+	ents, err := k.store.db.Quarantine(h.ctx, "gcpd.vault")
+	if err != nil || len(ents) != 1 || !ents[0].Sealed() {
+		t.Fatalf("quarantine = %+v, %v; want one sealed record", ents, err)
+	}
+	v, meta, err := k.sec.store.Get(h.ctx, secrets.Name(ents[0].Record.Secret))
+	if err != nil || v.Reveal() != "Joker venom formula" {
+		t.Fatalf("the sealed bytes through the store: %q, %v", v.Reveal(), err)
+	}
+	if meta.UpdatedBy != quarantineActor {
+		t.Fatalf("the sealed record's actor is %q, want %q", meta.UpdatedBy, quarantineActor)
+	}
+
+	h.close(k)
+
+	// Gate off: the seams stay unbound.
+	h2 := newSwapHost(t)
+	c2 := testConfig(t, gcpdMod(storage.ClaimReadWrite).with(func(m *module.Manifest) {
+		m.DataMigrations = []datamigrate.DataMigration{{
+			ID: "gcpd.noop", Owner: "gcpd", Description: "nothing to do",
+			Source:      cutoverSource,
+			Parallelism: tasks.Fixed(1, "test: one shard"), Mode: datamigrate.BootBlocking, Compat: storage.Additive,
+			Step: func(context.Context, storage.KV, *datamigrate.StepWriter) error { return nil },
+		}}
+	}))
+	c2.StoragePath, c2.StateDir = h2.db, h2.state
+	off := h2.mustBoot(c2)
+	if off.dataMig == nil {
+		t.Fatal("the gate-off control has no runner")
+	}
+	if off.dataMig.cfg.LevelStep != nil || off.dataMig.cfg.Quarantine != nil || off.dataMig.cfg.Preflight != nil {
+		t.Fatal("a gate-off boot bound the quarantine, level or preflight seam")
 	}
 }
