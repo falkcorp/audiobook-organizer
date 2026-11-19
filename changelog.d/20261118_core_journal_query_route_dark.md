@@ -1,0 +1,3 @@
+### Added
+
+- Core now has the system-log journal's query route, `GET /api/core/v1/system/logs`, built but not mounted (F5-19, dark; F5-18 mounts it and retires `GET /api/v1/system/logs`). It needs `core:system.manage` and takes `level`, `module`, `since`, `until`, `q`, `cursor` and `limit` (default 50, at most 1000). A caller without `core:users.view` is not served a record the module-registered predicate flags as naming another user's data, and sees `user_id` blank on the records it is served. The running binary behaves exactly as before: nothing imports the new `core/internal/loghttp` package.
