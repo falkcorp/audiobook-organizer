@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.69.6
+// version: 4.70.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package server
 
@@ -335,7 +335,7 @@ func (s *Server) currentRestoreStager() systemhandlers.RestoreStager {
 // nil, so a nil *startup.Steps is never boxed into a non-nil interface.
 func (s *Server) startupDegradedSource() systemhandlers.DegradedSource {
 	st := s.startupSteps.Load()
-	noPassword := servermiddleware.BasicGateNoPassword()
+	noPassword := basicGateNoPassword()
 	if st == nil && !noPassword {
 		return nil
 	}
@@ -355,7 +355,7 @@ type healthTokenSource struct {
 func (h healthTokenSource) Tokens() []string {
 	tokens := h.steps.Tokens()
 	if h.basicGateNoPassword {
-		tokens = append(tokens, servermiddleware.BasicGateNoPasswordToken)
+		tokens = append(tokens, BasicGateNoPasswordToken)
 	}
 	return tokens
 }
@@ -371,10 +371,10 @@ const basicGateNoPasswordStartupError = "Basic authentication is on (basic_auth_
 // non-exempt route.
 func logBasicGateAtStartup() {
 	switch {
-	case servermiddleware.BasicGateNoPassword():
+	case basicGateNoPassword():
 		lifecycleLog.Error(basicGateNoPasswordStartupError)
-	case servermiddleware.BasicGateUsesEnvPassword():
-		lifecycleLog.Warn(servermiddleware.BasicGateEnvPasswordWarning)
+	case basicGateUsesEnvPassword():
+		lifecycleLog.Warn(BasicGateEnvPasswordWarning)
 	}
 }
 

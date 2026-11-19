@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.115.11
+// version: 2.116.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package server
 
@@ -81,7 +81,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/fpworker"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
-	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
@@ -848,19 +847,19 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 
 	// The perimeter (peer allow-list and client address, request ID, tracing
 	// and the HTTP metrics, recovery, the access log, security headers, CORS,
-	// cross-origin protection, compression, the /api rate limit) runs in
-	// core's stages around the kernel's router (05-http-api §4.2, R1-17):
-	// every request passes it before this engine sees it. Only the Basic gate
-	// (stage 8) stays here until F3.
+	// cross-origin protection, the Basic gate, compression, the /api rate
+	// limit) runs in core's stages around the kernel's router (05-http-api
+	// §4.2, R1-17, F3-07 e4): every request passes it before this engine sees
+	// it. The Basic gate is stage 8, installed from books' mount
+	// (LegacyBasicGate); this engine has no gate of its own.
 	//
 	// First: marks the request for the perimeter shim (perimeter_shim.go),
 	// so a response this engine writes is told apart from one core's router
-	// writes itself, which the shim puts through the Basic gate.
+	// writes itself.
 	router.Use(perimeterSeen())
-	router.Use(servermiddleware.BasicAuth())
-	// Right after the gate: marks a request it let through, so the shim
-	// tells the gate's own 401 from one a handler writes.
-	router.Use(perimeterGatePassed())
+	if basicGateHookForTest != nil {
+		router.Use(basicGateHookForTest)
+	}
 	// Keeps the connection's own writer for setBodyReadDeadline (the
 	// accept-invite body read deadline), reached through core's writers'
 	// Unwrap.
