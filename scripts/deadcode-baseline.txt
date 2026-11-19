@@ -105,6 +105,8 @@ core/internal/logjournal.New
 core/internal/logjournal.NewImporter
 core/internal/logjournal.ParseLevel
 core/internal/logjournal.PruneDefinition
+core/internal/logjournal.RecordView.record
+core/internal/logjournal.StartTail
 core/internal/logjournal.StartTap
 core/internal/logjournal.StorageSpec
 core/internal/logjournal.Store.Append
@@ -113,6 +115,11 @@ core/internal/logjournal.Store.Prune
 core/internal/logjournal.Store.Query
 core/internal/logjournal.Store.decode
 core/internal/logjournal.Store.nextULID
+core/internal/logjournal.Tail.Counters
+core/internal/logjournal.Tail.Stop
+core/internal/logjournal.Tail.offer
+core/internal/logjournal.TailSpec
+core/internal/logjournal.TailTopic
 core/internal/logjournal.Tap.Counters
 core/internal/logjournal.Tap.Flush
 core/internal/logjournal.Tap.Stop
@@ -130,6 +137,7 @@ core/internal/logjournal.increment
 core/internal/logjournal.journalBounds
 core/internal/logjournal.journalKey
 core/internal/logjournal.makeULID
+core/internal/logjournal.mayReadUsers
 core/internal/logjournal.msOf
 core/internal/logjournal.parseCursor
 core/internal/logjournal.parseULID
@@ -137,8 +145,11 @@ core/internal/logjournal.pruneJournal
 core/internal/logjournal.retentionCutoff
 core/internal/logjournal.row.record
 core/internal/logjournal.rowCodec
+core/internal/logjournal.tailRedact
+core/internal/logjournal.tailVisible
 core/internal/logjournal.toRow
 core/internal/logjournal.ulidOfKey
+core/internal/logjournal.viewOf
 core/internal/outboxstore.SerializedPrefixes
 core/internal/outboxstore.StorageSpec
 core/internal/rbacstore.New
