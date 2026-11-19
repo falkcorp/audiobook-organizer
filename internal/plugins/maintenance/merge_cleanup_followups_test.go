@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_followups_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: d4f5094a-01a4-4706-8a50-b3d083766896
 // last-edited: 2026-11-19
 
@@ -277,4 +277,58 @@ func TestMergeCleanupRepointEvidenceNamesTheGroupAndSourceItWasReadFrom(t *testi
 	r := x.plan()["loser"]
 	require.Equal(t, mcKindRepoint, r.Class, "%s", r.SkipReason)
 	require.Contains(t, strings.Join(r.Evidence, " "), "is the primary of version group g of "+x.ids["b"])
+}
+
+// ---- a book merged INTO the loser is a source too ----
+
+// Y -> loser -> D: Y's chain enters the dead book D through the loser, so Y is
+// one of D's sources like any co-loser, though it is not beside the loser but
+// behind it. Whatever Y's content moved to is where the loser's belongs too.
+func TestMergeCleanupDeadEndABookMergedIntoTheLoserIsASource(t *testing.T) {
+	t.Run("its version group's live primary", func(t *testing.T) {
+		for _, trashed := range []bool{false, true} {
+			name := "live"
+			if trashed {
+				name = "in the trash"
+			}
+			t.Run(name, func(t *testing.T) {
+				x := newMCFixture(t)
+				x.mk("d", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+				x.mk("loser", mcHushSpec(30000))
+				x.point("loser", "d")
+				x.mk("y", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, group: "g", primary: mcFalse(), trashed: trashed})
+				x.point("y", "loser")
+				x.mk("p", mcHush("g", mcTrue()))
+				r := x.plan()["loser"]
+				require.Equal(t, mcKindRepoint, r.Class, "%s", r.SkipReason)
+				require.Equal(t, x.ids["p"], r.Proposed["merged_into_book_id"])
+				require.Contains(t, strings.Join(r.Evidence, " "), "is the primary of version group g of "+x.ids["y"])
+			})
+		}
+	})
+
+	t.Run("the live holder of its retired rows", func(t *testing.T) {
+		x := newMCFixture(t)
+		x.mk("d", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+		x.mk("loser", mcHushSpec(30000))
+		x.point("loser", "d")
+		x.mk("y", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}})
+		x.point("y", "loser")
+		x.mk("h", mcHushSpec(30000))
+		retireRowOnto(t, x.st, x.ids["y"], x.ids["h"], "ry", filepath.Join(x.root, "retired", "y.m4b"))
+		r := x.plan()["loser"]
+		require.Equal(t, mcKindRepoint, r.Class, "%s", r.SkipReason)
+		require.Equal(t, x.ids["h"], r.Proposed["merged_into_book_id"])
+		require.Contains(t, strings.Join(r.Evidence, " "), "holds the retired versions of "+x.ids["y"])
+	})
+
+	t.Run("a book with nothing behind it leaves the loser alone", func(t *testing.T) {
+		x := newMCFixture(t)
+		x.mk("d", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
+		x.mk("loser", mcHushSpec(30000))
+		x.point("loser", "d")
+		x.mk("y", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}})
+		x.point("y", "loser")
+		wantRow(t, x.plan(), "loser", mcKindUnmerge, "")
+	})
 }
