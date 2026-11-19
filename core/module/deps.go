@@ -1,14 +1,17 @@
 // file: core/module/deps.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 04c2ba0c-0bfa-4d6b-9e91-bc7ba2db6894
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package module
 
 import (
+	"context"
 	"errors"
+	"iter"
 	"log/slog"
 
+	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
@@ -55,6 +58,33 @@ type Deps struct {
 	// where no secret store is open: app.Describe, and a boot without core
 	// config.
 	Secrets secrets.Scope
+
+	// Config is the App's layered config store (05-config): every key of
+	// core and of every module, read and written as the caller's Actor. It is
+	// nil where no core config is wired: app.Describe, and a boot without
+	// kernel.Config.CoreConfigBoot. It is for the module that is the App's own
+	// configuration surface (ABO's internal/config Facade projects HEAD's flat
+	// Config over it); a module reads its own section through the handle its
+	// Manifest.Settings registered, and writes through the settings API, not
+	// through this. Apply authorizes per key against the Actor the caller
+	// passes, so the handle grants no authority the Actor lacks; it does let a
+	// module name any Actor, which is why only the App's own module takes it.
+	Config ConfigAccess
+}
+
+// ConfigAccess is Deps.Config: *config.Store's reads, one write and its
+// generation. The store is attached before any module's Register runs (P4d),
+// so Apply works from Register on.
+type ConfigAccess interface {
+	// Lookup is a key's effective state (value, source, lock, protection,
+	// pending restart, secret metadata); false for an unregistered path.
+	Lookup(p config.Path) (config.KeyState, bool)
+	// Keys is every registered key in path order.
+	Keys() iter.Seq2[config.Path, config.KeyState]
+	// Apply validates and commits a patch in one batch (05-config 1.4 step 8).
+	Apply(ctx context.Context, p config.Patch, a config.Actor) (config.Result, error)
+	// Generation moves on every commit and on Attach.
+	Generation() uint64
 }
 
 // StorageHandles is what Deps.Storage carries (06 §6.4.4). It lives in

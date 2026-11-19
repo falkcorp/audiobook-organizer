@@ -1,5 +1,5 @@
 // file: core/kernel/kernel.go
-// version: 1.0.27
+// version: 1.1.0
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
 // last-edited: 2026-11-19
 
@@ -611,7 +611,8 @@ func (k *Kernel) register(ctx context.Context) error {
 			continue
 		}
 		deps := module.Deps{Module: id, Log: k.moduleLog(id), Metrics: scope, ExtendStart: k.extendStart(id),
-			RequestRestart: k.lifecycle.RequestRestart, Storage: k.storageHandles(id), Secrets: k.secretsScope(id)}
+			RequestRestart: k.lifecycle.RequestRestart, Storage: k.storageHandles(id), Secrets: k.secretsScope(id),
+			Config: k.configAccess()}
 		r := module.NewRegistrar(module.RegistrarConfig{
 			Context:       regCtx,
 			Deps:          deps,

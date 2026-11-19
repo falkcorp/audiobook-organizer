@@ -1,5 +1,5 @@
 // file: core/kernel/config_boot.go
-// version: 1.0.6
+// version: 1.1.0
 // guid: 0e3db6c6-c5ae-4f54-adaf-6fd7b728c89e
 // last-edited: 2026-11-19
 
@@ -422,6 +422,16 @@ func (k *Kernel) secretsScope(id module.ID) secrets.Scope {
 		return secrets.Scope{}
 	}
 	return k.sec.store.Scope("modules." + string(id) + ".")
+}
+
+// configAccess is a module's Deps.Config: the layered store, nil where no core
+// config boot ran (the interface is left nil, not a typed nil pointer, so a
+// module's nil check holds).
+func (k *Kernel) configAccess() module.ConfigAccess {
+	if k.cfgBoot == nil {
+		return nil
+	}
+	return k.cfgBoot.store
 }
 
 // closeSecrets closes the secret store before the store it writes through.

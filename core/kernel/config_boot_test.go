@@ -1,5 +1,5 @@
 // file: core/kernel/config_boot_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d2618bbb-991d-4090-bcf6-a00ef3f98c75
 // last-edited: 2026-11-19
 
@@ -272,6 +272,53 @@ func TestConfigBoot_P4bOpensTheSecretStore(t *testing.T) {
 	}
 	if _, err := deps.Secrets.Put(ctx, "modules.bane.venom", secrets.NewValue(secretsFixture), "user:alfred"); !errors.Is(err, secrets.ErrOutOfScope) {
 		t.Fatalf("another module's name through alfred's scope: %v, want ErrOutOfScope", err)
+	}
+}
+
+// TestConfigBoot_DepsConfigIsTheLayeredStore: a gate-on boot hands each module
+// the layered config store as Deps.Config, attached (a read sees the effective
+// value, a write commits and moves the generation), and a gate-off boot hands
+// none. The Facade (ABO's internal/config) is built over it.
+func TestConfigBoot_DepsConfigIsTheLayeredStore(t *testing.T) {
+	h := newSwapHost(t)
+	var off module.Deps
+	h.mustBoot(h.config(&off))
+	if off.Config != nil {
+		t.Fatalf("a gate-off boot handed a module a config store: %T", off.Config)
+	}
+
+	h = newSwapHost(t)
+	var deps module.Deps
+	k := h.mustBoot(h.gatedConfig(&deps))
+	if deps.Config == nil {
+		t.Fatal("a gate-on boot handed a module no config store")
+	}
+	if deps.Config != module.ConfigAccess(k.cfgBoot.store) {
+		t.Fatal("Deps.Config is not the kernel's layered store")
+	}
+	const key config.Path = "core.shutdown.budget"
+	st, ok := deps.Config.Lookup(key)
+	if !ok {
+		t.Fatalf("Lookup(%s): not registered", key)
+	}
+	if len(st.Effective) == 0 {
+		t.Fatalf("Lookup(%s): no effective value", key)
+	}
+	var seen int
+	for range deps.Config.Keys() {
+		seen++
+	}
+	if seen == 0 {
+		t.Fatal("Keys is empty")
+	}
+	before := deps.Config.Generation()
+	res, err := deps.Config.Apply(t.Context(), config.Patch{Set: map[config.Path]json.RawMessage{key: json.RawMessage(`"45s"`)}},
+		config.Actor{Subject: "user:alfred", Interactive: true, Can: func(string) bool { return true }})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if res.Generation <= before || deps.Config.Generation() != res.Generation {
+		t.Fatalf("generation %d -> %d, result %d", before, deps.Config.Generation(), res.Generation)
 	}
 }
 
