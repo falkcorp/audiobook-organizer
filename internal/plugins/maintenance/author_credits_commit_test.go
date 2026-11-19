@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_credits_commit_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d2f6a40-1b73-4c95-a6e8-35f0c9b24d71
 // last-edited: 2026-11-19
 
@@ -147,8 +147,34 @@ func TestUnlink_AUserCreditEditBeforeTheCommitSurvives(t *testing.T) {
 
 	require.Error(t, err)
 	require.ErrorIs(t, err, errUnlinkInputsChanged)
+	require.Contains(t, err.Error(), "NOT unlinked", "the refusal is reported as the changed-inputs refusal, not as a generic write failure")
 	require.Equal(t, []int{junk.ID, other.ID}, creditIDs(t, s, book), "the user's credit edit was overwritten")
 	require.Equal(t, junk.ID, primaryOf(t, s, book))
+}
+
+// The primary author is half of what the unlink planned for. Another writer who
+// repoints it after the read, leaving the credits as they were, makes the commit
+// refuse: promoting the co-author over that primary would undo their change.
+func TestUnlink_APrimaryRepointedBeforeTheCommitIsNotOverwritten(t *testing.T) {
+	s, junk, keep, other, book := unlinkWorld(t)
+	db := commitHookDB{PebbleStore: s, beforeCommit: func(id string) {
+		_, err := s.ModifyBook(id, func(cur *database.Book) error {
+			id := other.ID
+			cur.AuthorID = &id
+			cur.Author = nil
+			return nil
+		})
+		require.NoError(t, err)
+	}}
+
+	n, _, lockHeld, err := runUnlink(t, db, junk)
+
+	require.ErrorIs(t, err, errUnlinkInputsChanged)
+	require.Contains(t, err.Error(), "NOT unlinked")
+	require.Zero(t, n)
+	require.Empty(t, lockHeld)
+	require.Equal(t, other.ID, primaryOf(t, s, book), "the other writer's primary was overwritten")
+	require.Equal(t, []int{junk.ID, keep.ID}, creditIDs(t, s, book), "credits were written although the primary no longer matched the plan")
 }
 
 // A lock and a credit edit that land together: still nothing is written and the

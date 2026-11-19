@@ -1,12 +1,13 @@
 // file: internal/books/store/modify_book_credits_respecting_locks_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a2b9f5f0-670e-43c5-97ac-93a397d042f6
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package store
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -263,5 +264,95 @@ func TestRespectingLocksHelpers_ReadTheLockInsideTheCallback(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []string{FieldKeyAuthorName}, held, "a lock saved before the callback ran did not hold the write")
 		require.Equal(t, w.a, w.primary(t))
+	})
+}
+
+// fixedLocks is a field-state reader with the given keys locked.
+type fixedLocks []string
+
+func (l fixedLocks) GetMetadataFieldStates(bookID string) ([]MetadataFieldState, error) {
+	var out []MetadataFieldState
+	for _, k := range l {
+		out = append(out, MetadataFieldState{BookID: bookID, Field: k, OverrideLocked: true})
+	}
+	return out, nil
+}
+
+func (fixedLocks) GetUserPreference(string) (*UserPreference, error) { return nil, nil }
+
+// echoModifier runs the callback on copies and hands back what the callback left,
+// whatever it returned: a BookCreditsRowModifier that does not discard a skipped
+// write's copies. PebbleStore does discard them, so only a stand-in like this
+// shows what the helper itself leaves behind on a hold.
+type echoModifier struct {
+	book      Book
+	credits   BookCreditsEdit
+	gotBook   Book
+	gotCredit BookCreditsEdit
+}
+
+func (m *echoModifier) ModifyBookCredits(_ string, fn func(*Book, *BookCreditsEdit) error) (*Book, BookCreditsEdit, error) {
+	cur := m.book
+	cr := BookCreditsEdit{Authors: slices.Clone(m.credits.Authors), Narrators: slices.Clone(m.credits.Narrators)}
+	err := fn(&cur, &cr)
+	m.gotBook, m.gotCredit = cur, cr
+	return &cur, cr, err
+}
+
+func newEchoModifier() *echoModifier {
+	a, b := 1, 2
+	return &echoModifier{
+		book: Book{ID: "b1", Title: "Year One", AuthorID: &a},
+		credits: BookCreditsEdit{
+			Authors:   []BookAuthor{{BookID: "b1", AuthorID: a, Role: "author"}, {BookID: "b1", AuthorID: b, Role: "author", Position: 1}},
+			Narrators: []BookNarrator{{BookID: "b1", NarratorID: 7, Role: "narrator"}},
+		},
+	}
+}
+
+// A hold puts back everything the callback touched, in the copies the store
+// holds: the row (primary author) and both credit lists, so a store that writes
+// what it is left with after a skip still writes the book as it was.
+func TestModifyBookCreditsRespectingLocks_AHoldRestoresTheRowAndBothListsInTheCallback(t *testing.T) {
+	m := newEchoModifier()
+	want := slices.Clone(m.credits.Authors)
+
+	_, held, err := ModifyBookCreditsRespectingLocks(m, fixedLocks{FieldKeyAuthorName}, "b1", func(b *Book, c *BookCreditsEdit) error {
+		id := 9
+		b.AuthorID = &id
+		c.Authors = []BookAuthor{{BookID: "b1", AuthorID: 9, Role: "author"}}
+		return nil
+	})
+
+	require.ErrorIs(t, err, ErrSkipBookWrite)
+	require.Equal(t, []string{FieldKeyAuthorName}, held)
+	require.Equal(t, 1, *m.gotBook.AuthorID, "the primary author was left repointed after the hold")
+	require.Equal(t, want, m.gotCredit.Authors, "the author credits were left changed after the hold")
+	require.Equal(t, m.credits.Narrators, m.gotCredit.Narrators)
+}
+
+// The snapshot a hold restores from is a copy, not a view of the live lists: a
+// callback that edits a credit IN PLACE is still seen as a change (and held) and
+// is undone, for narrators as for authors.
+func TestModifyBookCreditsRespectingLocks_InPlaceEditsAreSeenAndUndone(t *testing.T) {
+	t.Run("narrators", func(t *testing.T) {
+		m := newEchoModifier()
+		_, held, err := ModifyBookCreditsRespectingLocks(m, fixedLocks{FieldKeyNarrator}, "b1", func(_ *Book, c *BookCreditsEdit) error {
+			c.Narrators[0].NarratorID = 8
+			return nil
+		})
+		require.ErrorIs(t, err, ErrSkipBookWrite)
+		require.Equal(t, []string{FieldKeyNarrator}, held)
+		require.Equal(t, 7, m.gotCredit.Narrators[0].NarratorID, "the in-place narrator edit was left after the hold")
+	})
+	t.Run("authors", func(t *testing.T) {
+		m := newEchoModifier()
+		_, held, err := ModifyBookCreditsRespectingLocks(m, fixedLocks{FieldKeyAuthorName}, "b1", func(_ *Book, c *BookCreditsEdit) error {
+			c.Authors[1].AuthorID = 9
+			return nil
+		})
+		require.ErrorIs(t, err, ErrSkipBookWrite)
+		require.Equal(t, []string{FieldKeyAuthorName}, held)
+		require.Equal(t, 2, m.gotCredit.Authors[1].AuthorID, "the in-place author edit was left after the hold")
 	})
 }
