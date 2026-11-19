@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.56 -->
+<!-- version: 10.78.57 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -6749,8 +6749,17 @@ generate-on-behalf should force a short expiry / first-use rotation for safety.
   (2) Lock writers take `LockMetadataState`,
   not the book stripe, so a lock saved while a commit's callback is running can still lose;
   the window is one batch wide (todo.d `2026-11-18-lock-metadata-state-order-audit.md`).
-  (3) `refetch_missing_authors.go` can create author rows before its decisive check and
-  runs its co-author `ModifyBookAuthors` after the primary write with no re-check.
+  (3) `refetch_missing_authors.go`: the co-author `ModifyBookAuthors` that ran after the
+  primary write with no re-check is closed (2026-11-19): the primary and the co-author
+  credits are one `ModifyBookCreditsRespectingLocks` commit, and a store that cannot make
+  it is refused before the first author row is created. **Still open:** the resolve step
+  can create one author row (`authorcredit.MintAuthor`, step 5) before the commit, and that
+  row stays uncredited if the commit is then held by a lock saved after the advisory read,
+  skipped because the book got an author meanwhile, or fails. It cannot be deleted safely
+  with the store's primitives: `DeleteAuthor` removes credits and repoints books, so it
+  could strip a credit a concurrent writer gave that row. Closing it takes a new store
+  primitive that deletes an author only while nothing references it (Pebble, memdb, mock
+  and decorator implementations), or moving the mint inside the commit.
 
 - [ ] **Field-lock LOW items deferred from PR #3054's round-2 review** — none of these
   lose data; they are clarity and drift risks the review (L1–L4) named:
