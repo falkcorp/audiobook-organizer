@@ -1,5 +1,5 @@
 // file: internal/books/store/modify_book_credits_respecting_locks_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a2b9f5f0-670e-43c5-97ac-93a397d042f6
 // last-edited: 2026-11-19
 
@@ -320,6 +320,7 @@ func TestModifyBookCreditsRespectingLocks_AHoldRestoresTheRowAndBothListsInTheCa
 	_, held, err := ModifyBookCreditsRespectingLocks(m, fixedLocks{FieldKeyAuthorName}, "b1", func(b *Book, c *BookCreditsEdit) error {
 		id := 9
 		b.AuthorID = &id
+		b.Title = "Year Two" // not locked: only restoring the whole row undoes it
 		c.Authors = []BookAuthor{{BookID: "b1", AuthorID: 9, Role: "author"}}
 		return nil
 	})
@@ -327,6 +328,7 @@ func TestModifyBookCreditsRespectingLocks_AHoldRestoresTheRowAndBothListsInTheCa
 	require.ErrorIs(t, err, ErrSkipBookWrite)
 	require.Equal(t, []string{FieldKeyAuthorName}, held)
 	require.Equal(t, 1, *m.gotBook.AuthorID, "the primary author was left repointed after the hold")
+	require.Equal(t, "Year One", m.gotBook.Title, "a column the lock does not cover was left changed after a hold: the whole row is put back, not only the locked columns")
 	require.Equal(t, want, m.gotCredit.Authors, "the author credits were left changed after the hold")
 	require.Equal(t, m.credits.Narrators, m.gotCredit.Narrators)
 }
