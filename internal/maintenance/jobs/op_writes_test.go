@@ -1,11 +1,12 @@
 // file: internal/maintenance/jobs/op_writes_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8e3b5f21-6d94-4c07-b1a8-2f7c9e0d4a53
 // last-edited: 2026-11-18
 
 package jobs
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -27,11 +28,40 @@ var readOnlyJobReasons = map[string]string{
 	"scan-metadata-hash-dups": "reports books sharing a metadata hash and writes no row",
 }
 
-// opWritesFitOperationDef is a compile-time proof that OpWrites returns exactly
+// opWrites is the write set a maintenance job's OperationDef would declare in
+// OperationDef.Writes, so the dispatcher's write-set gate (Gate 3b) could see
+// the job. It is the same set the job's tasks.Effects carries (effectsFor):
+// derived from the store write methods the job's code reaches (jobWritesFor),
+// never typed per job. The names are the ops.Resource names, which the
+// registry's own v3 adapter casts to opsregistry.Resource one for one.
+//
+// It lives in this test file, not in production code, on purpose: the one
+// production caller would be registerMaintenanceJobOp (internal/server/
+// maintenance_job_op.go), and until that is wired an exported accessor is a
+// function nothing reaches, which the deadcode ratchet rejects. The change that
+// wires Writes exports it (see the TODO item). An unknown job is an error, not an
+// empty set, so a writer cannot pass for a read-only job by being missing here.
+func opWrites(jobID string) ([]opsregistry.Resource, error) {
+	all, err := jobWritesFor()
+	if err != nil {
+		return nil, fmt.Errorf("maintenance job %s: derive write set: %w", jobID, err)
+	}
+	ws, ok := all[jobID]
+	if !ok {
+		return nil, fmt.Errorf("maintenance job %s has no write-set trace (kinds_writes.go jobTraces)", jobID)
+	}
+	out := make([]opsregistry.Resource, len(ws))
+	for i, w := range ws {
+		out[i] = opsregistry.Resource(w)
+	}
+	return out, nil
+}
+
+// opWritesFitOperationDef is a compile-time proof that opWrites returns exactly
 // the type OperationDef.Writes holds, so wiring it into registerMaintenanceJobOp
 // is a one-field change with no conversion.
 var _ = func() opsregistry.OperationDef {
-	writes, _ := OpWrites("cleanup-series")
+	writes, _ := opWrites("cleanup-series")
 	return opsregistry.OperationDef{Writes: writes}
 }
 
@@ -43,7 +73,7 @@ func TestOpWrites_EveryRegisteredJobDeclaresWritesOrIsReadOnly(t *testing.T) {
 	for _, job := range maintenance.All() {
 		id := job.ID()
 		registered[id] = true
-		ws, err := OpWrites(id)
+		ws, err := opWrites(id)
 		if err != nil {
 			t.Errorf("%s: %v", id, err)
 			continue
@@ -75,13 +105,13 @@ func TestOpWrites_IsTheDerivedSetAndSorted(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, job := range maintenance.All() {
-		got, err := OpWrites(job.ID())
+		got, err := opWrites(job.ID())
 		if err != nil {
 			t.Fatal(err)
 		}
 		want := derived[job.ID()]
 		if len(got) != len(want) {
-			t.Errorf("%s: OpWrites has %d names, derived set has %d", job.ID(), len(got), len(want))
+			t.Errorf("%s: opWrites has %d names, derived set has %d", job.ID(), len(got), len(want))
 			continue
 		}
 		for i := range want {
@@ -90,10 +120,10 @@ func TestOpWrites_IsTheDerivedSetAndSorted(t *testing.T) {
 			}
 		}
 		if !slices.IsSorted(got) {
-			t.Errorf("%s: OpWrites is not sorted: %v", job.ID(), got)
+			t.Errorf("%s: opWrites is not sorted: %v", job.ID(), got)
 		}
 	}
-	if ws, err := OpWrites("not-a-job"); err == nil {
+	if ws, err := opWrites("not-a-job"); err == nil {
 		t.Errorf("an unknown job got a write set %v instead of an error", ws)
 	}
 }
@@ -108,13 +138,13 @@ func TestOpWrites_SeriesAndBooksWritersSeeTheSeriesOps(t *testing.T) {
 		{"cleanup-series", []opsregistry.Resource{opsregistry.ResSeries, opsregistry.ResBooks}},
 		{"fix-read-by-narrator", []opsregistry.Resource{opsregistry.ResBooks}},
 	} {
-		got, err := OpWrites(tc.job)
+		got, err := opWrites(tc.job)
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, w := range tc.want {
 			if !slices.Contains(got, w) {
-				t.Errorf("%s: OpWrites %v does not contain %q", tc.job, got, w)
+				t.Errorf("%s: opWrites %v does not contain %q", tc.job, got, w)
 			}
 		}
 	}
