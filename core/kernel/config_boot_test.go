@@ -1,5 +1,5 @@
 // file: core/kernel/config_boot_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d2618bbb-991d-4090-bcf6-a00ef3f98c75
 // last-edited: 2026-11-18
 
@@ -317,7 +317,8 @@ func TestConfigBoot_ResetAppliedAfterSecretsOpen(t *testing.T) {
 }
 
 // TestConfigBoot_ClosesSecretsWithStorage: closing the kernel closes the secret
-// store, and does so on a boot that failed after P4b opened it.
+// store, and so does a boot that fails after P4b opened it (a migration that
+// fails): the importer a Cutover step held refuses once the store is closed.
 func TestConfigBoot_ClosesSecretsWithStorage(t *testing.T) {
 	h := newSwapHost(t)
 	k := h.mustBoot(h.gatedConfig(nil))
@@ -333,6 +334,28 @@ func TestConfigBoot_ClosesSecretsWithStorage(t *testing.T) {
 	}
 	if v, _, err := store.Get(t.Context(), "modules.alfred.signal_key"); err == nil {
 		t.Fatalf("a read after close returned %d bytes, want the wiped keyring to refuse it", len(v.Reveal()))
+	}
+
+	// A boot that fails after P4b opened the store closes it too.
+	h2 := newSwapHost(t)
+	h2.close(h2.mustBoot(h2.gatedConfig(nil)))
+	var held secrets.Importer
+	broken := storage.Migration{Version: 2, Name: "broken", Compat: storage.Additive,
+		Up: func(context.Context, *storage.MigrationTx) error { return errors.New("bane broke it") }}
+	c := testConfig(t, storageMod("alfred", nil, seedStep(1, "cave"), broken).with(func(m *module.Manifest) {
+		m.Cutover = func(imp module.Importers) []datamigrate.DataMigration {
+			held = imp.Secrets
+			return nil
+		}
+	}))
+	c.StoragePath, c.StateDir, c.CoreConfigBoot = h2.db, h2.state, true
+	c.ConfigOptions, c.StateDirDefault = config.Options{Environ: []string{}}, h2.state
+	if _, err := New(h2.ctx, c); err == nil {
+		t.Fatal("a boot with a failing migration succeeded")
+	}
+	err := held.ImportSecret(h2.ctx, new(storage.Batch), secrets.Write{Name: "modules.alfred.signal_key", Value: secrets.NewValue(secretsFixture), By: "user:alfred"})
+	if err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("an import after a failed boot: %v, want the closed-store refusal", err)
 	}
 }
 
@@ -555,5 +578,59 @@ func TestConfigBoot_QuarantineSealsIntoTheSecretStore(t *testing.T) {
 	}
 	if off.dataMig.cfg.LevelStep != nil || off.dataMig.cfg.Quarantine != nil || off.dataMig.cfg.Preflight != nil {
 		t.Fatal("a gate-off boot bound the quarantine, level or preflight seam")
+	}
+}
+
+// TestConfigBoot_StoresSurviveM8: M8 closes and reopens the engine inside P4b,
+// after bindCoreStores took its keyspace handles. A gate-on boot that runs M8
+// finishes it, and afterwards the secret store still writes and reads, the
+// config store still applies, and P4d attached (gate-off twin:
+// TestBoot_RewriteRunsAtP4bThroughTheDeclaredSwapper).
+func TestConfigBoot_StoresSurviveM8(t *testing.T) {
+	h := newSwapHost(t)
+	gated := func(c Config) Config {
+		c.StoragePath, c.StateDir = h.db, h.state
+		c.CoreConfigBoot = true
+		c.ConfigOptions = config.Options{Environ: []string{}}
+		c.StateDirDefault = h.state
+		return c
+	}
+	// The store exists, with the keyring and both keyspaces, before M8 is declared.
+	h.close(h.mustBoot(gated(testConfig(t, storageMod("alfred", nil, seedStep(1, "cave"))))))
+
+	rw := rewriteMod("alfred")
+	k := h.mustBoot(gated(testConfig(t, rw)))
+	state, err := k.store.db.RewriteRecord(h.ctx, "alfred.rewrite")
+	if err != nil || state != storage.DataMigrationDone {
+		t.Fatalf("M8's record = %q, %v; want done", state, err)
+	}
+	if _, err := k.sec.store.Put(h.ctx, "modules.alfred.signal_key", secrets.NewValue(secretsFixture), "user:alfred"); err != nil {
+		t.Fatalf("a secret write after M8: %v", err)
+	}
+	if v, _, err := k.sec.store.Get(h.ctx, "modules.alfred.signal_key"); err != nil || v.Reveal() != secretsFixture {
+		t.Fatalf("a secret read after M8: %v", err)
+	}
+	if _, err := k.cfgBoot.store.Apply(h.ctx, config.Patch{Set: map[config.Path]json.RawMessage{"core.ai.journal_retention": json.RawMessage(`"48h"`)}},
+		config.Actor{Subject: "alfred", Interactive: true, Can: func(string) bool { return true }}); err != nil {
+		t.Fatalf("a config apply after M8: %v", err)
+	}
+}
+
+// TestConfigBoot_AttachRefusesAnOpenStoreWithNoSecrets: P4d with an open store
+// and no secret store is a wiring bug (P4b did not run), not a gate-off boot,
+// and it fails loudly. With no store at all it stays a no-op.
+func TestConfigBoot_AttachRefusesAnOpenStoreWithNoSecrets(t *testing.T) {
+	h := newSwapHost(t)
+	k := h.mustBoot(h.gatedConfig(nil))
+	defer h.close(k)
+	sec := k.sec
+	k.sec = nil
+	err := k.attachCoreConfig(h.ctx)
+	k.sec = sec
+	if err == nil || !strings.Contains(err.Error(), "secret store") {
+		t.Fatalf("attachCoreConfig with an open store and no secrets = %v, want the wiring error", err)
+	}
+	if err := (&Kernel{}).attachCoreConfig(h.ctx); err != nil {
+		t.Fatalf("attachCoreConfig with no store = %v, want nil", err)
 	}
 }
