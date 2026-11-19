@@ -1,7 +1,7 @@
 // file: internal/books/cutover/rename_data.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b874765a-43e8-4e15-a309-3879bf7e2e64
-// last-edited: 2026-11-11
+// last-edited: 2026-11-18
 
 package cutover
 
@@ -151,7 +151,7 @@ var explicitRows = []explicitRow{
 	{head: "smtp_username", targets: []Target{tpass("integrations.notify.email.username", false)}},
 	{head: "smtp_password", class: ClassSecret, targets: []Target{tpassSecret("integrations.notify.email.password")}},
 	{head: "smtp_from", targets: []Target{tpass("integrations.notify.email.from", false)}},
-	{head: "public_base_url", targets: []Target{tkc("core.http.public_base_url", "")}},
+	{head: "public_base_url", targets: []Target{tkc("core.http.public_base_url", "")}, admin: true, note: "HEAD's file-only key becomes a storable key; ProtectAdmin like its sibling core.auth.oidc.redirect_base_url (F3-07)"},
 	{head: "invite_email_service_token", targets: []Target{tk("modules.books.cfguests.invite_email_service_token", "")}},
 	{head: "tunnel_connector_addrs", targets: []Target{tk("core.http.trusted_proxies", ConvertCSVList)}, admin: true, note: "comma list -> list; a storable admin key from F3 (§1.3.7)"},
 	{head: "allowed_peer_cidrs", targets: []Target{tk("core.http.peer_allowlist", ConvertCSVList)}, admin: true, note: "comma list -> list; a storable admin key from F3 (§1.3.7)"},
