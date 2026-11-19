@@ -1,5 +1,5 @@
 // file: internal/books/module.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
 // last-edited: 2026-11-19
 
@@ -412,6 +412,9 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		DefaultCSP:  csp,
 		CSPReport:   cspReport,
 		BuildID:     buildID,
+		// Stage 8: the Basic gate that was gin's middleware (F3-07 e4).
+		BasicGate:         server.LegacyBasicGate(),
+		BasicExemptAssets: server.LegacyBasicExemptAssets,
 	})
 	cfg := m.serveConfig()
 	r.Hook(module.Hook{
