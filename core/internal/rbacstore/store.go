@@ -1,12 +1,13 @@
 // file: core/internal/rbacstore/store.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6f1c9a3e-28d4-4b7e-a5f0-93e1d27c4b85
 // last-edited: 2026-11-19
 
 // Package rbacstore is core's one implementation of rbac.Store and
 // rbac.Importer (05-rbac §3.4, §6.3 "Native store"): roles kept in the core
 // keyspace c/rbac/ at role/<name> as codec.JSON[rbac.Role](1), every field of
-// the role. It implements rbac (layer L4, 03 R4) and is imported only by the
+// the role, plus one counter at generation that every role write bumps in its
+// own batch (rbac.RoleGuarder). It implements rbac (layer L4, 03 R4) and is imported only by the
 // kernel and by tests. It holds no cache and no lock: every read goes to the
 // keyspace, and every write stages into the caller's batch with an Expect on
 // the stored record, so the batch's Commit fails with storage.ErrConflict when
@@ -19,6 +20,7 @@ package rbacstore
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"iter"
@@ -38,12 +40,21 @@ const Owner storage.Owner = "core/rbac"
 // roleSeg is the first key segment of every role row.
 const roleSeg = "role"
 
+// genSeg is the one segment of the role-set generation row, outside role/ so
+// ScanRoles never meets it.
+const genSeg = "generation"
+
 // StorageSpec is the c/rbac/ spec the kernel registers for Owner: a core
-// keyspace whose role rows are Serialized, so every write to one carries an
-// Expect (05-storage R6-1).
+// keyspace whose role rows and generation row are Serialized, so every write
+// to one carries an Expect (05-storage R6-1), and an Expect on the generation
+// is allowed (rbac.RoleGuarder).
 func StorageSpec() storage.Spec {
-	return storage.Spec{Keyspace: true, Serialized: []string{string(rolePrefix())}}
+	return storage.Spec{Keyspace: true, Serialized: []string{string(rolePrefix()), string(generationKey())}}
 }
+
+// generationKey is the relative key of the role-set generation: a big-endian
+// uint64 that every role write raises by one. Absent is generation 0.
+func generationKey() []byte { return keys.Join(keys.Str(genSeg)) }
 
 // rolePrefix is the relative prefix of every role row.
 func rolePrefix() []byte { return keys.Prefix(keys.Str(roleSeg)) }
@@ -235,40 +246,80 @@ func (s *Store) DeleteRole(b *storage.Batch, r *rbac.Role) error {
 	return s.stage(b, key, committed, nil)
 }
 
-// GuardRole stages into b an Expect that role r.Name is stored exactly as it
-// was read at r.Version (rbac.RoleGuarder). b is the caller's batch, which
-// belongs to another owner (auth's last-admin rule guards the role that makes
-// the other admin a holder); the Expect binds this keyspace into it, so a
-// role write that commits first, an edit or a delete, fails the caller's
-// Commit with storage.ErrConflict. An absent role, or one at another version,
-// wraps storage.ErrConflict and stages nothing. Nothing is written.
-func (s *Store) GuardRole(b *storage.Batch, r *rbac.Role) error {
+// RoleSetGeneration reads the committed role-set generation (rbac.RoleGuarder):
+// how many role writes have committed, 0 for none. A caller reads it before it
+// reads any role definition it will decide on.
+func (s *Store) RoleSetGeneration(ctx context.Context) (uint64, error) {
+	raw, err := s.ks.Get(ctx, generationKey())
+	if errors.Is(err, storage.ErrNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("rbacstore: read the role-set generation: %w", err)
+	}
+	return decodeGeneration(raw)
+}
+
+// GuardRoleSet stages into b an Expect that the role-set generation is still
+// generation (rbac.RoleGuarder). b is the caller's batch, which belongs to
+// another owner (auth's last-admin rule guards the role definitions it
+// reads); the Expect binds this keyspace into it, so any role write that
+// commits after generation was read, a create, an edit, a delete or an
+// import, fails the caller's Commit with storage.ErrConflict. Nothing is
+// written. Generation 0 expects the row absent, which is what an unwritten
+// role set is.
+func (s *Store) GuardRoleSet(b *storage.Batch, generation uint64) error {
 	if b == nil {
-		return errors.New("rbacstore: GuardRole needs the caller's batch")
+		return errors.New("rbacstore: GuardRoleSet needs the caller's batch")
 	}
-	if r == nil || r.Name == "" {
-		return errors.New("rbacstore: GuardRole of a role with no name")
-	}
-	key := roleKey(r.Name)
-	committed, err := s.committed(key)
-	if err != nil {
-		return err
-	}
-	if committed == nil {
-		return fmt.Errorf("%w: role %s is gone", storage.ErrConflict, r.Name)
-	}
-	stored, err := decode(r.Name, committed)
-	if err != nil {
-		return err
-	}
-	if stored.Version != r.Version {
-		return fmt.Errorf("%w: role %s is at version %d, guarded %d", storage.ErrConflict, r.Name, stored.Version, r.Version)
+	var want []byte
+	if generation != 0 {
+		want = encodeGeneration(generation)
 	}
 	b.Bind(s.ks)
-	if err := b.Expect(s.ks, key, committed); err != nil {
-		return fmt.Errorf("rbacstore: expect %q: %w", key, err)
+	if err := b.Expect(s.ks, generationKey(), want); err != nil {
+		return fmt.Errorf("rbacstore: expect the role-set generation: %w", err)
 	}
 	return nil
+}
+
+// bumpGeneration stages the generation row of b one above its committed
+// value, with an Expect on that value. Every role write calls it, so the
+// bump commits with the write and a role-set guard (GuardRoleSet) sees every
+// one. Two role writes in one batch (a seed or restore batch) both derive the
+// row from the committed value, keep the first read's Expect, and stage the
+// same bump.
+func (s *Store) bumpGeneration(b *storage.Batch) error {
+	key := generationKey()
+	view, err := b.GetForUpdate(context.Background(), s.ks, key)
+	switch {
+	case errors.Is(err, storage.ErrNotFound):
+		view = nil
+	case err != nil:
+		return fmt.Errorf("rbacstore: read the role-set generation through the batch: %w", err)
+	}
+	cur := uint64(0)
+	if view != nil {
+		if cur, err = decodeGeneration(view); err != nil {
+			return err
+		}
+	}
+	if err := b.In(s.ks).Set(key, encodeGeneration(cur+1)); err != nil {
+		return fmt.Errorf("rbacstore: stage the role-set generation: %w", err)
+	}
+	return nil
+}
+
+// encodeGeneration is the stored form of a generation: 8 bytes, big endian.
+func encodeGeneration(g uint64) []byte { return binary.BigEndian.AppendUint64(nil, g) }
+
+// decodeGeneration reads a stored generation; a row of another length is an
+// error, never generation 0.
+func decodeGeneration(raw []byte) (uint64, error) {
+	if len(raw) != 8 {
+		return 0, fmt.Errorf("rbacstore: the role-set generation row holds %d bytes, want 8", len(raw))
+	}
+	return binary.BigEndian.Uint64(raw), nil
 }
 
 // ImportRole stores r as a custom role (05-rbac §3.4, §6.3): Origin
@@ -391,8 +442,10 @@ func (s *Store) committed(key []byte) ([]byte, error) {
 var ErrDoubleWrite = errors.New("rbacstore: a record is written twice in one batch")
 
 // stage binds the role keyspace to b, records the Expect (want nil: the key
-// must be absent) and stages the write (raw nil: a delete). On an indexed batch
-// (the kernel's re-apply batch is one) it refuses a second write to key.
+// must be absent), stages the write (raw nil: a delete) and bumps the role-set
+// generation (rbac.RoleGuarder), the one place every role write goes through.
+// On an indexed batch (the kernel's re-apply batch is one) it refuses a second
+// write to key.
 func (s *Store) stage(b *storage.Batch, key, want, raw []byte) error {
 	b.Bind(s.ks)
 	if err := b.Expect(s.ks, key, want); err != nil {
@@ -423,12 +476,10 @@ func (s *Store) stage(b *storage.Batch, key, want, raw []byte) error {
 		if err := w.Delete(key); err != nil {
 			return fmt.Errorf("rbacstore: stage delete %q: %w", key, err)
 		}
-		return nil
-	}
-	if err := w.Set(key, raw); err != nil {
+	} else if err := w.Set(key, raw); err != nil {
 		return fmt.Errorf("rbacstore: stage %q: %w", key, err)
 	}
-	return nil
+	return s.bumpGeneration(b)
 }
 
 // sortedUnique returns ps sorted without duplicates, as a fresh slice.

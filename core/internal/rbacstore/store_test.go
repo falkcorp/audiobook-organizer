@@ -1,5 +1,5 @@
 // file: core/internal/rbacstore/store_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 23a85290-0088-42d7-b522-d7086e7dcf49
 // last-edited: 2026-11-19
 
@@ -156,69 +156,87 @@ func TestStore_StaleWantIsAConflictNotADoubleWrite(t *testing.T) {
 	}
 }
 
-// TestStore_GuardRoleWritesNothingAndBindsTheKeyspace: GuardRole is a
-// precondition, not a write. Into a batch of another keyspace (here an
-// indexed batch over the role keyspace stands for auth's), it commits when
-// the role is untouched and fails with ErrConflict once the role was
-// replaced; a guard over a stale version or a missing role is refused before
-// anything is staged; the nil cases are errors, not panics.
-func TestStore_GuardRoleWritesNothingAndBindsTheKeyspace(t *testing.T) {
-	st := newStore(t)
-	seed := st.NewBatch()
-	if err := st.PutRole(seed, role("Trustee", 1)); err != nil {
-		t.Fatal(err)
-	}
-	commit(t, seed)
-	read, err := st.GetRole(context.Background(), "custom.trustee")
-	if err != nil {
-		t.Fatal(err)
-	}
+// otherRole is a second custom role, at version v.
+func otherRole(v int64) *rbac.Role {
+	return &rbac.Role{Name: "custom.gatekeeper", Title: "Gatekeeper", Origin: rbac.OriginCustom, Added: []rbac.Permission{"core:self"}, Version: v}
+}
 
-	b := st.NewBatch()
-	if err := st.GuardRole(b, read); err != nil {
-		t.Fatalf("GuardRole: %v", err)
+func generation(t testing.TB, st *Store) uint64 {
+	t.Helper()
+	g, err := st.RoleSetGeneration(context.Background())
+	if err != nil {
+		t.Fatalf("RoleSetGeneration: %v", err)
 	}
-	if n := b.Count(); n != 0 {
-		t.Errorf("a guard staged %d writes", n)
+	return g
+}
+
+// TestStore_GenerationRowIsNotARole: the generation row lives beside role/, so
+// a scan of the roles meets only roles, and a bump never makes ScanRoles
+// yield an undecodable row.
+func TestStore_GenerationRowIsNotARole(t *testing.T) {
+	st := newStore(t)
+	b := st.NewBatch()
+	if err := st.PutRole(b, role("Trustee", 1)); err != nil {
+		t.Fatal(err)
 	}
 	commit(t, b)
-	if got, _ := st.GetRole(context.Background(), "custom.trustee"); got == nil || got.Version != 1 || got.Title != "Trustee" {
-		t.Fatalf("the guard changed the role: %+v", got)
+	if g := generation(t, st); g != 1 {
+		t.Fatalf("generation after one role write = %d, want 1", g)
 	}
-
-	b = st.NewBatch()
-	if err := st.GuardRole(b, read); err != nil {
-		t.Fatal(err)
-	}
-	other := st.NewBatch()
-	if err := st.PutRole(other, role("Warden", 2)); err != nil {
-		t.Fatal(err)
-	}
-	commit(t, other)
-	if err := b.Commit(context.Background(), storage.Sync); !errors.Is(err, storage.ErrConflict) {
-		t.Errorf("Commit of a guard over a replaced role: %v, want storage.ErrConflict", err)
-	}
-	_ = b.Close()
-
-	for name, tc := range map[string]*rbac.Role{
-		"a stale version": read,
-		"a missing role":  {Name: "custom.ghost", Version: 1},
-	} {
-		sb := st.NewBatch()
-		if err := st.GuardRole(sb, tc); !errors.Is(err, storage.ErrConflict) {
-			t.Errorf("GuardRole of %s: %v, want storage.ErrConflict", name, err)
+	n := 0
+	for r, err := range st.ScanRoles(context.Background()) {
+		if err != nil {
+			t.Fatalf("ScanRoles met the generation row: %v", err)
 		}
-		_ = sb.Close()
+		if r.Name != "custom.trustee" {
+			t.Fatalf("ScanRoles yielded %q", r.Name)
+		}
+		n++
 	}
-	if err := st.GuardRole(nil, read); err == nil {
-		t.Error("GuardRole without a batch succeeded")
+	if n != 1 {
+		t.Fatalf("ScanRoles yielded %d roles, want 1", n)
 	}
-	nb := st.NewBatch()
-	defer func() { _ = nb.Close() }()
-	if err := st.GuardRole(nb, nil); err == nil {
-		t.Error("GuardRole of a nil role succeeded")
+}
+
+// TestStore_TwoRolesInOneIndexedBatchRaiseTheGenerationAndStillCommit: the
+// kernel's re-apply batch is indexed and writes many roles; each bump reads
+// its own batch's earlier one, and the batch commits once.
+func TestStore_TwoRolesInOneIndexedBatchRaiseTheGenerationAndStillCommit(t *testing.T) {
+	st := newStore(t)
+	before := generation(t, st)
+	b := st.ks.NewIndexedBatch()
+	if err := st.PutRole(b, role("Trustee", 1)); err != nil {
+		t.Fatal(err)
 	}
-	if err := st.GuardRole(nb, &rbac.Role{}); err == nil {
-		t.Error("GuardRole of a nameless role succeeded")
+	if err := st.PutRole(b, otherRole(1)); err != nil {
+		t.Fatalf("the second role of the batch: %v", err)
+	}
+	commit(t, b)
+	if g := generation(t, st); g <= before {
+		t.Fatalf("generation %d after a two-role batch, was %d: it must rise", g, before)
+	}
+}
+
+// TestStore_AGenerationRowThatIsNotEightBytesIsAnError: a damaged generation
+// row is an error from the read, from a guard's caller and from every role
+// write, never generation 0 (which would let a stale reader's guard pass).
+func TestStore_AGenerationRowThatIsNotEightBytesIsAnError(t *testing.T) {
+	st := newStore(t)
+	b := st.NewBatch()
+	b.Bind(st.ks)
+	if err := b.Expect(st.ks, generationKey(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.In(st.ks).Set(generationKey(), []byte{1, 2, 3}); err != nil {
+		t.Fatal(err)
+	}
+	commit(t, b)
+	if _, err := st.RoleSetGeneration(context.Background()); err == nil {
+		t.Error("RoleSetGeneration over a 3-byte row succeeded")
+	}
+	wb := st.NewBatch()
+	defer func() { _ = wb.Close() }()
+	if err := st.PutRole(wb, role("Trustee", 1)); err == nil {
+		t.Error("PutRole over a 3-byte generation row succeeded")
 	}
 }

@@ -1,5 +1,5 @@
 // file: core/rbac/store.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 0b8f4d2e-61c7-4a95-8e3b-7d2c5a19f640
 // last-edited: 2026-11-19
 
@@ -160,22 +160,36 @@ type ImportSealer interface {
 }
 
 // RoleGuarder is implemented by a role store that can stage, into a batch
-// another owner opened, a precondition that a role is still stored as the
-// caller read it (coined by F4-02-ROLE-GUARD, ImportSealer's optional-interface
-// pattern; Store is frozen SDK and so cannot take the method). auth's
-// last-admin rule reads a role definition to decide that a user holds
-// core:admin, and its write lands in auth's batch: without the guard, an rbac
-// role edit that takes core:admin from that role between the read and the
-// commit is not seen, and the two writes together leave no active admin.
+// another owner opened, a precondition that no role has been written since the
+// caller read the role set (coined by F4-02-ROLE-GUARD, ImportSealer's
+// optional-interface pattern; Store is frozen SDK and so cannot take the
+// methods). auth's last-admin rule reads role definitions to decide that a
+// user holds core:admin, and its write lands in auth's batch: without the
+// guard, an rbac role write that takes core:admin from one of those roles
+// between the read and the commit is not seen, and the two writes together
+// leave no active admin.
 //
-// GuardRole stages an Expect that role r.Name is stored at r.Version, as read
-// from GetRole. When the stored role is absent or at another version it wraps
-// storage.ErrConflict and stages nothing: the caller's Commit would have
-// failed the same way, and the retry decides again on the new definition.
-// Service.GuardRole is the entry point; it reports ErrNoRoleGuard when the
-// store does not implement this interface.
+// The guard is one counter for the whole role set, not one per role, so it
+// also covers a role name the caller read as absent and a role deleted and
+// created again under the same name:
+//
+//   - every write of a role row (PutRole, DeleteRole, ImportRole) bumps the
+//     counter in the batch it stages the write in, so the bump commits or
+//     fails with the write;
+//   - RoleSetGeneration reads the committed counter; an unwritten role set is
+//     generation 0. A caller reads it before it reads any role, so every role
+//     it reads afterwards is at that generation or newer;
+//   - GuardRoleSet(b, g) stages into b an Expect that the counter is still g.
+//     It writes nothing. A role write committed in between fails b's Commit
+//     with storage.ErrConflict.
+//
+// Service.RoleSetGeneration and Service.GuardRoleSet are the entry points; they
+// report ErrNoRoleGuard when the store does not implement this interface. A
+// store that wraps another must forward both methods, or every user write that
+// runs the last-admin rule fails closed with ErrNoRoleGuard.
 type RoleGuarder interface {
-	GuardRole(b *storage.Batch, r *Role) error
+	RoleSetGeneration(ctx context.Context) (uint64, error)
+	GuardRoleSet(b *storage.Batch, generation uint64) error
 }
 
 // customPrefix is the namespace of operator-created role names.

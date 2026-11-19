@@ -1,5 +1,5 @@
 // file: core/rbac/rbactest/storesuite.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3a7e5c1d-94b2-4f68-8d0e-2b6f1a9c7e43
 // last-edited: 2026-11-19
 
@@ -86,7 +86,7 @@ func StoreSuite(t *testing.T, h Harness) {
 		{"ImportRejectedStagesNothing", importStagesNothing},
 		{"ImportWithoutCatalogRefuses", importNoCatalog},
 		{"ImportRefusedOnceSealed", importSealed},
-		{"GuardRoleExpectsTheReadVersion", guardRole},
+		{"RoleSetGuard", roleSetGuard},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { c.run(t, h) })
@@ -550,69 +550,196 @@ func importSealed(t *testing.T, h Harness) {
 	get(t, fx, "custom.alfred")
 }
 
-// guardRole: a store that implements rbac.RoleGuarder stages an Expect that a
-// role is still stored at the version the caller read, and writes nothing. A
-// role edit or delete that commits first fails the guarding batch's Commit
-// with storage.ErrConflict; a guard over a version that is no longer stored,
-// or over a role that is gone, is refused with storage.ErrConflict at once.
-// A store that does not implement it skips the case (rbac.Service.GuardRole
-// then answers ErrNoRoleGuard).
-func guardRole(t *testing.T, h Harness) {
+// roleSetGuard: a store that implements rbac.RoleGuarder keeps one role-set
+// generation that EVERY write of a role row raises (create, edit, delete,
+// import) in the batch the write commits in, and stages, on request, an
+// Expect that it is still the value a caller read. So a caller that read the
+// generation before it read any role finds out at its own Commit
+// (storage.ErrConflict) that some role was written since, whichever write it
+// was, whether the role existed when it read it, and even when the role came
+// back byte for byte as it was. A refused write, or one whose own Commit
+// failed, raises nothing. A store that does not implement it skips the case
+// (rbac.Service.RoleSetGeneration then answers ErrNoRoleGuard).
+func roleSetGuard(t *testing.T, h Harness) {
 	fx := h.New(t, Catalog(t))
 	guarder, ok := fx.Store.(rbac.RoleGuarder)
 	if !ok {
 		t.Skip("the store does not implement rbac.RoleGuarder")
 	}
-	put(t, fx, custom("custom.wayne", 1, "core:admin"))
-	read := get(t, fx, "custom.wayne")
-
-	if err := commit(t, fx, func(b *storage.Batch) error { return guarder.GuardRole(b, read) }); err != nil {
-		t.Fatalf("a guard over the stored version: %v", err)
+	ctx := context.Background()
+	generation := func(t *testing.T) uint64 {
+		t.Helper()
+		g, err := guarder.RoleSetGeneration(ctx)
+		if err != nil {
+			t.Fatalf("RoleSetGeneration: %v", err)
+		}
+		return g
 	}
-	if got := get(t, fx, "custom.wayne"); got.Version != 1 {
-		t.Errorf("a guard wrote the role: version %d", got.Version)
+	// guarded stages a guard at the generation now, runs write, and returns
+	// the guarding batch's Commit error and whether the generation moved.
+	guarded := func(t *testing.T, write func(t *testing.T)) (commitErr error, moved bool) {
+		t.Helper()
+		g := generation(t)
+		b := fx.NewBatch()
+		defer func() { _ = b.Close() }()
+		if err := guarder.GuardRoleSet(b, g); err != nil {
+			t.Fatalf("GuardRoleSet(%d): %v", g, err)
+		}
+		write(t)
+		commitErr = b.Commit(ctx, storage.Sync)
+		return commitErr, generation(t) != g
 	}
 
-	t.Run("an edit committed first", func(t *testing.T) {
-		b := fx.NewBatch()
-		defer func() { _ = b.Close() }()
-		if err := guarder.GuardRole(b, read); err != nil {
-			t.Fatal(err)
+	if g := generation(t); g != 0 {
+		t.Fatalf("an empty role set is at generation %d, want 0", g)
+	}
+	// Generation 0 is guardable too: the row is absent, and the first role
+	// ever written moves it.
+	if err := commit(t, fx, func(b *storage.Batch) error { return guarder.GuardRoleSet(b, 0) }); err != nil {
+		t.Fatalf("a guard over the untouched empty role set: %v", err)
+	}
+	if err, moved := guarded(t, func(t *testing.T) { put(t, fx, custom("custom.wayne", 1, "core:admin")) }); !errors.Is(err, storage.ErrConflict) || !moved {
+		t.Fatalf("the first role ever written: guard commit = %v, generation moved = %v, want storage.ErrConflict and true", err, moved)
+	}
+
+	t.Run("no role write in between", func(t *testing.T) {
+		g := generation(t)
+		if err, moved := guarded(t, func(t *testing.T) {
+			if _, err := fx.Store.GetRole(ctx, "custom.wayne"); err != nil {
+				t.Fatal(err)
+			}
+		}); err != nil || moved {
+			t.Fatalf("reads between the guard and its commit: commit = %v, generation moved = %v, want nil and false", err, moved)
 		}
-		put(t, fx, custom("custom.wayne", 2, "core:self"))
-		if err := b.Commit(context.Background(), storage.Sync); !errors.Is(err, storage.ErrConflict) {
-			t.Errorf("Commit of a guard over an edited role = %v, want storage.ErrConflict", err)
+		if again := generation(t); again != g {
+			t.Fatalf("a guard changed the generation: %d to %d", g, again)
+		}
+		if got := get(t, fx, "custom.wayne"); got.Version != 1 {
+			t.Fatalf("a guard wrote the role: version %d", got.Version)
 		}
 	})
 
-	t.Run("a stale version", func(t *testing.T) {
-		b := fx.NewBatch()
-		defer func() { _ = b.Close() }()
-		if err := guarder.GuardRole(b, read); !errors.Is(err, storage.ErrConflict) {
-			t.Errorf("GuardRole over version 1 with 2 stored = %v, want storage.ErrConflict", err)
+	t.Run("every kind of role write moves it", func(t *testing.T) {
+		kinds := []struct {
+			name  string
+			write func(t *testing.T)
+		}{
+			{"create", func(t *testing.T) { put(t, fx, custom("custom.gordon", 1, "core:self")) }},
+			{"edit", func(t *testing.T) {
+				cur := get(t, fx, "custom.gordon")
+				put(t, fx, custom("custom.gordon", cur.Version+1, "core:self", "core:users.view"))
+			}},
+			{"delete", func(t *testing.T) {
+				cur := get(t, fx, "custom.gordon")
+				if err := commit(t, fx, func(b *storage.Batch) error { return fx.Store.DeleteRole(b, cur) }); err != nil {
+					t.Fatal(err)
+				}
+			}},
+			{"import", func(t *testing.T) {
+				r := &rbac.Role{Name: "custom.robin", Origin: rbac.OriginCustom, Added: []rbac.Permission{"gotham:patrol"}}
+				if err := commit(t, fx, func(b *storage.Batch) error { return fx.Importer.ImportRole(b, r) }); err != nil {
+					t.Fatalf("ImportRole: %v", err)
+				}
+			}},
+		}
+		for _, k := range kinds {
+			if err, moved := guarded(t, k.write); !errors.Is(err, storage.ErrConflict) || !moved {
+				t.Errorf("%s: guard commit = %v, generation moved = %v, want storage.ErrConflict and true", k.name, err, moved)
+			}
 		}
 	})
 
-	t.Run("a delete committed first", func(t *testing.T) {
-		cur := get(t, fx, "custom.wayne")
-		b := fx.NewBatch()
-		defer func() { _ = b.Close() }()
-		if err := guarder.GuardRole(b, cur); err != nil {
-			t.Fatal(err)
-		}
-		if err := commit(t, fx, func(db *storage.Batch) error { return fx.Store.DeleteRole(db, cur) }); err != nil {
-			t.Fatal(err)
-		}
-		if err := b.Commit(context.Background(), storage.Sync); !errors.Is(err, storage.ErrConflict) {
-			t.Errorf("Commit of a guard over a deleted role = %v, want storage.ErrConflict", err)
+	t.Run("a role read as absent, then created", func(t *testing.T) {
+		if err, _ := guarded(t, func(t *testing.T) {
+			if _, err := fx.Store.GetRole(ctx, "custom.ghost"); !errors.Is(err, rbac.ErrUnknownRole) {
+				t.Fatalf("GetRole of a role never written = %v", err)
+			}
+			put(t, fx, custom("custom.ghost", 1, "core:admin"))
+		}); !errors.Is(err, storage.ErrConflict) {
+			t.Fatalf("guard commit after the absent role appeared = %v, want storage.ErrConflict", err)
 		}
 	})
 
-	t.Run("an absent role", func(t *testing.T) {
+	t.Run("deleted and put back byte for byte", func(t *testing.T) {
+		// A per-role version check passes this: same name, same version, same
+		// bytes. The generation does not.
+		put(t, fx, custom("custom.alfred", 1, "core:self"))
+		cur := get(t, fx, "custom.alfred")
+		if err, _ := guarded(t, func(t *testing.T) {
+			if err := commit(t, fx, func(b *storage.Batch) error { return fx.Store.DeleteRole(b, cur) }); err != nil {
+				t.Fatal(err)
+			}
+			put(t, fx, custom("custom.alfred", 1, "core:self"))
+		}); !errors.Is(err, storage.ErrConflict) {
+			t.Fatalf("guard commit after delete and recreate = %v, want storage.ErrConflict", err)
+		}
+		if back := get(t, fx, "custom.alfred"); !reflect.DeepEqual(back, cur) {
+			t.Fatalf("the recreated role differs from the original: %+v vs %+v", back, cur)
+		}
+	})
+
+	t.Run("a stale generation", func(t *testing.T) {
+		g := generation(t)
+		put(t, fx, custom("custom.nightwing", 1, "core:self"))
+		if err := commit(t, fx, func(b *storage.Batch) error { return guarder.GuardRoleSet(b, g) }); !errors.Is(err, storage.ErrConflict) {
+			t.Fatalf("a guard at generation %d with %d stored = %v, want storage.ErrConflict", g, generation(t), err)
+		}
+	})
+
+	t.Run("a refused write raises nothing", func(t *testing.T) {
+		g := generation(t)
 		b := fx.NewBatch()
-		defer func() { _ = b.Close() }()
-		if err := guarder.GuardRole(b, custom("custom.wayne", 2, "core:self")); !errors.Is(err, storage.ErrConflict) {
-			t.Errorf("GuardRole of a deleted role = %v, want storage.ErrConflict", err)
+		if err := fx.Store.PutRole(b, custom("custom.nightwing", 9, "core:self")); !errors.Is(err, rbac.ErrVersionMismatch) {
+			t.Fatalf("PutRole at a wrong version = %v", err)
+		}
+		_ = b.Close()
+		if err := commit(t, fx, func(b *storage.Batch) error { return fx.Store.DeleteRole(b, custom("custom.ghost2", 1)) }); !errors.Is(err, rbac.ErrUnknownRole) {
+			t.Fatalf("DeleteRole of an absent role = %v", err)
+		}
+		if now := generation(t); now != g {
+			t.Fatalf("refused writes moved the generation: %d to %d", g, now)
+		}
+	})
+
+	t.Run("a write whose commit failed raises nothing", func(t *testing.T) {
+		g := generation(t)
+		first, second := fx.NewBatch(), fx.NewBatch()
+		defer func() { _ = first.Close(); _ = second.Close() }()
+		if err := fx.Store.PutRole(first, custom("custom.oracle", 1, "core:self")); err != nil {
+			t.Fatal(err)
+		}
+		if err := fx.Store.PutRole(second, custom("custom.oracle", 1, "core:users.view")); err != nil {
+			t.Fatal(err)
+		}
+		if err := first.Commit(ctx, storage.Sync); err != nil {
+			t.Fatal(err)
+		}
+		if err := second.Commit(ctx, storage.Sync); !errors.Is(err, storage.ErrConflict) {
+			t.Fatalf("the second writer of one role = %v, want storage.ErrConflict", err)
+		}
+		if now := generation(t); now != g+1 {
+			t.Fatalf("two writers, one commit: generation %d to %d, want %d", g, now, g+1)
+		}
+	})
+
+	t.Run("two roles in one batch", func(t *testing.T) {
+		if err, moved := guarded(t, func(t *testing.T) {
+			if err := commit(t, fx, func(b *storage.Batch) error {
+				if err := fx.Store.PutRole(b, custom("custom.batgirl", 1, "core:self")); err != nil {
+					return err
+				}
+				return fx.Store.PutRole(b, custom("custom.huntress", 1, "core:self"))
+			}); err != nil {
+				t.Fatalf("two role writes in one batch: %v", err)
+			}
+		}); !errors.Is(err, storage.ErrConflict) || !moved {
+			t.Fatalf("guard commit after a two-role batch = %v, moved = %v, want storage.ErrConflict and true", err, moved)
+		}
+	})
+
+	t.Run("nil batch", func(t *testing.T) {
+		if err := guarder.GuardRoleSet(nil, 0); err == nil {
+			t.Fatal("GuardRoleSet without a batch succeeded")
 		}
 	})
 }
