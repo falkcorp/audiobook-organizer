@@ -1,7 +1,7 @@
 // file: core/kernel/cutover_importers_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c41e90b7-3d58-4f26-a7b1-0e5d8c92f163
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package kernel
 
@@ -201,5 +201,112 @@ func TestCatalog_CutoverStepOfAnotherOwnerIsAProblem(t *testing.T) {
 	}
 	if seen.Load() != 0 {
 		t.Fatalf("a step ran %d times during the catalog check", seen.Load())
+	}
+}
+
+// legacyProbe is a Cutover step over the gcpd rows that records what the
+// Importers' late-bound Legacy and AllowKeyRegen seams hand it, the way
+// books' M2 reads its legacy range and the key-regen switch (F3-07 d).
+type legacyProbe struct {
+	reads    atomic.Int64
+	value    atomic.Value // string: the legacy row the step read
+	nilOther atomic.Bool  // an owner with no claims got a nil reader
+	regen    atomic.Bool
+}
+
+func (p *legacyProbe) step(imp module.Importers) datamigrate.DataMigration {
+	return datamigrate.DataMigration{
+		ID: "gcpd.probe", Owner: "gcpd", Description: "read the legacy range through the late-bound seam",
+		Source:      cutoverSource,
+		Parallelism: tasks.Fixed(1, "test: one shard"), Mode: datamigrate.BootBlocking,
+		Compat: storage.Additive,
+		Step: func(ctx context.Context, _ storage.KV, _ *datamigrate.StepWriter) error {
+			p.reads.Add(1)
+			if r := imp.Legacy("gcpd"); r != nil {
+				v, err := r.Get(ctx, []byte("case:file/001"))
+				if err != nil {
+					return err
+				}
+				p.value.Store(string(v))
+			}
+			p.nilOther.Store(imp.Legacy("arkham") == nil)
+			p.regen.Store(imp.AllowKeyRegen())
+			return nil
+		},
+	}
+}
+
+// Before P4b binds them the Importers' Legacy hands a nil reader for every
+// owner and AllowKeyRegen is false; after migrateStorage binds, Legacy hands
+// the owner's legacy range (nil for an owner with no claims) and
+// AllowKeyRegen the resolved core.secrets.allow_key_regen.
+func TestMigrateStorage_BindsLegacyAndAllowKeyRegen(t *testing.T) {
+	h, _ := dryRunHost(t, map[string]string{"case:file/001": "The Long Halloween, part 1"})
+	probe := &legacyProbe{}
+	c := testConfig(t, gcpdMod(storage.ClaimReadWrite).with(func(m *module.Manifest) {
+		m.Cutover = func(imp module.Importers) []datamigrate.DataMigration {
+			if imp.Legacy("gcpd") != nil || imp.AllowKeyRegen() {
+				t.Error("an unbound Importers handed a reader or a true AllowKeyRegen")
+			}
+			return []datamigrate.DataMigration{probe.step(imp)}
+		}
+	}))
+	c.StoragePath, c.StateDir = h.db, h.state
+	k, err := offlineKernel(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = k.closeOffline(context.Background()) }()
+	k.importerAllowRegen = true
+	opts, err := k.storageOptions(h.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := storage.Open(h.ctx, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := o.Prepare(h.ctx)
+	if err != nil {
+		t.Fatal(errors.Join(err, o.Close()))
+	}
+	defer func() { _ = db.Close() }()
+	k.store = &kernelStore{opened: o, db: db}
+	if err := k.migrateStorage(h.ctx); err != nil {
+		t.Fatalf("migrateStorage = %v", err)
+	}
+	if probe.reads.Load() != 1 {
+		t.Fatalf("step ran %d times, want 1", probe.reads.Load())
+	}
+	if v, _ := probe.value.Load().(string); v != "The Long Halloween, part 1" {
+		t.Errorf("the step read %q through Importers.Legacy, want the legacy row", v)
+	}
+	if !probe.nilOther.Load() {
+		t.Error("Importers.Legacy handed a reader for an owner that declared no claims")
+	}
+	if !probe.regen.Load() {
+		t.Error("Importers.AllowKeyRegen did not report the bound value")
+	}
+}
+
+// With the gate on, bindCoreStores reads core.secrets.allow_key_regen and P4b
+// hands it to the Importers a Cutover func holds: true from the environment,
+// false by default.
+func TestConfigBoot_AllowKeyRegenReachesTheImporters(t *testing.T) {
+	for _, tc := range []struct {
+		env  []string
+		want bool
+	}{{[]string{}, false}, {[]string{"GOTHAM_CORE_SECRETS_ALLOW_KEY_REGEN=true"}, true}} {
+		h := newSwapHost(t)
+		c := testConfig(t, gcpdMod(storage.ClaimReadWrite))
+		c.StoragePath, c.StateDir = h.db, h.state
+		c.CoreConfigBoot = true
+		c.ConfigOptions = config.Options{Environ: tc.env}
+		c.StateDirDefault = h.state
+		k := h.mustBoot(c)
+		if got := k.importers().values().AllowKeyRegen(); got != tc.want {
+			t.Errorf("env %v: Importers.AllowKeyRegen = %v, want %v", tc.env, got, tc.want)
+		}
+		h.close(k)
 	}
 }

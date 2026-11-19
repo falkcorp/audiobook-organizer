@@ -1,7 +1,7 @@
 // file: core/kernel/cutover_importers.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f2b8d41-a903-4c7e-b5d8-1e9a07c3f562
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package kernel
 
@@ -29,11 +29,51 @@ type lateImporters struct {
 	mu  sync.RWMutex
 	cfg config.Importer
 	sec secrets.Importer
+	// legacy and allowRegen back Importers.Legacy and Importers.AllowKeyRegen
+	// (F3-07 d): bound after Prepare, at the start of P4b, with the rest.
+	legacy     func(storage.Owner) storage.Reader
+	allowRegen bool
 }
 
 // values are the importers a Cutover func is handed.
 func (l *lateImporters) values() module.Importers {
-	return module.Importers{Config: lateConfig{l}, Secrets: lateSecrets{l}}
+	return module.Importers{
+		Config: lateConfig{l}, Secrets: lateSecrets{l},
+		Legacy: l.legacyReader, AllowKeyRegen: l.allowKeyRegen,
+	}
+}
+
+// bindLegacy points Importers.Legacy at db's legacy ranges and fixes
+// Importers.AllowKeyRegen at allowRegen. The reader is nil for an owner with no
+// claims (storage.DB.Legacy's ok=false), never a typed zero value a step could
+// mistake for an open range.
+func (l *lateImporters) bindLegacy(db *storage.DB, allowRegen bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.legacy = func(o storage.Owner) storage.Reader {
+		lr, ok := db.Legacy(o)
+		if !ok {
+			return nil
+		}
+		return lr
+	}
+	l.allowRegen = allowRegen
+}
+
+func (l *lateImporters) legacyReader(o storage.Owner) storage.Reader {
+	l.mu.RLock()
+	f := l.legacy
+	l.mu.RUnlock()
+	if f == nil {
+		return nil
+	}
+	return f(o)
+}
+
+func (l *lateImporters) allowKeyRegen() bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.allowRegen
 }
 
 // bind points the importers at their stores; a nil argument leaves that
