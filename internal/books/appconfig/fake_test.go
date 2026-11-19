@@ -156,3 +156,48 @@ func (f *fakeAccess) DeleteSecret(_ context.Context, n secrets.Name, by string) 
 	f.by = append(f.by, by)
 	return nil
 }
+
+// fakeResidual is a Residual over a map; Redact blanks the value of a head named in redact.
+type fakeResidual struct {
+	vals   map[string]json.RawMessage
+	saves  int
+	loadEr error
+	saveEr error
+	redact map[string]bool
+}
+
+func newFakeResidual() *fakeResidual {
+	return &fakeResidual{vals: map[string]json.RawMessage{}, redact: map[string]bool{}}
+}
+
+func (r *fakeResidual) Load(context.Context) (map[string]json.RawMessage, error) {
+	if r.loadEr != nil {
+		return nil, r.loadEr
+	}
+	out := map[string]json.RawMessage{}
+	for k, v := range r.vals {
+		out[k] = v
+	}
+	return out, nil
+}
+
+func (r *fakeResidual) Save(_ context.Context, set map[string]json.RawMessage, unset []string) error {
+	if r.saveEr != nil {
+		return r.saveEr
+	}
+	r.saves++
+	for k, v := range set {
+		r.vals[k] = v
+	}
+	for _, k := range unset {
+		delete(r.vals, k)
+	}
+	return nil
+}
+
+func (r *fakeResidual) Redact(head string, v json.RawMessage) json.RawMessage {
+	if r.redact[head] {
+		return json.RawMessage(`"********"`)
+	}
+	return v
+}

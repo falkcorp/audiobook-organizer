@@ -32,6 +32,7 @@ type Engine struct {
 	tab     *cutover.RenameTable
 	rows    []projRow
 	byHead  map[string]projRow
+	res     Residual
 	publish func(config.Config)
 	log     *logger.StandardLogger
 
@@ -85,15 +86,20 @@ type Store interface {
 // New builds an Engine over acc. publish receives every projection (production:
 // config.Project); a nil publish keeps the projection to the Engine alone, which
 // is what a test of the Engine wants.
-func New(acc Store, publish func(config.Config)) *Engine {
+func New(acc Store, publish func(config.Config), opts ...Option) *Engine {
+	e := &Engine{acc: acc, publish: publish, log: logger.New("appconfig"),
+		locks: map[string]string{}, unreadable: map[string]bool{}, missing: map[string]bool{}}
+	for _, o := range opts {
+		o(e)
+	}
 	tab := cutover.Table()
-	rows := plan(tab)
+	rows := plan(tab, e.res != nil)
 	byHead := make(map[string]projRow, len(rows))
 	for _, p := range rows {
 		byHead[p.row.Head] = p
 	}
-	return &Engine{acc: acc, tab: tab, rows: rows, byHead: byHead, publish: publish, log: logger.New("appconfig"),
-		locks: map[string]string{}, unreadable: map[string]bool{}, missing: map[string]bool{}}
+	e.tab, e.rows, e.byHead = tab, rows, byHead
+	return e
 }
 
 // Start projects once and then re-projects on every commit: after Start the
@@ -114,9 +120,10 @@ func (e *Engine) Start(ctx context.Context) error {
 // projRow is one rename-table row the projection reads: where its value is
 // stored and which HEAD field it fills.
 type projRow struct {
-	row    *cutover.Row
-	segs   []string // Head split into the JSON path of the field
-	target cutover.Target
+	row      *cutover.Row
+	segs     []string // Head split into the JSON path of the field
+	target   cutover.Target
+	residual bool // class i: read from and written to the Residual, no core key
 }
 
 // plan lists the rows the projection reads, in table order. A row is read when
@@ -124,11 +131,17 @@ type projRow struct {
 // a map/array element) and a concrete canonical location of class k, s or o. The
 // fold and entry rows, and the class-i fields that stay in the residual blob,
 // have their own readers.
-func plan(tab *cutover.RenameTable) []projRow {
+func plan(tab *cutover.RenameTable, residual bool) []projRow {
 	var out []projRow
 	for i := range tab.Rows {
 		r := &tab.Rows[i]
 		if r.Container || r.Removed || r.Process || strings.ContainsAny(r.Head, "[]<>") {
+			continue
+		}
+		if r.Class == cutover.ClassInput {
+			if segs := strings.Split(r.Head, "."); residual && concrete(r.Head) && hasField(segs) {
+				out = append(out, projRow{row: r, segs: segs, residual: true})
+			}
 			continue
 		}
 		var want func(cutover.Target) bool
@@ -181,8 +194,27 @@ func (e *Engine) rebuildLocked(ctx context.Context) error {
 func (e *Engine) project(ctx context.Context) (cfg config.Config, locks map[string]string, unreadable, missing map[string]bool, err error) {
 	locks, unreadable, missing = map[string]string{}, map[string]bool{}, map[string]bool{}
 	pass := maps.Collect(e.acc.PassthroughValues())
+	var resv map[string]json.RawMessage
+	if e.res != nil {
+		if resv, err = e.res.Load(ctx); err != nil {
+			return cfg, nil, nil, nil, fmt.Errorf("appconfig: reading the residual settings: %w", err)
+		}
+	}
 	for _, p := range e.rows {
-		val, by, state, rerr := e.read(ctx, p, pass)
+		var (
+			val   json.RawMessage
+			by    string
+			state readState
+			rerr  error
+		)
+		if p.residual {
+			state = readOK
+			if val = resv[p.row.Head]; val == nil {
+				state = readUnset
+			}
+		} else {
+			val, by, state, rerr = e.read(ctx, p, pass)
+		}
 		switch state {
 		case readMissing:
 			missing[p.row.Head] = true
@@ -310,8 +342,14 @@ func (e *Engine) View() config.View {
 	keys := make([]config.KeyView, 0, len(e.rows))
 	for _, p := range e.rows {
 		kv := config.KeyView{Name: p.row.Head, Class: config.KeyClass(p.row.Class), LockedBy: locks[p.row.Head], Admin: p.row.Admin}
-		switch p.target.Kind {
-		case cutover.TargetSecret:
+		switch {
+		case p.residual:
+			if f, ok := fieldAt(&cur, p.segs); ok {
+				if raw, err := json.Marshal(f.Interface()); err == nil {
+					kv.Value = e.res.Redact(p.row.Head, raw)
+				}
+			}
+		case p.target.Kind == cutover.TargetSecret:
 			kv.Secret = e.secretMeta(p, unreadable[p.row.Head])
 		default:
 			if f, ok := fieldAt(&cur, p.segs); ok {
@@ -357,4 +395,11 @@ func sourceName(s secrets.Source) string {
 		return "env"
 	}
 	return ""
+}
+
+// hasField reports whether Config has a field at segs.
+func hasField(segs []string) bool {
+	var c config.Config
+	_, ok := fieldAt(&c, segs)
+	return ok
 }

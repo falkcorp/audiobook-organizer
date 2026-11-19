@@ -99,6 +99,8 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 	e.mu.RUnlock()
 	patch := coreconfig.Patch{Set: map[coreconfig.Path]json.RawMessage{}}
 	var secretSets, secretClears []secretOp
+	resSet, resUnset := map[string]json.RawMessage{}, []string{}
+	var adminHeads []string
 	var unknown, readOnly []string
 	var invalid []error
 	byPath := map[coreconfig.Path]string{}
@@ -107,6 +109,21 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 		switch {
 		case !ok:
 			unknown = append(unknown, head)
+			return
+		case p.residual:
+			if p.row.Admin {
+				adminHeads = append(adminHeads, head)
+			}
+			if clear {
+				resUnset = append(resUnset, head)
+				return
+			}
+			var probe config.Config
+			if f, ok := fieldAt(&probe, p.segs); !ok || json.Unmarshal(raw, f.Addr().Interface()) != nil {
+				invalid = append(invalid, &coreconfig.FieldError{Path: coreconfig.Path(head), Err: errors.New("the value does not fit the setting")})
+				return
+			}
+			resSet[head] = raw
 			return
 		case p.target.Kind == cutover.TargetPassthrough:
 			readOnly = append(readOnly, head)
@@ -169,8 +186,10 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 	if len(invalid) > 0 {
 		return config.UpdateResult{}, headErr(errors.Join(coreconfig.ErrInvalid, errors.Join(invalid...)), byPath)
 	}
-	if len(secretSets)+len(secretClears) > 0 && !(a.Interactive && a.Can != nil && a.Can(adminPerm)) {
-		return config.UpdateResult{}, fmt.Errorf("%w: %s needs %s", coreconfig.ErrForbidden, secretHeads(append(slices.Clone(secretSets), secretClears...)), adminPerm)
+	needAdmin := append(secretHeads(append(slices.Clone(secretSets), secretClears...)), adminHeads...)
+	if len(needAdmin) > 0 && !(a.Interactive && a.Can != nil && a.Can(adminPerm)) {
+		slices.Sort(needAdmin)
+		return config.UpdateResult{}, fmt.Errorf("%w: %s needs %s", coreconfig.ErrForbidden, strings.Join(needAdmin, ", "), adminPerm)
 	}
 	var res coreconfig.Result
 	if len(patch.Set)+len(patch.Unset) > 0 {
@@ -192,6 +211,19 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 		}
 		res.Applied = append(res.Applied, coreconfig.Path(op.name))
 		byPath[coreconfig.Path(op.name)] = op.head
+	}
+	if len(resSet)+len(resUnset) > 0 {
+		if err := e.res.Save(ctx, resSet, resUnset); err != nil {
+			return e.partial(ctx, res, byPath, fmt.Errorf("appconfig: saving the residual settings: %w", err))
+		}
+		for h := range resSet {
+			res.Applied = append(res.Applied, coreconfig.Path(h))
+			byPath[coreconfig.Path(h)] = h
+		}
+		for _, h := range resUnset {
+			res.Applied = append(res.Applied, coreconfig.Path(h))
+			byPath[coreconfig.Path(h)] = h
+		}
 	}
 	// An Apply re-projects through OnCommit; a secret write outside Apply moves
 	// nothing core sees, so project again here. Serialised by mu, so a hook's
@@ -249,13 +281,12 @@ type secretOp struct {
 	value string
 }
 
-func secretHeads(ops []secretOp) string {
+func secretHeads(ops []secretOp) []string {
 	var hs []string
 	for _, o := range ops {
 		hs = append(hs, o.head)
 	}
-	slices.Sort(hs)
-	return strings.Join(hs, ", ")
+	return hs
 }
 
 // partial reports a secret write that failed after Apply committed: what

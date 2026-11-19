@@ -291,3 +291,62 @@ func TestEngine_UpdateHooksStartOpsAfterTheCommit(t *testing.T) {
 		t.Fatalf("hooks ran %d times, want once (the committed Update only)", len(seen))
 	}
 }
+
+// TestEngine_ResidualFieldsRoundTrip: class-i fields are read from the Residual,
+// written back through it by Mutate and Update (one Save, admin rows gated), and
+// redacted in the view; an Engine without a Residual refuses to write them.
+func TestEngine_ResidualFieldsRoundTrip(t *testing.T) {
+	f := newFake()
+	f.vals["core.log.level"] = json.RawMessage(`"warn"`)
+	res := newFakeResidual()
+	res.vals["openai_base_url"] = json.RawMessage(`"http://192.0.2.7:8080"`)
+	res.vals["protected_paths"] = json.RawMessage(`["/vault"]`)
+	res.redact["openai_base_url"] = true
+	e := New(f, nil, WithResidual(res))
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got := e.Snapshot()
+	if got.OpenAIBaseURL != "http://192.0.2.7:8080" || !slices.Equal(got.ProtectedPaths, []string{"/vault"}) {
+		t.Fatalf("residual projection: %q %v", got.OpenAIBaseURL, got.ProtectedPaths)
+	}
+	for _, kv := range e.View().Keys {
+		if kv.Name == "openai_base_url" && (string(kv.Value) != `"********"` || kv.Class != config.KeyClassInput) {
+			t.Errorf("view of a residual field = %s class %s", kv.Value, kv.Class)
+		}
+	}
+	if err := e.Mutate(func(c *config.Config) { c.OpenAIBaseURL = "http://192.0.2.9"; c.LogLevel = "debug" }); err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	if res.saves != 1 || string(res.vals["openai_base_url"]) != `"http://192.0.2.9"` || len(f.applied) != 1 {
+		t.Fatalf("saves=%d vals=%s applies=%d; want one Save and one Apply", res.saves, res.vals["openai_base_url"], len(f.applied))
+	}
+	if e.Snapshot().OpenAIBaseURL != "http://192.0.2.9" {
+		t.Fatal("the projection did not follow the residual write")
+	}
+	// protected_paths is an admin row.
+	user := config.Actor{Subject: "user:robin", Interactive: true, Can: func(string) bool { return false }}
+	_, err := e.Update(t.Context(), user, config.Update{Set: map[string]json.RawMessage{"protected_paths": json.RawMessage(`["/x"]`)}})
+	if !errors.Is(err, coreconfig.ErrForbidden) || !contains(err, "protected_paths") || res.saves != 1 {
+		t.Fatalf("admin residual row without core:admin: err=%v saves=%d", err, res.saves)
+	}
+	if _, err := e.Update(t.Context(), adminActor, config.Update{Set: map[string]json.RawMessage{"protected_paths": json.RawMessage(`"not a list"`)}}); !errors.Is(err, coreconfig.ErrInvalid) {
+		t.Fatalf("a value of the wrong shape: %v", err)
+	}
+	if _, err := e.Update(t.Context(), adminActor, config.Update{Unset: []string{"protected_paths"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, still := res.vals["protected_paths"]; still || len(e.Snapshot().ProtectedPaths) != 0 {
+		t.Fatalf("unset left protected_paths = %v", res.vals["protected_paths"])
+	}
+	// A failing Save is reported and the projection still follows what committed.
+	res.saveEr = errors.New("disk full")
+	if err := e.Mutate(func(c *config.Config) { c.OpenAIBaseURL = "http://192.0.2.10" }); err == nil || e.Snapshot().OpenAIBaseURL != "http://192.0.2.9" {
+		t.Fatalf("failing Save: err=%v url=%q", err, e.Snapshot().OpenAIBaseURL)
+	}
+	// Without a Residual the class-i fields are not the Engine's.
+	bare := New(newFake(), nil)
+	if err := bare.Mutate(func(c *config.Config) { c.OpenAIBaseURL = "x" }); !errors.Is(err, coreconfig.ErrUnknownKey) {
+		t.Fatalf("no Residual: err=%v", err)
+	}
+}
