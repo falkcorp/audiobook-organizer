@@ -547,8 +547,9 @@ func (p *Plugin) splitBookBulkMergeNative(d ScoringKindDeps, sched func(tasks.Ki
 	// user_state, sync_identity) and journals the undo under the run's id
 	// (operations); the merged candidate's row is deleted (split_book_candidates).
 	// HEAD declared only books and book_files. The wider set is deliberate (a row
-	// errs wide, resources.go) and the coordinator signed off on it for F5-04 as a
-	// deviation from rule R7's verbatim mapping.
+	// errs wide, resources.go). It deviates from rule R7's verbatim mapping of a
+	// non-empty HEAD Writes, in the safe direction; the coordinator's sign-off on
+	// that deviation is still pending (seams.d/F5-04.md).
 	c.Effects = tasks.Writes(res(ops.ResBooks, ops.ResBookFiles, ops.ResAuthors, ops.ResMetadataCache,
 		ops.ResIndexes, ops.ResExternalIDs, ops.ResUserState, ops.ResSyncIdentity, ops.ResOperations,
 		ops.ResSplitBookCandidates)...)

@@ -1,14 +1,16 @@
 // file: internal/plugins/dedup/kinds_chain_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6d01f54f-d1e9-4cf7-8def-037dd38e3e04
 // last-edited: 2026-11-19
 
 package dedup
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -134,7 +136,7 @@ func chainRows() []kindRow {
 		},
 		{
 			HeadID: "dedup.run-all", Title: "Find all duplicates",
-			HeadResume: sdk.ResumeRestart, Resume: tasks.ResumeContinue,
+			HeadResume: sdk.ResumeRestart, Resume: tasks.ResumeContinue, HeadReadsCheckpoint: true,
 			Priority: tasks.PriorityLow, Timeout: 24 * time.Hour, ReadOnly: true,
 			HeadKey: "dedup.run-all",
 		},
@@ -555,6 +557,43 @@ func TestDedupChain_LabelRefinementStartsBothChildrenInPreviewWithEmptyParams(t 
 	require.Contains(t, h.lastNote(), "Finished (report only, nothing written)")
 }
 
+// The native shell announces each step as it starts (HEAD's emits no such frame:
+// TestLabelRefinementHeadShellOutputIsUnchanged), so the bar moves to the step's
+// base before the child's "waiting for" frame.
+func TestDedupChain_LabelRefinementNativeAnnouncesEachStepStart(t *testing.T) {
+	_, d := newChainSpy()
+	def := (&Plugin{}).labelRefinementNative(d, nil)
+	h, err := runKind(t, def, tasks.ModeLive, &sentinelWriter{}, "")
+	require.NoError(t, err)
+	require.Equal(t, barsOf(2000, 0, 1, 1000, 1001, 2000), h.bars())
+	h.mu.Lock()
+	notes := append([]string(nil), h.notes...)
+	h.mu.Unlock()
+	require.Equal(t, "Rebuilding gold labels", notes[0])
+	require.Contains(t, notes[1], "Rebuilding gold labels — waiting for dedup.rebuild-gold-labels")
+	require.Equal(t, "Calibrating composite scorer", notes[2])
+}
+
+// A re-attached native child reports the "waiting for" frame too, so the bar does
+// not sit on "Starting at step N" for the whole wait.
+func TestDedupChain_RunAllReattachedNativeChildReportsWaitingFor(t *testing.T) {
+	setEmbeddings(t, true)
+	_, d := newChainSpy()
+	def := (&Plugin{}).runAllNative(d, nil)
+	h := newKindHost(def, tasks.ModeLive, &sentinelWriter{})
+	require.NoError(t, h.FakeRun.SetCheckpoint("", runAllState{
+		Plan:      []string{"embeddings", "acoustic", "find", "ai-review", "rescore-preview"},
+		StepIndex: 2, ChildOpID: "child-find",
+		Finished: []RunAllStepRecord{{ID: "embeddings"}, {ID: "acoustic"}},
+	}))
+	require.NoError(t, runKindOn(t, def, h, ""))
+	h.mu.Lock()
+	notes := strings.Join(h.notes, "\n")
+	h.mu.Unlock()
+	require.Contains(t, notes, " — waiting for dedup.full-scan")
+	require.NotContains(t, enqueuedKinds(h), kindFor("dedup.full-scan"), "the recorded child is waited for, not started again")
+}
+
 func TestDedupChain_LabelRefinementStopsAtAFailedChild(t *testing.T) {
 	_, d := newChainSpy()
 	def := (&Plugin{}).labelRefinementNative(d, nil)
@@ -590,6 +629,39 @@ func TestDedupChain_LabelRefinementResultNamesTheChildren(t *testing.T) {
 	out, err := task.Run(tasks.NewRC(h), nil)
 	require.NoError(t, err)
 	require.JSONEq(t, `{"dry_run":true,"rebuild_op":"child-1","calibrate_op":"child-2"}`, string(out))
+}
+
+// The re-attach warning names the chain's own step id (run-all's "find"), as HEAD
+// logged it, not the child's definition id.
+func TestDedupChain_UnreadableRecordedChildWarningNamesTheStepID(t *testing.T) {
+	var buf bytes.Buffer
+	env := chainEnv{
+		kindEnv: kindEnv{
+			Logger:   slog.New(slog.NewTextHandler(&buf, nil)),
+			Progress: func(int, int, string) {},
+			Log:      func(slog.Level, string) {},
+		},
+		Children: childDriver{
+			NoID: "the test returned no id",
+			Start: func(context.Context, string, childMode) (string, error) {
+				return "child-new", nil
+			},
+			Wait: func(_ context.Context, _ string, reattach bool, _ func(childObservation)) (childEnd, error) {
+				if reattach {
+					return childEnd{}, childGoneError{cause: errors.New("gone")}
+				}
+				return childEnd{Completed: true}, nil
+			},
+		},
+	}
+	id := "child-old"
+	require.NoError(t, runChainChild(context.Background(), env, chainChild{
+		Label: "Finding", DefID: "dedup.full-scan", StepID: "find", Head: "Finding",
+		Units: 1000, Total: 1000, Chain: "dedup.run-all",
+	}, &id, nil))
+	require.Contains(t, buf.String(), "step=find")
+	require.NotContains(t, buf.String(), "step=dedup.full-scan")
+	require.Equal(t, "child-new", id)
 }
 
 // --- exact progress, logs and result shapes (mutation survivors of the first run) ---
@@ -648,7 +720,7 @@ func TestDedupChain_RunAllResumeReportsFromTheRecordedStep(t *testing.T) {
 	require.Equal(t, barFrame{Done: 2000, Total: 5000, Known: true}, h.bars()[0])
 	require.Contains(t, h.notes[0], "Starting at step 3 of 5")
 	require.Contains(t, h.logged(), "Resuming at step 3 of 5")
-	require.Equal(t, barsOf(5000, 2000, 2000, 3000), h.bars()[:3], "a recorded child that already finished moves the bar a whole step")
+	require.Equal(t, barsOf(5000, 2000, 2000, 2001, 3000), h.bars()[:4], "a re-attached child reports its waiting frame, then a finished one moves the bar a whole step")
 }
 
 // A checkpoint with no plan is not a resume: the plan is built fresh and a

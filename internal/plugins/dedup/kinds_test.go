@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/kinds_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 74d898af-e4c2-4b28-9fc7-5a2b749513d4
 // last-edited: 2026-11-19
 
@@ -51,12 +51,18 @@ func fakeKindDeps(t *testing.T) KindDeps {
 	}
 }
 
-// kindResumeFor is rule R5's ResumePolicy table, written out once here so a
-// definition that drifts from it fails whatever its row says.
-func kindResumeFor(p sdk.ResumePolicy) tasks.ResumePolicy {
+// kindResumeFor is rule R5's ResumePolicy table, as the coordinator's cross-row
+// resume ruling (RULINGS-common.md:6) refines it, written out once here so a
+// definition that drifts from it fails whatever its row says. A v2 Restart is
+// Continue only when HEAD reads its checkpoint on restart (readsCheckpoint);
+// otherwise it is FromZero.
+func kindResumeFor(p sdk.ResumePolicy, readsCheckpoint bool) tasks.ResumePolicy {
 	switch p {
 	case sdk.ResumeRestart:
-		return tasks.ResumeContinue
+		if readsCheckpoint {
+			return tasks.ResumeContinue
+		}
+		return tasks.ResumeFromZero
 	case sdk.ResumeRequeue:
 		return tasks.ResumeFromZero
 	case sdk.ResumeDrop:
@@ -81,6 +87,9 @@ type kindRow struct {
 	// Drop, Ask Ask).
 	HeadResume sdk.ResumePolicy
 	Resume     tasks.ResumePolicy
+	// HeadReadsCheckpoint is set when HEAD's Run reads its checkpoint on restart.
+	// Only then does a HEAD Restart map to Continue (RULINGS-common.md:6).
+	HeadReadsCheckpoint bool
 	// Priority is the native priority; HEAD's DefaultPriority must map to it.
 	Priority tasks.Priority
 	// Timeout is HEAD's Timeout, carried unchanged.
@@ -175,7 +184,7 @@ func TestDedupKinds_MatchHEADDefs(t *testing.T) {
 			require.Equal(t, r.Title, c.Title)
 			require.Equal(t, r.HeadResume, head.ResumePolicy, "row's HEAD resume is HEAD's")
 			require.Equal(t, r.Resume, c.Resume)
-			require.Equal(t, kindResumeFor(head.ResumePolicy), c.Resume, "HEAD's resume policy maps to the native one by rule R5")
+			require.Equal(t, kindResumeFor(head.ResumePolicy, r.HeadReadsCheckpoint), c.Resume, "HEAD's resume policy maps to the native one by rule R5 and the cross-row resume ruling")
 			require.Equal(t, r.Priority, c.Priority)
 			require.Equal(t, kindHeadPriority(head.DefaultPriority), c.Priority, "HEAD's priority maps to the native one")
 			require.Equal(t, head.Timeout, c.Timeout, "timeout is carried unchanged")

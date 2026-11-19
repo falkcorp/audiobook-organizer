@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/chain.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1f33e68f-5822-4267-bfe7-0106d08d6de6
 // last-edited: 2026-11-19
 
@@ -114,6 +114,9 @@ type chainEnv struct {
 type chainChild struct {
 	// Label is the step's name in messages; DefID the child's definition id.
 	Label, DefID string
+	// StepID is the chain's own id for the step (run-all's "find", not the child's
+	// DefID): the `step` attribute of the re-attach warning, as HEAD logged it.
+	StepID string
 	// Head prefixes every progress note; Base and Total place the step on the
 	// parent's bar, which is Units wide per step.
 	Head        string
@@ -145,8 +148,15 @@ func childEndedError(label, id string, end childEnd) error {
 // stopped with it): it fails the step.
 //
 // record is called with force after the child's id is set (the plan must be
-// frozen before the wait) and, throttled by its owner, while the wait goes on.
-// It may be nil.
+// frozen before the wait) and, throttled by its owner, while the wait goes on. It
+// may be nil. "Force" is the caller's own unthrottle only: natively record ends in
+// rc.Checkpoint, which the kernel holds in memory until MinCheckpointInterval (30
+// s) has passed since the last flush (core/internal/executor/attempt.go), and the
+// native wait calls record only through this forced call (its driver reports one
+// childWaiting frame, no row changes). So natively the child id is NOT durable
+// for the wait: a hard kill or a fenced attempt resumes at this step with no
+// child id and starts a second child. F5-18 owes a flush-now checkpoint from
+// core, or a route that keeps the id durable (todo.d/2026-11-19-f5-04-native-run-all-child-id-flush.md).
 func runChainChild(ctx context.Context, env chainEnv, c chainChild, childID *string, record func(force bool)) error {
 	if record == nil {
 		record = func(bool) {}
@@ -187,10 +197,14 @@ func runChainChild(ctx context.Context, env chainEnv, c chainChild, childID *str
 		var gone childGoneError
 		switch {
 		case errors.As(err, &gone):
-			// Unreadable or gone: start the step again (the enqueue collapses onto
-			// a live run of the same definition if there is one).
+			// Unreadable or gone: start the step again. HEAD's enqueue collapses onto
+			// a live run of the same definition. Natively the start folds only into a
+			// QUEUED run of the same kind, mode and params (stageFold,
+			// core/internal/executor/start.go), never a running one: a child that is
+			// already running is not joined, and a second one queues behind it on the
+			// shared ConcurrencyKey.
 			env.Logger.Warn(c.Chain+": recorded child unreadable; re-enqueueing step",
-				"step", c.DefID, "child_op_id", *childID, "error", gone.cause)
+				"step", c.StepID, "child_op_id", *childID, "error", gone.cause)
 			*childID = ""
 		case err != nil:
 			return err

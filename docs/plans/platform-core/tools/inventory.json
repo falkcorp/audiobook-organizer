@@ -2571,12 +2571,10 @@
    "internal/plugins/dedup/",
    "internal/books/testdata/tasklint_exempt.d/F5-04.txt",
    "scripts/deadcode-baseline.txt",
-   "docs/agent-tasks/platform-core/seams.d/F5-04.md",
-   "pkg/ops/effects.go",
-   "internal/books/module.go"
+   "docs/agent-tasks/platform-core/seams.d/F5-04.md"
   ],
   "spec": "05-tasks §5T.8.2 (T5 row)",
-  "notes": "Tier: 32 definitions converted, each shared body rerouted through its shell (rule 3). Conversion rules 1-4 of 05-tasks §5T.8.2 apply; under rule 3 each shared body reaches its writer and stores only through what its shell hands it (the native shell rc.Writer() and its owner's declared Deps, HEAD's shell an adapter of the same interface over HEAD's writer), so this PR is not a mechanical rewrite. It deletes its own exemption entry file (internal/books/testdata/tasklint_exempt.d/<row>.txt, listing the files it converts) in the same PR and touches no other entry. The native shells do not import pkg/plugin/sdk (the HEAD shells keep it until F5)."
+  "notes": "Tier: 32 definitions converted, each shared body rerouted through its shell (rule 3). Conversion rules 1-4 of 05-tasks §5T.8.2 apply; under rule 3 each shared body reaches its writer and stores only through what its shell hands it (the native shell rc.Writer() and its owner's declared Deps, HEAD's shell an adapter of the same interface over HEAD's writer), so this PR is not a mechanical rewrite. It deletes its own exemption entry file (internal/books/testdata/tasklint_exempt.d/<row>.txt, listing the files it converts) in the same PR and touches no other entry. The native shells do not import pkg/plugin/sdk (the HEAD shells keep it until F5). It adds one Resource constant (ResSplitBookCandidates) to pkg/ops/effects.go and internal/books/module.go taskResourceKinds; both files are F5-03's in this wave, so they are not listed here (the same convention as F5-13)."
  },
  {
   "id": "F5-05",

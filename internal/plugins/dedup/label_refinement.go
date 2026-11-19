@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/label_refinement.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4b8e2d7a-91c3-4f05-b6a8-3d0e5c7f1a92
 // last-edited: 2026-11-19
 
@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -110,6 +111,11 @@ type labelRefinementEnv struct {
 	kindEnv
 	Children childDriver
 	Phase    phaseFunc
+	// StepFrame emits a progress frame as each step starts, before its phase. It
+	// is native-only: HEAD's chain emitted none (its first frame for a step was
+	// the child's own queued or running frame at base+1), so HEAD's shell leaves
+	// it false and its output stays what it was.
+	StepFrame bool
 }
 
 // runLabelRefinement is HEAD's v2 shell over labelRefinementCore.
@@ -121,8 +127,21 @@ func (p *Plugin) runLabelRefinement(ctx context.Context, _ json.RawMessage, rep 
 		return fmt.Errorf("%s: operation store not available; cannot follow child operations", LabelRefinementDefID)
 	}
 	env := headEnv(rep, true)
-	_, err := labelRefinementCore(ctx, labelRefinementEnv{kindEnv: env, Children: p.headChildDriver(env.OpID), Phase: headPhase(rep)})
+	_, err := labelRefinementCore(ctx, labelRefinementEnv{kindEnv: env, Children: p.headChildDriver(env.OpID), Phase: headOuterPhase(rep, env)})
 	return err
+}
+
+// headOuterPhase is HEAD's label-refinement phase wrapper: Reporter.RunPhase for
+// the Operations page's per-step phase, but fn gets the OUTER env, not one over
+// the phase's reporter. HEAD's label-refinement ignored the phase reporter and
+// reported and logged through the outer one, so a step's lines carry no `phase`
+// attribute (dedup.run-all, by contrast, logs through its phase reporters).
+func headOuterPhase(rep sdk.Reporter, outer kindEnv) phaseFunc {
+	return func(ctx context.Context, id string, fn func(ctx context.Context, env kindEnv) error) error {
+		return rep.RunPhase(ctx, id, func(ctx context.Context, _ opsregistry.Reporter) error {
+			return fn(ctx, outer)
+		})
+	}
 }
 
 // labelRefinementCore is the label-refinement body, shared by both shells: each
@@ -132,12 +151,14 @@ func labelRefinementCore(ctx context.Context, env labelRefinementEnv) (LabelRefi
 	total := len(labelRefinementSteps) * labelRefinementStepUnits
 	childIDs := make([]string, len(labelRefinementSteps))
 	for i, step := range labelRefinementSteps {
-		env.Progress(i*labelRefinementStepUnits, total, step.Label)
+		if env.StepFrame {
+			env.Progress(i*labelRefinementStepUnits, total, step.Label)
+		}
 		// One phase per step, as dedup.run-all does, so the Operations page
 		// shows which step is running.
 		err := env.Phase(ctx, step.DefID, func(ctx context.Context, e kindEnv) error {
 			return runChainChild(ctx, chainEnv{kindEnv: e, Children: env.Children}, chainChild{
-				Label: step.Label, DefID: step.DefID, Head: step.Label,
+				Label: step.Label, DefID: step.DefID, StepID: step.DefID, Head: step.Label,
 				Base: i * labelRefinementStepUnits, Total: total, Units: labelRefinementStepUnits,
 				Mode: childReportOnly, StopNote: "; label refinement stopped", Chain: "dedup.label-refinement",
 			}, &childIDs[i], nil)
