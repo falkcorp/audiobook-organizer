@@ -1,11 +1,14 @@
 // file: internal/maintenance/jobs/export_writes_test.go
-// version: 2.0.0
+// version: 3.0.0
 // guid: 1f6e2b94-7c03-4d58-a9e1-5b8d3c70f2a6
-// last-edited: 2026-11-16
+// last-edited: 2026-11-19
 
 package jobs
 
-import "github.com/falkcorp/audiobook-organizer/pkg/ops"
+import (
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
+	"github.com/falkcorp/mediacore/tasks"
+)
 
 // TraceView is one job's jobTrace for the external tests.
 type TraceView struct {
@@ -36,10 +39,11 @@ func DeriveWrites(traces map[string][]string, table map[string][]ops.Resource) (
 	return deriveWrites(in, table)
 }
 
-// FailJobWritesWith replaces the derivation Kinds uses with one that fails with
-// err and returns the function that puts the real one back.
-func FailJobWritesWith(err error) (restore func()) {
-	prev := jobWritesFor
-	jobWritesFor = func() (map[string][]ops.Resource, error) { return nil, err }
-	return func() { jobWritesFor = prev }
+// KindsWithFailingWrites is Kinds over a derivation that fails with err. It
+// replaces FailJobWritesWith, which swapped the package variable Kinds reads and
+// so was unsafe under t.Parallel: a parallel test building the kinds beside it
+// would have seen the failure, and the swap and the read raced. Nothing global
+// changes here.
+func KindsWithFailingWrites(err error) ([]tasks.Definition, error) {
+	return kindsWith(func() (map[string][]ops.Resource, error) { return nil, err }, KindDeps{}, nil)
 }

@@ -148,8 +148,12 @@ func deriveJobWrites() (map[string][]ops.Resource, error) {
 	return deriveWrites(jobTraces, resources.Table())
 }
 
+// writesDeriver is a derivation of every job's declared write set.
+type writesDeriver func() (map[string][]ops.Resource, error)
+
 // jobWritesFor is every job's declared write set, derived on first use and not at
 // package init: nothing reads it until the kinds are built (Kinds, which F5-18
 // registers), so a binary that merely links this package does no work and cannot
-// fail here. It is a variable so a test can make the derivation fail.
-var jobWritesFor = sync.OnceValues(deriveJobWrites)
+// fail here. It is never reassigned: a test that needs a failing derivation hands
+// one to kindsWith instead of swapping this (see export_writes_test.go).
+var jobWritesFor writesDeriver = sync.OnceValues(deriveJobWrites)
