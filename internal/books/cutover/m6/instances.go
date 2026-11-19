@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/instances.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 8b6a74f6-b7ad-4baf-bb70-c1f2c5ccb49b
 // last-edited: 2026-11-19
 
@@ -174,7 +174,7 @@ type pending struct {
 	// member is the blob member the instance came from, and raw its JSON.
 	member string
 	raw    []byte
-	// urls is the destination fields: settings field to its (clean) URL.
+	// urls is the destination fields: settings field to its (clean) stored URL.
 	urls map[string]string
 	// userinfo is a credential split out of a URL field, to import as a secret.
 	userinfo string
@@ -183,24 +183,44 @@ type pending struct {
 	// operatorPair is one of the four operator-secret pairs of M1.4 step 2.
 	operatorPair bool
 	renamedFrom  string
+
+	// Set by finish: the signature of the effective destinations (the origin every
+	// trust field is signed from) and the fields whose effective origin is not the
+	// stored one.
+	sig      string
+	overlaid []string
 }
 
 // finish applies "Trust carried over" to p: Local with its origin for any
 // instance with a destination, the secrets origin when it holds a secret, and the
-// operator-secret origins for the four pairs.
-func (p *pending) finish() {
-	dests := map[string]string{}
-	for field, raw := range p.urls {
+// operator-secret origins for the four pairs. Every origin is the origin of the
+// effective destination: the stored URL with the operator overlay eff applied
+// over it, field by field (seams.d/F7-01 rows 17 and 22), so the signature core
+// compares at the first boot is the one that boot will compute.
+func (p *pending) finish(eff map[string]string) {
+	stored := destsOf(p.urls)
+	dests := maps.Clone(stored)
+	for _, field := range slices.Sorted(maps.Keys(eff)) {
+		raw := strings.TrimSpace(eff[field])
+		if raw == "" {
+			continue
+		}
 		if o, ok := originOf(raw); ok {
 			dests[field] = o
+		} else {
+			// An overlay that is no origin leaves the field with none to trust.
+			delete(dests, field)
+		}
+		if dests[field] != stored[field] {
+			p.overlaid = append(p.overlaid, field)
 		}
 	}
-	sig := signature(dests)
+	p.sig = signature(dests)
 	if len(dests) > 0 {
 		p.inst.Config.Local = true
-		p.inst.LocalOrigin = sig
+		p.inst.LocalOrigin = p.sig
 		if p.operatorPair {
-			p.inst.OperatorSecretOrigin = maps2(dests)
+			p.inst.OperatorSecretOrigin = maps.Clone(dests)
 		}
 	}
 	holds := false
@@ -210,16 +230,8 @@ func (p *pending) finish() {
 		}
 	}
 	if holds || p.copyKey != "" || p.userinfo != "" {
-		p.inst.SecretsOrigin = sig
+		p.inst.SecretsOrigin = p.sig
 	}
-}
-
-func maps2(m map[string]string) map[string]string {
-	out := make(map[string]string, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
-	return out
 }
 
 // cleanURL splits userinfo out of one URL field into p and returns the URL to
@@ -243,8 +255,12 @@ func (p *pending) cleanURL(field, raw string) (string, bool) {
 // its URL and an OpenAI key copy), into the chunk batch. A refusal quarantines
 // the member the instance came from, once.
 func (m *Migration) writeInstance(ctx context.Context, c *chunk, p *pending, quarantined map[string]bool) (wrote bool, err error) {
-	p.finish()
 	ref := p.inst.Config.Ref
+	eff, err := m.cfg.Effective(ctx, ref)
+	if err != nil {
+		return false, fmt.Errorf("m6: the effective destinations of %s: %w", ref, err)
+	}
+	p.finish(eff)
 	detail := string(p.inst.Config.Adapter)
 	if p.renamedFrom != "" {
 		detail += "; id " + p.renamedFrom + " renamed"
@@ -253,6 +269,10 @@ func (m *Migration) writeInstance(ctx context.Context, c *chunk, p *pending, qua
 	if p.inst.Config.Local {
 		m.report(Entry{Kind: "trust", ID: ref.String(), Detail: "Local, origin " + p.inst.LocalOrigin})
 	}
+	for _, field := range p.overlaid {
+		// The origin is in the trust entry above; the supplied URL is never reported.
+		m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the effective " + field + " is the operator's (environment or config file), not the stored one; trust is signed from it"})
+	}
 	for _, field := range slices.Sorted(maps.Keys(p.urls)) {
 		if u, err := url.Parse(p.urls[field]); err != nil || u.Scheme == "" || u.Host == "" {
 			// Kept as stored and never granted trust: the instance's own health
@@ -260,9 +280,6 @@ func (m *Migration) writeInstance(ctx context.Context, c *chunk, p *pending, qua
 			// M1.10), not a row M6 can decline.
 			m.report(Entry{Kind: "note", ID: ref.String(), Detail: "misconfigured: the " + field + " does not parse as a URL; kept as stored"})
 		}
-	}
-	if m.cfg.DryRun {
-		return true, nil
 	}
 	b := c.batch()
 	// Read the key to copy first and stage the secrets only after the instance
@@ -283,7 +300,7 @@ func (m *Migration) writeInstance(ctx context.Context, c *chunk, p *pending, qua
 		default:
 			copyVal = val
 			p.inst.Config.Settings["api_key"] = secrets.RefTo(p.copyKey)
-			p.inst.SecretsOrigin = signature(destsOf(p.urls))
+			p.inst.SecretsOrigin = p.sig
 		}
 	}
 	err = m.cfg.Integrations.ImportInstance(ctx, b, p.inst)
@@ -343,20 +360,21 @@ func (m *Migration) quarantineMember(c *chunk, member string, raw []byte, reason
 	return c.quarantine(KeyBlob+"#"+member, raw, reason)
 }
 
-// metadataInstance builds metadata/<id> from one metadata_sources entry.
-func (m *Migration) metadataInstance(raw json.RawMessage, i int, set secretSet) (*pending, string) {
-	member := fmt.Sprintf("metadata_sources.%d", i)
+// metadataInstance builds metadata/<id> from one metadata_sources entry. When it
+// cannot, it returns nil, the member's name and the quarantine reason.
+func (m *Migration) metadataInstance(raw json.RawMessage, i int, set secretSet) (p *pending, member, reason string) {
+	member = fmt.Sprintf("metadata_sources.%d", i)
 	var src headMetadataSource
 	if err := json.Unmarshal(raw, &src); err != nil || strings.TrimSpace(src.ID) == "" {
-		return nil, member
+		return nil, member, reasonBlobUndecodable
 	}
 	id, renamed, ok := instanceID(src.ID)
 	if !ok {
-		return nil, member
+		return nil, member, reasonBlobUndecodable
 	}
 	ref := integrations.Ref{Kind: integrations.KindMetadata, Instance: id}
 	adapter := integrations.AdapterID("books." + string(id))
-	p := &pending{member: member, raw: raw, urls: map[string]string{}, operatorPair: id == "google-books" || id == "hardcover"}
+	p = &pending{member: member, raw: raw, urls: map[string]string{}, operatorPair: id == "google-books" || id == "hardcover"}
 	if renamed {
 		p.renamedFrom = src.ID
 	}
@@ -364,7 +382,7 @@ func (m *Migration) metadataInstance(raw json.RawMessage, i int, set secretSet) 
 	if src.BaseURL != "" {
 		clean, ok := p.cleanURL("base_url", src.BaseURL)
 		if !ok {
-			return nil, member
+			return nil, member, reasonUnprovenURL
 		}
 		settings["base_url"] = clean
 	}
@@ -372,7 +390,7 @@ func (m *Migration) metadataInstance(raw json.RawMessage, i int, set secretSet) 
 		Ref: ref, Adapter: adapter, Name: src.Name, Enabled: src.Enabled, Priority: src.Priority,
 		Settings: settings, Limits: metadataLimits(string(id), src),
 	}}
-	return p, ""
+	return p, "", ""
 }
 
 // builtinLimits are HEAD's per-provider budgets (internal/metadata/providerhttp
@@ -434,23 +452,24 @@ func metadataLimits(id string, src headMetadataSource) *integrations.Limits {
 	return &l
 }
 
-// aiInstance builds ai/<id> from one ai_endpoints row (05-ai section 10).
-func (m *Migration) aiInstance(raw json.RawMessage, i int, set secretSet) (*pending, string) {
-	member := fmt.Sprintf("ai_endpoints.%d", i)
+// aiInstance builds ai/<id> from one ai_endpoints row (05-ai section 10). When it
+// cannot, it returns nil, the member's name and the quarantine reason.
+func (m *Migration) aiInstance(raw json.RawMessage, i int, set secretSet) (p *pending, member, reason string) {
+	member = fmt.Sprintf("ai_endpoints.%d", i)
 	var ep headAIEndpoint
 	if err := json.Unmarshal(raw, &ep); err != nil || strings.TrimSpace(ep.ID) == "" {
-		return nil, member
+		return nil, member, reasonBlobUndecodable
 	}
 	id, renamed, ok := instanceID(ep.ID)
 	if !ok {
-		return nil, member
+		return nil, member, reasonBlobUndecodable
 	}
 	adapter, ok := protocolAdapter(ep.Protocol)
 	if !ok {
-		return nil, member
+		return nil, member, reasonBlobUndecodable
 	}
 	ref := integrations.Ref{Kind: integrations.KindAI, Instance: id}
-	p := &pending{member: member, raw: raw, urls: map[string]string{}, operatorPair: id == instanceOpenAI}
+	p = &pending{member: member, raw: raw, urls: map[string]string{}, operatorPair: id == instanceOpenAI}
 	if renamed {
 		p.renamedFrom = ep.ID
 	}
@@ -464,7 +483,7 @@ func (m *Migration) aiInstance(raw json.RawMessage, i int, set secretSet) (*pend
 		} else {
 			clean, ok := p.cleanURL("url", ep.URL)
 			if !ok {
-				return nil, member
+				return nil, member, reasonUnprovenURL
 			}
 			settings["url"] = clean
 		}
@@ -514,7 +533,7 @@ func (m *Migration) aiInstance(raw json.RawMessage, i int, set secretSet) (*pend
 	p.inst = integrations.StoredInstance{Config: integrations.InstanceConfig{
 		Ref: ref, Adapter: adapter, Name: name, Enabled: ep.Enabled, Priority: ep.Priority, Settings: settings,
 	}}
-	return p, ""
+	return p, "", ""
 }
 
 // mapCaps maps each tick through the capability-ID map, dropping a duplicate the
@@ -530,15 +549,18 @@ func mapCaps(in []string) []string {
 	return out
 }
 
-// delugeInstance builds download/deluge from deluge_web_url (05-download
-// section 10); nil when HEAD had no web URL (the instance would have no
-// destination).
-func (m *Migration) delugeInstance(webURL string, set secretSet) (*pending, bool) {
+// delugeInstance builds download/deluge from webURL, the effective Web UI URL
+// (the operator's, else the blob's: see groupRun.deluge); nil when there is none
+// (the instance would have no destination), and proven false when a credential
+// cannot be ruled out of it. stored is the blob's own value, the only part of the
+// member that is quarantined if the importer refuses the instance: the operator's
+// URL is not the blob's to keep.
+func (m *Migration) delugeInstance(webURL, stored string, set secretSet) (*pending, bool) {
 	if strings.TrimSpace(webURL) == "" {
 		return nil, true
 	}
 	ref := integrations.Ref{Kind: integrations.KindDownload, Instance: instanceDeluge}
-	p := &pending{member: "deluge_web_url", raw: []byte(webURL), urls: map[string]string{}, operatorPair: true}
+	p := &pending{member: "deluge_web_url", raw: []byte(stored), urls: map[string]string{}, operatorPair: true}
 	// The member's raw bytes go to quarantine only on a refusal; the URL may carry
 	// userinfo, which is why the step declares the family Sensitive.
 	settings := refsFor(set, ref)
@@ -558,7 +580,9 @@ func (m *Migration) delugeInstance(webURL string, set secretSet) (*pending, bool
 // URL, priority and concurrency, the batch and vision features, and the key by
 // reference. Its capability ticks are not recoverable from a row that was never
 // stored, so none are set, which is default-deny until an admin ticks them.
-func (m *Migration) openAIInstance(base string, set secretSet) *pending {
+// proven is false when a credential cannot be ruled out of the URL: the caller
+// quarantines the member.
+func (m *Migration) openAIInstance(base string, set secretSet) (*pending, bool) {
 	ref := integrations.Ref{Kind: integrations.KindAI, Instance: instanceOpenAI}
 	if strings.TrimSpace(base) == "" {
 		base = defaultOpenAIBaseURL
@@ -566,7 +590,7 @@ func (m *Migration) openAIInstance(base string, set secretSet) *pending {
 	p := &pending{member: "openai_base_url", raw: []byte(base), urls: map[string]string{}, operatorPair: true}
 	clean, ok := p.cleanURL("url", base)
 	if !ok {
-		return nil
+		return nil, false
 	}
 	settings := refsFor(set, ref)
 	settings["url"] = clean
@@ -578,7 +602,7 @@ func (m *Migration) openAIInstance(base string, set secretSet) *pending {
 	p.inst = integrations.StoredInstance{Config: integrations.InstanceConfig{
 		Ref: ref, Adapter: "core.openai_compat", Name: "OpenAI (migrated from openai_api_key)", Enabled: true, Priority: 20, Settings: settings,
 	}}
-	return p
+	return p, true
 }
 
 // defaultOpenAIBaseURL is HEAD's config.DefaultOpenAIBaseURL, pinned by a test.

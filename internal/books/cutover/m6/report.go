@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/report.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0699342a-cff3-4c41-87a1-25c400aeba93
 // last-edited: 2026-11-19
 
@@ -20,7 +20,7 @@ type Entry struct {
 	Detail string
 }
 
-// Report collects the entries of a run, in a dry run and a real one alike.
+// Report collects the entries of a run, in a Plan and a real run alike.
 type Report struct {
 	mu      sync.Mutex
 	entries []Entry

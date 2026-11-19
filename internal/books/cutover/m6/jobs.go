@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/jobs.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8f23f612-3a1b-415d-8bc4-11836c3c671e
 // last-edited: 2026-11-19
 
@@ -126,14 +126,12 @@ func (m *Migration) job(ctx context.Context, c *chunk, kv storage.KV) error {
 		Updated:       updated,
 	}
 	m.report(Entry{Kind: "job", ID: id, Detail: state.String()})
-	if !m.cfg.DryRun {
-		switch err := m.cfg.AI.ImportJob(ctx, c.batch(), job); {
-		case err == nil:
-		case errors.Is(err, storage.ErrImportConflict):
-			return c.quarantine(key, kv.Value, reasonJobConflict)
-		default:
-			return errors.Join(errors.New("m6: import job "+id), err)
-		}
+	switch err := m.cfg.AI.ImportJob(ctx, c.batch(), job); {
+	case err == nil:
+	case errors.Is(err, storage.ErrImportConflict):
+		return c.quarantine(key, kv.Value, reasonJobConflict)
+	default:
+		return errors.Join(errors.New("m6: import job "+id), err)
 	}
 	outcome := OutcomeJob
 	if state == ai.JobFailed && (!known || row.Status != "failed" && row.Status != "expired") {

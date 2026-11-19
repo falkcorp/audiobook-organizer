@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/step.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: ff3e2f5f-1fc0-4835-b579-944568abeb07
 // last-edited: 2026-11-19
 
@@ -37,6 +37,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 
@@ -134,12 +136,22 @@ type Config struct {
 	// and the blob (a lazy accessor: the range exists only after the store is open).
 	Legacy func() storage.Reader
 
-	// DryRun makes Step read and plan but write nothing, staging no importer
-	// call and deleting no row; the plan is recorded in Report (05-metadata
-	// M1.10, "the step's dry-run mode").
-	DryRun bool
+	// Effective is the destination view in effect at cutover for the instance ref:
+	// the URL settings (settings field to URL) an operator supplies over the stored
+	// row, which at HEAD is the process environment or the server's config file. It
+	// is the overlay core's operator layer applies on top of the stored layer, and
+	// an instance's trust (Local, the secrets origin and the operator-secret
+	// origins) is signed from the stored destinations with this overlay applied
+	// (seams.d/F7-01 rows 17 and 22: the effective view wins over 05-metadata
+	// M1.10's "stored origins"). A value is the URL as supplied (empty ones are no
+	// overlay); a nil or empty map means none. For download/deluge the overlay is
+	// also the instance's own URL: HEAD's Deluge URL is environment-or-file
+	// authoritative over the stored blob, including a stored empty value
+	// (internal/config applyEnvAuthoritativeConfig), so the blob's may be empty or
+	// stale. Required: a caller with no overlay passes a function returning nil.
+	Effective func(ctx context.Context, ref integrations.Ref) (map[string]string, error)
 	// Report receives one entry per instance, trust grant, root and quarantined
-	// row, in both modes. nil keeps none.
+	// row. nil keeps none.
 	Report *Report
 	// Logger receives one line per quarantined row (its key, a class, never its
 	// value). nil discards.
@@ -155,13 +167,14 @@ type Migration struct {
 	logger *slog.Logger
 
 	mu sync.Mutex
-	// pulled is the keys a dry run has consumed: a real run deletes them, so the
-	// shard never reaches a row a group already took; a dry run deletes nothing,
-	// so it must remember.
-	pulled map[string]bool
-	read   int64
-	out    map[string]int64
-	quar   int64
+	// seen is every source row this boot has read, whether the shard visited it or
+	// a group pulled it forward, and handled the ones it consumed or quarantined.
+	// Verify holds them to each other: a row that was read and then neither
+	// consumed nor quarantined is a row the step lost track of.
+	seen    map[string]bool
+	handled map[string]bool
+	out     map[string]int64
+	quar    int64
 }
 
 // SourceRanges is the step's Source: the retired claims M6 drains, in key order.
@@ -192,10 +205,6 @@ func New(cfg Config, id string, raisesLevel int, after []storage.StepRef) (datam
 	switch {
 	case cfg.Integrations == nil || cfg.AI == nil || cfg.Notify == nil || cfg.Config == nil || cfg.Secrets == nil:
 		return datamigrate.DataMigration{}, errors.New("m6: all five importers are required")
-	case cfg.SecretNames == nil || cfg.SecretValue == nil:
-		return datamigrate.DataMigration{}, errors.New("m6: Config.SecretNames and Config.SecretValue are required")
-	case cfg.Legacy == nil:
-		return datamigrate.DataMigration{}, errors.New("m6: Config.Legacy is books' legacy range")
 	case id == "":
 		return datamigrate.DataMigration{}, errors.New("m6: the step ID is required")
 	case raisesLevel <= 0:
@@ -203,10 +212,10 @@ func New(cfg Config, id string, raisesLevel int, after []storage.StepRef) (datam
 	case len(after) == 0:
 		return datamigrate.DataMigration{}, errors.New("m6: after is books' level step")
 	}
-	m := &Migration{cfg: cfg, by: id, logger: cfg.Logger, out: map[string]int64{}, pulled: map[string]bool{}}
-	if m.logger == nil {
-		m.logger = slog.New(slog.DiscardHandler)
+	if err := cfg.checkReads(); err != nil {
+		return datamigrate.DataMigration{}, err
 	}
+	m := newMigration(cfg, id)
 	return datamigrate.DataMigration{
 		ID:          id,
 		Owner:       "books",
@@ -228,33 +237,57 @@ func New(cfg Config, id string, raisesLevel int, after []storage.StepRef) (datam
 	}, nil
 }
 
-// chunk is one Step call's writes: the StepWriter, or nothing in a dry run.
+// checkReads refuses a Config missing something the step reads (as opposed to
+// writes), which is all Plan needs as well.
+func (c Config) checkReads() error {
+	switch {
+	case c.SecretNames == nil || c.SecretValue == nil:
+		return errors.New("m6: Config.SecretNames and Config.SecretValue are required")
+	case c.Effective == nil:
+		return errors.New("m6: Config.Effective is required (a caller with no operator overlay passes a function returning nil)")
+	case c.Legacy == nil:
+		return errors.New("m6: Config.Legacy is books' legacy range")
+	}
+	return nil
+}
+
+func newMigration(cfg Config, id string) *Migration {
+	m := &Migration{cfg: cfg, by: id, logger: cfg.Logger, seen: map[string]bool{}, handled: map[string]bool{}, out: map[string]int64{}}
+	if m.logger == nil {
+		m.logger = slog.New(slog.DiscardHandler)
+	}
+	return m
+}
+
+// writes is where one Step call's effects go: the runner's StepWriter in a boot,
+// a recorder that keeps nothing in Plan. Step's code is the same either way; the
+// importers it calls and the writes it makes are what differ.
+type writes interface {
+	Batch() *storage.Batch
+	Delete(key []byte) error
+	Set(key, value []byte) error
+	Count(outcome string)
+	Quarantine(key, raw []byte, reason string) error
+}
+
+// chunk is one Step call's writes.
 type chunk struct {
 	m *Migration
-	w *datamigrate.StepWriter
+	w writes
 }
 
-// batch is the chunk's batch, nil in a dry run (no importer is called then).
-func (c *chunk) batch() *storage.Batch {
-	if c.m.cfg.DryRun {
-		return nil
-	}
-	return c.w.Batch()
-}
+// batch is the chunk's batch, which the importers stage into.
+func (c *chunk) batch() *storage.Batch { return c.w.Batch() }
 
 // consume deletes a source row the step has handled and counts it under
-// outcome. Every source row is consumed exactly once, whether Step was called
-// for it or it was pulled forward, which is what Verify's balance relies on.
+// outcome. Every source row is consumed or quarantined exactly once, whether Step
+// was called for it or it was pulled forward, which is what Verify checks.
 func (c *chunk) consume(key string, outcome string) error {
-	if !c.m.cfg.DryRun {
-		if err := c.w.Delete([]byte(key)); err != nil {
-			return err
-		}
-		c.w.Count(outcome)
-	} else {
-		c.m.markPulled(key)
+	if err := c.w.Delete([]byte(key)); err != nil {
+		return err
 	}
-	c.m.tally(outcome)
+	c.w.Count(outcome)
+	c.m.tally(key, outcome)
 	return nil
 }
 
@@ -263,70 +296,59 @@ func (c *chunk) consume(key string, outcome string) error {
 func (c *chunk) quarantine(key string, raw []byte, reason string) error {
 	c.m.logger.Warn("m6: a row is quarantined", "key", key, "reason", reason)
 	c.m.report(Entry{Kind: "quarantine", ID: key, Detail: reason})
-	if !c.m.cfg.DryRun {
-		if err := c.w.Quarantine([]byte(key), raw, reason); err != nil {
-			return err
-		}
-	} else {
-		c.m.markPulled(key)
+	if err := c.w.Quarantine([]byte(key), raw, reason); err != nil {
+		return err
 	}
 	c.m.tallyQuarantine(key)
 	return nil
 }
 
 // note counts a derived outcome (an instance, a grant) that is not a source row.
-func (c *chunk) note(outcome string) {
-	if !c.m.cfg.DryRun {
-		c.w.Count(outcome)
-	}
-}
+func (c *chunk) note(outcome string) { c.w.Count(outcome) }
 
-func (m *Migration) markPulled(key string) {
+// read records a source row the step has read.
+func (m *Migration) read(key string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.pulled[key] = true
-}
-
-// alreadyTaken reports a row a dry run consumed with its group.
-func (m *Migration) alreadyTaken(key string) bool {
-	if !m.cfg.DryRun {
-		return false
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.pulled[key]
+	m.seen[key] = true
 }
 
 // tally records one consumed source row under outcome.
-func (m *Migration) tally(outcome string) {
+func (m *Migration) tally(key, outcome string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.read++
+	m.handled[key] = true
 	m.out[outcome]++
 }
 
-// tallyQuarantine records a quarantined key. A synthetic member key of the blob
-// ("setting:config_blob#<member>") is a derived record, not a source row, so it
-// is not counted: the runner counts the quarantine record itself, and the
-// balance is over source rows.
+// memberKeyPrefix starts the synthetic key of a quarantined blob member
+// ("setting:config_blob#<member>"): a derived record, not a source row.
+const memberKeyPrefix = KeyBlob + "#"
+
+// tallyQuarantine records a quarantined source row. A synthetic member key is not
+// one, so it is not counted: the runner counts the quarantine record itself, and
+// the accounting is over source rows.
 func (m *Migration) tallyQuarantine(key string) {
-	if strings.Contains(key, "#") {
+	if strings.HasPrefix(key, memberKeyPrefix) {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.read++
+	m.handled[key] = true
 	m.quar++
 }
 
 // Step handles one row. A row is read once: by the visit the shard pays it, or by
 // the visit of the group it belongs to.
 func (m *Migration) Step(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
+	return m.step(ctx, kv, w)
+}
+
+// step is Step over any writes, which Plan drives with its own.
+func (m *Migration) step(ctx context.Context, kv storage.KV, w writes) error {
 	c := &chunk{m: m, w: w}
 	key := string(kv.Key)
-	if m.alreadyTaken(key) {
-		return nil
-	}
+	m.read(key)
 	switch {
 	case strings.HasPrefix(key, PrefixAIJobPayload):
 		return c.quarantine(key, kv.Value, reasonOrphanPayload)
@@ -353,28 +375,32 @@ func (m *Migration) get(ctx context.Context, key string) ([]byte, error) {
 	case err != nil:
 		return nil, fmt.Errorf("m6: read %s: %w", key, err)
 	}
+	m.read(key)
 	return bytes.Clone(raw), nil
 }
 
 // Verify is the step's invariant gate: nothing of any drained family is left, and
-// this boot's accounting balances (every source row consumed was imported,
-// dropped by rule or quarantined, never neither). Counts are this boot's: a boot
-// that resumed after a crash reports only what it stepped.
+// this boot's accounting balances: every source row it read (visited or pulled
+// forward) was consumed or quarantined, and nothing was consumed that it never
+// read. Counts are this boot's: a boot that resumed after a crash reports only
+// what it stepped.
 func (m *Migration) Verify(ctx context.Context, r storage.Reader) (datamigrate.VerifyReport, error) {
 	m.mu.Lock()
-	rep := datamigrate.VerifyReport{Read: m.read, Quarantined: m.quar}
-	var handled int64
+	rep := datamigrate.VerifyReport{Read: int64(len(m.seen)), Quarantined: m.quar}
 	for _, n := range m.out {
-		handled += n
+		rep.Written += n
 	}
-	rep.Written = handled
+	for _, key := range slices.Sorted(maps.Keys(m.seen)) {
+		if !m.handled[key] {
+			rep.Failures = append(rep.Failures, fmt.Sprintf("a row was read and neither consumed nor quarantined (%s)", key))
+		}
+	}
+	for _, key := range slices.Sorted(maps.Keys(m.handled)) {
+		if !m.seen[key] {
+			rep.Failures = append(rep.Failures, fmt.Sprintf("a row was consumed that was never read (%s)", key))
+		}
+	}
 	m.mu.Unlock()
-	if m.cfg.DryRun {
-		// A dry run deletes nothing, so the step must not be recorded as done: the
-		// boot that rehearses it fails here, and a real boot runs it.
-		rep.Failures = append(rep.Failures, "dry run: nothing was written and no row was deleted")
-		return rep, nil
-	}
 	for _, rg := range SourceRanges() {
 		for kv, err := range r.Scan(ctx, storage.ScanOptions{Start: rg.Start, End: rg.End, KeysOnly: true, Limit: 1}) {
 			if err != nil {
@@ -382,9 +408,6 @@ func (m *Migration) Verify(ctx context.Context, r storage.Reader) (datamigrate.V
 			}
 			rep.Failures = append(rep.Failures, fmt.Sprintf("a row of a drained family is still present (%s)", kv.Key))
 		}
-	}
-	if rep.Read != rep.Written+rep.Quarantined {
-		rep.Failures = append(rep.Failures, fmt.Sprintf("read %d rows but handled %d and quarantined %d", rep.Read, rep.Written, rep.Quarantined))
 	}
 	return rep, nil
 }

@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/webhooks.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3d0c6f1e-0b6e-4f0e-8a56-6d1bb6d0a9f4
 // last-edited: 2026-11-19
 
@@ -120,9 +120,6 @@ func (g *groupRun) rule(ctx context.Context, events string, refs []integrations.
 	}
 	rule := notify.Rule{ID: ruleWebhooks, Topics: topics, MinSeverity: notify.SeverityInfo, Instances: refs, Enabled: true}
 	m.report(Entry{Kind: "rule", ID: ruleWebhooks, Detail: fmt.Sprintf("%d topics, %d instances", len(topics), len(refs))})
-	if m.cfg.DryRun {
-		return nil
-	}
 	switch err := m.cfg.Notify.ImportRule(ctx, c.batch(), rule); {
 	case err == nil:
 		c.note(OutcomeRule)

@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/errors_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e93b1a7-d204-4c68-b7f0-3a81c6d9e552
 // last-edited: 2026-11-19
 
@@ -21,7 +21,7 @@ func TestNew_RefusesAnIncompleteConfig(t *testing.T) {
 	r := newRig(t, withRows(headRows(t)))
 	good := m6.Config{
 		Integrations: lazyInteg{r}, AI: lazyAI{r}, Notify: lazyNotify{r}, Config: r.cfg, Secrets: r.secrets,
-		SecretNames: r.secrets.names, SecretValue: r.secrets.value, Legacy: r.legacy,
+		SecretNames: r.secrets.names, SecretValue: r.secrets.value, Legacy: r.legacy, Effective: r.overlay,
 	}
 	after := []storage.StepRef{{Version: 1}}
 	if _, err := m6.New(good, "step", 3, after); err != nil {
@@ -36,6 +36,7 @@ func TestNew_RefusesAnIncompleteConfig(t *testing.T) {
 		"secret names": func(c *m6.Config) { c.SecretNames = nil },
 		"secret value": func(c *m6.Config) { c.SecretValue = nil },
 		"legacy":       func(c *m6.Config) { c.Legacy = nil },
+		"effective":    func(c *m6.Config) { c.Effective = nil },
 	} {
 		c := good
 		mut(&c)
