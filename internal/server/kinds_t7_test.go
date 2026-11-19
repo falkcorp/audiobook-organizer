@@ -73,6 +73,15 @@ var t7ServerRows = []t7Row{
 	{id: libraryImportOpID, liveOnly: true},
 	{id: libraryOrganizeOpID, liveOnly: true},
 	{id: libraryTranscodeOpID, liveOnly: true},
+	{id: dedupBookScanOpID, readOnly: true},
+	{id: dedupBookMergeOpID, liveOnly: true},
+	{id: dedupBookCombineOpID, liveOnly: true},
+	{id: dedupAuthorScanOpID, readOnly: true},
+	{id: dedupSeriesScanOpID, readOnly: true},
+	{id: dedupSeriesDedupOpID},
+	{id: dedupSeriesPruneOpID},
+	{id: dedupSeriesMergeOpID},
+	{id: dedupSeriesNormalizeOpID},
 }
 
 // t7ScanFullKind is the one native kind with no HEAD definition.
