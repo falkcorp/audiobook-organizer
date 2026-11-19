@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g7.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 8e3a5d17-2c94-4b60-a1f8-6d07c9e4b352
 // last-edited: 2026-11-19
 
@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 
+	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -270,6 +271,86 @@ func t6g7NativeStandDown(rc *tasks.RC, key tasks.Key) func(ctx context.Context, 
 	}
 }
 
+// t6g7Held is the scan stand-down hold of a core whose work runs under the
+// hold's own context and progress sink: HEAD's registry.HoldScanStandDown hands
+// back a context that is canceled when the lease is lost and a reporter whose
+// progress stamps renew it. (t6g7Hold, above, is the lighter shape for a core
+// that checkpoints the lease itself.)
+type t6g7Held struct {
+	// Ctx is the context the run's work uses.
+	Ctx context.Context
+	// Progress is the run's progress and log sink under the hold.
+	Progress operations.ProgressReporter
+	// Finish releases the hold and folds a lost lease into the run's error.
+	Finish func(runErr error) error
+}
+
+// t6g7HoldFunc takes the scan stand-down for the whole run.
+type t6g7HoldFunc func(ctx context.Context, reason string) (t6g7Held, error)
+
+// t6g7HeadHold is HEAD's hold (registry.HoldScanStandDown over the plugin's
+// scan controller).
+func (p *Plugin) t6g7HeadHold(reporter sdk.Reporter) t6g7HoldFunc {
+	return func(ctx context.Context, reason string) (t6g7Held, error) {
+		h, err := opsregistry.HoldScanStandDown(ctx, p.deps, reporter, reason)
+		if err != nil {
+			return t6g7Held{}, err
+		}
+		return t6g7Held{Ctx: h.Context(), Progress: newOpsAdapter(h.Reporter()), Finish: h.Finish}, nil
+	}
+}
+
+// t6g7NativeHold is the native hold: rc.StandDown over key. An empty key refuses,
+// so a live apply never runs without the interlock. The kernel fences the run's
+// writer if the lease is lost, so Finish only releases.
+func t6g7NativeHold(rc *tasks.RC, key tasks.Key, env t6g7Env) t6g7HoldFunc {
+	return func(ctx context.Context, reason string) (t6g7Held, error) {
+		if key == "" {
+			return t6g7Held{}, fmt.Errorf("no scan stand-down key configured, refusing to %s without it", reason)
+		}
+		h, err := rc.StandDown(key)
+		if err != nil {
+			return t6g7Held{}, fmt.Errorf("%s: the library scan did not stand down: %w", reason, err)
+		}
+		return t6g7Held{
+			Ctx:      ctx,
+			Progress: t6g7OpsProgress{env: env},
+			Finish: func(runErr error) error {
+				h.Release()
+				return runErr
+			},
+		}, nil
+	}
+}
+
+// t6g7OpsProgress is operations.ProgressReporter over the env: the sink a
+// delegated server-side pass takes.
+type t6g7OpsProgress struct{ env t6g7Env }
+
+func (r t6g7OpsProgress) UpdateProgress(current, total int, message string) error {
+	r.env.Progress(current, total, message)
+	return nil
+}
+
+func (r t6g7OpsProgress) Log(level, message string, details *string) error {
+	lvl := slog.LevelInfo
+	switch level {
+	case "debug":
+		lvl = slog.LevelDebug
+	case "warn", "warning":
+		lvl = slog.LevelWarn
+	case "error":
+		lvl = slog.LevelError
+	}
+	if details != nil {
+		message += ": " + *details
+	}
+	r.env.Log(lvl, message)
+	return nil
+}
+
+func (r t6g7OpsProgress) IsCanceled() bool { return r.env.Canceled != nil && r.env.Canceled() }
+
 // t6g7HeadStandDown is HEAD's stand-down (acquireScanStandDownForApply over the
 // plugin's scan controller).
 func t6g7HeadStandDown(scan ScanController, rep sdk.Reporter) func(ctx context.Context, reason string) (t6g7Hold, error) {
@@ -478,6 +559,7 @@ type t6g7Writer interface {
 	reviewStatusIndexRepairWriter
 	titleBackfillWriter
 	titleRepairWriter
+	bulkWriteBackWriter
 }
 
 // t6g7Deps is what the native kinds are built from. Every field is set once, by
@@ -495,6 +577,10 @@ type t6g7Deps struct {
 	// tags: metadata.AgreedChapterTitle over the configured supported extensions.
 	// F5-18 sets it.
 	AgreedChapterTitle func(dir string) (agreed string, multi bool)
+	// StandDownKey is the concurrency key of the library scan kinds, which a live
+	// apply parks while it writes (rc.StandDown). Empty refuses a live apply that
+	// needs the interlock. F5-18 sets it.
+	StandDownKey tasks.Key
 }
 
 // t6g7Kinds returns the 15 native definitions of group 7 in file order. sched
@@ -515,6 +601,7 @@ func t6g7KindList(p *Plugin, deps t6g7Deps, sched func(tasks.Kind) *tasks.Schedu
 		p.reportsPruneNative(deps, sched),
 		p.titleBackfillNative(deps, sched),
 		p.titleRepairNative(deps, sched),
+		p.bulkWriteBackNative(deps, sched),
 	}
 }
 
