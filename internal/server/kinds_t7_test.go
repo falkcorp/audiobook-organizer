@@ -16,7 +16,9 @@ import (
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/falkcorp/mediacore/tasks/taskstest"
 
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
 )
@@ -67,6 +69,10 @@ var t7ServerRows = []t7Row{
 	{id: identificationAdvanceOpID},
 	{id: bulkMetadataFetchOpID, liveOnly: true},
 	{id: catalogHarvestOpID},
+	{id: libraryScanOpID, liveOnly: true},
+	{id: libraryImportOpID, liveOnly: true},
+	{id: libraryOrganizeOpID, liveOnly: true},
+	{id: libraryTranscodeOpID, liveOnly: true},
 }
 
 // t7ScanFullKind is the one native kind with no HEAD definition.
@@ -277,14 +283,49 @@ func TestT7ServerKinds_WritesThroughShell(t *testing.T) {
 	}
 }
 
+// t7ScanCapture is a writer whose PerformScan records the request the shared
+// scan core built, and whose every other method panics (embedded nil).
+type t7ScanCapture struct {
+	t7FakeWriter
+	req *scanner.ScanRequest
+}
+
+func (c *t7ScanCapture) PerformScan(_ context.Context, req *scanner.ScanRequest, _ logger.Logger) error {
+	c.req = req
+	return nil
+}
+
 func TestT7ServerKinds_ScanFullBesideScan(t *testing.T) {
-	// library_core_ops.go is converted later in this PR; until its row lands,
-	// the kind is not in the list.
-	defs := t7ServerDefs(t, t7TestDeps(t))
-	for _, d := range defs {
-		if d.Kind() == t7ScanFullKind {
-			return
-		}
-	}
-	t.Skip("books.library.scan-full lands with library_core_ops.go")
+	cap := &t7ScanCapture{}
+	deps := t7TestDeps(t)
+	deps.NewWriter = func(tasks.Writer) t7Writer { return cap }
+	defs := t7ServerDefs(t, deps)
+	scan := t7ByKind(t, defs, tasks.Kind("books."+libraryScanOpID))
+	full := t7ByKind(t, defs, t7ScanFullKind)
+
+	taskstest.Conformance(t, scan, full)
+
+	// One key, the scan stand-down key: the two never run at once.
+	cs, cf := tasks.CommonOf(scan), tasks.CommonOf(full)
+	require.Equal(t, tasks.Key("books.library.scan"), cf.ConcurrencyKey)
+	require.Equal(t, cs.ConcurrencyKey, cf.ConcurrencyKey)
+	require.Equal(t, deps.StandDownKey, cf.ConcurrencyKey)
+
+	// A full run hands the shared core force_update and include_root_dir true,
+	// whatever the request carried; a plain scan hands it what it was given.
+	_, err := t7RunKind(t, full, tasks.ModeLive, &t7GateWriter{}, `{}`)
+	require.NoError(t, err)
+	require.NotNil(t, cap.req)
+	require.NotNil(t, cap.req.ForceUpdate)
+	require.True(t, *cap.req.ForceUpdate)
+	require.NotNil(t, cap.req.IncludeRootDir)
+	require.True(t, *cap.req.IncludeRootDir)
+
+	cap.req = nil
+	_, err = t7RunKind(t, scan, tasks.ModeLive, &t7GateWriter{}, `{"folder_path":"/batcave/import"}`)
+	require.NoError(t, err)
+	require.NotNil(t, cap.req)
+	require.Nil(t, cap.req.ForceUpdate)
+	require.Nil(t, cap.req.IncludeRootDir)
+	require.Equal(t, "/batcave/import", *cap.req.FolderPath)
 }
