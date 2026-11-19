@@ -82,6 +82,8 @@ var t7ServerRows = []t7Row{
 	{id: dedupSeriesPruneOpID},
 	{id: dedupSeriesMergeOpID},
 	{id: dedupSeriesNormalizeOpID},
+	{id: reconcileScanOpID, readOnly: true},
+	{id: reconcileApplyOpID, liveOnly: true},
 }
 
 // t7ScanFullKind is the one native kind with no HEAD definition.
