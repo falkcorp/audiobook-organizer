@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/drain_stale.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: a6103a90-d68c-4db5-ace4-e2a9fb2a51e1
 // last-edited: 2026-11-18
 
@@ -132,7 +132,7 @@ type drainStaleResult struct {
 	FlagSet      bool           `json:"flag_set"`
 }
 
-// isDrainFlagSet is the done-flag read (HEAD: Plugin.isFlagSet).
+// isDrainFlagSet is the done-flag read (HEAD read it through isFlagSetStore).
 func isDrainFlagSet(st drainStaleStore, key string) (bool, error) {
 	setting, err := st.GetSetting(key)
 	if err != nil {

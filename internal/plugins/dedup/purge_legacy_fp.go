@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/purge_legacy_fp.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 3b7a2e9f-c1d4-4f8b-a5e0-6d3c8b2f1e47
 // last-edited: 2026-11-18
 
@@ -508,10 +508,4 @@ func hasFileHashMatchIn(bookAID, bookBID string, idx map[string]map[string]struc
 		}
 	}
 	return false
-}
-
-// isFlagSet checks whether the named Settings key holds "true". Other defs of
-// this package (drain-stale, emb-reencode) call it.
-func (p *Plugin) isFlagSet(key string) (bool, error) {
-	return isFlagSetStore(p.store, key)
 }
