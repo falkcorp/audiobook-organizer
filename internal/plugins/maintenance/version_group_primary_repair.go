@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_repair.go
-// version: 1.5.8
+// version: 1.5.9
 // guid: 1cfccfec-8289-4d6a-8e2f-8a935d9ca4a5
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -19,11 +19,13 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance/resources"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // --- version-group-primary-repair ---
@@ -84,7 +86,8 @@ import (
 //     read of single m4b/m4a files. No tags are written, nothing is moved,
 //     no book_file row is touched.
 //
-// CONCURRENCY: registry.RunItems with Concurrency 4, one item per group.
+// CONCURRENCY: the shell's item pool (vgPrimaryRepairParallelism: 4 workers), one
+// item per group.
 // ffprobe is I/O-bound, and each group's members belong to that group only,
 // so no two workers ever read-modify-write the same book.
 
@@ -280,24 +283,32 @@ func (r *vgRepairReport) summary() string {
 	return s
 }
 
+// vgPrimaryRepairHelp is the definition's description, HEAD's and the native
+// kind's.
+const vgPrimaryRepairHelp = "Repairs version groups with no primary or more than one, using the shared primary rule: " +
+	"only a live, organized copy with all its files present under the library root can be primary, " +
+	"ranked m4b with chapters > m4b without > metadata > other formats. Groups whose better copy is " +
+	"outside the library, or with no such copy, are held and never written. The winner's EMPTY fields " +
+	"are filled from the best-metadata copy; nothing is overwritten. Groups touching books/itunes/** or " +
+	"Doctor Who / Big Finish / Torchwood are skipped and reported. DRY-RUN BY DEFAULT: only dry_run=false " +
+	"(or apply=true) writes; a write needs group_ids, pauses a running library.scan through the scan " +
+	"stand-down (waiting until it parks) instead of refusing, and records metadata history after each " +
+	"write. limit caps the groups planned."
+
+// vgPrimaryRepairKind is the native kind of this definition (R3: books. plus the
+// HEAD id).
+var vgPrimaryRepairKind = t6g7KindFor("maintenance.version-group-primary-repair")
+
 func (p *Plugin) versionGroupPrimaryRepairDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID: "maintenance.version-group-primary-repair",
 		// AnyFamilyWrites: Run writes when apply OR dry_run==false says so
 		// (vgPrimaryRepairParams.resolveWrite), not only when both do.
-		Preview:     sdk.PreviewSpec{Params: vgPrimaryRepairParams{}, AnyFamilyWrites: true},
-		Liveness:    sdk.LivenessManual,
-		Plugin:      "maintenance",
-		DisplayName: "Version-group primary repair",
-		Description: "Repairs version groups with no primary or more than one, using the shared primary rule: " +
-			"only a live, organized copy with all its files present under the library root can be primary, " +
-			"ranked m4b with chapters > m4b without > metadata > other formats. Groups whose better copy is " +
-			"outside the library, or with no such copy, are held and never written. The winner's EMPTY fields " +
-			"are filled from the best-metadata copy; nothing is overwritten. Groups touching books/itunes/** or " +
-			"Doctor Who / Big Finish / Torchwood are skipped and reported. DRY-RUN BY DEFAULT: only dry_run=false " +
-			"(or apply=true) writes; a write needs group_ids, pauses a running library.scan through the scan " +
-			"stand-down (waiting until it parks) instead of refusing, and records metadata history after each " +
-			"write. limit caps the groups planned.",
+		Preview:         sdk.PreviewSpec{Params: vgPrimaryRepairParams{}, AnyFamilyWrites: true},
+		Liveness:        sdk.LivenessManual,
+		Plugin:          "maintenance",
+		DisplayName:     "Version-group primary repair",
+		Description:     vgPrimaryRepairHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.version-group-primary-repair",
@@ -388,19 +399,179 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, st vgPrimaryStor
 		return nil, werr
 	}
 	params.Apply = write
+	env := vgPrimaryRepairEnv{
+		t6g7Env: t6g7HeadEnv(reporter, write),
+		Store:   vgPrimaryHeadReads{OpsStore: store, ChapterReader: vps},
+		RootDir: rootDir,
+		Prober:  prober,
+	}
+	if write {
+		env.Writer = vgPrimaryHeadWriter{BookModifier: store, HistoryRecorder: vps}
+		env.StandDown = p.vgPrimaryHeadStandDown(reporter)
+	}
+	return versionGroupPrimaryRepairCore(ctx, params, env)
+}
+
+// vgApplierStore is what planning and applying one group read: the group's
+// members and their files, one book (the merge-target check and the liveness
+// probe) and the field locks (ApplyRespectingLocks). The fixers' OpsStore
+// satisfies it too.
+type vgApplierStore interface {
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	GetBookByID(id string) (*database.Book, error)
+	database.MetadataFieldStateReader
+}
+
+// vgPrimaryRepairReads is every read the repair makes: the group reads, plus the
+// book list the census runs over, the series names for the manual-only guard and
+// the chapter table (the election's fallback signal). Nothing here writes.
+type vgPrimaryRepairReads interface {
+	vgApplierStore
+	GetAllBooksCoreComplete(limit, offset int) ([]database.BookCore, error)
+	GetAllSeries() ([]database.Series, error)
+	database.ChapterReader
+}
+
+// vgPrimaryRepairWriter is every write the repair makes: repairs.Writer's two
+// inputs, the book row (ModifyBook, inside which the write check and the write
+// are one step) and the metadata history row recorded for each changed field.
+type vgPrimaryRepairWriter interface {
+	repairs.BookModifier
+	repairs.HistoryRecorder
+}
+
+// vgPrimaryHeadReads is HEAD's read side: the operations store and the chapter
+// table of the version-primary store.
+type vgPrimaryHeadReads struct {
+	OpsStore
+	database.ChapterReader
+}
+
+// vgPrimaryHeadWriter is HEAD's write side: ModifyBook on the operations store,
+// history on the version-primary store.
+type vgPrimaryHeadWriter struct {
+	repairs.BookModifier
+	repairs.HistoryRecorder
+}
+
+// vgPrimaryRepairEnv is what the core takes from its shell.
+type vgPrimaryRepairEnv struct {
+	t6g7Env
+	// Store reads the library.
+	Store vgPrimaryRepairReads
+	// Writer writes it; nil unless the run applies.
+	Writer vgPrimaryRepairWriter
+	// RootDir is the library root: only a member under it can be primary.
+	RootDir string
+	// Prober counts a file's chapters; nil means the chapter table alone decides.
+	Prober versionprimary.ChapterProber
+}
+
+// vgPrimaryRepairParallelism is the group pool (vgRepairWorkers). HEAD set it
+// explicitly because RunItems defaults to one worker.
+func vgPrimaryRepairParallelism() tasks.Parallelism {
+	return tasks.Fixed(vgRepairWorkers, "ffprobe and store reads are I/O-bound and each group's members belong to that group only, so no two workers write the same book; a small fixed pool keeps the disk busy")
+}
+
+// vgPrimaryHeadStandDown is HEAD's stand-down for an apply: the scan is paused
+// through the stand-down and a scan that will not park yet is waited out
+// (repairs.AcquireStandDownWaiting), not refused.
+func (p *Plugin) vgPrimaryHeadStandDown(rep sdk.Reporter) func(ctx context.Context, reason string) (t6g7Hold, error) {
+	return func(ctx context.Context, reason string) (t6g7Hold, error) {
+		opID := registry.ReporterOpID(rep)
+		release, held, err := repairs.AcquireStandDownWaiting(ctx, p.deps, opID, reason, rep, p.standDownWait)
+		if err != nil {
+			return t6g7Hold{}, err
+		}
+		return t6g7Hold{
+			Lost:    func() bool { return scanStandDownLostForApply(p.deps, opID, held) },
+			Release: release,
+		}, nil
+	}
+}
+
+// versionGroupPrimaryRepairNative is the native kind. Preview is the dry run and
+// Live the apply, so the params keep group_ids and limit and refuse the mode
+// keys; a Live run needs group_ids and takes the scan stand-down.
+func (p *Plugin) versionGroupPrimaryRepairNative(deps t6g7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g7Common(vgPrimaryRepairKind, sched)
+	c.Title = "Version-group primary repair"
+	c.Help = vgPrimaryRepairHelp
+	c.Effects = tasks.Writes(t6g7Res(resources.Union(t6WriterResources["ModifyBook"], t6WriterResources["RecordMetadataChange"])...)...)
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.version-group-primary-repair")
+	c.Timeout = 2 * time.Hour
+	return tasks.Task(vgPrimaryRepairKind, tasks.TaskSpec[json.RawMessage, *vgRepairReport]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (*vgRepairReport, error) {
+			params, err := t6g7DecodeNative[vgPrimaryRepairParams](vgPrimaryRepairKind, raw)
+			if err != nil {
+				return nil, err
+			}
+			for _, d := range []struct {
+				name string
+				set  bool
+			}{{"Store", deps.Store != nil}, {"RootDir", deps.RootDir != nil}, {"ChapterProber", deps.ChapterProber != nil}} {
+				if err := t6g7NeedDep(vgPrimaryRepairKind, d.name, d.set); err != nil {
+					return nil, err
+				}
+			}
+			live := rc.Mode() == tasks.ModeLive
+			params.Apply = live
+			env := vgPrimaryRepairEnv{
+				t6g7Env: t6g7NativeEnv(rc),
+				Store:   deps.Store,
+				RootDir: deps.RootDir(),
+			}
+			// HEAD's run wrapper: no ffprobe is a warning and the chapter table
+			// decides, not a failure.
+			prober, perr := deps.ChapterProber()
+			if perr != nil {
+				env.Log(slog.LevelWarn, fmt.Sprintf(
+					"version-group-primary-repair: ffprobe unavailable (%v); chapter counts come from the chapter table", perr))
+				prober = nil
+			}
+			env.Prober = prober
+			if live {
+				w, err := t6g7NewWriter(vgPrimaryRepairKind, deps, rc)
+				if err != nil {
+					return nil, err
+				}
+				env.Writer = w
+				env.StandDown = t6g7NativeStandDown(rc, deps.StandDownKey)
+			}
+			return versionGroupPrimaryRepairCore(rc.Context(), params, env)
+		},
+	})
+}
+
+// versionGroupPrimaryRepairCore is the repair both shells run. params.Apply is
+// already resolved (HEAD: resolveWrite; native: the run's mode), the stores and
+// the writer come from env, and the core reaches the library only through
+// them: reads through env.Store, writes through env.Writer (nil unless the run
+// writes).
+func versionGroupPrimaryRepairCore(ctx context.Context, params vgPrimaryRepairParams, env vgPrimaryRepairEnv) (*vgRepairReport, error) {
+	store := env.Store
+	if store == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
 	requested := normalizeGroupIDs(params.GroupIDs)
 	report := &vgRepairReport{DryRun: !params.Apply, ByDecision: map[string]int{}, ByHoldReason: map[string]int{},
 		SkippedByReason: map[string]int{}}
 	if params.Apply && len(requested) == 0 {
 		return report, fmt.Errorf("version-group-primary-repair: apply needs explicit group_ids; run the dry run and pick them from its report")
 	}
-	opID := registry.ReporterOpID(reporter)
-	if params.Apply && opID == "" {
+	if params.Apply && env.OpID == "" {
 		return report, fmt.Errorf("version-group-primary-repair: no operation id; refusing to apply")
 	}
-	log := reporter.Logger()
+	if params.Apply && env.Writer == nil {
+		return report, fmt.Errorf("version-group-primary-repair: no writer for an apply; nothing written")
+	}
+	log := env.Logger
 
-	_ = reporter.UpdateProgress(0, 3, "Listing books…")
+	env.Progress(0, 3, "Listing books…")
 	// One consistent snapshot; the Complete variant refuses a memdb known to
 	// be missing rows, which would make a group look short.
 	books, err := store.GetAllBooksCoreComplete(0, 0)
@@ -504,7 +675,7 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, st vgPrimaryStor
 	log.Info("version-group-primary-repair candidates", "apply", params.Apply, "candidates", len(work),
 		"requested", len(requested), "unmatched", len(report.RequestedUnmatched), "not_candidate", len(report.RequestedNotCandidate))
 	if len(work) == 0 {
-		_ = reporter.UpdateProgress(3, 3, "nothing to repair — "+report.summary())
+		env.Progress(3, 3, "nothing to repair — "+report.summary())
 		return report, nil
 	}
 
@@ -519,37 +690,50 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, st vgPrimaryStor
 	for _, s := range allSeries {
 		seriesNames[s.ID] = s.Name
 	}
-	a := &vgApplier{store: store, reporter: reporter, apply: params.Apply, seriesNames: seriesNames, paths: repairs.NewPathResolver()}
-	holderID, held := "", false
+	a := &vgApplier{store: store, reporter: env.Reporter, apply: params.Apply, seriesNames: seriesNames, paths: repairs.NewPathResolver()}
+	var hold t6g7Hold
 	if params.Apply {
-		a.writer = repairs.NewWriter(store, vps, vgRepairSource, vgRepairChangeType, vgRepairBatchPrefix)
+		a.writer = repairs.NewWriter(env.Writer, env.Writer, vgRepairSource, vgRepairChangeType, vgRepairBatchPrefix)
 		// Never refused for a running scan (owner ruling 2026-09-27): the
 		// stand-down pauses it, and a scan that will not park yet is waited
 		// out, not treated as a failure. Only the op's own cancel/timeout
-		// ends the wait.
-		release, h, sdErr := repairs.AcquireStandDownWaiting(ctx, p.deps, opID, "version-group-primary-repair apply",
-			reporter, p.standDownWait)
+		// ends the wait. A shell with no interlock refuses: a core that
+		// writes never runs without one.
+		if env.StandDown == nil {
+			return report, fmt.Errorf("version-group-primary-repair: no scan stand-down; nothing written: no interlock configured")
+		}
+		h, sdErr := env.StandDown(ctx, "version-group-primary-repair apply")
 		if sdErr != nil {
 			return report, fmt.Errorf("version-group-primary-repair: no scan stand-down; nothing written: %w", sdErr)
 		}
-		defer release()
-		holderID, held = opID, h
+		if h.Release != nil {
+			defer h.Release()
+		}
+		hold = h
 	}
 
-	loader := versionprimary.Loader{Files: store, Chapters: vps, RootDir: rootDir, Probe: prober}
+	loader := versionprimary.Loader{Files: store, Chapters: store, RootDir: env.RootDir, Probe: env.Prober}
 	var (
 		mu      sync.Mutex
 		groups  []vgRepairGroupReport
 		lost    atomic.Bool
 		planned atomic.Int64
 	)
-	_ = reporter.UpdateProgress(1, 3, fmt.Sprintf("Ranking %d groups…", len(work)))
-	runErr := registry.RunItems(ctx, reporter, work, func(gctx context.Context, gid string) error {
+	env.Progress(1, 3, fmt.Sprintf("Ranking %d groups…", len(work)))
+	runErr := env.Items(ctx, vgPrimaryRepairParallelism(), len(work), t6g7ItemsOptions{
+		Collect: true,
+		// Label runs inside the workers: it reads only the atomic. (HEAD's pool
+		// only; the native pool's label is pure and drops it.)
+		Label: func(i, total int) string {
+			return fmt.Sprintf("Groups %d/%d", planned.Load(), total)
+		},
+	}, func(gctx context.Context, i int) error {
+		gid := work[i]
 		defer planned.Add(1)
 		if lost.Load() {
 			return nil
 		}
-		if params.Apply && scanStandDownLostForApply(p.deps, holderID, held) {
+		if params.Apply && hold.Lost != nil && hold.Lost() {
 			lost.Store(true)
 			return nil
 		}
@@ -563,14 +747,6 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, st vgPrimaryStor
 		groups = append(groups, g)
 		mu.Unlock()
 		return nil
-	}, registry.RunItemsOptions{
-		// Set explicitly: RunItems defaults to one worker.
-		Concurrency: vgRepairWorkers,
-		ErrMode:     registry.ErrModeCollect,
-		// Label runs inside the workers: it reads only the atomic.
-		Label: func(i, total int) string {
-			return fmt.Sprintf("Groups %d/%d", planned.Load(), total)
-		},
 	})
 
 	sort.Slice(groups, func(i, j int) bool { return groups[i].GroupID < groups[j].GroupID })
@@ -587,7 +763,7 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, st vgPrimaryStor
 	}
 	if lost.Load() {
 		report.Aborted = errVGRepairStandDownLost.Error()
-		_ = reporter.UpdateProgress(3, 3, report.summary())
+		env.Progress(3, 3, report.summary())
 		return report, errVGRepairStandDownLost
 	}
 	if runErr != nil {
@@ -598,7 +774,7 @@ func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, st vgPrimaryStor
 		prefix = "APPLIED — "
 	}
 	log.Info("version-group-primary-repair complete", "summary", report.summary())
-	_ = reporter.UpdateProgress(3, 3, prefix+report.summary())
+	env.Progress(3, 3, prefix+report.summary())
 	return report, nil
 }
 
@@ -649,7 +825,7 @@ func (r *vgRepairReport) tally(g *vgRepairGroupReport) {
 // vgApplier plans and (on apply) writes one group at a time. Workers share it;
 // its counters are atomics and it holds no per-group state.
 type vgApplier struct {
-	store    OpsStore
+	store    vgApplierStore
 	reporter sdk.Reporter
 	apply    bool
 	// writer is the one write path (ModifyBook + history). Nil on a dry run.
@@ -792,7 +968,9 @@ func (a *vgApplier) planGroup(ctx context.Context, loader versionprimary.Loader,
 // vgStoreAlive checks a merge target with a point read. A read error counts
 // as alive, which keeps the loser ineligible: the group is then left as it is
 // rather than crowning a book that may still be merged away.
-func vgStoreAlive(store OpsStore) func(string) bool {
+func vgStoreAlive(store interface {
+	GetBookByID(id string) (*database.Book, error)
+}) func(string) bool {
 	return func(id string) bool {
 		b, err := store.GetBookByID(id)
 		if err != nil {
