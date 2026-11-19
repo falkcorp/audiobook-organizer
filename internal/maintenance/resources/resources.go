@@ -1,5 +1,5 @@
 // file: internal/maintenance/resources/resources.go
-// version: 1.1.6
+// version: 1.1.7
 // guid: 511262bb-c287-4138-a7ee-7566c9543e3b
 // last-edited: 2026-11-19
 
@@ -258,6 +258,10 @@ func Table() map[string][]ops.Resource {
 		"RepointSyncFileToBook": {ops.ResSyncIdentity},
 		// --- undo journal, review items, journals, stores of one resource ----------
 		"RecordOperationChange": {ops.ResOperations},
+		// RecordMetadataChange writes one metadata_change:<book>:<field>:<ns> row
+		// (pebble_store_metadata.go): the history of a book lives on the book's own
+		// key space, so books, as RecordPathChange does. It writes no book row.
+		"RecordMetadataChange": {ops.ResBooks},
 		// The v1 operation rows: opstate:<op> (and its :params), opsummary:<id>,
 		// op_result:<op>:<book>, operation:<id> and operationlog:<id>:*.
 		"SaveOperationState":            {ops.ResOperations},

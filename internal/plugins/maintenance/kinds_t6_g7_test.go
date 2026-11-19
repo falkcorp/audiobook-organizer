@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g7_test.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: 4c7e1a92-6b3d-4f58-8a0e-2d9c5b71e3f6
 // last-edited: 2026-11-19
 
@@ -31,6 +31,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
@@ -195,8 +196,24 @@ func (r *t6g7Recorder) ModifyBook(id string, fn func(*database.Book) error) (*da
 	if cur.FilePath != b.FilePath {
 		line += " path=" + filepath.Base(cur.FilePath)
 	}
+	if storedPrimaryFlag(cur.IsPrimaryVersion) != storedPrimaryFlag(b.IsPrimaryVersion) {
+		line += " primary=" + storedPrimaryFlag(cur.IsPrimaryVersion)
+	}
 	r.rec(line)
 	return &cur, nil
+}
+
+// RecordMetadataChange records the history row a write of the repair leaves.
+func (r *t6g7Recorder) RecordMetadataChange(rec *database.MetadataChangeRecord) error {
+	prev, next := "", ""
+	if rec.PreviousValue != nil {
+		prev = *rec.PreviousValue
+	}
+	if rec.NewValue != nil {
+		next = *rec.NewValue
+	}
+	r.rec(fmt.Sprintf("RecordMetadataChange %s %s %s->%s", rec.BookID, rec.Field, prev, next))
+	return nil
 }
 
 // t6g7IntPtr is n, or "nil".
@@ -359,6 +376,9 @@ type t6g7Probe struct {
 	root  string
 	// seriesInvalidated counts InvalidateSeriesCache calls.
 	seriesInvalidated int
+	// prober is the chapter counter ChapterProber hands out; probeErr is its error.
+	prober   versionprimary.ChapterProber
+	probeErr error
 }
 
 func newT6G7Probe(t *testing.T) *t6g7Probe {
@@ -389,6 +409,7 @@ func (p *t6g7Probe) deps() t6g7Deps {
 		// A directory "agrees" on the title its name carries, so a test seeds the
 		// tags by naming the folder.
 		AgreedChapterTitle: func(dir string) (string, bool) { return filepath.Base(dir), true },
+		ChapterProber:      func() (versionprimary.ChapterProber, error) { return p.prober, p.probeErr },
 	}
 }
 
@@ -530,6 +551,7 @@ func t6g7KindWritersBuild() map[tasks.Kind]t6g7KindWrite {
 	add(p.reviewStatusIndexRepairDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[reviewStatusIndexRepairWriter]()}})
 	// series-phantom-repair also writes its report TSV: a file.
 	add(p.seriesPhantomRepairDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[seriesPhantomWriter]()}, outside: []ops.Resource{ops.ResFiles}})
+	add(p.versionGroupPrimaryRepairDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[vgPrimaryRepairWriter]()}})
 	add(p.repointUnrecordedRenamesDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[unrecordedRenameWriter]()}})
 	add(p.tagBackfillDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[tagBackfillWriter]()}})
 	add(p.userMergeDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[userMergeWriter]()}})
@@ -599,7 +621,7 @@ func TestT6G7Resources_TableCoversEveryWriterMethod(t *testing.T) {
 func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 	p := &Plugin{}
 	defs := p.t6g7Kinds(fakeT6G7Deps(t), nil)
-	require.Len(t, defs, 11, "grows to 15 as the group's definitions land")
+	require.Len(t, defs, 12, "grows to 15 as the group's definitions land")
 
 	// Every expected value below is written out by hand from the HEAD def and
 	// the coordinator's rulings, never derived from the code under test.
@@ -616,6 +638,7 @@ func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 	tagBackfillPar := tagBackfillParallelism()
 	repointPar := repointUnrecordedRenamesParallelism()
 	seriesPhantomPar := seriesPhantomRepairParallelism()
+	vgPrimaryPar := vgPrimaryRepairParallelism()
 	rows := []row{
 		{head: p.reviewStatusIndexRepairDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
 		{head: p.unknownAuthorAuditDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
@@ -631,6 +654,10 @@ func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 		// destination path.
 		{head: p.repointUnrecordedRenamesDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute,
 			par: &repointPar, wantPar: "fixed(4): "},
+		// HEAD's loop is vgRepairWorkers (4) groups at a time, set explicitly because
+		// RunItems defaults to one. HEAD is ResumeDrop, so the kind is too.
+		{head: p.versionGroupPrimaryRepairDef(), resume: tasks.ResumeDrop, timeout: 2 * time.Hour,
+			par: &vgPrimaryPar, wantPar: "fixed(4): "},
 		{head: p.tagBackfillDef(), resume: tasks.ResumeDrop, timeout: 120 * time.Minute,
 			par: &tagBackfillPar, wantPar: fmt.Sprintf("fixed(%d): ", runtime.NumCPU()*4)},
 		{head: p.titleRepairDef(), resume: tasks.ResumeDrop, timeout: 4 * time.Hour,
@@ -788,6 +815,16 @@ func t6g7WriteCases() []t6g7WriteCase {
 			},
 		},
 		{
+			kind:       vgPrimaryRepairKind,
+			params:     `{"group_ids":["vg-double"]}`,
+			standsDown: true,
+			setup: func(t *testing.T, p *t6g7Probe) {
+				seedVGPrimaryRig(t, p)
+			},
+			live: vgPrimaryDoubleWrites,
+			// A Preview run is the dry run: it plans on reads and writes nothing.
+		},
+		{
 			kind: repointUnrecordedRenamesKind,
 			setup: func(t *testing.T, p *t6g7Probe) {
 				seedRepointRig(t, p, "01BATBOOK00000000000000R1", "01BATFILE00000000000000R11", true)
@@ -860,7 +897,7 @@ func TestT6G7Kinds_WritesThroughShell(t *testing.T) {
 // case, before it builds a writer or touches the store: the run's mode comes
 // from the start request, never from params (coordinator ruling 3).
 func TestT6G7Kinds_WritingShellsRefuseModeKeys(t *testing.T) {
-	kinds := []tasks.Kind{reviewStatusIndexRepairKind, reportsPruneKind, titleBackfillKind, titleRepairKind, t6g7KindFor("maintenance.bulk-write-back"), t6g7KindFor("maintenance.user-merge"), tagBackfillKind, repointUnrecordedRenamesKind, seriesPhantomRepairKind}
+	kinds := []tasks.Kind{reviewStatusIndexRepairKind, reportsPruneKind, titleBackfillKind, titleRepairKind, t6g7KindFor("maintenance.bulk-write-back"), t6g7KindFor("maintenance.user-merge"), tagBackfillKind, repointUnrecordedRenamesKind, seriesPhantomRepairKind, vgPrimaryRepairKind}
 	keys := []string{"dry_run", "dryRun", "DRY_RUN", "DryRun", "apply", "Apply", "APPLY"}
 	gate := &t6g7GateWriter{name: "gotham"}
 	for _, kind := range kinds {
@@ -1346,4 +1383,198 @@ func TestT6G7Kinds_SeriesPhantomLiveNeedsTheScanStandDown(t *testing.T) {
 	_, err := runT6G7Kind(t, def, tasks.ModeLive, &t6g7GateWriter{name: "gotham"}, `{"mode":"null"}`)
 	require.ErrorContains(t, err, "stand")
 	require.Empty(t, p.rec.snapshot())
+}
+
+// vgPrimaryDoubleWrites is every write a Live run of the repair makes on the
+// vg-double group of the fixture (A wins on content and keeps its narrator; B
+// donates three empty fields and is demoted; C has no file and is demoted from
+// an unset flag): the winner's row and its history, then each demoted row.
+var vgPrimaryDoubleWrites = []string{
+	"ModifyBook A title=Book A",
+	`RecordMetadataChange A description ""->"donor description"`,
+	`RecordMetadataChange A publisher ""->"Donor House"`,
+	`RecordMetadataChange A asin ""->"B0TESTASIN"`,
+	"ModifyBook B title=Book B primary=false",
+	`RecordMetadataChange B is_primary_version "true"->"false"`,
+	"ModifyBook C title=Book C primary=false",
+	`RecordMetadataChange C is_primary_version ""->"false"`,
+}
+
+// vgPrimaryRigStore answers the repair's reads from a real store, and panics on
+// anything else (the embedded interface is nil): the fixture's rows are written
+// to a real store by HEAD's own helpers.
+type vgPrimaryRigStore struct {
+	t6g7Store
+	s *database.PebbleStore
+}
+
+func (r vgPrimaryRigStore) GetAllBooksCoreComplete(limit, offset int) ([]database.BookCore, error) {
+	return r.s.GetAllBooksCoreComplete(limit, offset)
+}
+func (r vgPrimaryRigStore) GetAllSeries() ([]database.Series, error) { return r.s.GetAllSeries() }
+func (r vgPrimaryRigStore) GetBooksByVersionGroup(gid string) ([]database.Book, error) {
+	return r.s.GetBooksByVersionGroup(gid)
+}
+func (r vgPrimaryRigStore) GetBookFiles(id string) ([]database.BookFile, error) {
+	return r.s.GetBookFiles(id)
+}
+func (r vgPrimaryRigStore) GetBookByID(id string) (*database.Book, error) { return r.s.GetBookByID(id) }
+func (r vgPrimaryRigStore) GetChaptersForBook(id string) ([]database.Chapter, error) {
+	return r.s.GetChaptersForBook(id)
+}
+func (r vgPrimaryRigStore) GetMetadataFieldStates(id string) ([]database.MetadataFieldState, error) {
+	return r.s.GetMetadataFieldStates(id)
+}
+func (r vgPrimaryRigStore) GetUserPreference(key string) (*database.UserPreference, error) {
+	return r.s.GetUserPreference(key)
+}
+
+// seedVGPrimaryRig builds the version-group fixture (vg-double, vg-held, vg-ok) in
+// a real store under the probe's root, with the chapter counts of its files, and
+// seeds the recorder with the rows the writer would modify.
+func seedVGPrimaryRig(t *testing.T, p *t6g7Probe) *vgRepairFixture {
+	t.Helper()
+	f := newVGRepairFixture(t)
+	f.seed(t)
+	p.store = vgPrimaryRigStore{s: f.s}
+	p.root = f.root
+	p.prober = f.probe
+	p.rec.books = map[string]*database.Book{}
+	for _, id := range []string{"A", "B", "C", "S", "L", "OK1", "OK2"} {
+		b, err := f.s.GetBookByID(id)
+		require.NoError(t, err)
+		require.NotNil(t, b, id)
+		p.rec.books[id] = b
+	}
+	return f
+}
+
+func runVGPrimaryKind(t *testing.T, p *t6g7Probe, mode tasks.Mode, params string) (*vgRepairReport, *t6g7Host, error) {
+	t.Helper()
+	def := t6g7ByKind(t, (&Plugin{}).t6g7Kinds(p.deps(), nil), vgPrimaryRepairKind)
+	h, err := runT6G7Kind(t, def, mode, &t6g7GateWriter{name: "gotham"}, params)
+	var res *vgRepairReport
+	if h != nil && len(h.result) > 0 {
+		require.NoError(t, json.Unmarshal(h.result, &res))
+	}
+	return res, h, err
+}
+
+// A Preview run is the dry run: it elects and plans on reads, builds no writer,
+// parks no scan and writes nothing, and what it plans is what a Live run writes.
+func TestT6G7Kinds_VGPrimaryRepairPreviewPlansOnReadsAndWritesNothing(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedVGPrimaryRig(t, p)
+	rep, h, err := runVGPrimaryKind(t, p, tasks.ModePreview, "")
+	require.NoError(t, err)
+	require.True(t, rep.DryRun)
+	require.Equal(t, 2, rep.Candidates, "vg-ok is correct and must not be a candidate")
+	require.Equal(t, 1, rep.ByDecision[versionprimary.DecisionElect])
+	require.Equal(t, 1, rep.ByHoldReason[versionprimary.HoldBetterCopyNotInLibrary])
+	require.Equal(t, 1, rep.ContentNotMetadataBest)
+	require.Len(t, rep.Groups, 2)
+	var double *vgRepairGroupReport
+	for i := range rep.Groups {
+		if rep.Groups[i].GroupID == "vg-double" {
+			double = &rep.Groups[i]
+		}
+	}
+	require.NotNil(t, double)
+	require.Equal(t, "A", double.WinnerID)
+	require.Equal(t, []string{"B", "C"}, double.DemotedIDs, "the plan names what a Live run demotes")
+	require.Zero(t, p.writerCalls(), "a preview built a writer")
+	require.Empty(t, h.standDowns, "a preview parked the scan")
+	require.Empty(t, p.rec.snapshot())
+}
+
+// A Live run applies the groups it is told to: the winner and every demotion go
+// through the run's writer, each with its history, under the scan stand-down,
+// on the declared four workers; a typo and a group that is not a candidate are
+// reported, not written.
+func TestT6G7Kinds_VGPrimaryRepairLiveAppliesThroughTheWriter(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedVGPrimaryRig(t, p)
+	rep, h, err := runVGPrimaryKind(t, p, tasks.ModeLive,
+		`{"group_ids":["vg-double","vg-held","vg-ok","vg-typo"]}`)
+	require.NoError(t, err)
+	require.False(t, rep.DryRun)
+	require.Equal(t, 1, rep.Applied)
+	require.Equal(t, 3, rep.FieldsFilled)
+	require.Equal(t, []string{"vg-typo"}, rep.RequestedUnmatched)
+	require.Equal(t, []string{"vg-ok"}, rep.RequestedNotCandidate)
+	require.Zero(t, rep.HistoryFailed)
+	require.Equal(t, vgPrimaryDoubleWrites, p.rec.snapshot())
+	require.Equal(t, 1, p.writerCalls())
+	require.Equal(t, []tasks.Key{"books.gotham-watch"}, h.standDowns)
+	require.True(t, h.released, "the stand-down was not released")
+	require.Contains(t, h.workerCaps(), vgRepairWorkers)
+}
+
+// A group whose row changed between the plan and the write is left alone and
+// counted: the check and the write are one step inside the writer's ModifyBook,
+// so nothing is written for the stale plan.
+func TestT6G7Kinds_VGPrimaryRepairLeavesAGroupChangedSincePlan(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedVGPrimaryRig(t, p)
+	// The row the writer sees was demoted meanwhile; the store's plan saw true.
+	no := false
+	p.rec.books["A"].IsPrimaryVersion = &no
+	rep, _, err := runVGPrimaryKind(t, p, tasks.ModeLive, `{"group_ids":["vg-double"]}`)
+	require.NoError(t, err)
+	require.Equal(t, 1, rep.ChangedSincePlan)
+	require.Zero(t, rep.Applied)
+	require.Empty(t, p.rec.snapshot(), "a stale plan was written")
+}
+
+// A Live run needs group_ids, and refuses before it parks the scan or writes.
+func TestT6G7Kinds_VGPrimaryRepairLiveNeedsGroupIDs(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedVGPrimaryRig(t, p)
+	_, h, err := runVGPrimaryKind(t, p, tasks.ModeLive, `{}`)
+	require.ErrorContains(t, err, "group_ids")
+	require.Empty(t, h.standDowns)
+	require.Empty(t, p.rec.snapshot())
+}
+
+// A live run that cannot park the scan (no stand-down key) writes nothing.
+func TestT6G7Kinds_VGPrimaryRepairLiveNeedsTheScanStandDown(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedVGPrimaryRig(t, p)
+	deps := p.deps()
+	deps.StandDownKey = ""
+	def := t6g7ByKind(t, (&Plugin{}).t6g7Kinds(deps, nil), vgPrimaryRepairKind)
+	_, err := runT6G7Kind(t, def, tasks.ModeLive, &t6g7GateWriter{name: "gotham"}, `{"group_ids":["vg-double"]}`)
+	require.ErrorContains(t, err, "no scan stand-down")
+	require.ErrorContains(t, err, "nothing written")
+	require.Empty(t, p.rec.snapshot())
+}
+
+// No ffprobe is a warning, not a failure: the run goes on with the chapter table
+// alone, as HEAD's run wrapper did, and a member whose count came from nowhere is
+// flagged.
+func TestT6G7Kinds_VGPrimaryRepairWithoutFFprobeFallsBackToTheChapterTable(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedVGPrimaryRig(t, p)
+	p.probeErr = errors.New("ffprobe not found")
+	rep, _, err := runVGPrimaryKind(t, p, tasks.ModePreview, "")
+	require.NoError(t, err)
+	require.Positive(t, rep.ChapterUnknownGroups, "the probe was not used and no chapter table row exists")
+}
+
+// A kind whose owner left a dependency unset refuses before it reads.
+func TestT6G7Kinds_VGPrimaryRepairNeedsItsDeps(t *testing.T) {
+	for name, strip := range map[string]func(*t6g7Deps){
+		"Store":         func(d *t6g7Deps) { d.Store = nil },
+		"RootDir":       func(d *t6g7Deps) { d.RootDir = nil },
+		"ChapterProber": func(d *t6g7Deps) { d.ChapterProber = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := newT6G7Probe(t)
+			deps := p.deps()
+			strip(&deps)
+			def := t6g7ByKind(t, (&Plugin{}).t6g7Kinds(deps, nil), vgPrimaryRepairKind)
+			_, err := runT6G7Kind(t, def, tasks.ModePreview, nil, "")
+			require.ErrorContains(t, err, "t6g7Deps."+name+" is not set")
+		})
+	}
 }
