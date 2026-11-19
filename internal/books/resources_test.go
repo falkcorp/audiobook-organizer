@@ -1,5 +1,5 @@
 // file: internal/books/resources_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5c9a2d3e-81b4-4f07-b6a1-3e7d0c42f958
 // last-edited: 2026-11-18
 
@@ -87,8 +87,7 @@ func registeredResources(t *testing.T) []string {
 // the package for a literal), so a declared set equal to the vocabulary is a
 // declared set that contains every kind's names. A constant added to pkg/ops
 // fails here until books declares it; a name declared that pkg/ops does not
-// define fails here too, so the list cannot grow a name no kind may use
-// (`aux_stores` was one).
+// define fails here too, so the list cannot grow a name no kind may use.
 func TestRegister_DeclaresEveryResourceKind(t *testing.T) {
 	require.Equal(t, opsResourceVocabulary(t), registeredResources(t))
 }
