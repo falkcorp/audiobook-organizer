@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/kinds.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: a3972df8-a6a8-49ee-b157-c35c462e3c8d
 // last-edited: 2026-11-19
 
@@ -196,6 +196,14 @@ type KindDeps struct {
 	// ReadOnly run no writer), and such a job writes nothing. A nil NewStore, or
 	// a nil Store from it, fails the run before the job starts.
 	NewStore func(w tasks.Writer) Store
+
+	// writes derives every job's declared write set; nil means jobWritesFor,
+	// the derivation from the traces and the shared table. It is a field, not a
+	// package variable a test swaps, so a test that makes the derivation fail
+	// (KindsWithFailingWrites) cannot be seen by another test building the
+	// kinds beside it under t.Parallel. Unexported: only this package's tests
+	// set it, and F5-18 leaves it nil.
+	writes writesDeriver
 }
 
 const (
@@ -217,17 +225,10 @@ const (
 // kind is returned then, because a list that silently lacks one job's writes
 // would register it as declaring none.
 func Kinds(deps KindDeps, sched func(tasks.Kind) *tasks.Schedule) ([]tasks.Definition, error) {
-	return kindsWith(jobWritesFor, deps, sched)
-}
-
-// kindsWith is Kinds over the given write-set derivation. The derivation is a
-// parameter, not a package variable a test swaps, so a test that makes it fail
-// cannot be seen by another test building the kinds beside it (t.Parallel).
-func kindsWith(writes writesDeriver, deps KindDeps, sched func(tasks.Kind) *tasks.Schedule) ([]tasks.Definition, error) {
 	jobs := maintenance.All()
 	out := make([]tasks.Definition, 0, len(jobs))
 	for _, job := range jobs {
-		d, err := kindForWith(writes, job, deps, sched)
+		d, err := kindFor(job, deps, sched)
 		if err != nil {
 			return nil, err
 		}
@@ -256,13 +257,12 @@ var _ = kindsRoot
 
 // kindFor builds one job's native kind.
 func kindFor(job maintenance.MaintenanceJob, deps KindDeps, sched func(tasks.Kind) *tasks.Schedule) (tasks.Definition, error) {
-	return kindForWith(jobWritesFor, job, deps, sched)
-}
-
-// kindForWith is kindFor over the given write-set derivation.
-func kindForWith(writes writesDeriver, job maintenance.MaintenanceJob, deps KindDeps, sched func(tasks.Kind) *tasks.Schedule) (tasks.Definition, error) {
 	id := job.ID()
-	fx, err := effectsWith(writes, id)
+	writes := deps.writes
+	if writes == nil {
+		writes = jobWritesFor
+	}
+	fx, err := effectsFor(writes, id)
 	if err != nil {
 		return nil, fmt.Errorf("maintenance job %s: %w", id, err)
 	}
@@ -364,13 +364,11 @@ func startRequirement(job maintenance.MaintenanceJob) rbac.Requirement {
 // Effects, which registration refuses. The error is a trace that names a method
 // the table has no row for.
 //
+// writes is the derivation of the per-job sets (jobWritesFor, unless a test
+// passes another).
+//
 // Resource kinds (tasks.Res("books", kind)) are the pkg/ops constants.
-func effectsFor(jobID string) (tasks.Effects, error) {
-	return effectsWith(jobWritesFor, jobID)
-}
-
-// effectsWith is effectsFor over the given write-set derivation.
-func effectsWith(writes writesDeriver, jobID string) (tasks.Effects, error) {
+func effectsFor(writes writesDeriver, jobID string) (tasks.Effects, error) {
 	all, err := writes()
 	if err != nil {
 		return tasks.Effects{}, err

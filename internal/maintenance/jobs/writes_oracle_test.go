@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/writes_oracle_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 40eadd67-76ac-419f-a3fe-7d1ed5e586e2
 // last-edited: 2026-11-19
 
@@ -355,9 +355,6 @@ func derivedWrites(op *oracleProgram, runFn *ssa.Function) (kinds []string, evid
 		parent := cur
 		cur = f
 		defer func() { cur = parent }()
-		for _, af := range f.AnonFuncs {
-			walk(af)
-		}
 		// The graph's callees of each call site in f.
 		sites := op.sitesOf(f, false)
 		var chaSites map[ssa.CallInstruction][]*ssa.Function
