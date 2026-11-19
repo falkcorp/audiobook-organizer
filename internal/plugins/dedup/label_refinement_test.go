@@ -1,19 +1,22 @@
 // file: internal/plugins/dedup/label_refinement_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 8c3f1a95-2e7d-4b60-9a14-6d0b5e8c2f73
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package dedup
 
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -135,5 +138,77 @@ func TestLabelRefinementDefShape(t *testing.T) {
 	b, _ := json.Marshal(labelRefinementChildParams{})
 	if string(b) != "{}" {
 		t.Errorf("child params = %s", b)
+	}
+}
+
+// lrReporter is a reporter whose RunPhase hands fn a DIFFERENT reporter, as the
+// real one does (a phaseReporter that tags every log line with `phase`), so a
+// test can tell which of the two a line went through.
+type lrReporter struct {
+	*runAllReporter
+	lmu        sync.Mutex
+	outerLogs  []string
+	phaseLogs  []string
+	phaseNames []string
+}
+
+func (r *lrReporter) Log(_ slog.Level, msg string, _ ...slog.Attr) error {
+	r.lmu.Lock()
+	defer r.lmu.Unlock()
+	r.outerLogs = append(r.outerLogs, msg)
+	return nil
+}
+
+func (r *lrReporter) RunPhase(ctx context.Context, name string, fn func(context.Context, opsregistry.Reporter) error) error {
+	r.lmu.Lock()
+	r.phaseNames = append(r.phaseNames, name)
+	r.lmu.Unlock()
+	return fn(ctx, &lrPhaseReporter{lrReporter: r, name: name})
+}
+
+type lrPhaseReporter struct {
+	*lrReporter
+	name string
+}
+
+func (r *lrPhaseReporter) Log(_ slog.Level, msg string, _ ...slog.Attr) error {
+	r.lmu.Lock()
+	defer r.lmu.Unlock()
+	r.phaseLogs = append(r.phaseLogs, msg)
+	return nil
+}
+
+// HEAD's label-refinement had no step-start frame (its first frame for a step was
+// the child's own frame) and ignored the phase reporter, reporting and
+// logging through the outer one. The shared child driver must not change either
+// in HEAD's shell (F5-04 review r2 m1).
+func TestLabelRefinementHeadShellOutputIsUnchanged(t *testing.T) {
+	p, _, _, _ := newRunAllPlugin(t, true)
+	rep := &lrReporter{runAllReporter: &runAllReporter{}}
+
+	if err := p.runLabelRefinement(context.Background(), nil, rep); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	for i, step := range labelRefinementSteps {
+		for _, f := range rep.progress {
+			if f.cur == i*labelRefinementStepUnits && f.msg == step.Label {
+				t.Errorf("step %d: HEAD reported a step-start frame %+v", i, f)
+			}
+		}
+	}
+	if len(rep.phaseNames) != 2 {
+		t.Fatalf("phases = %v, want one per step", rep.phaseNames)
+	}
+	if len(rep.phaseLogs) != 0 {
+		t.Errorf("lines went through the phase reporter (they would carry a phase attribute): %v", rep.phaseLogs)
+	}
+	started := 0
+	for _, l := range rep.outerLogs {
+		if strings.Contains(l, ": started dedup.") {
+			started++
+		}
+	}
+	if started != 2 {
+		t.Errorf("outer reporter logged %d started lines, want 2: %v", started, rep.outerLogs)
 	}
 }

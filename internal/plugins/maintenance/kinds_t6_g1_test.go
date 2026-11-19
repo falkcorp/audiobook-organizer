@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_test.go
-// version: 1.0.12
+// version: 1.0.13
 // guid: 8b0c5c2e-6a54-4c27-9d0e-3f1a7d52e0b4
 // last-edited: 2026-11-19
 
@@ -345,7 +345,7 @@ func t6g1OpsVocabulary(t *testing.T) map[string]bool {
 		}
 	}
 	require.Contains(t, valid, string(ops.ResBooks), "the enumeration found no Resource constants")
-	require.Len(t, valid, 28, "pkg/ops declares a different number of Resource constants; update the count with the new constant")
+	require.Len(t, valid, 27, "pkg/ops declares a different number of Resource constants; update the count with the new constant")
 	return valid
 }
 

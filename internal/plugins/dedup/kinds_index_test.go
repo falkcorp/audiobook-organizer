@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/kinds_index_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 37db46af-5d7a-4d7a-9acd-1cd87ae9dd07
 // last-edited: 2026-11-19
 
@@ -219,7 +219,7 @@ func indexRows() []kindRow {
 		},
 		{
 			HeadID: "dedup.window-index-build", Title: "Build window-print index",
-			HeadResume: sdk.ResumeRestart, Resume: tasks.ResumeContinue,
+			HeadResume: sdk.ResumeRestart, Resume: tasks.ResumeFromZero,
 			Priority: tasks.PriorityLow, Timeout: 180 * time.Minute,
 			Writes: []ops.Resource{ops.ResFingerprintIndex, ops.ResSettings},
 			Par: []string{fmt.Sprintf("fixed(%d): one worker per CPU and never fewer than two, never the sequential default RunItems falls back to",

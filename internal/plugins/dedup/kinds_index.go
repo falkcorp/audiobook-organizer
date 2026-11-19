@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/kinds_index.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 0c0d3b8a-6e5d-4e73-9a38-2b4f3f4d9a11
 // last-edited: 2026-11-19
 
@@ -242,10 +242,12 @@ func (p *Plugin) windowIndexBuildNative(d IndexKindDeps, sched func(tasks.Kind) 
 	// member list (fingerprint_index, as HEAD declares); SetWindowIndexBuilt is
 	// SetSetting (settings), which HEAD's declaration omits.
 	c.Effects = tasks.Writes(res(ops.ResFingerprintIndex, ops.ResSettings)...)
-	// HEAD Restart: Continue (rule R5: v2 Restart is v3 Continue, as run-all). The
-	// body reads no checkpoint, so a restart behaves as before: a file with a member
-	// list is skipped on the rerun.
-	c.Resume = tasks.ResumeContinue
+	// HEAD Restart, but its Run reads no checkpoint on restart: FromZero. The
+	// coordinator's cross-row resume ruling (RULINGS-common.md:6) maps a v2 Restart
+	// to Continue only when HEAD reads its checkpoint; run-all does, this does not.
+	// A restart behaves as before either way: a file with a member list is skipped
+	// on the rerun.
+	c.Resume = tasks.ResumeFromZero
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.dedup.window-index")
 	c.Timeout = 180 * time.Minute

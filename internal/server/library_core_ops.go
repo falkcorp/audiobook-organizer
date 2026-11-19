@@ -1,5 +1,5 @@
 // file: internal/server/library_core_ops.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-11-19
 
@@ -291,7 +291,7 @@ type libraryScanNativeParams struct {
 // updates, the files its organize hook moves, its activity entries and the
 // dedup candidates it files.
 func libraryScanEffects() tasks.Effects {
-	return t7Writes(ops.ResBooks, ops.ResBookFiles, ops.ResAuthors, ops.ResSeries, ops.ResFiles, ops.ResActivity, ops.ResDedupCandidates)
+	return t7Writes(ops.ResBooks, ops.ResBookFiles, ops.ResAuthors, ops.ResSeries, ops.ResFiles, ops.ResActivity, ops.ResEmbeddings)
 }
 
 // libraryScanRun is the native shells' shared Run: restore the scan's
