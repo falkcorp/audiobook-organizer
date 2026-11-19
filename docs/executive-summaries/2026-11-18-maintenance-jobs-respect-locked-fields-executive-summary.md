@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-18-maintenance-jobs-respect-locked-fields-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 5b3c0b30-3329-45c7-8ab5-ff4e0d328316 -->
 <!-- last-edited: 2026-11-18 -->
 
@@ -22,7 +22,9 @@ the real library with this change.
   title), the audit that restores a lost description, and the three author
   repairs that move a book from one author to another (the rewrite of a book's
   main author, the fix for a title that was filed as an author, and the merge of
-  two authors).
+  two authors). The same repair also deletes a leftover author row after moving
+  books off it; that last step now leaves a locked book alone too, and keeps the
+  row while a locked book still names it.
 - Each of them now checks the lock for the book it is about to change, at the
   moment of the change, and leaves a locked book exactly as it was. The job's
   summary says how many books it left alone and why, so a run that skipped a
@@ -49,7 +51,8 @@ the real library with this change.
   backfill and title repair jobs, the series de-numbering job, the metadata
   refresh handler, the entity handler, and the duplicate-merge helpers. A
   related path in the author-id repair and duplicate-merge jobs also still moves
-  books without a lock check.
+  books without a lock check. The author-merge step has only an early lock check,
+  so a lock saved in the instant before it moves a book's credits is not honoured.
 - A separate to-do item stays open too: the cleanup jobs are not yet known to
   the system that stops two conflicting jobs from running at once, so a
   cleanup job can still run beside a series operation. The list of what each
