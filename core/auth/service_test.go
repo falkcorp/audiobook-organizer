@@ -1,7 +1,7 @@
 // file: core/auth/service_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 298429ba-81c3-4473-ac04-17d50cc5f897
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package auth_test
 
@@ -33,12 +33,15 @@ import (
 // identity store, a frozen rbac.Service compiling through authz.Compile (as
 // the kernel wires it), and recording audit and journal fakes.
 type fx struct {
-	t     testing.TB
-	st    *authstore.Store
-	rb    *rbac.Service
-	svc   *auth.Service
-	audit *auditFake
-	jrnl  *journalFake
+	t  testing.TB
+	st *authstore.Store
+	// holders is rbac's role-holder view over st; a test sets afterRead to
+	// run a write between a role edit's holder read and its commit.
+	holders *holders
+	rb      *rbac.Service
+	svc     *auth.Service
+	audit   *auditFake
+	jrnl    *journalFake
 	// hasher is a lowered-cost hasher (test binaries only) whose derivations
 	// the sign-in tests count.
 	hasher *password.Hasher
@@ -89,7 +92,12 @@ var gothamPerms = []rbac.PermissionSpec{
 	{Name: "gotham:relay.worker", Title: "Relay worker", Confining: true},
 }
 
-func newFx(t testing.TB) *fx {
+func newFx(t testing.TB) *fx { return newFxRoleStore(t, nil) }
+
+// newFxRoleStore is newFx with the role store rbac.Service sits on passed
+// through wrap (nil: as is), so a test can hand rbac a store that lacks an
+// optional interface of the native one.
+func newFxRoleStore(t testing.TB, wrap func(rbac.Store) rbac.Store) *fx {
 	t.Helper()
 	ctx := context.Background()
 	o, err := storage.Open(ctx, storage.OpenOptions{
@@ -131,9 +139,14 @@ func newFx(t testing.TB) *fx {
 	if err != nil {
 		t.Fatal(err)
 	}
+	f.holders = &holders{st: f.st}
+	var roleStore rbac.Store = rst
+	if wrap != nil {
+		roleStore = wrap(rst)
+	}
 	if f.rb, err = rbac.New(ctx, rbac.Options{Source: "gotham-test"}, rbac.Deps{
-		Store: rst, Compile: authz.Compile, Audit: &auditFake{}, Revocations: &journalFake{},
-		NewBatch: rst.NewBatch, Holders: holders{f.st},
+		Store: roleStore, Compile: authz.Compile, Audit: &auditFake{}, Revocations: &journalFake{},
+		NewBatch: rst.NewBatch, Holders: f.holders,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -269,10 +282,27 @@ func (f *fx) key(id string) *auth.APIKey {
 }
 
 // holders is rbac's role-assignment view over the identity store, as the
-// kernel builds it.
-type holders struct{ st *authstore.Store }
+// kernel builds it: every holder it reports is read through the caller's
+// batch (rbac.Holders), so a user write that lands before the role edit
+// commits fails the edit's Commit with storage.ErrConflict.
+type holders struct {
+	st *authstore.Store
 
-func (h holders) HoldersOf(ctx context.Context, _ *storage.Batch, roles []rbac.RoleName) ([]rbac.Holder, error) {
+	mu sync.Mutex
+	// afterRead, when set, runs once the holders are read and guarded and
+	// before they are returned: the role edit's batch is staged but not
+	// committed, so a test can land a user write in that window.
+	afterRead func()
+}
+
+// setAfterRead installs (or, with nil, clears) the hook.
+func (h *holders) setAfterRead(fn func()) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.afterRead = fn
+}
+
+func (h *holders) HoldersOf(ctx context.Context, b *storage.Batch, roles []rbac.RoleName) ([]rbac.Holder, error) {
 	var out []rbac.Holder
 	for u, err := range h.st.ScanUsers(ctx) {
 		if err != nil {
@@ -280,10 +310,19 @@ func (h holders) HoldersOf(ctx context.Context, _ *storage.Batch, roles []rbac.R
 		}
 		for _, r := range u.Roles {
 			if slices.Contains(roles, r) {
+				if err := h.st.GuardUser(b, u); err != nil {
+					return nil, err
+				}
 				out = append(out, rbac.Holder{UserID: string(u.ID), Active: u.Status == auth.StatusActive})
 				break
 			}
 		}
+	}
+	h.mu.Lock()
+	hook := h.afterRead
+	h.mu.Unlock()
+	if hook != nil {
+		hook()
 	}
 	return out, nil
 }

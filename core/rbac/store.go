@@ -1,7 +1,7 @@
 // file: core/rbac/store.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 0b8f4d2e-61c7-4a95-8e3b-7d2c5a19f640
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package rbac
 
@@ -157,6 +157,25 @@ var ErrImportRejected = errors.New("rbac: imported role breaks a role store inva
 // the cutover as Importers.Roles.
 type ImportSealer interface {
 	SealImports()
+}
+
+// RoleGuarder is implemented by a role store that can stage, into a batch
+// another owner opened, a precondition that a role is still stored as the
+// caller read it (coined by F4-02-ROLE-GUARD, ImportSealer's optional-interface
+// pattern; Store is frozen SDK and so cannot take the method). auth's
+// last-admin rule reads a role definition to decide that a user holds
+// core:admin, and its write lands in auth's batch: without the guard, an rbac
+// role edit that takes core:admin from that role between the read and the
+// commit is not seen, and the two writes together leave no active admin.
+//
+// GuardRole stages an Expect that role r.Name is stored at r.Version, as read
+// from GetRole. When the stored role is absent or at another version it wraps
+// storage.ErrConflict and stages nothing: the caller's Commit would have
+// failed the same way, and the retry decides again on the new definition.
+// Service.GuardRole is the entry point; it reports ErrNoRoleGuard when the
+// store does not implement this interface.
+type RoleGuarder interface {
+	GuardRole(b *storage.Batch, r *Role) error
 }
 
 // customPrefix is the namespace of operator-created role names.
