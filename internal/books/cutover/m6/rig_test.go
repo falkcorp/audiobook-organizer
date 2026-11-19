@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/rig_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7be2c0d4-8a51-4c3e-b0a6-2f1d94c7e6a3
 // last-edited: 2026-11-19
 
@@ -398,6 +398,9 @@ type rig struct {
 	// importer names it) with the error it returns.
 	refuse func(kind, id string) error
 
+	// noLogger builds the step without a Logger, as a caller that has none does.
+	noLogger bool
+
 	// aiCatalog and noCatalog shape the AI importer's catalog.
 	noCatalog bool
 }
@@ -475,6 +478,14 @@ func (r *rig) owners(cut bool) []storage.OwnerSpec {
 // fixedOne is the step's own declaration: one shard, key order.
 func fixedOne() tasks.Parallelism { return tasks.Sequential("test: one shard in key order") }
 
+// logger is the step's logger: the rig's buffer, or none.
+func (r *rig) logger() *slog.Logger {
+	if r.noLogger {
+		return nil
+	}
+	return slog.New(slog.NewTextHandler(r.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
+
 // migration is M6 over this rig, built the way F7-09 builds it.
 func (r *rig) migration() datamigrate.DataMigration {
 	dm, err := m6.New(m6.Config{
@@ -482,7 +493,7 @@ func (r *rig) migration() datamigrate.DataMigration {
 		SecretNames: r.secrets.names, SecretValue: r.secrets.value,
 		Legacy: r.legacy,
 		DryRun: r.dryRun, Report: r.report,
-		Logger: slog.New(slog.NewTextHandler(r.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Logger: r.logger(),
 	}, cutover.IntegrationsCutoverID, cutover.BooksCutoverLevel, []storage.StepRef{cutover.BooksLevelStepRef(r.levelVersion())})
 	if err != nil {
 		r.t.Fatal(err)
