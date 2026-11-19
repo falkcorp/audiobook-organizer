@@ -1,5 +1,5 @@
 // file: core/internal/loghttp/permissions_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: fcea5e18-897d-4f58-8688-b96d12f281ea
 // last-edited: 2026-11-19
 
@@ -20,6 +20,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/events"
@@ -147,8 +149,8 @@ func seedUserLines(t testing.TB, st *logjournal.Store) {
 	}
 }
 
-func byMessage(v pageView) map[string]recordView {
-	m := map[string]recordView{}
+func byMessage(v pageView) map[string]logjournal.RecordView {
+	m := map[string]logjournal.RecordView{}
 	for _, r := range v.Items {
 		m[r.Message] = r
 	}
@@ -469,6 +471,7 @@ type tailStream struct {
 
 // open GETs path as id: a stream on 200, otherwise the status and problem code.
 func (r *tailRig) open(id, path string) (*tailStream, int, string) {
+	r.t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	r.mu.Lock()
 	r.cancels = append(r.cancels, cancel)
@@ -476,13 +479,13 @@ func (r *tailRig) open(id, path string) (*tailStream, int, string) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.srv.URL+path, nil)
 	if err != nil {
 		cancel()
-		panic(err)
+		r.t.Fatal(err)
 	}
 	req.Header.Set("X-Test-Principal", id)
 	resp, err := r.srv.Client().Do(req)
 	if err != nil {
 		cancel()
-		panic(err)
+		r.t.Fatalf("GET %s: %v", path, err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer cancel()
@@ -531,7 +534,7 @@ func (r *tailRig) open(id, path string) (*tailStream, int, string) {
 	case s.opened = <-opened:
 	case <-time.After(5 * time.Second):
 		cancel()
-		panic("the stream never sent its opened frame")
+		r.t.Fatal("the stream never sent its opened frame")
 	}
 	// The stream ends with the test's rig (the server closes), but a reader
 	// blocked on the body is released here too.
@@ -625,29 +628,40 @@ func TestJournalTail_SameViewAsQuery(t *testing.T) {
 	}
 }
 
-// attrSeq is the (key, kind, value) sequence of rec's attributes, as a
-// predicate reading them would see them.
-func attrSeq(rec log.Record) []string {
+// seenRecord is what a predicate was shown: every field of the record, the
+// attributes as their (key, kind, value) sequence.
+type seenRecord struct {
+	rec   log.Record
+	attrs []string
+}
+
+func seen(rec log.Record) seenRecord {
 	out := make([]string, 0, len(rec.Attrs))
 	for _, a := range rec.Attrs {
 		out = append(out, a.Key+"|"+a.Value.Kind().String()+"|"+a.Value.String())
 	}
-	return out
+	return seenRecord{rec: rec, attrs: out}
 }
 
 // TestJournalTail_PredicateSeesSameRecordAsQuery (05-logging §5): the
 // module's other-user predicate is handed the same record on the query route
-// and on the live tail, for a record that carries typed attributes, a repeated
-// key and an unsorted key order. The expected sequence is written out (text
-// kinds, sorted keys, the last repeat wins), so a drift on either surface
-// fails this test, not just a disagreement between them.
+// and on the live tail: every field, not only the attributes. A books-style
+// predicate classifies by subsystem and message, so a tail that dropped
+// Module, Subsystem, Level, Time or the trace and span ids would under-flag.
+// The record carries typed attributes, a repeated key and many keys; the
+// expectations are written out (text kinds, sorted keys, the last repeat
+// wins), so a drift on either surface fails this test, not just a
+// disagreement between them.
 func TestJournalTail_PredicateSeesSameRecordAsQuery(t *testing.T) {
+	const msg = "a signal was lit"
 	var mu sync.Mutex
-	seen := map[string][][]string{}
+	var got []seenRecord
 	pred := func(rec log.Record, viewer string) bool {
 		mu.Lock()
 		defer mu.Unlock()
-		seen[rec.Message] = append(seen[rec.Message], attrSeq(rec))
+		if rec.Message == msg {
+			got = append(got, seen(rec))
+		}
 		return false
 	}
 	rig := newTailRig(t, pred)
@@ -669,8 +683,20 @@ func TestJournalTail_PredicateSeesSameRecordAsQuery(t *testing.T) {
 		want = append(want, fmt.Sprintf("%s|String|%d", k, i))
 	}
 	slices.Sort(want) // keys are not prefixes of one another, so this is key order
-	rig.l.Module("core").Info("a signal was lit", attrs...)
+
+	const traceID, spanID = "4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7"
+	tid, err := trace.TraceIDFromHex(traceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid, err := trace.SpanIDFromHex(spanID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := trace.ContextWithSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{TraceID: tid, SpanID: sid}))
+	rig.l.Module("core").With(slog.String(log.KeySubsystem, "scanner")).WarnContext(ctx, msg, attrs...)
 	s.next(t)
+
 	var served pageView
 	for range 100 { // the journal tap writes in its own time
 		_ = rig.tap.Flush(context.Background())
@@ -685,13 +711,27 @@ func TestJournalTail_PredicateSeesSameRecordAsQuery(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	got := seen["a signal was lit"]
 	if len(got) != 2 {
 		t.Fatalf("predicate called %d times for the record, want 2 (tail, query): %v", len(got), got)
 	}
 	for i, surface := range []string{"tail", "query"} {
-		if !slices.Equal(got[i], want) {
-			t.Errorf("%s: predicate saw %v, want %v", surface, got[i], want)
+		g := got[i]
+		if !slices.Equal(g.attrs, want) {
+			t.Errorf("%s: predicate saw attrs %v, want %v", surface, g.attrs, want)
 		}
+		r := g.rec
+		if r.Module != "core" || r.Subsystem != "scanner" || r.Level != slog.LevelWarn || r.Message != msg {
+			t.Errorf("%s: predicate saw module %q subsystem %q level %v message %q, want core scanner WARN %q",
+				surface, r.Module, r.Subsystem, r.Level, r.Message, msg)
+		}
+		if r.TraceID != traceID || r.SpanID != spanID {
+			t.Errorf("%s: predicate saw trace %q span %q, want %q %q", surface, r.TraceID, r.SpanID, traceID, spanID)
+		}
+		if r.Time.IsZero() {
+			t.Errorf("%s: predicate saw a zero time", surface)
+		}
+	}
+	if a, b := got[0].rec.Time, got[1].rec.Time; !a.Equal(b) {
+		t.Errorf("predicate saw time %v on the tail and %v on the query route", a, b)
 	}
 }

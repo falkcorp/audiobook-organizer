@@ -1,5 +1,5 @@
 // file: core/internal/logjournal/tail_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 0d9e5b73-2c64-4a18-b7f1-93a60e4d2c85
 // last-edited: 2026-11-19
 
@@ -42,8 +42,9 @@ import (
 // Gotham's: the Batcave logs, the cast are Batman characters.
 
 const (
-	permManage = logjournal.PermSystemManage
-	permUsers  = logjournal.PermUsersView
+	// Spelled out, not read from the package under test.
+	permManage = rbac.Permission("core:system.manage")
+	permUsers  = rbac.Permission("core:users.view")
 	permView   = rbac.Permission("core:system.view")
 )
 
@@ -463,7 +464,8 @@ func TestJournalTail_AuthOffDeliversNothing(t *testing.T) {
 }
 
 // TestJournalTail_WireMembers pins the payload's member names to the query
-// route's (loghttp.recordView), which the SPA's log view reads from both.
+// route's items (the same Go type, so this guards the JSON names), which the
+// SPA's log view reads from both.
 func TestJournalTail_WireMembers(t *testing.T) {
 	b, err := json.Marshal(logjournal.RecordView{Attrs: map[string]string{}, TraceID: "t", SpanID: "s"})
 	if err != nil {
@@ -818,5 +820,146 @@ func TestJournalTail_UnstorableTimeIsSkipped(t *testing.T) {
 	}
 	if c := tl.Counters(); c.Skipped != 1 || c.Published != 0 || seen.Load() != 0 {
 		t.Errorf("counters %+v, subscriber saw %d; want 1 skipped, 0 published, 0 seen", c, seen.Load())
+	}
+}
+
+// TestJournalTail_PredicateReadsModuleSubsystemAndLevel: a books-style
+// predicate classifies by more than the message (05-logging §5: an imported
+// record is classified "by subsystem and message"), so the record the hub's
+// Visible hands it must carry Module, Subsystem and Level as logged, end to
+// end through the bus and the hub. A tail that lost one under-flags: another
+// user's line would reach a viewer without core:users.view.
+func TestJournalTail_PredicateReadsModuleSubsystemAndLevel(t *testing.T) {
+	pred := func(rec log.Record, _ string) bool {
+		return rec.Subsystem == "users" || rec.Module == "vault" || rec.Level >= slog.LevelError
+	}
+	r := newRig(t, pred)
+	r.sign("bruce", person(t, "u-bruce", permManage))
+	r.sign("lucius", person(t, "u-lucius", permManage, permUsers))
+	const topic = "/?topic=" + logjournal.TailTopicName
+	bruce, lucius := r.mustOpen("bruce", topic), r.mustOpen("lucius", topic)
+
+	r.l.Scope("core", "users").Info("a profile was edited")
+	r.l.Module("vault").Info("a drawer was opened")
+	r.l.Module("core").Error("the alarm rang")
+	r.l.Scope("core", "scanner").Info("a scan ran")
+
+	if got := lucius.messages(4); !slices.Equal(got, []string{"a profile was edited", "a drawer was opened", "the alarm rang", "a scan ran"}) {
+		t.Errorf("with users.view: %v", got)
+	}
+	if got := bruce.messages(1); !slices.Equal(got, []string{"a scan ran"}) {
+		t.Errorf("without users.view: %v, want only the line no field flags", got)
+	}
+	bruce.quiet(200 * time.Millisecond)
+}
+
+// TestJournalTail_BusWarningsReenterBounded: the bus logs through the same
+// Logging the tail taps (the kernel wires it so at F6-03), so its drop warning
+// is itself a record on the tail. The loop must neither block nor amplify:
+// one warning per subscriber per minute, however many events are dropped, and
+// the warning's own publish adds no further warning.
+func TestJournalTail_BusWarningsReenterBounded(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l := newLogging(t)
+		bus, err := events.NewBus(events.BusOptions{Logger: l.Module("events")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := bus.Declare("core", logjournal.TailSpec(nil)); err != nil {
+			t.Fatal(err)
+		}
+		release, entered := make(chan struct{}), make(chan struct{}, 1)
+		if err := bus.Subscribe("core", events.OnRaw(logjournal.TailTopicName, "core.test.never-reads", func(context.Context, events.RawEnvelope) {
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+			<-release
+		}, events.QueueSize(1))); err != nil {
+			t.Fatal(err)
+		}
+		var mu sync.Mutex
+		var warnings, seen int
+		if err := bus.Subscribe("core", events.OnRaw(logjournal.TailTopicName, "core.test.probe", func(_ context.Context, e events.RawEnvelope) {
+			var v logjournal.RecordView
+			_ = json.Unmarshal(e.Payload, &v)
+			mu.Lock()
+			defer mu.Unlock()
+			seen++
+			if v.Module == "events" && strings.Contains(v.Message, "dropping events for a subscriber") {
+				warnings++
+			}
+		}, events.QueueSize(8192))); err != nil {
+			t.Fatal(err)
+		}
+		bus.Freeze()
+		if err := bus.Open(); err != nil {
+			t.Fatal(err)
+		}
+		tl, err := logjournal.StartTail(l, bus, enabled)
+		if err != nil {
+			t.Fatal(err)
+		}
+		warned := func() int {
+			synctest.Wait() // every goroutine idle: nothing is still looping
+			mu.Lock()
+			defer mu.Unlock()
+			return warnings
+		}
+		lg := l.Module("core")
+		lg.Info("the first signal")
+		<-entered // the slow subscriber holds one event and never returns
+		for range 2000 {
+			lg.Info("signal")
+		}
+		if n := warned(); n != 1 {
+			t.Errorf("%d drop warnings reached the tail within the first minute, want exactly 1", n)
+		}
+		time.Sleep(time.Minute + time.Second) // fake time
+		lg.Info("a signal a minute later")
+		if n := warned(); n != 2 {
+			t.Errorf("%d drop warnings after a second minute, want exactly 2", n)
+		}
+		mu.Lock()
+		total := seen
+		mu.Unlock()
+		if total != 2002+2 { // an amplifying loop would show here
+			t.Errorf("the probe saw %d records, want the 2002 logged plus the 2 warnings", total)
+		}
+		close(release)
+		synctest.Wait()
+		tl.Stop()
+		if err := l.Close(context.Background()); err != nil {
+			t.Errorf("logger close: %v", err)
+		}
+		if err := bus.Close(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
+			t.Errorf("bus close: %v", err)
+		}
+	})
+}
+
+// TestJournalTail_SecondStartIsRefused: one tail per logger. A second enabled
+// start would publish every record twice under one drop counter.
+func TestJournalTail_SecondStartIsRefused(t *testing.T) {
+	l := newLogging(t)
+	bus, err := events.NewBus(events.BusOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := logjournal.StartTail(l, bus, enabled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Stop()
+	if _, err := logjournal.StartTail(l, bus, enabled); !errors.Is(err, logjournal.ErrTailStarted) {
+		t.Errorf("second start: err = %v, want ErrTailStarted", err)
+	}
+	off := enabled
+	off.Enabled = false
+	if _, err := logjournal.StartTail(l, bus, off); err != nil {
+		t.Errorf("a disabled start registers nothing, so it cannot clash: %v", err)
+	}
+	if _, err := logjournal.StartTail(newLogging(t), bus, enabled); err != nil {
+		t.Errorf("another logger is unaffected: %v", err)
 	}
 }
