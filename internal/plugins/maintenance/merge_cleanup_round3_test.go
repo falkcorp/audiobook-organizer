@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_cleanup_round3_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 7e985540-891e-4d66-9ce1-fd86d2879faa
 // last-edited: 2026-11-19
 
@@ -387,8 +387,9 @@ func TestMergeCleanupADeadEndsLoneLoserIsNotHeldAndNeitherIsOneWithAnEmptyMate(t
 	x.point("shell", "dead")
 	x.mk("trashed-mate", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000), trashed: true})
 	x.point("trashed-mate", "dead")
-	// In the trash by library state but not soft-deleted: the listing still
-	// hands it over, so only the index's own trash check keeps it out.
+	// In the trash by library state but not soft-deleted: the listing hands it
+	// over and the dead-end index admits it (it is a source of anchors), so what
+	// keeps it out of the mates is deadEndMates skipping an entry marked trashed.
 	x.mk("state-trashed-mate", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000), state: "deleted"})
 	x.point("state-trashed-mate", "dead")
 	// And a loser of another dead end.
