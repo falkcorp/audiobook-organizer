@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.15.3
+// version: 1.16.0
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
-// last-edited: 2026-11-15
+// last-edited: 2026-11-18
 
 package maintenance
 
@@ -377,7 +377,10 @@ type authorStripMergeReport struct {
 	RelinkConflict           int
 	RelinkSkippedITunes      int
 	RelinkSkippedOwnerManual int
-	RelinkFailed             int
+	// RelinkSkippedUserLocked: the user locked the book's author; its credits
+	// and primary author are left as they are.
+	RelinkSkippedUserLocked int
+	RelinkFailed            int
 	// RelinkAmbiguous: the one answer names 2+ existing rows (duplicate
 	// names); RelinkDeferred: relinks past limit, left for a later run.
 	RelinkAmbiguous int
@@ -392,12 +395,12 @@ type authorStripMergeReport struct {
 
 func (r authorStripMergeReport) summary() string {
 	return fmt.Sprintf(
-		"authors=%d junk=%d title-as-author=%d title-as-author-unverified=%d mergeable=%d ambiguous=%d target-is-junk=%d target-unverified=%d merge-target-removed=%d stripped-no-target=%d out-of-scope=%d placeholders=%d placeholders-no-canonical=%d canonical-unknown-id=%d merged=%d deleted=%d books-touched=%d books-held-sole-credit=%d rows-held-sole-credit=%d failed=%d relink-planned=%d relink-no-candidate=%d relink-conflict=%d relink-skipped-itunes=%d relink-skipped-owner-manual=%d relink-failed=%d relink-ambiguous=%d relink-deferred=%d relinked=%d relink-new-authors=%d relink-journal-rows=%d twin-deletes=%d",
+		"authors=%d junk=%d title-as-author=%d title-as-author-unverified=%d mergeable=%d ambiguous=%d target-is-junk=%d target-unverified=%d merge-target-removed=%d stripped-no-target=%d out-of-scope=%d placeholders=%d placeholders-no-canonical=%d canonical-unknown-id=%d merged=%d deleted=%d books-touched=%d books-held-sole-credit=%d rows-held-sole-credit=%d failed=%d relink-planned=%d relink-no-candidate=%d relink-conflict=%d relink-skipped-itunes=%d relink-skipped-owner-manual=%d relink-skipped-user-locked=%d relink-failed=%d relink-ambiguous=%d relink-deferred=%d relinked=%d relink-new-authors=%d relink-journal-rows=%d twin-deletes=%d",
 		r.TotalAuthors, r.Junk, r.TitleAsAuthor, r.TitleAsAuthorUnverified, r.Mergeable, r.Ambiguous, r.TargetIsJunk, r.TargetUnverified, r.MergeTargetRemoved,
 		r.StrippedNoTarget, r.OutOfScope, r.Placeholders, r.PlaceholdersNoCanonical,
 		r.CanonicalUnknownID, r.Merged, r.Deleted, r.BooksTouched,
 		r.BooksHeldSoleCredit, r.RowsHeldSoleCredit, r.Failed,
-		r.RelinkPlanned, r.RelinkNoCandidate, r.RelinkConflict, r.RelinkSkippedITunes, r.RelinkSkippedOwnerManual, r.RelinkFailed, r.RelinkAmbiguous, r.RelinkDeferred, r.Relinked, r.RelinkNewAuthors, r.RelinkJournalRows, r.TwinDeletes)
+		r.RelinkPlanned, r.RelinkNoCandidate, r.RelinkConflict, r.RelinkSkippedITunes, r.RelinkSkippedOwnerManual, r.RelinkSkippedUserLocked, r.RelinkFailed, r.RelinkAmbiguous, r.RelinkDeferred, r.Relinked, r.RelinkNewAuthors, r.RelinkJournalRows, r.TwinDeletes)
 }
 
 // authorStripMergeHelp is the def's Description, which the native kind carries
@@ -494,7 +497,6 @@ type authorStripMergeStore interface {
 	GetAllSeries() ([]database.Series, error)
 	GetBookByID(id string) (*database.Book, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
-	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
 }
 
 // authorStripMergeWriter is the writes the op makes: merges, the junk-row
@@ -853,6 +855,8 @@ func authorStripMergeCore(ctx context.Context, params authorStripMergeParams, en
 				report.RelinkSkippedITunes++
 			case titleRelinkOutcomeOwnerManual:
 				report.RelinkSkippedOwnerManual++
+			case titleRelinkOutcomeUserLocked:
+				report.RelinkSkippedUserLocked++
 			case titleRelinkOutcomeFailed:
 				report.RelinkFailed++
 			case titleRelinkOutcomeAmbiguous:
