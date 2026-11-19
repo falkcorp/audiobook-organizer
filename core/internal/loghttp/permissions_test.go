@@ -1,24 +1,33 @@
 // file: core/internal/loghttp/permissions_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: fcea5e18-897d-4f58-8688-b96d12f281ea
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package loghttp
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
+	"net/netip"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/falkcorp/mediacore/auth"
+	"github.com/falkcorp/mediacore/events"
 	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/internal/authz"
 	"github.com/falkcorp/mediacore/internal/logjournal"
 	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/realtime"
 )
 
 // TestJournal_RequiresSystemManage (the route half, 05-logging §10): the
@@ -74,7 +83,33 @@ func TestJournal_RequiresSystemManage(t *testing.T) {
 		})
 	}
 
-	// F6-05: the event half (no core.log.recorded.v1 events) is added here
+	// The event half (F6-05, 05-logging §10 "from F6, with realtime"): the same
+	// permission on the journal's live tail. A hub built here plays the kernel's
+	// part (F6-03); the principals carry real compiled checkers, so
+	// core:system.manage is AuthRequired and core:system.view is not enough.
+	t.Run("event_half", func(t *testing.T) {
+		rig := newTailRig(t, nil)
+		rig.sign("u-dick", "core:system.view")
+		rig.sign("u-bruce", permManage)
+		const topic = "/?topic=" + logjournal.TailTopicName
+
+		if _, status, code := rig.open("u-dick", topic); status != http.StatusForbidden || code != "topic_not_permitted" {
+			t.Errorf("system.view-only on topic=%s: %d %q, want 403 topic_not_permitted before the stream", logjournal.TailTopicName, status, code)
+		}
+		dick, _, _ := rig.open("u-dick", "/?topic=*")
+		bruce, _, _ := rig.open("u-bruce", "/?topic=*")
+		if dick == nil || bruce == nil {
+			t.Fatal("a wildcard stream was refused")
+		}
+		if slices.Contains(dick.opened, logjournal.TailTopicName) || !slices.Contains(bruce.opened, logjournal.TailTopicName) {
+			t.Fatalf("topic=* opened dick %v, bruce %v", dick.opened, bruce.opened)
+		}
+		rig.l.Module("core").Warn("the Batcave alarm rang")
+		if got := bruce.next(t); got.Message != "the Batcave alarm rang" {
+			t.Errorf("system.manage subscriber got %+v", got)
+		}
+		dick.quiet(t, 300*time.Millisecond)
+	})
 }
 
 // A books-style predicate (06 LogOtherUserData): a record naming selina is her
@@ -313,4 +348,278 @@ func TestJournal_HiddenRecordsLeaveNoTrace(t *testing.T) {
 			t.Errorf("with users.view: %d items next_cursor %q, want 1 and a cursor", len(v.Items), v.NextCursor)
 		}
 	})
+}
+
+// tailRig is a bus, a hub, the journal tap and the live tail over one logger,
+// wired as the kernel will wire them at F6-03, with the query route's api over
+// the same journal.
+type tailRig struct {
+	t   *testing.T
+	l   *log.Logging
+	tap *logjournal.Tap
+	st  *logjournal.Store
+	api *api
+	srv *httptest.Server
+
+	mu      sync.Mutex
+	roster  map[string]*auth.Principal
+	cancels []context.CancelFunc // the open streams' requests, ended before the server closes
+}
+
+// realPrincipal is a signed-in principal holding exactly perms, with the real
+// compiled checker of authz over core's scope catalog.
+func realPrincipal(t testing.TB, id string, perms ...rbac.Permission) *auth.Principal {
+	t.Helper()
+	cat, err := rbac.NewCatalog(rbac.CoreScopes()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &auth.Principal{
+		User: &auth.User{ID: auth.UserID(id), Username: strings.TrimPrefix(id, "u-")}, Method: auth.MethodSession,
+		Perms:      authz.Compile(rbac.CompileInput{CheckerInput: rbac.CheckerInput{Interactive: true}, RolePatterns: perms}, cat),
+		ClientAddr: netip.MustParseAddr("192.0.2.10"), CredentialID: "sess-" + id,
+	}
+}
+
+type liveAuth struct{}
+
+func (liveAuth) Revalidate(context.Context, *auth.Principal) error { return nil }
+
+func newTailRig(t *testing.T, pred log.OtherUserPredicate) *tailRig {
+	t.Helper()
+	r := &tailRig{t: t, roster: map[string]*auth.Principal{}, st: openJournal(t)}
+	var err error
+	if r.l, err = log.New(log.Options{Output: io.Discard, Format: log.FormatText, Level: slog.LevelDebug, Redactor: log.NewRedactor(nil)}); err != nil {
+		t.Fatal(err)
+	}
+	set := logjournal.Settings{Enabled: true, MinLevel: "debug", RetentionDays: 90, QueueSize: 4096}
+	if r.tap, err = logjournal.StartTap(r.l, r.st, set); err != nil {
+		t.Fatal(err)
+	}
+	bus, err := events.NewBus(events.BusOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bus.Declare("core", logjournal.TailSpec(pred)); err != nil {
+		t.Fatal(err)
+	}
+	// AllowNoControlTopics: the control topics are F4-08's, not under test.
+	hub, err := realtime.NewHub(realtime.Options{Heartbeat: time.Minute, AllowNoControlTopics: true}, realtime.Deps{
+		Auth: liveAuth{}, Catalog: bus.Catalog(),
+		Refresh: func(_ context.Context, p *auth.Principal) (*auth.Principal, error) { return p, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	subs, err := hub.Subscriptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bus.Subscribe("core", subs...); err != nil {
+		t.Fatal(err)
+	}
+	bus.Freeze()
+	if err := bus.Open(); err != nil {
+		t.Fatal(err)
+	}
+	tail, err := logjournal.StartTail(r.l, bus, set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.api = newAPI(r.st, pred)
+	r.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		r.mu.Lock()
+		p := r.roster[req.Header.Get("X-Test-Principal")]
+		r.mu.Unlock()
+		if p != nil {
+			req = req.WithContext(auth.WithPrincipal(req.Context(), p))
+		}
+		hub.Handler().ServeHTTP(w, req)
+	}))
+	t.Cleanup(func() {
+		r.mu.Lock()
+		for _, c := range r.cancels {
+			c()
+		}
+		r.mu.Unlock()
+		r.srv.Close()
+		tail.Stop()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = hub.Close(ctx)
+		_ = bus.Close(ctx)
+		_ = r.l.Close(ctx)
+	})
+	return r
+}
+
+func (r *tailRig) sign(id string, perms ...rbac.Permission) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.roster[id] = realPrincipal(r.t, id, perms...)
+}
+
+// tailStream is an open stream whose tail records are read on a goroutine.
+type tailStream struct {
+	opened []string
+	recs   chan json.RawMessage // each tail record's data member, as sent
+	done   chan struct{}
+}
+
+// open GETs path as id: a stream on 200, otherwise the status and problem code.
+func (r *tailRig) open(id, path string) (*tailStream, int, string) {
+	ctx, cancel := context.WithCancel(context.Background())
+	r.mu.Lock()
+	r.cancels = append(r.cancels, cancel)
+	r.mu.Unlock()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.srv.URL+path, nil)
+	if err != nil {
+		cancel()
+		panic(err)
+	}
+	req.Header.Set("X-Test-Principal", id)
+	resp, err := r.srv.Client().Do(req)
+	if err != nil {
+		cancel()
+		panic(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		defer cancel()
+		defer func() { _ = resp.Body.Close() }()
+		b, _ := io.ReadAll(resp.Body)
+		var p struct {
+			Code string `json:"code"`
+		}
+		_ = json.Unmarshal(b, &p)
+		return nil, resp.StatusCode, p.Code
+	}
+	s := &tailStream{recs: make(chan json.RawMessage, 256), done: make(chan struct{})}
+	opened := make(chan []string, 1)
+	go func() {
+		defer close(s.done)
+		defer close(s.recs)
+		sc := bufio.NewScanner(resp.Body)
+		sc.Buffer(make([]byte, 64<<10), 1<<20)
+		sent := false
+		for sc.Scan() {
+			data, ok := strings.CutPrefix(sc.Text(), "data: ")
+			if !ok {
+				continue
+			}
+			var en struct {
+				Topic string          `json:"topic"`
+				Data  json.RawMessage `json:"data"`
+			}
+			if json.Unmarshal([]byte(data), &en) != nil {
+				continue
+			}
+			switch {
+			case en.Topic == "core.stream.opened.v1" && !sent:
+				var d struct {
+					Topics []string `json:"topics"`
+				}
+				_ = json.Unmarshal(en.Data, &d)
+				opened <- d.Topics
+				sent = true
+			case en.Topic == logjournal.TailTopicName:
+				s.recs <- en.Data
+			}
+		}
+	}()
+	select {
+	case s.opened = <-opened:
+	case <-time.After(5 * time.Second):
+		cancel()
+		panic("the stream never sent its opened frame")
+	}
+	// The stream ends with the test's rig (the server closes), but a reader
+	// blocked on the body is released here too.
+	go func() { <-s.done; cancel() }()
+	return s, http.StatusOK, ""
+}
+
+// raw is the next tail record exactly as sent.
+func (s *tailStream) raw(t testing.TB) json.RawMessage {
+	t.Helper()
+	select {
+	case d, ok := <-s.recs:
+		if !ok {
+			t.Fatal("the stream ended while waiting for a record")
+		}
+		return d
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for a record")
+	}
+	return nil
+}
+
+func (s *tailStream) next(t testing.TB) logjournal.RecordView {
+	t.Helper()
+	var v logjournal.RecordView
+	if err := json.Unmarshal(s.raw(t), &v); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func (s *tailStream) quiet(t testing.TB, d time.Duration) {
+	t.Helper()
+	select {
+	case rec, ok := <-s.recs:
+		if ok {
+			t.Fatalf("unexpected record %s", rec)
+		}
+	case <-time.After(d):
+	}
+}
+
+// TestJournalTail_SameViewAsQuery: a record appended to the journal arrives on
+// the tail with the same fields the query route returns for it, byte for byte
+// as JSON, for attributes of every kind the store flattens (a group, numbers,
+// a boolean, a duration, a repeated key).
+func TestJournalTail_SameViewAsQuery(t *testing.T) {
+	rig := newTailRig(t, nil)
+	rig.sign("u-bruce", permManage, permUsers)
+	s, status, code := rig.open("u-bruce", "/?topic="+logjournal.TailTopicName)
+	if s == nil {
+		t.Fatalf("open: %d %s", status, code)
+	}
+	rig.l.Module("core").With(slog.String(log.KeySubsystem, "scanner")).Warn("a batarang was thrown",
+		slog.Int("count", 3), slog.Float64("arc", 0.25), slog.Bool("hit", true), slog.Duration("flight", 1500*time.Millisecond),
+		slog.Group("ctx", slog.String("user_id", "u-bruce"), slog.Group("deep", slog.Int64("n", -7))),
+		slog.String("dup", "first"), slog.String("dup", "last"))
+	tail := s.raw(t)
+
+	var served pageView
+	for range 100 { // the journal tap writes in its own time
+		_ = rig.tap.Flush(context.Background())
+		served = mustCall(t, rig.api, realPrincipal(t, "u-bruce", permManage, permUsers), queryRequest{})
+		if len(served.Items) > 0 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if len(served.Items) != 1 {
+		t.Fatalf("the query route returned %d records, want 1", len(served.Items))
+	}
+	want, err := json.Marshal(served.Items[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var norm any
+	if err := json.Unmarshal(tail, &norm); err != nil {
+		t.Fatal(err)
+	}
+	got, err := json.Marshal(norm) // the stream's data member, key-sorted like the route's
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wantNorm any
+	if err := json.Unmarshal(want, &wantNorm); err != nil {
+		t.Fatal(err)
+	}
+	wantSorted, _ := json.Marshal(wantNorm)
+	if string(got) != string(wantSorted) {
+		t.Errorf("tail and query disagree:\n tail  %s\n query %s", got, wantSorted)
+	}
 }
