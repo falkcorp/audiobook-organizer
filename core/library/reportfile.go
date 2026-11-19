@@ -1,5 +1,5 @@
 // file: core/library/reportfile.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8339ca84-a951-46b8-8fb2-5a3b65f59b65
 // last-edited: 2026-11-18
 
@@ -124,7 +124,7 @@ type reportOpenEnv struct {
 func defaultReportOpenEnv() reportOpenEnv { return reportOpenEnv{euid: os.Geteuid()} }
 
 // openReportFile is OpenReportFile over an explicit environment.
-func openReportFile(path string, perm fs.FileMode, mode ReportOpenMode, env reportOpenEnv) (*os.File, error) {
+func openReportFile(path string, perm fs.FileMode, mode ReportOpenMode, env reportOpenEnv) (f *os.File, err error) {
 	refuse := func(why string) error {
 		return fmt.Errorf("%w: %s: %s", ErrReportFileUnsafe, path, why)
 	}
@@ -132,11 +132,19 @@ func openReportFile(path string, perm fs.FileMode, mode ReportOpenMode, env repo
 	if err != nil {
 		return nil, refuse(err.Error())
 	}
-	d, closeDir, err := openReportDir(dir, env)
+	d, err := openReportDir(dir, env)
 	if err != nil {
 		return nil, refuse(err.Error())
 	}
-	defer closeDir()
+	// The directory handle is only the anchor for the openat below. A failure
+	// to release it still fails the call, and the file opened under it is
+	// closed rather than handed back.
+	defer func() {
+		if cerr := d.Close(); cerr != nil && err == nil {
+			err = libfs.CloseAfter(f, fmt.Errorf("close report directory %s: %w", dir, cerr))
+			f = nil
+		}
+	}()
 
 	flag := os.O_WRONLY | os.O_CREATE
 	switch mode {
@@ -145,7 +153,7 @@ func openReportFile(path string, perm fs.FileMode, mode ReportOpenMode, env repo
 	case ReportReadAppend:
 		flag = os.O_RDWR | os.O_CREATE
 	}
-	f, err := libfs.OpenFileAt(d, name, flag, perm)
+	f, err = libfs.OpenFileAt(d, name, flag, perm)
 	if err != nil {
 		if errors.Is(err, syscall.ELOOP) {
 			return nil, refuse("the report file is a symlink")
@@ -167,7 +175,7 @@ func openReportFile(path string, perm fs.FileMode, mode ReportOpenMode, env repo
 // may or may not exist yet, without creating or changing anything. A missing file
 // is fine. It lets ReportPathNotify refuse a report that could not be written
 // before an op has done any work.
-func checkExistingReportFile(path string, env reportOpenEnv) error {
+func checkExistingReportFile(path string, env reportOpenEnv) (err error) {
 	refuse := func(why string) error {
 		return fmt.Errorf("%w: %s: %s", ErrReportFileUnsafe, path, why)
 	}
@@ -175,11 +183,15 @@ func checkExistingReportFile(path string, env reportOpenEnv) error {
 	if err != nil {
 		return refuse(err.Error())
 	}
-	d, closeDir, err := openReportDir(dir, env)
+	d, err := openReportDir(dir, env)
 	if err != nil {
 		return refuse(err.Error())
 	}
-	defer closeDir()
+	defer func() {
+		if cerr := d.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("close report directory %s: %w", dir, cerr)
+		}
+	}()
 	f, err := libfs.OpenAt(d, name, os.O_RDONLY)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -213,39 +225,39 @@ func splitReportPath(path string) (dir, name string, err error) {
 	return dir, name, nil
 }
 
-// openReportDir opens the report directory as a descriptor and returns it with
-// the function that releases it. See OpenReportFile for what it checks.
-func openReportDir(dir string, env reportOpenEnv) (*libfs.Dir, func(), error) {
+// openReportDir opens the report directory as a descriptor and returns it; the
+// caller closes it. See OpenReportFile for what it checks.
+func openReportDir(dir string, env reportOpenEnv) (*libfs.Dir, error) {
 	before, err := os.Lstat(dir)
 	switch {
 	case err != nil:
-		return nil, nil, fmt.Errorf("the report directory cannot be inspected: %w", err)
+		return nil, fmt.Errorf("the report directory cannot be inspected: %w", err)
 	case before.Mode()&os.ModeSymlink != 0:
-		return nil, nil, errors.New("the report directory is a symlink, not a directory")
+		return nil, errors.New("the report directory is a symlink, not a directory")
 	case !before.IsDir():
-		return nil, nil, errors.New("the report directory is not a directory")
+		return nil, errors.New("the report directory is not a directory")
 	case !ownedByUID(before, env.euid):
-		return nil, nil, errors.New("the report directory is not owned by the user this process runs as")
+		return nil, errors.New("the report directory is not owned by the user this process runs as")
 	}
 	if env.afterDirChecked != nil {
 		env.afterDirChecked(dir)
 	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return nil, nil, fmt.Errorf("the report directory cannot be opened: %w", err)
+		return nil, fmt.Errorf("the report directory cannot be opened: %w", err)
 	}
 	opened, err := root.Stat(".")
 	if err != nil || !os.SameFile(before, opened) {
-		return nil, nil, errors.Join(errors.New("the report directory was replaced while it was being opened"), err, root.Close())
+		return nil, errors.Join(errors.New("the report directory was replaced while it was being opened"), err, root.Close())
 	}
 	d, err := libfs.OpenDir(root, ".")
 	if cerr := root.Close(); err == nil && cerr != nil {
 		err = cerr
 	}
 	if err != nil {
-		return nil, nil, errors.Join(fmt.Errorf("the report directory cannot be opened: %w", err), d.Close())
+		return nil, errors.Join(fmt.Errorf("the report directory cannot be opened: %w", err), d.Close())
 	}
-	return d, func() { _ = d.Close() }, nil
+	return d, nil
 }
 
 // unsafeReportFile says why the opened file may not be written as a report, or ""
