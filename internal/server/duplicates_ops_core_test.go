@@ -774,6 +774,9 @@ func TestHeadEnv_BuildsOverANilReporter(t *testing.T) {
 	require.NotPanics(t, func() {
 		e := t7HeadEnv(nil, true)
 		require.NotNil(t, e.Canceled)
-		require.NotNil(t, e.Checkpoint)
+		// Checkpoint is only the checkpointing shells' (t7HeadCheckpointing), so
+		// the restart-by-design defs never reach a Checkpoint call.
+		require.Nil(t, e.Checkpoint)
+		require.NotNil(t, t7HeadCheckpointing(e, nil).Checkpoint)
 	})
 }
