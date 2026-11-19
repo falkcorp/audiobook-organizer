@@ -1,5 +1,5 @@
 // file: core/internal/outboxhttp/routes_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b91b2c32-bee4-4aac-a400-6fb0e871d709
 // last-edited: 2026-11-19
 
@@ -178,6 +178,10 @@ type fakeRec struct {
 	j   *journal
 	err error // fails every Record
 
+	// honorCtx makes Record fail with the context's error once it is done, as a
+	// real store does, after keeping the event.
+	honorCtx bool
+
 	// errOn fails the Records it returns an error for, after keeping them.
 	errOn func(audit.Event) error
 	// onRecord runs after the n-th Record (1-based) was kept.
@@ -204,6 +208,11 @@ func (f *fakeRec) Record(ctx context.Context, e audit.Event) error {
 	}
 	if f.err != nil {
 		return f.err
+	}
+	if f.honorCtx {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 	}
 	if f.errOn != nil {
 		return f.errOn(e)
@@ -1393,18 +1402,18 @@ func TestOutboxHTTP_OperationAndRecordsOutliveAHangUp(t *testing.T) {
 			if len(rg.op.opCtx) != 1 {
 				t.Fatalf("%d operation calls, want 1", len(rg.op.opCtx))
 			}
-			if o := rg.op.opCtx[0]; !o.alive || o.remaining <= 0 || o.remaining > opTimeout {
-				t.Errorf("the operation's context: %+v, want alive with a deadline within %v", o, opTimeout)
+			if o := rg.op.opCtx[0]; !o.alive || o.remaining <= 0 || o.remaining > 2*time.Minute {
+				t.Errorf("the operation's context: %+v, want alive with a deadline within 2m", o)
 			}
 			recs := rg.rec.seen()
 			if len(recs) != 2 {
 				t.Fatalf("%d records, want the request's and one follow-up", len(recs))
 			}
-			if first := recs[0]; !first.alive || first.remaining <= 0 || first.remaining > auditTimeout {
-				t.Errorf("the first record's context: %+v, want the request's, live, with a deadline within %v", first, auditTimeout)
+			if first := recs[0]; !first.alive || first.remaining <= 0 || first.remaining > 10*time.Second {
+				t.Errorf("the first record's context: %+v, want the request's, live, with a deadline within 10s", first)
 			}
-			if after := recs[1]; !after.alive || after.remaining <= 0 || after.remaining > auditTimeout {
-				t.Errorf("the follow-up record's context: %+v, want a live one with a deadline within %v after the hang-up", after, auditTimeout)
+			if after := recs[1]; !after.alive || after.remaining <= 0 || after.remaining > 10*time.Second {
+				t.Errorf("the follow-up record's context: %+v, want a live one with a deadline within 10s after the hang-up", after)
 			}
 		})
 	}
@@ -1598,13 +1607,13 @@ func TestOutboxHTTP_WhatCannotBeRecordedAfterwardsIsLogged(t *testing.T) {
 				_, err := rg.api.retry(context.Background(), deadIn(bruce(), "core.notify.deliver", 6))
 				return err
 			},
-			[]string{"core.outbox.dead_retry", "consumer=core.notify.deliver", "seq=6", "topic=" + noticeTopic, "outcome=error", "reason=failed"}, boom},
+			[]string{"core.outbox.dead_retry", "consumer=core.notify.deliver", "seq=6", "topic=" + noticeTopic, "outcome=error", "reason=failed", "Batcave flooded"}, boom},
 		{"partial purge", func(rg *rig) { rg.op.purgeSkipped, rg.op.purgeErr = 4, boom },
 			func(rg *rig) error {
 				_, err := rg.api.purge(context.Background(), purgeIn(bruce(), "core.notify.deliver"))
 				return err
 			},
-			[]string{"core.outbox.backlog_purge", "consumer=core.notify.deliver", "skipped=4", "reason=partial"}, boom},
+			[]string{"core.outbox.backlog_purge", "consumer=core.notify.deliver", "skipped=4", "reason=partial", "Batcave flooded"}, boom},
 		{"completed purge", func(rg *rig) { rg.op.purgeSkipped = 7 },
 			func(rg *rig) error {
 				_, err := rg.api.purge(context.Background(), purgeIn(bruce(), "core.notify.deliver"))
@@ -2318,6 +2327,85 @@ func TestOutboxHTTP_DeadOperationsIgnoreUnreadableNeighbours(t *testing.T) {
 					t.Errorf("intake = %+v after a %s", rows, kind)
 				}
 			})
+		}
+	}
+}
+
+// TestOutboxHTTP_RequestRecordKeepsTheRequestsContext: the record of the request
+// is written on the request's own context (bounded), so a client that is already
+// gone gets no operation: the write fails and nothing is changed. Only what
+// follows an applied operation outlives the request.
+func TestOutboxHTTP_RequestRecordKeepsTheRequestsContext(t *testing.T) {
+	for _, kind := range []string{"retry", "discard", "purge"} {
+		t.Run(kind, func(t *testing.T) {
+			rg := newRig()
+			rg.rec.honorCtx = true
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			var err error
+			switch kind {
+			case "retry":
+				_, err = rg.api.retry(ctx, deadIn(bruce(), "core.notify.deliver", 4))
+			case "discard":
+				_, err = rg.api.discard(ctx, deadIn(bruce(), "core.notify.deliver", 4))
+			case "purge":
+				_, err = rg.api.purge(ctx, purgeIn(bruce(), "core.notify.deliver"))
+			}
+			wantProblem(t, err, http.StatusServiceUnavailable, "unavailable")
+			for _, step := range rg.j.all() {
+				if strings.HasPrefix(step, "op:retry") || strings.HasPrefix(step, "op:discard") || strings.HasPrefix(step, "op:purge") {
+					t.Errorf("the operation ran for a client that had hung up: %v", rg.j.all())
+				}
+			}
+		})
+	}
+}
+
+// TestOutboxHTTP_UnrecordedRequestAsksToRetry: the 503 of a request whose record
+// could not be written reaches the client as a 503 with Retry-After and says
+// that nothing was changed, so the client knows a retry is safe.
+func TestOutboxHTTP_UnrecordedRequestAsksToRetry(t *testing.T) {
+	rg := newRig()
+	rg.rec.err = errors.New("audit: the disk is full")
+	r := httpapi.NewRouter(httpapi.Options{}, httpapi.Deps{Log: discardLogger()})
+	httpapi.Handle(r.CoreGroup(), httpapi.Route{
+		Method: http.MethodGet, Path: "/probe/{consumer}/{seq}", Name: "probeUnrecorded", Perm: rbac.Public,
+	}, func(ctx context.Context, in *httpapi.In[deadReq]) (httpapi.NoContent, error) {
+		in.Principal = bruce()
+		return rg.api.retry(ctx, in)
+	})
+	h, err := r.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/core/v1/probe/core.notify.deliver/1", nil))
+	if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), "nothing was changed") {
+		t.Errorf("answer = %d %s, want 503 saying nothing was changed", rr.Code, rr.Body.String())
+	}
+	if got := rr.Header().Get("Retry-After"); got != "5" {
+		t.Errorf("Retry-After = %q, want 5", got)
+	}
+}
+
+// TestOutboxHTTP_IsRefusalBounds: a refusal is a 4xx problem and nothing else.
+func TestOutboxHTTP_IsRefusalBounds(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want bool
+	}{
+		{&httpapi.Error{Status: 399}, false},
+		{&httpapi.Error{Status: 400}, true},
+		{&httpapi.Error{Status: 404}, true},
+		{&httpapi.Error{Status: 499}, true},
+		{&httpapi.Error{Status: 500}, false},
+		{&httpapi.Error{Status: 503}, false},
+		{fmt.Errorf("wrapped: %w", &httpapi.Error{Status: 409}), true},
+		{errors.New("pebble: the Batcave flooded"), false},
+		{nil, false},
+	} {
+		if got := isRefusal(c.err); got != c.want {
+			t.Errorf("isRefusal(%v) = %v, want %v", c.err, got, c.want)
 		}
 	}
 }

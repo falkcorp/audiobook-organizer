@@ -1,5 +1,5 @@
 // file: core/outbox/operators_test.go
-// version: 1.0.2
+// version: 1.0.4
 // guid: 79b776b8-4d28-4cfd-addc-c1ac58312a45
 // last-edited: 2026-11-19
 
@@ -68,8 +68,14 @@ func seedDead(t testing.TB, r *rig, consumer string, seq uint64, withCursor bool
 func TestOutbox_ConcurrentDeadOperatorsActOnce(t *testing.T) {
 	type op func(ob *outbox.Outbox) error
 	const seq = 7
-	retry := func(ob *outbox.Outbox) error { _, err := ob.RetryDead(context.Background(), consumerN, seq); return err }
-	discard := func(ob *outbox.Outbox) error { _, err := ob.DiscardDead(context.Background(), consumerN, seq); return err }
+	retry := func(ob *outbox.Outbox) error {
+		_, err := ob.RetryDead(context.Background(), consumerN, seq)
+		return err
+	}
+	discard := func(ob *outbox.Outbox) error {
+		_, err := ob.DiscardDead(context.Background(), consumerN, seq)
+		return err
+	}
 	for _, shape := range []struct {
 		name       string
 		withCursor bool
@@ -357,6 +363,28 @@ func TestOutbox_DeadTopicRefusals(t *testing.T) {
 	} {
 		if topic, err := op(); !errors.Is(err, outbox.ErrDeadNotFound) || topic != "" {
 			t.Fatalf("an operation on a missing seq = %q, %v, want no topic and ErrDeadNotFound", topic, err)
+		}
+	}
+}
+
+// DeadTopic and the operations report a store problem as one: a key (sorting before the letter) inside the
+// consumer's own dead/ range that is not a dead-letter key stops the read, and
+// the caller is told so rather than that the letter is not there.
+func TestOutbox_DeadTopicReportsAStoreProblem(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t, rigOpts{noExec: true, register: consumeInto(&recorder{}, consumerN)})
+	seedDead(t, r, consumerN, 9, true)
+	stray := append(outboxstore.DeadPrefix(consumerN), "a-stray"...)
+	r.putRaw(stray, []byte("not a dead letter"))
+	if topic, err := r.ob.DeadTopic(ctx, consumerN, 9); err == nil || errors.Is(err, outbox.ErrDeadNotFound) || topic != "" {
+		t.Fatalf("DeadTopic with a stray key = %q, %v; want the store's error, not ErrDeadNotFound", topic, err)
+	}
+	for _, op := range []func() (string, error){
+		func() (string, error) { return r.ob.RetryDead(ctx, consumerN, 9) },
+		func() (string, error) { return r.ob.DiscardDead(ctx, consumerN, 9) },
+	} {
+		if topic, err := op(); err == nil || errors.Is(err, outbox.ErrDeadNotFound) || topic != "" {
+			t.Fatalf("an operation with a stray key = %q, %v; want the store's error", topic, err)
 		}
 	}
 }

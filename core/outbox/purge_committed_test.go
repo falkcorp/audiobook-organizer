@@ -1,5 +1,5 @@
 // file: core/outbox/purge_committed_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0d6a4f0e-2b67-4a35-9f3e-6c1f8b7a42d1
 // last-edited: 2026-11-19
 
@@ -105,5 +105,35 @@ func TestOutbox_PurgeBacklogReportsEverythingItCommitted(t *testing.T) {
 	must(t, err)
 	if skipped != 10 || r.pendingOf(consumerN) != 0 {
 		t.Fatalf("skipped = %d, pending after = %d; want 10 and 0", skipped, r.pendingOf(consumerN))
+	}
+}
+
+// A retry entry of a message the cursor already passed is still something the
+// consumer has not finished, so the purge counts it as skipped, the same way the
+// status read counts it as pending; the count and the cursors agree.
+func TestOutbox_PurgeBacklogCountsRetriesLikeStatus(t *testing.T) {
+	ctx := context.Background()
+	r := purgeFixture(t, nil, 10)
+	st := outboxstore.New(r.outKS)
+	hi, _, err := st.ReadHigh(ctx, noticeName)
+	must(t, err)
+	p := outboxstore.Pair{Consumer: consumerN, Topic: noticeName, PP: 0}
+	b := st.OpenBatch()
+	ps, err := st.LoadPair(ctx, b, p)
+	must(t, err)
+	ps.Cur.Seq = hi.High // partition 0 has taken over everything, but one message is waiting to be retried
+	ps.Try.Entries = []outboxstore.TryEntry{{Seq: 1, Attempt: 1, NextAt: time.Now().Add(time.Hour), Token: "error"}}
+	must(t, st.StagePair(b, p, ps, time.Now()))
+	must(t, b.Commit(ctx, storage.Sync))
+	b.Close()
+
+	before := r.pendingOf(consumerN)
+	if before == 0 {
+		t.Fatal("the fixture left nothing pending")
+	}
+	skipped, err := r.ob.PurgeBacklog(ctx, consumerN)
+	must(t, err)
+	if skipped != before || r.pendingOf(consumerN) != 0 {
+		t.Fatalf("skipped = %d, pending before = %d, after = %d; want the two counts equal and 0 after", skipped, before, r.pendingOf(consumerN))
 	}
 }
