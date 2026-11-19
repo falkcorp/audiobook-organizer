@@ -1,7 +1,7 @@
 // file: core/kernel/boot.go
-// version: 1.0.16
+// version: 1.0.17
 // guid: 0c2d259d-1f0d-46d8-a42f-e27deea9ec56
-// last-edited: 2026-11-12
+// last-edited: 2026-11-18
 
 package kernel
 
@@ -75,10 +75,23 @@ func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 	// Before any module code runs, so a restart request refused before
 	// readiness is logged (Lifecycle.RequestRestart).
 	k.lifecycle.log = k.log
+	// P0 (06 section 6.5.1) runs here, not first: the kernel's own logger, which
+	// its warnings need, is built from Config.Log until slice (e) of F3-07 takes
+	// core.log from the layers. Nothing before it reads state.
+	if c.CoreConfigBoot && !describe {
+		if err := k.phase(phaseP0, func() error { return k.bootCoreConfig(ctx) }); err != nil {
+			return nil, err
+		}
+	}
 	// P0a, the pre-boot swap, runs before anything opens the store (swap.go);
 	// each storage phase of a restore or reset boot then journals its step.
 	if k.swapWanted(describe) {
 		if err := k.phase(phaseP0a, func() error { return k.runP0a(ctx) }); err != nil {
+			return nil, err
+		}
+	}
+	if k.cfgBoot != nil {
+		if err := k.phase(phaseP3, func() error { return k.loadCoreConfig(ctx) }); err != nil {
 			return nil, err
 		}
 	}
@@ -540,6 +553,12 @@ func (k *Kernel) closeCore(ctx context.Context, deadline time.Time) error {
 		// "subscribers still running".
 		if err := k.coreCfg.close(context.WithoutCancel(ctx)); err != nil {
 			errs = append(errs, fmt.Errorf("kernel: core config close: %w", err))
+		}
+		// The layered store (Config.CoreConfigBoot), which the core config above
+		// shares: closed once, here, after storage (its DB layer is read-only after
+		// P4d and nothing writes through it once the services stopped).
+		if err := k.cfgBoot.close(context.WithoutCancel(ctx)); err != nil {
+			errs = append(errs, fmt.Errorf("kernel: config close: %w", err))
 		}
 		if k.logging != nil {
 			if err := k.logging.Close(cctx); err != nil {
