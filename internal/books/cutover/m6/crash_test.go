@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/crash_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e2a74c19-5b60-4d83-8f1e-0c9d3b6a7e45
 // last-edited: 2026-11-19
 
@@ -107,10 +107,7 @@ func TestCutoverCrashAtEveryChunk(t *testing.T) {
 	var oracles [][]string
 	for _, chunk := range []int{1, 4} {
 		t.Run("chunk_"+strconv.Itoa(chunk), func(t *testing.T) {
-			opts := []func(*rig){withRows(headRows(t)), func(r *rig) {
-				r.chunkItems = chunk
-				r.parallelism = func(dm *datamigrate.DataMigration) { dm.Parallelism = fixedOne() }
-			}}
+			opts := []func(*rig){withRows(headRows(t)), func(r *rig) { r.chunkItems = chunk }}
 			seeded := newRig(t, opts...).seed(t)
 
 			// The uninterrupted boot is the oracle, and counts the rows the shard visits.

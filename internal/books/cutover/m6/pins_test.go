@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/pins_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 21b7d4e8-0c95-4a36-8f1d-7e5a39c0b264
 // last-edited: 2026-11-19
 
@@ -8,12 +8,14 @@ package m6
 import (
 	"maps"
 	"math"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
+	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
@@ -268,4 +270,64 @@ func TestInstanceID(t *testing.T) {
 // not comparable).
 func sameLimits(a, b integrations.Limits) bool {
 	return a.RPS == b.RPS && a.Burst == b.Burst && a.MaxRetries == b.MaxRetries && a.Timeout == b.Timeout
+}
+
+// jsonNames is the set of JSON field names of a struct type, from its tags.
+func jsonNames(t *testing.T, typ reflect.Type) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	for i := range typ.NumField() {
+		tag, _, _ := strings.Cut(typ.Field(i).Tag.Get("json"), ",")
+		if tag == "-" || (tag == "" && !typ.Field(i).Anonymous) {
+			t.Fatalf("%s.%s has no JSON name: the pin cannot say what HEAD writes", typ, typ.Field(i).Name)
+		}
+		out[tag] = true
+	}
+	return out
+}
+
+// TestFrozenDecoders_CoverHEADFields holds each decoder M6 froze against the HEAD
+// type whose rows it reads. Every field HEAD writes is either decoded or named in
+// that type's lossy list (and a lossy field is not also decoded), and the decoder
+// reads no field HEAD lacks. A field added to HEAD before the freeze is therefore a
+// failing test, never a silent drop at the cutover.
+func TestFrozenDecoders_CoverHEADFields(t *testing.T) {
+	for _, c := range []struct {
+		name         string
+		head, frozen reflect.Type
+		lossy        []string
+	}{
+		{"ai_endpoints", reflect.TypeFor[config.AIEndpoint](), reflect.TypeFor[headAIEndpoint](), nil},
+		{"metadata_sources", reflect.TypeFor[config.MetadataSource](), reflect.TypeFor[headMetadataSource](), metadataSourceLossy},
+		{"path_aliases", reflect.TypeFor[config.PathAlias](), reflect.TypeFor[headPathAlias](), nil},
+		{"itunes.path_mappings", reflect.TypeFor[config.ITunesPathMap](), reflect.TypeFor[headPathMap](), nil},
+		{"import_path", reflect.TypeFor[store.ImportPath](), reflect.TypeFor[importPathRow](), nil},
+		{"aijob", reflect.TypeFor[store.AIJob](), reflect.TypeFor[aiJob](), jobLossy},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			head, frozen := jsonNames(t, c.head), jsonNames(t, c.frozen)
+			lossy := map[string]bool{}
+			for _, n := range c.lossy {
+				lossy[n] = true
+			}
+			for n := range head {
+				if !frozen[n] && !lossy[n] {
+					t.Errorf("HEAD writes %q and M6 neither decodes it nor lists it as lossy", n)
+				}
+			}
+			for n := range frozen {
+				if !head[n] {
+					t.Errorf("the frozen decoder reads %q, which HEAD's type does not have", n)
+				}
+			}
+			for n := range lossy {
+				if !head[n] {
+					t.Errorf("the lossy list names %q, which HEAD's type does not have", n)
+				}
+				if frozen[n] {
+					t.Errorf("%q is both decoded and listed as lossy", n)
+				}
+			}
+		})
+	}
 }

@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/instances.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 8b6a74f6-b7ad-4baf-bb70-c1f2c5ccb49b
 // last-edited: 2026-11-19
 
@@ -52,6 +52,13 @@ type headAIEndpoint struct {
 	HostRoots        map[string]string `json:"host_roots"`
 }
 
+// metadataSourceLossy are the metadata_sources fields no part of M6 reads:
+// credentials (M2 moved them out of the blob into the secrets store before M6 runs)
+// and requires_auth (a flag HEAD derives its auth checks from; the native
+// instance holds a secret ref or not). Pinned against HEAD's MetadataSource by
+// TestFrozenDecoders_CoverHEADFields.
+var metadataSourceLossy = []string{"credentials", "requires_auth"}
+
 // headMetadataSource is HEAD's metadata_sources entry (internal/config/config.go
 // MetadataSource), frozen here. Credentials are not read: M2 moved them out of
 // the blob.
@@ -68,6 +75,13 @@ type headMetadataSource struct {
 		MaxRetries     int     `json:"max_retries"`
 		TimeoutSeconds int     `json:"timeout_seconds"`
 	} `json:"rate_limit"`
+}
+
+// carriedSecret is one credential moved from the secret name M2 gave it under a
+// renamed source's HEAD ID to the name under its new instance ID.
+type carriedSecret struct {
+	from, to secrets.Name
+	field    string
 }
 
 // secretSet is the names the secrets store holds.
@@ -114,8 +128,10 @@ func instanceID(head string) (id integrations.InstanceID, renamed, ok bool) {
 	n := integrations.InstanceID(strings.ToLower(strings.ReplaceAll(head, "_", "-")))
 	// core's grammar starts with a letter (a secret name's segment must, 05-config
 	// 2.3), which the spec's own grammar does not require: an ID that starts with a
-	// digit gets a letter prefix, and its secrets are written under the new name
-	// (seams.d/F7-01.md, "InstanceID grammar").
+	// digit gets a letter prefix (seams.d/F7-01.md, "InstanceID grammar"). M2 has
+	// no secret to move for such an ID (its name is no valid secret name, so M2
+	// quarantines the credential); for any other renamed ID the credentials M2
+	// stored under HEAD's ID are carried to the new name by metadataInstance.
 	if n != "" && n[0] >= '0' && n[0] <= '9' {
 		n = digitPrefix + n
 	}
@@ -183,6 +199,9 @@ type pending struct {
 	// operatorPair is one of the four operator-secret pairs of M1.4 step 2.
 	operatorPair bool
 	renamedFrom  string
+	// carry is the credentials M2 stored under the HEAD ID of a renamed source,
+	// to be copied to the name under its new ID.
+	carry []carriedSecret
 
 	// Set by finish: the signature of the effective destinations (the origin every
 	// trust field is signed from) and the fields whose effective origin is not the
@@ -303,6 +322,29 @@ func (m *Migration) writeInstance(ctx context.Context, c *chunk, p *pending, qua
 			p.inst.SecretsOrigin = p.sig
 		}
 	}
+	// The credentials of a renamed source are read before the import for the same
+	// reason, and each carried one becomes a ref only once its value is read: an
+	// unreadable one is not carried (there is no marker M6 may write), and the
+	// instance reports the secret missing until the admin re-enters it.
+	type carried struct {
+		to  secrets.Name
+		val string
+	}
+	var moved []carried
+	for _, cs := range p.carry {
+		val, found, err := m.cfg.SecretValue(ctx, cs.from)
+		switch {
+		case err != nil:
+			return false, fmt.Errorf("m6: read the credential %s of the renamed source %s: %w", cs.field, ref, err)
+		case !found:
+			m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the credential " + cs.field + " is unreadable under the old name and is not carried: re-enter it"})
+		default:
+			p.inst.Config.Settings[cs.field] = secrets.RefTo(cs.to)
+			p.inst.SecretsOrigin = p.sig
+			moved = append(moved, carried{to: cs.to, val: val})
+			m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the credential " + cs.field + " is carried to the renamed source's secret name"})
+		}
+	}
 	err = m.cfg.Integrations.ImportInstance(ctx, b, p.inst)
 	switch {
 	case errors.Is(err, storage.ErrImportConflict):
@@ -315,6 +357,12 @@ func (m *Migration) writeInstance(ctx context.Context, c *chunk, p *pending, qua
 	if p.copyKey != "" {
 		if err := m.cfg.Secrets.ImportSecret(ctx, b, secrets.Write{Name: p.copyKey, Value: secrets.NewValue(copyVal), By: m.by}); err != nil && !errors.Is(err, storage.ErrImportConflict) {
 			return false, fmt.Errorf("m6: copy the OpenAI key to %s: %w", p.copyKey, err)
+		}
+		c.note(OutcomeSecretCopy)
+	}
+	for _, mv := range moved {
+		if err := m.cfg.Secrets.ImportSecret(ctx, b, secrets.Write{Name: mv.to, Value: secrets.NewValue(mv.val), By: m.by}); err != nil && !errors.Is(err, storage.ErrImportConflict) {
+			return false, fmt.Errorf("m6: carry a credential to %s: %w", mv.to, err)
 		}
 		c.note(OutcomeSecretCopy)
 	}
@@ -379,6 +427,25 @@ func (m *Migration) metadataInstance(raw json.RawMessage, i int, set secretSet) 
 		p.renamedFrom = src.ID
 	}
 	settings := refsFor(set, ref)
+	if renamed {
+		// M2 names a source's credentials with the ID HEAD gave it
+		// (integrations.metadata.<HEAD id>.credentials.<key>), and refsFor looks
+		// under the normalized one, so without this the instance would lose its refs
+		// and the secrets would be orphaned. Digit-leading IDs have none: M2
+		// quarantined them, the name being invalid.
+		headPrefix := "integrations.metadata." + src.ID + "."
+		for _, n := range slices.Sorted(maps.Keys(set)) {
+			field, ok := strings.CutPrefix(string(n), headPrefix)
+			if !ok || field == "" {
+				continue
+			}
+			to := secretName(ref, field)
+			if _, taken := settings[field]; taken || set[to] {
+				continue // already under the new ID: that one wins
+			}
+			p.carry = append(p.carry, carriedSecret{from: n, to: to, field: field})
+		}
+	}
 	if src.BaseURL != "" {
 		clean, ok := p.cleanURL("base_url", src.BaseURL)
 		if !ok {

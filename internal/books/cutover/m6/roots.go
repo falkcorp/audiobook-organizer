@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m6/roots.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5c6b9d2a-5df4-4e1e-9d64-7a0f3a1c1b52
 // last-edited: 2026-11-19
 
@@ -8,6 +8,7 @@ package m6
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -96,6 +97,28 @@ type plannedRoot struct {
 	spec library.RootSpec
 	scan *RootScan
 	key  string // the import_path row, "" for books-library
+	// raw is what the root came from, kept for quarantine if core refuses the
+	// roots list: the import_path row's value, or root_dir's string. member names
+	// root_dir's blob member ("" for an import_path row, which is quarantined by
+	// key).
+	raw    []byte
+	member string
+	// aliases are the path_aliases members attached to this root, with their raw
+	// JSON, quarantined with it if the list is refused.
+	aliases []rawMember
+}
+
+// rawMember is a blob member and its raw JSON.
+type rawMember struct {
+	name string
+	raw  []byte
+}
+
+// mappingEntry is one resolved iTunes mapping with the blob member it came from.
+type mappingEntry struct {
+	member string
+	raw    []byte
+	m      library.Mapping
 }
 
 // roots converts the roots, the iTunes mappings and the protected paths of the
@@ -126,7 +149,7 @@ func (g *groupRun) roots(ctx context.Context, rows, index []storage.KV, counter 
 				ID: BooksLibraryRoot, Path: rootDir, Role: library.RoleLibrary, Owner: Owner,
 				Watch: library.WatchOff, Sentinel: library.SentinelBootstrap, MinFree: 0,
 				Quarantine: failedDir, AppDir: library.DefaultAppDir,
-			}})
+			}, raw: []byte(rootDir), member: "root_dir"})
 			used[filepath.Clean(rootDir)] = string(BooksLibraryRoot)
 		}
 	}
@@ -189,6 +212,7 @@ func (g *groupRun) roots(ctx context.Context, rows, index []storage.KV, counter 
 			},
 			scan: &RootScan{Enabled: d.row.Enabled, CreatedAt: d.row.CreatedAt, LastScan: d.row.LastScan, BookCount: d.row.BookCount},
 			key:  key,
+			raw:  d.kv.Value,
 		})
 	}
 
@@ -224,7 +248,23 @@ func (g *groupRun) roots(ctx context.Context, rows, index []storage.KV, counter 
 				continue
 			}
 			planned[target].spec.Aliases = append(planned[target].spec.Aliases, library.Alias{Windows: a.Windows, UNC: a.UNC, SMBURL: a.SMBURL})
+			planned[target].aliases = append(planned[target].aliases, rawMember{name: member, raw: ar})
 		}
+	}
+
+	// Core accepts or refuses each of the three lists whole (a *config.FieldError
+	// names the list, not a row), and nothing is reported, counted or consumed for
+	// a list until core has accepted it. A refused list quarantines every row and
+	// member that fed it, so the store stays bootable and nothing is dropped.
+	refusedRoots, err := g.stage(pathRoots, rootSpecs(planned), len(planned) > 0)
+	if err != nil {
+		return err
+	}
+	if refusedRoots {
+		if err := g.quarantineRoots(planned); err != nil {
+			return err
+		}
+		planned = nil
 	}
 
 	// Nested roots are registered as the same-owner rule requires and reported.
@@ -239,34 +279,50 @@ func (g *groupRun) roots(ctx context.Context, rows, index []storage.KV, counter 
 	}
 
 	// itunes.path_mappings, resolved against the planned roots.
-	mappings, err := g.mappings(planned)
+	entries, err := g.mappings(planned)
 	if err != nil {
 		return err
+	}
+	mappings := make([]library.Mapping, len(entries))
+	for i, e := range entries {
+		mappings[i] = e.m
+	}
+	refusedMappings, err := g.stage(pathMappings, mappings, len(mappings) > 0)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if refusedMappings {
+			if err := g.quarantineMember(e.member, e.raw, reasonListRefused); err != nil {
+				return err
+			}
+			continue
+		}
+		m.report(Entry{Kind: "mapping", ID: e.member, Detail: string(e.m.Local.Root)})
+		c.note(OutcomeMapping)
 	}
 
 	// protected_paths.
 	var protected []string
-	if raw, present := g.top["protected_paths"]; present {
-		if err := json.Unmarshal(raw, &protected); err != nil {
-			if err := g.quarantineMember("protected_paths", raw, reasonBlobUndecodable); err != nil {
+	protectedRaw, hasProtected := g.top["protected_paths"]
+	if hasProtected {
+		if err := json.Unmarshal(protectedRaw, &protected); err != nil {
+			if err := g.quarantineMember("protected_paths", protectedRaw, reasonBlobUndecodable); err != nil {
 				return err
 			}
 			protected = nil
 		}
 	}
 	protected = nonEmpty(protected)
-
-	// Stage. A refusal of the whole list is an error, not a quarantine: the lists
-	// are one config value each, so a refusal names no one row, and failing the
-	// step leaves every source row where it is.
-	if err := g.stage(pathRoots, rootSpecs(planned), len(planned) > 0); err != nil {
+	refusedProtected, err := g.stage(pathProtected, protected, len(protected) > 0)
+	if err != nil {
 		return err
 	}
-	if err := g.stage(pathMappings, mappings, len(mappings) > 0); err != nil {
-		return err
-	}
-	if err := g.stage(pathProtected, protected, len(protected) > 0); err != nil {
-		return err
+	if refusedProtected {
+		if err := g.quarantineMember("protected_paths", protectedRaw, reasonListRefused); err != nil {
+			return err
+		}
+		protected = nil
 	}
 	for _, p := range planned {
 		m.report(Entry{Kind: "root", ID: string(p.spec.ID), Detail: p.spec.Role.String()})
@@ -299,17 +355,45 @@ func (g *groupRun) roots(ctx context.Context, rows, index []storage.KV, counter 
 }
 
 // stage writes one config list through config.Importer; skipped when there is
-// nothing to write.
-func (g *groupRun) stage(p config.Path, v any, want bool) error {
+// nothing to write. It reports refused when core refuses the list's value (a
+// *config.FieldError: the importer's documented "the step quarantines" case),
+// which the caller turns into quarantine records for what fed the list. Any
+// other error (an unregistered path, a closed store) is the step's to fail on:
+// it is no fault of the data.
+func (g *groupRun) stage(p config.Path, v any, want bool) (refused bool, err error) {
 	if !want {
-		return nil
+		return false, nil
 	}
 	raw, err := json.Marshal(v)
 	if err != nil {
-		return fmt.Errorf("m6: encode %s: %w", p, err)
+		return false, fmt.Errorf("m6: encode %s: %w", p, err)
 	}
 	if err := g.m.cfg.Config.Stage(g.c.batch(), p, raw, g.m.by); err != nil {
-		return fmt.Errorf("m6: stage %s: %w", p, err)
+		if _, ok := errors.AsType[*config.FieldError](err); ok {
+			g.m.logger.Warn("m6: core refused a config list", "path", string(p), "err", err.Error())
+			return true, nil
+		}
+		return false, fmt.Errorf("m6: stage %s: %w", p, err)
+	}
+	return false, nil
+}
+
+// quarantineRoots moves aside everything that fed a refused roots list: root_dir,
+// each import_path row and the path aliases attached to them.
+func (g *groupRun) quarantineRoots(planned []plannedRoot) error {
+	for _, p := range planned {
+		if p.member != "" {
+			if err := g.quarantineMember(p.member, p.raw, reasonListRefused); err != nil {
+				return err
+			}
+		} else if err := g.c.quarantine(p.key, p.raw, reasonListRefused); err != nil {
+			return err
+		}
+		for _, a := range p.aliases {
+			if err := g.quarantineMember(a.name, a.raw, reasonListRefused); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -346,8 +430,8 @@ func nonEmpty(in []string) []string {
 // Local is To resolved against the planned roots (the longest one containing it),
 // Fold is set for a Windows-form From (HEAD's normalizeWindowsPrefix). A mapping
 // whose To is under no root is quarantined raw, and the rest go on.
-func (g *groupRun) mappings(planned []plannedRoot) ([]library.Mapping, error) {
-	var out []library.Mapping
+func (g *groupRun) mappings(planned []plannedRoot) ([]mappingEntry, error) {
+	var out []mappingEntry
 	itunes, present := g.top["itunes"]
 	if !present {
 		return nil, nil
@@ -380,9 +464,7 @@ func (g *groupRun) mappings(planned []plannedRoot) ([]library.Mapping, error) {
 			}
 			continue
 		}
-		out = append(out, library.Mapping{Source: itunesSource, Remote: pm.From, Local: local, Fold: windowsForm(pm.From)})
-		g.m.report(Entry{Kind: "mapping", ID: member, Detail: string(local.Root)})
-		g.c.note(OutcomeMapping)
+		out = append(out, mappingEntry{member: member, raw: er, m: library.Mapping{Source: itunesSource, Remote: pm.From, Local: local, Fold: windowsForm(pm.From)}})
 	}
 	return out, nil
 }
