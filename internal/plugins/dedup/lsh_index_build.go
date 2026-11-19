@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/lsh_index_build.go
-// version: 1.6.3
+// version: 1.7.0
 // guid: e61b955e-93bf-4ea6-bb1f-7acd30491fdb
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 package dedup
 
@@ -9,15 +9,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"runtime"
 	"sync"
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // LSHIndexStore is the narrow store interface required by the
@@ -87,7 +86,94 @@ func (p *Plugin) lshIndexBuildDef() sdk.OperationDef {
 	}
 }
 
-// runLSHIndexBuild is the op runner for dedup.lsh-index-build.
+// lshIndexBuildKind is rule R3's native kind for dedup.lsh-index-build.
+const lshIndexBuildKind = tasks.Kind("books.dedup.lsh-index-build")
+
+// lshIndexBuildReads is the reads the core takes (rule R10): the BookFile
+// projection to index, the per-file "already indexed" probe, and the per-book
+// hydrate read that returns the raw fingerprint bytes.
+type lshIndexBuildReads interface {
+	GetAllBookFilesCore() ([]database.BookFileCore, error)
+	HasLSHIndex(bookFileID string) bool
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+}
+
+// lshIndexBuildWriter is the writes the core makes: the fpidx: rows of one file
+// and the completion flag.
+type lshIndexBuildWriter interface {
+	PutLSHEntries(fileID, bookID string, subs []fingerprint.Subprint, bands []byte) error
+	SetLSHIndexBuilt() error
+}
+
+// lshIndexBuildEnv is what the core takes from its shell (rules R2 and R10).
+type lshIndexBuildEnv struct {
+	kindEnv
+	Reads  lshIndexBuildReads
+	Writer lshIndexBuildWriter
+	// QueueRescan starts acoustid.fingerprint-rescan for the books that had files
+	// with no fingerprint. Nil when the shell has no way to start one (HEAD with
+	// no registry), which the core logs and carries on from.
+	QueueRescan func(ctx context.Context, bookIDs []string) error
+}
+
+// lshIndexBuildResult is the native run's result; HEAD stored none.
+type lshIndexBuildResult struct {
+	Indexed        int `json:"indexed"`
+	Skipped        int `json:"skipped"`
+	NoFP           int `json:"no_fingerprint"`
+	NoFPBooks      int `json:"no_fingerprint_books"`
+	NoFPPermFailed int `json:"no_fingerprint_perm_failed"`
+	Errors         int `json:"errors"`
+	Total          int `json:"total"`
+}
+
+// headLSHReads is HEAD's reads: the capability store for the index reads and the
+// main store for the hydrate (HEAD read the hydrate through p.store).
+type headLSHReads struct {
+	lsh   LSHIndexStore
+	books interface {
+		GetBookFiles(bookID string) ([]database.BookFile, error)
+	}
+}
+
+func (h headLSHReads) GetAllBookFilesCore() ([]database.BookFileCore, error) {
+	return h.lsh.GetAllBookFilesCore()
+}
+func (h headLSHReads) HasLSHIndex(id string) bool { return h.lsh.HasLSHIndex(id) }
+func (h headLSHReads) GetBookFiles(bookID string) ([]database.BookFile, error) {
+	return h.books.GetBookFiles(bookID)
+}
+
+// runLSHIndexBuild is the v2 shell: HEAD's Run (the capability lookup, the
+// params, none) over lshIndexBuildCore.
+func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+	// Obtain the LSH-capable store through the decorator chain. The concrete
+	// *PebbleStore satisfies LSHIndexStore; SQLite and mock stores may not. The
+	// registry hands this plugin the server's search-indexing decorator, so a
+	// bare p.store.(LSHIndexStore) assertion would fail on every Pebble server.
+	lshStore, ok := database.AsCapability[LSHIndexStore](p.store)
+	if !ok {
+		return fmt.Errorf("store does not implement LSHIndexStore (PebbleDB required)")
+	}
+	env := lshIndexBuildEnv{
+		kindEnv: headEnv(reporter, true),
+		Reads:   headLSHReads{lsh: lshStore, books: p.store},
+		Writer:  lshStore,
+	}
+	if p.registry != nil {
+		env.QueueRescan = func(ctx context.Context, bookIDs []string) error {
+			_, err := p.registry.EnqueueOp(ctx, "acoustid.fingerprint-rescan", map[string]any{
+				"scope":    "books",
+				"book_ids": bookIDs,
+			})
+			return err
+		}
+	}
+	_, err := lshIndexBuildCore(ctx, env)
+	return err
+}
+
+// lshIndexBuildCore is the body of dedup.lsh-index-build, shared by both shells.
 //
 // Algorithm:
 //  1. Load all BookFiles (memdb-slim projection: AcoustIDFingerprint is nil'd
@@ -112,29 +198,20 @@ func (p *Plugin) lshIndexBuildDef() sdk.OperationDef {
 //     running file-level tally in the label text; a slog heartbeat fires at
 //     most once per logInterval to avoid flooding the log on a ~275K-file run.
 //  6. On completion, set lsh_index_v1_done so T013 can gate on it.
-func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	// Obtain the LSH-capable store through the decorator chain. The concrete
-	// *PebbleStore satisfies LSHIndexStore; SQLite and mock stores may not. The
-	// registry hands this plugin the server's search-indexing decorator, so a
-	// bare p.store.(LSHIndexStore) assertion would fail on every Pebble server.
-	lshStore, ok := database.AsCapability[LSHIndexStore](p.store)
-	if !ok {
-		return fmt.Errorf("store does not implement LSHIndexStore (PebbleDB required)")
-	}
-
+func lshIndexBuildCore(ctx context.Context, env lshIndexBuildEnv) (lshIndexBuildResult, error) {
 	logger.InfoCtx(ctx, "lsh-index-build: starting")
-	loadProg := sdk.NewProgress(reporter, 0)
+	loadProg := newProgress(env.kindEnv, 0)
 	loadProg.Start("Loading BookFiles for LSH indexing…")
 
-	files, err := lshStore.GetAllBookFilesCore()
+	files, err := env.Reads.GetAllBookFilesCore()
 	if err != nil {
-		return fmt.Errorf("lsh-index-build: load files: %w", err)
+		return lshIndexBuildResult{}, fmt.Errorf("lsh-index-build: load files: %w", err)
 	}
 	total := len(files)
 	if total == 0 {
 		loadProg.Done("No BookFiles found — nothing to index")
 		logger.InfoCtx(ctx, "lsh-index-build: no files, exiting")
-		return nil
+		return lshIndexBuildResult{}, nil
 	}
 	logger.InfoCtx(ctx, "lsh-index-build: loaded files", "total", total)
 
@@ -157,7 +234,7 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 		groups[bookID] = append(groups[bookID], i)
 	}
 
-	prog := sdk.NewProgress(reporter, total)
+	prog := newProgress(env.kindEnv, total)
 	prog.Start(fmt.Sprintf("Indexing LSH bands: 0 / %d files", total))
 
 	var mu sync.Mutex
@@ -173,8 +250,23 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 	const logInterval = 15 * time.Second
 	lastLog := time.Now()
 
-	runErr := registry.RunItems(ctx, reporter, bookOrder, func(ctx context.Context, bookID string) error {
-		if reporter.IsCanceled() {
+	runErr := env.Items(ctx, tasks.CPU(), len(bookOrder), kindItemsOptions{
+		// The counter label is HEAD's; the native pool's label is pure, so it
+		// carries only the book position.
+		Label: func(i, t int) string {
+			mu.Lock()
+			curProcessed, curIndexed, curSkipped, curNoFP, curPermFailed, curErrs :=
+				processedFiles, indexed, skipped, noFP, noFPPermFailed, errs
+			mu.Unlock()
+			return fmt.Sprintf("Indexing LSH bands: %d/%d files (indexed=%d skipped=%d noFP=%d permFailed=%d errors=%d) [book %d/%d]",
+				curProcessed, total, curIndexed, curSkipped, curNoFP, curPermFailed, curErrs, i+1, t)
+		},
+		PureLabel: func(i, t int) string {
+			return fmt.Sprintf("Indexing LSH bands: book %d/%d", i+1, t)
+		},
+	}, func(ctx context.Context, bi int) error {
+		bookID := bookOrder[bi]
+		if env.Canceled() {
 			return context.Canceled
 		}
 
@@ -195,8 +287,8 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 
 		var hydrated map[string]database.BookFile
 		if needsHydrate {
-			if full, ferr := p.store.GetBookFiles(bookID); ferr != nil {
-				reporter.Logger().Error("lsh-index-build: hydrate GetBookFiles error",
+			if full, ferr := env.Reads.GetBookFiles(bookID); ferr != nil {
+				env.Logger.Error("lsh-index-build: hydrate GetBookFiles error",
 					"book_id", bookID, "error", ferr)
 				// hydrated stays nil; affected files below fall through to the
 				// "no bytes after hydrate" error path instead of silently
@@ -216,7 +308,7 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 
 		for _, idx := range idxs {
 			f := files[idx]
-			if reporter.IsCanceled() {
+			if env.Canceled() {
 				return context.Canceled
 			}
 
@@ -237,7 +329,7 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 			// Incremental resume: skip files that already have an fpidx_meta
 			// row. PutLSHEntries is idempotent, but the skip avoids
 			// unnecessary writes when re-running after a partial build.
-			if lshStore.HasLSHIndex(f.ID) {
+			if env.Reads.HasLSHIndex(f.ID) {
 				localSkipped++
 				continue
 			}
@@ -252,7 +344,7 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 					fpCurrent = hf.HasCurrentPrint() // era of the bytes actually read
 				}
 				if len(fp) == 0 {
-					reporter.Logger().Warn("lsh-index-build: hydrate returned empty fingerprint (data drift)",
+					env.Logger.Warn("lsh-index-build: hydrate returned empty fingerprint (data drift)",
 						"file_id", f.ID, "book_id", f.BookID)
 				}
 			}
@@ -276,7 +368,7 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 			if fpErr != nil {
 				// Misaligned fingerprint bytes — log and continue. Don't abort
 				// the entire build for one corrupt row.
-				reporter.Logger().Error("lsh-index-build: Subprints error",
+				env.Logger.Error("lsh-index-build: Subprints error",
 					"file_id", f.ID, "error", fpErr)
 				localErrs++
 				continue
@@ -293,8 +385,8 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 				continue
 			}
 
-			if putErr := lshStore.PutLSHEntries(f.ID, f.BookID, subs, bands); putErr != nil {
-				reporter.Logger().Error("lsh-index-build: PutLSHEntries error",
+			if putErr := env.Writer.PutLSHEntries(f.ID, f.BookID, subs, bands); putErr != nil {
+				env.Logger.Error("lsh-index-build: PutLSHEntries error",
 					"file_id", f.ID, "error", putErr)
 				localErrs++
 				continue
@@ -328,20 +420,10 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 		}
 
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: runtime.NumCPU(),
-		Label: func(i, t int) string {
-			mu.Lock()
-			curProcessed, curIndexed, curSkipped, curNoFP, curPermFailed, curErrs :=
-				processedFiles, indexed, skipped, noFP, noFPPermFailed, errs
-			mu.Unlock()
-			return fmt.Sprintf("Indexing LSH bands: %d/%d files (indexed=%d skipped=%d noFP=%d permFailed=%d errors=%d) [book %d/%d]",
-				curProcessed, total, curIndexed, curSkipped, curNoFP, curPermFailed, curErrs, i+1, t)
-		},
 	})
 	if runErr != nil {
 		logger.InfoCtx(ctx, "lsh-index-build: stopped", "processed", processedFiles, "indexed", indexed, "error", runErr)
-		return runErr
+		return lshIndexBuildResult{}, runErr
 	}
 
 	prog.Finalize("writing completion flag…")
@@ -353,29 +435,25 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 		for id := range noFPBookSet {
 			noFPBookIDs = append(noFPBookIDs, id)
 		}
-		if p.registry != nil {
-			_, enqErr := p.registry.EnqueueOp(ctx, "acoustid.fingerprint-rescan", map[string]any{
-				"scope":    "books",
-				"book_ids": noFPBookIDs,
-			})
-			if enqErr != nil {
-				reporter.Logger().Warn("lsh-index-build: failed to enqueue fingerprint-rescan",
+		if env.QueueRescan != nil {
+			if enqErr := env.QueueRescan(ctx, noFPBookIDs); enqErr != nil {
+				env.Logger.Warn("lsh-index-build: failed to enqueue fingerprint-rescan",
 					"books", len(noFPBookIDs), "error", enqErr)
 			} else {
-				reporter.Logger().Info("lsh-index-build: queued fingerprint-rescan for unfingerprinted books",
+				env.Logger.Info("lsh-index-build: queued fingerprint-rescan for unfingerprinted books",
 					"books", len(noFPBookIDs), "files", noFP)
 				logger.InfoCtx(ctx, "lsh-index-build: enqueued fingerprint-rescan",
 					"books", len(noFPBookIDs), "files", noFP)
 			}
 		} else {
-			reporter.Logger().Warn("lsh-index-build: registry unavailable, cannot enqueue fingerprint-rescan",
+			env.Logger.Warn("lsh-index-build: registry unavailable, cannot enqueue fingerprint-rescan",
 				"no_fp_books", len(noFPBookIDs), "no_fp_files", noFP)
 		}
 	}
 
 	// Mark the index as built so T013's probe-collector can enable itself.
-	if flagErr := lshStore.SetLSHIndexBuilt(); flagErr != nil {
-		reporter.Logger().Error("lsh-index-build: failed to set completion flag", "error", flagErr)
+	if flagErr := env.Writer.SetLSHIndexBuilt(); flagErr != nil {
+		env.Logger.Error("lsh-index-build: failed to set completion flag", "error", flagErr)
 		// Non-fatal: the index is built even if the flag write fails.
 		// The op will simply re-index skippable files on the next run,
 		// but no data is lost.
@@ -389,5 +467,8 @@ func (p *Plugin) runLSHIndexBuild(ctx context.Context, _ json.RawMessage, report
 		"indexed", indexed, "skipped", skipped,
 		"no_fp", noFP, "no_fp_books", len(noFPBookSet),
 		"no_fp_perm_failed", noFPPermFailed, "errors", errs, "total", total)
-	return nil
+	return lshIndexBuildResult{
+		Indexed: indexed, Skipped: skipped, NoFP: noFP, NoFPBooks: len(noFPBookSet),
+		NoFPPermFailed: noFPPermFailed, Errors: errs, Total: total,
+	}, nil
 }

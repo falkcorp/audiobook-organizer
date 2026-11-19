@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/label_refinement.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4b8e2d7a-91c3-4f05-b6a8-3d0e5c7f1a92
-// last-edited: 2026-10-15
+// last-edited: 2026-11-18
 
 // dedup.label-refinement is the parent op behind the scheduled label_refinement
 // task. It runs dedup.rebuild-gold-labels and then dedup.calibrate-composite as
@@ -40,10 +40,19 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // LabelRefinementDefID is the def id the label_refinement scheduled task enqueues.
 const LabelRefinementDefID = "dedup.label-refinement"
+
+// labelRefinementKind is rule R3's native kind for dedup.label-refinement.
+const labelRefinementKind = tasks.Kind("books.dedup.label-refinement")
+
+// labelRefinementHelp is HEAD's Description, shared with the native kind (rule R5).
+const labelRefinementHelp = "Runs dedup.rebuild-gold-labels then dedup.calibrate-composite as child operations, both in " +
+	"report-only mode, and stops if either does not complete. Nothing is written: applying a rebuild or " +
+	"a band change is a separate, operator-run step on the child operation."
 
 // labelRefinementStepUnits is how many progress units each of the two steps
 // spans, so the bar moves while a child runs (see runAllStepUnits).
@@ -76,13 +85,11 @@ type LabelRefinementResult struct {
 
 func (p *Plugin) labelRefinementDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          LabelRefinementDefID,
-		Liveness:    sdk.LivenessManual,
-		Plugin:      "dedup",
-		DisplayName: "Label refinement (report only)",
-		Description: "Runs dedup.rebuild-gold-labels then dedup.calibrate-composite as child operations, both in " +
-			"report-only mode, and stops if either does not complete. Nothing is written: applying a rebuild or " +
-			"a band change is a separate, operator-run step on the child operation.",
+		ID:             LabelRefinementDefID,
+		Liveness:       sdk.LivenessManual,
+		Plugin:         "dedup",
+		DisplayName:    "Label refinement (report only)",
+		Description:    labelRefinementHelp,
 		ResumePolicy:   sdk.ResumeDrop,
 		ConcurrencyKey: LabelRefinementDefID,
 		Cancellable:    true,
