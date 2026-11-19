@@ -1,7 +1,7 @@
 // file: internal/books/module.go
-// version: 1.3.8
+// version: 1.3.9
 // guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 // Package books is ABO's audiobook module and its composition-root glue (04
 // §2.4, 06 §6.11.1 step 2): Module() is the module.Module ABO's main hands
@@ -182,6 +182,10 @@ func (m *booksModule) Manifest() module.Manifest {
 		// only on request, the library folder's contents), run at the boot
 		// that applies a ResetFactory swap (reset_hook.go).
 		ResetHook: m.resetHook(),
+		// Books' config sections (config.go), registered by the kernel at P3
+		// when the config boot is on (F3-07 b); a boot without it never
+		// reads them.
+		Settings: booksSettings(),
 		// No native route yet, so no public one (the gin mount's public
 		// routes are the legacy manifest's Public rows).
 	}

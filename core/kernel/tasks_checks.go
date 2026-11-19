@@ -1,7 +1,7 @@
 // file: core/kernel/tasks_checks.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 8d3a6f17-2c94-4b5e-a1d0-7f6e9c2b5a38
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package kernel
 
@@ -112,8 +112,9 @@ func (k *Kernel) taskDefinitions() []tasks.Definition {
 // What 06 §6.4.2 leaves to the kernel and F2 cannot fully check: that a
 // view-class scope is not what Perms.Start asks for holds for core's scopes
 // only (a module's PermissionSpec.Class arrives with Manifest.Permissions,
-// F4), and a module kind's schedule config key is never declared (modules'
-// settings arrive with F3, so every such key is refused today).
+// F4), and a module kind's schedule config key is declared only when the
+// config boot is on and the module's Manifest.Settings section holds it (with
+// the boot off no module section is registered, so every such key is refused).
 func (k *Kernel) taskProblems() []module.Problem {
 	var probs []module.Problem
 	for _, e := range k.entries {
@@ -125,7 +126,8 @@ func (k *Kernel) taskProblems() []module.Problem {
 	// ValidateSchedules judges the registered definitions' schedules over the
 	// declared keys, so with no definition there is nothing to judge and the
 	// config store is not built (Kernel.coreConfig). With one, a module kind's
-	// schedule key is still refused: declared knows core's keys only.
+	// schedule key is declared by its module's section when the config boot
+	// registered it, else refused: declared knows core's keys only.
 	if defs := k.taskDefinitions(); len(defs) > 0 {
 		cfg, err := k.coreConfig()
 		if err != nil {
