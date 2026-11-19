@@ -1,7 +1,7 @@
 // file: core/kernel/tasks_checks.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8d3a6f17-2c94-4b5e-a1d0-7f6e9c2b5a38
-// last-edited: 2026-11-12
+// last-edited: 2026-11-18
 
 package kernel
 
@@ -14,6 +14,7 @@ import (
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/datamigrate"
 	"github.com/falkcorp/mediacore/tasks"
 )
 
@@ -51,14 +52,15 @@ func ledgerProblems(entries []*entry) []module.Problem {
 }
 
 // dataMigrationProblems is P1's ownership check of Manifest.DataMigrations
-// (06 §6.4.2): a module migrates its own owner's rows only, so a migration
-// whose Owner is not storage.Owner(<the module's ID>) is a ProblemMigrationOrder.
-// Their ordering and the rest of 05-storage 5S.3.6's registration rules are
-// NewDataMigrations' (it lists every problem, once, when the store opens).
-func dataMigrationProblems(entries []*entry) []module.Problem {
+// and of the steps Manifest.Cutover returns for imp (06 §6.4.2): a module
+// migrates its own owner's rows only, so a migration whose Owner is not
+// storage.Owner(<the module's ID>) is a ProblemMigrationOrder. Their ordering
+// and the rest of 05-storage 5S.3.6's registration rules are NewDataMigrations'
+// (it lists every problem, once, when the store opens).
+func dataMigrationProblems(entries []*entry, imp module.Importers) []module.Problem {
 	var probs []module.Problem
 	for _, e := range entries {
-		for _, m := range e.man.DataMigrations {
+		for _, m := range manifestMigrations(e.man, imp) {
 			if m.Owner != storage.Owner(e.man.ID) {
 				probs = append(probs, module.Problem{Module: e.man.ID, Kind: module.ProblemMigrationOrder,
 					Detail: fmt.Sprintf("data migration %q names owner %q; a module's data migrations are its own owner's (%q)", m.ID, m.Owner, storage.Owner(e.man.ID))})
@@ -66,6 +68,17 @@ func dataMigrationProblems(entries []*entry) []module.Problem {
 		}
 	}
 	return probs
+}
+
+// manifestMigrations is every migration a manifest declares: its
+// DataMigrations, then the steps its Cutover func returns for imp, in
+// declaration order (06 §6.4.2).
+func manifestMigrations(man module.Manifest, imp module.Importers) []datamigrate.DataMigration {
+	migs := slices.Clone(man.DataMigrations)
+	if man.Cutover != nil {
+		migs = append(migs, man.Cutover(imp)...)
+	}
+	return migs
 }
 
 // taskDefinitions are the definitions every enabled module registered, in
