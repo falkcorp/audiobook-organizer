@@ -1,5 +1,5 @@
 // file: internal/books/module.go
-// version: 1.3.9
+// version: 1.3.10
 // guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
 // last-edited: 2026-11-19
 
@@ -97,6 +97,7 @@ func taskResourceKinds() []string {
 		string(ops.ResAIScans),
 		string(ops.ResDedupCandidates),
 		string(ops.ResCollections),
+		string(ops.ResASINMisses),
 	}
 }
 

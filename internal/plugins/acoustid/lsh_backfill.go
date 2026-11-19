@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/lsh_backfill.go
-// version: 1.6.2
+// version: 1.7.1
 // guid: 2c4d6e80-3b5a-4f9c-9b1d-7e8f0a2b4c6d
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package acoustid
 
@@ -9,14 +9,44 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"runtime"
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
+
+// lshBackfillKind is rule R3's native kind for acoustid.lsh-backfill.
+const lshBackfillKind = tasks.Kind("books.acoustid.lsh-backfill")
+
+// lshBackfillHelp is the definition's description, HEAD's and the native kind's
+// Help (rule R5: verbatim).
+const lshBackfillHelp = "Walks every BookFile and populates the fpidx LSH index for rows that have a stored AcoustIDFingerprint but no fpidx_meta entry. Idempotent."
+
+// lshBackfillEnv is what the lsh-backfill core takes from its shell (rules R2
+// and R10): reads through Store, the one write through Writer.
+type lshBackfillEnv struct {
+	kindEnv
+	Store  kindStore
+	Writer kindWriter
+}
+
+// lshBackfillResult is the native run's result: the tallies HEAD logged and put
+// in its closing message. HEAD stored no result, so its shell drops it.
+type lshBackfillResult struct {
+	Total                 int `json:"total"`
+	Indexed               int `json:"indexed"`
+	SkippedNoFingerprint  int `json:"skipped_no_fingerprint"`
+	SkippedAlreadyIndexed int `json:"skipped_already_indexed"`
+	Failed                int `json:"failed"`
+}
+
+// lshBackfillParallelism is the item pool (rule R4): HEAD's
+// RunItemsOptions.Concurrency is runtime.NumCPU() (lshBackfillConcurrency), one
+// DB read plus one DB write per row with the index hook's CPU in the write.
+func lshBackfillParallelism() tasks.Parallelism { return tasks.CPU() }
 
 // lshIndexChecker is satisfied by any store that can answer "do I already
 // have an LSH index row for this BookFile?". The PebbleStore agent on the
@@ -61,7 +91,7 @@ func (p *Plugin) lshBackfillDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "acoustid",
 		DisplayName:     "Backfill LSH fingerprint index",
-		Description:     "Walks every BookFile and populates the fpidx LSH index for rows that have a stored AcoustIDFingerprint but no fpidx_meta entry. Idempotent.",
+		Description:     lshBackfillHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "acoustid.fingerprint",
@@ -75,57 +105,86 @@ func (p *Plugin) lshBackfillDef() sdk.OperationDef {
 	}
 }
 
-// lshBackfillConcurrency is the size of the worker pool runLSHBackfill hands to
-// registry.RunItems. One row per item and the work is a DB read plus a DB write
-// (CPU for the index hook), so the pool is sized to the cores. It is a function,
-// not an inline expression, so the cancel test can derive its guaranteed bound
-// (cancel point + in-flight workers) from the same value the op uses.
-func lshBackfillConcurrency() int { return runtime.NumCPU() }
-
 func (p *Plugin) runLSHBackfill(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	if p.store == nil {
-		return fmt.Errorf("database store not available")
+	_, err := lshBackfillCore(ctx, p.headLSHBackfillEnv(reporter))
+	return err
+}
+
+// headLSHBackfillEnv is HEAD's env: the plugin's store for reads and for the
+// write. A plugin with no store hands the core a nil Store, which it refuses
+// with HEAD's message.
+func (p *Plugin) headLSHBackfillEnv(reporter sdk.Reporter) lshBackfillEnv {
+	env := lshBackfillEnv{kindEnv: headEnv(reporter, true)}
+	if p.store != nil {
+		env.Store = p.store
+		env.Writer = headKindWriter{store: p.store}
+	}
+	return env
+}
+
+// lshBackfillCore is the body of runLSHBackfill, shared by both shells.
+func lshBackfillCore(ctx context.Context, env lshBackfillEnv) (lshBackfillResult, error) {
+	if env.Store == nil {
+		return lshBackfillResult{}, fmt.Errorf("database store not available")
 	}
 
-	log := reporter.Logger()
+	log := env.Logger
 	startedAt := time.Now()
 
 	// Optional fast-skip check: if the store exposes HasLSHIndex we skip
 	// rows that already have an index entry, otherwise we re-write.
-	checker, _ := database.AsCapability[lshIndexChecker](p.store)
+	checker, _ := database.AsCapability[lshIndexChecker](env.Store)
 	hasChecker := checker != nil
 
 	// Frame 0: loading. Real N comes once we've listed the rows.
-	prog := sdk.NewProgress(reporter, 0)
+	prog := newProgress(env.kindEnv, 0)
 	prog.Start("Loading book files for LSH backfill…")
 
-	files, err := p.store.GetAllBookFilesCore()
+	files, err := env.Store.GetAllBookFilesCore()
 	if err != nil {
-		return fmt.Errorf("load book files: %w", err)
+		return lshBackfillResult{}, fmt.Errorf("load book files: %w", err)
 	}
 	total := len(files)
 
-	prog = sdk.NewProgress(reporter, total)
+	prog = newProgress(env.kindEnv, total)
 	prog.Start(fmt.Sprintf("Backfilling LSH index for %d book files…", total))
 
 	if total == 0 {
 		prog.Done("No book files to scan.")
-		return nil
+		return lshBackfillResult{}, nil
 	}
 
-	// Tallies are atomics: RunItems runs fn on a worker pool, and its Label
-	// closure is called from the worker goroutines too, so a plain int here
-	// would be a data race in both places.
+	// Tallies are atomics: the item loop runs fn on a worker pool, and its Label
+	// closure is called from the worker goroutines too (HEAD's registry.RunItems
+	// invokes Label inside each worker), so a plain int here would be a data
+	// race in both places. The Label is a counter label, so only HEAD's pool
+	// carries it (seams.d/F5-05.md).
 	var indexed, skippedNoFP, skippedAlreadyIndexed, failed atomic.Int64
 
-	if err := registry.RunItems(ctx, reporter, files, func(ctx context.Context, f database.BookFileCore) error {
-		// A cancelled op must not start another write. RunItems only checks
+	if err := env.Items(ctx, lshBackfillParallelism(), total, kindItemsOptions{
+		// One row per item and the work is a DB read plus a DB write (CPU
+		// for the index hook), so size the pool to the cores. Rows are
+		// disjoint: each item writes only its own book_file row, and
+		// PebbleStore serializes writers to one row on a per-file lock.
+		// Two files of one book can run together. UpdateBookFile does
+		// recompute that book's aggregates after each write, and the
+		// recompute reads sibling rows outside any per-book lock, but this
+		// re-save changes no path, Duration or FileSize, so every snapshot
+		// sums to the same totals and whichever recompute commits last
+		// writes the same value.
+		Label: func(i, t int) string {
+			return fmt.Sprintf("LSH backfill %d/%d (indexed=%d skip-no-fp=%d skip-existing=%d fail=%d)",
+				i+1, t, indexed.Load(), skippedNoFP.Load(), skippedAlreadyIndexed.Load(), failed.Load())
+		},
+	}, func(ctx context.Context, i int) error {
+		f := files[i]
+		// A cancelled op must not start another write. The pool only checks
 		// ctx while dispatching, and its dispatcher picks at random when a
 		// worker slot is free AND ctx is done, so items already handed to a
 		// worker (and a few dispatched after the cancel) reach this function
 		// with a dead ctx. Without this guard each of them still hydrates and
 		// rewrites its row. The skipped item is not a failure and is not
-		// counted; the cancel is reported once, after RunItems returns.
+		// counted; the cancel is reported once, after the pool returns.
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -141,7 +200,7 @@ func (p *Plugin) runLSHBackfill(ctx context.Context, _ json.RawMessage, reporter
 			// Hydrate the full row and re-save THAT so
 			// PebbleStore.writeBookFileSecondaryIndexes writes the fpidx +
 			// fpidx_meta entries with the real fingerprint bytes intact.
-			target, herr := p.store.GetBookFileByID(f.BookID, f.ID)
+			target, herr := env.Store.GetBookFileByID(f.BookID, f.ID)
 			if herr != nil {
 				log.Warn("acoustid lsh-backfill: hydrate failed", "id", f.ID, "err", herr)
 				failed.Add(1)
@@ -152,7 +211,7 @@ func (p *Plugin) runLSHBackfill(ctx context.Context, _ json.RawMessage, reporter
 				failed.Add(1)
 				return nil
 			}
-			if err := p.store.UpdateBookFile(target.ID, target); err != nil {
+			if err := env.Writer.UpdateBookFile(target.ID, target); err != nil {
 				log.Warn("acoustid lsh-backfill: update failed", "id", f.ID, "err", err)
 				failed.Add(1)
 			} else {
@@ -160,30 +219,14 @@ func (p *Plugin) runLSHBackfill(ctx context.Context, _ json.RawMessage, reporter
 			}
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		// One row per item and the work is a DB read plus a DB write (CPU
-		// for the index hook), so size the pool to the cores. Rows are
-		// disjoint: each item writes only its own book_file row, and
-		// PebbleStore serializes writers to one row on a per-file lock.
-		// Two files of one book can run together. UpdateBookFile does
-		// recompute that book's aggregates after each write, and the
-		// recompute reads sibling rows outside any per-book lock, but this
-		// re-save changes no path, Duration or FileSize, so every snapshot
-		// sums to the same totals and whichever recompute commits last
-		// writes the same value.
-		Concurrency: lshBackfillConcurrency(),
-		Label: func(i, t int) string {
-			return fmt.Sprintf("LSH backfill %d/%d (indexed=%d skip-no-fp=%d skip-existing=%d fail=%d)",
-				i+1, t, indexed.Load(), skippedNoFP.Load(), skippedAlreadyIndexed.Load(), failed.Load())
-		},
 	}); err != nil {
-		return err
+		return lshBackfillResult{}, err
 	}
 	// Items skipped by the per-item guard return nil, and a sequential
-	// RunItems (one core) can finish its last item without re-checking ctx,
+	// pool (one core) can finish its last item without re-checking ctx,
 	// so surface the cancel here rather than report a partial run complete.
 	if err := ctx.Err(); err != nil {
-		return err
+		return lshBackfillResult{}, err
 	}
 
 	log.Info("acoustid lsh-backfill: complete",
@@ -195,5 +238,8 @@ func (p *Plugin) runLSHBackfill(ctx context.Context, _ json.RawMessage, reporter
 
 	prog.Done(fmt.Sprintf("LSH backfill complete: indexed=%d skipped_no_fp=%d skipped_existing=%d failed=%d (elapsed %s)",
 		indexed.Load(), skippedNoFP.Load(), skippedAlreadyIndexed.Load(), failed.Load(), time.Since(startedAt).Round(time.Second)))
-	return nil
+	return lshBackfillResult{
+		Total: total, Indexed: int(indexed.Load()), SkippedNoFingerprint: int(skippedNoFP.Load()),
+		SkippedAlreadyIndexed: int(skippedAlreadyIndexed.Load()), Failed: int(failed.Load()),
+	}, nil
 }

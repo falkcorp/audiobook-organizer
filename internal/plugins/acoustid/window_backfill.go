@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/window_backfill.go
-// version: 1.5.5
+// version: 1.6.1
 // guid: bd9433cb-2459-4d4f-b9cf-4989dfb527de
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package acoustid
 
@@ -22,12 +22,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -103,6 +104,13 @@ import (
 
 // windowBackfillDefID is the op's def ID.
 const windowBackfillDefID = "acoustid.window-backfill"
+
+// windowBackfillKind is the native kind's name (rule R3).
+const windowBackfillKind = tasks.Kind("books.acoustid.window-backfill")
+
+// windowBackfillHelp is the definition's description, shared by the v2 def and
+// the native kind.
+const windowBackfillHelp = "Fingerprints 120 s windows at 10/50/90% of every present file (skipping the shared intro) into the fpwin: sidecar. Files in books with missing files go first. Dry-run by default; pass live=true to write."
 
 // windowBackfillMaxWorkers caps the execution pool. Every worker runs one
 // ffmpeg and one fpcalc at a time.
@@ -278,7 +286,7 @@ func (p *Plugin) windowBackfillDef() sdk.OperationDef {
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "acoustid",
 		DisplayName: "AcoustID window backfill",
-		Description: "Fingerprints 120 s windows at 10/50/90% of every present file (skipping the shared intro) into the fpwin: sidecar. Files in books with missing files go first. Dry-run by default; pass live=true to write.",
+		Description: windowBackfillHelp,
 		// ResumeRestart re-dispatches with the last checkpoint, which is the
 		// caller's params plus the cursor. The plan is rebuilt on resume and
 		// already skips every file whose windows are current, so the cursor
@@ -471,23 +479,148 @@ func (t *windowTally) deferredByReason() map[string]int {
 // windowBackfill runs the op body. Split from runWindowBackfill so tests get
 // the counts back.
 func (p *Plugin) windowBackfill(ctx context.Context, reporter sdk.Reporter, params WindowBackfillParams) (*windowRunResult, error) {
-	if params.Live && !params.RemoteOnly && !params.AllowServerDecode &&
-		strings.TrimSpace(config.AppConfig.FingerprintWindowReferenceTools) != "" {
+	return windowBackfillCore(ctx, params, p.headWindowEnv(reporter, params.Live))
+}
+
+// windowParallelism is the execution pool (rule R4): HEAD's
+// RunItemsOptions.Concurrency is windowWorkers(param), clamped to
+// 1..windowBackfillMaxWorkers.
+func windowParallelism(workers int) tasks.Parallelism {
+	return tasks.Fixed(workers, "one ffmpeg|fpcalc pipe per in-flight file; sized from the concurrency param or FP_PARALLEL_WORKERS, clamped to 1..32 (windowWorkers)")
+}
+
+// windowPlanParallelism is the planning pool: a stat and two point reads per
+// file, I/O-bound, so a fixed 32 rather than the CPU count.
+func windowPlanParallelism() tasks.Parallelism {
+	return tasks.Fixed(windowPlanWorkers, "planning: a stat and two point reads per file, I/O-bound, not tied to the CPU count")
+}
+
+// WindowKindDeps is what the native acoustid.window-backfill kind needs from its
+// owner beyond the stores: the lease manager the HTTP layer serves, the scan
+// probe the op yields to, and the process facts HEAD's body read from the
+// plugin and from config. Nothing passes it in production before F5-18. A nil
+// func is HEAD's own behaviour (the default needs the plugin's tool wiring, so
+// it is filled in by Plugin.windowHooks).
+type WindowKindDeps struct {
+	// Hub is the lease manager (Plugin.WorkerHub); a live run attaches to it.
+	Hub *WorkerHub
+	// Probe is the library.scan probe the run yields to (nil: never yields).
+	Probe func() libraryScanProbe
+	// Tools resolves the run's tools: remoteOnlyTools for a remote-only run,
+	// Plugin.windowTools otherwise.
+	Tools func(ctx context.Context, remoteOnly, live bool) (fingerprint.WindowTools, error)
+	// Workers is windowWorkers.
+	Workers func(param int) int
+	// ReferenceToolsSet reports whether fingerprint_window_reference_tools is set.
+	ReferenceToolsSet func() bool
+	// SetToolEquivalence installs the run's tool-equivalence class
+	// (fingerprint.SetToolEquivalence over the configured allowlist).
+	SetToolEquivalence func(server fingerprint.ToolVersionInfo)
+	// Roots is the library path variables the planner splits paths by.
+	Roots func() []pathutil.PathVar
+	// ProbeDuration is the ffprobe header read (windowProbeDuration).
+	ProbeDuration func(ctx context.Context, path string) (float64, error)
+	// Hostname is os.Hostname.
+	Hostname func() (string, error)
+}
+
+// windowHooks is WindowKindDeps with every nil field filled in.
+type windowHooks struct {
+	Hub                *WorkerHub
+	Probe              func() libraryScanProbe
+	Tools              func(ctx context.Context, remoteOnly, live bool) (fingerprint.WindowTools, error)
+	Workers            func(param int) int
+	ReferenceToolsSet  func() bool
+	SetToolEquivalence func(server fingerprint.ToolVersionInfo)
+	Roots              func() []pathutil.PathVar
+	ProbeDuration      func(ctx context.Context, path string) (float64, error)
+	Hostname           func() (string, error)
+}
+
+// windowHooks fills the nil fields of d with HEAD's own functions.
+func (p *Plugin) windowHooks(d WindowKindDeps) windowHooks {
+	h := windowHooks(d)
+	if h.Hub == nil {
+		h.Hub = p.WorkerHub()
+	}
+	if h.Probe == nil {
+		h.Probe = p.currentScanProbe
+	}
+	if h.Tools == nil {
+		h.Tools = func(ctx context.Context, remoteOnly, live bool) (fingerprint.WindowTools, error) {
+			if remoteOnly {
+				return remoteOnlyTools(live)
+			}
+			return p.windowTools(ctx)
+		}
+	}
+	if h.Workers == nil {
+		h.Workers = windowWorkers
+	}
+	if h.ReferenceToolsSet == nil {
+		h.ReferenceToolsSet = headHostHooks().ReferenceToolsSet
+	}
+	if h.SetToolEquivalence == nil {
+		h.SetToolEquivalence = func(server fingerprint.ToolVersionInfo) {
+			fingerprint.SetToolEquivalence(server, fingerprint.ParseToolPairs(config.AppConfig.FingerprintWorkerToolVersions))
+		}
+	}
+	if h.Roots == nil {
+		h.Roots = func() []pathutil.PathVar { return pathutil.PathVars(config.AppConfig.RootDir) }
+	}
+	if h.ProbeDuration == nil {
+		// Read the package variable at call time: tests replace it.
+		h.ProbeDuration = func(ctx context.Context, path string) (float64, error) { return windowProbeDuration(ctx, path) }
+	}
+	if h.Hostname == nil {
+		h.Hostname = os.Hostname
+	}
+	return h
+}
+
+// windowEnv is what windowBackfillCore takes besides its params (rule R10).
+type windowEnv struct {
+	kindEnv
+	// Store is the read side: the plan reads every book file and its stored
+	// windows and tombstone through it.
+	Store kindStore
+	// Writer is the fpwin: sidecar writer, read only by a live run (the plan and
+	// a dry run write nothing). The hub's remote-result writes go through it too.
+	Writer kindWriter
+	Host   windowHooks
+}
+
+// headWindowEnv fills the env from HEAD's plugin and reporter.
+func (p *Plugin) headWindowEnv(rep sdk.Reporter, live bool) windowEnv {
+	e := windowEnv{kindEnv: headEnv(rep, live), Host: p.windowHooks(WindowKindDeps{})}
+	if p.store != nil {
+		e.Store = p.store
+		e.Writer = headKindWriter{store: p.store}
+	}
+	return e
+}
+
+// windowProgress is env.Progress, or a no-op for an env that has none.
+func (e windowEnv) windowProgress() func(current, total int, msg string) {
+	if e.Progress != nil {
+		return e.Progress
+	}
+	return func(int, int, string) {}
+}
+
+// windowBackfillCore is the body of windowBackfill, shared by both shells.
+func windowBackfillCore(ctx context.Context, params WindowBackfillParams, env windowEnv) (*windowRunResult, error) {
+	progress := env.windowProgress()
+	if params.Live && !params.RemoteOnly && !params.AllowServerDecode && env.Host.ReferenceToolsSet() {
 		return nil, errors.New("window-backfill: fingerprint_window_reference_tools is set, so windows are cut by remote workers only " +
 			"(no decoding on the server); queue the run with \"remote_only\": true, or pass \"allow_server_decode\": true to decode on the server deliberately")
 	}
-	var wt fingerprint.WindowTools
-	var terr error
-	if params.RemoteOnly {
-		// No local tools at all: the reference pair is the run's pair, so the
-		// equivalence class below is reference + allowlist and the server's
-		// own pair is not in it (it cuts nothing). Windows the server cut
-		// earlier with its own pair therefore read as stale unless that pair
-		// is allowlisted: never compared as if one build had cut them.
-		wt, terr = remoteOnlyTools(params.Live)
-	} else {
-		wt, terr = p.windowTools(ctx)
-	}
+	// RemoteOnly: no local tools at all: the reference pair is the run's pair, so
+	// the equivalence class below is reference + allowlist and the server's own
+	// pair is not in it (it cuts nothing). Windows the server cut earlier with
+	// its own pair therefore read as stale unless that pair is allowlisted:
+	// never compared as if one build had cut them.
+	wt, terr := env.Host.Tools(ctx, params.RemoteOnly, params.Live)
 	if terr != nil {
 		if params.Live {
 			return nil, fmt.Errorf("window-backfill: %w", terr)
@@ -501,44 +634,58 @@ func (p *Plugin) windowBackfill(ctx context.Context, reporter sdk.Reporter, para
 		versions = &wt.Versions
 		// One equivalence class for every reader of tool versions: this
 		// op's "current" check and WindowSetSimilarity's provenance check.
-		fingerprint.SetToolEquivalence(wt.Versions,
-			fingerprint.ParseToolPairs(config.AppConfig.FingerprintWorkerToolVersions))
+		env.Host.SetToolEquivalence(wt.Versions)
 	}
 
-	plan, err := p.planWindowBackfill(ctx, reporter, versions)
+	plan, err := planWindowBackfillVia(ctx, env.Store, env.Items, env.Host, versions)
 	if err != nil {
 		return nil, err
 	}
 	res := &windowRunResult{plan: plan}
 	logWindowPlan(plan, params.Live)
 	if !params.Live {
-		_ = reporter.UpdateProgress(1, 1, "Dry run: "+windowPlanSummary(plan))
+		progress(1, 1, "Dry run: "+windowPlanSummary(plan))
 		return res, nil
 	}
+	if env.Writer == nil {
+		return nil, errors.New("window-backfill: no writer for a live run")
+	}
 
-	workers := windowWorkers(params.Concurrency)
-	p.toolsMu.Lock()
-	probe := p.scanProbe
-	p.toolsMu.Unlock()
-	host, herr := os.Hostname()
+	workers := env.Host.Workers(params.Concurrency)
+	var probe libraryScanProbe
+	if env.Host.Probe != nil {
+		probe = env.Host.Probe()
+	}
+	host, herr := env.Host.Hostname()
 	if herr != nil {
 		// Host is provenance only; a window without it is still valid.
 		wbLog.Warn("hostname: %v; windows will carry an empty host", herr)
 		host = ""
 	}
 	var tally windowTally
-	run := &windowRun{p: p, wt: wt, host: host, t: &tally, reporter: reporter, probe: probe}
-	hub := p.WorkerHub()
+	run := &windowRun{writer: env.Writer, wt: wt, host: host, t: &tally, progress: progress, items: env.Items, probe: probe}
+	hub := env.Host.Hub
+	if hub == nil {
+		return nil, errors.New("window-backfill: no worker hub")
+	}
 	refExists := plan.refAny
 	if params.RemoteOnly && params.RebootstrapReference && refExists {
 		wbLog.Warn("window-backfill REMOTE-ONLY: rebootstrap_reference set: ignoring the reference-pair windows already stored; one worker will define a NEW reference without byte parity")
 		refExists = false
 	}
-	hub.attach(ctx, p, wt, &tally, plan.calibration, hubMode{remoteOnly: params.RemoteOnly, identity: plan.identity, refExists: refExists})
+	// The hub reads stored windows and writes a remote result through the same
+	// store and writer as this run, so its writes are gated like the run's own.
+	hub.attachVia(ctx, hubRunDeps{store: env.Store, writer: env.Writer, probe: probe}, wt, &tally, plan.calibration, hubMode{remoteOnly: params.RemoteOnly, identity: plan.identity, refExists: refExists})
 	defer hub.detach()
 	if params.RemoteOnly {
 		wbLog.Info("window-backfill REMOTE-ONLY: the server decodes nothing; reference pair fpcalc %s + ffmpeg %s; files no worker may have are deferred to a later run",
 			wt.Versions.Fpcalc, wt.Versions.FFmpeg)
+	}
+	checkpoint := func(state any) error {
+		if env.Checkpoint == nil {
+			return errors.New("checkpoint is not available in this run")
+		}
+		return env.Checkpoint(state)
 	}
 	total := len(plan.tiers[0]) + len(plan.tiers[1])
 	done := 0
@@ -565,9 +712,10 @@ func (p *Plugin) windowBackfill(ctx context.Context, reporter sdk.Reporter, para
 			items[i].qi = i
 		}
 		hub.beginTier(tier, items)
-		opts := windowRunOptions(workers, done, total, tier, items, params, reporter, &tally, hub.checkpointMark)
+		opts := windowItemsOptions(done, total, tier, items, params, checkpoint, &tally, hub.checkpointMark)
 		run.progCur.Store(int64(done))
 		run.progTotal.Store(int64(total))
+		par := windowParallelism(workers)
 		var err error
 		if params.RemoteOnly {
 			// One heartbeat for the tier (every waiter may sit on one stuck
@@ -579,16 +727,18 @@ func (p *Plugin) windowBackfill(ctx context.Context, reporter sdk.Reporter, para
 				defer close(hbDone)
 				run.remoteHeartbeat(tctx, stop, hub, tier, noWorkerGrace(params.NoWorkerGraceSec), pendingGrace(params.PendingGraceSec))
 			}()
-			err = registry.RunItems(tctx, reporter, items, run.remoteOnlyItem(hub), opts)
+			remote := run.remoteOnlyItem(hub)
+			err = env.Items(tctx, par, len(items), opts, func(ctx context.Context, i int) error { return remote(ctx, items[i]) })
 			stop(nil)
 			<-hbDone
 			if cause := context.Cause(tctx); err != nil && errors.Is(cause, errNoRemoteWorkers) {
 				err = cause
 			}
-			// No drain: RunItems returned only after every item was finished by
+			// No drain: the pool returned only after every item was finished by
 			// a worker or deferred, so nothing is leased or owed any more.
 		} else {
-			err = registry.RunItems(ctx, reporter, items, func(ctx context.Context, it windowItem) error {
+			err = env.Items(ctx, par, len(items), opts, func(ctx context.Context, i int) error {
+				it := items[i]
 				if hub.claimServer(it.qi) {
 					err := run.file(ctx, it)
 					hub.serverDone(it.qi)
@@ -600,7 +750,7 @@ func (p *Plugin) windowBackfill(ctx context.Context, reporter sdk.Reporter, para
 				// same pool, while the pass runs: left for the drain, each one
 				// would pin the checkpoint below it until the tier ends.
 				return run.serveBacklog(ctx, hub)
-			}, opts)
+			})
 			if err == nil {
 				err = run.drainRemote(ctx, hub, tier, workers)
 			}
@@ -613,7 +763,7 @@ func (p *Plugin) windowBackfill(ctx context.Context, reporter sdk.Reporter, para
 		// Tier finished: the next resume starts at the next tier.
 		next := params
 		next.Resume = &WindowBackfillCursor{Tier: tier + 1}
-		if cerr := reporter.Checkpoint(next); cerr != nil {
+		if cerr := checkpoint(next); cerr != nil {
 			wbLog.Warn("checkpoint after tier %d: %v", tier, cerr)
 		}
 	}
@@ -632,7 +782,7 @@ func (p *Plugin) windowBackfill(ctx context.Context, reporter sdk.Reporter, para
 		msg += "; deferred_server_only is remote-only: not cut, not tombstoned, replanned next run"
 	}
 	wbLog.Info("%s", msg)
-	_ = reporter.UpdateProgress(total, max(total, 1), msg)
+	progress(total, max(total, 1), msg)
 	return res, nil
 }
 
@@ -646,24 +796,19 @@ func fillWindowResult(res *windowRunResult, t *windowTally) {
 	res.deferred = t.deferredByReason()
 }
 
-// windowRunOptions builds the RunItems options for one tier. A named function
-// so a test runs the real options: an omitted Concurrency is exactly the
-// regression that left acoustid.backfill on one core for months.
-//
-// capMark lowers the watermark below any item a remote worker still owes
-// (WorkerHub.checkpointMark): the server lane passes a leased item by skipping
-// it, so the raw watermark can run ahead of work that is not done.
-func windowRunOptions(workers, done, total, tier int, items []windowItem, params WindowBackfillParams,
-	reporter sdk.Reporter, tally *windowTally, capMark func(int) int) registry.RunItemsOptions {
-	return registry.RunItemsOptions{
-		Concurrency:     workers,
-		ProgressOffset:  done,
+// windowItemsOptions is the pool-neutral half of windowRunOptions: the settings
+// both shells hand their pool. The Label reads the tally's counters, so only
+// HEAD's pool carries it (the kernel's label is pure; a seam in seams.d).
+func windowItemsOptions(done, total, tier int, items []windowItem, params WindowBackfillParams,
+	checkpoint func(state any) error, tally *windowTally, capMark func(int) int) kindItemsOptions {
+	return kindItemsOptions{
+		ProgressBase:    done,
 		ProgressTotal:   total,
 		CheckpointEvery: windowCheckpointEvery,
 		// The watermark is the unbroken completed prefix of items, so
 		// items[mark-1] and everything before it are finished even with
-		// workers completing out of order. Calls are serialized by RunItems.
-		CheckpointStateFn: func(_ context.Context, mark int) error {
+		// workers completing out of order. Calls are serialized by the pool.
+		CheckpointState: func(_ context.Context, mark int) error {
 			if capMark != nil {
 				mark = capMark(mark)
 			}
@@ -672,7 +817,7 @@ func windowRunOptions(workers, done, total, tier int, items []windowItem, params
 			}
 			next := params
 			next.Resume = &WindowBackfillCursor{Tier: tier, AfterFileID: items[mark-1].FileID}
-			if err := reporter.Checkpoint(next); err != nil {
+			if err := checkpoint(next); err != nil {
 				wbLog.Warn("checkpoint tier %d after %s: %v", tier, items[mark-1].FileID, err)
 			}
 			return nil
@@ -706,8 +851,13 @@ const (
 	windowTombstoned
 )
 
-func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, versions *fingerprint.ToolVersionInfo) (*windowPlan, error) {
-	cores, err := p.store.GetAllBookFilesCore()
+// planWindowBackfillVia is planWindowBackfill over the env's read store, pool and
+// host hooks (rule R10).
+func planWindowBackfillVia(ctx context.Context, store kindStore, items kindItemsFunc, host windowHooks, versions *fingerprint.ToolVersionInfo) (*windowPlan, error) {
+	if store == nil {
+		return nil, errors.New("window-backfill: database store not available")
+	}
+	cores, err := store.GetAllBookFilesCore()
 	if err != nil {
 		return nil, fmt.Errorf("window-backfill: list book files: %w", err)
 	}
@@ -717,12 +867,17 @@ func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, 
 	for lo := 0; lo < len(cores); lo += windowPlanChunk {
 		chunks = append(chunks, [2]int{lo, min(lo+windowPlanChunk, len(cores))})
 	}
-	err = registry.RunItems(ctx, reporter, chunks, func(ctx context.Context, c [2]int) error {
+	err = items(ctx, windowPlanParallelism(), len(chunks), kindItemsOptions{
+		PureLabel: func(i, _ int) string {
+			return fmt.Sprintf("Planning windows: rows %d-%d of %d", chunks[i][0]+1, chunks[i][1], len(cores))
+		},
+	}, func(ctx context.Context, ci int) error {
+		c := chunks[ci]
 		for i := c[0]; i < c[1]; i++ {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			r, perr := p.planOne(ctx, cores[i], versions, &durProbed, &durProbeFailed)
+			r, perr := planOneVia(ctx, store, host, cores[i], versions, &durProbed, &durProbeFailed)
 			if perr != nil {
 				// A store read failure on one file must not read as "needs
 				// work" (it would recompute) or "current" (it would skip);
@@ -733,11 +888,6 @@ func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, 
 			rows[i] = r // each index written by exactly one chunk
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: windowPlanWorkers,
-		Label: func(i, t int) string {
-			return fmt.Sprintf("Planning windows: rows %d-%d of %d", chunks[i][0]+1, chunks[i][1], len(cores))
-		},
 	})
 	if err != nil {
 		return nil, err
@@ -748,7 +898,7 @@ func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, 
 	plan := &windowPlan{excluded: map[string]int{}, rows: len(cores)}
 	plan.durationProbed = durProbed.Load()
 	plan.durationProbeFailed = durProbeFailed.Load()
-	libRoots := pathutil.PathVars(config.AppConfig.RootDir)
+	libRoots := host.Roots()
 	for i, r := range rows {
 		if r.missing {
 			plan.missingRows++
@@ -835,8 +985,8 @@ func (p *Plugin) planWindowBackfill(ctx context.Context, reporter sdk.Reporter, 
 	return plan, nil
 }
 
-// planOne classifies one tracked row.
-func (p *Plugin) planOne(ctx context.Context, f database.BookFileCore, versions *fingerprint.ToolVersionInfo, probed, probeFailed *atomic.Int64) (windowPlanRow, error) {
+// planOneVia is planOne over the env's read store and host hooks.
+func planOneVia(ctx context.Context, store kindStore, host windowHooks, f database.BookFileCore, versions *fingerprint.ToolVersionInfo, probed, probeFailed *atomic.Int64) (windowPlanRow, error) {
 	switch {
 	case f.FilePath == "":
 		return windowPlanRow{excluded: "empty_path"}, nil
@@ -875,7 +1025,7 @@ func (p *Plugin) planOne(ctx context.Context, f database.BookFileCore, versions 
 	// no I/O". planOne already stats every row, and runs on a bounded pool
 	// (windowPlanWorkers), so the probe inherits that ceiling.
 	if dur <= 0 && f.AcoustIDFingerprintDurationSec <= 0 {
-		secs, perr := windowProbeDuration(ctx, f.FilePath)
+		secs, perr := host.ProbeDuration(ctx, f.FilePath)
 		switch {
 		case perr == nil && secs > 0:
 			dur = secs
@@ -899,29 +1049,17 @@ func (p *Plugin) planOne(ctx context.Context, f database.BookFileCore, versions 
 		Size:      fi.Size(),
 		MtimeUnix: fi.ModTime().Unix(),
 	}
-	state, exact, anyExact, err := p.windowStateOf(it, versions)
+	state, exact, anyExact, err := windowStateOfVia(store, it, versions)
 	if err != nil {
 		return windowPlanRow{}, err
 	}
 	return windowPlanRow{present: true, state: state, exact: exact, anyExact: anyExact, item: it}, nil
 }
 
-// windowStateOf decides whether a file's stored windows (or tombstone) still
-// describe the file as it is. Stored rows only: the virtual legacy head from
-// WindowsForFile must never look like a current window.
-//
-// Current means: a non-empty set, every row made by this pipeline and window
-// set from these exact bytes (size and mtime), by these tool versions when
-// known, and covering the slots the plan would cut today when the duration is
-// known from the row. A tombstone is current under the same bytes/pipeline/
-// set/tool rule, so a new ffmpeg retries a file the old one could not read.
-//
-// exact reports, for a current file, that every stored window was cut with
-// exactly *versions (not merely an equivalent pair); anyExact, that at least
-// one stored window was, current or not.
-func (p *Plugin) windowStateOf(it windowItem, versions *fingerprint.ToolVersionInfo) (state windowState, exact, anyExact bool, err error) {
+// windowStateOfVia is windowStateOf over a read store.
+func windowStateOfVia(store kindStore, it windowItem, versions *fingerprint.ToolVersionInfo) (state windowState, exact, anyExact bool, err error) {
 	ref := database.FileWindowRef(it.FileID)
-	stored, err := p.store.GetFingerprintWindows(ref)
+	stored, err := store.GetFingerprintWindows(ref)
 	if err != nil {
 		return windowNeedsWork, false, false, err
 	}
@@ -929,7 +1067,7 @@ func (p *Plugin) windowStateOf(it windowItem, versions *fingerprint.ToolVersionI
 	if windowsCurrent(stored, it, versions) {
 		return windowCurrent, versions != nil && windowsExactPair(stored, *versions), anyExact, nil
 	}
-	fail, err := p.store.GetFingerprintWindowFailure(ref)
+	fail, err := store.GetFingerprintWindowFailure(ref)
 	if err != nil {
 		return windowNeedsWork, false, anyExact, err
 	}
@@ -1088,12 +1226,16 @@ func (p *Plugin) setScanProbe(sp libraryScanProbe) {
 
 // windowRun is the state one live run's workers share.
 type windowRun struct {
-	p        *Plugin
-	wt       fingerprint.WindowTools
-	host     string
-	t        *windowTally
-	reporter sdk.Reporter
-	probe    libraryScanProbe
+	// writer is the run's fpwin: writer: the gated one natively.
+	writer kindWriter
+	wt     fingerprint.WindowTools
+	host   string
+	t      *windowTally
+	// progress reports the run's status from inside the pool and the heartbeat.
+	progress func(current, total int, msg string)
+	// items is the shell's pool (the drain's backlog pass runs on it).
+	items kindItemsFunc
+	probe libraryScanProbe
 
 	consecutive atomic.Int64 // I/O-shaped failures since the last good file
 	ioFailures  atomic.Int64 // all I/O-shaped failures, for log rate-limiting
@@ -1113,7 +1255,7 @@ func (r *windowRun) waitForLibraryScan(ctx context.Context) error {
 	}
 	wbLog.Info("library.scan is running; window backfill paused until it finishes")
 	for r.probe.LibraryScanRunning() {
-		_ = r.reporter.UpdateProgress(int(r.progCur.Load()), int(r.progTotal.Load()), "Paused: library.scan is running")
+		r.progress(int(r.progCur.Load()), int(r.progTotal.Load()), "Paused: library.scan is running")
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -1136,15 +1278,15 @@ var windowDrainPoll = 30 * time.Second
 func (r *windowRun) drainRemote(ctx context.Context, hub *WorkerHub, tier, workers int) error {
 	for {
 		if backlog := hub.takeBacklog(); len(backlog) > 0 {
-			err := registry.RunItems(ctx, r.reporter, backlog, func(ctx context.Context, it windowItem) error {
-				defer hub.serverDone(it.qi)
-				return r.file(ctx, it)
-			}, registry.RunItemsOptions{
-				Concurrency: workers,
+			err := r.items(ctx, windowParallelism(workers), len(backlog), kindItemsOptions{
 				// Runs inside worker goroutines: reads atomics only.
 				Label: func(i, t int) string {
 					return fmt.Sprintf("%s: files handed back by remote workers %d/%d (%s)", windowTierNames[tier], i+1, t, r.t.summary())
 				},
+			}, func(ctx context.Context, i int) error {
+				it := backlog[i]
+				defer hub.serverDone(it.qi)
+				return r.file(ctx, it)
 			})
 			if err != nil {
 				return err
@@ -1155,7 +1297,7 @@ func (r *windowRun) drainRemote(ctx context.Context, hub *WorkerHub, tier, worke
 		if n == 0 {
 			return nil
 		}
-		_ = r.reporter.UpdateProgress(int(r.progCur.Load()), int(r.progTotal.Load()),
+		r.progress(int(r.progCur.Load()), int(r.progTotal.Load()),
 			fmt.Sprintf("%s: waiting for %d file(s) leased to remote workers", windowTierNames[tier], n))
 		select {
 		case <-ctx.Done():
@@ -1234,7 +1376,7 @@ func (r *windowRun) remoteHeartbeat(ctx context.Context, stop context.CancelCaus
 		if w := hub.ineligibleReasons(); w != "" {
 			why = "; not eligible for a worker: " + w
 		}
-		_ = r.reporter.UpdateProgress(int(r.progCur.Load())+done, int(r.progTotal.Load()),
+		r.progress(int(r.progCur.Load())+done, int(r.progTotal.Load()),
 			fmt.Sprintf("%s (remote-only heartbeat): %d/%d files resolved, %d leased to remote workers (%s)%s",
 				windowTierNames[tier], done, total, leased, r.t.summary(), why))
 	}
@@ -1327,10 +1469,10 @@ func (r *windowRun) file(ctx context.Context, it windowItem) error {
 
 		switch {
 		case werr == nil:
-			_ = r.p.storeWindows(it, prints, windowProvenance{host: r.host}, r.t) // tallied inside
+			_ = storeWindowsVia(r.writer, it, prints, windowProvenance{host: r.host}, r.t) // tallied inside
 			r.good()
 		case isDurableWindowErr(werr):
-			r.p.storeFailure(it, slot, dur, werr, r.wt, r.host, r.t)
+			storeFailureVia(r.writer, it, slot, dur, werr, r.wt, r.host, r.t)
 			r.good()
 		case errors.Is(werr, fingerprint.ErrWindowTransient) || errors.Is(werr, context.DeadlineExceeded):
 			return r.ioFailure(it, "cut", werr)
@@ -1425,10 +1567,9 @@ type windowProvenance struct {
 	leaseID string
 }
 
-// storeWindows writes one file's windows; both lanes write through it. The
-// outcome is tallied here; the error is returned for the remote lane, which
-// answers the worker with it.
-func (p *Plugin) storeWindows(it windowItem, prints []*fingerprint.WindowPrint, prov windowProvenance, t *windowTally) error {
+// storeWindowsVia is storeWindows over a writer (rule R10): the run's gated
+// writer natively, the plugin's store in HEAD.
+func storeWindowsVia(w kindWriter, it windowItem, prints []*fingerprint.WindowPrint, prov windowProvenance, t *windowTally) error {
 	ref := database.FileWindowRef(it.FileID)
 	now := time.Now().UTC()
 	rows := make([]database.FingerprintWindow, 0, len(prints))
@@ -1458,15 +1599,16 @@ func (p *Plugin) storeWindows(it windowItem, prints []*fingerprint.WindowPrint, 
 			LeaseID:         prov.leaseID,
 		})
 	}
-	if err := p.store.ReplaceFingerprintWindows(ref, rows); err != nil {
-		p.countWriteErr(it, err, t)
+	if err := w.ReplaceFingerprintWindows(ref, rows); err != nil {
+		countWriteErrVia(it, err, t)
 		return err
 	}
 	t.written.Add(1)
 	return nil
 }
 
-func (p *Plugin) storeFailure(it windowItem, slot int, dur fingerprint.DurationUsed, werr error, wt fingerprint.WindowTools, host string, t *windowTally) {
+// storeFailureVia is storeFailure over a writer.
+func storeFailureVia(w kindWriter, it windowItem, slot int, dur fingerprint.DurationUsed, werr error, wt fingerprint.WindowTools, host string, t *windowTally) {
 	detail := werr.Error()
 	if len(detail) > 1024 {
 		detail = detail[:1024]
@@ -1489,18 +1631,15 @@ func (p *Plugin) storeFailure(it windowItem, slot int, dur fingerprint.DurationU
 		FailedAt:           time.Now().UTC(),
 		Host:               host,
 	}
-	if err := p.store.RecordFingerprintWindowFailure(f); err != nil {
-		p.countWriteErr(it, err, t)
+	if err := w.RecordFingerprintWindowFailure(f); err != nil {
+		countWriteErrVia(it, err, t)
 		return
 	}
 	t.failed.Add(1)
 }
 
-// countWriteErr separates a row deleted mid-run from a real write failure,
-// which fails the run at the end rather than passing as success. The store
-// resolves the row by FILE ID and says so with ErrFingerprintWindowRowGone, so
-// a row that moved to another book is never mistaken for a gone one.
-func (p *Plugin) countWriteErr(it windowItem, err error, t *windowTally) {
+// countWriteErrVia is countWriteErr; it reads nothing from the plugin.
+func countWriteErrVia(it windowItem, err error, t *windowTally) {
 	if errors.Is(err, database.ErrFingerprintWindowRowGone) {
 		t.rowGone.Add(1)
 		return
