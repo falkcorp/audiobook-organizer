@@ -1,5 +1,5 @@
 // file: core/internal/outboxhttp/routes_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: b91b2c32-bee4-4aac-a400-6fb0e871d709
 // last-edited: 2026-11-19
 
@@ -249,7 +249,10 @@ type rig struct {
 
 func newRig() *rig {
 	j := &journal{}
-	op, rec, logs := &fakeOp{j: j}, &fakeRec{j: j}, &lockedBuffer{}
+	// The consumer the rig's purges name is known to Status with its topic, as a
+	// registered one is; a purge of a consumer Status does not list is a 404.
+	op, rec, logs := &fakeOp{j: j, status: outbox.Status{Consumers: []outbox.ConsumerStatus{{Name: "core.notify.deliver", Topic: noticeTopic}}}},
+		&fakeRec{j: j}, &lockedBuffer{}
 	return &rig{j: j, op: op, rec: rec, logs: logs,
 		api: newAPI("/api/core/v1", op, nil, rec, WithLogger(slog.New(slog.NewTextHandler(logs, nil))))}
 }
@@ -1896,25 +1899,11 @@ func TestOutboxHTTP_UnknownConsumerOrSeq404(t *testing.T) {
 	if rows := e.deadRows(); len(rows) != 1 {
 		t.Errorf("dead letters = %+v, want the one untouched", rows)
 	}
-	// Only the two purges were recorded, each as requested and then refused.
-	recs := e.records()
-	if len(recs) != 4 {
-		t.Fatalf("%d records, want the two purges' requests and refusals: %+v", len(recs), recs)
-	}
-	var requested, refused int
-	for _, r := range recs {
-		if r.Action != "core.outbox.backlog_purge" {
-			t.Errorf("a request for a letter that is not there was recorded: %+v", r.Event)
-		}
-		switch {
-		case r.Reason == reasonRequested && r.Outcome == audit.Success:
-			requested++
-		case r.Reason == reasonRefused && r.Outcome == audit.Failure:
-			refused++
-		}
-	}
-	if requested != 2 || refused != 2 {
-		t.Errorf("%d requested and %d refused records, want 2 and 2: %+v", requested, refused, recs)
+	// A 404 from the status read or the dead-letter read records nothing, for a
+	// purge as for a retry or discard: no audit row names a consumer or letter
+	// that was never there.
+	if recs := e.records(); len(recs) != 0 {
+		t.Fatalf("%d records for requests that were refused before anything was recorded: %+v", len(recs), recs)
 	}
 }
 
@@ -2119,8 +2108,8 @@ func TestOutboxHTTP_RegisterTakesNilCollaborators(t *testing.T) {
 // TestOutboxHTTP_TopicDetailOnlyWhenKnown: the first audit record of a retry or
 // discard names the topic DeadTopic read from the consumer's letter and never
 // the status read's (the status read is not consulted at all), and a purge's
-// records take the topic from the status read, leaving the key out rather than
-// empty when the outbox does not name one.
+// records take the topic from the status read. A purge of a consumer the status
+// does not list, or lists with no topic, is a 404 with nothing recorded.
 func TestOutboxHTTP_TopicDetailOnlyWhenKnown(t *testing.T) {
 	const consumer = "core.notify.deliver"
 	status := func(topic string) []outbox.ConsumerStatus {
@@ -2129,7 +2118,7 @@ func TestOutboxHTTP_TopicDetailOnlyWhenKnown(t *testing.T) {
 	for _, c := range []struct {
 		name      string
 		consumers []outbox.ConsumerStatus
-		wantPurge string // "" is no topic key at all
+		wantPurge string // "" is a 404 with no record
 	}{
 		{"status names a topic", status(signalTopic), signalTopic},
 		{"consumer unknown to the status", nil, ""},
@@ -2150,6 +2139,16 @@ func TestOutboxHTTP_TopicDetailOnlyWhenKnown(t *testing.T) {
 				case "purge":
 					_, err = rg.api.purge(context.Background(), purgeIn(bruce(), consumer))
 					want, wantRecs = c.wantPurge, 2 // the request and the count
+					if c.wantPurge == "" {
+						wantProblem(t, err, http.StatusNotFound, "not_found")
+						if recs := rg.rec.recorded(); len(recs) != 0 {
+							t.Fatalf("%d records for a purge refused before it was recorded: %+v", len(recs), recs)
+						}
+						if slices.Contains(rg.j.all(), "op:purge") {
+							t.Fatalf("the purge ran: %v", rg.j.all())
+						}
+						return
+					}
 				}
 				if err != nil {
 					t.Fatal(err)
@@ -2356,6 +2355,35 @@ func TestOutboxHTTP_RequestRecordKeepsTheRequestsContext(t *testing.T) {
 				if strings.HasPrefix(step, "op:retry") || strings.HasPrefix(step, "op:discard") || strings.HasPrefix(step, "op:purge") {
 					t.Errorf("the operation ran for a client that had hung up: %v", rg.j.all())
 				}
+			}
+		})
+	}
+}
+
+// A client that hung up before the first record neither reaches the audit store
+// (which counts a canceled commit as a write error) nor logs at ERROR: the
+// request ends 503 with the operation not run and the audit log untouched.
+func TestOutboxHTTP_HangUpBeforeTheFirstRecordIsNotAnAuditFailure(t *testing.T) {
+	for _, kind := range []string{"retry", "discard", "purge"} {
+		t.Run(kind, func(t *testing.T) {
+			rg := newRig()
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			var err error
+			switch kind {
+			case "retry":
+				_, err = rg.api.retry(ctx, deadIn(bruce(), "core.notify.deliver", 4))
+			case "discard":
+				_, err = rg.api.discard(ctx, deadIn(bruce(), "core.notify.deliver", 4))
+			case "purge":
+				_, err = rg.api.purge(ctx, purgeIn(bruce(), "core.notify.deliver"))
+			}
+			wantProblem(t, err, http.StatusServiceUnavailable, "unavailable")
+			if got := rg.rec.recorded(); len(got) != 0 {
+				t.Errorf("the audit store was written for a client that had hung up: %+v", got)
+			}
+			if logs := rg.logs.String(); strings.Contains(logs, "level=ERROR") {
+				t.Errorf("a hang-up before the first record logged at ERROR: %s", logs)
 			}
 		})
 	}

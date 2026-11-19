@@ -1,5 +1,5 @@
 // file: core/internal/outboxhttp/routes.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 53094039-febd-4731-bc69-141f4e2fb456
 // last-edited: 2026-11-19
 
@@ -433,13 +433,16 @@ func (a *api) purge(ctx context.Context, in *httpapi.In[purgeReq]) (OutboxPurgeR
 	if err != nil {
 		return zero, err
 	}
+	if topic == "" {
+		// Status lists no topic for it: the outbox would answer ErrUnknownConsumer
+		// (unknown, or never ran), so this is the same 404 a retry or discard of a
+		// letter that is not there gets, with nothing recorded.
+		return zero, noBacklog(consumer, known)
+	}
 	route := "DELETE " + a.base + "/outbox/consumers/{consumer}/backlog"
 	ev := a.event(in.RequestID, actionPurge, route, actor, consumer)
 	ev.Reason = reasonRequested
-	ev.Details = map[string]any{}
-	if topic != "" {
-		ev.Details["topic"] = topic
-	}
+	ev.Details = map[string]any{"topic": topic}
 	if err := a.recordFirst(ctx, ev); err != nil {
 		return zero, err
 	}
@@ -506,15 +509,29 @@ func (a *api) event(requestID, action, route string, actor audit.Actor, consumer
 // write is bounded, and keeps the request's own cancellation: a client that has
 // hung up before it has nothing to be recorded for.
 func (a *api) recordFirst(ctx context.Context, ev audit.Event) error {
+	if err := ctx.Err(); err != nil {
+		// A client that hung up before anything was written: nothing to record and
+		// nothing run. Not an audit failure, so it neither logs at ERROR nor reaches
+		// the store (which counts any commit error, a cancel included, as one).
+		a.log.DebugContext(ctx, "outboxhttp: the request ended before its record was written; nothing was run",
+			a.attribution(ev, "error", err)...)
+		return unrecordedError(err)
+	}
 	wctx, cancel := context.WithTimeout(ctx, auditTimeout)
 	defer cancel()
 	if err := a.rec.Record(wctx, ev); err != nil {
 		a.log.ErrorContext(ctx, "outboxhttp: the audit record could not be written, so the operation was not run",
 			a.attribution(ev, "error", err)...)
-		return (&httpapi.Error{Status: http.StatusServiceUnavailable, Code: "unavailable",
-			Detail: "the audit log is not available; nothing was changed", Err: err}).WithRetryAfter(5 * time.Second)
+		return unrecordedError(err)
 	}
 	return nil
+}
+
+// unrecordedError is the 503 of a request whose record was not written, so the
+// operation was not run and a retry is safe.
+func unrecordedError(cause error) error {
+	return (&httpapi.Error{Status: http.StatusServiceUnavailable, Code: "unavailable",
+		Detail: "the audit log is not available; nothing was changed", Err: cause}).WithRetryAfter(5 * time.Second)
 }
 
 // recordFailure writes the second record of an operation recorded as requested

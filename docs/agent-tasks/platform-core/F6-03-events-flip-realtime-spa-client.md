@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F6-03-events-flip-realtime-spa-client.md -->
-<!-- version: 1.1.6 -->
+<!-- version: 1.1.8 -->
 <!-- guid: c4bebd8c-0dc9-4e78-a620-116332cca63d -->
 <!-- last-edited: 2026-11-19 -->
 
@@ -78,7 +78,7 @@ routes F6-04 built), §5E.13 (table and "Order" item (3)); 05-logging §5 (live 
 | hub A and its callers | `internal/realtime/` (deleted), `internal/server/`, `internal/itunes/service/` |
 | SPA | `web/src/services/eventSourceManager.ts`, `web/src/` |
 | move bookkeeping | `internal/arch/layering_test.go` (`internal/realtime` leaves `layerOf`), `scripts/ci/short_test_weights.json` |
-| F6-04's skipped cells | `core/internal/outboxhttp/routes_test.go` (un-skip only: remove the `t.Skip("needs stage 13: F4-08")` calls; no other change: F6-04 already wrote every cell's body, the 401, 403 and interactive-guard matrix, after its `t.Skip`) |
+| F6-04's skipped cells | `core/internal/outboxhttp/routes_test.go` (remove the `t.Skip("needs stage 13: F4-08")` calls AND wire `stage13Do`: F6-04 wrote every cell's body, the 401, 403 and interactive-guard matrix, after its `t.Skip`, but `stage13Do` builds its router with `httpapi.Deps{Log}` only, which `Build` refuses (`ErrNoAuthService`) once F4-08 lands; point it at F4-08's `Deps.Auth`, RBAC and audit and authenticate the caller the way stage 12 does, so the principal the cell binds reaches the route) |
 
 The producer list was computed at the plan's base. F5-18 moves or deletes much of `internal/plugins/` before this PR,
 so re-grep at BASE (below): every non-test file that names the path-update follow-up is this PR's file, wherever F5-18
@@ -121,7 +121,7 @@ grep -rn 'OutboxConsumers\|OutboxHandler' core/module/ | wc -l               # 0
    `Deps.Outbox`); wire the relay, the hub (P5), `eventhttp`, F6-04's `outboxhttp` (its `Register` takes the outbox's
    `Operator`, the `events.Catalog` and the `audit.Logger`) and F6-05's tail topic in `core/kernel/boot.go` and
    `kernel.go`; regenerate `core/openapi/core.json` and the generated client. Un-skip the permission, guard and 401
-   cells of `outboxhttp` (`core/internal/outboxhttp/routes_test.go`: delete each `t.Skip("needs stage 13: F4-08")`),
+   cells of `outboxhttp` (`core/internal/outboxhttp/routes_test.go`: delete each `t.Skip("needs stage 13: F4-08")` and wire `stage13Do` to F4-08's auth, RBAC and audit `Deps`, with the caller authenticated as stage 12 does),
    which run now that F4-08's stage 13 is live and the package is mounted.
 3. Books' topic declarations in `books.Module()`'s `Register`; move every hub A publisher to `events.Publish`; book-change
    coalescing via `RealtimeMeta.Coalesce`.
