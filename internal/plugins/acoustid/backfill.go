@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/backfill.go
-// version: 2.6.4
+// version: 2.7.0
 // guid: f6a7b8c9-d0e1-2345-def0-123456789abc
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package acoustid
 
@@ -19,12 +19,52 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
+
+// backfillKind is rule R3's native kind for acoustid.backfill.
+const backfillKind = tasks.Kind("books.acoustid.backfill")
+
+// backfillHelp is the definition's description, HEAD's and the native kind's
+// Help (rule R5: verbatim).
+const backfillHelp = "Generates raw AcoustID (fpcalc) fingerprints for files that have none, including legacy segment-only rows."
+
+// backfillEnv is what the backfill core takes from its shell (rules R2 and R10):
+// reads through Store, every fingerprint and signature write through Writer.
+// Workers is the fpcalc pool size (backfillWorkers); HasEngine is HEAD's
+// "dedup engine available" gate, which the body never uses beyond refusing
+// without one; Host carries the fpcalc probe.
+type backfillEnv struct {
+	kindEnv
+	Store     kindStore
+	Writer    kindWriter
+	Workers   func() int
+	HasEngine bool
+	Host      hostHooks
+}
+
+// backfillResult is the native run's result: the tallies in the closing message.
+// HEAD stored no result, so its shell drops it.
+type backfillResult struct {
+	Books         int `json:"books"`
+	Fingerprinted int `json:"fingerprinted"`
+	Skipped       int `json:"skipped"`
+	Ineligible    int `json:"ineligible"`
+	Failed        int `json:"failed"`
+}
+
+// backfillParallelism is the book pool (rule R4): HEAD's
+// RunItemsOptions.Concurrency is backfillWorkers() (the FP_PARALLEL_WORKERS
+// knob, default 4), which also sizes the shared per-file fpcalc semaphore.
+func backfillParallelism(workers int) tasks.Parallelism {
+	return tasks.Fixed(workers, "one fpcalc subprocess per in-flight file; sized from the FP_PARALLEL_WORKERS knob (backfillWorkers), default 4")
+}
 
 // backfillPageSize is how many books one page loads. The op used to load the
 // whole book table up front (GetAllBooksFullFrom("", 0)), which held ~862 MB of
@@ -82,6 +122,10 @@ type backfillTally struct {
 	// unaccounted for.
 	mu      sync.Mutex
 	reasons map[string]int64
+
+	// books is the number of books the pages have drained, set by the (single)
+	// page loop after each page and read by the same goroutine at the end.
+	books int
 }
 
 func (t *backfillTally) record(outcome fingerprintFileOutcome, reason string) {
@@ -147,7 +191,14 @@ var (
 // Returns ctx.Err() when canceled so the page is not checkpointed; otherwise
 // nil — one unreadable book must not abort a whole-library pass.
 func (p *Plugin) backfillBook(ctx context.Context, b database.Book, tally *backfillTally, fpSem chan struct{}, logger *slog.Logger) error {
-	files, ferr := p.store.GetBookFiles(b.ID)
+	return backfillBookVia(ctx, p.store, b, tally, fpSem, logger)
+}
+
+// backfillBookVia is backfillBook over the store it is handed: a view joining
+// the run's read store and writer, so the fingerprint and signature writes reach
+// the writer and nothing else (rule R10).
+func backfillBookVia(ctx context.Context, store pluginStore, b database.Book, tally *backfillTally, fpSem chan struct{}, logger *slog.Logger) error {
+	files, ferr := store.GetBookFiles(b.ID)
 	if ferr != nil {
 		logger.Warn("acoustid backfill: list book files", "book_id", b.ID, "error", ferr)
 		return nil
@@ -173,7 +224,7 @@ func (p *Plugin) backfillBook(ctx context.Context, b database.Book, tally *backf
 		}
 		wg.Go(func() {
 			defer func() { <-fpSem }()
-			out := fingerprintFileFn(p.store, f, false)
+			out := fingerprintFileFn(store, f, false)
 			tally.record(out, "")
 			if out == fingerprintOutcomeFingerprinted {
 				modified.Store(true)
@@ -191,7 +242,7 @@ func (p *Plugin) backfillBook(ctx context.Context, b database.Book, tally *backf
 	// Also rebuild a legacy-era signature: it was synthesized from misdecoded
 	// prints and is ignored by every consumer until replaced (or cleared).
 	if modified.Load() || b.BookSigV1 == nil || !b.HasCurrentBookSig() {
-		if err := synthesizeBookSignatureForBook(p.store, b.ID); err != nil {
+		if err := synthesizeBookSignatureForBook(store, b.ID); err != nil {
 			logger.Warn("synthesize book signature", "book_id", b.ID, "error", err)
 		}
 	}
@@ -204,10 +255,19 @@ func (p *Plugin) backfillBook(ctx context.Context, b database.Book, tally *backf
 // the real options instead of a hand-written copy of them: dropping Concurrency
 // here is exactly the regression that made this op sequential for months.
 func backfillRunOptions(offset, total int, tally *backfillTally) registry.RunItemsOptions {
-	return registry.RunItemsOptions{
-		Concurrency:    backfillWorkers(),
-		ProgressOffset: offset,
-		ProgressTotal:  total,
+	return registryItemsOptions(backfillParallelism(backfillWorkers()), backfillItemsOptions(offset, total, tally))
+}
+
+// backfillItemsOptions is the per-page loop's settings in the engine-neutral
+// shape both pools take. The counter Label (tally.summary) only HEAD's pool
+// carries; the pure label is what a native run shows (seams.d/F5-05.md).
+func backfillItemsOptions(offset, total int, tally *backfillTally) kindItemsOptions {
+	return kindItemsOptions{
+		ProgressBase:  offset,
+		ProgressTotal: total,
+		PureLabel: func(i, t int) string {
+			return fmt.Sprintf("Books %d/%d", offset+i+1, t)
+		},
 		Label: func(i, t int) string {
 			return fmt.Sprintf("Books %d/%d (%s)", offset+i+1, t, tally.summary())
 		},
@@ -271,7 +331,7 @@ func (p *Plugin) backfillDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "acoustid",
 		DisplayName:     "AcoustID backfill",
-		Description:     "Generates raw AcoustID (fpcalc) fingerprints for files that have none, including legacy segment-only rows.",
+		Description:     backfillHelp,
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "acoustid.fingerprint",
@@ -306,35 +366,68 @@ func (p *Plugin) backfillDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runBackfill(ctx context.Context, params json.RawMessage, reporter sdk.Reporter) error {
-	if p.engine == nil {
-		return fmt.Errorf("dedup engine not available")
+	_, err := backfillCore(ctx, params, p.headBackfillEnv(reporter))
+	return err
+}
+
+// headBackfillEnv is HEAD's env: the plugin's store for reads and writes, HEAD's
+// own worker knob and fpcalc probe. A plugin with no store hands the core a nil
+// Store, which it refuses with HEAD's message (after the engine and fpcalc
+// gates, as HEAD ordered them).
+func (p *Plugin) headBackfillEnv(reporter sdk.Reporter) backfillEnv {
+	env := backfillEnv{kindEnv: headEnv(reporter, true), Workers: backfillWorkers, HasEngine: p.engine != nil, Host: headHostHooks()}
+	if p.store != nil {
+		env.Store = p.store
+		env.Writer = headKindWriter{store: p.store}
+	}
+	return env
+}
+
+// backfillCore is the body of runBackfill, shared by both shells. params is
+// HEAD's checkpoint (ResumeRestart re-dispatches with the last checkpoint as the
+// params, decoded here leniently: a bad one is logged and means a fresh start);
+// a native run has no such params and restores the same struct through
+// env.Restore instead.
+func backfillCore(ctx context.Context, params json.RawMessage, env backfillEnv) (backfillResult, error) {
+	if !env.HasEngine {
+		return backfillResult{}, fmt.Errorf("dedup engine not available")
 	}
 
-	if !fingerprint.Available() {
-		reporter.Logger().Info("acoustid backfill: no fingerprint backend found, skipping")
-		return nil
+	if !env.Host.FingerprintAvailable() {
+		env.Logger.Info("acoustid backfill: no fingerprint backend found, skipping")
+		return backfillResult{}, nil
 	}
 
-	if p.store == nil {
-		return fmt.Errorf("database store not available")
+	if env.Store == nil {
+		return backfillResult{}, fmt.Errorf("database store not available")
 	}
 
 	var state BackfillParams
-	if len(params) > 0 {
+	if env.Restore != nil {
+		if ok, err := env.Restore(&state); err != nil {
+			env.Logger.Error("failed to restore checkpoint", "error", err)
+			state = BackfillParams{}
+		} else if !ok {
+			state = BackfillParams{}
+		}
+	} else if len(params) > 0 {
 		if err := json.Unmarshal(params, &state); err != nil {
-			reporter.Logger().Error("failed to unmarshal checkpoint", "error", err)
+			env.Logger.Error("failed to unmarshal checkpoint", "error", err)
 			state = BackfillParams{}
 		}
 	}
 
 	var tally backfillTally
-	if err := p.backfillPages(ctx, reporter, state, &tally); err != nil {
-		return err
+	if err := backfillPagesCore(ctx, state, &tally, env); err != nil {
+		return backfillResult{}, err
 	}
 	if reasons := tally.reasonCounts(); len(reasons) > 0 {
-		reporter.Logger().Info("acoustid backfill: ineligible reason breakdown", "reasons", reasons)
+		env.Logger.Info("acoustid backfill: ineligible reason breakdown", "reasons", reasons)
 	}
-	return nil
+	return backfillResult{
+		Books: tally.books, Fingerprinted: int(tally.fingerprinted.Load()), Skipped: int(tally.skipped.Load()),
+		Ineligible: int(tally.ineligible.Load()), Failed: int(tally.failed.Load()),
+	}, nil
 }
 
 // backfillPages walks the book table one page at a time from the resume
@@ -342,27 +435,34 @@ func (p *Plugin) runBackfill(ctx context.Context, params json.RawMessage, report
 // cursor once the page has fully drained. Split out of runBackfill so tests can
 // drive it without a dedup engine or an fpcalc binary.
 func (p *Plugin) backfillPages(ctx context.Context, reporter sdk.Reporter, state BackfillParams, tally *backfillTally) error {
-	logger := reporter.Logger()
+	return backfillPagesCore(ctx, state, tally, p.headBackfillEnv(reporter))
+}
+
+// backfillPagesCore is backfillPages over the env it is handed.
+func backfillPagesCore(ctx context.Context, state BackfillParams, tally *backfillTally, env backfillEnv) error {
+	logger := env.Logger
 	cursor := resumeCursor(state)
+	store := kindView{env.Store, env.Writer}
 
 	// Progress denominator only. A failed count leaves the bar unsized; it
 	// does not stop the run.
-	total, cerr := p.store.CountAllBooks()
+	total, cerr := env.Store.CountAllBooks()
 	if cerr != nil {
 		logger.Warn("acoustid backfill: count books", "error", cerr)
 		total = 0
 	}
-	prog := sdk.NewProgress(reporter, total)
+	prog := newProgress(env.kindEnv, total)
 	prog.Start(fmt.Sprintf("Backfilling fingerprints for %d books…", total))
 
-	fpSem := make(chan struct{}, backfillWorkers())
+	workers := env.Workers()
+	fpSem := make(chan struct{}, workers)
 	done := 0
 	restarted := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		page, err := p.store.GetAllBooksFullFrom(cursor, backfillPageSize)
+		page, err := env.Store.GetAllBooksFullFrom(cursor, backfillPageSize)
 		if err != nil {
 			return fmt.Errorf("load books after %q: %w", cursor, err)
 		}
@@ -371,7 +471,7 @@ func (p *Plugin) backfillPages(ctx context.Context, reporter sdk.Reporter, state
 		// vanished between listing and loading), and treating that as the
 		// end reported a truncated run as complete.
 		if len(page) == 0 {
-			if done == 0 && cursor != "" && !restarted && p.cursorIsStale(cursor) {
+			if done == 0 && cursor != "" && !restarted && cursorIsStaleVia(env.Store, cursor) {
 				// GetAllBooksFullFrom seeks past the cursor, so a checkpoint
 				// naming a since-deleted book normally resumes at its
 				// successor and never lands here. An empty first page with a
@@ -388,16 +488,17 @@ func (p *Plugin) backfillPages(ctx context.Context, reporter sdk.Reporter, state
 			break
 		}
 
-		err = registry.RunItems(ctx, reporter, page, func(ctx context.Context, b database.Book) error {
-			return p.backfillBook(ctx, b, tally, fpSem, logger)
-		}, backfillRunOptions(done, total, tally))
+		err = env.Items(ctx, backfillParallelism(workers), len(page), backfillItemsOptions(done, total, tally), func(ctx context.Context, i int) error {
+			return backfillBookVia(ctx, store, page[i], tally, fpSem, logger)
+		})
 		if err != nil {
 			return err
 		}
 
 		done += len(page)
+		tally.books = done
 		cursor = page[len(page)-1].ID
-		if err := reporter.Checkpoint(BackfillParams{AfterBookID: cursor}); err != nil {
+		if err := env.Checkpoint(BackfillParams{AfterBookID: cursor}); err != nil {
 			logger.Warn("acoustid backfill: checkpoint", "cursor", cursor, "error", err)
 		}
 	}
@@ -410,7 +511,14 @@ func (p *Plugin) backfillPages(ctx context.Context, reporter sdk.Reporter, state
 // exists. A lookup error counts as stale, so the caller restarts (redoing
 // work) instead of finishing (skipping it).
 func (p *Plugin) cursorIsStale(cursor string) bool {
-	b, err := p.store.GetBookByID(cursor)
+	return cursorIsStaleVia(p.store, cursor)
+}
+
+// cursorIsStaleVia is cursorIsStale over the read store it is handed.
+func cursorIsStaleVia(store interface {
+	GetBookByID(id string) (*database.Book, error)
+}, cursor string) bool {
+	b, err := store.GetBookByID(cursor)
 	return err != nil || b == nil
 }
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/reset_all.go
-// version: 1.12.1
+// version: 1.13.0
 // guid: f3b1e8c4-2d7a-4d62-aabb-1f1d6e2c4a01
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package acoustid
 
@@ -10,14 +10,53 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"runtime"
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
+
+// resetAllKind is rule R3's native kind for acoustid.reset-all.
+const resetAllKind = tasks.Kind("books.acoustid.reset-all")
+
+// resetAllHelp is the definition's description, HEAD's and the native kind's
+// Help (rule R5: verbatim).
+const resetAllHelp = "Clears every stored AcoustID fingerprint segment, drops acoustid dedup candidates, wipes the LSH index, and re-enqueues a forced rescan."
+
+// resetAllEnv is what the reset-all core takes from its shell (rules R2 and
+// R10): reads through Store, every write (the batched wipe, the per-row clear,
+// the candidate deletes) through Writer. Candidates is the candidate list, nil
+// when the plugin has neither a reset candidate store nor an embedding store;
+// the pass is then skipped as HEAD skipped it.
+type resetAllEnv struct {
+	kindEnv
+	Store      kindStore
+	Writer     kindWriter
+	Candidates candidateReads
+}
+
+// resetAllResult is the native run's result: what the summary line reports.
+// HEAD stored no result, so its shell drops it.
+type resetAllResult struct {
+	Cleared           int `json:"cleared"`
+	CandidatesDeleted int `json:"candidates_deleted"`
+	BusyRows          int `json:"busy_rows"`
+	FailedBatches     int `json:"failed_batches"`
+	LeftBehind        int `json:"left_behind"`
+}
+
+// resetAllSlowParallelism is the per-row fallback pool (rule R4): HEAD's
+// Concurrency is runtime.NumCPU(). Each item hydrates and rewrites its own row.
+func resetAllSlowParallelism() tasks.Parallelism { return tasks.CPU() }
+
+// resetAllChunkParallelism is the candidate-delete pass (rule R4): HEAD omits
+// Concurrency (one batch at a time under the store-wide candidate lock).
+func resetAllChunkParallelism() tasks.Parallelism {
+	return tasks.Sequential("each chunk is one batch under the store-wide candidate lock; a pool would only queue on it")
+}
 
 // resetAllDef registers acoustid.reset-all — the "nuke everything and start
 // over" admin op for AcoustID fingerprint state. Use when stored fingerprints
@@ -36,7 +75,7 @@ func (p *Plugin) resetAllDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "acoustid",
 		DisplayName:     "Reset all AcoustID fingerprints",
-		Description:     "Clears every stored AcoustID fingerprint segment, drops acoustid dedup candidates, wipes the LSH index, and re-enqueues a forced rescan.",
+		Description:     resetAllHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityHigh,
 		ConcurrencyKey:  "acoustid.fingerprint",
@@ -51,17 +90,46 @@ func (p *Plugin) resetAllDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	if p.store == nil {
-		return fmt.Errorf("database store not available")
-	}
+	_, err := resetAllCore(ctx, p.headResetAllEnv(reporter))
+	return err
+}
 
-	log := reporter.Logger()
+// headResetAllEnv is HEAD's env: the plugin's store for reads, and a writer over
+// the same store whose candidate deletes go to the reset candidate store (or,
+// failing that, the embedding store), as HEAD chose. A plugin with no store
+// hands the core a nil Store, which it refuses with HEAD's message.
+func (p *Plugin) headResetAllEnv(reporter sdk.Reporter) resetAllEnv {
+	env := resetAllEnv{kindEnv: headEnv(reporter, true)}
+	if p.store == nil {
+		return env
+	}
+	var candidates resetCandidateStore
+	switch {
+	case p.resetCandidates != nil:
+		candidates = p.resetCandidates
+	case p.embeddingStore != nil:
+		candidates = p.embeddingStore
+	}
+	env.Store = p.store
+	env.Writer = headKindWriter{store: p.store, cands: candidates}
+	if candidates != nil {
+		env.Candidates = candidates
+	}
+	return env
+}
+
+// resetAllCore is the body of runResetAll, shared by both shells.
+func resetAllCore(ctx context.Context, env resetAllEnv) (resetAllResult, error) {
+	if env.Store == nil {
+		return resetAllResult{}, fmt.Errorf("database store not available")
+	}
+	log := env.Logger
 	startedAt := time.Now()
 
 	// Initial Progress with N=0 — we don't know the real N until we either
 	// get the first callback from the Pebble bulk-clear or load the slow
 	// path's file list. The helper degrades gracefully to a 2-frame bar.
-	prog := sdk.NewProgress(reporter, 0)
+	prog := newProgress(env.kindEnv, 0)
 	prog.Start("Clearing fingerprints (batched)…")
 
 	// cleared is an atomic: the slow-path RunItems pass below runs fn and the
@@ -83,14 +151,14 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 	// and nothing in the logs to say the fast path was skipped. See
 	// database/store_capability.go, which documents two prod jobs degraded this
 	// way for weeks.
-	if pebble := resolveFingerprintResetter(p.store); pebble != nil {
+	if pebble := env.Writer.FingerprintResetter(); pebble != nil {
 		var totalN int
 		c, t, clearErr := pebble.ClearAllAcoustIDFingerprints(ctx, 2000,
 			func(processed, c, t int) {
 				// Rebuild the Progress as soon as we know the real total.
 				if totalN != t {
 					totalN = t
-					prog = sdk.NewProgress(reporter, t)
+					prog = newProgress(env.kindEnv, t)
 					prog.Start("Clearing fingerprints (batched)…")
 				}
 				prog.StepN(processed,
@@ -109,7 +177,7 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 			clearErr = nil
 		}
 		if clearErr != nil {
-			return fmt.Errorf("bulk clear fingerprints: %w", clearErr)
+			return resetAllResult{}, fmt.Errorf("bulk clear fingerprints: %w", clearErr)
 		}
 		cleared.Store(int64(c))
 		log.Info("acoustid reset-all: bulk clear done", "cleared", c, "total", t, "busy", busyRows, "elapsed", time.Since(startedAt).Round(time.Second))
@@ -121,16 +189,24 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 		// row — never a hand-built BookFile{} from Core fields. Only reached
 		// in mock/sqlite tests (prod uses the bulk-clear fast path above),
 		// so the extra per-row hydrate read is not a perf concern.
-		files, err := p.store.GetAllBookFilesCore()
+		files, err := env.Store.GetAllBookFilesCore()
 		if err != nil {
-			return fmt.Errorf("load book files: %w", err)
+			return resetAllResult{}, fmt.Errorf("load book files: %w", err)
 		}
 		total := len(files)
 		log.Info("acoustid reset-all: clearing fingerprints (slow path)", "book_files", total)
-		prog = sdk.NewProgress(reporter, total)
+		prog = newProgress(env.kindEnv, total)
 		prog.Start("Clearing fingerprints (slow path)…")
-		err = registry.RunItems(ctx, reporter, files, func(_ context.Context, f database.BookFileCore) error {
-			target, herr := p.store.GetBookFileByID(f.BookID, f.ID)
+		err = env.Items(ctx, resetAllSlowParallelism(), total, kindItemsOptions{
+			// Each item hydrates and rewrites its own book_file row (per-row
+			// lock in PebbleStore), so items are disjoint and the pool is
+			// sized to the cores. Only the mock/sqlite fallback reaches here.
+			Label: func(i, t int) string {
+				return fmt.Sprintf("Clearing fingerprints %d/%d (cleared=%d)", i+1, t, cleared.Load())
+			},
+		}, func(_ context.Context, i int) error {
+			f := files[i]
+			target, herr := env.Store.GetBookFileByID(f.BookID, f.ID)
 			if herr != nil {
 				log.Warn("acoustid reset-all: hydrate failed", "id", f.ID, "err", herr)
 				return nil
@@ -151,23 +227,15 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 			target.AcoustIDSeg4 = ""
 			target.AcoustIDSeg5 = ""
 			target.AcoustIDSeg6 = ""
-			if err := p.store.UpdateBookFile(target.ID, target); err != nil {
+			if err := env.Writer.UpdateBookFile(target.ID, target); err != nil {
 				log.Warn("acoustid reset-all: update file failed", "id", f.ID, "err", err)
 				return nil
 			}
 			cleared.Add(1)
 			return nil
-		}, registry.RunItemsOptions{
-			// Each item hydrates and rewrites its own book_file row (per-row
-			// lock in PebbleStore), so items are disjoint and the pool is
-			// sized to the cores. Only the mock/sqlite fallback reaches here.
-			Concurrency: runtime.NumCPU(),
-			Label: func(i, t int) string {
-				return fmt.Sprintf("Clearing fingerprints %d/%d (cleared=%d)", i+1, t, cleared.Load())
-			},
 		})
 		if err != nil {
-			return err
+			return resetAllResult{}, err
 		}
 	}
 
@@ -176,19 +244,12 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 	prog.Finalize("Dropping acoustid dedup candidates…")
 	deleted := 0 // sequential: the batches below run one at a time
 	failedBatches, leftBehind := 0, 0
-	var candidates resetCandidateStore
-	switch {
-	case p.resetCandidates != nil:
-		candidates = p.resetCandidates
-	case p.embeddingStore != nil:
-		candidates = p.embeddingStore
-	}
-	if candidates != nil {
+	if env.Candidates != nil {
 		var allCands []database.DedupCandidate
 		offset := 0
 		const pageSize = 500
 		for {
-			cands, _, lerr := candidates.ListCandidates(database.CandidateFilter{
+			cands, _, lerr := env.Candidates.ListCandidates(database.CandidateFilter{
 				Layer:  "acoustid",
 				Limit:  pageSize,
 				Offset: offset,
@@ -224,8 +285,13 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 		}
 		if len(chunks) > 0 {
 			// runitems:sequential each chunk is one batch under the store-wide candidate lock; a pool would only queue on it
-			if derr := registry.RunItems(ctx, reporter, chunks, func(_ context.Context, chunk []int64) error {
-				n, err := candidates.DeleteCandidates(chunk)
+			if derr := env.Items(ctx, resetAllChunkParallelism(), len(chunks), kindItemsOptions{
+				Label: func(i, t int) string {
+					return fmt.Sprintf("Dropping acoustid dedup candidates batch %d/%d (deleted=%d)", i+1, t, deleted)
+				},
+			}, func(_ context.Context, ci int) error {
+				chunk := chunks[ci]
+				n, err := env.Writer.DeleteCandidates(chunk)
 				if err != nil {
 					// A failed batch deletes nothing (one Pebble batch), so
 					// all of its rows are still in the review queue: keep
@@ -237,12 +303,8 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 				}
 				deleted += n
 				return nil
-			}, registry.RunItemsOptions{
-				Label: func(i, t int) string {
-					return fmt.Sprintf("Dropping acoustid dedup candidates batch %d/%d (deleted=%d)", i+1, t, deleted)
-				},
 			}); derr != nil {
-				return derr
+				return resetAllResult{}, derr
 			}
 		}
 	}
@@ -264,12 +326,16 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 		summary += fmt.Sprintf(" WARNING: %d candidate batch(es) failed and %d poisoned candidates were left in the review queue; re-run to drop them.",
 			failedBatches, leftBehind)
 	}
+	result := resetAllResult{
+		Cleared: int(cleared.Load()), CandidatesDeleted: deleted, BusyRows: busyRows,
+		FailedBatches: failedBatches, LeftBehind: leftBehind,
+	}
 	if busyRows > 0 {
 		prog.Done(summary)
-		return nil
+		return result, nil
 	}
 	prog.Done(summary + " Now enqueue acoustid.fingerprint-rescan with scope=all force=true.")
-	return nil
+	return result, nil
 }
 
 // resetCandidateStore is the part of EmbeddingStore the candidate pass uses.

@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/online_lookup.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 6e7f8091-a2b3-c4d5-e6f7-08192a3b4c5d
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package acoustid
 
@@ -12,12 +12,87 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	"github.com/falkcorp/audiobook-organizer/internal/acoustid"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
+
+// onlineLookupKind is rule R3's native kind for acoustid.lookup-online.
+const onlineLookupKind = tasks.Kind("books.acoustid.lookup-online")
+
+// onlineLookupHelp is the definition's description, HEAD's and the native kind's
+// Help (rule R5: verbatim).
+const onlineLookupHelp = "For every BookFile with a stored whole-file chromaprint, queries the acoustid.org /v2/lookup API for a MusicBrainz recording match. Stores the top recording_id + score when score >= 0.85. Requires the ACOUSTID_API_KEY env var."
+
+// LookupFunc is one AcoustID.org /v2/lookup call: the compressed fingerprint
+// string and the whole-file duration in seconds.
+type LookupFunc func(ctx context.Context, fingerprint string, durationSec int) (acoustid.LookupResult, error)
+
+// LookupDeps is acoustid.lookup-online's access to AcoustID.org and the clock,
+// read from process state by HEAD's body and handed in by its owner for the
+// native kind (rule R10). A nil field is HEAD's own behaviour.
+type LookupDeps struct {
+	// APIKey returns the configured AcoustID API key ("" means not configured):
+	// config.AppConfig.AcoustIDAPIKey.
+	APIKey func() string
+	// NewLookup builds the lookup call for an API key: acoustid.NewClient(key).Lookup.
+	NewLookup func(apiKey string) LookupFunc
+	// Wait blocks for d or until ctx is done (returning ctx.Err()): the pacing
+	// between requests, a time.After select.
+	Wait func(ctx context.Context, d time.Duration) error
+}
+
+// lookupHooks is LookupDeps with every nil field filled in with HEAD's own.
+type lookupHooks struct {
+	APIKey    func() string
+	NewLookup func(apiKey string) LookupFunc
+	Wait      func(ctx context.Context, d time.Duration) error
+}
+
+func (d LookupDeps) hooks() lookupHooks {
+	h := lookupHooks(d)
+	if h.APIKey == nil {
+		h.APIKey = func() string { return config.AppConfig.AcoustIDAPIKey }
+	}
+	if h.NewLookup == nil {
+		h.NewLookup = func(apiKey string) LookupFunc { return acoustid.NewClient(apiKey).Lookup }
+	}
+	if h.Wait == nil {
+		h.Wait = func(ctx context.Context, d time.Duration) error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(d):
+				return nil
+			}
+		}
+	}
+	return h
+}
+
+// onlineLookupEnv is what the online-lookup core takes from its shell (rules R2
+// and R10): reads through Store, the one write through Writer.
+type onlineLookupEnv struct {
+	kindEnv
+	Store  kindStore
+	Writer kindWriter
+	Lookup lookupHooks
+}
+
+// onlineLookupResult is the native run's result: the tallies in the closing
+// message. HEAD stored no result, so its shell drops it.
+type onlineLookupResult struct {
+	Total              int `json:"total"`
+	Matched            int `json:"matched"`
+	NoMatch            int `json:"no_match"`
+	Failed             int `json:"failed"`
+	RateLimited        int `json:"rate_limited"`
+	NeedsRefingerprint int `json:"needs_refingerprint"`
+}
 
 // AcoustIDOnlineMinScore is the minimum top-result score we treat as a
 // real match. Below this the recording is more likely an unrelated
@@ -52,7 +127,7 @@ func (p *Plugin) onlineLookupDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessManual,
 		Plugin:          "acoustid",
 		DisplayName:     "Look up fingerprints on AcoustID.org",
-		Description:     "For every BookFile with a stored whole-file chromaprint, queries the acoustid.org /v2/lookup API for a MusicBrainz recording match. Stores the top recording_id + score when score >= 0.85. Requires the ACOUSTID_API_KEY env var.",
+		Description:     onlineLookupHelp,
 		ResumePolicy:    sdk.ResumeRequeue,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "acoustid.online",
@@ -74,34 +149,54 @@ func onlineLookupPrintUsable(f *database.BookFileCore) bool {
 }
 
 func (p *Plugin) runOnlineLookup(ctx context.Context, params json.RawMessage, reporter sdk.Reporter) error {
-	if p.store == nil {
-		return fmt.Errorf("database store not available")
+	_, err := onlineLookupCore(ctx, params, p.headOnlineLookupEnv(reporter))
+	return err
+}
+
+// headOnlineLookupEnv is HEAD's env: the plugin's store for reads and the write,
+// and HEAD's own config and client. A plugin with no store hands the core a nil
+// Store, which it refuses with HEAD's message.
+func (p *Plugin) headOnlineLookupEnv(reporter sdk.Reporter) onlineLookupEnv {
+	env := onlineLookupEnv{kindEnv: headEnv(reporter, true), Lookup: LookupDeps{}.hooks()}
+	if p.store != nil {
+		env.Store = p.store
+		env.Writer = headKindWriter{store: p.store}
+	}
+	return env
+}
+
+// onlineLookupCore is the body of runOnlineLookup, shared by both shells. params
+// is the raw start params, decoded here (after the store and API-key checks, as
+// HEAD ordered them).
+func onlineLookupCore(ctx context.Context, params json.RawMessage, env onlineLookupEnv) (onlineLookupResult, error) {
+	if env.Store == nil {
+		return onlineLookupResult{}, fmt.Errorf("database store not available")
 	}
 
 	// The persisted setting (set via PUT /api/v1/config from the AcousticDedup
 	// tab) and the ACOUSTID_API_KEY env var both flow into this one field via
 	// viper.BindEnv (see InitConfig) — no separate env fallback needed here.
-	apiKey := config.AppConfig.AcoustIDAPIKey
+	apiKey := env.Lookup.APIKey()
 	if apiKey == "" {
-		return fmt.Errorf("AcoustID API key is not configured; set it on the AcoustID Dedup page or via the ACOUSTID_API_KEY env var")
+		return onlineLookupResult{}, fmt.Errorf("AcoustID API key is not configured; set it on the AcoustID Dedup page or via the ACOUSTID_API_KEY env var")
 	}
-	client := acoustid.NewClient(apiKey)
+	lookup := env.Lookup.NewLookup(apiKey)
 
 	var req OnlineLookupParams
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &req); err != nil {
-			return fmt.Errorf("parse params: %w", err)
+			return onlineLookupResult{}, fmt.Errorf("parse params: %w", err)
 		}
 	}
 
-	log := reporter.Logger()
+	log := env.Logger
 
-	prog := sdk.NewProgress(reporter, 0)
+	prog := newProgress(env.kindEnv, 0)
 	prog.Start("Loading book files for online lookup…")
 
-	files, err := p.store.GetAllBookFilesCore()
+	files, err := env.Store.GetAllBookFilesCore()
 	if err != nil {
-		return fmt.Errorf("load book files: %w", err)
+		return onlineLookupResult{}, fmt.Errorf("load book files: %w", err)
 	}
 
 	// Filter to candidates: must have a whole-file fp, must not already
@@ -160,13 +255,13 @@ func (p *Plugin) runOnlineLookup(ctx context.Context, params json.RawMessage, re
 	}
 	total := len(cands)
 	if total == 0 {
-		prog = sdk.NewProgress(reporter, 0)
+		prog = newProgress(env.kindEnv, 0)
 		prog.Start("No book files eligible for online lookup")
 		prog.Done(fmt.Sprintf("Nothing to do — needs_refingerprint=%d (legacy-era prints; the nightly acoustid.backfill re-fingerprints them automatically); every other fingerprinted file already has an AcoustID result or no fingerprint exists.", needsRefingerprint))
-		return nil
+		return onlineLookupResult{NeedsRefingerprint: needsRefingerprint}, nil
 	}
 
-	prog = sdk.NewProgress(reporter, total)
+	prog = newProgress(env.kindEnv, total)
 	prog.Start(fmt.Sprintf("Querying acoustid.org for %d file(s)…", total))
 
 	var matched, noMatch, failed, rateLimited int
@@ -176,7 +271,7 @@ func (p *Plugin) runOnlineLookup(ctx context.Context, params json.RawMessage, re
 	for i, c := range cands {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return onlineLookupResult{}, ctx.Err()
 		default:
 		}
 
@@ -194,7 +289,7 @@ func (p *Plugin) runOnlineLookup(ctx context.Context, params json.RawMessage, re
 		var raw []byte
 		var hydrated *database.BookFile
 		var hydrateErr error
-		if bookFiles, herr := p.store.GetBookFiles(f.BookID); herr != nil {
+		if bookFiles, herr := env.Store.GetBookFiles(f.BookID); herr != nil {
 			hydrateErr = fmt.Errorf("hydrate GetBookFiles: %w", herr)
 		} else {
 			for j := range bookFiles {
@@ -229,7 +324,7 @@ func (p *Plugin) runOnlineLookup(ctx context.Context, params json.RawMessage, re
 			if encErr != nil {
 				lerr = encErr
 			} else {
-				res, lerr = client.Lookup(ctx, fpStr, c.dur)
+				res, lerr = lookup(ctx, fpStr, c.dur)
 			}
 		}
 		now := time.Now().UTC()
@@ -270,7 +365,7 @@ func (p *Plugin) runOnlineLookup(ctx context.Context, params json.RawMessage, re
 				hydrated.AcoustIDOnlineScore = 0
 				noMatch++
 			}
-			if uerr := p.store.UpdateBookFile(hydrated.ID, hydrated); uerr != nil {
+			if uerr := env.Writer.UpdateBookFile(hydrated.ID, hydrated); uerr != nil {
 				log.Warn("acoustid online lookup: persist failed",
 					"file_id", f.ID, "err", uerr)
 			}
@@ -284,15 +379,16 @@ func (p *Plugin) runOnlineLookup(ctx context.Context, params json.RawMessage, re
 
 		// Respect AcoustID's 3 req/sec free-tier limit. `throttle` widens
 		// to onlineLookupThrottleMax after the first 429.
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(throttle):
+		if err := env.Lookup.Wait(ctx, throttle); err != nil {
+			return onlineLookupResult{}, err
 		}
 	}
 
 	prog.Done(fmt.Sprintf("Online lookup complete in %s — matched=%d no_match=%d failed=%d rate_limited=%d needs_refingerprint=%d (of %d files)",
 		time.Since(startedAt).Round(time.Second),
 		matched, noMatch, failed, rateLimited, needsRefingerprint, total))
-	return nil
+	return onlineLookupResult{
+		Total: total, Matched: matched, NoMatch: noMatch, Failed: failed,
+		RateLimited: rateLimited, NeedsRefingerprint: needsRefingerprint,
+	}, nil
 }

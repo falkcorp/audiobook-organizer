@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/fingerprint_rescan.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: a7b8c9d0-e1f2-3456-def0-123456789abc
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package acoustid
 
@@ -17,12 +17,50 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
-	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
+
+// fingerprintRescanKind is rule R3's native kind for acoustid.fingerprint-rescan.
+const fingerprintRescanKind = tasks.Kind("books.acoustid.fingerprint-rescan")
+
+// fingerprintRescanHelp is the definition's description, HEAD's and the native
+// kind's Help (rule R5: verbatim).
+const fingerprintRescanHelp = "Generates per-file fingerprints on demand with scope and force options."
+
+// fingerprintRescanEnv is what the rescan core takes from its shell (rules R2
+// and R10): reads through Store, every fingerprint and signature write through
+// Writer, and the process facts (server-decode switch, fpcalc probe, worker
+// count, report file) through Host.
+type fingerprintRescanEnv struct {
+	kindEnv
+	Store  kindStore
+	Writer kindWriter
+	Host   hostHooks
+}
+
+// fingerprintRescanResult is the native run's result: the tallies in the closing
+// message. HEAD stored no result, so its shell drops it.
+type fingerprintRescanResult struct {
+	Books         int    `json:"books"`
+	Files         int    `json:"files"`
+	Fingerprinted int    `json:"fingerprinted"`
+	Skipped       int    `json:"skipped"`
+	Ineligible    int    `json:"ineligible"`
+	Failed        int    `json:"failed"`
+	ReportPath    string `json:"report_path,omitempty"`
+}
+
+// fingerprintRescanParallelism is the per-book fpcalc pool (rule R4): HEAD's
+// hand-rolled semaphore of fpRescanWorkers() books at a time (the
+// FP_PARALLEL_WORKERS knob, default 4), files within a book sequential. It stays
+// HEAD's exact pool in HEAD's shell (env.Pool).
+func fingerprintRescanParallelism(workers int) tasks.Parallelism {
+	return tasks.Fixed(workers, "one fpcalc subprocess per in-flight book; sized from the FP_PARALLEL_WORKERS knob (fpRescanWorkers), default 4")
+}
 
 // FingerprintRescanParams controls the scope and options of a fingerprint rescan operation.
 type FingerprintRescanParams struct {
@@ -53,7 +91,7 @@ func (p *Plugin) fingerprintRescanDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessManual,
 		Plugin:          "acoustid",
 		DisplayName:     "Fingerprint rescan",
-		Description:     "Generates per-file fingerprints on demand with scope and force options.",
+		Description:     fingerprintRescanHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "acoustid.fingerprint",
@@ -71,21 +109,44 @@ func (p *Plugin) fingerprintRescanDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runFingerprintRescan(ctx context.Context, params json.RawMessage, reporter sdk.Reporter) error {
-	if err := serverdecode.Check("acoustid.fingerprint-rescan"); err != nil {
-		return err
+	_, err := fingerprintRescanCore(ctx, params, p.headFingerprintRescanEnv(reporter))
+	return err
+}
+
+// headFingerprintRescanEnv is HEAD's env: the plugin's store for reads and
+// writes and HEAD's own process hooks and hand-rolled pool. A plugin with no
+// store hands the core a nil Store, which it refuses with HEAD's message (after
+// the server-decode refusal, as HEAD ordered them).
+func (p *Plugin) headFingerprintRescanEnv(reporter sdk.Reporter) fingerprintRescanEnv {
+	env := fingerprintRescanEnv{kindEnv: headEnv(reporter, true), Host: headHostHooks()}
+	if p.store != nil {
+		env.Store = p.store
+		env.Writer = headKindWriter{store: p.store}
 	}
-	if p.store == nil {
-		return fmt.Errorf("database store not available")
+	return env
+}
+
+// fingerprintRescanCore is the body of runFingerprintRescan, shared by both
+// shells. params is the raw start params, decoded here leniently (a bad body is
+// logged and means the defaults), as HEAD did.
+func fingerprintRescanCore(ctx context.Context, params json.RawMessage, env fingerprintRescanEnv) (fingerprintRescanResult, error) {
+	if err := env.Host.ServerDecodeCheck("acoustid.fingerprint-rescan"); err != nil {
+		return fingerprintRescanResult{}, err
+	}
+	if env.Store == nil {
+		return fingerprintRescanResult{}, fmt.Errorf("database store not available")
 	}
 
-	if !fingerprint.Available() {
-		return fmt.Errorf("no fingerprint backend (fpcalc / ffmpeg) found")
+	if !env.Host.FingerprintAvailable() {
+		return fingerprintRescanResult{}, fmt.Errorf("no fingerprint backend (fpcalc / ffmpeg) found")
 	}
+	store := kindView{env.Store, env.Writer}
+	log := env.Logger
 
 	var req FingerprintRescanParams
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &req); err != nil {
-			reporter.Logger().Error("failed to unmarshal params", "error", err)
+			log.Error("failed to unmarshal params", "error", err)
 			req = FingerprintRescanParams{}
 		}
 	}
@@ -99,27 +160,27 @@ func (p *Plugin) runFingerprintRescan(ctx context.Context, params json.RawMessag
 		// ok
 	case scopeBooks:
 		if len(req.BookIDs) == 0 {
-			return fmt.Errorf("book_ids is required when scope is \"books\"")
+			return fingerprintRescanResult{}, fmt.Errorf("book_ids is required when scope is \"books\"")
 		}
 	default:
-		return fmt.Errorf("scope must be one of: missing, all, books")
+		return fingerprintRescanResult{}, fmt.Errorf("scope must be one of: missing, all, books")
 	}
 
-	_ = reporter.UpdateProgress(0, 1, "Loading books for fingerprint rescan...")
+	env.Progress(0, 1, "Loading books for fingerprint rescan...")
 
-	books, lerr := loadBooksForRescan(p.store, scope, req.BookIDs)
+	books, lerr := loadBooksForRescan(store, scope, req.BookIDs)
 	if lerr != nil {
-		reporter.Logger().Error("load books", "error", lerr)
-		return fmt.Errorf("load books: %w", lerr)
+		log.Error("load books", "error", lerr)
+		return fingerprintRescanResult{}, fmt.Errorf("load books: %w", lerr)
 	}
 
 	total := len(books)
 	if total == 0 {
-		_ = reporter.UpdateProgress(1, 1, "No books matched the requested scope")
-		return nil
+		env.Progress(1, 1, "No books matched the requested scope")
+		return fingerprintRescanResult{}, nil
 	}
 
-	workers := fpRescanWorkers()
+	workers := env.Host.Workers()
 
 	var (
 		fingerprinted  atomic.Int64
@@ -152,92 +213,81 @@ func (p *Plugin) runFingerprintRescan(ctx context.Context, params json.RawMessag
 		for {
 			select {
 			case <-t.C:
-				_ = reporter.UpdateProgress(int(completedBooks.Load()), total, progressMsg())
+				env.ItemProgress(int(completedBooks.Load()), total, progressMsg())
 			case <-hbCtx.Done():
 				return
 			}
 		}
 	}()
 
-	// bookSem limits concurrent book processing to `workers`. Files within each
+	// The pool limits concurrent book processing to `workers`. Files within each
 	// book are processed sequentially — with N books running simultaneously
 	// there are already N concurrent fpcalc calls, which is enough to saturate
-	// the CPU without nested goroutine overhead.
-	bookSem := make(chan struct{}, workers)
-	var bookWg sync.WaitGroup
+	// the CPU without nested goroutine overhead. HEAD's shell runs its own
+	// semaphore pool here; the native shell the executor's.
+	if err := env.Pool(ctx, fingerprintRescanParallelism(workers), total, kindItemsOptions{}, func(ctx context.Context, bi int) error {
+		book := books[bi]
 
-	for _, b := range books {
-		select {
-		case <-ctx.Done():
-			bookWg.Wait()
-			return ctx.Err()
-		default:
+		if ctx.Err() != nil {
+			completedBooks.Add(1)
+			return nil
 		}
 
-		bookSem <- struct{}{}
-		book := b
-		bookWg.Go(func() {
-			defer func() { <-bookSem }()
-
-			if ctx.Err() != nil {
-				completedBooks.Add(1)
-				return
-			}
-
-			files, ferr := p.store.GetBookFiles(book.ID)
-			if ferr != nil {
-				completedBooks.Add(1)
-				return
-			}
-			totalFiles.Add(int64(len(files)))
-
-			for _, f := range files {
-				if ctx.Err() != nil {
-					break
-				}
-
-				outcome, reason, stop := fingerprintEligibility(f, req.Force)
-				if stop {
-					switch outcome {
-					case fingerprintOutcomeSkipped:
-						skipped.Add(1)
-					case fingerprintOutcomeIneligible:
-						ineligible.Add(1)
-						ineligibleMu.Lock()
-						ineligibleEntries = append(ineligibleEntries, ineligibleEntry{
-							BookID:    book.ID,
-							BookTitle: book.Title,
-							FilePath:  f.FilePath,
-							Reason:    reason,
-						})
-						ineligibleMu.Unlock()
-					}
-				} else {
-					switch doFingerprintFile(p.store, f, req.Force) {
-					case fingerprintOutcomeFingerprinted:
-						fingerprinted.Add(1)
-					case fingerprintOutcomeFailed:
-						failed.Add(1)
-					}
-				}
-				filesDone.Add(1)
-			}
-
-			if err := synthesizeBookSignatureForBook(p.store, book.ID); err != nil {
-				reporter.Logger().Warn("synthesize book signature", "book_id", book.ID, "error", err)
-			}
+		files, ferr := env.Store.GetBookFiles(book.ID)
+		if ferr != nil {
 			completedBooks.Add(1)
-		})
+			return nil
+		}
+		totalFiles.Add(int64(len(files)))
+
+		for _, f := range files {
+			if ctx.Err() != nil {
+				break
+			}
+
+			outcome, reason, stop := fingerprintEligibility(f, req.Force)
+			if stop {
+				switch outcome {
+				case fingerprintOutcomeSkipped:
+					skipped.Add(1)
+				case fingerprintOutcomeIneligible:
+					ineligible.Add(1)
+					ineligibleMu.Lock()
+					ineligibleEntries = append(ineligibleEntries, ineligibleEntry{
+						BookID:    book.ID,
+						BookTitle: book.Title,
+						FilePath:  f.FilePath,
+						Reason:    reason,
+					})
+					ineligibleMu.Unlock()
+				}
+			} else {
+				switch doFingerprintFile(store, f, req.Force) {
+				case fingerprintOutcomeFingerprinted:
+					fingerprinted.Add(1)
+				case fingerprintOutcomeFailed:
+					failed.Add(1)
+				}
+			}
+			filesDone.Add(1)
+		}
+
+		if err := synthesizeBookSignatureForBook(store, book.ID); err != nil {
+			log.Warn("synthesize book signature", "book_id", book.ID, "error", err)
+		}
+		completedBooks.Add(1)
+		return nil
+	}); err != nil {
+		return fingerprintRescanResult{}, err
 	}
 
-	bookWg.Wait()
 	cancelHB()
 
-	reportPath, reportErr := writeIneligibleReport(time.Now().Format("20060102-150405"), ineligibleEntries)
+	reportPath, reportErr := env.Host.WriteIneligibleReport(time.Now().Format("20060102-150405"), ineligibleEntries)
 	if reportErr != nil {
-		reporter.Logger().Warn("failed to write ineligible report", "err", reportErr)
+		log.Warn("failed to write ineligible report", "err", reportErr)
 	} else if len(ineligibleEntries) > 0 {
-		reporter.Logger().Info("ineligible file report written", "path", reportPath, "count", len(ineligibleEntries))
+		log.Info("ineligible file report written", "path", reportPath, "count", len(ineligibleEntries))
 	}
 
 	// Log reason breakdown so it's visible in journalctl without reading the file.
@@ -251,14 +301,18 @@ func (p *Plugin) runFingerprintRescan(ctx context.Context, params json.RawMessag
 			}
 			counts[key]++
 		}
-		reporter.Logger().Info("ineligible reason breakdown", "reasons", counts)
+		log.Info("ineligible reason breakdown", "reasons", counts)
 	}
 
-	_ = reporter.UpdateProgress(total, total,
+	env.Progress(total, total,
 		fmt.Sprintf("Fingerprint rescan complete in %s — fp=%d skip=%d ineligible=%d fail=%d (of %d books, %d files)",
 			time.Since(startedAt).Round(time.Second),
 			fingerprinted.Load(), skipped.Load(), ineligible.Load(), failed.Load(), total, filesDone.Load()))
-	return nil
+	return fingerprintRescanResult{
+		Books: total, Files: int(filesDone.Load()), Fingerprinted: int(fingerprinted.Load()),
+		Skipped: int(skipped.Load()), Ineligible: int(ineligible.Load()), Failed: int(failed.Load()),
+		ReportPath: reportPath,
+	}, nil
 }
 
 // writeIneligibleReport writes ineligible entries as JSONL sorted by reason
