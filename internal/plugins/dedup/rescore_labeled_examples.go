@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/rescore_labeled_examples.go
-// version: 1.2.4
+// version: 1.3.0
 // guid: 3e9c1a70-5d84-4b62-8f01-6a2d7c0e9b53
-// last-edited: 2026-11-09
+// last-edited: 2026-11-18
 
 // Package dedup — op dedup.rescore-labeled-examples.
 //
@@ -48,13 +48,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"runtime"
 	"sync"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -83,16 +83,12 @@ type labeledExampleStore interface {
 // dedup.rescore-labeled-examples.
 func (p *Plugin) rescoreLabeledExamplesDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "dedup.rescore-labeled-examples",
-		Preview:     sdk.PreviewSpec{Params: rescoreLabeledExamplesParams{}},
-		Liveness:    sdk.LivenessRunItems,
-		Plugin:      "dedup",
-		DisplayName: "Rescore labeled examples (populate ScoreBreakdowns for calibration)",
-		Description: "Recomputes each labeled dedup pair's ScoreBreakdown with the engine's " +
-			"existing scorer and narrow-writes it onto the LabeledExample, INCLUDING below-band " +
-			"and dismissed pairs, so dedup.calibrate-composite can meet its per-class coverage " +
-			"floor. Dry-run by default; apply=true writes only Score/ScoreBreakdown/Band, never " +
-			"the label fields.",
+		ID:              "dedup.rescore-labeled-examples",
+		Preview:         sdk.PreviewSpec{Params: rescoreLabeledExamplesParams{}},
+		Liveness:        sdk.LivenessRunItems,
+		Plugin:          "dedup",
+		DisplayName:     "Rescore labeled examples (populate ScoreBreakdowns for calibration)",
+		Description:     rescoreLabeledExamplesHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityNormal,
 		ConcurrencyKey:  "dedup.rescore-labeled-examples",
@@ -132,39 +128,71 @@ type aGroup struct {
 	refs []labeledRef
 }
 
-// runRescoreLabeledExamplesWith is the testable core: it lists labeled examples,
-// groups them by canonical A, scores each group through the engine's real scorer
-// in a bounded worker pool, and (apply=true) narrow-writes the recomputed
-// breakdown onto each LabeledExample.
-func runRescoreLabeledExamplesWith(
-	ctx context.Context,
-	scorer pairScorer,
-	store labeledExampleStore,
-	rawParams json.RawMessage,
-	reporter sdk.Reporter,
-) error {
-	var params rescoreLabeledExamplesParams
-	if len(rawParams) > 0 {
-		if err := json.Unmarshal(rawParams, &params); err != nil {
-			return fmt.Errorf("parse params: %w", err)
-		}
-	}
+// rescoreLabeledExamplesKind is rule R3's native kind for
+// dedup.rescore-labeled-examples.
+const rescoreLabeledExamplesKind = tasks.Kind("books.dedup.rescore-labeled-examples")
 
-	log := reporter.Logger()
-	log.Info("rescore-labeled-examples start", "apply", params.Apply)
+// rescoreLabeledExamplesHelp is HEAD's Description and the native Help (rule R5).
+const rescoreLabeledExamplesHelp = "Recomputes each labeled dedup pair's ScoreBreakdown with the engine's " +
+	"existing scorer and narrow-writes it onto the LabeledExample, INCLUDING below-band " +
+	"and dismissed pairs, so dedup.calibrate-composite can meet its per-class coverage " +
+	"floor. Dry-run by default; apply=true writes only Score/ScoreBreakdown/Band, never " +
+	"the label fields."
+
+// rescoreLabeledExamplesStore is the reads the core takes.
+type rescoreLabeledExamplesStore interface {
+	ListLabeledExamples(f database.LabeledExampleFilter) ([]database.LabeledExample, error)
+	GetLabeledExample(candidateID int64) (*database.LabeledExample, error)
+}
+
+// rescoreLabeledExamplesWriter is the one write the core makes.
+type rescoreLabeledExamplesWriter interface {
+	UpsertLabeledExample(ex database.LabeledExample) error
+}
+
+// rescoreLabeledExamplesEnv is what the core takes from its shell. Live is
+// HEAD's apply=true; a dry run never calls Writer, which may then be nil. Scorer
+// is read-only (ScorePairsForBook persists nothing).
+type rescoreLabeledExamplesEnv struct {
+	kindEnv
+	Scorer pairScorer
+	Store  rescoreLabeledExamplesStore
+	Writer rescoreLabeledExamplesWriter
+}
+
+// rescoreLabeledExamplesResult is the native run's result. HEAD stored none.
+type rescoreLabeledExamplesResult struct {
+	TotalLabeled      int `json:"total_labeled"`
+	ScoredTrueDup     int `json:"scored_true_dup"`
+	ScoredNotDup      int `json:"scored_not_dup"`
+	ZeroSignalTrueDup int `json:"zero_signal_true_dup"`
+	ZeroSignalNotDup  int `json:"zero_signal_not_dup"`
+	WouldWrite        int `json:"would_write"`
+	Wrote             int `json:"wrote"`
+	HumanPreserved    int `json:"human_labels_preserved"`
+	UpsertErrors      int `json:"upsert_errors"`
+}
+
+// rescoreLabeledExamplesCore is the body of runRescoreLabeledExamplesWith,
+// shared by both shells: it lists labeled examples, groups them by canonical A,
+// scores each group through the engine's real scorer on the CPU pool, and (Live)
+// narrow-writes the recomputed breakdown onto each LabeledExample.
+func rescoreLabeledExamplesCore(ctx context.Context, env rescoreLabeledExamplesEnv) (rescoreLabeledExamplesResult, error) {
+	log := env.Logger
+	log.Info("rescore-labeled-examples start", "apply", env.Live)
 
 	// --- Load the calibration classes (true_dup + not_dup, incl. dismissed) ---
-	_ = reporter.UpdateProgress(0, 3, "Loading labeled examples…")
-	trueDup, err := store.ListLabeledExamples(database.LabeledExampleFilter{Label: "true_dup", Limit: 1_000_000})
+	env.Progress(0, 3, "Loading labeled examples…")
+	trueDup, err := env.Store.ListLabeledExamples(database.LabeledExampleFilter{Label: "true_dup", Limit: 1_000_000})
 	if err != nil {
-		return fmt.Errorf("list true_dup examples: %w", err)
+		return rescoreLabeledExamplesResult{}, fmt.Errorf("list true_dup examples: %w", err)
 	}
-	notDup, err := store.ListLabeledExamples(database.LabeledExampleFilter{Label: "not_dup", Limit: 1_000_000})
+	notDup, err := env.Store.ListLabeledExamples(database.LabeledExampleFilter{Label: "not_dup", Limit: 1_000_000})
 	if err != nil {
-		return fmt.Errorf("list not_dup examples: %w", err)
+		return rescoreLabeledExamplesResult{}, fmt.Errorf("list not_dup examples: %w", err)
 	}
-	if reporter.IsCanceled() {
-		return context.Canceled
+	if env.Canceled() {
+		return rescoreLabeledExamplesResult{}, context.Canceled
 	}
 
 	// --- Group by canonical A book ---
@@ -202,7 +230,7 @@ func runRescoreLabeledExamplesWith(
 		"a_groups", len(groups))
 
 	// --- Score + (apply) persist, sharded across A-groups ---
-	_ = reporter.UpdateProgress(1, 3, fmt.Sprintf("Scoring %d labeled pairs across %d A-groups…", totalLabeled, len(groups)))
+	env.Progress(1, 3, fmt.Sprintf("Scoring %d labeled pairs across %d A-groups…", totalLabeled, len(groups)))
 
 	var (
 		mu             sync.Mutex
@@ -220,8 +248,11 @@ func runRescoreLabeledExamplesWith(
 		skippedNoBook  int
 	)
 
-	err = registry.RunItems(ctx, reporter, groups, func(ctx context.Context, g aGroup) error {
-		if reporter.IsCanceled() {
+	err = env.Items(ctx, tasks.CPU(), len(groups), kindItemsOptions{
+		PureLabel: func(i, total int) string { return fmt.Sprintf("Scored %d/%d A-groups…", i+1, total) },
+	}, func(ctx context.Context, gi int) error {
+		g := groups[gi]
+		if env.Canceled() {
 			return context.Canceled
 		}
 
@@ -230,7 +261,7 @@ func runRescoreLabeledExamplesWith(
 			inputs[i] = dedupengine.RescorePairInput{OtherID: r.otherID, EmbeddingCos: r.embeddingCos}
 		}
 
-		results, sErr := scorer.ScorePairsForBook(ctx, g.aID, inputs)
+		results, sErr := env.Scorer.ScorePairsForBook(ctx, g.aID, inputs)
 		if sErr != nil {
 			mu.Lock()
 			scoreErrs += len(g.refs)
@@ -277,12 +308,12 @@ func runRescoreLabeledExamplesWith(
 			wouldWrite++
 			mu.Unlock()
 
-			if !params.Apply {
+			if !env.Live {
 				continue
 			}
 
 			// --- NARROW read-modify-write (data safety) ---
-			cur, gErr := store.GetLabeledExample(ref.candidateID)
+			cur, gErr := env.Store.GetLabeledExample(ref.candidateID)
 			if gErr != nil {
 				mu.Lock()
 				getErrs++
@@ -314,7 +345,7 @@ func runRescoreLabeledExamplesWith(
 			cur.ScoreBreakdown = raw
 			cur.Band = res.Score.Band
 
-			if uErr := store.UpsertLabeledExample(*cur); uErr != nil {
+			if uErr := env.Writer.UpsertLabeledExample(*cur); uErr != nil {
 				log.Error("rescore-labeled-examples: upsert error", "candidate_id", ref.candidateID, "error", uErr)
 				mu.Lock()
 				upsertErrs++
@@ -329,20 +360,15 @@ func runRescoreLabeledExamplesWith(
 			mu.Unlock()
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: runtime.NumCPU(),
-		Label: func(i, total int) string {
-			return fmt.Sprintf("Scored %d/%d A-groups…", i+1, total)
-		},
 	})
 	if err != nil {
-		return err
+		return rescoreLabeledExamplesResult{}, err
 	}
 
 	// --- Report (zero_signal-by-class is the decision input for a follow-up) ---
-	_ = reporter.UpdateProgress(2, 3, "Summarizing…")
+	env.Progress(2, 3, "Summarizing…")
 	log.Info("rescore-labeled-examples report",
-		"apply", params.Apply,
+		"apply", env.Live,
 		"total_labeled", totalLabeled,
 		"scored_true_dup", scoredTrue,
 		"scored_not_dup", scoredNot,
@@ -362,10 +388,35 @@ func runRescoreLabeledExamplesWith(
 		"scored true_dup=%d not_dup=%d; zero_signal true_dup=%d not_dup=%d; would_write=%d wrote=%d human_preserved=%d upsert_errs=%d",
 		scoredTrue, scoredNot, zeroSignalTrue, zeroSignalNot, wouldWrite, wrote, humanPreserved, upsertErrs)
 
-	if !params.Apply {
-		_ = reporter.UpdateProgress(3, 3, "Dry-run — "+summary+". Pass apply=true to persist ScoreBreakdowns.")
+	if !env.Live {
+		env.Progress(3, 3, "Dry-run — "+summary+". Pass apply=true to persist ScoreBreakdowns.")
 	} else {
-		_ = reporter.UpdateProgress(3, 3, "Complete — "+summary+".")
+		env.Progress(3, 3, "Complete — "+summary+".")
 	}
-	return nil
+	return rescoreLabeledExamplesResult{
+		TotalLabeled: totalLabeled, ScoredTrueDup: scoredTrue, ScoredNotDup: scoredNot,
+		ZeroSignalTrueDup: zeroSignalTrue, ZeroSignalNotDup: zeroSignalNot,
+		WouldWrite: wouldWrite, Wrote: wrote, HumanPreserved: humanPreserved, UpsertErrors: upsertErrs,
+	}, nil
+}
+
+// runRescoreLabeledExamplesWith is the v2 shell over the testable core: HEAD's
+// params parse and the store as both read and write side.
+func runRescoreLabeledExamplesWith(
+	ctx context.Context,
+	scorer pairScorer,
+	store labeledExampleStore,
+	rawParams json.RawMessage,
+	reporter sdk.Reporter,
+) error {
+	var params rescoreLabeledExamplesParams
+	if len(rawParams) > 0 {
+		if err := json.Unmarshal(rawParams, &params); err != nil {
+			return fmt.Errorf("parse params: %w", err)
+		}
+	}
+	_, err := rescoreLabeledExamplesCore(ctx, rescoreLabeledExamplesEnv{
+		kindEnv: headEnv(reporter, params.Apply), Scorer: scorer, Store: store, Writer: store,
+	})
+	return err
 }
