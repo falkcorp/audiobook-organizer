@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_phantom_repair.go
-// version: 1.4.4
+// version: 1.5.0
 // guid: 7c2dfefe-ccbe-4a60-b69b-5baee504d537
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -22,10 +21,13 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance/resources"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/library"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // maintenance.series-phantom-repair — SERIES-PHANTOM-REPAIR (TODO.md).
@@ -164,6 +166,13 @@ type seriesPhantomRepairResult struct {
 	Aborted         string         `json:"aborted,omitempty"`
 }
 
+// seriesPhantomRepairHelp is the def's Description, which the native kind
+// carries as its Help.
+const seriesPhantomRepairHelp = "Lists every books.series_id value with no matching series row, grouped by how many books hold it (mode \"report\", the default). Two repairs, both dry-run by default and journaled to the undo ledger: mode \"null\" clears the dangling series_id on every holder; mode \"recreate\" creates a series row from an operator-supplied name (params.names[\"<id>\"]) and repoints the holders to it. Nothing is ever deleted."
+
+// seriesPhantomRepairKind is rule R3's kind for the def below.
+const seriesPhantomRepairKind = tasks.Kind("books.maintenance.series-phantom-repair")
+
 func (p *Plugin) seriesPhantomRepairDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              seriesPhantomRepairOpID,
@@ -171,7 +180,7 @@ func (p *Plugin) seriesPhantomRepairDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Report / repair phantom series IDs",
-		Description:     "Lists every books.series_id value with no matching series row, grouped by how many books hold it (mode \"report\", the default). Two repairs, both dry-run by default and journaled to the undo ledger: mode \"null\" clears the dangling series_id on every holder; mode \"recreate\" creates a series row from an operator-supplied name (params.names[\"<id>\"]) and repoints the holders to it. Nothing is ever deleted.",
+		Description:     seriesPhantomRepairHelp,
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  seriesPhantomRepairOpID,
@@ -227,15 +236,9 @@ func seriesPhantomStartCheck(params map[string]json.RawMessage, live bool) error
 // assert on the result struct instead of scraping log lines. It returns the
 // result whenever the census completed, even when the apply then failed.
 func (p *Plugin) seriesPhantomRepair(ctx context.Context, params seriesPhantomRepairParams, reporter sdk.Reporter) (*seriesPhantomRepairResult, error) {
-	mode := params.Mode
-	if mode == "" {
-		mode = seriesPhantomModeReport
-	}
-	switch mode {
-	case seriesPhantomModeReport, seriesPhantomModeNull, seriesPhantomModeRecreate:
-	default:
-		return nil, fmt.Errorf("series-phantom-repair: unknown mode %q (want %q, %q or %q)",
-			mode, seriesPhantomModeReport, seriesPhantomModeNull, seriesPhantomModeRecreate)
+	mode, err := seriesPhantomMode(params.Mode)
+	if err != nil {
+		return nil, err
 	}
 	// Dry run is the default for BOTH repairs and is not a choice for the report.
 	// The two spellings are resolved for every mode, so a body that states them
@@ -244,20 +247,210 @@ func (p *Plugin) seriesPhantomRepair(ctx context.Context, params seriesPhantomRe
 	if modeErr != nil {
 		return nil, modeErr
 	}
-	if mode == seriesPhantomModeReport {
-		dryRun = true
-	}
 
 	store := p.deps.OpsStore()
 	if store == nil {
 		return nil, fmt.Errorf("series-phantom-repair: no store")
 	}
-	log := reporter.Logger()
+	env := seriesPhantomRepairEnv{
+		t6g7Env: t6g7HeadEnv(reporter, !dryRun),
+		Store:   seriesPhantomHeadReads{store},
+		Writer:  store,
+		ResolveReport: func(explicit string) (string, error) {
+			return p.resolveReportPath(explicit, opReportFileName(reporter, "series-phantom-repair"))
+		},
+		InvalidateSeriesCache: p.deps.InvalidateSeriesCache,
+	}
+	env.StandDown = t6g7HeadStandDown(p.deps, reporter)
+	return seriesPhantomRepairCore(ctx, mode, dryRun, params, env)
+}
+
+// seriesPhantomMode is params.mode with its default, refusing an unknown one.
+func seriesPhantomMode(mode string) (string, error) {
+	if mode == "" {
+		mode = seriesPhantomModeReport
+	}
+	switch mode {
+	case seriesPhantomModeReport, seriesPhantomModeNull, seriesPhantomModeRecreate:
+		return mode, nil
+	}
+	return "", fmt.Errorf("series-phantom-repair: unknown mode %q (want %q, %q or %q)",
+		mode, seriesPhantomModeReport, seriesPhantomModeNull, seriesPhantomModeRecreate)
+}
+
+// seriesPhantomReads is every read the op makes.
+type seriesPhantomReads interface {
+	// GetAllSeriesBookRefCounts is the UNFILTERED series reference count
+	// (database.SeriesBookRefStore): no filtered stand-in exists, and a store that
+	// cannot answer it fails the run.
+	GetAllSeriesBookRefCounts() (map[int]int, error)
+	GetAllSeries() ([]database.Series, error)
+	GetAllBooksCoreComplete(limit, offset int) ([]database.BookCore, error)
+	ListSoftDeletedBooks(limit, offset int, olderThan *time.Time) ([]database.Book, error)
+	GetSeriesByName(name string, authorID *int) (*database.Series, error)
+	GetBookByID(id string) (*database.Book, error)
+	database.MetadataFieldStateReader
+}
+
+// seriesPhantomWriter is the op's three writes: a recreated series row, a book's
+// series_id under the book's write lock, and the undo-ledger row that precedes it.
+type seriesPhantomWriter interface {
+	CreateSeries(name string, authorID *int) (*database.Series, error)
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+	CreateOperationChange(change *database.OperationChange) error
+}
+
+// seriesPhantomRepointStore is what ONE book's repoint needs: a read of the row
+// and its field locks, then the ledger row and the book write.
+type seriesPhantomRepointStore interface {
+	GetBookByID(id string) (*database.Book, error)
+	database.MetadataFieldStateReader
+	seriesPhantomWriter
+}
+
+// seriesPhantomRW is the repoint's store over the run's two sides: the reads of
+// env.Store, the writes of env.Writer.
+type seriesPhantomRW struct {
+	r seriesPhantomReads
+	w seriesPhantomWriter
+}
+
+func (s seriesPhantomRW) GetBookByID(id string) (*database.Book, error) { return s.r.GetBookByID(id) }
+func (s seriesPhantomRW) GetMetadataFieldStates(id string) ([]database.MetadataFieldState, error) {
+	return s.r.GetMetadataFieldStates(id)
+}
+func (s seriesPhantomRW) GetUserPreference(key string) (*database.UserPreference, error) {
+	return s.r.GetUserPreference(key)
+}
+func (s seriesPhantomRW) CreateSeries(name string, authorID *int) (*database.Series, error) {
+	return s.w.CreateSeries(name, authorID)
+}
+func (s seriesPhantomRW) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	return s.w.ModifyBook(id, fn)
+}
+func (s seriesPhantomRW) CreateOperationChange(c *database.OperationChange) error {
+	return s.w.CreateOperationChange(c)
+}
+
+// seriesPhantomHeadReads is HEAD's reads: the unfiltered count resolves through
+// the store's capability (database.SeriesRefCounts), which fails closed.
+type seriesPhantomHeadReads struct {
+	seriesPhantomHeadBase
+}
+
+// seriesPhantomHeadBase is the reads HEAD's store answers directly.
+type seriesPhantomHeadBase interface {
+	GetAllSeries() ([]database.Series, error)
+	GetAllBooksCoreComplete(limit, offset int) ([]database.BookCore, error)
+	ListSoftDeletedBooks(limit, offset int, olderThan *time.Time) ([]database.Book, error)
+	GetSeriesByName(name string, authorID *int) (*database.Series, error)
+	GetBookByID(id string) (*database.Book, error)
+	database.MetadataFieldStateReader
+}
+
+func (s seriesPhantomHeadReads) GetAllSeriesBookRefCounts() (map[int]int, error) {
+	return database.SeriesRefCounts(s.seriesPhantomHeadBase)
+}
+
+// seriesPhantomRepairEnv is what the core takes from its shell.
+type seriesPhantomRepairEnv struct {
+	t6g7Env
+	Store seriesPhantomReads
+	// Writer is nil in a dry run (HEAD) or a Preview run (native): the plan is
+	// built and counted, nothing is created or written.
+	Writer seriesPhantomWriter
+	// ResolveReport confines params.report_path to the run's report directory.
+	ResolveReport func(explicit string) (string, error)
+	// InvalidateSeriesCache drops the series list and book-count caches after a
+	// write changed them.
+	InvalidateSeriesCache func()
+}
+
+// seriesPhantomRepairParallelism is the apply loop's concurrency, one worker per
+// core as HEAD's pool ran. Every item is a different book (a book has one
+// series_id), so no two workers write the same row.
+func seriesPhantomRepairParallelism() tasks.Parallelism { return tasks.CPU() }
+
+// seriesPhantomRepairNative is the native kind. Preview is the dry run HEAD's
+// default was; Live applies mode "null" or "recreate". Mode "report" only
+// reports, so a Live run of it is refused as HEAD's start check refused it.
+func (p *Plugin) seriesPhantomRepairNative(deps t6g7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g7Common(seriesPhantomRepairKind, sched)
+	c.Title = "Report / repair phantom series IDs"
+	c.Help = seriesPhantomRepairHelp
+	c.Effects = tasks.Writes(t6g7Res(resources.Union(t6WriterResources["CreateSeries"],
+		t6WriterResources["ModifyBook"], t6WriterResources["CreateOperationChange"],
+		[]ops.Resource{ops.ResFiles})...)...)
+	// HEAD: ResumeRestart, and the body reads no checkpoint: the census and the
+	// plan are rebuilt from the store, and a book already repointed no longer
+	// holds a phantom id.
+	c.Resume = tasks.ResumeFromZero
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.series-phantom-repair")
+	c.Timeout = 2 * time.Hour
+	return tasks.Task(seriesPhantomRepairKind, tasks.TaskSpec[json.RawMessage, *seriesPhantomRepairResult]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (*seriesPhantomRepairResult, error) {
+			params, err := t6g7DecodeNative[seriesPhantomRepairParams](seriesPhantomRepairKind, raw)
+			if err != nil {
+				return nil, err
+			}
+			mode, err := seriesPhantomMode(params.Mode)
+			if err != nil {
+				return nil, err
+			}
+			live := rc.Mode() == tasks.ModeLive
+			if live && mode == seriesPhantomModeReport {
+				return nil, fmt.Errorf("a live run of %s needs mode %q or %q in params; mode %q only reports",
+					seriesPhantomRepairOpID, seriesPhantomModeNull, seriesPhantomModeRecreate, seriesPhantomModeReport)
+			}
+			for _, d := range []struct {
+				name string
+				set  bool
+			}{{"Store", deps.Store != nil}, {"ResolveReportPath", deps.ResolveReportPath != nil},
+				{"InvalidateSeriesCache", deps.InvalidateSeriesCache != nil}} {
+				if err := t6g7NeedDep(seriesPhantomRepairKind, d.name, d.set); err != nil {
+					return nil, err
+				}
+			}
+			env := seriesPhantomRepairEnv{
+				t6g7Env: t6g7NativeEnv(rc),
+				Store:   deps.Store,
+				ResolveReport: func(explicit string) (string, error) {
+					return deps.ResolveReportPath(explicit, "series-phantom-repair-"+string(rc.RunID())+".tsv")
+				},
+				InvalidateSeriesCache: deps.InvalidateSeriesCache,
+			}
+			if live {
+				w, err := t6g7NewWriter(seriesPhantomRepairKind, deps, rc)
+				if err != nil {
+					return nil, err
+				}
+				env.Writer = w
+				env.StandDown = t6g7NativeStandDown(rc, deps.StandDownKey)
+			}
+			return seriesPhantomRepairCore(rc.Context(), mode, !live, params, env)
+		},
+	})
+}
+
+// seriesPhantomRepairCore is the body of seriesPhantomRepair; mode is validated
+// and dryRun decided by the shell (a report is always a dry run).
+func seriesPhantomRepairCore(ctx context.Context, mode string, dryRun bool, params seriesPhantomRepairParams, env seriesPhantomRepairEnv) (*seriesPhantomRepairResult, error) {
+	if mode == seriesPhantomModeReport {
+		dryRun = true
+	}
+	if env.Store == nil {
+		return nil, fmt.Errorf("series-phantom-repair: no store")
+	}
+	if !dryRun && env.Writer == nil {
+		return nil, fmt.Errorf("series-phantom-repair: no writer for a live run")
+	}
 
 	// The caller's report_path is confined to {root_dir}/.reports before any read,
 	// so a path that would escape it is refused with nothing done.
 	if params.ReportPath != "" {
-		resolved, rpErr := p.resolveReportPath(params.ReportPath, opReportFileName(reporter, "series-phantom-repair"))
+		resolved, rpErr := env.ResolveReport(params.ReportPath)
 		if rpErr != nil {
 			return nil, fmt.Errorf("series-phantom-repair: %w", rpErr)
 		}
@@ -267,11 +460,11 @@ func (p *Plugin) seriesPhantomRepair(ctx context.Context, params seriesPhantomRe
 	// 1. The denominator: every series id any book row references, in ANY
 	// state. Fails CLOSED. A filtered count is the exact instrument that created
 	// the phantoms, and this op must not measure them with it.
-	refCounts, err := database.SeriesRefCounts(store)
+	refCounts, err := env.Store.GetAllSeriesBookRefCounts()
 	if err != nil {
 		return nil, fmt.Errorf("series-phantom-repair: refusing to run without unfiltered reference counts: %w", err)
 	}
-	allSeries, err := store.GetAllSeries()
+	allSeries, err := env.Store.GetAllSeries()
 	if err != nil {
 		return nil, fmt.Errorf("series-phantom-repair: GetAllSeries: %w", err)
 	}
@@ -295,7 +488,7 @@ func (p *Plugin) seriesPhantomRepair(ctx context.Context, params seriesPhantomRe
 		Skipped:               map[string]int{},
 	}
 	if len(groups) == 0 {
-		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("series-phantom-repair: %d series referenced, %d exist, 0 phantom ids", len(refCounts), len(allSeries)))
+		env.Log(slog.LevelInfo, fmt.Sprintf("series-phantom-repair: %d series referenced, %d exist, 0 phantom ids", len(refCounts), len(allSeries)))
 		return result, nil
 	}
 
@@ -303,7 +496,7 @@ func (p *Plugin) seriesPhantomRepair(ctx context.Context, params seriesPhantomRe
 	// known to be short would otherwise hide holders and make a phantom look
 	// smaller than it is); trashed rows from the soft-deleted lister. Anything
 	// the counter sees beyond those two is "unseen" and stays reported.
-	live, err := store.GetAllBooksCoreComplete(0, 0)
+	live, err := env.Store.GetAllBooksCoreComplete(0, 0)
 	if err != nil {
 		return nil, fmt.Errorf("series-phantom-repair: refusing to enumerate holders from an incomplete listing: %w", err)
 	}
@@ -319,7 +512,7 @@ func (p *Plugin) seriesPhantomRepair(ctx context.Context, params seriesPhantomRe
 		g.Live++
 		g.holders = append(g.holders, seriesPhantomHolder{SeriesID: g.SeriesID, BookID: b.ID, Title: b.Title, AuthorID: b.AuthorID})
 	}
-	trashed, err := store.ListSoftDeletedBooks(0, 0, nil)
+	trashed, err := env.Store.ListSoftDeletedBooks(0, 0, nil)
 	if err != nil {
 		return nil, fmt.Errorf("series-phantom-repair: ListSoftDeletedBooks: %w", err)
 	}
@@ -374,23 +567,23 @@ func (p *Plugin) seriesPhantomRepair(ctx context.Context, params seriesPhantomRe
 		result.TopGroups = append(result.TopGroups, *g)
 	}
 
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+	env.Log(slog.LevelInfo, fmt.Sprintf(
 		"series-phantom-repair: %d phantom series id(s) held by %d live + %d trashed book(s) (%d reference(s) unseen by either listing); by holder count: %s",
 		result.PhantomSeries, result.BooksLive, result.BooksTrashed, result.BooksUnseen, formatHolderHistogram(result.PhantomsByHolderCount)))
 	for i, g := range sorted {
 		if i >= seriesPhantomLogGroups {
-			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("series-phantom-repair: … %d more phantom id(s); pass report_path for the full list", len(sorted)-i))
+			env.Log(slog.LevelInfo, fmt.Sprintf("series-phantom-repair: … %d more phantom id(s); pass report_path for the full list", len(sorted)-i))
 			break
 		}
-		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("series-phantom-repair: series_id=%d refs=%d live=%d trashed=%d unseen=%d titles=%q",
+		env.Log(slog.LevelInfo, fmt.Sprintf("series-phantom-repair: series_id=%d refs=%d live=%d trashed=%d unseen=%d titles=%q",
 			g.SeriesID, g.RefCount, g.Live, g.Trashed, g.Unseen, g.SampleTitles))
 	}
 	if params.ReportPath != "" {
 		if werr := writeSeriesPhantomReport(params.ReportPath, sorted); werr != nil {
 			// Not fatal: the counts above are still the answer. Loud, because a
 			// missing TSV is the one artifact the operator asked for by name.
-			log.Error("series-phantom-repair: report write failed", "path", params.ReportPath, "err", werr)
-			_ = reporter.Log(slog.LevelError, fmt.Sprintf("series-phantom-repair: report NOT written to %s: %v", params.ReportPath, werr))
+			env.Logger.Error("series-phantom-repair: report write failed", "path", params.ReportPath, "err", werr)
+			env.Log(slog.LevelError, fmt.Sprintf("series-phantom-repair: report NOT written to %s: %v", params.ReportPath, werr))
 		} else {
 			result.ReportPath = params.ReportPath
 		}
@@ -424,7 +617,7 @@ func (p *Plugin) seriesPhantomRepair(ctx context.Context, params seriesPhantomRe
 			}
 			authorID := majorityAuthorID(g.holders)
 			var targetID int
-			if existing, gerr := store.GetSeriesByName(name, authorID); gerr == nil && existing != nil {
+			if existing, gerr := env.Store.GetSeriesByName(name, authorID); gerr == nil && existing != nil {
 				targetID = existing.ID
 			} else if dryRun {
 				// Would create. A placeholder id keeps the plan countable
@@ -432,9 +625,9 @@ func (p *Plugin) seriesPhantomRepair(ctx context.Context, params seriesPhantomRe
 				targetID = -1
 				result.SeriesRecreated++
 			} else {
-				created, cerr := store.CreateSeries(name, authorID)
+				created, cerr := env.Writer.CreateSeries(name, authorID)
 				if cerr != nil || created == nil {
-					log.Warn("series-phantom-repair: CreateSeries failed; holders left as they are", "phantom_series_id", g.SeriesID, "name", name, "err", cerr)
+					env.Logger.Warn("series-phantom-repair: CreateSeries failed; holders left as they are", "phantom_series_id", g.SeriesID, "name", name, "err", cerr)
 					result.Failed += len(g.holders)
 					continue
 				}
@@ -460,7 +653,7 @@ func (p *Plugin) seriesPhantomRepair(ctx context.Context, params seriesPhantomRe
 				result.Repointed++
 			}
 		}
-		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+		env.Log(slog.LevelInfo, fmt.Sprintf(
 			"series-phantom-repair DRY RUN (mode=%s): would clear series_id on %d book(s), recreate %d series and repoint %d book(s); skipped %v. Pass {\"dry_run\": false} to apply.",
 			mode, result.Nulled, result.SeriesRecreated, result.Repointed, result.Skipped))
 		return result, nil
@@ -468,21 +661,29 @@ func (p *Plugin) seriesPhantomRepair(ctx context.Context, params seriesPhantomRe
 
 	// 5. Apply. Hold the scan stand-down: a concurrent library.scan rewrites
 	// the same book rows this op edits.
-	holderID, held, release, sdErr := acquireScanStandDownForApply(ctx, p.deps, reporter, "series-phantom-repair apply")
+	if env.StandDown == nil {
+		return nil, fmt.Errorf("series-phantom-repair: no scan stand-down available; refusing to write")
+	}
+	hold, sdErr := env.StandDown(ctx, "series-phantom-repair apply")
 	if sdErr != nil {
 		return nil, fmt.Errorf("series-phantom-repair: could not acquire scan stand-down; refusing to write: %w", sdErr)
 	}
-	defer release()
+	defer hold.Release()
 
-	opID := registry.ReporterOpID(reporter)
+	opID := env.OpID
 	if opID == "" {
-		log.Warn("series-phantom-repair: no operation id; undo-ledger rows will be uncorrelated (replay by book_id still works)")
+		env.Logger.Warn("series-phantom-repair: no operation id; undo-ledger rows will be uncorrelated (replay by book_id still works)")
 	}
 
 	var mu sync.Mutex
 	aborted := false
-	runErr := registry.RunItems(ctx, reporter, plan, func(ctx context.Context, w plannedWrite) error {
-		if scanStandDownLostForApply(p.deps, holderID, held) {
+	runErr := env.Items(ctx, seriesPhantomRepairParallelism(), len(plan), t6g7ItemsOptions{
+		// Disjoint by construction: every plannedWrite is a different book (a
+		// book has one series_id, so it appears under one phantom id once).
+		PureLabel: func(i, total int) string { return fmt.Sprintf("book %d/%d", i+1, total) },
+	}, func(ctx context.Context, i int) error {
+		w := plan[i]
+		if hold.Lost() {
 			mu.Lock()
 			if !aborted {
 				aborted = true
@@ -491,13 +692,13 @@ func (p *Plugin) seriesPhantomRepair(ctx context.Context, params seriesPhantomRe
 			mu.Unlock()
 			return errSeriesPhantomStandDownLost
 		}
-		outcome, ferr := seriesPhantomRepointOne(store, opID, w.holder, w.target)
+		outcome, ferr := seriesPhantomRepointOne(seriesPhantomRW{r: env.Store, w: env.Writer}, opID, w.holder, w.target)
 		mu.Lock()
 		defer mu.Unlock()
 		switch {
 		case ferr != nil:
 			result.Failed++
-			log.Warn("series-phantom-repair: book left as it was", "book_id", w.holder.BookID, "phantom_series_id", w.holder.SeriesID, "err", ferr)
+			env.Logger.Warn("series-phantom-repair: book left as it was", "book_id", w.holder.BookID, "phantom_series_id", w.holder.SeriesID, "err", ferr)
 		case outcome != "":
 			result.Skipped[outcome]++
 		case w.target == nil:
@@ -506,21 +707,13 @@ func (p *Plugin) seriesPhantomRepair(ctx context.Context, params seriesPhantomRe
 			result.Repointed++
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		// Disjoint by construction: every plannedWrite is a different book (a
-		// book has one series_id, so it appears under one phantom id once).
-		Concurrency: runtime.NumCPU(),
-		ErrMode:     registry.ErrModeFail,
-		Label: func(i, total int) string {
-			return fmt.Sprintf("book %d/%d", i+1, total)
-		},
 	})
 
 	if result.Nulled > 0 || result.Repointed > 0 || result.SeriesRecreated > 0 {
 		// Series book counts (and, for recreate, the list itself) changed.
-		p.deps.InvalidateSeriesCache()
+		env.InvalidateSeriesCache()
 	}
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+	env.Log(slog.LevelInfo, fmt.Sprintf(
 		"series-phantom-repair APPLY (mode=%s): cleared %d, recreated %d series, repointed %d, skipped %v, failed %d%s",
 		mode, result.Nulled, result.SeriesRecreated, result.Repointed, result.Skipped, result.Failed,
 		map[bool]string{true: "; ABORTED: " + result.Aborted, false: ""}[result.Aborted != ""]))
@@ -546,7 +739,7 @@ func (p *Plugin) seriesPhantomRepair(ctx context.Context, params seriesPhantomRe
 //     than a dangling id that survives to the next run.
 //
 // It returns a non-empty skip reason, or an error for a failed step.
-func seriesPhantomRepointOne(store OpsStore, opID string, h seriesPhantomHolder, target *int) (skip string, err error) {
+func seriesPhantomRepointOne(store seriesPhantomRepointStore, opID string, h seriesPhantomHolder, target *int) (skip string, err error) {
 	full, err := store.GetBookByID(h.BookID)
 	if err != nil {
 		return "", fmt.Errorf("GetBookByID: %w", err)
