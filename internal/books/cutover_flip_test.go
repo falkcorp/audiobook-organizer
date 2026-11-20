@@ -207,6 +207,11 @@ func TestFlipConfigNames_DarkUntilDeclared(t *testing.T) {
 	gotham := filepath.Join(t.TempDir(), "gotham.pebble")
 	withConfig(t, config.Config{DatabasePath: gotham})
 	t.Setenv(storagePathEnv, gotham)
+	// The flip is declared in the build now; the dark gate stays until the off
+	// branch is deleted, and this test still holds it to its contract.
+	old := flipDeclared
+	flipDeclared = false
+	t.Cleanup(func() { flipDeclared = old })
 	opts, err := OfflineOptions(BootInputs{})
 	if err != nil {
 		t.Fatal(err)
@@ -218,9 +223,7 @@ func TestFlipConfigNames_DarkUntilDeclared(t *testing.T) {
 		t.Errorf("flipConfigNames(false) = %v, %v, %t, want nothing", r, b, pt != nil)
 	}
 
-	old := flipDeclared
 	flipDeclared = true
-	t.Cleanup(func() { flipDeclared = old })
 	opts, err = OfflineOptions(BootInputs{})
 	if err != nil {
 		t.Fatal(err)

@@ -7,10 +7,11 @@
 # Regenerate: go test ./internal/books/cutover -run TestRenameTable_Golden -update
 # top-level rows: 173 (k=135 s=11 i=9 o=16 x=2); rows with two targets: 2
 # sub-key rows: 153; virtual rows: 3; removed-key rows: 23; process-name rows: 2; rows: 354
-# os.Getenv literals outside core/, internal/config/ and this package (05-config §1.12.4 "Not config at all"): 16
+# os.Getenv literals outside core/, internal/config/ and this package (05-config §1.12.4 "Not config at all"): 17
 #   getenv ABK_ALLOW_ENCRYPTION_KEY_REGEN
 #   getenv ABK_DISABLE_MEDIAINFO
 #   getenv ABK_HASH_BACKFILL_WORKERS
+#   getenv ABO_BOOKS_ABS_API_ENABLED
 #   getenv ABS_OIDC_REDIRECT_URIS
 #   getenv ALLOW_SERVER_DECODE
 #   getenv AO_FP_WORKER_ROOTS

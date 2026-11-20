@@ -416,6 +416,10 @@ func buildPlan(in *m2Input) (*plan, error) {
 		if err != nil {
 			return nil, errors.New("the settings blob does not decode")
 		}
+		for _, line := range aiRoutingContinuity(&blob, hasOpenAI) {
+			pl.p.Reported = append(pl.p.Reported, line)
+			pl.p.count("ai-routing-continuity")
+		}
 		tree, err := decodeTree(blob.Fields)
 		if err != nil {
 			return nil, err

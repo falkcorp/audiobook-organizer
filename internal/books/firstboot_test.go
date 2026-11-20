@@ -224,7 +224,7 @@ func TestClaimsModeIsStrictOnABOsBoot(t *testing.T) {
 // never scans, because iterators stay clipped to books' claims.
 func TestShadowModeBootsABO(t *testing.T) {
 	c := bootComposedWith(t, false, "", nil, nil, func(o *app.Options) {
-		o.Env = []string{"ABO_CORE_STORAGE_CLAIMS_MODE=shadow"}
+		o.Env = []string{storageEnv(), "ABO_CORE_STORAGE_CLAIMS_MODE=shadow"}
 	})
 	c.expectClaimViolations()
 	db := c.store.DB()
@@ -277,13 +277,24 @@ func TestProjectionKeepsRecordIDOnABOsBoot(t *testing.T) {
 	require.NotNil(t, dvAfter.Value)
 	var version database.DatabaseVersion
 	require.NoError(t, json.Unmarshal([]byte(*dvAfter.Value), &version))
-	assert.Equal(t, database.LatestMigrationVersion(), version.Version)
+	// The flip's level step is the version after HEAD's last (books.level-1).
+	assert.Equal(t, booksLevelStepVersion, version.Version)
+	assert.Equal(t, database.LatestMigrationVersion()+1, version.Version)
+	// The level step rewrites the stamp's value (version 2, asserted above) but
+	// never takes a new row ID for either bookkeeping row.
 	for _, k := range []string{"preference:storage_format", "preference:storage_migration"} {
-		assert.Equal(t, before[k], after[k], "%s changed", k)
+		var b, a database.UserPreference
+		if raw, ok := before[k]; ok {
+			require.NoError(t, json.Unmarshal([]byte(raw), &b))
+			require.NoError(t, json.Unmarshal([]byte(after[k]), &a))
+			assert.Equal(t, b.ID, a.ID, "%s took a new row ID", k)
+		}
 	}
 	sidecar, err := os.ReadFile(database.StorageFormatSidecarPath(path))
 	require.NoError(t, err)
-	assert.Equal(t, fmt.Sprint(database.SupportedStorageFormat), strings.TrimSpace(string(sidecar)))
+	// The sidecar R0 and `make rollback` read is the stamp: once the level step
+	// has run it is above R0's supported format, which refuses the store.
+	assert.Equal(t, fmt.Sprint(database.SupportedStorageFormat+1), strings.TrimSpace(string(sidecar)))
 	assert.Equal(t, 1, database.SupportedStorageFormat, "R1 raised the legacy projection")
 }
 
@@ -315,7 +326,10 @@ func TestStampWrittenAfterTheCheckpoint(t *testing.T) {
 	assert.NotZero(t, pref.ID, "the stamp has no preference ID")
 	var v database.DatabaseVersion
 	require.NoError(t, json.Unmarshal([]byte(*pref.Value), &v))
-	assert.Equal(t, 1, v.Version)
+	// 1 is the legacy projection before a level step has run; once one has (the
+	// flip's books.level-1) the stamp is LegacyMaxFormat+1, which every
+	// pre-guard build refuses (05-storage 5S.3.7).
+	assert.Equal(t, 2, v.Version)
 }
 
 // TestFirstBootRefusesForeignKeys on ABO's boot (05-storage §5S.10): a HEAD

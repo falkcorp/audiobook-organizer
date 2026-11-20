@@ -160,12 +160,12 @@ func TestUnchangedSave_OverTheRealCoreStore(t *testing.T) {
 			readOnly = append(readOnly, n)
 		}
 	}
-	// maintenance.* maps to core.tasks.windows.nightly.*, which core's tasks module
-	// registers; the composed boot has none, so core refuses them as unknown while
-	// the View still lists them from the projection's defaults. A production boot
-	// registers them.
+	// maintenance.* maps to core.tasks.windows.nightly.*, which core's tasks
+	// module registers on the flipped composition, so those keys are writable;
+	// database_path is the one key core refuses to rewrite (it is the store the
+	// boot opened, not a setting).
 	slices.Sort(readOnly)
-	require.Equal(t, []string{"database_path", "maintenance.enabled", "maintenance.window_end", "maintenance.window_start"}, readOnly,
+	require.Equal(t, []string{"database_path"}, readOnly,
 		"the set of keys core refuses to rewrite changed")
 	require.Equal(t, gen, f.Generation(), "an unchanged save moved the generation")
 	for _, k := range f.View().Keys {

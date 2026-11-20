@@ -19,7 +19,7 @@ import (
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/books/store"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // flipBootOn boots the flipped composition on the corpus copy at work and returns
@@ -31,12 +31,35 @@ func flipBootOn(t *testing.T, work string, configBoot bool) error {
 	old := flipDeclared
 	flipDeclared = true
 	t.Cleanup(func() { flipDeclared = old })
+	repointCorpusPaths(t, work)
 	return bootAt(t, work, func(o *app.Options) {
 		o.CoreConfigBoot = configBoot
 		if configBoot {
-			o.Env = []string{}
+			o.Env = append([]string{storageEnv()}, absEnv()...)
 		}
 	})
+}
+
+// corpusBuilderDir is the directory the corpus' builder ran in (a scratch
+// checkout of stage 1): the stored path settings name it.
+const corpusBuilderDir = "/tmp/r2corpus/stage1"
+
+// repointCorpusPaths rewrites the stored config blob's builder-relative paths
+// to the copy at work, so the boot validates directories that exist (the
+// flipped boot validates the effective config at registration; the builder's
+// scratch directory is gone by then). A store whose blob names no builder path
+// is left alone.
+func repointCorpusPaths(t *testing.T, work string) {
+	t.Helper()
+	st, err := database.OpenStandalone(storeDB(work), database.StandaloneOptions{})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+	s, err := st.GetSetting("config_blob")
+	require.NoError(t, err)
+	if s == nil || !strings.Contains(s.Value, corpusBuilderDir) {
+		return
+	}
+	require.NoError(t, st.SetSetting("config_blob", strings.ReplaceAll(s.Value, corpusBuilderDir, work), s.Type, false))
 }
 
 // bootAt boots the composition on the corpus copy at work with opt applied and
@@ -137,7 +160,7 @@ func TestCutoverRefusedByOlderBuilds(t *testing.T) {
 			// R0's check: books' legacy projection is above what R0 supports.
 			sidecar, err := os.ReadFile(storeDB(work) + ".storage-format")
 			require.NoError(t, err)
-			require.Greater(t, atoi(t, strings.TrimSpace(string(sidecar))), store.SupportedStorageFormat,
+			require.Greater(t, atoi(t, strings.TrimSpace(string(sidecar))), database.SupportedStorageFormat,
 				"the storage-format sidecar R0 and `make rollback` read is not above R0's supported format")
 
 			// The pre-flip build refuses, exit 78, and writes nothing.
