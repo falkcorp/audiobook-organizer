@@ -1,7 +1,7 @@
 // file: internal/server/reconcile_apply_permission_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b0f3d92-7a14-4c58-9e21-d5a83c7f1b04
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package server
 
@@ -76,4 +76,26 @@ func TestReconcileApplyRoute_NeedsSettingsManage(t *testing.T) {
 			require.Contains(t, w.Body.String(), "no matches provided")
 		})
 	}
+}
+
+// An unknown match_type is a 400 at the route, before an operation is queued:
+// the type decides whether the book keeps its hashes (n4 of the #4719 review).
+func TestReconcileApplyRoute_RefusesAnUnknownMatchType(t *testing.T) {
+	const path = "/api/v1/operations/reconcile"
+	srv, _, admin := repairsPermServer(t, true, true)
+	w := postRepairs(srv, admin, path, `{"matches":[{"book_id":"b1","new_path":"/x/a.m4b","match_type":"hash"},{"book_id":"b2","new_path":"/x/b.m4b","match_type":"Hash"}]}`)
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "unknown match_type")
+	require.Contains(t, w.Body.String(), "match 1 (book b2)")
+}
+
+// The store the apply runs against (storeForWiring, for both the HEAD shell and the
+// native kind) resolves the capability the row repoint needs: if it did not, every
+// match with a file row would be refused as "cannot look up or rewrite file rows".
+func TestReconcileApply_TheWiredStoreResolvesTheAtomicRepoint(t *testing.T) {
+	srv, _, _ := repairsPermServer(t, true, true)
+	_, ok := database.AsCapability[interface {
+		ModifyBookFileUnlessPathHeld(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
+	}](srv.storeForWiring())
+	require.True(t, ok, "the wired store must expose ModifyBookFileUnlessPathHeld through its decorators")
 }

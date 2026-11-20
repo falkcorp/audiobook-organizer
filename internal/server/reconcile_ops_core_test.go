@@ -1,7 +1,7 @@
 // file: internal/server/reconcile_ops_core_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d7cd87bc-6284-4a71-a1ab-081002a42264
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package server
 
@@ -168,6 +168,19 @@ func TestReconcileApplyPrecheck(t *testing.T) {
 	var ex *applycap.ExceededError
 	require.ErrorAs(t, err, &ex)
 	require.Equal(t, reconcileApplyOpID, ex.Op)
+}
+
+// The precheck refuses a match type the scan never produces before the first
+// write, for both shells.
+func TestReconcileApplyPrecheck_RefusesAnUnknownMatchType(t *testing.T) {
+	old := config.AppConfig.BulkApplyMaxItems
+	t.Cleanup(func() { config.AppConfig.BulkApplyMaxItems = old })
+	config.AppConfig.BulkApplyMaxItems = 10
+
+	require.NoError(t, reconcileApplyPrecheck(reconcileApplyOpParams{Matches: []reconcile.ReconcileApplyItem{{BookID: "b1", MatchType: "filename"}}}))
+	err := reconcileApplyPrecheck(reconcileApplyOpParams{Matches: []reconcile.ReconcileApplyItem{{BookID: "b1", MatchType: "filname"}}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unknown match_type")
 }
 
 // The native apply refuses an over-cap match set before it builds a writer, as
