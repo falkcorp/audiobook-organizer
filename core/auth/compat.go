@@ -161,8 +161,8 @@ func (c *compat) PrincipalFor(ctx context.Context, u *User, scopes []rbac.Permis
 	case err != nil:
 		return nil, fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
 	}
-	if cur.PasswordResetRequired {
-		return nil, fmt.Errorf("%w: %s", ErrResetRequired, cur.ID)
+	if err := compatSurfaceStanding(cur); err != nil {
+		return nil, err
 	}
 	p, err := s.PrincipalFor(ctx, cur, c.method, scopes, epoch)
 	if err != nil {

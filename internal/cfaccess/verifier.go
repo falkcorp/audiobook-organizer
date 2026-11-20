@@ -150,6 +150,10 @@ type VerifiedAssertion struct {
 	// IssuedAt is the token's iat; zero when the token has none. It is when
 	// Cloudflare authenticated the user, which is what an auth time means.
 	IssuedAt time.Time
+	// ExpiresAt is the token's exp, which Verify has already checked is in
+	// the future. It bounds the principal built from the token, so a
+	// long-lived request (an SSE stream) ends when the token does.
+	ExpiresAt time.Time
 }
 
 // Verify checks the signature, issuer, expiry, and aud of a Cloudflare Access JWT and
@@ -206,6 +210,7 @@ func (v *CFAccessVerifier) VerifyIssued(ctx context.Context, rawJWT string) (*Ve
 			EmailVerified: true,
 			Name:          "",
 		},
-		IssuedAt: tok.IssuedAt,
+		IssuedAt:  tok.IssuedAt,
+		ExpiresAt: tok.Expiry,
 	}, nil
 }

@@ -107,6 +107,7 @@ func coreSections() []any {
 				},
 			},
 			SetupRequiresToken: true,
+			ExtensionMaxAge:    dur(24 * time.Hour),
 			Login: authLogin{
 				MaxFailuresPerSource: 15,
 				Window:               dur(15 * time.Minute),
@@ -446,6 +447,11 @@ type authSettings struct {
 	OIDC                authOIDC      `json:"oidc"`
 	Owner               authOwner     `json:"owner"`
 	Schedules           authSchedules `json:"schedules"`
+
+	// ExtensionMaxAge bounds an identity extension's principal that asserts
+	// no expiry: it ends this long after its AuthTime (auth.Settings
+	// .ExtensionMaxAge; auth caps it at 168h).
+	ExtensionMaxAge config.Duration `json:"extension_max_age" protect:"admin"`
 }
 
 // authSchedules is core.auth.schedules (05-authn §8).

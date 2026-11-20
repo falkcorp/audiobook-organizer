@@ -40,7 +40,13 @@ type Assertion struct {
 	Scopes       []rbac.Permission // nil = the user's role permissions
 	CredentialID string            // never a secret
 	AuthTime     time.Time
-	Owner        bool // honoured only for an extension registered with OwnerVerifier=true
+	// ExpiresAt is when the asserted credential stops standing (cfaccess: the
+	// verified JWT's exp); zero is none, and the principal then ends
+	// core.auth.extension_max_age after AuthTime (Settings.ExtensionMaxAge).
+	// Revalidate and Refresh refuse the principal at or after it (ErrExpired),
+	// so a long-lived request (an SSE stream) cannot outlive the credential.
+	ExpiresAt time.Time
+	Owner     bool // honoured only for an extension registered with OwnerVerifier=true
 }
 
 // Order is an authenticator's relative position; core's API-key and session
@@ -481,11 +487,33 @@ func (s *Service) extensionStage(e Extension) func(*http.Request, ClientInfo) (*
 			return nil, &Failure{Code: failureCode(err)}, nil
 		}
 		p.CredentialID, p.AuthTime = a.CredentialID, a.AuthTime
+		p.notAfter = s.extensionNotAfter(a)
+		if !s.now().Before(p.notAfter) {
+			return nil, &Failure{Code: CodeExpired}, nil
+		}
 		if a.Owner && e.Spec.OwnerVerifier {
 			p.Assurance |= AssuranceOwner
 		}
 		return p, nil, nil
 	}
+}
+
+// extensionNotAfter is when an extension principal stops standing: the
+// assertion's own ExpiresAt, or, for an extension that asserts none,
+// core.auth.extension_max_age after its AuthTime (after now when it asserts
+// none, or one in the future, which would stretch the cap). Stage 12 refuses
+// an assertion already past it, and stands refuses the principal once it
+// passes, so no long-lived request holds an extension identity without a
+// bound.
+func (s *Service) extensionNotAfter(a *Assertion) time.Time {
+	if !a.ExpiresAt.IsZero() {
+		return a.ExpiresAt
+	}
+	from, now := a.AuthTime, s.now()
+	if from.IsZero() || from.After(now) {
+		from = now
+	}
+	return from.Add(s.settings().ExtensionMaxAge)
 }
 
 // failureCode maps a refusal to its stage 13 code (§6).
