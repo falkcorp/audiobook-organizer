@@ -99,11 +99,43 @@ type Options struct {
 	MaxPerBucket int           // open streams of one non-empty bucket
 	Heartbeat    time.Duration // comment-line interval and revalidation tick
 	WriteTimeout time.Duration // per-write deadline
-	Now          func() time.Time
+	// Limits, when set, is read at each Subscribe and each write in place of
+	// MaxClients, MaxPerBucket and WriteTimeout, so a reload applies to the
+	// next one; a field it returns that is not positive falls back to the
+	// field above. It must be safe for concurrent calls; it is never called
+	// under the broker's lock or a subscriber's write lock.
+	Limits func() Limits
+	Now    func() time.Time
 	// Nonce is the boot nonce; empty draws 8 random bytes, hex encoded. Tests
 	// set it to pin ids.
 	Nonce string
 	Hooks Hooks
+}
+
+// Limits are the options that may change while the broker runs.
+type Limits struct {
+	MaxClients   int
+	MaxPerBucket int
+	WriteTimeout time.Duration
+}
+
+// limits are the caps and the write deadline now (see Options.Limits).
+func (b *Broker) limits() Limits {
+	l := Limits{MaxClients: b.opt.MaxClients, MaxPerBucket: b.opt.MaxPerBucket, WriteTimeout: b.opt.WriteTimeout}
+	if b.opt.Limits == nil {
+		return l
+	}
+	v := b.opt.Limits()
+	if v.MaxClients > 0 {
+		l.MaxClients = v.MaxClients
+	}
+	if v.MaxPerBucket > 0 {
+		l.MaxPerBucket = v.MaxPerBucket
+	}
+	if v.WriteTimeout > 0 {
+		l.WriteTimeout = v.WriteTimeout
+	}
+	return l
 }
 
 func (o Options) validate() error {
@@ -272,14 +304,15 @@ func (b *Broker) Subscribe(req Subscription) (*Subscriber, error) {
 	for _, t := range req.Topics {
 		s.interest[t] = struct{}{}
 	}
+	lim := b.limits() // read before the lock: Options.Limits is the caller's code
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	switch {
 	case b.closed:
 		return nil, ErrClosed
-	case len(b.subs) >= b.opt.MaxClients:
+	case len(b.subs) >= lim.MaxClients:
 		return nil, ErrTooManyClients
-	case req.Bucket != "" && b.buckets[req.Bucket] >= b.opt.MaxPerBucket:
+	case req.Bucket != "" && b.buckets[req.Bucket] >= lim.MaxPerBucket:
 		return nil, ErrTooManyBucket
 	}
 	if req.LastEventID != "" {

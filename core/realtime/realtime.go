@@ -64,6 +64,23 @@ type Options struct {
 	// revocation or a role change only on the next heartbeat. It exists for a
 	// catalog that is deliberately smaller (a test, an App with no auth).
 	AllowNoControlTopics bool
+	// Live, when set, is read each time one of the four reloadable limits is
+	// needed (a subscribe, a write's deadline, a refusal's Retry-After), so a
+	// reload applies to the next stream or write (05-realtime §8: these four
+	// are live; the rest are read once). The four fields above are the
+	// values the hub is built with and what a bad Live value falls back to.
+	Live func() Limits
+}
+
+// Limits are the options a reload may change while streams are open. A zero
+// field takes its default; a negative or oversized one keeps the value the
+// hub was built with (and is logged once a minute). Lowering MaxClients or
+// MaxPerBucket ends no open stream: it refuses the next subscribe.
+type Limits struct {
+	MaxClients   int
+	MaxPerBucket int
+	WriteTimeout time.Duration
+	RetryAfter   time.Duration
 }
 
 // Option defaults and ceilings.
@@ -83,6 +100,7 @@ const (
 	// client that stopped reading can hold a stream's goroutine.
 	maxHeartbeat    = time.Minute
 	maxWriteTimeout = time.Minute
+	maxRetryAfter   = time.Hour
 
 	// closeBudget bounds how long Run waits for streams to drain when its
 	// context ends.
@@ -118,7 +136,7 @@ func (o Options) resolve() (Options, error) {
 	}{
 		{"Heartbeat", &o.Heartbeat, defaultHeartbeat, maxHeartbeat},
 		{"WriteTimeout", &o.WriteTimeout, defaultWriteTimeout, maxWriteTimeout},
-		{"RetryAfter", &o.RetryAfter, defaultRetryAfter, time.Hour},
+		{"RetryAfter", &o.RetryAfter, defaultRetryAfter, maxRetryAfter},
 	} {
 		switch {
 		case *c.v < 0 || *c.v > c.max:
@@ -128,6 +146,47 @@ func (o Options) resolve() (Options, error) {
 		}
 	}
 	return o, nil
+}
+
+// limits are the reloadable limits now: Options.Live's answer resolved like
+// Options (zero is the default), or the built value for a field Live gets
+// wrong.
+func (h *Hub) limits() Limits {
+	built := Limits{MaxClients: h.opt.MaxClients, MaxPerBucket: h.opt.MaxPerBucket, WriteTimeout: h.opt.WriteTimeout, RetryAfter: h.opt.RetryAfter}
+	if h.opt.Live == nil {
+		return built
+	}
+	l, bad := h.opt.Live(), false
+	count := func(v, def, built int) int {
+		switch {
+		case v == 0:
+			return def
+		case v < 0 || v > maxCount:
+			bad = true
+			return built
+		}
+		return v
+	}
+	dur := func(v, def, ceiling, built time.Duration) time.Duration {
+		switch {
+		case v == 0:
+			return def
+		case v < 0 || v > ceiling:
+			bad = true
+			return built
+		}
+		return v
+	}
+	out := Limits{
+		MaxClients:   count(l.MaxClients, defaultMaxClients, built.MaxClients),
+		MaxPerBucket: count(l.MaxPerBucket, defaultMaxPerBucket, built.MaxPerBucket),
+		WriteTimeout: dur(l.WriteTimeout, defaultWriteTimeout, maxWriteTimeout, built.WriteTimeout),
+		RetryAfter:   dur(l.RetryAfter, defaultRetryAfter, maxRetryAfter, built.RetryAfter),
+	}
+	if bad {
+		h.warnOnce("(limits)", "realtime: a reloaded limit is out of range; the value the hub was built with is kept (logged once per minute)")
+	}
+	return out
 }
 
 // Revalidator is what the hub asks about a stream's credential on every
@@ -150,9 +209,11 @@ type Deps struct {
 	// nil): the hub calls it after core.rbac.changed.v1 and on every
 	// heartbeat, because a role assignment change (auth.SetRoles) moves
 	// neither the credential epoch nor the rbac generation, so only a fresh
-	// build notices it. auth exports no such call (a key principal's scopes and
-	// a method's interactivity are the kernel's to rebuild), so the kernel
-	// supplies it (F6-03). A definite error ends the stream credential_revoked;
+	// build notices it. The kernel supplies auth.Service.Refresh (F6-03),
+	// which rebuilds every method auth builds (a session, a core or compat
+	// key over the key's current scopes, an identity extension or compat
+	// surface over the scopes it was built with) without widening it. A
+	// definite error ends the stream credential_revoked;
 	// a store failure is retried on each heartbeat, withholds every event
 	// while it persists, and ends the stream permission_revoked on the third
 	// in a row.
@@ -230,10 +291,17 @@ func NewHub(o Options, d Deps) (*Hub, error) {
 	if h.m, err = newInstruments(d.Metrics, h); err != nil {
 		return nil, err
 	}
+	var live func() sse.Limits
+	if opt.Live != nil {
+		live = func() sse.Limits {
+			l := h.limits()
+			return sse.Limits{MaxClients: l.MaxClients, MaxPerBucket: l.MaxPerBucket, WriteTimeout: l.WriteTimeout}
+		}
+	}
 	if h.br, err = sse.NewBroker(sse.Options{
 		RingSize: opt.RingSize, ClientBuffer: opt.ClientBuffer, MaxClients: opt.MaxClients,
 		MaxPerBucket: opt.MaxPerBucket, Heartbeat: opt.Heartbeat, WriteTimeout: opt.WriteTimeout,
-		Now: d.Clock, Hooks: sse.Hooks{
+		Limits: live, Now: d.Clock, Hooks: sse.Hooks{
 			Reset: h.m.reset, Dropped: h.m.overflowed, Closed: h.m.closed,
 			InterruptFailed: func(err error) {
 				h.log.Warn("realtime: could not interrupt a stream's write on shutdown or revocation; it ends at its write deadline", "err", err)

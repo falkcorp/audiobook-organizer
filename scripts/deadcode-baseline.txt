@@ -271,6 +271,7 @@ core/kernel.outboxKinds
 core/kernel.outboxOwnerSpec
 core/kernel.outboxProbe
 core/kernel.outboxProblems
+core/kernel.realtimeLimits
 core/kernel.realtimeOptions
 core/kernel.reapplyApplyFor
 core/kernel.reapplyInput.applicable
@@ -300,8 +301,6 @@ core/kernel.reapplyInput.untrusted
 core/kernel.reapplyInput.writeBookkeeping
 core/kernel.reapplyInput.writeMarkers
 core/kernel.reapplyRevocations
-core/kernel.refreshPrincipal
-core/kernel.refreshReadErr
 core/kernel.registerBuildInfo
 core/kernel.registerCoreComponents
 core/kernel.reportSecretsHealth

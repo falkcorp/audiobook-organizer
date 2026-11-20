@@ -83,9 +83,9 @@ func (h *Hub) refusal(err error) error {
 	case errors.Is(err, ErrNotPermitted):
 		return forbidden()
 	case errors.Is(err, ErrTooManyForUser):
-		return httpapi.Throttled(h.opt.RetryAfter)
+		return httpapi.Throttled(h.limits().RetryAfter)
 	case errors.Is(err, ErrTooManyClients), errors.Is(err, ErrNotReady), errors.Is(err, ErrClosed):
-		return httpapi.Unavailable("event streams are unavailable; retry shortly", h.opt.RetryAfter)
+		return httpapi.Unavailable("event streams are unavailable; retry shortly", h.limits().RetryAfter)
 	}
 	return err
 }
