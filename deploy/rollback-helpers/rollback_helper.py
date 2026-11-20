@@ -1313,9 +1313,12 @@ ENV_PARTS = ("unit", "local_conf")
 # missing.
 GEN_KEEP = 3
 GEN_KEEP_PINNED = 3
-# Boundary generations are rare (a level raise or an `enforced` change), so
-# they are never evicted for age; this cap only stops a runaway, and says so.
-GEN_KEEP_BOUNDARY = 10
+# Boundary generations are never evicted: the OLDEST one is the pre-flip
+# generation, the one the rollback after the config flip needs, so any cap would
+# drop exactly what they exist to keep. They are small (a unit and a local.conf),
+# so past this many the helper only says so, so a deploy loop that raises a
+# store level or flips `enforced` every time is noticed.
+GEN_WARN_BOUNDARY = 10
 PIN_BOUNDARY = "boundary"
 PIN_UNKNOWN = "unknown"
 _VERSION_TAG = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}")
@@ -1739,12 +1742,12 @@ def _evict(cfg: dict[str, str], keep_sha: str) -> None:
         return
     keep = {d["bin_sha256"] for d in docs[:GEN_KEEP]}
     boundary = [d for d in docs if d.get("pin_reason") == PIN_BOUNDARY]
-    keep |= {d["bin_sha256"] for d in boundary[:GEN_KEEP_BOUNDARY]}
-    if len(boundary) > GEN_KEEP_BOUNDARY:
+    keep |= {d["bin_sha256"] for d in boundary}
+    if len(boundary) > GEN_WARN_BOUNDARY:
         print(
-            f"warning: {len(boundary)} boundary generations are kept under {_env_dir(cfg)}, over the "
-            f"cap of {GEN_KEEP_BOUNDARY}: the oldest {len(boundary) - GEN_KEEP_BOUNDARY} are evicted. "
-            "A deploy that raises a store level or changes `enforced` this often is worth a look",
+            f"warning: {len(boundary)} boundary generations are kept under {_env_dir(cfg)} "
+            f"(more than {GEN_WARN_BOUNDARY}); none is evicted, because the oldest is the pre-flip "
+            "one. A deploy that raises a store level or changes `enforced` this often is worth a look",
             file=sys.stderr,
         )
     unknown = [d for d in docs if d.get("pinned") is True and d.get("pin_reason") != PIN_BOUNDARY]
@@ -1880,7 +1883,7 @@ def _rollback_list(cfg: dict[str, str]) -> int:
     docs, damaged = _scan_generations(cfg)
     print(
         f"generations={len(docs)} unreadable={damaged} keep_newest={GEN_KEEP} "
-        f"keep_unknown_pinned={GEN_KEEP_PINNED} keep_boundary={GEN_KEEP_BOUNDARY}"
+        f"keep_unknown_pinned={GEN_KEEP_PINNED} keep_boundary=all"
     )
     for d in docs:
         lc = d["local_conf"]
@@ -1928,6 +1931,20 @@ def _rollback_env(cfg: dict[str, str], rest: list[str]) -> int:
     return _rollback_env_run(cfg, rest, gen_arg, apply)
 
 
+def _binary_enforced(cfg: dict[str, str], binsha: str) -> str:
+    """The `enforced` fact the deploy recorded for the binary being restored,
+    from the generation kept under its own hash: 0 | 1 | unrecorded (that
+    generation holds none) | none (no generation of its own: a binary fetched by
+    RELEASE=, or one that went in by hand). The recipe compares it with the
+    environment ROLLBACK_ENV names."""
+    docs, _ = _scan_generations(cfg)
+    own = next((d for d in docs if d["bin_sha256"] == binsha), None)
+    if own is None:
+        return "none"
+    e = _clean_meta(own.get("binary"))["enforced"]
+    return "unrecorded" if e is None else str(int(e))
+
+
 def _rollback_env_run(cfg: dict[str, str], rest: list[str], gen_arg: str, apply: bool) -> int:
     b = cfg["bin"]
     prev = f"{b}.prev"
@@ -1944,7 +1961,7 @@ def _rollback_env_run(cfg: dict[str, str], rest: list[str], gen_arg: str, apply:
         _check_restorable(cfg, doc)
         print(
             f"env snapshot ok: current_prev_sha256={binsha} generation={gen} "
-            f"{_gen_desc(doc)} {_env_summary(doc)}"
+            f"{_gen_desc(doc)} {_env_summary(doc)} binary_enforced={_binary_enforced(cfg, binsha)}"
         )
         return 0
     if have != rest[1]:

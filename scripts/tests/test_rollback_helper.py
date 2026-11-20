@@ -2592,6 +2592,42 @@ class RollbackEnv(unittest.TestCase):
         self.assertEqual(self.b.read_text(), "pre-flip")
         return p
 
+    def test_check_reports_the_enforced_flag_of_the_binary_being_restored(self):
+        """The recipe compares it with the environment ROLLBACK_ENV names."""
+        h = self.env_host()
+        self.deploy(h, "pre-flip", conf=self.conf("P"), facts=self.facts("pre-flip", "v1.0.0"))
+        p = self.sha(self.b)
+        self.deploy(
+            h,
+            "flip-build",
+            conf=self.NEW_CONF,
+            facts=self.facts("flip-build", "v2.0.0", "storage=2", "1"),
+        )
+        code, out, err = self.roll(h, "check", "prev")
+        self.assertEqual(code, 0, err)
+        self.assertIn("binary_enforced=0", out, ".prev is the pre-flip build")
+        f = self.sha(self.b)
+        self.deploy(
+            h,
+            "hotfix",
+            conf=self.NEW_CONF,
+            facts=self.facts("hotfix", "v2.0.1", "storage=2", "1"),
+        )
+        code, out, err = self.roll(h, "check", "prev")
+        self.assertEqual(code, 0, err)
+        self.assertIn("binary_enforced=1", out, ".prev is the flip build")
+        code, out, err = self.roll(h, "check", "ab" * 32, p)
+        self.assertEqual(code, 0, err)
+        self.assertIn("binary_enforced=none", out, "no generation of its own")
+        path = self.gdir() / f"{f}.json"
+        doc = json.loads(path.read_text())
+        doc["binary"]["enforced"] = None
+        path.write_text(json.dumps(doc))
+        path.chmod(0o600)
+        code, out, err = self.roll(h, "check", "prev")
+        self.assertEqual(code, 0, err)
+        self.assertIn("binary_enforced=unrecorded", out)
+
     def assert_p_is_still_the_boundary(self, p: str) -> None:
         g = self.gen(p)
         self.assertEqual(g["pin_reason"], "boundary")
@@ -3112,9 +3148,9 @@ class RollbackEnv(unittest.TestCase):
         self.assertIn("unreadable=1", out)
         self.assertNotIn(bad, out, "a malformed generation is never listed as usable")
 
-    def test_boundary_generations_are_capped_with_a_warning(self):
+    def test_boundary_generations_are_never_evicted_and_a_long_run_is_warned_about(self):
         h = self.env_host()
-        cap = h.mod.GEN_KEEP_BOUNDARY
+        cap = h.mod.GEN_WARN_BOUNDARY
         self.deploy(
             h,
             "bat-signal-0",
@@ -3129,17 +3165,17 @@ class RollbackEnv(unittest.TestCase):
                 h, tag, conf=self.conf(str(n)), facts=self.facts(tag, f"v1.0.{n}", f"storage={n}")
             )
         self.assertEqual(
-            sum(1 for g in self.gens() if self.gen(g)["pin_reason"] == "boundary"), cap
+            sum(1 for g in self.gens() if self.gen(g)["pin_reason"] == "boundary"), cap + 3
         )
-        for newest in shas[-cap:]:
-            self.assertIn(newest, self.gens())
-        self.assertNotIn(shas[0], self.gens(), "the oldest boundary is past the cap")
+        for every in shas:
+            self.assertIn(every, self.gens(), "the oldest boundary is the pre-flip one: kept")
         (self.stage / "audiobook-organizer").write_text("bat-signal-last")
         code, _, err = h.run(
             "install", "binary", *self.facts("bat-signal-last", "v1.0.99", "storage=99")
         )
         self.assertEqual(code, 0, err)
         self.assertIn("boundary generations are kept", err)
+        self.assertIn("none is evicted", err)
 
     def test_a_generation_directory_open_to_group_or_others_is_refused(self):
         """_read_generation's directory check: the generations are root-only

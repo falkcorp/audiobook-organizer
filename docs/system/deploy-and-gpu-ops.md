@@ -617,7 +617,10 @@ still in place, so a later restart still uses its settings.
 
 Install them on the deploy host, once, with the one installer the repo ships.
 It is run by the owner, from a checkout of the commit being deployed, ON THE
-DEPLOY HOST (it needs root there, and re-runs itself under `sudo` to get it):
+DEPLOY HOST. The dry run runs from the checkout as you; `APPLY=1` exports `HEAD`
+(not your working tree) to a root-owned directory, `/opt/aorg-install` (override
+with `ROLLBACK_EXPORT_DIR=`), and runs the installer from there with `sudo`, so
+the account needs `sudo` and the commit must be the one you reviewed:
 
 ```bash
 make install-rollback-helpers ROLLBACK_INSTALL_ARGS="--deploy-user <ssh user> \
@@ -629,7 +632,7 @@ make install-rollback-helpers APPLY=1 ROLLBACK_INSTALL_ARGS="..."    # installs 
 It takes `DEPLOY_BIN`, `DEPLOY_DB` and `DEPLOY_UNIT` from `Makefile.local` and
 the rest from `ROLLBACK_INSTALL_ARGS` (`--checkpoint-dir`, `--service-group` and
 `--offline-env` are optional). Without `APPLY=1` it prints what it would do
-(`create`, `replace` or `unchanged` for each file) and changes nothing. With it
+(`create`, `replace`, `fix` or `unchanged` for each file) and changes nothing. With it
 the installer:
 
 1. renders the sudoers drop-in with `scripts/storage_format_guard.py sudoers`
@@ -667,12 +670,22 @@ executes:
 - **It will not run as root from a checkout `--deploy-user` can write.** It
   loads `scripts/storage_format_guard.py` from the checkout as root and copies
   the helper out of it, so whoever can edit those gets root. A normal checkout
-  owned by the deploy user fails this check: `APPLY=1` refuses and names the
-  paths (a dry run only prints a NOTICE). Run it from a root-owned export:
-  `sudo install -d -o root -g root -m 755 /opt/aorg-install && git archive HEAD
-  deploy scripts | sudo tar -x --no-same-owner -C /opt/aorg-install && sudo
-  python3 -I /opt/aorg-install/deploy/rollback-helpers/install_helpers.py
-  <the arguments make passes>`. It re-runs itself with `python3 -I` either way.
+  owned by the deploy user fails this check when the script is run directly: it
+  refuses with `--apply` (or as root) and names the paths, and a dry run only
+  prints a NOTICE. `make install-rollback-helpers APPLY=1` therefore never runs
+  it from the checkout: it does `sudo install -d -o root -g root -m 755
+  /opt/aorg-install`, `git archive HEAD deploy/rollback-helpers deploy/audiobook-organizer.service
+  scripts/storage_format_guard.py | sudo tar -x
+  --no-same-owner -C /opt/aorg-install` (files an earlier run left that this
+  commit no longer has stay, but the installer only reads the three paths above)
+  and `sudo python3 -I /opt/aorg-install/deploy/rollback-helpers/install_helpers.py ...
+  --apply`. To run it by hand, do the same. The script re-runs itself with
+  `python3 -I` either way. The recipe is covered by a `make -n` test and by
+  extracting the same archive into a scratch directory and running the installer
+  from it; the `sudo` steps themselves have not been run on a host.
+- **The dry run's diff needs to read the installed drop-in.** It is mode 0440 and
+  root-owned, so as an ordinary user the dry run says `unreadable` and shows the
+  rendered text; run it with `sudo` to see the diff.
 - **`--deploy-user` is required** (the drop-in grants that user, so it is never
   guessed from `$SUDO_USER`). The dry run prints `Sudoers grantee: <user>` and
   the rendered drop-in, or a diff against the installed one.
@@ -756,8 +769,9 @@ or owner-email settings. So the deploy keeps the environment with the binary.
   build that is already installed rotates nothing. A first deploy (no binary
   yet) keeps nothing.
 - **How many, and which are never dropped.** Several, not one: the newest three,
-  every *boundary* generation (up to ten; above that the oldest are evicted with
-  a warning, and a deploy that crosses that many level steps is worth a look),
+  every *boundary* generation (never evicted, because the oldest is the pre-flip
+  one; past ten the helper warns, since a deploy that crosses that many level
+  steps is worth a look),
   and the newest three *unknown* pins. A generation is a boundary when the binary
   that replaced it serves a higher store level for any owner, when `enforced`
   differs between the two builds, or when that binary enforces the retired-name
@@ -827,8 +841,15 @@ or owner-email settings. So the deploy keeps the environment with the binary.
   in by hand, or the recipe passed none) has `levels=unrecorded` or
   `enforced=unrecorded`: nothing can be compared, so the recipe does not refuse
   but prints a WARNING naming what is missing, and the operator confirms the fit
-  by hand. A generation of an enforcing build (`enforced=1`) gets a NOTE: it sets
-  the new names, which a build that predates them does not read.
+  by hand. The `enforced` flag is compared too, when both sides are recorded:
+  with no `RELEASE=` the binary being restored is `.prev`, whose own generation
+  holds the flag of the build it was deployed as, and the recipe refuses an
+  enforcing environment under a binary that predates the flip, and a pre-flip
+  environment under an enforcing binary (the old names are ignored). A
+  `RELEASE=` build has no generation of its own, so nothing can be compared: a
+  generation of an enforcing build (`enforced=1`) gets a NOTE instead (it sets
+  the new names, which a build that predates them does not read), and is
+  confirmed by hand.
   `ROLLBACK_ENV=snapshot` (the old blind switch) is rejected.
 - **`make rollback-check`.** Read-only: lists the generations (sha256, version,
   levels, pinned) and which one `.prev` matches, and prints no file content.
