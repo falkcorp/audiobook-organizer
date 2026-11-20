@@ -1,5 +1,5 @@
 // file: core/internal/integrationhttp/env_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 6d2e8b40-a7c3-4f19-95e1-0c3b7a48d256
 // last-edited: 2026-11-11
 
@@ -26,6 +26,7 @@ import (
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/integrations"
 	"github.com/falkcorp/mediacore/integrations/integrationstest"
+	"github.com/falkcorp/mediacore/integrations/providerhttp"
 	"github.com/falkcorp/mediacore/internal/instancestore"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
@@ -158,8 +159,8 @@ func (r *recorder) recordCalls() int {
 // fakeHolds is a HoldReleaser over a table of holds by instance, with the
 // semantics of providerhttp.Registry's pair: HoldFor reads one, ReleaseHoldIf
 // releases it only while it is still the hold in force (nil when none is,
-// ErrHoldChanged when a different one is). afterRead runs between HoldFor's
-// answer and the caller's next call, to change the hold in that gap.
+// providerhttp.ErrHoldChanged when a different one is). afterRead runs between
+// HoldFor's answer and the caller's next call, to change the hold in that gap.
 type fakeHolds struct {
 	mu        sync.Mutex
 	held      map[integrations.Ref]integrations.Hold
@@ -208,7 +209,7 @@ func (f *fakeHolds) ReleaseHoldIf(_ context.Context, expect integrations.Hold) e
 			continue
 		}
 		if cur != expect {
-			return fmt.Errorf("fake: %w", ErrHoldChanged)
+			return fmt.Errorf("fake: %w", providerhttp.ErrHoldChanged)
 		}
 		delete(f.held, ref)
 		f.released_ = append(f.released_, cur)

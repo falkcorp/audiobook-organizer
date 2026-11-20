@@ -1,5 +1,5 @@
 // file: core/internal/integrationhttp/hold.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4b84d061-0506-440f-b52d-4aa675443e56
 // last-edited: 2026-11-19
 
@@ -27,21 +27,16 @@ import (
 //   - ReleaseHoldIf ends expect only while it is still the hold in force. No
 //     hold in force (ended, or already released) is nil, the goal being met; a
 //     different hold in force releases nothing and returns an error for which
-//     errors.Is(err, ErrHoldChanged) holds.
+//     errors.Is(err, providerhttp.ErrHoldChanged) holds.
 //
 // The two methods have providerhttp.Registry's signatures (the hold is
 // integrations.Hold), so F7-09 hands the route that *Registry as it is: the
-// error it returns for a changed hold is already this package's ErrHoldChanged.
+// route recognises providerhttp.ErrHoldChanged itself (this package declares
+// no sentinel of its own, so there is one name for the one value).
 type HoldReleaser interface {
 	HoldFor(ref integrations.Ref) (integrations.Hold, bool)
 	ReleaseHoldIf(ctx context.Context, expect integrations.Hold) error
 }
-
-// ErrHoldChanged is what HoldReleaser.ReleaseHoldIf returns, wrapped or not,
-// when a different hold than the one expected is in force. It is
-// providerhttp.ErrHoldChanged itself (one value, so errors.Is holds across the
-// two packages and *providerhttp.Registry needs no wrapper to serve the route).
-var ErrHoldChanged = providerhttp.ErrHoldChanged
 
 // The real registry is the route's HoldReleaser as it is: the compiler holds
 // F7-09 to that, so no wrapper is needed.
@@ -92,7 +87,7 @@ func (a *api) releaseHold(ctx context.Context, in *httpapi.In[instanceReq]) (htt
 		return httpapi.NoContent{}, nil
 	}
 	if err := a.holds.ReleaseHoldIf(ctx, h); err != nil {
-		if errors.Is(err, ErrHoldChanged) {
+		if errors.Is(err, providerhttp.ErrHoldChanged) {
 			return httpapi.NoContent{}, errHoldChanged(err)
 		}
 		// A plain error: httpapi answers 500 and withholds its text.
