@@ -205,6 +205,9 @@ func jobsCalls(bookID string) map[string]func(w jobs.Store) {
 			_ = asCaps(w).SetUserPositionAt("u", bookID, "seg", 1, time.Unix(1, 0))
 		},
 		"SweepExpiredMetrics": func(w jobs.Store) { _, _ = asCaps(w).SweepExpiredMetrics() },
+		"ModifyBookCredits": func(w jobs.Store) {
+			_, _, _ = asCaps(w).ModifyBookCredits(bookID, func(*database.Book, *database.BookCreditsEdit) error { return nil })
+		},
 	}
 }
 
@@ -235,6 +238,10 @@ func jobsRefusedCalls(bookID string) map[string]func(w jobs.Store) error {
 		"ReplaceUserPositions":   func(w jobs.Store) error { return asCaps(w).ReplaceUserPositions("u", bookID, nil) },
 		"RevertBookToVersion": func(w jobs.Store) error {
 			_, err := asCaps(w).RevertBookToVersion(bookID, time.Unix(1, 0))
+			return err
+		},
+		"ModifyBookNarrators": func(w jobs.Store) error {
+			_, err := asCaps(w).ModifyBookNarrators(bookID, func(n []database.BookNarrator) ([]database.BookNarrator, error) { return n, nil })
 			return err
 		},
 		"UpdateBookmarkTitle": func(w jobs.Store) error { return asCaps(w).UpdateBookmarkTitle("u", bookID, 1, "t") },

@@ -110,6 +110,7 @@ var (
 	_ authorcredit.AuthorBooksSource = (*booksJobsStore)(nil)
 	_ authorcredit.TitleCacheKeyer   = (*booksJobsStore)(nil)
 	_ database.RetiredBookFileReader = (*booksJobsStore)(nil)
+	_ database.BookCreditsModifier   = (*booksJobsStore)(nil)
 )
 
 // --- reads forwarded from database.Store ---------------------------------
@@ -341,4 +342,27 @@ func (w *booksJobsStore) UpdateSeriesName(id int, name string) error {
 	return w.gate.do(runless(), "UpdateSeriesName", kindRef(ops.ResSeries), func(context.Context) error {
 		return w.caps.store.UpdateSeriesName(id, name)
 	})
+}
+
+// ModifyBookCredits is the one commit of a book's row and its credit lists
+// (database.BookCreditsModifier, which refetch-missing-authors resolves). It is
+// gated under the shared table's row for it.
+func (w *booksJobsStore) ModifyBookCredits(bookID string, fn func(book *database.Book, credits *database.BookCreditsEdit) error) (b *database.Book, edit database.BookCreditsEdit, err error) {
+	err = w.gate.do(runless(), "ModifyBookCredits", bookRef(bookID), func(context.Context) error {
+		var e error
+		b, edit, e = w.caps.credits.ModifyBookCredits(bookID, fn)
+		return e
+	})
+	return b, edit, err
+}
+
+// ModifyBookNarrators is the other method of the same capability. It has no row
+// in the shared table, so it is refused.
+func (w *booksJobsStore) ModifyBookNarrators(bookID string, fn func([]database.BookNarrator) ([]database.BookNarrator, error)) (out []database.BookNarrator, err error) {
+	err = w.gate.do(runless(), "ModifyBookNarrators", bookRef(bookID), func(context.Context) error {
+		var e error
+		out, e = w.caps.credits.ModifyBookNarrators(bookID, fn)
+		return e
+	})
+	return out, err
 }

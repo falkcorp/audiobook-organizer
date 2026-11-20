@@ -90,6 +90,7 @@ var jobCapabilityRows = map[string]capRow{
 	"AsCapability[jobs.aggregatesBackfillMarker]":   {capImplemented, "recompute-book-aggregates"},
 	"AsCapability[jobs.hbDeferredStore]":            {capImplemented, "backfill-file-hashes"},
 	"assert jobs.hbDeferredStore":                   {capImplemented, "backfill-file-hashes"},
+	"AsCapability[store.BookCreditsModifier]":       {capImplemented, "refetch-missing-authors: ModifyBookCredits gated, ModifyBookNarrators refused (no row)"},
 	"AsCapability[store.SeriesUnreferencedDeleter]": {capImplemented, "cleanup-series"},
 	"AsCapability[store.SeriesDeleteReadiness]":     {capImplemented, "cleanup-series"},
 	"AsCapability[store.SeriesBookRefStore]":        {capImplemented, "cleanup-series: GetAllSeriesBookRefCounts, a read"},
@@ -136,11 +137,37 @@ var (
 // both be in one signature of one interface), interface{} for any, and the
 // types byte and rune spelled as reflect spells them (uint8, int32).
 func normType(s string) string {
+	s = stripParamNames(s)
 	s = strings.ReplaceAll(s, " ", "")
 	s = anyRe.ReplaceAllString(s, "interface{}")
 	s = byteRe.ReplaceAllString(s, "uint8")
 	s = runeRe.ReplaceAllString(s, "int32")
 	return qualifierRe.ReplaceAllString(s, "")
+}
+
+// paramNameRe is a parameter name inside a function type's parameter list as
+// go/types prints it ("func(book *Book, credits *Edit) error"); reflect prints the
+// same type without them.
+var paramNameRe = regexp.MustCompile(`([(,] ?)([A-Za-z_][A-Za-z0-9_]*) ([^ ,)])`)
+
+// typeKeywords are words that can follow "(" or "," and a space without being
+// a parameter name.
+var typeKeywords = map[string]bool{"chan": true, "func": true, "map": true, "interface": true, "struct": true}
+
+func stripParamNames(s string) string {
+	for {
+		n := paramNameRe.ReplaceAllStringFunc(s, func(m string) string {
+			g := paramNameRe.FindStringSubmatch(m)
+			if typeKeywords[g[2]] {
+				return m
+			}
+			return g[1] + g[3]
+		})
+		if n == s {
+			return s
+		}
+		s = n
+	}
 }
 
 func sigString(params, results []string, variadic bool) string {

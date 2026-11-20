@@ -171,6 +171,7 @@ type jobsCaps struct {
 	positionAt     database.UserPositionTimestampWriter
 	opScan         jobsOpChangeScanner
 	retired        database.RetiredBookFileReader
+	credits        database.BookCreditsModifier
 	retiredProbe   jobsRetiredProbe
 	seriesRefs     database.SeriesBookRefStore
 	seriesMembers  database.SeriesMembershipStore
@@ -204,6 +205,7 @@ func resolveJobsCaps(src any) (jobsCaps, error) {
 	c.bookmarks = capOf[database.BookmarkStore](src, "BookmarkStore", &missing)
 	c.deferred = capOf[jobsDeferredAggregates](src, "ModifyBookFileDeferAggregates", &missing)
 	c.aggregates = capOf[jobsAggregatesMarker](src, "aggregates backfill sentinel", &missing)
+	c.credits = capOf[database.BookCreditsModifier](src, "BookCreditsModifier", &missing)
 	c.seriesDel = capOf[database.SeriesUnreferencedDeleter](src, "SeriesUnreferencedDeleter", &missing)
 	c.seriesReady = capOf[database.SeriesDeleteReadiness](src, "SeriesDeleteReadiness", &missing)
 	c.planner = capOf[database.SnapshotPrunePlanner](src, "SnapshotPrunePlanner", &missing)
@@ -268,7 +270,7 @@ var jobsWriteLabels = []string{
 	"MintOrGetSyncID", "RecordSyncMerge", "MintOrGetSyncFileID", "RepointSyncFileToBook", "CreateBookmark",
 	"ModifyBookFileDeferAggregates", "MarkBookAggregatesBackfillDone", "DeleteSeriesIfUnreferenced", "UpdateBookFileHashes",
 	"AppendFileEvent", "ClearUserPositions", "CopyBookmarkIfAbsent", "DeleteSeries", "SetBookAuthors", "SetUserPositionAt",
-	"SweepExpiredMetrics",
+	"SweepExpiredMetrics", "ModifyBookCredits",
 }
 
 // jobsRefusedLabels is every write the wrapper carries that has NO row in the
@@ -284,7 +286,7 @@ var jobsWriteLabels = []string{
 var jobsRefusedLabels = []string{
 	"AddBookTagWithSource", "ClearSyncMerge", "ClearSyncRedirect", "DeleteBookmark", "DeleteUserBookState",
 	"MarkIdentDirty", "MintOrGetSyncFileIDs", "RemoveBookTagsByPrefix", "RepointSyncFile", "RepointSyncItem",
-	"ReplaceUserPositions", "RevertBookToVersion", "UpdateBookmarkTitle", "UpdateSeriesName",
+	"ModifyBookNarrators", "ReplaceUserPositions", "RevertBookToVersion", "UpdateBookmarkTitle", "UpdateSeriesName",
 }
 
 func jobsRows() map[string][]ops.Resource {
