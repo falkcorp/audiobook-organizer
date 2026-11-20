@@ -46,6 +46,9 @@ afterEach(() => vi.useRealTimers());
 describe('buildStreamUrl', () => {
   it('repeats topic and adds key only for a keyed stream', () => {
     expect(buildStreamUrl('', ['a.b.v1', 'books.*'], '')).toBe('/api/core/v1/events?topic=a.b.v1&topic=books.*');
+    expect(buildStreamUrl('', ['*'], '', ['core.task.log-appended.v1'])).toBe(
+      '/api/core/v1/events?topic=*&exclude=core.task.log-appended.v1',
+    );
     expect(buildStreamUrl('', ['core.task.log-appended.v1'], 'run-batman-1')).toBe(
       '/api/core/v1/events?topic=core.task.log-appended.v1&key=run-batman-1',
     );
@@ -63,7 +66,7 @@ describe('request shape', () => {
     expect(c.url).toBe('/api/core/v1/events?topic=core.task.run-changed.v1&topic=books.book.changed.v1');
     expect(c.init.redirect).toBe('manual');
     expect(c.init.cache).toBe('no-store');
-    expect(c.init.credentials).toBe('same-origin');
+    expect(c.init.credentials).toBe('include');
     expect(c.headers.accept).toBe('text/event-stream');
     expect(c.headers['last-event-id']).toBeUndefined();
     conn.close('idle');
@@ -295,8 +298,9 @@ describe('deadlines', () => {
 });
 
 describe('open, close, restart', () => {
-  it('close aborts the request and schedules nothing; open again connects at once', async () => {
+  it('close aborts the request and schedules nothing; after a clean open, open again connects at once', async () => {
     const { server, conn, statuses } = setup();
+    server.openStream();
     server.openStream();
     conn.open();
     await tick();
@@ -308,6 +312,81 @@ describe('open, close, restart', () => {
     conn.open();
     await tick();
     expect(server.calls).toHaveLength(2);
+    conn.close('idle');
+  });
+
+  it('close then open under a Retry-After waits out the remainder and keeps the backoff attempt', async () => {
+    const { server, conn, statuses } = setup();
+    server.answer(() => problemResponse(429, 'rate_limited', 'x', { 'Retry-After': '30' }));
+    server.openStream();
+    conn.open();
+    await tick();
+    expect(server.calls).toHaveLength(1);
+    await tick(10000);
+    conn.close('hidden');
+    conn.open();
+    await tick(19999);
+    expect(server.calls).toHaveLength(1);
+    expect(statuses.at(-1)).toMatchObject({ state: 'reconnecting', attempt: 1 });
+    await tick(1);
+    expect(server.calls).toHaveLength(2);
+    conn.close('idle');
+  });
+
+  it('restart under a Retry-After is not sooner than the header either', async () => {
+    const { server, conn } = setup();
+    server.answer(() => problemResponse(503, 'unavailable', 'x', { 'Retry-After': '20' }));
+    server.openStream();
+    conn.open();
+    await tick();
+    conn.restart();
+    await tick(19999);
+    expect(server.calls).toHaveLength(1);
+    await tick(1);
+    expect(server.calls).toHaveLength(2);
+    conn.close('idle');
+  });
+
+  it('a good open clears the wait: close then open connects at once', async () => {
+    const { server, conn } = setup();
+    server.answer(() => problemResponse(429, 'rate_limited', 'x', { 'Retry-After': '30' }));
+    const s = server.openStream();
+    server.openStream();
+    conn.open();
+    await tick(30000);
+    s.control(TOPIC_OPENED, {});
+    await tick();
+    conn.close('hidden');
+    conn.open();
+    await tick();
+    expect(server.calls).toHaveLength(3);
+    conn.close('idle');
+  });
+
+  it('raises resync (reason reconnect) on an open with no resume id and after a hide, not on a resumed drop', async () => {
+    const { server, conn, resets } = setup();
+    const s1 = server.openStream();
+    const s2 = server.openStream();
+    server.openStream();
+    conn.open();
+    await tick();
+    s1.control(TOPIC_OPENED, {});
+    await tick();
+    expect(resets).toEqual(['reconnect']);
+    s1.event('n-1', RUN, {}, 'r');
+    await tick();
+    s1.end();
+    await tick(3000);
+    s2.control(TOPIC_OPENED, {}); // resumed with Last-Event-ID n-1: the server replays or resets
+    await tick();
+    expect(resets).toEqual(['reconnect']);
+    conn.close('hidden');
+    conn.open();
+    await tick();
+    expect(server.calls.at(-1)!.headers['last-event-id']).toBe('n-1');
+    server.streams.at(-1)!.control(TOPIC_OPENED, {});
+    await tick();
+    expect(resets).toEqual(['reconnect', 'reconnect']);
     conn.close('idle');
   });
 

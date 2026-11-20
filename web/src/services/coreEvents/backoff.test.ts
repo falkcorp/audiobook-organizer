@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { MAX_DELAY_MS, parseRetryAfter, reconnectDelay } from './backoff';
+import { MAX_DELAY_MS, MAX_RETRY_AFTER_MS, parseRetryAfter, reconnectDelay } from './backoff';
 
 describe('reconnectDelay', () => {
   it('doubles from 3 s to a 60 s ceiling and stays there', () => {
@@ -26,6 +26,8 @@ describe('reconnectDelay', () => {
   it('is never sooner than Retry-After, even above the ceiling', () => {
     expect(reconnectDelay(1, 30000, () => 0.9)).toBe(30000);
     expect(reconnectDelay(1, 5 * MAX_DELAY_MS, () => 0)).toBe(5 * MAX_DELAY_MS);
+    expect(reconnectDelay(1, Infinity, () => 0)).toBe(MAX_RETRY_AFTER_MS);
+    expect(reconnectDelay(1, 2 ** 40, () => 0)).toBe(MAX_RETRY_AFTER_MS);
     expect(reconnectDelay(6, 1000, () => 0)).toBe(60000);
   });
 });
@@ -38,6 +40,11 @@ describe('parseRetryAfter', () => {
     expect(parseRetryAfter('Thu, 19 Nov 2026 00:01:00 GMT', now)).toBe(60000);
     expect(parseRetryAfter('Wed, 18 Nov 2026 00:00:00 GMT', now)).toBe(0);
     expect(parseRetryAfter('soon')).toBeNull();
+    // a ceiling of 10 minutes: 2^31 seconds, a 400-digit value and a far date cannot overflow setTimeout
+    expect(parseRetryAfter(String(2 ** 31))).toBe(MAX_RETRY_AFTER_MS);
+    expect(parseRetryAfter('9'.repeat(400))).toBe(MAX_RETRY_AFTER_MS);
+    expect(parseRetryAfter('Fri, 31 Dec 9999 23:59:59 GMT', now)).toBe(MAX_RETRY_AFTER_MS);
+    expect(MAX_RETRY_AFTER_MS).toBeLessThan(2 ** 31 - 1);
     expect(parseRetryAfter('')).toBeNull();
     expect(parseRetryAfter(null)).toBeNull();
   });

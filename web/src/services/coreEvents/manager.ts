@@ -8,9 +8,13 @@
 // Per-tab mode: this tab opens its own stream, only while it is visible. (Leader
 // election across tabs, 05-realtime 4.8 item 7, is out of scope here and arrives with
 // the shell.) The manager multiplexes every subscriber onto:
-//  - one SHARED stream carrying the union of the topics subscribers named, and
-//  - one KEYED stream per distinct server-side key (`topic=...&key=<id>`), opened for
-//    a subscriber that asked for `stream: 'keyed'`, e.g. a run's log lines.
+//  - one SHARED stream: `topic=*` with `exclude=core.task.log-appended.v1`, filtered on the
+//    client per subscriber. ORDERING: the server answers 400 unknown_topic for an exclude
+//    naming a topic that is not in the catalog (core/realtime/handler.go match()), so the
+//    flip must land after F5-18 declares core.task.log-appended.v1; until then this
+//    stream is refused (visibly, in the status), and
+//  - one KEYED stream per key (`topic=...&key=<id>`), opened for a subscriber that asked
+//    for `stream: 'keyed'`, e.g. a run's log lines.
 // Nothing connects until the first subscribe, and a stream with no subscriber is closed.
 
 import { createStreamConnection, type ConnectionDeps, type StreamConnection } from './connection';
@@ -137,7 +141,12 @@ export function createEventStream(options: EventStreamOptions = {}): EventStream
     if (c) return c;
     c = createStreamConnection({
       key: streamKey,
-      topics: () => topicsFor(streamKey),
+      // The shared stream is topic=* minus the keyed-only topics, filtered per
+      // subscriber on the client (05-realtime 4.8 item 7): one subscriber's refused
+      // topic cannot refuse the stream for the rest, and a new subscriber never
+      // reconnects it. A keyed stream names its own topics.
+      topics: () => (streamKey === '' ? ['*'] : topicsFor(streamKey)),
+      exclude: () => (streamKey === '' ? [...keyedOnly].sort() : []),
       onEvent: (env, id) => dispatch(streamKey, env, id),
       onReset: (reason) => {
         for (const h of [...resyncHandlers]) guard(() => h({ reason, streamKey }), 'core.stream.reset.v1');
@@ -170,7 +179,7 @@ export function createEventStream(options: EventStreamOptions = {}): EventStream
       for (const s of subs) wanted.add(s.keyed ? s.key : '');
       for (const k of wanted) {
         const c = connectionFor(k);
-        const sig = topicsFor(k).join('\n');
+        const sig = k === '' ? '' : topicsFor(k).join('\n');
         if (!visibility.visible) {
           c.close('hidden');
         } else if (c.status.state === 'idle' || c.status.state === 'hidden') {

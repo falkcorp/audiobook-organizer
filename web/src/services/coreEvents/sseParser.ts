@@ -1,6 +1,6 @@
 // file: web/src/services/coreEvents/sseParser.ts
 // version: 0.1.0
-// guid: 
+// guid: 06141206-d18a-4914-a6a9-4f3b315305c1
 // last-edited: 2026-11-19
 
 // Incremental parser for a text/event-stream byte stream (WHATWG HTML, "Server-sent
