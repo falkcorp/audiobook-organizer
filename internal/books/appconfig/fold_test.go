@@ -22,6 +22,9 @@ func foldEngine(t *testing.T, providers, roots string) (*Engine, *fakeAccess) {
 	f.vals[oidcProvidersKey] = json.RawMessage(providers)
 	f.vals[libraryRootsKey] = json.RawMessage(roots)
 	f.regSecret["core.auth.oidc.github.client_secret"] = true
+	// An owner is configured: with none, HEAD refuses a change to the sign-in
+	// allow-list through the API (ownerroot.go), and these tests change it.
+	f.vals[ownerKey] = json.RawMessage(`"alfred@wayne.example"`)
 	e := New(f, nil)
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatal(err)

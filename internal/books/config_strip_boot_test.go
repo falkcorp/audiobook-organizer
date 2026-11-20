@@ -31,13 +31,17 @@ import (
 // are set (ListSecrets) and a key's effective value (Lookup).
 type stripAcc struct {
 	module.ConfigAccess
-	set    map[secrets.Name]secrets.Meta
-	eff    map[config.Path]string
-	listed int
+	set     map[secrets.Name]secrets.Meta
+	eff     map[config.Path]string
+	listed  int
+	listErr error
 }
 
 func (a *stripAcc) ListSecrets(_ context.Context, prefix string) ([]secrets.Meta, error) {
 	a.listed++
+	if a.listErr != nil {
+		return nil, a.listErr
+	}
 	var out []secrets.Meta
 	for n, m := range a.set {
 		if strings.HasPrefix(string(n), prefix) {
@@ -58,10 +62,16 @@ type fakeCheckpoints struct {
 	ok    bool
 	err   error
 	calls int
+	// goneFrom, when set, makes the checkpoint vanish from that call on (a
+	// sweep deleting it between two writes).
+	goneFrom int
 }
 
 func (f *fakeCheckpoints) Latest() (storage.Checkpoint, bool, error) {
 	f.calls++
+	if f.goneFrom != 0 && f.calls >= f.goneFrom {
+		return storage.Checkpoint{}, false, nil
+	}
 	return f.cp, f.ok, f.err
 }
 
@@ -205,6 +215,16 @@ func TestGapFillStrip_GuardsEveryWayTheStripChangesTheFile(t *testing.T) {
 		require.ErrorIs(t, r.strip().run(t.Context()), errStripUnguarded)
 		assert.Equal(t, stripFileHead, r.file(t))
 	})
+	t.Run("in-place rewrite checks again after the temp-file attempt", func(t *testing.T) {
+		// The checkpoint is there for the rewrite and gone for the in-place
+		// write that follows it: each changing call verifies for itself.
+		r := newStripRig(t, stripFileHead)
+		r.files = noTempFiles{cutover.OSFiles()}
+		r.cps.goneFrom = 2
+		require.ErrorIs(t, r.strip().run(t.Context()), errStripUnguarded)
+		assert.Equal(t, stripFileHead, r.file(t))
+		assert.Equal(t, 2, r.cps.calls)
+	})
 	t.Run("removal of a file that held only managed keys", func(t *testing.T) {
 		only := "openai_api_key: harley-quinn-token\nroot_dir: /arkham/library\n"
 		r := newStripRig(t, only)
@@ -288,4 +308,16 @@ func TestSecretMetaOf_ExactNameOnly(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, m.Set)
 	assert.ErrorIs(t, m.Err, secrets.ErrCorrupt, "an unreadable record's marker passes through")
+}
+
+// TestGapFillStrip_ASecretStoreThatCannotBeListedStripsNothing: the strip cannot
+// tell what the destinations hold, so it changes nothing, not even the keys it
+// could have shown to be held.
+func TestGapFillStrip_ASecretStoreThatCannotBeListedStripsNothing(t *testing.T) {
+	r := newStripRig(t, stripFileHead)
+	r.acc.listErr = errors.New("keyring unavailable")
+	err := r.strip().run(t.Context())
+	require.Error(t, err)
+	assert.Equal(t, stripFileHead, r.file(t))
+	assert.Empty(t, r.leftovers(t))
 }

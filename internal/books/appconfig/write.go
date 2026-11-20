@@ -94,6 +94,13 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 	e.mu.RLock()
 	before := e.cur
 	e.mu.RUnlock()
+	// HEAD's first rule, before every other check: with no owner set, nothing
+	// through the API changes who the owner is or how the owner signs in.
+	if hooks {
+		if err := e.ownerRootRefusal(before, u); err != nil {
+			return config.UpdateResult{}, err
+		}
+	}
 	patch := coreconfig.Patch{Set: map[coreconfig.Path]json.RawMessage{}}
 	var secretSets, secretClears []secretOp
 	resSet, resUnset := map[string]json.RawMessage{}, []string{}

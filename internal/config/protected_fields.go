@@ -226,6 +226,10 @@ var ownerTrustRootFields = map[string]string{
 	"oauth_allowed_emails":  "which Access identities are admitted at all",
 }
 
+// OwnerTrustRootUnsetMessage is the refusal for an owner trust-root change
+// while no owner is configured.
+const OwnerTrustRootUnsetMessage = "No owner is configured, so who the owner is and how the owner signs in (owner_email, cf_access_team_domain, cf_access_aud, enable_auth, oauth_allowed_emails) can be set only on the server: set OWNER_EMAIL (and CF_ACCESS_TEAM_DOMAIN / CF_ACCESS_AUD) in the host environment or config file and restart"
+
 // ChangedOwnerTrustRoot returns the ownerTrustRootFields that differ between
 // before and after, sorted. Same comparison as ChangedProtectedFields.
 func ChangedOwnerTrustRoot(before, after *Config) []string {
