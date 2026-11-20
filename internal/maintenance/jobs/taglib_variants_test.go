@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/taglib_variants_test.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: 5a0d9c7e-2f41-4b86-9d3a-c1e8f7b20a64
 // last-edited: 2026-11-19
 
@@ -32,7 +32,10 @@ import (
 // functions, written separately: one calls tagger.WriteTagsSafe, the other calls
 // fileops.WriteTagsSafe, tagger.ResolvePathForWrite and deps.VerifyWritten
 // itself. This test reads taglib_cgo.go as syntax (no type-check, so no cgo) and
-// compares what each variant's write functions reach.
+// compares what each variant's write functions reach: the write helpers, the
+// resource kinds and the classified calls of everything they call into the rest
+// of the module, and the file writers of package os that the variant's own bodies
+// call.
 
 const metadataDir = "../../metadata"
 
@@ -132,8 +135,7 @@ func taglibVariantFiles(t *testing.T, native bool) []*ast.File {
 
 // taglibCalls is what a function of internal/metadata calls: the functions of the
 // same package (by name), the functions of other packages it imports
-// ("<import path>.<name>"), and method names ("." + name) whose receiver the
-// syntax does not give.
+// ("<import path>.<name>"), and method names (the syntax gives no receiver).
 func taglibCalls(fd *ast.FuncDecl, imports map[string]string) (local, qualified, methods []string) {
 	ast.Inspect(fd.Body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
@@ -157,10 +159,22 @@ func taglibCalls(fd *ast.FuncDecl, imports map[string]string) (local, qualified,
 	return local, qualified, methods
 }
 
+// taglibReach is what one write entry point of one variant reaches.
+type taglibReach struct {
+	// helpers are the write helpers reached.
+	helpers []taglibHelper
+	// kinds are the resource kinds of everything the entry calls into the rest of
+	// the module, and calls those calls' keys the oracle records for them.
+	kinds, calls []string
+	// osWriters are the file writers (of package os, and of the packages the
+	// oracle treats as file writers) the variant's own bodies call.
+	osWriters []string
+}
+
 // taglibVariantReach is, per write entry point of a variant of internal/metadata,
-// the write helpers it reaches: through the variant's own functions (followed as
-// syntax), into the helpers' packages (followed as the program's SSA).
-func taglibVariantReach(t *testing.T, op *oracleProgram, idx *taglibIndex, native bool) map[string][]taglibHelper {
+// what it reaches: through the variant's own functions (followed as syntax), into
+// the module's packages (followed as the program's SSA, with the oracle's walk).
+func taglibVariantReach(t *testing.T, op *oracleProgram, idx *taglibIndex, native bool) map[string]taglibReach {
 	t.Helper()
 	decls := map[string]*ast.FuncDecl{}
 	imports := map[string]string{}
@@ -175,13 +189,14 @@ func taglibVariantReach(t *testing.T, op *oracleProgram, idx *taglibIndex, nativ
 		}
 		for _, d := range f.Decls {
 			if fd, ok := d.(*ast.FuncDecl); ok && fd.Body != nil {
-				// Methods are matched by name: the syntax gives no receiver type,
-				// and a name shared by two types only widens what is reached.
+				// Methods are matched by name among the variant's own
+				// declarations only: the syntax gives no receiver type, and a
+				// name shared by two types only widens what is reached.
 				decls[fd.Name.Name] = fd
 			}
 		}
 	}
-	out := map[string][]taglibHelper{}
+	out := map[string]taglibReach{}
 	for _, entry := range taglibWriteEntries {
 		fd := decls[entry]
 		if fd == nil {
@@ -196,13 +211,7 @@ func taglibVariantReach(t *testing.T, op *oracleProgram, idx *taglibIndex, nativ
 			queue = queue[1:]
 			l, q, m := taglibCalls(decls[name], imports)
 			qualified, methods = append(qualified, q...), append(methods, m...)
-			for _, callee := range l {
-				if _, ok := decls[callee]; ok && !seen[callee] {
-					seen[callee] = true
-					queue = append(queue, callee)
-				}
-			}
-			for _, callee := range m {
+			for _, callee := range append(l, m...) {
 				if _, ok := decls[callee]; ok && !seen[callee] {
 					seen[callee] = true
 					queue = append(queue, callee)
@@ -210,8 +219,15 @@ func taglibVariantReach(t *testing.T, op *oracleProgram, idx *taglibIndex, nativ
 			}
 		}
 		reached := map[taglibHelper]bool{}
+		kinds, calls, writers := map[string]bool{}, map[string]bool{}, map[string]bool{}
 		walk := func(f *ssa.Function) {
-			_, _, _, _, via := derivedWrites(op, f)
+			k, _, _, c, via := derivedWrites(op, f)
+			for _, kind := range k {
+				kinds[kind] = true
+			}
+			for key := range c {
+				calls[key] = true
+			}
 			if h := helperOf(f); h != "" {
 				reached[h] = true
 			}
@@ -223,46 +239,63 @@ func taglibVariantReach(t *testing.T, op *oracleProgram, idx *taglibIndex, nativ
 		}
 		for _, q := range qualified {
 			i := strings.LastIndex(q, ".")
-			pkg := op.prog.ImportedPackage(q[:i])
+			pkgPath, name := q[:i], q[i+1:]
+			if pkgPath == "os" && oracleFileWriters[name] || oracleOutsideFileWriters[pkgPath][name] {
+				writers[q] = true
+			}
+			pkg := op.prog.ImportedPackage(pkgPath)
 			if pkg == nil {
 				continue
 			}
-			if f := pkg.Func(q[i+1:]); f != nil {
+			if f := pkg.Func(name); f != nil {
 				walk(f)
 			}
 		}
+		// A method call is resolved only to the write helpers, by the helper's
+		// own method name (VerifyWritten): not to every method of that name in
+		// the module.
 		for _, m := range methods {
-			for _, f := range idx.methodsNamed[m] {
+			if f := idx.helperMethods[m]; f != nil {
 				walk(f)
 			}
 		}
+		r := taglibReach{kinds: sortedKeys(kinds), calls: sortedKeys(calls), osWriters: sortedKeys(writers)}
 		for h := range reached {
-			out[entry] = append(out[entry], h)
+			r.helpers = append(r.helpers, h)
 		}
-		sort.Slice(out[entry], func(i, j int) bool { return out[entry][i] < out[entry][j] })
+		sort.Slice(r.helpers, func(i, j int) bool { return r.helpers[i] < r.helpers[j] })
+		out[entry] = r
 	}
 	return out
 }
 
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // taglibIndex is the SSA functions the reach needs to look up: the write helpers
-// by their string form, and the methods of the packages a variant calls into, by
-// name.
+// by their string form, and the helpers that are methods by their method name.
 type taglibIndex struct {
 	helperByString map[string]taglibHelper
-	methodsNamed   map[string][]*ssa.Function
+	helperMethods  map[string]*ssa.Function
 }
 
 func newTaglibIndex(op *oracleProgram) *taglibIndex {
-	idx := &taglibIndex{helperByString: map[string]taglibHelper{}, methodsNamed: map[string][]*ssa.Function{}}
+	idx := &taglibIndex{helperByString: map[string]taglibHelper{}, helperMethods: map[string]*ssa.Function{}}
 	for f := range ssautil.AllFunctions(op.prog) {
 		if f.Pkg == nil || !strings.HasPrefix(f.Pkg.Pkg.Path(), oracleModule) {
 			continue
 		}
 		if h := helperOf(f); h != "" {
 			idx.helperByString[f.String()] = h
-		}
-		if f.Signature.Recv() != nil {
-			idx.methodsNamed[f.Name()] = append(idx.methodsNamed[f.Name()], f)
+			if f.Signature.Recv() != nil {
+				idx.helperMethods[f.Name()] = f
+			}
 		}
 	}
 	return idx
@@ -290,15 +323,22 @@ func TestTaglibVariants_ReachTheSameWriteHelpers(t *testing.T) {
 	copy(all, taglibWriteHelpers)
 	sort.Slice(all, func(i, j int) bool { return all[i] < all[j] })
 	for _, entry := range taglibWriteEntries {
-		s, c := fmt.Sprint(support[entry]), fmt.Sprint(cgo[entry])
-		if s != c {
-			t.Errorf("%s reaches %s in taglib_support.go and %s in taglib_cgo.go; the oracle walks only the first, production ships the second", entry, s, c)
+		s, c := support[entry], cgo[entry]
+		for what, pair := range map[string][2]string{
+			"write helpers":          {fmt.Sprint(s.helpers), fmt.Sprint(c.helpers)},
+			"resource kinds":         {fmt.Sprint(s.kinds), fmt.Sprint(c.kinds)},
+			"classified calls":       {fmt.Sprint(s.calls), fmt.Sprint(c.calls)},
+			"file writers (os etc.)": {fmt.Sprint(s.osWriters), fmt.Sprint(c.osWriters)},
+		} {
+			if pair[0] != pair[1] {
+				t.Errorf("%s reaches %s %s in taglib_support.go and %s in taglib_cgo.go; the oracle walks only the first, production ships the second", entry, what, pair[0], what+" "+pair[1])
+			}
 		}
 		want := fmt.Sprint([]taglibHelper(nil))
 		if slices.Contains(taglibSafeWriters, entry) {
 			want = fmt.Sprint(all)
 		}
-		for name, got := range map[string]string{"taglib_support.go": s, "taglib_cgo.go": c} {
+		for name, got := range map[string]string{"taglib_support.go": fmt.Sprint(s.helpers), "taglib_cgo.go": fmt.Sprint(c.helpers)} {
 			if got != want {
 				t.Errorf("%s in %s reaches %s, want %s", entry, name, got, want)
 			}
