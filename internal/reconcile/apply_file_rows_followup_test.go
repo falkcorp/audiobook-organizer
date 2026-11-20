@@ -1,7 +1,7 @@
 // file: internal/reconcile/apply_file_rows_followup_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5b0e7c3a-91d4-4f62-a8c7-3e1d6b9f0a24
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package reconcile
 
@@ -205,7 +205,10 @@ func TestExecuteReconcile_AFinishingRerunDoesNotTwinAnotherWritersRow(t *testing
 }
 
 // The hand-off is best effort, after the write: a journal that cannot mark the
-// earlier operation's rows still leaves the match applied, and its rows live.
+// earlier operation's rows still leaves the match applied, and its rows live. The
+// failure is not only logged: the result's errors name the operation whose rows
+// were not handed over, so the operator knows reverting it alone is unsafe (the
+// operation then ends with errors, though the match counts as applied).
 func TestExecuteReconcile_AFailedHandOffLeavesTheMatchApplied(t *testing.T) {
 	f := newApplyFixture(t)
 	old := f.missingPath("Year One.m4b")
@@ -216,8 +219,11 @@ func TestExecuteReconcile_AFailedHandOffLeavesTheMatchApplied(t *testing.T) {
 
 	store := &failingStore{PebbleStore: f.ps, failRowAfter: -1, failMark: true}
 	res, err := f.apply(store, "op-2", item)
-	if err != nil || res.Applied != 1 || res.Skipped != 0 {
-		t.Fatalf("op-2: %v, result %+v, want applied despite the hand-off failing", err, res)
+	if err == nil || res.Applied != 1 || res.Skipped != 0 || len(res.Errors) != 1 {
+		t.Fatalf("op-2: %v, result %+v, want applied with the failed hand-off in the errors", err, res)
+	}
+	if e := res.Errors[0]; !strings.Contains(e, "applied") || !strings.Contains(e, "operation op-1") || !strings.Contains(e, "revert op-2") {
+		t.Errorf("errors = %q, want the line to name op-1's unhanded rows and say to revert op-2", res.Errors)
 	}
 	if got := f.bookPath(id); got != f.newPath {
 		t.Errorf("book path = %q, want %q", got, f.newPath)
