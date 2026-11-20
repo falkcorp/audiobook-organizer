@@ -3,13 +3,14 @@
 // guid: b1325c94-e130-487d-a1a1-f928cc9aba2a
 // last-edited: 2026-11-06
 
-// Package ui is the Go side of core's UI shell (07 §7.6). This file is the
-// dependency-free leaf of the package that lands in release R1: the function
-// ReservedSegments and the plain types ModuleManifest and UIIDs. ReservedSegments
-// lets module.ReservedIDs() hold from R1, and the two types give
-// internal/modulehttp (L6, R2's identity flip) a type for modules[].ui. The
-// rest of the package, WriteManifestTS included, lands with the shell work
-// (FE3-8, FE4-6). It imports nothing, the standard library included.
+// Package ui is the Go side of core's UI shell (07 §7.6): the embedded
+// bundle (Bundle, FromFS), the SPA handler with its CSP policy (Handler) and
+// the manifest printer (WriteManifestTS). This file is the dependency-free
+// leaf of the package that landed in release R1: the function
+// ReservedSegments and the plain types ModuleManifest and UIIDs.
+// ReservedSegments lets module.ReservedIDs() hold from R1, and the two types
+// give internal/modulehttp (L6, R2's identity flip) a type for modules[].ui
+// (FE3-8, FE4-6). This file imports nothing, the standard library included.
 package ui
 
 // ReservedSegments lists the first segment of every shell route (§7.4.3);

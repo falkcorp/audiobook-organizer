@@ -82,7 +82,7 @@ func uiScope(t testing.TB) (*metrics.Provider, *metrics.Scope) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
-	sc, err := p.Core("ui", attribute.Key("outcome"), "kind", "module", "directive")
+	sc, err := p.Core("ui", attribute.Key("outcome"), "kind", "module", "directive", "build_id", "status")
 	if err != nil {
 		t.Fatal(err)
 	}
