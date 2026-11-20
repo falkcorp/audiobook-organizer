@@ -270,7 +270,7 @@ func (s *Service) AcceptInvite(ctx context.Context, in AcceptInviteInput) (*User
 	var user *User
 	var out *IssuedSession
 	var refusal error
-	err = s.commitRetrying(ctx, func(b *storage.Batch) error {
+	err = s.commitRetryingN(ctx, claimRetries, func(b *storage.Batch) error {
 		refusal = nil
 		t, err := s.d.Store.TakeOneTime(b, OneTimeInvite, Token(in.Token)) // parsed by openInvite
 		if errors.Is(err, ErrNotFound) {

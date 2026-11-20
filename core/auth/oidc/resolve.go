@@ -1,5 +1,5 @@
 // file: core/auth/oidc/resolve.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 1720bb8f-3301-4a84-b4b5-d3dd31f6c634
 // last-edited: 2026-11-11
 
@@ -24,10 +24,16 @@ import (
 	"github.com/falkcorp/mediacore/storage"
 )
 
-// RoleReader reads one stored role. *rbac.Service is one. An unknown role is
-// rbac.ErrUnknownRole.
+// RoleReader reads one stored role and claims it for a new account.
+// *rbac.Service is one. An unknown role is rbac.ErrUnknownRole.
+// RoleSetGeneration and ClaimRoleSet are the role-set guard a write that gives
+// a user a role runs under (auth's claimRoles does the same; see
+// rbac.RoleGuarder): the generation is read before any role is, and the claim is
+// staged in the account's batch.
 type RoleReader interface {
 	Role(ctx context.Context, name rbac.RoleName) (*rbac.Role, error)
+	RoleSetGeneration(ctx context.Context) (uint64, error)
+	ClaimRoleSet(b *storage.Batch, generation uint64) error
 }
 
 // AccountLock is the account-write seam of *auth.Service (auth/external.go):
@@ -77,8 +83,14 @@ func NewResolver(d ResolverDeps) (*Resolver, error) {
 }
 
 const (
-	auditModule    = "core"
-	conflictTries  = 4
+	auditModule = "core"
+	// conflictTries is how often a resolution runs again after a commit
+	// conflict. A first sign-in claims its role (ClaimRoleSet), and every
+	// claim bumps the one role-claim counter, so it conflicts with a
+	// concurrent SetRoles or accepted invite that touches another user; a
+	// conflict means another writer committed, so the loop cannot livelock,
+	// and sixteen tries let a burst of sixteen such writes all land.
+	conflictTries  = 16
 	maxUsernameTry = 100
 
 	actionLink     = "core.identity.link"
@@ -366,6 +378,15 @@ func (r *Resolver) create(ctx context.Context, pol Policy, c Claims, email strin
 	if role == "" {
 		role = rbac.RoleViewer
 	}
+	// The role set's generation is read before any role is (F4-02-ROLE-GUARD):
+	// the account's batch claims the role at this generation below, so a role
+	// write that lands between these reads and the commit fails the commit,
+	// and the caller's retry reads the roles again. A store that cannot guard
+	// refuses the account.
+	gen, err := r.d.Roles.RoleSetGeneration(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", auth.ErrStoreUnavailable, err)
+	}
 	if admin, err := r.holdsAdmin(ctx, []rbac.RoleName{role}); err != nil {
 		return nil, fmt.Errorf("%w: %w", auth.ErrStoreUnavailable, err)
 	} else if admin {
@@ -401,6 +422,9 @@ func (r *Resolver) create(ctx context.Context, pol Policy, c Claims, email strin
 		}
 	}
 	err = r.commit(ctx, func(b *storage.Batch) error {
+		if err := r.d.Roles.ClaimRoleSet(b, gen); err != nil {
+			return err
+		}
 		for _, h := range displaced {
 			up := cloneUser(h)
 			up.Email, up.EmailVerified, up.Version, up.UpdatedAt = "", false, h.Version+1, now

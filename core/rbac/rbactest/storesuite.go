@@ -737,28 +737,41 @@ func roleSetGuard(t *testing.T, h Harness) {
 		}
 	})
 
-	t.Run("a claim raises it, and a guard read before it conflicts", func(t *testing.T) {
+	t.Run("a claim fails a claims guard, not a role-set guard, and changes no role", func(t *testing.T) {
 		g := generation(t)
-		reader := fx.NewBatch()
-		defer func() { _ = reader.Close() }()
-		if err := guarder.GuardRoleSet(reader, g); err != nil {
+		claims := fx.NewBatch()
+		defer func() { _ = claims.Close() }()
+		if err := guarder.GuardRoleClaims(claims); err != nil {
+			t.Fatal(err)
+		}
+		roles := fx.NewBatch()
+		defer func() { _ = roles.Close() }()
+		if err := guarder.GuardRoleSet(roles, g); err != nil {
 			t.Fatal(err)
 		}
 		before := get(t, fx, "custom.wayne")
 		if err := commit(t, fx, func(b *storage.Batch) error { return guarder.ClaimRoleSet(b, g) }); err != nil {
 			t.Fatalf("a claim at the generation now: %v", err)
 		}
-		if now := generation(t); now != g+1 {
-			t.Fatalf("a claim moved the generation %d to %d, want %d", g, now, g+1)
+		if now := generation(t); now != g {
+			t.Fatalf("a claim moved the generation %d to %d", g, now)
 		}
 		if after := get(t, fx, "custom.wayne"); !reflect.DeepEqual(after, before) {
 			t.Fatalf("a claim changed a role: %+v vs %+v", after, before)
 		}
-		if err := reader.Commit(ctx, storage.Sync); !errors.Is(err, storage.ErrConflict) {
-			t.Fatalf("Commit of a guard read before the claim = %v, want storage.ErrConflict", err)
+		if err := claims.Commit(ctx, storage.Sync); !errors.Is(err, storage.ErrConflict) {
+			t.Fatalf("Commit of a claims guard staged before the claim = %v, want storage.ErrConflict", err)
 		}
+		if err := roles.Commit(ctx, storage.Sync); err != nil {
+			t.Fatalf("Commit of a role-set guard staged before a claim = %v, want nil", err)
+		}
+	})
+
+	t.Run("a claim over a stale generation", func(t *testing.T) {
+		g := generation(t)
+		put(t, fx, custom("custom.batwoman", 1, "core:self"))
 		if err := commit(t, fx, func(b *storage.Batch) error { return guarder.ClaimRoleSet(b, g) }); !errors.Is(err, storage.ErrConflict) {
-			t.Fatalf("a claim over a generation read before the first = %v, want storage.ErrConflict", err)
+			t.Fatalf("a claim at generation %d with %d stored = %v, want storage.ErrConflict", g, generation(t), err)
 		}
 	})
 
@@ -784,6 +797,9 @@ func roleSetGuard(t *testing.T, h Harness) {
 		}
 		if err := guarder.ClaimRoleSet(nil, 0); err == nil {
 			t.Fatal("ClaimRoleSet without a batch succeeded")
+		}
+		if err := guarder.GuardRoleClaims(nil); err == nil {
+			t.Fatal("GuardRoleClaims without a batch succeeded")
 		}
 	})
 }

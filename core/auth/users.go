@@ -193,7 +193,7 @@ func (s *Service) CreateUser(ctx context.Context, actor *Principal, in NewUser) 
 			return nil, fmt.Errorf("%w: e-mail %q is verified on another account", ErrUserExists, email)
 		}
 	}
-	err = s.commitRetrying(ctx, func(b *storage.Batch) error {
+	err = s.commitRetryingN(ctx, claimRetries, func(b *storage.Batch) error {
 		// CanAssign above ran on the cache and once; this runs on the store, on
 		// every attempt, under a guard on the role set (see claimRoles).
 		if err := s.claimRoles(ctx, b, actor.Perms, roles); err != nil {
@@ -620,7 +620,7 @@ func (s *Service) SetRoles(ctx context.Context, actor *Principal, id UserID, rol
 	}
 	next := normalizeRoles(roles)
 	now := s.now().UTC()
-	return s.commitRetrying(ctx, func(b *storage.Batch) error {
+	return s.commitRetryingN(ctx, claimRetries, func(b *storage.Batch) error {
 		u, err := s.d.Store.GetUser(ctx, id)
 		if err != nil {
 			return err

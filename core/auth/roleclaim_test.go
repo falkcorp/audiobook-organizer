@@ -1,5 +1,5 @@
 // file: core/auth/roleclaim_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0c5d7e21-93b4-4a68-8f1e-2d6a4b9c7e53
 // last-edited: 2026-11-19
 
@@ -8,12 +8,15 @@ package auth_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // roleRobin is a custom role no one holds yet, the role every scenario below
@@ -217,6 +220,98 @@ func TestRoleClaim_RoleRecreatedInsideTheAssignment(t *testing.T) {
 			if n := c.holdersOfRobin(); n != 0 {
 				t.Fatalf("%d user(s) hold the recreated role", n)
 			}
+		})
+	}
+}
+
+// TestRoleClaim_ConcurrentUnrelatedAssignmentsAllSucceed: every claim bumps
+// one counter, so claims that touch different users must still not fail one
+// another. Five CreateUsers, five SetRoleses on five different users and five
+// accepted invites, all for roleRobin and released together, all succeed (the
+// -race run's target): a conflict means another claim committed, so a writer
+// loses at most once to each of the other fourteen, and its sixteen attempts
+// (claimRetries) let all fifteen land.
+func TestRoleClaim_ConcurrentUnrelatedAssignmentsAllSucceed(t *testing.T) {
+	const n = 5
+	c := newClaimFx(t)
+	ctx := context.Background()
+	var writes []func() error
+	for i := range n {
+		name := fmt.Sprintf("gotham-recruit-%02d", i)
+		writes = append(writes, func() error {
+			_, err := c.f.svc.CreateUser(ctx, c.manager, auth.NewUser{Username: name, Roles: []rbac.RoleName{roleRobin}})
+			return err
+		})
+		target := c.f.user(fmt.Sprintf("gotham-patrol-%02d", i), "gotham.detective")
+		writes = append(writes, func() error {
+			return c.f.svc.SetRoles(ctx, c.manager, target.ID, []rbac.RoleName{"gotham.detective", roleRobin})
+		})
+		tok, _ := c.f.invite(c.manager, auth.InviteSpec{Username: fmt.Sprintf("gotham-invitee-%02d", i), Role: roleRobin})
+		writes = append(writes, func() error {
+			_, _, err := c.f.accept(tok, "gotham-city-1939")
+			return err
+		})
+	}
+	errs := make([]error, len(writes))
+	var start sync.WaitGroup
+	start.Add(1)
+	var wg sync.WaitGroup
+	for i, w := range writes {
+		wg.Go(func() { start.Wait(); errs[i] = w() })
+	}
+	start.Done()
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("assignment %d of %d: %v", i, len(writes), err)
+		}
+	}
+	if got := c.holdersOfRobin(); got != len(writes) {
+		t.Fatalf("%d holders of the role, want %d", got, len(writes))
+	}
+}
+
+// TestRoleClaim_AssignRacesDelete_Free releases an assignment and DeleteRole
+// of the role together, many times over. Whatever the interleaving, the end
+// state has no dangling role: either the role exists (the delete was refused
+// ErrRoleInUse or never ran first) and holds whatever was assigned, or it is
+// gone and nobody holds it (the assignment was refused as unknown).
+func TestRoleClaim_AssignRacesDelete_Free(t *testing.T) {
+	const rounds = 15
+	for _, way := range claimWays {
+		t.Run(way, func(t *testing.T) {
+			var assigned, deleted int
+			for i := range rounds {
+				c := newClaimFx(t)
+				write := c.assign(way)
+				var start sync.WaitGroup
+				start.Add(1)
+				var writeErr, delErr error
+				var wg sync.WaitGroup
+				wg.Go(func() { start.Wait(); writeErr = write() })
+				wg.Go(func() { start.Wait(); delErr = c.deleteRobin() })
+				start.Done()
+				wg.Wait()
+				_, roleErr := c.f.rb.Role(context.Background(), roleRobin)
+				held := c.holdersOfRobin()
+				switch {
+				case roleErr == nil && delErr != nil && !errors.Is(delErr, rbac.ErrRoleInUse) && !errors.Is(delErr, rbac.ErrVersionMismatch):
+					t.Fatalf("round %d: DeleteRole: unexpected error %v", i, delErr)
+				case roleErr != nil && held != 0:
+					t.Fatalf("round %d: %d user(s) hold a role that was deleted (write: %v, delete: %v)", i, held, writeErr, delErr)
+				case writeErr == nil && held != 1:
+					t.Fatalf("round %d: the assignment succeeded and %d user(s) hold the role", i, held)
+				case writeErr != nil && !errors.Is(writeErr, rbac.ErrUnknownRole) && !errors.Is(writeErr, storage.ErrConflict):
+					t.Fatalf("round %d: the assignment failed for the wrong reason: %v", i, writeErr)
+				}
+				if writeErr == nil {
+					assigned++
+				}
+				if roleErr != nil {
+					deleted++
+				}
+			}
+			t.Logf("%d rounds: assigned %d, role deleted %d", rounds, assigned, deleted)
 		})
 	}
 }

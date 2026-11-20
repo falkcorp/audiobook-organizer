@@ -14,7 +14,6 @@ import (
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/rbac"
-	"github.com/falkcorp/mediacore/storage"
 )
 
 // deleteSignal deletes roleSignal as an admin would, at its current version.
@@ -45,8 +44,9 @@ func (f *fx) signalHolders() int {
 // TestOIDC_CreateRoleDeletedInsideTheCommit (F4-02-ROLE-GUARD r2, n6): the
 // first sign-in of a new subject gives the policy's default role, which it has
 // read and not yet committed when DeleteRole removes it. The commit must
-// conflict on the role set: no account is created holding a role that no
-// longer exists.
+// conflict on the role set, and the resolver's retry (RetryOnConflict around
+// resolveLocked), which finds the role gone, must refuse: no account is created
+// holding a role that no longer exists.
 func TestOIDC_CreateRoleDeletedInsideTheCommit(t *testing.T) {
 	f := newFx(t)
 	pol := untrusting()
@@ -66,8 +66,8 @@ func TestOIDC_CreateRoleDeletedInsideTheCommit(t *testing.T) {
 	if delErr != nil {
 		t.Fatalf("DeleteRole, with no holder committed: %v", delErr)
 	}
-	if !errors.Is(err, storage.ErrConflict) {
-		t.Fatalf("a first sign-in over a default role deleted before its commit: err = %v, want storage.ErrConflict", err)
+	if !errors.Is(err, auth.ErrBadInput) {
+		t.Fatalf("a first sign-in over a default role deleted before its commit: err = %v, want auth.ErrBadInput (the default role cannot be read)", err)
 	}
 	if n := f.countUsers(); n != 0 {
 		t.Fatalf("%d account(s) created over a deleted role", n)
