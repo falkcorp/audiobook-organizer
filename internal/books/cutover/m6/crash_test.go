@@ -103,19 +103,27 @@ func TestCutoverCrashAtEveryChunk(t *testing.T) {
 		name      string
 		opts      []func(*rig)
 		instances int
+		carried   map[string]string
 	}{
-		{"head", nil, len(wantInstances)},
+		{"head", nil, len(wantInstances), nil},
 		{"renamed", []func(*rig){renamedSource, func(r *rig) {
 			r.secrets.seed["integrations.metadata.batcave_db.credentials.token"] = "fixture-batcave-db-token-fox"
 			delete(r.secrets.seed, "integrations.metadata.batcave_db.credentials.api_key")
 			r.secrets.unreadable["integrations.metadata.batcave_db.credentials.api_key"] = true
-		}}, len(wantInstances) + 1},
+		}}, len(wantInstances) + 1, map[string]string{
+			"integrations.metadata.batcave-db.credentials.token":   "fixture-batcave-db-token-fox",
+			"integrations.metadata.batcave-db.credentials.api_key": unreadableMarker + "corrupt",
+		}},
 	} {
-		t.Run(fx.name, func(t *testing.T) { crashAtEveryChunk(t, fx.opts, fx.instances) })
+		t.Run(fx.name, func(t *testing.T) { crashAtEveryChunk(t, fx.opts, fx.instances, fx.carried) })
 	}
 }
 
-func crashAtEveryChunk(t *testing.T, extra []func(*rig), wantN int) {
+// crashAtEveryChunk kills the step at every row visit in four ways and checks
+// the resumed boot matches an uninterrupted one. carried names the secrets the
+// oracle must hold, so a fixture whose carry silently did nothing cannot pass
+// by both runs agreeing on nothing.
+func crashAtEveryChunk(t *testing.T, extra []func(*rig), wantN int, carried map[string]string) {
 	type mode struct {
 		name          string
 		before, power bool
@@ -148,6 +156,11 @@ func crashAtEveryChunk(t *testing.T, extra []func(*rig), wantN int) {
 			}
 			if want.State != "done" || len(want.Verify.Failures) != 0 || len(instances(t, want)) != wantN || len(jobs(t, want)) != 7 {
 				t.Fatalf("the oracle is wrong: state %q verify %+v", want.State, want.Verify)
+			}
+			for name, v := range carried {
+				if got := string(want.Rows[string(ownerSecrets)][name]); got != v {
+					t.Fatalf("the oracle holds %q under %s, want %q: the fixture does not exercise the carry", got, name, v)
+				}
 			}
 			wantRows := flatten(want)
 			oracles = append(oracles, wantRows)
