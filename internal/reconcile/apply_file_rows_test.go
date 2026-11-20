@@ -1,5 +1,5 @@
 // file: internal/reconcile/apply_file_rows_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c2e84b17-5d93-4a06-b8f1-7e3a90d4c625
 // last-edited: 2026-11-18
 
@@ -521,6 +521,18 @@ func (s *failingStore) ModifyBook(id string, fn func(*database.Book) error) (*da
 }
 
 func (s *failingStore) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	return s.modifyRow(s.PebbleStore.ModifyBookFile, bookID, fileID, fn)
+}
+
+// ModifyBookFileUnlessPathHeld is the forward repoint's write: it counts as a row
+// call exactly as ModifyBookFile does, so the injected faults (failRowAfter,
+// unsyncedRowCalls, beforeRowCall) apply to it, then calls through.
+func (s *failingStore) ModifyBookFileUnlessPathHeld(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	return s.modifyRow(s.PebbleStore.ModifyBookFileUnlessPathHeld, bookID, fileID, fn)
+}
+
+// modifyRow is the shared body of the two row writes: next is the real call.
+func (s *failingStore) modifyRow(next func(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error), bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
 	s.mu.Lock()
 	call := s.rowCalls
 	s.rowCalls++
@@ -534,12 +546,12 @@ func (s *failingStore) ModifyBookFile(bookID, fileID string, fn func(*database.B
 		return nil, errInjected
 	}
 	if s.unsyncedRowCalls[call] {
-		if _, err := s.PebbleStore.ModifyBookFile(bookID, fileID, fn); err != nil {
+		if _, err := next(bookID, fileID, fn); err != nil {
 			return nil, err
 		}
 		return nil, fmt.Errorf("%w: injected", database.ErrBookFileDurabilityUnknown)
 	}
-	return s.PebbleStore.ModifyBookFile(bookID, fileID, fn)
+	return next(bookID, fileID, fn)
 }
 
 func (s *failingStore) CreateOperationChange(c *database.OperationChange) error {

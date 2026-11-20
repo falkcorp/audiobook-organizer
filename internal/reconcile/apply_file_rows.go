@@ -1,5 +1,5 @@
 // file: internal/reconcile/apply_file_rows.go
-// version: 1.3.0
+// version: 1.5.0
 // guid: 079ffa9c-f1f8-4388-a615-f9875fd5419f
 // last-edited: 2026-11-19
 
@@ -64,6 +64,37 @@ var errTargetHeld = errors.New("matched file is now held by another file row")
 // file's content is what the book's hashes name (keepsHashes).
 const matchTypeHash = "hash"
 
+// The scan's other match types (ReconcileMatch.MatchType): the file the book was
+// imported from, found by Book.OriginalFileHash, and a file found by name alone.
+const (
+	matchTypeOriginalHash = "original_hash"
+	matchTypeFilename     = "filename"
+)
+
+// ValidateApplyItems refuses a match set that carries a match type the scan never
+// produces. The type decides whether the apply KEEPS the book's hashes
+// (keepsHashes), and the only safe default for a value nobody recognises is the
+// clear, so an unknown type used to apply as an unproven match with no word about
+// it: a typo of "hash" ("Hash", "hash ") silently cleared the hashes of a match
+// that proved the content. The empty type stays valid: a caller that predates the
+// field sends none, and it is treated as unproven. It names the first bad item.
+func ValidateApplyItems(matches []ReconcileApplyItem) error {
+	for i, m := range matches {
+		if err := validateMatchType(m.MatchType); err != nil {
+			return fmt.Errorf("match %d (book %s): %w", i, m.BookID, err)
+		}
+	}
+	return nil
+}
+
+func validateMatchType(t string) error {
+	switch t {
+	case "", matchTypeHash, matchTypeOriginalHash, matchTypeFilename:
+		return nil
+	}
+	return fmt.Errorf("unknown match_type %q, want %q, %q or %q (or none)", t, matchTypeHash, matchTypeOriginalHash, matchTypeFilename)
+}
+
 // The book hash fields a non-hash match clears, as their metadata_update rows
 // name them (restorable: undo.RestoreBookField). The Missing files fixer
 // journals the same rows (rmFieldFileHash, rmFieldOrganizedHash).
@@ -93,6 +124,11 @@ func keepsHashes(matchType string) bool { return matchType == matchTypeHash }
 type fileRowStore interface {
 	database.BookFilePathLookup
 	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
+	// ModifyBookFileUnlessPathHeld is ModifyBookFile that refuses, atomically at
+	// the commit, to move the row onto a path another row holds
+	// (database.ErrBookFilePathHeld). The forward repoint uses it; the put-back
+	// moves the row onto the path it came from and uses ModifyBookFile.
+	ModifyBookFileUnlessPathHeld(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
 }
 
 // fileRowMove is the one book_file row a match repoints: bookID's row fileID,
@@ -261,11 +297,11 @@ func (m *fileRowMove) recordKeyOwner() error {
 
 // checkTarget refuses while any row, live or retired, holds the matched file.
 // It runs inside the row's compare-and-swap (forward), the last read before the
-// write: a library scan that imports the still-untracked file as a new book's row
-// after the plan would otherwise have its single-owner path key overwritten by
-// the repoint, and two books would hold one file. The store offers no atomic
-// "repoint unless held", so a row created between this read and the commit is
-// still not seen; that window is the callback's own length.
+// write, and gives the refusal its readable message. It is not what makes the
+// check atomic: a row created after this read would still have its single-owner
+// path key overwritten, so forward also writes through the store's
+// ModifyBookFileUnlessPathHeld, which re-checks the key at the commit under the
+// single-owner index mutex.
 func (m *fileRowMove) checkTarget() error {
 	holders, err := database.BookFileRowsAtPathForWrite(m.rows, m.to.Path)
 	if err != nil {
@@ -279,14 +315,22 @@ func (m *fileRowMove) checkTarget() error {
 }
 
 // forward repoints the row, only while it still is where the plan read it and
-// nothing holds the matched file. unsynced reports a write that landed but whose
-// fsync failed.
+// nothing holds the matched file, checked in the callback (checkTarget) and again
+// atomically at the commit (ModifyBookFileUnlessPathHeld). unsynced reports a
+// write that landed but whose fsync failed.
 func (m *fileRowMove) forward() (unsynced bool, err error) {
-	return m.repoint(m.was, m.to, m.checkTarget)
+	unsynced, err = m.repoint(m.was, m.to, m.checkTarget, m.rows.ModifyBookFileUnlessPathHeld)
+	if errors.Is(err, database.ErrBookFilePathHeld) && !errors.Is(err, errTargetHeld) {
+		// Taken between the callback's check and the commit.
+		err = fmt.Errorf("%w: %v", errTargetHeld, err)
+	}
+	return unsynced, err
 }
 
 // rollBack puts the row back, only while it still is where forward put it.
-func (m *fileRowMove) rollBack() (unsynced bool, err error) { return m.repoint(m.to, m.was, nil) }
+func (m *fileRowMove) rollBack() (unsynced bool, err error) {
+	return m.repoint(m.to, m.was, nil, m.rows.ModifyBookFile)
+}
 
 // repoint writes to onto the row under the store's compare-and-swap, only while
 // the row is at from (path and Missing flag: a hash or size filled in since does
@@ -294,13 +338,13 @@ func (m *fileRowMove) rollBack() (unsynced bool, err error) { return m.repoint(m
 // (ModifyBookFile retries a lost race) and checks the row every time.
 //
 // guard, when set, runs inside the callback after the location check and refuses
-// the write by returning an error.
+// the write by returning an error. modify is the store call that writes it.
 //
 // A write the store reports as database.ErrBookFileDurabilityUnknown was
 // APPLIED (only its fsync failed, and the caller must not roll back or retry it
 // as if it were lost): repoint returns nil with unsynced set.
-func (m *fileRowMove) repoint(from, to database.BookFileLocation, guard func() error) (unsynced bool, err error) {
-	written, err := m.rows.ModifyBookFile(m.bookID, m.fileID, func(f *database.BookFile) error {
+func (m *fileRowMove) repoint(from, to database.BookFileLocation, guard func() error, modify func(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)) (unsynced bool, err error) {
+	written, err := modify(m.bookID, m.fileID, func(f *database.BookFile) error {
 		if cur := database.BookFileLocationOf(f); !database.SameFileLocation(cur, from) {
 			return fmt.Errorf("%w: it is at %q (missing=%t), not %q (missing=%t)",
 				errFileRowChanged, cur.Path, cur.Missing, from.Path, from.Missing)
@@ -640,6 +684,12 @@ const (
 // row and the book back together. The hand-off runs only after a book write that
 // is this operation's own.
 func applyMatch(store Store, operationID string, m ReconcileApplyItem, log logger.Logger) (failure string, warnings []string) {
+	// The apply is the last line of defence for a queued match set that never
+	// passed the HTTP check (ValidateApplyItems): an unrecognised type is refused
+	// before anything is read or written, not applied as an unproven match.
+	if err := validateMatchType(m.MatchType); err != nil {
+		return fmt.Sprintf("book %s: not applied, nothing written: %v", m.BookID, err), nil
+	}
 	book, err := store.GetBookByID(m.BookID)
 	if err != nil || book == nil {
 		return fmt.Sprintf("book %s: not found", m.BookID), nil
