@@ -302,6 +302,62 @@ func TestRouter_QuotaBenchSurvivesALaterFailureAndAProbe(t *testing.T) {
 	}
 }
 
+// TestRouter_FailureThatOutlastsAQuotaBenchExtendsIt: when the failure that
+// lands on a quota bench would bench the endpoint for longer than the quota
+// window has left, the bench keeps the later end, and stays a quota bench for
+// all of it, so a probe cannot clear it before then. (The quota window is
+// short here only to make the failure's rung the longer one.)
+func TestRouter_FailureThatOutlastsAQuotaBenchExtendsIt(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.setConfig(ai.Config{CooldownBase: 10 * time.Minute, CooldownMax: time.Hour, QuotaCooldown: time.Minute})
+	c := h.capability("riddle")
+	f := fake()
+	set := textEndpoint("joker-7b", "gotham.riddle")
+	set.Concurrency = 2
+	ref := h.addEndpoint("arkham", 1, set, f)
+	ctx := context.Background()
+
+	release := make(chan struct{})
+	f.ScriptText(
+		coretest.FakeAIStep{Block: release, Err: classErr(integrations.ClassTransient)}, // B, taken first
+		coretest.FakeAIStep{Err: classErr(integrations.ClassQuota)},                     // A
+	)
+	var wg sync.WaitGroup
+	wg.Go(func() { _, _ = h.r.Generate(ctx, c, text("who?")) })
+	for deadline := time.Now().Add(5 * time.Second); len(f.Calls()) < 1; {
+		if time.Now().After(deadline) {
+			t.Fatal("call B never reached the provider")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if _, err := h.r.Generate(ctx, c, text("who?")); err == nil {
+		t.Fatal("the quota failure succeeded")
+	}
+	if until, ok := h.r.BenchedUntil(ref); !ok || until.Sub(h.clk.Now()) != time.Minute {
+		t.Fatalf("quota bench = %v, %v; want 1m", until, ok)
+	}
+	landed := h.clk.Now()
+	close(release)
+	wg.Wait()
+
+	// B is the second consecutive failure: 2 x 10m, longer than the minute left.
+	if got, ok := h.r.BenchedUntil(ref); !ok || got.Sub(landed) != 20*time.Minute {
+		t.Fatalf("after a 20m failure rung landed on a 1m quota bench: until = %v, %v; want %v", got, ok, landed.Add(20*time.Minute))
+	}
+	// Past the quota window and inside the failure's, it is still a quota bench.
+	h.clk.Advance(10 * time.Minute)
+	h.r.ObserveProbe(ref, integrations.Health{Status: integrations.HealthOK})
+	if _, ok := h.r.BenchedUntil(ref); !ok {
+		t.Error("an OK probe cleared the bench inside the extended window")
+	}
+	h.clk.Advance(11 * time.Minute)
+	h.r.ObserveProbe(ref, integrations.Health{Status: integrations.HealthOK})
+	if _, ok := h.r.BenchedUntil(ref); ok {
+		t.Error("an OK probe left the bench in force after the extended window")
+	}
+}
+
 // renamed is the ai instance called name as Config reports it, with its display
 // name changed: a Put that touches no routing field.
 func renamed(t *testing.T, h *harness, name string) integrations.InstanceConfig {

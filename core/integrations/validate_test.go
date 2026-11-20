@@ -8,6 +8,7 @@ package integrations_test
 import (
 	"context"
 	"errors"
+	"maps"
 	"strings"
 	"sync"
 	"testing"
@@ -63,9 +64,7 @@ func (v *validatorLog) count() int {
 
 func withChannel(inst integrations.InstanceConfig, c string) integrations.InstanceConfig {
 	s := map[string]any{}
-	for k, v := range inst.Settings {
-		s[k] = v
-	}
+	maps.Copy(s, inst.Settings)
 	s["channel"] = c
 	inst.Settings = s
 	return inst
