@@ -1,7 +1,7 @@
 // file: core/backup/journal/base.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: d1e85b74-2c39-4a06-9f7b-8a3e0c5d1f62
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 package journal
 
@@ -32,7 +32,7 @@ import (
 // The file is created exclusively (0600) and made durable with its directory;
 // an existing file is an error and is never touched. The header is signed under
 // the active derive key.
-func CreateBased(path string, keys Keys, hdr Header, base Head) error {
+func CreateBased(path string, keys Keys, hdr Header, base Head, opts ...FSOption) error {
 	if path == "" || keys == nil || hdr.InstallID == "" {
 		return errors.New("journal: CreateBased needs a path, Keys and an install ID")
 	}
@@ -41,7 +41,19 @@ func CreateBased(path string, keys Keys, hdr Header, base Head) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	fsys := fsOf(opts...)
+	if err := writeBase(fsys, path, line); err != nil {
+		return err
+	}
+	return syncDir(fsys, LabelBaseDirSync, filepath.Dir(path))
+}
+
+// writeBase creates path exclusively (0600), writes line and fsyncs, removing
+// the file again when the write or the fsync failed, all in
+// LabelBaseCreate's region.
+func writeBase(fsys FS, path string, line []byte) error {
+	defer fsys.Region(LabelBaseCreate)()
+	f, err := fsys.Open(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("journal: create %s: %w", path, err)
 	}
@@ -53,9 +65,9 @@ func CreateBased(path string, keys Keys, hdr Header, base Head) error {
 		err = f.Sync()
 	}
 	if err = errors.Join(err, f.Close()); err != nil {
-		return errors.Join(fmt.Errorf("journal: write the header of %s: %w", path, err), os.Remove(path))
+		return errors.Join(fmt.Errorf("journal: write the header of %s: %w", path, err), fsys.Remove(path))
 	}
-	return syncDir(filepath.Dir(path))
+	return nil
 }
 
 // Fingerprint identifies a broken journal state: where the chain breaks (or

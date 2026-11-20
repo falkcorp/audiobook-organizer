@@ -1,7 +1,7 @@
 // file: core/internal/archtest_layers_test.go
-// version: 1.0.20
+// version: 1.0.21
 // guid: 2d3bc73d-ccb4-47c7-92d8-0d5c18bcfb8a
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 // Package internal holds core's R4 layer guard (03 §3.5.1 item 2), the
 // redesigned successor of ABO's internal/arch/layering_test.go for core. It
@@ -119,6 +119,10 @@ var coreLayerOf = map[string]int{
 	// protocol under outbox's relay and operator operations (F6-01, 05-events
 	// §5E.5.2), so it takes outbox's layer (R4).
 	"internal/outboxstore": 4,
+	// internal/journalfs is the bridge from the boot's seam filesystem to
+	// backup/journal's stdlib-only journal.FS (F4-08 P-B), so it takes the
+	// journal's layer (R4).
+	"internal/journalfs": 4,
 	// L5
 	"acquire": 5,
 	// L6 (internal/<capability>http is coreFamily's pattern)

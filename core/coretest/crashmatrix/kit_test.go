@@ -1,7 +1,7 @@
 // file: core/coretest/crashmatrix/kit_test.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: 67d91a53-bcd6-4094-acf4-c145ba475897
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 package crashmatrix
 
@@ -20,6 +20,7 @@ import (
 	"github.com/cockroachdb/pebble/v2/vfs"
 
 	"github.com/falkcorp/mediacore/app"
+	backupjournal "github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/internal/restoreswap"
@@ -259,6 +260,74 @@ func TestUnobservedNamesEveryLabel(t *testing.T) {
 	missing, stale = Unobserved(rows, map[string]bool{"cave.sync": true, "cave.mkdir": true, "manor.write": true}, allow)
 	if len(missing) != 0 || !slices.Equal(stale, []string{"arkham.gate", "cave.sync"}) {
 		t.Fatalf("Unobserved = %v, %v; want none missing and the reached and unlisted entries stale", missing, stale)
+	}
+}
+
+// TestUnobservedHonoursUnbound: a row marked Unbound is a writer whose code
+// has landed with nothing wiring it into a boot yet. Its labels are never
+// missing, however many fixtures run, so the matrix can list the writer now;
+// the moment a fixture does reach one the mark is untrue and the label is
+// stale, so the PR that binds the writer must drop it. A label another,
+// bound row also lists keeps that row's obligation, and an allowlist entry
+// for an Unbound label is stale as well when it is reached.
+func TestUnobservedHonoursUnbound(t *testing.T) {
+	t.Parallel()
+	rows := []Row{
+		{Writer: "batcave", Labels: []string{"cave.mkdir", "cave.sync"}},
+		{Writer: "lazarus pit", Labels: []string{"pit.fill", "pit.drain"}, Unbound: "no boot opens the pit until Ra's al Ghul wires it"},
+		{Writer: "arkham", Labels: []string{"gate.open", "cave.sync"}, Unbound: "no boot reaches the asylum"},
+	}
+	missing, stale := Unobserved(rows, map[string]bool{"cave.mkdir": true, "cave.sync": true}, nil)
+	if len(missing) != 0 || len(stale) != 0 {
+		t.Fatalf("Unobserved = %v, %v; want the Unbound labels exempt and cave.sync still owed by its bound row", missing, stale)
+	}
+	missing, _ = Unobserved(rows, map[string]bool{"cave.mkdir": true}, nil)
+	if !slices.Equal(missing, []string{"cave.sync"}) {
+		t.Fatalf("missing = %v; want only cave.sync, which a bound row also lists", missing)
+	}
+	missing, stale = Unobserved(rows, map[string]bool{"cave.mkdir": true, "cave.sync": true, "pit.fill": true, "gate.open": true}, nil)
+	if len(missing) != 0 || len(stale) != 2 {
+		t.Fatalf("Unobserved = %v, %v; want pit.fill and gate.open stale once reached", missing, stale)
+	}
+	for _, l := range stale {
+		if !strings.HasPrefix(l, "pit.fill") && !strings.HasPrefix(l, "gate.open") {
+			t.Fatalf("stale entry %q names neither reached Unbound label", l)
+		}
+	}
+	if _, stale = Unobserved(rows, map[string]bool{"cave.mkdir": true, "cave.sync": true, "pit.drain": true}, map[string]string{"pit.drain": "reason"}); len(stale) == 0 {
+		t.Fatal("an allowlisted Unbound label that is reached must be stale")
+	}
+}
+
+// TestJournalRowsAreUnboundUntilF408: the journal's file writers are listed
+// in the writer table with a reason that names F4-08, so the table cannot
+// quietly keep claiming "unbound" once a boot reaches them (see
+// TestUnobservedHonoursUnbound), and every Unbound row says why.
+func TestJournalRowsAreUnboundUntilF408(t *testing.T) {
+	t.Parallel()
+	found := 0
+	for _, r := range Rows() {
+		if r.Unbound == "" {
+			continue
+		}
+		found++
+		if !strings.Contains(r.Unbound, "F4-08") {
+			t.Errorf("row %q is Unbound for %q, which names no owner", r.Writer, r.Unbound)
+		}
+	}
+	if found < 6 {
+		t.Fatalf("found %d Unbound rows, want the journal's five and the kernel's set-aside", found)
+	}
+	listed := map[string]bool{}
+	for _, r := range Rows() {
+		for _, l := range r.Labels {
+			listed[l] = true
+		}
+	}
+	for _, l := range append(backupjournal.FSLabels(), LabelKernelJournalAside, LabelKernelJournalAsideSync) {
+		if !listed[l] {
+			t.Errorf("label %s is in no writer-table row", l)
+		}
 	}
 }
 

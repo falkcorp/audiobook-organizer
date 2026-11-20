@@ -1,7 +1,7 @@
 // file: core/backup/journal/location.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8f35a1c2-5d4e-4b7a-9c63-2e1f0d8a7b54
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package journal
 
@@ -74,8 +74,8 @@ func (l Location) HasServedBoot() bool { return l.ServedBoot.N > 0 }
 // decodes to no db_path or no install_id (`{}`, `null`: every file this package
 // writes names both), because it may have held the evidence that the store was
 // replaced; callers treat it as unreadable evidence and rewrite it.
-func ReadLocation(stateDir string) (Location, bool, error) {
-	raw, err := os.ReadFile(filepath.Join(stateDir, LocationFile))
+func ReadLocation(stateDir string, opts ...FSOption) (Location, bool, error) {
+	raw, err := fsOf(opts...).ReadFile(filepath.Join(stateDir, LocationFile))
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		return Location{}, false, nil
@@ -101,14 +101,8 @@ func ReadLocation(stateDir string) (Location, bool, error) {
 // It does no locking: in a running process only the journal component writes
 // the file and it holds one mutex across every read-modify-write (DATA7-14),
 // so the callers outside this package are the component's methods.
-func WriteLocation(stateDir string, l Location) error {
-	return writeLocation(stateDir, l, os.Rename)
-}
-
-// writeLocation is WriteLocation with the rename it ends with passed in: the
-// crash tests' seam for a crash between the temp file and the rename, an
-// argument and not a package variable so no state is shared between callers.
-func writeLocation(stateDir string, l Location, rename func(oldpath, newpath string) error) error {
+func WriteLocation(stateDir string, l Location, opts ...FSOption) error {
+	fsys := fsOf(opts...)
 	raw, err := json.Marshal(locationWire{BackupDir: l.BackupDir, Journal: l.Journal, DBPath: l.DBPath, InstallID: l.InstallID,
 		Store: l.Store, ServedBoot: l.ServedBoot, Head: headRecord(l.Head)})
 	if err != nil {
@@ -117,24 +111,62 @@ func writeLocation(stateDir string, l Location, rename func(oldpath, newpath str
 	raw = append(raw, '\n')
 	final := filepath.Join(stateDir, LocationFile)
 	tmp := final + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err := writeLocationTmp(fsys, tmp, raw); err != nil {
+		return err
+	}
+	if err := renameLocation(fsys, tmp, final); err != nil {
+		return err
+	}
+	return syncDir(fsys, LabelLocationDirSync, stateDir)
+}
+
+// writeLocationTmp creates tmp (0600, truncating a leftover), writes raw and
+// fsyncs, in LabelLocationTmp's region; a temporary file that failed is
+// removed in LabelLocationCleanup's.
+func writeLocationTmp(fsys FS, tmp string, raw []byte) error {
+	created := false
+	err := func() error {
+		defer fsys.Region(LabelLocationTmp)()
+		f, err := fsys.Open(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+		if err != nil {
+			return fmt.Errorf("journal: create %s: %w", tmp, err)
+		}
+		created = true
+		n, err := f.Write(raw)
+		if err == nil && n != len(raw) {
+			err = io.ErrShortWrite
+		}
+		if err == nil {
+			err = f.Sync()
+		}
+		if err = errors.Join(err, f.Close()); err != nil {
+			return fmt.Errorf("journal: write %s: %w", tmp, err)
+		}
+		return nil
+	}()
+	if err != nil && created {
+		return errors.Join(err, removeLabelled(fsys, LabelLocationCleanup, tmp))
+	}
+	return err
+}
+
+// renameLocation renames tmp over final in LabelLocationRename's region; a
+// rename that failed removes tmp in LabelLocationCleanup's.
+func renameLocation(fsys FS, tmp, final string) error {
+	err := func() error {
+		defer fsys.Region(LabelLocationRename)()
+		return fsys.Rename(tmp, final)
+	}()
 	if err != nil {
-		return fmt.Errorf("journal: create %s: %w", tmp, err)
+		return errors.Join(fmt.Errorf("journal: rename %s: %w", tmp, err), removeLabelled(fsys, LabelLocationCleanup, tmp))
 	}
-	n, err := f.Write(raw)
-	if err == nil && n != len(raw) {
-		err = io.ErrShortWrite
-	}
-	if err == nil {
-		err = f.Sync()
-	}
-	if err = errors.Join(err, f.Close()); err != nil {
-		return errors.Join(fmt.Errorf("journal: write %s: %w", tmp, err), os.Remove(tmp))
-	}
-	if err := rename(tmp, final); err != nil {
-		return errors.Join(fmt.Errorf("journal: rename %s: %w", tmp, err), os.Remove(tmp))
-	}
-	return syncDir(stateDir)
+	return nil
+}
+
+// removeLabelled removes path through fsys inside label's region.
+func removeLabelled(fsys FS, label, path string) error {
+	defer fsys.Region(label)()
+	return fsys.Remove(path)
 }
 
 // ReadServedBoot reads the committed c/backup/served_boot through ks: the zero
