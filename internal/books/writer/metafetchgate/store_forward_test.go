@@ -1,5 +1,5 @@
 // file: internal/books/writer/metafetchgate/store_forward_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 8802cdeb-4160-44e4-a64f-f7fa9983a421
 // last-edited: 2026-11-19
 
@@ -16,12 +16,10 @@ import (
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/backup"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/books/writer"
 	"github.com/falkcorp/audiobook-organizer/internal/books/writer/metafetchgate"
 	"github.com/falkcorp/audiobook-organizer/internal/books/writer/writertest"
-	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
@@ -53,6 +51,9 @@ type forwardRecorder struct {
 	mu              sync.Mutex
 	calls           []call
 	ret             sentinels
+	// fail is what every method returns as its error: nil on the forward pass,
+	// a sentinel on the error pass (round 3, m2).
+	fail error
 }
 
 func (r *forwardRecorder) rec(method string, args ...any) {
@@ -63,126 +64,129 @@ func (r *forwardRecorder) rec(method string, args ...any) {
 
 func (r *forwardRecorder) CreateBook(b *database.Book) (*database.Book, error) {
 	r.rec("CreateBook", b)
-	return r.ret.book, nil
+	return r.ret.book, r.fail
 }
 func (r *forwardRecorder) UpdateBook(id string, b *database.Book) (*database.Book, error) {
 	r.rec("UpdateBook", id, b)
-	return r.ret.book, nil
+	return r.ret.book, r.fail
 }
 func (r *forwardRecorder) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
 	r.rec("ModifyBook", id, fn)
-	return r.ret.book, nil
+	return r.ret.book, r.fail
 }
-func (r *forwardRecorder) DeleteBook(id string) error { r.rec("DeleteBook", id); return nil }
+func (r *forwardRecorder) DeleteBook(id string) error { r.rec("DeleteBook", id); return r.fail }
 func (r *forwardRecorder) FlagMetadataHashDuplicate(primaryID, duplicateID string) error {
 	r.rec("FlagMetadataHashDuplicate", primaryID, duplicateID)
-	return nil
+	return r.fail
 }
 func (r *forwardRecorder) SetLastWrittenAt(id string, t time.Time) error {
 	r.rec("SetLastWrittenAt", id, t)
-	return nil
+	return r.fail
 }
-func (r *forwardRecorder) MarkNeedsRescan(id string) error { r.rec("MarkNeedsRescan", id); return nil }
+func (r *forwardRecorder) MarkNeedsRescan(id string) error {
+	r.rec("MarkNeedsRescan", id)
+	return r.fail
+}
 func (r *forwardRecorder) AddBookTagWithSource(bookID, tag, source string) error {
 	r.rec("AddBookTagWithSource", bookID, tag, source)
-	return nil
+	return r.fail
 }
 func (r *forwardRecorder) RemoveBookTagsByPrefix(bookID, prefix, source string) error {
 	r.rec("RemoveBookTagsByPrefix", bookID, prefix, source)
-	return nil
+	return r.fail
 }
 func (r *forwardRecorder) RecordPathChange(c *database.BookPathChange) error {
 	r.rec("RecordPathChange", c)
-	return nil
+	return r.fail
 }
 func (r *forwardRecorder) SetBookNarrators(bookID string, n []database.BookNarrator) error {
 	r.rec("SetBookNarrators", bookID, n)
-	return nil
+	return r.fail
 }
 func (r *forwardRecorder) CreateAuthor(name string) (*database.Author, error) {
 	r.rec("CreateAuthor", name)
-	return r.ret.author, nil
+	return r.ret.author, r.fail
 }
 func (r *forwardRecorder) SetBookAuthors(bookID string, a []database.BookAuthor) error {
 	r.rec("SetBookAuthors", bookID, a)
-	return nil
+	return r.fail
 }
 func (r *forwardRecorder) ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error) {
 	r.rec("ModifyBookAuthors", bookID, fn)
-	return r.ret.cred, nil
+	return r.ret.cred, r.fail
 }
 func (r *forwardRecorder) CreateSeries(name string, authorID *int) (*database.Series, error) {
 	r.rec("CreateSeries", name, authorID)
-	return r.ret.series, nil
+	return r.ret.series, r.fail
 }
 func (r *forwardRecorder) CreateBookFile(f *database.BookFile) error {
 	r.rec("CreateBookFile", f)
-	return nil
+	return r.fail
 }
 func (r *forwardRecorder) BatchCreateBookFiles(fs []*database.BookFile) error {
 	r.rec("BatchCreateBookFiles", fs)
-	return nil
+	return r.fail
 }
 func (r *forwardRecorder) UpdateBookFile(id string, f *database.BookFile) error {
 	r.rec("UpdateBookFile", id, f)
-	return nil
+	return r.fail
 }
 func (r *forwardRecorder) UpdateBookFileHashes(id, originalHash, postMetadataHash, fileHash string) error {
 	r.rec("UpdateBookFileHashes", id, originalHash, postMetadataHash, fileHash)
-	return nil
+	return r.fail
 }
 func (r *forwardRecorder) PatchBookFileFields(bookID, fileID string, p database.BookFileFieldPatch) (*database.BookFile, *database.BookFile, error) {
 	r.rec("PatchBookFileFields", bookID, fileID, p)
-	return r.ret.file, r.ret.after, nil
+	return r.ret.file, r.ret.after, r.fail
 }
 func (r *forwardRecorder) PutMetadataCache(e *database.MetadataCandidateCache) error {
 	r.rec("PutMetadataCache", e)
-	return nil
+	return r.fail
 }
 func (r *forwardRecorder) DeleteMetadataCache(bookID string) error {
 	r.rec("DeleteMetadataCache", bookID)
-	return nil
+	return r.fail
 }
 func (r *forwardRecorder) UpsertMetadataFieldState(st *database.MetadataFieldState) error {
 	r.rec("UpsertMetadataFieldState", st)
-	return nil
+	return r.fail
 }
 func (r *forwardRecorder) DeleteMetadataFieldState(bookID, field string) error {
 	r.rec("DeleteMetadataFieldState", bookID, field)
-	return nil
+	return r.fail
 }
 func (r *forwardRecorder) RecordMetadataChange(rec *database.MetadataChangeRecord) error {
 	r.rec("RecordMetadataChange", rec)
-	return nil
+	return r.fail
 }
 func (r *forwardRecorder) CreateOperationChange(c *database.OperationChange) error {
 	r.rec("CreateOperationChange", c)
-	return nil
+	return r.fail
 }
 func (r *forwardRecorder) DeleteOperationState(id string) error {
 	r.rec("DeleteOperationState", id)
-	return nil
+	return r.fail
 }
 func (r *forwardRecorder) SetUserPreference(key, value string) error {
 	r.rec("SetUserPreference", key, value)
-	return nil
+	return r.fail
 }
 func (r *forwardRecorder) DeleteUserPreference(key string) error {
 	r.rec("DeleteUserPreference", key)
-	return nil
+	return r.fail
 }
 func (r *forwardRecorder) SetUserPreferenceForUser(userID, key, value string) error {
 	r.rec("SetUserPreferenceForUser", userID, key, value)
-	return nil
+	return r.fail
 }
 func (r *forwardRecorder) SetRaw(key string, value []byte) error {
 	r.rec("SetRaw", key, value)
-	return nil
+	return r.fail
 }
-func (r *forwardRecorder) DeleteRaw(key string) error { r.rec("DeleteRaw", key); return nil }
+func (r *forwardRecorder) DeleteRaw(key string) error { r.rec("DeleteRaw", key); return r.fail }
 func (r *forwardRecorder) DeleteRawBatch(keys []string) error {
 	r.rec("DeleteRawBatch", keys)
-	return nil
+	return r.fail
 }
 
 // admitAll is a writer that declares every resource any row names, so every
@@ -237,6 +241,13 @@ func sentinelArgs(m string, fn reflect.Value) []reflect.Value {
 			})
 		case pt == reflect.TypeFor[time.Time]():
 			in[i] = reflect.ValueOf(time.Unix(1_700_000_000+int64(i), 0))
+		case pt.Kind() == reflect.Struct:
+			// A by-value struct is compared by value, so a zero one would equal
+			// the zero a decorator that dropped it passes instead (a dropped
+			// PatchBookFileFields patch): set one field.
+			v := reflect.New(pt).Elem()
+			setOneField(v)
+			in[i] = v
 		default:
 			in[i] = reflect.Zero(pt)
 		}
@@ -251,6 +262,29 @@ func sentinelArgs(m string, fn reflect.Value) []reflect.Value {
 		in[0] = reflect.ValueOf([]string{"pcache:a", "pcache:b"})
 	}
 	return in
+}
+
+// setOneField makes the struct v non-zero by setting its first settable
+// pointer, string or integer field.
+func setOneField(v reflect.Value) {
+	for j := 0; j < v.NumField(); j++ {
+		f := v.Field(j)
+		if !f.CanSet() {
+			continue
+		}
+		switch f.Kind() {
+		case reflect.Ptr:
+			f.Set(reflect.New(f.Type().Elem()))
+		case reflect.String:
+			f.SetString("x")
+		case reflect.Int, reflect.Int64:
+			f.SetInt(7)
+		default:
+			continue
+		}
+		return
+	}
+	panic("setOneField: " + v.Type().String() + " has no settable pointer, string or integer field")
 }
 
 // same compares an argument the wrapper received with the one the inner store
@@ -318,56 +352,24 @@ func TestGatedMethodsForwardToTheSameNamedInnerMethod(t *testing.T) {
 	}
 }
 
-// TestGatedStoreHidesEveryStoreCapability (round 2, m2): metafetchgate.Store
-// embeds metafetch.Store and has no Unwrap, so database.AsCapability sees only
-// the wrapper's own method set: an opaque decorator, the hazard class
-// internal/books/store/store_capability.go records. Four lookups on the
-// file-work path therefore find nothing through it, though the real store has
-// every one of them:
-//
-//   - merge.UserProgressMerger and the sync-identity store, in
-//     organizer's followListenerIdentity (listener_identity.go): on a miss only
-//     a Warn is logged and progress and sync identity stay on the demoted
-//     source;
-//   - backup.Checkpointable, in the organizer's auto-backup step
-//     (service.go): the checkpoint backup is skipped for the racy walk;
-//   - database.FileProvenanceRecorder, from tagger's HashStore
-//     (verify.go): the provenance record is skipped.
-//
-// That is fail-closed (the capability write is skipped, not made past the
-// gate), and it is pinned here. Adding an Unwrap to Store would make every one
-// of these resolve against the INNER store and write through it without a stamp:
-// a bypass of the gate, not a fix. If one of these writes has to happen on the
-// file-work path, give the wrapper a gated method for it; do not add Unwrap.
-func TestGatedStoreHidesEveryStoreCapability(t *testing.T) {
-	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
-	require.NoError(t, err)
-	inner.WaitForWarmup()
-	t.Cleanup(func() { _ = inner.Close() })
-
-	rows, err := metafetchgate.Rows()
-	require.NoError(t, err)
-	w := writertest.ForSet("books.f518b", nil, tasks.ModeLive)
-	var gated metafetch.Store = metafetchgate.Wrap(t.Context(), inner, writer.New(w, rows))
-
-	check := func(name string, innerHas, throughWrapper bool) {
-		require.True(t, innerHas, "%s: the real store must have the capability, or this test pins nothing", name)
-		require.False(t, throughWrapper, "%s resolved through the gated store: it would be written past the gate", name)
+// TestGatedMethodsReturnTheInnerError (round 3, m2): every gated method, admitted
+// by its writer, returns the error the inner store returned: a forward written
+// as `_ = s.Store.X(...); return nil` swallowed it and passed the forward test,
+// whose inner store never failed.
+func TestGatedMethodsReturnTheInnerError(t *testing.T) {
+	for _, m := range gatedMethods {
+		t.Run(m, func(t *testing.T) {
+			g, rec, w := admitAll(t)
+			boom := fmt.Errorf("inner %s failed", m)
+			rec.fail = boom
+			fn := reflect.ValueOf(g).MethodByName(m)
+			require.True(t, fn.IsValid())
+			var out []reflect.Value
+			require.NotPanics(t, func() { out = fn.Call(sentinelArgs(m, fn)) })
+			require.Empty(t, w.Refusals(), "%s was refused by a writer that declares every resource", m)
+			require.Len(t, rec.calls, 1, "%s must reach the inner store exactly once", m)
+			err, _ := out[len(out)-1].Interface().(error)
+			require.ErrorIs(t, err, boom, "%s did not return the inner store's error", m)
+		})
 	}
-	_, ok := database.AsCapability[merge.UserProgressMerger](inner)
-	_, hidden := database.AsCapability[merge.UserProgressMerger](gated)
-	check("merge.UserProgressMerger", ok, hidden)
-	ok, hidden = database.AsSyncIdentityStore(inner) != nil, database.AsSyncIdentityStore(gated) != nil
-	check("SyncIdentityStore", ok, hidden)
-	_, ok = database.AsCapability[backup.Checkpointable](inner)
-	_, hidden = database.AsCapability[backup.Checkpointable](gated)
-	check("backup.Checkpointable", ok, hidden)
-	_, ok = database.AsCapability[database.FileProvenanceRecorder](inner)
-	_, hidden = database.AsCapability[database.FileProvenanceRecorder](gated)
-	check("FileProvenanceRecorder", ok, hidden)
-
-	// The reason: the wrapper does not opt in. Adding Unwrap turns the hiding
-	// above into a bypass of the gate, so it must fail here first.
-	_, unwraps := any(gated).(database.StoreUnwrapper)
-	require.False(t, unwraps, "metafetchgate.Store must stay opaque (no Unwrap): see the test doc")
 }
