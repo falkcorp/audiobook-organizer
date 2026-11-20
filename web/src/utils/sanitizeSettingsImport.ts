@@ -1,5 +1,5 @@
 // file: web/src/utils/sanitizeSettingsImport.ts
-// version: 1.7.0
+// version: 1.9.0
 // guid: 3f6b1c2e-8d4a-4e7f-9a51-c2d0b7e4f813
 // last-edited: 2026-11-19
 
@@ -46,32 +46,79 @@ export interface SanitizeReport {
   cleaned: Partial<api.Config>;
   // Names of the secret fields in the file that were not imported.
   skipped: string[];
+  // Server addresses in the file that were not imported: an address a stored
+  // credential is sent to may be changed only by hand, never by a file.
+  ignored: string[];
+}
+
+/** What the report says of an address the import would have changed. */
+export const IGNORED_ADDRESS_NOTE = 'ignored: server address changes must be made by hand';
+
+// An address a stored secret travels to. A settings file that sets one on a
+// source that already has its credentials saved would point those credentials
+// at whatever host the file names, so the import never changes one:
+//  - a metadata source the server already has keeps its saved base_url;
+//  - a source new to the server may carry one, and arrives with no credentials;
+//  - embedding.base_url (the embeddings client sends the OpenAI key there) keeps
+//    the server's value.
+// Without the server's current config nothing can be told new from existing, so
+// every such address is left out.
+interface CurrentAddresses {
+  metadata_sources?: Array<{ id?: string; base_url?: string }>;
+  embedding?: { base_url?: string };
 }
 
 export const sanitizeSettingsImport = (
-  payload: Partial<api.Config>
-): Partial<api.Config> => sanitizeSettingsImportWithReport(payload).cleaned;
+  payload: Partial<api.Config>,
+  current?: CurrentAddresses
+): Partial<api.Config> => sanitizeSettingsImportWithReport(payload, current).cleaned;
 
 export const sanitizeSettingsImportWithReport = (
-  payload: Partial<api.Config>
+  payload: Partial<api.Config>,
+  current?: CurrentAddresses
 ): SanitizeReport => {
   const skipped: string[] = [];
+  const ignored: string[] = [];
   const allowed = new Set([
-    'root_dir', 'playlist_dir', 'organization_strategy', 'scan_on_startup', 'auto_organize',
-    'folder_naming_pattern', 'file_naming_pattern', 'create_backups', 'supported_extensions',
-    'exclude_patterns', 'enable_disk_quota', 'disk_quota_percent', 'enable_user_quotas',
+    'root_dir',
+    'playlist_dir',
+    'organization_strategy',
+    'scan_on_startup',
+    'auto_organize',
+    'folder_naming_pattern',
+    'file_naming_pattern',
+    'create_backups',
+    'supported_extensions',
+    'exclude_patterns',
+    'enable_disk_quota',
+    'disk_quota_percent',
+    'enable_user_quotas',
     'enable_ai_parsing',
     'metadata_sources',
-    'concurrent_scans', 'cache_invalidate_on_book_update',
+    'concurrent_scans',
+    'cache_invalidate_on_book_update',
     'metadata_fetch_cache_ttl_days',
-    'purge_soft_deleted_after_days', 'backup_retention_days', 'purge_soft_deleted_delete_files', 'log_level',
-    'auto_rename_on_apply', 'auto_write_tags_on_apply', 'verify_after_write', 'protected_paths',
+    'purge_soft_deleted_after_days',
+    'backup_retention_days',
+    'purge_soft_deleted_delete_files',
+    'log_level',
+    'auto_rename_on_apply',
+    'auto_write_tags_on_apply',
+    'verify_after_write',
+    'protected_paths',
     // nested sub-struct keys (CFG-1)
-    'embedding', 'dedup', 'metadata_scoring', 'itunes', 'maintenance', 'scheduled', 'auto_update', 'tools',
+    'embedding',
+    'dedup',
+    'metadata_scoring',
+    'itunes',
+    'maintenance',
+    'scheduled',
+    'auto_update',
+    'tools',
   ]);
 
   const cleaned: Partial<api.Config> = {};
-  if (!payload || typeof payload !== 'object') return { cleaned, skipped };
+  if (!payload || typeof payload !== 'object') return { cleaned, skipped, ignored };
 
   for (const key of SECRET_KEYS) {
     if (key in payload) skipped.push(key);
@@ -103,43 +150,62 @@ export const sanitizeSettingsImportWithReport = (
       case 'metadata_sources':
         if (Array.isArray(val)) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const sanitizedSources = (val as any[]).map((s) => {
-            if (!s || typeof s !== 'object') return null;
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const src: any = {};
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            if (typeof (s as any).id === 'string') src.id = (s as any).id;
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            if (typeof (s as any).name === 'string') src.name = (s as any).name;
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            src.enabled = Boolean((s as any).enabled);
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            src.priority = typeof (s as any).priority === 'number' ? (s as any).priority : 0;
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            src.requires_auth = Boolean((s as any).requires_auth ?? (s as any).requiresAuth);
-            // The fields the page has no control for ride along: a save names the
-            // whole list, so leaving them out would erase them on the server.
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            if (typeof (s as any).base_url === 'string') src.base_url = (s as any).base_url;
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const rl = (s as any).rate_limit;
-            if (rl && typeof rl === 'object' && !Array.isArray(rl)) src.rate_limit = rl;
-            src.credentials = {};
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            if ((s as any).credentials && typeof (s as any).credentials === 'object') {
+          const sanitizedSources = (val as any[])
+            .map((s) => {
+              if (!s || typeof s !== 'object') return null;
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              for (const [ck, cv] of Object.entries((s as any).credentials)) {
-                // An exported file carries the keys with blank values; only a
-                // value that was actually in the file is worth reporting.
-                if (typeof cv !== 'string' || cv === '') continue;
-                // Every credential field of a source is a secret in the secret
-                // store, and a file may carry one in any of them: none is imported.
-                // An empty credentials map leaves the saved ones as they are.
-                skipped.push(`metadata_sources[${src.id ?? '?'}].credentials.${ck}`);
+              const src: any = {};
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              if (typeof (s as any).id === 'string') src.id = (s as any).id;
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              if (typeof (s as any).name === 'string') src.name = (s as any).name;
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              src.enabled = Boolean((s as any).enabled);
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              src.priority = typeof (s as any).priority === 'number' ? (s as any).priority : 0;
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              src.requires_auth = Boolean((s as any).requires_auth ?? (s as any).requiresAuth);
+              // rate_limit rides along: a save names the whole list, so leaving it
+              // out would erase it on the server. base_url is an address the
+              // source's saved credentials are sent to, so a file never changes it
+              // on a source the server already has.
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const rl = (s as any).rate_limit;
+              if (rl && typeof rl === 'object' && !Array.isArray(rl)) src.rate_limit = rl;
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const fileBase =
+                typeof (s as any).base_url === 'string' ? (s as any).base_url : undefined;
+              const existing = current?.metadata_sources?.find((c) => c.id === src.id);
+              const isNew =
+                current?.metadata_sources !== undefined && typeof src.id === 'string' && !existing;
+              if (isNew) {
+                if (fileBase) src.base_url = fileBase;
+              } else {
+                // Keep the server's own value; say so when the file asked for another.
+                if (existing?.base_url) src.base_url = existing.base_url;
+                if (fileBase && fileBase !== (existing?.base_url ?? '')) {
+                  ignored.push(
+                    `metadata_sources[${src.id ?? '?'}].base_url (${IGNORED_ADDRESS_NOTE})`
+                  );
+                }
               }
-            }
-            return src;
-          }).filter(Boolean);
+              src.credentials = {};
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              if ((s as any).credentials && typeof (s as any).credentials === 'object') {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                for (const [ck, cv] of Object.entries((s as any).credentials)) {
+                  // An exported file carries the keys with blank values; only a
+                  // value that was actually in the file is worth reporting.
+                  if (typeof cv !== 'string' || cv === '') continue;
+                  // Every credential field of a source is a secret in the secret
+                  // store, and a file may carry one in any of them: none is imported.
+                  // An empty credentials map leaves the saved ones as they are.
+                  skipped.push(`metadata_sources[${src.id ?? '?'}].credentials.${ck}`);
+                }
+              }
+              return src;
+            })
+            .filter(Boolean);
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (cleaned as any)[key] = sanitizedSources;
         }
@@ -152,7 +218,7 @@ export const sanitizeSettingsImportWithReport = (
       case 'enable_disk_quota':
       case 'enable_user_quotas':
       case 'enable_ai_parsing':
-        case 'cache_invalidate_on_book_update':
+      case 'cache_invalidate_on_book_update':
       case 'purge_soft_deleted_delete_files':
       case 'auto_rename_on_apply':
       case 'auto_write_tags_on_apply':
@@ -186,8 +252,17 @@ export const sanitizeSettingsImportWithReport = (
       case 'auto_update':
       case 'tools':
         if (val !== null && typeof val === 'object' && !Array.isArray(val)) {
+          const section = withoutRetiredKeys(key, val as Record<string, unknown>);
+          if (key === 'embedding' && 'base_url' in section) {
+            // The embeddings client sends the OpenAI key to this address.
+            const keep = current?.embedding?.base_url ?? '';
+            if (section.base_url !== keep) {
+              ignored.push(`embedding.base_url (${IGNORED_ADDRESS_NOTE})`);
+            }
+            delete section.base_url;
+          }
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (cleaned as any)[key] = withoutRetiredKeys(key, val as Record<string, unknown>);
+          (cleaned as any)[key] = section;
         }
         break;
 
@@ -217,7 +292,8 @@ export const sanitizeSettingsImportWithReport = (
   if (!cleaned.auto_update) {
     const autoUpdate = pruned({
       enabled: legacyBool('auto_update_enabled'),
-      channel: typeof legacy.auto_update_channel === 'string' ? legacy.auto_update_channel : undefined,
+      channel:
+        typeof legacy.auto_update_channel === 'string' ? legacy.auto_update_channel : undefined,
       check_minutes: legacyNumber('auto_update_check_minutes'),
     });
     if (autoUpdate) cleaned.auto_update = autoUpdate as api.Config['auto_update'];
@@ -231,5 +307,5 @@ export const sanitizeSettingsImportWithReport = (
     if (maintenance) cleaned.maintenance = maintenance as api.Config['maintenance'];
   }
 
-  return { cleaned, skipped };
+  return { cleaned, skipped, ignored };
 };

@@ -1,5 +1,5 @@
 // file: web/src/pages/Settings.secrets.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7b1d9e45-3c82-4a60-8f17-d4e0a6c2b593
 // last-edited: 2026-11-19
 //
@@ -302,6 +302,44 @@ describe('Settings secrets', () => {
       await editLibraryPath();
       await waitFor(() => expect(alertSpy).toHaveBeenCalledTimes(1));
       expect(String(alertSpy.mock.calls[0][0])).toContain('changing root_dir needs the admin role');
+    });
+  });
+  describe('importing a settings file', () => {
+    const ATTACKER = 'https://evil.example.test';
+
+    it('does not repoint a saved source at a host the file names, says so, and keeps the saved address', async () => {
+      renderWithProviders(<Settings />, { initialEntries: ['/settings?tab=library'] });
+      await screen.findByLabelText('Library Path');
+      const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+      const body = JSON.stringify({
+        metadata_sources: [
+          {
+            id: 'google-books',
+            name: 'Google Books',
+            enabled: true,
+            priority: 2,
+            requires_auth: true,
+            credentials: { apiKey: '' },
+            base_url: ATTACKER,
+          },
+        ],
+      });
+      // jsdom's File has no text(); the handler reads the file with it.
+      const file = Object.assign(new File([body], 'settings.json', { type: 'application/json' }), {
+        text: async () => body,
+      });
+      fireEvent.change(input, { target: { files: [file] } });
+      expect(
+        await screen.findByText(
+          /metadata_sources\[google-books\]\.base_url \(ignored: server address changes must be made by hand\)/
+        )
+      ).toBeInTheDocument();
+      fireEvent.click(
+        within(await screen.findByRole('dialog')).getByRole('button', { name: 'Import Settings' })
+      );
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      // The saved address is the server's, so the list equals what it has and is not named.
+      expect(JSON.stringify(puts)).not.toContain(ATTACKER);
     });
   });
 });
