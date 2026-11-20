@@ -113,6 +113,17 @@ func seed(name rbac.RoleName, v int64, perms ...rbac.Permission) *rbac.Role {
 	}
 }
 
+// closeBatches discards each batch that is still open and fails the test if a
+// close reports an error. Close is idempotent, so a committed batch is fine.
+func closeBatches(t *testing.T, bs ...*storage.Batch) {
+	t.Helper()
+	for _, b := range bs {
+		if err := b.Close(); err != nil {
+			t.Errorf("close: %v", err)
+		}
+	}
+}
+
 // commit stages f into a fresh batch and commits it.
 func commit(t *testing.T, fx Fixture, f func(b *storage.Batch) error) error {
 	t.Helper()
@@ -581,7 +592,7 @@ func roleSetGuard(t *testing.T, h Harness) {
 		t.Helper()
 		g := generation(t)
 		b := fx.NewBatch()
-		defer func() { _ = b.Close() }()
+		defer closeBatches(t, b)
 		if err := guarder.GuardRoleSet(b, g); err != nil {
 			t.Fatalf("GuardRoleSet(%d): %v", g, err)
 		}
@@ -692,7 +703,7 @@ func roleSetGuard(t *testing.T, h Harness) {
 		if err := fx.Store.PutRole(b, custom("custom.nightwing", 9, "core:self")); !errors.Is(err, rbac.ErrVersionMismatch) {
 			t.Fatalf("PutRole at a wrong version = %v", err)
 		}
-		_ = b.Close()
+		closeBatches(t, b)
 		if err := commit(t, fx, func(b *storage.Batch) error { return fx.Store.DeleteRole(b, custom("custom.ghost2", 1)) }); !errors.Is(err, rbac.ErrUnknownRole) {
 			t.Fatalf("DeleteRole of an absent role = %v", err)
 		}
@@ -704,7 +715,7 @@ func roleSetGuard(t *testing.T, h Harness) {
 	t.Run("a write whose commit failed raises nothing", func(t *testing.T) {
 		g := generation(t)
 		first, second := fx.NewBatch(), fx.NewBatch()
-		defer func() { _ = first.Close(); _ = second.Close() }()
+		defer closeBatches(t, first, second)
 		if err := fx.Store.PutRole(first, custom("custom.oracle", 1, "core:self")); err != nil {
 			t.Fatal(err)
 		}
@@ -740,12 +751,12 @@ func roleSetGuard(t *testing.T, h Harness) {
 	t.Run("a claim fails a claims guard, not a role-set guard, and changes no role", func(t *testing.T) {
 		g := generation(t)
 		claims := fx.NewBatch()
-		defer func() { _ = claims.Close() }()
+		defer closeBatches(t, claims)
 		if err := guarder.GuardRoleClaims(claims); err != nil {
 			t.Fatal(err)
 		}
 		roles := fx.NewBatch()
-		defer func() { _ = roles.Close() }()
+		defer closeBatches(t, roles)
 		if err := guarder.GuardRoleSet(roles, g); err != nil {
 			t.Fatal(err)
 		}
@@ -778,7 +789,7 @@ func roleSetGuard(t *testing.T, h Harness) {
 	t.Run("the first guard of a batch wins", func(t *testing.T) {
 		g1 := generation(t)
 		b := fx.NewBatch()
-		defer func() { _ = b.Close() }()
+		defer closeBatches(t, b)
 		if err := guarder.GuardRoleSet(b, g1); err != nil {
 			t.Fatal(err)
 		}
