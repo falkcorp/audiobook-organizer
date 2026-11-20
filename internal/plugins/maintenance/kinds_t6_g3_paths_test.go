@@ -275,7 +275,9 @@ func (w *t6g3CBRecWriter) ClearClassLists(opID string) error {
 // store: HEAD's read adapter, and a writer factory that hands out recording
 // writers over HEAD's write adapter.
 type t6g3CBNative struct {
-	deps    t6g3Deps
+	deps t6g3Deps
+	// runs is deps.Runs: the run store holding this run, running.
+	runs    tasks.RunStore
 	rec     *t6g3CBStore
 	inval   *atomic.Int32
 	mu      sync.Mutex
@@ -285,10 +287,11 @@ type t6g3CBNative struct {
 
 func newT6G3CBNative(f *cbFixture, key tasks.Key) *t6g3CBNative {
 	p, rec, inval := newT6G3CBHead(f, nil)
-	n := &t6g3CBNative{rec: rec, inval: inval}
+	n := &t6g3CBNative{rec: rec, inval: inval, runs: runningCBRuns(f.t)}
 	n.deps = t6g3Deps{
 		Store:        headT6g3Store{OpsStore: rec, p: p},
 		StandDownKey: key,
+		Runs:         n.runs,
 		NewWriter: func(w tasks.Writer) t6g3Writer {
 			rw := &t6g3CBRecWriter{t6g3ForwardSpy: newT6G3ForwardSpy(headT6g3Writer{p: p, store: rec})}
 			n.mu.Lock()
@@ -323,6 +326,19 @@ func (n *t6g3CBNative) assertWithin(t *testing.T, d tasks.Definition) {
 	all.assertWithin(t, d)
 }
 
+// classListRows counts the class-list rows of the run (the fake run's id).
+func (n *t6g3CBNative) classListRows(t *testing.T) int {
+	t.Helper()
+	c := 0
+	for row, err := range n.runs.Rows(t.Context(), cbFakeRunID) {
+		require.NoError(t, err)
+		if strings.HasPrefix(row.ID, database.ClassListRowPrefix) {
+			c++
+		}
+	}
+	return c
+}
+
 func (n *t6g3CBNative) kind() tasks.Definition {
 	return (&Plugin{}).creditsBackfillKind(n.deps, nil)
 }
@@ -346,7 +362,8 @@ func TestT6G3_CreditsBackfillNativeLiveWritesThroughTheWriter(t *testing.T) {
 	calls := n.calls()
 	assert.Contains(t, calls, "ModifyBookCredits:cbc-join-empty")
 	assert.Contains(t, calls, "CreateOperationChange:"+undo.ChangeTypeCreditsBackfill)
-	assert.Contains(t, calls, "SaveClassLists")
+	assert.NotContains(t, calls, "SaveClassLists", "the class lists are not a writer call (F5-18d, O10)")
+	assert.NotZero(t, n.classListRows(t), "the class lists are the run's own rows")
 	assert.Contains(t, calls, "InvalidateAuthorsCache", "an apply that wrote books invalidates the authors cache")
 	assert.Equal(t, []tasks.Key{t6g3ScanKey}, host.standDowns, "the apply holds the owner's scan key")
 	var res creditsBackfillResult
@@ -374,6 +391,7 @@ func TestT6G3_CreditsBackfillNativePreviewWritesAndHoldsNothing(t *testing.T) {
 	assert.False(t, t6g3HasCall(calls, "CreateOperationChange"), "%v", calls)
 	assert.NotContains(t, calls, "InvalidateAuthorsCache")
 	assert.Empty(t, host.standDowns, "a preview holds no stand-down")
+	assert.NotZero(t, n.classListRows(t), "a preview keeps its class lists as its own rows (the owner reads them)")
 }
 
 // A live apply without the owner's scan key is refused before any write: the
@@ -813,24 +831,10 @@ func TestT6G3_CreditsBackfillHeadShellWarnsWhenAJudgedMarkerIsNotWritten(t *test
 	assert.Equal(t, "marker refused", line.Attrs["error"])
 }
 
-func TestT6G3_CreditsBackfillNativeWarnsWhenAJudgedMarkerIsNotWritten(t *testing.T) {
-	f, rec := cbLeftoverFixture(t, false)
-	cbSeedOtherOp(t, f, cbCrashedOp, creditsBackfillOpID, "failed", rec)
-	n := newT6G3CBNative(f, t6g3ScanKey)
-	n.rec.failMark = errors.New("marker refused")
-	host, rc := newT6G3Host(t6g3CreditsBackfillKind, tasks.ModeLive, &t6g3Gate{id: "credits-live"})
-	host.SetCPUSlots(3)
-	_, err := t6g3Run(t, n.kind(), rc, "")
-	require.NoError(t, err)
-	host.mu.Lock()
-	lines := slices.Clone(host.lines)
-	host.mu.Unlock()
-	line, ok := t6g3FindLine(lines, "could not mark operation's leftovers judged")
-	require.True(t, ok, "no warning in %v", lines)
-	assert.Equal(t, slog.LevelWarn, line.Level)
-	assert.Equal(t, cbCrashedOp, line.Attrs["operation"])
-	assert.Equal(t, "marker refused", line.Attrs["error"])
-}
+// The native kind writes no judged marker (its judgements ride in its result,
+// F5-18d O12), so it has no marker write to warn about:
+// TestT6G3_CreditsBackfillNativeJudgesAFailedNativeRunAndCarriesTheJudgement
+// (credits_backfill_native_test.go) covers its ledger.
 
 // Both HEAD-shell journal forwarders create a row behind the classification
 // check (database.RecordOperationChange): an unclassified change type is
