@@ -49,7 +49,10 @@ What it trusts, because it runs as root and writes files root later executes:
 guessed from $SUDO_USER), and the dry run prints the grantee and the rendered
 sudoers text, or its diff against what is installed.
 
-Needs root to apply. Run as a user it re-runs itself under `sudo`; --root
+Needs root to apply (`make install-rollback-helpers APPLY=1` exports HEAD to a
+root-owned directory and runs it from there with sudo; run directly as a user it
+re-runs itself under `sudo`, which the source check above refuses from a
+checkout the deploy user can write); --root
 PREFIX puts every destination under PREFIX instead (the tests; also a staging
 tree). Standard library only. Tests: scripts/tests/test_install_helpers.py.
 """
@@ -331,12 +334,19 @@ def state(step: Step) -> str:
 
 def sudoers_state(path: str, text: str) -> str:
     """unchanged | create | replace | fix, as state(): the text, the mode and
-    the owner all have to be right."""
+    the owner all have to be right; unreadable when the caller cannot read it
+    (a dry run as an ordinary user: run it with sudo to compare)."""
     p = Path(path)
     if not os.path.lexists(path):
         return "create"
-    if p.is_symlink() or not p.is_file() or p.read_text() != text:
+    if p.is_symlink() or not p.is_file():
         return "replace"
+    try:
+        if p.read_text() != text:
+            return "replace"
+    except PermissionError:
+        # root-owned 0440: a dry run as an ordinary user cannot compare it.
+        return "unreadable"
     st = p.stat()
     return "unchanged" if stat.S_IMODE(st.st_mode) == SUDOERS_MODE and owned_right(st) else "fix"
 
@@ -498,7 +508,8 @@ def main(argv: list[str] | None = None) -> int:
     if bad:
         print(
             f"  NOTICE: {len(bad)} path(s) of this checkout can be written by {a.deploy_user} "
-            f"(first: {bad[0]}). APPLY=1 will refuse to run as root from here; see the docstring."
+            f"(first: {bad[0]}). Running this script with --apply from here would refuse; "
+            "`make install-rollback-helpers APPLY=1` exports HEAD to a root-owned directory first."
         )
     for s, st in todo:
         print(f"  {st:<9} {s.path}" + (f"  ({s.note})" if s.note else ""))
@@ -506,6 +517,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\nSudoers grantee: {a.deploy_user} (may run the helpers as root, nothing else).")
     if sudo_state == "unchanged":
         print("The installed sudoers drop-in is already this one.")
+    elif sudo_state == "unreadable":
+        print(
+            f"{sudoers_path} is root-only (mode 0440), so this run cannot compare it: run the dry run "
+            f"with sudo to see the diff. The rendered text:\n{sudoers}"
+        )
     elif os.path.isfile(sudoers_path) and not os.path.islink(sudoers_path):
         print(f"Change to {sudoers_path}:")
         print(
@@ -559,7 +575,14 @@ def main(argv: list[str] | None = None) -> int:
         write_atomic(s.path, s.data, s.mode, chown)
         print(f"  wrote {s.path}")
     if tmp:
-        old = Path(sudoers_path).read_bytes() if os.path.isfile(sudoers_path) else None
+        try:
+            old = Path(sudoers_path).read_bytes() if os.path.isfile(sudoers_path) else None
+        except PermissionError:
+            os.unlink(tmp)
+            raise SystemExit(
+                f"install_helpers: cannot read {sudoers_path}, so it cannot be put back if the "
+                "whole-config check refuses the new one, so the drop-in was left as it is (run as root)"
+            )
         if chown:
             os.chown(tmp, 0, 0)
         os.replace(tmp, sudoers_path)
