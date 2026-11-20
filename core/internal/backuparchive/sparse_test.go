@@ -149,7 +149,7 @@ func TestExtractLegacyWritesNoMoreThanTheScanCounted(t *testing.T) {
 	}
 	info.Bytes--
 	store := t.TempDir()
-	if err := backuparchive.ExtractLegacy(t.Context(), p, info, store, backuparchive.Limits{}); !errors.Is(err, backuparchive.ErrChanged) {
+	if _, err := backuparchive.ExtractLegacy(t.Context(), p, info, store, backuparchive.Limits{}); !errors.Is(err, backuparchive.ErrChanged) {
 		t.Fatalf("err = %v, want ErrChanged", err)
 	}
 	if _, err := os.Lstat(filepath.Join(store, "g")); !errors.Is(err, os.ErrNotExist) {

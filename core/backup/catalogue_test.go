@@ -58,7 +58,7 @@ func TestCatalogueSurvivesRestore(t *testing.T) {
 	e.settings.MaxCount = 10
 	b := e.create("manual")
 	c := e.create("manual")
-	if _, err := e.svc.StageRestore(context.Background(), a.ID, backup.RestoreOptions{}); err != nil {
+	if _, err := e.svc.StageRestore(asOwner(context.Background()), a.ID, backup.RestoreOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	list, _ := e.svc.List(context.Background())
@@ -319,9 +319,9 @@ func TestBackupTaskExclusive(t *testing.T) {
 		"Prune":  e.svc.Prune(ctx),
 		"Delete": e.svc.Delete(ctx, first.ID),
 		"Cancel": e.svc.CancelRestore(ctx),
-		"Stage":  func() error { _, err := e.svc.StageRestore(ctx, first.ID, backup.RestoreOptions{}); return err }(),
+		"Stage":  func() error { _, err := e.svc.StageRestore(asOwner(ctx), first.ID, backup.RestoreOptions{}); return err }(),
 		"Rewrap": func() error { _, err := e.svc.Rewrap(ctx, first.ID); return err }(),
-		"Revert": func() error { _, err := e.svc.RevertLastRestore(ctx, backup.RestoreOptions{}); return err }(),
+		"Revert": func() error { _, err := e.svc.RevertLastRestore(asOwner(ctx), backup.RestoreOptions{}); return err }(),
 	}
 	for name, err := range refused {
 		if !errors.Is(err, backup.ErrBackupInProgress) {

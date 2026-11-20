@@ -48,7 +48,7 @@ func TestRestoreBelowUpgradeFloorRefusedAtStaging(t *testing.T) {
 			e.opts.Store = nil // a fresh host: there is no live store to protect or to disagree
 			e.rebuild()
 		}
-		_, err := e.svc.StageRestore(ctx, a.ID, backup.RestoreOptions{})
+		_, err := e.svc.StageRestore(asOwner(ctx), a.ID, backup.RestoreOptions{})
 		var uf *storage.ErrUpgradeFloor
 		if !errors.As(err, &uf) || uf.Owner != gothamOwner || uf.Floor != 99 || uf.InstallFirst != "v0.9.0" {
 			t.Fatalf("%s: err = %v, want *storage.ErrUpgradeFloor naming v0.9.0", host, err)
@@ -69,7 +69,7 @@ func TestRestoreRefusesBreakingStepAboveTheBuild(t *testing.T) {
 	a := e.create("manual")
 	e.opts.Inspector = wrapInspector{Inspector: e.opts.Inspector, fail: storage.ErrKeyspaceTooNew}
 	e.rebuild()
-	_, err := e.svc.StageRestore(ctx, a.ID, backup.RestoreOptions{})
+	_, err := e.svc.StageRestore(asOwner(ctx), a.ID, backup.RestoreOptions{})
 	if !errors.Is(err, backup.ErrBackupTooNew) || !errors.Is(err, storage.ErrKeyspaceTooNew) {
 		t.Fatalf("err = %v, want ErrBackupTooNew wrapping ErrKeyspaceTooNew", err)
 	}

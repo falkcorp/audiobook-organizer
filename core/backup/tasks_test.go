@@ -7,6 +7,7 @@ package backup_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"slices"
 	"strings"
@@ -166,13 +167,17 @@ func TestPruneAndStageTaskBodies(t *testing.T) {
 		t.Fatalf("catalogue = %d", len(list))
 	}
 	list, _ := e.svc.List(ctx)
-	rc := taskstest.NewFakeRun(ctx, backup.KindStageRestore).RC()
+	// The body's mapping of its parameters, under a run whose context carries
+	// the owner proof: no enqueuer can hand a run one today, so every real run
+	// is refused (TestStageTaskStagesNothingWithoutAProof); this checks what the
+	// body does once one can.
+	rc := taskstest.NewFakeRun(asOwner(ctx), backup.KindStageRestore).RC()
 	if _, err := backup.TaskStage(e.svc, rc, backup.StageParams{ArchiveID: list[0].ID, Verify: "bogus"}); err == nil {
 		t.Fatal("an unknown verify level was accepted")
 	}
 	res, err := backup.TaskStage(e.svc, rc, backup.StageParams{ArchiveID: list[0].ID, Verify: "entries", AllowWeakVerify: false})
-	if err == nil {
-		t.Fatalf("entries-level restore verification accepted without AllowWeakVerify: %+v", res)
+	if err == nil || errors.Is(err, backup.ErrRestoreNotAuthorized) {
+		t.Fatalf("entries-level restore verification without AllowWeakVerify: %+v, %v; want the verify-level refusal", res, err)
 	}
 	res, err = backup.TaskStage(e.svc, rc, backup.StageParams{ArchiveID: list[0].ID})
 	if err != nil || !res.RestartRequired || res.Pending.ArchiveID != list[0].ID {

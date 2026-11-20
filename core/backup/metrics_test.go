@@ -41,7 +41,7 @@ func TestBackupSeriesGolden(t *testing.T) {
 	if _, err := e.svc.Verify(ctx, a.ID, backup.VerifyEntries); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.svc.StageRestore(ctx, a.ID, backup.RestoreOptions{}); err != nil {
+	if _, err := e.svc.StageRestore(asOwner(ctx), a.ID, backup.RestoreOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.svc.List(ctx); err != nil {

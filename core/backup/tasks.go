@@ -139,9 +139,17 @@ func PruneTask(s *Svc) tasks.Definition {
 }
 
 // StageRestoreTask is core.backup.stage-restore: it verifies an archive and
-// stages it for the next start. It is started with core:backup.restore, and
-// the privileged options of StageParams are refused on this path (the service
-// requires a RestoreProof only an owner-checked route can set).
+// stages it for the next start. 05-backup §5B.3.4 names it "task
+// core.backup.stage-restore (POST /api/core/v1/backups/{id}/restore, permission
+// core:backup.restore (Sensitive, AuthRequired, 05-rbac), credential-change
+// route with owner proof". Start is that permission, and OwnerRouteOnly keeps
+// the kind off the generic task API, which would start it without the route's
+// interactive and owner guards.
+//
+// The service refuses every restore that carries no RestoreProof
+// (ErrRestoreNotAuthorized), and a task run's context carries none, so a run of
+// this kind stages nothing until whoever enqueues it can hand the run an owner
+// proof. Today the restore route calls StageRestore itself and enqueues nothing.
 //
 //tasklint:constructor the kernel passes the result to Registrar.Tasks at P6 from F8-04; this package registers nothing
 func StageRestoreTask(s *Svc) tasks.Definition {
@@ -151,11 +159,18 @@ func StageRestoreTask(s *Svc) tasks.Definition {
 	}
 	return tasks.Task(KindStageRestore, tasks.TaskSpec[StageParams, StageResult]{
 		Title: "Stage a restore", Help: "Verifies an archive and stages it for the next start. The live data is not touched until the service restarts.",
-		Effects: tasks.Writes(Resource()), Perms: tasks.Permissions{Start: rbac.Need("core:backup.restore")}, Resume: tasks.ResumeDrop,
+		Effects: tasks.Writes(Resource()), Perms: tasks.Permissions{Start: rbac.Need("core:backup.restore"), OwnerRouteOnly: stageRouteReason}, Resume: tasks.ResumeDrop,
 		ConcurrencyKey: taskKey, Timeout: 6 * time.Hour,
 		Run: run,
 	})
 }
+
+// stageRouteReason is why core.backup.stage-restore is not startable through
+// the generic task API: the restore route (core/internal/backuphttp) requires an
+// interactive session and the owner's assurance on top of core:backup.restore
+// (05-backup §5B.3.8), which a definition cannot state. The route stages the
+// restore itself today; it enqueues no run of this kind.
+const stageRouteReason = "a restore needs the restore route's interactive owner proof; the route stages it and enqueues no run of this kind"
 
 // manageBackups is the permission the create, verify and prune tasks start
 // with.

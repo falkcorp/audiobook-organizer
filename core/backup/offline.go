@@ -92,7 +92,7 @@ func extractStore(ctx context.Context, archive, storeDir string, disk Disk) (id 
 	}
 	lim := backuparchive.Limits{}
 	if _, err := os.Lstat(archive + ChecksumSidecar); err == nil {
-		if err := checkSumFile(ctx, archive); err != nil {
+		if _, err := checkSumFile(ctx, archive); err != nil {
 			return "", fmt.Errorf("backup: extract store: %w", err)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -187,7 +187,7 @@ func extractLegacyStore(ctx context.Context, archive, storeDir string, lim backu
 	if err := requireSpace(disk, 0, spaceClaim{dir: storeDir, bytes: uint64(info.Bytes)}); err != nil {
 		return "", fmt.Errorf("backup: extract store: %w", err)
 	}
-	if err := backuparchive.ExtractLegacy(ctx, archive, info, storeDir, lim); err != nil {
+	if _, err := backuparchive.ExtractLegacy(ctx, archive, info, storeDir, lim); err != nil {
 		return "", fmt.Errorf("backup: extract store: %w", err)
 	}
 	id := legacyIDOf(filepath.Base(archive))
