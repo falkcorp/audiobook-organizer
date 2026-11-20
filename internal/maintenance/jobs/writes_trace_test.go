@@ -105,6 +105,12 @@ var traceAliases = map[string]string{
 // traceWriteName is the store method a call key stands for, and whether it is a
 // write the trace has to account for.
 func traceWriteName(table map[string][]string, key string) (string, bool) {
+	// A call the walk could not resolve names no method (its suffix is where
+	// the value was read from, which can begin like a verb: #Precheck);
+	// TestJobWrites_NoUnresolvedCalls holds each one to a reason.
+	if strings.HasPrefix(key, "UNRESOLVED.") {
+		return "", false
+	}
 	if a, ok := traceAliases[key]; ok {
 		return a, true
 	}
