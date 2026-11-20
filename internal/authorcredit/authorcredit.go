@@ -1,5 +1,5 @@
 // file: internal/authorcredit/authorcredit.go
-// version: 1.5.3
+// version: 1.5.4
 // guid: 7000d1fc-e16c-47e1-bb94-6180fe3ec1de
 // last-edited: 2026-11-19
 
@@ -157,28 +157,45 @@ type titleIndex struct {
 
 var (
 	titleMu    sync.Mutex
-	titleCache = map[any]*titleIndex{}
+	titleCache = map[TitleKey]*titleIndex{}
 )
+
+// TitleKey is the identity a title index is cached under. It is opaque on
+// purpose: the only thing outside this package can do with one is compare it
+// and hand it back. It holds the store (or other pointer) it names in an
+// unexported field and has no methods, so a decorator that returns one from
+// TitleCacheKey hands its caller no way to reach the store it wraps (a raw
+// store returned as the key would be an Unwrap under another name, a write
+// path around the decorator).
+type TitleKey struct{ id any }
+
+// TitleKeyOf names the cache entry for v. Only a pointer is cached (a value
+// key may be unhashable or never repeat).
+func TitleKeyOf(v any) TitleKey { return TitleKey{id: v} }
+
+func (k TitleKey) cacheable() bool {
+	return k.id != nil && reflect.TypeOf(k.id).Kind() == reflect.Pointer
+}
 
 // TitleCacheKeyer is implemented by a decorator over a store that names the
 // identity the title index is cached under. The cache is keyed by the
 // TitleSource value, and a decorator built per run (the gated metafetch
 // wrapper) is a new value every run: it would be a new, never evicted entry
-// holding a library-sized index each time. Returning the wrapped store's own
-// key makes every decorator over one store share the store's entry.
+// holding a library-sized index each time. A decorator names the key of the
+// layer a bare store resolves its TitleSource at, so every decorator over one
+// store shares the store's entry.
 type TitleCacheKeyer interface {
-	TitleCacheKey() any
+	TitleCacheKey() TitleKey
 }
 
 // titleCacheKey is the identity ts's title index is cached under, and whether
-// it can be cached: a pointer key only (a value key may be unhashable, or never
-// repeat).
-func titleCacheKey(ts TitleSource) (key any, cacheable bool) {
-	key = ts
+// it can be cached.
+func titleCacheKey(ts TitleSource) (TitleKey, bool) {
+	key := TitleKeyOf(ts)
 	if k, ok := ts.(TitleCacheKeyer); ok {
 		key = k.TitleCacheKey()
 	}
-	return key, key != nil && reflect.TypeOf(key).Kind() == reflect.Pointer
+	return key, key.cacheable()
 }
 
 // titlesOf returns the title index of ts (every live book title and series
@@ -242,7 +259,7 @@ func TitleCacheLen() int {
 func ResetTitleCache() {
 	titleMu.Lock()
 	defer titleMu.Unlock()
-	titleCache = map[any]*titleIndex{}
+	titleCache = map[TitleKey]*titleIndex{}
 }
 
 // LettersKey is a name's letters and digits, lower-cased and NFC-normalized:
@@ -575,7 +592,7 @@ func LooksCombined(name string, exists func(piece string) bool) bool {
 // FindByAlias returns the author whose alias is name, through the store's
 // optional alias lookup (nil when the store has none or no alias matches).
 func FindByAlias(store any, name string) (*database.Author, error) {
-	af, ok := database.AsCapability[aliasFinder](store)
+	af, ok := database.AsCapability[AliasFinder](store)
 	if !ok {
 		return nil, nil
 	}
@@ -586,8 +603,9 @@ func FindByAlias(store any, name string) (*database.Author, error) {
 	return a, nil
 }
 
-// aliasFinder is the optional alias lookup a part may resolve through.
-type aliasFinder interface {
+// AliasFinder is the optional alias lookup a part may resolve through. Exported
+// so a decorator can assert at compile time that it still offers it.
+type AliasFinder interface {
 	FindAuthorByAlias(aliasName string) (*database.Author, error)
 }
 
@@ -602,7 +620,7 @@ func lookupExisting(store Store, name string) (*database.Author, error) {
 	if a != nil {
 		return a, nil
 	}
-	if af, ok := database.AsCapability[aliasFinder](store); ok {
+	if af, ok := database.AsCapability[AliasFinder](store); ok {
 		a, err = af.FindAuthorByAlias(name)
 		if err != nil {
 			return nil, fmt.Errorf("look up author alias %q: %w", name, err)
@@ -833,10 +851,11 @@ func gradeAuthorityAuthor(lookup authority.Lookup, name string) Evidence {
 	return Evidence{Strength: EvidenceWeak, Detail: fmt.Sprintf("the authority lists hold %q as an author (no tier O / A credit)", name)}
 }
 
-// authorBooksSource is the by-author book listing the outside-series
+// AuthorBooksSource is the by-author book listing the outside-series
 // evidence reads: one lookup per title-named part (a memdb index in
-// production).
-type authorBooksSource interface {
+// production). Exported so a decorator can assert at compile time that it
+// still offers it.
+type AuthorBooksSource interface {
 	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
 }
 
@@ -848,7 +867,7 @@ type authorBooksSource interface {
 // 2026-10-05): a junk record left on books whose series was never set would
 // otherwise link.
 type outsideSeriesEvidence struct {
-	books  authorBooksSource
+	books  AuthorBooksSource
 	series map[int]string // series ID -> name letters key (titleIndex)
 }
 
@@ -1048,7 +1067,7 @@ type evidenceSource struct {
 // when it has one (which may answer strong).
 func evidenceSources(store Store, ti *titleIndex) []evidenceSource {
 	out := []evidenceSource{{src: authorityEvidence{lookup: authorityOf(store)}, canBeStrong: true}}
-	if bs, ok := database.AsCapability[authorBooksSource](store); ok {
+	if bs, ok := database.AsCapability[AuthorBooksSource](store); ok {
 		out = append(out, evidenceSource{src: outsideSeriesEvidence{books: bs, series: ti.seriesKey}})
 	}
 	out = append(out, evidenceSource{src: providerCreditEvidence{store: store}})
