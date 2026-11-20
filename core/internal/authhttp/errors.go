@@ -1,7 +1,7 @@
 // file: core/internal/authhttp/errors.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4e91b6c3-0d27-4a58-9f3e-b8c71d5a2e04
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package authhttp
 
@@ -59,6 +59,9 @@ func (a *api) fail(ctx context.Context, s spec, p *auth.Principal, target string
 	case errors.Is(err, auth.ErrBusy):
 		return (&httpapi.Error{Status: http.StatusServiceUnavailable, Code: "busy", Detail: "the server is busy hashing passwords; try again"}).
 			WithRetryAfter(2 * time.Second)
+	case errors.Is(err, auth.ErrContended):
+		return (&httpapi.Error{Status: http.StatusServiceUnavailable, Code: "busy", Detail: "other changes to accounts and roles are landing; try again"}).
+			WithRetryAfter(time.Second)
 	case errors.Is(err, auth.ErrStoreUnavailable):
 		return &httpapi.Error{Status: http.StatusServiceUnavailable, Code: "auth_unavailable", Detail: "the credential store is unavailable"}
 	case errors.Is(err, auth.ErrBootstrapInvalid):

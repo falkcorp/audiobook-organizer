@@ -1,7 +1,7 @@
 // file: core/auth/errors.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d92e3ae8-8bef-47eb-a6ac-a221aa99fd21
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package auth
 
@@ -46,6 +46,15 @@ var (
 	// ErrBusy: the password-hashing semaphore was not free within the wait
 	// bound (503 busy, §6).
 	ErrBusy = errors.New("auth: password hashing busy")
+	// ErrContended: a write that gives a user a role (CreateUser, SetRoles, an
+	// accepted invite, a first OIDC sign-in), or any other commit retried on
+	// conflict, lost every one of its tries to other writers
+	// (F4-02-ROLE-GUARD r2: all of them bump one role-claim counter and read
+	// the role-set generation, so they conflict with each other and with role
+	// writes). Nothing was written and the same request is expected to land
+	// later; it wraps storage.ErrConflict, and authhttp answers 503 busy with
+	// a Retry-After, never a 500.
+	ErrContended = errors.New("auth: the write kept conflicting with others; retry")
 	// ErrUserExists: a username or e-mail another account holds.
 	ErrUserExists = errors.New("auth: user exists")
 	// ErrNotFound: the user, key, session or invite named does not exist.

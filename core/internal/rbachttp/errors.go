@@ -1,7 +1,7 @@
 // file: core/internal/rbachttp/errors.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 69b1d61d-585a-4f6f-b17d-d80d01b620cc
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package rbachttp
 
@@ -40,6 +40,7 @@ import (
 //	ErrVersionMismatch  412 precondition_failed (§8)
 //	ErrUnknownRole      404 not_found
 //	ErrRoleName, ErrBadScope, ErrUnknownScope 422 validation_failed
+//	ErrContended        503 busy               (coined; Retry-After 1s: the write lost every try to other writers)
 //	ErrNotFrozen        503 unavailable
 //
 // ErrFrozen and ErrConfiningSeed are boot-time refusals (a declaration after
@@ -81,6 +82,9 @@ func mapError(err error, permField string) error {
 	case errors.Is(err, rbac.ErrVersionMismatch):
 		return &httpapi.Error{Status: http.StatusPreconditionFailed, Code: "precondition_failed",
 			Detail: "the role changed since it was read; read it again and retry", Err: err}
+	case errors.Is(err, rbac.ErrContended):
+		return (&httpapi.Error{Status: http.StatusServiceUnavailable, Code: "busy",
+			Detail: "the role set is changing too fast to apply this change; try again", Err: err}).WithRetryAfter(time.Second)
 	case errors.Is(err, rbac.ErrNotFrozen):
 		return &httpapi.Error{Status: http.StatusServiceUnavailable, Code: "unavailable",
 			Detail: "roles are not available yet", Err: err}

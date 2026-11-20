@@ -1,5 +1,5 @@
 // file: core/auth/roleclaim_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0c5d7e21-93b4-4a68-8f1e-2d6a4b9c7e53
 // last-edited: 2026-11-19
 
@@ -312,6 +312,35 @@ func TestRoleClaim_AssignRacesDelete_Free(t *testing.T) {
 				}
 			}
 			t.Logf("%d rounds: assigned %d, role deleted %d", rounds, assigned, deleted)
+		})
+	}
+}
+
+// TestRoleClaim_LosingEveryTryIsContended: a write that gives a role whose
+// Commit conflicts on every try (a new role lands inside each one, moving the
+// role-set generation it guards) answers ErrContended, wrapping
+// storage.ErrConflict, and writes nothing: authhttp maps it 503 busy with a
+// Retry-After, where a bare storage.ErrConflict was a 500.
+func TestRoleClaim_LosingEveryTryIsContended(t *testing.T) {
+	for _, way := range claimWays {
+		t.Run(way, func(t *testing.T) {
+			c := newClaimFx(t)
+			write := c.assign(way)
+			tries := 0
+			c.f.audit.hold = func(audit.Event) {
+				tries++
+				name := rbac.RoleName(fmt.Sprintf("custom.nightwing-%d", tries))
+				if _, err := c.f.rb.CreateRole(context.Background(), c.rbacActor, rbac.RoleInput{Name: name, Title: "Nightwing", Permissions: []rbac.Permission{"gotham:patrol"}}); err != nil {
+					t.Errorf("CreateRole %s: %v", name, err)
+				}
+			}
+			err := write()
+			if !errors.Is(err, auth.ErrContended) || !errors.Is(err, storage.ErrConflict) {
+				t.Fatalf("%s that lost every try: err = %v, want ErrContended wrapping storage.ErrConflict", way, err)
+			}
+			if n := c.holdersOfRobin(); n != 0 {
+				t.Fatalf("%d user(s) hold the role after a write that never committed", n)
+			}
 		})
 	}
 }

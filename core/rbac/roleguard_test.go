@@ -1,5 +1,5 @@
 // file: core/rbac/roleguard_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c3a71d5e-2b84-4f09-9e6a-81d4b0f7a352
 // last-edited: 2026-11-19
 
@@ -224,5 +224,94 @@ func TestDeleteRole_StoreWithoutGuardFailsClosed(t *testing.T) {
 	}
 	if _, err := f.store.GetRole(ctx, "custom.wayne"); err != nil {
 		t.Fatalf("a refused delete removed the role: %v", err)
+	}
+}
+
+// claimOnce commits one ClaimRoleSet in its own batch, over the generation read
+// just before, the way a user write that gives a role does; a generation that
+// moved between the read and the commit is a conflict, and it reads again.
+func claimOnce(ctx context.Context, f *fixture) error {
+	return storage.RetryOnConflict(ctx, 64, func(ctx context.Context) error {
+		g, err := f.svc.RoleSetGeneration(ctx)
+		if err != nil {
+			return err
+		}
+		b := f.store.NewBatch()
+		defer func() { _ = b.Close() }()
+		if err := f.svc.ClaimRoleSet(b, g); err != nil {
+			return err
+		}
+		return b.Commit(ctx, storage.Sync)
+	})
+}
+
+// TestDeleteRole_LosingEveryTryIsContendedNotAMismatch: a DeleteRole whose
+// Commit conflicts on every one of its tries (a claim lands between its reads
+// and its Commit each time) answers ErrContended, which wraps
+// storage.ErrConflict and is not ErrVersionMismatch: the caller's version was
+// current, the role is untouched, and the same request is expected to land
+// later. rbachttp maps it 503 busy with a Retry-After, never a 500 and never the
+// 412 that tells a client its read was stale.
+func TestDeleteRole_LosingEveryTryIsContendedNotAMismatch(t *testing.T) {
+	ctx := context.Background()
+	f := boot(t, newEnv(t), setup{modules: []module{gotham()}})
+	lucius := f.mustCreate("custom.lucius", "core:self")
+	attempts := 0
+	rbac.SetBeforeCommit(f.svc, func() {
+		attempts++
+		if err := claimOnce(ctx, f); err != nil {
+			t.Errorf("the competing claim: %v", err)
+		}
+	})
+	err := f.svc.DeleteRole(ctx, f.admin(), "custom.lucius", lucius.Version)
+	if !errors.Is(err, rbac.ErrContended) || !errors.Is(err, storage.ErrConflict) {
+		t.Fatalf("DeleteRole that lost every try = %v, want ErrContended wrapping storage.ErrConflict", err)
+	}
+	if errors.Is(err, rbac.ErrVersionMismatch) {
+		t.Fatalf("DeleteRole that lost every try = %v: it must not read as a stale version", err)
+	}
+	if attempts != rbac.MaxWriteAttempts {
+		t.Fatalf("commit attempts = %d, want %d", attempts, rbac.MaxWriteAttempts)
+	}
+	f.unchanged("custom.lucius", lucius.Version)
+
+	rbac.SetBeforeCommit(f.svc, nil)
+	if err := f.svc.DeleteRole(ctx, f.admin(), "custom.lucius", lucius.Version); err != nil {
+		t.Fatalf("the same DeleteRole once the claims stop: %v", err)
+	}
+}
+
+// TestDeleteRole_LandsAgainstAFullBurstOfClaimers: fifteen claims, each landing
+// between a try's reads and its Commit (the first fifteen tries), with a
+// DeleteRole of a role none of them names. Each claim fails the delete's Commit
+// once, so the sixteenth try lands it; the retry is a bounded loop inside the
+// service, and the caller never sees a conflict. (Fifteen racing goroutines do
+// not exercise this: a claim almost never commits inside the window, so the
+// hook places it there.)
+func TestDeleteRole_LandsAgainstAFullBurstOfClaimers(t *testing.T) {
+	const claimers = 15
+	if rbac.MaxWriteAttempts < claimers+1 {
+		t.Fatalf("maxWriteAttempts = %d: fewer than the %d tries a burst of %d claimers can cost", rbac.MaxWriteAttempts, claimers+1, claimers)
+	}
+	ctx := context.Background()
+	f := boot(t, newEnv(t), setup{modules: []module{gotham()}})
+	lucius := f.mustCreate("custom.lucius", "core:self")
+	attempts := 0
+	rbac.SetBeforeCommit(f.svc, func() {
+		attempts++
+		if attempts <= claimers {
+			if err := claimOnce(ctx, f); err != nil {
+				t.Errorf("claim %d: %v", attempts, err)
+			}
+		}
+	})
+	if err := f.svc.DeleteRole(ctx, f.admin(), "custom.lucius", lucius.Version); err != nil {
+		t.Fatalf("DeleteRole against %d claimers: %v", claimers, err)
+	}
+	if attempts != claimers+1 {
+		t.Fatalf("commit attempts = %d, want %d", attempts, claimers+1)
+	}
+	if _, err := f.svc.Role(ctx, "custom.lucius"); !errors.Is(err, rbac.ErrUnknownRole) {
+		t.Fatalf("the role is still there after its delete returned nil: %v", err)
 	}
 }
