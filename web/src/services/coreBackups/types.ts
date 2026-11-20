@@ -139,6 +139,13 @@ export const BACKUP_REFUSAL_CODES = [
   'restore_option_not_authorized',
   'restore_stale',
   'staging_cross_device',
+  // httpapi and the shared decoders (core/httpapi, backuphttp/errors.go, routes.go).
+  'authentication_required',
+  'malformed_json',
+  'unsupported_media_type',
+  'unknown_field',
+  'validation_failed',
+  'unavailable',
 ] as const;
 export type BackupRefusalCode = (typeof BACKUP_REFUSAL_CODES)[number];
 

@@ -13,11 +13,9 @@
 // UNWIRED: nothing in the running app imports this module until the F8-04a flip.
 //
 // Rules this file enforces, each with a test in client.test.ts:
-//  - redirect: 'manual', as coreEvents does. An opaqueredirect response is an SSO bounce
-//    and is raised as the API client's ApiAuthRedirectError; so is a 2xx text/html page.
-//    response.redirected is never read.
-//  - A non-2xx answer is decoded with the API client's decodeProblem into a
-//    BackupRequestError (status, code, detail, request id, Retry-After, required scope).
+//  - The request itself (redirect: 'manual', the SSO-bounce and text/html handling, the
+//    deadline, problem+json decoding, Retry-After) is coreHttp's. A non-2xx answer becomes
+//    a BackupRequestError (status, code, detail, request id, Retry-After, required scope).
 //    A 403 is never retried or papered over: the caller decides what to show.
 //  - Request bodies carry only the members the server accepts (it rejects unknown ones),
 //    and a call with nothing to say sends no body at all.
@@ -28,14 +26,15 @@
 //  - Nothing is logged. Errors carry the operation, status, code and detail the server
 //    chose to send; never a request body, header, cookie or URL query.
 
+import type { Problem } from '@mediacore/api-client';
+
 import {
-  ApiAuthRedirectError,
-  ApiTimeoutError,
-  LEGACY_PROBLEM_CODE,
-  SESSION_ENDING_CODES,
-  decodeProblem,
-  type Problem,
-} from '@mediacore/api-client';
+  DEFAULT_TIMEOUT_MS,
+  MAX_RETRY_AFTER_MS,
+  createTransport,
+  parseRetryAfterMs,
+  type RawRequest,
+} from '../coreHttp';
 
 import {
   BackupArgumentError,
@@ -56,10 +55,9 @@ export const BACKUPS_IMPORT_PATH = `${BACKUPS_PATH}/import`;
 export const RESTORE_REVERT_PATH = '/api/core/v1/restore/revert';
 export const RESTORE_PENDING_PATH = '/api/core/v1/restore/pending';
 
-/** A request that gets no answer in this long is abandoned with ApiTimeoutError; <= 0 disables the deadline. */
-export const DEFAULT_TIMEOUT_MS = 30000;
-/** Retry-After above this is clamped: a hostile or broken header must not park the UI. */
-export const MAX_RETRY_AFTER_MS = 10 * 60 * 1000;
+// The deadline, the Retry-After parser and its cap live in coreHttp, shared with coreUpdater.
+export { DEFAULT_TIMEOUT_MS, MAX_RETRY_AFTER_MS, parseRetryAfterMs };
+
 /** The import's name bound (core/internal/backuphttp maxNameBytes). */
 const MAX_NAME_BYTES = 200;
 
@@ -76,7 +74,9 @@ export interface BackupsClientOptions {
    * Deadline of restore and revert. Default 0: no deadline, only the caller's signal ends
    * it. The server verifies, extracts, inspects and stages synchronously inside the
    * request (core/backup/stage.go) and has no write timeout, so a slow archive can
-   * legitimately take longer than timeoutMs; abandoning the call would not stop the server.
+   * legitimately take longer than timeoutMs. Abandoning the call does not tell you the
+   * outcome: the server derives its context from the request, so a dropped connection can
+   * cancel staging part-way, or it can finish; only pending() says which.
    */
   stageTimeoutMs?: number;
   fetch?: typeof fetch;
@@ -110,8 +110,9 @@ export interface BackupsClient {
    *
    * No deadline by default (stageTimeoutMs). If the answer is lost (the page was closed, the
    * connection dropped, the caller aborted) the restore may still have staged: call
-   * pending() to learn whether it did. NEVER retry restore() to find out; a second call
-   * stages a second store swap.
+   * pending() to learn whether it did. Do not retry restore() to find out: while one
+   * restore is staged the server answers 409 swap_pending, and a retry stages again only
+   * after the first was applied, cancelled or expired, which is a second store swap.
    */
   restore(id: string, req?: BackupRestoreRequest, opts?: CallOptions): Promise<BackupRestoreStaged>;
   /**
@@ -129,27 +130,6 @@ export interface BackupsClient {
 }
 
 type Op = 'list' | 'create' | 'remove' | 'import' | 'restore' | 'revert' | 'pending' | 'cancel';
-
-/** Retry-After as delta-seconds or an HTTP date, in ms; null when absent or unusable. */
-export function parseRetryAfterMs(
-  value: string | null | undefined,
-  now: () => number = Date.now
-): number | null {
-  if (value == null) return null;
-  const v = value.trim();
-  if (v === '') return null;
-  let ms: number;
-  if (/^\d+$/.test(v)) {
-    ms = Number(v) * 1000;
-  } else {
-    // An HTTP date starts with a day name; Date.parse would read "-5" as a year.
-    if (!/^[A-Za-z]/.test(v)) return null;
-    const at = Date.parse(v);
-    if (Number.isNaN(at)) return null;
-    ms = at - now();
-  }
-  return Math.min(Math.max(ms, 0), MAX_RETRY_AFTER_MS);
-}
 
 const CREATE_KEYS = ['reason', 'include_derived', 'include_recreatable'] as const;
 const RESTORE_KEYS = [
@@ -181,10 +161,14 @@ function bodyOf(
 
 /** Mirrors backup.ValidArchiveID (core/backup/manifest.go): a 26-character ULID or a "legacy-" name. */
 const ULID_ID = /^[0-9A-Z]{26}$/;
+// Go's len(s) == 26 branch never tries the legacy branch, so a 26-byte "legacy-" id is invalid.
 const LEGACY_ID = /^legacy-[A-Za-z0-9_-]+$/;
 
 function checkId(id: string): string {
-  if (typeof id !== 'string' || !(ULID_ID.test(id) || (LEGACY_ID.test(id) && id.length <= 200))) {
+  if (
+    typeof id !== 'string' ||
+    !(ULID_ID.test(id) || (LEGACY_ID.test(id) && id.length !== 26 && id.length <= 200))
+  ) {
     throw new BackupArgumentError('archive id is not an id the server issues');
   }
   return id;
@@ -229,102 +213,24 @@ export function backupDownloadUrl(id: string, baseUrl = ''): string {
 }
 
 export function createBackupsClient(opts: BackupsClientOptions = {}): BackupsClient {
-  // Raw fetch on purpose, not apiFetch or createCoreClient: both follow redirects, and the
-  // bounce must be seen as an opaqueredirect (05-realtime 4.8 item 4). It is handled in
-  // send() below (opaqueredirect and a 2xx text/html both raise ApiAuthRedirectError),
-  // which is what the lint rule exists to guarantee.
-  // eslint-disable-next-line no-restricted-properties
-  const doFetch: typeof fetch = opts.fetch ?? ((...a) => globalThis.fetch(...a));
-  const baseUrl = opts.baseUrl ?? '';
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const transport = createTransport(
+    opts,
+    (operation, r) =>
+      new BackupRequestError({
+        operation,
+        status: r.status,
+        code: r.code,
+        detail: r.detail,
+        requestId: r.requestId,
+        retryAfterMs: r.retryAfterMs,
+        requiredPermission: r.requiredPermission,
+        fields: r.fields,
+      })
+  );
+  const baseUrl = transport.baseUrl;
   const importTimeoutMs = opts.importTimeoutMs ?? 0;
   const stageTimeoutMs = opts.stageTimeoutMs ?? 0;
-
-  interface Req {
-    method: 'GET' | 'POST' | 'DELETE';
-    path: string;
-    json?: unknown;
-    raw?: Blob;
-    deadlineMs?: number;
-    signal?: AbortSignal;
-  }
-
-  /** One request; returns an ok, non-HTML response. Callers check status and body. */
-  async function send(op: Op, r: Req): Promise<Response> {
-    const url = `${baseUrl}${r.path}`;
-    // Errors name the endpoint, never the query (the import's ?name= is the user's file name).
-    const errUrl = `${baseUrl}${r.path.split('?')[0]}`;
-    const headers: Record<string, string> = { Accept: 'application/json' };
-    const init: RequestInit = {
-      method: r.method,
-      headers,
-      credentials: 'include',
-      cache: 'no-store',
-      redirect: 'manual',
-    };
-    if (r.json !== undefined) {
-      headers['Content-Type'] = 'application/json';
-      init.body = JSON.stringify(r.json);
-    } else if (r.raw !== undefined) {
-      headers['Content-Type'] = 'application/octet-stream';
-      init.body = r.raw;
-    }
-
-    const deadline = r.deadlineMs ?? timeoutMs;
-    const ctl = new AbortController();
-    let timedOut = false;
-    // A deadline <= 0 means none, as createCoreClient's runtimeFetch has it.
-    const timer =
-      deadline > 0
-        ? setTimeout(() => {
-            timedOut = true;
-            ctl.abort();
-          }, deadline)
-        : undefined;
-    const forward = () => ctl.abort();
-    if (r.signal?.aborted) ctl.abort();
-    else r.signal?.addEventListener('abort', forward);
-    init.signal = ctl.signal;
-
-    let res: Response;
-    try {
-      res = await doFetch(url, init);
-    } catch (err) {
-      // "We gave up" is a failure to report; "the caller gave up" is control flow.
-      if (timedOut) throw new ApiTimeoutError(errUrl, deadline);
-      throw err;
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
-      r.signal?.removeEventListener('abort', forward);
-    }
-
-    // SSO bounce: with redirect 'manual' the browser hands back an opaque response.
-    if (res.type === 'opaqueredirect') throw new ApiAuthRedirectError(errUrl, errUrl);
-
-    if (!res.ok) {
-      const problem = await decodeProblem(res);
-      if (res.status === 401 && SESSION_ENDING_CODES.has(problem.code))
-        opts.onUnauthorized?.(problem);
-      throw new BackupRequestError({
-        operation: op,
-        status: res.status,
-        code: problem.code,
-        // A legacy or proxy body is not ours to echo: decodeProblem puts its first 200
-        // characters in title, which could be anything the proxy printed.
-        detail: problem.code === LEGACY_PROBLEM_CODE ? '' : (problem.detail ?? problem.title ?? ''),
-        requestId: problem.request_id ?? '',
-        retryAfterMs: parseRetryAfterMs(res.headers?.get?.('Retry-After')),
-        requiredPermission: problem.required_permission,
-        fields: problem.errors ?? [],
-      });
-    }
-
-    // A same-origin SSO page answers 200 text/html: the same bounce, not an answer.
-    if ((res.headers?.get?.('Content-Type') ?? '').toLowerCase().includes('text/html')) {
-      throw new ApiAuthRedirectError(errUrl, errUrl);
-    }
-    return res;
-  }
+  const send = (op: Op, r: RawRequest) => transport.send(op, r);
 
   async function obj(op: Op, res: Response, status: number): Promise<Record<string, unknown>> {
     if (res.status !== status)
