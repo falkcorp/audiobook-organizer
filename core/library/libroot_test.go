@@ -967,8 +967,10 @@ func TestConfinedDirSwappedForASymlinkAfterItIsOpenedIsChangedByHandle(t *testin
 			if err := os.Chmod(dir, tc.mode); err != nil {
 				t.Fatal(err)
 			}
+			// The target's mode differs from the real directory's, so a decision made
+			// by looking at the name after the swap would come out differently.
 			victim := t.TempDir()
-			if err := os.Chmod(victim, tc.mode); err != nil {
+			if err := os.Chmod(victim, 0o700); err != nil {
 				t.Fatal(err)
 			}
 			env := defaultReportEnv()
@@ -976,8 +978,8 @@ func TestConfinedDirSwappedForASymlinkAfterItIsOpenedIsChangedByHandle(t *testin
 			if err := ensureConfinedDir(kind, dir, nil, env); err != nil {
 				t.Fatalf("the directory that was checked is still there under another name: %v", err)
 			}
-			if info, err := os.Stat(victim); err != nil || info.Mode().Perm() != tc.mode {
-				t.Fatalf("the symlink target was changed: %v %v, want %o", info, err, tc.mode)
+			if info, err := os.Stat(victim); err != nil || info.Mode().Perm() != 0o700 {
+				t.Fatalf("the symlink target was changed: %v %v, want 700", info, err)
 			}
 			if ents, _ := os.ReadDir(victim); len(ents) != 0 {
 				t.Fatalf("the symlink target received a file: %v", ents)
