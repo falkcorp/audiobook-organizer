@@ -1,5 +1,5 @@
 // file: core/integrations/write.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 29ac02ee-bf78-408e-a1cf-db1779640943
 // last-edited: 2026-11-19
 
@@ -111,7 +111,18 @@ func shape(ref Ref, a *adapter, inst InstanceConfig, secretsIn map[string]secret
 		return shaped{}, err
 	}
 	// The kind's own rule, over the same effective layer the schema judged.
-	if err := runValidator(val, a.desc.meta.ID, out.view, storedSettings); err != nil {
+	// The layer it is handed as "stored" is what the instance serves now, the
+	// stored layer with the operator overlay applied: a value an operator
+	// already locks is part of the row being replaced, though the stored layer
+	// does not hold it (a locked field keeps its stored value), so the rule can
+	// grandfather it like a stored one instead of refusing every Put of an
+	// instance over a value only the operator can change. A create has no row
+	// to replace and is handed nil.
+	var prior map[string]any
+	if storedSettings != nil {
+		prior = overlayValues(fs, storedSettings, ops)
+	}
+	if err := runValidator(val, a.desc.meta.ID, out.view, prior); err != nil {
 		return shaped{}, err
 	}
 	return out, nil

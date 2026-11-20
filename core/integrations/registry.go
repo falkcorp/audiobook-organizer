@@ -1,5 +1,5 @@
 // file: core/integrations/registry.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 5291a2b4-f665-40ef-8c7f-d588aa319bec
 // last-edited: 2026-11-19
 
@@ -204,8 +204,11 @@ type Registry struct {
 	last map[Ref]Health
 
 	// vmu guards validators, the kinds' SettingsValidators (validate.go). It
-	// is not the writer mutex: a kind's owner installs its validator from a
-	// constructor that may run while a write holds mu.
+	// is not the writer mutex: the map is read on the Put path, which already
+	// holds mu, and in Test, which does not, and a kind's owner installs its
+	// validator after the Registry exists, so a lock of its own keeps both reads
+	// and the install from depending on mu. It is a leaf: nothing is called
+	// while it is held.
 	vmu        sync.RWMutex
 	validators map[Kind]SettingsValidator
 
