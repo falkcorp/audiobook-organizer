@@ -122,6 +122,43 @@ func TestVerifyLegacyRefusesAScanOfOtherBytes(t *testing.T) {
 	}
 }
 
+// swapOnErr is a context whose Err rename-replaces the archive once, on its
+// second call. checkSumFile reads through ctxReader, which asks Err before
+// every Read, so the second call falls inside the sidecar check's copy: after
+// that check opened the archive and before ScanLegacy opens the path again.
+type swapOnErr struct {
+	context.Context
+	calls int
+	swap  func()
+}
+
+func (c *swapOnErr) Err() error {
+	c.calls++
+	if c.calls == 2 {
+		c.swap()
+	}
+	return c.Context.Err()
+}
+
+// TestVerifyBindsTheScanToTheBytesTheSidecarCheckRead: an archive renamed over
+// between the sidecar check's read and the legacy scan's read is refused. The
+// sidecar check hashed the original through its open descriptor and passed;
+// the scan read the replacement, and runVerify hands verifyLegacy the checked
+// digest to compare against, so verification fails and vouches for nothing.
+func TestVerifyBindsTheScanToTheBytesTheSidecarCheckRead(t *testing.T) {
+	path, _ := tinyLegacy(t, t.TempDir(), "Alfred", true)
+	other, _ := tinyLegacy(t, t.TempDir(), "Bane", false)
+	var swapErr error
+	ctx := &swapOnErr{Context: context.Background(), swap: func() { swapErr = os.Rename(other, path) }}
+	_, got, err := (&Svc{}).verifyWith(ctx, path, "legacy-x", VerifyEntries, false)
+	if swapErr != nil || ctx.calls < 2 {
+		t.Fatalf("fixture: the archive was not replaced (%d Err calls): %v", ctx.calls, swapErr)
+	}
+	if !errors.Is(err, backuparchive.ErrChanged) || got != "" {
+		t.Fatalf("an archive replaced between the sidecar check and the scan: %q, %v; want backuparchive.ErrChanged and no digest", got, err)
+	}
+}
+
 // TestExtractLegacyRefusesAnArchiveItDidNotVerify: staging extracts a legacy
 // archive only if it still has the digest the verification vouched for, and
 // writes nothing otherwise; with no digest vouched for there is nothing to bind.

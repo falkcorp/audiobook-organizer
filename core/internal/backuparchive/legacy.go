@@ -113,10 +113,28 @@ func ScanLegacy(ctx context.Context, archive string, lim Limits) (info LegacyInf
 // It returns every file it wrote, named relative to storeDir with the size and
 // SHA-256 of the bytes written, in archive order: a legacy archive has no
 // per-entry digests, so these are what a later re-hash of the copy compares
-// against. It returns nil with any error.
+// against. It returns nil with any error, a failed Close included.
 func ExtractLegacy(ctx context.Context, archive string, info LegacyInfo, storeDir string, lim Limits) ([]Written, error) {
 	lim = lim.withDefaults()
-	var written []Written
+	return extractLegacy(ctx, info, storeDir, lim, func() (io.ReadCloser, int64, error) {
+		f, st, err := OpenRegular(archive, lim.MaxArchiveBytes)
+		if err != nil {
+			return nil, 0, err
+		}
+		return f, st.Size(), nil
+	})
+}
+
+// extractLegacy is ExtractLegacy over an opener that returns the archive and
+// its size, so a test can hand it an archive whose Close fails. Its results are
+// named because the deferred Closes join their errors into err; the first
+// defer, which runs last, then drops written, so no error returns files.
+func extractLegacy(ctx context.Context, info LegacyInfo, storeDir string, lim Limits, open func() (io.ReadCloser, int64, error)) (written []Written, err error) {
+	defer func() {
+		if err != nil {
+			written = nil
+		}
+	}()
 	if entries, err := os.ReadDir(storeDir); err != nil {
 		return nil, err
 	} else if len(entries) > 0 {
@@ -131,12 +149,12 @@ func ExtractLegacy(ctx context.Context, archive string, info LegacyInfo, storeDi
 	// space; the extraction may write no more than that.
 	ex.SetBudget(info.Bytes)
 	remaining := info.Bytes
-	f, st, err := OpenRegular(archive, lim.MaxArchiveBytes)
+	f, size, err := open()
 	if err != nil {
 		return nil, err
 	}
 	defer func() { err = errors.Join(err, f.Close()) }()
-	if st.Size() != info.scanned {
+	if size != info.scanned {
 		return nil, ErrChanged
 	}
 	h := sha256.New()

@@ -15,7 +15,9 @@ restore routes establish (`ErrRestoreNotAuthorized`), and the task keeps
 so the generic task API refuses to start it. No run of the task can stage a
 restore until whatever enqueues it can hand the run an owner proof; the restore
 route stages restores itself. Nothing registers core backup yet, so nothing in
-production changes.
+production changes. An archtest (`RestoreProofCallers`) now fails the build when any
+non-test file outside `core/internal/backuphttp`, `core/backup`'s own task
+bodies included, mints the proof with `backup.WithRestoreProof`.
 
 ### Fixed
 
@@ -28,5 +30,6 @@ same-size corruption of the staged store passed the boot re-check. Each staged
 file's SHA-256 is now recorded as it is written, and a full re-hash refuses an
 entry that has no digest instead of skipping it. Staging also refuses a legacy
 archive whose bytes differ from the ones the verification accepted (an archive
-replaced, sidecar and all, between verification and extraction). The offline
-`storage restore-offline --archive` extractor is unchanged.
+replaced, sidecar and all, between verification and extraction), and
+verification refuses an archive replaced between its sidecar check and its
+scan. The offline `storage restore-offline --archive` extractor is unchanged.

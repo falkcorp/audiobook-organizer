@@ -1045,8 +1045,8 @@ func TestLegacyRestoreBindsTheVerifiedArchive(t *testing.T) {
 				t.Fatalf("List = %+v, %v", list, err)
 			}
 			opts := backup.RestoreOptions{Foreign: true, AllowWeakVerify: !sidecar}
-			if _, err := e.svc.StageRestore(ctx, list[0].ID, opts); !errors.Is(err, backuparchive.ErrChanged) {
-				t.Fatalf("an archive replaced after verification: err = %v, want backuparchive.ErrChanged", err)
+			if _, err := e.svc.StageRestore(ctx, list[0].ID, opts); !errors.Is(err, backuparchive.ErrChanged) || !strings.Contains(err.Error(), "not the one the verification accepted") {
+				t.Fatalf("an archive replaced after verification: err = %v, want staging's backuparchive.ErrChanged refusal", err)
 			}
 			if len(e.stager.staged) != 0 {
 				t.Fatal("an intent was created for an archive the verification did not accept")
