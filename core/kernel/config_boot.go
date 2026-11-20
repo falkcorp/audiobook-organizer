@@ -1,5 +1,5 @@
 // file: core/kernel/config_boot.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 0e3db6c6-c5ae-4f54-adaf-6fd7b728c89e
 // last-edited: 2026-11-19
 
@@ -359,6 +359,10 @@ func (k *Kernel) attachCoreConfig(ctx context.Context) error {
 		return errors.New("kernel: config: a store is open and the secret store is not: P4b did not run bindCoreStores")
 	}
 	if _, err := k.cfgBoot.attachConfig(ctx, k.audit, k.sec.store, k.sec.store); err != nil {
+		return err
+	}
+	// 05-config 2.4 step 2: before any module registers and reads a secret.
+	if err := handOperatorSecrets(k.cfgBoot.store, k.sec.store); err != nil {
 		return err
 	}
 	k.reportConfigHealth()
