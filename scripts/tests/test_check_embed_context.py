@@ -171,10 +171,11 @@ class RealTreeTests(unittest.TestCase):
         ):
             self.assertIn(want, lines)
 
-    def test_real_core_list_is_empty_and_core_half_passes(self):
+    def test_real_core_list_is_hello_web_dist_and_core_half_passes(self):
+        # F9-01: hello's ui_embed.go embeds its built SPA (07 §7.6, 06 §6.12.5).
         core_list = ROOT / "core/scripts/ci/embed_build_outputs.txt"
         self.assertTrue(core_list.is_file())
-        self.assertEqual(core_list.stat().st_size, 0)
+        self.assertEqual(ceo.read_outputs(core_list), ["examples/hello/web/dist"])
         self.assertEqual(ceo.core_problems(ROOT / "core", ceo.read_outputs(core_list)), [])
 
     def test_real_root_list_is_web_dist_and_both_dockerfiles_copy_core_mod(self):

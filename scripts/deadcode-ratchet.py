@@ -446,7 +446,11 @@ def with_surface(spec: RunSpec, helper: str, scratch: str, env: dict[str, str]) 
     synthetic SDK-surface main, which joins the run's patterns. The real tree
     is only read."""
     copy = os.path.join(scratch, spec.base or "module")
-    shutil.copytree(spec.cwd, copy, ignore=shutil.ignore_patterns(".git"))
+    # node_modules holds no Go, and after `make -C core web-install` it is a
+    # symlink cycle (core/web/node_modules/hello-web -> examples/hello/web,
+    # whose node_modules -> core/web/node_modules) that copytree would follow
+    # until ELOOP.
+    shutil.copytree(spec.cwd, copy, ignore=shutil.ignore_patterns(".git", "node_modules"))
     copied = dataclasses.replace(
         spec, cwd=Path(copy), patterns=(*spec.patterns, "./" + SURFACE_DIR)
     )
