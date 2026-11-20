@@ -32,8 +32,10 @@ export type {
   BookChangeBatchHandler,
   BookChangeBatcher,
   BookChangeBatcherOptions,
+  BookChangeSubscription,
   BookChangeSubscriptionOptions,
   UseBookChangesOptions,
+  UseBookChangesResult,
 } from './bookChanges';
 export { useServerShutdown, watchServerShutdown } from './shutdown';
 export type { ServerShutdownInfo, ServerShutdownListener } from './shutdown';

@@ -16,7 +16,11 @@
 //  - Refusals (problem+json before the first byte) surface with status, code and
 //    Retry-After, and the next attempt waits at least that long.
 //  - 3 s -> 60 s jittered backoff, no give-up.
-//  - core.stream.reset.v1 -> resync handlers; core.stream.closed.v1 -> reconnect.
+//  - core.stream.reset.v1 -> resync handlers, every one: a reset can follow the open (owed
+//    by the subscribe) or come mid-stream (a gap after withheld events), and only the
+//    manager's coalescing may merge them; core.stream.closed.v1 -> reconnect.
+//  - Waits are measured on a monotonic clock (deps.now), so a wall-clock step never
+//    stretches a backoff or a server hold.
 //  - Every wait on the network has a deadline (connect and idle), so a hung server is a
 //    visible reconnect, not an infinite 'connecting'.
 
@@ -46,7 +50,12 @@ export const DEFAULT_IDLE_TIMEOUT_MS = 45000;
 export interface ConnectionDeps {
   fetch: typeof fetch;
   random: () => number;
+  /** A monotonic clock in ms (performance.now): backoff and hold deadlines are on it. */
+  now: () => number;
 }
+
+/** The default clock: monotonic, so an NTP step or a resumed laptop moves no deadline. */
+export const monotonicNow = (): number => performance.now();
 
 /**
  * Reconnect state that outlives one connection object. The manager keeps one per
@@ -55,9 +64,12 @@ export interface ConnectionDeps {
  * and reconnecting at once under a standing wait (#4785 r2 m1).
  */
 export interface BackoffState {
-  /** Consecutive failed attempts since the last good open. */
+  /**
+   * Consecutive failed attempts since the last good open. The manager starts a stream
+   * that was closed and is wanted again from zero once its wait has lapsed.
+   */
   attempt: number;
-  /** Never connect before this (epoch ms); zeroed only by a good open. */
+  /** Never connect before this (deps.now ms); zeroed by a good open. */
   notBefore: number;
 }
 
@@ -68,7 +80,7 @@ export interface BackoffState {
  * new keyed stream as much as to the shared one that was refused.
  */
 export interface ServerHold {
-  /** Epoch ms before which no stream may connect (0 for none). */
+  /** The time (deps.now ms) before which no stream may connect (0 for none). */
   until(): number;
   /** A refusal named a Retry-After: hold every stream until `untilMs` (never shortens). */
   extend(untilMs: number): void;
@@ -156,6 +168,7 @@ export function createStreamConnection(opts: ConnectionOptions): StreamConnectio
   // eslint-disable-next-line no-restricted-properties
   const doFetch: typeof fetch = opts.deps?.fetch ?? ((...a) => globalThis.fetch(...a));
   const random = opts.deps?.random ?? Math.random;
+  const now = opts.deps?.now ?? monotonicNow;
   const baseUrl = opts.baseUrl ?? '';
   const connectTimeoutMs = opts.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
   const idleTimeoutMs = opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
@@ -166,7 +179,7 @@ export function createStreamConnection(opts: ConnectionOptions): StreamConnectio
   let timer: ReturnType<typeof setTimeout> | null = null;
   let wakeSleep: (() => void) | null = null;
   let lastEventId = '';
-  // backoff.notBefore: never sooner than this (epoch ms). Set from every failed attempt's
+  // backoff.notBefore: never sooner than this (now() ms). Set from every failed attempt's
   // backoff and Retry-After, honoured by open() and restart() too, reset only by a good open.
   const backoff: BackoffState = opts.backoff ?? { attempt: 0, notBefore: 0 };
   const serverHold = opts.serverHold;
@@ -179,12 +192,11 @@ export function createStreamConnection(opts: ConnectionOptions): StreamConnectio
   // handlers on the next good open (reason 'reconnect').
   let sentLastId = false;
   let resyncOnOpen = false;
-  // The server writes opened, then a reset if the subscribe owed one, then the replay
-  // (core/internal/sse/serve.go). When this attempt's open already told the resync
-  // handlers ('reconnect'), a 'gap' or 'restart' reset as the very next frame says the
-  // same thing again: swallow it, so one reopen is one resync (#4785 r2 m4). Any event or
-  // reset frame ends that window, and an 'overflow' is a loss after the open, never swallowed.
-  let resyncedAtOpen = false;
+  // A reopen can raise two resyncs: 'reconnect' at the open and the reset the subscribe
+  // owed right after it (core/internal/sse/serve.go). Both are passed on: the same 'gap'
+  // also comes mid-stream after withheld events (core/realtime/stream.go), and with no
+  // Last-Event-ID the subscribe owes none, so no frame here can be told apart as a
+  // repeat. The manager's resync coalescing merges the pair into one refetch (#4813 r1 M1).
 
   const setStatus = (state: StreamState, extra: Partial<StreamStatus> = {}) => {
     status = { state, attempt: backoff.attempt, streamKey: opts.key, ...(closedReason ? { closedReason } : {}), ...extra };
@@ -219,7 +231,6 @@ export function createStreamConnection(opts: ConnectionOptions): StreamConnectio
     const ctl = new AbortController();
     controller = ctl;
     closedThisAttempt = false;
-    resyncedAtOpen = false;
     const url = buildStreamUrl(baseUrl, opts.topics(), opts.key, opts.exclude?.() ?? []);
     let connectTimedOut = false;
     const connectTimer = setTimeout(() => {
@@ -330,18 +341,12 @@ export function createStreamConnection(opts: ConnectionOptions): StreamConnectio
         setStatus('open');
         if (resyncOnOpen || !sentLastId) {
           resyncOnOpen = false;
-          resyncedAtOpen = true;
           opts.onReset('reconnect');
         }
         return;
-      case TOPIC_RESET: {
-        const reason = reasonOf(parsed.data);
-        const owedBySubscribe = resyncedAtOpen && (reason === 'gap' || reason === 'restart');
-        resyncedAtOpen = false;
-        if (owedBySubscribe) return;
-        opts.onReset(reason);
+      case TOPIC_RESET:
+        opts.onReset(reasonOf(parsed.data));
         return;
-      }
       case TOPIC_CLOSED: {
         const reason = reasonOf(parsed.data);
         closedReason = reason;
@@ -350,7 +355,6 @@ export function createStreamConnection(opts: ConnectionOptions): StreamConnectio
         return;
       }
       default:
-        resyncedAtOpen = false;
         if (id !== '') lastEventId = id;
         opts.onEvent(parsed, id);
     }
@@ -377,14 +381,14 @@ export function createStreamConnection(opts: ConnectionOptions): StreamConnectio
         if (gen !== generation) return;
         backoff.attempt += 1;
         wait = reconnectDelay(backoff.attempt, end.retryAfterMs, random);
-        backoff.notBefore = Date.now() + wait;
+        backoff.notBefore = now() + wait;
         if (
           serverHold &&
           end.retryAfterMs != null &&
           end.error instanceof StreamRefusedError &&
           SERVER_WIDE_REFUSALS.has(end.error.status)
         ) {
-          serverHold.extend(Date.now() + end.retryAfterMs);
+          serverHold.extend(now() + end.retryAfterMs);
         }
         lastError = end.error ?? undefined;
       }
@@ -394,8 +398,8 @@ export function createStreamConnection(opts: ConnectionOptions): StreamConnectio
   };
 
   // The server hold is checked by the loop before every attempt, the first included.
-  const holdRemaining = () => (serverHold ? clampRetryAfter(serverHold.until() - Date.now()) : 0);
-  const remaining = () => clampRetryAfter(backoff.notBefore - Date.now());
+  const holdRemaining = () => (serverHold ? clampRetryAfter(serverHold.until() - now()) : 0);
+  const remaining = () => clampRetryAfter(backoff.notBefore - now());
 
   return {
     open() {

@@ -134,6 +134,23 @@ describe('createBookChangeBatcher', () => {
     expect(batches).toEqual([{ kind: 'created', ids: ['bk-2'] }]);
   });
 
+  it('a handler that disposes the batcher stops the rest of that flush', () => {
+    const seen: string[] = [];
+    const b: { current?: ReturnType<typeof createBookChangeBatcher> } = {};
+    b.current = createBookChangeBatcher(
+      (x) => {
+        seen.push(x.kind);
+        b.current!.dispose();
+      },
+      { maxIds: 1 },
+    );
+    b.current.add('deleted', 'bk-1');
+    b.current.add('deleted', 'bk-2');
+    b.current.add('updated', 'bk-3');
+    b.current.flush();
+    expect(seen).toEqual(['deleted']);
+  });
+
   it('dispose leaves no timer and ignores later changes', async () => {
     const { batches, onBatch } = collect();
     const b = createBookChangeBatcher(onBatch);
@@ -207,51 +224,56 @@ describe('subscribeBookChanges', () => {
     expect(batches).toEqual([]);
   });
 
-  it('a shared-stream resync drops what is pending', async () => {
+  it('a resync alone drops nothing: the consumer clears as it issues its refetch', async () => {
     const server = make();
     const s = server.openStream();
     const { batches, onBatch } = collect();
-    subscribeBookChanges(es, onBatch);
+    const sub = subscribeBookChanges(es, onBatch);
     await tick();
     s.event('n-1', BOOK_CHANGED_TOPIC, { kind: 'created', id: 'bk-1' }, 'bk-1');
     await tick(10);
     s.control(TOPIC_RESET, { reason: 'overflow' });
     await tick(BOOK_CHANGE_WINDOW_MS);
-    expect(batches).toEqual([]);
+    expect(batches).toEqual([{ kind: 'created', ids: ['bk-1'] }]);
+    s.event('n-2', BOOK_CHANGED_TOPIC, { kind: 'created', id: 'bk-2' }, 'bk-2');
+    await tick(10);
+    sub.clear(); // the refetch is issued now and covers bk-2
+    s.event('n-3', BOOK_CHANGED_TOPIC, { kind: 'created', id: 'bk-3' }, 'bk-3');
+    await tick(BOOK_CHANGE_WINDOW_MS);
+    expect(batches).toEqual([
+      { kind: 'created', ids: ['bk-1'] },
+      { kind: 'created', ids: ['bk-3'] },
+    ]);
   });
 
-  it('the unsubscribe removes the topic and resync listeners, drops the pending window and closes the stream', async () => {
+  it('the unsubscribe removes the topic listener, drops the pending window and closes the stream', async () => {
     const server = make();
     const s = server.openStream();
     const { batches, onBatch } = collect();
-    const off = subscribeBookChanges(es, onBatch);
+    const sub = subscribeBookChanges(es, onBatch);
     await tick();
     s.event('n-1', BOOK_CHANGED_TOPIC, { kind: 'updated', id: 'bk-1' }, 'bk-1');
     await tick(10);
-    off();
-    off(); // idempotent
+    sub.unsubscribe();
+    sub.unsubscribe(); // idempotent
     await tick(BOOK_CHANGE_WINDOW_MS);
     expect(batches).toEqual([]);
     expect(server.calls[0].init.signal!.aborted).toBe(true);
   });
 
   it('counts its registrations to zero on unsubscribe', () => {
-    const live = { topics: 0, resync: 0 };
+    const live = { topics: 0 };
     const fake = {
       subscribe: () => {
         live.topics++;
         return () => void live.topics--;
       },
-      onResync: () => {
-        live.resync++;
-        return () => void live.resync--;
-      },
     } as unknown as EventStream;
-    const off = subscribeBookChanges(fake, () => {});
-    expect(live).toEqual({ topics: 1, resync: 1 });
-    off();
-    off();
-    expect(live).toEqual({ topics: 0, resync: 0 });
+    const sub = subscribeBookChanges(fake, () => {});
+    expect(live).toEqual({ topics: 1 });
+    sub.unsubscribe();
+    sub.unsubscribe();
+    expect(live).toEqual({ topics: 0 });
   });
 });
 
@@ -279,5 +301,29 @@ describe('useBookChanges', () => {
     unmount();
     await act(() => tick());
     expect(server.calls[0].init.signal!.aborted).toBe(true);
+  });
+
+  it('returns a stable clear that drops the live window, and is a no-op while disabled', async () => {
+    const server = createFakeServer();
+    es = createEventStream({
+      visibility: { visible: true, onChange: () => () => {} },
+      deps: { fetch: server.fetch, random: () => 0 },
+    });
+    const s = server.openStream();
+    const seen: string[] = [];
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useBookChanges((b) => seen.push(b.ids.join()), { source: es, enabled }),
+      { initialProps: { enabled: true } },
+    );
+    const first = result.current;
+    await act(() => tick());
+    s.event('n-1', BOOK_CHANGED_TOPIC, { kind: 'created', id: 'bk-1' }, 'bk-1');
+    await act(() => tick(10));
+    act(() => result.current.clear());
+    await act(() => tick(BOOK_CHANGE_WINDOW_MS));
+    expect(seen).toEqual([]);
+    rerender({ enabled: false });
+    expect(result.current).toBe(first);
+    expect(() => result.current.clear()).not.toThrow();
   });
 });

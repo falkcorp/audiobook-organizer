@@ -414,6 +414,43 @@ describe('backoff across connections', () => {
     expect(server.calls).toHaveLength(4);
   });
 
+  // #4813 r1 m2: decided when the stream is wanted again, not by whether a sync ran.
+  it('a stream wanted again after its wait lapsed starts from attempt 0, with no sync in between', async () => {
+    const { server } = make();
+    server.answer(() => problemResponse(429, 'rate_limited', 'x', { 'Retry-After': '30' }));
+    server.answer(() => problemResponse(400, 'bad', 'x'));
+    server.openStream();
+    const off = es.subscribe(RUN, () => {});
+    await tick();
+    off();
+    await tick(); // the only sync: the wait still stands, so its state is kept
+    await tick(30000); // lapses with no sync
+    const statuses: number[] = [];
+    es.onStatus((st) => statuses.push(st.attempt));
+    es.subscribe(RUN, () => {});
+    await tick();
+    expect(server.calls).toHaveLength(2);
+    expect(statuses[0]).toBe(0);
+    await tick(2999); // the 400 is the first failure again: a 3 s backoff, not 6 s
+    expect(server.calls).toHaveLength(2);
+    await tick(1);
+    expect(server.calls).toHaveLength(3);
+  });
+
+  it('a wall-clock step back does not stretch a hold', async () => {
+    const { server } = make();
+    server.answer(() => problemResponse(503, 'unavailable', 'x', { 'Retry-After': '30' }));
+    server.openStream();
+    es.subscribe(RUN, () => {});
+    await tick();
+    vi.setSystemTime(Date.now() - 5 * 60 * 1000);
+    es.subscribe(LOG, () => {}, { stream: 'keyed', key: 'run-mad-hatter-1' });
+    await tick(29999);
+    expect(server.calls).toHaveLength(1);
+    await tick(1);
+    expect(server.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("a refusal that is about one stream (400 unknown_topic) does not hold back the others", async () => {
     const { server } = make();
     server.answer(() => problemResponse(400, 'unknown_topic', 'x', { 'Retry-After': '30' }));
@@ -514,6 +551,83 @@ describe('resync filtering and pacing', () => {
     for (let i = 1; i < at.length; i++) expect(at[i] - at[i - 1]).toBeGreaterThanOrEqual(DEFAULT_RESYNC_MIN_INTERVAL_MS);
   });
 
+  // #4813 r1 M2: a '*' handler routes on streamKey, so pacing never merges two streams.
+  it("paced '*' makes one call per stream that reset in the window, each with its latest reason", async () => {
+    const { server } = make();
+    const shared = server.openStream();
+    const keyed = server.openStream();
+    es.subscribe(RUN, () => {});
+    es.subscribe(LOG, () => {}, { stream: 'keyed', key: 'run-1' });
+    const seen: string[] = [];
+    es.onResync((i) => seen.push(`${i.streamKey}:${i.reason}`), { streamKey: '*' });
+    await tick();
+    shared.control(TOPIC_RESET, { reason: 'overflow' });
+    keyed.control(TOPIC_RESET, { reason: 'overflow' });
+    shared.control(TOPIC_RESET, { reason: 'gap' });
+    await tick(DEFAULT_RESYNC_COALESCE_MS - 1);
+    expect(seen).toEqual([]);
+    await tick(1);
+    expect(seen).toEqual([':gap', 'run-1:overflow']);
+    keyed.control(TOPIC_RESET, { reason: 'restart' });
+    await tick(DEFAULT_RESYNC_MIN_INTERVAL_MS);
+    expect(seen).toEqual([':gap', 'run-1:overflow', 'run-1:restart']);
+  });
+
+  it("a paced '*' handler that unsubscribes itself gets no further call of that flush", async () => {
+    const { server } = make();
+    const shared = server.openStream();
+    const keyed = server.openStream();
+    es.subscribe(RUN, () => {});
+    es.subscribe(LOG, () => {}, { stream: 'keyed', key: 'run-1' });
+    const seen: string[] = [];
+    const off = es.onResync(
+      (i) => {
+        seen.push(i.streamKey);
+        off();
+      },
+      { streamKey: '*' },
+    );
+    await tick();
+    shared.control(TOPIC_RESET, { reason: 'gap' });
+    keyed.control(TOPIC_RESET, { reason: 'gap' });
+    await tick(DEFAULT_RESYNC_MIN_INTERVAL_MS);
+    expect(seen).toEqual(['']);
+  });
+
+  it('a handler removed by an earlier handler of the same reset arms no timer', async () => {
+    const { server } = make();
+    const s = server.openStream();
+    es.subscribe(RUN, () => {});
+    const paced: string[] = [];
+    let offPaced = () => {};
+    es.onResync(() => offPaced(), { coalesceMs: 0, minIntervalMs: 0 });
+    offPaced = es.onResync((i) => paced.push(i.reason));
+    await tick();
+    const before = vi.getTimerCount();
+    s.control(TOPIC_RESET, { reason: 'gap' });
+    await tick();
+    expect(vi.getTimerCount()).toBe(before);
+    await tick(DEFAULT_RESYNC_MIN_INTERVAL_MS);
+    expect(paced).toEqual([]);
+  });
+
+  // #4813 r1 m1: pacing is on the monotonic clock.
+  it('a wall-clock step back does not stretch the min interval', async () => {
+    const { server } = make();
+    const s = server.openStream();
+    es.subscribe(RUN, () => {});
+    const seen: string[] = [];
+    es.onResync((i) => seen.push(i.reason));
+    await tick();
+    s.control(TOPIC_RESET, { reason: 'gap' });
+    await tick(DEFAULT_RESYNC_COALESCE_MS);
+    expect(seen).toEqual(['gap']);
+    vi.setSystemTime(Date.now() - 5 * 60 * 1000);
+    s.control(TOPIC_RESET, { reason: 'overflow' });
+    await tick(DEFAULT_RESYNC_MIN_INTERVAL_MS);
+    expect(seen).toEqual(['gap', 'overflow']);
+  });
+
   it('unsubscribing cancels a pending call, and so does dispose', async () => {
     const { server } = make();
     const s = server.openStream();
@@ -533,6 +647,100 @@ describe('resync filtering and pacing', () => {
     expect(a).toEqual([]);
     expect(b).toEqual([]);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+// #4813 r1 M1: the connection passes every reset on; the default coalescing is what makes a
+// reopen one refetch, and nothing it merges is lost.
+describe('one refetch per reopen (manager coalescing)', () => {
+  async function hiddenReopen() {
+    const ctx = make();
+    const s1 = ctx.server.openStream();
+    ctx.server.openStream();
+    const seen: string[] = [];
+    es.subscribe(RUN, () => {});
+    es.onResync((i) => seen.push(i.reason));
+    await tick();
+    s1.control(TOPIC_OPENED, {});
+    s1.event('n-1', RUN, {}, 'r');
+    await tick(DEFAULT_RESYNC_MIN_INTERVAL_MS);
+    expect(seen).toEqual(['reconnect']); // the first, id-less open
+    seen.length = 0;
+    ctx.vis.set(false);
+    await tick();
+    ctx.vis.set(true);
+    await tick();
+    return { ...ctx, seen, s2: ctx.server.streams.at(-1)! };
+  }
+
+  for (const reason of ['gap', 'restart']) {
+    it(`the open's reconnect and a ${reason} right after it are one call`, async () => {
+      const { seen, s2 } = await hiddenReopen();
+      s2.control(TOPIC_OPENED, {});
+      s2.control(TOPIC_RESET, { reason });
+      await tick(DEFAULT_RESYNC_COALESCE_MS);
+      await tick(DEFAULT_RESYNC_MIN_INTERVAL_MS);
+      expect(seen).toEqual([reason]);
+    });
+  }
+
+  it('an overflow and a gap inside the window are still one call', async () => {
+    const { seen, s2 } = await hiddenReopen();
+    s2.control(TOPIC_OPENED, {});
+    s2.control(TOPIC_RESET, { reason: 'overflow' });
+    s2.control(TOPIC_RESET, { reason: 'gap' });
+    await tick(DEFAULT_RESYNC_MIN_INTERVAL_MS);
+    expect(seen).toEqual(['gap']);
+  });
+
+  it('an overflow after the call is a second call, at the min interval', async () => {
+    const { seen, s2 } = await hiddenReopen();
+    s2.control(TOPIC_OPENED, {});
+    await tick(DEFAULT_RESYNC_COALESCE_MS);
+    expect(seen).toEqual(['reconnect']);
+    s2.control(TOPIC_RESET, { reason: 'overflow' }); // the call ran just now
+    await tick(DEFAULT_RESYNC_MIN_INTERVAL_MS - 1);
+    expect(seen).toEqual(['reconnect']);
+    await tick(1);
+    expect(seen).toEqual(['reconnect', 'overflow']);
+  });
+
+  it('a gap after an event of the same attempt reaches the handler', async () => {
+    const { seen, s2 } = await hiddenReopen();
+    s2.control(TOPIC_OPENED, {});
+    s2.event('n-2', RUN, {}, 'r');
+    await tick(1000);
+    s2.control(TOPIC_RESET, { reason: 'gap' });
+    await tick(DEFAULT_RESYNC_MIN_INTERVAL_MS);
+    expect(seen).toEqual(['reconnect', 'gap']);
+  });
+
+  it('a later resumed open passes its gap through', async () => {
+    const { server, seen, s2 } = await hiddenReopen();
+    const s3 = server.openStream();
+    s2.control(TOPIC_OPENED, {});
+    s2.end();
+    await tick(3000);
+    expect(server.calls.at(-1)!.headers['last-event-id']).toBe('n-1');
+    s3.control(TOPIC_OPENED, {}); // resumed: raises nothing
+    s3.control(TOPIC_RESET, { reason: 'gap' });
+    await tick(DEFAULT_RESYNC_MIN_INTERVAL_MS);
+    expect(seen).toEqual(['reconnect', 'gap']);
+  });
+
+  it('an id-less open followed by a lone mid-stream gap reaches the handler', async () => {
+    const { server } = make();
+    const s = server.openStream();
+    es.subscribe(RUN, () => {});
+    const seen: string[] = [];
+    es.onResync((i) => seen.push(i.reason));
+    await tick();
+    expect(server.calls[0].headers['last-event-id']).toBeUndefined();
+    s.control(TOPIC_OPENED, {}); // with no id sent the subscribe owes no reset
+    await tick(2000);
+    s.control(TOPIC_RESET, { reason: 'gap' }); // withheld events: a real loss
+    await tick(DEFAULT_RESYNC_MIN_INTERVAL_MS);
+    expect(seen).toEqual(['reconnect', 'gap']);
   });
 });
 
