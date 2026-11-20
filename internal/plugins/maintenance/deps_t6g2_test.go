@@ -20,6 +20,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/books/writer/writertest"
 	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 // booksGateRecorder is a tasks.Writer that records every Write it is given and
@@ -132,6 +133,10 @@ func g2WriterCalls(bookID string) map[string]func(w t6g2Writer) error {
 		},
 		"DeleteOrphanBookFileAcoustIDEntries": func(w t6g2Writer) error {
 			_, err := w.DeleteOrphanBookFileAcoustIDEntries(ctx, nil)
+			return err
+		},
+		"RetireAuthorBooksLegacy": func(w t6g2Writer) error {
+			_, err := w.RetireAuthorBooksLegacy(ctx, nil)
 			return err
 		},
 		"ModifyBook": func(w t6g2Writer) error {
@@ -370,4 +375,33 @@ func TestBooksT6G2Writer_EveryKindsCallsAreAdmittedByItsOwnEffects(t *testing.T)
 			})
 		}
 	}
+}
+
+// The author_books_legacy retirement (F5-18j) is served through the capability
+// of the store: the check reads and writes nothing, the retirement is one gated
+// call stamped with the shared table's row (authors) and refused when the writer
+// refuses.
+func TestBooksT6G2_AuthorBooksLegacyRetireIsACapabilityCheckThenOneGatedWrite(t *testing.T) {
+	s, _ := g2Fixture(t)
+	deps := newT6G2Deps(s, &booksHostSpy{}, func() string { return t.TempDir() })
+	require.True(t, deps.Store.Supports(t6g2CapAuthorBooksLegacyRetire), "the Pebble store carries the retirement; a false here makes the kind refuse")
+
+	before := t6g5Snapshot(t, s)
+	rep, err := deps.Store.CheckAuthorBooksLegacyRetire(context.Background(), nil)
+	require.NoError(t, err)
+	require.False(t, rep.Apply, "the check is the preview")
+	require.Equal(t, before, t6g5Snapshot(t, s), "the check wrote")
+
+	rec := &booksGateRecorder{}
+	rep, err = deps.NewWriter(rec).RetireAuthorBooksLegacy(context.Background(), nil)
+	require.NoError(t, err)
+	require.True(t, rep.Apply)
+	stamps := rec.stamps()
+	require.Len(t, stamps, 1)
+	require.Len(t, stamps[0].Resources, 1)
+	require.Equal(t, string(ops.ResAuthors), stamps[0].Resources[0].Kind)
+
+	refused := &booksGateRecorder{refuse: tasks.ErrOutsideEffects}
+	_, err = deps.NewWriter(refused).RetireAuthorBooksLegacy(context.Background(), nil)
+	require.ErrorIs(t, err, tasks.ErrOutsideEffects)
 }
