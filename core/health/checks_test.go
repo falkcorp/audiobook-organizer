@@ -1,13 +1,12 @@
 // file: core/health/checks_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4a7d1c93-8e52-4b60-9f3a-7c2e5b8d1a46
-// last-edited: 2026-11-13
+// last-edited: 2026-11-19
 
 package health
 
 import (
 	"context"
-	"runtime"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -108,16 +107,30 @@ func TestRegisterTimeProbeThatIgnoresItsContextCannotBlockRegister(t *testing.T)
 // goroutine; checks run per interval; a component registered while they run
 // joins them; stop ends every loop and a second StartChecks is inert.
 func TestChecks_LoopLifecycle(t *testing.T) {
-	before := runtime.NumGoroutine()
-	r := NewRegistryWith(Options{})
-	var calls atomic.Int32
-	mustRegister(t, r, Check{ID: "wayne.cave", Probe: func(context.Context) Result { calls.Add(1); return Result{Status: StatusUp} }})
-	if runtime.NumGoroutine() > before {
-		t.Fatalf("NewRegistry/Register started a goroutine (%d -> %d)", before, runtime.NumGoroutine())
-	}
-	if calls.Load() != 1 {
-		t.Fatalf("probe ran %d times before StartChecks, want Register's one", calls.Load())
-	}
+	// Asserted on the registry's own loop state and on behaviour, never on
+	// runtime.NumGoroutine: that count is process-wide, so a goroutine another
+	// test left running (or the runtime started) moved it and failed this test
+	// ("2 -> 3") in a run that never touched this package.
+	synctest.Test(t, func(t *testing.T) {
+		r := NewRegistryWith(Options{Timings: timingsOf(Timings{CheckInterval: 10 * time.Second})})
+		r.noJitter = true
+		var calls atomic.Int32
+		mustRegister(t, r, Check{ID: "wayne.cave", Probe: func(context.Context) Result { calls.Add(1); return Result{Status: StatusUp} }})
+		r.mu.Lock()
+		started := r.runCtx != nil
+		r.mu.Unlock()
+		if started {
+			t.Fatal("NewRegistry/Register set the loop context: a loop is running before StartChecks")
+		}
+		// A loop started at Register would tick the probe inside this bubble;
+		// only the bubble's own goroutines count, and its fake clock makes ten
+		// intervals instant.
+		time.Sleep(10 * 10 * time.Second)
+		synctest.Wait()
+		if calls.Load() != 1 {
+			t.Fatalf("probe ran %d times before StartChecks, want Register's one", calls.Load())
+		}
+	})
 
 	synctest.Test(t, func(t *testing.T) {
 		r := NewRegistryWith(Options{Timings: timingsOf(Timings{CheckInterval: 10 * time.Second})})
