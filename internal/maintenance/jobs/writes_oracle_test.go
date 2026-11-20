@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/writes_oracle_test.go
-// version: 3.2.0
+// version: 3.3.0
 // guid: 40eadd67-76ac-419f-a3fe-7d1ed5e586e2
 // last-edited: 2026-11-19
 
@@ -181,8 +181,9 @@ type oracleProgram struct {
 	// flows is what the module stores into each package variable, struct field,
 	// slice and map, so a function value loaded from one can be named.
 	flows *oracleFlows
-	// impls caches declaredImpls.
+	// impls caches declaredImpls, cache resolve and ifaceOpen.
 	impls *oracleImplCache
+	cache *oracleResolveCache
 }
 
 // oracleCallGraph is VTA over every function of the module (and every synthetic
@@ -618,9 +619,41 @@ type oracleMemoKey struct {
 // resolve is what the function value v can be, read in the function that holds
 // it.
 func (op *oracleProgram) resolve(v ssa.Value) oracleRes {
+	k := oracleCacheKey{op.graph, v, false}
+	if got, ok := op.cache.get(k); ok {
+		return got
+	}
 	r := &oracleResolver{op: op, memo: map[oracleMemoKey]*oracleRes{}, retStack: map[*ssa.Function]bool{}}
-	out := r.value(v, true)
-	return oracleDedupe(out)
+	out := oracleDedupe(r.value(v, true))
+	op.cache.put(k, out)
+	return out
+}
+
+// oracleResolveCache holds resolve's and ifaceOpen's answers. An answer depends
+// only on the value and the call graph (a parameter is read from the graph's
+// callers), so it is keyed by both: a test that swaps the graph gets its own.
+type oracleResolveCache struct {
+	mu sync.Mutex
+	m  map[oracleCacheKey]oracleRes
+}
+
+type oracleCacheKey struct {
+	g     *callgraph.Graph
+	v     ssa.Value
+	iface bool
+}
+
+func (c *oracleResolveCache) get(k oracleCacheKey) (oracleRes, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	r, ok := c.m[k]
+	return r, ok
+}
+
+func (c *oracleResolveCache) put(k oracleCacheKey, r oracleRes) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.m[k] = r
 }
 
 // ifaceOpen is why the interface value v can hold a type the call graph does not
@@ -628,8 +661,14 @@ func (op *oracleProgram) resolve(v ssa.Value) oracleRes {
 // field the wiring fills, code outside the module), or nil when every type it can
 // hold is converted to the interface where the program shows it.
 func (op *oracleProgram) ifaceOpen(v ssa.Value) []string {
+	k := oracleCacheKey{op.graph, v, true}
+	if got, ok := op.cache.get(k); ok {
+		return got.open
+	}
 	r := &oracleResolver{op: op, memo: map[oracleMemoKey]*oracleRes{}, retStack: map[*ssa.Function]bool{}, iface: true}
-	return oracleDedupe(r.value(v, false)).open
+	out := oracleDedupe(r.value(v, false))
+	op.cache.put(k, out)
+	return out.open
 }
 
 // oracleImplCache holds declaredImpls' answers per interface method.
@@ -1770,7 +1809,8 @@ func loadOracleProgram(checkBuild bool, overlay map[string][]byte, patterns ...s
 		}
 	}
 	g, c := oracleCallGraph(prog)
-	return &oracleProgram{prog: prog, graph: g, cha: c, roots: ssapkgs, flows: buildOracleFlows(prog), impls: &oracleImplCache{m: map[string][]*ssa.Function{}}}, nil
+	return &oracleProgram{prog: prog, graph: g, cha: c, roots: ssapkgs, flows: buildOracleFlows(prog), impls: &oracleImplCache{m: map[string][]*ssa.Function{}},
+		cache: &oracleResolveCache{m: map[oracleCacheKey]oracleRes{}}}, nil
 }
 
 func loadOracleJobs() (map[string]oracleJob, error) {
