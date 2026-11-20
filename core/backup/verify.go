@@ -93,9 +93,6 @@ func (s *Svc) verifyWith(ctx context.Context, path string, id ArchiveID, l Verif
 		s.o.log().Warn("backup: could not record the verification", "archive", id, "error", werr)
 	}
 	s.o.Metrics.Verified(ctx, l, res.OK, res.At)
-	if err != nil {
-		sum = ""
-	}
 	return res, sum, err
 }
 
@@ -104,7 +101,8 @@ func (s *Svc) verifyWith(ctx context.Context, path string, id ArchiveID, l Verif
 // digest (which must equal the sidecar's when both exist). That digest is what
 // binds a legacy-abo/0 restore to the bytes verified, the archive having no MAC
 // and no per-entry digests (StageRestore). It is "" when the verification read
-// no digest: no sidecar, and a level that does not scan.
+// no digest: no sidecar, and a level that does not scan. With any error it is
+// "": a verification that failed vouches for nothing.
 func (s *Svc) runVerify(ctx context.Context, path string, l VerifyLevel, skipSum bool) (string, error) {
 	sum := ""
 	if !skipSum {
@@ -128,7 +126,10 @@ func (s *Svc) runVerify(ctx context.Context, path string, l VerifyLevel, skipSum
 		return "", fmt.Errorf("%w: the manifest sidecar differs from the archive's manifest", ErrManifest)
 	}
 	if l == VerifyEntries {
-		return sum, a.consume(ctx, nil, "")
+		if err := a.consume(ctx, nil, ""); err != nil {
+			return "", err
+		}
+		return sum, nil
 	}
 	if s.o.Inspector == nil {
 		return "", errors.New("backup: verify at the open level needs an Inspector")
@@ -160,7 +161,10 @@ func (s *Svc) runVerify(ctx context.Context, path string, l VerifyLevel, skipSum
 	if err != nil {
 		return "", openRefusal("the archived store does not open", err)
 	}
-	return sum, matchManifest(a.Manifest, info)
+	if err := matchManifest(a.Manifest, info); err != nil {
+		return "", err
+	}
+	return sum, nil
 }
 
 // matchManifest is VerifyOpen's comparison: the store read from the archive
