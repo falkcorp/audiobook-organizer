@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/mediacore/library"
 	"github.com/falkcorp/mediacore/tasks"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/books/writer"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
@@ -74,6 +75,18 @@ func runless() context.Context { return context.Background() }
 // do is one gated store call.
 func (b booksGate) do(ctx context.Context, method string, subject entity.Ref, call func(context.Context) error) error {
 	return b.g.Do(ctx, method, subject, func(ctx context.Context) ([]tasks.Change, error) { return nil, call(ctx) })
+}
+
+// srcCap resolves one optional capability of a store through its decorator
+// chain, or says which one the store lacks. The groups whose source is the
+// ops store use it for every method that is not on that interface.
+func srcCap[T any](src any, what string) (T, error) {
+	v, ok := database.AsCapability[T](src)
+	if !ok {
+		var zero T
+		return zero, fmt.Errorf("store %T has no %s", src, what)
+	}
+	return v, nil
 }
 
 // bookRef and kindRef are the subjects of a gated write: the entity
