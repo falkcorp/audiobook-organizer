@@ -1,5 +1,5 @@
 // file: core/secrets/store.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: be9e243c-f9df-4ff7-930d-10a5b90f2f49
 // last-edited: 2026-11-19
 
@@ -81,10 +81,11 @@ func RootStateFiles(root *os.Root) StateFiles { return statefs.FromRoot(root) }
 // The crash-point labels of the secret store's boot writes (06 §6.5.1, P4b
 // first; coretest/crashmatrix's writer table). Names coined by F3-07.
 const (
-	labelMeta      = "secrets.meta"          // c/secrets/meta's batch
-	labelKeyring   = "secrets.keyring"       // the keyring file: created, its mode fixed, its header rewritten
-	labelStaleTemp = "secrets.keyring.stale" // a stale keyring temporary file removed
-	labelExport    = "secrets.export"        // export-keyring's copy and record (offline, never a boot)
+	labelMeta        = "secrets.meta"              // c/secrets/meta's batch
+	labelKeyring     = "secrets.keyring"           // the keyring file: created, its mode fixed, its header rewritten
+	labelStaleTemp   = "secrets.keyring.stale"     // a stale keyring temporary file removed
+	labelKeyringSync = "secrets.keyring.load-sync" // the keyring's directory synced before a present keyring is trusted
+	labelExport      = "secrets.export"            // export-keyring's copy and record (offline, never a boot)
 )
 
 // Options configures Open (05-config §2.3).
@@ -365,6 +366,17 @@ func (s *Store) resolveKeyring(ctx context.Context, o Options, m *storeMeta) (*k
 	fi, statErr := s.root.Lstat(s.keyFile)
 	switch {
 	case statErr == nil && fi.Mode().IsRegular():
+		// A keyring that is present is not yet a keyring that is durable: the
+		// boot that created it can have failed at the directory fsync after
+		// the link (the entry then sits in the page cache only, and Open
+		// returned the error), and a later boot sees the file. Anything this
+		// Open seals goes under this keyring, so its directory entry is made
+		// durable first; a failure fails Open closed, and nothing is sealed
+		// under a key a power loss can take away (the secrets would then be
+		// stored and unreadable: ErrKeyMissing, and re-entry).
+		if err := syncDir(s.root, labelKeyringSync, filepath.Dir(s.keyFile)); err != nil {
+			return nil, err
+		}
 		return s.loadKeyring(o)
 	case statErr == nil:
 		return nil, notRegularKeyring(s.keyFile, fi.Mode())
