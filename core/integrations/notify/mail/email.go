@@ -1,7 +1,7 @@
 // file: core/integrations/notify/mail/email.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: a9d25e71-4c08-4b36-8e1f-37f0c6a2d584
-// last-edited: 2026-11-13
+// last-edited: 2026-11-19
 
 package mail
 
@@ -57,8 +57,10 @@ func Descriptor() (integrations.Descriptor, error) {
 		DisplayName: "Email",
 		Version:     "1.0.0",
 		Settings:    schema,
-		// SMTP does not pass through providerhttp's dial guard: the gate
-		// admits and paces, the host is whatever the instance names.
+		// The SMTP dial passes the same egress guard as an HTTP request,
+		// through the gate's guarded dial (Send): a host that resolves to a
+		// private address is refused unless the instance is Local for it or
+		// lan_allow admits it.
 		Egress: integrations.EgressConfigured,
 		Limits: integrations.Limits{RPS: 0.5, Burst: 2, MaxRetries: 0, Timeout: DefaultTimeout},
 	}, buildWith(func(cfg SMTPConfig) (Sender, error) { return NewSMTPSender(cfg) })), nil
@@ -201,6 +203,9 @@ func (c *channel) Send(ctx context.Context, n notify.Notification, _ notify.Targ
 		return &integrations.Error{Ref: c.env.Ref, Op: "send", Class: class, Status: status, Err: err}
 	}
 	smtpCfg := c.cfg.smtp
+	// The connection goes through the gate's guarded dial, or the send is
+	// refused: there is no unguarded fallback for an instance's host.
+	smtpCfg.Dial = integrations.GuardedDial(c.env.Gate, c.env.Ref)
 	if c.cfg.password {
 		pw, err := c.env.Secrets.Secret(ctx, "password")
 		if err != nil {
@@ -235,6 +240,16 @@ func (c *channel) Send(ctx context.Context, n notify.Notification, _ notify.Targ
 		return nil
 	}
 	class, status := classify(ctx, err)
+	if class == integrations.ClassRefusedLocal {
+		// A refusal the gate's own dial made (the egress guard, the switch, no
+		// guard available): return it as it is. It names neither the host nor
+		// the address, and its cause lets the delivery tell a refusal that
+		// time lifts from one that needs a person. The sender's own text around
+		// it carries the host and port, so it is not returned.
+		if refusal, ok := errors.AsType[*integrations.Error](err); ok && refusal.Class == integrations.ClassRefusedLocal {
+			return refusal
+		}
+	}
 	return fail(class, status, errors.New(summary(class)))
 }
 

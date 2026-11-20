@@ -1,7 +1,7 @@
 // file: core/integrations/notify/mail/mail.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: 11234e57-50d2-4d9a-be89-62e983dfeda9
-// last-edited: 2026-11-13
+// last-edited: 2026-11-19
 
 // Package mail sends email over SMTP, in two shapes: the Sender primitive for
 // transactional mail that is not a notification (user invitations), and the
@@ -108,6 +108,14 @@ type SMTPConfig struct {
 	TLSConfig *tls.Config
 	// HelloName is sent in EHLO; empty means "localhost".
 	HelloName string
+	// Dial opens the connection to Host:Port ("host:port", network "tcp"). nil
+	// is a plain net.Dialer: the sender of an operator-configured relay (the
+	// invite flow's loopback postfix) dials its host as written. The core.email
+	// channel always sets it, to the instance's guarded dial
+	// (integrations.GuardedDial), because an instance's host is data an admin
+	// typed and must pass the egress guard. Whatever Dial returns is wrapped
+	// with the dialled address by Send; the channel does not return that text.
+	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 // SMTPSender sends mail through one SMTP server.
@@ -201,8 +209,11 @@ func (s *SMTPSender) Send(ctx context.Context, msg Message) (err error) {
 	defer cancel()
 
 	addr := s.dialAddr
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", addr)
+	dial := s.cfg.Dial
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
+	conn, err := dial(ctx, "tcp", addr)
 	if err != nil {
 		return fmt.Errorf("mail: connect %s: %w", addr, err)
 	}
