@@ -72,6 +72,13 @@ export interface BackupsClientOptions {
    * other call. Default 0: no deadline, only the caller's signal ends it.
    */
   importTimeoutMs?: number;
+  /**
+   * Deadline of restore and revert. Default 0: no deadline, only the caller's signal ends
+   * it. The server verifies, extracts, inspects and stages synchronously inside the
+   * request (core/backup/stage.go) and has no write timeout, so a slow archive can
+   * legitimately take longer than timeoutMs; abandoning the call would not stop the server.
+   */
+  stageTimeoutMs?: number;
   fetch?: typeof fetch;
   /**
    * Called for a 401 whose code ends the session (SESSION_ENDING_CODES), before the
@@ -100,9 +107,18 @@ export interface BackupsClient {
   /**
    * POST /backups/{id}/restore (core:backup.restore, interactive session, owner): stages a
    * restore that runs when the service restarts. 202 {pending, restart_required}.
+   *
+   * No deadline by default (stageTimeoutMs). If the answer is lost (the page was closed, the
+   * connection dropped, the caller aborted) the restore may still have staged: call
+   * pending() to learn whether it did. NEVER retry restore() to find out; a second call
+   * stages a second store swap.
    */
   restore(id: string, req?: BackupRestoreRequest, opts?: CallOptions): Promise<BackupRestoreStaged>;
-  /** POST /restore/revert: stages the undo of the last applied restore. 404 no_undo_point when none is kept. */
+  /**
+   * POST /restore/revert: stages the undo of the last applied restore. 404 no_undo_point
+   * when none is kept. No deadline by default (stageTimeoutMs). A lost answer means "call
+   * pending() to learn whether it staged", never "retry".
+   */
   revert(req?: BackupRevertRequest, opts?: CallOptions): Promise<BackupRestoreStaged>;
   /** GET /restore/pending (core:backup.restore): the staged restore, or null on a 204. */
   pending(opts?: CallOptions): Promise<PendingRestore | null>;
@@ -163,15 +179,13 @@ function bodyOf(
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+/** Mirrors backup.ValidArchiveID (core/backup/manifest.go): a 26-character ULID or a "legacy-" name. */
+const ULID_ID = /^[0-9A-Z]{26}$/;
+const LEGACY_ID = /^legacy-[A-Za-z0-9_-]+$/;
+
 function checkId(id: string): string {
-  if (
-    typeof id !== 'string' ||
-    id === '' ||
-    id.length > MAX_NAME_BYTES ||
-    /[/\\]/.test(id) ||
-    id.includes('..')
-  ) {
-    throw new BackupArgumentError('archive id is empty or not a plain id');
+  if (typeof id !== 'string' || !(ULID_ID.test(id) || (LEGACY_ID.test(id) && id.length <= 200))) {
+    throw new BackupArgumentError('archive id is not an id the server issues');
   }
   return id;
 }
@@ -193,6 +207,18 @@ function checkName(name: string): string {
   return name;
 }
 
+/** encodeURIComponent throws URIError on a lone surrogate; that is an argument error, not a crash. */
+function encodeName(name: string): string {
+  try {
+    return encodeURIComponent(checkName(name));
+  } catch (e) {
+    if (e instanceof URIError) {
+      throw new BackupArgumentError('import name must be a plain file name');
+    }
+    throw e;
+  }
+}
+
 /**
  * The URL of GET /backups/{id}/download (core:admin, interactive session, owner). It is a
  * URL on purpose: navigate to it and let the browser download it. Fetching it into memory
@@ -212,6 +238,7 @@ export function createBackupsClient(opts: BackupsClientOptions = {}): BackupsCli
   const baseUrl = opts.baseUrl ?? '';
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const importTimeoutMs = opts.importTimeoutMs ?? 0;
+  const stageTimeoutMs = opts.stageTimeoutMs ?? 0;
 
   interface Req {
     method: 'GET' | 'POST' | 'DELETE';
@@ -225,6 +252,8 @@ export function createBackupsClient(opts: BackupsClientOptions = {}): BackupsCli
   /** One request; returns an ok, non-HTML response. Callers check status and body. */
   async function send(op: Op, r: Req): Promise<Response> {
     const url = `${baseUrl}${r.path}`;
+    // Errors name the endpoint, never the query (the import's ?name= is the user's file name).
+    const errUrl = `${baseUrl}${r.path.split('?')[0]}`;
     const headers: Record<string, string> = { Accept: 'application/json' };
     const init: RequestInit = {
       method: r.method,
@@ -262,7 +291,7 @@ export function createBackupsClient(opts: BackupsClientOptions = {}): BackupsCli
       res = await doFetch(url, init);
     } catch (err) {
       // "We gave up" is a failure to report; "the caller gave up" is control flow.
-      if (timedOut) throw new ApiTimeoutError(url, deadline);
+      if (timedOut) throw new ApiTimeoutError(errUrl, deadline);
       throw err;
     } finally {
       if (timer !== undefined) clearTimeout(timer);
@@ -270,7 +299,7 @@ export function createBackupsClient(opts: BackupsClientOptions = {}): BackupsCli
     }
 
     // SSO bounce: with redirect 'manual' the browser hands back an opaque response.
-    if (res.type === 'opaqueredirect') throw new ApiAuthRedirectError(url, url);
+    if (res.type === 'opaqueredirect') throw new ApiAuthRedirectError(errUrl, errUrl);
 
     if (!res.ok) {
       const problem = await decodeProblem(res);
@@ -292,7 +321,7 @@ export function createBackupsClient(opts: BackupsClientOptions = {}): BackupsCli
 
     // A same-origin SSO page answers 200 text/html: the same bounce, not an answer.
     if ((res.headers?.get?.('Content-Type') ?? '').toLowerCase().includes('text/html')) {
-      throw new ApiAuthRedirectError(url, url);
+      throw new ApiAuthRedirectError(errUrl, errUrl);
     }
     return res;
   }
@@ -328,9 +357,16 @@ export function createBackupsClient(opts: BackupsClientOptions = {}): BackupsCli
       typeof a.id !== 'string' ||
       typeof a.name !== 'string' ||
       typeof a.size !== 'number' ||
-      typeof a.created_at !== 'string'
+      typeof a.created_at !== 'string' ||
+      typeof a.format !== 'string' ||
+      a.format === '' ||
+      typeof a.provenance !== 'string' ||
+      a.provenance === ''
     ) {
-      throw new BackupProtocolError(op, 'an archive lacks id, name, size or created_at');
+      throw new BackupProtocolError(
+        op,
+        'an archive lacks id, name, size, created_at, format or provenance'
+      );
     }
     return a as BackupArchive;
   }
@@ -350,7 +386,14 @@ export function createBackupsClient(opts: BackupsClientOptions = {}): BackupsCli
   }
 
   async function staged(op: Op, path: string, body: object | undefined, signal?: AbortSignal) {
-    const o = await obj(op, await send(op, { method: 'POST', path, json: body, signal }), 202);
+    const res = await send(op, {
+      method: 'POST',
+      path,
+      json: body,
+      deadlineMs: stageTimeoutMs,
+      signal,
+    });
+    const o = await obj(op, res, 202);
     if (typeof o.restart_required !== 'boolean') {
       throw new BackupProtocolError(op, 'the answer has no restart_required');
     }
@@ -389,7 +432,7 @@ export function createBackupsClient(opts: BackupsClientOptions = {}): BackupsCli
       noContent('remove', await send('remove', { method: 'DELETE', path, signal: o?.signal }));
     },
     async importArchive(name, body, o) {
-      const path = `${BACKUPS_IMPORT_PATH}?name=${encodeURIComponent(checkName(name))}`;
+      const path = `${BACKUPS_IMPORT_PATH}?name=${encodeName(name)}`;
       const res = await send('import', {
         method: 'POST',
         path,
