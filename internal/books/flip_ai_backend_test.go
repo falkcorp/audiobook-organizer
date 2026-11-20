@@ -13,6 +13,7 @@ import (
 	coreconfig "github.com/falkcorp/mediacore/config"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/appconfig"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 )
 
@@ -100,6 +101,16 @@ func TestAIBackendsSaveAndReload_RealCoreStore(t *testing.T) {
 	require.Equal(t, gen, f.Generation(), "an unchanged save moved the generation (applied %v)", res.Applied)
 	require.Equal(t, want, aiBackendValues(t, f))
 
-	// A reload sees the same: a new Engine over the same store is the next boot's.
-	_ = c
+	// A reload sees the same: a new Engine over the same core store and residual
+	// blob builds its projection from what was stored, as the next boot does.
+	in := c.mod.gapFillIn.Load()
+	require.NotNil(t, in, "the boot bound no Facade")
+	fresh := appconfig.New(in.acc, config.Project,
+		appconfig.WithBase(func() config.Config { return appConfigBase(c.mod.dbPath) }),
+		appconfig.WithResidual(&configResidual{store: c.store, acc: in.acc}))
+	require.NoError(t, fresh.Start(t.Context()))
+	require.Equal(t, want, aiBackendValues(t, fresh), "a rebuilt projection lost the save")
+	reloaded := fresh.Snapshot()
+	require.Equal(t, snap.AIBackend, reloaded.AIBackend)
+	require.Equal(t, "local", reloaded.AIBackend.EmbeddingMode)
 }
