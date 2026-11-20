@@ -364,10 +364,10 @@ func TestJobWrites_BadTraceIsAnErrorNotAPanic(t *testing.T) {
 // failing and real builds on purpose.
 func TestJobWrites_FailingDerivationIsNotSharedAcrossParallelTests(t *testing.T) {
 	boom := errors.New("trace names a method without a row")
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		t.Run(fmt.Sprintf("failing-%d", i), func(t *testing.T) {
 			t.Parallel()
-			for n := 0; n < 25; n++ {
+			for range 25 {
 				if _, err := jobs.KindsWithFailingWrites(boom); !errors.Is(err, boom) {
 					t.Errorf("KindsWithFailingWrites error = %v, want it to wrap %v", err, boom)
 					return
@@ -376,7 +376,7 @@ func TestJobWrites_FailingDerivationIsNotSharedAcrossParallelTests(t *testing.T)
 		})
 		t.Run(fmt.Sprintf("real-%d", i), func(t *testing.T) {
 			t.Parallel()
-			for n := 0; n < 25; n++ {
+			for range 25 {
 				defs, err := jobs.Kinds(jobs.KindDeps{}, nil)
 				if err != nil || len(defs) == 0 {
 					t.Errorf("Kinds beside a failing derivation = %d definitions, %v; want the real kinds", len(defs), err)
