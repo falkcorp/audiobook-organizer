@@ -1,7 +1,7 @@
 // file: core/backup/journal/move.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5a2c7e19-0b3d-4f86-a4d1-9e7c6b1f3a28
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package journal
 
@@ -38,15 +38,16 @@ var ErrMoveRefused = errors.New("journal: the journal move was refused")
 // file, or a destination that exists and is not one, is ErrMoveRefused, and the
 // temp file is created fresh (a leftover of an earlier crash, or a name someone
 // planted on the share, is removed first and never written through).
-func MoveFile(from, to string, keys Keys) (err error) {
+func MoveFile(from, to string, keys Keys, opts ...FSOption) (err error) {
 	if from == to {
 		return nil
 	}
+	fsys := fsOf(opts...)
 	// openJournal creates a missing file, which a move must not do.
-	if _, err := os.Lstat(from); errors.Is(err, os.ErrNotExist) {
+	if _, err := fsys.Lstat(from); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	f, data, err := openJournal(from)
+	f, data, err := openJournal(fsys, from)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrMoveRefused, err)
 	}
@@ -60,11 +61,11 @@ func MoveFile(from, to string, keys Keys) (err error) {
 	if len(data) == 0 {
 		return nil // an empty journal holds nothing to move
 	}
-	switch fi, err := os.Lstat(to); {
+	switch fi, err := fsys.Lstat(to); {
 	case err == nil && !fi.Mode().IsRegular():
 		return fmt.Errorf("%w: %w: %s is a %s", ErrMoveRefused, ErrNotRegular, to, fileKind(fi.Mode()))
 	case err == nil:
-		existing, err := os.ReadFile(to)
+		existing, err := fsys.ReadFile(to)
 		if err != nil {
 			return fmt.Errorf("%w: read %s: %w", ErrMoveRefused, to, err)
 		}
@@ -77,33 +78,46 @@ func MoveFile(from, to string, keys Keys) (err error) {
 	}
 
 	dir := filepath.Dir(to)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := mkdirLabelled(fsys, LabelMoveMkdir, dir, 0o700); err != nil {
 		return fmt.Errorf("%w: %w", ErrMoveRefused, err)
 	}
 	tmp := to + ".moving"
 	// Whatever is at the temp name is ours to replace, never to write through: a
 	// regular file is a crash's leftover, anything else a name planted on the
 	// share (removing a link removes the link). The create below is exclusive.
-	if err := os.Remove(tmp); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := removeLabelled(fsys, LabelMoveClear, tmp); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("%w: clear %s: %w", ErrMoveRefused, tmp, err)
 	}
-	if err := writeDurable(tmp, data); err != nil {
-		return errors.Join(fmt.Errorf("%w: %w", ErrMoveRefused, err), os.Remove(tmp))
+	cleanup := func() error { return removeLabelled(fsys, LabelMoveCleanup, tmp) }
+	if err := writeDurable(fsys, tmp, data); err != nil {
+		return errors.Join(fmt.Errorf("%w: %w", ErrMoveRefused, err), cleanup())
 	}
-	copied, err := os.ReadFile(tmp)
+	copied, err := fsys.ReadFile(tmp)
 	if err != nil || !bytes.Equal(copied, data) {
-		return errors.Join(fmt.Errorf("%w: the copy at %s does not match the source (%v)", ErrMoveRefused, tmp, err), os.Remove(tmp))
+		return errors.Join(fmt.Errorf("%w: the copy at %s does not match the source (%v)", ErrMoveRefused, tmp, err), cleanup())
 	}
 	if c := ReadChain(copied, keys); c.Break != nil || c.IntactEnd() != src.IntactEnd() {
-		return errors.Join(fmt.Errorf("%w: the copy at %s does not verify", ErrMoveRefused, tmp), os.Remove(tmp))
+		return errors.Join(fmt.Errorf("%w: the copy at %s does not verify", ErrMoveRefused, tmp), cleanup())
 	}
-	if err := os.Rename(tmp, to); err != nil {
-		return errors.Join(fmt.Errorf("%w: %w", ErrMoveRefused, err), os.Remove(tmp))
+	if err := renameLabelled(fsys, LabelMoveRename, tmp, to); err != nil {
+		return errors.Join(fmt.Errorf("%w: %w", ErrMoveRefused, err), cleanup())
 	}
-	if err := syncDir(dir); err != nil {
+	if err := syncDir(fsys, LabelMoveDirSync, dir); err != nil {
 		return fmt.Errorf("%w: %w", ErrMoveRefused, err)
 	}
 	return nil
+}
+
+// mkdirLabelled is os.MkdirAll through fsys inside label's region.
+func mkdirLabelled(fsys FS, label, dir string, perm os.FileMode) error {
+	defer fsys.Region(label)()
+	return fsys.MkdirAll(dir, perm)
+}
+
+// renameLabelled is os.Rename through fsys inside label's region.
+func renameLabelled(fsys FS, label, oldpath, newpath string) error {
+	defer fsys.Region(label)()
+	return fsys.Rename(oldpath, newpath)
 }
 
 // holdsMoved reports whether dst is the verified copy of src, or src extended:
@@ -120,9 +134,11 @@ func holdsMoved(dst, src *Chain) bool {
 }
 
 // writeDurable creates path (0600, exclusively: it fails when anything, a
-// symbolic link included, is already there), writes data and fsyncs.
-func writeDurable(path string, data []byte) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|openNoFollow, 0o600)
+// symbolic link included, is already there), writes data and fsyncs, in
+// LabelMoveCopy's region.
+func writeDurable(fsys FS, path string, data []byte) error {
+	defer fsys.Region(LabelMoveCopy)()
+	f, err := fsys.Open(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|openNoFollow, 0o600)
 	if err != nil {
 		return err
 	}

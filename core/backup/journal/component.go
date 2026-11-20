@@ -1,7 +1,7 @@
 // file: core/backup/journal/component.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c3d9f6a0-71e4-4a52-8b0d-6f2e91a4c7b5
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 package journal
 
@@ -77,6 +77,10 @@ type ComponentOptions struct {
 	// DirDev is the device of the directory at a path; nil is the OS probe.
 	// A failure means "unknown": no colocation token, never an error.
 	DirDev func(path string) (uint64, error)
+	// FS is the filesystem the journal file and backup.location.json are
+	// opened, read and written through; nil is OSFS (production). The
+	// crash-matrix kit passes core/internal/journalfs's.
+	FS FS
 }
 
 // Component is the journal component: the RevocationJournal auth and rbac
@@ -155,7 +159,7 @@ func (c *Component) Bind(ctx context.Context, path string) error {
 		c.file, c.path = nil, ""
 	}
 	f, err := OpenFile(ctx, FileOptions{Path: path, Keyspace: c.o.Keyspace, Source: c.o.Source, Keys: c.o.Keys,
-		InstallID: c.o.InstallID, App: c.o.App, Clock: c.o.Clock})
+		InstallID: c.o.InstallID, App: c.o.App, Clock: c.o.Clock, FS: c.o.FS})
 	if f != nil {
 		c.file, c.path = f, path
 	}
@@ -323,12 +327,12 @@ func (c *Component) syncAnchorLocked(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	loc, ok, err := ReadLocation(c.o.StateDir)
+	loc, ok, err := ReadLocation(c.o.StateDir, WithFS(c.o.FS))
 	if err != nil || !ok || !loc.Describes(c.o.DBPath, c.o.InstallID) || head.Seq <= loc.Head.Seq {
 		return err
 	}
 	loc.Head = head
-	return WriteLocation(c.o.StateDir, loc)
+	return WriteLocation(c.o.StateDir, loc, WithFS(c.o.FS))
 }
 
 // LocationDesc is what the boot (or a journal move) tells the component about
@@ -352,7 +356,7 @@ func (c *Component) WriteLocation(ctx context.Context, d LocationDesc, pair Serv
 		return fmt.Errorf("journal: read %s: %w", headKey, err)
 	}
 	return WriteLocation(c.o.StateDir, Location{BackupDir: d.BackupDir, Journal: d.Journal, DBPath: c.o.DBPath,
-		InstallID: c.o.InstallID, Store: d.Store, ServedBoot: pair, Head: head})
+		InstallID: c.o.InstallID, Store: d.Store, ServedBoot: pair, Head: head}, WithFS(c.o.FS))
 }
 
 // AdvanceServedBoot writes the store's next content marker (NextServedBoot,
@@ -366,7 +370,7 @@ func (c *Component) WriteLocation(ctx context.Context, d LocationDesc, pair Serv
 func (c *Component) AdvanceServedBoot(ctx context.Context) (ServedBoot, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	loc, ok, locErr := ReadLocation(c.o.StateDir)
+	loc, ok, locErr := ReadLocation(c.o.StateDir, WithFS(c.o.FS))
 	describes := locErr == nil && ok && loc.Describes(c.o.DBPath, c.o.InstallID)
 	var fileN uint64
 	if describes {
@@ -383,7 +387,7 @@ func (c *Component) AdvanceServedBoot(ctx context.Context) (ServedBoot, error) {
 	if head, err := ReadHead(ctx, c.o.Keyspace); err == nil && head.Seq > loc.Head.Seq {
 		loc.Head = head
 	}
-	if err := WriteLocation(c.o.StateDir, loc); err != nil {
+	if err := WriteLocation(c.o.StateDir, loc, WithFS(c.o.FS)); err != nil {
 		return pair, fmt.Errorf("journal: record the served_boot pair in %s: %w", LocationFile, err)
 	}
 	return pair, nil

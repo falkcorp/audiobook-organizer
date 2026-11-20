@@ -1,7 +1,7 @@
 // file: core/backup/journal/component_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 91b4e7d2-3c58-4a06-b2f1-7d0e5a8c4f69
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package journal
 
@@ -237,7 +237,7 @@ func TestLocationFileModeAndAtomicity(t *testing.T) {
 				t.Fatal("the simulated crash did not happen")
 			}
 		}()
-		_ = writeLocation(fx.dir, next, func(string, string) error { panic("the Batcave lost power") })
+		_ = WriteLocation(fx.dir, next, WithFS(renameFS{OSFS(), func(string, string) error { panic("the Batcave lost power") }}))
 	}()
 
 	if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, original) {
@@ -260,7 +260,7 @@ func TestLocationFileModeAndAtomicity(t *testing.T) {
 	}
 
 	// A rename that fails (not a crash) leaves the file and no temp behind.
-	if err := writeLocation(fx.dir, prev, func(string, string) error { return errors.New("read-only filesystem") }); err == nil {
+	if err := WriteLocation(fx.dir, prev, WithFS(renameFS{OSFS(), func(string, string) error { return errors.New("read-only filesystem") }})); err == nil {
 		t.Error("WriteLocation reported success although the rename failed")
 	}
 	if got := fx.location(t); got != next {
@@ -270,6 +270,15 @@ func TestLocationFileModeAndAtomicity(t *testing.T) {
 		t.Errorf("a failed rename left the temp file: %v", err)
 	}
 }
+
+// renameFS is the real filesystem with its rename replaced: the crash tests'
+// way to a crash, or a failure, between the temporary file and the rename.
+type renameFS struct {
+	FS
+	rename func(oldpath, newpath string) error
+}
+
+func (r renameFS) Rename(oldpath, newpath string) error { return r.rename(oldpath, newpath) }
 
 // TestLocation_ReadWriteDescribes: the file round-trips, a missing one reads
 // as absent, a malformed one is an error, and Describes compares db_path and

@@ -1,7 +1,7 @@
 // file: core/backup/journal/file.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: b701597d-6d06-4dd4-af78-0e0d6a9983ca
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 package journal
 
@@ -111,6 +111,12 @@ type FileOptions struct {
 	// Clock stamps a new header; nil is time.Now.
 	Clock func() time.Time
 
+	// FS is the filesystem the journal file is opened, read and written
+	// through; nil is OSFS (production). The crash-matrix kit passes
+	// core/internal/journalfs's, which records, labels, kills and fails each
+	// durable operation (05-storage §5S.3.16).
+	FS FS
+
 	// wrap, when set, wraps the opened file (the failure tests' seam; unset
 	// outside this package's tests, and not settable from outside it).
 	wrap func(lineFile) lineFile
@@ -128,6 +134,7 @@ type FileOptions struct {
 type File struct {
 	mu      sync.Mutex
 	path    string
+	fsys    FS
 	f       lineFile
 	size    int64  // bytes of complete, committed-to-disk lines
 	last    uint64 // seq of the last line
@@ -200,7 +207,7 @@ func OpenFile(ctx context.Context, o FileOptions) (*File, error) {
 	case o.InstallID == "":
 		return nil, errors.New("journal: OpenFile without the store's install ID")
 	}
-	j := &File{path: o.Path, ks: o.Keyspace, keys: o.Keys, source: o.Source, install: o.InstallID, app: o.App, now: o.Clock}
+	j := &File{path: o.Path, fsys: orOS(o.FS), ks: o.Keyspace, keys: o.Keys, source: o.Source, install: o.InstallID, app: o.App, now: o.Clock}
 	if j.now == nil {
 		j.now = time.Now
 	}
@@ -212,7 +219,7 @@ func OpenFile(ctx context.Context, o FileOptions) (*File, error) {
 	if err != nil {
 		return j.fail(fmt.Errorf("journal: read %s records: %w", gapPrefix, err))
 	}
-	f, data, err := openJournal(o.Path)
+	f, data, err := openJournal(j.fsys, o.Path)
 	if err != nil {
 		return j.fail(err)
 	}
@@ -238,7 +245,7 @@ func OpenFile(ctx context.Context, o FileOptions) (*File, error) {
 		}
 	}
 	if chain.Torn > 0 {
-		if err := errors.Join(j.f.Truncate(chain.ValidLen), j.f.Sync()); err != nil {
+		if err := j.cutTail(chain.ValidLen); err != nil {
 			return j.fail(fmt.Errorf("journal: cut the incomplete last line of %s: %w", o.Path, err))
 		}
 	}
@@ -254,10 +261,10 @@ func OpenFile(ctx context.Context, o FileOptions) (*File, error) {
 	if err != nil {
 		return j.fail(err)
 	}
-	if err := j.writeLine(line); err != nil {
+	if err := j.writeLine(LabelHeader, line); err != nil {
 		return j.fail(err)
 	}
-	if err := syncDir(filepath.Dir(o.Path)); err != nil {
+	if err := syncDir(j.fsys, LabelDirSync, filepath.Dir(o.Path)); err != nil {
 		return j.fail(err)
 	}
 	j.header, j.last, j.lastMAC = hdr, 0, hdr.MAC
@@ -295,15 +302,15 @@ func (j *File) fail(err error) (*File, error) {
 // append-only writes, created 0600, never through a symbolic link, required to
 // be a regular file (ErrNotRegular), locked exclusively (lockJournal) before
 // anything is read, and its current content.
-func openJournal(path string) (*os.File, []byte, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND|openNoFollow, 0o600)
+func openJournal(fsys FS, path string) (FSFile, []byte, error) {
+	f, err := openLabelled(fsys, LabelCreate, path, os.O_RDWR|os.O_CREATE|os.O_APPEND|openNoFollow, 0o600)
 	if err != nil {
-		return nil, nil, openError("open", path, err)
+		return nil, nil, openError(fsys, "open", path, err)
 	}
 	if err := regularFile(f); err != nil {
 		return nil, nil, errors.Join(err, f.Close())
 	}
-	if err := lockJournal(f); err != nil {
+	if err := f.Lock(); err != nil {
 		return nil, nil, errors.Join(err, f.Close())
 	}
 	data, err := readCapped(f, path)
@@ -322,7 +329,7 @@ func openJournal(path string) (*os.File, []byte, error) {
 const maxJournalBytes = 256 << 20
 
 // readCapped reads f whole, refusing more than maxJournalBytes.
-func readCapped(f *os.File, path string) ([]byte, error) {
+func readCapped(f FSFile, path string) ([]byte, error) {
 	fi, err := f.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("journal: stat %s: %w", path, err)
@@ -350,8 +357,8 @@ func readLimited(r io.Reader, path string, size, limit int64) ([]byte, error) {
 // openError is the error of failing to open path for op: a symbolic link at the
 // path (the open refuses to follow it) is ErrNotRegular, anything else is the
 // open's own error.
-func openError(op, path string, err error) error {
-	if fi, lerr := os.Lstat(path); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+func openError(fsys FS, op, path string, err error) error {
+	if fi, lerr := fsys.Lstat(path); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("%w: %s is a symbolic link", ErrNotRegular, path)
 	}
 	return fmt.Errorf("journal: %s %s: %w", op, path, err)
@@ -360,7 +367,7 @@ func openError(op, path string, err error) error {
 // regularFile reports ErrNotRegular for an open file that is not a regular
 // file. It runs on the descriptor, after the open, so the check and the use are
 // of the same object.
-func regularFile(f *os.File) error {
+func regularFile(f FSFile) error {
 	fi, err := f.Stat()
 	if err != nil {
 		return fmt.Errorf("journal: stat %s: %w", f.Name(), err)
@@ -388,26 +395,34 @@ func fileKind(m os.FileMode) string {
 	return "special file"
 }
 
-func syncDir(dir string) error {
-	d, err := os.Open(dir)
-	if err != nil {
-		return fmt.Errorf("journal: open %s: %w", dir, err)
-	}
-	return errors.Join(d.Sync(), d.Close())
+// openLabelled opens path through fsys inside label's region.
+func openLabelled(fsys FS, label, path string, flag int, perm os.FileMode) (FSFile, error) {
+	defer fsys.Region(label)()
+	return fsys.Open(path, flag, perm)
+}
+
+// syncDir fsyncs dir through fsys inside label's region.
+func syncDir(fsys FS, label, dir string) error {
+	defer fsys.Region(label)()
+	return fsys.SyncDir(dir)
 }
 
 // writeLine is the one writer: it appends data (one line or several) and
-// fsyncs, or rolls the file back to its previous length and reports the
-// error.
-func (j *File) writeLine(data []byte) error {
+// fsyncs inside label's region, or rolls the file back to its previous
+// length and reports the error.
+func (j *File) writeLine(label string, data []byte) error {
 	prev := j.size
-	n, err := j.f.Write(data)
-	if err == nil && n != len(data) {
-		err = io.ErrShortWrite
-	}
-	if err == nil {
-		err = j.f.Sync()
-	}
+	err := func() error {
+		defer j.fsys.Region(label)()
+		n, err := j.f.Write(data)
+		if err == nil && n != len(data) {
+			err = io.ErrShortWrite
+		}
+		if err == nil {
+			err = j.f.Sync()
+		}
+		return err
+	}()
 	if err != nil {
 		return errors.Join(fmt.Errorf("journal: append to %s: %w", j.path, err), j.rollback(prev))
 	}
@@ -420,12 +435,20 @@ func (j *File) writeLine(data []byte) error {
 // broken: a later Append would reuse a seq, so every one fails instead and
 // the callers record gaps.
 func (j *File) rollback(size int64) error {
+	defer j.fsys.Region(LabelRollback)()
 	if err := errors.Join(j.f.Truncate(size), j.f.Sync()); err != nil {
 		j.broken = fmt.Errorf("journal: %s may hold a line no store committed and could not be cut back: %w", j.path, err)
 		return j.broken
 	}
 	j.size = size
 	return nil
+}
+
+// cutTail cuts an incomplete last line off the file: size is the length of
+// its complete lines.
+func (j *File) cutTail(size int64) error {
+	defer j.fsys.Region(LabelCut)()
+	return errors.Join(j.f.Truncate(size), j.f.Sync())
 }
 
 // headRecord is c/backup/journal_head's value.
@@ -543,7 +566,7 @@ func (j *File) Append(ctx context.Context, b *storage.Batch, r Revocation) error
 		return err
 	}
 	prev := j.size
-	if err := j.writeLine(data); err != nil {
+	if err := j.writeLine(LabelAppend, data); err != nil {
 		return err
 	}
 	if err := setHead(b, j.ks, h); err != nil {
@@ -723,7 +746,7 @@ func (j *File) writeLineLocked(ctx context.Context, r Revocation) (Pending, erro
 	if err != nil {
 		return Pending{}, err
 	}
-	if err := j.writeLine(data); err != nil {
+	if err := j.writeLine(LabelAppend, data); err != nil {
 		return Pending{}, err
 	}
 	j.commitLines(h, stale, closed)

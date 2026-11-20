@@ -1,7 +1,7 @@
 // file: core/backup/journal/chain.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 1da2b496-21d3-4218-8a94-2e19379880f4
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 package journal
 
@@ -282,13 +282,14 @@ func claimedEnd(c *Chain, rest [][]byte, want uint64) uint64 {
 // journal is never read through a link planted on its share, for the same
 // reason it is never written through one, and a named pipe is refused without
 // waiting for a writer); a file over maxJournalBytes is ErrCorrupt.
-func ReadFile(path string, keys Keys) (c *Chain, err error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|openNoFollow|openNoBlock, 0)
+func ReadFile(path string, keys Keys, opts ...FSOption) (c *Chain, err error) {
+	fsys := fsOf(opts...)
+	f, err := fsys.Open(path, os.O_RDONLY|openNoFollow|openNoBlock, 0)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, err
 		}
-		return nil, openError("open", path, err)
+		return nil, openError(fsys, "open", path, err)
 	}
 	defer func() { err = errors.Join(err, f.Close()) }()
 	if err := regularFile(f); err != nil {
