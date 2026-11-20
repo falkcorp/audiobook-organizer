@@ -35,16 +35,27 @@ export function frameText(topic: string, data: unknown, key = '', id?: string): 
 /** An open stream answer that errors its body when the request is aborted. */
 export function sseStream(signal?: AbortSignal | null): FakeStream {
   let ctl!: ReadableStreamDefaultController<Uint8Array>;
+  // The abort listener is detached once the stream is over (aborted, cancelled by
+  // its reader, or ended by the server), so a long-lived signal never keeps a
+  // finished fake's controller reachable.
+  let detach = () => {};
   const body = new ReadableStream<Uint8Array>({
     start(c) {
       ctl = c;
-      signal?.addEventListener('abort', () => {
+      if (!signal) return;
+      const onAbort = () => {
+        detach();
         try {
           c.error(new DOMException('aborted', 'AbortError'));
         } catch {
           // already closed
         }
-      });
+      };
+      detach = () => signal.removeEventListener('abort', onAbort);
+      signal.addEventListener('abort', onAbort, { once: true });
+    },
+    cancel() {
+      detach();
     },
   });
   const response = new Response(body, {
@@ -64,6 +75,7 @@ export function sseStream(signal?: AbortSignal | null): FakeStream {
     event: (id, topic, data, key = '') => write(frameText(topic, data, key, id)),
     control: (topic, data) => write(frameText(topic, data)),
     end() {
+      detach();
       try {
         ctl.close();
       } catch {
