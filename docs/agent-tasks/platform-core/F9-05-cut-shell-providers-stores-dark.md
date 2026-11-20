@@ -11,8 +11,8 @@
 | Release | R3 (dark; merges after OWNER-05), flip label F9; the shell ships in R3 (owner direction 2026-11-16, plan §(l) item 7) |
 | Tier | **T3** (Opus / high): a cut of shell-classified providers, stores and presentational pieces, the Activity page among them; the import boundary must prove the cut and the SPA must behave the same |
 | Wave | W42 (beside R3-05; file-disjoint). This row is the **first** of the three F9 cut rows: F9-02 and F9-04 depend on it and follow in W43. It moved from W41 on 2026-11-16, when F9-01 moved to W41 behind OWNER-05 |
-| Depends on | F9-01 (the `ui-kit`, `shell` and `api-client` packages), F8-04 (the last R2 flip: F4-08 through F8-04 edit the `web/src/` files this row moves), OWNER-05 |
-| Precondition | 07 §7.19 step 4: every R2 flip whose native routes the cut files call has merged (enforced by `Depends on`: F8-04) |
+| Depends on | F9-01 (the `ui-kit`, `shell` and `api-client` packages), F8-04a/b (the last R2 flip: F4-08 through F8-04b edit the `web/src/` files this row moves), OWNER-05 |
+| Precondition | 07 §7.19 step 4: every R2 flip whose native routes the cut files call has merged (enforced by `Depends on`: F8-04a, F8-04b) |
 | Spec | 07 §7.11 (the classification table: the rows named in the title), §7.9.1 (`AuthProvider`, the 401 rule, `safeReturn`), §7.3.1 (import boundary; ui-kit's graph), §7.4.2 (`TaskKindPresentation`, `ActivityPaneContribution`, `storageKey()`, the provider order), §7.18 (`shellStorageKeys.test.tsx`, `shortcuts.test.tsx`, `auth.flow.test.tsx`), §7.19 step 4 |
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. **Dark:** ABO's SPA looks and behaves the
@@ -35,8 +35,8 @@ npm ci --prefix web
 
 07 §7.19 step 4 lists as preconditions "steps 1–2 and every R2 flip whose native routes the shell pages call". The
 pieces this row moves call the identity routes (`AuthContext`, F4-08), the tasks routes (the Activity page,
-`useOperationsStore`, `OperationTrackerProvider`, F5-18), the stream (F6-03) and the system routes (F8-04), and those
-flips edit these files under `web/src/` in their own PRs. `Depends on` F8-04 puts all of them in your base, so there is
+`useOperationsStore`, `OperationTrackerProvider`, F5-18), the stream (F6-03) and the system routes (F8-04a), and those
+flips edit these files under `web/src/` in their own PRs. `Depends on` F8-04a/b puts all of them in your base, so there is
 nothing to check here.
 
 ## Goal (07 §7.11, one row of the table per item)

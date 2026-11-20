@@ -16,7 +16,7 @@
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. **Dark:** no route is mounted, the
 gin `/api/v1/update/*` handlers keep serving HEAD's R0 behaviour, nothing in ABO's `main` passes
-`app.Options.Updater` (F8-04 wires it). The one user-visible addition allowed here is the offline command
+`app.Options.Updater` (F8-04b wires it). The one user-visible addition allowed here is the offline command
 `updater fetch-release` and the `RELEASE=` branch of `make rollback-restore` (plan §(l) item 9).
 
 ## START HERE (do this first, exactly)
@@ -39,7 +39,7 @@ one new parameter (A-6), add the `github` source adapter, the task bodies (`core
 `core.updater.apply`, `core.updater.rollback`), the native routes (unmounted), `Updater.FetchRelease` and its offline
 command, and the `RELEASE=` branch of `make rollback-restore`. Exactly two additions to HEAD's pipeline: the
 `core.updater.max_download` cap and the `--version-json` self-test (05-updater §5U.4). Only `updater.go` moves;
-`scheduler.go` and `register.go` stay in ABO until F8-04 deletes them (05-updater §5U.12).
+`scheduler.go` and `register.go` stay in ABO until F8-04b deletes them (05-updater §5U.12).
 
 ## Invariants
 
@@ -115,7 +115,7 @@ its API).
    `Perms.Start: core:admin`, `Cancel: Cooperative(30s)` until the swap), `core.updater.rollback`. Registered only
    when `app.Options.Updater` is non-nil (`TestPolicy_NilOptionsNoRoutesNoTasks`).
 6. `core/internal/updaterhttp`: the four routes of §5U.10, built but mounted only by the kernel when
-   `Options.Updater` is set (F8-04 sets it).
+   `Options.Updater` is set (F8-04b sets it).
 7. `FetchRelease(ctx, version, dest)` and `core/app/offline_updater.go`: the `updater fetch-release --version <tag>
    --out <path>` command; compiled-in cap 512 MiB (it reads no store).
 8. ABO side: keep `internal/updater`'s scheduler and registration compiling against the moved code (or a thin
@@ -189,7 +189,7 @@ All of 05-updater §5U.11 in `core/updater` and `core/updater/github`, among the
 `core/updater/testdata/series.golden` (05-metrics §12): the five §5U.9 families with their types and label sets.
 
 In ABO's root module: `TestABOUpdaterSourceMatchesHEAD` (05-updater §5U.12): build the `updater.Options` ABO's
-`main` will pass (put the constructor in an ABO package, for example `internal/updater`, so F8-04 only wires it) and
+`main` will pass (put the constructor in an ABO package, for example `internal/updater`, so F8-04b only wires it) and
 assert HEAD's API path for the repository, HEAD's raw asset name for each GOOS/GOARCH of `.goreleaser.yml`'s build
 matrix and HEAD's user agent `audiobook-organizer/<ver>`; run R0's fake-server test through those options with only
 the base URL injected.
@@ -232,7 +232,7 @@ make -C core ci
 ## Out of scope
 
 - Wiring `app.Options.Updater` in `main.go`, mounting the routes, deleting `/api/v1/update/*`, `scheduler.go`,
-  `register.go` and the maintenance-window step (all F8-04).
+  `register.go` and the maintenance-window step (all F8-04b).
 - Archive download, checksums, signed manifests, the boot-attempt counter, automatic rollback, exec restart,
   pre-update backup, container refusal (deferred-build, 05-updater §5U.3).
 - Changing the release pipeline.
@@ -240,7 +240,7 @@ make -C core ci
 ## Rollback
 
 Revert the PR: `internal/updater/updater.go` returns, `fetch-release` and the `RELEASE=` branch disappear. No stored
-data is written (dark; `c/updater/seen` is written only once F8-04 wires the check task).
+data is written (dark; `c/updater/seen` is written only once F8-04b wires the check task).
 
 ## Repo rules
 
@@ -255,6 +255,6 @@ data is written (dark; `c/updater/seen` is written only once F8-04 wires the che
 - Re-verify 5 was stale: `rollback-restore` already named `RELEASE` (R1-27's refusal). Fixed above.
 - The brief's file set did not cover the rows added to the Files table above (the helper op, `Options.Updater`, the offline registration, `books.OfflineOptions`).
 - Step 9 said to fetch to `<prev path>.fetched`; the deploy user cannot write the bin directory, so the fetch goes to `stage_bin` and a root helper op installs it.
-- F8-04's brief also says it registers `updater fetch-release` in `offline.go`; F8-02 does it, because the command is useless to the rollback recipe without it.
+- F8-04b's brief also says it registers `updater fetch-release` in `offline.go`; F8-02 does it, because the command is useless to the rollback recipe without it.
 - 05-updater §5U.3's `Deps` has no inputs for settings, version, state dir, db path or secrets; `New` gained functional Options. `Source{Latest, Open}` cannot fetch a named tag; the optional `TagSource` was added.
-- Details and the items left for F8-04: `docs/agent-tasks/platform-core/seams.d/F8-02.md`.
+- Details and the items left for F8-04b: `docs/agent-tasks/platform-core/seams.d/F8-02.md`.

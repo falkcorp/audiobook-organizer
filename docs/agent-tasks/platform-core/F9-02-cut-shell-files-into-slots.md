@@ -11,7 +11,7 @@
 | Release | R3 (dark; merges after OWNER-05), flip label F9; the shell ships in R3 (owner direction 2026-11-16, plan §(l) item 7) |
 | Tier | **T3** (Opus / high): a cut of shell-classified files into slots; the import boundary must prove the cut and the SPA must render the same |
 | Wave | W43 (beside F9-04, R3-01, R3-03; file-disjoint). It moved from W42 on 2026-11-16, behind F9-05 (now W42) |
-| Depends on | F9-01, F8-04 (F4-08 through F8-04 edit the `web/src/` layout files this row moves), F9-05 (see Goal) |
+| Depends on | F9-01, F8-04a, F8-04b (F4-08 through F8-04b edit the `web/src/` layout files this row moves), F9-05 (see Goal) |
 | Spec | 07 §7.11 (the classification table, rows `components/layout/{MainLayout,TopBar,UserMenu,sidebarSelection}.tsx, Sidebar.tsx minus its arrays` and `pages/ActivityLog.tsx … components/layout/OperationsIndicator.tsx`), §7.3.1 (import boundary), §7.4.2 (slot contributions: `nav`, `banners`, `topBarItems`, `activityPanes`, `taskKinds`), §7.19 step 4 ("cut the audiobook imports out of the shell-classified files into books slots and move them into `core/web`") |
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. **Dark:** ABO's SPA looks and behaves the
@@ -34,7 +34,7 @@ npm ci --prefix web
 
 07 §7.19 step 4: "Preconditions: steps 1–2 and every R2 flip whose native routes the shell pages call". The layout
 calls the identity routes (`UserMenu`: F4-08), the tasks routes (`OperationsIndicator`: F5-18) and the stream
-(`TopBar`: F6-03), and those flips edit these files under `web/src/`. `Depends on` F8-04 puts all of them in your base,
+(`TopBar`: F6-03), and those flips edit these files under `web/src/`. `Depends on` F8-04a/b puts all of them in your base,
 so there is nothing to check here.
 
 ## Goal

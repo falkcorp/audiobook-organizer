@@ -16,7 +16,7 @@
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. **Dark:** ABO's `internal/backup` keeps
 creating `legacy-abo/0` archives and keeps its `/api/v1/backup/*` routes; no core backup task is scheduled in ABO
-and no core route is mounted for ABO until F8-04. The core package is wired on `hello` and `coretest`.
+and no core route is mounted for ABO until F8-04a. The core package is wired on `hello` and `coretest`.
 
 ## START HERE (do this first, exactly)
 
@@ -60,7 +60,7 @@ Build core `backup` (05-backup), dark:
   (`TestRestoreBelowUpgradeFloorRefusedAtStaging`; R3-02 adds R3's floor cell).
 - **I6.** A `legacy-abo/0` archive restored on R2, staged and offline, is staged, extracted and checkpointed behind its
   own pre-migration checkpoint before the next boot migrates it (the staging half of
-  `TestLegacyArchiveRestoreThenMigrate`; F8-04 owns the test and adds the migration over every registered step).
+  `TestLegacyArchiveRestoreThenMigrate`; F8-04a owns the test and adds the migration over every registered step).
 - **I7.** Retention never deletes the newest verified archive and runs before the space check
   (`TestRetentionFloors`, `TestRetentionRunsBeforeSpaceCheck`).
 - **I8. Dark.** ABO's backup behaviour and routes are unchanged in this PR.
@@ -77,7 +77,7 @@ Build core `backup` (05-backup), dark:
 
 `core/backup/journal/` exists (F4-04's types and append, F4-11's authenticated format, `backup.location.json` writer
 and boot re-apply) and is not edited here except to adopt `journal.StorageSpec()` if 05-backup
-says `backup` adopts it at its own flip (that adoption is F8-04's wiring; leave the kernel's registration as is).
+says `backup` adopts it at its own flip (that adoption is F8-04a's wiring; leave the kernel's registration as is).
 
 ## Re-verify before editing (expected results at your base)
 
@@ -158,11 +158,11 @@ type Service interface {
 
 ## Tests (write first; spec names copied exactly, 05-backup §5B.9)
 
-The staging half of **`TestLegacyArchiveRestoreThenMigrate`** (05-backup §5B.9; F8-04 owns the test): a `legacy-abo/0`
+The staging half of **`TestLegacyArchiveRestoreThenMigrate`** (05-backup §5B.9; F8-04a owns the test): a `legacy-abo/0`
 archive of the R0 corpus, staged and offline, passes staging, is extracted, and the pre-migration checkpoint is taken.
 No cutover step is registered at this row's wave (F3-07 registers M2, M7 and M8 in a later wave; M3–M6 follow at F4-08, F5-18
 and F7-09), so this PR asserts nothing about migrated families. Write it under the spec name in ABO's root module;
-F8-04 extends it to the migrated store with the corpus' per-family counts.
+F8-04a extends it to the migrated store with the corpus' per-family counts.
 
 Also in this PR: `TestRestoreNeverWritesLiveStore`, `TestStagedRestoreAppliedBeforeConfigAndStorage`,
 `TestRestoreRejectedKeepsLiveData`, `TestStaleOrForeignIntentRejected`, `TestRestoreRejectsMismatchedDBPath`,
@@ -193,7 +193,7 @@ the PR which ones already existed.
 # Core backup. Expected: ok, no FAIL
 (cd core && go test -count=1 -race ./backup/... ./internal/backuparchive/... ./internal/backuphttp/...)
 
-# The staging half of the gate test (F8-04 completes it). Expected: ok
+# The staging half of the gate test (F8-04a completes it). Expected: ok
 go test -count=1 -run TestLegacyArchiveRestoreThenMigrate ./...
 
 # Dark: ABO's backup unchanged. Expected: ok
@@ -213,7 +213,7 @@ P4d durable write, extend `TestBootCrashMatrix` and `TestBootCrashMatrix_ABO` in
 ## Out of scope
 
 - Mounting routes in ABO, deleting `/api/v1/backup/*`, `internal/backup` and the organizer's auto-backup, the first
-  `core.backup.create` writing `mediacore-backup/1` in production (F8-04).
+  `core.backup.create` writing `mediacore-backup/1` in production (F8-04a).
 - Archive encryption, `Rewrap` beyond what §5B.3.9 keeps deferred (deferred-build).
 - The revocation journal's writers (F4-01, F4-02), its authenticated format, the boot re-apply and the restore-hook
   runner (F4-11), and the R3 floor (R3-02).

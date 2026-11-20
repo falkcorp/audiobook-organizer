@@ -15,7 +15,7 @@
 | Release | R2 (the one-way cutover) |
 | Tier | **OWNER**: deploy, production reads, release |
 | Wave | W40 |
-| Depends on | R2-01 (the runbook and the R2 release note; it follows every R2 flip, up to F8-04; F9 is R3's and follows this checkpoint) |
+| Depends on | R2-01 (the runbook and the R2 release note; it follows every R2 flip, up to F8-04b; F9 is R3's and follows this checkpoint) |
 | Unblocks | every R3 task (you end the R2 freeze yourself after the release; D15) |
 | Spec | 09 §9.4 R2 (Rollback, Owner), §9.3 item 2 (the optional dry run), §9.6 (what changes; last column feeds these steps), §9.7 P12; 05-config §2.4 (keyring export); 05-backup §5B.10 |
 

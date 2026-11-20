@@ -63,7 +63,7 @@ include `auto_update_paused`. R0 adds a `degraded` field to HEAD's authenticated
 is true; R1-24 later extends that field with the posture tokens (it does not create it). So in R0: (a)
 `GET /api/v1/update/status` reports the flag, and (b) `GET /api/v1/system/status` gains the `degraded` string list.
 It must **never** appear in `/health`. This row creates `TestHealth_UnauthenticatedTokenSetGolden` with its R0 cell;
-R1-24, F2-10 and F8-04 extend it.
+R1-24, F2-10 and F8-04a extend it.
 
 ## Files
 
@@ -150,7 +150,7 @@ Also, in `internal/server/handlers/system/health_tokens_test.go`:
 
 | Test | Proves |
 |---|---|
-| `TestHealth_UnauthenticatedTokenSetGolden` (05-health §5H.9; this row creates it with its R0 cell) | R0 cell, over HEAD's code: with every token HEAD's handler can raise at your base raised at once (`memdb_warming`, the degraded startup steps `metrics_disabled` and `search_index`, and `auto_update_paused`), every token of `HealthCheck`'s `degraded` list is in the fixed unauthenticated set of 05-health §5H.3.1 (a golden list in the test: `memdb_warming`, `metrics_disabled`, `search_index`, `basic_gate_no_password`) and `auto_update_paused` is not in it; `GetSystemStatus`'s `degraded` field contains `auto_update_paused`. Write the cells as a table so R1-24, F2-10 and F8-04 add theirs without rewriting it. |
+| `TestHealth_UnauthenticatedTokenSetGolden` (05-health §5H.9; this row creates it with its R0 cell) | R0 cell, over HEAD's code: with every token HEAD's handler can raise at your base raised at once (`memdb_warming`, the degraded startup steps `metrics_disabled` and `search_index`, and `auto_update_paused`), every token of `HealthCheck`'s `degraded` list is in the fixed unauthenticated set of 05-health §5H.3.1 (a golden list in the test: `memdb_warming`, `metrics_disabled`, `search_index`, `basic_gate_no_password`) and `auto_update_paused` is not in it; `GetSystemStatus`'s `degraded` field contains `auto_update_paused`. Write the cells as a table so R1-24, F2-10 and F8-04a add theirs without rewriting it. |
 | `TestSystemStatus_AutoUpdatePausedAuthenticatedOnly` (name coined here) | `GET /system/status`'s `degraded` carries `auto_update_paused` exactly while `AutoUpdate.Enabled` is true, and is empty otherwise. |
 
 And (name coined here) `TestMaintenanceWindowStep1_CheckOnly` in the new

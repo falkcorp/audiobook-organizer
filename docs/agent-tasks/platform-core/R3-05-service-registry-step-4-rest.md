@@ -33,7 +33,7 @@ git rebase origin/main
 one explicit list passed to `serviceregistry.NewContainerFrom` in `internal/books/services.go` (step 3). The flips
 deleted the generic services' entries as their core packages arrived (step 4): F3-07 `configupdate`; F5-18 `ophub`,
 `opregistry`, the four activity services and the five plugins; F7-09 `eventbus`, `filesystem`, `searchindex`, the ten
-AI services, `batchpoller` and the three metafetch services; F8-04 `updater`, `updatescheduler`, `system`,
+AI services, `batchpoller` and the three metafetch services; F8-04b `updater` and `updatescheduler`; F8-04a `system`,
 `dashboard` and `metricsstore`. That leaves the nine audiobook services of 06 §6.11.2's last two domain rows:
 `work`, `audiobook`, `organize`, `quarantine`, `scan`, `merge`, `importpath`, `batch` and `itunes`, all with
 destination "books" (a plain constructor in the books module).

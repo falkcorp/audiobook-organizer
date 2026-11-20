@@ -72,7 +72,7 @@ bug." `serviceregistry` keeps working inside books (06 §6.11.1 step 2: it is ap
 
 **No service changes.** The 43 registrants of 06 §6.11.2 keep their names, `Needs`, `Groups` and `Build` bodies
 byte-for-byte; the production container builds exactly the set HEAD builds. Step 4 (constructors replacing clusters,
-deleting `ServiceDef`s and `Get[T]` sites) is paced by the flips F3-07, F5-18, F7-09, F8-04 and finished by R3-05; it
+deleting `ServiceDef`s and `Get[T]` sites) is paced by the flips F3-07, F5-18, F7-09, F8-04a, F8-04b and finished by R3-05; it
 is not this PR.
 
 ## The set HEAD builds (what the explicit list must reproduce)
@@ -229,7 +229,7 @@ make ci; echo "exit $?"                                                         
 ## Out of scope
 
 Step 4 of 06 §6.11.1 (constructors replacing clusters, `Get[T]` sites, deleting `ServiceDef`s, the `batchpoller`
-explicit construction and the move of the server construction into start hooks): F3-07, F5-18, F7-09, F8-04 and
+explicit construction and the move of the server construction into start hooks): F3-07, F5-18, F7-09, F8-04a, F8-04b and
 R3-05. Deleting `internal/serviceregistry` (R3). Any service's behaviour.
 
 ## Rollback

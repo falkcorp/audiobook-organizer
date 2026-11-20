@@ -16,7 +16,7 @@
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. **Dark:** nothing in ABO switches. HEAD's
 `/health`, `/api/health`, `/api/v1/health` and `GET /api/v1/system/status` keep serving exactly as now; the core
-routes are built and tested on `hello`/`coretest` but the kernel mounts them for ABO only at F8-04.
+routes are built and tested on `hello`/`coretest` but the kernel mounts them for ABO only at F8-04a.
 
 ## START HERE (do this first, exactly)
 
@@ -34,10 +34,10 @@ Complete core `health` beyond F2's readiness core (05-health §5H.10, row F8: "e
 `ComponentState`, the remaining core components, `GET /livez` and `GET /readyz` (exact `Router.Infra` patterns),
 `GET /api/core/v1/health`, `GET /api/core/v1/system/info`, `GET /api/core/v1/system/status`, the diagnostics routes,
 the health status topic on the bus, `Startup` with `StepClass`/`StartupStep` (the module member
-`Registrar.StartupSteps` and `Registrar.Diagnostics` are the flip F8-04's, which owns `core/module/` in its wave), the
-heartbeat and the systemd watchdog ping (start functions in `core/kernel/health.go`, called by F8-04), `health/sysinfo` (a re-implementation of HEAD's host parts, not a
+`Registrar.StartupSteps` and `Registrar.Diagnostics` are the flip F8-04a's, which owns `core/module/` in its wave), the
+heartbeat and the systemd watchdog ping (start functions in `core/kernel/health.go`, called by F8-04a), `health/sysinfo` (a re-implementation of HEAD's host parts, not a
 move), and the diagnostics bundle (`Section`, `Writer`, `WriteJSONL`, `Viewer`, `Contributor`) that will replace
-`diagnostics.InterimExport` at F8-04.
+`diagnostics.InterimExport` at F8-04a.
 
 ## Invariants
 
@@ -66,8 +66,8 @@ move), and the diagnostics bundle (`Section`, `Writer`, `WriteJSONL`, `Viewer`, 
 | create | `core/health/sysinfo/` (`Info`, `Memory`, `RootSpace`, `Collect`) |
 | create | `core/health/diagnostics/bundle.go` (the bundle, `Section`, `Writer`, `WriteJSONL`, `Viewer`, `Contributor`) |
 | create | `core/internal/healthhttp/` (`/api/core/v1/health`, `/api/core/v1/system/info`, `/api/core/v1/system/status`, `/api/core/v1/diagnostics/{run}`) |
-| modify | `core/kernel/health.go` (F2-10's file): the kernel functions that start the heartbeat and the watchdog ping and register the remaining core components. Nothing calls them from `core/kernel/boot.go` in this PR: the call is F8-04's (it owns `boot.go` in W38), so ABO's boot is unchanged; tests call them directly |
-| (not this row) | `core/module/` (`Registrar.StartupSteps`, `Registrar.Diagnostics`, 06 §6.4.10 F8 row) and ABO's mounts: F8-04 |
+| modify | `core/kernel/health.go` (F2-10's file): the kernel functions that start the heartbeat and the watchdog ping and register the remaining core components. Nothing calls them from `core/kernel/boot.go` in this PR: the call is F8-04a's (it owns `boot.go` in W38), so ABO's boot is unchanged; tests call them directly |
+| (not this row) | `core/module/` (`Registrar.StartupSteps`, `Registrar.Diagnostics`, 06 §6.4.10 F8 row) and ABO's mounts: F8-04a |
 | create | tests beside each (with `core/health/testdata/series.golden`); one `changelog.d/` fragment (headerless) |
 
 ## Re-verify before editing (expected results at your base)
@@ -99,13 +99,13 @@ STOP if `Registry.Snapshot` already exists (someone landed part of this), if `co
 3. Implement §5H.3.1's remaining members (`Snapshot`, `Live`, `ComponentState`, check scheduling with
    `Interval`/`Timeout`, panic and timeout becoming Down).
 4. §5H.3.2 `Startup` (core rows: store, metrics, secure state dir, key guard, secrets, config load/validate,
-   registration gates, http; books' `searchindex` becomes a books Degraded step at F8-04). Shape `Startup` so F8-04's
+   registration gates, http; books' `searchindex` becomes a books Degraded step at F8-04a). Shape `Startup` so F8-04a's
    `Registrar.StartupSteps` can hand module rows to it without changing it.
 5. §5H.3.3 probes and routes; `/livez` and `/readyz` as `Router.Infra` exact patterns; the authenticated routes with
    their permissions (`core:system.manage`, `core:system.status`; diagnostics download with `Guards.Interactive` and
    the actor-or-admin rule, audited as `core.diagnostics.download`).
 6. §5H.3.4 watchdog: `WATCHDOG=1` on the same heartbeat as `/livez`; `STOPPING=1` at shutdown start; both in
-   functions of `core/kernel/health.go` that F8-04 calls from `boot.go` (05-health §5H.10 F8 row lands the watchdog
+   functions of `core/kernel/health.go` that F8-04a calls from `boot.go` (05-health §5H.10 F8 row lands the watchdog
    ping with the flip). Do not edit `boot.go`.
 7. §5H.3.5 diagnostics bundle: core sections and module `Contributor`s, typed and pattern redaction, `os.Root`
    confinement, run expiry (410).
@@ -185,7 +185,7 @@ func Collect(ctx context.Context, roots []library.Root) Info
 (cd core && go test -count=1 -race ./health/... ./internal/healthhttp/...)
 
 # TestHealth_UnauthenticatedTokenSetGolden exists from R0-06 (extended by R1-24 and F2-10); this row adds no cell
-# (F8-04 adds the F8 cells) and must keep it green. Expected: ok
+# (F8-04a adds the F8 cells) and must keep it green. Expected: ok
 go test -count=1 -run TestHealth_UnauthenticatedTokenSetGolden ./...
 
 # Dark: HEAD's health routes unchanged. Expected: ok
@@ -203,11 +203,11 @@ make -C core ci
 
 - Mounting the core health routes for ABO, deleting `/api/health` and `/api/v1/health`, switching callers, books'
   `/health` served from the registry, `books.memdb`, replacing `InterimExport` and deleting
-  `app.Options.InterimBackends` (F8-04).
+  `app.Options.InterimBackends` (F8-04a).
 - `internal/sysinfo`'s library parts and `RecentOperations` (they stay books').
-- The kernel `/metrics` mount (F8-04).
-- `Registrar.StartupSteps`, `Registrar.Diagnostics` and their kernel calls (F8-04).
-- `TestHealth_UnauthenticatedTokenSetGolden`'s cells: R0-06 owns the test; F8-04 adds the F8 cells.
+- The kernel `/metrics` mount (F8-04a).
+- `Registrar.StartupSteps`, `Registrar.Diagnostics` and their kernel calls (F8-04a).
+- `TestHealth_UnauthenticatedTokenSetGolden`'s cells: R0-06 owns the test; F8-04a adds the F8 cells.
 
 ## Rollback
 

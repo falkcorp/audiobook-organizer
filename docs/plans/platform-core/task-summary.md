@@ -210,10 +210,10 @@ The web app moves onto the engine's shared UI frame. All five of its tasks merge
 | Task | Kind | What | Why | Wave · needs |
 |---|---|---|---|---|
 | **F9-01** Build the shared UI shell packages **(critical path)** | Feature | Creates the shared UI kit and shell packages, a sample app package, and core's UI serving code. Dark. | The audiobook UI needs to run inside a reusable shell. Without these packages, there is nothing to move the UI onto. | W41 · R1-30, F6-02, OWNER-05 |
-| **F9-05** Move providers, stores and shared components **(critical path)** | Cleanup | Moves auth, toasts, app state, common components and the Activity page into the shell, with books supplying task labels. Dark. | Shell pieces still live in the app. Until moved, the shell cannot run on its own. | W42 · F9-01, F8-04, OWNER-05 |
-| **F9-02** Move layout code into the shell **(critical path)** | Cleanup | Cuts the audiobook-specific imports out of the layout files into books slots and moves the layout into core's web code. Dark. | The layout mixes shell and audiobook code. It has to be separated before the shell can own it. | W43 · F9-01, F8-04, F9-05 |
-| **F9-04** Move shell pages out of the app | Cleanup | Moves shared pages (login, setup, users, system, settings, dashboard and more) into the shell, with their audiobook parts becoming books widgets. Dark. | These pages belong to the platform, not the audiobook app. They must all move before the entry point can switch to the shell. | W43 · F9-01, F8-04, F9-05 |
-| **F9-03** Switch the UI to the shell **(critical path)** | Migration | In one PR, boots the app through the shell, uses the shell's realtime client, drops the old SPA serving, and moves all audiobook URLs under /books/. | This is the UI cutover. Every page path changes, with no redirects from old URLs, so bookmarks break and the release note lists the new paths. | W44 · F8-04, F9-02, F9-04, F9-05, OWNER-05 |
+| **F9-05** Move providers, stores and shared components **(critical path)** | Cleanup | Moves auth, toasts, app state, common components and the Activity page into the shell, with books supplying task labels. Dark. | Shell pieces still live in the app. Until moved, the shell cannot run on its own. | W42 · F9-01, F8-04a, F8-04b, OWNER-05 |
+| **F9-02** Move layout code into the shell **(critical path)** | Cleanup | Cuts the audiobook-specific imports out of the layout files into books slots and moves the layout into core's web code. Dark. | The layout mixes shell and audiobook code. It has to be separated before the shell can own it. | W43 · F9-01, F8-04a, F8-04b, F9-05 |
+| **F9-04** Move shell pages out of the app | Cleanup | Moves shared pages (login, setup, users, system, settings, dashboard and more) into the shell, with their audiobook parts becoming books widgets. Dark. | These pages belong to the platform, not the audiobook app. They must all move before the entry point can switch to the shell. | W43 · F9-01, F8-04a, F8-04b, F9-05 |
+| **F9-03** Switch the UI to the shell **(critical path)** | Migration | In one PR, boots the app through the shell, uses the shell's realtime client, drops the old SPA serving, and moves all audiobook URLs under /books/. | This is the UI cutover. Every page path changes, with no redirects from old URLs, so bookmarks break and the release note lists the new paths. | W44 · F8-04a, F8-04b, F9-02, F9-04, F9-05, OWNER-05 |
 
 ## R2 · Ship the cutover (1)
 
@@ -221,7 +221,7 @@ The runbook and release note, then the release itself.
 
 | Task | Kind | What | Why | Wave · needs |
 |---|---|---|---|---|
-| **R2-01** Write the R2 runbook and release note **(critical path)** | Docs | Writes the operator runbook (deploy, rollback, smoke run) and assembles the R2 release note from the rename tables, deleted routes and metric renames. | Operators need clear steps and a full list of breaking changes. Without them, upgrading is guesswork. | W39 · F8-04 |
+| **R2-01** Write the R2 runbook and release note **(critical path)** | Docs | Writes the operator runbook (deploy, rollback, smoke run) and assembles the R2 release note from the rename tables, deleted routes and metric renames. | Operators need clear steps and a full list of breaking changes. Without them, upgrading is guesswork. | W39 · F8-04a, F8-04b |
 
 ## R3 · Cleanup (5)
 
