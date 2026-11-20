@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_phantom_repair.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 7c2dfefe-ccbe-4a60-b69b-5baee504d537
 // last-edited: 2026-11-19
 
@@ -300,36 +300,13 @@ type seriesPhantomWriter interface {
 	CreateOperationChange(change *database.OperationChange) error
 }
 
-// seriesPhantomRepointStore is what ONE book's repoint needs: a read of the row
-// and its field locks, then the ledger row and the book write.
-type seriesPhantomRepointStore interface {
+// seriesPhantomRepointReads is what ONE book's repoint reads: the row and its
+// field locks. The ledger row and the book write go through the run's writer,
+// so the repoint takes the two sides separately and never forwards a journal
+// write (the journal-direct-writers guard).
+type seriesPhantomRepointReads interface {
 	GetBookByID(id string) (*database.Book, error)
 	database.MetadataFieldStateReader
-	seriesPhantomWriter
-}
-
-// seriesPhantomRW is the repoint's store over the run's two sides: the reads of
-// env.Store, the writes of env.Writer.
-type seriesPhantomRW struct {
-	r seriesPhantomReads
-	w seriesPhantomWriter
-}
-
-func (s seriesPhantomRW) GetBookByID(id string) (*database.Book, error) { return s.r.GetBookByID(id) }
-func (s seriesPhantomRW) GetMetadataFieldStates(id string) ([]database.MetadataFieldState, error) {
-	return s.r.GetMetadataFieldStates(id)
-}
-func (s seriesPhantomRW) GetUserPreference(key string) (*database.UserPreference, error) {
-	return s.r.GetUserPreference(key)
-}
-func (s seriesPhantomRW) CreateSeries(name string, authorID *int) (*database.Series, error) {
-	return s.w.CreateSeries(name, authorID)
-}
-func (s seriesPhantomRW) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
-	return s.w.ModifyBook(id, fn)
-}
-func (s seriesPhantomRW) CreateOperationChange(c *database.OperationChange) error {
-	return s.w.CreateOperationChange(c)
 }
 
 // seriesPhantomHeadReads is HEAD's reads: the unfiltered count resolves through
@@ -692,7 +669,7 @@ func seriesPhantomRepairCore(ctx context.Context, mode string, dryRun bool, para
 			mu.Unlock()
 			return errSeriesPhantomStandDownLost
 		}
-		outcome, ferr := seriesPhantomRepointOne(seriesPhantomRW{r: env.Store, w: env.Writer}, opID, w.holder, w.target)
+		outcome, ferr := seriesPhantomRepointOne(env.Store, env.Writer, opID, w.holder, w.target)
 		mu.Lock()
 		defer mu.Unlock()
 		switch {
@@ -739,7 +716,7 @@ func seriesPhantomRepairCore(ctx context.Context, mode string, dryRun bool, para
 //     than a dangling id that survives to the next run.
 //
 // It returns a non-empty skip reason, or an error for a failed step.
-func seriesPhantomRepointOne(store seriesPhantomRepointStore, opID string, h seriesPhantomHolder, target *int) (skip string, err error) {
+func seriesPhantomRepointOne(store seriesPhantomRepointReads, w seriesPhantomWriter, opID string, h seriesPhantomHolder, target *int) (skip string, err error) {
 	full, err := store.GetBookByID(h.BookID)
 	if err != nil {
 		return "", fmt.Errorf("GetBookByID: %w", err)
@@ -775,7 +752,7 @@ func seriesPhantomRepointOne(store seriesPhantomRepointStore, opID string, h ser
 	// the read side of the journal lock; it takes no book stripe and writes
 	// no book, so calling it while ModifyBook holds this book's stripe keeps
 	// the store's lock order (book stripe, then journal lock).
-	written, uerr := store.ModifyBook(full.ID, func(cur *database.Book) error {
+	written, uerr := w.ModifyBook(full.ID, func(cur *database.Book) error {
 		if cur.SeriesID == nil || *cur.SeriesID != h.SeriesID {
 			skip = "changed_underneath"
 			return database.ErrSkipBookWrite
@@ -784,7 +761,7 @@ func seriesPhantomRepointOne(store seriesPhantomRepointStore, opID string, h ser
 			skip = "locked"
 			return database.ErrSkipBookWrite
 		}
-		if jerr := database.RecordOperationChange(store, &database.OperationChange{
+		if jerr := database.RecordOperationChange(w, &database.OperationChange{
 			ID:          ulid.Make().String(),
 			OperationID: opID,
 			BookID:      h.BookID,

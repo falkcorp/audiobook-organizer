@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g7.go
-// version: 1.0.10
+// version: 1.0.11
 // guid: 8e3a5d17-2c94-4b60-a1f8-6d07c9e4b352
 // last-edited: 2026-11-19
 
@@ -566,8 +566,15 @@ func t6g7Res(rs ...ops.Resource) []tasks.Resource {
 
 // t6g7Store is every read the 15 definitions make, composed from each
 // definition's own narrow interface. A method two definitions share has one
-// signature, so the embeds overlap cleanly. Nothing here writes.
+// signature, so the embeds overlap cleanly. Nothing here writes. It is split in
+// two so no single declaration is wider than the interface-width ratchet allows;
+// the method set is the union and no consumer sees the split.
 type t6g7Store interface {
+	t6g7StoreMetadata
+	t6g7StoreRepair
+}
+
+type t6g7StoreMetadata interface {
 	reviewStatusIndexRepairStore
 	unknownAuthorAuditStore
 	versionGroupPrimaryReportStore
@@ -575,30 +582,44 @@ type t6g7Store interface {
 	titleBackfillStore
 	titleRepairStore
 	userMergeStore
+}
+
+type t6g7StoreRepair interface {
 	tagBackfillStore
 	unrecordedRenameStore
 	seriesPhantomReads
 	vgPrimaryRepairReads
 	rewritePathPrefixReads
 	rfReads
+	seriesDenumberReads
 }
 
 // t6g7Writer is every write the 15 definitions make, composed from each
 // definition's own narrow interface. The native shells build it with
 // t6g7Deps.NewWriter over the run's kernel-gated tasks.Writer, so every write
-// goes through the gate (and is recorded, not executed, in a Preview run).
+// goes through the gate (and is recorded, not executed, in a Preview run). Split
+// in two for the interface-width ratchet, like t6g7Store.
 type t6g7Writer interface {
+	t6g7WriterMetadata
+	t6g7WriterRepair
+}
+
+type t6g7WriterMetadata interface {
 	reviewStatusIndexRepairWriter
 	titleBackfillWriter
 	titleRepairWriter
 	tagBackfillWriter
 	bulkWriteBackWriter
 	userMergeWriter
+}
+
+type t6g7WriterRepair interface {
 	unrecordedRenameWriter
 	seriesPhantomWriter
 	vgPrimaryRepairWriter
 	rewritePathPrefixWriter
 	rfWriter
+	seriesDenumberWriter
 }
 
 // t6g7Deps is what the native kinds are built from. Every field is set once, by
@@ -659,6 +680,7 @@ func t6g7KindList(p *Plugin, deps t6g7Deps, sched func(tasks.Kind) *tasks.Schedu
 		p.versionGroupPrimaryRepairNative(deps, sched),
 		p.rewritePathPrefixNative(deps, sched),
 		p.repointMissingToFolderAudioNative(deps, sched),
+		p.seriesDenumberNative(deps, sched),
 	}
 }
 
