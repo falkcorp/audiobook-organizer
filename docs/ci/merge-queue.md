@@ -21,9 +21,11 @@ too but do not hold the queue.
 2. **Merge queue (`merge_group`).** The same workflows run on the queued
    commit, except that ci.yml runs **without** the race detector (owner
    decision 2026-11-20): the short shards drop `-race`, and the fixture shards
-   are skipped. Their "-short form" is the short shards, because every test
-   they run skips under `-short`. The `race` step of ci.yml's `changes` job
-   makes that decision; nothing else reads the event name.
+   are skipped. The fixture shards run whole packages without `-short`; those
+   packages' other tests also run in the short shards, so the queue gives up
+   only the tests that skip under `-short`. The `race` step of ci.yml's `changes` job
+   makes that decision. Core CI (`core-ci.yml`, not required) applies the same
+   rule to `make -C core ci` through `TEST_SHORT_RACE`.
 3. **Push to main.** After the merge, ci.yml runs again on main **with**
    `-race`, short and fixture shards both. `auto-revert.yml` watches that
    run's conclusion and reverts a red commit.
@@ -35,8 +37,10 @@ too but do not hold the queue.
 
 Why: in merge-queue run 44770780353 (60 minutes) the race shards took 15-24
 minutes each and the fixture shards 14-25, and every job also waited 30-37
-minutes for a runner. Dropping `-race` shortens the shards and removes three
-fixture jobs per queue run, which also cuts the runner wait.
+minutes for a runner. Without `-race` the shards took 9-14.5 minutes in the
+branch rehearsal (run 44793448411), and three fixture jobs per queue run are
+gone. Estimated queue time is 35-45 minutes; runner wait is the floor, and
+`extraction-gates` (about 34 minutes in the run above) may be the long pole.
 
 To rehearse the queue's flavour on a branch before enqueueing:
 `gh workflow run ci.yml --ref <branch> -f race=false`.
