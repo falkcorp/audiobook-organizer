@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/gate.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: ec0c1bf4-fb0b-44a4-ac17-f2ca02f02f83
 // last-edited: 2026-11-19
 
@@ -145,8 +145,10 @@ func (g *gate) pace(ctx context.Context, counter, op string) (string, error) {
 	return used, nil
 }
 
-// finish records the attempt's outcome once: the breaker, then the hold. A
-// success releases only a hold that existed when the attempt started.
+// finish records the attempt's outcome once: the breaker, the token refund the
+// outcome asks for (at most once per reservation, because it is inside the
+// once), then the hold. A success releases only a hold that existed when the
+// attempt started.
 func (t *ticket) finish(o outcome) {
 	t.once.Do(func() {
 		g, r := t.g, t.g.r
