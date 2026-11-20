@@ -1,0 +1,5 @@
+### Added
+
+#### R2 release-note assembler (`scripts/release/assemble_r2_notes.py`)
+
+A new release script assembles the R2 release note from the repository's own committed tables, so the note cannot drift from them: the config rename table golden, the kind-rename map (read from the generated Go source, because the test that was to own a listing of it does not exist), the R2 rows of the HTTP stages table (deleted routes and their successors), the F5 and F7 metric renames, and the changed-in-R2 table with the kept contract of the platform-core spec. It quotes each owner's text verbatim and fails with a message naming the source or phrase when anything is missing or matches more than once, and it never writes a partial note. Every spec sentence that mentions the R2 release note must be quoted or listed as a pointer, so a new owner text cannot be dropped silently. The shell's row and stage belong to the R3 note and are left out. Run it with `python3 scripts/release/assemble_r2_notes.py --out <file>`; nothing calls it yet and it changes no runtime behaviour.
