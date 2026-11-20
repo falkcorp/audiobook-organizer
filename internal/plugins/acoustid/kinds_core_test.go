@@ -1165,6 +1165,33 @@ func TestAcoustidCore_HostWorkersHookSizesTheFingerprintPools(t *testing.T) {
 	require.Positive(t, asked.Load(), "duration repair sizes its pool from the hook")
 }
 
+// TestAcoustidCore_BackfillSurvivesAWorkersHookReturningZero: KindDeps's
+// Workers hook is not clamped, and the per-file semaphore used to be sized
+// from it directly, so 0 made it unbuffered and the first file waited on it
+// until the run was cancelled. The run must size the semaphore from the same
+// clamped value as its pool and finish.
+func TestAcoustidCore_BackfillSurvivesAWorkersHookReturningZero(t *testing.T) {
+	for _, n := range []int{0, -3} {
+		t.Run(fmt.Sprintf("workers=%d", n), func(t *testing.T) {
+			bf := backfillFixture(t, 1)
+			bf.store.UpdateBookFileFunc = func(string, *database.BookFile) error { return nil }
+			d := newKit().deps(bf.store)
+			d.Fingerprint.Workers = func() int { return n }
+			errc := make(chan error, 1)
+			go func() {
+				_, err := runKind(t, byKind(t, (&Plugin{}).Kinds(d, nil), backfillKind), tasks.ModeLive, &sentinelWriter{}, ``)
+				errc <- err
+			}()
+			select {
+			case err := <-errc:
+				require.NoError(t, err)
+			case <-time.After(30 * time.Second):
+				t.Fatal("backfill did not finish: the fingerprint semaphore was sized from an unclamped worker count")
+			}
+		})
+	}
+}
+
 // failWindowWriter fails the window writes the way a store failure would.
 type failWindowWriter struct{ *recWriter }
 

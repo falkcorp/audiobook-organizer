@@ -416,8 +416,14 @@ func backfillPagesCore(ctx context.Context, state BackfillParams, tally *backfil
 	prog := newProgress(env.kindEnv, total)
 	prog.Start(fmt.Sprintf("Backfilling fingerprints for %d books…", total))
 
-	workers := env.Workers()
-	fpSem := make(chan struct{}, workers)
+	// The book pool and the per-file semaphore are sized from one value. The
+	// injected Workers hook is not clamped (HEAD's backfillWorkers always
+	// returned 1..32, a KindDeps hook need not), and a zero here made the
+	// semaphore unbuffered, so the first file waited on it until the run was
+	// cancelled. Fixed clamps to [1, MaxFixed], so taking the semaphore's
+	// size from the pool's Parallelism keeps the two from disagreeing.
+	par := backfillParallelism(env.Workers())
+	fpSem := make(chan struct{}, par.Workers())
 	done := 0
 	restarted := false
 	for {
@@ -450,7 +456,7 @@ func backfillPagesCore(ctx context.Context, state BackfillParams, tally *backfil
 			break
 		}
 
-		err = env.Items(ctx, backfillParallelism(workers), len(page), backfillItemsOptions(done, total, tally), func(ctx context.Context, i int) error {
+		err = env.Items(ctx, par, len(page), backfillItemsOptions(done, total, tally), func(ctx context.Context, i int) error {
 			return backfillBookVia(ctx, store, page[i], tally, fpSem, logger)
 		})
 		if err != nil {
