@@ -642,3 +642,40 @@ func TestWindowBackfillNative_FailsOnWriteErrorsCarriedFromYields(t *testing.T) 
 	_, err = runKindResult(t, def, h, `{"concurrency":1}`)
 	require.ErrorContains(t, err, "2 file(s) could not be written")
 }
+
+// The backlog pass of a tier's drain takes every handed-back file at once, then
+// runs them on the pool. When the margin arrives between the take and a file's
+// start, that file is handed back to the resumed attempt, not cut: the pool's
+// items are claimed ahead of when they run.
+func TestWindowBackfill_DrainBacklogHandsBackFilesStartedAfterTheMargin(t *testing.T) {
+	h := newHubEnv(t, 3)
+	for _, j := range h.lease("w1", 3).Jobs {
+		st := h.post("w1", workerapi.JobResult{JobID: j.JobID, Ref: j.Ref, Outcome: workerapi.OutcomeDecodeError, Error: "boom"})
+		require.Equal(t, "server_lane", st[0].Reason)
+	}
+	var near atomic.Bool
+	y := &windowYield{deadline: func() time.Time {
+		if near.Load() {
+			return time.Now().Add(time.Minute)
+		}
+		return time.Now().Add(time.Hour)
+	}, margin: 10 * time.Minute, budget: windowTotalBudget, now: time.Now, quiesce: h.hub.quiesce, abandon: h.hub.abandon,
+		settleSafety: windowSettleSafety, minSkip: -1, startedAt: time.Now()}
+	y.progressed.Store(1) // the attempt has finished a file already
+	var scans atomic.Int64
+	r := &windowRun{t: &windowTally{}, yield: y, progress: func(int, int, string) {},
+		probe: funcScanProbe(func() bool { scans.Add(1); return false })}
+	r.items = func(ctx context.Context, _ tasks.Parallelism, n int, _ kindItemsOptions, fn func(context.Context, int) error) error {
+		near.Store(true) // the margin arrives after the backlog was taken, before any file starts
+		for i := range n {
+			if err := fn(ctx, i); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	require.NoError(t, r.drainRemote(context.Background(), h.hub, windowTierPresent, 1))
+	require.Zero(t, scans.Load(), "a file was started after the margin (run.file polls the scan probe first)")
+	require.GreaterOrEqual(t, y.minSkip, 0, "the handed-back files were not recorded as skipped")
+	require.Zero(t, h.hub.inFlight())
+}
