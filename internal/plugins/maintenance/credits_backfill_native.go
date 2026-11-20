@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -187,7 +188,7 @@ type cbJudgedOnly struct {
 func (l *nativeCBLedger) others(own string) ([]cbSourceOp, error) {
 	judged := map[string]map[string]bool{}
 	var cands []tasks.RunRecord
-	q := tasks.RunQuery{Kinds: []tasks.Kind{t6g3CreditsBackfillKind}, RunFilter: tasks.RunFilter{Limit: cbRunListPage}}
+	q := tasks.RunQuery{Kinds: []tasks.Kind{t6g3CreditsBackfillKind}, Limit: cbRunListPage}
 	for {
 		n := 0
 		for rec, err := range l.runs.List(l.ctx, q) {
@@ -267,9 +268,7 @@ func (l *nativeCBLedger) judgedSources() map[string]string {
 		return nil
 	}
 	out := make(map[string]string, len(l.judged))
-	for k, v := range l.judged {
-		out[k] = v
-	}
+	maps.Copy(out, l.judged)
 	return out
 }
 
