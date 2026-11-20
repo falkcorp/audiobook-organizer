@@ -126,3 +126,14 @@ func TestFirstRun_KeyListIsExact(t *testing.T) {
 		}
 	}
 }
+
+// TestFirstRun_ActorIsNotTheOwner: the actor core sees for a wizard write is
+// interactive and holds every permission, but is never the owner: the window
+// opens nothing that needs the owner's proof, and an owner set from the
+// environment before the first user exists keeps its keys.
+func TestFirstRun_ActorIsNotTheOwner(t *testing.T) {
+	a := firstRunActor(config.Actor{Subject: "first-run", Can: func(p string) bool { return p == config.FirstRunPerm }})
+	if !a.Interactive || a.Owner || a.Can == nil || !a.Can(adminPerm) || a.Subject != "first-run" {
+		t.Fatalf("window actor = %+v", a)
+	}
+}

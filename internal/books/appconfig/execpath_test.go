@@ -248,3 +248,15 @@ func TestExecPaths_RefusalNeverEchoesTheOSError(t *testing.T) {
 		}
 	}
 }
+
+// TestExecPaths_EmptyValueIsTheManagedCopy: an empty path is "use the managed
+// binary", not a path to judge; it is accepted for every row.
+func TestExecPaths_EmptyValueIsTheManagedCopy(t *testing.T) {
+	for _, key := range []string{"tools.fpcalc.custom_path", "tools.ollama.custom_path", "tools.managed_dir"} {
+		for _, v := range []string{"", "   "} {
+			if got := execPathViolations(config.Config{}, set(key, `"`+v+`"`)); len(got) != 0 {
+				t.Errorf("%s=%q judged: %v", key, v, got)
+			}
+		}
+	}
+}
