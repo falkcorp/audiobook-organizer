@@ -1,5 +1,5 @@
 // file: internal/server/basic_gate_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b7e1d90-6a42-4c15-8f0e-d2a94c6b7e51
 // last-edited: 2026-11-19
 
@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	systemhandlers "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	"github.com/falkcorp/mediacore/secrets"
 )
 
@@ -241,5 +242,15 @@ func TestBasicGateHealthToken(t *testing.T) {
 	setBasicGateEnv(t, nil)
 	if basicGateNoPassword() {
 		t.Fatal("a disabled gate has no missing password")
+	}
+}
+
+// TestBasicGateNoPasswordToken_SystemHandlerMatchesCore: the system handler
+// keeps its own copy of the token (it may not import core's httpapi) to let
+// it through /health's unauthenticated filter; a rename in core would
+// silently drop it from the answer, so the two are pinned equal here.
+func TestBasicGateNoPasswordToken_SystemHandlerMatchesCore(t *testing.T) {
+	if systemhandlers.DegradedBasicGateNoPassword != BasicGateNoPasswordToken {
+		t.Fatalf("system handler token %q != core's %q", systemhandlers.DegradedBasicGateNoPassword, BasicGateNoPasswordToken)
 	}
 }
