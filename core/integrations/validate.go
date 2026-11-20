@@ -1,5 +1,5 @@
 // file: core/integrations/validate.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 05883661-d0f7-454b-b1c0-94be20c84612
 // last-edited: 2026-11-19
 
@@ -18,9 +18,11 @@ import (
 // called it).
 //
 // settings is the effective non-secret layer the write would serve (the
-// stored layer with the operator overlay applied); stored is the stored
-// layer of the row being replaced, nil for a create. Both are the Registry's
-// own copies; the validator must not retain or modify them. adapter names the
+// stored layer with the operator overlay applied); stored is what the row
+// being replaced serves now (its stored layer with the operator overlay
+// applied, so a value an operator locks is in it), nil for a create. A rule
+// that grandfathers a value the row already holds reads it from stored. Both
+// are the Registry's own copies; the validator must not retain or modify them. adapter names the
 // instance's adapter, so a kind with one adapter-specific rule can tell.
 //
 // Any error is a refusal. The Registry makes it an ErrInvalid (a 422 on the
