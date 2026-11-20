@@ -28,48 +28,22 @@ const (
 	maxLimit     = 1000
 )
 
-// actorDTO is who started or acted on a run.
-type actorDTO struct {
-	UserID     string `json:"user_id,omitempty"`
-	AuthMethod string `json:"auth_method,omitempty"`
-	System     string `json:"system,omitempty"`
-}
+// actorDTO is who started or acted on a run: the wire form tasks owns, shared
+// with the run-changed and finished topics.
+type actorDTO = tasks.ActorPayload
 
-func actorView(a tasks.Actor) actorDTO {
-	return actorDTO{UserID: a.UserID, AuthMethod: a.AuthMethod, System: a.System}
-}
+func actorView(a tasks.Actor) actorDTO { return tasks.NewActorPayload(a) }
 
-// runDTO is the JSON of a tasks.RunView (which has no tags of its own).
-type runDTO struct {
-	ID       string    `json:"id"`
-	Kind     string    `json:"kind"`
-	Mode     string    `json:"mode"`
-	State    string    `json:"state"`
-	Held     bool      `json:"held"`
-	Reason   string    `json:"reason,omitempty"`
-	Actor    actorDTO  `json:"actor"`
-	Trigger  string    `json:"trigger"`
-	Parent   string    `json:"parent,omitempty"`
-	PlanRef  string    `json:"plan_ref,omitempty"`
-	Created  time.Time `json:"created"`
-	Started  time.Time `json:"started,omitzero"`
-	Finished time.Time `json:"finished,omitzero"`
-	Done     int       `json:"done"`
-	Total    int       `json:"total"`
-	Current  string    `json:"current,omitempty"`
-}
+// runDTO is the JSON of a tasks.RunView (which has no tags of its own): the
+// same type core.task.run-changed.v1 and core.task.finished.v1 carry, so a run
+// reads the same over REST and over the stream.
+type runDTO = tasks.RunPayload
 
 // runView is the ONLY way a RunView leaves this package: it passes through
 // tasks.RedactRunView with the caller's checker (COR2-2), so Current is blank
 // unless the caller holds core:users.view.
 func runView(p *auth.Principal, v tasks.RunView) runDTO {
-	v = tasks.RedactRunView(p.Perms, v)
-	return runDTO{
-		ID: string(v.ID), Kind: string(v.Kind), Mode: v.Mode.String(), State: string(v.State), Held: v.Held,
-		Reason: v.Reason, Actor: actorView(v.Actor), Trigger: string(v.Trigger), Parent: string(v.Parent),
-		PlanRef: string(v.PlanRef), Created: v.Created, Started: v.Started, Finished: v.Finished,
-		Done: v.Done, Total: v.Total, Current: v.Current,
-	}
+	return tasks.NewRunPayload(tasks.RedactRunView(p.Perms, v))
 }
 
 func runViews(p *auth.Principal, vs []tasks.RunView) []runDTO {

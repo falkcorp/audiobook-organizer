@@ -33,7 +33,7 @@ func TestGetLog_RedactsLikeTheStream(t *testing.T) {
 			if rec.Code != 200 {
 				t.Fatalf("= %d\n%s", rec.Code, rec.Body.String())
 			}
-			var body struct{ Lines []logLineDTO }
+			var body struct{ Lines []tasks.LogAppended }
 			decode(t, rec, &body)
 			if len(body.Lines) != 1 {
 				t.Fatalf("lines = %+v", body.Lines)
@@ -44,6 +44,9 @@ func TestGetLog_RedactsLikeTheStream(t *testing.T) {
 			}
 			if !c.full && (l.Message != "" || l.Fields["user"] != "" || l.Level != "warn") {
 				t.Errorf("a caller without core:users.view saw %+v", l)
+			}
+			if _, ok := l.Fields["user"]; !ok {
+				t.Errorf("the Fields key was dropped by redaction: %+v", l)
 			}
 		})
 	}

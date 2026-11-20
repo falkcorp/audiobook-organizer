@@ -20,23 +20,17 @@ import (
 // 3), a change owned by F5-18; until then the catalog entries are declared by
 // nothing (kernel.coreTopics lists them, and declareCore is wired by F4-08).
 const (
-	// RunChangedTopicName carries a RunView on every state or progress change.
+	// RunChangedTopicName carries a RunPayload on every state or progress change.
 	// Keyed by run ID so a coalescing window keeps the latest view per run.
 	RunChangedTopicName = "core.task.run-changed.v1"
 	// LogAppendedTopicName carries one LogAppended. Keyed by run ID: the SPA reads a
 	// run's log on its own keyed stream (05-realtime §4.8 "Subscription set"),
 	// and the activity mirror reads the run from the envelope's key.
 	LogAppendedTopicName = "core.task.log-appended.v1"
-	// FinishedTopicName carries the terminal RunView once per terminal
+	// FinishedTopicName carries the terminal RunPayload once per terminal
 	// transition: the outcome is State and Reason. Keyed by run ID.
 	FinishedTopicName = "core.task.finished.v1"
 )
-
-// manageScope is who sees a task envelope until the wiring installs the
-// definition's View rule (see visibleToManagers). It is the scope 05-events
-// §5E.3.1 gives core.update.found.v1 ("`core:system.manage`"), the core
-// operator scope, and 05-rbac §6.1 grants it to admin.
-const manageScope rbac.Permission = "core:system.manage"
 
 // runChangedCoalesce is run-changed's realtime window. The spec says
 // "Realtime{Coalesce}" without a value (05-events §5E.3.1); 250 ms is the
@@ -44,9 +38,68 @@ const manageScope rbac.Permission = "core:system.manage"
 // §4.7). The terminal view always wins: coalescing keeps the latest per key.
 const runChangedCoalesce = 250 * time.Millisecond
 
+// ActorPayload is who started or acted on a run, as the wire spells it.
+type ActorPayload struct {
+	UserID     string `json:"user_id,omitempty"`
+	AuthMethod string `json:"auth_method,omitempty"`
+	System     string `json:"system,omitempty"`
+}
+
+// NewActorPayload is the wire form of a.
+func NewActorPayload(a Actor) ActorPayload {
+	return ActorPayload(a)
+}
+
+// RunPayload is the wire form of a RunView: the payload of
+// core.task.run-changed.v1 and core.task.finished.v1, and the JSON of every
+// run GET /api/core/v1/tasks/runs[/{id}] serves (taskhttp's runDTO is an alias
+// of it, so the two cannot drift). Lower-case keys and the mode as a word, as
+// the SPA's coreEvents client reads them. RunView itself carries no tags and
+// stays that way: RunRecord embeds it and its stored rows decode through it.
+// NewRunPayload is the one constructor.
+type RunPayload struct {
+	ID       string       `json:"id"`
+	Kind     string       `json:"kind"`
+	Mode     string       `json:"mode"`
+	State    string       `json:"state"`
+	Held     bool         `json:"held"`
+	Reason   string       `json:"reason,omitempty"`
+	Actor    ActorPayload `json:"actor"`
+	Trigger  string       `json:"trigger"`
+	Parent   string       `json:"parent,omitempty"`
+	PlanRef  string       `json:"plan_ref,omitempty"`
+	Created  time.Time    `json:"created"`
+	Started  time.Time    `json:"started,omitzero"`
+	Finished time.Time    `json:"finished,omitzero"`
+	Done     int          `json:"done"`
+	Total    int          `json:"total"`
+	Current  string       `json:"current,omitempty"`
+}
+
+// NewRunPayload is the wire form of v. It does not redact: the REST handler
+// calls RedactRunView first, and the stream applies RunViewRedactor.
+func NewRunPayload(v RunView) RunPayload {
+	return RunPayload{
+		ID: string(v.ID), Kind: string(v.Kind), Mode: v.Mode.String(), State: string(v.State), Held: v.Held,
+		Reason: v.Reason, Actor: NewActorPayload(v.Actor), Trigger: string(v.Trigger), Parent: string(v.Parent),
+		PlanRef: string(v.PlanRef), Created: v.Created, Started: v.Started, Finished: v.Finished,
+		Done: v.Done, Total: v.Total, Current: v.Current,
+	}
+}
+
+// RedactRunPayload is RedactRunView on the wire form: it blanks Current unless
+// who holds core:users.view. It calls RedactRunView so the rule is written once.
+func RedactRunPayload(who rbac.Checker, p RunPayload) RunPayload {
+	p.Current = RedactRunView(who, RunView{Current: p.Current}).Current
+	return p
+}
+
 // RunChangedTopic is the typed run-changed topic. A function, not a package
-// variable (R5). The publisher keys each envelope by the run's ID.
-func RunChangedTopic() events.Topic[RunView] { return events.NewTopic[RunView](RunChangedTopicName) }
+// variable (R5). The publisher keys each envelope by the run's ID and sends
+// NewRunPayload(view).
+func RunChangedTopic() events.Topic[RunPayload] {
+	return events.NewTopic[RunPayload](RunChangedTopicName)
+}
 
 // LogAppended is the payload of core.task.log-appended.v1: one log line
 // ("log line", 05-realtime §4.7), spelled as GET /runs/{id}/log spells it
@@ -74,26 +127,27 @@ func LogAppendedTopic() events.Topic[LogAppended] {
 	return events.NewTopic[LogAppended](LogAppendedTopicName)
 }
 
-// FinishedTopic is the typed finished topic. The payload is the run's terminal
-// RunView, the same value the executor's OnTerminal hook receives (05-tasks
-// §5T.4), so the notification and the bus envelope carry one outcome.
-func FinishedTopic() events.Topic[RunView] { return events.NewTopic[RunView](FinishedTopicName) }
+// FinishedTopic is the typed finished topic. The payload is the wire form of
+// the run's terminal RunView, the value the executor's OnTerminal hook
+// receives (05-tasks §5T.4), so the notification and the bus envelope carry
+// one outcome.
+func FinishedTopic() events.Topic[RunPayload] { return events.NewTopic[RunPayload](FinishedTopicName) }
 
 // RunChangedTopicSpec is the catalog entry of core.task.run-changed.v1: bus,
 // Realtime{Coalesce}, AnyAuthenticated, Redact = RunViewRedactor() (05-events
 // §5E.3.1; COR2-2, COR3-13).
 //
-// Visible is visibleToManagers, a fail-closed default: the spec's per-envelope
+// Visible is visibleToAdmins, a fail-closed default: the spec's per-envelope
 // rule is "the definition's Perms.View" (COR-20), which needs the definition
 // registry, and the declaration site (kernel.coreTopics, no arguments) does
 // not have one. Until the wiring replaces Visible on the returned value with
-// the definition's View rule, only a holder of core:system.manage sees a task
-// envelope; a plain signed-in user sees none. Replacing it is the F4-08 or
+// the definition's View rule, only a holder of core:admin sees a task
+// envelope; any other signed-in user sees none. Replacing it is the F4-08 or
 // executor wiring's job; forgetting to hides the stream, never exposes it.
 func RunChangedTopicSpec() events.TopicSpec {
 	return RunChangedTopic().Spec(events.TopicSpec{
 		Permission: rbac.AnyAuthenticated,
-		Visible:    visibleToManagers,
+		Visible:    visibleToAdmins,
 		Redact:     RunViewRedactor(),
 		Realtime:   &events.RealtimeMeta{Coalesce: runChangedCoalesce},
 	})
@@ -107,7 +161,7 @@ func RunChangedTopicSpec() events.TopicSpec {
 func LogAppendedTopicSpec() events.TopicSpec {
 	return LogAppendedTopic().Spec(events.TopicSpec{
 		Permission: rbac.AnyAuthenticated,
-		Visible:    visibleToManagers,
+		Visible:    visibleToAdmins,
 		Redact:     LogAppendedRedactor(),
 		Realtime:   &events.RealtimeMeta{},
 	})
@@ -121,18 +175,21 @@ func LogAppendedTopicSpec() events.TopicSpec {
 func FinishedTopicSpec() events.TopicSpec {
 	return FinishedTopic().Spec(events.TopicSpec{
 		Permission: rbac.AnyAuthenticated,
-		Visible:    visibleToManagers,
+		Visible:    visibleToAdmins,
 		Redact:     RunViewRedactor(),
 		Notify:     &events.NotifyMeta{Title: "Task finished", DefaultSeverity: "info"},
 	})
 }
 
-// visibleToManagers is the Visible of the three task entries until the wiring
+// visibleToAdmins is the Visible of the three task entries until the wiring
 // installs the definition's View rule: true only for a subscriber holding
-// manageScope. A nil checker, or a plain signed-in user, gets false, so an
-// unwired entry delivers nothing to them (fail closed).
-func visibleToManagers(_ context.Context, who rbac.Checker, _ events.RawEnvelope) bool {
-	return who != nil && who.Has(manageScope)
+// rbac.CoreAdmin ("Perms.View or admin", the coordinator ruling of 2026-11-20;
+// core:admin has no custom-role spread the way core:admin does, so a
+// forgotten swap cannot show every run to a role built for something else). A
+// nil checker, or any other signed-in user, gets false, so an unwired entry
+// delivers nothing to them (fail closed).
+func visibleToAdmins(_ context.Context, who rbac.Checker, _ events.RawEnvelope) bool {
+	return who != nil && who.Has(rbac.CoreAdmin)
 }
 
 // RedactLogAppended is RedactRunView's rule applied to one log line (05-tasks

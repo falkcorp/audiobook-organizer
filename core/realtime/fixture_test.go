@@ -83,7 +83,7 @@ var (
 	topicBeacon  = events.NewTopic[Beacon]("batcave.beacon.updated.v1") // batcave:view, Coalesce 250ms
 	topicArk     = events.NewTopic[Signal]("arkham.ward.alerted.v1")    // arkham:view
 	topicRetired = events.NewTopic[Retired]("core.ward.retired.v1")     // AnyAuthenticated
-	topicRun     = events.NewTopic[tasks.RunView]("core.task.run-changed.v1")
+	topicRun     = tasks.RunChangedTopic()
 	topicLog     = events.NewTopic[Retired]("core.task.log-appended.v1") // AnyAuthenticated, keyed by run
 	topicInval   = events.NewTopic[Invalidated]("core.principal.invalidated.v1")
 	topicRBAC    = events.NewTopic[RBACChanged]("core.rbac.changed.v1")
