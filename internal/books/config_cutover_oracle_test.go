@@ -187,7 +187,7 @@ var oracleLossy = []struct{ path, why string }{
 	{"ai_backend.embedding_mode", "HEAD stores the empty string for derive-from-the-rest; the flip stores the derived mode; the Effective mode is asserted equal"},
 	{"ai_backend.llm_mode", "HEAD stores the empty string for derive-from-the-rest; the flip stores the derived mode; the Effective mode is asserted equal"},
 	{"oauth_default_role", "HEAD spells the default role viewer; with no provider there is no entry to carry it and legacyoauth.New gives an empty role viewer (asserted equal)"},
-	{"ai_endpoints_routing", "OPEN: dropped by the table, one routed path reads it; the base-value decision is with the lead"},
+	{"ai_endpoints_routing", "BEHAVIOUR CHANGE (ruling 2026-11-20, 05-ai.md:803): after the flip the one path is the router over ai_endpoints, so the base sets true; an install that never turned routing on moves from the legacy path to the routed one (asserted true on a real boot)"},
 	{"scheduled.asin_backfill.enabled", "an interval-only entry runs iff its interval is above 0 and HEAD ignores enabled; the flipped Config carries the interval (scheduled.* interval is compared)"},
 	{"scheduled.candidate_fetch.enabled", "interval-only entry: see scheduled.asin_backfill.enabled"},
 	{"scheduled.catalog_harvest.enabled", "interval-only entry: see scheduled.asin_backfill.enabled"},

@@ -1475,7 +1475,7 @@ of M6, `o` operator-only at HEAD (nothing to migrate; its retired names follow �
 | `whisper_endpoints` | blob | `modules.books.whisper.endpoints` | k | |
 | `whisper_requires` | blob | `modules.books.whisper.requires` | k | |
 | `ai_endpoints` | blob | `ai/<row id>` instances | i | 05-ai §10 |
-| `ai_endpoints_routing` | blob | — | x | not a router input (05-ai §10) |
+| `ai_endpoints_routing` | blob | — | x | behaviour change: routing is always on after the flip (the one path is the router over ai_endpoints, 05-ai §10); an install that never turned it on moves from the legacy single-backend path to the routed one |
 | `concurrent_scans` | blob | `modules.books.scan.concurrent_scans` | k | |
 | `scan_progress_every` | blob | `modules.books.scan.progress_every` | k | |
 | `scan_standdown_grace_seconds` | blob | `modules.books.scan.standdown_grace_seconds` | k | |

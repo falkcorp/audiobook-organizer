@@ -128,7 +128,7 @@ var explicitRows = []explicitRow{
 	{head: "otel_metrics_otlp_insecure", targets: []Target{tk("core.metrics.otlp.insecure", "")}, admin: true},
 	{head: "telemetry_environment", targets: []Target{tk("core.metrics.environment", "")}},
 	{head: "ai_endpoints", class: ClassInput, targets: []Target{tinst("ai/<row id> instances")}, note: "05-ai §10"},
-	{head: "ai_endpoints_routing", class: ClassDropped, note: "not a router input (05-ai §10)"},
+	{head: "ai_endpoints_routing", class: ClassDropped, note: "behaviour change: routing is always on after the flip (the one path is the router over ai_endpoints, 05-ai §10); an install that never turned it on moves from the legacy single-backend path to the routed one"},
 	{head: "operation_timeout_minutes", targets: []Target{tk("modules.books.operations.stale_threshold_minutes", "")}, note: "read at HEAD only as the staleness threshold of books' GET /api/v1/operations/stale"},
 	{head: "log_retention_days", targets: []Target{tk("core.log.journal.retention_days", ConvertLogRetention)}, note: "0 -> 90, negative -> 0 (keep)"},
 	{head: "operation_log_retention_days", targets: []Target{tk("core.tasks.history_retention", ConvertDaysToDuration)}, note: "days -> duration"},

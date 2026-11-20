@@ -428,7 +428,7 @@ retired env AI_ENDPOINTS -> - warn
 
 ## ai_endpoints_routing
 top=true stored=blob class=x blob=ai_endpoints_routing admin=false fail-closed=false url=false
-note not a router input (05-ai §10)
+note behaviour change: routing is always on after the flip (the one path is the router over ai_endpoints, 05-ai §10); an install that never turned it on moves from the legacy single-backend path to the routed one
 retired file ai_endpoints_routing -> - warn
 retired env AI_ENDPOINTS_ROUTING -> - warn
 

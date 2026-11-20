@@ -39,7 +39,7 @@ var droppedWithValue = map[string]string{
 	"ai_backend.embedding_mode":        "projected: a view over ai_endpoints (appconfig kindAI)",
 	"ai_backend.llm_mode":              "projected: a view over ai_endpoints (appconfig kindAI)",
 	"ai_backend.local_base_url":        "projected: a view over ai_endpoints (appconfig kindAI)",
-	"ai_endpoints_routing":             "OPEN: HEAD default false is read by 5 callers; 05-ai.md:803 says one path (routed). Decision pending",
+	"ai_endpoints_routing":             "base: appConfigBase sets true (05-ai.md:803, one path: the router); HEAD's default was false",
 }
 
 // dropFields resolves a dotted HEAD name against the type of config.Config by

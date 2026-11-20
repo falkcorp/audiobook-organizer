@@ -39,6 +39,11 @@ func appConfigBase(dbPath string) config.Config {
 	c.AutoUpdate.WindowEnd = 5
 	c.AIBackend.LocalEmbeddingModel = "bge-m3"
 	c.AIBackend.LocalLLMModel = "qwen2.5:7b-instruct"
+	// 05-ai.md:803: after the flip there is one path, the router over the
+	// ai_endpoints rows. HEAD's default was off, so an install that never turned
+	// routing on moves from the legacy single-backend path to the routed one.
+	// This is a behaviour change, named in the release-note table.
+	c.AIEndpointsRouting = true
 	return c
 }
 

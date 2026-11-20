@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 )
 
@@ -25,4 +26,7 @@ func TestAppConfigBaseValuesSurvive(t *testing.T) {
 	require.Equal(t, 5, c.AutoUpdate.WindowEnd)
 	require.NotEmpty(t, c.AIBackend.LocalEmbeddingModel)
 	require.NotEmpty(t, c.AIBackend.LocalLLMModel)
+	// The routed path (05-ai.md:803): the pool source the call sites read says on.
+	require.True(t, c.AIEndpointsRouting)
+	require.True(t, ai.ConfigPool().Active())
 }
