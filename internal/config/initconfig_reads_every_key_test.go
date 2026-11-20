@@ -434,9 +434,7 @@ var resetZeroExemptions = map[string]string{}
 // cannot reach the reset result fails by name.
 func TestResetToDefaultsRestoresEveryDefaultedKey(t *testing.T) {
 	restoreAppConfig(t)
-	// The process-wide viper holds the registered defaults in a running server;
-	// applyEnvAuthoritativeConfig re-applies the env-only invitation keys (e.g.
-	// smtp_port) from it after the reset.
+	// The process-wide viper holds the registered defaults in a running server.
 	viper.Reset()
 	t.Cleanup(viper.Reset)
 	InitConfig()
@@ -492,8 +490,7 @@ func TestResetToDefaultsRestoresEveryDefaultedKey(t *testing.T) {
 // TestResetToDefaultsIgnoresEnvironment pins the choice that a reset restores
 // the shipped defaults, not the process environment: a reset is "back to
 // factory", and an env override that happened to be set on the host must not
-// be baked into what the operator is told are defaults. (Settings the host
-// owns through the environment are re-applied by applyEnvAuthoritativeConfig.)
+// be baked into what the operator is told are defaults.
 func TestResetToDefaultsIgnoresEnvironment(t *testing.T) {
 	restoreAppConfig(t)
 	t.Setenv("FP_PARALLEL_WORKERS", "77")

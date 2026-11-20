@@ -14,28 +14,6 @@ import (
 	"github.com/spf13/viper"
 )
 
-// TestViperIsSetIsTrueForARegisteredDefault pins the trap behind envSupplied, so
-// that nobody "simplifies" envSupplied back into viper.IsSet.
-//
-// The doc comment on applyEnvAuthoritativeConfig asserted for months that IsSet is
-// "true only when a real override layer supplied the key, NOT for SetDefault". That is
-// not how viper works: IsSet is Get(key) != nil, and a registered default IS a value.
-// Every key guarded by IsSet is therefore assigned unconditionally. The key here is a
-// probe that names no real setting, so the premise is tested on its own.
-func TestViperIsSetIsTrueForARegisteredDefault(t *testing.T) {
-	resetViper(t)
-	viper.SetDefault("isset_probe_key", "")
-	viper.BindEnv("isset_probe_key", "AO_ISSET_PROBE_KEY") //nolint:errcheck
-
-	if !viper.IsSet("isset_probe_key") {
-		t.Fatal("viper.IsSet is now false for a key with only a registered default — " +
-			"the premise behind envSupplied changed; re-read applyEnvAuthoritativeConfig")
-	}
-	if got := viper.GetString("isset_probe_key"); got != "" {
-		t.Fatalf("expected the empty default with no env set, got %q", got)
-	}
-}
-
 // TestActivityBackend_SQLiteFromConfFailsValidate is the fail-loud guarantee of
 // 01-P75: a conf that still says activity_backend: sqlite, in the config file or
 // the environment, loads into the field and is then refused by Validate (which

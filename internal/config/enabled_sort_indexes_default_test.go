@@ -8,10 +8,7 @@
 // because InitConfig's explicit struct literal omitted the field.
 //
 // The setting is BOOT-ONLY: the store builds its sort indexes once, at open,
-// from the value InitConfig read (default, config file, env). The stored blob
-// is read after the store exists, so it can never change what was built.
-// LoadConfigFromDatabase therefore pins the field to the boot value whatever
-// the blob says, and UpdateConfig refuses a PUT that changes it, so GET always
+// from the value InitConfig read (default, config file, env), so GET always
 // reports the set that is running.
 
 package config

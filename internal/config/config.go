@@ -222,9 +222,9 @@ type DedupSignalConfig struct {
 	// whether ComposeScore should start doing so). Since 2026-09-02 this map
 	// DOES reach the live engine's ScoreConfig.Signals — via
 	// DedupSignalConfig.ScoreConfig (dedup_score_config.go) → dedup.NewEngine
-	// at startup, and → Engine.SetScoreConfig through the UpdateService's
-	// dedup-score sink on every PUT /api/v1/config (which then queues the
-	// dedup.rescore op to re-band stored rows) or → Engine.ReloadScoreConfig
+	// at startup, and → Engine.SetScoreConfig through the dedup plugin's
+	// config Facade UpdateHook on every PUT /api/v1/config (which then queues
+	// the dedup.rescore op to re-band stored rows) or → Engine.ReloadScoreConfig
 	// on a calibrate apply, which is already inside an op and so re-bands
 	// inline — the same channel the band_*_min fields use. So once ComposeScore starts
 	// clamping there is nothing left to wire; until then the bounds are
@@ -1230,7 +1230,7 @@ type Config struct {
 
 	// WhisperRemoteURL points batch transcription at a remote faster-whisper
 	// server (e.g. "http://192.168.1.x:8000"); empty uses the local uv path.
-	// Environment-authoritative (WHISPER_REMOTE_URL) — see applyEnvAuthoritativeConfig.
+	// Bound to WHISPER_REMOTE_URL.
 	WhisperRemoteURL string `json:"whisper_remote_url" mapstructure:"whisper_remote_url"`
 
 	// WhisperEndpoints declares a pool of remote faster-whisper servers. When
@@ -1303,8 +1303,8 @@ type Config struct {
 	// off, and because 0 is also what any partially-populated Config carries, a
 	// stray zero silently stopped multi-file grouping for eleven days (12,525
 	// books imported without book_file rows). Read it through
-	// ResolveChapterConsolidationThresholdMin; Validate and SaveConfigToDatabase
-	// rewrite a stored zero to the default with a warning.
+	// ResolveChapterConsolidationThresholdMin, which maps a zero to the
+	// default with a warning.
 	ChapterConsolidationThresholdMin int `json:"chapter_consolidation_threshold_min" mapstructure:"chapter_consolidation_threshold_min"`
 	// RepairChapterMaxMin is the longest a single file may run (minutes) and
 	// still count as a chapter when a REPAIR JOB (the fragment consolidation
@@ -1530,8 +1530,7 @@ type Config struct {
 	// ── Audiobookshelf-compatible sync API (design spec Phase 1) ─────────────
 	//
 	// Environment-authoritative, like the OAuth/Cloudflare keys above: they are set
-	// from a systemd Environment= drop-in and re-applied on top of the DB config blob
-	// by applyEnvAuthoritativeConfig. The ABS secret must never live in the blob.
+	// from a systemd Environment= drop-in. The ABS secret must never live in the blob.
 	//
 	// ABSAPIEnabled is the master feature flag and defaults to FALSE: with it unset,
 	// no ABS route is registered at all and the server behaves exactly as it did
@@ -1581,8 +1580,7 @@ type Config struct {
 	// ── Invitation email and guest access (env_only_settings.go) ────────────
 	//
 	// ENVIRONMENT-ONLY and `json:"-"`: never in GET /config, never in the blob,
-	// refused by PUT /config. Re-applied after the blob load by
-	// applyEnvAuthoritativeConfig (applyInviteEnv).
+	// refused by PUT /config. Read from the environment by applyInviteEnv.
 	//
 	// SMTP transport for invitation email. Unconfigured (no host or no From)
 	// means no mail is sent and the admin copies the link by hand. A username
@@ -1805,9 +1803,7 @@ type Config struct {
 	// (default, config file or the ENABLED_SORT_INDEXES environment variable,
 	// space-separated) to SetEnabledSortIndexes BEFORE any store opens, then
 	// writes back the set that was actually built (unknown names dropped).
-	// That is the value for the life of the process: LoadConfigFromDatabase
-	// pins it over whatever the stored blob holds (pinBootOnlySettings), and
-	// UpdateConfig refuses a PUT that changes it. So GET /api/v1/config always
+	// That is the value for the life of the process. So GET /api/v1/config always
 	// reports the built set. To change it, edit the config file or the
 	// environment and restart. An explicit empty list in the config file
 	// means "no optional indexes".
@@ -1973,36 +1969,6 @@ var generation atomic.Uint64
 // convention forbids) are not seen.
 func Generation() uint64 { return generation.Load() }
 
-// applyEnvAuthoritativeConfig re-applies the environment-authoritative config keys on
-// top of an already-populated Config, so a systemd Environment= value wins over a
-// persisted config_blob. It exists because LoadConfigFromDatabase restores the whole
-// Config from the DB blob (*c = loaded), which overwrites the env-derived values that
-// InitConfig set. Call it LAST in the DB-load path (after the blob and secret rows are
-// applied) via Mutate.
-//
-// There are TWO categories here and they need DIFFERENT tests. Do not collapse them.
-//
-//  1. AUTH-SURFACE keys (OAuth / Cloudflare Access / ABS): the blob must NEVER win,
-//     even when the environment is silent. These are externally-reachable auth
-//     switches, and the blob is untrusted input — it must not be able to enable an
-//     auth surface or supply its credentials. `viper.IsSet` is the right test
-//     precisely BECAUSE every one of these keys has a registered SetDefault, which
-//     makes IsSet permanently true and so makes the assignment unconditional. That
-//     is deliberate; TestABSConfig_BlobCannotEnableOrCredentialTheABSAPI asserts it.
-//
-//  2. OPERATIONAL keys that the UI may also set (database_path): the environment
-//     wins only when it ACTUALLY supplies the key; otherwise the persisted blob
-//     value must survive. These need envSupplied(), NOT viper.IsSet.
-//
-// The comment that stood here until 2026-09-07 claimed "viper.IsSet is true only when
-// a real override layer supplied the key, NOT for SetDefault, so a UI-set value that
-// lives only in the blob is left untouched." That is FALSE — viper's IsSet is
-// Get(key) != nil and a registered default is a value, so IsSet is true with an empty
-// environment. Every category-2 key guarded by IsSet was therefore overwritten with
-// its default on EVERY boot, silently destroying the persisted value: a dead lever.
-//
-// UI-managed keys (itunes.*, scheduled.*, etc.) are excluded entirely — they belong
-// to the blob and must not appear in this function at all.
 // WhisperEndpoint declares one remote Whisper server for the dispatch pool.
 // Mirror of transcribe.Endpoint kept as a plain config struct so this package
 // never imports internal/transcribe.
@@ -2259,7 +2225,7 @@ func registerConfigDefaults(r defaultRegistrar) {
 	r.BindEnv("otel_metrics_otlp_interval", "OTEL_METRIC_EXPORT_INTERVAL")                    //nolint:errcheck
 	r.BindEnv("otel_metrics_otlp_insecure", "OTEL_EXPORTER_OTLP_METRICS_INSECURE")            //nolint:errcheck
 	// Deluge: bound explicitly so the environment reaches viper where AutomaticEnv
-	// is off. The names are the keys of envLockedSettings.
+	// is off.
 	r.BindEnv("deluge_web_url", "DELUGE_WEB_URL")                     //nolint:errcheck
 	r.BindEnv("deluge_web_password", "DELUGE_WEB_PASSWORD")           //nolint:errcheck
 	r.BindEnv("deluge_discovery_label", "DELUGE_DISCOVERY_LABEL")     //nolint:errcheck
@@ -2702,8 +2668,9 @@ func registerConfigDefaults(r defaultRegistrar) {
 	// Read by internal/dedup/unified.LoadScoreConfig via Viper as the layer
 	// under the persisted dedup.signals block; DedupSignalConfig.ScoreConfig
 	// (dedup_score_config.go) hands the merged result to the live engine
-	// (registry_wire.go at startup; the UpdateService dedup-score sink on
-	// PUT /api/v1/config and dedup.calibrate-composite apply at runtime).
+	// (registry_wire.go at startup; the dedup plugin's config Facade
+	// UpdateHook on PUT /api/v1/config and dedup.calibrate-composite apply at
+	// runtime).
 	// Overridable per-kind in config.yaml under dedup.signals.<kind>.*
 	r.SetDefault("dedup.signals.band_certain_min", 97.0)
 	r.SetDefault("dedup.signals.band_high_min", 90.0)
@@ -2799,9 +2766,7 @@ func configFromViper(v *viper.Viper) Config {
 		// activity_backend AND the ACTIVITY_BACKEND env (BindEnv above) reach
 		// the field, and a leftover "sqlite" is refused by Validate rather
 		// than dropped — the mapstructure tag is inert because this config is
-		// built by explicit GetString calls, not viper.Unmarshal. Also
-		// re-applied in applyEnvAuthoritativeConfig so the env value survives
-		// the DB-blob config overlay (see the ABS keys there).
+		// built by explicit GetString calls, not viper.Unmarshal.
 		ActivityBackend: v.GetString("activity_backend"),
 
 		FPParallelWorkers:                    v.GetInt("fp_parallel_workers"),
@@ -2872,9 +2837,7 @@ func configFromViper(v *viper.Viper) Config {
 
 		// OAuth / Cloudflare Access. These are environment-authoritative in prod
 		// (systemd Environment= drop-in) but read here via viper like everything
-		// else — the BindEnv bindings above make viper.GetX honor the env. The DB
-		// config-blob load later overwrites this whole struct, so the env values are
-		// re-applied on top of the blob by applyEnvAuthoritativeConfig (persistence.go).
+		// else — the BindEnv bindings above make viper.GetX honor the env.
 		OAuthEnabled:            v.GetBool("oauth_enabled"),
 		OAuthGithubClientID:     v.GetString("oauth_github_client_id"),
 		OAuthGithubClientSecret: v.GetString("oauth_github_client_secret"),
@@ -3008,9 +2971,7 @@ func configFromViper(v *viper.Viper) Config {
 		ExcludePatterns:     excludePatterns,
 
 		// Deluge integration. Read here so the config file and environment
-		// reach it. A value they supply is locked and beats the stored blob
-		// on load (applyEnvAuthoritativeConfig); with neither set the blob
-		// wins, like every other UI-managed key.
+		// reach it.
 		DelugeWebURL:           v.GetString("deluge_web_url"),
 		DelugeWebPassword:      v.GetString("deluge_web_password"),
 		DelugeDiscoveryLabel:   v.GetString("deluge_discovery_label"),
@@ -3605,10 +3566,7 @@ func (c *Config) Validate() error {
 	// (written by PUT /api/v1/config — the Settings → Dedup page — and by the
 	// dedup.calibrate-composite apply op), and the blob wins. An operator
 	// told to "fix config.yaml" for a value the UI persisted cannot repair it
-	// by editing config.yaml; they need to know to re-PUT a valid ladder (the
-	// UpdateService now rejects an invalid one with 400 before persisting, so
-	// this path is reached only by blobs written before that guard existed,
-	// or by a config.yaml edit).
+	// by editing config.yaml; they need to know to re-PUT a valid ladder.
 	if _, err := c.Dedup.Signals.ScoreConfig(); err != nil {
 		errs = append(errs, fmt.Sprintf("%v (effective value = config.yaml dedup.signals overlaid by the settings blob persisted in the database via PUT /api/v1/config / Settings → Dedup / calibrate-composite apply — the persisted blob wins, so re-save a valid ladder there, or delete the blob's dedup.signals keys, if config.yaml already looks right)", err))
 	}

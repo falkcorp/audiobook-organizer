@@ -13,7 +13,7 @@ import (
 // TestDedupSignalConfig_ConfidenceRoundTripsThroughJSON verifies that
 // DedupSignalConfig.Confidence — the INIT-1 T05 follow-up field (TODO item
 // 6) — survives a JSON marshal/unmarshal round trip, which is exactly the
-// path UpdateConfig/SaveConfigToDatabase use to persist the config blob. This
+// path HEAD's settings save used to persist the config blob. This
 // is the behavior the "confidence round" was missing: before this field
 // existed, per-kind confidence bounds had nowhere to live in DedupSignalConfig
 // and were silently dropped by that same round trip.

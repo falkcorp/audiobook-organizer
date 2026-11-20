@@ -35,10 +35,9 @@ var cfAccessVerifierOverride cfaccess.CFAssertionVerifier
 // aborting startup.
 func (s *Server) buildOAuthWiring() (*handlers.OAuthHandler, gin.HandlerFunc, gin.HandlerFunc) {
 	// Read OAuth/Cloudflare-Access settings from config like every other subsystem.
-	// config.AppConfig is authoritative here because the DB-load path re-applies the
-	// environment-authoritative keys on top of the config blob (see
-	// config.ApplyEnvAuthoritativeConfig), so a systemd Environment= value has already
-	// won by the time this runs. Snapshot() reads under the config lock.
+	// config.AppConfig already holds the environment's OAuth values (a systemd
+	// Environment= value reaches it through InitConfig, or core config's env
+	// layer once the flip is on). Snapshot() reads under the config lock.
 	cfgSnap := config.Snapshot()
 	redirectBase := cfgSnap.OAuthRedirectBaseURL
 	if redirectBase == "" {

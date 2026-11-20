@@ -37,10 +37,9 @@ func writeKeyFile(t *testing.T, dir string) {
 // TestGuard_RefusesWhenSecretsExistAndNoKeyAnywhere is the case that makes this
 // guard worth having.
 //
-// Without it, startup generates a fresh key and LoadConfigFromDatabase then
-// re-encrypts the four secrets recoverable from the config file and
-// DeleteSettings every other one. The process exits 0 and looks healthy; the
-// secrets are simply gone. Refusing to boot is the last moment at which the
+// Without it, startup generates a fresh key and every stored secret is
+// unreadable under it. The process exits 0 and looks healthy; the secrets are
+// simply gone. Refusing to boot is the last moment at which the
 // operator can still put the key file back.
 func TestGuard_RefusesWhenSecretsExistAndNoKeyAnywhere(t *testing.T) {
 	t.Setenv(allowKeyRegenEnv, "")
@@ -143,8 +142,7 @@ func TestGuard_OverrideLetsTheOperatorThrough(t *testing.T) {
 }
 
 // TestGuard_UnreadableSettingsRowGetsItsOwnMessage — a corrupt settings row is
-// not a census the override can get past: loadConfigFromDB fails on the same
-// row next, and a key generated meanwhile would be trusted on the following
+// not a census the override can get past: a key generated meanwhile would be trusted on the following
 // boot while every stored secret fails to decrypt. So the message names the
 // rows and the repair, and must not offer the override.
 func TestGuard_UnreadableSettingsRowGetsItsOwnMessage(t *testing.T) {
@@ -184,9 +182,9 @@ func TestGuard_WrappedUnreadableSettingsErrorIsRecognised(t *testing.T) {
 }
 
 // TestGuard_OverrideDoesNotPassAnUnreadableRow — the override cannot get past
-// an unreadable settings row (loadConfigFromDB fails on it next), and honouring
-// it would write a new key file that the boot after the repair trusts while
-// every stored secret fails to decrypt and is deleted. So it is refused even
+// an unreadable settings row, and honouring it would write a new key file
+// that the boot after the repair trusts while every stored secret fails to
+// decrypt. So it is refused even
 // with the override set, with the unreadable-row message.
 func TestGuard_OverrideDoesNotPassAnUnreadableRow(t *testing.T) {
 	t.Setenv(allowKeyRegenEnv, "1")

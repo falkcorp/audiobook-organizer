@@ -17,7 +17,7 @@ import "sync/atomic"
 // means none.
 var installed atomic.Pointer[Facade]
 
-// Install binds f behind AppConfig, Snapshot, Mutate and SettingLockedBy, and returns the Facade it replaced
+// Install binds f behind AppConfig, Snapshot and Mutate, and returns the Facade it replaced
 // (nil if none) so a test can restore it. The books module installs its Facade
 // from Register; nothing else should. Install(nil) unbinds.
 func Install(f Facade) (prev Facade) {

@@ -127,9 +127,8 @@ func registerInviteDefaults(r defaultRegistrar) {
 	}
 }
 
-// applyInviteEnv copies the invitation keys from viper onto c. It runs both when
-// the config is first built from viper and from applyEnvAuthoritativeConfig after
-// the blob load, which replaces the whole struct (and the blob never holds these).
+// applyInviteEnv copies the invitation keys from viper onto c when the config
+// is built from viper (the blob never holds these).
 func applyInviteEnv(c *Config, v *viper.Viper) {
 	c.SMTPHost = strings.TrimSpace(v.GetString("smtp_host"))
 	c.SMTPPort = v.GetInt("smtp_port")

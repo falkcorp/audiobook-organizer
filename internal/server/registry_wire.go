@@ -294,11 +294,11 @@ func serverServiceDefs() []serviceregistry.ServiceDef {
 					"confidence_overrides", len(cfg.Dedup.Signals.Confidence),
 					"source", "config.yaml dedup.signals overlaid by the persisted settings blob")
 				// Every later PUT /api/v1/config that changes dedup.signals reaches
-				// the live engine through the UpdateService's dedup sink (review-
-				// round H2), which also re-bands the stored candidate rows under
+				// the live engine through the dedup plugin's config Facade
+				// UpdateHook (review-round H2), which also re-bands the stored candidate rows under
 				// the new ladder (H3) — AutoResolveCertain reads the STORED band,
 				// so swapping the ladder without a rescore would leave rows
-				// auto-merging on the old one. The sink is installed by the dedup
+				// auto-merging on the old one. The hook is installed by the dedup
 				// PLUGIN (internal/plugins/dedup/register.go PostInit), not here:
 				// it queues the re-band as the dedup.rescore operation, which
 				// needs the ops registry — a plugin-level dependency this Build

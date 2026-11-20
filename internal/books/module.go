@@ -116,9 +116,8 @@ var errNotBooks = errors.New("books: not the module books.Module returned")
 // Module does no work: it reads whether the ABS surface is on, which decides
 // the legacy prefixes the manifest declares. The kernel reads the manifest
 // before the store opens, so that is the value from the environment and the
-// config file; the ABS flag is environment-authoritative (internal/config
-// applyEnvAuthoritativeConfig), and Register refuses a boot whose stored
-// settings turn it the other way (errABSFlagDrift).
+// config file, and Register refuses a boot whose settings, once the store is
+// open, turn it the other way (errABSFlagDrift).
 func Module() module.Module {
 	return &booksModule{abs: config.AppConfig.ABSAPIEnabled, flip: flipDeclared}
 }

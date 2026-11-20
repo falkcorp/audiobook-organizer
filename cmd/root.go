@@ -526,8 +526,7 @@ func initConfig() {
 	}
 	// Report what was BUILT, not what was asked for. enabled_sort_indexes is
 	// boot-only: this is the value GET /api/v1/config shows for the life of
-	// the process, LoadConfigFromDatabase pins it over whatever the stored
-	// blob holds, and UpdateConfig refuses a PUT that changes it. Writing the
+	// the process (the setting is boot-only). Writing the
 	// accepted set back drops unknown names, so a typo is not reported as an
 	// enabled index.
 	builtSortIndexes := database.EnabledSortIndexFields()

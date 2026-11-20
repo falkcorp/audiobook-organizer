@@ -44,9 +44,8 @@ const SecureStateDirEnv = "ABK_STATE_DIR"
 // often as they like and the operator-facing paths never change.
 //
 // THE HAZARD, if this value is ever changed: database.InitEncryption generates
-// a NEW key when it cannot read one, and config.LoadConfigFromDatabase then
-// re-encrypts the four secrets it can recover from the config file and calls
-// DeleteSetting on every other secret it cannot decrypt. So repointing this
+// a NEW key when it cannot read one, and every secret stored under the old key
+// becomes unreadable (the cutover reads them with this key). So repointing this
 // directory without physically moving .encryption_key silently destroys
 // secrets. InitEncryption takes fallback directories for exactly this reason;
 // see its doc comment before touching this.
