@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/writes_oracle_fixture_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8fbddfb2-91e8-42bd-ab62-8e8e7e8cd794
 // last-edited: 2026-11-19
 
@@ -264,6 +264,37 @@ func TestOracleWalk_DefaultDeny(t *testing.T) {
 			t.Errorf("%s: records %v, want no UNRESOLVED key (%s)", tc.root, keys, tc.why)
 		case tc.key != "" && !slices.ContainsFunc(keys, func(k string) bool { return strings.Contains(k, tc.key) }):
 			t.Errorf("%s: records %v, want an UNRESOLVED key containing %q (%s)", tc.root, keys, tc.key, tc.why)
+		}
+	}
+}
+
+// TestOracleWalk_ReporterOwnIsScopedToItsFunctions: oracleReporterOwn exempts a
+// store call only inside the function it names. Without the exemption the
+// reporter's write is noted; with it, the reporter's is not, and the same store
+// method called from job code still is.
+func TestOracleWalk_ReporterOwnIsScopedToItsFunctions(t *testing.T) {
+	op := oracleFixture(t)
+	walk := func(op *oracleProgram, root string) []string {
+		kinds, _, _, _, _ := derivedWrites(op, op.roots[0].Func(root))
+		return kinds
+	}
+	plain := walk(op, "ViaReporterOwn")
+	if len(plain) == 0 {
+		t.Fatalf("ViaReporterOwn: no write without the exemption; the fixture does not exercise it")
+	}
+	scoped := *op
+	scoped.reporterOwn = map[string]bool{
+		"(*" + oracleFixturePkg + ".runReporter).Log fix.opsSink.InsertOpErrorV2": true,
+	}
+	if got := walk(&scoped, "ViaReporterOwn"); len(got) != 0 {
+		t.Errorf("ViaReporterOwn: the walk finds %v with the reporter's call exempt, want none", got)
+	}
+	if got := walk(&scoped, "ViaJobWritesOpErrors"); !slices.Equal(got, plain) {
+		t.Errorf("ViaJobWritesOpErrors: the walk finds %v with the reporter's call exempt, want %v: the exemption must not reach the same method called from job code", got, plain)
+	}
+	for key := range oracleReporterOwn {
+		if !strings.Contains(key, "/internal/operations/registry.") {
+			t.Errorf("oracleReporterOwn has %s: only the operations registry's reporter persists for itself", key)
 		}
 	}
 }
