@@ -1,7 +1,7 @@
 // file: core/auth/oidc/fixture_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b1d75824-9a46-4e31-a57d-84cb5a5a7945
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package oidc
 
@@ -36,6 +36,8 @@ type fx struct {
 	rb    *rbac.Service
 	svc   *auth.Service
 	audit *auditFake
+
+	holders *holders
 
 	mu  sync.Mutex
 	now time.Time
@@ -93,9 +95,10 @@ func newFx(t testing.TB) *fx {
 	if err != nil {
 		t.Fatal(err)
 	}
+	f.holders = &holders{st: f.st}
 	if f.rb, err = rbac.New(ctx, rbac.Options{Source: "gotham-test"}, rbac.Deps{
 		Store: rst, Compile: authz.Compile, Audit: &auditFake{}, Revocations: &journalFake{},
-		NewBatch: rst.NewBatch, Holders: holders{f.st},
+		NewBatch: rst.NewBatch, Holders: f.holders,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -206,10 +209,32 @@ func (f *fx) countUsers() int {
 	return n
 }
 
-// holders is rbac's role-assignment view over the identity store.
-type holders struct{ st *authstore.Store }
+// holders is rbac's role-assignment view over the identity store. afterRead,
+// when set, runs once the holders are read, with the number of HoldersOf calls
+// so far (counted from 1 since it was set): a test can land a user write in the
+// window between a DeleteRole's holder read and its commit.
+type holders struct {
+	st *authstore.Store
 
-func (h holders) HoldersOf(ctx context.Context, _ *storage.Batch, roles []rbac.RoleName) ([]rbac.Holder, error) {
+	mu        sync.Mutex
+	calls     int
+	afterRead func(call int)
+}
+
+func (h *holders) setAfterRead(fn func(call int)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.afterRead, h.calls = fn, 0
+}
+
+func (h *holders) HoldersOf(ctx context.Context, _ *storage.Batch, roles []rbac.RoleName) ([]rbac.Holder, error) {
+	h.mu.Lock()
+	h.calls++
+	call, hook := h.calls, h.afterRead
+	h.mu.Unlock()
+	if hook != nil {
+		defer hook(call)
+	}
 	var out []rbac.Holder
 	for u, err := range h.st.ScanUsers(ctx) {
 		if err != nil {
@@ -230,6 +255,10 @@ type auditFake struct {
 	mu       sync.Mutex
 	recorded []audit.Event
 	emitted  []audit.Event
+	// hold, when set (before the write under test starts), runs at the start
+	// of RecordIn, outside mu: inside the window between a write's decision
+	// and its commit.
+	hold func(audit.Event)
 }
 
 func (a *auditFake) Record(context.Context, audit.Event) error {
@@ -239,6 +268,9 @@ func (a *auditFake) Record(context.Context, audit.Event) error {
 func (a *auditFake) RecordIn(_ context.Context, b *storage.Batch, e audit.Event) error {
 	if b == nil {
 		return errors.New("RecordIn without the change's batch")
+	}
+	if a.hold != nil {
+		a.hold(e)
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
