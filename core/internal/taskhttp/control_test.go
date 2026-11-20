@@ -399,7 +399,7 @@ func TestTimelineLogDiscard(t *testing.T) {
 		if rec.Code != 200 {
 			t.Fatalf("= %d\n%s", rec.Code, rec.Body.String())
 		}
-		var body struct{ Lines []logLineDTO }
+		var body struct{ Lines []tasks.LogAppended }
 		decode(t, rec, &body)
 		if len(body.Lines) != 2 || body.Lines[0].Message != "dusted the trophy case" || body.Lines[0].Fields["case"] != "riddler" {
 			t.Fatalf("lines = %+v", body.Lines)

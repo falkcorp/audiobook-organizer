@@ -56,24 +56,26 @@ func TestTaskTopics_NamesAndShape(t *testing.T) {
 		}
 	}
 	rc, la, fin := tasks.RunChangedTopicSpec(), tasks.LogAppendedTopicSpec(), tasks.FinishedTopicSpec()
-	if rc.Realtime == nil || rc.Realtime.Coalesce <= 0 || rc.Notify != nil {
-		t.Errorf("run-changed: Realtime = %+v, Notify = %+v, want Realtime{Coalesce} and no Notify", rc.Realtime, rc.Notify)
+	if rc.Realtime == nil || rc.Realtime.Coalesce != 250*time.Millisecond || rc.Notify != nil {
+		t.Errorf("run-changed: Realtime = %+v, Notify = %+v, want Realtime{Coalesce: 250ms} and no Notify", rc.Realtime, rc.Notify)
 	}
 	if la.Realtime == nil || la.Realtime.Coalesce != 0 || la.Notify != nil {
 		t.Errorf("log-appended: Realtime = %+v, Notify = %+v, want Realtime with every line and no Notify", la.Realtime, la.Notify)
 	}
-	if fin.Realtime != nil || fin.Notify == nil || fin.Notify.Title == "" {
-		t.Errorf("finished: Realtime = %+v, Notify = %+v, want Notify and no Realtime", fin.Realtime, fin.Notify)
+	if fin.Realtime != nil || fin.Notify == nil || fin.Notify.Title != "Task finished" || fin.Notify.DefaultSeverity != "info" {
+		t.Errorf("finished: Realtime = %+v, Notify = %+v, want Notify{Task finished, info} and no Realtime", fin.Realtime, fin.Notify)
 	}
 }
 
 // TestTaskTopics_VisibleFailsClosed: until the wiring installs the definition's
-// View rule, a plain signed-in user, even one holding core:tasks.view and
-// core:users.view, and a caller with no checker, are shown no envelope on any
-// of the three topics; only a holder of core:system.manage is.
+// View rule, a plain signed-in user (even one holding core:tasks.view and
+// core:users.view), a holder of core:system.manage alone (assignable to a
+// custom role) and a caller with no checker are shown no envelope on any of the
+// three topics; only a holder of core:admin is.
 func TestTaskTopics_VisibleFailsClosed(t *testing.T) {
 	plain := checker{[]rbac.Permission{"core:self", "core:tasks.view", "core:users.view"}}
-	manager := checker{[]rbac.Permission{"core:system.manage"}}
+	sysManager := checker{[]rbac.Permission{"core:system.manage"}}
+	admin := checker{[]rbac.Permission{rbac.CoreAdmin}}
 	for name, s := range taskSpecs() {
 		if s.Visible == nil {
 			t.Errorf("%s: Visible is nil, which would show it to every holder of its Permission", name)
@@ -83,11 +85,14 @@ func TestTaskTopics_VisibleFailsClosed(t *testing.T) {
 		if s.Visible(t.Context(), plain, env) {
 			t.Errorf("%s: shown to a plain signed-in user", name)
 		}
+		if s.Visible(t.Context(), sysManager, env) {
+			t.Errorf("%s: shown to a holder of core:system.manage alone", name)
+		}
 		if s.Visible(t.Context(), nil, env) {
 			t.Errorf("%s: shown to a nil checker", name)
 		}
-		if !s.Visible(t.Context(), manager, env) {
-			t.Errorf("%s: hidden from a holder of core:system.manage", name)
+		if !s.Visible(t.Context(), admin, env) {
+			t.Errorf("%s: hidden from a holder of core:admin", name)
 		}
 	}
 }
@@ -96,8 +101,8 @@ func TestTaskTopics_VisibleFailsClosed(t *testing.T) {
 // (a RunView for run-changed and finished, a LogAppended for log-appended).
 func TestTaskTopics_SchemaCarriesThePayload(t *testing.T) {
 	for name, field := range map[string]string{
-		"core.task.run-changed.v1":  "Current",
-		"core.task.finished.v1":     "Reason",
+		"core.task.run-changed.v1":  "current",
+		"core.task.finished.v1":     "reason",
 		"core.task.log-appended.v1": "message",
 	} {
 		var sc struct {
@@ -151,12 +156,12 @@ func TestTaskTopics_DeclareAndDeliver(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = bus.Close(context.Background()) })
 
-	view := tasks.RunView{ID: "run-nightwing-1", State: tasks.StateSucceeded, Done: 3, Total: 3, Current: "Dick Grayson"}
+	view := tasks.NewRunPayload(tasks.RunView{ID: "run-nightwing-1", Kind: "batcave.sweep", Mode: tasks.ModeLive, State: tasks.StateSucceeded, Done: 3, Total: 3, Current: "Dick Grayson"})
 	line := tasks.NewLogAppended(tasks.LogLine{At: time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC), Level: "info", Message: "Bat-Signal lit", Fields: map[string]string{"by": "Gordon"}})
 	scope := bus.Scope("core")
-	events.Publish(scope, context.Background(), tasks.RunChangedTopic(), string(view.ID), view)
-	events.Publish(scope, context.Background(), tasks.LogAppendedTopic(), string(view.ID), line)
-	events.Publish(scope, context.Background(), tasks.FinishedTopic(), string(view.ID), view)
+	events.Publish(scope, context.Background(), tasks.RunChangedTopic(), view.ID, view)
+	events.Publish(scope, context.Background(), tasks.LogAppendedTopic(), view.ID, line)
+	events.Publish(scope, context.Background(), tasks.FinishedTopic(), view.ID, view)
 
 	seen := map[string]events.RawEnvelope{}
 	for len(seen) < 3 {
@@ -168,12 +173,12 @@ func TestTaskTopics_DeclareAndDeliver(t *testing.T) {
 		}
 	}
 	for name, e := range seen {
-		if e.Key != string(view.ID) {
+		if e.Key != view.ID {
 			t.Errorf("%s: Key = %q, want the run ID", name, e.Key)
 		}
 	}
 	for _, name := range []string{tasks.RunChangedTopicName, tasks.FinishedTopicName} {
-		var v tasks.RunView
+		var v tasks.RunPayload
 		if err := json.Unmarshal(seen[name].Payload, &v); err != nil || v != view {
 			t.Errorf("%s: payload = %s (%v), want %+v", name, seen[name].Payload, err, view)
 		}
@@ -236,9 +241,9 @@ func TestTaskTopics_WrongPayloadTypeRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = bus.Close(context.Background()) })
-	// A RunView on the log topic: same name, wrong payload type.
+	// A RunPayload on the log topic: same name, wrong payload type.
 	events.Publish(bus.Scope("core"), context.Background(),
-		events.NewTopic[tasks.RunView](tasks.LogAppendedTopicName), "run-nightwing-1", tasks.RunView{ID: "run-nightwing-1"})
+		events.NewTopic[tasks.RunPayload](tasks.LogAppendedTopicName), "run-nightwing-1", tasks.RunPayload{ID: "run-nightwing-1"})
 	// A correct publish after it proves the subscriber is live and the bad one never arrived first.
 	events.Publish(bus.Scope("core"), context.Background(), tasks.LogAppendedTopic(), "run-nightwing-1", tasks.LogAppended{Message: "ok"})
 	select {
@@ -303,18 +308,87 @@ func TestLogAppendedRedactor(t *testing.T) {
 	}
 }
 
-// TestRunChangedRedact_IsTheRunViewRedactor: the redactor on run-changed and
-// finished blanks Current for a subscriber without core:users.view, so the
-// stream and GET /runs agree (COR2-2).
-func TestRunChangedRedact_IsTheRunViewRedactor(t *testing.T) {
-	payload, err := json.Marshal(tasks.RunView{ID: "r1", Current: "Oswald Cobblepot"})
+// TestTaskTopics_SpecRedactIsARedactor: each entry's own Redact, the value the
+// hub applies, blanks the user-identifying text for a subscriber without
+// core:users.view and keeps it for a holder, on all three topics (a pass-through
+// Redact fails the first half, an always-blank one the second).
+func TestTaskTopics_SpecRedactIsARedactor(t *testing.T) {
+	run, err := json.Marshal(tasks.NewRunPayload(tasks.RunView{ID: "r1", State: tasks.StateRunning, Current: "Oswald Cobblepot"}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, s := range map[string]events.TopicSpec{"run-changed": tasks.RunChangedTopicSpec(), "finished": tasks.FinishedTopicSpec()} {
-		var v tasks.RunView
-		if err := json.Unmarshal(s.Redact(checker{nil}, payload), &v); err != nil || v.Current != "" || v.ID != "r1" {
-			t.Errorf("%s: %+v (%v)", name, v, err)
+	log, err := json.Marshal(tasks.NewLogAppended(tasks.LogLine{Level: "info", Message: "Oswald Cobblepot paged", Fields: map[string]string{"who": "oswald"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := checker{[]rbac.Permission{"core:tasks.view"}}
+	holder := checker{[]rbac.Permission{"core:users.view"}}
+	for name, c := range map[string]struct {
+		payload json.RawMessage
+		text    func(json.RawMessage) (string, error)
+	}{
+		"core.task.run-changed.v1": {run, func(b json.RawMessage) (string, error) {
+			var v tasks.RunPayload
+			err := json.Unmarshal(b, &v)
+			return v.Current, err
+		}},
+		"core.task.finished.v1": {run, func(b json.RawMessage) (string, error) {
+			var v tasks.RunPayload
+			err := json.Unmarshal(b, &v)
+			return v.Current, err
+		}},
+		"core.task.log-appended.v1": {log, func(b json.RawMessage) (string, error) {
+			var v tasks.LogAppended
+			err := json.Unmarshal(b, &v)
+			return v.Message + "|" + v.Fields["who"], err
+		}},
+	} {
+		redact := taskSpecs()[name].Redact
+		if got, err := c.text(redact(plain, c.payload)); err != nil || (got != "" && got != "|") {
+			t.Errorf("%s: without core:users.view text = %q (%v)", name, got, err)
+		}
+		if got, err := c.text(redact(nil, c.payload)); err != nil || (got != "" && got != "|") {
+			t.Errorf("%s: nil checker text = %q (%v)", name, got, err)
+		}
+		if got, err := c.text(redact(holder, c.payload)); err != nil || got == "" || got == "|" {
+			t.Errorf("%s: a holder of core:users.view lost the text: %q (%v)", name, got, err)
+		}
+	}
+	// The run id and state survive the blanking.
+	var v tasks.RunPayload
+	if err := json.Unmarshal(taskSpecs()["core.task.run-changed.v1"].Redact(plain, run), &v); err != nil || v.ID != "r1" || v.State != "running" {
+		t.Errorf("redacted run = %+v (%v)", v, err)
+	}
+}
+
+// TestRunPayload_WireKeys pins the run payload's keys to what the SPA's
+// coreEvents client reads (id, kind, state, done, total, current; web/src/
+// services/coreEvents/types.ts) and REST serves, with the mode as a word.
+func TestRunPayload_WireKeys(t *testing.T) {
+	b, err := json.Marshal(tasks.NewRunPayload(tasks.RunView{
+		ID: "run-robin-1", Kind: "batcave.sweep", Mode: tasks.ModePreview, State: tasks.StateRunning,
+		Done: 2, Total: 5, Current: "the cowl", Reason: "r", Parent: "p", PlanRef: "pl",
+		Created: time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	for k, want := range map[string]any{"id": "run-robin-1", "kind": "batcave.sweep", "mode": "preview", "state": "running",
+		"done": 2.0, "total": 5.0, "current": "the cowl", "reason": "r", "parent": "p", "plan_ref": "pl", "held": false, "trigger": ""} {
+		if m[k] != want {
+			t.Errorf("%s = %v (%T), want %v", k, m[k], m[k], want)
+		}
+	}
+	if _, ok := m["started"]; ok {
+		t.Errorf("a zero started time is on the wire: %s", b)
+	}
+	for _, pascal := range []string{"ID", "Current", "Mode"} {
+		if _, ok := m[pascal]; ok {
+			t.Errorf("PascalCase key %s on the wire: %s", pascal, b)
 		}
 	}
 }

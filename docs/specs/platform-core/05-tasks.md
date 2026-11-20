@@ -963,8 +963,10 @@ type StartRequest struct {
 // (5T.3.7); automation always states its mode (COR2-5).
 var ErrModeUnset = errors.New("tasks: start mode not stated")
 
-// RunView is the read model of one run: what Client.Get/Runs return, what
-// GET /runs[/{id}] serialise, and the payload of core.task.run-changed.v1.
+// RunView is the read model of one run: what Client.Get/Runs return, and what
+// GET /runs[/{id}] and core.task.run-changed.v1 / core.task.finished.v1
+// serialise, through RunPayload (below). It carries no JSON tags and never
+// will: RunRecord embeds it, so a tag would rename the keys of stored rows.
 type RunView struct {
 	ID       RunID
 	Kind     Kind
@@ -984,6 +986,43 @@ type RunView struct {
 	Current  string // current item label; may name a user, so blanked by RedactRunView (below)
 }
 
+// RunPayload is the wire form of a RunView, built by the one constructor
+// NewRunPayload: the JSON of every run GET /runs[/{id}] serves and the payload of
+// core.task.run-changed.v1 and core.task.finished.v1 (the terminal view). The
+// REST DTO is an alias of it, so the two cannot drift. Lower-case keys, the mode
+// as a word ("preview", "live", "unset"); the SPA's coreEvents client reads
+// id, kind, state, done, total and current.
+type RunPayload struct {
+	ID       string       `json:"id"`
+	Kind     string       `json:"kind"`
+	Mode     string       `json:"mode"`
+	State    string       `json:"state"`
+	Held     bool         `json:"held"`
+	Reason   string       `json:"reason,omitempty"`
+	Actor    ActorPayload `json:"actor"` // {user_id, auth_method, system}, each omitted when empty
+	Trigger  string       `json:"trigger"`
+	Parent   string       `json:"parent,omitempty"`
+	PlanRef  string       `json:"plan_ref,omitempty"`
+	Created  time.Time    `json:"created"`
+	Started  time.Time    `json:"started,omitzero"`
+	Finished time.Time    `json:"finished,omitzero"`
+	Done     int          `json:"done"`
+	Total    int          `json:"total"`
+	Current  string       `json:"current,omitempty"` // blanked by RedactRunPayload without core:users.view
+}
+
+func NewRunPayload(v RunView) RunPayload
+// RedactRunPayload is RedactRunView's rule on the wire form (it calls it).
+func RedactRunPayload(who rbac.Checker, p RunPayload) RunPayload
+
+// core.task.log-appended.v1 carries LogAppended, one log line spelled as
+// GET /runs/{id}/log spells it: {at, level, message, fields (omitted when empty)};
+// NewLogAppended(LogLine) builds it, RedactRunView's rule is RedactLogAppended
+// (blank message and every fields value without core:users.view, keys kept), and
+// the run is the envelope's Key. It is not LogLine itself: LogLine has no tags,
+// and a line with no fields marshals "Fields":null, which the reflected schema
+// refuses, so the bus would drop the common line.
+
 // RedactRunView is the ONE redaction of a run's user-identifying text (COR2-2).
 // It blanks Current (and any free error text a later version adds) unless who
 // holds core:users.view, the canonical successor of HEAD's users.manage gate on
@@ -997,9 +1036,9 @@ type RunView struct {
 func RedactRunView(who rbac.Checker, v RunView) RunView
 
 // RunViewRedactor adapts RedactRunView to events.RedactFunc (decode the
-// payload as RunView, redact, re-encode; an undecodable payload is returned
-// blanked to "{}"). It is the Redact value of the core.task.run-changed.v1
-// catalog entry (05-events 5E.3.1; COR3-13).
+// payload as RunPayload, RedactRunPayload, re-encode; an undecodable payload is
+// returned blanked to "{}"). It is the Redact value of the core.task.run-changed.v1
+// and core.task.finished.v1 catalog entries (05-events 5E.3.1; COR3-13).
 func RunViewRedactor() events.RedactFunc
 
 // RunState is the state of a run as the executor and the API see it.
