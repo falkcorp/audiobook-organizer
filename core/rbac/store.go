@@ -185,22 +185,28 @@ type ImportSealer interface {
 //     is no longer the committed counter is refused at once with
 //     storage.ErrConflict, so a caller that decides twice in one batch cannot
 //     replace the older guard with a newer one;
-//   - ClaimRoleSet(b, g) is GuardRoleSet plus a bump of the counter in b. A
-//     user write that gives a user a role makes it, so that a DeleteRole that
-//     read the role's holders before the write landed conflicts with the
-//     write, as the guard makes the write conflict with a delete that landed
-//     first.
+//   - ClaimRoleSet(b, g) is GuardRoleSet plus a bump of a second counter, the
+//     role-claim counter, in b. A user write that gives a user a role makes it.
+//     The role-claim counter is separate from the generation so that a claim
+//     does not fail a last-admin decision, which guards the generation;
+//   - GuardRoleClaims(b) stages into b an Expect that no claim commits after
+//     this call. DeleteRole calls it before it reads a role's holders, so a
+//     claim that lands after that read, which the holders could not show,
+//     fails the delete's Commit; the guard in ClaimRoleSet makes the claim
+//     conflict with a delete that landed first. Assigning a role and deleting
+//     it conflict whichever commits first.
 //
-// Service.RoleSetGeneration, Service.GuardRoleSet and Service.ClaimRoleSet are
-// the entry points; they report ErrNoRoleGuard when the store does not
+// Service.RoleSetGeneration, Service.GuardRoleSet, Service.ClaimRoleSet and
+// Service.GuardRoleClaims are the entry points; they report ErrNoRoleGuard when the store does not
 // implement this interface, and DeleteRole refuses on it too. A store that
-// wraps another must forward all three methods, or every user write that runs
+// wraps another must forward all four methods, or every user write that runs
 // the last-admin rule or gives a role, and every DeleteRole, fails closed with
 // ErrNoRoleGuard.
 type RoleGuarder interface {
 	RoleSetGeneration(ctx context.Context) (uint64, error)
 	GuardRoleSet(b *storage.Batch, generation uint64) error
 	ClaimRoleSet(b *storage.Batch, generation uint64) error
+	GuardRoleClaims(b *storage.Batch) error
 }
 
 // customPrefix is the namespace of operator-created role names.

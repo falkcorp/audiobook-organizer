@@ -51,6 +51,10 @@ func (g *guardingRoleStore) ClaimRoleSet(b *storage.Batch, generation uint64) er
 	return g.guard.ClaimRoleSet(b, generation)
 }
 
+func (g *guardingRoleStore) GuardRoleClaims(b *storage.Batch) error {
+	return g.guard.GuardRoleClaims(b)
+}
+
 // armAfterRead runs fn once, right after the next GetRole of name returns.
 func (g *guardingRoleStore) armAfterRead(name rbac.RoleName, fn func()) {
 	g.mu.Lock()

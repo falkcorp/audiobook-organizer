@@ -1,5 +1,5 @@
 // file: core/rbac/roleguard_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c3a71d5e-2b84-4f09-9e6a-81d4b0f7a352
 // last-edited: 2026-11-19
 
@@ -120,18 +120,26 @@ func TestGuardRoleSet_TheFirstGuardOfABatchWins(t *testing.T) {
 	}
 }
 
-// TestClaimRoleSet_GuardsAndBumps: a claim over the current generation
-// commits and raises it; a second claim, or a guard, read before it fails.
-func TestClaimRoleSet_GuardsAndBumps(t *testing.T) {
+// TestClaimRoleSet_GuardsTheGenerationAndRaisesTheClaimCounter: a claim over
+// the current generation commits and changes neither the generation nor a role;
+// it fails a GuardRoleClaims staged before it (DeleteRole's guard) and leaves a
+// GuardRoleSet staged before it alone (a last-admin decision); a claim over a
+// generation a role write has since moved is refused.
+func TestClaimRoleSet_GuardsTheGenerationAndRaisesTheClaimCounter(t *testing.T) {
 	ctx := context.Background()
 	f := boot(t, newEnv(t), setup{modules: []module{gotham()}})
 	g, err := f.svc.RoleSetGeneration(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader := f.store.NewBatch()
-	defer func() { _ = reader.Close() }()
-	if err := f.svc.GuardRoleSet(reader, g); err != nil {
+	deleter := f.store.NewBatch()
+	defer func() { _ = deleter.Close() }()
+	if err := f.svc.GuardRoleClaims(deleter); err != nil {
+		t.Fatal(err)
+	}
+	decider := f.store.NewBatch()
+	defer func() { _ = decider.Close() }()
+	if err := f.svc.GuardRoleSet(decider, g); err != nil {
 		t.Fatal(err)
 	}
 	claim := f.store.NewBatch()
@@ -142,16 +150,20 @@ func TestClaimRoleSet_GuardsAndBumps(t *testing.T) {
 	if err := claim.Commit(ctx, storage.Sync); err != nil {
 		t.Fatalf("Commit of a claim: %v", err)
 	}
-	if after, err := f.svc.RoleSetGeneration(ctx); err != nil || after != g+1 {
-		t.Fatalf("generation after a claim: %d, %v, want %d", after, err, g+1)
+	if after, err := f.svc.RoleSetGeneration(ctx); err != nil || after != g {
+		t.Fatalf("generation after a claim: %d, %v, want it unchanged at %d", after, err, g)
 	}
-	if err := reader.Commit(ctx, storage.Sync); !errors.Is(err, storage.ErrConflict) {
-		t.Fatalf("Commit of a guard read before the claim: %v, want storage.ErrConflict", err)
+	if err := deleter.Commit(ctx, storage.Sync); !errors.Is(err, storage.ErrConflict) {
+		t.Fatalf("Commit of a claims guard staged before the claim: %v, want storage.ErrConflict", err)
 	}
+	if err := decider.Commit(ctx, storage.Sync); err != nil {
+		t.Fatalf("Commit of a role-set guard staged before a claim: %v, want nil: a claim is not a role write", err)
+	}
+	f.mustCreate("custom.wayne", "core:self")
 	late := f.store.NewBatch()
 	defer func() { _ = late.Close() }()
 	if err := f.svc.ClaimRoleSet(late, g); !errors.Is(err, storage.ErrConflict) {
-		t.Fatalf("ClaimRoleSet over a generation read before the first claim: %v, want storage.ErrConflict", err)
+		t.Fatalf("ClaimRoleSet over a generation a role write has moved: %v, want storage.ErrConflict", err)
 	}
 }
 
@@ -180,6 +192,9 @@ func TestGuardRoleSet_StoreWithoutGuardFailsClosed(t *testing.T) {
 	}
 	if err := svc.ClaimRoleSet(b, 0); !errors.Is(err, rbac.ErrNoRoleGuard) {
 		t.Fatalf("ClaimRoleSet over a store with no guard: %v, want ErrNoRoleGuard", err)
+	}
+	if err := svc.GuardRoleClaims(b); !errors.Is(err, rbac.ErrNoRoleGuard) {
+		t.Fatalf("GuardRoleClaims over a store with no guard: %v, want ErrNoRoleGuard", err)
 	}
 }
 
