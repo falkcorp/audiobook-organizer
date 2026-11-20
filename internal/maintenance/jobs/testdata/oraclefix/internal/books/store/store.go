@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/testdata/oraclefix/internal/books/store/store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: db2d82b3-5d4e-4b22-b482-844ff5219e2b
 // last-edited: 2026-11-19
 
@@ -24,3 +24,7 @@ func (*Store) RevertBookToVersion(id string) error { return nil }
 
 // GetBookByID reads a book row.
 func (*Store) GetBookByID(id string) error { return nil }
+
+// UpdateWith is a generic function of the store package: a call to it is a call
+// to an instance, which has no package of its own.
+func UpdateWith[T any](s *Store, v T) error { return s.ModifyBook("x") }

@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/writes_trace_test.go
-// version: 3.1.0
+// version: 3.2.0
 // guid: c58e1d07-3a92-4f64-b0d3-7e49a2f6c815
 // last-edited: 2026-11-19
 
@@ -44,7 +44,7 @@ var traceVerb = regexp.MustCompile(oracleVerb.String() + `|^(Import|Repoint|Drop
 // that follows them, which is in the trace.
 //
 // Each is keyed by the call key the oracle records, "<receiver>.<method>"
-// (STOREFN.<name> for a function of the store package, STORECONCRETE.<type>.<method>
+// (STOREFN.<package>.<name> for a function of a store package, STORECONCRETE.<type>.<method>
 // for a method called on a concrete store type), as traceAliases is. It used to
 // be keyed by the bare method name, which exempted a method of that name on ANY
 // receiver: a future write named Move or Locked on another type would have been
@@ -52,13 +52,13 @@ var traceVerb = regexp.MustCompile(oracleVerb.String() + `|^(Import|Repoint|Drop
 var traceInert = map[string]string{
 	"STORECONCRETE.*store.BookFile.SetMeasuredDuration":        "sets a field on the in-memory BookFile; the row is written by the file-row method that follows",
 	"STORECONCRETE.*store.BookFile.RecordDurationProbeFailure": "sets fields on the in-memory BookFile; the row is written by the file-row method that follows",
-	"STOREFN.LockUserBookState":                                "takes an in-process mutex",
-	"STOREFN.LockUserBookStates":                               "takes in-process mutexes",
-	"STOREFN.LockUserBookStatePair":                            "takes in-process mutexes",
+	"STOREFN.store.LockUserBookState":                          "takes an in-process mutex",
+	"STOREFN.store.LockUserBookStates":                         "takes in-process mutexes",
+	"STOREFN.store.LockUserBookStatePair":                      "takes in-process mutexes",
 	"STORECONCRETE.store.SeriesBooksMap.Move":                  "SeriesBooksMap.Move edits a map in memory",
-	"STOREFN.DropDanglingSeriesRef":                            "clears SeriesID on the in-memory book; the ModifyBook that follows writes it",
-	"STOREFN.ApplyRespectingLocks":                             "runs the mutate closure on the in-memory book and restores the locked fields",
-	"STOREFN.RetiredClaimOnPath":                               "reads book_file rows",
+	"STOREFN.store.DropDanglingSeriesRef":                      "clears SeriesID on the in-memory book; the ModifyBook that follows writes it",
+	"STOREFN.store.ApplyRespectingLocks":                       "runs the mutate closure on the in-memory book and restores the locked fields",
+	"STOREFN.store.RetiredClaimOnPath":                         "reads book_file rows",
 	"STORECONCRETE.store.FieldLocks.Locked":                    "FieldLocks.Locked reads a lock flag",
 	"STORECONCRETE.store.BookRuntime.StoredAggregateSec":       "BookRuntime.StoredAggregateSec reads a stored value",
 }
@@ -67,10 +67,9 @@ var traceInert = map[string]string{
 // name is not the table key it stands for: a raw-key method whose key family only
 // the receiver knows (SetRaw and DeleteRaw are qualified in the table), or a
 // function of the store package whose own body is not walked and whose one write
-// is another method. An interface call whose implementations are all module code
-// needs no entry: the walk follows it into them, and the writes are the ones their
-// bodies make (tagger.LibraryImporter.ImportPath and jobs.checkpointer.Save were
-// entries until the walk followed interface calls).
+// is another method. An interface call is recorded by its own key AND its
+// implementations are walked, so the key needs an entry when the method's name is
+// not the write it makes (the walk's by-body result is the union with it).
 var traceAliases = map[string]string{
 	// merge-chapter-groups' raw keys. WriteCombineJournal writes the
 	// merge:combine-journal: row (the undo journal: operations); putPendingRepair
@@ -84,16 +83,19 @@ var traceAliases = map[string]string{
 	"jobs.retentionKVStore.DeleteRaw": "DeleteRaw/dead_book_index",
 	// The checkpoint interface of backfill-file-hashes and recompute-book-aggregates
 	// stores its blob through SaveOperationState (checkpointerFrom).
+	"jobs.checkpointer.Save": "SaveOperationState",
 	// tagger.LibraryImporter has one implementation, deluge.LibraryImporterAdapter,
 	// whose ImportPath ends in ImportToLibraryWith and so in Store.UpdateBookFile
 	// (internal/deluge/importer_adapter.go:94), the call bulk-deluge-import makes.
-	// The oracle does not follow an interface call into its implementation.
+	// An implementation the program does not contain (the wiring passes it in)
+	// would leave only the method's name to judge by.
+	"tagger.LibraryImporter.ImportPath": "UpdateBookFile",
 	// database.ModifyBookRespectingLocks is a function in the store package, whose
 	// bodies the oracle does not walk, and its one write is the ModifyBook it
 	// makes under the book's lock. A job that calls it is a ModifyBook caller;
 	// without this the call reads as an unlisted write named after the helper and
 	// the ModifyBook the job's trace lists reads as unreached.
-	"STOREFN.ModifyBookRespectingLocks": "ModifyBook",
+	"STOREFN.store.ModifyBookRespectingLocks": "ModifyBook",
 }
 
 // traceWriteName is the store method a call key stands for, and whether it is a
