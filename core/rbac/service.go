@@ -1,5 +1,5 @@
 // file: core/rbac/service.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 9d2b7e41-5c3a-4f86-b0e9-1a6c8f3d5e27
 // last-edited: 2026-11-19
 
@@ -890,7 +890,7 @@ func (s *Service) covers(actor Checker, roles []RoleName, refusal error) error {
 	}
 	s.rolesMu.RLock()
 	defer s.rolesMu.RUnlock()
-	return covering(st.cat, actor, roles, refusal, func(name RoleName) (*Role, error) {
+	return covering(st.cat, actor, roles, refusal, true, func(name RoleName) (*Role, error) {
 		if r := s.roles[name]; r != nil {
 			return r, nil
 		}
@@ -903,9 +903,20 @@ func (s *Service) covers(actor Checker, roles []RoleName, refusal error) error {
 // commits, so a role deleted or recreated a moment ago can still look as it
 // did to CanAssign; a caller that has just read the role-set generation
 // (RoleSetGeneration) and decides on the roles it is about to give a user asks
-// the store, which is never behind that generation. Same refusals as
-// CanAssign: ErrEscalation, wrapping ErrUnknownRole for a name the store does
-// not hold unless actor holds core:admin.
+// the store, which is never behind that generation.
+//
+// Unlike CanAssign it refuses a role name the store does not hold for every
+// actor, core:admin holders included (ErrEscalation wrapping ErrUnknownRole):
+// the roles are about to be written onto a user, and a user holding a name no
+// role carries is granted whatever role is created under it later. CanAssign
+// keeps its admin exemption because it also judges removals, where an admin
+// must be able to take a dangling name off a user. Otherwise the refusals are
+// CanAssign's (ErrEscalation).
+//
+// A role the store cannot read (a failed read, ErrUndecodableRole) is not a
+// refusal of the actor: it comes back as the read error, not wrapped in
+// ErrEscalation, so a caller that answers ErrEscalation with a 403, or spends
+// an invite on it, does not do either for a fault of the server.
 func (s *Service) CanAssignCommitted(ctx context.Context, actor Checker, roles []RoleName) error {
 	if actor == nil {
 		return fmt.Errorf("%w: no actor", ErrEscalation)
@@ -914,24 +925,29 @@ func (s *Service) CanAssignCommitted(ctx context.Context, actor Checker, roles [
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrEscalation, err)
 	}
-	return covering(st.cat, actor, roles, ErrEscalation, func(name RoleName) (*Role, error) {
+	return covering(st.cat, actor, roles, ErrEscalation, false, func(name RoleName) (*Role, error) {
 		return s.deps.Store.GetRole(ctx, name)
 	})
 }
 
 // covering is the loop of covers and CanAssignCommitted over read, the role
-// lookup. A read error other than ErrUnknownRole fails closed.
-func covering(cat *Catalog, actor Checker, roles []RoleName, refusal error, read func(RoleName) (*Role, error)) error {
+// lookup. A name read reports as ErrUnknownRole is refused, unless
+// allowUnknown and actor holds core:admin. Any other read error is returned
+// as it is, wrapped in neither refusal nor ErrEscalation: it is a fault of
+// the store and fails the check closed without calling the actor's request a
+// refusal. (Only CanAssignCommitted can reach it; covers reads the cache,
+// which answers a role or ErrUnknownRole.)
+func covering(cat *Catalog, actor Checker, roles []RoleName, refusal error, allowUnknown bool, read func(RoleName) (*Role, error)) error {
 	for _, name := range roles {
 		r, err := read(name)
 		switch {
 		case errors.Is(err, ErrUnknownRole):
-			if !actor.Has(CoreAdmin) {
-				return fmt.Errorf("%w: %w: %s", refusal, ErrUnknownRole, name)
+			if allowUnknown && actor.Has(CoreAdmin) {
+				continue
 			}
-			continue
+			return fmt.Errorf("%w: %w: %s", refusal, ErrUnknownRole, name)
 		case err != nil:
-			return fmt.Errorf("%w: read role %s: %w", refusal, name, err)
+			return fmt.Errorf("rbac: read role %s: %w", name, err)
 		}
 		for _, p := range r.Permissions() {
 			if !holds(cat, actor, p) {

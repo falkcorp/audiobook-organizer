@@ -1,5 +1,5 @@
 // file: core/rbac/roleguard_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: c3a71d5e-2b84-4f09-9e6a-81d4b0f7a352
 // last-edited: 2026-11-19
 
@@ -8,6 +8,7 @@ package rbac_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/falkcorp/mediacore/internal/rbacstore"
@@ -406,4 +407,92 @@ func TestDeleteRole_LastAdminRuleFailingToReadHoldersRefusesTheDelete(t *testing
 		t.Fatalf("HoldersOf ran %d times, want 2 (DeleteRole's own read, then the last-admin rule's)", calls)
 	}
 	f.unchanged("custom.wayne", wayne.Version)
+}
+
+// TestCanAssignCommitted_UnknownRoleIsRefusedForEveryActor (F4-02-ROLE-GUARD
+// r3, m1): the check a role-giving write makes over the stored roles refuses a
+// name the store does not hold for a core:admin holder too, where CanAssign,
+// which also judges removals, lets the admin through. A user written holding
+// a name no role carries is handed whatever role is created under it later.
+// The cache check's exemption is pinned beside it, so the two cannot drift
+// into one behaviour by accident.
+func TestCanAssignCommitted_UnknownRoleIsRefusedForEveryActor(t *testing.T) {
+	ctx := context.Background()
+	f := boot(t, newEnv(t), setup{modules: []module{gotham()}})
+	f.mustCreate("custom.robin", "gotham:patrol")
+	viewerScopes := f.role(rbac.RoleViewer).Permissions()
+	for _, tc := range []struct {
+		name  string
+		actor rbac.Checker
+	}{{"admin", f.admin()}, {"non-admin", f.as(viewerScopes...)}} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := f.svc.CanAssignCommitted(ctx, tc.actor, []rbac.RoleName{"custom.ghost"})
+			errIs(t, "an unknown role", err, rbac.ErrEscalation)
+			errIs(t, "an unknown role", err, rbac.ErrUnknownRole)
+			err = f.svc.CanAssignCommitted(ctx, tc.actor, []rbac.RoleName{rbac.RoleViewer, "custom.ghost"})
+			errIs(t, "a known role then an unknown one", err, rbac.ErrUnknownRole)
+		})
+	}
+	if err := f.svc.CanAssignCommitted(ctx, f.admin(), []rbac.RoleName{rbac.RoleAdmin, rbac.RoleEditor, "custom.robin"}); err != nil {
+		t.Errorf("admin over roles the store holds: %v, want allowed", err)
+	}
+	if err := f.svc.CanAssign(f.admin(), []rbac.RoleName{"custom.ghost"}); err != nil {
+		t.Errorf("CanAssign by an admin over an unknown role: %v, want allowed (a removal of a dangling name)", err)
+	}
+}
+
+// getFaultStore is the native role store whose GetRole fails while err is set.
+type getFaultStore struct {
+	*rbacstore.Store
+	err error
+}
+
+func (h *getFaultStore) GetRole(ctx context.Context, name rbac.RoleName) (*rbac.Role, error) {
+	if h.err != nil {
+		return nil, h.err
+	}
+	return h.Store.GetRole(ctx, name)
+}
+
+// TestCanAssignCommitted_ReadFaultIsNotARefusal (F4-02-ROLE-GUARD r3, M1): a
+// role the store cannot read (a failed read, a corrupt row) is a fault of the
+// store, not a refusal of the actor. It comes back as the read error and is
+// not wrapped in ErrEscalation or ErrUnknownRole: auth answers ErrEscalation
+// with a 403 and spends an invite on it. Both kinds of actor, and the corrupt
+// row, which wraps ErrUndecodableRole.
+func TestCanAssignCommitted_ReadFaultIsNotARefusal(t *testing.T) {
+	ctx := context.Background()
+	f := boot(t, newEnv(t), setup{modules: []module{gotham()}})
+	f.mustCreate("custom.robin", "gotham:patrol")
+	hs := &getFaultStore{Store: f.store}
+	svc, err := rbac.New(ctx, rbac.Options{Source: "gotham-test"}, rbac.Deps{
+		Store: hs, Compile: f.comp.compile, Audit: f.audit,
+		Revocations: f.journal, NewBatch: f.store.NewBatch,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Freeze(ctx); err != nil {
+		t.Fatal(err)
+	}
+	viewerScopes := f.role(rbac.RoleViewer).Permissions()
+	boom := errors.New("the role keyspace broke")
+	for name, fault := range map[string]error{
+		"a failed read":       boom,
+		"an undecodable role": fmt.Errorf("%w: custom.robin", rbac.ErrUndecodableRole),
+	} {
+		for who, actor := range map[string]rbac.Checker{"admin": f.admin(), "non-admin": f.as(viewerScopes...)} {
+			t.Run(name+", "+who, func(t *testing.T) {
+				hs.err = fault
+				defer func() { hs.err = nil }()
+				err := svc.CanAssignCommitted(ctx, actor, []rbac.RoleName{"custom.robin"})
+				if !errors.Is(err, fault) {
+					t.Fatalf("CanAssignCommitted over %s: %v, want the read error", name, err)
+				}
+				if errors.Is(err, rbac.ErrEscalation) || errors.Is(err, rbac.ErrUnknownRole) {
+					t.Fatalf("CanAssignCommitted over %s: %v: a fault of the store must not read as a refusal", name, err)
+				}
+			})
+		}
+	}
 }
