@@ -128,6 +128,9 @@ type Recorder struct {
 	fs   vfs.FS
 	opts Options
 
+	// shared is the per-boot state every Seams this recorder makes carries.
+	shared bootseam.Shared
+
 	pebbleRE *regexp.Regexp
 
 	mu       sync.Mutex
@@ -153,7 +156,9 @@ func (r *Recorder) FS() vfs.FS { return r.fs }
 func (r *Recorder) Mem() *vfs.MemFS { return r.mem }
 
 // Seams is a boot's bootseam.Seams over this recorder.
-func (r *Recorder) Seams() *bootseam.Seams { return &bootseam.Seams{FS: r.fs, Labels: r} }
+func (r *Recorder) Seams() *bootseam.Seams {
+	return &bootseam.Seams{FS: r.fs, Labels: r, Shared: &r.shared}
+}
 
 // Enter opens a region (bootseam.Labeler); the outer label wins.
 func (r *Recorder) Enter(label string) func() {
