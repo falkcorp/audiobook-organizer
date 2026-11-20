@@ -502,3 +502,82 @@ func TestBasicExemptAssets_EqualsHEAD(t *testing.T) {
 		t.Fatalf("the table holds %d HEAD-exempt paths, want 9: it no longer covers both sides", accepted)
 	}
 }
+
+// TestHandler_CSPModesThroughRouterChain: through a built httpapi Router (the
+// real stage-5 chain, 05-http-api §4.2), index.html carries exactly the
+// handler's policy in each mode: enforcing gives one Content-Security-Policy
+// with the shell policy; report_only gives the policy as
+// Content-Security-Policy-Report-Only and no enforcing header at all, so
+// stage 5's default-src 'none' never lands beside it (07 §7.6.2).
+func TestHandler_CSPModesThroughRouterChain(t *testing.T) {
+	st, cfg := uiConfig(t)
+	r := httpapi.NewRouter(httpapi.Options{}, httpapi.Deps{})
+	if err := r.SPA(Handler(mustBundle(t), Options{Config: cfg, NonSPA: r.NonSPA()}), httpapi.SPAOptions{BasicExemptAssets: BasicExemptAssets}); err != nil {
+		t.Fatal(err)
+	}
+	h, err := r.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	page := func() http.Header {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/batcomputer", nil))
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<html") {
+			t.Fatalf("GET /batcomputer = %d", rec.Code)
+		}
+		return rec.Header()
+	}
+	hdr := page()
+	if got := hdr.Values("Content-Security-Policy"); len(got) != 1 || got[0] != wantPolicy() {
+		t.Errorf("enforcing: Content-Security-Policy = %q, want only the shell policy", got)
+	}
+	if got := hdr.Values("Content-Security-Policy-Report-Only"); len(got) != 0 {
+		t.Errorf("enforcing: Content-Security-Policy-Report-Only = %q, want none", got)
+	}
+	actor := config.Actor{Subject: "alfred", Interactive: true, Can: func(string) bool { return true }}
+	if _, err := st.Apply(context.Background(), config.Patch{Set: map[config.Path]json.RawMessage{"core.ui.csp.report_only": json.RawMessage(`true`)}}, actor); err != nil {
+		t.Fatal(err)
+	}
+	hdr = page()
+	if got := hdr.Values("Content-Security-Policy-Report-Only"); len(got) != 1 || got[0] != wantPolicy() {
+		t.Errorf("report_only: Content-Security-Policy-Report-Only = %q, want only the shell policy", got)
+	}
+	if got := hdr.Values("Content-Security-Policy"); len(got) != 0 {
+		t.Errorf("report_only: Content-Security-Policy = %q, want none (an enforcing policy beside the report-only one)", got)
+	}
+}
+
+// TestHandler_NonSPAOnCleanedPath: the predicate judges the path the handler
+// serves, so a dot-segment spelling of a probe is a 404 problem, not
+// index.html.
+func TestHandler_NonSPAOnCleanedPath(t *testing.T) {
+	h := Handler(mustBundle(t), Options{NonSPA: nonSPARouter(t)})
+	for _, p := range []string{"/x/../health", "/batcave/../livez", "/./metrics", "/a/b/../../HEALTH/"} {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.URL.Path = p // httptest.NewRequest would not keep the dot segments
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "<html") {
+			t.Errorf("GET %s = %d %q, want a 404 problem", p, rec.Code, rec.Body.String())
+		}
+	}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.URL.Path = "/health/../activity"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<html") {
+		t.Errorf("GET /health/../activity = %d, want index.html (it cleans to a page)", rec.Code)
+	}
+}
+
+// TestHandler_DefaultSettingsPolicyCached: with no Handle, two page loads
+// reuse one computed policy (one defaults pointer) instead of rebuilding it.
+func TestHandler_DefaultSettingsPolicyCached(t *testing.T) {
+	h := Handler(mustBundle(t), Options{}).(*handler)
+	do(h, http.MethodGet, "/")
+	first := h.policy.Load()
+	do(h, http.MethodGet, "/batcave")
+	if first == nil || h.policy.Load() != first || first.settings != h.def {
+		t.Error("the policy was rebuilt for the second page load")
+	}
+}

@@ -74,11 +74,22 @@ const (
 	kindPlaceholder = "placeholder"
 )
 
+// withPath is r with URL.Path p, r itself when the path is already p.
+func withPath(r *http.Request, p string) *http.Request {
+	if r.URL.Path == p {
+		return r
+	}
+	c := r.Clone(r.Context())
+	c.URL.Path, c.URL.RawPath = p, ""
+	return c
+}
+
 // handler is the Handler. Everything but policy is fixed at construction.
 type handler struct {
 	b       Bundle
 	nonSPA  func(*http.Request) bool
 	cfg     *config.Handle[Settings]
+	def     *Settings // DefaultSettings, built once: the value while cfg has none
 	connect func() []string
 	extra   []string
 	met     *uiMetrics
@@ -122,6 +133,7 @@ func Handler(b Bundle, opts Options) http.Handler {
 		b:       b,
 		nonSPA:  opts.NonSPA,
 		cfg:     opts.Config,
+		def:     new(DefaultSettings()),
 		connect: opts.ConnectSrcFrom,
 		extra:   extraDirectives(opts.ExtraDirectives),
 		met:     newUIMetrics(opts.Metrics, b),
@@ -148,7 +160,10 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) string {
 		httpapi.WriteError(w, r, &httpapi.Error{Status: http.StatusMethodNotAllowed, Code: "method_not_allowed"}, nil)
 		return kindMethod404
 	}
-	if h.nonSPA != nil && h.nonSPA(r) {
+	// One path decides both questions: the predicate sees the path this
+	// handler serves, so "/x/../health" is the probe it cleans to, not a page.
+	p := path.Clean("/" + r.URL.Path)
+	if h.nonSPA != nil && h.nonSPA(withPath(r, p)) {
 		httpapi.WriteError(w, r, &httpapi.Error{Status: http.StatusNotFound, Code: "not_found"}, nil)
 		return kindNonSPA404
 	}
@@ -156,7 +171,6 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) string {
 		h.servePlaceholder(w, r)
 		return kindPlaceholder
 	}
-	p := path.Clean("/" + r.URL.Path)
 	if p == "/" || p == "/index.html" {
 		h.index.ServeHTTP(w, r)
 		return kindIndex
@@ -243,19 +257,17 @@ func (h *handler) currentPolicy() *policy {
 	return next
 }
 
-// settings is the current core.ui value, or the defaults without a Handle.
-// The defaults pointer is cached in the policy, so it is built once.
+// settings is the current core.ui value, or the defaults when there is no
+// Handle or it holds no value yet.
 func (h *handler) settings() *Settings {
 	if h.cfg != nil {
 		if s := h.cfg.Get(); s != nil {
 			return s
 		}
 	}
-	if cur := h.policy.Load(); cur != nil && h.cfg == nil {
-		return cur.settings
-	}
-	d := DefaultSettings()
-	return &d
+	// One pointer for "no value", so currentPolicy's pointer comparison keeps
+	// the cached policy instead of rebuilding it on every page load.
+	return h.def
 }
 
 // servePlaceholder is the API-only page of a build without an embedded UI.
