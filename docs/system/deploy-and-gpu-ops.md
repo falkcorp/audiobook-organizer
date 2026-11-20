@@ -737,6 +737,26 @@ or owner-email settings. So the deploy keeps the environment with the binary.
   unreadable nothing is evicted. The deploy before the flip must go through the
   helpers with facts, so that the flip replaces a build with recorded facts and
   its generation is a boundary.
+- **These files hold secrets.** A generation is a root-only plaintext copy of
+  `local.conf` (the Cloudflare Access, ABS JWT, owner-email and peer settings)
+  and of the unit. The directory is 0700 and the files 0600, owned by root; the
+  helper refuses to read them if the directory or a file is open to group or
+  others, or is a symlink. They are kept for as long as the generation is, so a
+  secret rotated out of `local.conf` is still in the older generations: remove
+  them with the generation, and treat the host's backups of this directory like
+  `local.conf` itself. `make rollback-check` and the helper's messages never
+  print their content.
+- **One at a time, and durable.** `install-staged binary|prev|unit|local-conf`,
+  `rollback apply` and `swap-prev` hold one lock (`<bin>.envgen/lock`) for their
+  duration and refuse, changing nothing, while another holds it. The renames they
+  make are followed by an fsync of the containing directory.
+- **`host.conf` is not in the snapshot.** It is written once by the owner and no
+  deploy touches it, so a rollback restores the unit and `local.conf` but leaves
+  `host.conf` as it is. The flip must therefore keep `host.conf` valid for BOTH
+  builds (the previous release reads the same drop-in): do not rename or retire
+  anything in it in the flip, and check it with the previous build's reading of
+  it before the flip deploy. A rollback checks it the way a deploy does and
+  refuses if it fails.
 - **What a rollback does.** `make rollback` and `make rollback-restore` run
   `install-staged rollback check prev` before anything is stopped. It looks up
   the generation by the sha256 of the binary being restored and refuses, with
@@ -746,9 +766,13 @@ or owner-email settings. So the deploy keeps the environment with the binary.
   `render_local_conf`). A rollback that cannot restore the environment is
   refused rather than done half. The swap (`install-staged rollback apply
   <sha256>`) is a compare-and-swap on `.prev`: it refuses if a deploy changed
-  `.prev` after the check, stages the unit and drop-in, renames them in first and
-  the binary last, then runs `daemon-reload`. It can be run again after an
-  interruption. The helper never runs a binary as root.
+  `.prev` after the check (the staged copy of `.prev` is hashed as it is copied,
+  so a file swapped after the check is caught on the copy), stages the unit, the
+  drop-in and the kept `<bin>.rolled-back` copy, renames the environment in first
+  and the binary last, then runs `daemon-reload`. It can be run again after an
+  interruption, or after a failed `daemon-reload` (run `make rollback` again: the
+  deploy user has no sudo line for `systemctl daemon-reload`); a rerun does not
+  replace `<bin>.rolled-back` once the binary is already the restored one. The helper never runs a binary as root.
 - **`RELEASE=` and `ROLLBACK_ENV=<sha256>`.** `make rollback-restore RELEASE=<tag>`
   fetches a release, which essentially never has the sha256 of a build deployed
   from here, so no generation matches it. The environment is checked for the
