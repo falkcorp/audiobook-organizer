@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/F7-09-f7-flip-integrations.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: 92d3d884-998e-42de-94e1-451dd63836fb -->
-<!-- last-edited: 2026-11-12 -->
+<!-- last-edited: 2026-11-19 -->
 
 # F7-09 — F7 flip, one PR: integrations, AI jobs, provider gates, library roots and notify wired, M6 registered, internal/plugin and the webhook plugin deleted, deliveries in core's format, the AI families renamed with their dashboards, the late-owner holds and poll on their native bodies
 
@@ -336,6 +336,7 @@ must be green on the PR.
 - Moving organizer, versions, quarantine, Deluge import and iTunes transfer onto `library.Transfer` (after R2).
 - The download phase 2, the AI usage ledger, the notify inbox (deferred-build).
 - Backup, health, the updater and the kernel `/metrics` mount (F8-04a/b).
+- Moving the invite flow's mail sender onto the `notify/email` instance (05-authn 4.13): that rewire is the R2 row's, not this flip's. It carries a standing obligation: the sender must dial through the instance's guarded dial, never `mail.PlainDial` (which `internal/server/invite_guest_access.go` passes today only because `smtp_host` is environment-only). See `docs/agent-tasks/platform-core/seams.d/F7-09-T2.md` obligation 3 and `TODO-F7-09-INVITE-SENDER-GUARD`. F7-09 only registers `notifymail.Descriptor()` and passes the Registry's `Outbound` (obligations 1 and 2 there).
 
 ## Rollback
 
