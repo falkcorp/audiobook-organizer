@@ -136,15 +136,11 @@ func (noHolders) HoldersOf(context.Context, *storage.Batch, []rbac.RoleName) ([]
 // hub wired the way the kernel will wire them (F6-03): declare, subscribe the
 // hub's subscriptions, freeze, open.
 type env struct {
-	t  testing.TB
-	st *authstore.Store
-	rb *rbac.Service
-	// keyScopes remembers the scopes each API key was minted with
-	// (credential id -> []rbac.Permission), because auth.Principal does not
-	// carry them and refresh must rebuild a key principal over the same ones.
-	keyScopes sync.Map
-	svc       *auth.Service
-	now       time.Time
+	t   testing.TB
+	st  *authstore.Store
+	rb  *rbac.Service
+	svc *auth.Service
+	now time.Time
 
 	bus *events.Bus
 	hub *realtime.Hub
@@ -286,31 +282,14 @@ func (e *env) key(u *auth.User, scopes ...rbac.Permission) (*auth.Principal, *au
 		e.t.Fatalf("PrincipalFor key %s: %v", u.ID, err)
 	}
 	p.CredentialID = k.ID
-	e.keyScopes.Store(k.ID, scopes)
 	return p, k
 }
 
-// refresh is the Deps.Refresh the kernel will supply (F6-03): it rebuilds p
-// from the user as the store holds them now (so a SetRoles shows), over the
-// same credential and key scopes.
+// refresh is the Deps.Refresh the kernel supplies (F6-03): auth's own
+// Refresh, which rebuilds p from the user and credential as the store holds
+// them now (so a SetRoles shows), a key principal over the key's scopes.
 func (e *env) refresh(ctx context.Context, p *auth.Principal) (*auth.Principal, error) {
-	if p.User == nil {
-		return p, nil
-	}
-	u, err := e.st.GetUser(ctx, p.User.ID)
-	if err != nil {
-		return nil, err
-	}
-	var scopes []rbac.Permission
-	if v, ok := e.keyScopes.Load(p.CredentialID); ok {
-		scopes = v.([]rbac.Permission)
-	}
-	np, err := e.svc.PrincipalFor(ctx, u, p.Method, scopes, u.CredentialEpoch)
-	if err != nil {
-		return nil, err
-	}
-	np.CredentialID = p.CredentialID
-	return np, nil
+	return e.svc.Refresh(ctx, p)
 }
 
 // topicSpecs is the catalog the hub streams: the Batcave's and Arkham's
