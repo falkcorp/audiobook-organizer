@@ -1,1 +1,2 @@
 - Filed a TODO for an admin-only export of another user's reading history.
+- Filed a TODO for a user profile page (statistics, reading history, own API keys, sessions).
