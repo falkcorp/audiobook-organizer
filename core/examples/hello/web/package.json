@@ -1,0 +1,17 @@
+{
+  "name": "hello-web",
+  "version": "0.1.0",
+  "description": "hello's web package: one route, one nav entry and its settings panel on the mediacore shell",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "typecheck": "node ../../../web/node_modules/@typescript/native/bin/tsc -p tsconfig.json --noEmit",
+    "test": "vitest --passWithNoTests"
+  },
+  "dependencies": {
+    "@mediacore/shell": "0.1.0",
+    "@mediacore/ui-kit": "0.1.0"
+  }
+}

@@ -19,7 +19,7 @@ PYTHON ?= python3
 
 .PHONY: print-toolchain ci build vet test-short fmt-check fix-check tidy-check archtest exclude-check toolchain-check \
 	errcheck-ratchet interface-width pprof-check mocks-check web-install web-test web-lint openapi-check openapi-regen \
-	generate-api-client coverage-floor embed-check test-nightly version-check script-test \
+	generate-api-client coverage-floor embed-check test-nightly version-check script-test hello-web hello e2e \
 	tools readiness apidiff-gate coverage coredoc-check vulncheck
 
 ## print-toolchain: print the pin and nothing else (one line, e.g. goX.Y.Z).
@@ -138,8 +138,17 @@ openapi-regen:
 	go run ./examples/hello/cmd/hello openapi
 
 ## web-install: npm ci in core/web, exactly as locked (core/web's own lockfile).
+## web-install also links examples/hello/web/node_modules to web/node_modules:
+## hello's web package is a workspace member outside core/web, so resolution
+## upward from it never reaches the hoisted node_modules (07 §7.3.1). The link
+## is made here, not committed; a real directory in its place is refused, not
+## deleted.
+HELLO_WEB_MODULES := examples/hello/web/node_modules
 web-install:
 	cd web && npm ci --no-audit --no-fund
+	@if [ -e $(HELLO_WEB_MODULES) ] && [ ! -L $(HELLO_WEB_MODULES) ]; then \
+		echo "web-install: $(HELLO_WEB_MODULES) is not a symlink; remove it and rerun" >&2; exit 1; fi
+	ln -sfn ../../../web/node_modules $(HELLO_WEB_MODULES)
 
 ## web-lint: core/web's type check, its ESLint (with the import boundary of 07 §7.3.1:
 ## nothing in core/web imports from outside it) and the generated client's freshness.
@@ -148,9 +157,27 @@ web-lint: web-install
 	cd web && npm run generate:check -w @mediacore/api-client
 
 ## web-test: core/web's npm workspace tests (vitest in every workspace; the
-## api-client's generated-client coverage check is among them), after npm ci.
+## api-client's generated-client coverage check is among them), after npm ci,
+## then presets.test.mjs, which builds api-client, ui-kit and shell from a clean
+## tree in the 07 §7.3.2 order (FE8-1), and check-singletons' own tests.
 web-test: web-install
 	cd web && npm test --workspaces --if-present -- --run
+	cd web && npm run test:presets
+
+## hello-web: core/web's packages in the 07 §7.3.2 order, then hello's web
+## package into examples/hello/web/dist (06 §6.12), and the singleton check
+## over its sourcemaps.
+hello-web: web-install
+	cd web && npm run build && npm run build -w hello-web
+	cd web && npm run check-singletons
+
+## hello: the hello example with its embedded UI (ui_embed.go), bin/hello.
+hello: hello-web
+	go build -tags embed_frontend -o bin/hello ./examples/hello/cmd/hello
+
+## e2e: the shell's Playwright suite (core/web/e2e) against bin/hello.
+e2e: hello
+	cd web && npx playwright install chromium && npm run e2e
 
 ## generate-api-client: regenerate @mediacore/api-client's src/generated/ from
 ## openapi/core.json (07 §7.8). `make -C core web-lint` fails when it is stale.

@@ -1,0 +1,17 @@
+// file: core/web/packages/ui-kit/tsconfig.build.json
+// version: 0.1.0
+// guid: 7d3a1f68-2c5e-4b09-8a47-e1f9c0b2d635
+// last-edited: 2026-11-20
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "allowImportingTsExtensions": false,
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
+}

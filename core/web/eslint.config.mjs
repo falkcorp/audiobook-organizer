@@ -5,14 +5,15 @@
 
 import js from '@eslint/js';
 import globals from 'globals';
+import importX from 'eslint-plugin-import-x';
 import tseslint from 'typescript-eslint';
 
 // The import boundary (07 §7.3.1, FE-16): nothing in core/web imports from outside
 // core/web, because core/web becomes the split repository's npm root unchanged. A
 // specifier that climbs out of its package into ABO's web/ or names an ABO alias
-// fails lint. `import/no-relative-packages` (a specifier that resolves into a
-// sibling package's directory instead of its name) needs eslint-plugin-import-x and
-// is filed as a follow-up with the second package (todo.d/2026-11-08-core-web-no-relative-packages.md).
+// fails lint. `import-x/no-relative-packages` refuses a specifier that resolves
+// into a sibling package's directory instead of naming the package (added with
+// the second and third packages, ui-kit and shell).
 const outsideCoreWeb = {
   patterns: [
     {
@@ -28,6 +29,20 @@ const outsideCoreWeb = {
   ],
 };
 
+// ui-kit is presentational (07 §7.3.1, §7.11): its sources import neither the
+// API client nor the shell; a piece that needs data takes it as a prop. Its
+// vite.config.ts, outside src/, may import the one shell file it needs, the
+// unbuilt preset @mediacore/shell/vite.
+const uiKitBoundary = {
+  patterns: [
+    ...outsideCoreWeb.patterns,
+    {
+      group: ['@mediacore/api-client', '@mediacore/api-client/*', '@mediacore/shell', '@mediacore/shell/*'],
+      message: 'ui-kit imports neither @mediacore/api-client nor @mediacore/shell (07 §7.3.1).',
+    },
+  ],
+};
+
 export default tseslint.config(
   { ignores: ['**/dist/**', '**/node_modules/**', '**/coverage/**', '**/src/generated/**'] },
   js.configs.recommended,
@@ -35,6 +50,14 @@ export default tseslint.config(
     files: ['**/*.{ts,tsx,mjs}'],
     extends: [...tseslint.configs.recommended],
     languageOptions: { globals: { ...globals.browser, ...globals.node } },
-    rules: { 'no-restricted-imports': ['error', outsideCoreWeb] },
+    plugins: { 'import-x': importX },
+    rules: {
+      'no-restricted-imports': ['error', outsideCoreWeb],
+      'import-x/no-relative-packages': 'error',
+    },
+  },
+  {
+    files: ['packages/ui-kit/src/**/*.{ts,tsx}'],
+    rules: { 'no-restricted-imports': ['error', uiKitBoundary] },
   },
 );

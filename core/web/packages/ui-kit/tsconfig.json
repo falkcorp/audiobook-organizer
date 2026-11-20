@@ -1,0 +1,26 @@
+// file: core/web/packages/ui-kit/tsconfig.json
+// version: 0.1.0
+// guid: 2b7e5c91-4a08-4d63-9f1e-0c6a8b3d7e25
+// last-edited: 2026-11-20
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "customConditions": ["development"],
+    "jsx": "react-jsx",
+    "types": ["vitest/globals", "node"],
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src", "vite.config.ts"]
+}
