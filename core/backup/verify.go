@@ -65,18 +65,21 @@ func (s *Svc) Verify(ctx context.Context, id ArchiveID, l VerifyLevel) (VerifyRe
 }
 
 func (s *Svc) verifyArchive(ctx context.Context, path string, id ArchiveID, l VerifyLevel) (VerifyResult, error) {
-	return s.verifyWith(ctx, path, id, l, false)
+	res, _, err := s.verifyWith(ctx, path, id, l, false)
+	return res, err
 }
 
 // verifyWith is verifyArchive with the checksum sidecar optional: skipSum is
-// for a restore of an archive that has none, under AllowWeakVerify.
-func (s *Svc) verifyWith(ctx context.Context, path string, id ArchiveID, l VerifyLevel, skipSum bool) (VerifyResult, error) {
+// for a restore of an archive that has none, under AllowWeakVerify. It also
+// returns the archive file's SHA-256 the passing verification vouched for (see
+// runVerify), "" when it vouched for none.
+func (s *Svc) verifyWith(ctx context.Context, path string, id ArchiveID, l VerifyLevel, skipSum bool) (VerifyResult, string, error) {
 	if l < VerifyChecksum || l > VerifyOpen {
-		return VerifyResult{}, fmt.Errorf("backup: unknown verify level %d", l)
+		return VerifyResult{}, "", fmt.Errorf("backup: unknown verify level %d", l)
 	}
-	err := s.runVerify(ctx, path, l, skipSum)
+	sum, err := s.runVerify(ctx, path, l, skipSum)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrInsufficientSpace) {
-		return VerifyResult{}, err
+		return VerifyResult{}, "", err
 	}
 	res := VerifyResult{At: s.o.now().UTC().Round(0), Level: l, OK: err == nil}
 	if err != nil {
@@ -90,49 +93,60 @@ func (s *Svc) verifyWith(ctx context.Context, path string, id ArchiveID, l Verif
 		s.o.log().Warn("backup: could not record the verification", "archive", id, "error", werr)
 	}
 	s.o.Metrics.Verified(ctx, l, res.OK, res.At)
-	return res, err
+	if err != nil {
+		sum = ""
+	}
+	return res, sum, err
 }
 
-func (s *Svc) runVerify(ctx context.Context, path string, l VerifyLevel, skipSum bool) error {
+// runVerify verifies the archive at path and returns the SHA-256 of the archive
+// file it vouched for: the sidecar-checked digest, or a legacy archive's scan
+// digest (which must equal the sidecar's when both exist). That digest is what
+// binds a legacy-abo/0 restore to the bytes verified, the archive having no MAC
+// and no per-entry digests (StageRestore). It is "" when the verification read
+// no digest: no sidecar, and a level that does not scan.
+func (s *Svc) runVerify(ctx context.Context, path string, l VerifyLevel, skipSum bool) (string, error) {
+	sum := ""
 	if !skipSum {
-		if err := s.checkSum(ctx, path); err != nil {
-			return err
+		var err error
+		if sum, err = s.checkSum(ctx, path); err != nil {
+			return "", err
 		}
 	}
 	if l == VerifyChecksum {
-		return nil
+		return sum, nil
 	}
 	a, err := openArchive(path, s.limits())
 	if err != nil {
 		if !errors.Is(err, ErrManifest) {
-			return err
+			return "", err
 		}
-		return s.verifyLegacy(ctx, path, l, err)
+		return s.verifyLegacy(ctx, path, l, err, sum)
 	}
 	defer s.closeRead("the archive being verified", a)
 	if side, err := readBounded(path+ManifestSidecar, MaxManifestBytes); err == nil && !bytes.Equal(side, a.ManifestBytes) {
-		return fmt.Errorf("%w: the manifest sidecar differs from the archive's manifest", ErrManifest)
+		return "", fmt.Errorf("%w: the manifest sidecar differs from the archive's manifest", ErrManifest)
 	}
 	if l == VerifyEntries {
-		return a.consume(ctx, nil, "")
+		return sum, a.consume(ctx, nil, "")
 	}
 	if s.o.Inspector == nil {
-		return errors.New("backup: verify at the open level needs an Inspector")
+		return "", errors.New("backup: verify at the open level needs an Inspector")
 	}
 	// The open level extracts the store: its declared bytes must fit beside the
 	// database first, and the extractor stops at them.
 	declared, err := declaredBytes(a.Manifest.Entries, dbPrefix+"/")
 	if err != nil {
-		return err
+		return "", err
 	}
 	scratch, cleanup, err := s.scratch(declared)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer cleanup()
 	ex, err := backuparchive.NewExtractor(scratch)
 	if err != nil {
-		return err
+		return "", err
 	}
 	ex.SetBudget(budgetOf(declared))
 	cerr := a.consume(ctx, ex, dbPrefix)
@@ -140,13 +154,13 @@ func (s *Svc) runVerify(ctx context.Context, path string, l VerifyLevel, skipSum
 		cerr = serr
 	}
 	if cerr != nil {
-		return cerr
+		return "", cerr
 	}
 	info, err := s.o.Inspector.Inspect(ctx, scratch)
 	if err != nil {
-		return openRefusal("the archived store does not open", err)
+		return "", openRefusal("the archived store does not open", err)
 	}
-	return matchManifest(a.Manifest, info)
+	return sum, matchManifest(a.Manifest, info)
 }
 
 // matchManifest is VerifyOpen's comparison: the store read from the archive
@@ -182,30 +196,36 @@ func matchManifest(m *Manifest, info StoreInfo) error {
 
 // verifyLegacy verifies a legacy-abo/0 archive: it has no entry hashes, so the
 // entries level is a structural scan (one store directory, safe names, bounded)
-// and the open level extracts the store and opens it.
-func (s *Svc) verifyLegacy(ctx context.Context, path string, l VerifyLevel, why error) error {
+// and the open level extracts the store and opens it. checked is the digest the
+// sidecar check accepted ("" when none ran): the scan must read the same bytes,
+// or the archive changed between the two and backuparchive.ErrChanged refuses
+// it. It returns the scan's digest, the one the verification vouches for.
+func (s *Svc) verifyLegacy(ctx context.Context, path string, l VerifyLevel, why error, checked string) (string, error) {
 	info, err := backuparchive.ScanLegacy(ctx, path, s.limits())
 	if err != nil {
-		return errors.Join(err, why)
+		return "", errors.Join(err, why)
+	}
+	if checked != "" && !strings.EqualFold(info.SHA256, checked) {
+		return "", fmt.Errorf("%w: the scan read other bytes than the checksum check", backuparchive.ErrChanged)
 	}
 	if l == VerifyEntries {
-		return nil
+		return info.SHA256, nil
 	}
 	if s.o.Inspector == nil {
-		return errors.New("backup: verify at the open level needs an Inspector")
+		return "", errors.New("backup: verify at the open level needs an Inspector")
 	}
 	scratch, cleanup, err := s.scratch(uint64(info.Bytes))
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer cleanup()
-	if err := backuparchive.ExtractLegacy(ctx, path, info, scratch, s.limits()); err != nil {
-		return err
+	if _, err := backuparchive.ExtractLegacy(ctx, path, info, scratch, s.limits()); err != nil {
+		return "", err
 	}
 	if _, err := s.o.Inspector.Inspect(ctx, scratch); err != nil {
-		return openRefusal("the archived store does not open", err)
+		return "", openRefusal("the archived store does not open", err)
 	}
-	return nil
+	return info.SHA256, nil
 }
 
 // scratch is a private empty directory on the database's filesystem, for an
@@ -263,35 +283,39 @@ func (s *Svc) sweepScratch(root string) {
 }
 
 // checkSum hashes the archive and compares it with its .sha256 sidecar
-// (sha256sum format: "<hex>  <name>").
-func (s *Svc) checkSum(ctx context.Context, path string) error { return checkSumFile(ctx, path) }
+// (sha256sum format: "<hex>  <name>"). It returns the digest it computed, in
+// lower-case hex, when the two match.
+func (s *Svc) checkSum(ctx context.Context, path string) (string, error) {
+	return checkSumFile(ctx, path)
+}
 
 // checkSumFile is checkSum without a service: the offline extractor has none.
-func checkSumFile(ctx context.Context, path string) error {
+func checkSumFile(ctx context.Context, path string) (string, error) {
 	b, err := readBounded(path+ChecksumSidecar, maxSidecarBytes)
 	if errors.Is(err, os.ErrNotExist) {
-		return ErrNoChecksum
+		return "", ErrNoChecksum
 	}
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrNoChecksum, err)
+		return "", fmt.Errorf("%w: %v", ErrNoChecksum, err)
 	}
 	want, _, _ := strings.Cut(strings.TrimSpace(string(b)), " ")
 	if _, err := hex.DecodeString(want); err != nil || len(want) != 64 {
-		return fmt.Errorf("%w: the sidecar is not a SHA-256", ErrNoChecksum)
+		return "", fmt.Errorf("%w: the sidecar is not a SHA-256", ErrNoChecksum)
 	}
 	f, _, err := backuparchive.OpenRegular(path, 0)
 	if err != nil {
-		return err
+		return "", err
 	}
 	h := sha256.New()
 	_, err = io.Copy(h, ctxReader{ctx, f})
 	if err := errors.Join(err, f.Close()); err != nil {
-		return err
+		return "", err
 	}
-	if !strings.EqualFold(hex.EncodeToString(h.Sum(nil)), want) {
-		return ErrChecksumMismatch
+	got := hex.EncodeToString(h.Sum(nil))
+	if !strings.EqualFold(got, want) {
+		return "", ErrChecksumMismatch
 	}
-	return nil
+	return got, nil
 }
 
 // openRefusal wraps what storage.Open refused. A Breaking step above the build

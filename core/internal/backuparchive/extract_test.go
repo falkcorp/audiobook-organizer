@@ -13,6 +13,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -133,8 +134,18 @@ func TestLegacyScanAndExtract(t *testing.T) {
 				t.Fatalf("info = %+v", info)
 			}
 			store := t.TempDir()
-			if err := backuparchive.ExtractLegacy(context.Background(), p, info, store, backuparchive.Limits{}); err != nil {
+			written, err := backuparchive.ExtractLegacy(context.Background(), p, info, store, backuparchive.Limits{})
+			if err != nil {
 				t.Fatal(err)
+			}
+			// Every file written, named relative to the store, with the size and
+			// digest of its bytes: the anchor a later re-hash of the copy needs.
+			want := []backuparchive.Written{
+				{Name: "000001.sst", Size: 6, SHA256: sum("Alfred")},
+				{Name: "sub/MANIFEST", Size: 6, SHA256: sum("Lucius")},
+			}
+			if !reflect.DeepEqual(written, want) {
+				t.Fatalf("written = %+v, want %+v", written, want)
 			}
 			got, err := os.ReadFile(filepath.Join(store, "sub", "MANIFEST"))
 			if err != nil || string(got) != "Lucius" {
@@ -179,7 +190,7 @@ func TestLegacyExtractRefusesAnArchiveChangedAfterTheScan(t *testing.T) {
 	if err := os.Rename(other, p); err != nil {
 		t.Fatal(err)
 	}
-	if err := backuparchive.ExtractLegacy(context.Background(), p, info, t.TempDir(), backuparchive.Limits{}); !errors.Is(err, backuparchive.ErrChanged) {
+	if _, err := backuparchive.ExtractLegacy(context.Background(), p, info, t.TempDir(), backuparchive.Limits{}); !errors.Is(err, backuparchive.ErrChanged) {
 		t.Fatalf("err = %v, want ErrChanged", err)
 	}
 	// Same size, different bytes: caught by the digest.
@@ -193,7 +204,7 @@ func TestLegacyExtractRefusesAnArchiveChangedAfterTheScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := backuparchive.ExtractLegacy(context.Background(), p, info2, t.TempDir(), backuparchive.Limits{}); !errors.Is(err, backuparchive.ErrChanged) {
+	if _, err := backuparchive.ExtractLegacy(context.Background(), p, info2, t.TempDir(), backuparchive.Limits{}); !errors.Is(err, backuparchive.ErrChanged) {
 		t.Fatalf("same-size swap: err = %v, want ErrChanged", err)
 	}
 }
@@ -208,7 +219,7 @@ func TestLegacyExtractNeedsAnEmptyDirectory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(store, "old"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := backuparchive.ExtractLegacy(context.Background(), p, info, store, backuparchive.Limits{}); err == nil {
+	if _, err := backuparchive.ExtractLegacy(context.Background(), p, info, store, backuparchive.Limits{}); err == nil {
 		t.Fatal("extraction into a non-empty directory")
 	}
 }

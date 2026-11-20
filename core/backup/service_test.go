@@ -74,7 +74,7 @@ func TestRewrapKeepsAFloorProtectedOriginal(t *testing.T) {
 	e.keys.bruceKeys = newBruceKeys("d1", "d1", "d2")
 	e.rebuild()
 	old := e.create("manual")
-	if _, err := e.svc.StageRestore(ctx, old.ID, backup.RestoreOptions{}); err != nil {
+	if _, err := e.svc.StageRestore(asOwner(ctx), old.ID, backup.RestoreOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	e.keys.active = "d2"

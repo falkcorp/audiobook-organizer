@@ -109,16 +109,26 @@ func ScanLegacy(ctx context.Context, archive string, lim Limits) (info LegacyInf
 // Files are 0600 and directories 0700, every file is fsynced, and every
 // directory by the final Sync. The extraction writes at most info.Bytes (the
 // scan's total): the caller checks that figure against the free space first.
-func ExtractLegacy(ctx context.Context, archive string, info LegacyInfo, storeDir string, lim Limits) (err error) {
+//
+// It returns every file it wrote, named relative to storeDir with the size and
+// SHA-256 of the bytes written, in archive order: a legacy archive has no
+// per-entry digests, so these are what a later re-hash of the copy compares
+// against. It returns nil with any error.
+func ExtractLegacy(ctx context.Context, archive string, info LegacyInfo, storeDir string, lim Limits) (written []Written, err error) {
 	lim = lim.withDefaults()
+	defer func() {
+		if err != nil {
+			written = nil
+		}
+	}()
 	if entries, err := os.ReadDir(storeDir); err != nil {
-		return err
+		return nil, err
 	} else if len(entries) > 0 {
-		return fmt.Errorf("backuparchive: extraction directory %s is not empty", storeDir)
+		return nil, fmt.Errorf("backuparchive: extraction directory %s is not empty", storeDir)
 	}
 	ex, err := NewExtractor(storeDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { err = errors.Join(err, ex.Close()) }()
 	// The scan counted info.Bytes and the caller checked that against the free
@@ -127,32 +137,32 @@ func ExtractLegacy(ctx context.Context, archive string, info LegacyInfo, storeDi
 	remaining := info.Bytes
 	f, st, err := OpenRegular(archive, lim.MaxArchiveBytes)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { err = errors.Join(err, f.Close()) }()
 	if st.Size() != info.scanned {
-		return ErrChanged
+		return nil, ErrChanged
 	}
 	h := sha256.New()
 	rd, err := NewReader(io.TeeReader(f, h), lim, true)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { err = errors.Join(err, rd.Close()) }()
 	for {
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil, err
 		}
 		hd, err := rd.Next()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if !hd.Dir {
 			if hd.Size > remaining {
-				return fmt.Errorf("%w: it holds more bytes than the scan counted", ErrChanged)
+				return nil, fmt.Errorf("%w: it holds more bytes than the scan counted", ErrChanged)
 			}
 			remaining -= hd.Size
 		}
@@ -162,24 +172,30 @@ func ExtractLegacy(ctx context.Context, archive string, info LegacyInfo, storeDi
 		case strings.HasPrefix(hd.Name, info.Root+"/"):
 			rel = strings.TrimPrefix(hd.Name, info.Root+"/")
 		default:
-			return fmt.Errorf("%w: %q is outside %q", ErrNotAStore, hd.Name, info.Root)
+			return nil, fmt.Errorf("%w: %q is outside %q", ErrNotAStore, hd.Name, info.Root)
 		}
 		switch {
 		case rel == "": // the root's own directory entry
 		case hd.Dir:
 			err = ex.Mkdir(rel)
 		default:
-			_, err = ex.WriteFile(rel, rd, nil)
+			var w Written
+			if w, err = ex.WriteFile(rel, rd, nil); err == nil {
+				written = append(written, w)
+			}
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if err := rd.Finish(); err != nil {
-		return err
+		return nil, err
 	}
 	if hex.EncodeToString(h.Sum(nil)) != info.SHA256 {
-		return ErrChanged
+		return nil, ErrChanged
 	}
-	return ex.Sync()
+	if err := ex.Sync(); err != nil {
+		return nil, err
+	}
+	return written, nil
 }
