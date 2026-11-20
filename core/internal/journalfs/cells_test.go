@@ -1,5 +1,5 @@
 // file: core/internal/journalfs/cells_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 02bc10f1-4901-4d10-9b06-e5540d68cde6
 // last-edited: 2026-11-19
 
@@ -182,6 +182,13 @@ func TestKill_LocationFileIsNeverTorn(t *testing.T) {
 				default:
 					t.Fatalf("ReadLocation = %+v, %v; want absent, the earlier file or the new one", loc, ok)
 				}
+				if c.Event.Label == bootseamtest.LabelSettled {
+					// WriteLocation returned: the new file is what a crash now finds.
+					if !ok || loc != newer {
+						t.Fatalf("after WriteLocation returned, a crash left %+v, %v; want the new file", loc, ok)
+					}
+					got["settled"]++
+				}
 				if exists(t, e.rec.FS(), stateDir+"/"+journal.LocationFile+".tmp") {
 					got["temp left"]++
 				}
@@ -194,9 +201,9 @@ func TestKill_LocationFileIsNeverTorn(t *testing.T) {
 			})
 		}
 		if replacing {
-			got.require(t, "older", "newer", "temp left")
+			got.require(t, "older", "newer", "temp left", "settled")
 		} else {
-			got.require(t, "absent", "newer", "temp left")
+			got.require(t, "absent", "newer", "temp left", "settled")
 		}
 	}
 }
@@ -249,6 +256,13 @@ func TestKill_MoveFileLeavesTheSourceIntact(t *testing.T) {
 		t.Run(cloneName(c), func(t *testing.T) {
 			e := (&env{t: t, st: st}).after(c)
 			e.intactTo(journalAt, 2)
+			if c.Event.Label == bootseamtest.LabelSettled {
+				// MoveFile returned: the destination is what a crash now finds.
+				if !exists(t, e.rec.FS(), movedTo) {
+					t.Fatal("after MoveFile returned, a crash lost the destination")
+				}
+				got["settled"]++
+			}
 			if exists(t, e.rec.FS(), movedTo) {
 				got["destination"]++
 				e.intactTo(movedTo, 2)
@@ -267,7 +281,7 @@ func TestKill_MoveFileLeavesTheSourceIntact(t *testing.T) {
 			}
 		})
 	}
-	got.require(t, "destination", "no destination", "temp copy left")
+	got.require(t, "destination", "no destination", "temp copy left", "settled")
 }
 
 // TestKill_MoveFileMidCopySourceStillOpens: the crash that matters most, the
