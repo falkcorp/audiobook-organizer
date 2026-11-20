@@ -4,8 +4,14 @@
 // last-edited: 2026-11-20
 
 import '@testing-library/jest-dom/vitest';
-import { cleanup } from '@testing-library/react';
+import { cleanup, configure } from '@testing-library/react';
 import { afterEach } from 'vitest';
+
+// findBy*/waitFor resolve the moment their condition holds, so a longer ceiling
+// costs a passing test nothing. The 1s default timed out the SettingsSection
+// retry test (it waits for a MUI form to mount after a refetch) under CPU
+// contention, on a run recorded in the r1 review of F9-01.
+configure({ asyncUtilTimeout: 5000 });
 
 afterEach(() => {
   cleanup();
