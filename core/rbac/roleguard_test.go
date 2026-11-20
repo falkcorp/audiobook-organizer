@@ -1,5 +1,5 @@
 // file: core/rbac/roleguard_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c3a71d5e-2b84-4f09-9e6a-81d4b0f7a352
 // last-edited: 2026-11-19
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/falkcorp/mediacore/internal/rbacstore"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -313,5 +314,64 @@ func TestDeleteRole_LandsAgainstAFullBurstOfClaimers(t *testing.T) {
 	}
 	if _, err := f.svc.Role(ctx, "custom.lucius"); !errors.Is(err, rbac.ErrUnknownRole) {
 		t.Fatalf("the role is still there after its delete returned nil: %v", err)
+	}
+}
+
+// afterGetStore is the native role store with a hook that runs right after
+// every GetRole: a role write landing between a decision's reads and its
+// commit, in the one place the commit-time Expects of the write itself cannot
+// see it (they are recorded as the write stages its changes, after the reads).
+type afterGetStore struct {
+	*rbacstore.Store
+	after func(rbac.RoleName)
+}
+
+func (h *afterGetStore) GetRole(ctx context.Context, name rbac.RoleName) (*rbac.Role, error) {
+	r, err := h.Store.GetRole(ctx, name)
+	if h.after != nil {
+		h.after(name)
+	}
+	return r, err
+}
+
+// TestDeleteRole_RoleWrittenAfterItsReadsConflictsTheCommit (round 2): a role
+// write that commits after DeleteRole read the role and before it stages its
+// own changes (an import or a seed, which do not take rbac.Service's write
+// lock) must fail the delete's commit, so the delete decides again on the new
+// role set. The generation guard DeleteRole stages before its first read is
+// what does it: the generation the delete's own bump records is read later,
+// after that write, and would pass.
+func TestDeleteRole_RoleWrittenAfterItsReadsConflictsTheCommit(t *testing.T) {
+	ctx := context.Background()
+	f := boot(t, newEnv(t), setup{modules: []module{gotham()}})
+	lucius := f.mustCreate("custom.lucius", "core:self")
+	hs := &afterGetStore{Store: f.store}
+	svc, err := rbac.New(ctx, rbac.Options{Source: "gotham-test"}, rbac.Deps{
+		Store: hs, Compile: f.comp.compile, Audit: f.audit, Revocations: f.journal,
+		NewBatch: f.store.NewBatch, Holders: f.users,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Freeze(ctx); err != nil {
+		t.Fatal(err)
+	}
+	attempts := 0
+	rbac.SetBeforeCommit(svc, func() { attempts++ })
+	wrote := false
+	hs.after = func(name rbac.RoleName) {
+		if name == "custom.lucius" && !wrote {
+			wrote = true
+			f.mustCreate("custom.gordon", "core:self") // through f.svc: its own write lock
+		}
+	}
+	if err := svc.DeleteRole(ctx, f.admin(), "custom.lucius", lucius.Version); err != nil {
+		t.Fatalf("DeleteRole: %v", err)
+	}
+	if !wrote {
+		t.Fatal("the hook never ran: DeleteRole did not read custom.lucius")
+	}
+	if attempts != 2 {
+		t.Fatalf("commit attempts = %d, want 2: the role written after the reads must fail the first commit", attempts)
 	}
 }
