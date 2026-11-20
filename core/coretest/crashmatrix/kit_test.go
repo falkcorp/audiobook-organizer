@@ -465,6 +465,109 @@ func TestInjectableSkipsOnlyWhatPebblePanicsOn(t *testing.T) {
 	}
 }
 
+// TestI2KnowsTheRewriteSwap: M8's KindRewrite swap deletes the old store before
+// its journal says applied (05-storage 5S.3.13 phase 4), so I2 holds the
+// reverse of a restore's rule for it: an applied rewrite journal with a store
+// still opening in previous/ is the breach, and one with none is legal. The
+// restore rule stays whole: the same outcome under a journal that is not a
+// rewrite is still the "only undo is gone" breach, and a rewrite journal does
+// not excuse any other I2 breach (the placed store being the wrong one).
+// readSlot is what tells the two journals apart: it reads the kind from the
+// staged record, which a terminal journal still has.
+func TestI2KnowsTheRewriteSwap(t *testing.T) {
+	const id = "r-rewrite"
+	fr := &fixtureRun{initial: "original", hadStore: true,
+		legal: []outcome{{end: endApplied, endID: id, store: true, rows: "original"}}}
+	i2 := func(o outcome) []string {
+		var out []string
+		for _, v := range fr.violations(o) {
+			if strings.HasPrefix(v, "I2:") {
+				out = append(out, v)
+			}
+		}
+		return out
+	}
+	applied := func(rewrite bool) map[string]journal {
+		return map[string]journal{id: {last: restoreswap.StepApplied, rewrite: rewrite}}
+	}
+	for _, tc := range []struct {
+		name   string
+		o      outcome
+		breach bool
+	}{
+		{"rewrite applied, previous/ deleted", outcome{end: endApplied, endID: id, store: true, rows: "original", journals: applied(true)}, false},
+		{"rewrite applied, the old store still in previous/", outcome{end: endApplied, endID: id, store: true, rows: "original", previous: "original", journals: applied(true)}, true},
+		{"rewrite applied, a half store left in previous/", outcome{end: endApplied, endID: id, store: true, rows: "original", previous: "half", journals: applied(true)}, true},
+		{"rewrite applied, the wrong rows live", outcome{end: endApplied, endID: id, store: true, rows: "other", journals: applied(true)}, true},
+		{"restore applied, previous/ lost (the rewrite rule must not leak)", outcome{end: endApplied, endID: id, store: true, rows: "original", journals: applied(false)}, true},
+		{"restore applied, previous/ holds the original", outcome{end: endApplied, endID: id, store: true, rows: "original", previous: "original", journals: applied(false)}, false},
+	} {
+		got := i2(tc.o)
+		switch {
+		case tc.breach && len(got) == 0:
+			t.Errorf("%s: no I2 breach reported", tc.name)
+		case !tc.breach && len(got) > 0:
+			t.Errorf("%s: legal, and I2 reports %v", tc.name, got)
+		}
+	}
+
+	mem := vfs.NewMem()
+	state := "/gotham/state"
+	for id, first := range map[string]string{"r-m8": `{"step":"staged","note":"rewrite"}`, "r-restore": `{"step":"staged","note":"archive"}`} {
+		dir := restorejournal.JournalDir(state, id)
+		if err := mem.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		f, err := mem.Create(filepath.Join(dir, restorejournal.JournalName), vfs.WriteCategoryUnspecified)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write([]byte(first + "\n" + `{"step":"applied"}` + "\n")); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	journals, _, err := readSlot(mem, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !journals["r-m8"].rewrite || journals["r-restore"].rewrite || journals["r-m8"].last != restoreswap.StepApplied {
+		t.Fatalf("readSlot = %+v, want r-m8 a rewrite journal and r-restore not", journals)
+	}
+}
+
+// TestEndOfAllFoldsRewriteAttempts: M8's rewrite journals are one swap's
+// attempts. A killed attempt that the next boot swapped back, followed by the
+// attempt that applied, is one applied swap; an attempt that applied followed
+// by another journal that ran, or an earlier attempt that never ended, is
+// still a mixed end. The fold is only for KindRewrite: restores keep the one
+// class rule.
+func TestEndOfAllFoldsRewriteAttempts(t *testing.T) {
+	t.Parallel()
+	rw := func(step string) journal { return journal{last: step, rewrite: true} }
+	restore := func(step string) journal { return journal{last: step} }
+	for _, tc := range []struct {
+		name    string
+		js      map[string]journal
+		end, id string
+	}{
+		{"one applied attempt", map[string]journal{"r1": rw(restoreswap.StepApplied)}, endApplied, "r1"},
+		{"swapped back, then applied", map[string]journal{"r1": rw(restoreswap.StepSwappedBack), "r2": rw(restoreswap.StepApplied)}, endApplied, "r2"},
+		{"rejected, then applied", map[string]journal{"r1": rw(restoreswap.StepRejected), "r2": rw(restoreswap.StepApplied)}, endApplied, "r2"},
+		{"swapped back, then killed again", map[string]journal{"r1": rw(restoreswap.StepSwappedBack), "r2": rw(restoreswap.StepStaged)}, endOpen, "r2"},
+		{"applied, then a second rewrite", map[string]journal{"r1": rw(restoreswap.StepApplied), "r2": rw(restoreswap.StepApplied)}, endMixed, ""},
+		{"an earlier attempt never ended", map[string]journal{"r1": rw(restoreswap.StepStaged), "r2": rw(restoreswap.StepApplied)}, endMixed, ""},
+		{"two restores that disagree", map[string]journal{"r1": restore(restoreswap.StepApplied), "r2": restore(restoreswap.StepSwappedBack)}, endMixed, ""},
+		{"a restore and a rewrite that disagree", map[string]journal{"r1": restore(restoreswap.StepApplied), "r2": rw(restoreswap.StepSwappedBack)}, endMixed, ""},
+	} {
+		if end, id := endOfAll(tc.js); end != tc.end || id != tc.id {
+			t.Errorf("%s: endOfAll = (%s, %q), want (%s, %q)", tc.name, end, id, tc.end, tc.id)
+		}
+	}
+}
+
 // TestStateKeyIsTheContent: the nested-kill dedupe's key (stateKey) is equal
 // for two filesystems with the same directories and file bytes however they
 // were built, and differs for any difference in a name, a byte, an empty
