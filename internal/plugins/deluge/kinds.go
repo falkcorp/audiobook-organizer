@@ -358,8 +358,8 @@ func (p *Plugin) pathUpdateNative(d KindDeps, sched func(tasks.Kind) *tasks.Sche
 	// path: the newer move would be lost. A start made while one runs queues
 	// behind it, and reads the path as stored when it runs.
 	c.Dedupe = tasks.DedupePolicy{Key: func(raw json.RawMessage) (string, error) {
-		p, err := decodeNativeParams[pathUpdateCoreParams](pathUpdateKind, raw)
-		return p.BookID, err
+		params, err := decodeNativeParams[pathUpdateCoreParams](pathUpdateKind, raw)
+		return params.BookID, err
 	}}
 	c.Timeout = 1 * time.Minute
 	return tasks.Task(pathUpdateKind, tasks.TaskSpec[json.RawMessage, pathUpdateResult]{
