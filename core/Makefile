@@ -159,10 +159,13 @@ web-lint: web-install
 ## web-test: core/web's npm workspace tests (vitest in every workspace; the
 ## api-client's generated-client coverage check is among them), after npm ci,
 ## then presets.test.mjs, which builds api-client, ui-kit and shell from a clean
-## tree in the 07 §7.3.2 order (FE8-1), and check-singletons' own tests.
+## tree in the 07 §7.3.2 order (FE8-1), and check-singletons' own tests;
+## then hello's web build over those packages and check-singletons over its
+## sourcemaps (07 §7.18 "core/web CI: check-singletons.mjs").
 web-test: web-install
 	cd web && npm test --workspaces --if-present -- --run
 	cd web && npm run test:presets
+	cd web && npm run build -w hello-web && npm run check-singletons
 
 ## hello-web: core/web's packages in the 07 §7.3.2 order, then hello's web
 ## package into examples/hello/web/dist (06 §6.12), and the singleton check
