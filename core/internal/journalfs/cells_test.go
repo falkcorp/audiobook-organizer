@@ -44,9 +44,13 @@ func (e *env) after(c bootseamtest.Clone) *env {
 // rewrite, or a copy fsynced before its rename from one fsynced after. The
 // mixed ones keep each unsynced directory entry and data block with
 // probability one half, which is where a torn file, an entry without its data
-// and a rename that outlived its contents appear. The seeds are fixed, so a
-// run is reproducible; sixteen make a cell that needs one particular draw
-// (an entry kept, its data not) miss it with probability 0.75^16, under 1%.
+// and a rename that outlived its contents appear. The seeds are fixed but a
+// run is not reproducible from them: Pebble's CrashClone draws from the
+// generator while ranging over a directory's children, a Go map, so which
+// entry gets which draw changes from run to run. Sixteen seeds make a cell
+// that needs one particular draw (an entry kept, its data not) miss it with
+// probability 0.75^16, under 1%; a failure in a mixed clone may not recur on a
+// rerun.
 var mixedSeeds = []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 
 // crashRun runs setup and then run over a crashable filesystem that takes a
@@ -64,6 +68,23 @@ func crashRun(t *testing.T, st store, setup, run func(e *env)) (*env, []bootseam
 	skip := len(e.rec.Clones())
 	run(e)
 	return e, append(e.rec.Clones()[skip:], e.rec.Settled())
+}
+
+// isSettled reports whether c is the settled clone (the state after the last
+// operation returned) rather than a kill point inside the call.
+func isSettled(c bootseamtest.Clone) bool { return c.Event.Label == bootseamtest.LabelSettled }
+
+// killPoints is the number of clones in cs that are crashes inside the call:
+// the settled clone is always there and says nothing about how many durable
+// steps the call took, so a guard on how many it took must not count it.
+func killPoints(cs []bootseamtest.Clone) int {
+	n := 0
+	for _, c := range cs {
+		if !isSettled(c) {
+			n++
+		}
+	}
+	return n
 }
 
 // cloneName is a subtest name for c: the operation it precedes, and which
@@ -162,8 +183,8 @@ func TestKill_LocationFileIsNeverTorn(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
-		if len(clones) < 4*(1+len(mixedSeeds)) {
-			t.Fatalf("WriteLocation (replacing=%v) took %d crash states, want at least %d", replacing, len(clones), 4*(1+len(mixedSeeds)))
+		if killPoints(clones) < 4*(1+len(mixedSeeds)) {
+			t.Fatalf("WriteLocation (replacing=%v) took %d crash states, want at least %d", replacing, killPoints(clones), 4*(1+len(mixedSeeds)))
 		}
 		for _, c := range clones {
 			t.Run(fmt.Sprintf("replacing=%v/%s", replacing, cloneName(c)), func(t *testing.T) {
@@ -174,7 +195,9 @@ func TestKill_LocationFileIsNeverTorn(t *testing.T) {
 				}
 				switch {
 				case ok && loc == newer:
-					got["newer"]++
+					if !isSettled(c) {
+						got["newer"]++ // the settled clone always holds it: it proves nothing about a crash inside the call
+					}
 				case ok && replacing && loc == older:
 					got["older"]++
 				case !ok && !replacing:
@@ -182,7 +205,7 @@ func TestKill_LocationFileIsNeverTorn(t *testing.T) {
 				default:
 					t.Fatalf("ReadLocation = %+v, %v; want absent, the earlier file or the new one", loc, ok)
 				}
-				if c.Event.Label == bootseamtest.LabelSettled {
+				if isSettled(c) {
 					// WriteLocation returned: the new file is what a crash now finds.
 					if !ok || loc != newer {
 						t.Fatalf("after WriteLocation returned, a crash left %+v, %v; want the new file", loc, ok)
@@ -249,27 +272,31 @@ func TestKill_MoveFileLeavesTheSourceIntact(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	if len(clones) < 4*(1+len(mixedSeeds)) {
-		t.Fatalf("MoveFile took %d crash states, want at least %d", len(clones), 4*(1+len(mixedSeeds)))
+	if killPoints(clones) < 4*(1+len(mixedSeeds)) {
+		t.Fatalf("MoveFile took %d crash states, want at least %d", killPoints(clones), 4*(1+len(mixedSeeds)))
 	}
 	for _, c := range clones {
 		t.Run(cloneName(c), func(t *testing.T) {
 			e := (&env{t: t, st: st}).after(c)
 			e.intactTo(journalAt, 2)
-			if c.Event.Label == bootseamtest.LabelSettled {
+			dest := exists(t, e.rec.FS(), movedTo)
+			switch {
+			case isSettled(c):
 				// MoveFile returned: the destination is what a crash now finds.
-				if !exists(t, e.rec.FS(), movedTo) {
+				// The clone is not counted in the arms below: it always holds it.
+				if !dest {
 					t.Fatal("after MoveFile returned, a crash lost the destination")
 				}
 				got["settled"]++
-			}
-			if exists(t, e.rec.FS(), movedTo) {
+			case dest:
 				got["destination"]++
-				e.intactTo(movedTo, 2)
-			} else {
+			default:
 				got["no destination"]++
 			}
-			if exists(t, e.rec.FS(), movedTo+".moving") {
+			if dest {
+				e.intactTo(movedTo, 2)
+			}
+			if !isSettled(c) && exists(t, e.rec.FS(), movedTo+".moving") {
 				got["temp copy left"]++
 			}
 			if err := journal.MoveFile(journalAt, movedTo, keys{}, journal.WithFS(e.fsys)); err != nil {
@@ -328,9 +355,13 @@ func TestKill_MoveFileMidCopySourceStillOpens(t *testing.T) {
 	got.require(t, "copy entry kept", "no copy")
 }
 
-// TestKill_AppendNeverLosesAnAcknowledgedLine: a crash before any single
-// durable step of an Append leaves a journal that OpenFile opens, holding
-// every line acknowledged before it (seq 2) and at most the line in flight.
+// TestKill_AppendNeverLosesAnAcknowledgedLine: a crash before the durable step
+// of an Append (its fsync) leaves a journal that OpenFile opens, holding every
+// line acknowledged before it (seq 2) and the line in flight or not; and a
+// crash just after Append returned, the settled clone, holds the line it
+// acknowledged (seq 3). The cell fails unless the Append took its kill point
+// (a call with no fsync takes none) and both a lost and a kept line were
+// reached inside it.
 func TestKill_AppendNeverLosesAnAcknowledgedLine(t *testing.T) {
 	st := newStore(t)
 	_, clones := crashRun(t, st, func(e *env) { primed(e); e.holdOpen(journalAt) }, func(e *env) {
@@ -338,12 +369,29 @@ func TestKill_AppendNeverLosesAnAcknowledgedLine(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	if len(clones) == 0 {
-		t.Fatal("Append took no kill point")
+	if killPoints(clones) < 1+len(mixedSeeds) {
+		t.Fatalf("Append took %d crash states, want at least %d (its fsync is the kill point)", killPoints(clones), 1+len(mixedSeeds))
 	}
+	got := reached{}
 	for _, c := range clones {
-		t.Run(c.Event.Label+"/"+kindName(c.Event.Kind), func(t *testing.T) {
+		t.Run(cloneName(c), func(t *testing.T) {
 			e := (&env{t: t, st: st}).after(c)
+			cs, err := journal.ReadFile(journalAt, keys{}, journal.WithFS(e.fsys))
+			if err != nil || cs.Break != nil || cs.IntactEnd() < 2 || cs.IntactEnd() > 3 {
+				t.Fatalf("chain = %+v, %v; want intact to seq 2 or 3", cs, err)
+			}
+			switch {
+			case isSettled(c):
+				// Append returned: its line is durable.
+				if cs.IntactEnd() != 3 {
+					t.Fatalf("after Append returned, a crash left the chain at seq %d; want 3, the line it acknowledged", cs.IntactEnd())
+				}
+				got["settled"]++
+			case cs.IntactEnd() == 2:
+				got["line lost"]++
+			default:
+				got["line kept"]++
+			}
 			j, err := e.open(journalAt)
 			if err != nil {
 				t.Fatalf("OpenFile after a crash before %s: %v", c.Event.Label, err)
@@ -351,12 +399,9 @@ func TestKill_AppendNeverLosesAnAcknowledgedLine(t *testing.T) {
 			if err := j.Close(); err != nil {
 				t.Fatal(err)
 			}
-			cs, err := journal.ReadFile(journalAt, keys{}, journal.WithFS(e.fsys))
-			if err != nil || cs.Break != nil || cs.IntactEnd() < 2 || cs.IntactEnd() > 3 {
-				t.Fatalf("chain = %+v, %v; want intact to seq 2 or 3", cs, err)
-			}
 		})
 	}
+	got.require(t, "line lost", "line kept", "settled")
 }
 
 // TestKill_FirstOpenRecovers: a crash before any single durable step of the
@@ -364,7 +409,11 @@ func TestKill_AppendNeverLosesAnAcknowledgedLine(t *testing.T) {
 // or just after it, leaves either no journal or one the next OpenFile accepts
 // and appends to. The unsynced append may have survived (a mixed clone) or
 // not, so the chain after the next append is at seq 1 or 2; the cell fails
-// unless both were reached (and the journal started with no header too).
+// unless both were reached (and the journal started with no header too). A
+// crash just after the open and its append returned, the settled clone, holds
+// the journal with the line the append acknowledged (seq 1): the directory
+// fsync made the file's name durable. The settled clone is not counted in the
+// arms: it always holds the journal.
 func TestKill_FirstOpenRecovers(t *testing.T) {
 	st := newStore(t)
 	_, clones := crashRun(t, st, nil, func(e *env) {
@@ -373,14 +422,21 @@ func TestKill_FirstOpenRecovers(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	if len(clones) < 3*(1+len(mixedSeeds)) {
-		t.Fatalf("the first open took %d crash states, want at least %d", len(clones), 3*(1+len(mixedSeeds)))
+	if killPoints(clones) < 4*(1+len(mixedSeeds)) {
+		t.Fatalf("the first open took %d crash states, want at least %d", killPoints(clones), 4*(1+len(mixedSeeds)))
 	}
 	got := reached{}
 	for _, c := range clones {
 		t.Run(cloneName(c), func(t *testing.T) {
 			e := (&env{t: t, st: st}).after(c)
-			if !exists(t, e.rec.FS(), journalAt) {
+			switch {
+			case isSettled(c):
+				cs, err := journal.ReadFile(journalAt, keys{}, journal.WithFS(e.fsys))
+				if err != nil || cs.Break != nil || cs.IntactEnd() != 1 {
+					t.Fatalf("after the first open and its append returned, a crash left %+v, %v; want a journal intact to seq 1", cs, err)
+				}
+				got["settled"]++
+			case !exists(t, e.rec.FS(), journalAt):
 				got["no journal"]++
 			}
 			j, err := e.open(journalAt)
@@ -393,15 +449,16 @@ func TestKill_FirstOpenRecovers(t *testing.T) {
 			if err := j.Close(); err != nil {
 				t.Fatal(err)
 			}
-			switch e.intactToOneOf(journalAt, 1, 2) {
-			case 1:
+			switch end := e.intactToOneOf(journalAt, 1, 2); {
+			case isSettled(c):
+			case end == 1:
 				got["append lost"]++
-			case 2:
+			default:
 				got["append kept"]++
 			}
 		})
 	}
-	got.require(t, "no journal", "append lost", "append kept")
+	got.require(t, "no journal", "append lost", "append kept", "settled")
 }
 
 // TestKill_CutOfATornTailIsAtomic: the cut of an incomplete last line is a
@@ -418,8 +475,8 @@ func TestKill_CutOfATornTailIsAtomic(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	if len(clones) < 4*(1+len(mixedSeeds)) {
-		t.Fatalf("the cut took %d crash states, want at least %d", len(clones), 4*(1+len(mixedSeeds)))
+	if killPoints(clones) < 4*(1+len(mixedSeeds)) {
+		t.Fatalf("the cut took %d crash states, want at least %d", killPoints(clones), 4*(1+len(mixedSeeds)))
 	}
 	got := reached{}
 	for _, c := range clones {
