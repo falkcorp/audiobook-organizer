@@ -314,14 +314,17 @@ func TestBackupTaskExclusive(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { _, err := e.svc.Create(ctx, backup.CreateOptions{}); done <- err }()
 	<-entered
+	// Stage and Revert carry the owner proof, so what refuses them is the held
+	// resource and not the restore gate (which runs first).
+	octx := asOwner(ctx)
 	refused := map[string]error{
 		"Create": func() error { _, err := e.svc.Create(ctx, backup.CreateOptions{}); return err }(),
 		"Prune":  e.svc.Prune(ctx),
 		"Delete": e.svc.Delete(ctx, first.ID),
 		"Cancel": e.svc.CancelRestore(ctx),
-		"Stage":  func() error { _, err := e.svc.StageRestore(asOwner(ctx), first.ID, backup.RestoreOptions{}); return err }(),
+		"Stage":  func() error { _, err := e.svc.StageRestore(octx, first.ID, backup.RestoreOptions{}); return err }(),
 		"Rewrap": func() error { _, err := e.svc.Rewrap(ctx, first.ID); return err }(),
-		"Revert": func() error { _, err := e.svc.RevertLastRestore(asOwner(ctx), backup.RestoreOptions{}); return err }(),
+		"Revert": func() error { _, err := e.svc.RevertLastRestore(octx, backup.RestoreOptions{}); return err }(),
 	}
 	for name, err := range refused {
 		if !errors.Is(err, backup.ErrBackupInProgress) {
