@@ -33,7 +33,11 @@ makefile-local
     back, and no `.prev` binary either. `make rollback` and `make
     rollback-restore` refuse then; this refuses earlier, before the deploy
     that cannot be undone. Makefile.local.example's recipes are the model.
-    DEPLOY_ALLOW_NO_ROLLBACK=1 deploys anyway, with a warning.
+    DEPLOY_ALLOW_NO_ROLLBACK=1 deploys anyway, with a warning that says
+    which release a rollback then goes back to, EXCEPT when the list says
+    `enforced: true`: the build that carries the flip cannot be deployed
+    without rollback state (the previous release reads names it retires), so
+    the override is refused there.
 
 Usage:
     python3 scripts/deploy_env_check.py [retired|makefile-local ...]
@@ -212,7 +216,17 @@ def recipes(makefile: str) -> dict[str, tuple[list[str], str]]:
     return out
 
 
-def check_makefile_local(path: Path, environ: dict[str, str]) -> int:
+def list_enforced(list_path: Path) -> tuple[bool, str]:
+    """(whether the retired-name list says `enforced: true`, why it is unknown).
+    A list that cannot be read counts as enforced: the override that skips the
+    rollback state must not be honoured on a build whose state is unknown."""
+    try:
+        return parse_list(list_path.read_text(encoding="utf-8"))[0], ""
+    except (OSError, ValueError) as e:
+        return True, f"{list_path} is unusable ({e})"
+
+
+def check_makefile_local(path: Path, environ: dict[str, str], list_path: Path = LIST_PATH) -> int:
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -248,21 +262,42 @@ def check_makefile_local(path: Path, environ: dict[str, str]) -> int:
         print(f"deploy-env-check: {path}'s deploy recipes go through the install-staged helper.")
         return 0
     detail = "\n".join(f"  {p}" for p in problems)
+    owner_step = (
+        "Install the helper bundle on the host FIRST (once, as the owner: `make install-rollback-helpers`, "
+        'docs/system/deploy-and-gpu-ops.md, "Rollback helpers"), THEN replace this file\'s deploy and '
+        "deploy-debug recipes with Makefile.local.example's: they install the binary, the unit and "
+        "local.conf through the root-owned install-staged helper, which keeps the previous ones. A "
+        "recipe that calls the helper before it is installed fails at its first step."
+    )
     if environ.get(OVERRIDE, "").strip() == "1":
+        enforced, why = list_enforced(list_path)
+        if enforced:
+            reason = (
+                why
+                or f"{list_path.name} says `enforced: true`: this is the build that carries the flip"
+            )
+            print(
+                f"deploy-env-check: REFUSING: {OVERRIDE}=1 is not honoured for this build ({reason}). "
+                "The flip cannot be undone with the binary alone: the previous release reads "
+                "environment names this one retires, so a deploy that keeps no rollback state strands "
+                f"it. {path} keeps no rollback state:\n{detail}\n{owner_step} "
+                "Nothing was uploaded or installed.",
+                file=sys.stderr,
+            )
+            return 1
         print(
             f"deploy-env-check: WARNING: {OVERRIDE}=1: deploying although {path} keeps no rollback "
-            f"state:\n{detail}\n  `make rollback` will refuse after this deploy.",
+            f"state:\n{detail}\n  This deploy keeps neither the binary it replaces nor that binary's unit "
+            "and local.conf. If an earlier deploy went through the helper, `make rollback` after this "
+            "one goes back to THAT release (the one kept beside <bin>.prev then), skipping the release "
+            "this deploy replaces; if none did, `make rollback` refuses.",
             file=sys.stderr,
         )
         return 0
     print(
         f"deploy-env-check: REFUSING: {path} keeps no rollback state, so a rollback after this deploy "
-        f"would put back the binary alone (or nothing):\n{detail}\n"
-        "Replace its deploy and deploy-debug recipes with Makefile.local.example's: they install the "
-        "binary, the unit and local.conf through the root-owned install-staged helper, which keeps "
-        "the previous ones beside <bin>.prev. The helper bundle is installed once as root "
-        '(docs/system/deploy-and-gpu-ops.md, "Rollback helpers"). Nothing was uploaded or installed. '
-        f"To deploy anyway: {OVERRIDE}=1 make deploy.",
+        f"would put back the binary alone (or nothing):\n{detail}\n{owner_step} Nothing was uploaded "
+        f"or installed. To deploy anyway, while the list says `enforced: false`: {OVERRIDE}=1 make deploy.",
         file=sys.stderr,
     )
     return 1
@@ -302,7 +337,7 @@ def main(argv: list[str] | None = None, environ: dict[str, str] | None = None) -
     if "retired" in todo:
         worst = max(worst, check_retired(Path(a.local_conf), Path(a.list)))
     if "makefile-local" in todo:
-        worst = max(worst, check_makefile_local(Path(a.makefile_local), dict(env)))
+        worst = max(worst, check_makefile_local(Path(a.makefile_local), dict(env), Path(a.list)))
     return worst
 
 

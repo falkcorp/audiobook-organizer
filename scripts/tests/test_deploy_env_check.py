@@ -156,9 +156,14 @@ class Retired(Tmp):
 
 
 class MakefileLocal(Tmp):
-    def check(self, text, environ=None):
+    def check(self, text, environ=None, lst=LIST_REPORTING):
+        """The list is pinned (not the repo's) so these tests do not change
+        when the flip's wiring flips the real marker."""
         m = self.write("Makefile.local", text)
-        return run(["makefile-local", "--makefile-local", str(m)], environ)
+        args = ["makefile-local", "--makefile-local", str(m)]
+        if lst is not None:
+            args += ["--list", str(self.write("retired.txt", lst))]
+        return run(args, environ)
 
     def test_the_example_passes(self):
         rc, out, err = self.check(EXAMPLE)
@@ -171,13 +176,62 @@ class MakefileLocal(Tmp):
         self.assertIn("install-staged binary", err)
         self.assertIn("Makefile.local.example", err)
         self.assertIn("DEPLOY_ALLOW_NO_ROLLBACK=1", err)
-        self.assertNotIn("sudo systemctl", err.split("Replace")[1])  # no command is handed over
+        self.assertNotIn("sudo systemctl", err)  # no root command is handed over
 
-    def test_the_override_deploys_with_a_warning(self):
+    def test_the_owner_steps_are_in_order_helper_bundle_first(self):
+        """Syncing Makefile.local first makes its first step call a helper
+        that is not there: the helper bundle goes in first."""
+        rc, _, err = self.check(SUDO_MV_MAKEFILE)
+        self.assertEqual(rc, 1)
+        self.assertIn("make install-rollback-helpers", err)
+        self.assertLess(err.index("FIRST"), err.index("THEN"))
+        self.assertLess(err.index("make install-rollback-helpers"), err.index("THEN"))
+        self.assertLess(err.index("THEN"), err.index("Makefile.local.example"))
+
+    def test_the_override_deploys_with_a_warning_that_names_the_release_rollback_reaches(self):
         rc, _, err = self.check(SUDO_MV_MAKEFILE, {"DEPLOY_ALLOW_NO_ROLLBACK": "1"})
         self.assertEqual(rc, 0)
         self.assertIn("WARNING", err)
-        self.assertIn("rollback` will refuse", err)
+        # Not "rollback will refuse": with an older helper deploy's pair kept,
+        # it goes back to THAT release, skipping the one this deploy replaces.
+        self.assertNotIn("will refuse after this deploy", err)
+        self.assertIn("goes back to THAT release", err)
+        self.assertIn("skipping the release this deploy replaces", err)
+        self.assertIn("if none did, `make rollback` refuses", err)
+
+    def test_the_override_is_refused_on_the_build_that_carries_the_flip(self):
+        """enforced: true is the flip build, which the previous release cannot
+        run under the new environment: the override would strand it."""
+        rc, out, err = self.check(
+            SUDO_MV_MAKEFILE, {"DEPLOY_ALLOW_NO_ROLLBACK": "1"}, lst=LIST_ENFORCED
+        )
+        self.assertEqual(rc, 1)
+        self.assertIn("is not honoured for this build", err)
+        self.assertIn("enforced: true", err)
+        self.assertIn("make install-rollback-helpers", err)
+        self.assertNotIn("WARNING", err)
+        self.assertNotIn("deploying although", out + err)
+
+    def test_the_override_is_refused_when_the_list_is_malformed(self):
+        rc, _, err = self.check(
+            SUDO_MV_MAKEFILE, {"DEPLOY_ALLOW_NO_ROLLBACK": "1"}, "# enforced: maybe\n"
+        )
+        self.assertEqual(rc, 1, err)
+        self.assertIn("is not honoured for this build", err)
+        self.assertIn("unusable", err)
+
+    def test_the_override_is_refused_when_the_list_file_is_absent(self):
+        m = self.write("Makefile.local", SUDO_MV_MAKEFILE)
+        rc, _, err = run(
+            ["makefile-local", "--makefile-local", str(m), "--list", str(self.dir / "nope.txt")],
+            {"DEPLOY_ALLOW_NO_ROLLBACK": "1"},
+        )
+        self.assertEqual(rc, 1)
+        self.assertIn("is not honoured for this build", err)
+
+    def test_a_compliant_makefile_passes_on_the_flip_build_without_the_override(self):
+        rc, _, err = self.check(EXAMPLE, lst=LIST_ENFORCED)
+        self.assertEqual(rc, 0, err)
 
     def test_any_other_override_value_does_not_count(self):
         rc, _, _ = self.check(SUDO_MV_MAKEFILE, {"DEPLOY_ALLOW_NO_ROLLBACK": "yes"})
