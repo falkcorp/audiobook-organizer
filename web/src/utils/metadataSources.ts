@@ -1,5 +1,5 @@
 // file: web/src/utils/metadataSources.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a4e6d12-5b73-4c08-a1f9-3e7d0b2c8a64
 // last-edited: 2026-11-19
 
@@ -28,6 +28,15 @@ export interface UiMetadataSource {
   /** Saved credentials the user staged for deletion on the next save. */
   clearCredentials: string[];
   /**
+   * What the server served for the two fields the page derives, so a save with
+   * nothing touched reproduces the served list exactly: `requires_auth` as
+   * stored (the page forces it true for API-key sources), and whether a
+   * `credentials` object was served at all (the server leaves it out when a
+   * source has none).
+   */
+  servedRequiresAuth: boolean;
+  servedCredentials: boolean;
+  /**
    * Fields of the source the page has no control for (base_url, rate_limit ...),
    * sent back unchanged: a save names the whole list, so dropping them here
    * would erase them on the server.
@@ -52,6 +61,8 @@ const source = (
   enabled,
   priority,
   requiresAuth,
+  servedRequiresAuth: requiresAuth,
+  servedCredentials: false,
   credentials: {},
   savedCredentials: [],
   clearCredentials: [],
@@ -78,6 +89,8 @@ export function uiSourcesFromConfig(sources: api.MetadataSource[] | undefined): 
     // Sources that need an API key stay marked so, even when the stored entry
     // says requires_auth: false.
     requiresAuth: s.requires_auth || AUTH_SOURCES.includes(s.id),
+    servedRequiresAuth: s.requires_auth,
+    servedCredentials: s.credentials != null,
     credentials: {},
     savedCredentials: Object.keys(s.credentials ?? {}),
     clearCredentials: [],
@@ -102,8 +115,9 @@ export function sourcesPayload(sources: UiMetadataSource[]): api.MetadataSourceW
       name: s.name,
       enabled: s.enabled,
       priority: s.priority,
-      requires_auth: s.requiresAuth,
-      credentials,
+      requires_auth: s.servedRequiresAuth,
+      // Left out when there is nothing to say, as the server serves it.
+      ...(Object.keys(credentials).length > 0 || s.servedCredentials ? { credentials } : {}),
     };
   });
 }

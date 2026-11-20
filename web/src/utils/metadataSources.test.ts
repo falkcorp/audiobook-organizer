@@ -1,5 +1,5 @@
 // file: web/src/utils/metadataSources.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3d8b5f27-6a41-4e90-b2c8-7f1a9d4e0c53
 // last-edited: 2026-11-19
 
@@ -24,13 +24,21 @@ const served: api.MetadataSource[] = [
     base_url: 'https://books.mirror.example.test',
     rate_limit: { tier: 'low' },
   } as unknown as api.MetadataSource,
+  // A source with no credentials is served without the key at all.
   {
     id: 'audible',
     name: 'Audible',
     enabled: true,
     priority: 2,
     requires_auth: false,
-    credentials: {},
+  },
+  // An API-key source whose stored entry says requires_auth: false.
+  {
+    id: 'hardcover',
+    name: 'Hardcover',
+    enabled: false,
+    priority: 3,
+    requires_auth: false,
   },
 ];
 
@@ -82,6 +90,16 @@ describe('sourcesPayload', () => {
   it('sends an untouched list exactly as served, so a save of it changes nothing', () => {
     const payload = sourcesPayload(uiSourcesFromConfig(served));
     expect(payload).toEqual(served);
+    // Not just equal under toEqual: no invented credentials key, and the stored
+    // requires_auth survives the page forcing it on for display.
+    expect(payload[1]).not.toHaveProperty('credentials');
+    expect(payload[2].requires_auth).toBe(false);
+    expect(uiSourcesFromConfig(served)[2].requiresAuth).toBe(true);
+  });
+
+  it('keeps an explicitly served empty credentials object', () => {
+    const withEmpty = [{ ...served[1], credentials: {} }];
+    expect(sourcesPayload(uiSourcesFromConfig(withEmpty))).toEqual(withEmpty);
   });
 
   it('replaces a saved credential with the typed one', () => {
@@ -106,6 +124,6 @@ describe('sourcesPayload', () => {
   it('never invents a credential for a field the user left blank', () => {
     const ui = uiSourcesFromConfig(served);
     ui[1].credentials = { apiKey: '' };
-    expect(sourcesPayload(ui)[1].credentials).toEqual({});
+    expect(sourcesPayload(ui)[1]).not.toHaveProperty('credentials');
   });
 });

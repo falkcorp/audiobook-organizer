@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.213.0
+// version: 2.214.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-11-19
 
@@ -872,7 +872,8 @@ export interface MetadataSource {
   enabled: boolean;
   priority: number;
   requires_auth: boolean;
-  credentials: {
+  /** Served with blank values (a key means one is saved); left out when a source has none. */
+  credentials?: {
     [key: string]: string;
   };
 }
@@ -883,7 +884,7 @@ export interface MetadataSource {
  * deletes it.
  */
 export type MetadataSourceWrite = Omit<MetadataSource, 'credentials'> & {
-  credentials: { [key: string]: string | null };
+  credentials?: { [key: string]: string | null };
 };
 
 export interface EmbeddingConfig {

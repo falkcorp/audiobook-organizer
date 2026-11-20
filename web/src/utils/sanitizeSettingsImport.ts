@@ -1,5 +1,5 @@
 // file: web/src/utils/sanitizeSettingsImport.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3f6b1c2e-8d4a-4e7f-9a51-c2d0b7e4f813
 // last-edited: 2026-11-19
 
@@ -117,14 +117,24 @@ export const sanitizeSettingsImportWithReport = (
             src.priority = typeof (s as any).priority === 'number' ? (s as any).priority : 0;
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             src.requires_auth = Boolean((s as any).requires_auth ?? (s as any).requiresAuth);
+            // The fields the page has no control for ride along: a save names the
+            // whole list, so leaving them out would erase them on the server.
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            if (typeof (s as any).base_url === 'string') src.base_url = (s as any).base_url;
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const rl = (s as any).rate_limit;
+            if (rl && typeof rl === 'object' && !Array.isArray(rl)) src.rate_limit = rl;
             src.credentials = {};
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             if ((s as any).credentials && typeof (s as any).credentials === 'object') {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               for (const [ck, cv] of Object.entries((s as any).credentials)) {
-                if (typeof cv !== 'string') continue;
-                // Which credential fields are secrets is the server's call, and
-                // a file may carry a secret in any of them: none is imported.
+                // An exported file carries the keys with blank values; only a
+                // value that was actually in the file is worth reporting.
+                if (typeof cv !== 'string' || cv === '') continue;
+                // Every credential field of a source is a secret in the secret
+                // store, and a file may carry one in any of them: none is imported.
+                // An empty credentials map leaves the saved ones as they are.
                 skipped.push(`metadata_sources[${src.id ?? '?'}].credentials.${ck}`);
               }
             }
