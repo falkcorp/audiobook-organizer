@@ -114,7 +114,7 @@ func committedEmbedOutputs(dir string) ([]string, error) {
 		return nil, fmt.Errorf("%w: %v", errLoad, err)
 	}
 	var out []string
-	for _, line := range strings.Split(string(b), "\n") {
+	for line := range strings.SplitSeq(string(b), "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" && !strings.HasPrefix(line, "#") {
 			out = append(out, line)

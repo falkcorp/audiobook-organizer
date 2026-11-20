@@ -71,7 +71,7 @@ func TestHandler_IndexNoStore(t *testing.T) {
 			next.ServeHTTP(w, r)
 		})
 	}
-	h := Handler(mustBundle(t), Options{AppOptions: AppOptions{PageMiddleware: mw}})
+	h := Handler(mustBundle(t), Options{PageMiddleware: mw})
 	index := indexHTML("a1b2c3d-1767225600", "batcave", "batcave.shell.themeMode dark")
 	for i, p := range []string{"/", "/index.html", "/hello/greeting", "/settings/hello", "/users"} {
 		rec := do(h, http.MethodGet, p)
@@ -109,12 +109,11 @@ func TestHandler_CSPPolicyVerbatim(t *testing.T) {
 	if got := do(h, http.MethodGet, "/").Header().Get("Content-Security-Policy"); got != wantPolicy() {
 		t.Fatalf("default CSP =\n%q\nwant\n%q", got, wantPolicy())
 	}
-	h = Handler(mustBundle(t), Options{AppOptions: AppOptions{
+	h = Handler(mustBundle(t), Options{
 		ConnectSrcFrom: func() []string {
 			return []string{"HTTPS://Gotham.CloudflareAccess.com/", "gotham.cloudflareaccess.com", "evil.example.test; script-src *", "*.wayne.test", "localhost", ""}
 		},
-		ExtraDirectives: []string{"worker-src 'self' blob:", "upgrade-insecure-requests; script-src *", "  ", "frame-src 'none'"},
-	}})
+		ExtraDirectives: []string{"worker-src 'self' blob:", "upgrade-insecure-requests; script-src *", "  ", "frame-src 'none'"}})
 	want := wantPolicy("gotham.cloudflareaccess.com") + "; worker-src 'self' blob:; frame-src 'none'"
 	if got := do(h, http.MethodGet, "/").Header().Get("Content-Security-Policy"); got != want {
 		t.Fatalf("extended CSP =\n%q\nwant\n%q", got, want)
@@ -151,12 +150,12 @@ func uiConfig(t *testing.T) (*config.Store, *config.Handle[Settings]) {
 func TestHandler_CSPHotSwap(t *testing.T) {
 	st, cfg := uiConfig(t)
 	var team atomic.Pointer[string]
-	h := Handler(mustBundle(t), Options{Config: cfg, AppOptions: AppOptions{ConnectSrcFrom: func() []string {
+	h := Handler(mustBundle(t), Options{Config: cfg, ConnectSrcFrom: func() []string {
 		if p := team.Load(); p != nil {
 			return []string{*p}
 		}
 		return nil
-	}}})
+	}})
 	if got := do(h, http.MethodGet, "/").Header().Get("Content-Security-Policy"); got != wantPolicy() {
 		t.Fatalf("before = %q", got)
 	}
@@ -309,7 +308,7 @@ func TestHandler_NonGETRefused(t *testing.T) {
 	mw := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { ran.Store(true); next.ServeHTTP(w, r) })
 	}
-	h := Handler(mustBundle(t), Options{AppOptions: AppOptions{PageMiddleware: mw}})
+	h := Handler(mustBundle(t), Options{PageMiddleware: mw})
 	for _, m := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions, "BATARANG"} {
 		for _, p := range []string{"/", "/assets/index-Bat1.js", "/hello/greeting"} {
 			rec := do(h, m, p)
@@ -350,7 +349,7 @@ func TestHandler_PageMiddlewareOnlyOnIndex(t *testing.T) {
 			next.ServeHTTP(w, r)
 		})
 	}
-	h := Handler(mustBundle(t), Options{NonSPA: probes, AppOptions: AppOptions{PageMiddleware: mw}})
+	h := Handler(mustBundle(t), Options{NonSPA: probes, PageMiddleware: mw})
 	for _, p := range []string{"/assets/index-Bat1.js", "/favicon.svg", "/assets/gone.js", "/api/batcave", "/x.png", "/", "/index.html", "/system/status"} {
 		do(h, http.MethodGet, p)
 	}
@@ -365,7 +364,7 @@ func TestHandler_PageMiddlewareOnlyOnIndex(t *testing.T) {
 			http.Redirect(w, r, "/cdn-cgi/access/login", http.StatusFound)
 		})
 	}
-	rec := do(Handler(mustBundle(t), Options{AppOptions: AppOptions{PageMiddleware: redirect}}), http.MethodGet, "/")
+	rec := do(Handler(mustBundle(t), Options{PageMiddleware: redirect}), http.MethodGet, "/")
 	if rec.Code != http.StatusFound || strings.Contains(rec.Body.String(), "mediacore-build") {
 		t.Fatalf("redirecting middleware: %d %q", rec.Code, rec.Body.String())
 	}
