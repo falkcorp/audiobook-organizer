@@ -84,8 +84,14 @@ export interface PendingRestore {
  * The restore body (restoreRequest). `verify` defaults to "open" on the server.
  * `foreign` needs core:admin as well as the restore scope (403 otherwise).
  * `restart` asks the service to restart once the restore is staged (the drain that
- * broadcasts the shutdown frame to every connected page); without it the caller owes
- * the restart, which `restart_required` reports.
+ * broadcasts the shutdown frame to every connected page). The answer always carries
+ * restart_required: true (core/internal/backuphttp/routes.go): the swap happens at the
+ * next start whether or not `restart` was asked.
+ *
+ * `restart` is a NO-OP until the kernel wires backup.Options.Restart: today the server
+ * stages and leaves the restart to the operator. Defaulting to no restart is an F8-04a
+ * flip obligation: HEAD's restoreBackup always restarted, so the flip must pass
+ * `restart: true` wherever the old behaviour is wanted.
  */
 export interface BackupRestoreRequest {
   verify?: BackupVerifyLevel;
@@ -127,6 +133,12 @@ export const BACKUP_REFUSAL_CODES = [
   'body_too_large',
   'malformed_upload',
   'file_required',
+  'permission_denied',
+  'interactive_required',
+  'owner_required',
+  'restore_option_not_authorized',
+  'restore_stale',
+  'staging_cross_device',
 ] as const;
 export type BackupRefusalCode = (typeof BACKUP_REFUSAL_CODES)[number];
 
@@ -135,7 +147,7 @@ export type BackupFieldError = NonNullable<Problem['errors']>[number];
 
 /**
  * A non-2xx answer, decoded. `code` is the machine code (`authentication_required`,
- * `interactive_required`, `owner_required`, `forbidden`, `archive_not_found`, ...);
+ * `interactive_required`, `owner_required`, `permission_denied`, `archive_not_found`, ...);
  * `legacy_error` when the answer was not problem+json. Carries no request body, header
  * or cookie.
  */
@@ -173,12 +185,20 @@ export class BackupRequestError extends Error {
     this.fields = init.fields ?? [];
   }
 
-  /** Any 403: the caller lacks a scope, an interactive session or the owner assurance. */
+  /**
+   * Any 403: the caller lacks a scope (permission_denied, naming it in requiredPermission),
+   * an interactive session, the owner assurance, or the restore option's proof
+   * (restore_option_not_authorized, foreign_archive_requires_flag).
+   */
   get isForbidden(): boolean {
     return this.status === 403;
   }
 
-  /** The session is not interactive enough (delete, import, download, restore need one). */
+  /**
+   * The session is not interactive enough (delete, import and download need one). Restore
+   * and revert hold core:backup.restore, which is Sensitive: a non-interactive caller is
+   * refused there with permission_denied naming that scope, not with this code.
+   */
   get needsInteractiveSession(): boolean {
     return this.status === 403 && this.code === 'interactive_required';
   }
