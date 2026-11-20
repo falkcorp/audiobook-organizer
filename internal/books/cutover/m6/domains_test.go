@@ -64,12 +64,17 @@ func TestAIEndpointMigration_AuthRefKeyCopy(t *testing.T) {
 }
 
 // TestAIEndpointMigration_TicksRewritten: HEAD capability IDs in stored ticks
-// and in per-capability models become catalog IDs; an unknown tick is kept.
+// and in per-capability models become catalog IDs. A tick HEAD does not register
+// is dropped and reported, never carried: core refuses an imported endpoint that
+// carries one, so keeping it would lose the whole endpoint.
 func TestAIEndpointMigration_TicksRewritten(t *testing.T) {
-	_, s := runFixture(t)
+	r, s := runFixture(t)
 	st := settingsOf(instances(t, s)["ai/local-llm"])
-	if g := strs(st["capabilities"]); !slices.Equal(g, []string{"books.dedup_review", "books.embed_text", "mystery.cape"}) {
+	if g := strs(st["capabilities"]); !slices.Equal(g, []string{"books.dedup_review", "books.embed_text"}) {
 		t.Errorf("capabilities %v", g)
+	}
+	if !strings.Contains(reportText(r), `note|ai/local-llm|dropped: capability tick "mystery.cape"`) {
+		t.Errorf("the dropped tick is not reported:\n%s", reportText(r))
 	}
 	cm := st["capability_models"].(map[string]any)
 	if len(cm) != 1 || cm["books.dedup_review"] != "alfred-13b" {
@@ -297,6 +302,17 @@ func TestRootsCutover_FromHEADFixture(t *testing.T) {
 	}
 	if al := roots[0]["aliases"].([]any); len(al) != 1 || al[0].(map[string]any)["windows"] != "W:" {
 		t.Errorf("aliases %v", roots[0]["aliases"])
+	}
+	// import-2 is below books-library and has no alias of its own: HEAD rendered
+	// its paths through books-library's (the longest alias root over them), so it
+	// carries that alias with its relative path appended, in each form.
+	if al, _ := roots[2]["aliases"].([]any); len(al) != 1 ||
+		al[0].(map[string]any)["windows"] != `W:\incoming` || al[0].(map[string]any)["unc"] != `\\gotham\books\incoming` ||
+		al[0].(map[string]any)["smb_url"] != "smb://gotham/books/incoming" {
+		t.Errorf("import-2 aliases %v, want books-library's carried to it", roots[2]["aliases"])
+	}
+	if _, has := roots[1]["aliases"]; has {
+		t.Errorf("import-1, under no alias root, has aliases %v", roots[1]["aliases"])
 	}
 	var maps []map[string]any
 	if err := json.Unmarshal(s.Rows[string(ownerConfig)]["core.library.mappings"], &maps); err != nil {

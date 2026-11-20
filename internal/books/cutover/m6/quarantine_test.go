@@ -33,7 +33,9 @@ const (
 	rRootConflict     = "core already holds a different root"
 	rUnprovenURL      = "a credential cannot be ruled out of the URL"
 	rInstanceConflict = "core already holds a different instance under this ID"
-	rAliasNoRoot      = "the path alias names no root M6 registers"
+	rAliasNoRoot      = "the path alias's root is no library root and no ancestor of one: its display rendering is not carried"
+	rAliasSubRoot     = "the path alias's root is inside a library root, not at one, and core's aliases are per root: its display rendering is not carried"
+	rAliasShadowed    = "every library root under the path alias's root has a more specific alias: it rendered none of their paths, and its display rendering is not carried"
 	rRootPath         = "the root path is not an absolute host path"
 	rUnreadMember     = "a settings blob member that no part of M6 reads"
 )
@@ -175,6 +177,55 @@ func TestQuarantine_Cases(t *testing.T) {
 				tree["path_aliases"] = append(tree["path_aliases"].([]any), map[string]any{"root": "/nowhere", "windows": "N:"})
 			})},
 			want: map[string]string{memberPrefix + "path_aliases.1": rAliasNoRoot},
+		},
+		{
+			name: "path alias whose root is no absolute path",
+			opts: []func(*rig){withBlob(func(tree map[string]any) {
+				tree["path_aliases"] = append(tree["path_aliases"].([]any), map[string]any{"root": "batcave/library", "windows": "R:"})
+			})},
+			want: map[string]string{memberPrefix + "path_aliases.1": rAliasNoRoot},
+		},
+		{
+			// HEAD seeds such an alias from an iTunes mapping whose To is below a
+			// root (config.SeedPathAliases); core's aliases are per root.
+			name: "path alias inside a root",
+			opts: []func(*rig){withBlob(func(tree map[string]any) {
+				tree["path_aliases"] = append(tree["path_aliases"].([]any), map[string]any{"root": rootDir + "/itunes", "windows": "I:"})
+			})},
+			want: map[string]string{memberPrefix + "path_aliases.1": rAliasSubRoot},
+			raw:  map[string]string{memberPrefix + "path_aliases.1": `{"root":"` + rootDir + `/itunes","windows":"I:"}`},
+		},
+		{
+			name: "path alias over roots that each have their own",
+			opts: []func(*rig){withBlob(func(tree map[string]any) {
+				tree["path_aliases"] = append(tree["path_aliases"].([]any),
+					map[string]any{"root": "/batcave/import", "windows": "I:"},
+					map[string]any{"root": importOne, "windows": "G:"},
+					map[string]any{"root": importThree, "windows": "A:"})
+			})},
+			want: map[string]string{memberPrefix + "path_aliases.1": rAliasShadowed},
+		},
+		{
+			// leftovers skips plugins as read, so the webhook converter keeps
+			// what it does not read.
+			name: "plugin other than the webhook",
+			opts: []func(*rig){withBlob(func(tree map[string]any) {
+				tree["plugins"].(map[string]any)["batcomputer"] = map[string]any{"enabled": true, "settings": map[string]any{"mode": "detective"}}
+				tree["plugins"].(map[string]any)["unset"] = nil
+			})},
+			want: map[string]string{memberPrefix + "plugins.batcomputer": rUnreadMember},
+			raw:  map[string]string{memberPrefix + "plugins.batcomputer": `{"enabled":true,"settings":{"mode":"detective"}}`},
+		},
+		{
+			name: "webhook setting M6 does not convert",
+			opts: []func(*rig){withBlob(func(tree map[string]any) {
+				st := tree["plugins"].(map[string]any)["webhook"].(map[string]any)["settings"].(map[string]any)
+				st["timeout"] = "30s"
+				st["blank"] = " "
+				st["secret"] = "left-by-a-test" // M2's key: read, never quarantined here
+			})},
+			want: map[string]string{memberPrefix + "plugins.webhook.settings.timeout": rUnreadMember},
+			raw:  map[string]string{memberPrefix + "plugins.webhook.settings.timeout": "30s"},
 		},
 		{
 			name: "blob member no step reads",

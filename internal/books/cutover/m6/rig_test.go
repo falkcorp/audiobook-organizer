@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -181,8 +182,37 @@ func (s *secretsDouble) ImportSecret(ctx context.Context, b *storage.Batch, w se
 	return b.In(ks).Set([]byte(w.Name), []byte(w.Value.Reveal()))
 }
 
-func (s *secretsDouble) ImportUnreadable(context.Context, *storage.Batch, secrets.Name, string, string) error {
-	return errors.New("the rig's secrets double does not import unreadable markers: M6 never does")
+// unreadableMarker prefixes a staged unreadable marker's row: the reason
+// follows. value answers such a row unreadable, as the real store's Get does
+// (ErrKeyUnavailable or ErrCorrupt).
+const unreadableMarker = "\x00unreadable:"
+
+// ImportUnreadable stages the marker a renamed source's unreadable credential is
+// carried as, refusing a reason the real store refuses (checkUnreadable).
+func (s *secretsDouble) ImportUnreadable(ctx context.Context, b *storage.Batch, n secrets.Name, reason, _ string) error {
+	if err := n.Validate(); err != nil {
+		return fmt.Errorf("the secrets store refuses the name %q: %w", n, err)
+	}
+	if reason != "key" && reason != "corrupt" {
+		return fmt.Errorf("the secrets store refuses the unreadable reason %q", reason)
+	}
+	s.mu.Lock()
+	s.imports = append(s.imports, n)
+	s.mu.Unlock()
+	ks := s.get()
+	b.Bind(ks)
+	want := unreadableMarker + reason
+	raw, err := b.GetForUpdate(ctx, ks, []byte(n))
+	switch {
+	case err == nil:
+		if string(raw) == want {
+			return nil
+		}
+		return fmt.Errorf("%w: %s", storage.ErrImportConflict, n)
+	case !errors.Is(err, storage.ErrNotFound):
+		return err
+	}
+	return b.In(ks).Set([]byte(n), []byte(want))
 }
 
 func (s *secretsDouble) names(ctx context.Context) ([]secrets.Name, error) {
@@ -227,6 +257,8 @@ func (s *secretsDouble) value(ctx context.Context, n secrets.Name) (string, bool
 	if ks := s.get(); ks.Prefix() != "" {
 		raw, err := ks.Get(ctx, []byte(n))
 		switch {
+		case err == nil && strings.HasPrefix(string(raw), unreadableMarker):
+			return "", false, nil
 		case err == nil:
 			return string(raw), true, nil
 		case !errors.Is(err, storage.ErrNotFound):

@@ -38,6 +38,38 @@ func capabilityID(id string) string {
 	return id
 }
 
+// headCapabilities is every capability HEAD's aidispatch registry registers
+// (internal/aidispatch/capabilities.go), frozen here and pinned both ways by
+// TestCapabilityID_CoversEveryHEADCapability. A tick outside it is one HEAD
+// kept on load and ignored in selection (AIEndpoint.UnknownCapabilities); core's
+// endpoint validator refuses such a tick on an import (it has no stored row to
+// grandfather it), which would quarantine the whole endpoint, so M6 drops the
+// tick instead and reports it. A wildcard is never a HEAD capability.
+var headCapabilities = map[string]bool{
+	"llm.filename_parse": true, "llm.audiobook_parse": true, "llm.cover_art_vision": true,
+	"llm.author_review": true, "llm.author_discovery": true, "llm.metadata_rerank": true,
+	"llm.dedup_review": true, "llm.author_dedup_batch": true, "llm.diagnostics": true,
+	"embed.text": true, "embed.text_batch": true,
+	"transcribe.batch": true, "transcribe.intro_clip": true,
+}
+
+// coreFeatures are the features core's endpoint validator accepts
+// (core/integrations/ai declaredFeatures), plus the shared_fs:<root> form. HEAD
+// stores features as free strings, and core refuses an endpoint carrying any
+// other, so M6 drops one outside this set and reports it.
+// TestAIInstances_PassCoresEndpointValidator pins it against the real validator.
+var coreFeatures = map[string]bool{
+	"json_schema": true, "json_mode": true, "vision": true, "batch_api": true, "tools": true, "timestamps": true,
+}
+
+// sharedFSPrefix is the feature prefix of a measured shared-mount feature, valid
+// in both HEAD and core when a root ID follows it.
+const sharedFSPrefix = "shared_fs:"
+
+func knownFeature(f string) bool {
+	return coreFeatures[f] || (strings.HasPrefix(f, sharedFSPrefix) && len(f) > len(sharedFSPrefix))
+}
+
 // protocolAdapter is the adapter an ai_endpoints row's protocol becomes
 // (05-ai section 10; 05-metadata M1.10): openai_compat to core's adapter, the
 // two whisper protocols to books' own.

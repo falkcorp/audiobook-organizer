@@ -14,6 +14,7 @@ import (
 	"math"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -74,6 +75,10 @@ type headMetadataSource struct {
 		Burst          int     `json:"burst"`
 		MaxRetries     int     `json:"max_retries"`
 		TimeoutSeconds int     `json:"timeout_seconds"`
+		// MaxConcurrent bounded HEAD's in-flight searches to the source in a bulk
+		// fetch. core's Limits has no concurrency bound, so it is reported as
+		// dropped (metadataInstance), not carried.
+		MaxConcurrent int `json:"max_concurrent"`
 	} `json:"rate_limit"`
 }
 
@@ -115,6 +120,41 @@ func refsFor(set secretSet, ref integrations.Ref) map[string]any {
 	}
 	return out
 }
+
+// secretRefs is the start of an instance's settings: the refs to the secrets
+// M2 stored for it. M2 names them with the ID HEAD gave the row
+// (integrations.<kind>.<HEAD id>.<field>), so an instance whose ID is kept takes
+// them by refsFor. A renamed one never takes refsFor under its new ID: at the
+// cutover a name there belongs to another source (the exact-ID sibling, which
+// wins the ID: groupRun.exactIDs) or to none, and binding it would send that
+// credential to this source's destination. Its own credentials are carried
+// from the HEAD-ID names to the new ones instead (writeInstance), except where a
+// secret already sits under the new name, which is reported and left unbound.
+// Digit-leading IDs have none to carry: M2 quarantined them, the name being
+// invalid.
+func (p *pending) secretRefs(set secretSet, ref integrations.Ref, headID string, renamed bool) map[string]any {
+	if !renamed {
+		return refsFor(set, ref)
+	}
+	headPrefix := "integrations." + string(ref.Kind) + "." + headID + "."
+	for _, n := range slices.Sorted(maps.Keys(set)) {
+		field, ok := strings.CutPrefix(string(n), headPrefix)
+		if !ok || field == "" || field == "userinfo" {
+			continue
+		}
+		cs := carriedSecret{from: n, to: secretName(ref, field), field: field}
+		if set[cs.to] {
+			p.uncarried = append(p.uncarried, cs)
+			continue
+		}
+		p.carry = append(p.carry, cs)
+	}
+	return map[string]any{}
+}
+
+// unreadableCarried is the marker reason of a credential carried unreadable:
+// see writeInstance.
+const unreadableCarried = "corrupt"
 
 // instanceID is the InstanceID of a HEAD ID: kept when it already matches, else
 // lower-cased with _ as - and reported (05-metadata M1.10, last paragraph before
@@ -202,6 +242,12 @@ type pending struct {
 	// carry is the credentials M2 stored under the HEAD ID of a renamed source,
 	// to be copied to the name under its new ID.
 	carry []carriedSecret
+	// uncarried is the credentials of a renamed source left under the old name
+	// because a secret is already stored under the new one: neither is bound.
+	uncarried []carriedSecret
+	// dropped is the report lines of values M6 leaves out of the instance (an AI
+	// endpoint's unknown ticks and features), said once the instance is reported.
+	dropped []string
 
 	// Set by finish: the signature of the effective destinations (the origin every
 	// trust field is signed from) and the fields whose effective origin is not the
@@ -285,6 +331,9 @@ func (m *Migration) writeInstance(ctx context.Context, c *chunk, p *pending, qua
 		detail += "; id " + p.renamedFrom + " renamed"
 	}
 	m.report(Entry{Kind: "instance", ID: ref.String(), Detail: detail})
+	for _, d := range p.dropped {
+		m.report(Entry{Kind: "note", ID: ref.String(), Detail: "dropped: " + d})
+	}
 	if p.inst.Config.Local {
 		m.report(Entry{Kind: "trust", ID: ref.String(), Detail: "Local, origin " + p.inst.LocalOrigin})
 	}
@@ -323,27 +372,25 @@ func (m *Migration) writeInstance(ctx context.Context, c *chunk, p *pending, qua
 		}
 	}
 	// The credentials of a renamed source are read before the import for the same
-	// reason, and each carried one becomes a ref only once its value is read: an
-	// unreadable one is not carried (there is no marker M6 may write), and the
-	// instance reports the secret missing until the admin re-enters it.
+	// reason. Each becomes a ref under the new name, readable or not: an
+	// unreadable one is carried as an unreadable marker, so the renamed instance
+	// reports the secret unreadable exactly as an un-renamed one keeps its ref and
+	// does (TestIntegrationsMigration_UnreadableSecretReEnter). Nothing is staged
+	// or reported as carried until the instance import succeeds.
 	type carried struct {
-		to  secrets.Name
-		val string
+		cs         carriedSecret
+		val        string
+		unreadable bool
 	}
 	var moved []carried
 	for _, cs := range p.carry {
 		val, found, err := m.cfg.SecretValue(ctx, cs.from)
-		switch {
-		case err != nil:
+		if err != nil {
 			return false, fmt.Errorf("m6: read the credential %s of the renamed source %s: %w", cs.field, ref, err)
-		case !found:
-			m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the credential " + cs.field + " is unreadable under the old name and is not carried: re-enter it"})
-		default:
-			p.inst.Config.Settings[cs.field] = secrets.RefTo(cs.to)
-			p.inst.SecretsOrigin = p.sig
-			moved = append(moved, carried{to: cs.to, val: val})
-			m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the credential " + cs.field + " is carried to the renamed source's secret name"})
 		}
+		p.inst.Config.Settings[cs.field] = secrets.RefTo(cs.to)
+		p.inst.SecretsOrigin = p.sig
+		moved = append(moved, carried{cs: cs, val: val, unreadable: !found})
 	}
 	err = m.cfg.Integrations.ImportInstance(ctx, b, p.inst)
 	switch {
@@ -361,10 +408,27 @@ func (m *Migration) writeInstance(ctx context.Context, c *chunk, p *pending, qua
 		c.note(OutcomeSecretCopy)
 	}
 	for _, mv := range moved {
-		if err := m.cfg.Secrets.ImportSecret(ctx, b, secrets.Write{Name: mv.to, Value: secrets.NewValue(mv.val), By: m.by}); err != nil && !errors.Is(err, storage.ErrImportConflict) {
-			return false, fmt.Errorf("m6: carry a credential to %s: %w", mv.to, err)
+		if mv.unreadable {
+			// The marker's reason cannot be the source's (SecretValue answers found
+			// false, not why), and the carried record has no bytes to open whatever
+			// it was: corrupt (ErrCorrupt, "re-enter it") is the remedy that holds,
+			// where key (ErrKeyUnavailable) would send the admin after a key that
+			// could not help.
+			if err := m.cfg.Secrets.ImportUnreadable(ctx, b, mv.cs.to, unreadableCarried, m.by); err != nil && !errors.Is(err, storage.ErrImportConflict) {
+				return false, fmt.Errorf("m6: carry an unreadable credential to %s: %w", mv.cs.to, err)
+			}
+			m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the credential " + mv.cs.field + " is unreadable under the old name and is carried as unreadable: re-enter it"})
+		} else {
+			if err := m.cfg.Secrets.ImportSecret(ctx, b, secrets.Write{Name: mv.cs.to, Value: secrets.NewValue(mv.val), By: m.by}); err != nil && !errors.Is(err, storage.ErrImportConflict) {
+				return false, fmt.Errorf("m6: carry a credential to %s: %w", mv.cs.to, err)
+			}
+			c.note(OutcomeSecretCopy)
+			m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the credential " + mv.cs.field + " is carried to the renamed source's secret name"})
 		}
-		c.note(OutcomeSecretCopy)
+		m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the secret " + string(mv.cs.from) + " under the old ID stays in the store and nothing refers to it"})
+	}
+	for _, cs := range p.uncarried {
+		m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the credential " + cs.field + " is not carried: a secret is already stored under " + string(cs.to) + " and no source of this pass owns it, so neither is bound: re-enter it (" + string(cs.from) + " stays in the store, unreferenced)"})
 	}
 	if p.userinfo != "" {
 		name := secretName(ref, "userinfo")
@@ -426,32 +490,16 @@ func (m *Migration) metadataInstance(raw json.RawMessage, i int, set secretSet) 
 	if renamed {
 		p.renamedFrom = src.ID
 	}
-	settings := refsFor(set, ref)
-	if renamed {
-		// M2 names a source's credentials with the ID HEAD gave it
-		// (integrations.metadata.<HEAD id>.credentials.<key>), and refsFor looks
-		// under the normalized one, so without this the instance would lose its refs
-		// and the secrets would be orphaned. Digit-leading IDs have none: M2
-		// quarantined them, the name being invalid.
-		headPrefix := "integrations.metadata." + src.ID + "."
-		for _, n := range slices.Sorted(maps.Keys(set)) {
-			field, ok := strings.CutPrefix(string(n), headPrefix)
-			if !ok || field == "" {
-				continue
-			}
-			to := secretName(ref, field)
-			if set[to] {
-				continue // already under the new ID: that one wins
-			}
-			p.carry = append(p.carry, carriedSecret{from: n, to: to, field: field})
-		}
-	}
+	settings := p.secretRefs(set, ref, src.ID, renamed)
 	if src.BaseURL != "" {
 		clean, ok := p.cleanURL("base_url", src.BaseURL)
 		if !ok {
 			return nil, member, reasonUnprovenURL
 		}
 		settings["base_url"] = clean
+	}
+	if n := src.RateLimit.MaxConcurrent; n > 0 {
+		p.dropped = append(p.dropped, "rate_limit.max_concurrent "+strconv.Itoa(n)+" has no native field (core's limits pace a source by rate, burst and retries, not by searches in flight)")
 	}
 	p.inst = integrations.StoredInstance{Config: integrations.InstanceConfig{
 		Ref: ref, Adapter: adapter, Name: src.Name, Enabled: src.Enabled, Priority: src.Priority,
@@ -540,7 +588,7 @@ func (m *Migration) aiInstance(raw json.RawMessage, i int, set secretSet) (p *pe
 	if renamed {
 		p.renamedFrom = ep.ID
 	}
-	settings := refsFor(set, ref)
+	settings := p.secretRefs(set, ref, ep.ID, renamed)
 	// A whisper process endpoint's URL names no network address
 	// (config.LocalUVEndpointURL "local:uv-openai-whisper"): it is carried as is
 	// and grants no trust.
@@ -556,8 +604,16 @@ func (m *Migration) aiInstance(raw json.RawMessage, i int, set secretSet) (p *pe
 		}
 	}
 	settings["concurrency"] = max(ep.Concurrency, 1) // HEAD treats 0 as 1; core rejects 0
-	if caps := mapCaps(ep.Capabilities); len(caps) > 0 {
+	caps, droppedCaps := mapCaps(ep.Capabilities)
+	if len(caps) > 0 {
 		settings["capabilities"] = caps
+	}
+	for _, c := range droppedCaps {
+		p.dropped = append(p.dropped, "capability tick "+strconv.Quote(c)+" is not a capability HEAD registers (HEAD ignored it in selection)")
+	}
+	features, droppedFeatures := knownFeatures(ep.Features)
+	for _, f := range droppedFeatures {
+		p.dropped = append(p.dropped, "feature "+strconv.Quote(f)+" is not one core declares")
 	}
 	if ep.ChatModel != "" {
 		settings["text_model"] = ep.ChatModel
@@ -575,8 +631,8 @@ func (m *Migration) aiInstance(raw json.RawMessage, i int, set secretSet) (p *pe
 	if len(ep.Labels) > 0 {
 		settings["labels"] = ep.Labels
 	}
-	if len(ep.Features) > 0 {
-		settings["features"] = ep.Features
+	if len(features) > 0 {
+		settings["features"] = features
 	}
 	if ep.RequireGPU {
 		settings["require_gpu"] = true
@@ -603,17 +659,41 @@ func (m *Migration) aiInstance(raw json.RawMessage, i int, set secretSet) (p *pe
 	return p, "", ""
 }
 
-// mapCaps maps each tick through the capability-ID map, dropping a duplicate the
-// map creates, keeping order.
-func mapCaps(in []string) []string {
-	var out []string
+// mapCaps maps each tick HEAD registers through the capability-ID map, dropping
+// a duplicate the map creates, keeping order. Every other tick (a wildcard, or an
+// ID this build of HEAD does not register) is returned in dropped, once each:
+// HEAD ignored it in selection, and core's validator would refuse the whole
+// endpoint over it (headCapabilities).
+func mapCaps(in []string) (kept, dropped []string) {
 	for _, c := range in {
+		if strings.Contains(c, "*") || !headCapabilities[c] {
+			if !slices.Contains(dropped, c) {
+				dropped = append(dropped, c)
+			}
+			continue
+		}
 		id := capabilityID(c)
-		if !slices.Contains(out, id) {
-			out = append(out, id)
+		if !slices.Contains(kept, id) {
+			kept = append(kept, id)
 		}
 	}
-	return out
+	return kept, dropped
+}
+
+// knownFeatures splits HEAD's free-string features into those core declares
+// and the rest, keeping order and dropping duplicates.
+func knownFeatures(in []string) (kept, dropped []string) {
+	for _, f := range in {
+		switch {
+		case knownFeature(f):
+			if !slices.Contains(kept, f) {
+				kept = append(kept, f)
+			}
+		case !slices.Contains(dropped, f):
+			dropped = append(dropped, f)
+		}
+	}
+	return kept, dropped
 }
 
 // delugeInstance builds download/deluge from webURL, the effective Web UI URL

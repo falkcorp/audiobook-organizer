@@ -6,6 +6,8 @@
 package m6
 
 import (
+	"encoding"
+	"encoding/json"
 	"maps"
 	"math"
 	"reflect"
@@ -20,6 +22,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/mediacore/integrations"
+	"github.com/falkcorp/mediacore/integrations/ai"
+	"github.com/falkcorp/mediacore/library"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // The tables M6 copies from HEAD and from the spec are pinned here against their
@@ -168,10 +173,20 @@ func TestCapabilityID_CoversEveryHEADCapability(t *testing.T) {
 	if len(seen) == 0 {
 		t.Fatal("aidispatch registers no capability")
 	}
+	// headCapabilities, the set M6 keeps ticks of, is aidispatch's registry
+	// exactly: one HEAD registers and the frozen set lacks would be dropped from
+	// every endpoint, and one the set has that HEAD no longer registers would be
+	// carried to a capability no catalog declares.
+	registered := map[string]bool{}
+	for _, spec := range aidispatch.Registry() {
+		registered[spec.Capability.ID()] = true
+	}
+	if !maps.Equal(registered, headCapabilities) {
+		t.Errorf("headCapabilities %v, want aidispatch's registry %v", slices.Sorted(maps.Keys(headCapabilities)), slices.Sorted(maps.Keys(registered)))
+	}
 	for in, want := range map[string]string{
 		"embed.text": "books.embed_text", "embed.text_batch": "books.embed_text_batch",
 		"transcribe.batch": "books.transcribe_batch", "transcribe.intro_clip": "books.transcribe_intro_clip",
-		"mystery.cape": "mystery.cape", // an ID no table knows is kept
 	} {
 		if got := capabilityID(in); got != want {
 			t.Errorf("capabilityID(%q) = %q, want %q", in, got, want)
@@ -276,14 +291,45 @@ func sameLimits(a, b integrations.Limits) bool {
 func jsonNames(t *testing.T, typ reflect.Type) map[string]bool {
 	t.Helper()
 	out := map[string]bool{}
-	for i := range typ.NumField() {
-		tag, _, _ := strings.Cut(typ.Field(i).Tag.Get("json"), ",")
-		if tag == "-" || (tag == "" && !typ.Field(i).Anonymous) {
-			t.Fatalf("%s.%s has no JSON name: the pin cannot say what HEAD writes", typ, typ.Field(i).Name)
-		}
-		out[tag] = true
-	}
+	addJSONNames(t, typ, "", out)
 	return out
+}
+
+// addJSONNames adds typ's JSON field names under prefix, and recurses into a
+// field whose value is itself a JSON object of named fields (a struct, or a
+// pointer, slice, array or map of one), as dotted paths: a field HEAD adds to
+// a nested type (MetadataSource.RateLimit) is then as visible as a top-level
+// one. A type that marshals itself (time.Time) is a leaf.
+func addJSONNames(t *testing.T, typ reflect.Type, prefix string, out map[string]bool) {
+	t.Helper()
+	for i := range typ.NumField() {
+		f := typ.Field(i)
+		tag, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if tag == "-" || (tag == "" && !f.Anonymous) {
+			t.Fatalf("%s.%s has no JSON name: the pin cannot say what HEAD writes", typ, f.Name)
+		}
+		out[prefix+tag] = true
+		if inner, ok := jsonObject(f.Type); ok {
+			addJSONNames(t, inner, prefix+tag+".", out)
+		}
+	}
+}
+
+// jsonObject is the struct whose fields a value of typ is encoded as, false for
+// a leaf.
+func jsonObject(typ reflect.Type) (reflect.Type, bool) {
+	for typ.Kind() == reflect.Pointer || typ.Kind() == reflect.Slice || typ.Kind() == reflect.Array || typ.Kind() == reflect.Map {
+		typ = typ.Elem()
+	}
+	if typ.Kind() != reflect.Struct {
+		return nil, false
+	}
+	marshaler := reflect.TypeFor[json.Marshaler]()
+	text := reflect.TypeFor[encoding.TextMarshaler]()
+	if typ.Implements(marshaler) || reflect.PointerTo(typ).Implements(marshaler) || typ.Implements(text) || reflect.PointerTo(typ).Implements(text) {
+		return nil, false
+	}
+	return typ, true
 }
 
 // TestFrozenDecoders_CoverHEADFields holds each decoder M6 froze against the HEAD
@@ -329,5 +375,120 @@ func TestFrozenDecoders_CoverHEADFields(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// endpointValidator is core's real ai endpoint validator with books'
+// capabilities registered as the catalog would hold them: aidispatch's registry
+// through capabilityID. Nothing it touches does I/O, so the registry's store,
+// secrets and audit are never called.
+func endpointValidator(t *testing.T) *ai.Router {
+	t.Helper()
+	reg, err := integrations.New(integrations.Options{
+		Store: struct{ integrations.InstanceStore }{}, NewBatch: func() *storage.Batch { return nil },
+		Secrets: struct{ integrations.SecretStore }{}, Audit: struct{ integrations.AuditRecorder }{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := ai.NewRouter(ai.RouterOptions{Registry: reg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[aidispatch.Kind]ai.Kind{aidispatch.KindChat: ai.KindText, aidispatch.KindEmbed: ai.KindEmbed, aidispatch.KindWhisper: ai.KindTranscribe}
+	for _, spec := range aidispatch.Registry() {
+		if _, err := r.RegisterCapability("books", ai.CapabilitySpec{ID: capabilityID(spec.Capability.ID()), Kind: kinds[spec.Kind]}); err != nil {
+			t.Fatalf("register %s: %v", spec.Capability.ID(), err)
+		}
+	}
+	return r
+}
+
+// TestAIInstances_PassCoresEndpointValidator: core refuses an imported endpoint
+// whole for one unknown or wildcard tick or one undeclared feature (an import has
+// no stored row to grandfather a tick), so M6 drops each such value, reports it,
+// and what it writes passes core's own ValidateEndpoint for every protocol.
+func TestAIInstances_PassCoresEndpointValidator(t *testing.T) {
+	r := endpointValidator(t)
+	var every []string
+	for _, spec := range aidispatch.Registry() {
+		every = append(every, spec.Capability.ID())
+	}
+	for _, c := range []struct{ protocol, url string }{
+		{"openai_compat", "http://192.0.2.40:8080/v1"},
+		{"whisper_server", "http://192.0.2.41:9000"},
+		{"local_process", "local:uv-openai-whisper"},
+	} {
+		t.Run(c.protocol, func(t *testing.T) {
+			raw, err := json.Marshal(map[string]any{
+				"id": "oracle-node", "label": "Oracle", "protocol": c.protocol, "url": c.url, "enabled": true,
+				"capabilities": append(slices.Clone(every), "mystery.cape", "llm.*", "*", "llm.dedup_review"),
+				"features":     []string{"json_schema", "telepathy", "shared_fs:batcave-lib", "shared_fs:", "vision"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, _, why := (&Migration{}).aiInstance(raw, 0, secretSet{})
+			if p == nil {
+				t.Fatalf("the endpoint was refused: %s", why)
+			}
+			if err := r.ValidateEndpoint(p.inst.Config.Settings, nil); err != nil {
+				t.Fatalf("core refuses what M6 writes: %v", err)
+			}
+			for _, want := range []string{`tick "mystery.cape"`, `tick "llm.*"`, `tick "*"`, `feature "telepathy"`, `feature "shared_fs:"`} {
+				if !slices.ContainsFunc(p.dropped, func(d string) bool { return strings.Contains(d, want) }) {
+					t.Errorf("the dropped %s is not reported: %v", want, p.dropped)
+				}
+			}
+			if len(p.dropped) != 5 {
+				t.Errorf("dropped %v, want exactly the five unknown values", p.dropped)
+			}
+			caps, _ := p.inst.Config.Settings["capabilities"].([]string)
+			if len(caps) != len(every) {
+				t.Errorf("capabilities %v: every HEAD capability is kept, once", caps)
+			}
+			feats, _ := p.inst.Config.Settings["features"].([]string)
+			if !slices.Equal(feats, []string{"json_schema", "shared_fs:batcave-lib", "vision"}) {
+				t.Errorf("features %v", feats)
+			}
+			// The validator is not vacuous: each dropped value, put back, is refused.
+			for key, bad := range map[string][]string{"capabilities": {"mystery.cape"}, "features": {"telepathy"}} {
+				s := maps.Clone(p.inst.Config.Settings)
+				s[key] = bad
+				if r.ValidateEndpoint(s, nil) == nil {
+					t.Errorf("core accepted %s %v: the pin proves nothing", key, bad)
+				}
+			}
+		})
+	}
+}
+
+// TestDerivedAlias_IsHEADsRendering pins derivedAlias against HEAD's renderer
+// (web/src/utils/pathAliases.ts): toWindows trims one trailing separator run off
+// the prefix and joins with a backslash, flipping every slash; toSmbURL joins
+// with a slash and encodes each segment as encodeURIComponent does; an empty
+// form stays empty. The want strings are what that TypeScript returns for the
+// root's own path.
+func TestDerivedAlias_IsHEADsRendering(t *testing.T) {
+	for _, c := range []struct {
+		a    headPathAlias
+		rel  string
+		want library.Alias
+	}{
+		{headPathAlias{Windows: "W:", UNC: `\\gotham\books`, SMBURL: "smb://gotham/books"}, "incoming",
+			library.Alias{Windows: `W:\incoming`, UNC: `\\gotham\books\incoming`, SMBURL: "smb://gotham/books/incoming"}},
+		{headPathAlias{Windows: `W:\`, UNC: `\\gotham\books\/`, SMBURL: "smb://gotham/books"}, "Knightfall/Part One",
+			library.Alias{Windows: `W:\Knightfall\Part One`, UNC: `\\gotham\books\Knightfall\Part One`, SMBURL: "smb://gotham/books/Knightfall/Part%20One"}},
+		{headPathAlias{SMBURL: "smb://gotham/books"}, "Hush (2002)/Año Uno & #1!~*'",
+			library.Alias{SMBURL: "smb://gotham/books/Hush%20(2002)/A%C3%B1o%20Uno%20%26%20%231!~*'"}},
+		{headPathAlias{Windows: "W:"}, "a?b=c/d",
+			library.Alias{Windows: `W:\a?b=c\d`}},
+	} {
+		if got := derivedAlias(c.a, c.rel); got != c.want {
+			t.Errorf("derivedAlias(%+v, %q)\n got %+v\nwant %+v", c.a, c.rel, got, c.want)
+		}
+	}
+	if got := encodeURIComponent("a/b?c=d;e,f@g:h$i+j"); got != "a%2Fb%3Fc%3Dd%3Be%2Cf%40g%3Ah%24i%2Bj" {
+		t.Errorf("encodeURIComponent reserved characters: %s", got)
 	}
 }
