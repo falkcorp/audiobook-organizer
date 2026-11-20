@@ -46,8 +46,8 @@ func Union(rows ...[]ops.Resource) []ops.Resource {
 // sets Duration only), folder-cover (cover fields) and a title edit, and
 // RecomputeBookAggregates, which reaches ModifyBook, is the same row as
 // ModifyBook. The store decides per call what it stages (the stale stamp, the
-// ident: rows, the author_books_legacy: rows), a declaration cannot know that
-// ahead of the call, and the admission gate cannot detect an under-declared kind
+// ident: rows), a declaration cannot know that ahead of the call, and the
+// admission gate cannot detect an under-declared kind
 // (it compares DECLARED write sets, core/internal/executor/dispatch.go, and the
 // writer checks one tag per Do), so a row errs wide. The cost is coarser
 // exclusion, never a missed one; narrowing a method needs the store to guarantee
@@ -56,9 +56,11 @@ func Union(rows ...[]ops.Resource) []ops.Resource {
 // Consequence worth knowing: every kind that calls ModifyBook, UpdateBook,
 // RecomputeBookAggregates, SetLibraryStateOrganized, a CarryState method, or a
 // file-row method that recomputes the books aggregate declares the whole book
-// write (books, authors, metadata_cache, indexes). Applying the rule widened 25
-// kinds by one to three resources each (authors, metadata_cache, indexes;
-// docs/agent-tasks/platform-core/seams.d/F5-10.md lists them).
+// write (books, metadata_cache, indexes). Applying the rule widened 25 kinds by
+// one to three resources each (authors, metadata_cache, indexes;
+// docs/agent-tasks/platform-core/seams.d/F5-10.md lists them); F5-18j took
+// authors back out of the book row when the store stopped staging the
+// author_books_legacy: rows (seams.d/F5-18j.md).
 //
 // This is the ONE method-to-resource table of the six converted maintenance
 // groups (F5-07 .. F5-11 and F5-06's authority build) and of the legacy jobs
@@ -79,9 +81,13 @@ func Union(rows ...[]ops.Resource) []ops.Resource {
 //     SearchIdentityChanged, an AuthorID going from nil to set counts, and the
 //     ASIN replacement stamps it too); the ident: rows the store stages when the
 //     identity, the ASIN or the book-side identification inputs (review status,
-//     primary flag, trash, quarantine) change; and the author_books_legacy: rows
-//     it stages on every call where AuthorID is set (authors: the storediff map
-//     files the author_ families under authors). BOOKW below is that row.
+//     primary flag, trash, quarantine) change. BOOKW below is that row. It holds
+//     no authors: the store wrote an author_books_legacy:<author>:<book> row on
+//     every call where AuthorID was set until F5-18j, and since then no book
+//     write touches an author_, author: or book_authors: key (the credit list is
+//     written by its own methods: SetBookAuthors, ModifyBookAuthors,
+//     ModifyBookCredits; TestBookWrites_TouchNoAuthorsFamilyKey in
+//     internal/books/store pins it per method).
 //   - ident: is `indexes`. The ident: family is the identification driver's derived
 //     state (ident_state.go), the same set RebuildIdentIndex rebuilds, so every
 //     method that stages it declares `indexes`: CreateBook, ModifyBook, UpdateBook,
@@ -101,10 +107,9 @@ func Union(rows ...[]ops.Resource) []ops.Resource {
 //     the caller and are book_files only.
 //   - RecomputeBookAggregates calls ModifyBook with a closure that only moves the
 //     aggregate fields (duration, size, counts). Those are not search identity,
-//     so today it stamps no cache and stages no ident: rows, but it does write the
-//     author_books_legacy: rows through ModifyBook whenever AuthorID is set. Per
-//     THE RULE it carries the whole ModifyBook row: that is a guarantee the store
-//     does not make for the method, only a fact about this closure.
+//     so today it stamps no cache and stages no ident: rows. Per THE RULE it
+//     carries the whole ModifyBook row: that is a guarantee the store does not
+//     make for the method, only a fact about this closure.
 //
 // Composite rows, the group-level writer methods whose chain is several store
 // calls, are built from the base rows here, so a base row that widens widens
@@ -125,18 +130,18 @@ func Union(rows ...[]ops.Resource) []ops.Resource {
 // row with the rename argument of t6WriterView (internal/plugins/maintenance).
 func Table() map[string][]ops.Resource {
 	// bookW is everything ModifyBook can write (THE RULE above): the books row,
-	// the author_books_legacy: rows it stages when AuthorID is set (authors), the
-	// stale stamp (metadata_cache) and the ident: rows (indexes). Every method that
-	// reaches ModifyBook carries it whole.
-	bookW := []ops.Resource{ops.ResBooks, ops.ResAuthors, ops.ResMetadataCache, ops.ResIndexes}
+	// the stale stamp (metadata_cache) and the ident: rows (indexes). Every method
+	// that reaches ModifyBook carries it whole. No authors since F5-18j: the
+	// store no longer stages author_books_legacy: rows (see the traced rows).
+	bookW := []ops.Resource{ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes}
 	// fileRow is a file-row method that recomputes the books aggregate: its own
 	// book_files row plus BOOKW.
 	fileRow := Union([]ops.Resource{ops.ResBookFiles}, bookW)
 	rows := map[string][]ops.Resource{
 		// --- book rows and their derived state -----------------------------
-		// CreateBook stages the ident: rows and the author_books_legacy: rows; a
-		// new book has no cache row to stamp.
-		"CreateBook":              {ops.ResBooks, ops.ResAuthors, ops.ResIndexes},
+		// CreateBook stages the ident: rows; a new book has no cache row to stamp
+		// and, since F5-18j, no author_books_legacy: row.
+		"CreateBook":              {ops.ResBooks, ops.ResIndexes},
 		"ModifyBook":              bookW,
 		"UpdateBook":              bookW,
 		"RecomputeBookAggregates": bookW,
@@ -158,7 +163,8 @@ func Table() map[string][]ops.Resource {
 		// following the survivor, their sync ids and redirects, the undo journal
 		// and the sibling-move journal, and MarkIdentDirtyBestEffort.
 		"MergeBooks": Union(bookW, []ops.Resource{ops.ResExternalIDs, ops.ResUserState, ops.ResSyncIdentity, ops.ResOperations}),
-		// The clone creates the copy (CreateBook: books, authors, ident:), its files
+		// The clone creates the copy (CreateBook: books, ident:), copies the
+		// source's credit list (SetBookAuthors: authors), creates its files
 		// (book_files, and the bytes: files), hands over the source's sync id and
 		// listening state, and journals the clone. Its rollback runs DeleteBook on
 		// the new id, which also removes the field-state row, the embedding and the
@@ -219,6 +225,10 @@ func Table() map[string][]ops.Resource {
 		"ModifyBookFileReportingRecompute":    fileRow,
 		"CarryOverFingerprintWindows":         {ops.ResFingerprintIndex},
 		"DeleteOrphanBookFileAcoustIDEntries": {ops.ResBookFiles},
+		// RetireAuthorBooksLegacy deletes the author_books_legacy: rows (F5-18j),
+		// which the store-key vocabulary files under authors; it writes no book
+		// or credit row.
+		"RetireAuthorBooksLegacy": {ops.ResAuthors},
 		// --- files on disk -------------------------------------------------------
 		"Reflink":                  {ops.ResFiles},
 		"HealTrack":                {ops.ResFiles},

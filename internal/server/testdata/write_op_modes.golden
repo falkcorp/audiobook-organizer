@@ -117,6 +117,7 @@ library.scan	no-mode
 library.transcode	no-mode
 maintenance.activity-filter-index-backfill	no-mode
 maintenance.ai-dedup-batch	no-mode
+maintenance.author-books-legacy-retire	preview
 maintenance.author-conjunction-repair	preview
 maintenance.author-duplicate-merge	preview
 maintenance.author-id-repair	preview

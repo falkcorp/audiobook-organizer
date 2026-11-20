@@ -180,9 +180,9 @@ func (p *Plugin) introMigrateSingleFileKind(deps t6g4Deps, sched *tasks.Schedule
 			// ModifyBook), which commits the book row when the stored aggregate has
 			// drifted (the shared UpdateBookFile row, kinds_resources.go; stack parity
 			// review P1). It was declared as a read of books until then.
-			// The recompute reaches ModifyBook, so the row is the whole ModifyBook row: authors,
+			// The recompute reaches ModifyBook, so the row is the whole ModifyBook row:
 			// metadata_cache, indexes too (THE RULE, internal/maintenance/resources).
-			Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResAuthors, ops.ResMetadataCache, ops.ResIndexes)...),
+			Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes)...),
 			Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
 			// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
 			// internal/arch: overwrite is off by default, so a re-run skips a row that already carries a transcript), so the 05-tasks mapping is

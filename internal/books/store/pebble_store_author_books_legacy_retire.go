@@ -52,7 +52,8 @@ var ErrAuthorBooksLegacyRetireRefused = errors.New("author_books_legacy retire r
 // author_id_not_in_join classes.
 const authorBooksLegacyRetireSampleCap = 50
 
-// AuthorBooksLegacyRetireReport is the outcome of one RetireAuthorBooksLegacy.
+// AuthorBooksLegacyRetireReport is the outcome of one RetireAuthorBooksLegacy or
+// CheckAuthorBooksLegacyRetire.
 type AuthorBooksLegacyRetireReport struct {
 	// Apply is whether the run was allowed to delete.
 	Apply bool `json:"apply"`
@@ -90,17 +91,34 @@ type AuthorBooksLegacyRetireReport struct {
 	Refused bool `json:"refused"`
 }
 
+// AuthorBooksLegacyRetireProgress is called after each counted or deleted chunk
+// with a short phase name and the running count. The book-row phase calls it
+// from the pool's producer goroutine, never from two goroutines at once.
+type AuthorBooksLegacyRetireProgress func(phase string, n int)
+
+// CheckAuthorBooksLegacyRetire is the preview of RetireAuthorBooksLegacy: the
+// same check and counts, nothing written. Refused in the report says whether an
+// apply would refuse; the error is only for a failed read.
+func (p *PebbleStore) CheckAuthorBooksLegacyRetire(ctx context.Context, progress AuthorBooksLegacyRetireProgress) (AuthorBooksLegacyRetireReport, error) {
+	return p.retireAuthorBooksLegacy(ctx, false, progress)
+}
+
 // RetireAuthorBooksLegacy checks every book row's AuthorID against its credit
-// list, counts the author_books_legacy: rows, and, when apply is true and no
-// book blocks, deletes every one of them. A preview (apply false) writes
-// nothing. progress, when non-nil, is called after each counted or deleted
-// chunk with a short phase name and the running count.
+// list, counts the author_books_legacy: rows, and, when no book blocks, deletes
+// every one of them. When any book blocks it deletes nothing and returns
+// ErrAuthorBooksLegacyRetireRefused with the report naming the books: the
+// refusal lives here, in the one call that deletes, so no caller can delete
+// without the check.
 //
 // The book-row check runs on runAuthorBooksPass's bounded worker pool
 // (runtime.NumCPU() workers; each row costs a decode and one point read). The
 // delete is sequential: one iterator, a Sync commit every authorBooksBatchRows
 // keys, ctx checked between commits.
-func (p *PebbleStore) RetireAuthorBooksLegacy(ctx context.Context, apply bool, progress func(phase string, n int)) (AuthorBooksLegacyRetireReport, error) {
+func (p *PebbleStore) RetireAuthorBooksLegacy(ctx context.Context, progress AuthorBooksLegacyRetireProgress) (AuthorBooksLegacyRetireReport, error) {
+	return p.retireAuthorBooksLegacy(ctx, true, progress)
+}
+
+func (p *PebbleStore) retireAuthorBooksLegacy(ctx context.Context, apply bool, progress AuthorBooksLegacyRetireProgress) (AuthorBooksLegacyRetireReport, error) {
 	start := time.Now()
 	rep := AuthorBooksLegacyRetireReport{Apply: apply}
 	authorBooksIndexLog.Info("author-books-legacy-retire: starting: apply=%t", apply)

@@ -328,9 +328,8 @@ func (p *Plugin) fsRegroupXMLKind(deps t6g4Deps, sched *tasks.Schedule) tasks.De
 			// operations). ModifyBook (the survivor's title and path, the retired
 			// shells' soft delete) also stamps the metadata cache stale on an identity
 			// change and stages the ident: rows (metadata_cache, indexes: the shared
-			// ModifyBook row, kinds_resources.go) and the author_books_legacy: rows
-			// (authors).
-			Effects:        tasks.Writes(t6g4Res(ops.ResBooks, ops.ResBookFiles, ops.ResAuthors, ops.ResExternalIDs, ops.ResOperations, ops.ResMetadataCache, ops.ResIndexes)...),
+			// ModifyBook row, kinds_resources.go).
+			Effects:        tasks.Writes(t6g4Res(ops.ResBooks, ops.ResBookFiles, ops.ResExternalIDs, ops.ResOperations, ops.ResMetadataCache, ops.ResIndexes)...),
 			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
 			Resume:         tasks.ResumeDrop,
 			Priority:       tasks.PriorityLow,

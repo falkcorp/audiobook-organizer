@@ -286,3 +286,4 @@ maintenance.bookfile-acoustid-index-repair
 maintenance.combine-journal-check
 maintenance.credits-backfill
 metadata.batch-apply-refusals-reset
+maintenance.author-books-legacy-retire

@@ -239,6 +239,9 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.bookHashIndexRepairDef(),
 		// book_file_acoustid: index: delete the keys no row holds a segment for.
 		p.bookFileAcoustIDIndexRepairDef(),
+		// author_books_legacy: rows: retire the family no build reads (F5-18j),
+		// refusing while a book's AuthorID is not in its credit list.
+		p.authorBooksLegacyRetireDef(),
 		// combine-journal rows the purge's undo hold cannot decode: read-only list.
 		p.combineJournalCheckDef(),
 		p.identIndexRebuildDef(),

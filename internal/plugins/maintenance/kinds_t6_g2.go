@@ -128,6 +128,9 @@ const (
 	t6g2CapChapters         t6g2Capability = "chapters.persist"
 	t6g2CapFolderBuild      t6g2Capability = "book_file.by_path"
 	t6g2CapAtPathIndexBuilt t6g2Capability = "book_atpath.index_built"
+	// t6g2CapAuthorBooksLegacyRetire is the author_books_legacy: retirement
+	// (F5-18j): its check on the store, its delete on the writer.
+	t6g2CapAuthorBooksLegacyRetire t6g2Capability = "author_books_legacy.retire"
 )
 
 // t6g2HashIndexRun is one check or repair of the book hash indexes: the store's
@@ -167,6 +170,9 @@ type t6g2IndexReads interface {
 	// outcome a live migration of the book would have, with nothing written. It
 	// is a read, so a preview run (whose writer refuses to run) can use it.
 	ClassifyBookSigMigration(id string) (database.BookSigMigrateOutcome, error)
+	// CheckAuthorBooksLegacyRetire is the preview of RetireAuthorBooksLegacy:
+	// the check and the counts, nothing written.
+	CheckAuthorBooksLegacyRetire(ctx context.Context, progress database.AuthorBooksLegacyRetireProgress) (database.AuthorBooksLegacyRetireReport, error)
 }
 
 type t6g2StoreProbe interface {
@@ -201,6 +207,9 @@ type t6g2IndexWriter interface {
 	RebuildBookAtPathIndex(ctx context.Context, progress database.BookAtPathProgress) (database.BookAtPathBackfillResult, error)
 	BackfillBookAtPathIndex(ctx context.Context, progress database.BookAtPathProgress) (database.BookAtPathBackfillResult, error)
 	DeleteOrphanBookFileAcoustIDEntries(ctx context.Context, entries []database.BookFileAcoustIDEntry) (int, error)
+	// RetireAuthorBooksLegacy deletes the author_books_legacy: rows, refusing
+	// (and deleting nothing) while any book's AuthorID is not in its credits.
+	RetireAuthorBooksLegacy(ctx context.Context, progress database.AuthorBooksLegacyRetireProgress) (database.AuthorBooksLegacyRetireReport, error)
 }
 
 // t6g2RowWriter writes book, chapter and book_file rows.
@@ -430,6 +439,14 @@ func (s headT6G2Store) ClassifyBookSigMigration(id string) (database.BookSigMigr
 	return m.MigrateBookSigToSidecar(id, true)
 }
 
+func (s headT6G2Store) CheckAuthorBooksLegacyRetire(ctx context.Context, progress database.AuthorBooksLegacyRetireProgress) (database.AuthorBooksLegacyRetireReport, error) {
+	r, ok := database.AsCapability[authorBooksLegacyRetirer](s.ops)
+	if !ok {
+		return database.AuthorBooksLegacyRetireReport{}, t6g2Unsupported(s, t6g2CapAuthorBooksLegacyRetire)
+	}
+	return r.CheckAuthorBooksLegacyRetire(ctx, progress)
+}
+
 func (s headT6G2Store) Describe() string { return fmt.Sprintf("%T", s.ops) }
 
 func (s headT6G2Store) Supports(c t6g2Capability) bool {
@@ -456,6 +473,9 @@ func (s headT6G2Store) Supports(c t6g2Capability) bool {
 		return ok
 	case t6g2CapFolderBuild:
 		_, ok := any(s.ops).(folderBuildStore)
+		return ok
+	case t6g2CapAuthorBooksLegacyRetire:
+		_, ok := database.AsCapability[authorBooksLegacyRetirer](s.ops)
 		return ok
 	}
 	return false
@@ -532,6 +552,14 @@ func (w headT6G2Writer) DeleteOrphanBookFileAcoustIDEntries(ctx context.Context,
 		return 0, t6g2Unsupported(headT6G2Store{w.ops}, t6g2CapAcoustIDRepair)
 	}
 	return r.DeleteOrphanBookFileAcoustIDEntries(ctx, entries)
+}
+
+func (w headT6G2Writer) RetireAuthorBooksLegacy(ctx context.Context, progress database.AuthorBooksLegacyRetireProgress) (database.AuthorBooksLegacyRetireReport, error) {
+	r, ok := database.AsCapability[authorBooksLegacyRetirer](w.ops)
+	if !ok {
+		return database.AuthorBooksLegacyRetireReport{}, t6g2Unsupported(headT6G2Store{w.ops}, t6g2CapAuthorBooksLegacyRetire)
+	}
+	return r.RetireAuthorBooksLegacy(ctx, progress)
 }
 
 func (w headT6G2Writer) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
@@ -871,6 +899,7 @@ func t6g2KindList(deps t6g2Deps, sched func(tasks.Kind) *tasks.Schedule) []tasks
 		t6g2BookSigSidecarMigrateKind(deps, sched),
 		t6g2BuildFolderBookFilesKind(deps, sched),
 		t6g2ChaptersBackfillKind(deps, sched),
+		t6g2AuthorBooksLegacyRetireKind(deps, sched),
 	}
 }
 

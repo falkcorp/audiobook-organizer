@@ -221,8 +221,8 @@ func (p *Plugin) probeDirectoryBooksNative(deps t6g6Deps, sched func(tasks.Kind)
 	c.Title = "Probe directory-shaped books (tier 2 · re-classify)"
 	c.Help = probeDirectoryBooksHelp
 	// The shared fileRow of kinds_resources.go: a book_file row write also
-	// recomputes the owning book (books, authors, metadata_cache, indexes).
-	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResIndexes)))
+	// recomputes the owning book (books, metadata_cache, indexes).
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResIndexes)))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityNormal
 	c.ConcurrencyKey = tasks.Key("books.maintenance.relink-unlinked-books")

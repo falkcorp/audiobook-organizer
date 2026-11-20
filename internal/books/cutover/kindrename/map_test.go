@@ -229,14 +229,14 @@ func TestKindRenameMap_RuleTallies(t *testing.T) {
 		tally[tg.Rule]++
 	}
 	want := map[kindrename.Rule]int{
-		kindrename.RuleCore: 6, kindrename.RuleRepairs: 2, kindrename.RuleAlias: 19, kindrename.RuleBooks: 225, kindrename.RuleRetired: 17,
+		kindrename.RuleCore: 6, kindrename.RuleRepairs: 2, kindrename.RuleAlias: 19, kindrename.RuleBooks: 226, kindrename.RuleRetired: 17,
 	}
 	for r, n := range want {
 		if tally[r] != n {
 			t.Errorf("rule %v: %d entries, want %d", r, tally[r], n)
 		}
 	}
-	if len(tb.Defs) != 269 {
-		t.Errorf("%d entries, want 269 (the ledger's lines)", len(tb.Defs))
+	if len(tb.Defs) != 270 {
+		t.Errorf("%d entries, want 270 (the ledger's lines)", len(tb.Defs))
 	}
 }
