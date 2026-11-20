@@ -327,7 +327,7 @@ func TestUnconvert_LossyCases(t *testing.T) {
 		refused(t, ConvertMiBToBytes, `-1048576`, ErrNotRepresentable)
 		refused(t, ConvertMiBToBytes, `9007199254740994`, ErrNotRepresentable) // beyond what a float holds exactly
 		refused(t, ConvertMiBToBytes, `1e30`, ErrNotRepresentable)
-		refused(t, ConvertMiBToBytes, `9007200303317568`, ErrNotRepresentable) // a whole MiB, but past 2^53
+		refused(t, ConvertMiBToBytes, `9007199255789568`, ErrNotRepresentable) // a whole MiB, but past 2^53
 		ok(t, ConvertMiBToBytes, `9007199254740992`, `8589934592`)             // 2^53 itself is exact
 		ok(t, ConvertMiBToBytes, `1073741824`, `1024`)
 		refused(t, ConvertMiBToBytes, `"8"`, ErrConvertInput)
