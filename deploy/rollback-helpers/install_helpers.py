@@ -286,13 +286,17 @@ def check_sources(deploy_user: str, strict: bool) -> list[str]:
     watch += [x for x in HERE.iterdir() if x.is_file()]
     watch += [REPO / "scripts" / "storage_format_guard.py"]
     watch += [REPO / "deploy" / "audiobook-organizer.service"]
-    for anc in REPO.parents:
-        watch.append(anc)
+    ancestors = set(REPO.parents)
+    watch += list(REPO.parents)
     bad: list[str] = []
     for w in watch:
         try:
             st = w.stat()
         except OSError:
+            continue
+        if w in ancestors and st.st_mode & stat.S_ISVTX and st.st_uid != uid:
+            # A sticky directory (/tmp) lets anyone create entries but only
+            # rename or remove their own: the entry below it is checked itself.
             continue
         if writable_by(st, uid, gids):
             bad.append(str(w))

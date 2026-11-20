@@ -622,6 +622,20 @@ class InstallHelpers(unittest.TestCase):
     def test_a_clean_checkout_is_accepted(self) -> None:
         self.assertEqual(self.sources(self.fake_checkout(), "alfred"), [])
 
+    def test_a_sticky_world_writable_ancestor_like_tmp_is_not_a_finding(self) -> None:
+        co = self.fake_checkout()
+        parent = co.parent
+        parent.chmod(0o1777)
+        self.addCleanup(parent.chmod, 0o700)
+        self.assertEqual(self.sources(co, "alfred"), [])
+
+    def test_a_world_writable_ancestor_without_the_sticky_bit_is_named(self) -> None:
+        co = self.fake_checkout()
+        parent = co.parent
+        parent.chmod(0o777)
+        self.addCleanup(parent.chmod, 0o700)
+        self.assertIn(str(parent), self.sources(co, "alfred"))
+
     def test_a_world_writable_source_file_is_named(self) -> None:
         co = self.fake_checkout()
         guard_py = co / "scripts" / "storage_format_guard.py"
