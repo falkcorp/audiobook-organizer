@@ -1,7 +1,7 @@
 // file: core/integrations/notify/mail/email_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 5d17e2c9-83a4-4b60-9e1f-c7a02b6d4f38
-// last-edited: 2026-11-13
+// last-edited: 2026-11-19
 
 package mail
 
@@ -13,6 +13,7 @@ import (
 	"maps"
 	"net"
 	"net/textproto"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -32,6 +33,7 @@ type countingGate struct {
 	acquired int
 	done     []error
 	refuse   error
+	dials    []string // the addresses the channel dialled through the gate
 }
 
 func (g *countingGate) Acquire(context.Context, string) (integrations.Ticket, error) {
@@ -44,6 +46,16 @@ func (g *countingGate) Acquire(context.Context, string) (integrations.Ticket, er
 	return ticket{g}, nil
 }
 func (*countingGate) State() integrations.GateState { return integrations.GateState{} }
+
+// DialContext makes countingGate an integrations.GuardedDialer that does no
+// guarding of its own: these tests are about the channel, and the guard is
+// tested through the real outbound layer (email_egress_test.go).
+func (g *countingGate) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	g.mu.Lock()
+	g.dials = append(g.dials, addr)
+	g.mu.Unlock()
+	return (&net.Dialer{}).DialContext(ctx, network, addr)
+}
 
 type ticket struct{ g *countingGate }
 
@@ -360,4 +372,90 @@ func manyStrings(n int) []string {
 		out[i] = "robin" + strings.Repeat("x", i%3) + string(rune('a'+i%26)) + "@example.com"
 	}
 	return out
+}
+
+// unguardedGate admits but offers no guarded dial, as a gate wrapper that does
+// not forward the capability would.
+type unguardedGate struct{ integrations.Gate }
+
+// The channel never falls back to a plain dial: with no guarded dial on its
+// gate (or no gate at all) the send is refused locally before any connection,
+// and the refusal says why without naming the host.
+func TestEmail_NoGuardedDialRefusesBeforeAnyConnection(t *testing.T) {
+	for name, gate := range map[string]integrations.Gate{
+		"a gate with no dial": unguardedGate{&countingGate{}},
+		"no gate":             nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &fakeSMTP{offerTLS: true}
+			port, _ := startFake(t, f)
+			n := emailInstance(t, port, nil, settings(nil), gate)
+			err := n.Send(context.Background(), signalNote, notify.Target{})
+			if !errors.Is(err, integrations.ErrNoEgressGuard) {
+				t.Fatalf("err = %v, want ErrNoEgressGuard", err)
+			}
+			if c := integrations.ClassOf(context.Background(), err); c != integrations.ClassRefusedLocal {
+				t.Fatalf("class = %v, want refused_local", c)
+			}
+			if f.accepted.Load() != 0 {
+				t.Fatal("the sender connected although no guard was available")
+			}
+			if strings.Contains(err.Error(), "127.0.0.1") || strings.Contains(err.Error(), "mail.example.com") {
+				t.Errorf("the refusal names the destination: %v", err)
+			}
+		})
+	}
+}
+
+// The channel's sender connects through the gate's guarded dial, to the host
+// and port the instance names.
+func TestEmail_SendDialsThroughTheGate(t *testing.T) {
+	f := &fakeSMTP{offerTLS: true}
+	port, pool := startFake(t, f)
+	g := &countingGate{}
+	n := emailInstance(t, port, poolOf{pool}, settings(nil), g)
+	if err := n.Send(context.Background(), signalNote, notify.Target{}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	f.wait(t)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if want := net.JoinHostPort("127.0.0.1", strconv.Itoa(port)); len(g.dials) != 1 || g.dials[0] != want {
+		t.Fatalf("dialled %v through the gate, want [%s]", g.dials, want)
+	}
+}
+
+// The refusal of a guarded dial is returned as the guard made it: a local
+// refusal, with the guard's own cause, and none of the sender's connect text
+// (which names the host and port).
+func TestEmail_GuardRefusalIsReturnedWithoutTheDestination(t *testing.T) {
+	f := &fakeSMTP{offerTLS: true}
+	port, _ := startFake(t, f)
+	cause := errors.New("blocked by the guard")
+	g := &refusingDialGate{countingGate: &countingGate{}, err: &integrations.Error{
+		Ref: batphone, Op: "dial", Class: integrations.ClassRefusedLocal, Err: cause}}
+	n := emailInstance(t, port, nil, settings(nil), g)
+	err := n.Send(context.Background(), signalNote, notify.Target{})
+	if !errors.Is(err, cause) || integrations.ClassOf(context.Background(), err) != integrations.ClassRefusedLocal {
+		t.Fatalf("err = %v, want the guard's local refusal", err)
+	}
+	if strings.Contains(err.Error(), strconv.Itoa(port)) || strings.Contains(err.Error(), "127.0.0.1") {
+		t.Errorf("the refusal names the destination: %v", err)
+	}
+	if f.accepted.Load() != 0 {
+		t.Fatal("connected although the guard refused")
+	}
+	if len(g.done) != 1 || g.done[0] == nil {
+		t.Errorf("the ticket was ended with %v, want the refusal", g.done)
+	}
+}
+
+// refusingDialGate is a gate whose guarded dial refuses.
+type refusingDialGate struct {
+	*countingGate
+	err error
+}
+
+func (g *refusingDialGate) DialContext(context.Context, string, string) (net.Conn, error) {
+	return nil, g.err
 }
