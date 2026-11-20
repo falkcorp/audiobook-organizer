@@ -44,8 +44,8 @@ func wantJSON(t *testing.T, got json.RawMessage, want string) {
 }
 
 const (
-	ghEntry = `{"id":"github","kind":"github","client_id":"gh-batman","allowed_emails":["bruce@batcave.example"],"default_role":"editor"}`
-	goEntry = `{"id":"google","kind":"oidc","issuer":"https://accounts.google.com","client_id":"go-robin","allowed_emails":["bruce@batcave.example"],"default_role":"editor"}`
+	ghEntry = `{"id":"github","kind":"github","issuer":"","client_id":"gh-batman","scopes":[],"allowed_emails":["bruce@batcave.example"],"allowed_domains":[],"link_existing_by_email":false,"default_role":"editor"}`
+	goEntry = `{"id":"google","kind":"oidc","issuer":"https://accounts.google.com","client_id":"go-robin","scopes":[],"allowed_emails":["bruce@batcave.example"],"allowed_domains":[],"link_existing_by_email":false,"default_role":"editor"}`
 )
 
 // TestFoldOIDC_IsThePlannersFold: with no prev, the entries FoldOIDC returns are
@@ -105,7 +105,7 @@ func TestFoldOIDC_AddsAProvider(t *testing.T) {
 	// set by name and the caller adds the reference); the other is untouched.
 	prev := `[` + ghEntry + `]`
 	got := foldOK(t, vals(t, map[string]any{"oauth_google_client_id": "go-robin"}), prev)
-	wantJSON(t, got, `[`+ghEntry+`,{"id":"google","kind":"oidc","issuer":"https://accounts.google.com","client_id":"go-robin","allowed_emails":["bruce@batcave.example"],"default_role":"editor"}]`)
+	wantJSON(t, got, `[`+ghEntry+`,{"id":"google","kind":"oidc","issuer":"https://accounts.google.com","client_id":"go-robin","scopes":[],"allowed_domains":[],"link_existing_by_email":false,"allowed_emails":["bruce@batcave.example"],"default_role":"editor"}]`)
 }
 
 func TestFoldOIDC_RemovesAProvider(t *testing.T) {
@@ -129,7 +129,7 @@ func TestFoldOIDC_AbsentNamesComeFromPrev(t *testing.T) {
 	wantJSON(t, foldOK(t, vals(t, map[string]any{}), prev), prev)
 	// Only the role named: the id, the allow-list and sign-in stay.
 	wantJSON(t, foldOK(t, vals(t, map[string]any{"oauth_default_role": "viewer"}), prev),
-		`[{"id":"github","kind":"github","client_id":"gh-batman","allowed_emails":["bruce@batcave.example"],"default_role":"viewer"}]`)
+		`[{"id":"github","kind":"github","issuer":"","client_id":"gh-batman","scopes":[],"allowed_domains":[],"link_existing_by_email":false,"allowed_emails":["bruce@batcave.example"],"default_role":"viewer"}]`)
 	// Client ids with sign-in not on anywhere: nothing to fold.
 	wantJSON(t, foldOK(t, vals(t, map[string]any{"oauth_github_client_id": "gh-batman"}), ``), `[]`)
 }
@@ -139,13 +139,13 @@ func TestFoldOIDC_ClearsAllowListAndRole(t *testing.T) {
 	got := foldOK(t, vals(t, map[string]any{"oauth_allowed_emails": "", "oauth_default_role": ""}), prev)
 	// The allow-list is cleared to an explicit empty list (HEAD: no OAuth logins),
 	// never dropped; the role, which has no empty meaning, is removed.
-	wantJSON(t, got, `[{"id":"github","kind":"github","client_id":"gh-batman","allowed_emails":[]},{"id":"google","kind":"oidc","issuer":"https://accounts.google.com","client_id":"go-robin","allowed_emails":[]}]`)
+	wantJSON(t, got, `[{"id":"github","kind":"github","issuer":"","client_id":"gh-batman","scopes":[],"allowed_domains":[],"link_existing_by_email":false,"allowed_emails":[]},{"id":"google","kind":"oidc","issuer":"https://accounts.google.com","client_id":"go-robin","scopes":[],"allowed_domains":[],"link_existing_by_email":false,"allowed_emails":[]}]`)
 }
 
 func TestFoldOIDC_Lossy(t *testing.T) {
 	// Spacing and empties in the allow-list are normalised on the way in.
 	got := foldOK(t, vals(t, map[string]any{"oauth_enabled": true, "oauth_github_client_id": "gh-batman", "oauth_allowed_emails": " bruce@batcave.example , ,alfred@batcave.example"}), ``)
-	wantJSON(t, got, `[{"id":"github","kind":"github","client_id":"gh-batman","allowed_emails":["bruce@batcave.example","alfred@batcave.example"]}]`)
+	wantJSON(t, got, `[{"id":"github","kind":"github","issuer":"","client_id":"gh-batman","scopes":[],"allowed_domains":[],"link_existing_by_email":false,"allowed_emails":["bruce@batcave.example","alfred@batcave.example"]}]`)
 }
 
 func TestFoldOIDC_Refusals(t *testing.T) {
@@ -335,15 +335,15 @@ func TestFoldOIDC_PartialWriteKeepsPolicy(t *testing.T) {
 	prev := `[` + ghEntry + `,` + goEntry + `]`
 	// Only a client id: both the allow-list and the role stay.
 	got := foldOK(t, vals(t, map[string]any{"oauth_github_client_id": "gh-nightwing"}), prev)
-	wantJSON(t, got, `[{"id":"github","kind":"github","client_id":"gh-nightwing","allowed_emails":["bruce@batcave.example"],"default_role":"editor"},`+goEntry+`]`)
+	wantJSON(t, got, `[{"id":"github","kind":"github","issuer":"","client_id":"gh-nightwing","scopes":[],"allowed_domains":[],"link_existing_by_email":false,"allowed_emails":["bruce@batcave.example"],"default_role":"editor"},`+goEntry+`]`)
 	// Only sign-in on: nothing changes.
 	wantJSON(t, foldOK(t, vals(t, map[string]any{"oauth_enabled": true}), prev), prev)
 	// Only the allow-list named: the role stays.
 	got = foldOK(t, vals(t, map[string]any{"oauth_allowed_emails": "alfred@batcave.example"}), prev)
-	wantJSON(t, got, `[{"id":"github","kind":"github","client_id":"gh-batman","allowed_emails":["alfred@batcave.example"],"default_role":"editor"},{"id":"google","kind":"oidc","issuer":"https://accounts.google.com","client_id":"go-robin","allowed_emails":["alfred@batcave.example"],"default_role":"editor"}]`)
+	wantJSON(t, got, `[{"id":"github","kind":"github","issuer":"","client_id":"gh-batman","scopes":[],"allowed_domains":[],"link_existing_by_email":false,"allowed_emails":["alfred@batcave.example"],"default_role":"editor"},{"id":"google","kind":"oidc","issuer":"https://accounts.google.com","client_id":"go-robin","scopes":[],"allowed_domains":[],"link_existing_by_email":false,"allowed_emails":["alfred@batcave.example"],"default_role":"editor"}]`)
 	// Only the role named: the allow-list stays.
 	got = foldOK(t, vals(t, map[string]any{"oauth_default_role": "viewer"}), prev)
-	wantJSON(t, got, `[{"id":"github","kind":"github","client_id":"gh-batman","allowed_emails":["bruce@batcave.example"],"default_role":"viewer"},{"id":"google","kind":"oidc","issuer":"https://accounts.google.com","client_id":"go-robin","allowed_emails":["bruce@batcave.example"],"default_role":"viewer"}]`)
+	wantJSON(t, got, `[{"id":"github","kind":"github","issuer":"","client_id":"gh-batman","scopes":[],"allowed_domains":[],"link_existing_by_email":false,"allowed_emails":["bruce@batcave.example"],"default_role":"viewer"},{"id":"google","kind":"oidc","issuer":"https://accounts.google.com","client_id":"go-robin","scopes":[],"allowed_domains":[],"link_existing_by_email":false,"allowed_emails":["bruce@batcave.example"],"default_role":"viewer"}]`)
 	// A provider added by a partial write takes the allow-list and role prev holds.
 	got = foldOK(t, vals(t, map[string]any{"oauth_google_client_id": "go-robin"}), `[`+ghEntry+`]`)
 	wantJSON(t, got, `[`+ghEntry+`,`+goEntry+`]`)
@@ -366,7 +366,7 @@ func TestFoldOIDC_EmptyAllowListKeepsHEADMeaning(t *testing.T) {
 	}
 	// A new entry carries the empty list too.
 	got = foldOK(t, vals(t, map[string]any{"oauth_enabled": true, "oauth_github_client_id": "gh-batman", "oauth_allowed_emails": ""}), ``)
-	wantJSON(t, got, `[{"id":"github","kind":"github","client_id":"gh-batman","allowed_emails":[]}]`)
+	wantJSON(t, got, `[{"id":"github","kind":"github","issuer":"","client_id":"gh-batman","scopes":[],"allowed_domains":[],"link_existing_by_email":false,"allowed_emails":[]}]`)
 	// The round trip keeps the meaning: Unfold reads "" back.
 	flat, err := UnfoldOIDC(got)
 	if err != nil || string(flat["oauth_allowed_emails"]) != `""` {
@@ -441,9 +441,9 @@ func TestFoldOIDC_NonStringIDIsAnError(t *testing.T) {
 // A partial write leaves the allow-list and the role as prev spells them,
 // byte for byte, even where the fold would spell them differently.
 func TestFoldOIDC_PartialWriteLeavesPolicyUntouched(t *testing.T) {
-	prev := `[{"id":"github","kind":"github","client_id":"gh-batman","allowed_emails":[" Bruce@batcave.example "],"default_role":" editor "}]`
+	prev := `[{"id":"github","kind":"github","issuer":"","client_id":"gh-batman","scopes":[],"allowed_domains":[],"link_existing_by_email":false,"allowed_emails":[" Bruce@batcave.example "],"default_role":" editor "}]`
 	got := foldOK(t, vals(t, map[string]any{"oauth_github_client_id": "gh-nightwing"}), prev)
-	wantJSON(t, got, `[{"id":"github","kind":"github","client_id":"gh-nightwing","allowed_emails":[" Bruce@batcave.example "],"default_role":" editor "}]`)
+	wantJSON(t, got, `[{"id":"github","kind":"github","issuer":"","client_id":"gh-nightwing","scopes":[],"allowed_domains":[],"link_existing_by_email":false,"allowed_emails":[" Bruce@batcave.example "],"default_role":" editor "}]`)
 }
 
 func TestFoldRoots_AnAliasWithNoRootNeverMatchesARootWithNoPath(t *testing.T) {

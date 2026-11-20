@@ -1031,9 +1031,16 @@ func (pl *planner) fold() {
 			pl.p.Quarantines = append(pl.p.Quarantines, quarantined{Key: quarantineKey("oauth_" + p.id + "_client_id"), Raw: marshalAt(pair), Reason: reasonOAuthDisabled})
 			continue
 		}
-		entry := map[string]any{"id": p.id, "kind": p.kind, "client_id": id}
-		if p.issuer != "" {
-			entry["issuer"] = p.issuer
+		// Core's schema for a provider entry requires issuer, scopes, allowed_emails,
+		// allowed_domains and link_existing_by_email to be present (authOIDCProvider
+		// has no omitempty on them), so an entry without them is refused whole and
+		// sign-in goes off. An empty allow-list is written out as [], which admits
+		// nobody, HEAD's meaning of an empty oauth_allowed_emails; the other three
+		// take the zero values HEAD has no setting for.
+		entry := map[string]any{
+			"id": p.id, "kind": p.kind, "client_id": id, "issuer": p.issuer,
+			"scopes": []string{}, "allowed_emails": []string{}, "allowed_domains": []string{},
+			"link_existing_by_email": false,
 		}
 		if len(emails) > 0 {
 			entry["allowed_emails"] = emails
