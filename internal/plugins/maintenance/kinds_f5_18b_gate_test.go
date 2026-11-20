@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_f5_18b_gate_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 91c3e5a7-2b04-4d68-a1f9-6e7d0c4b8325
 // last-edited: 2026-11-19
 
@@ -84,11 +84,23 @@ type f518bRun struct {
 	def           tasks.Definition
 	w             *writertest.Writer
 	before, after map[string]string
+	store         *database.PebbleStore
 }
 
 func f518bResolveRun(t *testing.T, declare func([]entity.Ref) []entity.Ref) f518bRun {
 	t.Helper()
+	return f518bResolveRunWith(t, declare, nil, "Bruce Wayne")
+}
+
+// f518bResolveRunWith is f518bResolveRun over a store that setup has also
+// seeded, with the provider crediting providerAuthor. The store is in the
+// result's store field.
+func f518bResolveRunWith(t *testing.T, declare func([]entity.Ref) []entity.Ref, setup func(*testing.T, *database.PebbleStore), providerAuthor string) f518bRun {
+	t.Helper()
 	s := newRepairPebble(t)
+	if setup != nil {
+		setup(t, s)
+	}
 	prod, err := s.CreateAuthor("Monarch Theater")
 	require.NoError(t, err)
 	repairBook(t, s, "b1", &prod.ID, prod.ID)
@@ -103,7 +115,7 @@ func f518bResolveRun(t *testing.T, declare func([]entity.Ref) []entity.Ref) f518
 	deps.NewMetadataFetcher = func(w tasks.Writer) t6g1MetadataFetcher {
 		enforcing = w.(*writertest.Writer)
 		return f518bFetcher{f518bGatedService(t, s, w, []metadata.BookMetadata{{
-			Title: "Year One", Author: "Bruce Wayne", Publisher: "Wayne Enterprises", Series: "The Long Halloween", SeriesPosition: "1",
+			Title: "Year One", Author: providerAuthor, Publisher: "Wayne Enterprises", Series: "The Long Halloween", SeriesPosition: "1",
 			Description: "A masked vigilante's first year.", PublishYear: 1987, Language: "English",
 		}})}
 	}
@@ -114,7 +126,7 @@ func f518bResolveRun(t *testing.T, declare func([]entity.Ref) []entity.Ref) f518
 	_, _, err = runT6G1Full(t, def, tasks.ModeLive, w, "", nil)
 	require.NoError(t, err)
 	require.Same(t, w, enforcing, "the fetcher was built over the run's writer")
-	return f518bRun{def, w, before, t6g5Snapshot(t, s)}
+	return f518bRun{def, w, before, t6g5Snapshot(t, s), s}
 }
 
 // f518bWriter is the enforcing writer for def, over its own write set or over
@@ -284,5 +296,46 @@ func f518bAutoMatchRun(t *testing.T, declare func([]entity.Ref) []entity.Ref) f5
 	if declare == nil {
 		require.Equal(t, trans, got.Title, "the apply filled the empty title")
 	}
-	return f518bRun{def, w, before, t6g5Snapshot(t, s)}
+	return f518bRun{def, w, before, t6g5Snapshot(t, s), s}
+}
+
+// TestF518b_O9_AliasOnlyPartIsLinkedNotCombined (round 3, M1): the apply's
+// author resolution (authorcredit.ResolveBook) reads optional capabilities of
+// the store it is given (the alias lookup, the title listing, the author-history
+// read, the by-author book listing). Through the gate those must resolve as they
+// do on the bare store, or the gated apply credits differently: a provider
+// credit of two parts, one an existing author known only by an alias, links
+// both authors ungated, and through a wrapper that hides the alias lookup it
+// mints one combined author row. The run is the real resolve-production-authors
+// apply, admitted by the kind's own Effects.
+func TestF518b_O9_AliasOnlyPartIsLinkedNotCombined(t *testing.T) {
+	const credit = "Bruce Wayne, Richard Grayson"
+	r := f518bResolveRunWith(t, nil, func(t *testing.T, s *database.PebbleStore) {
+		t.Helper()
+		_, err := s.CreateAuthor("Bruce Wayne")
+		require.NoError(t, err)
+		dick, err := s.CreateAuthor("Dick Grayson")
+		require.NoError(t, err)
+		_, err = s.CreateAuthorAlias(dick.ID, "Richard Grayson", "pen_name")
+		require.NoError(t, err)
+	}, credit)
+	require.NoError(t, r.w.RequireClean())
+
+	authors, err := r.store.GetAllAuthors()
+	require.NoError(t, err)
+	byName := map[string]int{}
+	for _, a := range authors {
+		byName[a.Name] = a.ID
+		require.NotContains(t, a.Name, ",", "a combined author row %q was created", a.Name)
+	}
+	require.NotContains(t, byName, credit)
+
+	links, err := r.store.GetBookAuthors("b1")
+	require.NoError(t, err)
+	var linked []int
+	for _, l := range links {
+		linked = append(linked, l.AuthorID)
+	}
+	require.Contains(t, linked, byName["Bruce Wayne"], "the existing author named by name is linked")
+	require.Contains(t, linked, byName["Dick Grayson"], "the existing author known only by alias is linked")
 }

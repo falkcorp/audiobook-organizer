@@ -1,5 +1,5 @@
 // file: internal/books/writer/metafetchgate/store.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7a1d93e6-48c2-4f5b-b0e7-3d9c15a8f264
 // last-edited: 2026-11-19
 
@@ -19,6 +19,12 @@
 // every method of metafetch.Store as gated or read, so a new method fails until
 // a person classifies it, and they call every gated method over a nil inner
 // store to prove none of them reaches it past the gate.
+//
+// The wrapper is opaque to database.AsCapability (no Unwrap), so the optional
+// capabilities of the real store are not visible through it unless the wrapper
+// offers them itself. capabilities.go forwards the READ ones the consumers use
+// (hiding one changes what the consumer does); the WRITE ones stay hidden, which
+// fails closed. TestStoreCapabilitiesAreClassified lists them all.
 package metafetchgate
 
 import (
