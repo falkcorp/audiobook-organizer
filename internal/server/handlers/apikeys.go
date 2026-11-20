@@ -28,10 +28,16 @@ const (
 	DefaultAPIKeyTTLDays = 30
 	// DefaultAPIKeyTTL is DefaultAPIKeyTTLDays as a duration.
 	DefaultAPIKeyTTL = DefaultAPIKeyTTLDays * 24 * time.Hour
-	// MaxAPIKeyTTLDays is the longest lifetime a key may be given: one
-	// renewal a year for a set-and-forget integration, and a leaked,
-	// forgotten key still dies on its own. Over it is a 400, not a clamp.
-	MaxAPIKeyTTLDays = 365
+	// MaxAPIKeyTTLDays is the longest lifetime a key may be given: three
+	// years of 365 days (owner decision, 2026-11-20). A set-and-forget
+	// integration renews once every three years, and a leaked, forgotten key
+	// still dies on its own. It bounds expires_in_days and expires_at alike,
+	// counted from the moment of the request; over it is a 400, not a clamp.
+	// Three years is 1095 days, not three calendar years: a span that
+	// crosses a leap day is 1096 days long, and one number for both request
+	// fields, the UI's date picker and core's max_ttl keeps a picked date
+	// from being refused by one of them.
+	MaxAPIKeyTTLDays = 1095
 	// MaxAPIKeyTTL is MaxAPIKeyTTLDays as a duration.
 	MaxAPIKeyTTL = MaxAPIKeyTTLDays * 24 * time.Hour
 )
@@ -66,13 +72,48 @@ const noClampMessage = "this credential has no expiry to limit a new key to; sig
 
 // ---- Request / response types -----------------------------------------------
 
-// CreateAPIKeyRequest is the JSON body for POST /api/v1/auth/api-keys.
+// CreateAPIKeyRequest is the JSON body for POST /api/v1/auth/api-keys. The
+// expiry is expires_in_days or expires_at, never both; with neither the key
+// gets DefaultAPIKeyTTLDays.
 type CreateAPIKeyRequest struct {
 	Name          string   `json:"name" binding:"required"`
 	Description   string   `json:"description"`
 	Scopes        []string `json:"scopes"`
 	ExpiresInDays int      `json:"expires_in_days"`
-	UserID        string   `json:"user_id"`
+	// ExpiresAt is an RFC 3339 instant, after the request and no later than
+	// MaxAPIKeyTTL from it. A string, not a time.Time, so a malformed value
+	// gets requestedExpiry's message rather than encoding/json's.
+	ExpiresAt string `json:"expires_at"`
+	UserID    string `json:"user_id"`
+}
+
+// requestedExpiry is the expiry req asks for at now, before any clamp to the
+// calling key. Its error is the 400 message.
+func requestedExpiry(req CreateAPIKeyRequest, now time.Time) (time.Time, error) {
+	if req.ExpiresAt != "" {
+		if req.ExpiresInDays != 0 {
+			return time.Time{}, errors.New("send expires_in_days or expires_at, not both")
+		}
+		at, err := time.Parse(time.RFC3339, req.ExpiresAt)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("expires_at must be an RFC 3339 date-time such as 2027-01-31T12:00:00Z, got %q", req.ExpiresAt)
+		}
+		if !at.After(now) {
+			return time.Time{}, errors.New("expires_at must be in the future")
+		}
+		if at.After(now.Add(MaxAPIKeyTTL)) {
+			return time.Time{}, fmt.Errorf("expires_at must be no more than %d days (3 years) from now", MaxAPIKeyTTLDays)
+		}
+		return at.UTC(), nil
+	}
+	if req.ExpiresInDays < 0 || req.ExpiresInDays > MaxAPIKeyTTLDays {
+		return time.Time{}, fmt.Errorf("expires_in_days must be between 1 and %d (3 years); omit it or send 0 for the default of %d", MaxAPIKeyTTLDays, DefaultAPIKeyTTLDays)
+	}
+	days := req.ExpiresInDays
+	if days == 0 {
+		days = DefaultAPIKeyTTLDays
+	}
+	return now.Add(time.Duration(days) * 24 * time.Hour), nil
 }
 
 // CreateAPIKeyResponse is returned after successfully creating an API key.
@@ -127,11 +168,14 @@ type APIKeyHandlerStore interface {
 // APIKeyHandler handles all /auth/api-keys routes.
 type APIKeyHandler struct {
 	store APIKeyHandlerStore
+	// now is the clock a new key's expiry is counted from: time.Now outside
+	// tests, which pin it to test the cap to the second.
+	now func() time.Time
 }
 
 // NewAPIKeyHandler constructs an APIKeyHandler.
 func NewAPIKeyHandler(store APIKeyHandlerStore) *APIKeyHandler {
-	return &APIKeyHandler{store: store}
+	return &APIKeyHandler{store: store, now: time.Now}
 }
 
 func buildAPIKeyResponse(key database.APIKey, username string) APIKeyResponse {
@@ -183,8 +227,9 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, err.Error())
 		return
 	}
-	if req.ExpiresInDays < 0 || req.ExpiresInDays > MaxAPIKeyTTLDays {
-		httputil.RespondWithBadRequest(c, fmt.Sprintf("expires_in_days must be between 1 and %d (omit it or send 0 for the default of %d)", MaxAPIKeyTTLDays, DefaultAPIKeyTTLDays))
+	asked, err := requestedExpiry(req, h.now())
+	if err != nil {
+		httputil.RespondWithBadRequest(c, err.Error())
 		return
 	}
 	targetUserID := caller.ID
@@ -229,11 +274,7 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 	if len(key.Scopes) == 0 {
 		key.Scopes = []string{}
 	}
-	days := req.ExpiresInDays
-	if days == 0 {
-		days = DefaultAPIKeyTTLDays
-	}
-	exp, clamped, ok := clampToCallingKey(c, time.Now().Add(time.Duration(days)*24*time.Hour))
+	exp, clamped, ok := clampToCallingKey(c, asked)
 	if !ok {
 		httputil.RespondWithForbidden(c, noClampMessage)
 		return

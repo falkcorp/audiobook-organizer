@@ -7604,7 +7604,10 @@ export interface CreateAPIKeyRequest {
   name: string;
   description?: string;
   scopes?: string[];
+  // The expiry: expires_in_days (1 to 1095) or expires_at (an RFC 3339
+  // instant at most 1095 days out), never both; neither is the 30-day default.
   expires_in_days?: number;
+  expires_at?: string;
   user_id?: string;
 }
 

@@ -593,7 +593,7 @@ func TestCoreSections_Defaults(t *testing.T) {
 		{"core.auth", "core.auth.mode", "required"},
 		{"core.auth", "core.auth.session.ttl", 24 * time.Hour},
 		{"core.auth", "core.auth.session.remember_ttl", 168 * time.Hour},
-		{"core.auth", "core.auth.apikey.max_ttl", 8760 * time.Hour},
+		{"core.auth", "core.auth.apikey.max_ttl", 26280 * time.Hour},
 		{"core.auth", "core.auth.bootstrap.key_ttl", 8 * time.Hour},
 		{"core.auth", "core.auth.bootstrap.readonly_key.scopes", 1},
 		{"core.auth", "core.auth.login.soft_step", 200 * time.Millisecond},

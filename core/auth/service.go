@@ -31,7 +31,15 @@ const (
 	DefaultSessionTTL  = 24 * time.Hour
 	DefaultRememberTTL = 168 * time.Hour
 	DefaultKeyTTL      = 720 * time.Hour
-	DefaultKeyMaxTTL   = 8760 * time.Hour
+	// DefaultKeyMaxTTL is core.auth.apikey.max_ttl's default: the longest
+	// lifetime a new key may ask for, three years of 365 days (ABO owner
+	// decision, 2026-11-20; HEAD's handlers.MaxAPIKeyTTLDays is the same
+	// 1095 days). Longer is ErrBadInput, never a clamp.
+	DefaultKeyMaxTTL = 1095 * 24 * time.Hour
+	// MaxKeyMaxTTL caps any configured core.auth.apikey.max_ttl: an operator
+	// may shorten the longest key lifetime but never raise it past three
+	// years, so every key still dies on its own within them.
+	MaxKeyMaxTTL = 1095 * 24 * time.Hour
 	// DefaultSessionCookie is core.auth.session.cookie_name's fallback; the
 	// kernel passes <AppID>_session (§4.3, SEC-11).
 	DefaultSessionCookie = "mediacore_session"
@@ -90,7 +98,7 @@ type Settings struct {
 	SessionTTL    time.Duration // core.auth.session.ttl
 	RememberTTL   time.Duration // core.auth.session.remember_ttl
 	KeyDefaultTTL time.Duration // core.auth.apikey.default_ttl
-	KeyMaxTTL     time.Duration // core.auth.apikey.max_ttl
+	KeyMaxTTL     time.Duration // core.auth.apikey.max_ttl, capped at MaxKeyMaxTTL
 	SessionCookie string        // core.auth.session.cookie_name
 	// NoHostPrefix is core.auth.session.cookie_host_prefix=false: a Secure
 	// session cookie keeps its plain name (§4.3).
@@ -172,6 +180,7 @@ func (s Settings) withDefaults() Settings {
 	if s.KeyMaxTTL <= 0 {
 		s.KeyMaxTTL = DefaultKeyMaxTTL
 	}
+	s.KeyMaxTTL = min(s.KeyMaxTTL, MaxKeyMaxTTL)
 	if s.MinPasswordLength <= 0 {
 		s.MinPasswordLength = DefaultMinPasswordLength
 	}

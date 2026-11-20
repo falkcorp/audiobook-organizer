@@ -64,7 +64,7 @@ func TestAPIKeyCreate_DefaultsTo30Days(t *testing.T) {
 	expiresIn(t, created.ExpiresAt, handlers.DefaultAPIKeyTTL)
 }
 
-func TestAPIKeyCreate_365Accepted(t *testing.T) {
+func TestAPIKeyCreate_365StillAccepted(t *testing.T) {
 	store := handlersmocks.NewMockAPIKeyHandlerStore(t)
 	var created *database.APIKey
 	echoCreatedKey(store, &created)
@@ -74,11 +74,11 @@ func TestAPIKeyCreate_365Accepted(t *testing.T) {
 	handlers.NewAPIKeyHandler(store).Create(c)
 
 	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
-	expiresIn(t, created.ExpiresAt, handlers.MaxAPIKeyTTL)
+	expiresIn(t, created.ExpiresAt, 365*24*time.Hour)
 }
 
 func TestAPIKeyCreate_OutOfRangeIs400(t *testing.T) {
-	for _, days := range []int{366, 3650, -1} {
+	for _, days := range []int{handlers.MaxAPIKeyTTLDays + 1, 3650, -1} {
 		store := handlersmocks.NewMockAPIKeyHandlerStore(t) // no CreateAPIKey expected
 		c, w := newAuthCtx("POST", "/auth/api-keys", map[string]any{"name": "too long", "expires_in_days": days})
 		asCaller(c, &database.User{ID: "user-1"}, auth.MethodSession, nil)
