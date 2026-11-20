@@ -188,6 +188,23 @@ type WindowBackfillParams struct {
 type WindowBackfillCursor struct {
 	Tier        int    `json:"tier"`
 	AfterFileID string `json:"after_file_id,omitempty"`
+	// StartedAt is when the run first began, carried through every checkpoint so
+	// the native kind's total budget (windowTotalBudget) runs across the attempts
+	// it yields between. Zero in HEAD's shell, which has one 72h attempt and never
+	// stamps it.
+	StartedAt time.Time `json:"started_at,omitzero"`
+}
+
+// windowCursor is the cursor for tier with every file of it at or below after
+// done. It carries the run's StartedAt from params.Resume (the core stamps it
+// there when the run can yield), so no checkpoint of a yielding run drops it:
+// one that did would restart the budget clock on the next attempt.
+func windowCursor(params WindowBackfillParams, tier int, after string) *WindowBackfillCursor {
+	c := &WindowBackfillCursor{Tier: tier, AfterFileID: after}
+	if params.Resume != nil {
+		c.StartedAt = params.Resume.StartedAt
+	}
+	return c
 }
 
 // windowTier numbers.
@@ -588,6 +605,20 @@ type windowEnv struct {
 	// a dry run write nothing). The hub's remote-result writes go through it too.
 	Writer kindWriter
 	Host   windowHooks
+
+	// The fields below make a run yield instead of running into its attempt
+	// deadline. Deadline nil (HEAD's shell, which has one 72h attempt) never yields.
+	//
+	// Deadline is the attempt's deadline (rc.Deadline). YieldMargin is how close to
+	// it the run stops admitting work; it must cover the time to settle what is in
+	// flight (windowYieldMargin). TotalBudget bounds the run across attempts (0:
+	// windowTotalBudget). Now is the clock (nil: time.Now). ContinueInPlace is the
+	// sentinel the run returns after saving its cursor (tasks.ErrContinueInPlace).
+	Deadline        func() time.Time
+	YieldMargin     time.Duration
+	TotalBudget     time.Duration
+	Now             func() time.Time
+	ContinueInPlace error
 }
 
 // headWindowEnv fills the env from HEAD's plugin and reporter.
@@ -687,6 +718,14 @@ func windowBackfillCore(ctx context.Context, params WindowBackfillParams, env wi
 		}
 		return env.Checkpoint(state)
 	}
+	y := newWindowYield(env, &params, hub)
+	run.yield = y
+	if y != nil {
+		wctx, wstop := context.WithCancel(ctx)
+		watched := make(chan struct{})
+		go func() { defer close(watched); y.watch(wctx) }()
+		defer func() { wstop(); <-watched }()
+	}
 	total := len(plan.tiers[0]) + len(plan.tiers[1])
 	done := 0
 	for tier := range windowTierCount {
@@ -708,11 +747,16 @@ func windowBackfillCore(ctx context.Context, params WindowBackfillParams, env wi
 		if len(items) == 0 {
 			continue
 		}
+		if y.stopping() {
+			// Out of attempt (or run) before this tier began: nothing in flight.
+			return y.finish(res, &tally, params, checkpoint, progress, tier, items, done, total, 0)
+		}
 		for i := range items {
 			items[i].qi = i
 		}
 		hub.beginTier(tier, items)
-		opts := windowItemsOptions(done, total, tier, items, params, checkpoint, &tally, hub.checkpointMark)
+		opts := windowItemsOptions(done, total, tier, items, params, checkpoint, &tally,
+			func(mark int) int { return y.cap(hub.checkpointMark(mark)) })
 		run.progCur.Store(int64(done))
 		run.progTotal.Store(int64(total))
 		par := windowParallelism(workers)
@@ -728,23 +772,41 @@ func windowBackfillCore(ctx context.Context, params WindowBackfillParams, env wi
 				run.remoteHeartbeat(tctx, stop, hub, tier, noWorkerGrace(params.NoWorkerGraceSec), pendingGrace(params.PendingGraceSec))
 			}()
 			remote := run.remoteOnlyItem(hub)
-			err = env.Items(tctx, par, len(items), opts, func(ctx context.Context, i int) error { return remote(ctx, items[i]) })
+			err = env.Items(tctx, par, len(items), opts, func(ctx context.Context, i int) error {
+				if y.stopping() {
+					y.skip(items[i].qi)
+					return nil
+				}
+				return remote(ctx, items[i])
+			})
 			stop(nil)
 			<-hbDone
 			if cause := context.Cause(tctx); err != nil && errors.Is(cause, errNoRemoteWorkers) {
 				err = cause
 			}
-			// No drain: the pool returned only after every item was finished by
-			// a worker or deferred, so nothing is leased or owed any more.
+			// No drain on a normal tier: the pool returned only after every item was
+			// finished by a worker or deferred, so nothing is leased or owed any more.
+			// A yielding run is the exception: items it skipped may still be leased
+			// (the hub leases ahead of the pool's waiters), so it waits those out.
+			if err == nil && y.stopped() {
+				err = run.drainRemote(ctx, hub, tier, workers)
+			}
 		} else {
 			err = env.Items(ctx, par, len(items), opts, func(ctx context.Context, i int) error {
 				it := items[i]
+				if y.stopping() {
+					// Not claimed: left pending for the resumed attempt, and the
+					// cursor stays below it (windowYield.skip).
+					y.skip(it.qi)
+					return nil
+				}
 				if hub.claimServer(it.qi) {
 					err := run.file(ctx, it)
 					hub.serverDone(it.qi)
 					if err != nil {
 						return err
 					}
+					y.completed()
 				} // else a remote lease holds it; it comes back done or requeued
 				// Files workers handed to the server lane are cut here, by the
 				// same pool, while the pass runs: left for the drain, each one
@@ -759,10 +821,18 @@ func windowBackfillCore(ctx context.Context, params WindowBackfillParams, env wi
 			fillWindowResult(res, &tally)
 			return res, err
 		}
+		if y.stopped() {
+			// The pool and the lease drain have returned, so every lease is
+			// settled. A tier that still has unreached files yields; one that
+			// finished anyway falls through and yields at the top of the next.
+			if mark := y.cursorMark(hub, len(items)); mark < len(items) {
+				return y.finish(res, &tally, params, checkpoint, progress, tier, items, done, total, mark)
+			}
+		}
 		done += len(items)
 		// Tier finished: the next resume starts at the next tier.
 		next := params
-		next.Resume = &WindowBackfillCursor{Tier: tier + 1}
+		next.Resume = windowCursor(params, tier+1, "")
 		if cerr := checkpoint(next); cerr != nil {
 			wbLog.Warn("checkpoint after tier %d: %v", tier, cerr)
 		}
@@ -816,7 +886,7 @@ func windowItemsOptions(done, total, tier int, items []windowItem, params Window
 				return nil
 			}
 			next := params
-			next.Resume = &WindowBackfillCursor{Tier: tier, AfterFileID: items[mark-1].FileID}
+			next.Resume = windowCursor(params, tier, items[mark-1].FileID)
 			if err := checkpoint(next); err != nil {
 				wbLog.Warn("checkpoint tier %d after %s: %v", tier, items[mark-1].FileID, err)
 			}
@@ -1241,6 +1311,10 @@ type windowRun struct {
 	ioFailures  atomic.Int64 // all I/O-shaped failures, for log rate-limiting
 
 	progCur, progTotal atomic.Int64 // last progress, re-sent while paused
+
+	// yield is the run's yield-before-deadline state; nil for a run that cannot
+	// yield (HEAD's shell). Every method of it is nil-safe.
+	yield *windowYield
 }
 
 // waitForLibraryScan parks the worker while a library.scan runs (standing
@@ -1277,21 +1351,26 @@ var windowDrainPoll = 30 * time.Second
 // come back.
 func (r *windowRun) drainRemote(ctx context.Context, hub *WorkerHub, tier, workers int) error {
 	for {
-		if backlog := hub.takeBacklog(); len(backlog) > 0 {
-			err := r.items(ctx, windowParallelism(workers), len(backlog), kindItemsOptions{
-				// Runs inside worker goroutines: reads atomics only.
-				Label: func(i, t int) string {
-					return fmt.Sprintf("%s: files handed back by remote workers %d/%d (%s)", windowTierNames[tier], i+1, t, r.t.summary())
-				},
-			}, func(ctx context.Context, i int) error {
-				it := backlog[i]
-				defer hub.serverDone(it.qi)
-				return r.file(ctx, it)
-			})
-			if err != nil {
-				return err
+		// A yielding run takes no more work: it only waits out the leases (they
+		// finish, or expire and requeue), and what comes back is left for the
+		// resumed attempt.
+		if !r.yield.stopping() {
+			if backlog := hub.takeBacklog(); len(backlog) > 0 {
+				err := r.items(ctx, windowParallelism(workers), len(backlog), kindItemsOptions{
+					// Runs inside worker goroutines: reads atomics only.
+					Label: func(i, t int) string {
+						return fmt.Sprintf("%s: files handed back by remote workers %d/%d (%s)", windowTierNames[tier], i+1, t, r.t.summary())
+					},
+				}, func(ctx context.Context, i int) error {
+					it := backlog[i]
+					defer hub.serverDone(it.qi)
+					return r.file(ctx, it)
+				})
+				if err != nil {
+					return err
+				}
+				continue
 			}
-			continue
 		}
 		n := hub.inFlight()
 		if n == 0 {
@@ -1317,8 +1396,15 @@ func (r *windowRun) remoteOnlyItem(hub *WorkerHub) func(context.Context, windowI
 		if err != nil {
 			return err
 		}
-		if why != "" {
+		switch why {
+		case "":
+			r.yield.completed()
+		case hubYieldedWhy:
+			// Released by a yielding hub: not done, not deferred.
+			r.yield.skip(it.qi)
+		default:
 			r.t.deferItem(why)
+			r.yield.completed()
 		}
 		return nil
 	}
@@ -1362,6 +1448,10 @@ func (r *windowRun) remoteHeartbeat(ctx context.Context, stop context.CancelCaus
 			return
 		case <-t.C:
 		}
+		if r.yield.stopped() {
+			// Yielding: nothing is leased on purpose, which is not "no worker".
+			continue
+		}
 		if msg := hub.noWorkerExpired(grace, pending); msg != "" {
 			wbLog.Error("window-backfill remote-only: %s", msg)
 			stop(fmt.Errorf("%w: %s", errNoRemoteWorkers, msg))
@@ -1385,7 +1475,7 @@ func (r *windowRun) remoteHeartbeat(ctx context.Context, stop context.CancelCaus
 // serveBacklog cuts, one at a time, the requeued files the hub hands the
 // server lane during a tier's pass (takeBacklogN with inPass).
 func (r *windowRun) serveBacklog(ctx context.Context, hub *WorkerHub) error {
-	for ctx.Err() == nil {
+	for ctx.Err() == nil && !r.yield.stopping() {
 		back := hub.takeBacklogN(1, true)
 		if len(back) == 0 {
 			return nil

@@ -265,6 +265,10 @@ type hubRun struct {
 	leases    map[string]*workerLease
 	jobs      map[string]*workerJob
 	doneCount int // items in qDone this tier
+	// quiescing: the run is yielding to a fresh attempt (windowYield). No new
+	// lease is handed out and awaitRemote releases its waiters for items nobody
+	// holds; leases already out finish or expire as usual. mu-guarded.
+	quiescing bool
 
 	// Worker contact, for the no-worker and pending graces (mu-guarded;
 	// kept across tiers). Only lease, renew and results are progress
@@ -411,6 +415,24 @@ func (h *WorkerHub) sweepLoop(ctx context.Context, r *hubRun, every time.Duratio
 		case <-t.C:
 			h.sweep()
 		}
+	}
+}
+
+// hubYieldedWhy is awaitRemote's answer for an item it released because the run
+// is yielding: the item is neither done nor deferred, the resumed run does it.
+const hubYieldedWhy = "yielded"
+
+// quiesce stops the hub handing out work: Lease answers 204 from now on and
+// awaitRemote releases the waiters for items no worker holds. Leases already out
+// are left to finish (a result is still accepted and written) or expire (the
+// sweep requeues their items), which inFlight reports. The run calls it when it
+// yields before its deadline; detach clears it with the run.
+func (h *WorkerHub) quiesce() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if r := h.run; r != nil && !r.quiescing {
+		r.quiescing = true
+		r.signal()
 	}
 }
 
@@ -626,6 +648,12 @@ func (h *WorkerHub) awaitRemote(ctx context.Context, idx int) (string, error) {
 			r.setState(idx, qDone)
 			h.mu.Unlock()
 			return why, nil
+		}
+		if r.quiescing && st.state == qPending {
+			// Yielding: nobody holds it and nobody will lease it now. Left
+			// pending, not done: the resumed attempt plans it again.
+			h.mu.Unlock()
+			return hubYieldedWhy, nil
 		}
 		ch := r.bcast
 		h.mu.Unlock()
@@ -886,6 +914,9 @@ func (r *hubRun) remoteEligible(idx int) bool {
 // pick marks up to n items leased by leaseID, requeued items first.
 func (r *hubRun) pick(n int, leaseID string) []int {
 	var out []int
+	if r.quiescing {
+		return nil
+	}
 	for len(out) < n && len(r.requeue) > 0 {
 		idx := r.requeue[len(r.requeue)-1]
 		r.requeue = r.requeue[:len(r.requeue)-1]

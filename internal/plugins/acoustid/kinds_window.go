@@ -7,6 +7,7 @@ package acoustid
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/falkcorp/mediacore/tasks"
@@ -77,7 +78,11 @@ func (p *Plugin) windowBackfillNative(d KindDeps, sched func(tasks.Kind) *tasks.
 	c.Resume = tasks.ResumeContinue
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = fingerprintKey
-	// HEAD's timeout is 72h; the kernel caps a kind at tasks.MaxTimeout.
+	// HEAD's timeout is 72h; the kernel refuses a Timeout over tasks.MaxTimeout
+	// (24h). The run keeps HEAD's 72h as windowTotalBudget across attempts: it
+	// stops admitting work windowYieldMargin before each attempt's deadline,
+	// settles its leases, saves the cursor and yields (tasks.ErrContinueInPlace),
+	// and the resumed attempt continues from it (window_yield.go).
 	c.Timeout = tasks.MaxTimeout
 	return tasks.Task(windowBackfillKind, tasks.TaskSpec[json.RawMessage, windowBackfillResult]{
 		Common: c,
@@ -100,7 +105,9 @@ func (p *Plugin) windowBackfillNative(d KindDeps, sched func(tasks.Kind) *tasks.
 			} else if ok {
 				params.Resume = cp.Resume
 			}
-			env := windowEnv{kindEnv: nativeEnv(rc), Store: d.Store, Host: p.windowHooks(d.Window)}
+			env := windowEnv{kindEnv: nativeEnv(rc), Store: d.Store, Host: p.windowHooks(d.Window),
+				Deadline: rc.Deadline, YieldMargin: windowYieldMargin, TotalBudget: windowTotalBudget,
+				ContinueInPlace: tasks.ErrContinueInPlace}
 			if live {
 				w, werr := writerFor(windowBackfillKind, d, rc)
 				if werr != nil {
@@ -109,15 +116,21 @@ func (p *Plugin) windowBackfillNative(d KindDeps, sched func(tasks.Kind) *tasks.
 				env.Writer = w
 			}
 			res, err := windowBackfillCore(rc.Context(), params, env)
-			if err != nil {
+			if err != nil && !(errors.Is(err, tasks.ErrContinueInPlace) && res != nil) {
 				return windowBackfillResult{}, err
 			}
+			yielded := err
 			out := windowBackfillResult{
 				Written: res.written, Failed: res.failed, Transient: res.transient, Stale: res.stale,
 				RowGone: res.rowGone, WriteErrors: res.writeErrors, Skipped: res.skipped, Deferred: res.deferred,
 			}
 			if res.plan != nil {
 				out.Plan = windowPlanSummary(res.plan)
+			}
+			if yielded != nil {
+				// Continue in place: the tally so far, and the sentinel the executor
+				// re-queues the run on.
+				return out, yielded
 			}
 			if res.writeErrors > 0 {
 				return out, fmt.Errorf("window-backfill: %d file(s) could not be written; see log", res.writeErrors)
