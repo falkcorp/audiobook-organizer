@@ -383,8 +383,11 @@ type t6g4View struct {
 // same confinement over {RootDir}/.ledger (library.LedgerPathNotify), a directory
 // no report writer resolves into and reports-prune never looks in. The directory
 // is created without group write, and group and world write are removed from one
-// that already has them, so only the account the service runs as can unlink or
-// rename the ledger.
+// that already has them, so only the account the service runs as can create,
+// unlink or rename files inside it. That does not protect the directory itself:
+// whoever can write the library root can rename it aside and let the next run make
+// a fresh one. The export detects that (it refuses a ledger file that does not
+// continue from its cursor unless start_new is passed).
 func t6g4LedgerPath(store t6g4PathReads, explicit, fileName string) (string, error) {
 	return library.LedgerPathNotify(store.RootDir(), explicit, fileName, func(dir string, was fs.FileMode) {
 		logger.New("maintenance").Warn("removed group and world write from the ledger directory, its mode was %o dir=%s", was, logger.SanitizeLogValue(dir))

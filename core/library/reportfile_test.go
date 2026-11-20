@@ -9,6 +9,7 @@ package library
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,7 +19,7 @@ import (
 )
 
 // allReportModes is every ReportOpenMode: each one must vet the file the same way.
-var allReportModes = []ReportOpenMode{ReportTruncate, ReportAppend, ReportTouch, ReportReadAppend}
+var allReportModes = []ReportOpenMode{ReportTruncate, ReportAppend, ReportTouch, ReportReadAppend, ReportAppendAndRead}
 
 // reportsDirFor makes a library root with a prepared {root}/.reports (made the
 // way an op makes it, by ReportPathNotify) and returns the report directory.
@@ -670,4 +671,46 @@ func TestOpenReportFile_RefusalsNameTheKindOfFile(t *testing.T) {
 			want(err2, "resolving a symlink")
 		})
 	}
+}
+
+// ReportAppendAndRead can be read back and every write still lands at the end:
+// a write after a read, and a write after a seek to the start, both append. The
+// file is never truncated.
+func TestOpenReportFile_AppendAndReadReadsAndOnlyAppends(t *testing.T) {
+	reports := reportsDirFor(t)
+	path := filepath.Join(reports, "ledger.jsonl")
+	if err := os.WriteFile(path, []byte("one\ntwo\n"), FileMode); err != nil {
+		t.Fatal(err)
+	}
+	f, err := OpenReportFile(path, FileMode, ReportAppendAndRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 3)
+	if n, rerr := f.ReadAt(buf, 4); rerr != nil || string(buf[:n]) != "two" {
+		t.Fatalf("read back %q, %v; want \"two\"", buf[:n], rerr)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("three\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != "one\ntwo\nthree\n" {
+		t.Fatalf("file is %q, %v; want the write appended after what was there", got, err)
+	}
+	// Absent: created, empty.
+	fresh := filepath.Join(reports, "new.jsonl")
+	g, err := OpenReportFile(fresh, FileMode, ReportAppendAndRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info, serr := g.Stat(); serr != nil || info.Size() != 0 {
+		t.Fatalf("a new file must be created empty: %v %v", info, serr)
+	}
+	_ = g.Close()
 }

@@ -63,6 +63,12 @@ const (
 	// a half-written last line off and carries on writing (backfill-file-hashes'
 	// resume). It is vetted exactly like the other modes.
 	ReportReadAppend
+	// ReportAppendAndRead is ReportAppend that can also be read (O_RDWR|O_APPEND):
+	// every write goes at the end, whatever was read or seeked to, and the file is
+	// never truncated. It is for an append-only file whose end the writer checks
+	// before it appends (the provenance ledger export), where ReportReadAppend's
+	// positioned writes would be a way to overwrite what is there.
+	ReportAppendAndRead
 )
 
 // WriteReportFile writes data as the report at path and closes it. path must be
@@ -171,6 +177,8 @@ func openReportFile(path string, perm fs.FileMode, mode ReportOpenMode, env repo
 		flag |= os.O_APPEND
 	case ReportReadAppend:
 		flag = os.O_RDWR | os.O_CREATE
+	case ReportAppendAndRead:
+		flag = os.O_RDWR | os.O_CREATE | os.O_APPEND
 	}
 	f, err = libfs.OpenFileAt(d, name, flag, perm)
 	if err != nil {
