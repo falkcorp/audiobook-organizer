@@ -173,3 +173,34 @@ func TestBooksT6G6Writer_NoWriterRefusesEveryWrite(t *testing.T) {
 	_ = id
 	require.Zero(t, host.calls.Load())
 }
+
+// The capability getters hand back forwarders of the read methods, never the
+// capability itself: a caller must not be able to assert the value back to the
+// interface that writes (the index rebuild, the sync identity writes, the
+// bookmark writes).
+func TestBooksT6G6Store_ReadCapabilitiesDoNotHandBackTheWritingCapability(t *testing.T) {
+	s, _ := g2Fixture(t)
+	st := newT6G6Deps(s, &g6HostSpy{}, nil, "", nil, nil).Store
+
+	v, _, ok := st.OpChangeIndexVerifier()
+	require.True(t, ok, "the Pebble store has the index surface; a false here makes the check below vacuous")
+	_, isBuilder := any(v).(t6g6OpChangeIndexBuilder)
+	require.False(t, isBuilder, "the verifier hands back the index rebuild")
+	require.Equal(t, 1, reflect.TypeOf(v).NumMethod())
+
+	sr, ok := st.UserStateSyncReads()
+	require.True(t, ok)
+	_, isWrites := any(sr).(t6g6SyncWrites)
+	require.False(t, isWrites, "the sync reads hand back the sync writes")
+	_, isStore := any(sr).(database.SyncIdentityStore)
+	require.False(t, isStore, "the sync reads hand back the whole sync identity store")
+	require.Equal(t, reflect.TypeFor[t6g6SyncReads]().NumMethod(), reflect.TypeOf(sr).NumMethod())
+
+	br, ok := st.UserStateBookmarkReads()
+	require.True(t, ok)
+	_, isWrites = any(br).(t6g6BookmarkWrites)
+	require.False(t, isWrites, "the bookmark reads hand back the bookmark write")
+	_, isBookmarks := any(br).(database.BookmarkStore)
+	require.False(t, isBookmarks, "the bookmark reads hand back the whole bookmark store")
+	require.Equal(t, reflect.TypeFor[t6g6BookmarkReads]().NumMethod(), reflect.TypeOf(br).NumMethod())
+}

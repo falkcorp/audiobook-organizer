@@ -38,6 +38,11 @@ type t6g3Source interface {
 	t6g3CreditsReader
 	t6g3PreferenceWriter
 	t6g3CoverWriter
+	t6g3SourceOps
+}
+
+// t6g3SourceOps is the source's own writes that no narrower group carries.
+type t6g3SourceOps interface {
 	ResolveTombstoneChains() (int, error)
 	CreateNarrator(name string) (*database.Narrator, error)
 	DeleteNarrator(id int) error

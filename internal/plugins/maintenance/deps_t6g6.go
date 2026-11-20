@@ -188,23 +188,61 @@ func (s *booksT6G6Store) ListUsers() ([]database.User, error) {
 
 // OpChangeIndexVerifier resolves the index's verify surface through the
 // decorator chain. The verify and the build halves are ONE capability, as at
-// HEAD: a decorator that carries only one half answers "no index".
+// HEAD: a decorator that carries only one half answers "no index". The value
+// handed back is a forwarder with the verify alone, not the capability: the
+// capability also rebuilds the index, and a caller could assert it back.
 func (s *booksT6G6Store) OpChangeIndexVerifier() (t6g6OpChangeIndexVerifier, string, bool) {
 	v, ok := database.AsCapability[t6g6OpChangeIndexRebuilder](s.src)
 	if !ok {
 		return nil, fmt.Sprintf("%T", s.src), false
 	}
-	return v, fmt.Sprintf("%T", s.src), true
+	return forwardedOpChangeVerifier{v: v}, fmt.Sprintf("%T", s.src), true
 }
 
+// UserStateSyncReads and UserStateBookmarkReads hand back forwarders of the
+// read methods only, for the same reason: SyncIdentityStore and BookmarkStore
+// carry writes.
 func (s *booksT6G6Store) UserStateSyncReads() (t6g6SyncReads, bool) {
 	r := database.AsSyncIdentityStore(s.src)
-	return r, r != nil
+	if r == nil {
+		return nil, false
+	}
+	return forwardedSyncReads{s: r}, true
 }
 
 func (s *booksT6G6Store) UserStateBookmarkReads() (t6g6BookmarkReads, bool) {
 	r := database.AsBookmarkStore(s.src)
-	return r, r != nil
+	if r == nil {
+		return nil, false
+	}
+	return forwardedBookmarkReads{s: r}, true
+}
+
+type forwardedOpChangeVerifier struct{ v t6g6OpChangeIndexVerifier }
+
+func (f forwardedOpChangeVerifier) VerifyOpChangeByBookIndex(ctx context.Context, progress database.OpChangeIndexProgress) (database.OpChangeByBookIndexReport, error) {
+	return f.v.VerifyOpChangeByBookIndex(ctx, progress)
+}
+
+type forwardedSyncReads struct{ s t6g6SyncReads }
+
+func (f forwardedSyncReads) GetSyncIDForBook(bookID string) (string, bool, error) {
+	return f.s.GetSyncIDForBook(bookID)
+}
+func (f forwardedSyncReads) ResolveSyncItem(syncID string) (*database.SyncItem, error) {
+	return f.s.ResolveSyncItem(syncID)
+}
+func (f forwardedSyncReads) ListSyncAliases(syncID string) ([]string, error) {
+	return f.s.ListSyncAliases(syncID)
+}
+
+type forwardedBookmarkReads struct{ s t6g6BookmarkReads }
+
+func (f forwardedBookmarkReads) ListBookmarks(userID, itemID string) ([]progress.Bookmark, error) {
+	return f.s.ListBookmarks(userID, itemID)
+}
+func (f forwardedBookmarkReads) ListBookmarksForUser(userID string) ([]progress.Bookmark, error) {
+	return f.s.ListBookmarksForUser(userID)
 }
 
 // booksT6G6Writer is the group's writes: every method is one gated call (no
@@ -411,12 +449,14 @@ func (w *booksT6G6Writer) HealTrack(dst, src string) error {
 }
 
 // HealWhisperJournal answers nil, which the heal reads as "run without the
-// journal", when the call is refused. The appends the journal then makes are the
-// journal's own: the gate fences the open, not each append.
+// journal", when the call is refused. The journal it hands back has its appends
+// and removals stamped too (gatedResultJournal).
 func (w *booksT6G6Writer) HealWhisperJournal() (j transcribe.ResultJournal) {
 	gateQuiet(w.gate, "HealWhisperJournal", kindRef(ops.ResAIJournal), func() {
 		if h, err := w.heal(); err == nil {
-			j = h.HealWhisperJournal()
+			if hj := h.HealWhisperJournal(); hj != nil {
+				j = gatedResultJournal{j: hj, gate: w.gate, method: "HealWhisperJournal"}
+			}
 		}
 	})
 	return j

@@ -44,7 +44,9 @@ func TestBooksJobsStore_ReadsHaveNoRowAndWritesAreGated(t *testing.T) {
 	reads := reflect.TypeFor[jobsReads]()
 	for method := range reads.Methods() {
 		n := method.Name
-		require.Empty(t, t6WriterResources[n], "%s is in jobsReads but has a row: a write through the embedded store", n)
+		// Key presence, not length: a method with an empty row still has a row (it
+		// runs unfenced), which is a write through the embedded store.
+		require.NotContains(t, t6WriterResources, n, "%s is in jobsReads but has a row: a write through the embedded store", n)
 	}
 	st := reflect.TypeFor[jobs.Store]()
 	for method := range st.Methods() {
@@ -113,7 +115,7 @@ func TestBooksJobsStore_RawWritesAreRoutedByKeyFamily(t *testing.T) {
 	}
 	// No family, or a family that is delete-only: no row, so the gate refuses.
 	for _, c := range [][2]string{{"SetRaw", "settings:x"}, {"DeleteRaw", "settings:x"}, {"SetRaw", "book:series:dead"}} {
-		require.Empty(t, jobsRows()[jobsRawLabel(c[0], c[1])], "%s %s", c[0], c[1])
+		require.NotContains(t, jobsRows(), jobsRawLabel(c[0], c[1]), "%s %s", c[0], c[1])
 	}
 
 	s, _ := g2Fixture(t)
