@@ -158,11 +158,14 @@ the credit list is the author source, so the index now holds credit rows only.
   book's `AuthorID` is credited, and writers outside the store can break that at
   any time, so the reader trusts the index only after this process's reconcile
   found no unreadable credit row and no uncovered listable book. The v1
-  sentinel is deleted at reconcile start so a rolled-back build rebuilds its
-  legacy keys before trusting them.
+  sentinel is deleted at store open (and again at reconcile start) so a
+  rolled-back build rebuilds its legacy keys before trusting them.
 - Decision 6 no longer applies: there are no legacy links to leave.
-- Residual gap: a book written uncredited after this boot's reconcile and before
-  memdb publishes is missing from its author's cold listing until memdb takes
-  over.
+- The trust follows the writes after the reconcile: a book-row write that
+  leaves a listable book with an AuthorID its credits lack, or a credit write
+  that drops an author, revokes it for the rest of the process (readers scan),
+  and a reconcile overlapped by such a write does not grant it. A memdb warmup
+  that ends unpublished revokes it for good. Nothing restores it before the
+  next clean reconcile (`pebble_store_author_books_trust.go`).
 
 Details and the prod run plan: `docs/agent-tasks/platform-core/seams.d/F5-18j.md`.

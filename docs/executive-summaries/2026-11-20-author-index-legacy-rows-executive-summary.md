@@ -27,7 +27,11 @@ that is built and tested but has not been run on your library.
   after the server has checked, on that start, that every listed book's main
   author is also in its credit list. If any book fails the check, the lookup
   falls back to the slower full scan, as it worked before the lookup existed.
-  The results are the same either way; only the speed differs.
+  It also stops trusting the quick lookup as soon as a later save could make it
+  miss a book (a book given a main author its credit list does not have, or an
+  author removed from a credit list), and for good if the server's in-memory
+  copy of the library fails to load. The results are the same either way; only
+  the speed differs.
 - A new cleanup job deletes the old copied rows. It only reports by default. It
   refuses to delete anything while any book, including trashed ones, has a main
   author missing from its credit list, and it lists those books instead. Those
