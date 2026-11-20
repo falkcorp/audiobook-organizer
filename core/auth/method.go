@@ -77,6 +77,12 @@ type Principal struct {
 	// refuses it rather than guess.
 	scopes []rbac.Permission
 	built  bool
+	// notAfter is when an identity extension's principal stops standing
+	// (Assertion.ExpiresAt, or core.auth.extension_max_age after AuthTime);
+	// zero for every other method, whose credential record carries its own
+	// expiry. stands refuses at or after it; Refresh copies it, never
+	// extends it.
+	notAfter time.Time
 }
 
 // keyRef is the API key p was authenticated by, and false when p was not

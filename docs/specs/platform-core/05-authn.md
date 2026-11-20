@@ -427,8 +427,10 @@ func (s *Service) CheckCredentialFor(p *Principal, perm rbac.Requirement) error
 func (s *Service) Middleware() func(http.Handler) http.Handler
 
 // Revalidate reports whether a long-lived principal (an SSE stream) still
-// stands: user active, epoch unchanged, credential not revoked. Cheap: served
-// from an in-memory generation table invalidated by events.
+// stands: user active, epoch unchanged, credential not revoked, and an
+// identity extension's principal not past its notAfter (Assertion.ExpiresAt,
+// or core.auth.extension_max_age after AuthTime; ErrExpired at or after it).
+// Cheap: served from an in-memory generation table invalidated by events.
 func (s *Service) Revalidate(ctx context.Context, p *Principal) error
 
 // PostRestore is auth's journal.RestoreHook (05-backup §5B.3.2). It is a
@@ -490,6 +492,7 @@ type Assertion struct {
 	Scopes       []rbac.Permission // nil = the user's role permissions
 	CredentialID string            // never a secret
 	AuthTime     time.Time
+	ExpiresAt    time.Time         // when the credential ends (cfaccess: the JWT's exp); zero = core.auth.extension_max_age after AuthTime
 	Owner        bool              // honoured only for an extension registered with OwnerVerifier=true (below)
 }
 
@@ -564,11 +567,19 @@ var (
 )
 ```
 
+**An extension principal has a bound (F6-03 E4 review r2 M1).** No store record carries an
+extension credential's end, so stage 12 records one on the principal: `Assertion.ExpiresAt`, or, for
+an extension that asserts none, `core.auth.extension_max_age` (§8) after `AuthTime` (after now when
+`AuthTime` is zero or in the future). An assertion already at or past it is refused at stage 12
+with `expired` (stage 13's 401) on every request, not only on streams; `Revalidate` and `Refresh`
+refuse the principal with `ErrExpired` once it passes, and `Refresh` carries the bound unchanged,
+never extending it, so an SSE stream holding the principal ends when the credential does.
+
 Core ships **no** identity extension. The one ABO uses, Cloudflare Access, stays in ABO as
 `internal/cfaccess` ([04](04-package-mapping.md) §2.4; G11: deployment-specific): it verifies
 `Cf-Access-Jwt-Assertion` / `CF_Authorization` (issuer, AUD, expiry, JWKS via go-oidc), resolves an
 allowlisted e-mail to a user (its `Assertion.User`), asserts `Owner` when the owner e-mail matches,
-and may mark the CDN client-IP header believable for verified requests (it also carries the
+sets `Assertion.ExpiresAt` to the verified token's `exp`, and may mark the CDN client-IP header believable for verified requests (it also carries the
 "local peer + verified Access assertion" branch of ABO's `client_trust.go`, 05-http-api §8.1).
 ABO registers it in `app.Options.Authenticators` as `auth.Extension{Spec: MethodSpec{Method:
 "ext:cfaccess", Interactive: true, OwnerVerifier: true}, …}`; its settings are books keys under
@@ -1427,6 +1438,7 @@ interactive method). Every key that decides who may sign in, with which role, or
 | `core.auth.bootstrap.key_ttl` | duration | 8h (max 24h) | yes | admin |
 | `core.auth.bootstrap.readonly_key.enabled` / `.scopes` | bool / []scope | false / `["core:system.view"]` | no | admin |
 | `core.auth.setup_requires_token` | bool | true | yes | admin |
+| `core.auth.extension_max_age` | duration | 24h (max 168h; zero or negative takes the default) | yes (principals bound after the change) | admin |
 | `core.auth.login.max_failures_per_source` | int | 15 | yes | admin |
 | `core.auth.login.window` | duration | 15m | yes | admin |
 | `core.auth.login.soft_threshold` / `.soft_step` / `.soft_max` | int / duration / duration | 5 / 200ms / 2s | yes | admin |
