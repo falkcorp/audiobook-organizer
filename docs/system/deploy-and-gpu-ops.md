@@ -619,9 +619,10 @@ still in place, so a later restart still uses its settings.
 Install them on the deploy host, once, with the one installer the repo ships.
 It is run by the owner, from a checkout of the commit being deployed, ON THE
 DEPLOY HOST. The dry run runs from the checkout as you; `APPLY=1` exports `HEAD`
-(not your working tree) to a root-owned directory, `/opt/aorg-install` (override
-with `ROLLBACK_EXPORT_DIR=`), and runs the installer from there with `sudo`, so
-the account needs `sudo` and the commit must be the one you reviewed:
+(not your working tree) into a fresh root-made directory under `/opt` (a
+`mktemp -d`; override the parent with `ROLLBACK_EXPORT_DIR=`), runs the installer
+from there with `sudo` and removes the directory afterwards, so the account needs
+`sudo` and the commit must be the one you reviewed:
 
 ```bash
 make install-rollback-helpers ROLLBACK_INSTALL_ARGS="--deploy-user <ssh user> \
@@ -682,21 +683,27 @@ executes:
   deploy user fails this check when the script is run directly: it refuses with
   `--apply` (or as root) and names the paths, and a dry run only prints a
   NOTICE. `make install-rollback-helpers APPLY=1` therefore never runs
-  it from the checkout: it does `sudo install -d -o root -g root -m 755
-  /opt/aorg-install`, `git -c tar.umask=0022 archive HEAD deploy/rollback-helpers
-  deploy/audiobook-organizer.service scripts/storage_format_guard.py | sudo tar -x
-  -f - --no-same-owner -C /opt/aorg-install` (the umask keeps the archive's modes
-  from being group-writable, which a root `tar` would preserve). Files an earlier
-  run left that this commit no longer has stay, and the directory is left on the
-  host afterwards (nothing removes it; `sudo rm -r` it if you want it gone); the
-  installer only reads the three paths above. Then `sudo python3 -I /opt/aorg-install/deploy/rollback-helpers/install_helpers.py ...
-  --apply`. To run it by hand, do the same. The script re-runs itself with
-  `python3 -I` either way. The recipe is covered by a `make -n` test and by
-  extracting the same archive into a scratch directory and running the installer
-  from it; the `sudo` steps themselves have not been run on a host.
-- **The dry run's diff needs to read the installed drop-in.** It is mode 0440 and
-  root-owned, so as an ordinary user the dry run says `unreadable` and shows the
-  rendered text; run it with `sudo` to see the diff.
+  it from the checkout: it makes a fresh directory with `sudo mktemp -d
+  /opt/aorg-install.XXXXXX` (a new one every run, so a pre-created directory or a
+  file an earlier run left cannot be picked up), then `git -c tar.umask=0022
+  archive HEAD deploy/rollback-helpers deploy/audiobook-organizer.service
+  scripts/storage_format_guard.py | sudo tar -x -f - --no-same-owner -C <that
+  directory>` (the umask keeps the archive's modes from being group-writable,
+  which a root `tar` would preserve), then `sudo python3 -I -B
+  <that directory>/deploy/rollback-helpers/install_helpers.py ... --apply`, and
+  it removes the directory when it ends, whether the install succeeded or not
+  (the removal only runs for a path that matches the `mktemp` template under the
+  export directory). The refusal message prints the same steps for a by-hand
+  run. The script re-runs itself with `python3 -I -B` either way. The recipe is
+  covered by a `make -n` test and by extracting the same archive into a scratch
+  directory and running the installer from it; the `sudo` steps themselves have
+  not been run on a host.
+- **The dry run never needs root, and cannot diff the installed drop-in.** It is
+  mode 0440 and root-owned, so as an ordinary user the dry run says `unreadable`
+  and shows the rendered text. `APPLY=1` compares it as root (from the
+  root-owned export) and rewrites it only if it differs. Running the dry run
+  itself as root from the checkout is refused, like `--apply`: it would load the
+  guard from there as root.
 - **`--deploy-user` is required** (the drop-in grants that user, so it is never
   guessed from `$SUDO_USER`). The dry run prints `Sudoers grantee: <user>` and
   the rendered drop-in, or a diff against the installed one.

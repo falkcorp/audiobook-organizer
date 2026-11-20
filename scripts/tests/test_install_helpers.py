@@ -546,13 +546,24 @@ class InstallHelpers(unittest.TestCase):
 
     def test_make_apply_runs_the_installer_from_a_root_owned_export_not_the_checkout(self) -> None:
         out = self.make_n("APPLY=1", "ROLLBACK_EXPORT_DIR=/srv/exp")
-        self.assertIn("sudo install -d -o root -g root -m 755", out)
+        self.assertIn('sudo mktemp -d "/srv/exp/aorg-install.XXXXXX"', out, "a fresh dir every run")
+        self.assertNotIn("sudo install -d", out, "no fixed, reusable, pre-creatable directory")
+        self.assertNotIn('"/srv/exp/aorg-install"', out)
         self.assertIn("git archive HEAD deploy/rollback-helpers", out)
         self.assertIn("scripts/storage_format_guard.py", out)
         self.assertIn(
-            'sudo python3 -I "/srv/exp/aorg-install/deploy/rollback-helpers/install_helpers.py"',
+            'sudo python3 -I -B "$exp/deploy/rollback-helpers/install_helpers.py"',
             out,
         )
+        self.assertIn(
+            "trap 'sudo rm -rf -- \"$exp\"' EXIT", out, "removed even when the install fails"
+        )
+        self.assertLess(
+            out.index('case "$exp" in'),
+            out.index("trap "),
+            "nothing is removed unless the path checks out",
+        )
+        self.assertIn('"/srv/exp"/aorg-install.??????', out)
         self.assertIn("--apply", out)
         piped = [ln for ln in out.splitlines() if "| sudo tar" in ln]
         self.assertEqual(len(piped), 1, out)
@@ -563,14 +574,17 @@ class InstallHelpers(unittest.TestCase):
             "--no-same-owner",
             "git -c tar.umask=0022 archive",
             "tar -x -f -",
+            '-C "$exp"',
         ):
             self.assertIn(needed, piped[0], "what the installer reads, extracted root-owned")
         applied = out.split('if [ -n "1" ]; then', 1)[1].split("else", 1)[0]
-        self.assertNotIn("python3 -I deploy/rollback-helpers", applied, "never from the checkout")
+        self.assertNotIn(
+            "python3 -I -B deploy/rollback-helpers", applied, "never from the checkout"
+        )
 
     def test_make_without_apply_stays_in_the_checkout_and_never_calls_sudo(self) -> None:
         out = self.make_n()
-        self.assertIn("python3 -I deploy/rollback-helpers/install_helpers.py", out)
+        self.assertIn("python3 -I -B deploy/rollback-helpers/install_helpers.py", out)
         branch = out.split("else", 1)[1]
         self.assertNotIn("sudo", branch)
         self.assertNotIn("--apply", branch)
@@ -588,7 +602,8 @@ class InstallHelpers(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertNotIn("Traceback", p.stderr)
         self.assertIn("unreadable", p.stdout)
-        self.assertIn("run the dry run with sudo", p.stdout)
+        self.assertIn("APPLY=1 compares it as root", p.stdout)
+        self.assertNotIn("with sudo", p.stdout, "the dry run never asks for root")
         self.assertIn("alfred ALL=", p.stdout, "the rendered text is still shown")
         self.assertEqual(self.dropin.read_text(), before, "dry run: untouched")
 
@@ -697,8 +712,10 @@ class InstallHelpers(unittest.TestCase):
 
     # -- the checkout is not trusted either (r2 m9) -------------------------------------
 
-    def fake_checkout(self) -> Path:
-        co = self.tmp / "checkout"
+    def fake_checkout(self, nest: str = "") -> Path:
+        """nest: extra directories between the temp dir and the checkout, so a
+        test can tell the checkout's parent from its grandparents."""
+        co = self.tmp / nest / "checkout"
         for rel in (
             "deploy/rollback-helpers/rollback_helper.py",
             "deploy/audiobook-organizer.service",
@@ -738,6 +755,61 @@ class InstallHelpers(unittest.TestCase):
             self.assertIn(
                 str(must), got, "owned by a user, whatever its mode: the owner can chmod it"
             )
+
+    def test_every_ancestor_of_the_checkout_is_watched_not_just_its_parent(self) -> None:
+        """r3 m9: whoever can rename any directory above the checkout swaps the
+        whole tree, so narrowing the watch to REPO.parent must fail here."""
+        if os.geteuid() == 0:
+            self.skipTest("everything this test makes is root's when run as root")
+        co = self.fake_checkout(nest="outer/inner")
+        got = self.sources(co, staging=False)
+        for ancestor in (co.parent, co.parent.parent, self.tmp):
+            self.assertIn(str(ancestor), got, "a user-owned directory above the checkout")
+        # and the same under staging's extra trusted user: the user's own
+        # directories above it are named there too, not only the nearest
+        got = self.sources(co, staging=True)
+        self.assertNotIn(str(co.parent.parent), got, "staging trusts the running user's dirs")
+
+    def test_a_root_run_from_a_checkout_that_is_not_roots_is_refused_even_as_a_dry_run(
+        self,
+    ) -> None:
+        """r3 m9: the euid==0 branch. The dry run never needs root, and as root
+        it would load the guard from the checkout, so it is refused with the
+        recipe that works."""
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                unittest.mock.patch.object(IH, "check_sources", return_value=["/home/x/checkout"])
+            )
+            stack.enter_context(unittest.mock.patch.object(IH.os, "geteuid", return_value=0))
+            cm = stack.enter_context(self.assertRaises(SystemExit))
+            IH.main(ARGS)
+        msg = str(cm.exception.code)
+        self.assertIn("REFUSING", msg)
+        self.assertIn("/home/x/checkout", msg)
+        # the printed recipe is the Makefile's, so following it by hand works
+        for needed in (
+            "sudo mktemp -d",
+            "git -c tar.umask=0022 archive HEAD",
+            "tar -x -f - --no-same-owner",
+            "python3 -I -B",
+            "make install-rollback-helpers APPLY=1",
+        ):
+            self.assertIn(needed, msg)
+
+    def test_an_ordinary_user_dry_run_from_a_checkout_that_is_not_roots_is_not_refused(
+        self,
+    ) -> None:
+        """m1: the dry run never needs root, so a user's checkout is fine for it."""
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                unittest.mock.patch.object(IH, "check_sources", return_value=["/home/x/checkout"])
+            )
+            stack.enter_context(unittest.mock.patch.object(IH.os, "geteuid", return_value=1000))
+            stack.enter_context(
+                unittest.mock.patch.object(IH, "load", side_effect=RuntimeError("past the refusal"))
+            )
+            stack.enter_context(self.assertRaises(RuntimeError))
+            IH.main(ARGS)
 
     def test_a_read_only_path_owned_by_the_deploy_user_is_still_untrusted(self) -> None:
         """r3 H1. Mode 0555 is not safe when the owner is not root: chmod u+w."""
@@ -966,8 +1038,8 @@ class InstallHelpers(unittest.TestCase):
         argv = IH.sudo_argv()
         self.assertEqual(argv[0], "sudo")
         self.assertEqual(argv[1], sys.executable)
-        self.assertEqual(argv[2], "-I")
-        self.assertEqual(argv[3:], sys.argv)
+        self.assertEqual(argv[2:4], ["-I", "-B"], "the same flags as the Makefile and the docs")
+        self.assertEqual(argv[4:], sys.argv)
 
     def test_python_runs_isolated_whatever_the_environment_says(self) -> None:
         poison = self.tmp / "poison"

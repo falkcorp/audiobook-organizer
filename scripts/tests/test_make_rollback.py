@@ -1503,6 +1503,24 @@ class RollbackRestoresEnvironment(unittest.TestCase):
         self.assertIn("NOTE: ROLLBACK_ENV", out(p))
         self.assertIn("cannot tell", out(p))
 
+    def test_check_facts_never_reads_enforced_out_of_binary_enforced(self) -> None:
+        """r3 n1: whichever the line prints first, `enforced=` is the generation's."""
+        spec = importlib.util.spec_from_file_location(
+            "deploy_rollback_for_facts", REPO_ROOT / "scripts" / "deploy_rollback.py"
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        line = "generation=ab levels=storage=1 pinned=0 enforced=1 binary_enforced=0"
+        self.assertEqual(mod.check_facts(line), ("storage=1", "1", "0"))
+        swapped = "binary_enforced=0 levels=storage=1 enforced=1"
+        self.assertEqual(mod.check_facts(swapped), ("storage=1", "1", "0"))
+        only_binary = "levels=unrecorded binary_enforced=1"
+        self.assertEqual(
+            mod.check_facts(only_binary), ("unrecorded", "unrecorded", "1"), "no enforced= at all"
+        )
+        self.assertEqual(mod.check_facts("nothing"), (None, "unrecorded", "none"))
+
     def test_a_named_generation_with_fully_recorded_facts_says_nothing_extra(self) -> None:
         host, p = self.named_generation_run(
             {"version": "v0.40.0", "levels": dict(R1), "enforced": False}
