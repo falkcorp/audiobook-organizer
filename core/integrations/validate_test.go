@@ -1,5 +1,5 @@
 // file: core/integrations/validate_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c1e5a92-3b48-4d06-a9f7-5e20c84b1d63
 // last-edited: 2026-11-19
 
@@ -154,6 +154,75 @@ func TestKindValidator_SeesTheEffectiveLayer(t *testing.T) {
 	}
 	if got := v.last(t); got.settings["channel"] != "*" {
 		t.Errorf("the validator saw channel %v, want the operator's %q", got.settings["channel"], "*")
+	}
+}
+
+// TestKindValidator_StoredIsWhatTheRowServes: the "stored" layer a validator is
+// handed is what the row being replaced serves now, the stored layer with the
+// operator overlay applied, so a rule that grandfathers a value the row
+// already holds sees one an operator locks. Without it the value is in no
+// layer the rule can read as already there, and an unrelated Put of the
+// instance is refused over a field only the operator can change. A create has
+// no row and still gets nil.
+func TestKindValidator_StoredIsWhatTheRowServes(t *testing.T) {
+	e := newEnv(t)
+	r := e.registry(t, nil, nil)
+	// retired is the kind's rule: a channel of "retired" is refused unless the
+	// row being replaced already serves it.
+	var mu sync.Mutex
+	var gotStored []map[string]any
+	retired := func(_ integrations.AdapterID, settings, stored map[string]any) error {
+		mu.Lock()
+		gotStored = append(gotStored, stored)
+		mu.Unlock()
+		if settings["channel"] == "retired" && (stored == nil || stored["channel"] != "retired") {
+			return errors.New("channel retired is not accepted")
+		}
+		return nil
+	}
+	if err := r.SetValidator(integrations.KindNotify, retired); err != nil {
+		t.Fatal(err)
+	}
+	created := mustPut(t, admin(), r, signal("http://192.0.2.20/"), cred("alfred-1"))
+
+	// The operator locks the channel to a value the rule would refuse in a
+	// request, after the row was stored.
+	if err := r.SetOverlay(context.Background(), overlay("integrations.notify.gcpd-roof.channel", "retired")); err != nil {
+		t.Fatalf("SetOverlay: %v", err)
+	}
+	cur, ok := r.Config(signalRef)
+	if !ok || cur.Settings["channel"] != "retired" || cur.Locked["channel"] == "" {
+		t.Fatalf("the operator overlay did not lock the channel: %+v", cur)
+	}
+	cur.Name = "GCPD rooftop"
+	if _, err := r.Put(admin(), cur, nil); err != nil {
+		t.Fatalf("a Put that changes only the name, over a channel the operator locks: %v", err)
+	}
+	mu.Lock()
+	if last := gotStored[len(gotStored)-1]; last["channel"] != "retired" {
+		t.Errorf("the validator was handed stored %v, want the layer the row serves (channel retired)", last)
+	}
+	mu.Unlock()
+	// The stored layer itself still holds the value the operator replaced.
+	if row, _ := e.stored(t, signalRef); row.Config.Settings["channel"] != "gcpd" || row.Config.Version != created.Version+1 {
+		t.Errorf("the stored row = %+v, want channel gcpd at version %d", row.Config, created.Version+1)
+	}
+
+	// A create has no row to replace: the same locked value reaches the rule
+	// with stored nil and is refused.
+	other := signal("http://192.0.2.20/")
+	other.Ref.Instance = "gcpd-lab"
+	delete(other.Settings, "channel") // the operator's value is the only one
+	if err := r.SetOverlay(context.Background(), overlay("integrations.notify.gcpd-lab.channel", "retired")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Put(admin(), other, cred("alfred-1")); !errors.Is(err, integrations.ErrInvalid) {
+		t.Errorf("a create over a locked value the rule refuses: err = %v, want ErrInvalid", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if last := gotStored[len(gotStored)-1]; last != nil {
+		t.Errorf("a create reached the validator with stored %v, want nil", last)
 	}
 }
 
@@ -400,5 +469,38 @@ func TestOptionsProbed_FiresOnEveryProbe(t *testing.T) {
 	}
 	if changed != 1 {
 		t.Errorf("HealthChanged fired %d times, want once (the first status)", changed)
+	}
+}
+
+// TestOptionsProbed_FiresOnAStaticFinding: Probed also reports a result that
+// involved no remote call, an instance that is disabled or misconfigured, as
+// its doc promises: the health task needs every answer, and a consumer that
+// ends a bench on a probe decides for itself which statuses count.
+func TestOptionsProbed_FiresOnAStaticFinding(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	var mu sync.Mutex
+	var probed []integrations.HealthStatus
+	r := e.registry(t, nil, func(o *integrations.Options) {
+		o.Probed = func(_ integrations.Ref, h integrations.Health) {
+			mu.Lock()
+			probed = append(probed, h.Status)
+			mu.Unlock()
+		}
+	})
+	off := signal("http://192.0.2.20/")
+	off.Enabled = false
+	mustPut(t, admin(), r, off, cred("alfred-1"))
+	h, err := r.Health(ctx, signalRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Status != integrations.HealthDisabled {
+		t.Fatalf("a disabled instance's health = %v, want disabled (a finding with no probe)", h.Status)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(probed) != 1 || probed[0] != integrations.HealthDisabled {
+		t.Errorf("Probed saw %v for a static finding, want [disabled]", probed)
 	}
 }
