@@ -189,6 +189,10 @@ func newFailClosedStore(o config.Options) (*config.Store, error) {
 	return st, nil
 }
 
+// coreWindowsDefault is core.tasks.windows' default in core: one window, nightly,
+// hours 1 to 4, enabled (HEAD's maintenance window).
+const coreWindowsDefault = `{"nightly":{"enabled":true,"end":4,"start":1}}`
+
 // stageCall is one Importer.Stage call M2 made.
 type stageCall struct {
 	Path  string
@@ -229,6 +233,11 @@ func newTableImporter(real config.Importer, target rowStore) *tableImporter {
 						}
 					}
 				}
+			case TargetMember:
+				// Core registers the map, not its members. Its default declares
+				// the nightly window (core/kernel core_schedule_defaults.go).
+				ti.allowed[t.Map] = true
+				ti.defaults[t.Map] = json.RawMessage(coreWindowsDefault)
 			case TargetEntry, TargetFold:
 				ti.allowed[t.List] = true
 				ti.defaults[t.List] = json.RawMessage(`[]`)

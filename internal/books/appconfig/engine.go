@@ -183,6 +183,10 @@ const (
 	// writes them). The table has one class-x row, ai_backend; plan makes these
 	// rows from it.
 	kindAI
+	// kindMember is a row stored as a member of a registered map-valued key
+	// (core.tasks.windows.nightly.start): read by decoding the whole map, written
+	// by merging the member into it (cutover.MemberOf, WithMember).
+	kindMember
 )
 
 // plan lists the rows the projection reads, in table order. A row is read when
@@ -225,7 +229,7 @@ func plan(tab *cutover.RenameTable, residual bool) []projRow {
 		var want func(cutover.Target) bool
 		switch r.Class {
 		case cutover.ClassKey:
-			want = func(t cutover.Target) bool { return t.Kind == cutover.TargetKey }
+			want = func(t cutover.Target) bool { return t.Kind == cutover.TargetKey || t.Kind == cutover.TargetMember }
 		case cutover.ClassSecret:
 			want = func(t cutover.Target) bool { return t.Kind == cutover.TargetSecret }
 		case cutover.ClassEnv:
@@ -242,7 +246,11 @@ func plan(tab *cutover.RenameTable, residual bool) []projRow {
 		}
 		for _, t := range r.Targets {
 			if want(t) && concrete(t.Path) {
-				out = append(out, projRow{row: r, segs: strings.Split(r.Head, "."), target: t})
+				pr := projRow{row: r, segs: strings.Split(r.Head, "."), target: t}
+				if t.Kind == cutover.TargetMember {
+					pr.kind = kindMember
+				}
+				out = append(out, pr)
 				break
 			}
 		}
@@ -326,7 +334,7 @@ func (e *Engine) project(ctx context.Context) (*projection, error) {
 		return nil
 	}
 	for _, p := range e.rows {
-		if p.kind != kindKey {
+		if p.kind != kindKey && p.kind != kindMember {
 			continue // projectFolds reads these
 		}
 		var (
@@ -510,6 +518,20 @@ func (e *Engine) read(ctx context.Context, p projRow, pass map[coreconfig.Path]c
 		}
 		out, err := cutover.Unconvert(t.Convert, ov.Value)
 		return out, ov.By, readOK, err
+	case cutover.TargetMember:
+		st, ok := e.acc.Lookup(coreconfig.Path(t.Map))
+		if !ok {
+			return nil, "", readMissing, nil
+		}
+		raw, has, err := cutover.MemberOf(st.Effective, strings.TrimPrefix(t.Path, t.Map+"."))
+		if err != nil {
+			return nil, "", readOK, err
+		}
+		if !has {
+			return nil, "", readUnset, nil
+		}
+		out, err := cutover.Unconvert(t.Convert, raw)
+		return out, st.LockedBy, readOK, err
 	default:
 		st, ok := e.acc.Lookup(coreconfig.Path(t.Path))
 		if !ok {
@@ -694,6 +716,8 @@ func (e *Engine) keyOf(p projRow) string {
 		return oidcProvidersKey
 	case kindRoots:
 		return libraryRootsKey
+	case kindMember:
+		return p.target.Map
 	}
 	return p.target.Path
 }

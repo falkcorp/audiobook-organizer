@@ -1522,19 +1522,19 @@ retired env MAINTENANCE -> core.tasks.windows.nightly warn
 
 ## maintenance.enabled
 top=false stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
-target key core.tasks.windows.nightly.enabled convert=- env=ABO_CORE_TASKS_WINDOWS_NIGHTLY_ENABLED
+target member core.tasks.windows.nightly.enabled convert=- map=core.tasks.windows env=ABO_CORE_TASKS_WINDOWS_NIGHTLY_ENABLED
 retired env MAINTENANCE.ENABLED -> core.tasks.windows.nightly.enabled warn
 retired env MAINTENANCE_ENABLED -> core.tasks.windows.nightly.enabled warn
 
 ## maintenance.window_start
 top=false stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
-target key core.tasks.windows.nightly.start convert=- env=ABO_CORE_TASKS_WINDOWS_NIGHTLY_START
+target member core.tasks.windows.nightly.start convert=- map=core.tasks.windows env=ABO_CORE_TASKS_WINDOWS_NIGHTLY_START
 retired env MAINTENANCE.WINDOW_START -> core.tasks.windows.nightly.start warn
 retired env MAINTENANCE_WINDOW_START -> core.tasks.windows.nightly.start warn
 
 ## maintenance.window_end
 top=false stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
-target key core.tasks.windows.nightly.end convert=- env=ABO_CORE_TASKS_WINDOWS_NIGHTLY_END
+target member core.tasks.windows.nightly.end convert=- map=core.tasks.windows env=ABO_CORE_TASKS_WINDOWS_NIGHTLY_END
 retired env MAINTENANCE.WINDOW_END -> core.tasks.windows.nightly.end warn
 retired env MAINTENANCE_WINDOW_END -> core.tasks.windows.nightly.end warn
 

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
 	coreconfig "github.com/falkcorp/mediacore/config"
@@ -138,4 +139,37 @@ func (e *Engine) withSecretRefs(ctx context.Context, list json.RawMessage, setti
 		return list, nil
 	}
 	return json.Marshal(entries)
+}
+
+// memberInto adds the writes of the member rows (TargetMember) to the patch: one
+// write per registered map-valued key, the map as the store holds it with each
+// named member replaced. Reading the effective value here, not the projection,
+// keeps the members the update does not name exactly as core has them.
+func (e *Engine) memberInto(patch *coreconfig.Patch, byPath map[coreconfig.Path]string, also map[coreconfig.Path][]string, vals map[string]json.RawMessage) error {
+	if len(vals) == 0 {
+		return nil
+	}
+	byKey := map[string][]string{}
+	for head := range vals {
+		p := e.byHead[head]
+		byKey[p.target.Map] = append(byKey[p.target.Map], head)
+	}
+	for _, key := range slices.Sorted(maps.Keys(byKey)) {
+		heads := byKey[key]
+		slices.Sort(heads)
+		st, ok := e.acc.Lookup(coreconfig.Path(key))
+		if !ok {
+			return &coreconfig.FieldError{Path: coreconfig.Path(heads[0]), Err: fmt.Errorf("the key %s that stores it is not registered", key)}
+		}
+		whole := st.Effective
+		for _, head := range heads {
+			p := e.byHead[head]
+			var err error
+			if whole, err = cutover.WithMember(whole, strings.TrimPrefix(p.target.Path, p.target.Map+"."), vals[head]); err != nil {
+				return &coreconfig.FieldError{Path: coreconfig.Path(head), Err: err}
+			}
+		}
+		e.claim(patch, byPath, also, key, heads, whole)
+	}
+	return nil
 }

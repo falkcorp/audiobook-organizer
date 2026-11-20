@@ -55,6 +55,14 @@ const (
 	TargetEntry       TargetKind = "entry"       // an entry of a list-valued key, built from several rows
 	TargetFold        TargetKind = "fold"        // one of several rows folded into one key's list
 	TargetPassthrough TargetKind = "passthrough" // an integrations passthrough path (operator layer only)
+	// TargetMember is a member of a registered MAP-valued key
+	// (core.tasks.windows.<name>.{enabled,start,end}): core registers the map as
+	// one key, so Path (the member's dotted path) is not itself a key. Map is the
+	// registered key; M2 stages, and the Engine reads and writes, the whole map
+	// with the member merged in (MemberOf, WithMember). Without this kind the
+	// path is an unknown key: M2 quarantines the value and the projection reads
+	// nothing (found by the differential oracle, F3-07).
+	TargetMember TargetKind = "member"
 )
 
 // Target is one place a row's value goes.
@@ -63,6 +71,7 @@ type Target struct {
 	Path    string // the key or secret name; a description for an instance, entry or fold
 	List    string // the list-valued key an entry or fold belongs to
 	Convert string // the converter name, "" for identity
+	Map     string // TargetMember: the registered map-valued key the member lives in
 	Coined  bool   // the spec coins the name (no owner declares it yet)
 	// Dest marks a passthrough destination (a host or URL), whose retired name
 	// refuses; Passthrough marks a secret under an integrations path.
@@ -454,7 +463,7 @@ func (g *generator) checkTargets() {
 			if t.Convert != "" && !knownConvert(t.Convert) {
 				g.fail("row %s: unknown converter %q", g.rows[i].Head, t.Convert)
 			}
-			if t.Kind != TargetKey && t.Kind != TargetSecret && t.Kind != TargetPassthrough {
+			if t.Kind != TargetKey && t.Kind != TargetSecret && t.Kind != TargetPassthrough && t.Kind != TargetMember {
 				continue
 			}
 			p := strings.TrimSuffix(t.Path, ".*")
@@ -582,7 +591,7 @@ func isConcretePath(p string) bool {
 // where the value becomes an instance field (a later step's) or nothing.
 func (t Target) ConfigPath() config.Path {
 	switch t.Kind {
-	case TargetKey, TargetSecret, TargetPassthrough:
+	case TargetKey, TargetSecret, TargetPassthrough, TargetMember:
 		p := strings.TrimSuffix(t.Path, ".*")
 		if isConcretePath(p) {
 			return config.Path(p)

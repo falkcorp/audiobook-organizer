@@ -228,6 +228,9 @@ func formatTable(t testing.TB, tab *RenameTable, literals, dynamic []string) str
 			if tg.List != "" {
 				list = " list=" + tg.List
 			}
+			if tg.Map != "" {
+				list += " map=" + tg.Map
+			}
 			fmt.Fprintf(&b, "target %s %s convert=%s%s%s env=%s\n", tg.Kind, tg.Path, dash(tg.Convert), list, flags, env)
 		}
 		if r.Note != "" && !r.Removed {

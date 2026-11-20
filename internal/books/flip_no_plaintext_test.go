@@ -112,60 +112,57 @@ func filesHolding(t *testing.T, needle string, exclude []string, roots ...string
 	return hits
 }
 
-// TestConfigCutover_NoPlaintextSecretOnDisk (05-config 1.12.2; 05-storage 5S.3.13):
-// a canary secret planted in every HEAD form before the upgrade (the encrypted
-// rows, the blob's plaintext secrets, config.yaml's gap-fill keys) appears in no
-// file under the live DB directory, the state directory or the gap-fill file
-// after the whole cutover (M2, M6 and the forced compaction M8) and a clean
-// close. The retained checkpoint is the one exception, until the sweeper deletes
-// it; the test requires it to hold the canaries, which also proves the fixture
-// planted each form and the scan can see it.
-func TestConfigCutover_NoPlaintextSecretOnDisk(t *testing.T) {
+// flipFixture is a HEAD store on disk (a settings blob, encrypted secret rows and
+// an optional config.yaml) with the state directory that seals it, ready for the
+// flipped composition.
+type flipFixture struct {
+	root, stateDir, dbDir, dbPath, gapFill string
+	key                                    []byte
+}
+
+// newFlipFixture writes the HEAD store through seed (which writes the settings
+// rows) and yaml (when non-empty) as config.yaml beside the store.
+func newFlipFixture(t *testing.T, seed func(*database.PebbleStore), yaml string) *flipFixture {
+	t.Helper()
 	root := tempDir(t)
-	stateDir := filepath.Join(root, "state")
-	dbDir := filepath.Join(root, "db")
-	dbPath := filepath.Join(dbDir, "books.pebble")
-	require.NoError(t, os.MkdirAll(stateDir, 0o700))
-	require.NoError(t, os.MkdirAll(dbDir, 0o700))
-	key := bytes.Repeat([]byte{7}, 32)
-	require.NoError(t, os.WriteFile(database.EncryptionKeyPath(stateDir), key, 0o600))
-
-	blob, planted := canaryBlob()
-	rows := canaryRows()
-	for _, r := range rows {
-		planted = append(planted, r)
+	fx := &flipFixture{
+		root: root, stateDir: filepath.Join(root, "state"), dbDir: filepath.Join(root, "db"),
+		key: bytes.Repeat([]byte{7}, 32),
 	}
+	fx.dbPath = filepath.Join(fx.dbDir, "books.pebble")
+	fx.gapFill = filepath.Join(fx.dbDir, "config.yaml")
+	require.NoError(t, os.MkdirAll(fx.stateDir, 0o700))
+	require.NoError(t, os.MkdirAll(fx.dbDir, 0o700))
+	require.NoError(t, os.WriteFile(database.EncryptionKeyPath(fx.stateDir), fx.key, 0o600))
 	aboFlipFixtureMu.Lock()
-	require.NoError(t, database.InitEncryption(stateDir))
-	headStoreAt(t, dbPath, func(s *database.PebbleStore) {
-		require.NoError(t, s.SetSetting("config_blob", blob, "json", false))
-		for name, r := range rows {
-			require.NoError(t, s.SetSetting(name, r.value, "string", true))
-		}
-	})
+	require.NoError(t, database.InitEncryption(fx.stateDir))
+	headStoreAt(t, fx.dbPath, seed)
 	aboFlipFixtureMu.Unlock()
+	if yaml != "" {
+		require.NoError(t, os.WriteFile(fx.gapFill, []byte(yaml), 0o600))
+	}
+	return fx
+}
 
-	gapFill := filepath.Join(dbDir, "config.yaml")
-	yaml := fmt.Sprintf("openai_api_key: %s\ngoogle_books_api_key: %s\nhardcover_api_token: %s\n",
-		rows["openai_api_key"].value, rows["google_books_api_key"].value, rows["hardcover_api_token"].value)
-	require.NoError(t, os.WriteFile(gapFill, []byte(yaml), 0o600))
-
+// runFlipped boots the flipped composition on the fixture, waits for ready, calls
+// atReady (when set) with the booted composition, and stops it cleanly. Run, not
+// only boot: the gap-fill strip is a repairs-hook step, which runs at start.
+func (fx *flipFixture) runFlipped(t *testing.T, atReady func(*composed)) {
+	t.Helper()
 	old := flipDeclared
 	flipDeclared = true
 	t.Cleanup(func() { flipDeclared = old })
-	// Run, not only boot: the gap-fill strip is a repairs-hook step, which runs at
-	// start. Ready means every start step ran; stop closes the store cleanly.
-	r := runComposedIn(t, stateDir, func(cfg *config.Config) {
-		cfg.DatabasePath = dbPath
-		cfg.RootDir = dbDir
+	r := runComposedIn(t, fx.stateDir, func(cfg *config.Config) {
+		cfg.DatabasePath = fx.dbPath
+		cfg.RootDir = fx.dbDir
 	}, nil, func(o *app.Options) {
 		o.StorageFS = storage.FS{}
 		o.CoreConfigBoot = true
-		o.StateDir = stateDir
+		o.StateDir = fx.stateDir
 		o.Env = []string{}
 		loadConfigFromDB = config.LoadConfigFromDatabase
 		// sandboxStateDirAt wrote a fixed key; the rows are sealed under this one.
-		require.NoError(t, os.WriteFile(database.EncryptionKeyPath(stateDir), key, 0o600))
+		require.NoError(t, os.WriteFile(database.EncryptionKeyPath(fx.stateDir), fx.key, 0o600))
 	}, nil)
 	deadline := time.Now().Add(2 * time.Minute)
 	for {
@@ -177,7 +174,38 @@ func TestConfigCutover_NoPlaintextSecretOnDisk(t *testing.T) {
 		require.True(t, time.Now().Before(deadline), "/health never reported ready")
 		time.Sleep(50 * time.Millisecond)
 	}
+	if atReady != nil {
+		atReady(r.composed)
+	}
 	require.NoError(t, r.stop())
+}
+
+// TestConfigCutover_NoPlaintextSecretOnDisk (05-config 1.12.2; 05-storage 5S.3.13):
+// a canary secret planted in every HEAD form before the upgrade (the encrypted
+// rows, the blob's plaintext secrets, config.yaml's gap-fill keys) appears in no
+// file under the live DB directory, the state directory or the gap-fill file
+// after the whole cutover (M2, M6 and the forced compaction M8) and a clean
+// close. The retained checkpoint is the one exception, until the sweeper deletes
+// it; the test requires it to hold the canaries, which also proves the fixture
+// planted each form and the scan can see it.
+func TestConfigCutover_NoPlaintextSecretOnDisk(t *testing.T) {
+	blob, planted := canaryBlob()
+	rows := canaryRows()
+	secretRows := map[string]string{}
+	for name, r := range rows {
+		planted = append(planted, r)
+		secretRows[name] = r.value
+	}
+	yaml := fmt.Sprintf("openai_api_key: %s\ngoogle_books_api_key: %s\nhardcover_api_token: %s\n",
+		rows["openai_api_key"].value, rows["google_books_api_key"].value, rows["hardcover_api_token"].value)
+	fx := newFlipFixture(t, func(s *database.PebbleStore) {
+		require.NoError(t, s.SetSetting("config_blob", blob, "json", false))
+		for name, v := range secretRows {
+			require.NoError(t, s.SetSetting(name, v, "string", true))
+		}
+	}, yaml)
+	fx.runFlipped(t, nil)
+	root, stateDir, dbDir, dbPath, gapFill := fx.root, fx.stateDir, fx.dbDir, fx.dbPath, fx.gapFill
 
 	checkpoints := filepath.Join(dbDir, ".mediacore-checkpoints")
 	require.DirExists(t, checkpoints, "the cutover boot took no checkpoint")

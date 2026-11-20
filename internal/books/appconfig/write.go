@@ -110,7 +110,8 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 	var invalid []error
 	byPath := map[coreconfig.Path]string{}
 	foldVals, rootsVals := map[string]json.RawMessage{}, map[string]json.RawMessage{}
-	aiVals := map[string]json.RawMessage{} // ai_backend.<name> -> value
+	aiVals := map[string]json.RawMessage{}     // ai_backend.<name> -> value
+	memberVals := map[string]json.RawMessage{} // a member row's head -> its canonical value
 	add := func(head string, raw json.RawMessage, clear bool) {
 		p, ok := e.byHead[head]
 		if ok && p.kind == kindAI {
@@ -120,6 +121,33 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 				return
 			}
 			aiVals[strings.TrimPrefix(head, "ai_backend.")] = raw
+			return
+		}
+		if ok && p.kind == kindMember {
+			// A member of a map-valued core key: checked against its Config type,
+			// converted, and merged into the map below. Clearing one is its zero
+			// value, as for any field stored inside a core value.
+			if p.row.Admin {
+				adminHeads = append(adminHeads, head)
+			}
+			var probe config.Config
+			f, has := fieldAt(&probe, p.segs)
+			if !has {
+				unknown = append(unknown, head)
+				return
+			}
+			if clear {
+				raw = mustMarshal(f.Interface())
+			} else if json.Unmarshal(raw, f.Addr().Interface()) != nil {
+				invalid = append(invalid, &coreconfig.FieldError{Path: coreconfig.Path(head), Err: errors.New("the value does not fit the setting")})
+				return
+			}
+			out, _, err := cutover.Convert(p.target.Convert, raw)
+			if err != nil {
+				invalid = append(invalid, &coreconfig.FieldError{Path: coreconfig.Path(head), Err: err})
+				return
+			}
+			memberVals[head] = out
 			return
 		}
 		if ok && (e.foldHeads[head] || p.kind != kindKey) {
@@ -227,6 +255,9 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 	}
 	also := map[coreconfig.Path][]string{}
 	if err := e.foldInto(ctx, &patch, byPath, also, foldVals, rootsVals, secretSets); err != nil {
+		invalid = append(invalid, err)
+	}
+	if err := e.memberInto(&patch, byPath, also, memberVals); err != nil {
 		invalid = append(invalid, err)
 	}
 	// The ai_backend.* fields are one write of the ai_endpoints list.

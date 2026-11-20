@@ -37,6 +37,7 @@ const (
 	reasonRefusedStore   = "refused by config: the key cannot be stored"
 	reasonRefusedValue   = "refused by config: the value is not valid for the key"
 	reasonNotConvertible = "refused: the value does not convert to the canonical key's type"
+	reasonMemberNoBase   = "refused: a sibling member of the same canonical key has no value to merge with"
 	reasonUnreadableRow  = "unreadable settings row: the ciphertext does not decrypt"
 	reasonSecretConflict = "refused by secrets: the name already holds other content"
 	reasonSecretName     = "refused by secrets: the derived name is not a valid secret name"
@@ -137,6 +138,16 @@ type stagedKey struct {
 	Value    json.RawMessage
 	Original json.RawMessage // the value as stored, quarantined if config refuses Value
 	Member   string          // the blob member, the quarantine key's suffix
+	// Also are the other blob members a staged map-valued key carries
+	// (TargetMember): a refusal of the key quarantines each of them, not only
+	// Member, or the refused value would drop their originals.
+	Also []stagedMember
+}
+
+// stagedMember is one more blob member a staged key holds.
+type stagedMember struct {
+	Member   string
+	Original json.RawMessage
 }
 
 // quarantined is one row or blob member M2 quarantines (sealed: both live
@@ -350,6 +361,18 @@ type planner struct {
 	imported map[secrets.Name]bool
 	keepTop  map[string]bool // top-level class-i members, kept even when emptied
 	oidc     *oidcFold
+	// members are the TargetMember rows found in the blob, by the registered
+	// map-valued key they live in; stageMembers turns each group into one write.
+	members map[config.Path]*memberGroup
+}
+
+// memberGroup is the members of one registered map-valued key that the blob
+// holds: rel (the member path below the key) to its converted value, and to the
+// blob member it came from.
+type memberGroup struct {
+	vals  map[string]json.RawMessage
+	heads map[string]string
+	raws  map[string]json.RawMessage // by HEAD name
 }
 
 // buildPlan plans M2a for in. A blob that does not decode, or HEAD's codec
@@ -419,6 +442,7 @@ func buildPlan(in *m2Input) (*plan, error) {
 
 	pl.secretRows(rows)
 	pl.rowsPass()
+	pl.stageMembers()
 	pl.metadataSources()
 	pl.plugins()
 	pl.fold()
@@ -646,7 +670,7 @@ func (pl *planner) keyMember(r *Row, val any) {
 		switch t.Kind {
 		case TargetFold:
 			pl.foldValue(r.Head, val)
-		case TargetKey:
+		case TargetKey, TargetMember:
 			if strings.HasSuffix(t.Path, ".*") || !isConcretePath(t.Path) {
 				continue
 			}
@@ -665,6 +689,10 @@ func (pl *planner) keyMember(r *Row, val any) {
 			}
 			for _, d := range dropped {
 				pl.p.Dropped = append(pl.p.Dropped, r.Head+"."+d)
+			}
+			if t.Kind == TargetMember {
+				pl.addMember(r, t, out, raw)
+				continue
 			}
 			pl.stageKey(r, t, out, raw)
 		}
@@ -700,6 +728,77 @@ func (pl *planner) reportBlobNulls(blob string) {
 func (pl *planner) nullUnset(head string) {
 	pl.p.Reported = append(pl.p.Reported, "setting "+head+" was stored as null: treated as unset, so it keeps its default")
 	pl.p.count("null-as-unset")
+}
+
+// addMember holds one member row's converted value until stageMembers has every
+// row of its map-valued key: core stores the map as one key, so the members can
+// only be written together.
+func (pl *planner) addMember(r *Row, t Target, out, original json.RawMessage) {
+	if pl.members == nil {
+		pl.members = map[config.Path]*memberGroup{}
+	}
+	key := config.Path(t.Map)
+	g := pl.members[key]
+	if g == nil {
+		g = &memberGroup{vals: map[string]json.RawMessage{}, heads: map[string]string{}, raws: map[string]json.RawMessage{}}
+		pl.members[key] = g
+	}
+	rel := strings.TrimPrefix(t.Path, t.Map+".")
+	g.vals[rel], g.heads[rel], g.raws[r.Head] = out, r.Head, original
+}
+
+// stageMembers writes each map-valued key the blob has a member of, once, with
+// the members merged. A sibling the blob does not hold is HEAD's default (what
+// HEAD ran with), never the zero value a missing field would decode to, so one
+// stored member cannot silently reset the others. A group that cannot be
+// completed is quarantined whole.
+func (pl *planner) stageMembers() {
+	for _, key := range slices.Sorted(maps.Keys(pl.members)) {
+		g := pl.members[key]
+		var whole json.RawMessage
+		var heads []string
+		ok := true
+		for _, r := range pl.tab.Rows {
+			for _, t := range r.Targets {
+				if t.Kind != TargetMember || config.Path(t.Map) != key {
+					continue
+				}
+				rel := strings.TrimPrefix(t.Path, t.Map+".")
+				val, have := g.vals[rel]
+				if !have {
+					def, known := headDefault(r.Head)
+					if !known {
+						ok = false
+						continue
+					}
+					conv, _, err := Convert(t.Convert, marshalAt(def))
+					if err != nil {
+						ok = false
+						continue
+					}
+					val = conv
+				} else {
+					heads = append(heads, r.Head)
+				}
+				var err error
+				if whole, err = WithMember(whole, rel, val); err != nil {
+					ok = false
+				}
+			}
+		}
+		slices.Sort(heads)
+		if !ok {
+			for _, h := range heads {
+				pl.p.Quarantines = append(pl.p.Quarantines, quarantined{Key: quarantineKey(h), Raw: g.raws[h], Reason: reasonMemberNoBase})
+			}
+			continue
+		}
+		st := stagedKey{Head: heads[0], Path: key, Value: whole, Original: g.raws[heads[0]], Member: heads[0]}
+		for _, h := range heads[1:] {
+			st.Also = append(st.Also, stagedMember{Member: h, Original: g.raws[h]})
+		}
+		pl.p.Stages = append(pl.p.Stages, st)
+	}
 }
 
 // stageKey plans one key. A value that carries a URL has its userinfo split

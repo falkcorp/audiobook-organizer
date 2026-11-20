@@ -275,7 +275,7 @@ func TestFold_ViewReportsRestartPendingOfTheList(t *testing.T) {
 		t.Fatal("oauth_enabled is not a fold row")
 	}
 	for _, k := range e.View().Keys {
-		if want := e.byHead[k.Name].kind != kindKey; k.RestartPending != want {
+		if want := e.byHead[k.Name].kind == kindFold || e.byHead[k.Name].kind == kindRoots; k.RestartPending != want {
 			t.Errorf("%s RestartPending = %v, want %v", k.Name, k.RestartPending, want)
 		}
 	}

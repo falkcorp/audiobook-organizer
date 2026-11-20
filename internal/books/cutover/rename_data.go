@@ -80,6 +80,13 @@ func tk(path string, conv string) Target { return Target{Kind: TargetKey, Path: 
 func tkc(path string, conv string) Target {
 	return Target{Kind: TargetKey, Path: path, Convert: conv, Coined: true}
 }
+
+// tmember is a member of the registered map-valued key mapKey: rel is the dotted
+// path below it ("nightly.start").
+func tmember(mapKey, rel, conv string) Target {
+	return Target{Kind: TargetMember, Path: mapKey + "." + rel, Map: mapKey, Convert: conv}
+}
+
 func ts(path string) Target { return Target{Kind: TargetSecret, Path: path} }
 func tsc(path string) Target {
 	return Target{Kind: TargetSecret, Path: path, Coined: true}
@@ -209,9 +216,9 @@ type subRow struct {
 // subRows are the explicit rows of struct-typed fields' sub-keys.
 var subRows = []subRow{
 	{head: "itunes.path_mappings", class: ClassInput, targets: []Target{tentry("core.library.mappings", "core.library.mappings entries, Source: \"itunes\"")}, note: "05-library §5L.10; core.library.mappings is ProtectInteractive, so its retired name warns although HEAD classed the field FieldServerPath"},
-	{head: "maintenance.enabled", class: ClassKey, targets: []Target{tk("core.tasks.windows.nightly.enabled", "")}},
-	{head: "maintenance.window_start", class: ClassKey, targets: []Target{tk("core.tasks.windows.nightly.start", "")}},
-	{head: "maintenance.window_end", class: ClassKey, targets: []Target{tk("core.tasks.windows.nightly.end", "")}},
+	{head: "maintenance.enabled", class: ClassKey, targets: []Target{tmember("core.tasks.windows", "nightly.enabled", "")}},
+	{head: "maintenance.window_start", class: ClassKey, targets: []Target{tmember("core.tasks.windows", "nightly.start", "")}},
+	{head: "maintenance.window_end", class: ClassKey, targets: []Target{tmember("core.tasks.windows", "nightly.end", "")}},
 	{head: "ai_backend.embedding_mode", class: ClassDropped, note: "folded into ai_endpoints by HEAD's codec (05-ai §10)"},
 	{head: "ai_backend.llm_mode", class: ClassDropped, note: "folded into ai_endpoints by HEAD's codec (05-ai §10)"},
 	{head: "ai_backend.local_base_url", class: ClassDropped, note: "folded into ai_endpoints by HEAD's codec (05-ai §10)"},
