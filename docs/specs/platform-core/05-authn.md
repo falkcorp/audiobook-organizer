@@ -48,7 +48,7 @@ its own credential hashes (that is `secrets`), and does not own app protocols (A
 | Sessions | id = ULID (`crypto/rand`, 80 random bits), stored **unhashed** as Pebble key `sess:<id>` + `idx:sess:user:<user>:<id>`; TTL 24 h, remember-me 7 d | `internal/database/pebble_store_auth.go:1656-1675`, `internal/database/pebble_store.go:1050-1056`, `raw/10` §2.3 |
 | Session cookie | name `session_id`, `Path=/`, `HttpOnly`, `SameSite=Strict`, `Secure` on HTTPS; no `__Host-` prefix | `internal/server/handlers/auth.go:226-247` |
 | Session listing leaks tokens | `GET /api/v1/auth/sessions` returns the embedded `database.Session` (field `id` = bearer token) of **every** live session of the caller; the route has no permission and no credential guard, so an API key can read the user's session tokens | `internal/server/handlers/auth.go:513-537`, `raw/09` §4 rows 838-839 |
-| API keys | `abk_` + base64url(32 B); SHA-256 hex stored; mandatory expiry (default 30 d, max 365 d); `TouchAPIKeyLastUsed` synchronous | `internal/database/apikey_token.go:16-35`, `internal/server/handlers/apikeys.go:27-33`, `internal/server/middleware/auth.go:309-400` |
+| API keys | `abk_` + base64url(32 B); SHA-256 hex stored; mandatory expiry (default 30 d, max 1095 d: 3 years, owner decision 2026-11-20); `TouchAPIKeyLastUsed` synchronous | `internal/database/apikey_token.go:16-35`, `internal/server/handlers/apikeys.go:27-33`, `internal/server/middleware/auth.go:309-400` |
 | Key minted by a key | scopes checked ⊆ caller's effective set, **but empty scopes skip the check** and an empty-scope key means "all role permissions" | `internal/server/handlers/apikeys.go:199-226`, `internal/server/middleware/auth.go:405-408` |
 | Bootstrap | `abbs_` token, 10 min TTL, 0600 file in secure state dir, hash in settings, single use under mutex; exchanged at public `POST /api/v1/auth/bootstrap` for an admin API key (8 h default, 24 h max); admin = first active user whose role holds `users.manage`, else generated | `internal/server/bootstrap.go:40,140-170,211-292,305-470,484-560` |
 | First-run setup | public `POST /api/v1/auth/setup` creates the first admin (409 once a user exists); whole API open while 0 users | `internal/server/handlers/auth.go:267-292`, `raw/10` §5 |
@@ -725,7 +725,7 @@ unnecessary and keeps verification O(1).
 | Credential | Format | Lifetime | Stored as |
 |---|---|---|---|
 | Session | `mcs_<43>_<6>` | 24 h; remember-me 7 d; sliding `LastSeen` (idle timeout optional) | `SHA-256` key + public ULID |
-| API key | `mck_<43>_<6>` | default 30 d, max 365 d (today's values, `handlers/apikeys.go:27-33`) | `SHA-256` |
+| API key | `mck_<43>_<6>` | default 30 d, max 1095 d (today's values, `handlers/apikeys.go` `MaxAPIKeyTTLDays`) | `SHA-256` |
 | Bootstrap | `mcb_<43>_<6>` | 10 min, single use | `SHA-256` as a one-time token in the store + 0600 file |
 | Invite | `mci_<43>_<6>` | default 72 h (today, `handlers/user.go:177-181`), single use | `SHA-256` |
 | Temp-login | `mct_<43>_<6>` | 15 min, single use | `SHA-256` in storage (not a process map, R5) |
@@ -1421,7 +1421,7 @@ interactive method). Every key that decides who may sign in, with which role, or
 | `core.auth.session.cookie_host_prefix` | bool | true | no | admin |
 | `core.auth.password.min_length` | int | 8 | yes | admin |
 | `core.auth.apikey.default_ttl` | duration | 720h | yes | none |
-| `core.auth.apikey.max_ttl` | duration | 8760h | yes | admin |
+| `core.auth.apikey.max_ttl` | duration | 26280h (max 26280h: 3 years) | yes | admin |
 | `core.auth.bootstrap.enabled` | bool | true | no | admin |
 | `core.auth.bootstrap.token_ttl` | duration | 10m | no | admin |
 | `core.auth.bootstrap.key_ttl` | duration | 8h (max 24h) | yes | admin |

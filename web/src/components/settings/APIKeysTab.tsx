@@ -43,7 +43,14 @@ import {
   CheckBoxOutlineBlank as CheckBoxOutlineBlankIcon,
 } from '@mui/icons-material';
 import * as api from '../../services/api';
-import { API_KEY_EXPIRY_OPTIONS, formatKeyExpiry } from '../../utils/apiKeyExpiry';
+import {
+  API_KEY_CUSTOM_EXPIRY,
+  API_KEY_EXPIRY_OPTIONS,
+  customExpiryBounds,
+  customExpiryDays,
+  expiryAfterDays,
+  formatKeyExpiry,
+} from '../../utils/apiKeyExpiry';
 
 const ALL_SCOPES = [
   'library.view',
@@ -97,7 +104,8 @@ export function APIKeysTab() {
   const [newName, setNewName] = useState('');
   const [newDesc, setNewDesc] = useState('');
   const [newScopes, setNewScopes] = useState<string[]>([]);
-  const [newExpires, setNewExpires] = useState(90);
+  const [newExpires, setNewExpires] = useState<number | typeof API_KEY_CUSTOM_EXPIRY>(90);
+  const [customDate, setCustomDate] = useState('');
   const [creating, setCreating] = useState(false);
   const [createdToken, setCreatedToken] = useState<string | null>(null);
   const [createdNote, setCreatedNote] = useState<string | null>(null);
@@ -134,15 +142,22 @@ export function APIKeysTab() {
     };
   }, []);
 
+  // The lifetime the dialog will ask for, in days: a preset, or the custom
+  // date's distance from today. Null while the custom date is unset or out
+  // of range, which disables Create.
+  const customBounds = customExpiryBounds();
+  const expiryDays = newExpires === API_KEY_CUSTOM_EXPIRY ? customExpiryDays(customDate) : newExpires;
+  const expiryPreview = expiryDays === null ? null : expiryAfterDays(expiryDays);
+
   const handleCreate = async () => {
-    if (!newName.trim()) return;
+    if (!newName.trim() || expiryDays === null) return;
     setCreating(true);
     try {
       const resp = await api.createAPIKey({
         name: newName,
         description: newDesc,
         scopes: newScopes,
-        expires_in_days: newExpires,
+        expires_in_days: expiryDays,
       });
       setCreatedToken(resp.token);
       setCreatedNote(resp.note ?? null);
@@ -152,6 +167,7 @@ export function APIKeysTab() {
       setNewDesc('');
       setNewScopes([]);
       setNewExpires(90);
+      setCustomDate('');
       fetchKeys(showAll);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to create API key');
@@ -490,20 +506,56 @@ export function APIKeysTab() {
               <Select
                 label="Expires in"
                 value={newExpires}
-                onChange={(e) => setNewExpires(Number(e.target.value))}
+                onChange={(e) =>
+                  setNewExpires(
+                    e.target.value === API_KEY_CUSTOM_EXPIRY
+                      ? API_KEY_CUSTOM_EXPIRY
+                      : Number(e.target.value)
+                  )
+                }
               >
                 {API_KEY_EXPIRY_OPTIONS.map((o) => (
                   <MenuItem key={o.value} value={o.value}>
                     {o.label}
                   </MenuItem>
                 ))}
+                <MenuItem value={API_KEY_CUSTOM_EXPIRY}>Custom date</MenuItem>
               </Select>
             </MuiFormControl>
+            {newExpires === API_KEY_CUSTOM_EXPIRY && (
+              <TextField
+                label="Expiry date"
+                type="date"
+                size="small"
+                fullWidth
+                value={customDate}
+                onChange={(e) => setCustomDate(e.target.value)}
+                error={customDate !== '' && expiryDays === null}
+                helperText={
+                  customDate !== '' && expiryDays === null
+                    ? `Pick a date from ${customBounds.min} to ${customBounds.max}.`
+                    : `From tomorrow up to 3 years from today (${customBounds.max}).`
+                }
+                slotProps={{
+                  inputLabel: { shrink: true },
+                  htmlInput: { min: customBounds.min, max: customBounds.max },
+                }}
+              />
+            )}
+            <Typography variant="body2" color="text.secondary" data-testid="api-key-expiry-preview">
+              {expiryPreview
+                ? `Expires ${expiryPreview.toLocaleString()} (${formatKeyExpiry(expiryPreview.toISOString())}).`
+                : 'Pick an expiry date.'}
+            </Typography>
           </Stack>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setCreateOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleCreate} disabled={!newName.trim() || creating}>
+          <Button
+            variant="contained"
+            onClick={handleCreate}
+            disabled={!newName.trim() || expiryDays === null || creating}
+          >
             {creating ? 'Creating...' : 'Create'}
           </Button>
         </DialogActions>
