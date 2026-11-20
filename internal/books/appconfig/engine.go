@@ -1,11 +1,12 @@
 // file: internal/books/appconfig/engine.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 6c2f8a4d-9e13-4b75-a1c0-d4e7f3b82a59
 // last-edited: 2026-11-19
 
 package appconfig
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -297,6 +298,13 @@ func (e *Engine) project(ctx context.Context) (*projection, error) {
 			return fmt.Errorf("appconfig: row %s names no field of Config", head)
 		}
 		if err := json.Unmarshal(val, f.Addr().Interface()); err != nil {
+			// HEAD holds some operator values as the text its environment gave
+			// (LOGIN_SATURATED_RATE "2"); core types the key (a number). The
+			// number's own text is the value HEAD would have held.
+			if text, ok := scalarText(val); ok && f.Kind() == reflect.String {
+				f.SetString(text)
+				return nil
+			}
 			return fmt.Errorf("appconfig: row %s: %q does not fit %s: %w", head, val, f.Type(), err)
 		}
 		return nil
@@ -644,4 +652,18 @@ func (e *Engine) keyOf(p projRow) string {
 		return libraryRootsKey
 	}
 	return p.target.Path
+}
+
+// scalarText is the literal text of a JSON number or boolean, and false for any
+// other JSON value.
+func scalarText(raw json.RawMessage) (string, bool) {
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return "", false
+	}
+	switch v.(type) {
+	case float64, bool:
+		return string(bytes.TrimSpace(raw)), true
+	}
+	return "", false
 }

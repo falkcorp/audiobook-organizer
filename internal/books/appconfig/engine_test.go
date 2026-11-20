@@ -1,5 +1,5 @@
 // file: internal/books/appconfig/engine_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7d1b3e58-0a94-4c67-8f2d-b5c9a4e6d031
 // last-edited: 2026-11-19
 
@@ -603,5 +603,25 @@ func TestResidualHeadsAreAllExposed(t *testing.T) {
 	}
 	if n < 8 {
 		t.Fatalf("saw %d residual rows; the table changed shape", n)
+	}
+}
+
+// TestEngine_NumberKeyIntoStringField: core types login_saturated_rate as a
+// number while HEAD's Config holds the text its environment gave; the projection
+// holds the number's text instead of failing the boot (found by the differential
+// oracle on the R2 corpus).
+func TestEngine_NumberKeyIntoStringField(t *testing.T) {
+	f := newFake()
+	f.vals["core.auth.login.saturated_rate"] = json.RawMessage(`2`)
+	e := New(f, nil)
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.Snapshot().LoginSaturatedRate; got != "2" {
+		t.Fatalf("LoginSaturatedRate = %q, want \"2\"", got)
+	}
+	f.vals["core.auth.login.saturated_rate"] = json.RawMessage(`{"x":1}`)
+	if err := e.Rebuild(t.Context()); err == nil {
+		t.Fatal("an object was accepted as a string field")
 	}
 }
