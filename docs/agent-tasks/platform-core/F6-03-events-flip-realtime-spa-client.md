@@ -33,7 +33,7 @@ descriptions for the deferred cells they handed to this PR.
 
 ## Amendment 2026-11-20 (pre-scope slice E7): READ BEFORE THE GOAL
 
-Source: `.claude/notes/pc-tools/F6-03-prescope.md` (origin/main `f18ad2686`). This brief was last amended on 11-19 and
+Source: the coordinator's pre-scope of origin/main `f18ad2686`. Its content is inlined in this brief; the pre-scope notes (`.claude/notes/pc-tools/`) are gitignored coordinator scratch and are not in a clone, so do not look for them. This brief was last amended on 11-19 and
 none of the 11-19 findings reached it. **Where this section and the text below disagree, this section wins.** The
 sections that #4798 and #4785 supersede (Goal 3, Goal 4, Goal 5, STOP 3, the producer table, the re-verify block, Steps
 3 to 6, the tests and the acceptance) are also rewritten in place, so the two should not conflict; if they do, STOP and
@@ -46,16 +46,16 @@ tell the coordinator.
   cut. Its `seams.d/F6-03.md` "Left for the flip" is this PR's checklist (blocker 2).
 
 **Coordinator rulings of 2026-11-20 that bind this row.**
-- **R-A (merge order).** F6-03 and F8-04a do not depend on each other. Whichever is green first after F5-18 merges goes
+- **Merge-order ruling.** F6-03 and F8-04a do not depend on each other. Whichever is green first after F5-18 merges goes
   first; the second rebases the shared lines (blocker 15) and the second to land deletes
   `internal/server/toplevel_auth_chain.go` and its test. This amends the 11-19 23:22 ruling, which put F8-04a after
   F6-03. The plan's wave numbers (F6-03 W36, F8-04a W38) are the dispatch order, not a merge gate.
-- **R-B (status publisher).** F8-04a owns `Registry.SetStatusPublisher(health.PublishStatus(...))` and so the publisher of
+- **Status-publisher ruling.** F8-04a owns `Registry.SetStatusPublisher(health.PublishStatus(...))` and so the publisher of
   `core.system.status-changed.v1`. F6-03 publishes nothing on it (blocker 14).
-- **R-C (task topics).** F5-18 publishes `core.task.run-changed.v1`, `core.task.log-appended.v1` and
+- **Task-topics ruling.** F5-18 publishes `core.task.run-changed.v1`, `core.task.log-appended.v1` and
   `core.task.finished.v1` (slice E6b, see the F5-18 brief's amendment). F6-03 STOPs at dispatch if they are not
   published on `main` (blocker 1).
-- **R-D (Deluge moves).** The version-swap move (`internal/server/version_lifecycle.go:335`) and the import move
+- **Deluge-moves ruling.** The version-swap move (`internal/server/version_lifecycle.go:335`) and the import move
   (`internal/deluge/import.go`) stay in-process. They are not book relocations, the path-update kind acts on the Active
   version only, and "one publisher per event" holds because the organize move is the only one the consumer replaces. A
   test pins it (Tests). File a TODO fragment for durable swap and import events after R2.
@@ -69,7 +69,7 @@ tell the coordinator.
    `:68-73` says the task topics come "with the tasks flip (F5)"). F6-03 needs them for Goal 5's Activity page and keyed
    log stream, `TestHub_TaskTopicVisibleWithoutTasksView`, `TestRunRedaction_SameOnStreamAndREST`, and the merged client,
    which already names `core.task.log-appended.v1` as keyed-only (`web/src/services/coreEvents/manager.ts:35`). Owner:
-   F5-18 (R-C). Slice E6a (specs in `core/tasks/topics.go` plus one line in `coreTopics()`) may land dark on `main` first.
+   F5-18 (task-topics ruling). Slice E6a (specs in `core/tasks/topics.go` plus one line in `coreTopics()`) may land dark on `main` first.
 2. **#4798 supersedes Goal 3, Step 4, STOP 3 and the 14-producer table** *(changed)*. No producer stages anything, so
    STOP 3 cannot fire. Of the 17 files the old producer grep finds, 14 move no book with their own batch (the grep
    matches the undo journal type `undo.ChangeTypeBookPathUpdate`; `kindrename/map_gen.go` and `deluge/kinds.go` are not
@@ -96,7 +96,7 @@ tell the coordinator.
      relied on by backup restore (`web/src/hooks/useBackupHandlers.ts:130`). Successor `core.stream.closed.v1` with
      reason `shutdown` (`coreEvents/types.ts:30-34`).
    - `scan.auto_triggered` (`:926`): no SPA reader. Delete it.
-   - `system.status` (`:885`): no SPA reader; its publisher is F8-04a's (R-B). No topic here.
+   - `system.status` (`:885`): no SPA reader; its publisher is F8-04a's (status-publisher ruling). No topic here.
    - `books.changed` (`internal/realtime/book_changes.go`) is a batched `{kind, ids[]}` where deleted supersedes created
      and updated; the topic `books.book.changed.v1` is one frame per book (`coreEvents/types.ts:52`, keyed, latest-wins
      `Coalesce`). `ClientBuffer` defaults to 128 (`core/realtime/realtime.go:72`), so a bulk organize of a few hundred
@@ -120,8 +120,10 @@ tell the coordinator.
 8. **The acceptance greps cannot reach 0 as written** *(carried; one new hit)*. `grep -rn '/api/events'` hits the R0
    recordings (`internal/books/rbacreach/`, `scripts/r2corpus/record_r0_reach.py:497`,
    `scripts/tests/test_record_r0_reach.py:586-590`) and two comments (`internal/server/server.go:253`, `:435`). Use the
-   `git grep` with pathspec excludes below. `new EventSource(` stays at 1 until F5-18 deletes `openOperationsSSE`
-   (`web/src/services/api.ts:773`); record that at BASE.
+   `git grep` with pathspec excludes below. `new EventSource(` stays at 1 at BASE: `openOperationsSSE` (`web/src/services/api.ts:773`, URL `/operations/events`), whose one caller is
+   `useOperationsStore.ts:411` (plus `appApiMock.ts:59`, `App.health.test.tsx:69` and 6 mock sites in `useOperationsStore.test.ts`).
+   F5-18's brief never deletes it, so **F6-03 owns it**: switch `useOperationsStore` onto `coreEvents` (the `core.task.*` topics) and delete
+   `openOperationsSSE`, `OperationSSEHandler` and the mocks. Record the BASE count.
 9. **The e2e harness mocks `window.EventSource`, so a fetch reader escapes it** *(new)*. `mockEventSource`
    (`web/tests/e2e/utils/test-helpers.ts:314-356`) is installed for every mocked page (`:2093`, `setup-modes.ts:63`). The
    new client calls `fetch('/api/core/v1/events')`, which that mock does not intercept, so every e2e page would open a real
@@ -151,7 +153,7 @@ tell the coordinator.
 13. **The brief did not name its F4-08 dependency** *(carried)*. It needs `Registrar.Topics`, `Registrar.Subscribe` and
     `Deps.Events` (0 hits in `core/module/{registrar,deps,manifest}.go` on `main`); the bus is built by nothing until F4-08
     (`core/kernel/events.go:21-36`). `Depends on` now lists F4-08.
-14. **F6-03 and F8-04 both claimed the status-topic publisher** *(new)*. Resolved by R-B: F8-04a (F8-03's follow-up 2,
+14. **F6-03 and F8-04 both claimed the status-topic publisher** *(new)*. Resolved by the status-publisher ruling: F8-04a (F8-03's follow-up 2,
     `seams.d/F8-03.md:81`, and TODO-F8-03-BOOT-WIRING, `TODO.md:353`). Goal 2's `system.status` mapping is deleted.
 15. **Hot spots shared with F8-04a, which can now merge on either side** *(new)*: `server_lifecycle.go:2711-2712` (one
     condition); `App.tsx` (the stream at `:19,145`, the health poll at `:173`); `web/tests/e2e/utils/test-helpers.ts` (the
@@ -181,7 +183,7 @@ redo it.
 2. **Books' topics** (05-events §5E.13, 05-realtime §11): HEAD's hub A (`internal/realtime/events.go`) and
    `book_changes.go` are replaced by the hub plus books' catalog topic `books.book.changed.v1`
    (`Realtime{Coalesce: 250ms}`, the coalescing rule of `BookChangeCoalescer`); hub A's `system.status` and `scan.auto_triggered` frames
-   are deleted (no SPA reader; the status topic's publisher is F8-04a's, ruling R-B); HEAD's 5-second library counts get no
+   are deleted (no SPA reader; the status topic's publisher is F8-04a's, the status-publisher ruling); HEAD's 5-second library counts get no
    topic here. Every other `realtime.EventHub` publisher moves to typed `events.Publish` through `Deps.Events`, with the
    frame mapping of blocker 4.
 3. **Durable relocation follow-up** (superseded by #4798, blocker 2): books already stages `books.book.relocated.v1`
@@ -192,7 +194,7 @@ redo it.
    (`outbox.ConsumeIntoTask` with `Live()` onto `books.deluge.path-update` or its 05-download successor), m1
    (`ResumeFromZero`, retryable `MoveStorage`) and m5 (the `Live()` pin); it deletes `NotifyDelugeAfterOrganize` and the
    `handleBookRelocated` placeholder, so the relocation follow-up becomes durable for the first time. The version-swap and
-   import moves stay in-process (R-D).
+   import moves stay in-process (Deluge-moves ruling).
 4. **Delete** hub A, `/api/events` and its gin route and compression exclusion, and `internal/realtime` (04 key: F6 move
    `internal/realtime` → `mediacore/realtime`); delete `internal/itunes/service`'s `Realtime *realtime.EventHub` field (it is never set, blocker 5) with the layering entries it justified.
 5. **SPA** (05-realtime §4.8 items 1–6, §11 table; 07 §7.9.2; superseded in shape by #4785, blocker 3): the reader already
@@ -220,9 +222,9 @@ routes F6-04 built), §5E.13 (table and "Order" item (3)); 05-logging §5 (live 
 | generated | `core/openapi/core.json`, `core/web/packages/api-client/src/generated/` |
 | relocation follow-up (the 14-producer table is deleted: #4798 stages in the store's single funnel, blocker 2) | `internal/books/store/book_relocated_outbox.go`, `internal/books/store/pebble_store.go` (the `SetRelocationOutbox` call site; m2 and m4 are slice G1), `internal/plugins/deluge/relocation_consumer.go`, `internal/plugins/deluge/kinds.go`, `internal/plugins/deluge/path_update.go` (the `handleBookRelocated` placeholder), `internal/server/handlers/organize.go` and `internal/server/deluge_integration.go` (delete the in-process organize move and `NotifyDelugeAfterOrganize`). No producer file is edited |
 | hub A and its callers | `internal/realtime/` (deleted), `internal/server/` (including `server_lifecycle.go:2711-2712`, `legacy_manifest.go:294`, `handlers/system/{interfaces,handler}.go`, `wire_handlers.go`, the `system.EventStreamer` mock and `.mockery.yaml:240`, and `toplevel_auth_chain.go` plus its test if F8-04a has landed), `internal/itunes/service/` (delete the unset `Realtime` field) |
-| SPA | `web/src/services/coreEvents/**` (E1 preconditions, E2 adapters), `web/src/services/eventSourceManager.ts` and its test (deleted), `web/src/App.tsx`, `web/src/components/layout/TopBar.tsx`, `web/src/pages/Library.tsx`, `web/src/hooks/useBackupHandlers.ts` (the shutdown contract), the Activity page and the system-log view, `web/src/` |
+| SPA | `web/src/services/coreEvents/**` (E1 preconditions, E2 adapters), `web/src/services/eventSourceManager.ts` and its test (deleted), `web/src/App.tsx`, `web/src/components/layout/TopBar.tsx`, `web/src/pages/Library.tsx`, `web/src/hooks/useBackupHandlers.ts` (the shutdown contract), `web/src/services/api.ts` (delete `openOperationsSSE`), `web/src/stores/useOperationsStore.ts` and its test (onto `coreEvents`), `web/src/test/appApiMock.ts`, `web/src/App.health.test.tsx`, the Activity page and the system-log view, `web/src/` |
 | e2e | `web/tests/e2e/utils/mockCoreEvents.ts` (new, E3), `web/tests/e2e/utils/test-helpers.ts`, `web/tests/e2e/utils/setup-modes.ts`, `web/tests/e2e/error-handling.spec.ts` and the other 12 e2e files that reference `EventSource` (54 references in 15 files at `f18ad2686`) |
-| kernel and reach | `core/kernel/realtime.go` (new, E4), `core/kernel/events.go`, `core/archtest/outbox_consumers.go` (extend to the root module), `internal/books/cutover/reach_gate_test.go`, `reach_golden_test.go`, `reach_baseline_test.go` (blocker 7), `scripts/deadcode-baseline.txt` (prune the `logjournal`, outbox and #4798 dark lines) |
+| kernel and reach | `core/kernel/realtime.go` (new, E4), `core/archtest/outbox_consumers.go` (extend to the root module), `internal/books/cutover/reach_gate_test.go`, `reach_golden_test.go`, `reach_baseline_test.go` (blocker 7), `scripts/deadcode-baseline.txt` (prune the `logjournal`, outbox and #4798 dark lines) |
 | move bookkeeping | `internal/arch/layering_test.go` (`internal/realtime` leaves `layerOf`; the `:80`, `:268`, `:328-329`, `:516` entries go stale), `scripts/ci/short_test_weights.json` |
 | F6-04's skipped cells | `core/internal/outboxhttp/routes_test.go` (remove the `t.Skip("needs stage 13: F4-08")` calls AND wire `stage13Do`: F6-04 wrote every cell's body, the 401, 403 and interactive-guard matrix, after its `t.Skip`, but `stage13Do` builds its router with `httpapi.Deps{Log}` only, which `Build` refuses (`ErrNoAuthService`) once F4-08 lands; point it at F4-08's `Deps.Auth`, RBAC and audit and authenticate the caller the way stage 12 does, so the principal the cell binds reaches the route) |
 
@@ -244,7 +246,9 @@ grep -rn 'func ConsumeIntoTask\[' core/outbox/ | wc -l                        # 
 grep -rln 'path_update\|path-update' --include=*.go internal/plugins/deluge | wc -l   # >= 1 (the books.deluge.path-update kind)
 # Superseded: the 14-file producer grep is deleted (17 hits at f18ad2686, of which 14 move no book). Instead:
 grep -rn 'stageBookRelocated' internal/books/store/ --include=*.go | grep -v _test | wc -l   # >= 2 once #4798 has merged (STOP if it has not)
-grep -rn 'core.task.run-changed.v1\|core.task.log-appended.v1\|core.task.finished.v1' core/ --include=*.go | grep -v _test | wc -l   # >= 3 (F5-18 E6b or slice E6a; STOP if 0)
+grep -rn 'core.task.run-changed.v1\|core.task.log-appended.v1\|core.task.finished.v1' core/ --include=*.go | grep -v _test | wc -l   # >= 3 (E6a declarations alone satisfy this; it proves nothing about publishing)
+grep -rln 'Publish' core/internal/executor/ --include=*.go | grep -v _test | wc -l   # >= 1 (the E6b publisher; STOP if 0)
+(cd core && go test -count=1 ./internal/executor/ -run 'TestExecutor_PublishesRunChangedAfterCommit|TestExecutor_LogAppendedKeyedByRunID')   # ok (F5-18's tests, names coined by its amendment; STOP if no tests match or they fail)
 grep -rn 'func (r \*Registrar) Topics\|func (r \*Registrar) Subscribe' core/module/ | wc -l   # >= 2 (F4-08; STOP if 0)
 grep -rn 'package outboxhttp' core/internal/outboxhttp/ | wc -l               # >= 1 (F6-04)
 grep -c 'needs stage 13: F4-08' core/internal/outboxhttp/routes_test.go       # >= 3 (F6-04's skipped permission tables)
@@ -260,7 +264,7 @@ grep -rnE 'OutboxConsumers +\[\]|\) OutboxHandler\(' core/module/ | wc -l       
    engine write that bypasses the funnel): report its file and line; do not stage in a second batch and do not edit a
    producer. With #4798 merged and the served store core-backed (`legacyrange.go:116`) this cannot fire.
 4. Any subscriber receives an event its rights do not allow.
-5. The three `core.task.*` topics are not published on `main` (grep above is 0), or F4-08's `Registrar.Topics` is absent.
+5. The three `core.task.*` topics are not **published** on `main`: the executor has no `Publish` call (second grep above is 0) or F5-18's two publisher tests are absent or red; declarations from slice E6a alone do not satisfy this. Or F4-08's `Registrar.Topics` is absent.
    Do not declare or publish them here: that is F5-18's slice E6b.
 6. An e2e page reaches `/api/core/v1/events` without the fetch-stream mock.
 
@@ -279,14 +283,14 @@ grep -rnE 'OutboxConsumers +\[\]|\) OutboxHandler\(' core/module/ | wc -l       
 4. The durable relocation wiring only (#4798 staged it): `SetRelocationOutbox` before the store takes writes, the outbox
    storage owner, the consumer in `Manifest.OutboxConsumers` through `Registrar.OutboxHandler` with `Live()`, m1 and m5;
    delete `NotifyDelugeAfterOrganize`, its re-export and `handleBookRelocated`. Keep the version-swap and import moves
-   (R-D).
+   (Deluge-moves ruling).
 5. Delete hub A, `internal/realtime`, `/api/events` (the route at `server_lifecycle.go:2820`, the `:2712` exclusion, the
    manifest row `legacy_manifest.go:294`, `EventStreamer` with its mock and `.mockery.yaml` entry, `HandleEvents`, and
    `toplevel_auth_chain.go` if F8-04a landed first), and delete the iTunes `Realtime` field. Update every test that mounts
    `/api/events` (`handler_test.go`, `perimeter_stages_test.go`, `cf_recovery_test.go`, `server_extra_test.go`,
    `toplevel_auth_chain_test.go`, `wire_abs_routes_test.go`, `legacy_manifest_test.go`,
    `internal/books/perimeter_app_test.go`). Reach oracle (blocker 7).
-6. SPA: switch `App.tsx`, `TopBar.tsx`, `Library.tsx`, the Activity page and the system-log view onto `coreEvents`
+6. SPA: switch `App.tsx`, `TopBar.tsx`, `Library.tsx`, the Activity page, `useOperationsStore` (and delete `openOperationsSSE`) and the system-log view onto `coreEvents`
    (`useTopic` / `useResync`, the E2 batcher and shutdown hook); **delete `eventSourceManager.ts` and its test**; switch
    the e2e suite to `mockCoreEvents.ts` (E3); update each switched consumer's test.
 7. Layering (`layerOf`, `:80`, `:268`, `:328-329`, `:516`) and shard weights; the deadcode-baseline prune; `core.json` and the
@@ -301,7 +305,7 @@ grep -rnE 'OutboxConsumers +\[\]|\) OutboxHandler\(' core/module/ | wc -l       
 - `TestRelocationFollowUpDurable` (name coined here): pins `Live()` (#4798 m5); a path write stages
   `books.book.relocated.v1` in its own batch (through the store funnel); a crash after the commit and before delivery
   still starts exactly one `books.deluge.path-update` run after restart.
-- A version-swap and an import produce **no** relocation message (pins ruling R-D and the "no create event" rule).
+- A version-swap and an import produce **no** relocation message (pins the Deluge-moves ruling and the "no create event" rule).
 - A shutdown frame reaches the SPA as `core.stream.closed.v1{shutdown}` over HTTP/2 (`seams.d/F6-02.md:29`) and `App.tsx`
   shows the backdrop (backup restore relies on it, `useBackupHandlers.ts:130`).
 - A bulk book change of more than `ClientBuffer` books yields one batched update or one `reset{overflow}` followed by one
@@ -326,7 +330,7 @@ grep -rnE 'OutboxConsumers +\[\]|\) OutboxHandler\(' core/module/ | wc -l       
 - e2e: the Activity page shows a run's live progress without polling; the system-log view shows a new journal line
   without polling. **Every e2e page installs the fetch-stream mock** (`web/tests/e2e/utils/mockCoreEvents.ts`, a
   `page.route` for `/api/core/v1/events` with a controllable `ReadableStream`: frames, `closed{shutdown}`, a 429 with
-  `Retry-After`); `mockEventSource` is removed or reduced to `openOperationsSSE`'s needs until F5-18 deletes it, and a
+  `Retry-After`); `mockEventSource` is removed (F6-03 deletes `openOperationsSSE`, so nothing needs it), and a
   guard asserts that no request reaches `/api/core/v1/events` unmocked.
 
 ## Invariants
@@ -342,7 +346,7 @@ go build ./... && go vet ./...                                                  
 go test -count=1 ./internal/server/... ./internal/books/... ./internal/itunes/...       # ok
 ls -d internal/realtime 2>/dev/null | wc -l                                            # 0
 git grep -n '/api/events' -- internal web/src scripts .claude/skills ':!internal/books/rbacreach' ':!scripts/r2corpus' ':!scripts/tests/test_record_r0_reach.py' | grep -v '/api/core/v1/events' | wc -l   # 0 (fix the two server.go comments)
-grep -rn 'new EventSource(' web/src | grep -v test | wc -l                             # 0 (relies on F5-18 having deleted api.ts openOperationsSSE; record the BASE value)
+grep -rn 'new EventSource(' web/src | grep -v test | wc -l                             # 0 (this PR deletes api.ts openOperationsSSE and switches useOperationsStore; record the BASE value, 1)
 ls web/src/services/eventSourceManager.ts 2>/dev/null | wc -l                          # 0
 go test -count=1 ./internal/books/cutover/ -run 'TestReach'                            # ok (the reach oracle, blocker 7)
 (cd web && npm run build && npm test -- --run)                                         # exit 0 (the coreEvents suite plus one test per switched consumer)
@@ -356,7 +360,7 @@ make test-e2e                                                                   
 
 ## Out of scope
 
-The status-topic publisher (F8-04a, ruling R-B); durable version-swap and import relocation events (a TODO after R2, R-D); `@mediacore/shell`'s client and tab leader election (F9, or R3); webhook notifications on `notify` (F7); the plugin
+The status-topic publisher (F8-04a, the status-publisher ruling); durable version-swap and import relocation events (a TODO after R2, Deluge-moves ruling); `@mediacore/shell`'s client and tab leader election (F9, or R3); webhook notifications on `notify` (F7); the plugin
 `EventBus`, which keeps feeding the webhook plugin until F7 (05-events §5E.13 "Order" item (4)).
 
 ## Rollback

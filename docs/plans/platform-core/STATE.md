@@ -96,12 +96,13 @@ The owner's answers of 2026-11-16 change how the rest of the plan is worked. The
 - **F5-18 is to be split** into dark prep rows that land before the flip. The proposal, with every obligation and its
   source, is `docs/plans/platform-core/F5-18-prep-split-proposal.md`; it creates no brief and changes none.
 
-Counts (computed 2026-11-17 from the Execution table below against the 134 ids of `tools/inventory.json`): **98 of 128
+Counts (computed 2026-11-17 from the Execution table below against the 134 ids of `tools/inventory.json`; F8-04 was split into
+F8-04a and F8-04b on 2026-11-20, which makes it 135 ids and 129 agent rows, so read the figures below as 98 of 129 merged, 31 remaining): **98 of 128
 agent briefs merged, 30 remaining**; owner checkpoints recorded in the table **4 of 6** (OWNER-01, OWNER-02, OWNER-03, OWNER-04;
 OWNER-05 and OWNER-06 are not reached); **102 of 134 rows recorded, 32 remaining**. Not
 counted as briefs: F4-02b and the R1-25 follow-up (table rows without an inventory id) and the side PRs. The 30 agent
 rows remaining: F3-07, F3-08, F4-08, F5-03, F5-04, F5-05, F5-12, F5-13, F5-14, F5-16, F5-18, F5-19, F6-03, F6-04,
-F6-05, F7-08, F7-09, F8-02, F8-04, F9-01, F9-02, F9-03, F9-04, F9-05,
+F6-05, F7-08, F7-09, F8-02, F8-04a, F8-04b, F9-01, F9-02, F9-03, F9-04, F9-05,
 R2-01, R3-01, R3-02, R3-03, R3-04, R3-05.
 
 ## Execution

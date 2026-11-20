@@ -3113,7 +3113,6 @@
    "internal/plugins/deluge/relocation_consumer.go",
    "internal/plugins/deluge/kinds.go",
    "core/kernel/realtime.go",
-   "core/kernel/events.go",
    "core/archtest/outbox_consumers.go",
    "internal/books/cutover/reach_gate_test.go",
    "internal/books/cutover/reach_golden_test.go",
@@ -3123,7 +3122,7 @@
    "web/tests/e2e/"
   ],
   "spec": "09 §9.4 R2 flips table F6, §9.6 row 2; 03 §3.8 F6; 05-realtime §11; 05-events §5E.13; 07 §7.9.2; 06 §6.4.10 F6",
-  "notes": "Tier: the events flip moves the SPA's realtime client. books.book.relocated.v1 becomes a durable outbox topic consumed into books.deluge.path-update. Amended 2026-11-20 (pre-scope E7, 15 blockers): the relocation is staged once in the store's path-write funnel by #4798, so no producer file is edited and the 14-producer list is gone; this PR wires SetRelocationOutbox, the topic declaration, the outbox owner and the consumer, and deletes NotifyDelugeAfterOrganize; the version-swap and import moves stay in-process; the SPA switches onto web/src/services/coreEvents (#4785) and deletes eventSourceManager.ts, with a page.route fetch-stream mock for e2e; F5-18 publishes the core.task.* topics; F8-04a owns the status publisher and merges independently of this row; wires the relay and the hub with the F6 members OutboxConsumers, OutboxHandler and Outbox; mounts F6-04's routes; the SPA's log view moves from polling to F6-05's live tail. Un-skips the stage-13 permission, guard and 401 cells of the route package it mounts. 04 keys: F6 move internal/realtime -> mediacore/realtime. Flip PR: one atomic PR (09 §9.2.1)."
+  "notes": "Tier: the events flip moves the SPA's realtime client. books.book.relocated.v1 becomes a durable outbox topic consumed into books.deluge.path-update. Amended 2026-11-20 (pre-scope E7, 15 blockers): the relocation is staged once in the store's path-write funnel by #4798, so no producer file is edited and the 14-producer list is gone; this PR wires SetRelocationOutbox, the topic declaration, the outbox owner and the consumer, and deletes NotifyDelugeAfterOrganize; the version-swap and import moves stay in-process; the SPA switches onto web/src/services/coreEvents (#4785) and deletes eventSourceManager.ts and openOperationsSSE (switching useOperationsStore onto coreEvents), with a page.route fetch-stream mock for e2e; F5-18 publishes the core.task.* topics; F8-04a owns the status publisher and merges independently of this row; wires the relay and the hub with the F6 members OutboxConsumers, OutboxHandler and Outbox; mounts F6-04's routes; the SPA's log view moves from polling to F6-05's live tail. Un-skips the stage-13 permission, guard and 401 cells of the route package it mounts. 04 keys: F6 move internal/realtime -> mediacore/realtime. Flip PR: one atomic PR (09 §9.2.1)."
  },
  {
   "id": "F7-01",
@@ -3699,7 +3698,8 @@
    "internal/books/cutover/reach_gate_test.go",
    "internal/books/cutover/reach_golden_test.go",
    "internal/books/cutover/reach_baseline_test.go",
-   "scripts/deadcode-baseline.txt"
+   "scripts/deadcode-baseline.txt",
+   "core/archtest/tasklint/core_test.go"
   ],
   "spec": "09 §9.4 R2 flips table F8, §9.6 rows 3, 19; 03 §3.8 F8; 05-backup §5B.10; 05-health §5H.10; 05-metrics §6, §13; 05-http-api §8.1 F8 row; 06 §6.4.10 F8",
   "notes": "Tier: the backup, health and metrics flip (part a of the 2026-11-20 split of F8-04) changes /health callers, the metrics mount and books' live restore stager. /health becomes Basic-exempt in place of the deleted paths (TestBasicGate_ExemptSetGolden updated). The first core.backup.create writes mediacore-backup/1. Switches every first-party /api/health and /api/v1/health caller to /health in this PR (09 §9.2.9): e2e, workflows, scripts, docs and the deploy skill. Adds the F8 module members (StartupSteps, Diagnostics, Backup), and TestHealth_UnauthenticatedTokenSetGolden's F8 cells; deletes the ServiceDefs of system, dashboard and metricsstore (06 §6.11.1 step 4); the updater and updatescheduler ServiceDefs are F8-04b's. Re-points books' restore stager onto core backup and needs a read-only prod-copy restore rehearsal before merge. Owns the status publisher (SetStatusPublisher). Depends on F3-07, F4-08 and F5-18, not on F6-03 or F7-09: merges independently of F6-03, whichever is green first. 04 keys: F8 move internal/backup -> mediacore/backup; F8 move internal/sysinfo -> mediacore/health; F8 move internal/server -> mediacore/health; F8 move internal/server/handlers -> mediacore/health; F8 move internal/startup -> mediacore/kernel. Owns gate tests: the dashboard-reference test over the kernel /metrics mount (extension of TestDeployReferencedSeriesServed); TestLegacyArchiveRestoreThenMigrate. Flip PR: one atomic PR (09 §9.2.1)."
@@ -3735,7 +3735,6 @@
    "core/updater/",
    "web/src/",
    "docs/specs/platform-core/05-updater.md",
-   "TODO.md",
    "internal/books/cutover/reach_gate_test.go",
    "internal/books/cutover/reach_golden_test.go",
    "internal/books/cutover/reach_baseline_test.go",

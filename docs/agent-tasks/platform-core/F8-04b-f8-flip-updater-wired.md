@@ -14,6 +14,8 @@
 | Depends on | F8-04a (the shared wiring files and `core.json` are owned in series), F7-09 (**soft**, see below), F8-02, F8-03. The inventory lists F7-09 so the plan keeps the order; the brief tolerates its absence |
 | Spec | 09 §9.4 R2 flips table row F8, §9.6 row 19; 05-updater §5U.3, §5U.10, §5U.12, §5U.13; 05-health §5H.10; 06 §6.4.10 (F8 row); 04 §8.1 F8 |
 
+Provenance:The pre-scope notes (`.claude/notes/pc-tools/`) are gitignored coordinator scratch, not in a clone; their content is inlined in this brief. The `F8-04-prescope.md` and R2-01 pre-scope references below name those notes.
+
 **Gate:** plan, then execute autonomously in a worktree with its own PR; one atomic PR (09 §9.2.1). The R2 freeze is on: do not
 touch `.github/workflows/prerelease.yml`. This row replaces the updater half of the old `F8-04-f8-flip-backup-health-metrics.md`
 (superseded 2026-11-20).
@@ -42,9 +44,10 @@ before this PR merges: the O-5 asset answer is **given** (below), and the rollba
 - **The updater asset name follows `FetchOptions`** (owner ruling **O-5**, 2026-11-20 01:20: goreleaser's raw asset name,
   `internal/updater.FetchOptions()`, `adapter.go:101-113`). The default `RawBinary` namer asks for `audiobook-organizer-<GOOS>-<GOARCH>`,
   an asset no release carries (05-updater §5U.13 item 3: releases `v0.223.0` to `v0.232.1-rc.4` publish
-  `audiobook-organizer_Linux_x86_64` and siblings). The core apply task uses the `FetchOptions` namer. This needs a **05-updater §5U.12
-  edit** (the row for HEAD's asset name) in this PR, after which `TODO.md:157` can be closed. If the answer has not been recorded in the
-  decisions log, STOP and ask.
+  `audiobook-organizer_Linux_x86_64` and siblings). The core apply task uses the `FetchOptions` namer. The 05-updater text
+  (§5U.4 step 2, the release-pipeline paragraph, the asset-contract test row, the two §5U.12 rows, §5U.13 item 3) was amended to O-5 by the
+  pre-scope PR #4807; verify it still matches, then list `TODO.md:157` under "TODO check-offs / owner fixes" in the PR description. If the answer has not been recorded in the decisions
+  log, STOP and ask.
 - **F7-09 is a soft dependency** (pre-scope `F8-04-prescope.md` section 5). `Deps.HTTP` and `Deps.Notify` are both nil-tolerant: no HTTP
   falls back to the source's own client (`core/updater/updater.go:230`; `core/updater/github/github.go:118-136, 141-145`: an https-only
   redirect guard and a 30 s header timeout); no Notify means no found notification (`core/updater/tasks.go:253`). HEAD's
@@ -57,7 +60,7 @@ before this PR merges: the O-5 asset answer is **given** (below), and the rollba
   `core/integrations/providerhttp/registry.go:192`). Recorded as 05-updater §5U.13 item 7 with a recommendation (a core-owned fixed ref
   `core.updater`, `Disabled` and `LANAllow` read from the `core.updater` section). It must be settled before `Deps.HTTP` is set from
   F7-09's registry; with nil `Deps.HTTP` it does not block this PR.
-- **Merge order** (ruling R-A, shared with the F6-03 and F8-04a briefs): F8-04b follows F8-04a. The version-swap and import Deluge moves
+- **Merge order** (merge-order ruling, shared with the F6-03 and F8-04a briefs): F8-04b follows F8-04a. The version-swap and import Deluge moves
   stay in-process (not this row's business).
 
 ## The 16 blockers, part b's share (full table in the F8-04a brief)
@@ -128,7 +131,7 @@ before this PR merges: the O-5 asset answer is **given** (below), and the rollba
 | regenerate | `core/openapi/core.json`, `core/web/packages/api-client/src/generated/` |
 | modify | `web/src/services/api.ts` (`:5948-5973`), `web/src/components/SettingsGeneral.tsx`, `web/src/services/coreUpdater/` |
 | modify | the reach oracle: `internal/books/cutover/reach_gate_test.go`, `reach_golden_test.go`, `reach_baseline_test.go` |
-| modify | `docs/specs/platform-core/05-updater.md` (§5U.12 asset-name row for ruling O-5; §5U.13 item 7), `TODO.md` (close `:157` once the row is edited) |
+| modify | `docs/specs/platform-core/05-updater.md` (O-5 is already applied to §5U.4 step 2, the release-pipeline paragraph, the asset-contract test row, the two §5U.12 rows and §5U.13 item 3 by the pre-scope PR #4807; this PR verifies they still match and only adds item 7's decision if F7-09 settled it) |
 | modify | `internal/arch/layering_test.go`, `scripts/ci/short_test_weights.json`, `scripts/deadcode-baseline.txt` |
 | create | one `changelog.d/` fragment (headerless) |
 
@@ -149,7 +152,7 @@ grep -rn 'func (r \*Registry) Client' core/integrations/providerhttp/registry.go
 
 ## STOP conditions
 
-1. F8-04a is not merged, or the O-5 answer is not recorded, or the 05-updater §5U.12 row was not edited in this PR.
+1. F8-04a is not merged, or the O-5 answer is not recorded, or the 05-updater O-5 text (see the Files table) no longer matches `FetchOptions`.
 2. The apply task asks for an asset name no release carries (I5): compare against a real release's asset list, never against HEAD's name.
 3. The kernel sets `Deps.HTTP` before 05-updater §5U.13 item 7 has a decided `integrations.Ref`.
 4. A caller of `/api/v1/update/*` remains in `scripts/`, `.github/`, `deploy/`, `web/` or skills.
@@ -159,7 +162,7 @@ grep -rn 'func (r \*Registry) Client' core/integrations/providerhttp/registry.go
 
 1. Re-verify; record the F7-09 state (merged or the nil fallback) and the F5-18 state (blocker 15) in the PR.
 2. Tests first (below); then slice 8b-4 (move the constructor and its test into `internal/books`), then wire, delete, switch the SPA.
-3. Edit 05-updater §5U.12 (O-5) and close `TODO.md:157`; leave §5U.13 item 7 open unless F7-09's B3 settled it.
+3. Verify the 05-updater O-5 text and list `TODO.md:157` for check-off in the PR description; leave §5U.13 item 7 open unless F7-09's B3 settled it.
 4. `go build ./... && (cd core && go build ./...)`, acceptance, headers, fragment.
 
 ## Tests
@@ -191,6 +194,8 @@ the `providerhttp` registry itself (F7-09).
 Before R2 ships: revert the PR. After R2 ships: `make rollback-restore` (09 §9.2.1), which needs the helper bundle and `stage_bin`.
 
 ## Repo rules
+
+**TODO.md is not edited by this row (rule 25).** Lines `TODO.md:157-165` (the updater items) belong to this row; list each one this PR completes in the PR description under a "TODO check-offs / owner fixes" heading instead of editing the file. (This replaces the earlier steps that said to close `TODO.md:157` in the PR.)
 
 Worktree off fresh `origin/main`; headers on every file; conventional commits ending `Co-Authored-By: Claude <noreply@anthropic.com>`;
 `gh pr merge <n> --rebase` alone in its wave, never squash, never `--admin`; the PR description lists the `old ==> new` path (09 §9.2.10);

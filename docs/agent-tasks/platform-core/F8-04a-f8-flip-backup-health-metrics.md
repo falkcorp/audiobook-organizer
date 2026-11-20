@@ -10,7 +10,7 @@
 | ID | F8-04a |
 | Release | R2, flip F8, part a (backup, health, metrics). Part b, the updater, is `F8-04b-f8-flip-updater-wired.md` |
 | Tier | **T4** (Opus / xhigh–max): a flip PR; it changes the `/health` callers, the Basic-gate exempt set, the metrics mount, the backup owner and books' live restore path |
-| Wave | W38 in the plan (alone: it owns `main.go`, `internal/server/`, books' registration and the kernel and module wiring files in W38). **Merge order is not the wave number:** ruling R-A below lets it merge before F6-03 if it is green first. Runs inside an announced **move window** |
+| Wave | W38 in the plan (alone: it owns `main.go`, `internal/server/`, books' registration and the kernel and module wiring files in W38). **Merge order is not the wave number:** the merge-order ruling below lets it merge before F6-03 if it is green first. Runs inside an announced **move window** |
 | Depends on | F3-07, F4-08, F5-18, F8-01, F8-02, F8-03, F8-03b. **Not** F6-03, **not** F7-09 (pre-scope `F8-04-prescope.md` section 5, checked input by input) |
 | Owns gate tests | the dashboard-reference test over the kernel `/metrics` mount (extension of `TestDeployReferencedSeriesServed`); `TestLegacyArchiveRestoreThenMigrate` (F8-01 landed its staging half) |
 | Spec | 09 §9.4 R2 flips table row F8, §9.6 rows 3 and 19, §9.2.7, §9.2.9; 03 §3.8 F8; 05-backup §5B.10, B1, B7; 05-health §5H.3.3, §5H.10 (row F8); 05-metrics §6, §12, §13; 05-http-api §8.1 (F8 row), §12; 06 §6.4.10 (F8 row); 04 §8.1 F8 |
@@ -45,28 +45,28 @@ separately: they have separate windows.
 
 ## Coordinator rulings of 2026-11-20 (they bind this row)
 
-- **R-A. Merge order.** F8-04a merges independently of F6-03: whichever is green first after F5-18 goes first, and the
+- **Merge-order ruling.** F8-04a merges independently of F6-03: whichever is green first after F5-18 goes first, and the
   second rebases the shared lines (blocker 15) and deletes `internal/server/toplevel_auth_chain.go` and its test. This
   amends the 11-19 23:22 ruling ("F8-04a after F6-03"). The restore shutdown frame holds in either order (blocker 16).
   Whichever lands first, F8-04b follows F8-04a.
-- **R-B. Books' restore stager moves onto core `backup`** (Q2): re-point `internal/books/restore_stager.go`,
+- **Stager ruling:** books' restore stager moves onto core `backup` (Q2): re-point `internal/books/restore_stager.go`,
   `internal/books/options.go` and the organizer's auto-backup. The 04 key moves `internal/backup` to `mediacore/backup`, and
   core's catalogue already lists `legacy-abo/0` archives (F8-01). This is the largest unlisted item and carries the most
   data-loss risk, so: gate it on `TestLegacyArchiveRestoreThenMigrate` plus the books restore drill tests
   (`internal/books/{live_restore,restore_drill,restore_stager}_test.go`), and **do not merge without a read-only
   prod-copy restore rehearsal** (the owner's standing OK, 11-19): restore a copy of a production archive into a scratch
   directory on a copy of the data, never against the live store, and paste the per-family counts into the PR.
-- **R-C. F8-04a owns the status publisher.** `Registry.SetStatusPublisher(health.PublishStatus(<core scope>))` and so the
+- **Status-publisher ruling:** F8-04a owns the status publisher. `Registry.SetStatusPublisher(health.PublishStatus(<core scope>))` and so the
   only publisher of `core.system.status-changed.v1` (F8-03's follow-up 2, `seams.d/F8-03.md:81`, and TODO-F8-03-BOOT-WIRING,
   `TODO.md:353`). F6-03 drops it from its Goal 2; nothing publishes the topic until this row lands, which is harmless
   because no SPA code reads it.
-- **R-D. The version-swap and import Deluge moves stay in-process** (F6-03's ruling; nothing for this row to do, listed so
+- **Deluge-moves ruling:** the version-swap and import Deluge moves stay in-process (F6-03's ruling; nothing for this row to do, listed so
   the two briefs agree).
 
 ## The 16 blockers the old F8-04 brief did not list, split by part
 
 Counted against the old brief on 2026-11-20 (origin/main `f18ad2686`); *carried* = found 11-19, *new* = since, *changed* = a PR
-since changed what the flip must do. Source: `.claude/notes/pc-tools/F8-04-prescope.md`.
+since changed what the flip must do. Source: the coordinator's F8-04 pre-scope. The pre-scope notes (`.claude/notes/pc-tools/`) are gitignored coordinator scratch, not in a clone; their content is inlined in this brief.
 
 | # | Blocker | Part |
 |---|---|---|
@@ -83,7 +83,7 @@ since changed what the flip must do. Source: `.claude/notes/pc-tools/F8-04-presc
 | 11 | `request_size.go:45` special-cases `/backup/` | **a** |
 | 12 | The acceptance grep has a new non-caller hit | **a** |
 | 13 | F4-08 wires half of backup's storage; reuse it | **a** |
-| 14 | F6-03 and F8-04 both claimed the status publisher | **a** (ruling R-C) |
+| 14 | F6-03 and F8-04 both claimed the status publisher | **a** (status-publisher ruling) |
 | 15 | The maintenance-window step 1 may already be gone | b |
 | 16 | Backup restore in the SPA relies on hub A's shutdown frame | **a** |
 
@@ -139,7 +139,7 @@ since changed what the flip must do. Source: `.claude/notes/pc-tools/F8-04-presc
     (`todo.d/2026-11-19-f4-08-movefile-mkdir-parent-fsync.md`; #4776 round 4 m1: hand-built in-memory Seams without `Shared`
     fail loudly once `journalfs.From` is wired). Part a's kernel backup adapter waits for F4-08's journal wiring, and its file
     names must not collide with F4-08's new `core/kernel` files.
-14. **Status publisher ownership** *(new)*: ruling R-C.
+14. **Status publisher ownership** *(new)*: the status-publisher ruling.
 16. **Backup restore in the SPA relies on hub A's shutdown frame** *(new)*. `web/src/hooks/useBackupHandlers.ts:130` ("The
     server tells every connected page it is going down (system.shutdown)"), `App.tsx:146` shows the backdrop. If this row
     lands **before** F6-03 the frame must still be produced. Verified on `main`: core `backup.Options.Restart` is documented as
@@ -170,7 +170,7 @@ these lines; neither PR may reformat them. Also: F7-09 replaces `internal/search
    `serviceDefs` (`registry_wire.go:104`); the `updater`/`updatescheduler` Overrides are F8-04b's.
 1. **Backup.** The kernel builds core `backup` (F8-01); `Registrar.Backup` and `Deps.Backup` live; `/api/core/v1/backups*`
    mounted; HEAD's `/api/v1/backup/*` gin routes deleted with the SPA switched; **books' restore stager, `options.go` and the
-   organizer's auto-backup re-pointed onto core `backup`** (ruling R-B) and `internal/backup` deleted (`F8 move
+   organizer's auto-backup re-pointed onto core `backup`** (stager ruling) and `internal/backup` deleted (`F8 move
    internal/backup -> mediacore/backup`); the auto-backup becomes `Deps.Backup.Ensure(ctx, 6h, "pre:books.organize")`
    (05-backup §5B.10). The first `core.backup.create` writes `mediacore-backup/1`; existing archives list as `legacy-abo/0`.
 2. **Health.** The kernel mounts `/livez`, `/readyz`, `/api/core/v1/health`, `/api/core/v1/system/*` and the diagnostics
@@ -179,7 +179,7 @@ these lines; neither PR may reformat them. Also: F7-09 replaces `internal/search
    (`F8 move internal/startup -> mediacore/kernel`), books' `searchindex` a Degraded step; the host parts of `internal/sysinfo`
    replaced by `health/sysinfo` (nil roots; per-root capacity arrives with F7-09); `internal/diagnostics`'s zip half replaced by
    `health/diagnostics` with books' `Contributor` sections, so `diagnostics.InterimExport`, books' backend and
-   `app.Options.InterimBackends` are deleted. **Status publisher** (ruling R-C): `SetStatusPublisher(health.PublishStatus(...))`.
+   `app.Options.InterimBackends` are deleted. **Status publisher** (status-publisher ruling): `SetStatusPublisher(health.PublishStatus(...))`.
 3. **Metrics.** The kernel `/metrics` mount (`core/kernel/metrics_mount.go`) replaces the gin `/metrics` route with **no
    metric rename**; it requires `core:metrics.read`, while `/livez` and `/readyz` stay Public (`TestInfra_MetricsRequiresScope`).
    The kernel also emits `<namespace>_build_info` (label `version`; one of 05-metrics §6's always-on smoke families; a new
@@ -235,6 +235,7 @@ Part a's nil inputs are safe, not regressions (pre-scope section 5): `DerivedGen
 | modify | `web/src/` (backup and health callers; `App.tsx`'s health poll and `App.health.test.tsx`), `web/tests/e2e/` health and backup mocks (`utils/test-helpers.ts`, `backup-restore.spec.ts`) |
 | modify | every first-party `/api/health` or `/api/v1/health` caller at BASE: re-run the caller grep, paste the list into the PR description as the checklist. At `f18ad2686` it lists 38 files; `715da70dc` already moved the scripts, docs, deploy skill and `binary-smoke.yml`; `scripts/record_demo.js` and `scripts/run_demo_recording.sh` keep a `/api/health` fallback this PR deletes. Never edit `internal/books/rbacreach/`, `scripts/r2corpus/`, `scripts/tests/test_record_r0_reach.py` (R0 recordings) |
 | modify | `internal/arch/layering_test.go`, `scripts/ci/short_test_weights.json`, `scripts/deadcode-baseline.txt`; `.mockery.yaml` only if a mocked interface moves |
+| modify | `core/archtest/tasklint/core_test.go` (`TestTasklint_Core`, `TestTasklint_CoreGuards`: the F8 backup and diagnostics task kinds the kernel now registers must satisfy tasklint's rules; extend the package list if the new `core/kernel/backup_wire.go` and `diagnostics_wire.go` are not already covered) |
 | create | one `changelog.d/` fragment (headerless) |
 
 ## Re-verify before editing (expected at your base; regenerate and record both values in the PR)
@@ -273,7 +274,7 @@ grep -rn 'InterimBackends' core/app/options.go | wc -l                  # F5-18 
    lists a caller in a path you cannot change in this PR (report it; do not leave a caller on a deleted path).
 2. F3-07, F4-08 or F5-18 is not merged (grep 7).
 3. `TestLegacyArchiveRestoreThenMigrate` or a books restore drill test fails after re-pointing the stager, or the prod-copy
-   restore rehearsal was not run (ruling R-B). Never merge a restore change on green unit tests alone.
+   restore rehearsal was not run (stager ruling). Never merge a restore change on green unit tests alone.
 4. A plain restore reaches `StageRestoreTask` without an owner proof (A1 not landed).
 5. The restore path no longer produces the SPA's shutdown signal (blocker 16: `Options.Restart` not wired to `Lifecycle.RequestRestart`).
 6. The `Markers` or `Keyring` adapter opens a second journal handle instead of binding F4-08's (blocker 13).
@@ -325,7 +326,7 @@ make ci && make -C core ci
 ```
 
 The required checks of 09 §9.2.1, the R2 cutover suite included, must be green. **Plus the read-only prod-copy restore rehearsal
-of ruling R-B**, with its per-family counts in the PR description.
+of the stager ruling**, with its per-family counts in the PR description.
 
 ## Owner checks before part a deploys (one bundled question)
 
@@ -343,6 +344,8 @@ encryption and signed manifests; `internal/sysinfo`'s library and dashboard part
 Before R2 ships: revert the PR (atomic). After R2 ships: R2's rollback, `make rollback-restore` (09 §9.2.1).
 
 ## Repo rules
+
+**TODO.md is not edited by this row (rule 25).** The `TODO-F8-03-*` closes (`TODO.md:353-355`: boot wiring, the status publisher, the storage close timeout) go through the PR description under a "TODO check-offs / owner fixes" heading, naming each line this PR completes.
 
 Worktree off fresh `origin/main`; headers on every file; moved files keep their guid; conventional commits ending
 `Co-Authored-By: Claude <noreply@anthropic.com>`; `gh pr merge <n> --rebase`, never squash, never `--admin` past a required check. The PR
