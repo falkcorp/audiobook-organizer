@@ -410,11 +410,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			case !found:
 				// Seed and skip: the first tick after a deploy must not kick
 				// off an unannounced multi-hour re-hash of the whole library.
-				ts.seedFullSweepClock(time.Now())
+				ts.seedFullSweepClock(ts.now())
 				slog.Info("library_scan_full: no prior sweep recorded; seeding the clock and waiting a full period",
 					"periodHours", config.AppConfig.Scheduled.LibraryScanFull.PeriodHours, "source", source)
 				return nil, nil
-			case !fullSweepDue(last, time.Now(), period) && !manual:
+			case !fullSweepDue(last, ts.now(), period) && !manual:
 				return nil, nil
 			}
 
@@ -446,7 +446,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			// whole-library force_update re-hash running back to back forever,
 			// announced once an hour as a warning nobody reads. Skipping one
 			// sweep is the cheaper failure.
-			if stampErr := ts.stampFullSweepRun(time.Now()); stampErr != nil {
+			if stampErr := ts.stampFullSweepRun(ts.now()); stampErr != nil {
 				return nil, fmt.Errorf("library_scan_full: refusing to enqueue a sweep whose clock cannot be "+
 					"persisted, because it would re-enqueue on every due check: %w", stampErr)
 			}

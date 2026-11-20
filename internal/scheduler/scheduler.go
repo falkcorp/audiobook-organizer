@@ -95,6 +95,52 @@ type SchedulerDeps struct {
 	// search index is open. The task enqueues nothing when it says false. Nil
 	// means "cannot tell", and the task enqueues (the op then reports the reason).
 	CollectionsRefreshPending func() (bool, error)
+
+	// Now, Location and Tick are the clock seam (F5-14 pre-slice): the
+	// schedule-parity oracle (internal/books, TestScheduleParity_AllDefinitions)
+	// drives this scheduler's due rules with a fake clock. Production leaves
+	// all three nil, which is time.Now, time.Local and time.NewTicker, the
+	// values this package used before the seam existed.
+	//
+	// Now is read wherever a due rule, a clock stamp or the maintenance
+	// window's hour and date read the time. Location is the zone of the
+	// DailyAt timer, the maintenance window's hour and its once-a-day date,
+	// and the ops.Schedule loop's DailyAt and Cron (v3Scheduler.loc).
+	// Tick builds every timer Start runs (the interval, DailyAt and
+	// maintenance-window checkers, and the ops.Schedule loop); each call is
+	// one timer, its channel delivers the ticks, and stop releases it. A
+	// fake Tick that returns an unbuffered channel lets the oracle step a
+	// checker: a send returns once the checker has taken the tick, and the
+	// checker takes the next one only after it has acted on this one.
+	// WaitForOperation's poll keeps its own timer (waitPollInterval).
+	Now      func() time.Time
+	Location *time.Location
+	Tick     func(d time.Duration) (c <-chan time.Time, stop func())
+}
+
+// now is SchedulerDeps.Now, or time.Now.
+func (ts *TaskScheduler) now() time.Time {
+	if ts.deps.Now != nil {
+		return ts.deps.Now()
+	}
+	return time.Now()
+}
+
+// zone is SchedulerDeps.Location, or time.Local.
+func (ts *TaskScheduler) zone() *time.Location {
+	if ts.deps.Location != nil {
+		return ts.deps.Location
+	}
+	return time.Local
+}
+
+// newTicker is SchedulerDeps.Tick, or a time.Ticker.
+func (ts *TaskScheduler) newTicker(d time.Duration) (<-chan time.Time, func()) {
+	if ts.deps.Tick != nil {
+		return ts.deps.Tick(d)
+	}
+	t := time.NewTicker(d)
+	return t.C, t.Stop
 }
 
 // TaskDefinition defines a registered task in the unified task system.
@@ -210,6 +256,7 @@ func NewTaskScheduler(deps SchedulerDeps) *TaskScheduler {
 		tasks:   make(map[string]*TaskDefinition),
 		lastRun: make(map[string]time.Time),
 	}
+	ts.v3.now, ts.v3.loc = deps.Now, deps.Location // nil keeps v3's own defaults: time.Now, time.Local
 	ts.registerAllTasks()
 	ts.maintenanceOrder = []string{
 		"reconcile_scan",
@@ -355,16 +402,16 @@ func (ts *TaskScheduler) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 				continue
 			}
 			taskName := name
-			loc := time.Local
+			loc := ts.zone()
 			wg.Go(func() {
 				// Check once immediately so a run missed while the server was
 				// down fires at startup rather than one poll later.
 				ts.runDailyAtCheck(taskName, hour, minute, loc)
-				ticker := time.NewTicker(intervalPollInterval)
-				defer ticker.Stop()
+				ticks, stop := ts.newTicker(intervalPollInterval)
+				defer stop()
 				for {
 					select {
-					case <-ticker.C:
+					case <-ticks:
 						ts.runDailyAtCheck(taskName, hour, minute, loc)
 					case <-shutdown:
 						return
@@ -389,12 +436,12 @@ func (ts *TaskScheduler) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 			// 2026-08-30 — the only two days uptime passed 24 hours) while the
 			// activity table grew to 13,256,825 rows. See interval_clock.go.
 			wg.Go(func() {
-				ticker := time.NewTicker(intervalPollFor(interval))
-				defer ticker.Stop()
+				ticks, stop := ts.newTicker(intervalPollFor(interval))
+				defer stop()
 				for {
 					select {
-					case <-ticker.C:
-						if !ts.claimIntervalRun(taskName, interval, time.Now()) {
+					case <-ticks:
+						if !ts.claimIntervalRun(taskName, interval, ts.now()) {
 							continue
 						}
 						if op, err := ts.RunTask(taskName); err != nil {
@@ -455,13 +502,13 @@ func (ts *TaskScheduler) Start(shutdown chan struct{}, wg *sync.WaitGroup) {
 	// Maintenance window checker — runs every 60 seconds
 	if maint := ts.deps.Maintenance; maint.Enabled {
 		wg.Go(func() {
-			ticker := time.NewTicker(60 * time.Second)
-			defer ticker.Stop()
+			ticks, stop := ts.newTicker(60 * time.Second)
+			defer stop()
 			slog.Info("Maintenance window enabled", "windowStart", maint.WindowStart, "windowEnd", maint.WindowEnd)
 			for {
 				select {
-				case <-ticker.C:
-					if IsInMaintenanceWindow() && !ts.hasRunToday() {
+				case <-ticks:
+					if IsInMaintenanceWindowAt(ts.now().In(ts.zone()).Hour()) && !ts.hasRunToday() {
 						slog.Info("Maintenance window open — starting maintenance run")
 						if err := ts.RunMaintenanceWindow(context.Background()); err != nil {
 							slog.Warn("Maintenance window failed", "error", err)
@@ -515,7 +562,7 @@ func (ts *TaskScheduler) runTask(name, source string) (*database.Operation, erro
 	// for "did this actually happen", and it read healthy unconditionally.
 	if op != nil {
 		ts.mu.Lock()
-		ts.lastRun[name] = time.Now()
+		ts.lastRun[name] = ts.now()
 		ts.mu.Unlock()
 	}
 

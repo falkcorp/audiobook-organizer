@@ -846,7 +846,11 @@ func TestSchedule_BootOnStartRules(t *testing.T) {
 	})
 	f.hold(signal, true)
 	f.boot(day(1, 12, 0))
+	// A window member fires OnStart too (owner ruling 2026-11-20 and HEAD's
+	// temp_file_cleanup, seams.d/F5-14.md).
 	f.expect(
+		"01-01T12:00 seed gotham.batcave-sweep last_due=01-01T12:00",
+		"01-01T12:00 enqueue gotham.batcave-sweep on_start",
 		"01-01T12:00 seed gotham.case-file last_due=01-01T12:00",
 		"01-01T12:00 enqueue gotham.case-file on_start",
 	)

@@ -301,10 +301,12 @@ func (s *Scheduler) Stop(ctx context.Context) error {
 
 // Boot fires every OnStart schedule once (HEAD's runV3OnStart and the
 // TaskDefinitions' RunOnStart): a kind whose key is enabled, that is not
-// held and not a window member, and whose When gate is open, gets one run
-// with trigger on_start, and its clock is stamped in the same batch so the
-// first poll does not fire it again. Run calls it once; tests and the
-// harness call it directly.
+// held, and whose When gate is open, gets one run with trigger on_start, and
+// its clock is stamped in the same batch so the first poll does not fire it
+// again. A window member fires too, as HEAD's RunOnStart did for
+// temp_file_cleanup (a window member with no interval) and purge_deleted
+// (an interval and a window slot). Run calls it once; tests and the harness
+// call it directly.
 func (s *Scheduler) Boot(ctx context.Context) {
 	now := s.opts.Now()
 	s.pollMu.Lock()
@@ -319,7 +321,7 @@ func (s *Scheduler) Boot(ctx context.Context) {
 			s.scheduleError(e.kind, err)
 			continue
 		}
-		if !eff.enabled || eff.window != "" {
+		if !eff.enabled {
 			continue
 		}
 		s.commitFire(ctx, e.kind, tasks.TriggerOnStart, func(prev tasks.Clock, had bool) (decision, error) {
@@ -396,8 +398,8 @@ func (s *Scheduler) pollEntry(ctx context.Context, e entry, now, since time.Time
 		s.scheduleError(e.kind, err)
 		return
 	}
-	if eff.window != "" {
-		return // a window member: the window runs it; its own clock is not polled
+	if eff.window != "" && eff.t == nil {
+		return // a window-only member: the window runs it; its own clock is not polled
 	}
 	in := pollInput{now: now, since: since, poll: s.opts.Poll, loc: s.opts.Location, eff: eff, missed: e.sched.OnMissed()}
 	s.commitFire(ctx, e.kind, tasks.TriggerSchedule, func(prev tasks.Clock, had bool) (decision, error) {

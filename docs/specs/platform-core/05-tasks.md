@@ -727,8 +727,12 @@ type Schedule struct{ /* unexported */ }
 // "modules.books.scheduler.schedules.library_scan_full".
 func ScheduleFromConfig(key string) *Schedule
 
-// ScheduleConfig is the value type of every schedule key. Exactly one of
-// Every, DailyAt, Cron and Window is set when Enabled is true.
+// ScheduleConfig is the value type of every schedule key. When Enabled is
+// true it sets one of Every, DailyAt, Cron and Window, or Every and Window
+// together (owner ruling 2026-11-20): such a kind is polled on its interval
+// and is also a member of the window, and fires on whichever comes due. A
+// fire that finds a run of the kind active folds into it, so one due moment
+// never starts two runs. Window with DailyAt or Cron is refused.
 type ScheduleConfig struct {
 	Enabled bool          `json:"enabled"`
 	Every   config.Duration `json:"every,omitempty"`  // >= core.tasks.schedule_poll; a string such as "24h" in defaults and files (05-config)
@@ -818,7 +822,13 @@ The 38 `TaskDefinition`s become
 `ScheduleFromConfig` on their target def, with today's interval and enable flag as the key's
 default; `RunOnStart` → `.OnStart()`; `IsEnabled` → the key's `enabled` (or `.When` for gates that
 are not schedule settings); window membership (`maintenanceOrder`, `internal/scheduler/scheduler.go:197-246`)
-→ `Window: "nightly", Order: idx`. `transcode` (enqueues nothing) is deleted; `batch_poller` becomes the
+→ `Window: "nightly", Order: idx`, and a definition that also has an interval keeps it beside the slot
+(`Every: d, Window: "nightly", Order: idx`; owner ruling 2026-11-20, "Allow both in core"). Under HEAD's
+shipped defaults five definitions tick on an interval and sit in `maintenanceOrder` (`tombstone_cleanup`,
+`reports_prune`, `purge_deleted`, `cleanup_activity_log`, `ai_journal_prune`) and HEAD fires each on
+either; its window skips a task whose op is active (`isTaskRunning`) and leaves the interval clock alone,
+which the fold below reproduces. The window does not stamp a member's interval clock. A window member's
+`.OnStart()` fires at boot like any other (HEAD's `RunOnStart` on `temp_file_cleanup` and `purge_deleted`). `transcode` (enqueues nothing) is deleted; `batch_poller` becomes the
 schedule of the core kind `core.ai.batch-poll` ([05-ai](05-ai.md)), registered from F5 by its minimal owner
 registration (5T.8.2) and extended by the AI flip F7. The definitions' bodies and these
 declarations land dark and are registered by the tasks flip (F5, 5T.8.2), which deletes ABO's scheduler in
@@ -2506,3 +2516,12 @@ F2-03 review (2026-11-11): a Fixer whose `Approval` leaves `PlanRequired` false 
 `taskstest`'s conformance suite checks it. 5T.3.7's approve is recorded once per plan (the executor's
 readings, `seams.d/F2-03.md`): a second decision is refused, an approval always starts a new apply run, and
 an approve with no caller identity is refused.
+
+F5-14 pre-slice (2026-11-20, owner ruling "Allow both in core"): 5T.3.8's `ScheduleConfig` accepts `Every`
+together with `Window`. Such a kind is polled on its interval and is also a member of the window, so it fires
+on whichever comes due, and a start that finds a run of the kind active folds into it (the existing fold), so
+one due moment never starts two runs; `Window` with `DailyAt` or `Cron` stays refused. The conversion rule for
+window membership keeps a definition's interval beside its slot (`Every`, `Window`, `Order`), because HEAD's
+`tombstone_cleanup`, `reports_prune`, `purge_deleted`, `cleanup_activity_log` and `ai_journal_prune` fire on
+both under the shipped defaults, and a window member's `OnStart` fires at boot (HEAD's `temp_file_cleanup`,
+`purge_deleted`). Recorded in `docs/agent-tasks/platform-core/seams.d/F5-14.md`.

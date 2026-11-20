@@ -171,15 +171,19 @@ func TestScheduleConfig_OneJSONValue(t *testing.T) {
 func TestScheduleConfig_Validate(t *testing.T) {
 	hour := config.Duration(time.Hour)
 	bad := map[string]tasks.ScheduleConfig{
-		"every and cron":     {Enabled: true, Every: hour, Cron: "* * * * *"},
-		"two while disabled": {DailyAt: "03:00", Window: "nightly"},
-		"enabled, no timing": {Enabled: true},
-		"negative every":     {Enabled: true, Every: config.Duration(-time.Hour)},
-		"bad daily_at":       {Enabled: true, DailyAt: "3:00"},
-		"bad cron":           {Enabled: true, Cron: "* * * *"},
-		"bad window":         {Enabled: true, Window: "Night-ly"},
-		"negative order":     {Enabled: true, Window: "nightly", Order: -1},
-		"bad cron, disabled": {Cron: "bat signal"},
+		"every and cron":      {Enabled: true, Every: hour, Cron: "* * * * *"},
+		"two while disabled":  {DailyAt: "03:00", Window: "nightly"},
+		"enabled, no timing":  {Enabled: true},
+		"negative every":      {Enabled: true, Every: config.Duration(-time.Hour)},
+		"bad daily_at":        {Enabled: true, DailyAt: "3:00"},
+		"bad cron":            {Enabled: true, Cron: "* * * *"},
+		"bad window":          {Enabled: true, Window: "Night-ly"},
+		"negative order":      {Enabled: true, Window: "nightly", Order: -1},
+		"bad cron, disabled":  {Cron: "bat signal"},
+		"daily_at and window": {Enabled: true, DailyAt: "03:00", Window: "nightly"},
+		"cron and window":     {Enabled: true, Cron: "0 3 * * *", Window: "nightly"},
+		"every, cron, window": {Enabled: true, Every: hour, Cron: "0 3 * * *", Window: "nightly"},
+		"every, bad window":   {Enabled: true, Every: hour, Window: "Night-ly"},
 	}
 	for name, c := range bad {
 		if err := c.Validate(); err == nil {
@@ -189,6 +193,10 @@ func TestScheduleConfig_Validate(t *testing.T) {
 	for _, c := range []tasks.ScheduleConfig{
 		{}, {Every: hour}, {Enabled: true, Every: hour}, {Enabled: true, DailyAt: "23:59"},
 		{Enabled: true, Cron: "*/15 1-4 * * 1-5"}, {Enabled: true, Window: "nightly", Order: 3},
+		// Owner ruling 2026-11-20 (seams.d/F5-14.md): an interval and a
+		// window slot together, as HEAD's TaskDefinitions that tick on an
+		// interval and also sit in maintenanceOrder.
+		{Enabled: true, Every: hour, Window: "nightly", Order: 7}, {Every: hour, Window: "nightly"},
 	} {
 		if err := c.Validate(); err != nil {
 			t.Errorf("%+v: %v", c, err)

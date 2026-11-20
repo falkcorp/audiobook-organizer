@@ -67,9 +67,10 @@ func (ts *TaskScheduler) saveLastMaintenanceRun() {
 	if store == nil {
 		return
 	}
-	today := time.Now().Format("2006-01-02")
+	now := ts.now().In(ts.zone())
+	today := now.Format("2006-01-02")
 	_ = store.SetSetting("maintenance_window_last_run", today, "string", false)
-	ts.lastMaintenanceRun = time.Now()
+	ts.lastMaintenanceRun = now
 }
 
 // GetLastMaintenanceRunDate returns the last-run date as "2006-01-02", or "" if never run.
@@ -124,7 +125,7 @@ func (ts *TaskScheduler) hasActiveV2Op(defID string) bool {
 
 // hasRunToday checks if the maintenance window has already run today.
 func (ts *TaskScheduler) hasRunToday() bool {
-	today := time.Now().Format("2006-01-02")
+	today := ts.now().In(ts.zone()).Format("2006-01-02")
 	return ts.lastMaintenanceRun.Format("2006-01-02") == today
 }
 
