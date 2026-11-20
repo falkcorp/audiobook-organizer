@@ -1,5 +1,5 @@
 // file: internal/books/writer/gate_test.go
-// version: 1.0.1
+// version: 1.1.1
 // guid: 0d6e48b2-7a95-4c13-b8f0-52e1c9a7d340
 // last-edited: 2026-11-19
 
