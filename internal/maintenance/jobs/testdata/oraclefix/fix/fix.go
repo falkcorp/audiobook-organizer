@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/testdata/oraclefix/fix/fix.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 164bc002-83bc-4523-bed7-b8bfebfc2c9a
 // last-edited: 2026-11-19
 
@@ -469,3 +469,18 @@ func applyTo(fn func()) { fn() }
 // ViaOnlyAsValue hands out a helper as a value: no walked caller supplies the
 // helper's parameter, so the call through it is the caller-outside-the-walk's.
 func ViaOnlyAsValue() func(func()) { return applyTo }
+
+// opsSink stands in for the operations registry's own store: the op-error rows
+// a run's reporter persists for every run.
+type opsSink interface{ InsertOpErrorV2(msg string) error }
+
+type runReporter struct{ ops opsSink }
+
+// Log is the reporter persisting its own log line.
+func (r *runReporter) Log(msg string) { _ = r.ops.InsertOpErrorV2(msg) }
+
+// ViaReporterOwn logs through the run's reporter.
+func ViaReporterOwn(r *runReporter) { r.Log("Joker escaped Arkham") }
+
+// ViaJobWritesOpErrors makes the same store call from job code.
+func ViaJobWritesOpErrors(s opsSink) { _ = s.InsertOpErrorV2("Joker escaped Arkham") }
