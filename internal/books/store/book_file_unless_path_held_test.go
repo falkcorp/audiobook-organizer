@@ -1,5 +1,5 @@
 // file: internal/books/store/book_file_unless_path_held_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3e8a51c4-7d02-4f96-b1a8-c40d9e27f653
 // last-edited: 2026-11-19
 
@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -105,6 +106,10 @@ func TestModifyBookFileUnlessPathHeld_AStaleKeyHoldsNothing(t *testing.T) {
 	require.NoError(t, f.ps.CreateBookFile(gone))
 	_, err := f.ps.ModifyBookFile(f.other.ID, gone.ID, f.moveTo("/lib/unless/long-halloween/elsewhere.m4b"))
 	require.NoError(t, err)
+	// Moving a row drops its old path key, so the stale state (a key naming a row
+	// that has left the path) is written by hand, as an interrupted writer leaves it.
+	require.NoError(t, f.ps.db.Set([]byte(pathKeyOf(f.to)), []byte(f.other.ID+":"+gone.ID), pebble.NoSync))
+	require.Equal(t, f.other.ID+":"+gone.ID, indexOwner(t, f.ps, pathKeyOf(f.to)))
 
 	_, err = f.ps.ModifyBookFileUnlessPathHeld(f.book.ID, f.row.ID, f.moveTo(f.to))
 	require.NoError(t, err)
