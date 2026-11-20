@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/F7-09-f7-flip-integrations.md -->
-<!-- version: 1.3.1 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 92d3d884-998e-42de-94e1-451dd63836fb -->
-<!-- last-edited: 2026-11-19 -->
+<!-- last-edited: 2026-11-12 -->
 
 # F7-09 — F7 flip, one PR: integrations, AI jobs, provider gates, library roots and notify wired, M6 registered, internal/plugin and the webhook plugin deleted, deliveries in core's format, the AI families renamed with their dashboards, the late-owner holds and poll on their native bodies
 
