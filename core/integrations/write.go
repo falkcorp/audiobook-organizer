@@ -120,7 +120,7 @@ func shape(ref Ref, a *adapter, inst InstanceConfig, secretsIn map[string]secret
 	// to replace and is handed nil.
 	var prior map[string]any
 	if storedSettings != nil {
-		prior = overlayValues(fs, storedSettings, ops)
+		prior = eff
 	}
 	if err := runValidator(val, a.desc.meta.ID, out.view, prior); err != nil {
 		return shaped{}, err

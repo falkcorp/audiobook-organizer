@@ -106,8 +106,7 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 		if err := opts.Registry.SetValidator(integrations.KindAI, func(_ integrations.AdapterID, settings, stored map[string]any) error {
 			return r.ValidateEndpoint(settings, stored)
 		}); err != nil {
-			_ = m.close()
-			return nil, fmt.Errorf("ai: NewRouter: %w", err)
+			return nil, errors.Join(fmt.Errorf("ai: NewRouter: %w", err), m.close())
 		}
 	}
 	return r, nil
