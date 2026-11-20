@@ -1,5 +1,5 @@
 // file: core/internal/rbacstore/store_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 23a85290-0088-42d7-b522-d7086e7dcf49
 // last-edited: 2026-11-19
 
@@ -187,6 +187,36 @@ func TestStore_GenerationRowIsNotARole(t *testing.T) {
 	for r, err := range st.ScanRoles(context.Background()) {
 		if err != nil {
 			t.Fatalf("ScanRoles met the generation row: %v", err)
+		}
+		if r.Name != "custom.trustee" {
+			t.Fatalf("ScanRoles yielded %q", r.Name)
+		}
+		n++
+	}
+	if n != 1 {
+		t.Fatalf("ScanRoles yielded %d roles, want 1", n)
+	}
+}
+
+// TestStore_ClaimCounterIsNotARole: the role-claim counter lives beside role/
+// like the generation row, so a scan of the roles meets only roles after a
+// claim has been committed.
+func TestStore_ClaimCounterIsNotARole(t *testing.T) {
+	st := newStore(t)
+	b := st.NewBatch()
+	if err := st.PutRole(b, role("Trustee", 1)); err != nil {
+		t.Fatal(err)
+	}
+	commit(t, b)
+	cb := st.NewBatch()
+	if err := st.ClaimRoleSet(cb, generation(t, st)); err != nil {
+		t.Fatal(err)
+	}
+	commit(t, cb)
+	n := 0
+	for r, err := range st.ScanRoles(context.Background()) {
+		if err != nil {
+			t.Fatalf("ScanRoles met the claim counter: %v", err)
 		}
 		if r.Name != "custom.trustee" {
 			t.Fatalf("ScanRoles yielded %q", r.Name)
