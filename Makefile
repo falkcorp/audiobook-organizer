@@ -1031,6 +1031,15 @@ deploy-env-check:
 # installs .prev atomically and restarts. The wait refuses "ready" until the
 # unit has a new InvocationID: a restart that never ran leaves the old
 # process ready on /health. A restart sudo refuses fails at once.
+# The previous release's service environment goes back with its binary: every
+# deploy keeps the unit and the local.conf drop-in it replaced as
+# DEPLOY_BIN.prev.env, beside .prev, and the swap installs those with .prev
+# (install-staged rollback; daemon-reload). It is checked before anything is
+# stopped, and a rollback with no kept environment (a .prev that was not
+# installed through the helpers, or a snapshot of a different binary) refuses
+# rather than start the old build under the new environment. A .prev that
+# is not the binary the snapshot belongs to needs ROLLBACK_ENV=snapshot, which
+# says the kept environment fits it.
 # Privileged steps go through the root-owned rollback helpers, each granted
 # in the deploy user's sudoers drop-in (docs/system/deploy-and-gpu-ops.md).
 .PHONY: rollback
@@ -1072,7 +1081,9 @@ rollback:
 #      is running or starting; nothing retries it.
 #   5. Check the unit stayed stopped; install .prev atomically; start; wait
 #      as rollback does.
-# Every failure after a change says what state the host is in and prints the
+# The kept unit and local.conf are restored with .prev in step 5, like
+# rollback (ROLLBACK_ENV=snapshot when .prev came from RELEASE=). Every
+# failure after a change says what state the host is in and prints the
 # commands that finish or undo the rollback. The unit is not masked
 # (systemctl mask refuses a unit file installed in /etc/systemd/system).
 .PHONY: rollback-restore
