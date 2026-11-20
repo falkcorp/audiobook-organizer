@@ -27,17 +27,22 @@ Until then it duplicated almost every job GitHub already runs on each pull
 request: the short race suite split three ways, the fixture shards, vet, the
 repo guards and the ratchets. The repo is public, so GitHub minutes are free,
 while every duplicate loaded our own servers and made noise on them. Two
-workflows are left on pull requests:
+workflows are left on pull requests, and one runs nightly from a cron
+(see [Nightly race run](#nightly-race-run)):
 
 | workflow | agent label | runs | why it is not on GitHub |
 |---|---|---|---|
 | `checks-lint` | `host=u0` | `staticcheck` (one step, plus a cache-trim step) | staticcheck is not part of any GitHub PR workflow (`nightly.yml` runs it, no PR job does) |
+| `race-nightly` (cron only) | `platform=darwin/arm64` | the whole `-race` suite on main's tip at 03:00 America/New_York: `make test-short-shard` 1/2, 2/2 and core/2, and `make test-fixtures` 1/3 to 3/3 (a six-entry matrix) | the merge queue no longer runs `-race` (owner 2026-11-20); this is the nightly sweep that replaces it, kept off U1 and off prod |
 | `test-native-taglib` | `taglib=true` | `go test -tags native_taglib -race` of `internal/metadata`, `internal/tagger` and `internal/metafetch`: the cgo tag writers the production binary uses, which no other workflow compiles. `scripts/ci/build_taglib_static.py` builds TagLib 2.0.2 once into `$CI_CACHE_ROOT/taglib/` (keyed by the TagLib and utfcpp versions) and copies it to `third_party/taglib`; no coverage line | needs a TagLib built on the host and a host with ffmpeg, ffprobe and fpcalc |
 
-**The PR gate is GitHub's.** The merge-blocking test checks are ci.yml's
+**The PR gate is GitHub's.** The test checks a pull request runs are ci.yml's
 `go-test-short-shards` (Go Tests (short, race), shards 1/4 to 4/4 and core/4)
-and `Fixture Tests (no -short, race)` 1/3 to 3/3. Woodpecker's removed
-workflows and their GitHub twins:
+and `Fixture Tests (no -short, race)` 1/3 to 3/3, both under `-race`. In the
+merge queue the shards run without `-race` and the fixture shards are skipped
+(owner 2026-11-20); [merge-queue.md](merge-queue.md) lists the required checks
+and how each is met there. Woodpecker's removed workflows and their GitHub
+twins:
 
 | removed workflow | GitHub twin |
 |---|---|
@@ -63,8 +68,53 @@ counts. `make ci-woodpecker` follows the pull_request pipeline the push starts
 instead of queueing a second, manual one for the same commit.
 
 `checks-lint` stays on `host=u0`; `u0` has no `heavy` label. No workflow
-carries `heavy=true` any more, so the `heavy=true` labels on U1, llm1 and the
-Mac are idle until a heavy workflow is added again.
+carries `heavy=true` any more, so the `heavy=true` labels on U1, llm1, the
+Mac and u0-local (the server lists `heavy=true` on u0-local as of 2026-11-20,
+against the agent table below) are idle until a heavy workflow is added again.
+
+## Nightly race run
+
+`.woodpecker/race-nightly.yaml` runs the whole race-detector suite on main
+every night, since the merge queue stopped running it (owner decision
+2026-11-20; ci.yml's `race` step in the `changes` job says what the queue
+skips). Six workflows from one matrix: the short suite as
+`make test-short-shard SHARD=1/2`, `2/2` and `core/2`, and the fixture tests
+as `make test-fixtures FIXTURE_SHARD=1/3` to `3/3`. Each has the repo's
+60-minute timeout and Go's 25m per-process timeout.
+
+- **Agents.** `labels: platform: darwin/arm64`. Woodpecker sets `platform` on
+  every agent itself, so this matches llm1 (always on, 3 workflows at a time)
+  and mac (when its agent is started), and nothing else. Labels are matched by
+  equality with no OR, and `heavy` and `taglib` both match U1, so the platform
+  label is the only one that keeps the run off U1 (its fans must stay quiet at
+  night) and off U0/u0-local (prod: no decodes, and the fixture tests decode
+  audio). With six workflows and llm1's three slots it runs in two waves.
+- **Trigger.** `event: cron` with `cron: race-nightly` only. Not `manual`,
+  because `make ci-woodpecker` starts manual pipelines and would pull the race
+  suite into each one.
+- **The cron entry lives on the server**, not in the repo. Create it once,
+  after the workflow file is on main, from a host that can reach the server
+  (repo id 1; the values come from the gitignored
+  `.claude/.credentials/woodpecker-api.env`):
+
+  ```bash
+  set -a; . .claude/.credentials/woodpecker-api.env; set +a
+  curl -sS -X POST "$WOODPECKER_URL/api/repos/1/cron" \
+    -H "Authorization: Bearer $WOODPECKER_TOKEN" -H 'Content-Type: application/json' \
+    -d '{"name":"race-nightly","branch":"main","schedule":"0 3 * * *","timezone":"America/New_York","enabled":true}' \
+    | jq '{id, name, branch, schedule, timezone, enabled, next_exec}'
+  ```
+
+  `next_exec` in the reply is the next 03:00 Eastern as a Unix time. To run it
+  now: `curl -sS -X POST -H "Authorization: Bearer $WOODPECKER_TOKEN"
+  "$WOODPECKER_URL/api/repos/1/cron/<id>"`. The schedule is five-field cron
+  (`gdgvda/cron` standard options) in the cron's own `timezone`.
+- **Failures.** Woodpecker posts a commit status on the commit it ran,
+  `ci/woodpecker/cron/race-nightly/<n>`, one per matrix entry. Every morning at
+  13:00 UTC `.github/workflows/race-nightly-watch.yml` reads them and files an
+  issue labelled `race-nightly` (or comments on the open one) when a workflow
+  failed, is still pending, is missing, or no status exists at all (cron not
+  created, server down, no Mac agent online). It never touches main.
 
 Every workflow clones with `lfs: false`, because GitHub's LFS budget is
 exhausted and no check reads LFS content. Every image is pinned by digest.
