@@ -65,4 +65,9 @@ echo "✅ HEAD == $ref ($(git rev-parse --short HEAD))."
 # not been synced from Makefile.local.example calls only this script. It reads
 # deploy/local.conf and Makefile.local in the current directory (where make
 # runs); with neither there is nothing to check.
-python3 "$(dirname "$0")/deploy_env_check.py"
+# `make deploy` already ran it as a prerequisite and says so with
+# DEPLOY_ENV_CHECK_DONE=1, so its warnings are not printed twice; anything else
+# (a hand-written deploy target, a Makefile.local not synced yet) runs it here.
+if [ "${DEPLOY_ENV_CHECK_DONE:-}" != "1" ]; then
+  python3 "$(dirname "$0")/deploy_env_check.py"
+fi

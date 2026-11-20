@@ -427,6 +427,16 @@ class PreflightRunsTheCheck(Tmp):
         self.assertIn("deploy: deploy-env-check", EXAMPLE)
         self.assertIn("deploy-debug: deploy-env-check pprof-dropin deploy", EXAMPLE)
 
+    def test_the_example_tells_preflight_the_check_already_ran(self):
+        self.assertIn("DEPLOY_ENV_CHECK_DONE=1 bash scripts/deploy-preflight.sh", EXAMPLE)
+
+    def test_the_refusal_says_merge_not_replace(self):
+        """A Makefile.local has the owner's own variables and recipes in it:
+        replacing it would drop them."""
+        src = (SCRIPTS / "deploy_env_check.py").read_text()
+        self.assertIn("THEN merge Makefile.local.example", src)
+        self.assertNotIn("THEN replace", src)
+
 
 if __name__ == "__main__":
     unittest.main()

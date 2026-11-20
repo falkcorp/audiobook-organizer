@@ -112,7 +112,7 @@ DEPLOY_URL := https://$(lastword $(subst @, ,$(DEPLOY_HOST))):8484
 # build to differ from everyone else's.
 .PHONY: deploy
 deploy: deploy-env-check
-	@bash scripts/deploy-preflight.sh origin/main
+	@DEPLOY_ENV_CHECK_DONE=1 bash scripts/deploy-preflight.sh origin/main
 	@$(MAKE) build-linux VERSION=$(VERSION)
 	@echo "→ Copying the binary to $(DEPLOY_HOST)'s staging path..."
 	scp dist/$(BINARY)-linux-amd64 $(DEPLOY_HOST):/home/USER/audiobook-organizer

@@ -70,9 +70,15 @@ class _Repos:
         _git(self.other, "push", "-q", "origin", "main")
 
 
-def _preflight(cwd: pathlib.Path) -> subprocess.CompletedProcess[str]:
+def _preflight(
+    cwd: pathlib.Path, extra_env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["bash", str(SCRIPT)], cwd=cwd, env=GIT_ENV, capture_output=True, text=True
+        ["bash", str(SCRIPT)],
+        cwd=cwd,
+        env={**GIT_ENV, **(extra_env or {})},
+        capture_output=True,
+        text=True,
     )
 
 
@@ -91,6 +97,25 @@ class DeployPreflightTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
+
+    def test_the_env_check_runs_here_when_nothing_ran_it_before(self) -> None:
+        r = _preflight(self.repos.local)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # (one run prints one "no Makefile.local" line; a second run would print two)
+        self.assertEqual((r.stdout + r.stderr).count("no Makefile.local"), 1, r.stdout + r.stderr)
+
+    def test_the_env_check_is_not_run_twice_when_make_already_ran_it(self) -> None:
+        """`make deploy` runs deploy-env-check as a prerequisite and says so;
+        its warnings were printed twice."""
+        r = _preflight(self.repos.local, {"DEPLOY_ENV_CHECK_DONE": "1"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("deploy-env-check:", r.stdout + r.stderr)
+
+    def test_only_the_exact_value_one_skips_the_env_check(self) -> None:
+        for value in ("", "0", "yes", "true"):
+            with self.subTest(value=value):
+                r = _preflight(self.repos.local, {"DEPLOY_ENV_CHECK_DONE": value})
+                self.assertIn("deploy-env-check:", r.stdout + r.stderr)
 
     def test_exactly_origin_main_passes(self) -> None:
         r = _preflight(self.repos.local)
