@@ -3,6 +3,14 @@
 <!-- guid: 9c425807-35e2-4fe7-9289-5de6f5478ebe -->
 <!-- last-edited: 2026-11-16 -->
 
+> **SUPERSEDED 2026-11-20 (pre-scope slice A7).** This brief is split into
+> [`F8-04a-f8-flip-backup-health-metrics.md`](F8-04a-f8-flip-backup-health-metrics.md) (backup, health, metrics, the status publisher;
+> depends on F3-07, F4-08, F5-18, **not** on F6-03 or F7-09) and
+> [`F8-04b-f8-flip-updater-wired.md`](F8-04b-f8-flip-updater-wired.md) (the updater; soft dependency on F7-09 with a nil
+> HTTP/Notify fallback). Do not dispatch from this file: its updater code contract is wrong (`AppID` is `"abo"`, the asset name follows
+> `FetchOptions`, owner ruling O-5), its acceptance `ls -d internal/updater` cannot hold, and it lists none of the 16 blockers. It is kept
+> as history only.
+
 # F8-04 — F8 flip, one PR: backup in core's layout with its routes, the updater move wired, health wired with /api/health and /api/v1/health deleted and every caller on /health, the kernel /metrics mount with no rename, InterimExport and app.Options.InterimBackends deleted
 
 | Field | Value |

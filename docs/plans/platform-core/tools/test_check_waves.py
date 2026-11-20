@@ -33,7 +33,7 @@ def id_re():
 class IdPattern(unittest.TestCase):
     def test_accepts(self):
         r = id_re()
-        for i in ["R0-01", "R1-37", "R2-01", "R3-05", "F2-17", "F8-04", "F9-05", "OWNER-06", "F8-03b", "F7-10a"]:
+        for i in ["R0-01", "R1-37", "R2-01", "R3-05", "F2-17", "F8-04a", "F8-04b", "F9-05", "OWNER-06", "F8-03b", "F7-10a"]:
             self.assertTrue(r.match(i), i)
 
     def test_rejects(self):
@@ -62,8 +62,24 @@ class RealInventory(unittest.TestCase):
         self.assertEqual(row["depends_on"], ["F8-03"])
         self.assertEqual(row["release"], "F8")
         self.assertTrue(row["files"], "the F8-03b row names no files")
-        self.assertIn("F8-03b", rows["F8-04"]["depends_on"])
-        self.assertLess(row["wave"], rows["F8-04"]["wave"])
+        self.assertIn("F8-03b", rows["F8-04a"]["depends_on"])
+        self.assertLess(row["wave"], rows["F8-04a"]["wave"])
+
+    def test_f8_04_is_split_and_b_follows_a(self):
+        # F8-04 was split into F8-04a (backup, health, metrics) and F8-04b (the updater) on 2026-11-20. The old row is
+        # gone; F8-04b waits for F8-04a and sits in W38b, which the checker orders between W38 and W39.
+        with open(os.path.join(HERE, "inventory.json")) as f:
+            rows = {r["id"]: r for r in json.load(f)}
+        self.assertNotIn("F8-04", rows)
+        self.assertIn("F8-04a", rows)
+        self.assertIn("F8-04b", rows)
+        self.assertEqual(rows["F8-04a"]["wave"], "W38")
+        self.assertEqual(rows["F8-04b"]["wave"], "W38b")
+        self.assertIn("F8-04a", rows["F8-04b"]["depends_on"])
+        # F8-04a depends on neither F6-03 nor F7-09 (ruling R-A: it merges independently of F6-03).
+        self.assertNotIn("F6-03", rows["F8-04a"]["depends_on"])
+        self.assertNotIn("F7-09", rows["F8-04a"]["depends_on"])
+        self.assertEqual(sorted(rows["R2-01"]["depends_on"]), ["F8-04a", "F8-04b"])
 
 
 if __name__ == "__main__":

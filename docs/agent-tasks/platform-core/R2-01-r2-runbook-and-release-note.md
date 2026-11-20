@@ -11,7 +11,7 @@
 | Release | R2 (closing PR) |
 | Tier | **T2** (Sonnet / high): a runbook and a generated release note; well specified, many sources |
 | Wave | W39 |
-| Depends on | F8-04 |
+| Depends on | F8-04a, F8-04b |
 | Spec | 09 §9.2.9 (renames and the release note), §9.4 R2 ("Content", "Rollback", "Owner": deploy steps 0–8 and the smoke run), §9.2.1 (rollback by restore, what a restore costs), §9.2.3 ("A long first boot", the checkpoint's 7 days), §9.3 ("Boot time"), §9.6 (the changed-in-R2 table and the kept contract); 05-authn §11 (identity text); 05-config §1.12.2 ("Release note (R2, config and secrets)"), §1.12.3 (the rename table); 05-tasks §5T.8.2 (the kind-rename map); 05-http-api §8.1 (deleted routes per flip); 05-metrics §13 (metric renames) |
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. This is the last PR before OWNER-05 cuts R2.
@@ -100,7 +100,7 @@ phrase (the spec is final for this phase; do not paraphrase).
 ## Re-verify before editing (expected results at your base)
 
 ```bash
-# The last R2 flip merged. Expected: F8-04 found (F9-03 is R3's and is not waited for)
+# The last R2 flip merged. Expected: F8-04a and F8-04b found (F9-03 is R3's and is not waited for)
 git log --oneline origin/main | grep -i -E 'F8 flip|backup.*health.*metrics' | head -3
 
 # The pre-freeze tag the R2 build embeds. Expected: exactly one tag line (F3-08's file, F2-15's resolver)

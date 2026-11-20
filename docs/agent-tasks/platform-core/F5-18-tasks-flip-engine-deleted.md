@@ -40,6 +40,32 @@ pruner of the system log and is read through its native query route (F5-19's, mo
 `GET /api/v1/system/logs` in the same PR), and `tasklint`'s exemption directory is empty. Not deleted here: `tools/cmd/opsgen`, `web/src/generated/ops.ts` and
 `internal/operations/state` (one R3 PR, R3-02; 05-tasks §5T.8.1).
 
+## Amendment 2026-11-20 (pre-scope slice E7, E6b): F5-18 publishes the `core.task.*` topics
+
+Source: `.claude/notes/pc-tools/F6-03-prescope.md` blockers 1 and 13 (origin/main `f18ad2686`). The 11-19 23:22 decision gave
+the task topics to F5-18, but this brief (v1.2.0) only *consumes* `core.task.log-appended.v1` (the activity mirror: "Spec to read first" item 6
+and the activity commit) and never declares or publishes any task topic. F6-03 needs all three, so **this PR owns them**:
+
+- `core.task.run-changed.v1` (Redact `RunViewRedactor()`, `core/tasks/runview_redactor.go:24`), `core.task.log-appended.v1`
+  (keyed by run ID, with Redact) and `core.task.finished.v1`.
+- **Declaration (slice E6a).** New `core/tasks/topics.go` with `RunChangedTopicSpec()`, `LogAppendedTopicSpec()` and
+  `FinishedTopicSpec()`, appended to `coreTopics()` in `core/kernel/events.go:74` (today it returns only
+  `health.StatusTopicSpec()`; the comment at `:68-73` says the task topics come "with the tasks flip (F5)"). E6a is a dark,
+  one-line-in-the-kernel slice that may land on `main` before the flip (nothing declares the core catalog until F4-08's
+  `declareCore`); if it has merged by your BASE, do not redo it. If it has not, it is this PR's.
+- **Publication (slice E6b).** The executor publishes after each run commit: `core/internal/executor/*` (collides with
+  `executor/start.go` and `core/tasks/writer.go`, which this stack already edits, so build it in the F5-18 stack after
+  F5-18b). `core/tasks` already imports `events`, so there is no import cycle and no layering change.
+- **Gate for F6-03.** F6-03 STOPs at dispatch unless these three topics are published on `main`. Record in this PR's
+  description: the topic names, where `RunViewRedactor` is applied, and that the keyed `log-appended` stream is
+  keyed-only (the merged SPA client already treats it so, `web/src/services/coreEvents/manager.ts:35`).
+- Tests (added to the table below): `TestTaskTopics_DeclaredInCoreCatalog` (the three specs are in `coreTopics()`),
+  `TestExecutor_PublishesRunChangedAfterCommit` (one `run-changed` per committed transition, never before the commit),
+  `TestExecutor_LogAppendedKeyedByRunID`, `TestRunRedaction_SameOnStreamAndREST` stays F6-03's (it needs the hub).
+  Names marked `Test...` here are coined by this amendment.
+- Files: `core/tasks/topics.go` (new), `core/kernel/events.go`, `core/internal/executor/` are added to this row's list in
+  `inventory.json`.
+
 ## Spec to read first (this PR's contract; read all of it)
 
 1. 09 §9.4 R2 flips table (F5 row), §9.2.1 (merge gate, required checks, "one atomic PR"), §9.2.3 (step order),
@@ -98,6 +124,7 @@ nothing outside this list (STOP and report if a commit needs another path).
 | modify | `main.go` (sets `app.Options.InterimBackends`), `core/app/options.go` (adds the field if F2 did not) |
 | modify | `core/kernel/boot.go`, `core/kernel/kernel.go`, `core/module/manifest.go`, `core/module/registrar.go`, `core/module/deps.go` (commit 2: boot calls, members, mounts; this PR is their one owner in W35) |
 | modify | `core/tasks/` (run fencing made public, only if F2 did not provide it; commit 1) |
+| create / modify | amendment 2026-11-20 (E6a, E6b): `core/tasks/topics.go` (new; skip if slice E6a already merged), `core/kernel/events.go` (one line in `coreTopics()`), `core/internal/executor/` (publish after each run commit) |
 | regenerate | `core/openapi/core.json`, `core/web/packages/api-client/src/generated/` (commit 5) |
 | create | `internal/books/contract/` (commit 1) |
 | create (rename) | `internal/books/writer/` from `internal/operations/opswriter` (commit 1) |
@@ -234,6 +261,7 @@ core.
 |---|---|
 | Every HEAD op ID and tombstone maps to exactly one registered kind (or `books.retired.*`), no two canonical IDs to one kind, core targets exactly 05-tasks' table, the three late-owner kinds registered | `TestKindRenameMapCoversLedger` **(ABO)** on this build |
 | A second module boots beside books with no books edit (G6/G7, from here on) | `TestSecondModuleNoAudiobookEdit` (in `internal/books`; `coretest.New(t, WithModules(books.Module(…), hello.New()))`) |
+| The three `core.task.*` topics are declared in the core catalog and the executor publishes them (amendment 2026-11-20; F6-03 STOPs without them) | `TestTaskTopics_DeclaredInCoreCatalog`, `TestExecutor_PublishesRunChangedAfterCommit`, `TestExecutor_LogAppendedKeyedByRunID` (names coined by the amendment) |
 | Resume, cancel and shutdown behave as HEAD's suites say | `TestParity_ResumeCancelShutdown` **(ABO)** |
 | Schedules: HEAD-equivalent, no first-boot storm | `TestScheduleParity_AllDefinitions`, `TestCutover_NoCatchUpStorm` (F5-14's, now over the registered kinds) |
 | F5-14's stub kind list is the list this flip registers | `TestF5_ScheduledKindsRegistered` (name coined here): every kind in `books.ScheduledKinds()` is registered by one of the list functions `r.Tasks(...)` receives (the seven `t6g<k>Kinds`, `t7Kinds`, `jobs.Kinds`, `repairs.Kinds`, the plugins' `Kinds`), and each registered books kind's `Common.Schedule` is the schedule `books.ScheduleFor(k)` returns (nil exactly for the kinds outside the list). F5-14's parity test ran over stubs built from that list; this test is the re-check over the real kinds |
@@ -292,6 +320,7 @@ make test-e2e                                                                   
 - `TestKindRenameMapCoversLedger` finds an unmapped ledger line or two IDs on one kind.
 - A dashboard or rule reads a series the build no longer serves and 05-metrics §13 gives no successor.
 - A commit that does not build on its own (split it differently; never squash the PR).
+- The executor cannot publish a `core.task.*` topic after the run commit without an import cycle or a second commit: report the file and line (amendment 2026-11-20).
 
 ## Out of scope
 

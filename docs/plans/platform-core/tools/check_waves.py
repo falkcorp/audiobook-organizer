@@ -64,7 +64,20 @@ n_before = len(fails)
 
 # 2. dependencies
 by = {r["id"]: r for r in inv}
-wnum = {r["id"]: int(r["wave"][1:]) for r in inv}
+# A wave is W<nn> with an optional lowercase letter (W38b: a second wave of the same number, ordered after W38 and before
+# W39; F8-04b, which follows F8-04a and shares its wiring files). The key keeps the order numeric: 38 < 38b < 39.
+WAVE_RE = re.compile(r"^W(\d{2})([a-z]?)\Z")
+
+
+def wave_key(w):
+    m = WAVE_RE.match(w)
+    if not m:
+        fail("wave pattern: " + w)
+        return 0
+    return int(m.group(1)) * 100 + (ord(m.group(2)) - 96 if m.group(2) else 0)
+
+
+wnum = {r["id"]: wave_key(r["wave"]) for r in inv}
 for r in inv:
     for d in r["depends_on"]:
         if d not in by:
@@ -243,8 +256,8 @@ GONE = {
     "internal/walkresume/": "F5-18", "internal/scheduler/": "F5-18", "pkg/ops/": "F5-18", "internal/realtime/": "F6-03",
     "internal/security/safehttp/": "F7-02", "internal/mail/": "F7-05", "internal/plugin/": "F7-09",
     "internal/aidispatch/": "F7-09", "internal/ai/aijobs/": "F7-09", "internal/deluge/": "F7-09", "internal/watcher/": "F7-09",
-    "internal/plugins/webhook/": "F7-09", "internal/metadata/providerhttp/": "F7-09", "internal/updater/": "F8-04",
-    "internal/backup/": "F8-04", "internal/sysinfo/": "F8-04", "internal/startup/": "F8-04",
+    "internal/plugins/webhook/": "F7-09", "internal/metadata/providerhttp/": "F7-09", "internal/updater/": "F8-04b",
+    "internal/backup/": "F8-04a", "internal/sysinfo/": "F8-04a", "internal/startup/": "F8-04a",
     "internal/serviceregistry/": "R3-01", "pkg/plugin/sdk/": "R3-01", "tools/cmd/sdkguard/": "R3-01",
     "internal/bookfiles/": "R3-01", "internal/writeback/": "R3-01", "internal/models/": "R3-01",
     "internal/books/cutover/": "R3-02", "internal/operations/state/": "R3-02", "tools/cmd/opsgen/": "R3-02",
