@@ -88,10 +88,8 @@ func helperOf(f *ssa.Function) taglibHelper {
 		name = t[strings.LastIndex(t, ".")+1:] + "." + name
 	}
 	h := taglibHelper(pkg + "." + name)
-	for _, want := range taglibWriteHelpers {
-		if h == want {
-			return h
-		}
+	if slices.Contains(taglibWriteHelpers, h) {
+		return h
 	}
 	return ""
 }
@@ -317,7 +315,7 @@ func taglibReachOf(op *oracleProgram, idx *taglibIndex, files []*ast.File, entri
 		for h := range reached {
 			r.helpers = append(r.helpers, h)
 		}
-		sort.Slice(r.helpers, func(i, j int) bool { return r.helpers[i] < r.helpers[j] })
+		slices.Sort(r.helpers)
 		out[entry] = r
 	}
 	return out, missing
@@ -406,7 +404,7 @@ func TestTaglibVariants_ReachTheSameWriteHelpers(t *testing.T) {
 	cgo := taglibVariantReach(t, op, idx, true)
 	all := make([]taglibHelper, len(taglibWriteHelpers))
 	copy(all, taglibWriteHelpers)
-	sort.Slice(all, func(i, j int) bool { return all[i] < all[j] })
+	slices.Sort(all)
 	for _, entry := range taglibWriteEntries {
 		s, c := support[entry], cgo[entry]
 		for what, pair := range map[string][2]string{
