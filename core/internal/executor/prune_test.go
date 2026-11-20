@@ -239,7 +239,7 @@ func TestPrune_NothingToDo(t *testing.T) {
 }
 
 // An error stops the pass and surfaces; what an earlier chunk deleted is
-// reported in the status line (the executor stores no result for a failed run).
+// reported in the status line as well as in the result the run returns.
 func TestPrune_ErrorStopsAndSurfaces(t *testing.T) {
 	boom := errors.New("done index unreadable")
 	f := &fakePruner{left: 10 * pruneChunk, failAfter: 2, err: boom}

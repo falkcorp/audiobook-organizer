@@ -38,7 +38,9 @@ import (
 //     (creditsBackfillResult.JudgedSources), which the listing returns with
 //     every record, so it is read from the same pass and stays readable after
 //     the judging run is terminal. A run that fails after judging keeps the
-//     result it returns beside its error (core, F5-18d O5).
+//     result it returns beside its error (core, F5-18d O5). A judgement is
+//     durable only once the judging run ends with a stored result; HEAD wrote
+//     each marker as it judged.
 //
 // HEAD's shell keeps its v2 ledger (cbOpsLedger) unchanged.
 
@@ -63,7 +65,9 @@ const cbRunListPage = 1000
 // layout, attempt nonce and checks unchanged. An op row maps onto a tasks.Row
 // as ID -> ID, Index -> Class, Data -> State; State is a json.RawMessage, so a
 // row's Data must be valid JSON (the class-list rows are) and a row that is
-// not is refused rather than stored mangled. ctx bounds every call.
+// not is refused rather than stored mangled. ctx bounds every call; the native
+// shell passes one that a stopped run does not cancel, because the lists are
+// stored after the run's work ends.
 //
 // The run store has no point read and no prefix scan of rows: GetOpRows and
 // ScanOpRowIndex read every row of the run. A class list page over a
@@ -169,13 +173,17 @@ type cbJudgedOnly struct {
 // state by any run's stored result. Every read fails closed: a listing error
 // or a stored result that does not decode stops the apply, naming the run.
 //
-// Not listed, and so not judged: a run core.tasks.prune deleted. Prune deletes
-// terminal runs by age, and a judging run always starts after the runs it
-// judges ended, so prune removes a judged run no later than its judge: a
-// judgement is never lost while the run it covers is still listed. Its journal
+// Not listed, and so not judged: a run core.tasks.prune deleted. Its journal
 // rows stay (opchange: is not pruned with the run), so the run can still be
 // reverted; the records it may have left are no longer looked for here, as
 // with a discarded v2 operation (purge-empty-narrators removes unlinked ones).
+//
+// A judgement can be pruned before the run it covers. The candidates include
+// runs that have not ended (queued, waiting, interrupted), which prune never
+// deletes, while the judging run is terminal and is pruned by age: a judged run
+// that stays interrupted outlives its judgement and is judged again by the next
+// apply. Judging is a re-read of that run's journal, so the second judgement
+// finds what the first one already deleted gone.
 func (l *nativeCBLedger) others(own string) ([]cbSourceOp, error) {
 	judged := map[string]map[string]bool{}
 	var cands []tasks.RunRecord
@@ -188,17 +196,8 @@ func (l *nativeCBLedger) others(own string) ([]cbSourceOp, error) {
 			}
 			n++
 			q.After = rec.ID
-			mine, err := addJudged(judged, rec)
-			if err != nil {
+			if err := addJudged(judged, rec); err != nil {
 				return nil, err
-			}
-			if string(rec.ID) == own {
-				// A resumed run's record still holds the result an earlier
-				// attempt returned (a resume does not clear it): carry its
-				// judgements into this attempt's result, or they would be
-				// skipped here and then lost when this attempt's result
-				// replaces that one.
-				l.carry(mine)
 			}
 			if string(rec.ID) != own && rec.State != tasks.StateSucceeded {
 				cands = append(cands, rec)
@@ -224,16 +223,16 @@ func (l *nativeCBLedger) others(own string) ([]cbSourceOp, error) {
 	return out, nil
 }
 
-// addJudged adds the judgements rec's stored result carries, and returns them.
-// A run with no result carries none; a result that does not decode fails
-// closed, as HEAD's unreadable marker does.
-func addJudged(judged map[string]map[string]bool, rec tasks.RunRecord) (map[string]string, error) {
+// addJudged adds the judgements rec's stored result carries. A run with no
+// result carries none; a result that does not decode fails closed, as HEAD's
+// unreadable marker does.
+func addJudged(judged map[string]map[string]bool, rec tasks.RunRecord) error {
 	if len(rec.Result) == 0 || string(rec.Result) == "null" {
-		return nil, nil
+		return nil
 	}
 	var r cbJudgedOnly
 	if err := json.Unmarshal(rec.Result, &r); err != nil {
-		return nil, fmt.Errorf("read the judgements stored on credits-backfill run %s: %w%s", rec.ID, err, cbDiscardRemedy(string(rec.ID)))
+		return fmt.Errorf("read the judgements stored on credits-backfill run %s: %w%s", rec.ID, err, cbDiscardRemedy(string(rec.ID)))
 	}
 	for src, fp := range r.JudgedSources {
 		if judged[src] == nil {
@@ -241,25 +240,7 @@ func addJudged(judged map[string]map[string]bool, rec tasks.RunRecord) (map[stri
 		}
 		judged[src][fp] = true
 	}
-	return r.JudgedSources, nil
-}
-
-// carry keeps an earlier attempt's judgements in this run's, unless this
-// attempt has already judged the same run again.
-func (l *nativeCBLedger) carry(earlier map[string]string) {
-	if len(earlier) == 0 {
-		return
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.judged == nil {
-		l.judged = map[string]string{}
-	}
-	for src, fp := range earlier {
-		if _, ok := l.judged[src]; !ok {
-			l.judged[src] = fp
-		}
-	}
+	return nil
 }
 
 // markJudged records the judgement in this run's memory; the native shell puts

@@ -143,7 +143,7 @@ func TestExportTask_RunPropagatesBackendError(t *testing.T) {
 		t.Fatalf("err = %v, want %v", err, boom)
 	}
 	if raw != nil {
-		t.Errorf("a failed run stores no result, got %s", raw)
+		t.Errorf("a failed run whose backend returned only an error stores no result (a zero result is not kept), got %s", raw)
 	}
 }
 

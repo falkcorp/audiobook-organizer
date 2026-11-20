@@ -906,7 +906,14 @@ func (p *Plugin) creditsBackfillKind(deps t6g3Deps, sched func(tasks.Kind) *task
 			params.Apply = base.Live
 			env := t6g3CreditsCoreEnv(base, deps.GuardTags,
 				t6g3NativeCBEngine{rc: rc, base: base, standDownKey: deps.StandDownKey})
-			env.ClassLists = runClassLists{rows: runRowStore{ctx: rc.Context(), runs: deps.Runs}}
+			// The class lists are stored after the run's work ends, which on a
+			// cancel or a timeout is after rc.Context() is done: they are
+			// written under a context that is not canceled with it (as core's
+			// fixer stores its plan rows), so a stopped run still keeps its
+			// lists as rows and its result as the summary without them. The
+			// store still refuses a run that has ended, so nothing is written
+			// under a closed ledger.
+			env.ClassLists = runClassLists{rows: runRowStore{ctx: context.WithoutCancel(rc.Context()), runs: deps.Runs}}
 			ledger := &nativeCBLedger{ctx: rc.Context(), runs: deps.Runs}
 			env.Ledger = ledger
 			res, err := creditsBackfillCore(rc.Context(), params, env)
@@ -1023,7 +1030,11 @@ func creditsBackfillCore(ctx context.Context, params creditsBackfillParams, env 
 			return nil, fmt.Errorf("store credits backfill result: %w", serr)
 		}
 		env.Log(slog.LevelError, "credits-backfill: result not stored", slog.String("error", serr.Error()))
-		return res, err
+		// Never the lists: a run that ends in an error keeps the result it
+		// returns (core keeps a failed run's result, F5-18d O5), and the
+		// lists of a library-scale run are megabytes. The counts and samples
+		// stay; the lists, which were not stored, are not named.
+		return res.summary(nil), err
 	}
 	return summary, err
 }

@@ -180,8 +180,9 @@ func pruneJournal(rc *tasks.RC, store log.JournalStore, s Settings, now time.Tim
 			return nil
 		})
 	out := PruneResult{Deleted: res.Counters["deleted"]}
-	// The executor stores a result only for a run that succeeded, so the
-	// status line is where a failed or canceled pass's count survives.
+	// The executor keeps this result on a failed or canceled run as well as
+	// on a succeeded one (F5-18d, O5); the status line carries the count too,
+	// for the run's live view.
 	rc.Progress().Note(fmt.Sprintf("pruned %d records older than %s", out.Deleted, cutoff.UTC().Format(time.RFC3339)))
 	if err != nil {
 		return out, fmt.Errorf("logjournal: prune: %w", err)
