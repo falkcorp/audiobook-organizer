@@ -1,5 +1,5 @@
 // file: core/integrations/dial.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 169ba926-c33d-4860-a931-0359141a5366
 // last-edited: 2026-11-19
 
@@ -8,6 +8,7 @@ package integrations
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 )
 
@@ -28,9 +29,12 @@ type GuardedDialer interface {
 	DialContext(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
-// ErrNoEgressGuard: an adapter asked for a guarded connection and its Gate
-// offers none (a Registry built without an outbound layer, a gate that wraps
-// another and does not forward the dial, or no gate at all). Nothing is dialled.
+// ErrNoEgressGuard: an adapter asked for a guarded connection and nothing can
+// guard it: its Gate offers no guarded dial (a Registry built without an
+// outbound layer, a gate that wraps another and does not forward the dial, or no
+// gate at all), or the sender was given no dial. Nothing is dialled. Every one
+// of those refusals is an *Error of ClassRefusedLocal for which
+// errors.Is(err, ErrNoEgressGuard) holds.
 var ErrNoEgressGuard = errors.New("integrations: no egress guard is available for this connection")
 
 // GuardedDial is the dial an adapter hands its connection code: g's
@@ -47,9 +51,10 @@ func GuardedDial(g Gate, ref Ref) func(ctx context.Context, network, addr string
 }
 
 // DialContext refuses: the Registry has no outbound policy, so there is no
-// egress policy to dial under.
+// egress policy to dial under. The refusal is ErrNoEgressGuard, with
+// errNoOutbound as the reason.
 func (g noGate) DialContext(context.Context, string, string) (net.Conn, error) {
-	return nil, refused(g.ref, "dial", errNoOutbound)
+	return nil, refused(g.ref, "dial", fmt.Errorf("%w: %w", ErrNoEgressGuard, errNoOutbound))
 }
 
 // DialContext refuses while core.integrations.disabled is set, then defers to
