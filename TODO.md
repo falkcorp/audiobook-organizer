@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.78.57 -->
+<!-- version: 10.78.56 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -567,7 +568,7 @@ into one of the curated sections below, is a normal direct edit.
       before flushing the tap on shutdown, and adds the `log_journal_degraded` health
       token.
 
-- [ ] **TODO-F7-05-SMTP-DIAL-GUARD** (hard precondition of the F7-09 flip) The `core.email` channel is admitted by the
+- [x] **TODO-F7-05-SMTP-DIAL-GUARD** (done 2026-11-19, F7-09 T2: `integrations.GuardedDial` and the `providerhttp` gate's `DialContext`; seams in `docs/agent-tasks/platform-core/seams.d/F7-09-T2.md`) (hard precondition of the F7-09 flip) The `core.email` channel is admitted by the
       integrations gate but its SMTP dial has no egress guard: providerhttp's guard
       wraps HTTP only, so an SMTP host that resolves to a private address is not
       refused. Add a dial hook an adapter can use (F7-01 or providerhttp) and use it

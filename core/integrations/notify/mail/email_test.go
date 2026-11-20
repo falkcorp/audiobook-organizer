@@ -1,5 +1,5 @@
 // file: core/integrations/notify/mail/email_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5d17e2c9-83a4-4b60-9e1f-c7a02b6d4f38
 // last-edited: 2026-11-19
 
@@ -447,6 +447,28 @@ func TestEmail_GuardRefusalIsReturnedWithoutTheDestination(t *testing.T) {
 	}
 	if len(g.done) != 1 || g.done[0] == nil {
 		t.Errorf("the ticket was ended with %v, want the refusal", g.done)
+	}
+}
+
+// Only a local refusal is returned as it came from the dial. Any other
+// failure of the dial keeps the channel's own class and fixed text, which
+// carry no host, whatever the error beneath said.
+func TestEmail_OtherDialFailuresKeepTheFixedText(t *testing.T) {
+	f := &fakeSMTP{offerTLS: true}
+	port, _ := startFake(t, f)
+	g := &refusingDialGate{countingGate: &countingGate{}, err: &integrations.Error{
+		Ref: batphone, Op: "dial", Class: integrations.ClassTransient,
+		Err: errors.New("dial tcp mail.gotham.test:587: connection reset")}}
+	n := emailInstance(t, port, nil, settings(nil), g)
+	err := n.Send(context.Background(), signalNote, notify.Target{})
+	if err == nil {
+		t.Fatal("sent although the dial failed")
+	}
+	if strings.Contains(err.Error(), "mail.gotham.test") || strings.Contains(err.Error(), "connection reset") {
+		t.Errorf("the error carries the dial's own text: %v", err)
+	}
+	if c := integrations.ClassOf(context.Background(), err); c != integrations.ClassTransient {
+		t.Errorf("class = %v, want transient", c)
 	}
 }
 
