@@ -7,9 +7,11 @@ package maintenance
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"reflect"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -148,8 +150,8 @@ func TestBooksT6G3Writer_CoversEveryMethodOfTheInterface(t *testing.T) {
 func TestBooksT6G3Deps_NilInputsStayUnset(t *testing.T) {
 	src, host, _ := g3Fixture(t)
 	for name, d := range map[string]t6g3Deps{
-		"nil source": newT6G3Deps(nil, host, nil, ""),
-		"nil host":   newT6G3Deps(src, nil, nil, ""),
+		"nil source": newT6G3Deps(nil, host, nil, "", nil),
+		"nil host":   newT6G3Deps(src, nil, nil, "", nil),
 	} {
 		t.Run(name, func(t *testing.T) {
 			require.Nil(t, d.Store)
@@ -180,7 +182,7 @@ func t6g1ByKind3(t *testing.T, deps t6g3Deps, kind tasks.Kind) tasks.Definition 
 // RequireClean reports it.
 func TestBooksT6G3Writer_EveryKindsCallsAreAdmittedByItsOwnEffects(t *testing.T) {
 	src, host, id := g3Fixture(t)
-	deps := newT6G3Deps(src, host, nil, "")
+	deps := newT6G3Deps(src, host, nil, "", nil)
 	calls := g3WriterCalls(id)
 	for headID, kw := range t6g3KindCalls {
 		if len(kw.calls) == 0 {
@@ -212,7 +214,8 @@ func TestBooksT6G3Writer_EveryKindsCallsAreAdmittedByItsOwnEffects(t *testing.T)
 // because the core derives Apply from the run's mode.
 func TestBooksT6G3Writer_EmptyRowMethodsStayUnfencedAndTheCoreOwnsTheMode(t *testing.T) {
 	src, host, _ := g3Fixture(t)
-	deps := newT6G3Deps(src, host, nil, "")
+	runs := runningCBRuns(t)
+	deps := newT6G3Deps(src, host, nil, "", runs)
 	calls := g3WriterCalls("x")
 
 	def := t6g1ByKind3(t, deps, "books.maintenance.credits-backfill")
@@ -224,13 +227,23 @@ func TestBooksT6G3Writer_EmptyRowMethodsStayUnfencedAndTheCoreOwnsTheMode(t *tes
 	src.replaced.Store(0)
 	run := writertest.New(def, tasks.ModePreview)
 	_, rc := newT6G3Host(def.Kind(), tasks.ModePreview, run)
-	_, err := t6g3Run(t, def, rc, "")
+	raw, err := t6g3Run(t, def, rc, "")
 	require.NoError(t, err)
 	require.NoError(t, run.RequireClean())
 	require.EqualValues(t, 0, src.replaced.Load(), "a Preview run of the credits backfill wrote a judged marker")
-	// The result's class lists ARE stored by a preview, unfenced, as before the
-	// gate: the owner reads the preview's classes from them.
-	require.NotZero(t, src.classLists.Load(), "the preview run did not store its class lists")
+	// The result's class lists ARE stored by a preview (the owner reads the
+	// preview's classes from them), but as the run's own rows in the tasks run
+	// store (F5-18d, O10), not through the writer's unfenced op-row methods.
+	// This fixture has no book in any class, so the summary is the proof the
+	// lists were kept (the census tests in kinds_t6_g3_paths_test.go count rows).
+	require.Zero(t, src.classLists.Load(), "the preview run stored its class lists through the writer")
+	var res creditsBackfillResult
+	require.NoError(t, json.Unmarshal(raw, &res))
+	require.NotNil(t, res.ClassLists, "the preview run did not keep its class lists")
+	for row, err := range runs.Rows(t.Context(), cbFakeRunID) {
+		require.NoError(t, err)
+		require.True(t, strings.HasPrefix(row.ID, database.ClassListRowPrefix), "row %q", row.ID)
+	}
 }
 
 // TestBooksT6G3Writer_ErrorlessMethodsLogInsteadOfRunningWhenRefused: a method
@@ -238,7 +251,7 @@ func TestBooksT6G3Writer_EmptyRowMethodsStayUnfencedAndTheCoreOwnsTheMode(t *tes
 // is untouched.
 func TestBooksT6G3Writer_ErrorlessMethodsLogInsteadOfRunningWhenRefused(t *testing.T) {
 	src, host, _ := g3Fixture(t)
-	deps := newT6G3Deps(src, host, nil, "")
+	deps := newT6G3Deps(src, host, nil, "", nil)
 	rec := &booksGateRecorder{refuse: tasks.ErrOutsideEffects}
 	w := deps.NewWriter(rec)
 	w.ActivityFlushOp("op")

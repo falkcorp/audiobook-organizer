@@ -82,3 +82,17 @@ func finishNativeRun(t *testing.T, runs tasks.RunStore, id tasks.RunID, state ta
 	require.NoError(t, runs.Transition(ctx, b, id, tasks.Expect{State: cur.State, Attempt: cur.Attempt, FenceEpoch: cur.FenceEpoch}, next))
 	require.NoError(t, b.Commit(ctx, storage.Sync))
 }
+
+// runningCBRuns is a native run store holding the credits backfill's own run,
+// running, under the id taskstest.FakeRun gives every run of the kind: the run
+// the native kind keeps its class id lists under (ReplaceRows refuses a run that
+// is missing or terminal).
+func runningCBRuns(t *testing.T) tasks.RunStore {
+	t.Helper()
+	runs := newNativeRuns(t)
+	putNativeRun(t, runs, nativeRunAt(cbFakeRunID, t6g3CreditsBackfillKind, tasks.ModeLive, tasks.StateRunning, time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)))
+	return runs
+}
+
+// cbFakeRunID is the id taskstest.FakeRun gives a credits backfill run.
+const cbFakeRunID tasks.RunID = "fake-" + tasks.RunID(t6g3CreditsBackfillKind)
