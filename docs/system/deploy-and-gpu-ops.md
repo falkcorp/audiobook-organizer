@@ -47,15 +47,20 @@ through the `install-staged` helper (see
 previously deployed binary as `$(DEPLOY_BIN).prev` before it replaces it:
 
 ```
-ssh $(DEPLOY_HOST) 'sudo -n $(DEPLOY_HELPERS)/install-staged binary'
+ssh $(DEPLOY_HOST) 'sudo -n $(DEPLOY_HELPERS)/install-staged binary '"$(cat dist/<binary>.generation-args)"
 ```
 
 `install-staged unit` and `install-staged local-conf` run first in the same
 recipe, and each captures the unit or drop-in it is about to replace. When
-`install-staged binary` rotates `.prev`, it commits those captures as
-`$(DEPLOY_BIN).prev.env`, so the previous binary, unit and `local.conf` are
-kept together and a rollback can put all three back (see
+`install-staged binary` rotates `.prev`, it commits those captures as one
+**generation**, named by the sha256 of the binary it replaced, so the previous
+binary, unit and `local.conf` are kept together and a rollback can put all
+three back (see
 [The service environment is part of a rollback](#the-service-environment-is-part-of-a-rollback)).
+The four words after `binary` are what `scripts/deploy_generation_args.py`
+measured about the new build (its sha256, version, store levels and whether the
+retired-name list is enforced in it); the recipe runs it right after the upload,
+before anything on the host changes.
 
 A `Makefile.local` whose `deploy` replaces the binary with `sudo mv` or
 `sudo cp` keeps none of this, and `make deploy` refuses it
@@ -68,9 +73,9 @@ the same way, the flow is:
 1. `make deploy` — builds, ships, and (via the line above) copies the
    currently-running binary to `$(DEPLOY_BIN).prev` on the server before
    installing the new one (atomically: a copy beside it, then a rename) and
-   restarting the service. The unit and `local.conf` it replaced are kept as
-   `$(DEPLOY_BIN).prev.env`. `deploy-env-check` runs before anything is
-   uploaded.
+   restarting the service. The unit and `local.conf` it replaced are kept as a
+   generation in `$(DEPLOY_BIN).envgen/`, named by the replaced binary's sha256.
+   `deploy-env-check` runs before anything is uploaded.
 2. If the new deploy is bad, run the committed rollback target:
    ```bash
    make rollback DEPLOY_HOST=192.0.2.10 DEPLOY_BIN=/usr/local/bin/audiobook-organizer DEPLOY_DB=/path/to/audiobooks.pebble DEPLOY_URL=https://192.0.2.10:8484
@@ -86,10 +91,11 @@ the same way, the flow is:
    names the same `DEPLOY_BIN`, `DEPLOY_DB` and `DEPLOY_UNIT`, then checks that
    `$(DEPLOY_BIN).prev` exists on the server (errors out cleanly if not, e.g.
    right after a fresh install with no prior deploy). It then has the
-   `install-staged rollback check` helper validate the kept environment,
-   `$(DEPLOY_BIN).prev.env`, and refuses, before anything is stopped or
-   swapped, if it is missing, unreadable, or belongs to a different binary
-   than `.prev`.
+   `install-staged rollback check` helper find and validate the kept
+   environment for `.prev`: the generation whose sha256 is `.prev`'s own, never
+   the newest or the one beside it. It refuses, before anything is stopped or
+   swapped, if there is none, or it is unreadable or not valid for the host,
+   and the refusal lists what is kept (`make rollback-check` lists it any time).
 4. **Store guard** (`scripts/storage_format_guard.py`; 05-storage §5S.3.7).
    Before anything is swapped:
    - **In-flight probe.** The `inflight-probe` helper runs `find <state_dir>
@@ -477,7 +483,7 @@ root-owned config:
 | `restore-offline` | root, the restore as the service user | `checkpoint NAME`, `archive FILE`, `into-check FILE` | `storage restore-offline` in a transient unit |
 | `unit-type` | root | `simple` or `notify` | writes or removes the fixed `Type=simple` drop-in, `daemon-reload` |
 | `swap-prev` | root | none | `.prev` installed atomically, the old binary kept |
-| `install-staged` | root | `binary`, `prev`, `unit`, `local-conf` or `rollback` | installs `stage_bin` as the binary (atomically, the old one kept as `.prev`) or, with `prev`, as `.prev` alone (`make rollback-restore RELEASE=`; the binary is not touched); copies the bundle's root-owned `audiobook-organizer.service` as the unit; or renders the `[Service]` and `Environment=` lines of `stage_local_conf` as the `local.conf` drop-in; `binary`, `unit` and `local-conf` then run `daemon-reload` (`prev` reloads nothing and does not delete `stage_bin`; the recipe does). `unit` and `local-conf` first capture what they replace, and `binary` commits the capture as `<bin>.prev.env` when it rotates `.prev`; `rollback check\|apply paired\|unpaired` validates and installs that snapshot with `.prev` (below) |
+| `install-staged` | root | `binary`, `prev`, `unit`, `local-conf` or `rollback` | installs `stage_bin` as the binary (atomically, the old one kept as `.prev`) or, with `prev`, as `.prev` alone (`make rollback-restore RELEASE=`; the binary is not touched); copies the bundle's root-owned `audiobook-organizer.service` as the unit; or renders the `[Service]` and `Environment=` lines of `stage_local_conf` as the `local.conf` drop-in; `binary`, `unit` and `local-conf` then run `daemon-reload` (`prev` reloads nothing and does not delete `stage_bin`; the recipe does). `unit` and `local-conf` first capture what they replace, and `binary` (with nothing or four words of facts about the staged build) commits the capture as a generation in `<bin>.envgen/`, named by the replaced binary's sha256, when it rotates `.prev`; `rollback list`, `rollback check prev\|SHA256 [GEN]` and `rollback apply SHA256 [GEN]` read, validate and install a generation with `.prev` (below) |
 | `pprof` | root | `on` or `off` | writes or removes the fixed drop-in `pprof.conf` (`Environment=ABK_PPROF_ADDR=localhost:6060`), `daemon-reload` |
 
 `install-staged` never installs uploaded text as a unit file. systemd reads
@@ -608,21 +614,44 @@ bundle and run `daemon-reload`, but the binary is untouched and the service
 has not been restarted: it keeps running, and the previous `local.conf` is
 still in place, so a later restart still uses its settings.
 
-Install them on the deploy host (as root):
+Install them on the deploy host, once, with the one installer the repo ships.
+It is run by the owner, from a checkout of the commit being deployed, ON THE
+DEPLOY HOST (it needs root there, and re-runs itself under `sudo` to get it):
 
 ```bash
-install -d -o root -g root -m 0755 /usr/local/libexec/audiobook-organizer/rollback /etc/audiobook-organizer
-install -o root -g root -m 0755 deploy/rollback-helpers/rollback_helper.py \
-  deploy/rollback-helpers/inflight-probe deploy/rollback-helpers/checkpoint-record \
-  deploy/rollback-helpers/restore-offline deploy/rollback-helpers/unit-type \
-  deploy/rollback-helpers/swap-prev deploy/rollback-helpers/install-staged \
-  deploy/rollback-helpers/pprof /usr/local/libexec/audiobook-organizer/rollback/
-install -o root -g root -m 0644 deploy/audiobook-organizer.service \
-  /usr/local/libexec/audiobook-organizer/rollback/
-install -o root -g root -m 0644 deploy/rollback-helpers/rollback.conf.example /etc/audiobook-organizer/rollback.conf
+make install-rollback-helpers ROLLBACK_INSTALL_ARGS="--deploy-user <ssh user> \
+  --service-user <unit User=> --state-dir <state_dir> --archive-dir <archive_dir> \
+  --stage-bin <stage_bin> --stage-local-conf <stage_local_conf>"      # shows the plan
+make install-rollback-helpers APPLY=1 ROLLBACK_INSTALL_ARGS="..."    # installs it
 ```
 
-Then edit `/etc/audiobook-organizer/rollback.conf` (`bin`, `db`, `state_dir`,
+It takes `DEPLOY_BIN`, `DEPLOY_DB` and `DEPLOY_UNIT` from `Makefile.local` and
+the rest from `ROLLBACK_INSTALL_ARGS` (`--checkpoint-dir`, `--service-group` and
+`--offline-env` are optional). Without `APPLY=1` it prints what it would do
+(`create`, `replace` or `unchanged` for each file) and changes nothing. With it
+the installer:
+
+1. renders the sudoers drop-in with `scripts/storage_format_guard.py sudoers`
+   (the same table of commands the recipes run), writes it beside its final
+   place under a name sudo ignores and checks it with `visudo -c`; a drop-in
+   `visudo` refuses stops the install before a single file is written;
+2. installs the bundle (`rollback_helper.py`, one stub per operation, mode
+   0755) and the unit template, in a root-owned directory, atomically;
+3. writes `/etc/audiobook-organizer/rollback.conf` (below), and only moves the
+   sudoers drop-in into place last.
+
+It is idempotent: a file already as it should be is `unchanged` and is not
+rewritten, so running it again after a release that changes a helper replaces
+exactly that helper. A `rollback.conf` that exists and differs is yours: it is
+shown as a diff and left alone unless you pass `REPLACE_CONF=1`. It does not
+write `host.conf` (below) and it never touches `Makefile.local`.
+
+**Order: this first, then sync `Makefile.local`.** The synced recipes call the
+helper at their first step, so a `Makefile.local` synced before the bundle is
+installed fails there.
+
+The installer renders `/etc/audiobook-organizer/rollback.conf` from the values
+given. To change it later, edit it as root (`bin`, `db`, `state_dir`,
 `unit`, `service_user`, `archive_dir`, `checkpoint_dir` if
 `core.storage.checkpoint_dir` is set, `service_group` if it differs from
 `service_user`, and the deploy's staging paths `stage_bin` and
@@ -634,7 +663,7 @@ may be `root`. The recipes read the file (it holds no
 secret) and refuse when it names another binary, store or unit than
 `DEPLOY_BIN`, `DEPLOY_DB` and `DEPLOY_UNIT`.
 
-Add the drop-in with `sudo visudo -f /etc/sudoers.d/audiobook-organizer-rollback`.
+The installer writes the drop-in as `/etc/sudoers.d/audiobook-organizer-rollback`.
 `python3 scripts/storage_format_guard.py sudoers --deploy-user <ssh user> --db
 <DEPLOY_DB> [--bin <DEPLOY_BIN>] [--unit <unit>] [--service-user <user>]`
 prints it with your values; it renders the same table of commands the recipes
@@ -679,33 +708,57 @@ A binary swap alone starts the previous build under the *current* unit and
 new names: a peer allowlist that fails open, no Cloudflare Access, no ABS JWT
 or owner-email settings. So the deploy keeps the environment with the binary.
 
-- **What is kept.** `$(DEPLOY_BIN).prev.env`, one root-owned (mode 0600) JSON
-  file holding the unit and the `local.conf` drop-in the previous release ran
-  under, and the sha256 of that previous binary. It is written atomically (a
-  file beside it, then a rename). `install-staged unit` and `local-conf`
-  record what they replace in `$(DEPLOY_BIN).prev.env.pending`, the first
-  capture of a deploy wins, and a capture taken for a different binary than
-  the one now installed is dropped. Only `install-staged binary` commits the
-  capture, in the same step that rotates `.prev`, so the pair cannot be
-  separated by a deploy that stops half way. A first deploy (no binary yet)
-  keeps nothing.
+- **What is kept: generations.** `$(DEPLOY_BIN).envgen/` (root-owned, mode 0700)
+  holds one JSON file (mode 0600) per replaced binary, named by that binary's
+  sha256: the unit and the `local.conf` drop-in it ran under, plus what the
+  deploy recorded about it (its version, the store levels it serves, whether the
+  retired-name list was enforced in it) and a sequence number. They are written
+  atomically (a file beside it, then a rename). `install-staged unit` and
+  `local-conf` record what they replace in `pending.json` there, the first
+  capture of a deploy wins, and a capture taken for a different binary than the
+  one now installed is dropped. Only `install-staged binary` commits it, in the
+  same step that rotates `.prev`, and it deletes the capture only after the new
+  binary is in place: a deploy that fails half way, then runs again, still
+  labels the OLD unit and `local.conf` as the old binary's. Redeploying the
+  build that is already installed rotates nothing. A first deploy (no binary
+  yet) keeps nothing.
+- **How many, and which are never dropped.** Several, not one: the newest three,
+  and in addition the newest three *pinned* generations, so a hotfix train does
+  not push out the environment of the last build before a store level step or
+  before the retired-name list was enforced. A generation is pinned when the
+  binary that replaced it serves a higher store level for any owner, when
+  `enforced` differs between the two builds, or when either build's facts are
+  unknown (so a deploy whose recipe passes no facts keeps more, never less).
+  The helper cannot read the service-owned checkpoint area, so it cannot see
+  whether the checkpoint taken at a level step is still kept; it keeps the pinned
+  generations of that boundary until three newer ones displace them. If any
+  generation file is unreadable nothing is evicted.
 - **What a rollback does.** `make rollback` and `make rollback-restore` run
-  `install-staged rollback check` before anything is stopped. It refuses, with
-  the reason, when the snapshot is missing, unreadable or not valid for the
-  host (the kept unit and drop-in go through the same checks as a deploy's:
-  `host.conf`, the template, the unit rules, `render_local_conf`), or when
-  `.prev` is not the binary the snapshot belongs to. A rollback that cannot
-  restore the environment is refused rather than done half. The swap
-  (`install-staged rollback apply <sha256>`) is a compare-and-swap on `.prev`:
-  it refuses if a deploy changed `.prev` after the check, stages the unit and
-  drop-in, renames them in first and the binary last, then runs
-  `daemon-reload`. It can be run again after an interruption.
-- **`RELEASE=`.** `make rollback-restore RELEASE=<tag>` installs a fetched
-  release as `.prev`, which is not the binary the snapshot was kept for, so the
-  default pairing check refuses. Say that the kept environment fits that
-  release with `ROLLBACK_ENV=snapshot make rollback-restore RELEASE=<tag>`.
+  `install-staged rollback check prev` before anything is stopped. It looks up
+  the generation by the sha256 of the binary being restored and refuses, with
+  the reason and the kept generations, when none exists or it is unreadable or
+  not valid for the host (the kept unit and drop-in go through the same checks
+  as a deploy's: `host.conf`, the template, the unit rules,
+  `render_local_conf`). A rollback that cannot restore the environment is
+  refused rather than done half. The swap (`install-staged rollback apply
+  <sha256>`) is a compare-and-swap on `.prev`: it refuses if a deploy changed
+  `.prev` after the check, stages the unit and drop-in, renames them in first and
+  the binary last, then runs `daemon-reload`. It can be run again after an
+  interruption. The helper never runs a binary as root.
+- **`RELEASE=` and `ROLLBACK_ENV=<sha256>`.** `make rollback-restore RELEASE=<tag>`
+  fetches a release, which essentially never has the sha256 of a build deployed
+  from here, so no generation matches it. The environment is checked for the
+  fetched file BEFORE it replaces `.prev` (a refusal leaves `.prev` and its
+  environment exactly as they were), and the refusal lists the kept generations.
+  To say which one the release needs, name it: `ROLLBACK_ENV=<sha256> make
+  rollback-restore RELEASE=<tag>`. It is a generation's hash, not a switch: the
+  recipe refuses when that generation's recorded store levels differ from the
+  levels the binary serves. `ROLLBACK_ENV=snapshot` (the old blind switch) is
+  rejected.
+- **`make rollback-check`.** Read-only: lists the generations (sha256, version,
+  levels, pinned) and which one `.prev` matches, and prints no file content.
 - **A `.prev` from before this change** (or one put there by hand, or by a
-  `Makefile.local` that moves the binary with `sudo mv`) has no snapshot, and a
+  `Makefile.local` that moves the binary with `sudo mv`) has no generation, and a
   rollback refuses until one deploy through `install-staged` has kept one.
 
 ### Before a deploy: `make deploy-env-check`
@@ -715,8 +768,9 @@ anything is uploaded or installed (`deploy-preflight.sh` runs it too, which a
 `Makefile.local` that has not been synced from the example still calls). It
 reads no host.
 
-- **Retired names.** `deploy/local.conf` may not set an env name in
-  `deploy/retired-env-names.txt`: a binary with the config flip ignores a
+- **Retired names.** `deploy/local.conf`, and the `Environment=` lines of the
+  unit template `deploy/audiobook-organizer.service` (every deploy installs a
+  copy of it), may not set an env name in `deploy/retired-env-names.txt`: a binary with the config flip ignores a
   `warn` name with one boot warning (the setting silently stops applying) and
   refuses to boot on a `refuse` name. The list is generated from the rename
   table (`go test ./internal/books/cutover -run TestRetiredEnvList -update`
@@ -729,42 +783,56 @@ reads no host.
 - **`Makefile.local`.** Its `deploy` and `deploy-debug` must install through
   `install-staged` (a `sudo mv` or `sudo cp` keeps no `.prev`, unit or
   `local.conf`). `DEPLOY_ALLOW_NO_ROLLBACK=1 make deploy` deploys anyway, with
-  a warning, and a rollback after it will refuse.
+  a warning, only while the list says `enforced: false`: for the build that
+  carries the flip (`enforced: true`, or a list that cannot be read) it is
+  refused, because the previous release reads names the flip retires and a
+  deploy that keeps no rollback state strands it. The warning says which release
+  a rollback then reaches: the older one an earlier deploy through the helpers
+  kept beside `<bin>.prev`, skipping the one this deploy replaces; with none,
+  `make rollback` refuses. A `Makefile.local` that installs the binary without
+  the facts from `scripts/deploy_generation_args.py` still deploys, with a note:
+  every kept generation then counts as unknown and is pinned.
 
 ### Owner steps this needs, once
 
-Neither is a command to paste; both are files to put in place.
+Do them in this order. The first one is a command, not a file to put in place.
 
-1. **Sync `Makefile.local`.** Replace its `deploy` and `deploy-debug` recipes
-   (and the `pprof-dropin` and `pprof-off` ones) with `Makefile.local.example`'s.
-   Keep your own `DEPLOY_HOST`, `DEPLOY_BIN` and the like. `make
-   deploy-env-check` says whether it is in step. A private `deploy-preflight`
-   target is fine: the check runs from `scripts/deploy-preflight.sh`, which it
-   calls.
-2. **Install the helper bundle.** Everything under "Rollback helpers" above:
-   the bundle, `rollback.conf`, `host.conf`, and the sudoers drop-in rendered
-   by `python3 scripts/storage_format_guard.py sudoers`. No new sudoers line is
-   needed for `install-staged rollback`: `install-staged` is granted bare.
-   `rollback.conf`'s `offline_env` must use the name the installed bundle's
-   version reads (`ABK_STATE_DIR`; `ABO_CORE_PATHS_STATE_DIR` once the config
-   flip is deployed), so a bundle reinstalled after the flip carries the new
-   one.
+1. **Install the helper bundle, the sudoers drop-in and `rollback.conf`:**
+   `make install-rollback-helpers` (it shows the plan), then
+   `make install-rollback-helpers APPLY=1` (see "Rollback helpers" above for
+   the arguments). Write `host.conf` once as root (below). `rollback.conf`'s
+   `offline_env` must use the name the installed bundle's version reads
+   (`ABK_STATE_DIR`; `ABO_CORE_PATHS_STATE_DIR` once the config flip is
+   deployed), so a bundle reinstalled after the flip carries the new one.
+2. **Then sync `Makefile.local`.** Replace its `deploy` and `deploy-debug`
+   recipes (and the `pprof-dropin` and `pprof-off` ones) with
+   `Makefile.local.example`'s. Keep your own `DEPLOY_HOST`, `DEPLOY_BIN` and the
+   like. `make deploy-env-check` says whether it is in step. A private
+   `deploy-preflight` target is fine: the check runs from
+   `scripts/deploy-preflight.sh`, which it calls. The synced recipes call the
+   helper at their first step: synced first, they fail there.
+
+`make rollback-check` shows the host's state once both are done.
 
 Until both are done `make rollback` and `make rollback-restore` refuse (no
 helper, or no kept environment) rather than swap the binary alone, and
 `make deploy` and `make deploy-debug` refuse a `Makefile.local` that deploys
-with `sudo mv` (`DEPLOY_ALLOW_NO_ROLLBACK=1` deploys anyway, knowingly).
+with `sudo mv`. `DEPLOY_ALLOW_NO_ROLLBACK=1` deploys anyway, knowingly, but
+only while `deploy/retired-env-names.txt` says `enforced: false`: the build that
+carries the config flip cannot be deployed without rollback state, because the
+previous release reads names the flip retires.
 
-**Order.** Do both, then deploy once through the helpers *before* the deploy
-that carries the config flip. That deploy keeps the environment it replaces,
-and a rollback of the flip deploy restores exactly that one, but only if it
-passes the unit checks: a unit file from before the helpers (with its own
-`ExecStart=` rather than `host.conf`'s) fails them, and the rollback then
-refuses instead of restoring it. A deploy through the helpers installs the
-template unit, so the flip deploy's kept environment is a valid one.
+**Order of deploys.** Do both steps, then deploy once through the helpers
+*before* the deploy that carries the config flip. That deploy keeps the
+environment it replaces as a generation, and a rollback of the flip deploy
+restores exactly that one, but only if it passes the unit checks: a unit file
+from before the helpers (with its own `ExecStart=` rather than `host.conf`'s)
+fails them, and the rollback then refuses instead of restoring it. A deploy
+through the helpers installs the template unit, so the flip deploy's kept
+environment is a valid one.
 
-Note this only preserves **one** prior version — a second consecutive `make
-deploy` overwrites `.prev` with the (now second-to-last) binary. If you need
+Note `.prev` is **one** prior binary — a second consecutive `make
+deploy` overwrites it with the (now second-to-last) binary, and the environment generation of the one it replaced stays kept (above). If you need
 deeper history, keep your own timestamped copies (see `make backup` in
 `Makefile` for the equivalent pattern applied to data directories).
 

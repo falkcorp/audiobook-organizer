@@ -51,7 +51,16 @@ SUDO_MV_MAKEFILE = (
 )
 
 
+NO_UNIT = str(pathlib.Path(tempfile.gettempdir()) / "no-such-dir" / "audiobook-organizer.service")
+
+
 def run(argv, environ=None):
+    """chk.main, with the repo's own unit template swapped for a file that does
+    not exist unless the test names one: the real template sets names the
+    tests' small lists also hold."""
+    argv = list(argv)
+    if "--unit-template" not in argv:
+        argv += ["--unit-template", NO_UNIT]
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         rc = chk.main(argv, environ={} if environ is None else environ)
@@ -68,6 +77,53 @@ class Tmp(unittest.TestCase):
         p = self.dir / name
         p.write_text(text)
         return p
+
+
+class RetiredInTheUnitTemplate(Tmp):
+    """r1 m5: the repo's unit template is environment too: every deploy installs
+    a copy of it, so a retired name in it is held to the list like local.conf."""
+
+    UNIT = '[Service]\nUser=audiobook\nEnvironment="WHISPER_REMOTE_URL=http://192.0.2.7:8000"\n'
+
+    def check(self, unit, lst, conf="[Service]\nEnvironment=BATCAVE=1\n"):
+        c = self.write("local.conf", conf)
+        u = self.write("audiobook-organizer.service", unit)
+        lp = self.write("retired.txt", lst)
+        return run(
+            ["retired", "--local-conf", str(c), "--list", str(lp), "--unit-template", str(u)]
+        )
+
+    def test_a_retired_name_in_the_unit_refuses_when_enforced(self):
+        rc, _, err = self.check(self.UNIT, LIST_ENFORCED)
+        self.assertEqual(rc, 1, err)
+        self.assertIn("audiobook-organizer.service", err)
+        self.assertIn("WHISPER_REMOTE_URL", err)
+
+    def test_it_only_reports_while_the_list_is_not_enforced(self):
+        rc, out, _ = self.check(self.UNIT, LIST_REPORTING)
+        self.assertEqual(rc, 0)
+        self.assertIn("WHISPER_REMOTE_URL", out)
+
+    def test_a_unit_with_only_current_names_passes(self):
+        rc, out, _ = self.check("[Service]\nEnvironment=BATCAVE=1\n", LIST_ENFORCED)
+        self.assertEqual(rc, 0)
+        self.assertIn("sets no retired env name", out)
+
+    def test_both_files_are_reported(self):
+        conf = "[Service]\nEnvironment=SMTP_FROM=robin@example.invalid\n"
+        rc, _, err = self.check(self.UNIT, LIST_ENFORCED + "SMTP_FROM\trefuse\t-\n", conf)
+        self.assertEqual(rc, 1, err)
+        self.assertIn("SMTP_FROM", err)
+        self.assertIn("WHISPER_REMOTE_URL", err)
+
+    def test_the_real_unit_template_is_scanned_by_default(self):
+        out, err = io.StringIO(), io.StringIO()
+        lp = self.write("retired.txt", LIST_ENFORCED + "DATABASE_PATH\trefuse\t-\n")
+        c = self.write("local.conf", "[Service]\nEnvironment=BATCAVE=1\n")
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = chk.main(["retired", "--local-conf", str(c), "--list", str(lp)], environ={})
+        self.assertEqual(rc, 1, err.getvalue())
+        self.assertIn("DATABASE_PATH", err.getvalue())
 
 
 class Retired(Tmp):
@@ -266,6 +322,18 @@ class MakefileLocal(Tmp):
         text = "deploy:\n\tssh h \\\n\t  'sudo -n /x/install-staged binary /tmp/b'\n"
         rc, _, err = self.check(text)
         self.assertEqual(rc, 0, err)
+
+    def test_the_example_passes_the_generation_facts_so_there_is_no_note(self):
+        rc, out, err = self.check(EXAMPLE)
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn("NOTE", out)
+
+    def test_a_deploy_that_passes_no_facts_passes_with_a_note(self):
+        text = "deploy:\n\tssh h 'sudo -n /x/install-staged binary'\n"
+        rc, out, err = self.check(text)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("NOTE", out)
+        self.assertIn("deploy_generation_args", out)
 
     def test_no_makefile_local_is_nothing_to_check(self):
         rc, out, _ = run(["makefile-local", "--makefile-local", str(self.dir / "absent")])

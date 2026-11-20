@@ -42,6 +42,7 @@ makefile-local
 Usage:
     python3 scripts/deploy_env_check.py [retired|makefile-local ...]
         [--local-conf deploy/local.conf] [--list deploy/retired-env-names.txt]
+        [--unit-template deploy/audiobook-organizer.service]
         [--makefile-local Makefile.local]
 
 With no check named, both run. Paths default to the current directory's
@@ -63,6 +64,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 LIST_PATH = HERE.parent / "deploy" / "retired-env-names.txt"
+UNIT_TEMPLATE = HERE.parent / "deploy" / "audiobook-organizer.service"
 
 # `sudo` forms that replace a file the deploy installs. Anything the helpers do
 # for it is `sudo -n .../install-staged <verb>`, which none of these match.
@@ -145,7 +147,23 @@ def parse_list(text: str) -> tuple[bool, dict[str, tuple[str, str]]]:
     return enforced, rows
 
 
-def check_retired(local_conf: Path, list_path: Path) -> int:
+def retired_in(path: Path, rows: dict[str, tuple[str, str]]) -> tuple[list[str] | None, str]:
+    """(the retired names an Environment= line of path sets, why it could not
+    be read). (None, "") when the file does not exist."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None, ""
+    except (OSError, UnicodeDecodeError) as e:
+        return None, f"cannot read {path} ({e})"
+    return sorted({n for n in env_names(text) if n in rows}), ""
+
+
+def check_retired(local_conf: Path, list_path: Path, unit_template: Path | None = None) -> int:
+    """local_conf is what `make deploy` renders as the drop-in; unit_template is
+    the repo's own unit, whose Environment= lines every deploy installs (the
+    helper installs a copy of it as the unit). Both are the new binary's
+    environment, so both are held to the list."""
     try:
         enforced, rows = parse_list(list_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
@@ -155,37 +173,46 @@ def check_retired(local_conf: Path, list_path: Path) -> int:
             file=sys.stderr,
         )
         return 2
-    try:
-        text = local_conf.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        print(f"deploy-env-check: no {local_conf}: no environment to check.")
-        return 0
-    except (OSError, UnicodeDecodeError) as e:
-        print(f"deploy-env-check: cannot read {local_conf} ({e}).", file=sys.stderr)
-        return 1
-    found = sorted({n for n in env_names(text) if n in rows})
-    if not found:
-        print(f"deploy-env-check: {local_conf} sets no retired env name.")
+    sources = [local_conf] + ([unit_template] if unit_template is not None else [])
+    by_file: dict[Path, list[str]] = {}
+    for src in sources:
+        names, why = retired_in(src, rows)
+        if why:
+            print(f"deploy-env-check: {why}.", file=sys.stderr)
+            return 1
+        if names is None and src is local_conf:
+            continue
+        if names:
+            by_file[src] = names
+    if not by_file:
+        if not local_conf.exists():
+            print(f"deploy-env-check: no {local_conf}: no environment to check.")
+        else:
+            print(f"deploy-env-check: {local_conf} sets no retired env name.")
         return 0
     lines = []
-    for name in found:
-        verdict, replacement = rows[name]
-        what = (
-            "the new binary refuses to boot on it"
-            if verdict == "refuse"
-            else "the new binary ignores it with a warning, so the setting silently stops applying"
-        )
-        use = f"; set {replacement} instead" if replacement != "-" else "; it became no setting"
-        lines.append(f"  {name}: {what}{use}")
+    count = 0
+    for src, found in by_file.items():
+        count += len(found)
+        for name in found:
+            verdict, replacement = rows[name]
+            what = (
+                "the new binary refuses to boot on it"
+                if verdict == "refuse"
+                else "the new binary ignores it with a warning, so the setting silently stops applying"
+            )
+            use = f"; set {replacement} instead" if replacement != "-" else "; it became no setting"
+            lines.append(f"  {src}: {name}: {what}{use}")
+    where = " and ".join(str(f) for f in by_file)
     if not enforced:
         print(
-            f"deploy-env-check: {local_conf} sets {len(found)} name(s) the flip retires. The binary "
+            f"deploy-env-check: {where} set {count} name(s) the flip retires. The binary "
             "built from this tree still reads them, so the deploy is not refused; they must be "
             "renamed before the deploy that carries the flip:\n" + "\n".join(lines)
         )
         return 0
     print(
-        f"deploy-env-check: REFUSING: {local_conf} sets {len(found)} env name(s) the binary being "
+        f"deploy-env-check: REFUSING: {where} set {count} env name(s) the binary being "
         "deployed does not read (deploy/retired-env-names.txt, generated from the rename table). "
         "Nothing was uploaded or installed:\n" + "\n".join(lines),
         file=sys.stderr,
@@ -260,6 +287,15 @@ def check_makefile_local(path: Path, environ: dict[str, str], list_path: Path = 
             )
     if not problems:
         print(f"deploy-env-check: {path}'s deploy recipes go through the install-staged helper.")
+        for target in ("deploy", "deploy-debug"):
+            body = rules[target][1] if target in rules else ""
+            if "install-staged binary" in body and "deploy_generation_args" not in body:
+                print(
+                    f"deploy-env-check: NOTE: `{target}` installs the binary without telling the helper "
+                    "its version and store levels (scripts/deploy_generation_args.py, see "
+                    "Makefile.local.example). Every kept environment then counts as unknown and is "
+                    "pinned, so a hotfix train keeps more of them than it needs to."
+                )
         return 0
     detail = "\n".join(f"  {p}" for p in problems)
     owner_step = (
@@ -328,6 +364,7 @@ def main(argv: list[str] | None = None, environ: dict[str, str] | None = None) -
     p = argparse.ArgumentParser(description=description)
     p.add_argument("checks", nargs="*", choices=["retired", "makefile-local"])
     p.add_argument("--local-conf", default="deploy/local.conf")
+    p.add_argument("--unit-template", default=str(UNIT_TEMPLATE))
     p.add_argument("--list", default=str(LIST_PATH))
     p.add_argument("--makefile-local", default="Makefile.local")
     a = p.parse_args(argv)
@@ -335,7 +372,7 @@ def main(argv: list[str] | None = None, environ: dict[str, str] | None = None) -
     todo = a.checks or ["retired", "makefile-local"]
     worst = 0
     if "retired" in todo:
-        worst = max(worst, check_retired(Path(a.local_conf), Path(a.list)))
+        worst = max(worst, check_retired(Path(a.local_conf), Path(a.list), Path(a.unit_template)))
     if "makefile-local" in todo:
         worst = max(worst, check_makefile_local(Path(a.makefile_local), dict(env), Path(a.list)))
     return worst

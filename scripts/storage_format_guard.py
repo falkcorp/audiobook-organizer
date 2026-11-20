@@ -173,13 +173,15 @@ class Opts:
     # recipes read: "" = DEPLOY_BIN.prev, the fetched file once a RELEASE was
     # fetched and has not been installed.
     prev_path: str = ""
-    # The environment (unit and local.conf) kept beside <bin>.prev goes back
-    # with it. "paired" holds the helper to the binary the environment was
-    # kept with; ROLLBACK_ENV=snapshot says "unpaired": the kept environment
-    # is the one this <bin>.prev needs (a RELEASE= binary never matches).
+    # The environment (unit and local.conf) a binary ran under is kept per
+    # binary, named by its sha256, and goes back with it: the rollback finds
+    # the generation of the binary it puts back by that hash. env_gen is the
+    # operator's explicit word (ROLLBACK_ENV=<generation sha256>) that a
+    # DIFFERENT generation is the one this <bin>.prev needs (a release built
+    # elsewhere never has the hash of the build that was deployed).
     # prev_sha256 is what `install rollback check` read from <bin>.prev,
     # which `apply` must find unchanged.
-    env_mode: str = "paired"
+    env_gen: str = ""
     prev_sha256: str = ""
 
     @property
@@ -204,6 +206,7 @@ def commands(o: Opts, name: str = "") -> dict[str, str]:
     test_make_rollback.py checks those against sudoers()). `name` is the
     checkpoint name for the record and restore keys."""
     h = HELPER_DIR
+    gen = f" {o.env_gen}" if o.env_gen else ""
     return {
         "host_config": f"cat {HOST_CONFIG}",
         "prev_exists": f"test -f {o.bin}.prev",
@@ -244,12 +247,20 @@ def commands(o: Opts, name: str = "") -> dict[str, str]:
         # The binary alone: the manual emergency path. The recipes use
         # swap_env, which puts the unit and local.conf back with it.
         "swap": f"sudo -n {h}/swap-prev",
-        "env_check": f"sudo -n {h}/install-staged rollback check {o.env_mode}",
+        "env_check": f"sudo -n {h}/install-staged rollback check prev{gen}",
+        # RELEASE=: asked BEFORE the fetched file is installed as .prev, with
+        # the hash of the file in stage_bin.
+        "env_check_staged": (
+            f"sudo -n {h}/install-staged rollback check "
+            f"$(sha256sum {o.stage_bin} | cut -d' ' -f1){gen}"
+        ),
+        "env_list": f"sudo -n {h}/install-staged rollback list",
         # An operator's hand-typed recovery line has no checked hash: it
         # reads the .prev that is there at that moment.
         "swap_env": (
-            f"sudo -n {h}/install-staged rollback apply {o.env_mode} "
+            f"sudo -n {h}/install-staged rollback apply "
             + (o.prev_sha256 or f"$(sha256sum {o.bin}.prev | cut -d' ' -f1)")
+            + gen
         ),
         "install_binary": f"sudo -n {h}/install-staged binary",
         "install_unit": f"sudo -n {h}/install-staged unit",
@@ -862,8 +873,11 @@ def _validate(o: Opts) -> str:
         return f"checkpoint_dir {o.checkpoint_dir!r} must be an absolute path of letters, digits and ._/@+-"
     if o.archive and (not _ARCHIVE_NAME.fullmatch(o.archive) or ".." in o.archive):
         return f"ROLLBACK_ARCHIVE {o.archive!r} must be a file name in archive_dir (letters, digits and ._-, no /)"
-    if o.env_mode not in ("paired", "unpaired"):
-        return f"ROLLBACK_ENV {o.env_mode!r} must be empty or snapshot"
+    if o.env_gen and not re.fullmatch(r"[0-9a-f]{64}", o.env_gen):
+        return (
+            f"ROLLBACK_ENV {o.env_gen!r} must be empty or the sha256 of a kept generation "
+            "(make rollback-check lists them)"
+        )
     if o.prev_sha256 and not re.fullmatch(r"[0-9a-f]{64}", o.prev_sha256):
         return "the .prev hash is not 64 hex digits"
     if o.release and not _RELEASE_TAG.fullmatch(o.release):

@@ -97,7 +97,8 @@ DEPLOY_URL := https://$(lastword $(subst @, ,$(DEPLOY_HOST))):8484
 
 ## deploy: Build via the committed `build-linux` target, ship the binary and
 ## deploy/local.conf (if present), install them and the helper bundle's unit
-## through the helpers (the binary atomically, keeping a .prev copy), restart,
+## through the helpers (the binary atomically, keeping a .prev copy and, named by
+## the replaced binary's sha256, the unit and local.conf it ran under), restart,
 ## and verify the deployed version.
 #
 # The build itself lives in the committed Makefile (`make build-linux`): it owns
@@ -115,6 +116,9 @@ deploy: deploy-env-check
 	@$(MAKE) build-linux VERSION=$(VERSION)
 	@echo "→ Copying the binary to $(DEPLOY_HOST)'s staging path..."
 	scp dist/$(BINARY)-linux-amd64 $(DEPLOY_HOST):/home/USER/audiobook-organizer
+	@echo "→ Measuring the new binary's version and store levels (kept with the environment it replaces)..."
+	@python3 scripts/deploy_generation_args.py --host $(DEPLOY_HOST) --stage /home/USER/audiobook-organizer \
+	  --file dist/$(BINARY)-linux-amd64 > dist/$(BINARY)-linux-amd64.generation-args
 	@echo "→ Installing the unit from the root-owned helper bundle (nothing uploaded)..."
 	ssh $(DEPLOY_HOST) 'sudo -n $(DEPLOY_HELPERS)/install-staged unit'
 	@if [ -f deploy/local.conf ]; then \
@@ -125,7 +129,7 @@ deploy: deploy-env-check
 	@echo "→ Matching the service type to the new binary (removes a rollback's Type=simple drop-in)..."
 	@bash scripts/deploy-match-unit-type.sh $(DEPLOY_HOST) /home/USER/audiobook-organizer
 	@echo "→ Installing the new binary (the previous one is kept as .prev)..."
-	ssh $(DEPLOY_HOST) 'sudo -n $(DEPLOY_HELPERS)/install-staged binary'
+	ssh $(DEPLOY_HOST) 'sudo -n $(DEPLOY_HELPERS)/install-staged binary '"$$(cat dist/$(BINARY)-linux-amd64.generation-args)"
 	@# The InvocationID read before the restart: the wait refuses "ready" until
 	@# the unit has a new one, so a restart that never ran (sudo refused it, ssh
 	@# dropped) cannot pass on the old process. A sudo refusal fails at once.
