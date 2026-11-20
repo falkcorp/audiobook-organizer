@@ -1,7 +1,7 @@
 // file: internal/books/store/book_file_path_key.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 8a41d0c6-2f7e-4b39-95d8-c6e1f3a07b24
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package store
 
@@ -115,24 +115,55 @@ func (p *PebbleStore) claimPathKey(bookID, fileID, path string, retired bool) (c
 // pathKeyHeldByLiveRowAt reports whether key names a non-retired row whose
 // path is path.
 func (p *PebbleStore) pathKeyHeldByLiveRowAt(key []byte, path string) (bool, error) {
+	o, err := p.pathKeyOwnerAt(key, path)
+	if err != nil {
+		return false, err
+	}
+	return o != nil && !o.Retired, nil
+}
+
+// pathKeyOwnerAt is the row key names when that row exists and is at path, live
+// or retired; nil when the key is free, names nothing readable, or names a row
+// that is gone or has left the path (a stale key holds nothing). The caller holds
+// lockSingleOwnerIndex, so the key cannot change under the read.
+func (p *PebbleStore) pathKeyOwnerAt(key []byte, path string) (*BookFile, error) {
 	v, closer, err := p.db.Get(key)
 	if errors.Is(err, pebble.ErrNotFound) {
-		return false, nil
+		return nil, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("read the path key of %s: %w", path, err)
+		return nil, fmt.Errorf("read the path key of %s: %w", path, err)
 	}
 	ref := string(v)
 	_ = closer.Close()
 	parts := strings.SplitN(ref, ":", 2)
 	if len(parts) != 2 {
-		return false, nil
+		return nil, nil
 	}
 	o, err := p.getBookFileByID(parts[0], parts[1])
 	if err != nil {
-		return false, fmt.Errorf("read the path key's owner %s: %w", parts[1], err)
+		return nil, fmt.Errorf("read the path key's owner %s: %w", parts[1], err)
 	}
-	return o != nil && !o.Retired && o.FilePath == path, nil
+	if o == nil || o.FilePath != path {
+		return nil, nil
+	}
+	return o, nil
+}
+
+// requirePathNotHeld is ModifyBookFileUnlessPathHeld's verify hook body: it
+// returns an error wrapping ErrBookFilePathHeld when the path key of path names
+// a row other than fileID that is at path, live or retired. It must run under
+// lockSingleOwnerIndex (commitBookFileBatchVerified's verify does).
+func (p *PebbleStore) requirePathNotHeld(path, fileID string) error {
+	key := []byte(fmt.Sprintf("book_file_path:%s", bookFilePathCRC(path)))
+	o, err := p.pathKeyOwnerAt(key, path)
+	if err != nil {
+		return err
+	}
+	if o != nil && o.ID != fileID {
+		return fmt.Errorf("%w: %s is held by file row %s of book %s", ErrBookFilePathHeld, path, o.ID, o.BookID)
+	}
+	return nil
 }
 
 // claimPathKeyBeforeSetHook, when non-nil, runs in ClaimBookFilePathKey after
