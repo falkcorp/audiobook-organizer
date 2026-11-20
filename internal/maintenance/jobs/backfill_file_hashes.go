@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 4.6.5
+// version: 4.6.6
 // guid: a1000014-0000-0000-0000-000000000014
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 package jobs
 

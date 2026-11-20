@@ -1,9 +1,9 @@
 //go:build unix
 
 // file: core/library/reportfile_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d0c7b0e-3f4a-4b7e-9a52-6c1e8d2f7a14
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package library
 
@@ -224,10 +224,10 @@ func TestOpenReportFile_RefusesAFileOrDirOwnedByAnotherUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	if why := unsafeReportFile(f, os.Geteuid()+1); !strings.Contains(why, "not owned") {
+	if why := unsafeReportFile(reportDir(), f, os.Geteuid()+1); !strings.Contains(why, "not owned") {
 		t.Fatalf("a file owned by another user must be refused, got %q", why)
 	}
-	if why := unsafeReportFile(f, os.Geteuid()); why != "" {
+	if why := unsafeReportFile(reportDir(), f, os.Geteuid()); why != "" {
 		t.Fatalf("a file this user owns was refused: %q", why)
 	}
 }
@@ -606,5 +606,68 @@ func TestReportPathNotify_RefusesADefaultNameThatIsNotAFileName(t *testing.T) {
 	}
 	if got, err := ReportPathNotify(root, "", "plain-1.tsv", nil); err != nil || filepath.Base(got) != "plain-1.tsv" {
 		t.Fatalf("a plain default name must still work: %q %v", got, err)
+	}
+}
+
+// A refusal speaks of what was refused. A file in the ledger directory is a ledger,
+// so the provenance export is not told a report was refused; a file in the report
+// directory is a report. Every refusal still matches ErrReportFileUnsafe.
+func TestOpenReportFile_RefusalsNameTheKindOfFile(t *testing.T) {
+	for _, tc := range []struct {
+		noun, other, dir string
+		notify           func(root string) error
+	}{
+		{"report", "ledger", ReportDirName, func(root string) error { _, err := ReportPathNotify(root, "", "seed.tsv", nil); return err }},
+		{"ledger", "report", LedgerDirName, func(root string) error { _, err := LedgerPathNotify(root, "", "seed.jsonl", nil); return err }},
+	} {
+		t.Run(tc.noun, func(t *testing.T) {
+			root, _ := reportRootFor(t)
+			if err := tc.notify(root); err != nil {
+				t.Fatal(err)
+			}
+			dir := filepath.Join(root, tc.dir)
+			victim := victimFile(t)
+			if err := os.Symlink(victim, filepath.Join(dir, "link")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Link(victim, filepath.Join(dir, "hard")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(filepath.Join(dir, "adir"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			want := func(err error, why string) {
+				t.Helper()
+				if !errors.Is(err, ErrReportFileUnsafe) {
+					t.Fatalf("%s: not ErrReportFileUnsafe: %v", why, err)
+				}
+				msg := err.Error()
+				if !strings.Contains(msg, tc.noun+" ") || strings.Contains(msg, tc.other) {
+					t.Fatalf("%s: a refusal about a %s should say %s, and not %s: %v", why, tc.noun, tc.noun, tc.other, err)
+				}
+			}
+			for _, mode := range allReportModes {
+				_, err := OpenReportFile(filepath.Join(dir, "link"), 0o644, mode)
+				want(err, "symlink")
+				_, err = OpenReportFile(filepath.Join(dir, "hard"), 0o644, mode)
+				want(err, "hard link")
+				_, err = OpenReportFile(filepath.Join(dir, "adir"), 0o644, mode)
+				if err == nil {
+					t.Fatal("a directory at the name was opened")
+				}
+			}
+			_, err := OpenReportFile(filepath.Join(t.TempDir(), tc.dir, "x"), 0o644, ReportTruncate)
+			want(err, "missing directory")
+			mustUnchanged(t, victim, "keep me")
+			// The path-resolution stage speaks the same way.
+			explicit := "link"
+			var err2 error
+			if tc.noun == "report" {
+				_, err2 = ReportPathNotify(root, explicit, "", nil)
+			} else {
+				_, err2 = LedgerPathNotify(root, explicit, "", nil)
+			}
+			want(err2, "resolving a symlink")
+		})
 	}
 }

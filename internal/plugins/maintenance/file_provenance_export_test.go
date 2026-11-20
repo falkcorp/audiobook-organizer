@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_provenance_export_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: d61df6f5-c2e0-47ab-b028-44d97b64001c
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 //
 // The export is what turns "we can detect that history was destroyed" into
 // "history was not destroyed". The chain proves a row was rewritten; only a
@@ -274,9 +274,14 @@ func TestFileProvenanceExportLedgerIsOutOfReachOfReportOps(t *testing.T) {
 	for _, c := range reportOpCases() {
 		// By bare name the op writes {root}/.reports/ledger.jsonl, a different file.
 		_ = c.run(rp, context.Background(), c.raw(t, false, map[string]any{c.key(): "ledger.jsonl"}), &fakeReporter{})
-		// By the ledger's own path it is refused outright.
+		// By the ledger's own path it is refused outright, and refused for that
+		// reason: an op that failed earlier for some unrelated cause would leave
+		// the ledger untouched too and pass this leg without proving anything.
 		err := c.run(rp, context.Background(), c.raw(t, true, map[string]any{c.key(): out}), &fakeReporter{})
 		require.Error(t, err, "%s: the ledger's path must be refused as a report path", c.name)
+		require.ErrorContains(t, err, "report path", "%s: refused as something other than a report path: %v", c.name, err)
+		require.ErrorContains(t, err, "is not directly inside that directory", "%s: refused for another reason: %v", c.name, err)
+		require.ErrorContains(t, err, reports, "%s: the refusal does not name the report directory: %v", c.name, err)
 
 		after, rerr := os.ReadFile(out)
 		require.NoError(t, rerr)

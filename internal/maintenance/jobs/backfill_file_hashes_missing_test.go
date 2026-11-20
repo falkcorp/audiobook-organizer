@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_missing_test.go
-// version: 9.0.3
+// version: 9.0.4
 // guid: 5e1c7a42-93b8-4d06-a7f1-2c84e0b9d315
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package jobs_test
 

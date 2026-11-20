@@ -1,11 +1,12 @@
 // file: internal/maintenance/jobs/writes_oracle_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 40eadd67-76ac-419f-a3fe-7d1ed5e586e2
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package jobs_test
 
 import (
+	"errors"
 	"fmt"
 	"go/constant"
 	"go/types"
@@ -66,10 +67,40 @@ var oracleFileWriters = map[string]bool{
 // (library.OpenReportFile and its siblings, which use openat under the
 // .reports root rather than os.OpenFile) would otherwise read as writing no
 // files on disk.
+//
+// ReportPathNotify and LedgerPathNotify are listed with the openers although they
+// open no report: they create the report (or ledger) directory when it is absent,
+// remove write bits from one that has too many, and create and remove a probe file
+// in it. A job that resolves its report path and then fails before writing has
+// still changed the disk, so it declares the files resource whether or not it gets
+// as far as an opener. checkOutsideFileWriters keeps every name in this table
+// pointing at a function that exists.
 var oracleOutsideFileWriters = map[string]map[string]bool{
 	"github.com/falkcorp/mediacore/library": {
 		"OpenReportFile": true, "WriteReportFile": true, "PreflightReportFile": true,
+		"ReportPathNotify": true, "LedgerPathNotify": true,
 	},
+}
+
+// checkOutsideFileWriters fails when a name in oracleOutsideFileWriters is not a
+// function of a package the load reached. A misspelled or renamed entry would
+// otherwise match no call and the oracle would go on reporting a job as writing no
+// files, the exact gap the table exists to close.
+func checkOutsideFileWriters(prog *ssa.Program) error {
+	var errs []error
+	for path, names := range oracleOutsideFileWriters {
+		pkg := prog.ImportedPackage(path)
+		if pkg == nil {
+			errs = append(errs, fmt.Errorf("oracleOutsideFileWriters: package %s is not in the jobs package's import graph", path))
+			continue
+		}
+		for name := range names {
+			if pkg.Func(name) == nil {
+				errs = append(errs, fmt.Errorf("oracleOutsideFileWriters: %s has no function %s", path, name))
+			}
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // oracleResource names the resource kind an interface write touches, from the
@@ -308,6 +339,9 @@ func loadOracleJobs() (map[string]oracleJob, error) {
 		return nil, err
 	}
 	prog, ssapkgs := ssautil.AllPackages(pkgs, ssa.InstantiateGenerics)
+	if err := checkOutsideFileWriters(prog); err != nil {
+		return nil, err
+	}
 	for _, p := range ssapkgs {
 		if p != nil && strings.HasPrefix(p.Pkg.Path(), oracleModule) {
 			p.Build()
