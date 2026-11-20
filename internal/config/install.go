@@ -42,6 +42,14 @@ func Current() Facade {
 	return nil
 }
 
+// UpdateHookRegistrar is a Facade that runs UpdateHooks after each committed
+// Update (the books module's appconfig.Engine). A service whose live state
+// follows a setting registers its hook on Current() while the server is built,
+// before the Facade serves writes.
+type UpdateHookRegistrar interface {
+	OnUpdate(name string, fn UpdateHook)
+}
+
 // Project replaces AppConfig with cfg under the write lock and moves
 // Generation. It is the Facade's rebuild step, called on every core generation
 // change; no other caller should assign the whole Config.

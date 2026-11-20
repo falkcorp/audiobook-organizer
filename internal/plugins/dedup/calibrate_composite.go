@@ -357,11 +357,11 @@ type calibrateCompositeBaseline interface {
 }
 
 // calibrateCompositeWriter is the writes the apply path makes, in order: persist
-// the bands through the config update service, read the persisted settings back
-// as a score config, and reload that into the live engine (re-banding the
-// stored candidates).
+// the bands through the config Facade, read the persisted settings back as a
+// score config, and reload that into the live engine (re-banding the stored
+// candidates).
 type calibrateCompositeWriter interface {
-	ApplyConfigUpdates(ctx context.Context, payload map[string]any) error
+	PersistBandThresholds(ctx context.Context, cfg unified.ScoreConfig) error
 	PersistedScoreConfig() (unified.ScoreConfig, error)
 	ReloadScoreConfig(ctx context.Context, cfg unified.ScoreConfig) (dedupengine.RescoreResult, error)
 }
@@ -396,11 +396,10 @@ type calibrateCompositeResult struct {
 }
 
 // headCalibrateComposite is HEAD's reads and writes for the core: the embedding
-// store, the live engine and the config update service over the main store.
+// store, the live engine and the config Facade.
 type headCalibrateComposite struct {
 	emb    *database.EmbeddingStore
 	engine *dedupengine.Engine
-	store  pluginStore
 }
 
 func (h headCalibrateComposite) ListLabeledExamples(f database.LabeledExampleFilter) ([]database.LabeledExample, error) {
@@ -410,8 +409,18 @@ func (h headCalibrateComposite) GetCandidateByID(id int64) (*database.DedupCandi
 	return h.emb.GetCandidateByID(id)
 }
 func (h headCalibrateComposite) ScoreConfig() unified.ScoreConfig { return h.engine.ScoreConfig() }
-func (h headCalibrateComposite) ApplyConfigUpdates(ctx context.Context, payload map[string]any) error {
-	return config.NewUpdateService(h.store).ApplyUpdates(ctx, payload)
+// PersistBandThresholds stores the four band mins as one write through the
+// config Facade, as the process's own actor (config.MutateChecked). Not
+// Facade.Update: Update runs the UpdateHooks, and the dedup plugin's hook
+// (dedupScoreHook) would queue a dedup.rescore op of its own; see
+// applyBandThresholdsVia.
+func (h headCalibrateComposite) PersistBandThresholds(_ context.Context, cfg unified.ScoreConfig) error {
+	return config.MutateChecked(func(c *config.Config) {
+		c.Dedup.Signals.BandCertainMin = cfg.BandCertainMin
+		c.Dedup.Signals.BandHighMin = cfg.BandHighMin
+		c.Dedup.Signals.BandMediumMin = cfg.BandMediumMin
+		c.Dedup.Signals.BandReviewMin = cfg.BandReviewMin
+	})
 }
 func (h headCalibrateComposite) PersistedScoreConfig() (unified.ScoreConfig, error) {
 	return config.Snapshot().Dedup.Signals.ScoreConfig()
@@ -749,7 +758,7 @@ func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMe
 			return fmt.Errorf("parse params: %w", err)
 		}
 	}
-	h := headCalibrateComposite{emb: p.embeddingStore, engine: p.engine, store: p.store}
+	h := headCalibrateComposite{emb: p.embeddingStore, engine: p.engine}
 	_, err := calibrateCompositeCore(ctx, calibrateCompositeEnv{
 		kindEnv: headEnv(reporter, params.Apply), Store: h, Baseline: h, Writer: h,
 	}, calibrateCompositeNativeParams{
@@ -769,22 +778,21 @@ func (p *Plugin) runCalibrateComposite(ctx context.Context, rawParams json.RawMe
 //     out-of-range recommendation fails with a message naming THIS op's
 //     output rather than a generic "invalid configuration" from the config
 //     layer. (Review-round M4.)
-//  2. config.UpdateService.UpdateConfig via ApplyUpdates — the ONLY
-//     dedup.signals.* blob surface. All four band mins are written (recommended
-//     for tunable bands, baseline for held ones) so the persisted config stays
-//     internally ordered; the previous values are logged as the rollback record.
+//  2. PersistBandThresholds — one write of dedup.signals.* through the config
+//     Facade. All four band mins are written (recommended for tunable bands,
+//     baseline for held ones) so the persisted config stays internally
+//     ordered; the previous values are logged as the rollback record.
 //  3. Engine.ReloadScoreConfig — swaps the live ladder AND re-bands every
 //     stored pending candidate under it (review-round H3). AutoResolveCertain
 //     reads the STORED band, so without the rescore the rows would keep
 //     auto-resolving on the previous ladder.
 //
-// WHY a sink-less config.NewUpdateService(p.store) rather than the registry's
-// shared UpdateService: the shared one carries the dedup-score sink this
-// plugin installs (register.go), which would perform step 3 itself — but by
-// QUEUEING a dedup.rescore op, whose counts this op could not report and
-// whose ConcurrencyKey it would then be queued behind. Using a private
-// service keeps the re-band inline, under the op's own ctx and reporter, and
-// avoids re-banding the whole backlog twice.
+// WHY config.MutateChecked rather than Facade.Update: Update runs the
+// Facade's UpdateHooks, and the dedup plugin's hook (dedupScoreHook) would
+// perform step 3 itself, but by QUEUEING a dedup.rescore op, whose counts this
+// op could not report and whose ConcurrencyKey it would then be queued behind.
+// MutateChecked runs no hooks, so the re-band stays inline, under the op's own
+// ctx and reporter, and the whole backlog is not re-banded twice.
 //
 // Returns the RescoreResult so the caller can report how many rows moved.
 func applyBandThresholdsVia(ctx context.Context, w calibrateCompositeWriter, recCfg, prevCfg unified.ScoreConfig, log *slog.Logger) (dedupengine.RescoreResult, error) {
@@ -799,24 +807,14 @@ func applyBandThresholdsVia(ctx context.Context, w calibrateCompositeWriter, rec
 		"previous_medium_min", prevCfg.BandMediumMin, "previous_review_min", prevCfg.BandReviewMin,
 		"rollback", "re-run apply with the previous_* values to restore")
 
-	payload := map[string]any{
-		"dedup": map[string]any{
-			"signals": map[string]any{
-				"band_certain_min": recCfg.BandCertainMin,
-				"band_high_min":    recCfg.BandHighMin,
-				"band_medium_min":  recCfg.BandMediumMin,
-				"band_review_min":  recCfg.BandReviewMin,
-			},
-		},
-	}
-	if err := w.ApplyConfigUpdates(ctx, payload); err != nil {
+	if err := w.PersistBandThresholds(ctx, recCfg); err != nil {
 		return dedupengine.RescoreResult{}, fmt.Errorf("persist band thresholds: %w", err)
 	}
-	log.Info("calibrate-composite APPLY: band thresholds persisted (survives restart via config blob)")
+	log.Info("calibrate-composite APPLY: band thresholds persisted (survives restart through the config store)")
 
 	// Reload the PERSISTED settings into the live engine — the same
 	// conversion registry_wire.go uses at startup, read back from the config
-	// UpdateConfig just mutated, so "what the blob holds" and "what the
+	// the write above just changed, so "what the store holds" and "what the
 	// engine scores with" cannot drift. An error here is loud on purpose:
 	// the bands are on disk but the running engine (and/or the stored
 	// candidate rows) are still on the old ones. A restart would pick the
@@ -838,14 +836,10 @@ func applyBandThresholdsVia(ctx context.Context, w calibrateCompositeWriter, rec
 	return res, nil
 }
 
-// applyBandThresholds is the v2 entry to applyBandThresholdsVia: HEAD's main
-// store nil check, then the apply over the plugin's own config service and live
-// engine.
+// applyBandThresholds is the v2 entry to applyBandThresholdsVia: the apply
+// over the config Facade and the plugin's live engine.
 func (p *Plugin) applyBandThresholds(ctx context.Context, recCfg, prevCfg unified.ScoreConfig, log *slog.Logger) (dedupengine.RescoreResult, error) {
-	if p.store == nil {
-		return dedupengine.RescoreResult{}, fmt.Errorf("main store not available; cannot persist config")
-	}
-	return applyBandThresholdsVia(ctx, headCalibrateComposite{emb: p.embeddingStore, engine: p.engine, store: p.store}, recCfg, prevCfg, log)
+	return applyBandThresholdsVia(ctx, headCalibrateComposite{emb: p.embeddingStore, engine: p.engine}, recCfg, prevCfg, log)
 }
 
 // recOrBaselineMin returns the recommended band minimum when met, else the baseline.
