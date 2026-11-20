@@ -1520,6 +1520,12 @@ class RollbackRestoresEnvironment(unittest.TestCase):
             mod.check_facts(only_binary), ("unrecorded", "unrecorded", "1"), "no enforced= at all"
         )
         self.assertEqual(mod.check_facts("nothing"), (None, "unrecorded", "none"))
+        lookalikes = "prelevels=storage=9 preenforced=1 prebinary_enforced=1 x-enforced=1"
+        self.assertEqual(
+            mod.check_facts(lookalikes),
+            (None, "unrecorded", "none"),
+            "a longer key that merely ends in one of the three is not that key",
+        )
 
     def test_a_named_generation_with_fully_recorded_facts_says_nothing_extra(self) -> None:
         host, p = self.named_generation_run(
