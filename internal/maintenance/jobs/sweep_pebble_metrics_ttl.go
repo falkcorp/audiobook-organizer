@@ -22,6 +22,38 @@ import (
 
 func init() { maintenance.Register(&sweepPebbleMetricsTTLJob{}) }
 
+// metricsSweeper is the one call the job makes: delete the expired snapshots.
+type metricsSweeper interface {
+	SweepExpiredMetrics() (int64, error)
+}
+
+// resolveMetricsSweeper is the store's sweeper, or nil when it has none.
+//
+// A store that offers SweepExpiredMetrics itself is used as it stands. The
+// books module's job store does: it cannot hand the job the Pebble store (it has
+// no Unwrap and no promoted store, so that every write it makes is stamped), and
+// the sweep is one such write, so it carries the sweep as a gated method of its
+// own. Any other store resolves to the metrics store the way the job always did:
+// NewPebbleMetricsStoreFromStore, which looks through the decorator chain
+// internally. This job runs through server.maintenance_job_op, which hands it the
+// Bleve search-index decorator in production, and a bare `store.(*PebbleStore)`
+// took the skip branch on every prod run, so expired snapshots were never swept
+// and nothing surfaced it, because skipping is a legitimate outcome on a
+// non-Pebble backend. Constructing through internal/books/store also keeps
+// *PebbleStore out of this package.
+//
+// The nil check is explicit: a nil *PebbleMetricsStore converted to the
+// interface is a non-nil sweeper.
+func resolveMetricsSweeper(store any) metricsSweeper {
+	if s, ok := database.AsCapability[metricsSweeper](store); ok {
+		return s
+	}
+	if m := database.NewPebbleMetricsStoreFromStore(store); m != nil {
+		return m
+	}
+	return nil
+}
+
 type sweepPebbleMetricsTTLJob struct{}
 
 func (j *sweepPebbleMetricsTTLJob) ID() string       { return "sweep-pebble-metrics-ttl" }
@@ -47,16 +79,8 @@ func (j *sweepPebbleMetricsTTLJob) Run(
 	reporter maintenance.ProgressReporter,
 	dryRun bool,
 ) error {
-	// FromStore, which resolves through the decorator chain internally: this job
-	// runs through server.maintenance_job_op, which resolves Server.Store() at
-	// op-run time and therefore hands us the Bleve search-index decorator in
-	// production. A bare `store.(*database.PebbleStore)` failed against that
-	// wrapper, so this job took the skip branch below on every prod run and
-	// expired metrics snapshots were never swept. Nothing surfaced it because
-	// skipping is a legitimate outcome on a non-Pebble backend. Constructing via
-	// internal/books/store also keeps *PebbleStore out of this package entirely.
-	metricsStore := database.NewPebbleMetricsStoreFromStore(store)
-	if metricsStore == nil {
+	sweeper := resolveMetricsSweeper(store)
+	if sweeper == nil {
 		// Not a Pebble backend — no-op (test double or SQLite fallback).
 		slog.Info("sweep-pebble-metrics-ttl: store is not a PebbleStore; skipping")
 		reporter.Log("info", "Store is not PebbleStore — skipped", nil)
@@ -70,7 +94,7 @@ func (j *sweepPebbleMetricsTTLJob) Run(
 	}
 
 	slog.Info("[sweep-pebble-metrics-ttl] starting TTL sweep")
-	deleted, err := metricsStore.SweepExpiredMetrics()
+	deleted, err := sweeper.SweepExpiredMetrics()
 	if err != nil {
 		return fmt.Errorf("sweep-pebble-metrics-ttl: %w", err)
 	}

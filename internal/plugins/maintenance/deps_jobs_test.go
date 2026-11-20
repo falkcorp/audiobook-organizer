@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/mediacore/entity"
 	"github.com/falkcorp/mediacore/tasks"
@@ -66,9 +67,13 @@ func TestBooksJobsStore_NoUnwrapAndNoPromotedStore(t *testing.T) {
 	w := deps.NewStore(writertest.ForSet("books.maintenance.x", nil, tasks.ModeLive))
 	_, ok := w.(database.StoreUnwrapper)
 	require.False(t, ok, "an Unwrap hands every write to AsCapability unstamped")
-	require.Nil(t, database.AsPebbleStore(w),
-		"pinned: sweep-pebble-metrics-ttl builds its store from AsPebbleStore, so on this wrapper it skips; it needs a narrow sweeper capability (seams.d/F5-18c.md)")
-	require.Nil(t, database.NewPebbleMetricsStoreFromStore(w))
+	require.Nil(t, database.AsPebbleStore(w), "no promoted store: the Pebble store is not reachable through the wrapper")
+	require.Nil(t, database.NewPebbleMetricsStoreFromStore(w), "so the metrics store cannot be built from it either")
+	// sweep-pebble-metrics-ttl resolves its sweeper capability first
+	// (internal/maintenance/jobs.resolveMetricsSweeper), which the wrapper
+	// carries as a gated method of its own.
+	_, ok = w.(interface{ SweepExpiredMetrics() (int64, error) })
+	require.True(t, ok, "the sweep job's narrow capability is on the wrapper")
 }
 
 func TestBooksJobsDeps_BuildRefusesASourceWithoutTheCapabilities(t *testing.T) {
@@ -186,6 +191,93 @@ func jobsCalls(bookID string) map[string]func(w jobs.Store) {
 		"MarkBookAggregatesBackfillDone": func(w jobs.Store) { _ = asCaps(w).MarkBookAggregatesBackfillDone() },
 		"DeleteSeriesIfUnreferenced":     func(w jobs.Store) { _, _ = asCaps(w).DeleteSeriesIfUnreferenced(1, "x", nil) },
 		"UpdateBookFileHashes":           func(w jobs.Store) { _ = asCaps(w).UpdateBookFileHashes("f", "a", "b", "c") },
+
+		"AppendFileEvent":    func(w jobs.Store) { _ = asCaps(w).AppendFileEvent(database.FileEvent{Path: "/lib/y.m4b"}) },
+		"ClearUserPositions": func(w jobs.Store) { _ = asCaps(w).ClearUserPositions("u", bookID) },
+		"CopyBookmarkIfAbsent": func(w jobs.Store) {
+			_, _ = asCaps(w).CopyBookmarkIfAbsent(progress.Bookmark{UserID: "u", ItemID: bookID})
+		},
+		"DeleteSeries":   func(w jobs.Store) { _ = asCaps(w).DeleteSeries(1) },
+		"SetBookAuthors": func(w jobs.Store) { _ = asCaps(w).SetBookAuthors(bookID, nil) },
+		"SetUserPositionAt": func(w jobs.Store) {
+			_ = asCaps(w).SetUserPositionAt("u", bookID, "seg", 1, time.Unix(1, 0))
+		},
+		"SweepExpiredMetrics": func(w jobs.Store) { _, _ = asCaps(w).SweepExpiredMetrics() },
+	}
+}
+
+// jobsRefusedCalls is one call of every refused label: a write the wrapper
+// carries that has no row.
+func jobsRefusedCalls(bookID string) map[string]func(w jobs.Store) error {
+	asCaps := func(w jobs.Store) *booksJobsStore { return w.(*booksJobsStore) }
+	return map[string]func(w jobs.Store) error{
+		"AddBookTagWithSource": func(w jobs.Store) error { return asCaps(w).AddBookTagWithSource(bookID, "t", "s") },
+		"ClearSyncMerge":       func(w jobs.Store) error { return asCaps(w).ClearSyncMerge(bookID, bookID) },
+		"ClearSyncRedirect": func(w jobs.Store) error {
+			_, _, err := asCaps(w).ClearSyncRedirect(bookID)
+			return err
+		},
+		"DeleteBookmark":      func(w jobs.Store) error { return asCaps(w).DeleteBookmark("u", bookID, 1) },
+		"DeleteUserBookState": func(w jobs.Store) error { return asCaps(w).DeleteUserBookState("u", bookID) },
+		"MarkIdentDirty": func(w jobs.Store) error {
+			_, err := asCaps(w).MarkIdentDirty(bookID)
+			return err
+		},
+		"MintOrGetSyncFileIDs": func(w jobs.Store) error {
+			_, err := asCaps(w).MintOrGetSyncFileIDs(bookID, []string{"f"})
+			return err
+		},
+		"RemoveBookTagsByPrefix": func(w jobs.Store) error { return asCaps(w).RemoveBookTagsByPrefix(bookID, "p", "s") },
+		"RepointSyncFile":        func(w jobs.Store) error { return asCaps(w).RepointSyncFile(bookID, "a", "b") },
+		"RepointSyncItem":        func(w jobs.Store) error { return asCaps(w).RepointSyncItem(bookID, bookID) },
+		"ReplaceUserPositions":   func(w jobs.Store) error { return asCaps(w).ReplaceUserPositions("u", bookID, nil) },
+		"RevertBookToVersion": func(w jobs.Store) error {
+			_, err := asCaps(w).RevertBookToVersion(bookID, time.Unix(1, 0))
+			return err
+		},
+		"UpdateBookmarkTitle": func(w jobs.Store) error { return asCaps(w).UpdateBookmarkTitle("u", bookID, 1, "t") },
+		"UpdateSeriesName":    func(w jobs.Store) error { return asCaps(w).UpdateSeriesName(1, "x") },
+	}
+}
+
+func TestBooksJobsStore_RefusedCallTableCoversEveryRefusedLabel(t *testing.T) {
+	got := make([]string, 0)
+	for l := range jobsRefusedCalls("x") {
+		got = append(got, l)
+	}
+	want := slices.Clone(jobsRefusedLabels)
+	slices.Sort(got)
+	slices.Sort(want)
+	require.Equal(t, want, got)
+	for _, l := range jobsRefusedLabels {
+		require.NotContains(t, jobsWriteLabels, l, "%s is both gated and refused", l)
+	}
+}
+
+// TestBooksJobsStore_RefusedLabelsHaveNoRowAndNeverReachTheStore: a refused
+// label has no row in the shared table, and calling it, under a declared set
+// that holds every resource there is, returns ErrNoRow wrapped in
+// ErrOutsideEffects without the store being called. A store error cannot be
+// mistaken for it: the wrapper's own refusal is the only source of ErrNoRow.
+func TestBooksJobsStore_RefusedLabelsHaveNoRowAndNeverReachTheStore(t *testing.T) {
+	s, id := g2Fixture(t)
+	deps, err := newJobsDeps(s)
+	require.NoError(t, err)
+	var everything []entity.Ref
+	for _, rs := range t6WriterResources {
+		for _, r := range rs {
+			everything = append(everything, tasks.Res(writer.Module, string(r)))
+		}
+	}
+	for label, call := range jobsRefusedCalls(id) {
+		t.Run(label, func(t *testing.T) {
+			require.NotContains(t, t6WriterResources, label, "%s gained a row: move it from jobsRefusedLabels to jobsWriteLabels", label)
+			enforcing := writertest.ForSet("books.maintenance.x", everything, tasks.ModeLive)
+			err := call(deps.NewStore(enforcing))
+			require.ErrorIs(t, err, tasks.ErrOutsideEffects)
+			require.ErrorIs(t, err, writer.ErrNoRow)
+			require.Empty(t, enforcing.Writes(), "a refused call stamps nothing")
+		})
 	}
 }
 
