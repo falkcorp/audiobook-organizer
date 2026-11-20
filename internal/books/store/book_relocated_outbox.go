@@ -75,13 +75,16 @@ func (p *PebbleStore) SetRelocationOutbox(w outbox.Writer) {
 
 // stageBookRelocated stages the relocation of book id from oldPath to newPath
 // into batch, the batch that writes the new path. It stages nothing when no
-// outbox is installed, when the path did not change, or when the new path is
+// outbox is installed, when the path did not change, when the old path is
+// empty (a book getting its first path is a create, not a relocation: there is
+// nothing at an old path for a follow-up to move, and staging it would start a
+// path-update run for every newly imported book), or when the new path is
 // empty (a retire or detach: nothing is left at a path for a follow-up to point
 // at). An error must discard the batch: the move and its follow-up commit
 // together or not at all.
 func (p *PebbleStore) stageBookRelocated(batch *GatedBatch, id, oldPath, newPath string) error {
 	fn := p.relocation.Load()
-	if fn == nil || oldPath == newPath || newPath == "" {
+	if fn == nil || oldPath == newPath || oldPath == "" || newPath == "" {
 		return nil
 	}
 	if batch.lb == nil {
