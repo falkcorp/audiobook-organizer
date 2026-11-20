@@ -1,5 +1,5 @@
 // file: core/integrations/notify/mail/email_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 5d17e2c9-83a4-4b60-9e1f-c7a02b6d4f38
 // last-edited: 2026-11-19
 
@@ -295,7 +295,7 @@ func TestSender_RefusalsKeepTheAdminWording(t *testing.T) {
 
 	f := &fakeSMTP{}
 	port, _ := startFake(t, f)
-	s, err := NewSMTPSender(SMTPConfig{Host: "127.0.0.1", Port: port, From: "alerts@example.com"})
+	s, err := NewSMTPSender(SMTPConfig{Dial: PlainDial, Host: "127.0.0.1", Port: port, From: "alerts@example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestSender_RefusalsKeepTheAdminWording(t *testing.T) {
 
 	f = &fakeSMTP{}
 	port, _ = startFake(t, f)
-	s, err = NewSMTPSender(SMTPConfig{Host: "127.0.0.1", Port: port, From: "alerts@example.com", Username: "alfred", Password: "pw"})
+	s, err = NewSMTPSender(SMTPConfig{Dial: PlainDial, Host: "127.0.0.1", Port: port, From: "alerts@example.com", Username: "alfred", Password: "pw"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,8 +337,13 @@ func (r *recordingSender) Send(_ context.Context, m Message) error {
 	return nil
 }
 
-// NewChannel wraps a Sender as an email instance: with no recipient it would
-// index an empty list at the first send, so it refuses to build instead.
+// factoryOf is a SenderFactory for a sender that never touches the network.
+func factoryOf(s Sender) SenderFactory {
+	return func(DialFunc) (Sender, error) { return s, nil }
+}
+
+// NewChannel makes an email instance around a sender: with no recipient it
+// would index an empty list at the first send, so it refuses to build instead.
 func TestNewChannel_NeedsRecipientsAndSends(t *testing.T) {
 	rec := &recordingSender{}
 	for name, to := range map[string][]string{
@@ -349,12 +354,12 @@ func TestNewChannel_NeedsRecipientsAndSends(t *testing.T) {
 		"a list item": {"a@example.com, b@example.com"},
 		"too many":    manyStrings(maxRecipients + 1),
 	} {
-		ch, err := NewChannel(batphone, nil, rec, to)
+		ch, err := NewChannel(batphone, nil, factoryOf(rec), to)
 		if !errors.Is(err, integrations.ErrInvalid) || ch != nil {
 			t.Errorf("%s: NewChannel = (%v, %v), want (nil, ErrInvalid)", name, ch, err)
 		}
 	}
-	ch, err := NewChannel(batphone, nil, rec, []string{"jim@example.com", "alfred@example.com"})
+	ch, err := NewChannel(batphone, nil, factoryOf(rec), []string{"jim@example.com", "alfred@example.com"})
 	if err != nil {
 		t.Fatalf("NewChannel: %v", err)
 	}
@@ -364,6 +369,77 @@ func TestNewChannel_NeedsRecipientsAndSends(t *testing.T) {
 	if len(rec.sent) != 1 || rec.sent[0].To != "jim@example.com" || len(rec.sent[0].AlsoTo) != 1 {
 		t.Fatalf("sent = %+v, want one message to jim and alfred", rec.sent)
 	}
+}
+
+// NewChannel needs a factory: there is no sender to wrap without one.
+func TestNewChannel_NeedsAFactory(t *testing.T) {
+	ch, err := NewChannel(batphone, nil, nil, []string{"jim@example.com"})
+	if !errors.Is(err, integrations.ErrInvalid) || ch != nil {
+		t.Fatalf("NewChannel = (%v, %v), want (nil, ErrInvalid)", ch, err)
+	}
+}
+
+// NewChannel keeps the instance's guarded dial and hands it to the factory:
+// the channel does not discard it. With a gate that refuses its dial, the dial
+// the factory got refuses; with no gate, it refuses with ErrNoEgressGuard.
+func TestNewChannel_FactoryGetsTheGuardedDial(t *testing.T) {
+	to := []string{"jim@example.com"}
+	send := func(t *testing.T, gate integrations.Gate) DialFunc {
+		t.Helper()
+		var got DialFunc
+		ch, err := NewChannel(batphone, gate, func(d DialFunc) (Sender, error) {
+			got = d
+			return &recordingSender{}, nil
+		}, to)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ch.Send(context.Background(), signalNote, notify.Target{Instance: batphone}); err != nil {
+			t.Fatalf("Send: %v", err)
+		}
+		if got == nil {
+			t.Fatal("the factory was given no dial")
+		}
+		return got
+	}
+	t.Run("the gate's own dial", func(t *testing.T) {
+		cause := errors.New("blocked by the guard")
+		g := &refusingDialGate{countingGate: &countingGate{}, err: &integrations.Error{
+			Ref: batphone, Op: "dial", Class: integrations.ClassRefusedLocal, Err: cause}}
+		conn, err := send(t, g)(context.Background(), "tcp", "mail.gotham.test:587")
+		if conn != nil {
+			_ = conn.Close()
+		}
+		if !errors.Is(err, cause) {
+			t.Fatalf("dial err = %v, want the gate's refusal", err)
+		}
+	})
+	t.Run("no gate refuses", func(t *testing.T) {
+		conn, err := send(t, nil)(context.Background(), "tcp", "mail.gotham.test:587")
+		if conn != nil {
+			_ = conn.Close()
+		}
+		if !errors.Is(err, integrations.ErrNoEgressGuard) || integrations.ClassOf(context.Background(), err) != integrations.ClassRefusedLocal {
+			t.Fatalf("dial err = %v, want a local refusal wrapping ErrNoEgressGuard", err)
+		}
+	})
+	t.Run("a sender built on it connects through the gate", func(t *testing.T) {
+		f := &fakeSMTP{}
+		port, _ := startFake(t, f)
+		g := &countingGate{}
+		ch, err := NewChannel(batphone, g, func(d DialFunc) (Sender, error) {
+			return NewSMTPSender(SMTPConfig{Host: "127.0.0.1", Port: port, From: "alerts@example.com", Dial: d})
+		}, to)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ch.Send(context.Background(), signalNote, notify.Target{Instance: batphone}); err != nil {
+			t.Fatalf("Send: %v", err)
+		}
+		if want := net.JoinHostPort("127.0.0.1", strconv.Itoa(port)); len(g.dials) != 1 || g.dials[0] != want {
+			t.Fatalf("the gate saw dials %v, want [%s]", g.dials, want)
+		}
+	})
 }
 
 func manyStrings(n int) []string {

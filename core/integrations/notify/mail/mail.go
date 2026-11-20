@@ -1,5 +1,5 @@
 // file: core/integrations/notify/mail/mail.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 11234e57-50d2-4d9a-be89-62e983dfeda9
 // last-edited: 2026-11-19
 
@@ -108,14 +108,32 @@ type SMTPConfig struct {
 	TLSConfig *tls.Config
 	// HelloName is sent in EHLO; empty means "localhost".
 	HelloName string
-	// Dial opens the connection to Host:Port ("host:port", network "tcp"). nil
-	// is a plain net.Dialer: the sender of an operator-configured relay (the
-	// invite flow's loopback postfix) dials its host as written. The core.email
-	// channel always sets it, to the instance's guarded dial
-	// (integrations.GuardedDial), because an instance's host is data an admin
-	// typed and must pass the egress guard. Whatever Dial returns is wrapped
-	// with the dialled address by Send; the channel does not return that text.
-	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
+	// Dial opens the connection to Host:Port ("host:port", network "tcp"). It
+	// is the one place the sender touches the network, and an unguarded dial is
+	// never the default: nil refuses every send with an *integrations.Error
+	// wrapping integrations.ErrNoEgressGuard, before any connection. The
+	// core.email channel sets it to the instance's guarded dial
+	// (integrations.GuardedDial), because an instance's host is data a person
+	// typed and must pass the egress guard. A caller whose host an operator
+	// alone controls (the invite flow's relay) passes PlainDial, and so says in
+	// its own code that nothing guards the destination. Whatever Dial returns is
+	// wrapped with the dialled address by Send; the channel does not return
+	// that text.
+	Dial DialFunc
+}
+
+// DialFunc opens a connection: net.Dialer.DialContext's shape.
+type DialFunc = func(ctx context.Context, network, addr string) (net.Conn, error)
+
+// PlainDial is an unguarded dial: the destination is dialled as written, with
+// no egress check. It is for a sender whose host only an operator can set (the
+// invite flow's configured relay, often a loopback or LAN MTA). It must never
+// carry a host a person without operator rights can set, and in particular not
+// the host of a core.email instance: that sender dials through the instance's
+// guarded dial (integrations.GuardedDial).
+func PlainDial(ctx context.Context, network, addr string) (net.Conn, error) {
+	var d net.Dialer
+	return d.DialContext(ctx, network, addr)
 }
 
 // SMTPSender sends mail through one SMTP server.
@@ -150,6 +168,11 @@ func NewSMTPSender(cfg SMTPConfig) (*SMTPSender, error) {
 	from, err := parseAddress(cfg.From)
 	if err != nil {
 		return nil, fmt.Errorf("mail: SMTP from address: %w", err)
+	}
+	if cfg.Dial == nil {
+		// No default dial: a sender nobody gave a dial refuses (the zero Ref
+		// names no instance; the channel overwrites it with the instance's).
+		cfg.Dial = noDial
 	}
 	return &SMTPSender{
 		cfg: cfg, from: from,
@@ -209,11 +232,7 @@ func (s *SMTPSender) Send(ctx context.Context, msg Message) (err error) {
 	defer cancel()
 
 	addr := s.dialAddr
-	dial := s.cfg.Dial
-	if dial == nil {
-		dial = (&net.Dialer{}).DialContext
-	}
-	conn, err := dial(ctx, "tcp", addr)
+	conn, err := s.cfg.Dial(ctx, "tcp", addr)
 	if err != nil {
 		return fmt.Errorf("mail: connect %s: %w", addr, err)
 	}

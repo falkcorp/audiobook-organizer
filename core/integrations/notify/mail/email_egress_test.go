@@ -1,5 +1,5 @@
 // file: core/integrations/notify/mail/email_egress_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f6a9b13-d570-4c8e-8a41-b93e0c7d5a26
 // last-edited: 2026-11-19
 
@@ -9,7 +9,6 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"maps"
 	"net"
 	"os"
 	"slices"
@@ -115,8 +114,14 @@ type egressOpts struct {
 	lanAllow   []string
 	noOutbound bool
 	// trustFake makes the sender verify the fake server's certificate (the
-	// hosts these tests name are not loopback, so TLS is required).
-	trustFake bool
+	// hosts these tests name are not loopback, so TLS is required). The sender
+	// names ServerName "localhost" unless noServerName is set, which leaves it
+	// to default to the instance's host.
+	trustFake    bool
+	noServerName bool
+	// seed rows are imported (as a cutover does, with the trust fields they
+	// are given) before the Registry loads.
+	seed []integrations.StoredInstance
 }
 
 func newEgressRig(t *testing.T, o egressOpts) *egressRig {
@@ -189,6 +194,21 @@ func newEgressRig(t *testing.T, o egressOpts) *egressRig {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(o.seed) > 0 {
+		im := integrations.NativeImporter(iks, integrations.ImportAudit(au))
+		b := iks.NewBatch()
+		for _, row := range o.seed {
+			if err := im.ImportInstance(ctx, b, row); err != nil {
+				t.Fatalf("import: %v", err)
+			}
+		}
+		if err := b.Commit(ctx, storage.Sync); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	d, err := Descriptor()
 	if err != nil {
 		t.Fatal(err)
@@ -199,6 +219,9 @@ func newEgressRig(t *testing.T, o egressOpts) *egressRig {
 		// they are what the guard judges. Dial is whatever the channel set.
 		d = notify.Adapter(d.Meta(), buildWith(func(cfg SMTPConfig) (Sender, error) {
 			cfg.TLSConfig = &tls.Config{RootCAs: pool, ServerName: "localhost", MinVersion: tls.VersionTLS12}
+			if o.noServerName {
+				cfg.TLSConfig.ServerName = ""
+			}
 			return NewSMTPSender(cfg)
 		}))
 	}
@@ -388,21 +411,40 @@ func TestEmail_LocalIsBoundToItsDestination(t *testing.T) {
 		r.put(true, "mail.gotham.test", 587)
 		r.refused(r.send(), "mail.gotham.test")
 	})
-	t.Run("an instance whose host moves without a renewed Local is refused", func(t *testing.T) {
-		r := newEgressRig(t, egressOpts{answers: answering("10.1.2.3"), trustFake: true})
-		r.put(true, "mail.gotham.test", 587)
-		cur, ok := r.reg.Config(batphone)
-		if !ok {
-			t.Fatal("no instance")
+}
+
+// Local is bound to the destination it was granted for. A stored row that is
+// still Local but whose grant is for another host (the host moved afterwards)
+// is refused at the new host; the same row granted for its own host is admitted.
+func TestEmail_LocalDoesNotFollowAMovedHost(t *testing.T) {
+	row := func(host, grantedFor string) integrations.StoredInstance {
+		return integrations.StoredInstance{
+			Config: integrations.InstanceConfig{
+				Ref: batphone, Adapter: AdapterID, Name: "commissioner", Enabled: true, Local: true,
+				Origin: integrations.OriginUI,
+				Settings: map[string]any{
+					"host": host, "port": float64(587),
+					"from": "Gotham Alerts <alerts@example.com>", "to": []any{"jim@example.com"},
+				},
+			},
+			LocalOrigin: "host=smtp://" + grantedFor + ":587",
 		}
-		// The host moves and the grant is not renewed: Local does not follow it.
-		cur.Settings = maps.Clone(cur.Settings)
-		cur.Settings["host"] = "relay.gotham.test"
-		cur.Local = false
-		if _, err := r.reg.Put(egressAdmin(), cur, nil); err != nil {
-			t.Fatalf("Put: %v", err)
+	}
+	t.Run("granted for the old host: refused at the new one", func(t *testing.T) {
+		r := newEgressRig(t, egressOpts{answers: answering("10.1.2.3"), trustFake: true,
+			seed: []integrations.StoredInstance{row("relay.gotham.test", "mail.gotham.test")}})
+		if cur, ok := r.reg.Config(batphone); !ok || !cur.Local {
+			t.Fatalf("the seeded row is not Local: %+v (found %v)", cur, ok)
 		}
 		r.refused(r.send(), "relay.gotham.test")
+	})
+	t.Run("granted for this host: admitted", func(t *testing.T) {
+		r := newEgressRig(t, egressOpts{answers: answering("10.1.2.3"), trustFake: true,
+			seed: []integrations.StoredInstance{row("relay.gotham.test", "relay.gotham.test")}})
+		r.delivered(r.send())
+		if d := r.net.dials(); !slices.Equal(d, []string{"10.1.2.3:587"}) {
+			t.Fatalf("dialled %v", d)
+		}
 	})
 }
 
@@ -415,8 +457,10 @@ func TestEmail_LANAllowAdmitsAPrivateHost(t *testing.T) {
 }
 
 // A Registry built without an outbound layer has no egress policy: the send is
-// refused, never made with a plain dial.
-func TestEmail_NoOutboundLayerRefuses(t *testing.T) {
+// refused at Acquire (the gate refuses admission before the sender is built or
+// the dial made), so nothing connects. The dial's own refusal in that case is
+// pinned by TestGuardedDial_NoOutboundRefuses in the integrations package.
+func TestEmail_NoOutboundLayerRefusesAtAcquire(t *testing.T) {
 	r := newEgressRig(t, egressOpts{answers: answering("192.0.2.10"), noOutbound: true, trustFake: true})
 	r.put(false, "mail.gotham.test", 587)
 	err := r.send()
@@ -426,4 +470,43 @@ func TestEmail_NoOutboundLayerRefuses(t *testing.T) {
 	if r.f.accepted.Load() != 0 || len(r.net.dials()) != 0 {
 		t.Fatal("connected without an outbound layer")
 	}
+}
+
+// After a literal dial the certificate is still checked against the
+// instance's host: the dialled address never becomes the TLS server name. The
+// fake's certificate names mail.gotham.test (and localhost), not 192.0.2.10, so
+// a server name taken from the dial would fail verification.
+func TestEmail_TLSNameIsTheInstanceHostAfterALiteralDial(t *testing.T) {
+	r := newEgressRig(t, egressOpts{answers: answering("192.0.2.10"), trustFake: true, noServerName: true})
+	r.put(false, "mail.gotham.test", 587)
+	r.delivered(r.send())
+	if d := r.net.dials(); !slices.Equal(d, []string{"192.0.2.10:587"}) {
+		t.Fatalf("dialled %v, want the checked literal", d)
+	}
+	r.f.mu.Lock()
+	tlsUsed := r.f.startTLSUsed
+	r.f.mu.Unlock()
+	if !tlsUsed {
+		t.Fatal("the message was not sent over STARTTLS, so no certificate was checked")
+	}
+}
+
+// An IPv6 literal host is judged and dialled in its bracketed form, and the
+// instance's Local binds to that same form: without Local it is refused, with
+// Local the guard admits the dial of "[fd00::1]:587" (the send may fail later on
+// the fake's certificate, which is not the guard's business).
+func TestEmail_IPv6LiteralHost(t *testing.T) {
+	t.Run("unique local without Local is refused", func(t *testing.T) {
+		r := newEgressRig(t, egressOpts{trustFake: true})
+		r.put(false, "fd00::1", 587)
+		r.refused(r.send())
+	})
+	t.Run("Local binds to the bracketed literal", func(t *testing.T) {
+		r := newEgressRig(t, egressOpts{trustFake: true})
+		r.put(true, "fd00::1", 587)
+		_ = r.send()
+		if d := r.net.dials(); !slices.Equal(d, []string{"[fd00::1]:587"}) {
+			t.Fatalf("dialled %v, want [[fd00::1]:587]", d)
+		}
+	})
 }
