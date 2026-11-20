@@ -1,5 +1,5 @@
 // file: internal/maintenance/resources/resources.go
-// version: 1.1.7
+// version: 1.1.8
 // guid: 511262bb-c287-4138-a7ee-7566c9543e3b
 // last-edited: 2026-11-19
 
@@ -262,6 +262,10 @@ func Table() map[string][]ops.Resource {
 		// (pebble_store_metadata.go): the history of a book lives on the book's own
 		// key space, so books, as RecordPathChange does. It writes no book row.
 		"RecordMetadataChange": {ops.ResBooks},
+		// RecordPathChange writes one path_history:<book>:<ts> row
+		// (pebble_store_scancache.go): the move ledger of a book, on the book's own
+		// key space. It writes no book row.
+		"RecordPathChange": {ops.ResBooks},
 		// The v1 operation rows: opstate:<op> (and its :params), opsummary:<id>,
 		// op_result:<op>:<book>, operation:<id> and operationlog:<id>:*.
 		"SaveOperationState":            {ops.ResOperations},
