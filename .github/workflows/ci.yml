@@ -33,6 +33,15 @@ on:
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
+    inputs:
+      race:
+        # false runs this workflow the way the merge queue does (no race
+        # detector in the short shards, no fixture shards): the one way to
+        # rehearse the merge_group path on a branch before it reaches the
+        # queue. See the `race` step of the changes job.
+        description: Run the race detector (false = merge-queue flavour)
+        type: boolean
+        default: true
 
 # A merge-queue run must never be cancelled by a sibling run. The queue reuses
 # one gh-readonly-queue/main/pr-<n>-<base> ref for an entry, so a second run or
@@ -69,6 +78,7 @@ jobs:
     outputs:
       go: ${{ steps.classify.outputs.go }}
       web: ${{ steps.classify.outputs.web }}
+      race: ${{ steps.race.outputs.race }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -117,6 +127,37 @@ jobs:
           fi
           echo "go=$go web=$web (${range:-no range: fail open})"
           { echo "go=$go"; echo "web=$web"; } >> "$GITHUB_OUTPUT"
+
+      # race=false in the merge queue (owner decision 2026-11-20). The queue
+      # spent most of its hour on the race detector: the short shards took
+      # 15-24 min each and the fixture shards 14-25 min under -race (run
+      # 44770780353), and every job also waited half an hour for a runner. In
+      # the queue the short shards therefore run without -race and the fixture
+      # shards are skipped (their -short form IS the short shards: every test
+      # they run skips under -short). The race detector still runs on every
+      # pull request and every push to main (auto-revert.yml watches the push
+      # run), and the whole -race suite, short and fixture, runs nightly on a
+      # Mac Woodpecker agent (.woodpecker/race-nightly.yaml). None of the
+      # affected jobs is a required check; Coverage Floor (PR gate) is, and it
+      # still gets all four shard profiles (same -covermode=atomic).
+      # workflow_dispatch with race=false rehearses the queue's flavour.
+      # Its own step, not part of Classify changed paths:
+      # scripts/tests/test_ci_classifier.py requires that step to stay
+      # identical to extraction-gates.yml's copy.
+      - name: Race detector for this event
+        id: race
+        env:
+          EVENT: ${{ github.event_name }}
+          DISPATCH_RACE: ${{ inputs.race }}
+        run: |
+          set -euo pipefail
+          race=true
+          case "$EVENT" in
+            merge_group) race=false ;;
+            workflow_dispatch) if [ "$DISPATCH_RACE" = false ]; then race=false; fi ;;
+          esac
+          echo "race=$race (event $EVENT)"
+          echo "race=$race" >> "$GITHUB_OUTPUT"
 
   # Parallel fast jobs via reusable minimal workflow
   ci:
@@ -335,8 +376,9 @@ jobs:
         run: bash scripts/check-errcheck-ratchet.sh
 
   # The property tests of internal/applygate and internal/seqnum at full size,
-  # without the race detector. Under -race (the sharded short suite below, every
-  # CI run) their random draws are divided by five and their exhaustive walks
+  # without the race detector. Under -race (the sharded short suite below, on
+  # every pull request and push; the merge queue runs it without -race, at full
+  # size) their random draws are divided by five and their exhaustive walks
   # are one length shorter (`scaled` and `exhaustiveLen`, written after the
   # package's tests timed the 25m `go test` out), so those tests cover a fifth
   # of the texts there. This job runs the same two packages at full size, in
@@ -1018,6 +1060,12 @@ jobs:
   # 1-4 only. `core-ci` runs core's short tests as well, from an export of
   # core/ alone (12 SC4); this leg is the one that runs them in the root's
   # sharded suite next to the plan check that every package is assigned.
+  #
+  # In the merge queue (changes.outputs.race == 'false') the shards run
+  # WITHOUT -race; see the `race` step of the changes job. The job name keeps
+  # "(short, race)" on purpose: renaming a check breaks every reference to it
+  # (dashboards, docs, the ruleset if it is ever added), and the step name and
+  # log say which flavour ran.
   go-test-short-shards:
     name: Go Tests (short, race) shard ${{ matrix.shard }}
     needs: changes
@@ -1119,6 +1167,7 @@ jobs:
 
       - name: Restore Go race build cache
         id: race-cache
+        if: ${{ needs.changes.outputs.race == 'true' }}
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -1131,21 +1180,43 @@ jobs:
             ${{ runner.os }}-go-1.27-
             ${{ runner.os }}-go-
 
+      # Without -race (the merge queue) the race-instrumented objects above are
+      # useless: restore the shared go.sum cache instead, whose dependency
+      # objects a plain -covermode=atomic build reuses. Restore only; the race
+      # flavour is the one that saves, on main.
+      - name: Restore Go build cache (no race)
+        if: ${{ needs.changes.outputs.race != 'true' }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.27-
+            ${{ runner.os }}-go-
+
       - name: Install system dependencies
         run: scripts/ci/apt_install.sh libtag1-dev bc
 
-      - name: Run short tests, one shard, with coverage profile
+      # SHARD_RACE empty = no race detector (the merge queue). `'-race' || ''`
+      # and not `'' || '-race'`: an empty string is falsy in an expression, so
+      # the second form would always yield -race.
+      - name: Run short tests, one shard, with coverage profile (race=${{ needs.changes.outputs.race }})
         id: shard
         env:
           SHARD: ${{ matrix.shard }}
+          SHARD_RACE: ${{ needs.changes.outputs.race == 'true' && '-race' || '' }}
         run: |
           echo "n=${SHARD%%/*}" >> "$GITHUB_OUTPUT"
-          make test-short-shard SHARD="$SHARD"
+          make test-short-shard SHARD="$SHARD" SHARD_RACE="$SHARD_RACE"
 
       # !cancelled(), not the default success(): a red run's compiled objects
       # are as reusable as a green run's, and the next run is what pays.
+      # Race flavour only: a no-race run (workflow_dispatch race=false on main)
+      # must not save plain objects under the race key.
       - name: Save Go race build cache (main, first run of the slot)
-        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.race-cache.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && needs.changes.outputs.race == 'true' && github.ref == 'refs/heads/main' && steps.race-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -1171,13 +1242,33 @@ jobs:
   # (`short_test_shards.py --merge`, which fails if any shard's profile is
   # missing) instead of a profile from a run of its own. The display name is
   # the one the `coverage-gate` job had, so the check name stays the same.
+  #
+  # This is also the ONLY required check (ruleset 26660812) that the test
+  # shards reach: the shards themselves are not required. So it must FAIL when
+  # a shard fails, not be skipped. With a plain `needs:` a failed shard made
+  # GitHub skip this job, and a skipped required check counts as passing, so
+  # the queue could merge a commit whose short tests failed (merge_group run
+  # 44717492360: shard 1/4 failure, this check skipped). `always()` makes it
+  # run anyway and the first step fails it unless every shard succeeded, the
+  # pattern extraction-gates.yml's terminal job uses. Without -race in the
+  # merge queue the shards are the queue's whole Go test gate.
   coverage:
     name: Coverage Floor (PR gate)
     needs: [changes, go-test-short-shards]
-    if: ${{ needs.changes.outputs.go == 'true' }}
+    if: ${{ always() && needs.changes.outputs.go == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Every short-test shard passed
+        env:
+          SHARDS: ${{ needs.go-test-short-shards.result }}
+        run: |
+          echo "go-test-short-shards: ${SHARDS}"
+          if [ "$SHARDS" != success ]; then
+            echo "::error::Go Tests (short) shards ended '${SHARDS}'; the coverage floor gate fails with them"
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1250,10 +1341,17 @@ jobs:
   # Gate: this job's result feeds the "Continuous Integration" workflow
   # conclusion, which is what auto-revert.yml watches on main (see the note on
   # interface-width above: there are no required status checks).
+  #
+  # Skipped in the merge queue (changes.outputs.race == 'false', owner
+  # 2026-11-20): every test here skips under -short, so the "-short form" of
+  # this job is the short shards, and the -race run of it moves to the nightly
+  # Woodpecker pipeline (.woodpecker/race-nightly.yaml). It still runs on pull
+  # requests and on pushes to main. Not a required check, so a skipped job
+  # does not hold the queue.
   fixture-tests:
     name: Fixture Tests (no -short, race) ${{ matrix.shard }}
     needs: changes
-    if: ${{ needs.changes.outputs.go == 'true' }}
+    if: ${{ needs.changes.outputs.go == 'true' && needs.changes.outputs.race == 'true' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

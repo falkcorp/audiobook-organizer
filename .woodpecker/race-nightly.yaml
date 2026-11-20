@@ -1,0 +1,113 @@
+# file: .woodpecker/race-nightly.yaml
+# version: 0.1.0
+# guid: fe40deb1-7645-4373-a236-715cd15b8293
+# last-edited: 2026-11-20
+#
+# The whole race-detector suite, every night, on main (owner decision
+# 2026-11-20). The merge queue no longer runs -race: ci.yml's short shards run
+# without it in the queue and its fixture shards are skipped there (see the
+# `race` step of ci.yml's changes job). Pull requests and pushes to main still
+# run both under -race on GitHub; this pipeline is the nightly sweep over
+# main's tip in case a race slips past the PR run, for example a data race
+# that only shows up once two queued PRs combine.
+#
+# Six workflows from one matrix, each with the repo's own 60-minute timeout:
+#   short 1/2, 2/2   `make test-short-shard` (the same -short -race
+#                    -covermode=atomic -timeout 25m as ci.yml's shards, split
+#                    two ways instead of four; the plan check that every
+#                    package is assigned exactly once runs in each)
+#   short core/2     the nested core module's short tests (`go -C core test`)
+#   fixtures 1/3..3/3  `make test-fixtures`, every test that -short skips, no
+#                    -short, with -race (ci.yml's fixture-tests matrix)
+# The coverage-k.out files the short shards write are not used.
+#
+# WHERE IT RUNS: `platform: darwin/arm64`, i.e. a Mac agent (llm1, always on,
+# 3 workflows at a time; or mac, the owner's Mac, when its agent is started).
+# Woodpecker sets the platform label on every agent itself, and labels match
+# by equality with no OR, so this one label is what keeps the pipeline off
+# the three linux/amd64 agents:
+#   * U1 sits next to the owner and its fans cannot spin up at night
+#     (owner 2026-11-20: never U1). `heavy=true` and `taglib=true` would both
+#     match U1, so neither is used here.
+#   * U0 and u0-local are the prod host: no decodes there (standing rule), and
+#     the fixture packages decode audio. U0's docker agent also has no
+#     ffmpeg, so those tests would skip and report green.
+# If both Mac agents are offline the workflows sit pending, and
+# .github/workflows/race-nightly-watch.yml files an issue in the morning.
+#
+# TRIGGER: only the Woodpecker cron named `race-nightly` (created on the
+# server, not in this file: see docs/ci/woodpecker.md, "Nightly race run").
+# Not `manual`: `make ci-woodpecker` starts manual pipelines, and every one of
+# them would then run the full race suite. To run it on demand, trigger the
+# cron through the API (POST /api/repos/<id>/cron/<cron id>).
+#
+# FAILURE: Woodpecker posts a GitHub commit status on the commit it ran,
+# `ci/woodpecker/cron/race-nightly/<n>` (one per matrix entry).
+# race-nightly-watch.yml reads those statuses every morning and files or
+# updates an issue when one failed, is still pending, or none exists.
+#
+# Clone, environment and cleanup are copied from test-native-taglib.yaml and
+# the deleted test-fixtures-1.yaml (git show 6e217af55^:.woodpecker/test-fixtures-1.yaml);
+# see those for why each line is there.
+
+labels:
+  platform: darwin/arm64
+
+when:
+  - event: cron
+    cron: race-nightly
+
+matrix:
+  include:
+    - SUITE: short-1
+      MAKE_ARGS: test-short-shard SHARD=1/2
+    - SUITE: short-2
+      MAKE_ARGS: test-short-shard SHARD=2/2
+    - SUITE: short-core
+      MAKE_ARGS: test-short-shard SHARD=core/2
+    - SUITE: fixtures-1
+      MAKE_ARGS: test-fixtures FIXTURE_SHARD=1/3 FIXTURE_TIMEOUT=25m
+    - SUITE: fixtures-2
+      MAKE_ARGS: test-fixtures FIXTURE_SHARD=2/3 FIXTURE_TIMEOUT=25m
+    - SUITE: fixtures-3
+      MAKE_ARGS: test-fixtures FIXTURE_SHARD=3/3 FIXTURE_TIMEOUT=25m
+
+clone:
+  - name: clone
+    image: woodpeckerci/plugin-git:2.10.1@sha256:550075c844fcec0af41d9d28f9860aa5d8c43e1e9419be4b9266dc02c2f29804
+    settings:
+      lfs: false  # GitHub's LFS budget is exhausted; no test reads LFS content
+      depth: 50
+
+steps:
+  - name: test
+    # Local backend: `image` names the SHELL that runs the commands, not a
+    # container image; the step runs on the host with the agent's PATH.
+    image: bash
+    environment:
+      GOTOOLCHAIN: go1.27.3
+      # -trimpath keeps the shared GOCACHE reusable across clones (each
+      # pipeline clones into a new random workdir).
+      GOFLAGS: -trimpath
+    commands:
+      # Scrubs provider keys and points Go at the host-wide cache
+      # (/Users/jdfalk/ci/cache on the Macs); fails if there is none.
+      - . scripts/ci/cache_env.sh || exit 1
+      # The fixture packages' real-audio tests skip when these are missing,
+      # which would report them green while running none of them.
+      - command -v ffmpeg && command -v ffprobe && command -v fpcalc && python3 --version
+      - echo "race-nightly ${SUITE} runs make ${MAKE_ARGS}"
+      - make --no-print-directory ${MAKE_ARGS}
+
+  - name: cleanup
+    # Runs on success and failure; see test-native-taglib.yaml for each line.
+    image: bash
+    when:
+      - status: [success, failure]
+    commands:
+      - . scripts/ci/cache_env.sh || true
+      - '[ -n "$${GOCACHE}" ] && python3 scripts/ci/trim_go_cache.py "$${GOCACHE}" --max-gb 40 --target-gb 30 || true'
+      - '[ -n "$${CI_WORKSPACE}" ] && [ "$${CI_WORKSPACE}" != / ] && find "$${CI_WORKSPACE}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + || true'
+      - '[ -n "$${HOME}" ] && [ -d "$${HOME}/go" ] && chmod -R u+w "$${HOME}/go" && rm -rf "$${HOME}/go" || true'
+      - 'find "$${TMPDIR:-/tmp}" -maxdepth 1 -name "go-build*" -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true'
+      - '[ -n "$${HOME}" ] && W=$$(dirname "$${HOME}") && R=$$(dirname "$$W") && case "$$(basename "$$W")" in woodpecker-local-*) find "$$R" -mindepth 1 -maxdepth 1 -name "woodpecker-local-*" -type d ! -path "$$W" -mmin +180 -exec sh -c "chmod -R u+w \"\$$@\" && rm -rf \"\$$@\"" _ {} + ;; esac || true'

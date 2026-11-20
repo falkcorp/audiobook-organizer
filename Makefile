@@ -383,11 +383,19 @@ test-short: vet
 ##
 ## No `vet` prerequisite: Minimal CI's Go Vet & Build job gates it, and each
 ## matrix shard would pay for it again. test-short is unchanged.
+##
+## SHARD_RACE is the race flag, `-race` unless overridden. ci.yml passes
+## `SHARD_RACE=` (empty) in the merge queue (owner 2026-11-20): the race
+## detector runs on pull requests, on pushes to main and in the nightly
+## Woodpecker run (.woodpecker/race-nightly.yaml), not on the queued commit.
+## The coverage profile is the same shape either way (-covermode=atomic), so
+## the coverage job and its floor do not change.
 SHARD ?=
+SHARD_RACE ?= -race
 test-short-shard:
 	@if [ -z "$(SHARD)" ]; then echo "❌ usage: make test-short-shard SHARD=k/N"; exit 1; fi
-	@echo "🧪 Running short backend tests, shard $(SHARD) (with coverage)..."
-	@python3 scripts/ci/short_test_shards.py --shard $(SHARD) --out coverage-$(firstword $(subst /, ,$(SHARD))).out -- -short -race -covermode=atomic -timeout 25m
+	@echo "🧪 Running short backend tests, shard $(SHARD) (with coverage$(if $(SHARD_RACE),,; no race detector))..."
+	@python3 scripts/ci/short_test_shards.py --shard $(SHARD) --out coverage-$(firstword $(subst /, ,$(SHARD))).out -- -short $(SHARD_RACE) -covermode=atomic -timeout 25m
 	@echo "✅ Short backend tests passed for shard $(SHARD): coverage-$(firstword $(subst /, ,$(SHARD))).out"
 
 ## test-fixtures: Run, WITHOUT -short and with -race, every package whose
