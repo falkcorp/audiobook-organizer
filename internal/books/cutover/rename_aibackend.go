@@ -37,8 +37,9 @@ import (
 //     "openai-fallback-local" does both and sets that row's priority to 5
 //     (otherwise 20). With no local row the seed's list for the fallback is a
 //     cloud route alone, told from "openai" by that priority (llm) and by the
-//     absent embed.text_batch tick (embedding), and read as the fallback. embedding_mode ticks embed.text on local-llm (local), on
-//     openai (cloud), and embed.text_batch on openai for the pure "openai" mode.
+//     absent embed.text_batch tick (embedding), and read as the fallback.
+//     embedding_mode ticks embed.text on local-llm (local) and on openai
+//     (cloud), and embed.text_batch on openai for the pure "openai" mode.
 //   - Those are the only fields the fold ever writes on the openai row. It
 //     never creates or deletes it, and never touches its auth_ref; the OpenAI
 //     row exists iff a key does, and no ai_backend key can make one.
@@ -133,9 +134,10 @@ func aiUnrep(what string) error {
 // parseAIRows reads the list. Null, empty and absent are the empty list.
 func parseAIRows(in json.RawMessage) (*aiRows, error) {
 	rows := &aiRows{}
-	if t := bytes.TrimSpace(in); len(t) == 0 || bytes.Equal(t, []byte("null")) {
+	if len(bytes.TrimSpace(in)) == 0 {
 		return rows, nil
 	}
+	// A JSON null decodes to a nil slice without error: also the empty list.
 	var elems []json.RawMessage
 	if err := json.Unmarshal(in, &elems); err != nil {
 		return nil, aiBad("want a list of endpoints")
@@ -446,20 +448,11 @@ func FoldAIBackend(values map[string]json.RawMessage, prev json.RawMessage) (jso
 				}
 				break
 			}
-			chat, embed := defChat, defEmbed
-			if v, ok := named[aiBackendLocalLLMModel]; ok {
-				chat = v
-			}
-			if v, ok := named[aiBackendLocalEmbModel]; ok {
-				embed = v
-			}
-			if embed == "" {
-				return nil, aiUnrep("the local embedding model is empty")
-			}
-			// HEAD's row, before any mode ticks it.
+			// HEAD's row with HEAD's default models; the models named in this
+			// write, and the modes, are applied to it below like any row's.
 			b, err := marshalNoEscape(headAIEndpoint{
 				ID: headAIEndpointIDLocalLLM, Label: "Local LLM (migrated from ai_backend.local_base_url)",
-				Protocol: headProtocolOpenAICompat, URL: u, ChatModel: chat, EmbedModel: embed,
+				Protocol: headProtocolOpenAICompat, URL: u, ChatModel: defChat, EmbedModel: defEmbed,
 				Priority: 10, Concurrency: 4, Enabled: true, Capabilities: []string{},
 			})
 			if err != nil {
