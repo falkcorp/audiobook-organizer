@@ -155,17 +155,11 @@ func TestMemFS_AppendIsAtTheEnd(t *testing.T) {
 // TestMemFS_FileOperationsReportAsTheOSDoes: the in-memory filesystem answers
 // the two errors the journal branches on the way os does: an exclusive create
 // over an existing name is ErrExist, and removing a name that is not there is
-// ErrNotExist, never a silent success. The filesystem is the bare in-memory
-// one: the crash kit's errorfs wrapper reports a remove of a missing name as
-// nil before the adapter's answer is seen.
+// ErrNotExist, never a silent success. It holds through the crash kit's
+// recorder too, whose errorfs wrapper reports a remove of a missing name as nil
+// before the adapter is asked.
 func TestMemFS_FileOperationsReportAsTheOSDoes(t *testing.T) {
-	fsys, err := journalfs.From(bootseam.With(t.Context(), &bootseam.Seams{FS: vfs.NewMem()}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := fsys.MkdirAll(backupDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	fsys := newEnv(t, newStore(t), noOpts()).fsys
 	path := backupDir + "/riddler.txt"
 
 	if err := fsys.Remove(path); !errors.Is(err, os.ErrNotExist) {
