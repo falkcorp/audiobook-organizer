@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/testdata/oraclefix/fix/fix.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 164bc002-83bc-4523-bed7-b8bfebfc2c9a
 // last-edited: 2026-11-19
 
@@ -494,3 +494,23 @@ func (e jokerError) Error() string { _ = e.s.ModifyBook("joker"); return "Joker"
 // ViaOpenError calls error.Error on a value an exported function's caller
 // passes: the module's implementations are walked, and the others recorded.
 func ViaOpenError(err error) string { return err.Error() }
+
+// fillStep stores a function through the pointer it is handed: the caller's
+// variable gets a value its own stores into it do not show.
+func fillStep(p *step) { *p = func(s *store.Store, id string) error { return s.ModifyBook(id) } }
+
+// ViaEscapedCell calls a local variable whose address it hands to a helper that
+// fills it (round 3: a cell whose address is passed on is open).
+func ViaEscapedCell(s *store.Store) error {
+	var scarecrow step
+	fillStep(&scarecrow)
+	return scarecrow(s, "fear-toxin")
+}
+
+// ViaFilledByValue calls an element of a slice it built and handed to a
+// function value, which can fill it (round 3: a container handed on is open).
+func ViaFilledByValue(s *store.Store, fill func([]step)) error {
+	gotham := make([]step, 1)
+	fill(gotham)
+	return gotham[0](s, "arkham")
+}
