@@ -1,7 +1,7 @@
 // file: core/internal/rbachttp/routes_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 695e783a-feeb-4b32-97d7-a73f62a146d2
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package rbachttp
 
@@ -518,6 +518,7 @@ func TestMapError(t *testing.T) {
 		{rbac.ErrRoleExists, 409, "role_exists"},
 		{rbac.ErrNoPendingSeed, 409, "no_pending_seed"},
 		{rbac.ErrVersionMismatch, 412, "precondition_failed"},
+		{rbac.ErrContended, 503, "busy"},
 		{rbac.ErrNotFrozen, 503, "unavailable"},
 		{rbac.ErrRoleName, 422, "validation_failed"},
 		{rbac.ErrBadScope, 422, "validation_failed"},
@@ -576,6 +577,7 @@ func TestHandlers_ServiceRefusalsMap(t *testing.T) {
 		{"last admin", rbac.ErrLastAdmin, 409, "last_admin"},
 		{"escalation", rbac.ErrEscalation, 403, "scope_escalation"},
 		{"stale", rbac.ErrVersionMismatch, 412, "precondition_failed"},
+		{"contended", rbac.ErrContended, 503, "busy"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := &fakeRoles{err: c.err, roles: []*rbac.Role{{Name: "custom.oracle", Origin: rbac.OriginCustom, Version: 4}}}

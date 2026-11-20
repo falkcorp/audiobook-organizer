@@ -1,7 +1,7 @@
 // file: core/auth/service.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: ca90483b-e984-4a46-b126-bc0bb9aba4a5
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package auth
 
@@ -498,8 +498,10 @@ func (s *Service) commitRetrying(ctx context.Context, stage func(b *storage.Batc
 }
 
 // commitRetryingN is commitRetrying over attempts tries.
+// A commit that conflicts on every try returns ErrContended wrapping the last
+// conflict, so a handler answers 503 busy and not 500.
 func (s *Service) commitRetryingN(ctx context.Context, attempts int, stage func(b *storage.Batch) error) error {
-	return storage.RetryOnConflict(ctx, attempts, func(ctx context.Context) (err error) {
+	err := storage.RetryOnConflict(ctx, attempts, func(ctx context.Context) (err error) {
 		b := s.d.NewBatch()
 		defer func() {
 			if cerr := b.Close(); cerr != nil && err == nil {
@@ -511,4 +513,8 @@ func (s *Service) commitRetryingN(ctx context.Context, attempts int, stage func(
 		}
 		return b.Commit(ctx, storage.Sync)
 	})
+	if errors.Is(err, storage.ErrConflict) {
+		return fmt.Errorf("%w: %w", ErrContended, err)
+	}
+	return err
 }
