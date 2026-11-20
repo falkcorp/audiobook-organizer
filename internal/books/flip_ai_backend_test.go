@@ -8,6 +8,9 @@ package books
 import (
 	"encoding/json"
 	"errors"
+	"maps"
+	"slices"
+	"strings"
 	"testing"
 
 	coreconfig "github.com/falkcorp/mediacore/config"
@@ -113,4 +116,77 @@ func TestAIBackendsSaveAndReload_RealCoreStore(t *testing.T) {
 	reloaded := fresh.Snapshot()
 	require.Equal(t, snap.AIBackend, reloaded.AIBackend)
 	require.Equal(t, "local", reloaded.AIBackend.EmbeddingMode)
+}
+
+// TestUnchangedSave_OverTheRealCoreStore: a save that sends back every value the
+// page just read is accepted whole and changes nothing: no generation moved, no
+// value different afterwards. The one refusal is a key an operator layer forces
+// (database_path: core.storage.path is never stored), which core refuses even with
+// the value it holds; the page drops such a key from its diff, so the test names
+// the set and drops it the same way. A new read-only key fails here until it is
+// named, which is when the page needs to know about it too.
+func TestUnchangedSave_OverTheRealCoreStore(t *testing.T) {
+	bootFlippedFresh(t)
+	f := config.Current()
+	require.NotNil(t, f)
+	// Core keeps a fail-closed key's value as a stored row even when it equals the
+	// default (05-config 1.3.5: the stored row is what the fail-closed rule weighs
+	// against an operator value), so sending one back writes its row and moves the
+	// generation. That is by design and in the restrictive direction; they are
+	// checked below on their own, and this set is exactly those two.
+	failClosed := map[string]bool{"enable_auth": true, "basic_auth_enabled": true}
+	set := map[string]json.RawMessage{}
+	for _, k := range f.View().Keys {
+		if k.Class != config.KeyClassKey || k.Value == nil || k.LockedBy != "" || failClosed[k.Name] {
+			continue
+		}
+		set[k.Name] = k.Value
+	}
+	require.NotEmpty(t, set)
+	sent := maps.Clone(set)
+	gen := f.Generation()
+	var readOnly []string
+	for range 3 {
+		_, err := f.Update(t.Context(), settingsAdmin, config.Update{Set: set})
+		if err == nil {
+			break
+		}
+		require.True(t, errors.Is(err, config.ErrKeyReadOnly) || errors.Is(err, coreconfig.ErrUnknownKey), "an unchanged save was refused: %v", err)
+		names := err.Error()[strings.LastIndex(err.Error(), ": ")+2:]
+		for _, n := range strings.Split(names, ", ") {
+			require.Contains(t, set, n)
+			delete(set, n)
+			delete(sent, n)
+			readOnly = append(readOnly, n)
+		}
+	}
+	// The composed boot runs no maintenance module, so core registers none of its
+	// keys and refuses them as unknown, though the View still lists them from the
+	// projection's defaults; production registers them.
+	slices.Sort(readOnly)
+	require.Equal(t, []string{"database_path", "maintenance.enabled", "maintenance.window_end", "maintenance.window_start"}, readOnly,
+		"the set of keys core refuses to rewrite changed")
+	require.Equal(t, gen, f.Generation(), "an unchanged save moved the generation")
+	for _, k := range f.View().Keys {
+		if want, ok := sent[k.Name]; ok {
+			require.JSONEq(t, string(want), string(k.Value), k.Name)
+		}
+	}
+	// A fail-closed key sent back unchanged keeps its value.
+	for name := range failClosed {
+		var want json.RawMessage
+		for _, k := range f.View().Keys {
+			if k.Name == name {
+				want = k.Value
+			}
+		}
+		require.NotNil(t, want, name)
+		_, err := f.Update(t.Context(), settingsAdmin, config.Update{Set: map[string]json.RawMessage{name: want}})
+		require.NoError(t, err, name)
+		for _, k := range f.View().Keys {
+			if k.Name == name {
+				require.JSONEq(t, string(want), string(k.Value), name)
+			}
+		}
+	}
 }
