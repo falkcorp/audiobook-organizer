@@ -117,6 +117,37 @@ func TestOwnerTrustRoot_OnlyAChangeIsRefused(t *testing.T) {
 	}
 }
 
+// TestOwnerTrustRoot_OtherSettingsAreNotJudged: a null or ill-typed value on a
+// setting outside the five is the field check's refusal, not an owner refusal.
+func TestOwnerTrustRoot_OtherSettingsAreNotJudged(t *testing.T) {
+	e, _ := ownerRig(t, "")
+	for _, bad := range []string{`null`, `5`, `{`} {
+		_, err := e.Update(t.Context(), plainAdmin, set("log_level", bad))
+		if err != nil && strings.Contains(err.Error(), config.OwnerTrustRootUnsetMessage) {
+			t.Errorf("log_level %s refused as an owner change: %v", bad, err)
+		}
+	}
+}
+
+// TestOwnerTrustRoot_EveryFieldResolves: each of the five is a projected row whose
+// Config field the rule can decode into. The rule refuses a field it cannot
+// resolve, so a table change that breaks one fails here, loudly, rather than
+// turning that setting into a permanent refusal.
+func TestOwnerTrustRoot_EveryFieldResolves(t *testing.T) {
+	e, _ := ownerRig(t, "")
+	var c config.Config
+	for _, h := range ownerFields {
+		p, ok := e.byHead[h.head]
+		if !ok {
+			t.Errorf("%s is not a projected row", h.head)
+			continue
+		}
+		if f, ok := fieldAt(&c, p.segs); !ok || !f.CanSet() {
+			t.Errorf("%s does not resolve to a settable Config field (%v)", h.head, p.segs)
+		}
+	}
+}
+
 // TestOwnerTrustRoot_NullAndMalformedAreChanges: a value the write path would not
 // take as given is refused as a change, never judged "unchanged". Decoding a JSON
 // null or a wrong-typed value into the field's existing value leaves it in place,
