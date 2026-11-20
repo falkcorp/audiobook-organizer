@@ -2371,6 +2371,31 @@ class RollbackEnv(unittest.TestCase):
         self.assertEqual(h.run("install", "rollback", "apply", "paired", prev)[0], 0)
         self.assertEqual(self.b.read_text(), "bat-signal-1")
 
+    def test_an_interrupted_rollback_has_not_replaced_the_binary_yet(self):
+        """The environment is renamed in first and the binary last, so a
+        failure part way leaves the running binary alone (the rollback is then
+        finished by running apply again), never the old binary under files the
+        rollback has not restored."""
+        h = self.env_host()
+        self.deploy(h)
+        prev = self.sha(Path(f"{self.b}.prev"))
+        conf_dest = str(self.live_conf)
+        real_replace = os.replace
+
+        def failing(src, dst, *a, **kw):
+            if str(dst) == conf_dest:
+                raise OSError("disk full")
+            return real_replace(src, dst, *a, **kw)
+
+        with unittest.mock.patch.object(h.mod.os, "replace", side_effect=failing):
+            code, _, err = h.run("install", "rollback", "apply", "paired", prev)
+        self.assertNotEqual(code, 0)
+        self.assertIn("run `install rollback apply` again", err)
+        self.assertEqual(self.b.read_text(), "bat-signal-2", "the binary is the last rename")
+        self.assertEqual(h.run("install", "rollback", "apply", "paired", prev)[0], 0)
+        self.assertEqual(self.b.read_text(), "bat-signal-1")
+        self.assertIn("Environment=BATCAVE_PEERS=192.0.2.0/24", self.live_conf.read_text())
+
     def test_rollback_check_changes_nothing_and_names_the_hash_apply_must_hold(self):
         h = self.env_host()
         self.deploy(h)
