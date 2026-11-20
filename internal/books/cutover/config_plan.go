@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"path/filepath"
 	"slices"
@@ -397,6 +398,7 @@ func buildPlan(in *m2Input) (*plan, error) {
 			return nil, err
 		}
 		pl.tree = tree
+		pl.reportBlobNulls(blobSetting.Value)
 		headEffectiveTree(pl.tree, in.MaintSet)
 		// A file value M2 cannot carry exactly is HEAD's effective setting when
 		// the blob lacks the key, and the strip would delete it: refuse by name.
@@ -637,6 +639,7 @@ func (pl *planner) addSecret(name secrets.Name, value, member string) {
 func (pl *planner) keyMember(r *Row, val any) {
 	raw := marshalAt(val)
 	if val == nil {
+		pl.nullUnset(r.Head)
 		return
 	}
 	for _, t := range r.Targets {
@@ -649,6 +652,9 @@ func (pl *planner) keyMember(r *Row, val any) {
 			}
 			out, dropped, err := Convert(t.Convert, raw)
 			switch {
+			case errors.Is(err, ErrNullUnset):
+				pl.nullUnset(r.Head)
+				continue
 			case errors.Is(err, ErrNotStaged):
 				pl.p.Dropped = append(pl.p.Dropped, r.Head)
 				pl.p.count("dropped-by-rule")
@@ -663,6 +669,37 @@ func (pl *planner) keyMember(r *Row, val any) {
 			pl.stageKey(r, t, out, raw)
 		}
 	}
+}
+
+// reportBlobNulls names every top-level member the stored blob holds as an
+// explicit JSON null. HEAD's decode (headDecodeBlob) leaves such a member at the
+// default, so the decoded tree already carries the default and a null reaches no
+// converter from here; this is where the cutover report learns it was there.
+// Only a name the table knows is logged, so a hostile blob cannot write the log.
+func (pl *planner) reportBlobNulls(blob string) {
+	var members map[string]json.RawMessage
+	if json.Unmarshal([]byte(blob), &members) != nil {
+		return
+	}
+	known := map[string]bool{}
+	for _, r := range pl.tab.Rows {
+		if r.Top && r.BlobField != "" {
+			known[r.BlobField] = true
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(members)) {
+		if known[name] && bytes.Equal(bytes.TrimSpace(members[name]), []byte("null")) {
+			pl.nullUnset(name)
+		}
+	}
+}
+
+// nullUnset records a blob member stored as a JSON null: HEAD decoded it into
+// the value it already held, the default, so it is unset. Nothing is staged and
+// the cutover report names the key (never a value; a null has none).
+func (pl *planner) nullUnset(head string) {
+	pl.p.Reported = append(pl.p.Reported, "setting "+head+" was stored as null: treated as unset, so it keeps its default")
+	pl.p.count("null-as-unset")
 }
 
 // stageKey plans one key. A value that carries a URL has its userinfo split

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -110,13 +111,57 @@ func TestConvert_RefusesTheWrongShapeWithoutTheValue(t *testing.T) {
 	}
 }
 
-// TestConvert_AuthModeRefusesNullAndNonBooleans: a JSON null decodes into a bool
-// without error and leaves it false, which would convert to "disabled" and turn
-// sign-in off. It is not a boolean, with or without padding.
-func TestConvert_AuthModeRefusesNullAndNonBooleans(t *testing.T) {
-	for _, in := range []string{`null`, " null\n", `"true"`, `1`, `""`, `{}`, ``} {
+// TestConvert_AuthModeRefusesNonBooleans: what is not a boolean is refused, with
+// or without padding. (A null is not refused: it is unset, below.)
+func TestConvert_AuthModeRefusesNonBooleans(t *testing.T) {
+	for _, in := range []string{`"true"`, `1`, `""`, `{}`, ``} {
 		if out, _, err := Convert(ConvertAuthMode, json.RawMessage(in)); !errors.Is(err, ErrConvertInput) {
 			t.Errorf("Convert(auth-mode, %q) = %s, %v; want ErrConvertInput", in, out, err)
+		}
+	}
+}
+
+// TestConvert_ANullIsUnsetForEveryConverter: a stored JSON null, padded or not,
+// is "unset" for every converter Convert implements (ErrNullUnset; the two that
+// never stage answer ErrNotStaged) and returns no value,
+// so nothing is staged and the key keeps its default. Before the rule a null
+// decoded into a bool or a number as its zero value without an error, and for
+// auth-mode a zero bool is "disabled". The class list is closed: a converter
+// added to the table with no row here fails TestConvert_NullCoversEveryConverter.
+func TestConvert_ANullIsUnsetForEveryConverter(t *testing.T) {
+	for _, name := range converterNames {
+		for _, in := range []string{`null`, " null\n", "\tnull "} {
+			want := ErrNullUnset
+			if name == ConvertNeverStored || name == ConvertOIDCFold {
+				want = ErrNotStaged // these stage nothing for any input
+			}
+			out, dropped, err := Convert(name, json.RawMessage(in))
+			if !errors.Is(err, want) || out != nil || dropped != nil {
+				t.Errorf("Convert(%q, %q) = %s, %v, %v; want %v and nothing", name, in, out, dropped, err, want)
+			}
+		}
+	}
+	// Not a null: a string "null", and a value that merely starts with it.
+	if _, _, err := Convert(ConvertUpdaterChannel, json.RawMessage(`"null"`)); err != nil {
+		t.Errorf("the string \"null\" is a value: %v", err)
+	}
+	if _, _, err := Convert(ConvertAuthMode, json.RawMessage(`nullx`)); !errors.Is(err, ErrConvertInput) {
+		t.Errorf("nullx: err = %v, want ErrConvertInput", err)
+	}
+}
+
+// TestConvert_NullCoversEveryConverter: converterNames is the set the table uses
+// and the set Convert's switch implements, so the null test above runs them all.
+func TestConvert_NullCoversEveryConverter(t *testing.T) {
+	used := map[string]bool{}
+	for _, r := range Table().Rows {
+		for _, tg := range r.Targets {
+			used[tg.Convert] = true
+		}
+	}
+	for name := range used {
+		if !slices.Contains(converterNames, name) {
+			t.Errorf("the table uses converter %q, which converterNames does not list", name)
 		}
 	}
 }

@@ -7,6 +7,7 @@ package cutover
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -439,5 +440,65 @@ func TestConfigPlan_ParseBatchKnobsAreKeysNotDropped(t *testing.T) {
 	}
 	if _, ok := stagedValue(snap, "modules.books.ai.llm_mode"); ok {
 		t.Error("a retired mode scalar was staged as a key")
+	}
+}
+
+// TestConfigPlan_ANullBlobMemberIsUnsetAndReported: a settings blob that holds an
+// explicit JSON null for any top-level member the table knows is reported, by
+// name and with a count and never a value, as unset: HEAD decoded a null into
+// the value it already held, the default, so it keeps its default. What it must
+// never do is read as the zero value: a null enable_auth stages nothing weaker
+// than core's default "required", a null basic_auth_enabled nothing that turns
+// the gate off. An absent member is not reported.
+func TestConfigPlan_ANullBlobMemberIsUnsetAndReported(t *testing.T) {
+	var members, fields []string
+	for _, r := range Table().Rows {
+		if r.Top && r.BlobField == r.Head && r.Stored == StoredBlob {
+			members = append(members, r.Head)
+			fields = append(fields, `"`+r.Head+`":null`)
+		}
+	}
+	for _, must := range []string{"enable_auth", "basic_auth_enabled", "log_level"} {
+		if !slices.Contains(members, must) {
+			t.Fatalf("%s is not a top-level blob member of the table: the test would check nothing", must)
+		}
+	}
+	plan := func(blob string) *plan {
+		t.Helper()
+		p, err := buildPlan(&m2Input{Rows: map[string]*rowState{}, Blob: settingRow(blobRowName, blob, "json", false), File: headFileValues{}, FileHas: map[string]bool{}})
+		if err != nil {
+			t.Fatalf("buildPlan: %v", err)
+		}
+		return p
+	}
+	p := plan("{" + strings.Join(fields, ",") + "}")
+	for _, m := range members {
+		note := "setting " + m + " was stored as null: treated as unset, so it keeps its default"
+		if !slices.Contains(p.Reported, note) {
+			t.Errorf("no report line for %s", m)
+		}
+	}
+	if got := p.Counts["null-as-unset"]; got != len(members) {
+		t.Errorf("null-as-unset = %d, want %d", got, len(members))
+	}
+	for _, st := range p.Stages {
+		switch st.Path {
+		case "core.auth.mode":
+			if string(st.Value) != `"required"` {
+				t.Errorf("a null enable_auth staged core.auth.mode = %s", st.Value)
+			}
+		case "core.http.basic_gate.enabled":
+			if string(st.Value) == "false" {
+				t.Errorf("a null basic_auth_enabled staged the gate off at %s", st.Path)
+			}
+		}
+	}
+	for _, q := range p.Quarantines {
+		t.Errorf("a null member was quarantined: %v", q.Key)
+	}
+	// Absent is not null, and an unknown name is never logged.
+	p = plan(`{"log_level":"debug","not_a_setting_batman":null}`)
+	if p.Counts["null-as-unset"] != 0 {
+		t.Errorf("reported %v for a blob with no null of a known member", p.Reported)
 	}
 }
