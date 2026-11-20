@@ -1,7 +1,7 @@
 // file: web/tests/e2e/scan-import-organize.spec.ts
-// version: 1.14.0
+// version: 1.15.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-10-21
+// last-edited: 2026-11-19
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -280,16 +280,27 @@ const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
       }
       if (pathname === '/api/v1/config' && method === 'GET') {
         return Promise.resolve(jsonResponse({
-          config: {
-            root_dir: '/library',
-            database_path: '/data/library.db',
-            database_type: 'pebble',
-            setup_complete: true,
+          data: {
+            generation: 1,
+            keys: [
+              { name: 'root_dir', class: 'i', value: '/library' },
+              { name: 'database_path', class: 'k', value: '/data/library.db' },
+              { name: 'setup_complete', class: 'k', value: true },
+            ],
           },
         }));
       }
       if (pathname === '/api/v1/config' && method === 'PUT') {
-        return Promise.resolve(jsonResponse({ config: { root_dir: '/library', setup_complete: true } }));
+        return Promise.resolve(jsonResponse({
+          data: {
+            generation: 2,
+            keys: [
+              { name: 'root_dir', class: 'i', value: '/library' },
+              { name: 'setup_complete', class: 'k', value: true },
+            ],
+            applied: [],
+          },
+        }));
       }
       if (pathname === '/api/v1/audiobooks/soft-deleted' && method === 'GET') {
         return Promise.resolve(jsonResponse({ items: [], count: 0, total: 0, offset: 0, limit: 100 }));
