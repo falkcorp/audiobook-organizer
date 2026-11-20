@@ -193,7 +193,7 @@ func (p *Plugin) runAuthorityBuild(ctx context.Context, raw json.RawMessage, rep
 		env.Store, env.Writer = store, store
 	}
 	if r, ok := p.deps.OperationQueueStore().(authorityPlanReader); ok {
-		env.Plans = r
+		env.Plans = func(_ context.Context, id string) (*authorityPlanResult, error) { return loadAuthorityPlan(r, id) }
 	}
 	out, err := runAuthorityBuildCore(ctx, params, dryRun, env, time.Now())
 	if out != nil {
@@ -236,9 +236,11 @@ type authorityBuildEnv struct {
 	t6g1Env
 	Store  authorityBuildStore
 	Writer authorityBuildWriter
-	// Plans reads the stored dry run an apply carries out; nil when the
-	// operation store cannot.
-	Plans authorityPlanReader
+	// Plans finds the stored dry run an apply carries out by its id: a v2
+	// operation row under HEAD's shell (loadAuthorityPlan), a succeeded native
+	// Preview run under the native kind (loadNativeAuthorityPlan). Nil when the
+	// shell has no store to read it from.
+	Plans func(ctx context.Context, id string) (*authorityPlanResult, error)
 	// Items runs fn over n indexes on the pool the shell provides.
 	Items t6g1ItemsFunc
 	// ApplyParams is the body that applies a dry run's plan, for the result.
@@ -306,7 +308,7 @@ func (p *Plugin) authorityBuildNative(deps t6g1Deps, sched func(tasks.Kind) *tas
 			env := authorityBuildEnv{
 				t6g1Env: t6g1NativeEnv(rc),
 				Writer:  writer,
-				Plans:   deps.PlanReader,
+				Plans:   nativeAuthorityPlans(deps.PlanRuns),
 				Items:   t6g1NativeItems(rc, authorityBuildParallelism(np.Concurrency)),
 				ApplyParams: func(planOpID string) map[string]any {
 					return map[string]any{"plan_op_id": planOpID}
@@ -341,7 +343,7 @@ func runAuthorityBuildCore(ctx context.Context, params authorityBuildParams, dry
 		if env.Plans == nil {
 			return nil, fmt.Errorf("%s: operation store cannot read the plan op", authorityBuildOpID)
 		}
-		plan, err := loadAuthorityPlan(env.Plans, params.PlanOpID)
+		plan, err := env.Plans(ctx, params.PlanOpID)
 		if err != nil {
 			return nil, err
 		}
@@ -377,6 +379,55 @@ func loadAuthorityPlan(r authorityPlanReader, id string) (*authorityPlanResult, 
 	}
 	if !plan.DryRun || plan.Digest == "" {
 		return nil, fmt.Errorf("%s: op %s is not a dry run with a plan", authorityBuildOpID, id)
+	}
+	return &plan, nil
+}
+
+// authorityRunReader is what the native kind reads of the tasks run store to
+// find the plan an apply carries out (tasks.RunStore has it; F5-18 passes the
+// kernel's NativeStores.Runs). A native Preview's plan_op_id is its own RunID
+// and its plan is its stored result, so the plan lives in the run store, not in
+// the v2 operations table HEAD's shell reads (F5-18d, O6).
+type authorityRunReader interface {
+	Get(ctx context.Context, id tasks.RunID) (tasks.RunRecord, error)
+}
+
+// nativeAuthorityPlans is the native kind's plan lookup over runs; nil (no
+// lookup, so an apply refuses) when runs is nil.
+func nativeAuthorityPlans(runs authorityRunReader) func(context.Context, string) (*authorityPlanResult, error) {
+	if runs == nil {
+		return nil
+	}
+	return func(ctx context.Context, id string) (*authorityPlanResult, error) {
+		return loadNativeAuthorityPlan(ctx, runs, id)
+	}
+}
+
+// loadNativeAuthorityPlan reads the plan of a succeeded native authority-build
+// Preview run. Every check names why a run is not one: another kind, a Live
+// run (an apply's result is not a plan to apply), a run that did not succeed (a
+// failed Preview keeps the result it returned beside its error, so a result
+// alone proves nothing), and a result that is not a dry run with a digest.
+func loadNativeAuthorityPlan(ctx context.Context, runs authorityRunReader, id string) (*authorityPlanResult, error) {
+	rec, err := runs.Get(ctx, tasks.RunID(id))
+	switch {
+	case errors.Is(err, tasks.ErrRunNotFound):
+		return nil, fmt.Errorf("%s: plan run %s not found", authorityBuildKind, id)
+	case err != nil:
+		return nil, fmt.Errorf("%s: read plan run %s: %w", authorityBuildKind, id, err)
+	case rec.Kind != authorityBuildKind:
+		return nil, fmt.Errorf("%s: run %s is %s, not an authority-build dry run", authorityBuildKind, id, rec.Kind)
+	case rec.Mode != tasks.ModePreview:
+		return nil, fmt.Errorf("%s: run %s is a %s run, not a Preview (a dry run)", authorityBuildKind, id, rec.Mode)
+	case rec.State != tasks.StateSucceeded || len(rec.Result) == 0 || string(rec.Result) == "null":
+		return nil, fmt.Errorf("%s: plan run %s is %s, not a completed dry run", authorityBuildKind, id, rec.State)
+	}
+	var plan authorityPlanResult
+	if err := json.Unmarshal(rec.Result, &plan); err != nil {
+		return nil, fmt.Errorf("%s: decode plan %s: %w", authorityBuildKind, id, err)
+	}
+	if !plan.DryRun || plan.Digest == "" {
+		return nil, fmt.Errorf("%s: run %s is not a dry run with a plan", authorityBuildKind, id)
 	}
 	return &plan, nil
 }

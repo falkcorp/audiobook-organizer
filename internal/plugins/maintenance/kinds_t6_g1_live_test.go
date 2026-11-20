@@ -611,20 +611,16 @@ func TestT6G1Kinds_LiveCasesCoverEveryWritingKind(t *testing.T) {
 }
 
 // The authority build applies a reviewed plan: a Preview run produces it, a
-// Live run carries it out through the writer.
-//
-// PLANTED V2 ROW (seam, F5-18 obligation): the Live run finds its plan through
-// deps.PlanReader, which reads a v2 operation row (DefID maintenance.authority-build,
-// completed, ResultData set). A native Preview's result lives in the tasks run
-// store, not in the v2 operations table, so this test PLANTS a v2 row holding the
-// Preview's result (storePlanRow) to stand in for the lookup F5-18 must build.
-// It does not prove a native Preview's plan_op_id (its RunID) resolves in
-// production; seams.d/F5-06.md and todo.d/ carry that as an F5-18 obligation.
-func TestT6G1Kinds_AuthorityBuildAppliesFromAPlantedV2PlanRow(t *testing.T) {
+// Live run carries it out through the writer. The Live run finds the plan by
+// the Preview's RunID in the tasks run store (deps.PlanRuns, F5-18d O6): the
+// Preview's own result, stored on its succeeded record as the executor's
+// attempt end stores it, in core's NativeStores. No v2 operation row exists.
+func TestT6G1Kinds_AuthorityBuildAppliesANativePreviewsOwnPlan(t *testing.T) {
 	ps := authorityTestStore(t)
 	probe := &t6g1LiveProbe{}
 	deps := probe.deps(ps)
-	deps.PlanReader = ps
+	runs := newNativeRuns(t)
+	deps.PlanRuns = runs
 	def := t6g1ByKind(t, (&Plugin{}).t6g1Kinds(deps, nil), authorityBuildKind)
 	gate := &t6g1GateWriter{name: "authority"}
 
@@ -636,10 +632,17 @@ func TestT6G1Kinds_AuthorityBuildAppliesFromAPlantedV2PlanRow(t *testing.T) {
 	require.NoError(t, json.Unmarshal(res, &plan))
 	require.True(t, plan.DryRun)
 	require.Positive(t, plan.Writes)
-	// Planted v2 row: see the test comment. The native Preview did not write it.
-	storePlanRow(t, ps, "plan1", res)
+	row, err := ps.GetOperationV2("01JBATCAVEPREVIEW00000000A")
+	require.NoError(t, err)
+	require.Nil(t, row, "no v2 row stands in for the plan")
 
-	res, h, err := runT6G1Full(t, def, tasks.ModeLive, gate, `{"plan_op_id":"plan1"}`, nil)
+	created := time.Date(2026, time.March, 14, 21, 0, 0, 0, time.UTC)
+	preview := tasks.RunID("01JBATCAVEPREVIEW00000000A")
+	rec := nativeRunAt(preview, authorityBuildKind, tasks.ModePreview, tasks.StateRunning, created)
+	putNativeRun(t, runs, rec)
+	finishNativeRun(t, runs, preview, tasks.StateSucceeded, res)
+
+	res, h, err := runT6G1Full(t, def, tasks.ModeLive, gate, fmt.Sprintf(`{"plan_op_id":%q}`, preview), nil)
 	require.NoError(t, err)
 	var applied authorityPlanResult
 	require.NoError(t, json.Unmarshal(res, &applied))
@@ -660,6 +663,64 @@ func TestT6G1Kinds_AuthorityBuildAppliesFromAPlantedV2PlanRow(t *testing.T) {
 	acquires2, _ := h2.CPUStats()
 	require.Zero(t, acquires2, "a concurrency param declares Fixed(n), which takes no CPU slot")
 }
+
+// The native plan lookup accepts only a succeeded authority-build Preview. Each
+// case stores the same plan bytes a real Preview returned on a run that is not
+// one, and the Live run refuses it before it writes anything. The failed
+// Preview matters since F5-18d's O5: a failed run keeps the result it returned
+// beside its error, so a stored result is no proof the dry run completed.
+func TestT6G1Kinds_AuthorityBuildRefusesAPlanRunThatIsNotASucceededPreview(t *testing.T) {
+	ps := authorityTestStore(t)
+	probe := &t6g1LiveProbe{}
+	deps := probe.deps(ps)
+	runs := newNativeRuns(t)
+	deps.PlanRuns = runs
+	def := t6g1ByKind(t, (&Plugin{}).t6g1Kinds(deps, nil), authorityBuildKind)
+	gate := &t6g1GateWriter{name: "authority"}
+	planBytes, _, err := runT6G1Full(t, def, tasks.ModePreview, gate, fmt.Sprintf(`{"library_export_path":%q}`, writeExport(t, false)), nil)
+	require.NoError(t, err)
+	var notDry authorityPlanResult
+	require.NoError(t, json.Unmarshal(planBytes, &notDry))
+	notDry.DryRun = false
+	notDryBytes, err := json.Marshal(notDry)
+	require.NoError(t, err)
+
+	created := time.Date(2026, time.March, 14, 21, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		id     tasks.RunID
+		kind   tasks.Kind
+		mode   tasks.Mode
+		state  tasks.RunState
+		result []byte
+		want   string
+	}{
+		{"01JBATCAVELIVE0000000000AA", authorityBuildKind, tasks.ModeLive, tasks.StateSucceeded, planBytes, "not a Preview"},
+		{"01JBATCAVEFAILED000000000A", authorityBuildKind, tasks.ModePreview, tasks.StateFailed, planBytes, "not a completed dry run"},
+		{"01JBATCAVECANCELED0000000A", authorityBuildKind, tasks.ModePreview, tasks.StateCanceled, planBytes, "not a completed dry run"},
+		{"01JBATCAVEEMPTY0000000000A", authorityBuildKind, tasks.ModePreview, tasks.StateSucceeded, nil, "not a completed dry run"},
+		{"01JBATCAVEOTHERKIND00000AA", creditsBackfillKindForPlanTest, tasks.ModePreview, tasks.StateSucceeded, planBytes, "not an authority-build dry run"},
+		{"01JBATCAVENOTDRY000000000A", authorityBuildKind, tasks.ModePreview, tasks.StateSucceeded, notDryBytes, "not a dry run with a plan"},
+	} {
+		putNativeRun(t, runs, nativeRunAt(c.id, c.kind, c.mode, tasks.StateRunning, created))
+		finishNativeRun(t, runs, c.id, c.state, c.result)
+		before := probe.cw.total()
+		_, _, err := runT6G1Full(t, def, tasks.ModeLive, gate, fmt.Sprintf(`{"plan_op_id":%q}`, c.id), nil)
+		require.ErrorContains(t, err, c.want, "%s", c.id)
+		require.Equal(t, before, probe.cw.total(), "%s: a refused apply wrote", c.id)
+	}
+
+	_, _, err = runT6G1Full(t, def, tasks.ModeLive, gate, `{"plan_op_id":"01JBATCAVEMISSING00000000A"}`, nil)
+	require.ErrorContains(t, err, "not found")
+
+	deps.PlanRuns = nil
+	def = t6g1ByKind(t, (&Plugin{}).t6g1Kinds(deps, nil), authorityBuildKind)
+	_, _, err = runT6G1Full(t, def, tasks.ModeLive, gate, `{"plan_op_id":"01JBATCAVELIVE0000000000AA"}`, nil)
+	require.ErrorContains(t, err, "cannot read the plan", "no run store: an apply refuses")
+}
+
+// creditsBackfillKindForPlanTest is another registered kind, for the wrong-kind
+// case above.
+const creditsBackfillKindForPlanTest = t6g3CreditsBackfillKind
 
 // A resumed activity backfill picks up at the window its checkpoint names, from
 // the bytes HEAD wrote (activityFilterIndexBackfillParams).
