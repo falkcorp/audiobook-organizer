@@ -30,7 +30,7 @@ work.
   deliberate exception, stored as the new system expects.
 - **Things that are reported, not carried.** A few details have no home in the
   new storage: the Deluge background-service host and login, some AI job
-  counters, and a webhook's "requires auth" flag. The step lists each of these
+  counters, and a metadata source's "requires auth" flag. The step lists each of these
   in its report instead of dropping them quietly. A web address that does not
   parse is kept as stored and flagged as misconfigured.
 - **A preview that cannot get in the way.** A separate preview function says,

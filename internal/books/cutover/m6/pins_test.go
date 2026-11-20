@@ -397,7 +397,10 @@ func endpointValidator(t *testing.T) *ai.Router {
 	}
 	kinds := map[aidispatch.Kind]ai.Kind{aidispatch.KindChat: ai.KindText, aidispatch.KindEmbed: ai.KindEmbed, aidispatch.KindWhisper: ai.KindTranscribe}
 	for _, spec := range aidispatch.Registry() {
-		if _, err := r.RegisterCapability("books", ai.CapabilitySpec{ID: capabilityID(spec.Capability.ID()), Kind: kinds[spec.Kind]}); err != nil {
+		if _, err := r.RegisterCapability("books", ai.CapabilitySpec{
+			ID: capabilityID(spec.Capability.ID()), Kind: kinds[spec.Kind],
+			Description: spec.Description, DataSent: "fixture", TypicalRequest: "fixture",
+		}); err != nil {
 			t.Fatalf("register %s: %v", spec.Capability.ID(), err)
 		}
 	}
