@@ -309,8 +309,11 @@ into one of the curated sections below, is a normal direct edit.
         `TestJobWrites_NoUnresolvedCalls` fails unless it is allowed by an exact
         key with a reason. A store write reached through a non-store name (for
         example `dedup.dedupBookWriter.RevertBookToVersion`) is no longer
-        dropped. Implementations in packages the program does not load are not
-        seen (three such calls are allowed by key, traced).
+        dropped. A non-verb method of a module interface records a key only when
+        the program holds no implementation or only implementations outside the
+        module; a loaded implementation hides implementations in packages the
+        program does not load (`internal/server`, `internal/plugins`), which are
+        neither walked nor recorded (TODO-F5-18M-LOAD-WIRING).
       - [ ] Follow calls that leave the module: the walk does not enter code in
         another module or the standard library, so a write made there (a file
         writer outside the `os` and `fileops` lists, a client library that
@@ -318,6 +321,15 @@ into one of the curated sections below, is a normal direct edit.
         (the closures outside code returns are the allowed
         `oracleOutsideClosureAllowed` set). A body of a followed interface
         implementation that calls out is judged by the interface method's name.
+        A module value converted to an outside interface and handed to outside
+        code (a module `io.Writer` under `slog.NewJSONHandler`, a `RoundTripper`
+        in an `http.Client`) is not recorded, and outside code can call its
+        methods back.
+      - [ ] `containerEscapes` (`writes_oracle_test.go`) opens a local slice or
+        map only when a call receives it; one stored into a field or variable
+        and filled through that alias is read from the local's own stores and
+        records nothing. Treat every other referrer as an escape, with a
+        fixture root.
       - **Done 2026-11-19 (F5-18m, #4768):** Key `traceInert` by `"<receiver>.<method>"`, as `traceAliases` already is.
         It matches a bare method name on any receiver, so a future write named
         `Move` or `Locked` on another type would be ignored.
