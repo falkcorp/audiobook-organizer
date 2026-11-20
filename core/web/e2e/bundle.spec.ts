@@ -7,7 +7,12 @@
 // shell-page or module-page chunk, and the entry and mui chunks stay under
 // their budgets.
 
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
+
+/** Chunks that hold pages: the shell's own (one lazy chunk, 07 §7.10) and hello's module page and panel. */
+const PAGE_CHUNK = /shellPages|GreetingPage|HelloSettings/;
 
 /** gzip-free byte budgets of the two eager chunks (FE-18). */
 const BUDGET = { entry: 200 * 1024, mui: 450 * 1024 };
@@ -22,12 +27,21 @@ test('/login with an empty cache fetches no page chunk', async ({ page }) => {
   await page.goto('/login', { waitUntil: 'networkidle' });
   const names = scripts.map((s) => s.url);
   expect(names.some((n) => /\/index-[^/]+\.js$/.test(n)), `entry chunk among ${names}`).toBe(true);
-  // hello's module pages are lazy: neither its page nor its settings panel loads on /login.
-  expect(names.filter((n) => /GreetingPage|HelloSettings/.test(n))).toEqual([]);
+  // Shell pages and hello's module page and settings panel are lazy: none loads on /login.
+  expect(names.filter((n) => PAGE_CHUNK.test(n))).toEqual([]);
   const entry = scripts.find((s) => /\/index-[^/]+\.js$/.test(s.url))!;
   const mui = scripts.find((s) => /\/mui-[^/]+\.js$/.test(s.url));
+  expect(mui, `mui chunk among ${names}`).toBeTruthy();
   expect(entry.bytes).toBeLessThan(BUDGET.entry);
-  if (mui) expect(mui.bytes).toBeLessThan(BUDGET.mui);
+  expect(mui!.bytes).toBeLessThan(BUDGET.mui);
+});
+
+test('the build has the page chunks the /login check looks for', () => {
+  // Without this, a build that inlined every page into the entry would pass the check above.
+  const assets = readdirSync(join(import.meta.dirname, '../../examples/hello/web/dist/assets'));
+  for (const page of ['shellPages', 'GreetingPage', 'HelloSettings']) {
+    expect(assets.some((a) => a.startsWith(`${page}-`) && a.endsWith('.js')), `${page} chunk in ${assets}`).toBe(true);
+  }
 });
 
 test('the page carries the three preset metas and the boot script the CSP hashes', async ({ page, request }) => {

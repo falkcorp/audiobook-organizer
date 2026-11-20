@@ -9,7 +9,7 @@
 // shell adoption (F9-04); until then each frame renders the contributions of
 // the mounted modules and says when there are none.
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { Box, List, ListItemButton, ListItemText, Paper, Stack, Tab, Tabs, Typography } from '@mui/material';
 import { Link as RouterLink, useParams } from 'react-router';
 import { DataState } from '@mediacore/ui-kit';
@@ -19,20 +19,10 @@ import { SettingsSection } from '../settings';
 import type { Lazy } from '../types';
 import { useMountedModules, useShellContext } from './context';
 import { LazySlot } from './MainLayout';
+import { Page } from './Page';
 
-function Page({ title, children }: { title: string; children: ReactNode }) {
-  useEffect(() => {
-    document.title = title;
-  }, [title]);
-  return (
-    <Box sx={{ p: 3 }}>
-      <Typography variant="h4" component="h1" gutterBottom>
-        {title}
-      </Typography>
-      {children}
-    </Box>
-  );
-}
+// The shell's own pages, loaded lazily by the route table (07 §7.10, FE-18):
+// /login with an empty cache must fetch none of them.
 
 /** Module contributions visible to the user, in module ID then `order` order. */
 function useSlots<T extends { id: string; permission?: string; order?: number }>(pick: (m: ReturnType<typeof useMountedModules>['modules'][number]) => readonly T[] | undefined) {
@@ -160,24 +150,6 @@ export function SystemPage() {
           )}
         </>
       )}
-    </Page>
-  );
-}
-
-export function NotFoundPage() {
-  return (
-    <Page title="Not found">
-      <Typography>
-        Nothing lives at this address. <RouterLink to="/">Go home</RouterLink>
-      </Typography>
-    </Page>
-  );
-}
-
-export function NoAccessPage() {
-  return (
-    <Page title="No access">
-      <Typography>Your account does not have the permission this page needs.</Typography>
     </Page>
   );
 }

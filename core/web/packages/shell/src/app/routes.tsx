@@ -15,7 +15,17 @@ import { useMountedModules, useShellContext } from './context';
 import { LazySlot, MainLayout } from './MainLayout';
 import { ModulesGate } from './ModulesGate';
 import { StaleBuildBanner } from './StaleBuildBanner';
-import { ActivityPage, HomePage, NoAccessPage, NotFoundPage, SettingsPage, SystemPage, UsersPage } from './shellPages';
+import { NoAccessPage, NotFoundPage } from './Page';
+
+type ShellPages = typeof import('./shellPages');
+
+/**
+ * A shell page as a data-router lazy route (07 §7.10, FE-18): the pages are
+ * one dynamic chunk, so /login with an empty cache fetches none of them.
+ */
+function shellPage(name: keyof ShellPages): Pick<RouteObject, 'lazy'> {
+  return { lazy: () => import('./shellPages').then((m) => ({ Component: m[name] as ComponentType })) };
+}
 
 /** A source that never connects: the realtime provider of a signed-out tab. */
 const INERT_SOURCE: RealtimeSource = { subscribe: () => () => {}, setTopics() {}, start() {}, stop() {} };
@@ -111,11 +121,11 @@ export function shellRouteObjects(registry: readonly ModuleUI[], realtime: Realt
             </RequireAuth>
           ),
           children: [
-            { index: true, element: <HomePage /> },
-            { path: 'activity', element: <ActivityPage /> },
-            { path: 'settings/*', element: <SettingsPage /> },
-            { path: 'system/*', element: <SystemPage /> },
-            { path: 'users', element: <UsersPage /> },
+            { index: true, ...shellPage('HomePage') },
+            { path: 'activity', ...shellPage('ActivityPage') },
+            { path: 'settings/*', ...shellPage('SettingsPage') },
+            { path: 'system/*', ...shellPage('SystemPage') },
+            { path: 'users', ...shellPage('UsersPage') },
             ...moduleRoutes,
             { path: '*', element: <NotFoundPage /> },
           ],
