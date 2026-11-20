@@ -3,7 +3,7 @@
 <!-- guid: f41a3172-cd47-4776-9adf-e478758564c7 -->
 <!-- last-edited: 2026-11-20 -->
 
-> **DRAFT (R2-01b).** Owner rulings O-1 to O-5 and the known gaps below are open, and the closing PR (R2-01c) fills the
+> **DRAFT (R2-01b).** The owner rulings O-1 to O-5 are recorded below; the known gaps are still open, and the closing PR (R2-01c) fills the
 > `<...>` placeholders. Do not run this on a production host until those are filled.
 
 # R2 Cutover Runbook
@@ -33,7 +33,7 @@ Step 8.
    release workflow's changelog job runs in the `ci-bot` environment, whose deployment policy admits only the
    branch `main`. From a tag ref the release and tag are created, the run goes red, and `CHANGELOG.md` is not
    collected. No release-prod run has ever been dispatched from a tag.
-   <!-- OWNER RULING O-3: the fix for Keep from a tag ref. Open. Options: a `changelog-collect` toggle input on release-prod.yml (slice R2-01k), or a temporary tag policy on the ci-bot environment. Do not fill in the answer here until the owner rules. -->
+   **Owner ruling (O-3):** Keep runs from the RC tag through a new `changelog-collect` on/off input on `release-prod.yml`, and you dispatch it with collect turned off. A `scriv collect` PR lands on `main` afterwards to fold the changelog fragments in. The input lands in R2-01k; until then the gap above stands.
 2. **No tracked make target deploys a tagged RC yet.** The owner's current deploy builds locally, which this runbook
    forbids for R2. A tracked `make deploy-release RELEASE=<RC tag>` lands in R2-01t (it stacks on the rollback
    work); until then, [Step 4](#step-4-deploy-a-tagged-rc) cannot be done from a tracked target.
@@ -49,7 +49,7 @@ shipped. On the final day, you only record them, and do Steps 1, 2 and 4.
 |---|---|---|
 | Step 0, merges and identity rows | F4-08 deploy (the boot refuses otherwise) | Record the count from that deploy. |
 | Step 1, off-host archive | each flip (rehearsal) | **Do it again now.** |
-| Step 2, dry run | each flip's copy rehearsal | **Do it now**; see ruling O-1. |
+| Step 2, dry run | each flip's copy rehearsal | **Do it now**; see ruling O-1 (0 pending, 0 quarantined). |
 | Step 3, env renames | F3-07 deploy | Record. |
 | Step 4, deploy a tagged RC | none | **Do it now.** |
 | Step 5, webhook receivers | F7-09 deploy | Record. |
@@ -57,9 +57,9 @@ shipped. On the final day, you only record them, and do Steps 1, 2 and 4.
 | Step 7, keyring export | after the F3-07 first boot | Record; export again only after a `secrets rotate-derive`. |
 | Step 8, re-send invites | F4-08 deploy | Record. |
 
-<!-- OWNER RULING O-1: what "pass" means for the mandatory dry run on a store already migrated flip by flip. Open. Recommended in the pre-scope: keep the run and read the pass as "0 pending steps, 0 quarantined rows". The owner rules; not decided here. -->
+**Owner ruling (O-1):** keep the mandatory dry run; it takes minutes. On an already-migrated store (Path A) it passes when it reports 0 pending steps and 0 quarantined rows. Anything else: stop and look.
 
-<!-- OWNER RULING O-2: the second store rewrite (M8). M8 ran once, at the F3-07 first boot, so rows retired by the later steps may stay in store files. Open and owner-only: no default applies. Whatever is ruled must be stated here and in the release note. -->
+**Owner ruling (O-2):** there is no second M8 rewrite. Store files keep the residue from rows retired by the later steps (M3 to M6), and the R2 release note says so (05-storage §5S.3.12 and §5S.3.13).
 
 Then run, in order: Step 1, Step 2, Step 4, the [smoke run](#smoke-run), and [Keep or roll back](#keep-or-roll-back).
 
@@ -157,7 +157,7 @@ Every open invite link stops working at R2. Re-send each open invite.
 
 ## Smoke run
 
-<!-- OWNER RULING O-4: smoke length, one hour on the RC versus the one-day soak the brief names. Open. Recommended in the pre-scope: a one-hour checklist, a full day only if the RC carries code the production host never ran. Not decided here. -->
+**Owner ruling (O-4):** the smoke run is a one-hour checklist of the six checks below, run on the RC. Run a full-day soak only if the RC carries code the production host never ran.
 
 Six checks:
 
@@ -178,7 +178,7 @@ Cut the R2 production release from the RC tag you deployed, never from `main`:
 gh workflow run release-prod.yml --ref <RC tag>
 ```
 
-This is blocked by known gap 1 until ruling O-3 is applied.
+This is blocked by known gap 1 until R2-01k lands (ruling O-3); dispatch it with `changelog-collect` off.
 
 Then, in order: record the production tag the run creates (it is R3's `UpgradeFloor.InstallFirst`, and names the
 same commit as the RC tag); prepend the R2 release note to the generated notes, never replacing them; take a new
@@ -191,7 +191,7 @@ gh variable get RELEASE_FREEZE
 
 The second command prints an empty value when the freeze is cleared. Nothing merged after the RC is in the release.
 
-<!-- OWNER RULING O-5: the updater release asset name the core apply task asks for (goreleaser's raw name versus the name the core task expects). Open, and needed before the in-app updater is wired. Not decided here. -->
+**Owner ruling (O-5):** the updater release asset is goreleaser's raw asset name, as returned by `internal/updater.FetchOptions()`. This lands in F8-04b, with the 05-updater §5U.12 edit.
 
 ### Roll back
 
