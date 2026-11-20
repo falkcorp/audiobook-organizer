@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.56 -->
+<!-- version: 10.78.57 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -297,14 +297,24 @@ into one of the curated sections below, is a normal direct edit.
       this changes behaviour today). Two oracle gaps in
       `internal/maintenance/jobs/writes_oracle_test.go` and
       `writes_trace_test.go`, and three F5-18 preparation items.
-      - **Done 2026-11-19 (F5-18m, #4768):** Rewrite the SSA walk on `golang.org/x/tools/go/callgraph/vta` (or
-        `cha`) over the same program. It follows an interface call into its
-        implementations, which removes the hand alias for
-        `tagger.LibraryImporter.ImportPath`, and it follows functions passed as
-        values and calls that leave the module. Today a store write reached
-        through a non-store name (for example `dedup.dedupBookWriter.RevertBookToVersion`)
-        is dropped silently, because only names that start with a write verb or
-        have a table row are classified.
+      - **Done 2026-11-19 (F5-18m, #4768):** Rewrite the SSA walk on `golang.org/x/tools/go/callgraph/vta` over the
+        same program. It follows an interface call into its implementations and
+        judges it by the method's name as well (the union, so a partial set of
+        implementations or a body that writes through code outside the module
+        is still caught), follows functions passed as values (including values
+        loaded from a field, a package variable, a slice or a call result, read
+        from the module's own stores), and records any call through a function
+        value it cannot resolve as `UNRESOLVED` so that
+        `TestJobWrites_NoUnresolvedCalls` fails unless it is allowed with a
+        reason. A store write reached through a non-store name (for example
+        `dedup.dedupBookWriter.RevertBookToVersion`) is no longer dropped.
+      - [ ] Follow calls that leave the module: the walk does not enter code in
+        another module or the standard library, so a write made there (a file
+        writer outside the `os` and `fileops` lists, a client library that
+        writes a remote) is seen only by the name of the call that enters it
+        (the closures outside code returns are the allowed
+        `oracleOutsideClosureAllowed` set). A body of a followed interface
+        implementation that calls out is judged by the interface method's name.
       - **Done 2026-11-19 (F5-18m, #4768):** Key `traceInert` by `"<receiver>.<method>"`, as `traceAliases` already is.
         It matches a bare method name on any receiver, so a future write named
         `Move` or `Locked` on another type would be ignored.
