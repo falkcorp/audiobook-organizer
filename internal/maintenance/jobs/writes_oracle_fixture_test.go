@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/writes_oracle_fixture_test.go
-// version: 1.7.0
+// version: 1.9.0
 // guid: 8fbddfb2-91e8-42bd-ab62-8e8e7e8cd794
 // last-edited: 2026-11-19
 
@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"golang.org/x/tools/go/callgraph"
+	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/ssautil"
 )
 
@@ -249,6 +250,8 @@ func TestOracleWalk_DefaultDeny(t *testing.T) {
 		{"ViaOrphanNonVerb", nil, "#iface:", "M1: a non-verb method of a module interface the program holds no implementation of"},
 		{"ViaOutsideIface", nil, "#iface:fmt.Stringer.String", "M1: a non-verb method of an interface declared outside the module"},
 		{"ViaOpenError", []string{"books"}, "#iface:error.Error", "M1: a module type implementing an outside interface's non-verb method, reached through an open receiver: walked, and the outside implementations recorded"},
+		{"ViaEscapedCell", []string{"books"}, "#scarecrow:its address is passed on", "a local variable whose address a helper fills: the helper's function is walked as a value, and a key for the stores the cell does not show"},
+		{"ViaFilledByValue", nil, "#elements filled by a call through a value", "a local slice handed to a function value, which can fill it"},
 	} {
 		kinds, _, _, calls, _ := derivedWrites(op, op.roots[0].Func(tc.root))
 		if !slices.Equal(kinds, tc.want) {
@@ -273,6 +276,42 @@ func TestOracleWalk_DefaultDeny(t *testing.T) {
 // store call only inside the function it names. Without the exemption the
 // reporter's write is noted; with it, the reporter's is not, and the same store
 // method called from job code still is.
+// TestOracleResolveCache_KeyedByGraph proves a copy of the program that swaps
+// the call graph does not read the answers the original cached: the copy shares
+// the cache pointer, and a parameter's answer is read from the graph's callers.
+func TestOracleResolveCache_KeyedByGraph(t *testing.T) {
+	op := oracleFixture(t)
+	f := op.roots[0].Func("ViaFilledByValue")
+	var v ssa.Value
+	for _, b := range f.Blocks {
+		for _, in := range b.Instrs {
+			if c, ok := in.(*ssa.Call); ok && v == nil && c.Call.StaticCallee() == nil && !c.Call.IsInvoke() {
+				v = c.Call.Value
+			}
+		}
+	}
+	if v == nil {
+		t.Fatal("ViaFilledByValue makes no call through a function value")
+	}
+	count := func() (n int) {
+		op.cache.mu.Lock()
+		defer op.cache.mu.Unlock()
+		for k := range op.cache.m {
+			if k.v == v && !k.iface {
+				n++
+			}
+		}
+		return n
+	}
+	op.resolve(v)
+	swapped := *op
+	swapped.graph = op.cha
+	swapped.resolve(v)
+	if got := count(); got != 2 {
+		t.Errorf("the cache holds %d answers for one value under two call graphs, want 2 (one per graph)", got)
+	}
+}
+
 func TestOracleWalk_ReporterOwnIsScopedToItsFunctions(t *testing.T) {
 	op := oracleFixture(t)
 	walk := func(op *oracleProgram, root string) []string {

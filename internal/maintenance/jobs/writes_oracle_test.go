@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/writes_oracle_test.go
-// version: 3.7.0
+// version: 3.8.0
 // guid: 40eadd67-76ac-419f-a3fe-7d1ed5e586e2
 // last-edited: 2026-11-19
 
@@ -650,7 +650,9 @@ func (op *oracleProgram) resolve(v ssa.Value) oracleRes {
 
 // oracleResolveCache holds resolve's and ifaceOpen's answers. An answer depends
 // only on the value and the call graph (a parameter is read from the graph's
-// callers), so it is keyed by both: a test that swaps the graph gets its own.
+// callers), so it is keyed by both: a copy of the oracleProgram shares the cache
+// pointer, and a copy that swaps the graph gets its own answers
+// (TestOracleResolveCache_KeyedByGraph).
 type oracleResolveCache struct {
 	mu sync.Mutex
 	m  map[oracleCacheKey]oracleRes
