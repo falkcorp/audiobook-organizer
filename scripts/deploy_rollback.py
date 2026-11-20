@@ -331,7 +331,28 @@ class Run:
             )
         if o.env_gen:
             gl = self.g.re.search(r"levels=(\S+)", out)
+            ge = self.g.re.search(r"enforced=(\S+)", out)
             kept = None if not gl or gl.group(1) == "unrecorded" else self.kept_levels(gl.group(1))
+            if kept is None or not ge or ge.group(1) == "unrecorded":
+                # Nothing to compare: the named generation was kept without the
+                # facts a deploy measures (the build it belonged to went in by
+                # hand, or the recipe passed none). The operator named it, so
+                # this does not stop the rollback, but it is said loudly, here
+                # and not only in the helper's output.
+                self.say(
+                    f"   WARNING: ROLLBACK_ENV {o.env_gen[:12]}... was kept with no recorded "
+                    f"{'store levels' if kept is None else 'enforced flag'}"
+                    f"{' and no enforced flag' if kept is None and (not ge or ge.group(1) == 'unrecorded') else ''}"
+                    f": nothing checks that {o.prev} fits that environment. Confirm it by hand "
+                    "(the version it reads its settings from, and the names in the kept local.conf) "
+                    "before you rely on this rollback."
+                )
+            elif ge.group(1) == "1":
+                self.say(
+                    f"   NOTE: ROLLBACK_ENV {o.env_gen[:12]}... is the environment of a build that "
+                    "enforces the retired-name list: it sets the NEW names. Restoring it under a "
+                    "binary that predates them starts that binary without its settings."
+                )
             prev, how = self.g.prev_vector(o, self.get)
             if prev is None:
                 return self.refuse(

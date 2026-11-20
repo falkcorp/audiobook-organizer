@@ -780,8 +780,13 @@ or owner-email settings. So the deploy keeps the environment with the binary.
   To say which one the release needs, name it: `ROLLBACK_ENV=<sha256> make
   rollback-restore RELEASE=<tag>`. It is a generation's hash, not a switch: the
   recipe refuses when that generation's recorded store levels differ from the
-  levels the binary serves. `ROLLBACK_ENV=snapshot` (the old blind switch) is
-  rejected.
+  levels the binary serves. A generation kept without its facts (its build went
+  in by hand, or the recipe passed none) has `levels=unrecorded` or
+  `enforced=unrecorded`: nothing can be compared, so the recipe does not refuse
+  but prints a WARNING naming what is missing, and the operator confirms the fit
+  by hand. A generation of an enforcing build (`enforced=1`) gets a NOTE: it sets
+  the new names, which a build that predates them does not read.
+  `ROLLBACK_ENV=snapshot` (the old blind switch) is rejected.
 - **`make rollback-check`.** Read-only: lists the generations (sha256, version,
   levels, pinned) and which one `.prev` matches, and prints no file content.
 - **A `.prev` from before this change** (or one put there by hand, or by a

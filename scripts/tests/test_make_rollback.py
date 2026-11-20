@@ -1412,6 +1412,44 @@ class RollbackRestoresEnvironment(unittest.TestCase):
         self.assertEqual(host.index("install-staged prev"), -1)
         self.assertEqual(fake_ssh.fake_app_name(host.prev), "prev")
 
+    def named_generation_run(self, binary: dict) -> tuple[Any, Any]:
+        host = FakeHost(self, prev={"levels": R2}, releases={"v0.41.0": {}})
+        sha = host.write_generation("ab" * 32, binary=binary)
+        return host, host.make("rollback-restore", RELEASE="v0.41.0", ROLLBACK_ENV=sha)
+
+    def test_a_named_generation_with_no_recorded_levels_is_warned_about_loudly(self) -> None:
+        host, p = self.named_generation_run({"version": None, "levels": None, "enforced": False})
+        self.assertEqual(p.returncode, 0, out(p))
+        self.assertIn("WARNING: ROLLBACK_ENV", out(p))
+        self.assertIn("no recorded store levels", out(p))
+        self.assertIn("nothing checks that", out(p))
+        self.assertEqual(host.installed(), "fetched-v0.41.0")
+
+    def test_a_named_generation_with_no_recorded_enforced_flag_is_warned_about_loudly(self) -> None:
+        host, p = self.named_generation_run(
+            {"version": "v0.40.0", "levels": dict(R1), "enforced": None}
+        )
+        self.assertEqual(p.returncode, 0, out(p))
+        self.assertIn("WARNING: ROLLBACK_ENV", out(p))
+        self.assertIn("no recorded enforced flag", out(p))
+
+    def test_a_named_generation_of_an_enforcing_build_is_flagged(self) -> None:
+        host, p = self.named_generation_run(
+            {"version": "v0.40.0", "levels": dict(R1), "enforced": True}
+        )
+        self.assertEqual(p.returncode, 0, out(p))
+        self.assertIn("NOTE: ROLLBACK_ENV", out(p))
+        self.assertIn("enforces the retired-name list", out(p))
+        self.assertNotIn("WARNING: ROLLBACK_ENV", out(p))
+
+    def test_a_named_generation_with_fully_recorded_facts_says_nothing_extra(self) -> None:
+        host, p = self.named_generation_run(
+            {"version": "v0.40.0", "levels": dict(R1), "enforced": False}
+        )
+        self.assertEqual(p.returncode, 0, out(p))
+        self.assertNotIn("WARNING: ROLLBACK_ENV", out(p))
+        self.assertNotIn("NOTE: ROLLBACK_ENV", out(p))
+
     def test_a_refusal_after_the_install_carries_the_state_note(self) -> None:
         """The second check runs once .prev is the fetched file: its refusal
         must say the old .prev is gone."""
