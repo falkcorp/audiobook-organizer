@@ -555,6 +555,8 @@ class InstallHelpers(unittest.TestCase):
             "deploy/audiobook-organizer.service",
             "scripts/storage_format_guard.py",
             "--no-same-owner",
+            "git -c tar.umask=0022 archive",
+            "tar -x -f -",
         ):
             self.assertIn(needed, piped[0], "what the installer reads, extracted root-owned")
         applied = out.split('if [ -n "1" ]; then', 1)[1].split("else", 1)[0]
@@ -583,6 +585,23 @@ class InstallHelpers(unittest.TestCase):
         self.assertIn("run the dry run with sudo", p.stdout)
         self.assertIn("alfred ALL=", p.stdout, "the rendered text is still shown")
         self.assertEqual(self.dropin.read_text(), before, "dry run: untouched")
+
+    def test_a_dry_run_over_a_root_only_installed_file_says_unreadable_not_a_traceback(
+        self,
+    ) -> None:
+        if os.geteuid() == 0:
+            self.skipTest("root can read any file")
+        self.assertEqual(self.run_tool("--apply").returncode, 0)
+        target = self.libdir / "rollback_helper.py"
+        target.chmod(0o000)
+        try:
+            p = self.run_tool()
+        finally:
+            target.chmod(0o755)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        line = next(ln for ln in p.stdout.splitlines() if ln.endswith("rollback_helper.py"))
+        self.assertIn("unreadable", line)
 
     def test_an_apply_that_cannot_read_the_dropin_it_would_restore_refuses_cleanly(self) -> None:
         if os.geteuid() == 0:

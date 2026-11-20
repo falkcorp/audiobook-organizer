@@ -307,6 +307,16 @@ def check_sources(deploy_user: str, strict: bool) -> list[str]:
 
 
 def state(step: Step) -> str:
+    """unchanged | create | replace | fix, as _state(); `unreadable` when the
+    caller cannot read what is installed (a dry run as an ordinary user over a
+    root-only file or directory: run it with sudo to compare)."""
+    try:
+        return _state(step)
+    except PermissionError:
+        return "unreadable"
+
+
+def _state(step: Step) -> str:
     """unchanged | create | replace (bytes differ) | fix (right bytes, wrong owner,
     mode or link count; a directory: wrong owner or mode)."""
     p = Path(step.path)
