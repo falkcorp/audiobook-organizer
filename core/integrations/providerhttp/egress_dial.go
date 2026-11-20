@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/egress_dial.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b7d2c940-3f1e-4a85-9c6d-0e48a1f27b53
 // last-edited: 2026-11-19
 
@@ -32,9 +32,13 @@ import (
 // by the guard is returned as the *integrations.Error (ClassRefusedLocal,
 // ReasonEgress) an HTTP request gets: it names neither the host nor the
 // address, and it is a verdict on the destination, so it is never fed to the
-// breaker or a hold. A lookup that fails is the resolver's error, unchanged
-// (the destination was not judged; a retry resolves again), and nothing is
-// dialled.
+// breaker or a hold. A refusal also gives back the bucket token the
+// connection's Acquire took, as a refused HTTP attempt does (transport.go): the
+// destination was refused before anything was sent, so it did not use the
+// provider's pace. (The daily quota is not refunded here: Acquire does not keep
+// the counter it counted against, and core.email declares no quota.) A lookup
+// that fails is the resolver's error, unchanged (the destination was not
+// judged; a retry resolves again), and nothing is dialled.
 func (g *gate) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	r := g.r
 	if r.isDisabled() {
@@ -47,6 +51,7 @@ func (g *gate) DialContext(ctx context.Context, network, addr string) (net.Conn,
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil || host == "" || port == "" {
 		r.met.refused(g.ref, ReasonEgress)
+		g.sc.bk.giveBack()
 		return nil, refuse(g.ref, "dial", ReasonEgress, time.Time{},
 			fmt.Errorf("%w: the destination is not a host and a port", ErrBlockedAddress))
 	}
@@ -59,6 +64,7 @@ func (g *gate) DialContext(ctx context.Context, network, addr string) (net.Conn,
 	if err != nil {
 		if isEgressRefusal(err) {
 			r.met.refused(g.ref, ReasonEgress)
+			g.sc.bk.giveBack()
 			return nil, refuse(g.ref, "dial", ReasonEgress, time.Time{}, err)
 		}
 		return nil, err

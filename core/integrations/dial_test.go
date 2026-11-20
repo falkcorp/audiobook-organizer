@@ -1,5 +1,5 @@
 // file: core/integrations/dial_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c41d7e3-02fa-4b69-b5d1-6a9e307c4f18
 // last-edited: 2026-11-19
 
@@ -62,6 +62,9 @@ func TestGuardedDial_NoOutboundRefuses(t *testing.T) {
 	}
 	if err == nil || !refusedLocal(ctx, err) {
 		t.Fatalf("dial without an outbound policy: %v", err)
+	}
+	if !errors.Is(err, integrations.ErrNoEgressGuard) {
+		t.Fatalf("dial without an outbound policy: %v, want it to wrap ErrNoEgressGuard", err)
 	}
 }
 
