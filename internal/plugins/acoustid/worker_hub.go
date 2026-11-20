@@ -269,6 +269,8 @@ type hubRun struct {
 	// lease is handed out and awaitRemote releases its waiters for items nobody
 	// holds; leases already out finish or expire as usual. mu-guarded.
 	quiescing bool
+	// abandoned: the settle bound passed; awaitRemote stops waiting on leased items.
+	abandoned bool
 
 	// Worker contact, for the no-worker and pending graces (mu-guarded;
 	// kept across tiers). Only lease, renew and results are progress
@@ -427,6 +429,20 @@ const hubYieldedWhy = "yielded"
 // are left to finish (a result is still accepted and written) or expire (the
 // sweep requeues their items), which inFlight reports. The run calls it when it
 // yields before its deadline; detach clears it with the run.
+// abandon ends the wait on every item still leased: awaitRemote answers
+// hubYieldedWhy for them too. The items stay open (leased), so the cursor stays
+// below them; only the run's patience for the holders ends. Called when a
+// yielding run reaches its settle bound.
+func (h *WorkerHub) abandon() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if r := h.run; r != nil && !r.abandoned {
+		r.quiescing = true
+		r.abandoned = true
+		r.signal()
+	}
+}
+
 func (h *WorkerHub) quiesce() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -649,7 +665,7 @@ func (h *WorkerHub) awaitRemote(ctx context.Context, idx int) (string, error) {
 			h.mu.Unlock()
 			return why, nil
 		}
-		if r.quiescing && st.state == qPending {
+		if r.abandoned || (r.quiescing && st.state == qPending) {
 			// Yielding: nobody holds it and nobody will lease it now. Left
 			// pending, not done: the resumed attempt plans it again.
 			h.mu.Unlock()

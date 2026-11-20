@@ -38,9 +38,16 @@ import (
 type wbReporter struct {
 	mu          sync.Mutex
 	checkpoints []WindowBackfillParams
+	// reports is every (done, total) the run reported, in order.
+	reports [][2]int
 }
 
-func (r *wbReporter) UpdateProgress(int, int, string) error      { return nil }
+func (r *wbReporter) UpdateProgress(cur, total int, _ string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reports = append(r.reports, [2]int{cur, total})
+	return nil
+}
 func (r *wbReporter) Log(slog.Level, string, ...slog.Attr) error { return nil }
 func (r *wbReporter) Logger() *slog.Logger                       { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 func (r *wbReporter) IsCanceled() bool                           { return false }

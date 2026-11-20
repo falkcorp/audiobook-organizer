@@ -193,6 +193,28 @@ type WindowBackfillCursor struct {
 	// it yields between. Zero in HEAD's shell, which has one 72h attempt and never
 	// stamps it.
 	StartedAt time.Time `json:"started_at,omitzero"`
+	// ProgressDone is the progress the run last reported, kept monotonic across
+	// the attempts a yielding run spans. Each attempt re-plans from the store (a
+	// written file drops out of the plan), so its own count restarts near zero;
+	// the executor honours a yield only when the attempt reports more than the
+	// run's high-water done, so the resumed attempt's base is this value and its
+	// total is this plus what is left. Zero in HEAD's shell and on a first attempt.
+	ProgressDone int `json:"progress_done,omitempty"`
+	// Carry is the tally of the attempts already yielded, so the final attempt
+	// reports (and fails on) the run's cumulative counts: a write error below the
+	// cursor is never retried, and without this a run could end Succeeded over it.
+	Carry *WindowBackfillCarry `json:"carry,omitempty"`
+}
+
+// WindowBackfillCarry is the part of the tally a yielded attempt hands on.
+type WindowBackfillCarry struct {
+	Written     int64          `json:"written,omitempty"`
+	Failed      int64          `json:"failed,omitempty"`
+	Transient   int64          `json:"transient,omitempty"`
+	Stale       int64          `json:"stale,omitempty"`
+	RowGone     int64          `json:"row_gone,omitempty"`
+	WriteErrors int64          `json:"write_errors,omitempty"`
+	Deferred    map[string]int `json:"deferred,omitempty"`
 }
 
 // windowCursor is the cursor for tier with every file of it at or below after
@@ -203,6 +225,55 @@ func windowCursor(params WindowBackfillParams, tier int, after string) *WindowBa
 	c := &WindowBackfillCursor{Tier: tier, AfterFileID: after}
 	if params.Resume != nil {
 		c.StartedAt = params.Resume.StartedAt
+		c.ProgressDone = params.Resume.ProgressDone
+		c.Carry = params.Resume.Carry
+	}
+	return c
+}
+
+// windowCursorAt is windowCursor with the progress the run has reached. A run
+// that cannot yield (no StartedAt: HEAD's shell) keeps ProgressDone zero, so its
+// checkpoint bytes are unchanged.
+func windowCursorAt(params WindowBackfillParams, tier int, after string, progress int) *WindowBackfillCursor {
+	c := windowCursor(params, tier, after)
+	if !c.StartedAt.IsZero() {
+		c.ProgressDone = max(c.ProgressDone, progress)
+	}
+	return c
+}
+
+// seed adds the carried counts of earlier attempts to the tally, so everything
+// downstream (the result, the summary line, the cursor a yield saves) is cumulative.
+func (t *windowTally) seed(c *WindowBackfillCarry) {
+	if c == nil {
+		return
+	}
+	t.written.Add(c.Written)
+	t.failed.Add(c.Failed)
+	t.transient.Add(c.Transient)
+	t.stale.Add(c.Stale)
+	t.rowGone.Add(c.RowGone)
+	t.writeErrors.Add(c.WriteErrors)
+	t.deferMu.Lock()
+	defer t.deferMu.Unlock()
+	for why, n := range c.Deferred {
+		if t.deferredBy == nil {
+			t.deferredBy = map[string]int{}
+		}
+		t.deferredBy[why] += n
+		t.deferred.Add(int64(n))
+	}
+}
+
+// carry is the tally as a cursor field; nil when nothing is counted.
+func (t *windowTally) carry() *WindowBackfillCarry {
+	c := &WindowBackfillCarry{Written: t.written.Load(), Failed: t.failed.Load(), Transient: t.transient.Load(),
+		Stale: t.stale.Load(), RowGone: t.rowGone.Load(), WriteErrors: t.writeErrors.Load(), Deferred: t.deferredByReason()}
+	if len(c.Deferred) == 0 {
+		c.Deferred = nil
+	}
+	if c.Written|c.Failed|c.Transient|c.Stale|c.RowGone|c.WriteErrors == 0 && c.Deferred == nil {
+		return nil
 	}
 	return c
 }
@@ -616,6 +687,7 @@ type windowEnv struct {
 	// sentinel the run returns after saving its cursor (tasks.ErrContinueInPlace).
 	Deadline        func() time.Time
 	YieldMargin     time.Duration
+	SettleSafety    time.Duration // 0: windowSettleSafety
 	TotalBudget     time.Duration
 	Now             func() time.Time
 	ContinueInPlace error
@@ -728,6 +800,18 @@ func windowBackfillCore(ctx context.Context, params WindowBackfillParams, env wi
 	}
 	total := len(plan.tiers[0]) + len(plan.tiers[1])
 	done := 0
+	if y != nil && params.Resume != nil {
+		tally.seed(params.Resume.Carry)
+		// A resumed attempt re-plans, and the files the earlier attempts wrote are
+		// gone from the plan, so its own count restarts near zero. Progress keeps
+		// the run's high-water: the base is the progress already reported and the
+		// total is that plus what the plan still holds, so a yield measured from
+		// the cursor is always above the row's done (see ProgressDone).
+		if skipped := windowResumeSkipped(plan, params.Resume); params.Resume.ProgressDone > skipped {
+			done = params.Resume.ProgressDone - skipped
+			total += done
+		}
+	}
 	for tier := range windowTierCount {
 		items := plan.tiers[tier]
 		if c := params.Resume; c != nil {
@@ -803,6 +887,10 @@ func windowBackfillCore(ctx context.Context, params WindowBackfillParams, env wi
 				if hub.claimServer(it.qi) {
 					err := run.file(ctx, it)
 					hub.serverDone(it.qi)
+					if errors.Is(err, errWindowYield) {
+						y.skip(it.qi) // parked behind a scan at the margin: not touched
+						return nil
+					}
 					if err != nil {
 						return err
 					}
@@ -832,7 +920,7 @@ func windowBackfillCore(ctx context.Context, params WindowBackfillParams, env wi
 		done += len(items)
 		// Tier finished: the next resume starts at the next tier.
 		next := params
-		next.Resume = windowCursor(params, tier+1, "")
+		next.Resume = windowCursorAt(params, tier+1, "", done)
 		if cerr := checkpoint(next); cerr != nil {
 			wbLog.Warn("checkpoint after tier %d: %v", tier, cerr)
 		}
@@ -866,6 +954,22 @@ func fillWindowResult(res *windowRunResult, t *windowTally) {
 	res.deferred = t.deferredByReason()
 }
 
+// windowResumeSkipped is how many files of the plan the cursor skips: every file
+// of the tiers below its tier, and the finished prefix of its own.
+func windowResumeSkipped(plan *windowPlan, c *WindowBackfillCursor) int {
+	n := 0
+	for tier := range windowTierCount {
+		items := plan.tiers[tier]
+		switch {
+		case tier < c.Tier:
+			n += len(items)
+		case tier == c.Tier && c.AfterFileID != "":
+			n += sort.Search(len(items), func(i int) bool { return items[i].FileID > c.AfterFileID })
+		}
+	}
+	return n
+}
+
 // windowItemsOptions is the pool-neutral half of windowRunOptions: the settings
 // both shells hand their pool. The Label reads the tally's counters, so only
 // HEAD's pool carries it (the kernel's label is pure; a seam in seams.d).
@@ -886,7 +990,7 @@ func windowItemsOptions(done, total, tier int, items []windowItem, params Window
 				return nil
 			}
 			next := params
-			next.Resume = windowCursor(params, tier, items[mark-1].FileID)
+			next.Resume = windowCursorAt(params, tier, items[mark-1].FileID, done+mark)
 			if err := checkpoint(next); err != nil {
 				wbLog.Warn("checkpoint tier %d after %s: %v", tier, items[mark-1].FileID, err)
 			}
@@ -1317,6 +1421,11 @@ type windowRun struct {
 	yield *windowYield
 }
 
+// errWindowYield is returned by a file the run parked before touching it when the
+// run must yield: the caller records it as skipped (windowYield.skip) so the
+// cursor stays below it and the resumed attempt does it.
+var errWindowYield = errors.New("window-backfill: file handed back to the resumed attempt")
+
 // waitForLibraryScan parks the worker while a library.scan runs (standing
 // rule: nothing fights the scanner for the disks, and the scanner may be
 // rewriting the very files being cut). It yields rather than taking the scan
@@ -1329,6 +1438,11 @@ func (r *windowRun) waitForLibraryScan(ctx context.Context) error {
 	}
 	wbLog.Info("library.scan is running; window backfill paused until it finishes")
 	for r.probe.LibraryScanRunning() {
+		// A parked file has not been touched: when the run must yield it hands the
+		// file back (errWindowYield) instead of sitting out a scan past the attempt.
+		if r.yield.stopping() {
+			return errWindowYield
+		}
 		r.progress(int(r.progCur.Load()), int(r.progTotal.Load()), "Paused: library.scan is running")
 		select {
 		case <-ctx.Done():
@@ -1364,7 +1478,20 @@ func (r *windowRun) drainRemote(ctx context.Context, hub *WorkerHub, tier, worke
 				}, func(ctx context.Context, i int) error {
 					it := backlog[i]
 					defer hub.serverDone(it.qi)
-					return r.file(ctx, it)
+					// The pool is already running when the margin arrives: the items
+					// it has not started are handed back, not cut.
+					if r.yield.stopping() {
+						r.yield.skip(it.qi)
+						return nil
+					}
+					if err := r.file(ctx, it); err != nil {
+						if errors.Is(err, errWindowYield) {
+							r.yield.skip(it.qi)
+							return nil
+						}
+						return err
+					}
+					return nil
 				})
 				if err != nil {
 					return err
@@ -1376,13 +1503,20 @@ func (r *windowRun) drainRemote(ctx context.Context, hub *WorkerHub, tier, worke
 		if n == 0 {
 			return nil
 		}
+		// Settling is bounded: a lease holder that neither finishes nor lets go
+		// (Renew keeps extending it) must not carry the run past its attempt. The
+		// leased items stay open in the hub, which caps the cursor below them.
+		if r.yield.settleExpired() {
+			wbLog.Warn("yielding with %d file(s) still leased to remote workers: they stay pending for the resumed attempt", n)
+			return nil
+		}
 		r.progress(int(r.progCur.Load()), int(r.progTotal.Load()),
 			fmt.Sprintf("%s: waiting for %d file(s) leased to remote workers", windowTierNames[tier], n))
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-hub.changedCh():
-		case <-time.After(windowDrainPoll):
+		case <-time.After(r.yield.settleWait(windowDrainPoll)):
 		}
 	}
 }
@@ -1482,6 +1616,10 @@ func (r *windowRun) serveBacklog(ctx context.Context, hub *WorkerHub) error {
 		}
 		err := r.file(ctx, back[0])
 		hub.serverDone(back[0].qi)
+		if errors.Is(err, errWindowYield) {
+			r.yield.skip(back[0].qi)
+			return nil
+		}
 		if err != nil {
 			return err
 		}
