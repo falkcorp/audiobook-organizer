@@ -1142,7 +1142,7 @@ install-rollback-helpers:
 	@[ -n "$(DEPLOY_DB)" ] || (echo "ERROR: DEPLOY_DB is not set. Set it to the main Pebble store path on this host in Makefile.local or export it."; exit 1)
 	@if [ -n "$(APPLY)" ]; then \
 	  set -e; \
-	  echo "→ Exporting HEAD to the root-owned $(ROLLBACK_EXPORT_DIR)/aorg-install (the installer runs as root and will not run from a checkout the deploy user can write)..."; \
+	  echo "→ Exporting HEAD to the root-owned $(ROLLBACK_EXPORT_DIR)/aorg-install (the installer runs as root and will not run from a checkout that is not root's)..."; \
 	  sudo install -d -o root -g root -m 755 "$(ROLLBACK_EXPORT_DIR)/aorg-install"; \
 	  git archive HEAD deploy/rollback-helpers deploy/audiobook-organizer.service scripts/storage_format_guard.py > /dev/null; \
 	  git -c tar.umask=0022 archive HEAD deploy/rollback-helpers deploy/audiobook-organizer.service scripts/storage_format_guard.py | sudo tar -x -f - --no-same-owner -C "$(ROLLBACK_EXPORT_DIR)/aorg-install"; \

@@ -1299,7 +1299,9 @@ def _read_template(cfg: dict[str, str]) -> bytes:
 # same-build redeploy between the flip and its rollback cannot pair a binary with
 # an environment it never ran under.
 
-ENV_VERSION = 2
+# `format` is the schema of these JSON documents (generation, pending, current);
+# the binary's own version string is `binary.version`: two different things.
+ENV_FORMAT = 2
 # The unit and local.conf texts each fit in UNIT_LIMIT bytes, and json.dumps
 # writes a control character as \\u00XX: six bytes for one. The limit has to
 # hold the worst case, or a generation the helper wrote could not be read back.
@@ -1571,7 +1573,7 @@ def _existing_generation(cfg: dict[str, str], sha: str) -> dict | None:
         doc = _read_env_json(_gen_path(cfg, sha))
     except (OSError, RefusedError):
         return None
-    if doc is None or doc.get("version") != ENV_VERSION or doc.get("bin_sha256") != sha:
+    if doc is None or doc.get("format") != ENV_FORMAT or doc.get("bin_sha256") != sha:
         return None
     return doc
 
@@ -1614,10 +1616,10 @@ def _env_capture(cfg: dict[str, str], part: str) -> None:
         pend = _read_env_json(pending_path)
     except RefusedError:
         pend, cur = None, _sha256_file(cfg["bin"])
-    if pend is not None and (pend.get("version") != ENV_VERSION or pend.get("bin_sha256") != cur):
+    if pend is not None and (pend.get("format") != ENV_FORMAT or pend.get("bin_sha256") != cur):
         pend = None
     if pend is None:
-        pend = {"version": ENV_VERSION, "bin_sha256": cur}
+        pend = {"format": ENV_FORMAT, "bin_sha256": cur}
     if part in pend:
         return
     pend[part] = _capture_env(cfg, part)
@@ -1652,7 +1654,7 @@ def _env_promote(cfg: dict[str, str], had_binary: bool, incoming: dict | None = 
     except RefusedError:
         pend = {}
     if pend is not None and (
-        pend.get("version") != ENV_VERSION or pend.get("bin_sha256") != prev_sha
+        pend.get("format") != ENV_FORMAT or pend.get("bin_sha256") != prev_sha
     ):
         _forget_unless_boundary(cfg, prev_sha)
         _forget_env(pending_path)
@@ -1679,7 +1681,7 @@ def _env_promote(cfg: dict[str, str], had_binary: bool, incoming: dict | None = 
     if existing is not None and existing.get("pin_reason") == PIN_BOUNDARY:
         reason = PIN_BOUNDARY  # a boundary, once recorded, stays one
     doc = {
-        "version": ENV_VERSION,
+        "format": ENV_FORMAT,
         "bin_sha256": prev_sha,
         "seq": max((d["seq"] for d in docs), default=0) + 1,
         "binary": facts or _clean_meta(None),
@@ -1714,7 +1716,7 @@ def _scan_generations(cfg: dict[str, str]) -> tuple[list[dict], int]:
             continue
         if (
             doc is None
-            or doc.get("version") != ENV_VERSION
+            or doc.get("format") != ENV_FORMAT
             or doc.get("bin_sha256") != stem
             or not isinstance(doc.get("seq"), int)
             or isinstance(doc.get("seq"), bool)
@@ -1813,11 +1815,11 @@ def _read_generation(cfg: dict[str, str], gen: str, named: bool) -> dict:
             "ROLLBACK_ENV=<sha256> (make rollback-check lists them)"
         )
     if (
-        doc.get("version") != ENV_VERSION
+        doc.get("format") != ENV_FORMAT
         or doc.get("bin_sha256") != gen
         or not isinstance(doc.get("seq"), int)
     ):
-        raise RefusedError(f"{path} is malformed (version, bin_sha256 or seq)")
+        raise RefusedError(f"{path} is malformed (format, bin_sha256 or seq)")
     for part in ENV_PARTS:
         entry = doc.get(part)
         if not isinstance(entry, dict):
@@ -2206,7 +2208,7 @@ def _install_binary(cfg: dict[str, str], src: str, meta: dict | None = None) -> 
             # deploy would take it for stale and lose a generation. Rewrite it
             # as a capture for the binary installed now, which holds no parts.
             with contextlib.suppress(OSError, RefusedError):
-                _write_env_json(_pending_path(cfg), {"version": ENV_VERSION, "bin_sha256": sha_new})
+                _write_env_json(_pending_path(cfg), {"format": ENV_FORMAT, "bin_sha256": sha_new})
         _record_current(cfg, sha_new, meta)
     finally:
         os.close(fd)
@@ -2240,7 +2242,7 @@ def _record_current(cfg: dict[str, str], sha: str, meta: dict | None) -> None:
     the deploy that replaces it can say what that generation served. Advisory
     and best effort: a failure costs a label, never the deploy. A recipe's
     facts about another file than the one installed are not recorded."""
-    doc: dict = {"version": ENV_VERSION, "bin_sha256": sha}
+    doc: dict = {"format": ENV_FORMAT, "bin_sha256": sha}
     facts = None
     if meta is not None and meta["bin_sha256"] != sha:
         print(

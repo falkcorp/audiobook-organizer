@@ -19,7 +19,7 @@ import contextlib
 import importlib.util
 import io
 import os
-import pwd
+import shutil
 import stat
 import subprocess
 import sys
@@ -706,81 +706,255 @@ class InstallHelpers(unittest.TestCase):
             d.chmod(0o755)
         return co
 
-    def sources(self, co: Path, user: str) -> list[str]:
+    def sources(self, co: Path, staging: bool = True) -> list[str]:
+        """check_sources over a fake checkout. staging=True trusts the running
+        user as well as root (what --root does, and the only way a checkout this
+        test made can be accepted); False is the real run: root only."""
         here = co / "deploy" / "rollback-helpers"
-        patches = [
-            unittest.mock.patch.object(IH, "REPO", co),
-            unittest.mock.patch.object(IH, "HERE", here),
-        ]
         with contextlib.ExitStack() as stack:
-            for patch in patches:
-                stack.enter_context(patch)
-            return IH.check_sources(user, strict=True)
+            stack.enter_context(unittest.mock.patch.object(IH, "REPO", co))
+            stack.enter_context(unittest.mock.patch.object(IH, "HERE", here))
+            stack.enter_context(unittest.mock.patch.object(IH, "STAGING", staging))
+            return IH.check_sources()
+
+    def fake_stat(self, uid: int, mode: int) -> os.stat_result:
+        return os.stat_result((mode, 1, 1, 1, uid, 0, 0, 0, 0, 0))
 
     def test_a_clean_checkout_is_accepted(self) -> None:
-        self.assertEqual(self.sources(self.fake_checkout(), "alfred"), [])
+        self.assertEqual(self.sources(self.fake_checkout()), [])
 
-    def test_a_sticky_world_writable_ancestor_like_tmp_is_not_a_finding(self) -> None:
+    def test_a_checkout_owned_by_anyone_but_root_is_named_in_a_real_run(self) -> None:
+        if os.geteuid() == 0:
+            self.skipTest("everything this test makes is root's when run as root")
         co = self.fake_checkout()
-        parent = co.parent
-        parent.chmod(0o1777)
-        self.addCleanup(parent.chmod, 0o700)
-        self.assertEqual(self.sources(co, "alfred"), [])
+        got = self.sources(co, staging=False)
+        for must in (co, co / "scripts", co / "scripts" / "storage_format_guard.py", co.parent):
+            self.assertIn(
+                str(must), got, "owned by a user, whatever its mode: the owner can chmod it"
+            )
+
+    def test_a_read_only_path_owned_by_the_deploy_user_is_still_untrusted(self) -> None:
+        """r3 H1. Mode 0555 is not safe when the owner is not root: chmod u+w."""
+        self.assertTrue(IH.untrusted_source(self.fake_stat(1000, stat.S_IFREG | 0o444), False))
+        self.assertTrue(IH.untrusted_source(self.fake_stat(1000, stat.S_IFDIR | 0o555), False))
+        self.assertTrue(IH.untrusted_source(self.fake_stat(1000, stat.S_IFDIR | 0o555), True))
+        with unittest.mock.patch.object(IH, "STAGING", False):
+            self.assertFalse(IH.untrusted_source(self.fake_stat(0, stat.S_IFDIR | 0o755), True))
+            self.assertFalse(IH.untrusted_source(self.fake_stat(0, stat.S_IFREG | 0o644), False))
+
+    def test_the_sticky_exemption_is_for_a_root_owned_directory_above_the_checkout(self) -> None:
+        sticky = stat.S_IFDIR | stat.S_ISVTX | 0o777
+        with unittest.mock.patch.object(IH, "STAGING", False):
+            self.assertFalse(IH.untrusted_source(self.fake_stat(0, sticky), True), "/tmp")
+            self.assertTrue(IH.untrusted_source(self.fake_stat(0, sticky), False), "not above it")
+            self.assertTrue(IH.untrusted_source(self.fake_stat(1000, sticky), True), "r3 H2")
+            self.assertTrue(
+                IH.untrusted_source(self.fake_stat(0, stat.S_IFDIR | 0o777), True),
+                "world-writable and not sticky",
+            )
+            self.assertTrue(
+                IH.untrusted_source(self.fake_stat(0, stat.S_IFREG | stat.S_ISVTX | 0o777), True),
+                "a file is never exempt",
+            )
+
+    def test_a_child_of_a_1777_parent_that_the_deploy_user_owns_is_named(self) -> None:
+        """r3 H2: the entry below /tmp is the deploy user's, mode 0555 or not."""
+        if os.geteuid() == 0:
+            self.skipTest("everything this test makes is root's when run as root")
+        co = self.fake_checkout()
+        co.parent.chmod(0o1777)
+        self.addCleanup(co.parent.chmod, 0o700)
+        co.chmod(0o555)
+        self.addCleanup(co.chmod, 0o755)
+        got = self.sources(co, staging=False)
+        self.assertIn(str(co), got)
+        # and with staging's extra trusted user, a USER-owned sticky ancestor is
+        # not skipped: only root's is
+        self.assertIn(str(co.parent), self.sources(co, staging=True))
+
+    def test_a_checkout_under_a_real_sticky_root_directory_like_tmp_is_not_a_finding(self) -> None:
+        tmp = Path("/tmp").resolve()
+        st = tmp.stat()
+        if not (st.st_uid == 0 and st.st_mode & stat.S_ISVTX):
+            self.skipTest("/tmp is not a root-owned sticky directory here")
+        d = Path(tempfile.mkdtemp(dir=tmp)).resolve()
+        self.addCleanup(shutil.rmtree, d, True)
+        co = d / "checkout"
+        for rel in (
+            "deploy/rollback-helpers/rollback_helper.py",
+            "deploy/audiobook-organizer.service",
+            "scripts/storage_format_guard.py",
+        ):
+            f = co / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("x")
+        self.assertEqual(self.sources(co), [], "the sticky root-owned ancestor is skipped")
 
     def test_a_world_writable_ancestor_without_the_sticky_bit_is_named(self) -> None:
         co = self.fake_checkout()
         parent = co.parent
         parent.chmod(0o777)
         self.addCleanup(parent.chmod, 0o700)
-        self.assertIn(str(parent), self.sources(co, "alfred"))
+        self.assertIn(str(parent), self.sources(co))
 
-    def test_a_world_writable_source_file_is_named(self) -> None:
+    def test_a_world_or_group_writable_source_file_is_named(self) -> None:
+        for mode in (0o666, 0o664, 0o646):
+            with self.subTest(mode=oct(mode)):
+                co = self.fake_checkout()
+                guard_py = co / "scripts" / "storage_format_guard.py"
+                guard_py.chmod(mode)
+                self.assertEqual(self.sources(co), [str(guard_py)])
+
+    def test_a_group_or_world_writable_checkout_directory_is_named(self) -> None:
+        co = self.fake_checkout()
+        for d in ("deploy", "scripts", "deploy/rollback-helpers"):
+            (co / d).chmod(0o775)
+            self.assertIn(str(co / d), self.sources(co))
+            (co / d).chmod(0o755)
+
+    def test_a_symlinked_source_is_named(self) -> None:
         co = self.fake_checkout()
         guard_py = co / "scripts" / "storage_format_guard.py"
-        guard_py.chmod(0o666)
-        self.assertEqual(self.sources(co, "alfred"), [str(guard_py)])
+        real = self.tmp / "elsewhere.py"
+        real.write_text("x")
+        guard_py.unlink()
+        guard_py.symlink_to(real)
+        self.assertEqual(self.sources(co), [str(guard_py)])
 
-    def test_a_world_writable_checkout_directory_is_named(self) -> None:
+    def test_a_pycache_in_a_source_directory_is_held_to_the_same_rule(self) -> None:
         co = self.fake_checkout()
-        (co / "deploy").chmod(0o777)
-        self.assertIn(str(co / "deploy"), self.sources(co, "alfred"))
+        for d in ("scripts", "deploy", "deploy/rollback-helpers"):
+            cache = co / d / "__pycache__"
+            cache.mkdir()
+            cache.chmod(0o755)
+            pyc = cache / "x.cpython-0.pyc"
+            pyc.write_bytes(b"x")
+            pyc.chmod(0o644)
+        self.assertEqual(self.sources(co), [], "clean ones are fine")
+        pyc.chmod(0o666)
+        self.assertEqual(self.sources(co), [str(pyc)])
+        pyc.chmod(0o644)
+        (co / "scripts" / "__pycache__").chmod(0o777)
+        self.assertEqual(self.sources(co), [str(co / "scripts" / "__pycache__")])
 
-    def test_files_the_deploy_user_owns_or_shares_a_group_with_are_named(self) -> None:
-        me = pwd.getpwuid(os.getuid()).pw_name
+    def test_a_path_with_a_posix_acl_is_named(self) -> None:
         co = self.fake_checkout()
-        got = self.sources(co, me)
-        self.assertIn(str(co / "scripts" / "storage_format_guard.py"), got, "owned by that user")
-        self.assertIn(str(co), got)
+        guard_py = co / "scripts" / "storage_format_guard.py"
 
-    def test_a_group_writable_file_is_named_for_a_member_of_the_group(self) -> None:
-        me = pwd.getpwuid(os.getuid()).pw_name
-        co = self.fake_checkout()
-        f = co / "deploy" / "audiobook-organizer.service"
-        with unittest.mock.patch.object(IH.os, "getgrouplist", lambda *_: [f.stat().st_gid]):
-            st = f.stat()
-            self.assertFalse(IH.writable_by(st, 12345, {st.st_gid}), "not group-writable yet")
-            f.chmod(0o664)
-            self.assertTrue(IH.writable_by(f.stat(), 12345, {f.stat().st_gid}))
-            self.assertFalse(IH.writable_by(f.stat(), 12345, set()))
-        self.assertTrue(me)
+        def listxattr(path, *, follow_symlinks=True):
+            return ["system.posix_acl_access"] if str(path) == str(guard_py) else []
 
-    def test_apply_refuses_to_run_from_a_checkout_the_deploy_user_can_write(self) -> None:
-        me = pwd.getpwuid(os.getuid()).pw_name
-        args = [a for a in ARGS if not a.startswith("--deploy-user")] + [f"--deploy-user={me}"]
-        p = self.run_tool("--apply", args=args)
+        with unittest.mock.patch.object(IH.os, "listxattr", listxattr, create=True):
+            self.assertEqual(self.sources(co), [str(guard_py)])
+        with unittest.mock.patch.object(
+            IH.os, "listxattr", lambda *a, **k: ["user.x"], create=True
+        ):
+            self.assertEqual(self.sources(co), [], "another attribute is not an ACL")
+
+    def installer_copy(self) -> Path:
+        """A checkout made of the real installer, helper, guard and unit
+        template, whose permissions the test controls."""
+        co = self.tmp / "realcopy"
+        helpers = co / "deploy" / "rollback-helpers"
+        helpers.mkdir(parents=True)
+        for f in HELPERS.iterdir():
+            if f.is_file():
+                shutil.copy(f, helpers / f.name)
+        shutil.copy(REPO / "deploy" / "audiobook-organizer.service", co / "deploy")
+        (co / "scripts").mkdir()
+        shutil.copy(SCRIPTS / "storage_format_guard.py", co / "scripts")
+        for d in (co, co / "deploy", co / "scripts", helpers):
+            d.chmod(0o755)
+        return co
+
+    def run_copy(self, co: Path, *extra: str) -> subprocess.CompletedProcess:
+        env = {
+            **os.environ,
+            "VISUDO_LOG": str(self.log),
+            "VISUDO_COPY": str(self.copy),
+            "LIVE_DROPIN": str(self.dropin),
+            "VISUDO_WHOLE_LOG": str(self.tmp / "visudo.whole.log"),
+        }
+        return subprocess.run(
+            [
+                sys.executable,
+                str(co / "deploy" / "rollback-helpers" / "install_helpers.py"),
+                *ARGS,
+                f"--root={self.root}",
+                f"--visudo={self.visudo}",
+                *extra,
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    def test_apply_refuses_to_run_from_a_checkout_that_others_can_write(self) -> None:
+        co = self.installer_copy()
+        (co / "scripts" / "storage_format_guard.py").chmod(0o666)
+        p = self.run_copy(co, "--apply")
         self.assertNotEqual(p.returncode, 0)
         self.assertIn("REFUSING", p.stdout + p.stderr)
+        self.assertIn("storage_format_guard.py", p.stdout + p.stderr)
         self.assertIn("root-owned export", p.stdout + p.stderr)
         self.assertEqual(self.tree(), [], "nothing was written")
 
     def test_a_dry_run_from_such_a_checkout_says_so_and_still_shows_the_plan(self) -> None:
-        me = pwd.getpwuid(os.getuid()).pw_name
-        args = [a for a in ARGS if not a.startswith("--deploy-user")] + [f"--deploy-user={me}"]
-        p = self.run_tool(args=args)
+        co = self.installer_copy()
+        (co / "scripts" / "storage_format_guard.py").chmod(0o666)
+        p = self.run_copy(co)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("NOTICE", p.stdout)
         self.assertIn("with --apply from here would refuse", p.stdout)
         self.assertIn("exports HEAD to a root-owned directory", p.stdout)
+
+    def test_a_clean_copy_applies(self) -> None:
+        p = self.run_copy(self.installer_copy(), "--apply")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
+    def test_the_sources_are_run_from_their_bytes_never_from_a_cached_pyc(self) -> None:
+        """r3 M3. An UNCHECKED hash-based .pyc is never compared with the source:
+        a loader that consults __pycache__ runs it as root."""
+        import py_compile
+
+        co = self.installer_copy()
+        src = co / "scripts" / "storage_format_guard.py"
+        evil = self.tmp / "evil.py"
+        evil.write_text("POISONED = True\n")
+        cfile = importlib.util.cache_from_source(str(src))
+        py_compile.compile(
+            str(evil),
+            cfile=cfile,
+            doraise=True,
+            invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH,
+        )
+        self.assertTrue(os.path.exists(cfile))
+        # the control: the standard loader DOES take the cached bytecode
+        spec = importlib.util.spec_from_file_location("ctl_poisoned", src)
+        assert spec and spec.loader
+        ctl = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ctl)
+        self.assertTrue(getattr(ctl, "POISONED", False), "the control must be poisoned")
+        mod = IH.load("guard_under_load_test", src)
+        self.assertFalse(hasattr(mod, "POISONED"))
+        self.assertTrue(hasattr(mod, "sudoers"), "the real source ran")
+        self.assertIs(sys.modules["guard_under_load_test"], mod)
+        self.addCleanup(sys.modules.pop, "guard_under_load_test", None)
+        self.addCleanup(sys.modules.pop, "ctl_poisoned", None)
+
+    def test_the_installer_writes_no_bytecode(self) -> None:
+        code = (
+            "import runpy, sys\n"
+            f"sys.argv = {[str(TOOL), *ARGS, f'--root={self.root}', f'--visudo={self.visudo}']!r}\n"
+            f"try:\n    runpy.run_path({str(TOOL)!r}, run_name='__main__')\n"
+            "except SystemExit:\n    pass\n"
+            "print('DWB', sys.dont_write_bytecode)\n"
+        )
+        p = subprocess.run(
+            [sys.executable, "-I", "-c", code], capture_output=True, text=True, timeout=60
+        )
+        self.assertIn("DWB True", p.stdout, p.stdout + p.stderr)
 
     def test_the_sudo_re_run_is_isolated_too(self) -> None:
         argv = IH.sudo_argv()
