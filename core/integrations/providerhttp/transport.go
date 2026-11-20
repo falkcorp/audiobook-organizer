@@ -1,7 +1,7 @@
 // file: core/integrations/providerhttp/transport.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 251805ba-baff-4a97-b673-26771486637d
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package providerhttp
 
@@ -359,7 +359,10 @@ func (t *transport) pick(req *http.Request) *http.Transport {
 	return g.r.strict
 }
 
-// endpoint is u's lower-case "host:port" with the scheme's default port.
+// endpoint is u's lower-case "host:port" with the scheme's default port. The
+// smtp scheme is not an HTTP one: it is the origin of core.email's host-and-port
+// destination (integrations/fields.go), whose unset port renders empty and
+// stands for the submission port the sender dials, 587.
 func endpoint(u *url.URL) string {
 	if u == nil {
 		return ""
@@ -369,6 +372,8 @@ func endpoint(u *url.URL) string {
 		switch strings.ToLower(u.Scheme) {
 		case "https":
 			port = "443"
+		case "smtp":
+			port = "587"
 		default:
 			port = "80"
 		}
