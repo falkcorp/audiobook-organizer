@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/writer/writertest"
 	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
 )
 
@@ -312,4 +313,61 @@ func TestBooksT6G2Store_SupportsReflectsTheStore(t *testing.T) {
 	}
 	require.False(t, deps.Store.Supports(t6g2Capability("nonsense")))
 	require.Contains(t, deps.Store.Describe(), "PebbleStore")
+}
+
+// TestBooksT6G2Deps_NilInputsStayUnset: the builder does not wrap a missing
+// input in an adapter, so the group's own refusals (Store, NewWriter) still
+// fire instead of the run failing later on a nil dereference.
+func TestBooksT6G2Deps_NilInputsStayUnset(t *testing.T) {
+	s, _ := g2Fixture(t)
+	kind := t6g2KindExternalIDBackfill
+	par := tasks.Fixed(1, "test")
+
+	d := newT6G2Deps(nil, &booksHostSpy{}, func() string { return "" })
+	require.Nil(t, d.Store)
+	require.Nil(t, d.NewWriter)
+	require.Nil(t, d.ReportPath)
+	_, err := t6g2NativeEnv(t6g2NewRC(kind, tasks.ModeLive, &booksGateRecorder{}), d, par)
+	require.ErrorContains(t, err, "t6g2Deps.Store is not set")
+
+	d = newT6G2Deps(s, nil, func() string { return "" })
+	require.NotNil(t, d.Store)
+	require.Nil(t, d.NewWriter)
+	_, err = t6g2NativeEnv(t6g2NewRC(kind, tasks.ModeLive, &booksGateRecorder{}), d, par)
+	require.ErrorContains(t, err, "t6g2Deps.NewWriter is not set")
+
+	d = newT6G2Deps(s, &booksHostSpy{}, nil)
+	require.Nil(t, d.ReportPath)
+	_, err = t6g2NativeEnv(t6g2NewRC(kind, tasks.ModeLive, &booksGateRecorder{}), d, par)
+	require.NoError(t, err)
+}
+
+// TestBooksT6G2Writer_EveryKindsCallsAreAdmittedByItsOwnEffects is the proof
+// that a whole-row stamp is not wider than what a kind declares: each native
+// kind of the group is built over the builder's deps, and every writer method
+// its core can call (the table's calls) runs through the builder's writer over
+// the Effects-enforcing writer built from the kind's own definition, in Live and
+// in Preview. A stamp outside the kind's Effects is a refusal the writer
+// records, which RequireClean reports.
+func TestBooksT6G2Writer_EveryKindsCallsAreAdmittedByItsOwnEffects(t *testing.T) {
+	s, id := g2Fixture(t)
+	deps := newT6G2Deps(s, &booksHostSpy{}, func() string { return t.TempDir() })
+	defs := t6g2KindList(deps, nil)
+	for _, row := range t6g2Rows() {
+		if len(row.calls) == 0 {
+			continue
+		}
+		def := t6g2KindByName(t, defs, row.kind)
+		for _, mode := range []tasks.Mode{tasks.ModeLive, tasks.ModePreview} {
+			t.Run(string(row.kind)+"/"+mode.String(), func(t *testing.T) {
+				enforcing := writertest.New(def, mode)
+				w := deps.NewWriter(enforcing)
+				for _, method := range row.calls {
+					_ = g2WriterCalls(id)[method](w)
+				}
+				require.NoError(t, enforcing.RequireClean(), "a stamp is wider than the kind's declared Effects")
+				require.Len(t, enforcing.Writes(), len(row.calls), "every call is one stamped write")
+			})
+		}
+	}
 }
