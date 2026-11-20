@@ -69,6 +69,7 @@ var defTargets = map[string]Target{
 
 var schedulerTargets = map[string]SchedulerTarget{
 \t"riddler_clue":   {Kind: "books.riddler.clue"},
+\t"two_face_coin":  {Dropped: true},
 \t"penguin_umbrella": {Kind: "books.penguin.umbrella"},
 }
 """
@@ -279,6 +280,38 @@ class AssembleR2NotesTest(unittest.TestCase):
         self.assertIn("`MarkerRepairsPlan`", repairs)
         self.assertIn("### Renamed scheduler names", note)
         self.assertLess(note.index("penguin_umbrella"), note.index("riddler_clue"))
+
+    def test_dropped_scheduler_names_are_listed_apart_and_not_counted(self) -> None:
+        note = self.note()
+        renamed = note.split("### Renamed scheduler names")[1].split("###")[0]
+        self.assertNotIn("two_face_coin", renamed)
+        dropped = note.split("### Dropped scheduler names")[1].split("##")[0]
+        self.assertIn("- `two_face_coin`", dropped)
+        self.assertIn("2 scheduler names renamed, 1 dropped", note)
+
+    def test_an_unknown_kind_map_field_fails(self) -> None:
+        self.edit(
+            asm.SOURCES["kind_map"],
+            '{Kind: "books.riddler.clue"}',
+            '{Kind: "books.riddler.clue", Wiped: true}',
+        )
+        self.assert_fails("unknown field(s) Wiped")
+
+    def test_a_dropped_and_renamed_scheduler_name_fails(self) -> None:
+        self.edit(asm.SOURCES["kind_map"], "{Dropped: true}", '{Kind: "x", Dropped: true}')
+        self.assert_fails("both dropped and renamed")
+
+    def test_the_generated_header_must_be_the_exact_go_line(self) -> None:
+        self.edit(asm.SOURCES["kind_map"], "; DO NOT EDIT.", " and DO NOT EDIT")
+        self.assert_fails("generated-file header")
+
+    def test_an_empty_action_cell_fails(self) -> None:
+        self.edit(asm.SOURCES["changed"], "| 05-health | — |", "| 05-health |  |")
+        self.assert_fails("empty action cell")
+
+    def test_an_unreadable_flip_cell_fails(self) -> None:
+        self.edit(asm.SOURCES["metrics"], "| F7 | none reads it |", "| soon | none reads it |")
+        self.assert_fails("unreadable Flip cell")
 
     def test_only_r2_route_rows_and_only_f5_f7_metrics(self) -> None:
         note = self.note()

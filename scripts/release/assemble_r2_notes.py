@@ -409,7 +409,9 @@ _KIND_ENTRY = re.compile(r'^\t"([^"]+)":\s+\{(.*)\},?$')
 _KIND_FIELD = re.compile(r'(\w+): ("[^"]*"|\w+)')
 
 
-def go_map_entries(text: str, name: str) -> list[tuple[str, dict[str, str]]]:
+def go_map_entries(
+    text: str, name: str, allowed: frozenset[str]
+) -> list[tuple[str, dict[str, str]]]:
     """Entries ``(old, fields)`` of the generated Go map ``name``, sorted by old."""
     lines = text.split("\n")
     start = [i for i, ln in enumerate(lines) if ln.startswith(f"var {name} = map[")]
@@ -425,14 +427,24 @@ def go_map_entries(text: str, name: str) -> list[tuple[str, dict[str, str]]]:
         fields = {k: v.strip('"') for k, v in _KIND_FIELD.findall(m.group(2))}
         if not fields:
             raise SourceError(f"kind map: entry without fields in {name}: {ln!r}")
+        unknown = sorted(set(fields) - allowed)
+        if unknown:
+            raise SourceError(
+                f"kind map: unknown field(s) {', '.join(unknown)} in {name}: {ln.strip()!r};"
+                " teach the assembler what they mean before it renders them"
+            )
         entries.append((m.group(1), fields))
     if not entries:
         raise SourceError(f"kind map: {name} has no entries")
     return sorted(entries, key=lambda e: e[0])
 
 
-def kind_map(text: str) -> tuple[list[list[str]], list[list[str]]]:
-    if "Code generated" not in text or "DO NOT EDIT" not in text:
+_GENERATED_HEADER = re.compile(r"(?m)^// Code generated .* DO NOT EDIT\.$")
+
+
+def kind_map(text: str) -> tuple[list[list[str]], list[list[str]], list[str]]:
+    """Return the kind rows, the scheduler rename rows and the dropped scheduler names."""
+    if not _GENERATED_HEADER.search(text):
         raise SourceError("kind map: the generated-file header is missing")
 
     def cell(fields: dict[str, str], key: str) -> str:
@@ -440,10 +452,20 @@ def kind_map(text: str) -> tuple[list[list[str]], list[list[str]]]:
 
     defs = [
         [f"`{o}`", cell(f, "Kind"), cell(f, "Rule"), cell(f, "Marker")]
-        for o, f in go_map_entries(text, "defTargets")
+        for o, f in go_map_entries(text, "defTargets", frozenset({"Kind", "Rule", "Marker"}))
     ]
-    sched = [[f"`{o}`", cell(f, "Kind")] for o, f in go_map_entries(text, "schedulerTargets")]
-    return defs, sched
+    sched: list[list[str]] = []
+    dropped: list[str] = []
+    for o, f in go_map_entries(text, "schedulerTargets", frozenset({"Kind", "Dropped"})):
+        if f.get("Dropped") == "true":
+            if "Kind" in f:
+                raise SourceError(f"kind map: scheduler name {o!r} is both dropped and renamed")
+            dropped.append(f"`{o}`")
+        elif "Kind" in f:
+            sched.append([f"`{o}`", cell(f, "Kind")])
+        else:
+            raise SourceError(f"kind map: scheduler name {o!r} has neither Kind nor Dropped: true")
+    return defs, sched, dropped
 
 
 # --------------------------------------------------------------------------
@@ -468,6 +490,8 @@ def metric_rows(text: str) -> list[list[str]]:
     picked: list[list[str]] = []
     for header in ("| HEAD family |", "| HEAD family (labels) |"):
         for c in table_rows(body, header, "metric renames", 4):
+            if not re.match(rf"(F\d+|R\d+|{NO_ACTION})", c[2]):
+                raise SourceError(f"metric renames: unreadable Flip cell {c[2]!r} in row {c[0]!r}")
             if re.match(r"(F5|F7)\b", c[2]):
                 picked.append([c[0], c[1], c[2], c[3]])
     if not picked:
@@ -639,7 +663,7 @@ def blockquote(quote: str) -> str:
 def assemble(repo: Path) -> str:
     """Build the whole note in memory; raises SourceError before any output."""
     rename = rename_rows(read_text(repo, SOURCES["rename_table"], "rename table"))
-    defs, sched = kind_map(read_text(repo, SOURCES["kind_map"], "kind-rename map"))
+    defs, sched, dropped = kind_map(read_text(repo, SOURCES["kind_map"], "kind-rename map"))
     routes = route_rows(read_text(repo, SOURCES["routes"], "deleted routes"))
     metrics = metric_rows(read_text(repo, SOURCES["metrics"], "metric renames"))
     changed, kept = changed_rows(read_text(repo, SOURCES["changed"], "changed in R2"))
@@ -656,7 +680,7 @@ def assemble(repo: Path) -> str:
         " verbatim.",
         "",
         f"- {len(rename)} config keys and settings renamed or retired (table below).",
-        f"- {len(defs)} task kinds and {len(sched)} scheduler names renamed.",
+        f"- {len(defs)} task kinds and {len(sched)} scheduler names renamed, {len(dropped)} dropped.",
         f"- {len(routes)} R2 stages delete routes; {len(metrics)} metric families renamed.",
         f"- {len(owners)} quoted owner texts.",
         "",
@@ -664,7 +688,9 @@ def assemble(repo: Path) -> str:
     out += ["## What you must do", ""]
     for row in changed:
         action = row[5]
-        if action != "—":
+        if action in ("", "-"):
+            raise SourceError(f"09 9.6: row {row[0]} has an empty action cell; write the em dash")
+        if action != NO_ACTION:
             out.append(f"- Row {row[0]}, {row[1]}: {action}")
     out.append("")
     out += [
@@ -689,6 +715,14 @@ def assemble(repo: Path) -> str:
         "",
     ]
     out += ["### Renamed scheduler names", "", md_table(["Old name", "Kind"], sched), ""]
+    out += [
+        "### Dropped scheduler names (no successor)",
+        "",
+        "These scheduler tasks fire nothing after R2; their clocks are dropped, not renamed.",
+        "",
+    ]
+    out += [f"- {name}" for name in dropped] or ["- none"]
+    out.append("")
     out += ["## Deleted routes and their successors", ""]
     for flip, change in routes:
         out += [f"### {flip}", "", change, ""]
