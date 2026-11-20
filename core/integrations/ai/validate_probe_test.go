@@ -1,5 +1,5 @@
 // file: core/integrations/ai/validate_probe_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d4b7e20a-8f13-4c59-b6a2-91e5c3f07d48
 // last-edited: 2026-11-19
 
@@ -7,13 +7,19 @@ package ai_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"iter"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/coretest"
 	"github.com/falkcorp/mediacore/integrations"
 	"github.com/falkcorp/mediacore/integrations/ai"
+	"github.com/falkcorp/mediacore/metrics/metricstest"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // aiPut is a create (version 0) of an ai instance named name with set.
@@ -211,6 +217,8 @@ func TestAIHealthTaskClearsTheBench(t *testing.T) {
 	_, _ = h.r.Generate(ctx, c, text("who?"))
 	h.r.ObserveProbe(ref, integrations.Health{Status: integrations.HealthDown})
 	h.r.ObserveProbe(ref, integrations.Health{Status: integrations.HealthDegraded})
+	// Documents rather than tests: the bench is keyed by the full Ref, so a notify
+	// ref can never match an ai bench and ObserveProbe's kind guard is defensive.
 	h.r.ObserveProbe(integrations.Ref{Kind: integrations.KindNotify, Instance: ref.Instance}, integrations.Health{Status: integrations.HealthOK})
 	if _, ok := h.r.BenchedUntil(ref); !ok {
 		t.Error("a probe that was not an OK ai answer cleared the bench")
@@ -218,5 +226,259 @@ func TestAIHealthTaskClearsTheBench(t *testing.T) {
 	h.r.ObserveProbe(ref, integrations.Health{Status: integrations.HealthOK})
 	if _, ok := h.r.BenchedUntil(ref); ok {
 		t.Error("an OK ai probe left the bench in force")
+	}
+}
+
+// TestRouter_QuotaBenchSurvivesALaterFailureAndAProbe: a quota bench stays a
+// quota bench, with its end time, when a call that was already in flight
+// when the quota answer landed then fails some other benching way, so a probe
+// (GET /v1/models, which succeeds on a spent balance) cannot clear it. The
+// endpoint has two slots; call B is sent first and held at the provider, call
+// A gets the quota 429, then B's own failure arrives.
+func TestRouter_QuotaBenchSurvivesALaterFailureAndAProbe(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		class integrations.Class
+	}{
+		{"a timeout", integrations.ClassTransient},
+		{"a rate limit", integrations.ClassRateLimited},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			h.setConfig(ai.Config{CooldownBase: 30 * time.Second, QuotaCooldown: 4 * time.Hour})
+			c := h.capability("riddle")
+			f := fake()
+			set := textEndpoint("joker-7b", "gotham.riddle")
+			set.Concurrency = 2
+			ref := h.addEndpoint("arkham", 1, set, f)
+			ctx := context.Background()
+
+			release := make(chan struct{})
+			f.ScriptText(
+				coretest.FakeAIStep{Block: release, Err: classErr(tc.class)}, // B, taken first
+				coretest.FakeAIStep{Err: classErr(integrations.ClassQuota)},  // A
+			)
+			var wg sync.WaitGroup
+			wg.Go(func() { _, _ = h.r.Generate(ctx, c, text("who?")) })
+			for deadline := time.Now().Add(5 * time.Second); len(f.Calls()) < 1; {
+				if time.Now().After(deadline) {
+					t.Fatal("call B never reached the provider")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if _, err := h.r.Generate(ctx, c, text("who?")); err == nil {
+				t.Fatal("the quota failure succeeded")
+			}
+			quotaUntil, ok := h.r.BenchedUntil(ref)
+			if !ok || quotaUntil.Sub(h.clk.Now()) != 4*time.Hour {
+				t.Fatalf("quota bench = %v, %v; want 4h", quotaUntil, ok)
+			}
+			close(release)
+			wg.Wait()
+
+			// B's failure neither shortened the bench nor made it clearable.
+			if got, ok := h.r.BenchedUntil(ref); !ok || !got.Equal(quotaUntil) {
+				t.Fatalf("after %s landed on a quota bench: until = %v, %v; want it kept at %v", tc.name, got, ok, quotaUntil)
+			}
+			h.r.ObserveProbe(ref, integrations.Health{Status: integrations.HealthOK})
+			if got, ok := h.r.BenchedUntil(ref); !ok || !got.Equal(quotaUntil) {
+				t.Errorf("an OK probe cleared a quota bench still in force: %v, %v", got, ok)
+			}
+			// Past B's own failure window and inside the quota window it holds.
+			h.clk.Advance(time.Minute)
+			h.r.ObserveProbe(ref, integrations.Health{Status: integrations.HealthOK})
+			if _, ok := h.r.BenchedUntil(ref); !ok {
+				t.Error("an OK probe a minute later cleared the quota bench")
+			}
+			// Once the quota window has passed a probe clears it.
+			h.clk.Advance(4 * time.Hour)
+			h.r.ObserveProbe(ref, integrations.Health{Status: integrations.HealthOK})
+			if _, ok := h.r.BenchedUntil(ref); ok {
+				t.Error("an OK probe left the bench in force after the quota window")
+			}
+		})
+	}
+}
+
+// renamed is the ai instance called name as Config reports it, with its display
+// name changed: a Put that touches no routing field.
+func renamed(t *testing.T, h *harness, name string) integrations.InstanceConfig {
+	t.Helper()
+	cur, ok := h.reg.Config(aiRef(name))
+	if !ok {
+		t.Fatalf("no instance %s", name)
+	}
+	cur.Name = name + " (renamed)"
+	return cur
+}
+
+// capsOverlay is an operator overlay that locks the capabilities of the ai
+// instances named in locks to the ticks given.
+func capsOverlay(locks map[string][]string) iter.Seq2[config.Path, config.OperatorValue] {
+	return func(yield func(config.Path, config.OperatorValue) bool) {
+		for name, ticks := range locks {
+			raw, _ := json.Marshal(ticks)
+			p := config.Path("integrations.ai." + name + ".capabilities")
+			if !yield(p, config.OperatorValue{Value: raw, Src: config.SourceEnv, By: "env " + string(p)}) {
+				return
+			}
+		}
+	}
+}
+
+// retiredTicks is the ticks of a row stored before the rule: a retired
+// capability beside a live one.
+var retiredTicks = []string{"gotham.riddle", "retired.capability"}
+
+// TestAIEndpoint_RetiredTickKeptOnPutRefusedOnImport: the ai rule treats a tick
+// the catalog no longer knows differently on the two write paths, and the
+// difference is the one the seams file records. A Put of a row that already
+// carries the tick keeps it (the stored row is passed as "stored"); an import
+// has no stored row and is refused, which M6 quarantines. A wildcard is refused
+// on both.
+func TestAIEndpoint_RetiredTickKeptOnPutRefusedOnImport(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newHarness(t)
+	h.capability("riddle")
+	// Rows stored before the rule existed: no validator is installed yet.
+	if _, err := aiPut(h, "arkham", textEndpoint("joker-7b", retiredTicks...)); err != nil {
+		t.Fatalf("storing the retired tick: %v", err)
+	}
+	if _, err := aiPut(h, "blackgate", textEndpoint("joker-7b", "gotham.riddle", "*")); err != nil {
+		t.Fatalf("storing the wildcard tick: %v", err)
+	}
+	// The rule is installed by a Router whose catalog knows riddle only.
+	v, err := ai.NewRouter(ai.RouterOptions{Registry: h.reg, ValidateEndpoints: true})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	t.Cleanup(func() { _ = v.Close() })
+	if _, err := v.RegisterCapability("gotham", capSpec("riddle")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Put: the retired tick is kept; the wildcard is refused.
+	if _, err := h.reg.Put(admin(), renamed(t, h, "arkham"), nil); err != nil {
+		t.Errorf("a Put of a row that already ticks a retired capability: %v, want it kept", err)
+	}
+	if _, err := h.reg.Put(admin(), renamed(t, h, "blackgate"), nil); !errors.Is(err, integrations.ErrInvalid) || !errors.Is(err, ai.ErrInvalidEndpoint) {
+		t.Errorf("a Put of a row that ticks a wildcard: err = %v, want ErrInvalid wrapping ErrInvalidEndpoint", err)
+	}
+
+	// Import: the same retired tick is refused, nothing staged.
+	im := integrations.NativeImporter(h.iks, integrations.ImportAudit(h.au), integrations.ImportValidator(h.reg))
+	record := func(name string, ticks ...string) integrations.StoredInstance {
+		return integrations.StoredInstance{Config: integrations.InstanceConfig{
+			Ref: aiRef(name), Adapter: fakeAdapter, Name: name, Enabled: true,
+			Origin: integrations.OriginUI, Version: 3, Settings: settingsMap(t, textEndpoint("joker-7b", ticks...)),
+		}}
+	}
+	for _, tc := range []struct {
+		name  string
+		ticks []string
+		want  error
+	}{
+		{"wayne-tower", retiredTicks, ai.ErrUnknownCapability},
+		{"wayne-annex", []string{"gotham.riddle", "*"}, ai.ErrInvalidEndpoint},
+	} {
+		b := h.iks.NewBatch()
+		err := im.ImportInstance(ctx, b, record(tc.name, tc.ticks...))
+		if !errors.Is(err, integrations.ErrInvalid) || !errors.Is(err, tc.want) {
+			t.Errorf("import of %v: err = %v, want ErrInvalid wrapping %v", tc.ticks, err, tc.want)
+		}
+		if n := b.Count(); n != 0 {
+			t.Errorf("a refused import of %v staged %d writes", tc.ticks, n)
+		}
+		_ = b.Close()
+	}
+	// A clean record imports.
+	b := h.iks.NewBatch()
+	defer func() { _ = b.Close() }()
+	if err := im.ImportInstance(ctx, b, record("wayne-manor", "gotham.riddle")); err != nil {
+		t.Fatalf("a clean import: %v", err)
+	}
+	if err := b.Commit(ctx, storage.Sync); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestAIInstancePut_OperatorLockedTickIsGrandfathered: the ai capabilities
+// field can be locked by an operator value (integrations.ai.<id>.capabilities),
+// and the rule is handed what the row serves as its "stored" layer, so a tick
+// the operator locks, retired since, is kept like a stored one and does not
+// block every other Put of the instance. A locked wildcard is still refused,
+// as the rule never accepts one.
+func TestAIInstancePut_OperatorLockedTickIsGrandfathered(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newHarness(t, withEndpointValidation())
+	h.capability("riddle")
+	if _, err := aiPut(h, "arkham", textEndpoint("joker-7b", "gotham.riddle")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if _, err := aiPut(h, "blackgate", textEndpoint("joker-7b", "gotham.riddle")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := h.reg.SetOverlay(ctx, capsOverlay(map[string][]string{
+		"arkham":    retiredTicks,
+		"blackgate": {"gotham.riddle", "*"},
+	})); err != nil {
+		t.Fatalf("SetOverlay: %v", err)
+	}
+	cur, _ := h.reg.Config(aiRef("arkham"))
+	if cur.Locked["capabilities"] == "" {
+		t.Fatalf("the operator overlay did not lock capabilities: %+v", cur.Locked)
+	}
+
+	if _, err := h.reg.Put(admin(), renamed(t, h, "arkham"), nil); err != nil {
+		t.Errorf("a Put that changes only the name, over a locked retired tick: %v, want it accepted", err)
+	}
+	if _, err := h.reg.Put(admin(), renamed(t, h, "blackgate"), nil); !errors.Is(err, ai.ErrInvalidEndpoint) {
+		t.Errorf("a Put over a locked wildcard: err = %v, want ErrInvalidEndpoint", err)
+	}
+}
+
+// TestNewRouter_FailedValidatorInstallReleasesTheGauge: a second validating
+// Router on one Registry is refused, and the gauge callback it had registered
+// is released with it. The leaked callback would report the refused Router's
+// own empty bench for every instance, over the live Router's.
+func TestNewRouter_FailedValidatorInstallReleasesTheGauge(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, withMetrics(), withEndpointValidation())
+	h.setConfig(ai.Config{CooldownBase: time.Hour})
+	c := h.capability("riddle")
+	f := fake()
+	ref := h.addEndpoint("arkham", 1, textEndpoint("joker-7b", "gotham.riddle"), f)
+	f.ScriptText(coretest.FakeAIStep{Err: classErr(integrations.ClassTransient)})
+	_, _ = h.r.Generate(context.Background(), c, text("who?"))
+	if _, ok := h.r.BenchedUntil(ref); !ok {
+		t.Fatal("not benched")
+	}
+
+	if _, err := ai.NewRouter(ai.RouterOptions{Registry: h.reg, Metrics: h.scope, ValidateEndpoints: true}); !errors.Is(err, integrations.ErrInvalid) {
+		t.Fatalf("a second validating Router: err = %v, want ErrInvalid", err)
+	}
+	family := metricstest.FamilyPrefix(h.scope) + "endpoint_benched"
+	mfs, err := h.prov.Gatherer().Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := false
+	for _, mf := range mfs {
+		if mf.GetName() != family {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			seen = true
+			if got := m.GetGauge().GetValue(); got != 1 {
+				t.Errorf("%s = %v for the benched instance, want 1: a refused Router's gauge callback is still registered", family, got)
+			}
+		}
+	}
+	if !seen {
+		t.Fatalf("no %s series", family)
 	}
 }
