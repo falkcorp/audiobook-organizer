@@ -98,8 +98,8 @@ SSH_OPTS = [
 ]
 # Host paths go into shell commands and sudoers lines unquoted: allow only
 # characters that need no quoting.
-_SAFE_PATH = re.compile(r"^/[A-Za-z0-9._/@+-]+$")
-_SAFE_USER = re.compile(r"^[a-z_][a-z0-9_-]*$")
+_SAFE_PATH = re.compile(r"/[A-Za-z0-9._/@+-]+")
+_SAFE_USER = re.compile(r"[a-z_][a-z0-9_-]*")
 # 05-storage §5S.3.12 "Where": the checkpoint name grammar (fullmatch: `$`
 # would let a trailing newline through).
 _CHECKPOINT_NAME = re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}")
@@ -867,9 +867,9 @@ def _validate(o: Opts) -> str:
         ("archive_dir", o.archive_dir),
         ("stage_bin", o.stage_bin),
     ):
-        if p and (not _SAFE_PATH.match(p) or ".." in p.split("/")):
+        if p and (not _SAFE_PATH.fullmatch(p) or ".." in p.split("/")):
             return f"{label} {p!r} must be an absolute path of letters, digits and ._/@+-"
-    if o.checkpoint_dir and not _SAFE_PATH.match(o.checkpoint_dir):
+    if o.checkpoint_dir and not _SAFE_PATH.fullmatch(o.checkpoint_dir):
         return f"checkpoint_dir {o.checkpoint_dir!r} must be an absolute path of letters, digits and ._/@+-"
     if o.archive and (not _ARCHIVE_NAME.fullmatch(o.archive) or ".." in o.archive):
         return f"ROLLBACK_ARCHIVE {o.archive!r} must be a file name in archive_dir (letters, digits and ._-, no /)"
@@ -884,7 +884,7 @@ def _validate(o: Opts) -> str:
         return (
             f"RELEASE {o.release!r} must be a release tag such as v1.2.3 (letters, digits and ._+-)"
         )
-    if not _SAFE_USER.match(o.user) or o.user == "root":
+    if not _SAFE_USER.fullmatch(o.user) or o.user == "root":
         return f"service_user {o.user!r} is not the service's user"
     if not re.fullmatch(r"[A-Za-z0-9@._-]+\.service", o.unit):
         return f"unit {o.unit!r} is not a .service unit name"
@@ -905,7 +905,7 @@ def main(argv: list[str] | None = None) -> int:
     a = parser.parse_args(argv)
     o = Opts(host="localhost", db=a.db, bin=a.bin, unit=a.unit, user=a.service_user)
     bad = _validate(o) or (
-        "" if _SAFE_USER.match(a.deploy_user) else f"--deploy-user {a.deploy_user!r}"
+        "" if _SAFE_USER.fullmatch(a.deploy_user) else f"--deploy-user {a.deploy_user!r}"
     )
     if bad:
         print(f"storage_format_guard: {bad}", file=sys.stderr)
