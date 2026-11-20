@@ -1,7 +1,7 @@
 // file: internal/batch/series_deleted_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b7c2e91-3d64-4f08-a1e6-92c4d80f7a13
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package batch
 
@@ -16,11 +16,7 @@ import (
 // that row only: the row's result is a failure naming the series (the endpoint
 // answers 200 with per-row results, never a 500), and the book keeps its series.
 func TestUpdateAudiobooks_ASeriesIDOfADeletedSeriesFailsThatRowAndNamesIt(t *testing.T) {
-	store, err := database.NewPebbleStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := newServingPebbleStore(t)
 	kept, err := store.CreateSeries("Batman Eternal", nil)
 	if err != nil {
 		t.Fatal(err)
