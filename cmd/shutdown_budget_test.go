@@ -9,52 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 )
-
-func TestShutdownBudgetFromEnv(t *testing.T) {
-	tests := []struct {
-		name    string
-		set     bool
-		value   string
-		want    time.Duration
-		wantErr bool
-	}{
-		{name: "unset", set: false, want: 0},
-		{name: "empty", set: true, value: "", want: 0},
-		{name: "seconds", set: true, value: "25s", want: 25 * time.Second},
-		{name: "minute", set: true, value: "1m", want: time.Minute},
-		{name: "garbage", set: true, value: "abc", wantErr: true},
-		{name: "negative", set: true, value: "-5s", wantErr: true},
-		{name: "zero", set: true, value: "0s", wantErr: true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			lookup := func(key string) (string, bool) {
-				if key != shutdownBudgetEnv {
-					t.Fatalf("looked up %q, want %q", key, shutdownBudgetEnv)
-				}
-				return tc.value, tc.set
-			}
-			got, err := shutdownBudgetFromEnv(lookup)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("got %v, nil error; want an error", got)
-				}
-				if !strings.Contains(err.Error(), "ABO_CORE_SHUTDOWN_BUDGET") {
-					t.Fatalf("error %q does not name the variable", err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if got != tc.want {
-				t.Fatalf("got %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
 
 func TestDeployFilesCarryStopTimeouts(t *testing.T) {
 	compose, err := os.ReadFile("../docker-compose.yml")

@@ -176,7 +176,7 @@ type Options struct {
 
 	// R1Listen opens the listener of 06 §6.5.2 start step (7) in release R1,
 	// in place of httpapi.Listen: the kernel still decides when it opens
-	// (after the hooks, the workers and R1Values) and drains it first in the
+	// (after the hooks and the workers) and drains it first in the
 	// stop order, within min(core.shutdown.http_drain, remaining). ABO keeps
 	// HEAD's listener stack behind it (HTTP/3, the port-80 redirect, the TLS
 	// fallback, its timeouts, Alt-Svc and the peer allow-list) until core's

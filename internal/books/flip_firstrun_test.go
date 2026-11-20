@@ -22,9 +22,6 @@ import (
 // the real Engine behind GET/PUT /api/v1/config.
 func bootFlippedFresh(t *testing.T) *composed {
 	t.Helper()
-	old := flipDeclared
-	flipDeclared = true
-	t.Cleanup(func() { flipDeclared = old })
 	stateDir := t.TempDir()
 	return bootComposedWith(t, false, stateDir, func(c *config.Config) {
 		c.RootDir = ""

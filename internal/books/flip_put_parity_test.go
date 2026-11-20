@@ -343,9 +343,6 @@ func TestFlipPUTParity_OwnerTrustRootRefusedForEveryCallerWithNoOwner(t *testing
 // boot. Core refuses the write (409 locked) and the View says what locks the key,
 // which is the Deluge env-lock check kept, with a stricter answer.
 func TestFlipPUTParity_DelugeEnvLockRefusesTheWrite(t *testing.T) {
-	old := flipDeclared
-	flipDeclared = true
-	t.Cleanup(func() { flipDeclared = old })
 	stateDir := t.TempDir()
 	bootComposedWith(t, false, stateDir, func(c *config.Config) {
 		c.RootDir = ""
@@ -380,9 +377,6 @@ func TestFlipPUTParity_DelugeEnvLockRefusesTheWrite(t *testing.T) {
 // operator's environment naming it, a write is still refused and the value stays
 // the operator's, and the View says what locks it.
 func TestFlipPUTParity_DelugePasswordEnvLockRefusesTheWrite(t *testing.T) {
-	old := flipDeclared
-	flipDeclared = true
-	t.Cleanup(func() { flipDeclared = old })
 	stateDir := t.TempDir()
 	bootComposedWith(t, false, stateDir, func(c *config.Config) {
 		c.RootDir = ""
@@ -415,9 +409,6 @@ func TestFlipPUTParity_DelugePasswordEnvLockRefusesTheWrite(t *testing.T) {
 // read it into the setting and the settings page showed it as environment-set; the
 // value an operator supplies is the effective one and a write is refused.
 func TestFlipPUTParity_OpenAIKeyFromTheEcosystemEnvIsEffectiveAndLocked(t *testing.T) {
-	old := flipDeclared
-	flipDeclared = true
-	t.Cleanup(func() { flipDeclared = old })
 	stateDir := t.TempDir()
 	bootComposedWith(t, false, stateDir, func(c *config.Config) {
 		c.RootDir = ""

@@ -27,9 +27,6 @@ import (
 // boot sees only its own.
 func flippedOfflineABO(t *testing.T, env *[]string) *offlineABO {
 	t.Helper()
-	old := flipDeclared
-	flipDeclared = true
-	t.Cleanup(func() { flipDeclared = old })
 	h := &offlineABO{t: t, state: filepath.Join(t.TempDir(), "state")}
 	h.path = filepath.Join(tempDir(t), "gotham.pebble")
 	h.root, h.dump = gotham(t)

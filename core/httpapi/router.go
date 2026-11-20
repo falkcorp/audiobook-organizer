@@ -79,9 +79,8 @@ type Router struct {
 
 // Options configure a Router. The perimeter fields (PeerAllowlist,
 // TrustedProxies, ClientIPHeader, CORS, Limits) can change after Build
-// through SetPerimeter: in release R1 the kernel sets them once, from
-// app.Options.R1Values, before the first listener opens (05-config
-// §1.12.1).
+// through SetPerimeter: the kernel sets them from core.http.* before the
+// first listener opens (05-config §1.12.1) and again on every change.
 type Options struct {
 	CoreGroupBase string // "/api/core/v1" when empty
 	// PeerAllowlist is stage 0's allow-list (core.http.peer_allowlist):
@@ -246,7 +245,7 @@ func NewRouter(opts Options, deps Deps) *Router {
 // ignored) on the router and on the handler of its last Build. Requests
 // see the old or the new values, never a mix (05-http-api §9). The kernel
 // calls it at 06 §6.5.2 start step (7), before the first listener opens,
-// with the values app.Options.R1Values returned (05-config §1.12.1). After
+// with the values core.http.* resolves to (05-config §1.12.1). After
 // Build, an entry the chain cannot use (a zone naming no interface) is left
 // out and returned, joined, for the caller to log; the rest apply. Before
 // Build it returns nil, and Build logs what it cannot use.
