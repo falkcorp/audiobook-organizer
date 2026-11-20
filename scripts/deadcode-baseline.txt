@@ -1053,6 +1053,8 @@ internal/plugins/maintenance.t6g1RefuseUnwired
 internal/plugins/maintenance.t6g1StartRequirement
 internal/plugins/maintenance.t6g1Watermark.complete
 internal/plugins/maintenance.t6g1WriterOf
+internal/plugins/maintenance.t6g2AuthorBooksLegacyRetireKind
+internal/plugins/maintenance.t6g2AuthorBooksLegacyRetireMeta
 internal/plugins/maintenance.t6g2BookAtPathIndexBackfillKind
 internal/plugins/maintenance.t6g2BookAtPathIndexBackfillMeta
 internal/plugins/maintenance.t6g2BookAtPathIndexVerifyKind
