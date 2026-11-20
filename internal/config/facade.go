@@ -19,8 +19,7 @@ import (
 // while the implementation is built. Nothing here has behaviour.
 //
 // The Facade is the per-App value that sits behind this package's exported
-// names (AppConfig, Snapshot, Mutate, Generation,
-// SettingLockedBy). Today those read a process-wide Config that HEAD's viper
+// names (AppConfig, Snapshot, Mutate, Generation). Today those read a process-wide Config that HEAD's viper
 // loader fills. From the flip they read the Facade's projection: HEAD's flat
 // Config rebuilt, through the rename table (internal/books/cutover), from core
 // config's keys and the secret store, on every core generation change. A write
@@ -101,8 +100,7 @@ type KeyView struct {
 	// says about the record: set, source, updated_at, fingerprint.
 	Secret *SecretMeta `json:"secret,omitempty"`
 	// LockedBy says what makes the key read-only: "env ABO_CORE_LOG_LEVEL",
-	// "flag --db", "file <name>", "" when it is free. Same reasons as
-	// SettingLockedBy.
+	// "flag --db", "file <name>", "" when it is free.
 	LockedBy string `json:"locked_by,omitempty"`
 	// RestartPending is true when a restart-bound change is stored and not yet
 	// effective.
@@ -181,7 +179,7 @@ type Facade interface {
 	Mutate(fn func(*Config)) error
 	// Generation moves whenever the projection was rebuilt or Mutate ran.
 	Generation() uint64
-	// Locks is every locked setting to what locks it; SettingLockedBy reads it.
+	// Locks is every locked setting to what locks it.
 	Locks() map[string]string
 	// View is GET /api/v1/config's content.
 	View() View

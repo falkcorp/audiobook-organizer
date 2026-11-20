@@ -323,7 +323,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// in-method nil guards (which mirror the old `s.X == nil` / `s.X != nil`
 	// checks on the concrete pointers) are preserved: boxing a nil concrete
 	// pointer into an interface yields a non-nil interface and would defeat them.
-	// s.systemService / s.configUpdateService are concrete *struct pointers always
+	// s.systemService is a concrete *struct pointer always
 	// constructed in NewServer, but the guards keep parity with the established
 	// pattern and are harmless. s.pluginRegistry can legitimately be nil
 	// (HealthCheckAll skipped). s.hub is passed as a LAZY provider closure (not a

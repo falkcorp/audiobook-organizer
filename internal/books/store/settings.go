@@ -76,13 +76,11 @@ func FindEncryptionKey(dirs ...string) string {
 // InitEncryption loads the settings encryption key from dataDir, falling back
 // to legacyDirs, and generates a new one only when no key exists anywhere.
 //
-// GENERATING A KEY IS DESTRUCTIVE when encrypted settings already exist.
-// LoadConfigFromDatabase tries to decrypt every IsSecret row; on failure it
-// re-encrypts the four secrets it can recover from the config file
-// (openai_api_key, google_books_api_key, hardcover_api_token,
-// basic_auth_password) and calls DeleteSetting on every other one. So a key
-// that silently regenerates does not surface as an error -- it surfaces weeks
-// later as "why do I have to re-enter that credential again".
+// GENERATING A KEY IS DESTRUCTIVE when encrypted settings already exist:
+// every IsSecret row stored under the old key becomes unreadable, and the
+// cutover, which decrypts them with this key, cannot carry them over. A key
+// that silently regenerates does not surface as an error -- it surfaces later
+// as "why do I have to re-enter that credential again".
 //
 // Three branches, and the two that are NOT the happy path are the point:
 //
@@ -257,14 +255,11 @@ func (s *PebbleStore) SetSetting(key, value, typ string, isSecret bool) error {
 
 // GetAllSettings returns every row under the "setting:" prefix.
 //
-// It fails rather than returning a partial list. Callers act on what is
-// ABSENT from the result: config.LoadConfigFromDatabase falls back to
-// defaults (and then the legacy per-key path) when config_blob is missing,
-// and SaveConfigToDatabase writes the whole config struct back, so a row that
-// silently drops out of this list is overwritten on the next settings save.
-// cmd's guardAgainstKeyRegeneration uses the list to decide whether any
-// encrypted secret exists before generating a new key, so a dropped secret
-// row there means a new key and the loss of every stored secret.
+// It fails rather than returning a partial list, because its caller acts on
+// what is ABSENT from the result: books' guardAgainstKeyRegeneration uses the
+// list to decide whether any encrypted secret exists before generating a new
+// key, so a dropped secret row there means a new key and the loss of every
+// stored secret.
 //
 // Every writer under the prefix (SetSetting, EmbeddingStore's index flag)
 // stores the JSON Setting envelope, so a row that does
@@ -337,8 +332,8 @@ func collectSettings(iter settingsIter) (settings []Setting, err error) {
 // from an iterator or close error (which wraps the Pebble error instead)
 // because the remedy is different: the store itself is readable, and the named
 // rows have to be repaired or removed. No startup override helps, because every
-// startup path that reads settings (cmd's key-regeneration guard and
-// config.LoadConfigFromDatabase) fails on the same rows. Use errors.As.
+// startup path that reads settings (books' key-regeneration guard) fails on
+// the same rows. Use errors.As.
 //
 // Keys are the setting names without the "setting:" prefix, in key order. The
 // error never carries stored bytes; a value may be an encrypted secret.

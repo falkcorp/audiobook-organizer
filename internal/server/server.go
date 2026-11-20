@@ -398,7 +398,7 @@ type Server struct {
 	// backfill, async dedup scans, etc.) so Shutdown can wait for them to
 	// finish BEFORE the database is closed. Without this the embedding
 	// backfill goroutine would still be holding Pebble iterators when
-	// database.CloseStore() ran, and Pebble would panic with "element has
+	// the store was closed, and Pebble would panic with "element has
 	// outstanding references" during FileCache.Unref. Every goroutine that
 	// touches the store must: (1) start via bgWG.Go(name, fn), which
 	// registers name before the goroutine starts and deregisters it when fn

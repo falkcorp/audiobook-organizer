@@ -38,9 +38,10 @@ type fieldRule struct {
 	Why   string
 }
 
-// configFieldRules is THE classification of config fields that the
-// interactive-session rule cares about. It is the only list: UpdateService
-// enforces it (ChangedProtectedFields), and protected_fields_test.go fails
+// configFieldRules is HEAD's classification of config fields that the
+// interactive-session rule cares about. Nothing enforces it since F3-07
+// deleted UpdateService (ChangedProtectedFields was its enforcer); core
+// config's protect tags carry the rule now. protected_fields_test.go fails
 // when a field whose name looks like a path, an executable, a URL or a
 // sign-in setting exists in Config without an entry here.
 //
@@ -161,7 +162,7 @@ var configFieldRules = map[string]fieldRule{
 // the owner's identity is proven (auth.OwnerProofWhyNot). They are sign-in
 // settings too (configFieldRules), so an API key can never change them; on
 // top of that, once owner_email is set, only the owner may change them
-// (UpdateService; plan D15), whatever the caller's auth method and whether or
+// (plan D15; books/appconfig's owner trust-root rule), whatever the caller's auth method and whether or
 // not local auth is on. Without this a second admin signed in through
 // Access, or a stolen password session, could set owner_email to itself, or
 // point cf_access_* at a team it controls and mint the owner's JWT.

@@ -69,9 +69,9 @@ func withConfig(t *testing.T, c config.Config) {
 // it changes for the whole process: config.AppConfig (withConfig) and the
 // process-wide viper. InitConfig registers every shipped default and env
 // binding on viper and nothing undoes them, so without the restore every
-// later boot in the package has LoadConfigFromDatabase overwrite stored
-// settings with defaults (abs_api_enabled reads as set, to false, and Register
-// refuses with errABSFlagDrift). viper cannot be snapshotted, so restoring it
+// later boot in the package reads those defaults instead of the config the
+// test set (abs_api_enabled reads as set, to false, and Register can refuse
+// with errABSFlagDrift). viper cannot be snapshotted, so restoring it
 // means returning it to empty. The helper fails unless viper is empty when it
 // starts, which keeps the restore exact and catches the next test that leaks.
 func initConfigForTest(t *testing.T) {

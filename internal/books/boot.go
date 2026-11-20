@@ -109,10 +109,9 @@ type settingsCensus interface {
 // anywhere AND the database already holds encrypted secrets.
 //
 // That combination is not recoverable by starting up. InitEncryption would
-// generate a fresh key, and LoadConfigFromDatabase would then fail to decrypt
-// every existing secret, re-encrypt the four it can recover from the config file
-// and DeleteSetting the rest. The secrets are gone before anyone sees a warning,
-// and the app looks healthy afterwards. Refusing to boot is the only point at
+// generate a fresh key, and every existing secret would be unreadable under it
+// (the cutover could carry none of them over). The secrets are gone before
+// anyone sees a warning, and the app looks healthy afterwards. Refusing to boot is the only point at
 // which the operator can still put the key file back.
 //
 // Fails CLOSED on a census error, and names the override in the message: a
@@ -123,11 +122,9 @@ type settingsCensus interface {
 // no census. Otherwise the census runs BEFORE allowKeyRegenEnv is honoured,
 // because one census result is refused even with the override set: an
 // unreadable settings row (*database.UnreadableSettingsError). The override
-// cannot get past it -- loadConfigFromDB fails on the same rows next -- and
-// honouring it would let InitEncryption write a NEW key file first. Once the
-// row is repaired, the following boot would find that key, skip this guard,
-// fail to decrypt every stored secret, and LoadConfigFromDatabase would delete
-// them. So that message names the rows and the repair and does not offer the
+// cannot get past it, and honouring it would let InitEncryption write a NEW
+// key file first. Once the row is repaired, the following boot would find
+// that key, skip this guard, and every stored secret would be unreadable. So that message names the rows and the repair and does not offer the
 // override. Any other census error (I/O, iterator, close) still yields to the
 // override, which is the escape hatch it exists for.
 func guardAgainstKeyRegeneration(store settingsCensus, stateDir, legacyKeyDir string) error {
