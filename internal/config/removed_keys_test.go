@@ -7,18 +7,13 @@ package config
 
 import (
 	"bytes"
-	"context"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/spf13/viper"
-	"github.com/stretchr/testify/mock"
 )
 
 // captureRemovedKeyLogs routes slog to a buffer for the duration of the test.
@@ -29,80 +24,6 @@ func captureRemovedKeyLogs(t *testing.T) *bytes.Buffer {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 	return &buf
-}
-
-// TestUpdateConfig_RejectsRemovedEnableSQLite is the owner decision on
-// TASK-020: a PUT carrying enable_sqlite gets 400 for ANY value — it got 400
-// while the field was immutable, and dropping it silently would answer 200 for
-// a setting that does not exist. Nothing may be persisted.
-//
-// Mutation check: delete the removedKeyInUpdate call in UpdateConfig and every
-// case fails with 200 (the JSON round-trip drops the unknown key).
-func TestUpdateConfig_RejectsRemovedEnableSQLite(t *testing.T) {
-	for _, val := range []any{true, false, "true", nil} {
-		t.Run("", func(t *testing.T) {
-			restoreAppConfig(t)
-			ms, blobs := ladderTestStore(t)
-			svc := NewUpdateService(ms)
-
-			status, resp := svc.UpdateConfig(context.Background(), map[string]any{"enable_sqlite": val, "root_dir": "/lib"})
-			if status != http.StatusBadRequest {
-				t.Fatalf("enable_sqlite=%v: status = %d, want 400; resp = %v", val, status, resp)
-			}
-			msg, _ := resp["error"].(string)
-			for _, want := range []string{"enable_sqlite", "--enable-sqlite3-i-know-the-risks", "was removed", "SQLite is no longer selectable"} {
-				if !strings.Contains(msg, want) {
-					t.Errorf("enable_sqlite=%v: error %q does not mention %q", val, msg, want)
-				}
-			}
-			if len(*blobs) != 0 {
-				t.Errorf("enable_sqlite=%v: rejected PUT persisted %d blob(s)", val, len(*blobs))
-			}
-			if got := Snapshot().RootDir; got == "/lib" {
-				t.Errorf("enable_sqlite=%v: rejected PUT still applied root_dir", val)
-			}
-		})
-	}
-}
-
-// TestUpdateConfig_WithoutRemovedKeyUnaffected guards the other side: a PUT
-// that does not carry a removed key behaves exactly as before.
-func TestUpdateConfig_WithoutRemovedKeyUnaffected(t *testing.T) {
-	restoreAppConfig(t)
-	ms, blobs := ladderTestStore(t)
-	svc := NewUpdateService(ms)
-
-	if status, resp := svc.UpdateConfig(context.Background(), map[string]any{"root_dir": "/lib"}); status != http.StatusOK {
-		t.Fatalf("status = %d; resp = %v", status, resp)
-	}
-	if got := Snapshot().RootDir; got != "/lib" {
-		t.Errorf("root_dir = %q, want /lib", got)
-	}
-	if len(*blobs) == 0 {
-		t.Error("accepted PUT persisted no blob")
-	}
-}
-
-// TestUpdateConfig_ViperOnlyRemovedKeyRejected: enable_sqlite3_i_know_the_risks
-// was only ever the flag's viper/env key, never a config-API field, so a PUT
-// carrying it used to be dropped silently and answered 200. Since unknown keys
-// are refused, it gets a 400 — and the registry's removal message, which says
-// what to do, rather than the generic unknown-key text.
-func TestUpdateConfig_ViperOnlyRemovedKeyRejected(t *testing.T) {
-	restoreAppConfig(t)
-	ms, blobs := ladderTestStore(t)
-	svc := NewUpdateService(ms)
-
-	status, resp := svc.UpdateConfig(context.Background(), map[string]any{"enable_sqlite3_i_know_the_risks": true})
-	if status != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; resp = %v", status, resp)
-	}
-	if msg, _ := resp["error"].(string); !strings.Contains(msg, "was removed") {
-		t.Errorf("error %q is not the removal message", msg)
-	}
-	if len(*blobs) != 0 {
-		t.Error("rejected PUT persisted a blob")
-	}
 }
 
 // TestInitConfig_RemovedKeysInConfigFileWarnAndLoad covers the viper path
@@ -137,59 +58,6 @@ func TestInitConfig_RemovedKeysInConfigFileWarnAndLoad(t *testing.T) {
 	}
 	if !strings.Contains(out, "level=WARN") || !strings.Contains(out, "removed setting is ignored") {
 		t.Errorf("expected a removed-setting WARN, got:\n%s", out)
-	}
-}
-
-// TestLoadConfigFromFile_RemovedKeyWarnsAndLoads covers the config.yaml that
-// lives next to the database.
-func TestLoadConfigFromFile_RemovedKeyWarnsAndLoads(t *testing.T) {
-	restoreAppConfig(t)
-	logs := captureRemovedKeyLogs(t)
-
-	dir := t.TempDir()
-	Mutate(func(c *Config) {
-		c.DatabasePath = filepath.Join(dir, "audiobooks.pebble")
-		c.RootDir = ""
-	})
-	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("root_dir: /de/books\nenable_sqlite: true\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := LoadConfigFromFile(); err != nil {
-		t.Fatalf("LoadConfigFromFile: %v", err)
-	}
-	if got := Snapshot().RootDir; got != "/de/books" {
-		t.Errorf("root_dir = %q, want /de/books — the file did not load", got)
-	}
-	if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "key=enable_sqlite ") {
-		t.Errorf("expected a removed-setting WARN for enable_sqlite, got:\n%s", out)
-	}
-}
-
-// TestLoadConfigFromDatabase_LegacyRemovedKeyRowWarns covers installs still on
-// per-key settings rows: a row named enable_sqlite logs the removed-setting
-// WARN (not the generic "unknown setting key") and loading still succeeds.
-func TestLoadConfigFromDatabase_LegacyRemovedKeyRowWarns(t *testing.T) {
-	restoreAppConfig(t)
-	logs := captureRemovedKeyLogs(t)
-
-	store := mocks.NewMockStore(t)
-	setupMigrationExpectations(store)
-	store.On("GetSetting", mock.Anything).Return((*database.Setting)(nil), nil).Maybe()
-	store.On("SetSetting", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-	store.EXPECT().GetAllSettings().Return([]database.Setting{
-		{Key: "enable_sqlite", Value: "true", Type: "bool"},
-	}, nil).Once()
-
-	if err := LoadConfigFromDatabase(store); err != nil {
-		t.Fatalf("LoadConfigFromDatabase: %v", err)
-	}
-	out := logs.String()
-	if !strings.Contains(out, "removed setting is ignored") || !strings.Contains(out, "key=enable_sqlite ") {
-		t.Errorf("expected a removed-setting WARN, got:\n%s", out)
-	}
-	if strings.Contains(out, "unknown setting key: enable_sqlite") {
-		t.Errorf("legacy row fell through to the generic unknown-key path:\n%s", out)
 	}
 }
 
@@ -283,53 +151,6 @@ func TestRemovedWriteBackupBefore_WarnsOnLoad(t *testing.T) {
 	}
 	if msg, ok := removedKeyInUpdate(map[string]any{"write_backup_before_tag_write": true}); !ok || !strings.Contains(msg, "create_backups") {
 		t.Errorf("update with write_backup_before_tag_write: ok=%v msg=%q, want a refusal naming create_backups", ok, msg)
-	}
-}
-
-// A nested write_backup_before -- the shape a Settings page loaded before the
-// removal, or a settings export taken then, sends -- is refused with the
-// removed-setting message, not unknownConfigKeys' generic one.
-func TestUpdateConfig_RejectsNestedRemovedWriteBackupBefore(t *testing.T) {
-	restoreAppConfig(t)
-	ms, blobs := ladderTestStore(t)
-	svc := NewUpdateService(ms)
-
-	status, resp := svc.UpdateConfig(context.Background(), map[string]any{
-		"metadata_scoring": map[string]any{"write_backup_before": true, "llm_enabled": false},
-	})
-	if status != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; resp = %v", status, resp)
-	}
-	msg, _ := resp["error"].(string)
-	for _, want := range []string{"metadata_scoring.write_backup_before", "was removed", "create_backups"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("error %q does not mention %q", msg, want)
-		}
-	}
-	if _, generic := resp["unknown_keys"]; generic {
-		t.Errorf("refused as a generic unknown key, want the removed-setting message: %v", resp)
-	}
-	if len(*blobs) != 0 {
-		t.Errorf("rejected PUT persisted %d blob(s)", len(*blobs))
-	}
-}
-
-// The config.yaml beside the database warns about a nested removed key too.
-func TestLoadConfigFromFile_NestedRemovedKeyWarns(t *testing.T) {
-	restoreAppConfig(t)
-	logs := captureRemovedKeyLogs(t)
-
-	dir := t.TempDir()
-	Mutate(func(c *Config) { c.DatabasePath = filepath.Join(dir, "audiobooks.pebble") })
-	if err := os.WriteFile(filepath.Join(dir, "config.yaml"),
-		[]byte("metadata_scoring:\n  write_backup_before: true\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := LoadConfigFromFile(); err != nil {
-		t.Fatalf("LoadConfigFromFile: %v", err)
-	}
-	if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "key=metadata_scoring.write_backup_before ") {
-		t.Errorf("expected a removed-setting WARN for metadata_scoring.write_backup_before, got:\n%s", out)
 	}
 }
 

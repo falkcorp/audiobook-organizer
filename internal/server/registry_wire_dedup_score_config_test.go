@@ -7,9 +7,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"net/http"
 	"reflect"
 	"slices"
 	"strings"
@@ -26,14 +23,10 @@ import (
 )
 
 // dedupWiring is what buildDedupEngineFromContainer hands back: the engine the
-// production ServiceDef built, the config UpdateService the SAME container
-// built (the registry's own configupdate def, resolved through the dedup
-// def's Needs edge — not a test-constructed one), and the Pebble store both
-// persist to, so a test can read the config blob back.
+// production ServiceDef built. A changed ladder reaching the live engine is the
+// dedup plugin's Facade UpdateHook (internal/plugins/dedup/score_hook_test.go).
 type dedupWiring struct {
 	engine *dedup.Engine
-	update *config.UpdateService
-	pebble *database.PebbleStore
 }
 
 // buildDedupEngineFromContainer runs the production "dedup" ServiceDef (the
@@ -42,9 +35,8 @@ type dedupWiring struct {
 // or the Build error. This exercises the EXACT wiring line the bug lived on
 // — not a re-implementation of it in the test.
 //
-// KeyStore is a real Pebble store (not MockStore) so that the configupdate
-// service the container resolves transitively persists a real config_blob the
-// tests can assert on, and so the engine's rescore writes to real rows.
+// KeyStore is a real Pebble store (not MockStore) so the engine's rescore
+// writes to real rows.
 func buildDedupEngineFromContainer(t *testing.T, cfg *config.Config) (dedupWiring, error) {
 	t.Helper()
 	pebble, err := database.NewPebbleStore(t.TempDir())
@@ -89,15 +81,11 @@ func buildDedupEngineFromContainer(t *testing.T, cfg *config.Config) (dedupWirin
 	if !ok || eng == nil {
 		t.Fatalf("dedup engine not built (ok=%v) — the embedding-mode gate short-circuited the fixture", ok)
 	}
-	upd, ok := serviceregistry.TryGet[*config.UpdateService](c, serviceregistry.KeyConfigUpdate)
-	if !ok || upd == nil {
-		t.Fatalf("configupdate service not built (ok=%v) — the dedup def must pull it in via Needs", ok)
-	}
-	return dedupWiring{engine: eng, update: upd, pebble: pebble}, nil
+	return dedupWiring{engine: eng}, nil
 }
 
 // headOrderWithDatabase is the order the production container resolved its 45
-// names at R1-34's base (R1-15's head, fc21cd0ca) with DatabasePath set. It is
+// names, less configupdate (F3-07 deleted config.UpdateService, so 44 now), at R1-34's base (R1-15's head, fc21cd0ca) with DatabasePath set. It is
 // Container.Names() unsorted, so it pins the build, start and stop order as well
 // as the set. Captured by resolving that base's group-based container (the
 // core, ai, scheduler and plugins groups, plus activity) with NewServer's seven
@@ -122,7 +110,6 @@ var headOrderWithDatabase = []string{
 	"aiscanstore",
 	"audiobook",
 	"batch",
-	"configupdate",
 	"dashboard",
 	"delugeplugin",
 	"embeddingstore",
@@ -173,7 +160,6 @@ var headOrderWithoutDatabase = []string{
 	"aiscanstore",
 	"audiobook",
 	"batch",
-	"configupdate",
 	"dashboard",
 	"delugeplugin",
 	"embeddingstore",
@@ -203,7 +189,7 @@ var headOrderWithoutDatabase = []string{
 
 // TestServiceDefs_BuildsHEADSet pins what the production container builds:
 // serviceDefs(true) resolves to HEAD's 45 names in HEAD's order and
-// serviceDefs(false) to HEAD's 41, with no def listed twice. The container is
+// serviceDefs(false) to HEAD's 41, each less configupdate (44 and 40), with no def listed twice. The container is
 // made the way NewServer makes it, with the same seven overrides, so the names
 // include them.
 func TestServiceDefs_BuildsHEADSet(t *testing.T) {
@@ -284,40 +270,6 @@ func defsReachableFrom(all []serviceregistry.ServiceDef, leaves map[string]any, 
 	return out
 }
 
-// restoreGlobalConfig snapshots the process-wide config.AppConfig and puts it
-// back when the test ends; UpdateConfig mutates the global, not the container's
-// *Config, so tests that PUT must clean up after themselves.
-func restoreGlobalConfig(t *testing.T) {
-	t.Helper()
-	orig := config.Snapshot()
-	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = orig }) })
-}
-
-// persistedSignals reads dedup.signals back out of the config_blob the
-// UpdateService wrote to Pebble. ok=false when no blob has been written.
-func persistedSignals(t *testing.T, pebble *database.PebbleStore) (config.DedupSignalConfig, bool) {
-	t.Helper()
-	setting, err := pebble.GetSetting("config_blob")
-	if errors.Is(err, database.ErrSettingNotFound) {
-		return config.DedupSignalConfig{}, false
-	}
-	if err != nil {
-		t.Fatalf("GetSetting(config_blob): %v", err)
-	}
-	if setting == nil || setting.Value == "" {
-		return config.DedupSignalConfig{}, false
-	}
-	var blob struct {
-		Dedup struct {
-			Signals config.DedupSignalConfig `json:"signals"`
-		} `json:"dedup"`
-	}
-	if err := json.Unmarshal([]byte(setting.Value), &blob); err != nil {
-		t.Fatalf("config_blob is not JSON: %v", err)
-	}
-	return blob.Dedup.Signals, true
-}
-
 // dedupWiringConfig is a Config that gets past the dedup ServiceDef's
 // embedding-mode gate and carries the given persisted dedup.signals block.
 func dedupWiringConfig(sigs config.DedupSignalConfig) *config.Config {
@@ -380,114 +332,5 @@ func TestRegistryWire_DedupEngineRefusesInvalidSignals(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("startup error must contain %q so the operator knows WHAT is wrong and WHERE it lives (the persisted blob, not just config.yaml); got: %v", want, err)
 		}
-	}
-}
-
-// TestRegistryWire_PutConfigReachesLiveEngine (review-round H2): a
-// PUT /api/v1/config body carrying a new dedup.signals ladder must reach the
-// running engine through the sink registry_wire.go registers on the
-// container's UpdateService — the same service the HTTP handler calls. Before
-// this round the PUT persisted the blob and the engine kept scoring on the
-// ladder it was built with until a restart.
-//
-// Mutation check: delete the SetDedupScoreConfigSink call in registry_wire.go
-// and the engine still reads the 97/90/75/60 it was built with here.
-func TestRegistryWire_PutConfigReachesLiveEngine(t *testing.T) {
-	restoreGlobalConfig(t)
-	w, err := buildDedupEngineFromContainer(t, dedupWiringConfig(config.DedupSignalConfig{}))
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-	if got := w.engine.ScoreConfig().BandCertainMin; got != 97 {
-		t.Fatalf("fixture: engine should start on the default 97, got %.2f", got)
-	}
-
-	status, resp := w.update.UpdateConfig(context.Background(), map[string]any{
-		"dedup": map[string]any{
-			"signals": map[string]any{
-				"band_certain_min": 98.5,
-				"band_high_min":    91.0,
-				"band_medium_min":  76.0,
-				"band_review_min":  61.0,
-			},
-		},
-	})
-	if status != http.StatusOK {
-		t.Fatalf("UpdateConfig status = %d, resp = %v", status, resp)
-	}
-
-	live := w.engine.ScoreConfig()
-	if live.BandCertainMin != 98.5 || live.BandHighMin != 91 || live.BandMediumMin != 76 || live.BandReviewMin != 61 {
-		t.Fatalf("PUT /api/v1/config did not reach the live engine: engine ladder = %.2f/%.2f/%.2f/%.2f, want 98.5/91/76/61",
-			live.BandCertainMin, live.BandHighMin, live.BandMediumMin, live.BandReviewMin)
-	}
-	persisted, ok := persistedSignals(t, w.pebble)
-	if !ok {
-		t.Fatalf("PUT succeeded but no config_blob was persisted")
-	}
-	if persisted.BandCertainMin != 98.5 {
-		t.Fatalf("persisted band_certain_min = %.2f, want 98.5", persisted.BandCertainMin)
-	}
-
-	// D4: the stored-candidate re-band is QUEUED as dedup.rescore, not run
-	// inside the PUT. The response carries the op id, and a matching queued
-	// row exists in the ops store.
-	opID, _ := resp["dedup_rescore_op_id"].(string)
-	if opID == "" {
-		t.Fatalf("PUT response carries no dedup_rescore_op_id; the ladder changed but no re-band was queued: %v", resp)
-	}
-	ops, err := w.pebble.ListActiveOperationsV2()
-	if err != nil {
-		t.Fatalf("ListActiveOperationsV2: %v", err)
-	}
-	found := false
-	for _, op := range ops {
-		if op.ID == opID {
-			found = true
-			if op.DefID != "dedup.rescore" {
-				t.Errorf("queued op %s has def_id %q, want dedup.rescore", opID, op.DefID)
-			}
-		}
-	}
-	if !found {
-		t.Errorf("no queued operation with id %s; active ops = %+v", opID, ops)
-	}
-}
-
-// TestRegistryWire_PutInvalidLadderChangesNothing (review-round H1a): an
-// invalid ladder on PUT is rejected with 400 BEFORE anything is persisted, and
-// neither the live engine nor the in-memory config moves. This is what makes
-// the fail-closed startup above safe: a ladder that would refuse to boot can
-// no longer be saved through the API in the first place.
-func TestRegistryWire_PutInvalidLadderChangesNothing(t *testing.T) {
-	restoreGlobalConfig(t)
-	w, err := buildDedupEngineFromContainer(t, dedupWiringConfig(config.DedupSignalConfig{}))
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-	before := config.Snapshot().Dedup.Signals
-
-	status, resp := w.update.UpdateConfig(context.Background(), map[string]any{
-		"dedup": map[string]any{
-			"signals": map[string]any{
-				"band_certain_min": 1.0, // below every other band
-			},
-		},
-	})
-	if status != http.StatusBadRequest {
-		t.Fatalf("UpdateConfig status = %d, want 400; resp = %v", status, resp)
-	}
-	msg, _ := resp["error"].(string)
-	if !strings.Contains(msg, "band_certain_min") || !strings.Contains(msg, "nothing was saved") {
-		t.Errorf("400 body must name the offending field and say nothing was saved, got: %q", msg)
-	}
-	if got := w.engine.ScoreConfig(); !reflect.DeepEqual(got, unified.DefaultScoreConfig()) {
-		t.Errorf("rejected PUT must not touch the live engine; engine ladder now %+v", got)
-	}
-	if after := config.Snapshot().Dedup.Signals; !reflect.DeepEqual(before, after) {
-		t.Errorf("rejected PUT mutated in-memory config: before=%+v after=%+v", before, after)
-	}
-	if _, ok := persistedSignals(t, w.pebble); ok {
-		t.Errorf("rejected PUT must persist nothing, but a config_blob was written")
 	}
 }

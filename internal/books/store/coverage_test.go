@@ -71,10 +71,6 @@ func TestEncryptionHelpersAndSettings(t *testing.T) {
 		t.Fatalf("expected decrypted value, got %q", dec)
 	}
 
-	if got := MaskSecret("12345678"); got != "********" {
-		t.Fatalf("unexpected mask: %q", got)
-	}
-
 	store, cleanup := setupPebbleTestDB(t)
 	defer cleanup()
 	pebbleStore := store.(*PebbleStore)

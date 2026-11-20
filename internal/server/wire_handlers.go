@@ -314,10 +314,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// operations.Scheduler are distinct (structurally identical) types, so a
 	// func() operations.Scheduler value cannot be passed where
 	// func() handlers.Scheduler is expected.
-	schedulerH := handlers.NewSchedulerHandler(
-		s.storeForWiring(),
-		s.handlersSchedulerProvider(),
-	)
+	schedulerH := handlers.NewSchedulerHandler(s.handlersSchedulerProvider())
 
 	// System domain handler (health/status/announcements/storage/logs/
 	// activity-log/config/SSE events/backups/dashboard/
@@ -343,10 +340,6 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	if s.systemService != nil {
 		sysSvc = s.systemService
 	}
-	var sysConfigUpdate system.ConfigUpdateService
-	if s.configUpdateService != nil {
-		sysConfigUpdate = s.configUpdateService
-	}
 	var sysPlugins system.PluginHealthChecker
 	if s.pluginRegistry != nil {
 		sysPlugins = s.pluginRegistry
@@ -366,7 +359,6 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		// hold.
 		func() system.SystemStore { return s.storeForWiring() },
 		sysSvc,
-		sysConfigUpdate,
 		sysPlugins,
 		// Lazy hub provider: resolve s.hub at request time with a typed-nil guard
 		// so a nil *realtime.EventHub is never boxed into a non-nil interface.

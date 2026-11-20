@@ -49,7 +49,6 @@ import (
 type deps struct {
 	store   *systemmocks.MockSystemStore
 	sysSvc  *systemmocks.MockSystemService
-	cfgUpd  *systemmocks.MockConfigUpdateService
 	plugins *systemmocks.MockPluginHealthChecker
 	hub     *systemmocks.MockEventStreamer
 	opLogs  *systemmocks.MockOperationLogsProvider
@@ -64,7 +63,6 @@ func newTestHandler(t *testing.T) (*system.Handler, deps) {
 	d := deps{
 		store:   systemmocks.NewMockSystemStore(t),
 		sysSvc:  systemmocks.NewMockSystemService(t),
-		cfgUpd:  systemmocks.NewMockConfigUpdateService(t),
 		plugins: systemmocks.NewMockPluginHealthChecker(t),
 		hub:     systemmocks.NewMockEventStreamer(t),
 		opLogs:  systemmocks.NewMockOperationLogsProvider(t),
@@ -72,7 +70,6 @@ func newTestHandler(t *testing.T) (*system.Handler, deps) {
 	h := system.New(
 		func() system.SystemStore { return d.store },
 		d.sysSvc,
-		d.cfgUpd,
 		d.plugins,
 		func() system.EventStreamer { return d.hub },
 		d.opLogs,
@@ -91,13 +88,12 @@ func newTestHandlerWithOpLogs(t *testing.T, opLogs system.OperationLogsProvider)
 	d := deps{
 		store:   systemmocks.NewMockSystemStore(t),
 		sysSvc:  systemmocks.NewMockSystemService(t),
-		cfgUpd:  systemmocks.NewMockConfigUpdateService(t),
 		plugins: systemmocks.NewMockPluginHealthChecker(t),
 		hub:     systemmocks.NewMockEventStreamer(t),
 	}
 	h := system.New(
 		func() system.SystemStore { return d.store },
-		d.sysSvc, d.cfgUpd, d.plugins,
+		d.sysSvc, d.plugins,
 		func() system.EventStreamer { return d.hub },
 		opLogs,
 		func(path string) (uint64, uint64, error) { return 1000, 400, nil },
@@ -360,7 +356,7 @@ func TestHandleEvents_NilHub503(t *testing.T) {
 	store := systemmocks.NewMockSystemStore(t)
 	h := system.New(
 		func() system.SystemStore { return store },
-		nil, nil, nil,
+		nil, nil,
 		nil, // nil getHub provider -> resolveHub() returns nil -> 503
 		nil, nil, nil, nil, nil,
 	)

@@ -149,25 +149,6 @@ func applyInviteEnv(c *Config, v *viper.Viper) {
 	c.LoginSaturatedBurst = strings.TrimSpace(v.GetString("login_saturated_burst"))
 }
 
-// inviteEnvOnlyKeyInUpdate returns the refusal for a PUT /config payload that
-// names an invitation key at the top level, or ok=false when none is present.
-// The keys have no JSON field (json:"-"), so without this the payload would be
-// refused by unknownConfigKeys with a message that hides why.
-func inviteEnvOnlyKeyInUpdate(payload map[string]any) (string, bool) {
-	var hit []string
-	for _, s := range inviteEnvOnlySettings {
-		for k := range payload {
-			if strings.EqualFold(k, s.key) {
-				hit = append(hit, s.key+" ("+s.envVar+")")
-			}
-		}
-	}
-	if len(hit) == 0 {
-		return "", false
-	}
-	return EnvOnlySettingsRefusedMessage + ": " + strings.Join(hit, ", "), true
-}
-
 // TunnelConnectorAddrs returns tunnel_connector_addrs under the read lock: one
 // field, not a whole-struct Snapshot copy, because the public invite and
 // bootstrap routes read it on every request. The value is a comma-separated

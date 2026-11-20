@@ -52,39 +52,3 @@ func TestInitConfigReadsAcoustIDBackfillFromEnvironment(t *testing.T) {
 		t.Fatal("MAINTENANCE_ACOUSTID_BACKFILL=true did not reach AppConfig.Maintenance.AcoustIDBackfill")
 	}
 }
-
-// A stored blob that carries the key still wins over the environment, as for
-// every non-environment-authoritative setting. This is what decides prod after
-// deploy: a blob holding acoustid_backfill=false keeps the backfill off even
-// if the host sets MAINTENANCE_ACOUSTID_BACKFILL=true. The Deluge keys are the
-// exception (owner decision 2026-10-11): the environment beats the blob for
-// them, see deluge_locked_test.go.
-func TestStoredBlobBeatsEnvironmentForAcoustIDBackfill(t *testing.T) {
-	t.Setenv("MAINTENANCE_ACOUSTID_BACKFILL", "true")
-	t.Setenv("DELUGE_WEB_URL", "http://192.0.2.10:8112")
-	envInitConfig(t)
-
-	blob := `{"maintenance":{"acoustid_backfill":false},"deluge_web_url":"http://192.0.2.20:8112"}`
-	if err := LoadConfigFromDatabase(storeWithBlob(t, blob)); err != nil {
-		t.Fatalf("LoadConfigFromDatabase: %v", err)
-	}
-	c := Snapshot()
-	if c.Maintenance.AcoustIDBackfill {
-		t.Error("stored acoustid_backfill=false must win over the environment")
-	}
-	if c.DelugeWebURL != "http://192.0.2.10:8112" {
-		t.Errorf("DELUGE_WEB_URL must win over the stored deluge_web_url, got %q", c.DelugeWebURL)
-	}
-}
-
-// A blob that lacks the key inherits the startup (environment) value.
-func TestBlobWithoutKeyInheritsEnvironmentValue(t *testing.T) {
-	t.Setenv("DELUGE_WEB_URL", "http://192.0.2.10:8112")
-	envInitConfig(t)
-	if err := LoadConfigFromDatabase(storeWithBlob(t, `{"root_dir":"/mnt/books"}`)); err != nil {
-		t.Fatalf("LoadConfigFromDatabase: %v", err)
-	}
-	if got := Snapshot().DelugeWebURL; got != "http://192.0.2.10:8112" {
-		t.Errorf("deluge_web_url = %q, want the environment value for a blob without the key", got)
-	}
-}

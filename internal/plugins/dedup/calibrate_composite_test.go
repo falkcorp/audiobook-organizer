@@ -354,10 +354,8 @@ func TestCalibrateCompositeApplyPersistsBands(t *testing.T) {
 		t.Errorf("apply must log that the stored candidates were re-banded (with counts), so an operator can see the rescore happened")
 	}
 
-	// (1) Reload from the persisted config blob and assert the bands round-tripped.
-	if err := config.LoadConfigFromDatabase(pebble); err != nil {
-		t.Fatalf("LoadConfigFromDatabase: %v", err)
-	}
+	// (1) The bands were written to the config (config.MutateChecked: the
+	// Facade's durable write when one is installed, memory here).
 	sig := config.Snapshot().Dedup.Signals
 	if sig.BandCertainMin != recCertain {
 		t.Errorf("persisted band_certain_min = %v, want %v", sig.BandCertainMin, recCertain)

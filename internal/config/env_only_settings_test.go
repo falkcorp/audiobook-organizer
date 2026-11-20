@@ -6,9 +6,6 @@
 package config
 
 import (
-	"context"
-	"encoding/json"
-	"net/http"
 	"strings"
 	"testing"
 
@@ -102,94 +99,6 @@ func TestInviteConfig_BaseURLFallbacks(t *testing.T) {
 	}
 	if got := (&Config{}).InviteBaseURL(""); got != "" {
 		t.Fatalf("got %q, want empty", got)
-	}
-}
-
-// TestInviteConfig_NeverSerialized proves no invite value reaches JSON: not the
-// GET /config response (which marshals Config, then masks), not the blob.
-func TestInviteConfig_NeverSerialized(t *testing.T) {
-	resetViper(t)
-	registerInviteDefaults(viper.GetViper())
-	setInviteEnv(t)
-	c := Config{}
-	applyInviteEnv(&c, viper.GetViper())
-	us := &UpdateService{}
-	for name, v := range map[string]Config{"raw": c, "masked": us.MaskSecrets(c)} {
-		b, err := json.Marshal(v)
-		if err != nil {
-			t.Fatal(err)
-		}
-		out := string(b)
-		for _, secret := range []string{testSMTPPassword, testCFPolicyToken, testSMTPUsername} {
-			if strings.Contains(out, secret) {
-				t.Fatalf("%s config JSON contains an invite secret", name)
-			}
-		}
-		for _, s := range inviteEnvOnlySettings {
-			if strings.Contains(out, `"`+s.key+`"`) {
-				t.Fatalf("%s config JSON carries key %s", name, s.key)
-			}
-		}
-	}
-	// Clone (the reflection deep copy) must keep json:"-" fields.
-	if cl := c.Clone(); cl.CFPolicyAPIToken != testCFPolicyToken || cl.SMTPPassword != testSMTPPassword {
-		t.Fatal("Clone dropped an invite field")
-	}
-}
-
-func TestInviteConfig_UpdateRefusesEnvOnlyKeys(t *testing.T) {
-	restoreAppConfig(t)
-	Mutate(func(c *Config) { c.EnableAuth = false })
-	ms, blobs := ladderTestStore(t)
-	svc := NewUpdateService(ms)
-
-	for _, key := range []string{"smtp_password", "SMTP_Host", "cf_policy_api_token", "tunnel_connector_addrs", "allowed_peer_cidrs", "login_saturated_rate", "LOGIN_SATURATED_BURST"} {
-		status, resp := svc.UpdateConfig(context.Background(), map[string]any{
-			key:         "x",
-			"log_level": "warn",
-		})
-		if status != http.StatusBadRequest {
-			t.Fatalf("%s: status = %d, want 400; resp = %v", key, status, resp)
-		}
-		msg, _ := resp["error"].(string)
-		if !strings.Contains(msg, EnvOnlySettingsRefusedMessage) {
-			t.Fatalf("%s: error must be the env-only refusal: %q", key, msg)
-		}
-		if Snapshot().LogLevel == "warn" {
-			t.Fatalf("%s: refused PUT applied log_level", key)
-		}
-	}
-	if len(*blobs) != 0 {
-		t.Fatal("refused PUT persisted a blob")
-	}
-}
-
-// The shared guest service token was removed (2026-10-21). Its two names are
-// no longer env-only settings: a PUT naming one gets the removal message, not
-// the env-only refusal, and a stale value in the environment is warned about
-// at startup and never reaches Config.
-func TestInviteConfig_GuestServiceTokenIsGone(t *testing.T) {
-	restoreAppConfig(t)
-	Mutate(func(c *Config) { c.EnableAuth = false })
-	ms, blobs := ladderTestStore(t)
-	svc := NewUpdateService(ms)
-	for _, key := range []string{"invite_cf_access_client_id", "invite_cf_access_client_secret"} {
-		status, resp := svc.UpdateConfig(context.Background(), map[string]any{key: "x", "log_level": "warn"})
-		if status != http.StatusBadRequest {
-			t.Fatalf("%s: status = %d, want 400; resp = %v", key, status, resp)
-		}
-		msg, _ := resp["error"].(string)
-		if !strings.Contains(msg, "was removed") || strings.Contains(msg, EnvOnlySettingsRefusedMessage) {
-			t.Fatalf("%s: want the removal message, got %q", key, msg)
-		}
-	}
-	if len(*blobs) != 0 {
-		t.Fatal("refused PUT persisted a blob")
-	}
-	for _, s := range inviteEnvOnlySettings {
-		if strings.HasPrefix(s.key, "invite_cf_access") {
-			t.Fatalf("%s is still bound as an invite setting", s.key)
-		}
 	}
 }
 

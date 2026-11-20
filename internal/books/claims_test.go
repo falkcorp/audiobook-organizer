@@ -15,15 +15,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 )
 
 // TestBooksWritesEveryFamily (05-storage §5S.10, §5S.3.4; COR5-1): on ABO's
 // boot, under the strict claims in force, books writes a key of every
 // registered family through its store (the family's own key for a bare-key
-// family, a key under the prefix otherwise) and deletes it, saves the
-// settings (config_blob and the secret rows, Serialized claims) and writes a
+// family, a key under the prefix otherwise) and deletes it, and writes a
 // scan's import-root statistics, with no write refused: no family books
 // writes is outside its claims. A family left unclaimed would fail here with
 // storage.ErrOutsideKeyspace, and the fix is to claim it, never to widen a
@@ -64,11 +62,6 @@ func TestBooksWritesEveryFamily(t *testing.T) {
 		}
 	}
 	assert.Greater(t, written, 200, "the family registry is far smaller than 05-storage §5S.9.1's table: the test proves little")
-
-	// A settings save: the whole config struct as config_blob plus the
-	// secret rows (row 7, Serialized).
-	config.Mutate(func(cfg *config.Config) { cfg.OpenAIAPIKey = "sk-test-alfred" })
-	require.NoError(t, config.SaveConfigToDatabase(c.store), "a settings save was refused")
 
 	// A scan's import-root statistics write.
 	ip, err := c.store.CreateImportPath(t.TempDir(), "Batcave")

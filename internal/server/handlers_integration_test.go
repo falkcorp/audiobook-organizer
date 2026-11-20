@@ -87,10 +87,6 @@ func newSystemHandler(s *Server) *system.Handler {
 	if s.systemService != nil {
 		sysSvc = s.systemService
 	}
-	var cfgUpd system.ConfigUpdateService
-	if s.configUpdateService != nil {
-		cfgUpd = s.configUpdateService
-	}
 	var plugins system.PluginHealthChecker
 	if s.pluginRegistry != nil {
 		plugins = s.pluginRegistry
@@ -102,7 +98,6 @@ func newSystemHandler(s *Server) *system.Handler {
 	return system.New(
 		func() system.SystemStore { return s.storeForWiring() },
 		sysSvc,
-		cfgUpd,
 		plugins,
 		// Lazy hub provider mirrors wireHandlers; resolve s.hub at request time so
 		// TestHandleEventsUnavailable (which nils s.hub after construction) still

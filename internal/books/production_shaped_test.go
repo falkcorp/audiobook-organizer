@@ -177,29 +177,6 @@ func pointConfigAtStore(c *config.Config, work string) {
 	c.OpenLibraryDumpDir = filepath.Join(c.RootDir, "openlibrary-dumps")
 }
 
-// loadStoredConfigAt makes the boot's loadConfigFromDB, for this test only,
-// load the stored settings as serve does, point each path setting at the copy
-// at work (pointConfigAtStore), and then apply env, the boot's own
-// environment-authoritative settings. The re-apply is needed because
-// LoadConfigFromDatabase re-applies those keys from the process-wide viper,
-// not from this boot's environment: if a test left viper's defaults
-// registered (initConfigForTest is how a test should run InitConfig, and it
-// undoes them), abs_api_enabled reads as set, to false, the stored true is
-// overwritten, and Register refuses the boot (errABSFlagDrift).
-func loadStoredConfigAt(t *testing.T, work string, env func(*config.Config)) {
-	t.Helper()
-	prev := loadConfigFromDB
-	t.Cleanup(func() { loadConfigFromDB = prev })
-	loadConfigFromDB = func(s database.SettingsStore) error {
-		if err := config.LoadConfigFromDatabase(s); err != nil {
-			return err
-		}
-		pointConfigAtStore(&config.AppConfig, work)
-		env(&config.AppConfig)
-		return nil
-	}
-}
-
 // shapedBootEnv is the shaped boot's environment-authoritative config: the
 // corpus was written by an R0 that served the ABS surface (the boot spec's
 // ABS_API_ENABLED, ABS_AUTH_MODES and ABS_JWT_SECRET), the stored settings
@@ -217,21 +194,15 @@ func shapedBootEnv(c *config.Config) {
 func bootShapedStore(t *testing.T, work string, key []byte, wait time.Duration) ([]shapedPhase, float64) {
 	t.Helper()
 	stateDir := filepath.Join(work, "state")
+	// The corpus' stored path settings name the directories its builder ran
+	// in (a scratch checkout of stage 1): point each at the copy's real
+	// location, so the boot never touches, or depends on, the builder's.
 	edit := func(c *config.Config) {
-		c.DatabasePath = filepath.Join(work, "db", "audiobooks.pebble")
-		c.RootDir = filepath.Join(work, "library")
+		pointConfigAtStore(c, work)
 		shapedBootEnv(c)
 	}
 	opt := func(o *app.Options) {
 		o.StorageFS = storage.FS{}
-		// The stored settings are a blob the corpus' builder saved, and its
-		// path settings name the directories it ran in (a scratch checkout of
-		// stage 1). They are the one thing about the store that is not
-		// portable: a runner that never had those directories refuses to boot
-		// (config.Validate wants the parent of database_path and playlist_dir).
-		// Load them as serve does, then point each path at the copy's real
-		// location, so the boot never touches, or depends on, the builder's.
-		loadStoredConfigAt(t, work, shapedBootEnv)
 		// The harness writes its own key into the state directory; the corpus'
 		// secrets are encrypted under the one stage 1 holds.
 		require.NoError(t, os.WriteFile(database.EncryptionKeyPath(stateDir), key, 0o600))

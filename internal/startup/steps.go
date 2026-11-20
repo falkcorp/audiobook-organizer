@@ -71,9 +71,8 @@ type Step struct {
 // Token values reported in /health's `degraded` list. Fixed strings, never
 // error text: /health is unauthenticated.
 const (
-	TokenSearchIndex    = "search_index"
-	TokenSettingsWrites = "settings_writes"
-	TokenGapFillStrip   = "gap_fill_strip"
+	TokenSearchIndex  = "search_index"
+	TokenGapFillStrip = "gap_fill_strip"
 )
 
 // Table classifies every startup step, in the order startup runs them.
@@ -82,9 +81,7 @@ const (
 //   - EnsureSecureStateDir:        config.EnsureSecureStateDir, internal/config/state_dir.go:133; run in books.Options
 //   - guardAgainstKeyRegeneration: internal/books/boot.go guardAgainstKeyRegeneration; run in books' Register (bootSettings)
 //   - initEncryption:              database.InitEncryption, internal/books/store/settings.go:109
-//   - loadConfigFromDB:            config.LoadConfigFromDatabase, internal/config/persistence.go:698
 //   - config.Validate:             (*config.Config).Validate, internal/config/config.go:3510
-//   - settingsWrites:              internal/books/module.go (*booksModule).startRepairs (deferredSettings.apply)
 //   - gapFillStrip:                internal/books/config_strip_boot.go (*booksModule).stripGapFill, run by startRepairs
 //   - opRegistrationGate:          internal/server/server_lifecycle.go (*Server).opRegistrationGate
 //   - container.Start:             internal/server/server_lifecycle.go (*Server).StartHook
@@ -98,12 +95,8 @@ var Table = []Step{
 		Reason: "regenerating the key would orphan every encrypted setting"},
 	{Name: "initEncryption", Class: Fatal,
 		Reason: "without the key, secrets are unreadable and a save would write them under the wrong key"},
-	{Name: "loadConfigFromDB", Class: Fatal,
-		Reason: "SaveConfigToDatabase persists the WHOLE config struct as config_blob, so a server running on defaults overwrites the stored config on its first settings save"},
 	{Name: "config.Validate", Class: Fatal,
 		Reason: "bad config must not serve"},
-	{Name: "settingsWrites", Class: Degraded, Token: TokenSettingsWrites,
-		Reason: "the settings load's upgrade writes (blob migrations, markers, re-encryption) commit in books' repairs hook after the effective config is loaded and validated; a failed commit leaves the stored rows unchanged from the failed write on, the next boot's load stages them again, and the first settings save persists the whole effective config anyway (R1-23 review S2)"},
 	{Name: "gapFillStrip", Class: Degraded, Token: TokenGapFillStrip,
 		Reason: "removes config.yaml's gap-fill keys once M2a imported them; a refused or failed strip leaves the file exactly as it was or already stripped (it writes nothing the pre-migration checkpoint does not hold), nothing is served wrong, and the next boot runs it again"},
 	{Name: "opRegistrationGate", Class: Fatal,

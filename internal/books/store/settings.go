@@ -245,55 +245,6 @@ func DecryptValue(encrypted string) (string, error) {
 	return string(plaintext), nil
 }
 
-// secretMask is what MaskSecret returns for every secret shorter than
-// secretMaskRevealMinLen characters, and the prefix it returns for longer ones.
-const secretMask = "********"
-
-// secretMaskRevealMinLen is the length (in characters) at which MaskSecret
-// starts showing a suffix; secretMaskRevealChars is how many it shows.
-const (
-	secretMaskRevealMinLen = 16
-	secretMaskRevealChars  = 2
-)
-
-// MaskSecret returns a masked version of a secret (for display).
-//
-// The amount revealed is independent of how short the secret is, so a short
-// password never leaks most of itself: a secret under 16 characters becomes
-// exactly "********", and a secret of 16 or more becomes "********" followed
-// by only its last 2 characters. No prefix is ever shown. Lengths are counted
-// in characters (runes), not bytes, so a multi-byte suffix is not split.
-//
-// Callers that recognise an echoed mask compare against MaskSecret(stored)
-// rather than a literal, so this is the only place the shape is defined. The
-// result is not injective by design (every short secret masks the same), which
-// is why a client echoing the mask back must be treated as "unchanged".
-func MaskSecret(secret string) string {
-	runes := []rune(secret)
-	if len(runes) < secretMaskRevealMinLen {
-		return secretMask
-	}
-	return secretMask + string(runes[len(runes)-secretMaskRevealChars:])
-}
-
-// IsEchoedMask reports whether incoming is exactly the mask MaskSecret
-// produces for the stored secret, i.e. a client handed the masked value back
-// unchanged. Only the current mask shape is recognised; earlier shapes
-// (first 3 + "****" + last 4, or "****") are deliberately not, so a stale
-// client's echo is never mistaken for "unchanged". An empty stored secret has
-// no mask to echo.
-func IsEchoedMask(incoming, stored string) bool {
-	return stored != "" && incoming == MaskSecret(stored)
-}
-
-// LooksLikeMask reports whether s contains a run of four or more asterisks,
-// the signature of a masked value of any shape. Such a value is never a real
-// secret to store; the update path rejects it unless IsEchoedMask says it is
-// the current echo of the stored secret.
-func LooksLikeMask(s string) bool {
-	return strings.Contains(s, "****")
-}
-
 // PebbleDB implementation
 func (s *PebbleStore) GetSetting(key string) (*Setting, error) {
 	data, closer, err := s.db.Get([]byte("setting:" + key))
