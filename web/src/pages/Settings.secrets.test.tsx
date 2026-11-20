@@ -1,5 +1,5 @@
 // file: web/src/pages/Settings.secrets.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b1d9e45-3c82-4a60-8f17-d4e0a6c2b593
 // last-edited: 2026-11-19
 //
@@ -23,7 +23,33 @@ import { Settings } from './Settings';
 
 const TYPED_KEY = 'sk-riddler-typed-0007';
 
-function makeView(opts: { keySet: boolean; keyLock?: string; logLevel?: string }): ConfigView {
+const SOURCES = (googleKeySaved: boolean) => [
+  {
+    id: 'audible',
+    name: 'Audible',
+    enabled: true,
+    priority: 1,
+    requires_auth: false,
+    credentials: {},
+  },
+  {
+    id: 'google-books',
+    name: 'Google Books',
+    enabled: true,
+    priority: 2,
+    requires_auth: true,
+    // Served as the key with a blank value: presence means a key is saved.
+    credentials: googleKeySaved ? { apiKey: '' } : {},
+    base_url: 'https://books.mirror.example.test',
+  },
+];
+
+function makeView(opts: {
+  keySet: boolean;
+  keyLock?: string;
+  logLevel?: string;
+  googleKeySaved?: boolean;
+}): ConfigView {
   return {
     generation: 1,
     naming_pattern_tokens: ['{title}'],
@@ -33,6 +59,7 @@ function makeView(opts: { keySet: boolean; keyLock?: string; logLevel?: string }
       { name: 'database_path', class: 'k', value: '/var/lib/abo/db', locked_by: 'flag --db' },
       { name: 'log_level', class: 'k', value: opts.logLevel ?? 'info' },
       { name: 'enable_ai_parsing', class: 'k', value: true },
+      { name: 'metadata_sources', class: 'i', value: SOURCES(opts.googleKeySaved ?? true) },
       {
         name: 'openai_api_key',
         class: 's',
@@ -64,9 +91,19 @@ describe('Settings secrets', () => {
           } else if (body.set?.openai_api_key) {
             view = makeView({ keySet: true });
           }
-          return new Response(JSON.stringify({ data: { ...view, applied: Object.keys(body.set ?? {}) } }), {
-            status: 200,
-          });
+          const google = (
+            body.set?.metadata_sources as
+              Array<{ id: string; credentials: Record<string, unknown> }> | undefined
+          )?.find((src) => src.id === 'google-books');
+          if (google && 'apiKey' in google.credentials) {
+            view = makeView({ keySet: true, googleKeySaved: google.credentials.apiKey !== null });
+          }
+          return new Response(
+            JSON.stringify({ data: { ...view, applied: Object.keys(body.set ?? {}) } }),
+            {
+              status: 200,
+            }
+          );
         }
         if (u.endsWith('/config')) {
           return new Response(JSON.stringify({ data: view }), { status: 200 });
@@ -105,7 +142,13 @@ describe('Settings secrets', () => {
     // A served key whose value did not change stays out of the patch: the locked
     // database_path (the server refuses a locked key even with its own value) and
     // the rest.
-    for (const served of ['root_dir', 'playlist_dir', 'database_path', 'log_level', 'enable_ai_parsing']) {
+    for (const served of [
+      'root_dir',
+      'playlist_dir',
+      'database_path',
+      'log_level',
+      'enable_ai_parsing',
+    ]) {
       expect(puts[0].set).not.toHaveProperty(served);
     }
 
@@ -121,7 +164,9 @@ describe('Settings secrets', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Clear key' }));
     await waitFor(() => expect(puts).toHaveLength(1));
     expect(puts[0]).toEqual({ set: {}, unset: ['openai_api_key'] });
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Clear key' })).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Clear key' })).not.toBeInTheDocument()
+    );
   });
 
   it('does not clear when the confirmation is declined', async () => {
@@ -147,5 +192,68 @@ describe('Settings secrets', () => {
     await waitFor(() => expect(field.placeholder).toMatch(/Enter your OpenAI API key/));
     expect(screen.queryByRole('button', { name: 'Clear key' })).not.toBeInTheDocument();
     expect(within(document.body).queryByText(/fingerprint/)).not.toBeInTheDocument();
+  });
+  describe('metadata source credentials', () => {
+    const googleField = async () =>
+      (await screen.findByLabelText('Google Books API Key')) as HTMLInputElement;
+
+    it('shows a saved source key as status and never serves a value into the field', async () => {
+      renderWithProviders(<Settings />, { initialEntries: ['/settings?tab=metadata'] });
+      const field = await googleField();
+      await waitFor(() => expect(field.placeholder).toMatch(/Saved/));
+      expect(field.value).toBe('');
+      expect(screen.getByText(/A key is saved\. Type a new one/)).toBeInTheDocument();
+    });
+
+    it('a save that touches no credential leaves the sources out of the patch', async () => {
+      renderWithProviders(<Settings />, { initialEntries: ['/settings?tab=metadata'] });
+      const field = await googleField();
+      await waitFor(() => expect(field.placeholder).toMatch(/Saved/));
+      fireEvent.change(await keyField(), { target: { value: TYPED_KEY } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
+      await waitFor(() => expect(puts).toHaveLength(1));
+      // The list equals what the server served, so it is not named; if it were,
+      // the saved credential would go as blank, which leaves it.
+      expect(puts[0].set).not.toHaveProperty('metadata_sources');
+    });
+
+    it('sends a typed source key and keeps the fields the page has no control for', async () => {
+      renderWithProviders(<Settings />, { initialEntries: ['/settings?tab=metadata'] });
+      const field = await googleField();
+      await waitFor(() => expect(field.placeholder).toMatch(/Saved/));
+      fireEvent.change(field, { target: { value: 'sk-penguin-0011' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
+      await waitFor(() => expect(puts).toHaveLength(1));
+      const sources = puts[0].set.metadata_sources as Array<Record<string, unknown>>;
+      const google = sources.find((src) => src.id === 'google-books')!;
+      expect(google.credentials).toEqual({ apiKey: 'sk-penguin-0011' });
+      expect(google.base_url).toBe('https://books.mirror.example.test');
+      await waitFor(() => expect(field.value).toBe(''));
+      expect(document.body.textContent).not.toContain('sk-penguin-0011');
+    });
+
+    it('stages a clear and sends it as null on save', async () => {
+      renderWithProviders(<Settings />, { initialEntries: ['/settings?tab=metadata'] });
+      const field = await googleField();
+      await waitFor(() => expect(field.placeholder).toMatch(/Saved/));
+      fireEvent.click(screen.getByText('Clear saved key'));
+      expect(screen.getByText(/will be deleted when you save/)).toBeInTheDocument();
+      expect(puts).toHaveLength(0);
+      fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
+      await waitFor(() => expect(puts).toHaveLength(1));
+      const sources = puts[0].set.metadata_sources as Array<{ id: string; credentials: unknown }>;
+      expect(sources.find((src) => src.id === 'google-books')!.credentials).toEqual({
+        apiKey: null,
+      });
+      await waitFor(() => expect(screen.queryByText('Clear saved key')).not.toBeInTheDocument());
+    });
+
+    it('offers no clear for a source with no saved key', async () => {
+      view = makeView({ keySet: true, googleKeySaved: false });
+      renderWithProviders(<Settings />, { initialEntries: ['/settings?tab=metadata'] });
+      const field = await googleField();
+      await waitFor(() => expect(field.placeholder).toMatch(/Enter your Google Books API key/));
+      expect(screen.queryByText('Clear saved key')).not.toBeInTheDocument();
+    });
   });
 });

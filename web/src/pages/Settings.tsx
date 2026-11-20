@@ -1,5 +1,5 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.69.1
+// version: 1.70.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 // last-edited: 2026-11-19
 
@@ -31,6 +31,11 @@ import {
 } from '@mui/material';
 import * as api from '../services/api';
 import type { SecretStatus } from '../services/configView';
+import {
+  defaultMetadataSources,
+  uiSourcesFromConfig,
+  type UiMetadataSource,
+} from '../utils/metadataSources';
 import { ServerFileBrowser } from '../components/common/ServerFileBrowser';
 import { SettingsGeneral } from '../components/SettingsGeneral';
 import BlockedHashesTab from '../components/settings/BlockedHashesTab';
@@ -110,15 +115,6 @@ type SettingsTab = (typeof TAB_KEYS)[number];
 // location without a hash.
 function tabFromLocation(search: URLSearchParams, hash: string): SettingsTab {
   return parseEnum(search.get('tab') ?? hash.replace('#', ''), TAB_KEYS, 'library');
-}
-
-interface UiMetadataSource {
-  id: string;
-  name: string;
-  enabled: boolean;
-  priority: number;
-  requiresAuth: boolean;
-  credentials: { [key: string]: string };
 }
 
 export interface SettingsState {
@@ -256,48 +252,7 @@ export function Settings() {
     // Metadata settings
     enableAIParsing: false,
     openaiApiKey: '',
-    metadataSources: [
-      {
-        id: 'audible',
-        name: 'Audible',
-        enabled: true,
-        priority: 1,
-        requiresAuth: false,
-        credentials: {},
-      },
-      {
-        id: 'openlibrary',
-        name: 'Open Library',
-        enabled: true,
-        priority: 2,
-        requiresAuth: false,
-        credentials: {},
-      },
-      {
-        id: 'audnexus',
-        name: 'Audnexus',
-        enabled: true,
-        priority: 3,
-        requiresAuth: false,
-        credentials: {},
-      },
-      {
-        id: 'google-books',
-        name: 'Google Books',
-        enabled: false,
-        priority: 4,
-        requiresAuth: true,
-        credentials: { apiKey: '' },
-      },
-      {
-        id: 'hardcover',
-        name: 'Hardcover',
-        enabled: false,
-        priority: 5,
-        requiresAuth: true,
-        credentials: { apiKey: '' },
-      },
-    ],
+    metadataSources: defaultMetadataSources(),
 
     // Performance settings
     concurrentScans: 4,
@@ -499,65 +454,7 @@ export function Settings() {
         // Metadata settings
         enableAIParsing: config.enable_ai_parsing ?? false,
         openaiApiKey: '', // Clear field when loading, show placeholder instead
-        metadataSources:
-          config.metadata_sources && config.metadata_sources.length > 0
-            ? config.metadata_sources.map((source) => {
-                // Force requiresAuth for sources that need API keys,
-                // even if the saved config has requires_auth: false
-                const authSources = ['google-books', 'hardcover'];
-                return {
-                  id: source.id,
-                  name: source.name,
-                  enabled: source.enabled,
-                  priority: source.priority,
-                  requiresAuth: source.requires_auth || authSources.includes(source.id),
-                  credentials: authSources.includes(source.id)
-                    ? { apiKey: '', ...source.credentials }
-                    : source.credentials || ({} as { [key: string]: string }),
-                };
-              })
-            : [
-                {
-                  id: 'audible',
-                  name: 'Audible',
-                  enabled: true,
-                  priority: 1,
-                  requiresAuth: false,
-                  credentials: {},
-                },
-                {
-                  id: 'openlibrary',
-                  name: 'Open Library',
-                  enabled: true,
-                  priority: 2,
-                  requiresAuth: false,
-                  credentials: {},
-                },
-                {
-                  id: 'audnexus',
-                  name: 'Audnexus',
-                  enabled: true,
-                  priority: 3,
-                  requiresAuth: false,
-                  credentials: {},
-                },
-                {
-                  id: 'google-books',
-                  name: 'Google Books',
-                  enabled: false,
-                  priority: 4,
-                  requiresAuth: true,
-                  credentials: { apiKey: '' },
-                },
-                {
-                  id: 'hardcover',
-                  name: 'Hardcover',
-                  enabled: false,
-                  priority: 5,
-                  requiresAuth: true,
-                  credentials: { apiKey: '' },
-                },
-              ],
+        metadataSources: uiSourcesFromConfig(config.metadata_sources),
 
         // Performance settings
         concurrentScans: config.concurrent_scans || 4,
@@ -643,6 +540,7 @@ export function Settings() {
     handleSourceToggle,
     handleTestMetadataSource,
     handleCredentialChange,
+    handleToggleClearCredential,
     handleSourceReorder,
     handleSave,
     handleReset,
@@ -873,6 +771,7 @@ export function Settings() {
             handleSourceToggle={handleSourceToggle}
             handleTestMetadataSource={handleTestMetadataSource}
             handleCredentialChange={handleCredentialChange}
+            handleToggleClearCredential={handleToggleClearCredential}
             handleSourceReorder={handleSourceReorder}
           />
         </TabPanel>

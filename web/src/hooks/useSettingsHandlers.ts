@@ -1,5 +1,5 @@
 // file: web/src/hooks/useSettingsHandlers.ts
-// version: 1.15.0
+// version: 1.16.0
 // guid: b8c9d0e1-f2a3-4567-bcde-678901234567
 // last-edited: 2026-11-19
 
@@ -8,6 +8,7 @@ import { NavigateFunction } from 'react-router';
 import * as api from '../services/api';
 import type { SecretStatus } from '../services/configView';
 import type { SettingsState } from '../pages/Settings';
+import { sourcesPayload, uiSourcesFromConfig } from '../utils/metadataSources';
 import { useImportFolderHandlers } from './useImportFolderHandlers';
 import { useBackupHandlers } from './useBackupHandlers';
 import { useMetadataSourceHandlers } from './useMetadataSourceHandlers';
@@ -166,6 +167,7 @@ export interface UseSettingsHandlersReturn {
   handleSourceToggle: (sourceId: string) => void;
   handleTestMetadataSource: (sourceId: string) => Promise<void>;
   handleCredentialChange: (sourceId: string, field: string, value: string) => void;
+  handleToggleClearCredential: (sourceId: string, field: string) => void;
   handleSourceReorder: (sourceId: string, direction: 'up' | 'down') => void;
   handleSave: () => Promise<boolean>;
   handleReset: () => void;
@@ -468,14 +470,9 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
         enable_ai_parsing: settings.enableAIParsing,
         // A secret is write-only: a typed key is stored, a blank field leaves the stored one alone.
         ...(settings.openaiApiKey ? { secrets: { openai_api_key: settings.openaiApiKey } } : {}),
-        metadata_sources: settings.metadataSources.map((source) => ({
-          id: source.id,
-          name: source.name,
-          enabled: source.enabled,
-          priority: source.priority,
-          requires_auth: source.requiresAuth,
-          credentials: source.credentials as { [key: string]: string },
-        })),
+        // Credentials are write-only: typed values replace, saved ones go back
+        // blank (which leaves them) and a staged clear goes as null.
+        metadata_sources: sourcesPayload(settings.metadataSources),
         concurrent_scans: settings.concurrentScans,
         cache_invalidate_on_book_update: settings.cacheInvalidateOnBookUpdate,
         metadata_fetch_cache_ttl_days: settings.metadataFetchCacheTTLDays,
@@ -507,11 +504,16 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
       const response = await api.updateConfig(updates);
 
       let nextSettings = settings;
-      if (settings.openaiApiKey) {
-        setOpenaiKeyStatus(response.secret_status?.openai_api_key);
-        nextSettings = { ...settings, openaiApiKey: '' };
-        setSettings(nextSettings);
-      }
+      // The response is the server's view after the write: typed secrets are
+      // stored and must leave the form, and each source's credential status
+      // comes from it, not from what was typed.
+      setOpenaiKeyStatus(response.secret_status?.openai_api_key);
+      nextSettings = {
+        ...settings,
+        openaiApiKey: '',
+        metadataSources: uiSourcesFromConfig(response.metadata_sources),
+      };
+      setSettings(nextSettings);
 
       setSavedSnapshot(JSON.stringify(nextSettings));
       setSaved(true);

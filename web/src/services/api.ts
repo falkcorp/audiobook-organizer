@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.212.0
+// version: 2.213.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-11-19
 
@@ -876,6 +876,15 @@ export interface MetadataSource {
     [key: string]: string;
   };
 }
+
+/**
+ * A metadata source as a save writes it. A credential is write-only: a
+ * non-empty string replaces the saved one, an empty string leaves it, null
+ * deletes it.
+ */
+export type MetadataSourceWrite = Omit<MetadataSource, 'credentials'> & {
+  credentials: { [key: string]: string | null };
+};
 
 export interface EmbeddingConfig {
   enabled: boolean;
@@ -3408,9 +3417,11 @@ type ConfigPatch<T> = {
 
 /** What a page may change: the plain settings (a section by the keys in it that change), and the secrets by name. */
 export type ConfigUpdate = ConfigPatch<
-  Omit<Config, 'env_locked' | 'setting_locks' | 'secret_status' | 'naming_pattern_tokens'>
-> &
-  SecretWrites;
+  Omit<
+    Config,
+    'env_locked' | 'setting_locks' | 'secret_status' | 'naming_pattern_tokens' | 'metadata_sources'
+  >
+> & { metadata_sources?: MetadataSourceWrite[] } & SecretWrites;
 
 /**
  * PUT /config. Only the settings that differ from what the server last said

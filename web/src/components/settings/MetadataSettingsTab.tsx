@@ -1,11 +1,12 @@
 // file: web/src/components/settings/MetadataSettingsTab.tsx
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9e0f1a2b-3c4d-5e6f-7a8b-9c0d1e2f3a4b
 // last-edited: 2026-11-19
 import { Dispatch, SetStateAction } from 'react';
 import type { SecretStatus } from '../../services/configView';
 import { canClearSecret, describeSecretStatus } from '../../utils/secretStatus';
 import { describeLock } from '../../utils/settingLocks';
+import { hasSavedCredential, type UiMetadataSource } from '../../utils/metadataSources';
 import {
   Box,
   Typography,
@@ -29,17 +30,6 @@ import {
 } from '@mui/icons-material';
 import * as api from '../../services/api';
 import { OpenLibraryDumps } from './OpenLibraryDumps';
-
-interface UiMetadataSource {
-  id: string;
-  name: string;
-  enabled: boolean;
-  priority: number;
-  requiresAuth: boolean;
-  credentials: {
-    apiKey?: string;
-  };
-}
 
 interface MetadataSettingsTabProps {
   settings: {
@@ -69,6 +59,7 @@ interface MetadataSettingsTabProps {
   handleSourceToggle: (sourceId: string) => void;
   handleTestMetadataSource: (sourceId: string) => void;
   handleCredentialChange: (sourceId: string, field: string, value: string) => void;
+  handleToggleClearCredential: (sourceId: string, field: string) => void;
   handleSourceReorder: (sourceId: string, direction: 'up' | 'down') => void;
 }
 
@@ -88,6 +79,7 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
     handleSourceToggle,
     handleTestMetadataSource,
     handleCredentialChange,
+    handleToggleClearCredential,
     handleSourceReorder,
   } = props;
 
@@ -307,10 +299,35 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
                           onChange={(e) =>
                             handleCredentialChange(source.id, 'apiKey', e.target.value)
                           }
-                          placeholder={'Enter your ' + source.name + ' API key'}
+                          autoComplete="off"
+                          placeholder={
+                            hasSavedCredential(source, 'apiKey')
+                              ? 'Saved (type a new key to replace it)'
+                              : 'Enter your ' + source.name + ' API key'
+                          }
+                          helperText={
+                            source.clearCredentials.includes('apiKey')
+                              ? 'The saved key will be deleted when you save.'
+                              : hasSavedCredential(source, 'apiKey')
+                                ? 'A key is saved. Type a new one to replace it.'
+                                : undefined
+                          }
                         />
                       </Grid>
                       <Grid size={12}>
+                        {source.savedCredentials.includes('apiKey') && (
+                          <Button
+                            size="small"
+                            variant="text"
+                            color={source.clearCredentials.includes('apiKey') ? 'inherit' : 'error'}
+                            sx={{ mr: 1 }}
+                            onClick={() => handleToggleClearCredential(source.id, 'apiKey')}
+                          >
+                            {source.clearCredentials.includes('apiKey')
+                              ? 'Keep saved key'
+                              : 'Clear saved key'}
+                          </Button>
+                        )}
                         <Button
                           size="small"
                           variant="outlined"
