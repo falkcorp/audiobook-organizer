@@ -1022,8 +1022,6 @@ export interface AutoUpdateConfig {
   enabled: boolean;
   channel: string;
   check_minutes: number;
-  window_start: number;
-  window_end: number;
 }
 
 export interface ToolsConfig {
@@ -3429,8 +3427,8 @@ export async function updateConfig(updates: ConfigUpdate): Promise<Config> {
   const changed = diffUpdate(plain as Record<string, unknown>, base.known, base.baseline);
   const body = buildUpdateBody(changed, { secrets, clear_secrets });
   if (Object.keys(body.set).length === 0 && body.unset.length === 0 && configCurrent) {
-    // Nothing differs from what the server has, and the server refuses an empty
-    // patch: there is no write to make.
+    // Nothing differs from what the server has: there is no write to make, and
+    // no request to spend on one.
     return configCurrent;
   }
   const response = await apiFetch(`${API_BASE}/config`, {

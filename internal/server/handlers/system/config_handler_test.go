@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/config_handler_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c2d7e41-0b58-4f36-8a1d-3e6f5a90c274
 // last-edited: 2026-11-19
 
@@ -210,11 +210,31 @@ func TestUpdateConfig_BodyIsOneUpdate(t *testing.T) {
 	assert.NotContains(t, string(enc), plaintext, "the plaintext is never echoed")
 }
 
+// An empty patch names no key: nothing to authorize or write. It answers 200
+// with the current View, as HEAD's update did for a body that changed nothing,
+// and does not reach the Facade (so it needs no permission and moves nothing).
+func TestUpdateConfig_EmptyPatchIsANoOp(t *testing.T) {
+	for name, body := range map[string]string{
+		"empty object":        `{}`,
+		"empty set and unset": `{"set":{},"unset":[]}`,
+		"null set":            `{"set":null}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &stubFacade{view: config.View{Generation: 4, Keys: []config.KeyView{{Name: "log_level", Class: config.KeyClassKey, Value: json.RawMessage(`"info"`)}}}}
+			code, resp := configHandler(t, f)(http.MethodPut, body)
+			require.Equal(t, http.StatusOK, code)
+			d := resp["data"].(map[string]any)
+			assert.Equal(t, []any{}, d["applied"])
+			assert.EqualValues(t, 4, d["generation"])
+			assert.Len(t, d["keys"].([]any), 1)
+			assert.Empty(t, f.updates, "an empty patch reaches the Facade as nothing")
+		})
+	}
+}
+
 func TestUpdateConfig_RejectsMalformedBodies(t *testing.T) {
 	cases := map[string]string{
 		"the old flat body":      `{"scan_on_startup":true}`,
-		"empty object":           `{}`,
-		"empty set and unset":    `{"set":{},"unset":[]}`,
 		"set is not an object":   `{"set":["scan_on_startup"]}`,
 		"empty set key":          `{"set":{"":1}}`,
 		"blank set key":          `{"set":{"  ":1}}`,
