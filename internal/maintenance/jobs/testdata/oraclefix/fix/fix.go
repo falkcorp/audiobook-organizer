@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/testdata/oraclefix/fix/fix.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 164bc002-83bc-4523-bed7-b8bfebfc2c9a
 // last-edited: 2026-11-19
 
@@ -463,3 +463,9 @@ func ViaOrphanNonVerb(r rewinder, id string) error { return r.Rewind(id) }
 // ViaOutsideIface calls a non-verb method of an interface declared outside the
 // module.
 func ViaOutsideIface(x fmt.Stringer) string { return x.String() }
+
+func applyTo(fn func()) { fn() }
+
+// ViaOnlyAsValue hands out a helper as a value: no walked caller supplies the
+// helper's parameter, so the call through it is the caller-outside-the-walk's.
+func ViaOnlyAsValue() func(func()) { return applyTo }

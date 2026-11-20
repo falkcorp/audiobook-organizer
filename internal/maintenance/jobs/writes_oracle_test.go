@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/writes_oracle_test.go
-// version: 3.1.0
+// version: 3.2.0
 // guid: 40eadd67-76ac-419f-a3fe-7d1ed5e586e2
 // last-edited: 2026-11-19
 
@@ -8,6 +8,7 @@ package jobs_test
 import (
 	"errors"
 	"fmt"
+	"go/ast"
 	"go/constant"
 	"go/token"
 	"go/types"
@@ -180,6 +181,8 @@ type oracleProgram struct {
 	// flows is what the module stores into each package variable, struct field,
 	// slice and map, so a function value loaded from one can be named.
 	flows *oracleFlows
+	// impls caches declaredImpls.
+	impls *oracleImplCache
 }
 
 // oracleCallGraph is VTA over every function of the module (and every synthetic
@@ -297,20 +300,18 @@ func oracleOriginOf(v ssa.Value, seen map[ssa.Value]bool) (o oracleOrigin) {
 				o.merge(oracleOriginOf(v.X, seen))
 				return o
 			case *ssa.FieldAddr, *ssa.IndexAddr:
-				// An element or field of something. Of an object a caller
-				// supplies (an options struct, a receiver), the callback is
-				// the caller's, read where that caller builds the object. Of
-				// an object built in this function, it is stored here. Of a
-				// package variable or anything else, only the module's
-				// stores can say.
-				switch oracleBaseOf(x, map[ssa.Value]bool{}) {
-				case oracleBaseParam:
-					o.param = true
-				case oracleBaseLocal:
-				default:
+				// An element or field of something: of an object built in
+				// this function, it is stored here; of an object a caller
+				// supplies (a receiver, an options struct), a package
+				// variable or anything else, the module's stores into that
+				// field or element say, and the call graph is asked too
+				// (round-2 review B1 (a): a parameter-rooted load is not a
+				// parameter, and leaving it to the caller dropped a
+				// callback a constructor's parameter set).
+				if oracleBaseOf(x, map[ssa.Value]bool{}) != oracleBaseLocal {
 					o.other, o.declared = true, true
-					o.name = oracleLoadName(x)
 				}
+				o.name = oracleLoadName(x)
 				return o
 			case *ssa.Global:
 				o.other, o.declared = true, true
@@ -464,7 +465,7 @@ func oracleLeavesModule(v ssa.Value) bool {
 // loaded from, field-sensitive and flow-insensitive: every store into a package
 // variable, into a struct field (by the field's declaration, across every
 // struct of that type), into a captured or local cell, and into a slice, array
-// or map (an element store, a composite literal, an append). A function value
+// or map (an element store, a composite literal, an append, a copy). A function value
 // the module loads from one of them, and hands to a shared helper, is one of the
 // functions stored there.
 type oracleFlows struct {
@@ -472,6 +473,8 @@ type oracleFlows struct {
 	fields  map[*types.Var][]ssa.Value
 	cells   map[ssa.Value][]ssa.Value
 	elems   map[any][]ssa.Value
+	// copies are the source containers copy() copied into each container.
+	copies map[any][]ssa.Value
 }
 
 func oracleFieldVar(fa *ssa.FieldAddr) *types.Var {
@@ -506,6 +509,7 @@ func buildOracleFlows(prog *ssa.Program) *oracleFlows {
 	fl := &oracleFlows{
 		globals: map[*ssa.Global][]ssa.Value{}, fields: map[*types.Var][]ssa.Value{},
 		cells: map[ssa.Value][]ssa.Value{}, elems: map[any][]ssa.Value{},
+		copies: map[any][]ssa.Value{},
 	}
 	for f := range ssautil.AllFunctions(prog) {
 		if f.Pkg != nil && !strings.HasPrefix(f.Pkg.Pkg.Path(), oracleModule) {
@@ -526,11 +530,20 @@ func buildOracleFlows(prog *ssa.Program) *oracleFlows {
 						k := oracleContainer(a.X)
 						fl.elems[k] = append(fl.elems[k], in.Val)
 					case *ssa.Alloc, *ssa.FreeVar:
-						fl.cells[a] = append(fl.cells[a], in.Val)
+						// A store through a closure's captured variable is
+						// a store into the cell it was captured from.
+						if cell := oracleCellRoot(a); cell != nil {
+							fl.cells[cell] = append(fl.cells[cell], in.Val)
+						}
 					}
 				case *ssa.MapUpdate:
 					k := oracleContainer(in.Map)
 					fl.elems[k] = append(fl.elems[k], in.Value)
+				case *ssa.Call:
+					if b, ok := in.Call.Value.(*ssa.Builtin); ok && b.Name() == "copy" && len(in.Call.Args) == 2 {
+						k := oracleContainer(in.Call.Args[0])
+						fl.copies[k] = append(fl.copies[k], in.Call.Args[1])
+					}
 				}
 			}
 		}
@@ -538,8 +551,648 @@ func buildOracleFlows(prog *ssa.Program) *oracleFlows {
 	return fl
 }
 
-// oracleCellOf is the variable cell a captured variable refers to.
-func oracleCellOf(fv *ssa.FreeVar) ssa.Value {
+// oracleOpenExported is whether a package variable or struct field with an
+// exported name counts as open: the program is the jobs package and what it
+// imports, so the wiring that imports the jobs (internal/server, cmd) is not in
+// it, and a store it makes into an exported variable or field is invisible.
+const oracleOpenExported = true
+
+// oracleRes is what a function value can be, as far as the loaded program says.
+//
+// The resolver is default-deny: every value it has no rule for, and every value
+// that can come from code it cannot see, adds a reason to open, and the walk
+// records each reason as UNRESOLVED.<function>#<reason>. A set is trusted as
+// complete only when every leaf of it was read from the program.
+type oracleRes struct {
+	// fns are the functions it can be.
+	fns []*ssa.Function
+	// params are parameters it can be, of the function that holds the value
+	// (or of the function whose closure captures it), reached without passing
+	// through a variable, a field or an element: what each caller passes is
+	// read where that caller is walked (see derivedWrites).
+	params []*ssa.Parameter
+	// open are the reasons the set is not known to be complete: a value made by
+	// code outside the module ("outside:<function>"), a variable or field
+	// nothing in the program stores a function into ("<name>"), one code
+	// outside the program can store into ("<name>:exported", "<name>:set by
+	// <function>(<parameter>)"), or a shape the resolver has no rule for.
+	open []string
+	// known is set, when an interface value is resolved (oracleResolver.iface),
+	// by a leaf whose concrete type the program shows: a conversion to the
+	// interface the call graph sees.
+	known bool
+}
+
+func (r *oracleRes) merge(o oracleRes) {
+	r.known = r.known || o.known
+	r.fns = append(r.fns, o.fns...)
+	r.params = append(r.params, o.params...)
+	r.open = append(r.open, o.open...)
+}
+
+func (r *oracleRes) openf(format string, args ...any) {
+	r.open = append(r.open, fmt.Sprintf(format, args...))
+}
+
+// oracleResolver resolves function values. memo holds each value's result
+// (nil while it is being resolved, which breaks a cycle); retStack is the
+// functions whose return statements are being read, which breaks recursion;
+// leaf is the variable or field being read, which names the reasons a parameter
+// reached through it gives.
+type oracleResolver struct {
+	op       *oracleProgram
+	memo     map[oracleMemoKey]*oracleRes
+	retStack map[*ssa.Function]bool
+	leaf     string
+	// iface resolves an interface value instead of a function value: a
+	// conversion to the interface is a known leaf, a parameter is always read
+	// from its callers, and what is wanted is only whether anything is open.
+	iface bool
+}
+
+type oracleMemoKey struct {
+	v    any
+	mode string
+}
+
+// resolve is what the function value v can be, read in the function that holds
+// it.
+func (op *oracleProgram) resolve(v ssa.Value) oracleRes {
+	r := &oracleResolver{op: op, memo: map[oracleMemoKey]*oracleRes{}, retStack: map[*ssa.Function]bool{}}
+	out := r.value(v, true)
+	return oracleDedupe(out)
+}
+
+// ifaceOpen is why the interface value v can hold a type the call graph does not
+// see flow to it (it comes from a parameter of an exported function, an exported
+// field the wiring fills, code outside the module), or nil when every type it can
+// hold is converted to the interface where the program shows it.
+func (op *oracleProgram) ifaceOpen(v ssa.Value) []string {
+	r := &oracleResolver{op: op, memo: map[oracleMemoKey]*oracleRes{}, retStack: map[*ssa.Function]bool{}, iface: true}
+	return oracleDedupe(r.value(v, false)).open
+}
+
+// oracleImplCache holds declaredImpls' answers per interface method.
+type oracleImplCache struct {
+	mu sync.Mutex
+	m  map[string][]*ssa.Function
+}
+
+// declaredImpls is the method of every named type the module's loaded packages
+// declare that implements the interface com is called on: what the wiring can
+// pass, whether or not the program converts the type to an interface (CHA knows
+// only the types it does, so a type only the unloaded wiring converts would be
+// missing). A type declared inside a function, or in a package the program does
+// not load, is not seen.
+func (op *oracleProgram) declaredImpls(com *ssa.CallCommon) []*ssa.Function {
+	iface, ok := com.Value.Type().Underlying().(*types.Interface)
+	if !ok {
+		return nil // a type parameter: the call graph's answer stands
+	}
+	key := types.TypeString(com.Value.Type(), nil) + "." + com.Method.Id()
+	op.impls.mu.Lock()
+	defer op.impls.mu.Unlock()
+	if got, ok := op.impls.m[key]; ok {
+		return got
+	}
+	var out []*ssa.Function
+	for _, p := range op.prog.AllPackages() {
+		if !strings.HasPrefix(p.Pkg.Path(), oracleModule) {
+			continue
+		}
+		scope := p.Pkg.Scope()
+		for _, name := range scope.Names() {
+			tn, ok := scope.Lookup(name).(*types.TypeName)
+			if !ok || tn.IsAlias() {
+				continue
+			}
+			named, ok := tn.Type().(*types.Named)
+			if !ok || named.TypeParams().Len() > 0 || types.IsInterface(named) {
+				continue
+			}
+			for _, t := range []types.Type{named, types.NewPointer(named)} {
+				if types.Implements(t, iface) {
+					if f := op.prog.LookupMethod(t, com.Method.Pkg(), com.Method.Name()); f != nil {
+						out = append(out, f)
+					}
+					break
+				}
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
+	op.impls.m[key] = out
+	return out
+}
+
+func oracleDedupe(r oracleRes) oracleRes {
+	out := oracleRes{known: r.known}
+	seenF, seenP, seenO := map[*ssa.Function]bool{}, map[*ssa.Parameter]bool{}, map[string]bool{}
+	for _, f := range r.fns {
+		if !seenF[f] {
+			seenF[f] = true
+			out.fns = append(out.fns, f)
+		}
+	}
+	for _, p := range r.params {
+		if !seenP[p] {
+			seenP[p] = true
+			out.params = append(out.params, p)
+		}
+	}
+	for _, o := range r.open {
+		if !seenO[o] {
+			seenO[o] = true
+			out.open = append(out.open, o)
+		}
+	}
+	sort.Strings(out.open)
+	return out
+}
+
+// memoized runs compute once per (v, mode) in this resolver.
+func (r *oracleResolver) memoized(v any, mode string, compute func() oracleRes) oracleRes {
+	k := oracleMemoKey{v, mode}
+	if got, ok := r.memo[k]; ok {
+		if got == nil {
+			return oracleRes{} // a cycle: what it adds is being collected already
+		}
+		return *got
+	}
+	r.memo[k] = nil
+	out := compute()
+	r.memo[k] = &out
+	return out
+}
+
+// value is what v can be. direct is false once the walk back from the call has
+// passed through a variable, a field or an element, where a parameter it meets
+// is no longer the holder's to be asked about but every caller's.
+func (r *oracleResolver) value(v ssa.Value, direct bool) oracleRes {
+	if v == nil {
+		return oracleRes{}
+	}
+	mode := "value"
+	if !direct {
+		mode = "stored"
+	}
+	return r.memoized(v, mode, func() (out oracleRes) {
+		switch v := v.(type) {
+		case *ssa.Const:
+			// nil: calling it panics, it writes nothing
+			out.known = r.iface
+		case *ssa.MakeInterface:
+			if r.iface {
+				out.known = true
+			} else {
+				out = r.value(v.X, direct)
+			}
+		case *ssa.Function:
+			out.fns = append(out.fns, v)
+		case *ssa.MakeClosure:
+			if f, ok := v.Fn.(*ssa.Function); ok {
+				out.fns = append(out.fns, f)
+			}
+		case *ssa.Parameter:
+			if direct && !r.iface {
+				out.params = append(out.params, v)
+			} else {
+				out = r.fromCallers(v, false)
+			}
+		case *ssa.FreeVar:
+			if b := oracleBinding(v); b != nil {
+				out = r.value(b, direct)
+			} else {
+				out.openf("captured %s", v.Name())
+			}
+		case *ssa.Phi:
+			for _, e := range v.Edges {
+				out.merge(r.value(e, direct))
+			}
+		case *ssa.ChangeType:
+			out = r.value(v.X, direct)
+		case *ssa.Convert:
+			out = r.value(v.X, direct)
+		case *ssa.ChangeInterface:
+			out = r.value(v.X, direct)
+		case *ssa.TypeAssert:
+			out = r.value(v.X, direct)
+		case *ssa.Lookup:
+			out = r.elems(v.X)
+		case *ssa.Field:
+			fv := oracleStructField(v.X.Type(), v.Field)
+			if fv == nil {
+				out.openf("a field of %s", v.X.Type())
+				break
+			}
+			out = r.leafOf(fv, fv.Name(), r.op.flows.fields[fv], fv.Exported())
+		case *ssa.UnOp:
+			if v.Op != token.MUL {
+				out.openf("received from a channel")
+				break
+			}
+			out = r.load(v.X, direct)
+		case *ssa.Call:
+			out = r.callResult(v, -1, direct)
+		case *ssa.Extract:
+			switch t := v.Tuple.(type) {
+			case *ssa.Call:
+				out = r.callResult(t, v.Index, direct)
+			case *ssa.TypeAssert:
+				out = r.value(t.X, direct)
+			case *ssa.Lookup:
+				out = r.elems(t.X)
+			case *ssa.Next:
+				if rg, ok := t.Iter.(*ssa.Range); ok && v.Index == 2 {
+					out = r.elems(rg.X)
+				} else {
+					out.openf("a range key")
+				}
+			default:
+				out.openf("a %T result", v.Tuple)
+			}
+		default:
+			out.openf("a %T", v)
+		}
+		return out
+	})
+}
+
+// load is what was stored at addr, the address a function value is loaded from.
+func (r *oracleResolver) load(addr ssa.Value, direct bool) (out oracleRes) {
+	switch x := addr.(type) {
+	case *ssa.Global:
+		return r.leafOf(x, x.Name(), r.op.flows.globals[x], ast.IsExported(x.Name()))
+	case *ssa.FieldAddr:
+		fv := oracleFieldVar(x)
+		if fv == nil {
+			out.openf("a field")
+			return out
+		}
+		return r.leafOf(fv, fv.Name(), r.op.flows.fields[fv], fv.Exported())
+	case *ssa.IndexAddr:
+		return r.elems(x.X)
+	case *ssa.Alloc, *ssa.FreeVar:
+		cell := oracleCellRoot(x)
+		if cell == nil {
+			out.openf("a captured variable")
+			return out
+		}
+		if a, ok := cell.(*ssa.Alloc); ok {
+			if why := oracleCellEscapes(a); why != "" {
+				out.openf("%s:%s", a.Comment, why)
+			}
+		}
+		// A local variable: zero (nil) when nothing is stored, which writes
+		// nothing; a parameter stored into it is still the holder's.
+		for _, st := range r.op.flows.cells[cell] {
+			out.merge(r.value(st, direct))
+		}
+		return out
+	}
+	out.openf("loaded through a %T", addr)
+	return out
+}
+
+// leafOf is what a package variable or struct field (key) holds: every value the
+// program stores into it, with a parameter so stored read from its function's
+// callers. A leaf nothing stores a function into is a hook only code outside the
+// program sets ("<name>"); one with an exported name can be stored into by the
+// wiring outside the program ("<name>:exported").
+func (r *oracleResolver) leafOf(key any, name string, stores []ssa.Value, exported bool) oracleRes {
+	return r.memoized(key, "leaf", func() (out oracleRes) {
+		prev := r.leaf
+		r.leaf = name
+		defer func() { r.leaf = prev }()
+		for _, st := range stores {
+			out.merge(r.value(st, false))
+		}
+		if exported && oracleOpenExported {
+			out.openf("%s:exported", name)
+		}
+		if len(out.fns) == 0 && len(out.open) == 0 && len(out.params) == 0 && !out.known {
+			out.openf("%s", name)
+		}
+		return out
+	})
+}
+
+// fromCallers is what the program's callers pass for a parameter reached through
+// a variable, a field or an element (a setter's or a constructor's parameter),
+// or the elements of what they pass (elems). Every caller in the program counts,
+// not only the job's: the variable is shared. A function code outside the
+// program can call (an exported one), or that nothing in the program calls,
+// leaves the set open.
+func (r *oracleResolver) fromCallers(p *ssa.Parameter, elems bool) oracleRes {
+	mode := "callers"
+	if elems {
+		mode = "callers-elems"
+	}
+	return r.memoized(p, mode, func() (out oracleRes) {
+		fn := p.Parent()
+		idx := oracleParamIndex(p)
+		what := r.leaf
+		if what == "" {
+			what = "parameter"
+		}
+		setBy := fmt.Sprintf("%s:set by %s(%s)", what, fn.Name(), p.Name())
+		callers := 0
+		if node := r.op.graph.Nodes[fn]; node != nil && idx >= 0 {
+			for _, e := range node.In {
+				if e.Site == nil {
+					continue
+				}
+				arg, ok := oracleArgAt(e.Site.Common(), idx)
+				if !ok {
+					out.openf("%s, passed in a way the resolver cannot read", setBy)
+					continue
+				}
+				callers++
+				if elems {
+					out.merge(r.elems(arg))
+				} else {
+					out.merge(r.value(arg, false))
+				}
+			}
+		}
+		if callers == 0 || oracleCallableOutside(fn) {
+			out.openf("%s", setBy)
+		}
+		return out
+	})
+}
+
+// elems is what the elements of the slice, array or map c can be.
+func (r *oracleResolver) elems(c ssa.Value) oracleRes {
+	if c == nil {
+		return oracleRes{}
+	}
+	return r.memoized(c, "elems", func() (out oracleRes) {
+		key := oracleContainer(c)
+		for _, sv := range r.op.flows.elems[key] {
+			out.merge(r.value(sv, false))
+		}
+		for _, src := range r.op.flows.copies[key] {
+			out.merge(r.elems(src))
+		}
+		switch c := c.(type) {
+		case *ssa.UnOp:
+			if c.Op != token.MUL {
+				out.openf("elements received from a channel")
+				break
+			}
+			var stores []ssa.Value
+			name, exported := "", false
+			switch x := c.X.(type) {
+			case *ssa.Global:
+				stores, name, exported = r.op.flows.globals[x], x.Name(), ast.IsExported(x.Name())
+			case *ssa.FieldAddr:
+				if fv := oracleFieldVar(x); fv != nil {
+					stores, name, exported = r.op.flows.fields[fv], fv.Name(), fv.Exported()
+				} else {
+					out.openf("elements of a field")
+				}
+			case *ssa.Alloc, *ssa.FreeVar:
+				if cell := oracleCellRoot(x); cell != nil {
+					stores = r.op.flows.cells[cell]
+				} else {
+					out.openf("elements of a captured variable")
+				}
+			default:
+				out.openf("elements loaded through a %T", c.X)
+			}
+			for _, sv := range stores {
+				out.merge(r.elems(sv))
+			}
+			if exported && oracleOpenExported {
+				out.openf("%s:exported", name)
+			}
+		case *ssa.Parameter:
+			prev := r.leaf
+			r.leaf = c.Name()
+			out.merge(r.fromCallers(c, true))
+			r.leaf = prev
+		case *ssa.FreeVar:
+			if b := oracleBinding(c); b != nil {
+				out.merge(r.elems(b))
+			} else {
+				out.openf("elements of captured %s", c.Name())
+			}
+		case *ssa.Call:
+			if b, ok := c.Call.Value.(*ssa.Builtin); ok && b.Name() == "append" {
+				for _, a := range c.Call.Args {
+					out.merge(r.elems(a))
+				}
+				break
+			}
+			out.openf("elements of a call result")
+		case *ssa.Slice:
+			out.merge(r.elems(c.X))
+		case *ssa.ChangeType:
+			out.merge(r.elems(c.X))
+		case *ssa.Phi:
+			for _, e := range c.Edges {
+				out.merge(r.elems(e))
+			}
+		case *ssa.MakeSlice, *ssa.MakeMap, *ssa.Alloc:
+			// Built here: what is stored into it (above), unless it is handed
+			// to code that can fill it.
+			why, into := r.op.containerEscapes(c)
+			if why != "" {
+				out.openf("%s", why)
+			}
+			for _, p := range into {
+				for _, sv := range r.op.flows.elems[p] {
+					out.merge(r.value(sv, false))
+				}
+				for _, src := range r.op.flows.copies[p] {
+					out.merge(r.elems(src))
+				}
+			}
+		case *ssa.Const:
+			// a nil slice or map: no elements
+		default:
+			out.openf("elements of a %T", c)
+		}
+		return out
+	})
+}
+
+// callResult is the functions the idx-th result (or the one result, idx < 0) of
+// a call can be.
+func (r *oracleResolver) callResult(c *ssa.Call, idx int, direct bool) (out oracleRes) {
+	com := &c.Call
+	if com.IsInvoke() {
+		name := oracleIfaceMethodName(com)
+		if pkg := com.Method.Pkg(); pkg == nil || !strings.HasPrefix(pkg.Path(), oracleModule) {
+			out.openf("outside:%s", name)
+			return out
+		}
+		// A module interface: what the implementations the call graph gives the
+		// call return.
+		impls := r.op.calleesAt(c)
+		if len(impls) == 0 {
+			out.openf("call result:%s", name)
+		}
+		for _, impl := range impls {
+			out.merge(r.returnedBy(impl, c, idx, direct))
+		}
+		return out
+	}
+	if callee := com.StaticCallee(); callee != nil {
+		return r.returnedBy(callee, c, idx, direct)
+	}
+	if _, ok := com.Value.(*ssa.Builtin); ok {
+		return out
+	}
+	// A call through a function value: what the functions it can be return.
+	fv := r.value(com.Value, direct)
+	out.open = append(out.open, fv.open...)
+	for _, p := range fv.params {
+		out.openf("call result:%s(%s)", p.Parent().Name(), p.Name())
+	}
+	for _, f := range fv.fns {
+		out.merge(r.returnedBy(f, c, idx, direct))
+	}
+	if len(fv.fns) == 0 && len(fv.open) == 0 && len(fv.params) == 0 {
+		out.openf("call result")
+	}
+	return out
+}
+
+// returnedBy is what fn returns at the idx-th result when called at c: what its
+// return statements name, with a parameter it returns replaced by what c passes.
+func (r *oracleResolver) returnedBy(fn *ssa.Function, c *ssa.Call, idx int, direct bool) (out oracleRes) {
+	if owner := oracleOwner(fn); owner.Pkg != nil && !strings.HasPrefix(owner.Pkg.Pkg.Path(), oracleModule) {
+		out.openf("outside:%s", oracleFuncName(fn))
+		return out
+	}
+	if len(fn.Blocks) == 0 {
+		out.openf("call result:%s", fn.Name())
+		return out
+	}
+	if r.retStack[fn] {
+		return out // recursion: the outer reading collects it
+	}
+	r.retStack[fn] = true
+	defer delete(r.retStack, fn)
+	sub := &oracleResolver{op: r.op, memo: map[oracleMemoKey]*oracleRes{}, retStack: r.retStack, leaf: r.leaf, iface: r.iface}
+	for _, b := range fn.Blocks {
+		ret, ok := b.Instrs[len(b.Instrs)-1].(*ssa.Return)
+		if !ok {
+			continue
+		}
+		for i, res := range ret.Results {
+			if idx >= 0 && i != idx {
+				continue
+			}
+			got := sub.value(res, true)
+			out.known = out.known || got.known
+			out.fns = append(out.fns, got.fns...)
+			out.open = append(out.open, got.open...)
+			for _, p := range got.params {
+				pi := oracleParamIndex(p)
+				if p.Parent() != fn || pi < 0 || pi >= len(c.Call.Args) {
+					out.openf("call result:%s", fn.Name())
+					continue
+				}
+				out.merge(r.value(c.Call.Args[pi], direct))
+			}
+		}
+	}
+	return out
+}
+
+// calleesAt is the call graph's callees of one call instruction.
+func (op *oracleProgram) calleesAt(c ssa.CallInstruction) []*ssa.Function {
+	n := op.graph.Nodes[c.Parent()]
+	if n == nil {
+		return nil
+	}
+	var out []*ssa.Function
+	for _, e := range n.Out {
+		if e.Site == c {
+			out = append(out, e.Callee.Func)
+		}
+	}
+	return out
+}
+
+// containerEscapes says why a slice, array or map built in a function can hold
+// elements the program's element stores into it do not show (it is handed to a
+// call through a value, or to a function outside the module, which can fill it),
+// or "" when it cannot; and into is the parameters of the module functions it is
+// handed to, whose element stores (keyed by the parameter in buildOracleFlows)
+// fill it as well.
+func (op *oracleProgram) containerEscapes(c ssa.Value) (why string, into []*ssa.Parameter) {
+	seen := map[ssa.Value]bool{}
+	var visit func(v ssa.Value)
+	visit = func(v ssa.Value) {
+		if seen[v] || why != "" {
+			return
+		}
+		seen[v] = true
+		refs := v.Referrers()
+		if refs == nil {
+			return
+		}
+		for _, in := range *refs {
+			switch in := in.(type) {
+			case *ssa.Slice:
+				visit(in)
+			case *ssa.ChangeType:
+				visit(in)
+			case *ssa.Phi:
+				visit(in)
+			case ssa.CallInstruction:
+				com := in.Common()
+				if _, ok := com.Value.(*ssa.Builtin); ok {
+					continue
+				}
+				callee := com.StaticCallee()
+				switch {
+				case callee == nil:
+					why = "elements filled by a call through a value"
+				case oracleOwner(callee).Pkg != nil && !strings.HasPrefix(oracleOwner(callee).Pkg.Pkg.Path(), oracleModule):
+					why = "elements filled by " + oracleFuncName(callee)
+				default:
+					for i, a := range com.Args {
+						if a == v && i < len(callee.Params) {
+							into = append(into, callee.Params[i])
+						}
+					}
+				}
+			}
+		}
+	}
+	visit(c)
+	return why, into
+}
+
+// oracleCellEscapes says why a local variable can be set by code the program's
+// stores into it do not show (its address is handed on), or "".
+func oracleCellEscapes(a *ssa.Alloc) string {
+	refs := a.Referrers()
+	if refs == nil {
+		return ""
+	}
+	for _, in := range *refs {
+		switch in := in.(type) {
+		case *ssa.Store:
+			if in.Val == a {
+				return "its address is stored"
+			}
+		case *ssa.UnOp, *ssa.DebugRef, *ssa.MakeClosure:
+		default:
+			return "its address is passed on"
+		}
+	}
+	return ""
+}
+
+// oracleBinding is the value a closure's captured variable was bound to where the
+// closure was made.
+func oracleBinding(fv *ssa.FreeVar) ssa.Value {
 	fn := fv.Parent()
 	idx := -1
 	for i, x := range fn.FreeVars {
@@ -559,188 +1212,90 @@ func oracleCellOf(fv *ssa.FreeVar) ssa.Value {
 	return nil
 }
 
-// funcs is the functions a function value might be, as far as the module's own
-// stores say: the function itself, a closure's function, the functions stored
-// into the package variable, field, cell, slice or map it was loaded from, and
-// the functions a called function returns. A parameter is the caller's to say,
-// so it names none.
-func (fl *oracleFlows) funcs(v ssa.Value, seen map[ssa.Value]bool) (out []*ssa.Function) {
-	if v == nil || seen[v] {
-		return nil
-	}
-	seen[v] = true
-	switch v := v.(type) {
-	case *ssa.Function:
-		return []*ssa.Function{v}
-	case *ssa.MakeClosure:
-		if f, ok := v.Fn.(*ssa.Function); ok {
-			return []*ssa.Function{f}
+// oracleCellRoot is the variable cell (an Alloc) a captured variable's address
+// refers to, through any number of nested closures; an Alloc is its own root.
+func oracleCellRoot(v ssa.Value) ssa.Value {
+	for i := 0; i < 64; i++ {
+		fv, ok := v.(*ssa.FreeVar)
+		if !ok {
+			return v
 		}
-	case *ssa.Phi:
-		for _, e := range v.Edges {
-			out = append(out, fl.funcs(e, seen)...)
-		}
-	case *ssa.ChangeType:
-		return fl.funcs(v.X, seen)
-	case *ssa.Convert:
-		return fl.funcs(v.X, seen)
-	case *ssa.MakeInterface:
-		return fl.funcs(v.X, seen)
-	case *ssa.TypeAssert:
-		return fl.funcs(v.X, seen)
-	case *ssa.Lookup:
-		return fl.elemFuncs(v.X, seen)
-	case *ssa.UnOp:
-		if v.Op != token.MUL {
+		v = oracleBinding(fv)
+		if v == nil {
 			return nil
 		}
-		var stored []ssa.Value
-		switch x := v.X.(type) {
-		case *ssa.Global:
-			stored = fl.globals[x]
-		case *ssa.FieldAddr:
-			if fv := oracleFieldVar(x); fv != nil {
-				stored = fl.fields[fv]
-			}
-		case *ssa.IndexAddr:
-			return fl.elemFuncs(x.X, seen)
-		case *ssa.Alloc:
-			stored = fl.cells[x]
-		case *ssa.FreeVar:
-			if cell := oracleCellOf(x); cell != nil {
-				stored = fl.cells[cell]
-			}
-		}
-		for _, sv := range stored {
-			out = append(out, fl.funcs(sv, seen)...)
-		}
-	case *ssa.Call:
-		out = append(out, fl.returned(v, -1, seen)...)
-	case *ssa.Extract:
-		if c, ok := v.Tuple.(*ssa.Call); ok {
-			out = append(out, fl.returned(c, v.Index, seen)...)
-		}
 	}
-	return out
+	return nil
 }
 
-// returned is the functions a statically called module function returns (the
-// idx-th result, or the one result for idx < 0).
-func (fl *oracleFlows) returned(c *ssa.Call, idx int, seen map[ssa.Value]bool) (out []*ssa.Function) {
-	callee := c.Call.StaticCallee()
-	if callee == nil {
+func oracleParamIndex(p *ssa.Parameter) int {
+	for i, q := range p.Parent().Params {
+		if q == p {
+			return i
+		}
+	}
+	return -1
+}
+
+// oracleArgAt is the argument a call passes for the idx-th parameter of its
+// callee (an interface call's receiver is not among its Args).
+func oracleArgAt(com *ssa.CallCommon, idx int) (ssa.Value, bool) {
+	at := idx
+	if com.IsInvoke() {
+		at = idx - 1
+	}
+	if at < 0 || at >= len(com.Args) {
+		return nil, false
+	}
+	return com.Args[at], true
+}
+
+// oracleCallableOutside is whether code outside the loaded program can call fn:
+// an exported function or method.
+func oracleCallableOutside(fn *ssa.Function) bool {
+	return fn.Parent() == nil && fn.Synthetic == "" && ast.IsExported(fn.Name())
+}
+
+// oracleStructField is the declaration of the idx-th field of a struct type.
+func oracleStructField(t types.Type, idx int) *types.Var {
+	st, ok := t.Underlying().(*types.Struct)
+	if !ok || idx >= st.NumFields() {
 		return nil
 	}
-	for _, b := range callee.Blocks {
-		ret, ok := b.Instrs[len(b.Instrs)-1].(*ssa.Return)
-		if !ok {
-			continue
-		}
-		for i, r := range ret.Results {
-			if idx < 0 || i == idx {
-				out = append(out, fl.funcs(r, seen)...)
-			}
-		}
-	}
-	return out
+	return st.Field(idx)
 }
 
-// elemFuncs is the functions that might be elements of a slice, array or map
-// value: what was stored into the container it was loaded from, appended to it,
-// or written into the literal that built it.
-func (fl *oracleFlows) elemFuncs(c ssa.Value, seen map[ssa.Value]bool) (out []*ssa.Function) {
-	if c == nil || seen[c] {
-		return nil
+// oracleFuncName names a function outside the module: "<package path>.<name>",
+// or "<package path>.<Type>.<method>".
+func oracleFuncName(fn *ssa.Function) string {
+	owner := oracleOwner(fn)
+	if owner.Pkg == nil {
+		return owner.String()
 	}
-	seen[c] = true
-	for _, sv := range fl.elems[oracleContainer(c)] {
-		out = append(out, fl.funcs(sv, seen)...)
-	}
-	switch c := c.(type) {
-	case *ssa.UnOp:
-		if c.Op != token.MUL {
-			return out
+	name := owner.Name()
+	if r := owner.Signature.Recv(); r != nil {
+		t := r.Type()
+		if p, ok := t.(*types.Pointer); ok {
+			t = p.Elem()
 		}
-		var stored []ssa.Value
-		switch x := c.X.(type) {
-		case *ssa.Global:
-			stored = fl.globals[x]
-		case *ssa.FieldAddr:
-			if fv := oracleFieldVar(x); fv != nil {
-				stored = fl.fields[fv]
-			}
-		case *ssa.Alloc:
-			stored = fl.cells[x]
-		}
-		for _, sv := range stored {
-			out = append(out, fl.elemFuncs(sv, seen)...)
-		}
-	case *ssa.Call:
-		if b, ok := c.Call.Value.(*ssa.Builtin); ok && b.Name() == "append" {
-			for _, a := range c.Call.Args {
-				out = append(out, fl.elemFuncs(a, seen)...)
-			}
-		}
-	case *ssa.Slice:
-		out = append(out, fl.elemFuncs(c.X, seen)...)
-	case *ssa.ChangeType:
-		out = append(out, fl.elemFuncs(c.X, seen)...)
-	case *ssa.Phi:
-		for _, e := range c.Edges {
-			out = append(out, fl.elemFuncs(e, seen)...)
+		if n, ok := t.(*types.Named); ok {
+			name = n.Obj().Name() + "." + name
 		}
 	}
-	return out
+	return owner.Pkg.Pkg.Path() + "." + name
 }
 
-// oracleParamsUnresolved is whether some caller of the function a parameter
-// belongs to hands it a function value the walk cannot name: not a function, a
-// closure, nil, another parameter, or something the module's stores resolve.
-func (op *oracleProgram) oracleParamsUnresolved(params []*ssa.Parameter) bool {
-	for _, p := range params {
-		fn := p.Parent()
-		idx := -1
-		for i, q := range fn.Params {
-			if q == p {
-				idx = i
-			}
-		}
-		node := op.graph.Nodes[fn]
-		if idx < 0 || node == nil {
-			continue
-		}
-		for _, e := range node.In {
-			if e.Site == nil {
-				continue
-			}
-			com := e.Site.Common()
-			args, at := com.Args, idx
-			if com.IsInvoke() {
-				at = idx - 1
-			}
-			if at < 0 || at >= len(args) || (!com.IsInvoke() && len(args) != len(fn.Params)) {
-				continue
-			}
-			switch a := args[at].(type) {
-			case *ssa.Function, *ssa.MakeClosure, *ssa.Const:
-				continue
-			default:
-				// A value the caller itself takes from a parameter or builds
-				// is that caller's callers' business (or was read where it
-				// was built); a result of a call is the callee's return
-				// statements'. What is left is a value read from a variable
-				// or a field the module never stores a function into, or
-				// from outside the program.
-				if o := oracleOriginOf(a, map[ssa.Value]bool{}); o.param || o.outside || o.viaCall || !o.other {
-					continue
-				}
-				if len(op.flows.funcs(a, map[ssa.Value]bool{})) == 0 {
-					return true
-				}
-			}
+// oracleIfaceMethodName names an interface method by the interface that declares
+// it: "<package path>.<Interface>.<method>" (io.Closer.Close for a Close an
+// interface embeds from io.Closer).
+func oracleIfaceMethodName(com *ssa.CallCommon) string {
+	t := com.Value.Type()
+	if sig, ok := com.Method.Type().(*types.Signature); ok && sig.Recv() != nil {
+		if _, named := sig.Recv().Type().(*types.Named); named {
+			t = sig.Recv().Type()
 		}
 	}
-	return false
+	return types.TypeString(t, nil) + "." + com.Method.Name()
 }
 
 // sitesOf is the callees of each call site in f, from the VTA graph or the CHA
@@ -778,6 +1333,60 @@ func oracleFollows(f *ssa.Function) bool {
 		}
 	}
 	return !oracleNotWalked.MatchString(f.String())
+}
+
+// oracleParamSupplied is whether every chain of walked callers that supplies p
+// ends in a caller that passes something other than its own parameter: the
+// value the walk resolved and recorded there.
+func (op *oracleProgram) oracleParamSupplied(p *ssa.Parameter, walked map[*ssa.Function]bool, visiting map[*ssa.Parameter]bool) bool {
+	if visiting[p] {
+		return true
+	}
+	visiting[p] = true
+	idx := oracleParamIndex(p)
+	node := op.graph.Nodes[p.Parent()]
+	if node == nil || idx < 0 {
+		return false
+	}
+	callers := 0
+	for _, e := range node.In {
+		if e.Site == nil || !walked[e.Site.Parent()] {
+			continue
+		}
+		arg, ok := oracleArgAt(e.Site.Common(), idx)
+		if !ok {
+			return false
+		}
+		callers++
+		for _, q := range op.resolve(arg).params {
+			if !op.oracleParamSupplied(q, walked, visiting) {
+				return false
+			}
+		}
+	}
+	return callers > 0
+}
+
+// oracleIsArg is whether v is the address of one of com's arguments (not its
+// callee value).
+func oracleIsArg(com *ssa.CallCommon, v *ssa.Value) bool {
+	for i := range com.Args {
+		if v == &com.Args[i] {
+			return true
+		}
+	}
+	return false
+}
+
+// oracleUnion is a and the functions of b not in a.
+func oracleUnion(a, b []*ssa.Function) []*ssa.Function {
+	out := append([]*ssa.Function(nil), a...)
+	for _, f := range b {
+		if !slices.Contains(out, f) {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // oracleStoreKey names a call into the store package for the trace test: a
@@ -838,6 +1447,18 @@ func derivedWrites(op *oracleProgram, runFn *ssa.Function) (kinds []string, evid
 		}
 	}
 	seen := map[*ssa.Function]bool{}
+	// walked is the functions whose bodies the walk read.
+	walked := map[*ssa.Function]bool{}
+	// paramCalls are the calls through a parameter of the function that holds
+	// them, checked once the walk is done (see oracleParamSupplied).
+	type paramCall struct {
+		f *ssa.Function
+		p *ssa.Parameter
+	}
+	var paramCalls []paramCall
+	unresolved := func(f *ssa.Function, why string) {
+		calls[oracleUnresolvedKey(f, why)] = f.String()
+	}
 	var walk func(f *ssa.Function)
 	var cur *ssa.Function
 	walk = func(f *ssa.Function) {
@@ -848,6 +1469,7 @@ func derivedWrites(op *oracleProgram, runFn *ssa.Function) (kinds []string, evid
 		if !oracleFollows(f) {
 			return
 		}
+		walked[f] = true
 		if cur != nil {
 			via[f.String()] = cur.String()
 		}
@@ -860,6 +1482,7 @@ func derivedWrites(op *oracleProgram, runFn *ssa.Function) (kinds []string, evid
 		var operands [16]*ssa.Value
 		for _, b := range f.Blocks {
 			for _, in := range b.Instrs {
+				ci, isCall := in.(ssa.CallInstruction)
 				for _, v := range in.Operands(operands[:0]) {
 					if v == nil || *v == nil {
 						continue
@@ -871,14 +1494,26 @@ func derivedWrites(op *oracleProgram, runFn *ssa.Function) (kinds []string, evid
 					// A function value the module loads from a field, a
 					// package variable, a slice, a map or a call and passes
 					// on is one of the functions stored there.
-					if _, ok := (*v).Type().Underlying().(*types.Signature); ok {
-						for _, fn := range op.flows.funcs(*v, map[ssa.Value]bool{}) {
-							walk(fn)
+					if _, ok := (*v).Type().Underlying().(*types.Signature); !ok {
+						continue
+					}
+					res := op.resolve(*v)
+					for _, fn := range res.fns {
+						walk(fn)
+					}
+					// Handed to a callee as an argument: what the resolver
+					// cannot vouch for is recorded here, where the value is
+					// made, whatever the callee is (a module helper that calls
+					// it, a function outside the module that does: round-2
+					// review B1 (d), (f)). A parameter passed on is checked
+					// where it is finally called.
+					if isCall && oracleIsArg(ci.Common(), v) {
+						for _, why := range res.open {
+							unresolved(f, why)
 						}
 					}
 				}
-				ci, ok := in.(ssa.CallInstruction)
-				if !ok {
+				if !isCall {
 					continue
 				}
 				com := ci.Common()
@@ -886,34 +1521,43 @@ func derivedWrites(op *oracleProgram, runFn *ssa.Function) (kinds []string, evid
 					name := com.Method.Name()
 					recv := types.TypeString(com.Value.Type(), func(p *types.Package) string { return p.Name() })
 					impls := sites[ci]
-					if pkg := com.Method.Pkg(); len(impls) == 0 && pkg != nil && strings.HasPrefix(pkg.Path(), oracleModule) {
-						// VTA found no type that flows to this interface
-						// value: the value comes from code outside the loaded
-						// program (the wiring that hands a job its
-						// collaborators). Every implementation of a module
-						// interface that the program contains is then the
-						// answer. Not for an interface of the standard library
-						// or a dependency (error, fs.FileInfo, io.Closer):
-						// every type in the module implements one.
-						if chaSites == nil {
-							chaSites = op.sitesOf(f, true)
-						}
-						impls = chaSites[ci]
+					pkg := com.Method.Pkg()
+					moduleIface := pkg != nil && strings.HasPrefix(pkg.Path(), oracleModule)
+					if moduleIface && len(op.ifaceOpen(com.Value)) > 0 {
+						// VTA's set is every type the program converts to the
+						// interface on the way here. When the value can come
+						// from code the program does not show (an exported
+						// field the wiring fills, a parameter of an exported
+						// function: the ManualOnlyFilesReader shape), that set
+						// can be partial, and a method named like no write
+						// (Undo, Rollback) is judged by its bodies alone
+						// (round-2 review M1): every implementation the
+						// module's loaded packages declare is walked as well.
+						// Not for an interface of the standard library or a
+						// dependency (error, io.Closer): every type in the
+						// module implements one.
+						impls = oracleUnion(impls, op.declaredImpls(com))
 					}
 					// The call is judged by the interface method's own name
 					// AND its implementations' bodies are walked, and the
-					// result is the union. Neither alone is enough: the set of
-					// implementations the program knows can be partial (an
-					// in-program type beside a store the wiring passes in),
-					// and a body can write through code the walk does not
-					// enter. Progress and liveness reporting are not books
-					// writes (oracleNotAWrite), so their names are not judged,
-					// but what implements them is still walked.
+					// result is the union. Progress and liveness reporting are
+					// not books writes (oracleNotAWrite), so their names are
+					// not judged, but what implements them is still walked.
 					if _, ok := calls[recv+"."+name]; !ok {
 						calls[recv+"."+name] = f.String()
 					}
-					if oracleVerb.MatchString(name) && !oracleNotAWrite.MatchString(recv) {
+					verb := oracleVerb.MatchString(name)
+					if verb && !oracleNotAWrite.MatchString(recv) {
 						note(oracleResource(recv, name), recv+"."+name+" in "+f.String())
+					}
+					// A method named like no write whose bodies the walk
+					// cannot read: of an interface declared outside the module
+					// (the walk never enters such code, nor asks CHA about it),
+					// or of a module interface the program holds no
+					// implementation of. Allowed by interface method in
+					// oracleOutsideIfaceAllowed, or by key.
+					if !verb && (!moduleIface || len(impls) == 0) {
+						unresolved(f, "iface:"+oracleIfaceMethodName(com))
 					}
 					for _, impl := range impls {
 						walk(impl)
@@ -925,46 +1569,44 @@ func derivedWrites(op *oracleProgram, runFn *ssa.Function) (kinds []string, evid
 					if _, builtin := com.Value.(*ssa.Builtin); builtin {
 						continue
 					}
-					// A call through a function value. What the module's
-					// stores say it can be (a package variable's or a field's
-					// functions, the default of a nil-means-default
-					// parameter), plus, for a value some caller supplies, what
-					// the callers pass (read where each is mentioned); for a
-					// value no caller supplies, the VTA graph, then the
-					// signature-based CHA graph where VTA knows nothing (a
-					// value set by code outside the program).
+					// A call through a function value: default-deny. What the
+					// resolver reads from the program (the function itself, a
+					// closure, the stores into a variable, field, cell or
+					// element, what a called function returns), plus the call
+					// graph for any value not held in a parameter, plus the
+					// signature graph where nothing else knows (a value carried
+					// in a context or a registry). Every reason the set may be
+					// incomplete is recorded as UNRESOLVED, even when targets
+					// were found (a default beside a setter, a parameter beside
+					// an unset default: round-2 review B1 (b), (c)). A
+					// parameter is the caller's: checked after the walk.
 					o := oracleOriginOf(com.Value, map[ssa.Value]bool{})
-					targets := op.flows.funcs(com.Value, map[ssa.Value]bool{})
-					switch {
-					case o.outside && !o.other && !o.param && len(targets) == 0:
-						// a closure of code outside the module
-						calls[oracleUnresolvedKey(f, "outside:"+o.name)] = f.String()
-					case o.other && !o.param:
+					res := op.resolve(com.Value)
+					targets := res.fns
+					// The call graph only for a value read from outside this
+					// function (a field, a variable, a call result: o.other);
+					// a local slice or cell the resolver reads whole, and VTA
+					// keys a slice's elements by type, which would hand this
+					// call every function stored in any slice of the type.
+					if len(res.params) == 0 && o.other {
 						g := sites[ci]
-						if len(g) == 0 && len(targets) == 0 && !o.viaCall && !o.declared {
-							// A value set by code outside the program (a
-							// context value, a registry): every function of
-							// that signature, as for an interface value. Not
-							// for a call result (the module's return
-							// statements are the answer there) nor for a
-							// package variable or field (the module's stores
-							// are): a function of a common signature (func())
-							// matches everything.
+						if len(g) == 0 && len(targets) == 0 && o.other && !o.viaCall && !o.declared {
+							// A function of a common signature (func())
+							// matches everything, so not for a call result nor
+							// for a package variable or field, whose stores the
+							// resolver reads.
 							if chaSites == nil {
 								chaSites = op.sitesOf(f, true)
 							}
 							g = chaSites[ci]
 						}
 						targets = append(targets, g...)
-						if len(targets) == 0 {
-							what := o.name
-							if o.viaCall {
-								what = "call result"
-							}
-							calls[oracleUnresolvedKey(f, what)] = f.String()
-						}
-					case o.param && op.oracleParamsUnresolved(o.params):
-						calls[oracleUnresolvedKey(f, "parameter")] = f.String()
+					}
+					for _, why := range res.open {
+						unresolved(f, why)
+					}
+					for _, p := range res.params {
+						paramCalls = append(paramCalls, paramCall{f, p})
 					}
 					for _, target := range targets {
 						walk(target)
@@ -1006,6 +1648,16 @@ func derivedWrites(op *oracleProgram, runFn *ssa.Function) (kinds []string, evid
 		}
 	}
 	walk(runFn)
+	// A call through a parameter: what each walked caller passes was resolved,
+	// walked and recorded at that caller's operand scan; a caller that passes its
+	// own parameter on is followed to its callers, at any depth. What is left is
+	// a parameter no walked caller supplies (code outside the module calls the
+	// function, or the walk reached it only as a value).
+	for _, pc := range paramCalls {
+		if !op.oracleParamSupplied(pc.p, walked, map[*ssa.Parameter]bool{}) {
+			unresolved(pc.f, "parameter:"+pc.p.Name())
+		}
+	}
 	for k := range set {
 		kinds = append(kinds, k)
 	}
@@ -1118,7 +1770,7 @@ func loadOracleProgram(checkBuild bool, overlay map[string][]byte, patterns ...s
 		}
 	}
 	g, c := oracleCallGraph(prog)
-	return &oracleProgram{prog: prog, graph: g, cha: c, roots: ssapkgs, flows: buildOracleFlows(prog)}, nil
+	return &oracleProgram{prog: prog, graph: g, cha: c, roots: ssapkgs, flows: buildOracleFlows(prog), impls: &oracleImplCache{m: map[string][]*ssa.Function{}}}, nil
 }
 
 func loadOracleJobs() (map[string]oracleJob, error) {
