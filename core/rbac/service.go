@@ -1,5 +1,5 @@
 // file: core/rbac/service.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9d2b7e41-5c3a-4f86-b0e9-1a6c8f3d5e27
 // last-edited: 2026-11-19
 
@@ -43,6 +43,15 @@ var (
 	ErrLockedRole      = errors.New("rbac: role is locked")
 	ErrRoleExists      = errors.New("rbac: role exists")
 	ErrVersionMismatch = errors.New("rbac: version mismatch")
+	// ErrContended is what a role write returns when its Commit conflicted on
+	// every one of its attempts (maxWriteAttempts) without any attempt ever
+	// reaching a decision of its own (no ErrVersionMismatch, ErrRoleInUse,
+	// ErrLastAdmin ...): other writers kept committing between its reads and
+	// its commit. The role is as it was and the caller's version may be
+	// current, so unlike ErrVersionMismatch it is not a stale-read answer: the
+	// same request, sent again, is expected to land. It wraps
+	// storage.ErrConflict, and rbachttp answers it 503 with a Retry-After.
+	ErrContended       = errors.New("rbac: the role set kept changing under the write; retry")
 	ErrLastAdmin       = errors.New("rbac: change would remove the last core:admin")
 	ErrSeedRoleLocked  = errors.New("rbac: seed roles are read-only until seed-role editing lands")
 	ErrUndecodableRole = errors.New("rbac: stored role cannot be decoded") // per row, from Store.ScanRoles (§6.3)
@@ -82,9 +91,17 @@ var (
 // DefaultCacheSize is core.rbac.cache_size's default (05-rbac §10).
 const DefaultCacheSize = 4096
 
-// maxWriteAttempts bounds the retries of a role write whose Commit failed on
-// a precondition (another writer, or a user record a Holders read changed).
-const maxWriteAttempts = 3
+// maxWriteAttempts bounds the tries of a role write whose Commit failed on a
+// precondition (another writer, a user record a Holders read changed, or a
+// user write that claimed a role: Store.ClaimRoleSet). It is sixteen because a
+// role write conflicts with every claim that commits between its first read
+// and its Commit, and a burst of n claiming writers (auth.claimRetries is
+// sixteen too) can make it lose at most n times, one conflict per claim, so
+// n+1 tries always land it: sixteen covers fifteen concurrent claimers. A
+// try that loses sleeps a jittered 1 to 128ms first (storage.RetryOnConflict),
+// so the worst case waits about a second, under writeMu. A write that still
+// loses is ErrContended.
+const maxWriteAttempts = 16
 
 // Options is what New takes beyond its dependencies.
 type Options struct {
@@ -1017,27 +1034,27 @@ type roleChange struct {
 
 // write runs stage in a fresh batch and commits it, under writeMu. A Commit
 // that fails on a precondition (storage.ErrConflict: another writer changed
-// a role or a user record this write read) runs stage again, up to
-// maxWriteAttempts, so the retry decides on the new state; the last conflict
-// is returned wrapped in ErrVersionMismatch. After the commit the role cache
+// a role or a user record this write read, or a user write claimed a role)
+// runs stage again, up to maxWriteAttempts with jittered backoff, so the retry
+// decides on the new state; a write that conflicts on every try returns
+// ErrContended, wrapping the last conflict. After the commit the role cache
 // takes the changes, the generation is bumped and Deps.OnChange called.
 func (s *Service) write(ctx context.Context, stage func(b *storage.Batch) ([]*roleChange, error)) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	for attempt := 1; ; attempt++ {
-		changes, err := s.attempt(ctx, stage)
-		if errors.Is(err, storage.ErrConflict) && attempt < maxWriteAttempts {
-			continue
-		}
-		if errors.Is(err, storage.ErrConflict) {
-			return fmt.Errorf("%w: %w", ErrVersionMismatch, err)
-		}
-		if err != nil {
-			return err
-		}
-		s.apply(changes)
-		return nil
+	var changes []*roleChange
+	err := storage.RetryOnConflict(ctx, maxWriteAttempts, func(context.Context) (err error) {
+		changes, err = s.attempt(ctx, stage)
+		return err
+	})
+	if errors.Is(err, storage.ErrConflict) {
+		return fmt.Errorf("%w: %w", ErrContended, err)
 	}
+	if err != nil {
+		return err
+	}
+	s.apply(changes)
+	return nil
 }
 
 // attempt is one try of write: stage, then Commit.

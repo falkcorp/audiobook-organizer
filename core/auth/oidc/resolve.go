@@ -1,7 +1,7 @@
 // file: core/auth/oidc/resolve.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1720bb8f-3301-4a84-b4b5-d3dd31f6c634
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package oidc
 
@@ -171,6 +171,9 @@ func (r *Resolver) Resolve(ctx context.Context, pol Policy, c Claims) (*auth.Use
 		u, rerr = r.resolveLocked(ctx, pol, c, email)
 		return rerr
 	})
+	if errors.Is(err, storage.ErrConflict) {
+		err = fmt.Errorf("%w: %w", auth.ErrContended, err)
+	}
 	if errors.Is(err, auth.ErrEmailInUse) {
 		r.refused.put(key, err, r.d.Clock())
 	}
