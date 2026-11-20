@@ -58,13 +58,10 @@ func TestIntegrationHTTP_KindValidatorRefusalIs422(t *testing.T) {
 	}
 }
 
-// TestErrHoldChanged_IsProviderHTTPs: the route's ErrHoldChanged is
-// providerhttp's own, so the real *providerhttp.Registry's ReleaseHoldIf
-// answer maps to the 409 with no translation layer.
-func TestErrHoldChanged_IsProviderHTTPs(t *testing.T) {
-	if ErrHoldChanged != providerhttp.ErrHoldChanged {
-		t.Fatal("integrationhttp.ErrHoldChanged is not providerhttp.ErrHoldChanged")
-	}
+// TestReleaseHold_ProviderHTTPErrHoldChangedIs409: the route recognises
+// providerhttp's own ErrHoldChanged, so the real *providerhttp.Registry's
+// ReleaseHoldIf answer maps to the 409 with no translation layer.
+func TestReleaseHold_ProviderHTTPErrHoldChangedIs409(t *testing.T) {
 	e := newEnv(t)
 	ctx := adminCtx()
 	e.create(t, ctx, kindNotify, signalBody(roofID, "http://192.0.2.20/", "alfred-1"))
