@@ -1,5 +1,5 @@
 // file: internal/books/writer/metafetchgate/store_forward_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8802cdeb-4160-44e4-a64f-f7fa9983a421
 // last-edited: 2026-11-19
 
@@ -38,7 +38,8 @@ type sentinels struct {
 	book   *database.Book
 	author *database.Author
 	series *database.Series
-	file   *database.BookFile
+	file   *database.BookFile // PatchBookFileFields: before
+	after  *database.BookFile // PatchBookFileFields: after, a different row
 	cred   []database.BookAuthor
 }
 
@@ -132,7 +133,7 @@ func (r *forwardRecorder) UpdateBookFileHashes(id, originalHash, postMetadataHas
 }
 func (r *forwardRecorder) PatchBookFileFields(bookID, fileID string, p database.BookFileFieldPatch) (*database.BookFile, *database.BookFile, error) {
 	r.rec("PatchBookFileFields", bookID, fileID, p)
-	return r.ret.file, r.ret.file, nil
+	return r.ret.file, r.ret.after, nil
 }
 func (r *forwardRecorder) PutMetadataCache(e *database.MetadataCandidateCache) error {
 	r.rec("PutMetadataCache", e)
@@ -203,7 +204,7 @@ func admitAll(t *testing.T) (*metafetchgate.Store, *forwardRecorder, *writertest
 	w := writertest.ForSet("books.f518b", set, tasks.ModeLive)
 	rec := &forwardRecorder{ret: sentinels{
 		book: &database.Book{ID: "ret-book"}, author: &database.Author{Name: "ret-author"},
-		series: &database.Series{Name: "ret-series"}, file: &database.BookFile{ID: "ret-file"},
+		series: &database.Series{Name: "ret-series"}, file: &database.BookFile{ID: "ret-file"}, after: &database.BookFile{ID: "ret-file-after"},
 		cred: []database.BookAuthor{{BookID: "ret-cred"}},
 	}}
 	return metafetchgate.Wrap(t.Context(), rec, writer.New(w, rows)), rec, w
@@ -306,7 +307,7 @@ func TestGatedMethodsForwardToTheSameNamedInnerMethod(t *testing.T) {
 			case "ModifyBookAuthors":
 				want = []any{rec.ret.cred}
 			case "PatchBookFileFields":
-				want = []any{rec.ret.file, rec.ret.file}
+				want = []any{rec.ret.file, rec.ret.after}
 			}
 			require.Len(t, out, len(want)+1, "%s: unexpected result count", m)
 			for i, wnt := range want {
