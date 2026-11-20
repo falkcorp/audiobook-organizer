@@ -1407,7 +1407,7 @@ Two further books sections come from explicit rows: `identity` and `scheduler` (
 **The table** (generated; HEAD's source order). *Stored*: where HEAD keeps the value (`blob` = the settings blob,
 `row` = an encrypted row, `env/file` = never stored). *Class*: `k` key and `s` secret (migrated by M2), `i` input
 of M6, `o` operator-only at HEAD (nothing to migrate; its retired names follow §1.3.6), `x` dropped. A path ending
-`.*` holds the struct's sub-keys under their `json` names. Counts: 134 `k`, 11 `s`, 9 `i`, 16 `o`, 3 `x` (173 top-level rows; two of them, `oauth_allowed_emails` and the
+`.*` holds the struct's sub-keys under their `json` names. Counts: 135 `k`, 11 `s`, 9 `i`, 16 `o`, 2 `x` (173 top-level rows; two of them, `oauth_allowed_emails` and the
 `scheduled.db_optimize` sub-key, have two targets).
 
 | HEAD name | Stored | Canonical path or name | Class | Note |
@@ -1506,7 +1506,7 @@ of M6, `o` operator-only at HEAD (nothing to migrate; its retired names follow �
 | `dedup_boilerplate` | blob | `modules.books.dedup.boilerplate.*` | k | |
 | `metadata_scoring` | blob | `modules.books.metadata.scoring.*` | k | |
 | `catalog` | blob | `modules.books.catalog.*` | k | |
-| `ai_backend` | blob | — | x | its scalars are already folded into `ai_endpoints` by HEAD's codec (05-ai §10) |
+| `ai_backend` | blob | `modules.books.ai.*` | k | sub-key rows below: the five mode and model scalars are `x` (folded into `ai_endpoints` by HEAD's codec, 05-ai §10); `parse_batch_size`, `parse_batch_timeout_seconds` and `parse_batch_workers` are `k` keys `modules.books.ai.parse_batch_*` (the scanner's AI batch phase reads them and no list carries them; 0 is the phase's default) |
 | `api_rate_limit_per_minute` | blob | `core.http.rate_limit.per_minute` | k | |
 | `json_body_limit_mb` | blob | `core.http.body.json_max_bytes` | k | MiB → bytes |
 | `upload_body_limit_mb` | blob | `core.http.body.upload_max_bytes` | k | MiB → bytes |

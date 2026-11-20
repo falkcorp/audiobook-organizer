@@ -43,6 +43,7 @@ var egressExempt = map[string]string{
 	"whisper_remote_url":          "the remote transcription server takes no credential",
 	"oauth_redirect_base_url":     "where the sign-in returns to, not a host the client secret is sent to; admin-only",
 	"public_base_url":             "this server's own address; operator-only (env or file)",
+	"ai_backend.local_base_url":   "retired (class x): the scalar HEAD folded into ai_endpoints, read by nothing; the list's own rule covers the live address",
 }
 
 // egressSecretExempt are the class-s rows whose value is not sent to a host a

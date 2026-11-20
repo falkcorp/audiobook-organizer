@@ -169,6 +169,11 @@ type aiSettings struct {
 	CoverArtModel      string `json:"cover_art_model"`
 	EnableAIParsing    bool   `json:"enable_ai_parsing"`
 	FilenameParseModel string `json:"filename_parse_model"`
+	// The AI batch phase's knobs (HEAD ai_backend.parse_batch_*): 0 means the
+	// phase's own default, so the zero value is the default.
+	ParseBatchSize           int `json:"parse_batch_size"`
+	ParseBatchTimeoutSeconds int `json:"parse_batch_timeout_seconds"`
+	ParseBatchWorkers        int `json:"parse_batch_workers"`
 }
 
 type cacheSettings struct {

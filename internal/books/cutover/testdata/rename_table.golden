@@ -5,8 +5,8 @@
 #
 # Rename table (05-config §1.12.3), generated from the frozen HEAD Config by rename_table.go.
 # Regenerate: go test ./internal/books/cutover -run TestRenameTable_Golden -update
-# top-level rows: 173 (k=134 s=11 i=9 o=16 x=3); rows with two targets: 2
-# sub-key rows: 129; virtual rows: 3; removed-key rows: 23; process-name rows: 2; rows: 330
+# top-level rows: 173 (k=135 s=11 i=9 o=16 x=2); rows with two targets: 2
+# sub-key rows: 137; virtual rows: 3; removed-key rows: 23; process-name rows: 2; rows: 338
 # os.Getenv literals outside core/, internal/config/ and this package (05-config §1.12.4 "Not config at all"): 16
 #   getenv ABK_ALLOW_ENCRYPTION_KEY_REGEN
 #   getenv ABK_DISABLE_MEDIAINFO
@@ -903,18 +903,62 @@ target key modules.books.catalog.max_products_per_author convert=- env=ABO_BOOKS
 retired env CATALOG.MAX_PRODUCTS_PER_AUTHOR -> modules.books.catalog.max_products_per_author warn
 
 ## ai_backend
-top=true stored=blob class=x blob=ai_backend admin=false fail-closed=false url=false
-note its scalars are already folded into ai_endpoints by HEAD's codec (05-ai §10)
-retired file ai_backend -> - warn
-retired env AI_BACKEND -> - warn
+top=true stored=blob class=k blob=ai_backend admin=false fail-closed=false url=false
+target key modules.books.ai.* convert=- env=ABO_BOOKS_AI
+note sub-key rows below
+retired file ai_backend -> modules.books.ai warn
+retired env AI_BACKEND -> modules.books.ai warn
+
+## ai_backend.embedding_mode
+top=false stored=blob class=x blob=ai_backend admin=false fail-closed=false url=false
+note folded into ai_endpoints by HEAD's codec (05-ai §10)
+retired env AI_BACKEND.EMBEDDING_MODE -> - warn
 retired env AI_BACKEND_EMBEDDING_MODE -> - warn
+
+## ai_backend.llm_mode
+top=false stored=blob class=x blob=ai_backend admin=false fail-closed=false url=false
+note folded into ai_endpoints by HEAD's codec (05-ai §10)
+retired env AI_BACKEND.LLM_MODE -> - warn
 retired env AI_BACKEND_LLM_MODE -> - warn
+
+## ai_backend.local_base_url
+top=false stored=blob class=x blob=ai_backend admin=false fail-closed=false url=true
+note folded into ai_endpoints by HEAD's codec (05-ai §10)
+retired env AI_BACKEND.LOCAL_BASE_URL -> - warn
 retired env AI_BACKEND_LOCAL_BASE_URL -> - warn
+
+## ai_backend.local_embedding_model
+top=false stored=blob class=x blob=ai_backend admin=false fail-closed=false url=false
+note folded into ai_endpoints by HEAD's codec (05-ai §10)
+retired env AI_BACKEND.LOCAL_EMBEDDING_MODEL -> - warn
 retired env AI_BACKEND_LOCAL_EMBEDDING_MODEL -> - warn
+
+## ai_backend.local_llm_model
+top=false stored=blob class=x blob=ai_backend admin=false fail-closed=false url=false
+note folded into ai_endpoints by HEAD's codec (05-ai §10)
+retired env AI_BACKEND.LOCAL_LLM_MODEL -> - warn
 retired env AI_BACKEND_LOCAL_LLM_MODEL -> - warn
-retired env AI_BACKEND_PARSE_BATCH_SIZE -> - warn
-retired env AI_BACKEND_PARSE_BATCH_TIMEOUT_SECONDS -> - warn
-retired env AI_BACKEND_PARSE_BATCH_WORKERS -> - warn
+
+## ai_backend.parse_batch_size
+top=false stored=blob class=k blob=ai_backend admin=false fail-closed=false url=false
+target key modules.books.ai.parse_batch_size convert=- env=ABO_BOOKS_AI_PARSE_BATCH_SIZE
+note not folded: read by the scanner's AI batch phase (ResolveAIParseBatch), 0 = its default
+retired env AI_BACKEND.PARSE_BATCH_SIZE -> modules.books.ai.parse_batch_size warn
+retired env AI_BACKEND_PARSE_BATCH_SIZE -> modules.books.ai.parse_batch_size warn
+
+## ai_backend.parse_batch_timeout_seconds
+top=false stored=blob class=k blob=ai_backend admin=false fail-closed=false url=false
+target key modules.books.ai.parse_batch_timeout_seconds convert=- env=ABO_BOOKS_AI_PARSE_BATCH_TIMEOUT_SECONDS
+note not folded: read by the scanner's AI batch phase, 0 = its default
+retired env AI_BACKEND.PARSE_BATCH_TIMEOUT_SECONDS -> modules.books.ai.parse_batch_timeout_seconds warn
+retired env AI_BACKEND_PARSE_BATCH_TIMEOUT_SECONDS -> modules.books.ai.parse_batch_timeout_seconds warn
+
+## ai_backend.parse_batch_workers
+top=false stored=blob class=k blob=ai_backend admin=false fail-closed=false url=false
+target key modules.books.ai.parse_batch_workers convert=- env=ABO_BOOKS_AI_PARSE_BATCH_WORKERS
+note not folded: read by the scanner's AI batch phase, 0 = its default
+retired env AI_BACKEND.PARSE_BATCH_WORKERS -> modules.books.ai.parse_batch_workers warn
+retired env AI_BACKEND_PARSE_BATCH_WORKERS -> modules.books.ai.parse_batch_workers warn
 
 ## api_rate_limit_per_minute
 top=true stored=blob class=k blob=api_rate_limit_per_minute admin=false fail-closed=false url=false

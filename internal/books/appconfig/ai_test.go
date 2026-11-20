@@ -61,7 +61,8 @@ func TestAIBackend_RowsReadTheList(t *testing.T) {
 		}
 	}
 	for _, kv := range e.View().Keys {
-		if strings.HasPrefix(kv.Name, "ai_backend.") && (!kv.Admin || kv.Class != config.KeyClassInput) {
+		// The three parse_batch_* knobs are ordinary books keys, not list rows.
+		if strings.HasPrefix(kv.Name, "ai_backend.") && !strings.HasPrefix(kv.Name, "ai_backend.parse_batch_") && (!kv.Admin || kv.Class != config.KeyClassInput) {
 			t.Errorf("%s: admin=%v class=%s; want an admin input row", kv.Name, kv.Admin, kv.Class)
 		}
 	}

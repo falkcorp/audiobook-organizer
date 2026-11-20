@@ -412,3 +412,32 @@ func TestConfigPlan_RecoveredFromConfigYAMLIsCountedApart(t *testing.T) {
 		}
 	})
 }
+
+// HEAD's ai_backend.parse_batch_* are read by the scanner's AI batch phase and
+// carried by no ai_endpoints list, so the cutover moves them to their own keys
+// instead of dropping the ai_backend object whole; the five mode and model
+// scalars are still dropped (HEAD's codec already folded them).
+func TestConfigPlan_ParseBatchKnobsAreKeysNotDropped(t *testing.T) {
+	r := newRig(t, "stage1", mutateBlob(func(tree map[string]any) {
+		tree["ai_backend"] = map[string]any{
+			"llm_mode": "local", "parse_batch_size": json.Number("40"),
+			"parse_batch_timeout_seconds": json.Number("90"), "parse_batch_workers": json.Number("2"),
+		}
+	}))
+	snap, err := r.run(t)
+	if err != nil {
+		t.Fatalf("M2: %v", err)
+	}
+	for path, want := range map[string]string{
+		"modules.books.ai.parse_batch_size":            "40",
+		"modules.books.ai.parse_batch_timeout_seconds": "90",
+		"modules.books.ai.parse_batch_workers":         "2",
+	} {
+		if got, ok := stagedValue(snap, path); !ok || strings.TrimSpace(got) != want {
+			t.Errorf("%s staged as %q (present %v), want %s", path, got, ok, want)
+		}
+	}
+	if _, ok := stagedValue(snap, "modules.books.ai.llm_mode"); ok {
+		t.Error("a retired mode scalar was staged as a key")
+	}
+}
