@@ -177,17 +177,17 @@ describe('installCoreEventsShim', () => {
     expect(ctl.requests[1].lastEventId).toBe('n-7');
   });
 
-  it('a reset control frame reaches the resync handlers', async () => {
+  it('a reset control frame reaches the resync handlers, the first one right after the open included', async () => {
     const ctl = installFromSource({ autoOpened: true, refusals: [] });
     const stream = client();
     const reasons: string[] = [];
     stream.subscribe(RUN, () => {});
     stream.onResync((i) => reasons.push(i.reason), { coalesceMs: 0, minIntervalMs: 0 });
     await tick();
-    expect(ctl.reset('overflow')).toBe(1);
-    expect(ctl.control(TOPIC_RESET, { reason: 'gap' })).toBe(1);
+    expect(ctl.reset('gap')).toBe(1);
+    expect(ctl.control(TOPIC_RESET, { reason: 'overflow' })).toBe(1);
     await tick();
-    expect(reasons).toEqual(['reconnect', 'overflow', 'gap']);
+    expect(reasons).toEqual(['reconnect', 'gap', 'overflow']);
   });
 
   it('a 429 with Retry-After is a refusal the client honours', async () => {
@@ -301,7 +301,7 @@ describe('mockCoreEvents(page)', () => {
     expect(await mock.openCount()).toBe(0);
   });
 
-  it('guards the events path at the network: records an escaped request and refuses it with 503 + Retry-After', async () => {
+  it('guards the events path at the network: records an escaped request, refuses it with a 500 and no Retry-After, and fails every later call loudly', async () => {
     const { page, routes } = fakePage();
     const mock = await mockCoreEvents(page);
     expect(routes).toHaveLength(1);
@@ -311,6 +311,7 @@ describe('mockCoreEvents(page)', () => {
     expect(match(new URL('http://127.0.0.1:5173/api/core/v1/eventsx'))).toBe(false);
     expect(match(new URL('http://127.0.0.1:5173/api/events'))).toBe(false);
     expect(mock.unmockedRequests()).toEqual([]);
+    expect(() => mock.assertNoUnmockedRequests()).not.toThrow();
     const fulfilled: unknown[] = [];
     const route = {
       request: () => ({ url: () => 'http://127.0.0.1:5173/api/core/v1/events?topic=*' }),
@@ -318,7 +319,25 @@ describe('mockCoreEvents(page)', () => {
     } as unknown as Route;
     await handler(route);
     expect(mock.unmockedRequests()).toEqual(['http://127.0.0.1:5173/api/core/v1/events?topic=*']);
-    expect(fulfilled).toMatchObject([{ status: 503, headers: { 'Retry-After': '60' } }]);
+    expect(fulfilled).toHaveLength(1);
+    const f = fulfilled[0] as { status: number; headers?: Record<string, string>; body: string };
+    expect(f.status).toBe(500); // not 429/503: the client's tab-wide hold stays untouched
+    expect(f.headers?.['Retry-After']).toBeUndefined();
+    expect(JSON.parse(f.body)).toMatchObject({ status: 500, code: 'unmocked' });
+    expect(() => mock.assertNoUnmockedRequests()).toThrow(/1 request\(s\) to \/api\/core\/v1\/events got past the shim.*topic=\*/);
+    await expect(mock.openCount()).rejects.toThrow(/got past the shim/);
+    await expect(mock.event(RUN, {})).rejects.toThrow(/got past the shim/);
+  });
+
+  it('a second call on the same page throws, and the first call stays the only one installed', async () => {
+    const { page, routes, initScripts } = fakePage();
+    await mockCoreEvents(page);
+    await expect(mockCoreEvents(page)).rejects.toThrow(/already mocked/);
+    expect(routes).toHaveLength(1);
+    expect(initScripts).toHaveLength(1);
+    const other = fakePage();
+    delete w.__coreEventsMock;
+    await expect(mockCoreEvents(other.page)).resolves.toBeDefined();
   });
 
   it('a call before the shim exists in the page says so', async () => {

@@ -15,11 +15,18 @@
 //    Retry-After). Like the server it writes core.stream.opened.v1 first, heartbeats
 //    every 15 s, and filters each frame by the stream's topic, exclude and key parameters;
 //  - a page.route guard on the same path that records any request that got past the shim
-//    and refuses it with 503 + Retry-After, so a test can assert that no request reached
-//    the real server (unmockedRequests() stays empty).
+//    and refuses it with a 500 (no Retry-After, so the client's tab-wide 429/503 hold is
+//    not tripped and other streams keep running). Once one has escaped, every call on the
+//    handle throws naming it, so the test fails on that message rather than a timeout.
 //
-// Call mockCoreEvents(page) before the first page.goto. No spec imports this until the
-// F6 flip switches e2e off mockEventSource.
+// Call mockCoreEvents(page) once per Page, before the first page.goto; a second call on
+// the same Page throws. The shim's state is per DOCUMENT, not per Page: the init script
+// runs again in every document the page loads, so after a navigation or reload the
+// configured refusals answer that document's first requests again, requests() lists only
+// the current document's requests, and any frame sent before is gone. A popup or another
+// Page is neither shimmed nor guarded: call mockCoreEvents on it too.
+//
+// No spec imports this until the F6 flip switches e2e off mockEventSource.
 
 import type { Page } from '@playwright/test';
 
@@ -266,9 +273,17 @@ export interface CoreEventsMock {
   openCount(): Promise<number>;
   /** Events-path requests that reached the network instead of the shim; should stay empty. */
   unmockedRequests(): string[];
+  /** Throws naming every escaped request; a no-op while none has escaped. */
+  assertNoUnmockedRequests(): void;
 }
 
+const mockedPages = new WeakSet<Page>();
+
 export async function mockCoreEvents(page: Page, options: MockCoreEventsOptions = {}): Promise<CoreEventsMock> {
+  // A second init script would be ignored by the shim (installed once per document), and
+  // a second route would shadow the first handle's guard: refuse instead of half working.
+  if (mockedPages.has(page)) throw new Error('mockCoreEvents: this page is already mocked; call it once per Page');
+  mockedPages.add(page);
   const config: CoreEventsShimConfig = {
     autoOpened: options.autoOpened ?? true,
     refusals: options.refusals ?? [],
@@ -282,13 +297,12 @@ export async function mockCoreEvents(page: Page, options: MockCoreEventsOptions 
     async (route) => {
       unmocked.push(route.request().url());
       await route.fulfill({
-        status: 503,
+        status: 500,
         contentType: 'application/problem+json',
-        headers: { 'Retry-After': '60' },
         body: JSON.stringify({
           type: 'about:blank',
           title: 'unmocked event stream',
-          status: 503,
+          status: 500,
           code: 'unmocked',
           detail: 'a request to /api/core/v1/events got past the mockCoreEvents shim',
         }),
@@ -296,8 +310,17 @@ export async function mockCoreEvents(page: Page, options: MockCoreEventsOptions 
     },
   );
 
-  const invoke = <R>(method: keyof CoreEventsShimController, ...args: unknown[]): Promise<R> =>
-    page.evaluate(
+  const assertNoUnmockedRequests = () => {
+    if (unmocked.length === 0) return;
+    throw new Error(
+      `mockCoreEvents: ${unmocked.length} request(s) to ${CORE_EVENTS_PATH} got past the shim ` +
+        `(mockCoreEvents called after page.goto, or a fetch from a worker?): ${unmocked.join(', ')}`,
+    );
+  };
+
+  const invoke = async <R>(method: keyof CoreEventsShimController, ...args: unknown[]): Promise<R> => {
+    assertNoUnmockedRequests();
+    return page.evaluate(
       ([m, a]) => {
         const ctl = (window as unknown as { __coreEventsMock?: Record<string, unknown> }).__coreEventsMock;
         if (!ctl) throw new Error('mockCoreEvents: the shim is not installed in this page (call it before page.goto)');
@@ -306,6 +329,7 @@ export async function mockCoreEvents(page: Page, options: MockCoreEventsOptions 
       },
       [method, args] as [string, unknown[]],
     ) as Promise<R>;
+  };
 
   return {
     event: (topic, data, opts) => invoke('event', topic, data, opts),
@@ -317,5 +341,6 @@ export async function mockCoreEvents(page: Page, options: MockCoreEventsOptions 
     requests: () => invoke('requests'),
     openCount: () => invoke('openCount'),
     unmockedRequests: () => [...unmocked],
+    assertNoUnmockedRequests,
   };
 }
