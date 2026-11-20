@@ -1,7 +1,7 @@
 // file: core/integrations/providerhttp/gate.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: ec0c1bf4-fb0b-44a4-ac17-f2ca02f02f83
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package providerhttp
 
@@ -82,6 +82,12 @@ type outcome struct {
 	status     int
 	retryAfter time.Duration
 	success    bool
+	// refund gives the bucket token the attempt took back: the attempt was
+	// refused at its dial by the egress guard, so nothing was sent and it did
+	// not use the provider's pace. It is applied inside ticket.finish's once,
+	// so it can happen at most once per reservation and never for a dial that
+	// was not made under an Acquire.
+	refund bool
 }
 
 // admit runs the first two stages of M2.4's order for one request: the
@@ -149,6 +155,9 @@ func (t *ticket) finish(o outcome) {
 		lim := g.sc.lim
 		g.sc.br.record(r.now(), lim.Breaker, t.probe, t.epoch, v)
 		g.sc.mu.Unlock()
+		if o.refund {
+			g.sc.bk.giveBack()
+		}
 		switch {
 		case o.success:
 			r.releaseIfStarted(t.ctx, g.sc.name, t.start)
@@ -208,13 +217,22 @@ func (g *gate) Acquire(ctx context.Context, counter string) (integrations.Ticket
 type gateTicket struct{ t *ticket }
 
 // Done records err (nil: success), classified with integrations.ClassOf
-// against the Acquire context.
+// against the Acquire context. An err that is the guard's own refusal of a dial
+// (ReasonEgress, from DialContext) also gives back the bucket token this
+// Acquire took, as a refused HTTP attempt does: the refund belongs to the
+// reservation, not to the dial, so a dial made without an Acquire returns
+// nothing and a sender that dials more than once under one Acquire returns at
+// most the one token it took. (The daily quota is not refunded: Acquire keeps
+// no counter, and core.email declares no quota.)
 func (gt gateTicket) Done(err error) {
 	if err == nil {
 		gt.t.finish(outcome{class: integrations.ClassUnknown, success: true})
 		return
 	}
 	o := outcome{class: integrations.ClassOf(gt.t.ctx, err)}
+	if reason, ok := ReasonOf(err); ok && reason == ReasonEgress {
+		o.refund = true
+	}
 	if e, ok := errors.AsType[*integrations.Error](err); ok {
 		o.status, o.retryAfter = e.Status, e.RetryAfter
 	}
