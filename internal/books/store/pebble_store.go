@@ -174,8 +174,18 @@ type PebbleStore struct {
 	// authorBooksVerifiedThisBoot is set when this process finished a clean
 	// ReconcileAuthorBooksIndex (every credit row decoded, every listable
 	// book's AuthorID credited). The author -> books index reader requires it
-	// (pebble_store_author_books_index.go, TRUST).
+	// (pebble_store_author_books_index.go, TRUST). A write that can uncover a
+	// listable book clears it (pebble_store_author_books_trust.go).
 	authorBooksVerifiedThisBoot atomic.Bool
+	// authorBooksTrustGen moves on every trust revocation; a reconcile keeps
+	// its clean result only if it did not move while it ran
+	// (pebble_store_author_books_trust.go, ORDERING).
+	authorBooksTrustGen atomic.Uint64
+	// memWarmupUnpublished is set, and never cleared, when the memdb warmup
+	// ends without publishing (init, warm or publish failed): reads stay on
+	// Pebble for the whole process, and the author -> books index is not
+	// trusted again in it (abandonAuthorBooksTrust).
+	memWarmupUnpublished atomic.Bool
 	// opChangeByBookGen and opChangeByBookBuiltAt cache a positive read of the
 	// opchange_by_book: backfill sentinel. The cache is valid only while
 	// opChangeByBookBuiltAt == opChangeByBookGen+1; the rebuild and Reset bump
@@ -2778,7 +2788,15 @@ func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 	// No author -> books index key here: the index holds credit rows only and
 	// the credit writers stage it. The Book.AuthorID family it once staged here
 	// is retired (F5-18j, pebble_store_author_books_index.go), so a book-row
-	// write writes no authors-family key.
+	// write writes no authors-family key. A listable book created with an
+	// AuthorID its credit row lacks (the usual order is CreateBook, then
+	// SetBookAuthors) is one the index cannot list, so the index's trust is
+	// revoked before and after the commit (pebble_store_author_books_trust.go).
+	uncovers := bookRowNeedsCoverageCheck(nil, book) &&
+		p.authorIDUncredited(book.ID, *book.AuthorID, nil, false)
+	if uncovers {
+		p.revokeAuthorBooksTrust("new book has an uncredited AuthorID", book.ID)
+	}
 
 	// Version-group index (PERF-VERSIONS): O(N) full-scan in
 	// GetBooksByVersionGroup was costing ~15s on a 10K-book library.
@@ -2860,6 +2878,9 @@ func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 	}
 	if err := p.commitIdentBatch(batch, identTx, pebble.Sync); err != nil {
 		return nil, err
+	}
+	if uncovers {
+		p.revokeAuthorBooksTrust("new book has an uncredited AuthorID", book.ID)
 	}
 	unlockIdentBook()
 	identBookLocked = false
@@ -2957,6 +2978,12 @@ type bookWriteOpts struct {
 	// a stripped projection, and restoring it would put back a denormalized
 	// author naming a primary the write just moved away from.
 	authorAsGiven bool
+	// creditIDs, when creditIDsGiven, is the author credit row this write's
+	// batch also writes (ModifyBookCredits stages it through stage). The
+	// author -> books trust check reads it instead of the stored row the batch
+	// replaces (pebble_store_author_books_trust.go).
+	creditIDs      []int
+	creditIDsGiven bool
 }
 
 // updateBookLockedMode is UpdateBook's body with the variations in opts. The
@@ -3223,7 +3250,17 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 
 	// No author -> books index key here either: the credit-row keys belong to
 	// the credit writers, and the Book.AuthorID family is retired (F5-18j,
-	// pebble_store_author_books_index.go).
+	// pebble_store_author_books_index.go). What the index cannot see is a
+	// listable book whose AuthorID its credits lack, so a write that can make
+	// one (a new AuthorID, or a book made listable) reads the credit row once
+	// and revokes the index's trust before and after the commit when the
+	// AuthorID is not in it (pebble_store_author_books_trust.go). It writes no
+	// key.
+	uncovers := bookRowNeedsCoverageCheck(oldBook, book) &&
+		p.authorIDUncredited(id, *book.AuthorID, opts.creditIDs, opts.creditIDsGiven)
+	if uncovers {
+		p.revokeAuthorBooksTrust("book row has an uncredited AuthorID", id)
+	}
 
 	// Update version-group index (PERF-VERSIONS).
 	//
@@ -3428,6 +3465,9 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 	// released below.
 	if err := p.commitIdentBatch(batch, identTx, pebble.Sync); err != nil {
 		return nil, err
+	}
+	if uncovers {
+		p.revokeAuthorBooksTrust("book row has an uncredited AuthorID", id)
 	}
 	if unlockCache != nil {
 		unlockCache()
