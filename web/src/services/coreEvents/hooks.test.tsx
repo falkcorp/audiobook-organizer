@@ -86,7 +86,7 @@ describe('useResync, useStreamClosed, useStreamStatus', () => {
     const closes: string[] = [];
     renderHook(() => {
       useTopic(RUN, () => {}, { source: es });
-      useResync((i) => resyncs.push(i.reason), es);
+      useResync((i) => resyncs.push(i.reason), { source: es, coalesceMs: 0, minIntervalMs: 0 });
       useStreamClosed((i) => closes.push(i.reason), es);
     });
     await tick();
@@ -95,6 +95,48 @@ describe('useResync, useStreamClosed, useStreamStatus', () => {
     await tick();
     expect(resyncs).toEqual(['gap']);
     expect(closes).toEqual(['shutdown']);
+  });
+
+  it('useResync takes only the shared stream by default, the owned key when given, and detaches on unmount', async () => {
+    const server = make();
+    const shared = server.openStream();
+    const keyed = server.openStream();
+    const fast = { source: es, coalesceMs: 0, minIntervalMs: 0 };
+    const def: string[] = [];
+    const own: string[] = [];
+    const { unmount } = renderHook(() => {
+      useTopic(RUN, () => {}, { source: es });
+      useTopic('core.task.log-appended.v1', () => {}, { source: es, stream: 'keyed', key: 'run-1' });
+      useResync((i) => def.push(`${i.streamKey}:${i.reason}`), fast);
+      useResync((i) => own.push(`${i.streamKey}:${i.reason}`), { ...fast, streamKey: 'run-1' });
+    });
+    await tick();
+    shared.control(TOPIC_RESET, { reason: 'restart' });
+    keyed.control(TOPIC_RESET, { reason: 'gap' });
+    await tick();
+    expect(def).toEqual([':restart']);
+    expect(own).toEqual(['run-1:gap']);
+    unmount();
+    shared.control(TOPIC_RESET, { reason: 'overflow' });
+    await tick();
+    expect(def).toEqual([':restart']);
+  });
+
+  it('useResync coalesces by default', async () => {
+    const server = make();
+    const s = server.openStream();
+    const seen: string[] = [];
+    renderHook(() => {
+      useTopic(RUN, () => {}, { source: es });
+      useResync((i) => seen.push(i.reason), { source: es });
+    });
+    await tick();
+    s.control(TOPIC_RESET, { reason: 'gap' });
+    s.control(TOPIC_RESET, { reason: 'overflow' });
+    await tick(249);
+    expect(seen).toEqual([]);
+    await tick(1);
+    expect(seen).toEqual(['overflow']);
   });
 
   it('useStreamStatus re-renders with the stream state', async () => {

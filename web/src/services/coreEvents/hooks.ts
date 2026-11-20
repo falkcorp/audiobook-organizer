@@ -9,7 +9,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useSyncExternalStore, type RefObject } from 'react';
 
-import { getEventStream, type EventStream, type SubscribeOptions } from './manager';
+import { getEventStream, type EventStream, type ResyncOptions, type SubscribeOptions } from './manager';
 import type {
   ClosedListener,
   PayloadOf,
@@ -54,10 +54,23 @@ export function useTopic<T extends string>(
   }, [topic, stream, key, source, enabled, ref]);
 }
 
-/** Run `handler` when the server says the stream lost events: refetch over REST. */
-export function useResync(handler: ResyncHandler, source?: EventStream): void {
+export interface UseResyncOptions extends ResyncOptions {
+  /** Which EventStream to use (tests); defaults to the shared instance. */
+  source?: EventStream;
+}
+
+/**
+ * Run `handler` when a stream lost events: refetch over REST. Takes the shared stream's
+ * resets unless `streamKey` names the keyed stream this view owns ('*' for every stream),
+ * merged and rate-limited per the manager's defaults (see ResyncOptions).
+ */
+export function useResync(handler: ResyncHandler, opts: UseResyncOptions = {}): void {
   const ref = useLatest(handler);
-  useEffect(() => (source ?? getEventStream()).onResync((i) => ref.current(i)), [source, ref]);
+  const { source, streamKey, coalesceMs, minIntervalMs } = opts;
+  useEffect(
+    () => (source ?? getEventStream()).onResync((i) => ref.current(i), { streamKey, coalesceMs, minIntervalMs }),
+    [source, streamKey, coalesceMs, minIntervalMs, ref],
+  );
 }
 
 /** Run `listener` when the server closes the stream (shutdown: show the backdrop). */
