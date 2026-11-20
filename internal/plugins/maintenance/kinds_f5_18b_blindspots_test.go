@@ -1,11 +1,12 @@
 // file: internal/plugins/maintenance/kinds_f5_18b_blindspots_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d2a8f419-6c70-4e35-b1a2-0f94e7c3a561
 // last-edited: 2026-11-19
 
 package maintenance
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -165,13 +166,13 @@ func TestF518b_LocalRowsCoverWhatTheStoreWrites(t *testing.T) {
 		{"AddBookTagWithSource", nil, tag, []string{"books"}},
 		{"RemoveBookTagsByPrefix", func(t *testing.T, s *database.PebbleStore) { require.NoError(t, tag(s)) },
 			func(s *database.PebbleStore) error { return s.RemoveBookTagsByPrefix("bk", "mood:", "system") }, []string{"books"}},
-		{"CreateSeries", nil, func(s *database.PebbleStore) error { _, err := s.CreateSeries("Gotham Chronicles", nil); return err }, []string{"series"}},
+		{"CreateSeries", nil, func(s *database.PebbleStore) error { _, err := s.CreateSeries("The Long Halloween", nil); return err }, []string{"series"}},
 		{"UpsertMetadataFieldState", nil, fieldState, []string{"field_states"}},
 		{"DeleteMetadataFieldState", func(t *testing.T, s *database.PebbleStore) { require.NoError(t, fieldState(s)) },
 			func(s *database.PebbleStore) error { return s.DeleteMetadataFieldState("bk", "title") }, []string{"field_states"}},
 		{"RecordMetadataChange", nil, func(s *database.PebbleStore) error {
 			return s.RecordMetadataChange(&database.MetadataChangeRecord{BookID: "bk", Field: "title", ChangeType: "fetched", ChangedAt: now})
-		}, []string{"operations"}},
+		}, []string{"books"}},
 		{"PutMetadataCache", nil, func(s *database.PebbleStore) error {
 			return s.PutMetadataCache(&database.MetadataCandidateCache{BookID: "bk", FetchedAt: now, SourceHash: "h"})
 		}, []string{"metadata_cache"}},
@@ -216,6 +217,60 @@ func TestF518b_LocalRowsCoverWhatTheStoreWrites(t *testing.T) {
 			}
 			for _, r := range c.mustWrite {
 				require.Contains(t, changed, r, "%s was expected to write %s: the case does not exercise the row", c.method, r)
+			}
+		})
+	}
+}
+
+// TestF518b_LegacyStaleSeriesRowWriteIsCoveredByTheBookRow (round 2, M1): a
+// book write over a legacy stale-series row (Series set, SeriesID nil: what
+// older builds left behind) drops the stored object and stages a
+// metadata_change: history row in the book's own batch
+// (stageSeriesObjectDrop). The row of every method that reaches ModifyBook has
+// to carry that write. metadata_change: is book-keyed history, so it is
+// `books`, like path_history:; the test shows the row was staged and that the
+// row of the call covers everything that changed.
+func TestF518b_LegacyStaleSeriesRowWriteIsCoveredByTheBookRow(t *testing.T) {
+	now := time.Now()
+	shared := writer.SharedRows()
+	local := writer.MetafetchApplyRows()
+	for name, c := range map[string]struct {
+		row []ops.Resource
+		do  func(s *database.PebbleStore) error
+	}{
+		"ModifyBook (shared row)": {shared["ModifyBook"], func(s *database.PebbleStore) error {
+			_, err := s.ModifyBook("bk", func(b *database.Book) error { b.Title = "Hush"; return nil })
+			return err
+		}},
+		"SetLastWrittenAt": {local["SetLastWrittenAt"], func(s *database.PebbleStore) error { return s.SetLastWrittenAt("bk", now) }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newRepairPebble(t)
+			repairBook(t, s, "bk", nil)
+			_, err := s.SeedLegacyBookRowForTest("bk", func(b *database.Book) error {
+				b.Series = &database.Series{ID: 7, Name: "Hush"}
+				b.SeriesID = nil
+				return nil
+			})
+			require.NoError(t, err)
+			before := t6g5Snapshot(t, s)
+			require.NoError(t, c.do(s))
+			after := t6g5Snapshot(t, s)
+
+			var staged bool
+			for k := range after {
+				if _, had := before[k]; !had && strings.HasPrefix(k, "metadata_change:bk:") {
+					staged = true
+				}
+			}
+			require.True(t, staged, "the write did not stage the series-object-drop history row: the case does not exercise the row")
+
+			inRow := map[string]bool{}
+			for _, r := range c.row {
+				inRow[string(r)] = true
+			}
+			for r, key := range f518bChangedResources(t, before, after) {
+				require.True(t, inRow[r], "%s changed %s (key %s) over a legacy stale-series row but its row %v does not list it", name, r, key, c.row)
 			}
 		})
 	}
