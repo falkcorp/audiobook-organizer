@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_missing_to_folder_audio.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 5169412c-6469-4f70-9073-b544025dd08e
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 // Package maintenance — maintenance.repoint-missing-to-folder-audio.
 //
@@ -106,14 +106,16 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance/resources"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/library"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 const (
@@ -152,6 +154,25 @@ const (
 	rfOutcomeSkipped = "not_attempted"
 )
 
+// rfStatParallelism, rfPlanParallelism and rfWriteParallelism are the three
+// pools of the op, as HEAD's registry.RunItems calls sized them (RunItems
+// defaults to ONE worker, so each is set explicitly). The stat sweep is
+// filesystem-I/O bound; the plan is read-only apart from a header probe per
+// target that spawns ffprobe, so it stays well below the stat pool; the write
+// phase is one book per item, and after the serial collision pass no two books
+// share a target or a row.
+func rfStatParallelism() tasks.Parallelism {
+	return tasks.Fixed(rfStatWorkers, "filesystem-I/O bound (a stat per active row), so sized above NumCPU; each worker writes only its own book's verdict")
+}
+
+func rfPlanParallelism() tasks.Parallelism {
+	return tasks.Fixed(rfPlanWorkers, "each book's plan reads a directory, a few index rows and one ffprobe header per target, so it stays well below the stat pool; the plan is read-only and each worker writes only its own result slot")
+}
+
+func rfWriteParallelism() tasks.Parallelism {
+	return tasks.Fixed(rfWriteWorkers, "one book per item, written by one worker: after the serial collision pass no two books plan the same target or row")
+}
+
 type rfParams struct {
 	// DryRun defaults to TRUE. dry_run is accepted as an alias; both present
 	// and disagreeing is an error (same contract as duration-backfill).
@@ -171,6 +192,14 @@ type rfParams struct {
 
 func (p rfParams) dryRun() (bool, error) {
 	return opmode.ResolveDryRun("maintenance.repoint-missing-to-folder-audio", p.DryRunSnake, p.DryRun)
+}
+
+// validate is the check both shells make before any store read or writer.
+func (p rfParams) validate() error {
+	if p.Limit < 0 {
+		return fmt.Errorf("%s: limit must be >= 0", rfOpName)
+	}
+	return nil
 }
 
 func (p rfParams) bookIDs() []string {
@@ -305,9 +334,16 @@ type rfITunesLink struct {
 
 func (l rfITunesLink) linked() bool { return l.Path != "" || l.PID != "" }
 
-// rfStore is the narrow store the op needs. Every method is on
-// database.Store, so a Store-embedding decorator satisfies it.
+// rfStore is the narrow store HEAD's shell hands the core: every read, and the
+// one write. Every method is on database.Store, so a Store-embedding decorator
+// satisfies it.
 type rfStore interface {
+	rfReads
+	rfWriter
+}
+
+// rfReads is every read the op makes.
+type rfReads interface {
 	GetAllBookFilesCore() ([]database.BookFileCore, error)
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
@@ -316,10 +352,17 @@ type rfStore interface {
 	// BookAtPathIndexBuilt must be true before asking LiveBookIDsAtPath per
 	// item: until the index is built each call scans every book row.
 	BookAtPathIndexBuilt() (bool, error)
+}
+
+// rfWriter is the op's one write: a book's rows in a single call, which
+// recomputes the book's aggregates once after the last row.
+type rfWriter interface {
 	UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error)
 }
 
-// rfEnv is everything one run reads besides its params.
+// rfEnv is everything one HEAD run reads besides its params: what the tests and
+// HEAD's shell hand repointMissingToFolderAudio, which turns it into the core's
+// env.
 type rfEnv struct {
 	store       rfStore
 	rootDir     string
@@ -329,12 +372,46 @@ type rfEnv struct {
 	// itunesPathFor maps a library file path to the iTunes location recorded
 	// in itunes_path, or "" when no mapping covers it. nil means no mapping.
 	itunesPathFor func(string) string
-	// dryRun is set by repointMissingToFolderAudio from the op's params. It only
-	// changes how loudly the plan-time probe logs (see planProbeLog).
-	dryRun bool
 	// probeLog receives the plan-time probe's log lines. nil: durLog in a dry
 	// run, bookfileaudio's own logger otherwise. A seam for tests.
 	probeLog logger.LevelLogger
+}
+
+// rfCoreEnv is what the core takes from its shell: reads through Reads, the one
+// write through Writer, everything else through the hooks of t6g7Env.
+type rfCoreEnv struct {
+	t6g7Env
+	Reads rfReads
+	// Writer is nil unless the run is live: a dry run plans on reads and never
+	// builds a writer.
+	Writer rfWriter
+	// Queue is the operation queue the apply checks for a running library scan.
+	// nil is "cannot verify" and refuses the apply.
+	Queue         OpQueueReader
+	RootDir       string
+	ITunesRoots   []string
+	ITunesPathFor func(string) string
+	// ProbeLog receives the plan-time probe's log lines (see planProbeLog).
+	ProbeLog logger.LevelLogger
+}
+
+// rfPlanEnv is the read-only slice of the env the per-book planner needs.
+type rfPlanEnv struct {
+	store       rfReads
+	rootDir     string
+	itunesRoots []string
+	// itunesPathFor maps a library file path to the iTunes location recorded
+	// in itunes_path, or "" when no mapping covers it. nil means no mapping.
+	itunesPathFor func(string) string
+	// dryRun only changes how loudly the plan-time probe logs (see planProbeLog).
+	dryRun bool
+	// probeLog: nil is durLog in a dry run, bookfileaudio's own logger otherwise.
+	probeLog logger.LevelLogger
+}
+
+func (e rfCoreEnv) planEnv() rfPlanEnv {
+	return rfPlanEnv{store: e.Reads, rootDir: e.RootDir, itunesRoots: e.ITunesRoots,
+		itunesPathFor: e.ITunesPathFor, dryRun: !e.Live, probeLog: e.ProbeLog}
 }
 
 // demotedWarnLog is a logger whose Warn goes to Debug. bookfileaudio checks
@@ -350,7 +427,7 @@ func (demotedWarnLog) DemotesWarn() bool              { return true }
 // a dry run over a library with ffprobe missing or a bad mount would otherwise
 // be one Warn per target. In a real run the plan-time read is the only place
 // the failure is logged (the apply replays it), so it keeps Warn.
-func (env rfEnv) planProbeLog() logger.LevelLogger {
+func (env rfPlanEnv) planProbeLog() logger.LevelLogger {
 	base := env.probeLog
 	if base == nil && env.dryRun {
 		base = durLog
@@ -361,19 +438,25 @@ func (env rfEnv) planProbeLog() logger.LevelLogger {
 	return base
 }
 
+// rfKind is rule R3's kind for the def below.
+const rfKind = tasks.Kind("books.maintenance.repoint-missing-to-folder-audio")
+
+// rfHelp is the def's Description, which the native kind carries as its Help.
+const rfHelp = "For primary + organized books whose active book_file rows point at files that no longer exist, " +
+	"repoints them at the audio actually in the book's folder: N chapter rows collapsed into one file keep ONE " +
+	"row (repointed) and mark the rest missing; rows with an exact size match each repoint 1:1. Anything " +
+	"ambiguous (several candidates, none, a file another book references, anything under an iTunes root, an " +
+	"iTunes-linked row whose new file has no mapped iTunes path) is reported and left alone. A repointed row " +
+	"with an iTunes link gets itunes_path rewritten to the new file's mapped path (persistent ID kept) and the " +
+	"book is enqueued for iTunes write-back. Never deletes a row. Fills Duration with a header read. DRY-RUN BY DEFAULT: {\"dryRun\":false} to write; " +
+	"optional book_ids and limit."
+
 func (p *Plugin) repointMissingToFolderAudioDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "maintenance.repoint-missing-to-folder-audio",
-		Preview:     sdk.PreviewSpec{Params: rfParams{}},
-		DisplayName: "Repoint missing book files to the audio in their folder",
-		Description: "For primary + organized books whose active book_file rows point at files that no longer exist, " +
-			"repoints them at the audio actually in the book's folder: N chapter rows collapsed into one file keep ONE " +
-			"row (repointed) and mark the rest missing; rows with an exact size match each repoint 1:1. Anything " +
-			"ambiguous (several candidates, none, a file another book references, anything under an iTunes root, an " +
-			"iTunes-linked row whose new file has no mapped iTunes path) is reported and left alone. A repointed row " +
-			"with an iTunes link gets itunes_path rewritten to the new file's mapped path (persistent ID kept) and the " +
-			"book is enqueued for iTunes write-back. Never deletes a row. Fills Duration with a header read. DRY-RUN BY DEFAULT: {\"dryRun\":false} to write; " +
-			"optional book_ids and limit.",
+		ID:              "maintenance.repoint-missing-to-folder-audio",
+		Preview:         sdk.PreviewSpec{Params: rfParams{}},
+		DisplayName:     "Repoint missing book files to the audio in their folder",
+		Description:     rfHelp,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.repoint-missing-to-folder-audio",
 		// Same write-set as missing-file-repoint: never beside another op that
@@ -423,19 +506,91 @@ func (p *Plugin) runRepointMissingToFolderAudio(ctx context.Context, raw json.Ra
 		itunesPathFor: rfProductionITunesPathFor()}
 	report, runErr := repointMissingToFolderAudio(ctx, env, params, reporter)
 	if report != nil {
-		if len(report.Books) > 0 {
-			if wErr := writeRFReport(reportPath, report.Books); wErr != nil {
-				reporter.Logger().Error(rfOpName+": FAILED to write the per-row report", "path", reportPath, "err", wErr)
-			} else {
-				report.ReportPath = reportPath
-			}
-		}
-		if sErr := registry.ReporterSetResult(reporter, report); sErr != nil {
-			reporter.Logger().Warn(rfOpName+": result not persisted", "err", sErr)
-		}
-		reporter.Logger().Info(rfOpName+" complete", "summary", report.summary())
+		rfConclude(t6g7HeadEnv(reporter, false), reportPath, report)
 	}
 	return runErr
+}
+
+// repointMissingToFolderAudioNative is the native kind. Preview is the dry run
+// HEAD defaulted to; Live repoints. The result is the report HEAD persisted.
+func (p *Plugin) repointMissingToFolderAudioNative(deps t6g7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g7Common(rfKind, sched)
+	c.Title = "Repoint missing book files to the audio in their folder"
+	c.Help = rfHelp
+	// The one write is a book's rows in a single UpdateBookFiles call; the per-row
+	// report is a file written in Preview too.
+	c.Effects = tasks.Writes(t6g7Res(resources.Union(t6WriterResources["UpdateBookFiles"],
+		[]ops.Resource{ops.ResFiles})...)...)
+	// HEAD: ResumeDrop. A write op interrupted midway must not resume itself; a
+	// re-run is safe, because a repointed row is no longer missing.
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.repoint-missing-to-folder-audio")
+	return tasks.Task(rfKind, tasks.TaskSpec[json.RawMessage, rfReport]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (rfReport, error) {
+			params, err := t6g7DecodeStrictNative[rfParams](rfKind, raw)
+			if err != nil {
+				return rfReport{}, err
+			}
+			if err := params.validate(); err != nil {
+				return rfReport{}, err
+			}
+			for _, d := range []struct {
+				name string
+				set  bool
+			}{{"Store", deps.Store != nil}, {"RootDir", deps.RootDir != nil}, {"ResolveReportPath", deps.ResolveReportPath != nil}} {
+				if err := t6g7NeedDep(rfKind, d.name, d.set); err != nil {
+					return rfReport{}, err
+				}
+			}
+			// Fail closed like repoint-unrecorded-renames: with no resolvable iTunes
+			// roots the op cannot prove a path is outside them.
+			roots, err := merge.ITunesProtectedRoots(config.Snapshot().ITunes)
+			if err != nil {
+				return rfReport{}, fmt.Errorf("%s: resolve iTunes roots: %w", rfOpName, err)
+			}
+			reportPath, err := deps.ResolveReportPath(params.ReportPath, rfOpName+"-"+string(rc.RunID())+".tsv")
+			if err != nil {
+				return rfReport{}, fmt.Errorf("%s: %w", rfOpName, err)
+			}
+			env := rfCoreEnv{
+				t6g7Env: t6g7NativeEnv(rc),
+				Reads:   deps.Store, Queue: deps.Store, RootDir: deps.RootDir(),
+				ITunesRoots: roots, ITunesPathFor: rfProductionITunesPathFor(),
+			}
+			if env.Live {
+				w, err := t6g7NewWriter(rfKind, deps, rc)
+				if err != nil {
+					return rfReport{}, err
+				}
+				env.Writer = w
+				env.StandDown = t6g7NativeStandDown(rc, deps.StandDownKey)
+			}
+			report, runErr := repointMissingToFolderAudioCore(rc.Context(), params, env)
+			rfConclude(env.t6g7Env, reportPath, report)
+			return *report, runErr
+		},
+	})
+}
+
+// rfConclude is the tail both shells share once the core has run: the per-row
+// TSV (only when a book was decided), the result document where the shell keeps
+// one (HEAD persists it; a native Task returns it), and the summary line.
+func rfConclude(env t6g7Env, reportPath string, report *rfReport) {
+	if len(report.Books) > 0 {
+		if wErr := writeRFReport(reportPath, report.Books); wErr != nil {
+			env.Logger.Error(rfOpName+": FAILED to write the per-row report", "path", reportPath, "err", wErr)
+		} else {
+			report.ReportPath = reportPath
+		}
+	}
+	if env.SetResult != nil {
+		if sErr := env.SetResult(report); sErr != nil {
+			env.Logger.Warn(rfOpName+": result not persisted", "err", sErr)
+		}
+	}
+	env.Logger.Info(rfOpName+" complete", "summary", report.summary())
 }
 
 // rfProductionITunesPathFor is the library -> iTunes path mapping the op runs
@@ -465,25 +620,54 @@ func (b *rfBook) missingCount() int {
 	return n
 }
 
+// rfNewReport is an empty report in the given mode.
+func rfNewReport(dryRun bool) *rfReport {
+	return &rfReport{DryRun: dryRun, ByDecision: map[string]int{}, ByReason: map[string]int{}, ByOutcome: map[string]int{}}
+}
+
+// repointMissingToFolderAudio is HEAD's entry to the core: the mode comes from
+// the params (dry run unless the params say otherwise), the writer and the scan
+// stand-down are built only for an apply.
 func repointMissingToFolderAudio(ctx context.Context, env rfEnv, params rfParams, reporter sdk.Reporter) (*rfReport, error) {
-	log := reporter.Logger()
 	dryRun, err := params.dryRun()
-	report := &rfReport{DryRun: true, ByDecision: map[string]int{}, ByReason: map[string]int{}, ByOutcome: map[string]int{}}
 	if err != nil {
-		return report, fmt.Errorf("%s: %w", rfOpName, err)
+		return rfNewReport(true), fmt.Errorf("%s: %w", rfOpName, err)
 	}
-	report.DryRun = dryRun
-	env.dryRun = dryRun
-	if params.Limit < 0 {
-		return report, fmt.Errorf("%s: limit must be >= 0", rfOpName)
+	ce := rfCoreEnv{
+		t6g7Env: t6g7HeadEnv(reporter, !dryRun),
+		Reads:   env.store, Queue: env.queue, RootDir: env.rootDir,
+		ITunesRoots: env.itunesRoots, ITunesPathFor: env.itunesPathFor, ProbeLog: env.probeLog,
 	}
-	if strings.TrimSpace(env.rootDir) == "" {
+	if !dryRun {
+		ce.Writer = env.store
+		ce.StandDown = t6g7HeadStandDown(env.scan, reporter)
+	}
+	return repointMissingToFolderAudioCore(ctx, params, ce)
+}
+
+// repointMissingToFolderAudioCore plans, and on a live run applies, the repoints.
+// It is the body both shells share.
+func repointMissingToFolderAudioCore(ctx context.Context, params rfParams, env rfCoreEnv) (*rfReport, error) {
+	log := env.Logger
+	dryRun := !env.Live
+	report := rfNewReport(dryRun)
+	if env.Reads == nil {
+		return report, fmt.Errorf("%s: database not initialized", rfOpName)
+	}
+	if err := params.validate(); err != nil {
+		return report, err
+	}
+	if strings.TrimSpace(env.RootDir) == "" {
 		return report, fmt.Errorf("%s: root_dir is not set; cannot tell which folders are in the library", rfOpName)
 	}
+	if env.Live && env.Writer == nil {
+		return report, fmt.Errorf("%s: no writer for a live run", rfOpName)
+	}
+	plan := env.planEnv()
 
 	// --- scope: primary + organized books, and their active rows ---
 	requested := params.bookIDs()
-	books, err := rfScopedBooks(env.store, requested)
+	books, err := rfScopedBooks(env.Reads, requested)
 	if err != nil {
 		return report, err
 	}
@@ -502,7 +686,7 @@ func repointMissingToFolderAudio(ctx context.Context, env rfEnv, params rfParams
 	// The default list: retired rows are never repaired. Their claim on a path is
 	// honoured separately, by rfPathClaim, which counts a retired row as a claim
 	// on its file (two rows on one file is what a repoint onto it would make).
-	files, err := env.store.GetAllBookFilesCore()
+	files, err := env.Reads.GetAllBookFilesCore()
 	if err != nil {
 		return report, fmt.Errorf("%s: load book files: %w", rfOpName, err)
 	}
@@ -527,7 +711,13 @@ func repointMissingToFolderAudio(ctx context.Context, env rfEnv, params rfParams
 
 	// --- phase 1: stat every active row (parallel, I/O bound) ---
 	var statDone atomic.Int64
-	err = registry.RunItems(ctx, reporter, scoped, func(_ context.Context, b *rfBook) error {
+	err = env.Items(ctx, rfStatParallelism(), len(scoped), t6g7ItemsOptions{
+		Collect: true,
+		Label: func(_, t int) string {
+			return fmt.Sprintf("Stat: %d/%d books", statDone.Load(), t)
+		},
+	}, func(_ context.Context, i int) error {
+		b := scoped[i]
 		defer statDone.Add(1)
 		b.missing = make([]bool, len(b.rows))
 		for i := range b.rows {
@@ -541,12 +731,6 @@ func repointMissingToFolderAudio(ctx context.Context, env rfEnv, params rfParams
 			}
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: rfStatWorkers,
-		ErrMode:     registry.ErrModeCollect,
-		Label: func(_, t int) string {
-			return fmt.Sprintf("Stat: %d/%d books", statDone.Load(), t)
-		},
 	})
 	if err != nil {
 		return report, fmt.Errorf("%s: stat sweep: %w", rfOpName, err)
@@ -564,7 +748,7 @@ func repointMissingToFolderAudio(ctx context.Context, env rfEnv, params rfParams
 	}
 	report.Planned = len(affected)
 	if len(affected) > 0 {
-		built, berr := env.store.BookAtPathIndexBuilt()
+		built, berr := env.Reads.BookAtPathIndexBuilt()
 		if berr != nil || !built {
 			report.Aborted = fmt.Sprintf("book_atpath index not built (built=%v err=%v); every per-file owner check "+
 				"would scan every book row. Run maintenance.book-atpath-index-backfill first", built, berr)
@@ -580,20 +764,20 @@ func repointMissingToFolderAudio(ctx context.Context, env rfEnv, params rfParams
 	}
 	var planDone atomic.Int64
 	var ownerCheckDown atomic.Bool
-	err = registry.RunItems(ctx, reporter, affected, func(_ context.Context, b *rfBook) error {
+	err = env.Items(ctx, rfPlanParallelism(), len(affected), t6g7ItemsOptions{
+		Collect: true,
+		Label: func(_, t int) string {
+			return fmt.Sprintf("Plan: %d/%d books", planDone.Load(), t)
+		},
+	}, func(_ context.Context, i int) error {
+		b := affected[i]
 		defer planDone.Add(1)
-		r := planRFBook(env, liveBooks, b)
+		r := planRFBook(plan, liveBooks, b)
 		if r.Reason == "owner-check-unavailable" {
 			ownerCheckDown.Store(true)
 		}
 		results[idx[b]] = r
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: rfPlanWorkers,
-		ErrMode:     registry.ErrModeCollect,
-		Label: func(_, t int) string {
-			return fmt.Sprintf("Plan: %d/%d books", planDone.Load(), t)
-		},
 	})
 	if err != nil {
 		return report, fmt.Errorf("%s: plan: %w", rfOpName, err)
@@ -640,16 +824,20 @@ func repointMissingToFolderAudio(ctx context.Context, env rfEnv, params rfParams
 	}
 
 	// --- phase 3: write (parallel, one book per item) ---
-	if err := refuseWhileLibraryScanActive(env.queue, rfOpName); err != nil {
+	if err := refuseWhileLibraryScanActive(env.Queue, rfOpName); err != nil {
 		finishRFReport(report, results)
 		return report, err
 	}
-	holderID, held, release, sdErr := acquireScanStandDownForApply(ctx, env.scan, reporter, rfOpName+" apply")
+	if env.StandDown == nil {
+		finishRFReport(report, results)
+		return report, fmt.Errorf("%s: acquire scan stand-down: no interlock configured; nothing written", rfOpName)
+	}
+	hold, sdErr := env.StandDown(ctx, rfOpName+" apply")
 	if sdErr != nil {
 		finishRFReport(report, results)
 		return report, fmt.Errorf("%s: acquire scan stand-down: %w", rfOpName, sdErr)
 	}
-	defer release()
+	defer hold.Release()
 
 	var work []int
 	for i := range results {
@@ -662,22 +850,28 @@ func repointMissingToFolderAudio(ctx context.Context, env rfEnv, params rfParams
 	// RunItems returns, so results needs no lock.
 	var lost atomic.Bool
 	var writeDone atomic.Int64
-	err = registry.RunItems(ctx, reporter, work, func(itemCtx context.Context, i int) error {
+	err = env.Items(ctx, rfWriteParallelism(), len(work), t6g7ItemsOptions{
+		Collect: true,
+		Label: func(_, t int) string {
+			return fmt.Sprintf("Write: %d/%d books", writeDone.Load(), t)
+		},
+	}, func(itemCtx context.Context, w int) error {
+		i := work[w]
 		defer writeDone.Add(1)
 		if lost.Load() {
 			return nil
 		}
-		if scanStandDownLostForApply(env.scan, holderID, held) {
+		if hold.Lost() {
 			lost.Store(true)
 			log.Warn(rfOpName + ": scan stand-down lease lost; aborting remaining writes")
 			return nil
 		}
 		r := results[i]
-		outcome, errText := applyRFBook(itemCtx, env, liveBooks, r, reporter, func() bool {
+		outcome, errText := applyRFBook(itemCtx, env, liveBooks, r, func() bool {
 			if lost.Load() {
 				return true
 			}
-			if scanStandDownLostForApply(env.scan, holderID, held) {
+			if hold.Lost() {
 				lost.Store(true)
 				return true
 			}
@@ -686,12 +880,6 @@ func repointMissingToFolderAudio(ctx context.Context, env rfEnv, params rfParams
 		results[i].Outcome = outcome
 		results[i].Error = errText
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: rfWriteWorkers,
-		ErrMode:     registry.ErrModeCollect,
-		Label: func(_, t int) string {
-			return fmt.Sprintf("Write: %d/%d books", writeDone.Load(), t)
-		},
 	})
 	finishRFReport(report, results)
 	if err != nil {
@@ -712,7 +900,7 @@ type rfScope struct {
 	live map[string]bool
 }
 
-func rfScopedBooks(store rfStore, only []string) (rfScope, error) {
+func rfScopedBooks(store rfReads, only []string) (rfScope, error) {
 	want := map[string]bool{}
 	for _, id := range only {
 		want[id] = true
@@ -763,7 +951,7 @@ func rfAmbiguous(r rfBookResult, reason, detail string) rfBookResult {
 }
 
 // planRFBook decides one book. Read-only apart from the header probe.
-func planRFBook(env rfEnv, liveBooks map[string]bool, b *rfBook) rfBookResult {
+func planRFBook(env rfPlanEnv, liveBooks map[string]bool, b *rfBook) rfBookResult {
 	r := rfBookResult{BookID: b.core.ID, Title: b.core.Title, ActiveRows: len(b.rows), MissingRows: b.missingCount()}
 	amb := func(reason, detail string) rfBookResult { return rfAmbiguous(r, reason, detail) }
 
@@ -1005,7 +1193,7 @@ func rfNoteITunes(plan *rfPlan, f database.BookFileCore) {
 // rfFolder picks the book's folder: the one existing directory of its missing
 // rows, else book.file_path's directory. The folder must be inside the library
 // root and outside every iTunes root.
-func rfFolder(env rfEnv, b *rfBook) (string, string) {
+func rfFolder(env rfPlanEnv, b *rfBook) (string, string) {
 	dirs := map[string]bool{}
 	for i := range b.rows {
 		if !b.missing[i] {
@@ -1084,7 +1272,7 @@ func (c rfClaim) describe() string {
 // liveBooks and bookID filters below apply to live rows only. A live holder is
 // not reported as an OTHER owner on the strength of a retired row, though: a
 // live owner is named only for what it actively references.
-func rfPathClaim(store rfStore, liveBooks map[string]bool, bookID, path string) (rfClaim, error) {
+func rfPathClaim(store rfReads, liveBooks map[string]bool, bookID, path string) (rfClaim, error) {
 	rows, err := store.BookFilesAtPath(path)
 	if err != nil {
 		return rfClaim{}, err
@@ -1103,7 +1291,7 @@ func rfPathClaim(store rfStore, liveBooks map[string]bool, bookID, path string) 
 
 // rfOtherLiveBook returns a live book other than bookID whose file_path is
 // exactly path, or "".
-func rfOtherLiveBook(store rfStore, bookID, path string) (string, error) {
+func rfOtherLiveBook(store rfReads, bookID, path string) (string, error) {
 	ids, err := store.LiveBookIDsAtPath(path)
 	if err != nil {
 		return "", fmt.Errorf("live books at %s: %w", path, err)
@@ -1118,7 +1306,7 @@ func rfOtherLiveBook(store rfStore, bookID, path string) (string, error) {
 
 // applyRFBook writes one planned book. It re-reads the rows and re-checks
 // every precondition first; a book that changed since the plan is skipped.
-func applyRFBook(ctx context.Context, env rfEnv, liveBooks map[string]bool, r rfBookResult, reporter sdk.Reporter, abort func() bool) (string, string) {
+func applyRFBook(ctx context.Context, env rfCoreEnv, liveBooks map[string]bool, r rfBookResult, abort func() bool) (string, string) {
 	plan := r.plan
 	for _, target := range r.NewPaths {
 		st, err := os.Stat(target)
@@ -1128,7 +1316,7 @@ func applyRFBook(ctx context.Context, env rfEnv, liveBooks map[string]bool, r rf
 		if probe, ok := plan.Probes[target]; ok && !probe.matches(st) {
 			return rfOutcomeChanged, "target changed since the plan's header read: " + target
 		}
-		claim, err := rfPathClaim(env.store, liveBooks, r.BookID, target)
+		claim, err := rfPathClaim(env.Reads, liveBooks, r.BookID, target)
 		if err != nil {
 			return rfOutcomeFailed, "owner re-check: " + err.Error()
 		}
@@ -1136,7 +1324,7 @@ func applyRFBook(ctx context.Context, env rfEnv, liveBooks map[string]bool, r rf
 			return rfOutcomeChanged, target + " is now " + claim.describe()
 		}
 	}
-	rows, err := env.store.GetBookFiles(r.BookID)
+	rows, err := env.Reads.GetBookFiles(r.BookID)
 	if err != nil {
 		return rfOutcomeFailed, "load rows: " + err.Error()
 	}
@@ -1189,7 +1377,9 @@ func applyRFBook(ctx context.Context, env rfEnv, liveBooks map[string]bool, r rf
 		f.Missing = true
 		out = append(out, f)
 	}
-	res := writeBookFileBatch(ctx, env.store, out, bookFileBatchOpts{Reporter: reporter, Abort: abort})
+	// The batch's per-row liveness stamp goes to the shell's own sink: HEAD's
+	// reporter, or the native run's progress tick.
+	res := writeBookFileBatchVia(ctx, env.Writer, out, bookFileBatchSink{Touch: env.Touch, Progress: env.Progress}, bookFileBatchHooks{Abort: abort})
 	switch {
 	case res.RowErrs > 0:
 		return rfOutcomeFailed, fmt.Sprintf("%d of %d row writes failed", res.RowErrs, len(out))
