@@ -1,5 +1,5 @@
 // file: internal/books/appconfig/engine.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6c2f8a4d-9e13-4b75-a1c0-d4e7f3b82a59
 // last-edited: 2026-11-19
 
@@ -83,6 +83,7 @@ func (e *Engine) OnUpdate(name string, fn config.UpdateHook) {
 type Store interface {
 	Lookup(p coreconfig.Path) (coreconfig.KeyState, bool)
 	Apply(ctx context.Context, p coreconfig.Patch, a coreconfig.Actor) (coreconfig.Result, error)
+	Generation() uint64
 	OnCommit(fn func(gen uint64))
 	PassthroughValues() iter.Seq2[coreconfig.Path, coreconfig.OperatorValue]
 	Secret(ctx context.Context, name secrets.Name) (secrets.Value, secrets.Meta, error)
@@ -478,17 +479,26 @@ func (e *Engine) View() config.View {
 	keys := make([]config.KeyView, 0, len(e.rows))
 	for _, p := range e.rows {
 		kv := config.KeyView{Name: p.row.Head, Class: config.KeyClass(p.row.Class), LockedBy: locks[p.row.Head], Admin: p.row.Admin}
+		// Default-deny: a Value only for a field HEAD's GET serialised (exposed).
+		// The environment-only fields (json:"-") keep their name, class and lock
+		// so the page can say they are set by the operator, and never their value
+		// or, for a secret, its metadata.
+		shown := exposed(p.segs)
 		switch {
 		case p.residual:
-			if f, ok := e.own(cur, p); ok {
+			if f, ok := e.own(cur, p); ok && shown {
 				if raw, err := json.Marshal(f.Interface()); err == nil {
 					kv.Value = e.res.Redact(p.row.Head, raw)
 				}
 			}
 		case p.target.Kind == cutover.TargetSecret:
-			kv.Secret = e.secretMeta(p, unreadable[p.row.Head])
+			// A secret HEAD's GET never returned (json:"-") shows not even whether
+			// it is set or its fingerprint.
+			if shown {
+				kv.Secret = e.secretMeta(p, unreadable[p.row.Head])
+			}
 		default:
-			if f, ok := e.own(cur, p); ok {
+			if f, ok := e.own(cur, p); ok && shown {
 				if raw, err := json.Marshal(f.Interface()); err == nil {
 					kv.Value = raw
 				}

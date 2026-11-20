@@ -1,7 +1,7 @@
 // file: internal/books/cutover/config_plan.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 0f2f4b87-3f6d-4a4c-8e0a-7c7f2c64b0d1
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 package cutover
 
@@ -961,7 +961,7 @@ func (pl *planner) metadataSources() {
 			if v == "" {
 				continue
 			}
-			pl.addSecret(secrets.Name("integrations.metadata."+id+".credentials."+snakeSegment(k)), v, fmt.Sprintf("metadata_sources.%d.credentials.%s", i, k))
+			pl.addSecret(MetadataCredentialName(id, k), v, fmt.Sprintf("metadata_sources.%d.credentials.%s", i, k))
 		}
 		delete(src, "credentials")
 	}
@@ -1007,7 +1007,7 @@ func (pl *planner) plugins() {
 			continue
 		}
 		if len(settings) > 0 {
-			name := secrets.Name("modules.books.plugins." + id + ".settings")
+			name := PluginSettingsName(id)
 			if err := name.Validate(); err != nil {
 				pl.p.Quarantines = append(pl.p.Quarantines, quarantined{Key: quarantineKey("plugins." + id), Raw: marshalAt(entry), Reason: reasonPluginName})
 			} else {
@@ -1037,7 +1037,7 @@ func (pl *planner) webhook(settings map[string]any) {
 			continue
 		}
 		n++
-		pl.addSecret(secrets.Name(fmt.Sprintf("integrations.notify.webhook-%d.secret", n)), secret, "plugins.webhook.settings.secret")
+		pl.addSecret(WebhookSecretName(n), secret, "plugins.webhook.settings.secret")
 	}
 	if n == 0 {
 		pl.p.Quarantines = append(pl.p.Quarantines, quarantined{Key: quarantineKey("plugins.webhook.settings.secret"), Raw: []byte(secret), Reason: reasonWebhookNoURL})

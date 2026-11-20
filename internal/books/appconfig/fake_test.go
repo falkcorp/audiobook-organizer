@@ -1,11 +1,12 @@
 // file: internal/books/appconfig/fake_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2a6d8f14-7c39-4e51-9b0a-e3f5c1d7a862
 // last-edited: 2026-11-19
 
 package appconfig
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -73,21 +74,34 @@ func (f *fakeAccess) Apply(_ context.Context, p coreconfig.Patch, _ coreconfig.A
 	}
 	f.applied = append(f.applied, p)
 	var applied []coreconfig.Path
+	// Like core: a patch that leaves every value as it is commits nothing and
+	// moves no generation, yet reports the patch's paths as applied.
+	changed := false
 	for k, v := range p.Set {
 		if f.regSecret[k] {
 			var plain string
 			_ = json.Unmarshal(v, &plain)
+			changed = changed || f.secrets[secrets.Name(k)] != plain
 			f.secrets[secrets.Name(k)] = plain
 		} else {
+			changed = changed || !bytes.Equal(f.vals[k], v)
 			f.vals[k] = v
 		}
 		applied = append(applied, k)
 	}
 	for _, k := range p.Unset {
+		_, had := f.secrets[secrets.Name(k)]
+		_, hadVal := f.vals[k]
+		changed = changed || had || hadVal
 		delete(f.secrets, secrets.Name(k))
 		applied = append(applied, k)
 	}
 	slices.Sort(applied)
+	if !changed {
+		gen := f.gen
+		f.mu.Unlock()
+		return coreconfig.Result{Generation: gen, Applied: applied}, nil
+	}
 	f.gen++
 	gen, hooks := f.gen, slices.Clone(f.hooks)
 	f.mu.Unlock()

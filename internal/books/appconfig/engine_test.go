@@ -1,5 +1,5 @@
 // file: internal/books/appconfig/engine_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d1b3e58-0a94-4c67-8f2d-b5c9a4e6d031
 // last-edited: 2026-11-19
 
@@ -546,5 +546,62 @@ func TestEngine_FoldsProject(t *testing.T) {
 	}
 	if !slices.Equal(e.Unrepresentable(), []string{"oauth_enabled"}) || e.Snapshot().OAuthEnabled {
 		t.Fatalf("disagreeing providers: unrep=%v enabled=%v", e.Unrepresentable(), e.Snapshot().OAuthEnabled)
+	}
+}
+
+// TestEngine_UnchangedUpdateIsANoOp: a PUT that re-sends the values already in
+// force (a settings form that posts every field, a script run twice) succeeds
+// with the current generation, applies nothing, runs no hook and publishes no
+// new projection; the same Update with one real change applies exactly it.
+func TestEngine_UnchangedUpdateIsANoOp(t *testing.T) {
+	e, f, published := engineOver(t)
+	hooked := 0
+	e.OnUpdate("watch", func(context.Context, config.Config, config.Config) (map[string]string, error) {
+		hooked++
+		return map[string]string{"x_op_id": "op-1"}, nil
+	})
+	same := config.Update{Set: map[string]json.RawMessage{"log_level": json.RawMessage(`"warn"`), "scan_on_startup": json.RawMessage(`true`)}}
+	genBefore, pubBefore, engGen := f.Generation(), len(*published), e.Generation()
+	res, err := e.Update(t.Context(), adminActor, same)
+	if err != nil {
+		t.Fatalf("an unchanged Update failed: %v", err)
+	}
+	if res.Generation != genBefore || len(res.Applied) != 0 || res.Ops != nil || res.PostCommit != nil {
+		t.Fatalf("result = %+v, want the current generation %d and nothing else", res, genBefore)
+	}
+	if hooked != 0 || len(*published) != pubBefore || e.Generation() != engGen {
+		t.Fatalf("a no-op ran a hook (%d), published (%d new) or moved the generation", hooked, len(*published)-pubBefore)
+	}
+	change := config.Update{Set: map[string]json.RawMessage{"log_level": json.RawMessage(`"warn"`), "scan_on_startup": json.RawMessage(`false`)}}
+	res, err = e.Update(t.Context(), adminActor, change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Generation == genBefore || hooked != 1 || res.Ops["x_op_id"] != "op-1" || len(*published) <= pubBefore {
+		t.Fatalf("a real change: %+v, hooks %d", res, hooked)
+	}
+	// An unknown key in an otherwise unchanged Update is still refused.
+	bad := config.Update{Set: map[string]json.RawMessage{"log_level": json.RawMessage(`"warn"`), "no_such_key": json.RawMessage(`1`)}}
+	if _, err := e.Update(t.Context(), adminActor, bad); err == nil {
+		t.Fatal("an unknown key was accepted because the rest was unchanged")
+	}
+}
+
+// TestResidualHeadsAreAllExposed pins why the residual branch of View needs no
+// json:"-" case of its own today: no class-i row names a hidden field. A row that
+// does must show up here, where the branch's own `shown` check then matters.
+func TestResidualHeadsAreAllExposed(t *testing.T) {
+	e := New(newFake(), nil, WithResidual(newFakeResidual()))
+	n := 0
+	for head, p := range e.byHead {
+		if p.residual {
+			n++
+			if !exposed(p.segs) {
+				t.Errorf("residual row %s is json:\"-\": the residual View branch now needs its own test", head)
+			}
+		}
+	}
+	if n < 8 {
+		t.Fatalf("saw %d residual rows; the table changed shape", n)
 	}
 }

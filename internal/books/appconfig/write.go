@@ -1,5 +1,5 @@
 // file: internal/books/appconfig/write.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1e5a7c93-4d08-4f26-b3a9-8c0d2e6f1b74
 // last-edited: 2026-11-19
 
@@ -196,6 +196,7 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 		return config.UpdateResult{}, fmt.Errorf("%w: %s needs %s", coreconfig.ErrForbidden, strings.Join(needAdmin, ", "), adminPerm)
 	}
 	var res coreconfig.Result
+	genBefore := e.acc.Generation()
 	if len(patch.Set)+len(patch.Unset) > 0 {
 		var err error
 		if res, err = e.acc.Apply(ctx, patch, a); err != nil {
@@ -228,6 +229,14 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 			res.Applied = append(res.Applied, coreconfig.Path(h))
 			byPath[coreconfig.Path(h)] = h
 		}
+	}
+	// An Update that leaves every value as it is is a no-op, not an error (HEAD
+	// answered 200 to an idempotent save, and a form that re-sends every field
+	// is one): core committed nothing and moved no generation, so nothing was
+	// applied, no hook has anything to start, and the current generation is the
+	// answer.
+	if res.Generation == genBefore && len(secretSets)+len(secretClears)+len(resSet)+len(resUnset) == 0 {
+		return config.UpdateResult{Generation: genBefore}, nil
 	}
 	// An Apply re-projects through OnCommit; a secret write outside Apply moves
 	// nothing core sees, so project again here. Serialised by mu, so a hook's

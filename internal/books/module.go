@@ -1,5 +1,5 @@
 // file: internal/books/module.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 1eb7c933-3c90-4be5-a58c-52b621bd1dfe
 // last-edited: 2026-11-19
 
@@ -169,6 +169,9 @@ type booksModule struct {
 	srv atomic.Pointer[server.Server]
 	// registered counts Register calls (TestBooksDisabledInert).
 	registered atomic.Int32
+	// appConfigInstalled is set when Register bound the config Facade
+	// (config_wire.go); closeStore unbinds it.
+	appConfigInstalled atomic.Bool
 }
 
 // Manifest is books' static declaration. It is pure: the legacy prefixes
@@ -198,7 +201,10 @@ func (m *booksModule) Manifest() module.Manifest {
 		Settings: booksSettings(),
 		// F3's cutover, when the flip switch is on (cutover.go).
 		Cutover: m.cutoverSteps(),
-		Rewrite: m.rewriteStep(),
+		// The App's configuration surface: Deps.Config and the secrets the
+		// rename table maps (config_wire.go).
+		AppConfig: appConfigSpec(),
+		Rewrite:   m.rewriteStep(),
 		// No native route yet, so no public one (the gin mount's public
 		// routes are the legacy manifest's Public rows).
 	}
@@ -320,6 +326,12 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		}
 	}
 	database.SetGlobalStore(store)
+	// With the core config boot on, the Facade is bound before the settings
+	// boot and the server read AppConfig (config_wire.go); without it Deps.Config
+	// is nil and HEAD's loaders below stay the source.
+	if _, err := m.installAppConfig(context.Background(), r, store); err != nil {
+		return err
+	}
 	if m.beforeSettings != nil {
 		m.beforeSettings(store)
 	}
@@ -466,6 +478,7 @@ func (m *booksModule) closeStore() error {
 		return nil
 	}
 	database.SetGlobalStore(nil)
+	m.releaseAppConfig()
 	if err := store.Close(); err != nil {
 		return fmt.Errorf("books: close the store: %w", err)
 	}
