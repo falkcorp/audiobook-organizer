@@ -146,3 +146,58 @@ describe('WelcomeWizard — a refused library root', () => {
     alertSpy.mockRestore();
   });
 });
+
+describe('WelcomeWizard — the setup is ONE config write', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getAppVersion).mockResolvedValue('0.0.0-test');
+    vi.mocked(api.getHomeDirectory).mockResolvedValue('/home/tester');
+    vi.mocked(api.updateConfig).mockResolvedValue({} as never);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function complete(typedKey: string) {
+    const onComplete = vi.fn();
+    render(<WelcomeWizard open onComplete={onComplete} />);
+    await screen.findByText('AI Setup (Optional)');
+    fireEvent.click(screen.getByRole('button', { name: /^next$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^next$/i }));
+    if (typedKey) {
+      fireEvent.change(await screen.findByLabelText(/OpenAI API Key/i), {
+        target: { value: typedKey },
+      });
+    }
+    for (let i = 0; i < 2; i++) {
+      fireEvent.click(screen.getByRole('button', { name: /^next$/i }));
+    }
+    fireEvent.click(await screen.findByRole('button', { name: /complete setup/i }));
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+  }
+
+  // The server lets a first-run caller (no user yet) write only the wizard's keys,
+  // and only until setup_complete is set. A key in a LATER request is refused, and
+  // a new install would end with setup complete and no OpenAI key. So the key and
+  // AI parsing travel in the same request as setup_complete.
+  it('sends the OpenAI key and AI parsing in the same request as setup_complete', async () => {
+    await complete(TEST_KEY);
+    expect(api.updateConfig).toHaveBeenCalledTimes(1);
+    const body = vi.mocked(api.updateConfig).mock.calls[0][0] as Record<string, unknown>;
+    expect(body.setup_complete).toBe(true);
+    expect(body.secrets).toEqual({ openai_api_key: TEST_KEY });
+    expect(body.enable_ai_parsing).toBe(true);
+    expect(typeof body.root_dir).toBe('string');
+  });
+
+  it('sends no key and no AI parsing when none was typed, still in one request', async () => {
+    await complete('');
+    expect(api.updateConfig).toHaveBeenCalledTimes(1);
+    const body = vi.mocked(api.updateConfig).mock.calls[0][0] as Record<string, unknown>;
+    expect(body.setup_complete).toBe(true);
+    expect(body).not.toHaveProperty('secrets');
+    expect(body).not.toHaveProperty('enable_ai_parsing');
+  });
+});
