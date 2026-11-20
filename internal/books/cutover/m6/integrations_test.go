@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover/m6"
+	"github.com/falkcorp/mediacore/integrations"
 	"github.com/falkcorp/mediacore/secrets"
 )
 
@@ -491,20 +492,31 @@ func TestIntegrationsMigration_ExactIDWinsForAIEndpoints(t *testing.T) {
 
 // TestIntegrationsMigration_RenamedSourceRefusedCarriesNothing: the carry is
 // staged, and reported, only once the instance import succeeds. When core
-// refuses the renamed instance, no secret or marker is written under the new
-// name and no carry is reported, readable or not.
+// rejects the renamed instance, as a conflict with a stored one or as invalid,
+// no secret or marker is written under the new name and no carry is reported,
+// readable or not.
 func TestIntegrationsMigration_RenamedSourceRefusedCarriesNothing(t *testing.T) {
+	invalid := func(r *rig) {
+		r.refuse = func(k, i string) error {
+			if k == "instance" && i == "metadata/batcave-db" {
+				return fmt.Errorf("bad settings: %w", integrations.ErrInvalid)
+			}
+			return nil
+		}
+	}
 	const from = "integrations.metadata.batcave_db.credentials.api_key"
 	const to = "integrations.metadata.batcave-db.credentials.api_key"
 	for _, c := range []struct {
 		name string
 		opts []func(*rig)
 	}{
-		{"readable", nil},
-		{"unreadable", []func(*rig){func(r *rig) { delete(r.secrets.seed, from); r.secrets.unreadable[from] = true }}},
+		{"conflict/readable", []func(*rig){conflict("instance", "metadata/batcave-db")}},
+		{"conflict/unreadable", []func(*rig){conflict("instance", "metadata/batcave-db"), func(r *rig) { delete(r.secrets.seed, from); r.secrets.unreadable[from] = true }}},
+		{"invalid/readable", []func(*rig){invalid}},
+		{"invalid/unreadable", []func(*rig){invalid, func(r *rig) { delete(r.secrets.seed, from); r.secrets.unreadable[from] = true }}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			r, s := runFixture(t, append([]func(*rig){renamedSource, conflict("instance", "metadata/batcave-db")}, c.opts...)...)
+			r, s := runFixture(t, append([]func(*rig){renamedSource}, c.opts...)...)
 			if _, ok := instances(t, s)["metadata/batcave-db"]; ok {
 				t.Fatal("the refused instance was written")
 			}
