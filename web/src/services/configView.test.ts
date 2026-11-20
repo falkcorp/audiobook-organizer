@@ -1,5 +1,5 @@
 // file: web/src/services/configView.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e9a3c71-2d84-4f06-b7a1-8c0d6e2f4b39
 // last-edited: 2026-11-19
 
@@ -69,6 +69,32 @@ describe('parseView', () => {
   });
 });
 
+describe('parseView secrets', () => {
+  it('never lets a secret into the config or the baseline, even if the server sent a value', () => {
+    const parsed = parseView({
+      generation: 1,
+      keys: [
+        {
+          name: 'openai_api_key',
+          class: 's',
+          // A server must not send this; the page must not keep it if one does.
+          value: 'sk-stray-0001',
+          secret: { set: true, source: 'stored' },
+        },
+      ],
+    });
+    expect(parsed.config).toEqual({});
+    expect(parsed.baseline.has('openai_api_key')).toBe(false);
+    expect(parsed.secretNames.has('openai_api_key')).toBe(true);
+    expect(JSON.stringify(parsed)).not.toContain('sk-stray-0001');
+  });
+
+  it('reads a secret that arrives with no metadata as not set, never as set', () => {
+    const parsed = parseView({ generation: 1, keys: [{ name: 'acoustid_api_key', class: 's' }] });
+    expect(parsed.secretStatus.acoustid_api_key).toEqual({ set: false });
+  });
+});
+
 describe('diffUpdate', () => {
   const { known, baseline } = parseView(view);
 
@@ -112,7 +138,9 @@ describe('diffUpdate', () => {
   });
 
   it('compares objects regardless of key order', () => {
-    expect(canonicalJSON({ b: 1, a: { d: 2, c: 3 } })).toBe(canonicalJSON({ a: { c: 3, d: 2 }, b: 1 }));
+    expect(canonicalJSON({ b: 1, a: { d: 2, c: 3 } })).toBe(
+      canonicalJSON({ a: { c: 3, d: 2 }, b: 1 })
+    );
   });
 });
 
@@ -124,7 +152,10 @@ describe('buildUpdateBody', () => {
   });
 
   it('treats a blank secret as "leave it", never as a clear', () => {
-    expect(buildUpdateBody({}, { secrets: { openai_api_key: '' } })).toEqual({ set: {}, unset: [] });
+    expect(buildUpdateBody({}, { secrets: { openai_api_key: '' } })).toEqual({
+      set: {},
+      unset: [],
+    });
   });
 
   it('clears a secret through unset', () => {
@@ -136,7 +167,10 @@ describe('buildUpdateBody', () => {
 
   it('lets a clear win over a typed value for the same secret', () => {
     expect(
-      buildUpdateBody({}, { secrets: { openai_api_key: 'sk-robin-0003' }, clear_secrets: ['openai_api_key'] })
+      buildUpdateBody(
+        {},
+        { secrets: { openai_api_key: 'sk-robin-0003' }, clear_secrets: ['openai_api_key'] }
+      )
     ).toEqual({ set: {}, unset: ['openai_api_key'] });
   });
 });
