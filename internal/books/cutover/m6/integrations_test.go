@@ -133,12 +133,32 @@ func TestIntegrationsMigration_SecretsByRef(t *testing.T) {
 			t.Errorf("the report, logs or an unsealed quarantine record holds a secret value")
 		}
 	}
-	// Every quarantine record of a sensitive family is sealed (never plaintext in
-	// the record).
+	// Every quarantine record of the blob, the one sensitive family, is sealed
+	// (never plaintext in the record).
 	for _, q := range s.Quarantine {
-		if !q.Sealed {
+		if strings.HasPrefix(q.Key, m6.KeyBlob) && !q.Sealed {
 			t.Errorf("quarantine record %s is not sealed", q.Key)
 		}
+	}
+}
+
+// TestQuarantine_ImportPathRowsAreNotSealed: an import_path row holds a path, a
+// name and scan counters, never a credential, so its family is not Sensitive
+// and a quarantined one stays readable without the keyring.
+func TestQuarantine_ImportPathRowsAreNotSealed(t *testing.T) {
+	_, s := runFixture(t, withRows(map[string][]byte{"import_path:7": []byte("{not json")}))
+	found := false
+	for _, q := range s.Quarantine {
+		if q.Key != "import_path:7" {
+			continue
+		}
+		found = true
+		if q.Sealed || q.Value != "{not json" {
+			t.Errorf("the import_path record is sealed=%v value=%q, want it in the clear", q.Sealed, q.Value)
+		}
+	}
+	if !found {
+		t.Fatal("the undecodable import_path row was not quarantined")
 	}
 }
 
@@ -334,40 +354,138 @@ func TestIntegrationsMigration_RenamedSourceKeepsItsCredential(t *testing.T) {
 }
 
 // TestIntegrationsMigration_RenamedSourceUnreadableCredential: an unreadable
-// credential under the old name is not carried (M6 writes no unreadable marker),
-// no ref is invented, and the report says to re-enter it.
+// credential under the old name is carried as it would stay for a source that
+// kept its ID: the instance refs the new name, an unreadable marker (reason
+// corrupt, "re-enter it") is staged there, and the report says to re-enter it
+// and that the old name is left unreferenced.
 func TestIntegrationsMigration_RenamedSourceUnreadableCredential(t *testing.T) {
 	const from = "integrations.metadata.batcave_db.credentials.api_key"
+	const to = "integrations.metadata.batcave-db.credentials.api_key"
 	r, s := runFixture(t, renamedSource, func(r *rig) {
 		delete(r.secrets.seed, from)
 		r.secrets.unreadable[from] = true
 	})
 	row := instances(t, s)["metadata/batcave-db"]
-	if g := refName(settingsOf(row), "credentials.api_key"); g != "" {
-		t.Errorf("an unreadable credential was given the ref %q", g)
+	if g := refName(settingsOf(row), "credentials.api_key"); g != to {
+		t.Errorf("the unreadable credential's ref is %q, want %q", g, to)
 	}
-	if _, ok := s.Rows[string(ownerSecrets)]["integrations.metadata.batcave-db.credentials.api_key"]; ok {
-		t.Error("a secret was written for an unreadable credential")
+	if v := string(s.Rows[string(ownerSecrets)][to]); v != unreadableMarker+"corrupt" {
+		t.Errorf("the new name holds %q, want the corrupt unreadable marker", v)
 	}
-	noted := false
+	if row["secrets_origin"] == nil || row["secrets_origin"] == "" {
+		t.Error("the instance holds a secret ref with no secrets_origin")
+	}
+	noted, orphan := false, false
 	for _, e := range r.report.Entries() {
-		noted = noted || e.Kind == "note" && e.ID == "metadata/batcave-db" && strings.Contains(e.Detail, "re-enter it")
+		if e.Kind != "note" || e.ID != "metadata/batcave-db" {
+			continue
+		}
+		noted = noted || strings.Contains(e.Detail, "carried as unreadable: re-enter it")
+		orphan = orphan || strings.Contains(e.Detail, from) && strings.Contains(e.Detail, "nothing refers to it")
+		if strings.Contains(e.Detail, "carried to the renamed source") {
+			t.Errorf("an unreadable credential is reported carried: %v", e)
+		}
 	}
 	if !noted {
 		t.Error("the unreadable credential is not reported")
 	}
+	if !orphan {
+		t.Error("the old name left in the store is not reported")
+	}
 }
 
-// TestIntegrationsMigration_RenamedSourceNewNameWins: a secret already stored under
-// the new ID is the instance's, and the old name's is not copied over it.
-func TestIntegrationsMigration_RenamedSourceNewNameWins(t *testing.T) {
+// TestIntegrationsMigration_RenamedSourceOrphanAtNewName: a secret already under
+// the new name belongs to no source of this pass (no entry has that HEAD ID), so
+// it is not the renamed source's to take: the instance gets no ref, the old
+// name's value is not copied over it, and the report says both stay unbound.
+func TestIntegrationsMigration_RenamedSourceOrphanAtNewName(t *testing.T) {
 	const to = "integrations.metadata.batcave-db.credentials.api_key"
-	_, s := runFixture(t, renamedSource, func(r *rig) { r.secrets.seed[to] = "fixture-batcave-db-key-newer" })
+	r, s := runFixture(t, renamedSource, func(r *rig) { r.secrets.seed[to] = "fixture-batcave-db-key-newer" })
 	if v := s.Rows[string(ownerSecrets)][to]; v != nil {
 		t.Errorf("the carry wrote %q over a secret already under the new name", v)
 	}
 	row := instances(t, s)["metadata/batcave-db"]
-	if g := refName(settingsOf(row), "credentials.api_key"); g != to {
-		t.Errorf("ref %q, want %q", g, to)
+	if g := refName(settingsOf(row), "credentials.api_key"); g != "" {
+		t.Errorf("the renamed source took the ref %q to a secret it does not own", g)
+	}
+	noted := false
+	for _, e := range r.report.Entries() {
+		noted = noted || e.Kind == "note" && e.ID == "metadata/batcave-db" && strings.Contains(e.Detail, "is not carried: a secret is already stored under "+to)
+	}
+	if !noted {
+		t.Errorf("the uncarried credential is not reported:\n%s", reportText(r))
+	}
+}
+
+// TestIntegrationsMigration_ExactIDWinsWhateverTheOrder: an entry whose HEAD ID
+// already is the instance ID keeps it, listed before or after the entry renamed
+// onto it; the renamed one is quarantined as the duplicate and never takes the
+// exact entry's credential, which M2 stored under that very name.
+func TestIntegrationsMigration_ExactIDWinsWhateverTheOrder(t *testing.T) {
+	const name = "integrations.metadata.batcave-db.credentials.api_key"
+	exact := map[string]any{"id": "batcave-db", "name": "Batcave DB (exact)", "enabled": true, "priority": 5}
+	renamed := map[string]any{"id": "batcave_db", "name": "Batcave DB (renamed)", "enabled": true, "priority": 4}
+	base := len(blobTree()["metadata_sources"].([]any))
+	for _, c := range []struct {
+		name    string
+		order   []any
+		renamed int // the renamed entry's index in the list
+	}{{"exact first", []any{exact, renamed}, base + 1}, {"renamed first", []any{renamed, exact}, base}} {
+		t.Run(c.name, func(t *testing.T) {
+			r, s := runFixture(t, func(r *rig) {
+				tree := blobTree()
+				tree["metadata_sources"] = append(tree["metadata_sources"].([]any), c.order...)
+				withRows(map[string][]byte{m6.KeyBlob: blobRow(r.t, tree)})(r)
+				r.secrets.seed[name] = "fixture-batcave-db-key-exact"
+				r.secrets.seed["integrations.metadata.batcave_db.credentials.api_key"] = "fixture-batcave-db-key-renamed"
+			})
+			row, ok := instances(t, s)["metadata/batcave-db"]
+			if !ok {
+				t.Fatal("no metadata/batcave-db instance")
+			}
+			if row["name"] != "Batcave DB (exact)" {
+				t.Errorf("the instance is %v, want the exact-ID entry", row["name"])
+			}
+			if g := refName(settingsOf(row), "credentials.api_key"); g != name {
+				t.Errorf("the exact entry refs %q, want %q", g, name)
+			}
+			if v := s.Rows[string(ownerSecrets)][name]; v != nil {
+				t.Errorf("a carry wrote %q over the exact entry's secret", v)
+			}
+			want := fmt.Sprintf("%smetadata_sources.%d", memberPrefix, c.renamed)
+			if !slices.ContainsFunc(s.Quarantine, func(q quarantined) bool { return q.Key == want && q.Reason == rInstanceConflict }) {
+				t.Errorf("the renamed duplicate %s was not quarantined", want)
+			}
+			taken := false
+			for _, e := range r.report.Entries() {
+				taken = taken || e.Kind == "instance" && e.ID == "metadata/batcave-db" && strings.Contains(e.Detail, "whose HEAD id it is")
+			}
+			if !taken {
+				t.Error("the conflict is not reported")
+			}
+		})
+	}
+}
+
+// TestIntegrationsMigration_ExactIDWinsForAIEndpoints: the same rule over
+// ai_endpoints, whose renamed rows also carry their credentials.
+func TestIntegrationsMigration_ExactIDWinsForAIEndpoints(t *testing.T) {
+	_, s := runFixture(t, withBlob(func(tree map[string]any) {
+		tree["ai_endpoints"] = append([]any{
+			map[string]any{"id": "oracle_node", "label": "Oracle (renamed)", "protocol": "openai_compat", "url": "http://192.0.2.40:8080", "enabled": true},
+		}, append(tree["ai_endpoints"].([]any),
+			map[string]any{"id": "oracle-node", "label": "Oracle (exact)", "protocol": "openai_compat", "url": "http://192.0.2.41:8080", "enabled": true})...)
+	}))
+	row, ok := instances(t, s)["ai/oracle-node"]
+	if !ok {
+		t.Fatal("no ai/oracle-node instance")
+	}
+	if row["name"] != "Oracle (exact)" {
+		t.Errorf("the instance is %v, want the exact-ID row listed after the renamed one", row["name"])
+	}
+	if !slices.ContainsFunc(s.Quarantine, func(q quarantined) bool {
+		return q.Key == memberPrefix+"ai_endpoints.0" && q.Reason == rInstanceConflict
+	}) {
+		t.Error("the renamed row listed first was not quarantined as the duplicate")
 	}
 }

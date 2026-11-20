@@ -110,10 +110,16 @@ const (
 	reasonUnprovenURL      = "a credential cannot be ruled out of the URL"
 	reasonListRefused      = "core refused the config list this row feeds"
 	reasonInstanceConflict = "core already holds a different instance under this ID"
-	reasonAliasNoRoot      = "the path alias names no root M6 registers"
-	reasonRootPath         = "the root path is not an absolute host path"
-	reasonUnreadMember     = "a settings blob member that no part of M6 reads"
-	reasonWebhookEvent     = "the webhook rule's events map to no topic"
+	reasonAliasNoRoot      = "the path alias's root is no library root and no ancestor of one: its display rendering is not carried"
+	// reasonAliasSubRoot: core's aliases are per root (core/library Alias has no
+	// root of its own), so an alias of a path below a root, as HEAD seeds from an
+	// iTunes mapping whose To is below one, has no representation.
+	reasonAliasSubRoot       = "the path alias's root is inside a library root, not at one, and core's aliases are per root: its display rendering is not carried"
+	reasonAliasShadowed      = "every library root under the path alias's root has a more specific alias: it rendered none of their paths, and its display rendering is not carried"
+	reasonMappingRootRefused = "core refused the library roots this iTunes mapping's To resolves against"
+	reasonRootPath           = "the root path is not an absolute host path"
+	reasonUnreadMember       = "a settings blob member that no part of M6 reads"
+	reasonWebhookEvent       = "the webhook rule's events map to no topic"
 )
 
 // Config is what the step needs besides its declaration.
@@ -229,10 +235,13 @@ func New(cfg Config, id string, raisesLevel int, after []storage.StepRef) (datam
 		RaisesLevel: raisesLevel,
 		After:       append([]storage.StepRef(nil), after...),
 		Cutover:     true,
-		// The residual blob and a webhook family secret can hold a credential
-		// when M2 could not move it, and a quarantined instance member is the
-		// raw JSON of a source that may carry userinfo.
-		Sensitive:       []string{KeyBlob, PrefixImportPath},
+		// The residual blob can hold a credential when M2 could not move it, and
+		// a quarantined blob member (setting:config_blob#<member>, under the same
+		// prefix) is the raw JSON of a source that may carry userinfo. An
+		// import_path row holds a path, a name and scan counters, never a
+		// credential, so it is not sealed: a quarantined root stays readable to a
+		// listing without the keyring.
+		Sensitive:       []string{KeyBlob},
 		RewritesInPlace: true,
 		Step:            m.Step,
 		Verify:          m.Verify,

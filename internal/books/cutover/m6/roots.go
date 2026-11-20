@@ -216,40 +216,8 @@ func (g *groupRun) roots(ctx context.Context, rows, index []storage.KV, counter 
 		})
 	}
 
-	// path_aliases: an alias belongs to the root whose path is its Root; one that
-	// matches none is kept raw rather than attached to a root it was not for.
-	if raw, present := g.top["path_aliases"]; present {
-		var aliases []json.RawMessage
-		if err := json.Unmarshal(raw, &aliases); err != nil {
-			if err := g.quarantineMember("path_aliases", raw, reasonBlobUndecodable); err != nil {
-				return err
-			}
-		}
-		for i, ar := range aliases {
-			var a headPathAlias
-			member := fmt.Sprintf("path_aliases.%d", i)
-			if err := json.Unmarshal(ar, &a); err != nil {
-				if err := g.quarantineMember(member, ar, reasonBlobUndecodable); err != nil {
-					return err
-				}
-				continue
-			}
-			target := -1
-			for j := range planned {
-				if a.Root != "" && filepath.Clean(planned[j].spec.Path) == filepath.Clean(a.Root) {
-					target = j
-					break
-				}
-			}
-			if target < 0 {
-				if err := g.quarantineMember(member, ar, reasonAliasNoRoot); err != nil {
-					return err
-				}
-				continue
-			}
-			planned[target].spec.Aliases = append(planned[target].spec.Aliases, library.Alias{Windows: a.Windows, UNC: a.UNC, SMBURL: a.SMBURL})
-			planned[target].aliases = append(planned[target].aliases, rawMember{name: member, raw: ar})
-		}
+	if err := g.pathAliases(planned); err != nil {
+		return err
 	}
 
 	// Core accepts or refuses each of the three lists whole (a *config.FieldError
@@ -260,11 +228,12 @@ func (g *groupRun) roots(ctx context.Context, rows, index []storage.KV, counter 
 	if err != nil {
 		return err
 	}
+	var refused []plannedRoot
 	if refusedRoots {
 		if err := g.quarantineRoots(planned); err != nil {
 			return err
 		}
-		planned = nil
+		refused, planned = planned, nil
 	}
 
 	// Nested roots are registered as the same-owner rule requires and reported.
@@ -279,7 +248,7 @@ func (g *groupRun) roots(ctx context.Context, rows, index []storage.KV, counter 
 	}
 
 	// itunes.path_mappings, resolved against the planned roots.
-	entries, err := g.mappings(planned)
+	entries, err := g.mappings(planned, refused)
 	if err != nil {
 		return err
 	}
@@ -429,8 +398,10 @@ func nonEmpty(in []string) []string {
 // mappings converts blob itunes.path_mappings into library.Mapping entries:
 // Local is To resolved against the planned roots (the longest one containing it),
 // Fold is set for a Windows-form From (HEAD's normalizeWindowsPrefix). A mapping
-// whose To is under no root is quarantined raw, and the rest go on.
-func (g *groupRun) mappings(planned []plannedRoot) ([]mappingEntry, error) {
+// whose To is under no root is quarantined raw, and the rest go on. refused is
+// the roots core refused (planned is then empty): a mapping that would have
+// resolved against one of them is quarantined as such, not as unmappable.
+func (g *groupRun) mappings(planned, refused []plannedRoot) ([]mappingEntry, error) {
 	var out []mappingEntry
 	itunes, present := g.top["itunes"]
 	if !present {
@@ -459,7 +430,11 @@ func (g *groupRun) mappings(planned []plannedRoot) ([]mappingEntry, error) {
 		}
 		local, ok := resolve(planned, pm.To)
 		if !ok {
-			if err := g.quarantineMember(member, er, reasonUnmappable); err != nil {
+			why := reasonUnmappable
+			if _, under := resolve(refused, pm.To); under {
+				why = reasonMappingRootRefused
+			}
+			if err := g.quarantineMember(member, er, why); err != nil {
 				return nil, err
 			}
 			continue
@@ -509,4 +484,171 @@ func windowsForm(from string) bool {
 		return true
 	}
 	return len(s) >= 2 && s[1] == ':' && (s[0] >= 'a' && s[0] <= 'z' || s[0] >= 'A' && s[0] <= 'Z')
+}
+
+// pathAliases attaches blob path_aliases to the planned roots. core's Alias has
+// no root of its own: it renders its root's Path (core/library Alias). HEAD's
+// PathAlias.Root is matched as a path prefix, most-specific-first
+// (web/src/utils/pathAliases.ts matchAlias; internal/config PathAlias), so for
+// each root the alias HEAD renders its paths with is the one with the longest
+// Root that is the root's path or an ancestor of it:
+//
+//   - an alias whose Root is the root's path is attached as is (every such
+//     alias, in list order, as before);
+//   - with none, an alias whose Root is an ancestor is carried by appending the
+//     root's path relative to it, in each form HEAD renders (derivedAlias), so
+//     the root renders as HEAD rendered it. One alias can feed several roots.
+//
+// An alias no root takes is quarantined raw, and the reason says its display
+// rendering is not carried: one whose Root is inside a root (HEAD seeds those
+// from an iTunes mapping whose To is below a root: config.SeedPathAliases) has
+// no representation in core's per-root model; one over roots that all have a
+// more specific alias rendered nothing at HEAD that a root reaches; one near no
+// root has no root to render.
+func (g *groupRun) pathAliases(planned []plannedRoot) error {
+	raw, present := g.top["path_aliases"]
+	if !present {
+		return nil
+	}
+	var list []json.RawMessage
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return g.quarantineMember("path_aliases", raw, reasonBlobUndecodable)
+	}
+	type alias struct {
+		a      headPathAlias
+		root   string // the cleaned Root, "" when it is no absolute path
+		member rawMember
+	}
+	var all []alias
+	for i, ar := range list {
+		member := fmt.Sprintf("path_aliases.%d", i)
+		var a headPathAlias
+		if err := json.Unmarshal(ar, &a); err != nil {
+			if err := g.quarantineMember(member, ar, reasonBlobUndecodable); err != nil {
+				return err
+			}
+			continue
+		}
+		root := ""
+		if badRootPath(a.Root) == "" {
+			root = filepath.Clean(a.Root)
+		}
+		all = append(all, alias{a: a, root: root, member: rawMember{name: member, raw: ar}})
+	}
+	taken := make([]bool, len(all))
+	for j := range planned {
+		rp := filepath.Clean(planned[j].spec.Path)
+		var exact []int
+		ancestor := ""
+		for k, al := range all {
+			switch {
+			case al.root == "":
+			case al.root == rp:
+				exact = append(exact, k)
+			case library.WithinRoot(rp, al.root) && len(al.root) > len(ancestor):
+				ancestor = al.root
+			}
+		}
+		if len(exact) > 0 {
+			for _, k := range exact {
+				a := all[k].a
+				planned[j].spec.Aliases = append(planned[j].spec.Aliases, library.Alias{Windows: a.Windows, UNC: a.UNC, SMBURL: a.SMBURL})
+				planned[j].aliases = append(planned[j].aliases, all[k].member)
+				taken[k] = true
+			}
+			continue
+		}
+		if ancestor == "" {
+			continue
+		}
+		rel, err := filepath.Rel(ancestor, rp)
+		if err != nil {
+			continue
+		}
+		for k, al := range all {
+			if al.root != ancestor {
+				continue
+			}
+			planned[j].spec.Aliases = append(planned[j].spec.Aliases, derivedAlias(al.a, filepath.ToSlash(rel)))
+			planned[j].aliases = append(planned[j].aliases, al.member)
+			taken[k] = true
+		}
+	}
+	for k, al := range all {
+		if taken[k] {
+			continue
+		}
+		if err := g.quarantineMember(al.member.name, al.member.raw, aliasReason(al.root, planned)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// aliasReason is why an alias no root took is quarantined.
+func aliasReason(root string, planned []plannedRoot) string {
+	if root == "" {
+		return reasonAliasNoRoot
+	}
+	for _, p := range planned {
+		if library.WithinRoot(root, p.spec.Path) {
+			return reasonAliasSubRoot
+		}
+	}
+	for _, p := range planned {
+		if library.WithinRoot(p.spec.Path, root) {
+			return reasonAliasShadowed
+		}
+	}
+	return reasonAliasNoRoot
+}
+
+// derivedAlias is a, an alias of an ancestor of a root, as an alias of the root
+// rel (slash-separated, non-empty) below it: each form is HEAD's rendering of
+// the root's own path (web/src/utils/pathAliases.ts toWindows and toSmbURL), so
+// a path under the root renders through it exactly as HEAD rendered it through
+// a. An empty form stays empty.
+func derivedAlias(a headPathAlias, rel string) library.Alias {
+	return library.Alias{Windows: windowsJoin(a.Windows, rel), UNC: windowsJoin(a.UNC, rel), SMBURL: smbJoin(a.SMBURL, rel)}
+}
+
+// windowsJoin is toWindows: one trailing separator run trimmed from prefix, then
+// a backslash and rel with every slash flipped.
+func windowsJoin(prefix, rel string) string {
+	if prefix == "" {
+		return ""
+	}
+	return strings.TrimRight(prefix, `\/`) + `\` + strings.ReplaceAll(rel, "/", `\`)
+}
+
+// smbJoin is toSmbURL: base, a slash, and each segment of rel percent-encoded as
+// encodeURIComponent does.
+func smbJoin(base, rel string) string {
+	if base == "" {
+		return ""
+	}
+	segs := strings.Split(rel, "/")
+	for i, s := range segs {
+		segs[i] = encodeURIComponent(s)
+	}
+	return base + "/" + strings.Join(segs, "/")
+}
+
+// encodeURIComponent is JavaScript's: every UTF-8 byte except A-Z a-z 0-9 and
+// - _ . ! ~ * ' ( ) is written %XX with upper-case hex.
+func encodeURIComponent(s string) string {
+	const hex = "0123456789ABCDEF"
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', strings.IndexByte("-_.!~*'()", c) >= 0:
+			b.WriteByte(c)
+		default:
+			b.WriteByte('%')
+			b.WriteByte(hex[c>>4])
+			b.WriteByte(hex[c&15])
+		}
+	}
+	return b.String()
 }
