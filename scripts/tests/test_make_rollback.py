@@ -45,6 +45,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fake_ssh  # noqa: E402
@@ -1320,9 +1321,9 @@ class RollbackRestoresEnvironment(unittest.TestCase):
         self.assertEqual(boot_peers(host), "192.0.2.0/24")
 
     def test_the_environment_is_checked_before_anything_is_stopped(self) -> None:
-        for target, hk in (("rollback", {}), ("rollback-restore", {})):
+        for target in ("rollback", "rollback-restore"):
             with self.subTest(target=target):
-                host = FakeHost(self, env_snapshot=False, **hk)
+                host = FakeHost(self, env_snapshot=False)
                 before = host.environment()
                 p = host.make(target)
                 self.assertNotEqual(p.returncode, 0, out(p))
@@ -1404,7 +1405,7 @@ class SudoersDrift(unittest.TestCase):
 
     def test_every_sudo_command_the_recipes_run_is_granted(self) -> None:
         commands = set()
-        for target, kw, host_kw in (
+        cases: list[tuple[str, dict[str, str], dict[str, Any]]] = [
             ("rollback", {}, {"prev": {"capabilities": None}}),
             ("rollback", {}, {}),
             ("rollback-restore", {}, {}),
@@ -1414,7 +1415,8 @@ class SudoersDrift(unittest.TestCase):
                 {"RELEASE": "v0.41.0", "ROLLBACK_ENV": "snapshot"},
                 {"releases": {"v0.41.0": {}}},
             ),
-        ):
+        ]
+        for target, kw, host_kw in cases:
             host = FakeHost(self, **host_kw)
             p = host.make(target, **kw)
             self.assertEqual(p.returncode, 0, out(p))

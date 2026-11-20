@@ -110,7 +110,7 @@ DEPLOY_URL := https://$(lastword $(subst @, ,$(DEPLOY_HOST))):8484
 # is read after them and DOES override them. Don't, unless you mean the deploy
 # build to differ from everyone else's.
 .PHONY: deploy
-deploy:
+deploy: deploy-env-check
 	@bash scripts/deploy-preflight.sh origin/main
 	@$(MAKE) build-linux VERSION=$(VERSION)
 	@echo "→ Copying the binary to $(DEPLOY_HOST)'s staging path..."
@@ -159,7 +159,7 @@ pprof-dropin:
 	@echo "→ Installing pprof drop-in (ABK_PPROF_ADDR=localhost:6060); takes effect on the next restart..."
 	ssh $(DEPLOY_HOST) 'sudo -n $(DEPLOY_HELPERS)/pprof on'
 
-deploy-debug: pprof-dropin deploy
+deploy-debug: deploy-env-check pprof-dropin deploy
 	@echo "→ Checking the pprof listener answers..."
 	@bash scripts/deploy-wait-ready.sh $(DEPLOY_URL) $(DEPLOY_READY_TIMEOUT) $(DEPLOY_HOST) $(DEPLOY_UNIT)
 	ssh $(DEPLOY_HOST) 'out=$$(curl -sf "http://localhost:6060/debug/pprof/goroutineleak?debug=1") && [ -n "$$out" ] && printf "%s\n" "$$out" | head -1'

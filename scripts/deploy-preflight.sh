@@ -58,3 +58,11 @@ if [ "$ahead" != "0" ] || [ "$behind" != "0" ]; then
 fi
 
 echo "✅ HEAD == $ref ($(git rev-parse --short HEAD))."
+
+# The deploy must also be one `make rollback` can undo, and must not ship
+# environment the new binary ignores (scripts/deploy_env_check.py). Run from
+# here as well as from `make deploy-env-check` because a Makefile.local that has
+# not been synced from Makefile.local.example calls only this script. It reads
+# deploy/local.conf and Makefile.local in the current directory (where make
+# runs); with neither there is nothing to check.
+python3 "$(dirname "$0")/deploy_env_check.py"

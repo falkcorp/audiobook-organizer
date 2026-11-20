@@ -993,6 +993,23 @@ backup:
 		ssh $(DEPLOY_HOST) "rm -f /tmp/aobackup-$$STAMP.tar.gz"; \
 		echo "✅ Backup saved to $(BACKUP_DIR)/aobackup-$$STAMP.tar.gz"
 
+## deploy-env-check: Refuse a deploy that cannot be rolled back, or whose deploy/local.conf sets an env name the new binary ignores (reads nothing on the host)
+#
+# scripts/deploy_env_check.py. `make deploy` and `make deploy-debug` run it
+# first (Makefile.local.example), and scripts/deploy-preflight.sh runs it too,
+# which a Makefile.local that has not been synced from the example still calls.
+#   - retired: deploy/local.conf may not set an env name in
+#     deploy/retired-env-names.txt, the list generated from the rename table.
+#     A binary that has the flip ignores a `warn` name with one boot warning
+#     (the setting silently stops applying) and refuses to boot on a `refuse`
+#     one. While the list says `enforced: false` it only reports.
+#   - makefile-local: Makefile.local's deploy and deploy-debug must install
+#     through install-staged, which keeps the previous binary, unit and
+#     local.conf for `make rollback`. DEPLOY_ALLOW_NO_ROLLBACK=1 overrides.
+.PHONY: deploy-env-check
+deploy-env-check:
+	@python3 scripts/deploy_env_check.py
+
 ## rollback: Swap in the previous deployed binary and restart (requires DEPLOY_HOST, DEPLOY_BIN, DEPLOY_DB; DEPLOY_URL defaults from API_URL or DEPLOY_HOST)
 #
 # scripts/deploy_rollback.py rollback runs it; the decisions are the store
