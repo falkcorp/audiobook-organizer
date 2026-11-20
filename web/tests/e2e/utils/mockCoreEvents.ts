@@ -12,8 +12,8 @@
 //  - an init script (installCoreEventsShim) that wraps window.fetch for the events path
 //    only and answers with a ReadableStream the test drives through page.evaluate: event
 //    frames, control frames (opened, reset, closed{shutdown}) and refusals (429 with
-//    Retry-After). Like the server it writes core.stream.opened.v1 first, and it filters
-//    each frame by the stream's topic, exclude and key parameters;
+//    Retry-After). Like the server it writes core.stream.opened.v1 first, heartbeats
+//    every 15 s, and filters each frame by the stream's topic, exclude and key parameters;
 //  - a page.route guard on the same path that records any request that got past the shim
 //    and refuses it with 503 + Retry-After, so a test can assert that no request reached
 //    the real server (unmockedRequests() stays empty).
@@ -37,6 +37,11 @@ export interface CoreEventsShimConfig {
   autoOpened: boolean;
   /** Answers for the first requests, in order; later requests get a stream. */
   refusals: CoreEventsRefusal[];
+  /**
+   * Write a `: hb` comment to each open stream this often (ms), as the server does every
+   * 15 s; the client drops a stream silent for 45 s. Default 15000; 0 turns it off.
+   */
+  heartbeatMs?: number;
 }
 
 export interface CoreEventsRequestRecord {
@@ -84,6 +89,7 @@ export function installCoreEventsShim(config: CoreEventsShimConfig): void {
     typeof w.fetch === 'function' ? w.fetch.bind(w) : () => Promise.reject(new TypeError('fetch is unavailable'));
   const enc = new TextEncoder();
   const refusals = [...config.refusals];
+  const heartbeatMs = config.heartbeatMs ?? 15000;
   const requests: CoreEventsRequestRecord[] = [];
   let seq = 0;
 
@@ -114,9 +120,12 @@ export function installCoreEventsShim(config: CoreEventsShimConfig): void {
   const openStream = (record: CoreEventsRequestRecord, signal: AbortSignal | null | undefined) => {
     let ctl!: ReadableStreamDefaultController<Uint8Array>;
     let live = true;
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
     const stop = () => {
       if (!live) return false;
       live = false;
+      if (heartbeat) clearInterval(heartbeat);
+      heartbeat = null;
       record.open = false;
       const i = streams.indexOf(s);
       if (i !== -1) streams.splice(i, 1);
@@ -164,6 +173,7 @@ export function installCoreEventsShim(config: CoreEventsShimConfig): void {
     };
     streams.push(s);
     signal?.addEventListener('abort', onAbort, { once: true });
+    if (heartbeatMs > 0) heartbeat = setInterval(() => s.write(': hb\n\n'), heartbeatMs);
     s.write('retry: 3000\n\n');
     if (config.autoOpened) s.write(frame('core.stream.opened.v1', { topics: record.topics }, ''));
     return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' } });
@@ -238,6 +248,8 @@ export function installCoreEventsShim(config: CoreEventsShimConfig): void {
 
 export interface MockCoreEventsOptions {
   autoOpened?: boolean;
+  /** See CoreEventsShimConfig.heartbeatMs. */
+  heartbeatMs?: number;
   /** Refuse the first requests, in order (e.g. a 429 with Retry-After). */
   refusals?: CoreEventsRefusal[];
 }
@@ -260,6 +272,7 @@ export async function mockCoreEvents(page: Page, options: MockCoreEventsOptions 
   const config: CoreEventsShimConfig = {
     autoOpened: options.autoOpened ?? true,
     refusals: options.refusals ?? [],
+    heartbeatMs: options.heartbeatMs ?? 15000,
   };
   await page.addInitScript(installCoreEventsShim, config);
 
