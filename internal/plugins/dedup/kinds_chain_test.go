@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/kinds_chain_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 6d01f54f-d1e9-4cf7-8def-037dd38e3e04
 // last-edited: 2026-11-19
 

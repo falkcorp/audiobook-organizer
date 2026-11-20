@@ -1,5 +1,5 @@
 // file: pkg/ops/coined_resources_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5e2a9b73-0c41-4d68-b1f7-93a6d0c8e214
 // last-edited: 2026-11-19
 

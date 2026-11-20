@@ -1,5 +1,5 @@
 // file: pkg/ops/effects.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 56bbb3ad-7cb3-4962-a476-26ea63bdc9ba
 // last-edited: 2026-11-19
 

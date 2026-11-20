@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/kinds_index_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 37db46af-5d7a-4d7a-9acd-1cd87ae9dd07
 // last-edited: 2026-11-19
 

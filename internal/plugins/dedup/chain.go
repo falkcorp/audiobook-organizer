@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/chain.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1f33e68f-5822-4267-bfe7-0106d08d6de6
 // last-edited: 2026-11-19
 
