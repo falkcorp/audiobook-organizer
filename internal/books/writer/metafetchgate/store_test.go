@@ -1,5 +1,5 @@
 // file: internal/books/writer/metafetchgate/store_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b60f3d92-14e7-4a85-9c2d-7e1a58f4c036
 // last-edited: 2026-11-19
 
@@ -154,7 +154,7 @@ func TestRawWritesAreClassifiedByKeyFamilyAndFailClosed(t *testing.T) {
 	for name, err := range map[string]error{
 		"SetRaw unknown":        g.SetRaw("mystery:1", nil),
 		"DeleteRaw unknown":     g.DeleteRaw("mystery:1"),
-		"DeleteRawBatch":        g.DeleteRawBatch([]string{"pcache:a", "metadata_rejection:b"}),
+		"DeleteRawBatch":        g.DeleteRawBatch([]string{"pcache:a", "metadata_fetch_cache:b"}),
 		"DeleteRawBatch unknwn": g.DeleteRawBatch([]string{"mystery:1"}),
 	} {
 		require.ErrorIs(t, err, tasks.ErrOutsideEffects, name)
@@ -257,7 +257,7 @@ var subjectOf = map[string]struct {
 	"FlagMetadataHashDuplicate": {"books", 1}, "SetLastWrittenAt": {"books", 0}, "MarkNeedsRescan": {"books", 0},
 	"AddBookTagWithSource": {"books", 0}, "RemoveBookTagsByPrefix": {"books", 0}, "SetBookNarrators": {"books", 0},
 	"CreateAuthor": {"authors", 0}, "SetBookAuthors": {"books", 0}, "ModifyBookAuthors": {"books", 0},
-	"CreateSeries": {"series", 0}, "UpdateBookFile": {"book_files", 0}, "UpdateBookFileHashes": {"book_files", 1},
+	"CreateSeries": {"series", 0}, "UpdateBookFile": {"book_files", 0}, "UpdateBookFileHashes": {"book_files", 0},
 	"PatchBookFileFields": {"book_files", 1}, "DeleteMetadataCache": {"books", 0}, "DeleteMetadataFieldState": {"books", 0},
 	"DeleteOperationState": {"operations", 0}, "SetUserPreference": {"user_state", 0}, "DeleteUserPreference": {"user_state", 0},
 	"SetUserPreferenceForUser": {"user_state", 1},
@@ -303,9 +303,30 @@ func TestRawKeyFamilyIsAPrefixNotASubstring(t *testing.T) {
 	for name, err := range map[string]error{
 		"SetRaw":         g.SetRaw("x-pcache:1", nil),
 		"DeleteRaw":      g.DeleteRaw("x-metadata_fetch_cache:1"),
-		"DeleteRawBatch": g.DeleteRawBatch([]string{"x-metadata_rejection:1"}),
+		"DeleteRawBatch": g.DeleteRawBatch([]string{"x-pcache:1"}),
 	} {
 		require.ErrorIs(t, err, writer.ErrNoRow, name)
 	}
 	require.Empty(t, w.Refusals())
+}
+
+// The two rejection key families are in no raw family (round 2, m4): metafetch's
+// own raw writes are the fetch cache only (rejected_candidate: is written by
+// server handlers over the server's store, metadata_rejection: by the store's
+// typed methods), so a rejection key reaching the gate is a write nobody
+// classified and is refused without asking the writer.
+func TestRejectionKeysAreInNoRawFamily(t *testing.T) {
+	var prefixes []string
+	for _, f := range writer.RawFamilies() {
+		prefixes = append(prefixes, f.Prefix)
+	}
+	require.ElementsMatch(t, []string{"metadata_fetch_cache:", "pcache:"}, prefixes)
+
+	g, w := refuseAll(t)
+	for _, key := range []string{"rejected_candidate:b", "metadata_rejection:b"} {
+		require.ErrorIs(t, g.SetRaw(key, nil), writer.ErrNoRow, key)
+		require.ErrorIs(t, g.DeleteRaw(key), writer.ErrNoRow, key)
+		require.ErrorIs(t, g.DeleteRawBatch([]string{key}), writer.ErrNoRow, key)
+	}
+	require.Empty(t, w.Refusals(), "an unclassifiable key is refused before the writer is asked")
 }
