@@ -1,11 +1,12 @@
 // file: web/src/utils/sanitizeSettingsImport.test.ts
-// version: 1.8.0
+// version: 1.9.0
 // guid: 8a2d4f60-1b3e-4c7a-b95d-6e0f2a7c3d19
 // last-edited: 2026-11-19
 
 import { describe, it, expect } from 'vitest';
 import {
   IGNORED_ADDRESS_NOTE,
+  IGNORED_PROGRAM_NOTE,
   sanitizeSettingsImport,
   sanitizeSettingsImportWithReport,
 } from './sanitizeSettingsImport';
@@ -162,6 +163,47 @@ describe('sanitizeSettingsImport', () => {
       'metadata_sources[gotham-books].credentials.apiKey',
       'metadata_sources[gotham-books].credentials.user',
     ]);
+  });
+
+  describe('program paths', () => {
+    it('never imports a path the server would execute, and reports each', () => {
+      const file = {
+        tools: {
+          managed_dir: '/tmp/evil',
+          mode: 'managed',
+          ollama: { mode: 'custom', custom_path: '/tmp/evil/ollama' },
+          fpcalc: { mode: 'custom', custom_path: '/tmp/evil/fpcalc' },
+        },
+      } as unknown as Partial<api.Config>;
+      const copy = JSON.stringify(file);
+      const { cleaned, ignored } = sanitizeSettingsImportWithReport(file, undefined);
+      expect(JSON.stringify(cleaned)).not.toContain('/tmp/evil');
+      expect(cleaned.tools).toEqual({
+        mode: 'managed',
+        ollama: { mode: 'custom' },
+        fpcalc: { mode: 'custom' },
+      });
+      expect(ignored).toEqual([
+        `tools.managed_dir (${IGNORED_PROGRAM_NOTE})`,
+        `tools.ollama.custom_path (${IGNORED_PROGRAM_NOTE})`,
+        `tools.fpcalc.custom_path (${IGNORED_PROGRAM_NOTE})`,
+      ]);
+      expect(JSON.stringify(file)).toBe(copy); // the caller's object is untouched
+    });
+
+    it('drops an empty path too (the file never sets one) and stays quiet without any', () => {
+      const withEmpty = sanitizeSettingsImportWithReport(
+        { tools: { fpcalc: { custom_path: '' } } } as unknown as Partial<api.Config>,
+        undefined
+      );
+      expect(withEmpty.ignored).toEqual([`tools.fpcalc.custom_path (${IGNORED_PROGRAM_NOTE})`]);
+      const without = sanitizeSettingsImportWithReport(
+        { tools: { allow_periodic_ollama: true } } as unknown as Partial<api.Config>,
+        undefined
+      );
+      expect(without.cleaned.tools).toEqual({ allow_periodic_ollama: true });
+      expect(without.ignored).toEqual([]);
+    });
   });
 
   describe('addresses a stored credential is sent to', () => {

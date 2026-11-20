@@ -1,5 +1,5 @@
 // file: web/src/utils/sanitizeSettingsImport.ts
-// version: 1.10.0
+// version: 1.11.0
 // guid: 3f6b1c2e-8d4a-4e7f-9a51-c2d0b7e4f813
 // last-edited: 2026-11-19
 
@@ -53,6 +53,41 @@ export interface SanitizeReport {
 
 /** What the report says of an address the import would have changed. */
 export const IGNORED_ADDRESS_NOTE = 'ignored: server address changes must be made by hand';
+
+/** What the report says of a program path the import would have set. */
+export const IGNORED_PROGRAM_NOTE = 'ignored: program paths must be set by hand on the server';
+
+// A setting that names a program the server runs, or the directory it installs
+// and runs managed tools from. A file that set one would make the server execute
+// whatever the file names, so none is imported, on any host and for any value.
+const PROGRAM_PATH_SETTINGS: Array<{ section?: string; name: string }> = [
+  { name: 'managed_dir' },
+  { section: 'ollama', name: 'custom_path' },
+  { section: 'fpcalc', name: 'custom_path' },
+];
+
+// A copy of the file's tools section without its program paths, each named in
+// ignored. The file's own object is not touched.
+const withoutProgramPaths = (
+  tools: Record<string, unknown>,
+  ignored: string[]
+): Record<string, unknown> => {
+  const out: Record<string, unknown> = { ...tools };
+  for (const { section, name } of PROGRAM_PATH_SETTINGS) {
+    const where = section ? `tools.${section}` : 'tools';
+    const node = section ? out[section] : out;
+    if (node === null || typeof node !== 'object' || !(name in node)) continue;
+    ignored.push(`${where}.${name} (${IGNORED_PROGRAM_NOTE})`);
+    if (section) {
+      const { [name]: dropped, ...rest } = node as Record<string, unknown>;
+      void dropped;
+      out[section] = rest;
+    } else {
+      delete out[name];
+    }
+  }
+  return out;
+};
 
 // An address a stored secret travels to. URLs are never imported: a file that
 // set one would point stored credentials at whatever host it names.
@@ -257,6 +292,11 @@ export const sanitizeSettingsImportWithReport = (
               ignored.push(`embedding.base_url (${IGNORED_ADDRESS_NOTE})`);
             }
             delete section.base_url;
+          }
+          if (key === 'tools') {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (cleaned as any)[key] = withoutProgramPaths(section, ignored);
+            break;
           }
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (cleaned as any)[key] = section;
