@@ -1,7 +1,7 @@
 // file: internal/server/owner_routes_test.go
-// version: 1.4.3
+// version: 1.4.4
 // guid: 7b2d9e41-6c85-4f30-a1e7-4c9f2b8d6a15
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 // Router-level coverage for the owner gate on the iTunes library (2026-10-07):
 // every route that removes, overwrites or repoints iTunes tracks, or turns off
@@ -97,9 +97,9 @@ func ownerRefused(w *httptest.ResponseRecorder) bool {
 	return w.Code == http.StatusForbidden && strings.Contains(w.Body.String(), "Owner actions")
 }
 
-// putOwnerEmail sends PUT /api/v1/config {"owner_email": email}.
+// putOwnerEmail sends PUT /api/v1/config {"set":{"owner_email": email}}.
 func (f *ownerRouteFixture) putOwnerEmail(email string, hdr map[string]string) *httptest.ResponseRecorder {
-	return f.requestBody(http.MethodPut, "/api/v1/config", `{"owner_email":"`+email+`"}`, hdr)
+	return f.requestBody(http.MethodPut, "/api/v1/config", `{"set":{"owner_email":"`+email+`"}}`, hdr)
 }
 
 // TestOwnerTrustRoot_ConfigThroughTheRouter is the second review's BLOCKER
@@ -127,11 +127,11 @@ func TestOwnerTrustRoot_ConfigThroughTheRouter(t *testing.T) {
 			for caller, hdr := range refused {
 				w := f.putOwnerEmail(otherAdminEmail, hdr)
 				assert.Equal(t, http.StatusForbidden, w.Code, "%s: %s", caller, w.Body.String())
-				assert.Contains(t, w.Body.String(), "Only the owner may change", caller)
+				assert.Contains(t, w.Body.String(), "Owner actions need", caller)
 				assert.Equal(t, ownerRouteEmail, config.Snapshot().OwnerEmail, "%s changed owner_email", caller)
-				w = f.requestBody(http.MethodPut, "/api/v1/config", `{"cf_access_team_domain":"attacker.example.test"}`, hdr)
+				w = f.requestBody(http.MethodPut, "/api/v1/config", `{"set":{"cf_access_team_domain":"attacker.example.test"}}`, hdr)
 				assert.Equal(t, http.StatusForbidden, w.Code, "%s cf_access_team_domain: %s", caller, w.Body.String())
-				assert.Contains(t, w.Body.String(), "Only the owner may change", caller)
+				assert.Contains(t, w.Body.String(), "Owner actions need", caller)
 			}
 			// The owner may hand ownership on.
 			w := f.putOwnerEmail(otherAdminEmail, map[string]string{cfaccess.CFAccessHeader: "jwt-owner"})
@@ -153,11 +153,11 @@ func TestOwnerTrustRoot_ConfigThroughTheRouter(t *testing.T) {
 			for caller, hdr := range noOwner {
 				w := f.putOwnerEmail(ownerRouteEmail, hdr)
 				assert.Equal(t, http.StatusForbidden, w.Code, "set owner_email by %s: %s", caller, w.Body.String())
-				assert.Contains(t, w.Body.String(), "OWNER_EMAIL", caller)
+				assert.Contains(t, w.Body.String(), "only on the server", caller)
 				assert.Empty(t, config.Snapshot().OwnerEmail)
-				w = f.requestBody(http.MethodPut, "/api/v1/config", `{"cf_access_team_domain":"attacker.example.test"}`, hdr)
+				w = f.requestBody(http.MethodPut, "/api/v1/config", `{"set":{"cf_access_team_domain":"attacker.example.test"}}`, hdr)
 				assert.Equal(t, http.StatusForbidden, w.Code, "repoint cf_access by %s: %s", caller, w.Body.String())
-				assert.Contains(t, w.Body.String(), "OWNER_EMAIL", caller)
+				assert.Contains(t, w.Body.String(), "only on the server", caller)
 			}
 		})
 	}
