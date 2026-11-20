@@ -168,6 +168,16 @@ func (s *booksT6G2Store) ClassifyBookSigMigration(id string) (database.BookSigMi
 	return m.MigrateBookSigToSidecar(id, true)
 }
 
+// CheckAuthorBooksLegacyRetire is the preview of RetireAuthorBooksLegacy: the
+// check and the counts, nothing written.
+func (s *booksT6G2Store) CheckAuthorBooksLegacyRetire(ctx context.Context, progress database.AuthorBooksLegacyRetireProgress) (database.AuthorBooksLegacyRetireReport, error) {
+	r, ok := database.AsCapability[authorBooksLegacyRetirer](s.src)
+	if !ok {
+		return database.AuthorBooksLegacyRetireReport{}, t6g2Unsupported(s, t6g2CapAuthorBooksLegacyRetire)
+	}
+	return r.CheckAuthorBooksLegacyRetire(ctx, progress)
+}
+
 func (s *booksT6G2Store) Describe() string { return fmt.Sprintf("%T", s.src) }
 
 func (s *booksT6G2Store) Supports(c t6g2Capability) bool {
@@ -194,6 +204,9 @@ func (s *booksT6G2Store) Supports(c t6g2Capability) bool {
 		return ok
 	case t6g2CapFolderBuild:
 		_, ok := database.AsCapability[folderBuildStore](s.src)
+		return ok
+	case t6g2CapAuthorBooksLegacyRetire:
+		_, ok := database.AsCapability[authorBooksLegacyRetirer](s.src)
 		return ok
 	}
 	return false
@@ -304,6 +317,22 @@ func (w *booksT6G2Writer) DeleteOrphanBookFileAcoustIDEntries(ctx context.Contex
 		return e
 	})
 	return n, err
+}
+
+// RetireAuthorBooksLegacy deletes the author_books_legacy: rows, refusing (and
+// deleting nothing) while any book's AuthorID is not in its credits. Its row is
+// the shared table's: authors.
+func (w *booksT6G2Writer) RetireAuthorBooksLegacy(ctx context.Context, progress database.AuthorBooksLegacyRetireProgress) (res database.AuthorBooksLegacyRetireReport, err error) {
+	err = w.gate.do(ctx, "RetireAuthorBooksLegacy", kindRef(ops.ResAuthors), func(ctx context.Context) error {
+		r, ok := database.AsCapability[authorBooksLegacyRetirer](w.src)
+		if !ok {
+			return t6g2Unsupported(&booksT6G2Store{src: w.src}, t6g2CapAuthorBooksLegacyRetire)
+		}
+		var e error
+		res, e = r.RetireAuthorBooksLegacy(ctx, progress)
+		return e
+	})
+	return res, err
 }
 
 // ModifyBook, SaveChaptersForBook, BatchCreateBookFiles and
