@@ -333,6 +333,8 @@ class Run:
             gl = self.g.re.search(r"levels=(\S+)", out)
             ge = self.g.re.search(r"enforced=(\S+)", out)
             kept = None if not gl or gl.group(1) == "unrecorded" else self.kept_levels(gl.group(1))
+            ob = self.g.re.search(r"binary_enforced=(\S+)", out)
+            own_e = ob.group(1) if ob else "none"
             if kept is None or not ge or ge.group(1) == "unrecorded":
                 # Nothing to compare: the named generation was kept without the
                 # facts a deploy measures (the build it belonged to went in by
@@ -347,11 +349,25 @@ class Run:
                     "(the version it reads its settings from, and the names in the kept local.conf) "
                     "before you rely on this rollback."
                 )
-            elif ge.group(1) == "1":
+            elif own_e in ("0", "1") and own_e != ge.group(1):
+                names = (
+                    "the new names, which a binary that predates the config flip does not read"
+                    if ge.group(1) == "1"
+                    else "the old names, which a binary that enforces the retired-name list ignores"
+                )
+                return self.refuse(
+                    f"REFUSING: ROLLBACK_ENV names the environment of a build that "
+                    f"{'enforces' if ge.group(1) == '1' else 'does not enforce'} the retired-name "
+                    f"list, but {o.prev} {'enforces it' if own_e == '1' else 'does not'}: that "
+                    f"environment sets {names}. Nothing was stopped or changed.{self.prev_note()}",
+                    "`make rollback-check` lists the kept generations with their enforced flag.",
+                )
+            elif ge.group(1) == "1" and own_e != "1":
                 self.say(
                     f"   NOTE: ROLLBACK_ENV {o.env_gen[:12]}... is the environment of a build that "
-                    "enforces the retired-name list: it sets the NEW names. Restoring it under a "
-                    "binary that predates them starts that binary without its settings."
+                    "enforces the retired-name list: it sets the NEW names. The recipe cannot tell "
+                    f"whether {o.prev} reads them (it has no recorded enforced flag of its own); "
+                    "restoring it under a binary that predates them starts that binary without its settings."
                 )
             prev, how = self.g.prev_vector(o, self.get)
             if prev is None:

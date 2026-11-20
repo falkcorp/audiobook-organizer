@@ -1445,6 +1445,50 @@ class RollbackRestoresEnvironment(unittest.TestCase):
         self.assertIn("enforces the retired-name list", out(p))
         self.assertNotIn("WARNING: ROLLBACK_ENV", out(p))
 
+    def pair_run(self, kept_enforced, prev_enforced):
+        """ROLLBACK_ENV names another kept generation while .prev has its own,
+        so the recipe knows both builds' enforced flags and can compare them."""
+        host = FakeHost(self)
+        host.write_generation(
+            host.prev_sha,
+            binary={"version": "v0.40.0", "levels": dict(R1), "enforced": prev_enforced},
+        )
+        sha = host.write_generation(
+            "ab" * 32, binary={"version": "v0.39.0", "levels": dict(R1), "enforced": kept_enforced}
+        )
+        before = host.environment()
+        return host, before, host.make("rollback-restore", ROLLBACK_ENV=sha)
+
+    def test_an_enforcing_environment_under_a_binary_that_does_not_enforce_is_refused(self) -> None:
+        host, before, p = self.pair_run(kept_enforced=True, prev_enforced=False)
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertIn(
+            "REFUSING: ROLLBACK_ENV names the environment of a build that enforces", out(p)
+        )
+        self.assertIn("predates the config flip", out(p))
+        self.assertEqual(host.changes(), [], "nothing stopped or restored")
+        self.assertEqual(host.environment(), before)
+
+    def test_a_pre_flip_environment_under_a_binary_that_enforces_is_refused(self) -> None:
+        host, before, p = self.pair_run(kept_enforced=False, prev_enforced=True)
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertIn("does not enforce the retired-name list, but", out(p))
+        self.assertIn("ignores", out(p))
+        self.assertEqual(host.changes(), [])
+        self.assertEqual(host.environment(), before)
+
+    def test_two_enforcing_builds_roll_back_with_no_note_or_refusal(self) -> None:
+        host, _, p = self.pair_run(kept_enforced=True, prev_enforced=True)
+        self.assertEqual(p.returncode, 0, out(p))
+        self.assertNotIn("NOTE: ROLLBACK_ENV", out(p))
+        self.assertNotIn("WARNING: ROLLBACK_ENV", out(p))
+
+    def test_a_binary_with_no_recorded_enforced_flag_gets_the_note_not_a_refusal(self) -> None:
+        host, _, p = self.pair_run(kept_enforced=True, prev_enforced=None)
+        self.assertEqual(p.returncode, 0, out(p))
+        self.assertIn("NOTE: ROLLBACK_ENV", out(p))
+        self.assertIn("cannot tell", out(p))
+
     def test_a_named_generation_with_fully_recorded_facts_says_nothing_extra(self) -> None:
         host, p = self.named_generation_run(
             {"version": "v0.40.0", "levels": dict(R1), "enforced": False}
