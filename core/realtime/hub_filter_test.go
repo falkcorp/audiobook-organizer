@@ -264,17 +264,17 @@ func runView(current string) tasks.RunView {
 
 // runPayload publishes v as core.task.run-changed.v1.
 func (c *cast) runPayload(v tasks.RunView) {
-	events.Publish(c.cor, context.Background(), topicRun, string(v.ID), v)
+	events.Publish(c.cor, context.Background(), topicRun, string(v.ID), tasks.NewRunPayload(v))
 }
 
 // streamRun reads one run frame from rd and decodes its payload.
-func streamRun(t testing.TB, rd *reader) tasks.RunView {
+func streamRun(t testing.TB, rd *reader) tasks.RunPayload {
 	t.Helper()
 	en, _ := rd.nextData()
 	if en.Topic != "core.task.run-changed.v1" {
 		t.Fatalf("topic = %s", en.Topic)
 	}
-	var v tasks.RunView
+	var v tasks.RunPayload
 	if err := json.Unmarshal(en.Data, &v); err != nil {
 		t.Fatalf("run payload %s: %v", en.Data, err)
 	}
@@ -306,11 +306,11 @@ func TestRunView_CurrentRedactedWithoutUsersView(t *testing.T) {
 			if (got.Current != "") != tc.keepCurrent {
 				t.Errorf("Current = %q, kept = %v, want kept = %v", got.Current, got.Current != "", tc.keepCurrent)
 			}
-			got.Current, v.Current = "", ""
-			if got != v {
-				t.Errorf("redaction changed more than Current: %+v vs %+v", got, v)
+			want := tasks.NewRunPayload(v)
+			got.Current, want.Current = "", ""
+			if got != want {
+				t.Errorf("redaction changed more than Current: %+v vs %+v", got, want)
 			}
-			v.Current = "Dick Grayson joined the sweep"
 		})
 	}
 }
@@ -325,8 +325,8 @@ func TestRunViewRedactor_UndecodableIsBlanked(t *testing.T) {
 		}
 	}
 	// A nil checker blanks Current, as RedactRunView does.
-	out := redact(nil, json.RawMessage(`{"ID":"r1","Current":"Barbara Gordon"}`))
-	var v tasks.RunView
+	out := redact(nil, json.RawMessage(`{"id":"r1","current":"Barbara Gordon"}`))
+	var v tasks.RunPayload
 	if err := json.Unmarshal(out, &v); err != nil || v.Current != "" || v.ID != "r1" {
 		t.Errorf("nil-checker redact = %s (%v)", out, err)
 	}

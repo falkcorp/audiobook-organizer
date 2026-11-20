@@ -207,14 +207,6 @@ func (s *Server) listItems(w http.ResponseWriter, r *http.Request, _ *auth.Princ
 	s.writeJSON(w, http.StatusOK, body)
 }
 
-// logLineDTO is one line of a run's log.
-type logLineDTO struct {
-	At      time.Time         `json:"at"`
-	Level   string            `json:"level"`
-	Message string            `json:"message"`
-	Fields  map[string]string `json:"fields,omitempty"`
-}
-
 // getLog: GET /runs/{id}/log?limit=. Client.Log applies the definition's
 // View rule, and each line passes tasks.RedactLogAppended with the caller's
 // checker, the same function core.task.log-appended.v1 carries as its Redact,
@@ -226,14 +218,13 @@ func (s *Server) getLog(w http.ResponseWriter, r *http.Request, p *auth.Principa
 		s.write(w, r, *bad)
 		return
 	}
-	lines := make([]logLineDTO, 0, min(limit, 64))
+	lines := make([]tasks.LogAppended, 0, min(limit, 64))
 	for l, err := range s.d.Client.Log(r.Context(), runID(r), tasks.PageQuery{Page: tasks.PageLog, Limit: limit}) {
 		if err != nil {
 			s.fail(w, r, err)
 			return
 		}
-		red := tasks.RedactLogAppended(p.Perms, tasks.NewLogAppended(l))
-		lines = append(lines, logLineDTO{At: red.At, Level: red.Level, Message: red.Message, Fields: red.Fields})
+		lines = append(lines, tasks.RedactLogAppended(p.Perms, tasks.NewLogAppended(l)))
 		if len(lines) == limit {
 			break
 		}
