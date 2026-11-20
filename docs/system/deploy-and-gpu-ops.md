@@ -694,7 +694,9 @@ executes:
   it removes the directory when it ends, whether the install succeeded or not
   (the removal only runs for a path that matches the `mktemp` template under the
   export directory). The refusal message prints the same steps for a by-hand
-  run. The script re-runs itself with `python3 -I -B` either way. The recipe is
+  run, with `<the same arguments>` and no `--apply` of its own, so a root dry run
+  from the export (which never changes anything) shows the sudoers diff as well.
+  The script re-runs itself with `python3 -I -B` either way. The recipe is
   covered by a `make -n` test and by extracting the same archive into a scratch
   directory and running the installer from it; the `sudo` steps themselves have
   not been run on a host.

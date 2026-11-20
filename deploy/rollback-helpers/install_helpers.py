@@ -525,7 +525,7 @@ def main(argv: list[str] | None = None) -> int:
             "deploy/rollback-helpers deploy/audiobook-organizer.service "
             'scripts/storage_format_guard.py | sudo tar -x -f - --no-same-owner -C "$d" && '
             'sudo python3 -I -B "$d/deploy/rollback-helpers/install_helpers.py" '
-            '<the same arguments> --apply (then remove "$d" as root); '
+            '<the same arguments> (then remove "$d" as root); '
             "or just `make install-rollback-helpers APPLY=1`, which does all of this"
         )
     rh = load("rollback_helper", HERE / "rollback_helper.py")

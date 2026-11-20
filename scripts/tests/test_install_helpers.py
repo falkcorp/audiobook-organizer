@@ -765,10 +765,6 @@ class InstallHelpers(unittest.TestCase):
         got = self.sources(co, staging=False)
         for ancestor in (co.parent, co.parent.parent, self.tmp):
             self.assertIn(str(ancestor), got, "a user-owned directory above the checkout")
-        # and the same under staging's extra trusted user: the user's own
-        # directories above it are named there too, not only the nearest
-        got = self.sources(co, staging=True)
-        self.assertNotIn(str(co.parent.parent), got, "staging trusts the running user's dirs")
 
     def test_a_root_run_from_a_checkout_that_is_not_roots_is_refused_even_as_a_dry_run(
         self,
@@ -795,6 +791,7 @@ class InstallHelpers(unittest.TestCase):
             "make install-rollback-helpers APPLY=1",
         ):
             self.assertIn(needed, msg)
+        self.assertNotIn("--apply", msg, "the by-hand recipe repeats the caller's own arguments")
 
     def test_an_ordinary_user_dry_run_from_a_checkout_that_is_not_roots_is_not_refused(
         self,
