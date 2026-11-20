@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/kinds_chain.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: ca58ea3e-cc42-4a27-b1be-b532eb5a7b6e
 // last-edited: 2026-11-19
 

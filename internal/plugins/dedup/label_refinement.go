@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/label_refinement.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 4b8e2d7a-91c3-4f05-b6a8-3d0e5c7f1a92
 // last-edited: 2026-11-19
 

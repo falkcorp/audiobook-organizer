@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/run_all.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 428d4a76-207e-4f6e-8b0a-5f4d939690f2
 // last-edited: 2026-11-19
 

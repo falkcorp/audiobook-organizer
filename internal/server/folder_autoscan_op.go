@@ -1,5 +1,5 @@
 // file: internal/server/folder_autoscan_op.go
-// version: 1.11.1
+// version: 1.11.2
 // guid: 7b3e9f2a-4c1d-4e85-a6b8-2f0d5c8e1a93
 // last-edited: 2026-11-19
 //

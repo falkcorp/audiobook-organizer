@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/kinds_scoring.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 87767b32-a764-471a-bc6d-1b845dc5a45d
 // last-edited: 2026-11-19
 
