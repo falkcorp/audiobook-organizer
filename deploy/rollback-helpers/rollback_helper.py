@@ -62,8 +62,9 @@ Operations (the stub name, then the subcommand):
                      writes the fixed drop-in `[Service]\\nType=simple\\n` to
                      /etc/systemd/system/<unit>.d/zz-rollback-type-simple.conf;
                      notify removes it. Then `systemctl daemon-reload`.
-  install-staged     `install binary`, `install prev`, `install unit` or
-                     `install local-conf`, as root: the deploy. binary
+  install-staged     `install binary`, `install prev`, `install unit`,
+                     `install local-conf` or `install rollback ...`, as root:
+                     the deploy and the environment-restoring rollback. binary
                      installs stage_bin as <bin> atomically (copy to
                      <bin>.new, fsync, rename), keeping the replaced one as
                      <bin>.prev. prev installs stage_bin as <bin>.prev the
@@ -85,11 +86,38 @@ Operations (the stub name, then the subcommand):
                      no symlink in any path component, must be a regular file
                      owned by the deploy user (SUDO_UID) with one link, and
                      is read once.
+                     The service ENVIRONMENT is part of a rollback: the
+                     previous unit and local.conf drop-in are kept beside
+                     <bin>.prev as the one file <bin>.prev.env (mode 0600,
+                     written atomically, never printed). `install unit` and
+                     `install local-conf` capture the file they are about to
+                     replace into <bin>.prev.env.pending (the first capture of
+                     a deploy wins, so a rerun after a half-done deploy keeps
+                     the real previous environment); `install binary`, which is
+                     what rotates <bin>.prev, promotes the capture to
+                     <bin>.prev.env together with the sha256 of the binary it
+                     rotated (a deploy that never captured one snapshots the
+                     environment as it stands: it did not change it). `install
+                     rollback check` validates the snapshot with the same
+                     rules the installs use and prints its pairing, changing
+                     nothing; `install rollback apply paired|unpaired SHA256`
+                     is the rollback: it refuses unless <bin>.prev still has
+                     the sha256 the recipe checked (a deploy that landed in
+                     between), and, when `paired`, unless that is the binary
+                     the snapshot was taken with (`unpaired` is the operator's
+                     explicit word that it is, for a RELEASE= binary). It
+                     stages the binary, the unit and local.conf first and
+                     renames all three in a row, then `daemon-reload`s.
+                     It refuses, changing nothing, when the snapshot is
+                     missing or malformed rather than roll back half.
   pprof              `pprof on` or `pprof off`, as root. on writes the fixed
                      drop-in `[Service]\\nEnvironment=ABK_PPROF_ADDR=localhost:6060\\n`
                      to /etc/systemd/system/<unit>.d/pprof.conf; off removes
                      it. Then `systemctl daemon-reload`.
-  swap-prev          `swap-prev`, no arguments, as root. Keeps <bin> as
+  swap-prev          `swap-prev`, no arguments, as root: the BINARY only, kept
+                     as the manual emergency path (the recipes use `install
+                     rollback apply`, which restores the environment too).
+                     Keeps <bin> as
                      <bin>.rolled-back and installs <bin>.prev as <bin>
                      atomically (copy to <bin>.new, then rename), which also
                      avoids ETXTBSY on the running executable.
@@ -102,6 +130,7 @@ Install: docs/system/deploy-and-gpu-ops.md ("Rollback helpers").
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -1170,12 +1199,351 @@ def _read_template(cfg: dict[str, str]) -> bytes:
     return data
 
 
+# --- the service environment is part of a rollback ---------------------------
+#
+# <bin>.prev.env holds the unit file and the local.conf drop-in the PREVIOUS
+# binary ran under, as one JSON file so that one rename commits it. It is
+# root-only (mode 0600): local.conf carries secrets, and nothing prints it.
+
+ENV_VERSION = 1
+ENV_LIMIT = 2 * UNIT_LIMIT + 4096
+_HEX64 = re.compile(r"[0-9a-f]{64}")
+ENV_PARTS = ("unit", "local_conf")
+
+
+def _env_paths(cfg: dict[str, str]) -> tuple[str, str]:
+    """The committed snapshot and the capture a deploy is still making."""
+    return f"{cfg['bin']}.prev.env", f"{cfg['bin']}.prev.env.pending"
+
+
+def _live_env_path(cfg: dict[str, str], part: str) -> str:
+    if part == "unit":
+        return f"{SYSTEMD_DIR}/{cfg['unit']}"
+    return f"{SYSTEMD_DIR}/{cfg['unit']}.d/local.conf"
+
+
+def _sha256_file(path: str) -> str:
+    """sha256 of a regular file, opened without following a symlink; ""
+    when it does not exist. Anything else refuses."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return ""
+    except OSError as e:
+        raise RefusedError(f"cannot open {path} ({e.strerror}; a symlink is refused)") from e
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise RefusedError(f"{path} is not a regular file")
+        h = hashlib.sha256()
+        while True:
+            chunk = os.read(fd, 1 << 20)
+            if not chunk:
+                return h.hexdigest()
+            h.update(chunk)
+    finally:
+        os.close(fd)
+
+
+def _capture_env(cfg: dict[str, str], part: str) -> dict:
+    """The live file as a snapshot entry. A file that cannot be read under
+    _read_root_conf's rules is recorded as unreadable, never skipped: it must
+    not block the install that replaces it, and a rollback must not pretend
+    it knows what was there."""
+    try:
+        return {"present": True, "text": _read_root_conf(_live_env_path(cfg, part))}
+    except FileNotFoundError:
+        return {"present": False}
+    except RefusedError:
+        return {"unreadable": True}
+
+
+def _read_env_json(path: str, root_owned: bool) -> dict | None:
+    """The JSON object at path, or None when it is absent. A file that is
+    not a small regular file (owned by root unless root_owned is False), or
+    does not parse, raises RefusedError."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        raise RefusedError(f"cannot open {path} ({e.strerror}; a symlink is refused)") from e
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > ENV_LIMIT or not _owner_ok(st):
+            raise RefusedError(
+                f"{path} must be a regular file of at most {ENV_LIMIT} bytes, owned by root and "
+                "not writable by group or others"
+            )
+        data = _read_all(fd, ENV_LIMIT + 1)
+    finally:
+        os.close(fd)
+    try:
+        doc = json.loads(data.decode("utf-8", "strict"))
+    except (ValueError, UnicodeDecodeError) as e:
+        raise RefusedError(f"{path} does not parse as JSON") from e
+    if not isinstance(doc, dict):
+        raise RefusedError(f"{path} is not a JSON object")
+    return doc
+
+
+def _write_env_json(path: str, doc: dict) -> None:
+    _write_replace(path, json.dumps(doc, sort_keys=True).encode(), 0o600)
+
+
+def _forget_env(*paths: str) -> None:
+    for p in paths:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(p)
+
+
+def _env_capture(cfg: dict[str, str], part: str) -> None:
+    """Before install unit or local-conf replaces its file: keep that file as
+    this deploy's capture. The first capture wins, so a deploy rerun after a
+    half-done one still keeps the environment the previous BINARY ran under,
+    not the half-new one. A capture made under another binary than the one
+    installed now is stale (a rollback or a hand swap came between) and is
+    started again."""
+    _, pending_path = _env_paths(cfg)
+    try:
+        cur = _sha256_file(cfg["bin"])
+        pend = _read_env_json(pending_path, True)
+    except RefusedError:
+        pend, cur = None, _sha256_file(cfg["bin"])
+    if pend is not None and (pend.get("version") != ENV_VERSION or pend.get("bin_sha256") != cur):
+        pend = None
+    if pend is None:
+        pend = {"version": ENV_VERSION, "bin_sha256": cur}
+    if part in pend:
+        return
+    pend[part] = _capture_env(cfg, part)
+    try:
+        _write_env_json(pending_path, pend)
+    except OSError as e:
+        raise RefusedError(
+            f"keeping the {part.replace('_', '-')} being replaced for a rollback failed ({e}); nothing installed"
+        ) from e
+
+
+def _env_promote(cfg: dict[str, str], had_binary: bool) -> None:
+    """In install binary, once <bin>.prev holds the replaced binary: commit
+    the deploy's capture as <bin>.prev.env with the sha256 of that binary.
+    A part the deploy did not capture was not changed by it, so it is taken
+    as it stands. A capture the binary changed under (stale) is dropped, and
+    with it the snapshot: a rollback then refuses instead of restoring a
+    guess. A deploy with no binary to keep has nothing to roll back to."""
+    bundle_path, pending_path = _env_paths(cfg)
+    b = cfg["bin"]
+    if not had_binary:
+        _forget_env(bundle_path, pending_path)
+        return
+    try:
+        pend = _read_env_json(pending_path, True)
+    except RefusedError:
+        pend = {}
+    if pend is not None and (
+        pend.get("version") != ENV_VERSION or pend.get("bin_sha256") != _sha256_file(b)
+    ):
+        _forget_env(bundle_path, pending_path)
+        print(
+            f"warning: the environment capture for {b}.prev is stale, so there is no {bundle_path}: "
+            "a rollback refuses until the next deploy",
+            file=sys.stderr,
+        )
+        return
+    pend = pend or {}
+    doc = {"version": ENV_VERSION, "prev_sha256": _sha256_file(f"{b}.prev")}
+    for part in ENV_PARTS:
+        doc[part] = pend.get(part) or _capture_env(cfg, part)
+    _write_env_json(bundle_path, doc)
+    _forget_env(pending_path)
+
+
+def _read_snapshot(cfg: dict[str, str]) -> dict:
+    """<bin>.prev.env, validated; every refusal says what to do."""
+    path, _ = _env_paths(cfg)
+    dst = os.stat(os.path.dirname(path))
+    if not _owner_ok(dst):
+        raise RefusedError(f"{os.path.dirname(path)} is not owned by root or is group or world writable")
+    doc = _read_env_json(path, True)
+    if doc is None:
+        raise RefusedError(
+            f"no {path}: the unit and local.conf the previous binary ran under were not kept, so a "
+            "rollback would restore the binary alone. A deploy through install-staged keeps them"
+        )
+    sha = doc.get("prev_sha256")
+    if doc.get("version") != ENV_VERSION or not isinstance(sha, str) or not _HEX64.fullmatch(sha):
+        raise RefusedError(f"{path} is malformed (version or prev_sha256)")
+    for part in ENV_PARTS:
+        entry = doc.get(part)
+        if not isinstance(entry, dict):
+            raise RefusedError(f"{path} is malformed ({part})")
+        if entry.get("unreadable") is True:
+            raise RefusedError(
+                f"{path}: the {part.replace('_', '-')} that was replaced could not be read when it was kept "
+                "(not a root-owned regular file), so it cannot be restored"
+            )
+        if entry.get("present") is True and isinstance(entry.get("text"), str):
+            continue
+        if entry.get("present") is False and part == "local_conf":
+            continue
+        if entry.get("present") is False:
+            raise RefusedError(
+                f"{path}: no unit file existed before this deploy installed one, and a rollback does not "
+                "remove the unit"
+            )
+        raise RefusedError(f"{path} is malformed ({part})")
+    return doc
+
+
+def _check_restorable(cfg: dict[str, str], doc: dict) -> str | None:
+    """The rules install unit and install local-conf apply, applied to what
+    would be put back. Returns the local.conf to write: the kept drop-in
+    re-rendered through render_local_conf, so a drop-in an older tool or a
+    person wrote (not this helper) is held to the grammar and the denied
+    loader variables too, or None when there was no drop-in."""
+    _check_host_conf(cfg)
+    _check_unit_dropins(cfg)
+    _check_unit_fragment(cfg, installing_unit=True)
+    path, _ = _env_paths(cfg)
+    text = doc["unit"]["text"]
+    try:
+        _check_template(text, cfg, path)
+    except RefusedError as e:
+        raise RefusedError(f"the kept unit: {e}; nothing changed") from e
+    _check_rules(text, cfg, f"{path} (unit)")
+    if not doc["local_conf"].get("present"):
+        return None
+    try:
+        return render_local_conf(doc["local_conf"]["text"], "the kept local.conf")
+    except RefusedError as e:
+        raise RefusedError(f"the kept local.conf: {e}; nothing changed") from e
+
+
+def _env_summary(doc: dict) -> str:
+    lc = doc["local_conf"]
+    lines = (
+        sum(1 for ln in lc["text"].splitlines() if ln.lstrip().startswith("Environment="))
+        if lc.get("present")
+        else 0
+    )
+    return (
+        f"unit=present local_conf={'present' if lc.get('present') else 'absent'} "
+        f"environment_lines={lines}"
+    )
+
+
+def _rollback_env(cfg: dict[str, str], rest: list[str]) -> int:
+    """install rollback check paired|unpaired | apply paired|unpaired SHA256."""
+    usage = "install rollback check paired|unpaired | install rollback apply paired|unpaired SHA256"
+    if len(rest) == 2 and rest[0] == "check" and rest[1] in ("paired", "unpaired"):
+        apply = False
+    elif (
+        len(rest) == 3
+        and rest[0] == "apply"
+        and rest[1] in ("paired", "unpaired")
+        and _HEX64.fullmatch(rest[2])
+    ):
+        apply = True
+    else:
+        raise RefusedError(f"usage: {usage}", 2)
+    b = cfg["bin"]
+    prev = f"{b}.prev"
+    doc = _read_snapshot(cfg)
+    have = _sha256_file(prev)
+    if not have:
+        raise RefusedError(f"no {prev}: nothing to roll back to; nothing changed")
+    if rest[1] == "paired" and doc["prev_sha256"] != have:
+        raise RefusedError(
+            f"{prev} is not the binary the kept environment belongs to (the environment was kept when "
+            f"sha256 {doc['prev_sha256'][:12]}... was replaced; {prev} is {have[:12]}...), as after "
+            "`install prev` (RELEASE=). Nothing changed. If the kept environment is the one that binary "
+            "needs, say so: ROLLBACK_ENV=snapshot"
+        )
+    if not apply:
+        _check_restorable(cfg, doc)
+        print(f"env snapshot ok: current_prev_sha256={have} {_env_summary(doc)}")
+        return 0
+    if have != rest[2]:
+        raise RefusedError(
+            f"{prev} is not the file the rollback checked (sha256 {have[:12]}..., expected {rest[2][:12]}...): "
+            "a deploy or an install landed in between. Nothing changed; run the rollback again"
+        )
+    conf_text = _check_restorable(cfg, doc)
+    unit_dest = _live_env_path(cfg, "unit")
+    conf_dest = _live_env_path(cfg, "local_conf")
+    kept, new = f"{b}.rolled-back", f"{b}.new"
+    # Stage everything first: the renames below are the only steps that change
+    # a live path.
+    staged: list[tuple[str, str]] = []
+    try:
+        shutil.copy2(b, f"{kept}.tmp")
+        os.replace(f"{kept}.tmp", kept)
+    except OSError as e:
+        raise RefusedError(f"keeping {b} as {kept} failed ({e}); nothing changed") from e
+    try:
+        shutil.copy2(prev, new)
+        with open(new, "rb") as f:
+            os.fsync(f.fileno())
+        staged.append((new, b))
+        for text, dest in (
+            (doc["unit"]["text"], unit_dest),
+            (conf_text, conf_dest),
+        ):
+            if text is None:
+                continue
+            tmp = f"{dest}.tmp"
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(tmp)
+            os.makedirs(os.path.dirname(dest), mode=0o755, exist_ok=True)
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            with os.fdopen(fd, "wb") as f:
+                f.write(text.encode())
+                f.flush()
+                os.fchmod(f.fileno(), 0o644)
+                os.fsync(f.fileno())
+            staged.append((tmp, dest))
+    except OSError as e:
+        for tmp, _ in staged:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+        raise RefusedError(f"staging the rollback failed ({e}); nothing changed") from e
+    try:
+        # Environment first, binary last: a failure before the last rename
+        # leaves the old binary running under the restored environment's
+        # files, which `apply` run again finishes.
+        for tmp, dest in sorted(staged, key=lambda t: t[1] == b):
+            os.replace(tmp, dest)
+        if not doc["local_conf"].get("present"):
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(conf_dest)
+        _forget_env(_env_paths(cfg)[1])
+    except OSError as e:
+        raise RefusedError(
+            f"the rollback was interrupted ({e}): run `install rollback apply` again to finish it"
+        ) from e
+    print(
+        f"restored {prev} as {b} (the replaced binary is {kept}), the unit and the local.conf drop-in "
+        f"({_env_summary(doc)})"
+    )
+    try:
+        _daemon_reload()
+    except RefusedError as e:
+        raise RefusedError(
+            f"{e}; the binary, the unit and local.conf are already restored: run systemctl daemon-reload"
+        ) from e
+    return 0
+
+
 def op_install(args: list[str]) -> int:
-    _arity(args, 1, "install binary|prev|unit|local-conf")
+    usage = "install binary|prev|unit|local-conf|rollback ..."
+    if not args or args[0] not in ("binary", "prev", "unit", "local-conf", "rollback"):
+        raise RefusedError(f"usage: {usage}", 2)
     what = args[0]
-    if what not in ("binary", "prev", "unit", "local-conf"):
-        raise RefusedError("usage: install binary|prev|unit|local-conf", 2)
+    if what != "rollback":
+        _arity(args, 1, usage)
     cfg = load_config()
+    if what == "rollback":
+        return _rollback_env(cfg, args[1:])
     if what in ("unit", "local-conf"):
         # Before anything is read or copied: without a good host.conf the
         # base unit's ExecStart would run (no TLS, the wrong store), so
@@ -1187,6 +1555,7 @@ def op_install(args: list[str]) -> int:
         data = _read_template(cfg)
         os.makedirs(SYSTEMD_DIR, mode=0o755, exist_ok=True)
         dest = f"{SYSTEMD_DIR}/{cfg['unit']}"
+        _env_capture(cfg, "unit")
         _write_replace(dest, data, 0o644)
         print(f"installed the unit template {LIBDIR}/{UNIT_TEMPLATE} as {dest}")
         _daemon_reload()
@@ -1196,7 +1565,7 @@ def op_install(args: list[str]) -> int:
     if not src:
         raise RefusedError(f"{key} is not set in {CONFIG}: nothing to install from")
     if what == "binary":
-        return _install_binary(cfg["bin"], src)
+        return _install_binary(cfg, src)
     if what == "prev":
         return _install_prev(cfg["bin"], src)
     fd, _ = _read_staged(src, UNIT_LIMIT)
@@ -1217,22 +1586,35 @@ def op_install(args: list[str]) -> int:
     d = f"{SYSTEMD_DIR}/{cfg['unit']}.d"
     os.makedirs(d, mode=0o755, exist_ok=True)
     dest = f"{d}/local.conf"
+    _env_capture(cfg, "local_conf")
     _write_replace(dest, rendered.encode("ascii"), 0o644)
     print(f"rendered {dest} from the Environment= lines of {src}")
     _daemon_reload()
     return 0
 
 
-def _install_binary(b: str, src: str) -> int:
+def _install_binary(cfg: dict[str, str], src: str) -> int:
+    b = cfg["bin"]
     prev, new = f"{b}.prev", f"{b}.new"
     fd, _ = _read_staged(src, None)
     try:
-        if os.path.lexists(b):
+        had = os.path.lexists(b)
+        if had:
             try:
                 shutil.copy2(b, f"{prev}.tmp")
                 os.replace(f"{prev}.tmp", prev)
             except OSError as e:
                 raise RefusedError(f"keeping {b} as {prev} failed ({e}); {b} is unchanged") from e
+        try:
+            _env_promote(cfg, had)
+        except (OSError, RefusedError) as e:
+            # .prev is now the current binary: a snapshot of an older one
+            # must not outlive it.
+            _forget_env(*_env_paths(cfg))
+            raise RefusedError(
+                f"keeping the environment beside {prev} failed ({e}); {b} is unchanged, "
+                "and a rollback refuses until a deploy succeeds"
+            ) from e
         try:
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(new)

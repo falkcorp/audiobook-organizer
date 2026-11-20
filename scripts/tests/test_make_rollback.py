@@ -34,6 +34,7 @@ Run with:
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib.util
 import json
 import os
@@ -123,6 +124,7 @@ class FakeHost:
         shows=None,
         config=None,
         releases=None,
+        env_snapshot=True,
     ):
         self._tmp = tempfile.TemporaryDirectory()
         tc.addCleanup(self._tmp.cleanup)
@@ -192,6 +194,7 @@ class FakeHost:
             doc.update(record or {})
             (self.cp_area / f"{CHECKPOINT}.json").write_text(json.dumps(doc))
         self._install_helpers({"stage_bin": str(self.stage), **(config or {})})
+        self._install_environment(env_snapshot)
         self.server = fake_ssh.HealthServer([READY])
         tc.addCleanup(self.server.close)
         all_rules = list(rules or [])
@@ -295,6 +298,64 @@ class FakeHost:
         self.config.write_text("".join(f"{k} = {v}\n" for k, v in values.items() if v is not None))
         self.config.chmod(0o644)
 
+    # The unit and local.conf the PREVIOUS release ran under, kept beside
+    # .prev, and the ones the CURRENT release runs under, live on the host.
+    PREV_UNIT_MARK = "# the unit the previous release ran under\n"
+    PREV_CONF = "[Service]\nEnvironment=BATCAVE_PEERS=192.0.2.0/24\n"
+    CUR_CONF = "[Service]\nEnvironment=ABO_CORE_PEERS=192.0.2.0/24\n"
+
+    def _install_environment(self, snapshot: bool) -> None:
+        """The host's unit, host.conf and local.conf (the CURRENT release's),
+        and, unless snapshot is False, the environment a deploy through the
+        helpers kept beside .prev (the PREVIOUS release's), the file
+        `make rollback` and `make rollback-restore` put back with it."""
+        systemd = self.root / "systemd"
+        dropins = systemd / "audiobook-organizer.service.d"
+        dropins.mkdir(parents=True)
+        for d in (systemd, dropins):
+            d.chmod(0o755)
+        unit = (REPO_ROOT / "deploy" / "audiobook-organizer.service").read_text()
+        unit = (
+            unit.replace("User=audiobook", f"User={USER}")
+            .replace("Group=audiobook", f"Group={USER}")
+            .replace("/usr/local/bin/audiobook-organizer", str(self.bin))
+        )
+        self.unit_text = unit
+        self.unit_file = systemd / "audiobook-organizer.service"
+        self.unit_file.write_text(unit)
+        (dropins / "host.conf").write_text(
+            f"[Service]\nExecStart=\nExecStart={self.bin} serve --db {self.db}\nUser={USER}\n"
+        )
+        self.local_conf = dropins / "local.conf"
+        self.local_conf.write_text(self.CUR_CONF)
+        for p in (self.unit_file, dropins / "host.conf", self.local_conf):
+            p.chmod(0o644)
+        self.snapshot = Path(f"{self.bin}.prev.env")
+        if snapshot:
+            self.write_snapshot()
+
+    def write_snapshot(self, **over) -> None:
+        doc = {
+            "version": 1,
+            "prev_sha256": hashlib.sha256(self.prev.read_bytes()).hexdigest(),
+            "unit": {"present": True, "text": self.PREV_UNIT_MARK + self.unit_text},
+            "local_conf": {"present": True, "text": self.PREV_CONF},
+        }
+        doc.update(over)
+        self.snapshot.write_text(json.dumps(doc))
+        self.snapshot.chmod(0o600)
+
+    def conf_lines(self) -> list[str]:
+        """The Environment= lines of the live local.conf (the helper
+        re-renders the drop-in, so its comment header is not compared)."""
+        return [
+            ln for ln in self.local_conf.read_text().splitlines() if ln.startswith("Environment=")
+        ]
+
+    def environment(self) -> tuple[str, str]:
+        """The live unit file and local.conf."""
+        return self.unit_file.read_text(), self.local_conf.read_text()
+
     def make(
         self, target: str, guard: Path | None = None, **overrides
     ) -> subprocess.CompletedProcess:
@@ -308,6 +369,7 @@ class FakeHost:
             "ROLLBACK_IGNORE_FORMAT": "",
             "ROLLBACK_ARCHIVE": "",
             "RELEASE": "",
+            "ROLLBACK_ENV": "",
             "ROLLBACK_GUARD": str(guard or GUARD),
         }
         variables.update(overrides)
@@ -337,6 +399,7 @@ class FakeHost:
         for c in self.ssh():
             if (
                 "swap-prev" in c
+                or "install-staged rollback apply" in c
                 or "systemctl stop" in c
                 or "systemctl start" in c
                 or "systemctl restart" in c
@@ -384,8 +447,8 @@ class TestRollbackGuardRefusesAfterCutover(unittest.TestCase):
         self.assertEqual(p.returncode, 0, out(p))
         self.assertEqual(host.installed(), "prev")
         self.assertEqual(Path(f"{host.bin}.rolled-back").exists(), True)
-        self.assertGreater(host.index("systemctl restart"), host.index("swap-prev"))
-        self.assertGreater(host.index("swap-prev"), host.index("systemctl show -p InvocationID"))
+        self.assertGreater(host.index("systemctl restart"), host.index("rollback apply"))
+        self.assertGreater(host.index("rollback apply"), host.index("systemctl show -p InvocationID"))
         self.assertIn("--print-storage-levels", " ".join(host.ssh()))
         self.assertTrue(
             any(c.startswith(UNIT_SHOW[1:]) for c in host.ssh()), "the wait reads the unit"
@@ -546,13 +609,14 @@ class RollbackRestoreTest(unittest.TestCase):
             ".migration-checkpoint",  # the source
             f"checkpoint-record {CHECKPOINT}",
             ".prev --print-storage-levels",  # the level check
+            "install-staged rollback check paired",  # the kept environment, before the stop
             ".prev --print-capabilities",  # unit type, before the stop
             "unit-type notify",
             "systemctl show -p InvocationID",
             "systemctl stop",
             "systemctl show -p ActiveState,SubState audiobook",
             f"restore-offline checkpoint {CHECKPOINT}",
-            "swap-prev",
+            "install-staged rollback apply paired",
             "systemctl start",
             "systemctl show -p ActiveState,SubState,NRestarts,ExecMainStatus",
         )
@@ -773,7 +837,7 @@ class RollbackRestoreTest(unittest.TestCase):
         """After an R2 hotfix .prev is an R2 build; RELEASE names the R1 tag
         the checkpoint was taken under, and make fetches it."""
         host = FakeHost(self, prev={"levels": R2}, releases={"v0.41.0": {}})
-        p = host.make("rollback-restore", RELEASE="v0.41.0")
+        p = host.make("rollback-restore", RELEASE="v0.41.0", ROLLBACK_ENV="snapshot")
         self.assertEqual(p.returncode, 0, out(p))
         self.assert_order(
             host,
@@ -784,11 +848,12 @@ class RollbackRestoreTest(unittest.TestCase):
             f"updater fetch-release --version v0.41.0 --out {host.stage}",
             f"{host.stage} --print-storage-levels",
             "install-staged prev",
+            "install-staged rollback check unpaired",
             ".prev --print-capabilities",
             "unit-type notify",
             "systemctl stop",
             f"restore-offline checkpoint {CHECKPOINT}",
-            "swap-prev",
+            "install-staged rollback apply unpaired",
             "systemctl start",
         )
         fetch = next(c for c in host.ssh() if "updater fetch-release" in c)
@@ -809,7 +874,7 @@ class RollbackRestoreTest(unittest.TestCase):
     def test_release_needs_no_prev_to_exist(self) -> None:
         host = FakeHost(self, releases={"v0.41.0": {}})
         host.prev.unlink()
-        p = host.make("rollback-restore", RELEASE="v0.41.0")
+        p = host.make("rollback-restore", RELEASE="v0.41.0", ROLLBACK_ENV="snapshot")
         self.assertEqual(p.returncode, 0, out(p))
         self.assertEqual(host.installed(), "fetched-v0.41.0")
 
@@ -900,7 +965,7 @@ class RollbackRestoreTest(unittest.TestCase):
             releases={"v0.41.0": {}},
             rules=[{"match": "unit-type", "responses": [{"exit": 1, "stderr": "no\n"}]}],
         )
-        p = host.make("rollback-restore", RELEASE="v0.41.0")
+        p = host.make("rollback-restore", RELEASE="v0.41.0", ROLLBACK_ENV="snapshot")
         self.assertNotEqual(p.returncode, 0, out(p))
         self.assertIn("matching the unit type failed", out(p))
         self.assertIn("release v0.41.0's binary", out(p))
@@ -1034,7 +1099,7 @@ class ReviewProbes(unittest.TestCase):
             self,
             rules=[
                 {
-                    "match": r"cp \S+\.prev |swap-prev",
+                    "match": r"cp \S+\.prev |install-staged rollback apply",
                     "responses": [
                         {"stderr": "cp: error writing: No space left on device\n", "exit": 1}
                     ],
@@ -1184,6 +1249,154 @@ def sudo_commands(shell: str) -> list[str]:
     return out
 
 
+def service_environment(host: FakeHost) -> dict[str, str]:
+    """The environment systemd would give the service on its next start: the
+    unit file's Environment= lines, then each drop-in's, in file-name order
+    (systemd.unit(5)). Only the plain KEY=value form the helpers write."""
+    env: dict[str, str] = {}
+    files = [host.unit_file, *sorted((host.unit_file.parent / (host.unit_file.name + ".d")).glob("*.conf"))]
+    for f in files:
+        for line in f.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("Environment="):
+                k, _, v = line[len("Environment=") :].strip('"').partition("=")
+                env[k] = v
+    return env
+
+
+def boot_peers(host: FakeHost) -> str:
+    """What the binary now at DEPLOY_BIN reports as its peer allowlist when it
+    starts under the unit and drop-ins now on the host."""
+    p = subprocess.run(
+        [str(host.bin), "--print-peers"],
+        env={**os.environ, **service_environment(host)},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return p.stdout.strip()
+
+
+class RollbackRestoresEnvironment(unittest.TestCase):
+    """A rollback restores the unit and local.conf the previous binary ran
+    under, with the binary, or refuses before it changes anything.
+
+    After an env-name change the previous build reads only the old names: put
+    back alone under the new drop-in, its peer allowlist fails open and its
+    CF Access, ABS JWT and owner-email settings are gone."""
+
+    def test_drill_the_previous_build_boots_under_the_pre_flip_environment(self) -> None:
+        host = FakeHost(self)
+        self.assertEqual(
+            boot_peers(host), "OPEN (fails open)", "the current drop-in uses the new names"
+        )
+        p = host.make("rollback")
+        self.assertEqual(p.returncode, 0, out(p))
+        self.assertEqual(host.installed(), "prev")
+        self.assertEqual(boot_peers(host), "192.0.2.0/24", "the allowlist is back")
+        self.assertEqual(host.conf_lines(), ["Environment=BATCAVE_PEERS=192.0.2.0/24"])
+        self.assertEqual(host.environment()[0], host.PREV_UNIT_MARK + host.unit_text)
+
+    def test_drill_control_a_binary_only_swap_boots_the_previous_build_open(self) -> None:
+        """The failure the fix removes, run on the same host: `swap-prev` puts
+        the binary back and nothing else."""
+        host = FakeHost(self)
+        proc = subprocess.run(
+            ["ssh", HOST, f"sudo -n {guard.HELPER_DIR}/swap-prev"],
+            env=dict(host.h["env"]),
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(host.installed(), "prev")
+        self.assertEqual(boot_peers(host), "OPEN (fails open)")
+
+    def test_rollback_restore_puts_the_environment_back_too(self) -> None:
+        host = FakeHost(self)
+        p = host.make("rollback-restore")
+        self.assertEqual(p.returncode, 0, out(p))
+        self.assertEqual(host.installed(), "prev")
+        self.assertEqual(host.conf_lines(), ["Environment=BATCAVE_PEERS=192.0.2.0/24"])
+        self.assertEqual(boot_peers(host), "192.0.2.0/24")
+
+    def test_the_environment_is_checked_before_anything_is_stopped(self) -> None:
+        for target, hk in (("rollback", {}), ("rollback-restore", {})):
+            with self.subTest(target=target):
+                host = FakeHost(self, env_snapshot=False, **hk)
+                before = host.environment()
+                p = host.make(target)
+                self.assertNotEqual(p.returncode, 0, out(p))
+                self.assertIn("binary alone", out(p))
+                self.assertIn("Nothing was stopped", out(p))
+                self.assertEqual(host.changes(), [], "no stop, no swap, no restore")
+                self.assertEqual(host.installed(), "current")
+                self.assertEqual(host.environment(), before)
+                self.assertEqual(
+                    sum("systemctl show -p InvocationID" in c for c in host.ssh()),
+                    0,
+                    "refused before the unit is even inspected",
+                )
+
+    def test_a_snapshot_the_helper_refuses_stops_the_rollback_before_any_change(self) -> None:
+        host = FakeHost(self)
+        host.write_snapshot(unit={"present": True, "text": host.unit_text.replace("User=alfred", "User=root")})
+        before = host.environment()
+        p = host.make("rollback-restore")
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertIn("the kept unit", out(p))
+        self.assertEqual(host.changes(), [])
+        self.assertEqual(host.environment(), before)
+        self.assertEqual(host.restores(), [])
+
+    def test_a_release_prev_needs_the_operator_to_say_the_environment_fits(self) -> None:
+        host = FakeHost(self, prev={"levels": R2}, releases={"v0.41.0": {}})
+        before = host.environment()
+        p = host.make("rollback-restore", RELEASE="v0.41.0")
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertIn("ROLLBACK_ENV=snapshot", out(p))
+        self.assertEqual(host.changes(), [], "nothing stopped or restored")
+        self.assertEqual(host.environment(), before)
+        self.assertEqual(
+            fake_ssh.fake_app_name(host.prev),
+            "fetched-v0.41.0",
+            "the release was installed as .prev before the check, as the recipe says",
+        )
+        host2 = FakeHost(self, prev={"levels": R2}, releases={"v0.41.0": {}})
+        p2 = host2.make("rollback-restore", RELEASE="v0.41.0", ROLLBACK_ENV="snapshot")
+        self.assertEqual(p2.returncode, 0, out(p2))
+        self.assertEqual(host2.conf_lines(), ["Environment=BATCAVE_PEERS=192.0.2.0/24"])
+
+    def test_the_swap_holds_the_hash_the_check_read(self) -> None:
+        host = FakeHost(self)
+        p = host.make("rollback")
+        self.assertEqual(p.returncode, 0, out(p))
+        want = hashlib.sha256(host.prev.read_bytes()).hexdigest()
+        apply = next(c for c in host.ssh() if "rollback apply" in c)
+        self.assertTrue(apply.endswith(f"rollback apply paired {want}"), apply)
+
+    def test_rollback_env_is_empty_or_snapshot(self) -> None:
+        host = FakeHost(self)
+        p = host.make("rollback", ROLLBACK_ENV="yes")
+        self.assertEqual(p.returncode, 2, out(p))
+        self.assertIn("ROLLBACK_ENV", out(p))
+        self.assertEqual(host.ssh(), [], "refused before the host is read")
+
+    def test_a_failed_swap_names_the_command_that_finishes_it(self) -> None:
+        host = FakeHost(
+            self,
+            rules=[
+                {
+                    "match": r"install-staged rollback apply",
+                    "responses": [{"stderr": "rollback helper: boom\n", "exit": 1}],
+                }
+            ],
+        )
+        p = host.make("rollback")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("unit and local.conf failed", out(p))
+        self.assertFalse(any("systemctl restart" in c for c in host.ssh()))
+
+
 class SudoersDrift(unittest.TestCase):
     """The drop-in is rendered from the commands the recipes run; this
     checks it grants every one of them, has no `*`, and that the doc's
@@ -1196,7 +1409,11 @@ class SudoersDrift(unittest.TestCase):
             ("rollback", {}, {}),
             ("rollback-restore", {}, {}),
             ("rollback-restore", {"ROLLBACK_ARCHIVE": ARCHIVE}, {"pointer": False}),
-            ("rollback-restore", {"RELEASE": "v0.41.0"}, {"releases": {"v0.41.0": {}}}),
+            (
+                "rollback-restore",
+                {"RELEASE": "v0.41.0", "ROLLBACK_ENV": "snapshot"},
+                {"releases": {"v0.41.0": {}}},
+            ),
         ):
             host = FakeHost(self, **host_kw)
             p = host.make(target, **kw)
