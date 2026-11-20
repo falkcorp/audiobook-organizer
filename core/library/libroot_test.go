@@ -275,7 +275,7 @@ func TestReportPathRefusesWhenWorldWriteCannotBeRemoved(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := defaultReportEnv()
-	env.chmod = func(string, os.FileMode) error { return errors.New("operation not permitted") }
+	env.chmod = func(*os.File, os.FileMode) error { return errors.New("operation not permitted") }
 	called := false
 	_, err := reportPathNotify(root, "", "r.tsv", func(string, os.FileMode) { called = true }, env)
 	if err == nil || !strings.Contains(err.Error(), "world write could not be removed") || !strings.Contains(err.Error(), "777") {
@@ -790,7 +790,7 @@ func TestLedgerPathNotifyRefusesWhenGroupWriteCannotBeRemoved(t *testing.T) {
 			t.Fatal(err)
 		}
 		env := defaultReportEnv()
-		env.chmod = func(string, os.FileMode) error { return errors.New("operation not permitted") }
+		env.chmod = func(*os.File, os.FileMode) error { return errors.New("operation not permitted") }
 		called := false
 		_, err := confinedPathNotify(ledgerDir(), root, "", "l.jsonl", func(string, os.FileMode) { called = true }, env)
 		if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "report") {
@@ -852,5 +852,157 @@ func TestLedgerPathNotifyRefusesAnUnusableLedgerDirNamingTheLedger(t *testing.T)
 	_, err = LedgerPathNotify(root, "l.jsonl", "", nil)
 	if err == nil || !strings.Contains(err.Error(), "symlink") || strings.Contains(err.Error(), "report") {
 		t.Fatalf("a symlinked ledger dir must be refused for an explicit name too, got %v", err)
+	}
+}
+
+// swapForSymlink is what another user who can write the library root does in the
+// window between a directory being checked and being changed: the directory is
+// moved aside and a symlink to somewhere else is put at its name.
+func swapForSymlink(t *testing.T, target string) func(dir string) {
+	t.Helper()
+	return func(dir string) {
+		if err := os.Rename(dir, dir+".moved"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A directory swapped for a symlink after it was checked must not have its target
+// changed: chmod follows symlinks, so a path-based chmod would loosen (here:
+// tighten, but the same call) a directory the process never vetted. The refusal is
+// made and the target keeps its mode and receives nothing.
+func TestConfinedDirSwappedForASymlinkAfterTheCheckIsNotChmodded(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		kind func() confinedDir
+		mode os.FileMode // of the real directory; the swap target gets the same
+	}{
+		{"report", reportDir, 0o777},
+		{"ledger", ledgerDir, 0o775},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, _ := reportRootFor(t)
+			kind := tc.kind()
+			dir := filepath.Join(root, kind.name)
+			if err := os.Mkdir(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(dir, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			victim := t.TempDir()
+			if err := os.Chmod(victim, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			env := defaultReportEnv()
+			env.afterDirChecked = swapForSymlink(t, victim)
+			called := false
+			err := ensureConfinedDir(kind, dir, func(string, os.FileMode) { called = true }, env)
+			if err == nil {
+				t.Fatal("a directory swapped for a symlink must be refused")
+			}
+			if info, serr := os.Stat(victim); serr != nil || info.Mode().Perm() != tc.mode {
+				t.Fatalf("the symlink target was changed: mode %v err %v, want %o", info.Mode().Perm(), serr, tc.mode)
+			}
+			if ents, _ := os.ReadDir(victim); len(ents) != 0 {
+				t.Fatalf("the symlink target received a file: %v", ents)
+			}
+			if called {
+				t.Fatal("the callback must not run for a directory that was not changed")
+			}
+		})
+	}
+}
+
+// The writability probe is made in the directory that was checked, not wherever
+// the name points when the probe runs: a directory that needs no chmod and is
+// swapped for a symlink is refused, and nothing is created through the link.
+func TestConfinedDirSwappedForASymlinkAfterTheCheckIsNotProbed(t *testing.T) {
+	for _, kind := range []confinedDir{reportDir(), ledgerDir()} {
+		t.Run(kind.noun, func(t *testing.T) {
+			root, _ := reportRootFor(t)
+			dir := filepath.Join(root, kind.name)
+			if err := os.Mkdir(dir, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			victim := t.TempDir()
+			env := defaultReportEnv()
+			env.afterDirChecked = swapForSymlink(t, victim)
+			if err := ensureConfinedDir(kind, dir, nil, env); err == nil {
+				t.Fatal("a directory swapped for a symlink must be refused, not probed through the link")
+			}
+			if ents, _ := os.ReadDir(victim); len(ents) != 0 {
+				t.Fatalf("the symlink target received a file: %v", ents)
+			}
+		})
+	}
+}
+
+// The same swap after the directory was opened and shown to be the checked one:
+// the chmod and the probe act on the descriptor, so the real directory (now under
+// another name) is the one changed and probed, and the symlink's target, which
+// nothing vetted, keeps its mode and receives nothing.
+func TestConfinedDirSwappedForASymlinkAfterItIsOpenedIsChangedByHandle(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		kind func() confinedDir
+		mode os.FileMode // the real directory's, and the swap target's
+		want os.FileMode // the real directory's after
+	}{
+		{"report chmod", reportDir, 0o777, 0o775},
+		{"ledger chmod", ledgerDir, 0o775, 0o755},
+		{"report probe only", reportDir, 0o775, 0o775},
+		{"ledger probe only", ledgerDir, 0o750, 0o750},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, _ := reportRootFor(t)
+			kind := tc.kind()
+			dir := filepath.Join(root, kind.name)
+			if err := os.Mkdir(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(dir, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			victim := t.TempDir()
+			if err := os.Chmod(victim, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			env := defaultReportEnv()
+			env.afterDirOpened = swapForSymlink(t, victim)
+			if err := ensureConfinedDir(kind, dir, nil, env); err != nil {
+				t.Fatalf("the directory that was checked is still there under another name: %v", err)
+			}
+			if info, err := os.Stat(victim); err != nil || info.Mode().Perm() != tc.mode {
+				t.Fatalf("the symlink target was changed: %v %v, want %o", info, err, tc.mode)
+			}
+			if ents, _ := os.ReadDir(victim); len(ents) != 0 {
+				t.Fatalf("the symlink target received a file: %v", ents)
+			}
+			real, err := os.Stat(dir + ".moved")
+			if err != nil || real.Mode().Perm() != tc.want {
+				t.Fatalf("the directory that was checked has mode %v (%v), want %o", real, err, tc.want)
+			}
+			if ents, _ := os.ReadDir(dir + ".moved"); len(ents) != 0 {
+				t.Fatalf("the probe was left behind in the checked directory: %v", ents)
+			}
+		})
+	}
+}
+
+// A successful preparation leaves the directory empty: the probe is removed.
+func TestConfinedDirProbeLeavesNothingBehind(t *testing.T) {
+	for _, kind := range []confinedDir{reportDir(), ledgerDir()} {
+		root, _ := reportRootFor(t)
+		dir := filepath.Join(root, kind.name)
+		if err := ensureConfinedDir(kind, dir, nil, defaultReportEnv()); err != nil {
+			t.Fatal(err)
+		}
+		if ents, _ := os.ReadDir(dir); len(ents) != 0 {
+			t.Fatalf("%s: the probe was left behind: %v", kind.noun, ents)
+		}
 	}
 }
