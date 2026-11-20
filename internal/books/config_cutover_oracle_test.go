@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -22,26 +24,50 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 )
 
-// headEffective is the Config HEAD's loaders produce from the fixture's store:
-// the shipped defaults (ResetToDefaultsForTest), then LoadConfigFromDatabase over
-// a copy of the store, as serve ran them. The fixture is not touched.
-func headEffective(t *testing.T, fx *flipFixture) config.Config {
+// The differential oracle's HEAD side is FROZEN. testdata/config_oracle/{defaults,populated}.json
+// were produced at d3d767304, while HEAD's own loaders were still in the tree, by
+// saving a Config through HEAD's SaveConfigToDatabase (the "rows": the blob with its
+// secrets zeroed, and the secret rows) and loading it back with
+// LoadConfigFromDatabase over a copy of the store (the "config": what HEAD's serve
+// would have run with). "defaults" saved the shipped defaults. "populated" saved the
+// shipped defaults with every scalar moved off its value (a bool flipped, a number
+// plus one, a string list lengthened) and the settings a perturbation cannot invent
+// set to realistic values: OAuth sign-in on with a GitHub and a Google client id and
+// secret, allowed emails, role "editor", a redirect base URL, the OpenAI key, the
+// Hardcover token, the Google Books key, and credentials on the google-books and
+// hardcover metadata sources. The loaders are deleted (F3-07 loader), so the goldens
+// cannot be regenerated; they are read-only evidence of what HEAD produced.
+
+type oracleRow struct {
+	Key    string `json:"key"`
+	Type   string `json:"type"`
+	Secret bool   `json:"secret"`
+	Value  string `json:"value"`
+}
+
+type oracleGolden struct {
+	Rows   []oracleRow   `json:"rows"`
+	Config config.Config `json:"config"`
+}
+
+func loadOracleGolden(t *testing.T, name string) oracleGolden {
 	t.Helper()
-	copyDir := t.TempDir()
-	require.NoError(t, copyTree(fx.dbDir, copyDir))
-	store, err := database.NewPebbleStore(copyDir + "/books.pebble")
+	raw, err := os.ReadFile(filepath.Join("testdata", "config_oracle", name+".json"))
 	require.NoError(t, err)
-	defer func() { require.NoError(t, store.Close()) }()
-	withConfig(t, config.Config{DatabasePath: fx.dbPath, RootDir: fx.dbDir})
-	config.ResetToDefaultsForTest()
-	require.NoError(t, config.LoadConfigFromDatabase(store))
-	// serve validates the loaded config; Validate also normalizes (a zero minimum
-	// book size and rescan age take their defaults), so the loaded value is the
-	// validated one. Its errors (paths of a store that is not a real install) are
-	// not the oracle's.
-	c := config.Snapshot()
-	_ = c.Validate()
-	return c
+	var g oracleGolden
+	require.NoError(t, json.Unmarshal(raw, &g))
+	require.NotEmpty(t, g.Rows)
+	return g
+}
+
+// seedRows writes the golden's settings rows the way HEAD's save left them (secret
+// rows encrypted under the fixture's key by SetSetting).
+func (g oracleGolden) seedRows(t *testing.T) func(*database.PebbleStore) {
+	return func(s *database.PebbleStore) {
+		for _, r := range g.Rows {
+			require.NoError(t, s.SetSetting(r.Key, r.Value, r.Type, r.Secret))
+		}
+	}
 }
 
 // flattenConfig is a Config as dotted JSON paths to leaf values, slices and maps
@@ -74,104 +100,6 @@ func join(prefix, k string) string {
 	}
 	return prefix + "." + k
 }
-
-// configDiff is the paths whose values differ, sorted, as "path: head -> flipped".
-func configDiff(head, flipped map[string]string) []string {
-	var out []string
-	for _, k := range slices.Sorted(maps.Keys(head)) {
-		if h, f := head[k], flipped[k]; h != f {
-			out = append(out, fmt.Sprintf("%s: %s -> %s", k, h, f))
-		}
-	}
-	for _, k := range slices.Sorted(maps.Keys(flipped)) {
-		if _, ok := head[k]; !ok {
-			out = append(out, fmt.Sprintf("%s: (absent) -> %s", k, flipped[k]))
-		}
-	}
-	return out
-}
-
-// headSaved seeds the store the way an R0 serve left it after a settings save:
-// the shipped defaults with edit applied, written by HEAD's own SaveConfigToDatabase
-// (the blob without its secrets, the secrets as encrypted rows).
-func headSaved(t *testing.T, edit func(*config.Config)) func(*database.PebbleStore) {
-	return func(s *database.PebbleStore) {
-		withConfig(t, config.Config{})
-		config.ResetToDefaultsForTest()
-		if edit != nil {
-			config.Mutate(edit)
-		}
-		require.NoError(t, config.SaveConfigToDatabase(s))
-	}
-}
-
-// perturbConfig sets every scalar leaf of c to a value that is not its current
-// one: a bool flips, a number moves by 7, a string gets a suffix, a string list
-// gets one more element. It walks nested structs and leaves maps, pointers and
-// lists of structs alone (they have their own fixtures). A leaf whose json path
-// is in skip is left as is.
-func perturbConfig(c *config.Config, skip map[string]bool) {
-	perturbValue(reflect.ValueOf(c).Elem(), "", skip)
-}
-
-func perturbValue(v reflect.Value, prefix string, skip map[string]bool) {
-	t := v.Type()
-	for i := range t.NumField() {
-		f := t.Field(i)
-		if !f.IsExported() {
-			continue
-		}
-		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
-		if name == "" || name == "-" {
-			continue
-		}
-		path := join(prefix, name)
-		if skip[path] || perturbSkipped(path) {
-			continue
-		}
-		fv := v.Field(i)
-		switch fv.Kind() {
-		case reflect.Struct:
-			perturbValue(fv, path, skip)
-		case reflect.Bool:
-			fv.SetBool(!fv.Bool())
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			fv.SetInt(fv.Int() + 1)
-		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			fv.SetUint(fv.Uint() + 1)
-		case reflect.Float32, reflect.Float64:
-			fv.SetFloat(fv.Float() - 0.5)
-		case reflect.String:
-			if freeText[path] {
-				fv.SetString(fv.String() + "-gotham")
-			}
-		}
-	}
-}
-
-// perturbSkip are the settings the perturbation leaves at their value, by json
-// path or prefix, each for a stated reason: the flipped boot, like HEAD's, refuses
-// a stored value the environment decides.
-var perturbSkip = []struct{ prefix, why string }{
-	{"enable_auth", "the authentication switch: a flipped value gates the health probe this harness waits on; TestAuthSwitch_MoreRestrictiveWins owns it"},
-	{"basic_auth", "the Basic gate: same as enable_auth; TestBasicGate_MoreRestrictiveWins owns it"},
-	{"abs_", "environment-authoritative: a stored value that differs from the environment's is refused at boot"},
-}
-
-func perturbSkipped(path string) bool {
-	for _, p := range perturbSkip {
-		if strings.HasPrefix(path, p.prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-// freeText are the string settings with no validator beyond "a string": the only
-// strings the perturbation changes (every other string is an enum, a path, a URL
-// or a list element with a format, and a changed one is refused by HEAD's own
-// validation, which is not what the oracle measures).
-var freeText = map[string]bool{}
 
 // oracleLossy are the paths at which a flipped Config is allowed to differ from
 // the one HEAD's loaders built from the same store, each with the reason and where
@@ -261,39 +189,13 @@ func pruneEmpty(v any, top bool) any {
 
 func isEmptyJSON(v any) bool { return v == nil || v == "" }
 
-// oracleFixture is a Config an operator who used every settings page would have
-// saved: every scalar moved off its default (perturbConfig) plus the settings the
-// perturbation cannot invent, with realistic values (OAuth sign-in with its
-// secrets, API keys as plain Batman-named values).
-func oracleFixture(c *config.Config) {
-	perturbConfig(c, nil)
-	c.OAuthEnabled = true
-	c.OAuthGithubClientID = "gotham-gh-client-7f3a9c41"
-	c.OAuthGithubClientSecret = "gotham-gh-client-secret"
-	c.OAuthGoogleClientID = "gotham-g-client-1b6e4d92.apps.example"
-	c.OAuthGoogleClientSecret = "gotham-g-client-secret"
-	c.OAuthAllowedEmails = "bruce@wayne.example,alfred@wayne.example"
-	c.OAuthDefaultRole = "editor"
-	c.OAuthRedirectBaseURL = "https://batcave.example"
-	c.OpenAIAPIKey = "batman-openai-key"
-	c.HardcoverAPIToken = "robin-hardcover-token"
-	c.GoogleBooksAPIKey = "batgirl-google-books-key"
-	for i := range c.MetadataSources {
-		switch c.MetadataSources[i].ID {
-		case "google-books":
-			c.MetadataSources[i].Credentials = map[string]string{"apiKey": "nightwing-source-key"}
-		case "hardcover":
-			c.MetadataSources[i].Credentials = map[string]string{"apiKey": "oracle-source-key"}
-		}
-	}
-}
-
 func TestConfigCutover_EffectiveConfigUnchanged(t *testing.T) {
 	used := map[string]bool{}
-	run := func(name string, edit func(*config.Config), after func(t *testing.T, fx *flipFixture, head, flipped config.Config)) {
+	run := func(name string, after func(t *testing.T, fx *flipFixture, head, flipped config.Config)) {
 		t.Run(name, func(t *testing.T) {
-			fx := newFlipFixture(t, headSaved(t, edit), "")
-			head := headEffective(t, fx)
+			golden := loadOracleGolden(t, name)
+			fx := newFlipFixture(t, golden.seedRows(t), "")
+			head := golden.Config
 			var flipped config.Config
 			fx.runFlipped(t, func(*composed) {
 				flipped = config.Snapshot()
@@ -345,8 +247,8 @@ func TestConfigCutover_EffectiveConfigUnchanged(t *testing.T) {
 			}
 		})
 	}
-	run("factory_defaults", nil, nil)
-	run("every_setting_populated", oracleFixture, func(t *testing.T, _ *flipFixture, head, flipped config.Config) {
+	run("defaults", nil)
+	run("populated", func(t *testing.T, _ *flipFixture, head, flipped config.Config) {
 		// The populated fixture really populated what it claims to, on both sides.
 		require.Equal(t, "editor", head.OAuthDefaultRole)
 		require.Equal(t, head.OpenAIAPIKey, flipped.OpenAIAPIKey)

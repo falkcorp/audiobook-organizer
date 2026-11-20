@@ -13,6 +13,7 @@ import (
 
 	coreconfig "github.com/falkcorp/mediacore/config"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 )
 
@@ -42,9 +43,10 @@ func missingRows(t *testing.T) []string {
 }
 
 func TestMaintenanceWindow_StoredWindowProjectsFromCore(t *testing.T) {
-	fx := newFlipFixture(t, headSaved(t, func(c *config.Config) {
-		c.Maintenance.Enabled, c.Maintenance.WindowStart, c.Maintenance.WindowEnd = false, 3, 6
-	}), "")
+	fx := newFlipFixture(t, func(s *database.PebbleStore) {
+		// The stored shape of HEAD's save: the window is a nested object in config_blob.
+		require.NoError(t, s.SetSetting("config_blob", `{"maintenance":{"enabled":false,"window_start":3,"window_end":6}}`, "json", false))
+	}, "")
 	var got windowView
 	var missing []string
 	fx.runFlipped(t, func(*composed) {

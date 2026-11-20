@@ -571,23 +571,19 @@ func lastLine(s string) string {
 // ---------------------------------------------------------------- the build under test
 
 // cutoverBootConfig returns the config edit and options that boot the
-// composition on the store copy at work as serve does (on disk, the stored
-// settings loaded with their paths pointed at the copy, the copy's own key).
+// composition on the store copy at work as serve does (on disk, paths pointed at
+// the copy, the copy's own key).
 func cutoverBootConfig(t *testing.T, work string) (func(*config.Config), func(*app.Options)) {
 	t.Helper()
 	stateDir := filepath.Join(work, "state")
 	key, err := os.ReadFile(database.EncryptionKeyPath(stateDir))
 	require.NoError(t, err, "the corpus holds no settings key")
 	edit := func(c *config.Config) {
-		c.DatabasePath = storeDB(work)
-		c.RootDir = filepath.Join(work, "library")
+		pointConfigAtStore(c, work)
 		cutoverBootEnv(c)
 	}
 	opt := func(o *app.Options) {
 		o.StorageFS = storage.FS{}
-		// The stored settings, paths pointed at the copy, then the boot's own
-		// environment re-applied (loadStoredConfigAt says why).
-		loadStoredConfigAt(t, work, cutoverBootEnv)
 		// sandboxStateDirAt wrote a fixed key; the corpus' secrets are
 		// encrypted under its own.
 		require.NoError(t, os.WriteFile(database.EncryptionKeyPath(stateDir), key, 0o600))
