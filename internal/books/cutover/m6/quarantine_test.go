@@ -35,7 +35,7 @@ const (
 	rInstanceConflict = "core already holds a different instance under this ID"
 	rAliasNoRoot      = "the path alias's root is no library root and no ancestor of one: its display rendering is not carried"
 	rAliasSubRoot     = "the path alias's root is inside a library root, not at one, and core's aliases are per root: its display rendering is not carried"
-	rAliasShadowed    = "every library root under the path alias's root has a more specific alias: it rendered none of their paths, and its display rendering is not carried"
+	rAliasShadowed    = "every library root at or under the path alias's root matched an alias listed before it first: HEAD rendered none of their paths with it, and its display rendering is not carried"
 	rRootPath         = "the root path is not an absolute host path"
 	rUnreadMember     = "a settings blob member that no part of M6 reads"
 )
@@ -196,12 +196,24 @@ func TestQuarantine_Cases(t *testing.T) {
 			raw:  map[string]string{memberPrefix + "path_aliases.1": `{"root":"` + rootDir + `/itunes","windows":"I:"}`},
 		},
 		{
-			name: "path alias over roots that each have their own",
+			// HEAD's matchAlias takes the first alias in list order whose root
+			// contains the path; nothing sorts the list. The parent listed first
+			// rendered every path of both roots, so the roots' own aliases listed
+			// after it never rendered one (TestAliasCarry_FirstMatchInListOrder).
+			name: "path alias listed after a parent alias that matched first",
 			opts: []func(*rig){withBlob(func(tree map[string]any) {
 				tree["path_aliases"] = append(tree["path_aliases"].([]any),
 					map[string]any{"root": "/batcave/import", "windows": "I:"},
 					map[string]any{"root": importOne, "windows": "G:"},
 					map[string]any{"root": importThree, "windows": "A:"})
+			})},
+			want: map[string]string{memberPrefix + "path_aliases.2": rAliasShadowed, memberPrefix + "path_aliases.3": rAliasShadowed},
+		},
+		{
+			// A second alias at the same root never rendered anything at HEAD.
+			name: "second path alias at the same root",
+			opts: []func(*rig){withBlob(func(tree map[string]any) {
+				tree["path_aliases"] = append(tree["path_aliases"].([]any), map[string]any{"root": rootDir, "windows": "X:"})
 			})},
 			want: map[string]string{memberPrefix + "path_aliases.1": rAliasShadowed},
 		},

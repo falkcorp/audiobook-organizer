@@ -43,9 +43,16 @@ func capabilityID(id string) string {
 // (internal/aidispatch/capabilities.go), frozen here and pinned both ways by
 // TestCapabilityID_CoversEveryHEADCapability. A tick outside it is one HEAD
 // kept on load and ignored in selection (AIEndpoint.UnknownCapabilities); core's
-// endpoint validator refuses such a tick on an import (it has no stored row to
-// grandfather it), which would quarantine the whole endpoint, so M6 drops the
-// tick instead and reports it. A wildcard is never a HEAD capability.
+// endpoint validator (ai.Router.ValidateEndpoint) refuses such a tick on an
+// import (it has no stored row to grandfather it), which would quarantine the
+// whole endpoint, so M6 drops the tick instead and reports it. A wildcard is
+// never a HEAD capability. At this head
+// ImportInstance runs only its structural check (core/integrations importer.go
+// checkImport); the refusal arrives with #4804 (F7-09 T3), whose validateImport
+// runs the adapter's validator on an import, together with F7-09's ai adapter
+// wiring, which makes that ai.Router.ValidateEndpoint. The alternative T3 round 1
+// raised, grandfathering stored ticks on an import as Put does for a stored
+// row, was not taken: HEAD selected by none of them, so nothing is lost.
 var headCapabilities = map[string]bool{
 	"llm.filename_parse": true, "llm.audiobook_parse": true, "llm.cover_art_vision": true,
 	"llm.author_review": true, "llm.author_discovery": true, "llm.metadata_rerank": true,

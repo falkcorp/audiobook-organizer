@@ -304,7 +304,7 @@ func TestRootsCutover_FromHEADFixture(t *testing.T) {
 		t.Errorf("aliases %v", roots[0]["aliases"])
 	}
 	// import-2 is below books-library and has no alias of its own: HEAD rendered
-	// its paths through books-library's (the longest alias root over them), so it
+	// its paths through books-library's (the first alias whose root contains them), so it
 	// carries that alias with its relative path appended, in each form.
 	if al, _ := roots[2]["aliases"].([]any); len(al) != 1 ||
 		al[0].(map[string]any)["windows"] != `W:\incoming` || al[0].(map[string]any)["unc"] != `\\gotham\books\incoming` ||
@@ -396,5 +396,81 @@ func TestMetadataMigration_MaxConcurrentReportedDropped(t *testing.T) {
 	}))
 	if !strings.Contains(reportText(r), "note|metadata/google-books|dropped: rate_limit.max_concurrent 3 has no native field") {
 		t.Errorf("the dropped max_concurrent is not reported:\n%s", reportText(r))
+	}
+}
+
+// rootAliases runs the fixture with its path_aliases replaced by list and
+// returns each root's Windows alias renderings by root ID.
+func rootAliases(t *testing.T, list []any, opts ...func(*rig)) map[string][]string {
+	t.Helper()
+	_, s := runFixture(t, append([]func(*rig){withBlob(func(tree map[string]any) { tree["path_aliases"] = list })}, opts...)...)
+	var roots []map[string]any
+	if err := json.Unmarshal(s.Rows[string(ownerConfig)]["core.library.roots"], &roots); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string][]string{}
+	for _, ro := range roots {
+		al, _ := ro["aliases"].([]any)
+		for _, a := range al {
+			out[ro["id"].(string)] = append(out[ro["id"].(string)], a.(map[string]any)["windows"].(string))
+		}
+	}
+	return out
+}
+
+// TestAliasCarry_FirstMatchInListOrder: each root takes the first alias in list
+// order whose root is its path or an ancestor, which is what HEAD's matchAlias
+// rendered its paths with, whatever the specificity. Parent first, the parent
+// renders both import roots; child first, the child renders its root and the
+// parent the other.
+func TestAliasCarry_FirstMatchInListOrder(t *testing.T) {
+	parent := map[string]any{"root": "/batcave/import", "windows": "I:"}
+	gotham := map[string]any{"root": importOne, "windows": "G:"}
+	got := rootAliases(t, []any{parent, gotham})
+	if !slices.Equal(got["import-1"], []string{`I:\gotham`}) || !slices.Equal(got["import-3"], []string{`I:\arkham`}) {
+		t.Errorf("parent first: %v, want the parent carried to both import roots", got)
+	}
+	got = rootAliases(t, []any{gotham, parent})
+	if !slices.Equal(got["import-1"], []string{"G:"}) || !slices.Equal(got["import-3"], []string{`I:\arkham`}) {
+		t.Errorf("child first: %v, want G: on import-1 and the parent carried to import-3", got)
+	}
+}
+
+// TestAliasCarry_NestedAncestorsFirstListedWins: two ancestors of a root, the
+// outer listed first: the outer is the one HEAD matched, so the root renders
+// through it; listed the other way round, through the inner one.
+func TestAliasCarry_NestedAncestorsFirstListedWins(t *testing.T) {
+	outer := map[string]any{"root": "/batcave", "windows": "B:"}
+	inner := map[string]any{"root": "/batcave/import", "windows": "I:"}
+	if got := rootAliases(t, []any{outer, inner}); !slices.Equal(got["import-1"], []string{`B:\import\gotham`}) {
+		t.Errorf("outer first: import-1 %v, want the outer alias carried", got["import-1"])
+	}
+	if got := rootAliases(t, []any{inner, outer}); !slices.Equal(got["import-1"], []string{`I:\gotham`}) {
+		t.Errorf("inner first: import-1 %v, want the inner alias carried", got["import-1"])
+	}
+}
+
+// TestAliasCarry_SiblingPrefixIsNoAncestor: /batcave/import/goth is a string
+// prefix of /batcave/import/gotham but not an ancestor, so it renders nothing of
+// import-1 and is quarantined as near no root.
+func TestAliasCarry_SiblingPrefixIsNoAncestor(t *testing.T) {
+	_, s := runFixture(t, withBlob(func(tree map[string]any) {
+		tree["path_aliases"] = []any{map[string]any{"root": "/batcave/import/goth", "windows": "S:"}}
+	}))
+	var roots []map[string]any
+	if err := json.Unmarshal(s.Rows[string(ownerConfig)]["core.library.roots"], &roots); err != nil {
+		t.Fatal(err)
+	}
+	for _, ro := range roots {
+		if al, has := ro["aliases"]; has {
+			t.Errorf("%s took %v from a sibling-prefix alias", ro["id"], al)
+		}
+	}
+	found := false
+	for _, q := range s.Quarantine {
+		found = found || q.Key == memberPrefix+"path_aliases.0" && q.Reason == rAliasNoRoot
+	}
+	if !found {
+		t.Errorf("the sibling-prefix alias was not quarantined as near no root: %v", s.Quarantine)
 	}
 }

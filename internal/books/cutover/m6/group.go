@@ -47,8 +47,14 @@ type groupRun struct {
 	seen  map[integrations.Ref]string
 	// exact is, for the list being converted, each instance ID some entry
 	// already has as its HEAD ID, with that entry's member: the ID it wins
-	// whatever the order (exactIDs).
+	// whatever the order (exactIDs), unless it is not written (settleDeferred).
 	exact map[integrations.Ref]string
+	// deferred is the renamed entries of the list whose new ID is another
+	// entry's exact HEAD ID, decided once the list is done (settleDeferred).
+	deferred []*pending
+	// openAIKeyUsed: a written AI instance refers to, or copies, the stored
+	// OpenAI key.
+	openAIKeyUsed bool
 }
 
 func (g *groupRun) quarantineMember(member string, raw []byte, reason string) error {
@@ -57,16 +63,18 @@ func (g *groupRun) quarantineMember(member string, raw []byte, reason string) er
 
 // instance imports p, refusing a second instance under an ID this pass already
 // wrote (two sources whose IDs collide after the rename): the later one is
-// quarantined, never written over the first.
+// quarantined, never written over the first. A renamed entry whose new ID is
+// another entry's exact HEAD ID waits for the end of the list (settleDeferred).
 func (g *groupRun) instance(ctx context.Context, p *pending) error {
-	ref := p.inst.Config.Ref
-	if owner, taken := g.exact[ref]; taken && p.renamedFrom != "" && owner != p.member {
-		// The entry whose HEAD ID already is this ID keeps it, listed before or
-		// after: the renamed one is the duplicate (and must not take that entry's
-		// credentials, which M2 stored under this very name).
-		g.m.report(Entry{Kind: "instance", ID: ref.String(), Detail: "id already taken by " + owner + ", whose HEAD id it is"})
-		return g.quarantineMember(p.member, p.raw, reasonInstanceConflict)
+	if owner, taken := g.exact[p.inst.Config.Ref]; taken && p.renamedFrom != "" && owner != p.member {
+		g.deferred = append(g.deferred, p)
+		return nil
 	}
+	return g.write(ctx, p)
+}
+
+func (g *groupRun) write(ctx context.Context, p *pending) error {
+	ref := p.inst.Config.Ref
 	if first, dup := g.seen[ref]; dup {
 		g.m.report(Entry{Kind: "instance", ID: ref.String(), Detail: "id already taken by " + first})
 		return g.quarantineMember(p.member, p.raw, reasonInstanceConflict)
@@ -78,7 +86,43 @@ func (g *groupRun) instance(ctx context.Context, p *pending) error {
 	}
 	if wrote {
 		g.wrote[ref] = true
+		g.openAIKeyUsed = g.openAIKeyUsed || p.usesOpenAIKey
 	}
+	return nil
+}
+
+// settleDeferred decides the renamed entries that landed on another entry's
+// exact HEAD ID, once every entry of the list has been tried. The entry whose
+// HEAD ID it is keeps the ID, listed before or after, when it was written: the
+// renamed one is the duplicate (and must not take that entry's credentials,
+// which M2 stored under this very name). When that entry was not written (it
+// did not decode, or core refused it or holds another instance under the ID),
+// nothing holds the ID and the first renamed entry takes it. It still takes
+// no credential M2 stored under the new name, which belongs to that entry
+// (secretRefs reports each), except the one aiInstance binds on purpose: HEAD's
+// OpenAI key, for a row whose auth_ref sent it that key.
+func (g *groupRun) settleDeferred(ctx context.Context) error {
+	for _, p := range g.deferred {
+		ref := p.inst.Config.Ref
+		owner := g.exact[ref]
+		if g.wrote[ref] {
+			g.m.report(Entry{Kind: "instance", ID: ref.String(), Detail: "id already taken by " + owner + ", whose HEAD id it is"})
+			if err := g.quarantineMember(p.member, p.raw, reasonInstanceConflict); err != nil {
+				return err
+			}
+			continue
+		}
+		if g.seen[ref] == owner {
+			delete(g.seen, ref)
+		}
+		if _, dup := g.seen[ref]; !dup {
+			g.m.report(Entry{Kind: "note", ID: ref.String(), Detail: owner + ", whose HEAD id this is, was not written, so " + p.member + " (HEAD id " + p.renamedFrom + ") takes the id"})
+		}
+		if err := g.write(ctx, p); err != nil {
+			return err
+		}
+	}
+	g.deferred = nil
 	return nil
 }
 
@@ -199,6 +243,9 @@ func (g *groupRun) instances(ctx context.Context) error {
 				return err
 			}
 		}
+		if err := g.settleDeferred(ctx); err != nil {
+			return err
+		}
 	}
 	// ai_endpoints
 	haveOpenAI := false
@@ -218,6 +265,8 @@ func (g *groupRun) instances(ctx context.Context) error {
 				}
 				continue
 			}
+			// Decided by the new ID: a row renamed to openai is the row HEAD's
+			// synthesis would collide with, and a second ai/openai is a duplicate.
 			if p.inst.Config.Ref.Instance == instanceOpenAI {
 				haveOpenAI = true
 			}
@@ -225,10 +274,18 @@ func (g *groupRun) instances(ctx context.Context) error {
 				return err
 			}
 		}
+		if err := g.settleDeferred(ctx); err != nil {
+			return err
+		}
 	}
 	g.exact = nil
-	// The row HEAD synthesises when an OpenAI key is stored and no stored row has
-	// the ID openai (internal/config/ai_endpoints.go).
+	// The row standing for HEAD's legacy OpenAI path, synthesised when an OpenAI
+	// key is stored and no row has the ID openai. HEAD's own synthesis ran only
+	// while ai_endpoints was absent (internal/config/ai_endpoints.go
+	// migrateAIEndpointsBlob), but with ai_endpoints_routing off, its default,
+	// every call site outside the routed ones read the key from the scalars
+	// whatever the list held (internal/server/ai_ops.go,
+	// internal/plugins/maintenance/dedup_ops.go), so a stored key was in use.
 	if !haveOpenAI && g.set[secretOpenAI] {
 		var base string
 		if raw, ok := g.top["openai_base_url"]; ok {
@@ -249,6 +306,12 @@ func (g *groupRun) instances(ctx context.Context) error {
 				return err
 			}
 		}
+	}
+	if g.set[secretOpenAI] && !g.openAIKeyUsed {
+		// A row renamed to openai with no auth_ref suppresses the synthesis and
+		// takes no ref under its new name (secretRefs): HEAD's key then reaches
+		// no instance. Said, never silent.
+		g.m.report(Entry{Kind: "note", ID: integrations.Ref{Kind: integrations.KindAI, Instance: instanceOpenAI}.String(), Detail: "the stored OpenAI key " + string(secretOpenAI) + " is referred to by no migrated AI endpoint: it stays in the store, unreferenced; bind it to an endpoint to use it"})
 	}
 	// download_client.torrent daemon fields and deluge_web_url
 	if err := g.deluge(ctx); err != nil {
