@@ -16,6 +16,7 @@ import (
 	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // kernelEvents is the App's one events.Bus and its catalog (05-events §5E.6;
@@ -67,11 +68,14 @@ func newKernelEvents(p *metrics.Provider, l *slog.Logger, queueSize int, closeDr
 
 // coreTopics are the catalog entries core declares. Each is registered only
 // when its owner lands (05-events §5E.3.1 "Core topics"): core.rbac.changed.v1
-// with F4-08, the core.task.* topics with the tasks flip (F5), the backup,
-// integration-health and auth topics with their owning rows. The status topic
-// is health's (F8-03, 05-health §5H.3.3); the rest do not exist yet. Nothing
-// declares any of them until F4-08 wires declareCore.
-func coreTopics() []events.TopicSpec { return []events.TopicSpec{health.StatusTopicSpec()} }
+// with F4-08, the backup, integration-health and auth topics with their owning
+// rows. The status topic is health's (F8-03, 05-health §5H.3.3); the three
+// core.task.* specs are tasks' (F6-03 E6a), declared here with no publisher
+// until the executor publishes them (F5-18); the rest do not exist yet.
+// Nothing declares any of them until F4-08 wires declareCore.
+func coreTopics() []events.TopicSpec {
+	return []events.TopicSpec{health.StatusTopicSpec(), tasks.RunChangedTopicSpec(), tasks.LogAppendedTopicSpec(), tasks.FinishedTopicSpec()}
+}
 
 // declareCore declares core's topics; a refusal is a core problem (Module "").
 func (ke *kernelEvents) declareCore(topics []events.TopicSpec) []module.Problem {
