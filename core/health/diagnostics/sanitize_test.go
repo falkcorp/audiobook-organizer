@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"unicode"
@@ -539,8 +540,9 @@ func plant(pre string, f plantForm, names []string, final, suf string) string {
 
 // checkPlanted is the invariant: the planted marker, and every word of the
 // planted names, is gone from the output; the output is idempotent; and it
-// satisfies the structural property.
-func checkPlanted(t testing.TB, s Sanitizer, in, marker string, nameWords []string) {
+// satisfies the structural property. It returns the output, so a caller that
+// checks more of it does not sanitize the same input again.
+func checkPlanted(t testing.TB, s Sanitizer, in, marker string, nameWords []string) string {
 	t.Helper()
 	got := s.Text(in)
 	if strings.Contains(got, marker) {
@@ -555,7 +557,19 @@ func checkPlanted(t testing.TB, s Sanitizer, in, marker string, nameWords []stri
 		t.Fatalf("not idempotent: Text(%q) = %q, then %q", in, got, again)
 	}
 	checkStructure(t, in, got)
+	return got
 }
+
+// structEntity and structDrive are checkStructure's patterns. checkStructure
+// runs on every input of the planted cross product (about 1.4 million), so they
+// are compiled once, not per call (the {1,32} repeat expands to 32 copies), and
+// a word is matched against one only when it holds the byte the pattern needs
+// ("&", ":"): the backtracker allocates a bitmap per match, which was most of
+// the remaining cost under -race.
+var (
+	structEntity = regexp.MustCompile(`&(#|[A-Za-z0-9]{1,32};)`) // 32 is the sanitizer's entity-name bound (the longest HTML name is 31)
+	structDrive  = regexp.MustCompile(`^["'(\[{<]*[A-Za-z]:`)
+)
 
 // checkStructure is the structural property, written without reading the
 // sanitizer: no word of the output holds a separator, "%", "~", an entity or
@@ -563,24 +577,21 @@ func checkPlanted(t testing.TB, s Sanitizer, in, marker string, nameWords []stri
 // and "i/o".
 func checkStructure(t testing.TB, in, got string) {
 	t.Helper()
-	entity := regexp.MustCompile(`&(#|[A-Za-z0-9]{1,32};)`) // 32 is the sanitizer's entity-name bound (the longest HTML name is 31)
-	drive := regexp.MustCompile(`^["'(\[{<]*[A-Za-z]:`)
 	for _, w := range strings.FieldsFunc(got, unicode.IsSpace) {
 		switch strings.ToLower(w) { // the errno texts match ignoring ASCII case
 		case "input/output", "i/o", "input/output,", "fork/exec":
 			continue
 		}
-		if strings.ContainsAny(w, `/\%~`) || entity.MatchString(w) || drive.MatchString(w) {
+		if strings.ContainsAny(w, `/\%~`) || (strings.IndexByte(w, '&') >= 0 && structEntity.MatchString(w)) || (strings.IndexByte(w, ':') >= 0 && structDrive.MatchString(w)) {
 			t.Fatalf("Text(%q) = %q: the word %q can still be a location", in, got, w)
 		}
 	}
 }
 
 // checkSuffix: a known error text at the end of the line stays, and any other
-// suffix is lost with the location.
-func checkSuffix(t testing.TB, s Sanitizer, in, suf string) {
+// suffix is lost with the location. got is Text(in), as checkPlanted returned it.
+func checkSuffix(t testing.TB, in, got, suf string) {
 	t.Helper()
-	got := s.Text(in)
 	if keptSuffix(suf) {
 		if !strings.HasSuffix(got, suf) {
 			t.Fatalf("Text(%q) = %q lost the error text %q", in, got, suf)
@@ -597,39 +608,52 @@ func checkSuffix(t testing.TB, s Sanitizer, in, suf string) {
 // TestSanitize_PlantedMarkerNeverAppears is the invariant over a cross product
 // of forms, names, finals, prefixes and suffixes, and over a seeded random
 // sample of one- to three-name locations.
+//
+// The cross product is about 1.4 million inputs, so each form is a parallel
+// subtest and the random sample is one more: the Sanitizer is read-only after
+// NewSanitizer (its roots and errno index are only read by Text), so the shards
+// share it, and the run uses every core instead of one. The sample is drawn
+// from one seeded stream in one shard, so it is the same sample on every run.
 func TestSanitize_PlantedMarkerNeverAppears(t *testing.T) {
 	s := testSanitizer()
 	words := plantedNameWords()
-	n := 0
-	for _, f := range plantForms() {
-		for _, name := range plantNames() {
-			for _, fin := range plantFinals() {
-				for _, pre := range plantPrefixes() {
-					for _, suf := range plantSuffixes() {
-						in := plant(pre, f, []string{name}, fin, suf)
-						checkPlanted(t, s, in, "Hush", words)
-						checkSuffix(t, s, in, suf)
-						n++
+	forms, names, finals, pres, sufs := plantForms(), plantNames(), plantFinals(), plantPrefixes(), plantSuffixes()
+	var n atomic.Int64
+	// Parallel subtests run after this function returns; a cleanup runs after them.
+	t.Cleanup(func() { t.Logf("%d planted inputs", n.Load()) })
+	for i, f := range forms {
+		t.Run(fmt.Sprintf("form%02d", i), func(t *testing.T) {
+			t.Parallel()
+			local := 0
+			for _, name := range names {
+				for _, fin := range finals {
+					for _, pre := range pres {
+						for _, suf := range sufs {
+							in := plant(pre, f, []string{name}, fin, suf)
+							checkSuffix(t, in, checkPlanted(t, s, in, "Hush", words), suf)
+							local++
+						}
 					}
 				}
 			}
-		}
+			n.Add(int64(local))
+		})
 	}
-	rng := rand.New(rand.NewPCG(2026, 11))
-	forms, names, finals, pres, sufs := plantForms(), plantNames(), plantFinals(), plantPrefixes(), plantSuffixes()
-	for range 60_000 {
-		k := 1 + rng.IntN(3)
-		var ns []string
-		for range k {
-			ns = append(ns, names[rng.IntN(len(names))])
+	t.Run("random", func(t *testing.T) {
+		t.Parallel()
+		rng := rand.New(rand.NewPCG(2026, 11))
+		for range 60_000 {
+			k := 1 + rng.IntN(3)
+			var ns []string
+			for range k {
+				ns = append(ns, names[rng.IntN(len(names))])
+			}
+			suf := sufs[rng.IntN(len(sufs))]
+			in := plant(pres[rng.IntN(len(pres))], forms[rng.IntN(len(forms))], ns, finals[rng.IntN(len(finals))], suf)
+			checkSuffix(t, in, checkPlanted(t, s, in, "Hush", words), suf)
+			n.Add(1)
 		}
-		suf := sufs[rng.IntN(len(sufs))]
-		in := plant(pres[rng.IntN(len(pres))], forms[rng.IntN(len(forms))], ns, finals[rng.IntN(len(finals))], suf)
-		checkPlanted(t, s, in, "Hush", words)
-		checkSuffix(t, s, in, suf)
-		n++
-	}
-	t.Logf("%d planted inputs", n)
+	})
 }
 
 // FuzzSanitizerText: the planted marker never appears, and no word of the two
@@ -1157,7 +1181,9 @@ func TestSanitize_OpsAreLinear(t *testing.T) {
 		if got > bound {
 			t.Errorf("%s: %d steps for %d bytes, want at most %d", name, got, len(in), bound)
 		}
-		small, big := opsOf(s, mk(mib/4)), opsOf(s, mk(mib))
+		// got is already the 1 MiB count (the step count of the same input is the
+		// same every time), so only the 256 KiB size is sanitized again.
+		small, big := opsOf(s, mk(mib/4)), got
 		if small == 0 || float64(big) > 4.4*float64(small) {
 			t.Errorf("%s: %d steps at 256 KiB and %d at 1 MiB: the cost is not linear in the input", name, small, big)
 		}
@@ -1183,10 +1209,11 @@ func TestSanitize_CollidingKeysAreLinear(t *testing.T) {
 	const n = 50_000
 	x := make(map[string]any, n)
 	total := 0
+	s := testSanitizer() // one Sanitizer, as a build has: NewSanitizer builds its errno index per call
 	for i := range n {
 		k := fmt.Sprintf("/Users/bruce/My Books/%05d.m4b", i)
 		x[k] = i
-		total += opsOf(testSanitizer(), k)
+		total += opsOf(s, k)
 	}
 	if total > 64*n*40 {
 		t.Errorf("%d steps to sanitize %d keys", total, n)
