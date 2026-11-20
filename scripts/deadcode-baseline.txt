@@ -983,15 +983,6 @@ internal/books/writer/metafetchgate.Wrap
 internal/books/writer/metafetchgate.book
 internal/books/writer/metafetchgate.file
 internal/books/writer/metafetchgate.of
-internal/books/writer/writertest.ForSet
-internal/books/writer/writertest.New
-internal/books/writer/writertest.Writer.Do
-internal/books/writer/writertest.Writer.MarkRowApplied
-internal/books/writer/writertest.Writer.Refusals
-internal/books/writer/writertest.Writer.RequireClean
-internal/books/writer/writertest.Writer.RowApplied
-internal/books/writer/writertest.Writer.Stamped
-internal/books/writer/writertest.Writer.Writes
 internal/cfaccess.Extension
 internal/cfaccess.extension.Authenticate
 internal/cfaccess.extension.Name
