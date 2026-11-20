@@ -1024,7 +1024,8 @@ rollback:
 	@[ -n "$(DEPLOY_URL)" ] || (echo "ERROR: DEPLOY_URL is empty. Set DEPLOY_URL (or API_URL, or DEPLOY_HOST) in Makefile.local or export it."; exit 1)
 	@ROLLBACK_IGNORE_FORMAT="$(ROLLBACK_IGNORE_FORMAT)" python3 scripts/deploy_rollback.py rollback \
 	  --guard="$(ROLLBACK_GUARD)" --host="$(DEPLOY_HOST)" --bin="$(DEPLOY_BIN)" --db="$(DEPLOY_DB)" \
-	  --url="$(DEPLOY_URL)" --unit="$(DEPLOY_UNIT)" --timeout="$(DEPLOY_READY_TIMEOUT)"
+	  --url="$(DEPLOY_URL)" --unit="$(DEPLOY_UNIT)" --timeout="$(DEPLOY_READY_TIMEOUT)" \
+	  --env="$(ROLLBACK_ENV)"
 
 ## rollback-restore: Restore the pre-upgrade checkpoint (or ROLLBACK_ARCHIVE=<file name in the helpers' archive_dir>) with the current binary, then reinstall .prev and start; RELEASE=<tag> first fetches that release as .prev (requires DEPLOY_HOST, DEPLOY_BIN, DEPLOY_DB; DEPLOY_URL as for rollback)
 #
@@ -1066,7 +1067,7 @@ rollback-restore:
 	@python3 scripts/deploy_rollback.py restore \
 	  --guard="$(ROLLBACK_GUARD)" --host="$(DEPLOY_HOST)" --bin="$(DEPLOY_BIN)" --db="$(DEPLOY_DB)" \
 	  --url="$(DEPLOY_URL)" --unit="$(DEPLOY_UNIT)" --timeout="$(DEPLOY_READY_TIMEOUT)" \
-	  --archive="$(ROLLBACK_ARCHIVE)" --release="$(RELEASE)"
+	  --archive="$(ROLLBACK_ARCHIVE)" --release="$(RELEASE)" --env="$(ROLLBACK_ENV)"
 
 # Quick aliases
 .PHONY: t c b v

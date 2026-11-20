@@ -173,6 +173,14 @@ class Opts:
     # recipes read: "" = DEPLOY_BIN.prev, the fetched file once a RELEASE was
     # fetched and has not been installed.
     prev_path: str = ""
+    # The environment (unit and local.conf) kept beside <bin>.prev goes back
+    # with it. "paired" holds the helper to the binary the environment was
+    # kept with; ROLLBACK_ENV=snapshot says "unpaired": the kept environment
+    # is the one this <bin>.prev needs (a RELEASE= binary never matches).
+    # prev_sha256 is what `install rollback check` read from <bin>.prev,
+    # which `apply` must find unchanged.
+    env_mode: str = "paired"
+    prev_sha256: str = ""
 
     @property
     def prev(self) -> str:
@@ -233,7 +241,16 @@ def commands(o: Opts, name: str = "") -> dict[str, str]:
         "restart": f"sudo -n /usr/bin/systemctl restart {o.unit}",
         "unit_type_simple": f"sudo -n {h}/unit-type simple",
         "unit_type_notify": f"sudo -n {h}/unit-type notify",
+        # The binary alone: the manual emergency path. The recipes use
+        # swap_env, which puts the unit and local.conf back with it.
         "swap": f"sudo -n {h}/swap-prev",
+        "env_check": f"sudo -n {h}/install-staged rollback check {o.env_mode}",
+        # An operator's hand-typed recovery line has no checked hash: it
+        # reads the .prev that is there at that moment.
+        "swap_env": (
+            f"sudo -n {h}/install-staged rollback apply {o.env_mode} "
+            + (o.prev_sha256 or f"$(sha256sum {o.bin}.prev | cut -d' ' -f1)")
+        ),
         "install_binary": f"sudo -n {h}/install-staged binary",
         "install_unit": f"sudo -n {h}/install-staged unit",
         "install_local_conf": f"sudo -n {h}/install-staged local-conf",
@@ -845,6 +862,10 @@ def _validate(o: Opts) -> str:
         return f"checkpoint_dir {o.checkpoint_dir!r} must be an absolute path of letters, digits and ._/@+-"
     if o.archive and (not _ARCHIVE_NAME.fullmatch(o.archive) or ".." in o.archive):
         return f"ROLLBACK_ARCHIVE {o.archive!r} must be a file name in archive_dir (letters, digits and ._-, no /)"
+    if o.env_mode not in ("paired", "unpaired"):
+        return f"ROLLBACK_ENV {o.env_mode!r} must be empty or snapshot"
+    if o.prev_sha256 and not re.fullmatch(r"[0-9a-f]{64}", o.prev_sha256):
+        return "the .prev hash is not 64 hex digits"
     if o.release and not _RELEASE_TAG.fullmatch(o.release):
         return (
             f"RELEASE {o.release!r} must be a release tag such as v1.2.3 (letters, digits and ._+-)"

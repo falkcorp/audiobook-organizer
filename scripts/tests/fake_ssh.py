@@ -188,6 +188,12 @@ if args == ["--print-storage-format"]:
         unknown("--print-storage-format")
     print(IDENT["format"])
     sys.exit(0)
+if args == ["--print-peers"]:
+    # What the PREVIOUS build reads at boot to decide who may connect: its own
+    # (pre-flip) env name. Absent, it fails open, which is the incident a
+    # rollback that restored the binary alone would cause.
+    print(os.environ.get("BATCAVE_PEERS") or "OPEN (fails open)")
+    sys.exit(0)
 if args == ["--print-capabilities"]:
     if IDENT.get("capabilities") is None:
         unknown("--print-capabilities")

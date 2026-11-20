@@ -125,6 +125,7 @@ class Run:
             unit=a.unit,
             archive=getattr(a, "archive", "") or "",
             release=getattr(a, "release", "") or "",
+            env_mode="unpaired" if getattr(a, "env", "") == "snapshot" else "paired",
         )
         self.get = guard.SSH(self.o)
         # RELEASE's file in stage_bin: fetched and not yet installed as .prev,
@@ -278,6 +279,41 @@ class Run:
             )
         return 0
 
+    def check_env(self) -> int:
+        """Before anything is stopped or changed: the environment (unit and
+        local.conf) kept beside <bin>.prev must exist, be valid and belong to
+        it. The helper's answer carries the hash of .prev that the swap then
+        holds it to, so a deploy landing in between is refused."""
+        o = self.o
+        self.say(
+            f"→ Checking the unit and local.conf kept beside {o.bin}.prev (install-staged rollback check)..."
+        )
+        r = self.g.run_remote(o.host, self.cmd("env_check"), timeout=120)
+        out = self.g.clean(r.stdout)
+        m = self.g.re.search(r"current_prev_sha256=([0-9a-f]{64})", out)
+        if r.rc != 0 or not m:
+            why = self.g._cause(r) if r.rc != 0 else "the helper's answer carried no hash"
+            return self.refuse(
+                f"REFUSING: the environment kept beside {o.bin}.prev cannot be restored with it ({why}). "
+                f"Nothing was stopped, restored or swapped; {o.unit} still runs the current binary and its "
+                "current unit and local.conf.",
+                "A rollback that put back the binary alone would start the previous build under the NEW "
+                "environment (dropped settings, an open peer allowlist). The kept environment is written by "
+                f"`make deploy` through the helpers; a {o.bin}.prev installed any other way has none. "
+                f"({self.g.DOCS}).",
+                *(
+                    []
+                    if o.env_mode == "unpaired"
+                    else [
+                        "If the helper says .prev is not the binary the environment belongs to (a RELEASE= "
+                        "binary), and the kept environment is the one that binary needs: ROLLBACK_ENV=snapshot."
+                    ]
+                ),
+            )
+        o.prev_sha256 = m.group(1)
+        self.say("   " + out.strip().splitlines()[-1] if out.strip() else "")
+        return 0
+
     def match_unit_type(self) -> int:
         caps = self.get("prev_caps")
         notify = caps.rc == 0 and "sd_notify" in self.g.clean(caps.stdout).split()
@@ -323,6 +359,8 @@ def rollback(run: Run) -> int:
     run.say(*lines, err=code != 0)
     if code:
         return 1
+    if run.check_env():
+        return 1
     if run.match_unit_type():
         return 1
     previous, err = run.invocation()
@@ -332,10 +370,12 @@ def rollback(run: Run) -> int:
             f"process from the old one. Nothing was swapped; the unit type now matches {o.bin}.prev.",
             *run.start_current_lines(),
         )
-    swap = run.act("swap")
+    swap = run.act("swap_env")
     if swap.rc != 0:
         return run.refuse(
-            f"ERROR: installing {o.bin}.prev failed ({run.g._cause(swap)}). {o.bin} is unchanged and "
+            f"ERROR: installing {o.bin}.prev with its unit and local.conf failed ({run.g._cause(swap)}); "
+            f"if that says the rollback was interrupted, run make rollback again, which finishes it. {o.bin} is "
+            f"as the helper left it and "
             f"{o.unit} was not restarted; the unit type now matches {o.bin}.prev, so match it back before the "
             f"next restart: bash scripts/deploy-match-unit-type.sh {o.host} {o.bin}"
         )
@@ -396,10 +436,12 @@ def restore(run: Run) -> int:
             f"REFUSING: an earlier restore is still running on the host as {run.g.TRANSIENT_UNIT}.service "
             f"(ActiveState={earlier}): do NOT start {o.unit} until it has finished. Nothing was stopped or changed.",
             *run.g.restore_check_lines(o),
-            f"If it succeeded, finish with: {run.ssh_line('swap')} && {run.ssh_line('start')}",
+            f"If it succeeded, finish with: {run.ssh_line('swap_env')} && {run.ssh_line('start')}",
             "If it failed, run make rollback-restore again once it has ended.",
         )
     if o.release and run.install_fetched():
+        return 1
+    if run.check_env():
         return 1
     if run.match_unit_type():
         return 1
@@ -442,7 +484,7 @@ def restore(run: Run) -> int:
             f"ERROR: the connection to {o.host} dropped during the restore. The restore keeps running on the host "
             f"as {run.g.TRANSIENT_UNIT}.service: do NOT start {o.unit} until it has finished.",
             *run.g.restore_check_lines(o),
-            f"If it succeeded, finish with: {run.ssh_line('swap')} && {run.ssh_line('start')}",
+            f"If it succeeded, finish with: {run.ssh_line('swap_env')} && {run.ssh_line('start')}",
             f"If it failed, {o.bin} is still the current binary and {unit_type_note}.",
             *run.start_current_lines(),
         )
@@ -465,13 +507,14 @@ def restore(run: Run) -> int:
             "still at .prev's levels, and refuses if the current binary already migrated it (then run make "
             "rollback-restore again).",
         )
-    swap = run.act("swap")
+    swap = run.act("swap_env")
     if swap.rc != 0:
         return run.refuse(
-            f"ERROR: the store is restored, but installing {o.bin}.prev failed ({run.g._cause(swap)}). {o.unit} is "
+            f"ERROR: the store is restored, but installing {o.bin}.prev and its unit and local.conf failed "
+            f"({run.g._cause(swap)}). {o.unit} is "
             f"stopped and {o.bin} is still the current binary: do not start {o.unit} now, the current binary "
             "would migrate the restored store again.",
-            f"Fix the cause, then finish with: {run.ssh_line('swap')} && {run.ssh_line('start')}",
+            f"Fix the cause, then finish with: {run.ssh_line('swap_env')} && {run.ssh_line('start')}",
         )
     start = run.act("start")
     if start.rc != 0:
@@ -518,12 +561,17 @@ def main(argv: list[str] | None = None) -> int:
         if mode == "restore":
             p.add_argument("--archive", default="")
             p.add_argument("--release", default="")
+        p.add_argument("--env", default="", help="'' or 'snapshot' (ROLLBACK_ENV)")
     a = parser.parse_args(argv)
     guard = load_guard(a.guard)
     for k in ("host", "bin", "db", "unit", "url"):
         setattr(a, k, getattr(a, k).strip())
     if a.mode == "restore":
         a.archive, a.release = a.archive.strip(), a.release.strip()
+    a.env = a.env.strip()
+    if a.env not in ("", "snapshot"):
+        print("deploy_rollback: ROLLBACK_ENV must be empty or snapshot", file=sys.stderr)
+        return 2
     run = Run(guard, a)
     bad = guard._validate(run.o)
     if bad or a.timeout < 0:
