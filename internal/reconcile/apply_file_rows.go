@@ -1,7 +1,7 @@
 // file: internal/reconcile/apply_file_rows.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 079ffa9c-f1f8-4388-a615-f9875fd5419f
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package reconcile
 
@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"time"
 
@@ -105,8 +106,8 @@ type fileRowMove struct {
 // applyPlan is what planFileRow decided for one match besides the book: move is
 // the row to repoint (nil when none needs to), and rowAtNew is the row already at
 // the matched file (the stranded state a cut-off earlier apply leaves). prior is
-// the book's live journal rows written by the apply (no Source), read only when
-// rowAtNew is set: the evidence a stranded match leaves, and the rows finishing
+// the book's live journal rows written by the apply (Source applySource), read
+// only when rowAtNew is set: the evidence a stranded match leaves, and the rows finishing
 // it hands over (handOffRows).
 type applyPlan struct {
 	move     *fileRowMove
@@ -143,7 +144,7 @@ type applyPlan struct {
 // (fileRowMove.checkTarget) and refuses while ANY row holds newPath.
 //
 // The row's hash is kept only for a hash match (keepsHashes).
-func planFileRow(store Store, log logger.Logger, book *database.Book, m ReconcileApplyItem, newSize int64) (*applyPlan, error) {
+func planFileRow(store Store, book *database.Book, m ReconcileApplyItem, newSize int64) (*applyPlan, error) {
 	newPath := m.NewPath
 	files, err := store.GetBookFiles(book.ID)
 	if err != nil {
@@ -169,7 +170,16 @@ func planFileRow(store Store, log logger.Logger, book *database.Book, m Reconcil
 	case len(atNew) == 1 && len(atOld) == 0:
 		// The row is where the book is going.
 		rowAtNew = &atNew[0]
-		prior = priorApplyRows(store, log, book.ID)
+		prior, err = priorApplyRows(store, book.ID)
+		if err != nil {
+			// Finishing this match needs the journal: its rows are the twin that
+			// makes the finish revertible on its own and the rows it hands over.
+			// Without them the finish would leave the row at the matched file
+			// when only it is reverted. Nothing is written yet, so refusing
+			// costs nothing, and a rerun finishes it once the journal reads.
+			return nil, fmt.Errorf("its row is already at %q and none is at its path %q (a match an earlier apply left unfinished), and its journal cannot be read, so finishing it could not be made revertible: %w",
+				newPath, oldPath, err)
+		}
 		if len(files) > 1 && len(repointRowsOf(prior, rowAtNew.ID, oldPath, newPath)) == 0 {
 			return nil, fmt.Errorf("it has %d file rows, one at %q and none at its path %q, and no earlier apply's journal says it left that row there: not exactly one row to repoint",
 				len(files), newPath, oldPath)
@@ -315,6 +325,36 @@ func (m *fileRowMove) repoint(from, to database.BookFileLocation, guard func() e
 	return false, nil
 }
 
+// applySource is the Source the apply stamps on every journal row it writes.
+// The journal row outlives its operation row (registry.Discard deletes a failed
+// or interrupted op's row and keeps its opchange rows, and a stranded match is
+// exactly the leftover of a failed op), so the row itself must say who wrote
+// it: the twin and the hand-off copy and mark only rows of this Source. An
+// empty Source says nothing (fs_regroup_xml and the organizer also journal
+// book_path_update with none). The id names no registered fixer, so
+// opaccess.Reader.MayUndoChange reads such a row as ordinary history, the same
+// as the rows a v3 op stamps with its definition id.
+const applySource = "reconcile.apply"
+
+// rowKind is what a journaled row of one match describes, so a failure path can
+// take back the rows of a write that did not happen without touching the rest.
+type rowKind int
+
+const (
+	// kindPath is the book's path change.
+	kindPath rowKind = iota
+	// kindHash is a clear of one of the book's current-file hashes.
+	kindHash
+	// kindRow is the file row's repoint, or the journal-only twin of an earlier
+	// operation's repoint.
+	kindRow
+)
+
+type journalEntry struct {
+	kind rowKind
+	row  *database.OperationChange
+}
+
 // applyJournal is the journal rows one match has recorded. They are written
 // BEFORE the writes they describe (so a crash leaves them), and they are
 // reversible (book_path_update, book_file_repoint_location), so a revert acts on
@@ -323,16 +363,17 @@ func (m *fileRowMove) repoint(from, to database.BookFileLocation, guard func() e
 // this operation undo a later, successful apply of the same match (it reads the
 // row's NewValue as current and "restores" it).
 type applyJournal struct {
-	store Store
-	rows  []*database.OperationChange
+	store   Store
+	entries []journalEntry
 }
 
-// record writes one row and remembers it.
-func (j *applyJournal) record(c *database.OperationChange) error {
+// record writes one row, stamped with applySource, and remembers it.
+func (j *applyJournal) record(kind rowKind, c *database.OperationChange) error {
+	c.Source = applySource
 	if err := database.RecordOperationChange(j.store, c); err != nil {
 		return err
 	}
-	j.rows = append(j.rows, c)
+	j.entries = append(j.entries, journalEntry{kind: kind, row: c})
 	return nil
 }
 
@@ -340,23 +381,33 @@ func (j *applyJournal) record(c *database.OperationChange) error {
 // (credits_backfill voidJournal, repairs.Writer): the row is rewritten under its
 // id with Voided and RevertedAt set, so no revert acts on it. It returns the
 // failures joined; a row it could not void stays live.
-func (j *applyJournal) void() error {
+func (j *applyJournal) void() error { return j.voidKinds(kindPath, kindHash, kindRow) }
+
+// voidKinds is void for the rows of the given kinds only. The rows it takes
+// back are forgotten; one it could not void stays live and is forgotten too (a
+// second attempt would only repeat the failure the caller reports).
+func (j *applyJournal) voidKinds(kinds ...rowKind) error {
 	var errs []error
-	for _, c := range j.rows {
-		v := *c
+	kept := j.entries[:0:0]
+	for _, e := range j.entries {
+		if !slices.Contains(kinds, e.kind) {
+			kept = append(kept, e)
+			continue
+		}
+		v := *e.row
 		now := time.Now()
 		v.RevertedAt, v.Voided = &now, true
 		if err := database.RecordOperationChange(j.store, &v); err != nil {
-			errs = append(errs, fmt.Errorf("row %s: %w", c.ID, err))
+			errs = append(errs, fmt.Errorf("row %s: %w", e.row.ID, err))
 		}
 	}
-	j.rows = nil
+	j.entries = kept
 	return errors.Join(errs...)
 }
 
 // bookChangeLookup is the journal read finishing a stranded match needs. It
-// is not part of Store (Store only narrows); a store without it finishes the
-// match without the row's twin and without the hand-off.
+// is not part of Store (Store only narrows); a store without it refuses to
+// finish a stranded match (planFileRow).
 type bookChangeLookup interface {
 	GetBookChanges(bookID string) ([]*database.OperationChange, error)
 }
@@ -367,30 +418,32 @@ type changeReverter interface {
 	MarkOperationChangesReverted(operationID string, changeIDs []string) error
 }
 
-// priorApplyRows is the book's journal rows that this apply could have written
-// and that still stand: not voided, not reverted, and no Source. The apply
-// journals no Source; a row that names one is another writer's (a repairs
-// fixer's), and the twin and the hand-off must not copy or mark it, as the
-// Missing files fixer requires its own Source at every step. It returns nil when
-// the store cannot read the journal.
-func priorApplyRows(store Store, log logger.Logger, bookID string) []*database.OperationChange {
+// priorApplyRows is the book's journal rows that this apply wrote and that still
+// stand: Source applySource, not voided, not reverted. The Source is what says
+// who wrote a row: the journal outlives its operation row, and the other writers
+// of book_path_update (fs_regroup_xml, the organizer) stamp none, so a row of
+// another writer, or of a repairs fixer, is never copied or marked, as the
+// Missing files fixer requires its own Source at every step. A row journaled by
+// an apply before the apply stamped its Source has none and is not recognised.
+// It fails when the journal cannot be read: a store without GetBookChanges, or a
+// read that errors.
+func priorApplyRows(store Store, bookID string) ([]*database.OperationChange, error) {
 	lookup, ok := database.AsCapability[bookChangeLookup](store)
 	if !ok {
-		return nil
+		return nil, errors.New("the store cannot read a book's change journal")
 	}
 	changes, err := lookup.GetBookChanges(bookID)
 	if err != nil {
-		log.Warn("reconcile: book %s: cannot read its journal, finishing without a revertible row repoint or a hand-off: %v", bookID, err)
-		return nil
+		return nil, fmt.Errorf("read the book's change journal: %w", err)
 	}
 	var out []*database.OperationChange
 	for _, c := range changes {
-		if c == nil || c.Voided || c.RevertedAt != nil || c.Source != "" {
+		if c == nil || c.Voided || c.RevertedAt != nil || c.Source != applySource {
 			continue
 		}
 		out = append(out, c)
 	}
-	return out
+	return out, nil
 }
 
 // repointRowsOf is the rows among prior that repointed row fileID from oldPath
@@ -449,13 +502,20 @@ func strandedRowTwin(prior []*database.OperationChange, row *database.BookFile, 
 
 // handOffRows is, by operation, the ids of the live rows of OTHER operations that
 // describe this match's writes: the book's path change from oldPath to newPath,
-// the repoint of the row, and each hash clear this apply made (hashOld is the
-// value it cleared, by field). The apply that has just written the match owns
-// those changes, so these rows must not stay live: whichever operation is
-// reverted first would undo the book, and the other's rows would then undo it
-// again, or undo a LATER apply of the same match (revert op-2, apply op-3, revert
-// op-1 undoes op-3).
-func handOffRows(prior []*database.OperationChange, operationID, fileID, oldPath, newPath string, hashOld map[string]string) map[string][]string {
+// the repoint of the row, and each hash clear of a value the book held when this
+// apply wrote it (hashes is that value, by field). The apply that has just
+// written the match owns those changes, so these rows must not stay live:
+// whichever operation is reverted first would undo the book, and the other's rows
+// would then undo it again, or undo a LATER apply of the same match (revert op-2,
+// apply op-3, revert op-1 undoes op-3).
+//
+// A hash-clear row is chosen by the BOOK's hash, not by what this apply cleared.
+// An earlier operation that stranded journaled the clear of the hash the book
+// still held, and never wrote it; whether this apply clears that hash (a
+// non-hash match) or keeps it (a hash match) the row describes a clear that never
+// ran, and a revert of it would put the value back onto a book a later apply has
+// since cleared.
+func handOffRows(prior []*database.OperationChange, operationID, fileID, oldPath, newPath string, hashes map[string]string) map[string][]string {
 	out := map[string][]string{}
 	add := func(c *database.OperationChange) {
 		if c.OperationID != operationID {
@@ -470,7 +530,7 @@ func handOffRows(prior []*database.OperationChange, operationID, fileID, oldPath
 		case c.ChangeType == undo.ChangeTypeBookPathUpdate && c.FieldName == "file_path" && c.OldValue == oldPath && c.NewValue == newPath:
 			add(c)
 		case c.ChangeType == "metadata_update" && c.NewValue == "":
-			if old, ok := hashOld[c.FieldName]; ok && c.OldValue == old {
+			if held, ok := hashes[c.FieldName]; ok && c.OldValue == held {
 				add(c)
 			}
 		}
@@ -484,19 +544,22 @@ func handOffRows(prior []*database.OperationChange, operationID, fileID, oldPath
 // and this operation's revert undoes the whole move.
 //
 // Best effort, after the write that landed. A store that cannot mark, or a failed
-// mark, leaves both operations' rows live and is logged; so does a crash between
-// the write and the mark. That is the state before the hand-off existed:
-// reverting this operation alone still restores everything, reverting the other
-// alone, or after a later apply of the same match, does not.
-func handOff(store Store, log logger.Logger, bookID, operationID string, byOp map[string][]string) {
+// mark, leaves both operations' rows live: that is the state before the hand-off
+// existed (reverting this operation alone still restores everything; reverting
+// the other alone, or after a later apply of the same match, does not), so the
+// match stays applied. It is logged and returned, one line per operation, so the
+// result tells the operator which operation is no longer safe to revert alone. A
+// crash between the write and the mark leaves the same state with nothing said.
+func handOff(store Store, log logger.Logger, bookID, operationID string, byOp map[string][]string) []string {
 	if len(byOp) == 0 {
-		return
+		return nil
 	}
 	ops := make([]string, 0, len(byOp))
 	for op := range byOp {
 		ops = append(ops, op)
 	}
 	sort.Strings(ops)
+	var failed []string
 	marker, ok := database.AsCapability[changeReverter](store)
 	for _, op := range ops {
 		var err error
@@ -508,8 +571,11 @@ func handOff(store Store, log logger.Logger, bookID, operationID string, byOp ma
 		if err != nil {
 			log.Warn("reconcile: book %s: operation %s's rows for this match were not handed to operation %s; reverting %s alone will not undo it cleanly: %v",
 				logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(op), logger.SanitizeLogValue(operationID), logger.SanitizeLogValue(op), err)
+			failed = append(failed, fmt.Sprintf("book %s: applied, but operation %s's journal rows for this match were not handed to operation %s (%v): reverting operation %s alone will not undo it cleanly, revert %s instead",
+				bookID, op, operationID, err, op, operationID))
 		}
 	}
+	return failed
 }
 
 // strOf is a hash pointer's value, "" when nil.
@@ -520,9 +586,26 @@ func strOf(p *string) string {
 	return *p
 }
 
-// applyMatch applies one confirmed match and returns "" when it landed, or the
-// message for the result's errors when it did not. See ExecuteReconcile for the
-// order of the steps.
+// bookResult is what the book write left, for the journal rows and the hand-off.
+type bookResult int
+
+const (
+	// bookWritten: this operation staged the book's path.
+	bookWritten bookResult = iota
+	// bookNotOurs: the book holds the matched path and this operation did not
+	// write it (another writer set it after the plan).
+	bookNotOurs
+	// bookUnproven: the book holds the matched path after a write that reported
+	// a failure, and nothing shows whether this operation wrote it.
+	bookUnproven
+)
+
+// applyMatch applies one confirmed match. It returns failure "" when the match
+// landed, or the message for the result's errors when it did not (a failed match
+// is counted as skipped). warnings are lines for the result's errors about a
+// match that DID land: it stays applied, but the operator is told what was left
+// undone (a hand-off that could not be made, rows that could not be voided).
+// See ExecuteReconcile for the order of the steps.
 //
 // What a failure leaves, step by step (the journal rows are reversible, so each
 // must be voided unless its write landed or may have):
@@ -535,8 +618,10 @@ func strOf(p *string) string {
 //     put back and, when that works, the rows are voided;
 //   - the book write fails for any other reason: the book is read BACK before
 //     anything is undone, because ModifyBook's error alone cannot tell a failure
-//     from a write that landed. At the matched path the write landed: the row is
-//     not rolled back, the match counts as applied (with a warning). Unreadable:
+//     from a write that landed. At the matched path the write landed (when a
+//     non-hash match's hashes are cleared) or another writer set the path (when
+//     they are still the plan's): the row is not rolled back and the match counts
+//     as applied (with a warning). Unreadable:
 //     nothing is undone and nothing voided (rolling the row back under a book
 //     that may be at the matched file would leave the one state a rerun cannot
 //     finish). At the old path it did not land: the row is put back and, when
@@ -545,37 +630,54 @@ func strOf(p *string) string {
 //   - the rollback fails: nothing is voided. The row landed, so its repoint row
 //     stays live, and so does the book's, so reverting this operation restores
 //     both even if a rerun sets the book.
-func applyMatch(store Store, operationID string, m ReconcileApplyItem, log logger.Logger) string {
+//
+// A book that holds the matched path when this operation writes it, because
+// another writer set it after the plan, takes no path write from this operation:
+// its hash clear still runs under the same check, a clear that cannot run (the
+// hashes changed) has its rows voided, and the path and twin rows are voided when
+// this operation moved no row (nothing of its own would be left for them to
+// describe). When it did move the row, those rows stay live so a revert puts the
+// row and the book back together. The hand-off runs only after a book write that
+// is this operation's own.
+func applyMatch(store Store, operationID string, m ReconcileApplyItem, log logger.Logger) (failure string, warnings []string) {
 	book, err := store.GetBookByID(m.BookID)
 	if err != nil || book == nil {
-		return fmt.Sprintf("book %s: not found", m.BookID)
+		return fmt.Sprintf("book %s: not found", m.BookID), nil
 	}
 	if book.IsSoftDeleted() {
-		return fmt.Sprintf("book %s: it is in the trash, not repointed", m.BookID)
+		return fmt.Sprintf("book %s: it is in the trash, not repointed", m.BookID), nil
 	}
 
 	// The matched file must exist and be a file: a directory would give the book
 	// and its row a path nothing can play.
 	newInfo, err := os.Stat(m.NewPath)
 	if err != nil {
-		return fmt.Sprintf("book %s: new path does not exist: %s", m.BookID, m.NewPath)
+		return fmt.Sprintf("book %s: new path does not exist: %s", m.BookID, m.NewPath), nil
 	}
 	if !newInfo.Mode().IsRegular() {
-		return fmt.Sprintf("book %s: new path is not a regular file: %s", m.BookID, m.NewPath)
+		return fmt.Sprintf("book %s: new path is not a regular file: %s", m.BookID, m.NewPath), nil
 	}
 
 	oldPath := book.FilePath
 
 	// The book's file row at the old path moves with it. Planned (and refused)
 	// before anything is journaled or written.
-	plan, err := planFileRow(store, log, book, m, newInfo.Size())
+	plan, err := planFileRow(store, book, m, newInfo.Size())
 	if err != nil {
-		return fmt.Sprintf("book %s: not applied, nothing written: %v", m.BookID, err)
+		return fmt.Sprintf("book %s: not applied, nothing written: %v", m.BookID, err), nil
+	}
+	if oldPath == m.NewPath {
+		// Already there at the plan (a match resubmitted after it applied, or the
+		// organizer got the book there): nothing to apply, so nothing is
+		// journaled and no hash is cleared. The plan found its row, if it has
+		// one, at the matched file too, or refused above.
+		log.Info("Book %s is already at %s: nothing to apply", book.ID, m.NewPath)
+		return "", nil
 	}
 	move := plan.move
 	if move != nil {
 		if err := move.recordKeyOwner(); err != nil {
-			return fmt.Sprintf("book %s: not applied, nothing written: %v", m.BookID, err)
+			return fmt.Sprintf("book %s: not applied, nothing written: %v", m.BookID, err), nil
 		}
 	}
 
@@ -610,7 +712,7 @@ func applyMatch(store Store, operationID string, m ReconcileApplyItem, log logge
 	// reverse) beside it a revert would put the row back and leave the
 	// book at the matched file. With both reversible, reverting the
 	// operation restores the book and its row together.
-	if err := j.record(&database.OperationChange{
+	if err := j.record(kindPath, &database.OperationChange{
 		ID:          ulid.Make().String(),
 		OperationID: operationID,
 		BookID:      book.ID,
@@ -619,14 +721,14 @@ func applyMatch(store Store, operationID string, m ReconcileApplyItem, log logge
 		OldValue:    oldPath,
 		NewValue:    m.NewPath,
 	}); err != nil {
-		return fmt.Sprintf("book %s: failed to record change: %v", m.BookID, err)
+		return fmt.Sprintf("book %s: failed to record change: %v", m.BookID, err), nil
 	}
 	for _, field := range []string{fieldFileHash, fieldOrganizedHash} {
 		old, ok := hashOld[field]
 		if !ok {
 			continue
 		}
-		if err := j.record(&database.OperationChange{
+		if err := j.record(kindHash, &database.OperationChange{
 			ID:          ulid.Make().String(),
 			OperationID: operationID,
 			BookID:      book.ID,
@@ -635,7 +737,7 @@ func applyMatch(store Store, operationID string, m ReconcileApplyItem, log logge
 			OldValue:    old,
 			NewValue:    "",
 		}); err != nil {
-			return fmt.Sprintf("book %s: failed to record the %s change: %v%s", m.BookID, field, err, voided())
+			return fmt.Sprintf("book %s: failed to record the %s change: %v%s", m.BookID, field, err, voided()), nil
 		}
 	}
 
@@ -647,14 +749,14 @@ func applyMatch(store Store, operationID string, m ReconcileApplyItem, log logge
 		rowRow = strandedRowTwin(plan.prior, plan.rowAtNew, oldPath, m.NewPath, operationID, book.ID)
 	}
 	if rowRow != nil {
-		if err := j.record(rowRow); err != nil {
-			return fmt.Sprintf("book %s: failed to record the file row change: %v%s", m.BookID, err, voided())
+		if err := j.record(kindRow, rowRow); err != nil {
+			return fmt.Sprintf("book %s: failed to record the file row change: %v%s", m.BookID, err, voided()), nil
 		}
 	}
 	if move != nil {
 		unsynced, err := move.forward()
 		if err != nil {
-			return fmt.Sprintf("book %s: file row %s not repointed, the book is left at %s: %v%s", m.BookID, move.fileID, oldPath, err, voided())
+			return fmt.Sprintf("book %s: file row %s not repointed, the book is left at %s: %v%s", m.BookID, move.fileID, oldPath, err, voided()), nil
 		}
 		if unsynced {
 			log.Warn("reconcile: book %s: file row %s was repointed but its fsync failed, durability unknown", m.BookID, move.fileID)
@@ -668,11 +770,31 @@ func applyMatch(store Store, operationID string, m ReconcileApplyItem, log logge
 	// path it replaces must still be the one the row move and the journal
 	// were made from, and the book must still be live with the hashes the
 	// journal says it cleared.
+	//
+	// What the callback did is recorded in these, because the write's error
+	// cannot say it: wrotePath is set when it staged the path, clearedHashes when
+	// it staged the hash clear, and sawFile/sawOrganized are the hashes the book
+	// held under the lock when it staged the path (the hand-off's witnesses: a
+	// hash-match finish checks no hash, so the plan's read may be stale).
+	var (
+		wrotePath, clearedHashes bool
+		sawFile, sawOrganized    string
+	)
 	written, err := store.ModifyBook(book.ID, func(b *database.Book) error {
+		wrotePath, clearedHashes = false, false
+		clearable := strOf(b.FileHash) == oldHash && strOf(b.OrganizedFileHash) == oldOrganized
 		if b.FilePath == m.NewPath {
-			// Already there: nothing to write, whatever else has happened to
-			// the book. Refusing a trashed book here would roll the row back
-			// under a book that is at the matched file.
+			// Already there: another writer set the path after the plan. There
+			// is no path to write, whatever else has happened to the book
+			// (refusing a trashed book here would roll the row back under a book
+			// that is at the matched file). The hashes are still this match's to
+			// clear, under the same check as below; hashes that changed since
+			// the plan are not.
+			if clearHashes && clearable {
+				b.FileHash, b.OrganizedFileHash = nil, nil
+				clearedHashes = true
+				return nil
+			}
 			return database.ErrSkipBookWrite
 		}
 		if b.IsSoftDeleted() {
@@ -682,16 +804,25 @@ func applyMatch(store Store, operationID string, m ReconcileApplyItem, log logge
 			return fmt.Errorf("%w: it now points at %q, not %q", errBookRepointed, b.FilePath, oldPath)
 		}
 		if clearHashes {
-			if strOf(b.FileHash) != oldHash || strOf(b.OrganizedFileHash) != oldOrganized {
+			if !clearable {
 				return fmt.Errorf("%w: its hashes are no longer the ones the journal records as cleared", errBookHashesChanged)
 			}
+		}
+		sawFile, sawOrganized = strOf(b.FileHash), strOf(b.OrganizedFileHash)
+		if clearHashes {
 			b.FileHash, b.OrganizedFileHash = nil, nil
+			clearedHashes = true
 		}
 		b.FilePath = m.NewPath
+		wrotePath = true
 		return nil
 	})
 	if err == nil && written == nil {
 		err = errors.New("it vanished before its path could be updated")
+	}
+	result := bookWritten
+	if err == nil && !wrotePath {
+		result = bookNotOurs
 	}
 	if err != nil {
 		// A refusal from the callback saw the book under its lock and returned
@@ -711,11 +842,24 @@ func applyMatch(store Store, operationID string, m ReconcileApplyItem, log logge
 				} else {
 					msg += fmt.Sprintf("; the book could not be read back (%v), so it is not known whether the write landed and the journal rows stay live, check the book before rerunning the match", gerr)
 				}
-				return msg
+				return msg, nil
 			case cur != nil && cur.FilePath == m.NewPath:
-				// The write landed: keep the row, count the match as applied.
+				// The book holds the matched path: the match counts as applied
+				// and the row stays. Whether THIS write put it there is the
+				// question for the rows: a landed write cleared the hashes it
+				// journaled, so hashes still at the plan's value show another
+				// writer set the path (and the clear never ran).
 				log.Warn("reconcile: book %s: the book write reported %v but the book is at the matched file, treating the match as applied", m.BookID, err)
 				err = nil
+				switch {
+				case clearHashes && strOf(cur.FileHash) == "" && strOf(cur.OrganizedFileHash) == "":
+					result = bookWritten
+					sawFile, sawOrganized = oldHash, oldOrganized
+				case clearHashes:
+					result, clearedHashes = bookNotOurs, false
+				default:
+					result = bookUnproven
+				}
 			}
 		}
 		if err != nil {
@@ -752,19 +896,43 @@ func applyMatch(store Store, operationID string, m ReconcileApplyItem, log logge
 					msg += "; the book could not be confirmed unwritten, so its journal rows stay live"
 				}
 			}
-			return msg
+			return msg, nil
 		}
 	}
 
-	if plan.rowAtNew != nil {
-		// This apply finished a stranded match: the earlier operation's rows for
-		// it must not stay live (handOff).
-		handOff(store, log, book.ID, operationID, handOffRows(plan.prior, operationID, plan.rowAtNew.ID, oldPath, m.NewPath, hashOld))
+	switch result {
+	case bookWritten:
+		if plan.rowAtNew != nil {
+			// This apply finished a stranded match: the earlier operation's rows
+			// for it must not stay live (handOff), keyed on the hashes the book
+			// held when this apply wrote it.
+			witness := map[string]string{}
+			if sawFile != "" {
+				witness[fieldFileHash] = sawFile
+			}
+			if sawOrganized != "" {
+				witness[fieldOrganizedHash] = sawOrganized
+			}
+			warnings = append(warnings, handOff(store, log, book.ID, operationID,
+				handOffRows(plan.prior, operationID, plan.rowAtNew.ID, oldPath, m.NewPath, witness))...)
+		}
+	case bookNotOurs:
+		// The rows this operation journaled for writes it did not make.
+		if !clearedHashes {
+			if err := j.voidKinds(kindHash); err != nil {
+				warnings = append(warnings, fmt.Sprintf("book %s: applied, but this operation's journal rows for a hash clear that did not run could not be voided and stay live: %v", m.BookID, err))
+			}
+		}
+		if move == nil {
+			if err := j.voidKinds(kindPath, kindRow); err != nil {
+				warnings = append(warnings, fmt.Sprintf("book %s: applied, but this operation's journal rows for a path change another writer made could not be voided and stay live: %v", m.BookID, err))
+			}
+		}
 	}
 	if move != nil {
 		log.Info("Updated book %s and its file row %s: %s -> %s", book.ID, move.fileID, oldPath, m.NewPath)
 	} else {
 		log.Info("Updated book %s: %s -> %s", book.ID, oldPath, m.NewPath)
 	}
-	return ""
+	return "", warnings
 }

@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.29.1
+// version: 1.29.2
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package reconcile
 
@@ -829,7 +829,15 @@ func FindUntrackedFiles(ctx context.Context, store Store, knownPaths map[string]
 // match finishes it, and journals the row's repoint again so the rerun reverts on
 // its own, and hands the earlier operation's rows over so reverting THAT
 // operation no longer undoes the rerun). A match that is skipped or fails is
-// never counted as applied.
+// never counted as applied. A rerun needs the journal: a stranded match whose
+// journal cannot be read is refused with nothing written, because finishing it
+// without the twin and the hand-off would not be revertible on its own.
+//
+// A match that LANDED can still leave something undone, and then it is applied
+// AND named in the result's errors (so the operation ends with an error and the
+// operator sees it): the hand-off to an earlier operation that could not be made
+// (reverting that operation alone is then unsafe), or journal rows for a write
+// another writer made that could not be voided.
 //
 // CRASH RESIDUAL. All of the above covers failures the process survives. The
 // journal rows are written BEFORE the writes they describe, and a process that
@@ -881,7 +889,11 @@ func ExecuteReconcile(ctx context.Context, store Store, operationID string, save
 
 		// One match, whole or not at all (applyMatch): a match that fails is
 		// reported and counted as skipped, never applied.
-		if msg := applyMatch(store, operationID, m, log); msg != "" {
+		msg, warnings := applyMatch(store, operationID, m, log)
+		// A match that landed can still leave something the operator must know
+		// (applyMatch): its lines go to the errors and the match stays applied.
+		result.Errors = append(result.Errors, warnings...)
+		if msg != "" {
 			result.Errors = append(result.Errors, msg)
 			result.Skipped++
 			continue
