@@ -21,6 +21,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
@@ -73,6 +74,23 @@ type Seams struct {
 	// of any other type fails the boot. nil, and so no sharing, in every
 	// production boot.
 	SectionCache any
+	// Shared is the state the adapters a boot builds over FS share between
+	// them, so two adapters made from two Seams values over one boot (a
+	// recorder builds a new Seams on every call) still see one lock set:
+	// journalfs keeps its per-filesystem lock set and unsynced-entry record
+	// here, in place of a package variable. nil, as in every production boot,
+	// means no sharing: an adapter built from this Seams keeps its own.
+	Shared *Shared
+}
+
+// Shared is a boot's store of per-boot state its adapters share, keyed by a
+// package-private type of the adapter's own. The zero value is ready to use.
+type Shared struct{ m sync.Map }
+
+// LoadOrStore returns the value stored under key, or stores and returns val.
+// loaded reports whether the value was already there.
+func (s *Shared) LoadOrStore(key, val any) (actual any, loaded bool) {
+	return s.m.LoadOrStore(key, val)
 }
 
 // TaskRunSeed asks for N queued runs of Kind (Seams.TaskRuns).

@@ -22,7 +22,7 @@
 // The in-memory filesystem has no append mode, no ftruncate, no file lock and
 // no symbolic links, so this package models what the journal needs of them:
 // an append is a write at the end offset, the lock is a set of locked paths
-// shared by every adapter over the same in-memory filesystem (flock(2)
+// shared by every adapter of one boot (the Seams.Shared they are built over; flock(2)
 // conflicts between open file descriptions, so two opens in one boot exclude
 // each other whichever adapter made them), and a truncation, or an O_TRUNC
 // open of an existing file, replaces the file with a fresh one at the same
@@ -51,10 +51,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"time"
-	"weak"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
 
@@ -65,7 +63,7 @@ import (
 // From is the filesystem the journal uses in the boot ctx belongs to:
 // journal.OSFS() when ctx carries no seam or one with no filesystem (every
 // production boot), the seam's in-memory filesystem otherwise. Every value
-// From returns over one in-memory filesystem shares one lock set (and one
+// From returns over one boot's Seams.Shared shares one lock set (and one
 // record of the unsynced entries it created), so the journal opened through
 // two of them in a boot still excludes itself.
 func From(ctx context.Context) (journal.FS, error) {
@@ -77,7 +75,7 @@ func From(ctx context.Context) (journal.FS, error) {
 	if !ok {
 		return nil, fmt.Errorf("journalfs: the boot filesystem %T is neither the real one nor in memory", vfs.Root(seams.FS))
 	}
-	return &memFS{mem: seams.FS, base: base, seams: seams, state: stateOf(base)}, nil
+	return &memFS{mem: seams.FS, base: base, seams: seams, state: stateOf(seams)}, nil
 }
 
 // fsState is what the adapters over one in-memory filesystem share: the paths
@@ -89,34 +87,25 @@ type fsState struct {
 	fresh map[string]bool
 }
 
-// states maps an in-memory filesystem to its fsState. The key is the
-// filesystem under every wrapper, held weakly, and not the *bootseam.Seams
-// (a recorder builds a new one on every call) or the errorfs wrapper (a
-// second wrapper over one filesystem must not split the set). An entry goes
-// when its filesystem is collected, so a test's thousands of crash clones
-// leave nothing behind.
-var (
-	statesMu sync.Mutex
-	states   = map[weak.Pointer[vfs.MemFS]]*fsState{}
-)
-
-// stateOf is the fsState of base, made on first use.
-func stateOf(base *vfs.MemFS) *fsState {
-	key := weak.Make(base)
-	statesMu.Lock()
-	defer statesMu.Unlock()
-	if st, ok := states[key]; ok {
+// stateOf is the fsState the adapters of one boot share. It lives on the
+// boot's bootseam.Shared (which Recorder.Seams hands to every Seams it makes,
+// so two Seams over one recorder, and the two From calls over them, find one
+// state), not in a package variable: the state is per boot, and a process-wide
+// map keyed on the filesystem would be the global state 03 R5 forbids. A
+// hand-built Seams with no Shared has no way to carry it, so each From over it
+// gets its own state; take the Seams from a Recorder when more than one
+// adapter is built in a boot.
+func stateOf(seams *bootseam.Seams) *fsState {
+	st := &fsState{held: map[string]bool{}, fresh: map[string]bool{}}
+	if seams.Shared == nil {
 		return st
 	}
-	st := &fsState{held: map[string]bool{}, fresh: map[string]bool{}}
-	states[key] = st
-	runtime.AddCleanup(base, func(k weak.Pointer[vfs.MemFS]) {
-		statesMu.Lock()
-		delete(states, k)
-		statesMu.Unlock()
-	}, key)
-	return st
+	got, _ := seams.Shared.LoadOrStore(stateKey{}, st)
+	return got.(*fsState)
 }
+
+// stateKey is the key of the fsState on a bootseam.Shared.
+type stateKey struct{}
 
 // markFresh records that path's directory entry is not durable yet.
 func (s *fsState) markFresh(path string) {
