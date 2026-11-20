@@ -67,8 +67,13 @@ func checkScheduleKey(key string) error {
 	return err
 }
 
-// ScheduleConfig is the value type of every schedule key. Exactly one of
-// Every, DailyAt, Cron and Window is set when Enabled is true.
+// ScheduleConfig is the value type of every schedule key. When Enabled is
+// true it sets a timing: one of Every, DailyAt and Cron, or Window, or Every
+// and Window together. With both, the kind fires on its interval and again as
+// a member of the window, as HEAD's TaskDefinitions that tick on an interval
+// and also sit in maintenanceOrder did (owner ruling 2026-11-20, F5-14 pre-slice):
+// a fire that finds a run of the kind active folds into it, so the two never
+// start two runs for one due moment.
 type ScheduleConfig struct {
 	Enabled bool            `json:"enabled"`
 	Every   config.Duration `json:"every,omitempty"`    // >= core.tasks.schedule_poll; a string such as "24h" in defaults and files (05-config)
@@ -95,24 +100,27 @@ func (c ScheduleConfig) MarshalJSON() ([]byte, error) {
 }
 
 // Validate checks c's value (05-tasks 5T.3.8): at most one of Every,
-// DailyAt, Cron and Window, exactly one when Enabled; Every positive; DailyAt
-// a 24-hour "HH:MM"; Cron the 5-field grammar; Window a config segment (the
-// window's name); Order not negative. The kernel's config sections call it,
-// so a bad value is refused when config loads it, not at the first poll.
-// Every >= core.tasks.schedule_poll is the scheduler's check (it depends on
-// another key). Method added by F2-04.
+// DailyAt and Cron; Window alone or with Every, never with DailyAt or Cron;
+// a timing set when Enabled; Every positive; DailyAt a 24-hour "HH:MM"; Cron
+// the 5-field grammar; Window a config segment (the window's name); Order not
+// negative. The kernel's config sections call it, so a bad value is refused
+// when config loads it, not at the first poll. Every >= core.tasks.schedule_poll
+// is the scheduler's check (it depends on another key). Method added by F2-04;
+// Every with Window accepted by the F5-14 pre-slice (owner ruling 2026-11-20).
 func (c ScheduleConfig) Validate() error {
 	var errs []error
-	set := 0
-	for _, on := range []bool{c.Every != 0, c.DailyAt != "", c.Cron != "", c.Window != ""} {
+	timings := 0
+	for _, on := range []bool{c.Every != 0, c.DailyAt != "", c.Cron != ""} {
 		if on {
-			set++
+			timings++
 		}
 	}
 	switch {
-	case set > 1:
-		errs = append(errs, fmt.Errorf("only one of every, daily_at, cron and window may be set (got %d)", set))
-	case set == 0 && c.Enabled:
+	case timings > 1:
+		errs = append(errs, fmt.Errorf("only one of every, daily_at and cron may be set (got %d)", timings))
+	case c.Window != "" && (c.DailyAt != "" || c.Cron != ""):
+		errs = append(errs, errors.New("window combines with every only, not with daily_at or cron"))
+	case timings == 0 && c.Window == "" && c.Enabled:
 		errs = append(errs, errors.New("an enabled schedule sets one of every, daily_at, cron and window"))
 	}
 	if c.Every < 0 {

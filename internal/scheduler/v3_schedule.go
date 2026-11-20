@@ -639,11 +639,11 @@ func (ts *TaskScheduler) startV3(shutdown chan struct{}, wg *sync.WaitGroup) {
 	}
 	wg.Go(func() {
 		ts.runV3OnStart()
-		ticker := time.NewTicker(poll)
-		defer ticker.Stop()
+		ticks, stop := ts.newTicker(poll)
+		defer stop()
 		for {
 			select {
-			case <-ticker.C:
+			case <-ticks:
 				ts.pollV3(ts.v3.clock())
 			case <-shutdown:
 				return

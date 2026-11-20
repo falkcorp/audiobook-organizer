@@ -142,12 +142,14 @@ func TestCoreSections_ScheduleValidation(t *testing.T) {
 		"negative every":   `{"enabled":true,"every":"-1h"}`,
 		"enabled, nothing": `{"enabled":true}`,
 		"bad cron, off":    `{"enabled":false,"cron":"* * * *"}`,
+		"cron and window":  `{"enabled":true,"cron":"0 3 * * *","window":"nightly"}`,
 	}
 	good := map[string]string{
 		"every":    `{"enabled":true,"every":"2h"}`,
 		"daily_at": `{"enabled":true,"daily_at":"03:15"}`,
 		"cron":     `{"enabled":true,"cron":"*/15 1-4 * * 1-5"}`,
 		"window":   `{"enabled":true,"window":"nightly","order":2}`,
+		"both":     `{"enabled":true,"every":"24h","window":"nightly","order":7}`,
 		"off":      `{"enabled":false}`,
 	}
 	cb, _ := startedCfg(t, configIn(t))

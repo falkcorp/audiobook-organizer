@@ -124,7 +124,7 @@ func (ts *TaskScheduler) claimDailyAtRun(name string, hour, minute int, loc *tim
 
 // runDailyAtCheck performs one due check and runs the task if it is due.
 func (ts *TaskScheduler) runDailyAtCheck(name string, hour, minute int, loc *time.Location) {
-	if !ts.claimDailyAtRun(name, hour, minute, loc, time.Now()) {
+	if !ts.claimDailyAtRun(name, hour, minute, loc, ts.now()) {
 		return
 	}
 	if op, err := ts.RunTask(name); err != nil {

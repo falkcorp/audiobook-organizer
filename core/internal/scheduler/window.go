@@ -24,7 +24,10 @@ import (
 // enable flag. Its kind, core.window.<name> (declared by core/tasks, the one
 // owner), is fired by this scheduler once per opening, and its run starts the
 // window's members, the kinds whose ScheduleConfig.Window names it, one after
-// another in (Order, kind) order. A member's own clock is not polled.
+// another in (Order, kind) order. A window-only member's own clock is not
+// polled; a member that also sets Every (owner ruling 2026-11-20) is polled on
+// its interval as well, the window never stamps that clock, and a start that
+// finds the member's run active folds into it ("already active; skipped").
 //
 // Once per opening: a window's clock always holds the start instant of an
 // opening, never a poll time. A fire stamps LastDue with the start of the

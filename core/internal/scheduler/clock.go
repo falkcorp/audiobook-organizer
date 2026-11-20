@@ -60,8 +60,8 @@ func (d interval) Next(after time.Time, _ *time.Location) (time.Time, bool) {
 // effective is one kind's schedule as the current config states it.
 type effective struct {
 	enabled bool
-	window  string // a window member: the window runs it, its own clock is not polled
-	t       timing // nil when disabled or a window member
+	window  string // a window member: the window starts it once per opening
+	t       timing // nil when disabled or a window-only member, whose own clock is not polled
 	hash    string
 }
 
@@ -87,6 +87,14 @@ func effectiveOf(c tasks.ScheduleConfig, poll time.Duration, loc *time.Location)
 		d := c.Every.Std()
 		if d < poll {
 			return effective{}, fmt.Errorf("%w: every %s is below core.tasks.schedule_poll %s", errConfig, d, poll)
+		}
+		if c.Window != "" {
+			// Both (owner ruling 2026-11-20): the interval clock is polled
+			// as for an interval-only kind, and the window starts the kind
+			// as a member; a start that finds a run of the kind active folds
+			// into it (the executor's DedupePolicy), so one due moment never
+			// starts two runs.
+			return effective{enabled: true, window: c.Window, t: interval(d), hash: hashOf("every", d.String(), "window", c.Window)}, nil
 		}
 		return effective{enabled: true, t: interval(d), hash: hashOf("every", d.String())}, nil
 	case c.DailyAt != "":
