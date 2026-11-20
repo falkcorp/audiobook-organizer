@@ -215,9 +215,13 @@ core/kernel.kernelOutbox.register
 core/kernel.kernelOutbox.startNudger
 core/kernel.kernelOutbox.stopNudger
 core/kernel.kernelOutbox.writer
+core/kernel.kernelRealtime.closeOnShutdown
+core/kernel.kernelRealtime.run
+core/kernel.kernelRealtime.subscriptions
 core/kernel.kernelSecrets.close
 core/kernel.newKernelEvents
 core/kernel.newKernelOutbox
+core/kernel.newKernelRealtime
 core/kernel.openSecrets
 core/kernel.operatorString
 core/kernel.operatorValueString
@@ -228,6 +232,7 @@ core/kernel.outboxKinds
 core/kernel.outboxOwnerSpec
 core/kernel.outboxProbe
 core/kernel.outboxProblems
+core/kernel.realtimeOptions
 core/kernel.reapplyApplyFor
 core/kernel.reapplyInput.applicable
 core/kernel.reapplyInput.applyTail
@@ -256,6 +261,8 @@ core/kernel.reapplyInput.untrusted
 core/kernel.reapplyInput.writeBookkeeping
 core/kernel.reapplyInput.writeMarkers
 core/kernel.reapplyRevocations
+core/kernel.refreshPrincipal
+core/kernel.refreshReadErr
 core/kernel.registerCoreComponents
 core/kernel.reportSecretsHealth
 core/kernel.restoreAborted
