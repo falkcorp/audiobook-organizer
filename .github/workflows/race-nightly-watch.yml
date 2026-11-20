@@ -1,0 +1,157 @@
+# file: .github/workflows/race-nightly-watch.yml
+# version: 0.1.0
+# guid: 1f32203a-11f9-4752-a738-53dec04b2a7f
+# last-edited: 2026-11-20
+
+# Morning check of the nightly race-detector run (.woodpecker/race-nightly.yaml).
+#
+# The merge queue stopped running -race on 2026-11-20 (owner decision); the
+# whole race suite runs at 03:00 (America/New_York) on a Mac Woodpecker agent
+# instead. Woodpecker has no GitHub token to file anything itself, but it
+# posts a commit status on the commit it ran, one per matrix workflow:
+# `ci/woodpecker/cron/race-nightly/<n>`. Nobody looks at statuses on main by
+# hand, so this workflow does, the same way auto-revert-backstop.yml polls for
+# a red gate nobody reacted to: on a schedule, read-only on the code, and it
+# files a deduplicated issue.
+#
+# It reports when, in the last 26 hours:
+#   * any race-nightly status ended failure or error (a test failed or raced);
+#   * any is still pending five hours after the start (the pipeline is stuck,
+#     or no Mac agent was online to take it: llm1 down, mac not started);
+#   * fewer statuses exist than the matrix has entries;
+#   * none exist at all (the Woodpecker cron was never created, was disabled,
+#     or the server was down at 03:00).
+# One open issue (label race-nightly) collects them: a new finding comments on
+# it rather than opening a second one. A green night comments only when such
+# an issue is open, so the issue shows the recovery; a human closes it.
+#
+# Not part of "Continuous Integration": auto-revert.yml reacts to that
+# workflow's conclusion on main, and a nightly race found here must not revert
+# whatever happened to be main's tip. Manual run: `gh workflow run
+# race-nightly-watch.yml`.
+name: Race Nightly Watch
+
+on:
+  schedule:
+    - cron: '0 13 * * *' # 08:00 EST / 09:00 EDT, five hours after the 03:00 run
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  statuses: read
+  issues: write
+
+concurrency:
+  group: race-nightly-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    name: Check the nightly race run
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Read the race-nightly statuses on main
+        id: read
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREFIX: ci/woodpecker/cron/race-nightly
+          # The matrix in .woodpecker/race-nightly.yaml has six entries. Keep
+          # this in step with it.
+          EXPECTED: '6'
+        run: |
+          set -euo pipefail
+          since=$(date -u -d '-26 hours' +%Y-%m-%dT%H:%M:%SZ)
+          # The cron runs main's tip at 03:00, so the commit that carries the
+          # statuses is the newest one that has any: walk main back from its
+          # tip (60 commits is several days of merges).
+          sha=''
+          latest='[]'
+          for c in $(gh api "repos/$GITHUB_REPOSITORY/commits?sha=main&per_page=60" --jq '.[].sha'); do
+            rows=$(gh api "repos/$GITHUB_REPOSITORY/commits/$c/statuses?per_page=100" |
+              jq -c --arg p "$PREFIX" --arg since "$since" '
+                [.[] | select(.context | startswith($p)) | select(.created_at >= $since)]
+                | group_by(.context) | map(max_by(.created_at))
+                | map({context, state, target_url, created_at})')
+            if [ "$rows" != '[]' ]; then
+              sha=$c
+              latest=$rows
+              break
+            fi
+          done
+
+          count=$(jq 'length' <<<"$latest")
+          bad=$(jq '[.[] | select(.state == "failure" or .state == "error")] | length' <<<"$latest")
+          pending=$(jq '[.[] | select(.state == "pending")] | length' <<<"$latest")
+          if [ "$count" -eq 0 ]; then
+            verdict=missing
+          elif [ "$bad" -gt 0 ]; then
+            verdict=failed
+          elif [ "$pending" -gt 0 ]; then
+            verdict=unfinished
+          elif [ "$count" -lt "$EXPECTED" ]; then
+            verdict=incomplete
+          else
+            verdict=ok
+          fi
+          echo "verdict=$verdict sha=${sha:-none} statuses=$count failed=$bad pending=$pending (since $since)"
+
+          {
+            echo "### Race nightly watch"
+            echo
+            echo "- verdict: \`$verdict\`"
+            echo "- commit: \`${sha:-none}\`"
+            echo "- statuses since $since: $count of $EXPECTED (failed $bad, pending $pending)"
+            echo
+            jq -r '.[] | "- `\(.context)`: **\(.state)** \(.target_url // "")"' <<<"$latest"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          {
+            echo "_Filed by \`.github/workflows/race-nightly-watch.yml\` (run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)._"
+            echo
+            case "$verdict" in
+              ok) echo "The nightly race run passed on \`$sha\`: all $count workflows green." ;;
+              failed) echo "The nightly race run **failed** on \`$sha\`: $bad of $count workflows ended failure or error." ;;
+              unfinished) echo "The nightly race run on \`$sha\` has **not finished**: $pending of $count workflows are still pending. A Mac agent (llm1 or mac) may be offline or stuck." ;;
+              incomplete) echo "The nightly race run on \`$sha\` reported only $count of $EXPECTED workflows." ;;
+              missing) echo "**No nightly race run** reported a status on main in the last 26 hours. Check that the Woodpecker cron \`race-nightly\` exists and is enabled (docs/ci/woodpecker.md, \"Nightly race run\") and that the server was up at 03:00." ;;
+            esac
+            echo
+            jq -r '.[] | "- `\(.context)`: **\(.state)** \(.target_url // "")"' <<<"$latest"
+            echo
+            echo "The merge queue does not run the race detector (owner decision 2026-11-20); this run is where a race on main shows up. Reproduce a failed shard locally with the \`make\` line at the top of its Woodpecker log."
+          } > "$RUNNER_TEMP/race-nightly.md"
+
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: File or update the race-nightly issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERDICT: ${{ steps.read.outputs.verdict }}
+          SHA: ${{ steps.read.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # --state open: a closed earlier incident must not swallow a new one.
+          open=$(gh issue list --repo "$GITHUB_REPOSITORY" --label race-nightly --state open \
+            --json number --jq '.[0].number // empty')
+          if [ "$VERDICT" = ok ]; then
+            if [ -n "$open" ]; then
+              gh issue comment "$open" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/race-nightly.md"
+            fi
+            echo "::notice::nightly race run green on ${SHA:0:8}"
+            exit 0
+          fi
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/race-nightly.md"
+            echo "::warning::nightly race run $VERDICT; commented on #$open"
+            exit 0
+          fi
+          gh label create race-nightly --color D93F0B \
+            --description "Filed by race-nightly-watch.yml when the nightly -race run on main fails or does not run" \
+            --force --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || true
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "Nightly race run on main: $VERDICT${SHA:+ at ${SHA:0:8}}" \
+            --body-file "$RUNNER_TEMP/race-nightly.md" \
+            --label bug --label ci --label automation --label race-nightly
+          echo "::warning::nightly race run $VERDICT; issue filed"
