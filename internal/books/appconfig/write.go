@@ -107,6 +107,8 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 	resSet, resUnset := map[string]json.RawMessage{}, []string{}
 	var adminHeads, aiHeads []string
 	var unknown, readOnly []string
+	var locked []*coreconfig.LockedError
+	locks := e.Locks()
 	var invalid []error
 	byPath := map[coreconfig.Path]string{}
 	foldVals, rootsVals := map[string]json.RawMessage{}, map[string]json.RawMessage{}
@@ -185,6 +187,13 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 			unknown = append(unknown, head)
 			return
 		case p.residual:
+			if by, isLocked := locks[head]; isLocked {
+				// The blob is not core's store, so core's lock does not stop this
+				// write: an operator-set value is refused here instead of stored
+				// and overridden at the next boot, which HEAD did.
+				locked = append(locked, &coreconfig.LockedError{Path: coreconfig.Path(head), By: by})
+				return
+			}
 			if p.row.Admin {
 				adminHeads = append(adminHeads, head)
 			}
@@ -209,6 +218,10 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 			if !clear {
 				if err := json.Unmarshal(raw, &s); err != nil {
 					invalid = append(invalid, &coreconfig.FieldError{Path: path, Err: errors.New("a secret is a string")})
+					return
+				}
+				if hooks && maskCheckedHeads[head] && maskShaped(s) {
+					invalid = append(invalid, &coreconfig.FieldError{Path: path, Err: errMaskShaped(head)})
 					return
 				}
 			}
@@ -279,13 +292,21 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 	// Credentials follow their URL (egress.go): beyond HEAD parity. It sees the
 	// list the write ends with, so a model or URL folded in is checked too.
 	invalid = append(invalid, egressViolations(before, checked)...)
+	if hooks {
+		invalid = append(invalid, endpointsProblems(u)...)
+		invalid = append(invalid, maskedCredentialProblems(u)...)
+	}
 	if len(unknown) > 0 {
 		slices.Sort(unknown)
-		return config.UpdateResult{}, fmt.Errorf("%w: %s", coreconfig.ErrUnknownKey, strings.Join(unknown, ", "))
+		return config.UpdateResult{}, fmt.Errorf("%w: %s", coreconfig.ErrUnknownKey, unknownKeysMessage(unknown))
 	}
 	if len(readOnly) > 0 {
 		slices.Sort(readOnly)
 		return config.UpdateResult{}, fmt.Errorf("%w: %s", config.ErrKeyReadOnly, strings.Join(readOnly, ", "))
+	}
+	if len(locked) > 0 {
+		slices.SortFunc(locked, func(a, b *coreconfig.LockedError) int { return strings.Compare(string(a.Path), string(b.Path)) })
+		return config.UpdateResult{}, locked[0]
 	}
 	if len(invalid) > 0 {
 		return config.UpdateResult{}, headErr(errors.Join(coreconfig.ErrInvalid, errors.Join(invalid...)), byPath)
@@ -311,6 +332,15 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 			// names one key outside the list is not elevated: core sees the caller
 			// as they are and refuses every admin key in it.
 			applyAs = firstRunActor(a)
+		}
+	}
+	// HEAD ran Config.Validate on every PUT candidate before it wrote anything, and
+	// core's per-key schema does not state all of its checks (a backup codec, the
+	// naming patterns, the dedup ladder, a path's parent directory ...). Only a
+	// caller authorized for the keys reaches it: some checks look at the filesystem.
+	if hooks {
+		if err := e.validateCandidate(before, u, resSet["ai_endpoints"]); err != nil {
+			return config.UpdateResult{}, headErr(errors.Join(coreconfig.ErrInvalid, err), byPath)
 		}
 	}
 	// A program the server runs must be a path an unprivileged user cannot swap.
@@ -504,4 +534,70 @@ func mustMarshal(v any) json.RawMessage {
 		panic(err)
 	}
 	return raw
+}
+
+// validateCandidate is Config.Validate over the Config this update would
+// produce: the projection as it stands, with each named field set to the typed
+// value the update carries (the HEAD field a row fills, by the same decode the
+// update was already checked with). It reports only the problems the update
+// adds: one the stored state already has is not blamed on a save that does not
+// touch it, so an update that repairs a bad value is never refused for the bad
+// value it replaces, and an unset (a return to the default, which is valid) is
+// judged by what remains. At boot the projection passed Validate, so for every
+// stored state a running server can be in this is HEAD's rule exactly.
+//
+// aiOut is the ai_endpoints list an ai_backend.* write folds into, already
+// built; the candidate carries it, not the five scalar fields.
+func (e *Engine) validateCandidate(before config.Config, u config.Update, aiOut json.RawMessage) error {
+	cand := before.Clone()
+	for head, raw := range u.Set {
+		p, ok := e.byHead[head]
+		if !ok || p.kind == kindAI {
+			continue
+		}
+		if f, has := fieldAt(cand, p.segs); has && f.CanSet() {
+			// A value that does not fit was refused above; this decode cannot differ.
+			_ = json.Unmarshal(raw, f.Addr().Interface())
+		}
+	}
+	// An unset returns the key to the value no row gives it, which is the base.
+	if len(u.Unset) > 0 && e.base != nil {
+		def := e.base()
+		for _, head := range u.Unset {
+			p, ok := e.byHead[head]
+			if !ok || p.kind == kindAI {
+				continue
+			}
+			dst, hasDst := fieldAt(cand, p.segs)
+			src, hasSrc := fieldAt(&def, p.segs)
+			if hasDst && hasSrc && dst.CanSet() {
+				_ = json.Unmarshal(mustMarshal(src.Interface()), dst.Addr().Interface())
+			}
+		}
+	}
+	if aiOut != nil {
+		if f, has := fieldAt(cand, []string{"ai_endpoints"}); has {
+			_ = json.Unmarshal(aiOut, f.Addr().Interface())
+		}
+	}
+	found := cand.Problems()
+	if len(found) == 0 {
+		return nil
+	}
+	had := map[string]bool{}
+	for _, m := range before.Clone().Problems() {
+		had[m] = true
+	}
+	var errs []error
+	for _, m := range found {
+		if had[m] {
+			continue
+		}
+		path, _, _ := strings.Cut(m, " ")
+		if _, known := e.byHead[path]; !known {
+			path = ""
+		}
+		errs = append(errs, &coreconfig.FieldError{Path: coreconfig.Path(path), Err: errors.New(m)})
+	}
+	return errors.Join(errs...)
 }

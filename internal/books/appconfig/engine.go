@@ -348,6 +348,20 @@ func (e *Engine) project(ctx context.Context) (*projection, error) {
 			if val = resv[p.row.Head]; val == nil {
 				state = readUnset
 			}
+			// A residual setting HEAD's environment could also supply (the Deluge
+			// connection: DELUGE_WEB_URL, now its canonical ABO_ name) keeps that
+			// operator value authoritative and locked, as HEAD's envLockedSettings
+			// did. The blob holds only what no operator layer sets.
+			for _, t := range p.row.Targets {
+				if t.Kind != cutover.TargetPassthrough {
+					continue
+				}
+				if ov, ok := pass[coreconfig.Path(t.Path)]; ok {
+					if op, err := cutover.Unconvert(t.Convert, ov.Value); err == nil {
+						val, by, state = op, ov.By, readOK
+					}
+				}
+			}
 		} else {
 			val, by, state, rerr = e.read(ctx, p, pass)
 		}

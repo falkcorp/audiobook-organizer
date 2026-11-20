@@ -6,8 +6,12 @@
 package config
 
 import (
+	"errors"
+	"fmt"
 	"maps"
+	"net/url"
 	"slices"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
 )
@@ -128,4 +132,90 @@ func cloneStringMap(m map[string]string) map[string]string {
 	out := make(map[string]string, len(m))
 	maps.Copy(out, m)
 	return out
+}
+
+// knownAIAuthRefs are the secret names an endpoint row may reference.
+var knownAIAuthRefs = []string{"openai_api_key"}
+
+// normalizeEndpointURL is the form used for the (protocol, URL) uniqueness
+// check: trimmed, case-folded, without a trailing slash.
+func normalizeEndpointURL(u string) string {
+	return strings.TrimRight(strings.ToLower(strings.TrimSpace(u)), "/")
+}
+
+// ValidateAIEndpoints checks a submitted ai_endpoints list. It runs only on a
+// PUT that carries the key, so rows stored by a newer binary (with capability
+// IDs this one does not know) never block an unrelated settings save. The
+// config Engine calls it on the list a write carries; HEAD called it from the
+// update service this replaced.
+func ValidateAIEndpoints(rows []AIEndpoint) error {
+	var errs []string
+	ids := make(map[string]int, len(rows))
+	pairs := make(map[string]string, len(rows))
+	for i, r := range rows {
+		where := fmt.Sprintf("ai_endpoints[%d]", i)
+		if strings.TrimSpace(r.ID) == "" {
+			errs = append(errs, where+": id is required")
+		} else if j, dup := ids[r.ID]; dup {
+			errs = append(errs, fmt.Sprintf("%s: duplicate id %q (also ai_endpoints[%d])", where, r.ID, j))
+		} else {
+			ids[r.ID] = i
+		}
+		if r.ID != "" {
+			where = fmt.Sprintf("ai_endpoints[%d] (%s)", i, r.ID)
+		}
+
+		switch aidispatch.Protocol(r.Protocol) {
+		case aidispatch.ProtocolOpenAICompat, aidispatch.ProtocolWhisperServer:
+			if strings.TrimSpace(r.URL) == "" {
+				errs = append(errs, where+": url is required for protocol "+r.Protocol)
+			}
+		case aidispatch.ProtocolLocalProcess:
+		default:
+			errs = append(errs, fmt.Sprintf("%s: unknown protocol %q (want %s, %s or %s)", where, r.Protocol,
+				aidispatch.ProtocolOpenAICompat, aidispatch.ProtocolWhisperServer, aidispatch.ProtocolLocalProcess))
+		}
+		if r.URL != "" {
+			if u, err := url.Parse(r.URL); err == nil && u.User != nil {
+				errs = append(errs, where+": url must not embed credentials; use auth_ref")
+			}
+			key := r.Protocol + " " + normalizeEndpointURL(r.URL)
+			if other, dup := pairs[key]; dup {
+				errs = append(errs, fmt.Sprintf("%s: protocol %s and url %q are already used by %q", where, r.Protocol, r.URL, other))
+			} else {
+				pairs[key] = r.ID
+			}
+		}
+
+		if r.Concurrency < 0 {
+			errs = append(errs, fmt.Sprintf("%s: concurrency must be >= 0 (0 means 1), got %d", where, r.Concurrency))
+		}
+		for _, id := range r.Capabilities {
+			if msg := capabilityIDProblem(id); msg != "" {
+				errs = append(errs, where+": capabilities: "+msg)
+			}
+		}
+		for id := range r.CapabilityModels {
+			if msg := capabilityIDProblem(id); msg != "" {
+				errs = append(errs, where+": capability_models: "+msg)
+			}
+		}
+		if r.AuthRef != "" && !slices.Contains(knownAIAuthRefs, r.AuthRef) {
+			errs = append(errs, fmt.Sprintf("%s: auth_ref %q is not a known secret (want one of %v)", where, r.AuthRef, knownAIAuthRefs))
+		}
+	}
+	if len(errs) > 0 {
+		return errors.New("invalid ai_endpoints: " + strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func capabilityIDProblem(id string) string {
+	if strings.Contains(id, "*") {
+		return fmt.Sprintf("wildcard %q is not allowed; tick each capability explicitly", id)
+	}
+	if _, ok := aidispatch.ParseCapability(id); !ok {
+		return fmt.Sprintf("unknown capability %q (see GET /api/v1/ai/capabilities)", id)
+	}
+	return ""
 }

@@ -3386,7 +3386,17 @@ func (c *Config) Validate() error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
 	}
+	if errs := c.Problems(); len(errs) > 0 {
+		return fmt.Errorf("invalid configuration: %s", strings.Join(errs, "; "))
+	}
+	return nil
+}
 
+// Problems is every structural problem Validate would report, one message
+// each, and the same normalisations Validate makes (a zero that means "the
+// default" is replaced). The settings write path asks for the list so it can
+// name each setting; Validate is the boot and one-error form of the same checks.
+func (c *Config) Problems() []string {
 	var errs []string
 
 	// iTunes 4-state model: derive the legacy path shims, then run the fail-closed
@@ -3571,10 +3581,7 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Sprintf("%v (effective value = config.yaml dedup.signals overlaid by the settings blob persisted in the database via PUT /api/v1/config / Settings → Dedup / calibrate-composite apply — the persisted blob wins, so re-save a valid ladder there, or delete the blob's dedup.signals keys, if config.yaml already looks right)", err))
 	}
 
-	if len(errs) > 0 {
-		return fmt.Errorf("invalid configuration: %s", strings.Join(errs, "; "))
-	}
-	return nil
+	return errs
 }
 
 // factoryDefaultConfigForTest is the Config a fresh install gets from the shipped
