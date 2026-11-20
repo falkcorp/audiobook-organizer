@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/testdata/oraclefix/fix/fix.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 164bc002-83bc-4523-bed7-b8bfebfc2c9a
 // last-edited: 2026-11-19
 
@@ -12,6 +12,7 @@ package fix
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"slices"
 	"sync"
 
@@ -340,3 +341,125 @@ func ViaPhiOfHooks(first bool) {
 	}
 	f()
 }
+
+// --- Round 3: the default-deny shapes. Each root below was walked to no target
+// and no UNRESOLVED key by the round-2 dispatch.
+
+// injJob holds a callback a constructor takes as a parameter (shape a). The
+// constructor is exported, so code outside the program (the wiring) can call it
+// with any function.
+type injJob struct{ apply step }
+
+// NewInjJob stores its parameter into the field.
+func NewInjJob(fn step) *injJob { return &injJob{apply: fn} }
+
+var defaultInj = NewInjJob(renamedModify)
+
+// ViaInjectedField calls a field of a parameter, filled by the constructor's
+// parameter (shape a, the direct call).
+func ViaInjectedField(j *injJob, s *store.Store, id string) error { return j.apply(s, id) }
+
+// ViaInjectedFieldCallback hands the same field to a shared helper (shape a, the
+// operand form: round 1 B2's RunItems(..., j.deps.Apply)).
+func ViaInjectedFieldCallback(j *injJob, s *store.Store, ids []string) error {
+	return runEach(s, ids, j.apply)
+}
+
+// settable is a package variable with an in-program default and a setter that
+// stores its parameter (shape b): the wiring can replace the default.
+var settable step = dropAuthor
+
+// SetSettable is the setter.
+func SetSettable(fn step) { settable = fn }
+
+// ViaDefaultPlusSetter calls the variable.
+func ViaDefaultPlusSetter(s *store.Store, id string) error { return settable(s, id) }
+
+var unsetStepB step
+
+// runEachOrUnset falls back to a variable nothing stores to (shape c).
+func runEachOrUnset(s *store.Store, id string, fn step) error {
+	if fn == nil {
+		fn = unsetStepB
+	}
+	return fn(s, id)
+}
+
+// ViaParamOrUnset passes nil, so the unset default is what runs.
+func ViaParamOrUnset(s *store.Store, id string) error { return runEachOrUnset(s, id, nil) }
+
+var unsetStepC step
+
+func forwardA(s *store.Store, id string, fn step) error { return forwardB(s, id, fn) }
+
+func forwardB(s *store.Store, id string, fn step) error { return fn(s, id) }
+
+// ViaTwoLevelForward hands an unset variable through two forwarding helpers
+// (shape d).
+func ViaTwoLevelForward(s *store.Store, id string) error { return forwardA(s, id, unsetStepC) }
+
+func callHook(h func()) { h() }
+
+// ViaHelperOfCallResult hands a helper the result of a call that names no
+// function (shape d).
+func ViaHelperOfCallResult() { callHook(fetchHook()) }
+
+// ViaHelperOfOutsideClosure hands a helper a closure code outside the module
+// made (shape d): the outside-closure allowlist applies to it.
+func ViaHelperOfOutsideClosure(ctx context.Context) {
+	_, cancel := context.WithCancel(ctx)
+	callHook(cancel)
+}
+
+// ViaCopiedSteps copies a package-level slice into a local one and calls an
+// element (shape e).
+func ViaCopiedSteps(s *store.Store, id string) error {
+	fns := make([]step, len(steps))
+	copy(fns, steps)
+	return fns[0](s, id)
+}
+
+// ViaRangeCopied fills a local slice from a parameter's elements (shape e).
+func ViaRangeCopied(s *store.Store, id string, src []step) error {
+	fns := make([]step, len(src))
+	for i, f := range src {
+		fns[i] = f
+	}
+	return fns[0](s, id)
+}
+
+type hooks struct{ fire func() }
+
+// ViaHandedOutside hands a field nothing stores to to code outside the module,
+// which calls it (shape f).
+func ViaHandedOutside(ctx context.Context, h *hooks) { context.AfterFunc(ctx, h.fire) }
+
+// partialUndoer has a non-verb method; the program passes only the dry run, the
+// wiring passes the store-backed one (M1).
+type partialUndoer interface{ Rollback(id string) error }
+
+type dryUndo struct{}
+
+func (dryUndo) Rollback(string) error { return nil }
+
+type storeRollback struct{ s *store.Store }
+
+func (r storeRollback) Rollback(id string) error { return r.s.ModifyBook(id) }
+
+// ViaPartialNonVerb calls a non-verb interface method whose set of
+// implementations the program knows only in part.
+func ViaPartialNonVerb(u partialUndoer, id string) error { return u.Rollback(id) }
+
+// DryUndoCaller is the one in-program caller of ViaPartialNonVerb.
+func DryUndoCaller(id string) error { return ViaPartialNonVerb(dryUndo{}, id) }
+
+// rewinder is a module interface with a non-verb method nothing in the program
+// implements.
+type rewinder interface{ Rewind(id string) error }
+
+// ViaOrphanNonVerb calls it: no implementation, no verb.
+func ViaOrphanNonVerb(r rewinder, id string) error { return r.Rewind(id) }
+
+// ViaOutsideIface calls a non-verb method of an interface declared outside the
+// module.
+func ViaOutsideIface(x fmt.Stringer) string { return x.String() }
