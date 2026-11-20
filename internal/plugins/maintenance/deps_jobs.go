@@ -299,13 +299,17 @@ func jobsRows() map[string][]ops.Resource {
 
 // jobsRawFamilies maps a raw key's prefix to the family the shared table names
 // its row by. The prefixes are the merge package's key families
-// (internal/merge: combine_journal.go, group_redirect.go, pending_repair.go) and
+// (internal/merge: combine_journal.go, retire_link.go, sibling_journal.go,
+// group_redirect.go, pending_repair.go; TestJobsRawFamiliesCoverEveryMergePrefix
+// fails when the package gains one this list lacks) and
 // the dead-index prefixes retention-and-hygiene sweeps. A key in none of them
 // has no family, so its write is refused: the same SetRaw is a different row on
 // every key family and a caller that cannot say which gets none.
 var jobsRawFamilies = []struct{ prefix, family string }{
 	{"merge:combine-journal:", "merge_journal"},
 	{"merge:combine-undo-applied:", "merge_journal"},
+	{"merge:combine-retire:", "merge_journal"},
+	{"merge:sibling-journal:", "merge_journal"},
 	{"merge:group-redirect:", "group_redirect"},
 	{"merge_user_state_pending:", "user_state"},
 	{"merge:survivor-reconcile:", "user_state"},
