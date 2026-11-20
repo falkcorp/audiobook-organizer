@@ -27,9 +27,14 @@ const RelocationConsumerName = "books.deluge.book-relocated"
 // that is already committed wants the torrent to follow it; the kind's
 // Preview default must never apply to an outbox start (COR2-5).
 //
-// It replaces the in-process best-effort Deluge moves (NotifyDelugeAfterOrganize,
-// the version swap's and the import's), which the flip deletes in the same PR
-// that registers this consumer, so a move never triggers Deluge twice.
+// It replaces only NotifyDelugeAfterOrganize, which the flip deletes in the
+// same PR that registers this consumer, so an organize move never triggers
+// Deluge twice. The version-swap and import moves are not replaced and stay
+// in-process until the flip designs their events: a swap moves the
+// from-version to .versions/<id>, which path-update skips (it acts on the
+// Active version only), and a same-path swap writes no book row so stages
+// nothing; an import writes a book_file row and its DelugeHash, never
+// Book.FilePath.
 func RelocationConsumer() outbox.Handler {
 	return outbox.ConsumeIntoTask(database.BookRelocatedTopic(), RelocationConsumerName, pathUpdateKind,
 		relocationRunParams, outbox.Live())
