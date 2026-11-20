@@ -2281,14 +2281,16 @@ func (s *Server) startBackfills() {
 		}
 	})
 
-	// Author -> books index (database/pebble_store_author_books_index.go): the
-	// first boot after it shipped builds it (author_books: keys for every credit
-	// row and Book.AuthorID), then sets the sentinel that lets
-	// GET /authors/:id/books read it instead of scanning the library while
-	// memdb warms. Every later boot waits for warmup and reconciles in place,
-	// writing only keys that are absent (a rollback to a binary without the
-	// index leaves some). Resolved through resolveAuthorBooksIndexer for the
-	// reason resolveVGBackfiller exists. Never blocks startup.
+	// Author -> books index (books/store/pebble_store_author_books_index.go):
+	// every boot reconciles it at once, without waiting for warmup, writing
+	// only the author_books: credit-row keys that are absent (a rollback to a
+	// binary without the index leaves some). It has no persistent sentinel: a
+	// clean reconcile trusts it for this process only, so author listings
+	// (GET /authors/:id/books among them) read it instead of scanning the
+	// library while memdb warms, until a write revokes that trust
+	// (pebble_store_author_books_trust.go). runAuthorBooksIndexBoot has the
+	// sequence. Resolved through resolveAuthorBooksIndexer for the reason
+	// resolveVGBackfiller exists. Never blocks startup.
 	s.bgWG.Go("author-books-index", func() {
 		if err := s.bgCtx.Err(); err != nil {
 			return
@@ -3267,7 +3269,8 @@ func resolveAuthorBooksIndexer(s any) (authorBooksIndexer, bool) {
 // is a read-mostly pass. A failure is logged and leaves readers on the scan for
 // the life of the process: an unreadable credit row, or a listable book whose
 // AuthorID its credit list does not hold (the index cannot list it), keeps the
-// index untrusted until a later boot reconciles clean.
+// index untrusted until a later boot reconciles clean. A clean one trusts it
+// until a write that could uncover a book revokes that (pebble_store_author_books_trust.go).
 func runAuthorBooksIndexBoot(ctx context.Context, b authorBooksIndexer) {
 	if _, err := b.ReconcileAuthorBooksIndex(ctx); err != nil {
 		lifecycleLog.Warn("author-books-index: reconcile failed, authors' book lists keep scanning until a boot completes it: err=%s", logger.SanitizeLogValue(err.Error()))

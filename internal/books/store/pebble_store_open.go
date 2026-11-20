@@ -455,6 +455,9 @@ func (p *PebbleStore) startMemWarmup() {
 	memStore, memErr := NewMemStore()
 	if memErr != nil {
 		pebbleOpenLog.Warn("memdb init failed, in-memory queries disabled: %s", logger.SanitizeLogValue(memErr.Error()))
+		// Reads stay on Pebble for the whole process: stop trusting the
+		// author -> books index for it (abandonAuthorBooksTrust).
+		p.abandonAuthorBooksTrust("memdb init failed")
 		close(p.warmupDone)
 		return
 	}
@@ -486,11 +489,16 @@ func (p *PebbleStore) startMemWarmup() {
 		if warmErr := memStore.WarmFromPebble(warmupCtx, p); warmErr != nil {
 			pebbleOpenLog.Warn("memdb warmup failed after %d ms, will stay on Pebble for reads: %s",
 				time.Since(started).Milliseconds(), logger.SanitizeLogValue(warmErr.Error()))
+			// No retry: reads stay on Pebble for the whole process, so the
+			// author -> books index stops being trusted for it
+			// (abandonAuthorBooksTrust).
+			p.abandonAuthorBooksTrust("memdb warmup failed")
 			return
 		}
 		// Replays the buffered write-throughs into memStore and publishes it in
 		// one critical section, so no write can land between the two.
 		if !p.publishWarmMemStore(memStore) {
+			p.abandonAuthorBooksTrust("memdb not published")
 			return
 		}
 		pebbleOpenLog.Info("memdb warmup published after %d ms", time.Since(started).Milliseconds())
@@ -505,6 +513,16 @@ func (p *PebbleStore) startMemWarmup() {
 // HEAD did; both callers run them after the boot's pre-migration checkpoint.
 func (p *PebbleStore) runOpenRepairs() error {
 	if err := p.stampStorageFormat(); err != nil {
+		return err
+	}
+	// The pre-F5-18j author -> books sentinel goes before this build serves a
+	// single write: from its first book write on, the legacy family it vouches
+	// for is no longer maintained, and a rolled-back binary that still found
+	// the sentinel would trust that family without rebuilding it. The boot
+	// reconcile deletes it too, but runs in the background and may not finish
+	// before a crash (pebble_store_author_books_index.go,
+	// authorBooksIndexSentinelV1).
+	if err := p.dropAuthorBooksSentinelV1(); err != nil {
 		return err
 	}
 	if err := p.repairJournalClock(); err != nil {

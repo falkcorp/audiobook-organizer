@@ -954,16 +954,27 @@ func (p *PebbleStore) setBookAuthorsLocked(bookID string, authors []BookAuthor) 
 	if err != nil {
 		return nil, err
 	}
+	// Dropping an author can uncover the book (its AuthorID may be the one
+	// dropped), so the index's trust is revoked before and after the commit
+	// (pebble_store_author_books_trust.go, ORDERING).
+	newIDs := bookAuthorIDsOf(authors)
+	drops := creditRowDropsAnAuthor(oldIDs, oldOK, newIDs)
+	if drops {
+		p.revokeAuthorBooksTrust("credit row drops an author", bookID)
+	}
 	batch := p.db.NewBatch()
 	defer batch.Close()
 	if err := batch.Set(bookAuthorsKey(bookID), data, nil); err != nil {
 		return nil, err
 	}
-	if err := stageAuthorBooksCreditDiff(batch, bookID, oldIDs, oldOK, bookAuthorIDsOf(authors)); err != nil {
+	if err := stageAuthorBooksCreditDiff(batch, bookID, oldIDs, oldOK, newIDs); err != nil {
 		return nil, err
 	}
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return nil, err
+	}
+	if drops {
+		p.revokeAuthorBooksTrust("credit row drops an author", bookID)
 	}
 	// A credit change is a change to the book as every list reads it: an
 	// author: filter matches the credited authors, and the library-list
