@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/writes_oracle_test.go
-// version: 3.4.0
+// version: 3.5.0
 // guid: 40eadd67-76ac-419f-a3fe-7d1ed5e586e2
 // last-edited: 2026-11-19
 
@@ -57,6 +57,22 @@ var oracleVerb = regexp.MustCompile(`^(Create|Update|Delete|Set|Save|Add|Remove|
 // oracleNotAWrite names receivers whose "writes" are not a books resource:
 // progress and liveness reporting, hashing, and the activity log's own sink.
 var oracleNotAWrite = regexp.MustCompile(`Reporter|LivenessToucher|hash\.Hash|ActivityLogWriter`)
+
+// oracleReporterOwn are the writes the run's reporter makes for itself, keyed by
+// "<calling function> <receiver>.<method>": the op-log and op-error rows and the
+// activity entry the operations registry persists for every run, whatever the
+// job, through the registry's own store. A job's log line reaches them in
+// production (logger.StandardLogger -> slog.Handler.Handle -> the registry's
+// fanoutHandler -> dbReporter.Log), which the walk sees once it walks the module's
+// implementations of an outside interface. They are not the job's effects, so
+// F5-18's fences must not be built from them (seams.d/F5-18m.md). Exempt only in
+// these functions: the same store methods called from anywhere else, job code
+// included, are still noted (TestOracleWalk_ReporterOwnIsScopedToItsFunctions).
+var oracleReporterOwn = map[string]bool{
+	"(*github.com/falkcorp/audiobook-organizer/internal/operations/registry.dbReporter).Log store.OpsV2Store.InsertOpErrorV2":                            true,
+	"(*github.com/falkcorp/audiobook-organizer/internal/operations/registry.dbReporter).recordActivity registry.ActivityRecorder.Record":                 true,
+	"(github.com/falkcorp/audiobook-organizer/internal/operations/registry.prodSchedulerStore).InsertOpErrorV2 registry.opRegistryStore.InsertOpErrorV2": true,
+}
 
 // oracleNotWalked are functions the walk does not follow into, though they are
 // inside the module: the scan stand-down hold's heartbeat. RunItems calls
@@ -152,6 +168,8 @@ type oracleProgram struct {
 	// impls caches declaredImpls, cache resolve and ifaceOpen.
 	impls *oracleImplCache
 	cache *oracleResolveCache
+	// reporterOwn is oracleReporterOwn; a fixture test swaps in its own.
+	reporterOwn map[string]bool
 }
 
 // oracleCallGraph is VTA over every function of the module (and every synthetic
@@ -1554,7 +1572,7 @@ func derivedWrites(op *oracleProgram, runFn *ssa.Function) (kinds []string, evid
 						calls[recv+"."+name] = f.String()
 					}
 					verb := oracleVerb.MatchString(name)
-					if verb && !oracleNotAWrite.MatchString(recv) {
+					if verb && !oracleNotAWrite.MatchString(recv) && !op.reporterOwn[f.String()+" "+recv+"."+name] {
 						note(oracleResource(recv, name), recv+"."+name+" in "+f.String())
 					}
 					// A method named like no write whose bodies the walk
@@ -1645,7 +1663,7 @@ func derivedWrites(op *oracleProgram, runFn *ssa.Function) (kinds []string, evid
 					// package's own bodies are not walked.
 					if owner.Signature.Recv() != nil && oracleVerb.MatchString(owner.Name()) {
 						recv := types.TypeString(owner.Signature.Recv().Type(), func(p *types.Package) string { return p.Name() })
-						if !oracleNotAWrite.MatchString(recv) {
+						if !oracleNotAWrite.MatchString(recv) && !op.reporterOwn[f.String()+" "+recv+"."+owner.Name()] {
 							note(oracleResource(recv, owner.Name()), recv+"."+owner.Name()+" in "+f.String())
 						}
 					}
@@ -1772,7 +1790,7 @@ func loadOracleProgram(checkBuild bool, patterns ...string) (*oracleProgram, err
 	}
 	g, c := oracleCallGraph(prog)
 	return &oracleProgram{prog: prog, graph: g, cha: c, roots: ssapkgs, flows: buildOracleFlows(prog), impls: &oracleImplCache{m: map[string][]*ssa.Function{}},
-		cache: &oracleResolveCache{m: map[oracleCacheKey]oracleRes{}}}, nil
+		cache: &oracleResolveCache{m: map[oracleCacheKey]oracleRes{}}, reporterOwn: oracleReporterOwn}, nil
 }
 
 func loadOracleJobs() (map[string]oracleJob, error) {
