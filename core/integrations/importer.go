@@ -1,7 +1,7 @@
 // file: core/integrations/importer.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4d4c4598-17e3-44ff-83be-ad14e5b9b4d9
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package integrations
 
@@ -74,6 +74,18 @@ func ImportAudit(a AuditRecorder) ImporterOption {
 	return func(im *nativeImporter) { im.audit = a }
 }
 
+// ImportValidator makes the importer run reg's kind validators
+// (Registry.SetValidator) over each record it imports, so a migrated instance
+// is held to the rule a Put of it would be. The record's adapter must be
+// registered with reg and of the record's kind, else the record is not judged
+// and is kept for the Registry to report, as without this option; the
+// validator is handed the non-secret fields and no stored row. A refusal
+// wraps ErrInvalid, nothing is staged, and the cutover step decides what to do
+// with the record (M6 quarantines it). The serve path never validates.
+func ImportValidator(reg *Registry) ImporterOption {
+	return func(im *nativeImporter) { im.reg = reg }
+}
+
 // NativeImporter is the importer over c/integrations/. The options are a
 // deviation from M1.3's NativeImporter(ks), additive at every call site: the
 // audit record the importer stages needs an audit store a keyspace does not
@@ -90,6 +102,7 @@ func NativeImporter(ks storage.Keyspace, opts ...ImporterOption) Importer {
 type nativeImporter struct {
 	s     *instancestore.Store
 	audit AuditRecorder
+	reg   *Registry // ImportValidator; nil = the kind validators are not run
 }
 
 // ImportInstance validates inst, forces Origin migration and version 1, and
@@ -103,6 +116,11 @@ func (im *nativeImporter) ImportInstance(ctx context.Context, b *storage.Batch, 
 	}
 	if err := checkImport(inst); err != nil {
 		return err
+	}
+	if im.reg != nil {
+		if err := im.reg.validateImport(inst.Config); err != nil {
+			return err
+		}
 	}
 	inst.Config.Origin = OriginMigration
 	inst.Config.Version = 0

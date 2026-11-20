@@ -1,7 +1,7 @@
 // file: core/integrations/lease.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 8db314c4-39fe-4242-974f-f95bb76ffdd4
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package integrations
 
@@ -480,8 +480,8 @@ func (r *Registry) ProbeAll(ctx context.Context) error {
 	return ctx.Err()
 }
 
-// observe records h as s's last health, feeds the metrics and calls
-// Options.HealthChanged when the status moved.
+// observe records h as s's last health, feeds the metrics, calls
+// Options.HealthChanged when the status moved and Options.Probed always.
 func (r *Registry) observe(s *slot, h Health, probed bool, d time.Duration) {
 	ref := s.cfg.Ref
 	r.hmu.Lock()
@@ -493,6 +493,9 @@ func (r *Registry) observe(s *slot, h Health, probed bool, d time.Duration) {
 	}
 	if r.o.HealthChanged != nil && (!had || prev.Status != h.Status) {
 		r.o.HealthChanged(ref, h)
+	}
+	if r.o.Probed != nil {
+		r.o.Probed(ref, h)
 	}
 }
 
