@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/egress_dial.go
-// version: 1.2.0
+// version: 1.1.0
 // guid: b7d2c940-3f1e-4a85-9c6d-0e48a1f27b53
 // last-edited: 2026-11-19
 
@@ -62,7 +62,7 @@ func (g *gate) DialContext(ctx context.Context, network, addr string) (net.Conn,
 	if err != nil {
 		if isEgressRefusal(err) {
 			r.met.refused(g.ref, ReasonEgress)
-				return nil, refuse(g.ref, "dial", ReasonEgress, time.Time{}, err)
+			return nil, refuse(g.ref, "dial", ReasonEgress, time.Time{}, err)
 		}
 		return nil, err
 	}
