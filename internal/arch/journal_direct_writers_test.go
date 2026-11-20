@@ -1,7 +1,7 @@
 // file: internal/arch/journal_direct_writers_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5b2f9a6e-1d84-4c37-a0e3-7c91d2f4b685
-// last-edited: 2026-11-13
+// last-edited: 2026-11-19
 
 package arch
 
@@ -51,6 +51,9 @@ var journalDirectAllowed = map[string]string{
 		"passed through database.RecordOperationChange (its store view's CreateOperationChange is called by that helper only); " +
 		"it creates no row of its own",
 	"pkg/ops/opstest/world.go": "the in-memory test world forwards the store method it implements; it creates no row of its own",
+	"internal/books/writer/metafetchgate/store.go": "the gated metafetch store decorator forwards the one store method it gates " +
+		"(CreateOperationChange) inside a tasks.Writer.Do; the row was already built, and classified, by the caller's " +
+		"database.RecordOperationChange, so it creates no row of its own",
 }
 
 // scanJournalDirectWrites returns, for every non-test Go file under root that
