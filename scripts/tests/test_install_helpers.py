@@ -548,6 +548,15 @@ class InstallHelpers(unittest.TestCase):
             out,
         )
         self.assertIn("--apply", out)
+        piped = [ln for ln in out.splitlines() if "| sudo tar" in ln]
+        self.assertEqual(len(piped), 1, out)
+        for needed in (
+            "deploy/rollback-helpers",
+            "deploy/audiobook-organizer.service",
+            "scripts/storage_format_guard.py",
+            "--no-same-owner",
+        ):
+            self.assertIn(needed, piped[0], "what the installer reads, extracted root-owned")
         applied = out.split('if [ -n "1" ]; then', 1)[1].split("else", 1)[0]
         self.assertNotIn("python3 -I deploy/rollback-helpers", applied, "never from the checkout")
 
@@ -574,6 +583,21 @@ class InstallHelpers(unittest.TestCase):
         self.assertIn("run the dry run with sudo", p.stdout)
         self.assertIn("alfred ALL=", p.stdout, "the rendered text is still shown")
         self.assertEqual(self.dropin.read_text(), before, "dry run: untouched")
+
+    def test_an_apply_that_cannot_read_the_dropin_it_would_restore_refuses_cleanly(self) -> None:
+        if os.geteuid() == 0:
+            self.skipTest("root can read any file")
+        self.assertEqual(self.run_tool("--apply").returncode, 0)
+        before = self.dropin.read_text()
+        self.dropin.chmod(0o000)
+        try:
+            p = self.run_tool("--apply")
+        finally:
+            self.dropin.chmod(0o440)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertIn("cannot read", p.stderr + p.stdout)
+        self.assertEqual(self.dropin.read_text(), before, "left as it was")
 
     def test_a_sudoers_with_the_right_text_and_the_wrong_mode_is_rewritten(self) -> None:
         self.assertEqual(self.run_tool("--apply").returncode, 0)
