@@ -13,8 +13,7 @@ import { useState } from 'react';
 import { Box, List, ListItemButton, ListItemText, Paper, Stack, Tab, Tabs, Typography } from '@mui/material';
 import { Link as RouterLink, useParams } from 'react-router';
 import { DataState } from '@mediacore/ui-kit';
-import { useAuth } from '../auth';
-import { holds } from '../nav/navModel';
+import { useGrants } from '../auth';
 import { SettingsSection } from '../settings';
 import type { Lazy } from '../types';
 import { useMountedModules, useShellContext } from './context';
@@ -27,10 +26,10 @@ import { Page } from './Page';
 /** Module contributions visible to the user, in module ID then `order` order. */
 function useSlots<T extends { id: string; permission?: string; order?: number }>(pick: (m: ReturnType<typeof useMountedModules>['modules'][number]) => readonly T[] | undefined) {
   const { modules, status } = useMountedModules();
-  const { permissions } = useAuth();
+  const grants = useGrants();
   const slots = modules
     .flatMap((m) => (pick(m) ?? []).map((s) => ({ ...s, moduleId: m.id })))
-    .filter((s) => holds(permissions, s.permission))
+    .filter((s) => grants(s.permission))
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   return { slots, status };
 }
@@ -125,7 +124,7 @@ export function SettingsPage() {
 /** /system: status widgets, diagnostics widgets, and System → UI diagnostics for admins (07 §7.5.2). */
 export function SystemPage() {
   const { diagnostics } = useMountedModules();
-  const { permissions } = useAuth();
+  const grants = useGrants();
   const shown = diagnostics.filter((d) => d.level !== 'debug');
   return (
     <Page title="System">
@@ -134,7 +133,7 @@ export function SystemPage() {
         Diagnostics
       </Typography>
       <Widgets placement="diagnostics" />
-      {holds(permissions, 'core:admin') && (
+      {grants('core:admin') && (
         <>
           <Typography variant="h6" component="h2" sx={{ mt: 3 }}>
             UI diagnostics

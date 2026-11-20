@@ -6,8 +6,7 @@
 import { useEffect, useMemo, type ComponentType, type ReactNode } from 'react';
 import { Outlet, useNavigate, type RouteObject } from 'react-router';
 import { DataState } from '@mediacore/ui-kit';
-import { AuthProvider, InvitePage, LoginPage, ModulesHintsContext, RequireAuth, SetupPage, TempLoginPage, useAuth } from '../auth';
-import { holds } from '../nav/navModel';
+import { AuthProvider, InvitePage, LoginPage, ModulesHintsContext, RequireAuth, SetupPage, TempLoginPage, useAuth, useGrants } from '../auth';
 import { RealtimeProvider } from '../realtime';
 import type { RealtimeSource } from '../contracts';
 import type { ModuleManifest, ModuleUI, RouteContribution } from '../types';
@@ -80,7 +79,7 @@ export function ShellFrame({ realtime }: { realtime: RealtimeSource }) {
 /** A module page: waits for the intersection, 404s an unmounted module, guards its permission. */
 function ModuleRoute({ moduleId, route }: { moduleId: string; route: RouteContribution<ModuleManifest> }) {
   const { status, modules } = useMountedModules();
-  const { permissions } = useAuth();
+  const grants = useGrants();
   const mounted = modules.find((m) => m.id === moduleId);
   const live = mounted?.routes.find((r) => r.id === route.id);
   useEffect(() => {
@@ -89,7 +88,7 @@ function ModuleRoute({ moduleId, route }: { moduleId: string; route: RouteContri
   if (status === 'loading' || status === 'idle') return <DataState status="loading" />;
   if (status === 'error' && !live) return <DataState status="error" error="The module list did not load, so this page cannot be shown." />;
   if (!live) return <NotFoundPage />;
-  if (!holds(permissions, live.permission)) return <NoAccessPage />;
+  if (!grants(live.permission)) return <NoAccessPage />;
   return <LazySlot load={live.lazy} label={live.title ?? `${moduleId} ${live.id}`} />;
 }
 

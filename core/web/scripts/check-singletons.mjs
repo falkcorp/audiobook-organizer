@@ -18,10 +18,14 @@ import { SINGLETONS } from '@mediacore/shell/vite';
 const here = dirname(fileURLToPath(import.meta.url));
 const dist = resolve(process.argv[2] ?? join(here, '../../examples/hello/web/dist'));
 
+// Longest name first: react/compiler-runtime's files live under react/, so
+// testing "react" first would file them as React and never name the runtime.
+const BY_SPECIFICITY = [...SINGLETONS].sort((a, b) => b.length - a.length);
+
 /** The package directory (…/node_modules/<name>) a source path comes from, for a singleton, or null. */
 export function singletonDir(source) {
   const norm = source.replace(/\\/g, '/');
-  for (const name of SINGLETONS) {
+  for (const name of BY_SPECIFICITY) {
     const pkg = name === 'react/compiler-runtime' ? 'react' : name;
     const marker = `/node_modules/${pkg}/`;
     const at = norm.lastIndexOf(marker);

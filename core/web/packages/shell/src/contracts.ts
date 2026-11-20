@@ -9,7 +9,7 @@
 
 import type { Permission } from './types';
 
-/** The signed-in user, as GET /api/core/v1/auth/me returns it (authhttp.Me). */
+/** The signed-in user, as GET /api/core/v1/me returns it (core/internal/authhttp/me.go getMe). */
 export interface AuthUser {
   id: string;
   username: string;
@@ -31,7 +31,7 @@ export interface AuthState {
   setupRequired: boolean;
   authDisabled: boolean;
   error: string | null;
-  /** Re-probes /auth/status and /auth/me. */
+  /** Re-probes /auth/status and /me. */
   refresh(): Promise<void>;
   /** POST /auth/logout, then anonymous; the caller navigates to /login. */
   logout(): Promise<void>;

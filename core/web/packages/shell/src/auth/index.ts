@@ -5,7 +5,7 @@
 
 export { AuthProvider, type AuthProviderProps } from './AuthProvider';
 export { AuthClientContext, AuthContext, ModulesHintsContext } from './context';
-export { hasPermission, useAction, useAuth, useAuthClient, usePermission } from './hooks';
+export { grantsFor, grantsOf, hasPermission, useAction, useAuth, useAuthClient, useGrants, usePermission, type Grants } from './hooks';
 export { RequireAuth } from './RequireAuth';
 export { safeReturn } from './safeReturn';
 export { default as InvitePage } from './InvitePage';

@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Alert, Button, Typography } from '@mui/material';
 import { BlockingPage } from '@mediacore/ui-kit';
-import { useAuth } from '../auth';
+import { grantsOf, useAuth } from '../auth';
 import { useResync } from '../realtime';
 import { intersect, loadServerModules, reportDiagnostics, type Diagnostic, type IntersectResult } from '../version';
 import { MountedModulesContext, useShellContext } from './context';
@@ -34,7 +34,7 @@ export function ModulesGate({ children }: { children: ReactNode }) {
   useResync(resync);
 
   const signedIn = auth.status === 'authenticated';
-  const isAdmin = auth.permissions.includes('core:admin');
+  const isAdmin = grantsOf(auth)('core:admin');
   useEffect(() => {
     if (!signedIn) {
       setState({ phase: 'idle' });

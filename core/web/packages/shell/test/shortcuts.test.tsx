@@ -14,6 +14,7 @@ import { useMemo } from 'react';
 import { useNavigate } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 import { useKeyboardShortcuts } from '@mediacore/ui-kit';
+import { grantsFor } from '../src/auth/hooks';
 import { buildGoTable, buildNav } from '../src/nav/navModel';
 import { renderInShell } from '../src/testing';
 import type { ModuleUI } from '../src/types';
@@ -22,7 +23,7 @@ import { arkham, batcave } from './fixtures';
 function Shortcuts({ modules }: { modules: readonly ModuleUI[] }) {
   const navigate = useNavigate();
   const table = useMemo(
-    () => buildGoTable(buildNav(modules, ['batcave:read', 'arkham:read'])).map((e) => ({ key: e.key, run: () => navigate(e.href) })),
+    () => buildGoTable(buildNav(modules, grantsFor(['batcave:read', 'arkham:read']))).map((e) => ({ key: e.key, run: () => navigate(e.href) })),
     [modules, navigate],
   );
   useKeyboardShortcuts(table);
