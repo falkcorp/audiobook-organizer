@@ -1,5 +1,5 @@
 // file: core/integrations/notify/mail/email.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a9d25e71-4c08-4b36-8e1f-37f0c6a2d584
 // last-edited: 2026-11-19
 
@@ -240,15 +240,13 @@ func (c *channel) Send(ctx context.Context, n notify.Notification, _ notify.Targ
 		return nil
 	}
 	class, status := classify(ctx, err)
-	if class == integrations.ClassRefusedLocal {
-		// A refusal the gate's own dial made (the egress guard, the switch, no
-		// guard available): return it as it is. It names neither the host nor
-		// the address, and its cause lets the delivery tell a refusal that
-		// time lifts from one that needs a person. The sender's own text around
-		// it carries the host and port, so it is not returned.
-		if refusal, ok := errors.AsType[*integrations.Error](err); ok && refusal.Class == integrations.ClassRefusedLocal {
-			return refusal
-		}
+	// A refusal the gate's own dial made (the egress guard, the switch, no
+	// guard available) is returned as it is. It names neither the host nor
+	// the address, and its cause lets the delivery tell a refusal that time
+	// lifts from one that needs a person. The sender's own text around it
+	// carries the host and port, so it is not returned.
+	if refusal, ok := errors.AsType[*integrations.Error](err); ok && refusal.Class == integrations.ClassRefusedLocal {
+		return refusal
 	}
 	return fail(class, status, errors.New(summary(class)))
 }
