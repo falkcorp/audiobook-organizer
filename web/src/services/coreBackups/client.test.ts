@@ -132,6 +132,24 @@ function client(f: ReturnType<typeof fake>, o: Parameters<typeof createBackupsCl
   return createBackupsClient({ fetch: f.fetch, ...o });
 }
 
+/**
+ * A fetch that stays pending until resolve() is called and, like a real fetch, rejects with an
+ * AbortError the moment its signal aborts. A fake that ignores init.signal cannot tell a client
+ * that set a deadline from one that did not.
+ */
+function pendingFetch() {
+  const signals: AbortSignal[] = [];
+  let answer!: (r: Response) => void;
+  const f: typeof fetch = (_u, init) =>
+    new Promise<Response>((res, rej) => {
+      answer = res;
+      const sig = init?.signal as AbortSignal;
+      signals.push(sig);
+      sig.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')));
+    });
+  return { fetch: f, signals, resolve: (r: Response) => answer(r) };
+}
+
 async function caught(p: Promise<unknown>): Promise<unknown> {
   try {
     await p;
@@ -242,13 +260,24 @@ describe('list', () => {
   });
 
   it('only ids the server issues reach fetch (ULID or legacy-)', async () => {
-    const f = fake(noContent(), noContent());
+    const legacy200 = `legacy-${'a'.repeat(193)}`;
+    const f = fake(noContent(), noContent(), noContent());
+    await client(f).remove(legacy200);
     await client(f).remove('legacy-bruce_wayne-1');
     await client(f).remove(ID);
-    for (const bad of ['abc', ID.toLowerCase(), ID + 'A', 'legacy-', 'legacy-a/b', 'legacy-a.b']) {
+    for (const bad of [
+      'abc',
+      ID.toLowerCase(),
+      ID + 'A',
+      'legacy-',
+      'legacy-a/b',
+      'legacy-a.b',
+      `legacy-${'a'.repeat(19)}`, // 26 bytes: Go's ULID-length branch refuses it
+      `${legacy200}a`, // 201 bytes
+    ]) {
       expect(await caught(client(f).remove(bad))).toBeInstanceOf(BackupArgumentError);
     }
-    expect(f.calls).toHaveLength(2);
+    expect(f.calls).toHaveLength(3);
   });
 
   it('a 200 with the wrong shape is a BackupProtocolError, not a crash', async () => {
@@ -439,11 +468,11 @@ describe('importArchive', () => {
 
   it('is not abandoned by the 30 s default deadline', async () => {
     vi.useFakeTimers();
-    let resolve!: (r: Response) => void;
-    const f: typeof fetch = () => new Promise<Response>((r) => (resolve = r));
-    const p = createBackupsClient({ fetch: f }).importArchive('a.archive', new Blob(['x']));
+    const pf = pendingFetch();
+    const p = createBackupsClient({ fetch: pf.fetch }).importArchive('a.archive', new Blob(['x']));
     await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
-    resolve(jsonRes(ARCHIVE, 201));
+    expect(pf.signals[0].aborted).toBe(false);
+    pf.resolve(jsonRes(ARCHIVE, 201));
     await expect(p).resolves.toEqual(ARCHIVE);
   });
 
@@ -611,11 +640,11 @@ describe('restore staging', () => {
 
   it('is not abandoned by the 30 s default deadline, and honours stageTimeoutMs when set', async () => {
     vi.useFakeTimers();
-    let resolve!: (r: Response) => void;
-    const slow: typeof fetch = () => new Promise<Response>((r) => (resolve = r));
-    const p = createBackupsClient({ fetch: slow }).restore(ID);
+    const pf = pendingFetch();
+    const p = createBackupsClient({ fetch: pf.fetch }).restore(ID);
     await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
-    resolve(jsonRes(STAGED, 202));
+    expect(pf.signals[0].aborted).toBe(false);
+    pf.resolve(jsonRes(STAGED, 202));
     await expect(p).resolves.toEqual(STAGED);
 
     const hung: typeof fetch = (_u, init) =>
@@ -683,12 +712,12 @@ describe('revert, pending and cancel', () => {
 
   it('revert is not abandoned by the 30 s default deadline, and honours stageTimeoutMs', async () => {
     vi.useFakeTimers();
-    let resolve!: (r: Response) => void;
-    const slow: typeof fetch = () => new Promise<Response>((r) => (resolve = r));
-    const p = createBackupsClient({ fetch: slow }).revert();
+    const pf = pendingFetch();
+    const p = createBackupsClient({ fetch: pf.fetch }).revert();
     await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    expect(pf.signals[0].aborted).toBe(false);
     const staged = { pending: { ...PENDING, kind: 'revert' }, restart_required: true };
-    resolve(jsonRes(staged, 202));
+    pf.resolve(jsonRes(staged, 202));
     await expect(p).resolves.toEqual(staged);
 
     const hung: typeof fetch = (_u, init) =>
