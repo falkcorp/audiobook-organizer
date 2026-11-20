@@ -1,5 +1,5 @@
 // file: web/src/hooks/useSettingsHandlers.ts
-// version: 1.16.0
+// version: 1.17.0
 // guid: b8c9d0e1-f2a3-4567-bcde-678901234567
 // last-edited: 2026-11-19
 
@@ -706,15 +706,27 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
     try {
       const text = await file.text();
       const parsed = JSON.parse(text) as Partial<api.Config>;
-      const { cleaned, skipped } = sanitizeSettingsImportWithReport(parsed);
+      // What the server has now decides which sources are new and which saved
+      // addresses a file may not change. If it cannot be read, no address from
+      // the file is imported.
+      let current: api.Config | undefined;
+      try {
+        current = await api.getConfig();
+      } catch {
+        current = undefined;
+      }
+      const { cleaned, skipped, ignored } = sanitizeSettingsImportWithReport(parsed, current);
       setImportFileName(file.name);
       setImportPayload(cleaned);
       setImportDialogOpen(true);
+      const notes: string[] = [];
       if (skipped.length > 0) {
-        setImportNotice(
-          `Secrets are not imported from a file: ${skipped.join(', ')}. Enter them in Settings.`
-        );
+        notes.push(`Secrets are not imported from a file: ${skipped.join(', ')}. Enter them in Settings.`);
       }
+      if (ignored.length > 0) {
+        notes.push(`Not imported: ${ignored.join('; ')}.`);
+      }
+      if (notes.length > 0) setImportNotice(notes.join(' '));
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Import failed.';

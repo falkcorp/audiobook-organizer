@@ -1,10 +1,14 @@
 // file: web/src/utils/sanitizeSettingsImport.test.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: 8a2d4f60-1b3e-4c7a-b95d-6e0f2a7c3d19
 // last-edited: 2026-11-19
 
 import { describe, it, expect } from 'vitest';
-import { sanitizeSettingsImport, sanitizeSettingsImportWithReport } from './sanitizeSettingsImport';
+import {
+  IGNORED_ADDRESS_NOTE,
+  sanitizeSettingsImport,
+  sanitizeSettingsImportWithReport,
+} from './sanitizeSettingsImport';
 import type * as api from '../services/api';
 
 // Legacy settings files carry keys that are no longer on api.Config, so the
@@ -160,28 +164,121 @@ describe('sanitizeSettingsImport', () => {
     ]);
   });
 
-  it("keeps a source's base_url and rate_limit, and reports no blank credential from an exported file", () => {
-    const { cleaned, skipped } = sanitizeSettingsImportWithReport({
-      metadata_sources: [
-        {
-          id: 'hardcover',
-          name: 'Hardcover',
-          enabled: true,
-          priority: 1,
-          requires_auth: true,
-          // What an export carries: the key with a blank value.
-          credentials: { apiKey: '' },
-          base_url: 'https://books.mirror.example.test',
-          rate_limit: { tier: 'low' },
-        },
-      ],
-    } as unknown as Partial<api.Config>);
-    expect(cleaned.metadata_sources?.[0]).toMatchObject({
-      base_url: 'https://books.mirror.example.test',
-      rate_limit: { tier: 'low' },
-      credentials: {},
+  describe('addresses a stored credential is sent to', () => {
+    const MIRROR = 'https://books.mirror.example.test';
+    const ATTACKER = 'https://evil.example.test';
+    const current = {
+      metadata_sources: [{ id: 'hardcover', base_url: MIRROR }, { id: 'audible' }],
+      embedding: { base_url: 'https://embed.example.test' },
+    };
+    const fileWith = (sources: unknown[]) =>
+      ({ metadata_sources: sources }) as unknown as Partial<api.Config>;
+    const src = (id: string, more: Record<string, unknown> = {}) => ({
+      id,
+      name: id,
+      enabled: true,
+      priority: 1,
+      requires_auth: true,
+      credentials: { apiKey: '' },
+      ...more,
     });
-    expect(skipped).toEqual([]);
+
+    it("drops an imported base_url on an existing source, keeps the server's, and reports it", () => {
+      const { cleaned, ignored } = sanitizeSettingsImportWithReport(
+        fileWith([src('hardcover', { base_url: ATTACKER })]),
+        current
+      );
+      expect(cleaned.metadata_sources?.[0]).toMatchObject({ base_url: MIRROR });
+      expect(JSON.stringify(cleaned)).not.toContain(ATTACKER);
+      expect(ignored).toEqual([`metadata_sources[hardcover].base_url (${IGNORED_ADDRESS_NOTE})`]);
+    });
+
+    it('does not give an existing source with no saved address one from the file', () => {
+      const { cleaned, ignored } = sanitizeSettingsImportWithReport(
+        fileWith([src('audible', { base_url: ATTACKER })]),
+        current
+      );
+      expect(cleaned.metadata_sources?.[0]).not.toHaveProperty('base_url');
+      expect(ignored).toHaveLength(1);
+    });
+
+    it('reports nothing when the file repeats the saved address', () => {
+      const { cleaned, ignored } = sanitizeSettingsImportWithReport(
+        fileWith([src('hardcover', { base_url: MIRROR })]),
+        current
+      );
+      expect(cleaned.metadata_sources?.[0]).toMatchObject({ base_url: MIRROR });
+      expect(ignored).toEqual([]);
+    });
+
+    it('lets a new source carry its base_url, with no credentials', () => {
+      const { cleaned, ignored } = sanitizeSettingsImportWithReport(
+        fileWith([
+          src('gotham-books', { base_url: MIRROR, credentials: { apiKey: 'sk-gotham-0003' } }),
+        ]),
+        current
+      );
+      const added = cleaned.metadata_sources?.[0] as unknown as Record<string, unknown>;
+      expect(added.base_url).toBe(MIRROR);
+      expect(added.credentials).toEqual({});
+      expect(JSON.stringify(cleaned)).not.toContain('sk-gotham-0003');
+      expect(ignored).toEqual([]);
+    });
+
+    it('imports no address at all when the current config could not be read', () => {
+      const { cleaned, ignored } = sanitizeSettingsImportWithReport(
+        fileWith([src('hardcover', { base_url: ATTACKER })])
+      );
+      expect(cleaned.metadata_sources?.[0]).not.toHaveProperty('base_url');
+      expect(ignored).toHaveLength(1);
+    });
+
+    it('keeps rate_limit, and reports no blank credential from an exported file', () => {
+      const { cleaned, skipped } = sanitizeSettingsImportWithReport(
+        fileWith([src('hardcover', { base_url: MIRROR, rate_limit: { tier: 'low' } })]),
+        current
+      );
+      expect(cleaned.metadata_sources?.[0]).toMatchObject({
+        rate_limit: { tier: 'low' },
+        credentials: {},
+      });
+      expect(skipped).toEqual([]);
+    });
+
+    it('never imports embedding.base_url (the embeddings client sends the OpenAI key there)', () => {
+      const { cleaned, ignored } = sanitizeSettingsImportWithReport(
+        { embedding: { enabled: true, base_url: ATTACKER } } as unknown as Partial<api.Config>,
+        current
+      );
+      expect(cleaned.embedding).toEqual({ enabled: true });
+      expect(JSON.stringify(cleaned)).not.toContain(ATTACKER);
+      expect(ignored).toEqual([`embedding.base_url (${IGNORED_ADDRESS_NOTE})`]);
+    });
+
+    it('stays quiet when embedding.base_url matches the server', () => {
+      const { cleaned, ignored } = sanitizeSettingsImportWithReport(
+        {
+          embedding: { enabled: true, base_url: 'https://embed.example.test' },
+        } as unknown as Partial<api.Config>,
+        current
+      );
+      expect(cleaned.embedding).toEqual({ enabled: true });
+      expect(ignored).toEqual([]);
+    });
+
+    it('has no other importable section that carries an address', () => {
+      // Deny-by-default: these hold a URL next to a stored secret, and none is
+      // importable at all.
+      const { cleaned } = sanitizeSettingsImportWithReport({
+        openai_base_url: ATTACKER,
+        ai_backend: { local_base_url: ATTACKER },
+        ai_endpoints: [{ id: 'x', base_url: ATTACKER }],
+        deluge_web_url: ATTACKER,
+        oauth_redirect_base_url: ATTACKER,
+        plugins: { webhook: { settings: { url: ATTACKER } } },
+      } as unknown as Partial<api.Config>);
+      expect(JSON.stringify(cleaned)).not.toContain(ATTACKER);
+    });
   });
 
   it('reports nothing when the file carries no secret', () => {
