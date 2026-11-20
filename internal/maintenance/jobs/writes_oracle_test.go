@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/writes_oracle_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 40eadd67-76ac-419f-a3fe-7d1ed5e586e2
 // last-edited: 2026-11-19
 
@@ -11,6 +11,7 @@ import (
 	"go/constant"
 	"go/types"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -322,25 +323,31 @@ func checkProductionBuild(pkgs []*packages.Package) error {
 	return bad
 }
 
-func loadOracleJobs() (map[string]oracleJob, error) {
+// buildOracleProgram loads the jobs package with its dependencies' syntax and
+// builds its SSA, over the production build. overlay is extra source files, by
+// absolute path, that the load sees as if they were in the tree: the probe test
+// uses it to add a function whose only effect is one call, which the real jobs
+// do not isolate.
+func buildOracleProgram(overlay map[string][]byte) (*ssa.Program, *ssa.Package, error) {
 	cfg := &packages.Config{
 		Mode:       packages.LoadAllSyntax,
 		BuildFlags: []string{oracleBuildTags},
 		Env:        append(os.Environ(), oracleEnv...),
+		Overlay:    overlay,
 	}
 	pkgs, err := packages.Load(cfg, "github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs")
 	if err != nil {
-		return nil, fmt.Errorf("load jobs package: %w", err)
+		return nil, nil, fmt.Errorf("load jobs package: %w", err)
 	}
 	if packages.PrintErrors(pkgs) > 0 {
-		return nil, fmt.Errorf("the jobs package does not type-check")
+		return nil, nil, fmt.Errorf("the jobs package does not type-check")
 	}
 	if err := checkProductionBuild(pkgs); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	prog, ssapkgs := ssautil.AllPackages(pkgs, ssa.InstantiateGenerics)
 	if err := checkOutsideFileWriters(prog); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for _, p := range ssapkgs {
 		if p != nil && strings.HasPrefix(p.Pkg.Path(), oracleModule) {
@@ -354,6 +361,14 @@ func loadOracleJobs() (map[string]oracleJob, error) {
 		if strings.HasPrefix(p.Pkg.Path(), oracleModule) {
 			p.Build()
 		}
+	}
+	return prog, jp, nil
+}
+
+func loadOracleJobs() (map[string]oracleJob, error) {
+	prog, jp, err := buildOracleProgram(nil)
+	if err != nil {
+		return nil, err
 	}
 	out := map[string]oracleJob{}
 	for _, m := range jp.Members {
@@ -487,5 +502,62 @@ func TestKindShell_ResumeContinueMeansCheckpoint(t *testing.T) {
 	sort.Strings(cp)
 	if want := []string{"backfill-file-hashes", "recompute-book-aggregates"}; !slices.Equal(cp, want) {
 		t.Errorf("jobs that checkpoint = %v, want %v", cp, want)
+	}
+}
+
+// oracleProbeSource is a function added to the jobs package by overlay. Each of
+// its calls is the only thing the function does, so what the oracle derives for it
+// is what that one call is judged to be. No real job isolates a report-path
+// resolution from the write that follows it (the backfill resolves, then opens), so
+// without the probe a table entry for ReportPathNotify or LedgerPathNotify could be
+// deleted and nothing would notice.
+const oracleProbeSource = `package jobs
+
+import "github.com/falkcorp/mediacore/library"
+
+func oracleProbeReportPathNotify() {
+	_, _ = library.ReportPathNotify("", "", "", nil)
+}
+
+func oracleProbeLedgerPathNotify() {
+	_, _ = library.LedgerPathNotify("", "", "", nil)
+}
+
+func oracleProbeNothing() {
+	_ = library.Mounted("")
+}
+`
+
+// TestOracle_PathResolversCountAsFileWriters pins that the oracle reads a call to
+// ReportPathNotify or LedgerPathNotify as a write to the files resource (they
+// create the directory, change its mode and create and remove a probe file), and
+// that a call to a library function that writes nothing is not read as one.
+func TestOracle_PathResolversCountAsFileWriters(t *testing.T) {
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog, jp, err := buildOracleProgram(map[string][]byte{
+		filepath.Join(dir, "zz_oracle_probe.go"): []byte(oracleProbeSource),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		fn   string
+		want []string
+	}{
+		{"oracleProbeReportPathNotify", []string{"files"}},
+		{"oracleProbeLedgerPathNotify", []string{"files"}},
+		{"oracleProbeNothing", nil},
+	} {
+		f := jp.Func(tc.fn)
+		if f == nil {
+			t.Fatalf("%s: the probe function is not in the loaded package", tc.fn)
+		}
+		got, why, _, _ := derivedWrites(prog, f)
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%s: derived writes %v, want %v (evidence %v)", tc.fn, got, tc.want, why)
+		}
 	}
 }
