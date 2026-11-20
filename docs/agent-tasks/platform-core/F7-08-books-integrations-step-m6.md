@@ -37,7 +37,7 @@ and resumable, **one batch per chunk** that writes the importers' rows and delet
 
 1. **Instances** (05-metadata M1.10 migration table): metadata sources → `metadata/<id>`; Deluge → `download/deluge`;
    `ai_endpoints` rows → `ai/<row id>` (`openai_compat` → `core.openai_compat`; whisper adapters → `books.whisper_*`;
-   ticks rewritten through books' capability-ID map, an unknown tick kept); the synthesised `ai/openai`; each written
+   ticks rewritten through books' capability-ID map, an unknown or wildcard tick dropped and reported, seams.d/F7-08); the synthesised `ai/openai`; each written
    through `integrations.Importer` with secret fields as `secrets.Ref`s to the names M2 used, Origin `migration`,
    `Local`/`LocalOrigin` and `OperatorSecretOrigin` as "Trust carried over" says, each `Local` grant audited as
    `core.integration.local_migrated` in the chunk's batch; an `auth_ref: openai_api_key` row gets its own key copy.
