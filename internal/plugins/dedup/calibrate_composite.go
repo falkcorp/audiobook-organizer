@@ -409,6 +409,7 @@ func (h headCalibrateComposite) GetCandidateByID(id int64) (*database.DedupCandi
 	return h.emb.GetCandidateByID(id)
 }
 func (h headCalibrateComposite) ScoreConfig() unified.ScoreConfig { return h.engine.ScoreConfig() }
+
 // PersistBandThresholds stores the four band mins as one write through the
 // config Facade, as the process's own actor (config.MutateChecked). Not
 // Facade.Update: Update runs the UpdateHooks, and the dedup plugin's hook

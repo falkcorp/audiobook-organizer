@@ -35,6 +35,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -247,7 +248,7 @@ func (p *Plugin) dedupScoreHook(ctx context.Context, before, after config.Config
 	if err != nil {
 		return nil, err
 	}
-	slog.Info("dedup score ladder updated in live engine; stored-candidate re-band queued",
+	logger.InfoCtx(ctx, "dedup score ladder updated in live engine; stored-candidate re-band queued",
 		"certain", next.BandCertainMin, "high", next.BandHighMin,
 		"medium", next.BandMediumMin, "review", next.BandReviewMin,
 		"rescore_op_id", opID)
