@@ -640,6 +640,7 @@ internal/books/cutover/m5.decode
 internal/books/cutover/m5.level
 internal/books/cutover/m5.parseKey
 internal/books/cutover/m5.usable
+internal/books/store.BookRelocatedTopicSpec
 internal/books/store.CatalogKeyPrefixes
 internal/books/store.GetCachedMetadataFetch
 internal/books/store.GetGlobalStore
@@ -749,6 +750,8 @@ internal/plugins/dedup.Plugin.applyBandThresholds
 internal/plugins/dedup.Plugin.computeRebuildDiff
 internal/plugins/dedup.Plugin.scanOrphanEmbeddings
 internal/plugins/dedup.scanReembedCandidates
+internal/plugins/deluge.RelocationConsumer
+internal/plugins/deluge.relocationRunParams
 internal/plugins/itunes.NewLoggerWrapper
 internal/plugins/itunes.loggerWrapper.ChangeCounters
 internal/plugins/itunes.loggerWrapper.Debug
