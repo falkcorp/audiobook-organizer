@@ -732,7 +732,7 @@ func (k *Kernel) handlerPhase() error {
 // so the handler runs on ui.DefaultSettings until the config flip hands it
 // the section's Handle.
 func (k *Kernel) mountUI(nonSPA func(*http.Request) bool) error {
-	opts := ui.Options{AppOptions: k.cfg.UIOptions, NonSPA: nonSPA}
+	opts := ui.Options{AppOptions: k.cfg.UIOptions, NonSPA: nonSPA, Logger: k.log}
 	sc, err := k.uiMetricsScope()
 	if err != nil {
 		return err

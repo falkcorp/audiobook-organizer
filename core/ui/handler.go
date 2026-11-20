@@ -8,6 +8,7 @@ package ui
 import (
 	"bytes"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"path"
 	"slices"
@@ -58,6 +59,7 @@ type Options struct {
 
 	Config  *config.Handle[Settings] // core.ui.* (§7.15); hot keys swap the policy atomically. nil = DefaultSettings
 	Metrics *metrics.Scope           // the core "ui" scope; nil records nothing
+	Logger  *slog.Logger             // a failed response write is logged at Debug, as httpapi does; nil logs nothing
 	// There is no redirect recorder and no redirect list (D13): a former
 	// page path is served index.html like any other SPA path.
 }
@@ -80,6 +82,7 @@ type handler struct {
 	connect func() []string
 	extra   []string
 	met     *uiMetrics
+	log     *slog.Logger
 	index   http.Handler // serveIndex wrapped in PageMiddleware
 	policy  atomic.Pointer[policy]
 }
@@ -122,6 +125,7 @@ func Handler(b Bundle, opts Options) http.Handler {
 		connect: opts.ConnectSrcFrom,
 		extra:   extraDirectives(opts.ExtraDirectives),
 		met:     newUIMetrics(opts.Metrics, b),
+		log:     opts.Logger,
 	}
 	h.index = http.HandlerFunc(h.serveIndex)
 	if opts.PageMiddleware != nil {
@@ -149,7 +153,7 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) string {
 		return kindNonSPA404
 	}
 	if h.b.IsZero() {
-		servePlaceholder(w, r)
+		h.servePlaceholder(w, r)
 		return kindPlaceholder
 	}
 	p := path.Clean("/" + r.URL.Path)
@@ -207,7 +211,15 @@ func (h *handler) serveIndex(w http.ResponseWriter, r *http.Request) {
 	hdr.Set("Reporting-Endpoints", cspReportGroup+`="`+CSPReportPath+`"`)
 	w.WriteHeader(http.StatusOK)
 	if r.Method != http.MethodHead {
-		_, _ = w.Write(h.b.index)
+		h.write(w, r, h.b.index)
+	}
+}
+
+// write sends a page body; the status is already out, so a failure (the
+// client went away) can only be logged.
+func (h *handler) write(w http.ResponseWriter, r *http.Request, body []byte) {
+	if _, err := w.Write(body); err != nil && h.log != nil {
+		h.log.DebugContext(r.Context(), "ui: write response", "path", r.URL.Path, "error", err)
 	}
 }
 
@@ -247,7 +259,7 @@ func (h *handler) settings() *Settings {
 }
 
 // servePlaceholder is the API-only page of a build without an embedded UI.
-func servePlaceholder(w http.ResponseWriter, r *http.Request) {
+func (h *handler) servePlaceholder(w http.ResponseWriter, r *http.Request) {
 	hdr := w.Header()
 	hdr.Set("Content-Type", "text/html; charset=utf-8")
 	hdr.Set("Cache-Control", "no-store")
@@ -255,7 +267,7 @@ func servePlaceholder(w http.ResponseWriter, r *http.Request) {
 	hdr.Set("Content-Security-Policy", placeholderCSP)
 	w.WriteHeader(http.StatusOK)
 	if r.Method != http.MethodHead {
-		_, _ = w.Write([]byte(placeholderHTML))
+		h.write(w, r, []byte(placeholderHTML))
 	}
 }
 

@@ -7,6 +7,7 @@ package ui
 
 import (
 	"context"
+	"slices"
 	"strconv"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -44,10 +45,8 @@ func seededPairs() [][2]string {
 // statusLabel is code's label, "other" outside the closed set.
 func statusLabel(code int) string {
 	s := strconv.Itoa(code)
-	for _, l := range statusLabels() {
-		if l == s {
-			return s
-		}
+	if slices.Contains(statusLabels(), s) {
+		return s
 	}
 	return "other"
 }
