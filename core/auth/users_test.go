@@ -1,5 +1,5 @@
 // file: core/auth/users_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8d00694b-a22c-438a-82d5-31749fe5b244
 // last-edited: 2026-11-19
 
@@ -493,6 +493,9 @@ func TestLastAdmin_ConcurrentDemotions(t *testing.T) {
 // once. The actor of a write is its own target, so the actor's record is no
 // help: only the guard on the other holder (Store.GuardUser in keepAnAdmin)
 // makes the second commit fail. One lands, the other retries and is refused.
+// Each steps down to no role at all: a write that adds a role (viewer) claims
+// the role set, and two claims conflict on the claim counter whatever the
+// holders' guard does, which hid a missing guard here until round 2's mutants.
 func TestLastAdmin_ConcurrentSelfDemotions(t *testing.T) {
 	f := newFx(t)
 	ctx := context.Background()
@@ -514,8 +517,8 @@ func TestLastAdmin_ConcurrentSelfDemotions(t *testing.T) {
 	}
 	errs := make([]error, 2)
 	var wg sync.WaitGroup
-	wg.Go(func() { errs[0] = f.svc.SetRoles(ctx, pBruce, bruce.ID, []rbac.RoleName{rbac.RoleViewer}) })
-	wg.Go(func() { errs[1] = f.svc.SetRoles(ctx, pDick, dick.ID, []rbac.RoleName{rbac.RoleViewer}) })
+	wg.Go(func() { errs[0] = f.svc.SetRoles(ctx, pBruce, bruce.ID, nil) })
+	wg.Go(func() { errs[1] = f.svc.SetRoles(ctx, pDick, dick.ID, nil) })
 	wg.Wait()
 
 	refused := 0

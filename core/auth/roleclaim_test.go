@@ -1,5 +1,5 @@
 // file: core/auth/roleclaim_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 0c5d7e21-93b4-4a68-8f1e-2d6a4b9c7e53
 // last-edited: 2026-11-19
 
@@ -455,5 +455,41 @@ func (c *claimFx) createRobinAgain(t testing.TB) {
 	t.Helper()
 	if _, err := c.f.rb.CreateRole(context.Background(), c.rbacActor, rbac.RoleInput{Name: "custom.batgirl", Title: "Batgirl", Permissions: []rbac.Permission{"gotham:patrol"}}); err != nil {
 		t.Errorf("CreateRole: %v", err)
+	}
+}
+
+// TestRoleClaim_StoreWithoutGuardRefusesBeforeItDecides (round 2): over a role
+// store that cannot guard the role set, a write that gives a role is refused
+// with rbac.ErrNoRoleGuard even when the store would also refuse the role on
+// its merits. The capability is checked first (the generation read), so no
+// per-role decision is made on a store the claim cannot protect. The role is
+// deleted straight through the native store, behind the service, so the cache
+// the first check reads still has it and only the store-side check
+// (CanAssignCommitted) would answer ErrUnknownRole.
+func TestRoleClaim_StoreWithoutGuardRefusesBeforeItDecides(t *testing.T) {
+	var native *rbacstore.Store
+	c := newClaimFxOver(t, func(s rbac.Store) rbac.Store {
+		native, _ = s.(*rbacstore.Store)
+		return bareRoleStore{s}
+	})
+	if native == nil {
+		t.Fatal("the fixture's role store is not the native one")
+	}
+	b := native.NewBatch()
+	defer func() { _ = b.Close() }()
+	if err := native.DeleteRole(b, c.robin); err != nil {
+		t.Fatalf("DeleteRole through the store: %v", err)
+	}
+	if err := b.Commit(context.Background(), storage.Sync); err != nil {
+		t.Fatalf("commit of the delete: %v", err)
+	}
+	if err := c.f.rb.CanAssign(c.manager.Perms, []rbac.RoleName{roleRobin}); err != nil {
+		t.Fatalf("the role cache no longer has the role (CanAssign: %v): the test does not lag it", err)
+	}
+	for _, way := range claimWays {
+		err := c.assign(way)()
+		if !errors.Is(err, rbac.ErrNoRoleGuard) || errors.Is(err, rbac.ErrUnknownRole) {
+			t.Errorf("%s over a store with no guard: err = %v, want rbac.ErrNoRoleGuard and not a decision on the role", way, err)
+		}
 	}
 }
