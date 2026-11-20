@@ -1,5 +1,5 @@
 // file: core/integrations/ai/harness_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3a6f9c18-d4e2-4b75-8e01-c7b25f6a9d34
 // last-edited: 2026-11-19
 
@@ -178,8 +178,10 @@ type harness struct {
 	clk    *clock
 	stager *fakeStager
 	ks     storage.Keyspace
-	jobs   ai.JobStore // the native store, for reads and competing writes
-	hooks  *hookStore  // what the router writes through
+	iks    storage.Keyspace // the instance store's, for an importer
+	au     *audit.Store     // what an importer audits through
+	jobs   ai.JobStore      // the native store, for reads and competing writes
+	hooks  *hookStore       // what the router writes through
 
 	prov  *metrics.Provider // nil unless the harness was built withMetrics
 	scope *metrics.Scope
@@ -334,6 +336,7 @@ func newHarness(t testing.TB, opts ...harnessOption) *harness {
 		}
 	})
 	h.reg = reg
+	h.iks, h.au = iks, au
 	h.ks = keyspaceOf(t, db, ai.Owner)
 	h.jobs = ai.NativeJobStore(h.ks)
 	h.hooks = &hookStore{JobStore: h.jobs}
