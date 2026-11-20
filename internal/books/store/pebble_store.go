@@ -340,6 +340,11 @@ type PebbleStore struct {
 	// generation-keyed index can catch up by re-reading only those books
 	// (BooksChangedSince) instead of rebuilding from every book.
 	bookChanges idChangeLog
+
+	// relocation stages books.book.relocated.v1 in the batch of every
+	// file_path change; nil (the default until the events flip installs it
+	// with SetRelocationOutbox) stages nothing (book_relocated_outbox.go).
+	relocation atomic.Pointer[relocationStager]
 }
 
 // mem returns the active in-memory query layer or nil if warmup hasn't
@@ -3148,6 +3153,12 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 			return nil, err
 		}
 		if err := p.setBookPathKeyIfFree(batch, book.FilePath, id); err != nil {
+			batch.Close()
+			return nil, err
+		}
+		// The relocation follow-up commits in this batch or not at all
+		// (book_relocated_outbox.go; dark until SetRelocationOutbox).
+		if err := p.stageBookRelocated(batch, id, oldBook.FilePath, book.FilePath); err != nil {
 			batch.Close()
 			return nil, err
 		}
