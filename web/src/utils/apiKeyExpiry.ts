@@ -3,7 +3,7 @@
 // guid: b55142f1-0389-400b-9e31-818583595581
 // last-edited: 2026-10-07
 
-// Every API key expires (server default 30 days, maximum 1095 days: three
+// Every API key expires (server default 30 days, maximum 1096 days: three
 // years). These are the lifetimes the create dialog offers beside a custom
 // date; there is deliberately no "Never": the server treats 0 as its 30-day
 // default, so a "Never" choice would lie.
@@ -16,11 +16,11 @@ export const API_KEY_EXPIRY_OPTIONS: ReadonlyArray<{ label: string; value: numbe
 ];
 
 /**
- * The server's maximum key lifetime in days (handlers.MaxAPIKeyTTLDays):
- * three years of 365 days, counted from the request. Not three calendar
- * years, which can be 1096 days and would offer a date the server refuses.
+ * The server's maximum key lifetime in days (handlers.MaxAPIKeyTTLDays and
+ * core's max_ttl), counted from the request: three years as 1096 days, so
+ * the three-year anniversary date is pickable even across a leap day.
  */
-export const API_KEY_MAX_TTL_DAYS = 1095;
+export const API_KEY_MAX_TTL_DAYS = 1096;
 
 /** The create dialog's Select value for "pick a date". */
 export const API_KEY_CUSTOM_EXPIRY = 'custom';
@@ -83,14 +83,36 @@ export function daysUntilDate(value: string, now: Date = new Date()): number | n
 
 /**
  * The expires_in_days a custom date asks for, or null when the date is not
- * between tomorrow and API_KEY_MAX_TTL_DAYS out. The dialog sends days, not an
- * instant: the server counts them from its own clock, so the latest date is
- * never refused because the browser's clock runs ahead of the server's.
+ * between tomorrow and API_KEY_MAX_TTL_DAYS out (counted on the calendar).
+ *
+ * The dialog sends days, not an instant: the server counts them from its own
+ * clock, so the latest date is never refused because the browser's clock runs
+ * ahead of the server's, and the day count maps straight onto core's
+ * duration-only expires_in after the identity flip. The count is chosen so
+ * that now + days × 24 h falls on the picked date in the viewer's zone: across
+ * a daylight-saving change the plain calendar count can land an hour past
+ * midnight on the next day (late evening before spring-forward) or an hour
+ * before midnight on the day before (just after midnight before fall-back),
+ * so one day less or more is taken when that one lands on the picked date.
+ *
+ * No whole-day count can hit the spring-forward day itself (23 hours long)
+ * from a time in the hour next to midnight; then the count is the one that
+ * keeps the key alive through the whole picked date, expiring within an hour
+ * after it ends. At the last date before a fall-back, one more day would pass
+ * the maximum, so the maximum stands and the key expires within the hour
+ * before that date begins.
  */
 export function customExpiryDays(value: string, now: Date = new Date()): number | null {
-  const days = daysUntilDate(value, now);
-  if (days === null || days < 1 || days > API_KEY_MAX_TTL_DAYS) return null;
-  return days;
+  const calendar = daysUntilDate(value, now);
+  if (calendar === null || calendar < 1 || calendar > API_KEY_MAX_TTL_DAYS) return null;
+  const candidates = [calendar - 1, calendar, calendar + 1].filter(
+    (days) => days >= 1 && days <= API_KEY_MAX_TTL_DAYS
+  );
+  const landing = (days: number) => toDateInputValue(expiryAfterDays(days, now.getTime()));
+  const exact = candidates.find((days) => landing(days) === value);
+  if (exact !== undefined) return exact;
+  // YYYY-MM-DD strings compare in date order.
+  return candidates.find((days) => landing(days) > value) ?? calendar;
 }
 
 /** The instant a key created now with an expiry of `days` days expires. */

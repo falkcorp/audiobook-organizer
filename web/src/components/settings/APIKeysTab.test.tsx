@@ -83,8 +83,8 @@ describe('APIKeysTab expiry', () => {
 });
 
 describe('APIKeysTab custom expiry date', () => {
-  // Noon local on 2026-11-20: the picker runs from 2026-11-21 to 2029-11-19
-  // (1095 days; three calendar years would be 1096 across 2028's leap day).
+  // Noon local on 2026-11-20: the picker runs from 2026-11-21 to the
+  // anniversary, 2029-11-20 (1096 days across 2028's leap day).
   const NOW = new Date(2026, 10, 20, 12, 0, 0);
 
   beforeEach(() => {
@@ -120,24 +120,26 @@ describe('APIKeysTab custom expiry date', () => {
     return within(dialog).getByLabelText('Expiry date') as HTMLInputElement;
   }
 
-  it('bounds the picker from tomorrow to today plus 1095 days', async () => {
+  it('bounds the picker from tomorrow to the three-year anniversary', async () => {
     const dialog = await openDialog();
     const input = await chooseCustom(dialog);
     expect(input).toHaveAttribute('type', 'date');
     expect(input).toHaveAttribute('min', '2026-11-21');
-    expect(input).toHaveAttribute('max', '2029-11-19');
+    expect(input).toHaveAttribute('max', '2029-11-20');
+    expect(within(dialog).getByText(/up to 3 years from today \(2029-11-20\)/)).toBeInTheDocument();
   });
 
-  it('sends the latest date as expires_in_days 1095 and previews it first', async () => {
+  it('sends the anniversary as expires_in_days 1096 and previews it first', async () => {
     const dialog = await openDialog();
     const input = await chooseCustom(dialog);
     const create = within(dialog).getByRole('button', { name: /^create$/i });
     expect(create).toBeDisabled();
-    fireEvent.change(input, { target: { value: '2029-11-19' } });
+    fireEvent.change(input, { target: { value: '2029-11-20' } });
     const preview = within(dialog).getByTestId('api-key-expiry-preview');
     expect(preview).toHaveTextContent(
-      `Expires ${new Date(NOW.getTime() + 1095 * 24 * HOUR).toLocaleString()}`
+      `Expires ${new Date(NOW.getTime() + 1096 * 24 * HOUR).toLocaleString()}`
     );
+    expect(preview).toHaveAttribute('aria-live', 'polite');
     expect(create).toBeEnabled();
     fireEvent.click(create);
     await waitFor(() => expect(api.createAPIKey).toHaveBeenCalledTimes(1));
@@ -145,7 +147,7 @@ describe('APIKeysTab custom expiry date', () => {
       name: 'Riddler',
       description: '',
       scopes: [],
-      expires_in_days: 1095,
+      expires_in_days: 1096,
     });
   });
 
@@ -161,10 +163,12 @@ describe('APIKeysTab custom expiry date', () => {
     const dialog = await openDialog();
     const input = await chooseCustom(dialog);
     const create = within(dialog).getByRole('button', { name: /^create$/i });
-    for (const value of ['2029-11-20', '2026-11-20', '2025-01-01']) {
+    for (const value of ['2029-11-21', '2026-11-20', '2025-01-01']) {
       fireEvent.change(input, { target: { value } });
       expect(create).toBeDisabled();
-      expect(within(dialog).getByText(/Pick a date from 2026-11-21 to 2029-11-19/)).toBeInTheDocument();
+      expect(
+        within(dialog).getByText(/Pick a date from 2026-11-21 to 2029-11-20/)
+      ).toBeInTheDocument();
     }
     fireEvent.click(create);
     expect(api.createAPIKey).not.toHaveBeenCalled();

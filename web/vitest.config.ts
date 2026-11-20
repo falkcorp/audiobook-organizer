@@ -4,8 +4,17 @@
 
 import { defineConfig } from 'vitest/config';
 
+// Every run, local or CI, uses one US time zone with daylight saving time, so
+// tests of local dates and DST shifts (the API key expiry picker) are not
+// blind on a UTC runner. Set here as well as in test.env: the env reaches the
+// workers, and setting it before they start keeps Node's zone cache from
+// holding the runner's own zone.
+const TEST_TZ = 'America/New_York';
+process.env.TZ = TEST_TZ;
+
 export default defineConfig({
   test: {
+    env: { TZ: TEST_TZ },
     environment: 'jsdom',
     setupFiles: './src/test/setup.ts',
     globals: true,

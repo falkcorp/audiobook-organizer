@@ -146,7 +146,8 @@ export function APIKeysTab() {
   // date's distance from today. Null while the custom date is unset or out
   // of range, which disables Create.
   const customBounds = customExpiryBounds();
-  const expiryDays = newExpires === API_KEY_CUSTOM_EXPIRY ? customExpiryDays(customDate) : newExpires;
+  const expiryDays =
+    newExpires === API_KEY_CUSTOM_EXPIRY ? customExpiryDays(customDate) : newExpires;
   const expiryPreview = expiryDays === null ? null : expiryAfterDays(expiryDays);
 
   const handleCreate = async () => {
@@ -542,7 +543,12 @@ export function APIKeysTab() {
                 }}
               />
             )}
-            <Typography variant="body2" color="text.secondary" data-testid="api-key-expiry-preview">
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              aria-live="polite"
+              data-testid="api-key-expiry-preview"
+            >
               {expiryPreview
                 ? `Expires ${expiryPreview.toLocaleString()} (${formatKeyExpiry(expiryPreview.toISOString())}).`
                 : 'Pick an expiry date.'}

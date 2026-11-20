@@ -15,11 +15,12 @@ import (
 	"github.com/falkcorp/mediacore/rbac"
 )
 
-const threeYears = 1095 * 24 * time.Hour
+const threeYears = 1096 * 24 * time.Hour
 
-// TestAPIKey_MaxTTLIsThreeYears (§8, ABO owner decision 2026-11-20): a new
-// key may live at most core.auth.apikey.max_ttl, three years by default; a
-// configured value may shorten that but never raise it past three years.
+// TestAPIKey_MaxTTLIsThreeYears (§8, ABO owner decisions 2026-11-20): a new
+// key may live at most core.auth.apikey.max_ttl, three years (1096 days) by
+// default; a configured value may shorten that but never raise it past three
+// years.
 func TestAPIKey_MaxTTLIsThreeYears(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -48,6 +49,35 @@ func TestAPIKey_MaxTTLIsThreeYears(t *testing.T) {
 			}
 			if _, _, err := f.svc.CreateAPIKey(ctx, f.session(dick), spec(tc.refuse)); !errors.Is(err, auth.ErrBadInput) {
 				t.Fatalf("a %s key: %v, want ErrBadInput", tc.refuse, err)
+			}
+		})
+	}
+}
+
+// TestAPIKey_DefaultTTLNeverExceedsMaxTTL (§8): a key created with no expiry
+// takes core.auth.apikey.default_ttl, held to max_ttl when max_ttl is the
+// shorter, so the maximum bounds every key.
+func TestAPIKey_DefaultTTLNeverExceedsMaxTTL(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		settings auth.Settings
+		want     time.Duration
+	}{
+		{"max below the default", auth.Settings{KeyMaxTTL: 24 * time.Hour}, 24 * time.Hour},
+		{"max below a configured default", auth.Settings{KeyDefaultTTL: 90 * 24 * time.Hour, KeyMaxTTL: 7 * 24 * time.Hour}, 7 * 24 * time.Hour},
+		{"default below the max", auth.Settings{KeyDefaultTTL: 48 * time.Hour}, 48 * time.Hour},
+		{"both unset", auth.Settings{}, auth.DefaultKeyTTL},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFx(t)
+			f.setSettings(tc.settings)
+			dick := f.user("dick", "gotham.detective")
+			_, k, err := f.svc.CreateAPIKey(context.Background(), f.session(dick), auth.KeySpec{Name: "grapnel", Scopes: []rbac.Permission{"gotham:patrol"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := k.ExpiresAt.Sub(f.clock()); got != tc.want {
+				t.Fatalf("key lives %s, want %s", got, tc.want)
 			}
 		})
 	}

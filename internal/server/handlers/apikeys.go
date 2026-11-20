@@ -29,15 +29,15 @@ const (
 	// DefaultAPIKeyTTL is DefaultAPIKeyTTLDays as a duration.
 	DefaultAPIKeyTTL = DefaultAPIKeyTTLDays * 24 * time.Hour
 	// MaxAPIKeyTTLDays is the longest lifetime a key may be given: three
-	// years of 365 days (owner decision, 2026-11-20). A set-and-forget
-	// integration renews once every three years, and a leaked, forgotten key
-	// still dies on its own. It bounds expires_in_days and expires_at alike,
-	// counted from the moment of the request; over it is a 400, not a clamp.
-	// Three years is 1095 days, not three calendar years: a span that
-	// crosses a leap day is 1096 days long, and one number for both request
-	// fields, the UI's date picker and core's max_ttl keeps a picked date
-	// from being refused by one of them.
-	MaxAPIKeyTTLDays = 1095
+	// years (owner decisions, 2026-11-20). A set-and-forget integration
+	// renews once every three years, and a leaked, forgotten key still dies
+	// on its own. It bounds expires_in_days and expires_at alike, counted
+	// from the moment of the request; over it is a 400, not a clamp.
+	// It is 1096 days, not 3 × 365: three calendar years that cross a leap
+	// day are 1096 days long, and the owner ruled that the three-year
+	// anniversary date must always be pickable. The UI's date picker and
+	// core's max_ttl use the same number.
+	MaxAPIKeyTTLDays = 1096
 	// MaxAPIKeyTTL is MaxAPIKeyTTLDays as a duration.
 	MaxAPIKeyTTL = MaxAPIKeyTTLDays * 24 * time.Hour
 )
@@ -76,10 +76,13 @@ const noClampMessage = "this credential has no expiry to limit a new key to; sig
 // expiry is expires_in_days or expires_at, never both; with neither the key
 // gets DefaultAPIKeyTTLDays.
 type CreateAPIKeyRequest struct {
-	Name          string   `json:"name" binding:"required"`
-	Description   string   `json:"description"`
-	Scopes        []string `json:"scopes"`
-	ExpiresInDays int      `json:"expires_in_days"`
+	Name        string   `json:"name" binding:"required"`
+	Description string   `json:"description"`
+	Scopes      []string `json:"scopes"`
+	// ExpiresInDays is a pointer so that a request sending both fields is
+	// refused even when it sends expires_in_days 0; nil and 0 both mean
+	// the default.
+	ExpiresInDays *int `json:"expires_in_days"`
 	// ExpiresAt is an RFC 3339 instant, after the request and no later than
 	// MaxAPIKeyTTL from it. A string, not a time.Time, so a malformed value
 	// gets requestedExpiry's message rather than encoding/json's.
@@ -91,7 +94,7 @@ type CreateAPIKeyRequest struct {
 // calling key. Its error is the 400 message.
 func requestedExpiry(req CreateAPIKeyRequest, now time.Time) (time.Time, error) {
 	if req.ExpiresAt != "" {
-		if req.ExpiresInDays != 0 {
+		if req.ExpiresInDays != nil {
 			return time.Time{}, errors.New("send expires_in_days or expires_at, not both")
 		}
 		at, err := time.Parse(time.RFC3339, req.ExpiresAt)
@@ -106,10 +109,13 @@ func requestedExpiry(req CreateAPIKeyRequest, now time.Time) (time.Time, error) 
 		}
 		return at.UTC(), nil
 	}
-	if req.ExpiresInDays < 0 || req.ExpiresInDays > MaxAPIKeyTTLDays {
+	days := 0
+	if req.ExpiresInDays != nil {
+		days = *req.ExpiresInDays
+	}
+	if days < 0 || days > MaxAPIKeyTTLDays {
 		return time.Time{}, fmt.Errorf("expires_in_days must be between 1 and %d (3 years); omit it or send 0 for the default of %d", MaxAPIKeyTTLDays, DefaultAPIKeyTTLDays)
 	}
-	days := req.ExpiresInDays
 	if days == 0 {
 		days = DefaultAPIKeyTTLDays
 	}
