@@ -1,5 +1,5 @@
 // file: internal/server/config_engine_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e1b9d34-5a28-4c60-8f13-b2d4a6c90e57
 // last-edited: 2026-11-19
 
@@ -45,6 +45,24 @@ func (s *engineStore) Lookup(coreconfig.Path) (coreconfig.KeyState, bool) {
 
 func (s *engineStore) Apply(context.Context, coreconfig.Patch, coreconfig.Actor) (coreconfig.Result, error) {
 	return coreconfig.Result{}, nil
+}
+
+func (s *engineStore) Generation() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.gen
+}
+
+func (s *engineStore) ListSecrets(_ context.Context, prefix string) ([]secrets.Meta, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []secrets.Meta
+	for n := range s.secrets {
+		if strings.HasPrefix(string(n), prefix) {
+			out = append(out, secrets.Meta{Name: n, Set: true, Source: secrets.SourceStored, Fingerprint: "abcd1234"})
+		}
+	}
+	return out, nil
 }
 
 func (s *engineStore) OnCommit(fn func(uint64)) {
@@ -100,14 +118,11 @@ func (s *engineStore) DeleteSecret(_ context.Context, n secrets.Name, _ string) 
 // secrets) must not appear in GET /api/v1/config, as they never did in HEAD's
 // json.Marshal(Config).
 //
-// It is skipped, and must stay in the tree, until the Engine's View stops
-// putting a Value on a class-o key whose Config field is json:"-": measured at
-// f75d422c8, KeyView{Name:"smtp_username", Class:"o"} carries the username and
-// smtp_host the host. The lead owns the fix (internal/books/appconfig); flip
-// the Skip when it lands.
+// Engine.View is default-deny since F3-07 e2: a class-o key whose Config field is
+// json:"-" (smtp_username, smtp_host) is served by name, class and lock with no
+// Value. Measured before that fix, KeyView{Name:"smtp_username", Class:"o"}
+// carried the username and smtp_host the host.
 func TestConfigGET_NeverReturnsInviteSecrets_RealEngine(t *testing.T) {
-	t.Skip("blocked on the F3-07 Engine.View fix: class-o keys whose Config field is json:\"-\" (smtp_username, smtp_host) must carry no Value; remove this Skip when it lands")
-
 	srv, _ := setupUserHandlerServer(t)
 	saved := config.Snapshot()
 	t.Cleanup(func() { config.Project(saved) })
