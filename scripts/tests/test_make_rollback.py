@@ -344,7 +344,7 @@ class FakeHost:
         self.envgen.mkdir(mode=0o700, exist_ok=True)
         self.envgen.chmod(0o700)
         doc = {
-            "version": 2,
+            "format": 2,
             "bin_sha256": sha,
             "seq": 1,
             "binary": {"version": "v0.40.0", "levels": dict(R1), "enforced": False},

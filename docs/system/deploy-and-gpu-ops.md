@@ -667,12 +667,20 @@ executes:
   when a directory it would fix is a symlink. Whoever can rename inside a parent
   can swap what the installer just made for a path of their own. Dry runs refuse
   too.
-- **It will not run as root from a checkout `--deploy-user` can write.** It
-  loads `scripts/storage_format_guard.py` from the checkout as root and copies
-  the helper out of it, so whoever can edit those gets root. A normal checkout
-  owned by the deploy user fails this check when the script is run directly: it
-  refuses with `--apply` (or as root) and names the paths, and a dry run only
-  prints a NOTICE. `make install-rollback-helpers APPLY=1` therefore never runs
+- **It will not run as root from a checkout that is not root's.** It loads
+  `scripts/storage_format_guard.py` from the checkout as root and copies the
+  helper out of it, so whoever can edit those gets root. There is no model of
+  what one user can write (the owner of a file can chmod it): every path it
+  reads, the directories `deploy`, `scripts` and the helper directory, and every
+  directory above the checkout must be owned by root with no group or other
+  write bit, no POSIX ACL and no symlink (a root-owned sticky directory such as
+  `/tmp` above the checkout is skipped, but the checkout's own top directory,
+  its child, must be root's). A `__pycache__` in those directories is held to
+  the same rule, and the installer never reads one: it runs the guard and helper
+  from their source bytes, with `python3 -I -B`. A normal checkout owned by the
+  deploy user fails this check when the script is run directly: it refuses with
+  `--apply` (or as root) and names the paths, and a dry run only prints a
+  NOTICE. `make install-rollback-helpers APPLY=1` therefore never runs
   it from the checkout: it does `sudo install -d -o root -g root -m 755
   /opt/aorg-install`, `git -c tar.umask=0022 archive HEAD deploy/rollback-helpers
   deploy/audiobook-organizer.service scripts/storage_format_guard.py | sudo tar -x

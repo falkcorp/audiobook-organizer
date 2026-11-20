@@ -2479,27 +2479,32 @@ class RollbackEnv(unittest.TestCase):
         return p, f
 
     def test_the_pre_flip_environment_survives_hotfixes_and_its_rollback_pairs_it(self):
-        """After the flip and four hotfixes, .prev is a hotfix and the
-        pre-flip environment is no newer than five generations back. It is
-        kept (the flip deploy raised the level it was replacing), and
-        RELEASE=<pre-flip> installs the pre-flip bytes as .prev, which the
-        rollback pairs with that environment by hash."""
+        """P is installed THROUGH the helpers with facts (storage=1, not
+        enforced), so the flip that replaces it is a known boundary. After the
+        flip and four hotfixes .prev is a hotfix and P's environment is five
+        generations back; it is kept as a boundary, and RELEASE=<P> installs P's
+        bytes as .prev, which the rollback pairs with that environment by hash."""
         h = self.env_host()
+        self.deploy(h, "pre-flip", conf=self.conf("P"), facts=self.facts("pre-flip", "v1.0.0"))
         p, f = self.flip_then_hotfixes(h, 4)
-        self.assertIn(p, self.gens(), "pinned: the flip replaced it across a level change")
+        self.assertIn(p, self.gens(), "kept: the flip replaced it across a level change")
+        self.assertEqual(
+            self.gen(p)["pin_reason"], "boundary", "a known boundary, not an unknown pin"
+        )
         self.assertNotIn(f, self.gens(), "the flip's own generation is not pinned and aged out")
-        self.assertEqual(len(self.gens()), 4, "the newest 3 plus the pinned one")
+        # the newest 3, the boundary, and the original binary's unknown pin
+        self.assertEqual(len(self.gens()), 5)
         # RELEASE=<pre-flip>: the same bytes arrive as .prev.
-        (self.stage / "audiobook-organizer").write_text("bat-signal-1")
+        (self.stage / "audiobook-organizer").write_text("pre-flip")
         self.assertEqual(h.run("install", "prev")[0], 0)
         self.assertEqual(self.prev_sha(), p)
         code, out, err = self.roll(h, "check", "prev")
         self.assertEqual(code, 0, err)
         self.assertIn(f"generation={p}", out)
         self.assertEqual(self.roll(h, "apply", p)[0], 0)
-        self.assertEqual(self.b.read_text(), "bat-signal-1")
-        self.assertIn("BATCAVE_PEERS", self.live_conf.read_text())
-        self.assertEqual(self.live_unit.read_text(), self.OLD_UNIT_MARK + self.unit_text)
+        self.assertEqual(self.b.read_text(), "pre-flip")
+        self.assertIn("GENP", self.live_conf.read_text())
+        self.assertEqual(self.live_unit.read_text(), self.unit_text)
 
     def test_without_a_boundary_the_oldest_generation_ages_out(self):
         """The pin is for boundaries only: deploys at one level with the list
@@ -2640,7 +2645,10 @@ class RollbackEnv(unittest.TestCase):
         p = self.flip_and_roll_back(h)
         cur = json.loads((self.gdir() / "current.json").read_text())
         self.assertEqual(cur["bin_sha256"], p)
-        self.assertEqual(cur["version"], 2, "the schema version, not the binary's")
+        self.assertEqual(cur["format"], 2, "the schema format")
+        self.assertNotIn(
+            "version", cur, "the binary's version is under binary, not beside the format"
+        )
         self.assertEqual(cur["binary"]["version"], "v1.0.0")
         self.assertEqual(cur["binary"]["levels"], {"storage": 1})
         self.assertIs(cur["binary"]["enforced"], False)
@@ -2757,7 +2765,7 @@ class RollbackEnv(unittest.TestCase):
         h = self.env_host()
         p = self.flip_and_roll_back(h)
         (self.gdir() / "pending.json").write_text(
-            json.dumps({"version": 2, "bin_sha256": "f" * 64, "local_conf": {"present": False}})
+            json.dumps({"format": 2, "bin_sha256": "f" * 64, "local_conf": {"present": False}})
         )
         (self.gdir() / "pending.json").chmod(0o600)
         (self.stage / "audiobook-organizer").write_text("flip-build-2")
@@ -3138,9 +3146,7 @@ class RollbackEnv(unittest.TestCase):
         self.deploy(h)
         bad = "0" * 64
         (self.gdir() / f"{bad}.json").write_text(
-            json.dumps(
-                {"version": 2, "bin_sha256": bad, "seq": 99, "unit": "text", "local_conf": 1}
-            )
+            json.dumps({"format": 2, "bin_sha256": bad, "seq": 99, "unit": "text", "local_conf": 1})
         )
         (self.gdir() / f"{bad}.json").chmod(0o600)
         code, out, err = self.roll(h, "list")
@@ -3379,7 +3385,7 @@ class RollbackEnv(unittest.TestCase):
         cases = {
             "not json": "{",
             "a list": "[]",
-            "wrong version": json.dumps({**json.loads(good), "version": 99}),
+            "wrong format": json.dumps({**json.loads(good), "format": 99}),
             "another binary's hash": json.dumps({**json.loads(good), "bin_sha256": "ab" * 32}),
             "no seq": json.dumps({k: v for k, v in json.loads(good).items() if k != "seq"}),
             "no unit": json.dumps({k: v for k, v in json.loads(good).items() if k != "unit"}),

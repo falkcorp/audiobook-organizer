@@ -40,10 +40,16 @@ What it trusts, because it runs as root and writes files root later executes:
                        or /etc/sudoers.d is not root-owned or is group- or
                        world-writable (whoever can rename inside one could swap
                        a directory it just made for a path of their own)
-    the sources        the checkout it reads from, and every file it reads, must
-                       not be writable by --deploy-user (it loads the guard from
-                       there as root): run it from a root-owned export, see
-                       docs/system/deploy-and-gpu-ops.md. It runs python with -I.
+    the sources        the checkout it reads from, every file it reads, and every
+                       directory above them must be owned by root with no group
+                       or other write bit, no ACL and no symlink (a sticky
+                       root-owned ancestor such as /tmp excepted): it loads the
+                       guard from there as root, and the owner of a file can
+                       chmod it, so there is no "writable by the deploy user"
+                       model, only "root's". Run it from a root-owned export,
+                       see docs/system/deploy-and-gpu-ops.md. It runs python
+                       with -I -B and runs the sources it loads from their
+                       bytes, never through __pycache__.
 
 --deploy-user is required (the sudoers drop-in grants that user, so it is never
 guessed from $SUDO_USER), and the dry run prints the grantee and the rendered
@@ -52,7 +58,7 @@ sudoers text, or its diff against what is installed.
 Needs root to apply (`make install-rollback-helpers APPLY=1` exports HEAD to a
 root-owned directory and runs it from there with sudo; run directly as a user it
 re-runs itself under `sudo`, which the source check above refuses from a
-checkout the deploy user can write); --root
+checkout that is not root's); --root
 PREFIX puts every destination under PREFIX instead (the tests; also a staging
 tree). Standard library only. Tests: scripts/tests/test_install_helpers.py.
 """
@@ -66,13 +72,11 @@ import sys
 if __name__ == "__main__" and not sys.flags.isolated:
     # This runs as root: re-run with -I, so no PYTHON* variable, no user site
     # and no script or current directory decides which module `import` finds.
-    os.execv(sys.executable, [sys.executable, "-I", *sys.argv])  # noqa: S606 (argv)
+    os.execv(sys.executable, [sys.executable, "-I", "-B", *sys.argv])  # noqa: S606 (argv)
 
 import argparse
 import contextlib
 import difflib
-import importlib.util
-import pwd
 import shlex
 import stat
 import subprocess
@@ -105,12 +109,18 @@ REQUIRED = ("bin", "db", "state_dir", "unit", "service_user", "archive_dir", "st
 
 
 def load(name: str, path: Path) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise SystemExit(f"install_helpers: cannot load {path}")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
+    """Run path's SOURCE as a fresh module. Never `import`, never a loader that
+    consults __pycache__: this runs as root, and a cached .pyc (an unchecked
+    hash-based one is never compared with the source) in a directory somebody
+    else can write would run as root whatever the .py next to it says."""
+    try:
+        code = compile(path.read_bytes(), str(path), "exec")
+    except OSError as e:
+        raise SystemExit(f"install_helpers: cannot load {path} ({e.strerror})") from e
+    mod = ModuleType(name)
+    mod.__file__ = str(path)
+    sys.modules[name] = mod  # a dataclass looks its module up here
+    exec(code, mod.__dict__)  # noqa: S102 (the file this installs from, checked above)
     return mod
 
 
@@ -263,45 +273,60 @@ def check_parents(base: str, target: str, include_target: bool) -> None:
             )
 
 
-def writable_by(st: os.stat_result, uid: int | None, gids: set[int]) -> bool:
-    """Could the user (uid, gids) change this file or directory? With no
-    such user, only the world-write bit counts."""
-    m = st.st_mode
-    if m & stat.S_IWOTH:
+def untrusted_source(st: os.stat_result, ancestor: bool) -> bool:
+    """Could anyone but root change this path (or what is below it)? No model
+    of what one named user can write: the owner of a file can chmod it, so a
+    path is trusted only when root (not the user running the tests, outside a
+    --root staging run) owns it and no group or other write bit is set. One
+    exception: a sticky directory ABOVE the checkout, owned by root (/tmp),
+    where only the owner of an entry can rename or remove it; the entry below
+    it is a watched path itself and has to be root's."""
+    if st.st_uid not in trusted_uids():
         return True
-    if uid is None:
+    if not st.st_mode & 0o022:
         return False
-    return bool((m & stat.S_IWUSR and st.st_uid == uid) or (m & stat.S_IWGRP and st.st_gid in gids))
+    sticky_root_dir = (
+        stat.S_ISDIR(st.st_mode) and bool(st.st_mode & stat.S_ISVTX) and st.st_uid == 0
+    )
+    return not (ancestor and sticky_root_dir)
 
 
-def check_sources(deploy_user: str, strict: bool) -> list[str]:
-    """The checkout this runs from, and every file read from it, must not be
-    writable by deploy_user: the installer loads the guard from there as root
-    and copies the helper from there into a root-owned directory. Returns the
-    offending paths (empty when fine); the caller refuses when strict."""
+def has_acl(path: Path) -> bool:
+    """A POSIX ACL (Linux xattr) can grant write without a mode bit showing it."""
+    listx = getattr(os, "listxattr", None)
+    if listx is None:
+        return False
     try:
-        pw = pwd.getpwnam(deploy_user)
-        uid: int | None = pw.pw_uid
-        gids = set(os.getgrouplist(deploy_user, pw.pw_gid))
-    except KeyError:
-        uid, gids = None, set()
+        return any(n.startswith("system.posix_acl") for n in listx(path, follow_symlinks=False))
+    except OSError:
+        return False
+
+
+def check_sources() -> list[str]:
+    """The checkout this runs from, and every file read from it, must be
+    root's and closed to group and others, with no ACL and no symlink: the
+    installer loads the guard from there as root and copies the helper from
+    there into a root-owned directory. A __pycache__ in a source directory is
+    held to the same rule. Returns the offending paths (empty when fine)."""
     watch: list[Path] = [REPO, REPO / "deploy", REPO / "scripts", HERE]
     watch += [x for x in HERE.iterdir() if x.is_file()]
     watch += [REPO / "scripts" / "storage_format_guard.py"]
     watch += [REPO / "deploy" / "audiobook-organizer.service"]
+    for d in (REPO / "deploy", REPO / "scripts", HERE):
+        cache = d / "__pycache__"
+        if cache.is_dir() and not cache.is_symlink():
+            watch += [cache, *cache.iterdir()]
+        elif os.path.lexists(cache):
+            watch.append(cache)
     ancestors = set(REPO.parents)
     watch += list(REPO.parents)
     bad: list[str] = []
     for w in watch:
         try:
-            st = w.stat()
+            st = w.lstat()
         except OSError:
             continue
-        if w in ancestors and st.st_mode & stat.S_ISVTX and st.st_uid != uid:
-            # A sticky directory (/tmp) lets anyone create entries but only
-            # rename or remove their own: the entry below it is checked itself.
-            continue
-        if writable_by(st, uid, gids):
+        if stat.S_ISLNK(st.st_mode) or untrusted_source(st, w in ancestors) or has_acl(w):
             bad.append(str(w))
     return bad
 
@@ -476,6 +501,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--root", default="", help="put every destination under this prefix")
     p.add_argument("--visudo", default="visudo", help="the visudo command (tests give a fake)")
     a = p.parse_args(argv)
+    sys.dont_write_bytecode = True  # root writes no .pyc beside sources others may own
     a.unit = a.unit or "audiobook-organizer.service"
     global STAGING
     STAGING = bool(a.root)
@@ -485,11 +511,12 @@ def main(argv: list[str] | None = None) -> int:
             "helpers as root, so it is named, never guessed from $SUDO_USER or $USER "
             '(ROLLBACK_INSTALL_ARGS="--deploy-user <the user make deploy ssh\'s as> ...")'
         )
-    bad = check_sources(a.deploy_user, strict=True)
+    bad = check_sources()
     if bad and (a.apply or os.geteuid() == 0):
         raise SystemExit(
-            "install_helpers: REFUSING to run as root from a checkout --deploy-user "
-            f"({a.deploy_user}) can write: {', '.join(bad[:6])}"
+            "install_helpers: REFUSING to run as root from a checkout that is not root's "
+            "(owner, group/other write bit, ACL or symlink on a path it reads or sits under): "
+            f"{', '.join(bad[:6])}"
             + (f" and {len(bad) - 6} more" if len(bad) > 6 else "")
             + ". It loads scripts/storage_format_guard.py as root and copies the helper into a "
             "root-owned directory, so whoever can edit them gets root. Run it from a root-owned "
@@ -517,7 +544,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Rollback helper bundle, from {REPO}:")
     if bad:
         print(
-            f"  NOTICE: {len(bad)} path(s) of this checkout can be written by {a.deploy_user} "
+            f"  NOTICE: {len(bad)} path(s) of this checkout are not root's or are open to others "
             f"(first: {bad[0]}). Running this script with --apply from here would refuse; "
             "`make install-rollback-helpers APPLY=1` exports HEAD to a root-owned directory first."
         )
