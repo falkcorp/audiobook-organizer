@@ -310,7 +310,7 @@ func storagePath(dbPath string) (string, error) {
 // config.yaml beside the database. A file that does not exist is skipped by
 // the checkpoint.
 func StateFiles(stateDir, dbPath string) []storage.StateFile {
-	keyDir := database.FindEncryptionKey(stateDir, filepath.Dir(dbPath))
+	keyDir := database.FindEncryptionKey(stateDir, legacyKeyDir(dbPath))
 	if keyDir == "" {
 		keyDir = stateDir
 	}
@@ -319,6 +319,12 @@ func StateFiles(stateDir, dbPath string) []storage.StateFile {
 		{Label: "gap_fill", Path: gapFillPath(dbPath)},
 	}
 }
+
+// legacyKeyDir is where HEAD kept the settings encryption key before it had a
+// state directory: beside the store. The boot (bootSettings) and the checkpoint's
+// state-file table (StateFiles) both look there second, through this one rule, so
+// they cannot name different files for the key.
+func legacyKeyDir(dbPath string) string { return filepath.Dir(dbPath) }
 
 // gapFillPath is HEAD's config.yaml beside the database (config.ConfigFilePath):
 // the file the checkpoint copies and M2 imports the gap-fill values of.

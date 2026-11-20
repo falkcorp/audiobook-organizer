@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -39,10 +38,12 @@ type settingsStore interface {
 }
 
 // bootSettings runs HEAD's pre-server steps over store, through steps, in
-// HEAD's order. stateDir is the secure state directory Options resolved; the
-// key's legacy location is the database's own directory.
-func bootSettings(store settingsStore, steps *startup.Steps, stateDir string) error {
-	legacyKeyDir := filepath.Dir(config.AppConfig.DatabasePath)
+// HEAD's order. stateDir is the secure state directory Options resolved and
+// dbPath the store it resolved; the key's legacy location is the store's own
+// directory (legacyKeyDir), the same one StateFiles tells the checkpoint to
+// copy the key from, so the file the boot loads is the file the checkpoint saved.
+func bootSettings(store settingsStore, steps *startup.Steps, stateDir, dbPath string) error {
+	legacyKeyDir := legacyKeyDir(dbPath)
 	if err := steps.Run("guardAgainstKeyRegeneration", func() error {
 		return guardAgainstKeyRegeneration(store, stateDir, legacyKeyDir)
 	}); err != nil {

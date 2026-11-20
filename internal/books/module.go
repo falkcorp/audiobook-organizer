@@ -365,7 +365,7 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	if steps == nil {
 		steps = newSteps()
 	}
-	if err := bootSettings(store, steps, m.stateDir); err != nil {
+	if err := bootSettings(store, steps, m.stateDir, m.dbPath); err != nil {
 		return err
 	}
 	if config.AppConfig.ABSAPIEnabled != m.abs {
