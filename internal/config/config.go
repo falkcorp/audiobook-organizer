@@ -2010,14 +2010,25 @@ func KeptSweepApplyEnabled() bool {
 
 // Mutate applies fn to AppConfig under a write lock.
 // ALL write sites (startup init, update service, test setups) must use this.
+//
+// With a Facade installed the change is a persisted write as the process's own
+// actor and it can be refused; Mutate has no error to return, so the refusal is
+// logged once. A caller that must tell its own caller whether the change took
+// uses MutateChecked or MutatePersist.
 func Mutate(fn func(*Config)) {
+	if err := MutateChecked(fn); err != nil {
+		mutateRefused(err)
+	}
+}
+
+// MutateChecked is Mutate that returns the Facade's refusal. With no Facade
+// installed it changes memory only and never fails.
+func MutateChecked(fn func(*Config)) error {
 	if f := Current(); f != nil {
-		if err := f.Mutate(fn); err != nil {
-			mutateRefused(err)
-		}
-		return
+		return f.Mutate(fn)
 	}
 	mutateLocal(fn)
+	return nil
 }
 
 // mutateLocal is Mutate on the process-wide Config: what runs with no Facade

@@ -16,6 +16,7 @@ package handlers_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -498,4 +499,76 @@ func TestUpdateTaskConfig_MetadataUpgradeIntervalAloneSchedulesIt(t *testing.T) 
 	w = putTaskConfig(t, "metadata_upgrade", "interval_minutes", 0)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	require.False(t, view().Enabled, "interval 0 turns it off")
+}
+
+// --- the writers go through the Facade, and its refusal is an answer ---
+
+// refusingFacade is a config.Facade whose Mutate is answered as the Engine does for
+// a change it will not store.
+type refusingFacade struct {
+	err     error
+	mutated int
+}
+
+func (f *refusingFacade) Snapshot() config.Config { return config.Config{} }
+func (f *refusingFacade) Generation() uint64      { return 0 }
+func (f *refusingFacade) Mutate(fn func(*config.Config)) error {
+	f.mutated++
+	var c config.Config
+	fn(&c)
+	return f.err
+}
+func (f *refusingFacade) Locks() map[string]string { return nil }
+func (f *refusingFacade) View() config.View        { return config.View{Keys: []config.KeyView{}} }
+func (f *refusingFacade) Update(context.Context, config.Actor, config.Update) (config.UpdateResult, error) {
+	return config.UpdateResult{}, nil
+}
+
+// TestSchedulerWriters_FacadeRefusalIsNot200: with the Facade installed a refused
+// change answers 500 naming it, and nothing is written to the settings blob (the
+// store mock is strict: any SetSetting fails the test). Before this, the handler
+// called Mutate (the refusal only logged), answered 200, and saved the whole flat
+// Config, which the projection fills with every drained secret in plaintext.
+func TestSchedulerWriters_FacadeRefusalIsNot200(t *testing.T) {
+	cases := []struct {
+		name, method, route, path, want string
+		body                            map[string]any
+		register                        func(h *handlers.SchedulerHandler) func(r *gin.Engine)
+	}{
+		{"task config", http.MethodPut, "/tasks/:name", "/tasks/dedup_refresh", "alfred refuses", map[string]any{"enabled": true},
+			func(h *handlers.SchedulerHandler) func(r *gin.Engine) {
+				return func(r *gin.Engine) { r.PUT("/tasks/:name", h.UpdateTaskConfig) }
+			}},
+		{"maintenance window", http.MethodPut, "/maintenance-window/config", "/maintenance-window/config", "failed to save maintenance window config",
+			map[string]any{"enabled": true, "window_start": 3, "window_end": 5},
+			func(h *handlers.SchedulerHandler) func(r *gin.Engine) {
+				return func(r *gin.Engine) { r.PUT("/maintenance-window/config", h.UpdateMaintenanceWindowConfig) }
+			}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h, _, _ := newTestSchedulerHandler(t) // strict store: no SetSetting expected
+			prev := config.Install(&refusingFacade{err: errors.New("config: alfred refuses")})
+			t.Cleanup(func() { config.Install(prev) })
+			body, _ := json.Marshal(c.body)
+			w := run(c.method, c.route, c.path, body, c.register(h))
+			assert.Equal(t, http.StatusInternalServerError, w.Code, w.Body.String())
+			assert.Contains(t, w.Body.String(), c.want)
+		})
+	}
+}
+
+// TestSchedulerWriters_FacadeAcceptedWriteTouchesNoBlob: an accepted change is 200
+// and the settings store is not written beside the Facade.
+func TestSchedulerWriters_FacadeAcceptedWriteTouchesNoBlob(t *testing.T) {
+	h, _, _ := newTestSchedulerHandler(t) // strict store
+	f := &refusingFacade{}
+	prev := config.Install(f)
+	t.Cleanup(func() { config.Install(prev) })
+	body, _ := json.Marshal(map[string]any{"enabled": true, "window_start": 3, "window_end": 5})
+	w := run(http.MethodPut, "/maintenance-window/config", "/maintenance-window/config", body, func(r *gin.Engine) {
+		r.PUT("/maintenance-window/config", h.UpdateMaintenanceWindowConfig)
+	})
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Equal(t, 1, f.mutated)
 }

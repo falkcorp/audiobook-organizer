@@ -1921,6 +1921,29 @@ func storedDelugeWebPassword(store database.SettingsStore) (string, error) {
 	return stored.Password, nil
 }
 
+// MutatePersist applies fn and makes the change durable, returning the error if it
+// was refused or could not be stored. A handler that answers 200 on it must use
+// this and not Mutate followed by SaveConfigToDatabase.
+//
+// With a Facade installed the write itself is durable: the Facade stores every key
+// where the new layout keeps it (secrets in the keyring, never the settings blob),
+// so there is nothing further to save and SaveConfigToDatabase is never called. With
+// none installed, HEAD's path: memory, then the blob.
+func MutatePersist(store database.SettingsStore, fn func(*Config)) error {
+	if f := Current(); f != nil {
+		return f.Mutate(fn)
+	}
+	mutateLocal(fn)
+	if store == nil {
+		return nil
+	}
+	return SaveConfigToDatabase(store)
+}
+
+// ErrBlobSaveWithFacade is SaveConfigToDatabase's refusal while a Facade is
+// installed. See SaveConfigToDatabase.
+var ErrBlobSaveWithFacade = errors.New("config: the settings blob is no longer written; the change must go through the config Facade (config.MutatePersist or Facade.Update)")
+
 // SaveConfigToDatabase persists current AppConfig to database AND config file.
 //
 // Storage format (v2, blob-based):
@@ -1933,6 +1956,15 @@ func storedDelugeWebPassword(store database.SettingsStore) (string, error) {
 func SaveConfigToDatabase(store database.SettingsStore) error {
 	if store == nil {
 		return fmt.Errorf("store is nil")
+	}
+	// Once the Facade is installed the settings are stored key by key where the new
+	// layout keeps them, secrets in the keyring. This function writes the WHOLE
+	// flat Config as one blob, and the Facade's projection fills the Config's secret
+	// fields with their plaintext: saving it would put every credential the
+	// migration moved out back on disk, in the clear. It is refused, not narrowed:
+	// a writer that reaches it is one that has not been moved onto the Facade.
+	if Current() != nil {
+		return ErrBlobSaveWithFacade
 	}
 
 	slog.Info("Saving configuration to database...")

@@ -52,7 +52,7 @@ type Scheduler interface {
 // endpoints: list/run/configure tasks, and trigger/inspect/configure the
 // nightly maintenance window.
 type SchedulerHandler struct {
-	// store is used only to persist config changes (SaveConfigToDatabase).
+	// store is used only to persist config changes (config.MutatePersist).
 	// database.SettingsStore is the exact four-method interface that call
 	// needs -- see operations.OperationsStore's doc for why it is embedded
 	// rather than method-listed elsewhere in this codebase; the same
@@ -449,8 +449,13 @@ func (h *SchedulerHandler) UpdateTaskConfig(c *gin.Context) {
 
 	// Fold before applying, and only once a write is actually going to land, so
 	// a rejected or empty request never rewrites config as a side effect.
+	//
+	// The write is one call that returns an error: a refusal (the Facade turned
+	// the change down) or a failed save is reported, never answered with a 200.
+	// A failure here means the change did not take, or is live in memory but will
+	// not survive a restart; either way it is not "task config updated".
 	if len(writes) > 0 {
-		config.Mutate(func(c *config.Config) {
+		err := config.MutatePersist(h.store, func(c *config.Config) {
 			if binding.foldLegacy != nil {
 				binding.foldLegacy(c)
 			}
@@ -458,16 +463,10 @@ func (h *SchedulerHandler) UpdateTaskConfig(c *gin.Context) {
 				write()
 			}
 		})
-	}
-
-	// Persist to database. A failure here means the change is live in memory but
-	// will not survive a restart, which is not "task config updated" — report it
-	// rather than logging a warning under a 200.
-	if h.store != nil {
-		if err := config.SaveConfigToDatabase(h.store); err != nil {
+		if err != nil {
 			slog.Error("Failed to save task config", "task", name, "err", err)
 			httputil.RespondWithInternalError(c, fmt.Sprintf(
-				"task %q config applied in memory but could not be persisted: %v", name, err))
+				"task %q config was not saved: %v", name, err))
 			return
 		}
 	}
@@ -535,16 +534,13 @@ func (h *SchedulerHandler) UpdateMaintenanceWindowConfig(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "window_start and window_end must be 0-23")
 		return
 	}
-	config.Mutate(func(c *config.Config) {
+	if err := config.MutatePersist(h.store, func(c *config.Config) {
 		c.Maintenance.Enabled = req.Enabled
 		c.Maintenance.WindowStart = req.WindowStart
 		c.Maintenance.WindowEnd = req.WindowEnd
-	})
-	if h.store != nil {
-		if err := config.SaveConfigToDatabase(h.store); err != nil {
-			httputil.InternalError(c, "failed to save maintenance window config", err)
-			return
-		}
+	}); err != nil {
+		httputil.InternalError(c, "failed to save maintenance window config", err)
+		return
 	}
 	httputil.RespondWithOK(c, gin.H{"ok": true})
 }
