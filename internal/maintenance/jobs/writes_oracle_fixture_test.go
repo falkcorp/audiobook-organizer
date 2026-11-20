@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/writes_oracle_fixture_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 8fbddfb2-91e8-42bd-ab62-8e8e7e8cd794
 // last-edited: 2026-11-19
 
@@ -248,6 +248,7 @@ func TestOracleWalk_DefaultDeny(t *testing.T) {
 		{"ViaPartialNonVerb", []string{"books"}, "", "M1: a non-verb method whose implementations the program knows in part: every implementation the program holds is walked"},
 		{"ViaOrphanNonVerb", nil, "#iface:", "M1: a non-verb method of a module interface the program holds no implementation of"},
 		{"ViaOutsideIface", nil, "#iface:fmt.Stringer.String", "M1: a non-verb method of an interface declared outside the module"},
+		{"ViaOpenError", []string{"books"}, "#iface:error.Error", "M1: a module type implementing an outside interface's non-verb method, reached through an open receiver: walked, and the outside implementations recorded"},
 	} {
 		kinds, _, _, calls, _ := derivedWrites(op, op.roots[0].Func(tc.root))
 		if !slices.Equal(kinds, tc.want) {

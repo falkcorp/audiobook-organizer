@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/writes_oracle_test.go
-// version: 3.5.0
+// version: 3.6.0
 // guid: 40eadd67-76ac-419f-a3fe-7d1ed5e586e2
 // last-edited: 2026-11-19
 
@@ -72,6 +72,7 @@ var oracleReporterOwn = map[string]bool{
 	"(*github.com/falkcorp/audiobook-organizer/internal/operations/registry.dbReporter).Log store.OpsV2Store.InsertOpErrorV2":                            true,
 	"(*github.com/falkcorp/audiobook-organizer/internal/operations/registry.dbReporter).recordActivity registry.ActivityRecorder.Record":                 true,
 	"(github.com/falkcorp/audiobook-organizer/internal/operations/registry.prodSchedulerStore).InsertOpErrorV2 registry.opRegistryStore.InsertOpErrorV2": true,
+	"(github.com/falkcorp/audiobook-organizer/internal/operations/registry.OpsV2DepAdapter).InsertOpErrorV2 store.OpsV2Store.InsertOpErrorV2":            true,
 }
 
 // oracleNotWalked are functions the walk does not follow into, though they are
@@ -1551,16 +1552,22 @@ func derivedWrites(op *oracleProgram, runFn *ssa.Function) (kinds []string, evid
 					impls := sites[ci]
 					pkg := com.Method.Pkg()
 					moduleIface := pkg != nil && strings.HasPrefix(pkg.Path(), oracleModule)
-					if moduleIface && len(op.ifaceOpen(com.Value)) > 0 {
+					if len(op.ifaceOpen(com.Value)) > 0 {
 						// VTA's set is every type the program converts to the
 						// interface on the way here. When the value can come
 						// from code the program does not show (an exported
 						// field the wiring fills, a parameter of an exported
-						// function: the ManualOnlyFilesReader shape), that set
-						// can be partial, and a method named like no write
-						// (Undo, Rollback) is judged by its bodies alone
-						// (round-2 review M1): every implementation the
+						// function: the ManualOnlyFilesReader shape, or a value
+						// a function outside the module returns), that set can
+						// be partial, and a method named like no write (Undo,
+						// Rollback, slog.Handler.Handle) is judged by its bodies
+						// alone (round-2 review M1): every implementation the
 						// module's loaded packages declare is walked as well.
+						// For an interface of the standard library or a
+						// dependency (error, slog.Handler) that is the module's
+						// own types (the registry's fanoutHandler is one); the
+						// types outside the module are the UNRESOLVED key's,
+						// allowed by method in oracleOutsideIfaceAllowed.
 						impls = oracleUnion(impls, op.declaredImpls(com))
 					}
 					// The call is judged by the interface method's own name
@@ -1568,11 +1575,15 @@ func derivedWrites(op *oracleProgram, runFn *ssa.Function) (kinds []string, evid
 					// result is the union. Progress and liveness reporting are
 					// not books writes (oracleNotAWrite), so their names are
 					// not judged, but what implements them is still walked.
-					if _, ok := calls[recv+"."+name]; !ok {
+					// The run reporter's own persistence is neither noted nor
+					// recorded as a call here (the trace test reads the calls),
+					// only in the function oracleReporterOwn names.
+					own := op.reporterOwn[f.String()+" "+recv+"."+name]
+					if _, ok := calls[recv+"."+name]; !ok && !own {
 						calls[recv+"."+name] = f.String()
 					}
 					verb := oracleVerb.MatchString(name)
-					if verb && !oracleNotAWrite.MatchString(recv) && !op.reporterOwn[f.String()+" "+recv+"."+name] {
+					if verb && !oracleNotAWrite.MatchString(recv) && !own {
 						note(oracleResource(recv, name), recv+"."+name+" in "+f.String())
 					}
 					// A method named like no write whose bodies the walk
@@ -1959,6 +1970,7 @@ func TestKindShell_ResumeContinueMeansCheckpoint(t *testing.T) {
 // a registry filled by code outside the program) fails TestJobWrites_NoUnresolvedCalls
 // until someone has read it and said here what it does.
 var oracleUnresolvedAllowed = map[string]string{
+	"UNRESOLVED.(*github.com/falkcorp/audiobook-organizer/internal/backup.safeCloser).Close$1#iface:io.Closer.Close":                                                                             "safeCloser.w is the gzip writer, the zstd encoder or nopWriteCloser (module, walked): closing a compression writer flushes it into the archive stream, whose file is recorded where it is opened",
 	"UNRESOLVED.(*github.com/falkcorp/audiobook-organizer/internal/deluge.Client).callCtx#iface:io.Closer.Close":                                                                                 "resp.Body.Close on the net/http response of the Deluge RPC call: closes a network body",
 	"UNRESOLVED.(*github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs.hashBackfillReport).close#iface:io.Closer.Close":                                                             "r.f.Close on the report file hbOpenFile opened (a *os.File from mediacore library.OpenReportFile): closes the job's report file, whose writes are recorded where it is opened",
 	"UNRESOLVED.github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs.openHashBackfillReport#iface:io.Closer.Close":                                                                  "f.Close on the report file hbOpenFile just opened (a *os.File) when vetting or truncating it fails",
@@ -2024,7 +2036,9 @@ var oracleOutsideIfaceAllowed = map[string]string{
 	"io/fs.FileInfo.Mode":                      "a stat result's mode",
 	"io/fs.FileInfo.Size":                      "a stat result's size",
 	"io/fs.FileInfo.Sys":                       "a stat result's system data",
-	"reflect.Type.Kind":                        "a type's kind",
+	"log/slog.Handler.Handle":                  "the standard library's and dependencies' handlers write a log record to a stream; the module's own handlers (the registry's fanoutHandler) are walked",
+	"github.com/prometheus/client_golang/prometheus.Counter.Inc": "a metric counter, in memory (metrics.IncOpActivityMirrorDropped, counting dropped activity-mirror lines)",
+	"reflect.Type.Kind": "a type's kind",
 }
 
 // TestJobWrites_NoUnresolvedCalls: no job reaches a call through a function value
