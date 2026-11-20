@@ -1,0 +1,10 @@
+# file: core/scripts/ci/embed_build_outputs.txt
+# version: 0.1.0
+# guid: 3d8f1b62-7a49-4e05-9c13-b6e0a2f7d584
+# last-edited: 2026-11-20
+#
+# Core's build outputs that an embed pattern names and that a tree may not
+# have built (module-relative; one per line; blank and # lines ignored). Read
+# by scripts/ci/check_embed_outputs.py (make embed-check) and by
+# archtest.Load whenever its caller passes no EmbedOutputs.
+examples/hello/web/dist

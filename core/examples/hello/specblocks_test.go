@@ -77,7 +77,7 @@ type specGroup struct {
 // core type) waits for those identifiers in the same way, listed one by one
 // (waitForCore). Since core/tasks landed (F2-01) every package of 06 compiles
 // against existing packages, and hello waits only for identifiers later rows
-// add (ui.Bundle, the Manifest and Registrar members), so the
+// add (the Manifest and Registrar members; ui.Bundle landed with F9-01), so the
 // 06 subtest skips with that list, and the control snapshots below prove the
 // harness compiles, boots, catches a compile error, catches a refusal and plans
 // both kinds of skip. A package joins the build on its own the day its last
@@ -122,7 +122,6 @@ func TestSpecGoBlocksCompile(t *testing.T) {
 			"module.Setting",              // no owning row yet
 			"module.Settings",             // no owning row yet
 			"module.SettingsSection",      // no owning row yet
-			"ui.Bundle",                   // F9-03
 		}
 		wantWaiting := map[string]string{
 			"examples/hello":           "missing in core: " + strings.Join(helloMissing, ", "),

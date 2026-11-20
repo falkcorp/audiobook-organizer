@@ -51,8 +51,9 @@ func options(args []string) app.Options {
 		AppID:       "hello",
 		DisplayName: "Hello",
 		Version:     version,
-		EnvPrefix:   "HELLO",       // the default, strings.ToUpper(AppID), spelled out
-		StateDir:    "hello-state", // compiled default; HELLO_CORE_PATHS_STATE_DIR overrides it
+		EnvPrefix:   "HELLO",          // the default, strings.ToUpper(AppID), spelled out
+		StateDir:    "hello-state",    // compiled default; HELLO_CORE_PATHS_STATE_DIR overrides it
+		UI:          hello.UIBundle(), // ui_embed.go (embed_frontend) or ui_nonembed.go
 		Args:        args,
 	}
 }
