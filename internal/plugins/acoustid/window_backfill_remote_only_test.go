@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint/workerapi"
+	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
 // refPair is the configured reference pair in these tests: distinct from the
@@ -656,6 +657,13 @@ func TestWindowBackfill_ReferenceConfiguredRefusesServerDecode(t *testing.T) {
 // the hub on clock and a fast heartbeat, and waits until the hub is attached.
 func startRemoteOnlyRun(t *testing.T, e *wbEnv, clock *testClock, p WindowBackfillParams) (context.Context, chan error) {
 	t.Helper()
+	return startRemoteOnlyRunWith(t, e, clock, p, &wbReporter{})
+}
+
+// startRemoteOnlyRunWith is startRemoteOnlyRun with the reporter the run
+// reports through, for a test that has to see the heartbeat's reports.
+func startRemoteOnlyRunWith(t *testing.T, e *wbEnv, clock *testClock, p WindowBackfillParams, rep sdk.Reporter) (context.Context, chan error) {
+	t.Helper()
 	prevPoll := windowDrainPoll
 	windowDrainPoll = 5 * time.Millisecond
 	t.Cleanup(func() { windowDrainPoll = prevPoll })
@@ -672,7 +680,7 @@ func startRemoteOnlyRun(t *testing.T, e *wbEnv, clock *testClock, p WindowBackfi
 	})
 	go func() {
 		defer close(finished)
-		_, err := e.run(ctx, nil, p)
+		_, err := e.plugin.windowBackfill(ctx, rep, p)
 		done <- err
 	}()
 	for {
@@ -876,10 +884,36 @@ func TestWorkerHub_RemoteOnly_WrongPairLeaseDoesNotKeepTheClaim(t *testing.T) {
 	require.True(t, r.Bootstrap, "a refused wrong-pair call must not have kept mac1's claim alive")
 }
 
+// waitHeartbeats blocks until the remote-only heartbeat has reported n more
+// times than it had when this was called. The heartbeat checks
+// noWorkerExpired before it reports, and reports once per iteration, so after
+// two reports at least one whole iteration began after the caller's last
+// clock advance: a run that was going to end on that advance has ended or is
+// ending on the very next one. This is what lets a test assert "the run is
+// still going" without guessing how long a heartbeat takes.
+func waitHeartbeats(t *testing.T, ctx context.Context, rep *hbReporter, n int64) {
+	t.Helper()
+	want := rep.beats.Load() + n
+	for rep.beats.Load() < want {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("heartbeat reported %d times, wanted %d more: %v", rep.beats.Load(), n, ctx.Err())
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
 // TestWindowBackfill_RemoteOnly_PendingGraceFailsNamingWaitingWorkers: a
 // worker that only ever hears reference_pending is not progress. The run
 // outlives the no-worker grace while it waits, then ends after the pending
 // grace, naming the missing pair and the waiting worker.
+//
+// The last clock advance is what ends the run, so nothing may call the hub
+// after it: the heartbeat detaches the run within one windowDrainPoll of the
+// advance, and a hello that lands after that is ErrNoRun by contract. A third
+// hello here was exactly that race (it failed CI with "acoustid.window-backfill
+// is not running"), and it added nothing: the waiting worker was recorded by
+// the hello at 90s, which is already inside the pending window.
 func TestWindowBackfill_RemoteOnly_PendingGraceFailsNamingWaitingWorkers(t *testing.T) {
 	e := newWBEnv(t)
 	withRootDir(t, e.lib)
@@ -887,7 +921,8 @@ func TestWindowBackfill_RemoteOnly_PendingGraceFailsNamingWaitingWorkers(t *test
 	noLocalTools(e)
 	e.addFile("", "lib/a.m4b", true, 3600)
 	clock := &testClock{}
-	ctx, done := startRemoteOnlyRun(t, e, clock, WindowBackfillParams{Live: true, RemoteOnly: true, NoWorkerGraceSec: 60, PendingGraceSec: 120})
+	rep := &hbReporter{wbReporter: &wbReporter{}}
+	ctx, done := startRemoteOnlyRunWith(t, e, clock, WindowBackfillParams{Live: true, RemoteOnly: true, NoWorkerGraceSec: 60, PendingGraceSec: 120}, rep)
 	hub := e.plugin.WorkerHub()
 	waiter := workerapi.HelloRequest{WorkerID: "mac9", FpcalcVersion: "1.6.1", FFmpegVersion: "9.0.1"}
 	hello := func() {
@@ -899,14 +934,13 @@ func TestWindowBackfill_RemoteOnly_PendingGraceFailsNamingWaitingWorkers(t *test
 	hello()
 	clock.advance(90 * time.Second) // past the no-worker grace, inside the pending grace
 	hello()
-	time.Sleep(60 * time.Millisecond)
+	waitHeartbeats(t, ctx, rep, 2) // the heartbeat has judged the run at 90s
 	select {
 	case err := <-done:
 		t.Fatalf("run ended while the pending grace still ran: %v", err)
 	default:
 	}
-	clock.advance(60 * time.Second)
-	hello()
+	clock.advance(60 * time.Second) // 150s since the first pending hello: past the 120s grace
 	err := <-done
 	require.ErrorIs(t, err, errNoRemoteWorkers)
 	require.ErrorContains(t, err, "no worker with the reference pair "+refPair.Fpcalc+"/"+refPair.FFmpeg)
