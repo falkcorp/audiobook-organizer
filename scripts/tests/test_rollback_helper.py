@@ -2164,7 +2164,12 @@ class RollbackEnv(unittest.TestCase):
     under the NEW environment: after an env-name change that means a peer
     allowlist that fails open and settings the old build never reads."""
 
-    # InstallStaged's fixtures, reused without its tests.
+    # InstallStaged's fixtures, reused without its tests. host() sets these
+    # attributes on the instance; they are declared so a type checker sees them.
+    host_conf_path: Path
+    lib_unit: Path
+    stage: Path
+
     host = InstallStaged.host
     template = InstallStaged.template
     changes = InstallStaged.changes
