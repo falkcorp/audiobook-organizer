@@ -1,7 +1,7 @@
 # file: .github/workflows/binary-smoke.yml
-# version: 1.9.2
+# version: 1.9.3
 # guid: 8dad4b58-c626-48e4-9adc-2696ddd2e864
-# last-edited: 2026-11-07
+# last-edited: 2026-11-19
 
 name: Binary Smoke
 
@@ -11,6 +11,13 @@ on:
   pull_request:
     branches: [main, master]
   workflow_dispatch:
+
+concurrency:
+  # Cancel a superseded run of the same PR (a new push makes the old run moot).
+  # Pushes to main and scheduled runs get a unique group (run_id), so they
+  # are never cancelled or dropped while pending.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

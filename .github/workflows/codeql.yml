@@ -1,7 +1,7 @@
 # file: .github/workflows/codeql.yml
-# version: 1.6.3
+# version: 1.6.4
 # guid: 4e7a1b2c-3d5f-6e8a-9b0c-1d2e3f4a5b6c
-# last-edited: 2026-11-06
+# last-edited: 2026-11-19
 #
 # Overrides GitHub's dynamic default CodeQL workflow so the Go toolchain and
 # build steps match ci.yml. (Until Go 1.27 this also carried GOEXPERIMENT=jsonv2
@@ -19,6 +19,13 @@ on:
   schedule:
     - cron: '0 8 * * 1' # Weekly Monday 08:00 UTC
   workflow_dispatch:
+
+concurrency:
+  # Cancel a superseded run of the same PR (a new push makes the old run moot).
+  # Pushes to main and scheduled runs get a unique group (run_id), so they
+  # are never cancelled or dropped while pending.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   actions: read
