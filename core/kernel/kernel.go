@@ -163,6 +163,15 @@ type Config struct {
 	// core.storage.swap.reset_hook_timeout); 0 = defaultResetHookTimeout.
 	// Tests only until config lands (F3).
 	ResetHookTimeout time.Duration
+	// UI is app.Options.UI, the embedded shell bundle (07 §7.6). A non-zero
+	// Bundle makes ui.Handler the "/" owner in P8; with a ServesSPA legacy
+	// mount it is a P7 ProblemSPAOwner (FE-1). The zero Bundle mounts
+	// nothing yet: a ServesSPA mount or nobody owns "/" (F9-01 wires the
+	// non-zero case only; the placeholder for the zero Bundle is F9-03's).
+	UI ui.Bundle
+	// UIOptions is app.Options.UIOptions, merged into the ui.Options P8
+	// builds (FE3-4). Ignored with a zero UI.
+	UIOptions ui.AppOptions
 }
 
 // R1Values mirrors app.R1Values field for field (05-config §1.12.1), so app
@@ -233,6 +242,7 @@ type Kernel struct {
 	logging   *log.Logging // nil when Config.Logger is set
 	redactor  *log.Redactor
 	provider  *metrics.Provider
+	uiScope   *metrics.Scope // uiMetricsScope; P8 only, single goroutine
 	scope     *metrics.Scope // "<namespace>.kernel"
 	logScope  *metrics.Scope // "<namespace>.log" (logmetrics.go); nil without a pipeline
 	bootPhase metric.Float64Gauge
@@ -632,6 +642,11 @@ func (k *Kernel) consume() error {
 		}
 		for _, m := range e.rec.Mounts {
 			if m.ServesSPA {
+				if !k.cfg.UI.IsZero() {
+					probs = append(probs, module.Problem{Module: id, Kind: module.ProblemSPAOwner,
+						Detail: "a ServesSPA legacy mount and a non-zero app.Options.UI both claim \"/\" (FE-1)"})
+					continue
+				}
 				if spaOwner != "" {
 					probs = append(probs, module.Problem{Module: id, Kind: module.ProblemSPAOwner,
 						Detail: fmt.Sprintf("a second ServesSPA legacy mount; module %s already owns \"/\" (FE-1)", spaOwner)})
@@ -680,12 +695,22 @@ func (k *Kernel) checkMountSegments(owner module.ID, declared []string, m httpap
 	return probs
 }
 
-// handlerPhase is P8: Router.Build, its errors mapped to problems, and the
-// shell-segment check (06 §6.5.1 P8). There is no core "/" owner before the
-// shell (ui.Handler lands with it), so a ServesSPA mount or nothing owns "/".
+// handlerPhase is P8: the "/" owner, Router.Build, its errors mapped to
+// problems, and the shell-segment check (06 §6.5.1 P8). A non-zero
+// Config.UI makes ui.Handler the owner, mounted with Router.SPA and HEAD's
+// Basic-gate asset exemption (FE5-10); otherwise a ServesSPA mount or nothing
+// owns "/".
 func (k *Kernel) handlerPhase() error {
+	var probs []module.Problem
+	var spaPred func(*http.Request) bool
+	if !k.cfg.UI.IsZero() {
+		// The predicate is taken after Build, so it holds every claim, mount
+		// and infra route; no request reaches the handler before then.
+		probs = append(probs, problemsFrom("", k.mountUI(func(r *http.Request) bool { return spaPred(r) }))...)
+	}
 	h, err := k.router.Build()
-	probs := problemsFrom("", err)
+	spaPred = k.router.NonSPA()
+	probs = append(probs, problemsFrom("", err)...)
 	nonSPA := k.router.NonSPASegments()
 	for _, seg := range ui.ReservedSegments() {
 		if slices.Contains(nonSPA, seg) {
@@ -698,6 +723,45 @@ func (k *Kernel) handlerPhase() error {
 	}
 	k.handler = h
 	return nil
+}
+
+// mountUI builds ui.Handler over Config.UI with Config.UIOptions merged in
+// (FE3-4) and mounts it as the "/" owner. nonSPA is the router's predicate
+// (handlerPhase binds it after Build). The handler's two metric
+// families go to the core "ui" scope (07 §7.16). core.ui.* is not bound yet,
+// so the handler runs on ui.DefaultSettings until the config flip hands it
+// the section's Handle.
+func (k *Kernel) mountUI(nonSPA func(*http.Request) bool) error {
+	opts := ui.Options{AppOptions: k.cfg.UIOptions, NonSPA: nonSPA}
+	sc, err := k.uiMetricsScope()
+	if err != nil {
+		return err
+	}
+	opts.Metrics = sc
+	return k.router.SPA(ui.Handler(k.cfg.UI, opts), httpapi.SPAOptions{
+		BasicExemptAssets: ui.BasicExemptAssets,
+		BuildID:           k.cfg.UI.BuildID(),
+	})
+}
+
+// uiMetricsScope returns the core "ui" metrics scope, created on first use.
+// A Provider hands each scope out once (metrics.ErrScopeTaken), and three
+// packages record on it: ui.Handler, internal/modulehttp and internal/uihttp
+// (07 §7.16). So the kernel owns the one scope and its label keys, the union
+// of the three, and every mount that needs it calls here. nil without a
+// Provider (Describe, tests).
+func (k *Kernel) uiMetricsScope() (*metrics.Scope, error) {
+	if k.provider == nil {
+		return nil, nil
+	}
+	if k.uiScope == nil {
+		sc, err := k.provider.Core("ui", "outcome", "kind", "module", "directive", "build_id", "status")
+		if err != nil {
+			return nil, fmt.Errorf("kernel: ui metrics scope: %w", err)
+		}
+		k.uiScope = sc
+	}
+	return k.uiScope, nil
 }
 
 // routerKinds maps the registration errors of httpapi's Router to the

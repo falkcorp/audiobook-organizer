@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path"
@@ -60,7 +61,11 @@ type LoadOptions struct {
 	// absent (the module's committed in-image list, 03 §3.2 item 4). A
 	// "pattern X: no matching files found" error is ignored only when X,
 	// normalised (an all: prefix stripped, joined with the package directory
-	// relative to the module root), is one of them or lies under one.
+	// relative to the module root), is one of them or lies under one. nil
+	// reads the module's committed list, <Dir>/scripts/ci/embed_build_outputs.txt
+	// (absent file: none), so every caller tolerates exactly the outputs
+	// the module declares, hello's examples/hello/web/dist in core; an empty
+	// non-nil slice tolerates none.
 	EmbedOutputs []string
 }
 
@@ -93,6 +98,31 @@ type listError struct {
 
 var errLoad = errors.New("archtest: load")
 
+// EmbedOutputsFile is the module-relative path of a module's committed list of
+// build outputs that may be absent (one path per line; blank and # lines
+// ignored), read by Load when LoadOptions.EmbedOutputs is nil.
+const EmbedOutputsFile = "scripts/ci/embed_build_outputs.txt"
+
+// committedEmbedOutputs reads dir's EmbedOutputsFile: nil when the module has
+// none, an error when it exists but cannot be read.
+func committedEmbedOutputs(dir string) ([]string, error) {
+	b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(EmbedOutputsFile)))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errLoad, err)
+	}
+	var out []string
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			out = append(out, line)
+		}
+	}
+	return out, nil
+}
+
 // embedMissingRe matches go list's error for an embed pattern with no files.
 func embedMissingRe() *regexp.Regexp {
 	return regexp.MustCompile(`^pattern (\S+): no matching files found$`)
@@ -114,6 +144,13 @@ func Load(opts LoadOptions) (map[string]*Package, error) {
 	patterns := opts.Patterns
 	if patterns == nil {
 		patterns = []string{"./..."}
+	}
+	if opts.EmbedOutputs == nil {
+		outs, err := committedEmbedOutputs(opts.Dir)
+		if err != nil {
+			return nil, err
+		}
+		opts.EmbedOutputs = outs
 	}
 
 	type result struct {
@@ -218,7 +255,10 @@ func embedOutputListed(opts LoadOptions, lp listPackage, pattern string) bool {
 	if lp.Module == nil || !lp.Module.Main {
 		return false
 	}
-	relDir, ok := Rel(lp.Module.Path, lp.ImportPath)
+	// A test variant is listed as "<path> [<path>.test]"; its files and so
+	// its embed patterns are the package's own.
+	importPath, _, _ := strings.Cut(lp.ImportPath, " [")
+	relDir, ok := Rel(lp.Module.Path, importPath)
 	if !ok {
 		return false
 	}

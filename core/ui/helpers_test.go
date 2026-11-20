@@ -39,7 +39,7 @@ func indexHTML(build, app, theme string) string {
 // distFS is a built dist directory under web/dist.
 func distFS() fstest.MapFS {
 	return fstest.MapFS{
-		"web/dist/index.html":          {Data: []byte(indexHTML("a1b2c3d-1767225600", "batcave", "batcave.shell.themeMode dark"))},
+		"web/dist/index.html":           {Data: []byte(indexHTML("a1b2c3d-1767225600", "batcave", "batcave.shell.themeMode dark"))},
 		"web/dist/assets/index-Bat1.js": {Data: []byte("console.log('Wayne Manor');")},
 		"web/dist/assets/mui-Rob1.css":  {Data: []byte("body{}")},
 		"web/dist/favicon.svg":          {Data: []byte("<svg xmlns=\"http://www.w3.org/2000/svg\"/>")},
