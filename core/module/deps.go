@@ -72,17 +72,25 @@ type Deps struct {
 	Config ConfigAccess
 }
 
-// ConfigAccess is Deps.Config: *config.Store's reads, one write and its
-// generation. The store is attached before any module's Register runs (P4d),
-// so Apply works from Register on.
+// ConfigAccess is Deps.Config: *config.Store's reads, one write, its
+// generation and the secrets the module's declaration admits. The store is
+// attached before any module's Register runs (P4d), so Apply works from
+// Register on. It is three embedded interfaces, not ten methods: each is a
+// handle a caller can take alone, and the interface-width ratchet counts the
+// declared entries.
 type ConfigAccess interface {
+	ConfigReads
+	ConfigWrite
+	ConfigSecrets
+}
+
+// ConfigReads is the read side of ConfigAccess.
+type ConfigReads interface {
 	// Lookup is a key's effective state (value, source, lock, protection,
 	// pending restart, secret metadata); false for an unregistered path.
 	Lookup(p config.Path) (config.KeyState, bool)
 	// Keys is every registered key in path order.
 	Keys() iter.Seq2[config.Path, config.KeyState]
-	// Apply validates and commits a patch in one batch (05-config 1.4 step 8).
-	Apply(ctx context.Context, p config.Patch, a config.Actor) (config.Result, error)
 	// Generation moves on every commit and on Attach.
 	Generation() uint64
 	// OnCommit registers fn to run after every committed Apply with the new
@@ -92,6 +100,16 @@ type ConfigAccess interface {
 	// PassthroughValues are the operator-layer values of passthrough paths
 	// (integrations.<kind>.<instance>.<field>), raw and sorted by path.
 	PassthroughValues() iter.Seq2[config.Path, config.OperatorValue]
+}
+
+// ConfigWrite is the one write of ConfigAccess.
+type ConfigWrite interface {
+	// Apply validates and commits a patch in one batch (05-config 1.4 step 8).
+	Apply(ctx context.Context, p config.Patch, a config.Actor) (config.Result, error)
+}
+
+// ConfigSecrets is the secret side of ConfigAccess.
+type ConfigSecrets interface {
 	// Secret, PutSecret and DeleteSecret reach the secret store by name, for
 	// names Manifest.AppConfig.Secrets admits; any other name is refused with
 	// secrets.ErrOutOfScope. A name that is a registered config key is

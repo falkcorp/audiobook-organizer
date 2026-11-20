@@ -73,12 +73,6 @@ func (f *serverConfigFacade) Mutate(fn func(*config.Config)) error {
 
 func (f *serverConfigFacade) Generation() uint64 { return f.gen.Load() }
 
-func (f *serverConfigFacade) lock(key, by string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.locks[key] = by
-}
-
 func (f *serverConfigFacade) Locks() map[string]string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

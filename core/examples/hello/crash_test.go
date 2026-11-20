@@ -573,7 +573,7 @@ func rejected(t *testing.T, name string, edit func(*restorejournal.Intent)) cras
 // the sealed value reads back.
 const (
 	sealerName  secrets.Name = "modules.hello.oracle_token"
-	sealerValue              = "wayne-enterprises-uplink-7"
+	sealerValue string       = "wayne-enterprises-uplink-7"
 )
 
 // sealer is hello that, in Register, reads its secret back and writes it
