@@ -24,7 +24,11 @@ import (
 // DefaultSecureStateDir). A value stored in the database would be read from the
 // very database whose secrets it governs, and a text box in the UI would let
 // someone trigger that with one keystroke and no way to move the file.
-const SecureStateDirEnv = "ABK_STATE_DIR"
+//
+// Since the config flip it is core's name for the key, ABO_CORE_PATHS_STATE_DIR
+// (core.paths.state_dir): HEAD's ABK_STATE_DIR is retired and refuses boot, so
+// one variable names the directory for core's step 0 and for every reader here.
+const SecureStateDirEnv = "ABO_CORE_PATHS_STATE_DIR"
 
 // DefaultSecureStateDir is where the credentials live, on purpose, as a
 // constant rather than as anything derived from database_path.
@@ -97,6 +101,15 @@ func rememberStateDir(dir string) {
 	resolvedStateDir = dir
 	resolvedMu.Unlock()
 }
+
+// AdoptStateDir makes dir the directory SecureStateDir reports, without reading
+// the environment or creating anything. The flipped boot resolves the state
+// directory once, in core's step 0 (ABO_CORE_PATHS_STATE_DIR, the flag, the
+// compiled default, the fallback beside the store), and every reader of the
+// key, the bootstrap token and the swap slot must look where core put the rest
+// of the state: two resolvers would write the token in one directory and look
+// for it in another.
+func AdoptStateDir(dir string) { rememberStateDir(filepath.Clean(dir)) }
 
 // ResetStateDirForTest clears the memoised directory so a test can change
 // ABK_STATE_DIR and have it take effect. Tests that call EnsureSecureStateDir

@@ -65,6 +65,10 @@ type ServeInputs struct {
 	// ShutdownBudget is core.shutdown.budget as serve read it from
 	// ABO_CORE_SHUTDOWN_BUDGET (R1-33). Zero is core's default (25s).
 	ShutdownBudget time.Duration
+	// Boot is the command line's contribution to core's config boot: the flags
+	// the operator set and the --config file (BootInputs). The zero value is
+	// the environment and the compiled defaults alone.
+	Boot BootInputs
 	// FromRelease is the pre-freeze release's tag main embeds (09 §9.2.1), the
 	// from_release the pre-migration checkpoint records. "" = none embedded.
 	FromRelease string
@@ -114,18 +118,20 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 	m.steps = cfg.StartupSteps
 	m.cfg.Store(&cfg)
 
+	// One resolver owns the store path and the state directory: core's step
+	// 0 over the environment, the flags and the operator file. Books asks it
+	// here, before app.New, because its state-file table, its swap check and
+	// its Manifest need both; the boot resolves the same layers again and
+	// must agree.
+	var dbPath string
 	if err := m.steps.Run("EnsureSecureStateDir", func() error {
-		dir, err := config.EnsureSecureStateDir(config.Snapshot().DatabasePath)
+		db, dir, err := ResolveBootPaths(context.Background(), mod, in.Boot)
 		if err != nil {
-			return fmt.Errorf("failed to create state directory %q: %w", dir, err)
+			return fmt.Errorf("failed to resolve the store and the state directory: %w", err)
 		}
-		m.stateDir = dir
+		m.stateDir, dbPath = dir, db
 		return nil
 	}); err != nil {
-		return app.Options{}, err
-	}
-	dbPath, err := storeLocation(m.stateDir)
-	if err != nil {
 		return app.Options{}, err
 	}
 	m.dbPath, m.version = dbPath, telemetry.Version()
@@ -139,11 +145,19 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 	// Before app.New runs P0a: whether it may swap the store, which voids
 	// the HNSW clean-stop marker Register takes (swapVoidReason).
 	m.swapVoid = swapVoidReason(m.stateDir)
-	retired, bindings, passthrough := flipConfigNames(m.flip)
+	// No R1StoragePath: the store is whatever the layers named, which
+	// core's step 0 resolves again to the path ResolveBootPaths returned.
+	// StateDir is that step's result, so the log directory
+	// (app.ResolveStateDir, environment only) agrees with it when the default
+	// could not be created and the state sits beside a store named by a flag.
+	o := bootOptions(in.Boot, m.flip)
 	return app.Options{
-		RetiredConfigNames:    retired,
-		ConfigEnvBindings:     bindings,
-		ConfigPassthrough:     passthrough,
+		CoreConfigBoot:        o.CoreConfigBoot,
+		RetiredConfigNames:    o.RetiredConfigNames,
+		ConfigEnvBindings:     o.ConfigEnvBindings,
+		ConfigPassthrough:     o.ConfigPassthrough,
+		ConfigFile:            o.ConfigFile,
+		ConfigFlags:           o.ConfigFlags,
 		AppID:                 AppID,
 		MetricNamespace:       metricNamespace,
 		ServiceName:           serviceName,
@@ -158,37 +172,9 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 		R1Log:                 &logCfg,
 		ProcessDefaults:       true,
 		StateDir:              m.stateDir,
-		R1StoragePath:         dbPath,
 		StorageStateFiles:     StateFiles(m.stateDir, dbPath),
 		FromRelease:           in.FromRelease,
 	}, nil
-}
-
-// storeLocation is HEAD's database path as core.storage.path, checked
-// against the state directory ABO resolved: a database_type other than
-// Pebble or an empty path refuses, and so does a core state directory that
-// is not stateDir. One state directory per process (OPS4-8): core resolves
-// it again in New (its explicit ABO_CORE_PATHS_STATE_DIR first, then this
-// default), and HEAD's key, the checkpoint's state files and core's own
-// state files must not land in two places.
-func storeLocation(stateDir string) (string, error) {
-	snap := config.Snapshot()
-	if err := database.ValidateDatabaseType(snap.DatabaseType); err != nil {
-		return "", err
-	}
-	dbPath, err := storagePath(snap.DatabasePath)
-	if err != nil {
-		return "", err
-	}
-	coreDir, err := app.ResolveStateDir(app.Options{AppID: AppID, StateDir: stateDir})
-	if err != nil {
-		return "", err
-	}
-	if filepath.Clean(coreDir) != filepath.Clean(stateDir) {
-		return "", fmt.Errorf("books: core's state directory %q is not ABO's %q (%s); set one, or set both to the same path",
-			coreDir, stateDir, config.SecureStateDirEnv)
-	}
-	return dbPath, nil
 }
 
 // OfflineOptions is ABO's app.Options for core's offline commands
@@ -200,21 +186,24 @@ func storeLocation(stateDir string) (string, error) {
 // (backup.ExtractStore). It reads the loaded config (the root command's
 // PersistentPreRun loads it) and builds no server, logging pipeline or
 // telemetry.
-func OfflineOptions() (app.Options, error) {
-	stateDir, err := config.EnsureSecureStateDir(config.Snapshot().DatabasePath)
-	if err != nil {
-		return app.Options{}, fmt.Errorf("failed to create state directory %q: %w", stateDir, err)
-	}
-	dbPath, err := storeLocation(stateDir)
+func OfflineOptions(boot BootInputs) (app.Options, error) {
+	dbPath, stateDir, err := ResolveBootPaths(context.Background(), Module(), boot)
 	if err != nil {
 		return app.Options{}, err
 	}
+	// The offline commands that read the loaded config (scan, diagnostics,
+	// the CLI's own prints) get the store the layers named, as HEAD's
+	// InitConfig gave them the database_path it resolved.
+	config.Mutate(func(c *config.Config) { c.DatabasePath, c.DatabaseType = dbPath, "pebble" })
 	coreOpts := updater.FetchOptions()
-	retired, bindings, passthrough := flipConfigNames(flipDeclared)
+	o := bootOptions(boot, flipDeclared)
 	return app.Options{
-		RetiredConfigNames: retired,
-		ConfigEnvBindings:  bindings,
-		ConfigPassthrough:  passthrough,
+		CoreConfigBoot:     o.CoreConfigBoot,
+		RetiredConfigNames: o.RetiredConfigNames,
+		ConfigEnvBindings:  o.ConfigEnvBindings,
+		ConfigPassthrough:  o.ConfigPassthrough,
+		ConfigFile:         o.ConfigFile,
+		ConfigFlags:        o.ConfigFlags,
 		AppID:              AppID,
 		// serve's Version: the binary ID a staged swap records hashes it, so
 		// a reset or restore staged offline must carry the one the serve

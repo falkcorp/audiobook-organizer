@@ -20,7 +20,13 @@ import (
 // offlineOptions is the app.Options core's offline commands run with,
 // resolved when one runs, after its flags are parsed and the config loaded.
 // A var so a test can point it at a temporary store.
-var offlineOptions = books.OfflineOptions
+var offlineOptions = func() (app.Options, error) {
+	boot, err := rootBootInputs()
+	if err != nil {
+		return app.Options{}, err
+	}
+	return books.OfflineOptions(boot)
+}
 
 // addOfflineCommands wraps each entry of app.OfflineCommands as a cobra
 // command under root (06 §6.4.5; MOD2-4, R9-9, COR9-6): core's offline

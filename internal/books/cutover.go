@@ -36,7 +36,7 @@ import (
 // slice (e) of F3-07, which sets it with app.Options.CoreConfigBoot and deletes
 // both. Tests that need the flip build the module with flip set, or set this
 // for the length of the test.
-var flipDeclared = false
+var flipDeclared = true
 
 // flipConfigNames are the config lists app.Options carries once the flip is
 // declared: the retired env names and file keys (HEAD's names are retired only

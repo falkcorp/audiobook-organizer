@@ -311,7 +311,11 @@ var serveCmd = &cobra.Command{
 		// Public-facing origin for absolute link generation (e.g. temp-login URLs).
 		cfg.ExternalURL = cmd.Flag("external-url").Value.String()
 
-		return runApp(cmd.Context(), books.ServeInputs{Server: cfg, Telemetry: telemetryCfg, ShutdownBudget: shutdownBudget, FromRelease: fromRelease})
+		boot, err := rootBootInputs()
+		if err != nil {
+			return err
+		}
+		return runApp(cmd.Context(), books.ServeInputs{Server: cfg, Telemetry: telemetryCfg, ShutdownBudget: shutdownBudget, FromRelease: fromRelease, Boot: boot})
 	},
 }
 

@@ -128,6 +128,24 @@ func offlineStoragePath(ctx context.Context, opts Options, c kernel.Config, mods
 	return kernel.ResolveStorage(ctx, c, owner)
 }
 
+// ResolveStorage is the store path and the state directory a boot of mods
+// over opts opens, resolved before anything boots (05-config section 1.7, step
+// 0): with Options.CoreConfigBoot the ones kernel.ResolveStorage reads over
+// the operator layers (the environment, opts.ConfigFlags and the operator
+// file), so an app that must name the store before New (its state-file table,
+// its swap check) agrees with the boot by construction, not by re-deriving
+// the rule. With the gate off they are storagePath's. Both are "" for mods
+// that declare no storage. It creates the state directory when it is absent,
+// as the boot would. owner is the offline commands' (see offlineConfig): ""
+// for a boot, which checks nothing before it creates.
+func ResolveStorage(ctx context.Context, opts Options, mods []module.Module, owner string) (dbPath, stateDir string, err error) {
+	c, err := kernelConfig(opts, mods)
+	if err != nil {
+		return "", "", err
+	}
+	return offlineStoragePath(ctx, opts, c, mods, owner)
+}
+
 // readWriteOwner is offlineConfig's owner for an open that writes only when
 // it is not read-only: the kernel's own check's name for it.
 func readWriteOwner(readOnly bool) string {

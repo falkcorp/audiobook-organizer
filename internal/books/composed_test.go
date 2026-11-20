@@ -215,6 +215,10 @@ func composedOptions(t *testing.T, abs bool, stateDir string, edit func(*config.
 		edit(&c)
 	}
 	withConfig(t, c)
+	// The store path is a layer now (core.storage.path), not the loaded
+	// config's database_path: name the one the fixture's config holds.
+	t.Setenv(storagePathEnv, c.DatabasePath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(c.DatabasePath), 0o700))
 	sandboxStateDirAt(t, stateDir)
 	t.Cleanup(func() {
 		database.SetGlobalStore(nil)

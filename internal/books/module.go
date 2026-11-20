@@ -25,8 +25,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -115,11 +117,24 @@ var errNotBooks = errors.New("books: not the module books.Module returned")
 // opens the store at P2 and books reaches it through its claims (R1-23).
 // Module does no work: it reads whether the ABS surface is on, which decides
 // the legacy prefixes the manifest declares. The kernel reads the manifest
-// before the store opens, so that is the value from the environment and the
-// config file, and Register refuses a boot whose settings, once the store is
-// open, turn it the other way (errABSFlagDrift).
+// before the store opens, so that is the value from the environment
+// (ABO_BOOKS_ABS_API_ENABLED, modules.books.abs.api_enabled), and Register
+// refuses a boot whose settings, once the store is open, turn it the other
+// way (errABSFlagDrift).
 func Module() module.Module {
-	return &booksModule{abs: config.AppConfig.ABSAPIEnabled, flip: flipDeclared}
+	return &booksModule{abs: absSurfaceFromEnv(), flip: flipDeclared}
+}
+
+// absEnabledEnv is the environment name of modules.books.abs.api_enabled (the
+// layered store's <APP>_<PATH> grammar, the leading "modules." dropped).
+const absEnabledEnv = "ABO_BOOKS_ABS_API_ENABLED"
+
+// absSurfaceFromEnv is whether the environment turns the ABS surface on. An
+// unset or unparsable value is off: core's config boot reports the unparsable
+// one (it fails boot, naming the variable) before Register runs.
+func absSurfaceFromEnv() bool {
+	on, err := strconv.ParseBool(strings.TrimSpace(os.Getenv(absEnabledEnv)))
+	return err == nil && on
 }
 
 // booksModule is books' module.Module.
@@ -250,7 +265,7 @@ func (m *booksModule) cleanStopVoid() string {
 // surface the other way from the environment Module read: the manifest's
 // legacy prefixes were fixed from the environment before the store opened.
 var errABSFlagDrift = errors.New("books: the stored settings set abs_api_enabled differently from the environment; " +
-	"set ABS_API_ENABLED in the environment (it is environment-authoritative), so the legacy prefixes fixed before the store opened match the server")
+	"set " + absEnabledEnv + " in the environment (it is environment-authoritative), so the legacy prefixes fixed before the store opened match the server")
 
 // reservedAPINamespaces are the second segments under /api of ABO's
 // unversioned surfaces (the ABS protocol's /api/me, /api/items, ...), which

@@ -85,6 +85,15 @@ type Options struct {
 	// the binding's env name set and no predicate, boot fails "which no
 	// registered section owns". nil accepts no path. From F3-07.
 	ConfigPassthrough func(config.Path) bool
+	// ConfigFlags are the flags the operator set on the command line, by the
+	// config path each one sets (05-config §1.3.3): the app builds them with
+	// config.FromFlagSet's rule (only a flag the operator explicitly set, never
+	// a default, so a default never locks a key) and its own table of flag name
+	// to path. They are the highest operator layer, handed to
+	// config.Options.Flags. A flag that names a secret key is refused when the
+	// config loads (it would show in the process list). Copied, so the
+	// caller's map stays its own. From F3-07.
+	ConfigFlags map[config.Path]string
 	// Args/Env feed the flag and env layers; nil means
 	// os.Args[1:]/os.Environ(). At R1's skeleton only ResolveStateDir reads
 	// Env; the flag layer arrives with config (F3).

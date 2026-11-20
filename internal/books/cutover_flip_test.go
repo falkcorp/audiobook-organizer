@@ -204,8 +204,10 @@ func (oracleModule) Register(*module.Registrar) error { return nil }
 // reads "retired". Declared, the lists are the rename table's: the retired names
 // exclude the ecosystem names, and the bindings are exactly the two OPENAI ones.
 func TestFlipConfigNames_DarkUntilDeclared(t *testing.T) {
-	withConfig(t, config.Config{DatabasePath: filepath.Join(t.TempDir(), "gotham.pebble")})
-	opts, err := OfflineOptions()
+	gotham := filepath.Join(t.TempDir(), "gotham.pebble")
+	withConfig(t, config.Config{DatabasePath: gotham})
+	t.Setenv(storagePathEnv, gotham)
+	opts, err := OfflineOptions(BootInputs{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +221,7 @@ func TestFlipConfigNames_DarkUntilDeclared(t *testing.T) {
 	old := flipDeclared
 	flipDeclared = true
 	t.Cleanup(func() { flipDeclared = old })
-	opts, err = OfflineOptions()
+	opts, err = OfflineOptions(BootInputs{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,8 +256,10 @@ func TestOfflineModule_PlansTheFlipOnlyOverADatabase(t *testing.T) {
 	old := flipDeclared
 	flipDeclared = true
 	t.Cleanup(func() { flipDeclared = old })
-	withConfig(t, config.Config{DatabasePath: filepath.Join(t.TempDir(), "gotham.pebble")})
-	opts, err := OfflineOptions()
+	gotham := filepath.Join(t.TempDir(), "gotham.pebble")
+	withConfig(t, config.Config{DatabasePath: gotham})
+	t.Setenv(storagePathEnv, gotham)
+	opts, err := OfflineOptions(BootInputs{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,6 +328,7 @@ func TestOptions_CarriesTheConfigListsOnlyWithTheSwitch(t *testing.T) {
 			initConfigForTest(t)
 			sandboxStateDir(t)
 			config.AppConfig.DatabasePath = filepath.Join(tempDir(t), "gotham.pebble")
+			t.Setenv(storagePathEnv, config.AppConfig.DatabasePath)
 			mod := Module().(*booksModule)
 			mod.flip = on
 			opts, err := Options(mod, ServeInputs{Server: server.GetDefaultServerConfig(), Telemetry: config.Snapshot()})

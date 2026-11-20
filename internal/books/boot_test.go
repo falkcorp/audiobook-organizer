@@ -78,9 +78,9 @@ func TestSettingsBoot_ABSFlagDriftRefuses(t *testing.T) {
 }
 
 // Options refuses what would make core open a store HEAD never named: a
-// database_type other than Pebble, and no database path (core would open a
-// new, empty store at its own default and books would serve an empty
-// library).
+// database_type other than Pebble. (An empty path is no longer an error: the
+// store is core.storage.path, and with no layer naming one it is the state
+// directory's default; TestResolveBootPaths covers the orphaned-store refusal.)
 func TestOptions_RefusesAStoreHEADWouldNotOpen(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -88,7 +88,6 @@ func TestOptions_RefusesAStoreHEADWouldNotOpen(t *testing.T) {
 		want string
 	}{
 		{"sqlite", func(c *config.Config) { c.DatabaseType = "sqlite" }, "SQLite3 support has been removed"},
-		{"no path", func(c *config.Config) { c.DatabasePath = "" }, errNoDatabasePath.Error()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := config.Config{DatabaseType: "pebble", DatabasePath: filepath.Join(tempDir(t), "books.pebble")}
@@ -108,11 +107,13 @@ func TestOptions_RefusesAStoreHEADWouldNotOpen(t *testing.T) {
 func TestOptions_StorageInputs(t *testing.T) {
 	db := filepath.Join(tempDir(t), "books.pebble")
 	withConfig(t, config.Config{DatabaseType: "pebble", DatabasePath: db})
+	t.Setenv(storagePathEnv, db)
 	stateDir := sandboxStateDir(t)
 	mod := Module()
 	opts, err := Options(mod, ServeInputs{})
 	require.NoError(t, err)
-	assert.Equal(t, db, opts.R1StoragePath)
+	assert.Empty(t, opts.R1StoragePath, "no compiled store path: core's step 0 resolves the layers")
+	assert.Equal(t, db, mod.(*booksModule).dbPath)
 	assert.Equal(t, stateDir, opts.StateDir)
 	assert.Equal(t, []storage.StateFile{
 		{Label: "encryption_key", Path: database.EncryptionKeyPath(stateDir)},

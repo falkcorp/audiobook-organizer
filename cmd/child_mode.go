@@ -87,19 +87,18 @@ func RunOperationRunner() {
 	restoreClaim := database.DisableHNSWCleanStopClaim()
 	defer restoreClaim()
 	// The state directory, resolved as the parent resolved it
-	// (config.EnsureSecureStateDir, from the same ABK_STATE_DIR and database
-	// path): nothing in this fresh process has, so SecureStateDir would be
+	// (resolveCLIPaths: core's step 0 over the same environment and flags): nothing in this fresh process has, so SecureStateDir would be
 	// the unresolved default, and where that cannot be created the parent
 	// fell back to the database directory, where the swap slot and the swap
 	// lock are. Everything later in the child (the updater's slot check
 	// among them) reads the resolved directory too.
-	stateDir, err := config.EnsureSecureStateDir(config.Snapshot().DatabasePath)
+	dbPath, stateDir, err := resolveCLIPaths()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "child mode: resolve the state directory %s: %v\n", stateDir, err)
 		os.Exit(2)
 	}
 	snap := config.Snapshot()
-	store, err := initializeChildStore(snap.DatabaseType, snap.DatabasePath,
+	store, err := initializeChildStore(snap.DatabaseType, dbPath,
 		database.StandaloneOptions{StateDir: stateDir})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "child mode: initializeChildStore: %v\n", err)

@@ -7,6 +7,7 @@ package app
 
 import (
 	"log/slog"
+	"maps"
 	"os"
 	"slices"
 
@@ -17,9 +18,9 @@ import (
 // (05-config §1.3.3, 06 §6.4.5): the app's identity and env prefix, the
 // environment captured once (Options.Env, else os.Environ), the operator
 // file, and the two F3 lists, copied so the caller's slices stay its own:
-// RetiredConfigNames into Retired and ConfigEnvBindings into EnvBindings, and
-// the ConfigPassthrough predicate into Passthrough.
-// The kernel adds the flags, the boot-record root, metrics and secrets. Core
+// RetiredConfigNames into Retired and ConfigEnvBindings into EnvBindings, the
+// ConfigPassthrough predicate into Passthrough, and ConfigFlags into Flags.
+// The kernel adds the boot-record root, metrics and secrets. Core
 // holds no app name: the lists arrive only through here (03 R1).
 func (o Options) configOptions() config.Options {
 	env := o.Env
@@ -38,6 +39,7 @@ func (o Options) configOptions() config.Options {
 		Retired:     slices.Clone(o.RetiredConfigNames),
 		EnvBindings: slices.Clone(o.ConfigEnvBindings),
 		Passthrough: o.ConfigPassthrough,
+		Flags:       maps.Clone(o.ConfigFlags),
 		Logger:      log,
 	}
 }

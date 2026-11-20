@@ -20,8 +20,10 @@ import (
 // `updater fetch-release` reads app.Options.Updater, and the asset it looks
 // for must be the one releases publish, not the name the gin apply asks for.
 func TestOfflineOptions_FetchReleaseAsksForThePublishedAsset(t *testing.T) {
-	withConfig(t, config.Config{DatabaseType: "pebble", DatabasePath: filepath.Join(tempDir(t), "books.pebble")})
-	opts, err := OfflineOptions()
+	books := filepath.Join(tempDir(t), "books.pebble")
+	withConfig(t, config.Config{DatabaseType: "pebble", DatabasePath: books})
+	t.Setenv(storagePathEnv, books)
+	opts, err := OfflineOptions(BootInputs{})
 	require.NoError(t, err)
 	require.NotNil(t, opts.Updater, "the offline options carry no release source")
 	require.NotNil(t, opts.Updater.AssetName, "the fetch falls back to core's default asset name, which no release publishes")

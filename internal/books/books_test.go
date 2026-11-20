@@ -63,6 +63,9 @@ func withConfig(t *testing.T, c config.Config) {
 	orig := config.AppConfig
 	config.AppConfig = c
 	t.Cleanup(func() { config.AppConfig = orig })
+	// Module() reads the ABS surface from the environment, as the manifest is
+	// read before any store opens: the fixture's setting is that environment.
+	t.Setenv(absEnabledEnv, strconv.FormatBool(c.ABSAPIEnabled))
 }
 
 // initConfigForTest runs config.InitConfig as serve does and puts back what
@@ -502,6 +505,7 @@ func TestTelemetry_TracerFromEnv(t *testing.T) {
 	}
 	sandboxStateDir(t)
 	config.AppConfig.DatabasePath = filepath.Join(tempDir(t), "books.pebble")
+	t.Setenv(storagePathEnv, config.AppConfig.DatabasePath)
 	mod := Module()
 	opts, err := Options(mod, ServeInputs{Server: server.GetDefaultServerConfig(), Telemetry: config.Snapshot()})
 	if err != nil {
