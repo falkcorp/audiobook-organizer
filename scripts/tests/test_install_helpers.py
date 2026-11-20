@@ -91,6 +91,12 @@ class InstallHelpers(unittest.TestCase):
         self.libdir = self.root / RH.LIBDIR.lstrip("/")
         self.conf = self.root / RH.CONFIG.lstrip("/")
         self.dropin = self.root / "etc" / "sudoers.d" / "audiobook-organizer-rollback"
+        # The tool runs from a copy under the temp dir, never from this checkout:
+        # whether the checkout's own ancestors (/home, a runner's work directory)
+        # pass the root-only source check depends on the machine, not on the test.
+        self.tool = (
+            self.installer_copy("tool") / "deploy" / "rollback-helpers" / "install_helpers.py"
+        )
 
     def run_tool(
         self, *extra: str, fail: bool = False, whole_fail: bool = False, args=None
@@ -109,7 +115,7 @@ class InstallHelpers(unittest.TestCase):
         return subprocess.run(
             [
                 sys.executable,
-                str(TOOL),
+                str(self.tool),
                 *(ARGS if args is None else args),
                 f"--root={self.root}",
                 f"--visudo={self.visudo}",
@@ -218,7 +224,7 @@ class InstallHelpers(unittest.TestCase):
         p = subprocess.run(
             [
                 sys.executable,
-                str(TOOL),
+                str(self.tool),
                 *ARGS,
                 f"--root={self.root}",
                 f"--visudo={self.tmp / 'no-such-visudo'}",
@@ -487,7 +493,7 @@ class InstallHelpers(unittest.TestCase):
         args = [a for a in ARGS if not a.startswith("--deploy-user")]
         env = {**os.environ, "SUDO_USER": "alfred", "USER": "alfred"}
         p = subprocess.run(
-            [sys.executable, str(TOOL), *args, f"--root={self.root}", "--apply"],
+            [sys.executable, str(self.tool), *args, f"--root={self.root}", "--apply"],
             env=env,
             capture_output=True,
             text=True,
@@ -851,10 +857,10 @@ class InstallHelpers(unittest.TestCase):
         ):
             self.assertEqual(self.sources(co), [], "another attribute is not an ACL")
 
-    def installer_copy(self) -> Path:
+    def installer_copy(self, name: str = "realcopy") -> Path:
         """A checkout made of the real installer, helper, guard and unit
         template, whose permissions the test controls."""
-        co = self.tmp / "realcopy"
+        co = self.tmp / name
         helpers = co / "deploy" / "rollback-helpers"
         helpers.mkdir(parents=True)
         for f in HELPERS.iterdir():
@@ -946,8 +952,8 @@ class InstallHelpers(unittest.TestCase):
     def test_the_installer_writes_no_bytecode(self) -> None:
         code = (
             "import runpy, sys\n"
-            f"sys.argv = {[str(TOOL), *ARGS, f'--root={self.root}', f'--visudo={self.visudo}']!r}\n"
-            f"try:\n    runpy.run_path({str(TOOL)!r}, run_name='__main__')\n"
+            f"sys.argv = {[str(self.tool), *ARGS, f'--root={self.root}', f'--visudo={self.visudo}']!r}\n"
+            f"try:\n    runpy.run_path({str(self.tool)!r}, run_name='__main__')\n"
             "except SystemExit:\n    pass\n"
             "print('DWB', sys.dont_write_bytecode)\n"
         )
@@ -975,7 +981,7 @@ class InstallHelpers(unittest.TestCase):
             "LIVE_DROPIN": str(self.dropin),
         }
         p = subprocess.run(
-            [sys.executable, str(TOOL), *ARGS, f"--root={self.root}"],
+            [sys.executable, str(self.tool), *ARGS, f"--root={self.root}"],
             env=env,
             capture_output=True,
             text=True,
