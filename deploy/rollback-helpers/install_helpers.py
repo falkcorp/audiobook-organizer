@@ -334,7 +334,7 @@ def check_sources() -> list[str]:
 def state(step: Step) -> str:
     """unchanged | create | replace | fix, as _state(); `unreadable` when the
     caller cannot read what is installed (a dry run as an ordinary user over a
-    root-only file or directory: run it with sudo to compare)."""
+    root-only file or directory: `APPLY=1` compares it as root)."""
     try:
         return _state(step)
     except PermissionError:
@@ -370,7 +370,7 @@ def _state(step: Step) -> str:
 def sudoers_state(path: str, text: str) -> str:
     """unchanged | create | replace | fix, as state(): the text, the mode and
     the owner all have to be right; unreadable when the caller cannot read it
-    (a dry run as an ordinary user: run it with sudo to compare)."""
+    (a dry run as an ordinary user: `APPLY=1` compares it as root)."""
     p = Path(path)
     if not os.path.lexists(path):
         return "create"
@@ -469,7 +469,7 @@ def validate_sudoers(visudo: str, text: str, directory: str) -> str:
 def sudo_argv() -> list[str]:
     """The command that re-runs this installer as root: isolated (-I), so no
     PYTHON* variable survives sudo's environment handling into a root python."""
-    return ["sudo", sys.executable, "-I", *sys.argv]
+    return ["sudo", sys.executable, "-I", "-B", *sys.argv]
 
 
 def check_whole_config(visudo: str) -> str:
@@ -521,9 +521,12 @@ def main(argv: list[str] | None = None) -> int:
             + ". It loads scripts/storage_format_guard.py as root and copies the helper into a "
             "root-owned directory, so whoever can edit them gets root. Run it from a root-owned "
             'export instead (docs/system/deploy-and-gpu-ops.md, "Rollback helpers"): '
-            "sudo install -d -o root -g root -m 755 /opt/aorg-install && git archive HEAD deploy "
-            "scripts | sudo tar -x --no-same-owner -C /opt/aorg-install && sudo python3 -I "
-            "/opt/aorg-install/deploy/rollback-helpers/install_helpers.py <the same arguments>"
+            "d=$(sudo mktemp -d /opt/aorg-install.XXXXXX) && git -c tar.umask=0022 archive HEAD "
+            "deploy/rollback-helpers deploy/audiobook-organizer.service "
+            'scripts/storage_format_guard.py | sudo tar -x -f - --no-same-owner -C "$d" && '
+            'sudo python3 -I -B "$d/deploy/rollback-helpers/install_helpers.py" '
+            '<the same arguments> --apply (then remove "$d" as root); '
+            "or just `make install-rollback-helpers APPLY=1`, which does all of this"
         )
     rh = load("rollback_helper", HERE / "rollback_helper.py")
     guard = load("storage_format_guard", REPO / "scripts" / "storage_format_guard.py")
@@ -556,8 +559,9 @@ def main(argv: list[str] | None = None) -> int:
         print("The installed sudoers drop-in is already this one.")
     elif sudo_state == "unreadable":
         print(
-            f"{sudoers_path} is root-only (mode 0440), so this run cannot compare it: run the dry run "
-            f"with sudo to see the diff. The rendered text:\n{sudoers}"
+            f"{sudoers_path} is root-only (mode 0440), so this run cannot compare it. APPLY=1 "
+            "compares it as root and rewrites it only if it differs. The rendered text:"
+            f"\n{sudoers}"
         )
     elif os.path.isfile(sudoers_path) and not os.path.islink(sudoers_path):
         print(f"Change to {sudoers_path}:")

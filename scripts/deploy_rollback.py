@@ -95,6 +95,23 @@ def fetch_timeout() -> float:
     return value
 
 
+def check_facts(out: str) -> tuple[str | None, str, str]:
+    """(levels, enforced, binary_enforced) from the helper's `check` line.
+
+    Each key is anchored: `enforced=` must not be read out of
+    `binary_enforced=`, whichever of the two the line prints first.
+    levels is None when the line carries none; enforced is `unrecorded` and
+    binary_enforced is `none` when theirs is absent."""
+    gl = re.search(r"(?<![\w-])levels=(\S+)", out)
+    ge = re.search(r"(?<![\w-])enforced=(\S+)", out)
+    ob = re.search(r"(?<![\w-])binary_enforced=(\S+)", out)
+    return (
+        gl.group(1) if gl else None,
+        ge.group(1) if ge else "unrecorded",
+        ob.group(1) if ob else "none",
+    )
+
+
 def load_guard(path: str) -> ModuleType:
     spec = importlib.util.spec_from_file_location("storage_format_guard", path)
     if spec is None or spec.loader is None:
@@ -330,12 +347,8 @@ class Run:
                 ),
             )
         if o.env_gen:
-            gl = self.g.re.search(r"levels=(\S+)", out)
-            ge = self.g.re.search(r"enforced=(\S+)", out)
-            kept = None if not gl or gl.group(1) == "unrecorded" else self.kept_levels(gl.group(1))
-            ob = self.g.re.search(r"binary_enforced=(\S+)", out)
-            own_e = ob.group(1) if ob else "none"
-            ge_v = ge.group(1) if ge else "unrecorded"
+            levels, ge_v, own_e = check_facts(out)
+            kept = None if levels is None or levels == "unrecorded" else self.kept_levels(levels)
             # The enforced flag is compared on its own: it needs no store levels,
             # so a generation kept without them is still refused when it
             # certainly does not fit the binary.

@@ -1133,8 +1133,9 @@ rollback-check:
 # APPLY=1 does not run the installer from this checkout: it runs as root and
 # loads scripts/storage_format_guard.py, which the deploy user can edit here.
 # The recipe exports HEAD (the dry run shows the working tree; what is installed
-# is HEAD) to the root-owned $(ROLLBACK_EXPORT_DIR)/aorg-install (default /opt),
-# overwriting what an earlier run left there, and runs the installer from it.
+# is HEAD) into a fresh root-made `mktemp -d` under $(ROLLBACK_EXPORT_DIR)
+# (default /opt), runs the installer from it, and removes it on the way out
+# (a pre-created directory or a file an earlier run left cannot be picked up).
 ROLLBACK_EXPORT_DIR ?= /opt
 .PHONY: install-rollback-helpers
 install-rollback-helpers:
@@ -1142,15 +1143,17 @@ install-rollback-helpers:
 	@[ -n "$(DEPLOY_DB)" ] || (echo "ERROR: DEPLOY_DB is not set. Set it to the main Pebble store path on this host in Makefile.local or export it."; exit 1)
 	@if [ -n "$(APPLY)" ]; then \
 	  set -e; \
-	  echo "→ Exporting HEAD to the root-owned $(ROLLBACK_EXPORT_DIR)/aorg-install (the installer runs as root and will not run from a checkout that is not root's)..."; \
-	  sudo install -d -o root -g root -m 755 "$(ROLLBACK_EXPORT_DIR)/aorg-install"; \
+	  echo "→ Exporting HEAD to a fresh root-owned directory under $(ROLLBACK_EXPORT_DIR) (the installer runs as root and will not run from a checkout that is not root's)..."; \
 	  git archive HEAD deploy/rollback-helpers deploy/audiobook-organizer.service scripts/storage_format_guard.py > /dev/null; \
-	  git -c tar.umask=0022 archive HEAD deploy/rollback-helpers deploy/audiobook-organizer.service scripts/storage_format_guard.py | sudo tar -x -f - --no-same-owner -C "$(ROLLBACK_EXPORT_DIR)/aorg-install"; \
-	  sudo python3 -I "$(ROLLBACK_EXPORT_DIR)/aorg-install/deploy/rollback-helpers/install_helpers.py" \
+	  exp=$$(sudo mktemp -d "$(ROLLBACK_EXPORT_DIR)/aorg-install.XXXXXX"); \
+	  case "$$exp" in "$(ROLLBACK_EXPORT_DIR)"/aorg-install.??????) ;; *) echo "ERROR: unexpected export directory '$$exp'"; exit 1;; esac; \
+	  trap 'sudo rm -rf -- "$$exp"' EXIT; \
+	  git -c tar.umask=0022 archive HEAD deploy/rollback-helpers deploy/audiobook-organizer.service scripts/storage_format_guard.py | sudo tar -x -f - --no-same-owner -C "$$exp"; \
+	  sudo python3 -I -B "$$exp/deploy/rollback-helpers/install_helpers.py" \
 	    --bin="$(DEPLOY_BIN)" --db="$(DEPLOY_DB)" --unit="$(DEPLOY_UNIT)" $(ROLLBACK_INSTALL_ARGS) \
 	    --apply $(if $(REPLACE_CONF),--replace-conf,); \
 	else \
-	  python3 -I deploy/rollback-helpers/install_helpers.py --bin="$(DEPLOY_BIN)" --db="$(DEPLOY_DB)" \
+	  python3 -I -B deploy/rollback-helpers/install_helpers.py --bin="$(DEPLOY_BIN)" --db="$(DEPLOY_DB)" \
 	    --unit="$(DEPLOY_UNIT)" $(ROLLBACK_INSTALL_ARGS) $(if $(REPLACE_CONF),--replace-conf,); \
 	fi
 
