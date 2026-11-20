@@ -13,6 +13,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"os"
 	"slices"
 	"sync"
 
@@ -513,4 +514,19 @@ func ViaFilledByValue(s *store.Store, fill func([]step)) error {
 	gotham := make([]step, 1)
 	fill(gotham)
 	return gotham[0](s, "arkham")
+}
+
+// batFile is a module interface whose only implementation is outside the module
+// (*os.File): the walk reads no body of its methods (round-3 review M1).
+type batFile interface{ Sync() error }
+
+// ViaOutsideOnlyImpl calls a non-verb method of a module interface implemented
+// only outside the module.
+func ViaOutsideOnlyImpl(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	var b batFile = f
+	return b.Sync()
 }

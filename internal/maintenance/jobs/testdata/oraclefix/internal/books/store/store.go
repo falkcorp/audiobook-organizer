@@ -28,3 +28,6 @@ func (*Store) GetBookByID(id string) error { return nil }
 // UpdateWith is a generic function of the store package: a call to it is a call
 // to an instance, which has no package of its own.
 func UpdateWith[T any](s *Store, v T) error { return s.ModifyBook("x") }
+
+// LookupBatcave is a plain store-package function a caller can name directly.
+func LookupBatcave(s *Store, id string) error { return nil }
