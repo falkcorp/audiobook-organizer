@@ -1,5 +1,5 @@
 // file: core/auth/lastadmin_roleguard_wrap_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8e2c4a17-3b95-4d60-a1f8-5c70d9e3b246
 // last-edited: 2026-11-19
 
@@ -36,6 +36,9 @@ type guardingRoleStore struct {
 	// genErr, when set, is what RoleSetGeneration answers: the role store
 	// being unreadable at the one read every guarded write starts with.
 	genErr error
+	// guardErr, when set, is what GuardRoleSet answers: the role store
+	// refusing to stage the guard after the generation was read fine.
+	guardErr error
 }
 
 func newGuardingRoleStore(s rbac.Store) *guardingRoleStore {
@@ -53,6 +56,12 @@ func (g *guardingRoleStore) RoleSetGeneration(ctx context.Context) (uint64, erro
 }
 
 func (g *guardingRoleStore) GuardRoleSet(b *storage.Batch, generation uint64) error {
+	g.mu.Lock()
+	err := g.guardErr
+	g.mu.Unlock()
+	if err != nil {
+		return err
+	}
 	return g.guard.GuardRoleSet(b, generation)
 }
 
@@ -120,5 +129,32 @@ func TestLastAdmin_RoleReadBeforeGenerationIsAConflict(t *testing.T) {
 	jason := w.f.user("jason-todd", "gotham.detective")
 	if err := w.f.svc.SetStatus(context.Background(), me, jason.ID, auth.StatusDisabled); err != nil {
 		t.Fatalf("disabling a detective over a wrapper that forwards the guard: %v", err)
+	}
+}
+
+// TestLastAdmin_GuardThatCannotBeStagedRefusesTheWrite (round 2): the role
+// store read the generation and then could not stage the guard on it (a read
+// through the batch failed, or the generation moved on the spot). The write is
+// refused with that error and changes nothing: an unstaged guard is no guard,
+// and the rule must not go on to decide on role definitions nothing watches.
+// Disabling a detective, who holds no admin, is the case that shows it, since
+// the guard is staged before the rule looks at anyone's roles.
+func TestLastAdmin_GuardThatCannotBeStagedRefusesTheWrite(t *testing.T) {
+	var gs *guardingRoleStore
+	w := newWayneFx(t, func(s rbac.Store) rbac.Store { gs = newGuardingRoleStore(s); return gs })
+	bruce := w.f.user("bruce-wayne", rbac.RoleAdmin)
+	jason := w.f.user("jason-todd", "gotham.detective")
+	boom := errors.New("the role keyspace refused the guard")
+	gs.mu.Lock()
+	gs.guardErr = boom
+	gs.mu.Unlock()
+
+	ctx := context.Background()
+	if err := w.f.svc.SetStatus(ctx, w.f.session(bruce), jason.ID, auth.StatusDisabled); !errors.Is(err, boom) {
+		t.Fatalf("SetStatus over a role store that cannot stage the guard: err = %v, want %v", err, boom)
+	}
+	got, err := w.f.st.GetUser(ctx, jason.ID)
+	if err != nil || got.Version != jason.Version || got.Status != auth.StatusActive {
+		t.Fatalf("a refused write changed the user: %+v, %v", got, err)
 	}
 }
