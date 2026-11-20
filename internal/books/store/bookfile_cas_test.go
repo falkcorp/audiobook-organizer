@@ -1,7 +1,7 @@
 // file: internal/books/store/bookfile_cas_test.go
-// version: 1.8.5
+// version: 1.8.6
 // guid: 0f3c52d8-7e19-4b64-a2d0-91c8b5e46a17
-// last-edited: 2026-11-15
+// last-edited: 2026-11-19
 
 package store
 
@@ -152,7 +152,7 @@ func strayWriteRow(t *testing.T, s *PebbleStore, bookID, fileID string, mutate f
 	}
 	next := cloneBookFile(old)
 	mutate(&next)
-	if _, err := s.updateBookFileOver(old, raw, &next, bookFileMergeReplace, false); err != nil {
+	if _, err := s.updateBookFileOver(old, raw, &next, bookFileMergeReplace, false, nil); err != nil {
 		t.Errorf("strayWriteRow: %v", err)
 	}
 }

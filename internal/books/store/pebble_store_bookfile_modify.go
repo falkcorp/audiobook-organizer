@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store_bookfile_modify.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 6d3a9e27-b4c1-4f58-8a02-e7c5d1b9f463
-// last-edited: 2026-11-15
+// last-edited: 2026-11-19
 
 package store
 
@@ -40,7 +40,41 @@ var ErrSkipBookFileWrite = errors.New("skip book file write")
 // (nil, nil) when the row does not exist. fn must not change ID or BookID and
 // must not write any book_file itself.
 func (s *PebbleStore) ModifyBookFile(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error) {
-	return s.modifyBookFile(bookID, fileID, fn, true)
+	return s.modifyBookFileReporting(bookID, fileID, fn, modifyBookFileOpts{recompute: true})
+}
+
+// ErrBookFilePathHeld is the refusal of ModifyBookFileUnlessPathHeld when the new
+// path is held, at the commit, by another row (live or retired). Nothing was
+// written: taking the path's single-owner key from that row would leave two rows
+// holding one file.
+var ErrBookFilePathHeld = errors.New("book file path is held by another file row")
+
+// ModifyBookFileUnlessPathHeld is ModifyBookFile that refuses to MOVE the row onto
+// a path some other row holds, atomically. ModifyBookFile (and every writer of a
+// row's path) writes the single-owner path key (book_file_path:<crc>) with a
+// plain Set, so a caller that checked "is anyone at this path?" before the write
+// could be raced by a row created at the path in between, and the repoint would
+// take the key from it. Here the check is the commit's verify hook: it runs with
+// the owner stripes and the single-owner index mutex held (lockSingleOwnerIndex),
+// which every other writer of a path key takes around its own apply, so no row
+// can take the path between the check and the write. A holder is any row whose
+// path key names the path and which is at the path, retired or not, other than
+// this row itself.
+//
+// The check runs only when fn changes the row's path, on every attempt (a
+// compare-and-swap retry re-runs fn and the check). A refusal returns an error
+// wrapping ErrBookFilePathHeld and writes nothing. Everything else is
+// ModifyBookFile: fn may run more than once, ErrSkipBookFileWrite writes nothing,
+// and (nil, nil) means the row does not exist.
+//
+// Like ModifyBookFileDeferAggregates it is deliberately NOT a Store method
+// (TestStoreFlattenedWidth lets Store only narrow); a consumer declares it as its
+// own interface and resolves it with AsCapability. Its consumer is
+// reconcile.apply's row repoint. repairs.Writer.RepointBookFile deliberately does
+// not use it: it hands a path key back from a retired holder on purpose (the
+// KeyOwner rows), which this refuses.
+func (s *PebbleStore) ModifyBookFileUnlessPathHeld(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error) {
+	return s.modifyBookFileReporting(bookID, fileID, fn, modifyBookFileOpts{recompute: true, unlessPathHeld: true})
 }
 
 // ModifyBookFileDeferAggregates is ModifyBookFile without the per-write
@@ -57,7 +91,7 @@ func (s *PebbleStore) ModifyBookFile(bookID, fileID string, fn func(*BookFile) e
 // narrow). A consumer declares the one method as its own interface and resolves it
 // with AsCapability (backfill-file-hashes: hbDeferredStore).
 func (s *PebbleStore) ModifyBookFileDeferAggregates(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error) {
-	return s.modifyBookFile(bookID, fileID, fn, false)
+	return s.modifyBookFileReporting(bookID, fileID, fn, modifyBookFileOpts{})
 }
 
 // ErrBookAggregatesStale is the error of ModifyBookFileReportingRecompute when
@@ -88,18 +122,21 @@ var ErrBookAggregatesStale = errors.New("book file written but its book's aggreg
 // (TestStoreFlattenedWidth lets Store only narrow); a consumer declares it as its
 // own interface and resolves it with AsCapability.
 func (s *PebbleStore) ModifyBookFileReportingRecompute(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error) {
-	return s.modifyBookFileReporting(bookID, fileID, fn, true, true)
+	return s.modifyBookFileReporting(bookID, fileID, fn, modifyBookFileOpts{recompute: true, report: true})
 }
 
-func (s *PebbleStore) modifyBookFile(bookID, fileID string, fn func(*BookFile) error, recompute bool) (*BookFile, error) {
-	return s.modifyBookFileReporting(bookID, fileID, fn, recompute, false)
+// modifyBookFileOpts says how modifyBookFileReporting writes: recompute whether
+// the write refreshes the book's aggregates, report whether a failed refresh is
+// returned (ErrBookAggregatesStale) rather than logged, unlessPathHeld whether a
+// move to a path another row holds is refused at the commit (ErrBookFilePathHeld).
+type modifyBookFileOpts struct {
+	recompute, report, unlessPathHeld bool
 }
 
-// modifyBookFileReporting is the one body of every ModifyBookFile variant.
-// recompute says whether the write refreshes the book's aggregates; report says
-// whether a failed refresh is returned (ErrBookAggregatesStale) rather than
-// logged.
-func (s *PebbleStore) modifyBookFileReporting(bookID, fileID string, fn func(*BookFile) error, recompute, report bool) (out *BookFile, outErr error) {
+// modifyBookFileReporting is the one body of every ModifyBookFile variant;
+// opts says how it writes (modifyBookFileOpts).
+func (s *PebbleStore) modifyBookFileReporting(bookID, fileID string, fn func(*BookFile) error, opts modifyBookFileOpts) (out *BookFile, outErr error) {
+	recompute, report := opts.recompute, opts.report
 	type modified struct {
 		row    *BookFile
 		notify bool
@@ -142,7 +179,14 @@ func (s *PebbleStore) modifyBookFileReporting(bookID, fileID string, fn func(*Bo
 			return modified{}, fmt.Errorf("ModifyBookFile: callback changed the identity of %s (id %q→%q, book %q→%q)",
 				fileID, stored.ID, row.ID, stored.BookID, row.BookID)
 		}
-		n, err := s.updateBookFileOver(stored, raw, &row, bookFileMergeReplace, recompute)
+		// The path is judged at the commit, under the index mutex, so only the
+		// intent is captured here (updateBookFileOver merges the row).
+		var verify func() error
+		if opts.unlessPathHeld && row.FilePath != "" && row.FilePath != stored.FilePath {
+			newPath := row.FilePath
+			verify = func() error { return s.requirePathNotHeld(newPath, fileID) }
+		}
+		n, err := s.updateBookFileOver(stored, raw, &row, bookFileMergeReplace, recompute, verify)
 		if errors.Is(err, errBookFileRowVanished) {
 			return modified{}, err // lost the compare-and-swap: rmwBookFile re-reads and re-runs fn
 		}
