@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_phantom_repair_test.go
-// version: 1.4.6
+// version: 1.4.7
 // guid: baa66b78-fd15-4fb8-87c8-2892d296df6e
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -495,7 +495,7 @@ func TestSeriesPhantomRepair_ChangedUnderneathWritesNoLedgerRow(t *testing.T) {
 
 	store := phantomStaleReadStore{PebbleStore: s, staleID: fx.live777[0], stale: stale}
 	h := seriesPhantomHolder{SeriesID: phantomA, BookID: fx.live777[0], Title: stale.Title, AuthorID: stale.AuthorID}
-	skip, err := seriesPhantomRepointOne(store, "op-345", h, nil)
+	skip, err := seriesPhantomRepointOne(store, store, "op-345", h, nil)
 	require.NoError(t, err)
 	require.Equal(t, "changed_underneath", skip)
 
