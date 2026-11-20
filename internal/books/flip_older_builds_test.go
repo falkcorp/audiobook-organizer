@@ -70,6 +70,12 @@ func bootAt(t *testing.T, work string, opt func(*app.Options)) error {
 	mod, opts, _ := composedOptions(t, false, filepath.Join(work, "state"), edit, nil)
 	base(&opts)
 	opts.StateDir = filepath.Join(work, "state")
+	// Options asks for the process defaults, which app.New installs early and only
+	// InstallProcessDefaults' restore (or a failed New) puts back: a boot that
+	// succeeds and is merely closed would leave the process holding them, and
+	// every later test's InstallProcessDefaults would answer ErrProcessDefaultsTaken.
+	// These boots read the store, they do not need the globals.
+	opts.ProcessDefaults = false
 	opt(&opts)
 	a, err := app.New(t.Context(), opts, mod)
 	if err == nil {

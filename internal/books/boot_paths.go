@@ -10,6 +10,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/mediacore/app"
@@ -61,6 +65,9 @@ func bootOptions(boot BootInputs, flip bool) app.Options {
 // the state directory when it is absent, as the boot would.
 func ResolveBootPaths(ctx context.Context, mod module.Module, boot BootInputs) (dbPath, stateDir string, err error) {
 	if err := refuseHEADHomeFile(boot.ConfigFile); err != nil {
+		return "", "", err
+	}
+	if err := refuseHEADKeyedConfigFile(boot.ConfigFile); err != nil {
 		return "", "", err
 	}
 	dbPath, stateDir, err = app.ResolveStorage(ctx, bootOptions(boot, flipDeclared), []module.Module{mod}, "")
@@ -126,4 +133,57 @@ func refuseHEADHomeFile(configFile string) error {
 		}
 	}
 	return nil
+}
+
+// refuseHEADKeyedConfigFile refuses a --config file (or ABO_CONFIG's) that holds
+// HEAD's flat keys. HEAD's viper read it as settings; the operator file is
+// core's now and reads canonical keys only, and the cutover imports only the
+// config.yaml beside the database (05-config section 1.12.2), never this file.
+// Core refuses a retired key at a protected or secret path and merely warns for
+// the rest (section 1.3.6), so the rest would be dropped on a log line: this
+// refuses by file and key name, never a value, so a HEAD-era file cannot lose
+// settings silently. A file this cannot parse as a mapping is core's to judge.
+func refuseHEADKeyedConfigFile(configFile string) error {
+	if configFile == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(configFile)
+	if err != nil {
+		return nil
+	}
+	var top map[string]any
+	if yaml.Unmarshal(raw, &top) != nil {
+		return nil
+	}
+	retired := map[string]bool{}
+	for _, r := range flipRetiredFileKeys() {
+		retired[r] = true
+	}
+	var found []string
+	for k := range top {
+		if retired[k] {
+			found = append(found, k)
+		}
+	}
+	if len(found) == 0 {
+		return nil
+	}
+	slices.Sort(found)
+	return fmt.Errorf("books: %s holds settings under HEAD's flat key names (%s), which nothing reads any more and the cutover does not import from a --config file: "+
+		"move them to canonical keys in the operator file or to ABO_* environment names (the R2 release note lists every rename), "+
+		"or remove them; the config.yaml beside the database is imported once by the cutover and needs no change",
+		configFile, strings.Join(found, ", "))
+}
+
+// flipRetiredFileKeys are the top-level operator-file keys HEAD read that the
+// flip retires, from the same list core's boot is given.
+func flipRetiredFileKeys() []string {
+	retired, _, _ := flipConfigNames(flipDeclared)
+	var out []string
+	for _, r := range retired {
+		if r.File {
+			out = append(out, r.Name)
+		}
+	}
+	return out
 }

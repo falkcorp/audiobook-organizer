@@ -416,10 +416,6 @@ func buildPlan(in *m2Input) (*plan, error) {
 		if err != nil {
 			return nil, errors.New("the settings blob does not decode")
 		}
-		for _, line := range aiRoutingContinuity(&blob, hasOpenAI) {
-			pl.p.Reported = append(pl.p.Reported, line)
-			pl.p.count("ai-routing-continuity")
-		}
 		tree, err := decodeTree(blob.Fields)
 		if err != nil {
 			return nil, err
@@ -433,6 +429,12 @@ func buildPlan(in *m2Input) (*plan, error) {
 			return nil, &unrepresentableError{Keys: keys}
 		}
 		pl.gapFill()
+		// After the gap-fill, so config.yaml's llm_mode and enable_ai_parsing are
+		// part of the effective config the legacy path served.
+		for _, line := range aiRoutingContinuity(pl.tree, hasOpenAI) {
+			pl.p.Reported = append(pl.p.Reported, line)
+			pl.p.count("ai-routing-continuity")
+		}
 	} else {
 		pl.tree = map[string]any{}
 		// What config.yaml holds that HEAD reads as a setting (root_dir and the

@@ -299,10 +299,11 @@ func TestProjectionKeepsRecordIDOnABOsBoot(t *testing.T) {
 }
 
 // TestStampWrittenAfterTheCheckpoint (R1-23 review B2): a HEAD store without
-// the storage_format stamp gets it at 1 from books' boot repairs, after the
+// the storage_format stamp gets it from books' boot repairs, after the
 // pre-migration checkpoint: the checkpoint holds no stamp and the store holds
-// 1 in HEAD's row format. A present stamp is never rewritten
-// (TestProjectionKeepsRecordIDOnABOsBoot).
+// one, in HEAD's row format, at the flip's raised level (version 2: 1 is the
+// legacy projection, and the level step this boot runs raises it). A present
+// stamp is never rewritten (TestProjectionKeepsRecordIDOnABOsBoot).
 func TestStampWrittenAfterTheCheckpoint(t *testing.T) {
 	path := filepath.Join(tempDir(t), "blackgate.pebble")
 	headStoreAt(t, path, nil)

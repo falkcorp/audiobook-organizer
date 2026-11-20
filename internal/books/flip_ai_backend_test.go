@@ -160,8 +160,9 @@ func TestUnchangedSave_OverTheRealCoreStore(t *testing.T) {
 			readOnly = append(readOnly, n)
 		}
 	}
-	// maintenance.* maps to core.tasks.windows.nightly.*, which core's tasks
-	// module registers on the flipped composition, so those keys are writable;
+	// maintenance.* maps to core.tasks.windows.nightly.*, which core's kernel
+	// registers on every composition (core_sections.go, tasksSettings), so those
+	// keys are writable;
 	// database_path is the one key core refuses to rewrite (it is the store the
 	// boot opened, not a setting).
 	slices.Sort(readOnly)

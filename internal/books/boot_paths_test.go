@@ -177,3 +177,40 @@ func TestStandaloneOptionsOpenAFlippedStore(t *testing.T) {
 	_, err = database.OpenStandalone(fx.dbPath, database.StandaloneOptions{})
 	require.Error(t, err, "a standalone open that does not plan the flip's levels accepted a raised store")
 }
+
+// An explicit --db that names a different store than the unit's environment is
+// the operator's newest word (flags sit above the environment in the layer
+// order, 05-config 1.12.4): the flag's store is opened, the environment's is
+// not, and the boot does not refuse. Pinned deliberately so a change to that
+// precedence shows up here.
+func TestResolveBootPaths_DifferingFlagAndEnvTheFlagWins(t *testing.T) {
+	bootPathsSandbox(t)
+	fromEnv := filepath.Join(t.TempDir(), "from-env.pebble")
+	fromFlag := filepath.Join(t.TempDir(), "from-flag.pebble")
+	t.Setenv(storagePathEnv, fromEnv)
+	db, _, err := resolveBoot(t, BootInputs{Flags: map[coreconfig.Path]string{"core.storage.path": fromFlag}})
+	require.NoError(t, err)
+	assert.Equal(t, fromFlag, db)
+}
+
+// Ruling B: a --config file holding HEAD's flat keys is refused by file and key
+// name, never a value, even for keys core would only warn about; a file of
+// canonical keys passes this check.
+func TestResolveBootPaths_ConfigFileWithHEADKeysIsRefused(t *testing.T) {
+	bootPathsSandbox(t)
+	dir := t.TempDir()
+	head := filepath.Join(dir, "head.yaml")
+	require.NoError(t, os.WriteFile(head, []byte("root_dir: /srv/gotham-secret-path\nconcurrent_scans: 3\n"), 0o600))
+	_, _, err := resolveBoot(t, BootInputs{ConfigFile: head})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), head)
+	assert.Contains(t, err.Error(), "root_dir")
+	assert.NotContains(t, err.Error(), "gotham-secret-path", "the refusal names a value")
+
+	canonical := filepath.Join(dir, "operator.yaml")
+	require.NoError(t, os.WriteFile(canonical, []byte("core:\n  log:\n    level: warn\n"), 0o600))
+	_, _, err = resolveBoot(t, BootInputs{ConfigFile: canonical})
+	if err != nil {
+		assert.NotContains(t, err.Error(), "flat key names")
+	}
+}
