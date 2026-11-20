@@ -40,6 +40,13 @@ on:
       - '.github/workflows/core-ci.yml'
   merge_group:
   workflow_dispatch:
+    inputs:
+      race:
+        # false runs the suite the way the merge queue does (no race
+        # detector), the same switch as ci.yml's `race` step.
+        description: Run the race detector (false = merge-queue flavour)
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -102,8 +109,14 @@ jobs:
           go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
+      # No race detector in the merge queue (owner 2026-11-20), the same rule
+      # as ci.yml's `race` step in its changes job: -race stays on pull
+      # requests and pushes. `'-race' || ''`, not `'' || '-race'`: an empty
+      # string is falsy in an expression.
       - name: make -C core ci
-        run: make -C core ci
+        env:
+          TEST_SHORT_RACE: ${{ !(github.event_name == 'merge_group' || (github.event_name == 'workflow_dispatch' && inputs.race == false)) && '-race' || '' }}
+        run: make -C core ci TEST_SHORT_RACE="$TEST_SHORT_RACE"
 
       - name: Module skew (root-side, blocking)
         run: make module-skew

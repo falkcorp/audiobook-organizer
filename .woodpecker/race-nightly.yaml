@@ -35,6 +35,16 @@
 # If both Mac agents are offline the workflows sit pending, and
 # .github/workflows/race-nightly-watch.yml files an issue in the morning.
 #
+# EXPECTED DURATION on llm1 (estimates; the first runs will measure it): the
+# three fixture shards took about 3400-3500 s together on llm1 when they were
+# PR workflows (see the deleted test-fixtures-1.yaml), so about 20 min each run
+# alone; the short shards are planned at about 900 s (1/2, 2/2) and 1050 s
+# (core/2) by short_test_shards.py's Mac weights. llm1 takes 3 workflows at a
+# time, so two waves of roughly 25-45 min under contention: done by about
+# 04:30 America/New_York. Any workflow that passes the repo's 60-minute
+# Woodpecker timeout is killed and its status ends failure or error, and the
+# watcher files an issue for it the same as for a failed test.
+#
 # TRIGGER: only the Woodpecker cron named `race-nightly` (created on the
 # server, not in this file: see docs/ci/woodpecker.md, "Nightly race run").
 # Not `manual`: `make ci-woodpecker` starts manual pipelines, and every one of

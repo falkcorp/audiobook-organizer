@@ -54,8 +54,13 @@ vet:
 
 ## test-short: the -short suite under -race, writing coverage.out for
 ## coverage-floor (one pass: -race and -coverprofile together).
+## TEST_SHORT_RACE is the race flag, `-race` unless overridden: core-ci.yml
+## passes it empty in the root repo's merge queue (owner 2026-11-20), where
+## the race detector does not run. -covermode=atomic is explicit so the
+## profile has the same mode either way (it is -race's default).
+TEST_SHORT_RACE ?= -race
 test-short:
-	go test ./... -short -race -count=1 -timeout 25m -coverprofile=coverage.out
+	go test ./... -short $(TEST_SHORT_RACE) -covermode=atomic -count=1 -timeout 25m -coverprofile=coverage.out
 
 ## test-nightly: everything -short skips (property tests and the rest), for
 ## nightly.yml's core job. Not part of ci.
