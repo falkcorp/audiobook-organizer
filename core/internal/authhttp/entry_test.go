@@ -1,7 +1,7 @@
 // file: core/internal/authhttp/entry_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c8d1f503-2b79-4e46-a0c3-6f94e7b15d82
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package authhttp
 
@@ -453,6 +453,7 @@ func TestFail_MapsEverySentinel(t *testing.T) {
 		{auth.ErrNotFound, 404, "not_found"},
 		{auth.ErrBadInput, 400, "bad_request"},
 		{auth.ErrBusy, 503, "busy"},
+		{auth.ErrContended, 503, "busy"},
 		{auth.ErrStoreUnavailable, 503, "auth_unavailable"},
 		{auth.ErrThrottled, 429, "throttled"},
 	} {
