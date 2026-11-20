@@ -19,7 +19,7 @@ PYTHON ?= python3
 
 .PHONY: print-toolchain ci build vet test-short fmt-check fix-check tidy-check archtest exclude-check toolchain-check \
 	errcheck-ratchet interface-width pprof-check mocks-check web-install web-test web-lint openapi-check openapi-regen \
-	generate-api-client coverage-floor embed-check test-nightly version-check script-test \
+	generate-api-client coverage-floor embed-check test-nightly version-check script-test hello-web hello e2e \
 	tools readiness apidiff-gate coverage coredoc-check vulncheck
 
 ## print-toolchain: print the pin and nothing else (one line, e.g. goX.Y.Z).
@@ -143,9 +143,27 @@ web-lint: web-install
 	cd web && npm run generate:check -w @mediacore/api-client
 
 ## web-test: core/web's npm workspace tests (vitest in every workspace; the
-## api-client's generated-client coverage check is among them), after npm ci.
+## api-client's generated-client coverage check is among them), after npm ci,
+## then presets.test.mjs, which builds api-client, ui-kit and shell from a clean
+## tree in the 07 §7.3.2 order (FE8-1), and check-singletons' own tests.
 web-test: web-install
 	cd web && npm test --workspaces --if-present -- --run
+	cd web && npm run test:presets
+
+## hello-web: core/web's packages in the 07 §7.3.2 order, then hello's web
+## package into examples/hello/web/dist (06 §6.12), and the singleton check
+## over its sourcemaps.
+hello-web: web-install
+	cd web && npm run build && npm run build -w hello-web
+	cd web && npm run check-singletons
+
+## hello: the hello example with its embedded UI (ui_embed.go), bin/hello.
+hello: hello-web
+	go build -tags embed_frontend -o bin/hello ./examples/hello/cmd/hello
+
+## e2e: the shell's Playwright suite (core/web/e2e) against bin/hello.
+e2e: hello
+	cd web && npx playwright install chromium && npm run e2e
 
 ## generate-api-client: regenerate @mediacore/api-client's src/generated/ from
 ## openapi/core.json (07 §7.8). `make -C core web-lint` fails when it is stale.
