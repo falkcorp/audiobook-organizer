@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store_bookfiles.go
-// version: 1.52.9
+// version: 1.53.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package store
 
@@ -833,7 +833,7 @@ func (s *PebbleStore) updateBookFileLocked(id string, file *BookFile, merge book
 		if stillMatches != nil && !stillMatches(old) {
 			return false, errBookFileMatchStale
 		}
-		return s.updateBookFileOver(old, raw, file, merge, recomputeAggregates)
+		return s.updateBookFileOver(old, raw, file, merge, recomputeAggregates, nil)
 	})
 	if !bookFileApplied(err) {
 		*file = intent
@@ -845,7 +845,12 @@ func (s *PebbleStore) updateBookFileLocked(id string, file *BookFile, merge book
 // stored row old, which was read as raw. It returns an error wrapping
 // errBookFileRowVanished when the commit found the row gone or no longer equal
 // to raw; nothing was written then, and the caller re-reads and retries.
-func (s *PebbleStore) updateBookFileOver(old *BookFile, raw []byte, file *BookFile, merge bookFileMerge, recomputeAggregates bool) (bool, error) {
+//
+// verify, when non-nil, is commitBookFileBatchVerified's hook: it runs with the
+// owner stripes and the single-owner index mutex held, immediately before the
+// apply, and an error from it writes nothing and is returned as is
+// (ModifyBookFileUnlessPathHeld's path check).
+func (s *PebbleStore) updateBookFileOver(old *BookFile, raw []byte, file *BookFile, merge bookFileMerge, recomputeAggregates bool, verify func() error) (bool, error) {
 	id := old.ID
 	var err error
 	// CONS-18: normalise to the stored standard — Duration is SECONDS. This was the
@@ -949,7 +954,7 @@ func (s *PebbleStore) updateBookFileOver(old *BookFile, raw []byte, file *BookFi
 	// read, so a concurrent DeleteBookFile + DeleteBook cannot let this write
 	// recreate the row under a deleted book, and a writer that takes no file
 	// stripe cannot have its change reverted (book_delete_owns_files.go).
-	durErr := s.commitBookFileBatch(batch, []string{file.BookID}, nil, []bookFileRewrite{bookFileUnchanged(key, raw)})
+	durErr := s.commitBookFileBatchVerified(batch, []string{file.BookID}, nil, []bookFileRewrite{bookFileUnchanged(key, raw)}, verify)
 	if !bookFileApplied(durErr) {
 		return false, durErr
 	}
@@ -3077,7 +3082,7 @@ func (s *PebbleStore) SetBookFileHash(id, hash string) error {
 // that makes a missing row the repoint duplicate of a present one (or breaks
 // that pairing) leaves Book.Duration correct.
 func (s *PebbleStore) writeHashesOver(old *BookFile, raw []byte, bf *BookFile) (bool, error) {
-	notify, err := s.updateBookFileOver(old, raw, bf, bookFileMergeReplace, false)
+	notify, err := s.updateBookFileOver(old, raw, bf, bookFileMergeReplace, false, nil)
 	if !notify && bookFileApplied(err) && s.hashWriteMovesAggregate(old, bf) {
 		notify = true
 	}

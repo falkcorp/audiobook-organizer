@@ -1,7 +1,7 @@
 // file: internal/books/store/single_owner_index_lock_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: b4e07d19-6a3c-4825-9f71-3d8c05e2a916
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package store
 
@@ -199,7 +199,7 @@ var singleOwnerIndexStagers = map[string]string{
 	"createBookFileAttempt":          "commitBookFileBatch",
 	"batchCreateBookFilesAttempt":    "commitBookFileBatch",
 	"stagePIDTransfer":               "its caller's commitBookFileBatch",
-	"updateBookFileOver":             "commitBookFileBatch",
+	"updateBookFileOver":             "commitBookFileBatchVerified",
 	"batchUpsertBookFilesStaged":     "commitBookFileBatch",
 	"moveBookFilesToBookBulkAttempt": "commitBookFileBatch",
 	"retireBookFilesAttempt":         "commitBookFileBatchVerified",
