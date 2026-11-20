@@ -39,7 +39,7 @@ func egressRig(t *testing.T) (*Engine, *fakeAccess, *fakeResidual) {
 	res.vals["download_client.torrent.deluge.port"] = json.RawMessage(`58846`)
 	res.vals["metadata_sources"] = json.RawMessage(`[{"id":"gotham-books","name":"Gotham Books","enabled":true,"base_url":"https://books.example.test/api","credentials":{"api_key":"pengu1n"}},{"id":"arkham","name":"Arkham","enabled":true,"credentials":{}},{"id":"narrows","enabled":true,"base_url":"https://narrows.example.test","credentials":{"api_key":""}},{"id":"hardcover","enabled":true,"base_url":"https://graphql.example.test/v1"}]`)
 	res.vals["plugins"] = json.RawMessage(`{"webhook":{"enabled":true,"settings":{"urls":"https://hooks.example.test/a, https://hooks.example.test/b","secret":"riddle"}}}`)
-	res.vals["ai_endpoints"] = json.RawMessage(`[{"id":"openai","url":"https://llm.example.test:8443/v1","auth_ref":"openai_api_key"},{"id":"local","url":"http://192.0.2.9:11434"}]`)
+	res.vals["ai_endpoints"] = json.RawMessage(`[{"id":"openai","protocol":"openai_compat","url":"https://llm.example.test:8443/v1","auth_ref":"openai_api_key"},{"id":"local","protocol":"openai_compat","url":"http://192.0.2.9:11434"}]`)
 	e := New(f, nil, WithResidual(res))
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatal(err)
@@ -103,8 +103,8 @@ func TestEgress_HostChangeWithoutNewCredentialIsRefused(t *testing.T) {
 		{"hardcover: base_url removed moves it to the default", set("metadata_sources", `[{"id":"hardcover"}]`), "metadata_sources"},
 		{"webhook new host", set("plugins", `{"webhook":{"enabled":true,"settings":{"urls":"https://hooks.example.test/a, https://evil.example.test/x"}}}`), "plugins"},
 		{"webhook new host, blank secret", set("plugins", `{"webhook":{"enabled":true,"settings":{"urls":"https://evil.example.test/x","secret":""}}}`), "plugins"},
-		{"ai endpoint host", set("ai_endpoints", `[{"id":"openai","url":"https://evil.example.test/v1","auth_ref":"openai_api_key"}]`), "ai_endpoints"},
-		{"ai endpoint new row with the ref", set("ai_endpoints", `[{"id":"mine","url":"https://evil.example.test/v1","auth_ref":"openai_api_key"}]`), "ai_endpoints"},
+		{"ai endpoint host", set("ai_endpoints", `[{"id":"openai","protocol":"openai_compat","url":"https://evil.example.test/v1","auth_ref":"openai_api_key"}]`), "ai_endpoints"},
+		{"ai endpoint new row with the ref", set("ai_endpoints", `[{"id":"mine","protocol":"openai_compat","url":"https://evil.example.test/v1","auth_ref":"openai_api_key"}]`), "ai_endpoints"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { egressRefused(t, c.name, c.u, c.field) })
@@ -167,13 +167,13 @@ func TestEgress_HostChangeWithNewCredentialIsAccepted(t *testing.T) {
 					t.Fatalf("not written: %s", res.vals["plugins"])
 				}
 			}},
-		{"ai endpoint with a new key", set("ai_endpoints", `[{"id":"openai","url":"https://llm2.example.test/v1","auth_ref":"openai_api_key"}]`, "openai_api_key", `"oswald"`),
+		{"ai endpoint with a new key", set("ai_endpoints", `[{"id":"openai","protocol":"openai_compat","url":"https://llm2.example.test/v1","auth_ref":"openai_api_key"}]`, "openai_api_key", `"oswald"`),
 			func(t *testing.T, f *fakeAccess, _ *fakeResidual) {
 				if f.secrets[openAIKeyName] != "oswald" {
 					t.Fatalf("key = %q", f.secrets[openAIKeyName])
 				}
 			}},
-		{"ai endpoint drops the ref", set("ai_endpoints", `[{"id":"openai","url":"https://evil.example.test/v1"}]`),
+		{"ai endpoint drops the ref", set("ai_endpoints", `[{"id":"openai","protocol":"openai_compat","url":"https://evil.example.test/v1"}]`),
 			func(t *testing.T, _ *fakeAccess, res *fakeResidual) {
 				if !strings.Contains(string(res.vals["ai_endpoints"]), "evil.example.test") {
 					t.Fatalf("not written: %s", res.vals["ai_endpoints"])
@@ -211,8 +211,8 @@ func TestEgress_SameHostKeepsTheCredential(t *testing.T) {
 		{"metadata source without credentials moves freely", set("metadata_sources", `[{"id":"gotham-books","base_url":"https://books.example.test/api"},{"id":"arkham","base_url":"https://anywhere.example.test"}]`)},
 		{"metadata new source", set("metadata_sources", `[{"id":"gotham-books","base_url":"https://books.example.test/api"},{"id":"narrows","base_url":"https://elsewhere.example.test"}]`)},
 		{"webhook known hosts, other path", set("plugins", `{"webhook":{"enabled":true,"settings":{"urls":"https://hooks.example.test/c","secret":""}}}`)},
-		{"ai endpoint, same origin", set("ai_endpoints", `[{"id":"openai","url":"https://llm.example.test:8443/other","auth_ref":"openai_api_key"}]`)},
-		{"ai endpoint without a ref moves freely", set("ai_endpoints", `[{"id":"local","url":"http://192.0.2.77:11434"}]`)},
+		{"ai endpoint, same origin", set("ai_endpoints", `[{"id":"openai","protocol":"openai_compat","url":"https://llm.example.test:8443/other","auth_ref":"openai_api_key"}]`)},
+		{"ai endpoint without a ref moves freely", set("ai_endpoints", `[{"id":"local","protocol":"openai_compat","url":"http://192.0.2.77:11434"}]`)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { egressAccepted(t, c.name, c.u) })
@@ -332,10 +332,10 @@ func TestEgress_DefaultOpenAIHost(t *testing.T) {
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Update(t.Context(), adminActor, set("ai_endpoints", `[{"id":"openai","url":"https://api.openai.com/v1","auth_ref":"openai_api_key"}]`)); err != nil {
+	if _, err := e.Update(t.Context(), adminActor, set("ai_endpoints", `[{"id":"openai","protocol":"openai_compat","url":"https://api.openai.com/v1","auth_ref":"openai_api_key"}]`)); err != nil {
 		t.Fatalf("an endpoint on the default host: %v", err)
 	}
-	if _, err := e.Update(t.Context(), adminActor, set("ai_endpoints", `[{"id":"openai","url":"https://evil.example.test/v1","auth_ref":"openai_api_key"}]`)); !errors.Is(err, coreconfig.ErrInvalid) {
+	if _, err := e.Update(t.Context(), adminActor, set("ai_endpoints", `[{"id":"openai","protocol":"openai_compat","url":"https://evil.example.test/v1","auth_ref":"openai_api_key"}]`)); !errors.Is(err, coreconfig.ErrInvalid) {
 		t.Fatalf("an endpoint elsewhere: err = %v", err)
 	}
 }

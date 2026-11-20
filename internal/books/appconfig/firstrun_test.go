@@ -7,6 +7,7 @@ package appconfig
 
 import (
 	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -22,11 +23,13 @@ var setupPrincipal = config.Actor{Can: func(p string) bool { return p == config.
 // meets the library root's admin protection for exactly that write.
 func TestFirstRun_WizardKeysNeedNoAdmin(t *testing.T) {
 	e, f := foldEngine(t, `[]`, `[]`)
-	res, err := e.Update(t.Context(), setupPrincipal, set("root_dir", `"/srv/library"`, "playlist_dir", `"/srv/library/playlists"`, "setup_complete", `true`))
+	// The playlist directory's parent must exist, as it had to for HEAD's PUT.
+	lib := t.TempDir()
+	res, err := e.Update(t.Context(), setupPrincipal, set("root_dir", strconv.Quote(lib), "playlist_dir", strconv.Quote(lib+"/playlists"), "setup_complete", `true`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e.Snapshot().RootDir != "/srv/library" || !e.Snapshot().SetupComplete || len(res.Applied) == 0 {
+	if e.Snapshot().RootDir != lib || !e.Snapshot().SetupComplete || len(res.Applied) == 0 {
 		t.Fatalf("root=%q setup_complete=%v applied=%v", e.Snapshot().RootDir, e.Snapshot().SetupComplete, res.Applied)
 	}
 	if len(f.actors) != 1 || !f.actors[0].Interactive || !f.actors[0].Can("core:admin") {

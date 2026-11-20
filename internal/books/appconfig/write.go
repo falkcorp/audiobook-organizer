@@ -588,12 +588,21 @@ func (e *Engine) validateCandidate(before config.Config, u config.Update, aiOut 
 	for _, m := range before.Clone().Problems() {
 		had[m] = true
 	}
+	// A key the write names is judged on its own: replacing one bad value with
+	// another bad value is not a repair, even though the problem reads the same.
+	touched := map[string]bool{}
+	for head := range u.Set {
+		touched[head] = true
+	}
+	for _, head := range u.Unset {
+		touched[head] = true
+	}
 	var errs []error
 	for _, m := range found {
-		if had[m] {
+		path, _, _ := strings.Cut(m, " ")
+		if had[m] && !touched[path] {
 			continue
 		}
-		path, _, _ := strings.Cut(m, " ")
 		if _, known := e.byHead[path]; !known {
 			path = ""
 		}

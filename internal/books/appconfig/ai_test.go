@@ -17,9 +17,9 @@ import (
 
 // aiList is a list as HEAD's seed builds it for a local server, a local mode for
 // both uses and an OpenAI key present: a local-llm row and an openai row.
-const aiList = `[{"id":"local-llm","url":"http://192.0.2.10:11434/v1","chat_model":"qwen2.5:7b-instruct","embed_model":"bge-m3","enabled":true,` +
+const aiList = `[{"id":"local-llm","protocol":"openai_compat","url":"http://192.0.2.10:11434/v1","chat_model":"qwen2.5:7b-instruct","embed_model":"bge-m3","enabled":true,` +
 	`"capabilities":["llm.filename_parse","llm.author_review","llm.author_discovery","llm.metadata_rerank","embed.text"]},` +
-	`{"id":"openai","url":"https://api.openai.com/v1","auth_ref":"openai_api_key","priority":20,"enabled":true,"capabilities":[]}]`
+	`{"id":"openai","protocol":"openai_compat","url":"https://api.openai.com/v1","auth_ref":"openai_api_key","priority":20,"enabled":true,"capabilities":[]}]`
 
 func aiEngine(t *testing.T, list string) (*Engine, *fakeAccess, *fakeResidual) {
 	t.Helper()

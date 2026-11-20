@@ -212,7 +212,8 @@ func TestFlipPUTParity_FormerlyFileOnlyKeysAreOrdinaryKeys(t *testing.T) {
 
 // apiKeyActor is a credential that may do everything its scopes allow (the
 // full-scope bootstrap key) but is not an interactive session.
-var apiKeyActor = config.Actor{Subject: "key:bootstrap", Interactive: false, Can: func(string) bool { return true }}
+// (The handler grants FirstRunPerm only in the first-run window, never to a key.)
+var apiKeyActor = config.Actor{Subject: "key:bootstrap", Interactive: false, Can: func(p string) bool { return p != config.FirstRunPerm }}
 
 // Ruling: HEAD answered 403 when an API key (including the bootstrap key) PUT a
 // sign-in, executable, path or database setting. ProtectAdmin is checked as
