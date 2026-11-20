@@ -11,9 +11,9 @@
 | TODO id | `TODO-F8-03B-SHARE-SAFE-BUNDLE` (`TODO.md`, folded in from `todo.d/2026-11-15-f8-03b-share-safe-bundle.md`) |
 | Release | R2, flip label F8 (dark PR; it adds no route and switches nothing) |
 | Tier | **T3** (Sonnet at medium effort, then an Opus review and a T3 security review before merge): a sanitizer that decides what a third party may read |
-| Wave | W37 (any wave after F8-03's W30; it must merge before F8-04's W38 and it is file-disjoint from every other wave-W37 row) |
+| Wave | W37 (any wave after F8-03's W30; it must merge before F8-04a's W38 and it is file-disjoint from every other wave-W37 row) |
 | Depends on | F8-03 (merged: the Exporter, the marker, the gate and the open-leak list are its) |
-| Blocks | F8-04 (its item 3, Health, mounts the diagnostics routes) |
+| Blocks | F8-04a (its item 3, Health, mounts the diagnostics routes) |
 | Spec | 05-health §5H.3.5 (the diagnostics bundle, layer 2 "absolute filesystem paths outside known roots"); `docs/agent-tasks/platform-core/seams.d/F8-03.md` ("S1", "Round 8: what the redactor does not meet"); the round 7 review of PR #4658 (the break-it and design review of head 7235dc265, option "3+5 hybrid") and the round 8 delta review (ba689b7bc) |
 
 > **Done (round 13, `seams.d/F8-03.md`).** The sanitizer, the deletions and the tests below landed in one PR. The text
@@ -88,12 +88,12 @@ wires it to every byte that leaves, and deletes the marker, the runtime refusal 
    (`archtest.Package.IgnoredGoFiles` is general loader API and stays.)
 6. **Update docs:**
    - the seams note: S1's status, the residual and the costs;
-   - the F8-04 brief: remove the STOP line and keep F8-03b in `Depends on`;
+   - the F8-04a brief: remove the STOP line and keep F8-03b in `Depends on`;
    - a changelog fragment;
    - check `TODO-F8-03B-SHARE-SAFE-BUNDLE` off in `TODO.md` (grep `TODO.md` first: the fragment is folded in by the
      daily job and its deletion proves nothing).
 7. **Record the owner's rulings, or the defaults taken** (see "Owner decisions" below).
-8. **Get an Opus review and a T3 security review before merge.** F8-04 item 3 (Health) may not start until F8-03b has
+8. **Get an Opus review and a T3 security review before merge.** F8-04a item 3 (Health) may not start until F8-03b has
    merged.
 
 ## Outline (from the round 7 review, option "3+5 hybrid")
@@ -186,7 +186,7 @@ reads a clock to assert linearity, and `grep -rn 'RedesignPendingF8_03b\|F803bGa
 
 ## Out of scope
 
-- Mounting the diagnostics routes, switching ABO's `diagnostics.export` and deleting `InterimExport` (F8-04).
+- Mounting the diagnostics routes, switching ABO's `diagnostics.export` and deleting `InterimExport` (F8-04a).
 - Moving the path rule into `core/log`'s `Redactor` (a later 05-logging edit).
 - Bare usernames and hostnames outside paths.
 - The legacy `POST /api/v1/diagnostics/export` in ABO's `internal/diagnostics`, which does not use this redactor.

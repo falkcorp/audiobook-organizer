@@ -11,8 +11,8 @@
 | Release | R3 (dark; merges after OWNER-05), flip label F9; the shell ships in R3 (owner direction 2026-11-16, plan §(l) item 7) |
 | Tier | **T3** (Opus / high): a cut of shell-classified pages into the shell and books' slots; the import boundary must prove the cut and the SPA must render the same |
 | Wave | W43 (beside F9-02, R3-01, R3-03; file-disjoint). It moved from W42 on 2026-11-16, behind F9-05 (now W42) |
-| Depends on | F9-01 (the `shell` and `ui-kit` packages), F8-04 (F4-08 through F8-04 edit these pages under `web/src/`), F9-05 (the pages import its providers and utils) |
-| Precondition | 07 §7.19 step 4: every R2 flip whose native routes the pages call has merged (enforced by `Depends on`: F8-04) |
+| Depends on | F9-01 (the `shell` and `ui-kit` packages), F8-04a/b (F4-08 through F8-04b edit these pages under `web/src/`), F9-05 (the pages import its providers and utils) |
+| Precondition | 07 §7.19 step 4: every R2 flip whose native routes the pages call has merged (enforced by `Depends on`: F8-04a, F8-04b) |
 | Spec | 07 §7.11 (the classification table: the `pages/Login.tsx …`, `pages/Users.tsx`, `pages/System.tsx`, `components/system/MaintenanceTab.tsx`, `pages/Settings.tsx`, `pages/Dashboard.tsx`, `pages/Diagnostics.tsx` and `components/wizard/WelcomeWizard.tsx` rows), §7.4.2 (`WidgetContribution`, `SetupContribution`, `UserPageExtensions`, `SettingsPanelContribution`), §7.4.3 (shell routes), §7.9.1 (permission atoms; `/setup` and the first-run gate order), §7.3.1 (import boundary), §7.19 step 4 |
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. **Dark:** ABO's SPA looks and behaves the
@@ -37,10 +37,10 @@ npm ci --prefix web
 07 §7.19 step 4: "Preconditions: steps 1–2 and every R2 flip whose native routes the shell pages call". These pages
 call the identity routes (Login, AcceptInvite, Setup, Users: F4-08), the tasks routes (Dashboard, MaintenanceTab's
 shell half: F5-18), the integrations routes (the Settings frame's generic tabs: F7-09) and the system, backup, update
-and health routes (System and its tabs: F8-04), and those flips edit these files under `web/src/`. The pages also import
+and health routes (System and its tabs: F8-04a), and those flips edit these files under `web/src/`. The pages also import
 F9-05's providers and utils (`AuthContext`, `apiFetch`, `apiResponse`, `safeReturn`, `ServerFileBrowser`,
 `AnnouncementBanner`, `useOperationsStore`, `storageKeys`), which must be in the shell before a page can move.
-`Depends on` F8-04 and F9-05 puts the flips and those pieces in your base, so there is nothing to check here.
+`Depends on` F8-04a/b and F9-05 puts the flips and those pieces in your base, so there is nothing to check here.
 
 ## Goal (07 §7.11, one row per page)
 

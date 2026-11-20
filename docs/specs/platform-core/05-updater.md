@@ -287,7 +287,7 @@ HEAD, with the hotfix's rules. Steps, each a `rc.Phase`:
    `no_asset`; **the offline fetch behind `make rollback-restore RELEASE=<tag>` asks for the name releases
    really publish instead**: goreleaser's raw binary `audiobook-organizer_<Title(os)>_<x86_64|arm64>`,
    rendered by ABO's `ReleasedAsset` and held to `.goreleaser.yml` by `TestReleasedAssetMatchesGoreleaser`, with
-   HEAD's name kept on the gin path only until F8-04, which decides the name the core apply task asks for),
+   HEAD's name kept on the gin path only until F8-04b, which decides the name the core apply task asks for),
    fetched through `providerhttp` with user agent `<BinaryName>/<version>` (ABO: HEAD's
    `audiobook-organizer/<ver>`, `updater.go:239`) and streamed straight into `<exe>.new`, mode 0755, in
    the executable's directory, so the rename is atomic (HEAD's `updater.go:254-265`). The body is capped
@@ -544,7 +544,7 @@ Check) and the durable clock of the `core.updater.check` kind, which `tasks.Stor
 3. Confirm the asset naming the reusable release workflow actually publishes (UNKNOWN in this repo). Checked for
    the fetch on 2026-11-18, on the releases `v0.223.0`, `v0.230.0`, `v0.231.0`, `v0.232.0` and `v0.232.1-rc.4`: each publishes `audiobook-organizer_Linux_x86_64`,
    `_Linux_arm64`, `_Darwin_x86_64` and `_Darwin_arm64` (and the archives) and none publishes HEAD's
-   `audiobook-organizer-<os>-<arch>`, so the live `/api/v1/update/apply` finds no asset on any of them. F8-04
+   `audiobook-organizer-<os>-<arch>`, so the live `/api/v1/update/apply` finds no asset on any of them. F8-04b
    chooses the name for the core apply task (and with it whether the gin path's behaviour changes).
 4. Windows support for the swap (a running `.exe` cannot be renamed over on some setups): not a
    current deployment target; the deferred exec-mode restart is Unix-only.

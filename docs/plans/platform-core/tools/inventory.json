@@ -108,7 +108,7 @@
    "internal/server/handlers/system/health_tokens_test.go"
   ],
   "spec": "05-updater §5U.12 (R0 behaviour), §5U.11; 09 §9.4 R0 Content (3), Verification; 09 §9.1 updater row; 09 Out-of-scope defects item 3; 05-health §5H.3.1, §5H.9 (the R0 cell), §5H.10 R0 row; 05-updater 5U.5",
-  "notes": "Tier: a wrong swap strands self-updating installs; several refusal paths must hold together; the degraded field is the first posture-token surface. golang.org/x/mod becomes a direct requirement. A manual apply refuses a describe-suffixed current version unless the operator names the version. R0 adds the authenticated degraded field of GET /api/v1/system/status carrying the one token auto_update_paused, never shown on /health; R1-24 extends the field with the posture tokens. This row creates TestHealth_UnauthenticatedTokenSetGolden with its R0 cell; R1-24, F2-10 and F8-04 extend it. Owns gate tests: the R0 updater test: TestApply_RestartExits75, TestApply_SwapAtomicAndPrevKept, TestCheck_SemverNeverDowngrades, TestCheck_DescribeSuffixedCurrentNotCompared, TestCheck_ScheduledRunNeverApplies; TestHealth_UnauthenticatedTokenSetGolden."
+  "notes": "Tier: a wrong swap strands self-updating installs; several refusal paths must hold together; the degraded field is the first posture-token surface. golang.org/x/mod becomes a direct requirement. A manual apply refuses a describe-suffixed current version unless the operator names the version. R0 adds the authenticated degraded field of GET /api/v1/system/status carrying the one token auto_update_paused, never shown on /health; R1-24 extends the field with the posture tokens. This row creates TestHealth_UnauthenticatedTokenSetGolden with its R0 cell; R1-24, F2-10 and F8-04a extend it. Owns gate tests: the R0 updater test: TestApply_RestartExits75, TestApply_SwapAtomicAndPrevKept, TestCheck_SemverNeverDowngrades, TestCheck_DescribeSuffixedCurrentNotCompared, TestCheck_ScheduledRunNeverApplies; TestHealth_UnauthenticatedTokenSetGolden."
  },
  {
   "id": "R0-03",
@@ -1042,7 +1042,7 @@
    "internal/work/register_test.go"
   ],
   "spec": "06 §6.11.1 steps 2-3, §6.11.2 (the 43 registrants)",
-  "notes": "Tier: 24 registering files changed the same way in one PR, with no service changed. The first books-internal PR after the composition root: it removes the global factory map (test-isolation defects and the batchpoller class of bug) and changes no service. Step 4 is paced by the flips (F3-07, F5-18, F7-09, F8-04 delete their generic services' ServiceDefs) and finished by R3-05. The explicit list lives in internal/server/registry_wire.go: internal/server's tests need the full set and books cannot import it."
+  "notes": "Tier: 24 registering files changed the same way in one PR, with no service changed. The first books-internal PR after the composition root: it removes the global factory map (test-isolation defects and the batchpoller class of bug) and changes no service. Step 4 is paced by the flips (F3-07, F5-18, F7-09, F8-04a, F8-04b delete their generic services' ServiceDefs) and finished by R3-05. The explicit list lives in internal/server/registry_wire.go: internal/server's tests need the full set and books cannot import it."
  },
  {
   "id": "R1-17",
@@ -3548,7 +3548,7 @@
    "go.sum"
   ],
   "spec": "05-backup §5B.3, §5B.10, B1, B7; 05-config §1.12.2 (--gap-fill); 04 §8.1 F8",
-  "notes": "Tier: backup and restore of every core store. Lands the staging, extraction and pre-migration-checkpoint half of TestLegacyArchiveRestoreThenMigrate; F8-04, where every step is registered, owns it. 04 keys: F8 create mediacore/backup."
+  "notes": "Tier: backup and restore of every core store. Lands the staging, extraction and pre-migration-checkpoint half of TestLegacyArchiveRestoreThenMigrate; F8-04a, where every step is registered, owns it. 04 keys: F8 create mediacore/backup."
  },
  {
   "id": "F8-03",
@@ -3571,7 +3571,7 @@
    "core/kernel/health.go"
   ],
   "spec": "05-health §5H.3, §5H.10 Landing R2 F8; 06 §6.4.10 F8; 04 §8.1 F8",
-  "notes": "Tier: probes and the startup supervisor. Starts the heartbeat and watchdog from core/kernel/health.go; Registrar.StartupSteps and Diagnostics are F8-04's module members. 04 keys: F8 grow mediacore/health; F8 grow mediacore/health/diagnostics."
+  "notes": "Tier: probes and the startup supervisor. Starts the heartbeat and watchdog from core/kernel/health.go; Registrar.StartupSteps and Diagnostics are F8-04a's module members. 04 keys: F8 grow mediacore/health; F8 grow mediacore/health/diagnostics."
  },
  {
   "id": "F8-02",
@@ -3628,7 +3628,7 @@
    "core/internal/healthhttp/"
   ],
   "spec": "05-health \u00a75H.3.5; docs/agent-tasks/platform-core/seams.d/F8-03.md (S1, Round 8)",
-  "notes": "Tier: a sanitizer that decides what a third party may read; Opus review and a T3 security review before merge. A follow-up row of the merged F8-03 (round 7 and 8 reviews of PR #4658), named F8-03b because its name was the marker's (the marker, the runtime refusal and the archtest gate this row deleted); the rows-take-the-next-free-number rule would call it F8-05. Replaces the token scanner in core/health/diagnostics/paths.go, applies the sanitizer to every byte that leaves (Writer.JSON values and keys, Writer.File lines, manifest text, zip entry names, the health route's Detail) and deletes the marker, the runtime refusal in New and Build, and the archtest gate, probe pin and linker-flag guard (the four core/archtest/f803b_*.go files, which are therefore no longer listed under files). Landed in round 13 of seams.d/F8-03.md. Covers no 04 key of its own: F8-03 owns the F8 grow of mediacore/health/diagnostics. F8-04 depends on it: F8-04 mounts the diagnostics routes. Dark: no route is mounted, nothing in ABO switches."
+  "notes": "Tier: a sanitizer that decides what a third party may read; Opus review and a T3 security review before merge. A follow-up row of the merged F8-03 (round 7 and 8 reviews of PR #4658), named F8-03b because its name was the marker's (the marker, the runtime refusal and the archtest gate this row deleted); the rows-take-the-next-free-number rule would call it F8-05. Replaces the token scanner in core/health/diagnostics/paths.go, applies the sanitizer to every byte that leaves (Writer.JSON values and keys, Writer.File lines, manifest text, zip entry names, the health route's Detail) and deletes the marker, the runtime refusal in New and Build, and the archtest gate, probe pin and linker-flag guard (the four core/archtest/f803b_*.go files, which are therefore no longer listed under files). Landed in round 13 of seams.d/F8-03.md. Covers no 04 key of its own: F8-03 owns the F8 grow of mediacore/health/diagnostics. F8-04a depends on it: F8-04a mounts the diagnostics routes. Dark: no route is mounted, nothing in ABO switches."
  },
  {
   "id": "F8-04a",
@@ -3830,7 +3830,7 @@
    "core/web/packages/api-client/src/index.ts"
   ],
   "spec": "07 §7.11 (the classification table), §7.9.1, §7.19 step 4",
-  "notes": "Tier: a cut of shell-classified providers, stores and presentational pieces, the Activity page among them. The Activity page becomes the shell's tasks pane with books' taskKinds labels; OperationsIndicator.tsx is F9-02's (the layout); PathLinks and its utils stay books. Waits for F8-04: F4-08 through F8-04 edit the web/src files this row moves. Owns the shell's root src/index.ts; F9-02 and F9-04 add their exports after it merges. Also creates the empty layout/ and pages/ entry files and their root re-export lines, so F9-02 and F9-04 never edit the root index.ts. Merges after OWNER-05 (the shell ships in R3), so its reset of the saved UI preferences reaches users only with R3's release note."
+  "notes": "Tier: a cut of shell-classified providers, stores and presentational pieces, the Activity page among them. The Activity page becomes the shell's tasks pane with books' taskKinds labels; OperationsIndicator.tsx is F9-02's (the layout); PathLinks and its utils stay books. Waits for F8-04a/b: F4-08 through F8-04b edit the web/src files this row moves. Owns the shell's root src/index.ts; F9-02 and F9-04 add their exports after it merges. Also creates the empty layout/ and pages/ entry files and their root re-export lines, so F9-02 and F9-04 never edit the root index.ts. Merges after OWNER-05 (the shell ships in R3), so its reset of the saved UI preferences reaches users only with R3's release note."
  },
  {
   "id": "F9-02",
@@ -3850,7 +3850,7 @@
    "core/web/packages/shell/src/layout/"
   ],
   "spec": "07 §7.11, §7.19 step 4",
-  "notes": "Tier: a cut of shell-classified files into slots. 07 §7.11 puts books' UI under web/src/modules/books/; the pages are F9-04's and the providers, stores and presentational pieces F9-05's. Waits for F8-04: F4-08 through F8-04 edit the web/src files this row moves."
+  "notes": "Tier: a cut of shell-classified files into slots. 07 §7.11 puts books' UI under web/src/modules/books/; the pages are F9-04's and the providers, stores and presentational pieces F9-05's. Waits for F8-04a/b: F4-08 through F8-04b edit the web/src files this row moves."
  },
  {
   "id": "F9-04",
@@ -3883,7 +3883,7 @@
    "web/src/modules/books/pages/"
   ],
   "spec": "07 §7.11 (the classification table), §7.19 step 4",
-  "notes": "Tier: a cut of shell-classified pages into the shell and books' slots. Every shell-classified file is cut and moved before main.tsx switches (07 §7.19 step 4); F9-03 switches it. Waits for F8-04: F4-08 through F8-04 edit the web/src files this row moves. Also cuts the Settings frame's generic tabs, which 07 classifies as shell."
+  "notes": "Tier: a cut of shell-classified pages into the shell and books' slots. Every shell-classified file is cut and moved before main.tsx switches (07 §7.19 step 4); F9-03 switches it. Waits for F8-04a/b: F4-08 through F8-04b edit the web/src files this row moves. Also cuts the Settings frame's generic tabs, which 07 classifies as shell."
  },
  {
   "id": "F9-03",
@@ -4006,7 +4006,7 @@
    "cmd/"
   ],
   "spec": "06 §6.11.1 step 4, §6.11.2, §6.4.5 (Register's side-effect rule; Describe over books)",
-  "notes": "Tier: constructors replace the remaining registry clusters and the server construction moves into start hooks. The flips delete the generic services' ServiceDefs as their core packages arrive (F3-07, F5-18, F7-09, F8-04); this row takes the audiobook clusters left, by R3 at the latest, which lets Describe run over books."
+  "notes": "Tier: constructors replace the remaining registry clusters and the server construction moves into start hooks. The flips delete the generic services' ServiceDefs as their core packages arrive (F3-07, F5-18, F7-09, F8-04a, F8-04b); this row takes the audiobook clusters left, by R3 at the latest, which lets Describe run over books."
  },
  {
   "id": "R3-01",

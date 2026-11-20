@@ -33,7 +33,7 @@ Delete what R3's content list names and nothing else (09 §9.4 R3; 04 §3.6, §5
 
 1. `internal/serviceregistry` (04 §3.6: the process-global factory map; 06 §6.11.1 step 4 says "when the list is
    empty, delete `internal/serviceregistry` … in R3 at the latest"). R1-34 replaced the `init()` registrations with
-   one explicit `ServiceDefs()` list (step 3), the flips F3-07, F5-18, F7-09 and F8-04 deleted their generic services'
+   one explicit `ServiceDefs()` list (step 3), the flips F3-07, F5-18, F7-09 and F8-04a and F8-04b deleted their generic services'
    entries, and R3-05 emptied the rest, so the only caller left is books' empty list in `internal/books/services.go`.
 2. `pkg/plugin/sdk` (04 §6: deleted, N4) and `tools/cmd/sdkguard`, the ratchet that guarded it (04 §6
    "Consequences": `archtest` replaces it), with its `make sdkguard` target and its CI step.

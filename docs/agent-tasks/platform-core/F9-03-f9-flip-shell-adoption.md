@@ -11,7 +11,7 @@
 | Release | R3: merges after OWNER-05 cuts R2, outside the freeze (09 §9.3; plan §(l) item 7; owner direction 2026-11-16) |
 | Tier | **T4** (Opus / xhigh–max): every flip PR is T4; this one changes every page path and the owner of `/` |
 | Wave | W44 (alone: the only PR of its wave; it owns `main.go`, `internal/server/`, books' registration and `core/kernel/kernel.go` in W41). Runs inside an announced **move window** (04 key `F9 move internal/server -> mediacore/ui`) |
-| Depends on | F8-04, F9-02, F9-04, F9-05, OWNER-05 |
+| Depends on | F8-04a, F8-04b, F9-02, F9-04, F9-05, OWNER-05 |
 | Spec | 07 §7.19 steps 4–5 (one release; the order inside the series), §7.11, §7.6.3 (ownership of `/`, the Basic-gate asset exemption, ABO adopts the hello pattern, route-chain placement, `embed_frontend` semantics), §7.5 (server manifest and intersection), §7.9.2 (realtime client), §7.10 (preset), §7.18; 09 §9.4 R2 flips table row F9, §9.6 row 21; 05-http-api §8.1 (F9 row), §4.10; 03 §3.8 F9; 06 §6.4.10 ("Shell" row: `Options.UI`, `Options.UIOptions`, `Description.UIManifests`), §6.10 (`TestABOManifestBootsWithShell`) |
 
 **Gate:** plan, then execute autonomously in a worktree with its own PR. **One atomic PR** (09 §9.2.1). It merges

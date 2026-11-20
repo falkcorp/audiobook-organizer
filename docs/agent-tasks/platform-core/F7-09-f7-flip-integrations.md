@@ -335,7 +335,7 @@ must be green on the PR.
 
 - Moving organizer, versions, quarantine, Deluge import and iTunes transfer onto `library.Transfer` (after R2).
 - The download phase 2, the AI usage ledger, the notify inbox (deferred-build).
-- Backup, health, the updater and the kernel `/metrics` mount (F8-04).
+- Backup, health, the updater and the kernel `/metrics` mount (F8-04a/b).
 
 ## Rollback
 

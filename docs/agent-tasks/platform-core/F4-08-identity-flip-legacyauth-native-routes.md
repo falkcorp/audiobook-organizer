@@ -396,7 +396,7 @@ grep -c 'internal/auth$' tools/cmd/sdkguard/internal-deps.txt                   
     `users.manage` carries the atom table's full-reach entry; a custom role holding the four `settings.manage`
     expansion scopes gets 403 on backup restore, backup create, logs, tool install and plugin settings.
   - `TestCoreRoutesReplaceGin` (created here, with the F4 cell): on the real engine no gin route remains at a path this
-    flip's native routes replace (the flip's generated list). F5-18, F6-03, F7-09 and F8-04 each add their cell.
+    flip's native routes replace (the flip's generated list). F5-18, F6-03, F7-09 and F8-04a/b each add their cell.
 - **Link forms** (07 §7.18):
   - `TestOldLinkFormsNotServed`: `GET /auth/temp-login?token=` answers 404, an old `/invite/<token>` link opens no
     invite, a token minted before the flip is refused, and the access log and span show the redacted path.

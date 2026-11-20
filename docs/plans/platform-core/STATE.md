@@ -76,7 +76,7 @@ OWNER-05; R2-02 removed). Recorded in spec 02 §2.6 and OWNER-01.
 The owner's answers of 2026-11-16 change how the rest of the plan is worked. They are recorded in plan §(n) item 13
 (direction, agent cap, review tiers) and §(l) item 7 (F9 in R3).
 
-- **Product work comes first.** All seven flip rows (F3-07, F4-08, F5-18, F6-03, F7-09, F8-04, F9-03) are ON HOLD until
+- **Product work comes first.** All seven flip rows (F3-07, F4-08, F5-18, F6-03, F7-09, F8-04a, F8-04b, F9-03) are ON HOLD until
   the owner lifts the hold. No agent starts, enqueues or merges one. The superseded line "finish the refactor as fast as
   possible" (Owner 2026-11-07, under Blockers) still stands for the "no owner gates, no burn-in" part only.
 - **At most 3 agents** work on dark platform rows at a time.
