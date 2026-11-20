@@ -1246,7 +1246,7 @@ func oracleBinding(fv *ssa.FreeVar) ssa.Value {
 // oracleCellRoot is the variable cell (an Alloc) a captured variable's address
 // refers to, through any number of nested closures; an Alloc is its own root.
 func oracleCellRoot(v ssa.Value) ssa.Value {
-	for i := 0; i < 64; i++ {
+	for range 64 {
 		fv, ok := v.(*ssa.FreeVar)
 		if !ok {
 			return v
@@ -1764,7 +1764,7 @@ type oracleJob struct {
 // chain is the route the walk took from the job's Run to fn, innermost first.
 func (j oracleJob) chain(fn string) string {
 	out := fn
-	for i := 0; i < 64; i++ {
+	for range 64 {
 		parent, ok := j.via[fn]
 		if !ok {
 			break
@@ -2106,15 +2106,15 @@ func TestJobWrites_NoUnresolvedCalls(t *testing.T) {
 				used[key] = true
 				continue
 			}
-			if i := strings.Index(key, "#outside:"); i >= 0 {
-				name := key[i+len("#outside:"):]
+			if _, after, ok := strings.Cut(key, "#outside:"); ok {
+				name := after
 				if _, ok := oracleOutsideClosureAllowed[name]; ok {
 					used[name] = true
 					continue
 				}
 			}
-			if i := strings.Index(key, "#iface:"); i >= 0 {
-				name := key[i+len("#iface:"):]
+			if _, after, ok := strings.Cut(key, "#iface:"); ok {
+				name := after
 				if _, ok := oracleOutsideIfaceAllowed[name]; ok {
 					used["iface:"+name] = true
 					continue
