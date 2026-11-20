@@ -122,7 +122,7 @@ describe('config over the key-shaped API', () => {
     expect(after.secret_status?.openai_api_key?.set).toBe(false);
   });
 
-  it('updateConfig makes no request when nothing differs, since the server refuses an empty patch', async () => {
+  it('updateConfig makes no request when nothing differs', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ data: viewWith() }));
     await getConfig();
     const cfg = await updateConfig({ log_level: 'info', secrets: { openai_api_key: '' } });

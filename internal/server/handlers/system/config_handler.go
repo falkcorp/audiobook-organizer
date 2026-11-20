@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/config_handler.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b8e1c63-2f47-4d90-a6c1-7e3d09b4f825
 // last-edited: 2026-11-19
 
@@ -99,7 +99,7 @@ type configResponse struct {
 
 // configUpdateBody is PUT /config's request: the keys to set, each to its new
 // JSON value (a secret's value is its plaintext), and the keys to clear. At
-// least one of the two must name a key.
+// a body that names neither is an empty patch, which changes nothing.
 type configUpdateBody struct {
 	Set   map[string]json.RawMessage `json:"set"`
 	Unset []string                   `json:"unset"`
@@ -138,6 +138,14 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 		return
 	}
 
+	if len(upd.Set) == 0 && len(upd.Unset) == 0 {
+		// An empty patch names no key, so there is nothing to authorize or
+		// write: answer with the current View, as HEAD's update did for a body
+		// that changed nothing.
+		respondConfigApplied(c, f.View(), config.UpdateResult{})
+		return
+	}
+
 	actor := h.configActor(c, f)
 	res, err := f.Update(c.Request.Context(), actor, upd)
 	if err != nil {
@@ -156,10 +164,15 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 			configCodeError, fields)
 		return
 	}
-	// The fresh View, what the write did, and the operations the write's
-	// hooks started under the response keys the Facade names them by
-	// ("dedup_rescore_op_id" when a dedup weight change queued a re-band).
-	view := newConfigResponse(f.View())
+	respondConfigApplied(c, f.View(), res)
+}
+
+// respondConfigApplied answers a PUT that committed (or was empty): the fresh
+// View, what the write did, and the operations the write's hooks started under
+// the response keys the Facade names them by ("dedup_rescore_op_id" when a dedup
+// weight change queued a re-band).
+func respondConfigApplied(c *gin.Context, v config.View, res config.UpdateResult) {
+	view := newConfigResponse(v)
 	body := map[string]any{
 		"generation":            view.Generation,
 		"keys":                  view.Keys,
@@ -190,7 +203,8 @@ func nonNil(s []string) []string {
 
 // decodeConfigUpdate reads and checks the body. A body that names no key, an
 // unknown top-level field (the old flat shape would land here), a key twice,
-// or an empty key is a 400; it writes the response itself.
+// or an empty key is a 400; it writes the response itself. A body that names no
+// key at all is valid: an empty patch, answered with the current View.
 func decodeConfigUpdate(c *gin.Context) (config.Update, bool) {
 	raw, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, maxConfigBodyBytes))
 	if err != nil {
@@ -206,10 +220,6 @@ func decodeConfigUpdate(c *gin.Context) (config.Update, bool) {
 	}
 	if dec.More() {
 		httputil.RespondWithBadRequest(c, "the body must be one JSON object")
-		return config.Update{}, false
-	}
-	if len(body.Set) == 0 && len(body.Unset) == 0 {
-		httputil.RespondWithBadRequest(c, `nothing to change: name a key in "set" or "unset"`)
 		return config.Update{}, false
 	}
 	for name := range body.Set {

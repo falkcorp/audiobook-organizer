@@ -1,7 +1,7 @@
 // file: web/src/components/settings/AutoUpdateSection.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: f8e2d4c6-b3a1-4f7e-9c2d-5a8b6e3f1d90
-// last-edited: 2026-11-05
+// last-edited: 2026-11-19
 
 import { useState, useEffect } from 'react';
 import {
@@ -29,8 +29,6 @@ interface AutoUpdateSectionProps {
     autoUpdateEnabled: boolean;
     autoUpdateChannel: string;
     autoUpdateCheckMinutes: number;
-    autoUpdateWindowStart: number;
-    autoUpdateWindowEnd: number;
   };
   setSettings: React.Dispatch<React.SetStateAction<SettingsState>>;
 }
@@ -93,7 +91,6 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
     }
   };
 
-  const hourOptions = Array.from({ length: 24 }, (_, i) => i);
 
   return (
     <Paper sx={{ mt: 4, p: 3 }}>
@@ -211,60 +208,6 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
               htmlInput: { min: 1 },
             }}
           />
-        </Grid>
-
-        <Grid
-          size={{
-            xs: 12,
-            sm: 4,
-          }}
-        >
-          <TextField
-            select
-            fullWidth
-            label="Update window start"
-            value={settings.autoUpdateWindowStart}
-            onChange={(e) =>
-              setSettings((prev) => ({
-                ...prev,
-                autoUpdateWindowStart: parseInt(e.target.value),
-              }))
-            }
-            size="small"
-          >
-            {hourOptions.map((h) => (
-              <MenuItem key={h} value={h}>
-                {String(h).padStart(2, '0')}:00
-              </MenuItem>
-            ))}
-          </TextField>
-        </Grid>
-
-        <Grid
-          size={{
-            xs: 12,
-            sm: 4,
-          }}
-        >
-          <TextField
-            select
-            fullWidth
-            label="Update window end"
-            value={settings.autoUpdateWindowEnd}
-            onChange={(e) =>
-              setSettings((prev) => ({
-                ...prev,
-                autoUpdateWindowEnd: parseInt(e.target.value),
-              }))
-            }
-            size="small"
-          >
-            {hourOptions.map((h) => (
-              <MenuItem key={h} value={h}>
-                {String(h).padStart(2, '0')}:00
-              </MenuItem>
-            ))}
-          </TextField>
         </Grid>
 
         {localBuild && (

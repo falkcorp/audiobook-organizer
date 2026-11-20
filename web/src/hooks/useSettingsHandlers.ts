@@ -487,8 +487,6 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
           enabled: settings.autoUpdateEnabled,
           channel: settings.autoUpdateChannel,
           check_minutes: settings.autoUpdateCheckMinutes,
-          window_start: settings.autoUpdateWindowStart,
-          window_end: settings.autoUpdateWindowEnd,
         },
         maintenance: maintenanceConfig,
         embedding: embeddingConfig,
