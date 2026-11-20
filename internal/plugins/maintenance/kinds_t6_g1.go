@@ -443,8 +443,10 @@ type t6g1Deps struct {
 	// ActivityFilter reads the Pebble activity store's filter-index state; nil
 	// when no Pebble activity store is wired. Its writes go through NewWriters.
 	ActivityFilter activityFilterStore
-	// PlanReader reads the stored dry run an authority-build apply carries out.
-	PlanReader authorityPlanReader
+	// PlanRuns reads the run store an authority-build apply finds its plan in:
+	// the succeeded native Preview run its plan_op_id names (F5-18d, O6). Nil
+	// refuses every apply.
+	PlanRuns authorityRunReader
 	// StandDownKey is the concurrency key of the library scan kinds, which a live
 	// apply parks while it writes (rc.StandDown). Empty refuses a live apply that
 	// needs the stand-down: it never runs without it. F5-18 sets it.
