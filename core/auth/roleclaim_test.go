@@ -1,5 +1,5 @@
 // file: core/auth/roleclaim_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0c5d7e21-93b4-4a68-8f1e-2d6a4b9c7e53
 // last-edited: 2026-11-19
 
@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
+	"github.com/falkcorp/mediacore/internal/rbacstore"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -35,9 +36,13 @@ type claimFx struct {
 	jason     *auth.User // a detective the SetRoles scenario hands roleRobin to
 }
 
-func newClaimFx(t testing.TB) *claimFx {
+func newClaimFx(t testing.TB) *claimFx { return newClaimFxOver(t, nil) }
+
+// newClaimFxOver is newClaimFx with the role store passed through wrap (nil: as
+// is), so a test can keep the native store and write to it behind rbac.Service.
+func newClaimFxOver(t testing.TB, wrap func(rbac.Store) rbac.Store) *claimFx {
 	t.Helper()
-	c := &claimFx{f: newFxRoleStore(t, nil)}
+	c := &claimFx{f: newFxRoleStore(t, wrap)}
 	c.rbacActor = c.f.rb.Compile(rbac.CheckerInput{Roles: []rbac.RoleName{rbac.RoleAdmin}, Interactive: true})
 	c.robin = c.createRobin([]rbac.Permission{"gotham:patrol"})
 	c.gordon = c.f.user("jim-gordon", roleCommissioner)
@@ -340,6 +345,58 @@ func TestRoleClaim_LosingEveryTryIsContended(t *testing.T) {
 			}
 			if n := c.holdersOfRobin(); n != 0 {
 				t.Fatalf("%d user(s) hold the role after a write that never committed", n)
+			}
+		})
+	}
+}
+
+// TestRoleClaim_TheStoreDecidesNotTheCache: rbac.Service installs its role cache
+// after a role write commits, so a role the store has already lost can still be
+// in the cache (here: deleted straight through the native store, behind the
+// service). The write's first attempt conflicts on the moved generation; its
+// retry must read the role from the store, find it gone and refuse, where a
+// check on the cache would pass and commit a user holding a role that no longer
+// exists.
+func TestRoleClaim_TheStoreDecidesNotTheCache(t *testing.T) {
+	for _, way := range claimWays {
+		t.Run(way, func(t *testing.T) {
+			var native *rbacstore.Store
+			c := newClaimFxOver(t, func(s rbac.Store) rbac.Store {
+				native, _ = s.(*rbacstore.Store)
+				return s
+			})
+			if native == nil {
+				t.Fatal("the fixture's role store is not the native one")
+			}
+			write := c.assign(way)
+			var fired bool
+			c.f.audit.hold = func(audit.Event) {
+				if fired {
+					return
+				}
+				fired = true
+				b := native.NewBatch()
+				defer func() { _ = b.Close() }()
+				if err := native.DeleteRole(b, c.robin); err != nil {
+					t.Errorf("DeleteRole through the store: %v", err)
+					return
+				}
+				if err := b.Commit(context.Background(), storage.Sync); err != nil {
+					t.Errorf("commit of the delete: %v", err)
+				}
+				if err := c.f.rb.CanAssign(c.manager.Perms, []rbac.RoleName{roleRobin}); err != nil {
+					t.Errorf("the role cache no longer has the role (CanAssign: %v): the test does not lag it", err)
+				}
+			}
+			err := write()
+			if !fired {
+				t.Fatal("the hook never ran")
+			}
+			if !errors.Is(err, rbac.ErrUnknownRole) {
+				t.Fatalf("%s over a role only the cache still has: err = %v, want a refusal naming the unknown role", way, err)
+			}
+			if n := c.holdersOfRobin(); n != 0 {
+				t.Fatalf("%d user(s) hold the deleted role", n)
 			}
 		})
 	}
