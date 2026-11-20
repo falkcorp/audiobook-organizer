@@ -30,6 +30,7 @@ func TestTasklint_Core(t *testing.T) {
 			core + "/integrations/ai.BatchPollTask",              // the same, for InterimBackends.Poll (F2-11, F5-18)
 			core + "/integrations/ai.BatchApplyTask",             // a module passes it to Registrar.Tasks in its Register, one per batch capability; core registers none (F7-03)
 			core + "/health/diagnostics.ExportTask",              // the same, for InterimBackends.Export (F2-11, F5-18)
+			core + "/health/diagnostics.PruneTask",               // dark until the kernel registers core.diagnostics.prune at P6 when it wires core.diagnostics (F8-04); delete with the directive
 			core + "/internal/bleveindex.Engine.RebuildTask",     // dark until the kernel registers core.index.rebuild when it wires the index engine (F7-09); delete with the directive
 			core + "/library.TransferRecoverTask",                // the kernel registers it when core.library is wired (F2-16, F7; F7-06)
 			core + "/outbox.Outbox.RelayDefinition",              // dark until F6-03 hands it to the executor's definition list (F6-01)
