@@ -13,6 +13,7 @@ import (
 
 	"github.com/falkcorp/mediacore/tasks"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
@@ -99,6 +100,13 @@ type jobsAggregatesMarker interface {
 
 // jobsCaps is the optional store capabilities the jobs reach, resolved through
 // the source's decorator chain once.
+//
+// One field per capability, never one wide interface for several: AsCapability
+// answers with the first layer of the chain that has the WHOLE interface, so a
+// combined one is satisfied by no layer when its methods live on two (the Pebble
+// store holds most of these, a decorator forwards only the ones it knows).
+// store is the exception on purpose: every method in jobsStoreOps is a method of
+// database.Store, which every layer has.
 type jobsCaps struct {
 	sync        database.SyncIdentityStore
 	syncFile    database.SyncFileStore
@@ -109,41 +117,96 @@ type jobsCaps struct {
 	seriesReady database.SeriesDeleteReadiness
 	planner     database.SnapshotPrunePlanner
 	hashes      database.BookFileHashUpdater
+
+	store          jobsStoreOps
+	bookmarkCopier database.BookmarkCopier
+	syncMerge      jobsSyncMergeClearer
+	syncRedirect   jobsSyncRedirectClearer
+	strictUsers    database.StrictUserLister
+	replacer       database.UserPositionReplacer
+	stateDeleter   database.UserBookStateDeleter
+	positionAt     database.UserPositionTimestampWriter
+	opScan         jobsOpChangeScanner
+	retired        database.RetiredBookFileReader
+	retiredProbe   jobsRetiredProbe
+	seriesRefs     database.SeriesBookRefStore
+	seriesMembers  database.SeriesMembershipStore
+	provenance     database.FileProvenanceRecorder
+	identDirty     database.IdentDirtyMarker
+	// metrics is the Pebble metrics store the sweep deletes through. It is a
+	// concrete type because that is what internal/books/store builds from a
+	// store; the wrapper's SweepExpiredMetrics is the only call made on it.
+	metrics *database.PebbleMetricsStore
+	// titleKey is the identity authorcredit caches its title index under. It is
+	// opaque (no method reads the store back out of it), so handing it out is not
+	// a way to reach the store.
+	titleKey authorcredit.TitleKey
+}
+
+// capOf resolves one capability, noting its name when src lacks it.
+func capOf[T any](src any, name string, missing *[]string) T {
+	c, ok := database.AsCapability[T](src)
+	if !ok {
+		*missing = append(*missing, name)
+	}
+	return c
 }
 
 // resolveJobsCaps resolves every capability or names every one src lacks.
 func resolveJobsCaps(src any) (jobsCaps, error) {
 	var c jobsCaps
 	var missing []string
-	need := func(name string, ok bool) {
-		if !ok {
-			missing = append(missing, name)
-		}
+	c.sync = capOf[database.SyncIdentityStore](src, "SyncIdentityStore", &missing)
+	c.syncFile = capOf[database.SyncFileStore](src, "SyncFileStore", &missing)
+	c.bookmarks = capOf[database.BookmarkStore](src, "BookmarkStore", &missing)
+	c.deferred = capOf[jobsDeferredAggregates](src, "ModifyBookFileDeferAggregates", &missing)
+	c.aggregates = capOf[jobsAggregatesMarker](src, "aggregates backfill sentinel", &missing)
+	c.seriesDel = capOf[database.SeriesUnreferencedDeleter](src, "SeriesUnreferencedDeleter", &missing)
+	c.seriesReady = capOf[database.SeriesDeleteReadiness](src, "SeriesDeleteReadiness", &missing)
+	c.planner = capOf[database.SnapshotPrunePlanner](src, "SnapshotPrunePlanner", &missing)
+	c.hashes = capOf[database.BookFileHashUpdater](src, "BookFileHashUpdater", &missing)
+
+	c.store = capOf[jobsStoreOps](src, "the database.Store methods merge and dedup reach", &missing)
+	c.bookmarkCopier = capOf[database.BookmarkCopier](src, "BookmarkCopier", &missing)
+	c.syncMerge = capOf[jobsSyncMergeClearer](src, "ClearSyncMerge", &missing)
+	c.syncRedirect = capOf[jobsSyncRedirectClearer](src, "ClearSyncRedirect", &missing)
+	c.strictUsers = capOf[database.StrictUserLister](src, "StrictUserLister", &missing)
+	c.replacer = capOf[database.UserPositionReplacer](src, "UserPositionReplacer", &missing)
+	c.stateDeleter = capOf[database.UserBookStateDeleter](src, "UserBookStateDeleter", &missing)
+	c.positionAt = capOf[database.UserPositionTimestampWriter](src, "UserPositionTimestampWriter", &missing)
+	c.opScan = capOf[jobsOpChangeScanner](src, "ScanOperationChanges", &missing)
+	c.retired = capOf[database.RetiredBookFileReader](src, "RetiredBookFileReader", &missing)
+	c.retiredProbe = capOf[jobsRetiredProbe](src, "HasRetiredVersions", &missing)
+	c.seriesRefs = capOf[database.SeriesBookRefStore](src, "SeriesBookRefStore", &missing)
+	c.seriesMembers = capOf[database.SeriesMembershipStore](src, "SeriesMembershipStore", &missing)
+	c.provenance = capOf[database.FileProvenanceRecorder](src, "FileProvenanceRecorder", &missing)
+	c.identDirty = capOf[database.IdentDirtyMarker](src, "IdentDirtyMarker", &missing)
+	if c.metrics = database.NewPebbleMetricsStoreFromStore(src); c.metrics == nil {
+		missing = append(missing, "the Pebble metrics store")
 	}
-	var ok bool
-	c.sync, ok = database.AsCapability[database.SyncIdentityStore](src)
-	need("SyncIdentityStore", ok)
-	c.syncFile, ok = database.AsCapability[database.SyncFileStore](src)
-	need("SyncFileStore", ok)
-	c.bookmarks, ok = database.AsCapability[database.BookmarkStore](src)
-	need("BookmarkStore", ok)
-	c.deferred, ok = database.AsCapability[jobsDeferredAggregates](src)
-	need("ModifyBookFileDeferAggregates", ok)
-	c.aggregates, ok = database.AsCapability[jobsAggregatesMarker](src)
-	need("aggregates backfill sentinel", ok)
-	c.seriesDel, ok = database.AsCapability[database.SeriesUnreferencedDeleter](src)
-	need("SeriesUnreferencedDeleter", ok)
-	c.seriesReady, ok = database.AsCapability[database.SeriesDeleteReadiness](src)
-	need("SeriesDeleteReadiness", ok)
-	c.planner, ok = database.AsCapability[database.SnapshotPrunePlanner](src)
-	need("SnapshotPrunePlanner", ok)
-	c.hashes, ok = database.AsCapability[database.BookFileHashUpdater](src)
-	need("BookFileHashUpdater", ok)
+	c.titleKey = titleKeyOf(src)
+
 	if len(missing) > 0 {
 		return jobsCaps{}, fmt.Errorf("maintenance jobs: store %T lacks %s; no job store is built, so every maintenance run fails before it starts",
 			src, strings.Join(missing, ", "))
 	}
 	return c, nil
+}
+
+// titleKeyOf is the key authorcredit caches src's title index under: the key of
+// the layer a bare store resolves authorcredit.TitleSource at (that layer's own
+// key when it names one, else that layer). Cached under the job store's own
+// value, a store built for every run would leave one library-sized title index
+// behind per run, and nothing evicts it.
+func titleKeyOf(src any) authorcredit.TitleKey {
+	layer := src
+	if ts, ok := database.AsCapability[authorcredit.TitleSource](src); ok {
+		layer = ts
+	}
+	if k, ok := layer.(authorcredit.TitleCacheKeyer); ok {
+		return k.TitleCacheKey()
+	}
+	return authorcredit.TitleKeyOf(layer)
 }
 
 // jobsWriteLabels is every gated write of the wrapper, as the label the gate
@@ -158,9 +221,27 @@ var jobsWriteLabels = []string{
 	// raw writes, by key family
 	"SetRaw/merge_journal", "SetRaw/group_redirect", "SetRaw/user_state",
 	"DeleteRaw/merge_journal", "DeleteRaw/group_redirect", "DeleteRaw/user_state", "DeleteRaw/dead_book_index",
-	// capability writes (rows the table has; the rest of each capability's writes have none and refuse)
+	// capability writes with a row in the shared table
 	"MintOrGetSyncID", "RecordSyncMerge", "MintOrGetSyncFileID", "RepointSyncFileToBook", "CreateBookmark",
 	"ModifyBookFileDeferAggregates", "MarkBookAggregatesBackfillDone", "DeleteSeriesIfUnreferenced", "UpdateBookFileHashes",
+	"AppendFileEvent", "ClearUserPositions", "CopyBookmarkIfAbsent", "DeleteSeries", "SetBookAuthors", "SetUserPositionAt",
+	"SweepExpiredMetrics",
+}
+
+// jobsRefusedLabels is every write the wrapper carries that has NO row in the
+// shared table, so the gate refuses it (ErrNoRow, wrapping ErrOutsideEffects)
+// and the store is never called. Each is a method of a capability a job reaches
+// (the merge package resolves most of them at runtime), implemented so that the
+// reach is a refusal naming the method instead of a capability that quietly is
+// not there (a consumer that tests for the capability takes its own fallback,
+// and the fallback is not always the same operation). A row is added to
+// resources.Table() (and rowsPinned) by the row that declares the writer a
+// job's Effects must admit; this list shrinks as that happens, and TestBooksJobsStore_RefusedLabelsHaveNoRowAndNeverReachTheStore
+// fails on a label that gains a row while still listed.
+var jobsRefusedLabels = []string{
+	"AddBookTagWithSource", "ClearSyncMerge", "ClearSyncRedirect", "DeleteBookmark", "DeleteUserBookState",
+	"MarkIdentDirty", "MintOrGetSyncFileIDs", "RemoveBookTagsByPrefix", "RepointSyncFile", "RepointSyncItem",
+	"ReplaceUserPositions", "RevertBookToVersion", "UpdateBookmarkTitle", "UpdateSeriesName",
 }
 
 func jobsRows() map[string][]ops.Resource {
