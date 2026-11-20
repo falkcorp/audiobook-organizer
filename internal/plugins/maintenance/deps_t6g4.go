@@ -501,16 +501,16 @@ func (w *booksT6G4Writer) RebuildIdentIndex(ctx context.Context) (st database.Id
 	return st, err
 }
 
-// OpenWhisperJournal stamps the open, which fences a preview and a stopped run;
-// the appends the journal then makes are the journal's own and are not
-// individually fenced.
+// OpenWhisperJournal stamps the open, which fences a preview and a stopped run,
+// and hands back the journal with its appends and removals stamped too
+// (gatedResultJournal).
 func (w *booksT6G4Writer) OpenWhisperJournal() (j transcribe.ResultJournal, err error) {
 	err = w.gate.do(runless(), "OpenWhisperJournal", kindRef(ops.ResAIJournal), func(context.Context) error {
 		jr, e := resultjournal.New(w.src, whisperJournalKind)
 		if e != nil {
 			return e
 		}
-		j = jr
+		j = gatedResultJournal{j: jr, gate: w.gate, method: "OpenWhisperJournal"}
 		return nil
 	})
 	return j, err
