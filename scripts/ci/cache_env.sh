@@ -1,8 +1,8 @@
 #!/bin/bash
 # file: scripts/ci/cache_env.sh
-# version: 1.3.1
+# version: 1.3.2
 # guid: 6b0e7d3a-92c4-4f18-a5d7-1e8c3f40b9a2
-# last-edited: 2026-10-17
+# last-edited: 2026-11-19
 # Source this from a Woodpecker step (`. scripts/ci/cache_env.sh`) as the
 # step's first command. It does two things: it unsets the provider keys and
 # live-service URLs that would turn on a live external call (below), and it
@@ -27,8 +27,10 @@
 
 # CI never calls paid providers or live services. internal/ai's integration
 # tests run when OPENAI_API_KEY is set (and the openai-go SDK reads it from env),
-# ACOUSTID_API_KEY reaches config through viper.BindEnv, AutomaticEnv
-# (cmd/root.go) maps the other provider keys when the binary runs, and
+# the AcoustID, Google Books and Hardcover keys reach config through core's env
+# layer under their canonical names (ABO_BOOKS_ACOUSTID_API_KEY,
+# ABO_INTEGRATIONS_METADATA_GOOGLE_BOOKS_API_KEY,
+# ABO_INTEGRATIONS_METADATA_HARDCOVER_API_TOKEN) when the binary runs, and
 # WHISPER_LIVE_URL turns on internal/transcribe's live capability probe. On
 # 2026-10-12 the steps on a Mac agent saw OPENAI_API_KEY, so test-rest called
 # OpenAI for real and failed on 429 (pipelines 874 and 882). Every step on the
@@ -41,7 +43,9 @@
 # step prints. It is no barrier to a hostile step, which runs as the agent's
 # user; the u0-local agent's token is its own and revocable for that reason
 # (docs/ci/woodpecker.md).
-unset OPENAI_API_KEY ANTHROPIC_API_KEY ACOUSTID_API_KEY GOOGLE_BOOKS_API_KEY HARDCOVER_API_TOKEN WHISPER_LIVE_URL WOODPECKER_AGENT_SECRET
+unset OPENAI_API_KEY ANTHROPIC_API_KEY ABO_BOOKS_ACOUSTID_API_KEY \
+  ABO_INTEGRATIONS_METADATA_GOOGLE_BOOKS_API_KEY ABO_INTEGRATIONS_METADATA_HARDCOVER_API_TOKEN \
+  WHISPER_LIVE_URL WOODPECKER_AGENT_SECRET
 
 
 CI_CACHE_ROOT=

@@ -1,8 +1,8 @@
 #!/usr/bin/python3 -I
 # file: deploy/rollback-helpers/rollback_helper.py
-# version: 1.13.0
+# version: 1.13.1
 # guid: 1d8f47fb-8f03-4fc9-af45-4b16e6ef75aa
-# last-edited: 2026-11-18
+# last-edited: 2026-11-19
 
 """Root-owned helpers for `make deploy`, `make rollback` and `make rollback-restore` (R1-27).
 
@@ -21,7 +21,7 @@ it touches comes from CONFIG, a root-owned file the owner writes once:
     service_user = audiobook
     archive_dir = /path/to/archives
     checkpoint_dir =                       (optional; core.storage.checkpoint_dir)
-    offline_env = HOME=/var/lib/audiobook-organizer ABK_STATE_DIR=/var/lib/audiobook-organizer
+    offline_env = HOME=/var/lib/audiobook-organizer ABO_CORE_PATHS_STATE_DIR=/var/lib/audiobook-organizer
     service_group = audiobook             (optional; defaults to service_user)
     stage_bin = /home/USER/audiobook-organizer                    (optional)
     stage_local_conf = /home/USER/audiobook-organizer-local.conf  (optional)
@@ -151,7 +151,7 @@ _BASENAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,199}")
 _PATH = re.compile(r"/[A-Za-z0-9._/@+-]+")
 _USER = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
 _UNIT = re.compile(r"[A-Za-z0-9@._-]+\.service")
-_ENV = re.compile(r"(HOME|ABK_STATE_DIR|ABK_[A-Z0-9_]+)=[A-Za-z0-9._/@+:-]*")
+_ENV = re.compile(r"(HOME|ABO_[A-Z0-9_]+)=[A-Za-z0-9._/@+:-]*")
 _KEYS = {
     "bin": True,
     "db": True,
@@ -246,7 +246,7 @@ def load_config() -> dict[str, str]:
     for tok in cfg.get("offline_env", "").split():
         if not _ENV.fullmatch(tok):
             raise RefusedError(
-                f"{CONFIG}: offline_env token {tok!r} is not HOME=, ABK_STATE_DIR= or ABK_*="
+                f"{CONFIG}: offline_env token {tok!r} is not HOME= or ABO_*="
             )
     return cfg
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/tests/fake_ssh.py
-# version: 1.3.0
+# version: 1.3.1
 # guid: e299f5fd-6b61-4552-a861-35f0c11b511d
-# last-edited: 2026-11-18
+# last-edited: 2026-11-19
 
 """A fake deploy host for the deploy and rollback recipes' tests.
 
@@ -167,7 +167,7 @@ IDENT = json.loads({ident!r})
 args = sys.argv[1:]
 with open(IDENT["log"], "a", encoding="utf-8") as f:
     f.write(json.dumps({{"kind": "app", "name": IDENT["name"], "path": sys.argv[0], "args": args,
-                        "env": {{k: os.environ.get(k, "") for k in ("HOME", "ABK_STATE_DIR")}}}}) + "\\n")
+                        "env": {{k: os.environ.get(k, "") for k in ("HOME", "ABO_CORE_PATHS_STATE_DIR")}}}}) + "\\n")
 def unknown(flag):
     sys.stderr.write("Error: unknown flag: " + flag + "\\n")
     sys.exit(1)

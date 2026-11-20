@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/setup_mac_ai_worker.py
-# version: 1.1.1
+# version: 1.1.2
 # guid: 3b8e6d21-7f4a-4c19-9e52-0a6d4f8c1b73
-# last-edited: 2026-10-27
+# last-edited: 2026-11-19
 """Set up an Apple Silicon Mac as an AI worker for audiobook-organizer.
 
 It installs and configures three things:
@@ -184,7 +184,7 @@ def ensure_env_line(text: str, line: str) -> tuple[str, bool]:
 
 
 def prod_endpoint_entries(plan: PortPlan, label: str) -> list[dict]:
-    """WHISPER_ENDPOINTS entries for the server's systemd drop-in."""
+    """ABO_BOOKS_WHISPER_ENDPOINTS entries for the server's systemd drop-in."""
     return [
         {
             "url": f"http://127.0.0.1:{p}",
@@ -321,7 +321,7 @@ def print_plan(args: argparse.Namespace, plan: PortPlan) -> None:
     print(f"  tunnel agent:    {TUNNEL_LABEL}")
     if not args.skip_whisper:
         entries = prod_endpoint_entries(plan, f"mac{plan.host_index}")
-        print("\nAfter it is healthy, add these to WHISPER_ENDPOINTS on the server:")
+        print("\nAfter it is healthy, add these to ABO_BOOKS_WHISPER_ENDPOINTS on the server:")
         for e in entries:
             print("  " + json.dumps(e, separators=(",", ":")))
     if not args.skip_ollama:

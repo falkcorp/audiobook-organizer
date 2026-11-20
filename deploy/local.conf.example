@@ -1,7 +1,7 @@
 # file: deploy/local.conf.example
-# version: 1.8.0
+# version: 1.8.1
 # guid: b3c5d7e9-f1a3-4b5c-9d7e-1f3a5b7c9d1e
-# last-edited: 2026-11-18
+# last-edited: 2026-11-19
 #
 # TEMPLATE — the environment drop-in for audiobook-organizer.service.
 # Copy to deploy/local.conf (gitignored) and fill in your own endpoints.
@@ -20,7 +20,7 @@
 # and docs/system/deploy-and-gpu-ops.md for the full deploy/rollback flow.
 #
 # Real secrets/paths (TLS cert/key paths, actual DB path, real
-# WHISPER_REMOTE_URL host if different from your own GPU box) must be filled
+# ABO_BOOKS_WHISPER_REMOTE_URL host if different from your own GPU box) must be filled
 # in by the operator — nothing below is a real credential. 192.168.0.10 /
 # 192.168.0.20 are placeholder addresses — substitute your own hosts in
 # docs/system/runbooks.md and docs/status/2026-07-02-local-cutover-and-matching.md.

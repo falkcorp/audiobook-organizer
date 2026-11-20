@@ -1,7 +1,7 @@
 # file: scripts/tests/test_make_rollback.py
-# version: 1.5.0
+# version: 1.5.1
 # guid: 17d15b8e-ad9f-4804-af7c-e1f0e4b72b13
-# last-edited: 2026-11-18
+# last-edited: 2026-11-19
 
 """`make rollback` and `make rollback-restore` against a fake host.
 
@@ -289,7 +289,7 @@ class FakeHost:
             "service_user": USER,
             "archive_dir": str(self.archives),
             "checkpoint_dir": "",
-            "offline_env": f"HOME={self.state} ABK_STATE_DIR={self.state}",
+            "offline_env": f"HOME={self.state} ABO_CORE_PATHS_STATE_DIR={self.state}",
         }
         values.update(config)
         self.config.write_text("".join(f"{k} = {v}\n" for k, v in values.items() if v is not None))
@@ -577,7 +577,7 @@ class RollbackRestoreTest(unittest.TestCase):
             ],
         )
         self.assertEqual(
-            runs[0]["env"], {"HOME": str(host.state), "ABK_STATE_DIR": str(host.state)}
+            runs[0]["env"], {"HOME": str(host.state), "ABO_CORE_PATHS_STATE_DIR": str(host.state)}
         )
         sdrun = [e for e in host.calls() if e["kind"] == "tool" and e["tool"] == "systemd-run"]
         self.assertIn(f"--uid={USER}", sdrun[0]["argv"], "as the service user, never root")
@@ -793,7 +793,7 @@ class RollbackRestoreTest(unittest.TestCase):
         )
         fetch = next(c for c in host.ssh() if "updater fetch-release" in c)
         self.assertIn(
-            "ABK_STATE_DIR=", fetch, "a scratch state directory: no access to the service's"
+            "ABO_CORE_PATHS_STATE_DIR=", fetch, "a scratch state directory: no access to the service's"
         )
         runs = [e for e in host.calls() if e["kind"] == "app" and e["args"][:1] == ["updater"]]
         self.assertEqual([r["name"] for r in runs], ["current"], "the CURRENT binary fetches")

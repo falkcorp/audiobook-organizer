@@ -1,7 +1,7 @@
 # file: scripts/tests/test_rollback_helper.py
-# version: 1.14.0
+# version: 1.14.1
 # guid: 9609b377-57c2-454a-9130-320303c2815e
-# last-edited: 2026-11-18
+# last-edited: 2026-11-19
 
 """Tests for deploy/rollback-helpers/rollback_helper.py, the root-owned
 helpers the rollback recipes run through sudo (R1-27).
@@ -171,7 +171,7 @@ class Host:
             "unit": "audiobook-organizer.service",
             "service_user": "alfred",
             "archive_dir": str(self.archives),
-            "offline_env": f"HOME={self.state} ABK_STATE_DIR={self.state}",
+            "offline_env": f"HOME={self.state} ABO_CORE_PATHS_STATE_DIR={self.state}",
         }
         values.update(config)
         self.write_config(values)
@@ -213,7 +213,7 @@ class Host:
             f"--property=StandardOutput=append:{log}",
             f"--property=StandardError=append:{log}",
             f"--setenv=HOME={self.state}",
-            f"--setenv=ABK_STATE_DIR={self.state}",
+            f"--setenv=ABO_CORE_PATHS_STATE_DIR={self.state}",
             "--",
             sys.executable,
             "-I",
@@ -447,7 +447,7 @@ class Restore(unittest.TestCase):
 
     def test_checkpoint_runs_the_exact_argv_as_the_service_user(self):
         h = Host(self)
-        self.fake_bin(h, "print('restored', os.environ.get('ABK_STATE_DIR'))")
+        self.fake_bin(h, "print('restored', os.environ.get('ABO_CORE_PATHS_STATE_DIR'))")
         code, out, err = h.run("restore", "checkpoint", NAME)
         self.assertEqual(code, 0, err)
         runs = [t for t in h.tools() if t["tool"] == "systemd-run"]
@@ -815,18 +815,18 @@ class SwapPrev(unittest.TestCase):
 # an em dash. Values are made up.
 REAL_SHAPED_LOCAL_CONF = """# Wayne Manor — the Batcave's environment
 [Service]
-Environment='WHISPER_ENDPOINTS=[{"url":"http://127.0.0.1:19848","priority":50}]'
-Environment=OWNER_EMAIL=alfred@wayne-manor.invalid
-Environment="SMTP_FROM=Alfred Pennyworth <alfred@wayne-manor.invalid>"
+Environment='ABO_BOOKS_WHISPER_ENDPOINTS=[{"url":"http://127.0.0.1:19848","priority":50}]'
+Environment=ABO_BOOKS_IDENTITY_OWNER_EMAIL=alfred@wayne-manor.invalid
+Environment="ABO_INTEGRATIONS_NOTIFY_EMAIL_FROM=Alfred Pennyworth <alfred@wayne-manor.invalid>"
   # an indented comment
 Environment=HOME=/srv/batcave/.appdata
 """
 
 RENDERED_REAL_SHAPED = (
     "[Service]\n"
-    'Environment=\'WHISPER_ENDPOINTS=[{"url":"http://127.0.0.1:19848","priority":50}]\'\n'
-    "Environment=OWNER_EMAIL=alfred@wayne-manor.invalid\n"
-    'Environment="SMTP_FROM=Alfred Pennyworth <alfred@wayne-manor.invalid>"\n'
+    'Environment=\'ABO_BOOKS_WHISPER_ENDPOINTS=[{"url":"http://127.0.0.1:19848","priority":50}]\'\n'
+    "Environment=ABO_BOOKS_IDENTITY_OWNER_EMAIL=alfred@wayne-manor.invalid\n"
+    'Environment="ABO_INTEGRATIONS_NOTIFY_EMAIL_FROM=Alfred Pennyworth <alfred@wayne-manor.invalid>"\n'
     "Environment=HOME=/srv/batcave/.appdata\n"
 )
 

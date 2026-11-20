@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/storage_format_guard.py
-# version: 2.6.0
+# version: 2.6.1
 # guid: 35696d63-9d8e-4fc3-b6a8-9c9770cd798c
-# last-edited: 2026-11-18
+# last-edited: 2026-11-19
 
 """The store guard of `make rollback` and `make rollback-restore`.
 
@@ -214,7 +214,7 @@ def commands(o: Opts, name: str = "") -> dict[str, str]:
         # (the command reads no store); then the discard of the file it
         # wrote, and the helper's install of it as .prev.
         "fetch_release": (
-            'd=$(mktemp -d) && ABK_STATE_DIR="$d" HOME="$d" '
+            'd=$(mktemp -d) && ABO_CORE_PATHS_STATE_DIR="$d" HOME="$d" '
             f"{o.bin} updater fetch-release --version {o.release} --out {o.stage_bin}; "
             'rc=$?; rm -rf "$d"; exit $rc'
         ),

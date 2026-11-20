@@ -1,7 +1,7 @@
 # file: deploy/rollback-helpers/rollback.conf.example
-# version: 1.4.0
+# version: 1.4.1
 # guid: 8bafb640-d659-4122-8365-282864483ab6
-# last-edited: 2026-11-18
+# last-edited: 2026-11-19
 #
 # /etc/audiobook-organizer/rollback.conf: the fixed paths the rollback helpers
 # use, make deploy's included. Root-owned, mode 0644, in a root-owned
@@ -21,7 +21,7 @@ archive_dir = /path/to/archives
 # core.storage.checkpoint_dir, if set; empty means the store's parent directory.
 checkpoint_dir =
 # The environment storage restore-offline runs with (the unit's).
-offline_env = HOME=/var/lib/audiobook-organizer ABK_STATE_DIR=/var/lib/audiobook-organizer
+offline_env = HOME=/var/lib/audiobook-organizer ABO_CORE_PATHS_STATE_DIR=/var/lib/audiobook-organizer
 # The unit's Group=, if not service_user. install-staged unit refuses a unit
 # whose User= or Group= differ from these.
 service_group =
