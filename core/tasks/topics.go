@@ -65,7 +65,7 @@ type LogAppended struct {
 
 // NewLogAppended is the payload for l.
 func NewLogAppended(l LogLine) LogAppended {
-	return LogAppended{At: l.At, Level: l.Level, Message: l.Message, Fields: l.Fields}
+	return LogAppended(l) // same fields, in order; only the tags differ
 }
 
 // LogAppendedTopic is the typed log-appended topic; the publisher keys each
