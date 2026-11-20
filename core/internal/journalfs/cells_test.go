@@ -1,5 +1,5 @@
 // file: core/internal/journalfs/cells_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 02bc10f1-4901-4d10-9b06-e5540d68cde6
 // last-edited: 2026-11-19
 
@@ -8,7 +8,10 @@ package journalfs_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -22,8 +25,8 @@ import (
 )
 
 // after is a boot that restarts over a crash clone: a fresh journalfs adapter
-// (the lock set is per boot) over the filesystem a crash just before one
-// durable operation left.
+// over the filesystem a crash just before one durable operation left (a new
+// filesystem is a new lock set: nothing survives the crash).
 func (e *env) after(c bootseamtest.Clone) *env {
 	e.t.Helper()
 	fsys, err := journalfs.From(bootseam.With(context.Background(), &bootseam.Seams{FS: c.FS}))
@@ -33,18 +36,62 @@ func (e *env) after(c bootseamtest.Clone) *env {
 	return &env{t: e.t, st: e.st, rec: bootseamtest.New(c.FS, bootseamtest.Options{}), fsys: fsys}
 }
 
+// mixedSeeds are the generator seeds of the mixed-persistence clones every
+// cell takes before each kill point, beside the minimal clone. The minimal
+// clone keeps only what was synced, which for a sequence whose only directory
+// fsync is its last operation is always the state before the call: a cell
+// that ran on it alone could not tell an atomic replace from an in-place
+// rewrite, or a copy fsynced before its rename from one fsynced after. The
+// mixed ones keep each unsynced directory entry and data block with
+// probability one half, which is where a torn file, an entry without its data
+// and a rename that outlived its contents appear. The seeds are fixed, so a
+// run is reproducible; sixteen make a cell that needs one particular draw
+// (an entry kept, its data not) miss it with probability 0.75^16, under 1%.
+var mixedSeeds = []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+
 // crashRun runs setup and then run over a crashable filesystem that takes a
-// clone before every kill point, and returns the env and the clones run took
-// (the setup's own are dropped: only the site's kill points are the cells).
+// minimal clone and a mixed clone per seed before every kill point, and
+// returns the env and the clones run took (the setup's own are dropped: only
+// the site's kill points are the cells), then one more: the filesystem a crash
+// just after run returned would leave (Recorder.Settled), which is where what
+// the call acknowledged must already be durable.
 func crashRun(t *testing.T, st store, setup, run func(e *env)) (*env, []bootseamtest.Clone) {
 	t.Helper()
-	e := newEnv(t, st, bootseamtest.Options{Clones: true})
+	e := newEnv(t, st, bootseamtest.Options{Clones: true, MixedSeeds: mixedSeeds})
 	if setup != nil {
 		setup(e)
 	}
 	skip := len(e.rec.Clones())
 	run(e)
-	return e, e.rec.Clones()[skip:]
+	return e, append(e.rec.Clones()[skip:], e.rec.Settled())
+}
+
+// cloneName is a subtest name for c: the operation it precedes, and which
+// kind of clone it is.
+func cloneName(c bootseamtest.Clone) string {
+	kind := "minimal"
+	switch {
+	case c.Event.Label == bootseamtest.LabelSettled:
+		return "settled"
+	case c.Mixed:
+		kind = fmt.Sprintf("mixed-%d", c.Seed)
+	}
+	return c.Event.Label + "/" + kindName(c.Event.Kind) + "/" + kind
+}
+
+// reached counts the outcomes a cell's clones came to, so the cell can fail
+// when an arm it is written for is never taken: an arm no clone reaches checks
+// nothing.
+type reached map[string]int
+
+// require fails unless every named outcome was reached at least once.
+func (r reached) require(t *testing.T, outcomes ...string) {
+	t.Helper()
+	for _, o := range outcomes {
+		if r[o] == 0 {
+			t.Errorf("no clone reached the outcome %q (reached %v): the arm the cell is written for was never taken", o, map[string]int(r))
+		}
+	}
 }
 
 func exists(t *testing.T, fs vfs.FS, path string) bool {
@@ -54,6 +101,16 @@ func exists(t *testing.T, fs vfs.FS, path string) bool {
 		t.Fatal(err)
 	}
 	return err == nil
+}
+
+// readAll is the content of path on fsys.
+func readAll(fsys vfs.FS, path string) ([]byte, error) {
+	f, err := fsys.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return io.ReadAll(f)
 }
 
 // intactTo fails unless the journal at path reads as an intact chain whose
@@ -66,15 +123,34 @@ func (e *env) intactTo(path string, want uint64) {
 	}
 }
 
+// intactToOneOf is intactTo for a file whose end the crash left open between
+// several chains (the unsynced append kept or lost): it returns the one it is.
+func (e *env) intactToOneOf(path string, want ...uint64) uint64 {
+	e.t.Helper()
+	c, err := journal.ReadFile(path, keys{}, journal.WithFS(e.fsys))
+	if err != nil || c.Break != nil {
+		e.t.Fatalf("%s reads as %+v, %v; want an intact chain", path, c, err)
+	}
+	if !slices.Contains(want, c.IntactEnd()) {
+		e.t.Fatalf("%s is intact to seq %d; want one of %v", path, c.IntactEnd(), want)
+	}
+	return c.IntactEnd()
+}
+
 // TestKill_LocationFileIsNeverTorn: a crash before any single durable step of
-// WriteLocation leaves backup.location.json either absent, the earlier
-// contents or the new ones, whole, and never an error from ReadLocation; the
-// next WriteLocation then succeeds over whatever the crash left, a torn
-// temporary file included.
+// WriteLocation, or just after it returned, leaves backup.location.json either
+// absent, the earlier contents or the new ones, whole, and never an error from
+// ReadLocation; the next WriteLocation then succeeds over whatever the crash
+// left, a torn temporary file included. The crash states are the minimal one,
+// mixed-persistence ones (mixedSeeds) and the settled one, and the cell fails
+// unless every outcome it is written for was reached: the new file (so the
+// rename was seen to outlive the crash, with its data), the older file or none,
+// and a temporary file a crash left (so the next write's replace is tested).
 func TestKill_LocationFileIsNeverTorn(t *testing.T) {
 	st := newStore(t)
 	older, newer := location("batgirl"), location("robin")
 	for _, replacing := range []bool{false, true} {
+		got := reached{}
 		_, clones := crashRun(t, st, func(e *env) {
 			if replacing {
 				if err := journal.WriteLocation(stateDir, older, journal.WithFS(e.fsys)); err != nil {
@@ -86,28 +162,41 @@ func TestKill_LocationFileIsNeverTorn(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
-		if len(clones) < 4 {
-			t.Fatalf("WriteLocation (replacing=%v) took %d kill points, want at least 4", replacing, len(clones))
+		if len(clones) < 4*(1+len(mixedSeeds)) {
+			t.Fatalf("WriteLocation (replacing=%v) took %d crash states, want at least %d", replacing, len(clones), 4*(1+len(mixedSeeds)))
 		}
 		for _, c := range clones {
-			t.Run(c.Event.Label+"/"+kindName(c.Event.Kind), func(t *testing.T) {
+			t.Run(fmt.Sprintf("replacing=%v/%s", replacing, cloneName(c)), func(t *testing.T) {
 				e := (&env{t: t, st: st}).after(c)
-				got, ok, err := journal.ReadLocation(stateDir, journal.WithFS(e.fsys))
+				loc, ok, err := journal.ReadLocation(stateDir, journal.WithFS(e.fsys))
 				if err != nil {
 					t.Fatalf("ReadLocation after a crash before %s: %v", c.Event.Label, err)
 				}
 				switch {
-				case ok && got == newer, ok && replacing && got == older, !ok && !replacing:
+				case ok && loc == newer:
+					got["newer"]++
+				case ok && replacing && loc == older:
+					got["older"]++
+				case !ok && !replacing:
+					got["absent"]++
 				default:
-					t.Fatalf("ReadLocation = %+v, %v; want absent, the earlier file or the new one", got, ok)
+					t.Fatalf("ReadLocation = %+v, %v; want absent, the earlier file or the new one", loc, ok)
+				}
+				if exists(t, e.rec.FS(), stateDir+"/"+journal.LocationFile+".tmp") {
+					got["temp left"]++
 				}
 				if err := journal.WriteLocation(stateDir, newer, journal.WithFS(e.fsys)); err != nil {
 					t.Fatalf("the next WriteLocation: %v", err)
 				}
-				if got, ok, err := journal.ReadLocation(stateDir, journal.WithFS(e.fsys)); err != nil || !ok || got != newer {
-					t.Fatalf("after the next write ReadLocation = %+v, %v, %v; want the new file", got, ok, err)
+				if loc, ok, err := journal.ReadLocation(stateDir, journal.WithFS(e.fsys)); err != nil || !ok || loc != newer {
+					t.Fatalf("after the next write ReadLocation = %+v, %v, %v; want the new file", loc, ok, err)
 				}
 			})
+		}
+		if replacing {
+			got.require(t, "older", "newer", "temp left")
+		} else {
+			got.require(t, "absent", "newer", "temp left")
 		}
 	}
 }
@@ -138,25 +227,36 @@ func TestKill_TornLocationTempIsIgnoredAndReplaced(t *testing.T) {
 }
 
 // TestKill_MoveFileLeavesTheSourceIntact: a crash before any single durable
-// step of MoveFile, the copy's write and fsync included, leaves the source
-// journal whole at its old path, and the destination either absent or a whole
-// copy; a rerun of MoveFile over what the crash left finishes the move.
+// step of MoveFile, the copy's write and fsync included, or just after it
+// returned, leaves the source journal whole at its old path, and the
+// destination either absent or a whole copy; a rerun of MoveFile over what the
+// crash left finishes the move. The cell fails unless both a destination and
+// none, and a temporary copy a crash left, were reached: a destination that
+// exists only in the settled state would leave the arm that checks it whole
+// untested for every crash inside the call.
 func TestKill_MoveFileLeavesTheSourceIntact(t *testing.T) {
 	st := newStore(t)
+	got := reached{}
 	_, clones := crashRun(t, st, primed, func(e *env) {
 		if err := journal.MoveFile(journalAt, movedTo, keys{}, journal.WithFS(e.fsys)); err != nil {
 			t.Fatal(err)
 		}
 	})
-	if len(clones) < 4 {
-		t.Fatalf("MoveFile took %d kill points, want at least 4", len(clones))
+	if len(clones) < 4*(1+len(mixedSeeds)) {
+		t.Fatalf("MoveFile took %d crash states, want at least %d", len(clones), 4*(1+len(mixedSeeds)))
 	}
 	for _, c := range clones {
-		t.Run(c.Event.Label+"/"+kindName(c.Event.Kind), func(t *testing.T) {
+		t.Run(cloneName(c), func(t *testing.T) {
 			e := (&env{t: t, st: st}).after(c)
 			e.intactTo(journalAt, 2)
 			if exists(t, e.rec.FS(), movedTo) {
+				got["destination"]++
 				e.intactTo(movedTo, 2)
+			} else {
+				got["no destination"]++
+			}
+			if exists(t, e.rec.FS(), movedTo+".moving") {
+				got["temp copy left"]++
 			}
 			if err := journal.MoveFile(journalAt, movedTo, keys{}, journal.WithFS(e.fsys)); err != nil {
 				t.Fatalf("rerunning MoveFile: %v", err)
@@ -167,11 +267,15 @@ func TestKill_MoveFileLeavesTheSourceIntact(t *testing.T) {
 			}
 		})
 	}
+	got.require(t, "destination", "no destination", "temp copy left")
 }
 
 // TestKill_MoveFileMidCopySourceStillOpens: the crash that matters most, the
-// one inside the copy (the copy's write is durable, its fsync is not), leaves
-// a source that OpenFile still opens and appends to.
+// one inside the copy (the copy's write is not durable until its fsync),
+// leaves a source that OpenFile still opens and appends to, whatever of the
+// copy the crash kept: nothing, its entry without its data, or both. The cell
+// fails unless a crash kept the copy's entry (the premise that the source is
+// not the only file there).
 func TestKill_MoveFileMidCopySourceStillOpens(t *testing.T) {
 	st := newStore(t)
 	_, clones := crashRun(t, st, primed, func(e *env) {
@@ -179,27 +283,35 @@ func TestKill_MoveFileMidCopySourceStillOpens(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	var mid *bootseamtest.Clone
-	for i, c := range clones {
-		if c.Event.Label == journal.LabelMoveCopy && c.Event.Kind == errorfs.OpFileSync {
-			mid = &clones[i]
+	got := reached{}
+	for _, c := range clones {
+		if c.Event.Label != journal.LabelMoveCopy || c.Event.Kind != errorfs.OpFileSync {
+			continue
 		}
+		t.Run(cloneName(c), func(t *testing.T) {
+			e := (&env{t: t, st: st}).after(c)
+			if exists(t, e.rec.FS(), movedTo+".moving") {
+				got["copy entry kept"]++
+			} else {
+				got["no copy"]++
+			}
+			j, err := e.open(journalAt)
+			if err != nil {
+				t.Fatalf("OpenFile of the source after a crash mid-copy: %v", err)
+			}
+			if err := e.appendUncommitted(j); err != nil {
+				t.Fatal(err)
+			}
+			if err := j.Close(); err != nil {
+				t.Fatal(err)
+			}
+			e.intactTo(journalAt, 3)
+		})
 	}
-	if mid == nil {
+	if len(got) == 0 {
 		t.Fatal("no kill point before the copy's fsync")
 	}
-	e := (&env{t: t, st: st}).after(*mid)
-	j, err := e.open(journalAt)
-	if err != nil {
-		t.Fatalf("OpenFile of the source after a crash mid-copy: %v", err)
-	}
-	if err := e.appendUncommitted(j); err != nil {
-		t.Fatal(err)
-	}
-	if err := j.Close(); err != nil {
-		t.Fatal(err)
-	}
-	e.intactTo(journalAt, 3)
+	got.require(t, "copy entry kept", "no copy")
 }
 
 // TestKill_AppendNeverLosesAnAcknowledgedLine: a crash before any single
@@ -234,8 +346,11 @@ func TestKill_AppendNeverLosesAnAcknowledgedLine(t *testing.T) {
 }
 
 // TestKill_FirstOpenRecovers: a crash before any single durable step of the
-// first OpenFile (create, header, directory fsync) leaves either no journal
-// or one the next OpenFile accepts and appends to.
+// first OpenFile (create, header, directory fsync) and of the append after it,
+// or just after it, leaves either no journal or one the next OpenFile accepts
+// and appends to. The unsynced append may have survived (a mixed clone) or
+// not, so the chain after the next append is at seq 1 or 2; the cell fails
+// unless both were reached (and the journal started with no header too).
 func TestKill_FirstOpenRecovers(t *testing.T) {
 	st := newStore(t)
 	_, clones := crashRun(t, st, nil, func(e *env) {
@@ -244,12 +359,16 @@ func TestKill_FirstOpenRecovers(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	if len(clones) < 3 {
-		t.Fatalf("the first open took %d kill points, want at least 3", len(clones))
+	if len(clones) < 3*(1+len(mixedSeeds)) {
+		t.Fatalf("the first open took %d crash states, want at least %d", len(clones), 3*(1+len(mixedSeeds)))
 	}
+	got := reached{}
 	for _, c := range clones {
-		t.Run(c.Event.Label+"/"+kindName(c.Event.Kind), func(t *testing.T) {
+		t.Run(cloneName(c), func(t *testing.T) {
 			e := (&env{t: t, st: st}).after(c)
+			if !exists(t, e.rec.FS(), journalAt) {
+				got["no journal"]++
+			}
 			j, err := e.open(journalAt)
 			if err != nil {
 				t.Fatalf("OpenFile after a crash before %s: %v", c.Event.Label, err)
@@ -260,15 +379,23 @@ func TestKill_FirstOpenRecovers(t *testing.T) {
 			if err := j.Close(); err != nil {
 				t.Fatal(err)
 			}
-			e.intactTo(journalAt, 1)
+			switch e.intactToOneOf(journalAt, 1, 2) {
+			case 1:
+				got["append lost"]++
+			case 2:
+				got["append kept"]++
+			}
 		})
 	}
+	got.require(t, "no journal", "append lost", "append kept")
 }
 
 // TestKill_CutOfATornTailIsAtomic: the cut of an incomplete last line is a
-// truncate, which the in-memory file performs as an atomic replace; a crash
-// before any single durable step of it leaves a journal OpenFile still opens
-// whole at seq 2, cut or not yet cut.
+// truncate; a crash before any single durable step of it, mixed-persistence
+// states included, or just after it, leaves a journal OpenFile still opens
+// whole at seq 2, cut or not yet cut. A real truncate leaves the old length or
+// the new one and never a third; the cell fails unless it saw both the torn
+// tail still there and the cut done, and a temporary file of the cut left.
 func TestKill_CutOfATornTailIsAtomic(t *testing.T) {
 	st := newStore(t)
 	_, clones := crashRun(t, st, func(e *env) { primed(e); e.tearTail(journalAt) }, func(e *env) {
@@ -277,12 +404,24 @@ func TestKill_CutOfATornTailIsAtomic(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	if len(clones) < 4 {
-		t.Fatalf("the cut took %d kill points, want at least 4", len(clones))
+	if len(clones) < 4*(1+len(mixedSeeds)) {
+		t.Fatalf("the cut took %d crash states, want at least %d", len(clones), 4*(1+len(mixedSeeds)))
 	}
+	got := reached{}
 	for _, c := range clones {
-		t.Run(c.Event.Label+"/"+kindName(c.Event.Kind), func(t *testing.T) {
+		t.Run(cloneName(c), func(t *testing.T) {
 			e := (&env{t: t, st: st}).after(c)
+			if raw, err := readAll(e.rec.FS(), journalAt); err != nil {
+				t.Fatal(err)
+			} else if len(raw) > 0 && raw[len(raw)-1] == '\n' {
+				got["cut done"]++
+			} else {
+				got["torn tail"]++
+			}
+			if exists(t, e.rec.FS(), journalAt+".truncating") {
+				// The cut's temporary file is only ever replaced, never read.
+				got["temp left"]++
+			}
 			j, err := e.open(journalAt)
 			if err != nil {
 				t.Fatalf("OpenFile after a crash before %s: %v", c.Event.Label, err)
@@ -291,11 +430,37 @@ func TestKill_CutOfATornTailIsAtomic(t *testing.T) {
 				t.Fatal(err)
 			}
 			e.intactTo(journalAt, 2)
-			if exists(t, e.rec.FS(), journalAt+".truncating") {
-				// The cut's temporary file is only ever replaced, never read.
-				t.Log("a temporary file of the cut survived the crash; the next cut replaces it")
-			}
 		})
+	}
+	got.require(t, "torn tail", "cut done", "temp left")
+}
+
+// TestMemFS_MoveFileOntoItsVerifiedCopy: a destination that is already a
+// regular file holding the source's chain is the copy an earlier run finished
+// (a crash between the rename and the record update): MoveFile reads it
+// through the filesystem it was given, finds it verified and writes nothing,
+// and a regular file that is not that copy is refused. Both reads (the
+// destination's Lstat and ReadFile) must be the memory filesystem's, since the
+// host's disk holds neither file.
+func TestMemFS_MoveFileOntoItsVerifiedCopy(t *testing.T) {
+	e := newEnv(t, newStore(t), noOpts())
+	primed(e)
+	if err := journal.MoveFile(journalAt, movedTo, keys{}, journal.WithFS(e.fsys)); err != nil {
+		t.Fatal(err)
+	}
+	before := len(e.rec.Events())
+	if err := journal.MoveFile(journalAt, movedTo, keys{}, journal.WithFS(e.fsys)); err != nil {
+		t.Fatalf("a repeated move onto the verified copy: %v", err)
+	}
+	if evs := e.since(before); len(evs) != 0 {
+		t.Fatalf("a repeated move onto the verified copy wrote %v; want nothing", summarize(evs))
+	}
+	e.intactTo(movedTo, 2)
+
+	notACopy := movedTo + ".other"
+	e.plant(notACopy, "not a journal\n")
+	if err := journal.MoveFile(journalAt, notACopy, keys{}, journal.WithFS(e.fsys)); !errors.Is(err, journal.ErrMoveRefused) {
+		t.Fatalf("a move onto a regular file that is not the source's copy: err = %v, want ErrMoveRefused", err)
 	}
 }
 

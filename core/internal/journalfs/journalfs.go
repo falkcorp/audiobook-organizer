@@ -1,5 +1,5 @@
 // file: core/internal/journalfs/journalfs.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9c78ddbb-cfba-47f5-a91a-8282b5264fac
 // last-edited: 2026-11-19
 
@@ -21,12 +21,26 @@
 //
 // The in-memory filesystem has no append mode, no ftruncate, no file lock and
 // no symbolic links, so this package models what the journal needs of them:
-// an append is a write at the end offset, the lock is a per-boot set of
-// locked paths, and a truncation is an atomic replace (a durable copy of the
-// kept prefix renamed over the file and the directory fsynced), whose two
-// outcomes are the two outcomes of an ftruncate. A crash between the steps
-// of that replace leaves the file as it was, which is the state before the
-// truncation.
+// an append is a write at the end offset, the lock is a set of locked paths
+// shared by every adapter over the same in-memory filesystem (flock(2)
+// conflicts between open file descriptions, so two opens in one boot exclude
+// each other whichever adapter made them), and a truncation, or an O_TRUNC
+// open of an existing file, replaces the file with a fresh one at the same
+// name (Pebble's MemFS has no in-place truncate).
+//
+// A real truncation (ftruncate) leaves the old contents or the truncated ones
+// after a crash, becomes durable at the file's own fsync and never fsyncs the
+// directory. The replacement matches: its directory entry is unsynced until
+// the file's Sync, so a minimal crash clone holds the old file and a mixed one
+// (bootseamtest.Options.MixedSeeds) either. The Sync makes the entry durable
+// as well, unrecorded, because that is not an operation of the journal's, with
+// two limits. The entry of a file the journal created and has not yet synced
+// the directory for (the adapter tracks these) stays unsynced, so a rollback
+// of a new journal's header never makes its name durable ahead of the
+// journal.dirsync that does. And Pebble's MemFS can only sync a whole
+// directory, so a Sync that does sync the entry also makes the directory's
+// other unsynced entries durable, which a real fsync does not. A truncation
+// itself never syncs the directory.
 package journalfs
 
 import (
@@ -37,8 +51,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
+	"weak"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
 
@@ -48,25 +64,99 @@ import (
 
 // From is the filesystem the journal uses in the boot ctx belongs to:
 // journal.OSFS() when ctx carries no seam or one with no filesystem (every
-// production boot), the seam's in-memory filesystem otherwise.
+// production boot), the seam's in-memory filesystem otherwise. Every value
+// From returns over one in-memory filesystem shares one lock set (and one
+// record of the unsynced entries it created), so the journal opened through
+// two of them in a boot still excludes itself.
 func From(ctx context.Context) (journal.FS, error) {
 	seams := bootseam.From(ctx)
 	if seams == nil || seams.FS == nil || seams.FS == vfs.Default {
 		return journal.OSFS(), nil
 	}
-	if _, ok := vfs.Root(seams.FS).(*vfs.MemFS); !ok {
+	base, ok := vfs.Root(seams.FS).(*vfs.MemFS)
+	if !ok {
 		return nil, fmt.Errorf("journalfs: the boot filesystem %T is neither the real one nor in memory", vfs.Root(seams.FS))
 	}
-	return &memFS{mem: seams.FS, seams: seams, locked: map[string]bool{}}, nil
+	return &memFS{mem: seams.FS, base: base, seams: seams, state: stateOf(base)}, nil
+}
+
+// fsState is what the adapters over one in-memory filesystem share: the paths
+// of the open, locked files, and the paths of the files and renames they made
+// whose directory entry no SyncDir has made durable yet.
+type fsState struct {
+	mu    sync.Mutex
+	held  map[string]bool
+	fresh map[string]bool
+}
+
+// states maps an in-memory filesystem to its fsState. The key is the
+// filesystem under every wrapper, held weakly, and not the *bootseam.Seams
+// (a recorder builds a new one on every call) or the errorfs wrapper (a
+// second wrapper over one filesystem must not split the set). An entry goes
+// when its filesystem is collected, so a test's thousands of crash clones
+// leave nothing behind.
+var (
+	statesMu sync.Mutex
+	states   = map[weak.Pointer[vfs.MemFS]]*fsState{}
+)
+
+// stateOf is the fsState of base, made on first use.
+func stateOf(base *vfs.MemFS) *fsState {
+	key := weak.Make(base)
+	statesMu.Lock()
+	defer statesMu.Unlock()
+	if st, ok := states[key]; ok {
+		return st
+	}
+	st := &fsState{held: map[string]bool{}, fresh: map[string]bool{}}
+	states[key] = st
+	runtime.AddCleanup(base, func(k weak.Pointer[vfs.MemFS]) {
+		statesMu.Lock()
+		delete(states, k)
+		statesMu.Unlock()
+	}, key)
+	return st
+}
+
+// markFresh records that path's directory entry is not durable yet.
+func (s *fsState) markFresh(path string) {
+	s.mu.Lock()
+	s.fresh[path] = true
+	s.mu.Unlock()
+}
+
+// forget drops path from the unsynced entries (it was removed or replaced).
+func (s *fsState) forget(path string) {
+	s.mu.Lock()
+	delete(s.fresh, path)
+	s.mu.Unlock()
+}
+
+// isFresh reports whether path's directory entry is not durable yet.
+func (s *fsState) isFresh(path string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.fresh[path]
+}
+
+// synced drops every entry of dir from the unsynced ones: a directory fsync
+// made them durable.
+func (s *fsState) synced(dir string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for p := range s.fresh {
+		if filepath.Dir(p) == dir {
+			delete(s.fresh, p)
+		}
+	}
 }
 
 // memFS is journal.FS over the kit's in-memory filesystem.
 type memFS struct {
 	mem   vfs.FS
+	base  *vfs.MemFS // the in-memory filesystem under mem's wrappers
 	seams *bootseam.Seams
-
-	mu     sync.Mutex
-	locked map[string]bool // the paths of open, locked files
+	state *fsState
 }
 
 func (m *memFS) Region(label string) func() { return bootseam.RegionOf(m.seams, label) }
@@ -98,7 +188,14 @@ func (m *memFS) MkdirAll(path string, _ fs.FileMode) error {
 	return m.mem.MkdirAll(path, 0o700)
 }
 
-func (m *memFS) Rename(oldpath, newpath string) error { return m.mem.Rename(oldpath, newpath) }
+func (m *memFS) Rename(oldpath, newpath string) error {
+	if err := m.mem.Rename(oldpath, newpath); err != nil {
+		return err
+	}
+	m.state.forget(oldpath)
+	m.state.markFresh(newpath) // the renamed entry is durable at the directory's fsync
+	return nil
+}
 
 // Remove is os.Remove. A name that is not there is os.ErrNotExist, answered
 // here: errorfs reports a remove of a missing name as nil before it reaches
@@ -108,7 +205,11 @@ func (m *memFS) Remove(path string) error {
 	if _, err := m.mem.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return &fs.PathError{Op: "remove", Path: path, Err: fs.ErrNotExist}
 	}
-	return m.mem.Remove(path)
+	if err := m.mem.Remove(path); err != nil {
+		return err
+	}
+	m.state.forget(path)
+	return nil
 }
 
 func (m *memFS) SyncDir(dir string) error {
@@ -116,13 +217,18 @@ func (m *memFS) SyncDir(dir string) error {
 	if err != nil {
 		return err
 	}
-	return errors.Join(d.Sync(), d.Close())
+	err = errors.Join(d.Sync(), d.Close())
+	if err == nil {
+		m.state.synced(dir)
+	}
+	return err
 }
 
 // Open is os.OpenFile's flags over the in-memory filesystem. O_CREATE of a
 // missing file is a create; O_EXCL refuses an existing one; O_TRUNC of an
-// existing one is a create of a fresh file at the name (one operation, as the
-// truncating open is one); anything else opens the file where it is.
+// existing one replaces it with a fresh file at the name (one operation, as the
+// truncating open is one, whose directory entry the file's Sync makes durable:
+// the package comment); anything else opens the file where it is.
 func (m *memFS) Open(path string, flag int, _ fs.FileMode) (journal.FSFile, error) {
 	write := flag&(os.O_WRONLY|os.O_RDWR) != 0
 	fi, serr := m.mem.Stat(path)
@@ -159,7 +265,10 @@ func (m *memFS) Open(path string, flag int, _ fs.FileMode) (journal.FSFile, erro
 	if err != nil {
 		return nil, err
 	}
-	mf := &memFile{fs: m, path: path, f: f, write: write, append: flag&os.O_APPEND != 0}
+	if !exists {
+		m.state.markFresh(path)
+	}
+	mf := &memFile{fs: m, path: path, f: f, write: write, append: flag&os.O_APPEND != 0, pending: exists && flag&os.O_TRUNC != 0 && write}
 	if fi, err := f.Stat(); err == nil {
 		mf.end = fi.Size()
 	}
@@ -177,6 +286,9 @@ type memFile struct {
 	end    int64 // the file's length, which an append writes at
 	locked bool
 	closed bool
+	// pending is a directory entry that replaced the file's and is not yet
+	// synced: a truncation's, which the file's Sync makes durable.
+	pending bool
 }
 
 func (f *memFile) Name() string { return f.path }
@@ -214,9 +326,34 @@ func (f *memFile) Write(p []byte) (int, error) {
 	return n, err
 }
 
-func (f *memFile) Sync() error { return f.f.Sync() }
+// Sync fsyncs the file, and its directory entry when a truncation replaced it
+// (the package comment). The directory sync is made on the filesystem under
+// the recorder's wrappers: it is part of the file's fsync and not an operation
+// the journal makes, so it is neither recorded nor a kill point.
+func (f *memFile) Sync() error {
+	if err := f.f.Sync(); err != nil {
+		return err
+	}
+	if !f.pending {
+		return nil
+	}
+	f.pending = false
+	if f.fs.state.isFresh(f.path) {
+		return nil // the name is unsynced: the journal's own directory fsync makes it durable
+	}
+	dir := filepath.Dir(f.path)
+	d, err := f.fs.base.OpenDir(dir)
+	if err != nil {
+		return err
+	}
+	if err := errors.Join(d.Sync(), d.Close()); err != nil {
+		return err
+	}
+	f.fs.state.synced(dir)
+	return nil
+}
 
-// Truncate cuts the file to size as an atomic replace (the package comment).
+// Truncate cuts the file to size as a replace (the package comment).
 func (f *memFile) Truncate(size int64) error {
 	if size == f.end {
 		return nil
@@ -239,15 +376,12 @@ func (f *memFile) Truncate(size int64) error {
 	if err := f.fs.mem.Rename(tmp, f.path); err != nil {
 		return errors.Join(err, f.fs.mem.Remove(tmp))
 	}
-	if err := f.fs.SyncDir(filepath.Dir(f.path)); err != nil {
-		return err
-	}
 	nf2, err := f.fs.mem.OpenReadWrite(f.path, vfs.WriteCategoryUnspecified)
 	if err != nil {
 		return err
 	}
 	old := f.f
-	f.f, f.end = nf2, size
+	f.f, f.end, f.pending = nf2, size, true
 	return old.Close()
 }
 
@@ -255,12 +389,13 @@ func (f *memFile) Truncate(size int64) error {
 // file holds is journal.ErrLocked, as flock(2) refuses a second open file
 // description.
 func (f *memFile) Lock() error {
-	f.fs.mu.Lock()
-	defer f.fs.mu.Unlock()
-	if f.fs.locked[f.path] && !f.locked {
+	st := f.fs.state
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.held[f.path] && !f.locked {
 		return fmt.Errorf("%w (%s)", journal.ErrLocked, f.path)
 	}
-	f.fs.locked[f.path], f.locked = true, true
+	st.held[f.path], f.locked = true, true
 	return nil
 }
 
@@ -270,9 +405,10 @@ func (f *memFile) Close() error {
 	}
 	f.closed = true
 	if f.locked {
-		f.fs.mu.Lock()
-		delete(f.fs.locked, f.path)
-		f.fs.mu.Unlock()
+		st := f.fs.state
+		st.mu.Lock()
+		delete(st.held, f.path)
+		st.mu.Unlock()
 	}
 	return f.f.Close()
 }

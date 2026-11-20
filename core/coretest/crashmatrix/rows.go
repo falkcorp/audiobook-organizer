@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/rows.go
-// version: 1.0.10
+// version: 1.0.11
 // guid: d18639c8-9b23-4ce6-a83c-4b77e83754c1
 // last-edited: 2026-11-19
 
@@ -25,11 +25,17 @@ import (
 // after that boot's retry.
 //
 // Unbound, when non-empty, is why no boot of this build reaches the row's
-// writer yet: the writer's code has landed (or its call site is known) but
-// nothing wires it into a boot. Unobserved does not report such a row's
-// labels as missing, and reports one a fixture does reach as stale, so the
-// field cannot outlive the wiring that makes it untrue: the PR that binds
-// the writer drops it, and until then the matrix knows the writer exists.
+// writer yet: the writer's code has landed but nothing wires it into a boot.
+// Unobserved does not report such a row's labels as missing, and reports one
+// a fixture does reach as stale. That catches a row a fixture reaches, and
+// nothing else: a row no fixture ever reaches (a writer on a non-default
+// branch of its caller) would keep the mark after the wiring lands and the
+// matrix would go on never breaking it. So a row that no fault-free boot
+// reaches once the writer is wired is not Unbound: its labels go in each
+// fixture's allow map, one reason per label, the reviewed mechanism for a
+// label no fixture can reach, and TestJournalRowsAreUnboundUntilF408 fails
+// while any row is Unbound once core/kernel imports core/internal/journalfs
+// (the wiring), so the mark cannot be left behind by a PR that wires it.
 type Row struct {
 	Phase   string
 	Writer  string
@@ -98,17 +104,17 @@ func Rows() []Row {
 		}, Unbound: unboundJournal},
 		{Phase: "P4d 2", Writer: "journal: CreateBased, a new journal that continues after the store's head, exclusively created, written, fsynced and its directory fsynced (the set-aside of another install's journal, §5B.3.6 \"Boot re-apply\" (0))", Labels: []string{
 			backupjournal.LabelBaseCreate, backupjournal.LabelBaseDirSync,
-		}, Unbound: unboundJournal},
+		}},
 		{Phase: "P4d 2", Writer: "journal: backup.location.json, a temporary file written and fsynced, renamed over the file, the state directory fsynced, a failed temporary file removed (WriteLocation; §5B.3.6 row \"Where\")", Labels: []string{
 			backupjournal.LabelLocationTmp, backupjournal.LabelLocationRename, backupjournal.LabelLocationDirSync, backupjournal.LabelLocationCleanup,
 		}, Unbound: unboundJournal},
-		{Phase: "P4d 2", Writer: "journal: MoveFile, the destination directory, a leftover temporary copy cleared, the copy written and fsynced, renamed into place, the directory fsynced, a failed copy removed, and the old file removed once the record points at the new one (RemoveMoved; §5B.3.6 row \"Where\")", Labels: []string{
-			backupjournal.LabelMoveMkdir, backupjournal.LabelMoveClear, backupjournal.LabelMoveCopy, backupjournal.LabelMoveRename,
+		{Phase: "P4d 2", Writer: "journal: MoveFile, the source's open, the destination directory, a leftover temporary copy cleared, the copy written and fsynced, renamed into place, the directory fsynced, a failed copy removed, and the old file removed once the record points at the new one (RemoveMoved; §5B.3.6 row \"Where\")", Labels: []string{
+			backupjournal.LabelMoveSource, backupjournal.LabelMoveMkdir, backupjournal.LabelMoveClear, backupjournal.LabelMoveCopy, backupjournal.LabelMoveRename,
 			backupjournal.LabelMoveDirSync, backupjournal.LabelMoveCleanup, backupjournal.LabelMoveRemoveSource,
-		}, Unbound: unboundJournal + "; core/kernel/restore_reapply.go still removes the moved source with a raw os.Remove (writeStoreMarkers, around :1274), which F4-08 moves onto journal.RemoveMoved"},
-		{Phase: "P4d 2", Writer: "the kernel: another install's journal renamed aside and the directory fsynced before CreateBased starts the new one (restore_reapply.go setAside, around :491, and syncDirOf, around :504), raw os calls the kit cannot see until F4-08 routes them through a labelled journal filesystem", Labels: []string{
+		}},
+		{Phase: "P4d 2", Writer: "the kernel: another install's journal renamed aside and the directory fsynced before CreateBased starts the new one (restore_reapply.go setAside, around :491, and syncDirOf, around :504), raw os calls the kit cannot see until F4-08 routes them through a labelled journal filesystem; a fixture that reaches them (another install's journal on disk) is the F4-08 scenario", Labels: []string{
 			LabelKernelJournalAside, LabelKernelJournalAsideSync,
-		}, Unbound: "the kernel's set-aside still calls os.Rename and syncDirOf directly and nothing binds the journal at boot until F4-08 (P4d step 2); F4-08 wires both through journalfs under these labels"},
+		}},
 		{Phase: "P4d 3 (R1)", Writer: "the kernel, on a restore boot with no restore hooks: marker_written, applied, inflight.json removed (DATA9-5)", Labels: []string{
 			"swap.journal.marker_written", "swap.journal.applied", "swap.slot.remove",
 		}},
@@ -119,16 +125,49 @@ func Rows() []Row {
 	}
 }
 
-// unboundJournal is the Unbound reason of the journal's file-writer rows.
+// unboundJournal is the Unbound reason of the journal's file-writer rows that
+// the first boot with a revocation in it reaches (open, append, location).
 const unboundJournal = "no boot binds the revocation journal until F4-08 wires P4d step 2 (the kernel opens the journal component with core/internal/journalfs's filesystem)"
 
 // The kernel-side labels of the journal's set-aside, which F4-08 gives the two
-// raw os calls of core/kernel/restore_reapply.go's setAside. No code carries
-// them yet; they are listed so the matrix already knows the writers exist.
+// raw os calls of core/kernel/restore_reapply.go's setAside (and, with them,
+// the raw os.Remove of the moved source, writeStoreMarkers around :1274, which
+// F4-08 moves onto journal.RemoveMoved). No code carries them yet; they are
+// listed so the matrix already knows the writers exist, and every fixture
+// allows them with a reason (they run on a non-default branch of the re-apply).
 const (
 	LabelKernelJournalAside     = "kernel.journal.aside.rename"
 	LabelKernelJournalAsideSync = "kernel.journal.aside.dirsync"
 )
+
+// JournalUnreachedLabels is the allow-map entries, one reason per label, for
+// the journal rows whose writers run on a non-default branch of the kernel's
+// revocation re-apply (reapplyRevocations), which no fixture sets up before
+// F4-08 binds the journal: CreateBased and the kernel's set-aside (another
+// install's journal on disk), and MoveFile and RemoveMoved (a changed backup
+// directory). A fixture's allow map takes the whole set (maps.Copy) and drops
+// a label only when one of its own scenarios reaches it; Unobserved reports
+// an entry a fixture reaches as stale, so the entry cannot hide a writer the
+// matrix breaks, and a label no fixture reaches keeps its reason in review.
+func JournalUnreachedLabels() map[string]string {
+	const (
+		create = "CreateBased runs only when the re-apply finds another install's journal on disk, a scenario no fixture sets up before F4-08 binds the journal"
+		move   = "MoveFile and RemoveMoved run only when the backup directory changed since the recorded location, a scenario no fixture sets up before F4-08 binds the journal"
+		aside  = "the kernel's set-aside of another install's journal (restore_reapply.go setAside and syncDirOf) runs on the same non-default branch as CreateBased, and its labels land with F4-08"
+	)
+	out := map[string]string{}
+	for _, l := range []string{backupjournal.LabelBaseCreate, backupjournal.LabelBaseDirSync} {
+		out[l] = create
+	}
+	for _, l := range []string{backupjournal.LabelMoveSource, backupjournal.LabelMoveMkdir, backupjournal.LabelMoveClear, backupjournal.LabelMoveCopy, backupjournal.LabelMoveRename,
+		backupjournal.LabelMoveDirSync, backupjournal.LabelMoveCleanup, backupjournal.LabelMoveRemoveSource} {
+		out[l] = move
+	}
+	for _, l := range []string{LabelKernelJournalAside, LabelKernelJournalAsideSync} {
+		out[l] = aside
+	}
+	return out
+}
 
 // Unobserved checks every label of rows against observed, the labels the
 // fixtures' fault-free boots reach (06 §6.5.1;
@@ -142,22 +181,22 @@ const (
 // (the row's Unbound reason is then untrue and is dropped). A label of an
 // Unbound row is never missing. Both are sorted.
 func Unobserved(rows []Row, observed map[string]bool, allow map[string]string) (missing, stale []string) {
-	listed, bound := map[string]bool{}, map[string]bool{}
+	listed, unbound := map[string]bool{}, map[string]bool{}
 	for _, r := range rows {
 		for _, l := range r.Labels {
 			if !listed[l] {
-				bound[l] = r.Unbound != ""
+				unbound[l] = r.Unbound != ""
 			} else {
-				bound[l] = bound[l] && r.Unbound != ""
+				unbound[l] = unbound[l] && r.Unbound != ""
 			}
 			listed[l] = true
 		}
 	}
 	for l := range listed {
 		switch {
-		case observed[l] && bound[l]:
+		case observed[l] && unbound[l]:
 			stale = append(stale, l+" (its row is marked Unbound)")
-		case !observed[l] && !bound[l] && allow[l] == "":
+		case !observed[l] && !unbound[l] && allow[l] == "":
 			missing = append(missing, l)
 		}
 	}

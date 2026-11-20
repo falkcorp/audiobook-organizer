@@ -1,5 +1,5 @@
 // file: core/backup/journal/fsys.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 780df8a6-dd11-4800-9f3d-b61a2a164b5b
 // last-edited: 2026-11-19
 
@@ -182,6 +182,12 @@ const (
 	// LabelMoveCleanup: the removal of a temporary copy that failed
 	// verification or the rename.
 	LabelMoveCleanup = "journal.move.cleanup"
+	// LabelMoveSource: MoveFile's open of the source journal. The open is
+	// read-write and creates a missing file (it is OpenFile's), so a source
+	// that vanished between MoveFile's existence check and the open would be
+	// created here: under this label and not LabelCreate's, so the kit never
+	// takes a move's open for a first open's.
+	LabelMoveSource = "journal.move.source"
 	// LabelMoveRemoveSource: RemoveMoved, the removal of the old journal once
 	// backup.location.json points at the new one.
 	LabelMoveRemoveSource = "journal.move.remove_source"
@@ -194,7 +200,7 @@ func FSLabels() []string {
 		LabelCreate, LabelHeader, LabelDirSync, LabelAppend, LabelRollback, LabelCut,
 		LabelBaseCreate, LabelBaseDirSync,
 		LabelLocationTmp, LabelLocationRename, LabelLocationDirSync, LabelLocationCleanup,
-		LabelMoveMkdir, LabelMoveClear, LabelMoveCopy, LabelMoveRename, LabelMoveDirSync, LabelMoveCleanup,
+		LabelMoveSource, LabelMoveMkdir, LabelMoveClear, LabelMoveCopy, LabelMoveRename, LabelMoveDirSync, LabelMoveCleanup,
 		LabelMoveRemoveSource,
 	})
 }

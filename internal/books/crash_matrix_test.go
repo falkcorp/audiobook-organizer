@@ -1,7 +1,7 @@
 // file: internal/books/crash_matrix_test.go
-// version: 1.0.9
+// version: 1.0.10
 // guid: 1a6f3d82-9c4e-4b17-8e25-7d0b5c9a2f61
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package books
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -268,7 +269,8 @@ func aboUnreachedLabels() map[string]string {
 		noM8 = "books registers no store rewrite (M8) until F3-07, and the boot call that runs one is F2-16's; " +
 			"hello's m8-rewrite cells break the writer through the kernel's entry point and restoreswap's P0a until then"
 	)
-	return map[string]string{
+	out := crashmatrix.JournalUnreachedLabels()
+	maps.Copy(out, map[string]string{
 		"storage.levelstep.sidecars": "books declares no level step at R1 (Level 0; raising one is an R1-23 STOP condition)",
 		"storage.levelstep.rollback": "books declares no level step at R1",
 		"storage.dm.plan":            noDataMigration,
@@ -305,5 +307,6 @@ func aboUnreachedLabels() map[string]string {
 		"swap.delete.remove": "a factory reset's delete entries lie off the store's filesystem (05-storage §5S.3.15) and run books' reset hook; " +
 			"the matrix boots books' storage declaration without its hooks (booksStorage) on a one-filesystem host, and the hook's own tests " +
 			"(reset_hook_test.go) cover its removals",
-	}
+	})
+	return out
 }

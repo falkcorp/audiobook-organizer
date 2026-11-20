@@ -1,5 +1,5 @@
 // file: core/internal/journalfs/env_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e34bd4bd-6585-4b25-aec6-e61610d311cb
 // last-edited: 2026-11-19
 
@@ -12,8 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -133,10 +131,13 @@ func syncTree(t *testing.T, mem *vfs.MemFS, dirs ...string) {
 func fixedClock() time.Time { return time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC) }
 
 // open is OpenFile over e's filesystem.
-func (e *env) open(path string) (*journal.File, error) {
+func (e *env) open(path string) (*journal.File, error) { return e.openOn(e.fsys, path) }
+
+// openOn is OpenFile over fsys.
+func (e *env) openOn(fsys journal.FS, path string) (*journal.File, error) {
 	return journal.OpenFile(context.Background(), journal.FileOptions{
 		Path: path, Keyspace: e.st.ks, Keys: keys{}, InstallID: installID, App: "gotham", Source: "batcomputer-1",
-		Clock: fixedClock, FS: e.fsys,
+		Clock: fixedClock, FS: fsys,
 	})
 }
 
@@ -214,10 +215,6 @@ func unlabelled(t *testing.T, evs []bootseamtest.Event) {
 	}
 }
 
-func hasLabelPrefix(evs []bootseamtest.Event, prefix string) bool {
-	return slices.ContainsFunc(evs, func(ev bootseamtest.Event) bool { return strings.HasPrefix(ev.Label, prefix) })
-}
-
 // noOpts is a recorder that records and takes no clone and injects nothing.
 func noOpts() bootseamtest.Options { return bootseamtest.Options{} }
 
@@ -241,8 +238,6 @@ func (e *env) tearTail(path string) {
 		e.t.Fatal(err)
 	}
 }
-
-func errorsJoin(errs ...error) error { return errors.Join(errs...) }
 
 // plant writes a durable file at path, as an earlier attempt that died left it.
 func (e *env) plant(path, content string) {

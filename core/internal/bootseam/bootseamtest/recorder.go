@@ -1,7 +1,7 @@
 // file: core/internal/bootseam/bootseamtest/recorder.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 6473c7ec-c6f5-4957-863f-62991f66eaa2
-// last-edited: 2026-11-08
+// last-edited: 2026-11-19
 
 // Package bootseamtest is the fault-injecting, labelling filesystem behind
 // the crash-matrix kit (coretest/crashmatrix) and the swap's own crash
@@ -13,6 +13,7 @@
 package bootseamtest
 
 import (
+	"math/rand/v2"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -36,6 +37,8 @@ const (
 	// Pebble's own; a WAL write or sync outside a region is one (an
 	// unlabelled batch).
 	LabelNone = ""
+	// LabelSettled is the label of Settled's clone, which no operation carries.
+	LabelSettled = "settled"
 )
 
 // Event is one durable operation.
@@ -73,11 +76,21 @@ func (e Event) Kill() bool {
 	return false
 }
 
-// Clone is the filesystem a crash just before Event would have left.
+// Clone is the filesystem a crash just before Event would have left. A clone
+// of the minimal kind holds exactly what was synced; a mixed one
+// (Options.MixedSeeds) also holds, drawn from Seed, some of the directory
+// entries and data blocks that were not.
 type Clone struct {
 	Event Event
 	FS    *vfs.MemFS
+	// Mixed marks a clone of the mixed kind, which Seed drew.
+	Mixed bool
+	Seed  uint64
 }
+
+// DefaultMixedPercent is the chance, in percent, that each unsynced directory
+// entry and data block is in a mixed clone when Options.MixedPercent is zero.
+const DefaultMixedPercent = 50
 
 // Options configure a Recorder.
 type Options struct {
@@ -90,6 +103,20 @@ type Options struct {
 	CloneIf func(ev Event) bool
 	// Fail returns the error to inject into ev, nil to let it run.
 	Fail func(ev Event) error
+	// MixedSeeds, when set, takes one more clone per seed before every kill
+	// point the options above take a clone at: a mixed-persistence clone, in
+	// which each directory entry and each data block that was not synced is
+	// there with probability MixedPercent, drawn from a generator seeded with
+	// the seed and the kill point's Seq (pebble's own crash tests do this).
+	// The minimal clone keeps only what was synced, so for a sequence whose
+	// only directory fsync is its last operation it is always the pre-state;
+	// the mixed ones are where a torn file, a rename that outlived its data or
+	// a copy without its entry show up. It is opt-in: a test that does not set
+	// it sees the clones it always saw.
+	MixedSeeds []uint64
+	// MixedPercent is the probability, 1 to 99, of a mixed clone including an
+	// unsynced entry or block; zero is DefaultMixedPercent.
+	MixedPercent int
 	// Stores are the absolute paths of the Pebble stores the boot opens: the
 	// creation and syncs of these directories are Pebble's (Event.Engine).
 	Stores []string
@@ -201,6 +228,9 @@ func (r *Recorder) MaybeError(op errorfs.Op) error {
 	r.events = append(r.events, ev)
 	if ev.Kill() && (r.opts.Clones || r.opts.CloneIf != nil && r.opts.CloneIf(ev)) {
 		r.clones = append(r.clones, Clone{Event: ev, FS: r.mem.CrashClone(vfs.CrashCloneCfg{})})
+		for _, seed := range r.opts.MixedSeeds {
+			r.clones = append(r.clones, Clone{Event: ev, FS: r.mixedClone(seed, ev.Seq), Mixed: true, Seed: seed})
+		}
 	}
 	fail := r.opts.Fail
 	r.mu.Unlock()
@@ -208,6 +238,28 @@ func (r *Recorder) MaybeError(op errorfs.Op) error {
 		return fail(ev)
 	}
 	return nil
+}
+
+// mixedClone is a crash clone in which each unsynced entry and block is kept
+// with probability MixedPercent, from a generator seeded with seed and seq.
+func (r *Recorder) mixedClone(seed uint64, seq int) *vfs.MemFS {
+	pct := r.opts.MixedPercent
+	if pct <= 0 {
+		pct = DefaultMixedPercent
+	}
+	return r.mem.CrashClone(vfs.CrashCloneCfg{UnsyncedDataPercent: pct, RNG: rand.New(rand.NewPCG(seed, uint64(seq)))})
+}
+
+// Settled is the crash clone a crash just after the last operation recorded
+// would leave (the minimal kind: exactly what was synced). A cell takes it
+// when a call has returned, to assert that what the call acknowledged is
+// durable: the pre-call clones cannot show that, because each is taken before
+// an operation and the last is before the last operation. Its Event is the
+// operation after the last, with the label "settled".
+func (r *Recorder) Settled() Clone {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return Clone{Event: Event{Seq: len(r.events), Label: LabelSettled}, FS: r.mem.CrashClone(vfs.CrashCloneCfg{})}
 }
 
 // engine reports an operation of Pebble's engine (Event.Engine); r.mu is

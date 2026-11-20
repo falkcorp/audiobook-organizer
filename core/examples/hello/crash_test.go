@@ -1,7 +1,7 @@
 // file: core/examples/hello/crash_test.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: d2573b3f-2985-4783-baa2-5b0ee3888984
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package hello_test
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -124,7 +125,11 @@ func TestBootCrashMatrixCoversEveryWriter(t *testing.T) {
 // unreachedLabels are the writer-table labels no hello fixture can reach,
 // each with the reason (R1-21 review M4).
 func unreachedLabels() map[string]string {
-	return map[string]string{
+	// The journal's writers on a non-default branch of the re-apply: no hello
+	// fixture reaches them before F4-08 binds the journal (and then only the
+	// scenarios F4-08 adds); each entry goes when a scenario reaches its label.
+	out := crashmatrix.JournalUnreachedLabels()
+	maps.Copy(out, map[string]string{
 		// storage/levels.go: the rollback rewrites the sidecars from the
 		// committed stamps only after a level step's sidecar write fails
 		// (a stamp commit's failure is fatal in Pebble). The level-step
@@ -135,7 +140,8 @@ func unreachedLabels() map[string]string {
 		// mtime, so no scratch entry is 7 days old at a kit boot. Storage's
 		// TestDryRunScratchModeAndSweep deletes one on a fake clock.
 		"storage.sweeper.scratch": "a copied fixture file's mtime is the host's clock, never 7 days before the kit's fixed clock",
-	}
+	})
+	return out
 }
 
 type namedScenario struct {
