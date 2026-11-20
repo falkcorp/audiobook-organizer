@@ -267,6 +267,30 @@ func TestRetireAuthorBooksLegacy_RefusesWhileAnAuthorIDIsUncredited(t *testing.T
 	require.Empty(t, abLegacyKeys(t, p))
 }
 
+// TestRetireAuthorBooksLegacy_OneUncreditedBookRefuses: a single book whose
+// AuthorID only a legacy row holds is enough to refuse; the refusal has no
+// tolerance threshold.
+func TestRetireAuthorBooksLegacy_OneUncreditedBookRefuses(t *testing.T) {
+	p := newAuthorBooksPebble(t)
+	fx := buildABRetireFixture(t, p)
+	lone := abMakeBook(t, p, "Batman: The Man Who Laughs", fx.bruce)
+	abSeedLegacy(t, p, abLegacyKey(fx.bruce, lone.ID))
+	legacyBefore := abLegacyKeys(t, p)
+
+	preview, err := p.CheckAuthorBooksLegacyRetire(context.Background(), nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, preview.Blocking)
+	require.True(t, preview.Refused, "a preview says a live run would refuse")
+
+	rep, err := p.RetireAuthorBooksLegacy(context.Background(), nil)
+	require.ErrorIs(t, err, ErrAuthorBooksLegacyRetireRefused)
+	require.True(t, rep.Refused)
+	require.Equal(t, 1, rep.Blocking)
+	require.Equal(t, []string{fmt.Sprintf("no_credit_row book:%s author:%d", lone.ID, fx.bruce)}, rep.SampleBlocking)
+	require.Zero(t, rep.Deleted)
+	require.Equal(t, legacyBefore, abLegacyKeys(t, p))
+}
+
 // TestRetireAuthorBooksLegacy_UndecodableBookRowNeverBlocks: no path can list a
 // book whose row does not decode, so its legacy row protects nothing.
 func TestRetireAuthorBooksLegacy_UndecodableBookRowNeverBlocks(t *testing.T) {
