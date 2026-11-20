@@ -532,7 +532,7 @@ into one of the curated sections below, is a normal direct edit.
       to remember the call. Brief: `docs/agent-tasks/platform-core/F7-09-f7-flip-integrations.md`.
       Hook shipped dark by F7-09 T3 (`Registry.SetValidator`, `ImportValidator`,
       `RouterOptions.ValidateEndpoints`); what is left is the F7-09 wiring and deleting
-      that option, see `todo.d/f7-09-delete-validate-endpoints-option.md`.
+      that option, see `F7-09-DELETE-VALIDATE-ENDPOINTS-OPTION` below and `docs/agent-tasks/platform-core/seams.d/F7-09-T3.md`.
 - [ ] **TODO-F7-03-CLEAR-BENCH** Have the `core.integrations.health` task call
       `ai.Router.ClearBench` on a `HealthOK` probe (F7-09), without clearing a quota
       bench: `GET /v1/models` succeeds on a spent balance.
