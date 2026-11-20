@@ -1,5 +1,5 @@
 // file: core/auth/lastadmin_roleguard_wrap_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8e2c4a17-3b95-4d60-a1f8-5c70d9e3b246
 // last-edited: 2026-11-19
 
@@ -33,6 +33,9 @@ type guardingRoleStore struct {
 	mu        sync.Mutex
 	name      rbac.RoleName
 	afterRead func()
+	// genErr, when set, is what RoleSetGeneration answers: the role store
+	// being unreadable at the one read every guarded write starts with.
+	genErr error
 }
 
 func newGuardingRoleStore(s rbac.Store) *guardingRoleStore {
@@ -40,6 +43,12 @@ func newGuardingRoleStore(s rbac.Store) *guardingRoleStore {
 }
 
 func (g *guardingRoleStore) RoleSetGeneration(ctx context.Context) (uint64, error) {
+	g.mu.Lock()
+	err := g.genErr
+	g.mu.Unlock()
+	if err != nil {
+		return 0, err
+	}
 	return g.guard.RoleSetGeneration(ctx)
 }
 
