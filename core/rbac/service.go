@@ -1,5 +1,5 @@
 // file: core/rbac/service.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 9d2b7e41-5c3a-4f86-b0e9-1a6c8f3d5e27
 // last-edited: 2026-11-19
 
@@ -70,11 +70,12 @@ var (
 	ErrFrozen = errors.New("rbac: the catalog is frozen")
 	// ErrNotFrozen is a call that needs the frozen catalog before Freeze.
 	ErrNotFrozen = errors.New("rbac: the catalog is not frozen yet")
-	// ErrNoRoleGuard is RoleSetGeneration or GuardRoleSet over a Deps.Store
-	// that does not implement RoleGuarder: the role set cannot be guarded in
-	// another owner's batch, so the caller (auth's last-admin rule) refuses
-	// rather than decide on definitions a role write may change before it
-	// commits.
+	// ErrNoRoleGuard is RoleSetGeneration, GuardRoleSet or ClaimRoleSet over a
+	// Deps.Store that does not implement RoleGuarder, and DeleteRole over one:
+	// the role set cannot be guarded in another owner's batch, so the caller
+	// (auth's last-admin rule, a user write that gives a role, DeleteRole)
+	// refuses rather than decide on definitions a role write may change
+	// before it commits.
 	ErrNoRoleGuard = errors.New("rbac: the role store cannot guard a role in another owner's batch")
 )
 
@@ -546,16 +547,35 @@ func (s *Service) RoleSetGeneration(ctx context.Context) (uint64, error) {
 // role was). auth's last-admin rule calls it first in its own batch, so a
 // UpdateRole, DeleteRole, CreateRole or seed write that commits before auth's
 // write fails auth's Commit with storage.ErrConflict, and auth decides again
-// on the new definitions. rbac's own writes need no such call: they stage an
-// Expect on every role they replace, bump the generation themselves, and read
-// the holders through their batch. A Deps.Store that does not implement
-// RoleGuarder answers ErrNoRoleGuard (fail closed).
+// on the new definitions. The first guard of a batch wins (a generation that
+// is no longer the committed one is refused at once with ErrConflict), so a
+// caller may guard twice. rbac's own writes need no such call except
+// DeleteRole, which guards the role set before it reads anything (see there);
+// the others stage an Expect on every role they replace and bump the
+// generation themselves. A Deps.Store that does not implement RoleGuarder
+// answers ErrNoRoleGuard (fail closed).
 func (s *Service) GuardRoleSet(b *storage.Batch, generation uint64) error {
 	g, ok := s.deps.Store.(RoleGuarder)
 	if !ok {
 		return ErrNoRoleGuard
 	}
 	return g.GuardRoleSet(b, generation)
+}
+
+// ClaimRoleSet is GuardRoleSet plus a bump of the generation in the same
+// batch (coined by F4-02-ROLE-GUARD). A user write that gives a user a role
+// calls it, after reading the generation and before it decides the role may be
+// given (CanAssignCommitted): a role write that commits after the read fails
+// the user write's Commit, and the bump fails the Commit of a DeleteRole that
+// read the role's holders before the user write landed, so assigning a role
+// and deleting it conflict whichever commits first. A Deps.Store that does
+// not implement RoleGuarder answers ErrNoRoleGuard (fail closed).
+func (s *Service) ClaimRoleSet(b *storage.Batch, generation uint64) error {
+	g, ok := s.deps.Store.(RoleGuarder)
+	if !ok {
+		return ErrNoRoleGuard
+	}
+	return g.ClaimRoleSet(b, generation)
 }
 
 // CreateRole creates the custom role in.Name (custom.<slug>) holding
@@ -670,6 +690,22 @@ func (s *Service) DeleteRole(ctx context.Context, actor Checker, id RoleName, if
 		return err
 	}
 	return s.write(ctx, func(b *storage.Batch) ([]*roleChange, error) {
+		// The holders read below see only users that hold the role now. A user
+		// write that gives it to someone after that read (a CreateUser, a
+		// SetRoles, an accepted invite or a first OIDC sign-in naming the role)
+		// is not among them, and nothing this batch guards would change. Every
+		// such write bumps the role-set generation in its own batch
+		// (ClaimRoleSet), so guarding the generation as it was before any read
+		// of this attempt makes that write fail this Commit; the retry reads the
+		// new holder and refuses with ErrRoleInUse. A store that cannot guard
+		// the role set cannot show the delete safe, and refuses.
+		gen, err := s.RoleSetGeneration(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.GuardRoleSet(b, gen); err != nil {
+			return nil, err
+		}
 		cur, err := s.editable(ctx, id, ifVersion)
 		if err != nil {
 			return nil, err
@@ -687,9 +723,7 @@ func (s *Service) DeleteRole(ctx context.Context, actor Checker, id RoleName, if
 		if len(hs) > 0 {
 			return nil, fmt.Errorf("%w: %s is held by %d user(s)", ErrRoleInUse, id, len(hs))
 		}
-		// Role-in-use alone cannot see a user write that gives the role to
-		// someone after this read: HoldersOf of the role just reported, and so
-		// guarded, nobody. Deleting a role that grants core:admin takes it from
+		// Deleting a role that grants core:admin takes it from
 		// every holder, so the last-admin rule runs too (nil permissions: the
 		// role is deleted). It guards every current admin's record through b,
 		// so a user write that makes a holder of this role changes a guarded
@@ -810,7 +844,8 @@ func (s *Service) Dominates(actor Checker, target []RoleName) error {
 
 // covers is CanAssign and Dominates: actor must hold every scope of every
 // role named, and a name the service does not know is refused unless actor
-// holds core:admin. refusal is the sentinel every error wraps.
+// holds core:admin. refusal is the sentinel every error wraps. It reads the
+// role cache.
 func (s *Service) covers(actor Checker, roles []RoleName, refusal error) error {
 	if actor == nil {
 		return fmt.Errorf("%w: no actor", refusal)
@@ -821,16 +856,51 @@ func (s *Service) covers(actor Checker, roles []RoleName, refusal error) error {
 	}
 	s.rolesMu.RLock()
 	defer s.rolesMu.RUnlock()
+	return covering(st.cat, actor, roles, refusal, func(name RoleName) (*Role, error) {
+		if r := s.roles[name]; r != nil {
+			return r, nil
+		}
+		return nil, ErrUnknownRole
+	})
+}
+
+// CanAssignCommitted is CanAssign over the stored roles instead of the cache
+// (coined by F4-02-ROLE-GUARD). The cache is installed after a role write
+// commits, so a role deleted or recreated a moment ago can still look as it
+// did to CanAssign; a caller that has just read the role-set generation
+// (RoleSetGeneration) and decides on the roles it is about to give a user asks
+// the store, which is never behind that generation. Same refusals as
+// CanAssign: ErrEscalation, wrapping ErrUnknownRole for a name the store does
+// not hold unless actor holds core:admin.
+func (s *Service) CanAssignCommitted(ctx context.Context, actor Checker, roles []RoleName) error {
+	if actor == nil {
+		return fmt.Errorf("%w: no actor", ErrEscalation)
+	}
+	st, err := s.frozen()
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrEscalation, err)
+	}
+	return covering(st.cat, actor, roles, ErrEscalation, func(name RoleName) (*Role, error) {
+		return s.deps.Store.GetRole(ctx, name)
+	})
+}
+
+// covering is the loop of covers and CanAssignCommitted over read, the role
+// lookup. A read error other than ErrUnknownRole fails closed.
+func covering(cat *Catalog, actor Checker, roles []RoleName, refusal error, read func(RoleName) (*Role, error)) error {
 	for _, name := range roles {
-		r := s.roles[name]
-		if r == nil {
+		r, err := read(name)
+		switch {
+		case errors.Is(err, ErrUnknownRole):
 			if !actor.Has(CoreAdmin) {
 				return fmt.Errorf("%w: %w: %s", refusal, ErrUnknownRole, name)
 			}
 			continue
+		case err != nil:
+			return fmt.Errorf("%w: read role %s: %w", refusal, name, err)
 		}
 		for _, p := range r.Permissions() {
-			if !holds(st.cat, actor, p) {
+			if !holds(cat, actor, p) {
 				return fmt.Errorf("%w: role %s holds %s", refusal, name, p)
 			}
 		}

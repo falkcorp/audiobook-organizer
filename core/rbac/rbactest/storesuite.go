@@ -1,5 +1,5 @@
 // file: core/rbac/rbactest/storesuite.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3a7e5c1d-94b2-4f68-8d0e-2b6f1a9c7e43
 // last-edited: 2026-11-19
 
@@ -737,9 +737,53 @@ func roleSetGuard(t *testing.T, h Harness) {
 		}
 	})
 
+	t.Run("a claim raises it, and a guard read before it conflicts", func(t *testing.T) {
+		g := generation(t)
+		reader := fx.NewBatch()
+		defer func() { _ = reader.Close() }()
+		if err := guarder.GuardRoleSet(reader, g); err != nil {
+			t.Fatal(err)
+		}
+		before := get(t, fx, "custom.wayne")
+		if err := commit(t, fx, func(b *storage.Batch) error { return guarder.ClaimRoleSet(b, g) }); err != nil {
+			t.Fatalf("a claim at the generation now: %v", err)
+		}
+		if now := generation(t); now != g+1 {
+			t.Fatalf("a claim moved the generation %d to %d, want %d", g, now, g+1)
+		}
+		if after := get(t, fx, "custom.wayne"); !reflect.DeepEqual(after, before) {
+			t.Fatalf("a claim changed a role: %+v vs %+v", after, before)
+		}
+		if err := reader.Commit(ctx, storage.Sync); !errors.Is(err, storage.ErrConflict) {
+			t.Fatalf("Commit of a guard read before the claim = %v, want storage.ErrConflict", err)
+		}
+		if err := commit(t, fx, func(b *storage.Batch) error { return guarder.ClaimRoleSet(b, g) }); !errors.Is(err, storage.ErrConflict) {
+			t.Fatalf("a claim over a generation read before the first = %v, want storage.ErrConflict", err)
+		}
+	})
+
+	t.Run("the first guard of a batch wins", func(t *testing.T) {
+		g1 := generation(t)
+		b := fx.NewBatch()
+		defer func() { _ = b.Close() }()
+		if err := guarder.GuardRoleSet(b, g1); err != nil {
+			t.Fatal(err)
+		}
+		put(t, fx, custom("custom.signal", 1, "core:self"))
+		if err := guarder.GuardRoleSet(b, generation(t)); err != nil {
+			t.Fatalf("a second guard at the generation now: %v", err)
+		}
+		if err := b.Commit(ctx, storage.Sync); !errors.Is(err, storage.ErrConflict) {
+			t.Fatalf("Commit with the first guard stale = %v, want storage.ErrConflict: a second guard must not replace it", err)
+		}
+	})
+
 	t.Run("nil batch", func(t *testing.T) {
 		if err := guarder.GuardRoleSet(nil, 0); err == nil {
 			t.Fatal("GuardRoleSet without a batch succeeded")
+		}
+		if err := guarder.ClaimRoleSet(nil, 0); err == nil {
+			t.Fatal("ClaimRoleSet without a batch succeeded")
 		}
 	})
 }

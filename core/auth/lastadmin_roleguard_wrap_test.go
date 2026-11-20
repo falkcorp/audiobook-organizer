@@ -1,5 +1,5 @@
 // file: core/auth/lastadmin_roleguard_wrap_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8e2c4a17-3b95-4d60-a1f8-5c70d9e3b246
 // last-edited: 2026-11-19
 
@@ -45,6 +45,10 @@ func (g *guardingRoleStore) RoleSetGeneration(ctx context.Context) (uint64, erro
 
 func (g *guardingRoleStore) GuardRoleSet(b *storage.Batch, generation uint64) error {
 	return g.guard.GuardRoleSet(b, generation)
+}
+
+func (g *guardingRoleStore) ClaimRoleSet(b *storage.Batch, generation uint64) error {
+	return g.guard.ClaimRoleSet(b, generation)
 }
 
 // armAfterRead runs fn once, right after the next GetRole of name returns.
