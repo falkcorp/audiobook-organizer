@@ -7,7 +7,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -57,22 +56,38 @@ func abCredits(bookID string, authorIDs ...int) []BookAuthor {
 	return rows
 }
 
-// abIndexKeys is every key of both index families as stored.
+// abIndexKeys is every key of the index family as stored.
 func abIndexKeys(t *testing.T, p *PebbleStore) []string {
 	t.Helper()
 	var keys []string
-	for _, prefix := range []string{authorBooksPrefix, authorBooksLegacyPrefix} {
-		require.NoError(t, forEachKeyInRange(p.db, []byte(prefix), prefixEnd([]byte(prefix)), func(k, _ []byte) error {
-			keys = append(keys, string(k))
-			return nil
-		}))
-	}
+	require.NoError(t, forEachKeyInRange(p.db, []byte(authorBooksPrefix), prefixEnd([]byte(authorBooksPrefix)), func(k, _ []byte) error {
+		keys = append(keys, string(k))
+		return nil
+	}))
 	sort.Strings(keys)
 	return keys
 }
 
+// abLegacyKeys is every retired author_books_legacy: row as stored.
+func abLegacyKeys(t *testing.T, p *PebbleStore) []string {
+	t.Helper()
+	var keys []string
+	require.NoError(t, forEachKeyInRange(p.db, []byte(authorBooksLegacyPrefix), prefixEnd([]byte(authorBooksLegacyPrefix)), func(k, _ []byte) error {
+		keys = append(keys, string(k))
+		return nil
+	}))
+	sort.Strings(keys)
+	return keys
+}
+
+// abLegacyKey is the retired family's key for (authorID, bookID), as builds
+// before F5-18j wrote it. Tests seed it to stand for rows those builds left.
+func abLegacyKey(authorID int, bookID string) []byte {
+	return []byte(authorBooksLegacyPrefix + strconv.Itoa(authorID) + ":" + bookID)
+}
+
 // abTruthKeys derives the exact key set the rows imply: one credit key per
-// author in each book_authors row and one legacy key per Book.AuthorID.
+// author in each book_authors row. Book.AuthorID implies no key.
 func abTruthKeys(t *testing.T, p *PebbleStore) []string {
 	t.Helper()
 	var keys []string
@@ -84,25 +99,17 @@ func abTruthKeys(t *testing.T, p *PebbleStore) []string {
 		}
 		return nil
 	}))
-	require.NoError(t, forEachBookRow(p.db, func(id string, v []byte) error {
-		var row struct {
-			AuthorID *int `json:"author_id"`
-		}
-		require.NoError(t, json.Unmarshal(v, &row))
-		if row.AuthorID != nil {
-			keys = append(keys, string(authorBooksLegacyKey(*row.AuthorID, id)))
-		}
-		return nil
-	}))
 	sort.Strings(keys)
 	return keys
 }
 
 // requireIndexMatchesRows is the sync invariant: after any write, the stored
-// index is EXACTLY what the rows imply, no key missing and none extra.
+// index is EXACTLY what the credit rows imply, no key missing and none extra,
+// and no write staged a retired author_books_legacy: row.
 func requireIndexMatchesRows(t *testing.T, p *PebbleStore, step string) {
 	t.Helper()
 	require.Equal(t, abTruthKeys(t, p), abIndexKeys(t, p), "author_books index out of sync after: %s", step)
+	require.Empty(t, abLegacyKeys(t, p), "%s staged a retired author_books_legacy: row", step)
 }
 
 func abIDs(books []BookCore) []string {
@@ -126,7 +133,7 @@ func TestAuthorBooksIndex_StaysInSyncAcrossWrites(t *testing.T) {
 	// insert
 	yearOne := abMakeBook(t, p, "Year One", bruce)
 	requireIndexMatchesRows(t, p, "CreateBook with AuthorID")
-	require.Contains(t, abIndexKeys(t, p), string(authorBooksLegacyKey(bruce, yearOne.ID)))
+	require.Empty(t, abIndexKeys(t, p), "a book row's AuthorID stages no index key")
 	noAuthor := abMakeBook(t, p, "Hush", 0)
 	requireIndexMatchesRows(t, p, "CreateBook without AuthorID")
 
@@ -137,9 +144,7 @@ func TestAuthorBooksIndex_StaysInSyncAcrossWrites(t *testing.T) {
 	require.NoError(t, p.SetBookAuthors(yearOne.ID, abCredits(yearOne.ID, dick)))
 	requireIndexMatchesRows(t, p, "SetBookAuthors drops the primary from the credit row")
 	require.NotContains(t, abIndexKeys(t, p), string(authorBooksKey(bruce, yearOne.ID)),
-		"credit key of a dropped author must go")
-	require.Contains(t, abIndexKeys(t, p), string(authorBooksLegacyKey(bruce, yearOne.ID)),
-		"the legacy key is the book row's, not the credit writer's, and must survive a credit change")
+		"credit key of a dropped author must go, whatever the row's AuthorID says")
 	_, err := p.ModifyBookAuthors(noAuthor.ID, func(rows []BookAuthor) ([]BookAuthor, error) {
 		return abCredits(noAuthor.ID, alfred), nil
 	})
@@ -153,8 +158,8 @@ func TestAuthorBooksIndex_StaysInSyncAcrossWrites(t *testing.T) {
 	_, err = p.UpdateBook(yearOne.ID, fresh)
 	require.NoError(t, err)
 	requireIndexMatchesRows(t, p, "UpdateBook changes AuthorID")
-	require.NotContains(t, abIndexKeys(t, p), string(authorBooksLegacyKey(bruce, yearOne.ID)))
-	require.Contains(t, abIndexKeys(t, p), string(authorBooksLegacyKey(selina, yearOne.ID)))
+	require.NotContains(t, abIndexKeys(t, p), string(authorBooksKey(selina, yearOne.ID)),
+		"an AuthorID change is not a credit")
 
 	// an unrelated UpdateBook keeps the keys
 	fresh, err = p.GetBookByID(yearOne.ID)
@@ -204,6 +209,7 @@ func TestAuthorBooksIndex_StaysInSyncAcrossMerge(t *testing.T) {
 	other := abMakeAuthor(t, p, "Barbara Gordon")
 
 	killingJoke := abMakeBook(t, p, "The Killing Joke", dupe)
+	require.NoError(t, p.SetBookAuthors(killingJoke.ID, abCredits(killingJoke.ID, dupe)))
 	knightfall := abMakeBook(t, p, "Knightfall", other)
 	require.NoError(t, p.SetBookAuthors(knightfall.ID, abCredits(knightfall.ID, other, dupe)))
 	requireIndexMatchesRows(t, p, "seed")
@@ -233,21 +239,24 @@ func TestAuthorBooksIndex_StaysInSyncAcrossMerge(t *testing.T) {
 		require.False(t, strings.Contains(k, ":"+strconv.Itoa(dupe)+":"), "key of the merged-away author left: %s", k)
 	}
 
-	require.NoError(t, p.setSentinelForTest())
+	rep, err := p.ReconcileAuthorBooksIndex(context.Background())
+	require.NoError(t, err)
+	require.True(t, rep.Trusted)
+	p.UseMemDB = false
+	defer func() { p.UseMemDB = true }()
 	got, err := p.GetBooksByAuthorIDCore(keep)
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{killingJoke.ID, knightfall.ID}, abIDs(got))
 }
 
-func (p *PebbleStore) setSentinelForTest() error {
-	return p.db.Set([]byte(authorBooksIndexSentinel), []byte("1"), pebble.Sync)
-}
-
-// abBatmanFixture is the conformance fixture on Batman names: a legacy link, a
-// co-author-only link, a non-primary version, a trashed book, and an unrelated one.
+// abBatmanFixture is the conformance fixture on Batman names: a book credited to
+// the author who is also its AuthorID, a co-author-only link, a non-primary
+// version, a trashed book, and an unrelated one. Every listable book's AuthorID
+// is credited, so a reconcile trusts the index; the trashed book's AuthorID is
+// not, and must not hold trust (no listing returns it).
 type abBatmanFixture struct {
-	author                                                       int
-	legacy, coAuthored, nonPrimary, trashed, unrelated, otherCol string
+	author, other                                                  int
+	credited, coAuthored, nonPrimary, trashed, unrelated, otherCol string
 }
 
 func buildABBatmanFixture(t *testing.T, p *PebbleStore) abBatmanFixture {
@@ -255,9 +264,12 @@ func buildABBatmanFixture(t *testing.T, p *PebbleStore) abBatmanFixture {
 	var fx abBatmanFixture
 	fx.author = abMakeAuthor(t, p, "Bruce Wayne")
 	other := abMakeAuthor(t, p, "Alfred Pennyworth")
+	fx.other = other
 	yes, no := true, false
 
-	fx.legacy = abMakeBook(t, p, "Batman Year One", fx.author).ID
+	cr := abMakeBook(t, p, "Batman Year One", fx.author)
+	require.NoError(t, p.SetBookAuthors(cr.ID, abCredits(cr.ID, fx.author)))
+	fx.credited = cr.ID
 
 	co := abMakeBook(t, p, "The Long Halloween", other)
 	require.NoError(t, p.SetBookAuthors(co.ID, abCredits(co.ID, other, fx.author)))
@@ -276,7 +288,9 @@ func buildABBatmanFixture(t *testing.T, p *PebbleStore) abBatmanFixture {
 	require.NoError(t, err)
 	fx.trashed = tr.ID
 
-	fx.unrelated = abMakeBook(t, p, "A Death in the Family", other).ID
+	un := abMakeBook(t, p, "A Death in the Family", other)
+	require.NoError(t, p.SetBookAuthors(un.ID, abCredits(un.ID, other)))
+	fx.unrelated = un.ID
 	fx.otherCol = fx.unrelated
 	return fx
 }
@@ -298,7 +312,7 @@ func TestGetBooksByAuthorIDCore_IndexedPebbleMatchesMemdb(t *testing.T) {
 	defer func() { p.UseMemDB = true }()
 	trusted, err := p.AuthorBooksIndexTrusted()
 	require.NoError(t, err)
-	require.False(t, trusted, "precondition: sentinel absent, so this is the scan path")
+	require.False(t, trusted, "precondition: no reconcile in this process, so this is the scan path")
 	scanBooks, err := p.GetBooksByAuthorIDCore(fx.author)
 	require.NoError(t, err)
 
@@ -311,7 +325,7 @@ func TestGetBooksByAuthorIDCore_IndexedPebbleMatchesMemdb(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, indexed, len(idxBooks))
 
-	want := []string{fx.legacy, fx.coAuthored}
+	want := []string{fx.credited, fx.coAuthored}
 	sort.Strings(want)
 	require.Equal(t, want, abIDs(memBooks), "memdb")
 	require.Equal(t, want, abIDs(scanBooks), "scan fallback")
@@ -342,38 +356,34 @@ func TestGetBooksByAuthorIDCore_IndexedPathDoesNotScanTheLibrary(t *testing.T) {
 	defer func() { p.UseMemDB = true }()
 	got, err := p.GetBooksByAuthorIDCore(fx.author)
 	require.NoError(t, err)
-	require.ElementsMatch(t, []string{fx.legacy, fx.coAuthored}, abIDs(got))
+	require.ElementsMatch(t, []string{fx.credited, fx.coAuthored}, abIDs(got))
 }
 
-// TestGetBooksByAuthorIDCore_UntrustedIndexKeepsScanning: without the sentinel
-// the reader must not use a partial index.
+// TestGetBooksByAuthorIDCore_UntrustedIndexKeepsScanning: before this
+// process's reconcile the reader must not use a partial index.
 func TestGetBooksByAuthorIDCore_UntrustedIndexKeepsScanning(t *testing.T) {
 	p := newAuthorBooksPebble(t)
 	fx := buildABBatmanFixture(t, p)
 	// Wipe the index so an index read would return nothing.
-	for _, prefix := range []string{authorBooksPrefix, authorBooksLegacyPrefix} {
-		require.NoError(t, p.db.DeleteRange([]byte(prefix), prefixEnd([]byte(prefix)), pebble.Sync))
-	}
+	require.NoError(t, p.db.DeleteRange([]byte(authorBooksPrefix), prefixEnd([]byte(authorBooksPrefix)), pebble.Sync))
 	p.UseMemDB = false
 	defer func() { p.UseMemDB = true }()
 	got, err := p.GetBooksByAuthorIDCore(fx.author)
 	require.NoError(t, err)
-	require.ElementsMatch(t, []string{fx.legacy, fx.coAuthored}, abIDs(got))
+	require.ElementsMatch(t, []string{fx.credited, fx.coAuthored}, abIDs(got))
 }
 
 // TestReconcileAuthorBooksIndex_BuildsFromExistingRows: the backfill builds the
-// index from rows that predate it, is idempotent, repairs a lost key on a later
-// boot, and refuses to set the sentinel over an undecodable credit row.
+// index from rows that predate it, is idempotent, and repairs a lost key on a
+// later boot.
 func TestReconcileAuthorBooksIndex_BuildsFromExistingRows(t *testing.T) {
 	p := newAuthorBooksPebble(t)
 	fx := buildABBatmanFixture(t, p)
 	want := abTruthKeys(t, p)
 	require.NotEmpty(t, want)
 
-	// Rows that predate the index: no keys, no sentinel.
-	for _, prefix := range []string{authorBooksPrefix, authorBooksLegacyPrefix} {
-		require.NoError(t, p.db.DeleteRange([]byte(prefix), prefixEnd([]byte(prefix)), pebble.Sync))
-	}
+	// Rows that predate the index: no keys.
+	require.NoError(t, p.db.DeleteRange([]byte(authorBooksPrefix), prefixEnd([]byte(authorBooksPrefix)), pebble.Sync))
 	require.Empty(t, abIndexKeys(t, p))
 
 	rep, err := p.ReconcileAuthorBooksIndex(context.Background())
@@ -398,7 +408,7 @@ func TestReconcileAuthorBooksIndex_BuildsFromExistingRows(t *testing.T) {
 	require.Equal(t, want, abIndexKeys(t, p))
 }
 
-func TestReconcileAuthorBooksIndex_UndecodableCreditRowHoldsTheSentinel(t *testing.T) {
+func TestReconcileAuthorBooksIndex_UndecodableCreditRowHoldsTrust(t *testing.T) {
 	p := newAuthorBooksPebble(t)
 	fx := buildABBatmanFixture(t, p)
 	require.NoError(t, p.db.Set(bookAuthorsKey(fx.unrelated), []byte("{not json"), pebble.Sync))
@@ -406,37 +416,22 @@ func TestReconcileAuthorBooksIndex_UndecodableCreditRowHoldsTheSentinel(t *testi
 	rep, err := p.ReconcileAuthorBooksIndex(context.Background())
 	require.Error(t, err)
 	require.Equal(t, 1, rep.UnreadableCredits)
+	require.Zero(t, rep.UncoveredBooks, "an undecodable credit row is counted once, by the credit pass")
 	require.False(t, rep.Trusted)
 	trusted, err := p.AuthorBooksIndexTrusted()
 	require.NoError(t, err)
 	require.False(t, trusted)
 }
 
-// withBuildIdentity stands in for a different running build for one test.
-func withBuildIdentity(t *testing.T, id string) {
-	t.Helper()
-	old := authorBooksBuildIdentity
-	authorBooksBuildIdentity = func() string { return id }
-	t.Cleanup(func() { authorBooksBuildIdentity = old })
-}
-
-func abSentinelValue(t *testing.T, p *PebbleStore) (string, bool) {
-	t.Helper()
-	present, recorded, err := readAuthorBooksSentinel(p.db)
-	require.NoError(t, err)
-	return recorded, present
-}
-
-// A sentinel an earlier reconcile left must not survive a reconcile that finds
-// an undecodable credit row: readers have to go back to the fail-closed scan.
-func TestReconcileAuthorBooksIndex_UnreadableCreditDeletesTheSentinel(t *testing.T) {
+// A process that trusted the index stops trusting it when a later reconcile
+// finds an undecodable credit row: readers have to go back to the fail-closed
+// scan. Repairing the row and reconciling again restores trust.
+func TestReconcileAuthorBooksIndex_UnreadableCreditRevokesTrust(t *testing.T) {
 	p := newAuthorBooksPebble(t)
 	fx := buildABBatmanFixture(t, p)
 	rep, err := p.ReconcileAuthorBooksIndex(context.Background())
 	require.NoError(t, err)
 	require.True(t, rep.Trusted)
-	_, present := abSentinelValue(t, p)
-	require.True(t, present, "precondition: a clean reconcile sets the sentinel")
 	_, trusted, err := p.booksByAuthorIDFromIndex(fx.author)
 	require.NoError(t, err)
 	require.True(t, trusted)
@@ -447,9 +442,6 @@ func TestReconcileAuthorBooksIndex_UnreadableCreditDeletesTheSentinel(t *testing
 	require.Equal(t, 1, rep.UnreadableCredits)
 	require.True(t, rep.WasTrusted)
 	require.False(t, rep.Trusted)
-
-	_, present = abSentinelValue(t, p)
-	require.False(t, present, "the sentinel must be deleted, not just left unset")
 	got, err := p.AuthorBooksIndexTrusted()
 	require.NoError(t, err)
 	require.False(t, got)
@@ -457,8 +449,7 @@ func TestReconcileAuthorBooksIndex_UnreadableCreditDeletesTheSentinel(t *testing
 	require.NoError(t, err)
 	require.False(t, trusted, "the reader must be back on the scan")
 
-	// Repairing the row and reconciling again restores trust.
-	require.NoError(t, p.db.Delete(bookAuthorsKey(fx.unrelated), pebble.Sync))
+	require.NoError(t, p.SetBookAuthors(fx.unrelated, abCredits(fx.unrelated, fx.other)))
 	rep, err = p.ReconcileAuthorBooksIndex(context.Background())
 	require.NoError(t, err)
 	require.True(t, rep.Trusted)
@@ -467,81 +458,156 @@ func TestReconcileAuthorBooksIndex_UnreadableCreditDeletesTheSentinel(t *testing
 	require.True(t, trusted)
 }
 
-// A sentinel recorded by another build says nothing about writes made since
-// (the intermediate binary may not have maintained the index). The reader scans
-// until this boot's reconcile completes, then trusts and rewrites the sentinel.
-func TestAuthorBooksIndex_OtherBuildSentinelScansUntilReconcileCompletes(t *testing.T) {
+// TestReconcileAuthorBooksIndex_UncoveredAuthorIDHoldsTrust: the index cannot
+// find a listable book linked only through Book.AuthorID, which the scan and
+// memdb list, so such a book holds trust (both shapes: no credit row, and a
+// credit row naming someone else). Trashed and non-primary uncovered books do
+// not: no listing returns them. Crediting the author restores trust and the
+// index then lists the book.
+func TestReconcileAuthorBooksIndex_UncoveredAuthorIDHoldsTrust(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		credits func(fx abBatmanFixture, id string) []BookAuthor
+	}{
+		{"no credit row", func(abBatmanFixture, string) []BookAuthor { return nil }},
+		{"credit row names another author", func(fx abBatmanFixture, id string) []BookAuthor { return abCredits(id, fx.other) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newAuthorBooksPebble(t)
+			fx := buildABBatmanFixture(t, p)
+			yes, no := true, false
+
+			// Uncovered but not listable: never holds trust.
+			np := abMakeBook(t, p, "Batman: Year Two", fx.author)
+			np.IsPrimaryVersion = &no
+			_, err := p.UpdateBook(np.ID, np)
+			require.NoError(t, err)
+			tr := abMakeBook(t, p, "Batman: Venom", fx.author)
+			tr.MarkedForDeletion = &yes
+			_, err = p.UpdateBook(tr.ID, tr)
+			require.NoError(t, err)
+			rep, err := p.ReconcileAuthorBooksIndex(context.Background())
+			require.NoError(t, err)
+			require.True(t, rep.Trusted, "trashed and non-primary uncovered books do not hold trust")
+			require.Zero(t, rep.UncoveredBooks)
+
+			// Uncovered and listable: holds trust, and a process that trusted
+			// the index stops.
+			hush := abMakeBook(t, p, "Batman: Hush Returns", fx.author)
+			if c := tc.credits(fx, hush.ID); c != nil {
+				require.NoError(t, p.SetBookAuthors(hush.ID, c))
+			}
+			rep, err = p.ReconcileAuthorBooksIndex(context.Background())
+			require.Error(t, err)
+			require.ErrorContains(t, err, "credits-backfill")
+			require.True(t, rep.WasTrusted)
+			require.False(t, rep.Trusted)
+			require.Equal(t, 1, rep.UncoveredBooks)
+			require.Equal(t, []string{"book:" + hush.ID}, rep.SampleUncovered)
+			_, trusted, err := p.booksByAuthorIDFromIndex(fx.author)
+			require.NoError(t, err)
+			require.False(t, trusted)
+
+			p.UseMemDB = false
+			defer func() { p.UseMemDB = true }()
+			got, err := p.GetBooksByAuthorIDCore(fx.author)
+			require.NoError(t, err)
+			require.Contains(t, abIDs(got), hush.ID, "the scan lists the AuthorID-only book")
+
+			require.NoError(t, p.SetBookAuthors(hush.ID, abCredits(hush.ID, fx.author)))
+			rep, err = p.ReconcileAuthorBooksIndex(context.Background())
+			require.NoError(t, err)
+			require.True(t, rep.Trusted)
+			indexed, trusted, err := p.booksByAuthorIDFromIndex(fx.author)
+			require.NoError(t, err)
+			require.True(t, trusted)
+			require.Contains(t, abIDs(coresOf(indexed)), hush.ID)
+		})
+	}
+}
+
+func coresOf(books []Book) []BookCore {
+	out := make([]BookCore, len(books))
+	for i := range books {
+		out[i] = books[i].Core()
+	}
+	return out
+}
+
+// TestAuthorBooksIndex_FreshProcessScansUntilReconcile: trust is never carried
+// across a restart. Writers outside the store set an AuthorID without a credit,
+// so a check made by an earlier boot says nothing about the writes since; a new
+// process scans until its own reconcile finishes.
+func TestAuthorBooksIndex_FreshProcessScansUntilReconcile(t *testing.T) {
 	p := newAuthorBooksPebble(t)
 	fx := buildABBatmanFixture(t, p)
-	withBuildIdentity(t, "rev-new")
 	_, err := p.ReconcileAuthorBooksIndex(context.Background())
 	require.NoError(t, err)
 
-	// Simulate a restart onto a newer build after a stretch on a binary that
-	// wrote a credit without maintaining the index: the old sentinel is there,
-	// the index key for one book is not.
+	// A restart, and since the last boot a writer set an AuthorID it did not
+	// credit.
 	p.authorBooksVerifiedThisBoot.Store(false)
-	require.NoError(t, p.db.Set([]byte(authorBooksIndexSentinel), []byte("rev-old"), pebble.Sync))
-	missing := authorBooksKey(fx.author, fx.coAuthored)
-	require.NoError(t, p.db.Delete(missing, pebble.Sync))
+	drift := abMakeBook(t, p, "Batman: The Cult", fx.author)
 
 	trusted, err := p.AuthorBooksIndexTrusted()
 	require.NoError(t, err)
-	require.False(t, trusted, "different build, reconcile not finished: not trusted")
+	require.False(t, trusted)
 	_, indexUsed, err := p.booksByAuthorIDFromIndex(fx.author)
 	require.NoError(t, err)
-	require.False(t, indexUsed, "the reader must scan, so the missing key cannot hide a book")
-
+	require.False(t, indexUsed, "the reader must scan, so the uncredited book cannot be hidden")
 	p.UseMemDB = false
 	defer func() { p.UseMemDB = true }()
 	got, err := p.GetBooksByAuthorIDCore(fx.author)
 	require.NoError(t, err)
-	require.Contains(t, abIDs(got), fx.coAuthored, "the scan still finds the book the index lost")
+	require.Contains(t, abIDs(got), drift.ID)
 
 	rep, err := p.ReconcileAuthorBooksIndex(context.Background())
-	require.NoError(t, err)
-	require.True(t, rep.Trusted)
-	require.Equal(t, 1, rep.Written, "only the absent key is written")
-	recorded, present := abSentinelValue(t, p)
-	require.True(t, present)
-	require.Equal(t, "rev-new", recorded, "the sentinel carries this build's identity")
-	trusted, err = p.AuthorBooksIndexTrusted()
-	require.NoError(t, err)
-	require.True(t, trusted)
-	_, indexUsed, err = p.booksByAuthorIDFromIndex(fx.author)
-	require.NoError(t, err)
-	require.True(t, indexUsed)
-}
-
-// A restart on the same build keeps trusting the sentinel with no reconcile, so
-// the index still covers the warmup window.
-func TestAuthorBooksIndex_SameBuildSentinelTrustedImmediately(t *testing.T) {
-	p := newAuthorBooksPebble(t)
-	fx := buildABBatmanFixture(t, p)
-	withBuildIdentity(t, "rev-same")
-	_, err := p.ReconcileAuthorBooksIndex(context.Background())
-	require.NoError(t, err)
-
-	p.authorBooksVerifiedThisBoot.Store(false) // a fresh process
-	trusted, err := p.AuthorBooksIndexTrusted()
-	require.NoError(t, err)
-	require.True(t, trusted)
-	_, indexUsed, err := p.booksByAuthorIDFromIndex(fx.author)
-	require.NoError(t, err)
-	require.True(t, indexUsed)
-
-	// A sentinel with no identity ("1": written by a build without VCS
-	// stamping) does not match a stamped running build.
-	require.NoError(t, p.db.Set([]byte(authorBooksIndexSentinel), []byte("1"), pebble.Sync))
+	require.Error(t, err)
+	require.False(t, rep.WasTrusted)
+	require.Equal(t, 1, rep.UncoveredBooks)
 	trusted, err = p.AuthorBooksIndexTrusted()
 	require.NoError(t, err)
 	require.False(t, trusted)
+}
 
-	// An unstamped running build (go test, no VCS info) trusts any sentinel.
-	withBuildIdentity(t, "")
-	trusted, err = p.AuthorBooksIndexTrusted()
+// TestReconcileAuthorBooksIndex_DeletesTheV1Sentinel: a build before F5-18j
+// trusted its own v1 sentinel without a reconcile. Once this build has run the
+// legacy family is no longer maintained, so the sentinel must go: a rolled-back
+// binary then scans until its boot reconcile has rebuilt the family. The
+// delete happens even when the run does not trust the index.
+func TestReconcileAuthorBooksIndex_DeletesTheV1Sentinel(t *testing.T) {
+	for _, clean := range []bool{true, false} {
+		t.Run(fmt.Sprintf("clean=%t", clean), func(t *testing.T) {
+			p := newAuthorBooksPebble(t)
+			fx := buildABBatmanFixture(t, p)
+			if !clean {
+				abMakeBook(t, p, "Batman: The Black Mirror", fx.author)
+			}
+			require.NoError(t, p.db.Set([]byte(authorBooksIndexSentinelV1), []byte("rev-old"), pebble.Sync))
+			rep, err := p.ReconcileAuthorBooksIndex(context.Background())
+			require.Equal(t, clean, err == nil)
+			require.Equal(t, clean, rep.Trusted)
+			_, closer, err := p.db.Get([]byte(authorBooksIndexSentinelV1))
+			if err == nil {
+				closer.Close()
+			}
+			require.ErrorIs(t, err, pebble.ErrNotFound, "the v1 sentinel must be deleted")
+		})
+	}
+}
+
+// TestReconcileAuthorBooksIndex_WritesNoLegacyRow: the reconcile used to
+// rebuild the Book.AuthorID family on every boot. It reads the book rows now
+// only to check coverage, and leaves rows an older build wrote alone (the
+// retirement op deletes them).
+func TestReconcileAuthorBooksIndex_WritesNoLegacyRow(t *testing.T) {
+	p := newAuthorBooksPebble(t)
+	fx := buildABBatmanFixture(t, p)
+	old := abLegacyKey(fx.author, fx.trashed)
+	require.NoError(t, p.db.Set(old, []byte{}, pebble.Sync))
+	_, err := p.ReconcileAuthorBooksIndex(context.Background())
 	require.NoError(t, err)
-	require.True(t, trusted)
+	require.Equal(t, []string{string(old)}, abLegacyKeys(t, p))
 }
 
 // TestAuthorBooksBounds_AuthorOneNeverLeaksIntoAuthorTen pins the scan range.
@@ -564,9 +630,10 @@ func TestAuthorBooksBounds_AuthorOneNeverLeaksIntoAuthorTen(t *testing.T) {
 	}))
 	require.Equal(t, []string{"BOOK-A", "BOOK:WITH:COLONS"}, got)
 
-	// And the family never reaches the legacy family or the plain author: rows.
+	// And the family never reaches the retired legacy rows (still stored until
+	// the retirement op runs) or the plain author: rows.
 	ll, lu := authorBooksBounds(authorBooksLegacyPrefix, 1)
-	require.NoError(t, p.db.Set(authorBooksLegacyKey(1, "BOOK-E"), []byte{}, pebble.Sync))
+	require.NoError(t, p.db.Set(abLegacyKey(1, "BOOK-E"), []byte{}, pebble.Sync))
 	got = nil
 	require.NoError(t, forEachKeyInRange(p.db, lower, upper, func(k, _ []byte) error {
 		got = append(got, string(k))
@@ -601,11 +668,13 @@ func TestGetBooksByAuthorIDCore_AuthorOneDoesNotSeeAuthorTen(t *testing.T) {
 	require.NotZero(t, one, "author id 1 must exist")
 	require.NotZero(t, ten, "author id 10 must exist")
 	b1 := abMakeBook(t, p, "Batman Incorporated", one)
+	require.NoError(t, p.SetBookAuthors(b1.ID, abCredits(b1.ID, one)))
 	b10 := abMakeBook(t, p, "Batman Eternal", ten)
 	require.NoError(t, p.SetBookAuthors(b10.ID, abCredits(b10.ID, ten)))
 
-	_, err := p.ReconcileAuthorBooksIndex(context.Background())
+	rep, err := p.ReconcileAuthorBooksIndex(context.Background())
 	require.NoError(t, err)
+	require.True(t, rep.Trusted, "the index path is the one under test")
 	p.UseMemDB = false
 	defer func() { p.UseMemDB = true }()
 	got, err := p.GetBooksByAuthorIDCore(one)

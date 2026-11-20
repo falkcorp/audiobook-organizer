@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
-	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -33,27 +32,28 @@ var authorBooksIndexLog = logger.New("database.author-books-index")
 // after every start; before this index that window paid two full-library
 // unmarshal passes per request (TODO.md SQ-02).
 //
-// Two key families, one per SOURCE of the link. A book is linked to an author
-// when the author is in its book_authors:<bookID> credit row (any role or
-// position) OR is its legacy Book.AuthorID. Those two are written under
-// different locks: the credit writers hold the book_authors stripe and cannot
-// take the book stripe (order book -> owner -> book_authors), while UpdateBook
-// holds the book stripe and not the credit stripe. With ONE shared key a credit
-// writer that read the old AuthorID could delete a key an UpdateBook had just
-// set for the same pair, leaving a linked book with no key. Splitting by source
-// gives each key exactly one writer family, so neither ever deletes the other's:
+// ONE key family, from ONE source: the book_authors:<bookID> credit row (any
+// role or position). The credit list is the only author source the index
+// holds.
 //
-//	author_books:<authorID>:<bookID>         credit rows. Writers: SetBookAuthors /
-//	                                         ModifyBookAuthors, ModifyBookCredits,
-//	                                         DeleteBook, DeleteAuthor's sweep.
-//	author_books_legacy:<authorID>:<bookID>  Book.AuthorID. Writers: CreateBook,
-//	                                         UpdateBook (and its variants), DeleteBook.
+//	author_books:<authorID>:<bookID>  credit rows. Writers: SetBookAuthors /
+//	                                  ModifyBookAuthors, ModifyBookCredits,
+//	                                  DeleteBook, DeleteAuthor's sweep.
 //
-// Both hold an empty value and are staged in the SAME batch as the row they
-// derive from. Both cover trashed and non-primary books too (the reader
-// filters), so they stay a pure function of the two sources. The author id is
+// The key holds an empty value and is staged in the SAME batch as the credit row
+// it derives from. It covers trashed and non-primary books too (the reader
+// filters), so it stays a pure function of the credit rows. The author id is
 // decimal, so <authorID>: terminates the id and author 1's range
 // [author_books:1:, author_books:1;) cannot contain author 10's keys.
+//
+// RETIRED FAMILY (F5-18j, 2026-11-19). Until then a second family,
+// author_books_legacy:<authorID>:<bookID>, carried the legacy Book.AuthorID,
+// staged by CreateBook, UpdateBook and ModifyBook on every write that had an
+// AuthorID. That made every book-row write an `authors` write, so every kind
+// reaching ModifyBook had to declare `authors` (internal/maintenance/resources).
+// Nothing stages or reads that family any more. The rows already stored are
+// inert and maintenance.author-books-legacy-retire deletes them
+// (pebble_store_author_books_legacy_retire.go).
 //
 // READ CONTRACT. A missing key hides a linked book; an extra key is harmless.
 // The reader therefore point-verifies every candidate (row exists and decodes,
@@ -61,24 +61,41 @@ var authorBooksIndexLog = logger.New("database.author-books-index")
 // scan applied), so only a missing key can be wrong. Writers set their keys
 // unconditionally on every write (a self-heal, like book:versiongroup:).
 //
-// TRUST. Until authorBooksIndexSentinel exists the reader keeps the two-scan
-// path unchanged. ReconcileAuthorBooksIndex builds the index, then sets the
-// sentinel only when every credit row decoded; it also runs on EVERY later boot
-// (writing only keys that are absent) because a binary that predates this index
-// writes none, so a rollback followed by a roll-forward would otherwise leave
-// the sentinel set over a short index. See docs/decisions/2026-10-30-author-books-index.md.
+// TRUST. The listing scan (getBooksByAuthorIDFull) still links a book through
+// its Book.AuthorID as well as its credit row, and so do memdb and every merge
+// and relink getter: retiring Book.AuthorID itself is the credit-list plan's PR
+// 4 to 6 (docs/plans/2026-10-04-author-narrator-credit-lists-audit.md). The
+// index cannot discover a book linked ONLY through Book.AuthorID, so it agrees
+// with the scan only while every listable book's AuthorID is also in its credit
+// row. The reader therefore uses the index only after THIS PROCESS's
+// ReconcileAuthorBooksIndex has finished clean: every credit row decoded and
+// every listable book's AuthorID is credited (authorBooksVerifiedThisBoot).
+// A persistent sentinel cannot carry that: writers outside the store still set
+// an AuthorID without a credit, so a check made by an earlier boot says nothing
+// about the writes since. Cost: each boot scans until its reconcile finishes.
+// The window left open is a book written uncredited after this boot's reconcile
+// and before memdb publishes; it is missing from its author's cold listing until
+// memdb (which links Book.AuthorID) takes over. See
+// docs/decisions/2026-10-30-author-books-index.md and seams.d/F5-18j.md.
 //
 // NOT USED by booksByAuthorIDForMutation / GetBooksByAuthorIDForRelinkCore:
 // merges and deletes run exactly when memdb is incomplete and must see every
 // link, so they stay on the authoritative scan rather than a derived index.
 
 const (
-	authorBooksPrefix       = "author_books:"
+	authorBooksPrefix = "author_books:"
+	// authorBooksLegacyPrefix is the retired Book.AuthorID family. Only the
+	// retirement op names it: it counts and deletes the rows older builds left.
 	authorBooksLegacyPrefix = "author_books_legacy:"
 
-	// authorBooksIndexSentinel is set once a full build has written every key.
-	// Bump the version to force readers back to the scan and a rebuild.
-	authorBooksIndexSentinel = "system:backfill:author_books_index_v1_done"
+	// authorBooksIndexSentinelV1 is the sentinel builds before F5-18j set once
+	// both families were complete, and trusted without a reconcile whenever it
+	// carried their own build identity. Reconcile deletes it: after this build
+	// has run, the legacy family is no longer maintained, and a rolled-back
+	// binary that found its own sentinel would answer from a legacy family that
+	// misses every book written since. Without it the old build scans until its
+	// own boot reconcile has rewritten every absent key from Book.AuthorID.
+	authorBooksIndexSentinelV1 = "system:backfill:author_books_index_v1_done"
 
 	authorBooksBatchRows  = 512
 	authorBooksProgressEv = 50_000
@@ -88,11 +105,6 @@ const (
 // authorBooksKey is the credit-row key for (authorID, bookID).
 func authorBooksKey(authorID int, bookID string) []byte {
 	return []byte(authorBooksPrefix + strconv.Itoa(authorID) + ":" + bookID)
-}
-
-// authorBooksLegacyKey is the Book.AuthorID key for (authorID, bookID).
-func authorBooksLegacyKey(authorID int, bookID string) []byte {
-	return []byte(authorBooksLegacyPrefix + strconv.Itoa(authorID) + ":" + bookID)
 }
 
 // authorBooksBounds is the scan range holding exactly one author's keys of one
@@ -151,30 +163,13 @@ func stageAuthorBooksCreditDiff(batch *GatedBatch, bookID string, oldIDs []int, 
 	return nil
 }
 
-// stageAuthorBooksLegacy stages the Book.AuthorID key moving from old to new.
-// The Set is unconditional (self-heal); the Delete only when the id changed.
-func stageAuthorBooksLegacy(batch *GatedBatch, bookID string, old, cur *int) error {
-	if old != nil && (cur == nil || *old != *cur) {
-		if err := batch.Delete(authorBooksLegacyKey(*old, bookID), nil); err != nil {
-			return err
-		}
-	}
-	if cur != nil {
-		return batch.Set(authorBooksLegacyKey(*cur, bookID), []byte{}, nil)
-	}
-	return nil
-}
-
 // stageAuthorBooksDelete stages the removal of every key a book owns, given
-// the credit row it is leaving (ids, ok as decodeCreditAuthorIDs) and its AuthorID.
-func stageAuthorBooksDelete(batch *GatedBatch, bookID string, creditIDs []int, authorID *int) error {
+// the author ids of the credit row it is leaving (as decodeCreditAuthorIDs).
+func stageAuthorBooksDelete(batch *GatedBatch, bookID string, creditIDs []int) error {
 	for _, id := range creditIDs {
 		if err := batch.Delete(authorBooksKey(id, bookID), nil); err != nil {
 			return err
 		}
-	}
-	if authorID != nil {
-		return batch.Delete(authorBooksLegacyKey(*authorID, bookID), nil)
 	}
 	return nil
 }
@@ -195,126 +190,56 @@ func readCreditAuthorIDs(r gatedReader, bookID string) (ids []int, found, ok boo
 	return ids, true, ok, nil
 }
 
-// authorBooksBuildIdentity names the running build. It is a variable so tests
-// can stand in for a different build. The VCS revision (with a "+dirty" mark)
-// when the binary carries one; empty under `go test` and for any build without
-// VCS stamping, which counts as "equal to any recorded identity".
-var authorBooksBuildIdentity = func() string {
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return ""
-	}
-	rev, dirty := "", ""
-	for _, kv := range info.Settings {
-		switch kv.Key {
-		case "vcs.revision":
-			rev = kv.Value
-		case "vcs.modified":
-			if kv.Value == "true" {
-				dirty = "+dirty"
-			}
-		}
-	}
-	if rev == "" {
-		return ""
-	}
-	return rev + dirty
-}
-
-// readAuthorBooksSentinel reads the sentinel from r: whether it exists and the
-// build identity recorded in its value. A read error other than not-found is
-// returned, never read as "absent".
-func readAuthorBooksSentinel(r gatedReader) (present bool, recorded string, err error) {
-	val, closer, err := r.Get([]byte(authorBooksIndexSentinel))
-	switch {
-	case err == nil:
-		recorded = string(val)
-		closer.Close()
-		return true, recorded, nil
-	case errors.Is(err, pebble.ErrNotFound):
-		return false, "", nil
-	default:
-		return false, "", fmt.Errorf("read %s: %w", authorBooksIndexSentinel, err)
-	}
-}
-
-// authorBooksTrustedAt reports whether readers may use the index as seen by r.
-// Two conditions, both required:
-//
-//  1. the sentinel exists (a clean build or reconcile completed at some point);
-//  2. the build that recorded it is THIS build, or this boot's reconcile has
-//     finished (verifiedThisBoot). A sentinel written by another build says
-//     nothing about writes made since: an intermediate binary may have run
-//     without maintaining the index (a rollback), so until this boot has
-//     written every absent key the reader scans.
-//
-// An empty running identity (tests, unstamped builds) counts as equal. A
-// recorded value that is not an identity ("1", written when there was none) is
-// compared like any other, so it differs from a non-empty running identity.
-//
-// verified is loaded BEFORE r is read: a true flag means the keys were durable
-// before it was set, and the sentinel read is at least as new.
-func (p *PebbleStore) authorBooksTrustedAt(r gatedReader) (bool, error) {
-	verified := p.authorBooksVerifiedThisBoot.Load()
-	present, recorded, err := readAuthorBooksSentinel(r)
-	if err != nil || !present {
-		return false, err
-	}
-	if verified {
-		return true, nil
-	}
-	running := authorBooksBuildIdentity()
-	return running == "" || recorded == running, nil
-}
-
 // AuthorBooksIndexTrusted reports whether readers may use the author -> books
-// index right now (see authorBooksTrustedAt).
+// index right now: this process's ReconcileAuthorBooksIndex has finished clean
+// (see TRUST above). The error is always nil; the signature is the server's
+// authorBooksIndexer capability.
 func (p *PebbleStore) AuthorBooksIndexTrusted() (bool, error) {
-	return p.authorBooksTrustedAt(p.db)
+	return p.authorBooksVerifiedThisBoot.Load(), nil
 }
 
 // booksByAuthorIDFromIndex is getBooksByAuthorIDFull answered from the index.
 // Same listing view as the scan: linked through a credit row or the legacy
 // AuthorID, soft-deleted and non-primary versions excluded, ascending by book
-// id. One snapshot serves the sentinel, both key scans and every point read, so
-// the answer is as of a single instant. trusted is false when the sentinel is
-// absent (the caller then scans).
+// id. One snapshot serves the key scan and every point read, so the answer is
+// as of a single instant. trusted is false until this boot's reconcile has
+// verified the index (the caller then scans).
+//
+// Candidates come from the credit-row keys only. The AuthorID check in the
+// point-verify is the scan's own rule and costs nothing; it never discovers a
+// book, it only keeps one a stale credit key named that the scan would list too.
 //
 // An undecodable book row is skipped, as the scan skips it. An undecodable
 // credit row of a candidate that is not linked through AuthorID is an error
 // naming the row: the candidate claims the link, and the fail-closed rule of
 // bookIDsInAuthorJunction applies unchanged.
 func (p *PebbleStore) booksByAuthorIDFromIndex(authorID int) (books []Book, trusted bool, err error) {
+	// The flag first: it is set only after every key the reconcile wrote was
+	// committed, so a snapshot taken after a true load sees them.
+	if !p.authorBooksVerifiedThisBoot.Load() {
+		return nil, false, nil
+	}
 	snap := p.db.NewSnapshot()
 	defer func() { _ = snap.Close() }()
 
-	// Sentinel first: keys committed before it are visible to the scans below.
-	if trusted, err = p.authorBooksTrustedAt(snap); err != nil || !trusted {
-		return nil, false, err
-	}
-
 	var ids []string
-	for _, prefix := range []string{authorBooksPrefix, authorBooksLegacyPrefix} {
-		lower, upper := authorBooksBounds(prefix, authorID)
-		iter, err := snap.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
-		if err != nil {
-			return nil, true, err
-		}
-		for ok := iter.First(); ok; ok = iter.Next() {
-			// The book id is everything after the author's prefix; it may itself
-			// contain ':', so it is sliced off, never split out.
-			if id := iter.Key()[len(lower):]; len(id) > 0 {
-				ids = append(ids, string(id))
-			}
-		}
-		iterErr := iter.Error()
-		_ = iter.Close()
-		if iterErr != nil {
-			return nil, true, fmt.Errorf("books by author index scan truncated, refusing to answer from a partial list: %w", iterErr)
+	lower, upper := authorBooksBounds(authorBooksPrefix, authorID)
+	iter, err := snap.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
+	if err != nil {
+		return nil, true, err
+	}
+	for ok := iter.First(); ok; ok = iter.Next() {
+		// The book id is everything after the author's prefix; it may itself
+		// contain ':', so it is sliced off, never split out.
+		if id := iter.Key()[len(lower):]; len(id) > 0 {
+			ids = append(ids, string(id))
 		}
 	}
-	slices.Sort(ids)
-	ids = slices.Compact(ids)
+	iterErr := iter.Error()
+	_ = iter.Close()
+	if iterErr != nil {
+		return nil, true, fmt.Errorf("books by author index scan truncated, refusing to answer from a partial list: %w", iterErr)
+	}
 
 	for _, id := range ids {
 		val, closer, err := snap.Get([]byte(bookRowPrefix + id))
@@ -354,25 +279,64 @@ func (p *PebbleStore) booksByAuthorIDFromIndex(authorID int) (books []Book, trus
 	return books, true, nil
 }
 
-// AuthorBooksIndexReport is the outcome of one ReconcileAuthorBooksIndex run.
-type AuthorBooksIndexReport struct {
-	// CreditRows and BookRows are the rows read in each pass.
-	CreditRows int `json:"credit_rows"`
-	BookRows   int `json:"book_rows"`
-	// Checked is the (author, book) pairs found; Written the keys that were
-	// absent and are now written.
-	Checked int `json:"checked"`
-	Written int `json:"written"`
-	// UnreadableCredits is how many book_authors rows did not decode; while any
-	// exist the sentinel is not set. UnreadableBooks is the same for book rows;
-	// they cannot be listed by either path, so they do not hold the sentinel.
-	UnreadableCredits int      `json:"unreadable_credits"`
-	UnreadableBooks   int      `json:"unreadable_books"`
-	SampleUnreadable  []string `json:"sample_unreadable,omitempty"`
-	// WasTrusted is whether the sentinel existed when the run began; Trusted
-	// whether it exists when the run ends.
-	WasTrusted bool `json:"was_trusted"`
-	Trusted    bool `json:"trusted"`
+// authorIDCoverage is how one book row's Book.AuthorID stands against its credit
+// row: the question both the index trust check and the legacy-row retirement
+// ask.
+type authorIDCoverage int
+
+const (
+	// coverageNoAuthorID: the row has no AuthorID, so there is nothing to cover.
+	coverageNoAuthorID authorIDCoverage = iota
+	// coverageCredited: the AuthorID is one of the credit row's authors.
+	coverageCredited
+	// coverageNoCreditRow: the AuthorID is set and the book has no credit row.
+	coverageNoCreditRow
+	// coverageNotInCredits: the credit row exists and does not name the AuthorID.
+	coverageNotInCredits
+	// coverageCreditUndecodable: the credit row exists and does not decode, so
+	// whether it names the AuthorID is unknown.
+	coverageCreditUndecodable
+)
+
+// authorIDCoverageRow is the part of a book row the coverage check reads.
+type authorIDCoverageRow struct {
+	AuthorID          *int  `json:"author_id"`
+	IsPrimaryVersion  *bool `json:"is_primary_version"`
+	MarkedForDeletion *bool `json:"marked_for_deletion"`
+}
+
+// listable reports whether the listing getters (the index reader, the scan and
+// memdb's listing view) can return the book: not soft-deleted, and primary or
+// unversioned.
+func (r authorIDCoverageRow) listable() bool {
+	if markedForDeletionFlag(r.MarkedForDeletion) {
+		return false
+	}
+	return r.IsPrimaryVersion == nil || *r.IsPrimaryVersion
+}
+
+// classifyAuthorIDCoverage reads book id's credit row from r and classifies
+// the row's AuthorID against it. ok is false when value does not decode.
+func classifyAuthorIDCoverage(r gatedReader, id string, value []byte) (row authorIDCoverageRow, class authorIDCoverage, ok bool, err error) {
+	if uerr := json.Unmarshal(value, &row); uerr != nil {
+		return row, coverageNoAuthorID, false, nil
+	}
+	if row.AuthorID == nil {
+		return row, coverageNoAuthorID, true, nil
+	}
+	creditIDs, found, decoded, err := readCreditAuthorIDs(r, id)
+	switch {
+	case err != nil:
+		return row, coverageNoAuthorID, true, err
+	case !found:
+		return row, coverageNoCreditRow, true, nil
+	case !decoded:
+		return row, coverageCreditUndecodable, true, nil
+	case slices.Contains(creditIDs, *row.AuthorID):
+		return row, coverageCredited, true, nil
+	default:
+		return row, coverageNotInCredits, true, nil
+	}
 }
 
 // authorBooksRow is one scanned row handed to a worker (key and value copied).
@@ -381,46 +345,146 @@ type authorBooksRow struct {
 	value []byte
 }
 
-// ReconcileAuthorBooksIndex makes sure every link the credit rows and book rows
-// hold has its key, then sets the sentinel if every credit row decoded. It only
-// ever WRITES MISSING KEYS, never a book or credit row and never a delete, so it
-// is safe to run at any time, concurrently with live writers, and repeatedly:
-// a key it writes from a row that changed under it is an extra key, which the
-// reader's point-verify ignores. It is the first-build backfill when the
-// sentinel is absent and the rollback self-heal on every other boot.
+// runAuthorBooksPass drives one row scan through a bounded worker pool
+// (runtime.NumCPU() workers): scan feeds rows in chunks of authorBooksBatchRows,
+// each worker applies handle to every row of a chunk on a fresh batch and
+// commits the batch (Sync) when handle staged anything. The scan is a single
+// sequential iterator; the JSON decode and point reads are what the workers
+// spread over the cores. ctx cancels the pass between rows.
+func (p *PebbleStore) runAuthorBooksPass(ctx context.Context, scan func(emit func(authorBooksRow) error) error, handle func(batch *GatedBatch, r authorBooksRow) error) error {
+	workers := runtime.NumCPU()
+	g, gctx := errgroup.WithContext(ctx)
+	rows := make(chan []authorBooksRow, workers)
+	for range workers {
+		g.Go(func() error {
+			for chunk := range rows {
+				batch := p.db.NewBatch()
+				for _, r := range chunk {
+					if err := gctx.Err(); err != nil {
+						batch.Close()
+						return err
+					}
+					if err := handle(batch, r); err != nil {
+						batch.Close()
+						return err
+					}
+				}
+				var err error
+				if !batch.Empty() {
+					err = batch.Commit(pebble.Sync)
+				}
+				batch.Close()
+				if err != nil {
+					return fmt.Errorf("commit author-books batch: %w", err)
+				}
+			}
+			return nil
+		})
+	}
+	g.Go(func() error {
+		defer close(rows)
+		var chunk []authorBooksRow
+		send := func() error {
+			if len(chunk) == 0 {
+				return nil
+			}
+			select {
+			case rows <- chunk:
+				chunk = nil
+				return nil
+			case <-gctx.Done():
+				return gctx.Err()
+			}
+		}
+		if err := scan(func(r authorBooksRow) error {
+			chunk = append(chunk, r)
+			if len(chunk) >= authorBooksBatchRows {
+				return send()
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		return send()
+	})
+	return g.Wait()
+}
+
+// AuthorBooksIndexReport is the outcome of one ReconcileAuthorBooksIndex run.
+type AuthorBooksIndexReport struct {
+	// CreditRows and BookRows are the rows read in each pass.
+	CreditRows int `json:"credit_rows"`
+	BookRows   int `json:"book_rows"`
+	// Checked is the (author, book) credit pairs found; Written the keys that
+	// were absent and are now written.
+	Checked int `json:"checked"`
+	Written int `json:"written"`
+	// UnreadableCredits is how many book_authors rows did not decode; while any
+	// exist the index is not trusted. UnreadableBooks is the same for book rows;
+	// they cannot be listed by either path, so they do not hold trust.
+	UnreadableCredits int      `json:"unreadable_credits"`
+	UnreadableBooks   int      `json:"unreadable_books"`
+	SampleUnreadable  []string `json:"sample_unreadable,omitempty"`
+	// UncoveredBooks is how many listable books (live, primary or unversioned)
+	// carry a Book.AuthorID their credit row does not name. The index cannot
+	// find them under that author while the scan and memdb can, so while any
+	// exist the index is not trusted. maintenance.credits-backfill writes the
+	// missing credits; maintenance.credit-census lists them by class.
+	UncoveredBooks  int      `json:"uncovered_books"`
+	SampleUncovered []string `json:"sample_uncovered,omitempty"`
+	// WasTrusted is whether this process trusted the index when the run began;
+	// Trusted whether it does when the run ends.
+	WasTrusted bool `json:"was_trusted"`
+	Trusted    bool `json:"trusted"`
+}
+
+// ReconcileAuthorBooksIndex makes sure every link the credit rows hold has its
+// key, checks that every listable book's Book.AuthorID is credited, and opens
+// the reader's gate for this process only when both hold (see TRUST). It only
+// ever WRITES MISSING KEYS, never a book or credit row and never an index
+// delete, so it is safe to run at any time, concurrently with live writers, and
+// repeatedly: a key it writes from a row that changed under it is an extra key,
+// which the reader's point-verify ignores. It is the first-build backfill and
+// the per-boot verification at once.
 //
-// The two row scans are sequential iterators feeding bounded worker pools
+// It also deletes the pre-F5-18j sentinel (authorBooksIndexSentinelV1), so a
+// rolled-back binary scans until its own reconcile has rebuilt the legacy family.
+//
+// Both row scans are sequential iterators feeding bounded worker pools
 // (runtime.NumCPU()), so the JSON decode and the point reads are spread over
 // the cores. A key is a pure function of (author, book), so workers can never
 // write conflicting values. Every exit path logs.
 func (p *PebbleStore) ReconcileAuthorBooksIndex(ctx context.Context) (AuthorBooksIndexReport, error) {
 	start := time.Now()
 	var rep AuthorBooksIndexReport
-	present, recorded, err := readAuthorBooksSentinel(p.db)
-	if err != nil {
-		authorBooksIndexLog.Error("author-books-index: cannot read sentinel, aborting: err=%s", logger.SanitizeLogValue(err.Error()))
+	rep.WasTrusted = p.authorBooksVerifiedThisBoot.Load()
+	authorBooksIndexLog.Info("author-books-index: starting: was_trusted=%t", rep.WasTrusted)
+
+	if err := p.dropAuthorBooksSentinelV1(); err != nil {
+		authorBooksIndexLog.Error("author-books-index: cannot remove the v1 sentinel, aborting: err=%s", logger.SanitizeLogValue(err.Error()))
+		p.authorBooksVerifiedThisBoot.Store(false)
 		return rep, err
 	}
-	trusted, err := p.AuthorBooksIndexTrusted()
-	if err != nil {
-		return rep, err
-	}
-	rep.WasTrusted = trusted
-	authorBooksIndexLog.Info("author-books-index: starting: sentinel=%s present=%t was_trusted=%t",
-		authorBooksIndexSentinel, present, trusted)
 
 	var (
 		checked, written, creditRows, bookRows atomic.Int64
 		unreadableCredits, unreadableBooks     atomic.Int64
+		uncovered                              atomic.Int64
 		mu                                     sync.Mutex
-		samples                                []string
+		samples, uncoveredSamples              []string
 	)
-	note := func(s string) {
+	note := func(dst *[]string, s string) {
 		mu.Lock()
-		if len(samples) < authorBooksSampleCap {
-			samples = append(samples, s)
+		if len(*dst) < authorBooksSampleCap {
+			*dst = append(*dst, s)
 		}
 		mu.Unlock()
+	}
+	fail := func(pass string, err error) (AuthorBooksIndexReport, error) {
+		p.authorBooksVerifiedThisBoot.Store(false)
+		authorBooksIndexLog.Error("author-books-index: pass failed: pass=%q credit_rows=%d book_rows=%d err=%s",
+			pass, creditRows.Load(), bookRows.Load(), logger.SanitizeLogValue(err.Error()))
+		return rep, err
 	}
 
 	// ensure writes key unless it exists. The Get avoids rewriting (and
@@ -439,71 +503,8 @@ func (p *PebbleStore) ReconcileAuthorBooksIndex(ctx context.Context) (AuthorBook
 		return batch.Set(key, []byte{}, nil)
 	}
 
-	// runPass drives one scan: scan feeds rows into the channel, workers apply
-	// handle to each and commit their batch every authorBooksBatchRows rows.
-	runPass := func(name string, scan func(emit func(authorBooksRow) error) error, handle func(batch *GatedBatch, r authorBooksRow) error) error {
-		workers := runtime.NumCPU()
-		g, gctx := errgroup.WithContext(ctx)
-		rows := make(chan []authorBooksRow, workers)
-		for range workers {
-			g.Go(func() error {
-				for chunk := range rows {
-					batch := p.db.NewBatch()
-					for _, r := range chunk {
-						if err := gctx.Err(); err != nil {
-							batch.Close()
-							return err
-						}
-						if err := handle(batch, r); err != nil {
-							batch.Close()
-							return err
-						}
-					}
-					err := batch.Commit(pebble.Sync)
-					batch.Close()
-					if err != nil {
-						return fmt.Errorf("write author-books index keys: %w", err)
-					}
-				}
-				return nil
-			})
-		}
-		g.Go(func() error {
-			defer close(rows)
-			var chunk []authorBooksRow
-			send := func() error {
-				if len(chunk) == 0 {
-					return nil
-				}
-				select {
-				case rows <- chunk:
-					chunk = nil
-					return nil
-				case <-gctx.Done():
-					return gctx.Err()
-				}
-			}
-			if err := scan(func(r authorBooksRow) error {
-				chunk = append(chunk, r)
-				if len(chunk) >= authorBooksBatchRows {
-					return send()
-				}
-				return nil
-			}); err != nil {
-				return err
-			}
-			return send()
-		})
-		if err := g.Wait(); err != nil {
-			authorBooksIndexLog.Error("author-books-index: pass failed: pass=%q credit_rows=%d book_rows=%d err=%s",
-				name, creditRows.Load(), bookRows.Load(), logger.SanitizeLogValue(err.Error()))
-			return err
-		}
-		return nil
-	}
-
 	creditPrefix := []byte("book_authors:")
-	if err := runPass("credit rows", func(emit func(authorBooksRow) error) error {
+	if err := p.runAuthorBooksPass(ctx, func(emit func(authorBooksRow) error) error {
 		return forEachKeyInRange(p.db, creditPrefix, prefixEnd(creditPrefix), func(key, value []byte) error {
 			if n := creditRows.Add(1); n%authorBooksProgressEv == 0 {
 				authorBooksIndexLog.Info("author-books-index: progress: pass=credit-rows scanned=%d elapsed=%s",
@@ -515,7 +516,7 @@ func (p *PebbleStore) ReconcileAuthorBooksIndex(ctx context.Context) (AuthorBook
 		ids, ok := decodeCreditAuthorIDs(r.value)
 		if !ok {
 			unreadableCredits.Add(1)
-			note("book_authors:" + r.id)
+			note(&samples, "book_authors:"+r.id)
 			return nil
 		}
 		for _, id := range ids {
@@ -525,10 +526,13 @@ func (p *PebbleStore) ReconcileAuthorBooksIndex(ctx context.Context) (AuthorBook
 		}
 		return nil
 	}); err != nil {
-		return rep, err
+		return fail("credit rows", err)
 	}
 
-	if err := runPass("book rows", func(emit func(authorBooksRow) error) error {
+	// The coverage pass: a listable book whose AuthorID its credit row does not
+	// name is one the index cannot find under that author. An undecodable
+	// credit row is already counted by the credit pass.
+	if err := p.runAuthorBooksPass(ctx, func(emit func(authorBooksRow) error) error {
 		return forEachBookRow(p.db, func(id string, value []byte) error {
 			if n := bookRows.Add(1); n%authorBooksProgressEv == 0 {
 				authorBooksIndexLog.Info("author-books-index: progress: pass=book-rows scanned=%d elapsed=%s",
@@ -536,70 +540,68 @@ func (p *PebbleStore) ReconcileAuthorBooksIndex(ctx context.Context) (AuthorBook
 			}
 			return emit(authorBooksRow{id: id, value: append([]byte(nil), value...)})
 		})
-	}, func(batch *GatedBatch, r authorBooksRow) error {
-		var row struct {
-			AuthorID *int `json:"author_id"`
+	}, func(_ *GatedBatch, r authorBooksRow) error {
+		row, class, ok, err := classifyAuthorIDCoverage(p.db, r.id, r.value)
+		if err != nil {
+			return err
 		}
-		if err := json.Unmarshal(r.value, &row); err != nil {
+		if !ok {
 			unreadableBooks.Add(1)
 			return nil
 		}
-		if row.AuthorID == nil {
-			return nil
+		if (class == coverageNoCreditRow || class == coverageNotInCredits) && row.listable() {
+			uncovered.Add(1)
+			note(&uncoveredSamples, "book:"+r.id)
 		}
-		return ensure(batch, authorBooksLegacyKey(*row.AuthorID, r.id))
+		return nil
 	}); err != nil {
-		return rep, err
+		return fail("book rows", err)
 	}
 
 	rep.CreditRows, rep.BookRows = int(creditRows.Load()), int(bookRows.Load())
 	rep.Checked, rep.Written = int(checked.Load()), int(written.Load())
 	rep.UnreadableCredits, rep.UnreadableBooks = int(unreadableCredits.Load()), int(unreadableBooks.Load())
 	rep.SampleUnreadable = samples
+	rep.UncoveredBooks, rep.SampleUncovered = int(uncovered.Load()), uncoveredSamples
 
-	// Every key is durable (each chunk committed with Sync).
-	if rep.UnreadableCredits > 0 {
-		// An undecodable credit row hides its authors from the index, so the
-		// index is not complete for this library. Fail closed: remove a
-		// sentinel an earlier run left, so readers go back to the scan (which
-		// fails closed naming the row) until a clean reconcile, rather than
-		// keep trusting a sentinel this run just disproved.
-		p.authorBooksVerifiedThisBoot.Store(false)
-		if present {
-			if err := p.db.Delete([]byte(authorBooksIndexSentinel), pebble.Sync); err != nil {
-				authorBooksIndexLog.Error("author-books-index: cannot remove the sentinel: err=%s", logger.SanitizeLogValue(err.Error()))
-				return rep, fmt.Errorf("delete %s: %w", authorBooksIndexSentinel, err)
-			}
-		}
-		rep.Trusted = false
-	} else {
-		// Clean: record this build's identity (rewriting a sentinel another
-		// build left) and only then open the gate for this boot.
-		identity := authorBooksBuildIdentity()
-		value := identity
-		if value == "" {
-			value = "1"
-		}
-		if !present || (identity != "" && recorded != identity) {
-			if err := p.db.Set([]byte(authorBooksIndexSentinel), []byte(value), pebble.Sync); err != nil {
-				authorBooksIndexLog.Error("author-books-index: sentinel commit failed: err=%s", logger.SanitizeLogValue(err.Error()))
-				return rep, fmt.Errorf("set %s: %w", authorBooksIndexSentinel, err)
-			}
-		}
-		p.authorBooksVerifiedThisBoot.Store(true)
-		rep.Trusted = true
-	}
-	summary := fmt.Sprintf("author-books-index: complete: credit_rows=%d book_rows=%d checked=%d written=%d unreadable_credits=%d unreadable_books=%d sample_unreadable=%q was_trusted=%t trusted=%t duration=%s",
+	// Every key is durable (each chunk committed with Sync), so the gate may
+	// open now if nothing disproved the index.
+	rep.Trusted = rep.UnreadableCredits == 0 && rep.UncoveredBooks == 0
+	p.authorBooksVerifiedThisBoot.Store(rep.Trusted)
+
+	summary := fmt.Sprintf("author-books-index: complete: credit_rows=%d book_rows=%d checked=%d written=%d unreadable_credits=%d unreadable_books=%d sample_unreadable=%q uncovered_books=%d sample_uncovered=%q was_trusted=%t trusted=%t duration=%s",
 		rep.CreditRows, rep.BookRows, rep.Checked, rep.Written, rep.UnreadableCredits, rep.UnreadableBooks,
-		logger.SanitizeLogValue(strings.Join(rep.SampleUnreadable, ",")), rep.WasTrusted, rep.Trusted,
+		logger.SanitizeLogValue(strings.Join(rep.SampleUnreadable, ",")), rep.UncoveredBooks,
+		logger.SanitizeLogValue(strings.Join(rep.SampleUncovered, ",")), rep.WasTrusted, rep.Trusted,
 		time.Since(start).Round(time.Millisecond))
-	if rep.UnreadableCredits > 0 {
+	switch {
+	case rep.UnreadableCredits > 0:
 		authorBooksIndexLog.Error("%s", summary)
-	} else {
-		authorBooksIndexLog.Info("%s", summary)
-	}
-	if rep.UnreadableCredits > 0 {
 		return rep, fmt.Errorf("author-books index not trusted: %d book_authors row(s) do not decode (sample %v)", rep.UnreadableCredits, rep.SampleUnreadable)
+	case rep.UncoveredBooks > 0:
+		authorBooksIndexLog.Warn("%s", summary)
+		return rep, fmt.Errorf("author-books index not trusted: %d listable book(s) carry an AuthorID their credit row does not name (sample %v); maintenance.credits-backfill writes the missing credits", rep.UncoveredBooks, rep.SampleUncovered)
+	default:
+		authorBooksIndexLog.Info("%s", summary)
+		return rep, nil
 	}
-	return rep, nil
+}
+
+// dropAuthorBooksSentinelV1 deletes the pre-F5-18j sentinel if it exists (see
+// authorBooksIndexSentinelV1). A read error other than not-found is returned.
+func (p *PebbleStore) dropAuthorBooksSentinelV1() error {
+	key := []byte(authorBooksIndexSentinelV1)
+	_, closer, err := p.db.Get(key)
+	switch {
+	case errors.Is(err, pebble.ErrNotFound):
+		return nil
+	case err != nil:
+		return fmt.Errorf("read %s: %w", authorBooksIndexSentinelV1, err)
+	}
+	closer.Close()
+	if err := p.db.Delete(key, pebble.Sync); err != nil {
+		return fmt.Errorf("delete %s: %w", authorBooksIndexSentinelV1, err)
+	}
+	authorBooksIndexLog.Info("author-books-index: removed the v1 sentinel %s (the legacy family is retired)", authorBooksIndexSentinelV1)
+	return nil
 }
