@@ -195,9 +195,21 @@ func (p *PebbleStore) ModifyBookCredits(bookID string, fn func(book *Book, credi
 		// held that newAuthors drops are exactly the keys deleted.
 		return stageAuthorBooksCreditDiff(b, bookID, bookAuthorIDsOf(authors), true, bookAuthorIDsOf(newAuthors))
 	}
-	updated, err := p.updateBookLockedMode(bookID, fresh, bookWriteOpts{stage: stage, authorAsGiven: true})
+	// A dropped author can uncover the book: revoke the index's trust before
+	// and after the commit (pebble_store_author_books_trust.go, ORDERING). The
+	// AuthorID side is checked by updateBookLockedMode against the credit row
+	// this batch writes (creditIDs), not the stored one it replaces.
+	newIDs := bookAuthorIDsOf(newAuthors)
+	drops := creditRowDropsAnAuthor(bookAuthorIDsOf(authors), true, newIDs)
+	if drops {
+		p.revokeAuthorBooksTrust("credit row drops an author", bookID)
+	}
+	updated, err := p.updateBookLockedMode(bookID, fresh, bookWriteOpts{stage: stage, authorAsGiven: true, creditIDs: newIDs, creditIDsGiven: true})
 	if err != nil {
 		return nil, BookCreditsEdit{}, err
+	}
+	if drops {
+		p.revokeAuthorBooksTrust("credit row drops an author", bookID)
 	}
 	if authorsChanged || narratorsChanged {
 		// The row's own write-through bumped the library generation before

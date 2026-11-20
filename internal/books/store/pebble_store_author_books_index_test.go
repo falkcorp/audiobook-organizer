@@ -491,8 +491,9 @@ func TestReconcileAuthorBooksIndex_UncoveredAuthorIDHoldsTrust(t *testing.T) {
 			require.True(t, rep.Trusted, "trashed and non-primary uncovered books do not hold trust")
 			require.Zero(t, rep.UncoveredBooks)
 
-			// Uncovered and listable: holds trust, and a process that trusted
-			// the index stops.
+			// Uncovered and listable: holds trust. The write that uncovers the
+			// book already revoked it (pebble_store_author_books_trust.go), and
+			// the reconcile does not grant it back.
 			hush := abMakeBook(t, p, "Batman: Hush Returns", fx.author)
 			if c := tc.credits(fx, hush.ID); c != nil {
 				require.NoError(t, p.SetBookAuthors(hush.ID, c))
@@ -500,7 +501,7 @@ func TestReconcileAuthorBooksIndex_UncoveredAuthorIDHoldsTrust(t *testing.T) {
 			rep, err = p.ReconcileAuthorBooksIndex(context.Background())
 			require.Error(t, err)
 			require.ErrorContains(t, err, "credits-backfill")
-			require.True(t, rep.WasTrusted)
+			require.False(t, rep.WasTrusted, "the uncredited create revoked it")
 			require.False(t, rep.Trusted)
 			require.Equal(t, 1, rep.UncoveredBooks)
 			require.Equal(t, []string{"book:" + hush.ID}, rep.SampleUncovered)

@@ -73,9 +73,12 @@ var authorBooksIndexLog = logger.New("database.author-books-index")
 // A persistent sentinel cannot carry that: writers outside the store still set
 // an AuthorID without a credit, so a check made by an earlier boot says nothing
 // about the writes since. Cost: each boot scans until its reconcile finishes.
-// The window left open is a book written uncredited after this boot's reconcile
-// and before memdb publishes; it is missing from its author's cold listing until
-// memdb (which links Book.AuthorID) takes over. See
+// The writes after the reconcile keep the trust in step with the rows, in memory only:
+// a book-row write that gives a listable book an uncredited AuthorID (or makes
+// such a book listable), and a credit write that drops an author, revoke it for
+// the rest of the process, and a reconcile that a revoking write overlapped
+// does not grant it (pebble_store_author_books_trust.go). A memdb warmup that
+// ends unpublished also revokes it for good. See
 // docs/decisions/2026-10-30-author-books-index.md and seams.d/F5-18j.md.
 //
 // NOT USED by booksByAuthorIDForMutation / GetBooksByAuthorIDForRelinkCore:
@@ -214,13 +217,21 @@ func (p *PebbleStore) AuthorBooksIndexTrusted() (bool, error) {
 // naming the row: the candidate claims the link, and the fail-closed rule of
 // bookIDsInAuthorJunction applies unchanged.
 func (p *PebbleStore) booksByAuthorIDFromIndex(authorID int) (books []Book, trusted bool, err error) {
-	// The flag first: it is set only after every key the reconcile wrote was
-	// committed, so a snapshot taken after a true load sees them.
+	// The flag before the snapshot: it is set only after every key the
+	// reconcile wrote was committed, so a snapshot taken after a true load sees
+	// them. And again after it: a write that uncovers a book revokes before it
+	// commits (pebble_store_author_books_trust.go, ORDERING), so a snapshot
+	// holding that commit is followed by a false load and the caller scans.
+	// The answer is the index's as of the snapshot, and the snapshot is one in
+	// which the index was trusted.
 	if !p.authorBooksVerifiedThisBoot.Load() {
 		return nil, false, nil
 	}
 	snap := p.db.NewSnapshot()
 	defer func() { _ = snap.Close() }()
+	if !p.authorBooksVerifiedThisBoot.Load() {
+		return nil, false, nil
+	}
 
 	var ids []string
 	lower, upper := authorBooksBounds(authorBooksPrefix, authorID)
@@ -436,7 +447,16 @@ type AuthorBooksIndexReport struct {
 	// Trusted whether it does when the run ends.
 	WasTrusted bool `json:"was_trusted"`
 	Trusted    bool `json:"trusted"`
+	// RevokedDuringRun is set when the scans found nothing wrong but trust was
+	// still withheld: a write revoked it while they ran, or the memdb warmup
+	// has ended unpublished (pebble_store_author_books_trust.go).
+	RevokedDuringRun bool `json:"revoked_during_run,omitempty"`
 }
+
+// authorBooksBeforeTrustHook, when non-nil, runs in ReconcileAuthorBooksIndex
+// after both scans and before the trust decision. Tests use it to land a write
+// inside the run. Production never sets it.
+var authorBooksBeforeTrustHook func()
 
 // ReconcileAuthorBooksIndex makes sure every link the credit rows hold has its
 // key, checks that every listable book's Book.AuthorID is credited, and opens
@@ -457,6 +477,10 @@ type AuthorBooksIndexReport struct {
 func (p *PebbleStore) ReconcileAuthorBooksIndex(ctx context.Context) (AuthorBooksIndexReport, error) {
 	start := time.Now()
 	var rep AuthorBooksIndexReport
+	// Sampled before either scan opens its iterator: a revoking write whose
+	// commit the scans miss bumps the generation after this read
+	// (pebble_store_author_books_trust.go, ORDERING).
+	gen := p.authorBooksTrustGen.Load()
 	rep.WasTrusted = p.authorBooksVerifiedThisBoot.Load()
 	authorBooksIndexLog.Info("author-books-index: starting: was_trusted=%t", rep.WasTrusted)
 
@@ -565,14 +589,26 @@ func (p *PebbleStore) ReconcileAuthorBooksIndex(ctx context.Context) (AuthorBook
 	rep.UncoveredBooks, rep.SampleUncovered = int(uncovered.Load()), uncoveredSamples
 
 	// Every key is durable (each chunk committed with Sync), so the gate may
-	// open now if nothing disproved the index.
+	// open now if nothing disproved the index: no unreadable credit, no
+	// uncovered book, no revoking write while the scans ran, and a memdb warmup
+	// that has not ended unpublished. The flag is stored first and the
+	// generation and warmup state read after it, so a revocation racing the
+	// Store either is seen here or clears the flag after it (ORDERING).
+	if authorBooksBeforeTrustHook != nil {
+		authorBooksBeforeTrustHook()
+	}
 	rep.Trusted = rep.UnreadableCredits == 0 && rep.UncoveredBooks == 0
 	p.authorBooksVerifiedThisBoot.Store(rep.Trusted)
+	if rep.Trusted && (p.authorBooksTrustGen.Load() != gen || p.memWarmupUnpublished.Load()) {
+		p.authorBooksVerifiedThisBoot.Store(false)
+		rep.Trusted = false
+		rep.RevokedDuringRun = true
+	}
 
-	summary := fmt.Sprintf("author-books-index: complete: credit_rows=%d book_rows=%d checked=%d written=%d unreadable_credits=%d unreadable_books=%d sample_unreadable=%q uncovered_books=%d sample_uncovered=%q was_trusted=%t trusted=%t duration=%s",
+	summary := fmt.Sprintf("author-books-index: complete: credit_rows=%d book_rows=%d checked=%d written=%d unreadable_credits=%d unreadable_books=%d sample_unreadable=%q uncovered_books=%d sample_uncovered=%q was_trusted=%t trusted=%t revoked_during_run=%t duration=%s",
 		rep.CreditRows, rep.BookRows, rep.Checked, rep.Written, rep.UnreadableCredits, rep.UnreadableBooks,
 		logger.SanitizeLogValue(strings.Join(rep.SampleUnreadable, ",")), rep.UncoveredBooks,
-		logger.SanitizeLogValue(strings.Join(rep.SampleUncovered, ",")), rep.WasTrusted, rep.Trusted,
+		logger.SanitizeLogValue(strings.Join(rep.SampleUncovered, ",")), rep.WasTrusted, rep.Trusted, rep.RevokedDuringRun,
 		time.Since(start).Round(time.Millisecond))
 	switch {
 	case rep.UnreadableCredits > 0:
@@ -581,6 +617,12 @@ func (p *PebbleStore) ReconcileAuthorBooksIndex(ctx context.Context) (AuthorBook
 	case rep.UncoveredBooks > 0:
 		authorBooksIndexLog.Warn("%s", summary)
 		return rep, fmt.Errorf("author-books index not trusted: %d listable book(s) carry an AuthorID their credit row does not name (sample %v); maintenance.credits-backfill writes the missing credits", rep.UncoveredBooks, rep.SampleUncovered)
+	case rep.RevokedDuringRun:
+		// Every key is written; only the trust is withheld. Not a failure of
+		// the run, so no error: the listings scan, as they would after any
+		// later revocation.
+		authorBooksIndexLog.Warn("%s", summary)
+		return rep, nil
 	default:
 		authorBooksIndexLog.Info("%s", summary)
 		return rep, nil
