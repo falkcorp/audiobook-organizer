@@ -1111,16 +1111,25 @@ jobs:
       # pull request the first parent of the merge ref, read from the raw
       # commit because the shallow boundary hides it from rev-parse. A push has
       # neither, so the test falls back to origin/main, which is HEAD there.
+      # A workflow_dispatch run (the race=false rehearsal of the merge queue)
+      # on a branch that is behind main has no base of its own either; it
+      # takes the branch's merge base with main from the compare API, so an
+      # exemption main removed after the branch point does not read as one
+      # the branch added (rehearsal run 44793448411 failed exactly that way).
       - name: Fetch the tasklint shrink-only base
         env:
           EVENT_NAME: ${{ github.event_name }}
           MERGE_GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           git fetch --no-tags --depth=1 origin main
           git rev-parse --verify origin/main
           base="$MERGE_GROUP_BASE"
           if [ -z "$base" ] && [ "$EVENT_NAME" = pull_request ]; then
             base=$(git cat-file -p HEAD | awk '/^parent /{print $2; exit}')
+          fi
+          if [ -z "$base" ] && [ "$EVENT_NAME" = workflow_dispatch ]; then
+            base=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" --jq .merge_base_commit.sha)
           fi
           if [ -n "$base" ]; then
             git fetch --no-tags --depth=1 origin "$base"
@@ -1379,16 +1388,25 @@ jobs:
       # pull request the first parent of the merge ref, read from the raw
       # commit because the shallow boundary hides it from rev-parse. A push has
       # neither, so the test falls back to origin/main, which is HEAD there.
+      # A workflow_dispatch run (the race=false rehearsal of the merge queue)
+      # on a branch that is behind main has no base of its own either; it
+      # takes the branch's merge base with main from the compare API, so an
+      # exemption main removed after the branch point does not read as one
+      # the branch added (rehearsal run 44793448411 failed exactly that way).
       - name: Fetch the tasklint shrink-only base
         env:
           EVENT_NAME: ${{ github.event_name }}
           MERGE_GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           git fetch --no-tags --depth=1 origin main
           git rev-parse --verify origin/main
           base="$MERGE_GROUP_BASE"
           if [ -z "$base" ] && [ "$EVENT_NAME" = pull_request ]; then
             base=$(git cat-file -p HEAD | awk '/^parent /{print $2; exit}')
+          fi
+          if [ -z "$base" ] && [ "$EVENT_NAME" = workflow_dispatch ]; then
+            base=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" --jq .merge_base_commit.sha)
           fi
           if [ -n "$base" ]; then
             git fetch --no-tags --depth=1 origin "$base"
