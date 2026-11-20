@@ -487,24 +487,26 @@ func windowsForm(from string) bool {
 }
 
 // pathAliases attaches blob path_aliases to the planned roots. core's Alias has
-// no root of its own: it renders its root's Path (core/library Alias). HEAD's
-// PathAlias.Root is matched as a path prefix, most-specific-first
-// (web/src/utils/pathAliases.ts matchAlias; internal/config PathAlias), so for
-// each root the alias HEAD renders its paths with is the one with the longest
-// Root that is the root's path or an ancestor of it:
+// no root of its own: it renders its root's Path (core/library Alias). HEAD
+// renders a path through the first alias, in list order, whose Root contains it
+// (web/src/utils/pathAliases.ts matchAlias). Its doc asks callers to order the
+// list most specific first, but nothing enforces that: PathLinks passes
+// cfg.path_aliases through as stored and config.SeedPathAliases keeps the
+// mappings' order. So for each root, M6 takes the first alias in list order
+// whose Root is the root's path or an ancestor of it, which is the alias HEAD
+// rendered every path of the root with:
 //
-//   - an alias whose Root is the root's path is attached as is (every such
-//     alias, in list order, as before);
-//   - with none, an alias whose Root is an ancestor is carried by appending the
-//     root's path relative to it, in each form HEAD renders (derivedAlias), so
-//     the root renders as HEAD rendered it. One alias can feed several roots.
+//   - when its Root is the root's path, it is attached as is;
+//   - when its Root is an ancestor, it is carried by appending the root's path
+//     relative to it, in each form HEAD renders (derivedAlias), so the root
+//     renders as HEAD rendered it. One alias can feed several roots.
 //
 // An alias no root takes is quarantined raw, and the reason says its display
-// rendering is not carried: one whose Root is inside a root (HEAD seeds those
-// from an iTunes mapping whose To is below a root: config.SeedPathAliases) has
-// no representation in core's per-root model; one over roots that all have a
-// more specific alias rendered nothing at HEAD that a root reaches; one near no
-// root has no root to render.
+// rendering is not carried. Either its Root is inside a root (HEAD seeds those
+// from an iTunes mapping whose To is below a root: config.SeedPathAliases), and
+// core's per-root model cannot hold it. Or every root at or under its Root
+// matched an alias listed before it first, so HEAD rendered nothing a root
+// reaches with it. Or it is near no root, with no root to render.
 func (g *groupRun) pathAliases(planned []plannedRoot) error {
 	raw, present := g.top["path_aliases"]
 	if !present {
@@ -538,40 +540,22 @@ func (g *groupRun) pathAliases(planned []plannedRoot) error {
 	taken := make([]bool, len(all))
 	for j := range planned {
 		rp := filepath.Clean(planned[j].spec.Path)
-		var exact []int
-		ancestor := ""
 		for k, al := range all {
-			switch {
-			case al.root == "":
-			case al.root == rp:
-				exact = append(exact, k)
-			case library.WithinRoot(rp, al.root) && len(al.root) > len(ancestor):
-				ancestor = al.root
-			}
-		}
-		if len(exact) > 0 {
-			for _, k := range exact {
-				a := all[k].a
-				planned[j].spec.Aliases = append(planned[j].spec.Aliases, library.Alias{Windows: a.Windows, UNC: a.UNC, SMBURL: a.SMBURL})
-				planned[j].aliases = append(planned[j].aliases, all[k].member)
-				taken[k] = true
-			}
-			continue
-		}
-		if ancestor == "" {
-			continue
-		}
-		rel, err := filepath.Rel(ancestor, rp)
-		if err != nil {
-			continue
-		}
-		for k, al := range all {
-			if al.root != ancestor {
+			if al.root == "" || !library.WithinRoot(rp, al.root) {
 				continue
 			}
-			planned[j].spec.Aliases = append(planned[j].spec.Aliases, derivedAlias(al.a, filepath.ToSlash(rel)))
+			if al.root == rp {
+				planned[j].spec.Aliases = append(planned[j].spec.Aliases, library.Alias{Windows: al.a.Windows, UNC: al.a.UNC, SMBURL: al.a.SMBURL})
+			} else {
+				rel, err := filepath.Rel(al.root, rp)
+				if err != nil {
+					continue
+				}
+				planned[j].spec.Aliases = append(planned[j].spec.Aliases, derivedAlias(al.a, filepath.ToSlash(rel)))
+			}
 			planned[j].aliases = append(planned[j].aliases, al.member)
 			taken[k] = true
+			break // HEAD's matchAlias stops at the first match
 		}
 	}
 	for k, al := range all {
@@ -591,7 +575,7 @@ func aliasReason(root string, planned []plannedRoot) string {
 		return reasonAliasNoRoot
 	}
 	for _, p := range planned {
-		if library.WithinRoot(root, p.spec.Path) {
+		if rp := filepath.Clean(p.spec.Path); root != rp && library.WithinRoot(root, rp) {
 			return reasonAliasSubRoot
 		}
 	}

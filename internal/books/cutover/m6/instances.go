@@ -152,6 +152,13 @@ func (p *pending) secretRefs(set secretSet, ref integrations.Ref, headID string,
 	return map[string]any{}
 }
 
+// droppedValue is a value M6 leaves out of an instance that is quarantined
+// under KeyBlob#<member>.<path>.
+type droppedValue struct {
+	path string
+	raw  []byte
+}
+
 // unreadableCarried is the marker reason of a credential carried unreadable:
 // see writeInstance.
 const unreadableCarried = "corrupt"
@@ -248,6 +255,14 @@ type pending struct {
 	// dropped is the report lines of values M6 leaves out of the instance (an AI
 	// endpoint's unknown ticks and features), said once the instance is reported.
 	dropped []string
+	// droppedValues is the dropped values that held data the owner set (a
+	// capability_models entry's model), quarantined once the instance is written
+	// so the value can be recovered; a refused instance is quarantined whole.
+	droppedValues []droppedValue
+	// notes is the report lines said once the instance is reported.
+	notes []string
+	// usesOpenAIKey: the instance refers to, or copies, the stored OpenAI key.
+	usesOpenAIKey bool
 
 	// Set by finish: the signature of the effective destinations (the origin every
 	// trust field is signed from) and the fields whose effective origin is not the
@@ -333,6 +348,9 @@ func (m *Migration) writeInstance(ctx context.Context, c *chunk, p *pending, qua
 	m.report(Entry{Kind: "instance", ID: ref.String(), Detail: detail})
 	for _, d := range p.dropped {
 		m.report(Entry{Kind: "note", ID: ref.String(), Detail: "dropped: " + d})
+	}
+	for _, n := range p.notes {
+		m.report(Entry{Kind: "note", ID: ref.String(), Detail: n})
 	}
 	if p.inst.Config.Local {
 		m.report(Entry{Kind: "trust", ID: ref.String(), Detail: "Local, origin " + p.inst.LocalOrigin})
@@ -428,7 +446,12 @@ func (m *Migration) writeInstance(ctx context.Context, c *chunk, p *pending, qua
 		m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the secret " + string(mv.cs.from) + " under the old ID stays in the store and nothing refers to it"})
 	}
 	for _, cs := range p.uncarried {
-		m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the credential " + cs.field + " is not carried: a secret is already stored under " + string(cs.to) + " and no source of this pass owns it, so neither is bound: re-enter it (" + string(cs.from) + " stays in the store, unreferenced)"})
+		m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the credential " + cs.field + " is not carried: a secret is already stored under " + string(cs.to) + ", the name M2 gave the credential of the entry whose HEAD id is " + string(ref.Instance) + " (or of none), so neither is bound: re-enter it (" + string(cs.from) + " stays in the store, unreferenced)"})
+	}
+	for _, dv := range p.droppedValues {
+		if err := c.quarantine(KeyBlob+"#"+p.member+"."+dv.path, dv.raw, reasonDroppedValue); err != nil {
+			return false, err
+		}
 	}
 	if p.userinfo != "" {
 		name := secretName(ref, "userinfo")
@@ -486,7 +509,12 @@ func (m *Migration) metadataInstance(raw json.RawMessage, i int, set secretSet) 
 	}
 	ref := integrations.Ref{Kind: integrations.KindMetadata, Instance: id}
 	adapter := integrations.AdapterID("books." + string(id))
-	p = &pending{member: member, raw: raw, urls: map[string]string{}, operatorPair: id == "google-books" || id == "hardcover"}
+	// The operator key pair belongs to HEAD's exact provider ID only: HEAD's
+	// provider switch was exact and case-sensitive (metafetch/service_search.go),
+	// so a row whose ID M6 lowers to google-books or hardcover was an inert
+	// unknown source at HEAD, and the operator key must never be served beside a
+	// base_url HEAD never sent it to.
+	p = &pending{member: member, raw: raw, urls: map[string]string{}, operatorPair: !renamed && (id == "google-books" || id == "hardcover")}
 	if renamed {
 		p.renamedFrom = src.ID
 	}
@@ -584,11 +612,16 @@ func (m *Migration) aiInstance(raw json.RawMessage, i int, set secretSet) (p *pe
 		return nil, member, reasonBlobUndecodable
 	}
 	ref := integrations.Ref{Kind: integrations.KindAI, Instance: id}
-	p = &pending{member: member, raw: raw, urls: map[string]string{}, operatorPair: id == instanceOpenAI}
+	// A renamed row that lands on openai pairs with the operator's OpenAI key
+	// only when HEAD sent it that key (auth_ref, below).
+	p = &pending{member: member, raw: raw, urls: map[string]string{}, operatorPair: id == instanceOpenAI && (!renamed || ep.AuthRef == "openai_api_key")}
 	if renamed {
 		p.renamedFrom = ep.ID
 	}
 	settings := p.secretRefs(set, ref, ep.ID, renamed)
+	if _, ok := settings["api_key"]; ok && id == instanceOpenAI {
+		p.usesOpenAIKey = true // the exact openai row keeps the key M2 moved to its name
+	}
 	// A whisper process endpoint's URL names no network address
 	// (config.LocalUVEndpointURL "local:uv-openai-whisper"): it is carried as is
 	// and grants no trust.
@@ -626,7 +659,9 @@ func (m *Migration) aiInstance(raw json.RawMessage, i int, set secretSet) (p *pe
 	cm := map[string]string{}
 	for _, k := range slices.Sorted(maps.Keys(ep.CapabilityModels)) {
 		if strings.Contains(k, "*") || !headCapabilities[k] {
-			p.dropped = append(p.dropped, "capability_models entry "+strconv.Quote(k)+" is not for a capability HEAD registers")
+			p.dropped = append(p.dropped, "capability_models entry "+strconv.Quote(k)+" is not for a capability HEAD registers (its model is quarantined)")
+			v, _ := json.Marshal(ep.CapabilityModels[k])
+			p.droppedValues = append(p.droppedValues, droppedValue{path: "capability_models." + k, raw: v})
 			continue
 		}
 		cm[capabilityID(k)] = ep.CapabilityModels[k]
@@ -646,10 +681,21 @@ func (m *Migration) aiInstance(raw json.RawMessage, i int, set secretSet) (p *pe
 	if len(ep.HostRoots) > 0 {
 		settings["root_paths"] = ep.HostRoots
 	}
-	// auth_ref: the native design has none. The openai row keeps the secret M2
-	// moved to its name; any other row that named openai_api_key gets its own copy.
-	if ep.AuthRef == "openai_api_key" && id != instanceOpenAI {
+	// auth_ref: the native design has none. HEAD sent the OpenAI key to any row
+	// whose auth_ref names it, whatever its ID (internal/ai/pool_routing.go
+	// poolSecret). The exact openai row keeps the secret M2 moved to its name
+	// (secretRefs). A row renamed to openai (OpenAI, OPENAI) takes no refs under
+	// its new name (secretRefs), but that name is the very key HEAD sent it, so
+	// it is bound here and reported. Any other row gets its own copy.
+	switch {
+	case ep.AuthRef == "openai_api_key" && id == instanceOpenAI && renamed && set[secretOpenAI]:
+		settings["api_key"] = secrets.RefTo(secretOpenAI)
+		p.usesOpenAIKey = true
+		p.uncarried = slices.DeleteFunc(p.uncarried, func(cs carriedSecret) bool { return cs.field == "api_key" })
+		p.notes = append(p.notes, "HEAD's OpenAI key "+string(secretOpenAI)+" is bound to the renamed row, as HEAD sent it that key (auth_ref openai_api_key)")
+	case ep.AuthRef == "openai_api_key" && id != instanceOpenAI:
 		p.copyKey = secretName(ref, "api_key")
+		p.usesOpenAIKey = true
 		delete(settings, "api_key")
 	}
 	// HEAD calls any endpoint with an auth_ref cloud whatever its host
@@ -669,7 +715,8 @@ func (m *Migration) aiInstance(raw json.RawMessage, i int, set secretSet) (p *pe
 // a duplicate the map creates, keeping order. Every other tick (a wildcard, or an
 // ID this build of HEAD does not register) is returned in dropped, once each:
 // HEAD ignored it in selection, and core's validator would refuse the whole
-// endpoint over it (headCapabilities).
+// endpoint over it once #4804's validateImport runs it on an import
+// (headCapabilities says why that dependency, and not grandfathering).
 func mapCaps(in []string) (kept, dropped []string) {
 	for _, c := range in {
 		if strings.Contains(c, "*") || !headCapabilities[c] {
@@ -746,6 +793,7 @@ func (m *Migration) openAIInstance(base string, set secretSet) (*pending, bool) 
 		return nil, false
 	}
 	settings := refsFor(set, ref)
+	_, p.usesOpenAIKey = settings["api_key"]
 	settings["url"] = clean
 	settings["concurrency"] = 4
 	settings["features"] = []string{"batch_api", "vision"}
