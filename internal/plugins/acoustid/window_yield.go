@@ -28,6 +28,13 @@ const windowTotalBudget = 72 * time.Hour
 // server lane is cutting finishes in minutes.
 const windowYieldMargin = workerapi.LeaseTTL + 15*time.Minute
 
+// windowSettleSafety is how long before the attempt deadline a yielding run stops
+// waiting for in-flight work. Settling is bounded because draining to zero is not
+// needed for correctness: the cursor is capped below every item a worker holds
+// (hub.checkpointMark) and every item skipped, and the writer is fenced when the
+// attempt ends. It must be well under windowYieldMargin or the settle window is gone.
+const windowSettleSafety = 5 * time.Minute
+
 // windowYieldPoll is how often the watcher re-checks the clock: a remote-only
 // run can sit in awaitRemote with no item starting, so nothing else would notice
 // the margin. A variable so tests do not wait.
@@ -46,6 +53,10 @@ type windowYield struct {
 	cont      error
 	startedAt time.Time
 	quiesce   func()
+	abandon   func() // stop waiting on leased items (hub.abandon)
+	// settleSafety is how long before the attempt deadline the run stops waiting
+	// on leases and in-flight waits and yields anyway (see settleAt).
+	settleSafety time.Duration
 
 	stop       atomic.Bool
 	overBudget atomic.Bool
@@ -66,7 +77,11 @@ func newWindowYield(env windowEnv, params *WindowBackfillParams, hub *WorkerHub)
 		return nil
 	}
 	y := &windowYield{deadline: env.Deadline, margin: env.YieldMargin, budget: env.TotalBudget,
-		now: env.Now, cont: env.ContinueInPlace, quiesce: hub.quiesce, minSkip: -1}
+		now: env.Now, cont: env.ContinueInPlace, quiesce: hub.quiesce, abandon: hub.abandon, minSkip: -1,
+		settleSafety: env.SettleSafety}
+	if y.settleSafety <= 0 {
+		y.settleSafety = windowSettleSafety
+	}
 	if y.now == nil {
 		y.now = time.Now
 	}
@@ -120,6 +135,35 @@ func (y *windowYield) stopping() bool {
 // stopped is the latched decision, without evaluating the clock.
 func (y *windowYield) stopped() bool { return y != nil && y.stop.Load() }
 
+// settleAt is when a yielding run stops waiting on what is in flight; zero when
+// there is no deadline to bound it by.
+func (y *windowYield) settleAt() time.Time {
+	if y == nil {
+		return time.Time{}
+	}
+	dl := y.deadline()
+	if dl.IsZero() {
+		return time.Time{}
+	}
+	return dl.Add(-y.settleSafety)
+}
+
+// settleExpired reports that a stopped run must stop waiting and yield now.
+func (y *windowYield) settleExpired() bool {
+	at := y.settleAt()
+	return y.stopped() && !at.IsZero() && !y.now().Before(at)
+}
+
+// settleWait is how long a wait that re-checks every poll may sleep: the poll,
+// cut to the time left before the settle bound once the run is stopping.
+func (y *windowYield) settleWait(poll time.Duration) time.Duration {
+	at := y.settleAt()
+	if !y.stopped() || at.IsZero() {
+		return poll
+	}
+	return min(poll, max(at.Sub(y.now()), time.Millisecond))
+}
+
 // completed notes an item finished (written, tombstoned or deferred) this attempt.
 func (y *windowYield) completed() {
 	if y != nil {
@@ -172,7 +216,14 @@ func (y *windowYield) watch(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if y.stopping() {
+			if !y.stopping() {
+				continue
+			}
+			// Stopping: the pool's waiters sit on items leased to workers, and only
+			// the hub can release them. At the settle bound it stops waiting on the
+			// holders, so the attempt yields before its deadline instead of after.
+			if y.settleExpired() {
+				y.abandon()
 				return
 			}
 		}
@@ -199,7 +250,11 @@ func (y *windowYield) finish(res *windowRunResult, tally *windowTally, params Wi
 		after = params.Resume.AfterFileID // nothing new finished here: keep the old cursor
 	}
 	next := params
-	next.Resume = windowCursor(params, tier, after)
+	next.Resume = windowCursorAt(params, tier, after, done+mark)
+	// Every lease is settled or abandoned and the pool has returned, so the tally
+	// is final for this attempt: hand it on, or a write error below the cursor
+	// (never retried) would not be seen by the attempt that ends the run.
+	next.Resume.Carry = tally.carry()
 	if err := checkpoint(next); err != nil {
 		return res, fmt.Errorf("window-backfill: save the cursor before yielding: %w", err)
 	}
