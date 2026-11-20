@@ -14,11 +14,15 @@
 # a red gate nobody reacted to: on a schedule, read-only on the code, and it
 # files a deduplicated issue.
 #
-# It reports when, in the last 26 hours:
-#   * any race-nightly status ended failure or error (a test failed or raced);
-#   * any is still pending five hours after the start (the pipeline is stuck,
-#     or no Mac agent was online to take it: llm1 down, mac not started);
-#   * fewer statuses exist than the matrix has entries;
+# It takes the newest status of each race-nightly context (the API lists a
+# commit's statuses newest first) and counts only those created at or after
+# 06:00 UTC today, so last night's run is the only one that can satisfy it
+# (03:00 America/New_York is 07:00 or 08:00 UTC). It reports when:
+#   * any of them ended failure or error (a test failed or raced, or the
+#     workflow hit the 60-minute Woodpecker timeout);
+#   * any is still pending at 13:00 UTC, five hours after the start (the
+#     pipeline is stuck, or no Mac agent took it: llm1 down, mac not started);
+#   * fewer exist than the matrix has entries;
 #   * none exist at all (the Woodpecker cron was never created, was disabled,
 #     or the server was down at 03:00).
 # One open issue (label race-nightly) collects them: a new finding comments on
@@ -61,7 +65,9 @@ jobs:
           EXPECTED: '6'
         run: |
           set -euo pipefail
-          since=$(date -u -d '-26 hours' +%Y-%m-%dT%H:%M:%SZ)
+          # 06:00 UTC today: before the earliest 03:00 America/New_York start
+          # (07:00 UTC in summer), after yesterday's run.
+          since="$(date -u +%Y-%m-%d)T06:00:00Z"
           # The cron runs main's tip at 03:00, so the commit that carries the
           # statuses is the newest one that has any: walk main back from its
           # tip (60 commits is several days of merges).
@@ -70,8 +76,10 @@ jobs:
           for c in $(gh api "repos/$GITHUB_REPOSITORY/commits?sha=main&per_page=60" --jq '.[].sha'); do
             rows=$(gh api "repos/$GITHUB_REPOSITORY/commits/$c/statuses?per_page=100" |
               jq -c --arg p "$PREFIX" --arg since "$since" '
-                [.[] | select(.context | startswith($p)) | select(.created_at >= $since)]
-                | group_by(.context) | map(max_by(.created_at))
+                [.[] | select(.context | startswith($p))]
+                | reduce .[] as $s ({}; if has($s.context) then . else .[$s.context] = $s end)
+                | [.[]]
+                | map(select(.created_at >= $since))
                 | map({context, state, target_url, created_at})')
             if [ "$rows" != '[]' ]; then
               sha=$c
@@ -114,7 +122,7 @@ jobs:
               failed) echo "The nightly race run **failed** on \`$sha\`: $bad of $count workflows ended failure or error." ;;
               unfinished) echo "The nightly race run on \`$sha\` has **not finished**: $pending of $count workflows are still pending. A Mac agent (llm1 or mac) may be offline or stuck." ;;
               incomplete) echo "The nightly race run on \`$sha\` reported only $count of $EXPECTED workflows." ;;
-              missing) echo "**No nightly race run** reported a status on main in the last 26 hours. Check that the Woodpecker cron \`race-nightly\` exists and is enabled (docs/ci/woodpecker.md, \"Nightly race run\") and that the server was up at 03:00." ;;
+              missing) echo "**No nightly race run** reported a status on main since $since. Check that the Woodpecker cron \`race-nightly\` exists and is enabled (docs/ci/woodpecker.md, \"Nightly race run\") and that the server was up at 03:00." ;;
             esac
             echo
             jq -r '.[] | "- `\(.context)`: **\(.state)** \(.target_url // "")"' <<<"$latest"

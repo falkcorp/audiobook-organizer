@@ -133,8 +133,11 @@ jobs:
       # 15-24 min each and the fixture shards 14-25 min under -race (run
       # 44770780353), and every job also waited half an hour for a runner. In
       # the queue the short shards therefore run without -race and the fixture
-      # shards are skipped (their -short form IS the short shards: every test
-      # they run skips under -short). The race detector still runs on every
+      # shards are skipped. Those run whole packages without -short; the
+      # packages' other tests already run in the short shards, so what the
+      # queue gives up is only the tests that skip under -short (it keeps the
+      # fixture shards' -short half, not their unique half). The race detector
+      # still runs on every
       # pull request and every push to main (auto-revert.yml watches the push
       # run), and the whole -race suite, short and fixture, runs nightly on a
       # Mac Woodpecker agent (.woodpecker/race-nightly.yaml). None of the
@@ -1356,8 +1359,9 @@ jobs:
   # interface-width above: there are no required status checks).
   #
   # Skipped in the merge queue (changes.outputs.race == 'false', owner
-  # 2026-11-20): every test here skips under -short, so the "-short form" of
-  # this job is the short shards, and the -race run of it moves to the nightly
+  # 2026-11-20). This job runs whole packages without -short; their tests that
+  # do not skip under -short also run in the short shards, so the queue loses
+  # only the short-skipped tests, whose -race run moves to the nightly
   # Woodpecker pipeline (.woodpecker/race-nightly.yaml). It still runs on pull
   # requests and on pushes to main. Not a required check, so a skipped job
   # does not hold the queue.
