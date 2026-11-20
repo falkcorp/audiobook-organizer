@@ -1,5 +1,5 @@
 // file: core/secrets/store.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: be9e243c-f9df-4ff7-930d-10a5b90f2f49
 // last-edited: 2026-11-19
 
@@ -86,6 +86,7 @@ const (
 	labelStaleTemp   = "secrets.keyring.stale"     // a stale keyring temporary file removed
 	labelKeyringSync = "secrets.keyring.load-sync" // the keyring's directory synced before a present keyring is trusted
 	labelExport      = "secrets.export"            // export-keyring's copy and record (offline, never a boot)
+	labelExportSync  = "secrets.export-sync"       // the keyring's directory synced before export-keyring reads it (offline, never a boot)
 )
 
 // Options configures Open (05-config §2.3).
