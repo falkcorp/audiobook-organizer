@@ -1,0 +1,3 @@
+### Fixed
+
+- Test timing only, no production change. `internal/batch` tests that delete a series right after opening a store now open it through a shared fixture that waits for the memdb warmup to finish and fails with that reason if it ended unpublished, instead of racing the async warmup (`TestUpdateAudiobooks_ASeriesIDOfADeletedSeriesFailsThatRowAndNamesIt` failed with "the memdb is not serving"). `core/outbox` `TestOutboxMetrics_SeriesGolden` now waits until every series of its golden is exported instead of until the orphan topic is empty, which the sweep reaches one step before it counts the drop.

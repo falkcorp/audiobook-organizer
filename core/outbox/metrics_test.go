@@ -1,7 +1,7 @@
 // file: core/outbox/metrics_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8e3c6a17-9d42-4b05-a1f8-6c70d2e5b943
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 package outbox_test
 
@@ -71,7 +71,17 @@ func TestOutboxMetrics_SeriesGolden(t *testing.T) {
 	clk.advance(2 * time.Hour)
 	eventually(t, "the orphan to be dropped", func() bool { return r.messages(alarmName) == 0 })
 
-	r.ob.RefreshStatus(context.Background())
+	// The sweep deletes the message in its commit and counts the drop after the
+	// commit returns, and the delivered/folded/filtered counters likewise trail
+	// the state the waits above watch. An empty topic therefore says nothing
+	// about the counters; wait for the series the golden asserts instead.
+	want, err := metricstest.ReadGolden("testdata/series.golden")
+	must(t, err)
+	eventually(t, "every series of the golden to be exported", func() bool {
+		r.ob.RefreshStatus(context.Background())
+		got, err := metricstest.Gather(p.Gatherer(), metricstest.FamilyPrefix(sc))
+		return err == nil && len(metricstest.Diff(want, got)) == 0
+	})
 	metricstest.AssertSeries(t, p, sc, "testdata/series.golden")
 	metricstest.AssertNoOverflow(t, p)
 }
