@@ -1,7 +1,7 @@
 // file: internal/server/apikey_credential_guard_test.go
-// version: 1.5.5
+// version: 1.5.6
 // guid: 3e9a5c72-4b1d-4f08-b6e3-9d2c7a0f5e14
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 // Router-level coverage for the credential guard (2026-10-07): an API key
 // (here an all-scope admin key, the strongest there is) gets 403 from the
@@ -187,7 +187,9 @@ func guardedRoutes() []guardedRoute {
 		{"rotate another user's key (retired: a session reaches the 410)", http.MethodPost, func(f *credGuardFixture) string { return "/api/v1/auth/api-keys/" + f.targetKeyID + "/rotate" },
 			func(*credGuardFixture) any { return nil }, http.StatusGone},
 		{"sign-in setting change", http.MethodPut, func(*credGuardFixture) string { return "/api/v1/config" },
-			func(*credGuardFixture) any { return map[string]any{"oauth_default_role": "admin"} }, http.StatusOK},
+			func(*credGuardFixture) any {
+				return map[string]any{"set": map[string]any{"oauth_default_role": "admin"}}
+			}, http.StatusOK},
 	}
 }
 
@@ -222,12 +224,19 @@ func TestCredentialGuard_APIKeyRefusedEverywhere_SessionAllowed(t *testing.T) {
 	}
 }
 
-// A route the guard does not cover keeps working for a key: PUT /config
-// with an unchanged sign-in value (a GET-then-PUT round trip).
+// An API key keeps the settings that are not credentials. The old "unchanged
+// sign-in value round trip" no longer exists: the Settings page sends only the
+// keys it changed, and core's protection judges every key named in a PUT, so a
+// key naming enable_auth is refused even with the value it already has.
 func TestCredentialGuard_ConfigRoundTripAllowedForKey(t *testing.T) {
 	f := setupCredGuardServer(t)
-	w := f.do(t, f.apiKey, http.MethodPut, "/api/v1/config", map[string]any{"enable_auth": true})
+	w := f.do(t, f.apiKey, http.MethodPut, "/api/v1/config", map[string]any{"set": map[string]any{"log_level": "debug"}})
 	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Equal(t, "debug", config.Snapshot().LogLevel)
+
+	w = f.do(t, f.apiKey, http.MethodPut, "/api/v1/config", map[string]any{"set": map[string]any{"enable_auth": true}})
+	assert.Equal(t, http.StatusForbidden, w.Code, "an unchanged sign-in value is still a sign-in key: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), servermiddleware.CredentialChangeRefusedMessage)
 }
 
 // TestCredentialGuard_ConfigCaseVariantKeyRefused is the 2026-10-07 review's
@@ -242,20 +251,22 @@ func TestCredentialGuard_ConfigCaseVariantKeyRefused(t *testing.T) {
 		{"OAUTH_ALLOWED_EMAILS": "attacker@example.test"},
 		{"Root_Dir": "/elsewhere"},
 	} {
-		w := f.do(t, f.apiKey, http.MethodPut, "/api/v1/config", payload)
-		assert.GreaterOrEqual(t, w.Code, 400, "%v: %s", payload, w.Body.String())
+		// Key names are exact now: a case variant is an unknown key (400), not
+		// a decoder match.
+		w := f.do(t, f.apiKey, http.MethodPut, "/api/v1/config", map[string]any{"set": payload})
+		assert.Equal(t, http.StatusBadRequest, w.Code, "%v: %s", payload, w.Body.String())
 	}
 	cfg := config.Snapshot()
 	assert.NotEqual(t, "admin", cfg.OAuthDefaultRole)
 	assert.Empty(t, cfg.OAuthAllowedEmails)
 
-	// Path settings need a session too; a key's same-value round trip works.
-	w := f.do(t, f.apiKey, http.MethodPut, "/api/v1/config", map[string]any{"root_dir": t.TempDir()})
+	// Path settings need a session too, even with the value already stored.
+	w := f.do(t, f.apiKey, http.MethodPut, "/api/v1/config", map[string]any{"set": map[string]any{"root_dir": t.TempDir()}})
 	assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
 	assert.Contains(t, w.Body.String(), "refused_keys")
-	w = f.do(t, f.apiKey, http.MethodPut, "/api/v1/config", map[string]any{"root_dir": cfg.RootDir})
-	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	w = f.do(t, f.sessionToken, http.MethodPut, "/api/v1/config", map[string]any{"root_dir": t.TempDir()})
+	w = f.do(t, f.apiKey, http.MethodPut, "/api/v1/config", map[string]any{"set": map[string]any{"root_dir": cfg.RootDir}})
+	assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+	w = f.do(t, f.sessionToken, http.MethodPut, "/api/v1/config", map[string]any{"set": map[string]any{"root_dir": t.TempDir()}})
 	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
 }
 
