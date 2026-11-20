@@ -1,5 +1,5 @@
 // file: core/auth/lastadmin_roleguard_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b8e2f61-7a3d-4c90-b1e4-d6a92c0f3e75
 // last-edited: 2026-11-19
 
@@ -16,6 +16,7 @@ import (
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // roleWayne is a custom role that grants core:admin, held by one of the two
@@ -512,4 +513,60 @@ func TestRoleDelete_UserWriteCommitsInsideTheDelete(t *testing.T) {
 	if n := w.f.holders.holderReads(); n < lastRead+1 {
 		t.Fatalf("HoldersOf ran %d times, want %d or more: the first attempt must have failed at its commit and run again", n, lastRead+1)
 	}
+}
+
+// TestLastAdmin_MergeUsers (round 2, n5): StageUserMerge disables the source
+// user, so it runs the last-admin rule like the other three callers
+// (SetStatus, DeleteUser, SetRoles). Merging dick away while a role edit
+// takes core:admin from bruce's role inside the write fails the merge's
+// commit and leaves dick active; over a role store with no guard the merge is
+// refused before it stages anything.
+func TestLastAdmin_MergeUsers(t *testing.T) {
+	t.Run("role edit commits inside the merge", func(t *testing.T) {
+		r := newAdminRace(t)
+		jason := r.f.user("jason-todd", "gotham.detective")
+		var editErr error
+		fired := r.holdOnce(func() { editErr = r.stripAdmin() })
+		err := r.f.stageMerge(r.f.signedIn(r.bruce), auth.UserMergePlan{Source: r.dick.ID, Target: jason.ID})
+		if !fired.Load() {
+			t.Fatal("the role edit never ran inside the merge")
+		}
+		if editErr != nil {
+			t.Fatalf("the role edit, with dick still an active admin: %v", editErr)
+		}
+		if !errors.Is(err, storage.ErrConflict) {
+			t.Fatalf("a merge of dick away after bruce lost core:admin meanwhile: err = %v, want storage.ErrConflict", err)
+		}
+		if got := r.f.reload(r.dick.ID); got.Version != r.dick.Version || got.Status != auth.StatusActive {
+			t.Fatalf("a failed merge changed dick: %+v", got)
+		}
+		if n := r.activeAdmins(t); n != 1 {
+			t.Fatalf("%d active admins, want 1", n)
+		}
+	})
+
+	t.Run("the retry refuses the last admin", func(t *testing.T) {
+		r := newAdminRace(t)
+		jason := r.f.user("jason-todd", "gotham.detective")
+		if err := r.stripAdmin(); err != nil {
+			t.Fatal(err)
+		}
+		err := r.f.stageMerge(r.f.signedIn(r.dick), auth.UserMergePlan{Source: r.dick.ID, Target: jason.ID})
+		if !errors.Is(err, auth.ErrLastAdmin) {
+			t.Fatalf("merging the only admin left away: err = %v, want ErrLastAdmin", err)
+		}
+	})
+
+	t.Run("a store with no guard refuses", func(t *testing.T) {
+		f := newFxRoleStore(t, func(s rbac.Store) rbac.Store { return bareRoleStore{s} })
+		bruce := f.user("bruce-wayne", rbac.RoleAdmin)
+		dick := f.user("dick-grayson", rbac.RoleAdmin)
+		err := f.stageMerge(f.signedIn(bruce), auth.UserMergePlan{Source: dick.ID, Target: bruce.ID})
+		if !errors.Is(err, rbac.ErrNoRoleGuard) {
+			t.Fatalf("a merge over a role store with no guard: err = %v, want rbac.ErrNoRoleGuard", err)
+		}
+		if got := f.reload(dick.ID); got.Version != dick.Version || got.Status != auth.StatusActive {
+			t.Fatalf("a refused merge changed dick: %+v", got)
+		}
+	})
 }
