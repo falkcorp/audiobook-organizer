@@ -444,12 +444,13 @@ func (k kindShell) run(rc *tasks.RC, raw json.RawMessage) (json.RawMessage, erro
 	}
 	if runErr != nil && out != nil {
 		// HEAD stores a failed run's result on its row (merge-chapter-groups
-		// persists a cancelled merge's outcomes and journal IDs on purpose).
-		// core/tasks discards the result of a Run that returns an error. The log
-		// records only that a result existed and its size: the payload is the
-		// job's own data (paths, titles, counts) and can be megabytes, so it is
-		// neither copied into the log nor truncated into it.
-		rc.Log().Warn("run failed; core drops the partial result a job had set", "kind", string(k.kind), "result_bytes", len(out))
+		// persists a cancelled merge's outcomes and journal IDs on purpose),
+		// and core keeps the non-zero result of a Run that returns an error
+		// on the failed record too (F5-18d, O5). The log records only that a
+		// result was kept and its size: the payload is the job's own data
+		// (paths, titles, counts) and can be megabytes, so it is neither copied
+		// into the log nor truncated into it.
+		rc.Log().Warn("run failed; its partial result is kept on the failed record", "kind", string(k.kind), "result_bytes", len(out))
 	}
 	if errors.Is(runErr, maintenance.ErrContinueInPlace) {
 		// The job's "restart this same run" is core's ErrContinueInPlace.

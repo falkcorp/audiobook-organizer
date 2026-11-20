@@ -1350,7 +1350,6 @@ internal/plugins/maintenance.kindRef
 internal/plugins/maintenance.loadNativeAuthorityPlan
 internal/plugins/maintenance.nativeAuthorityPlans
 internal/plugins/maintenance.nativeCBFingerprint
-internal/plugins/maintenance.nativeCBLedger.carry
 internal/plugins/maintenance.nativeCBLedger.judgedSources
 internal/plugins/maintenance.nativeCBLedger.markJudged
 internal/plugins/maintenance.nativeCBLedger.others

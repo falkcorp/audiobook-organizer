@@ -45,6 +45,9 @@ type t6g3CBStore struct {
 	failClear error
 	// failMark makes the judged-marker write fail.
 	failMark error
+	// onGetBook, set before the run starts, is called on every book read (a
+	// test stops the run's context from inside its work).
+	onGetBook func()
 
 	mu    sync.Mutex
 	calls []string
@@ -68,6 +71,13 @@ func (s *t6g3CBStore) ModifyBookCredits(id string, fn func(*database.Book, *data
 		return s.mod.ModifyBookCredits(id, fn)
 	}
 	return s.PebbleStore.ModifyBookCredits(id, fn)
+}
+
+func (s *t6g3CBStore) GetBookByID(id string) (*database.Book, error) {
+	if s.onGetBook != nil {
+		s.onGetBook()
+	}
+	return s.PebbleStore.GetBookByID(id)
 }
 
 func (s *t6g3CBStore) CreateNarrator(name string) (*database.Narrator, error) {

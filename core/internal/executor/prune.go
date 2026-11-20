@@ -124,8 +124,9 @@ func pruneRuns(rc *tasks.RC, runs RunPruner, keep time.Duration, now time.Time) 
 			return nil
 		}, tasks.ItemsOptions[int]{Label: func(i int) string { return fmt.Sprintf("chunk %d", i+1) }})
 	out := PruneResult{Deleted: res.Counters["deleted"]}
-	// The executor stores a result only for a run that succeeded, so the
-	// status line is where a failed or canceled pass's count survives.
+	// The executor keeps this result on a failed or canceled run as well as
+	// on a succeeded one (F5-18d, O5); the status line carries the count too,
+	// for the run's live view.
 	rc.Progress().Note(fmt.Sprintf("pruned %d runs older than %s", out.Deleted, cutoff.UTC().Format(time.RFC3339)))
 	if err != nil {
 		return out, fmt.Errorf("executor: prune task history: %w", err)

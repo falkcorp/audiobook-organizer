@@ -697,12 +697,16 @@ func TestT6G1Kinds_AuthorityBuildRefusesAPlanRunThatIsNotASucceededPreview(t *te
 		{"01JBATCAVELIVE0000000000AA", authorityBuildKind, tasks.ModeLive, tasks.StateSucceeded, planBytes, "not a Preview"},
 		{"01JBATCAVEFAILED000000000A", authorityBuildKind, tasks.ModePreview, tasks.StateFailed, planBytes, "not a completed dry run"},
 		{"01JBATCAVECANCELED0000000A", authorityBuildKind, tasks.ModePreview, tasks.StateCanceled, planBytes, "not a completed dry run"},
+		{"01JBATCAVETIMEDOUT0000000A", authorityBuildKind, tasks.ModePreview, tasks.StateTimedOut, planBytes, "not a completed dry run"},
+		{"01JBATCAVERUNNING00000000A", authorityBuildKind, tasks.ModePreview, tasks.StateRunning, nil, "not a completed dry run"},
 		{"01JBATCAVEEMPTY0000000000A", authorityBuildKind, tasks.ModePreview, tasks.StateSucceeded, nil, "not a completed dry run"},
 		{"01JBATCAVEOTHERKIND00000AA", creditsBackfillKindForPlanTest, tasks.ModePreview, tasks.StateSucceeded, planBytes, "not an authority-build dry run"},
 		{"01JBATCAVENOTDRY000000000A", authorityBuildKind, tasks.ModePreview, tasks.StateSucceeded, notDryBytes, "not a dry run with a plan"},
 	} {
 		putNativeRun(t, runs, nativeRunAt(c.id, c.kind, c.mode, tasks.StateRunning, created))
-		finishNativeRun(t, runs, c.id, c.state, c.result)
+		if c.state != tasks.StateRunning {
+			finishNativeRun(t, runs, c.id, c.state, c.result)
+		}
 		before := probe.cw.total()
 		_, _, err := runT6G1Full(t, def, tasks.ModeLive, gate, fmt.Sprintf(`{"plan_op_id":%q}`, c.id), nil)
 		require.ErrorContains(t, err, c.want, "%s", c.id)

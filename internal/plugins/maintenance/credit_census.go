@@ -693,7 +693,7 @@ func runCreditCensusScan(ctx context.Context, store creditCensusStore, reporter 
 // every book and its credits and writes nothing. Rule R7 declares no reads for
 // a ReadOnly kind, so HEAD's Reads (books, authors) are not carried. A ReadOnly
 // run gets no writer from core, so the shell builds none. The result is the
-// census; on an error core drops it (see the F5-08 seams note).
+// census; on an error core keeps it beside the error (F5-18d, O5).
 func (p *Plugin) creditCensusKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.ReadOnly()
 	return tasks.Task(t6g3CreditCensusKind, tasks.TaskSpec[struct{}, creditCensusResult]{

@@ -6,9 +6,13 @@
 package maintenance
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -246,28 +250,103 @@ func TestWithJudged(t *testing.T) {
 	assert.Equal(t, creditsBackfillResult{BooksToWrite: 2}, withJudged(&creditsBackfillResult{BooksToWrite: 2}, nil))
 }
 
-// A resumed judging run's record still holds an earlier attempt's result: its
-// judgements are skipped as before AND carried into this attempt's result, so
-// the attempt's result does not drop them.
-func TestNativeCBLedger_AResumedRunCarriesItsEarlierJudgements(t *testing.T) {
-	runs := newNativeRuns(t)
-	failed := nativeRunAt("01GOTHAMJOKER0000000000000", t6g3CreditsBackfillKind, tasks.ModeLive, tasks.StateFailed, cbNativeT0)
-	own := nativeRunAt("01GOTHAMOWNRUN00000000000A", t6g3CreditsBackfillKind, tasks.ModeLive, tasks.StateRunning, cbNativeT0.Add(2*time.Hour))
-	raw, err := json.Marshal(creditsBackfillResult{JudgedSources: map[string]string{string(failed.ID): nativeCBFingerprint(failed)}})
-	require.NoError(t, err)
-	own.Result = raw
-	putNativeRuns(t, runs, failed, own)
+// cbStopCtx is a run context the test stops from inside the run's work, with
+// the error a cancel (context.Canceled) or the executor's timeout
+// (context.DeadlineExceeded) leaves on it.
+type cbStopCtx struct {
+	context.Context
+	err  error
+	once sync.Once
+	done chan struct{}
+}
 
-	l := &nativeCBLedger{ctx: t.Context(), runs: runs}
-	got, err := l.others(string(own.ID))
-	require.NoError(t, err)
-	assert.Empty(t, got, "the run an earlier attempt judged is not read again")
-	assert.Equal(t, map[string]string{string(failed.ID): nativeCBFingerprint(failed)}, l.judgedSources(), "and its judgement is carried")
+func newCBStopCtx(err error) *cbStopCtx {
+	return &cbStopCtx{Context: context.Background(), err: err, done: make(chan struct{})}
+}
 
-	// A judgement this attempt made of the same run wins over the carried one.
-	l = &nativeCBLedger{ctx: t.Context(), runs: runs}
-	require.NoError(t, l.markJudged(cbSourceOp{id: string(failed.ID), fingerprint: "newer"}))
-	_, err = l.others(string(own.ID))
+func (c *cbStopCtx) stop()                 { c.once.Do(func() { close(c.done) }) }
+func (c *cbStopCtx) Done() <-chan struct{} { return c.done }
+func (c *cbStopCtx) Err() error {
+	select {
+	case <-c.done:
+		return c.err
+	default:
+		return nil
+	}
+}
+
+// runStoppedCB runs a native credits preview over the census fixture on one
+// worker, stops its context while it reads the last book, and returns the
+// result the kind hands the executor (which keeps it on the failed record,
+// F5-18d O5).
+func runStoppedCB(t *testing.T, n *t6g3CBNative, stopErr error) (json.RawMessage, creditsBackfillResult, *t6g3Host) {
+	t.Helper()
+	ids, err := n.rec.ListBookIDs()
 	require.NoError(t, err)
-	assert.Equal(t, map[string]string{string(failed.ID): "newer"}, l.judgedSources())
+	require.Greater(t, len(ids), 1)
+	ctx := newCBStopCtx(stopErr)
+	var reads atomic.Int32
+	n.rec.onGetBook = func() {
+		if int(reads.Add(1)) == len(ids)-1 {
+			ctx.stop()
+		}
+	}
+	host := &t6g3Host{FakeRun: taskstest.NewFakeRun(ctx, t6g3CreditsBackfillKind), mode: tasks.ModePreview, w: &t6g3Gate{}}
+	host.SetCPUSlots(1)
+	raw, err := t6g3Run(t, n.kind(), tasks.NewRC(host), "")
+	require.ErrorIs(t, err, stopErr)
+	require.NotEmpty(t, raw, "a stopped run returns what it saw")
+	var res creditsBackfillResult
+	require.NoError(t, json.Unmarshal(raw, &res))
+	listed := 0
+	for _, c := range res.Classes {
+		listed += c.Count
+	}
+	require.Positive(t, listed, "the run filed books under its classes before it stopped, so it had lists to keep")
+	return raw, res, host
+}
+
+var cbStopErrs = []struct {
+	name string
+	err  error
+}{{"canceled", context.Canceled}, {"timed out", context.DeadlineExceeded}}
+
+// A canceled or timed-out native run stores its class lists after its context
+// is done: they still become its rows, and the result it returns, which core
+// keeps on the record, is the summary without them (F5-18d review M1). A
+// library-scale run's lists are megabytes.
+func TestT6G3_CreditsBackfillNativeAStoppedRunKeepsItsListsAsRowsNotInItsResult(t *testing.T) {
+	for _, tc := range cbStopErrs {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCBFixture(t)
+			seedCBCensusFixture(f)
+			n := newT6G3CBNative(f, t6g3ScanKey)
+			raw, res, _ := runStoppedCB(t, n, tc.err)
+			assert.NotContains(t, string(raw), `"book_ids"`, "the stored result never carries the lists")
+			assert.True(t, res.ClassLists.Valid(), "the result names the rows its lists are in")
+			assert.NotZero(t, n.classListRows(t), "the lists are the stopped run's rows")
+		})
+	}
+}
+
+// A stopped run whose lists cannot be stored (here: the run store has no such
+// run, so ReplaceRows refuses) still returns no lists: the counts and samples
+// stay, the lists and a row summary do not.
+func TestT6G3_CreditsBackfillNativeAStoppedRunWhoseListsAreNotStoredReturnsNoLists(t *testing.T) {
+	for _, tc := range cbStopErrs {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCBFixture(t)
+			seedCBCensusFixture(f)
+			n := newT6G3CBNative(f, t6g3ScanKey)
+			n.runs = newNativeRuns(t)
+			n.deps.Runs = n.runs
+			raw, res, host := runStoppedCB(t, n, tc.err)
+			assert.NotContains(t, string(raw), `"book_ids"`, "a result whose lists were not stored never carries them")
+			assert.Nil(t, res.ClassLists, "no rows were stored, so none are named")
+			host.mu.Lock()
+			logs := strings.Join(host.logs, "\n")
+			host.mu.Unlock()
+			assert.Contains(t, logs, "credits-backfill: result not stored")
+		})
+	}
 }

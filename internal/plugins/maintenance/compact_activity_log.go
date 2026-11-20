@@ -211,8 +211,8 @@ func (p *Plugin) compactActivityLogKind(deps t6g3Deps, sched func(tasks.Kind) *t
 			}
 			result, err := compactAndRecordCore(rc.Context(), cutoff, startMsg, t6g3CompactRecordEnv{base: base})
 			if err != nil {
-				// core drops a failed run's result (core/tasks/erased.go): see the
-				// F5-08 seams note.
+				// core keeps a failed run's non-zero result beside its error
+				// (core/tasks/erased.go failedResult, F5-18d O5).
 				return result, fmt.Errorf("compact-activity-log: %w", err)
 			}
 			return result, nil
