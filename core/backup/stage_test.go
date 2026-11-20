@@ -978,8 +978,10 @@ func TestRecheckRefusesAnEntryWithNoDigest(t *testing.T) {
 	if err := backup.Recheck(nil)(ctx, in); err != nil {
 		t.Fatalf("a size-only recheck needs no digest: %v", err)
 	}
-	if err := backup.Recheck(func() bool { return true })(ctx, in); err == nil {
-		t.Fatal("a full re-hash accepted entries with no digest")
+	// Refused by name, not by a digest comparison against "" that happens to
+	// fail: the refusal says there is nothing to re-hash against.
+	if err := backup.Recheck(func() bool { return true })(ctx, in); err == nil || !strings.Contains(err.Error(), "has no digest to re-hash against") {
+		t.Fatalf("a full re-hash over entries with no digest: %v, want the no-digest refusal", err)
 	}
 }
 
