@@ -1,5 +1,5 @@
 // file: core/auth/roleclaim_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 0c5d7e21-93b4-4a68-8f1e-2d6a4b9c7e53
 // last-edited: 2026-11-19
 
@@ -490,6 +490,95 @@ func TestRoleClaim_StoreWithoutGuardRefusesBeforeItDecides(t *testing.T) {
 		err := c.assign(way)()
 		if !errors.Is(err, rbac.ErrNoRoleGuard) || errors.Is(err, rbac.ErrUnknownRole) {
 			t.Errorf("%s over a store with no guard: err = %v, want rbac.ErrNoRoleGuard and not a decision on the role", way, err)
+		}
+	}
+}
+
+// TestRoleClaim_ClaimFaultIsNotAScopeRefusal (F4-02-ROLE-GUARD r2): CreateUser
+// and SetRoles map ErrScopeEscalation to a 403, "you may not give this role".
+// Over a role store that cannot guard the role set the claim fails with
+// rbac.ErrNoRoleGuard, which is a fault of the server, not a refusal of the
+// actor, so it must not carry ErrScopeEscalation (authhttp answers the bare
+// error with a 500). The role exists and the actor may give it, so the cache
+// check before the claim passes and only the claim fails. The invite reads
+// the same fault as itself too, not as a spent, invalid invite.
+func TestRoleClaim_ClaimFaultIsNotAScopeRefusal(t *testing.T) {
+	c := newClaimFxOver(t, func(s rbac.Store) rbac.Store { return bareRoleStore{s} })
+	for _, way := range claimWays {
+		t.Run(way, func(t *testing.T) {
+			err := c.assign(way)()
+			if !errors.Is(err, rbac.ErrNoRoleGuard) {
+				t.Fatalf("%s: err = %v, want rbac.ErrNoRoleGuard", way, err)
+			}
+			if errors.Is(err, auth.ErrScopeEscalation) || errors.Is(err, rbac.ErrEscalation) || errors.Is(err, auth.ErrInviteInvalid) {
+				t.Fatalf("%s: err = %v: a fault of the role store must not read as a refusal of the actor", way, err)
+			}
+		})
+	}
+}
+
+// TestRoleClaim_ClaimReadFaultIsNotAScopeRefusal is the same rule for a fault
+// that only the claim can hit. SetRoles reads the role-set generation in
+// keepAnAdmin before it claims, so a store that cannot guard at all is refused
+// there and never reaches claimRoles; here the store reads the generation fine
+// for keepAnAdmin and breaks on the claim's read (the second call of SetRoles,
+// the first of CreateUser). The fault must come back as itself, not as a scope
+// refusal, at each of the two call sites that wrap the claim.
+func TestRoleClaim_ClaimReadFaultIsNotAScopeRefusal(t *testing.T) {
+	boom := errors.New("the role store broke")
+	for _, tc := range []struct {
+		way string
+		at  int
+	}{{"create user", 1}, {"set roles", 2}} {
+		t.Run(tc.way, func(t *testing.T) {
+			var gs *guardingRoleStore
+			c := newClaimFxOver(t, func(s rbac.Store) rbac.Store { gs = newGuardingRoleStore(s); return gs })
+			gs.mu.Lock()
+			gs.failGenAt, gs.failGenErr, gs.genCalls = tc.at, boom, 0
+			gs.mu.Unlock()
+			err := c.assign(tc.way)()
+			if !errors.Is(err, boom) {
+				t.Fatalf("%s: err = %v, want the role store's fault", tc.way, err)
+			}
+			if errors.Is(err, auth.ErrScopeEscalation) {
+				t.Fatalf("%s: err = %v: a fault of the role store must not read as a scope refusal", tc.way, err)
+			}
+			if n := c.holdersOfRobin(); n != 0 {
+				t.Fatalf("%d user(s) hold the role after a refused write", n)
+			}
+		})
+	}
+}
+
+// TestRoleClaim_EscalationStaysAScopeRefusal is the other side: the store's
+// own refusal of the role (it no longer exists) stays ErrScopeEscalation on
+// the two writes that wrap it, so scopeRefusal narrows the wrapping and does
+// not remove it. The role is deleted straight through the native store so the
+// cache check before the claim still passes and only the claim refuses.
+func TestRoleClaim_EscalationStaysAScopeRefusal(t *testing.T) {
+	var native *rbacstore.Store
+	c := newClaimFxOver(t, func(s rbac.Store) rbac.Store {
+		native, _ = s.(*rbacstore.Store)
+		return s
+	})
+	if native == nil {
+		t.Fatal("the fixture's role store is not the native one")
+	}
+	b := native.NewBatch()
+	defer func() { _ = b.Close() }()
+	if err := native.DeleteRole(b, c.robin); err != nil {
+		t.Fatalf("DeleteRole through the store: %v", err)
+	}
+	if err := b.Commit(context.Background(), storage.Sync); err != nil {
+		t.Fatalf("commit of the delete: %v", err)
+	}
+	if err := c.f.rb.CanAssign(c.manager.Perms, []rbac.RoleName{roleRobin}); err != nil {
+		t.Fatalf("the role cache no longer has the role (CanAssign: %v): the test does not lag it", err)
+	}
+	for _, way := range []string{"create user", "set roles"} {
+		err := c.assign(way)()
+		if !errors.Is(err, auth.ErrScopeEscalation) || !errors.Is(err, rbac.ErrUnknownRole) {
+			t.Errorf("%s: err = %v, want ErrScopeEscalation wrapping the unknown role", way, err)
 		}
 	}
 }

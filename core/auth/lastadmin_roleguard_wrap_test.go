@@ -1,5 +1,5 @@
 // file: core/auth/lastadmin_roleguard_wrap_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8e2c4a17-3b95-4d60-a1f8-5c70d9e3b246
 // last-edited: 2026-11-19
 
@@ -39,6 +39,13 @@ type guardingRoleStore struct {
 	// guardErr, when set, is what GuardRoleSet answers: the role store
 	// refusing to stage the guard after the generation was read fine.
 	guardErr error
+	// failGenAt, when above zero, makes the failGenAt-th RoleSetGeneration call
+	// answer failGenErr and every other one succeed: the role store breaking at
+	// one chosen read of a write that reads the generation more than once
+	// (SetRoles reads it in keepAnAdmin, then again in claimRoles).
+	failGenAt  int
+	failGenErr error
+	genCalls   int
 }
 
 func newGuardingRoleStore(s rbac.Store) *guardingRoleStore {
@@ -48,6 +55,10 @@ func newGuardingRoleStore(s rbac.Store) *guardingRoleStore {
 func (g *guardingRoleStore) RoleSetGeneration(ctx context.Context) (uint64, error) {
 	g.mu.Lock()
 	err := g.genErr
+	g.genCalls++
+	if g.failGenAt > 0 && g.genCalls == g.failGenAt {
+		err = g.failGenErr
+	}
 	g.mu.Unlock()
 	if err != nil {
 		return 0, err

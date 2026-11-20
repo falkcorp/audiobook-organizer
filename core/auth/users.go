@@ -1,5 +1,5 @@
 // file: core/auth/users.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 41d0b787-5ce8-4a3f-9d8e-8c7b8380e2f0
 // last-edited: 2026-11-19
 
@@ -197,7 +197,7 @@ func (s *Service) CreateUser(ctx context.Context, actor *Principal, in NewUser) 
 		// CanAssign above ran on the cache and once; this runs on the store, on
 		// every attempt, under a guard on the role set (see claimRoles).
 		if err := s.claimRoles(ctx, b, actor.Perms, roles); err != nil {
-			return fmt.Errorf("%w: %w", ErrScopeEscalation, err)
+			return scopeRefusal(err)
 		}
 		rec := *u
 		rec.Roles = slices.Clone(roles)
@@ -642,7 +642,7 @@ func (s *Service) SetRoles(ctx context.Context, actor *Principal, id UserID, rol
 			return err
 		}
 		if err := s.claimRoles(ctx, b, actor.Perms, added); err != nil {
-			return fmt.Errorf("%w: %w", ErrScopeEscalation, err)
+			return scopeRefusal(err)
 		}
 		up := *u
 		up.Roles = slices.Clone(next)
@@ -746,7 +746,9 @@ func (s *Service) roleSetGeneration(ctx context.Context) (uint64, error) {
 // grants (the audit's MEDIUM, F4-02-ROLE-GUARD round 2, n6).
 //
 // It returns the rbac error (ErrEscalation, wrapping rbac.ErrUnknownRole for
-// an absent role) unwrapped, for the caller to wrap as it wraps CanAssign's.
+// an absent role) unwrapped, for the caller to wrap as a scope refusal
+// (scopeRefusal, or the invite's own refusal); any other error is not a
+// refusal and is returned as it is.
 // Nothing is staged on a refusal. No roles added is no claim and stages
 // nothing. Called twice in one batch (SetRoles runs keepAnAdmin first), the
 // first guard wins and a newer generation than the first fails the commit.
@@ -762,6 +764,22 @@ func (s *Service) claimRoles(ctx context.Context, b *storage.Batch, by rbac.Chec
 		return err
 	}
 	return s.d.RBAC.ClaimRoleSet(b, gen)
+}
+
+// scopeRefusal is claimRoles' error as CreateUser and SetRoles return it. Only
+// the rbac refusal (rbac.ErrEscalation: the actor lacks a scope the role
+// carries, or the role no longer exists) is a scope refusal, the 403 callers
+// map ErrScopeEscalation to. Every other error is a fault of the server and
+// passes through as it is: a role store that cannot guard the role set
+// (rbac.ErrNoRoleGuard), an unreadable generation (ErrStoreUnavailable), a
+// write that lost its commit (storage.ErrConflict, which the retry loop
+// reads). Wrapping them all as a scope refusal, as the first version did,
+// told a client that a misconfigured server had refused it for what it holds.
+func scopeRefusal(err error) error {
+	if errors.Is(err, rbac.ErrEscalation) {
+		return fmt.Errorf("%w: %w", ErrScopeEscalation, err)
+	}
+	return err
 }
 
 // keepAnAdmin is the last-admin rule (05-rbac §4.6): when u is an active
