@@ -368,7 +368,7 @@ into one of the curated sections below, is a normal direct edit.
 - [ ] **F4-07-OWNER-ALLOW** F4-08 (a row of `reachObligations`, cleared by `TestReachRegisteredPath_OwnerAllow` in `internal/books/cutover`; a row is open until that test exists, asserts and declares the bar the guard computes): the Access-verified owner is admitted on every `Guards.Owner` route. R0's allow side is unrecorded: the recording boot has no Access verifier and no issuer, so no principal can be the owner, and `verdicts.json` `owner_set` holds no allowed cell. Record it (an HTTPS stand-in issuer, a trusted CA, a signed JWT, an owner-only column, never a 38th principal) or assert it on the registered path.
 - [ ] **F4-07-PRINCIPAL-CLASSES** spec owner (05-rbac section 12): decide whether to add the principal classes the oracle does not run: `session_delegated`, a Cloudflare Access identity, an owner-assured principal, an ABS-token principal on non-delegated routes, a user with no role, a multi-role user (`fp-worker` plus another), the key of the `custom-unknown` user and the zero-users first run. Listed in `seams.d/F4-07.md`, "Flagged for the spec's owner".
 
-- [ ] F5-18: back the native authority-build plan lookup with the tasks run store. A native Preview's `plan_op_id` is its RunID, but `deps.PlanReader` reads a v2 operation row, so a native apply of a native dry run cannot find its plan. Replace `TestT6G1Kinds_AuthorityBuildAppliesFromAPlantedV2PlanRow` with a test that feeds a native Preview's own result to the Live run. See `docs/agent-tasks/platform-core/seams.d/F5-06.md`.
+- [x] F5-18: back the native authority-build plan lookup with the tasks run store. Done in F5-18d (O6): `nativeAuthorityPlans` reads the plan from a succeeded native Preview's own record (`t6g1Deps.PlanRuns`); see `docs/agent-tasks/platform-core/seams.d/F5-18d.md`. A native Preview's `plan_op_id` is its RunID, but `deps.PlanReader` reads a v2 operation row, so a native apply of a native dry run cannot find its plan. Replace `TestT6G1Kinds_AuthorityBuildAppliesFromAPlantedV2PlanRow` with a test that feeds a native Preview's own result to the Live run. See `docs/agent-tasks/platform-core/seams.d/F5-06.md`.
 - [ ] F5-18: rewrite the native Help text of the 12 T6 group 1 writing kinds. It is verbatim HEAD and tells callers to pass `apply=true` or `dry_run=false`, which the native kinds refuse; name the run mode instead.
 - [x] F5-18: register every resource name the T6 group 1 kinds use in `r.Resources(...)`: `activity`, `metadata_cache`, `field_states`, `ai_journal`, `authority_lists`; also `sync_identity` and `metrics` (F5-01), `cover_text` (F5-08) and `file_provenance` (F5-09, F5-07). No kind uses `aux_stores` any more. DONE (F5-18a): `internal/books/module.go` declares the whole `pkg/ops` resource vocabulary (23 names) in `Register`; `internal/books/resources_test.go` keeps it equal to `pkg/ops/effects.go`.
 - [ ] F5-18: add the first test that runs the real metafetch apply (resolve-production-authors, auto-match-transcribed) through an Effects-enforcing writer; the gated writer must map tag writes to books, the change record to operations and `metadata_state:` to field_states.
@@ -408,16 +408,16 @@ into one of the curated sections below, is a normal direct edit.
       writer if it lapses, the shells stamp liveness from progress, and a test
       fails when either is removed. F5-18 blocker. Notes: `docs/agent-tasks/platform-core/seams.d/F5-11.md`.
 
-- [ ] **TODO-F5-18-CREDITS-CLASS-LISTS-RUN-ROWS** Route the native credits-backfill
+- [x] **TODO-F5-18-CREDITS-CLASS-LISTS-RUN-ROWS** (done in F5-18d, O10: `runClassLists` over `runRowStore`) Route the native credits-backfill
       class id lists (`SaveClassLists`/`ClearClassLists`) to `RunStore.ReplaceRows`
       on the run's own id, not through `rc.Writer()`: run rows are not gated by
       Preview, so a native preview keeps them with no Preview hole in the Writer.
       HEAD's dry run keeps them (`TestT6G3_CreditsBackfillHeadShellDryRunWritesNoBook`).
-- [ ] **TODO-F5-18-CREDITS-OPS-LISTER** The ops lister must return native runs of
+- [x] **TODO-F5-18-CREDITS-OPS-LISTER** (done in F5-18d, O11: `nativeCBLedger.others` pages the run listing) The ops lister must return native runs of
       `books.maintenance.credits-backfill`: `otherCreditsBackfillOps` filters on
       `row.DefID == "maintenance.credits-backfill"` and would stop seeing earlier
       attempts.
-- [ ] **TODO-F5-18-CREDITS-JUDGED-MARKERS-HOME** Judged markers are op rows written
+- [x] **TODO-F5-18-CREDITS-JUDGED-MARKERS-HOME** (done in F5-18d, O12: the judging run's result carries `judged_sources`) Judged markers are op rows written
       under an earlier (terminal) operation's id, and native `ReplaceRows` refuses a
       closed ledger (`core/tasks/native.go`). Give them a home outside the judged
       run's ledger (rows on the judging run keyed by the source id, or a journal
