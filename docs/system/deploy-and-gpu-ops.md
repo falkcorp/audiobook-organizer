@@ -674,11 +674,13 @@ executes:
   refuses with `--apply` (or as root) and names the paths, and a dry run only
   prints a NOTICE. `make install-rollback-helpers APPLY=1` therefore never runs
   it from the checkout: it does `sudo install -d -o root -g root -m 755
-  /opt/aorg-install`, `git archive HEAD deploy/rollback-helpers deploy/audiobook-organizer.service
-  scripts/storage_format_guard.py | sudo tar -x
-  --no-same-owner -C /opt/aorg-install` (files an earlier run left that this
-  commit no longer has stay, but the installer only reads the three paths above)
-  and `sudo python3 -I /opt/aorg-install/deploy/rollback-helpers/install_helpers.py ...
+  /opt/aorg-install`, `git -c tar.umask=0022 archive HEAD deploy/rollback-helpers
+  deploy/audiobook-organizer.service scripts/storage_format_guard.py | sudo tar -x
+  -f - --no-same-owner -C /opt/aorg-install` (the umask keeps the archive's modes
+  from being group-writable, which a root `tar` would preserve). Files an earlier
+  run left that this commit no longer has stay, and the directory is left on the
+  host afterwards (nothing removes it; `sudo rm -r` it if you want it gone); the
+  installer only reads the three paths above. Then `sudo python3 -I /opt/aorg-install/deploy/rollback-helpers/install_helpers.py ...
   --apply`. To run it by hand, do the same. The script re-runs itself with
   `python3 -I` either way. The recipe is covered by a `make -n` test and by
   extracting the same archive into a scratch directory and running the installer

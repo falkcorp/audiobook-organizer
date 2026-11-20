@@ -1445,7 +1445,7 @@ class RollbackRestoresEnvironment(unittest.TestCase):
         self.assertIn("enforces the retired-name list", out(p))
         self.assertNotIn("WARNING: ROLLBACK_ENV", out(p))
 
-    def pair_run(self, kept_enforced, prev_enforced):
+    def pair_run(self, kept_enforced, prev_enforced, kept_levels=R1):
         """ROLLBACK_ENV names another kept generation while .prev has its own,
         so the recipe knows both builds' enforced flags and can compare them."""
         host = FakeHost(self)
@@ -1454,7 +1454,12 @@ class RollbackRestoresEnvironment(unittest.TestCase):
             binary={"version": "v0.40.0", "levels": dict(R1), "enforced": prev_enforced},
         )
         sha = host.write_generation(
-            "ab" * 32, binary={"version": "v0.39.0", "levels": dict(R1), "enforced": kept_enforced}
+            "ab" * 32,
+            binary={
+                "version": "v0.39.0",
+                "levels": None if kept_levels is None else dict(kept_levels),
+                "enforced": kept_enforced,
+            },
         )
         before = host.environment()
         return host, before, host.make("rollback-restore", ROLLBACK_ENV=sha)
@@ -1468,6 +1473,15 @@ class RollbackRestoresEnvironment(unittest.TestCase):
         self.assertIn("predates the config flip", out(p))
         self.assertEqual(host.changes(), [], "nothing stopped or restored")
         self.assertEqual(host.environment(), before)
+
+    def test_the_enforced_mismatch_is_refused_even_when_no_levels_were_recorded(self) -> None:
+        for kept, prev in ((True, False), (False, True)):
+            with self.subTest(kept_enforced=kept):
+                host, before, p = self.pair_run(kept, prev, kept_levels=None)
+                self.assertNotEqual(p.returncode, 0, out(p))
+                self.assertIn("REFUSING: ROLLBACK_ENV names the environment", out(p))
+                self.assertEqual(host.changes(), [])
+                self.assertEqual(host.environment(), before)
 
     def test_a_pre_flip_environment_under_a_binary_that_enforces_is_refused(self) -> None:
         host, before, p = self.pair_run(kept_enforced=False, prev_enforced=True)

@@ -1145,7 +1145,7 @@ install-rollback-helpers:
 	  echo "→ Exporting HEAD to the root-owned $(ROLLBACK_EXPORT_DIR)/aorg-install (the installer runs as root and will not run from a checkout the deploy user can write)..."; \
 	  sudo install -d -o root -g root -m 755 "$(ROLLBACK_EXPORT_DIR)/aorg-install"; \
 	  git archive HEAD deploy/rollback-helpers deploy/audiobook-organizer.service scripts/storage_format_guard.py > /dev/null; \
-	  git archive HEAD deploy/rollback-helpers deploy/audiobook-organizer.service scripts/storage_format_guard.py | sudo tar -x --no-same-owner -C "$(ROLLBACK_EXPORT_DIR)/aorg-install"; \
+	  git -c tar.umask=0022 archive HEAD deploy/rollback-helpers deploy/audiobook-organizer.service scripts/storage_format_guard.py | sudo tar -x -f - --no-same-owner -C "$(ROLLBACK_EXPORT_DIR)/aorg-install"; \
 	  sudo python3 -I "$(ROLLBACK_EXPORT_DIR)/aorg-install/deploy/rollback-helpers/install_helpers.py" \
 	    --bin="$(DEPLOY_BIN)" --db="$(DEPLOY_DB)" --unit="$(DEPLOY_UNIT)" $(ROLLBACK_INSTALL_ARGS) \
 	    --apply $(if $(REPLACE_CONF),--replace-conf,); \
