@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-19-gated-writer-stamping-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 7e4c9a21-5b38-4d06-8f17-c2a9d0e63b54 -->
 <!-- last-edited: 2026-11-19 -->
 
@@ -42,7 +42,7 @@ Nothing.
   library store. File work after an apply (cover download, rename, tag writing),
   the activity log and the duplicate check that follows an apply are not behind
   it yet; the seam notes list them for the step that switches the engine on.
-- Fifteen of the store's write operations had no entry in the shared table that
+- Fifteen of the store's write operations (fourteen named operations and the raw key-value write) had no entry in the shared table that
   says what each one can change. Their entries are kept beside the new check for
   now, with a test that compares each against what the real store does, and
   belong in the shared table.
