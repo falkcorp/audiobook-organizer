@@ -2632,6 +2632,193 @@ class RollbackEnv(unittest.TestCase):
         self.assertIn(p, self.gens())
         self.assertLessEqual(len(self.gens()), 1 + 3 + 3, "boundary + newest 3 + 3 unknown pins")
 
+    # -- flip, rollback, flip again ------------------------------------------
+
+    def flip_and_roll_back(self, h):
+        """P (facts known, storage=1, not enforced) -> F (the flip) -> rollback
+        to P. Returns P's hash."""
+        self.deploy(h, "pre-flip", conf=self.conf("P"), facts=self.facts("pre-flip", "v1.0.0"))
+        p = self.sha(self.b)
+        self.deploy(
+            h,
+            "flip-build",
+            conf=self.NEW_CONF,
+            facts=self.facts("flip-build", "v2.0.0", "storage=2", "1"),
+        )
+        self.assertEqual(self.roll(h, "apply", p)[0], 0)
+        self.assertEqual(self.b.read_text(), "pre-flip")
+        return p
+
+    def assert_p_is_still_the_boundary(self, p: str) -> None:
+        g = self.gen(p)
+        self.assertEqual(g["pin_reason"], "boundary")
+        self.assertEqual(g["binary"]["version"], "v1.0.0")
+        self.assertEqual(g["binary"]["levels"], {"storage": 1})
+        self.assertIs(g["binary"]["enforced"], False)
+
+    def test_a_rollback_records_the_restored_binary_as_the_installed_one(self):
+        h = self.env_host()
+        p = self.flip_and_roll_back(h)
+        cur = json.loads((self.gdir() / "current.json").read_text())
+        self.assertEqual(cur["bin_sha256"], p)
+        self.assertEqual(cur["version"], 2, "the schema version, not the binary's")
+        self.assertEqual(cur["binary"]["version"], "v1.0.0")
+        self.assertEqual(cur["binary"]["levels"], {"storage": 1})
+        self.assertIs(cur["binary"]["enforced"], False)
+
+    def test_a_rollback_by_override_records_no_facts_for_the_restored_binary(self):
+        h = self.env_host()
+        self.deploy(h, "pre-flip", conf=self.conf("P"), facts=self.facts("pre-flip", "v1.0.0"))
+        p = self.sha(self.b)
+        self.deploy(h, "flip-build", conf=self.NEW_CONF, facts=self.facts("flip-build", "v2.0.0"))
+        # a release built elsewhere installed as .prev, named by P's generation
+        (self.stage / "audiobook-organizer").write_text("a-release-built-elsewhere")
+        self.assertEqual(h.run("install", "prev")[0], 0)
+        elsewhere = self.prev_sha()
+        self.assertEqual(self.roll(h, "apply", elsewhere, p)[0], 0)
+        cur = json.loads((self.gdir() / "current.json").read_text())
+        self.assertEqual(cur["bin_sha256"], elsewhere)
+        self.assertNotIn("binary", cur, "the generation's facts are about another binary")
+
+    def test_flip_rollback_reflip_keeps_the_pre_flip_boundary_and_its_facts(self):
+        h = self.env_host()
+        p = self.flip_and_roll_back(h)
+        self.deploy(
+            h,
+            "flip-build-2",
+            conf=self.NEW_CONF,
+            facts=self.facts("flip-build-2", "v2.0.1", "storage=2", "1"),
+        )
+        self.assert_p_is_still_the_boundary(p)
+        for n in range(8):  # eviction pressure, facts unknown
+            self.deploy(h, f"blind-{n}", conf=self.conf(f"B{n}"))
+        self.assertIn(p, self.gens())
+        self.assert_p_is_still_the_boundary(p)
+
+    def test_the_reflip_keeps_the_boundary_even_if_the_installed_record_was_lost(self):
+        h = self.env_host()
+        p = self.flip_and_roll_back(h)
+        (self.gdir() / "current.json").unlink()
+        self.deploy(
+            h,
+            "flip-build-2",
+            conf=self.NEW_CONF,
+            facts=self.facts("flip-build-2", "v2.0.1", "storage=2", "1"),
+        )
+        self.assert_p_is_still_the_boundary(p)
+
+    def test_a_deploy_with_no_facts_after_a_rollback_does_not_downgrade_the_boundary(self):
+        h = self.env_host()
+        p = self.flip_and_roll_back(h)
+        (self.gdir() / "current.json").unlink()
+        self.deploy(h, "flip-build-2", conf=self.NEW_CONF)  # the recipe passed no facts
+        self.assert_p_is_still_the_boundary(p)
+        for n in range(8):
+            self.deploy(h, f"blind-{n}", conf=self.conf(f"B{n}"))
+        self.assertIn(p, self.gens())
+
+    def test_the_flip_is_a_boundary_even_as_the_first_deploy_through_the_helper(self):
+        """The build it replaces was installed by hand, so no facts about it
+        exist: a build that enforces the retired-name list is still the first
+        one the previous release cannot read."""
+        h = self.env_host()
+        p = self.sha(self.b)
+        self.deploy(
+            h,
+            "flip-build",
+            conf=self.NEW_CONF,
+            facts=self.facts("flip-build", "v2.0.0", "storage=2", "1"),
+        )
+        self.assertEqual(self.gen(p)["pin_reason"], "boundary")
+        for n in range(8):
+            self.deploy(h, f"blind-{n}", conf=self.conf(f"B{n}"))
+        self.assertIn(p, self.gens())
+
+    def test_a_failed_keep_after_a_rollback_leaves_the_boundary_generation_in_place(self):
+        """ENOSPC while the generation is rewritten: the handler used to
+        delete P's generation, the one a rollback to P needs."""
+        h = self.env_host()
+        p = self.flip_and_roll_back(h)
+        (self.stage / "audiobook-organizer").write_text("flip-build-2")
+        real = h.mod._write_env_json
+
+        def full(path, doc):
+            if str(path).endswith(f"{p}.json"):
+                raise OSError(28, "No space left on device")
+            return real(path, doc)
+
+        with unittest.mock.patch.object(h.mod, "_write_env_json", side_effect=full):
+            code, _, err = h.run(
+                "install", "binary", *self.facts("flip-build-2", "v2.0.1", "storage=2", "1")
+            )
+        self.assertEqual(code, 1)
+        self.assertIn("keeping the environment", err)
+        self.assertEqual(self.b.read_text(), "pre-flip", "the binary is unchanged")
+        self.assert_p_is_still_the_boundary(p)
+
+    def test_a_stale_capture_after_a_rollback_leaves_the_boundary_generation_in_place(self):
+        h = self.env_host()
+        p = self.flip_and_roll_back(h)
+        (self.gdir() / "pending.json").write_text(
+            json.dumps({"version": 2, "bin_sha256": "f" * 64, "local_conf": {"present": False}})
+        )
+        (self.gdir() / "pending.json").chmod(0o600)
+        (self.stage / "audiobook-organizer").write_text("flip-build-2")
+        code, _, err = h.run(
+            "install", "binary", *self.facts("flip-build-2", "v2.0.1", "storage=2", "1")
+        )
+        self.assertEqual(code, 0, err)
+        self.assertIn("stale", err)
+        self.assert_p_is_still_the_boundary(p)
+
+    def test_a_capture_left_behind_by_a_finished_deploy_does_not_cost_the_next_generation(self):
+        """The new binary is in place but the capture could not be removed:
+        the next deploy (binary only) must still keep the generation for the
+        binary it replaces."""
+        h = self.env_host()
+        self.deploy(h, "bat-signal-2", conf=self.conf("2"), facts=self.facts("bat-signal-2"))
+        real = h.mod._forget_env
+
+        def stuck(*paths):
+            if any(str(x).endswith("pending.json") for x in paths):
+                raise OSError(5, "Input/output error")
+            return real(*paths)
+
+        (self.stage / "audiobook-organizer").write_text("bat-signal-3")
+        self.stage_conf(self.conf("3"))
+        self.assertEqual(h.run("install", "local-conf")[0], 0)
+        with unittest.mock.patch.object(h.mod, "_forget_env", side_effect=stuck):
+            code, _, err = h.run("install", "binary", *self.facts("bat-signal-3"))
+        self.assertEqual(code, 0, err)
+        self.assertIn("could not remove the finished capture", err)
+        three = self.sha(self.b)
+        (self.stage / "audiobook-organizer").write_text("bat-signal-4")
+        code, _, err = h.run("install", "binary", *self.facts("bat-signal-4"))
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("stale", err)
+        self.assertIn(three, self.gens(), "the generation for the binary just replaced is kept")
+
+    def test_eviction_waits_for_the_new_binary_to_be_in_place(self):
+        h = self.env_host()
+        for n in range(2, 7):
+            tag = f"bat-signal-{n}"
+            self.deploy(h, tag, conf=self.conf(str(n)), facts=self.facts(tag))
+        before = self.gens()
+        (self.stage / "audiobook-organizer").write_text("bat-signal-7")
+        real = h.mod.os.replace
+
+        def failing(src, dst, *a, **kw):
+            if str(dst) == str(self.b):
+                raise OSError(28, "No space left on device")
+            return real(src, dst, *a, **kw)
+
+        with unittest.mock.patch.object(h.mod.os, "replace", side_effect=failing):
+            code, _, _ = h.run("install", "binary", *self.facts("bat-signal-7"))
+        self.assertEqual(code, 1)
+        self.assertTrue(
+            before <= self.gens(), "a deploy that failed before the rename evicted nothing"
+        )
+
     def test_pins_are_bounded(self):
         h = self.env_host()
         for n in range(2, 14):
@@ -2933,6 +3120,66 @@ class RollbackEnv(unittest.TestCase):
         with self.assertRaises(h.mod.RefusedError):
             h.mod._write_env_json(path, {"text": "x" * (h.mod.ENV_LIMIT + 1)})
         self.assertFalse(Path(path).exists())
+
+    def test_a_bin_directory_open_to_group_or_others_is_refused_on_restore(self):
+        """The old snapshot read checked the directory holding <bin>: a rollback
+        copies .prev into it as root, so whoever can rename files there could
+        swap what it copies."""
+        h = self.env_host()
+        self.deploy(h)
+        prev = self.prev_sha()
+        self.b.parent.chmod(0o777)
+        self.addCleanup(self.b.parent.chmod, 0o700)
+        for argv in (("check", "prev"), ("apply", prev)):
+            with self.subTest(argv=argv):
+                code, _, err = self.roll(h, *argv)
+                self.assertEqual(code, 1)
+                self.assertIn("group or world writable", err)
+        self.assertEqual(self.b.read_text(), "bat-signal-2")
+
+    def test_a_malformed_generation_is_listed_as_unreadable_not_a_traceback(self):
+        h = self.env_host()
+        self.deploy(h)
+        bad = "0" * 64
+        (self.gdir() / f"{bad}.json").write_text(
+            json.dumps(
+                {"version": 2, "bin_sha256": bad, "seq": 99, "unit": "text", "local_conf": 1}
+            )
+        )
+        (self.gdir() / f"{bad}.json").chmod(0o600)
+        code, out, err = self.roll(h, "list")
+        self.assertEqual(code, 0, err)
+        self.assertIn("unreadable=1", out)
+        self.assertNotIn(bad, out, "a malformed generation is never listed as usable")
+
+    def test_boundary_generations_are_capped_with_a_warning(self):
+        h = self.env_host()
+        cap = h.mod.GEN_KEEP_BOUNDARY
+        self.deploy(
+            h,
+            "bat-signal-0",
+            conf=self.conf("0"),
+            facts=self.facts("bat-signal-0", "v1.0.0", "storage=0"),
+        )
+        shas = []
+        for n in range(1, cap + 4):
+            shas.append(self.sha(self.b))
+            tag = f"bat-signal-{n}"
+            self.deploy(
+                h, tag, conf=self.conf(str(n)), facts=self.facts(tag, f"v1.0.{n}", f"storage={n}")
+            )
+        self.assertEqual(
+            sum(1 for g in self.gens() if self.gen(g)["pin_reason"] == "boundary"), cap
+        )
+        for newest in shas[-cap:]:
+            self.assertIn(newest, self.gens())
+        self.assertNotIn(shas[0], self.gens(), "the oldest boundary is past the cap")
+        (self.stage / "audiobook-organizer").write_text("bat-signal-last")
+        code, _, err = h.run(
+            "install", "binary", *self.facts("bat-signal-last", "v1.0.99", "storage=99")
+        )
+        self.assertEqual(code, 0, err)
+        self.assertIn("boundary generations are kept", err)
 
     def test_a_generation_directory_open_to_group_or_others_is_refused(self):
         """_read_generation's directory check: the generations are root-only

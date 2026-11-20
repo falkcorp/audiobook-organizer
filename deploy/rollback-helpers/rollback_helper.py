@@ -1321,6 +1321,9 @@ ENV_PARTS = ("unit", "local_conf")
 # missing.
 GEN_KEEP = 3
 GEN_KEEP_PINNED = 3
+# Boundary generations are rare (a level raise or an `enforced` change), so
+# they are never evicted for age; this cap only stops a runaway, and says so.
+GEN_KEEP_BOUNDARY = 10
 PIN_BOUNDARY = "boundary"
 PIN_UNKNOWN = "unknown"
 _VERSION_TAG = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}")
@@ -1533,6 +1536,16 @@ def _pin_reason(replaced: dict | None, incoming: dict | None) -> str:
     routine deploy. A known boundary is never evicted; unknown pins are
     bounded, so a run of deploys that measured nothing cannot grow the
     directory, and cannot push a boundary out either."""
+    # The flip: the previous release reads names this build retires. That
+    # holds even when the replaced build's facts are unknown (the flip is the
+    # first deploy through the helper): unless it is KNOWN to have been
+    # enforced already, it is the last build before enforcement.
+    if (
+        incoming is not None
+        and incoming["enforced"] is True
+        and (replaced is None or replaced["enforced"] is not True)
+    ):
+        return PIN_BOUNDARY
     if replaced is not None and incoming is not None:
         r, i = replaced["levels"], incoming["levels"]
         if (
@@ -1554,6 +1567,42 @@ def _pin_reason(replaced: dict | None, incoming: dict | None) -> str:
     ):
         return PIN_UNKNOWN
     return ""
+
+
+def _existing_generation(cfg: dict[str, str], sha: str) -> dict | None:
+    """The stored generation for sha, or None when there is none or it is not
+    one this helper wrote (a damaged file is left to _scan_generations)."""
+    try:
+        doc = _read_env_json(_gen_path(cfg, sha))
+    except (OSError, RefusedError):
+        return None
+    if doc is None or doc.get("version") != ENV_VERSION or doc.get("bin_sha256") != sha:
+        return None
+    return doc
+
+
+def _forget_unless_boundary(cfg: dict[str, str], sha: str) -> None:
+    """Delete the generation for sha, except a boundary one: it is the
+    environment of the last build before a store level or enforcement step,
+    and a deploy that only lost track of it (a stale capture, a failed write
+    after a rollback) must not be the reason it is gone."""
+    doc = _existing_generation(cfg, sha)
+    if doc is not None and doc.get("pin_reason") == PIN_BOUNDARY:
+        return
+    _forget_env(_gen_path(cfg, sha))
+
+
+def _merge_facts(replaced: dict | None, existing: dict | None) -> dict | None:
+    """The facts for a generation being rewritten: what this deploy knows
+    about the replaced binary, and where it knows nothing, what the
+    generation already recorded (a rollback and a second deploy of the same
+    binary must not forget what the first deploy measured)."""
+    if existing is None:
+        return replaced
+    old = _clean_meta(existing.get("binary"))
+    if replaced is None:
+        return old
+    return {k: (replaced[k] if replaced[k] is not None else old[k]) for k in old}
 
 
 def _env_capture(cfg: dict[str, str], part: str) -> None:
@@ -1594,7 +1643,8 @@ def _env_promote(cfg: dict[str, str], had_binary: bool, incoming: dict | None = 
     with no binary to keep has nothing to roll back to. The capture itself is
     deleted by install binary once the new binary is in place, not here: if
     that last step fails and the deploy is rerun, the capture is what still
-    holds the environment the replaced binary ran under."""
+    holds the environment the replaced binary ran under. Eviction is the
+    caller's, after the new binary is in place."""
     pending_path = _pending_path(cfg)
     b = cfg["bin"]
     if not had_binary:
@@ -1609,10 +1659,12 @@ def _env_promote(cfg: dict[str, str], had_binary: bool, incoming: dict | None = 
     if pend is not None and (
         pend.get("version") != ENV_VERSION or pend.get("bin_sha256") != prev_sha
     ):
-        _forget_env(gen_path, pending_path)
+        _forget_unless_boundary(cfg, prev_sha)
+        _forget_env(pending_path)
         print(
-            f"warning: the environment capture for {b}.prev is stale, so no environment is kept for "
-            "it: a rollback to it refuses until the next deploy",
+            f"warning: the environment capture for {b}.prev is stale, so no new environment is kept "
+            "for it: a rollback to it refuses until the next deploy (a boundary generation kept "
+            "for it earlier is left in place)",
             file=sys.stderr,
         )
         return
@@ -1625,20 +1677,23 @@ def _env_promote(cfg: dict[str, str], had_binary: bool, incoming: dict | None = 
     except RefusedError:
         cur = None  # advisory: an unreadable record is "unrecorded"
     if cur is not None and cur.get("bin_sha256") == prev_sha:
-        replaced = _clean_meta(cur)
-    reason = _pin_reason(replaced, incoming)
+        replaced = _clean_meta(cur.get("binary"))
+    existing = _existing_generation(cfg, prev_sha)
+    facts = _merge_facts(replaced, existing)
+    reason = _pin_reason(facts, incoming)
+    if existing is not None and existing.get("pin_reason") == PIN_BOUNDARY:
+        reason = PIN_BOUNDARY  # a boundary, once recorded, stays one
     doc = {
         "version": ENV_VERSION,
         "bin_sha256": prev_sha,
         "seq": max((d["seq"] for d in docs), default=0) + 1,
-        "binary": replaced or _clean_meta(None),
+        "binary": facts or _clean_meta(None),
         "pinned": bool(reason),
         "pin_reason": reason,
     }
     for part in ENV_PARTS:
         doc[part] = pend.get(part) or _capture_env(cfg, part)
     _write_env_json(gen_path, doc)
-    _evict(cfg, prev_sha)
 
 
 def _scan_generations(cfg: dict[str, str]) -> tuple[list[dict], int]:
@@ -1668,6 +1723,7 @@ def _scan_generations(cfg: dict[str, str]) -> tuple[list[dict], int]:
             or doc.get("bin_sha256") != stem
             or not isinstance(doc.get("seq"), int)
             or isinstance(doc.get("seq"), bool)
+            or not all(isinstance(doc.get(part), dict) for part in ENV_PARTS)
         ):
             damaged += 1
             continue
@@ -1690,7 +1746,15 @@ def _evict(cfg: dict[str, str], keep_sha: str) -> None:
         )
         return
     keep = {d["bin_sha256"] for d in docs[:GEN_KEEP]}
-    keep |= {d["bin_sha256"] for d in docs if d.get("pin_reason") == PIN_BOUNDARY}
+    boundary = [d for d in docs if d.get("pin_reason") == PIN_BOUNDARY]
+    keep |= {d["bin_sha256"] for d in boundary[:GEN_KEEP_BOUNDARY]}
+    if len(boundary) > GEN_KEEP_BOUNDARY:
+        print(
+            f"warning: {len(boundary)} boundary generations are kept under {_env_dir(cfg)}, over the "
+            f"cap of {GEN_KEEP_BOUNDARY}: the oldest {len(boundary) - GEN_KEEP_BOUNDARY} are evicted. "
+            "A deploy that raises a store level or changes `enforced` this often is worth a look",
+            file=sys.stderr,
+        )
     unknown = [d for d in docs if d.get("pinned") is True and d.get("pin_reason") != PIN_BOUNDARY]
     keep |= {d["bin_sha256"] for d in unknown[:GEN_KEEP_PINNED]}
     keep.add(keep_sha)
@@ -1706,7 +1770,8 @@ def _gen_desc(doc: dict) -> str:
     b = _clean_meta(doc.get("binary"))
     return (
         f"version={b['version'] or 'unrecorded'} levels={_fmt_levels(b['levels'])} "
-        f"pinned={(doc.get('pin_reason') or PIN_UNKNOWN) if doc.get('pinned') is True else 0}"
+        f"pinned={(doc.get('pin_reason') or PIN_UNKNOWN) if doc.get('pinned') is True else 0} "
+        f"enforced={'unrecorded' if b['enforced'] is None else int(b['enforced'])}"
     )
 
 
@@ -1717,9 +1782,25 @@ def _kept_list(cfg: dict[str, str]) -> str:
     return "kept: " + "; ".join(f"{d['bin_sha256']} ({_gen_desc(d)})" for d in docs)
 
 
+def _check_bin_dir(cfg: dict[str, str]) -> None:
+    """The directory holding <bin>, <bin>.prev and <bin>.new must be one only
+    root (or the helper's user) can write: a rollback copies .prev into it as
+    root, and whoever can rename files there could swap what it copies."""
+    d = os.path.dirname(cfg["bin"])
+    try:
+        st = os.stat(d)
+    except OSError as e:
+        raise RefusedError(f"cannot read {d} ({e.strerror}); nothing changed") from e
+    if not _owner_ok(st):
+        raise RefusedError(
+            f"{d} is not owned by root or is group or world writable; nothing changed"
+        )
+
+
 def _read_generation(cfg: dict[str, str], gen: str, named: bool) -> dict:
     """The generation for the binary with sha256 gen, validated; every
     refusal says what to do. named: the operator named it (ROLLBACK_ENV)."""
+    _check_bin_dir(cfg)
     d = _env_dir(cfg)
     path = _gen_path(cfg, gen)
     doc = _read_env_json(path) if _check_env_dir(d) else None
@@ -1806,7 +1887,8 @@ def _rollback_list(cfg: dict[str, str]) -> int:
     pinned, what the files hold: no content), and which one .prev matches."""
     docs, damaged = _scan_generations(cfg)
     print(
-        f"generations={len(docs)} unreadable={damaged} keep_newest={GEN_KEEP} keep_unknown_pinned={GEN_KEEP_PINNED}"
+        f"generations={len(docs)} unreadable={damaged} keep_newest={GEN_KEEP} "
+        f"keep_unknown_pinned={GEN_KEEP_PINNED} keep_boundary={GEN_KEEP_BOUNDARY}"
     )
     for d in docs:
         lc = d["local_conf"]
@@ -1952,6 +2034,16 @@ def _rollback_env_run(cfg: dict[str, str], rest: list[str], gen_arg: str, apply:
         raise RefusedError(
             f"the rollback was interrupted ({e}): run `install rollback apply` again to finish it"
         ) from e
+    # The restored binary is the installed one now: say so, with what the
+    # generation recorded about it when it is its own generation (an override
+    # names another binary's, which says nothing about this one). The next
+    # deploy reads this to label the generation it keeps for it.
+    facts = doc.get("binary") if gen == rest[1] else None
+    _record_current(
+        cfg,
+        rest[1],
+        None if facts is None else {"bin_sha256": rest[1], **_clean_meta(facts)},
+    )
     print(
         f"restored {prev} as {b} (the replaced binary is {kept}), the unit and the local.conf drop-in "
         f"({_env_summary(doc)})"
@@ -2078,7 +2170,7 @@ def _install_binary(cfg: dict[str, str], src: str, meta: dict | None = None) -> 
                 # an earlier deploy is not the environment it last ran under.
                 # The capture stays (see _env_promote).
                 with contextlib.suppress(OSError, RefusedError):
-                    _forget_env(_gen_path(cfg, _sha256_file(prev)))
+                    _forget_unless_boundary(cfg, _sha256_file(prev))
                 raise RefusedError(
                     f"keeping the environment of {prev} failed ({e}); {b} is unchanged, "
                     "and a rollback to it refuses until a deploy succeeds"
@@ -2088,6 +2180,10 @@ def _install_binary(cfg: dict[str, str], src: str, meta: dict | None = None) -> 
             except OSError as e:
                 raise RefusedError(f"installing {src} as {b} failed ({e}); {b} is unchanged") from e
             _sync_dir(b)
+            # Only now: a deploy that fails before this point evicts nothing.
+            if had:
+                with contextlib.suppress(OSError, RefusedError):
+                    _evict(cfg, cur)
         except BaseException:
             with contextlib.suppress(OSError):
                 os.unlink(new)
@@ -2097,6 +2193,11 @@ def _install_binary(cfg: dict[str, str], src: str, meta: dict | None = None) -> 
             _forget_env(_pending_path(cfg))
         except OSError as e:
             print(f"warning: could not remove the finished capture ({e})", file=sys.stderr)
+            # A capture left behind names the binary just replaced: the next
+            # deploy would take it for stale and lose a generation. Rewrite it
+            # as a capture for the binary installed now, which holds no parts.
+            with contextlib.suppress(OSError, RefusedError):
+                _write_env_json(_pending_path(cfg), {"version": ENV_VERSION, "bin_sha256": sha_new})
         _record_current(cfg, sha_new, meta)
     finally:
         os.close(fd)
@@ -2131,6 +2232,7 @@ def _record_current(cfg: dict[str, str], sha: str, meta: dict | None) -> None:
     and best effort: a failure costs a label, never the deploy. A recipe's
     facts about another file than the one installed are not recorded."""
     doc: dict = {"version": ENV_VERSION, "bin_sha256": sha}
+    facts = None
     if meta is not None and meta["bin_sha256"] != sha:
         print(
             "warning: the recipe measured another file than the one installed (the staged file "
@@ -2138,7 +2240,9 @@ def _record_current(cfg: dict[str, str], sha: str, meta: dict | None) -> None:
             file=sys.stderr,
         )
     elif meta is not None:
-        doc.update(version=meta["version"], levels=meta["levels"], enforced=meta["enforced"])
+        facts = {k: meta[k] for k in ("version", "levels", "enforced")}
+    if facts is not None:
+        doc["binary"] = facts
     try:
         _ensure_env_dir(cfg)
         _write_env_json(_current_path(cfg), doc)
