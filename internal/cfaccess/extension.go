@@ -168,7 +168,8 @@ func (e *extension) Name() string { return ExtensionName }
 //     account is refused with its own error; a store failure is returned as
 //     is (stage 12 answers 503).
 //   - Otherwise an Assertion for the resolved user, Owner set when the JWT's
-//     e-mail is the configured owner and AuthTime the token's iat. The
+//     e-mail is the configured owner, AuthTime the token's iat and
+//     ExpiresAt its exp (the principal ends with the token). The
 //     Assertion carries no scopes and never raises the user's checker.
 //
 // Cf-Access-Authenticated-User-Email and every forwarding header are
@@ -244,6 +245,7 @@ func (e *extension) authenticate(r *http.Request, raw string, fromHeader bool) (
 		User:         user.ID,
 		CredentialID: "cfaccess:" + claims.Subject,
 		AuthTime:     authTime,
+		ExpiresAt:    va.ExpiresAt.UTC(),
 		Owner:        auth.IsOwnerEmail(claims.Email, e.c.OwnerEmail()),
 	}, nil
 }

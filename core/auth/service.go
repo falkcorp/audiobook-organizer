@@ -56,6 +56,14 @@ const (
 	// covers any session that needs the break-glass key, and a bootstrap key
 	// always expires.
 	MaxBootstrapKeyTTL = 24 * time.Hour
+	// DefaultExtensionMaxAge is core.auth.extension_max_age's default: how
+	// long an identity extension's principal stands after its AuthTime when
+	// the extension asserts no expiry (a session's own default TTL).
+	DefaultExtensionMaxAge = 24 * time.Hour
+	// MaxExtensionMaxAge caps any configured extension max age, so a
+	// principal with no asserted expiry still ends within a week (the
+	// remember-me TTL's default).
+	MaxExtensionMaxAge = 168 * time.Hour
 	// DefaultTempLoginTTL is core.auth.temp_login.ttl's default: how long a
 	// temp-login or reset link may be consumed (HEAD's 15 minutes, §4.1).
 	DefaultTempLoginTTL = 15 * time.Minute
@@ -174,6 +182,12 @@ type Settings struct {
 	// the start-up read-only key BootWrites mints (§4.6 item 6).
 	ReadOnlyKey       bool
 	ReadOnlyKeyScopes []rbac.Permission
+	// ExtensionMaxAge is core.auth.extension_max_age: how long after its
+	// AuthTime an identity extension's principal stands when the extension
+	// asserts no ExpiresAt. Zero or negative takes the 24 h default and a value
+	// above MaxExtensionMaxAge is capped there, so such a principal always
+	// ends (reloadable: it applies to principals bound after the change).
+	ExtensionMaxAge time.Duration
 }
 
 func (s Settings) withDefaults() Settings {
@@ -201,6 +215,10 @@ func (s Settings) withDefaults() Settings {
 		s.BootstrapKeyTTL = DefaultBootstrapKeyTTL
 	}
 	s.BootstrapKeyTTL = min(s.BootstrapKeyTTL, MaxBootstrapKeyTTL)
+	if s.ExtensionMaxAge <= 0 {
+		s.ExtensionMaxAge = DefaultExtensionMaxAge
+	}
+	s.ExtensionMaxAge = min(s.ExtensionMaxAge, MaxExtensionMaxAge)
 	if s.TempLoginTTL <= 0 {
 		s.TempLoginTTL = DefaultTempLoginTTL
 	}
@@ -417,6 +435,18 @@ func (s *Service) knownMethod(m Method) bool {
 	switch m {
 	case MethodSession, MethodSessionDelegated, MethodAPIKey:
 		return true
+	}
+	s.methodsMu.RLock()
+	_, ok := s.methods[m]
+	s.methodsMu.RUnlock()
+	return ok
+}
+
+// compatMethod reports whether m is a registered app compatibility method
+// (RegisterCompat): registered, and not an identity extension's "ext:" one.
+func (s *Service) compatMethod(m Method) bool {
+	if strings.HasPrefix(string(m), extensionPrefix) {
+		return false
 	}
 	s.methodsMu.RLock()
 	_, ok := s.methods[m]

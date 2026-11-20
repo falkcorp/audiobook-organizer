@@ -249,8 +249,11 @@ func (s *Service) keptSession(ctx context.Context, u *User, except string, now t
 // exists, is unexpired and is at the user's current epoch (so a self-service
 // password change, which re-stamps the caller's own session, keeps that
 // stream); a key principal's key is still active and unexpired, whatever the
-// epoch (keys are not epoch-bound, §4.12); a principal of any other method
-// stands while the user's epoch is the one it was built at. It returns nil,
+// epoch (keys are not epoch-bound, §4.12); an identity extension's principal
+// stands until its notAfter (Assertion.ExpiresAt, or
+// core.auth.extension_max_age after its AuthTime: ErrExpired at or after
+// it); a principal of any other method stands while the user's epoch is the
+// one it was built at. It returns nil,
 // the refusal (ErrRevoked, ErrExpired, ErrStaleEpoch, ErrInactiveUser,
 // ErrResetRequired, ErrInvalidCredentials), or ErrStoreUnavailable.
 //
@@ -283,6 +286,12 @@ func (s *Service) authOffBinding(p *Principal) bool {
 func (s *Service) stands(ctx context.Context, p *Principal) (*User, *APIKey, error) {
 	if p == nil || p.User == nil || p.User.ID == "" {
 		return nil, nil, fmt.Errorf("%w: no principal", ErrInvalidCredentials)
+	}
+	if !p.notAfter.IsZero() && !s.now().Before(p.notAfter) {
+		// An identity extension's credential has its own end (its token's
+		// exp, or core.auth.extension_max_age after AuthTime), which no
+		// store record carries: without this a stream outlives it.
+		return nil, nil, fmt.Errorf("%w: %s credential %s", ErrExpired, p.Method, p.CredentialID)
 	}
 	u, err := s.d.Store.GetUser(ctx, p.User.ID)
 	if err != nil {
@@ -331,18 +340,23 @@ func (s *Service) stands(ctx context.Context, p *Principal) (*User, *APIKey, err
 // (which moves neither the epoch nor the rbac generation) reaches it. p must
 // still stand, exactly as Revalidate decides (its user active and
 // unrestricted; its session alive and at the user's epoch; its key active,
-// unexpired and its user's; any other method at the epoch it was built at),
-// and the answer is built through PrincipalFor with p's own Method, over
-// the key's current scopes for a key principal (core's or a compat
-// surface's) and otherwise over the scopes p was built with: a narrowed
+// unexpired and its user's; an identity extension's principal before its
+// notAfter; any other method at the epoch it was built at), and a compat
+// surface's own principal is refused while its user must reset a password,
+// as Compat.PrincipalFor refuses to build it. The answer is built through
+// PrincipalFor with p's own Method, over the scopes p was built with that
+// the stored key still holds for a key principal (core's or a compat
+// surface's), and otherwise over the scopes p was built with: a narrowed
 // identity-extension or compat principal stays narrowed, and nil stays the
 // method's own rule. It never widens: a principal PrincipalFor did not build
 // carries no record of its narrowing and is refused. CredentialID, the key
-// reference, AuthTime, Assurance and ClientAddr are p's. The auth-off
-// binding is answered afresh while the mode is on. Errors are Revalidate's
-// (a store failure is ErrStoreUnavailable, anything else definite) and
-// PrincipalFor's. It reads the user and at most one credential and records
-// no metric (Revalidate counts the beat).
+// reference, AuthTime, Assurance, ClientAddr and the extension expiry are
+// p's; the expiry is never extended. The auth-off binding is answered afresh
+// while the mode is on. Refresh trusts its caller to pass the request's own
+// principal (the one stage 12 bound to it), as Revalidate does. Errors are
+// Revalidate's (a store failure is ErrStoreUnavailable, anything else
+// definite) and PrincipalFor's. It reads the user and at most one credential
+// and records no metric (Revalidate counts the beat).
 func (s *Service) Refresh(ctx context.Context, p *Principal) (*Principal, error) {
 	if s.authOffBinding(p) {
 		np, _ := s.authDisabledPrincipal(ClientInfo{})
@@ -357,12 +371,22 @@ func (s *Service) Refresh(ctx context.Context, p *Principal) (*Principal, error)
 		return nil, err
 	}
 	scopes := p.scopes
-	if k != nil {
+	switch {
+	case k != nil:
 		if len(k.Scopes) == 0 {
 			// Never stored (R3-1); nil would be the owner's whole role set.
 			return nil, fmt.Errorf("%w: key %s has no scope", ErrInvalidCredentials, k.ID)
 		}
-		scopes = k.Scopes
+		if scopes, err = keyScopes(p.scopes, k); err != nil {
+			return nil, err
+		}
+	case s.compatMethod(p.Method):
+		// A compat surface's own principal (an ABS JWT or refresh session)
+		// is refused while a reset is required, as Compat.PrincipalFor
+		// refuses to build it; standing alone does not check that.
+		if err := compatSurfaceStanding(u); err != nil {
+			return nil, err
+		}
 	}
 	np, err := s.PrincipalFor(ctx, u, p.Method, scopes, u.CredentialEpoch)
 	if err != nil {
@@ -370,7 +394,27 @@ func (s *Service) Refresh(ctx context.Context, p *Principal) (*Principal, error)
 	}
 	np.CredentialID, np.keyID = p.CredentialID, p.keyID
 	np.AuthTime, np.Assurance, np.ClientAddr = p.AuthTime, p.Assurance, p.ClientAddr
+	np.notAfter = p.notAfter // carried, never extended
 	return np, nil
+}
+
+// keyScopes is a refreshed key principal's scopes: the ones it was built with
+// that the stored key still holds, so a refresh never widens past either
+// (the key's scopes are immutable in authstore today; this holds by
+// construction if that changes). An empty intersection is refused, because
+// PrincipalFor would read nil as the owner's whole role set; a built key
+// principal always records its scopes (PrincipalFor refuses a key without).
+func keyScopes(recorded []rbac.Permission, k *APIKey) ([]rbac.Permission, error) {
+	out := make([]rbac.Permission, 0, len(recorded))
+	for _, sc := range recorded {
+		if slices.Contains(k.Scopes, sc) && !slices.Contains(out, sc) {
+			out = append(out, sc)
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%w: key %s no longer holds any scope its principal was built with", ErrRevoked, k.ID)
+	}
+	return out, nil
 }
 
 // revalidateErr maps a Revalidate point read's error: a missing record is a
@@ -386,6 +430,17 @@ func revalidateErr(what string, err error) error {
 		return err
 	}
 	return fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
+}
+
+// compatSurfaceStanding is the extra user rule of a compat surface's own
+// principal (Compat.PrincipalFor; not its key principal, which follows
+// stage 12's key rules): a user whose password must be reset is refused,
+// because the surface verified a credential that predates the reset.
+func compatSurfaceStanding(u *User) error {
+	if u.PasswordResetRequired {
+		return fmt.Errorf("%w: %s", ErrResetRequired, u.ID)
+	}
+	return nil
 }
 
 // standing is the user half of every credential check: the user is active

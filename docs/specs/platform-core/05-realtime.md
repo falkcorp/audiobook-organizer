@@ -257,8 +257,12 @@ A stream outlives the request that opened it. The hub listens on `events` for
   longer see are dropped from its set (explicitly named ones end the stream with
   `reason:"permission_revoked"`).
 - Additionally every heartbeat calls `auth.Service.Revalidate` (cheap, in-memory generation
-  table), covering expiry of the session itself (stream C's `StreamOpen()` check,
-  `opaccess/repairs.go:272`).
+  table), covering expiry of the credential itself (stream C's `StreamOpen()` check,
+  `opaccess/repairs.go:272`): a session's or a key's stored expiry, and an identity extension
+  principal's `notAfter`, which stage 12 records from `Assertion.ExpiresAt` (cfaccess: the JWT's
+  `exp`) or, when the extension asserts none, `core.auth.extension_max_age` after its `AuthTime`
+  (05-authn §3.3). `Refresh` carries that bound and never extends it. Expiry currently closes the
+  stream with `reason:"credential_revoked"`, like a revoke.
 
 ### 4.7 Streamed core topics
 

@@ -86,9 +86,9 @@ func TestRefresh_CoreKeyFollowsTheKeysScopes(t *testing.T) {
 	if !np.Perms.Has("gotham:patrol") || np.Perms.Has("gotham:cases.read") {
 		t.Fatalf("a patrol key rebuilt as %v: it widened to the owner's roles", np.Perms.Concrete())
 	}
-	// The stored key's scopes win over the ones the principal was built with
-	// (a key's scopes are immutable in the store, so a principal carrying
-	// others is one Refresh must not trust).
+	// The answer is the scopes the principal was built with that the stored
+	// key still holds: never wider than the key (a principal carrying others
+	// is one Refresh must not trust) ...
 	wide, err := f.svc.PrincipalFor(ctx, barbara, auth.MethodAPIKey, []rbac.Permission{"gotham:patrol", "gotham:cases.read"}, barbara.CredentialEpoch)
 	if err != nil {
 		t.Fatal(err)
@@ -97,6 +97,24 @@ func TestRefresh_CoreKeyFollowsTheKeysScopes(t *testing.T) {
 	if np := refreshed(t, f.svc, wide); !np.Perms.Has("gotham:patrol") || np.Perms.Has("gotham:cases.read") {
 		t.Fatalf("rebuilt over %v, want the stored key's scope (patrol) only", np.Perms.Concrete())
 	}
+	// ... and never wider than the principal: one built narrower than its key
+	// stays that narrow, and one sharing no scope with the key is refused.
+	_, bk := f.mint(f.session(barbara), barbara.ID, "gotham:patrol", "gotham:cases.read")
+	narrow, err := f.svc.PrincipalFor(ctx, barbara, auth.MethodAPIKey, []rbac.Permission{"gotham:cases.read"}, barbara.CredentialEpoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	narrow.CredentialID = bk.ID
+	if np := refreshed(t, f.svc, narrow); !np.Perms.Has("gotham:cases.read") || np.Perms.Has("gotham:patrol") {
+		t.Fatalf("a principal narrower than its key rebuilt as %v: it widened to the key", np.Perms.Concrete())
+	}
+	disjoint, err := f.svc.PrincipalFor(ctx, barbara, auth.MethodAPIKey, []rbac.Permission{"gotham:cases.read"}, barbara.CredentialEpoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disjoint.CredentialID = k.ID // patrol only
+	_, err = f.svc.Refresh(ctx, disjoint)
+	wantErr(t, "a key principal sharing no scope with its key", err, auth.ErrRevoked)
 
 	_, gk := f.mint(f.session(gordon), gordon.ID, "gotham:patrol")
 	borrowed := f.keyPrincipal(barbara, gk)
@@ -166,6 +184,21 @@ func TestRefresh_CompatPrincipals(t *testing.T) {
 	if np := refreshed(t, f.svc, narrow); !np.Perms.Has("gotham:patrol") || np.Perms.Has("gotham:cases.read") {
 		t.Fatalf("a narrowed compat principal rebuilt as %v: it widened", np.Perms.Concrete())
 	}
+
+	// A required password reset ends the surface's own principal, as
+	// Compat.PrincipalFor refuses to build one; the key principal follows the
+	// key rules (no reset check), as Compat.AuthenticateKey does.
+	raw2, _ := f.mint(sess, dick.ID, "gotham:patrol")
+	kp2, err := c.AuthenticateKey(ctx, raw2, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.edit(dick, func(u *auth.User) { u.PasswordResetRequired = true })
+	_, err = f.svc.Refresh(ctx, whole)
+	wantErr(t, "a compat surface principal whose user must reset", err, auth.ErrResetRequired)
+	_, err = c.PrincipalFor(ctx, dick, nil, dick.CredentialEpoch, cl)
+	wantErr(t, "Compat.PrincipalFor for a user who must reset", err, auth.ErrResetRequired)
+	refreshed(t, f.svc, kp2)
 }
 
 // oracleExt is an identity extension asserting a fixed result.

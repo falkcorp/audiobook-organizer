@@ -211,9 +211,11 @@ type Deps struct {
 	// neither the credential epoch nor the rbac generation, so only a fresh
 	// build notices it. The kernel supplies auth.Service.Refresh (F6-03),
 	// which rebuilds every method auth builds (a session, a core or compat
-	// key over the key's current scopes, an identity extension or compat
-	// surface over the scopes it was built with) without widening it. A
-	// definite error ends the stream credential_revoked;
+	// key over the scopes it was built with that the key still holds, an
+	// identity extension or compat surface over the scopes it was built
+	// with) without widening it, and refuses an identity extension's
+	// principal past its expiry (ErrExpired). A definite error, an expiry
+	// included, ends the stream credential_revoked;
 	// a store failure is retried on each heartbeat, withholds every event
 	// while it persists, and ends the stream permission_revoked on the third
 	// in a row.

@@ -108,7 +108,7 @@ func (f *fx) withExtensions(t *testing.T, exts ...auth.Extension) (*auth.Service
 	t.Helper()
 	return auth.New(context.Background(), auth.Options{ImportedKeyPrefixes: []string{"abk_"}}, auth.Deps{
 		Store: f.st, NewBatch: f.st.NewBatch, RBAC: f.rb, Audit: f.audit, Revocations: f.jrnl, Clock: f.clock,
-		Extensions: exts,
+		Settings: f.liveSettings, Extensions: exts,
 	})
 }
 

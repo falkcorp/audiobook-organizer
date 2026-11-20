@@ -424,6 +424,23 @@ func TestCFAccess_ValidTokenFromHeaderOrCookie(t *testing.T) {
 	}
 }
 
+// TestCFAccess_AssertionCarriesTheTokensExp: the assertion's ExpiresAt is the
+// verified token's exp, so the principal stage 12 builds (and an SSE stream
+// holding it) ends when the token does, not at core's no-expiry cap.
+func TestCFAccess_AssertionCarriesTheTokensExp(t *testing.T) {
+	g := newRig(t)
+	exp := time.Now().Add(90 * time.Minute).Truncate(time.Second).UTC() // exp is whole unix seconds
+	spec := human("barbara@wayne.example.test")
+	spec.Expiry = exp
+	a, err := g.do(g.acc.token(spec), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.ExpiresAt.Equal(exp) {
+		t.Fatalf("ExpiresAt = %v, want the token's exp %v", a.ExpiresAt, exp)
+	}
+}
+
 // TestCFAccess_JWKSOutageFallsThrough: when Cloudflare's keys cannot be
 // fetched the token is neither accepted nor called forged: the extension
 // reports ErrExtensionUnavailable and grants nothing, and stage 12 opens to
