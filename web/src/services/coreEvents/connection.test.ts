@@ -451,6 +451,16 @@ describe('one resync per reopen', () => {
     });
   }
 
+  it('only the frame right after the open can be swallowed: a gap after a delivered overflow passes', async () => {
+    const { conn, resets, s2 } = await hiddenReopen();
+    s2.control(TOPIC_OPENED, {});
+    s2.control(TOPIC_RESET, { reason: 'overflow' });
+    s2.control(TOPIC_RESET, { reason: 'gap' });
+    await tick();
+    expect(resets).toEqual(['reconnect', 'overflow', 'gap']);
+    conn.close('idle');
+  });
+
   it('never swallows an overflow', async () => {
     const { conn, resets, s2 } = await hiddenReopen();
     s2.control(TOPIC_OPENED, {});
