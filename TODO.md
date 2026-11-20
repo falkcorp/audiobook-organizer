@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.56 -->
+<!-- version: 10.78.57 -->
 <!-- version: 10.78.49 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
@@ -4652,7 +4652,7 @@ Do it properly: `state_dir` as an ordinary setting, resolved the same way the re
   start-up, which is the bug #3168 was about — and this setting is *more* dangerous to
   get wrong than `database_path`, because the blob lives in the database whose secrets
   the setting governs.
-- An entry in `envLockedSettings`/`flagLockedSettings` so `SettingLocks()` reports it
+- An entry in `envLockedSettings`/`flagLockedSettings` so `SettingLockedBy()` reports it
   and the UI can grey it out with a reason.
 - Keep `ABK_STATE_DIR` working as an alias, or migrate it and say so in the changelog.
 

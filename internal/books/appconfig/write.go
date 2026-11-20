@@ -1,5 +1,5 @@
 // file: internal/books/appconfig/write.go
-// version: 1.4.0
+// version: 1.6.0
 // guid: 1e5a7c93-4d08-4f26-b3a9-8c0d2e6f1b74
 // last-edited: 2026-11-19
 
@@ -243,6 +243,8 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 	// Credentials follow their URL (egress.go): beyond HEAD parity. It sees the
 	// list the write ends with, so a model or URL folded in is checked too.
 	invalid = append(invalid, egressViolations(before, checked)...)
+	// A program the server runs must be a path an unprivileged user cannot swap.
+	invalid = append(invalid, execPathViolations(before, u)...)
 	if len(unknown) > 0 {
 		slices.Sort(unknown)
 		return config.UpdateResult{}, fmt.Errorf("%w: %s", coreconfig.ErrUnknownKey, strings.Join(unknown, ", "))
@@ -255,15 +257,28 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 		return config.UpdateResult{}, headErr(errors.Join(coreconfig.ErrInvalid, errors.Join(invalid...)), byPath)
 	}
 	needAdmin := append(secretHeads(append(slices.Clone(secretSets), secretClears...)), adminHeads...)
-	if len(needAdmin) > 0 && !(a.Interactive && a.Can != nil && a.Can(adminPerm)) {
-		slices.Sort(needAdmin)
-		return config.UpdateResult{}, fmt.Errorf("%w: %s needs %s", coreconfig.ErrForbidden, strings.Join(needAdmin, ", "), adminPerm)
+	applyAs := a
+	if !(a.Interactive && a.Can != nil && a.Can(adminPerm)) {
+		inWindow := firstRunMay(a, u)
+		if len(needAdmin) > 0 && !inWindow {
+			slices.Sort(needAdmin)
+			return config.UpdateResult{}, fmt.Errorf("%w: %s needs %s", coreconfig.ErrForbidden, strings.Join(needAdmin, ", "), adminPerm)
+		}
+		if inWindow {
+			// The first-run window: the Engine has authorized an update made only
+			// of the setup wizard's keys, so core's own protection (a library root
+			// is an admin key; so may be any other key of the list) is answered for
+			// exactly this write, as Mutate's internal actor is. An update that
+			// names one key outside the list is not elevated: core sees the caller
+			// as they are and refuses every admin key in it.
+			applyAs = firstRunActor(a)
+		}
 	}
 	var res coreconfig.Result
 	genBefore := e.acc.Generation()
 	if len(patch.Set)+len(patch.Unset) > 0 {
 		var err error
-		if res, err = e.acc.Apply(ctx, patch, a); err != nil {
+		if res, err = e.acc.Apply(ctx, patch, applyAs); err != nil {
 			return config.UpdateResult{}, headErr(err, byPath)
 		}
 	}

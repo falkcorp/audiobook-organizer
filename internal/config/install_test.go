@@ -1,5 +1,5 @@
 // file: internal/config/install_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a1e3c7d-9b04-4f62-8d3a-2e6b0c9f1a48
 // last-edited: 2026-11-19
 
@@ -28,7 +28,6 @@ func (s *stubFacade) Mutate(fn func(*Config)) error {
 	return s.mutateErr
 }
 func (s *stubFacade) Locks() map[string]string { return s.locks }
-func (s *stubFacade) EnvLocked() []string      { return s.envLocked }
 func (s *stubFacade) View() View               { return View{Keys: []KeyView{}} }
 func (s *stubFacade) Update(context.Context, Actor, Update) (UpdateResult, error) {
 	return UpdateResult{}, nil
@@ -118,17 +117,11 @@ func TestInstall_ProjectReplacesAppConfigAndMovesGeneration(t *testing.T) {
 	}
 }
 
-// TestInstall_LocksComeFromTheFacade: SettingLocks, EnvLockedSettings and
-// SettingLockedBy answer from the installed Facade, not from HEAD's env tables.
+// TestInstall_LocksComeFromTheFacade: SettingLockedBy answers from the installed
+// Facade, not from HEAD's env tables.
 func TestInstall_LocksComeFromTheFacade(t *testing.T) {
-	f := &stubFacade{locks: map[string]string{"log_level": "env ABO_CORE_LOG_LEVEL"}, envLocked: []string{"log_level"}}
+	f := &stubFacade{locks: map[string]string{"log_level": "env ABO_CORE_LOG_LEVEL"}}
 	installForTest(t, f)
-	if got := SettingLocks(); len(got) != 1 || got["log_level"] != "env ABO_CORE_LOG_LEVEL" {
-		t.Fatalf("SettingLocks = %v", got)
-	}
-	if got := EnvLockedSettings(); len(got) != 1 || got[0] != "log_level" {
-		t.Fatalf("EnvLockedSettings = %v", got)
-	}
 	if got := SettingLockedBy("log_level"); got != "env ABO_CORE_LOG_LEVEL" {
 		t.Fatalf("SettingLockedBy(log_level) = %q", got)
 	}

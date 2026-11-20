@@ -1,5 +1,5 @@
 // file: internal/server/server_more_test.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 18a6b0a3-7e78-4e0f-8b8e-0e4c1dbde6de
 // last-edited: 2026-11-19
 
@@ -129,39 +129,55 @@ func TestUpdateConfigEndpoint(t *testing.T) {
 
 // TestUpdateConfig_FirstRunWithNoUsers pins what a fresh install gets from
 // PUT /api/v1/config before any account exists (the first-run wizard's state):
-// no users, so no principal and no admin role. root_dir is an admin key and is
-// refused (403) with nothing written; setup_complete is a plain key and goes
-// through. There is no auth-off exemption (HEAD had one), so a wizard that must
-// set the library path before the first account exists cannot, until a lead
-// decides otherwise.
+// no user and setup not complete is the first-run window, and the route hands the
+// Facade an Actor that holds config.FirstRunPerm (and no admin role) exactly
+// then. That is all this test pins, over the route tests' stub. What the
+// Facade does with it is decided by the real Engine over core's store, and
+// asserted there: appconfig's TestFirstRun_* (who may write which key) and
+// internal/books' TestFirstRun_*OverTheRealCoreStore (the wizard's save commits;
+// anything else is refused; the window shuts at setup_complete).
 func TestUpdateConfig_FirstRunWithNoUsers(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
+	stub, ok := config.Current().(*serverConfigFacade)
+	require.True(t, ok, "the fixture installs the stub")
 
-	put := func(set map[string]any) *httptest.ResponseRecorder {
-		body, err := json.Marshal(map[string]any{"set": set})
+	put := func() config.Actor {
+		body, err := json.Marshal(map[string]any{"set": map[string]any{"scan_on_startup": true}})
 		require.NoError(t, err)
 		req := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		server.router.ServeHTTP(w, req)
-		return w
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		stub.mu.Lock()
+		defer stub.mu.Unlock()
+		require.NotEmpty(t, stub.actors)
+		return stub.actors[len(stub.actors)-1]
 	}
 	users, err := database.GetGlobalStore().ListUsers()
 	require.NoError(t, err)
 	require.Empty(t, users, "the fixture must be a fresh install")
 
-	before := config.Snapshot().RootDir
-	w := put(map[string]any{"root_dir": t.TempDir()})
-	assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
-	assert.Equal(t, before, config.Snapshot().RootDir, "a refused write changes nothing")
+	c := config.Snapshot()
+	c.SetupComplete = false
+	config.Project(c)
+	a := put()
+	require.NotNil(t, a.Can)
+	assert.True(t, a.Can(config.FirstRunPerm), "no user and setup not complete: the window is open")
+	assert.False(t, a.Can("core:admin"), "the window is not the admin role")
+	assert.False(t, a.Interactive)
 
-	w = put(map[string]any{"setup_complete": true})
-	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	assert.True(t, config.Snapshot().SetupComplete)
+	c.SetupComplete = true
+	config.Project(c)
+	assert.False(t, put().Can(config.FirstRunPerm), "setup_complete shuts the window")
 
-	w = put(map[string]any{"setup_complete": true, "root_dir": t.TempDir()})
-	assert.Equal(t, http.StatusForbidden, w.Code, "the wizard's two-key save is refused whole: %s", w.Body.String())
+	c.SetupComplete = false
+	config.Project(c)
+	require.True(t, server.configFirstRun())
+	_, err = database.GetGlobalStore().CreateUser("bruce", "bruce@wayne.example", "bcrypt", "hash", []string{"admin"}, "active")
+	require.NoError(t, err)
+	assert.False(t, server.configFirstRun(), "a user exists: the window is shut")
 }
 
 func TestImportMetadataEndpoint(t *testing.T) {

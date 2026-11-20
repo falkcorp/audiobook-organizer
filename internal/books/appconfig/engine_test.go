@@ -1,5 +1,5 @@
 // file: internal/books/appconfig/engine_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 7d1b3e58-0a94-4c67-8f2d-b5c9a4e6d031
 // last-edited: 2026-11-19
 
@@ -69,8 +69,8 @@ func TestEngine_ProjectsKeysSecretsAndPassthrough(t *testing.T) {
 	if len(published) != 1 || published[0].LogLevel != "warn" {
 		t.Fatalf("published %d projections, want the one Start made", len(published))
 	}
-	if e.Locks()["smtp_host"] != "env ABO_X" || !slices.Equal(e.EnvLocked(), []string{"smtp_host"}) {
-		t.Errorf("locks = %v, env-locked %v", e.Locks(), e.EnvLocked())
+	if l := e.Locks(); len(l) != 1 || l["smtp_host"] != "env ABO_X" {
+		t.Errorf("locks = %v", l)
 	}
 }
 

@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.14.3 -->
+<!-- version: 1.14.4 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-19 -->
 
@@ -1091,7 +1091,8 @@ an optional ratchet, not an extraction step.
    becomes a façade. The books module constructs one **`Facade` value** per App (the type lives in ABO's
    `internal/config` itself, so it adds no package path; MOD6-11) from the handles it registered and the core
    handles it reads (`core.storage`, `core.auth`, …), and installs it as the target of ABO's package-level
-   `AppConfig`, `Snapshot`, `Mutate`, `Generation`, `SettingLocks`, `EnvLockedSettings`. `AppConfig` is a
+   `AppConfig`, `Snapshot`, `Mutate`, `Generation`, `SettingLockedBy` (`SettingLocks` and `EnvLockedSettings`, which fed the old
+   `env_locked` annotation, are deleted at F3-07). `AppConfig` is a
    **projection** rebuilt under the façade's lock on every core generation change (one `OnChange` per section),
    mapped field by field through the rename table (§1.12.3); secret fields in the projection are resolved from
    `secrets` in memory only. `Mutate(fn)` diffs the before/after `Config` and turns it into one `Store.Apply`

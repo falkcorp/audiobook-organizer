@@ -1,5 +1,5 @@
 // file: internal/books/options.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
 // last-edited: 2026-11-19
 
@@ -462,6 +462,7 @@ func Attach(mod module.Module, a *app.App) error {
 		return fmt.Errorf("books: attach the served registry: %w", err)
 	}
 	tapActivity(a, srv.ActivityLogWriter())
+	srv.SetConfigAtoms(atomsWithScope)
 	srv.SetPostureTokens(func() []system.PostureToken {
 		h, err := a.CheckpointHealth()
 		return checkpointPosture(h, err, time.Now())

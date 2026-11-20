@@ -1,5 +1,5 @@
 // file: internal/books/appconfig/fake_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2a6d8f14-7c39-4e51-9b0a-e3f5c1d7a862
 // last-edited: 2026-11-19
 
@@ -38,6 +38,7 @@ type fakeAccess struct {
 	hooks     []func(uint64)
 	applyErr  error
 	applied   []coreconfig.Patch
+	actors    []coreconfig.Actor // who each Apply ran as
 	puts      []secrets.Name
 	dels      []secrets.Name
 	by        []string
@@ -67,8 +68,9 @@ func (f *fakeAccess) Keys() iter.Seq2[coreconfig.Path, coreconfig.KeyState] {
 	return func(func(coreconfig.Path, coreconfig.KeyState) bool) {}
 }
 
-func (f *fakeAccess) Apply(_ context.Context, p coreconfig.Patch, _ coreconfig.Actor) (coreconfig.Result, error) {
+func (f *fakeAccess) Apply(_ context.Context, p coreconfig.Patch, a coreconfig.Actor) (coreconfig.Result, error) {
 	f.mu.Lock()
+	f.actors = append(f.actors, a)
 	if f.applyErr != nil {
 		f.mu.Unlock()
 		return coreconfig.Result{}, f.applyErr

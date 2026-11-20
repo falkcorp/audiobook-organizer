@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.116.0
+// version: 2.117.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-11-19
 
@@ -271,7 +271,13 @@ type Server struct {
 	// and the restart request), installed by books' Attach once the App
 	// exists, after the handlers are wired: atomic for the same reason as
 	// postureTokens. Nil answers the route 503. See SetRestoreStager.
-	restoreStager      atomic.Pointer[systemhandlers.RestoreStager]
+	restoreStager atomic.Pointer[systemhandlers.RestoreStager]
+	// configAtoms is the lookup the settings routes build Actor.Can from (HEAD's
+	// permission atoms whose native scopes include a permission): books' atom table
+	// is books' code, so books installs it from Attach once the handlers are
+	// wired, as with postureTokens. Nil holds no section permission, which fails
+	// closed. See SetConfigAtoms.
+	configAtoms        atomic.Pointer[systemhandlers.ConfigPermissionAtoms]
 	batchPoller        *BatchPoller
 	mergeService       *merge.Service
 	diagnosticsService *diagnostics.Service

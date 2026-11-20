@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.177.0
+// version: 1.178.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-11-19
 
@@ -2368,38 +2368,6 @@ var flagLockedSettings = map[string]string{
 	"database_path": "--db",
 }
 
-// EnvLockedSettings returns the JSON field names of the settings the operator is
-// currently forcing — through the environment, an explicit flag, or (for the Deluge
-// keys) the server's config file — sorted so the response is stable. The name is the
-// wire name of the API field ("env_locked") and was kept when the file source was
-// added.
-//
-// This exists so the UI cannot lie. Production sets DATABASE_PATH in its systemd
-// unit; without this list the path control renders as an ordinary editable field
-// whose saved value is overwritten on the next boot — the edit appears to take, and
-// then quietly does not. A control the operator cannot actually change must say so.
-func EnvLockedSettings() []string {
-	if f := Current(); f != nil {
-		return f.EnvLocked()
-	}
-	locked := make([]string, 0, len(envLockedSettings)+len(flagLockedSettings))
-	for key, envVar := range envLockedSettings {
-		if envSupplied(envVar) || configFileSupplied(key) {
-			locked = append(locked, key)
-		}
-	}
-	// A key can be locked by an explicit flag as well as by the environment, and
-	// a key locked by both must appear once, not twice — the UI renders this list
-	// directly.
-	for key := range flagLockedSettings {
-		if flagSupplied(key) && !slices.Contains(locked, key) {
-			locked = append(locked, key)
-		}
-	}
-	slices.Sort(locked)
-	return locked
-}
-
 // SettingLockedBy names what makes key read-only — the environment variable, the
 // command-line flag, or LockedByConfigFile (plus the file's path) — or "" when the key is freely settable
 // from the UI. When several apply the environment wins, then the flag, then the file.
@@ -2419,22 +2387,6 @@ func SettingLockedBy(key string) string {
 		return configFileLockReason()
 	}
 	return ""
-}
-
-// SettingLocks returns every currently-locked setting mapped to what locks it.
-// Same membership as EnvLockedSettings, with the reason attached.
-//
-// EnvLockedSettings is kept as-is beside this: the UI's existing checks are
-// membership tests, and a bare list is the right shape for those. This map is
-// for the copy that has to name the mechanism — telling an operator to remove
-// an environment variable when the real cause is a --db on the ExecStart line
-// sends them to edit the wrong thing.
-func SettingLocks() map[string]string {
-	locks := make(map[string]string, len(envLockedSettings)+len(flagLockedSettings))
-	for _, key := range EnvLockedSettings() {
-		locks[key] = SettingLockedBy(key)
-	}
-	return locks
 }
 
 // lockedBool returns the boolean a locked key resolves to. viper turns a value that
@@ -2768,7 +2720,7 @@ func registerConfigDefaults(r defaultRegistrar) {
 	r.BindEnv("otel_metrics_otlp_interval", "OTEL_METRIC_EXPORT_INTERVAL")                    //nolint:errcheck
 	r.BindEnv("otel_metrics_otlp_insecure", "OTEL_EXPORTER_OTLP_METRICS_INSECURE")            //nolint:errcheck
 	// Deluge: bound explicitly so the environment reaches viper where AutomaticEnv
-	// is off. The names are the ones SettingLocks reports (envLockedSettings).
+	// is off. The names are the keys of envLockedSettings.
 	r.BindEnv("deluge_web_url", "DELUGE_WEB_URL")                     //nolint:errcheck
 	r.BindEnv("deluge_web_password", "DELUGE_WEB_PASSWORD")           //nolint:errcheck
 	r.BindEnv("deluge_discovery_label", "DELUGE_DISCOVERY_LABEL")     //nolint:errcheck

@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.70.0
+// version: 4.71.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-11-19
 
@@ -307,6 +307,34 @@ func (s *Server) currentPostureTokens() []systemhandlers.PostureToken {
 		return (*f)()
 	}
 	return nil
+}
+
+// SetConfigAtoms installs the lookup the settings routes answer a section
+// permission with (05-rbac section 6.1): the HEAD atoms whose native scopes
+// include the permission. internal/books hands it its atom table once New has
+// returned; until then no section permission is held and such writes are refused.
+func (s *Server) SetConfigAtoms(f systemhandlers.ConfigPermissionAtoms) {
+	s.configAtoms.Store(&f)
+}
+
+// configAtomsFor is the system handler's lazy lookup: SetConfigAtoms' function,
+// none before.
+func (s *Server) configAtomsFor(perm string) []string {
+	if f := s.configAtoms.Load(); f != nil && *f != nil {
+		return (*f)(perm)
+	}
+	return nil
+}
+
+// configFirstRun reports the first-run window: no user exists and setup is not
+// complete. A store that cannot count users is not the window.
+func (s *Server) configFirstRun() bool {
+	store := s.storeForWiring()
+	if store == nil || config.Snapshot().SetupComplete {
+		return false
+	}
+	n, err := store.CountUsers()
+	return err == nil && n == 0
 }
 
 // SetRestoreStager installs POST /backup/restore's stager (05-backup

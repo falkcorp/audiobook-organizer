@@ -1,5 +1,5 @@
 // file: internal/server/config_facade_test.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 3d8a6c52-1e47-4b09-9f2a-5c7e0b1d4a68
 // last-edited: 2026-11-19
 
@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -44,9 +43,10 @@ import (
 // owner's proof while an owner is set and the host's configuration while none
 // is. There is no auth-off exemption, as in core.
 type serverConfigFacade struct {
-	mu    sync.Mutex
-	gen   atomic.Uint64
-	locks map[string]string
+	mu     sync.Mutex
+	gen    atomic.Uint64
+	locks  map[string]string
+	actors []config.Actor // who each Update ran as, in order
 }
 
 // installServerConfigFacade binds a fresh serverConfigFacade behind the config
@@ -86,16 +86,6 @@ func (f *serverConfigFacade) Locks() map[string]string {
 	for k, v := range f.locks {
 		out[k] = v
 	}
-	return out
-}
-
-func (f *serverConfigFacade) EnvLocked() []string {
-	l := f.Locks()
-	out := make([]string, 0, len(l))
-	for k := range l {
-		out = append(out, k)
-	}
-	sort.Strings(out)
 	return out
 }
 
@@ -189,6 +179,7 @@ const facadeAdminPerm = "core:admin"
 func (f *serverConfigFacade) Update(_ context.Context, a config.Actor, u config.Update) (config.UpdateResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.actors = append(f.actors, a)
 
 	var both []error
 	for _, k := range u.Unset {

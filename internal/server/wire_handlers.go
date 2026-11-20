@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.64.13
+// version: 2.65.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-11-18
 
@@ -387,7 +387,10 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		WithPostureTokens(s.currentPostureTokens).
 		WithANNSnapshotDivergence(s.markHNSWSnapshotDiverged).
 		// Lazy: books installs the stager after wiring (SetRestoreStager).
-		WithRestoreStager(s.currentRestoreStager)
+		WithRestoreStager(s.currentRestoreStager).
+		// Lazy: books installs its atom table after wiring (SetConfigAtoms).
+		WithConfigAtoms(s.configAtomsFor).
+		WithConfigFirstRun(s.configFirstRun)
 	s.systemHandler = systemH
 
 	// Dedup domain handler (candidate / cluster / series listing, merge /

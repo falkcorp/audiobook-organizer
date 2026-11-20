@@ -1,5 +1,5 @@
 // file: internal/books/appconfig/engine.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6c2f8a4d-9e13-4b75-a1c0-d4e7f3b82a59
 // last-edited: 2026-11-19
 
@@ -563,13 +563,6 @@ func (e *Engine) Locks() map[string]string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return maps.Clone(e.locks)
-}
-
-// EnvLocked is the locked settings' names, sorted.
-func (e *Engine) EnvLocked() []string {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return slices.Sorted(maps.Keys(e.locks))
 }
 
 // View is GET /api/v1/config's content: every projected row, ordered by name,

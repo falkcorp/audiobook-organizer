@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/config_handler.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5b8e1c63-2f47-4d90-a6c1-7e3d09b4f825
 // last-edited: 2026-11-19
 
@@ -77,6 +77,16 @@ func (h *Handler) WithConfigFacade(f func() config.Facade) *Handler {
 // is refused: the lookup fails closed.
 func (h *Handler) WithConfigAtoms(f ConfigPermissionAtoms) *Handler {
 	h.configAtoms = f
+	return h
+}
+
+// WithConfigFirstRun installs the report of the first-run window: no user exists
+// yet and setup is not complete. Inside it the Actor holds config.FirstRunPerm,
+// which lets the setup wizard's keys (and only those) be written before the first
+// account exists, as HEAD let a fresh install's wizard set the library path.
+// Unset, the window is never open.
+func (h *Handler) WithConfigFirstRun(f func() bool) *Handler {
+	h.configFirstRun = f
 	return h
 }
 
@@ -267,6 +277,9 @@ func (h *Handler) configActor(c *gin.Context, f config.Facade) config.Actor {
 // held when the principal holds an atom whose native scopes include it.
 func (h *Handler) configCan(c *gin.Context) func(string) bool {
 	return func(perm string) bool {
+		if perm == config.FirstRunPerm {
+			return h.configFirstRun != nil && h.configFirstRun()
+		}
 		if perm == "core:admin" {
 			u, ok := servermiddleware.CurrentUser(c)
 			return ok && slices.Contains(u.Roles, "admin") && servermiddleware.APIKeyMayActAsAdmin(c)

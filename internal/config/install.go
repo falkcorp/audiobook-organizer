@@ -1,5 +1,5 @@
 // file: internal/config/install.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0c7e9b52-3d61-4a8f-b1e4-6f2a9d4c8e07
 // last-edited: 2026-11-19
 
@@ -17,8 +17,7 @@ import "sync/atomic"
 // means none.
 var installed atomic.Pointer[Facade]
 
-// Install binds f behind AppConfig, Snapshot, Mutate, SettingLocks,
-// SettingLockedBy and EnvLockedSettings, and returns the Facade it replaced
+// Install binds f behind AppConfig, Snapshot, Mutate and SettingLockedBy, and returns the Facade it replaced
 // (nil if none) so a test can restore it. The books module installs its Facade
 // from Register; nothing else should. Install(nil) unbinds.
 func Install(f Facade) (prev Facade) {

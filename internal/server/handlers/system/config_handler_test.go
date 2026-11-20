@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/config_handler_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9c2d7e41-0b58-4f36-8a1d-3e6f5a90c274
 // last-edited: 2026-11-19
 
@@ -470,6 +470,39 @@ func TestUpdateConfig_ActorFromTheRequest(t *testing.T) {
 		assert.False(t, a.Owner)
 		assert.False(t, a.Can("core:admin"))
 		assert.False(t, a.Can("core:settings.manage"))
+	})
+}
+
+// TestUpdateConfig_FirstRunWindowGrantsOnlyItsOwnPermission: the first-run
+// provider grants config.FirstRunPerm and nothing else: not the admin role, not a
+// section permission, and nothing at all when the provider is absent or reports
+// the window shut.
+func TestUpdateConfig_FirstRunWindowGrantsOnlyItsOwnPermission(t *testing.T) {
+	canFor := func(t *testing.T, provider func() bool) func(string) bool {
+		t.Helper()
+		f := &stubFacade{}
+		h, _ := newTestHandler(t)
+		h.WithConfigFacade(func() config.Facade { return f })
+		h.WithConfigAtoms(func(string) []string { return nil })
+		if provider != nil {
+			h.WithConfigFirstRun(provider)
+		}
+		w := run(http.MethodPut, "/config", "/config", []byte(`{"set":{"a":1}}`), func(r *gin.Engine) { r.PUT("/config", h.UpdateConfig) })
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		require.Len(t, f.actors, 1)
+		return f.actors[0].Can
+	}
+	t.Run("window open", func(t *testing.T) {
+		can := canFor(t, func() bool { return true })
+		assert.True(t, can(config.FirstRunPerm))
+		assert.False(t, can("core:admin"), "the window is not the admin role")
+		assert.False(t, can("core:settings.manage"))
+	})
+	t.Run("window shut", func(t *testing.T) {
+		assert.False(t, canFor(t, func() bool { return false })(config.FirstRunPerm))
+	})
+	t.Run("no provider", func(t *testing.T) {
+		assert.False(t, canFor(t, nil)(config.FirstRunPerm), "an unwired handler never opens the window")
 	})
 }
 

@@ -1,5 +1,5 @@
 // file: internal/config/database_path_precedence_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5b2e9c14-7a38-4d6f-9e21-c0a4b7d3e582
 // last-edited: 2026-10-19
 
@@ -233,7 +233,7 @@ func TestRootDirIsDeliberatelyNotEnvAuthoritative(t *testing.T) {
 	}
 }
 
-// TestSettingLocks_NameTheMechanism covers the UI annotation. A disabled field
+// TestSettingLocks_NameTheMechanism covers the lock reason a field shows. A disabled field
 // that blames the wrong mechanism is worse than one that says nothing: it sends
 // the operator to delete an environment variable that was never the cause.
 func TestSettingLocks_NameTheMechanism(t *testing.T) {
@@ -249,25 +249,11 @@ func TestSettingLocks_NameTheMechanism(t *testing.T) {
 		t.Fatalf("SettingLockedBy = %q, want \"--db\"", got)
 	}
 
-	// Both at once: the key must be reported ONCE, and the environment named
-	// first — it is the layer an operator is most likely to be able to change.
+	// Both at once: the environment is named first — it is the layer an operator
+	// is most likely to be able to change.
 	t.Setenv("DATABASE_PATH", "/mnt/x/audiobooks.pebble")
 	if got := SettingLockedBy("database_path"); got != "DATABASE_PATH" {
 		t.Fatalf("SettingLockedBy = %q with both supplied, want \"DATABASE_PATH\"", got)
-	}
-	locked := EnvLockedSettings()
-	var n int
-	for _, k := range locked {
-		if k == "database_path" {
-			n++
-		}
-	}
-	if n != 1 {
-		t.Fatalf("database_path appears %d times in EnvLockedSettings %v, want exactly 1 — "+
-			"the UI renders this list directly", n, locked)
-	}
-	if got := SettingLocks()["database_path"]; got != "DATABASE_PATH" {
-		t.Fatalf("SettingLocks()[database_path] = %q, want \"DATABASE_PATH\"", got)
 	}
 }
 

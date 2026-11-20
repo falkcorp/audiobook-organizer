@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-11-19
 
@@ -71,7 +71,10 @@ type Handler struct {
 	// section permission. See WithConfigFacade and WithConfigAtoms.
 	configFacade func() config.Facade
 	configAtoms  ConfigPermissionAtoms
-	opLogs       OperationLogsProvider
+	// configFirstRun reports the first-run window (no user exists and setup is
+	// not complete); nil is never in it. See WithConfigFirstRun.
+	configFirstRun func() bool
+	opLogs         OperationLogsProvider
 
 	// getHub resolves the SSE event hub lazily, at request time. The original
 	// handleEvents read s.hub at call time (late binding), and a test

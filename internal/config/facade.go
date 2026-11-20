@@ -1,5 +1,5 @@
 // file: internal/config/facade.go
-// version: 1.1.0
+// version: 1.3.0
 // guid: 4d1f6a0e-7b52-4c39-9e8a-2a6c0b5d7e13
 // last-edited: 2026-11-19
 
@@ -19,8 +19,8 @@ import (
 // while the implementation is built. Nothing here has behaviour.
 //
 // The Facade is the per-App value that sits behind this package's exported
-// names (AppConfig, Snapshot, Mutate, Generation, SettingLocks,
-// EnvLockedSettings). Today those read a process-wide Config that HEAD's viper
+// names (AppConfig, Snapshot, Mutate, Generation,
+// SettingLockedBy). Today those read a process-wide Config that HEAD's viper
 // loader fills. From the flip they read the Facade's projection: HEAD's flat
 // Config rebuilt, through the rename table (internal/books/cutover), from core
 // config's keys and the secret store, on every core generation change. A write
@@ -55,6 +55,13 @@ type Access interface {
 // principal's HEAD atoms mapped through books' atom table).
 type Actor = coreconfig.Actor
 
+// FirstRunPerm is the permission atom the settings handler grants an Actor in the
+// first-run window (no user exists yet and setup is not complete). It is not an
+// RBAC atom: the Engine asks for it, and only for the keys the setup wizard
+// writes (appconfig firstRunKeys), so the wizard can set the library path before
+// the first account exists without the window opening any other admin key.
+const FirstRunPerm = "books:first-run-setup"
+
 // KeyClass is a rename-table row's class (cutover.Class), as the settings page
 // needs it: how a key is stored decides how it is edited.
 type KeyClass string
@@ -86,7 +93,7 @@ type KeyView struct {
 	Secret *SecretMeta `json:"secret,omitempty"`
 	// LockedBy says what makes the key read-only: "env ABO_CORE_LOG_LEVEL",
 	// "flag --db", "file <name>", "" when it is free. Same reasons as
-	// SettingLocks.
+	// SettingLockedBy.
 	LockedBy string `json:"locked_by,omitempty"`
 	// RestartPending is true when a restart-bound change is stored and not yet
 	// effective.
@@ -165,10 +172,8 @@ type Facade interface {
 	Mutate(fn func(*Config)) error
 	// Generation moves whenever the projection was rebuilt or Mutate ran.
 	Generation() uint64
-	// Locks is SettingLocks: every locked setting to what locks it.
+	// Locks is every locked setting to what locks it; SettingLockedBy reads it.
 	Locks() map[string]string
-	// EnvLocked is EnvLockedSettings: the locked settings' names, sorted.
-	EnvLocked() []string
 	// View is GET /api/v1/config's content.
 	View() View
 	// Update is PUT /api/v1/config's write.

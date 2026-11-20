@@ -1,5 +1,5 @@
 // file: internal/config/deluge_locked_test.go
-// version: 1.5.4
+// version: 1.7.0
 // guid: 8e2c4a17-5b9d-4f63-a1d8-0c7e3f95b264
 // last-edited: 2026-11-09
 
@@ -156,9 +156,6 @@ func TestDelugeLock_StoredValueWinsWhenEnvIsUnset(t *testing.T) {
 			c.DelugeWebURL, c.DelugeDiscoveryLabel, c.DelugeDiscoveryEnabled, c.DelugeMoveEnabled)
 	}
 	for _, k := range delugeKeys {
-		if slices.Contains(EnvLockedSettings(), k) {
-			t.Errorf("%s reported locked with neither env nor config file setting it", k)
-		}
 		if got := SettingLockedBy(k); got != "" {
 			t.Errorf("SettingLockedBy(%s) = %q, want \"\"", k, got)
 		}
@@ -180,11 +177,13 @@ func TestDelugeLock_OnlyTheSuppliedKeyIsLocked(t *testing.T) {
 		t.Errorf("unsupplied keys must keep their stored value: label=%q move=%v",
 			c.DelugeDiscoveryLabel, c.DelugeMoveEnabled)
 	}
-	if got := EnvLockedSettings(); !slices.Contains(got, "deluge_web_url") || slices.Contains(got, "deluge_discovery_label") {
-		t.Errorf("EnvLockedSettings() = %v, want only deluge_web_url among the Deluge keys", got)
+	if got := SettingLockedBy("deluge_web_url"); got != "DELUGE_WEB_URL" {
+		t.Errorf("SettingLockedBy(deluge_web_url) = %q, want DELUGE_WEB_URL", got)
 	}
-	if got := SettingLocks()["deluge_web_url"]; got != "DELUGE_WEB_URL" {
-		t.Errorf("SettingLocks()[deluge_web_url] = %q, want DELUGE_WEB_URL", got)
+	for _, k := range delugeKeys {
+		if k != "deluge_web_url" && SettingLockedBy(k) != "" {
+			t.Errorf("%s is locked by %q, want only deluge_web_url among the Deluge keys", k, SettingLockedBy(k))
+		}
 	}
 }
 
@@ -206,12 +205,12 @@ func TestDelugeLock_ConfigFileBeatsStoredValue(t *testing.T) {
 	}
 	for _, k := range []string{"deluge_web_url", "deluge_discovery_label", "deluge_move_enabled", "deluge_discovery_enabled"} {
 		// The reason names the file viper loaded, so the operator edits the right one.
-		if got, want := SettingLocks()[k], LockedByConfigFile+" "+path; got != want {
-			t.Errorf("SettingLocks()[%s] = %q, want %q", k, got, want)
+		if got, want := SettingLockedBy(k), LockedByConfigFile+" "+path; got != want {
+			t.Errorf("SettingLockedBy(%s) = %q, want %q", k, got, want)
 		}
 	}
-	if _, ok := SettingLocks()["deluge_web_password"]; ok {
-		t.Error("deluge_web_password is not in the file and must not be locked")
+	if got := SettingLockedBy("deluge_web_password"); got != "" {
+		t.Errorf("deluge_web_password is not in the file and must not be locked, got %q", got)
 	}
 }
 
@@ -259,7 +258,7 @@ func TestDelugeLock_PutIsHandledLikeOtherLockedSettings(t *testing.T) {
 	us := NewUpdateService(store)
 	ctx := auth.WithMethod(context.Background(), auth.MethodSession)
 
-	if !slices.Contains(EnvLockedSettings(), "activity_backend") {
+	if SettingLockedBy("activity_backend") == "" {
 		t.Fatal("precondition: the comparison setting must be locked")
 	}
 	statusOther, respOther := us.UpdateConfig(ctx, map[string]any{"activity_backend": "pebble"})
@@ -316,15 +315,8 @@ func TestDelugeLock_PasswordIsNeverEchoedOrLogged(t *testing.T) {
 		t.Error("the masked password should be present (non-empty mask) so the UI knows one is set")
 	}
 
-	locks, _ := json.Marshal(SettingLocks())
-	locked, _ := json.Marshal(EnvLockedSettings())
-	for _, out := range []string{string(locks), string(locked)} {
-		if strings.Contains(out, delugeEnvPW) {
-			t.Errorf("lock annotation leaks the password value: %s", out)
-		}
-	}
-	if got := SettingLocks()["deluge_web_password"]; got != "DELUGE_WEB_PASSWORD" {
-		t.Errorf("SettingLocks()[deluge_web_password] = %q, want the variable NAME only", got)
+	if got := SettingLockedBy("deluge_web_password"); got != "DELUGE_WEB_PASSWORD" {
+		t.Errorf("SettingLockedBy(deluge_web_password) = %q, want the variable NAME only", got)
 	}
 
 	if strings.Contains(logs.String(), delugeEnvPW) || strings.Contains(logs.String(), delugeStoredPW) {
@@ -503,9 +495,6 @@ func TestDelugeLock_ConfigFileDoesNotLockNonDelugeKeys(t *testing.T) {
 	delugeInitConfig(t, "activity_backend: pebble\ndatabase_path: /srv/db-file\n")
 
 	for _, k := range []string{"activity_backend", "database_path"} {
-		if slices.Contains(EnvLockedSettings(), k) {
-			t.Errorf("%s was reported locked by the config file", k)
-		}
 		if got := SettingLockedBy(k); got != "" {
 			t.Errorf("SettingLockedBy(%s) = %q, want \"\"", k, got)
 		}
