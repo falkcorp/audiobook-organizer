@@ -54,7 +54,7 @@ To rehearse the queue's flavour on a branch before enqueueing:
 | `Mock Freshness` | ci.yml `mocks-check` | Runs, unchanged. |
 | `vet-darwin` | ci.yml `vet-darwin` | Runs, unchanged. |
 | `vet-integration` | ci.yml `vet-integration` | Runs, unchanged. |
-| `Coverage Floor (PR gate)` | ci.yml `coverage` | Runs after the five short shards, which run **without** `-race` but with the same `-covermode=atomic` profile, so the four root profiles merge and meet `.ci/coverage-floor.txt` as before. It runs under `always()` and fails unless every shard succeeded: it is the only required check the test shards reach, and a skipped required check counts as passing. |
+| `Coverage Floor (PR gate)` | ci.yml `coverage` | Runs after the five short shards, which run **without** `-race` but with the same `-covermode=atomic` profile, so the four root profiles merge and meet `.ci/coverage-floor.txt` as before. It runs under `!cancelled()` and fails unless every shard succeeded: it is the only required check the test shards reach, and a skipped required check counts as passing. |
 | `extraction-gates` | extraction-gates.yml terminal job | Runs, unchanged (no `-race` in that workflow). |
 
 No required check is a race job, so no required name disappears in the

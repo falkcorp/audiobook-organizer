@@ -10,4 +10,4 @@ The whole `-race` suite (short and fixture) runs every night at 03:00 America/Ne
 
 #### Coverage Floor (PR gate) fails when a short-test shard fails
 
-It used to be skipped when a shard failed, and a skipped required check counts as passing, so the queue could merge a commit with failing short tests (merge-queue run 44717492360: shard 1/4 failed, the check was skipped). It now runs under `always()` and fails unless every shard succeeded, like extraction-gates' terminal job. New page `docs/ci/merge-queue.md` lists the 11 required checks and how each is met in the queue.
+It used to be skipped when a shard failed, and a skipped required check counts as passing, so the queue could merge a commit with failing short tests (merge-queue run 44717492360: shard 1/4 failed, the check was skipped). It now runs under `!cancelled()` and fails unless every shard succeeded, like extraction-gates' terminal job (`!cancelled()` so a superseded push run on main is not turned red). New page `docs/ci/merge-queue.md` lists the 11 required checks and how each is met in the queue.
