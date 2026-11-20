@@ -1,5 +1,5 @@
 // file: internal/books/cutover/rename_unconvert_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6b0f2c1e-3a54-4f0e-9a37-2f5d1c7e8b41
 // last-edited: 2026-11-19
 
@@ -327,6 +327,8 @@ func TestUnconvert_LossyCases(t *testing.T) {
 		refused(t, ConvertMiBToBytes, `-1048576`, ErrNotRepresentable)
 		refused(t, ConvertMiBToBytes, `9007199254740994`, ErrNotRepresentable) // beyond what a float holds exactly
 		refused(t, ConvertMiBToBytes, `1e30`, ErrNotRepresentable)
+		refused(t, ConvertMiBToBytes, `9007200303317568`, ErrNotRepresentable) // a whole MiB, but past 2^53
+		ok(t, ConvertMiBToBytes, `9007199254740992`, `8589934592`)             // 2^53 itself is exact
 		ok(t, ConvertMiBToBytes, `1073741824`, `1024`)
 		refused(t, ConvertMiBToBytes, `"8"`, ErrConvertInput)
 	})
@@ -634,6 +636,8 @@ func TestUnfoldRoots_OnlyHEADRootsHoldHEADAliases(t *testing.T) {
 	  {"id":"import-7","path":"/gotham/imports/seven","aliases":[{"windows":"X:"}]},
 	  {"id":"import-07","path":"/gotham/imports/leading-zero","aliases":[{"windows":"Y:"}]},
 	  {"id":"import-x","path":"/gotham/imports/text","aliases":[{"windows":"Z:"}]},
+	  {"id":"9","path":"/gotham/imports/bare","aliases":[{"windows":"U:"}]},
+	  {"id":"import--1","path":"/gotham/imports/negative","aliases":[{"windows":"T:"}]},
 	  {"id":"dropbox-2","path":"/gotham/dropbox","aliases":[{"windows":"V:"}]}]`)
 	_, aliases, err := UnfoldRoots(entries)
 	if err != nil {
