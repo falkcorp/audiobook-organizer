@@ -6,19 +6,24 @@
 // This file holds the two checks every library-wide maintenance op makes
 // against the library root before it trusts what it finds there: that the root
 // is really mounted, and that a per-row report can be written under it. It
-// imports only the standard library and the permission constants in perms.go,
-// so the maintenance plugin and the legacy maintenance jobs share one copy
+// imports only the standard library, this module's descriptor-relative file
+// operations (internal/libfs) and the permission constants in perms.go, so the
+// maintenance plugin and the legacy maintenance jobs share one copy
 // instead of each keeping their own.
 
 package library
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/falkcorp/mediacore/internal/libfs"
 )
 
 // Mounted refuses to proceed when the library root is unset, unreadable or
@@ -183,13 +188,24 @@ func isSingleComponent(name string) bool {
 // down rather than held in package variables so a test can stand in for another
 // user, or a failing chmod, without mutable global state.
 type reportEnv struct {
-	chmod func(name string, mode os.FileMode) error
+	// chmod changes the mode of the directory the descriptor is open on (fchmod).
+	// It takes the handle, not a name, so it cannot follow a link planted at the
+	// name after the directory was checked.
+	chmod func(dir *os.File, mode os.FileMode) error
 	euid  func() int
+	// afterDirChecked, when not nil, runs after the directory passed its checks
+	// and before it is opened. It is the window another process would use to
+	// swap the directory for a link, so a test can use it to do so.
+	afterDirChecked func(dir string)
+	// afterDirOpened, when not nil, runs once the directory is open and shown to
+	// be the one that was checked, before it is changed or probed: the window in
+	// which a name-based chmod or probe would be redirected.
+	afterDirOpened func(dir string)
 }
 
 // defaultReportEnv returns the real process environment.
 func defaultReportEnv() reportEnv {
-	return reportEnv{chmod: os.Chmod, euid: os.Geteuid}
+	return reportEnv{chmod: func(dir *os.File, mode os.FileMode) error { return dir.Chmod(mode) }, euid: os.Geteuid}
 }
 
 func reportPathNotify(root, explicit, fileName string, onTightened func(dir string, was fs.FileMode), env reportEnv) (string, error) {
@@ -316,8 +332,16 @@ func realLocation(p string) (string, error) {
 // may be able to write, so before anything is written to it, it must be what this
 // process made: it is created (kind.mode) when absent, and when it exists it must
 // be a real directory (not a symlink somebody planted to redirect the files) owned
-// by the user this process runs as. Lstat is used so a symlink is seen as a symlink.
+// by the user this process runs as. A symlink is seen as one (Lstat) and refused.
 //
+// The directory is then opened and shown to be the one that was checked, and the
+// rest (the owner check, the chmod, the writability probe) is done on that
+// descriptor: fchmod, and a probe created and unlinked relative to the handle. A
+// path-based chmod follows a symlink, so between a check by name and a chmod by
+// name the directory could be swapped for a link and the link's target, which
+// nothing vetted, would be changed.
+//
+
 // An owned directory that has write bits kind.strip lists (an older build created
 // it 0777-ish) has those bits, and only those, removed, and onTightened is told.
 // For the report directory that is world write alone. Group bits, the setgid and
@@ -336,31 +360,39 @@ func realLocation(p string) (string, error) {
 // OpenReportFile) re-open the directory by handle and open the file with
 // O_NOFOLLOW relative to it, and refuse a file that is not a regular file owned by
 // this user with a single link.
-func ensureConfinedDir(kind confinedDir, dir string, onTightened func(dir string, was fs.FileMode), env reportEnv) error {
-	info, err := os.Lstat(dir)
-	if errors.Is(err, fs.ErrNotExist) {
+func ensureConfinedDir(kind confinedDir, dir string, onTightened func(dir string, was fs.FileMode), env reportEnv) (err error) {
+	if _, serr := os.Lstat(dir); errors.Is(serr, fs.ErrNotExist) {
 		if merr := os.Mkdir(dir, kind.mode); merr != nil && !errors.Is(merr, fs.ErrExist) {
 			return merr
 		}
-		info, err = os.Lstat(dir)
 	}
+	// Everything after this is done on the descriptor: the directory is checked by
+	// name once (so a symlink is seen as one), opened, and shown to be the same
+	// directory (openReportDir), and from then on what is inspected, changed and
+	// probed is that handle. A name swapped for a link in between cannot redirect
+	// the chmod or the probe.
+	d, err := openReportDir(kind, dir, reportOpenEnv{euid: env.euid(), afterDirChecked: env.afterDirChecked})
 	if err != nil {
-		return err
+		return fmt.Errorf("%s: %w", dir, err)
 	}
-	switch {
-	case info.Mode()&os.ModeSymlink != 0:
-		return fmt.Errorf("%s is a symlink, not a directory; refusing to write %ss through it", dir, kind.noun)
-	case !info.IsDir():
-		return fmt.Errorf("%s is not a directory", dir)
-	case !ownedByUID(info, env.euid()):
-		return fmt.Errorf("%s is not owned by the user this process runs as; refusing to trust it", dir)
+	defer func() {
+		if cerr := d.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("close %s directory %s: %w", kind.noun, dir, cerr)
+		}
+	}()
+	if env.afterDirOpened != nil {
+		env.afterDirOpened(dir)
+	}
+	info, err := d.File().Stat()
+	if err != nil {
+		return fmt.Errorf("%s directory %s cannot be inspected: %w", kind.noun, dir, err)
 	}
 	if was := info.Mode().Perm(); was&kind.strip != 0 {
 		// Perm bits plus the setuid, setgid and sticky bits, minus the bits this
 		// kind of directory may not have. Dropping the special bits here would be a
 		// second change nobody asked for.
 		next := info.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky) &^ kind.strip
-		if cerr := env.chmod(dir, next); cerr != nil {
+		if cerr := env.chmod(d.File(), next); cerr != nil {
 			who, what := "everyone", "world write"
 			switch bits := was & kind.strip; {
 			case bits&worldWrite == 0:
@@ -374,23 +406,30 @@ func ensureConfinedDir(kind confinedDir, dir string, onTightened func(dir string
 			onTightened(dir, was)
 		}
 	}
-	return probeWritable(kind, dir)
+	return probeWritable(kind, d)
 }
 
 // worldWrite is the "other" write permission bit.
 const worldWrite fs.FileMode = 0o002
 
-// probeWritable proves a file can be created in dir. The probe is named for what
-// the directory holds, so a leftover one in a ledger directory does not read as a
+// probeWritable proves a file can be created in the directory d is open on. The
+// probe is created with O_EXCL by name relative to the handle and removed through
+// the same handle, so it is made and deleted in the directory that was checked,
+// whatever the directory's name points at by then. It is named for what the
+// directory holds, so a leftover one in a ledger directory does not read as a
 // report.
-func probeWritable(kind confinedDir, dir string) error {
-	f, err := os.CreateTemp(dir, "."+kind.noun+"-write-probe-*")
+func probeWritable(kind confinedDir, d *libfs.Dir) error {
+	var suffix [8]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return err
+	}
+	name := "." + kind.noun + "-write-probe-" + hex.EncodeToString(suffix[:])
+	f, err := libfs.OpenFileAt(d, name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}
-	name := f.Name()
 	closeErr := f.Close()
-	removeErr := os.Remove(name)
+	removeErr := libfs.RemoveAt(d, name)
 	if closeErr != nil {
 		return closeErr
 	}
