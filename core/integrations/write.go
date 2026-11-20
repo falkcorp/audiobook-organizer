@@ -1,7 +1,7 @@
 // file: core/integrations/write.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 29ac02ee-bf78-408e-a1cf-db1779640943
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package integrations
 
@@ -44,7 +44,7 @@ type shaped struct {
 // values of the locked fields are read from ops through a's fields, not
 // from cur's view, which holds no operator value while cur's adapter is
 // unknown (an operator-only instance being created).
-func shape(ref Ref, a *adapter, inst InstanceConfig, secretsIn map[string]secrets.Value, storedSettings map[string]any, cur *slot, ops map[string]config.OperatorValue) (shaped, error) {
+func shape(ref Ref, a *adapter, inst InstanceConfig, secretsIn map[string]secrets.Value, storedSettings map[string]any, cur *slot, ops map[string]config.OperatorValue, val SettingsValidator) (shaped, error) {
 	fs := a.fs
 	out := shaped{settings: map[string]any{}, clear: map[string]bool{}}
 	for _, f := range sortedFields(inst.Settings) {
@@ -108,6 +108,10 @@ func shape(ref Ref, a *adapter, inst InstanceConfig, secretsIn map[string]secret
 		}
 	}
 	if err := validateSettings(a.desc.meta.Settings, fs, out.view); err != nil {
+		return shaped{}, err
+	}
+	// The kind's own rule, over the same effective layer the schema judged.
+	if err := runValidator(val, a.desc.meta.ID, out.view, storedSettings); err != nil {
 		return shaped{}, err
 	}
 	return out, nil
@@ -288,7 +292,7 @@ func (r *Registry) planPut(ctx context.Context, w writer, inst InstanceConfig, s
 	}
 	storedSettings := readableSettings(stored)
 	ops := snap.ops[ref]
-	sh, err := shape(ref, a, inst, secretsIn, storedSettings, snap.slots[ref], ops)
+	sh, err := shape(ref, a, inst, secretsIn, storedSettings, snap.slots[ref], ops, r.validatorFor(ref.Kind))
 	if err != nil {
 		return putPlan{}, err
 	}
@@ -630,7 +634,7 @@ func (r *Registry) test(ctx context.Context, w writer, inst InstanceConfig, secr
 		return TestResult{}, err
 	}
 	storedSettings := readableSettings(stored)
-	sh, err := shape(ref, a, inst, secretsIn, storedSettings, cur, ops)
+	sh, err := shape(ref, a, inst, secretsIn, storedSettings, cur, ops, r.validatorFor(ref.Kind))
 	if err != nil {
 		return TestResult{}, err
 	}

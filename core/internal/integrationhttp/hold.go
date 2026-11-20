@@ -1,7 +1,7 @@
 // file: core/internal/integrationhttp/hold.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4b84d061-0506-440f-b52d-4aa675443e56
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package integrationhttp
 
@@ -12,6 +12,7 @@ import (
 
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/integrations"
+	"github.com/falkcorp/mediacore/integrations/providerhttp"
 )
 
 // HoldReleaser is what the hold route needs of providerhttp's registry
@@ -29,21 +30,18 @@ import (
 //     errors.Is(err, ErrHoldChanged) holds.
 //
 // The two methods have providerhttp.Registry's signatures (the hold is
-// integrations.Hold), so F7-09 hands the route that *Registry, with one
-// mapping: ErrHoldChanged here stands for providerhttp.ErrHoldChanged, which
-// this package cannot import until F7-02 is merged (see ErrHoldChanged).
+// integrations.Hold), so F7-09 hands the route that *Registry as it is: the
+// error it returns for a changed hold is already this package's ErrHoldChanged.
 type HoldReleaser interface {
 	HoldFor(ref integrations.Ref) (integrations.Hold, bool)
 	ReleaseHoldIf(ctx context.Context, expect integrations.Hold) error
 }
 
 // ErrHoldChanged is what HoldReleaser.ReleaseHoldIf returns, wrapped or not,
-// when a different hold than the one expected is in force. It mirrors
-// providerhttp.ErrHoldChanged. F7-09 either wraps the providerhttp registry
-// so that error maps to this one, or, once F7-02 has merged, redeclares this
-// as `var ErrHoldChanged = providerhttp.ErrHoldChanged` (one line, same
-// semantics).
-var ErrHoldChanged = errors.New("integrationhttp: the hold changed since it was read")
+// when a different hold than the one expected is in force. It is
+// providerhttp.ErrHoldChanged itself (one value, so errors.Is holds across the
+// two packages and *providerhttp.Registry needs no wrapper to serve the route).
+var ErrHoldChanged = providerhttp.ErrHoldChanged
 
 // errHoldChanged is the 409 of a release that found a different hold in
 // force: the answer carries no hold text, and the operator reads the

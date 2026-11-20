@@ -1,7 +1,7 @@
 // file: core/storage/migrate.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: cbe1923b-9a7c-4207-87b3-a13fb6e46ea1
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package storage
 
@@ -98,6 +98,24 @@ func specProblems(o *ownerInfo) []string {
 	}
 	if f := s.UpgradeFloor; f != nil && f.Owner != o.owner {
 		add("UpgradeFloor.Owner %q is not the declaring owner", f.Owner)
+	}
+	// Spec.Derived is manifest data the claim ledger and readiness gating read
+	// while the module is disabled, so a declaration nothing can be built from
+	// is refused here rather than when the module first asks for the handle.
+	// DB.Derived issues no handle to a core subsystem, so declaring one there
+	// would be a dead entry the readiness gate still waits on.
+	if len(s.Derived) > 0 && o.core {
+		add("a core subsystem declares no derived indexes (DB.Derived issues handles to modules only)")
+	}
+	declared := map[string]bool{}
+	for _, d := range s.Derived {
+		if err := d.Validate(); err != nil {
+			add("%v", err)
+		}
+		if declared[d.Name] {
+			add("derived index %q is declared twice", d.Name)
+		}
+		declared[d.Name] = true
 	}
 	return probs
 }

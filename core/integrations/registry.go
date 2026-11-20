@@ -1,7 +1,7 @@
 // file: core/integrations/registry.go
-// version: 1.3.4
+// version: 1.4.0
 // guid: 5291a2b4-f665-40ef-8c7f-d588aa319bec
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package integrations
 
@@ -150,6 +150,14 @@ type Options struct {
 	// the kernel publishes core.integration.health.changed.v1 from it
 	// (M1.4 step 5). nil = none.
 	HealthChanged func(ref Ref, h Health)
+	// Probed is called after every probe of an instance, whether or not the
+	// status moved: HealthChanged fires only on a move, so a consumer that
+	// must act on a repeated answer (the ai router clearing a transient
+	// bench each time its endpoint probes OK) needs this one. h is the answer
+	// the probe recorded, a static finding (disabled, misconfigured) included.
+	// ProbeAll probes in parallel, so it may be called concurrently; it runs
+	// on the probing goroutine and must not block. nil = none.
+	Probed func(ref Ref, h Health)
 	// Settings reads the live core.integrations section; nil = defaults.
 	Settings func() Settings
 	// OperatorInstances names the adapter of each instance an operator
@@ -194,6 +202,12 @@ type Registry struct {
 
 	hmu  sync.Mutex
 	last map[Ref]Health
+
+	// vmu guards validators, the kinds' SettingsValidators (validate.go). It
+	// is not the writer mutex: a kind's owner installs its validator from a
+	// constructor that may run while a write holds mu.
+	vmu        sync.RWMutex
+	validators map[Kind]SettingsValidator
 
 	// secretsMu orders stored-secret reads against writes: a commit and
 	// the publish of its row run write-held, secretFor's row check and
