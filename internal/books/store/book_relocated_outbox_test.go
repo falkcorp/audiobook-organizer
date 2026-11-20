@@ -262,14 +262,46 @@ func TestBookRelocated_EmptyNewPathIsNoRelocation(t *testing.T) {
 	if got := r.staged(t); len(got) != 0 {
 		t.Fatalf("clearing the path staged %+v, want nothing (no path for a follow-up to point at)", got)
 	}
-	// Giving the book a path again is a relocation (an undo of a retire puts
-	// it back where its torrent must follow).
-	if err := r.move(b.ID, "/gotham/library/batman/killing-joke"); err != nil {
+	if got := r.pathOf(t, b.ID); got != "" {
+		t.Fatalf("path = %q, want the cleared path committed", got)
+	}
+}
+
+// A book getting its first path is a create, not a relocation: nothing sits at
+// an old path for a follow-up to move. The path write still commits, and the
+// book's next move is a relocation again.
+func TestBookRelocated_EmptyOldPathIsNoRelocation(t *testing.T) {
+	r := newRelocationRig(t, false)
+	r.store.SetRelocationOutbox(r.ob.Writer("books"))
+	b := r.book(t, "Dark Victory", "")
+	if err := r.move(b.ID, "/gotham/library/dark-victory"); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.pathOf(t, b.ID); got != "/gotham/library/dark-victory" {
+		t.Fatalf("path = %q, want the first path committed", got)
+	}
+	// The full-row update funnel too, from a cleared path.
+	c := r.book(t, "The Killing Joke", "/gotham/library/killing-joke")
+	if err := r.move(c.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.store.UpdateBook(c.ID, &Book{Title: c.Title, FilePath: "/gotham/library/batman/killing-joke"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.pathOf(t, c.ID); got != "/gotham/library/batman/killing-joke" {
+		t.Fatalf("path = %q, want the restored path committed", got)
+	}
+	if got := r.staged(t); len(got) != 0 {
+		t.Fatalf("giving a book a path from none staged %+v, want nothing (a create is not a relocation)", got)
+	}
+	if err := r.move(b.ID, "/gotham/library/batman/dark-victory"); err != nil {
 		t.Fatal(err)
 	}
 	got := r.staged(t)
-	if len(got) != 1 || got[0].Payload != (BookRelocatedV1{BookID: b.ID, FromPath: "", ToPath: "/gotham/library/batman/killing-joke"}) {
-		t.Fatalf("staged = %+v, want one relocation from the empty path", got)
+	want := []stagedRelocation{{Key: b.ID, Producer: "books", Payload: BookRelocatedV1{
+		BookID: b.ID, FromPath: "/gotham/library/dark-victory", ToPath: "/gotham/library/batman/dark-victory"}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("staged = %+v, want %+v (the move after the first path is a relocation)", got, want)
 	}
 }
 
