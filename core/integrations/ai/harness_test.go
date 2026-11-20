@@ -1,7 +1,7 @@
 // file: core/integrations/ai/harness_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3a6f9c18-d4e2-4b75-8e01-c7b25f6a9d34
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 package ai_test
 
@@ -196,6 +196,8 @@ type harnessOptions struct {
 	metrics, noStager bool
 	outbound          func(integrations.OutboundSpec) (integrations.HTTP, integrations.Gate)
 	adapters          []adapterReg
+	probed            func(integrations.Ref, integrations.Health)
+	validate          bool
 }
 
 // adapterReg is an adapter the harness registers besides its fake one.
@@ -221,6 +223,16 @@ func withOutbound(f func(integrations.OutboundSpec) (integrations.HTTP, integrat
 func withAdapter(origin string, d integrations.Descriptor) harnessOption {
 	return func(o *harnessOptions) { o.adapters = append(o.adapters, adapterReg{origin, d}) }
 }
+
+// withProbed sets the Registry's Options.Probed, the per-probe callback the
+// health task wires to Router.ObserveProbe.
+func withProbed(f func(integrations.Ref, integrations.Health)) harnessOption {
+	return func(o *harnessOptions) { o.probed = f }
+}
+
+// withEndpointValidation builds the router with RouterOptions.ValidateEndpoints,
+// so Put runs Router.ValidateEndpoint.
+func withEndpointValidation() harnessOption { return func(o *harnessOptions) { o.validate = true } }
 
 // withoutStager builds the router with no Stager, as a service that cannot
 // start module runs would be.
@@ -285,7 +297,7 @@ func newHarness(t testing.TB, opts ...harnessOption) *harness {
 	}
 	reg, err := integrations.New(integrations.Options{
 		Store: integrations.NativeInstanceStore(iks), NewBatch: iks.NewBatch,
-		Secrets: sec, Audit: au, Outbound: outbound, Now: clk.Now,
+		Secrets: sec, Audit: au, Outbound: outbound, Now: clk.Now, Probed: ho.probed,
 	})
 	if err != nil {
 		t.Fatalf("New registry: %v", err)
@@ -343,7 +355,7 @@ func newHarness(t testing.TB, opts ...harnessOption) *harness {
 	}
 	r, err := ai.NewRouter(ai.RouterOptions{
 		Registry: reg, Disabled: h.disabled.Load, Jobs: h.hooks, NewBatch: h.ks.NewIndexedBatch,
-		Stager: stager, Now: clk.Now, Metrics: h.scope,
+		Stager: stager, Now: clk.Now, Metrics: h.scope, ValidateEndpoints: ho.validate,
 		Config: func() ai.Config {
 			h.cfgMu.Lock()
 			defer h.cfgMu.Unlock()

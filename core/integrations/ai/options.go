@@ -1,7 +1,7 @@
 // file: core/integrations/ai/options.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a2c5e18-6f3d-4d90-8b14-c0e9f1a3d527
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 package ai
 
@@ -198,6 +198,16 @@ type RouterOptions struct {
 	// stages each ready job's apply run through it; core services never hold
 	// the Executor). nil: the poll cannot stage an apply run and fails closed.
 	Stager tasks.Stager
+	// ValidateEndpoints installs Router.ValidateEndpoint as the Registry's
+	// validator for the ai kind (Registry.SetValidator), so a Put, a Test or an
+	// import of an ai instance is refused (ErrInvalid) for a wildcard or
+	// unknown capability tick, a concurrency below 1, a bad locality or a bad
+	// feature, with nothing for the kernel to remember. It is off by default
+	// because it changes what a Put accepts: until the integrations flip (F7-09)
+	// nothing validates, and rows and fixtures that carry a retired tick are
+	// stored as they are. The flip sets it. At most one Router per Registry may
+	// set it; a second NewRouter fails with ErrInvalid.
+	ValidateEndpoints bool
 	// Metrics is the core "ai" scope, created with the labels capability,
 	// instance, model, class, kind, direction, mode, state and result; nil
 	// records nothing.
