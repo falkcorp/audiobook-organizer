@@ -122,12 +122,12 @@ func booksTargets(t *testing.T) []booksTarget {
 	return out
 }
 
-// TestRenameTable_BooksKeysRegistered: every books canonical path a class-k
+// TestRenameTable_EveryKeyRegistered_Books: every books canonical path a class-k
 // or class-s row of the rename table names is served by books' sections: a
 // registered key, a container with keys below it (the "<section>.*" rows), or
 // a reviewed record row. A class-k path is a plain key and a secret path is a
 // secret key, so M2 stages each through the importer it will use.
-func TestRenameTable_BooksKeysRegistered(t *testing.T) {
+func TestRenameTable_EveryKeyRegistered_Books(t *testing.T) {
 	b := newBooksStore(t)
 	seenRecord := map[string]bool{}
 	checked := 0
@@ -504,7 +504,7 @@ func TestBooksSettings_ProtectionMatchesTable(t *testing.T) {
 			}
 			known, want := refuses(re.Canonical)
 			if !known {
-				continue // TestRenameTable_BooksKeysRegistered reports it
+				continue // TestRenameTable_EveryKeyRegistered_Books reports it
 			}
 			compared++
 			if got := re.Verdict == cutover.VerdictRefuse; got != want {

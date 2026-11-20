@@ -160,9 +160,10 @@ func TestUnchangedSave_OverTheRealCoreStore(t *testing.T) {
 			readOnly = append(readOnly, n)
 		}
 	}
-	// The composed boot runs no maintenance module, so core registers none of its
-	// keys and refuses them as unknown, though the View still lists them from the
-	// projection's defaults; production registers them.
+	// maintenance.* maps to core.tasks.windows.nightly.*, which core's tasks module
+	// registers; the composed boot has none, so core refuses them as unknown while
+	// the View still lists them from the projection's defaults. A production boot
+	// registers them.
 	slices.Sort(readOnly)
 	require.Equal(t, []string{"database_path", "maintenance.enabled", "maintenance.window_end", "maintenance.window_start"}, readOnly,
 		"the set of keys core refuses to rewrite changed")

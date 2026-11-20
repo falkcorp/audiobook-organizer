@@ -767,6 +767,44 @@ func TestOwnAuthRoutesGolden(t *testing.T) {
 	goldenRoutes(t, "own_auth_routes.golden", "b304ad2a-94d4-454f-84c4-4c6d6a4c6bae", lines)
 }
 
+// TestBasicGate_ExemptSetGolden is the reviewed set of what core's Basic gate
+// (stage 8) lets through unauthenticated over books' real manifest: HEAD's set
+// until F8 retires it. A route is exempt when its row is BasicExempt (the two
+// health probes) or OwnAuth (the ABS routes that run their own authentication);
+// the Vite-built static files are exempt by LegacyBasicExemptAssets on the "/"
+// owner. /ping, /status and /login stay gated: they are public to the app's own
+// auth but not to the gate. A route that becomes exempt, or stops being, changes
+// this file, which is the review.
+func TestBasicGate_ExemptSetGolden(t *testing.T) {
+	var lines []string
+	for _, abs := range absModes() {
+		lines = append(lines, "# "+absName(abs))
+		for _, lr := range legacyManifest(abs) {
+			switch {
+			case lr.BasicExempt:
+				lines = append(lines, lr.Method+" "+lr.GinPath+" basic-exempt")
+			case lr.OwnAuth:
+				lines = append(lines, lr.Method+" "+lr.GinPath+" own-auth")
+			}
+		}
+	}
+	lines = append(lines, "# static-asset rule on the / owner")
+	for _, path := range []string{
+		"/assets/index-abc.js", "/assets/logo.png", "/favicon.ico", "/app.js", "/style.css", "/mark.png", "/mark.svg", "/font.woff2",
+		"/", "/index.html", "/api/v1/books", "/ping", "/status", "/login", "/metrics", "/sw.js.map",
+	} {
+		lines = append(lines, fmt.Sprintf("%s %t", path, LegacyBasicExemptAssets(path)))
+	}
+	goldenRoutes(t, "basic_gate_exempt.golden", "5d0f7a3c-81b6-4e29-a4c5-9e2b7f1d6038", lines)
+	// The three routes the gate must keep gating, by name.
+	for _, lr := range legacyManifest(true) {
+		switch lr.Method + " " + lr.GinPath {
+		case "GET /ping", "GET /status", "POST /login":
+			assert.False(t, lr.BasicExempt || lr.OwnAuth, "%s %s is exempt from the Basic gate", lr.Method, lr.GinPath)
+		}
+	}
+}
+
 // TestLegacyManifest_DriftFailsBoot: a gin route with no row, and a row with
 // no gin route, are ErrLegacyManifest.
 func TestLegacyManifest_DriftFailsBoot(t *testing.T) {
