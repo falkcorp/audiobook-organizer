@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/rewrite_path_prefix.go
-// version: 2.6.4
+// version: 2.6.5
 // guid: 584360e3-4976-406c-b4d1-80bbe47ed390
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 // Package maintenance — REWRITE a stored path PREFIX across every row that
 // records a location under it, after a directory was renamed or moved on disk.
@@ -99,12 +99,14 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance/resources"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/library"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // rewritePathPrefixDefaultMax bounds how many BOOKS one run will rewrite, so a
@@ -115,6 +117,15 @@ const rewritePathPrefixDefaultMax = 500
 // missingFileStatConcurrency's rationale: the work is filesystem-I/O bound, not
 // CPU bound, so it is sized above NumCPU.
 const rewritePathPrefixConcurrency = 24
+
+// rewritePathPrefixParallelism is the pool both phases run on, as HEAD's
+// registry.RunItems calls sized them. The check sweep only reads and each
+// worker writes its own plan's verdict; the write phase partitions by BOOK (a
+// holder's live and retired units go to one worker), so two workers never write
+// the same book.
+func rewritePathPrefixParallelism() tasks.Parallelism {
+	return tasks.Fixed(rewritePathPrefixConcurrency, "filesystem-I/O bound (a stat per row), so sized above NumCPU; the check sweep writes only its own plan's verdict and the write phase is partitioned by book, so no two workers touch the same row")
+}
 
 type rewritePathPrefixParams struct {
 	// OldPrefix / NewPrefix are the substitution. Both required, both must be
@@ -349,29 +360,92 @@ func (p rewritePathPrefixPlan) summary() string {
 		p.SkippedChanged, p.SkippedGone, p.UpdateErrs)
 }
 
-// rewritePathPrefixStore is the narrow store this op needs. Every method is on
-// database.Store, so no AsCapability unwrap is needed and nothing silently
-// misses against a Store-embedding decorator.
+// rewritePathPrefixStore is HEAD's store: every method is on database.Store, so
+// no AsCapability unwrap is needed and nothing silently misses against a
+// Store-embedding decorator. The core itself takes the two halves below.
 type rewritePathPrefixStore interface {
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	GetAllBookFilesCore() ([]database.BookFileCore, error)
 	LiveBookIDsAtPath(path string) ([]string, error)
+	rewritePathPrefixWriter
+}
+
+// rewritePathPrefixReads is every read the op makes. The retired-aware list of
+// book_file rows is the claim set's source: a set built from the live rows alone
+// would let a write land on a file a retired version holds.
+type rewritePathPrefixReads interface {
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error)
+	LiveBookIDsAtPath(path string) ([]string, error)
+}
+
+// rewritePathPrefixWriter is the op's three writes: a book row's paths and a
+// book_file row's path, each as one compare-and-write, and the path-history row
+// that records the move.
+type rewritePathPrefixWriter interface {
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
 	RecordPathChange(change *database.BookPathChange) error
 }
 
+// rewritePathPrefixHeadBase is the reads HEAD's store answers directly.
+type rewritePathPrefixHeadBase interface {
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	LiveBookIDsAtPath(path string) ([]string, error)
+}
+
+// rewritePathPrefixHeadReads is HEAD's reads: the retired-aware list resolves
+// through the store's capability (database.AllBookFilesCoreIncludingRetired),
+// which fails closed.
+type rewritePathPrefixHeadReads struct {
+	rewritePathPrefixHeadBase
+}
+
+func (s rewritePathPrefixHeadReads) GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
+	return database.AllBookFilesCoreIncludingRetired(s.rewritePathPrefixHeadBase)
+}
+
+// rewritePathPrefixEnv is what the core takes from its shell.
+type rewritePathPrefixEnv struct {
+	t6g7Env
+	Store rewritePathPrefixReads
+	// Writer is nil in a dry run: a dry run reads the rows and decides, it never
+	// takes a row's write lock.
+	Writer rewritePathPrefixWriter
+}
+
+// rewritePathPrefixHeadEnv is the env HEAD's shell (and the tests that call the
+// planner directly) hand the core.
+func rewritePathPrefixHeadEnv(store rewritePathPrefixStore, scan ScanController, live bool, reporter sdk.Reporter) rewritePathPrefixEnv {
+	env := rewritePathPrefixEnv{
+		t6g7Env: t6g7HeadEnv(reporter, live),
+		Store:   rewritePathPrefixHeadReads{store},
+	}
+	if live {
+		env.Writer = store
+		env.StandDown = t6g7HeadStandDown(scan, reporter)
+	}
+	return env
+}
+
+// rewritePathPrefixKind is rule R3's kind for the def below.
+const rewritePathPrefixKind = tasks.Kind("books.maintenance.rewrite-path-prefix")
+
+// rewritePathPrefixHelp is the def's Description, which the native kind carries
+// as its Help.
+const rewritePathPrefixHelp = "Substitutes old_prefix → new_prefix in book.file_path, book.source_import_path " +
+	"and book_file.file_path for every row filed under old_prefix, matching on a path-component " +
+	"boundary. NEVER deletes a row. Refuses any book whose new path is already claimed by another " +
+	"live book (or another book_file row) or does not exist on disk. DEFAULT DRY RUN: pass " +
+	"{\"dry_run\": false} to write."
+
 func (p *Plugin) rewritePathPrefixDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "maintenance.rewrite-path-prefix",
-		Preview:     sdk.PreviewSpec{Params: rewritePathPrefixParams{}},
-		Plugin:      "maintenance",
-		DisplayName: "Rewrite a stored path prefix after a folder rename",
-		Description: "Substitutes old_prefix → new_prefix in book.file_path, book.source_import_path " +
-			"and book_file.file_path for every row filed under old_prefix, matching on a path-component " +
-			"boundary. NEVER deletes a row. Refuses any book whose new path is already claimed by another " +
-			"live book (or another book_file row) or does not exist on disk. DEFAULT DRY RUN: pass " +
-			"{\"dry_run\": false} to write.",
+		ID:              "maintenance.rewrite-path-prefix",
+		Preview:         sdk.PreviewSpec{Params: rewritePathPrefixParams{}},
+		Plugin:          "maintenance",
+		DisplayName:     "Rewrite a stored path prefix after a folder rename",
+		Description:     rewritePathPrefixHelp,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.rewrite-path-prefix",
 		// Declared write-set (dispatcher Gate 3b). BOTH resources: unlike
@@ -402,6 +476,27 @@ func (p *Plugin) runRewritePathPrefix(ctx context.Context, rawParams json.RawMes
 	if _, err := opmode.ResolveDryRun("maintenance.rewrite-path-prefix", params.DryRun, params.DryRunCamel); err != nil {
 		return err
 	}
+	if err := rewritePathPrefixCheckParams(params); err != nil {
+		return err
+	}
+	store := p.deps.OpsStore()
+	if store == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	// Resolve the report path before any work: a run that could not record its
+	// decisions must fail with nothing done, not apply and then lose its record.
+	reportPath, rpErr := p.resolveReportPath(params.ReportPath, opReportFileName(reporter, "rewrite-path-prefix"))
+	if rpErr != nil {
+		return fmt.Errorf("rewrite-path-prefix: %w", rpErr)
+	}
+	env := rewritePathPrefixHeadEnv(store, p.deps, !params.dryRun(), reporter)
+	_, err := rewritePathPrefixRun(ctx, params, reportPath, env)
+	return err
+}
+
+// rewritePathPrefixCheckParams is the checks both shells make before any store
+// read: the prefixes are valid and neither can reach the frozen iTunes tree.
+func rewritePathPrefixCheckParams(params rewritePathPrefixParams) error {
 	if err := params.validate(); err != nil {
 		return fmt.Errorf("rewrite-path-prefix: %w", err)
 	}
@@ -419,19 +514,67 @@ func (p *Plugin) runRewritePathPrefix(ctx context.Context, rawParams json.RawMes
 			"the iTunes tree is frozen and its rows are never rewritten by a maintenance op",
 			params.OldPrefix, params.NewPrefix)
 	}
-	store := p.deps.OpsStore()
-	if store == nil {
-		return fmt.Errorf("database not initialized")
-	}
-	// Resolve the report path before any work: a run that could not record its
-	// decisions must fail with nothing done, not apply and then lose its record.
-	reportPath, rpErr := p.resolveReportPath(params.ReportPath, opReportFileName(reporter, "rewrite-path-prefix"))
-	if rpErr != nil {
-		return fmt.Errorf("rewrite-path-prefix: %w", rpErr)
-	}
+	return nil
+}
 
-	plan, err := planRewritePathPrefix(ctx, store, p.deps, params, reporter)
-	log := reporter.Logger()
+// rewritePathPrefixNative is the native kind. Preview is the dry run HEAD
+// defaulted to; Live rewrites. The result is the plan HEAD logged as JSON.
+func (p *Plugin) rewritePathPrefixNative(deps t6g7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g7Common(rewritePathPrefixKind, sched)
+	c.Title = "Rewrite a stored path prefix after a folder rename"
+	c.Help = rewritePathPrefixHelp
+	// The per-row report is a file written in Preview too.
+	c.Effects = tasks.Writes(t6g7Res(resources.Union(t6WriterResources["ModifyBook"],
+		t6WriterResources["ModifyBookFile"], t6WriterResources["RecordPathChange"],
+		[]ops.Resource{ops.ResFiles})...)...)
+	// HEAD: ResumeDrop. An apply interrupted midway must not silently pick itself
+	// back up; a re-run is cheap because a rewritten row no longer matches.
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.rewrite-path-prefix")
+	return tasks.Task(rewritePathPrefixKind, tasks.TaskSpec[json.RawMessage, rewritePathPrefixPlan]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (rewritePathPrefixPlan, error) {
+			params, err := t6g7DecodeStrictNative[rewritePathPrefixParams](rewritePathPrefixKind, raw)
+			if err != nil {
+				return rewritePathPrefixPlan{}, err
+			}
+			if err := rewritePathPrefixCheckParams(params); err != nil {
+				return rewritePathPrefixPlan{}, err
+			}
+			for _, d := range []struct {
+				name string
+				set  bool
+			}{{"Store", deps.Store != nil}, {"ResolveReportPath", deps.ResolveReportPath != nil}} {
+				if err := t6g7NeedDep(rewritePathPrefixKind, d.name, d.set); err != nil {
+					return rewritePathPrefixPlan{}, err
+				}
+			}
+			reportPath, rpErr := deps.ResolveReportPath(params.ReportPath, "rewrite-path-prefix-"+string(rc.RunID())+".tsv")
+			if rpErr != nil {
+				return rewritePathPrefixPlan{}, fmt.Errorf("rewrite-path-prefix: %w", rpErr)
+			}
+			live := rc.Mode() == tasks.ModeLive
+			env := rewritePathPrefixEnv{t6g7Env: t6g7NativeEnv(rc), Store: deps.Store}
+			if live {
+				w, err := t6g7NewWriter(rewritePathPrefixKind, deps, rc)
+				if err != nil {
+					return rewritePathPrefixPlan{}, err
+				}
+				env.Writer = w
+				env.StandDown = t6g7NativeStandDown(rc, deps.StandDownKey)
+			}
+			return rewritePathPrefixRun(rc.Context(), params, reportPath, env)
+		},
+	})
+}
+
+// rewritePathPrefixRun plans (and on a live run applies) the rewrite, writes the
+// per-row report and logs the outcome: the body both shells share once the
+// params are checked and the report path resolved.
+func rewritePathPrefixRun(ctx context.Context, params rewritePathPrefixParams, reportPath string, env rewritePathPrefixEnv) (rewritePathPrefixPlan, error) {
+	plan, err := rewritePathPrefixPlanCore(ctx, params, env)
+	log := env.Logger
 
 	// Write the report BEFORE returning any error, so a run that aborts mid-apply
 	// still leaves the artifact behind — the run where an operator most needs it.
@@ -445,7 +588,7 @@ func (p *Plugin) runRewritePathPrefix(ctx context.Context, rawParams json.RawMes
 		}
 	}
 	if err != nil {
-		return err
+		return plan, err
 	}
 	if b, mErr := json.Marshal(plan); mErr == nil {
 		log.Info("rewrite-path-prefix report (JSON)", "report", string(b))
@@ -465,7 +608,7 @@ func (p *Plugin) runRewritePathPrefix(ctx context.Context, rawParams json.RawMes
 			"cap", plan.CappedAt, "rewritable", plan.Rewritable)
 	}
 	log.Info("rewrite-path-prefix complete", "summary", plan.summary())
-	return nil
+	return plan, nil
 }
 
 // prefixTouchesITunes reports whether a SWEEP PREFIX can reach an iTunes root.
@@ -508,6 +651,8 @@ func rewriteTarget(old, oldPrefix, newPrefix string) (string, bool) {
 	return newPrefix + rest, true
 }
 
+// planRewritePathPrefix is HEAD's planner entry: the core over HEAD's store,
+// stand-down and reporter.
 func planRewritePathPrefix(
 	ctx context.Context,
 	store rewritePathPrefixStore,
@@ -515,18 +660,30 @@ func planRewritePathPrefix(
 	params rewritePathPrefixParams,
 	reporter sdk.Reporter,
 ) (rewritePathPrefixPlan, error) {
-	log := reporter.Logger()
+	return rewritePathPrefixPlanCore(ctx, params, rewritePathPrefixHeadEnv(store, scan, !params.dryRun(), reporter))
+}
+
+// rewritePathPrefixPlanCore plans the rewrite and, when env.Live, applies it.
+func rewritePathPrefixPlanCore(ctx context.Context, params rewritePathPrefixParams, env rewritePathPrefixEnv) (rewritePathPrefixPlan, error) {
+	store := env.Store
+	if store == nil {
+		return rewritePathPrefixPlan{}, fmt.Errorf("rewrite-path-prefix: no store")
+	}
+	if env.Live && env.Writer == nil {
+		return rewritePathPrefixPlan{}, fmt.Errorf("rewrite-path-prefix: no writer for a live run")
+	}
+	log := env.Logger
 	maxBooks := params.Max
 	if maxBooks <= 0 {
 		maxBooks = rewritePathPrefixDefaultMax
 	}
 	log.Info("rewrite-path-prefix start",
 		"old_prefix", params.OldPrefix, "new_prefix", params.NewPrefix,
-		"dry_run", params.dryRun(), "require_target_exists", params.requireTargetExists(),
+		"dry_run", !env.Live, "require_target_exists", params.requireTargetExists(),
 		"max_books", maxBooks)
 
 	plan := rewritePathPrefixPlan{
-		DryRun:              params.dryRun(),
+		DryRun:              !env.Live,
 		RequireTargetExists: params.requireTargetExists(),
 	}
 
@@ -565,7 +722,7 @@ func planRewritePathPrefix(
 	// Retired rows included: a mount or prefix migration that skipped them would
 	// leave a retired version pointing at a path that no longer exists, and its
 	// paths are claims a rewrite target must not collide with.
-	files, err := database.AllBookFilesCoreIncludingRetired(store)
+	files, err := store.GetAllBookFilesCoreIncludingRetired()
 	if err != nil {
 		return plan, fmt.Errorf("load book files: %w", err)
 	}
@@ -647,10 +804,16 @@ func planRewritePathPrefix(
 	// Label closure reads are atomics, because run_items.go invokes Label INSIDE
 	// each worker goroutine.
 	var refusedCount, okCount atomic.Int64
-	prog := sdk.NewProgress(reporter, len(plans))
+	prog := sdk.NewProgress(env.Reporter, len(plans))
 	prog.Start(fmt.Sprintf("Checking %d book(s) under %s…", len(plans), params.OldPrefix))
 
-	err = registry.RunItems(ctx, reporter, plans, func(_ context.Context, bp *rewriteBookPlan) error {
+	err = env.Items(ctx, rewritePathPrefixParallelism(), len(plans), t6g7ItemsOptions{
+		Collect: true,
+		Label: func(i, t int) string {
+			return fmt.Sprintf("Checked %d/%d books (ok=%d refused=%d)", i+1, t, okCount.Load(), refusedCount.Load())
+		},
+	}, func(_ context.Context, i int) error {
+		bp := plans[i]
 		bucket, reason, causeRow, causeField := checkRewriteBook(store, bp, claimed, params)
 		bp.Bucket, bp.Reason, bp.CauseRowID, bp.CauseField = bucket, reason, causeRow, causeField
 		if bucket == "rewritable" {
@@ -659,12 +822,6 @@ func planRewritePathPrefix(
 			refusedCount.Add(1)
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: rewritePathPrefixConcurrency,
-		ErrMode:     registry.ErrModeCollect,
-		Label: func(i, t int) string {
-			return fmt.Sprintf("Checked %d/%d books (ok=%d refused=%d)", i+1, t, okCount.Load(), refusedCount.Load())
-		},
 	})
 	if err != nil {
 		return plan, fmt.Errorf("safety sweep: %w", err)
@@ -713,7 +870,7 @@ func planRewritePathPrefix(
 		rewritable = rewritable[:maxBooks]
 	}
 
-	if params.dryRun() {
+	if !env.Live {
 		for _, bp := range rewritable {
 			bp.Reason = "would rewrite"
 			plan.recordBook(bp)
@@ -726,12 +883,14 @@ func planRewritePathPrefix(
 	// --- Phase 2: write ---
 	// Acquire the scan stand-down so our path rewrites cannot race a running
 	// library.scan's own writes. Released on return.
-	holderID, standDownHeld, releaseStandDown, sdErr := acquireScanStandDownForApply(
-		ctx, scan, reporter, "rewrite-path-prefix apply")
+	if env.StandDown == nil {
+		return plan, fmt.Errorf("rewrite-path-prefix: acquire scan stand-down: no interlock configured; nothing written")
+	}
+	hold, sdErr := env.StandDown(ctx, "rewrite-path-prefix apply")
 	if sdErr != nil {
 		return plan, fmt.Errorf("rewrite-path-prefix: acquire scan stand-down: %w", sdErr)
 	}
-	defer releaseStandDown()
+	defer hold.Release()
 
 	var booksWritten, fieldsWritten, retiredWritten, skippedChanged, skippedGone, updateErrs atomic.Int64
 	var standDownLost atomic.Bool
@@ -762,12 +921,12 @@ func planRewritePathPrefix(
 		if standDownLost.Load() {
 			return
 		}
-		if scanStandDownLostForApply(scan, holderID, standDownHeld) {
+		if hold.Lost() {
 			standDownLost.Store(true)
 			log.Warn("rewrite-path-prefix: scan stand-down lease lost — aborting remaining writes")
 			return
 		}
-		decisions, wrote := applyRewriteBook(store, bp, params, log)
+		decisions, wrote := applyRewriteBook(env.Writer, bp, params, log)
 		mu.Lock()
 		for _, d := range decisions {
 			plan.record(d)
@@ -794,18 +953,17 @@ func planRewritePathPrefix(
 		}
 	}
 
-	err = registry.RunItems(ctx, reporter, groups, func(_ context.Context, g *bookWriteGroup) error {
-		for _, bp := range g.units {
-			writeUnit(bp)
-		}
-		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: rewritePathPrefixConcurrency,
-		ErrMode:     registry.ErrModeCollect,
+	err = env.Items(ctx, rewritePathPrefixParallelism(), len(groups), t6g7ItemsOptions{
+		Collect: true,
 		Label: func(i, t int) string {
 			return fmt.Sprintf("Rewrote %d/%d books (fields=%d errs=%d)",
 				i+1, t, fieldsWritten.Load(), updateErrs.Load())
 		},
+	}, func(_ context.Context, i int) error {
+		for _, bp := range groups[i].units {
+			writeUnit(bp)
+		}
+		return nil
 	})
 	if err != nil {
 		return plan, fmt.Errorf("rewrite writes: %w", err)
@@ -842,7 +1000,9 @@ func planRewritePathPrefix(
 // book whose folder moved but whose files did not (or vice versa) is worse than
 // one left entirely alone.
 func checkRewriteBook(
-	store rewritePathPrefixStore,
+	store interface {
+		LiveBookIDsAtPath(path string) ([]string, error)
+	},
 	bp *rewriteBookPlan,
 	claimed map[string]string,
 	params rewritePathPrefixParams,
@@ -938,7 +1098,7 @@ func checkRewriteBook(
 // SKIPPED (ErrSkipBookWrite / ErrSkipBookFileWrite) rather than clobbered with
 // this run's stale idea of where it was.
 func applyRewriteBook(
-	store rewritePathPrefixStore,
+	store rewritePathPrefixWriter,
 	bp *rewriteBookPlan,
 	params rewritePathPrefixParams,
 	log interface {

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g7_test.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 4c7e1a92-6b3d-4f58-8a0e-2d9c5b71e3f6
 // last-edited: 2026-11-19
 
@@ -196,6 +196,9 @@ func (r *t6g7Recorder) ModifyBook(id string, fn func(*database.Book) error) (*da
 	if cur.FilePath != b.FilePath {
 		line += " path=" + filepath.Base(cur.FilePath)
 	}
+	if t6g7StrPtr(cur.SourceImportPath) != t6g7StrPtr(b.SourceImportPath) {
+		line += " src=" + filepath.Base(t6g7StrPtr(cur.SourceImportPath))
+	}
 	if storedPrimaryFlag(cur.IsPrimaryVersion) != storedPrimaryFlag(b.IsPrimaryVersion) {
 		line += " primary=" + storedPrimaryFlag(cur.IsPrimaryVersion)
 	}
@@ -214,6 +217,20 @@ func (r *t6g7Recorder) RecordMetadataChange(rec *database.MetadataChangeRecord) 
 	}
 	r.rec(fmt.Sprintf("RecordMetadataChange %s %s %s->%s", rec.BookID, rec.Field, prev, next))
 	return nil
+}
+
+// RecordPathChange records the move ledger row a rewrite leaves.
+func (r *t6g7Recorder) RecordPathChange(c *database.BookPathChange) error {
+	r.rec(fmt.Sprintf("RecordPathChange %s %s %s->%s", c.BookID, c.ChangeType, c.OldPath, c.NewPath))
+	return nil
+}
+
+// t6g7StrPtr is *s, or "" for nil.
+func t6g7StrPtr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // t6g7IntPtr is n, or "nil".
@@ -552,6 +569,8 @@ func t6g7KindWritersBuild() map[tasks.Kind]t6g7KindWrite {
 	// series-phantom-repair also writes its report TSV: a file.
 	add(p.seriesPhantomRepairDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[seriesPhantomWriter]()}, outside: []ops.Resource{ops.ResFiles}})
 	add(p.versionGroupPrimaryRepairDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[vgPrimaryRepairWriter]()}})
+	// rewrite-path-prefix also writes its per-row report TSV, in Preview too: a file.
+	add(p.rewritePathPrefixDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[rewritePathPrefixWriter]()}, outside: []ops.Resource{ops.ResFiles}})
 	add(p.repointUnrecordedRenamesDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[unrecordedRenameWriter]()}})
 	add(p.tagBackfillDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[tagBackfillWriter]()}})
 	add(p.userMergeDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[userMergeWriter]()}})
@@ -621,7 +640,7 @@ func TestT6G7Resources_TableCoversEveryWriterMethod(t *testing.T) {
 func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 	p := &Plugin{}
 	defs := p.t6g7Kinds(fakeT6G7Deps(t), nil)
-	require.Len(t, defs, 12, "grows to 15 as the group's definitions land")
+	require.Len(t, defs, 13, "grows to 15 as the group's definitions land")
 
 	// Every expected value below is written out by hand from the HEAD def and
 	// the coordinator's rulings, never derived from the code under test.
@@ -639,6 +658,7 @@ func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 	repointPar := repointUnrecordedRenamesParallelism()
 	seriesPhantomPar := seriesPhantomRepairParallelism()
 	vgPrimaryPar := vgPrimaryRepairParallelism()
+	rewritePar := rewritePathPrefixParallelism()
 	rows := []row{
 		{head: p.reviewStatusIndexRepairDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
 		{head: p.unknownAuthorAuditDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
@@ -658,6 +678,10 @@ func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 		// RunItems defaults to one. HEAD is ResumeDrop, so the kind is too.
 		{head: p.versionGroupPrimaryRepairDef(), resume: tasks.ResumeDrop, timeout: 2 * time.Hour,
 			par: &vgPrimaryPar, wantPar: "fixed(4): "},
+		// HEAD's two RunItems pools (the check sweep and the write phase) are both 24
+		// workers; the def sets no timeout. HEAD is ResumeDrop.
+		{head: p.rewritePathPrefixDef(), resume: tasks.ResumeDrop,
+			par: &rewritePar, wantPar: "fixed(24): "},
 		{head: p.tagBackfillDef(), resume: tasks.ResumeDrop, timeout: 120 * time.Minute,
 			par: &tagBackfillPar, wantPar: fmt.Sprintf("fixed(%d): ", runtime.NumCPU()*4)},
 		{head: p.titleRepairDef(), resume: tasks.ResumeDrop, timeout: 4 * time.Hour,
@@ -825,6 +849,19 @@ func t6g7WriteCases() []t6g7WriteCase {
 			// A Preview run is the dry run: it plans on reads and writes nothing.
 		},
 		{
+			kind:       rewritePathPrefixKind,
+			params:     rppParams(`,"require_target_exists":false`),
+			standsDown: true,
+			setup: func(t *testing.T, p *t6g7Probe) {
+				seedRewriteRig(t, p, 1)
+			},
+			live: []string{
+				"ModifyBook 01BATBOOK00000000000000W1 title=Year One path=Year One src=Year One.m4b",
+				"ModifyBookFile 01BATFILE00000000000000W1 path=01.mp3 itunes=",
+				"RecordPathChange 01BATBOOK00000000000000W1 prefix-rewrite /gotham/old/Year One->/gotham/new/Year One",
+			},
+		},
+		{
 			kind: repointUnrecordedRenamesKind,
 			setup: func(t *testing.T, p *t6g7Probe) {
 				seedRepointRig(t, p, "01BATBOOK00000000000000R1", "01BATFILE00000000000000R11", true)
@@ -897,7 +934,7 @@ func TestT6G7Kinds_WritesThroughShell(t *testing.T) {
 // case, before it builds a writer or touches the store: the run's mode comes
 // from the start request, never from params (coordinator ruling 3).
 func TestT6G7Kinds_WritingShellsRefuseModeKeys(t *testing.T) {
-	kinds := []tasks.Kind{reviewStatusIndexRepairKind, reportsPruneKind, titleBackfillKind, titleRepairKind, t6g7KindFor("maintenance.bulk-write-back"), t6g7KindFor("maintenance.user-merge"), tagBackfillKind, repointUnrecordedRenamesKind, seriesPhantomRepairKind, vgPrimaryRepairKind}
+	kinds := []tasks.Kind{reviewStatusIndexRepairKind, reportsPruneKind, titleBackfillKind, titleRepairKind, t6g7KindFor("maintenance.bulk-write-back"), t6g7KindFor("maintenance.user-merge"), tagBackfillKind, repointUnrecordedRenamesKind, seriesPhantomRepairKind, vgPrimaryRepairKind, rewritePathPrefixKind}
 	keys := []string{"dry_run", "dryRun", "DRY_RUN", "DryRun", "apply", "Apply", "APPLY"}
 	gate := &t6g7GateWriter{name: "gotham"}
 	for _, kind := range kinds {
@@ -1577,4 +1614,275 @@ func TestT6G7Kinds_VGPrimaryRepairNeedsItsDeps(t *testing.T) {
 			require.ErrorContains(t, err, "t6g7Deps."+name+" is not set")
 		})
 	}
+}
+
+// The prefixes every rewrite test uses. Neither exists on disk: a test that needs
+// the new path present creates it under the probe's root with a different prefix.
+const (
+	rppOld = "/gotham/old"
+	rppNew = "/gotham/new"
+)
+
+// rppParams is the params of a run over rppOld -> rppNew; extra is more JSON
+// members, each led by a comma.
+func rppParams(extra string) string {
+	return `{"old_prefix":"` + rppOld + `","new_prefix":"` + rppNew + `"` + extra + `}`
+}
+
+var rppTitles = []string{"Year One", "The Long Halloween", "Hush", "Dark Victory"}
+
+// seedRewriteRig seeds n books filed under rppOld, each with one book_file row
+// and a source import path under rppOld, in the probe's store (what the planner
+// reads) and in its recorder (what the write callbacks run on). The iTunes tree
+// is configured at a root the prefixes stay clear of. It returns the book ids.
+func seedRewriteRig(t *testing.T, p *t6g7Probe, n int) []string {
+	t.Helper()
+	prev := config.Snapshot()
+	config.Mutate(func(c *config.Config) { c.ITunes = config.ITunesConfig{MediaRoot: "/gotham/itunes"} })
+	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = prev }) })
+
+	st := &t6g7TestStore{bookAt: map[string][]string{}}
+	p.rec.books = map[string]*database.Book{}
+	p.rec.bookFiles = map[string]*database.BookFile{}
+	var ids []string
+	for i := 1; i <= n; i++ {
+		id := fmt.Sprintf("01BATBOOK00000000000000W%d", i)
+		fid := fmt.Sprintf("01BATFILE00000000000000W%d", i)
+		title := rppTitles[i-1]
+		dir := rppOld + "/" + title
+		src := rppOld + "/imports/" + title + ".m4b"
+		st.cores = append(st.cores, database.BookCore{ID: id, Title: title, FilePath: dir, SourceImportPath: &src})
+		row := database.BookFile{ID: fid, BookID: id, FilePath: dir + "/01.mp3"}
+		st.allFiles = append(st.allFiles, row.Core())
+		st.bookAt[dir] = []string{id}
+		p.rec.books[id] = &database.Book{ID: id, Title: title, FilePath: dir, SourceImportPath: &src}
+		p.rec.bookFiles[fid] = &row
+		ids = append(ids, id)
+	}
+	p.store = st
+	return ids
+}
+
+func runRewriteKind(t *testing.T, p *t6g7Probe, mode tasks.Mode, params string) (rewritePathPrefixPlan, *t6g7Host, error) {
+	t.Helper()
+	def := t6g7ByKind(t, (&Plugin{}).t6g7Kinds(p.deps(), nil), rewritePathPrefixKind)
+	h, err := runT6G7Kind(t, def, mode, &t6g7GateWriter{name: "gotham"}, params)
+	var plan rewritePathPrefixPlan
+	if h != nil && len(h.result) > 0 {
+		require.NoError(t, json.Unmarshal(h.result, &plan))
+	}
+	return plan, h, err
+}
+
+// rppReports lists the report files a run left in the probe's root.
+func rppReports(t *testing.T, p *t6g7Probe) []string {
+	t.Helper()
+	got, err := filepath.Glob(filepath.Join(p.root, "*.tsv"))
+	require.NoError(t, err)
+	return got
+}
+
+// A Preview run is the dry run HEAD defaulted to: it plans on reads, builds no
+// writer, parks no scan and writes no row. It does write the per-row report, to
+// the path the params name (the kind declares files for it).
+func TestT6G7Kinds_RewritePathPrefixPreviewPlansAndWritesNoRow(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedRewriteRig(t, p, 2)
+	plan, h, err := runRewriteKind(t, p, tasks.ModePreview, rppParams(`,"require_target_exists":false,"report_path":"audit.tsv"`))
+	require.NoError(t, err)
+	require.True(t, plan.DryRun)
+	require.Equal(t, 2, plan.MatchedBooks)
+	require.Equal(t, 2, plan.Rewritable)
+	require.Zero(t, plan.BooksRewritten)
+	require.Zero(t, p.writerCalls(), "a preview built a writer")
+	require.Empty(t, p.rec.snapshot())
+	require.Empty(t, h.standDowns, "a preview parked the scan")
+
+	require.Equal(t, filepath.Join(p.root, "audit.tsv"), plan.ReportPath)
+	body, rerr := os.ReadFile(plan.ReportPath)
+	require.NoError(t, rerr)
+	// Three fields per book (book path, source import path, file path), each a row.
+	require.Equal(t, 6, strings.Count(string(body), "\twould rewrite\n"))
+}
+
+// A Live run rewrites every book through the run's gated writer, a book row
+// before its file rows and the move ledger last, parks the scan for the writes,
+// and leaves its report under the derived name.
+func TestT6G7Kinds_RewritePathPrefixLiveRewritesThroughTheWriter(t *testing.T) {
+	p := newT6G7Probe(t)
+	ids := seedRewriteRig(t, p, 3)
+	plan, h, err := runRewriteKind(t, p, tasks.ModeLive, rppParams(`,"require_target_exists":false`))
+	require.NoError(t, err)
+	require.False(t, plan.DryRun)
+	require.Equal(t, 3, plan.BooksRewritten)
+	require.Equal(t, 9, plan.FieldsRewritten, "book path, source import path and file path of each book")
+	require.Zero(t, plan.UpdateErrs)
+	require.Equal(t, 1, p.writerCalls(), "NewWriter calls")
+	require.Equal(t, []tasks.Key{"books.gotham-watch"}, h.standDowns)
+	require.True(t, h.released, "stand-down released")
+	require.Contains(t, h.workerCaps(), rewritePathPrefixConcurrency)
+
+	calls := p.rec.snapshot()
+	require.Len(t, calls, 9)
+	for i, id := range ids {
+		title := rppTitles[i]
+		fid := fmt.Sprintf("01BATFILE00000000000000W%d", i+1)
+		modBook := slices.Index(calls, fmt.Sprintf("ModifyBook %s title=%s path=%s src=%s.m4b", id, title, title, title))
+		modFile := slices.Index(calls, fmt.Sprintf("ModifyBookFile %s path=01.mp3 itunes=", fid))
+		ledger := slices.Index(calls, fmt.Sprintf("RecordPathChange %s prefix-rewrite %s/%s->%s/%s", id, rppOld, title, rppNew, title))
+		require.GreaterOrEqual(t, modBook, 0, "%s: book row not written", title)
+		require.Greater(t, modFile, modBook, "%s: file row before the book row", title)
+		require.Greater(t, ledger, modFile, "%s: ledger row before the file row", title)
+	}
+	reports := rppReports(t, p)
+	require.Len(t, reports, 1)
+	require.Equal(t, reports[0], plan.ReportPath)
+	require.Contains(t, filepath.Base(reports[0]), "rewrite-path-prefix-")
+}
+
+// A book whose stored path no longer starts with old_prefix when its write runs
+// was moved by another writer since the scan: nothing of it is written.
+func TestT6G7Kinds_RewritePathPrefixLiveLeavesABookChangedSinceTheScan(t *testing.T) {
+	p := newT6G7Probe(t)
+	ids := seedRewriteRig(t, p, 1)
+	p.rec.books[ids[0]].FilePath = "/gotham/elsewhere/Year One"
+	plan, _, err := runRewriteKind(t, p, tasks.ModeLive, rppParams(`,"require_target_exists":false`))
+	require.NoError(t, err)
+	require.Zero(t, plan.BooksRewritten)
+	require.Zero(t, plan.FieldsRewritten)
+	require.Equal(t, 3, plan.SkippedChanged)
+	require.Empty(t, p.rec.snapshot())
+}
+
+// A target that is not on disk, or that another live book holds, refuses the
+// whole book, in Live and in Preview alike, and writes nothing.
+func TestT6G7Kinds_RewritePathPrefixRefusesAMissingOrClaimedTarget(t *testing.T) {
+	for _, mode := range []tasks.Mode{tasks.ModeLive, tasks.ModePreview} {
+		p := newT6G7Probe(t)
+		seedRewriteRig(t, p, 1)
+		plan, _, err := runRewriteKind(t, p, mode, rppParams(``))
+		require.NoError(t, err, fmt.Sprint(mode))
+		require.Equal(t, 1, plan.TargetMissing, "the new path is not on disk (%s)", mode)
+		require.Zero(t, plan.Rewritable)
+		require.Empty(t, p.rec.snapshot(), "%s", mode)
+
+		p = newT6G7Probe(t)
+		seedRewriteRig(t, p, 1)
+		p.store.(*t6g7TestStore).bookAt[rppNew+"/Year One"] = []string{"01BATBOOK00000000000000W9"}
+		plan, _, err = runRewriteKind(t, p, mode, rppParams(`,"require_target_exists":false`))
+		require.NoError(t, err, fmt.Sprint(mode))
+		require.Equal(t, 1, plan.TargetCollision, "another book holds the new path (%s)", mode)
+		require.Empty(t, p.rec.snapshot(), "%s", mode)
+	}
+}
+
+// max bounds how many books one Live run rewrites; the rest are reported capped.
+func TestT6G7Kinds_RewritePathPrefixMaxCapsTheBooksRewritten(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedRewriteRig(t, p, 3)
+	plan, _, err := runRewriteKind(t, p, tasks.ModeLive, rppParams(`,"require_target_exists":false,"max":2`))
+	require.NoError(t, err)
+	require.Equal(t, 2, plan.CappedAt)
+	require.Equal(t, 2, plan.BooksRewritten)
+	body, rerr := os.ReadFile(plan.ReportPath)
+	require.NoError(t, rerr)
+	require.Contains(t, string(body), "capped\t")
+}
+
+// A Live run needs the scan stand-down: without a key it refuses before a row is
+// written, as HEAD refused without the scan controller's interlock.
+func TestT6G7Kinds_RewritePathPrefixLiveNeedsTheScanStandDown(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedRewriteRig(t, p, 1)
+	deps := p.deps()
+	deps.StandDownKey = ""
+	def := t6g7ByKind(t, (&Plugin{}).t6g7Kinds(deps, nil), rewritePathPrefixKind)
+	_, err := runT6G7Kind(t, def, tasks.ModeLive, &t6g7GateWriter{name: "gotham"}, rppParams(`,"require_target_exists":false`))
+	require.ErrorContains(t, err, "acquire scan stand-down")
+	require.ErrorContains(t, err, "no scan stand-down key configured")
+	require.Empty(t, p.rec.snapshot())
+}
+
+// Params HEAD refused are refused before the store is read or a writer built: an
+// unknown key (HEAD decoded strictly, so a habitual "apply" cannot silently mean
+// dry run), a relative or identical prefix, and a prefix that reaches the frozen
+// iTunes tree from either side.
+func TestT6G7Kinds_RewritePathPrefixRefusesBadParams(t *testing.T) {
+	for name, tc := range map[string]struct{ params, want string }{
+		"unknown key":      {rppParams(`,"requre_target_exists":false`), "unknown field"},
+		"duplicate key":    {rppParams(`,"max":1,"max":2`), "duplicate key"},
+		"relative old":     {`{"old_prefix":"gotham/old","new_prefix":"` + rppNew + `"}`, "is not absolute"},
+		"identical":        {`{"old_prefix":"` + rppOld + `","new_prefix":"` + rppOld + `"}`, "identical"},
+		"nested":           {`{"old_prefix":"` + rppOld + `","new_prefix":"` + rppOld + `/inner"}`, "nested"},
+		"inside itunes":    {`{"old_prefix":"/gotham/itunes/Batman","new_prefix":"` + rppNew + `"}`, "iTunes library root"},
+		"contains itunes":  {`{"old_prefix":"/gotham","new_prefix":"/metropolis"}`, "iTunes library root"},
+		"new inside itune": {`{"old_prefix":"` + rppOld + `","new_prefix":"/gotham/itunes/Batman"}`, "iTunes library root"},
+		"missing new":      {`{"old_prefix":"` + rppOld + `"}`, "both required"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := newT6G7Probe(t)
+			seedRewriteRig(t, p, 1)
+			_, _, err := runRewriteKind(t, p, tasks.ModeLive, tc.params)
+			require.ErrorContains(t, err, tc.want)
+			require.Zero(t, p.writerCalls(), "a writer was built")
+			require.Empty(t, p.rec.snapshot())
+			require.Empty(t, rppReports(t, p), "a refused run left a report")
+		})
+	}
+}
+
+// A native run whose owner left a dependency unset refuses before it reads.
+func TestT6G7Kinds_RewritePathPrefixNeedsItsDeps(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mutate func(*t6g7Deps)
+		mode   tasks.Mode
+		want   string
+	}{
+		"store":  {func(d *t6g7Deps) { d.Store = nil }, tasks.ModePreview, "Store is not set"},
+		"report": {func(d *t6g7Deps) { d.ResolveReportPath = nil }, tasks.ModePreview, "ResolveReportPath is not set"},
+		"writer": {func(d *t6g7Deps) { d.NewWriter = nil }, tasks.ModeLive, "NewWriter is not set"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := newT6G7Probe(t)
+			seedRewriteRig(t, p, 1)
+			deps := p.deps()
+			tc.mutate(&deps)
+			def := t6g7ByKind(t, (&Plugin{}).t6g7Kinds(deps, nil), rewritePathPrefixKind)
+			_, err := runT6G7Kind(t, def, tc.mode, &t6g7GateWriter{name: "gotham"}, rppParams(`,"require_target_exists":false`))
+			require.ErrorContains(t, err, tc.want)
+			require.Empty(t, p.rec.snapshot())
+		})
+	}
+}
+
+// The core stops writing when the lease it holds lapses (HEAD's controller can
+// lose it; the native kernel fences the writer instead and reports it never
+// lost), and a Live core with no interlock refuses before a write.
+func TestRewritePathPrefixCore_StopsWritingWhenTheLeaseLapses(t *testing.T) {
+	var params rewritePathPrefixParams
+	require.NoError(t, json.Unmarshal([]byte(rppParams(`,"require_target_exists":false`)), &params))
+
+	p := newT6G7Probe(t)
+	seedRewriteRig(t, p, 3)
+	released := false
+	env := rewritePathPrefixEnv{t6g7Env: t6g7HeadEnv(&fakeReporter{}, true), Store: p.store, Writer: p.rec}
+	env.StandDown = func(context.Context, string) (t6g7Hold, error) {
+		return t6g7Hold{Lost: func() bool { return true }, Release: func() { released = true }}, nil
+	}
+	plan, err := rewritePathPrefixPlanCore(context.Background(), params, env)
+	require.ErrorContains(t, err, "lease lapsed mid-apply")
+	require.Zero(t, plan.BooksRewritten)
+	require.Empty(t, p.rec.snapshot(), "a book was written after the lease lapsed")
+	require.True(t, released, "the lapsed hold was not released")
+
+	p = newT6G7Probe(t)
+	seedRewriteRig(t, p, 1)
+	env = rewritePathPrefixEnv{t6g7Env: t6g7HeadEnv(&fakeReporter{}, true), Store: p.store, Writer: p.rec}
+	_, err = rewritePathPrefixPlanCore(context.Background(), params, env)
+	require.ErrorContains(t, err, "no interlock configured")
+	require.Empty(t, p.rec.snapshot())
+
+	env = rewritePathPrefixEnv{t6g7Env: t6g7HeadEnv(&fakeReporter{}, true), Store: p.store}
+	_, err = rewritePathPrefixPlanCore(context.Background(), params, env)
+	require.ErrorContains(t, err, "no writer for a live run")
 }
