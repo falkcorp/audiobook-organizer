@@ -1,5 +1,5 @@
 // file: internal/books/cutover_flip_test.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: b94e07d2-6a1c-4c35-8d7f-2e0a5f3c9b18
 // last-edited: 2026-11-19
 
@@ -28,6 +28,15 @@ import (
 // ship it: the switch on and Options' paths set.
 func flipOn() *booksModule {
 	return &booksModule{flip: true, stateDir: "/srv/gotham/state", dbPath: "/srv/gotham/main.pebble"}
+}
+
+// flipOnAt is flipOn over a state directory and a database path that exist: the
+// crash matrix's fixtures, whose key file M2 reads and whose paths the level step
+// and the legacy key search name (flipOn's /srv/gotham paths exist nowhere).
+func flipOnAt(stateDir, dbPath string) *booksModule {
+	m := flipOn()
+	m.stateDir, m.dbPath = stateDir, dbPath
+	return m
 }
 
 // versionOf finds a versioned step by name.
