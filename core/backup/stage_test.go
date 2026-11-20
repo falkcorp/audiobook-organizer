@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/falkcorp/mediacore/backup"
@@ -75,7 +76,7 @@ func TestStagedRestoreHappyPathAndCancel(t *testing.T) {
 	e.opts.Actor = func(context.Context) string { return "alfred" }
 	e.rebuild()
 	a := e.create("manual")
-	pr, err := e.svc.StageRestore(ctx, a.ID, backup.RestoreOptions{})
+	pr, err := e.svc.StageRestore(asOwner(ctx), a.ID, backup.RestoreOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +125,7 @@ func TestStagedRestoreHappyPathAndCancel(t *testing.T) {
 	if err != nil || pend == nil || pend.ArchiveID != a.ID {
 		t.Fatalf("Pending = %+v, %v", pend, err)
 	}
-	if _, err := e.svc.StageRestore(ctx, a.ID, backup.RestoreOptions{}); !errors.Is(err, restorejournal.ErrSwapPending) {
+	if _, err := e.svc.StageRestore(asOwner(ctx), a.ID, backup.RestoreOptions{}); !errors.Is(err, restorejournal.ErrSwapPending) {
 		t.Fatalf("second stage: %v, want ErrSwapPending", err)
 	}
 	if len(e.stager.staged) != 1 {
@@ -147,7 +148,7 @@ func TestStagedRestoreHappyPathAndCancel(t *testing.T) {
 	if err := e.svc.CancelRestore(ctx); err != nil {
 		t.Fatalf("Cancel with nothing staged: %v", err)
 	}
-	if _, err := e.svc.StageRestore(ctx, a.ID, backup.RestoreOptions{}); err != nil {
+	if _, err := e.svc.StageRestore(asOwner(ctx), a.ID, backup.RestoreOptions{}); err != nil {
 		t.Fatalf("stage after Cancel: %v", err)
 	}
 }
@@ -166,7 +167,7 @@ func TestCancelRefusesWhileSwapInFlight(t *testing.T) {
 		t.Fatalf("Cancel during a swap: %v, want ErrSwapPending", err)
 	}
 	a := e.create("manual")
-	if _, err := e.svc.StageRestore(ctx, a.ID, backup.RestoreOptions{}); !errors.Is(err, restorejournal.ErrSwapPending) {
+	if _, err := e.svc.StageRestore(asOwner(ctx), a.ID, backup.RestoreOptions{}); !errors.Is(err, restorejournal.ErrSwapPending) {
 		t.Fatalf("stage during a swap: %v, want ErrSwapPending", err)
 	}
 }
@@ -177,7 +178,7 @@ func TestRestoreNeverWritesLiveStore(t *testing.T) {
 	a := e.create("manual")
 	before := liveFiles(t, e.st.Path())
 	checkpoints, advances := e.log.index("checkpoint"), len(e.markers.advances)
-	if _, err := e.svc.StageRestore(ctx, a.ID, backup.RestoreOptions{}); err != nil {
+	if _, err := e.svc.StageRestore(asOwner(ctx), a.ID, backup.RestoreOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	after := liveFiles(t, e.st.Path())
@@ -318,7 +319,7 @@ func TestRestoreRefusesWeakOrBrokenVerification(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
 	a := e.create("manual")
-	if _, err := e.svc.StageRestore(ctx, a.ID, backup.RestoreOptions{Verify: backup.VerifyChecksum}); err == nil {
+	if _, err := e.svc.StageRestore(asOwner(ctx), a.ID, backup.RestoreOptions{Verify: backup.VerifyChecksum}); err == nil {
 		t.Fatal("a checksum-level restore verification was accepted without AllowWeakVerify")
 	}
 	if len(e.stager.staged) != 0 {
@@ -334,7 +335,7 @@ func TestRestoreRefusesWeakOrBrokenVerification(t *testing.T) {
 	if err := os.WriteFile(p, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.svc.StageRestore(ctx, a.ID, backup.RestoreOptions{}); err == nil {
+	if _, err := e.svc.StageRestore(asOwner(ctx), a.ID, backup.RestoreOptions{}); err == nil {
 		t.Fatal("a corrupted archive was staged")
 	}
 	if len(e.stager.staged) != 0 {
@@ -351,7 +352,7 @@ func TestStageAuditFailureRefuses(t *testing.T) {
 	a := e.create("manual")
 	e.opts.Audit = func(context.Context, string, map[string]string) error { return errors.New("the ledger is shut") }
 	e.rebuild()
-	if _, err := e.svc.StageRestore(ctx, a.ID, backup.RestoreOptions{}); err == nil {
+	if _, err := e.svc.StageRestore(asOwner(ctx), a.ID, backup.RestoreOptions{}); err == nil {
 		t.Fatal("a restore was staged though its audit record could not be written")
 	}
 	if len(e.stager.staged) != 0 {
@@ -549,7 +550,7 @@ func TestRecheckDetectsTamperedStaging(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
 	a := e.create("manual")
-	if _, err := e.svc.StageRestore(ctx, a.ID, backup.RestoreOptions{}); err != nil {
+	if _, err := e.svc.StageRestore(asOwner(ctx), a.ID, backup.RestoreOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	in := e.stager.staged[0]
@@ -644,7 +645,7 @@ func TestHostLossRestore(t *testing.T) {
 	if err != nil || len(list) != 1 || list[0].Provenance != backup.Own {
 		t.Fatalf("List = %+v, %v; the archive is Own when there is no live store to disagree", list, err)
 	}
-	if _, err := e.svc.StageRestore(ctx, a.ID, backup.RestoreOptions{}); err != nil {
+	if _, err := e.svc.StageRestore(asOwner(ctx), a.ID, backup.RestoreOptions{}); err != nil {
 		t.Fatalf("host-loss restore: %v", err)
 	}
 	if in := e.stager.staged[0]; in.InstallID != "" {
@@ -845,18 +846,18 @@ func revertFixture(t *testing.T, e *env, id, step string, previous bool) (prev s
 func TestRevertLastRestore(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
-	if _, err := e.svc.RevertLastRestore(ctx, backup.RestoreOptions{}); !errors.Is(err, backup.ErrNoUndoPoint) {
+	if _, err := e.svc.RevertLastRestore(asOwner(ctx), backup.RestoreOptions{}); !errors.Is(err, backup.ErrNoUndoPoint) {
 		t.Fatalf("nothing to undo: %v", err)
 	}
 	revertFixture(t, e, "20261110T010000Z-aaaaaaaa", "swapped", true)  // never applied
 	revertFixture(t, e, "20261110T020000Z-bbbbbbbb", "applied", false) // previous dir gone
-	if _, err := e.svc.RevertLastRestore(ctx, backup.RestoreOptions{}); !errors.Is(err, backup.ErrNoUndoPoint) {
+	if _, err := e.svc.RevertLastRestore(asOwner(ctx), backup.RestoreOptions{}); !errors.Is(err, backup.ErrNoUndoPoint) {
 		t.Fatalf("an unapplied restore and one without a previous/ are no undo points: %v", err)
 	}
 	old := revertFixture(t, e, "20261110T030000Z-cccccccc", "applied", true)
 	newest := revertFixture(t, e, "20261111T030000Z-dddddddd", "applied_offline", true)
 	_ = old
-	pr, err := e.svc.RevertLastRestore(ctx, backup.RestoreOptions{})
+	pr, err := e.svc.RevertLastRestore(asOwner(ctx), backup.RestoreOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -870,7 +871,197 @@ func TestRevertLastRestore(t *testing.T) {
 	if pr.Kind == 0 || pr.ArchiveID != "" {
 		t.Fatalf("PendingRestore = %+v", pr)
 	}
-	if _, err := e.svc.RevertLastRestore(ctx, backup.RestoreOptions{}); !errors.Is(err, restorejournal.ErrSwapPending) {
+	if _, err := e.svc.RevertLastRestore(asOwner(ctx), backup.RestoreOptions{}); !errors.Is(err, restorejournal.ErrSwapPending) {
 		t.Fatalf("a second revert while one is staged: %v", err)
+	}
+}
+
+// TestLegacyRestoreRehashCoversEveryFile: a staged legacy-abo/0 restore records
+// each extracted file's SHA-256 beside its size, so core.backup.restore.rehash_on_boot
+// re-hashes a legacy restore as it does a mediacore-backup/1 one. Before, the
+// legacy entries carried no digest and the full re-hash skipped every one of
+// them, so a flipped byte of the same size passed step b.
+func TestLegacyRestoreRehashCoversEveryFile(t *testing.T) {
+	ctx := asOwner(context.Background())
+	e := newEnv(t)
+	legacyArchive(t, e, "gzip", true)
+	list, err := e.svc.List(ctx)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("List = %+v, %v", list, err)
+	}
+	if _, err := e.svc.StageRestore(ctx, list[0].ID, backup.RestoreOptions{Foreign: true}); err != nil {
+		t.Fatal(err)
+	}
+	in := e.stager.staged[0]
+	lm, err := os.ReadFile(filepath.Join(in.Staging, "legacy-manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var staged struct{ Entries []backup.Entry }
+	if err := json.Unmarshal(lm, &staged); err != nil || len(staged.Entries) == 0 {
+		t.Fatalf("legacy manifest: %v %+v", err, staged)
+	}
+	var victim string
+	for _, en := range staged.Entries {
+		b, err := os.ReadFile(filepath.Join(in.Staging, filepath.FromSlash(en.Path)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if en.SHA256 != shaHex(b) {
+			t.Fatalf("entry %s records digest %q, the staged file hashes to %s", en.Path, en.SHA256, shaHex(b))
+		}
+		if victim == "" && len(b) > 0 {
+			victim = filepath.Join(in.Staging, filepath.FromSlash(en.Path))
+		}
+	}
+	if victim == "" {
+		t.Fatal("the staged legacy store has no non-empty file to tamper with")
+	}
+	orig, err := os.ReadFile(victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flipped := append([]byte(nil), orig...)
+	flipped[len(flipped)/2] ^= 0xff
+	if err := os.WriteFile(victim, flipped, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := backup.Recheck(nil)(ctx, in); err != nil {
+		t.Fatalf("a size-only recheck must not hash: %v", err)
+	}
+	if err := backup.Recheck(func() bool { return true })(ctx, in); err == nil {
+		t.Fatal("rehash_on_boot did not notice a flipped byte in a staged legacy file")
+	}
+	if err := os.WriteFile(victim, orig, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := backup.Recheck(func() bool { return true })(ctx, in); err != nil {
+		t.Fatalf("restored file: %v", err)
+	}
+}
+
+// TestRecheckRefusesAnEntryWithNoDigest: under a full re-hash an entry with no
+// digest to compare is refused, never skipped, so a staged manifest that lost
+// its digests cannot turn rehash_on_boot into a size check.
+func TestRecheckRefusesAnEntryWithNoDigest(t *testing.T) {
+	ctx := asOwner(context.Background())
+	e := newEnv(t)
+	legacyArchive(t, e, "gzip", true)
+	list, err := e.svc.List(ctx)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("List = %+v, %v", list, err)
+	}
+	if _, err := e.svc.StageRestore(ctx, list[0].ID, backup.RestoreOptions{Foreign: true}); err != nil {
+		t.Fatal(err)
+	}
+	in := e.stager.staged[0]
+	mp := filepath.Join(in.Staging, "legacy-manifest.json")
+	raw, err := os.ReadFile(mp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lm map[string]any
+	if err := json.Unmarshal(raw, &lm); err != nil {
+		t.Fatal(err)
+	}
+	for _, en := range lm["entries"].([]any) {
+		delete(en.(map[string]any), "sha256")
+	}
+	stripped, err := json.Marshal(lm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mp, stripped, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	in.ManifestSHA256 = shaHex(stripped) // the intent agrees: only the digests are gone
+	if err := backup.Recheck(nil)(ctx, in); err != nil {
+		t.Fatalf("a size-only recheck needs no digest: %v", err)
+	}
+	if err := backup.Recheck(func() bool { return true })(ctx, in); err == nil {
+		t.Fatal("a full re-hash accepted entries with no digest")
+	}
+}
+
+// swapInspector replaces the archive under test with another one on its first
+// Inspect, which is the open-level verification's: what staging then extracts
+// is not what the verification accepted.
+type swapInspector struct {
+	backup.Inspector
+	once     sync.Once
+	from, to []string // files copied over, pairwise
+	t        *testing.T
+}
+
+func (s *swapInspector) Inspect(ctx context.Context, dir string) (backup.StoreInfo, error) {
+	s.once.Do(func() {
+		for i := range s.from {
+			b, err := os.ReadFile(s.from[i])
+			if err != nil {
+				s.t.Error(err)
+				return
+			}
+			if err := os.WriteFile(s.to[i], b, 0o600); err != nil {
+				s.t.Error(err)
+			}
+		}
+	})
+	return s.Inspector.Inspect(ctx, dir)
+}
+
+// TestLegacyRestoreBindsTheVerifiedArchive: a legacy archive has no MAC and no
+// per-entry digest, so its SHA-256 is the only thing that ties what staging
+// extracts to what step 2 verified. An archive replaced after the verification
+// (its sidecar with it, so the sidecar check alone would pass) is refused and
+// nothing is staged; without a sidecar, the open-level scan's digest binds it.
+func TestLegacyRestoreBindsTheVerifiedArchive(t *testing.T) {
+	ctx := asOwner(context.Background())
+	for _, sidecar := range []bool{true, false} {
+		name := "sidecar"
+		if !sidecar {
+			name = "no-sidecar"
+		}
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t)
+			fname := legacyArchive(t, e, "gzip", sidecar)
+			// Another store's archive under the same name.
+			other := newEnv(t)
+			if err := other.st.Keyspace(gothamOwner).Set(context.Background(), []byte("rogue/z"), []byte("two-face")); err != nil {
+				t.Fatal(err)
+			}
+			legacyArchive(t, other, "gzip", sidecar)
+			sw := &swapInspector{Inspector: e.opts.Inspector, t: t,
+				from: []string{filepath.Join(other.backupDir, fname)}, to: []string{filepath.Join(e.backupDir, fname)}}
+			if sidecar {
+				sw.from = append(sw.from, filepath.Join(other.backupDir, fname+backup.ChecksumSidecar))
+				sw.to = append(sw.to, filepath.Join(e.backupDir, fname+backup.ChecksumSidecar))
+			}
+			e.opts.Inspector = sw
+			e.rebuild()
+			list, err := e.svc.List(ctx)
+			if err != nil || len(list) != 1 {
+				t.Fatalf("List = %+v, %v", list, err)
+			}
+			opts := backup.RestoreOptions{Foreign: true, AllowWeakVerify: !sidecar}
+			if _, err := e.svc.StageRestore(ctx, list[0].ID, opts); !errors.Is(err, backuparchive.ErrChanged) {
+				t.Fatalf("an archive replaced after verification: err = %v, want backuparchive.ErrChanged", err)
+			}
+			if len(e.stager.staged) != 0 {
+				t.Fatal("an intent was created for an archive the verification did not accept")
+			}
+			if _, err := os.Stat(filepath.Join(e.dbParent, ".mediacore-restore")); err == nil {
+				ents, _ := os.ReadDir(filepath.Join(e.dbParent, ".mediacore-restore"))
+				if len(ents) != 0 {
+					t.Fatalf("staging left behind: %v", ents)
+				}
+			}
+			// The replaced archive restores on its own: the refusal was the binding,
+			// not damage.
+			e.opts.Inspector = sw.Inspector
+			e.rebuild()
+			if _, err := e.svc.StageRestore(ctx, list[0].ID, opts); err != nil {
+				t.Fatalf("the replacement archive staged directly: %v", err)
+			}
+		})
 	}
 }

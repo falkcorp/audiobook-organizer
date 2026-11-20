@@ -13,10 +13,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/mediacore/backup/journal"
@@ -91,7 +91,7 @@ func (s *Svc) slot() (pending *restorejournal.Intent, taken bool, inflight []str
 // only under <db parent>/.mediacore-restore/<id>/ and <state_dir>/restore/;
 // the live store is never opened for writing (TestRestoreNeverWritesLiveStore).
 func (s *Svc) StageRestore(ctx context.Context, id ArchiveID, o RestoreOptions) (pr PendingRestore, err error) {
-	if err := authorizeOptions(ctx, o); err != nil {
+	if err := authorizeRestore(ctx, o); err != nil {
 		s.o.Metrics.Restore(ctx, "rejected", o.Foreign)
 		return PendingRestore{}, err
 	}
@@ -110,8 +110,10 @@ func (s *Svc) StageRestore(ctx context.Context, id ArchiveID, o RestoreOptions) 
 	if err != nil {
 		return PendingRestore{}, err
 	}
-	// 2. Verify.
-	if err := s.verifyForRestore(ctx, f, o); err != nil {
+	// 2. Verify. verified is the archive file's digest the verification vouched
+	// for; a legacy archive is extracted only if it still has it.
+	verified, err := s.verifyForRestore(ctx, f, o)
+	if err != nil {
 		s.o.Metrics.Restore(ctx, "rejected", o.Foreign)
 		return PendingRestore{}, err
 	}
@@ -180,7 +182,7 @@ func (s *Svc) StageRestore(ctx context.Context, id ArchiveID, o RestoreOptions) 
 		if manifestSHA, err = s.extractCore(ctx, open, staging); err != nil {
 			return PendingRestore{}, err
 		}
-	} else if manifestSHA, err = s.extractLegacy(ctx, f.Path, staging); err != nil {
+	} else if manifestSHA, err = s.extractLegacy(ctx, f.Path, staging, verified); err != nil {
 		return PendingRestore{}, err
 	}
 	// 5. Secrets: open the staged checkpoint read-only.
@@ -263,19 +265,22 @@ func pendingOf(in restorejournal.Intent, warnings []string) PendingRestore {
 
 // verifyForRestore is step 2: at the requested level (default open). A level
 // below open, and an archive with no checksum sidecar, need AllowWeakVerify.
-func (s *Svc) verifyForRestore(ctx context.Context, f found, o RestoreOptions) error {
+// It returns the archive file's SHA-256 the verification vouched for (verify.go
+// runVerify): "" only for a checksum-level verification of an archive with no
+// sidecar under AllowWeakVerify, which reads no digest at all.
+func (s *Svc) verifyForRestore(ctx context.Context, f found, o RestoreOptions) (string, error) {
 	level := o.Verify
 	if level == VerifyInvalid {
 		level = VerifyOpen
 	}
 	if level < VerifyOpen && !o.AllowWeakVerify {
-		return fmt.Errorf("backup: verification at the %s level needs AllowWeakVerify", level)
+		return "", fmt.Errorf("backup: verification at the %s level needs AllowWeakVerify", level)
 	}
-	_, err := s.verifyWith(ctx, f.Path, f.ID, level, false)
+	_, sum, err := s.verifyWith(ctx, f.Path, f.ID, level, false)
 	if errors.Is(err, ErrNoChecksum) && o.AllowWeakVerify {
-		_, err = s.verifyWith(ctx, f.Path, f.ID, level, true)
+		_, sum, err = s.verifyWith(ctx, f.Path, f.ID, level, true)
 	}
-	return err
+	return sum, err
 }
 
 // compat is step 4 for a mediacore-backup/1 archive: the app, the levels, the
@@ -364,8 +369,10 @@ func (s *Svc) extractCore(ctx context.Context, a *openedArchive, staging string)
 }
 
 // legacyStaged is what a staged legacy-abo/0 restore keeps beside the store: the
-// archive's outer SHA-256 and the extracted files' names and sizes, the anchor
-// step b re-checks (a legacy archive has no per-entry digests).
+// archive's outer SHA-256 and the extracted files' names, sizes and SHA-256s,
+// the anchor step b re-checks. A legacy archive has no per-entry digests of its
+// own, so each file's digest is the one taken as it was written into staging,
+// which lets core.backup.restore.rehash_on_boot re-hash a legacy restore too.
 type legacyStaged struct {
 	Format  string  `json:"format"`
 	Archive string  `json:"archive_sha256"`
@@ -375,10 +382,21 @@ type legacyStaged struct {
 
 const legacyManifestName = "legacy-manifest.json"
 
-func (s *Svc) extractLegacy(ctx context.Context, archive, staging string) (string, error) {
+// extractLegacy is steps 6/7 for a legacy-abo/0 archive. verified is the
+// archive's SHA-256 step 2 vouched for: the scan here must read the same bytes,
+// or the archive was replaced after it was verified and backuparchive.ErrChanged
+// refuses it before a byte is written (ExtractLegacy then holds the extraction
+// to the scan's digest). A legacy archive has no MAC and no per-entry digest,
+// so this digest is the only thing tying the staged store to the verified one.
+// verified is "" only when step 2 read no digest (a checksum-level, no-sidecar
+// restore under AllowWeakVerify), and then there is nothing to bind.
+func (s *Svc) extractLegacy(ctx context.Context, archive, staging, verified string) (string, error) {
 	info, err := backuparchive.ScanLegacy(ctx, archive, s.limits())
 	if err != nil {
 		return "", err
+	}
+	if verified != "" && !strings.EqualFold(info.SHA256, verified) {
+		return "", fmt.Errorf("%w: the archive is not the one the verification accepted", backuparchive.ErrChanged)
 	}
 	// The scan counted the bytes the extraction will write; they must fit before
 	// any is written (ExtractLegacy stops at the same figure).
@@ -389,27 +407,13 @@ func (s *Svc) extractLegacy(ctx context.Context, archive, staging string) (strin
 	if err := os.Mkdir(db, 0o700); err != nil {
 		return "", err
 	}
-	if err := backuparchive.ExtractLegacy(ctx, archive, info, db, s.limits()); err != nil {
-		return "", err
-	}
-	var ents []Entry
-	err = filepath.WalkDir(db, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		fi, err := d.Info()
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(staging, p)
-		if err != nil {
-			return err
-		}
-		ents = append(ents, Entry{Path: filepath.ToSlash(rel), Size: fi.Size(), Class: SystemOfRecord})
-		return nil
-	})
+	written, err := backuparchive.ExtractLegacy(ctx, archive, info, db, s.limits())
 	if err != nil {
 		return "", err
+	}
+	ents := make([]Entry, 0, len(written))
+	for _, w := range written {
+		ents = append(ents, Entry{Path: dbPrefix + "/" + w.Name, Size: w.Size, SHA256: w.SHA256, Class: SystemOfRecord})
 	}
 	sort.Slice(ents, func(i, j int) bool { return ents[i].Path < ents[j].Path })
 	b, err := json.Marshal(legacyStaged{Format: FormatLegacyABO, Archive: info.SHA256, Codec: info.Codec, Entries: ents})
@@ -576,7 +580,7 @@ func (s *Svc) CancelRestore(ctx context.Context) error {
 // previous/ directory placed back as the live store, through the same swap,
 // with kind revert (§5B.3.4 "Undo").
 func (s *Svc) RevertLastRestore(ctx context.Context, o RestoreOptions) (PendingRestore, error) {
-	if err := authorizeOptions(ctx, o); err != nil {
+	if err := authorizeRestore(ctx, o); err != nil {
 		return PendingRestore{}, err
 	}
 	release, err := s.acquire()
@@ -687,7 +691,8 @@ func lastJournalStep(p string) string {
 // Recheck is step b's re-check of a staged archive restore (decision D4), for
 // restoreswap.Options.Recheck: the manifest in staging must hash to the
 // intent's manifest_sha256, and every listed file must exist with its recorded
-// size (and, when rehash reports true, its digest: core.backup.restore.rehash_on_boot).
+// size (and, when rehash reports true, its digest: core.backup.restore.rehash_on_boot;
+// an entry with no digest then fails the check rather than being skipped).
 // A revert has no archive: only its sources are checked. The kernel composes
 // it with the swapper's default (the placements' rename pre-check) at F8-04.
 func Recheck(rehash func() bool) func(ctx context.Context, in restorejournal.Intent) error {
@@ -739,7 +744,12 @@ func Recheck(rehash func() bool) func(ctx context.Context, in restorejournal.Int
 			if err != nil || !fi.Mode().IsRegular() || fi.Size() != e.Size {
 				return fmt.Errorf("the staged file %s is missing or its size changed", e.Path)
 			}
-			if full && e.SHA256 != "" {
+			if full && e.SHA256 == "" {
+				// A full re-hash with nothing to compare would be a size check that
+				// reports itself as a re-hash.
+				return fmt.Errorf("the staged file %s has no digest to re-hash against", e.Path)
+			}
+			if full {
 				f, _, err := backuparchive.OpenRegular(p, 0)
 				if err != nil {
 					return err

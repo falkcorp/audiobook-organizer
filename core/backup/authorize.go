@@ -12,24 +12,27 @@ import (
 	"strings"
 )
 
-// ErrRestoreNotAuthorized: the caller asked for restore options that need
-// proof of who is asking, and gave none. The options are Foreign, ReplaceConfig,
-// AcceptUnreadableSecrets and AllowWeakVerify; each of them plants or accepts
-// something an ordinary restore does not, so each needs the interactive owner
-// proof the restore route establishes (05-backup §5B.3.8), and Foreign needs
+// ErrRestoreNotAuthorized: the caller asked to stage a restore or a revert and
+// gave no proof of who is asking. 05-backup §5B.3.4 names the API phase "task
+// core.backup.stage-restore (POST /api/core/v1/backups/{id}/restore, permission
+// core:backup.restore (Sensitive, AuthRequired, 05-rbac), credential-change
+// route with owner proof", and §5B.3.8 gives POST /restore/revert the same
+// "core:backup.restore (Sensitive, AuthRequired) + Guards.Interactive +
+// Guards.Owner". So every staging needs the interactive owner proof the
+// restore routes establish, a plain one included, and a foreign restore needs
 // core:admin as well.
-var ErrRestoreNotAuthorized = errors.New("backup: this restore option needs an interactive owner proof")
+var ErrRestoreNotAuthorized = errors.New("backup: staging a restore needs an interactive owner proof")
 
 // RestoreProof is what the caller of StageRestore or RevertLastRestore
-// established about the person who asked. The zero value is "nothing proven":
-// an ordinary restore needs no proof from this package (the caller's own gate
-// said who may restore at all), but every privileged option does.
+// established about the person who asked. The zero value is "nothing proven",
+// and nothing proven stages nothing: holding core:backup.restore is the route's
+// and the task's start check, not proof of the owner.
 //
 // Only a caller that has itself enforced the route's guards sets it: the
 // restore routes of core/internal/backuphttp, after Guards.Interactive and
 // Guards.Owner (or the 05-authn §4.8 fallback). The core.backup.stage-restore
-// task cannot carry an interactive owner proof, so it never sets one and its
-// privileged options are refused here, in the one place every caller passes.
+// task cannot carry an interactive owner proof, so it never sets one and every
+// restore it asks for is refused here, in the one place every caller passes.
 type RestoreProof struct {
 	Owner bool // an interactive credential with the owner's assurance (or the §4.8 fallback)
 	Admin bool // the person holds core:admin
@@ -60,7 +63,8 @@ func RestoreProofFrom(ctx context.Context) RestoreProof {
 	return p
 }
 
-// privileged names the options of o that need proof, in a fixed order.
+// privileged names the options of o that plant or accept something an
+// ordinary restore does not, in a fixed order, for the refusal's text.
 func privileged(o RestoreOptions) []string {
 	var out []string
 	if o.Foreign {
@@ -78,18 +82,18 @@ func privileged(o RestoreOptions) []string {
 	return out
 }
 
-// authorizeOptions is the one gate on restore options. It runs before the
-// backup resource is taken or anything is read, so a refused caller learns
-// nothing about the archives. Fail closed: an option without its proof is
-// refused, whoever the caller is.
-func authorizeOptions(ctx context.Context, o RestoreOptions) error {
-	opts := privileged(o)
-	if len(opts) == 0 {
-		return nil
-	}
+// authorizeRestore is the one gate on staging a restore or a revert. It runs
+// before the backup resource is taken or anything is read, so a refused caller
+// learns nothing about the archives. Fail closed: without the owner proof
+// nothing is staged, whatever the options and whoever the caller is; a foreign
+// restore also needs core:admin.
+func authorizeRestore(ctx context.Context, o RestoreOptions) error {
 	p := RestoreProofFrom(ctx)
 	if !p.Owner {
-		return fmt.Errorf("%w: %s", ErrRestoreNotAuthorized, strings.Join(opts, ", "))
+		if opts := privileged(o); len(opts) > 0 {
+			return fmt.Errorf("%w: %s", ErrRestoreNotAuthorized, strings.Join(opts, ", "))
+		}
+		return ErrRestoreNotAuthorized
 	}
 	if o.Foreign && !p.Admin {
 		return fmt.Errorf("%w: foreign also needs core:admin", ErrRestoreNotAuthorized)
