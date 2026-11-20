@@ -26,6 +26,7 @@ import (
 	backupjournal "github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/internal/bootseam"
+	"github.com/falkcorp/mediacore/internal/journalfs"
 	"github.com/falkcorp/mediacore/internal/restoreswap"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
@@ -709,5 +710,46 @@ func TestNewInjector_SectionCache(t *testing.T) {
 	}
 	if got := newInjector(Fixture{}, nil, vfs.NewMem(), nil).seams.SectionCache; got != nil {
 		t.Errorf("Seams.SectionCache = %v with no cache given, want nil", got)
+	}
+}
+
+// TestBoot_SecondOpenOfAHeldJournalIsLocked: the injector of a boot with no
+// recorder (the one Boot builds over a loaded fixture filesystem, fixture.go)
+// carries a Shared too, so two journalfs.From values over its seam share one
+// lock set: a second open of a held journal is ErrLocked, as flock(2) makes it
+// between two open file descriptions in one process.
+func TestBoot_SecondOpenOfAHeldJournalIsLocked(t *testing.T) {
+	dir := t.TempDir()
+	mem, err := load(Fixture{Name: "arkham", StateDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inj := newInjector(Fixture{Name: "arkham", StateDir: dir}, nil, mem, nil)
+	ctx := bootseam.With(context.Background(), inj.seams)
+	first, err := journalfs.From(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := journalfs.From(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "batcave.journal")
+	f1, err := first.Open(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f2, err := second.Open(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f1.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f2.Lock(); !errors.Is(err, backupjournal.ErrLocked) {
+		t.Fatalf("a second Lock through a second From: err = %v, want ErrLocked", err)
+	}
+	if err := errors.Join(f1.Close(), f2.Close()); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -78,8 +78,9 @@ type Seams struct {
 	// them, so two adapters made from two Seams values over one boot (a
 	// recorder builds a new Seams on every call) still see one lock set:
 	// journalfs keeps its per-filesystem lock set and unsynced-entry record
-	// here, in place of a package variable. nil, as in every production boot,
-	// means no sharing: an adapter built from this Seams keeps its own.
+	// here, in place of a package variable. nil in every production boot (which
+	// has no Seams); journalfs.From refuses a Seams with an in-memory FS and no
+	// Shared, so a test that builds one by hand sets it (&bootseam.Shared{}).
 	Shared *Shared
 }
 

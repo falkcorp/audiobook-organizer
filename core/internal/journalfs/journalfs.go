@@ -75,6 +75,9 @@ func From(ctx context.Context) (journal.FS, error) {
 	if !ok {
 		return nil, fmt.Errorf("journalfs: the boot filesystem %T is neither the real one nor in memory", vfs.Root(seams.FS))
 	}
+	if seams.Shared == nil {
+		return nil, errors.New("journalfs: the seam has an in-memory filesystem and no Shared: its adapters could not share one lock set, so two opens of one journal in a boot would not exclude each other; build the Seams with bootseamtest.Recorder.Seams or set Shared")
+	}
 	return &memFS{mem: seams.FS, base: base, seams: seams, state: stateOf(seams)}, nil
 }
 
@@ -91,15 +94,11 @@ type fsState struct {
 // boot's bootseam.Shared (which Recorder.Seams hands to every Seams it makes,
 // so two Seams over one recorder, and the two From calls over them, find one
 // state), not in a package variable: the state is per boot, and a process-wide
-// map keyed on the filesystem would be the global state 03 R5 forbids. A
-// hand-built Seams with no Shared has no way to carry it, so each From over it
-// gets its own state; take the Seams from a Recorder when more than one
-// adapter is built in a boot.
+// map keyed on the filesystem would be the global state 03 R5 forbids. From
+// refuses a seam with an in-memory filesystem and no Shared, so a boot cannot
+// end up with a private state per adapter.
 func stateOf(seams *bootseam.Seams) *fsState {
 	st := &fsState{held: map[string]bool{}, fresh: map[string]bool{}}
-	if seams.Shared == nil {
-		return st
-	}
 	got, _ := seams.Shared.LoadOrStore(stateKey{}, st)
 	return got.(*fsState)
 }
