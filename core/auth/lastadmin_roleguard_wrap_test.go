@@ -1,5 +1,5 @@
 // file: core/auth/lastadmin_roleguard_wrap_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8e2c4a17-3b95-4d60-a1f8-5c70d9e3b246
 // last-edited: 2026-11-19
 
@@ -46,6 +46,11 @@ type guardingRoleStore struct {
 	failGenAt  int
 	failGenErr error
 	genCalls   int
+	// getFaultRole, when set, makes GetRole of that role answer getFault: the
+	// role store breaking on the one role a write is about to give, after
+	// everything the write read before it was fine.
+	getFaultRole rbac.RoleName
+	getFault     error
 }
 
 func newGuardingRoleStore(s rbac.Store) *guardingRoleStore {
@@ -92,6 +97,13 @@ func (g *guardingRoleStore) armAfterRead(name rbac.RoleName, fn func()) {
 }
 
 func (g *guardingRoleStore) GetRole(ctx context.Context, name rbac.RoleName) (*rbac.Role, error) {
+	g.mu.Lock()
+	if g.getFault != nil && name == g.getFaultRole {
+		err := g.getFault
+		g.mu.Unlock()
+		return nil, err
+	}
+	g.mu.Unlock()
 	r, err := g.Store.GetRole(ctx, name)
 	g.mu.Lock()
 	fn := g.afterRead

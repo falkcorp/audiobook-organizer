@@ -1,5 +1,5 @@
 // file: core/auth/roleclaim_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 0c5d7e21-93b4-4a68-8f1e-2d6a4b9c7e53
 // last-edited: 2026-11-19
 
@@ -34,6 +34,7 @@ type claimFx struct {
 	gordon    *auth.User
 	manager   *auth.Principal
 	jason     *auth.User // a detective the SetRoles scenario hands roleRobin to
+	admin     *auth.Principal
 }
 
 func newClaimFx(t testing.TB) *claimFx { return newClaimFxOver(t, nil) }
@@ -83,24 +84,38 @@ func (c *claimFx) holdersOfRobin() int {
 	return n
 }
 
+// adminActor is an interactive core:admin holder, the usual actor of a role
+// assignment on this product. core:admin passes every scope check, so only the
+// store's answer on whether the role exists can refuse it.
+func (c *claimFx) adminActor() *auth.Principal {
+	c.f.t.Helper()
+	if c.admin == nil {
+		c.admin = c.f.session(c.f.user("bruce-wayne", rbac.RoleAdmin))
+	}
+	return c.admin
+}
+
 // assign is the auth write by which a user comes to hold roleRobin, one per
-// way a user gets a role: CreateUser, SetRoles and an invite's accept. The
-// invite is minted here, before the scenario sets its hook, so the write itself
-// is only the accept.
-func (c *claimFx) assign(way string) func() error {
+// way a user gets a role: CreateUser, SetRoles and an invite's accept, with
+// the manager as the actor (the invite's creator).
+func (c *claimFx) assign(way string) func() error { return c.assignBy(way, c.manager) }
+
+// assignBy is assign with by as the actor. The invite is minted here, before
+// the scenario sets its hook, so the write itself is only the accept.
+func (c *claimFx) assignBy(way string, by *auth.Principal) func() error {
 	ctx := context.Background()
 	switch way {
 	case "create user":
 		return func() error {
-			_, err := c.f.svc.CreateUser(ctx, c.manager, auth.NewUser{Username: "tim-drake", Roles: []rbac.RoleName{roleRobin}})
+			_, err := c.f.svc.CreateUser(ctx, by, auth.NewUser{Username: "tim-drake", Roles: []rbac.RoleName{roleRobin}})
 			return err
 		}
 	case "set roles":
 		return func() error {
-			return c.f.svc.SetRoles(ctx, c.manager, c.jason.ID, []rbac.RoleName{"gotham.detective", roleRobin})
+			return c.f.svc.SetRoles(ctx, by, c.jason.ID, []rbac.RoleName{"gotham.detective", roleRobin})
 		}
 	case "accept invite":
-		tok, _ := c.f.invite(c.manager, auth.InviteSpec{Username: "stephanie-brown", Role: roleRobin})
+		tok, _ := c.f.invite(by, auth.InviteSpec{Username: "stephanie-brown", Role: roleRobin})
 		return func() error {
 			_, _, err := c.f.accept(tok, "gotham-city-1939")
 			return err
@@ -112,39 +127,55 @@ func (c *claimFx) assign(way string) func() error {
 
 var claimWays = []string{"create user", "set roles", "accept invite"}
 
+// claimActors are who gives the role: the manager, who needs the role's scopes
+// and is refused an absent role by the cache check as well, and an admin, who
+// needs no scope and whom no check but the store's own answer on the role
+// refuses (the claim, not the cache check, is what the scenarios exercise).
+var claimActors = []struct {
+	name string
+	by   func(*claimFx) *auth.Principal
+}{
+	{"manager", func(c *claimFx) *auth.Principal { return c.manager }},
+	{"admin", func(c *claimFx) *auth.Principal { return c.adminActor() }},
+}
+
 // TestRoleClaim_RoleDeletedInsideTheAssignment (F4-02-ROLE-GUARD r2, n6): a
 // user write that gives a role has read the role and not yet committed when
 // DeleteRole removes it (it is held by no one the delete can see). The write's
 // commit must conflict on the role set, and its retry, which finds the role
 // gone, must refuse: no user ends up holding a role that no longer exists,
-// for a later CreateRole under the same name to grant.
+// for a later CreateRole under the same name to grant. The actor is an admin
+// too (r3, m1): core:admin passes the cache check on an absent role, so only
+// the claim stands between an admin's write and a dangling role.
 func TestRoleClaim_RoleDeletedInsideTheAssignment(t *testing.T) {
 	for _, way := range claimWays {
-		t.Run(way, func(t *testing.T) {
-			c := newClaimFx(t)
-			write := c.assign(way)
-			var delErr error
-			var fired bool
-			c.f.audit.hold = func(audit.Event) {
-				if !fired {
-					fired = true
-					delErr = c.deleteRobin()
+		for _, actor := range claimActors {
+			t.Run(way+", "+actor.name, func(t *testing.T) {
+				c := newClaimFx(t)
+				write := c.assignBy(way, actor.by(c))
+				var delErr error
+				var fired bool
+				c.f.audit.hold = func(audit.Event) {
+					if !fired {
+						fired = true
+						delErr = c.deleteRobin()
+					}
 				}
-			}
-			err := write()
-			if !fired {
-				t.Fatal("the hook never ran: the write recorded no audit event")
-			}
-			if delErr != nil {
-				t.Fatalf("DeleteRole, with no holder committed: %v", delErr)
-			}
-			if !errors.Is(err, rbac.ErrUnknownRole) {
-				t.Fatalf("%s after the role was deleted: err = %v, want a refusal naming the unknown role", way, err)
-			}
-			if n := c.holdersOfRobin(); n != 0 {
-				t.Fatalf("%d user(s) hold the deleted role", n)
-			}
-		})
+				err := write()
+				if !fired {
+					t.Fatal("the hook never ran: the write recorded no audit event")
+				}
+				if delErr != nil {
+					t.Fatalf("DeleteRole, with no holder committed: %v", delErr)
+				}
+				if !errors.Is(err, rbac.ErrUnknownRole) {
+					t.Fatalf("%s after the role was deleted: err = %v, want a refusal naming the unknown role", way, err)
+				}
+				if n := c.holdersOfRobin(); n != 0 {
+					t.Fatalf("%d user(s) hold the deleted role", n)
+				}
+			})
+		}
 	}
 }
 
@@ -356,49 +387,53 @@ func TestRoleClaim_LosingEveryTryIsContended(t *testing.T) {
 // service). The write's first attempt conflicts on the moved generation; its
 // retry must read the role from the store, find it gone and refuse, where a
 // check on the cache would pass and commit a user holding a role that no longer
-// exists.
+// exists. An admin actor is no exception: the cache check lets core:admin
+// through on an absent role, and the claim does not.
 func TestRoleClaim_TheStoreDecidesNotTheCache(t *testing.T) {
 	for _, way := range claimWays {
-		t.Run(way, func(t *testing.T) {
-			var native *rbacstore.Store
-			c := newClaimFxOver(t, func(s rbac.Store) rbac.Store {
-				native, _ = s.(*rbacstore.Store)
-				return s
+		for _, actor := range claimActors {
+			t.Run(way+", "+actor.name, func(t *testing.T) {
+				var native *rbacstore.Store
+				c := newClaimFxOver(t, func(s rbac.Store) rbac.Store {
+					native, _ = s.(*rbacstore.Store)
+					return s
+				})
+				if native == nil {
+					t.Fatal("the fixture's role store is not the native one")
+				}
+				by := actor.by(c)
+				write := c.assignBy(way, by)
+				var fired bool
+				c.f.audit.hold = func(audit.Event) {
+					if fired {
+						return
+					}
+					fired = true
+					b := native.NewBatch()
+					defer func() { _ = b.Close() }()
+					if err := native.DeleteRole(b, c.robin); err != nil {
+						t.Errorf("DeleteRole through the store: %v", err)
+						return
+					}
+					if err := b.Commit(context.Background(), storage.Sync); err != nil {
+						t.Errorf("commit of the delete: %v", err)
+					}
+					if err := c.f.rb.CanAssign(by.Perms, []rbac.RoleName{roleRobin}); err != nil {
+						t.Errorf("the role cache no longer has the role (CanAssign: %v): the test does not lag it", err)
+					}
+				}
+				err := write()
+				if !fired {
+					t.Fatal("the hook never ran")
+				}
+				if !errors.Is(err, rbac.ErrUnknownRole) {
+					t.Fatalf("%s over a role only the cache still has: err = %v, want a refusal naming the unknown role", way, err)
+				}
+				if n := c.holdersOfRobin(); n != 0 {
+					t.Fatalf("%d user(s) hold the deleted role", n)
+				}
 			})
-			if native == nil {
-				t.Fatal("the fixture's role store is not the native one")
-			}
-			write := c.assign(way)
-			var fired bool
-			c.f.audit.hold = func(audit.Event) {
-				if fired {
-					return
-				}
-				fired = true
-				b := native.NewBatch()
-				defer func() { _ = b.Close() }()
-				if err := native.DeleteRole(b, c.robin); err != nil {
-					t.Errorf("DeleteRole through the store: %v", err)
-					return
-				}
-				if err := b.Commit(context.Background(), storage.Sync); err != nil {
-					t.Errorf("commit of the delete: %v", err)
-				}
-				if err := c.f.rb.CanAssign(c.manager.Perms, []rbac.RoleName{roleRobin}); err != nil {
-					t.Errorf("the role cache no longer has the role (CanAssign: %v): the test does not lag it", err)
-				}
-			}
-			err := write()
-			if !fired {
-				t.Fatal("the hook never ran")
-			}
-			if !errors.Is(err, rbac.ErrUnknownRole) {
-				t.Fatalf("%s over a role only the cache still has: err = %v, want a refusal naming the unknown role", way, err)
-			}
-			if n := c.holdersOfRobin(); n != 0 {
-				t.Fatalf("%d user(s) hold the deleted role", n)
-			}
-		})
+		}
 	}
 }
 
@@ -553,8 +588,9 @@ func TestRoleClaim_ClaimReadFaultIsNotAScopeRefusal(t *testing.T) {
 // TestRoleClaim_EscalationStaysAScopeRefusal is the other side: the store's
 // own refusal of the role (it no longer exists) stays ErrScopeEscalation on
 // the two writes that wrap it, so scopeRefusal narrows the wrapping and does
-// not remove it. The role is deleted straight through the native store so the
-// cache check before the claim still passes and only the claim refuses.
+// not remove it, for an admin actor as for the manager. The role is deleted
+// straight through the native store so the cache check before the claim still
+// passes and only the claim refuses.
 func TestRoleClaim_EscalationStaysAScopeRefusal(t *testing.T) {
 	var native *rbacstore.Store
 	c := newClaimFxOver(t, func(s rbac.Store) rbac.Store {
@@ -576,9 +612,91 @@ func TestRoleClaim_EscalationStaysAScopeRefusal(t *testing.T) {
 		t.Fatalf("the role cache no longer has the role (CanAssign: %v): the test does not lag it", err)
 	}
 	for _, way := range []string{"create user", "set roles"} {
-		err := c.assign(way)()
-		if !errors.Is(err, auth.ErrScopeEscalation) || !errors.Is(err, rbac.ErrUnknownRole) {
-			t.Errorf("%s: err = %v, want ErrScopeEscalation wrapping the unknown role", way, err)
+		for _, actor := range claimActors {
+			err := c.assignBy(way, actor.by(c))()
+			if !errors.Is(err, auth.ErrScopeEscalation) || !errors.Is(err, rbac.ErrUnknownRole) {
+				t.Errorf("%s by %s: err = %v, want ErrScopeEscalation wrapping the unknown role", way, actor.name, err)
+			}
 		}
+	}
+}
+
+// TestRoleClaim_RoleReadFaultIsAServerFault (F4-02-ROLE-GUARD r3, M1): the
+// claim reads the role it is about to give from the store. When that read
+// fails the fault comes back as itself at all three call sites: not as a scope
+// refusal (CreateUser and SetRoles would answer a 403 for a fault of the
+// server), and not as a refusal of the invite, which an accept spends. The
+// fault is on roleRobin alone, so everything the write reads before the claim
+// is fine and only the claim's read breaks. With the fault gone the same
+// write, and for the invite the same token, goes through: nothing was written
+// and the invite was not spent.
+func TestRoleClaim_RoleReadFaultIsAServerFault(t *testing.T) {
+	boom := errors.New("the role keyspace broke")
+	for _, way := range claimWays {
+		for _, actor := range claimActors {
+			t.Run(way+", "+actor.name, func(t *testing.T) {
+				var gs *guardingRoleStore
+				c := newClaimFxOver(t, func(s rbac.Store) rbac.Store { gs = newGuardingRoleStore(s); return gs })
+				write := c.assignBy(way, actor.by(c))
+				gs.mu.Lock()
+				gs.getFaultRole, gs.getFault = roleRobin, boom
+				gs.mu.Unlock()
+				err := write()
+				if !errors.Is(err, boom) {
+					t.Fatalf("%s over a role the store cannot read: err = %v, want the read fault", way, err)
+				}
+				if errors.Is(err, auth.ErrScopeEscalation) || errors.Is(err, rbac.ErrEscalation) ||
+					errors.Is(err, auth.ErrInviteInvalid) || errors.Is(err, rbac.ErrUnknownRole) {
+					t.Fatalf("%s: err = %v: a fault of the role store must not read as a refusal", way, err)
+				}
+				if n := c.holdersOfRobin(); n != 0 {
+					t.Fatalf("%d user(s) hold the role after the fault", n)
+				}
+				gs.mu.Lock()
+				gs.getFault = nil
+				gs.mu.Unlock()
+				if err := write(); err != nil {
+					t.Fatalf("%s again, with the role store readable: %v (for an accept, the invite was spent by the fault)", way, err)
+				}
+				if n := c.holdersOfRobin(); n != 1 {
+					t.Fatalf("%d user(s) hold the role after the retry, want 1", n)
+				}
+			})
+		}
+	}
+}
+
+// TestRoleClaim_InviteForARoleDeletedBeforeAcceptance (F4-02-ROLE-GUARD r3,
+// m1): an admin invites someone to a role, and the role is deleted before the
+// invite is accepted (a pending invite is not a holder, so the delete is
+// allowed). There is no race: the role cache is current. The creator is an
+// admin, so the cache check in the accept lets the absent role through, and
+// only the claim refuses it: the invite is refused as an invalid one, naming
+// the unknown role, no account is created, and the invite is spent like any
+// other refused one.
+func TestRoleClaim_InviteForARoleDeletedBeforeAcceptance(t *testing.T) {
+	c := newClaimFx(t)
+	admin := c.adminActor()
+	tok, _ := c.f.invite(admin, auth.InviteSpec{Username: "stephanie-brown", Role: roleRobin})
+	if err := c.deleteRobin(); err != nil {
+		t.Fatalf("DeleteRole, with only a pending invite naming it: %v", err)
+	}
+	if err := c.f.rb.CanAssign(admin.Perms, []rbac.RoleName{roleRobin}); err != nil {
+		t.Fatalf("the cache check by an admin over the deleted role: %v: the test needs it to pass for the claim to be what refuses", err)
+	}
+	_, _, err := c.f.accept(tok, "gotham-city-1939")
+	if !errors.Is(err, auth.ErrInviteInvalid) || !errors.Is(err, rbac.ErrUnknownRole) {
+		t.Fatalf("accepting an admin's invite to a deleted role: err = %v, want ErrInviteInvalid naming the unknown role", err)
+	}
+	if n := c.holdersOfRobin(); n != 0 {
+		t.Fatalf("%d user(s) hold the deleted role", n)
+	}
+	// Spent: bringing the role back does not revive it.
+	c.createRobin([]rbac.Permission{"gotham:patrol"})
+	if _, _, err := c.f.accept(tok, "gotham-city-1939"); !errors.Is(err, auth.ErrInviteInvalid) {
+		t.Fatalf("accepting the refused invite again: err = %v, want ErrInviteInvalid (it was spent)", err)
+	}
+	if n := c.holdersOfRobin(); n != 0 {
+		t.Fatalf("%d user(s) hold the role after the second accept", n)
 	}
 }

@@ -1,5 +1,5 @@
 // file: core/auth/users.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 41d0b787-5ce8-4a3f-9d8e-8c7b8380e2f0
 // last-edited: 2026-11-19
 
@@ -732,8 +732,9 @@ func (s *Service) roleSetGeneration(ctx context.Context) (uint64, error) {
 // resolver's first sign-in does the same through its RoleReader): it reads the
 // role-set generation, asks the store, not the cache, whether by may give each
 // role (rbac.Service.CanAssignCommitted: a role that no longer exists is
-// refused unless by holds core:admin, a role recreated with a scope by lacks is
-// refused), and stages rbac.Service.ClaimRoleSet in b.
+// refused for every actor, core:admin holders included, where the cache check
+// lets an admin through; a role recreated with a scope by lacks is refused),
+// and stages rbac.Service.ClaimRoleSet in b.
 //
 // The two Expects that decision needs are both in that one call. The guard
 // fails this commit if a role write (DeleteRole, or a delete and recreate
@@ -748,7 +749,9 @@ func (s *Service) roleSetGeneration(ctx context.Context) (uint64, error) {
 // It returns the rbac error (ErrEscalation, wrapping rbac.ErrUnknownRole for
 // an absent role) unwrapped, for the caller to wrap as a scope refusal
 // (scopeRefusal, or the invite's own refusal); any other error is not a
-// refusal and is returned as it is.
+// refusal and is returned as it is, a failed read of a role included
+// (CanAssignCommitted does not wrap it in ErrEscalation), so a fault of the
+// role store neither answers a 403 nor spends an invite.
 // Nothing is staged on a refusal. No roles added is no claim and stages
 // nothing. Called twice in one batch (SetRoles runs keepAnAdmin first), the
 // first guard wins and a newer generation than the first fails the commit.
