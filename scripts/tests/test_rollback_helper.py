@@ -2299,6 +2299,21 @@ class RollbackEnv(unittest.TestCase):
         self.assertFalse(Path(f"{self.b}.prev.env").exists())
         self.assertEqual(Path(f"{self.b}.prev").read_text(), "hand-swapped")
 
+    def test_a_new_deploy_restarts_a_capture_made_under_another_binary(self):
+        """The stale capture is not carried into the next deploy: that deploy
+        captures what is live now, under the binary installed now, so its
+        rollback still has an environment (a kept stale capture would make
+        the promote drop the snapshot)."""
+        h = self.env_host()
+        self.assertEqual(h.run("install", "unit")[0], 0)  # captures the OLD unit
+        self.b.write_text("hand-swapped")
+        self.deploy(h, binary="bat-signal-3")
+        doc = self.bundle()
+        self.assertEqual(doc["prev_sha256"], self.sha(Path(f"{self.b}.prev")))
+        self.assertEqual(Path(f"{self.b}.prev").read_text(), "hand-swapped")
+        self.assertNotIn(self.OLD_UNIT_MARK, doc["unit"]["text"])
+        self.assertFalse(Path(f"{self.b}.prev.env.pending").exists())
+
     def test_a_stale_snapshot_never_outlives_a_deploy_whose_keep_failed(self):
         h = self.env_host()
         self.deploy(h)
