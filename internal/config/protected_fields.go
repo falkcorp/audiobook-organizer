@@ -33,10 +33,6 @@ const (
 	FieldServerPath
 )
 
-// Protected reports whether a field of this class needs an interactive
-// session to change.
-func (c FieldClass) Protected() bool { return c != FieldUnprotected }
-
 type fieldRule struct {
 	Class FieldClass
 	Why   string
@@ -159,51 +155,6 @@ var configFieldRules = map[string]fieldRule{
 	"telemetry_environment":       {FieldUnprotected, "label value on exported telemetry"},
 	"deluge_web_url":              {FieldUnprotected, "outbound endpoint"},
 	"download_client":             {FieldUnprotected, "outbound endpoints"},
-}
-
-// ChangedProtectedFields returns, sorted, the protected fields whose value
-// differs between before and after. It compares the decoded structs, not the
-// request body, so it sees exactly what the decoder applied — whatever the
-// spelling or case of the keys that carried it (the 2026-10-07 review found
-// that a key-name check could be walked around with "OAuth_Default_Role",
-// which encoding/json still decodes onto oauth_default_role).
-func ChangedProtectedFields(before, after *Config) []string {
-	if before == nil || after == nil {
-		return nil
-	}
-	var changed []string
-	for path, rule := range configFieldRules {
-		if !rule.Class.Protected() {
-			continue
-		}
-		a, errA := projectField(reflect.ValueOf(*before), strings.Split(path, "."))
-		b, errB := projectField(reflect.ValueOf(*after), strings.Split(path, "."))
-		if errA != nil || errB != nil || !reflect.DeepEqual(a, b) {
-			// A rule that no longer resolves is reported as changed: the
-			// check fails closed, and the completeness test names it.
-			changed = append(changed, path)
-		}
-	}
-	sort.Strings(changed)
-	return changed
-}
-
-// ChangedEnvOnlyFields lists the absEnvOnlySettings keys whose value differs
-// between before and after, sorted, each as "key (VARIABLE)".
-func ChangedEnvOnlyFields(before, after *Config) []string {
-	if before == nil || after == nil {
-		return nil
-	}
-	var changed []string
-	for key, envVar := range absEnvOnlySettings {
-		a, errA := projectField(reflect.ValueOf(*before), []string{key})
-		b, errB := projectField(reflect.ValueOf(*after), []string{key})
-		if errA != nil || errB != nil || !reflect.DeepEqual(a, b) {
-			changed = append(changed, key+" ("+envVar+")")
-		}
-	}
-	sort.Strings(changed)
-	return changed
 }
 
 // ownerTrustRootFields are the settings that decide WHO the owner is or how

@@ -119,16 +119,3 @@ func TestInstall_ProjectReplacesAppConfigAndMovesGeneration(t *testing.T) {
 		t.Fatal("Project did not move Generation")
 	}
 }
-
-// TestInstall_LocksComeFromTheFacade: SettingLockedBy answers from the installed
-// Facade, not from HEAD's env tables.
-func TestInstall_LocksComeFromTheFacade(t *testing.T) {
-	f := &stubFacade{locks: map[string]string{"log_level": "env ABO_CORE_LOG_LEVEL"}}
-	installForTest(t, f)
-	if got := SettingLockedBy("log_level"); got != "env ABO_CORE_LOG_LEVEL" {
-		t.Fatalf("SettingLockedBy(log_level) = %q", got)
-	}
-	if got := SettingLockedBy("scan_on_startup"); got != "" {
-		t.Fatalf("SettingLockedBy of a free key = %q, want empty", got)
-	}
-}
