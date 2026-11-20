@@ -114,13 +114,9 @@ func ScanLegacy(ctx context.Context, archive string, lim Limits) (info LegacyInf
 // SHA-256 of the bytes written, in archive order: a legacy archive has no
 // per-entry digests, so these are what a later re-hash of the copy compares
 // against. It returns nil with any error.
-func ExtractLegacy(ctx context.Context, archive string, info LegacyInfo, storeDir string, lim Limits) (written []Written, err error) {
+func ExtractLegacy(ctx context.Context, archive string, info LegacyInfo, storeDir string, lim Limits) ([]Written, error) {
 	lim = lim.withDefaults()
-	defer func() {
-		if err != nil {
-			written = nil
-		}
-	}()
+	var written []Written
 	if entries, err := os.ReadDir(storeDir); err != nil {
 		return nil, err
 	} else if len(entries) > 0 {

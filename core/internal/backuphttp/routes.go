@@ -685,8 +685,10 @@ func (a *api) cancel(w http.ResponseWriter, r *http.Request, c caller) {
 // interactive credential and the owner's assurance (or, once the owner is not
 // required, core:admin), so the proof is owner-level; Admin says whether the
 // person also holds core:admin, which a foreign restore needs. The service's
-// gate (backup.ErrRestoreNotAuthorized) is the one every caller, this route and
-// the stage-restore task alike, passes.
+// gate (backup.ErrRestoreNotAuthorized) refuses every staging, plain ones
+// included, whose context lacks this proof, so these routes are the only callers
+// that can stage or revert a restore: a core.backup.stage-restore run carries no
+// proof, and the task is owner-route-only.
 func (a *api) restoreCtx(r *http.Request, c caller) context.Context {
 	ctx := audit.WithActor(r.Context(), c.actor(r))
 	return backup.WithRestoreProof(ctx, backup.RestoreProof{Owner: true, Admin: holds(c.p, rbac.CoreAdmin)})
