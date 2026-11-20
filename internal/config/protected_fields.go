@@ -40,8 +40,10 @@ type fieldRule struct {
 
 // configFieldRules is HEAD's classification of config fields that the
 // interactive-session rule cares about. Nothing enforces it since F3-07
-// deleted UpdateService (ChangedProtectedFields was its enforcer); core
-// config's protect tags carry the rule now. protected_fields_test.go fails
+// deleted UpdateService (ChangedProtectedFields was its enforcer). With the
+// flip on, core config's protect:"..." struct tags (internal/books/config.go,
+// core/kernel/core_sections.go) carry the rule; with it off, no PUT path
+// checks these classes. protected_fields_test.go fails
 // when a field whose name looks like a path, an executable, a URL or a
 // sign-in setting exists in Config without an entry here.
 //

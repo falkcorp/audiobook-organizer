@@ -8,8 +8,9 @@
 // because InitConfig's explicit struct literal omitted the field.
 //
 // The setting is BOOT-ONLY: the store builds its sort indexes once, at open,
-// from the value InitConfig read (default, config file, env), so GET always
-// reports the set that is running.
+// from the value read at boot (default, config file, env). On core config the
+// key is reload:"restart" (internal/books/config.go), so a PUT that changes it
+// is stored restart-pending and takes effect only at the next boot.
 
 package config
 
