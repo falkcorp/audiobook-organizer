@@ -22,7 +22,7 @@
 
 import { ApiAuthRedirectError, decodeProblem } from '@mediacore/api-client';
 
-import { parseRetryAfter, reconnectDelay } from './backoff';
+import { clampRetryAfter, parseRetryAfter, reconnectDelay } from './backoff';
 import { createSseParser } from './sseParser';
 import {
   StreamProtocolError,
@@ -53,6 +53,8 @@ export interface ConnectionOptions {
   key: string;
   /** The topic patterns to stream, read fresh on every (re)connect. */
   topics: () => readonly string[];
+  /** Topic patterns to exclude (the `exclude` query parameter), read on every (re)connect. */
+  exclude?: () => readonly string[];
   /** Called for each event frame. */
   onEvent: (env: StreamEnvelope, id: string) => void;
   onReset: (reason: ResetReason) => void;
@@ -69,15 +71,21 @@ export interface StreamConnection {
   open(): void;
   /** Close the stream and cancel any pending retry, for `state` (idle or hidden). */
   close(state: 'idle' | 'hidden'): void;
-  /** The topic set changed: restart now, resuming from the last id, with no backoff. */
+  /** The topic set changed: restart, resuming from the last id, but still never before notBefore. */
   restart(): void;
   readonly status: StreamStatus;
 }
 
-/** Builds the stream URL: repeated `topic`, and `key` when the stream is keyed. */
-export function buildStreamUrl(baseUrl: string, topics: readonly string[], key: string): string {
+/** Builds the stream URL: repeated `topic` and `exclude`, and `key` when the stream is keyed. */
+export function buildStreamUrl(
+  baseUrl: string,
+  topics: readonly string[],
+  key: string,
+  exclude: readonly string[] = [],
+): string {
   const q = new URLSearchParams();
   for (const t of topics) q.append('topic', t);
+  for (const t of exclude) q.append('exclude', t);
   if (key !== '') q.set('key', key);
   const qs = q.toString();
   return `${baseUrl}${EVENTS_PATH}${qs ? `?${qs}` : ''}`;
@@ -129,6 +137,15 @@ export function createStreamConnection(opts: ConnectionOptions): StreamConnectio
   let attempt = 0;
   let closedReason: ClosedReason | undefined;
   let closedThisAttempt = false;
+  // Never sooner than this (epoch ms): set from every failed attempt's backoff and
+  // Retry-After, honoured by open() and restart() too, reset only by a good open.
+  let notBefore = 0;
+  let lastError: unknown;
+  // Missed events cannot be replayed when the attempt sent no Last-Event-ID (the server
+  // sends no reset then, sse/broker.go), nor after the tab was hidden: tell the resync
+  // handlers on the next good open (reason 'reconnect').
+  let sentLastId = false;
+  let resyncOnOpen = false;
 
   const setStatus = (state: StreamState, extra: Partial<StreamStatus> = {}) => {
     status = { state, attempt, streamKey: opts.key, ...(closedReason ? { closedReason } : {}), ...extra };
@@ -163,7 +180,7 @@ export function createStreamConnection(opts: ConnectionOptions): StreamConnectio
     const ctl = new AbortController();
     controller = ctl;
     closedThisAttempt = false;
-    const url = buildStreamUrl(baseUrl, opts.topics(), opts.key);
+    const url = buildStreamUrl(baseUrl, opts.topics(), opts.key, opts.exclude?.() ?? []);
     let connectTimedOut = false;
     const connectTimer = setTimeout(() => {
       connectTimedOut = true;
@@ -171,13 +188,14 @@ export function createStreamConnection(opts: ConnectionOptions): StreamConnectio
     }, connectTimeoutMs);
     const headers: Record<string, string> = { Accept: 'text/event-stream' };
     if (lastEventId !== '') headers['Last-Event-ID'] = lastEventId;
+    sentLastId = lastEventId !== '';
 
     let res: Response;
     try {
       res = await doFetch(url, {
         method: 'GET',
         headers,
-        credentials: 'same-origin',
+        credentials: 'include',
         cache: 'no-store',
         redirect: 'manual',
         signal: ctl.signal,
@@ -266,8 +284,14 @@ export function createStreamConnection(opts: ConnectionOptions): StreamConnectio
     switch (parsed.topic) {
       case TOPIC_OPENED:
         attempt = 0;
+        notBefore = 0;
+        lastError = undefined;
         closedReason = undefined;
         setStatus('open');
+        if (resyncOnOpen || !sentLastId) {
+          resyncOnOpen = false;
+          opts.onReset('reconnect');
+        }
         return;
       case TOPIC_RESET:
         opts.onReset(reasonOf(parsed.data));
@@ -285,41 +309,46 @@ export function createStreamConnection(opts: ConnectionOptions): StreamConnectio
     }
   };
 
-  const loop = async (gen: number) => {
+  const loop = async (gen: number, initialWait: number) => {
     try {
+      let wait = initialWait;
       for (;;) {
+        if (wait > 0) {
+          setStatus('reconnecting', { delayMs: wait, error: lastError });
+          await sleep(wait, gen);
+        }
         if (gen !== generation) return;
         setStatus('connecting');
         const end = await attemptOnce(gen);
         if (gen !== generation) return;
         attempt += 1;
-        const delayMs = reconnectDelay(attempt, end.retryAfterMs, random);
-        setStatus('reconnecting', { delayMs, error: end.error ?? undefined });
-        await sleep(delayMs, gen);
+        wait = reconnectDelay(attempt, end.retryAfterMs, random);
+        notBefore = Date.now() + wait;
+        lastError = end.error ?? undefined;
       }
     } catch {
       // our own abort (close/restart); the new generation, if any, runs its own loop
     }
   };
 
+  const remaining = () => clampRetryAfter(notBefore - Date.now());
+
   return {
     open() {
       if (running) return;
       running = true;
-      const gen = generation;
-      void loop(gen);
+      void loop(generation, remaining());
     },
     close(state) {
       running = false;
       teardown();
-      attempt = 0;
+      if (state === 'hidden') resyncOnOpen = true;
       setStatus(state);
     },
     restart() {
       if (!running) return;
       teardown();
-      attempt = 0;
-      void loop(generation);
+      void loop(generation, remaining());
     },
     get status() {
       return status;

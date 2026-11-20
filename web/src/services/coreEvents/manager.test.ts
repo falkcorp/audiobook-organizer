@@ -5,9 +5,9 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createFakeServer } from '../../test/eventStreamFake';
+import { createFakeServer, problemResponse } from '../../test/eventStreamFake';
 import { createEventStream, type EventStream, type VisibilitySource } from './manager';
-import { TOPIC_CLOSED, TOPIC_RESET, type TopicEvent } from './types';
+import { TOPIC_CLOSED, TOPIC_OPENED, TOPIC_RESET, type TopicEvent } from './types';
 
 const RUN = 'core.task.run-changed.v1';
 const BOOK = 'books.book.changed.v1';
@@ -61,7 +61,7 @@ describe('connection lifecycle', () => {
     es.subscribe(RUN, () => {});
     await tick();
     expect(server.calls).toHaveLength(1);
-    expect(server.calls[0].url).toBe(`/api/core/v1/events?topic=${BOOK}&topic=${RUN}`);
+    expect(server.calls[0].url).toBe(`/api/core/v1/events?topic=*&exclude=${LOG}`);
   });
 
   it('opens a stream only while the tab is visible, closes it on hidden and reopens on visible, resuming', async () => {
@@ -105,19 +105,64 @@ describe('connection lifecycle', () => {
     expect(es.getStatus().state).toBe('idle');
   });
 
-  it('restarts with the wider topic set, resuming from the last id, when a subscriber is added', async () => {
+  it('adding a subscriber never reconnects the shared stream (topic=* is filtered on the client)', async () => {
     const { server } = make();
     const s = server.openStream();
-    server.openStream();
     es.subscribe(RUN, () => {});
     await tick();
     s.event('n-4', RUN, {}, 'r1');
     await tick();
     es.subscribe(BOOK, () => {});
+    es.subscribe('*', () => {});
     await tick();
+    expect(server.calls).toHaveLength(1);
+    expect(server.calls[0].url).toBe(`/api/core/v1/events?topic=*&exclude=${LOG}`);
+  });
+
+  it('a wildcard on the shared stream still excludes the log topic server-side', async () => {
+    const { server } = make();
+    server.openStream();
+    es.subscribe('core.*', () => {});
+    await tick();
+    expect(server.calls[0].url).toContain(`exclude=${encodeURIComponent(LOG)}`);
+  });
+
+  it('a hidden tab that reopens waits out a standing Retry-After instead of reconnecting at once', async () => {
+    const { server, vis } = make();
+    server.answer(() => problemResponse(429, 'rate_limited', 'x', { 'Retry-After': '30' }));
+    server.openStream();
+    es.subscribe(RUN, () => {});
+    await tick();
+    vis.set(false);
+    await tick();
+    vis.set(true);
+    await tick(1000);
+    expect(server.calls).toHaveLength(1);
+    await tick(29000);
     expect(server.calls).toHaveLength(2);
-    expect(server.calls[1].url).toBe(`/api/core/v1/events?topic=${BOOK}&topic=${RUN}`);
-    expect(server.calls[1].headers['last-event-id']).toBe('n-4');
+  });
+
+  it('runs the resync handlers when a hidden tab reopens, and on a first open with no resume id', async () => {
+    const { server, vis } = make();
+    const s1 = server.openStream();
+    const s2 = server.openStream();
+    const reasons: string[] = [];
+    es.onResync((i) => reasons.push(i.reason));
+    es.subscribe(RUN, () => {});
+    await tick();
+    s1.control(TOPIC_OPENED, {});
+    await tick();
+    expect(reasons).toEqual(['reconnect']); // first open: no id to send
+    s1.event('n-1', RUN, {}, 'r1');
+    await tick();
+    vis.set(false);
+    await tick();
+    vis.set(true);
+    await tick();
+    s2.control(TOPIC_OPENED, {});
+    await tick();
+    expect(server.calls[1].headers['last-event-id']).toBe('n-1');
+    expect(reasons).toEqual(['reconnect', 'reconnect']); // reopen after hidden
   });
 });
 
@@ -204,7 +249,7 @@ describe('keyed streams', () => {
     const off = es.subscribe(LOG, (e) => logSeen.push(e.id), { stream: 'keyed', key: 'run-joker-1' });
     await tick();
     expect(server.calls.map((c) => c.url).sort()).toEqual(
-      [`/api/core/v1/events?topic=${LOG}&key=run-joker-1`, `/api/core/v1/events?topic=${RUN}`].sort(),
+      [`/api/core/v1/events?topic=${LOG}&key=run-joker-1`, `/api/core/v1/events?topic=*&exclude=${LOG}`].sort(),
     );
     shared.event('n-1', RUN, {}, 'run-joker-1');
     keyed.event('n-1', LOG, { line: 'he laughs' }, 'run-joker-1');
