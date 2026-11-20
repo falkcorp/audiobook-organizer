@@ -8,13 +8,13 @@ package appconfig
 import (
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	coreconfig "github.com/falkcorp/mediacore/config"
 )
 
@@ -80,6 +80,9 @@ func execPathHeads(before config.Config, u config.Update) []string {
 
 // pathChecker is checkExecPath; a variable so a test can prove that a refused
 // caller never reaches the filesystem.
+// execLog carries the OS detail a refusal keeps out of its response.
+var execLog = logger.New("appconfig")
+
 var pathChecker = checkExecPath
 
 // execPathViolations are the refusals the update's executable-path values earn, as
@@ -114,7 +117,7 @@ func checkExecPath(p string, kind execPathKind) error {
 	case errors.Is(err, os.ErrNotExist) && kind == execDir:
 		return checkDirOf(filepath.Dir(p))
 	case err != nil:
-		slog.Warn("config: executable path refused", "path", p, "err", err)
+		execLog.Warn("config: executable path %s refused: %s", logger.SanitizeLogValue(p), logger.SanitizeLogValue(err.Error()))
 		return errors.New("cannot be used")
 	}
 	switch kind {
@@ -145,7 +148,7 @@ func checkExecPath(p string, kind execPathKind) error {
 func checkDirOf(dir string) error {
 	info, err := os.Stat(dir)
 	if err != nil {
-		slog.Warn("config: executable path's directory refused", "dir", dir, "err", err)
+		execLog.Warn("config: executable path directory %s refused: %s", logger.SanitizeLogValue(dir), logger.SanitizeLogValue(err.Error()))
 		return errors.New("its directory cannot be used")
 	}
 	if info.Mode().Perm()&0o002 != 0 {
