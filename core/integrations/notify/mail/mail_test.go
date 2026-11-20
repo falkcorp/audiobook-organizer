@@ -1,7 +1,7 @@
 // file: core/integrations/notify/mail/mail_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4390d39b-6ec5-4a8e-a468-83a1beaa191b
-// last-edited: 2026-11-13
+// last-edited: 2026-11-19
 
 package mail
 
@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -47,6 +48,7 @@ type fakeSMTP struct {
 	rcptAll      []string // every RCPT TO, in order
 	data         string
 	done         chan struct{}
+	accepted     atomic.Int32 // connections accepted
 }
 
 func testCert(t *testing.T) (tls.Certificate, *x509.CertPool) {
@@ -100,6 +102,7 @@ func (f *fakeSMTP) serve() {
 	if err != nil {
 		return
 	}
+	f.accepted.Add(1)
 	defer conn.Close()
 	if f.stall {
 		_, _ = io.Copy(io.Discard, conn) // until the client closes
@@ -464,5 +467,88 @@ func checkMIME(t *testing.T, raw string) {
 	}
 	if !strings.Contains(got[0], "https://books.example.com/invite/abc") || !strings.Contains(got[1], "Hello &amp; welcome") {
 		t.Fatalf("part bodies = %q", got)
+	}
+}
+
+// SMTPConfig.Dial replaces the plain net dial: the sender connects through it,
+// to the host and port it was configured with, and nothing else opens a
+// connection.
+func TestSend_UsesTheConfiguredDial(t *testing.T) {
+	f := &fakeSMTP{offerTLS: true}
+	port, _ := startFake(t, f)
+	var gotNetwork, gotAddr string
+	s, err := NewSMTPSender(SMTPConfig{
+		Host: "127.0.0.1", Port: port, From: "Books <books@example.com>",
+		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			gotNetwork, gotAddr = network, addr
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Send(context.Background(), testMsg); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	f.wait(t)
+	if want := net.JoinHostPort("127.0.0.1", strconv.Itoa(port)); gotNetwork != "tcp" || gotAddr != want {
+		t.Fatalf("the dial saw %s %s, want tcp %s", gotNetwork, gotAddr, want)
+	}
+	if f.accepted.Load() != 1 {
+		t.Fatalf("the server accepted %d connections, want 1", f.accepted.Load())
+	}
+}
+
+// A dial that refuses ends the send before any connection, and its error
+// stays in the chain so the caller can classify it.
+func TestSend_DialRefusalEndsTheSendBeforeAnyConnection(t *testing.T) {
+	f := &fakeSMTP{offerTLS: true}
+	port, _ := startFake(t, f)
+	refusal := errors.New("the guard said no")
+	s, err := NewSMTPSender(SMTPConfig{
+		Host: "127.0.0.1", Port: port, From: "Books <books@example.com>",
+		Dial: func(context.Context, string, string) (net.Conn, error) { return nil, refusal },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Send(context.Background(), testMsg); !errors.Is(err, refusal) {
+		t.Fatalf("err = %v, want the dial's refusal", err)
+	}
+	if n := f.accepted.Load(); n != 0 {
+		t.Fatalf("the server accepted %d connections after a refused dial", n)
+	}
+}
+
+// The address the sender hands its dial is the one the egress guard judges, so
+// it must be the one the sender would have used: an unset port is the
+// submission port 587, and 465 (implicit TLS) and any other port are dialled
+// as given. These are the same rules NewSMTPSender always applied.
+func TestSend_DialAddressFollowsThePort(t *testing.T) {
+	for _, c := range []struct {
+		port int
+		want string
+	}{
+		{0, "mail.gotham.test:587"},
+		{587, "mail.gotham.test:587"},
+		{465, "mail.gotham.test:465"},
+		{25, "mail.gotham.test:25"},
+		{2525, "mail.gotham.test:2525"},
+	} {
+		var got string
+		s, err := NewSMTPSender(SMTPConfig{
+			Host: "mail.gotham.test", Port: c.port, From: "Books <books@example.com>",
+			Dial: func(_ context.Context, _, addr string) (net.Conn, error) {
+				got = addr
+				return nil, errors.New("stop")
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = s.Send(context.Background(), testMsg)
+		if got != c.want {
+			t.Errorf("port %d: dialled %q, want %q", c.port, got, c.want)
+		}
 	}
 }
