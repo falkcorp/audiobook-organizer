@@ -1,5 +1,5 @@
 // file: web/src/pages/Settings.secrets.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7b1d9e45-3c82-4a60-8f17-d4e0a6c2b593
 // last-edited: 2026-11-19
 //
@@ -75,9 +75,12 @@ function makeView(opts: {
 describe('Settings secrets', () => {
   let view: ConfigView;
   let puts: Array<{ set: Record<string, unknown>; unset: string[] }>;
+  // When set, the next PUT is refused with this status and body.
+  let refusal: { status: number; body: Record<string, unknown> } | null;
 
   beforeEach(() => {
     puts = [];
+    refusal = null;
     view = makeView({ keySet: true });
     vi.stubGlobal(
       'fetch',
@@ -86,6 +89,9 @@ describe('Settings secrets', () => {
         if (u.endsWith('/config') && init?.method === 'PUT') {
           const body = JSON.parse(String(init.body));
           puts.push(body);
+          if (refusal) {
+            return new Response(JSON.stringify(refusal.body), { status: refusal.status });
+          }
           if (body.unset?.includes('openai_api_key')) {
             view = makeView({ keySet: false });
           } else if (body.set?.openai_api_key) {
@@ -254,6 +260,49 @@ describe('Settings secrets', () => {
       const field = await googleField();
       await waitFor(() => expect(field.placeholder).toMatch(/Enter your Google Books API key/));
       expect(screen.queryByText('Clear saved key')).not.toBeInTheDocument();
+    });
+  });
+  describe('a refused write of a library root', () => {
+    const editLibraryPath = async () => {
+      renderWithProviders(<Settings />, { initialEntries: ['/settings?tab=library'] });
+      const field = (await screen.findByLabelText('Library Path')) as HTMLInputElement;
+      await waitFor(() => expect(field.value).toBe('/library/gotham'));
+      fireEvent.change(field, { target: { value: '/library/arkham' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
+      await waitFor(() => expect(puts).toHaveLength(1));
+      return field;
+    };
+
+    it('shows the 422 that names the field, keeps the typed path and does not report a save', async () => {
+      const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+      refusal = {
+        status: 422,
+        body: {
+          error: 'root_dir: must be an absolute path that exists — nothing was saved',
+          code: 'config_invalid',
+          fields: [{ key: 'root_dir', error: 'must be an absolute path that exists' }],
+        },
+      };
+      const field = await editLibraryPath();
+      // Only the keys that changed were named, root_dir among them.
+      expect(puts[0].set.root_dir).toBe('/library/arkham');
+      await waitFor(() => expect(alertSpy).toHaveBeenCalledTimes(1));
+      const shown = String(alertSpy.mock.calls[0][0]);
+      expect(shown).toContain('Failed to save settings');
+      expect(shown).toContain('root_dir: must be an absolute path that exists');
+      expect(field.value).toBe('/library/arkham');
+      expect(screen.queryByText(/Settings saved successfully/i)).not.toBeInTheDocument();
+    });
+
+    it('shows the 403 that says the admin role is needed', async () => {
+      const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+      refusal = {
+        status: 403,
+        body: { error: 'changing root_dir needs the admin role', code: 'config_forbidden' },
+      };
+      await editLibraryPath();
+      await waitFor(() => expect(alertSpy).toHaveBeenCalledTimes(1));
+      expect(String(alertSpy.mock.calls[0][0])).toContain('changing root_dir needs the admin role');
     });
   });
 });
