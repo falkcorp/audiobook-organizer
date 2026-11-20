@@ -94,10 +94,11 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 	e.mu.RLock()
 	before := e.cur
 	e.mu.RUnlock()
-	// HEAD's first rule, before every other check: with no owner set, nothing
-	// through the API changes who the owner is or how the owner signs in.
+	// HEAD's first rule, before every other check: nothing through the API changes
+	// who the owner is or how the owner signs in unless the owner asks, and with
+	// no owner set, nobody can.
 	if hooks {
-		if err := e.ownerRootRefusal(before, u); err != nil {
+		if err := e.ownerRootRefusal(a, before, u); err != nil {
 			return config.UpdateResult{}, err
 		}
 	}

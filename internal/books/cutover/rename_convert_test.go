@@ -110,6 +110,17 @@ func TestConvert_RefusesTheWrongShapeWithoutTheValue(t *testing.T) {
 	}
 }
 
+// TestConvert_AuthModeRefusesNullAndNonBooleans: a JSON null decodes into a bool
+// without error and leaves it false, which would convert to "disabled" and turn
+// sign-in off. It is not a boolean, with or without padding.
+func TestConvert_AuthModeRefusesNullAndNonBooleans(t *testing.T) {
+	for _, in := range []string{`null`, " null\n", `"true"`, `1`, `""`, `{}`, ``} {
+		if out, _, err := Convert(ConvertAuthMode, json.RawMessage(in)); !errors.Is(err, ErrConvertInput) {
+			t.Errorf("Convert(auth-mode, %q) = %s, %v; want ErrConvertInput", in, out, err)
+		}
+	}
+}
+
 // TestConvert_EveryConverterTheTableNamesIsKnown: the table names no converter
 // Convert does not implement.
 func TestConvert_EveryConverterTheTableNamesIsKnown(t *testing.T) {

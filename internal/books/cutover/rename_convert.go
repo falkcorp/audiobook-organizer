@@ -74,8 +74,11 @@ func Convert(name string, in json.RawMessage) (out json.RawMessage, dropped []st
 	case ConvertNeverStored, ConvertOIDCFold:
 		return nil, nil, ErrNotStaged
 	case ConvertAuthMode:
+		// A JSON null decodes into a bool without error and leaves it false, which
+		// would read as "disabled": it is not a boolean, so it is refused before
+		// it can turn sign-in off.
 		var b bool
-		if err := json.Unmarshal(in, &b); err != nil {
+		if bytes.Equal(bytes.TrimSpace(in), []byte("null")) || json.Unmarshal(in, &b) != nil {
 			return nil, nil, bad("want a boolean")
 		}
 		if b {

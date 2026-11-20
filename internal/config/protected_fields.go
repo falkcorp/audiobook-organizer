@@ -226,6 +226,13 @@ var ownerTrustRootFields = map[string]string{
 	"oauth_allowed_emails":  "which Access identities are admitted at all",
 }
 
+// IsOwnerTrustRootField reports whether name is one of the owner trust-root
+// settings, by HEAD's flat key.
+func IsOwnerTrustRootField(name string) bool {
+	_, ok := ownerTrustRootFields[name]
+	return ok
+}
+
 // OwnerTrustRootUnsetMessage is the refusal for an owner trust-root change
 // while no owner is configured.
 const OwnerTrustRootUnsetMessage = "No owner is configured, so who the owner is and how the owner signs in (owner_email, cf_access_team_domain, cf_access_aud, enable_auth, oauth_allowed_emails) can be set only on the server: set OWNER_EMAIL (and CF_ACCESS_TEAM_DOMAIN / CF_ACCESS_AUD) in the host environment or config file and restart"
