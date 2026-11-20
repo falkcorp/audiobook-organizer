@@ -242,10 +242,10 @@ func (p *Plugin) runMarkMissingFiles(ctx context.Context, rawParams json.RawMess
 // decode into HEAD's struct after the mode key (apply) is refused.
 func (p *Plugin) markMissingFilesKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	// The book_file row writers: the shared fileRow of kinds_resources.go (the row
-	// and everything the aggregate recompute it triggers writes: books, authors,
+	// and everything the aggregate recompute it triggers writes: books,
 	// metadata_cache, indexes).
 	eff := tasks.Writes(tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResBooks)),
-		tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResMetadataCache)),
+		tasks.Res("books", string(ops.ResMetadataCache)),
 		tasks.Res("books", string(ops.ResIndexes)))
 	return tasks.Task(markMissingFilesKind, tasks.TaskSpec[json.RawMessage, markMissingPlan]{
 		Common: t6g5Common(p.markMissingFilesDef(), markMissingFilesKind, eff, sched),

@@ -323,36 +323,36 @@ func TestJobWrites_NoDerivationAtPackageInit(t *testing.T) {
 // This literal does not move with the table. Changing a job's set on purpose, or
 // a row it reaches, means editing the word here in the same change.
 var jobWritesPinned = map[string]string{
-	"backfill-book-files":             "authors book_files books indexes metadata_cache operations",
-	"backfill-file-hashes":            "authors book_files books files indexes metadata_cache operations",
+	"backfill-book-files":             "book_files books indexes metadata_cache operations",
+	"backfill-file-hashes":            "book_files books files indexes metadata_cache operations",
 	"backfill-itunes-positions":       "user_state",
 	"backfill-merge-undo-pointers":    "operations",
-	"backfill-metadata-source-hash":   "authors books indexes metadata_cache",
+	"backfill-metadata-source-hash":   "books indexes metadata_cache",
 	"backfill-sync-ids":               "sync_identity",
-	"bulk-deluge-import":              "authors book_files books files indexes metadata_cache operations",
+	"bulk-deluge-import":              "book_files books files indexes metadata_cache operations",
 	"cleanup-empty-folders":           "files",
 	"cleanup-organize-mess":           "files",
-	"cleanup-series":                  "authors books indexes metadata_cache series",
-	"dedup-books":                     "authors book_files books external_ids indexes metadata_cache user_state",
-	"enrich-book-files":               "authors book_files books indexes metadata_cache",
-	"fix-author-narrator-swap":        "authors books indexes metadata_cache",
+	"cleanup-series":                  "books indexes metadata_cache series",
+	"dedup-books":                     "book_files books external_ids indexes metadata_cache user_state",
+	"enrich-book-files":               "book_files books indexes metadata_cache",
+	"fix-author-narrator-swap":        "books indexes metadata_cache",
 	"fix-file-modes":                  "files",
-	"fix-read-by-narrator":            "authors books indexes metadata_cache",
-	"fix-version-groups":              "authors book_files books indexes metadata_cache",
+	"fix-read-by-narrator":            "books indexes metadata_cache",
+	"fix-version-groups":              "book_files books indexes metadata_cache",
 	"merge-chapter-groups":            "authors book_files books external_ids indexes metadata_cache operations sync_identity user_state",
-	"normalize-primary-flags":         "authors books indexes metadata_cache",
+	"normalize-primary-flags":         "books indexes metadata_cache",
 	"prune-book-snapshots":            "books",
-	"purge-unknown-author-duplicates": "authors books indexes metadata_cache",
-	"recompute-book-aggregates":       "authors books indexes metadata_cache operations",
-	"recompute-itunes-paths":          "authors book_files books indexes metadata_cache",
+	"purge-unknown-author-duplicates": "books indexes metadata_cache",
+	"recompute-book-aggregates":       "books indexes metadata_cache operations",
+	"recompute-itunes-paths":          "book_files books indexes metadata_cache",
 	"refetch-missing-authors":         "authors books indexes metadata_cache",
-	"relink-missing-to-itunes":        "authors book_files books indexes metadata_cache",
+	"relink-missing-to-itunes":        "book_files books indexes metadata_cache",
 	"relink-report":                   "",
-	"repoint-version-primary":         "authors books indexes metadata_cache",
+	"repoint-version-primary":         "books indexes metadata_cache",
 	"retention-and-hygiene":           "books operations settings",
-	"revert-metadata-fetch":           "authors books indexes metadata_cache",
+	"revert-metadata-fetch":           "books indexes metadata_cache",
 	"scan-chapter-groups":             "",
-	"scan-composer-tags":              "authors book_files books file_provenance files indexes metadata_cache operations",
+	"scan-composer-tags":              "book_files books file_provenance files indexes metadata_cache operations",
 	"scan-duplicate-files":            "",
 	"scan-duration-mismatch":          "",
 	"scan-metadata-hash-dups":         "",
@@ -425,7 +425,9 @@ func TestJobWrites_NamedBookWriters(t *testing.T) {
 // recompute that calls it), by name, typed by hand: ModifyBook itself, the
 // aggregate recompute, and the file-row methods that notify it. Whatever the
 // caller's closure sets, the store writes the stale stamp on metadata_cache and
-// the ident: rows (indexes) underneath these calls.
+// the ident: rows (indexes) underneath these calls. It writes no authors-family
+// key since F5-18j, which retired the author_books_legacy: rows ModifyBook staged
+// (TestBookWrites_TouchNoAuthorsFamilyKey in internal/books/store pins it).
 var bookWriteFamily = []string{
 	"ModifyBook", "UpdateBook", "RecomputeBookAggregates", "SetLibraryStateOrganized",
 	"CreateBookFile", "UpdateBookFile", "UpdateBookFiles", "ModifyBookFile",
@@ -434,7 +436,7 @@ var bookWriteFamily = []string{
 }
 
 // TestJobWrites_BookWriteFamilyDeclaresCacheAndIndexes: every job whose code calls
-// a ModifyBook-family method declares books, authors, metadata_cache and indexes.
+// a ModifyBook-family method declares books, metadata_cache and indexes.
 // The callers come from the SSA oracle, not from a list, so a job that starts
 // calling ModifyBook is held to it.
 func TestJobWrites_BookWriteFamilyDeclaresCacheAndIndexes(t *testing.T) {
@@ -456,7 +458,7 @@ func TestJobWrites_BookWriteFamilyDeclaresCacheAndIndexes(t *testing.T) {
 		}
 		callers++
 		got := declaredWrites(d)
-		for _, want := range []string{"authors", "books", "indexes", "metadata_cache"} {
+		for _, want := range []string{"books", "indexes", "metadata_cache"} {
 			if !slices.Contains(got, want) {
 				t.Errorf("%s calls %s but declares %v, which lacks %s", id, reaches, got, want)
 			}

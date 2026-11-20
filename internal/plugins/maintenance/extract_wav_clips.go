@@ -116,8 +116,8 @@ func (p *Plugin) extractWAVClipsKind(deps t6g4Deps, sched *tasks.Schedule) tasks
 			// hardlinks it makes under the library root (bytes on disk, written outside
 			// the writer).
 			// ModifyBook is reached through the recompute, so the row is the whole ModifyBook row:
-			// authors, metadata_cache, indexes too (THE RULE, internal/maintenance/resources).
-			Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResAuthors, ops.ResMetadataCache, ops.ResIndexes, ops.ResFiles)...),
+			// metadata_cache, indexes too (THE RULE, internal/maintenance/resources).
+			Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes, ops.ResFiles)...),
 			Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
 			// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
 			// internal/arch: skip_existing (the default) skips a clip already in the cache), so the 05-tasks mapping is

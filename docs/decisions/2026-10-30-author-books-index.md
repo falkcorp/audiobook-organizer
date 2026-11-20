@@ -142,3 +142,27 @@ in practice the legacy keys move with the books.
 - No consistency checker op (the book-hash index has one). The exact-match
   invariant is covered by tests; a repair op would be a follow-up.
 - `DeleteAuthor`'s sweep still scans every credit row.
+
+## Update 2026-11-20: the legacy family is retired (F5-18j)
+
+Decision 1's second family, `author_books_legacy:`, is retired. It made every
+book-row write an `authors` write, so nearly every kind that saves a book had to
+declare `authors` and could not run beside an author job. The owner rule is that
+the credit list is the author source, so the index now holds credit rows only.
+
+- Nothing stages or reads `author_books_legacy:`. `maintenance.author-books-legacy-retire`
+  deletes the stored rows; it refuses while any book (every state) has an
+  `AuthorID` its credit list does not hold, and lists them.
+- Decision 2's sentinel no longer gates trust. A credit-only index agrees with
+  the listing scan (which still links `Book.AuthorID`) only while every listable
+  book's `AuthorID` is credited, and writers outside the store can break that at
+  any time, so the reader trusts the index only after this process's reconcile
+  found no unreadable credit row and no uncovered listable book. The v1
+  sentinel is deleted at reconcile start so a rolled-back build rebuilds its
+  legacy keys before trusting them.
+- Decision 6 no longer applies: there are no legacy links to leave.
+- Residual gap: a book written uncredited after this boot's reconcile and before
+  memdb publishes is missing from its author's cold listing until memdb takes
+  over.
+
+Details and the prod run plan: `docs/agent-tasks/platform-core/seams.d/F5-18j.md`.
