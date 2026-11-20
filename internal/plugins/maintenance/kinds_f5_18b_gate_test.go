@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_f5_18b_gate_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 91c3e5a7-2b04-4d68-a1f9-6e7d0c4b8325
 // last-edited: 2026-11-19
 
@@ -89,7 +89,7 @@ type f518bRun struct {
 func f518bResolveRun(t *testing.T, declare func([]entity.Ref) []entity.Ref) f518bRun {
 	t.Helper()
 	s := newRepairPebble(t)
-	prod, err := s.CreateAuthor("Gotham Playhouse Theater")
+	prod, err := s.CreateAuthor("Monarch Theater")
 	require.NoError(t, err)
 	repairBook(t, s, "b1", &prod.ID, prod.ID)
 	for _, id := range []string{"b1"} {
@@ -103,7 +103,7 @@ func f518bResolveRun(t *testing.T, declare func([]entity.Ref) []entity.Ref) f518
 	deps.NewMetadataFetcher = func(w tasks.Writer) t6g1MetadataFetcher {
 		enforcing = w.(*writertest.Writer)
 		return f518bFetcher{f518bGatedService(t, s, w, []metadata.BookMetadata{{
-			Title: "Year One", Author: "Bruce Wayne", Publisher: "Wayne Audio", Series: "Gotham Chronicles", SeriesPosition: "1",
+			Title: "Year One", Author: "Bruce Wayne", Publisher: "Wayne Enterprises", Series: "The Long Halloween", SeriesPosition: "1",
 			Description: "A masked vigilante's first year.", PublishYear: 1987, Language: "English",
 		}})}
 	}
@@ -187,11 +187,11 @@ func TestF518b_EveryStampedResourceIsLoadBearing(t *testing.T) {
 
 // f518bExtraFamilies are key families the apply writes that the store-diff
 // helper has no resource for (kinds_t6_g5_storediff_test.go is another row's
-// file): the history rows of RecordMetadataChange (operations, as F5-06 filed
-// them), the series rows CreateSeries writes and the global preference rows
+// file): the history rows of RecordMetadataChange (books: book-keyed history,
+// like path_history:; coordinator ruling 2026-11-19), the series rows CreateSeries writes and the global preference rows
 // SetUserPreference writes (user_state, as the shared table has
 // SetUserPreferenceForUser).
-var f518bExtraFamilies = map[string]string{"metadata_change:": "operations", "series:": "series", "preference:": "user_state"}
+var f518bExtraFamilies = map[string]string{"metadata_change:": "books", "series:": "series", "preference:": "user_state"}
 
 // f518bChangedResources are the resources the keys changed between two
 // snapshots belong to, each with one changed key as evidence.
@@ -270,7 +270,7 @@ func f518bAutoMatchRun(t *testing.T, declare func([]entity.Ref) []entity.Ref) f5
 	deps.NewTranscriptionRunners = func(w tasks.Writer) TranscriptionRunners {
 		svc := f518bGatedService(t, s, w, nil)
 		return f518bRunners{svc: svc, cand: metafetch.MetadataCandidate{
-			Title: trans, Author: author, Series: "Gotham Chronicles", Publisher: "Wayne Audio", Source: "f518b-fake",
+			Title: trans, Author: author, Series: "The Long Halloween", Publisher: "Wayne Enterprises", Source: "f518b-fake",
 		}}
 	}
 	def := t6g1ByKind(t, (&Plugin{}).t6g1Kinds(deps, nil), autoMatchTranscribedKind)

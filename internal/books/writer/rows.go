@@ -1,5 +1,5 @@
 // file: internal/books/writer/rows.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c4e91a73-0b58-4d26-9f3a-71d5e2a86b04
 // last-edited: 2026-11-19
 
@@ -29,8 +29,10 @@ func SharedRows() Rows { return Rows(resources.Table()) }
 //   - CreateSeries: series: and series:name: (series).
 //   - UpsertMetadataFieldState, DeleteMetadataFieldState: metadata_state:
 //     (field_states).
-//   - RecordMetadataChange: metadata_change: history rows (operations, as
-//     F5-06 filed them).
+//   - RecordMetadataChange: metadata_change: history rows, which are book-keyed
+//     (books, as path_history: is; coordinator ruling 2026-11-19). A ModifyBook
+//     over a legacy stale-series row stages one of them in its own batch, so
+//     the ModifyBook row carries it as `books` too.
 //   - PutMetadataCache: the metadata_cache: row and the book's ident: state in
 //     one batch (metadata_cache, indexes), as DeleteMetadataCache.
 //   - RecordPathChange: path_history: (books: a record keyed on a book).
@@ -58,7 +60,7 @@ func MetafetchApplyRows() Rows {
 		"CreateSeries":              {ops.ResSeries},
 		"UpsertMetadataFieldState":  {ops.ResFieldStates},
 		"DeleteMetadataFieldState":  {ops.ResFieldStates},
-		"RecordMetadataChange":      {ops.ResOperations},
+		"RecordMetadataChange":      {ops.ResBooks},
 		"PutMetadataCache":          {ops.ResMetadataCache, ops.ResIndexes},
 		"RecordPathChange":          {ops.ResBooks},
 		"FlagMetadataHashDuplicate": slices.Clone(bookW),
