@@ -280,9 +280,10 @@ func (k *Kernel) swapAfter(ctx context.Context, phase string) error {
 	case out.Boot == restoreswap.BootRestore && phase == phaseP4b:
 		err = s.RestoreApplied(ctx, out.ID)
 	case out.Boot == restoreswap.BootReset && phase == phaseP4a && !k.cfg.CoreConfigBoot:
-		// Under Config.CoreConfigBoot applied is journalled after secrets.Open
-		// instead (bindCoreStores): the keyring header is the last thing the reset
-		// rewrites, and the swap is not applied until it has.
+		// Under Config.CoreConfigBoot applied is journalled in bindCoreStores
+		// instead, after secrets.Open rewrote the keyring header and the reset's
+		// fresh rows are committed (SEC8-5): the swap is not applied until both
+		// are durable.
 		err = s.ResetApplied(ctx, out.ID)
 	case (out.Boot == restoreswap.BootReset || out.Boot == restoreswap.BootResetApplied) && phase == phaseP4b:
 		if out.Intent.Reset == restorejournal.ResetFactory && k.resetEntry() != nil {
