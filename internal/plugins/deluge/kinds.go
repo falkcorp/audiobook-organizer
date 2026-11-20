@@ -352,6 +352,15 @@ func (p *Plugin) pathUpdateNative(d KindDeps, sched func(tasks.Kind) *tasks.Sche
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityNormal
 	c.ConcurrencyKey = tasks.Key("books.deluge.path-update")
+	// Fold a start only into a QUEUED run of the same book (F6-01 obligation
+	// 3, for the relocation consumer). The zero policy would also fold it into
+	// a RUNNING run with identical params, which may already have read the old
+	// path: the newer move would be lost. A start made while one runs queues
+	// behind it, and reads the path as stored when it runs.
+	c.Dedupe = tasks.DedupePolicy{Key: func(raw json.RawMessage) (string, error) {
+		p, err := decodeNativeParams[pathUpdateCoreParams](pathUpdateKind, raw)
+		return p.BookID, err
+	}}
 	c.Timeout = 1 * time.Minute
 	return tasks.Task(pathUpdateKind, tasks.TaskSpec[json.RawMessage, pathUpdateResult]{
 		Common: c,
