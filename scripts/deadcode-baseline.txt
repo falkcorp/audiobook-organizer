@@ -734,6 +734,7 @@ internal/books/cutover/m6.signature
 internal/books/cutover/m6.splitUserinfo
 internal/books/cutover/m6.unknownJobType
 internal/books/cutover/m6.windowsForm
+internal/books/store.BookRelocatedTopicSpec
 internal/books/store.CatalogKeyPrefixes
 internal/books/store.GetCachedMetadataFetch
 internal/books/store.GetGlobalStore
@@ -843,6 +844,8 @@ internal/plugins/dedup.Plugin.applyBandThresholds
 internal/plugins/dedup.Plugin.computeRebuildDiff
 internal/plugins/dedup.Plugin.scanOrphanEmbeddings
 internal/plugins/dedup.scanReembedCandidates
+internal/plugins/deluge.RelocationConsumer
+internal/plugins/deluge.relocationRunParams
 internal/plugins/itunes.NewLoggerWrapper
 internal/plugins/itunes.loggerWrapper.ChangeCounters
 internal/plugins/itunes.loggerWrapper.Debug
