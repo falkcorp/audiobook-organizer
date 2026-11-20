@@ -97,7 +97,7 @@ const ARCHIVE: BackupArchive = {
   name: 'batman-2026-11-20.archive',
   size: 1234,
   created_at: '2026-11-20T10:00:00Z',
-  format: 'archive-v1',
+  format: 'mediacore-backup/1',
   provenance: 'own',
   reason: 'manual',
   app_version: 'v1.0.0',
@@ -171,7 +171,9 @@ describe('list', () => {
 
   it('a 403 is a BackupRequestError naming the scope, and is not retried', async () => {
     const f = fake(
-      problem(403, 'forbidden', 'missing scope', { required_permission: 'core:system.view' }),
+      problem(403, 'permission_denied', 'missing scope', {
+        required_permission: 'core:system.view',
+      }),
       jsonRes({ backups: [] })
     );
     const e = (await caught(client(f).list())) as BackupRequestError;
@@ -179,7 +181,7 @@ describe('list', () => {
     expect(e.status).toBe(403);
     expect(e.isForbidden).toBe(true);
     expect(e.needsInteractiveSession).toBe(false);
-    expect(e.code).toBe('forbidden');
+    expect(e.code).toBe('permission_denied');
     expect(e.requiredPermission).toBe('core:system.view');
     expect(e.requestId).toBe('req-bruce');
     expect(f.calls).toHaveLength(1);
@@ -230,6 +232,23 @@ describe('list', () => {
       new Response('<html>log in</html>', { status: 200, headers: { 'Content-Type': 'text/html' } })
     );
     expect(await caught(client(f).list())).toBeInstanceOf(ApiAuthRedirectError);
+  });
+
+  it('an archive without a string format or provenance is a BackupProtocolError', async () => {
+    for (const mut of [{ format: undefined }, { provenance: undefined }, { format: 3 }]) {
+      const f = fake(jsonRes({ backups: [{ ...ARCHIVE, ...mut }] }));
+      expect(await caught(client(f).list())).toBeInstanceOf(BackupProtocolError);
+    }
+  });
+
+  it('only ids the server issues reach fetch (ULID or legacy-)', async () => {
+    const f = fake(noContent(), noContent());
+    await client(f).remove('legacy-bruce_wayne-1');
+    await client(f).remove(ID);
+    for (const bad of ['abc', ID.toLowerCase(), ID + 'A', 'legacy-', 'legacy-a/b', 'legacy-a.b']) {
+      expect(await caught(client(f).remove(bad))).toBeInstanceOf(BackupArgumentError);
+    }
+    expect(f.calls).toHaveLength(2);
   });
 
   it('a 200 with the wrong shape is a BackupProtocolError, not a crash', async () => {
@@ -324,17 +343,19 @@ describe('create', () => {
   it('a 422 invalid reason keeps its field errors', async () => {
     const f = fake(
       problem(422, 'validation_failed', 'invalid body', {
-        errors: [{ field: '/body/reason', code: 'invalid_reason', message: 'bad' }],
+        errors: [{ field: '/body/reason', code: 'invalid', message: 'bad' }],
       })
     );
     const e = (await caught(client(f).create({ reason: '\u0001' }))) as BackupRequestError;
     expect(e.status).toBe(422);
-    expect(e.fields).toEqual([{ field: '/body/reason', code: 'invalid_reason', message: 'bad' }]);
+    expect(e.fields).toEqual([{ field: '/body/reason', code: 'invalid', message: 'bad' }]);
   });
 
   it('a 403 (core:system.manage missing) is surfaced and not retried', async () => {
     const f = fake(
-      problem(403, 'forbidden', 'missing scope', { required_permission: 'core:system.manage' })
+      problem(403, 'permission_denied', 'missing scope', {
+        required_permission: 'core:system.manage',
+      })
     );
     const e = (await caught(client(f).create())) as BackupRequestError;
     expect(e.isForbidden).toBe(true);
@@ -344,11 +365,11 @@ describe('create', () => {
 });
 
 describe('download URL', () => {
-  it('is the download route, with the id encoded and no fetch', () => {
+  it('is the download route for a legacy id too, with no fetch', () => {
     const f = fake();
     expect(client(f).downloadUrl(ID)).toBe(`/api/core/v1/backups/${ID}/download`);
-    expect(backupDownloadUrl('legacy-a b.archive', 'https://abo.example.test')).toBe(
-      'https://abo.example.test/api/core/v1/backups/legacy-a%20b.archive/download'
+    expect(backupDownloadUrl('legacy-a_b-1', 'https://abo.example.test')).toBe(
+      'https://abo.example.test/api/core/v1/backups/legacy-a_b-1/download'
     );
     expect(f.calls).toHaveLength(0);
   });
@@ -444,6 +465,43 @@ describe('importArchive', () => {
     expect(await p).toBeInstanceOf(ApiTimeoutError);
   });
 
+  it('a timeout or bounce names the endpoint, never the ?name= query', async () => {
+    vi.useFakeTimers();
+    const hung: typeof fetch = (_u, init) =>
+      new Promise((_res, rej) =>
+        init?.signal?.addEventListener('abort', () =>
+          rej(new DOMException('aborted', 'AbortError'))
+        )
+      );
+    const p = caught(
+      createBackupsClient({ fetch: hung, importTimeoutMs: 500 }).importArchive(
+        'robin-secret.archive',
+        new Blob(['x'])
+      )
+    );
+    await vi.advanceTimersByTimeAsync(501);
+    const t = (await p) as Error;
+    expect(t).toBeInstanceOf(ApiTimeoutError);
+    expect(t.message).not.toContain('robin-secret');
+    expect(t.message).not.toContain('?name=');
+
+    const f = fake(opaqueRedirect());
+    const b = (await caught(
+      client(f).importArchive('robin-secret.archive', new Blob(['x']))
+    )) as Error;
+    expect(b).toBeInstanceOf(ApiAuthRedirectError);
+    expect(JSON.stringify(b)).not.toContain('robin-secret');
+    expect(b.message).not.toContain('robin-secret');
+  });
+
+  it('a lone surrogate in the name is a BackupArgumentError, not a URIError', async () => {
+    const f = fake();
+    expect(
+      await caught(client(f).importArchive('a\ud800.archive', new Blob(['x'])))
+    ).toBeInstanceOf(BackupArgumentError);
+    expect(f.calls).toHaveLength(0);
+  });
+
   it('refuses a name the server would refuse before uploading anything', async () => {
     const f = fake();
     for (const bad of [
@@ -523,48 +581,52 @@ describe('restore staging', () => {
     });
   });
 
-  it('a restart_required:false answer is passed through, not forced to true', async () => {
-    const f = fake(jsonRes({ pending: PENDING, restart_required: false }, 202));
-    expect((await client(f).restore(ID, { restart: true })).restart_required).toBe(false);
-  });
-
   it('a pending restore without warnings still has a warnings array', async () => {
     const { warnings: _w, ...rest } = PENDING;
     const f = fake(jsonRes({ pending: rest, restart_required: true }, 202));
     expect((await client(f).restore(ID)).pending.warnings).toEqual([]);
   });
 
-  it('403 interactive_required, owner_required, foreign_archive_requires_flag and a plain scope refusal are distinguished', async () => {
+  it('403 owner_required, foreign_archive_requires_flag, restore_option_not_authorized and a plain scope refusal are distinguished', async () => {
     const run = async (code: string, extra: Record<string, unknown> = {}) =>
       (await caught(
         client(fake(problem(403, code, 'refused', extra))).restore(ID)
       )) as BackupRequestError;
-    const a = await run('interactive_required');
-    expect([a.needsInteractiveSession, a.needsOwner, a.needsForeignFlag]).toEqual([
-      true,
-      false,
-      false,
-    ]);
-    const b = await run('owner_required');
-    expect([b.needsInteractiveSession, b.needsOwner, b.needsForeignFlag]).toEqual([
-      false,
-      true,
-      false,
-    ]);
-    const c = await run('foreign_archive_requires_flag');
-    expect([c.needsInteractiveSession, c.needsOwner, c.needsForeignFlag]).toEqual([
-      false,
-      false,
-      true,
-    ]);
-    const d = await run('forbidden', { required_permission: 'core:backup.restore' });
-    expect([d.isForbidden, d.needsInteractiveSession, d.needsOwner, d.needsForeignFlag]).toEqual([
-      true,
-      false,
-      false,
-      false,
-    ]);
+    const flags = (e: BackupRequestError) => [
+      e.needsInteractiveSession,
+      e.needsOwner,
+      e.needsForeignFlag,
+    ];
+    expect(flags(await run('owner_required'))).toEqual([false, true, false]);
+    expect(flags(await run('foreign_archive_requires_flag'))).toEqual([false, false, true]);
+    const o = await run('restore_option_not_authorized');
+    expect([o.isForbidden, ...flags(o)]).toEqual([true, false, false, false]);
+    // core:backup.restore is Sensitive: a non-interactive caller gets permission_denied naming
+    // the scope, never interactive_required.
+    const d = await run('permission_denied', { required_permission: 'core:backup.restore' });
+    expect([d.isForbidden, ...flags(d)]).toEqual([true, false, false, false]);
+    expect(d.code).toBe('permission_denied');
     expect(d.requiredPermission).toBe('core:backup.restore');
+  });
+
+  it('is not abandoned by the 30 s default deadline, and honours stageTimeoutMs when set', async () => {
+    vi.useFakeTimers();
+    let resolve!: (r: Response) => void;
+    const slow: typeof fetch = () => new Promise<Response>((r) => (resolve = r));
+    const p = createBackupsClient({ fetch: slow }).restore(ID);
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    resolve(jsonRes(STAGED, 202));
+    await expect(p).resolves.toEqual(STAGED);
+
+    const hung: typeof fetch = (_u, init) =>
+      new Promise((_res, rej) =>
+        init?.signal?.addEventListener('abort', () =>
+          rej(new DOMException('aborted', 'AbortError'))
+        )
+      );
+    const q = caught(createBackupsClient({ fetch: hung, stageTimeoutMs: 500 }).restore(ID));
+    await vi.advanceTimersByTimeAsync(501);
+    expect(await q).toBeInstanceOf(ApiTimeoutError);
   });
 
   it('a refusal is never retried', async () => {
@@ -619,6 +681,27 @@ describe('revert, pending and cancel', () => {
     expect(JSON.parse(f.calls[0].init.body as string)).toEqual({ restart: true });
   });
 
+  it('revert is not abandoned by the 30 s default deadline, and honours stageTimeoutMs', async () => {
+    vi.useFakeTimers();
+    let resolve!: (r: Response) => void;
+    const slow: typeof fetch = () => new Promise<Response>((r) => (resolve = r));
+    const p = createBackupsClient({ fetch: slow }).revert();
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    const staged = { pending: { ...PENDING, kind: 'revert' }, restart_required: true };
+    resolve(jsonRes(staged, 202));
+    await expect(p).resolves.toEqual(staged);
+
+    const hung: typeof fetch = (_u, init) =>
+      new Promise((_res, rej) =>
+        init?.signal?.addEventListener('abort', () =>
+          rej(new DOMException('aborted', 'AbortError'))
+        )
+      );
+    const q = caught(createBackupsClient({ fetch: hung, stageTimeoutMs: 500 }).revert());
+    await vi.advanceTimersByTimeAsync(501);
+    expect(await q).toBeInstanceOf(ApiTimeoutError);
+  });
+
   it('revert 404 no_undo_point is a BackupRequestError', async () => {
     const e = (await caught(
       client(fake(problem(404, 'no_undo_point', 'nothing to undo'))).revert()
@@ -639,7 +722,7 @@ describe('revert, pending and cancel', () => {
 
   it('pending 403 and a 200 text/html bounce are told apart from "nothing staged"', async () => {
     expect(
-      await caught(client(fake(problem(403, 'forbidden', 'missing scope'))).pending())
+      await caught(client(fake(problem(403, 'permission_denied', 'missing scope'))).pending())
     ).toBeInstanceOf(BackupRequestError);
     expect(
       await caught(
