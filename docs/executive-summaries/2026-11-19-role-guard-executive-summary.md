@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-19-role-guard-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 4867f7a3-90d2-48ed-881b-a49a520e46d7 -->
 <!-- last-edited: 2026-11-19 -->
 
@@ -8,8 +8,8 @@
 **Date:** 19 November 2026. Part of the shared core's new sign-in and
 permissions code, which nothing in the running app uses yet.
 
-**PR:** [falkcorp/audiobook-organizer#4771](https://github.com/falkcorp/audiobook-organizer/pull/4771).
-**Merge commit:** recorded when the PR merges (the merge queue chooses it).
+**Pull request:** [#4771](https://github.com/falkcorp/audiobook-organizer/pull/4771) (merge commit: pending).
+
 **Related specs:** [05-rbac](../specs/platform-core/05-rbac.md) (the
 last-admin rule and who may give which role) and
 [05-authn](../specs/platform-core/05-authn.md).
@@ -38,9 +38,6 @@ last-admin rule and who may give which role) and
   role try up to sixteen times with a short random pause. Deactivating or
   deleting a user keeps its four tries, and merging two accounts is retried by
   whoever asked for it.
-- A storage fault while reading a role is no longer reported as "you may not
-  give this role", and no longer uses up the one-time invite link of the person
-  being invited.
 - Nothing is switched on for users: the code that would let these collisions
   happen is not connected yet. The change closes the gap before that
   connection is made.
@@ -83,7 +80,9 @@ before it looks at who holds the role. The delete also runs the same last-admin
 check an edit does. Giving a role is now checked against the stored role, and a
 role that does not exist is refused for everyone, administrators included. An
 invite to a role that has since gone is refused and used up, like any other
-refused invite.
+refused invite. A failed read of the stored role is reported as a server
+problem, not as a refusal, so a storage fault neither tells the person they
+lack a permission nor uses up an invite link.
 
 ## Busy, try again instead of an error
 
@@ -98,16 +97,3 @@ told to reload, and retrying by hand was the only way forward.
 short random pause between tries, which is enough for a burst of fifteen other
 changes to land first. Past that the person gets a "busy, try again" answer that
 says how long to wait. Other user changes keep their existing number of tries.
-
-## A storage fault that looked like a refusal
-
-**What it was.** Giving a role asks the stored role whether it may be given. If
-that read failed, or the stored role was damaged, the failure was reported as
-"the person giving the role lacks a permission it carries".
-
-**Why it mattered.** The person saw a refusal that was not true. Worse, someone
-accepting an invite hit the same failure and lost their one-time invite link to
-it, with no way to retry.
-
-**The fix.** A failed read now comes back as a server problem, not a refusal.
-Nothing is written, and an invite stays usable once the fault clears.

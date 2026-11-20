@@ -2,6 +2,7 @@
 <!-- version: 10.78.57 -->
 <!-- version: 10.78.56 -->
 <!-- version: 10.78.58 -->
+<!-- version: 10.78.59 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -652,7 +653,7 @@ into one of the curated sections below, is a normal direct edit.
   - Owner: 05-tasks' owner, before F5's M4 lands.
 
 - [x] **F4-02-ROLE-GUARD** Guard role definitions in core auth's last-admin rule before
-      anything implements `rbac.Holders` (PR #4771, rounds 1 and 2). A role-set generation
+      anything implements `rbac.Holders` (PR #4771, rounds 1 to 3). A role-set generation
       guards all three exits of `keepAnAdmin`, `DeleteRole` applies the last-admin rule, and
       every write that gives a role claims it against a role-claim counter that `DeleteRole`
       guards. Hard prerequisite of F4-08's `rbac.Holders` (see
