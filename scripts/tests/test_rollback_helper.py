@@ -2333,6 +2333,60 @@ class RollbackEnv(unittest.TestCase):
         self.assertEqual(self.b.read_text(), "bat-signal-2", "the binary is unchanged")
         self.assertFalse(Path(f"{self.b}.prev.env").exists())
 
+    def half_deploy(self, h, fail: str) -> None:
+        """A deploy whose unit and local.conf are installed and whose binary
+        write then fails: fail="write" fails the rename of the new binary
+        (a full disk), fail="promote" fails keeping the environment."""
+        self.assertEqual(h.run("install", "unit")[0], 0)
+        self.stage_conf(self.NEW_CONF)
+        self.assertEqual(h.run("install", "local-conf")[0], 0)
+        (self.stage / "audiobook-organizer").write_text("bat-signal-2")
+        real_replace = os.replace
+        b_new = f"{self.b}.new"
+
+        def failing(src, dst, *a, **kw):
+            if str(src) == b_new:
+                raise OSError("no space left on device")
+            return real_replace(src, dst, *a, **kw)
+
+        if fail == "write":
+            with unittest.mock.patch.object(h.mod.os, "replace", side_effect=failing):
+                code, _, err = h.run("install", "binary")
+        else:
+            with unittest.mock.patch.object(
+                h.mod, "_env_promote", side_effect=OSError("no space left on device")
+            ):
+                code, _, err = h.run("install", "binary")
+        self.assertEqual(code, 1, err)
+        self.assertIn("no space left", err)
+        self.assertEqual(self.b.read_text(), "bat-signal-1", "the binary is unchanged")
+
+    def test_a_failed_binary_write_does_not_let_a_rerun_label_the_new_environment_as_old(self):
+        """The capture is committed before the binary is written. If it were
+        deleted then, the rerun would capture the NEW unit and local.conf the
+        first run installed, under the OLD binary, and a rollback would call
+        that pair consistent."""
+        for fail in ("write", "promote"):
+            with self.subTest(fail=fail):
+                h = self.env_host()
+                self.half_deploy(h, fail)
+                self.deploy(h)  # the same deploy, run again
+                doc = self.bundle()
+                self.assertEqual(doc["prev_sha256"], self.sha(Path(f"{self.b}.prev")))
+                self.assertEqual(Path(f"{self.b}.prev").read_text(), "bat-signal-1")
+                self.assertEqual(
+                    doc["unit"], {"present": True, "text": self.OLD_UNIT_MARK + self.unit_text}
+                )
+                self.assertEqual(doc["local_conf"], {"present": True, "text": self.OLD_CONF})
+                self.assertFalse(Path(f"{self.b}.prev.env.pending").exists())
+
+    def test_the_capture_outlives_a_failed_write_and_goes_with_a_good_one(self):
+        h = self.env_host()
+        self.half_deploy(h, "write")
+        self.assertTrue(Path(f"{self.b}.prev.env.pending").exists())
+        self.deploy(h)
+        self.assertFalse(Path(f"{self.b}.prev.env.pending").exists())
+
     def test_an_unreadable_live_unit_does_not_block_the_deploy_but_blocks_the_rollback(self):
         h = self.env_host()
         self.live_unit.chmod(0o666)  # group- and world-writable: not root-trusted
