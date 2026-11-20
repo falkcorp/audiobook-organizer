@@ -1490,6 +1490,14 @@ class RollbackRestoresEnvironment(unittest.TestCase):
         p = host.make("rollback")
         self.assertNotEqual(p.returncode, 0)
         self.assertIn("unit and local.conf failed", out(p))
+        self.assertIn("boom", out(p), "the helper's own reason is shown")
+        self.assertIn(
+            "run make rollback again", out(p), "the command that finishes an interrupted swap"
+        )
+        self.assertIn(
+            "deploy-match-unit-type.sh", out(p), "and the one that matches the unit type back"
+        )
+        self.assertNotIn("systemctl daemon-reload", out(p), "the deploy user has no such sudo line")
         self.assertFalse(any("systemctl restart" in c for c in host.ssh()))
 
 

@@ -120,10 +120,17 @@ Operations (the stub name, then the subcommand):
                      between), and restores the generation whose binary is
                      that sha256, or the one the operator named by its sha256
                      (a release built elsewhere never has the deployed build's
-                     hash). It stages the binary, the unit and local.conf first
-                     and renames all three in a row, then `daemon-reload`s.
-                     It refuses, changing nothing, when no generation matches
-                     or it is malformed, rather than roll back half.
+                     hash). It stages the binary (copied and hashed in one
+                     pass, so a .prev swapped after the check is refused), the
+                     unit and local.conf, and the kept <bin>.rolled-back copy
+                     (skipped when <bin> already is the restored binary),
+                     then renames all three in a row, the binary last, and
+                     `daemon-reload`s. It refuses, changing nothing, when no
+                     generation matches or it is malformed, rather than roll
+                     back half. Every verb that changes something (install
+                     binary|prev|unit|local-conf, rollback apply, swap-prev)
+                     holds one lock for its life and refuses, changing
+                     nothing, if another holds it.
   pprof              `pprof on` or `pprof off`, as root. on writes the fixed
                      drop-in `[Service]\\nEnvironment=ABK_PPROF_ADDR=localhost:6060\\n`
                      to /etc/systemd/system/<unit>.d/pprof.conf; off removes
@@ -144,6 +151,7 @@ Install: docs/system/deploy-and-gpu-ops.md ("Rollback helpers").
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -586,6 +594,81 @@ def _daemon_reload() -> None:
         raise RefusedError(f"systemctl daemon-reload exited {rc}")
 
 
+def _sync_dir(path: str) -> None:
+    """fsync the directory holding path, so a rename into it survives a crash.
+    The rename has already happened, so a failure is a warning, not a refusal."""
+    d = os.path.dirname(path) or "."
+    try:
+        dfd = os.open(d, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError as e:
+        print(f"warning: {path} is in place but {d} could not be synced ({e})", file=sys.stderr)
+
+
+def _copy_hashed(src: str, dst: str) -> str:
+    """Copy the regular file src to dst (new, 0o700 until the mode is set, fsynced), opened
+    without following a symlink; the sha256 of the bytes that were copied.
+    The caller compares it to the hash it expected, so a file swapped between
+    its own hash and this copy is caught on the copy itself."""
+    sfd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        st = os.fstat(sfd)
+        if not stat.S_ISREG(st.st_mode):
+            raise OSError(f"{src} is not a regular file")
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(dst)
+        dfd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o700)
+        try:
+            h = hashlib.sha256()
+            while True:
+                chunk = os.read(sfd, 1 << 20)
+                if not chunk:
+                    break
+                h.update(chunk)
+                view = memoryview(chunk)
+                while view:
+                    view = view[os.write(dfd, view) :]
+            os.fchmod(dfd, stat.S_IMODE(st.st_mode))
+            os.fsync(dfd)
+            return h.hexdigest()
+        finally:
+            os.close(dfd)
+    finally:
+        os.close(sfd)
+
+
+@contextlib.contextmanager
+def _helper_lock(cfg: dict[str, str]):
+    """One install, rollback or swap at a time, across every verb that changes
+    the binary, .prev, the unit, local.conf or the generations. The lock is a
+    file in the generation directory (root-only), held for the verb's life
+    and released by the kernel if the helper dies. A second caller is refused
+    rather than queued: a deploy and a rollback running together is an
+    operator error to look at, not to wait out."""
+    _ensure_env_dir(cfg)
+    path = f"{_env_dir(cfg)}/lock"
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError as e:
+        raise RefusedError(
+            f"cannot open the helper lock {path} ({e.strerror}); nothing changed"
+        ) from e
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as e:
+            raise RefusedError(
+                "another install or rollback is running (the helper lock is held); nothing changed. "
+                "Wait for it to finish, then run this again"
+            ) from e
+        yield
+    finally:
+        os.close(fd)
+
+
 def _write_replace(path: str, data: bytes, mode: int) -> None:
     """Write data to path atomically: a temporary file beside it, fsync, rename."""
     tmp = f"{path}.tmp"
@@ -603,6 +686,7 @@ def _write_replace(path: str, data: bytes, mode: int) -> None:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
         raise
+    _sync_dir(path)
 
 
 def op_unit_type(args: list[str]) -> int:
@@ -1754,6 +1838,15 @@ def _rollback_env(cfg: dict[str, str], rest: list[str]) -> int:
         apply = True
     else:
         raise RefusedError(f"usage: {usage}", 2)
+    if apply:
+        # Read, checked and changed under one lock: a deploy cannot land
+        # between the sha256 of .prev and the copy of it.
+        with _helper_lock(cfg):
+            return _rollback_env_run(cfg, rest, gen_arg, apply)
+    return _rollback_env_run(cfg, rest, gen_arg, apply)
+
+
+def _rollback_env_run(cfg: dict[str, str], rest: list[str], gen_arg: str, apply: bool) -> int:
     b = cfg["bin"]
     prev = f"{b}.prev"
     have = _sha256_file(prev)
@@ -1781,18 +1874,24 @@ def _rollback_env(cfg: dict[str, str], rest: list[str]) -> int:
     unit_dest = _live_env_path(cfg, "unit")
     conf_dest = _live_env_path(cfg, "local_conf")
     kept, new = f"{b}.rolled-back", f"{b}.new"
-    # Stage everything first: the renames below are the only steps that change
-    # a live path.
+    # Stage everything first, kept-binary copy included: the renames below
+    # are the only steps that change a live path, so a refusal before them is
+    # "nothing changed" in fact.
     staged: list[tuple[str, str]] = []
+    cleanup: list[str] = [new]
+
+    def unstage() -> None:
+        for path in cleanup:
+            with contextlib.suppress(OSError):
+                os.unlink(path)
+
     try:
-        shutil.copy2(b, f"{kept}.tmp")
-        os.replace(f"{kept}.tmp", kept)
-    except OSError as e:
-        raise RefusedError(f"keeping {b} as {kept} failed ({e}); nothing changed") from e
-    try:
-        shutil.copy2(prev, new)
-        with open(new, "rb") as f:
-            os.fsync(f.fileno())
+        copied = _copy_hashed(prev, new)
+        if copied != rest[1]:
+            raise RefusedError(
+                f"{prev} changed while it was being copied (sha256 {copied[:12]}..., expected "
+                f"{rest[1][:12]}...); nothing changed. Run the rollback again"
+            )
         staged.append((new, b))
         for text, dest in (
             (doc["unit"]["text"], unit_dest),
@@ -1801,6 +1900,7 @@ def _rollback_env(cfg: dict[str, str], rest: list[str]) -> int:
             if text is None:
                 continue
             tmp = f"{dest}.tmp"
+            cleanup.append(tmp)
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(tmp)
             os.makedirs(os.path.dirname(dest), mode=0o755, exist_ok=True)
@@ -1811,20 +1911,34 @@ def _rollback_env(cfg: dict[str, str], rest: list[str]) -> int:
                 os.fchmod(f.fileno(), 0o644)
                 os.fsync(f.fileno())
             staged.append((tmp, dest))
+        # Keep what is running as .rolled-back, unless it already is the
+        # binary being restored: a rerun after the binary rename must not
+        # overwrite the kept rolled-back binary with the restored one.
+        if _sha256_file(b) != rest[1]:
+            shutil.copy2(b, f"{kept}.tmp")
+            cleanup.append(f"{kept}.tmp")
+            os.replace(f"{kept}.tmp", kept)
+            _sync_dir(kept)
+    except RefusedError:
+        unstage()
+        raise
     except OSError as e:
-        for tmp, _ in staged:
-            with contextlib.suppress(OSError):
-                os.unlink(tmp)
+        unstage()
         raise RefusedError(f"staging the rollback failed ({e}); nothing changed") from e
     try:
         # Environment first, binary last: a failure before the last rename
         # leaves the old binary running under the restored environment's
-        # files, which `apply` run again finishes.
+        # files, which `apply` run again finishes. A missing local.conf is
+        # removed with the environment, before the binary is replaced.
         for tmp, dest in sorted(staged, key=lambda t: t[1] == b):
+            if dest == b and not doc["local_conf"].get("present"):
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(conf_dest)
             os.replace(tmp, dest)
-        if not doc["local_conf"].get("present"):
-            with contextlib.suppress(FileNotFoundError):
-                os.unlink(conf_dest)
+        for _, dest in staged:
+            _sync_dir(dest)
+        if not doc["local_conf"].get("present") and os.path.isdir(os.path.dirname(conf_dest)):
+            _sync_dir(conf_dest)
         _forget_env(_pending_path(cfg))
     except OSError as e:
         raise RefusedError(
@@ -1838,7 +1952,8 @@ def _rollback_env(cfg: dict[str, str], rest: list[str]) -> int:
         _daemon_reload()
     except RefusedError as e:
         raise RefusedError(
-            f"{e}; the binary, the unit and local.conf are already restored: run systemctl daemon-reload"
+            f"{e}; the binary, the unit and local.conf are already restored: run make rollback again "
+            "(it finds nothing left to replace and reloads systemd)"
         ) from e
     return 0
 
@@ -1856,6 +1971,11 @@ def op_install(args: list[str]) -> int:
     cfg = load_config()
     if what == "rollback":
         return _rollback_env(cfg, args[1:])
+    with _helper_lock(cfg):
+        return _install(cfg, what, meta)
+
+
+def _install(cfg: dict[str, str], what: str, meta: dict | None) -> int:
     if what in ("unit", "local-conf"):
         # Before anything is read or copied: without a good host.conf the
         # base unit's ExecStart would run (no TLS, the wrong store), so
@@ -1959,6 +2079,7 @@ def _install_binary(cfg: dict[str, str], src: str, meta: dict | None = None) -> 
                 os.replace(new, b)
             except OSError as e:
                 raise RefusedError(f"installing {src} as {b} failed ({e}); {b} is unchanged") from e
+            _sync_dir(b)
         except BaseException:
             with contextlib.suppress(OSError):
                 os.unlink(new)
@@ -2059,7 +2180,12 @@ def _install_prev(b: str, src: str) -> int:
 
 def op_swap_prev(args: list[str]) -> int:
     _arity(args, 0, "swap-prev (no arguments)")
-    b = load_config()["bin"]
+    cfg = load_config()
+    with _helper_lock(cfg):
+        return _swap_prev(cfg["bin"])
+
+
+def _swap_prev(b: str) -> int:
     prev, kept, new = f"{b}.prev", f"{b}.rolled-back", f"{b}.new"
     try:
         pst = os.lstat(prev)

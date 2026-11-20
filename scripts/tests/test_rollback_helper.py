@@ -2756,8 +2756,186 @@ class RollbackEnv(unittest.TestCase):
         self.deploy(h)
         prev = self.prev_sha()
         self.assertEqual(self.roll(h, "apply", prev)[0], 0)
+        kept = Path(f"{self.b}.rolled-back")
+        self.assertEqual(kept.read_text(), "bat-signal-2")
         self.assertEqual(self.roll(h, "apply", prev)[0], 0)
         self.assertEqual(self.b.read_text(), "bat-signal-1")
+        self.assertEqual(
+            kept.read_text(),
+            "bat-signal-2",
+            "a rerun after the binary rename keeps the rolled-back binary, not the restored one",
+        )
+
+    def test_apply_removes_the_capture_of_a_deploy_that_never_finished(self):
+        h = self.env_host()
+        self.deploy(h)
+        self.assertEqual(h.run("install", "local-conf")[0], 0)  # a capture, no binary after it
+        self.assertTrue((self.gdir() / "pending.json").exists())
+        self.assertEqual(self.roll(h, "apply", self.prev_sha())[0], 0)
+        self.assertFalse((self.gdir() / "pending.json").exists())
+
+    def test_a_missing_local_conf_is_removed_before_the_binary_is_replaced(self):
+        h = self.env_host()
+        self.live_conf.unlink()
+        self.deploy(h)
+        self.assertTrue(self.live_conf.exists())
+        prev = self.prev_sha()
+        real_replace = os.replace
+
+        def failing(src, dst, *a, **kw):
+            if str(dst) == str(self.b):
+                raise OSError("disk full")
+            return real_replace(src, dst, *a, **kw)
+
+        with unittest.mock.patch.object(h.mod.os, "replace", side_effect=failing):
+            code, _, err = self.roll(h, "apply", prev)
+        self.assertNotEqual(code, 0)
+        self.assertIn("run `install rollback apply` again", err)
+        self.assertEqual(self.b.read_text(), "bat-signal-2", "the binary is still the last rename")
+        self.assertFalse(
+            self.live_conf.exists(), "the drop-in went with the rest of the environment"
+        )
+        self.assertEqual(self.roll(h, "apply", prev)[0], 0)
+        self.assertEqual(self.b.read_text(), "bat-signal-1")
+        self.assertFalse(self.live_conf.exists())
+
+    def test_a_staging_refusal_leaves_the_kept_rolled_back_binary_alone(self):
+        """`nothing changed` has to be true: the kept copy of the running
+        binary is replaced only after everything is staged."""
+        h = self.env_host()
+        self.deploy(h)
+        kept = Path(f"{self.b}.rolled-back")
+        kept.write_text("an-earlier-rolled-back-binary")
+        with unittest.mock.patch.object(h.mod.os, "makedirs", side_effect=OSError("read-only")):
+            code, _, err = self.roll(h, "apply", self.prev_sha())
+        self.assertEqual(code, 1)
+        self.assertIn("nothing changed", err)
+        self.assertEqual(kept.read_text(), "an-earlier-rolled-back-binary")
+        self.assertEqual(self.b.read_text(), "bat-signal-2")
+        for leftover in (".new", ".rolled-back.tmp"):
+            self.assertFalse(Path(f"{self.b}{leftover}").exists(), leftover)
+
+    def test_a_prev_swapped_between_its_hash_and_its_copy_is_caught_on_the_copy(self):
+        h = self.env_host()
+        self.deploy(h)
+        prev = self.prev_sha()
+        real = h.mod._copy_hashed
+
+        def swapping(src, dst):
+            Path(src).write_text("not-the-binary-that-was-checked")
+            return real(src, dst)
+
+        with unittest.mock.patch.object(h.mod, "_copy_hashed", side_effect=swapping):
+            code, _, err = self.roll(h, "apply", prev)
+        self.assertEqual(code, 1)
+        self.assertIn("changed while it was being copied", err)
+        self.assertIn("nothing changed", err)
+        self.assertEqual(self.b.read_text(), "bat-signal-2")
+        self.assertIn("ABO_CORE_PEERS", self.live_conf.read_text())
+        self.assertFalse(Path(f"{self.b}.new").exists())
+        self.assertFalse(Path(f"{self.b}.rolled-back").exists())
+
+    def test_the_copy_of_prev_refuses_a_symlink(self):
+        h = self.env_host()
+        self.deploy(h)
+        prev = self.prev_sha()
+        p = Path(f"{self.b}.prev")
+        target = p.parent / "elsewhere"
+        target.write_text(p.read_text())
+        p.unlink()
+        p.symlink_to(target)
+        code, _, err = self.roll(h, "apply", prev)
+        self.assertEqual(code, 1, err)
+        self.assertEqual(self.b.read_text(), "bat-signal-2")
+
+    # -- one install or rollback at a time ----------------------------------
+
+    def hold_lock(self):
+        import fcntl
+
+        fd = os.open(self.gdir() / "lock", os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fd
+
+    def test_a_held_helper_lock_refuses_every_verb_that_changes_something(self):
+        h = self.env_host()
+        self.deploy(h)
+        prev = self.prev_sha()
+        (self.stage / "audiobook-organizer").write_text("bat-signal-3")
+        self.hold_lock()
+        for argv in (
+            ("install", "binary"),
+            ("install", "prev"),
+            ("install", "unit"),
+            ("install", "local-conf"),
+            ("install", "rollback", "apply", prev),
+            ("swap-prev",),
+        ):
+            with self.subTest(argv=argv):
+                code, _, err = h.run(*argv)
+                self.assertEqual(code, 1)
+                self.assertIn("another install or rollback is running", err)
+        self.assertEqual(self.b.read_text(), "bat-signal-2")
+        self.assertEqual(self.prev_sha(), prev)
+
+    def test_a_held_helper_lock_does_not_stop_the_read_only_verbs(self):
+        h = self.env_host()
+        self.deploy(h)
+        self.hold_lock()
+        self.assertEqual(self.roll(h, "list")[0], 0)
+        self.assertEqual(self.roll(h, "check", "prev")[0], 0)
+
+    def test_the_lock_is_released_when_a_verb_ends(self):
+        h = self.env_host()
+        self.deploy(h)
+        self.assertEqual(self.roll(h, "apply", self.prev_sha())[0], 0)
+        self.hold_lock()  # would raise if the finished apply still held it
+
+    def test_a_failed_daemon_reload_after_the_restore_says_to_run_make_rollback_again(self):
+        h = self.env_host()
+        self.deploy(h)
+        with unittest.mock.patch.object(
+            h.mod,
+            "_daemon_reload",
+            side_effect=h.mod.RefusedError("systemctl daemon-reload exited 1"),
+        ):
+            code, out, err = self.roll(h, "apply", self.prev_sha())
+        self.assertEqual(code, 1)
+        self.assertIn("already restored", err)
+        self.assertIn("run make rollback again", err)
+        self.assertNotIn(
+            "run systemctl daemon-reload", err, "the deploy user has no such sudo line"
+        )
+        self.assertEqual(self.b.read_text(), "bat-signal-1")
+        self.assertEqual(self.roll(h, "apply", self.prev_sha())[0], 0, "and the rerun finishes")
+
+    def test_a_generation_directory_open_to_group_or_others_is_refused(self):
+        """_read_generation's directory check: the generations are root-only
+        plaintext copies of local.conf, and a directory others can write to
+        could swap one."""
+        h = self.env_host()
+        self.deploy(h)
+        prev = self.prev_sha()
+        self.gdir().chmod(0o770 | 0o007)
+        self.addCleanup(self.gdir().chmod, 0o700)
+        for argv in (("check", "prev"), ("apply", prev)):
+            with self.subTest(argv=argv):
+                code, _, err = self.roll(h, *argv)
+                self.assertEqual(code, 1)
+                self.assertIn("closed to group and others", err)
+        self.assertEqual(self.b.read_text(), "bat-signal-2")
+
+    def test_a_generation_directory_that_is_a_symlink_is_refused(self):
+        h = self.env_host()
+        self.deploy(h)
+        real = Path(f"{self.b}.envgen")
+        moved = real.parent / "moved-gens"
+        real.rename(moved)
+        real.symlink_to(moved)
+        code, _, err = self.roll(h, "check", "prev")
+        self.assertEqual(code, 1)
+        self.assertIn("is not a directory owned by root", err)
 
     def test_an_interrupted_rollback_has_not_replaced_the_binary_yet(self):
         """The environment is renamed in first and the binary last, so a
