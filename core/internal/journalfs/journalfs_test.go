@@ -88,10 +88,27 @@ func TestFrom_RefusesAForeignFilesystem(t *testing.T) {
 		t.Fatal("From accepted a filesystem that is not the real one or in memory")
 	}
 	for _, fsys := range []vfs.FS{vfs.NewMem(), errorfs.Wrap(vfs.NewMem(), noInjection{})} {
-		got, err := journalfs.From(bootseam.With(t.Context(), &bootseam.Seams{FS: fsys}))
+		got, err := journalfs.From(bootseam.With(t.Context(), &bootseam.Seams{FS: fsys, Shared: &bootseam.Shared{}}))
 		if err != nil || got == journal.OSFS() {
 			t.Fatalf("From over an in-memory filesystem = %T, %v; want the memory-backed filesystem", got, err)
 		}
+	}
+}
+
+// TestFrom_RefusesAnInMemorySeamWithoutShared: the adapters of a boot share one
+// lock set through Seams.Shared, so a seam with an in-memory filesystem and no
+// Shared is refused (each From would get a lock set of its own and two opens of
+// one journal would not exclude each other), while the real filesystem needs no
+// Shared.
+func TestFrom_RefusesAnInMemorySeamWithoutShared(t *testing.T) {
+	for _, fsys := range []vfs.FS{vfs.NewMem(), errorfs.Wrap(vfs.NewMem(), noInjection{})} {
+		if got, err := journalfs.From(bootseam.With(t.Context(), &bootseam.Seams{FS: fsys})); err == nil {
+			t.Fatalf("From over an in-memory filesystem with no Shared = %T, nil; want an error", got)
+		}
+	}
+	got, err := journalfs.From(bootseam.With(t.Context(), &bootseam.Seams{FS: vfs.Default}))
+	if err != nil || got != journal.OSFS() {
+		t.Fatalf("From over the real filesystem with no Shared = %T, %v; want journal.OSFS()", got, err)
 	}
 }
 

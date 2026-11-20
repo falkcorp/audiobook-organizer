@@ -61,7 +61,7 @@ type Injector struct {
 // the boots of one run share it, so the core sections are built once and not
 // once per boot (a cell boots the kernel hundreds of times).
 func newInjector(f Fixture, rec *bootseamtest.Recorder, fsys vfs.FS, cache *config.SectionCache) *Injector {
-	s := &bootseam.Seams{FS: fsys, BuildID: BuildID, Clock: Now}
+	s := &bootseam.Seams{FS: fsys, BuildID: BuildID, Clock: Now, Shared: &bootseam.Shared{}}
 	if rec != nil {
 		s = rec.Seams()
 		s.BuildID, s.Clock = BuildID, Now

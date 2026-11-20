@@ -29,7 +29,7 @@ import (
 // filesystem is a new lock set: nothing survives the crash).
 func (e *env) after(c bootseamtest.Clone) *env {
 	e.t.Helper()
-	fsys, err := journalfs.From(bootseam.With(context.Background(), &bootseam.Seams{FS: c.FS}))
+	fsys, err := journalfs.From(bootseam.With(context.Background(), &bootseam.Seams{FS: c.FS, Shared: &bootseam.Shared{}}))
 	if err != nil {
 		e.t.Fatal(err)
 	}
