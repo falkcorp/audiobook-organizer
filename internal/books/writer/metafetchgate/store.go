@@ -1,5 +1,5 @@
 // file: internal/books/writer/metafetchgate/store.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7a1d93e6-48c2-4f5b-b0e7-3d9c15a8f264
 // last-edited: 2026-11-19
 
@@ -175,8 +175,13 @@ func (s *Store) UpdateBookFile(id string, f *database.BookFile) error {
 	return s.do("UpdateBookFile", file(id), func() error { return s.Store.UpdateBookFile(id, f) })
 }
 
-func (s *Store) UpdateBookFileHashes(bookID, fileID, hash, orig string) error {
-	return s.do("UpdateBookFileHashes", file(fileID), func() error { return s.Store.UpdateBookFileHashes(bookID, fileID, hash, orig) })
+// UpdateBookFileHashes takes the FILE row's id first (the store's
+// UpdateBookFileHashes(id, originalHash, postMetadataHash, fileHash)), so the
+// subject is file(id); there is no book id argument.
+func (s *Store) UpdateBookFileHashes(id, originalHash, postMetadataHash, fileHash string) error {
+	return s.do("UpdateBookFileHashes", file(id), func() error {
+		return s.Store.UpdateBookFileHashes(id, originalHash, postMetadataHash, fileHash)
+	})
 }
 
 func (s *Store) PatchBookFileFields(bookID, fileID string, p database.BookFileFieldPatch) (before, after *database.BookFile, err error) {

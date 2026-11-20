@@ -1,5 +1,5 @@
 // file: internal/books/writer/rows.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c4e91a73-0b58-4d26-9f3a-71d5e2a86b04
 // last-edited: 2026-11-19
 
@@ -42,7 +42,7 @@ func SharedRows() Rows { return Rows(resources.Table()) }
 //     one file row (book_files).
 //   - PatchBookFileFields: the book_file row, then notifyBookFileChange ->
 //     RecomputeBookAggregates -> ModifyBook (a file-row method).
-//   - SetUserPreference, DeleteUserPreference: pref: rows, which the file
+//   - SetUserPreference, DeleteUserPreference: preference: rows, which the file
 //     pipeline's phase checkpoints are (user_state).
 //
 // The raw key-value writes are qualified by key family (RawFamilies).
@@ -79,15 +79,24 @@ type RawFamily struct {
 }
 
 // RawFamilies are the raw key families metafetch's apply writes through
-// SetRaw, DeleteRaw and DeleteRawBatch, by key prefix. A raw write is stamped
-// by the family of its key, qualified as "SetRaw/<prefix without the colon>"
-// (the shared table's convention for SetRaw/cover_text and the like); a key in
-// no family is refused, so a new raw write fails closed.
+// SetRaw, DeleteRaw and DeleteRawBatch, by key prefix: the fetch cache and its
+// per-source cache, which the store helper behind the apply writes through the
+// store it is handed (metadata_fetch_cache.go). A raw write is stamped by the
+// family of its key, qualified as "SetRaw/<prefix without the colon>" (the
+// shared table's convention for SetRaw/cover_text and the like); a key in no
+// family is refused, so a new raw write fails closed.
+//
+// Candidate rejections are not in the list on purpose. metafetch's rejection
+// helpers raw-write rejected_candidate: (rejected_candidates.go), but only
+// server handlers reach them, over the server's own store, never through
+// metafetch.Service's store; and metadata_rejection: is written only by the
+// store's typed methods. Neither is a raw write the gate sees. If F5-18 routes
+// the rejection helpers through the gate it adds rejected_candidate: here with
+// the resource it decides on.
 func RawFamilies() []RawFamily {
 	return []RawFamily{
 		{"metadata_fetch_cache:", ops.ResMetadataCache},
 		{"pcache:", ops.ResMetadataCache},
-		{"metadata_rejection:", ops.ResBooks},
 	}
 }
 
