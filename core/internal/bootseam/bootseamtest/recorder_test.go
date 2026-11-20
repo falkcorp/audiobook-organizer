@@ -1,7 +1,7 @@
 // file: core/internal/bootseam/bootseamtest/recorder_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 7088e36e-83e4-4533-b4d0-a40f7503e603
-// last-edited: 2026-11-08
+// last-edited: 2026-11-19
 
 package bootseamtest
 
@@ -10,6 +10,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/cockroachdb/pebble/v2"
 	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/cockroachdb/pebble/v2/vfs/errorfs"
 )
@@ -152,5 +153,84 @@ func TestRecorderCloneIf(t *testing.T) {
 	}
 	if want := []errorfs.OpKind{errorfs.OpCreate, errorfs.OpFileSync}; !slices.Equal(got, want) {
 		t.Fatalf("clones before %v, want one before each kill point of the accepted region %v", got, want)
+	}
+}
+
+// TestRecorderFlagsPebblesWALRotation: an operation Pebble issues inside its
+// WAL rotation (a Flush's, here, on a store in a labelled region) is flagged
+// PebbleFatal, because Pebble panics on an I/O error there, and no other
+// operation of the region is: not an ordinary WAL commit and not a plain file
+// operation of the region's own, whose errors their callers handle. The flag
+// does not hide the rotation's operations from kill mode: a clone is taken
+// before each of them. The flag must not grow: if it covered a plain
+// operation, the matrix would stop injecting errors into the region's own
+// writes (run.go's injectable).
+func TestRecorderFlagsPebblesWALRotation(t *testing.T) {
+	r := New(vfs.NewCrashableMem(), Options{Clones: true})
+	fs := r.FS()
+	if err := fs.MkdirAll("/cave", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	db, err := pebble.Open("/cave/db", &pebble.Options{FS: fs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exit := r.Enter("storage.rewrite.copy")
+	before := len(r.Events())
+	if err := db.Set([]byte("robin"), []byte("nightwing"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if err := create(t, fs, "/cave/batarang"); err != nil {
+		t.Fatal(err)
+	}
+	ordinary := r.Events()[before:]
+	before = len(r.Events())
+	if err := db.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	flush := r.Events()[before:]
+	exit()
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var plain int
+	for _, ev := range ordinary {
+		if ev.Fatal() {
+			t.Errorf("an operation outside a WAL rotation is flagged fatal: %+v", ev)
+		}
+		if ev.Path == "/cave/batarang" && !ev.Engine && ev.Label == "storage.rewrite.copy" {
+			plain++
+		}
+	}
+	if plain == 0 {
+		t.Fatalf("the region's plain file operations were not recorded: %+v", ordinary)
+	}
+	var fatal []Event
+	for _, ev := range flush {
+		if ev.Fatal() {
+			fatal = append(fatal, ev)
+		}
+	}
+	if len(fatal) == 0 {
+		t.Fatalf("a Flush's WAL rotation issued no operation flagged fatal: %+v", flush)
+	}
+	cloned := map[int]bool{}
+	for _, c := range r.Clones() {
+		if c.Event.Fatal() {
+			cloned[c.Event.Seq] = true
+		}
+	}
+	kills := 0
+	for _, ev := range fatal {
+		if ev.Kill() {
+			kills++
+			if !cloned[ev.Seq] {
+				t.Errorf("kill mode took no clone before the fatal kill point %+v", ev)
+			}
+		}
+	}
+	if kills == 0 {
+		t.Fatalf("the rotation has no fatal kill point to clone: %+v", fatal)
 	}
 }

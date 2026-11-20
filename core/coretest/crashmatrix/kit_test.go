@@ -1,7 +1,7 @@
 // file: core/coretest/crashmatrix/kit_test.go
-// version: 1.0.7
+// version: 1.1.0
 // guid: 67d91a53-bcd6-4094-acf4-c145ba475897
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 package crashmatrix
 
@@ -18,10 +18,12 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
+	"github.com/cockroachdb/pebble/v2/vfs/errorfs"
 
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/internal/bootseam"
+	"github.com/falkcorp/mediacore/internal/bootseam/bootseamtest"
 	"github.com/falkcorp/mediacore/internal/restoreswap"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
@@ -433,6 +435,33 @@ func TestI2TiesTheEndToTheStore(t *testing.T) {
 	}
 	if end, _ := endOfAll(map[string]journal{id: {last: restoreswap.StepSwappedBack}, "r-older": {last: restoreswap.StepApplied}}); end != endMixed {
 		t.Errorf("endOfAll over two different ends = %s, want %s", end, endMixed)
+	}
+}
+
+// TestInjectableSkipsOnlyWhatPebblePanicsOn: the error mode returns an errno
+// from a labelled operation of the boot's own, and not from Pebble's engine
+// (D12), from an unlabelled one, or from one Pebble issues inside its WAL
+// rotation (the directory sync of a copy store's new log under M8's Flush),
+// where it panics. The last skip is that narrow: the same operation outside a
+// rotation, and every other region operation, is still injected.
+func TestInjectableSkipsOnlyWhatPebblePanicsOn(t *testing.T) {
+	region := bootseamtest.Event{Label: "storage.rewrite.copy", Kind: errorfs.OpFileSync, Path: "/gotham/copy"}
+	for _, tc := range []struct {
+		name string
+		mut  func(*bootseamtest.Event)
+		want bool
+	}{
+		{"a region operation", func(*bootseamtest.Event) {}, true},
+		{"Pebble's engine", func(e *bootseamtest.Event) { e.Engine = true }, false},
+		{"an unlabelled operation", func(e *bootseamtest.Event) { e.Label = bootseamtest.LabelNone }, false},
+		{"inside Pebble's WAL rotation", func(e *bootseamtest.Event) { e.PebbleFatal = true }, false},
+		{"a create of the region's own", func(e *bootseamtest.Event) { e.Kind = errorfs.OpCreate }, true},
+	} {
+		ev := region
+		tc.mut(&ev)
+		if got := injectable(ev); got != tc.want {
+			t.Errorf("%s: injectable = %t, want %t", tc.name, got, tc.want)
+		}
 	}
 }
 
