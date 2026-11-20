@@ -1,0 +1,15 @@
+# file: core/examples/hello/web/.gitignore
+# version: 0.1.0
+# guid: 2c7f0e94-8b36-4a15-9d2e-6f1a3c8b5e70
+# last-edited: 2026-11-20
+# The built SPA ui_embed.go embeds; made by `make -C core hello-web`, never committed.
+dist/
+*.tsbuildinfo
+# node_modules is a symlink to ../../../web/node_modules that
+# `make -C core web-install` creates after npm ci: this package is a member of
+# the core/web workspace but lives outside it, so Node, Vite and tsc resolving
+# upward from here would never reach the workspace's hoisted node_modules.
+# It is not committed (a clean checkout would carry a dangling link). No
+# trailing slash: a "node_modules/" pattern matches only directories, and the
+# link is not one.
+node_modules
