@@ -1,7 +1,7 @@
 // file: core/internal/executor/start.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 89eb5ff3-93fb-4a22-9970-d55b28fbbe40
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package executor
 
