@@ -103,6 +103,19 @@ const (
 	// empty, written so the next run skips it. They are not ResMetadataCache (the
 	// cached lookup responses, pcache: rows) and not ResExternalIDs (a found ASIN).
 	ResASINMisses Resource = "asin_misses"
+	// ResUsers is the account rows (user:<id> and their status, roles and
+	// merged-into marks, internal/books/store). F5-12 coined it for
+	// books.maintenance.user-merge, which retires the merged-away account.
+	ResUsers Resource = "users"
+	// ResAuthCredentials is what signs an account in besides its password: API
+	// keys, OAuth identities and invites with their grants, plus the owner-index
+	// rows that find them (apikey:<user id>:..., oauthid:<user id>:...). The
+	// user merge re-owns all of them. It is not ResUserState (listening state and
+	// preferences).
+	ResAuthCredentials Resource = "auth_credentials"
+	// ResAuthSessions is the signed-in sessions of an account, web and
+	// Audiobookshelf: the user merge revokes the merged-away account's.
+	ResAuthSessions Resource = "auth_sessions"
 )
 
 // deletePrefix marks a Resource built by Deletes.

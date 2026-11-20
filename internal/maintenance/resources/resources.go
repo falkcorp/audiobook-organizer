@@ -386,19 +386,26 @@ func addComposites(rows map[string][]ops.Resource) {
 	// maintenance.Deps) is one opaque pass per book: the rename step moves the
 	// files (files) and repoints their rows through the book write (the
 	// ModifyBook and UpdateBookFile rows), the tag write stamps the provenance
-	// ledger (file_provenance), the batch is logged (activity) and the resume
-	// checkpoint is an operation-state row (operations).
+	// ledger (file_provenance), the batch is logged (activity), the resume
+	// checkpoint is an operation-state row (operations) and a failed or healed
+	// rename records or clears its rename_path_write_failure: preference key
+	// (user_state, as repoint-unrecorded-renames' SetUserPreferenceForUser row).
 	rows["RunBulkWriteBack"] = Union(
-		[]ops.Resource{ops.ResFiles, ops.ResFileProvenance, ops.ResActivity, ops.ResOperations},
+		[]ops.Resource{ops.ResFiles, ops.ResFileProvenance, ops.ResActivity, ops.ResOperations, ops.ResUserState},
 		rows["ModifyBook"], rows["UpdateBookFile"])
-	// The user-merge service's three writes (internal/usermerge): the key writes
-	// of the merge ops are listening state (ubs:, upos:, idx:ubs:) and
-	// preferences (pref:), and the journal records them. The closest resource is
-	// user_state; the user rows, credentials and journal have no resource of
-	// their own yet (seams.d/F5-12.md).
-	rows["ApplyUserMerge"] = []ops.Resource{ops.ResUserState}
-	rows["ResumeUserMerge"] = []ops.Resource{ops.ResUserState}
-	rows["UndoUserMerge"] = []ops.Resource{ops.ResUserState}
+	// The user-merge service's three writes (internal/usermerge) move one account
+	// into another, in families: listening state and preferences (ubs:, upos:,
+	// idx:ubs:status:, pref:, bookmarks and playlists: user_state, the F5-10
+	// playlists ruling), collections the account created (collections), API keys,
+	// OAuth identities and invites with their apikey:/oauthid: owner-index rows
+	// (auth_credentials), the merged-away account's sessions, which it revokes
+	// (auth_sessions), the retire step on the account rows (users) and the merge
+	// journal that records every step (operations).
+	userMerge := []ops.Resource{ops.ResUserState, ops.ResCollections, ops.ResAuthCredentials,
+		ops.ResAuthSessions, ops.ResUsers, ops.ResOperations}
+	rows["ApplyUserMerge"] = userMerge
+	rows["ResumeUserMerge"] = userMerge
+	rows["UndoUserMerge"] = userMerge
 	// F5-07's boot-time writers.
 	rows["StripMovementAtoms"] = Union(
 		[]ops.Resource{ops.ResFiles, ops.ResSettings, ops.ResFileProvenance}, rows["UpdateBookFile"])

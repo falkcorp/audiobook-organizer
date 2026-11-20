@@ -68,18 +68,10 @@ type t6g7Recorder struct {
 // of Effects resources its call chain writes, as "books/<resource>" refs. It is
 // this group's view of t6WriterResources (kinds_resources.go), the one method
 // table of every converted group, where each row is traced from the store call
-// chain and cited (the CollapseHealDuplicates chain is cited there). A recorded
-// call whose method has no row fails the test, and t6g7AssertWritesDeclared
-// requires every traced resource to be in the kind's declared write set. SetRaw
-// is this group's user_state key family (the pending-repair keys).
-//
-// The heal's whisper journal (ai_journal) is not a writer-method call the spy
-// records (HealWhisperJournal is an accessor the spy answers with nil, and the
-// transcription that writes the journal needs ffmpeg and a whisper pool), so it
-// is pinned by TestT6G7Kinds_HealWhisperJournalWritesTheDeclaredAIJournalKeys
-// (kinds_t6_g6_m5_test.go): the production journal over a real store writes under
-// aijournal:, and the heal's Effects declare ai_journal. The heal row of
-// TestT6G7Kinds_MatchHEADDefs only compares the declaration with HEAD's.
+// chain and cited. A recorded call whose method has no row fails the test, and
+// t6g7AssertWritesDeclared requires every traced resource to be in the kind's
+// declared write set. SetRaw is this group's user_state key family (the
+// listening-state and preference keys the user merge writes).
 var t6g7WriterResource = t6g7WriterView()
 
 func t6g7WriterView() map[string][]string {
@@ -236,7 +228,7 @@ func (r *t6g7Recorder) RecordPathChange(c *database.BookPathChange) error {
 // UpdateBookFiles records one book's batch: each row as id>file name, whether it
 // is marked missing and its duration, in the order the kind wrote them. Every row
 // is reported applied, as the store reports a clean write.
-func (r *t6g7Recorder) UpdateBookFiles(_ context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error) {
+func (r *t6g7Recorder) UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error) {
 	parts := make([]string, len(files))
 	book := ""
 	for i, f := range files {
@@ -247,6 +239,10 @@ func (r *t6g7Recorder) UpdateBookFiles(_ context.Context, files []*database.Book
 	for i := range files {
 		if afterRow != nil {
 			afterRow(i, true)
+		}
+		// Like the store: a canceled batch stops after the row it is on.
+		if err := ctx.Err(); err != nil && i < len(files)-1 {
+			return i + 1, err
 		}
 	}
 	return len(files), nil
@@ -808,7 +804,7 @@ func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 		// declares no pool. HEAD is ResumeDrop.
 		{head: p.seriesDenumberDef(), resume: tasks.ResumeDrop, timeout: 2 * time.Hour},
 		{head: p.tagBackfillDef(), resume: tasks.ResumeDrop, timeout: 120 * time.Minute,
-			par: &tagBackfillPar, wantPar: fmt.Sprintf("fixed(%d): ", runtime.NumCPU()*4)},
+			par: &tagBackfillPar, wantPar: fmt.Sprintf("fixed(%d): ", min(runtime.NumCPU()*4, tasks.MaxFixed))},
 		{head: p.titleRepairDef(), resume: tasks.ResumeDrop, timeout: 4 * time.Hour,
 			par: &titleRepairPar, wantPar: fmt.Sprintf("fixed(%d): ", max(min(runtime.NumCPU(), 8), 1))},
 	}
@@ -852,6 +848,12 @@ func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 			require.Equal(t, wantWrites, gotWrites, "%s write set: the union of the rows of every method of its writer interfaces", id)
 		}
 
+		// HEAD's own declared writes are inside the native set (the native kind may
+		// declare more, never less).
+		for _, w := range r.head.Writes {
+			require.Contains(t, gotWrites, "books/"+string(w), "%s: HEAD declares writing %s", id, w)
+		}
+
 		if r.par != nil {
 			require.True(t, strings.HasPrefix(r.par.String(), r.wantPar), "%s parallelism %q, want prefix %q", id, r.par.String(), r.wantPar)
 		}
@@ -884,6 +886,9 @@ type t6g7WriteCase struct {
 	live, preview []string
 	// standsDown is true when a Live run holds the scan stand-down.
 	standsDown bool
+	// caps is every worker count the Live run's loops declare, written out by hand
+	// from the HEAD loop (nil for a kind whose Live run runs no pool of its own).
+	caps []int
 }
 
 func t6g7WriteCases() []t6g7WriteCase {
@@ -910,6 +915,7 @@ func t6g7WriteCases() []t6g7WriteCase {
 					files:    map[string][]database.BookFile{book: rows},
 				}
 			},
+			caps: []int{min(runtime.NumCPU()*4, tasks.MaxFixed)},
 			live: []string{"BatchUpsertBookFiles 01BATFILE00000000000000T11:trk1,01BATFILE00000000000000T12:trk2"},
 		},
 		{
@@ -939,20 +945,21 @@ func t6g7WriteCases() []t6g7WriteCase {
 				}
 				p.rec.books = map[string]*database.Book{id: {ID: id, Title: "Chapter 01"}}
 			},
+			caps: []int{max(min(runtime.NumCPU(), 8), 1)},
 			live: []string{"ModifyBook 01BATBOOK00000000000000J1 title=The Long Halloween"},
 		},
 		{
 			kind: titleBackfillKind,
 			setup: func(t *testing.T, p *t6g7Probe) {
 				p.store = &t6g7TestStore{cores: []database.BookCore{
-					{ID: "01BATBOOK00000000000000H1", Title: "(76/85) Tarkin"},
+					{ID: "01BATBOOK00000000000000H1", Title: "(3/12) Hush"},
 					{ID: "01BATBOOK00000000000000H2", Title: "Year One"},
 				}}
 				p.rec.books = map[string]*database.Book{
-					"01BATBOOK00000000000000H1": {ID: "01BATBOOK00000000000000H1", Title: "(76/85) Tarkin"},
+					"01BATBOOK00000000000000H1": {ID: "01BATBOOK00000000000000H1", Title: "(3/12) Hush"},
 				}
 			},
-			live: []string{"ModifyBook 01BATBOOK00000000000000H1 title=Tarkin"},
+			live: []string{"ModifyBook 01BATBOOK00000000000000H1 title=Hush"},
 		},
 		{
 			kind:       seriesPhantomRepairKind,
@@ -961,6 +968,7 @@ func t6g7WriteCases() []t6g7WriteCase {
 			setup: func(t *testing.T, p *t6g7Probe) {
 				seedSeriesPhantomRig(p, 7)
 			},
+			caps: []int{max(runtime.NumCPU(), 1)},
 			live: []string{
 				"CreateOperationChange 01BATBOOK00000000000000S1 series_id 7->",
 				"ModifyBook 01BATBOOK00000000000000S1 title=The Killing Joke series=nil",
@@ -1021,6 +1029,7 @@ func t6g7WriteCases() []t6g7WriteCase {
 			setup: func(t *testing.T, p *t6g7Probe) {
 				seedRepointRig(t, p, "01BATBOOK00000000000000R1", "01BATFILE00000000000000R11", true)
 			},
+			caps: []int{4},
 			live: []string{
 				"ModifyBookFile 01BATFILE00000000000000R11 path=new-01.mp3 itunes=file:///gotham/new-01.mp3",
 				`SetUserPreferenceForUser _system ` + organizer.RenamePathWriteFailureKey("01BATBOOK00000000000000R1", "01BATFILE00000000000000R11") + `=""`,
@@ -1055,6 +1064,9 @@ func TestT6G7Kinds_WritesThroughShell(t *testing.T) {
 			require.Same(t, gate, p.given, "NewWriter must be given the run's writer")
 			require.Equal(t, c.live, p.rec.snapshot(), "writes in a live run")
 			t6g7AssertWritesDeclared(t, p.rec.snapshot(), def)
+			if c.caps != nil {
+				require.ElementsMatch(t, c.caps, h.workerCaps(), "worker counts the loops of a live run declared")
+			}
 			if c.standsDown {
 				require.Equal(t, []tasks.Key{"books.gotham-watch"}, h.standDowns, "scan stand-down")
 				require.True(t, h.released, "stand-down released")
@@ -2140,8 +2152,7 @@ func TestT6G7Kinds_RepointFolderAudioLiveWritesEachBookThroughTheWriter(t *testi
 	require.Equal(t, []tasks.Key{"books.gotham-watch"}, h.standDowns, "scan stand-down")
 	require.True(t, h.released, "stand-down released")
 	caps := h.workerCaps()
-	require.Contains(t, caps, 24, "the stat sweep")
-	require.Contains(t, caps, 4, "the plan and the write")
+	require.ElementsMatch(t, []int{24, 4, 4}, caps, "the stat sweep, the plan and the write, each on its own pool")
 }
 
 // A library scan that is running (or whose queue cannot be read) refuses the
@@ -2424,13 +2435,8 @@ func TestT6G7Kinds_SeriesDenumberLiveMergesJournalsAndDeletes(t *testing.T) {
 	require.Equal(t, []tasks.Key{"books.gotham-watch"}, h.standDowns)
 	require.True(t, h.released, "the stand-down was not released")
 	require.Equal(t, 1, p.seriesInvalidated)
+	// The outcome report is written beside the resolved report, with ".applied" added.
 	applied, rerr := os.ReadFile(filepath.Join(p.root, "denumber.tsv") + ".applied")
-	_ = applied
-	// The test's resolver joins an absolute path under the root, so the outcome
-	// report is where the core computed it: beside the resolved report.
-	if rerr != nil {
-		applied, rerr = os.ReadFile(filepath.Join(p.root, "denumber.tsv.applied"))
-	}
 	require.NoError(t, rerr)
 	require.Contains(t, string(applied), "moved")
 	require.Contains(t, string(applied), "deleted")
