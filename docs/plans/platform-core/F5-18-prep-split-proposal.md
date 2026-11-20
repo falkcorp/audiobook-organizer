@@ -1,7 +1,7 @@
 <!-- file: docs/plans/platform-core/F5-18-prep-split-proposal.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 7d1e4c52-3b8a-4f60-9a27-c5e0b4d86f13 -->
-<!-- last-edited: 2026-11-18 -->
+<!-- last-edited: 2026-11-19 -->
 
 # F5-18 prep split: proposal
 
@@ -35,7 +35,7 @@ Source column is where the obligation is written today. IDs O1.. are used by the
 | O6 | Authority-build plan lookup: back `PlanReader` with the tasks run store (a native apply of a native dry run cannot find its plan) | seams.d/F5-06.md:42; TODO.md:42 |
 | O7 | Rewrite native Help text of the 12 group 1 writing kinds ("apply=true" and "dry_run=false" are refused natively) | seams.d/F5-06.md:43; TODO.md:43 |
 | O8 | Register every group 1 resource name: `activity`, `metadata_cache`, `field_states`, `ai_journal`, `authority_lists`, `sync_identity`, `metrics`, `cover_text`, `file_provenance` | seams.d/F5-06.md:49 (Round 4); TODO.md:44 |
-| O9 | First test that runs the real metafetch apply (resolve, auto-match) through an Effects-enforcing writer; the gated writer maps tag writes to books, change records to operations, `metadata_state:` to field_states | seams.d/F5-06.md:54; TODO.md:45 |
+| O9 | First test that runs the real metafetch apply (resolve, auto-match) through an Effects-enforcing writer; the gated writer maps tag writes to books, change records (`metadata_change:`, book-keyed history) to books (F5-18b round 2 ruling; `operations` stays declared for the organizer's undo journal), `metadata_state:` to field_states | seams.d/F5-06.md:54; TODO.md:45 |
 | O10 | Credits class lists to the run's own rows (`RunStore.ReplaceRows`), not through the Writer | seams.d/F5-08.md:60; TODO.md:82 |
 | O11 | Ops lister must return native `books.maintenance.credits-backfill` runs | seams.d/F5-08.md:61; TODO.md:87 |
 | O12 | Judged markers need a home outside the judged run's closed ledger | seams.d/F5-08.md:62; TODO.md:91 |
