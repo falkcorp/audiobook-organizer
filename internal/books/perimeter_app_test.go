@@ -62,7 +62,7 @@ func TestPerimeter_ThroughTheRunningApp(t *testing.T) {
 		coreBody   bool     // core's own problem body: compare the status only
 		gzip       bool     // the answer is gzipped
 		vary       []string // the answer's Vary values, nil for none
-		volatile   []string // top-level JSON fields that differ per request, removed before the bodies are compared
+		volatile   []string // dotted JSON paths that differ per request, removed before the bodies are compared
 	}{
 		{name: "/api redirect, gzip, same origin", path: "/api/audiobooks?batman=1", header: gzipSame,
 			gzip: true, vary: []string{"Origin", "Accept-Encoding"}},
@@ -71,9 +71,12 @@ func TestPerimeter_ThroughTheRunningApp(t *testing.T) {
 		{name: "core group, gzip, same origin", path: "/api/core/v1/riddler", header: gzipSame, coreBody: true},
 		{name: "routed, gzip, same origin", path: "/api/v1/health", header: gzipSame,
 			gzip: true, vary: []string{"Origin", "Accept-Encoding"},
-			// /health stamps the second it answered in; the two requests can
-			// straddle a second boundary.
-			volatile: []string{"timestamp"}},
+			// /health answers in httputil's {"data": {...}} envelope and stamps
+			// the second it answered in (data.timestamp); the two requests can
+			// straddle a second boundary. data.warmup_ms is the store's warmup
+			// duration, present only once warmup finished, which can happen
+			// between the two requests. Every other field is compared exactly.
+			volatile: []string{"data.timestamp", "data.warmup_ms"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			hreq := httptest.NewRequest(http.MethodGet, tc.path, nil)
@@ -134,21 +137,31 @@ func TestPerimeter_ThroughTheRunningApp(t *testing.T) {
 	}
 }
 
-// withoutFields removes the named top-level JSON fields from a readableBody
-// string (optionally "gzip: "-prefixed) and re-encodes the rest with sorted
-// keys, so two answers that differ only in those per-request fields compare
-// equal. A body that is not a JSON object fails the test: naming a volatile
-// field for a body that cannot carry one is a mistake in the table.
+// withoutFields removes the named JSON fields from a readableBody string
+// (optionally "gzip: "-prefixed) and re-encodes the rest with sorted keys, so
+// two answers that differ only in those per-request fields compare equal. A
+// field is a dotted path from the top-level object ("data.timestamp" is the
+// timestamp inside the data envelope). The path's parents must exist as JSON
+// objects, so a typo or a body without the envelope fails the test instead of
+// silently removing nothing; the last element may be absent (a field an answer
+// carries only sometimes).
 func withoutFields(t *testing.T, readable string, fields []string) string {
 	t.Helper()
 	prefix := ""
 	if rest, ok := strings.CutPrefix(readable, "gzip: "); ok {
 		prefix, readable = "gzip: ", rest
 	}
-	var obj map[string]json.RawMessage
+	var obj map[string]any
 	require.NoError(t, json.Unmarshal([]byte(readable), &obj), "body is a JSON object: %s", readable)
 	for _, f := range fields {
-		delete(obj, f)
+		parts := strings.Split(f, ".")
+		parent := obj
+		for _, p := range parts[:len(parts)-1] {
+			child, ok := parent[p].(map[string]any)
+			require.True(t, ok, "volatile field %q: %q is not a JSON object in %s", f, p, readable)
+			parent = child
+		}
+		delete(parent, parts[len(parts)-1])
 	}
 	out, err := json.Marshal(obj)
 	require.NoError(t, err)
