@@ -1281,8 +1281,10 @@ internal/plugins/maintenance.booksJobsStore.MintOrGetSyncFileIDs
 internal/plugins/maintenance.booksJobsStore.MintOrGetSyncID
 internal/plugins/maintenance.booksJobsStore.ModifyBook
 internal/plugins/maintenance.booksJobsStore.ModifyBookAuthors
+internal/plugins/maintenance.booksJobsStore.ModifyBookCredits
 internal/plugins/maintenance.booksJobsStore.ModifyBookFile
 internal/plugins/maintenance.booksJobsStore.ModifyBookFileDeferAggregates
+internal/plugins/maintenance.booksJobsStore.ModifyBookNarrators
 internal/plugins/maintenance.booksJobsStore.MoveBookFilesToBook
 internal/plugins/maintenance.booksJobsStore.PlanBookSnapshotPrune
 internal/plugins/maintenance.booksJobsStore.PruneBookSnapshots
@@ -1316,6 +1318,7 @@ internal/plugins/maintenance.booksJobsStore.UpdateBookmarkTitle
 internal/plugins/maintenance.booksJobsStore.UpdateSeriesName
 internal/plugins/maintenance.booksT6G2Store.BookAtPathIndexBuilt
 internal/plugins/maintenance.booksT6G2Store.BookFilesAtPath
+internal/plugins/maintenance.booksT6G2Store.CheckAuthorBooksLegacyRetire
 internal/plugins/maintenance.booksT6G2Store.CheckBookHashIndex
 internal/plugins/maintenance.booksT6G2Store.ClassifyBookSigMigration
 internal/plugins/maintenance.booksT6G2Store.Describe
@@ -1343,6 +1346,7 @@ internal/plugins/maintenance.booksT6G2Writer.QuarantineKnownBadFiles
 internal/plugins/maintenance.booksT6G2Writer.RebuildBookAtPathIndex
 internal/plugins/maintenance.booksT6G2Writer.RemuxMalformedM4BFiles
 internal/plugins/maintenance.booksT6G2Writer.RepairBookHashIndex
+internal/plugins/maintenance.booksT6G2Writer.RetireAuthorBooksLegacy
 internal/plugins/maintenance.booksT6G2Writer.SaveChaptersForBook
 internal/plugins/maintenance.booksT6G2Writer.StripMovementAtoms
 internal/plugins/maintenance.booksT6G2Writer.TranscodeMalformedM4BFiles
@@ -1519,10 +1523,19 @@ internal/plugins/maintenance.creditsBackfillParallelism
 internal/plugins/maintenance.duplicateCopiesFixer.detail
 internal/plugins/maintenance.durationPoolOn
 internal/plugins/maintenance.folderBooksFixer.handOff
+internal/plugins/maintenance.forwardedBookmarkReads.ListBookmarks
+internal/plugins/maintenance.forwardedBookmarkReads.ListBookmarksForUser
+internal/plugins/maintenance.forwardedOpChangeVerifier.VerifyOpChangeByBookIndex
+internal/plugins/maintenance.forwardedSyncReads.GetSyncIDForBook
+internal/plugins/maintenance.forwardedSyncReads.ListSyncAliases
+internal/plugins/maintenance.forwardedSyncReads.ResolveSyncItem
 internal/plugins/maintenance.fragmentFixer.stores
 internal/plugins/maintenance.g3Cap
 internal/plugins/maintenance.gateQuiet
 internal/plugins/maintenance.gatedBookmarkWrites.CopyBookmarkIfAbsent
+internal/plugins/maintenance.gatedResultJournal.Complete
+internal/plugins/maintenance.gatedResultJournal.Invalidate
+internal/plugins/maintenance.gatedResultJournal.Lookup
 internal/plugins/maintenance.gatedStampWriter.SetUserPositionAt
 internal/plugins/maintenance.gatedSyncWrites.MintOrGetSyncID
 internal/plugins/maintenance.gatedSyncWrites.RecordSyncMerge
