@@ -1,5 +1,5 @@
 // file: web/src/utils/sanitizeSettingsImport.test.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8a2d4f60-1b3e-4c7a-b95d-6e0f2a7c3d19
 // last-edited: 2026-11-19
 
@@ -21,12 +21,12 @@ describe('sanitizeSettingsImport', () => {
       auto_update_window_start: 2,
       auto_update_window_end: '4',
     });
+    // The window is gone from the server (ignored since the updater hotfix), so
+    // the flat keys are dropped with it.
     expect(cleaned.auto_update).toEqual({
       enabled: true,
       channel: 'beta',
       check_minutes: 30,
-      window_start: 2,
-      window_end: 4,
     });
   });
 
@@ -54,13 +54,20 @@ describe('sanitizeSettingsImport', () => {
   });
 
   it('keeps a nested object from the file and ignores the flat keys beside it', () => {
-    const nested = { enabled: false, channel: 'stable', check_minutes: 60, window_start: 0, window_end: 6 };
+    const nested = { enabled: false, channel: 'stable', check_minutes: 60 };
     const cleaned = load({
       auto_update: nested,
       auto_update_enabled: true,
       auto_update_channel: 'beta',
     });
     expect(cleaned.auto_update).toEqual(nested);
+  });
+
+  it('drops the retired update window from a nested auto_update in an older export', () => {
+    const cleaned = load({
+      auto_update: { enabled: true, channel: 'stable', check_minutes: 60, window_start: 0, window_end: 6 },
+    });
+    expect(cleaned.auto_update).toEqual({ enabled: true, channel: 'stable', check_minutes: 60 });
   });
 
   it('drops non-numeric strings and omits the object when nothing usable is left', () => {

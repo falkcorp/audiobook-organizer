@@ -1,5 +1,5 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.69.0
+// version: 1.69.1
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 // last-edited: 2026-11-19
 
@@ -149,8 +149,6 @@ export interface SettingsState {
   autoUpdateEnabled: boolean;
   autoUpdateChannel: string;
   autoUpdateCheckMinutes: number;
-  autoUpdateWindowStart: number;
-  autoUpdateWindowEnd: number;
   maintenanceWindowEnabled: boolean;
   maintenanceWindowStart: number;
   maintenanceWindowEnd: number;
@@ -320,8 +318,6 @@ export function Settings() {
     autoUpdateEnabled: false,
     autoUpdateChannel: 'stable',
     autoUpdateCheckMinutes: 60,
-    autoUpdateWindowStart: 1,
-    autoUpdateWindowEnd: 4,
 
     // Maintenance window
     maintenanceWindowEnabled: false,
@@ -583,8 +579,6 @@ export function Settings() {
         autoUpdateEnabled: config.auto_update?.enabled ?? false,
         autoUpdateChannel: config.auto_update?.channel ?? 'stable',
         autoUpdateCheckMinutes: config.auto_update?.check_minutes ?? 60,
-        autoUpdateWindowStart: config.auto_update?.window_start ?? 1,
-        autoUpdateWindowEnd: config.auto_update?.window_end ?? 4,
 
         // Maintenance window, nested object only (same reason).
         maintenanceWindowEnabled: config.maintenance?.enabled ?? false,
