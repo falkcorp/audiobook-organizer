@@ -245,3 +245,29 @@ func TestWithJudged(t *testing.T) {
 	assert.Equal(t, creditsBackfillResult{BooksToWrite: 2, JudgedSources: j}, withJudged(&creditsBackfillResult{BooksToWrite: 2}, j))
 	assert.Equal(t, creditsBackfillResult{BooksToWrite: 2}, withJudged(&creditsBackfillResult{BooksToWrite: 2}, nil))
 }
+
+// A resumed judging run's record still holds an earlier attempt's result: its
+// judgements are skipped as before AND carried into this attempt's result, so
+// the attempt's result does not drop them.
+func TestNativeCBLedger_AResumedRunCarriesItsEarlierJudgements(t *testing.T) {
+	runs := newNativeRuns(t)
+	failed := nativeRunAt("01GOTHAMJOKER0000000000000", t6g3CreditsBackfillKind, tasks.ModeLive, tasks.StateFailed, cbNativeT0)
+	own := nativeRunAt("01GOTHAMOWNRUN00000000000A", t6g3CreditsBackfillKind, tasks.ModeLive, tasks.StateRunning, cbNativeT0.Add(2*time.Hour))
+	raw, err := json.Marshal(creditsBackfillResult{JudgedSources: map[string]string{string(failed.ID): nativeCBFingerprint(failed)}})
+	require.NoError(t, err)
+	own.Result = raw
+	putNativeRuns(t, runs, failed, own)
+
+	l := &nativeCBLedger{ctx: t.Context(), runs: runs}
+	got, err := l.others(string(own.ID))
+	require.NoError(t, err)
+	assert.Empty(t, got, "the run an earlier attempt judged is not read again")
+	assert.Equal(t, map[string]string{string(failed.ID): nativeCBFingerprint(failed)}, l.judgedSources(), "and its judgement is carried")
+
+	// A judgement this attempt made of the same run wins over the carried one.
+	l = &nativeCBLedger{ctx: t.Context(), runs: runs}
+	require.NoError(t, l.markJudged(cbSourceOp{id: string(failed.ID), fingerprint: "newer"}))
+	_, err = l.others(string(own.ID))
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{string(failed.ID): "newer"}, l.judgedSources())
+}
