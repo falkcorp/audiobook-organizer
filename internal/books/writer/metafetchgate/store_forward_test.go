@@ -354,7 +354,7 @@ func TestGatedMethodsForwardToTheSameNamedInnerMethod(t *testing.T) {
 
 // TestGatedMethodsReturnTheInnerError (round 3, m2): every gated method, admitted
 // by its writer, returns the error the inner store returned: a forward written
-// as `_ = s.Store.X(...); return nil` swallowed it and passed the forward test,
+// as `_ = s.innerStore.X(...); return nil` swallowed it and passed the forward test,
 // whose inner store never failed.
 func TestGatedMethodsReturnTheInnerError(t *testing.T) {
 	for _, m := range gatedMethods {
