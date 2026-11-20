@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/testdata/oraclefix/fix/fix.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 164bc002-83bc-4523-bed7-b8bfebfc2c9a
 // last-edited: 2026-11-19
 
@@ -10,7 +10,10 @@
 package fix
 
 import (
+	"bufio"
+	"context"
 	"slices"
+	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs/testdata/oraclefix/internal/books/store"
 )
@@ -144,18 +147,30 @@ func UsesStdGeneric(ids []string) []string {
 	return ids
 }
 
-// progressReporter is progress reporting: its calls, and what implements them,
-// are not books writes (the oracle's oracleNotAWrite names the Reporter types).
+// progressReporter is progress reporting: a call to one is not judged by its
+// method name (the oracle's oracleNotAWrite names the Reporter types), but what
+// implements it is still walked.
 type progressReporter interface{ Report(id string) error }
+
+type quietReporter struct{}
+
+func (quietReporter) Report(string) error { return nil }
 
 type storeReporter struct{ s *store.Store }
 
 func (r storeReporter) Report(id string) error { return r.s.ModifyBook(id) }
 
 // ReportsProgress calls a progress reporter whose implementation happens to
-// write through the store. Reporting progress is not a books write.
+// write through the store: the call's name is not a write, the implementation's
+// body is.
 func ReportsProgress(s *store.Store, id string) error {
 	var r progressReporter = storeReporter{s}
+	return r.Report(id)
+}
+
+// ReportsQuietly calls a progress reporter that does nothing: no write.
+func ReportsQuietly(id string) error {
+	var r progressReporter = quietReporter{}
 	return r.Report(id)
 }
 
@@ -189,4 +204,139 @@ func ViaEitherField(s *store.Store, id string, first bool) error {
 		fn = theWorker.apply
 	}
 	return fn(s, id)
+}
+
+// bookModifier is a module interface the store's pointer type implements, beside
+// an in-program type that does not write. The program passes only the second to
+// ViaPartialImpls, so a call graph built from what flows in the program knows one
+// implementation; the production wiring passes the other.
+type bookModifier interface{ ModifyBook(id string) error }
+
+type dryRun struct{}
+
+func (dryRun) ModifyBook(string) error { return nil }
+
+// ViaPartialImpls calls the interface method of a value whose set of
+// implementations the program knows only in part.
+func ViaPartialImpls(m bookModifier, id string) error { return m.ModifyBook(id) }
+
+// DryRunCaller is the one in-program caller of ViaPartialImpls.
+func DryRunCaller(id string) error { return ViaPartialImpls(dryRun{}, id) }
+
+// remoteSaver is implemented by a followed type whose body leaves the module
+// without a write verb in sight.
+type remoteSaver interface{ SaveBook(id string) error }
+
+type flushSaver struct{ w *bufio.Writer }
+
+func (f flushSaver) SaveBook(string) error { return f.w.Flush() }
+
+// ViaOutsideBody calls an interface method whose one known implementation writes
+// through code outside the module: the walk cannot follow the body out, so the
+// method's own name is the only evidence.
+func ViaOutsideBody(r remoteSaver, id string) error { return r.SaveBook(id) }
+
+// OutsideCaller is the one in-program caller of ViaOutsideBody.
+func OutsideCaller(w *bufio.Writer, id string) error { return ViaOutsideBody(flushSaver{w}, id) }
+
+// ViaFieldCallback passes a function value loaded from a struct field to a shared
+// helper.
+func ViaFieldCallback(s *store.Store, ids []string) error {
+	return runEach(s, ids, theWorker.apply)
+}
+
+// ViaGlobalCallback passes a function value loaded from a package-level slice.
+func ViaGlobalCallback(s *store.Store, ids []string) error {
+	return runEach(s, ids, steps[0])
+}
+
+// ViaNilDefault passes nothing and lets the helper fall back to its default.
+func ViaNilDefault(s *store.Store, ids []string) error {
+	return runEachOrDefault(s, ids, nil)
+}
+
+type ctxKey struct{}
+
+// ViaContextFunc calls a function value carried in a context, set by code the
+// program does not contain.
+func ViaContextFunc(ctx context.Context, s *store.Store, id string) error {
+	fn, _ := ctx.Value(ctxKey{}).(step)
+	return fn(s, id)
+}
+
+// oddFn has a signature no other function in the fixture has.
+type oddFn func(float64) float32
+
+var registry sync.Map
+
+// ViaUnresolved calls a function value from a map filled by code outside the
+// program, of a signature nothing in the program has: no graph can name a callee.
+func ViaUnresolved() float32 {
+	v, _ := registry.Load("k")
+	f, _ := v.(oddFn)
+	return f(1)
+}
+
+// ViaGenericStoreFn calls an instance of a generic function of the store package.
+func ViaGenericStoreFn(s *store.Store) error { return store.UpdateWith(s, 1) }
+
+// unsetHook is a package variable nothing in the program stores to: a hook that
+// only code outside the program sets.
+var unsetHook func()
+
+// ViaUnsetHook calls a declared variable the module never stores a function into.
+func ViaUnsetHook() { unsetHook() }
+
+// fetchHook returns a function it took from a registry filled outside the program.
+func fetchHook() func() {
+	v, _ := registry.Load("h")
+	f, _ := v.(func())
+	return f
+}
+
+// ViaCallResult calls the result of a module function whose return statements
+// name no function.
+func ViaCallResult() { fetchHook()() }
+
+// ViaOutsideClosure calls a closure that code outside the module made.
+func ViaOutsideClosure(ctx context.Context) {
+	_, cancel := context.WithCancel(ctx)
+	cancel()
+}
+
+// unwiredUndoer is a module interface whose method name starts with no write verb.
+type unwiredUndoer interface{ Undo(id string) error }
+
+type unwiredStoreUndoer struct{ s *store.Store }
+
+func (u unwiredStoreUndoer) Undo(id string) error { return u.s.ModifyBook(id) }
+
+// ViaUnwiredInterface calls a non-verb method on a value nothing in the program
+// passes (the wiring outside it does): only the signature-based class hierarchy
+// knows the implementation.
+func ViaUnwiredInterface(u unwiredUndoer, id string) error { return u.Undo(id) }
+
+var stepByName = map[string]step{"drop": dropAuthor}
+
+// ViaMapCallback passes a function value loaded from a package-level map.
+func ViaMapCallback(s *store.Store, ids []string) error {
+	return runEach(s, ids, stepByName["drop"])
+}
+
+var unsetStep step
+
+// runEachUnset is a helper with one caller, which passes a variable nothing
+// stores a function into.
+func runEachUnset(s *store.Store, id string, fn step) error { return fn(s, id) }
+
+// ViaUnsetStepParam hands a helper a callback read from an unset variable.
+func ViaUnsetStepParam(s *store.Store, id string) error { return runEachUnset(s, id, unsetStep) }
+
+// ViaPhiOfHooks calls a value that is one of two reads of an unset variable.
+func ViaPhiOfHooks(first bool) {
+	f := unsetHook
+	if !first {
+		f = unsetHook
+	}
+	f()
 }
