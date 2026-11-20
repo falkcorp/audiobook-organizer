@@ -12,6 +12,7 @@ import (
 
 	"github.com/falkcorp/mediacore/internal/modulehttp"
 	"github.com/falkcorp/mediacore/metrics/metricstest"
+	"github.com/falkcorp/mediacore/ui"
 )
 
 // emptyView is a modulehttp.ModulesView over nothing: this test registers
@@ -39,6 +40,9 @@ func TestUISeries_Golden(t *testing.T) {
 	if err := Register(r.CoreGroup(), Deps{ModuleIDs: []string{"batman", "robin"}, Scope: sc}); err != nil {
 		t.Fatalf("uihttp.Register: %v", err)
 	}
+	// ui.Handler, the third user of the scope, adds the build_info gauge and
+	// the responses counter (07 §7.16; F9-01).
+	ui.Handler(ui.Bundle{}, ui.Options{Metrics: sc})
 	metricstest.AssertSeries(t, p, sc, "testdata/series.golden")
 	metricstest.AssertNoOverflow(t, p)
 }
