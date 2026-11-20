@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g7_test.go
-// version: 1.0.9
+// version: 1.0.10
 // guid: 4c7e1a92-6b3d-4f58-8a0e-2d9c5b71e3f6
 // last-edited: 2026-11-19
 
@@ -30,6 +30,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -225,6 +226,25 @@ func (r *t6g7Recorder) RecordPathChange(c *database.BookPathChange) error {
 	return nil
 }
 
+// UpdateBookFiles records one book's batch: each row as id>file name, whether it
+// is marked missing and its duration, in the order the kind wrote them. Every row
+// is reported applied, as the store reports a clean write.
+func (r *t6g7Recorder) UpdateBookFiles(_ context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error) {
+	parts := make([]string, len(files))
+	book := ""
+	for i, f := range files {
+		book = f.BookID
+		parts[i] = fmt.Sprintf("%s>%s missing=%v dur=%d", f.ID, filepath.Base(f.FilePath), f.Missing, durtest.Sec(f.Duration))
+	}
+	r.rec("UpdateBookFiles " + book + " " + strings.Join(parts, ","))
+	for i := range files {
+		if afterRow != nil {
+			afterRow(i, true)
+		}
+	}
+	return len(files), nil
+}
+
 // t6g7StrPtr is *s, or "" for nil.
 func t6g7StrPtr(s *string) string {
 	if s == nil {
@@ -301,7 +321,28 @@ type t6g7TestStore struct {
 	series       []database.Series
 	trashed      []database.Book
 	seriesByName map[string]*database.Series
+	// scanStatus, when set, adds a library.scan operation in that status to what
+	// ListActiveOperationsV2 answers; activeErr fails the read.
+	scanStatus string
+	activeErr  error
+	// atPathUnbuilt reports the book_atpath index as not built.
+	atPathUnbuilt bool
 }
+
+// BookFilesAtPath answers every seeded row (by book) whose file is at path.
+func (s *t6g7TestStore) BookFilesAtPath(path string) ([]database.BookFile, error) {
+	var out []database.BookFile
+	for _, rows := range s.files {
+		for i := range rows {
+			if rows[i].FilePath == path {
+				out = append(out, rows[i])
+			}
+		}
+	}
+	return out, nil
+}
+
+func (s *t6g7TestStore) BookAtPathIndexBuilt() (bool, error) { return !s.atPathUnbuilt, nil }
 
 func (s *t6g7TestStore) GetAllSeriesBookRefCounts() (map[int]int, error) { return s.refCounts, nil }
 func (s *t6g7TestStore) GetAllSeries() ([]database.Series, error)        { return s.series, nil }
@@ -344,7 +385,12 @@ func (s *t6g7TestStore) GetAllBookFilesCoreIncludingRetired() ([]database.BookFi
 	return s.allFiles, nil
 }
 
-func (s *t6g7TestStore) GetBookFiles(id string) ([]database.BookFile, error) { return s.files[id], nil }
+// GetBookFiles answers a copy, as a store decodes fresh rows per call: a caller
+// that edits a returned row (the repoint does, before it writes) must not edit
+// the seed another worker is reading.
+func (s *t6g7TestStore) GetBookFiles(id string) ([]database.BookFile, error) {
+	return append([]database.BookFile(nil), s.files[id]...), nil
+}
 
 func (s *t6g7TestStore) GetAllBookFilesCore() ([]database.BookFileCore, error) {
 	return s.allFiles, nil
@@ -354,9 +400,15 @@ func (s *t6g7TestStore) GetMetadataFieldStates(id string) ([]database.MetadataFi
 }
 
 func (s *t6g7TestStore) ListActiveOperationsV2() ([]database.OperationV2Row, error) {
-	rows := make([]database.OperationV2Row, 0, len(s.active))
+	if s.activeErr != nil {
+		return nil, s.activeErr
+	}
+	rows := make([]database.OperationV2Row, 0, len(s.active)+1)
 	for _, id := range s.active {
 		rows = append(rows, database.OperationV2Row{ID: id})
+	}
+	if s.scanStatus != "" {
+		rows = append(rows, database.OperationV2Row{ID: "01BATSCAN000000000000000S1", DefID: "library.scan", Status: s.scanStatus})
 	}
 	return rows, nil
 }
@@ -571,6 +623,9 @@ func t6g7KindWritersBuild() map[tasks.Kind]t6g7KindWrite {
 	add(p.versionGroupPrimaryRepairDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[vgPrimaryRepairWriter]()}})
 	// rewrite-path-prefix also writes its per-row report TSV, in Preview too: a file.
 	add(p.rewritePathPrefixDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[rewritePathPrefixWriter]()}, outside: []ops.Resource{ops.ResFiles}})
+	// repoint-missing-to-folder-audio also writes its per-row report TSV, in Preview
+	// too: a file.
+	add(p.repointMissingToFolderAudioDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[rfWriter]()}, outside: []ops.Resource{ops.ResFiles}})
 	add(p.repointUnrecordedRenamesDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[unrecordedRenameWriter]()}})
 	add(p.tagBackfillDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[tagBackfillWriter]()}})
 	add(p.userMergeDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[userMergeWriter]()}})
@@ -640,7 +695,7 @@ func TestT6G7Resources_TableCoversEveryWriterMethod(t *testing.T) {
 func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 	p := &Plugin{}
 	defs := p.t6g7Kinds(fakeT6G7Deps(t), nil)
-	require.Len(t, defs, 13, "grows to 15 as the group's definitions land")
+	require.Len(t, defs, 14, "grows to 15 as the group's definitions land")
 
 	// Every expected value below is written out by hand from the HEAD def and
 	// the coordinator's rulings, never derived from the code under test.
@@ -652,6 +707,12 @@ func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 		// of its own; nil for a kind with no loop.
 		par     *tasks.Parallelism
 		wantPar string
+		// more are the kind's other pools, when it runs more than one at different
+		// sizes.
+		more []struct {
+			par     tasks.Parallelism
+			wantPar string
+		}
 	}
 	titleRepairPar := titleRepairParallelism()
 	tagBackfillPar := tagBackfillParallelism()
@@ -659,6 +720,7 @@ func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 	seriesPhantomPar := seriesPhantomRepairParallelism()
 	vgPrimaryPar := vgPrimaryRepairParallelism()
 	rewritePar := rewritePathPrefixParallelism()
+	rfStatPar := rfStatParallelism()
 	rows := []row{
 		{head: p.reviewStatusIndexRepairDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
 		{head: p.unknownAuthorAuditDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
@@ -682,6 +744,14 @@ func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 		// workers; the def sets no timeout. HEAD is ResumeDrop.
 		{head: p.rewritePathPrefixDef(), resume: tasks.ResumeDrop,
 			par: &rewritePar, wantPar: "fixed(24): "},
+		// HEAD's three RunItems pools: the stat sweep (missingFileStatConcurrency, 24),
+		// the read-only plan (4) and the one-book-per-item write (4). No timeout is
+		// set; HEAD is ResumeDrop.
+		{head: p.repointMissingToFolderAudioDef(), resume: tasks.ResumeDrop,
+			par: &rfStatPar, wantPar: "fixed(24): ", more: []struct {
+				par     tasks.Parallelism
+				wantPar string
+			}{{rfPlanParallelism(), "fixed(4): "}, {rfWriteParallelism(), "fixed(4): "}}},
 		{head: p.tagBackfillDef(), resume: tasks.ResumeDrop, timeout: 120 * time.Minute,
 			par: &tagBackfillPar, wantPar: fmt.Sprintf("fixed(%d): ", runtime.NumCPU()*4)},
 		{head: p.titleRepairDef(), resume: tasks.ResumeDrop, timeout: 4 * time.Hour,
@@ -729,6 +799,9 @@ func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 
 		if r.par != nil {
 			require.True(t, strings.HasPrefix(r.par.String(), r.wantPar), "%s parallelism %q, want prefix %q", id, r.par.String(), r.wantPar)
+		}
+		for _, m := range r.more {
+			require.True(t, strings.HasPrefix(m.par.String(), m.wantPar), "%s parallelism %q, want prefix %q", id, m.par.String(), m.wantPar)
 		}
 		require.Contains(t, c.Ready, t6g7SignalMemDB, "%s readiness", id)
 		require.Equal(t, rbac.KindAllOf, c.Perms.Start.Kind(), "%s start requirement must be AllOf", id)
@@ -862,6 +935,21 @@ func t6g7WriteCases() []t6g7WriteCase {
 			},
 		},
 		{
+			kind:       rfKind,
+			params:     `{}`,
+			standsDown: true,
+			setup: func(t *testing.T, p *t6g7Probe) {
+				seedFolderAudioRig(t, p, 1)
+			},
+			// One book's rows in one call: the repointed row first, then the rows
+			// marked missing. A Preview run plans on reads and writes nothing.
+			live: []string{
+				"UpdateBookFiles 01BATBOOK00000000000000F1 01BATFILE000000000000000F1a>Year One.m4b missing=false dur=3600," +
+					"01BATFILE000000000000000F1b>Chapter 02.mp3 missing=true dur=0," +
+					"01BATFILE000000000000000F1c>Chapter 03.mp3 missing=true dur=0",
+			},
+		},
+		{
 			kind: repointUnrecordedRenamesKind,
 			setup: func(t *testing.T, p *t6g7Probe) {
 				seedRepointRig(t, p, "01BATBOOK00000000000000R1", "01BATFILE00000000000000R11", true)
@@ -934,7 +1022,7 @@ func TestT6G7Kinds_WritesThroughShell(t *testing.T) {
 // case, before it builds a writer or touches the store: the run's mode comes
 // from the start request, never from params (coordinator ruling 3).
 func TestT6G7Kinds_WritingShellsRefuseModeKeys(t *testing.T) {
-	kinds := []tasks.Kind{reviewStatusIndexRepairKind, reportsPruneKind, titleBackfillKind, titleRepairKind, t6g7KindFor("maintenance.bulk-write-back"), t6g7KindFor("maintenance.user-merge"), tagBackfillKind, repointUnrecordedRenamesKind, seriesPhantomRepairKind, vgPrimaryRepairKind, rewritePathPrefixKind}
+	kinds := []tasks.Kind{reviewStatusIndexRepairKind, reportsPruneKind, titleBackfillKind, titleRepairKind, t6g7KindFor("maintenance.bulk-write-back"), t6g7KindFor("maintenance.user-merge"), tagBackfillKind, repointUnrecordedRenamesKind, seriesPhantomRepairKind, vgPrimaryRepairKind, rewritePathPrefixKind, rfKind}
 	keys := []string{"dry_run", "dryRun", "DRY_RUN", "DryRun", "apply", "Apply", "APPLY"}
 	gate := &t6g7GateWriter{name: "gotham"}
 	for _, kind := range kinds {
@@ -1885,4 +1973,292 @@ func TestRewritePathPrefixCore_StopsWritingWhenTheLeaseLapses(t *testing.T) {
 	env = rewritePathPrefixEnv{t6g7Env: t6g7HeadEnv(&fakeReporter{}, true), Store: p.store}
 	_, err = rewritePathPrefixPlanCore(context.Background(), params, env)
 	require.ErrorContains(t, err, "no writer for a live run")
+}
+
+// seedFolderAudioRig seeds n books, each in its own folder under the probe's root
+// with three chapter rows whose files are gone and one consolidated file standing
+// in the folder, in the probe's store (what the planner reads). Ids are
+// ...F1..Fn; the rows are ...Fna, Fnb, Fnc. The header read is stubbed to 3600
+// seconds, and the iTunes tree is configured at a root the folders stay clear of.
+// It returns the book ids.
+func seedFolderAudioRig(t *testing.T, p *t6g7Probe, n int) []string {
+	t.Helper()
+	prev := config.Snapshot()
+	config.Mutate(func(c *config.Config) { c.ITunes = config.ITunesConfig{MediaRoot: "/gotham/itunes"} })
+	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = prev }) })
+	rfStubProbe(t, 3600)
+
+	st := &t6g7TestStore{files: map[string][]database.BookFile{}, bookAt: map[string][]string{}}
+	var ids []string
+	for i := 1; i <= n; i++ {
+		id := fmt.Sprintf("01BATBOOK00000000000000F%d", i)
+		title := rppTitles[i-1]
+		folder := filepath.Join(p.root, "Gotham", title)
+		writeFile(t, filepath.Join(folder, title+".m4b"), 250)
+		st.cores = append(st.cores, rfBookCore(id, folder))
+		for j, suffix := range []string{"a", "b", "c"} {
+			row := database.BookFile{
+				ID: fmt.Sprintf("01BATFILE000000000000000F%d%s", i, suffix), BookID: id,
+				FilePath: filepath.Join(folder, fmt.Sprintf("Chapter %02d.mp3", j+1)), FileSize: 100, TrackNumber: j + 1,
+			}
+			st.files[id] = append(st.files[id], row)
+			st.allFiles = append(st.allFiles, row.Core())
+		}
+		ids = append(ids, id)
+	}
+	p.store = st
+	return ids
+}
+
+func runFolderAudioKind(t *testing.T, p *t6g7Probe, mode tasks.Mode, params string) (rfReport, *t6g7Host, error) {
+	t.Helper()
+	def := t6g7ByKind(t, (&Plugin{}).t6g7Kinds(p.deps(), nil), rfKind)
+	h, err := runT6G7Kind(t, def, mode, &t6g7GateWriter{name: "gotham"}, params)
+	var rep rfReport
+	if h != nil && len(h.result) > 0 {
+		require.NoError(t, json.Unmarshal(h.result, &rep))
+	}
+	return rep, h, err
+}
+
+// A Preview run is the dry run HEAD defaulted to: it plans on reads, builds no
+// writer, parks no scan and writes no row. It does write the per-row report, to
+// the path the params name (the kind declares files for it), and a library scan
+// that is running does not stop it.
+func TestT6G7Kinds_RepointFolderAudioPreviewPlansAndWritesNoRow(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedFolderAudioRig(t, p, 2)
+	p.store.(*t6g7TestStore).scanStatus = "running"
+	rep, h, err := runFolderAudioKind(t, p, tasks.ModePreview, `{"reportPath":"audit.tsv"}`)
+	require.NoError(t, err)
+	require.True(t, rep.DryRun)
+	require.Equal(t, 2, rep.ScopedBooks)
+	require.Equal(t, 2, rep.BooksWithMissing)
+	require.Equal(t, 2, rep.Planned)
+	require.Equal(t, map[string]int{rfDecisionConsolidated: 2}, rep.ByDecision)
+	require.Equal(t, 2, rep.RowsRepointed)
+	require.Equal(t, 4, rep.RowsMarkedMissing)
+	for _, b := range rep.Books {
+		require.Equal(t, 3600, b.DurationSec, "a dry run reports the duration the apply would write")
+		require.Empty(t, b.Outcome, "a dry run attempts nothing")
+	}
+	require.Zero(t, p.writerCalls(), "a preview built a writer")
+	require.Empty(t, p.rec.snapshot())
+	require.Empty(t, h.standDowns, "a preview parked the scan")
+
+	want := filepath.Join(p.root, "audit.tsv")
+	require.Equal(t, want, rep.ReportPath)
+	body, rerr := os.ReadFile(want)
+	require.NoError(t, rerr)
+	require.Len(t, strings.Split(strings.TrimSpace(string(body)), "\n"), 1+6, "a header and one line per planned row")
+}
+
+// A Live run writes each book's rows in one call through the run's writer, under
+// the scan stand-down, on the three pools HEAD sized (24, 4, 4).
+func TestT6G7Kinds_RepointFolderAudioLiveWritesEachBookThroughTheWriter(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedFolderAudioRig(t, p, 2)
+	rep, h, err := runFolderAudioKind(t, p, tasks.ModeLive, `{}`)
+	require.NoError(t, err)
+	require.False(t, rep.DryRun)
+	require.Equal(t, map[string]int{rfOutcomeApplied: 2}, rep.ByOutcome)
+	require.Equal(t, 2, rep.RowsRepointed)
+	require.Equal(t, 4, rep.RowsMarkedMissing)
+	require.ElementsMatch(t, []string{
+		"UpdateBookFiles 01BATBOOK00000000000000F1 01BATFILE000000000000000F1a>Year One.m4b missing=false dur=3600," +
+			"01BATFILE000000000000000F1b>Chapter 02.mp3 missing=true dur=0,01BATFILE000000000000000F1c>Chapter 03.mp3 missing=true dur=0",
+		"UpdateBookFiles 01BATBOOK00000000000000F2 01BATFILE000000000000000F2a>The Long Halloween.m4b missing=false dur=3600," +
+			"01BATFILE000000000000000F2b>Chapter 02.mp3 missing=true dur=0,01BATFILE000000000000000F2c>Chapter 03.mp3 missing=true dur=0",
+	}, p.rec.snapshot())
+	require.Equal(t, []tasks.Key{"books.gotham-watch"}, h.standDowns, "scan stand-down")
+	require.True(t, h.released, "stand-down released")
+	caps := h.workerCaps()
+	require.Contains(t, caps, 24, "the stat sweep")
+	require.Contains(t, caps, 4, "the plan and the write")
+}
+
+// A library scan that is running (or whose queue cannot be read) refuses the
+// apply before it takes the stand-down or writes: a scan rewrites the rows this
+// op changes. The per-row report of what was planned is still left behind.
+func TestT6G7Kinds_RepointFolderAudioLiveRefusesWhileAScanRuns(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mutate func(*t6g7TestStore)
+		want   string
+	}{
+		"running": {func(s *t6g7TestStore) { s.scanStatus = "running" }, "library.scan is running"},
+		"queued":  {func(s *t6g7TestStore) { s.scanStatus = "queued" }, "library.scan is queued"},
+		"unread":  {func(s *t6g7TestStore) { s.activeErr = errors.New("queue down") }, "cannot list active operations"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := newT6G7Probe(t)
+			seedFolderAudioRig(t, p, 1)
+			tc.mutate(p.store.(*t6g7TestStore))
+			_, h, err := runFolderAudioKind(t, p, tasks.ModeLive, `{}`)
+			require.ErrorContains(t, err, tc.want)
+			require.Empty(t, p.rec.snapshot(), "rows were written beside a scan")
+			require.Empty(t, h.standDowns, "the stand-down was taken before the refusal")
+			require.Len(t, rppReports(t, p), 1, "the plan's report is left behind")
+		})
+	}
+}
+
+// A book whose row changed between the plan and the write is skipped, not
+// overwritten: the apply re-reads the rows and re-checks every precondition.
+func TestT6G7Kinds_RepointFolderAudioLiveLeavesABookChangedSinceThePlan(t *testing.T) {
+	p := newT6G7Probe(t)
+	ids := seedFolderAudioRig(t, p, 1)
+	st := p.store.(*t6g7TestStore)
+	// The row GetBookFiles answers at apply time has moved on from the one the
+	// plan read in GetAllBookFilesCore.
+	st.files[ids[0]][1].FilePath = filepath.Join(p.root, "Gotham", "Elsewhere.mp3")
+	rep, _, err := runFolderAudioKind(t, p, tasks.ModeLive, `{}`)
+	require.NoError(t, err)
+	require.Equal(t, map[string]int{rfOutcomeChanged: 1}, rep.ByOutcome)
+	require.Contains(t, rep.Books[0].Error, "changed since the plan")
+	require.Empty(t, p.rec.snapshot(), "a changed book was written")
+}
+
+// A file another live book references is not this book's to take: the book is
+// reported ambiguous, in both modes, and nothing is written.
+func TestT6G7Kinds_RepointFolderAudioLeavesAFileAnotherBookOwns(t *testing.T) {
+	for _, mode := range []tasks.Mode{tasks.ModePreview, tasks.ModeLive} {
+		p := newT6G7Probe(t)
+		ids := seedFolderAudioRig(t, p, 1)
+		st := p.store.(*t6g7TestStore)
+		target := filepath.Join(p.root, "Gotham", "Year One", "Year One.m4b")
+		st.bookAt[target] = []string{"01BATBOOK0000000000000OTHER"}
+		rep, _, err := runFolderAudioKind(t, p, mode, `{}`)
+		require.NoError(t, err)
+		require.Equal(t, map[string]int{rfDecisionAmbiguous: 1}, rep.ByDecision)
+		require.Equal(t, ids[0], rep.Books[0].BookID)
+		require.Equal(t, "folder-shared-with-other-book", rep.Books[0].Reason)
+		require.Empty(t, p.rec.snapshot(), "an ambiguous book was written (%v)", mode)
+	}
+}
+
+// limit caps how many books are planned, lowest ids first so a re-run is stable;
+// book_ids (or its bookIds alias) scopes the run and names what was out of scope.
+func TestT6G7Kinds_RepointFolderAudioLimitAndBookIDsScopeTheRun(t *testing.T) {
+	p := newT6G7Probe(t)
+	ids := seedFolderAudioRig(t, p, 3)
+	rep, _, err := runFolderAudioKind(t, p, tasks.ModePreview, `{"limit":2}`)
+	require.NoError(t, err)
+	require.Equal(t, 3, rep.BooksWithMissing)
+	require.Equal(t, 2, rep.Planned)
+	require.Equal(t, 2, rep.CappedAt)
+	require.Equal(t, ids[0], rep.Books[0].BookID)
+	require.Equal(t, ids[1], rep.Books[1].BookID)
+
+	rep, _, err = runFolderAudioKind(t, p, tasks.ModePreview, `{"bookIds":["`+ids[2]+`","01BATBOOK00000000000000NOPE"]}`)
+	require.NoError(t, err)
+	require.Equal(t, 1, rep.Planned)
+	require.Equal(t, ids[2], rep.Books[0].BookID)
+	require.Equal(t, []string{"01BATBOOK00000000000000NOPE"}, rep.OutOfScope)
+}
+
+// Until the book_atpath index is built every per-file owner check would scan every
+// book row, so the run aborts before it plans.
+func TestT6G7Kinds_RepointFolderAudioRefusesWhileTheAtPathIndexIsNotBuilt(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedFolderAudioRig(t, p, 1)
+	p.store.(*t6g7TestStore).atPathUnbuilt = true
+	_, _, err := runFolderAudioKind(t, p, tasks.ModePreview, `{}`)
+	require.ErrorContains(t, err, "book_atpath index not built")
+	require.Empty(t, p.rec.snapshot())
+}
+
+// Params HEAD refused are refused before the store is read or a writer built: an
+// unknown or duplicate key (HEAD decoded strictly, so a typo cannot silently mean
+// a default) and a negative limit.
+func TestT6G7Kinds_RepointFolderAudioRefusesBadParams(t *testing.T) {
+	for name, tc := range map[string]struct{ params, want string }{
+		"mode key":       {`{"apply":false,"frobnicate":1}`, "mode comes from the start request"},
+		"unknown field":  {`{"frobnicate":1}`, "unknown field"},
+		"duplicate key":  {`{"limit":1,"limit":2}`, "duplicate key"},
+		"negative limit": {`{"limit":-1}`, "limit must be >= 0"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := newT6G7Probe(t)
+			seedFolderAudioRig(t, p, 1)
+			_, _, err := runFolderAudioKind(t, p, tasks.ModeLive, tc.params)
+			require.ErrorContains(t, err, tc.want)
+			require.Zero(t, p.writerCalls(), "a writer was built")
+			require.Empty(t, p.rec.snapshot())
+		})
+	}
+}
+
+// A native run whose owner left a dependency unset refuses before it reads.
+func TestT6G7Kinds_RepointFolderAudioNeedsItsDeps(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mutate func(*t6g7Deps)
+		mode   tasks.Mode
+		want   string
+	}{
+		"store":   {func(d *t6g7Deps) { d.Store = nil }, tasks.ModePreview, "Store is not set"},
+		"report":  {func(d *t6g7Deps) { d.ResolveReportPath = nil }, tasks.ModePreview, "ResolveReportPath is not set"},
+		"rootdir": {func(d *t6g7Deps) { d.RootDir = nil }, tasks.ModePreview, "RootDir is not set"},
+		"writer":  {func(d *t6g7Deps) { d.NewWriter = nil }, tasks.ModeLive, "NewWriter is not set"},
+		"blank root": {func(d *t6g7Deps) { d.RootDir = func() string { return "" } }, tasks.ModePreview,
+			"root_dir is not set"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := newT6G7Probe(t)
+			seedFolderAudioRig(t, p, 1)
+			deps := p.deps()
+			tc.mutate(&deps)
+			def := t6g7ByKind(t, (&Plugin{}).t6g7Kinds(deps, nil), rfKind)
+			_, err := runT6G7Kind(t, def, tc.mode, &t6g7GateWriter{name: "gotham"}, `{}`)
+			require.ErrorContains(t, err, tc.want)
+			require.Empty(t, p.rec.snapshot())
+		})
+	}
+}
+
+func TestT6G7Kinds_RepointFolderAudioLiveNeedsTheScanStandDown(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedFolderAudioRig(t, p, 1)
+	deps := p.deps()
+	deps.StandDownKey = ""
+	def := t6g7ByKind(t, (&Plugin{}).t6g7Kinds(deps, nil), rfKind)
+	_, err := runT6G7Kind(t, def, tasks.ModeLive, &t6g7GateWriter{name: "gotham"}, `{}`)
+	require.ErrorContains(t, err, "acquire scan stand-down")
+	require.ErrorContains(t, err, "no scan stand-down key configured")
+	require.Empty(t, p.rec.snapshot())
+}
+
+// The core stops writing when the lease it holds lapses (HEAD's controller can
+// lose it; the native kernel fences the writer instead and reports it never
+// lost), and a Live core with no interlock or no writer refuses before a write.
+func TestRepointFolderAudioCore_StopsWritingWhenTheLeaseLapses(t *testing.T) {
+	newEnv := func(t *testing.T) (*t6g7Probe, rfCoreEnv) {
+		p := newT6G7Probe(t)
+		seedFolderAudioRig(t, p, 3)
+		return p, rfCoreEnv{
+			t6g7Env: t6g7HeadEnv(&fakeReporter{}, true),
+			Reads:   p.store, Writer: p.rec, Queue: p.store, RootDir: p.root,
+		}
+	}
+
+	p, env := newEnv(t)
+	released := false
+	env.StandDown = func(context.Context, string) (t6g7Hold, error) {
+		return t6g7Hold{Lost: func() bool { return true }, Release: func() { released = true }}, nil
+	}
+	rep, err := repointMissingToFolderAudioCore(context.Background(), rfParams{}, env)
+	require.ErrorContains(t, err, "scan stand-down lease lapsed")
+	require.Equal(t, map[string]int{rfOutcomeSkipped: 3}, rep.ByOutcome, "every planned book is left not attempted")
+	require.Empty(t, p.rec.snapshot(), "rows were written after the lease lapsed")
+	require.True(t, released, "the hold was not released")
+
+	p, env = newEnv(t)
+	_, err = repointMissingToFolderAudioCore(context.Background(), rfParams{}, env)
+	require.ErrorContains(t, err, "no interlock configured")
+	require.Empty(t, p.rec.snapshot())
+
+	p, env = newEnv(t)
+	env.Writer = nil
+	_, err = repointMissingToFolderAudioCore(context.Background(), rfParams{}, env)
+	require.ErrorContains(t, err, "no writer for a live run")
+	require.Empty(t, p.rec.snapshot())
 }
