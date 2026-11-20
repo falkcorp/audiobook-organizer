@@ -264,14 +264,8 @@ internal/books/cutover.ConfigCutoverDone
 internal/books/cutover.CutoverListError.Error
 internal/books/cutover.CutoverListError.Is
 internal/books/cutover.IdentityStep
-internal/books/cutover.NewGapFillHolder
 internal/books/cutover.StepIDs
-internal/books/cutover.StripGapFill
 internal/books/cutover.ValidateCutoverList
-internal/books/cutover.blobRootDir
-internal/books/cutover.fileHoldsValueFold
-internal/books/cutover.flatKeys
-internal/books/cutover.headDeleteConfigKeyFold
 internal/books/cutover.headHasConfigKey
 internal/books/cutover.headRemovedKeyMessage
 internal/books/cutover.levelOwnerOfStep
