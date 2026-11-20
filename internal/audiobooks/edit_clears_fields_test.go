@@ -27,6 +27,11 @@ func seriesFixture(t *testing.T) (*database.PebbleStore, *database.Book, *databa
 	store, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
+	// Memdb warms up asynchronously. The series deletes these tests make have no
+	// Pebble path (DeleteSeriesIfUnreferenced refuses with
+	// ErrSeriesDeleteMemdbNotServing until memdb publishes), so a slow CI agent
+	// that runs the test body first fails them. Wait for the warmup here.
+	store.WaitForWarmup()
 	series, err := store.CreateSeries("Redshirts", nil)
 	require.NoError(t, err)
 	seq, raw := 1, "1"
@@ -1972,6 +1977,20 @@ func TestUpdateAudiobook_PositionEqualAsANumberIsNotAnEdit(t *testing.T) {
 // handler can answer 400 (TestUpdateAudiobook_DeletedSeriesIDIs400...) instead
 // of a 500. The book is untouched.
 func TestUpdateAudiobook_SeriesIDOfADeletedSeriesIsRefusedAndKeepsItsIdentity(t *testing.T) {
+	requireDeletedSeriesIDRefused(t)
+}
+
+// The same scenario on a CI agent so loaded that memdb warmup starts 300ms late:
+// seriesFixture must still hand back a store whose memdb is serving, or the
+// fixture's own series delete is refused (CI run 44677402812, shard 3/4).
+func TestUpdateAudiobook_SeriesIDOfADeletedSeriesIsRefused_SlowMemdbWarmup(t *testing.T) {
+	restore := database.SetWarmupStartHookForTest(func() { time.Sleep(300 * time.Millisecond) })
+	defer restore()
+	requireDeletedSeriesIDRefused(t)
+}
+
+func requireDeletedSeriesIDRefused(t *testing.T) {
+	t.Helper()
 	store, book, _ := seriesFixture(t)
 	gone, err := store.CreateSeries("Cataclysm", nil)
 	require.NoError(t, err)
