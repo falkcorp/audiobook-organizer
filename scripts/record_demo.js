@@ -44,7 +44,14 @@ async function waitForServer(maxAttempts = 30) {
   console.log('⏳ Waiting for server...');
   for (let i = 0; i < maxAttempts; i++) {
     try {
-      const response = await axiosInstance.get(`${BASE_URL}/api/health`);
+      // /health is the probe; /api/health is the older alias a server that
+      // still has the Basic sign-in gate on answers without credentials.
+      let response;
+      try {
+        response = await axiosInstance.get(`${BASE_URL}/health`);
+      } catch (_) {
+        response = await axiosInstance.get(`${BASE_URL}/api/health`);
+      }
       if (response.status === 200) {
         console.log('✅ Server is ready!');
         return true;

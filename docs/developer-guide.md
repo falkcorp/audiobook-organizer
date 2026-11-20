@@ -137,7 +137,7 @@ All endpoints live under `/api/v1/`. The server uses Gin with optional authentic
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/v1/health` | Health check |
+| `GET` | `/health` | Health check (unauthenticated probe; carries `ready`) |
 | `GET` | `/api/events` | SSE event stream |
 | `GET` | `/api/v1/audiobooks` | List books (paginated, filterable) |
 | `GET` | `/api/v1/audiobooks/search` | Full-text search |

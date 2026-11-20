@@ -119,7 +119,7 @@ class APITester:
         print(f"{'#' * 80}\n")
 
         # Health check
-        self.test_endpoint("GET", "/api/health", description="Health check endpoint")
+        self.test_endpoint("GET", "/health", description="Health check endpoint")
 
         # Real-time events (SSE) - just test connection
         print("\n" + "=" * 80)

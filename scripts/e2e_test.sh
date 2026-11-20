@@ -10,7 +10,7 @@
 set -e
 
 API_BASE="${API_BASE:-http://localhost:8484/api/v1}"
-HEALTH_CHECK="${HEALTH_CHECK:-http://localhost:8484/api/health}"
+HEALTH_CHECK="${HEALTH_CHECK:-http://localhost:8484/health}"
 VERBOSE="${VERBOSE:-false}"
 
 # Color output
