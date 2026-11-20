@@ -1,4 +1,4 @@
 ### Changed
 
-- A task that fails, times out or is canceled now keeps the partial result it returned with its error, so the run record still shows what the run did before it stopped. A run that returned nothing still stores no result.
+- A task that fails, times out or is canceled now keeps the partial result it returned with its error, so the run record still shows what the run did before it stopped. A run that returned nothing still stores no result. The native credits backfill never puts its class id lists (megabytes on a full library) in a stopped run's result: they stay in the run's rows.
 - The native (not yet enabled) `maintenance.authority-build` apply finds its plan in the run history: the plan is the result of a successful preview run of the same kind. The native `maintenance.credits-backfill` stores its class id lists as rows of its own run, a preview included. It finds earlier unfinished runs from the run history, and it records which runs' leftovers it has already judged in its own result. The current (v2) code paths of both operations are unchanged.

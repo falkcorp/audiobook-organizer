@@ -150,9 +150,9 @@ func TestTransferRecoverTask_RunRecoversAKilledTransfer(t *testing.T) {
 	}
 }
 
-// A pass that cannot finish returns the error, wrapped so it names the library.
-// The executor stores no result for a failed run, so the report reaches the
-// run's record through the status line.
+// A pass that cannot finish returns the error, wrapped so it names the library,
+// and its report reaches the run's status line as well as the result the
+// executor keeps beside the error (F5-18d, O5).
 func TestTransferRecoverTask_RunKeepsTheReportOfAFailedPass(t *testing.T) {
 	boom := errors.New("the journal is unreadable")
 	m := failingRecover{rep: RecoverReport{Completed: 2, Failed: 1}, err: boom}
