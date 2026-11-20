@@ -1,7 +1,7 @@
 // file: core/integrations/providerhttp/gate.go
-// version: 1.3.1
+// version: 1.2.0
 // guid: ec0c1bf4-fb0b-44a4-ac17-f2ca02f02f83
-// last-edited: 2026-11-19
+// last-edited: 2026-11-11
 
 package providerhttp
 

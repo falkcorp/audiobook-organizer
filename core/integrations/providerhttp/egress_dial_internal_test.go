@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/egress_dial_internal_test.go
-// version: 1.1.0
+// version: 1.0.0
 // guid: 8d2c6f41-3b97-4e50-a6d8-1f4b9c70e532
 // last-edited: 2026-11-19
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net"
 	"testing"
+	"time"
 
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -206,4 +207,26 @@ func TestGuardedDial_TwoDialsOneAcquireRefundOnce(t *testing.T) {
 		t.Fatalf("tokens = %.2f after a second Done on the same ticket, want still 1", got)
 	}
 	b.Done(nil)
+}
+
+// TestGuardedDial_OnlyAnEgressRefusalGivesTheTokenBack: a ticket's Done refunds
+// the bucket token for the guard's refusal of the dial and for nothing else: not
+// a different kind of gate refusal, and not an ordinary failure.
+func TestGuardedDial_OnlyAnEgressRefusalGivesTheTokenBack(t *testing.T) {
+	ref := integrations.Ref{Kind: integrations.KindNotify, Instance: "commissioner"}
+	for name, err := range map[string]error{
+		"another gate refusal": refuse(ref, "dial", ReasonDisabled, time.Time{}, integrations.ErrDisabled),
+		"an ordinary failure":  errors.New("connection reset"),
+		"success":              nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			g, _, _ := dialRig(t) // a fresh bucket of two per case: a second Acquire would wait on a refill
+			tk := acquire(t, g)
+			before := g.State().BucketTokens
+			tk.Done(err)
+			if got := g.State().BucketTokens; got > before+0.1 {
+				t.Fatalf("tokens %.2f -> %.2f, Done gave a token back", before, got)
+			}
+		})
+	}
 }
