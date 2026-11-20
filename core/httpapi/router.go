@@ -184,6 +184,10 @@ type RouteInfo struct {
 // SPA's own paths; nil exempts nothing (FE5-10).
 type SPAOptions struct {
 	BasicExemptAssets func(path string) bool
+	// BuildID is stage 5's X-App-Build while this handler owns "/": the UI
+	// build ID of the bundle it serves (ui.Bundle.BuildID, 07 §7.6.3). ""
+	// is written "dev".
+	BuildID string
 }
 
 // LegacyAuth says who authenticates a legacy mount (05-http-api §8.2).
@@ -731,9 +735,13 @@ func (r *Router) newChain() *httpmw.Chain {
 }
 
 // buildID is stage 5's X-App-Build: the UI build ID of the bundle the "/"
-// owner serves, before the shell flip the mount's LegacyMount.BuildID
-// (FE3-2, FE4-1); "" (written "dev") otherwise. r.mu is held.
+// owner serves: SPAOptions.BuildID of Router.SPA's handler, or, before the
+// shell flip, the ServesSPA mount's LegacyMount.BuildID (FE3-2, FE4-1); ""
+// (written "dev") otherwise. r.mu is held.
 func (r *Router) buildID() string {
+	if r.spa != nil {
+		return r.spaOpt.BuildID
+	}
 	for _, m := range r.mounts {
 		if m.ServesSPA {
 			return m.BuildID

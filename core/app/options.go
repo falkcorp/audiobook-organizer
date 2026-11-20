@@ -19,13 +19,15 @@ import (
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/ui"
 	"github.com/falkcorp/mediacore/updater"
 )
 
 // Options configure one process (06 §6.4.5). Zero values are valid defaults
 // unless noted. These are the R1 fields that need no storage (06 §6.4.10)
-// and F3's config lists; a field whose package lands later (UI, UIOptions,
-// Authenticators, Auth, Adapters, InterimBackends) arrives with it.
+// and F3's config lists, plus the shell's UI and UIOptions (F9-01); a field
+// whose package lands later (Authenticators, Auth, Adapters,
+// InterimBackends) arrives with it.
 type Options struct {
 	AppID string // app identifier, [a-z][a-z0-9]{1,15} (03 §3.6), e.g. "abo"
 	// MetricNamespace is the namespace of every series the App emits: core's
@@ -181,6 +183,23 @@ type Options struct {
 	// that cannot be built degrades the Provider and New goes on (05-metrics
 	// §8, as ABO's InitOTEL did).
 	Telemetry *Telemetry
+
+	// UI is the app's embedded SPA (07 §7.6), from its UIBundle(): ui_embed.go
+	// (embed_frontend) returns ui.MustFromFS over the built dist, ui_nonembed.go
+	// the zero Bundle. A non-zero UI makes ui.Handler the "/" owner, mounted
+	// by the kernel in P8; together with a ServesSPA legacy mount it is a boot
+	// error (FE-1). The zero Bundle mounts nothing: a ServesSPA mount or nobody
+	// owns "/" (the API-only placeholder for it arrives with F9-03).
+	UI ui.Bundle
+
+	// UIOptions carries the app's own contributions into the ui.Handler the
+	// kernel builds in P8 (FE3-4): page-load middleware, extra connect-src
+	// hosts and extra CSP directives (ui.AppOptions, 07 §7.6.1). A
+	// compile-time value built in main before New, so a func whose inputs
+	// exist only after boot reads an atomic.Pointer the module fills in its
+	// Start hook and is a no-op until then (FE4-5). The zero value adds
+	// nothing; it is ignored with a zero UI.
+	UIOptions ui.AppOptions
 
 	// Updater is the app's release source and binary name for core's updater
 	// (05-updater §5U.3): nil = no updater, no routes and no tasks. Only

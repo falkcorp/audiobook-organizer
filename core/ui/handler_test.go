@@ -361,7 +361,9 @@ func TestHandler_PageMiddlewareOnlyOnIndex(t *testing.T) {
 	// A middleware that answers itself (CF recovery's redirect) replaces the
 	// page, and the handler adds nothing after it.
 	redirect := func(http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/cdn-cgi/access/login", http.StatusFound) })
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/cdn-cgi/access/login", http.StatusFound)
+		})
 	}
 	rec := do(Handler(mustBundle(t), Options{AppOptions: AppOptions{PageMiddleware: redirect}}), http.MethodGet, "/")
 	if rec.Code != http.StatusFound || strings.Contains(rec.Body.String(), "mediacore-build") {

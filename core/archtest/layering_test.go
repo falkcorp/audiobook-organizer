@@ -215,6 +215,31 @@ func writeModule(t *testing.T, files map[string]string) string {
 	return root
 }
 
+// TestLoadReadsCommittedEmbedOutputs: with LoadOptions.EmbedOutputs nil, Load
+// tolerates the outputs the module lists in scripts/ci/embed_build_outputs.txt
+// and only those; an empty non-nil slice opts out of the file.
+func TestLoadReadsCommittedEmbedOutputs(t *testing.T) {
+	files := map[string]string{
+		"go.mod": "module example.com/m\n\ngo 1.27.0\n",
+		"ui/ui.go": "package ui\n\nimport \"embed\"\n\n//go:embed all:web/dist\nvar dist embed.FS\n\n" +
+			"func FS() embed.FS { return dist }\n",
+		// A test file makes go list report the "ui [ui.test]" variant too.
+		"ui/ui_test.go":                      "package ui\n\nimport \"testing\"\n\nfunc TestFS(t *testing.T) { _ = FS() }\n",
+		"scripts/ci/embed_build_outputs.txt": "# the batcave's built UI\n\nui/web/dist\n",
+	}
+	root := writeModule(t, files)
+	if _, err := Load(LoadOptions{Dir: root}); err != nil {
+		t.Fatalf("output listed in the committed file not tolerated: %v", err)
+	}
+	if _, err := Load(LoadOptions{Dir: root, EmbedOutputs: []string{}}); err == nil {
+		t.Fatal("an empty EmbedOutputs still read the committed file")
+	}
+	files["scripts/ci/embed_build_outputs.txt"] = "# nothing listed\nother/web/dist\n"
+	if _, err := Load(LoadOptions{Dir: writeModule(t, files)}); err == nil || !strings.Contains(err.Error(), "no matching files found") {
+		t.Fatalf("an output the committed file does not list was tolerated: %v", err)
+	}
+}
+
 // TestLoadToleratesOnlyListedEmbedOutputs is 03 §3.5.1 item 4's fixture pair:
 // a tree with no built frontend passes when the output is listed, and any
 // other package error fails.

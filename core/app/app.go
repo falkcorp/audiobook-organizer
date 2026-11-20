@@ -419,6 +419,8 @@ func kernelConfig(opts Options, mods []module.Module) (kernel.Config, error) {
 		LegacyAuthGinUntil:    opts.LegacyAuthGinUntil,
 		Logger:                opts.Logger,
 		Modules:               slices.Clone(mods),
+		UI:                    opts.UI,
+		UIOptions:             opts.UIOptions,
 	}
 	if f := opts.R1Values; f != nil {
 		c.R1Values = func() kernel.R1Values { return kernel.R1Values(f()) }
