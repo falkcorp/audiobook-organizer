@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/writes_oracle_test.go
-// version: 3.3.0
+// version: 3.4.0
 // guid: 40eadd67-76ac-419f-a3fe-7d1ed5e586e2
 // last-edited: 2026-11-19
 
@@ -1054,10 +1054,13 @@ func (r *oracleResolver) callResult(c *ssa.Call, idx int, direct bool) (out orac
 	}
 	// A call through a function value: what the functions it can be return.
 	fv := r.value(com.Value, direct)
-	out.open = append(out.open, fv.open...)
+	// A parameter called for its result is not the caller's to check (the
+	// result is used here): what the program's callers pass, and the
+	// reason when that set is not every caller (round-3).
 	for _, p := range fv.params {
-		out.openf("call result:%s(%s)", p.Parent().Name(), p.Name())
+		fv.merge(r.fromCallers(p, false))
 	}
+	out.open = append(out.open, fv.open...)
 	for _, f := range fv.fns {
 		out.merge(r.returnedBy(f, c, idx, direct))
 	}
@@ -1540,9 +1543,6 @@ func derivedWrites(op *oracleProgram, runFn *ssa.Function) (kinds []string, evid
 						// (Undo, Rollback) is judged by its bodies alone
 						// (round-2 review M1): every implementation the
 						// module's loaded packages declare is walked as well.
-						// Not for an interface of the standard library or a
-						// dependency (error, io.Closer): every type in the
-						// module implements one.
 						impls = oracleUnion(impls, op.declaredImpls(com))
 					}
 					// The call is judged by the interface method's own name
@@ -1558,11 +1558,11 @@ func derivedWrites(op *oracleProgram, runFn *ssa.Function) (kinds []string, evid
 						note(oracleResource(recv, name), recv+"."+name+" in "+f.String())
 					}
 					// A method named like no write whose bodies the walk
-					// cannot read: of an interface declared outside the module
-					// (the walk never enters such code, nor asks CHA about it),
-					// or of a module interface the program holds no
-					// implementation of. Allowed by interface method in
-					// oracleOutsideIfaceAllowed, or by key.
+					// cannot all read: of an interface declared outside the
+					// module (the walk never enters the implementations
+					// outside the module), or of a module interface the
+					// program holds no implementation of. Allowed by interface
+					// method in oracleOutsideIfaceAllowed, or by key.
 					if !verb && (!moduleIface || len(impls) == 0) {
 						unresolved(f, "iface:"+oracleIfaceMethodName(com))
 					}
@@ -1941,9 +1941,33 @@ func TestKindShell_ResumeContinueMeansCheckpoint(t *testing.T) {
 // a registry filled by code outside the program) fails TestJobWrites_NoUnresolvedCalls
 // until someone has read it and said here what it does.
 var oracleUnresolvedAllowed = map[string]string{
-	"UNRESOLVED.github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs.hbHook#hbCommitHook":                                         "a test seam: production never sets hbCommitHook, so the call is nil and does nothing",
-	"UNRESOLVED.(*github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs.mergeChapterGroupsJob).applyOne$1#chapterPrecheckTestHook": "a test hook: set only by tests, nil in production",
-	"UNRESOLVED.(*github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp.throttled).RoundTrip$2$1#call result":                 "cancel of attemptContext, a variable holding context.WithTimeout: the standard library's cancel function, which releases a context and writes nothing",
+	"UNRESOLVED.(*github.com/falkcorp/audiobook-organizer/internal/deluge.Client).callCtx#iface:io.Closer.Close":                                                                                 "resp.Body.Close on the net/http response of the Deluge RPC call: closes a network body",
+	"UNRESOLVED.(*github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs.hashBackfillReport).close#iface:io.Closer.Close":                                                             "r.f.Close on the report file hbOpenFile opened (a *os.File from mediacore library.OpenReportFile): closes the job's report file, whose writes are recorded where it is opened",
+	"UNRESOLVED.github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs.openHashBackfillReport#iface:io.Closer.Close":                                                                  "f.Close on the report file hbOpenFile just opened (a *os.File) when vetting or truncating it fails",
+	"UNRESOLVED.github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs.openHashBackfillReport#iface:io.Seeker.Seek":                                                                   "f.Seek on the report file hbOpenFile opened (a *os.File): moves its offset to the last good line",
+	"UNRESOLVED.(*github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp.attemptBody).Close#iface:io.Closer.Close":                                                               "b.ReadCloser.Close on the wrapped net/http response body: closes a network body",
+	"UNRESOLVED.(struct{io.Reader; io.Closer}).Close#iface:io.Closer.Close":                                                                                                                      "ai peekQuota429's re-wrapped response body, whose Closer is the original net/http response body: closes a network body",
+	"UNRESOLVED.(*github.com/falkcorp/audiobook-organizer/internal/maintenance.ProgressAdapter).Log#iface:github.com/falkcorp/audiobook-organizer/internal/operations.ProgressReporter.Log":      "ProgressAdapter.Ops is filled by server maintenance_job_op.go with registryProgressAdapter (a package the program does not load), whose Log forwards to the run reporter's Log: the run's own op-log rows (oracleReporterOwn)",
+	"UNRESOLVED.github.com/falkcorp/audiobook-organizer/internal/authorcredit.authorityOf#iface:github.com/falkcorp/audiobook-organizer/internal/authorcredit.AuthoritySource.AuthorityLookup":   "the one implementation is server authorityEvidenceProvider (a package the program does not load), whose AuthorityLookup returns the loaded authority.Lookup: a getter",
+	"UNRESOLVED.github.com/falkcorp/audiobook-organizer/internal/bookfileaudio.warnUnavailableOnce#iface:github.com/falkcorp/audiobook-organizer/internal/bookfileaudio.warnDemoter.DemotesWarn": "the one implementation is plugins/maintenance demotedWarnLog (a package the program does not load), whose DemotesWarn returns true: a constant",
+	"UNRESOLVED.github.com/falkcorp/audiobook-organizer/internal/merge.CompletePendingUserStateRepairs#parameter:set by CompletePendingUserStateRepairs(lock)":                                   "exported, but the only callers outside tests are in merge itself (completePendingInvolving passes nil, PendingRepairLoop a closure returning UnlockMergeRMW); the walk reads both",
+	"UNRESOLVED.(*github.com/falkcorp/audiobook-organizer/internal/openlibrary.OLStore).CloseWithin#closeDB:set by NewOLStoreOnEngine(closeDB)":                                                  "exported for tests: outside tests only NewOLStore calls NewOLStoreOnEngine, passing the close function database.NewOwnedGatedDB returns, which the walk reads",
+	"UNRESOLVED.github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs.hbHook#hbCommitHook":                                                                                           "a test seam: production never sets hbCommitHook, so the call is nil and does nothing",
+	"UNRESOLVED.(*github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs.mergeChapterGroupsJob).applyOne$1#chapterPrecheckTestHook":                                                   "a test hook: set only by tests, nil in production",
+	"UNRESOLVED.(*github.com/falkcorp/audiobook-organizer/internal/operations/registry.Registry).livenessClock#LivenessNow:exported":                                                             "a test clock: only registry tests set Options.LivenessNow; nil in production, where the watchdog uses time.Now",
+	"UNRESOLVED.(*github.com/falkcorp/audiobook-organizer/internal/operations/registry.dbReporter).TouchLiveness#touchProgressFn:set by NewDBReporterForTestWithTouch(touchFn)":                  "a test seam: only tests build a reporter with NewDBReporterForTestWithTouch; production reporters use the default the walk reads",
+	"UNRESOLVED.(github.com/falkcorp/audiobook-organizer/internal/versionprimary.Loader).Load#Probe:exported":                                                                                    "every versionprimary.Loader a jobs run reaches is built inside the program, where its stores are read and walked; the stores outside the program (plugins/maintenance fixers, reconcile, server reconcile, books restore stager) fill other operations' Loaders, never a jobs run's",
+	"UNRESOLVED.(github.com/falkcorp/audiobook-organizer/internal/versionprimary.Loader).Load#Stat:exported":                                                                                     "every versionprimary.Loader a jobs run reaches is built inside the program, where its stores are read and walked; the stores outside the program (plugins/maintenance duplicate-copies fixer) fill other operations' Loaders, never a jobs run's",
+	"UNRESOLVED.github.com/falkcorp/audiobook-organizer/internal/bookfileaudio.boundedProbe$1#probe:set by SetProbeForTesting(fn)":                                                               "a test seam: only tests call SetProbeForTesting; production probes with the default the walk reads",
+	"UNRESOLVED.github.com/falkcorp/audiobook-organizer/internal/dedup.MergeSplitBookClusterRechecked$1#Precheck:exported":                                                                       "SplitMergeOptions.Precheck has two stores, both inside the program (jobs merge_chapter_groups.go, dedup split_book_recheck.go), and both are read and walked",
+	"UNRESOLVED.github.com/falkcorp/audiobook-organizer/internal/dedup.MergeSplitBookClusterWithOptions#Precheck:exported":                                                                       "SplitMergeOptions.Precheck has two stores, both inside the program (jobs merge_chapter_groups.go, dedup split_book_recheck.go), and both are read and walked",
+	"UNRESOLVED.github.com/falkcorp/audiobook-organizer/internal/maintenance.SetResult#outside:context.Context.Value":                                                                            "the run's result setter: put on the context by jobs kinds.go (resultBox.set, an in-memory box the walk reads) and server maintenance_job_op.go (ReporterSetResult, the operation's own result row): neither is a library store write",
+	"UNRESOLVED.github.com/falkcorp/audiobook-organizer/internal/operations/registry.RunItems[string]$1#CheckpointStateFn:exported":                                                              "every RunItemsOptions a jobs run reaches is built inside the program, where its stores are read and walked; the stores outside the program (plugins/maintenance kinds, server kinds_t7, acoustid window backfill) fill other operations' options, never a jobs run's",
+	"UNRESOLVED.github.com/falkcorp/audiobook-organizer/internal/operations/registry.RunItems[string]$3#Label:exported":                                                                          "every RunItemsOptions a jobs run reaches is built inside the program, where its stores are read and walked; the stores outside the program (the plugins' and reconcile's RunItems calls) fill other operations' options, never a jobs run's",
+	"UNRESOLVED.github.com/falkcorp/audiobook-organizer/internal/operations/registry.runItemsSeq[string]#CheckpointFn:exported":                                                                  "every RunItemsOptions a jobs run reaches is built inside the program, where its stores are read and walked; the stores outside the program (plugins/maintenance kinds, server kinds_t7, transcription auto-match) fill other operations' options, never a jobs run's",
+	"UNRESOLVED.github.com/falkcorp/audiobook-organizer/internal/scanner.DetectChapterGroupsWithOptions#Exclude:exported":                                                                        "scanner chapter-group Options.Exclude has one store, inside the program (jobs chapter_groups_common.go), read and walked",
+	"UNRESOLVED.github.com/falkcorp/audiobook-organizer/internal/scanner.evaluateSeqBucket#Protected:exported":                                                                                   "scanner chapter-group Options.Protected has one store, inside the program (jobs chapter_groups_common.go), read and walked",
+	"UNRESOLVED.github.com/falkcorp/audiobook-organizer/internal/versionprimary.EnsureSinglePrimary#MayWrite:exported":                                                                           "every versionprimary.Env a jobs run reaches is built inside the program, where its stores are read and walked; the stores outside the program (plugins/maintenance fixers, reconcile, audiobooks revert-settle) fill other operations' Envs, never a jobs run's",
 }
 
 // oracleOutsideClosureAllowed are the functions outside the module whose
@@ -1954,6 +1978,35 @@ var oracleOutsideClosureAllowed = map[string]string{
 	"context.WithTimeout": "the cancel function releases a context and its timer",
 	"strings.SplitSeq":    "the iterator walks a string in memory, calling the loop body (a range-over-func yield, read where it is written)",
 	"strings.FieldsSeq":   "the iterator walks a string in memory, calling the loop body (a range-over-func yield, read where it is written)",
+	"slices.Backward":     "the iterator walks a slice in memory, calling the loop body (a range-over-func yield, read where it is written)",
+	"sync.OnceValues":     "the closure calls only the function handed to sync.OnceValues, which the walk reads and walks where it is handed over",
+}
+
+// oracleOutsideIfaceAllowed are the methods, named like no write, of interfaces
+// declared outside the module that the jobs call, keyed by
+// "<package path>.<interface>.<method>" (the key ends #iface:<that>), and why a
+// call is not a write. Every implementation the module's loaded packages declare
+// is walked beside the call graph's set; what is allowed here is the
+// implementations outside the module, which cannot reach the store except by
+// calling a module function value handed to them, and that hand-over is
+// recorded where it is made.
+var oracleOutsideIfaceAllowed = map[string]string{
+	"context.Context.Deadline":                 "a context's deadline",
+	"context.Context.Done":                     "a context's cancellation channel",
+	"context.Context.Err":                      "a context's cancellation cause",
+	"context.Context.Value":                    "a context value lookup; a function value it returns is resolved where it is called",
+	"error.Error":                              "an error's message",
+	"github.com/dhowden/tag.Metadata.FileType": "a parsed tag's file type, in memory",
+	"github.com/dhowden/tag.Metadata.Raw":      "a parsed tag's raw frames, in memory",
+	"hash.Hash.Sum":                            "a hash digest, in memory",
+	"hash.Hash32.Sum32":                        "a hash digest, in memory",
+	"io/fs.DirEntry.IsDir":                     "a directory entry's mode bit",
+	"io/fs.DirEntry.Name":                      "a directory entry's name",
+	"io/fs.FileInfo.IsDir":                     "a stat result's mode bit",
+	"io/fs.FileInfo.Mode":                      "a stat result's mode",
+	"io/fs.FileInfo.Size":                      "a stat result's size",
+	"io/fs.FileInfo.Sys":                       "a stat result's system data",
+	"reflect.Type.Kind":                        "a type's kind",
 }
 
 // TestJobWrites_NoUnresolvedCalls: no job reaches a call through a function value
@@ -1978,6 +2031,13 @@ func TestJobWrites_NoUnresolvedCalls(t *testing.T) {
 					continue
 				}
 			}
+			if i := strings.Index(key, "#iface:"); i >= 0 {
+				name := key[i+len("#iface:"):]
+				if _, ok := oracleOutsideIfaceAllowed[name]; ok {
+					used["iface:"+name] = true
+					continue
+				}
+			}
 			t.Errorf("%s: a call through a function value the walk cannot resolve, %s (in %s): read what it can be and allow it in oracleUnresolvedAllowed with the reason", id, key, j.calls[key])
 		}
 	}
@@ -1989,6 +2049,11 @@ func TestJobWrites_NoUnresolvedCalls(t *testing.T) {
 	for name := range oracleOutsideClosureAllowed {
 		if !used[name] {
 			t.Errorf("oracleOutsideClosureAllowed has %s, but no job calls a closure it made any more: remove it", name)
+		}
+	}
+	for name := range oracleOutsideIfaceAllowed {
+		if !used["iface:"+name] {
+			t.Errorf("oracleOutsideIfaceAllowed has %s, but no job calls that method any more: remove it", name)
 		}
 	}
 }
