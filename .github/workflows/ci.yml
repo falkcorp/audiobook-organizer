@@ -1248,14 +1248,18 @@ jobs:
   # a shard fails, not be skipped. With a plain `needs:` a failed shard made
   # GitHub skip this job, and a skipped required check counts as passing, so
   # the queue could merge a commit whose short tests failed (merge_group run
-  # 44717492360: shard 1/4 failure, this check skipped). `always()` makes it
-  # run anyway and the first step fails it unless every shard succeeded, the
-  # pattern extraction-gates.yml's terminal job uses. Without -race in the
-  # merge queue the shards are the queue's whole Go test gate.
+  # 44717492360: shard 1/4 failure, this check skipped). `!cancelled()` makes
+  # it run anyway and the first step fails it unless every shard succeeded
+  # (extraction-gates.yml's terminal job does the same with always()).
+  # `!cancelled()`, not `always()`: cancelled() is about the RUN, so a failed or
+  # timed-out shard still fails this job, while a push run on main superseded
+  # by the next merge (cancel-in-progress) skips it instead of adding a failed
+  # job to a run auto-revert.yml reads. Without -race in the merge queue the
+  # shards are the queue's whole Go test gate.
   coverage:
     name: Coverage Floor (PR gate)
     needs: [changes, go-test-short-shards]
-    if: ${{ always() && needs.changes.outputs.go == 'true' }}
+    if: ${{ !cancelled() && needs.changes.outputs.go == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

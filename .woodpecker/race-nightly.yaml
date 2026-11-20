@@ -90,8 +90,8 @@ steps:
       # pipeline clones into a new random workdir).
       GOFLAGS: -trimpath
     commands:
-      # Scrubs provider keys and points Go at the host-wide cache
-      # (/Users/jdfalk/ci/cache on the Macs); fails if there is none.
+      # Scrubs provider keys and points Go at the host-wide cache (the roots
+      # are listed in scripts/ci/cache_env.sh); fails if there is none.
       - . scripts/ci/cache_env.sh || exit 1
       # The fixture packages' real-audio tests skip when these are missing,
       # which would report them green while running none of them.
