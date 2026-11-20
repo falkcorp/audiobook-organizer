@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/rows.go
-// version: 1.0.10
+// version: 1.0.11
 // guid: d18639c8-9b23-4ce6-a83c-4b77e83754c1
 // last-edited: 2026-11-19
 
@@ -72,8 +72,8 @@ func Rows() []Row {
 		{Phase: "P4a (reset boot; R1 has no keyring, 06 §6.5.1 P4b first; Config.CoreConfigBoot off)", Writer: "the kernel: journal applied after the fresh install", Labels: []string{
 			"swap.journal.applied",
 		}},
-		{Phase: "P4b, first (Config.CoreConfigBoot)", Writer: "secrets.Open: stale keyring temporary files removed, the keyring created (exclusive temp, fsync, link, directory fsync) or its mode fixed and its header's install_id written or rewritten (a reset boot), then c/secrets/meta's batch (05-config §2.4 step 1)", Labels: []string{
-			"secrets.keyring.stale", "secrets.keyring", "secrets.meta",
+		{Phase: "P4b, first (Config.CoreConfigBoot)", Writer: "secrets.Open: stale keyring temporary files removed, the keyring created (exclusive temp, fsync, link, directory fsync) or its mode fixed and its header's install_id written or rewritten (a reset boot), then c/secrets/meta's batch (05-config §2.4 step 1); a present keyring's directory is synced before it is trusted (secrets.keyring.load-sync: the boot that created it may have failed at its own directory fsync)", Labels: []string{
+			"secrets.keyring.stale", "secrets.keyring.load-sync", "secrets.keyring", "secrets.meta",
 		}},
 		{Phase: "P4b, after secrets.Open (reset boot; Config.CoreConfigBoot)", Writer: "the kernel: journal applied once the keyring header carries the fresh store's install ID (06 §6.5.1 P4b first; DATA7-17)", Labels: []string{
 			"swap.journal.applied",

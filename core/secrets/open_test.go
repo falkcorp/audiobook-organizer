@@ -1,5 +1,5 @@
 // file: core/secrets/open_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 5543ef2e-3564-4e6b-a213-df11eb05e442
 // last-edited: 2026-11-19
 
@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -532,5 +533,110 @@ func TestKeyring_Invariants(t *testing.T) {
 	bad.Keys = append(bad.Keys, mk("k2", useData, statusActive))
 	if err := writeKeyring(statefs.FromRoot(e.root), defaultKeyFile, bad); err == nil {
 		t.Error("writeKeyring wrote a keyring with two active data keys")
+	}
+}
+
+// syncSpy is StateFiles with SyncDir recorded by label and failed for the
+// labels in failOn, with failErr: the directory fsync's outcomes a test needs
+// to break and to see.
+type syncSpy struct {
+	StateFiles
+	failOn  map[string]bool
+	failErr error
+
+	mu    sync.Mutex
+	syncs []string // labels, in call order
+}
+
+func (p *syncSpy) SyncDir(label, name string) error {
+	p.mu.Lock()
+	p.syncs = append(p.syncs, label)
+	p.mu.Unlock()
+	if p.failOn[label] {
+		return p.failErr
+	}
+	return p.StateFiles.SyncDir(label, name)
+}
+
+func (p *syncSpy) labels() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.syncs...)
+}
+
+// withSpy makes Open run on a syncSpy over e's state directory.
+func (e *env) withSpy(failOn ...string) (*syncSpy, func(*Options)) {
+	spy := &syncSpy{StateFiles: statefs.FromRoot(e.root), failOn: map[string]bool{}, failErr: errors.New("no space left on device (Joker's trap)")}
+	for _, l := range failOn {
+		spy.failOn[l] = true
+	}
+	return spy, func(o *Options) { o.StateDir = spy }
+}
+
+// TestOpen_KeyringDirectorySyncedBeforeItIsTrusted is the data-loss case the
+// F3-07 e7 crash matrix found. Boot 1 creates the keyring (exclusive
+// temporary file, fsync, link) and fails at the directory fsync that follows:
+// the entry is in the page cache, not durable, and Open returns the error.
+// Boot 2 finds the file. If it trusted it, the secrets it seals would sit
+// under a keyring a power loss can still take away. Open must sync the
+// directory itself before it trusts a present keyring, and must fail closed,
+// with no c/secrets/ row written, when that sync fails.
+func TestOpen_KeyringDirectorySyncedBeforeItIsTrusted(t *testing.T) {
+	e := newEnv(t)
+
+	// Boot 1: the creating write's directory fsync fails; the file is there.
+	_, brokenCreate := e.withSpy(labelKeyring)
+	if _, err := Open(context.Background(), func() Options { o := e.opts(); brokenCreate(&o); return o }()); err == nil {
+		t.Fatal("Open succeeded although the keyring's directory fsync failed")
+	}
+	if _, err := os.Stat(e.keyringPath()); err != nil {
+		t.Fatalf("the failed boot left no keyring to find: %v", err)
+	}
+	if n := len(rows(t, e.ks)); n != 0 {
+		t.Fatalf("the failed boot wrote %d c/secrets/ rows", n)
+	}
+
+	// Boot 2, directory fsync failing: closed, nothing written or sealed.
+	spy, failing := e.withSpy(labelKeyringSync)
+	o := e.opts()
+	failing(&o)
+	s, err := Open(context.Background(), o)
+	if err == nil {
+		_ = s.Close()
+		t.Fatal("Open trusted a present keyring whose directory fsync failed")
+	}
+	if !errors.Is(err, spy.failErr) {
+		t.Fatalf("Open's error does not carry the fsync failure: %v", err)
+	}
+	if n := len(rows(t, e.ks)); n != 0 {
+		t.Fatalf("a refused Open wrote %d c/secrets/ rows (meta before the keyring was durable)", n)
+	}
+
+	// Boot 3, directory fsync working: the keyring is loaded after one sync
+	// under the load-sync label, and c/secrets/meta follows.
+	spy, healthy := e.withSpy()
+	s = e.open(t, healthy)
+	if got := spy.labels(); len(got) != 1 || got[0] != labelKeyringSync {
+		t.Fatalf("a boot over a present keyring synced %v, want exactly [%s]", got, labelKeyringSync)
+	}
+	if _, ok := rows(t, e.ks)[string(metaKey())]; !ok {
+		t.Fatal("the healthy boot wrote no c/secrets/meta")
+	}
+	if _, err := s.Put(context.Background(), nameGate, NewValue(valueVengeance), byAlfred); err != nil {
+		t.Fatalf("Put after the recovery boot: %v", err)
+	}
+}
+
+// TestOpen_FirstRunKeyringIsNotSyncedTwice: the creating boot's own
+// directory fsync (labelKeyring) already made the entry durable, so it does
+// not also issue the load-sync one.
+func TestOpen_FirstRunKeyringIsNotSyncedTwice(t *testing.T) {
+	e := newEnv(t)
+	spy, mut := e.withSpy()
+	e.open(t, mut)
+	for _, l := range spy.labels() {
+		if l == labelKeyringSync {
+			t.Fatalf("a boot that created the keyring synced under %s too: %v", l, spy.labels())
+		}
 	}
 }
