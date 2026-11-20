@@ -15,14 +15,22 @@
 //    stream is refused (visibly, in the status), and
 //  - one KEYED stream per key (`topic=...&key=<id>`), opened for a subscriber that asked
 //    for `stream: 'keyed'`, e.g. a run's log lines.
-// Nothing connects until the first subscribe, and a stream with no subscriber is closed.
+// Nothing connects until the first subscribe (or retain), and a stream with no subscriber
+// is closed.
 
-import { createStreamConnection, type ConnectionDeps, type StreamConnection } from './connection';
+import {
+  createStreamConnection,
+  type BackoffState,
+  type ConnectionDeps,
+  type ServerHold,
+  type StreamConnection,
+} from './connection';
 import {
   topicMatches,
   type ClosedListener,
   type PayloadOf,
   type ResyncHandler,
+  type ResyncInfo,
   type StatusListener,
   type StreamEnvelope,
   type StreamStatus,
@@ -42,6 +50,26 @@ export interface SubscribeOptions {
    */
   stream?: 'shared' | 'keyed';
   key?: string;
+}
+
+/** Resets arriving within this long of the first are one call (a reopen's open + reset). */
+export const DEFAULT_RESYNC_COALESCE_MS = 250;
+/** At least this long between two calls of one resync handler (a flapping server). */
+export const DEFAULT_RESYNC_MIN_INTERVAL_MS = 5000;
+
+export interface ResyncOptions {
+  /**
+   * Whose resets to take: '' (default) the shared stream's, a key for that keyed stream's,
+   * '*' every stream's. A new keyed stream opens with no id to resume from, so it always
+   * raises 'reconnect'; a view that does not own the key must not refetch for it
+   * (#4785 r2 m2).
+   */
+  streamKey?: string;
+  /** Merge every reset within this long of the first into one call (trailing). 0 with
+   * minIntervalMs 0 calls synchronously. */
+  coalesceMs?: number;
+  /** At least this long between two calls; resets in between are merged into the next. */
+  minIntervalMs?: number;
 }
 
 export interface VisibilitySource {
@@ -65,8 +93,17 @@ export interface EventStreamOptions {
 export interface EventStream {
   /** Subscribe to a topic (exact, `module.*` or `*`); returns the unsubscribe. */
   subscribe<T extends string>(topic: T, handler: TopicHandler<PayloadOf<T>>, opts?: SubscribeOptions): () => void;
-  /** Called on core.stream.reset.v1 from any of this tab's streams: refetch over REST. */
-  onResync(handler: ResyncHandler): () => void;
+  /**
+   * Called when a stream must be resynced (core.stream.reset.v1, or a client-raised
+   * 'reconnect'): refetch over REST. By default only the shared stream's resets, merged
+   * per DEFAULT_RESYNC_COALESCE_MS and at most one call per DEFAULT_RESYNC_MIN_INTERVAL_MS.
+   */
+  onResync(handler: ResyncHandler, opts?: ResyncOptions): () => void;
+  /**
+   * Keep the shared stream open with no topic subscriber, for a listener that only needs
+   * the control frames (the shutdown backdrop). Returns the release; idempotent.
+   */
+  retain(): () => void;
   /** Called on core.stream.closed.v1 (shutdown: show the backdrop first). */
   onClosed(listener: ClosedListener): () => void;
   /** Status changes of every stream; `status.streamKey` says which. */
@@ -82,6 +119,16 @@ interface Sub {
   handler: TopicHandler<unknown>;
   key: string; // client-side filter (shared) or the stream key (keyed)
   keyed: boolean;
+}
+
+interface ResyncSub {
+  handler: ResyncHandler;
+  streamKey: string;
+  coalesceMs: number;
+  minIntervalMs: number;
+  timer: ReturnType<typeof setTimeout> | null;
+  pending: ResyncInfo | null;
+  lastCall: number;
 }
 
 function documentVisibility(): VisibilitySource {
@@ -101,10 +148,22 @@ export function createEventStream(options: EventStreamOptions = {}): EventStream
   const keyedOnly = new Set(options.keyedOnlyTopics ?? DEFAULT_KEYED_ONLY_TOPICS);
   const visibility = options.visibility ?? documentVisibility();
   const subs = new Set<Sub>();
-  const resyncHandlers = new Set<ResyncHandler>();
+  const resyncSubs = new Set<ResyncSub>();
   const closedListeners = new Set<ClosedListener>();
   const statusListeners = new Set<StatusListener>();
   const connections = new Map<string, StreamConnection>(); // '' = shared; else the key
+  // Backoff per stream key, kept after its connection is closed for having no subscriber
+  // while a wait is still standing (pruned once it lapses), so a resubscribe does not
+  // reconnect at once (#4785 r2 m1).
+  const backoffs = new Map<string, BackoffState>();
+  let holdUntil = 0;
+  const serverHold: ServerHold = {
+    until: () => holdUntil,
+    extend: (untilMs) => {
+      if (untilMs > holdUntil) holdUntil = untilMs;
+    },
+  };
+  let holds = 0;
   let sharedStatus: StreamStatus = { state: 'idle', attempt: 0, streamKey: '' };
   let pendingSync = false;
   let disposed = false;
@@ -127,6 +186,9 @@ export function createEventStream(options: EventStreamOptions = {}): EventStream
   };
 
   const dispatch = (streamKey: string, env: StreamEnvelope, id: string) => {
+    // The shared stream asks the server to exclude these; should one arrive anyway, it
+    // still reaches no shared subscriber, '*' included (#4785 r2 m3).
+    if (streamKey === '' && keyedOnly.has(env.topic)) return;
     const event: TopicEvent = { topic: env.topic, ts: env.ts, key: env.key ?? '', data: env.data, id };
     for (const s of [...subs]) {
       if (streamKey === '' ? s.keyed : !s.keyed || s.key !== streamKey) continue;
@@ -134,6 +196,42 @@ export function createEventStream(options: EventStreamOptions = {}): EventStream
       if (!s.keyed && s.key !== '' && s.key !== event.key) continue;
       guard(() => s.handler(event), env.topic);
     }
+  };
+
+  const deliverResync = (r: ResyncSub, info: ResyncInfo) => {
+    if (r.streamKey !== '*' && r.streamKey !== info.streamKey) return;
+    if (r.coalesceMs <= 0 && r.minIntervalMs <= 0) {
+      guard(() => r.handler(info), 'core.stream.reset.v1');
+      return;
+    }
+    r.pending = info; // the latest reason wins; the handler refetches either way
+    if (r.timer) return;
+    const now = Date.now();
+    const at = Math.max(now + r.coalesceMs, r.lastCall + r.minIntervalMs);
+    r.timer = setTimeout(() => {
+      r.timer = null;
+      const p = r.pending;
+      r.pending = null;
+      if (!p || !resyncSubs.has(r)) return;
+      r.lastCall = Date.now();
+      guard(() => r.handler(p), 'core.stream.reset.v1');
+    }, at - now);
+  };
+
+  const stopResync = (r: ResyncSub) => {
+    if (r.timer) clearTimeout(r.timer);
+    r.timer = null;
+    r.pending = null;
+    resyncSubs.delete(r);
+  };
+
+  const backoffFor = (streamKey: string): BackoffState => {
+    let b = backoffs.get(streamKey);
+    if (!b) {
+      b = { attempt: 0, notBefore: 0 };
+      backoffs.set(streamKey, b);
+    }
+    return b;
   };
 
   const connectionFor = (streamKey: string): StreamConnection => {
@@ -149,7 +247,7 @@ export function createEventStream(options: EventStreamOptions = {}): EventStream
       exclude: () => (streamKey === '' ? [...keyedOnly].sort() : []),
       onEvent: (env, id) => dispatch(streamKey, env, id),
       onReset: (reason) => {
-        for (const h of [...resyncHandlers]) guard(() => h({ reason, streamKey }), 'core.stream.reset.v1');
+        for (const r of [...resyncSubs]) deliverResync(r, { reason, streamKey });
       },
       onClosed: (reason) => {
         for (const l of [...closedListeners]) guard(() => l({ reason, streamKey }), 'core.stream.closed.v1');
@@ -162,6 +260,8 @@ export function createEventStream(options: EventStreamOptions = {}): EventStream
       connectTimeoutMs: options.connectTimeoutMs,
       idleTimeoutMs: options.idleTimeoutMs,
       deps: options.deps,
+      backoff: backoffFor(streamKey),
+      serverHold,
     });
     connections.set(streamKey, c);
     return c;
@@ -176,6 +276,7 @@ export function createEventStream(options: EventStreamOptions = {}): EventStream
       pendingSync = false;
       if (disposed) return;
       const wanted = new Set<string>();
+      if (holds > 0) wanted.add('');
       for (const s of subs) wanted.add(s.keyed ? s.key : '');
       for (const k of wanted) {
         const c = connectionFor(k);
@@ -195,6 +296,10 @@ export function createEventStream(options: EventStreamOptions = {}): EventStream
           connections.delete(k);
           signatures.delete(k);
         }
+      }
+      const now = Date.now();
+      for (const [k, b] of backoffs) {
+        if (!connections.has(k) && b.notBefore <= now) backoffs.delete(k);
       }
     });
   };
@@ -226,9 +331,30 @@ export function createEventStream(options: EventStreamOptions = {}): EventStream
         sync();
       };
     },
-    onResync(handler) {
-      resyncHandlers.add(handler);
-      return () => void resyncHandlers.delete(handler);
+    onResync(handler, opts = {}) {
+      const r: ResyncSub = {
+        handler,
+        streamKey: opts.streamKey ?? '',
+        coalesceMs: opts.coalesceMs ?? DEFAULT_RESYNC_COALESCE_MS,
+        minIntervalMs: opts.minIntervalMs ?? DEFAULT_RESYNC_MIN_INTERVAL_MS,
+        timer: null,
+        pending: null,
+        lastCall: -Infinity,
+      };
+      resyncSubs.add(r);
+      return () => stopResync(r);
+    },
+    retain() {
+      if (disposed) throw new Error('event stream: retain after dispose');
+      holds += 1;
+      sync();
+      let done = false;
+      return () => {
+        if (done) return;
+        done = true;
+        holds -= 1;
+        sync();
+      };
     },
     onClosed(listener) {
       closedListeners.add(listener);
@@ -243,6 +369,9 @@ export function createEventStream(options: EventStreamOptions = {}): EventStream
       disposed = true;
       stopVisibility();
       subs.clear();
+      holds = 0;
+      for (const r of [...resyncSubs]) stopResync(r);
+      backoffs.clear();
       for (const c of connections.values()) c.close('idle');
       connections.clear();
     },

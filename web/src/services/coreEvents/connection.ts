@@ -48,6 +48,35 @@ export interface ConnectionDeps {
   random: () => number;
 }
 
+/**
+ * Reconnect state that outlives one connection object. The manager keeps one per
+ * stream key, so a stream that is closed for having no subscriber and then wanted again
+ * (a route change, a run's log reopened) resumes its backoff instead of starting over
+ * and reconnecting at once under a standing wait (#4785 r2 m1).
+ */
+export interface BackoffState {
+  /** Consecutive failed attempts since the last good open. */
+  attempt: number;
+  /** Never connect before this (epoch ms); zeroed only by a good open. */
+  notBefore: number;
+}
+
+/**
+ * A wait that holds back every stream of the tab. The server's 429 (too many streams for
+ * this user) and 503 (too many streams, not ready, closing) are about the user or the
+ * server, not one stream (core/realtime/handler.go), so their Retry-After applies to a
+ * new keyed stream as much as to the shared one that was refused.
+ */
+export interface ServerHold {
+  /** Epoch ms before which no stream may connect (0 for none). */
+  until(): number;
+  /** A refusal named a Retry-After: hold every stream until `untilMs` (never shortens). */
+  extend(untilMs: number): void;
+}
+
+/** Statuses whose Retry-After is about the user or the server, not this one stream. */
+const SERVER_WIDE_REFUSALS = new Set([429, 503]);
+
 export interface ConnectionOptions {
   /** Server-side key narrowing this stream to one entity ('' for none). */
   key: string;
@@ -64,6 +93,10 @@ export interface ConnectionOptions {
   connectTimeoutMs?: number;
   idleTimeoutMs?: number;
   deps?: Partial<ConnectionDeps>;
+  /** Backoff state to read and write (the manager's, per stream key); a private one when absent. */
+  backoff?: BackoffState;
+  /** The tab-wide hold from a server-wide refusal; none when absent. */
+  serverHold?: ServerHold;
 }
 
 export interface StreamConnection {
@@ -127,28 +160,34 @@ export function createStreamConnection(opts: ConnectionOptions): StreamConnectio
   const connectTimeoutMs = opts.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
   const idleTimeoutMs = opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
 
-  let status: StreamStatus = { state: 'idle', attempt: 0, streamKey: opts.key };
   let running = false;
   let generation = 0; // bumps on every close/restart so a stale loop stops itself
   let controller: AbortController | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let wakeSleep: (() => void) | null = null;
   let lastEventId = '';
-  let attempt = 0;
+  // backoff.notBefore: never sooner than this (epoch ms). Set from every failed attempt's
+  // backoff and Retry-After, honoured by open() and restart() too, reset only by a good open.
+  const backoff: BackoffState = opts.backoff ?? { attempt: 0, notBefore: 0 };
+  const serverHold = opts.serverHold;
+  let status: StreamStatus = { state: 'idle', attempt: backoff.attempt, streamKey: opts.key };
   let closedReason: ClosedReason | undefined;
   let closedThisAttempt = false;
-  // Never sooner than this (epoch ms): set from every failed attempt's backoff and
-  // Retry-After, honoured by open() and restart() too, reset only by a good open.
-  let notBefore = 0;
   let lastError: unknown;
   // Missed events cannot be replayed when the attempt sent no Last-Event-ID (the server
   // sends no reset then, sse/broker.go), nor after the tab was hidden: tell the resync
   // handlers on the next good open (reason 'reconnect').
   let sentLastId = false;
   let resyncOnOpen = false;
+  // The server writes opened, then a reset if the subscribe owed one, then the replay
+  // (core/internal/sse/serve.go). When this attempt's open already told the resync
+  // handlers ('reconnect'), a 'gap' or 'restart' reset before any event says the same
+  // thing again: swallow it, so one reopen is one resync (#4785 r2 m4). An 'overflow'
+  // is a loss after the open and is never swallowed.
+  let resyncedAtOpen = false;
 
   const setStatus = (state: StreamState, extra: Partial<StreamStatus> = {}) => {
-    status = { state, attempt, streamKey: opts.key, ...(closedReason ? { closedReason } : {}), ...extra };
+    status = { state, attempt: backoff.attempt, streamKey: opts.key, ...(closedReason ? { closedReason } : {}), ...extra };
     opts.onStatus(status);
   };
 
@@ -180,6 +219,7 @@ export function createStreamConnection(opts: ConnectionOptions): StreamConnectio
     const ctl = new AbortController();
     controller = ctl;
     closedThisAttempt = false;
+    resyncedAtOpen = false;
     const url = buildStreamUrl(baseUrl, opts.topics(), opts.key, opts.exclude?.() ?? []);
     let connectTimedOut = false;
     const connectTimer = setTimeout(() => {
@@ -283,19 +323,27 @@ export function createStreamConnection(opts: ConnectionOptions): StreamConnectio
     if (!isEnvelope(parsed)) return;
     switch (parsed.topic) {
       case TOPIC_OPENED:
-        attempt = 0;
-        notBefore = 0;
+        backoff.attempt = 0;
+        backoff.notBefore = 0;
         lastError = undefined;
         closedReason = undefined;
         setStatus('open');
         if (resyncOnOpen || !sentLastId) {
           resyncOnOpen = false;
+          resyncedAtOpen = true;
           opts.onReset('reconnect');
         }
         return;
-      case TOPIC_RESET:
-        opts.onReset(reasonOf(parsed.data));
+      case TOPIC_RESET: {
+        const reason = reasonOf(parsed.data);
+        const owedBySubscribe = reason === 'gap' || reason === 'restart';
+        if (resyncedAtOpen && owedBySubscribe) {
+          resyncedAtOpen = false;
+          return;
+        }
+        opts.onReset(reason);
         return;
+      }
       case TOPIC_CLOSED: {
         const reason = reasonOf(parsed.data);
         closedReason = reason;
@@ -304,6 +352,7 @@ export function createStreamConnection(opts: ConnectionOptions): StreamConnectio
         return;
       }
       default:
+        resyncedAtOpen = false;
         if (id !== '') lastEventId = id;
         opts.onEvent(parsed, id);
     }
@@ -318,12 +367,27 @@ export function createStreamConnection(opts: ConnectionOptions): StreamConnectio
           await sleep(wait, gen);
         }
         if (gen !== generation) return;
+        // Another stream of this tab may have been refused server-wide while this one
+        // slept: wait out that hold too before connecting.
+        const held = holdRemaining();
+        if (held > 0) {
+          wait = held;
+          continue;
+        }
         setStatus('connecting');
         const end = await attemptOnce(gen);
         if (gen !== generation) return;
-        attempt += 1;
-        wait = reconnectDelay(attempt, end.retryAfterMs, random);
-        notBefore = Date.now() + wait;
+        backoff.attempt += 1;
+        wait = reconnectDelay(backoff.attempt, end.retryAfterMs, random);
+        backoff.notBefore = Date.now() + wait;
+        if (
+          serverHold &&
+          end.retryAfterMs != null &&
+          end.error instanceof StreamRefusedError &&
+          SERVER_WIDE_REFUSALS.has(end.error.status)
+        ) {
+          serverHold.extend(Date.now() + end.retryAfterMs);
+        }
         lastError = end.error ?? undefined;
       }
     } catch {
@@ -331,7 +395,9 @@ export function createStreamConnection(opts: ConnectionOptions): StreamConnectio
     }
   };
 
-  const remaining = () => clampRetryAfter(notBefore - Date.now());
+  // The server hold is checked by the loop before every attempt, the first included.
+  const holdRemaining = () => (serverHold ? clampRetryAfter(serverHold.until() - Date.now()) : 0);
+  const remaining = () => clampRetryAfter(backoff.notBefore - Date.now());
 
   return {
     open() {

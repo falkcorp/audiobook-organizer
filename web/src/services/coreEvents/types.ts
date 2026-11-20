@@ -23,8 +23,11 @@ export const TOPIC_OPENED = 'core.stream.opened.v1';
 export const TOPIC_RESET = 'core.stream.reset.v1';
 export const TOPIC_CLOSED = 'core.stream.closed.v1';
 
-/** Why the server says it reset the stream: restart, gap or overflow (05-realtime 4.2). */
-/** 'reconnect' is raised by the client itself: a (re)open that had no Last-Event-ID to resume from, or a reopen after the tab was hidden. */
+/**
+ * Why the stream must be resynced. 'restart', 'gap' and 'overflow' come from the server's
+ * core.stream.reset.v1 (05-realtime 4.2). 'reconnect' is raised by the client itself: a
+ * (re)open that had no Last-Event-ID to resume from, or a reopen after the tab was hidden.
+ */
 export type ResetReason = 'restart' | 'gap' | 'overflow' | 'reconnect' | (string & {});
 /** Why the server closed the stream (05-realtime 4.2). 'shutdown' means show the backdrop. */
 export type ClosedReason =

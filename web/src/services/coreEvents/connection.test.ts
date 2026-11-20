@@ -7,7 +7,7 @@ import { ApiAuthRedirectError, isAuthRedirectError } from '@mediacore/api-client
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createFakeServer, frameText, problemResponse } from '../../test/eventStreamFake';
-import { buildStreamUrl, createStreamConnection, type ConnectionOptions } from './connection';
+import { buildStreamUrl, createStreamConnection, type BackoffState, type ConnectionOptions, type ServerHold } from './connection';
 import {
   StreamProtocolError,
   StreamRefusedError,
@@ -347,13 +347,18 @@ describe('open, close, restart', () => {
     conn.close('idle');
   });
 
-  it('a good open clears the wait: close then open connects at once', async () => {
+  // The wait has always lapsed by the time a later attempt opens, unless the wall clock
+  // stepped back meanwhile (an NTP correction, a resumed laptop): then only the zeroing
+  // on a good open stops a stale wait from holding a healthy stream off (#4785 r2 n1).
+  it('a good open clears the wait even after the wall clock steps back: close then open connects at once', async () => {
     const { server, conn } = setup();
     server.answer(() => problemResponse(429, 'rate_limited', 'x', { 'Retry-After': '30' }));
     const s = server.openStream();
     server.openStream();
     conn.open();
     await tick(30000);
+    expect(server.calls).toHaveLength(2);
+    vi.setSystemTime(Date.now() - 5 * 60 * 1000);
     s.control(TOPIC_OPENED, {});
     await tick();
     conn.close('hidden');
@@ -413,5 +418,176 @@ describe('open, close, restart', () => {
     await tick();
     expect(server.calls).toHaveLength(1);
     conn.close('idle');
+  });
+});
+
+// #4785 r2 m4: a reopen that already resynced at the open does not resync again for the
+// reset the subscribe owed; a later loss still does.
+describe('one resync per reopen', () => {
+  async function hiddenReopen() {
+    const ctx = setup();
+    const s1 = ctx.server.openStream();
+    ctx.server.openStream();
+    ctx.conn.open();
+    await tick();
+    s1.control(TOPIC_OPENED, {});
+    s1.event('n-1', RUN, {}, 'r');
+    await tick();
+    ctx.resets.length = 0;
+    ctx.conn.close('hidden');
+    ctx.conn.open();
+    await tick();
+    return { ...ctx, s2: ctx.server.streams.at(-1)! };
+  }
+
+  for (const reason of ['gap', 'restart']) {
+    it(`swallows a ${reason} reset right after an open that raised reconnect`, async () => {
+      const { conn, resets, s2 } = await hiddenReopen();
+      s2.control(TOPIC_OPENED, {});
+      s2.control(TOPIC_RESET, { reason });
+      await tick();
+      expect(resets).toEqual(['reconnect']);
+      conn.close('idle');
+    });
+  }
+
+  it('never swallows an overflow', async () => {
+    const { conn, resets, s2 } = await hiddenReopen();
+    s2.control(TOPIC_OPENED, {});
+    s2.control(TOPIC_RESET, { reason: 'overflow' });
+    await tick();
+    expect(resets).toEqual(['reconnect', 'overflow']);
+    conn.close('idle');
+  });
+
+  it('a reset after an event of the same attempt is a new loss and reaches onReset', async () => {
+    const { conn, resets, s2 } = await hiddenReopen();
+    s2.control(TOPIC_OPENED, {});
+    s2.event('n-2', RUN, {}, 'r');
+    s2.control(TOPIC_RESET, { reason: 'gap' });
+    await tick();
+    expect(resets).toEqual(['reconnect', 'gap']);
+    conn.close('idle');
+  });
+
+  it('the swallow does not outlive its attempt: a later resumed open passes a gap through', async () => {
+    const { server, conn, resets, s2 } = await hiddenReopen();
+    const s3 = server.openStream();
+    s2.control(TOPIC_OPENED, {}); // raises reconnect; no event follows
+    s2.end();
+    await tick(3000);
+    expect(server.calls.at(-1)!.headers['last-event-id']).toBe('n-1');
+    s3.control(TOPIC_OPENED, {}); // resumed: raises nothing
+    s3.control(TOPIC_RESET, { reason: 'gap' });
+    await tick();
+    expect(resets).toEqual(['reconnect', 'gap']);
+    conn.close('idle');
+  });
+
+  it('a resumed open that raised no resync passes the server reset through', async () => {
+    const { server, conn, resets } = setup();
+    const s1 = server.openStream();
+    const s2 = server.openStream();
+    conn.open();
+    await tick();
+    s1.control(TOPIC_OPENED, {});
+    s1.event('n-1', RUN, {}, 'r');
+    s1.end();
+    await tick(3000);
+    s2.control(TOPIC_OPENED, {});
+    s2.control(TOPIC_RESET, { reason: 'gap' });
+    await tick();
+    expect(resets).toEqual(['reconnect', 'gap']);
+    conn.close('idle');
+  });
+});
+
+// #4785 r2 m1 at the connection level: injected state outlives the connection object.
+describe('shared backoff state and server hold', () => {
+  function hold(): ServerHold & { value: () => number } {
+    let until = 0;
+    return {
+      until: () => until,
+      extend: (u) => {
+        if (u > until) until = u;
+      },
+      value: () => until,
+    };
+  }
+
+  it('reports the attempt of the BackoffState it was given before it opens', () => {
+    const { conn } = setup({ backoff: { attempt: 2, notBefore: 0 } });
+    expect(conn.status).toMatchObject({ state: 'idle', attempt: 2 });
+  });
+
+  it('a new connection on the same BackoffState honours the standing wait and attempt', async () => {
+    const backoff: BackoffState = { attempt: 0, notBefore: 0 };
+    const first = setup({ backoff });
+    first.server.answer(() => problemResponse(429, 'rate_limited', 'x', { 'Retry-After': '30' }));
+    first.conn.open();
+    await tick();
+    first.conn.close('idle');
+    expect(backoff.attempt).toBe(1);
+    const second = setup({ backoff });
+    second.server.openStream();
+    second.conn.open();
+    await tick(29999);
+    expect(second.server.calls).toHaveLength(0);
+    expect(second.statuses.at(-1)).toMatchObject({ state: 'reconnecting', attempt: 1 });
+    await tick(1);
+    expect(second.server.calls).toHaveLength(1);
+    second.conn.close('idle');
+  });
+
+  for (const status of [429, 503]) {
+    it(`a ${status} Retry-After extends the server hold, and another connection waits for it`, async () => {
+      const h = hold();
+      const a = setup({ serverHold: h });
+      a.server.answer(() => problemResponse(status, 'x', 'x', { 'Retry-After': '40' }));
+      a.conn.open();
+      await tick();
+      expect(h.value()).toBe(Date.now() + 40000);
+      const b = setup({ key: 'run-1', serverHold: h });
+      b.server.openStream();
+      b.conn.open();
+      await tick(39999);
+      expect(b.server.calls).toHaveLength(0);
+      await tick(1);
+      expect(b.server.calls).toHaveLength(1);
+      a.conn.close('idle');
+      b.conn.close('idle');
+    });
+  }
+
+  it('a 400 or 403 Retry-After, or a 429 without one, leaves the server hold alone', async () => {
+    const h = hold();
+    const c = setup({ serverHold: h });
+    c.server.answer(() => problemResponse(400, 'unknown_topic', 'x', { 'Retry-After': '40' }));
+    c.server.answer(() => problemResponse(403, 'forbidden', 'x', { 'Retry-After': '40' }));
+    c.server.answer(() => problemResponse(429, 'rate_limited', 'x'));
+    c.conn.open();
+    await tick();
+    await tick(40000);
+    await tick(40000);
+    expect(c.server.calls.length).toBeGreaterThanOrEqual(3);
+    expect(h.value()).toBe(0);
+    c.conn.close('idle');
+  });
+
+  it('a hold raised while this stream sleeps on a shorter backoff extends its wait', async () => {
+    const h = hold();
+    const c = setup({ serverHold: h });
+    c.server.answer(() => problemResponse(400, 'bad', 'x')); // 3 s backoff
+    c.server.openStream();
+    c.conn.open();
+    await tick();
+    expect(c.server.calls).toHaveLength(1);
+    h.extend(Date.now() + 20000);
+    await tick(3000);
+    expect(c.server.calls).toHaveLength(1);
+    expect(c.statuses.at(-1)).toMatchObject({ state: 'reconnecting' });
+    await tick(17000);
+    expect(c.server.calls).toHaveLength(2);
+    c.conn.close('idle');
   });
 });

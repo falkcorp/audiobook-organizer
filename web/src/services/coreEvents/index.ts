@@ -8,10 +8,16 @@
 
 export { reconnectDelay, parseRetryAfter, BASE_DELAY_MS, MAX_DELAY_MS } from './backoff';
 export { buildStreamUrl, EVENTS_PATH } from './connection';
-export { createEventStream, getEventStream, resetSharedEventStream } from './manager';
-export type { EventStream, EventStreamOptions, SubscribeOptions, VisibilitySource } from './manager';
+export {
+  createEventStream,
+  getEventStream,
+  resetSharedEventStream,
+  DEFAULT_RESYNC_COALESCE_MS,
+  DEFAULT_RESYNC_MIN_INTERVAL_MS,
+} from './manager';
+export type { EventStream, EventStreamOptions, ResyncOptions, SubscribeOptions, VisibilitySource } from './manager';
 export { useResync, useStreamClosed, useStreamStatus, useTopic } from './hooks';
-export type { UseTopicOptions } from './hooks';
+export type { UseResyncOptions, UseTopicOptions } from './hooks';
 export { createSseParser } from './sseParser';
 export type { SseFrame, SseParser } from './sseParser';
 export * from './types';
