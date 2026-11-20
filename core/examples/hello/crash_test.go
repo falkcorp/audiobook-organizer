@@ -1,5 +1,5 @@
 // file: core/examples/hello/crash_test.go
-// version: 1.0.9
+// version: 1.1.0
 // guid: d2573b3f-2985-4783-baa2-5b0ee3888984
 // last-edited: 2026-11-19
 
@@ -7,14 +7,21 @@ package hello_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/pebble/v2"
 	"github.com/cockroachdb/pebble/v2/vfs"
 
 	"github.com/falkcorp/mediacore/app"
@@ -23,7 +30,9 @@ import (
 	ipebble "github.com/falkcorp/mediacore/internal/pebble"
 	"github.com/falkcorp/mediacore/kernel"
 	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/keys"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 	"github.com/falkcorp/mediacore/storage/restorejournal/restorejournaltest"
 	"github.com/falkcorp/mediacore/tasks"
@@ -553,4 +562,216 @@ func rejected(t *testing.T, name string, edit func(*restorejournal.Intent)) cras
 		t.Fatalf("fixture %s: stage: %v", name, err)
 	}
 	return f
+}
+
+// The secrets writes of the config boot (F3-07: the keyring file and
+// c/secrets/meta, P4b first) as hello meets them. hello holds no secret of
+// its own, so sealer (below) writes one through Deps.Secrets, the module scope
+// every module has, and every cell asks the same questions of the recovery
+// boot: the keyring is whole with no stale temporary file beside it,
+// c/secrets/meta names this app and a key number at least the keyring's, and
+// the sealed value reads back.
+const (
+	sealerName  secrets.Name = "modules.hello.oracle_token"
+	sealerValue              = "wayne-enterprises-uplink-7"
+)
+
+// sealer is hello that, in Register, reads its secret back and writes it
+// when it was never set. Register runs once the store is open, after the
+// keyring and c/secrets/meta, so a boot that sealed it under a keyring that
+// was then lost fails the next boot's Register (secrets.ErrKeyUnavailable,
+// or Open's ErrKeyMissing before it) instead of passing silently. ready
+// counts the boots that read the value back.
+type sealer struct {
+	*hello.Module
+	ready *atomic.Int64
+}
+
+func (m sealer) Register(r *module.Registrar) error {
+	if err := m.Module.Register(r); err != nil {
+		return err
+	}
+	ctx, sc := context.Background(), r.Deps().Secrets
+	if _, _, err := sc.Get(ctx, sealerName); errors.Is(err, secrets.ErrNotSet) {
+		if _, err := sc.Put(ctx, sealerName, secrets.NewValue(sealerValue), "user:alfred"); err != nil {
+			return fmt.Errorf("hello sealer: put: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("hello sealer: get: %w", err)
+	}
+	v, _, err := sc.Get(ctx, sealerName)
+	if err != nil {
+		return fmt.Errorf("hello sealer: read back: %w", err)
+	}
+	if v.Reveal() != sealerValue {
+		return errors.New("hello sealer: the secret reads back as another value")
+	}
+	m.ready.Add(1)
+	return nil
+}
+
+// helloSecretsState is the secrets files and rows a boot left, read straight
+// from fsys.
+type helloSecretsState struct {
+	keyring    []byte // nil when the file does not exist
+	keyringMax int    // the highest key number in it
+	temps      []string
+	meta       map[string]any // c/secrets/meta's JSON; nil when the row does not exist
+}
+
+func readHelloSecrets(t *testing.T, fsys vfs.FS, f crashmatrix.Fixture) helloSecretsState {
+	t.Helper()
+	var st helloSecretsState
+	names, err := fsys.List(f.StateDir)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("list the state directory: %v", err)
+	}
+	for _, n := range names {
+		if strings.HasPrefix(n, "secrets.keyring.tmp-") {
+			st.temps = append(st.temps, n)
+		}
+	}
+	if h, err := fsys.Open(filepath.Join(f.StateDir, "secrets.keyring")); err == nil {
+		raw := make([]byte, 1<<16)
+		n, rerr := h.ReadAt(raw, 0)
+		if cerr := h.Close(); cerr != nil || (rerr != nil && !errors.Is(rerr, io.EOF)) {
+			t.Fatalf("read the keyring: %v %v", rerr, cerr)
+		}
+		st.keyring = raw[:n]
+		var kf struct {
+			Keys []struct {
+				ID string `json:"id"`
+			} `json:"keys"`
+		}
+		if err := json.Unmarshal(st.keyring, &kf); err != nil {
+			return st // a keyring that does not parse is reported by the caller
+		}
+		for _, k := range kf.Keys {
+			if num, err := strconv.Atoi(strings.TrimLeft(k.ID, "kd")); err == nil {
+				st.keyringMax = max(st.keyringMax, num)
+			}
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("open the keyring: %v", err)
+	}
+	db := dbPath(f)
+	if _, err := fsys.Stat(db); err != nil {
+		return st
+	}
+	pdb, err := pebble.Open(db, &pebble.Options{FS: fsys, ReadOnly: true, ErrorIfNotExists: true})
+	if err != nil {
+		t.Fatalf("open the store read-only: %v", err)
+	}
+	raw, closer, err := pdb.Get(append([]byte("c/secrets/"), keys.Join(keys.Str("meta"))...))
+	switch {
+	case errors.Is(err, pebble.ErrNotFound):
+	case err != nil:
+		t.Fatalf("read c/secrets/meta: %v", err)
+	default:
+		if err := json.Unmarshal(raw, &st.meta); err != nil {
+			t.Fatalf("c/secrets/meta does not parse: %v", err)
+		}
+		_ = closer.Close()
+	}
+	if err := pdb.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+// helloSecretsViolations is what is wrong with a state that must be
+// consistent: a keyring that exists parses; c/secrets/meta, when present,
+// names hello and a max_key_id no lower than the keyring's (a keyring
+// numbered past it would give a retired key's number to new material).
+func helloSecretsViolations(st helloSecretsState, afterRecovery bool) []string {
+	var out []string
+	if st.keyring != nil && !json.Valid(st.keyring) {
+		out = append(out, "secrets.keyring exists and is not whole JSON")
+	}
+	if st.keyring != nil && st.keyringMax == 0 {
+		out = append(out, "secrets.keyring names no key number")
+	}
+	if st.meta != nil {
+		if st.meta["app_id"] != "hello" {
+			out = append(out, fmt.Sprintf("c/secrets/meta names app %v, not hello", st.meta["app_id"]))
+		}
+		if mk, _ := st.meta["max_key_id"].(float64); st.keyring != nil && int(mk) < st.keyringMax {
+			out = append(out, fmt.Sprintf("c/secrets/meta max_key_id %d is below the keyring's %d", int(mk), st.keyringMax))
+		}
+	}
+	if afterRecovery {
+		switch {
+		case st.keyring == nil:
+			out = append(out, "no keyring after the recovery boot")
+		case st.meta == nil:
+			out = append(out, "no c/secrets/meta after the recovery boot")
+		}
+		if len(st.temps) > 0 {
+			out = append(out, fmt.Sprintf("stale keyring temporary files left after the recovery boot: %v", st.temps))
+		}
+	}
+	return out
+}
+
+// TestBootCrashMatrix_SecretsCells kills hello's first boot at each write of
+// the keyring (the exclusive temporary file, its fsync, the link, the temp's
+// removal, the directory fsync) and of c/secrets/meta, and reboots: the keyring
+// is whole or absent after the kill, and the recovery boot ends with the
+// keyring, a c/secrets/meta that names hello and covers the keyring, no stale
+// temporary file, and the sealed secret read back.
+func TestBootCrashMatrix_SecretsCells(t *testing.T) {
+	cells := []struct {
+		label string
+		nth   int
+		// sealed: the fixture is a state already booted once, with the
+		// secret sealed under its keyring, so the recovery boot must read
+		// the value an earlier boot wrote, not write it again.
+		sealed bool
+	}{
+		{"secrets.keyring", 0, false}, {"secrets.keyring", 1, false}, {"secrets.keyring", 2, false},
+		{"secrets.keyring", 3, false}, {"secrets.keyring", 4, false},
+		{"secrets.meta", 0, false},
+		// A boot over a present keyring syncs its directory before it trusts
+		// the file (secrets.keyring.load-sync); killed there, the sealed
+		// secret and its keyring both survive.
+		{"secrets.keyring.load-sync", 0, true},
+	}
+	for _, c := range cells {
+		t.Run(fmt.Sprintf("%s-%d", strings.TrimPrefix(c.label, "secrets."), c.nth), func(t *testing.T) {
+			t.Parallel()
+			var ready atomic.Int64
+			mod := sealer{Module: hello.New(), ready: &ready}
+			f := crashmatrix.Fixture{Name: "secrets-cell", StateDir: t.TempDir()}
+			if c.sealed {
+				boot(t, f, mod)
+				if ready.Load() == 0 {
+					t.Fatal("the fixture boot did not seal and read back the secret")
+				}
+			}
+			clone, err := crashmatrix.KillAt(t, f, build(mod), c.label, c.nth)(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ready.Store(0) // KillAt's own boot ran to readiness; only a recovery boot counts
+			if v := helloSecretsViolations(readHelloSecrets(t, clone, f), false); len(v) > 0 {
+				t.Fatalf("the state a kill before %s #%d left: %v", c.label, c.nth, v)
+			}
+			if err := os.RemoveAll(f.StateDir); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := vfs.Clone(clone, vfs.Default, f.StateDir, f.StateDir); err != nil {
+				t.Fatalf("restore the crash clone: %v", err)
+			}
+			var errs []error
+			for boot := 0; boot < 3 && ready.Load() == 0; boot++ {
+				errs = append(errs, crashmatrix.Boot(t, build(mod), f))
+			}
+			if ready.Load() == 0 {
+				t.Fatalf("no recovery boot read the sealed secret back: %v", errs)
+			}
+			if v := helloSecretsViolations(readHelloSecrets(t, vfs.Default, f), true); len(v) > 0 {
+				t.Fatalf("after the recovery boot: %v", v)
+			}
+		})
+	}
 }
