@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/writes_oracle_test.go
-// version: 3.6.0
+// version: 3.7.0
 // guid: 40eadd67-76ac-419f-a3fe-7d1ed5e586e2
 // last-edited: 2026-11-19
 
@@ -2086,6 +2086,15 @@ func TestJobWrites_NoUnresolvedCalls(t *testing.T) {
 	for name := range oracleOutsideIfaceAllowed {
 		if !used["iface:"+name] {
 			t.Errorf("oracleOutsideIfaceAllowed has %s, but no job calls that method any more: remove it", name)
+		}
+		// Only interfaces declared outside the module, and only methods named
+		// like no write: a module interface's implementations are walked, and
+		// a write-named method is judged by its name, never allowed.
+		if strings.HasPrefix(name, oracleModule) {
+			t.Errorf("oracleOutsideIfaceAllowed has %s, an interface the module declares: allow its call by key in oracleUnresolvedAllowed, with the implementations traced", name)
+		}
+		if oracleVerb.MatchString(name[strings.LastIndex(name, ".")+1:]) {
+			t.Errorf("oracleOutsideIfaceAllowed has %s, a method named like a write: it is judged by its name and is never allowed", name)
 		}
 	}
 }
