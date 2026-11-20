@@ -33,6 +33,13 @@ func versionFields() []string {
 	return []string{"app", "version", "commit", "ui_build_id", "binary_id"}
 }
 
+// VersionFields returns a copy of the field list of --version-json, the one
+// the updater's step-3 self-test requires of a binary's answer. A host binary
+// that emits --version-json checks its own field names against it.
+func VersionFields() []string {
+	return versionFields()
+}
+
 // probeResult is one finished run of a binary.
 type probeResult struct {
 	Stdout string

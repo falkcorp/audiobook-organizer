@@ -186,7 +186,7 @@ into one of the curated sections below, is a normal direct edit.
   - F8-04's brief says to add `updater fetch-release` to `core/app/offline.go`; F8-02 already did, so skip that step.
   - Owner: F8-04.
 
-- [ ] **updater: the self-test's `--version-json` fields are pinned in two places that no test ties together** `core/updater/selftest.go` reads `{app, version, commit, ui_build_id, binary_id}` and ABO's `main.go` prints them from `versionInfo`. A rename of a json tag on either side is caught only by a release that then fails its self-test. A root test that marshals `versionInfo` and compares its tags with core's `versionFields` closes it; it was left out because F8-02 may not edit `main.go`'s package.
+- [x] **updater: the self-test's `--version-json` fields are pinned in two places that no test ties together** `core/updater/selftest.go` reads `{app, version, commit, ui_build_id, binary_id}` and ABO's `main.go` prints them from `versionInfo`. A rename of a json tag on either side is caught only by a release that then fails its self-test. A root test that marshals `versionInfo` and compares its tags with core's `versionFields` closes it; it was left out because F8-02 may not edit `main.go`'s package.
   - Owner: F8-04 (it removes the gin path, after which the task path is the only user).
 
 - [ ] **TODO-MERGE-CLEANUP-REPLAN-GUARDS** The `maintenance.merge-cleanup` Replan has no
