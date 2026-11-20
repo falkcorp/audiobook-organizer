@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g2.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: f05c0cfb-33a6-46e3-a29b-4ab6825825dc
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -587,6 +587,15 @@ type t6g2Deps struct {
 	// ReportPath resolves a report file's location (book-shape-report's TSV):
 	// explicit if given, else the default directory under the library root. A
 	// file write is not a tasks.Writer write, so it is a dep of its own.
+	//
+	// It is the ONLY thing standing between a caller-supplied reportPath and the
+	// file the core writes, so an implementation MUST return the result of
+	// Plugin.resolveReportPath (library.ReportPathNotify): that is what confines
+	// the path to {root_dir}/.reports and vets a file already there. A hook that
+	// returns the explicit path as given hands the caller any file the server can
+	// write; the report writers open the returned path without following links
+	// but cannot tell whether its directory is the right one. Tests may stub it
+	// with a fixed path; production wiring must not.
 	ReportPath func(explicit, fileName string) (string, error)
 }
 

@@ -1,7 +1,7 @@
 // file: core/library/libroot_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 8e1c5a73-d2b4-4f69-a0e8-3b7f9d1c6a25
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package library
 
@@ -28,6 +28,11 @@ func TestMounted(t *testing.T) {
 		{"missing directory", filepath.Join(t.TempDir(), "nope"), "unreadable"},
 		{"empty directory (unmounted share)", t.TempDir(), "no library content"},
 		{"populated directory", populated, ""},
+		// The path resolvers trim the root, so a root with stray whitespace in the
+		// configuration is judged as the directory they would write under.
+		{"populated directory, padded with whitespace", "  " + populated + "\t\n", ""},
+		{"only whitespace", " \t ", "not configured"},
+		{"empty directory, padded with whitespace", " " + t.TempDir() + " ", "no library content"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -577,5 +582,252 @@ func TestReportPathNotifyExplicitRefusesASymlinkedReportsDir(t *testing.T) {
 	}
 	if ents, _ := os.ReadDir(outside); len(ents) != 0 {
 		t.Fatalf("a refused path wrote through the symlinked report directory: %v", ents)
+	}
+}
+
+// A refused explicit path leaves nothing behind: every refusal about the shape of
+// the path is made before the report (or ledger) directory is prepared, so a root
+// that has no such directory yet still has none afterwards, and no probe file was
+// written. The refusals that need the directory (a file in the way, a foreign
+// owner) can only come after the path was accepted as a name in it.
+func TestRefusedExplicitPathCreatesNothing(t *testing.T) {
+	refused := func(root, reports, ledger string) []string {
+		outside := t.TempDir()
+		alias := filepath.Join(t.TempDir(), "alias")
+		if err := os.Symlink(root, alias); err != nil {
+			t.Fatal(err)
+		}
+		return []string{
+			filepath.Join("..", "escaped.tsv"),
+			filepath.Join(outside, "escaped.tsv"),
+			filepath.Join(root, "Gotham", "escaped.tsv"),
+			reports, ledger, root,
+			filepath.Join(reports, "x", "r.tsv"),
+			filepath.Join(ledger, "x", "r.tsv"),
+			filepath.Join(reports, "..", "escaped.tsv"),
+			filepath.Join(alias, "Gotham", "r.tsv"),
+			filepath.Join(alias, ReportDirName, "x", "r.tsv"),
+			filepath.Join("batman", "r.tsv"),
+			"." + string(filepath.Separator) + "r.tsv",
+			"bad\x00.tsv", ".", "..",
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		notify func(root, explicit string) (string, error)
+	}{
+		{"report", func(root, explicit string) (string, error) {
+			return ReportPathNotify(root, explicit, "ignored.tsv", nil)
+		}},
+		{"ledger", func(root, explicit string) (string, error) {
+			return LedgerPathNotify(root, explicit, "ignored.tsv", nil)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, reports := reportRootFor(t)
+			ledger := filepath.Join(root, LedgerDirName)
+			for _, explicit := range refused(root, reports, ledger) {
+				if got, err := tc.notify(root, explicit); err == nil {
+					t.Fatalf("path %q was accepted as %q", explicit, got)
+				}
+				ents, err := os.ReadDir(root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var names []string
+				for _, e := range ents {
+					names = append(names, e.Name())
+				}
+				if len(names) != 1 || names[0] != "Gotham" {
+					t.Fatalf("refusing %q left %v in the root, want only Gotham", explicit, names)
+				}
+			}
+		})
+	}
+}
+
+// A caller who spells the root through a symlink gets the same answer on a first
+// run, when the report directory does not exist yet, as on every later one: the
+// directory's real location is where it will be created, and the path returned is
+// the real root's, in the form the root was given.
+func TestExplicitPathThroughASymlinkedRootIsAcceptedBeforeTheDirExists(t *testing.T) {
+	real, reports := reportRootFor(t)
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(real, alias); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReportPathNotify(real, filepath.Join(alias, ReportDirName, "r.tsv"), "ignored.tsv", nil)
+	if err != nil {
+		t.Fatalf("an absolute path through a symlinked root must be accepted on a first run: %v", err)
+	}
+	if want := filepath.Join(reports, "r.tsv"); got != want {
+		t.Fatalf("path = %q, want %q", got, want)
+	}
+	if st, err := os.Stat(reports); err != nil || !st.IsDir() {
+		t.Fatalf("the report directory was not made: %v", err)
+	}
+	// And a path through the alias that is not the report directory is still refused.
+	if _, err := ReportPathNotify(real, filepath.Join(alias, "Gotham", "r.tsv"), "ignored.tsv", nil); err == nil {
+		t.Fatal("a path outside the report directory must be refused through a symlinked root")
+	}
+}
+
+// The ledger directory is created without group write (LedgerDirMode), whatever the
+// umask: a group member who can write the directory can unlink or rename the
+// ledger. The report directory keeps DirMode.
+func TestLedgerPathNotifyCreatesTheDirWithoutGroupWrite(t *testing.T) {
+	old := syscall.Umask(0) // so only the requested mode decides
+	t.Cleanup(func() { syscall.Umask(old) })
+	root, _ := reportRootFor(t)
+	if _, err := LedgerPathNotify(root, "", "l.jsonl", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReportPathNotify(root, "", "r.tsv", nil); err != nil {
+		t.Fatal(err)
+	}
+	for dir, want := range map[string]os.FileMode{LedgerDirName: LedgerDirMode, ReportDirName: DirMode} {
+		info, err := os.Stat(filepath.Join(root, dir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Fatalf("%s mode = %o, want %o", dir, got, want)
+		}
+	}
+	// A narrower umask can only narrow it.
+	syscall.Umask(0o077)
+	root2, _ := reportRootFor(t)
+	if _, err := LedgerPathNotify(root2, "", "l.jsonl", nil); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ := os.Stat(filepath.Join(root2, LedgerDirName)); info.Mode().Perm()&0o077 != 0 {
+		t.Fatalf("ledger dir mode %o under umask 077 gives group or world access", info.Mode().Perm())
+	}
+}
+
+// A ledger directory that already exists with group or world write has those, and
+// only those, removed, and the callback gets the mode it had: it may have been made
+// by an earlier build (or a preview) with DirMode. Read and execute bits and the
+// setgid and sticky bits are left as found, and one without them is not touched.
+func TestLedgerPathNotifyRemovesGroupAndWorldWriteFromAnExistingLedgerDir(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		mode    os.FileMode
+		want    os.FileMode
+		special os.FileMode
+		called  bool
+	}{
+		{"0750 untouched", 0o750, 0o750, 0, false},
+		{"0755 untouched, read kept", 0o755, 0o755, 0, false},
+		{"0700 untouched", 0o700, 0o700, 0, false},
+		{"0775 loses group write", 0o775, 0o755, 0, true},
+		{"0770 loses group write", 0o770, 0o750, 0, true},
+		{"0757 loses world write", 0o757, 0o755, 0, true},
+		{"0777 loses both", 0o777, 0o755, 0, true},
+		{"2775 loses group write, setgid kept", 0o775, 0o755, os.ModeSetgid, true},
+		{"1777 loses both, sticky kept", 0o777, 0o755, os.ModeSticky, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, _ := reportRootFor(t)
+			dir := filepath.Join(root, LedgerDirName)
+			if err := os.Mkdir(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(dir, tc.mode|tc.special); err != nil {
+				t.Fatal(err)
+			}
+			if info, _ := os.Stat(dir); info.Mode()&tc.special != tc.special {
+				t.Skipf("this filesystem does not keep %v on a directory", tc.special)
+			}
+			var calls []os.FileMode
+			path, err := LedgerPathNotify(root, "", "l.jsonl", func(d string, was os.FileMode) {
+				if d != dir {
+					t.Errorf("callback dir = %q, want %q", d, dir)
+				}
+				calls = append(calls, was)
+			})
+			if err != nil {
+				t.Fatalf("an owned ledger dir must be accepted: %v", err)
+			}
+			if path != filepath.Join(dir, "l.jsonl") {
+				t.Fatalf("path = %q", path)
+			}
+			info, _ := os.Stat(dir)
+			if got := info.Mode().Perm(); got != tc.want {
+				t.Fatalf("mode = %o, want %o", got, tc.want)
+			}
+			if info.Mode()&(os.ModeSetgid|os.ModeSticky) != tc.special {
+				t.Fatalf("special bits = %v, want %v", info.Mode()&(os.ModeSetgid|os.ModeSticky), tc.special)
+			}
+			switch {
+			case tc.called && (len(calls) != 1 || calls[0] != tc.mode):
+				t.Fatalf("callback calls = %o, want one with %o", calls, tc.mode)
+			case !tc.called && len(calls) != 0:
+				t.Fatalf("callback ran for a directory that needed no change: %o", calls)
+			}
+		})
+	}
+}
+
+// When the chmod of a ledger directory fails the directory is refused and the
+// message names what could not be removed, group write included.
+func TestLedgerPathNotifyRefusesWhenGroupWriteCannotBeRemoved(t *testing.T) {
+	for _, tc := range []struct {
+		mode os.FileMode
+		want string
+	}{
+		{0o777, "group and world write could not be removed"},
+		{0o775, "group write could not be removed"},
+		{0o770, "group write could not be removed"},
+		{0o757, "world write could not be removed"},
+	} {
+		root, _ := reportRootFor(t)
+		dir := filepath.Join(root, LedgerDirName)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(dir, tc.mode); err != nil {
+			t.Fatal(err)
+		}
+		env := defaultReportEnv()
+		env.chmod = func(string, os.FileMode) error { return errors.New("operation not permitted") }
+		called := false
+		_, err := confinedPathNotify(ledgerDir(), root, "", "l.jsonl", func(string, os.FileMode) { called = true }, env)
+		if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "report") {
+			t.Fatalf("mode %o: want a refusal containing %q and not speaking of reports, got %v", tc.mode, tc.want, err)
+		}
+		if called {
+			t.Fatal("the callback must not run when the chmod failed")
+		}
+	}
+}
+
+// The probe file made to prove a directory is writable is named for what the
+// directory holds; a failed probe in the ledger directory says ledger.
+func TestProbeFileIsNamedForTheDirectoryItProbes(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory modes")
+	}
+	for _, tc := range []struct {
+		name   string
+		notify func(root string) error
+		dir    string
+		probe  string
+	}{
+		{"report", func(root string) error { _, err := ReportPathNotify(root, "", "r.tsv", nil); return err }, ReportDirName, ".report-write-probe-"},
+		{"ledger", func(root string) error { _, err := LedgerPathNotify(root, "", "l.jsonl", nil); return err }, LedgerDirName, ".ledger-write-probe-"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, _ := reportRootFor(t)
+			dir := filepath.Join(root, tc.dir)
+			if err := os.Mkdir(dir, 0o555); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+			err := tc.notify(root)
+			if err == nil || !strings.Contains(err.Error(), tc.probe) {
+				t.Fatalf("an unwritable %s directory must be refused naming its probe %q, got %v", tc.name, tc.probe, err)
+			}
+		})
 	}
 }

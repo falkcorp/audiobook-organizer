@@ -1,7 +1,7 @@
 // file: core/library/registry.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 363acb46-296b-4fe8-bd5c-6b1160ab673b
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package library
 
@@ -986,7 +986,7 @@ const appDirMode fs.FileMode = 0o755
 
 // ensureAppDirBase creates <root>/<AppDir> when absent and refuses a symlink, a
 // non-directory or a directory this process does not own; world write is
-// removed (libroot.ensureReportsDir semantics, through the root's handle).
+// removed (libroot.ensureConfinedDir semantics, through the root's handle).
 func (r *Root) ensureAppDirBase() error {
 	return r.ensureDir(r.spec.AppDir)
 }

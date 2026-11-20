@@ -1,7 +1,7 @@
 // file: core/library/libroot.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 4d8b2f61-a3c7-4e90-b512-9e6f0c1d7a38
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 // This file holds the two checks every library-wide maintenance op makes
 // against the library root before it trusts what it finds there: that the root
@@ -42,6 +42,10 @@ import (
 // a not-found must treat this as one safeguard among others, never as the only
 // one.
 func Mounted(root string) error {
+	// Trimmed like the root the path resolvers use (confinedPathNotify), so a root
+	// with stray whitespace in the configuration is judged as the directory they
+	// would write under, not refused here as an unreadable relative path.
+	root = strings.TrimSpace(root)
 	if root == "" {
 		return errors.New("library root is not configured")
 	}
@@ -77,17 +81,49 @@ const ReportDirName = ".reports"
 const LedgerDirName = ".ledger"
 
 // confinedDir names one of the application-owned directories under the library
-// root that ReportPathNotify and LedgerPathNotify confine a file to, and the word
-// its refusals use for what is kept there.
+// root that ReportPathNotify and LedgerPathNotify confine a file to, the word
+// its refusals use for what is kept there, and how it is protected.
 type confinedDir struct {
-	name string // directory name under the root
-	noun string // "report" or "ledger"
+	name string      // directory name under the root
+	noun string      // "report" or "ledger"
+	mode fs.FileMode // creation mode (before the umask)
+	// strip is the permission bits removed from a directory of this kind that
+	// already exists with them set. Only write bits are ever listed: read and
+	// execute are the operator's to grant, and the setuid, setgid and sticky bits
+	// are never touched.
+	strip fs.FileMode
 }
+
+// groupWrite is the "group" write permission bit.
+const groupWrite fs.FileMode = 0o020
 
 // reportDir and ledgerDir return the two confined directories. Functions, not
 // package-level values, so there is no mutable package state to reassign.
-func reportDir() confinedDir { return confinedDir{name: ReportDirName, noun: "report"} }
-func ledgerDir() confinedDir { return confinedDir{name: LedgerDirName, noun: "ledger"} }
+//
+// The report directory is group-writable (DirMode): reports are replaced on every
+// run and the share's group may need to write there, and only world write is ever
+// removed from it. The ledger directory is not (LedgerDirMode, and group write is
+// removed from one that already has it): a group member who can write a directory
+// can unlink or rename the file in it whatever the file's own mode is, which for
+// an append-only ledger is the one thing that must not be possible; the next
+// export would start a new file from its stored cursor with a gap nobody sees.
+func reportDir() confinedDir {
+	return confinedDir{name: ReportDirName, noun: "report", mode: DirMode, strip: worldWrite}
+}
+func ledgerDir() confinedDir {
+	return confinedDir{name: LedgerDirName, noun: "ledger", mode: LedgerDirMode, strip: groupWrite | worldWrite}
+}
+
+// kindOfDir is the confined directory a file's directory is, judged by its name:
+// the two directories have fixed names under the root, so a ledger's name carries
+// the word ledger in its refusals even when the opener is handed only a path.
+// Anything else is a report directory.
+func kindOfDir(dir string) confinedDir {
+	if filepath.Base(dir) == LedgerDirName {
+		return ledgerDir()
+	}
+	return reportDir()
+}
 
 // LedgerPathNotify is ReportPathNotify for a ledger: the same confinement, the
 // same checks on an existing file, the same directory preparation, over
@@ -117,7 +153,7 @@ func LedgerPathNotify(root, explicit, fileName string, onTightened func(dir stri
 // A report file that already exists must pass the same checks the writer makes
 // (see OpenReportFile): not a symlink, not a directory, a regular file owned by
 // this user with one link. The report directory itself is checked and prepared
-// exactly as for the default path (see ensureReportsDir).
+// exactly as for the default path (see ensureConfinedDir).
 //
 // This is the decision, made when it is called; it is not a lock. The file is
 // written later, by WriteReportFile or OpenReportFile, and those repeat the
@@ -127,8 +163,9 @@ func LedgerPathNotify(root, explicit, fileName string, onTightened func(dir stri
 //
 // onTightened, when not nil, is called when the report directory already
 // existed with world write and that bit was removed: it gets the directory and
-// the permission bits it had. This package imports no module package, so it
-// cannot log; the caller does.
+// the permission bits it had. (LedgerPathNotify's also fires when group write is
+// removed from the ledger directory.) This package imports no module package, so
+// it cannot log; the caller does.
 func ReportPathNotify(root, explicit, fileName string, onTightened func(dir string, was fs.FileMode)) (string, error) {
 	return reportPathNotify(root, explicit, fileName, onTightened, defaultReportEnv())
 }
@@ -188,10 +225,10 @@ func confinedPathNotify(kind confinedDir, root, explicit, fileName string, onTig
 		return "", fmt.Errorf("default %s name %q is not a single file name", kind.noun, fileName)
 	}
 	path := filepath.Join(reportsDir, fileName)
-	if err := ensureReportsDir(reportsDir, onTightened, env); err != nil {
+	if err := ensureConfinedDir(kind, reportsDir, onTightened, env); err != nil {
 		return "", fmt.Errorf("%s path %s is not writable: %w", kind.noun, path, err)
 	}
-	if err := checkExistingReportFile(path, reportOpenEnv{euid: env.euid()}); err != nil {
+	if err := checkExistingReportFile(kind, path, reportOpenEnv{euid: env.euid()}); err != nil {
 		return "", err
 	}
 	return path, nil
@@ -202,9 +239,16 @@ func confinedPathNotify(kind confinedDir, root, explicit, fileName string, onTig
 // reportsDir. An absolute path is accepted only when its directory is reportsDir:
 // lexically, or, for a caller who spelled the root another way (a symlinked mount
 // point), when the directory resolves to reportsDir's real location. Anything with
-// a directory component is refused before the filesystem is consulted, so no "..",
-// no symlinked subdirectory and no not-yet-created subdirectory can carry the
-// report out, and nothing is created here except reportsDir itself (ensureReportsDir).
+// a directory component is refused, so no "..", no symlinked subdirectory and no
+// not-yet-created subdirectory can carry the report out.
+//
+// Every refusal about the shape of the path is made before anything is created: the
+// only filesystem access up to then is reading symlinks (for the other-spelling
+// case), so a refused path leaves nothing behind, not even a report directory
+// that was missing. Once the path is accepted as a name in reportsDir, reportsDir
+// is made if absent and checked (ensureConfinedDir), and an existing file at the
+// name is vetted; those two can still refuse, and the directory (and the probe file
+// it writes and removes) is the only thing a refusal at that stage can have created.
 //
 // The path returned is reportsDir joined with the bare name, never the caller's
 // spelling. An existing file at that name is vetted the way the writer vets it, so
@@ -217,18 +261,15 @@ func containedReportPath(kind confinedDir, reportsDir, explicit string, onTighte
 	if strings.ContainsRune(explicit, 0) {
 		return refuse("it contains a NUL byte")
 	}
-	if err := ensureReportsDir(reportsDir, onTightened, env); err != nil {
-		return "", fmt.Errorf("%s directory %s is not usable: %w", kind.noun, reportsDir, err)
-	}
 
 	name := explicit
 	if filepath.IsAbs(explicit) {
 		clean := filepath.Clean(explicit)
 		dir := filepath.Dir(clean)
 		if dir != reportsDir {
-			realDir, derr := filepath.EvalSymlinks(dir)
-			realReports, rerr := filepath.EvalSymlinks(reportsDir)
-			if derr != nil || rerr != nil || filepath.Clean(realDir) != filepath.Clean(realReports) {
+			realDir, derr := realLocation(dir)
+			realReports, rerr := realLocation(reportsDir)
+			if derr != nil || rerr != nil || realDir != realReports {
 				return refuse("it is not directly inside that directory")
 			}
 		}
@@ -240,39 +281,65 @@ func containedReportPath(kind confinedDir, reportsDir, explicit string, onTighte
 		return refuse("it does not name a file")
 	}
 
+	if err := ensureConfinedDir(kind, reportsDir, onTightened, env); err != nil {
+		return "", fmt.Errorf("%s directory %s is not usable: %w", kind.noun, reportsDir, err)
+	}
 	path := filepath.Join(reportsDir, name)
-	if err := checkExistingReportFile(path, reportOpenEnv{euid: env.euid()}); err != nil {
+	if err := checkExistingReportFile(kind, path, reportOpenEnv{euid: env.euid()}); err != nil {
 		return "", err
 	}
 	return path, nil
 }
 
-// ensureReportsDir prepares the default report directory, {root}/.reports. That
-// directory is inside the library share, which other users may be able to write,
-// so before anything is written to it, it must be what this process made: it is
-// created (DirMode) when absent, and when it exists it must be a real
-// directory (not a symlink somebody planted to redirect the reports) owned by the
-// user this process runs as. Lstat is used so a symlink is seen as a symlink.
+// realLocation is where p really is: its symlinks resolved, without needing its
+// last component to exist. A directory that has not been created yet is its
+// real parent joined with its name, which is where it would be created, so a
+// caller who spells the root through a symlink is judged the same on a first run
+// as on every later one. Anything else that cannot be resolved is an error.
+func realLocation(p string) (string, error) {
+	real, err := filepath.EvalSymlinks(p)
+	if err == nil {
+		return filepath.Clean(real), nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+	parent, perr := filepath.EvalSymlinks(filepath.Dir(p))
+	if perr != nil {
+		return "", perr
+	}
+	return filepath.Join(parent, filepath.Base(p)), nil
+}
+
+// ensureConfinedDir prepares one of the confined directories, {root}/.reports or
+// {root}/.ledger. That directory is inside the library share, which other users
+// may be able to write, so before anything is written to it, it must be what this
+// process made: it is created (kind.mode) when absent, and when it exists it must
+// be a real directory (not a symlink somebody planted to redirect the files) owned
+// by the user this process runs as. Lstat is used so a symlink is seen as a symlink.
 //
-// An owned directory that anyone can write (an older build created it 0777-ish)
-// has world write, and only world write, removed, and onTightened is told. Group
-// bits, the setgid and sticky bits, and any POSIX ACL are left exactly as they
-// are: on a POSIX-ACL filesystem the group bits ARE the ACL mask (see
-// DirMode), so clearing group write would silently strip the write access of
-// every named user and group the operator granted, and the setgid bit keeps new
-// files in the share's group. The directory is refused only when it is not ours,
-// is not a directory, or the chmod fails.
+// An owned directory that has write bits kind.strip lists (an older build created
+// it 0777-ish) has those bits, and only those, removed, and onTightened is told.
+// For the report directory that is world write alone. Group bits, the setgid and
+// sticky bits, and any POSIX ACL are left exactly as they are: on a POSIX-ACL
+// filesystem the group bits ARE the ACL mask (see DirMode), so clearing group write
+// would silently strip the write access of every named user and group the operator
+// granted, and the setgid bit keeps new files in the share's group. The ledger
+// directory is the exception on purpose, and the only one: nobody but the service
+// writes there, so group write is removed from it too (see ledgerDir). The
+// directory is refused only when it is not ours, is not a directory, or the chmod
+// fails.
 //
-// The directory stays group-writable by design, so another user in the group can
-// plant a symlink or a hard link at a report's name at any time. This function
-// cannot prevent that and does not try: the writers (WriteReportFile and
+// The report directory stays group-writable by design, so another user in the
+// group can plant a symlink or a hard link at a report's name at any time. This
+// function cannot prevent that and does not try: the writers (WriteReportFile and
 // OpenReportFile) re-open the directory by handle and open the file with
 // O_NOFOLLOW relative to it, and refuse a file that is not a regular file owned by
 // this user with a single link.
-func ensureReportsDir(dir string, onTightened func(dir string, was fs.FileMode), env reportEnv) error {
+func ensureConfinedDir(kind confinedDir, dir string, onTightened func(dir string, was fs.FileMode), env reportEnv) error {
 	info, err := os.Lstat(dir)
 	if errors.Is(err, fs.ErrNotExist) {
-		if merr := os.Mkdir(dir, DirMode); merr != nil && !errors.Is(merr, fs.ErrExist) {
+		if merr := os.Mkdir(dir, kind.mode); merr != nil && !errors.Is(merr, fs.ErrExist) {
 			return merr
 		}
 		info, err = os.Lstat(dir)
@@ -282,32 +349,42 @@ func ensureReportsDir(dir string, onTightened func(dir string, was fs.FileMode),
 	}
 	switch {
 	case info.Mode()&os.ModeSymlink != 0:
-		return fmt.Errorf("%s is a symlink, not a directory; refusing to write reports through it", dir)
+		return fmt.Errorf("%s is a symlink, not a directory; refusing to write %ss through it", dir, kind.noun)
 	case !info.IsDir():
 		return fmt.Errorf("%s is not a directory", dir)
 	case !ownedByUID(info, env.euid()):
 		return fmt.Errorf("%s is not owned by the user this process runs as; refusing to trust it", dir)
 	}
-	if was := info.Mode().Perm(); was&worldWrite != 0 {
-		// Perm bits plus the setuid, setgid and sticky bits, minus world write.
-		// Dropping the special bits here would be a second change nobody asked for.
-		next := info.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky) &^ worldWrite
+	if was := info.Mode().Perm(); was&kind.strip != 0 {
+		// Perm bits plus the setuid, setgid and sticky bits, minus the bits this
+		// kind of directory may not have. Dropping the special bits here would be a
+		// second change nobody asked for.
+		next := info.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky) &^ kind.strip
 		if cerr := env.chmod(dir, next); cerr != nil {
-			return fmt.Errorf("%s is writable by everyone (mode %o) and world write could not be removed: %w", dir, was, cerr)
+			who, what := "everyone", "world write"
+			switch bits := was & kind.strip; {
+			case bits&worldWrite == 0:
+				who, what = "its group", "group write"
+			case bits&groupWrite != 0:
+				what = "group and world write"
+			}
+			return fmt.Errorf("%s is writable by %s (mode %o) and %s could not be removed: %w", dir, who, was, what, cerr)
 		}
 		if onTightened != nil {
 			onTightened(dir, was)
 		}
 	}
-	return probeWritable(dir)
+	return probeWritable(kind, dir)
 }
 
 // worldWrite is the "other" write permission bit.
 const worldWrite fs.FileMode = 0o002
 
-// probeWritable proves a file can be created in dir.
-func probeWritable(dir string) error {
-	f, err := os.CreateTemp(dir, ".report-write-probe-*")
+// probeWritable proves a file can be created in dir. The probe is named for what
+// the directory holds, so a leftover one in a ledger directory does not read as a
+// report.
+func probeWritable(kind confinedDir, dir string) error {
+	f, err := os.CreateTemp(dir, "."+kind.noun+"-write-probe-*")
 	if err != nil {
 		return err
 	}

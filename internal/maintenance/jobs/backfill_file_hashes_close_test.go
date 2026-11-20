@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_close_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 0c6d4a82-91e7-4b35-8f2a-d3a7b5e1c649
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package jobs
 

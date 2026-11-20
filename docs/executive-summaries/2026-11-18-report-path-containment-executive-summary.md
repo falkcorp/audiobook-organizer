@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-11-18-report-path-containment-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 0b6f2c1e-7a34-4d58-9e21-c5a8d3f40b97 -->
-<!-- last-edited: 2026-11-18 -->
+<!-- last-edited: 2026-11-19 -->
 
 # Maintenance reports can only be written into the report folder
 
@@ -25,8 +25,11 @@ same day after its review.
   of the reports folder any more, so nothing is created inside it either. A path
   that climbs out with "..", one that goes through a shortcut (a symbolic link)
   leading elsewhere, a report file that is itself such a shortcut, and a path
-  that names a folder instead of a file are all refused. A refused path creates
-  nothing. With no library folder configured there is nothing to keep a named
+  that names a folder instead of a file are all refused. A path refused for what
+  it names creates nothing, not even a reports folder that was missing; one
+  refused only because of what already sits at that name (another account's
+  file, a shortcut) can have caused the reports folder to be made first. With
+  no library folder configured there is nothing to keep a named
   report inside, so a named report is refused.
 - The check at the start of a run was not enough on its own, because the run
   checks the name first and writes the report later, and a shortcut can be put at
@@ -60,7 +63,10 @@ same day after its review.
   works. Before this tightening, a name with a folder in it, such as
   "mine/chosen.tsv", was accepted and the folder created; that no longer works,
   so use "chosen.tsv". Anyone who has been exporting file history to a file
-  elsewhere needs to start a new ledger file inside ".ledger": the export
+  elsewhere needs to start a new ledger file inside ".ledger" (only the
+  account the server runs as can write in that folder: it is made that way, and
+  a folder that already let the group or everyone write into it has that taken
+  away, so nobody else can delete or rename the ledger): the export
   remembers how far it got, so the new file begins at that point and the
   earlier lines stay in the old file, which should be kept with it. A ledger
   copied in must be an ordinary file owned by the account the server runs as

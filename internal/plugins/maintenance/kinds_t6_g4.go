@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g4.go
-// version: 1.0.21
+// version: 1.0.22
 // guid: a6f18f0f-9e00-4b3a-a135-2ea70c56209f
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -381,10 +381,13 @@ type t6g4View struct {
 
 // t6g4LedgerPath is t6g4ReportPath for a ledger kept outside the reports: the
 // same confinement over {RootDir}/.ledger (library.LedgerPathNotify), a directory
-// no report writer resolves into and reports-prune never looks in.
+// no report writer resolves into and reports-prune never looks in. The directory
+// is created without group write, and group and world write are removed from one
+// that already has them, so only the account the service runs as can unlink or
+// rename the ledger.
 func t6g4LedgerPath(store t6g4PathReads, explicit, fileName string) (string, error) {
 	return library.LedgerPathNotify(store.RootDir(), explicit, fileName, func(dir string, was fs.FileMode) {
-		logger.New("maintenance").Warn("removed world write from the ledger directory, its mode was %o dir=%s", was, logger.SanitizeLogValue(dir))
+		logger.New("maintenance").Warn("removed group and world write from the ledger directory, its mode was %o dir=%s", was, logger.SanitizeLogValue(dir))
 	})
 }
 
