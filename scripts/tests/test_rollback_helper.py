@@ -2618,6 +2618,20 @@ class RollbackEnv(unittest.TestCase):
         b, kept = self.pin_probe(("storage=1", "0"), ("storage=1", "0"))
         self.assertNotIn(b, kept)
 
+    def test_a_run_of_deploys_that_measured_nothing_cannot_push_the_pre_flip_generation_out(self):
+        """The flip is a known boundary; later deploys whose facts are missing
+        (an ssh timeout, an old Makefile.local) pin what they replace, and
+        those pins are bounded among themselves, not against the boundary."""
+        h = self.env_host()
+        # The owner's deploy through the helpers before the flip: the build
+        # the flip replaces has recorded facts.
+        self.deploy(h, "pre-flip", conf=self.conf("P"), facts=self.facts("pre-flip"))
+        p, _ = self.flip_then_hotfixes(h, 1)
+        for n in range(8):
+            self.deploy(h, f"blind-{n}", conf=self.conf(f"B{n}"))
+        self.assertIn(p, self.gens())
+        self.assertLessEqual(len(self.gens()), 1 + 3 + 3, "boundary + newest 3 + 3 unknown pins")
+
     def test_pins_are_bounded(self):
         h = self.env_host()
         for n in range(2, 14):
