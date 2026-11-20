@@ -6,9 +6,12 @@
 package executor
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -78,4 +81,56 @@ func TestFailedRun_KeepsANonZeroResult(t *testing.T) {
 			t.Fatalf("%s: result %+v, want %+v", c.kind, got, *c.want)
 		}
 	}
+}
+
+// A run that times out, or is canceled, keeps the non-zero result it returned
+// with the context's cause, as a failed run does (attempt.go finish: the
+// timed-out case shares the failed branch, the canceled case has its own).
+func TestTimedOutAndCanceledRuns_KeepANonZeroResult(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started := make(chan struct{}, 2)
+		wait := func(filed int) func(*tasks.RC, noParams) (ledgerTally, error) {
+			return func(rc *tasks.RC, _ noParams) (ledgerTally, error) {
+				started <- struct{}{}
+				<-rc.Context().Done()
+				return ledgerTally{Filed: filed}, context.Cause(rc.Context())
+			}
+		}
+		slow := tasks.Task(tasks.Kind("gotham.slowcase"), tasks.TaskSpec[noParams, ledgerTally]{
+			Common: common("gotham.slowcase", withTimeout(time.Minute)),
+			Run:    wait(3),
+		})
+		stopped := tasks.Task(tasks.Kind("gotham.stoppedcase"), tasks.TaskSpec[noParams, ledgerTally]{
+			Common: common("gotham.stoppedcase"),
+			Run:    wait(4),
+		})
+		h := newHarness(t, []tasks.Definition{slow, stopped}, synctestConfig)
+
+		timed := h.start("gotham.slowcase", tasks.StartRequest{})
+		<-started
+		time.Sleep(2 * time.Minute)
+		synctest.Wait()
+		r := h.waitState(timed, tasks.StateTimedOut, tasks.StateFailed, tasks.StateSucceeded)
+		if r.State != tasks.StateTimedOut {
+			t.Fatalf("slowcase: %s, want timed_out", r.State)
+		}
+		var got ledgerTally
+		if err := json.Unmarshal(r.Result, &got); err != nil || got.Filed != 3 {
+			t.Fatalf("slowcase: result %s (%v), want filed 3", r.Result, err)
+		}
+
+		canceled := h.start("gotham.stoppedcase", tasks.StartRequest{})
+		<-started
+		if err := h.x.Cancel(context.Background(), canceled); err != nil {
+			t.Fatal(err)
+		}
+		r = h.waitState(canceled, tasks.StateCanceled, tasks.StateFailed, tasks.StateSucceeded)
+		if r.State != tasks.StateCanceled {
+			t.Fatalf("stoppedcase: %s, want canceled", r.State)
+		}
+		got = ledgerTally{}
+		if err := json.Unmarshal(r.Result, &got); err != nil || got.Filed != 4 {
+			t.Fatalf("stoppedcase: result %s (%v), want filed 4", r.Result, err)
+		}
+	})
 }

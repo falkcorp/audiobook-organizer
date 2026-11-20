@@ -864,8 +864,8 @@ func t6g3CreditsCoreEnv(base t6g3Base, tags repairs.GuardTagReader, eng t6g3CBEn
 // and not authority_lists; the judgements of other runs' leftovers ride in this
 // run's result (JudgedSources; credits_backfill_native.go). HEAD declared Reads
 // books and authors (kept) and Writes books; the series read is the guard's
-// (GetAllSeries). The result is the summary the core stored; on an error core
-// drops it (see the F5-08 seams note).
+// (GetAllSeries). The result is the summary the core stored; a run that ends in
+// an error keeps the non-zero result it returns beside it (F5-18d, O5).
 func (p *Plugin) creditsBackfillKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	// metadata_cache and indexes: ModifyBookCredits re-authors the book (the stale
 	// stamp when the credits change the search identity, the ident: rows), the shared

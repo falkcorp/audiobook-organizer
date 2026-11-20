@@ -188,8 +188,17 @@ func (l *nativeCBLedger) others(own string) ([]cbSourceOp, error) {
 			}
 			n++
 			q.After = rec.ID
-			if err := addJudged(judged, rec); err != nil {
+			mine, err := addJudged(judged, rec)
+			if err != nil {
 				return nil, err
+			}
+			if string(rec.ID) == own {
+				// A resumed run's record still holds the result an earlier
+				// attempt returned (a resume does not clear it): carry its
+				// judgements into this attempt's result, or they would be
+				// skipped here and then lost when this attempt's result
+				// replaces that one.
+				l.carry(mine)
 			}
 			if string(rec.ID) != own && rec.State != tasks.StateSucceeded {
 				cands = append(cands, rec)
@@ -215,16 +224,16 @@ func (l *nativeCBLedger) others(own string) ([]cbSourceOp, error) {
 	return out, nil
 }
 
-// addJudged adds the judgements rec's stored result carries. A run with no
-// result carries none; a result that does not decode fails closed, as HEAD's
-// unreadable marker does.
-func addJudged(judged map[string]map[string]bool, rec tasks.RunRecord) error {
+// addJudged adds the judgements rec's stored result carries, and returns them.
+// A run with no result carries none; a result that does not decode fails
+// closed, as HEAD's unreadable marker does.
+func addJudged(judged map[string]map[string]bool, rec tasks.RunRecord) (map[string]string, error) {
 	if len(rec.Result) == 0 || string(rec.Result) == "null" {
-		return nil
+		return nil, nil
 	}
 	var r cbJudgedOnly
 	if err := json.Unmarshal(rec.Result, &r); err != nil {
-		return fmt.Errorf("read the judgements stored on credits-backfill run %s: %w%s", rec.ID, err, cbDiscardRemedy(string(rec.ID)))
+		return nil, fmt.Errorf("read the judgements stored on credits-backfill run %s: %w%s", rec.ID, err, cbDiscardRemedy(string(rec.ID)))
 	}
 	for src, fp := range r.JudgedSources {
 		if judged[src] == nil {
@@ -232,7 +241,25 @@ func addJudged(judged map[string]map[string]bool, rec tasks.RunRecord) error {
 		}
 		judged[src][fp] = true
 	}
-	return nil
+	return r.JudgedSources, nil
+}
+
+// carry keeps an earlier attempt's judgements in this run's, unless this
+// attempt has already judged the same run again.
+func (l *nativeCBLedger) carry(earlier map[string]string) {
+	if len(earlier) == 0 {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.judged == nil {
+		l.judged = map[string]string{}
+	}
+	for src, fp := range earlier {
+		if _, ok := l.judged[src]; !ok {
+			l.judged[src] = fp
+		}
+	}
 }
 
 // markJudged records the judgement in this run's memory; the native shell puts
