@@ -110,6 +110,36 @@ describe('installCoreEventsShim', () => {
     expect(lines).toEqual(['run-joker-1']);
   });
 
+  it('heartbeats, so the real client keeps a quiet stream open past its idle deadline', async () => {
+    const ctl = installFromSource({ autoOpened: true, refusals: [] });
+    const stream = client();
+    stream.subscribe(RUN, () => {});
+    await tick();
+    await tick(120000);
+    expect(ctl.requests).toHaveLength(1);
+    expect(stream.getStatus().state).toBe('open');
+  });
+
+  it('with the heartbeat off a quiet stream is dropped by the client, and an ended stream leaves no timer', async () => {
+    const ctl = installFromSource({ autoOpened: true, refusals: [], heartbeatMs: 0 });
+    const stream = client();
+    stream.subscribe(RUN, () => {});
+    await tick();
+    await tick(50000);
+    expect(ctl.requests.length).toBeGreaterThan(1);
+    stream.dispose();
+    await tick();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('an ended stream stops its heartbeat', async () => {
+    const ctl = installFromSource({ autoOpened: true, refusals: [] });
+    await w.fetch(CORE_EVENTS_PATH);
+    expect(vi.getTimerCount()).toBe(1);
+    ctl.endAll();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('autoOpened false leaves the open to the test', async () => {
     const ctl = installFromSource({ autoOpened: false, refusals: [] });
     const stream = client();
@@ -248,7 +278,10 @@ describe('mockCoreEvents(page)', () => {
     const { page, initScripts } = fakePage();
     const mock = await mockCoreEvents(page, { autoOpened: false, refusals: [{ status: 429, retryAfterSeconds: 9 }] });
     expect(initScripts).toEqual([
-      { fn: installCoreEventsShim, arg: { autoOpened: false, refusals: [{ status: 429, retryAfterSeconds: 9 }] } },
+      {
+        fn: installCoreEventsShim,
+        arg: { autoOpened: false, refusals: [{ status: 429, retryAfterSeconds: 9 }], heartbeatMs: 15000 },
+      },
     ]);
     const stream = client();
     stream.subscribe(BOOK, () => {});
