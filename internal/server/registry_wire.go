@@ -104,7 +104,6 @@ func resolveVectorBackend(backend string) string {
 func serviceDefs(databasePathSet bool) []serviceregistry.ServiceDef {
 	defs := slices.Concat(
 		plugin.ServiceDefs(),
-		config.ServiceDefs(),
 		fileops.ServiceDefs(),
 		sysinfo.ServiceDefs(),
 		search.ServiceDefs(),
@@ -274,14 +273,11 @@ func serverServiceDefs() []serviceregistry.ServiceDef {
 				// band threshold was inert and scoring ran on the compiled-in
 				// 97/90/75/60.
 				//
-				// Fail-closed is only safe because the SAME conversion now runs
-				// before anything is persisted (config.UpdateService.UpdateConfig
-				// rejects a bad ladder with 400 and writes nothing), so a ladder that
-				// trips this at startup can only have arrived via a hand-edited
-				// config.yaml or a settings blob written by an older build.
+				// Fail-closed: a ladder that does not convert refuses the start
+				// rather than scoring on the compiled-in defaults.
 				scoreCfg, err := cfg.Dedup.Signals.ScoreConfig()
 				if err != nil {
-					return nil, fmt.Errorf("dedup engine: %w — refusing to start on default thresholds. The effective value is config.yaml's dedup.signals overlaid by the settings blob persisted in the database (written by PUT /api/v1/config, Settings → Dedup, and calibrate-composite apply); the persisted blob wins, so re-save a valid ladder through the API/Settings page, or clear its dedup.signals keys, if config.yaml already looks right", err)
+					return nil, fmt.Errorf("dedup engine: %w — refusing to start on default thresholds. The effective value is the dedup.signals settings persisted by the config store (written by PUT /api/v1/config, Settings → Dedup, and calibrate-composite apply) over config.yaml's; the persisted value wins, so re-save a valid ladder through the API/Settings page if config.yaml already looks right", err)
 				}
 				engine, err := dedup.NewEngine(embStore, store, embClient, llmParser, mergeSvc, scoreCfg)
 				if err != nil {
@@ -455,7 +451,6 @@ func wireServerFromContainer(s *Server, c *serviceregistry.Container) {
 	s.scanService = serviceregistry.Get[*scanner.ScanService](c, serviceregistry.KeyScan)
 	s.dashboardService = serviceregistry.Get[*sysinfo.DashboardService](c, serviceregistry.KeyDashboard)
 	s.systemService = serviceregistry.Get[*sysinfo.SystemService](c, serviceregistry.KeySystem)
-	s.configUpdateService = serviceregistry.Get[*config.UpdateService](c, serviceregistry.KeyConfigUpdate)
 	s.metadataStateService = serviceregistry.Get[*metafetch.MetadataStateService](c, serviceregistry.KeyMetadataState)
 
 	// W2 services

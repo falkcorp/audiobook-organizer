@@ -31,7 +31,6 @@ func stubCommandDeps(t *testing.T) {
 	origProcess := processBooks
 	origPlaylists := generatePlaylists
 	origTags := updateSeriesTags
-	origLoadConfig := loadConfigFromDB
 	origNewServer := newServer
 	origDefaultCfg := getDefaultServerConfig
 	origRunApp := runApp
@@ -61,9 +60,6 @@ func stubCommandDeps(t *testing.T) {
 	updateSeriesTags = func() error {
 		return nil
 	}
-	loadConfigFromDB = func(store database.SettingsStore) error {
-		return nil
-	}
 	newServer = func(_ database.Store, _ ...server.ServerOption) *server.Server { return &server.Server{} }
 	getDefaultServerConfig = func() server.ServerConfig {
 		return server.ServerConfig{Host: "localhost", Port: "8484"}
@@ -76,7 +72,6 @@ func stubCommandDeps(t *testing.T) {
 		processBooks = origProcess
 		generatePlaylists = origPlaylists
 		updateSeriesTags = origTags
-		loadConfigFromDB = origLoadConfig
 		newServer = origNewServer
 		getDefaultServerConfig = origDefaultCfg
 		runApp = origRunApp
@@ -282,8 +277,8 @@ func serveWithStubs(t *testing.T) (started bool, in books.ServeInputs, err error
 }
 
 // serve runs no startup step of its own (06 §6.4.3, R1-23): the kernel opens
-// the store at P2, and books runs the key guard, the encryption init, the
-// settings load and config.Validate in Register. serve hands the composition
+// the store at P2, and books runs the key guard, the encryption init and
+// config.Validate in Register. serve hands the composition
 // root its listener flags and the telemetry settings as HEAD's InitOTEL read
 // them, before any stored setting applies (the settings boot runs inside
 // app.New, after this snapshot), as it did for HEAD (R1-15).
@@ -292,10 +287,6 @@ func TestServe_RunsNoStartupStepOfItsOwn(t *testing.T) {
 	openCLIStore = func(context.Context, bool) (cliStore, func(), error) {
 		t.Error("serve opened the store itself; the kernel opens it at P2")
 		return nil, nil, fmt.Errorf("serve must not open the store")
-	}
-	loadConfigFromDB = func(database.SettingsStore) error {
-		t.Error("serve loaded the stored settings itself; books' Register does")
-		return nil
 	}
 	origConfig := config.AppConfig
 	t.Cleanup(func() { config.AppConfig = origConfig })

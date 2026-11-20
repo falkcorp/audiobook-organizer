@@ -14,7 +14,6 @@
 package system
 
 import (
-	"context"
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -106,16 +105,6 @@ type SystemStore interface {
 type SystemService interface {
 	CollectSystemStatus(mayRead sysinfo.OperationReadCheck) (*sysinfo.SystemStatus, error)
 	CollectSystemLogs(level, search string, limit, offset int, mayRead sysinfo.LogReadCheck) ([]sysinfo.SystemLogEntry, int, error)
-}
-
-// ConfigUpdateService is the *config.UpdateService write the settings route
-// used before F3-07 e3. GET and PUT /config now run over the config Facade
-// (config_handler.go), nothing calls this, and the secret masking that used to
-// sit beside it is gone: a secret is write-only. It stays one slice, as New's
-// parameter type, because New's caller is outside that slice; the slice that
-// edits the caller deletes the interface, its mock and New's parameter.
-type ConfigUpdateService interface {
-	UpdateConfig(ctx context.Context, payload map[string]any) (int, map[string]any)
 }
 
 // PluginHealthChecker is the narrow *plugin.Registry subset used by

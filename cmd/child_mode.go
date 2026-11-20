@@ -18,20 +18,16 @@ import (
 // newServer is already defined in root.go as a package-level var pointing
 // to server.NewServer; we use it here to share the test override.
 
-// initializeChildStore and closeChildStore are how the op-runner child opens
-// and closes the live store. The child is not an offline CLI subcommand: the
+// initializeChildStore is how the op-runner child opens the live store. The child is not an offline CLI subcommand: the
 // serving parent re-execs it while the store is open under the parent's
 // process, so it keeps the standalone opener (app.OpenOffline refuses a
 // store a running service holds). It passes the resolved state directory so
 // the opener reads the swap slot first, and refuses while a swap is staged
 // or in flight (R1-25; TestCLISubcommandsUseOfflineOpen,
 // TestRunOperationRunner_StagedSwapRefusesTheOpen,
-// TestRunOperationRunner_ResolvesTheStateDirectory). Vars so a test can stub
-// them.
-var (
-	initializeChildStore = database.InitializeStoreWith
-	closeChildStore      = database.CloseStore
-)
+// TestRunOperationRunner_ResolvesTheStateDirectory). A var so a test can stub
+// it.
+var initializeChildStore = database.InitializeStoreWith
 
 // init registers the parent-side environment provider for
 // registry.runSubprocess. When the parent re-execs the binary as a child,
@@ -109,26 +105,12 @@ func RunOperationRunner() {
 		fmt.Fprintf(os.Stderr, "child mode: initializeChildStore: %v\n", err)
 		os.Exit(2)
 	}
-	// Load persisted config so plugin registration sees the same AppConfig as
-	// the parent (notably RootDir, which the maintenance plugin gate in
-	// server.go requires to be non-empty).
-	//
-	// Fatal, the same as the server's "loadConfigFromDB" startup step
-	// (internal/startup.Table). Until 2026-10-10 a failure here was a warning
-	// and the child ran its op on defaults; an op that saves settings (dedup
-	// calibrate-composite -> ApplyUpdates -> SaveConfigToDatabase) writes the
-	// whole config struct as config_blob, so it would have overwritten the
-	// stored settings with those defaults. An empty settings keyspace (a fresh
-	// install) is not an error: LoadConfigFromDatabase returns nil for it.
-	if err := loadConfigFromDB(store); err != nil {
-		fmt.Fprintf(os.Stderr, "child mode: failed to load config from database: %v\n", err)
-		if cerr := closeChildStore(); cerr != nil {
-			fmt.Fprintf(os.Stderr, "child mode: close store: %v\n", cerr)
-		}
-		os.Exit(2)
-	}
+	// HEAD loaded the stored settings here (config.LoadConfigFromDatabase);
+	// F3-07 deleted that loader, so the child's settings are what the parent
+	// hands it: the flags, the environment and config.yaml, plus the library
+	// root the parent passes in EnvChildRootDir, which the maintenance plugin
+	// gate in server.go requires to be non-empty.
 	if config.Snapshot().RootDir == "" {
-		// Re-apply env override after loadConfigFromDB may have reset it.
 		if v := os.Getenv(registry.EnvChildRootDir); v != "" {
 			config.Mutate(func(c *config.Config) { c.RootDir = v })
 		}

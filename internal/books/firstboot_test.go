@@ -37,8 +37,12 @@ type headSeed struct {
 	bookID string
 }
 
+// flatEmbeddingBlob is a config_blob in the shape before the nested
+// embedding object, as an older HEAD left it.
+const flatEmbeddingBlob = `{"embedding_enabled":true,"embedding_model":"batcomputer"}`
+
 // headStoreAt writes a store at path as HEAD (R0) leaves a production store:
-// library rows, a config_blob in a shape the settings load migrates, books'
+// library rows, a config_blob in an older HEAD shape, books'
 // schema at LegacyCap, and no core key, sidecar or checkpoint. It writes the
 // rows with this build's standalone opener and then removes what a core
 // build adds, as internal/books/store's rewindToR0 does for that package's
@@ -161,8 +165,8 @@ func checkpointName(t *testing.T, path string) string {
 // TestCheckpointPrecedesEveryWrite on ABO's boot (05-storage §5S.10, §5S.4):
 // release R1's first boot of a HEAD store takes its checkpoint before any
 // write. The copy holds exactly the rows HEAD left, byte for byte, although
-// the boot then wrote core's rows, books' R1 migrations, the settings
-// load's writes and the boot repairs; and it holds the state files serve
+// the boot then wrote core's rows, books' R1 migrations and the boot
+// repairs; and it holds the state files serve
 // names (the encryption key).
 func TestCheckpointPrecedesEveryWrite(t *testing.T) {
 	path := filepath.Join(tempDir(t), "gotham.pebble")
@@ -170,10 +174,7 @@ func TestCheckpointPrecedesEveryWrite(t *testing.T) {
 	before := rawKVs(t, path)
 
 	edit, disk := onDisk(path)
-	r := runComposedWith(t, edit, nil, func(o *app.Options) {
-		disk(o)
-		loadConfigFromDB = config.LoadConfigFromDatabase
-	}, nil)
+	r := runComposedWith(t, edit, nil, disk, nil)
 	require.NoError(t, r.stop())
 
 	name := checkpointName(t, path)
@@ -183,7 +184,6 @@ func TestCheckpointPrecedesEveryWrite(t *testing.T) {
 
 	after := rawKVs(t, path)
 	assert.NotEmpty(t, keysWithPrefix(after, "c/"), "the boot wrote no core row: the test proves nothing")
-	assert.NotEqual(t, before["setting:config_blob"], after["setting:config_blob"], "the settings load's blob migration was not committed")
 
 	var rec struct {
 		StateFiles []struct {

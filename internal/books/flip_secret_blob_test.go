@@ -100,9 +100,9 @@ func plantAt(v reflect.Value, segs []string, sentinel string) bool {
 // TestSecretFields_NeverReachTheSettingsBlob: for every field the rename table
 // classes as a secret that has a stored form, set it through the real Engine and
 // core store, then read every non-secret row of the settings store: no secret value
-// is in any of them. The save that used to write the blob after a Mutate
-// (SaveConfigToDatabase) is refused, and a new secret field added to the table is
-// covered without anyone adding it here.
+// is in any of them. (The blob save that wrote the projection, secrets and all,
+// was deleted with HEAD's settings loader in F3-07.) A new secret field added to
+// the table is covered without anyone adding it here.
 func TestSecretFields_NeverReachTheSettingsBlob(t *testing.T) {
 	c := bootFlippedFresh(t)
 	var planted []string
@@ -118,10 +118,6 @@ func TestSecretFields_NeverReachTheSettingsBlob(t *testing.T) {
 		planted = append(planted, head)
 	}
 	require.NotEmpty(t, planted)
-
-	// The refused blob save: a handler that still called it would write the
-	// projection, which carries every secret in plaintext.
-	require.ErrorIs(t, config.SaveConfigToDatabase(c.store), config.ErrBlobSaveWithFacade)
 
 	rows, err := c.store.GetAllSettings()
 	require.NoError(t, err)

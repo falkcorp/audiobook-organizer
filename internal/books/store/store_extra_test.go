@@ -9,9 +9,7 @@
 package store
 
 import (
-	"fmt"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -642,58 +640,6 @@ func TestUpdateWorkWithAltTitles(t *testing.T) {
 	if len(result.AltTitles) != 2 {
 		t.Errorf("Expected 2 alt titles after update, got %d", len(result.AltTitles))
 	}
-}
-
-// TestMaskSecretEdgeCases pins the exact MaskSecret output for a spread of
-// lengths and asserts that no leading character of the secret ever leaks.
-func TestMaskSecretEdgeCases(t *testing.T) {
-	const alphabet = "BATMANROBINJOKERGOTHAMCITYBATCAVEWAYNEMANORALFRED" // 48 chars
-	secretOf := func(n int) string { return alphabet[:n] }
-
-	tests := []struct {
-		length   int
-		expected string
-	}{
-		{0, "********"},
-		{1, "********"},
-		{7, "********"},
-		{8, "********"},
-		{15, "********"},
-		{16, "********" + "ER"},
-		{20, "********" + "TH"},
-		{40, "********" + "MA"},
-	}
-
-	for _, tt := range tests {
-		t.Run(fmt.Sprintf("len_%d", tt.length), func(t *testing.T) {
-			secret := secretOf(tt.length)
-			result := MaskSecret(secret)
-			if result != tt.expected {
-				t.Errorf("MaskSecret(len %d) = %q, expected %q", tt.length, result, tt.expected)
-			}
-			// No prefix leaks: the output must not begin with any real
-			// character of the secret, and short secrets reveal nothing.
-			if tt.length > 0 && strings.HasPrefix(result, secret[:1]) {
-				t.Errorf("MaskSecret leaks the first character of a %d-char secret: %q", tt.length, result)
-			}
-			if tt.length < 16 && strings.Trim(result, "*") != "" {
-				t.Errorf("short secret (len %d) revealed characters: %q", tt.length, result)
-			}
-			if tt.length >= 16 && !strings.HasSuffix(secret, strings.TrimPrefix(result, "********")) {
-				t.Errorf("revealed tail %q is not the secret's suffix", result)
-			}
-		})
-	}
-
-	t.Run("multibyte suffix not split", func(t *testing.T) {
-		secret := strings.Repeat("é", 16)
-		if got := MaskSecret(secret); got != "********éé" {
-			t.Errorf("MaskSecret(16 runes) = %q", got)
-		}
-		if got := MaskSecret(strings.Repeat("é", 15)); got != "********" {
-			t.Errorf("MaskSecret(15 runes, 30 bytes) = %q, want fully masked", got)
-		}
-	})
 }
 
 // TestDecryptValueErrors tests error handling in DecryptValue

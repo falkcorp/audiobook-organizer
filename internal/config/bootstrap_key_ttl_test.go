@@ -9,8 +9,6 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
-
-	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 func TestResolveBootstrapKeyTTL(t *testing.T) {
@@ -99,26 +97,5 @@ func TestResolveBootstrapKeyTTL_ThroughInitConfig(t *testing.T) {
 				t.Errorf("ttl=%v warn=%q; want ttl=%v warning=%v", got, warn, tc.want, tc.wantWarn)
 			}
 		})
-	}
-}
-
-// A stored config blob from before 2026-10-07 carries the old materialized
-// default "bootstrap_key_ttl_days": 30. Loading it must leave the 8h default
-// in force.
-func TestResolveBootstrapKeyTTL_OldBlobIgnored(t *testing.T) {
-	resetViper(t)
-	orig := Snapshot()
-	t.Cleanup(func() { Mutate(func(c *Config) { *c = orig }) })
-	InitConfig()
-	store := newMockSettingsStore()
-	if err := store.SetSetting("config_blob", `{"bootstrap_key_ttl_days":30}`, "json", false); err != nil {
-		t.Fatal(err)
-	}
-	if err := LoadConfigFromDatabase(store); err != nil {
-		t.Fatal(err)
-	}
-	snap := Snapshot()
-	if got, warn := snap.ResolveBootstrapKeyTTL(); got != coreauth.DefaultBootstrapKeyTTL || warn != "" {
-		t.Errorf("after loading an old blob: ttl=%v warn=%q, want %v and no warning", got, warn, coreauth.DefaultBootstrapKeyTTL)
 	}
 }

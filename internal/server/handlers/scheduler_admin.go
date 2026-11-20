@@ -52,14 +52,6 @@ type Scheduler interface {
 // endpoints: list/run/configure tasks, and trigger/inspect/configure the
 // nightly maintenance window.
 type SchedulerHandler struct {
-	// store is used only to persist config changes (config.MutatePersist).
-	// database.SettingsStore is the exact four-method interface that call
-	// needs -- see operations.OperationsStore's doc for why it is embedded
-	// rather than method-listed elsewhere in this codebase; the same
-	// reasoning applies here, one level narrower since this handler needs
-	// nothing else from the store.
-	store database.SettingsStore
-
 	// getScheduler resolves the scheduler lazily, at request time. The
 	// *Server.scheduler field is assigned in Start() -- AFTER NewServer →
 	// setupRoutes → wireHandlers runs -- so snapshotting it at wire time would
@@ -73,11 +65,8 @@ type SchedulerHandler struct {
 // NewSchedulerHandler constructs a SchedulerHandler. getScheduler is a lazy
 // provider (see the field doc) rather than a plain Scheduler value because
 // *Server.scheduler is populated after wire time.
-func NewSchedulerHandler(store database.SettingsStore, getScheduler func() Scheduler) *SchedulerHandler {
-	return &SchedulerHandler{
-		store:        store,
-		getScheduler: getScheduler,
-	}
+func NewSchedulerHandler(getScheduler func() Scheduler) *SchedulerHandler {
+	return &SchedulerHandler{getScheduler: getScheduler}
 }
 
 // resolveScheduler returns the live scheduler via the lazy provider, or nil if
@@ -452,10 +441,10 @@ func (h *SchedulerHandler) UpdateTaskConfig(c *gin.Context) {
 	//
 	// The write is one call that returns an error: a refusal (the Facade turned
 	// the change down) or a failed save is reported, never answered with a 200.
-	// A failure here means the change did not take, or is live in memory but will
-	// not survive a restart; either way it is not "task config updated".
+	// With a Facade installed the write is durable; with none it is live in
+	// memory only (HEAD's blob save is gone since F3-07).
 	if len(writes) > 0 {
-		err := config.MutatePersist(h.store, func(c *config.Config) {
+		err := config.MutateChecked(func(c *config.Config) {
 			if binding.foldLegacy != nil {
 				binding.foldLegacy(c)
 			}
@@ -534,7 +523,7 @@ func (h *SchedulerHandler) UpdateMaintenanceWindowConfig(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "window_start and window_end must be 0-23")
 		return
 	}
-	if err := config.MutatePersist(h.store, func(c *config.Config) {
+	if err := config.MutateChecked(func(c *config.Config) {
 		c.Maintenance.Enabled = req.Enabled
 		c.Maintenance.WindowStart = req.WindowStart
 		c.Maintenance.WindowEnd = req.WindowEnd

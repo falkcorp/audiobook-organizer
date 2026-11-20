@@ -10,7 +10,7 @@
 // quick-queries.
 //
 // Dependencies that lived on the *Server receiver are reached through narrow
-// interfaces (SystemStore, SystemService, ConfigUpdateService,
+// interfaces (SystemStore, SystemService,
 // PluginHealthChecker, EventStreamer, OperationLogsProvider) plus three
 // injected funcs (getDiskStats, appVersion, filterReviewedAuthorGroups) that wrap
 // server-package helpers / build-tagged functions / mutable package vars that
@@ -60,12 +60,7 @@ type Handler struct {
 	// and this handler's getHub seams.
 	getStore  func() SystemStore
 	systemSvc SystemService
-	// configUpdate is dead since F3-07 e3: GET and PUT /config run over the
-	// config Facade (config_handler.go). It stays only so New's signature, and
-	// its caller in wire_handlers.go, do not change in this slice; the slice
-	// that edits the caller deletes it.
-	configUpdate ConfigUpdateService
-	plugins      PluginHealthChecker
+	plugins   PluginHealthChecker
 	// configFacade resolves the config Facade at request time; nil is
 	// config.Current. configAtoms is Actor.Can's atom lookup; nil holds no
 	// section permission. See WithConfigFacade and WithConfigAtoms.
@@ -261,7 +256,6 @@ type DegradedSource interface {
 func New(
 	getStore func() SystemStore,
 	systemSvc SystemService,
-	configUpdate ConfigUpdateService,
 	plugins PluginHealthChecker,
 	getHub func() EventStreamer,
 	opLogs OperationLogsProvider,
@@ -273,7 +267,6 @@ func New(
 	return &Handler{
 		getStore:                   getStore,
 		systemSvc:                  systemSvc,
-		configUpdate:               configUpdate,
 		plugins:                    plugins,
 		getHub:                     getHub,
 		opLogs:                     opLogs,

@@ -15,7 +15,6 @@ import (
 	"strings"
 	"testing"
 
-	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/stretchr/testify/assert"
@@ -79,58 +78,6 @@ func TestAPIKeyPersistenceRoundtrip(t *testing.T) {
 	server.router.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	assert.Empty(t, config.AppConfig.OpenAIAPIKey)
-}
-
-// TestAPIKeyConfigFileFallback tests that the config file fallback works
-// when database decryption fails.
-func TestAPIKeyConfigFileFallback(t *testing.T) {
-	server, cleanup := setupTestServer(t)
-	defer cleanup()
-	_ = server
-
-	store := database.GetGlobalStore()
-	err := database.InitEncryption(config.AppConfig.RootDir)
-	require.NoError(t, err)
-
-	// Step 1: Set the key in memory and save (writes both DB and file)
-	config.AppConfig.OpenAIAPIKey = "sk-fallback-test-key"
-	config.AppConfig.EnableAIParsing = true
-	err = config.SaveConfigToDatabase(store)
-	require.NoError(t, err)
-
-	// Step 2: Verify config file was written
-	cfgPath := config.ConfigFilePath()
-	require.NotEmpty(t, cfgPath, "ConfigFilePath should return a path")
-	t.Logf("Config file path: %s", cfgPath)
-
-	// Step 3: Corrupt the DB value to simulate the old masking bug.
-	// Store a non-encrypted value directly with isSecret=false to bypass encryption,
-	// then the load path will try to decrypt it (because the DB row has is_secret=true
-	// from the original save) and fail.
-	// We need to write the raw corrupted value, so use SetSetting with isSecret=false
-	// to avoid re-encryption, but we need is_secret=true in the DB row.
-	// Workaround: save with isSecret=true but a value that will encrypt fine,
-	// then we can't simulate corruption that way. Instead, use SetSetting(isSecret=false)
-	// to write raw text, but GetAllSettings won't flag it as secret.
-	// The simplest approach: write a bad base64 value with isSecret=true — SetSetting
-	// will encrypt it, but we can overwrite with a second call that bypasses encryption.
-	// Actually the most realistic test: SetSetting encrypts, so let me just verify the
-	// config file fallback works when the DB has NO key at all (deleted).
-	err = store.DeleteSetting("openai_api_key")
-	require.NoError(t, err)
-
-	// Step 4: Clear memory and reload
-	config.AppConfig.OpenAIAPIKey = ""
-	config.AppConfig.EnableAIParsing = false
-
-	err = config.LoadConfigFromDatabase(store)
-	require.NoError(t, err)
-
-	// Step 5: Key should be recovered from config file
-	assert.Equal(t, "sk-fallback-test-key", config.AppConfig.OpenAIAPIKey,
-		"API key should be recovered from config file when DB decrypt fails")
-	assert.True(t, config.AppConfig.EnableAIParsing,
-		"EnableAIParsing should be recovered from config file")
 }
 
 // TestOLDumpUpload tests that the OpenLibrary dump upload endpoint works.
@@ -250,18 +197,14 @@ func TestOLDumpDirAutoDerive(t *testing.T) {
 	assert.Equal(t, "/tmp/test-audiobooks/openlibrary-dumps", dir)
 }
 
-// A config blob stored before 01-P80 still carries the eleven removed settings.
-// GET /config must not serve them, and what GET serves must be acceptable back:
-// the page now PUTs the keys it changed, so the round trip is "every writable
-// key's served value, sent back, is accepted".
-func TestConfigRoundTrip_StoredBlobWithRemovedKeys(t *testing.T) {
+// GET /config must not serve the eleven settings 01-P80 removed, and what GET
+// serves must be acceptable back: the page PUTs the keys it changed, so the
+// round trip is "every writable key's served value, sent back, is accepted".
+// (HEAD seeded a pre-01-P80 config_blob through LoadConfigFromDatabase; F3-07
+// deleted that loader. Decoding such a blob is internal/config's
+// TestConfigBlob_RemovedUnreadSettingsDecode.)
+func TestConfigRoundTrip_ServedValuesAcceptedWithoutRemovedKeys(t *testing.T) {
 	f := setupCredGuardServer(t)
-
-	blob := `{"metadata_review_default_view":"compact","default_user_quota_gb":100,` +
-		`"memory_limit_type":"items","cache_size":1000,"memory_limit_percent":25,"memory_limit_mb":512,` +
-		`"log_format":"text","enable_json_logging":false,"auth_rate_limit_per_minute":10,"language":"en","api_keys":{}}`
-	require.NoError(t, f.store.SetSetting("config_blob", blob, "json", false))
-	require.NoError(t, config.LoadConfigFromDatabase(f.store))
 
 	w := f.do(t, f.sessionToken, http.MethodGet, "/api/v1/config", nil)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())

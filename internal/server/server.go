@@ -214,7 +214,6 @@ type Server struct {
 	scanService            *scanner.ScanService
 	organizeService        *OrganizeService
 	metadataFetchService   *metafetch.Service
-	configUpdateService    *config.UpdateService
 	systemService          *sysinfo.SystemService
 	metadataStateService   *metafetch.MetadataStateService
 	dashboardService       *sysinfo.DashboardService

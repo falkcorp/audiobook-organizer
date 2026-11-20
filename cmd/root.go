@@ -95,7 +95,6 @@ var (
 	processBooks           = scanner.ProcessBooks  // func([]Book, logger.Logger) error
 	generatePlaylists      = playlist.GeneratePlaylistsForSeries
 	updateSeriesTags       = tagger.UpdateSeriesTags
-	loadConfigFromDB       = config.LoadConfigFromDatabase
 	newServer              = server.NewServer
 	getDefaultServerConfig = server.GetDefaultServerConfig
 	// runApp is serve's composition root (serve_app.go): app.New(ctx, opts,

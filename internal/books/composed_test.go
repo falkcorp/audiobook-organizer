@@ -132,9 +132,7 @@ func checkClaimViolations(t *testing.T, a *app.App, c *composed) {
 // bootComposed boots the composition with the ABS surface on or off; edit,
 // when set, adjusts the config before the store opens. pre, when set, runs
 // on books' store in Register, after core's migrations and before the
-// settings boot and the server (a stored settings blob, say). The settings
-// boot's loader and env sync are stubbed (stubSettingsLoad); a test of
-// either sets the seam back. Cleanup releases the unstarted server and the
+// settings boot and the server (a stored settings blob, say). Cleanup releases the unstarted server and the
 // store and puts the process defaults back.
 func bootComposed(t *testing.T, abs bool, edit func(*config.Config), pre func(*database.PebbleStore)) *composed {
 	t.Helper()
@@ -218,7 +216,6 @@ func composedOptions(t *testing.T, abs bool, stateDir string, edit func(*config.
 	}
 	withConfig(t, c)
 	sandboxStateDirAt(t, stateDir)
-	stubSettingsLoad(t)
 	t.Cleanup(func() {
 		database.SetGlobalStore(nil)
 		scanner.SetStore(nil)
@@ -262,17 +259,6 @@ func sandboxStateDirAt(t *testing.T, dir string) string {
 	t.Setenv(config.SecureStateDirEnv, dir)
 	require.NoError(t, os.WriteFile(database.EncryptionKeyPath(dir), bytes.Repeat([]byte{9}, 32), 0o600))
 	return dir
-}
-
-// stubSettingsLoad stubs the settings boot's loader and env sync for the
-// test, which otherwise apply the process's viper state over the config the
-// test set. A test of the loader sets loadConfigFromDB back.
-func stubSettingsLoad(t *testing.T) {
-	t.Helper()
-	origLoad, origSync := loadConfigFromDB, syncConfigFromEnv
-	loadConfigFromDB = func(database.SettingsStore) error { return nil }
-	syncConfigFromEnv = func() {}
-	t.Cleanup(func() { loadConfigFromDB, syncConfigFromEnv = origLoad, origSync })
 }
 
 // runningApp is a composition whose App runs as serve runs it, with its
@@ -394,8 +380,6 @@ func TestR1AppConfigFromBlob(t *testing.T) {
 	c := bootComposed(t, false, nil, func(store *database.PebbleStore) {
 		blob := fmt.Sprintf(`{"api_rate_limit_per_minute":%d,"json_body_limit_mb":%d}`, rate, jsonMB)
 		require.NoError(t, store.SetSetting("config_blob", blob, "json", false))
-		// The settings boot's loadConfigFromDB, which this harness stubs.
-		require.NoError(t, config.LoadConfigFromDatabase(store))
 	})
 	snap := config.Snapshot()
 	assert.Equal(t, rate, snap.APIRateLimitPerMinute, "blob-only value not effective in AppConfig")

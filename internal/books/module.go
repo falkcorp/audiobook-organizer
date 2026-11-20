@@ -351,8 +351,7 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	if steps == nil {
 		steps = newSteps()
 	}
-	settingsWrites, err := bootSettings(store, steps, m.stateDir)
-	if err != nil {
+	if err := bootSettings(store, steps, m.stateDir); err != nil {
 		return err
 	}
 	if config.AppConfig.ABSAPIEnabled != m.abs {
@@ -399,14 +398,14 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	// closes the core DB.
 	r.Hook(module.Hook{
 		Name: string(ID) + ".repairs",
-		// The settings load's held writes, then HEAD's open-time writers
+		// The config.yaml gap-fill strip, then HEAD's open-time writers
 		// and the opv3 reconcile (05-storage §5S.9.3; 06 §6.5.2 step 2),
 		// then the memdb warmup, before the server's start resumes
 		// operations. A failure closes the store here: the kernel calls no
 		// Stop for a hook whose Start failed.
 		Start: func(ctx context.Context) error {
 			m.repairsBegan.Store(true)
-			return m.startRepairs(ctx, steps, settingsWrites, store)
+			return m.startRepairs(ctx, steps, store)
 		},
 		Stop: func(context.Context) error { return m.closeStore() },
 	})
@@ -469,18 +468,10 @@ func asBooks(mod module.Module) (*booksModule, error) {
 // closeStore closes the store Register built and clears the process-global
 // reference to it. Close is idempotent.
 // startRepairs is the repairs hook's Start once it has marked the hook
-// begun. The settings load's held writes commit first, as the Degraded
-// startup step settingsWrites (R1-23 review S2): a failed commit is logged,
-// settings_writes is recorded for /health, and the boot goes on, because the
-// effective config is already loaded, validated and served, the writes
-// after the failure stay uncommitted for the next boot's load to stage
-// again, and HEAD's load logged a failed marker or re-encryption write and
-// served the same way. Then the boot repairs, whose failure closes the
-// store (the kernel calls no Stop for a hook whose Start failed).
-func (m *booksModule) startRepairs(ctx context.Context, steps *startup.Steps, writes *deferredSettings, store *database.PebbleStore) error {
-	if err := steps.Run("settingsWrites", writes.apply); err != nil {
-		return errors.Join(err, m.closeStore())
-	}
+// begun: the config.yaml gap-fill strip, then the boot repairs, whose
+// failure closes the store (the kernel calls no Stop for a hook whose Start
+// failed).
+func (m *booksModule) startRepairs(ctx context.Context, steps *startup.Steps, store *database.PebbleStore) error {
 	// A failed or refused strip degrades /health, it does not stop the boot: the
 	// file is untouched or already stripped, and the next boot runs it again.
 	if err := steps.Run("gapFillStrip", func() error { return m.stripGapFill(ctx) }); err != nil {
