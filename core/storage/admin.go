@@ -29,6 +29,16 @@ type Admin struct{ db *DB }
 // Admin returns the store's admin surface, for the kernel.
 func (db *DB) Admin() *Admin { return &Admin{db: db} }
 
+// DataMigrationDone reports whether the data migration id has committed: its
+// state record in storage's own keyspace is done (never re-entered, DATA2-15).
+// false when it has no record yet or is anywhere short of done. It is the read
+// a module's repairs hook makes to learn that a boot-blocking cutover step has
+// finished, which it cannot do through its own keyspace (F3-07's strip of
+// config.yaml waits on M2a this way).
+func (a *Admin) DataMigrationDone(ctx context.Context, id string) (bool, error) {
+	return a.db.stepDone(ctx, StepRef{DataMigration: id})
+}
+
 // CheckpointBytes sums the bytes of every recorded pre-migration checkpoint
 // by the two states of <namespace>_storage_checkpoint_bytes (§5S.8):
 // completed, a record whose attempt completed (completed_at set), and open,

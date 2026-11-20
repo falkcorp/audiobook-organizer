@@ -448,6 +448,7 @@ func Attach(mod module.Module, a *app.App) error {
 	}
 	if store := m.store.Load(); store != nil {
 		store.AttachStorageAdmin(a.StorageAdmin())
+		m.storageAdmin.Store(a.StorageAdmin())
 		// Process-scoped, so the throttle registry's store lifetime matches
 		// the process; after the server is built, as before. Deliberately
 		// NOT inside NewServer (see AttachProviderThrottleStore).

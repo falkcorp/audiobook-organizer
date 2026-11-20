@@ -172,6 +172,14 @@ type booksModule struct {
 	// appConfigInstalled is set when Register bound the config Facade
 	// (config_wire.go); closeStore unbinds it.
 	appConfigInstalled atomic.Bool
+
+	// gapFillIn is what the strip of config.yaml's gap-fill keys needs from
+	// Register (the config access and books' legacy range, set when the Facade
+	// was bound) and from Attach (the storage admin that says whether M2a
+	// committed); startRepairs runs the step only when both arrived and the flip
+	// is declared (config_strip_boot.go).
+	gapFillIn    atomic.Pointer[gapFillInputs]
+	storageAdmin atomic.Pointer[storage.Admin]
 }
 
 // Manifest is books' static declaration. It is pure: the legacy prefixes
@@ -329,8 +337,12 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	// With the core config boot on, the Facade is bound before the settings
 	// boot and the server read AppConfig (config_wire.go); without it Deps.Config
 	// is nil and HEAD's loaders below stay the source.
-	if _, err := m.installAppConfig(context.Background(), r, store); err != nil {
+	bound, err := m.installAppConfig(context.Background(), r, store)
+	if err != nil {
 		return err
+	}
+	if bound && m.declaresFlip() {
+		m.gapFillIn.Store(&gapFillInputs{acc: r.Deps().Config, legacy: legacy})
 	}
 	if m.beforeSettings != nil {
 		m.beforeSettings(store)
@@ -467,6 +479,11 @@ func asBooks(mod module.Module) (*booksModule, error) {
 // store (the kernel calls no Stop for a hook whose Start failed).
 func (m *booksModule) startRepairs(ctx context.Context, steps *startup.Steps, writes *deferredSettings, store *database.PebbleStore) error {
 	if err := steps.Run("settingsWrites", writes.apply); err != nil {
+		return errors.Join(err, m.closeStore())
+	}
+	// A failed or refused strip degrades /health, it does not stop the boot: the
+	// file is untouched or already stripped, and the next boot runs it again.
+	if err := steps.Run("gapFillStrip", func() error { return m.stripGapFill(ctx) }); err != nil {
 		return errors.Join(err, m.closeStore())
 	}
 	if err := store.RunBootRepairs(ctx); err != nil {
