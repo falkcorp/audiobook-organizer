@@ -247,11 +247,12 @@ func TestOracleWalk_DefaultDeny(t *testing.T) {
 		{"ViaRangeCopied", nil, "#src", "(e) a local slice filled from a parameter's elements"},
 		{"ViaHandedOutside", nil, "#fire", "(f) a field nothing stores to handed to code outside the module"},
 		{"ViaPartialNonVerb", []string{"books"}, "", "M1: a non-verb method whose implementations the program knows in part: every implementation the program holds is walked"},
-		{"ViaOrphanNonVerb", nil, "#iface:", "M1: a non-verb method of a module interface the program holds no implementation of"},
+		{"ViaOrphanNonVerb", nil, "#iface:" + oracleFixturePkg + ".rewinder.Rewind", "M1: a non-verb method of a module interface the program holds no implementation of"},
 		{"ViaOutsideIface", nil, "#iface:fmt.Stringer.String", "M1: a non-verb method of an interface declared outside the module"},
 		{"ViaOpenError", []string{"books"}, "#iface:error.Error", "M1: a module type implementing an outside interface's non-verb method, reached through an open receiver: walked, and the outside implementations recorded"},
 		{"ViaEscapedCell", []string{"books"}, "#scarecrow:its address is passed on", "a local variable whose address a helper fills: the helper's function is walked as a value, and a key for the stores the cell does not show"},
 		{"ViaFilledByValue", nil, "#elements filled by a call through a value", "a local slice handed to a function value, which can fill it"},
+		{"ViaOutsideOnlyImpl", nil, "#iface:" + oracleFixturePkg + ".batFile.Sync", "a non-verb method of a module interface whose only implementation is outside the module (*os.File)"},
 	} {
 		kinds, _, _, calls, _ := derivedWrites(op, op.roots[0].Func(tc.root))
 		if !slices.Equal(kinds, tc.want) {
@@ -272,10 +273,28 @@ func TestOracleWalk_DefaultDeny(t *testing.T) {
 	}
 }
 
-// TestOracleWalk_ReporterOwnIsScopedToItsFunctions: oracleReporterOwn exempts a
-// store call only inside the function it names. Without the exemption the
-// reporter's write is noted; with it, the reporter's is not, and the same store
-// method called from job code still is.
+// TestOracleNeverByMethod: the allowlist guard refuses, by exact name or write
+// prefix, a method of an outside interface that can write a file, a remote or
+// the store, and still accepts the getters allowed today (round-3 review m2).
+func TestOracleNeverByMethod(t *testing.T) {
+	for _, m := range []string{"Close", "Seek", "Sync", "Flush", "Truncate", "Commit", "Exec", "Do", "RoundTrip", "Send", "Encode", "Publish",
+		"Write", "WriteString", "SetDeadline", "Put", "DeleteObject", "UpdateBook", "InsertRow", "ModifyBook", "Save"} {
+		if !oracleNeverByMethod(m) {
+			t.Errorf("oracleNeverByMethod(%q) = false, want true: it can write by its name", m)
+		}
+	}
+	for _, m := range []string{"Done", "Deadline", "Err", "Value", "Error", "Sum", "Sum32", "IsDir", "Name", "Mode", "Size", "Sys", "Handle", "Inc", "Kind", "FileType", "Raw"} {
+		if oracleNeverByMethod(m) {
+			t.Errorf("oracleNeverByMethod(%q) = true, want false: a getter oracleOutsideIfaceAllowed may allow", m)
+		}
+	}
+	for name := range oracleOutsideIfaceAllowed {
+		if oracleNeverByMethod(name[strings.LastIndex(name, ".")+1:]) {
+			t.Errorf("oracleOutsideIfaceAllowed allows %s by method, a name that can write", name)
+		}
+	}
+}
+
 // TestOracleResolveCache_KeyedByGraph proves a copy of the program that swaps
 // the call graph does not read the answers the original cached: the copy shares
 // the cache pointer, and a parameter's answer is read from the graph's callers.
@@ -312,6 +331,10 @@ func TestOracleResolveCache_KeyedByGraph(t *testing.T) {
 	}
 }
 
+// TestOracleWalk_ReporterOwnIsScopedToItsFunctions: oracleReporterOwn exempts a
+// store call only inside the function it names. Without the exemption the
+// reporter's write is noted; with it, the reporter's is not, and the same store
+// method called from job code still is.
 func TestOracleWalk_ReporterOwnIsScopedToItsFunctions(t *testing.T) {
 	op := oracleFixture(t)
 	walk := func(op *oracleProgram, root string) []string {
