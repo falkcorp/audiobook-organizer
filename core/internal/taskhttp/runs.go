@@ -216,9 +216,11 @@ type logLineDTO struct {
 }
 
 // getLog: GET /runs/{id}/log?limit=. Client.Log applies the definition's
-// View rule. The log has no cursor yet (a LogLine carries no key), so the
-// page is the first limit lines.
-func (s *Server) getLog(w http.ResponseWriter, r *http.Request, _ *auth.Principal) {
+// View rule, and each line passes tasks.RedactLogAppended with the caller's
+// checker, the same function core.task.log-appended.v1 carries as its Redact,
+// so REST and the stream agree (COR2-2). The log has no cursor yet (a LogLine
+// carries no key), so the page is the first limit lines.
+func (s *Server) getLog(w http.ResponseWriter, r *http.Request, p *auth.Principal) {
 	limit, bad := limitParam(r)
 	if bad != nil {
 		s.write(w, r, *bad)
@@ -230,7 +232,8 @@ func (s *Server) getLog(w http.ResponseWriter, r *http.Request, _ *auth.Principa
 			s.fail(w, r, err)
 			return
 		}
-		lines = append(lines, logLineDTO{At: l.At, Level: l.Level, Message: l.Message, Fields: l.Fields})
+		red := tasks.RedactLogAppended(p.Perms, tasks.NewLogAppended(l))
+		lines = append(lines, logLineDTO{At: red.At, Level: red.Level, Message: red.Message, Fields: red.Fields})
 		if len(lines) == limit {
 			break
 		}
