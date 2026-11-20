@@ -7,6 +7,7 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/books"
 	"os"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -87,19 +88,19 @@ func RunOperationRunner() {
 	restoreClaim := database.DisableHNSWCleanStopClaim()
 	defer restoreClaim()
 	// The state directory, resolved as the parent resolved it
-	// (resolveCLIPaths: core's step 0 over the same environment and flags): nothing in this fresh process has, so SecureStateDir would be
+	// (resolveChildPaths: core's step 0 over the parent's store path and the same environment): nothing in this fresh process has, so SecureStateDir would be
 	// the unresolved default, and where that cannot be created the parent
 	// fell back to the database directory, where the swap slot and the swap
 	// lock are. Everything later in the child (the updater's slot check
 	// among them) reads the resolved directory too.
-	dbPath, stateDir, err := resolveCLIPaths()
+	dbPath, stateDir, err := resolveChildPaths(os.Getenv(registry.EnvChildDBPath))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "child mode: resolve the state directory %s: %v\n", stateDir, err)
 		os.Exit(2)
 	}
 	snap := config.Snapshot()
 	store, err := initializeChildStore(snap.DatabaseType, dbPath,
-		database.StandaloneOptions{StateDir: stateDir})
+		books.StandaloneOptions(database.StandaloneOptions{StateDir: stateDir}))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "child mode: initializeChildStore: %v\n", err)
 		os.Exit(2)

@@ -219,6 +219,11 @@ func composedOptions(t *testing.T, abs bool, stateDir string, edit func(*config.
 	// config's database_path: name the one the fixture's config holds.
 	t.Setenv(storagePathEnv, c.DatabasePath)
 	require.NoError(t, os.MkdirAll(filepath.Dir(c.DatabasePath), 0o700))
+	// The ABS signing secret is an operator-only secret (class o): its layer is
+	// the environment, not the loaded config the fixture also sets.
+	if c.ABSJWTSecret != "" {
+		t.Setenv("ABO_BOOKS_ABS_JWT_SECRET", c.ABSJWTSecret)
+	}
 	sandboxStateDirAt(t, stateDir)
 	t.Cleanup(func() {
 		database.SetGlobalStore(nil)

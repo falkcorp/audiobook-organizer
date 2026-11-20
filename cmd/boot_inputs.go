@@ -84,3 +84,27 @@ func resolveCLIPaths() (dbPath, stateDir string, err error) {
 	}
 	return books.ResolveBootPaths(context.Background(), books.Module(), boot)
 }
+
+// resolveChildPaths is resolveCLIPaths for the op-runner child, a fresh process
+// the parent handed the store it resolved (childDB, registry.EnvChildDBPath):
+// that path is the child's --db, the highest operator layer, so a parent that
+// took its path from a flag or the unit's environment is followed exactly, and
+// a child started with neither still opens the parent's store. "" names no
+// path and leaves the layers alone.
+func resolveChildPaths(childDB string) (dbPath, stateDir string, err error) {
+	boot, err := rootBootInputs()
+	if err != nil {
+		return "", "", err
+	}
+	if childDB != "" {
+		abs, err := filepath.Abs(childDB)
+		if err != nil {
+			return "", "", fmt.Errorf("the parent's store path %q: %w", childDB, err)
+		}
+		if boot.Flags == nil {
+			boot.Flags = map[coreconfig.Path]string{}
+		}
+		boot.Flags["core.storage.path"] = abs
+	}
+	return books.ResolveBootPaths(context.Background(), books.Module(), boot)
+}

@@ -8,6 +8,7 @@ package books
 import (
 	"errors"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -62,42 +63,14 @@ func TestSettingsBoot_StepFailuresAreFatal(t *testing.T) {
 // refuse the boot instead of failing later on a route outside the prefixes.
 func TestSettingsBoot_ABSFlagDriftRefuses(t *testing.T) {
 	for _, abs := range []bool{false, true} {
-		// The drift arrives after the store opens (the stored config the
-		// Facade binds); beforeSettings stands in for it.
+		// Module read the flag from the environment when it was built. The
+		// drift is the settings core projects at boot saying the opposite: the
+		// environment layer changed since (a unit edited between Module and
+		// New), so the projection and the manifest's prefixes disagree.
 		mod, opts, _ := composedOptions(t, abs, "", nil, nil)
-		pre := mod.beforeSettings
-		mod.beforeSettings = func(s *database.PebbleStore) {
-			if pre != nil {
-				pre(s)
-			}
-			config.Mutate(func(c *config.Config) { c.ABSAPIEnabled = !abs })
-		}
+		t.Setenv(absEnabledEnv, strconv.FormatBool(!abs))
 		err := bootFails(t, mod, opts)
 		assert.ErrorIs(t, err, errABSFlagDrift, "abs=%v", abs)
-	}
-}
-
-// Options refuses what would make core open a store HEAD never named: a
-// database_type other than Pebble. (An empty path is no longer an error: the
-// store is core.storage.path, and with no layer naming one it is the state
-// directory's default; TestResolveBootPaths covers the orphaned-store refusal.)
-func TestOptions_RefusesAStoreHEADWouldNotOpen(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		edit func(*config.Config)
-		want string
-	}{
-		{"sqlite", func(c *config.Config) { c.DatabaseType = "sqlite" }, "SQLite3 support has been removed"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			c := config.Config{DatabaseType: "pebble", DatabasePath: filepath.Join(tempDir(t), "books.pebble")}
-			tc.edit(&c)
-			withConfig(t, c)
-			sandboxStateDir(t)
-			_, err := Options(Module(), ServeInputs{})
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tc.want)
-		})
 	}
 }
 

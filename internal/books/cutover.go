@@ -7,11 +7,13 @@ package books
 
 import (
 	"context"
+	"slices"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	coreconfig "github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/kernel"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
@@ -57,6 +59,36 @@ func flipConfigNames(declared bool) (retired []coreconfig.RetiredName, bindings 
 // nextBooksVersion (the tests' count of the R1 steps) drifts from it, which is a versioned step added
 // ahead of the level step that has already shipped.
 const booksLevelStepVersion = database.LegacyCap + 3
+
+// StandaloneSpec is books' storage spec for the openers that plan no manifest
+// (the op-runner child's store, the restore stager's verify of an archive): the
+// R1 spec as is while the flip is dark, and with the level step and the level
+// the serve boot raises the store to once it is declared (cutover.Flip.Spec).
+// Without it those opens refuse a flipped store as written by a newer build.
+func StandaloneSpec(base storage.Spec) storage.Spec {
+	if !flipDeclared {
+		return base
+	}
+	// Only the level step and the claims are applied (Flip.Spec reads nothing
+	// else): the data steps need M2's inputs, which a standalone open has none
+	// of and never runs.
+	level := cutover.BooksLevelStep(booksLevelStepVersion, cutover.BooksCutoverLevel)
+	return cutover.Flip{Level: level}.Spec(base)
+}
+
+// StandaloneOptions is o with the flip's storage declarations added for an open
+// that plans no manifest: books' spec through StandaloneSpec and, once the flip
+// is declared, core's level owner (kernel.CoreOwners), so a store the serve boot
+// raised opens at both of its levels.
+func StandaloneOptions(o database.StandaloneOptions) database.StandaloneOptions {
+	o.Spec = StandaloneSpec
+	if flipDeclared {
+		m := Module().(*booksModule)
+		m.dbPath = "standalone" // declaresFlip needs a database named; only the declaration is read
+		o.ExtraOwners = append(slices.Clone(o.ExtraOwners), kernel.CoreOwners(m)...)
+	}
+	return o
+}
 
 // declaresFlip reports whether this manifest declares F3's cutover: the switch
 // is on and Options has named the database (the steps read HEAD's paths, and
