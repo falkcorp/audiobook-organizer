@@ -52,7 +52,7 @@ func SharedRows() Rows { return Rows(resources.Table()) }
 // fails if a row ever differs from the shared one, so the day they move there
 // is a deletion, not a reconciliation.
 func MetafetchApplyRows() Rows {
-	bookW := []ops.Resource{ops.ResBooks, ops.ResAuthors, ops.ResMetadataCache, ops.ResIndexes}
+	bookW := []ops.Resource{ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes}
 	fileRow := resources.Union([]ops.Resource{ops.ResBookFiles}, bookW)
 	return Rows{
 		"AddBookTagWithSource":      {ops.ResBooks},
