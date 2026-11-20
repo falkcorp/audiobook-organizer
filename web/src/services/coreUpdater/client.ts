@@ -24,6 +24,7 @@
 import {
   ApiAuthRedirectError,
   ApiTimeoutError,
+  LEGACY_PROBLEM_CODE,
   SESSION_ENDING_CODES,
   decodeProblem,
   type Problem,
@@ -42,10 +43,10 @@ export const UPDATER_CHECK_PATH = `${UPDATER_PATH}/check`;
 export const UPDATER_APPLY_PATH = `${UPDATER_PATH}/apply`;
 export const UPDATER_ROLLBACK_PATH = `${UPDATER_PATH}/rollback`;
 
-/** A request that gets no answer in this long is abandoned with ApiTimeoutError. */
+/** A request that gets no answer in this long is abandoned with ApiTimeoutError; <= 0 disables the deadline. */
 export const DEFAULT_TIMEOUT_MS = 30000;
 /** Retry-After above this is clamped: a hostile or broken header must not park the UI. */
-export const MAX_RETRY_AFTER_MS = 5 * 60 * 1000;
+export const MAX_RETRY_AFTER_MS = 10 * 60 * 1000;
 
 export interface UpdaterClientOptions {
   baseUrl?: string;
@@ -126,10 +127,14 @@ export function createUpdaterClient(opts: UpdaterClientOptions = {}): UpdaterCli
 
     const ctl = new AbortController();
     let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      ctl.abort();
-    }, timeoutMs);
+    // timeoutMs <= 0 means no deadline, as createCoreClient's runtimeFetch has it.
+    const timer =
+      timeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            ctl.abort();
+          }, timeoutMs)
+        : undefined;
     const forward = () => ctl.abort();
     if (signal?.aborted) ctl.abort();
     else signal?.addEventListener('abort', forward);
@@ -143,7 +148,7 @@ export function createUpdaterClient(opts: UpdaterClientOptions = {}): UpdaterCli
       if (timedOut) throw new ApiTimeoutError(url, timeoutMs);
       throw err;
     } finally {
-      clearTimeout(timer);
+      if (timer !== undefined) clearTimeout(timer);
       signal?.removeEventListener('abort', forward);
     }
 
@@ -157,11 +162,13 @@ export function createUpdaterClient(opts: UpdaterClientOptions = {}): UpdaterCli
         operation: op,
         status: res.status,
         code: problem.code,
-        detail: problem.detail ?? problem.title ?? '',
+        // A legacy or proxy body is not ours to echo: decodeProblem puts its first 200
+        // characters in title, which could be anything the proxy printed.
+        detail: problem.code === LEGACY_PROBLEM_CODE ? '' : (problem.detail ?? problem.title ?? ''),
         requestId: problem.request_id ?? '',
         retryAfterMs: parseRetryAfterMs(res.headers?.get?.('Retry-After')),
         requiredPermission: problem.required_permission,
-        fields: (problem.errors ?? []) as UpdaterRequestError['fields'],
+        fields: problem.errors ?? [],
       });
     }
 

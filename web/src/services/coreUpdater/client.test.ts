@@ -49,9 +49,16 @@ const problem = (status: number, code: string, detail: string, headers: Record<s
   });
 
 function opaqueRedirect(): Response {
-  const r = new Response(null, { status: 200 });
-  Object.defineProperty(r, 'type', { value: 'opaqueredirect' });
-  return r;
+  // The shape a browser hands back under redirect: 'manual' (status 0, ok false); as in coreEvents.
+  return new Proxy(
+    { type: 'opaqueredirect', status: 0, ok: false },
+    {
+      get(t, p) {
+        if (p === 'redirected') throw new Error('response.redirected must not be read');
+        return (t as Record<string | symbol, unknown>)[p as string];
+      },
+    },
+  ) as unknown as Response;
 }
 
 const STATUS: UpdaterStatus = {
@@ -180,7 +187,6 @@ describe('apply', () => {
     [409, 'local_build_needs_version'],
     [409, 'no_update'],
     [409, 'not_newer'],
-    [422, 'invalid_version'],
   ])('decodes the %i %s refusal and does not retry', async (status, code) => {
     const s = fake(problem(status, code, 'refused'), jsonRes({ task_id: 'must-not-be-reached' }, 202));
     const err = await createUpdaterClient({ fetch: s.fetch }).apply('v1.1.0').catch((e: unknown) => e);
@@ -194,19 +200,44 @@ describe('apply', () => {
     expect(s.calls).toHaveLength(1);
   });
 
-  it('carries field errors of a 422', async () => {
+  it("treats the server's real 422 validation_failed body as an apply refusal", async () => {
+    // core/httpapi/problem.go Invalid/Field: top-level code validation_failed, detail in errors[].
     const body = {
       type: 'about:blank',
-      title: 'invalid',
+      title: 'Validation failed',
       status: 422,
       code: 'validation_failed',
-      errors: [{ pointer: '/body/version', code: 'invalid_version', detail: 'must be a release tag such as v1.2.3' }],
+      request_id: 'req-alfred',
+      errors: [{ field: '/body/version', code: 'invalid_version', message: 'must be a release tag such as v1.2.3' }],
     };
     const s = fake(
       new Response(JSON.stringify(body), { status: 422, headers: { 'Content-Type': 'application/problem+json' } }),
     );
     const e = (await createUpdaterClient({ fetch: s.fetch }).apply('nope').catch((x: unknown) => x)) as UpdaterRequestError;
+    expect(e.status).toBe(422);
+    expect(e.code).toBe('validation_failed');
     expect(e.fields).toEqual(body.errors);
+    expect(e.isApplyRefusal).toBe(true);
+  });
+
+  it('a 422 with another field code, or a 409 with an unknown code, is not an apply refusal', async () => {
+    const other = {
+      type: 'about:blank', title: 'x', status: 422, code: 'validation_failed', request_id: 'r',
+      errors: [{ field: '/body/other', code: 'too_long', message: 'm' }],
+    };
+    const a = fake(new Response(JSON.stringify(other), { status: 422, headers: { 'Content-Type': 'application/problem+json' } }));
+    const ea = (await createUpdaterClient({ fetch: a.fetch }).apply('v1.1.0').catch((x: unknown) => x)) as UpdaterRequestError;
+    expect(ea.isApplyRefusal).toBe(false);
+    const b = fake(problem(409, 'something_else', 'x'));
+    const eb = (await createUpdaterClient({ fetch: b.fetch }).apply('v1.1.0').catch((x: unknown) => x)) as UpdaterRequestError;
+    expect(eb.isApplyRefusal).toBe(false);
+    const d = fake(problem(500, 'no_update', 'x'));
+    const ed = (await createUpdaterClient({ fetch: d.fetch }).apply('v1.1.0').catch((x: unknown) => x)) as UpdaterRequestError;
+    expect(ed.isApplyRefusal).toBe(false); // the refusal codes count on a 409 only
+    // a top-level invalid_version is not what the server sends and does not count
+    const c = fake(problem(422, 'invalid_version', 'x'));
+    const ec = (await createUpdaterClient({ fetch: c.fetch }).apply('v1.1.0').catch((x: unknown) => x)) as UpdaterRequestError;
+    expect(ec.isApplyRefusal).toBe(false);
   });
 });
 
@@ -229,8 +260,8 @@ describe('error decoding', () => {
     expect(e.requiredPermission).toBe('core:admin');
   });
 
-  it('a plain 403 forbidden is not an interactive-session problem', async () => {
-    const s = fake(problem(403, 'forbidden', 'no'));
+  it('a plain 403 permission_denied is not an interactive-session problem', async () => {
+    const s = fake(problem(403, 'permission_denied', 'no'));
     const e = (await createUpdaterClient({ fetch: s.fetch }).status().catch((x: unknown) => x)) as UpdaterRequestError;
     expect(e.needsInteractiveSession).toBe(false);
   });
@@ -346,11 +377,42 @@ describe('deadline and abort', () => {
   });
 });
 
+describe('timer and listener hygiene', () => {
+  it('clears the deadline timer and removes the abort listener after an answer and after a failure', async () => {
+    vi.useFakeTimers();
+    const ctl = new AbortController();
+    const add = vi.spyOn(ctl.signal, 'addEventListener');
+    const remove = vi.spyOn(ctl.signal, 'removeEventListener');
+    await createUpdaterClient({ fetch: fake(jsonRes(STATUS)).fetch }).status({ signal: ctl.signal });
+    expect(vi.getTimerCount()).toBe(0);
+    expect(add).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(remove.mock.calls[0][1]).toBe(add.mock.calls[0][1]);
+    await createUpdaterClient({ fetch: fake(problem(500, 'internal', 'x')).fetch }).check().catch(() => {});
+    const boom: typeof fetch = () => Promise.reject(new TypeError('network down'));
+    await createUpdaterClient({ fetch: boom }).status({ signal: ctl.signal }).catch(() => {});
+    expect(vi.getTimerCount()).toBe(0);
+    expect(add).toHaveBeenCalledTimes(2);
+    expect(remove).toHaveBeenCalledTimes(2);
+  });
+
+  it('timeoutMs <= 0 means no deadline', async () => {
+    vi.useFakeTimers();
+    let release: (r: Response) => void = () => {};
+    const slow: typeof fetch = () => new Promise<Response>((r) => (release = r));
+    const p = createUpdaterClient({ fetch: slow, timeoutMs: 0 }).status();
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(24 * 3600 * 1000);
+    release(jsonRes(STATUS));
+    await expect(p).resolves.toEqual(STATUS);
+  });
+});
+
 describe('no secrets in logs or errors', () => {
   it('logs nothing, and an error carries neither the request body nor response headers', async () => {
     const canary = 'canary-batcave-sentinel';
     const s = fake(
-      new Response(JSON.stringify({ type: 'about:blank', title: 'forbidden', status: 403, code: 'forbidden', detail: 'no' }), {
+      new Response(JSON.stringify({ type: 'about:blank', title: 'forbidden', status: 403, code: 'permission_denied', detail: 'no' }), {
         status: 403,
         headers: {
           'Content-Type': 'application/problem+json',
@@ -368,6 +430,22 @@ describe('no secrets in logs or errors', () => {
     expect(dump).not.toContain('v1.1.0'); // the request body is not echoed
     for (const spy of consoleSpies) expect(spy).not.toHaveBeenCalled();
     expect(s.calls[0].headers.authorization).toBeUndefined(); // the client adds no credential header itself
+  });
+
+  it('does not echo a legacy or proxy body, or a malformed success body, into an error', async () => {
+    const canary = 'canary-batcave-sentinel';
+    const proxy = fake(new Response(`upstream said ${canary}`, { status: 502, headers: { 'Content-Type': 'text/plain' } }));
+    const e1 = (await createUpdaterClient({ fetch: proxy.fetch }).status().catch((x: unknown) => x)) as UpdaterRequestError;
+    expect(e1.code).toBe('legacy_error');
+    const legacy = fake(jsonRes({ error: canary, message: canary }, 500));
+    const e2 = (await createUpdaterClient({ fetch: legacy.fetch }).check().catch((x: unknown) => x)) as UpdaterRequestError;
+    const bad = fake(jsonRes({ mode: canary }));
+    const e3 = (await createUpdaterClient({ fetch: bad.fetch }).status().catch((x: unknown) => x)) as Error;
+    expect(e3).toBeInstanceOf(UpdaterProtocolError);
+    for (const e of [e1, e2, e3]) {
+      expect(`${e.message} ${JSON.stringify(e)} ${e.stack ?? ''}`).not.toContain(canary);
+    }
+    for (const spy of consoleSpies) expect(spy).not.toHaveBeenCalled();
   });
 
   it('logs nothing on success or on a redirect', async () => {
