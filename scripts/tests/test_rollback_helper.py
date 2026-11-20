@@ -2638,6 +2638,24 @@ class RollbackEnv(unittest.TestCase):
         self.assertIn(p, self.gens())
         self.assert_p_is_still_the_boundary(p)
 
+    def test_new_measurements_win_over_the_facts_a_generation_already_held(self):
+        """Merging keeps old facts only where the new ones are unknown."""
+        h = self.env_host()
+        p = self.flip_and_roll_back(h)
+        path = self.gdir() / f"{p}.json"
+        doc = json.loads(path.read_text())
+        doc["binary"]["version"] = "stale-v0"
+        path.write_text(json.dumps(doc))
+        path.chmod(0o600)
+        self.deploy(
+            h,
+            "flip-build-2",
+            conf=self.NEW_CONF,
+            facts=self.facts("flip-build-2", "v2.0.1", "storage=2", "1"),
+        )
+        self.assertEqual(self.gen(p)["binary"]["version"], "v1.0.0", "what the deploy measured")
+        self.assertEqual(self.gen(p)["pin_reason"], "boundary")
+
     def test_the_reflip_keeps_the_boundary_even_if_the_installed_record_was_lost(self):
         h = self.env_host()
         p = self.flip_and_roll_back(h)

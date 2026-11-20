@@ -421,6 +421,12 @@ def validate_sudoers(visudo: str, text: str, directory: str) -> str:
     return tmp
 
 
+def sudo_argv() -> list[str]:
+    """The command that re-runs this installer as root: isolated (-I), so no
+    PYTHON* variable survives sudo's environment handling into a root python."""
+    return ["sudo", sys.executable, "-I", *sys.argv]
+
+
 def check_whole_config(visudo: str) -> str:
     """`visudo -c` over the whole sudoers configuration: the drop-in checked on
     its own can still be wrong in context (an Include order, an alias another
@@ -535,7 +541,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if refuse_conf else 0
     if os.geteuid() != 0 and not root:
         print("\nApplying needs root: re-running under sudo.", flush=True)
-        os.execvp("sudo", ["sudo", sys.executable, "-I", *sys.argv])  # noqa: S606 (argv)
+        os.execvp("sudo", sudo_argv())  # noqa: S606 (argv)
     chown = os.geteuid() == 0
     # The sudoers text is checked first: a drop-in visudo refuses stops the
     # install before a single file is written.
