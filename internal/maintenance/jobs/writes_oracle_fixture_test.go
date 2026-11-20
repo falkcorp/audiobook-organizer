@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/writes_oracle_fixture_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8fbddfb2-91e8-42bd-ab62-8e8e7e8cd794
 // last-edited: 2026-11-19
 
@@ -117,14 +117,18 @@ func TestOracleWalk_RecordsWhatItCannotResolve(t *testing.T) {
 	op := oracleFixture(t)
 	// Every shape the signature-based fallback is not applied to (a declared
 	// variable, a call result, an outside call's closure) must still be
-	// recorded, never skipped.
+	// recorded, never skipped. The key names where the value was made: the
+	// outside function a call result came from, the variable nothing stores to
+	// (read where the caller passes it, for ViaUnsetStepParam), a parameter no
+	// walked caller supplies.
 	for root, what := range map[string]string{
-		"ViaUnresolved":     "#value",
+		"ViaUnresolved":     "#outside:sync.Map.Load",
 		"ViaUnsetHook":      "#unsetHook",
-		"ViaCallResult":     "#call result",
+		"ViaCallResult":     "#outside:sync.Map.Load",
 		"ViaOutsideClosure": "#outside:context.WithCancel",
-		"ViaUnsetStepParam": "#parameter",
+		"ViaUnsetStepParam": "#unsetStep",
 		"ViaPhiOfHooks":     "#unsetHook",
+		"ViaOnlyAsValue":    "#parameter:fn",
 	} {
 		_, _, _, calls, _ := derivedWrites(op, op.roots[0].Func(root))
 		var found []string
