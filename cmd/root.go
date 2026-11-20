@@ -28,29 +28,6 @@ import (
 	"github.com/spf13/viper"
 )
 
-// shutdownBudgetEnv is the R1 reading of core.shutdown.budget's operator name (05-health §5H.4;
-// 05-config §1.12.1). F3 deletes it with R1Values: core config reads the variable from then on.
-// serve reads it first thing and passes it as books.ServeInputs.ShutdownBudget, which books.Options
-// sets as R1Values.ShutdownBudget.
-const shutdownBudgetEnv = "ABO_CORE_SHUTDOWN_BUDGET"
-
-// shutdownBudgetFromEnv returns 0 (core's default) when the variable is unset or empty, the parsed
-// duration when it is a positive time.ParseDuration value, and an error naming the variable otherwise.
-func shutdownBudgetFromEnv(lookup func(string) (string, bool)) (time.Duration, error) {
-	raw, ok := lookup(shutdownBudgetEnv)
-	if !ok || raw == "" {
-		return 0, nil
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil {
-		return 0, fmt.Errorf("%s: %w", shutdownBudgetEnv, err)
-	}
-	if d <= 0 {
-		return 0, fmt.Errorf("%s: %q must be a positive duration", shutdownBudgetEnv, raw)
-	}
-	return d, nil
-}
-
 var cfgFile string
 var rootDir string
 var databasePath string
@@ -249,13 +226,6 @@ var serveCmd = &cobra.Command{
 	Short: "Start the web server",
 	Long:  `Start the web server to provide a web interface for audiobook management.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// An invalid ABO_CORE_SHUTDOWN_BUDGET refuses the start, before the
-		// store opens or anything binds (R1-33).
-		shutdownBudget, err := shutdownBudgetFromEnv(os.LookupEnv)
-		if err != nil {
-			return fmt.Errorf("serve: %w", err)
-		}
-
 		// Lines before app.New installs the log pipeline at P5 (the config
 		// load here, and the kernel's store open, checkpoint and migrations at
 		// P2 to P4b) go to standard output at log_level, as the rest of serve's
@@ -303,7 +273,10 @@ var serveCmd = &cobra.Command{
 			}
 		}
 
-		// TLS configuration (defaults to snake oil certs)
+		// TLS: the files reach the listener as core.http.tls.* (the flags are
+		// flag layers, serveBootInputs); these two only describe the process
+		// to the server config until the listener's address and files replace
+		// them.
 		cfg.TLSCertFile = cmd.Flag("tls-cert").Value.String()
 		cfg.TLSKeyFile = cmd.Flag("tls-key").Value.String()
 		cfg.HTTP3Port = cmd.Flag("http3-port").Value.String()
@@ -311,11 +284,11 @@ var serveCmd = &cobra.Command{
 		// Public-facing origin for absolute link generation (e.g. temp-login URLs).
 		cfg.ExternalURL = cmd.Flag("external-url").Value.String()
 
-		boot, err := rootBootInputs()
+		boot, err := serveBootInputs(cmd.Flags())
 		if err != nil {
 			return err
 		}
-		return runApp(cmd.Context(), books.ServeInputs{Server: cfg, Telemetry: telemetryCfg, ShutdownBudget: shutdownBudget, FromRelease: fromRelease, Boot: boot})
+		return runApp(cmd.Context(), books.ServeInputs{Server: cfg, Telemetry: telemetryCfg, FromRelease: fromRelease, Boot: boot})
 	},
 }
 
@@ -399,8 +372,8 @@ func init() {
 	serveCmd.Flags().String("read-timeout", "0s", "read timeout (0s disables timeout for SSE compatibility)")
 	serveCmd.Flags().String("write-timeout", "0s", "write timeout (0s disables timeout for SSE compatibility)")
 	serveCmd.Flags().String("idle-timeout", "120s", "idle timeout (e.g. 60s, 2m)")
-	serveCmd.Flags().String("tls-cert", "certs/localhost.crt", "TLS certificate file for HTTPS/HTTP2/HTTP3")
-	serveCmd.Flags().String("tls-key", "certs/localhost.key", "TLS key file for HTTPS/HTTP2/HTTP3")
+	serveCmd.Flags().String("tls-cert", "", "TLS certificate file for HTTPS/HTTP2/HTTP3 (core.http.tls.cert_file; with --tls-key; none = HTTP only)")
+	serveCmd.Flags().String("tls-key", "", "TLS key file for HTTPS/HTTP2/HTTP3 (core.http.tls.key_file)")
 	serveCmd.Flags().String("http3-port", "8484", "HTTP/3 (QUIC) port on UDP (same as --port for best compatibility)")
 	serveCmd.Flags().String("external-url", "", "public-facing origin used in generated links, e.g. https://books.example.com (prevents Host-header injection)")
 	serveCmd.Flags().Int("workers", 2, "number of background operation workers")

@@ -454,9 +454,7 @@ func kernelConfig(opts Options, mods []module.Module) (kernel.Config, error) {
 		c.ConfigOptions = opts.configOptions()
 		c.StateDirDefault = opts.StateDir
 	}
-	if f := opts.R1Values; f != nil {
-		c.R1Values = func() kernel.R1Values { return kernel.R1Values(f()) }
-	}
+	c.CoreDefaults = kernel.CoreDefaults(opts.CoreDefaults)
 	if opts.Logger == nil {
 		c.LogOutput = opts.LogOutput
 		if opts.R1Log != nil {

@@ -173,7 +173,7 @@ func TestSupervisor_DefaultNotifierSpeaksSystemd(t *testing.T) {
 	var addr atomic.Value
 	c := supervised(t, rec, hooked("alfred", rec))
 	c.Notifier = nil // the default: systemd's notify protocol
-	c.R1Values = func() R1Values { return R1Values{Listen: "127.0.0.1:0"} }
+	withCore(&c, "core.http.listen", "127.0.0.1:0")
 	c.Listen = func(o httpapi.ListenOptions, h http.Handler, l *slog.Logger) (Server, error) {
 		s, err := listenHTTP(o, h, l)
 		if err == nil {

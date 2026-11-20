@@ -266,7 +266,7 @@ func lateStopKernel(t *testing.T, path string, budget time.Duration, hold func()
 	c.Logger = capture.Logger()
 	ready := make(chan struct{})
 	c.Notifier = readySignal{notifier: notifier{rec}, ready: ready}
-	c.R1Values = func() R1Values { return R1Values{Listen: "localhost:0", ShutdownBudget: budget} }
+	withCore(&c, "core.http.listen", "localhost:0", "core.shutdown.budget", budget.String())
 	c.StoragePath = path
 	return mustNew(t, c), deps, capture, ready
 }
@@ -600,7 +600,7 @@ func TestCloseWithoutRun(t *testing.T) {
 		const budget = 1500 * time.Millisecond
 		c := testConfig(t, storageMod("alfred", nil))
 		c.StoragePath = tempStoragePath(t)
-		c.R1Values = func() R1Values { return R1Values{ShutdownBudget: budget} }
+		withCore(&c, "core.shutdown.budget", budget.String())
 		k := mustNew(t, c)
 		k.lateMu.Lock()
 		k.lateStops = append(k.lateStops, make(chan struct{}))
@@ -613,20 +613,16 @@ func TestCloseWithoutRun(t *testing.T) {
 			t.Fatalf("Close took %s, want the configured budget %s (the default is %s)", took, budget, defaultShutdownBudget)
 		}
 	})
-	t.Run("negative-budget", func(t *testing.T) {
-		capture := logcapture.New(t)
-		c := testConfig(t, storageMod("alfred", nil))
-		c.Logger = capture.Logger()
-		c.StoragePath = tempStoragePath(t)
-		c.R1Values = func() R1Values { return R1Values{ShutdownBudget: -time.Second} }
-		k := mustNew(t, c)
-		if err := k.Close(t.Context()); err != nil {
-			t.Fatalf("Close with a negative budget = %v, want nil: the close still runs", err)
-		}
-		if !slices.ContainsFunc(capture.Records(), func(r slog.Record) bool {
-			return r.Level == slog.LevelWarn && strings.Contains(r.Message, "default shutdown budget")
-		}) {
-			t.Fatalf("no WARN for the negative budget: %v", capture.Messages())
+	// A budget that is not positive never reaches the stop order: core.shutdown
+	// refuses it when the config loads, naming the key.
+	t.Run("non-positive-budget-refused", func(t *testing.T) {
+		for _, v := range []string{"-1s", "0s"} {
+			c := testConfig(t, storageMod("alfred", nil))
+			c.StoragePath = tempStoragePath(t)
+			withCore(&c, "core.shutdown.budget", v)
+			if _, err := New(t.Context(), c); err == nil || !strings.Contains(err.Error(), "core.shutdown") {
+				t.Fatalf("New with core.shutdown.budget %s = %v, want a refusal naming core.shutdown", v, err)
+			}
 		}
 	})
 }

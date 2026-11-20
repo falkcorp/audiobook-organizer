@@ -429,6 +429,7 @@ func buildPlan(in *m2Input) (*plan, error) {
 			return nil, &unrepresentableError{Keys: keys}
 		}
 		pl.gapFill()
+		pl.perimeterRules()
 		// After the gap-fill, so config.yaml's llm_mode and enable_ai_parsing are
 		// part of the effective config the legacy path served.
 		for _, line := range aiRoutingContinuity(pl.tree, hasOpenAI) {

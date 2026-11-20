@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/app"
+	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/coretest/logcapture"
 	"github.com/falkcorp/mediacore/examples/hello"
 )
@@ -31,11 +32,11 @@ func TestHelloEndToEnd(t *testing.T) {
 	capture := logcapture.New(t)
 	stateDir := t.TempDir()
 	a, err := app.New(t.Context(), app.Options{
-		AppID:    "hello",
-		Logger:   capture.Logger(),
-		StateDir: stateDir,
-		Env:      []string{}, // no HELLO_CORE_* variable of the host leaks in
-		R1Values: func() app.R1Values { return app.R1Values{Listen: "localhost:0"} },
+		AppID:       "hello",
+		Logger:      capture.Logger(),
+		StateDir:    stateDir,
+		Env:         []string{}, // no HELLO_CORE_* variable of the host leaks in
+		ConfigFlags: map[config.Path]string{"core.http.listen": "localhost:0"},
 		// hello boots through the config boot, as cmd/hello does (F3-07).
 		CoreConfigBoot: true,
 	}, hello.New())

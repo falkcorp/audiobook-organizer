@@ -8,6 +8,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"net"
 	"path/filepath"
 
 	"github.com/spf13/pflag"
@@ -64,6 +65,45 @@ func bootInputs(fs *pflag.FlagSet) (books.BootInputs, error) {
 		if err := database.ValidateDatabaseType(f.Value.String()); err != nil {
 			return books.BootInputs{}, err
 		}
+	}
+	return in, nil
+}
+
+// serveFlagConfigPaths maps serve's own flags that name a core key onto its
+// canonical path. --host and --port are one key between them
+// (core.http.listen), so they are handled by serveBootInputs, not here.
+var serveFlagConfigPaths = map[string]coreconfig.Path{
+	"tls-cert": "core.http.tls.cert_file",
+	"tls-key":  "core.http.tls.key_file",
+}
+
+// serveBootInputs is bootInputs for serve: the root flags (persistent, on
+// the root command) and serve's own, in the same changed-only form. --host
+// and --port make one flag layer value for core.http.listen, the host:port
+// they name, with the flag's own default standing in for the one the operator
+// did not set (--port 9000 listens on localhost:9000, as it always did).
+// A flag left at its default is no layer, so it locks nothing: the
+// environment (ABO_CORE_HTTP_LISTEN) and the stored value decide, and with
+// neither core.http.listen is ABO's compiled default (localhost:8484).
+func serveBootInputs(fs *pflag.FlagSet) (books.BootInputs, error) {
+	in, err := rootBootInputs()
+	if err != nil {
+		return books.BootInputs{}, err
+	}
+	set := func(p coreconfig.Path, v string) {
+		if in.Flags == nil {
+			in.Flags = map[coreconfig.Path]string{}
+		}
+		in.Flags[p] = v
+	}
+	for name, path := range serveFlagConfigPaths {
+		if f := fs.Lookup(name); f != nil && f.Changed {
+			set(path, f.Value.String())
+		}
+	}
+	host, port := fs.Lookup("host"), fs.Lookup("port")
+	if host != nil && port != nil && (host.Changed || port.Changed) {
+		set("core.http.listen", net.JoinHostPort(host.Value.String(), port.Value.String()))
 	}
 	return in, nil
 }

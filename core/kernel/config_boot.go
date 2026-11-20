@@ -82,7 +82,7 @@ func (k *Kernel) configInput(ctx context.Context) configInput {
 	o := k.cfg.ConfigOptions
 	return configInput{
 		AppID: k.cfg.AppID, EnvPrefix: o.EnvPrefix, Environ: o.Environ, FilePath: o.FilePath, Flags: o.Flags,
-		StateDirDefault: k.cfg.StateDirDefault, Modules: k.cfg.Modules, Passthrough: o.Passthrough,
+		StateDirDefault: k.cfg.StateDirDefault, Defaults: k.cfg.CoreDefaults, Modules: k.cfg.Modules, Passthrough: o.Passthrough,
 		EnvBindings: o.EnvBindings, Retired: o.Retired, OwnerSet: o.OwnerSet,
 		Logger: k.coreLog("config"), Now: bootClock(ctx),
 	}

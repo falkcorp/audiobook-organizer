@@ -47,6 +47,10 @@ type coreConfig struct {
 	store  *config.Store
 	shared bool
 	tasks  *config.Handle[tasksSettings]
+	// http and shutdown are core.http and core.shutdown, which start step 7
+	// reads (the listener, the perimeter and the stop budget).
+	http     *config.Handle[httpSettings]
+	shutdown *config.Handle[shutdownSettings]
 	// leaves is every key of the core sections (and, with the config boot on,
 	// of the enabled modules' sections) by dotted path, for the
 	// schedule-key declaration check (ValidateSchedules' declared function).
@@ -84,7 +88,7 @@ func (k *Kernel) coreConfig() (*coreConfig, error) {
 				c.shared = true
 			}
 		} else {
-			c, err = newCoreConfig(k.cfg.AppID, k.sectionCache)
+			c, err = newCoreConfig(k.cfg.AppID, k.cfg.CoreDefaults, k.sectionCache)
 		}
 		if err != nil {
 			return nil, err
@@ -96,7 +100,7 @@ func (k *Kernel) coreConfig() (*coreConfig, error) {
 
 // newCoreConfig builds the defaults-only store over coreSections(). cache, when
 // non-nil, is where it gets its sections built (config.Options.SectionCache).
-func newCoreConfig(appID string, cache *config.SectionCache) (*coreConfig, error) {
+func newCoreConfig(appID string, d CoreDefaults, cache *config.SectionCache) (*coreConfig, error) {
 	st, err := config.NewStore(config.Options{
 		AppID:        appID,
 		Environ:      []string{}, // no environment layer: os.Environ is not read
@@ -106,7 +110,7 @@ func newCoreConfig(appID string, cache *config.SectionCache) (*coreConfig, error
 	if err != nil {
 		return nil, fmt.Errorf("kernel: core config: %w", err)
 	}
-	handles, err := config.RegisterSections(st.Registry(), coreSections()...)
+	handles, err := config.RegisterSections(st.Registry(), coreSectionsWith(d)...)
 	if err != nil {
 		return nil, fmt.Errorf("kernel: core config: register the core sections: %w", err)
 	}
@@ -123,13 +127,18 @@ func newCoreConfig(appID string, cache *config.SectionCache) (*coreConfig, error
 func coreConfigOver(st *config.Store, handles []any) (*coreConfig, error) {
 	c := &coreConfig{store: st, leaves: map[string]cfgLeaf{}}
 	for _, h := range handles {
-		if th, ok := h.(*config.Handle[tasksSettings]); ok {
+		switch th := h.(type) {
+		case *config.Handle[tasksSettings]:
 			c.tasks = th
+		case *config.Handle[httpSettings]:
+			c.http = th
+		case *config.Handle[shutdownSettings]:
+			c.shutdown = th
 		}
 		cfgWalkLeaves(c.leaves, h)
 	}
-	if c.tasks == nil {
-		return nil, fmt.Errorf("kernel: core config: coreSections lacks core.tasks")
+	if c.tasks == nil || c.http == nil || c.shutdown == nil {
+		return nil, fmt.Errorf("kernel: core config: coreSections lacks core.tasks, core.http or core.shutdown")
 	}
 	return c, nil
 }

@@ -75,7 +75,7 @@ func offlineConfig(ctx context.Context, opts Options, mods []module.Module, owne
 			c.Log.Output = "stderr"
 		}
 	}
-	c.R1Values, c.Listen = nil, nil
+	c.Listen = nil
 	c.BeforeSwap, c.ArchiveExtract = opts.R1BeforeSwap, opts.R1ArchiveExtract
 	if c.ArchiveExtract == nil {
 		c.ArchiveExtract = backup.ExtractStore

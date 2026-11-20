@@ -65,10 +65,12 @@ type configInput struct {
 	// StateDirDefault is app.Options.StateDir, the compiled default of
 	// core.paths.state_dir.
 	StateDirDefault string
-	Modules         []module.Module
-	Passthrough     func(config.Path) bool
-	EnvBindings     []config.EnvName
-	Retired         []config.RetiredName
+	// Defaults are the app's compiled defaults of core keys (Config.CoreDefaults).
+	Defaults    CoreDefaults
+	Modules     []module.Module
+	Passthrough func(config.Path) bool
+	EnvBindings []config.EnvName
+	Retired     []config.RetiredName
 	// OwnerVerifier is true when the app configured an owner-proof verifier
 	// (F4's app.Options.Authenticators; nothing sets it before then). OwnerSet
 	// is then required: config checks ProtectOwner with Actor.Owner only once an
@@ -185,7 +187,7 @@ func newStep0Store(in configInput, bootRecord func(string) (config.StateFiles, e
 	if err != nil {
 		return nil, nil, fmt.Errorf("kernel: config store: %w", err)
 	}
-	rest, err := coreSectionsButPathsAndModules()
+	rest, err := coreSectionsButPathsAndModules(in.Defaults)
 	if err == nil {
 		var handles []any
 		if handles, err = config.RegisterSections(st.Registry(), rest...); err == nil {
@@ -268,10 +270,11 @@ func step0(ctx context.Context, st *config.Store, in configInput, mkdir func(str
 // coreSectionsButPathsAndModules is coreSections without core.paths and
 // core.modules, which register with defaults the boot computes
 // (registerPathsAndModules).
-func coreSectionsButPathsAndModules() ([]any, error) {
+func coreSectionsButPathsAndModules(d CoreDefaults) ([]any, error) {
 	var paths, mods any
-	rest := make([]any, 0, len(coreSections()))
-	for _, sec := range coreSections() {
+	all := coreSectionsWith(d)
+	rest := make([]any, 0, len(all))
+	for _, sec := range all {
 		switch pathOf(sec) {
 		case pathsSection:
 			paths = sec
@@ -348,7 +351,7 @@ func CheckConfig(ctx context.Context, c ConfigCheck) (uses []config.RetiredUse, 
 		return nil, fmt.Errorf("kernel: config check: %w", err)
 	}
 	defer func() { err = errors.Join(err, st.Close(ctx)) }()
-	rest, err := coreSectionsButPathsAndModules()
+	rest, err := coreSectionsButPathsAndModules(CoreDefaults{})
 	if err != nil {
 		return nil, err
 	}

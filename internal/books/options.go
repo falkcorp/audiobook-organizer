@@ -11,9 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,9 +60,6 @@ type ServeInputs struct {
 	// Register), so the OTLP endpoints, interval and environment come from
 	// where they always did.
 	Telemetry config.Config
-	// ShutdownBudget is core.shutdown.budget as serve read it from
-	// ABO_CORE_SHUTDOWN_BUDGET (R1-33). Zero is core's default (25s).
-	ShutdownBudget time.Duration
 	// Boot is the command line's contribution to core's config boot: the flags
 	// the operator set and the --config file (BootInputs). The zero value is
 	// the environment and the compiled defaults alone.
@@ -87,10 +82,10 @@ type ServeInputs struct {
 //     HEAD's resolver, ABK_STATE_DIR and its fallback beside the database),
 //     which core's ResolveStateDir must agree with; StorageStateFiles is the
 //     state-file table the first-boot checkpoint copies (StateFiles);
-//   - R1Values: the listener and perimeter values of the effective config
-//     (stored settings and env overrides applied), which the kernel reads
-//     once at start step 7; ShutdownBudget is ServeInputs.ShutdownBudget
-//     (serve's ABO_CORE_SHUTDOWN_BUDGET reading, 0 = core's default);
+//   - CoreDefaults: ABO's compiled defaults of core.http.listen and
+//     core.http.client_ip_header (coreDefaults); the listener, perimeter and
+//     shutdown budget are core config keys, read by the kernel at start step
+//     7 from the layered store (serve's flags are flag layers, BootInputs);
 //   - R1Listen: HEAD's listener stack behind the perimeter shim
 //     (internal/server R1Listener);
 //   - Telemetry: HEAD's OTLP tracing and metric push and its environment;
@@ -165,7 +160,7 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 		Version:               m.version,
 		ReservedAPINamespaces: reservedAPINamespaces(),
 		LegacyAuthGinUntil:    ID,
-		R1Values:              func() app.R1Values { return r1Values(cfg, config.Snapshot(), in.ShutdownBudget) },
+		CoreDefaults:          coreDefaults,
 		R1Listen:              m.r1Listen,
 		Telemetry:             telemetryFromConfig(in.Telemetry),
 		LogOutput:             logStream(in.LogOut),
@@ -204,6 +199,7 @@ func OfflineOptions(boot BootInputs) (app.Options, error) {
 		ConfigPassthrough:  o.ConfigPassthrough,
 		ConfigFile:         o.ConfigFile,
 		ConfigFlags:        o.ConfigFlags,
+		CoreDefaults:       coreDefaults,
 		AppID:              AppID,
 		// serve's Version: the binary ID a staged swap records hashes it, so
 		// a reset or restore staged offline must carry the one the serve
@@ -330,58 +326,16 @@ func legacyKeyDir(dbPath string) string { return filepath.Dir(dbPath) }
 // the file the checkpoint copies and M2 imports the gap-fill values of.
 func gapFillPath(dbPath string) string { return filepath.Join(filepath.Dir(dbPath), "config.yaml") }
 
-// r1Values maps serve's flags and the effective config onto R1Values (05-config
-// §1.12.1): HEAD's --host/--port and TLS flags, ALLOWED_PEER_CIDRS,
-// TUNNEL_CONNECTOR_ADDRS with the header they set, the rate limit and the body
-// limits (MiB to bytes), and the shutdown budget serve read from
-// ABO_CORE_SHUTDOWN_BUDGET.
-func r1Values(cfg server.ServerConfig, c config.Config, shutdownBudget time.Duration) app.R1Values {
-	return app.R1Values{
-		Listen:         net.JoinHostPort(cfg.Host, cfg.Port),
-		TLSCertFile:    cfg.TLSCertFile,
-		TLSKeyFile:     cfg.TLSKeyFile,
-		PeerAllowlist:  splitList(c.AllowedPeerCIDRs),
-		TrustedProxies: connectorAddrs(c.TunnelConnectorAddrs),
-		// The connectors set CF-Connecting-IP (client_trust.go).
-		ClientIPHeader: "CF-Connecting-IP",
-		// HEAD's rule: enable_rate_limit is the switch and a positive
-		// api_rate_limit_per_minute the threshold; both must hold.
-		RateLimitEnabled:   c.EnableRateLimit && c.APIRateLimitPerMinute > 0,
-		RateLimitPerMinute: c.APIRateLimitPerMinute,
-		JSONMaxBytes:       int64(c.JSONBodyLimitMB) << 20,
-		UploadMaxBytes:     int64(c.UploadBodyLimitMB) << 20,
-		ShutdownBudget:     shutdownBudget,
-	}
-}
-
-// connectorAddrs is TUNNEL_CONNECTOR_ADDRS under HEAD's rule
-// (client_trust.go parseConnectorPeers): a connector is trusted by its exact
-// address, so an entry that is not one, a CIDR range included, is dropped.
-// Core's stage 0 accepts prefixes as trusted proxies; passing a range through
-// would trust every host in it to name the client. The warning for a dropped
-// entry is client_trust.go's reportConnectorRejects, which parses the same
-// setting with the same netip.ParseAddr rule; a second one here would show
-// the operator every warning twice.
-func connectorAddrs(csv string) []string {
-	var out []string
-	for _, e := range splitList(csv) {
-		if _, err := netip.ParseAddr(e); err == nil {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
-// splitList splits a comma-separated setting into its trimmed, non-empty
-// entries.
-func splitList(s string) []string {
-	var out []string
-	for _, f := range strings.Split(s, ",") {
-		if f = strings.TrimSpace(f); f != "" {
-			out = append(out, f)
-		}
-	}
-	return out
+// coreDefaults is ABO's compiled defaults of the core keys whose default the
+// specs leave to the app (05-http-api section 10). core.http.listen defaults
+// to one interface, as --host always did ("localhost"), and
+// core.http.client_ip_header to the header the tunnel connectors set
+// (CF-Connecting-IP, client_trust.go): core's own defaults, all interfaces and
+// the peer's address, would widen a bare install and blind the trusted-proxy
+// list. An operator value, a flag or a stored value beats both.
+var coreDefaults = app.CoreDefaults{
+	HTTPListen:         "localhost:8484",
+	HTTPClientIPHeader: "CF-Connecting-IP",
 }
 
 // telemetryFromConfig is HEAD's InitOTEL configuration as app.Telemetry:

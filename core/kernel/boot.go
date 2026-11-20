@@ -543,6 +543,9 @@ func (k *Kernel) closeCore(ctx context.Context, deadline time.Time) error {
 		// executor before the audit writer (06 §6.5.2), while storage is open;
 		// a no-op for a boot that started none, or when Run's stop order
 		// already did.
+		if k.perimeterStop != nil {
+			k.perimeterStop()
+		}
 		if err := k.stopCoreServices(cctx, atLeastFloor(deadline)); err != nil {
 			errs = append(errs, err)
 		}

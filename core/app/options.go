@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"time"
 
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/httpapi"
@@ -58,6 +57,11 @@ type Options struct {
 	// later); an app that touches state files before or outside New calls
 	// ResolveStateDir.
 	StateDir string
+	// CoreDefaults are the app's compiled defaults of the core keys whose
+	// default the specs leave to the app (05-http-api §10). A zero field is
+	// core's own default. Like StateDir they are defaults: an operator value,
+	// a flag or a stored value beats them, and they lock nothing.
+	CoreDefaults CoreDefaults
 	// ConfigFile is optional; layered under env/flags/DB overrides
 	// (05-config). Read once config lands (F3).
 	ConfigFile string
@@ -99,14 +103,6 @@ type Options struct {
 	// Env; the flag layer arrives with config (F3).
 	Args []string
 	Env  []string
-
-	// R1Values delivers ABO's stored listener and perimeter values to the
-	// kernel in release R1, when core config has no DB layer (05-config
-	// §1.12.1 owns the type and the rule). The kernel calls it once per boot
-	// at 06 §6.5.2 start step (7), after the module start hooks of step (2)
-	// and before the first listener opens. nil = every key at core's default
-	// (hello). Release R1 only: F3's PR deletes the field and the type.
-	R1Values func() R1Values
 
 	// LegacyAuthGinUntil names the one module whose LegacyMount may use
 	// httpapi.LegacyAuthGin (ABO: "books" in R1). R2's identity flip clears it
@@ -226,6 +222,19 @@ type Options struct {
 	Updater *updater.Options
 }
 
+// CoreDefaults is the value of Options.CoreDefaults. It mirrors
+// kernel.CoreDefaults field for field, so New converts one into the other.
+type CoreDefaults struct {
+	// HTTPListen is core.http.listen's default (core: ":8484"). ABO names one
+	// interface, "localhost:8484", as its --host flag always defaulted: a
+	// bare install must not start listening on every interface.
+	HTTPListen string
+	// HTTPClientIPHeader is core.http.client_ip_header's default (core: "",
+	// the peer's own address). ABO's tunnel connectors name the client in
+	// "CF-Connecting-IP".
+	HTTPClientIPHeader string
+}
+
 // R1Server is one listener R1Listen opens: what the supervisor drives.
 // Serve blocks until the listener stops (nil after Shutdown); Shutdown
 // drains within ctx and closes what is left when ctx ends.
@@ -242,18 +251,4 @@ type Telemetry struct {
 	Tracing     *metrics.OTLPTracing // nil = the no-op TracerProvider
 	Environment string               // deployment.environment; "" = metrics.DefaultEnvironment
 	InstanceID  string               // service.instance.id; "" = a random one per Provider
-}
-
-// R1Values is the release-R1-only value Options.R1Values returns (05-config
-// §1.12.1). Deleted in F3.
-type R1Values struct {
-	Listen                       string        // HEAD's --host and --port → core.http.listen
-	TLSCertFile, TLSKeyFile      string        // HEAD's --tls-cert, --tls-key
-	PeerAllowlist                []string      // ALLOWED_PEER_CIDRS → core.http.peer_allowlist
-	TrustedProxies               []string      // TUNNEL_CONNECTOR_ADDRS → core.http.trusted_proxies
-	ClientIPHeader               string        // the header TrustedProxies set (ABO: CF-Connecting-IP) → core.http.client_ip_header
-	RateLimitEnabled             bool          // enable_rate_limit → core.http.rate_limit.enabled
-	RateLimitPerMinute           int           // api_rate_limit_per_minute → core.http.rate_limit.per_minute
-	JSONMaxBytes, UploadMaxBytes int64         // json_body_limit_mb, upload_body_limit_mb (MiB → bytes)
-	ShutdownBudget               time.Duration // ABO_CORE_SHUTDOWN_BUDGET; 0 = core's default (05-health §5H.4)
 }

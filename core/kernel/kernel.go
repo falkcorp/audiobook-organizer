@@ -59,10 +59,6 @@ type Config struct {
 	Version               string // the app's release version: the resource's service.version
 	ReservedAPINamespaces []string
 	LegacyAuthGinUntil    module.ID
-	// R1Values is app.Options.R1Values, converted. The supervisor calls it
-	// once per Run, at start step (7), before the listener opens. nil = every
-	// value at core's default.
-	R1Values func() R1Values
 	// Logger replaces the log.Logging the kernel would build (tests).
 	Logger *slog.Logger
 	// LogOutput is where the kernel's log.Logging writes; nil = the stream of
@@ -186,21 +182,9 @@ type Config struct {
 	// StateDirDefault is app.Options.StateDir: the compiled default of
 	// core.paths.state_dir. Read only when CoreConfigBoot is set.
 	StateDirDefault string
-}
-
-// R1Values mirrors app.R1Values field for field (05-config §1.12.1), so app
-// converts one into the other without copying fields by hand; the kernel
-// cannot import app. F3 deletes both.
-type R1Values struct {
-	Listen                       string
-	TLSCertFile, TLSKeyFile      string
-	PeerAllowlist                []string
-	TrustedProxies               []string
-	ClientIPHeader               string
-	RateLimitEnabled             bool
-	RateLimitPerMinute           int
-	JSONMaxBytes, UploadMaxBytes int64
-	ShutdownBudget               time.Duration
+	// CoreDefaults are the app's compiled defaults of the core keys whose
+	// default is the app's to name (app.Options.CoreDefaults).
+	CoreDefaults CoreDefaults
 }
 
 // Telemetry mirrors app.Telemetry field for field, so app converts one into
@@ -273,6 +257,9 @@ type Kernel struct {
 	// when a manifest declares data migrations (storageOptions).
 	rbacCat *rbac.Catalog
 	coreCfg *coreConfig
+	// perimeterStop ends the core.http subscription followPerimeter made; nil
+	// before start step 7.
+	perimeterStop func()
 	// sectionCache is the section cache a test handed the boot in its
 	// bootseam.Seams (read at P5), for the core config built at P7; nil in
 	// every production boot.
