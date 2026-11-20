@@ -12,7 +12,7 @@
 // WithinRoot, SecureJoin, SecureJoinResolved, CleanAbsolutePath,
 // SanitizeFilename, IsDangerousRoot, SafePath, Mounted, ReportPathNotify,
 // LedgerPathNotify, WriteReportFile, OpenReportFile (and its modes, ReportTruncate,
-// ReportAppend, ReportTouch and ReportReadAppend), PreflightReportFile, Call,
+// ReportAppend, ReportTouch, ReportReadAppend and ReportAppendAndRead), PreflightReportFile, Call,
 // Stats, the ReportDirName and LedgerDirName directories and the DirMode,
 // LedgerDirMode, FileMode and SecretFileMode constants):
 //

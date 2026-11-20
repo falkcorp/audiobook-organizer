@@ -6,10 +6,13 @@
 package maintenance
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -56,31 +59,46 @@ type fileProvExportParams struct {
 	// Max caps events per run so a first export over a large ledger can be
 	// done in bounded chunks. Whatever is left is reported, never silent.
 	Max int `json:"max"`
+	// StartNew accepts a ledger file that does not continue where the cursor says
+	// it should: renamed aside and recreated empty, replaced, restored from an
+	// older copy or truncated. Without it such a file is refused, because the
+	// events between the file's last line and the cursor are in no file at the
+	// ledger's path, and appending anyway would hide that. With it the run goes
+	// on from the cursor, and the gap is recorded in the result (ledger_gap) and
+	// as a marker line at the start of what this run appends. Ignored when the
+	// file is continuous with the cursor.
+	StartNew bool `json:"start_new"`
 }
 
 const fileProvExportDefaultMax = 5000
 
-// syncWriteCloser is an append target that can be made durable. *os.File
+// exportLedger is the ledger file as the export uses it: written and made
+// durable, and read back (its size and its last lines) to check that it continues
+// where the export cursor says it should before anything is appended. *os.File
 // satisfies it.
-type syncWriteCloser interface {
+type exportLedger interface {
 	io.WriteCloser
+	io.ReaderAt
 	Sync() error
+	Stat() (fs.FileInfo, error)
 }
 
 // openExportFile opens the export file for appending. The default opens it the
-// way every report is opened (library.OpenReportFile, ReportAppend): relative to a
-// handle on its directory, never following a symlink, and refusing a file that is
-// not a regular file owned by this user with one link. The export appends rather
-// than replaces, and it is the ledger's only copy outside the database, so a link
-// planted at its name must not redirect it.
+// way every report is opened (library.OpenReportFile): relative to a handle on its
+// directory, never following a symlink, and refusing a file that is not a regular
+// file owned by this user with one link. The export appends rather than replaces,
+// and it is the ledger's only copy outside the database, so a link planted at its
+// name must not redirect it. The file is opened for reading as well
+// (library.ReportAppendAndRead: still O_APPEND, so every write goes at the end),
+// because the export reads the end of it back before writing.
 //
 // It is also a seam. The single most important property of this op is
 // that the cursor advances only AFTER the bytes are durable, and the only way
 // to test that is to open successfully and then fail the write or the sync —
 // which no real filesystem will do on demand. Tests substitute this; nothing
 // else does.
-var openExportFile = func(path string) (syncWriteCloser, error) {
-	return library.OpenReportFile(path, 0o644, library.ReportAppend)
+var openExportFile = func(path string) (exportLedger, error) {
+	return library.OpenReportFile(path, 0o644, library.ReportAppendAndRead)
 }
 
 // fileProvExportLine is one JSONL record.
@@ -94,6 +112,11 @@ type fileProvExportLine struct {
 	ExportedAt time.Time           `json:"exported_at"`
 	Missing    bool                `json:"missing,omitempty"`
 	Event      *database.FileEvent `json:"event,omitempty"`
+	// Gap marks a line that is not an event: written at the start of a run that
+	// was told (start_new) to carry on past a ledger file that did not continue
+	// where the cursor said it should. Seq is 0 on it. A reader collapsing the file
+	// on seq must skip lines whose Gap is set.
+	Gap string `json:"gap,omitempty"`
 }
 
 // fileProvExportResult is what the op reports back.
@@ -128,6 +151,9 @@ type fileProvExportResult struct {
 	ChainsBroken int `json:"chains_broken"`
 	// BrokenChains names the first few offenders, for going and looking.
 	BrokenChains []string `json:"broken_chains,omitempty"`
+	// LedgerGap says how the ledger file failed to continue from the cursor and
+	// was accepted anyway (start_new). Empty when the file was continuous.
+	LedgerGap string `json:"ledger_gap,omitempty"`
 }
 
 // brokenChainSampleCap bounds the named offenders. The count is exact; the
@@ -173,8 +199,9 @@ type fileProvExportEnv struct {
 // fileProvExportNativeParams is fileProvExportParams for the native run: the
 // mode keys are only refusal markers (the mode comes from the start request).
 type fileProvExportNativeParams struct {
-	Path string `json:"path"`
-	Max  int    `json:"max"`
+	Path     string `json:"path"`
+	Max      int    `json:"max"`
+	StartNew bool   `json:"start_new"`
 	t6g4ModeKeys
 }
 
@@ -208,7 +235,10 @@ func (p *Plugin) fileProvenanceExportKind(deps t6g4Deps, sched *tasks.Schedule) 
 				"missing rows as deletion evidence. Path is required: a file name in the library's " +
 				"ledger directory (root_dir/.ledger), such as ledger.jsonl; a path anywhere " +
 				"else, or one with a directory in it, is refused, and the library volume must be " +
-				"mounted. The directory is created if it is missing, on a preview too. A preview " +
+				"mounted. The directory is created if it is missing, on a preview too. A live run " +
+				"refuses a ledger file that does not continue where the cursor says it should " +
+				"(renamed aside and recreated, replaced, truncated); start_new=true carries on " +
+				"anyway and records the gap in the result and as a marker line. A preview " +
 				"(the default) appends nothing, start in live mode to write.",
 			// Appends the ledger to a JSONL file on disk (files) and moves the export
 			// cursor in the provenance keyspace, declared as t6g4ResProvenance.
@@ -233,7 +263,7 @@ func (p *Plugin) fileProvenanceExportKind(deps t6g4Deps, sched *tasks.Schedule) 
 				return fileProvExportResult{}, err
 			}
 			return p.runFileProvenanceExportCore(rc.Context(), fileProvExportParams{
-				Path: in.Path, Apply: base.Live, Max: in.Max,
+				Path: in.Path, Apply: base.Live, Max: in.Max, StartNew: in.StartNew,
 			}, fileProvExportEnv{t6g4Base: base})
 		},
 	})
@@ -278,6 +308,10 @@ func (p *Plugin) runFileProvenanceExportCore(ctx context.Context, params filePro
 	if result.Missing > 0 {
 		log.Warn("file-provenance-export: sequence slots whose event row is gone",
 			"missing", result.Missing)
+	}
+	if result.LedgerGap != "" {
+		log.Warn("file-provenance-export: the ledger file did not continue from the cursor; carrying on (start_new)",
+			"gap", result.LedgerGap, "path", result.Path)
 	}
 	if result.CursorAfter < result.MaxSeq {
 		log.Warn("file-provenance-export: more events remain — run again to continue",
@@ -412,6 +446,18 @@ func (p *Plugin) exportFileProvenanceCore(ctx context.Context, params fileProvEx
 	if err != nil {
 		return result, fmt.Errorf("file-provenance-export: open %s: %w", outPath, err)
 	}
+	// The ledger directory is closed to other users, but whoever can write the
+	// library root can rename it, and the next run would make a fresh one and
+	// append from the cursor: the events before it would be in no file at this
+	// path, and nothing would say so. The file must continue where the cursor says.
+	gap, gapErr := checkLedgerContinuity(f, cursor, params.StartNew)
+	if gapErr != nil {
+		return result, fmt.Errorf("file-provenance-export: %s: %w", outPath, errors.Join(gapErr, f.Close()))
+	}
+	if gap != "" {
+		result.LedgerGap = gap
+		lines = append([]fileProvExportLine{{ExportedAt: now, Gap: gap}}, lines...)
+	}
 
 	var written int
 	var bytesWritten int64
@@ -427,7 +473,9 @@ func (p *Plugin) exportFileProvenanceCore(ctx context.Context, params fileProvEx
 			if wErr != nil {
 				return fmt.Errorf("write seq %d: %w", line.Seq, wErr)
 			}
-			written++
+			if line.Gap == "" {
+				written++
+			}
 		}
 		// fsync before the cursor moves. The ordering is the whole safety
 		// argument: if this fails, the cursor stays put and the next run
@@ -453,4 +501,97 @@ func (p *Plugin) exportFileProvenanceCore(ctx context.Context, params fileProvEx
 	}
 	result.CursorAfter = last
 	return result, nil
+}
+
+// checkLedgerContinuity says whether the ledger file f continues where the export
+// cursor says it should: when events up to cursor were already exported, the last
+// exported line in the file must be at or after the cursor (after it is possible
+// and harmless: a run that wrote and synced and died before it advanced the
+// cursor, which the next run re-appends). A file that is empty (made by this very
+// open, or truncated), that holds no exported line, or that ends before the cursor
+// is not that ledger: it was renamed aside and recreated, replaced, restored from an
+// older copy or cut short, and the events between its end and the cursor are in no
+// file at this path.
+//
+// It returns "" when the file is continuous. When it is not, it returns an error
+// that says so and names start_new, unless startNew is set, in which case it
+// returns the description for the result and the marker line. The ledger is read
+// from the file rather than from a copy kept beside the cursor: what is checked is
+// the bytes about to be appended to, and a restored or copied ledger that really
+// holds the lines is not a gap. cursor 0 (nothing exported yet) always passes.
+func checkLedgerContinuity(f exportLedger, cursor uint64, startNew bool) (string, error) {
+	if cursor == 0 {
+		return "", nil
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return "", fmt.Errorf("inspect the ledger file: %w", err)
+	}
+	var problem string
+	if info.Size() == 0 {
+		problem = fmt.Sprintf("the ledger file is empty, but the export cursor says events up to seq %d were already exported", cursor)
+	} else {
+		last, found, lerr := lastLedgerSeq(f, info.Size())
+		switch {
+		case lerr != nil:
+			return "", fmt.Errorf("read the end of the ledger file: %w", lerr)
+		case !found:
+			problem = fmt.Sprintf("the ledger file holds no exported event, but the export cursor says events up to seq %d were already exported", cursor)
+		case last < cursor:
+			problem = fmt.Sprintf("the ledger file ends at seq %d, but the export cursor says events up to seq %d were already exported", last, cursor)
+		}
+	}
+	if problem == "" {
+		return "", nil
+	}
+	if !startNew {
+		return "", fmt.Errorf("%s, so the earlier lines are not in this file (it was renamed, replaced, restored "+
+			"from an older copy or truncated); nothing was appended. Pass start_new=true to carry on in this file anyway; "+
+			"the gap is then recorded in the result and as a marker line", problem)
+	}
+	return problem, nil
+}
+
+// ledgerTailChunk is how much of the end of the ledger is read at a time.
+const ledgerTailChunk = 64 << 10
+
+// lastLedgerSeq finds the sequence of the last event line in the file of the given
+// size, reading backwards from the end in chunks. A line without a trailing newline
+// at the very end is a write that was cut off, and is skipped, as are lines that
+// do not parse, marker lines (Gap set) and anything with seq 0.
+func lastLedgerSeq(r io.ReaderAt, size int64) (seq uint64, found bool, err error) {
+	var carry []byte // the start of a line whose beginning is in an earlier chunk
+	for end, first := size, true; end > 0; first = false {
+		start := max(0, end-ledgerTailChunk)
+		buf := make([]byte, int(end-start)+len(carry))
+		n, rerr := r.ReadAt(buf[:end-start], start)
+		if rerr != nil && !(errors.Is(rerr, io.EOF) && int64(n) == end-start) {
+			return 0, false, rerr
+		}
+		copy(buf[end-start:], carry)
+		lines := bytes.Split(buf, []byte{'\n'})
+		carry = nil
+		if start > 0 {
+			// The first element may be the tail of a line that began before start.
+			carry = append([]byte(nil), lines[0]...)
+			lines = lines[1:]
+		}
+		if first && len(lines) > 0 {
+			// The element after the last newline is empty when the file ends in
+			// one, and a cut-off write when it does not; neither is a line.
+			lines = lines[:len(lines)-1]
+		}
+		for i := len(lines) - 1; i >= 0; i-- {
+			var l struct {
+				Seq uint64 `json:"seq"`
+				Gap string `json:"gap"`
+			}
+			if json.Unmarshal(lines[i], &l) != nil || l.Seq == 0 || l.Gap != "" {
+				continue
+			}
+			return l.Seq, true, nil
+		}
+		end = start
+	}
+	return 0, false, nil
 }

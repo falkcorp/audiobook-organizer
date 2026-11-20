@@ -63,12 +63,23 @@ same day after its review.
   works. Before this tightening, a name with a folder in it, such as
   "mine/chosen.tsv", was accepted and the folder created; that no longer works,
   so use "chosen.tsv". Anyone who has been exporting file history to a file
-  elsewhere needs to start a new ledger file inside ".ledger" (only the
-  account the server runs as can write in that folder: it is made that way, and
-  a folder that already let the group or everyone write into it has that taken
-  away, so nobody else can delete or rename the ledger): the export
-  remembers how far it got, so the new file begins at that point and the
-  earlier lines stay in the old file, which should be kept with it. A ledger
+  elsewhere needs to start a new ledger file inside ".ledger", and to tell the
+  export so once: it remembers how far it got, and a file that does not hold
+  the lines up to that point is refused (see below) unless the run is given
+  "start_new". The new file then begins at that point, the gap is written into
+  the result and as a marker line in the file, and the earlier lines stay in the
+  old file, which should be kept with it. Only the account the server runs as
+  can create, delete or rename files inside the ".ledger" folder: it is made
+  that way, and a folder that already let the group or everyone write into it
+  has that taken away. That does not protect the folder itself. Anyone who can
+  write in the library folder can rename ".ledger" and let the next export make
+  a new one. The export now notices: before it appends, it reads the end of the
+  ledger file and refuses, writing nothing, if that file is empty or stops
+  before the point the export remembers (renamed aside and recreated, deleted,
+  replaced, cut short), until "start_new" is passed. A file that is a copy or a
+  restore holding all the lines passes. A file that runs past the point is
+  fine: that is what a run that was cut off just before it noted its progress
+  leaves, and the next run repeats those lines. A ledger
   copied in must be an ordinary file owned by the account the server runs as
   and with a single name; one copied in with administrator rights belongs to
   the administrator and is refused until its owner is changed. The same test is

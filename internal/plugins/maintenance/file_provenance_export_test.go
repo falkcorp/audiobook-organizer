@@ -16,13 +16,18 @@ package maintenance
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -529,10 +534,15 @@ func (f *failingWriter) Sync() error {
 }
 func (f *failingWriter) Close() error { return nil }
 
-func withOpenExportFile(t *testing.T, w syncWriteCloser) {
+// The rest is a ledger that is empty and stays where it is: the failing writer is
+// used with a cursor of 0, where nothing is read back.
+func (f *failingWriter) ReadAt([]byte, int64) (int, error) { return 0, io.EOF }
+func (f *failingWriter) Stat() (fs.FileInfo, error)        { return nil, errors.New("not a file") }
+
+func withOpenExportFile(t *testing.T, w exportLedger) {
 	t.Helper()
 	prev := openExportFile
-	openExportFile = func(string) (syncWriteCloser, error) { return w, nil }
+	openExportFile = func(string) (exportLedger, error) { return w, nil }
 	t.Cleanup(func() { openExportFile = prev })
 }
 
@@ -648,4 +658,243 @@ func exportFileProvenanceHEAD(p *Plugin, ctx context.Context, rawParams json.Raw
 		return fileProvExportResult{}, err
 	}
 	return p.runFileProvenanceExportCore(ctx, params, p.fileProvenanceExportHeadEnv(&fakeReporter{}, params.Apply))
+}
+
+// ledgerRoot is the library root and ledger directory of an export fixture.
+func ledgerRoot(out string) (root, ledger string) {
+	ledger = filepath.Dir(out)
+	return filepath.Dir(ledger), ledger
+}
+
+func exportErr(p *Plugin, params map[string]any) (fileProvExportResult, error) {
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return fileProvExportResult{}, err
+	}
+	return exportFileProvenanceHEAD(p, context.Background(), raw)
+}
+
+// Whoever can write the library root can rename the ledger directory aside; the
+// next run would make a fresh one and append from the cursor, leaving the earlier
+// events in no file at the ledger's path. That is refused, nothing is appended and
+// the cursor stays, and the file that was set aside is untouched.
+func TestFileProvenanceExportRefusesALedgerThatWasRenamedAside(t *testing.T) {
+	p, store, out := newExportFixture(t)
+	seedEvents(t, store, 2)
+	runExport(t, p, map[string]any{"path": "ledger.jsonl", "apply": true})
+	root, ledger := ledgerRoot(out)
+	aside := filepath.Join(root, ".ledger.aside")
+	require.NoError(t, os.Rename(ledger, aside))
+	before, err := os.ReadFile(filepath.Join(aside, "ledger.jsonl"))
+	require.NoError(t, err)
+	seedEvents(t, store, 2)
+
+	_, err = exportErr(p, map[string]any{"path": "ledger.jsonl", "apply": true})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "start_new")
+	assert.Contains(t, err.Error(), "seq 2")
+
+	cur, cErr := store.GetFileProvExportCursor()
+	require.NoError(t, cErr)
+	assert.EqualValues(t, 2, cur, "the cursor moved although nothing was appended")
+	fresh, err := os.ReadFile(out)
+	require.NoError(t, err)
+	assert.Empty(t, fresh, "the export appended to a ledger that did not continue from the cursor")
+	after, err := os.ReadFile(filepath.Join(aside, "ledger.jsonl"))
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+}
+
+// The other ways the file at the ledger's name stops continuing from the cursor:
+// it is deleted (the open then makes an empty one), cut back to an earlier line, or
+// replaced with an older copy. Each is refused; a file whose lines run to the
+// cursor is accepted.
+func TestFileProvenanceExportRefusesALedgerThatDoesNotReachTheCursor(t *testing.T) {
+	for name, damage := range map[string]func(t *testing.T, out string){
+		"deleted": func(t *testing.T, out string) { require.NoError(t, os.Remove(out)) },
+		"truncated to the first line": func(t *testing.T, out string) {
+			b, err := os.ReadFile(out)
+			require.NoError(t, err)
+			first := bytes.SplitAfterN(b, []byte("\n"), 2)[0]
+			require.NoError(t, os.WriteFile(out, first, 0o644))
+		},
+		"emptied": func(t *testing.T, out string) { require.NoError(t, os.WriteFile(out, nil, 0o644)) },
+		"only marker lines": func(t *testing.T, out string) {
+			require.NoError(t, os.WriteFile(out, []byte(`{"seq":0,"exported_at":"2026-01-01T00:00:00Z","gap":"earlier"}`+"\n"), 0o644))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, store, out := newExportFixture(t)
+			seedEvents(t, store, 3)
+			runExport(t, p, map[string]any{"path": "ledger.jsonl", "apply": true})
+			damage(t, out)
+			seedEvents(t, store, 1)
+			_, err := exportErr(p, map[string]any{"path": "ledger.jsonl", "apply": true})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "start_new")
+			cur, cErr := store.GetFileProvExportCursor()
+			require.NoError(t, cErr)
+			assert.EqualValues(t, 3, cur)
+		})
+	}
+}
+
+// start_new carries on past the gap: the run appends from the cursor, the result
+// says what the gap was, and the file gets a marker line ahead of what this run
+// writes. Afterwards the file is continuous again, so the next run needs no flag.
+func TestFileProvenanceExportStartNewAcceptsTheGapAndRecordsIt(t *testing.T) {
+	p, store, out := newExportFixture(t)
+	seedEvents(t, store, 2)
+	runExport(t, p, map[string]any{"path": "ledger.jsonl", "apply": true})
+	root, ledger := ledgerRoot(out)
+	require.NoError(t, os.Rename(ledger, filepath.Join(root, ".ledger.aside")))
+	seedEvents(t, store, 2)
+
+	res, err := exportErr(p, map[string]any{"path": "ledger.jsonl", "apply": true, "start_new": true})
+	require.NoError(t, err)
+	assert.Contains(t, res.LedgerGap, "empty")
+	assert.Contains(t, res.LedgerGap, "seq 2")
+	assert.Equal(t, 2, res.Written, "the marker line is not an event")
+	assert.EqualValues(t, 4, res.CursorAfter)
+
+	lines := readLines(t, out)
+	require.Len(t, lines, 3)
+	assert.Zero(t, lines[0].Seq)
+	assert.Equal(t, res.LedgerGap, lines[0].Gap)
+	assert.Nil(t, lines[0].Event)
+	assert.EqualValues(t, 3, lines[1].Seq)
+	assert.EqualValues(t, 4, lines[2].Seq)
+
+	seedEvents(t, store, 1)
+	res, err = exportErr(p, map[string]any{"path": "ledger.jsonl", "apply": true})
+	require.NoError(t, err, "the file continues from the cursor again, so no flag is needed")
+	assert.Empty(t, res.LedgerGap)
+	assert.Equal(t, 1, res.Written)
+}
+
+// A ledger that is continuous with the cursor is not affected, with or without the
+// flag: it is appended to in order, in chunks, and never records a gap.
+func TestFileProvenanceExportAppendsToAContinuousLedgerWithoutAGap(t *testing.T) {
+	for _, startNew := range []bool{false, true} {
+		t.Run(fmt.Sprintf("start_new=%v", startNew), func(t *testing.T) {
+			p, store, out := newExportFixture(t)
+			seedEvents(t, store, 5)
+			for _, want := range []uint64{2, 4, 5} {
+				res, err := exportErr(p, map[string]any{"path": "ledger.jsonl", "apply": true, "max": 2, "start_new": startNew})
+				require.NoError(t, err)
+				assert.Empty(t, res.LedgerGap)
+				assert.Equal(t, want, res.CursorAfter)
+			}
+			lines := readLines(t, out)
+			require.Len(t, lines, 5)
+			for i, l := range lines {
+				assert.EqualValues(t, i+1, l.Seq)
+				assert.Empty(t, l.Gap)
+			}
+		})
+	}
+}
+
+// memLedger is a ledger file held in memory, for the checks that read it.
+type memLedger struct {
+	*bytes.Reader
+	size int64
+}
+
+func newMemLedger(b []byte) *memLedger {
+	return &memLedger{Reader: bytes.NewReader(b), size: int64(len(b))}
+}
+func (m *memLedger) Write(b []byte) (int, error) { return len(b), nil }
+func (m *memLedger) Close() error                { return nil }
+func (m *memLedger) Sync() error                 { return nil }
+func (m *memLedger) Stat() (fs.FileInfo, error)  { return memInfo{m.size}, nil }
+
+type memInfo struct{ size int64 }
+
+func (memInfo) Name() string           { return "ledger" }
+func (m memInfo) Size() int64          { return m.size }
+func (memInfo) Mode() fs.FileMode      { return 0o644 }
+func (memInfo) ModTime() (t time.Time) { return t }
+func (memInfo) IsDir() bool            { return false }
+func (memInfo) Sys() any               { return nil }
+
+func ledgerText(seqs ...uint64) []byte {
+	var b bytes.Buffer
+	for _, s := range seqs {
+		fmt.Fprintf(&b, `{"seq":%d,"exported_at":"2026-01-01T00:00:00Z"}`+"\n", s)
+	}
+	return b.Bytes()
+}
+
+// What the continuity check accepts and what it refuses, against the bytes of the
+// file: a file at or past the cursor passes (a run that wrote and synced and died
+// before advancing the cursor leaves it ahead, and the next run re-appends), a
+// write cut off at the end is not a line, and a marker line never counts as the
+// ledger's end.
+func TestCheckLedgerContinuity(t *testing.T) {
+	cut := append(ledgerText(1, 2, 3), []byte(`{"seq":4,"exported_at":"2026`)...)
+	marked := append(ledgerText(1, 2), []byte(`{"seq":0,"exported_at":"2026-01-01T00:00:00Z","gap":"x"}`+"\n")...)
+	for _, tc := range []struct {
+		name    string
+		file    []byte
+		cursor  uint64
+		wantGap bool
+	}{
+		{"nothing exported yet", nil, 0, false},
+		{"nothing exported yet, file has lines", ledgerText(1, 2), 0, false},
+		{"ends at the cursor", ledgerText(1, 2, 3), 3, false},
+		{"ahead of the cursor", ledgerText(1, 2, 3, 4), 3, false},
+		{"behind the cursor", ledgerText(1, 2), 3, true},
+		{"empty", nil, 3, true},
+		{"a cut-off last write is not a line", cut, 4, true},
+		{"a cut-off last write after the cursor is fine", cut, 3, false},
+		{"a marker line is not the end", marked, 3, true},
+		{"a marker line after the end", marked, 2, false},
+		{"not json", []byte("hello\n"), 3, true},
+		{"a complete last line with no newline is a cut-off write", append(ledgerText(1, 2, 3), []byte(`{"seq":4}`)...), 4, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gap, err := checkLedgerContinuity(newMemLedger(tc.file), tc.cursor, true)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantGap, gap != "", gap)
+			_, err = checkLedgerContinuity(newMemLedger(tc.file), tc.cursor, false)
+			assert.Equal(t, tc.wantGap, err != nil, "without start_new a gap must be an error and nothing else may be")
+		})
+	}
+}
+
+// The end of a ledger is found past the size of one read: lines are read back from
+// the end across several chunks, including a line that straddles a chunk boundary.
+func TestLastLedgerSeqReadsAcrossChunks(t *testing.T) {
+	var b bytes.Buffer
+	pad := strings.Repeat("x", 900)
+	for i := 1; i <= 400; i++ { // ~370 KB, several chunks
+		fmt.Fprintf(&b, `{"seq":%d,"exported_at":"2026-01-01T00:00:00Z","pad":%q}`+"\n", i, pad)
+	}
+	require.Greater(t, b.Len(), 3*ledgerTailChunk)
+	last, found, err := lastLedgerSeq(bytes.NewReader(b.Bytes()), int64(b.Len()))
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.EqualValues(t, 400, last)
+
+	// Marker lines, a long run of them, between the last event and the end.
+	markers := strings.Repeat(`{"seq":0,"gap":"`+pad+`"}`+"\n", 200) // ~180 KB of markers
+	all := append(append([]byte(nil), b.Bytes()...), markers...)
+	last, found, err = lastLedgerSeq(bytes.NewReader(all), int64(len(all)))
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.EqualValues(t, 400, last, "marker lines must be skipped however many chunks they fill")
+
+	// The last event line is itself longer than a chunk, so its start is read in an
+	// earlier chunk than its end.
+	huge := append(append([]byte(nil), ledgerText(1, 2)...),
+		[]byte(fmt.Sprintf(`{"seq":3,"pad":%q}`+"\n", strings.Repeat("y", 2*ledgerTailChunk+100)))...)
+	last, found, err = lastLedgerSeq(bytes.NewReader(huge), int64(len(huge)))
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.EqualValues(t, 3, last, "a line spanning chunks must be put back together")
+
+	_, found, err = lastLedgerSeq(bytes.NewReader([]byte(markers)), int64(len(markers)))
+	require.NoError(t, err)
+	assert.False(t, found)
 }
