@@ -13,7 +13,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -27,7 +26,7 @@ import (
 func (s *Server) getOLStatus(c *gin.Context) {
 	svc := s.olService
 	resp := gin.H{
-		"enabled":   config.AppConfig.OpenLibraryDumpEnabled,
+		"enabled":   svc.DumpsEnabled(),
 		"downloads": svc.Tracker.GetAll(),
 	}
 
