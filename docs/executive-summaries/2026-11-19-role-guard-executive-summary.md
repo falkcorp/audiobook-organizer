@@ -1,13 +1,18 @@
 <!-- file: docs/executive-summaries/2026-11-19-role-guard-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4867f7a3-90d2-48ed-881b-a49a520e46d7 -->
 <!-- last-edited: 2026-11-19 -->
 
 # Editing roles and users at the same moment can no longer leave the system with no administrator
 
-**Date:** 19 November 2026 (rename to the merge date if it differs). Part of the
-shared core's new sign-in and permissions code, which nothing in the running app
-uses yet.
+**Date:** 19 November 2026. Part of the shared core's new sign-in and
+permissions code, which nothing in the running app uses yet.
+
+**PR:** [falkcorp/audiobook-organizer#4771](https://github.com/falkcorp/audiobook-organizer/pull/4771).
+**Merge commit:** recorded when the PR merges (the merge queue chooses it).
+**Related specs:** [05-rbac](../specs/platform-core/05-rbac.md) (the
+last-admin rule and who may give which role) and
+[05-authn](../specs/platform-core/05-authn.md).
 
 ## Executive Summary
 
@@ -17,44 +22,92 @@ uses yet.
   while another person changed a user at the very same moment, each change could
   look safe on its own and both could be saved, leaving nobody with
   administrator rights.
-- The rule now watches the whole set of role definitions, not one role. Any
-  change to any role, in the time between "the rule looked" and "the change was
-  saved", makes the user change start over and look again.
-- Deleting a role, and giving someone a role while that role is being deleted,
-  can no longer both succeed. Before, a user could end up holding a role that no
-  longer existed, which a later role with the same name would silently hand
-  back.
-- When many changes collide, a change tries again up to sixteen times with a
-  short random pause. If it still cannot get through, the person sees a plain
-  "busy, try again" answer, not a server error and not a "your copy is out of
-  date" message.
+- The rule now watches the whole set of role definitions. Before this change it
+  watched no role definition at all, only the other administrator's user record.
+  Any change to any role, in the time between "the rule looked" and "the change
+  was saved", now makes the user change start over and look again.
+- Deleting a role while someone is being given it can no longer both succeed.
+  Before, a user could end up holding a role that no longer existed, which a
+  later role with the same name would silently hand back. Giving a role now also
+  refuses a role that does not exist when the person giving it is an
+  administrator; before, administrators were let through on a name nobody had
+  defined.
+- When many changes collide, a change tries again, and if it still cannot get
+  through the person sees a plain "busy, try again" answer, not a server error
+  and not a "your copy is out of date" message. Changing a role and giving a
+  role try up to sixteen times with a short random pause. Deactivating or
+  deleting a user keeps its four tries, and merging two accounts is retried by
+  whoever asked for it.
+- A storage fault while reading a role is no longer reported as "you may not
+  give this role", and no longer uses up the one-time invite link of the person
+  being invited.
 - Nothing is switched on for users: the code that would let these collisions
   happen is not connected yet. The change closes the gap before that
   connection is made.
+- Verified by tests that force each ordering of the colliding changes, both ways
+  round, and by 68 deliberately broken variants of the new logic, every one of
+  which a test catches.
 
-## A last-admin check that only watched one role
+## The last-admin check that watched no role
 
-**What it was.** The check watched the single role that made the other
-administrator an administrator. Two of its three exits (the user is not an
-administrator now, or still is afterwards) decided on role definitions and
-watched nothing.
+**What it was.** The check looked at who else was an administrator and made sure
+that other person's account was unchanged when the change was saved. It never
+checked that the roles making them an administrator were unchanged. Whether a
+user is an administrator, whether they still will be, and which other
+administrator is left were all decided from role definitions that nothing
+watched.
 
 **Why it mattered.** One person tidying their own roles while another edited a
 custom administrator role could leave zero administrators, with nobody left who
 could repair it from inside the app.
 
 **The fix.** Every role change raises one counter. The check reads the counter
-first and refuses to save if it moved, which covers every exit, roles that do not
-exist, and a role deleted and re-created under the same name.
+first and refuses to save if it moved, which covers every case the check can
+end in, roles that do not exist, and a role deleted and re-created under the
+same name.
 
 ## Deleting a role that someone is just being given
 
 **What it was.** The delete asked "does anyone hold this role?", got "no", and a
-moment later a user was given it.
+moment later a user was given it. The delete also skipped the administrator
+check that an edit already had. Separately, the check on "may this person give
+this role?" waved administrators through when the role did not exist.
 
 **Why it mattered.** The user ended up holding a role that does not exist, and
-the delete skipped the administrator check that an edit already had.
+a role created later under the same name would grant them whatever it carried.
+That includes a pending invite to a role that is deleted before the invitee
+accepts it.
 
 **The fix.** Giving a role raises a second counter, and a delete watches it
 before it looks at who holds the role. The delete also runs the same last-admin
-check an edit does.
+check an edit does. Giving a role is now checked against the stored role, and a
+role that does not exist is refused for everyone, administrators included. An
+invite to a role that has since gone is refused and used up, like any other
+refused invite.
+
+## Busy, try again instead of an error
+
+**What it was.** When two changes collided, the loser either gave up quickly
+with a raw storage error or, for role changes, reported "your copy is out of
+date" even though its copy was current.
+
+**Why it mattered.** A person who did nothing wrong saw a server error or was
+told to reload, and retrying by hand was the only way forward.
+
+**The fix.** Changes that give or edit roles now try up to sixteen times with a
+short random pause between tries, which is enough for a burst of fifteen other
+changes to land first. Past that the person gets a "busy, try again" answer that
+says how long to wait. Other user changes keep their existing number of tries.
+
+## A storage fault that looked like a refusal
+
+**What it was.** Giving a role asks the stored role whether it may be given. If
+that read failed, or the stored role was damaged, the failure was reported as
+"the person giving the role lacks a permission it carries".
+
+**Why it mattered.** The person saw a refusal that was not true. Worse, someone
+accepting an invite hit the same failure and lost their one-time invite link to
+it, with no way to retry.
+
+**The fix.** A failed read now comes back as a server problem, not a refusal.
+Nothing is written, and an invite stays usable once the fault clears.

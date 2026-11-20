@@ -1,5 +1,5 @@
 // file: core/internal/rbacstore/store.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 6f1c9a3e-28d4-4b7e-a5f0-93e1d27c4b85
 // last-edited: 2026-11-19
 
@@ -362,9 +362,13 @@ func counterThrough(s *Store, b *storage.Batch, key []byte) (uint64, error) {
 // bumpGeneration stages the generation row of b one above its committed
 // value, with an Expect on that value. Every role write calls it, so the
 // bump commits with the write and a role-set guard (GuardRoleSet) sees every
-// one. Two role writes in one batch (a seed or restore batch) both derive the
-// row from the committed value, keep the first read's Expect, and stage the
-// same bump.
+// one. The Expect is on the committed value, taken from the first read through
+// b and kept for the rest of the batch. Two role writes in one batch (a seed or
+// restore batch) each stage the row one above what GetForUpdate returns: on a
+// batch without an index that is the committed value, so both stage the same
+// bump; on an indexed batch (the kernel's re-apply) it is the batch's own
+// staged row, so the second stages one more. Either is right, because a guard
+// compares the committed value and the staged one is only what lands.
 func (s *Store) bumpGeneration(b *storage.Batch) error {
 	cur, err := s.generationThrough(b)
 	if err != nil {
