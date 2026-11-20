@@ -114,8 +114,11 @@ const (
 	// reasonAliasSubRoot: core's aliases are per root (core/library Alias has no
 	// root of its own), so an alias of a path below a root, as HEAD seeds from an
 	// iTunes mapping whose To is below one, has no representation.
-	reasonAliasSubRoot       = "the path alias's root is inside a library root, not at one, and core's aliases are per root: its display rendering is not carried"
-	reasonAliasShadowed      = "every library root under the path alias's root has a more specific alias: it rendered none of their paths, and its display rendering is not carried"
+	reasonAliasSubRoot = "the path alias's root is inside a library root, not at one, and core's aliases are per root: its display rendering is not carried"
+	// reasonAliasShadowed: HEAD renders a path through the first alias in list
+	// order whose root contains it (web/src/utils/pathAliases.ts matchAlias).
+	reasonAliasShadowed      = "every library root at or under the path alias's root matched an alias listed before it first: HEAD rendered none of their paths with it, and its display rendering is not carried"
+	reasonDroppedValue       = "a value HEAD selected by nothing with, left out of the migrated instance: kept here so it can be recovered"
 	reasonMappingRootRefused = "core refused the library roots this iTunes mapping's To resolves against"
 	reasonRootPath           = "the root path is not an absolute host path"
 	reasonUnreadMember       = "a settings blob member that no part of M6 reads"

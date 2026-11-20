@@ -531,3 +531,195 @@ func TestIntegrationsMigration_RenamedSourceRefusedCarriesNothing(t *testing.T) 
 		})
 	}
 }
+
+// reportHas reports whether some report entry of kind on id contains detail.
+func reportHas(r *rig, kind, id, detail string) bool {
+	for _, e := range r.report.Entries() {
+		if e.Kind == kind && e.ID == id && strings.Contains(e.Detail, detail) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestIntegrationsMigration_RenamedOpenAIRowKeepsHEADsKey: HEAD sent the OpenAI
+// key to any row whose auth_ref names it (poolSecret), so a hand-typed OpenAI
+// row renamed to openai keeps it: the key M2 moved to the openai name is bound,
+// and the binding is reported. Without auth_ref HEAD sent it none: nothing is
+// bound, the row gets no operator-key pairing, and the key left unreferenced is
+// reported. Either way the row suppresses the synthesised one.
+func TestIntegrationsMigration_RenamedOpenAIRowKeepsHEADsKey(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		authRef string
+	}{{"auth_ref", "openai_api_key"}, {"no auth_ref", ""}} {
+		t.Run(c.name, func(t *testing.T) {
+			row := map[string]any{"id": "OpenAI", "label": "OpenAI (hand-typed)", "protocol": "openai_compat", "url": "https://llm.invalid/v1", "enabled": true}
+			if c.authRef != "" {
+				row["auth_ref"] = c.authRef
+			}
+			r, s := runFixture(t, withBlob(func(tree map[string]any) {
+				if c.authRef == "" {
+					// No other row copies the key either, so nothing uses it.
+					for _, ep := range tree["ai_endpoints"].([]any) {
+						delete(ep.(map[string]any), "auth_ref")
+					}
+				}
+				tree["ai_endpoints"] = append(tree["ai_endpoints"].([]any), row)
+			}))
+			inst, ok := instances(t, s)["ai/openai"]
+			if !ok || inst["name"] != "OpenAI (hand-typed)" {
+				t.Fatalf("ai/openai is %v, want the renamed row and no synthesised one", inst["name"])
+			}
+			bound := refName(settingsOf(inst), "api_key")
+			_, paired := inst["operator_secret_origin"]
+			unref := reportHas(r, "note", "ai/openai", "is referred to by no migrated AI endpoint")
+			if c.authRef != "" {
+				if bound != "integrations.ai.openai.api_key" || !reportHas(r, "note", "ai/openai", "is bound to the renamed row") {
+					t.Errorf("api_key refs %q (reported %v), want HEAD's key bound and reported", bound, reportHas(r, "note", "ai/openai", "is bound"))
+				}
+				if !paired || unref {
+					t.Errorf("operator pairing %v, unreferenced note %v: want paired, no note", paired, unref)
+				}
+				return
+			}
+			if bound != "" || paired {
+				t.Errorf("api_key refs %q, operator pairing %v: HEAD sent this row no key", bound, paired)
+			}
+			if !unref {
+				t.Error("the OpenAI key left unreferenced is not reported")
+			}
+		})
+	}
+}
+
+// TestIntegrationsMigration_ExactIDEntryNotWrittenRenamedTakesTheID: when the
+// entry whose HEAD ID it is does not get written (core refuses it, or it does
+// not decode), nothing holds the ID, so the renamed entry takes it in either
+// order, the report says why, and it still takes no credential stored under the
+// new name.
+func TestIntegrationsMigration_ExactIDEntryNotWrittenRenamedTakesTheID(t *testing.T) {
+	const name = "integrations.metadata.batcave-db.credentials.api_key"
+	exact := map[string]any{"id": "batcave-db", "name": "Batcave DB (exact)", "enabled": true, "priority": 5}
+	undecodable := map[string]any{"id": "batcave-db", "name": "Batcave DB (exact)", "priority": "high"}
+	renamed := map[string]any{"id": "batcave_db", "name": "Batcave DB (renamed)", "enabled": true, "priority": 4}
+	for _, c := range []struct {
+		name  string
+		order []any
+		opts  []func(*rig)
+	}{
+		{"refused, exact first", []any{exact, renamed}, []func(*rig){conflict("instance", "metadata/batcave-db")}},
+		{"refused, renamed first", []any{renamed, exact}, []func(*rig){conflict("instance", "metadata/batcave-db")}},
+		{"undecodable, exact first", []any{undecodable, renamed}, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			refusals := 0
+			opts := append([]func(*rig){func(r *rig) {
+				tree := blobTree()
+				tree["metadata_sources"] = append(tree["metadata_sources"].([]any), c.order...)
+				withRows(map[string][]byte{m6.KeyBlob: blobRow(r.t, tree)})(r)
+				r.secrets.seed[name] = "fixture-batcave-db-key-exact"
+			}}, c.opts...)
+			// Refuse only the first import under the ID: the exact entry's,
+			// which settleDeferred tries before the renamed one.
+			opts = append(opts, func(r *rig) {
+				inner := r.refuse
+				if inner == nil {
+					return
+				}
+				r.refuse = func(k, i string) error {
+					if err := inner(k, i); err != nil && refusals == 0 {
+						refusals++
+						return err
+					}
+					return nil
+				}
+			})
+			r, s := runFixture(t, opts...)
+			row, ok := instances(t, s)["metadata/batcave-db"]
+			if !ok || row["name"] != "Batcave DB (renamed)" {
+				t.Fatalf("metadata/batcave-db is %v, want the renamed entry", row["name"])
+			}
+			if g := refName(settingsOf(row), "credentials.api_key"); g != "" {
+				t.Errorf("the renamed entry refs %q, the exact entry's credential", g)
+			}
+			if !reportHas(r, "note", "metadata/batcave-db", "was not written, so metadata_sources.") {
+				t.Error("taking the ID is not reported")
+			}
+			if reportHas(r, "instance", "metadata/batcave-db", "whose HEAD id it is") {
+				t.Error("the report says the ID is taken by an entry that holds nothing")
+			}
+		})
+	}
+}
+
+// TestMetadataMigration_RenamedProviderGetsNoOperatorKey: HEAD's provider switch
+// was exact, so a source whose ID M6 lowers to google-books was an inert unknown
+// source at HEAD. It gets no operator-key pairing: the operator key is never
+// served beside a base_url HEAD never sent it to.
+func TestMetadataMigration_RenamedProviderGetsNoOperatorKey(t *testing.T) {
+	_, s := runFixture(t, withBlob(func(tree map[string]any) {
+		srcs := tree["metadata_sources"].([]any)
+		srcs[1].(map[string]any)["id"] = "Google_Books"
+		srcs[1].(map[string]any)["base_url"] = "https://mirror.invalid"
+	}))
+	row, ok := instances(t, s)["metadata/google-books"]
+	if !ok {
+		t.Fatal("no metadata/google-books instance")
+	}
+	if got, has := row["operator_secret_origin"]; has {
+		t.Errorf("the renamed source has operator_secret_origin %v", got)
+	}
+	if row["local_origin"] == nil {
+		t.Error("the renamed source lost its Local grant, which is not what this test is about")
+	}
+}
+
+// TestAIEndpointMigration_DroppedModelQuarantined: a capability_models entry for
+// a capability HEAD does not register is left out of the instance, and its model
+// is quarantined under its own key so the owner can recover it.
+func TestAIEndpointMigration_DroppedModelQuarantined(t *testing.T) {
+	r, s := runFixture(t, withBlob(func(tree map[string]any) {
+		ep := tree["ai_endpoints"].([]any)[0].(map[string]any)
+		ep["capability_models"] = map[string]any{"llm.dedup_review": "alfred-13b", "mystery.cape": "riddler-1b"}
+	}))
+	key := memberPrefix + "ai_endpoints.0.capability_models.mystery.cape"
+	found := false
+	for _, q := range s.Quarantine {
+		if q.Key == key {
+			found = true
+			if q.Value != `"riddler-1b"` || q.Reason != "a value HEAD selected by nothing with, left out of the migrated instance: kept here so it can be recovered" {
+				t.Errorf("%s holds %q (%s)", key, q.Value, q.Reason)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("the dropped model is not quarantined: %v", s.Quarantine)
+	}
+	if cm, _ := settingsOf(instances(t, s)["ai/local-llm"])["capability_models"].(map[string]any); len(cm) != 1 {
+		t.Errorf("capability_models %v, want only the registered capability's", cm)
+	}
+	if len(s.Verify.Failures) != 0 {
+		t.Errorf("verify failures: %v", s.Verify.Failures)
+	}
+	_ = r
+}
+
+// TestIntegrationsMigration_RenamedSourceSkipsStoredUserinfo: userinfo is split
+// from the URL afresh on every conversion, so a userinfo secret stored under the
+// old ID is neither carried nor bound.
+func TestIntegrationsMigration_RenamedSourceSkipsStoredUserinfo(t *testing.T) {
+	r, s := runFixture(t, renamedSource, func(r *rig) {
+		r.secrets.seed["integrations.metadata.batcave_db.userinfo"] = "fixture-batcave-db-userinfo-fox"
+	})
+	row := instances(t, s)["metadata/batcave-db"]
+	if _, has := settingsOf(row)["userinfo"]; has {
+		t.Errorf("the stored userinfo is bound: %v", settingsOf(row)["userinfo"])
+	}
+	if v, ok := s.Rows[string(ownerSecrets)]["integrations.metadata.batcave-db.userinfo"]; ok {
+		t.Errorf("the stored userinfo is carried: %q", v)
+	}
+	if reportHas(r, "note", "metadata/batcave-db", "credential userinfo") {
+		t.Error("the stored userinfo is reported as a carried credential")
+	}
+}

@@ -498,3 +498,30 @@ func TestDerivedAlias_IsHEADsRendering(t *testing.T) {
 		t.Errorf("encodeURIComponent reserved characters: %s", got)
 	}
 }
+
+// TestCoreFeatures_PinnedBothWays: coreFeatures is exactly core's declared
+// feature constants (none missing, none extra), and an endpoint carrying each
+// one keeps it and passes core's validator.
+func TestCoreFeatures_PinnedBothWays(t *testing.T) {
+	declared := []ai.Feature{ai.FeatureJSONSchema, ai.FeatureJSONMode, ai.FeatureVision, ai.FeatureBatch, ai.FeatureTools, ai.FeatureTimestamps}
+	if len(coreFeatures) != len(declared) {
+		t.Errorf("coreFeatures has %d entries, core declares %d", len(coreFeatures), len(declared))
+	}
+	r := endpointValidator(t)
+	for _, f := range declared {
+		raw, err := json.Marshal(map[string]any{"id": "oracle-node", "protocol": "openai_compat", "url": "http://192.0.2.40:8080/v1", "enabled": true, "features": []string{string(f)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, _, why := (&Migration{}).aiInstance(raw, 0, secretSet{})
+		if p == nil {
+			t.Fatalf("refused: %s", why)
+		}
+		if got, _ := p.inst.Config.Settings["features"].([]string); !slices.Equal(got, []string{string(f)}) {
+			t.Errorf("feature %s: kept %v", f, got)
+		}
+		if err := r.ValidateEndpoint(p.inst.Config.Settings, nil); err != nil {
+			t.Errorf("feature %s: core refuses it: %v", f, err)
+		}
+	}
+}
