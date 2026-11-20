@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
@@ -53,6 +54,10 @@ type kernelSwap struct {
 	// hookOwed: a ResetFactory swap whose app declares a reset hook reached
 	// P4b, so hook_done is the hook's (Run step (2), reset.go), not P4b's.
 	hookOwed bool
+	// appliedBeforeRewrite: a restore boot journaled applied ahead of M8
+	// (restoreAppliedBeforeRewrite), so the restore is complete and a failure
+	// after it is M8's, never the restore's (swapFailed).
+	appliedBeforeRewrite atomic.Bool
 }
 
 // swapWanted gates P0a: a state directory, and not Describe, which performs
@@ -271,6 +276,8 @@ func (k *Kernel) swapAfter(ctx context.Context, phase string) error {
 	case out.Boot == restoreswap.BootRestore && phase == phaseP2:
 		err = s.Opened(ctx, out.ID)
 	case out.Boot == restoreswap.BootRestore && phase == phaseP4b:
+		// M8's hook may have journaled it already; the call is idempotent, and a
+		// build with no M8 does it here.
 		err = s.RestoreApplied(ctx, out.ID)
 	// A reset's applied record is not written here: bindCoreStores journals it,
 	// after secrets.Open rewrote the keyring header and the reset's fresh rows
@@ -308,6 +315,14 @@ func (k *Kernel) swapFailed(ctx context.Context, phase string, cause error) erro
 		return errors.Join(cause, fmt.Errorf("kernel: step x of %s needs the store closed: %w", out.ID, err))
 	}
 	k.store = nil
+	// A failure after applied is M8's. The restore is complete and its in-flight
+	// file gone, so there is nothing for step x to swap back: the boot fails
+	// without serving, and the next boot finds M8 pending (or its own in-flight
+	// rewrite journal) and resumes it. The pre-restore store stays under
+	// restore/<id>/previous for an operator to roll back by hand until M8 is done.
+	if k.swap.appliedBeforeRewrite.Load() {
+		return fmt.Errorf("kernel: restore %s is applied; the store rewrite (M8) failed in %s and retries at the next boot: %w", out.ID, phase, cause)
+	}
 	if phase == phaseP4b && out.Intent.Kind == restorejournal.KindCheckpoint {
 		if _, ok := errors.AsType[*storage.StepError](cause); !ok {
 			return cause
@@ -318,4 +333,20 @@ func (k *Kernel) swapFailed(ctx context.Context, phase string, cause error) erro
 		return fmt.Errorf("%w (journal %s): %w", ErrCheckpointRestoreFailedHere, out.ID, cause)
 	}
 	return k.swap.s.SwapBack(ctx, out.ID, fmt.Errorf("%s: %w", phase, cause))
+}
+
+// restoreAppliedBeforeRewrite is DataMigrationsConfig.BeforeRewrite: on a
+// restore boot, the restore's applied record (and the in-flight file's
+// removal) is journaled once every data migration has run and before M8
+// starts, because M8's own swap refuses while a restore holds the intent
+// slot (restorejournal.ErrSwapPending). Any other boot does nothing.
+func (k *Kernel) restoreAppliedBeforeRewrite(ctx context.Context) error {
+	if k.swap == nil || k.swap.out.Boot != restoreswap.BootRestore {
+		return nil
+	}
+	if err := k.swap.s.RestoreApplied(ctx, k.swap.out.ID); err != nil {
+		return fmt.Errorf("kernel: swap journal %s before the store rewrite: %w", k.swap.out.ID, err)
+	}
+	k.swap.appliedBeforeRewrite.Store(true)
+	return nil
 }

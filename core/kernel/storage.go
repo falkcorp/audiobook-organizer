@@ -161,6 +161,7 @@ func (k *Kernel) dataSteps(ctx context.Context, owners []storage.OwnerSpec, buil
 			return nil, err
 		}
 		cfg.Swapper = sw
+		cfg.BeforeRewrite = k.restoreAppliedBeforeRewrite
 	}
 	dm, err := NewDataMigrations(cfg, owners, migs...)
 	if err != nil {
