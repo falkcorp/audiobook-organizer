@@ -2910,6 +2910,30 @@ class RollbackEnv(unittest.TestCase):
         self.assertEqual(self.b.read_text(), "bat-signal-1")
         self.assertEqual(self.roll(h, "apply", self.prev_sha())[0], 0, "and the rerun finishes")
 
+    def test_a_generation_of_the_largest_allowed_files_full_of_escapes_reads_back(self):
+        """json.dumps writes a control character as six bytes: the read limit
+        has to hold two UNIT_LIMIT texts of them, or the helper writes a
+        generation it then reports as unreadable."""
+        h = self.env_host()
+        big = "\x01" * h.mod.UNIT_LIMIT
+        self.live_unit.write_text(big)
+        self.live_conf.write_text(big)
+        (self.stage / "audiobook-organizer").write_text("bat-signal-2")
+        self.assertEqual(h.run("install", "binary")[0], 0)  # no capture: both parts as they stand
+        code, out, err = self.roll(h, "list")
+        self.assertEqual(code, 0, err)
+        self.assertIn("generations=1 unreadable=0", out)
+        self.assertGreater(
+            (self.gdir() / f"{self.prev_sha()}.json").stat().st_size, 2 * h.mod.UNIT_LIMIT + 4096
+        )
+
+    def test_a_generation_over_the_read_limit_is_never_written(self):
+        h = self.env_host()
+        path = str(self.gdir().parent / "too-big.json")
+        with self.assertRaises(h.mod.RefusedError):
+            h.mod._write_env_json(path, {"text": "x" * (h.mod.ENV_LIMIT + 1)})
+        self.assertFalse(Path(path).exists())
+
     def test_a_generation_directory_open_to_group_or_others_is_refused(self):
         """_read_generation's directory check: the generations are root-only
         plaintext copies of local.conf, and a directory others can write to

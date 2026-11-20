@@ -1308,7 +1308,10 @@ def _read_template(cfg: dict[str, str]) -> bytes:
 # an environment it never ran under.
 
 ENV_VERSION = 2
-ENV_LIMIT = 2 * UNIT_LIMIT + 4096
+# The unit and local.conf texts each fit in UNIT_LIMIT bytes, and json.dumps
+# writes a control character as \\u00XX: six bytes for one. The limit has to
+# hold the worst case, or a generation the helper wrote could not be read back.
+ENV_LIMIT = 2 * 6 * UNIT_LIMIT + 4096
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 ENV_PARTS = ("unit", "local_conf")
 # The newest generations always kept; every one kept because the deploy that
@@ -1402,10 +1405,10 @@ def _capture_env(cfg: dict[str, str], part: str) -> dict:
         return {"unreadable": True}
 
 
-def _read_env_json(path: str, root_owned: bool) -> dict | None:
+def _read_env_json(path: str) -> dict | None:
     """The JSON object at path, or None when it is absent. A file that is
-    not a small regular file (owned by root unless root_owned is False), or
-    does not parse, raises RefusedError."""
+    not a small regular file (owned by root or the helper's own user, closed
+    to group and others), or does not parse, raises RefusedError."""
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
@@ -1432,7 +1435,12 @@ def _read_env_json(path: str, root_owned: bool) -> dict | None:
 
 
 def _write_env_json(path: str, doc: dict) -> None:
-    _write_replace(path, json.dumps(doc, sort_keys=True).encode(), 0o600)
+    data = json.dumps(doc, sort_keys=True).encode()
+    if len(data) > ENV_LIMIT:
+        # Never write what _read_env_json would refuse: a rollback would then
+        # find an "unreadable" generation it cannot use.
+        raise RefusedError(f"{path} would be {len(data)} bytes, over the {ENV_LIMIT}-byte limit")
+    _write_replace(path, data, 0o600)
 
 
 def _forget_env(*paths: str) -> None:
@@ -1559,7 +1567,7 @@ def _env_capture(cfg: dict[str, str], part: str) -> None:
     _ensure_env_dir(cfg)
     try:
         cur = _sha256_file(cfg["bin"])
-        pend = _read_env_json(pending_path, True)
+        pend = _read_env_json(pending_path)
     except RefusedError:
         pend, cur = None, _sha256_file(cfg["bin"])
     if pend is not None and (pend.get("version") != ENV_VERSION or pend.get("bin_sha256") != cur):
@@ -1595,7 +1603,7 @@ def _env_promote(cfg: dict[str, str], had_binary: bool, incoming: dict | None = 
     prev_sha = _sha256_file(f"{b}.prev")
     gen_path = _gen_path(cfg, prev_sha)
     try:
-        pend = _read_env_json(pending_path, True)
+        pend = _read_env_json(pending_path)
     except RefusedError:
         pend = {}
     if pend is not None and (
@@ -1613,7 +1621,7 @@ def _env_promote(cfg: dict[str, str], had_binary: bool, incoming: dict | None = 
     docs, _ = _scan_generations(cfg)
     replaced = None
     try:
-        cur = _read_env_json(_current_path(cfg), True)
+        cur = _read_env_json(_current_path(cfg))
     except RefusedError:
         cur = None  # advisory: an unreadable record is "unrecorded"
     if cur is not None and cur.get("bin_sha256") == prev_sha:
@@ -1650,7 +1658,7 @@ def _scan_generations(cfg: dict[str, str]) -> tuple[list[dict], int]:
         if ext != "json" or not _HEX64.fullmatch(stem):
             continue
         try:
-            doc = _read_env_json(f"{d}/{name}", True)
+            doc = _read_env_json(f"{d}/{name}")
         except (OSError, RefusedError):
             damaged += 1
             continue
@@ -1714,7 +1722,7 @@ def _read_generation(cfg: dict[str, str], gen: str, named: bool) -> dict:
     refusal says what to do. named: the operator named it (ROLLBACK_ENV)."""
     d = _env_dir(cfg)
     path = _gen_path(cfg, gen)
-    doc = _read_env_json(path, True) if _check_env_dir(d) else None
+    doc = _read_env_json(path) if _check_env_dir(d) else None
     if doc is None:
         what = (
             "no kept environment with that sha256"
