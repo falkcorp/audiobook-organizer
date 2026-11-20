@@ -1,7 +1,7 @@
 // file: internal/authorcredit/authorcredit.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 7000d1fc-e16c-47e1-bb94-6180fe3ec1de
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 // Package authorcredit turns one author credit string ("J.N. Chaney, Jonathan
 // P. Brazee") into the author rows a book should be credited to, in order.
@@ -160,13 +160,34 @@ var (
 	titleCache = map[any]*titleIndex{}
 )
 
+// TitleCacheKeyer is implemented by a decorator over a store that names the
+// identity the title index is cached under. The cache is keyed by the
+// TitleSource value, and a decorator built per run (the gated metafetch
+// wrapper) is a new value every run: it would be a new, never evicted entry
+// holding a library-sized index each time. Returning the wrapped store's own
+// key makes every decorator over one store share the store's entry.
+type TitleCacheKeyer interface {
+	TitleCacheKey() any
+}
+
+// titleCacheKey is the identity ts's title index is cached under, and whether
+// it can be cached: a pointer key only (a value key may be unhashable, or never
+// repeat).
+func titleCacheKey(ts TitleSource) (key any, cacheable bool) {
+	key = ts
+	if k, ok := ts.(TitleCacheKeyer); ok {
+		key = k.TitleCacheKey()
+	}
+	return key, key != nil && reflect.TypeOf(key).Kind() == reflect.Pointer
+}
+
 // titlesOf returns the title index of ts (every live book title and series
 // name), cached per store for titleIndexTTL.
 func titlesOf(ts TitleSource) (*titleIndex, error) {
-	cacheable := reflect.TypeOf(ts).Kind() == reflect.Pointer
+	key, cacheable := titleCacheKey(ts)
 	if cacheable {
 		titleMu.Lock()
-		e := titleCache[ts]
+		e := titleCache[key]
 		titleMu.Unlock()
 		if e != nil && time.Since(e.built) < titleIndexTTL {
 			return e, nil
@@ -202,10 +223,18 @@ func titlesOf(ts TitleSource) (*titleIndex, error) {
 	idx := &titleIndex{keys: keys, seriesKey: seriesKey, built: time.Now()}
 	if cacheable {
 		titleMu.Lock()
-		titleCache[ts] = idx
+		titleCache[key] = idx
 		titleMu.Unlock()
 	}
 	return idx, nil
+}
+
+// TitleCacheLen is the number of title indexes cached (tests that bound the
+// cache's growth).
+func TitleCacheLen() int {
+	titleMu.Lock()
+	defer titleMu.Unlock()
+	return len(titleCache)
 }
 
 // ResetTitleCache drops every cached title index (tests that add titles to
