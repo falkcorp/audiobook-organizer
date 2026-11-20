@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g7.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 8e3a5d17-2c94-4b60-a1f8-6d07c9e4b352
 // last-edited: 2026-11-19
 
@@ -513,6 +513,20 @@ func t6g7DecodeNative[P any](kind tasks.Kind, raw json.RawMessage) (P, error) {
 	return v, err
 }
 
+// t6g7DecodeStrictNative is t6g7DecodeNative for a def whose HEAD shell decoded
+// with decodeStrictParams: a mode key is refused first, then an unknown or
+// duplicate key, or data after the object, is refused as HEAD refused it.
+func t6g7DecodeStrictNative[P any](kind tasks.Kind, raw json.RawMessage) (P, error) {
+	var v P
+	if err := t6g7RefuseModeKeys(kind, raw); err != nil {
+		return v, err
+	}
+	if err := decodeStrictParams(raw, &v); err != nil {
+		return v, fmt.Errorf("%s: decode params: %w", kind, err)
+	}
+	return v, nil
+}
+
 // t6g7RefuseModeKeys is t6g7DecodeParams for a shell whose body takes no params
 // of its own; any other key is ignored, as HEAD ignored the params of these defs.
 func t6g7RefuseModeKeys(kind tasks.Kind, raw json.RawMessage) error {
@@ -565,6 +579,7 @@ type t6g7Store interface {
 	unrecordedRenameStore
 	seriesPhantomReads
 	vgPrimaryRepairReads
+	rewritePathPrefixReads
 }
 
 // t6g7Writer is every write the 15 definitions make, composed from each
@@ -581,6 +596,7 @@ type t6g7Writer interface {
 	unrecordedRenameWriter
 	seriesPhantomWriter
 	vgPrimaryRepairWriter
+	rewritePathPrefixWriter
 }
 
 // t6g7Deps is what the native kinds are built from. Every field is set once, by
@@ -639,6 +655,7 @@ func t6g7KindList(p *Plugin, deps t6g7Deps, sched func(tasks.Kind) *tasks.Schedu
 		p.repointUnrecordedRenamesNative(deps, sched),
 		p.seriesPhantomRepairNative(deps, sched),
 		p.versionGroupPrimaryRepairNative(deps, sched),
+		p.rewritePathPrefixNative(deps, sched),
 	}
 }
 
