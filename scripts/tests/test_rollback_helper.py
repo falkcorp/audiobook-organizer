@@ -2235,7 +2235,9 @@ class RollbackEnv(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(os.stat(env).st_mode), 0o600, "local.conf may carry secrets")
         doc = self.bundle()
         self.assertEqual(doc["prev_sha256"], before)
-        self.assertEqual(doc["unit"], {"present": True, "text": self.OLD_UNIT_MARK + self.unit_text})
+        self.assertEqual(
+            doc["unit"], {"present": True, "text": self.OLD_UNIT_MARK + self.unit_text}
+        )
         self.assertEqual(doc["local_conf"], {"present": True, "text": self.OLD_CONF})
         # ... while the live files are the new deploy's.
         self.assertEqual(self.live_unit.read_text(), self.unit_text)
@@ -2275,7 +2277,9 @@ class RollbackEnv(unittest.TestCase):
         self.live_conf.unlink()
         self.deploy(h, conf="[Service]\nEnvironment=A=1\n")
         self.assertEqual(self.bundle()["local_conf"], {"present": False})
-        self.assertEqual(h.run("install", "rollback", "apply", "paired", self.bundle()["prev_sha256"])[0], 0)
+        self.assertEqual(
+            h.run("install", "rollback", "apply", "paired", self.bundle()["prev_sha256"])[0], 0
+        )
         self.assertFalse(self.live_conf.exists(), "the drop-in the deploy added is removed")
 
     def test_the_first_ever_binary_install_has_nothing_to_keep(self):
@@ -2400,7 +2404,8 @@ class RollbackEnv(unittest.TestCase):
         h = self.env_host()
         self.deploy(h)
         before = {
-            p: p.read_bytes() for p in (self.b, self.live_unit, self.live_conf, Path(f"{self.b}.prev"))
+            p: p.read_bytes()
+            for p in (self.b, self.live_unit, self.live_conf, Path(f"{self.b}.prev"))
         }
         changed = self.changes(h)
         code, out, err = h.run("install", "rollback", "check", "paired")
@@ -2504,11 +2509,15 @@ class RollbackEnv(unittest.TestCase):
             "not json": "{",
             "a list": "[]",
             "wrong version": json.dumps({**json.loads(good), "version": 99}),
-            "no hash": json.dumps({k: v for k, v in json.loads(good).items() if k != "prev_sha256"}),
+            "no hash": json.dumps(
+                {k: v for k, v in json.loads(good).items() if k != "prev_sha256"}
+            ),
             "bad hash": json.dumps({**json.loads(good), "prev_sha256": "XYZ"}),
             "no unit": json.dumps({k: v for k, v in json.loads(good).items() if k != "unit"}),
             "unit absent": json.dumps({**json.loads(good), "unit": {"present": False}}),
-            "text not a string": json.dumps({**json.loads(good), "unit": {"present": True, "text": 7}}),
+            "text not a string": json.dumps(
+                {**json.loads(good), "unit": {"present": True, "text": 7}}
+            ),
         }
         for name, text in cases.items():
             with self.subTest(name):
@@ -2518,7 +2527,9 @@ class RollbackEnv(unittest.TestCase):
                 self.assertEqual(self.b.read_text(), "bat-signal-2")
         env.write_text(good)
         env.chmod(0o666)
-        self.assertEqual(h.run("install", "rollback", "apply", "paired", sha)[0], 1, "group-writable")
+        self.assertEqual(
+            h.run("install", "rollback", "apply", "paired", sha)[0], 1, "group-writable"
+        )
         env.chmod(0o600)
         env.unlink()
         os.symlink(self.live_unit, env)

@@ -1363,7 +1363,9 @@ def _read_snapshot(cfg: dict[str, str]) -> dict:
     path, _ = _env_paths(cfg)
     dst = os.stat(os.path.dirname(path))
     if not _owner_ok(dst):
-        raise RefusedError(f"{os.path.dirname(path)} is not owned by root or is group or world writable")
+        raise RefusedError(
+            f"{os.path.dirname(path)} is not owned by root or is group or world writable"
+        )
     doc = _read_env_json(path, True)
     if doc is None:
         raise RefusedError(

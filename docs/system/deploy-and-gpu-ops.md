@@ -735,10 +735,12 @@ reads no host.
 
 Neither is a command to paste; both are files to put in place.
 
-1. **Sync `Makefile.local`.** Replace its `deploy`, `deploy-debug` and
-   `deploy-preflight` recipes with `Makefile.local.example`'s. Keep your own
-   `DEPLOY_HOST`, `DEPLOY_BIN` and the like. `make deploy-env-check` says
-   whether it is in step.
+1. **Sync `Makefile.local`.** Replace its `deploy` and `deploy-debug` recipes
+   (and the `pprof-dropin` and `pprof-off` ones) with `Makefile.local.example`'s.
+   Keep your own `DEPLOY_HOST`, `DEPLOY_BIN` and the like. `make
+   deploy-env-check` says whether it is in step. A private `deploy-preflight`
+   target is fine: the check runs from `scripts/deploy-preflight.sh`, which it
+   calls.
 2. **Install the helper bundle.** Everything under "Rollback helpers" above:
    the bundle, `rollback.conf`, `host.conf`, and the sudoers drop-in rendered
    by `python3 scripts/storage_format_guard.py sudoers`. No new sudoers line is
@@ -749,7 +751,17 @@ Neither is a command to paste; both are files to put in place.
    one.
 
 Until both are done `make rollback` and `make rollback-restore` refuse (no
-helper, or no kept environment) rather than swap the binary alone.
+helper, or no kept environment) rather than swap the binary alone, and
+`make deploy` and `make deploy-debug` refuse a `Makefile.local` that deploys
+with `sudo mv` (`DEPLOY_ALLOW_NO_ROLLBACK=1` deploys anyway, knowingly).
+
+**Order.** Do both, then deploy once through the helpers *before* the deploy
+that carries the config flip. That deploy keeps the environment it replaces,
+and a rollback of the flip deploy restores exactly that one, but only if it
+passes the unit checks: a unit file from before the helpers (with its own
+`ExecStart=` rather than `host.conf`'s) fails them, and the rollback then
+refuses instead of restoring it. A deploy through the helpers installs the
+template unit, so the flip deploy's kept environment is a valid one.
 
 Note this only preserves **one** prior version — a second consecutive `make
 deploy` overwrites `.prev` with the (now second-to-last) binary. If you need
