@@ -384,7 +384,7 @@ func (s *t6g3FakeStore) GetOperationChanges(string) ([]*database.OperationChange
 	return nil, nil
 }
 func (s *t6g3FakeStore) Can(c t6g3Capability) bool {
-	return c == t6g3CapOpsLister || c == t6g3CapClassLists
+	return c == t6g3CapOpsLister
 }
 func (s *t6g3FakeStore) GetNarratorByName(string) (*database.Narrator, error) {
 	return nil, errT6g3NoCapability
@@ -424,6 +424,9 @@ type t6g3Fake struct {
 	t      *testing.T
 	writer *t6g3RecWriter
 	store  *t6g3FakeStore
+	// runs is the credits backfill's run store (runningCBRuns), made on the
+	// first deps().
+	runs tasks.RunStore
 
 	mu         sync.Mutex
 	newWriters []tasks.Writer
@@ -439,9 +442,13 @@ func newT6G3Fake(t *testing.T) *t6g3Fake {
 }
 
 func (f *t6g3Fake) deps() t6g3Deps {
+	if f.runs == nil {
+		f.runs = runningCBRuns(f.t)
+	}
 	return t6g3Deps{
 		Store:        f.store,
 		StandDownKey: t6g3ScanKey,
+		Runs:         f.runs,
 		NewWriter: func(w tasks.Writer) t6g3Writer {
 			f.mu.Lock()
 			f.newWriters = append(f.newWriters, w)
@@ -895,7 +902,7 @@ func TestT6G3_CreditsBackfillApplyWritesThroughTheWriter(t *testing.T) {
 	calls := f.writer.called()
 	assert.Contains(t, calls, "CreateOperationChange", "the journal row goes through the writer")
 	assert.Contains(t, calls, "ModifyBookCredits:bk-1", "the book write goes through the writer")
-	assert.Contains(t, calls, "SaveClassLists", "the class lists go through the writer")
+	assert.NotContains(t, calls, "SaveClassLists", "the class lists are the run's own rows, not a writer call (F5-18d, O10)")
 	assert.Same(t, gate, f.handed()[0])
 	f.writer.assertWithin(t, d)
 }

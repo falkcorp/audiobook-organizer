@@ -711,6 +711,12 @@ type creditsBackfillResult struct {
 	StartedAt  time.Time                  `json:"started_at"`
 	FinishedAt time.Time                  `json:"finished_at"`
 	Error      string                     `json:"error,omitempty"`
+	// JudgedSources is the native run's judgements of other runs' leftovers:
+	// run id -> the record state (nativeCBFingerprint) it judged them in. The
+	// judging run carries them because the judged runs are terminal and their
+	// ledgers closed (credits_backfill_native.go). HEAD's v2 shell keeps its
+	// markers as op rows under the judged operation and never sets this.
+	JudgedSources map[string]string `json:"judged_sources,omitempty"`
 }
 
 // cbSamplesPerClass bounds the before/after samples kept per write class:
@@ -792,6 +798,15 @@ type t6g3CreditsBackfillCoreEnv struct {
 	// StoreResult keeps the summary beyond the return value (HEAD: the
 	// reporter's result slot). Nil: the return value is the result.
 	StoreResult func(res *creditsBackfillResult) error
+	// ClassLists keeps the result's class id lists. Nil: the run's Writer,
+	// which keeps them as op rows beside the v2 operation (HEAD). The native
+	// kind keeps them as its own run rows (runClassLists), never through the
+	// Writer, so a Preview keeps them without an unfenced write.
+	ClassLists t6g3CBResultWriter
+	// Ledger finds the other runs whose leftovers an apply judges and records
+	// the judgement. Nil: HEAD's v2 operation ledger (cbOpsLedger); the native
+	// kind passes its run-store ledger (nativeCBLedger).
+	Ledger cbLedger
 }
 
 // runCreditsBackfill is the v2 shell of maintenance.credits-backfill.
@@ -845,8 +860,9 @@ func t6g3CreditsCoreEnv(base t6g3Base, tags repairs.GuardTagReader, eng t6g3CBEn
 // author joins a credits write replaces (authors: ModifyBookCredits takes book,
 // book_authors and book_narrators together), and the undo journal (operations:
 // the run writes it through CreateOperationChange). The class id lists are the
-// run's own rows (opv2:row:), not an Effect and not authority_lists; the judged
-// markers are op rows written under earlier operations. HEAD declared Reads
+// run's own rows in the tasks run store (deps.Runs, ReplaceRows), not an Effect
+// and not authority_lists; the judgements of other runs' leftovers ride in this
+// run's result (JudgedSources; credits_backfill_native.go). HEAD declared Reads
 // books and authors (kept) and Writes books; the series read is the guard's
 // (GetAllSeries). The result is the summary the core stored; on an error core
 // drops it (see the F5-08 seams note).
@@ -882,18 +898,36 @@ func (p *Plugin) creditsBackfillKind(deps t6g3Deps, sched func(tasks.Kind) *task
 			if err := t6g3NeedStore(t6g3CreditsBackfillKind, base); err != nil {
 				return creditsBackfillResult{}, err
 			}
-			if !base.Store.Can(t6g3CapClassLists) {
-				return creditsBackfillResult{}, fmt.Errorf("%s: the store cannot keep the class id lists (database.OpRowStore)", t6g3CreditsBackfillKind)
+			// The class id lists are the run's own rows and the other runs are
+			// the run store's (F5-18d, O10-O12): no run store, no run.
+			if deps.Runs == nil {
+				return creditsBackfillResult{}, fmt.Errorf("%s: t6g3Deps.Runs is not set; the run cannot keep its class id lists or find the runs whose leftovers it judges", t6g3CreditsBackfillKind)
 			}
 			params.Apply = base.Live
-			res, err := creditsBackfillCore(rc.Context(), params, t6g3CreditsCoreEnv(base, deps.GuardTags,
-				t6g3NativeCBEngine{rc: rc, base: base, standDownKey: deps.StandDownKey}))
-			if res == nil {
-				return creditsBackfillResult{}, err
-			}
-			return *res, err
+			env := t6g3CreditsCoreEnv(base, deps.GuardTags,
+				t6g3NativeCBEngine{rc: rc, base: base, standDownKey: deps.StandDownKey})
+			env.ClassLists = runClassLists{rows: runRowStore{ctx: rc.Context(), runs: deps.Runs}}
+			ledger := &nativeCBLedger{ctx: rc.Context(), runs: deps.Runs}
+			env.Ledger = ledger
+			res, err := creditsBackfillCore(rc.Context(), params, env)
+			return withJudged(res, ledger.judgedSources()), err
 		},
 	})
+}
+
+// withJudged is the native result: res with the judgements this run made. A run
+// that judged and then failed before it had a result still returns the
+// judgements, which the executor keeps beside the error (F5-18d, O5), so the
+// next apply does not judge the same runs again; the zero result is no result.
+func withJudged(res *creditsBackfillResult, judged map[string]string) creditsBackfillResult {
+	var out creditsBackfillResult
+	if res != nil {
+		out = *res
+	}
+	if judged != nil {
+		out.JudgedSources = judged
+	}
+	return out
 }
 
 // creditsBackfillParallelism is rule R4: HEAD ran every loop at
@@ -971,6 +1005,7 @@ func creditsBackfillCore(ctx context.Context, params creditsBackfillParams, env 
 		opID:    env.OpID,
 		workers: env.Workers,
 		eng:     env.Eng,
+		ledger:  env.Ledger,
 	}, params)
 	if res == nil {
 		return nil, err
@@ -978,7 +1013,11 @@ func creditsBackfillCore(ctx context.Context, params creditsBackfillParams, env 
 	if params.Apply && res.Counts != nil && res.BooksToWrite > 0 {
 		env.Writer.InvalidateAuthorsCache()
 	}
-	summary, serr := t6g3PersistCreditsBackfillResult(env.Writer, env.OpID, res, env.StoreResult, env.Log)
+	var lists t6g3CBResultWriter = env.Writer
+	if env.ClassLists != nil {
+		lists = env.ClassLists
+	}
+	summary, serr := t6g3PersistCreditsBackfillResult(lists, env.OpID, res, env.StoreResult, env.Log)
 	if serr != nil {
 		if err == nil {
 			return nil, fmt.Errorf("store credits backfill result: %w", serr)
@@ -1055,6 +1094,9 @@ type creditsBackfillEnv struct {
 	// and worker pool. headT6g3CBEngine fills it from the HEAD reporter;
 	// the core's callers fill it themselves.
 	eng t6g3CBEngine
+	// ledger is where the other runs and the judgements live (nil: HEAD's v2
+	// operation ledger over store, cbOpsLedger).
+	ledger cbLedger
 }
 
 // t6g3CBCreditsModifier is the one write the apply makes to a book:
@@ -1747,7 +1789,7 @@ func (r *cbRun) indexNarrators() {
 // leaves the same record for every LATER operation (each limit cohort runs
 // under its own operation id), so the journals read are this operation's and
 // those of the other credits-backfill operations whose status is not completed
-// and that no earlier apply has judged (otherCreditsBackfillOps).
+// and that no earlier apply has judged (cbLedger.others).
 //
 // The candidates of each journal are named by its own rows, voided rows
 // included (a refused write voids its row, and the record it created stays):
@@ -1789,7 +1831,7 @@ func (r *cbRun) seedLeftovers() error {
 	if err := r.leftoverCandidates(own, "this operation", cand); err != nil {
 		return err
 	}
-	others, err := r.otherCreditsBackfillOps()
+	others, err := r.ledger().others(r.env.opID)
 	if err != nil {
 		return err
 	}
@@ -1965,7 +2007,7 @@ func (r *cbRun) leftoverCandidates(src cbSourceOp, whose string, cand map[int]da
 // books that credited them lose their links and the records turn unlinked: the
 // shape of a leftover. A judged operation is skipped exactly so that this
 // question is not re-opened for "a record that was credited and has since lost
-// its book" (otherCreditsBackfillOps). Clearing the marker on revert would make
+// its book" (cbOpsLedger.others). Clearing the marker on revert would make
 // the next apply delete those records as leftovers of the reverted operation,
 // without any of the checks purge-empty-narrators applies, and the revert's own
 // contract is that the empty records are that operation's to remove. A
@@ -1991,7 +2033,7 @@ func cbSourceFingerprint(row database.OperationV2Row) string {
 		stamp(row.StartedAt), stamp(row.CompletedAt), stamp(row.LastProgressAt))
 }
 
-// otherCreditsBackfillOps is the OTHER credits-backfill operations whose last
+// others (cbOpsLedger) is the OTHER credits-backfill operations whose last
 // attempt did not complete and whose leftovers no apply has judged yet: every
 // operation of this definition but this one whose status is not "completed"
 // (failed, canceled, interrupted, running, queued or waiting). The dispatcher
@@ -2023,22 +2065,22 @@ func cbSourceFingerprint(row database.OperationV2Row) string {
 // is gone from this listing although its journal rows stay, and so is a
 // completed operation that was reverted afterwards (its status reads completed);
 // the records only such a journal names are not found here.
-func (r *cbRun) otherCreditsBackfillOps() ([]cbSourceOp, error) {
-	lister, ok := database.AsCapability[database.OperationsV2SinceLister](r.env.store)
-	if !ok || t6g3CBLacks(r.env.store, t6g3CapOpsLister) {
-		return nil, fmt.Errorf("cannot find the records other credits-backfill operations left: store is %T, which cannot list operations (OperationsV2SinceLister)", r.env.store)
+func (l cbOpsLedger) others(own string) ([]cbSourceOp, error) {
+	lister, ok := database.AsCapability[database.OperationsV2SinceLister](l.store)
+	if !ok || t6g3CBLacks(l.store, t6g3CapOpsLister) {
+		return nil, fmt.Errorf("cannot find the records other credits-backfill operations left: store is %T, which cannot list operations (OperationsV2SinceLister)", l.store)
 	}
 	rows, err := lister.ListOperationsV2Since(time.Time{}, math.MaxInt)
 	if err != nil {
 		return nil, fmt.Errorf("list operations for the records other credits-backfill operations left: %w", err)
 	}
-	markers, _ := database.AsCapability[database.OpRowStore](r.env.store)
-	if t6g3CBLacks(r.env.store, t6g3CapOpRows) {
+	markers, _ := database.AsCapability[database.OpRowStore](l.store)
+	if t6g3CBLacks(l.store, t6g3CapOpRows) {
 		markers = nil
 	}
 	var out []cbSourceOp
 	for _, row := range rows {
-		if row.DefID != creditsBackfillOpID || row.ID == r.env.opID || row.Status == "completed" {
+		if row.DefID != creditsBackfillOpID || row.ID == own || row.Status == "completed" {
 			continue
 		}
 		src := cbSourceOp{id: row.ID, endedAt: row.CompletedAt, fingerprint: cbSourceFingerprint(row)}
@@ -2064,10 +2106,7 @@ func (r *cbRun) otherCreditsBackfillOps() ([]cbSourceOp, error) {
 // next apply reads it again. A marker that cannot be written is only logged: the
 // next apply reads the journal again, which is the safe direction.
 func (r *cbRun) markLeftoversJudged() {
-	markers, ok := database.AsCapability[database.OpRowStore](r.env.store)
-	if !ok || t6g3CBLacks(r.env.store, t6g3CapOpRows) {
-		return
-	}
+	l := r.ledger()
 	for _, src := range r.judged {
 		settled := true
 		for id, srcs := range r.leftoverSrc {
@@ -2079,14 +2118,38 @@ func (r *cbRun) markLeftoversJudged() {
 		if !settled {
 			continue
 		}
-		err := markers.ReplaceOpRowsPrefix(src.id, cbSwept, 1, func(int) (database.OpRow, error) {
-			return database.OpRow{ID: cbSwept, Data: []byte(src.fingerprint)}, nil
-		})
-		if err != nil {
+		if err := l.markJudged(src); err != nil {
 			r.env.eng.Log(slog.LevelWarn, "credits-backfill: could not mark operation's leftovers judged",
 				slog.String("operation", src.id), slog.String("error", err.Error()))
 		}
 	}
+}
+
+// ledger is the run's cbLedger: the env's, or HEAD's v2 operation ledger over
+// the run's store.
+func (r *cbRun) ledger() cbLedger {
+	if r.env.ledger != nil {
+		return r.env.ledger
+	}
+	return cbOpsLedger{store: r.env.store}
+}
+
+// cbOpsLedger is cbLedger over HEAD's v2 operations: the listing of the
+// credits-backfill definition's rows (others) and a marker op row under each
+// judged operation (markJudged). Unchanged from HEAD's otherCreditsBackfillOps
+// and markLeftoversJudged.
+type cbOpsLedger struct{ store creditsBackfillStore }
+
+// markJudged writes src's marker under src's id. A store that keeps no op rows
+// keeps no marker, as before: the next apply reads the journal again.
+func (l cbOpsLedger) markJudged(src cbSourceOp) error {
+	markers, ok := database.AsCapability[database.OpRowStore](l.store)
+	if !ok || t6g3CBLacks(l.store, t6g3CapOpRows) {
+		return nil
+	}
+	return markers.ReplaceOpRowsPrefix(src.id, cbSwept, 1, func(int) (database.OpRow, error) {
+		return database.OpRow{ID: cbSwept, Data: []byte(src.fingerprint)}, nil
+	})
 }
 
 // recordNamed is the record holding exactly this name (the store's name index
