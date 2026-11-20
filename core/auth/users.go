@@ -1,5 +1,5 @@
 // file: core/auth/users.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 41d0b787-5ce8-4a3f-9d8e-8c7b8380e2f0
 // last-edited: 2026-11-19
 
@@ -194,6 +194,11 @@ func (s *Service) CreateUser(ctx context.Context, actor *Principal, in NewUser) 
 		}
 	}
 	err = s.commitRetrying(ctx, func(b *storage.Batch) error {
+		// CanAssign above ran on the cache and once; this runs on the store, on
+		// every attempt, under a guard on the role set (see claimRoles).
+		if err := s.claimRoles(ctx, b, actor.Perms, roles); err != nil {
+			return fmt.Errorf("%w: %w", ErrScopeEscalation, err)
+		}
 		rec := *u
 		rec.Roles = slices.Clone(roles)
 		if err := s.d.Store.SetPassword(b, &rec, hash); err != nil {
@@ -636,6 +641,9 @@ func (s *Service) SetRoles(ctx context.Context, actor *Principal, id UserID, rol
 		if err := s.keepAnAdmin(ctx, b, u, next, u.Status); err != nil {
 			return err
 		}
+		if err := s.claimRoles(ctx, b, actor.Perms, added); err != nil {
+			return fmt.Errorf("%w: %w", ErrScopeEscalation, err)
+		}
 		up := *u
 		up.Roles = slices.Clone(next)
 		up.Version = u.Version + 1
@@ -704,6 +712,58 @@ func adminHoldsWith(ctx context.Context, roleGrants func(context.Context, rbac.R
 	}
 }
 
+// roleSetGeneration reads the role set's generation (F4-02-ROLE-GUARD), the
+// first thing every decision on role definitions does, before it reads any
+// role. A role store that cannot guard the role set (rbac.ErrNoRoleGuard)
+// refuses the write; any other error is the store being unavailable.
+func (s *Service) roleSetGeneration(ctx context.Context) (uint64, error) {
+	gen, err := s.d.RBAC.RoleSetGeneration(ctx)
+	switch {
+	case errors.Is(err, rbac.ErrNoRoleGuard):
+		return 0, err
+	case err != nil:
+		return 0, fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
+	}
+	return gen, nil
+}
+
+// claimRoles is what every user write that gives a user a role runs first
+// (CreateUser, SetRoles over the roles it adds, an accepted invite; the OIDC
+// resolver's first sign-in does the same through its RoleReader): it reads the
+// role-set generation, asks the store, not the cache, whether by may give each
+// role (rbac.Service.CanAssignCommitted: a role that no longer exists is
+// refused unless by holds core:admin, a role recreated with a scope by lacks is
+// refused), and stages rbac.Service.ClaimRoleSet in b.
+//
+// The two Expects that decision needs are both in that one call. The guard
+// fails this commit if a role write (DeleteRole, or a delete and recreate
+// under the same name, which no per-role check can tell from the original)
+// committed after the generation was read, and the retry runs the check again
+// on the new definitions. The bump fails the commit of a DeleteRole that read
+// the role's holders before this write landed and found none. Without both,
+// the role and the user can commit in either order and leave a user holding a
+// role that no longer exists, which a later CreateRole under the same name
+// grants (the audit's MEDIUM, F4-02-ROLE-GUARD round 2, n6).
+//
+// It returns the rbac error (ErrEscalation, wrapping rbac.ErrUnknownRole for
+// an absent role) unwrapped, for the caller to wrap as it wraps CanAssign's.
+// Nothing is staged on a refusal. No roles added is no claim and stages
+// nothing. Called twice in one batch (SetRoles runs keepAnAdmin first), the
+// first guard wins and a newer generation than the first fails the commit.
+func (s *Service) claimRoles(ctx context.Context, b *storage.Batch, by rbac.Checker, roles []rbac.RoleName) error {
+	if len(roles) == 0 {
+		return nil
+	}
+	gen, err := s.roleSetGeneration(ctx)
+	if err != nil {
+		return err
+	}
+	if err := s.d.RBAC.CanAssignCommitted(ctx, by, roles); err != nil {
+		return err
+	}
+	return s.d.RBAC.ClaimRoleSet(b, gen)
+}
+
 // keepAnAdmin is the last-admin rule (05-rbac §4.6): when u is an active
 // core:admin holder and, with roles after and status after, would not be
 // one, some other active holder must exist. That holder is guarded in b
@@ -742,12 +802,9 @@ func adminHoldsWith(ctx context.Context, roleGrants func(context.Context, rbac.R
 // rule cannot be shown to hold. The other holder's user record is guarded as
 // before (Store.GuardUser).
 func (s *Service) keepAnAdmin(ctx context.Context, b *storage.Batch, u *User, after []rbac.RoleName, afterStatus UserStatus) error {
-	gen, err := s.d.RBAC.RoleSetGeneration(ctx)
-	switch {
-	case errors.Is(err, rbac.ErrNoRoleGuard):
+	gen, err := s.roleSetGeneration(ctx)
+	if err != nil {
 		return err
-	case err != nil:
-		return fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
 	}
 	if err := s.d.RBAC.GuardRoleSet(b, gen); err != nil {
 		return err

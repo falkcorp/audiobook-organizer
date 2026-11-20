@@ -1,5 +1,5 @@
 // file: core/internal/rbacstore/store.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6f1c9a3e-28d4-4b7e-a5f0-93e1d27c4b85
 // last-edited: 2026-11-19
 
@@ -268,19 +268,58 @@ func (s *Store) RoleSetGeneration(ctx context.Context) (uint64, error) {
 // import, fails the caller's Commit with storage.ErrConflict. Nothing is
 // written. Generation 0 expects the row absent, which is what an unwritten
 // role set is.
+//
+// The first guard of a batch wins. A caller that decides twice in one batch
+// (SetRoles runs the last-admin rule and then claims the roles it adds) reads
+// the generation twice, and the second read can be newer than the first when a
+// role write landed between them; an Expect staged for the newer value would
+// replace the older one, and the decisions made at the older value would lose
+// their guard. So the precondition is recorded the way a read-modify-write
+// records it (storage.Batch.GetForUpdate keeps the first read's), and a
+// generation that is not the committed one now is refused on the spot with
+// storage.ErrConflict, which every caller's retry loop already treats as "decide
+// again".
 func (s *Store) GuardRoleSet(b *storage.Batch, generation uint64) error {
 	if b == nil {
 		return errors.New("rbacstore: GuardRoleSet needs the caller's batch")
 	}
-	var want []byte
-	if generation != 0 {
-		want = encodeGeneration(generation)
-	}
 	b.Bind(s.ks)
-	if err := b.Expect(s.ks, generationKey(), want); err != nil {
-		return fmt.Errorf("rbacstore: expect the role-set generation: %w", err)
+	cur, err := s.generationThrough(b)
+	if err != nil {
+		return err
+	}
+	if cur != generation {
+		return fmt.Errorf("%w: the role set moved from generation %d to %d since it was read", storage.ErrConflict, generation, cur)
 	}
 	return nil
+}
+
+// ClaimRoleSet is GuardRoleSet followed by a bump of the generation in the same
+// batch (rbac.RoleGuarder). A user write that gives a user a role calls it: the
+// guard makes the write conflict with any role write that committed after the
+// caller decided the role exists, and the bump makes a role write that decided
+// before this write (DeleteRole, which read the role's holders and found none)
+// conflict with it in turn, so the two cannot both commit whichever lands
+// first. The bump changes no role.
+func (s *Store) ClaimRoleSet(b *storage.Batch, generation uint64) error {
+	if err := s.GuardRoleSet(b, generation); err != nil {
+		return err
+	}
+	return s.bumpGeneration(b)
+}
+
+// generationThrough reads the generation row through b, recording the
+// Expect on the committed value if b has none for it yet (and keeping the one
+// it has). An absent row is generation 0.
+func (s *Store) generationThrough(b *storage.Batch) (uint64, error) {
+	view, err := b.GetForUpdate(context.Background(), s.ks, generationKey())
+	switch {
+	case errors.Is(err, storage.ErrNotFound):
+		return 0, nil
+	case err != nil:
+		return 0, fmt.Errorf("rbacstore: read the role-set generation through the batch: %w", err)
+	}
+	return decodeGeneration(view)
 }
 
 // bumpGeneration stages the generation row of b one above its committed
@@ -290,21 +329,11 @@ func (s *Store) GuardRoleSet(b *storage.Batch, generation uint64) error {
 // row from the committed value, keep the first read's Expect, and stage the
 // same bump.
 func (s *Store) bumpGeneration(b *storage.Batch) error {
-	key := generationKey()
-	view, err := b.GetForUpdate(context.Background(), s.ks, key)
-	switch {
-	case errors.Is(err, storage.ErrNotFound):
-		view = nil
-	case err != nil:
-		return fmt.Errorf("rbacstore: read the role-set generation through the batch: %w", err)
+	cur, err := s.generationThrough(b)
+	if err != nil {
+		return err
 	}
-	cur := uint64(0)
-	if view != nil {
-		if cur, err = decodeGeneration(view); err != nil {
-			return err
-		}
-	}
-	if err := b.In(s.ks).Set(key, encodeGeneration(cur+1)); err != nil {
+	if err := b.In(s.ks).Set(generationKey(), encodeGeneration(cur+1)); err != nil {
 		return fmt.Errorf("rbacstore: stage the role-set generation: %w", err)
 	}
 	return nil

@@ -178,6 +178,7 @@ core/internal/outboxstore.SerializedPrefixes
 core/internal/outboxstore.StorageSpec
 core/internal/rbacstore.New
 core/internal/rbacstore.StorageSpec
+core/internal/rbacstore.Store.ClaimRoleSet
 core/internal/rbacstore.Store.DeleteRole
 core/internal/rbacstore.Store.GetRole
 core/internal/rbacstore.Store.GuardRoleSet
@@ -189,6 +190,7 @@ core/internal/rbacstore.Store.ScanRoles
 core/internal/rbacstore.Store.SealImports
 core/internal/rbacstore.Store.bumpGeneration
 core/internal/rbacstore.Store.committed
+core/internal/rbacstore.Store.generationThrough
 core/internal/rbacstore.Store.stage
 core/internal/rbacstore.checkShape
 core/internal/rbacstore.decode
