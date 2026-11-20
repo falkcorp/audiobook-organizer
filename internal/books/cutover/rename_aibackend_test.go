@@ -1,5 +1,5 @@
 // file: internal/books/cutover/rename_aibackend_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0F2D9E5B-7C41-4A38-B6D2-3E91A8C47F10
 // last-edited: 2026-11-19
 
@@ -746,4 +746,47 @@ func TestAIBackend_LossyCases(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, aiCaps(aiRow(t, got, "local-llm")))
 	})
+}
+
+// A mode write that ticks or unticks nothing new on a row leaves that row's
+// bytes alone: only a row whose capabilities really changed is re-encoded
+// (the re-encode sorts keys, so it would show).
+func TestAIBackend_FoldRewritesOnlyRowsWhoseTicksChanged(t *testing.T) {
+	prev := aiHandList()
+	before := elems(t, prev)
+
+	// local -> openai-fallback-local: local-llm already has every local tick.
+	got, err := FoldAIBackend(aiVals("llm_mode", "openai-fallback-local"), prev)
+	require.NoError(t, err)
+	after := elems(t, got)
+	assert.Equal(t, string(before[2]), string(after[2]), "local-llm already holds the local ticks")
+	assert.NotEqual(t, string(before[1]), string(after[1]), "openai gained the cloud ticks")
+
+	// local -> disabled: openai holds no cloud llm tick to take away.
+	got, err = FoldAIBackend(aiVals("llm_mode", "disabled"), prev)
+	require.NoError(t, err)
+	after = elems(t, got)
+	assert.Equal(t, string(before[1]), string(after[1]), "openai held no llm tick to remove")
+	assert.NotEqual(t, string(before[2]), string(after[2]), "local-llm lost its ticks")
+}
+
+// The refusal for a cloud mode with no openai row is one the SPA can show.
+func TestAIBackend_FoldCloudModeWithoutAKeyIsAskedForOne(t *testing.T) {
+	noKey := aiSeed(t, aiCfg{url: aiURL1, llm: "local", emb: "local", chat: "c", embed: "e"})
+	for _, vals := range []map[string]json.RawMessage{
+		aiVals("llm_mode", "openai"),
+		aiVals("embedding_mode", "openai-fallback-local"),
+	} {
+		_, err := FoldAIBackend(vals, noKey)
+		require.ErrorIs(t, err, ErrNotRepresentable)
+		assert.Contains(t, err.Error(), "set an OpenAI key first")
+	}
+}
+
+// A row the fold writes is not HTML-escaped: a URL's & stays an &.
+func TestAIBackend_FoldWritesRowsWithoutHTMLEscaping(t *testing.T) {
+	got, err := FoldAIBackend(aiVals("local_base_url", "http://192.0.2.10:11434/v1?a=1&b=2"), json.RawMessage(`[]`))
+	require.NoError(t, err)
+	assert.Contains(t, string(got), "a=1&b=2")
+	assert.NotContains(t, string(got), `\u0026`)
 }
