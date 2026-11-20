@@ -244,9 +244,11 @@ def commands(o: Opts, name: str = "") -> dict[str, str]:
         "restart": f"sudo -n /usr/bin/systemctl restart {o.unit}",
         "unit_type_simple": f"sudo -n {h}/unit-type simple",
         "unit_type_notify": f"sudo -n {h}/unit-type notify",
-        # The binary alone: the manual emergency path. The recipes use
-        # swap_env, which puts the unit and local.conf back with it.
-        "swap": f"sudo -n {h}/swap-prev",
+        # There is deliberately no binary-alone swap here: a rollback that puts
+        # the binary back without the unit and local.conf it ran under starts
+        # the previous build under the new environment. swap_env (install-staged
+        # rollback apply) is the only way, and it is idempotent, so the
+        # recovery after a failed swap is `make rollback` again.
         "env_check": f"sudo -n {h}/install-staged rollback check prev{gen}",
         # RELEASE=: asked BEFORE the fetched file is installed as .prev, with
         # the hash of the file in stage_bin.
@@ -289,7 +291,6 @@ def sudoers(o: Opts, deploy_user: str) -> str:
         "start",
         "restart",
         "probe",
-        "swap",
         "restore_checkpoint",
         "unit_type_simple",
         "install_unit",

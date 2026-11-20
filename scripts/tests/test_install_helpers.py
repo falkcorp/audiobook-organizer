@@ -529,6 +529,16 @@ class InstallHelpers(unittest.TestCase):
         checked = [x for x in self.log.read_text().splitlines() if x != "live-existed"]
         self.assertEqual(len(checked), 2, "validated again")
 
+    def test_a_sudoers_with_the_right_text_and_a_mode_that_is_not_0440_is_rewritten(self) -> None:
+        """Not group- or world-writable, but not the mode sudo expects either."""
+        self.assertEqual(self.run_tool("--apply").returncode, 0)
+        for mode in (0o400, 0o444, 0o640):
+            with self.subTest(mode=oct(mode)):
+                self.dropin.chmod(mode)
+                p = self.run_tool("--apply")
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertEqual(stat.S_IMODE(self.dropin.stat().st_mode), 0o440)
+
     def test_a_sudoers_with_the_right_text_and_the_wrong_owner_is_not_unchanged(self) -> None:
         self.assertEqual(self.run_tool("--apply").returncode, 0)
         text = self.dropin.read_text()

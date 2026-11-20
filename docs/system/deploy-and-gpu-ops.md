@@ -417,9 +417,11 @@ path. `scripts/deploy_rollback.py restore` runs it, in order:
    access to the state directory is `inflight-probe`'s read-only `find`. The
    recipe does not retry. Afterwards it checks again that the unit stayed
    stopped.
-5. The `swap-prev` helper keeps the current binary as
-   `$(DEPLOY_BIN).rolled-back` and installs `.prev` atomically; it starts
-   the unit and waits as above.
+5. `install-staged rollback apply` keeps the current binary as
+   `$(DEPLOY_BIN).rolled-back` and installs `.prev` atomically, with the unit
+   and `local.conf` it ran under; the recipe then starts the unit and waits
+   as above. There is no binary-alone helper: one would start the previous
+   build under the new environment, which is what this exists to prevent.
 
 Every failure after the first change says what state the host is in and
 prints the commands that finish or undo the rollback:
@@ -437,7 +439,8 @@ prints the commands that finish or undo the rollback:
 - the unit was running after the restore: the store **is** restored, and the
   current binary would migrate it again; stop it and run `make rollback`;
 - the swap failed: the store is restored and the current binary must not
-  start on it; finish with the `swap-prev` helper and `systemctl start`.
+  start on it; run `make rollback` again (the swap is idempotent: it replaces
+  whatever is left and reloads systemd), then it starts the unit.
 
 The unit is not masked during the restore. `systemctl mask` refuses a unit
 whose file is installed in `/etc/systemd/system`. The restore's swap lock is
@@ -482,7 +485,6 @@ root-owned config:
 | `checkpoint-record` | service user | a checkpoint name (`20261101T020304Z-0badc0de` form) | prints that record, without following a symlink |
 | `restore-offline` | root, the restore as the service user | `checkpoint NAME`, `archive FILE`, `into-check FILE` | `storage restore-offline` in a transient unit |
 | `unit-type` | root | `simple` or `notify` | writes or removes the fixed `Type=simple` drop-in, `daemon-reload` |
-| `swap-prev` | root | none | `.prev` installed atomically, the old binary kept |
 | `install-staged` | root | `binary`, `prev`, `unit`, `local-conf` or `rollback` | installs `stage_bin` as the binary (atomically, the old one kept as `.prev`) or, with `prev`, as `.prev` alone (`make rollback-restore RELEASE=`; the binary is not touched); copies the bundle's root-owned `audiobook-organizer.service` as the unit; or renders the `[Service]` and `Environment=` lines of `stage_local_conf` as the `local.conf` drop-in; `binary`, `unit` and `local-conf` then run `daemon-reload` (`prev` reloads nothing and does not delete `stage_bin`; the recipe does). `unit` and `local-conf` first capture what they replace, and `binary` (with nothing or four words of facts about the staged build) commits the capture as a generation in `<bin>.envgen/`, named by the replaced binary's sha256, when it rotates `.prev`; `rollback list`, `rollback check prev\|SHA256 [GEN]` and `rollback apply SHA256 [GEN]` read, validate and install a generation with `.prev` (below) |
 | `pprof` | root | `on` or `off` | writes or removes the fixed drop-in `pprof.conf` (`Environment=ABK_PPROF_ADDR=localhost:6060`), `daemon-reload` |
 
@@ -711,7 +713,6 @@ deploy ALL=(root) NOPASSWD: /usr/bin/systemctl stop audiobook-organizer.service,
     /usr/bin/systemctl start audiobook-organizer.service, \
     /usr/bin/systemctl restart audiobook-organizer.service, \
     /usr/local/libexec/audiobook-organizer/rollback/inflight-probe "", \
-    /usr/local/libexec/audiobook-organizer/rollback/swap-prev "", \
     /usr/local/libexec/audiobook-organizer/rollback/restore-offline, \
     /usr/local/libexec/audiobook-organizer/rollback/unit-type, \
     /usr/local/libexec/audiobook-organizer/rollback/install-staged, \
@@ -756,20 +757,29 @@ or owner-email settings. So the deploy keeps the environment with the binary.
   build that is already installed rotates nothing. A first deploy (no binary
   yet) keeps nothing.
 - **How many, and which are never dropped.** Several, not one: the newest three,
-  every *boundary* generation, and the newest three *unknown* pins. A generation
-  is a boundary when both builds' facts are known and the binary that replaced
-  it serves a higher store level for any owner or `enforced` differs between the
-  two builds: the last build before a level step or before the retired-name list
-  was enforced. Boundary generations are never evicted, and no run of later
-  deploys displaces them (they are rare). A generation is an unknown pin when a
-  fact needed to tell is missing (a deploy whose recipe passes no facts, an ssh
+  every *boundary* generation (up to ten; above that the oldest are evicted with
+  a warning, and a deploy that crosses that many level steps is worth a look),
+  and the newest three *unknown* pins. A generation is a boundary when the binary
+  that replaced it serves a higher store level for any owner, when `enforced`
+  differs between the two builds, or when that binary enforces the retired-name
+  list and the one it replaced is not known to have: the last build before a
+  level step, and the last build before the flip. After the flip every build is
+  enforced; that is intended, and only the first enforced build marks a
+  boundary. A boundary, once recorded, stays one: a rollback records the
+  restored binary (and the facts of its own generation) as the installed one, so
+  flip, rollback and flip again does not rewrite the pre-flip generation as an
+  unknown with no facts, and a rewrite that has no new facts keeps the old ones.
+  Boundary generations are never evicted for age, and no run of later deploys
+  displaces them (they are rare). A generation is an unknown pin when a fact
+  needed to tell is missing (a deploy whose recipe passes no facts, an ssh
   timeout while measuring): one more kept costs less than one lost, and those
   pins are bounded among themselves so the directory cannot grow. The helper
   cannot read the service-owned checkpoint area, so it cannot see whether the
   checkpoint taken at a level step is still kept. If any generation file is
-  unreadable nothing is evicted. The deploy before the flip must go through the
-  helpers with facts, so that the flip replaces a build with recorded facts and
-  its generation is a boundary.
+  unreadable nothing is evicted, and eviction runs only after the new binary is
+  in place. The deploy before the flip must go through the helpers with facts, so
+  that the flip replaces a build with recorded facts; a first deploy through the
+  helpers whose build enforces the list is a boundary too.
 - **These files hold secrets.** A generation is a root-only plaintext copy of
   `local.conf` (the Cloudflare Access, ABS JWT, owner-email and peer settings)
   and of the unit. The directory is 0700 and the files 0600, owned by root; the
@@ -780,7 +790,7 @@ or owner-email settings. So the deploy keeps the environment with the binary.
   `local.conf` itself. `make rollback-check` and the helper's messages never
   print their content.
 - **One at a time, and durable.** `install-staged binary|prev|unit|local-conf`,
-  `rollback apply` and `swap-prev` hold one lock (`<bin>.envgen/lock`) for their
+  and `rollback apply` hold one lock (`<bin>.envgen/lock`) for their
   duration and refuse, changing nothing, while another holds it. The renames they
   make are followed by an fsync of the containing directory.
 - **`host.conf` is not in the snapshot.** It is written once by the owner and no
@@ -870,9 +880,9 @@ Do them in this order. The first one is a command, not a file to put in place.
    `offline_env` must use the name the installed bundle's version reads
    (`ABK_STATE_DIR`; `ABO_CORE_PATHS_STATE_DIR` once the config flip is
    deployed), so a bundle reinstalled after the flip carries the new one.
-2. **Then sync `Makefile.local`.** Replace its `deploy` and `deploy-debug`
-   recipes (and the `pprof-dropin` and `pprof-off` ones) with
-   `Makefile.local.example`'s. Keep your own `DEPLOY_HOST`, `DEPLOY_BIN` and the
+2. **Then sync `Makefile.local`.** Merge `Makefile.local.example`'s `deploy` and
+   `deploy-debug` recipes (and its `pprof-dropin` and `pprof-off` ones) into it,
+   in place of yours. Keep your own `DEPLOY_HOST`, `DEPLOY_BIN` and the
    like. `make deploy-env-check` says whether it is in step. A private
    `deploy-preflight` target is fine: the check runs from
    `scripts/deploy-preflight.sh`, which it calls. The synced recipes call the
