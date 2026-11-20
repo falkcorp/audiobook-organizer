@@ -181,9 +181,9 @@ export function createStreamConnection(opts: ConnectionOptions): StreamConnectio
   let resyncOnOpen = false;
   // The server writes opened, then a reset if the subscribe owed one, then the replay
   // (core/internal/sse/serve.go). When this attempt's open already told the resync
-  // handlers ('reconnect'), a 'gap' or 'restart' reset before any event says the same
-  // thing again: swallow it, so one reopen is one resync (#4785 r2 m4). An 'overflow'
-  // is a loss after the open and is never swallowed.
+  // handlers ('reconnect'), a 'gap' or 'restart' reset as the very next frame says the
+  // same thing again: swallow it, so one reopen is one resync (#4785 r2 m4). Any event or
+  // reset frame ends that window, and an 'overflow' is a loss after the open, never swallowed.
   let resyncedAtOpen = false;
 
   const setStatus = (state: StreamState, extra: Partial<StreamStatus> = {}) => {
@@ -336,11 +336,9 @@ export function createStreamConnection(opts: ConnectionOptions): StreamConnectio
         return;
       case TOPIC_RESET: {
         const reason = reasonOf(parsed.data);
-        const owedBySubscribe = reason === 'gap' || reason === 'restart';
-        if (resyncedAtOpen && owedBySubscribe) {
-          resyncedAtOpen = false;
-          return;
-        }
+        const owedBySubscribe = resyncedAtOpen && (reason === 'gap' || reason === 'restart');
+        resyncedAtOpen = false;
+        if (owedBySubscribe) return;
         opts.onReset(reason);
         return;
       }
