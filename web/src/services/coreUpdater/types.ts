@@ -18,6 +18,8 @@
 // The release asset is never named here. The server picks it (ABO: goreleaser's raw
 // binary name, internal/updater.FetchOptions()); apply takes a release tag only.
 
+import type { Problem } from '@mediacore/api-client';
+
 /** core.updater.mode as StatusView serves it (core/updater/types.go Mode.String). */
 export type UpdaterMode = 'off' | 'check' | (string & {});
 
@@ -57,8 +59,9 @@ export interface UpdaterApplyRequest {
 }
 
 /**
- * The 409 codes apply answers before a task exists (updaterhttp mapPrepare), plus the
- * 422 `invalid_version` (a field error under /body/version).
+ * The 409 codes apply answers before a task exists (updaterhttp mapPrepare). A malformed
+ * tag is a 422 whose top-level code is `validation_failed`; `invalid_version` appears only
+ * as a field error's code (see INVALID_VERSION_FIELD_CODE).
  */
 export const APPLY_REFUSAL_CODES = [
   'updater_off',
@@ -66,16 +69,13 @@ export const APPLY_REFUSAL_CODES = [
   'local_build_needs_version',
   'no_update',
   'not_newer',
-  'invalid_version',
 ] as const;
+/** The field-error code of a malformed apply tag, inside a 422 validation_failed's errors[]. */
+export const INVALID_VERSION_FIELD_CODE = 'invalid_version';
 export type ApplyRefusalCode = (typeof APPLY_REFUSAL_CODES)[number];
 
-/** One entry of a problem's `errors` array (RFC 9457 extension, 05-http-api 3.3). */
-export interface UpdaterFieldError {
-  pointer?: string;
-  code?: string;
-  detail?: string;
-}
+/** One entry of a problem's `errors` array: {field, code, message} (core.Problem). */
+export type UpdaterFieldError = NonNullable<Problem['errors']>[number];
 
 /**
  * A non-2xx answer, decoded. `code` is the machine code (`authentication_required`,
@@ -120,7 +120,8 @@ export class UpdaterRequestError extends Error {
 
   /** An apply the server refused before starting a task (the 409s and the 422). */
   get isApplyRefusal(): boolean {
-    return (APPLY_REFUSAL_CODES as readonly string[]).includes(this.code);
+    if (this.status === 422) return this.fields.some((f) => f.code === INVALID_VERSION_FIELD_CODE);
+    return this.status === 409 && (APPLY_REFUSAL_CODES as readonly string[]).includes(this.code);
   }
 }
 
