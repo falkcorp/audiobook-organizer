@@ -71,6 +71,9 @@ type t6g2FakeStore struct {
 	verified   int      // VerifyBookAtPathIndex calls
 	classified []string // ClassifyBookSigMigration calls (preview of the sidecar migration)
 	scanAfters []string // the cursor of every ScanBookFileAcoustIDIndex call
+	// retireChecked counts CheckAuthorBooksLegacyRetire calls (preview of the
+	// author_books_legacy: retirement).
+	retireChecked int
 
 	// gt gates the store reads a pool's items make (an acoustid judgement, a
 	// build folder's book_file lookup), so a test can pin that pool's width.
@@ -169,6 +172,13 @@ func (s *t6g2FakeStore) CheckBookHashIndex(context.Context, database.BookHashInd
 	s.checked++
 	s.mu.Unlock()
 	return t6g2HashIndexRun{}, nil
+}
+
+func (s *t6g2FakeStore) CheckAuthorBooksLegacyRetire(context.Context, database.AuthorBooksLegacyRetireProgress) (database.AuthorBooksLegacyRetireReport, error) {
+	s.mu.Lock()
+	s.retireChecked++
+	s.mu.Unlock()
+	return database.AuthorBooksLegacyRetireReport{LegacyRows: 1}, nil
 }
 
 // t6g2RecWriter records every write that reaches it, as "Method" or
@@ -386,6 +396,11 @@ func (w *t6g2RecWriter) BackfillBookAtPathIndex(context.Context, database.BookAt
 func (w *t6g2RecWriter) DeleteOrphanBookFileAcoustIDEntries(_ context.Context, e []database.BookFileAcoustIDEntry) (int, error) {
 	w.rec(fmt.Sprintf("DeleteOrphanBookFileAcoustIDEntries:%d", len(e)))
 	return len(e), nil
+}
+
+func (w *t6g2RecWriter) RetireAuthorBooksLegacy(context.Context, database.AuthorBooksLegacyRetireProgress) (database.AuthorBooksLegacyRetireReport, error) {
+	w.rec("RetireAuthorBooksLegacy")
+	return database.AuthorBooksLegacyRetireReport{Apply: true, LegacyRows: 1, Deleted: 1}, nil
 }
 
 // ModifyBook runs fn on a book with an empty Description so the restore logic
@@ -722,6 +737,11 @@ func t6g2Rows() []t6g2Row {
 			arrange:  func(t *testing.T, f *t6g2Fakes) { t6g2ChaptersFixture(t, f, "bat-1") },
 			wantLive: []string{"SaveChaptersForBook:bat-1:2"},
 		},
+		{
+			def: (*Plugin).authorBooksLegacyRetireDef, kind: t6g2KindAuthorBooksLegacyRetire, resume: tasks.ResumeFromZero,
+			calls: []string{"RetireAuthorBooksLegacy"}, reads: []ops.Resource{ops.ResBooks, ops.ResAuthors}, params: `{}`,
+			wantLive: []string{"RetireAuthorBooksLegacy"},
+		},
 	}
 	for i := range rows {
 		rows[i].head = rows[i].def(p)
@@ -784,8 +804,8 @@ func t6g2ShapeFixture(t *testing.T, f *t6g2Fakes) {
 func TestT6G2Kinds_Conformance(t *testing.T) {
 	defs := (&Plugin{}).t6g2Kinds(fakeT6G2Deps(t), nil)
 	rows := t6g2Rows()
-	if len(defs) != 13 || len(rows) != 13 {
-		t.Fatalf("t6g2Kinds returned %d definitions for %d rows, want 13", len(defs), len(rows))
+	if len(defs) != 14 || len(rows) != 14 {
+		t.Fatalf("t6g2Kinds returned %d definitions for %d rows, want 14", len(defs), len(rows))
 	}
 	for i, d := range defs {
 		if d.Kind() != rows[i].kind {
@@ -1437,10 +1457,10 @@ func TestT6G2Kinds_WritesThroughShell(t *testing.T) {
 //     index keys and the build's sentinel, all keyed by book (books).
 //   - DeleteOrphanBookFileAcoustIDEntries: deletes acoustid index keys, which are
 //     book_file segment lookups (book_files); it never writes a book_file row.
-//   - ModifyBook: the books row, the author_books_legacy: rows an author id stages,
-//     the metadata-cache stale stamp on an identity change and the ident: rows the
-//     store stages (books, authors, metadata_cache, indexes: the whole book row,
-//     whatever a caller's closure sets today, per the one rule of kinds_resources.go).
+//   - ModifyBook: the books row, the metadata-cache stale stamp on an identity
+//     change and the ident: rows the store stages (books, metadata_cache, indexes:
+//     the whole book row, whatever a caller's closure sets today, per the one rule
+//     of kinds_resources.go; no authors since F5-18j).
 //   - SaveChaptersForBook: chapters are stored under the book (books).
 //   - BatchCreateBookFiles: creates the book_file rows (book_files), then
 //     notifyBookFileChanges and RecomputeBookAggregates rewrite the book through
@@ -1461,6 +1481,7 @@ var t6g2HeadLive = map[tasks.Kind]string{
 	t6g2KindBookSigSidecarMigrate:       `{"dry_run":false}`,
 	t6g2KindBuildFolderBookFiles:        `{"apply":true,"book_ids":["bat-1"]}`,
 	t6g2KindChaptersBackfill:            `{"apply":true,"book_ids":["bat-1"]}`,
+	t6g2KindAuthorBooksLegacyRetire:     `{"dry_run":false}`,
 }
 
 // ---------------------------------------------------------------------------
@@ -1542,6 +1563,12 @@ func (s t6g2HeadStore) DeleteOrphanBookFileAcoustIDEntries(ctx context.Context, 
 func (s t6g2HeadStore) RepairBookHashIndex(ctx context.Context, p database.BookHashIndexProgress) (database.BookHashIndexReport, error) {
 	_, err := s.f.writer.RepairBookHashIndex(ctx, p)
 	return database.BookHashIndexReport{}, err
+}
+func (s t6g2HeadStore) CheckAuthorBooksLegacyRetire(ctx context.Context, p database.AuthorBooksLegacyRetireProgress) (database.AuthorBooksLegacyRetireReport, error) {
+	return s.f.store.CheckAuthorBooksLegacyRetire(ctx, p)
+}
+func (s t6g2HeadStore) RetireAuthorBooksLegacy(ctx context.Context, p database.AuthorBooksLegacyRetireProgress) (database.AuthorBooksLegacyRetireReport, error) {
+	return s.f.writer.RetireAuthorBooksLegacy(ctx, p)
 }
 
 // MigrateBookSigToSidecar is the store's one method for both directions, as

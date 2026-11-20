@@ -46,9 +46,11 @@ const (
 	// a book write does it. It does NOT name the search index or the in-memory
 	// (memdb) read model: those follow the store's own commits and no kind
 	// declares them. Row-family secondary indexes kept in a row's own batch
-	// (book_atpath:, book_hash:, book_file_acoustid:, author_books_legacy:, path
-	// and version-group indexes) are NOT indexes: they belong to the row family's
-	// resource (books, book_files, authors).
+	// (book_atpath:, book_hash:, book_file_acoustid:, author_books:, path and
+	// version-group indexes) are NOT indexes: they belong to the row family's
+	// resource (books, book_files, authors). The retired author_books_legacy:
+	// family (F5-18j: no build stages or reads it) is authors too, which is what
+	// maintenance.author-books-legacy-retire declares when it deletes the rows.
 	ResIndexes Resource = "indexes"
 
 	// ResAIJournal is the durable AI result journal (aijournal:<kind>:<key>

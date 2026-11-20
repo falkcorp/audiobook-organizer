@@ -491,11 +491,10 @@ func (p *Plugin) fileIntroTranscribeKind(deps t6g4Deps, sched *tasks.Schedule) t
 			// RecordIntroTimeout: book_files), a book's transcript fill (ModifyBook:
 			// books). ModifyBook also stamps the metadata cache stale on an identity
 			// change and stages the ident: rows (metadata_cache, indexes: the shared
-			// ModifyBook row, kinds_resources.go) and the author_books_legacy: rows
-			// (authors). The run's counters (the
+			// ModifyBook row, kinds_resources.go). The run's counters (the
 			// stats:transcribe-files key) have no pkg/ops constant and are written
 			// outside the gated writer on purpose: see t6g4StatsSink.
-			Effects:  tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResAuthors, ops.ResMetadataCache, ops.ResIndexes)...),
+			Effects:  tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes)...),
 			Perms:    tasks.Permissions{Start: t6g4StartRequirement()},
 			Resume:   tasks.ResumeContinue,
 			Priority: tasks.PriorityLow,

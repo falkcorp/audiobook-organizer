@@ -370,9 +370,7 @@ func (p *Plugin) repairMergedUserStateNative(deps t6g6Deps, sched func(tasks.Kin
 	// and indexes: the shared row of ModifyBook, kinds_resources.go).
 	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResUserState)),
 		tasks.Res("books", string(ops.ResSyncIdentity)), tasks.Res("books", string(ops.ResMetadataCache)),
-		tasks.Res("books", string(ops.ResIndexes)),
-		// authors: ModifyBook also stages author_books_legacy: (the shared ModifyBook row).
-		tasks.Res("books", string(ops.ResAuthors)))
+		tasks.Res("books", string(ops.ResIndexes)))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books." + merge.UserStateRepairOpID)

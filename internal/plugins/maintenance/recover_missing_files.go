@@ -355,8 +355,8 @@ func (p *Plugin) recoverMissingFilesNative(deps t6g6Deps, sched func(tasks.Kind)
 	// (files, the resource F5-08 names it). Effects are static per kind, so files
 	// is declared for every run, as the widest the kind can do.
 	// The shared fileRow of kinds_resources.go: a book_file row write also
-	// recomputes the owning book (books, authors, metadata_cache, indexes).
-	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResFiles)), tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResIndexes)))
+	// recomputes the owning book (books, metadata_cache, indexes).
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResFiles)), tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResIndexes)))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.recover-missing-files")

@@ -309,9 +309,9 @@ func (p *Plugin) runRepairLibraryState(ctx context.Context, rawParams json.RawMe
 // of kinds_resources.go); the preview is HEAD's dry run.
 func (p *Plugin) libraryStateRepairKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	// SetLibraryStateOrganized is a ModifyBook-shaped write: the books row and what
-	// a book write carries (authors' legacy index, the stale stamp, the ident: rows;
+	// a book write carries (the stale stamp, the ident: rows;
 	// the shared bookW row of kinds_resources.go).
-	eff := tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)),
+	eff := tasks.Writes(tasks.Res("books", string(ops.ResBooks)),
 		tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResIndexes)))
 	return tasks.Task(libraryStateRepairKind, tasks.TaskSpec[json.RawMessage, libraryStateRepairResult]{
 		Common: t6g5Common(p.repairLibraryStateDef(), libraryStateRepairKind, eff, sched),

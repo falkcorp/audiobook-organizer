@@ -102,6 +102,7 @@ var defTargets = map[string]Target{
 	"maintenance.activity-filter-index-backfill":     {Kind: "books.maintenance.activity-filter-index-backfill", Rule: RuleBooks},
 	"maintenance.activity-reclaim":                   {Kind: "books.retired.maintenance.activity-reclaim", Rule: RuleRetired},
 	"maintenance.ai-dedup-batch":                     {Kind: "books.maintenance.ai-dedup-batch", Rule: RuleBooks},
+	"maintenance.author-books-legacy-retire":         {Kind: "books.maintenance.author-books-legacy-retire", Rule: RuleBooks},
 	"maintenance.author-conjunction-repair":          {Kind: "books.maintenance.author-conjunction-repair", Rule: RuleBooks},
 	"maintenance.author-duplicate-merge":             {Kind: "books.maintenance.author-duplicate-merge", Rule: RuleBooks},
 	"maintenance.author-id-repair":                   {Kind: "books.maintenance.author-id-repair", Rule: RuleBooks},

@@ -152,7 +152,7 @@ func TestRetireAuthorBooksLegacy_PreviewWritesNothing(t *testing.T) {
 	fx := buildABRetireFixture(t, p)
 	before := abAllKeysExceptLegacy(t, p)
 
-	rep, err := p.RetireAuthorBooksLegacy(context.Background(), false, nil)
+	rep, err := p.CheckAuthorBooksLegacyRetire(context.Background(), nil)
 	require.NoError(t, err)
 	require.False(t, rep.Apply)
 	require.False(t, rep.Refused, "stale rows never block")
@@ -174,7 +174,7 @@ func TestRetireAuthorBooksLegacy_ApplyDeletesEveryLegacyRowAndNothingElse(t *tes
 	before := abAllKeysExceptLegacy(t, p)
 
 	var phases []string
-	rep, err := p.RetireAuthorBooksLegacy(context.Background(), true, func(phase string, _ int) { phases = append(phases, phase) })
+	rep, err := p.RetireAuthorBooksLegacy(context.Background(), func(phase string, _ int) { phases = append(phases, phase) })
 	require.NoError(t, err)
 	require.True(t, rep.Apply)
 	require.False(t, rep.Refused)
@@ -184,7 +184,7 @@ func TestRetireAuthorBooksLegacy_ApplyDeletesEveryLegacyRowAndNothingElse(t *tes
 	require.Equal(t, before, abAllKeysExceptLegacy(t, p), "only author_books_legacy: rows may change")
 	require.Contains(t, phases, "deleting legacy rows")
 
-	rep, err = p.RetireAuthorBooksLegacy(context.Background(), true, nil)
+	rep, err = p.RetireAuthorBooksLegacy(context.Background(), nil)
 	require.NoError(t, err)
 	require.Zero(t, rep.LegacyRows)
 	require.Zero(t, rep.Deleted)
@@ -217,7 +217,12 @@ func TestRetireAuthorBooksLegacy_RefusesWhileAnAuthorIDIsUncredited(t *testing.T
 	legacyBefore := abLegacyKeys(t, p)
 
 	for _, apply := range []bool{false, true} {
-		rep, err := p.RetireAuthorBooksLegacy(context.Background(), apply, nil)
+		run := p.CheckAuthorBooksLegacyRetire
+		if apply {
+			run = p.RetireAuthorBooksLegacy
+		}
+		rep, err := run(context.Background(), nil)
+		require.Equal(t, apply, rep.Apply)
 		if apply {
 			require.ErrorIs(t, err, ErrAuthorBooksLegacyRetireRefused)
 		} else {
@@ -255,7 +260,7 @@ func TestRetireAuthorBooksLegacy_RefusesWhileAnAuthorIDIsUncredited(t *testing.T
 	} {
 		require.NoError(t, p.SetBookAuthors(b.id, abCredits(b.id, b.credits...)))
 	}
-	rep, err := p.RetireAuthorBooksLegacy(context.Background(), true, nil)
+	rep, err := p.RetireAuthorBooksLegacy(context.Background(), nil)
 	require.NoError(t, err)
 	require.False(t, rep.Refused)
 	require.Equal(t, len(legacyBefore), rep.Deleted)
@@ -268,7 +273,7 @@ func TestRetireAuthorBooksLegacy_UndecodableBookRowNeverBlocks(t *testing.T) {
 	p := newAuthorBooksPebble(t)
 	fx := buildABRetireFixture(t, p)
 	require.NoError(t, p.db.Set([]byte(bookRowPrefix+fx.books[0]), []byte("{not json"), pebble.Sync))
-	rep, err := p.RetireAuthorBooksLegacy(context.Background(), true, nil)
+	rep, err := p.RetireAuthorBooksLegacy(context.Background(), nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, rep.UnreadableBooks)
 	require.False(t, rep.Refused)
@@ -291,7 +296,7 @@ func TestRetireAuthorBooksLegacy_ResumesAfterACancelledDelete(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	rep, err := p.RetireAuthorBooksLegacy(ctx, true, func(phase string, n int) {
+	rep, err := p.RetireAuthorBooksLegacy(ctx, func(phase string, n int) {
 		if phase == "deleting legacy rows" && n >= authorBooksBatchRows {
 			cancel()
 		}
@@ -301,7 +306,7 @@ func TestRetireAuthorBooksLegacy_ResumesAfterACancelledDelete(t *testing.T) {
 	require.Equal(t, authorBooksBatchRows, rep.Deleted)
 	require.Len(t, abLegacyKeys(t, p), total-authorBooksBatchRows)
 
-	rep, err = p.RetireAuthorBooksLegacy(context.Background(), true, nil)
+	rep, err = p.RetireAuthorBooksLegacy(context.Background(), nil)
 	require.NoError(t, err)
 	require.Equal(t, total-authorBooksBatchRows, rep.LegacyRows)
 	require.Equal(t, total-authorBooksBatchRows, rep.Deleted)

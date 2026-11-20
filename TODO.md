@@ -339,11 +339,15 @@ into one of the curated sections below, is a normal direct edit.
         reason on the run and alert when a scheduled kind has waited longer than a
         set number of hours. At the flip the four scheduled kinds that can be held
         back by a manual whole-library job are `books.maintenance.tombstone-cleanup`
-        (overlaps 20 jobs, was 2), `books.maintenance.author-split-scan`,
+        (overlapped 20 jobs, back to 2 after F5-18j), `books.maintenance.author-split-scan`,
         `books.maintenance.purge-deleted` and `books.maintenance.trash-cleanup`.
-      - Retire the legacy author-junction rows (`author_books_legacy:`) the store
+      - DONE (F5-18j, 2026-11-20; `docs/agent-tasks/platform-core/seams.d/F5-18j.md`):
+        Retire the legacy author-junction rows (`author_books_legacy:`) the store
         stages inside `ModifyBook`, so `authors` leaves the book row and
-        `tombstone-cleanup` goes back to 2 overlapping jobs.
+        `tombstone-cleanup` goes back to 2 overlapping jobs. Measured: 20 jobs
+        to 2. The store no longer stages or reads the family; deleting the rows
+        already on prod is `maintenance.author-books-legacy-retire`, which waits
+        for the owner's go (run plan in the seams note).
       - Convert the long whole-library jobs (`backfill-file-hashes`,
         `recompute-book-aggregates`, `scan-composer-tags`) to per-batch book
         locking (a per-book resource ID through `RunItems`) instead of a
