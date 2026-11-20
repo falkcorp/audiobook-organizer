@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/writes_oracle_fixture_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8fbddfb2-91e8-42bd-ab62-8e8e7e8cd794
 // last-edited: 2026-11-19
 
@@ -7,6 +7,7 @@ package jobs_test
 
 import (
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -65,11 +66,20 @@ func TestOracleWalk_FindsWritesReachedByOtherNames(t *testing.T) {
 		{"ViaNonVerbStoreMethod", []string{"books"}, "a store method whose name starts with Revert"},
 		{"SharedWriter", []string{"authors"}, "a callback passed to a shared helper"},
 		{"SharedReadOnly", nil, "a reading callback passed to the same shared helper writes nothing (the helper's callback is the caller's, not every caller's)"},
-		{"MixedReadOnly", nil, "a callback that may also be a package variable's step is the caller's, not the graph's"},
+		{"MixedReadOnly", []string{"authors"}, "the helper may fall back to a package variable's step, so that step's writes are reported (the safe side) though this caller passes a reader"},
+		{"ViaPartialImpls", []string{"books"}, "the program knows one implementation of the interface (it does not write), the production wiring passes the store: the method name still says write"},
+		{"ViaOutsideBody", []string{"books"}, "the one known implementation writes through code outside the module: only the method name is evidence"},
+		{"ViaFieldCallback", []string{"books"}, "a function value loaded from a struct field and passed to a shared helper"},
+		{"ViaGlobalCallback", []string{"authors"}, "a function value loaded from a package-level slice and passed to a shared helper"},
+		{"ViaNilDefault", []string{"authors"}, "the helper's nil-means-default idiom"},
+		{"ViaUnwiredInterface", []string{"books"}, "a non-verb method on a value the program never passes: the class hierarchy's implementation"},
+		{"ViaMapCallback", []string{"authors"}, "a function value loaded from a package-level map"},
+		{"ViaContextFunc", []string{"authors", "books"}, "a function value no flow reaches: the signature-based callees (every function of that signature)"},
 		{"ViaOrphanInterface", []string{"books"}, "an interface nothing implements is judged by its method name"},
 		{"ViaGeneric", []string{"books"}, "a closure handed to an instance of this module's generic"},
 		{"UsesStdGeneric", nil, "a standard library generic instance is not followed"},
-		{"ReportsProgress", nil, "a progress reporter is not a books write, nor is what implements it"},
+		{"ReportsProgress", []string{"books"}, "a progress reporter's own name is not judged, but its implementation's body is walked: it writes through the store"},
+		{"ReportsQuietly", nil, "a progress reporter that does nothing: neither its name nor its body is a write"},
 		{"ConvertedReadOnly", nil, "a callback converted inside the shared helper is still the caller's"},
 		{"ConvertedWriter", []string{"authors"}, "the converting helper with a writing callback"},
 		{"ViaEitherField", []string{"authors", "books"}, "a function value chosen between two package-level values"},
@@ -80,6 +90,73 @@ func TestOracleWalk_FindsWritesReachedByOtherNames(t *testing.T) {
 			t.Errorf("%s: the walk finds %v, want %v (%s)", tc.root, got, tc.want, tc.why)
 		}
 	}
+}
+
+// TestOracleWalk_NotWalkedIsOnlyTheHeartbeat: the walk skips the scan stand-down
+// hold's heartbeat (Checkpoint, Beat, beat) and no other method of it: take,
+// Finish and Release still are followed.
+func TestOracleWalk_NotWalkedIsOnlyTheHeartbeat(t *testing.T) {
+	const recv = "(*github.com/falkcorp/audiobook-organizer/internal/operations/registry.ScanStandDownHold)."
+	for _, name := range []string{"Checkpoint", "Beat", "beat"} {
+		if !oracleNotWalked.MatchString(recv + name) {
+			t.Errorf("%s is the heartbeat and must not be walked", name)
+		}
+	}
+	for _, name := range []string{"take", "Finish", "Release", "Retain", "CheckpointAndFinish"} {
+		if oracleNotWalked.MatchString(recv + name) {
+			t.Errorf("%s is not the heartbeat and must be walked", name)
+		}
+	}
+}
+
+// TestOracleWalk_RecordsWhatItCannotResolve: a call through a function value that
+// neither the flow graph nor the signature graph can name is recorded, not
+// skipped, so a job that makes one fails TestJobWrites_NoUnresolvedCalls unless
+// the call is allow-listed with a reason.
+func TestOracleWalk_RecordsWhatItCannotResolve(t *testing.T) {
+	op := oracleFixture(t)
+	// Every shape the signature-based fallback is not applied to (a declared
+	// variable, a call result, an outside call's closure) must still be
+	// recorded, never skipped.
+	for root, what := range map[string]string{
+		"ViaUnresolved":     "#value",
+		"ViaUnsetHook":      "#unsetHook",
+		"ViaCallResult":     "#call result",
+		"ViaOutsideClosure": "#outside:context.WithCancel",
+		"ViaUnsetStepParam": "#parameter",
+		"ViaPhiOfHooks":     "#unsetHook",
+	} {
+		_, _, _, calls, _ := derivedWrites(op, op.roots[0].Func(root))
+		var found []string
+		for k := range calls {
+			if strings.HasPrefix(k, "UNRESOLVED.") && strings.HasSuffix(k, what) {
+				found = append(found, k)
+			}
+		}
+		if len(found) != 1 {
+			t.Errorf("%s records %v, want exactly one UNRESOLVED call ending %s", root, calls, what)
+		}
+	}
+	_, _, _, calls, _ := derivedWrites(op, op.roots[0].Func("ViaFieldCallback"))
+	for k := range calls {
+		if strings.HasPrefix(k, "UNRESOLVED.") {
+			t.Errorf("ViaFieldCallback records %s, but its callback is resolvable", k)
+		}
+	}
+}
+
+// TestOracleWalk_KeysAGenericStoreFunction: a call to an instance of a generic
+// function of the store package is keyed by the generic, like any store function
+// (an instance has no package of its own, and keying by it dropped the call).
+func TestOracleWalk_KeysAGenericStoreFunction(t *testing.T) {
+	op := oracleFixture(t)
+	_, _, _, calls, _ := derivedWrites(op, op.roots[0].Func("ViaGenericStoreFn"))
+	for k := range calls {
+		if strings.HasPrefix(k, "STOREFN.") && strings.HasSuffix(k, ".UpdateWith") {
+			return
+		}
+	}
+	t.Errorf("ViaGenericStoreFn records %v, want a STOREFN key for UpdateWith", calls)
 }
 
 // TestOracleWalk_FollowsGenericInstancesByTheirOrigin: an instance of a generic
@@ -113,20 +190,28 @@ func TestOracleWalk_FollowsGenericInstancesByTheirOrigin(t *testing.T) {
 }
 
 // TestOracleWalk_NeedsTheCallGraph pins what the call graph adds: with an empty
-// graph (the walk before F5-18m resolved no interface call and no function value)
-// the three graph shapes find nothing, while the shapes that need no graph still
-// do. It is the sensitivity check of the test above: if the graph shapes found
+// graph the interface call and the function value no flow reaches find nothing,
+// while the shapes that need no graph (a callback the caller names, a function
+// value loaded from a field, a variable or a slice that the module stores into)
+// still do. It is the sensitivity check of the test above: if the graph shapes found
 // their writes without the graph, that test would prove nothing about it.
 func TestOracleWalk_NeedsTheCallGraph(t *testing.T) {
 	op := *oracleFixture(t)
 	empty := callgraph.New(nil)
 	op.graph, op.cha = empty, empty
-	for _, root := range []string{"ViaInterface", "ViaFuncValue", "ViaStructField"} {
+	for _, root := range []string{"ViaInterface", "ViaContextFunc"} {
 		if got := fixtureWrites(t, &op, root); len(got) != 0 {
 			t.Errorf("%s: finds %v without a call graph; the fixture does not exercise the graph", root, got)
 		}
 	}
-	for root, want := range map[string][]string{"ViaNonVerbStoreMethod": {"books"}, "SharedWriter": {"authors"}} {
+	// What the module's own stores into a field, a package variable or a slice
+	// say (ViaFuncValue, ViaStructField, ViaFieldCallback, ViaGlobalCallback) is
+	// resolved without any call graph, like the caller's own callback.
+	for root, want := range map[string][]string{
+		"ViaNonVerbStoreMethod": {"books"}, "SharedWriter": {"authors"},
+		"ViaFuncValue": {"authors"}, "ViaStructField": {"books"},
+		"ViaFieldCallback": {"books"}, "ViaGlobalCallback": {"authors"},
+	} {
 		if got := fixtureWrites(t, &op, root); !slices.Equal(got, want) {
 			t.Errorf("%s: finds %v without a call graph, want %v (it needs no graph)", root, got, want)
 		}
