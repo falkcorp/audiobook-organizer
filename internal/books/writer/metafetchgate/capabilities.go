@@ -80,7 +80,7 @@ var (
 // FindAuthorByAlias is the inner store's alias lookup; (nil, nil), a miss, when
 // it has none.
 func (s *Store) FindAuthorByAlias(aliasName string) (*database.Author, error) {
-	f, ok := database.AsCapability[authorcredit.AliasFinder](s.Store)
+	f, ok := database.AsCapability[authorcredit.AliasFinder](s.innerStore)
 	if !ok {
 		return nil, nil
 	}
@@ -89,7 +89,7 @@ func (s *Store) FindAuthorByAlias(aliasName string) (*database.Author, error) {
 
 // GetAllSeries is the inner store's series listing; empty when it has none.
 func (s *Store) GetAllSeries() ([]database.Series, error) {
-	l, ok := database.AsCapability[seriesLister](s.Store)
+	l, ok := database.AsCapability[seriesLister](s.innerStore)
 	if !ok {
 		return nil, nil
 	}
@@ -99,7 +99,7 @@ func (s *Store) GetAllSeries() ([]database.Series, error) {
 // GetMetadataChangeHistory is the inner store's metadata change history for a
 // field; empty when it has none.
 func (s *Store) GetMetadataChangeHistory(bookID string, field string, limit int) ([]database.MetadataChangeRecord, error) {
-	h, ok := database.AsCapability[authorcredit.HistorySource](s.Store)
+	h, ok := database.AsCapability[authorcredit.HistorySource](s.innerStore)
 	if !ok {
 		return nil, nil
 	}
@@ -109,7 +109,7 @@ func (s *Store) GetMetadataChangeHistory(bookID string, field string, limit int)
 // GetBooksByAuthorIDWithRoleCore is the inner store's by-author book listing;
 // empty when it has none.
 func (s *Store) GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error) {
-	l, ok := database.AsCapability[authorcredit.AuthorBooksSource](s.Store)
+	l, ok := database.AsCapability[authorcredit.AuthorBooksSource](s.innerStore)
 	if !ok {
 		return nil, nil
 	}
@@ -121,7 +121,7 @@ func (s *Store) GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCor
 // retired resolves the inner store's retired-row reader, or the error the
 // database helpers return for a store without it.
 func (s *Store) retired(what string) (database.RetiredBookFileReader, error) {
-	r, ok := database.AsCapability[database.RetiredBookFileReader](s.Store)
+	r, ok := database.AsCapability[database.RetiredBookFileReader](s.innerStore)
 	if !ok {
 		return nil, fmt.Errorf("%s: %w", what, database.ErrRetiredReaderUnavailable)
 	}
@@ -182,7 +182,7 @@ var _ database.RetiredBookFileReader = (*Store)(nil)
 // ErrNoFileHashHolderLookup for a store without it (database.BooksHoldingFileHash
 // fails closed on that, never answering "no holders").
 func (s *Store) BooksByFileHash(hash string) ([]*database.Book, error) {
-	l, ok := database.AsCapability[database.FileHashHolderLookup](s.Store)
+	l, ok := database.AsCapability[database.FileHashHolderLookup](s.innerStore)
 	if !ok {
 		return nil, database.ErrNoFileHashHolderLookup
 	}
@@ -205,11 +205,11 @@ var _ database.FileHashHolderLookup = (*Store)(nil)
 // through it with no stamp, an Unwrap under another name
 // (TestNoMethodHandsBackTheInnerStore).
 func (s *Store) TitleCacheKey() authorcredit.TitleKey {
-	if s.Store == nil {
+	if s.innerStore == nil {
 		return authorcredit.TitleKeyOf(s)
 	}
-	layer := any(s.Store)
-	if ts, ok := database.AsCapability[authorcredit.TitleSource](s.Store); ok {
+	layer := any(s.innerStore)
+	if ts, ok := database.AsCapability[authorcredit.TitleSource](s.innerStore); ok {
 		layer = ts
 	}
 	if k, ok := layer.(authorcredit.TitleCacheKeyer); ok {
