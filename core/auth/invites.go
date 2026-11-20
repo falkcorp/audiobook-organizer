@@ -1,7 +1,7 @@
 // file: core/auth/invites.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 50c00e01-9428-42af-bc4e-b9e9aee83e64
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package auth
 
@@ -303,10 +303,13 @@ func (s *Service) AcceptInvite(ctx context.Context, in AcceptInviteInput) (*User
 		if err := s.d.Store.GuardUser(b, creator); err != nil {
 			return err
 		}
-		// inviteRefusal checked the role on the cache. The role set is guarded
-		// and the role asked of the store here, as every write that gives a role
-		// does (see claimRoles); a role that went away since the invite was made
-		// spends the invite like any other refusal.
+		// inviteRefusal checked the role on the cache, where a creator holding
+		// core:admin is let through on a name no role carries. The role set is
+		// guarded and the role asked of the store here, as every write that
+		// gives a role does (see claimRoles), and the store's check refuses an
+		// absent role for every creator, admins included: a role that went away
+		// since the invite was made spends the invite like any other refusal.
+		// A fault reading the role is not a refusal and does not spend it.
 		checker := s.d.RBAC.Compile(rbac.CheckerInput{Roles: creator.Roles, Interactive: true})
 		if err := s.claimRoles(ctx, b, checker, []rbac.RoleName{t.Role}); err != nil {
 			if !errors.Is(err, rbac.ErrEscalation) {
