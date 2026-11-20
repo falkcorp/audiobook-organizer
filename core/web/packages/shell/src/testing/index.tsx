@@ -15,6 +15,7 @@ import { setShellAppId } from '../app/appId';
 import { MountedModulesContext } from '../app/context';
 import { ShellProviders } from '../app/createShell';
 import { AuthClientContext, AuthContext, ModulesHintsContext } from '../auth/context';
+import { grantsOf } from '../auth/hooks';
 import type { AuthState } from '../contracts';
 import { RealtimeProvider } from '../realtime';
 import type { ModuleUI, Permission } from '../types';
@@ -95,7 +96,7 @@ export function renderInShell(
   const client = { ...base, ...opts.client } as ShellClient;
   const auth = authState(opts);
   const result = intersect(CORE_VERSION, opts.serverModules ?? serverModulesFor(appId, modules), modules, {
-    isAdmin: auth.permissions.includes('core:admin'),
+    isAdmin: grantsOf(auth)('core:admin'),
   });
   const mounted = { status: 'ready' as const, modules: result.modules, diagnostics: result.diagnostics };
   const router = createMemoryRouter([{ path: '*', element: ui }], { initialEntries: [opts.route ?? '/'] });

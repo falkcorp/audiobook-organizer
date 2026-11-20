@@ -25,8 +25,8 @@ import LightModeIcon from '@mui/icons-material/LightMode';
 import AccountCircleIcon from '@mui/icons-material/AccountCircle';
 import { Link as RouterLink, Outlet, useLocation, useNavigate } from 'react-router';
 import { useKeyboardShortcuts } from '@mediacore/ui-kit';
-import { useAuth } from '../auth';
-import { buildGoTable, buildNav, holds } from '../nav/navModel';
+import { useAuth, useGrants } from '../auth';
+import { buildGoTable, buildNav } from '../nav/navModel';
 import { ShellNav } from '../nav/ShellNav';
 import type { Lazy, Permission } from '../types';
 import { useMountedModules, useShellContext } from './context';
@@ -109,12 +109,11 @@ function UserMenu() {
  */
 export function MainLayout() {
   const { displayName } = useShellContext();
-  const auth = useAuth();
   const { modules } = useMountedModules();
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const perms = auth.permissions;
-  const items = useMemo(() => buildNav(modules, perms), [modules, perms]);
+  const grants = useGrants();
+  const items = useMemo(() => buildNav(modules, grants), [modules, grants]);
   const goTable = useMemo(() => buildGoTable(items).map((e) => ({ key: e.key, run: () => navigate(e.href) })), [items, navigate]);
   useKeyboardShortcuts(goTable);
 
@@ -122,7 +121,7 @@ export function MainLayout() {
   const collect = (pick: (m: (typeof modules)[number]) => readonly { id: string; lazy: Lazy; permission?: string; order?: number }[] | undefined): Slot[] =>
     modules
       .flatMap((m) => (pick(m) ?? []).map((s) => ({ ...s, moduleId: m.id })))
-      .filter((s) => holds(perms, s.permission))
+      .filter((s) => grants(s.permission))
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const banners = collect((m) => m.banners);
   const topBar = collect((m) => m.topBarItems);
@@ -144,7 +143,7 @@ export function MainLayout() {
       <Drawer variant="permanent" sx={{ width: DRAWER, flexShrink: 0, '& .MuiDrawer-paper': { width: DRAWER, boxSizing: 'border-box' } }}>
         <Toolbar />
         <List component="nav" aria-label="Shell">
-          {SHELL_ENTRIES.filter((e) => holds(perms, e.permission)).map((e) => (
+          {SHELL_ENTRIES.filter((e) => grants(e.permission)).map((e) => (
             <ListItemButton key={e.to} component={RouterLink} to={e.to} selected={e.to === '/' ? pathname === '/' : pathname.startsWith(e.to)}>
               <ListItemText primary={e.label} />
             </ListItemButton>

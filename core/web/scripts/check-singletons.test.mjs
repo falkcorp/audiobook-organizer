@@ -19,5 +19,11 @@ test('React from two package directories fails', () => {
 
 test('react/compiler-runtime from two paths fails', () => {
   const d = findDuplicates(['/a/node_modules/react/compiler-runtime.js', '/b/node_modules/react/compiler-runtime.js']);
-  assert.ok(d.some((x) => x.name === 'react/compiler-runtime' || x.name === 'react'));
+  assert.deepEqual(d.map((x) => x.name), ['react/compiler-runtime']);
+});
+
+test('react/compiler-runtime is not filed as react', () => {
+  // One React, two runtimes: only the runtime is duplicated.
+  const d = findDuplicates(['/w/node_modules/react/index.js', '/a/node_modules/react/compiler-runtime.js', '/b/node_modules/react/compiler-runtime.js']);
+  assert.deepEqual(d.map((x) => x.name), ['react/compiler-runtime']);
 });

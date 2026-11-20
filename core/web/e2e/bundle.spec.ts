@@ -49,11 +49,26 @@ test('the page carries the three preset metas and the boot script the CSP hashes
   expect(res.headers()['cache-control']).toBe('no-store');
   const csp = res.headers()['content-security-policy'] ?? res.headers()['content-security-policy-report-only'];
   expect(csp).toMatch(/script-src 'self' 'sha256-[A-Za-z0-9+/=]+'/);
-  await page.goto('/login');
+  // A blocked inline script raises securitypolicyviolation and a console error.
+  // Asserting their absence is what proves the boot script ran: the
+  // data-mui-color-scheme check below alone is blind, because MUI sets that
+  // attribute too once the app mounts.
+  await page.addInitScript(() => {
+    const w = window as unknown as { __cspViolations: string[] };
+    w.__cspViolations = [];
+    document.addEventListener('securitypolicyviolation', (e) => w.__cspViolations.push(`${e.violatedDirective} ${e.blockedURI}`));
+  });
+  const cspErrors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error' && /Content Security Policy/i.test(m.text())) cspErrors.push(m.text());
+  });
+  await page.goto('/login', { waitUntil: 'networkidle' });
+  expect(await page.evaluate(() => (window as unknown as { __cspViolations: string[] }).__cspViolations)).toEqual([]);
+  expect(cspErrors).toEqual([]);
   for (const name of ['mediacore-build', 'mediacore-app', 'mediacore-theme']) {
     await expect(page.locator(`meta[name="${name}"]`)).toHaveCount(1);
   }
   await expect(page.locator('meta[name="mediacore-app"]')).toHaveAttribute('content', 'hello');
-  // The boot script ran under the CSP: the mode attribute is set before the app mounts.
+  // The mode attribute is set (by the boot script, then by MUI).
   await expect(page.locator('html')).toHaveAttribute('data-mui-color-scheme', /^(light|dark)$/);
 });

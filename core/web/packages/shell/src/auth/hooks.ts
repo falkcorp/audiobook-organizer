@@ -3,7 +3,7 @@
 // guid: 87721002-3daa-48ae-96b9-7a70e61ebdf7
 // last-edited: 2026-11-20
 
-import { useContext } from 'react';
+import { useContext, useMemo } from 'react';
 import type { AuthState } from '../contracts';
 import type { Permission } from '../types';
 import type { ShellClient } from '../api/interim';
@@ -37,10 +37,42 @@ function split(p: string): { ns: string; rest: string } | null {
   return { ns: p.slice(0, i), rest: p.slice(i + 1) };
 }
 
-/** Pure form of usePermission: false unless signed in and some held permission covers `p`. */
+/**
+ * What the principal may see: whether it passes `need` (absent = anyone
+ * signed in). Client-side and advisory; the server decides (07 §7.9.1).
+ */
+export type Grants = (need: string | undefined) => boolean;
+
+/** The Grants of a list of held permissions, by rbac.Covers. */
+export function grantsFor(perms: readonly string[]): Grants {
+  return (need) => need === undefined || perms.some((held) => covers(held, need));
+}
+
+const GRANTS_NOTHING: Grants = () => false;
+const GRANTS_EVERYTHING: Grants = () => true;
+
+/**
+ * The Grants of an auth state (07 §7.9.1): nothing unless signed in;
+ * everything when the server runs with authentication disabled, because
+ * the server then enforces no permission and /me lists none, and a shell
+ * that filtered on that empty list would hide every gated page the server
+ * would serve; otherwise the permissions /me returned.
+ */
+export function grantsOf(auth: AuthState | null): Grants {
+  if (!auth || auth.status !== 'authenticated') return GRANTS_NOTHING;
+  if (auth.authDisabled) return GRANTS_EVERYTHING;
+  return grantsFor(auth.permissions);
+}
+
+/** grantsOf the enclosing AuthProvider's state, stable while that state is. */
+export function useGrants(): Grants {
+  const auth = useContext(AuthContext);
+  return useMemo(() => grantsOf(auth), [auth]);
+}
+
+/** Pure form of usePermission: grantsOf(auth) applied to `p`. */
 export function hasPermission(auth: AuthState | null, p: Permission): boolean {
-  if (!auth || auth.status !== 'authenticated') return false;
-  return auth.permissions.some((held) => covers(held, p));
+  return grantsOf(auth)(p);
 }
 
 /** The client of the enclosing AuthProvider. */

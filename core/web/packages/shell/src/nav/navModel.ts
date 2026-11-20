@@ -3,8 +3,8 @@
 // guid: 4b9e2d71-0a36-4c85-9f13-6d7a8e2c5b04
 // last-edited: 2026-11-20
 
-import type { ModuleManifest, ModuleUI, NavContribution, Permission } from '../types';
-import { covers } from '../auth/hooks';
+import type { ModuleManifest, ModuleUI, NavContribution } from '../types';
+import type { Grants } from '../auth/hooks';
 import { SHELL_GO_KEYS } from '../routes';
 
 /** A nav entry resolved to a URL, with the module that contributed it. */
@@ -15,11 +15,6 @@ export interface NavItem {
   href: string;
   entry: NavContribution<ModuleManifest>;
   children: NavItem[];
-}
-
-/** Whether a holder of `perms` passes `need` (absent = anyone signed in), by rbac.Covers. */
-export function holds(perms: readonly Permission[], need: string | undefined): boolean {
-  return need === undefined || perms.some((held) => covers(held, need));
 }
 
 /** The URL of a module page: /<module id>/<route path>, plus the entry's search. */
@@ -36,14 +31,14 @@ export function pageHref(mod: ModuleUI, to: NavContribution<ModuleManifest>['to'
  * then by `order`, with an entry (and its children) hidden when the user
  * lacks its permission or its module's permissionsHints.view (any-of).
  */
-export function buildNav(modules: readonly ModuleUI[], perms: readonly Permission[]): NavItem[] {
+export function buildNav(modules: readonly ModuleUI[], grants: Grants): NavItem[] {
   const out: NavItem[] = [];
   for (const mod of [...modules].sort((a, b) => a.id.localeCompare(b.id))) {
     const view = mod.permissionsHints.view;
-    if (view.length > 0 && !view.some((p) => holds(perms, p))) continue;
+    if (view.length > 0 && !view.some((p) => grants(p))) continue;
     const walk = (entries: readonly NavContribution<ModuleManifest>[]): NavItem[] =>
       [...entries]
-        .filter((e) => holds(perms, e.permission))
+        .filter((e) => grants(e.permission))
         .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
         .map((e) => ({
           key: `${mod.id}.${e.id}`,
