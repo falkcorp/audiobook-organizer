@@ -88,7 +88,7 @@ wires it to every byte that leaves, and deletes the marker, the runtime refusal 
    (`archtest.Package.IgnoredGoFiles` is general loader API and stays.)
 6. **Update docs:**
    - the seams note: S1's status, the residual and the costs;
-   - the F8-04a brief: remove the STOP line and keep F8-03b in `Depends on`;
+   - the F8-04a brief: no STOP line (the old F8-04 brief's was removed) and F8-03b stays in `Depends on`;
    - a changelog fragment;
    - check `TODO-F8-03B-SHARE-SAFE-BUNDLE` off in `TODO.md` (grep `TODO.md` first: the fragment is folded in by the
      daily job and its deletion proves nothing).
@@ -158,7 +158,7 @@ Record each ruling, or the default taken, in the seams note.
 | `core/health/diagnostics/*_test.go`, `testdata/probemain/` | grammar-only tests deleted; the refusal tests (`redesign_refusal_test.go`, `redesign_binary_test.go`) and `testdata/probemain/` deleted; new tests (a) to (g) |
 | `core/internal/healthhttp/` | `Sanitize` injected into the deps; Detail passes through it |
 | `core/archtest/f803b_gate.go`, `f803b_gate_test.go`, `f803b_probe.go`, `f803b_probe_test.go` | deleted |
-| `docs/agent-tasks/platform-core/seams.d/F8-03.md`, `F8-04-f8-flip-backup-health-metrics.md` | updated |
+| `docs/agent-tasks/platform-core/seams.d/F8-03.md`, `F8-04a-f8-flip-backup-health-metrics.md` | updated |
 | `changelog.d/`, `TODO.md` | a fragment (no header, no `##` heading); the TODO entry checked off |
 
 ## Re-verify before editing (expected results at your base)
@@ -167,7 +167,7 @@ Record each ruling, or the default taken, in the seams note.
 grep -n 'RedesignPendingF8_03b' core/health/diagnostics/paths.go            # the marker, const true
 grep -rn 'ErrRedesignPendingF8_03b' core/health/diagnostics/*.go            # the refusal in New and Build
 ls core/archtest/f803b_*.go                                                  # the gate, the probe pin and their tests
-grep -n 'F8-03b' docs/agent-tasks/platform-core/F8-04-f8-flip-backup-health-metrics.md   # the STOP line and Depends on
+grep -n 'F8-03b' docs/agent-tasks/platform-core/F8-04a-f8-flip-backup-health-metrics.md   # Depends on (F8-04a carries no STOP line for F8-03b: it was removed when F8-03b merged)
 grep -n 'TODO-F8-03B-SHARE-SAFE-BUNDLE' TODO.md todo.d/*.md                  # the entry (TODO.md once folded in)
 ```
 

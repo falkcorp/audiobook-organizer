@@ -282,12 +282,13 @@ HEAD, with the hotfix's rules. Steps, each a `rc.Phase`:
    `DisabledReason: "binary_not_writable"`, refuses apply and rollback, and keeps component `core.updater`
    Degraded `binary_not_writable` while mode ≥ check, so the operator learns that updates cannot be installed
    instead of the update silently failing at step 2 (5U.5 lists the supported layouts).
-2. Download HEAD's raw asset: the release asset `AssetName` names (ABO: the default `RawBinary`,
-   `audiobook-organizer-<GOOS>-<GOARCH>`, HEAD's name, `updater.go:318-326`; a release without it is
-   `no_asset`; **the offline fetch behind `make rollback-restore RELEASE=<tag>` asks for the name releases
-   really publish instead**: goreleaser's raw binary `audiobook-organizer_<Title(os)>_<x86_64|arm64>`,
-   rendered by ABO's `ReleasedAsset` and held to `.goreleaser.yml` by `TestReleasedAssetMatchesGoreleaser`, with
-   HEAD's name kept on the gin path only until F8-04b, which decides the name the core apply task asks for),
+2. Download the raw asset (HEAD's raw-binary form, no archive): the release asset `AssetName` names. **ABO's name
+   is goreleaser's raw binary `audiobook-organizer_<Title(os)>_<x86_64|arm64>` (owner ruling O-5, 2026-11-20), the same
+   name the offline fetch behind `make rollback-restore RELEASE=<tag>` asks for**: rendered by ABO's `ReleasedAsset`,
+   wired as `FetchOptions().AssetName` and held to `.goreleaser.yml` by `TestReleasedAssetMatchesGoreleaser`. HEAD's
+   `audiobook-organizer-<GOOS>-<GOARCH>` (`updater.go:318-326`, the default `RawBinary`) is published by no release,
+   so the core apply task does not use it and the gin path's behaviour changes with it (F8-04b wires this; a release
+   without the asset is `no_asset`),
    fetched through `providerhttp` with user agent `<BinaryName>/<version>` (ABO: HEAD's
    `audiobook-organizer/<ver>`, `updater.go:239`) and streamed straight into `<exe>.new`, mode 0755, in
    the executable's directory, so the rename is atomic (HEAD's `updater.go:254-265`). The body is capped
@@ -400,9 +401,9 @@ privileged helper is deliberately not provided: it would need a setuid binary or
 contradicting `NoNewPrivileges=yes`, for a convenience the service-owned layout gives for free.
 
 **Release pipeline requirements** (cost surfaced: the reusable release workflow lives outside this
-repo): publish the per-platform raw binaries the app's `AssetName` names (ABO: HEAD's
-`audiobook-organizer-<GOOS>-<GOARCH>`, `updater.go:318-326`). Whether the workflow does is open item 3;
-archives, `checksums.txt` and signing are read only by deferred-build members (5U.3).
+repo): publish the per-platform raw binaries the app's `AssetName` names (ABO: goreleaser's
+`audiobook-organizer_<Title(os)>_<x86_64|arm64>`, owner ruling O-5; the workflow already does, open item 3, closed). Archives,
+`checksums.txt` and signing are read only by deferred-build members (5U.3).
 
 ## 5U.6 Error semantics
 
@@ -485,7 +486,7 @@ The `/api/v1/update/*` paths are deleted in R2; the SPA switches to these routes
 | `TestCheck_SemverNeverDowngrades`, `TestCheck_DevBuildNeverAvailable`, `TestCheck_DescribeSuffixedCurrentNotCompared` (current `v0.223.0-5-gabc1234` or `-dirty`, latest `v0.223.0` or older → no update offered, `LocalBuild` set, apply of a named version allowed, of an unnamed one refused) | comparison, OPS4-17 |
 | `TestCheck_ScheduledRunNeverApplies` (mode `check`, a newer release: the scheduled run notifies and records `Status`; no download, no swap; `auto_update.enabled=true` → `AutoApplyPaused` and Degraded `auto_update_paused`) | check-only unattended mode (A-6) |
 | `TestGithubSource_ParameterisedSlugAndBaseURL` (httptest) | release source parameterised, no hard-coded repo |
-| `TestRawBinary_MatchesHEAD` (`RawBinary("audiobook-organizer")` gives `audiobook-organizer-<GOOS>-<GOARCH>` for every GOOS/GOARCH of the build matrix, `updater.go:318-326`) | asset contract |
+| `TestABOUpdaterSourceMatchesHEAD` and `TestReleasedAssetMatchesGoreleaser` (ABO's wired `AssetName` gives goreleaser's `audiobook-organizer_<Title(os)>_<x86_64|arm64>` for every GOOS/GOARCH of the build matrix; owner ruling O-5; `RawBinary`'s default namer is not used for ABO) | asset contract |
 | `TestApply_RawAssetNoBackup` (fake source serving only HEAD's raw asset: apply streams it into `<exe>.new`, opens no archive and reads no `checksums.txt`; `Deps` has no backup runner, and the fake source records that nothing else was fetched; the same run in a container fixture applies as on a host) | HEAD's pipeline (R10-8, OPS10-6) |
 | `TestApply_OversizeAborts`, `TestApply_FailedDownloadDeletesNew` | the size cap; HEAD's delete of `.new` on a failed write |
 | `TestApply_SelfTestFailsKeepsOldBinary` (fake binary in a temp dir) | self-test |
@@ -506,14 +507,14 @@ The `/api/v1/update/*` paths are deleted in R2; the SPA switches to these routes
 
 | ABO today | Becomes |
 |---|---|
-| `internal/updater.Updater` (`updater.go`), as R0 hotfixes it | `core/updater` + `core/updater/github`, **moved** in R2 (A-6), with HEAD's raw-asset download and no archive, checksum, backup or container step (R10-8): ABO's `main` passes its slug and binary name and keeps the default `RawBinary` asset namer |
+| `internal/updater.Updater` (`updater.go`), as R0 hotfixes it | `core/updater` + `core/updater/github`, **moved** in R2 (A-6), with HEAD's raw-asset download and no archive, checksum, backup or container step (R10-8): ABO's `main` passes its slug, `AppID` `"abo"`, binary name and goreleaser's raw asset namer (`FetchOptions()`, owner ruling O-5), not the default `RawBinary` |
 | `internal/updater.Scheduler` + `SchedulerStarterAdapter` + `updatescheduler` service (`scheduler.go`) and the `init()` registration (`register.go:59-90`) | deleted, not moved: only `updater.go` moves (MOD9-9); `core.updater.check` task with its schedule key; no scheduled apply; the kernel wires the updater from `app.Options.Updater` |
 | maintenance-window step 1 (`scheduler_maintenance_window_op.go:73-92`) and setting `maintenance_window_update_completed` | deleted (the hotfix made it check-only in R0) |
 | `RestartSelf` (`os.Exit(0)`, `updater.go:329-334`) | `Restarter.Restart` (graceful, exit 75; no exec mode). Until R2, the R0 hotfix of HEAD's updater (09) does this: exit 75, `.prev` kept, semver comparison that treats a describe-suffixed current version as a local build and offers nothing (OPS4-17), and **both** auto-apply paths of 5U.2 check-only (OPS3-12), reporting `auto_update_paused` on the authenticated `degraded` field it adds to `GET /api/v1/system/status` (never on `/health`); it makes no store check of the new binary. From R1, when the journaled swap lands, it also refuses while the swap slot is taken (`restore_pending`, `restore_inflight`, read in process from the state directory, the same probe as 05-storage §5S.3.7's guard, never through `sudo`, which cannot run under the unit's `NoNewPrivileges=yes`, `deploy/audiobook-organizer.service:122`; OPS8-8, R8-1). R2 moves exactly this behaviour into core |
 | `<exe>.old`, deleted after the swap (`updater.go:267-280`) | `<exe>.prev`, kept; shared with `make rollback` (from the R0 hotfix) |
 | `/api/v1/update/*` handlers (`update_handlers.go`) | core routes; the old paths are deleted in R2 |
 | `auto_update.*` config | `core.updater.*` and `core.updater.schedules.check`, renamed once by the R2 config cutover (5U.8) |
-| release pipeline (reusable workflow, UNKNOWN details) | unchanged in R2; ABO's asset namer must match what the pipeline publishes — verify before an admin applies through the core updater (open item 3) |
+| release pipeline (reusable workflow, UNKNOWN details) | unchanged in R2; ABO's asset namer is goreleaser's raw name, which the pipeline publishes (owner ruling O-5; open item 3 closed) |
 
 **R2 done-check.** The move is checked against the hotfix it moves: R0's updater tests, re-pointed
 at `core/updater`, pass with unchanged expectations (exit 75, `.prev` kept, the semver and local-build
@@ -541,11 +542,11 @@ Check) and the durable clock of the `core.updater.check` kind, which `tasks.Stor
 2. (Closed, OPS2-11/R2-4/OPS3-7/OPS6-1, revised by D10: an upgrade-path constraint is a boot refusal only. A
    binary whose store it cannot serve exits 78 before any write, naming the release to install first; the
    updater checks nothing before the swap.)
-3. Confirm the asset naming the reusable release workflow actually publishes (UNKNOWN in this repo). Checked for
+3. (Closed by owner ruling O-5, 2026-11-20: ABO's core apply task asks for goreleaser's raw asset name, `FetchOptions().AssetName`.) The asset naming the reusable release workflow publishes was checked for
    the fetch on 2026-11-18, on the releases `v0.223.0`, `v0.230.0`, `v0.231.0`, `v0.232.0` and `v0.232.1-rc.4`: each publishes `audiobook-organizer_Linux_x86_64`,
    `_Linux_arm64`, `_Darwin_x86_64` and `_Darwin_arm64` (and the archives) and none publishes HEAD's
-   `audiobook-organizer-<os>-<arch>`, so the live `/api/v1/update/apply` finds no asset on any of them. F8-04b
-   chooses the name for the core apply task (and with it whether the gin path's behaviour changes).
+   `audiobook-organizer-<os>-<arch>`, so the live `/api/v1/update/apply` finds no asset on any of them. The owner ruled
+   (O-5) that the core apply task uses the published goreleaser raw name; F8-04b wires it and edits 5U.3 and 5U.12 to match.
 4. Windows support for the swap (a running `.exe` cannot be renamed over on some setups): not a
    current deployment target; the deferred exec-mode restart is Unix-only.
 5. (Closed: 06 `app.Options` has `Updater *updater.Options`.)

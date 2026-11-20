@@ -43,6 +43,42 @@ class IdPattern(unittest.TestCase):
             self.assertFalse(r.match(i), repr(i))
 
 
+def wave_funcs():
+    """Load WAVE_RE and wave_key from check_waves.py without running the checker (it executes at import)."""
+    with open(SCRIPT) as f:
+        src = f.read()
+    m = re.search(r"^WAVE_RE = re\.compile\(.*\)$", src, re.M)
+    assert m, "check_waves.py has no WAVE_RE line"
+    k = re.search(r"^def wave_key\(w\):\n(?:    .*\n|\n)+?(?=\n\S)", src, re.M)
+    assert k, "check_waves.py has no wave_key function"
+    failures = []
+    ns = {"re": re, "fail": failures.append}
+    exec(m.group(0) + "\n\n" + k.group(0), ns)
+    return ns["WAVE_RE"], ns["wave_key"], failures
+
+
+class WavePattern(unittest.TestCase):
+    def test_accepts(self):
+        r, _, _ = wave_funcs()
+        for w in ["W01", "W38", "W38b", "W39", "W47"]:
+            self.assertTrue(r.match(w), w)
+
+    def test_rejects(self):
+        r, _, _ = wave_funcs()
+        for w in ["W38B", "W3", "W38bb", "W38\n", "W38b\n", "w38", "W038", "W38-b", " W38", "W38 ", "W"]:
+            self.assertFalse(r.match(w), repr(w))
+
+    def test_order_is_numeric_with_the_letter_after_the_bare_wave(self):
+        _, key, failures = wave_funcs()
+        self.assertLess(key("W38"), key("W38b"))
+        self.assertLess(key("W38b"), key("W39"))
+        self.assertLess(key("W09"), key("W10"))
+        self.assertLess(key("W38b"), key("W38c"))
+        self.assertEqual(failures, [])
+        key("W38B")
+        self.assertEqual(len(failures), 1, "a malformed wave must be reported, not ordered")
+
+
 class RealInventory(unittest.TestCase):
     def test_all_checks_pass_and_the_f8_03b_row_is_in_it(self):
         inv = os.path.join(HERE, "inventory.json")

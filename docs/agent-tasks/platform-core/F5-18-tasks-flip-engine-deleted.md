@@ -42,7 +42,7 @@ pruner of the system log and is read through its native query route (F5-19's, mo
 
 ## Amendment 2026-11-20 (pre-scope slice E7, E6b): F5-18 publishes the `core.task.*` topics
 
-Source: `.claude/notes/pc-tools/F6-03-prescope.md` blockers 1 and 13 (origin/main `f18ad2686`). The 11-19 23:22 decision gave
+Source: the coordinator's F6-03 pre-scope, blockers 1 and 13 (a gitignored scratch note, not in a clone; its content is inlined here) (origin/main `f18ad2686`). The 11-19 23:22 decision gave
 the task topics to F5-18, but this brief (v1.2.0) only *consumes* `core.task.log-appended.v1` (the activity mirror: "Spec to read first" item 6
 and the activity commit) and never declares or publishes any task topic. F6-03 needs all three, so **this PR owns them**:
 
