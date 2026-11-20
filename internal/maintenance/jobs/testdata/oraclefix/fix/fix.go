@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/testdata/oraclefix/fix/fix.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 164bc002-83bc-4523-bed7-b8bfebfc2c9a
 // last-edited: 2026-11-19
 
@@ -484,3 +484,13 @@ func ViaReporterOwn(r *runReporter) { r.Log("Joker escaped Arkham") }
 
 // ViaJobWritesOpErrors makes the same store call from job code.
 func ViaJobWritesOpErrors(s opsSink) { _ = s.InsertOpErrorV2("Joker escaped Arkham") }
+
+// jokerError is a module type implementing an interface declared outside the
+// module whose method, named like no write, writes.
+type jokerError struct{ s *store.Store }
+
+func (e jokerError) Error() string { _ = e.s.ModifyBook("joker"); return "Joker" }
+
+// ViaOpenError calls error.Error on a value an exported function's caller
+// passes: the module's implementations are walked, and the others recorded.
+func ViaOpenError(err error) string { return err.Error() }
