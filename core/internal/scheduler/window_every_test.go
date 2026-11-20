@@ -23,10 +23,9 @@ import (
 // either; a fire that finds a run of the task active is skipped (HEAD's
 // isTaskRunning), which core's executor fold reproduces.
 
-const (
-	tombstone    tasks.Kind = "gotham.tombstone"
-	tombstoneKey            = "modules.gotham.night.schedules.tombstone"
-)
+const tombstone tasks.Kind = "gotham.tombstone"
+
+const tombstoneKey = "modules.gotham.night.schedules.tombstone"
 
 func bothCfg(d time.Duration, order int) tasks.ScheduleConfig {
 	return tasks.ScheduleConfig{Enabled: true, Every: config.Duration(d), Window: "nightly", Order: order}
