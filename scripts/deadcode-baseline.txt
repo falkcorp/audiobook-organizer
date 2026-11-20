@@ -713,8 +713,10 @@ internal/books/cutover/m6.groupRun.quarantineMember
 internal/books/cutover/m6.groupRun.quarantineRoots
 internal/books/cutover/m6.groupRun.roots
 internal/books/cutover/m6.groupRun.rule
+internal/books/cutover/m6.groupRun.settleDeferred
 internal/books/cutover/m6.groupRun.stage
 internal/books/cutover/m6.groupRun.webhooks
+internal/books/cutover/m6.groupRun.write
 internal/books/cutover/m6.instanceID
 internal/books/cutover/m6.jobState
 internal/books/cutover/m6.knownFeature

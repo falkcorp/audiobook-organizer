@@ -713,16 +713,17 @@ reads HEAD's rows, writes the entries through `config.Importer` (05-config §1.3
 | blob `protected_paths` | `core.library.protected_paths` |
 
 **Path aliases are per root.** HEAD's `path_aliases` are not tied to a root: each `PathAlias.Root` is a path
-prefix, and HEAD renders a path through the alias with the longest matching `Root` (`web/src/utils/pathAliases.ts`).
-A core `Alias` has no root of its own and renders the path of the root that holds it. So for every root entry above
-(`books-library` and each `import-<n>`) M6 attaches each alias whose `Root` is the root's path. A root with none
-takes the alias or aliases with the longest `Root` that is an ancestor of the root's path, carried to it by
-appending the root's path relative to that `Root` in each form as HEAD renders it: Windows and UNC trim a trailing
+prefix, and HEAD renders a path through the first alias, in list order, whose `Root` contains it
+(`web/src/utils/pathAliases.ts` `matchAlias`; its doc asks for a most-specific-first list, but nothing sorts it). A
+core `Alias` has no root of its own and renders the path of the root that holds it. So for every root entry above
+(`books-library` and each `import-<n>`) M6 takes the first alias in list order whose `Root` is the root's path or an
+ancestor of it, the alias HEAD rendered every path of the root with. At the root's path it is attached as is; at an
+ancestor it is carried by appending the root's path relative to that `Root` in each form as HEAD renders it: Windows and UNC trim a trailing
 separator run and join with `\`, the SMB URL joins with `/` and percent-encodes each segment. An empty form stays
 empty. Every root then renders as HEAD rendered it. An alias no root takes is quarantined with its raw value, and
 the reason says its display rendering is not carried: one whose `Root` is inside a root (HEAD seeds those from an
-iTunes mapping whose `To` is below a root, `config.SeedPathAliases`), one over roots that each have a more specific
-alias, and one under no root and over none (seams.d/F7-08).
+iTunes mapping whose `To` is below a root, `config.SeedPathAliases`), one over roots that each matched an alias
+listed before it, and one under no root and over none (seams.d/F7-08).
 
 **IDs are kept (14 E2).** HEAD's import-path ID `n` and the root ID `import-<n>` map to each other by one pure function
 in books, so no books row and no client that names `n` is rewritten; a root created after R2 gets an `import-<n>` ID
@@ -888,4 +889,4 @@ as its oracle; rollback names the pre-freeze release's binary.
 
 Round 17 (2026-11-05): plan-review gap G22: boot recovery `core.library.transfer-recover` gets the declared schedule key `core.library.schedules.transfer_recover` (`ScheduleConfig` needs one timing field when enabled, so its default is `every: 24h`; `OnStart()` adds the boot run), §5L.3.3 and the key table.
 
-Round 18 (2026-11-20): F7-09 slice T1 (the F7-08 round-2 alias ruling). §5L.10 states that path aliases are per root: each root takes the aliases whose root is its path, and a root with none takes the longest ancestor alias, carried with its relative path appended in each form HEAD renders. An alias no root takes is quarantined with a reason saying its display rendering is not carried (seams.d/F7-08).
+Round 18 (2026-11-20): F7-09 slice T1 (the F7-08 round-2 alias ruling). §5L.10 states that path aliases are per root: each root takes the first alias in list order whose root is its path or an ancestor (HEAD's `matchAlias`), attached as is at its path or carried with its relative path appended in each form HEAD renders. An alias no root takes is quarantined with a reason saying its display rendering is not carried (seams.d/F7-08).
