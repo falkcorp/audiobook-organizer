@@ -1,13 +1,16 @@
 // file: internal/reconcile/apply_file_rows_handoff2_test.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: c41f8a27-6e3b-4d95-b1a0-7f2d9e5c8b36
 // last-edited: 2026-11-19
 
 package reconcile
 
 import (
+	"hash/fnv"
 	"strings"
 	"testing"
+
+	"github.com/oklog/ulid/v2"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
@@ -373,4 +376,121 @@ func TestExecuteReconcile_AStrandedMatchOnAStoreWithNoJournalReadIsRefused(t *te
 		t.Fatalf("op-2: %v, result %+v, want the store refused for the journal it cannot read", err, res)
 	}
 	f.requireRows("op-2", 0, 0)
+}
+
+// n4: the match type decides whether the book keeps its hashes, so a value the
+// scan never produces is refused instead of applied as an unproven match.
+func TestValidateApplyItems(t *testing.T) {
+	for _, ok := range []string{"", "hash", "original_hash", "filename"} {
+		if err := ValidateApplyItems([]ReconcileApplyItem{{BookID: "b", MatchType: ok}}); err != nil {
+			t.Errorf("match_type %q refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"Hash", "hash ", "sha256", "filename,hash"} {
+		err := ValidateApplyItems([]ReconcileApplyItem{{BookID: "b1", MatchType: "hash"}, {BookID: "b2", MatchType: bad}})
+		if err == nil || !strings.Contains(err.Error(), "match 1 (book b2)") || !strings.Contains(err.Error(), "unknown match_type") {
+			t.Errorf("match_type %q: err = %v, want the second match named as unknown", bad, err)
+		}
+	}
+}
+
+// n4: a queued set that never passed the HTTP check still cannot clear a hash
+// match's hashes by a typo: the apply refuses the match with nothing written.
+func TestExecuteReconcile_AnUnknownMatchTypeIsRefusedWithNothingWritten(t *testing.T) {
+	f := newApplyFixture(t)
+	old := f.missingPath("Year One.m4b")
+	id := f.book("Batman: Year One", old)
+	f.row(id, old)
+	setBookHashes(t, f, id, "book-hash", "organized-hash")
+	before := f.rows(id)
+
+	res, err := f.apply(f.ps, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath, MatchType: "Hash"})
+	if err == nil || res.Applied != 0 || res.Skipped != 1 || len(res.Errors) != 1 || !strings.Contains(res.Errors[0], "unknown match_type") {
+		t.Fatalf("err = %v, result %+v, want the match refused for its type", err, res)
+	}
+	f.requireUntouched(id, old, before)
+	f.requireRows("op-1", 0, 0)
+	if b, _ := f.ps.GetBookByID(id); strOf(b.FileHash) != "book-hash" || strOf(b.OrganizedFileHash) != "organized-hash" {
+		t.Errorf("hashes = %q/%q, want them kept", strOf(b.FileHash), strOf(b.OrganizedFileHash))
+	}
+}
+
+// intrudingStore creates another book's row at path from INSIDE the row write's
+// callback, after the callback's own checks passed and before the commit: a window
+// no read in the callback can see. Both row writes intrude, so a repoint that does
+// not use the store's atomic variant is exposed instead of skipped.
+type intrudingStore struct {
+	*failingStore
+	t        *testing.T
+	ps       *database.PebbleStore
+	bookID   string
+	path     string
+	intruded database.BookFile
+	fired    bool
+}
+
+func (s *intrudingStore) wrap(fn func(*database.BookFile) error) func(*database.BookFile) error {
+	return func(f *database.BookFile) error {
+		if err := fn(f); err != nil {
+			return err
+		}
+		if !s.fired {
+			s.fired = true
+			s.intruded = database.BookFile{ID: otherStripeULID(f.ID), BookID: s.bookID, FilePath: s.path, Format: "m4b"}
+			if err := s.ps.CreateBookFile(&s.intruded); err != nil {
+				s.t.Fatal(err)
+			}
+		}
+		return nil
+	}
+}
+
+func (s *intrudingStore) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	return s.failingStore.ModifyBookFile(bookID, fileID, s.wrap(fn))
+}
+
+func (s *intrudingStore) ModifyBookFileUnlessPathHeld(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	return s.failingStore.ModifyBookFileUnlessPathHeld(bookID, fileID, s.wrap(fn))
+}
+
+// otherStripeULID is a fresh id on a different book_file lock stripe than id: the
+// intruder is created while the row's stripe is held, and the same stripe would
+// deadlock the test. The store has 256 stripes keyed by FNV-1a (a different count
+// would only change how rarely a retry is needed).
+func otherStripeULID(id string) string {
+	stripe := func(s string) uint32 { h := fnv.New32a(); _, _ = h.Write([]byte(s)); return h.Sum32() % 256 }
+	for {
+		c := ulid.Make().String()
+		if stripe(c) != stripe(id) {
+			return c
+		}
+	}
+}
+
+// m3: the repoint refuses atomically, at the commit, when a row takes the matched
+// file after the callback's own holder check passed. The check inside the callback
+// cannot see that row (it is created after it); only the store's commit-time
+// re-check under the single-owner index mutex does. The match is refused with its
+// rows voided, the row stays at the old path, and the intruder keeps the file.
+func TestExecuteReconcile_ARowThatTakesTheFoundFileInsideTheRowWriteRefusesTheMatch(t *testing.T) {
+	f := newApplyFixture(t)
+	old := f.missingPath("Year One.m4b")
+	id := f.book("Batman: Year One", old)
+	f.row(id, old)
+	before := f.rows(id)
+	other := f.book("Batman: Knightfall", f.missingPath("kf.m4b"))
+	store := &intrudingStore{failingStore: &failingStore{PebbleStore: f.ps, failRowAfter: -1}, t: t, ps: f.ps, bookID: other, path: f.newPath}
+
+	res, err := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath})
+	if err == nil || res.Applied != 0 || res.Skipped != 1 || len(res.Errors) != 1 {
+		t.Fatalf("err = %v, result %+v, want one refused match", err, res)
+	}
+	if !strings.Contains(res.Errors[0], "now held") {
+		t.Errorf("errors = %q, want the refusal to say the file is now held", res.Errors)
+	}
+	f.requireUntouched(id, old, before)
+	f.requireRows("op-1", 2, 0)
+	if got := f.atPath(f.newPath); len(got) != 1 || got[0] != other {
+		t.Errorf("the found file is held by %v, want only book %s", got, other)
+	}
 }
