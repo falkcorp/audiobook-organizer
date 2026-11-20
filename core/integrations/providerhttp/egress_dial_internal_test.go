@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/egress_dial_internal_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d2c6f41-3b97-4e50-a6d8-1f4b9c70e532
 // last-edited: 2026-11-19
 
@@ -40,12 +40,11 @@ func refusedCount(t *testing.T, rd *sdkmetric.ManualReader, reason Reason) int64
 	return n
 }
 
-// TestGuardedDial_RefusalCountsAndGivesBackItsToken: the guard's refusal of a
-// dial is counted as an egress refusal (the same instrument an HTTP refusal
-// feeds) and gives back the bucket token the connection's Acquire took, as a
-// refused HTTP attempt does. A lookup that fails is neither: the destination was
-// not judged, so it is not counted as a refusal and the token stays spent.
-func TestGuardedDial_RefusalCountsAndGivesBackItsToken(t *testing.T) {
+// dialRig is a registry whose gate has a bucket of two tokens that effectively
+// never refills, a resolver that puts mail.gotham.test on a private address and
+// fails every other lookup, and a metrics sink the test can read.
+func dialRig(t *testing.T) (integrations.Gate, integrations.GuardedDialer, *sdkmetric.ManualReader) {
+	t.Helper()
 	rd := sdkmetric.NewManualReader()
 	m := sdkmetric.NewMeterProvider(sdkmetric.WithReader(rd)).Meter("test")
 	in := &instruments{}
@@ -80,55 +79,131 @@ func TestGuardedDial_RefusalCountsAndGivesBackItsToken(t *testing.T) {
 		Ref:    integrations.Ref{Kind: integrations.KindNotify, Instance: "commissioner"},
 		Egress: integrations.EgressConfigured, Limits: integrations.Limits{RPS: 0.0001, Burst: 2},
 	})
-	d := g.(integrations.GuardedDialer)
+	return g, g.(integrations.GuardedDialer), rd
+}
+
+func acquire(t *testing.T, g integrations.Gate) integrations.Ticket {
+	t.Helper()
+	before := g.State().BucketTokens
+	tk, err := g.Acquire(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := g.State().BucketTokens; got > before-0.9 {
+		t.Fatalf("Acquire took no token: %.2f -> %.2f", before, got)
+	}
+	return tk
+}
+
+func dial(t *testing.T, d integrations.GuardedDialer, addr string) error {
+	t.Helper()
+	_, err := d.DialContext(context.Background(), "tcp", addr)
+	if err == nil {
+		t.Fatalf("%s: dialled", addr)
+	}
+	return err
+}
+
+// TestGuardedDial_RefusalCountsAndTheTicketGivesBackItsToken: the guard's
+// refusal of a dial is counted as an egress refusal (the same instrument an HTTP
+// refusal feeds), and the Ticket of the Acquire that took the token gives it back
+// when Done is handed the refusal, as a refused HTTP attempt does. A lookup that
+// fails is neither: the destination was not judged, so it is not counted as a
+// refusal and the token stays spent.
+func TestGuardedDial_RefusalCountsAndTheTicketGivesBackItsToken(t *testing.T) {
+	g, d, rd := dialRig(t)
 	tokens := func() float64 { return g.State().BucketTokens }
 
-	dialUnderTicket := func(addr string) error {
-		t.Helper()
-		before := tokens()
-		if _, err := g.Acquire(context.Background(), ""); err != nil {
-			t.Fatal(err)
-		}
-		if got := tokens(); got > before-0.9 {
-			t.Fatalf("Acquire took no token: %.2f -> %.2f", before, got)
-		}
-		_, err := d.DialContext(context.Background(), "tcp", addr)
-		if err == nil {
-			t.Fatalf("%s: dialled", addr)
-		}
-		return err
-	}
-
-	// A refusal by the guard: counted, token back.
-	if err := dialUnderTicket("mail.gotham.test:587"); !errors.Is(err, ErrBlockedAddress) {
+	// A refusal by the guard: counted, and the token is back once Done has it.
+	tk := acquire(t, g)
+	err := dial(t, d, "mail.gotham.test:587")
+	if !errors.Is(err, ErrBlockedAddress) {
 		t.Fatalf("err = %v, want the guard's refusal", err)
 	}
 	if n := refusedCount(t, rd, ReasonEgress); n != 1 {
 		t.Fatalf("egress refusals counted = %d, want 1", n)
 	}
+	if got := tokens(); got > 1.1 {
+		t.Fatalf("tokens = %.2f before Done: the dial itself must not give the token back (1)", got)
+	}
+	tk.Done(err)
 	if got := tokens(); got < 1.9 {
-		t.Fatalf("tokens = %.2f after a refused dial, want the token back (2)", got)
+		t.Fatalf("tokens = %.2f after Done(refusal), want the token back (2)", got)
 	}
 
 	// An address that is not host:port is refused the same way.
-	if err := dialUnderTicket("mail.gotham.test"); !errors.Is(err, ErrBlockedAddress) {
+	tk = acquire(t, g)
+	err = dial(t, d, "mail.gotham.test")
+	if !errors.Is(err, ErrBlockedAddress) {
 		t.Fatalf("err = %v, want a refusal", err)
 	}
 	if n := refusedCount(t, rd, ReasonEgress); n != 2 {
 		t.Fatalf("egress refusals counted = %d, want 2", n)
 	}
+	tk.Done(err)
 	if got := tokens(); got < 1.9 {
 		t.Fatalf("tokens = %.2f after a malformed address, want the token back (2)", got)
 	}
 
 	// A lookup that fails is not a refusal and does not give the token back.
-	if err := dialUnderTicket("relay.gotham.test:587"); errors.Is(err, ErrBlockedAddress) {
+	tk = acquire(t, g)
+	err = dial(t, d, "relay.gotham.test:587")
+	if errors.Is(err, ErrBlockedAddress) {
 		t.Fatalf("err = %v, a failed lookup is not a refusal", err)
 	}
+	tk.Done(err)
 	if n := refusedCount(t, rd, ReasonEgress); n != 2 {
 		t.Fatalf("egress refusals counted = %d after a failed lookup, want still 2", n)
 	}
 	if got := tokens(); got > 1.1 {
 		t.Fatalf("tokens = %.2f after a failed lookup, want the token spent (1)", got)
 	}
+}
+
+// TestGuardedDial_NoAcquireNoRefund: a refused dial made without an Acquire has
+// no reservation to give a token back for, so it returns nothing: the bucket is
+// drained by two real Acquires, and a refused dial under neither must not mint a
+// token.
+func TestGuardedDial_NoAcquireNoRefund(t *testing.T) {
+	g, d, _ := dialRig(t)
+	a, b := acquire(t, g), acquire(t, g)
+	if got := g.State().BucketTokens; got > 0.1 {
+		t.Fatalf("tokens = %.2f after two Acquires, want ~0", got)
+	}
+	for _, addr := range []string{"mail.gotham.test:587", "mail.gotham.test"} {
+		dial(t, d, addr)
+		if got := g.State().BucketTokens; got > 0.1 {
+			t.Fatalf("tokens = %.2f after a refused dial with no Acquire (%s): a token nobody took was returned", got, addr)
+		}
+	}
+	a.Done(nil)
+	b.Done(nil)
+	if got := g.State().BucketTokens; got > 0.1 {
+		t.Fatalf("tokens = %.2f after two successful Dones, want ~0 (a success gives nothing back)", got)
+	}
+}
+
+// TestGuardedDial_TwoDialsOneAcquireRefundOnce: a sender that dials twice under
+// one Acquire (a second host to try, an internal retry) gets back the one token
+// that Acquire took, not one per refused dial; and Done being called again
+// returns nothing more (the ticket's once).
+func TestGuardedDial_TwoDialsOneAcquireRefundOnce(t *testing.T) {
+	g, d, _ := dialRig(t)
+	a, b := acquire(t, g), acquire(t, g) // drained: 0 tokens, so a minted token shows
+	err := dial(t, d, "mail.gotham.test:587")
+	if err2 := dial(t, d, "mail.gotham.test:25"); !errors.Is(err2, ErrBlockedAddress) {
+		t.Fatalf("second dial err = %v", err2)
+	}
+	if got := g.State().BucketTokens; got > 0.1 {
+		t.Fatalf("tokens = %.2f after two refused dials, before Done", got)
+	}
+	a.Done(err)
+	if got := g.State().BucketTokens; got < 0.9 || got > 1.1 {
+		t.Fatalf("tokens = %.2f after Done(refusal), want exactly the one token back (1)", got)
+	}
+	a.Done(err)
+	if got := g.State().BucketTokens; got > 1.1 {
+		t.Fatalf("tokens = %.2f after a second Done on the same ticket, want still 1", got)
+	}
+	b.Done(nil)
 }
