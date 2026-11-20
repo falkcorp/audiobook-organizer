@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/egress_dial_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e8f1c27-6b93-4d05-a1e2-7c30d95b8a64
 // last-edited: 2026-11-19
 
@@ -166,6 +166,12 @@ func TestGuardedDial_ResolverErrorFailsClosed(t *testing.T) {
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want the resolver's error", err)
 	}
+	if why, ok := providerhttp.ReasonOf(err); ok {
+		t.Fatalf("a failed lookup was returned as a refusal (%s)", why)
+	}
+	if errors.Is(err, providerhttp.ErrBlockedAddress) {
+		t.Fatalf("a failed lookup was reported as a blocked address: %v", err)
+	}
 	if got := rec.dials(); len(got) != 0 {
 		t.Fatalf("a connection was attempted after a failed lookup: %v", got)
 	}
@@ -234,6 +240,11 @@ func TestGuardedDial_LocalIsBoundToItsOwnHostAndPort(t *testing.T) {
 		{"another host", "smtp://mail.gotham.test:2525", "relay.gotham.test:2525", "10.1.2.3", false},
 		{"a literal origin", "smtp://10.1.2.3:2525", "10.1.2.3:2525", "10.1.2.3", true},
 		{"a literal, another port", "smtp://10.1.2.3:2525", "10.1.2.3:25", "10.1.2.3", false},
+		{"an IPv6 literal origin", "smtp://[fd00::1]:2525", "[fd00::1]:2525", "fd00::1", true},
+		{"an IPv6 literal, upper case", "smtp://[FD00::1]:2525", "[fd00::1]:2525", "fd00::1", true},
+		{"an IPv6 literal, unset port", "smtp://[fd00::1]:", "[fd00::1]:587", "fd00::1", true},
+		{"an IPv6 literal, another port", "smtp://[fd00::1]:2525", "[fd00::1]:25", "fd00::1", false},
+		{"an IPv6 literal, another address", "smtp://[fd00::1]:2525", "[fd00::2]:2525", "fd00::2", false},
 		{"loopback", "smtp://mail.gotham.test:2525", "mail.gotham.test:2525", "127.0.0.1", true},
 		{"unique local", "smtp://mail.gotham.test:2525", "mail.gotham.test:2525", "fc00::1", true},
 		{"CGNAT", "smtp://mail.gotham.test:2525", "mail.gotham.test:2525", "100.64.0.1", true},

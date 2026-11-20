@@ -1,7 +1,7 @@
 // file: internal/server/invite_guest_access.go
-// version: 1.12.5
+// version: 1.12.6
 // guid: 5b2e9c47-8a13-4d6f-b3e1-0c7a4f8d2e95
-// last-edited: 2026-11-13
+// last-edited: 2026-11-19
 
 package server
 
@@ -106,6 +106,12 @@ func (s *Server) inviteMailSender() imail.Sender {
 		Host: snap.SMTPHost, Port: snap.SMTPPort,
 		Username: snap.SMTPUsername, Password: snap.SMTPPassword,
 		From: snap.SMTPFrom,
+		// An unguarded dial, chosen here on purpose: smtp_host is environment-only
+		// (an operator sets it; no API write reaches it), so the destination is
+		// the operator's own relay. When the host comes from the notify/email
+		// instance instead (R2), this must dial through that instance's guarded
+		// dial, never PlainDial: see docs/agent-tasks/platform-core/seams.d/F7-09-T2.md.
+		Dial: imail.PlainDial,
 	})
 	if err != nil {
 		inviteAccessLog.Warn("invite email: SMTP settings are invalid, email is off: %v", err)

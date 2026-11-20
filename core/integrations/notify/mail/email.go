@@ -1,5 +1,5 @@
 // file: core/integrations/notify/mail/email.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: a9d25e71-4c08-4b36-8e1f-37f0c6a2d584
 // last-edited: 2026-11-19
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"net/textproto"
 	"slices"
 	"strings"
@@ -177,22 +178,46 @@ func (c *channel) Test(ctx context.Context) error {
 	}, notify.Target{Instance: c.env.Ref})
 }
 
-// NewChannel wraps a Sender as the Notifier of ref, sending to to and acquiring
-// ticket from gate (nil: no admission). It is how the kernel makes the invite
-// flow's Sender, and coretest.MailRecorder, an email instance (05-notify
-// section 10, the mailSenderOverride seam).
+// SenderFactory builds the Sender of a NewChannel instance around the dial the
+// channel hands it: the instance's guarded dial. A Sender that opens a network
+// connection must use it as its SMTPConfig.Dial (a factory that ignores it, or
+// dials by another route, is a Sender the egress guard does not cover; only
+// one that never touches the network, like coretest.MailRecorder, may ignore it).
+type SenderFactory func(dial DialFunc) (Sender, error)
+
+// noDial is the dial a sender nobody gave one refuses with: a ClassRefusedLocal
+// *integrations.Error wrapping integrations.ErrNoEgressGuard, before any
+// connection. There is no unguarded default (see SMTPConfig.Dial, PlainDial).
+func noDial(ctx context.Context, network, addr string) (net.Conn, error) {
+	return integrations.GuardedDial(nil, integrations.Ref{})(ctx, network, addr)
+}
+
+// NewChannel makes the Notifier of ref from a Sender built by mk, sending to to
+// and acquiring ticket from gate (nil: no admission). It is how the kernel
+// makes the invite flow's Sender, and coretest.MailRecorder, an email instance
+// (05-notify section 10, the mailSenderOverride seam).
+//
+// mk is called on every Send with the instance's guarded dial
+// (integrations.GuardedDial of gate: a nil gate, or one that offers no dial,
+// refuses every connection). A channel holds no pre-built Sender, because a
+// Sender built before the channel exists carries a dial of its own, and a
+// plain-dial sender wrapped in a channel would be an email instance with no
+// guard.
 //
 // It fails (integrations.ErrInvalid) for a recipient list a configured
 // instance would refuse: none, too many, or an entry that is not a single
 // address. A channel with no recipient has nothing to send to.
-func NewChannel(ref integrations.Ref, gate integrations.Gate, s Sender, to []string) (notify.Notifier, error) {
+func NewChannel(ref integrations.Ref, gate integrations.Gate, mk SenderFactory, to []string) (notify.Notifier, error) {
 	if err := checkRecipients(to); err != nil {
 		return nil, err
+	}
+	if mk == nil {
+		return nil, fmt.Errorf("%w: a channel needs a sender factory", integrations.ErrInvalid)
 	}
 	return &channel{
 		env: integrations.Env{Ref: ref, Gate: gate, Now: time.Now},
 		cfg: instanceConfig{to: slices.Clone(to)},
-		mk:  func(SMTPConfig) (Sender, error) { return s, nil },
+		mk:  func(cfg SMTPConfig) (Sender, error) { return mk(cfg.Dial) },
 	}, nil
 }
 

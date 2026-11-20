@@ -1,5 +1,5 @@
 // file: core/integrations/notify/mail/mail_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4390d39b-6ec5-4a8e-a468-83a1beaa191b
 // last-edited: 2026-11-19
 
@@ -28,6 +28,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/falkcorp/mediacore/integrations"
 )
 
 // fakeSMTP is a minimal in-process SMTP server: enough of RFC 5321 to drive
@@ -63,7 +65,7 @@ func testCert(t *testing.T) (tls.Certificate, *x509.CertPool) {
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(time.Hour),
 		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
-		DNSNames:     []string{"localhost"},
+		DNSNames:     []string{"localhost", "mail.gotham.test"},
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
@@ -208,7 +210,7 @@ var testMsg = Message{
 func TestSend_LoopbackNoAuthSkipsStartTLS(t *testing.T) {
 	f := &fakeSMTP{offerTLS: true}
 	port, _ := startFake(t, f)
-	s, err := NewSMTPSender(SMTPConfig{Host: "127.0.0.1", Port: port, From: "Books <books@example.com>"})
+	s, err := NewSMTPSender(SMTPConfig{Dial: PlainDial, Host: "127.0.0.1", Port: port, From: "Books <books@example.com>"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,6 +237,7 @@ func TestSend_StartTLSThenAuthWhenUsernameSet(t *testing.T) {
 	f := &fakeSMTP{offerTLS: true, offerAuth: true}
 	port, pool := startFake(t, f)
 	s, err := NewSMTPSender(SMTPConfig{
+		Dial: PlainDial,
 		Host: "127.0.0.1", Port: port, From: "books@example.com",
 		Username: "mailer", Password: "pw-SENTINEL",
 		TLSConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
@@ -258,6 +261,7 @@ func TestSend_ImplicitTLSOn465Style(t *testing.T) {
 	f := &fakeSMTP{implicitTLS: true}
 	port, pool := startFake(t, f)
 	s, err := NewSMTPSender(SMTPConfig{
+		Dial: PlainDial,
 		Host: "127.0.0.1", Port: port, From: "books@example.com",
 		TLSConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
 	})
@@ -281,7 +285,7 @@ func TestSend_RemoteNoStartTLSRefusesAuth(t *testing.T) {
 	// offered, so PlainAuth must refuse to send the password in clear text.
 	f := &fakeSMTP{offerAuth: true}
 	port, _ := startFake(t, f)
-	s, err := NewSMTPSender(SMTPConfig{Host: "127.0.0.1", Port: port, From: "books@example.com", Username: "u", Password: "pw-SENTINEL"})
+	s, err := NewSMTPSender(SMTPConfig{Dial: PlainDial, Host: "127.0.0.1", Port: port, From: "books@example.com", Username: "u", Password: "pw-SENTINEL"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +306,7 @@ func TestSend_RemoteNoStartTLSRefusesAuth(t *testing.T) {
 func TestSend_NonLoopbackWithoutStartTLSRefused(t *testing.T) {
 	f := &fakeSMTP{}
 	port, _ := startFake(t, f)
-	s, err := NewSMTPSender(SMTPConfig{Host: "127.0.0.1", Port: port, From: "books@example.com", Username: "u", Password: "pw-SENTINEL"})
+	s, err := NewSMTPSender(SMTPConfig{Dial: PlainDial, Host: "127.0.0.1", Port: port, From: "books@example.com", Username: "u", Password: "pw-SENTINEL"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +327,7 @@ func TestSend_NonLoopbackWithoutStartTLSRefused(t *testing.T) {
 func TestSend_NonLoopbackNoUsernameStillRequiresTLS(t *testing.T) {
 	f := &fakeSMTP{}
 	port, _ := startFake(t, f)
-	s, err := NewSMTPSender(SMTPConfig{Host: "127.0.0.1", Port: port, From: "books@example.com"})
+	s, err := NewSMTPSender(SMTPConfig{Dial: PlainDial, Host: "127.0.0.1", Port: port, From: "books@example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,6 +345,7 @@ func TestSend_NonLoopbackWithStartTLSSucceeds(t *testing.T) {
 	f := &fakeSMTP{offerTLS: true}
 	port, pool := startFake(t, f)
 	s, err := NewSMTPSender(SMTPConfig{
+		Dial: PlainDial,
 		Host: "127.0.0.1", Port: port, From: "books@example.com",
 		TLSConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
 	})
@@ -361,7 +366,7 @@ func TestSend_NonLoopbackWithStartTLSSucceeds(t *testing.T) {
 func TestSend_NonLoopbackStartTLSBadCertRefused(t *testing.T) {
 	f := &fakeSMTP{offerTLS: true}
 	port, _ := startFake(t, f) // pool deliberately not trusted
-	s, err := NewSMTPSender(SMTPConfig{Host: "127.0.0.1", Port: port, From: "books@example.com"})
+	s, err := NewSMTPSender(SMTPConfig{Dial: PlainDial, Host: "127.0.0.1", Port: port, From: "books@example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +381,7 @@ func TestSend_NonLoopbackStartTLSBadCertRefused(t *testing.T) {
 }
 
 func TestSend_RejectsHeaderInjection(t *testing.T) {
-	s, err := NewSMTPSender(SMTPConfig{Host: "127.0.0.1", Port: 1, From: "books@example.com"})
+	s, err := NewSMTPSender(SMTPConfig{Dial: PlainDial, Host: "127.0.0.1", Port: 1, From: "books@example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +402,7 @@ func TestSend_RejectsHeaderInjection(t *testing.T) {
 func TestSend_ContextCancelUnblocksStalledServer(t *testing.T) {
 	f := &fakeSMTP{stall: true}
 	port, _ := startFake(t, f)
-	s, err := NewSMTPSender(SMTPConfig{Host: "127.0.0.1", Port: port, From: "books@example.com", Timeout: 10 * time.Second})
+	s, err := NewSMTPSender(SMTPConfig{Dial: PlainDial, Host: "127.0.0.1", Port: port, From: "books@example.com", Timeout: 10 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,5 +555,43 @@ func TestSend_DialAddressFollowsThePort(t *testing.T) {
 		if got != c.want {
 			t.Errorf("port %d: dialled %q, want %q", c.port, got, c.want)
 		}
+	}
+}
+
+// A sender nobody gave a dial refuses: there is no unguarded default. The
+// refusal is a local one that wraps ErrNoEgressGuard, and no connection is
+// made (the fake server, listening and ready, accepts nothing).
+func TestSend_NilDialRefusesBeforeAnyConnection(t *testing.T) {
+	f := &fakeSMTP{}
+	port, _ := startFake(t, f)
+	s, err := NewSMTPSender(SMTPConfig{Host: "127.0.0.1", Port: port, From: "books@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.Send(context.Background(), testMsg)
+	if !errors.Is(err, integrations.ErrNoEgressGuard) {
+		t.Fatalf("err = %v, want it to wrap ErrNoEgressGuard", err)
+	}
+	if c := integrations.ClassOf(context.Background(), err); c != integrations.ClassRefusedLocal {
+		t.Fatalf("class = %v, want refused_local", c)
+	}
+	if n := f.accepted.Load(); n != 0 {
+		t.Fatalf("the server accepted %d connections, want 0", n)
+	}
+}
+
+// PlainDial is the explicit unguarded dial: it reaches the server as written.
+func TestSend_PlainDialConnects(t *testing.T) {
+	f := &fakeSMTP{}
+	port, _ := startFake(t, f)
+	s, err := NewSMTPSender(SMTPConfig{Host: "127.0.0.1", Port: port, From: "books@example.com", Dial: PlainDial})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Send(context.Background(), testMsg); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if n := f.accepted.Load(); n != 1 {
+		t.Fatalf("the server accepted %d connections, want 1", n)
 	}
 }
