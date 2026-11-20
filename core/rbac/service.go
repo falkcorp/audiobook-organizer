@@ -1,5 +1,5 @@
 // file: core/rbac/service.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9d2b7e41-5c3a-4f86-b0e9-1a6c8f3d5e27
 // last-edited: 2026-11-19
 
@@ -686,6 +686,16 @@ func (s *Service) DeleteRole(ctx context.Context, actor Checker, id RoleName, if
 		}
 		if len(hs) > 0 {
 			return nil, fmt.Errorf("%w: %s is held by %d user(s)", ErrRoleInUse, id, len(hs))
+		}
+		// Role-in-use alone cannot see a user write that gives the role to
+		// someone after this read: HoldersOf of the role just reported, and so
+		// guarded, nobody. Deleting a role that grants core:admin takes it from
+		// every holder, so the last-admin rule runs too (nil permissions: the
+		// role is deleted). It guards every current admin's record through b,
+		// so a user write that makes a holder of this role changes a guarded
+		// record and fails this commit; the retry then finds the role held.
+		if err := s.checkLastAdmin(ctx, b, map[RoleName][]Permission{id: nil}); err != nil {
+			return nil, err
 		}
 		if err := s.revoke(ctx, b, journal.Revocation{Kind: journal.RoleDeleted, Subject: roleRef(id)}); err != nil {
 			return nil, err
