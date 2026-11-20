@@ -722,16 +722,20 @@ or owner-email settings. So the deploy keeps the environment with the binary.
   build that is already installed rotates nothing. A first deploy (no binary
   yet) keeps nothing.
 - **How many, and which are never dropped.** Several, not one: the newest three,
-  and in addition the newest three *pinned* generations, so a hotfix train does
-  not push out the environment of the last build before a store level step or
-  before the retired-name list was enforced. A generation is pinned when the
-  binary that replaced it serves a higher store level for any owner, when
-  `enforced` differs between the two builds, or when either build's facts are
-  unknown (so a deploy whose recipe passes no facts keeps more, never less).
-  The helper cannot read the service-owned checkpoint area, so it cannot see
-  whether the checkpoint taken at a level step is still kept; it keeps the pinned
-  generations of that boundary until three newer ones displace them. If any
-  generation file is unreadable nothing is evicted.
+  every *boundary* generation, and the newest three *unknown* pins. A generation
+  is a boundary when both builds' facts are known and the binary that replaced
+  it serves a higher store level for any owner or `enforced` differs between the
+  two builds: the last build before a level step or before the retired-name list
+  was enforced. Boundary generations are never evicted, and no run of later
+  deploys displaces them (they are rare). A generation is an unknown pin when a
+  fact needed to tell is missing (a deploy whose recipe passes no facts, an ssh
+  timeout while measuring): one more kept costs less than one lost, and those
+  pins are bounded among themselves so the directory cannot grow. The helper
+  cannot read the service-owned checkpoint area, so it cannot see whether the
+  checkpoint taken at a level step is still kept. If any generation file is
+  unreadable nothing is evicted. The deploy before the flip must go through the
+  helpers with facts, so that the flip replaces a build with recorded facts and
+  its generation is a boundary.
 - **What a rollback does.** `make rollback` and `make rollback-restore` run
   `install-staged rollback check prev` before anything is stopped. It looks up
   the generation by the sha256 of the binary being restored and refuses, with
@@ -790,7 +794,7 @@ reads no host.
   kept beside `<bin>.prev`, skipping the one this deploy replaces; with none,
   `make rollback` refuses. A `Makefile.local` that installs the binary without
   the facts from `scripts/deploy_generation_args.py` still deploys, with a note:
-  every kept generation then counts as unknown and is pinned.
+  every kept generation then counts as an unknown pin (bounded to three).
 
 ### Owner steps this needs, once
 

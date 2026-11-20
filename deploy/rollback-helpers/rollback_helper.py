@@ -102,10 +102,10 @@ Operations (the stub name, then the subcommand):
                      it did not change it), then renames <bin>.new last; the
                      capture is deleted only after that rename. The same bytes
                      again rotate nothing. At least GEN_KEEP generations are
-                     kept, and the newest GEN_KEEP_PINNED of those whose
-                     binary a deploy replaced across a level or environment
-                     boundary (or without the facts to tell) are never
-                     evicted. `install binary` takes either nothing or
+                     kept, plus every one whose binary a deploy replaced
+                     across a store level raise or an `enforced` change
+                     (never evicted), plus the newest GEN_KEEP_PINNED of those
+                     replaced without the facts to tell. `install binary` takes either nothing or
                      `SHA256 VERSION LEVELS ENFORCED`, what the deploy recipe
                      measured about the staged binary as the deploy user (this
                      helper never runs a binary as root); they are validated,
@@ -1227,12 +1227,15 @@ ENV_VERSION = 2
 ENV_LIMIT = 2 * UNIT_LIMIT + 4096
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 ENV_PARTS = ("unit", "local_conf")
-# The newest generations always kept, and the newest ones kept because the
-# deploy that replaced their binary changed what the store or the environment
-# needs (see _boundary): the pre-flip binary's, so the flip can be undone
-# after later hotfixes.
+# The newest generations always kept; every one kept because the deploy that
+# replaced its binary changed what the store or the environment needs (see
+# _pin_reason): the pre-flip binary's, so the flip can be undone after later
+# hotfixes; and the newest GEN_KEEP_PINNED kept because the facts to tell were
+# missing.
 GEN_KEEP = 3
 GEN_KEEP_PINNED = 3
+PIN_BOUNDARY = "boundary"
+PIN_UNKNOWN = "unknown"
 _VERSION_TAG = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}")
 _LEVEL_OWNER = re.compile(r"[a-z][a-z0-9_.-]{0,63}")
 _LEVEL_MAX = 64
@@ -1429,23 +1432,36 @@ def _parse_meta(args: list[str]) -> dict | None:
     }
 
 
-def _boundary(replaced: dict | None, incoming: dict | None) -> bool:
-    """Does this deploy move the store's levels, or the environment's names?
-    Then the binary it replaces is the last one that could run under the
-    previous ones, and its generation is pinned. Anything unknown counts as a
-    boundary: the cost of a wrong yes is one more generation kept."""
+def _pin_reason(replaced: dict | None, incoming: dict | None) -> str:
+    """Why this deploy pins the generation of the binary it replaces:
+    "boundary" when both sides' facts are known and the deploy raises a store
+    level or changes `enforced` (that binary is the last one that could run
+    under the previous levels or names); "unknown" when a fact needed to tell
+    is missing (the cost of a wrong yes is one more kept generation); "" for a
+    routine deploy. A known boundary is never evicted; unknown pins are
+    bounded, so a run of deploys that measured nothing cannot grow the
+    directory, and cannot push a boundary out either."""
+    if replaced is not None and incoming is not None:
+        r, i = replaced["levels"], incoming["levels"]
+        if (
+            r is not None
+            and i is not None
+            and any(i.get(o, 0) > r.get(o, 0) for o in set(r) | set(i))
+        ):
+            return PIN_BOUNDARY
+        re, ie = replaced["enforced"], incoming["enforced"]
+        if re is not None and ie is not None and re != ie:
+            return PIN_BOUNDARY
     if replaced is None or incoming is None:
-        return True
-    r, i = replaced["levels"], incoming["levels"]
-    if r is None or i is None:
-        return True
-    if any(i.get(o, 0) > r.get(o, 0) for o in set(r) | set(i)):
-        return True
-    return (
-        replaced["enforced"] is None
+        return PIN_UNKNOWN
+    if (
+        replaced["levels"] is None
+        or incoming["levels"] is None
+        or replaced["enforced"] is None
         or incoming["enforced"] is None
-        or (replaced["enforced"] != incoming["enforced"])
-    )
+    ):
+        return PIN_UNKNOWN
+    return ""
 
 
 def _env_capture(cfg: dict[str, str], part: str) -> None:
@@ -1518,12 +1534,14 @@ def _env_promote(cfg: dict[str, str], had_binary: bool, incoming: dict | None = 
         cur = None  # advisory: an unreadable record is "unrecorded"
     if cur is not None and cur.get("bin_sha256") == prev_sha:
         replaced = _clean_meta(cur)
+    reason = _pin_reason(replaced, incoming)
     doc = {
         "version": ENV_VERSION,
         "bin_sha256": prev_sha,
         "seq": max((d["seq"] for d in docs), default=0) + 1,
         "binary": replaced or _clean_meta(None),
-        "pinned": _boundary(replaced, incoming),
+        "pinned": bool(reason),
+        "pin_reason": reason,
     }
     for part in ENV_PARTS:
         doc[part] = pend.get(part) or _capture_env(cfg, part)
@@ -1567,9 +1585,11 @@ def _scan_generations(cfg: dict[str, str]) -> tuple[list[dict], int]:
 
 
 def _evict(cfg: dict[str, str], keep_sha: str) -> None:
-    """Drop generations beyond the newest GEN_KEEP, except the newest
-    GEN_KEEP_PINNED pinned ones and keep_sha. Nothing is dropped while any
-    generation file is unreadable (it may be one that must stay)."""
+    """Drop generations beyond the newest GEN_KEEP, except every generation
+    pinned for a known boundary, the newest GEN_KEEP_PINNED pinned for unknown
+    facts (a pin without a recorded reason counts as unknown), and keep_sha.
+    Nothing is dropped while any generation file is unreadable (it may be one
+    that must stay)."""
     docs, damaged = _scan_generations(cfg)
     if damaged:
         print(
@@ -1578,9 +1598,9 @@ def _evict(cfg: dict[str, str], keep_sha: str) -> None:
         )
         return
     keep = {d["bin_sha256"] for d in docs[:GEN_KEEP]}
-    keep |= {
-        d["bin_sha256"] for d in [x for x in docs if x.get("pinned") is True][:GEN_KEEP_PINNED]
-    }
+    keep |= {d["bin_sha256"] for d in docs if d.get("pin_reason") == PIN_BOUNDARY}
+    unknown = [d for d in docs if d.get("pinned") is True and d.get("pin_reason") != PIN_BOUNDARY]
+    keep |= {d["bin_sha256"] for d in unknown[:GEN_KEEP_PINNED]}
     keep.add(keep_sha)
     for d in docs:
         if d["bin_sha256"] not in keep:
@@ -1594,7 +1614,7 @@ def _gen_desc(doc: dict) -> str:
     b = _clean_meta(doc.get("binary"))
     return (
         f"version={b['version'] or 'unrecorded'} levels={_fmt_levels(b['levels'])} "
-        f"pinned={1 if doc.get('pinned') is True else 0}"
+        f"pinned={(doc.get('pin_reason') or PIN_UNKNOWN) if doc.get('pinned') is True else 0}"
     )
 
 
@@ -1694,7 +1714,7 @@ def _rollback_list(cfg: dict[str, str]) -> int:
     pinned, what the files hold: no content), and which one .prev matches."""
     docs, damaged = _scan_generations(cfg)
     print(
-        f"generations={len(docs)} unreadable={damaged} keep_newest={GEN_KEEP} keep_pinned={GEN_KEEP_PINNED}"
+        f"generations={len(docs)} unreadable={damaged} keep_newest={GEN_KEEP} keep_unknown_pinned={GEN_KEEP_PINNED}"
     )
     for d in docs:
         lc = d["local_conf"]
