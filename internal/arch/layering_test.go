@@ -319,9 +319,7 @@ var layerOf = map[string]int{
 // imported) with a one-line reason. See the package comment for the ratchet.
 var allowed = map[edge]string{
 	{"internal/config", "internal/aidispatch"}:                  "config reaches a package that floors at domain; 07-M1 makes config a leaf",
-	{"internal/config", "internal/auth"}:                        "config imports auth (which imports database); 07-M1",
 	{"internal/config", "internal/backup"}:                      "config reaches a package that floors at domain; 07-M1",
-	{"internal/config", "internal/books/store"}:                 "config reads the store directly; 07-M1",
 	{"internal/config", "internal/dedup/unified"}:               "config reaches a package that floors at domain; 07-M1",
 	{"internal/dedup", "internal/operations/registry"}:          "domain package registers operations itself; move registration into plugins/dedup",
 	{"internal/metadata", "internal/operations/registry"}:       "provider clients import the operations registry; 07-M4",
