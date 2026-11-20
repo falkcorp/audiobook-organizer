@@ -43,47 +43,90 @@ import (
 // TestBooksJobsStore_ReadsHaveNoRowAndWritesAreGated checks, so the embedded
 // value cannot be a way to write.
 type jobsReads interface {
-	BookFilesAtPath(path string) ([]database.BookFile, error)
-	CountPrefix(prefix string) (int64, error)
-	GetAllAuthors() ([]database.Author, error)
-	GetAllBookFilesCore() ([]database.BookFileCore, error)
+	jobsReadBooks
+	jobsReadBookDetail
+	jobsReadBookFiles
+	jobsReadContributors
+	jobsReadUserState
+	jobsReadOperations
+	jobsReadKV
+	jobsReadLinked
+}
+
+// The read groups follow jobs.Store's store*Store grouping, each at most 8
+// declared entries (the interface-width gate, .golangci.yml interfacebloat.max).
+
+// jobsReadBooks is the book reads (jobs.Store's storeBookReader).
+type jobsReadBooks interface {
+	GetBookByID(id string) (*database.Book, error)
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error)
-	GetAllSeries() ([]database.Series, error)
-	GetAllSeriesBookCounts() (map[int]int, error)
-	GetAuthorByID(id int) (*database.Author, error)
-	GetAuthorByName(name string) (*database.Author, error)
+	ListBookIDs() ([]string, error)
+	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
+	GetBooksBySeriesIDAllVersions(seriesID int) ([]database.BookCore, error)
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+}
+
+// jobsReadBookDetail is the per-book detail reads (storeManualOnlyReader and the metadata field states).
+type jobsReadBookDetail interface {
 	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
-	GetBookByID(id string) (*database.Book, error)
+	GetBookTagsDetailed(bookID string) ([]database.BookTag, error)
+	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
 	GetBookChangeHistory(bookID string, limit int) ([]database.MetadataChangeRecord, error)
-	GetBookChanges(bookID string) ([]*database.OperationChange, error)
+	GetSeriesByID(id int) (*database.Series, error)
+}
+
+// jobsReadBookFiles is the book-file reads (storeBookFileReader).
+type jobsReadBookFiles interface {
+	GetBookFiles(bookID string) ([]database.BookFile, error)
 	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
 	GetBookFileByPath(filePath string) (*database.BookFile, error)
-	GetBookFiles(bookID string) ([]database.BookFile, error)
+	BookFilesAtPath(path string) ([]database.BookFile, error)
+	GetAllBookFilesCore() ([]database.BookFileCore, error)
 	GetBookFilesNeedingDelugeImportCore() ([]database.BookFileCore, error)
-	GetBookTagsDetailed(bookID string) ([]database.BookTag, error)
-	GetBookUserTags(bookID string) ([]string, error)
-	GetBooksBySeriesIDAllVersions(seriesID int) ([]database.BookCore, error)
-	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
-	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
-	GetChaptersForBook(bookID string) ([]database.Chapter, error)
-	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
-	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
-	GetOperationByID(id string) (*database.Operation, error)
-	GetOperationResults(operationID string) ([]database.OperationResult, error)
-	GetOperationState(opID string) ([]byte, error)
-	GetOperationV2(id string) (*database.OperationV2Row, error)
-	GetRaw(key string) ([]byte, error)
-	GetSeriesByID(id int) (*database.Series, error)
-	GetSetting(key string) (*database.Setting, error)
-	GetUserBookState(userID, bookID string) (*database.UserBookState, error)
-	GetUserPreference(key string) (*database.UserPreference, error)
-	ListBookIDs() ([]string, error)
-	ListOperations(limit, offset int) ([]database.Operation, int, error)
-	ListUserPositionsForBook(userID, bookID string) ([]database.UserPosition, error)
+}
+
+// jobsReadContributors is the author and series reads (storeContributorStore's reads).
+type jobsReadContributors interface {
+	GetAllAuthors() ([]database.Author, error)
+	GetAuthorByID(id int) (*database.Author, error)
+	GetAuthorByName(name string) (*database.Author, error)
+	GetAllSeries() ([]database.Series, error)
+	GetAllSeriesBookCounts() (map[int]int, error)
+}
+
+// jobsReadUserState is the user-state reads (storeUserStateStore's reads).
+type jobsReadUserState interface {
 	ListUsers() ([]database.User, error)
+	GetUserBookState(userID, bookID string) (*database.UserBookState, error)
+	ListUserPositionsForBook(userID, bookID string) ([]database.UserPosition, error)
+	GetBookUserTags(bookID string) ([]string, error)
+}
+
+// jobsReadOperations is the operation record, state and undo-ledger reads (storeOperationStore's reads).
+type jobsReadOperations interface {
+	GetOperationByID(id string) (*database.Operation, error)
+	GetOperationV2(id string) (*database.OperationV2Row, error)
+	GetOperationResults(operationID string) ([]database.OperationResult, error)
+	ListOperations(limit, offset int) ([]database.Operation, int, error)
+	GetOperationState(opID string) ([]byte, error)
+	GetBookChanges(bookID string) ([]*database.OperationChange, error)
+}
+
+// jobsReadKV is the settings and raw key reads (storeKVStore's reads).
+type jobsReadKV interface {
+	GetSetting(key string) (*database.Setting, error)
+	GetUserPreference(key string) (*database.UserPreference, error)
+	GetRaw(key string) ([]byte, error)
+	CountPrefix(prefix string) (int64, error)
 	ScanPrefix(prefix string) ([]database.KVPair, error)
 	ScanPrefixPage(prefix, after string, limit int) ([]database.KVPair, string, error)
+}
+
+// jobsReadLinked is the external-id and chapter reads.
+type jobsReadLinked interface {
+	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
+	GetChaptersForBook(bookID string) ([]database.Chapter, error)
 }
 
 // jobsDeferredAggregates, jobsAggregatesMarker: the shape of the jobs' private
