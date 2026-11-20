@@ -681,6 +681,7 @@ internal/books/cutover/m6.Report.Entries
 internal/books/cutover/m6.Report.IDs
 internal/books/cutover/m6.RootID
 internal/books/cutover/m6.SourceRanges
+internal/books/cutover/m6.aliasReason
 internal/books/cutover/m6.authorityHasAt
 internal/books/cutover/m6.badRootPath
 internal/books/cutover/m6.capabilityID
@@ -689,6 +690,7 @@ internal/books/cutover/m6.chunk.consume
 internal/books/cutover/m6.chunk.note
 internal/books/cutover/m6.chunk.quarantine
 internal/books/cutover/m6.defaultPort
+internal/books/cutover/m6.derivedAlias
 internal/books/cutover/m6.destsOf
 internal/books/cutover/m6.discardAI.ImportJob
 internal/books/cutover/m6.discardConfig.Default
@@ -699,11 +701,14 @@ internal/books/cutover/m6.discardSecrets.ImportSecret
 internal/books/cutover/m6.discardSecrets.ImportUnreadable
 internal/books/cutover/m6.emptyJSON
 internal/books/cutover/m6.emptyValue
+internal/books/cutover/m6.encodeURIComponent
+internal/books/cutover/m6.exactIDs
 internal/books/cutover/m6.groupRun.deluge
 internal/books/cutover/m6.groupRun.instance
 internal/books/cutover/m6.groupRun.instances
 internal/books/cutover/m6.groupRun.leftovers
 internal/books/cutover/m6.groupRun.mappings
+internal/books/cutover/m6.groupRun.pathAliases
 internal/books/cutover/m6.groupRun.quarantineMember
 internal/books/cutover/m6.groupRun.quarantineRoots
 internal/books/cutover/m6.groupRun.roots
@@ -712,6 +717,8 @@ internal/books/cutover/m6.groupRun.stage
 internal/books/cutover/m6.groupRun.webhooks
 internal/books/cutover/m6.instanceID
 internal/books/cutover/m6.jobState
+internal/books/cutover/m6.knownFeature
+internal/books/cutover/m6.knownFeatures
 internal/books/cutover/m6.mapCaps
 internal/books/cutover/m6.metadataLimits
 internal/books/cutover/m6.newMigration
@@ -719,6 +726,7 @@ internal/books/cutover/m6.nonEmpty
 internal/books/cutover/m6.originOf
 internal/books/cutover/m6.pending.cleanURL
 internal/books/cutover/m6.pending.finish
+internal/books/cutover/m6.pending.secretRefs
 internal/books/cutover/m6.planWrites.Batch
 internal/books/cutover/m6.planWrites.Count
 internal/books/cutover/m6.planWrites.Delete
@@ -731,9 +739,11 @@ internal/books/cutover/m6.resolve
 internal/books/cutover/m6.rootSpecs
 internal/books/cutover/m6.secretName
 internal/books/cutover/m6.signature
+internal/books/cutover/m6.smbJoin
 internal/books/cutover/m6.splitUserinfo
 internal/books/cutover/m6.unknownJobType
 internal/books/cutover/m6.windowsForm
+internal/books/cutover/m6.windowsJoin
 internal/books/store.CatalogKeyPrefixes
 internal/books/store.GetCachedMetadataFetch
 internal/books/store.GetGlobalStore

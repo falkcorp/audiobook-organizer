@@ -149,9 +149,7 @@ func afterM2(r *rig) {
 		if err := lr.Set(ctx, []byte(m6.KeyBlob), residual); err != nil {
 			t.Fatal(err)
 		}
-		for n, v := range stored {
-			r.secrets.seed[n] = v
-		}
+		maps.Copy(r.secrets.seed, stored)
 		for key, name := range headSecretRows(t) {
 			if _, err := lr.Get(ctx, []byte(key)); err == nil {
 				r.secrets.seed[name] = "m2-moved-" + string(name)

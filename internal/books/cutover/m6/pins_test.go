@@ -302,8 +302,7 @@ func jsonNames(t *testing.T, typ reflect.Type) map[string]bool {
 // one. A type that marshals itself (time.Time) is a leaf.
 func addJSONNames(t *testing.T, typ reflect.Type, prefix string, out map[string]bool) {
 	t.Helper()
-	for i := range typ.NumField() {
-		f := typ.Field(i)
+	for f := range typ.Fields() {
 		tag, _, _ := strings.Cut(f.Tag.Get("json"), ",")
 		if tag == "-" || (tag == "" && !f.Anonymous) {
 			t.Fatalf("%s.%s has no JSON name: the pin cannot say what HEAD writes", typ, f.Name)
@@ -425,8 +424,9 @@ func TestAIInstances_PassCoresEndpointValidator(t *testing.T) {
 		t.Run(c.protocol, func(t *testing.T) {
 			raw, err := json.Marshal(map[string]any{
 				"id": "oracle-node", "label": "Oracle", "protocol": c.protocol, "url": c.url, "enabled": true,
-				"capabilities": append(slices.Clone(every), "mystery.cape", "llm.*", "*", "llm.dedup_review"),
-				"features":     []string{"json_schema", "telepathy", "shared_fs:batcave-lib", "shared_fs:", "vision"},
+				"capabilities":      append(slices.Clone(every), "mystery.cape", "llm.*", "*", "llm.dedup_review"),
+				"features":          []string{"json_schema", "telepathy", "shared_fs:batcave-lib", "shared_fs:", "vision"},
+				"capability_models": map[string]string{"llm.dedup_review": "alfred-13b", "mystery.cape": "riddler-1b"},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -438,13 +438,16 @@ func TestAIInstances_PassCoresEndpointValidator(t *testing.T) {
 			if err := r.ValidateEndpoint(p.inst.Config.Settings, nil); err != nil {
 				t.Fatalf("core refuses what M6 writes: %v", err)
 			}
-			for _, want := range []string{`tick "mystery.cape"`, `tick "llm.*"`, `tick "*"`, `feature "telepathy"`, `feature "shared_fs:"`} {
+			for _, want := range []string{`tick "mystery.cape"`, `tick "llm.*"`, `tick "*"`, `feature "telepathy"`, `feature "shared_fs:"`, `capability_models entry "mystery.cape"`} {
 				if !slices.ContainsFunc(p.dropped, func(d string) bool { return strings.Contains(d, want) }) {
 					t.Errorf("the dropped %s is not reported: %v", want, p.dropped)
 				}
 			}
-			if len(p.dropped) != 5 {
-				t.Errorf("dropped %v, want exactly the five unknown values", p.dropped)
+			if len(p.dropped) != 6 {
+				t.Errorf("dropped %v, want exactly the six unknown values", p.dropped)
+			}
+			if cm, _ := p.inst.Config.Settings["capability_models"].(map[string]string); len(cm) != 1 || cm["books.dedup_review"] != "alfred-13b" {
+				t.Errorf("capability_models %v, want only the registered capability's", cm)
 			}
 			caps, _ := p.inst.Config.Settings["capabilities"].([]string)
 			if len(caps) != len(every) {

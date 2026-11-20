@@ -887,3 +887,5 @@ M6's one write outside its retired claims, excluded by name from the byte-identi
 as its oracle; rollback names the pre-freeze release's binary.
 
 Round 17 (2026-11-05): plan-review gap G22: boot recovery `core.library.transfer-recover` gets the declared schedule key `core.library.schedules.transfer_recover` (`ScheduleConfig` needs one timing field when enabled, so its default is `every: 24h`; `OnStart()` adds the boot run), §5L.3.3 and the key table.
+
+Round 18 (2026-11-20): F7-09 slice T1 (the F7-08 round-2 alias ruling). §5L.10 states that path aliases are per root: each root takes the aliases whose root is its path, and a root with none takes the longest ancestor alias, carried with its relative path appended in each form HEAD renders. An alias no root takes is quarantined with a reason saying its display rendering is not carried (seams.d/F7-08).

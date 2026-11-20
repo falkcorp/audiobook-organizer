@@ -17,10 +17,11 @@ import (
 // capabilityID is books' capability-ID map (05-ai section 10, "ticks rewritten
 // through books' capability-ID map"): HEAD's aidispatch capability IDs
 // (internal/aidispatch/capabilities.go) to the IDs books registers with core.
-// The llm.* family moves under the books module as books.<name>; the three
-// non-chat families are renamed one by one. An ID this table does not know is
-// kept verbatim, which is how HEAD itself treats an ID a newer build wrote
-// ("kept on load and ignored by selection", internal/config/ai_endpoints.go).
+// The llm.* family moves under the books module as books.<name>; the
+// non-chat families are renamed one by one. It is applied only to the IDs in
+// headCapabilities: a tick or a capability_models key outside that set is
+// dropped and reported (aiInstance), not passed through, because core refuses
+// an imported endpoint that carries a tick its catalog does not know.
 func capabilityID(id string) string {
 	switch id {
 	case "embed.text":
