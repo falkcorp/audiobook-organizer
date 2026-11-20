@@ -1032,14 +1032,17 @@ deploy-env-check:
 # unit has a new InvocationID: a restart that never ran leaves the old
 # process ready on /health. A restart sudo refuses fails at once.
 # The previous release's service environment goes back with its binary: every
-# deploy keeps the unit and the local.conf drop-in it replaced as
-# DEPLOY_BIN.prev.env, beside .prev, and the swap installs those with .prev
-# (install-staged rollback; daemon-reload). It is checked before anything is
-# stopped, and a rollback with no kept environment (a .prev that was not
-# installed through the helpers, or a snapshot of a different binary) refuses
-# rather than start the old build under the new environment. A .prev that
-# is not the binary the snapshot belongs to needs ROLLBACK_ENV=snapshot, which
-# says the kept environment fits it.
+# deploy that replaces a binary keeps the unit and the local.conf drop-in that
+# binary ran under, as one generation named by the binary's sha256
+# (DEPLOY_BIN.envgen/), and the swap installs the generation of the binary it
+# puts back (install-staged rollback; daemon-reload), found by that hash and
+# never by position. It is checked before anything is stopped, and a rollback
+# with no kept environment for the binary (a .prev that was not installed
+# through the helpers, or a release built elsewhere, whose hash no deploy has
+# seen) refuses rather than start the old build under the new environment.
+# ROLLBACK_ENV=<sha256> names the generation to use when the hash differs; the
+# recipe refuses when that generation's recorded store levels differ from
+# .prev's. `make rollback-check` lists the generations (read-only).
 # Privileged steps go through the root-owned rollback helpers, each granted
 # in the deploy user's sudoers drop-in (docs/system/deploy-and-gpu-ops.md).
 .PHONY: rollback
@@ -1082,7 +1085,10 @@ rollback:
 #   5. Check the unit stayed stopped; install .prev atomically; start; wait
 #      as rollback does.
 # The kept unit and local.conf are restored with .prev in step 5, like
-# rollback (ROLLBACK_ENV=snapshot when .prev came from RELEASE=). Every
+# rollback (the generation of the release's own hash, or ROLLBACK_ENV=<sha256>
+# when RELEASE= fetched a build that was never deployed from here), and the
+# environment is checked for the fetched file BEFORE it replaces .prev, so a
+# refusal leaves .prev and its environment as they were. Every
 # failure after a change says what state the host is in and prints the
 # commands that finish or undo the rollback. The unit is not masked
 # (systemctl mask refuses a unit file installed in /etc/systemd/system).
@@ -1096,6 +1102,40 @@ rollback-restore:
 	  --guard="$(ROLLBACK_GUARD)" --host="$(DEPLOY_HOST)" --bin="$(DEPLOY_BIN)" --db="$(DEPLOY_DB)" \
 	  --url="$(DEPLOY_URL)" --unit="$(DEPLOY_UNIT)" --timeout="$(DEPLOY_READY_TIMEOUT)" \
 	  --archive="$(ROLLBACK_ARCHIVE)" --release="$(RELEASE)" --env="$(ROLLBACK_ENV)"
+
+## rollback-check: List the environment generations the deploy host keeps for rollback, and which one .prev matches (read-only; requires DEPLOY_HOST, DEPLOY_BIN, DEPLOY_DB)
+#
+# Runs `install-staged rollback list` over ssh: sha256, the version and store
+# levels the deploy recorded, whether it is pinned, and what the files hold
+# (never their content). Nothing is stopped, fetched or changed.
+.PHONY: rollback-check
+rollback-check:
+	@[ -n "$(DEPLOY_HOST)" ] || (echo "ERROR: DEPLOY_HOST is not set. Add it to Makefile.local or export it."; exit 1)
+	@[ -n "$(DEPLOY_BIN)" ] || (echo "ERROR: DEPLOY_BIN is not set. Add it to Makefile.local or export it."; exit 1)
+	@[ -n "$(DEPLOY_DB)" ] || (echo "ERROR: DEPLOY_DB is not set. Set it to the main Pebble store path on DEPLOY_HOST (the --db / DATABASE_PATH value) in Makefile.local or export it."; exit 1)
+	@python3 scripts/deploy_rollback.py check \
+	  --guard="$(ROLLBACK_GUARD)" --host="$(DEPLOY_HOST)" --bin="$(DEPLOY_BIN)" --db="$(DEPLOY_DB)" \
+	  --unit="$(DEPLOY_UNIT)"
+
+## install-rollback-helpers: The owner's one-time install of the rollback helper bundle ON THE DEPLOY HOST: dry run by default, APPLY=1 installs (needs DEPLOY_BIN, DEPLOY_DB; see ROLLBACK_INSTALL_ARGS)
+#
+# Run it on the deploy host, in a checkout of the commit being deployed. It
+# installs the bundle, rollback.conf and the sudoers drop-in (rendered from the
+# recipes' own command table, checked with `visudo -c` on a temporary file
+# before it is moved into place), and shows what it would do first. Idempotent.
+# ROLLBACK_INSTALL_ARGS carries the host's own values, for example:
+#   ROLLBACK_INSTALL_ARGS="--deploy-user alfred --service-user audiobook \
+#     --state-dir /var/lib/audiobook-organizer --archive-dir /var/backups/ao \
+#     --stage-bin /home/alfred/audiobook-organizer \
+#     --stage-local-conf /home/alfred/audiobook-organizer-local.conf"
+# Install the bundle FIRST, then sync Makefile.local from Makefile.local.example:
+# the synced recipes call the helper at their first step.
+.PHONY: install-rollback-helpers
+install-rollback-helpers:
+	@[ -n "$(DEPLOY_BIN)" ] || (echo "ERROR: DEPLOY_BIN is not set. Add it to Makefile.local or export it."; exit 1)
+	@[ -n "$(DEPLOY_DB)" ] || (echo "ERROR: DEPLOY_DB is not set. Set it to the main Pebble store path on this host in Makefile.local or export it."; exit 1)
+	@python3 deploy/rollback-helpers/install_helpers.py --bin="$(DEPLOY_BIN)" --db="$(DEPLOY_DB)" \
+	  --unit="$(DEPLOY_UNIT)" $(ROLLBACK_INSTALL_ARGS) $(if $(APPLY),--apply,) $(if $(REPLACE_CONF),--replace-conf,)
 
 # Quick aliases
 .PHONY: t c b v

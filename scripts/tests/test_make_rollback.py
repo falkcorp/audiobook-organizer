@@ -331,20 +331,32 @@ class FakeHost:
         self.local_conf.write_text(self.CUR_CONF)
         for p in (self.unit_file, dropins / "host.conf", self.local_conf):
             p.chmod(0o644)
-        self.snapshot = Path(f"{self.bin}.prev.env")
+        self.envgen = Path(f"{self.bin}.envgen")
+        self.prev_sha = hashlib.sha256(self.prev.read_bytes()).hexdigest()
         if snapshot:
-            self.write_snapshot()
+            self.write_generation()
 
-    def write_snapshot(self, **over) -> None:
+    def write_generation(self, sha: str | None = None, **over) -> str:
+        """The environment a deploy through the helpers kept for the binary
+        with this sha256 (default: the one now at .prev): the PREVIOUS
+        release's unit and local.conf, with the store levels it served."""
+        sha = sha or self.prev_sha
+        self.envgen.mkdir(mode=0o700, exist_ok=True)
+        self.envgen.chmod(0o700)
         doc = {
-            "version": 1,
-            "prev_sha256": hashlib.sha256(self.prev.read_bytes()).hexdigest(),
+            "version": 2,
+            "bin_sha256": sha,
+            "seq": 1,
+            "binary": {"version": "v0.40.0", "levels": dict(R1), "enforced": False},
+            "pinned": False,
             "unit": {"present": True, "text": self.PREV_UNIT_MARK + self.unit_text},
             "local_conf": {"present": True, "text": self.PREV_CONF},
         }
         doc.update(over)
-        self.snapshot.write_text(json.dumps(doc))
-        self.snapshot.chmod(0o600)
+        path = self.envgen / f"{sha}.json"
+        path.write_text(json.dumps(doc))
+        path.chmod(0o600)
+        return sha
 
     def conf_lines(self) -> list[str]:
         """The Environment= lines of the live local.conf (the helper
@@ -612,14 +624,14 @@ class RollbackRestoreTest(unittest.TestCase):
             ".migration-checkpoint",  # the source
             f"checkpoint-record {CHECKPOINT}",
             ".prev --print-storage-levels",  # the level check
-            "install-staged rollback check paired",  # the kept environment, before the stop
+            "install-staged rollback check prev",  # the kept environment, before the stop
             ".prev --print-capabilities",  # unit type, before the stop
             "unit-type notify",
             "systemctl show -p InvocationID",
             "systemctl stop",
             "systemctl show -p ActiveState,SubState audiobook",
             f"restore-offline checkpoint {CHECKPOINT}",
-            "install-staged rollback apply paired",
+            "install-staged rollback apply ",
             "systemctl start",
             "systemctl show -p ActiveState,SubState,NRestarts,ExecMainStatus",
         )
@@ -840,7 +852,7 @@ class RollbackRestoreTest(unittest.TestCase):
         """After an R2 hotfix .prev is an R2 build; RELEASE names the R1 tag
         the checkpoint was taken under, and make fetches it."""
         host = FakeHost(self, prev={"levels": R2}, releases={"v0.41.0": {}})
-        p = host.make("rollback-restore", RELEASE="v0.41.0", ROLLBACK_ENV="snapshot")
+        p = host.make("rollback-restore", RELEASE="v0.41.0", ROLLBACK_ENV=host.prev_sha)
         self.assertEqual(p.returncode, 0, out(p))
         self.assert_order(
             host,
@@ -850,13 +862,14 @@ class RollbackRestoreTest(unittest.TestCase):
             f"checkpoint-record {CHECKPOINT}",
             f"updater fetch-release --version v0.41.0 --out {host.stage}",
             f"{host.stage} --print-storage-levels",
+            "install-staged rollback check $(sha256sum",  # BEFORE .prev is replaced
             "install-staged prev",
-            "install-staged rollback check unpaired",
+            "install-staged rollback check prev",
             ".prev --print-capabilities",
             "unit-type notify",
             "systemctl stop",
             f"restore-offline checkpoint {CHECKPOINT}",
-            "install-staged rollback apply unpaired",
+            "install-staged rollback apply ",
             "systemctl start",
         )
         fetch = next(c for c in host.ssh() if "updater fetch-release" in c)
@@ -877,7 +890,7 @@ class RollbackRestoreTest(unittest.TestCase):
     def test_release_needs_no_prev_to_exist(self) -> None:
         host = FakeHost(self, releases={"v0.41.0": {}})
         host.prev.unlink()
-        p = host.make("rollback-restore", RELEASE="v0.41.0", ROLLBACK_ENV="snapshot")
+        p = host.make("rollback-restore", RELEASE="v0.41.0", ROLLBACK_ENV=host.prev_sha)
         self.assertEqual(p.returncode, 0, out(p))
         self.assertEqual(host.installed(), "fetched-v0.41.0")
 
@@ -949,7 +962,7 @@ class RollbackRestoreTest(unittest.TestCase):
             }
         )
         host = FakeHost(self, prev={"levels": R2}, releases={"v0.41.0": {"swap_to": deployed}})
-        p = host.make("rollback-restore", RELEASE="v0.41.0")
+        p = host.make("rollback-restore", RELEASE="v0.41.0", ROLLBACK_ENV=host.prev_sha)
         self.assertNotEqual(p.returncode, 0, out(p))
         self.assertEqual(fake_ssh.fake_app_name(host.prev), "deployed", ".prev is the swapped file")
         self.assertIn("after the install", out(p))
@@ -968,7 +981,7 @@ class RollbackRestoreTest(unittest.TestCase):
             releases={"v0.41.0": {}},
             rules=[{"match": "unit-type", "responses": [{"exit": 1, "stderr": "no\n"}]}],
         )
-        p = host.make("rollback-restore", RELEASE="v0.41.0", ROLLBACK_ENV="snapshot")
+        p = host.make("rollback-restore", RELEASE="v0.41.0", ROLLBACK_ENV=host.prev_sha)
         self.assertNotEqual(p.returncode, 0, out(p))
         self.assertIn("matching the unit type failed", out(p))
         self.assertIn("release v0.41.0's binary", out(p))
@@ -1343,10 +1356,10 @@ class RollbackRestoresEnvironment(unittest.TestCase):
                     "refused before the unit is even inspected",
                 )
 
-    def test_a_snapshot_the_helper_refuses_stops_the_rollback_before_any_change(self) -> None:
+    def test_a_generation_the_helper_refuses_stops_the_rollback_before_any_change(self) -> None:
         host = FakeHost(self)
-        host.write_snapshot(
-            unit={"present": True, "text": host.unit_text.replace("User=alfred", "User=root")}
+        host.write_generation(
+            unit={"present": True, "text": host.unit_text.replace(f"User={USER}", "User=root")}
         )
         before = host.environment()
         p = host.make("rollback-restore")
@@ -1356,23 +1369,67 @@ class RollbackRestoresEnvironment(unittest.TestCase):
         self.assertEqual(host.environment(), before)
         self.assertEqual(host.restores(), [])
 
-    def test_a_release_prev_needs_the_operator_to_say_the_environment_fits(self) -> None:
+    def test_a_release_with_no_kept_environment_is_refused_before_prev_is_replaced(self) -> None:
+        """r1 M1. RELEASE= fetches a build no deploy from here ever installed,
+        so no kept environment has its hash. The refusal comes BEFORE
+        install-staged prev: .prev, and the environment kept for it, are as
+        they were, and the message does not say otherwise."""
         host = FakeHost(self, prev={"levels": R2}, releases={"v0.41.0": {}})
         before = host.environment()
         p = host.make("rollback-restore", RELEASE="v0.41.0")
         self.assertNotEqual(p.returncode, 0, out(p))
-        self.assertIn("ROLLBACK_ENV=snapshot", out(p))
+        self.assertIn("ROLLBACK_ENV=<sha256>", out(p))
+        self.assertIn(host.prev_sha[:12], out(p), "lists the kept generation it could use")
+        self.assertNotIn("replaced", out(p), "nothing was replaced")
+        self.assertNotIn("is now release", out(p))
         self.assertEqual(host.changes(), [], "nothing stopped or restored")
         self.assertEqual(host.environment(), before)
-        self.assertEqual(
-            fake_ssh.fake_app_name(host.prev),
-            "fetched-v0.41.0",
-            "the release was installed as .prev before the check, as the recipe says",
+        self.assertEqual(fake_ssh.fake_app_name(host.prev), "prev", ".prev was not replaced")
+        self.assertTrue((host.envgen / f"{host.prev_sha}.json").exists(), "its environment is kept")
+        self.assertEqual(host.index("install-staged prev"), -1, "never installed")
+        self.assertFalse(host.stage.exists(), "the fetched file is deleted")
+
+    def test_a_named_generation_lets_a_release_through(self) -> None:
+        host = FakeHost(self, prev={"levels": R2}, releases={"v0.41.0": {}})
+        p = host.make("rollback-restore", RELEASE="v0.41.0", ROLLBACK_ENV=host.prev_sha)
+        self.assertEqual(p.returncode, 0, out(p))
+        self.assertEqual(host.conf_lines(), ["Environment=BATCAVE_PEERS=192.0.2.0/24"])
+        self.assertEqual(host.installed(), "fetched-v0.41.0")
+        staged = host.index("rollback check $(sha256sum")
+        self.assertTrue(0 <= staged < host.index("install-staged prev"), host.ssh())
+
+    def test_a_named_generation_that_served_other_levels_is_refused_before_the_install(
+        self,
+    ) -> None:
+        host = FakeHost(self, prev={"levels": R2}, releases={"v0.41.0": {}})
+        sha = host.write_generation(
+            "ab" * 32, binary={"version": "v0.50.0", "levels": dict(R2), "enforced": False}
         )
-        host2 = FakeHost(self, prev={"levels": R2}, releases={"v0.41.0": {}})
-        p2 = host2.make("rollback-restore", RELEASE="v0.41.0", ROLLBACK_ENV="snapshot")
-        self.assertEqual(p2.returncode, 0, out(p2))
-        self.assertEqual(host2.conf_lines(), ["Environment=BATCAVE_PEERS=192.0.2.0/24"])
+        p = host.make("rollback-restore", RELEASE="v0.41.0", ROLLBACK_ENV=sha)
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertIn("not the environment this binary needs", out(p))
+        self.assertEqual(host.changes(), [])
+        self.assertEqual(host.index("install-staged prev"), -1)
+        self.assertEqual(fake_ssh.fake_app_name(host.prev), "prev")
+
+    def test_a_refusal_after_the_install_carries_the_state_note(self) -> None:
+        """The second check runs once .prev is the fetched file: its refusal
+        must say the old .prev is gone."""
+        host = FakeHost(
+            self,
+            prev={"levels": R2},
+            releases={"v0.41.0": {}},
+            rules=[
+                {
+                    "match": r"rollback check prev",
+                    "responses": [{"stderr": "rollback helper: boom\n", "exit": 1}],
+                }
+            ],
+        )
+        p = host.make("rollback-restore", RELEASE="v0.41.0", ROLLBACK_ENV=host.prev_sha)
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertIn("is now release v0.41.0's binary", out(p))
+        self.assertEqual(host.changes(), [])
 
     def test_the_swap_holds_the_hash_the_check_read(self) -> None:
         host = FakeHost(self)
@@ -1380,14 +1437,45 @@ class RollbackRestoresEnvironment(unittest.TestCase):
         self.assertEqual(p.returncode, 0, out(p))
         want = hashlib.sha256(host.prev.read_bytes()).hexdigest()
         apply = next(c for c in host.ssh() if "rollback apply" in c)
-        self.assertTrue(apply.endswith(f"rollback apply paired {want}"), apply)
+        self.assertTrue(apply.endswith(f"rollback apply {want}"), apply)
 
-    def test_rollback_env_is_empty_or_snapshot(self) -> None:
+    def test_rollback_env_is_empty_or_a_generation_sha(self) -> None:
+        for bad in ("yes", "snapshot", "ab" * 31, "AB" * 32, "ab" * 32 + "0"):
+            with self.subTest(value=bad):
+                host = FakeHost(self)
+                p = host.make("rollback", ROLLBACK_ENV=bad)
+                self.assertEqual(p.returncode, 2, out(p))
+                self.assertIn("ROLLBACK_ENV", out(p))
+                self.assertEqual(host.ssh(), [], "refused before the host is read")
+
+    def test_a_rollback_can_name_the_generation_of_another_binary(self) -> None:
+        host = FakeHost(self, env_snapshot=False)
+        sha = host.write_generation("cd" * 32)
+        p = host.make("rollback", ROLLBACK_ENV=sha)
+        self.assertEqual(p.returncode, 0, out(p))
+        self.assertEqual(host.conf_lines(), ["Environment=BATCAVE_PEERS=192.0.2.0/24"])
+        apply = next(c for c in host.ssh() if "rollback apply" in c)
+        self.assertTrue(apply.endswith(f" {sha}"), apply)
+
+    def test_rollback_check_lists_the_generations_and_changes_nothing(self) -> None:
         host = FakeHost(self)
-        p = host.make("rollback", ROLLBACK_ENV="yes")
-        self.assertEqual(p.returncode, 2, out(p))
-        self.assertIn("ROLLBACK_ENV", out(p))
-        self.assertEqual(host.ssh(), [], "refused before the host is read")
+        before = host.environment()
+        p = host.make("rollback-check")
+        self.assertEqual(p.returncode, 0, out(p))
+        self.assertIn(host.prev_sha, out(p))
+        self.assertIn("v0.40.0", out(p), "the version the deploy recorded")
+        self.assertEqual(host.changes(), [])
+        self.assertEqual(host.environment(), before)
+        self.assertFalse(
+            any("systemctl" in c or "swap" in c for c in host.ssh()),
+            "read-only: one helper call and the config",
+        )
+
+    def test_rollback_check_refuses_without_helpers(self) -> None:
+        host = FakeHost(self)
+        p = host.make("rollback-check", DEPLOY_HOST="")
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertIn("DEPLOY_HOST", out(p))
 
     def test_a_failed_swap_names_the_command_that_finishes_it(self) -> None:
         host = FakeHost(
@@ -1415,16 +1503,18 @@ class SudoersDrift(unittest.TestCase):
         cases: list[tuple[str, dict[str, str], dict[str, Any]]] = [
             ("rollback", {}, {"prev": {"capabilities": None}}),
             ("rollback", {}, {}),
+            ("rollback-check", {}, {}),
             ("rollback-restore", {}, {}),
             ("rollback-restore", {"ROLLBACK_ARCHIVE": ARCHIVE}, {"pointer": False}),
             (
                 "rollback-restore",
-                {"RELEASE": "v0.41.0", "ROLLBACK_ENV": "snapshot"},
+                {"RELEASE": "v0.41.0", "ROLLBACK_ENV": "@prev_sha"},
                 {"releases": {"v0.41.0": {}}},
             ),
         ]
         for target, kw, host_kw in cases:
             host = FakeHost(self, **host_kw)
+            kw = {k: host.prev_sha if v == "@prev_sha" else v for k, v in kw.items()}
             p = host.make(target, **kw)
             self.assertEqual(p.returncode, 0, out(p))
             commands |= {
@@ -1571,8 +1661,11 @@ class MutationProbes(unittest.TestCase):
         install, F8-02 review m2) still refuses before the stop; that look is
         what keeps a restore from going ahead on the install's own result."""
         host = FakeHost(self, releases={"v0.42.0": {"levels": R2}})
+        # The kept generation says R2, so the named environment passes its own
+        # check and the install happens: the second look is what refuses.
+        host.write_generation(binary={"version": "v0.42.0", "levels": dict(R2), "enforced": False})
         m = mutant(self, "    diff = differs(src.levels, prev)\n", "    diff = []\n")
-        p = host.make("rollback-restore", guard=m, RELEASE="v0.42.0")
+        p = host.make("rollback-restore", guard=m, RELEASE="v0.42.0", ROLLBACK_ENV=host.prev_sha)
         self.assertNotEqual(p.returncode, 0, out(p))
         self.assertTrue(any("install-staged prev" in c for c in host.ssh()))
         self.assertIn("after the install", out(p))

@@ -67,6 +67,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+import re
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -125,7 +126,7 @@ class Run:
             unit=a.unit,
             archive=getattr(a, "archive", "") or "",
             release=getattr(a, "release", "") or "",
-            env_mode="unpaired" if getattr(a, "env", "") == "snapshot" else "paired",
+            env_gen=getattr(a, "env", "") or "",
         )
         self.get = guard.SSH(self.o)
         # RELEASE's file in stage_bin: fetched and not yet installed as .prev,
@@ -279,40 +280,82 @@ class Run:
             )
         return 0
 
-    def check_env(self) -> int:
+    def check_env(self, staged: bool = False) -> int:
         """Before anything is stopped or changed: the environment (unit and
-        local.conf) kept beside <bin>.prev must exist, be valid and belong to
-        it. The helper's answer carries the hash of .prev that the swap then
-        holds it to, so a deploy landing in between is refused."""
+        local.conf) kept for the binary that is, or is about to be, <bin>.prev
+        must exist, be valid and belong to it, found by that binary's sha256.
+        staged: RELEASE= asks about the fetched file in stage_bin BEFORE it
+        replaces .prev, so a refusal leaves .prev as it was. Asked again after
+        the install, the helper's answer carries the hash of .prev that the
+        swap then holds it to, so a deploy landing in between is refused."""
         o = self.o
+        key = "env_check_staged" if staged else "env_check"
         self.say(
-            f"→ Checking the unit and local.conf kept beside {o.bin}.prev (install-staged rollback check)..."
+            f"→ Checking the unit and local.conf kept for {o.stage_bin if staged else o.bin + '.prev'}"
+            f" (install-staged rollback check)..."
         )
-        r = self.g.run_remote(o.host, self.cmd("env_check"), timeout=120)
+        r = self.g.run_remote(o.host, self.cmd(key), timeout=120)
         out = self.g.clean(r.stdout)
         m = self.g.re.search(r"current_prev_sha256=([0-9a-f]{64})", out)
         if r.rc != 0 or not m:
-            why = self.g._cause(r) if r.rc != 0 else "the helper's answer carried no hash"
+            # The helper's own refusal names the kept generations and the
+            # override: print all of it (it prints no file content), not the
+            # 200-character cut the other steps use.
+            lines = [ln.strip()[:1500] for ln in self.g.clean(r.stderr).splitlines() if ln.strip()]
+            why = (
+                f"exit {r.rc}; " + " | ".join(lines[-6:])
+                if r.rc != 0 and lines
+                else self.g._cause(r)
+                if r.rc != 0
+                else "the helper's answer carried no hash"
+            )
+            what = f"the release fetched to {o.stage_bin}" if staged else f"{o.bin}.prev"
             return self.refuse(
-                f"REFUSING: the environment kept beside {o.bin}.prev cannot be restored with it ({why}). "
+                f"REFUSING: the environment kept for {what} cannot be restored with it ({why}). "
                 f"Nothing was stopped, restored or swapped; {o.unit} still runs the current binary and its "
-                "current unit and local.conf.",
+                f"current unit and local.conf.{self.prev_note()}",
                 "A rollback that put back the binary alone would start the previous build under the NEW "
                 "environment (dropped settings, an open peer allowlist). The kept environment is written by "
-                f"`make deploy` through the helpers; a {o.bin}.prev installed any other way has none. "
-                f"({self.g.DOCS}).",
+                f"`make deploy` through the helpers, one per binary; a {o.bin}.prev installed any other way "
+                f"has none. `make rollback-check` lists what is kept ({self.g.DOCS}).",
                 *(
                     []
-                    if o.env_mode == "unpaired"
+                    if o.env_gen
                     else [
-                        "If the helper says .prev is not the binary the environment belongs to (a RELEASE= "
-                        "binary), and the kept environment is the one that binary needs: ROLLBACK_ENV=snapshot."
+                        "If the helper says no environment is kept for this binary, and an earlier "
+                        "release's kept environment is the one it needs (a RELEASE= binary built elsewhere "
+                        "never has the hash of the build that was deployed): ROLLBACK_ENV=<that "
+                        "generation's sha256>."
                     ]
                 ),
             )
+        if o.env_gen:
+            gl = self.g.re.search(r"levels=(\S+)", out)
+            kept = None if not gl or gl.group(1) == "unrecorded" else self.kept_levels(gl.group(1))
+            prev, how = self.g.prev_vector(o, self.get)
+            if prev is None:
+                return self.refuse(
+                    f"REFUSING: cannot tell which store levels {o.prev} serves ({how}), so ROLLBACK_ENV "
+                    f"{o.env_gen[:12]}... cannot be checked against them. Nothing was stopped or "
+                    f"changed.{self.prev_note()}"
+                )
+            if kept is not None and self.g.differs(kept, prev):
+                return self.refuse(
+                    f"REFUSING: ROLLBACK_ENV names the environment of a binary that served "
+                    f"{self.g.fmt(kept)}, but {o.prev} serves {self.g.fmt(prev)}: it is not the "
+                    f"environment this binary needs. Nothing was stopped or changed.{self.prev_note()}",
+                    "`make rollback-check` lists the kept generations with the levels each served.",
+                )
         o.prev_sha256 = m.group(1)
         self.say("   " + out.strip().splitlines()[-1] if out.strip() else "")
         return 0
+
+    @staticmethod
+    def kept_levels(text: str) -> dict[str, int]:
+        """The helper's `owner=level,owner=level` (or `.`, every owner at 0)."""
+        if text == ".":
+            return {}
+        return {k: int(v) for k, _, v in (part.partition("=") for part in text.split(","))}
 
     def match_unit_type(self) -> int:
         caps = self.get("prev_caps")
@@ -439,8 +482,13 @@ def restore(run: Run) -> int:
             f"If it succeeded, finish with: {run.ssh_line('swap_env')} && {run.ssh_line('start')}",
             "If it failed, run make rollback-restore again once it has ended.",
         )
-    if o.release and run.install_fetched():
-        return 1
+    if o.release:
+        # Before .prev is replaced: a refusal here leaves it, and its
+        # environment, exactly as they were.
+        if run.check_env(staged=True):
+            return 1
+        if run.install_fetched():
+            return 1
     if run.check_env():
         return 1
     if run.match_unit_type():
@@ -546,6 +594,31 @@ def restore(run: Run) -> int:
     return 0
 
 
+def check(run: Run) -> int:
+    """`make rollback-check`: read-only. What environment generations the host
+    keeps (one per binary, by sha256, with the version and store levels the
+    deploy recorded) and which one the current <bin>.prev matches. Changes
+    nothing, stops nothing, fetches nothing."""
+    o = run.o
+    refusal = run.g.load_host_config(o, run.get)
+    if refusal:
+        return run.refuse(*refusal)
+    run.say(f"→ Kept environments on {o.host} (install-staged rollback list; read-only)...")
+    r = run.get("env_list")
+    if r.rc != 0:
+        return run.refuse(
+            f"REFUSING: reading the kept environments failed ({run.g._cause(r)}). Nothing was changed.",
+            f"It runs `{run.cmd('env_list')}`: check the install-staged helper and its sudoers line "
+            f"({run.g.DOCS}).",
+        )
+    run.say(*("   " + ln for ln in run.g.clean(r.stdout).strip().splitlines()))
+    run.say(
+        "A rollback restores the generation whose sha256 is the binary's own. When .prev has none "
+        "(`generation=none` above), name the one it needs: ROLLBACK_ENV=<sha256> make rollback."
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="mode", required=True)
@@ -561,7 +634,18 @@ def main(argv: list[str] | None = None) -> int:
         if mode == "restore":
             p.add_argument("--archive", default="")
             p.add_argument("--release", default="")
-        p.add_argument("--env", default="", help="'' or 'snapshot' (ROLLBACK_ENV)")
+        p.add_argument(
+            "--env",
+            default="",
+            help="'' or the sha256 of a kept environment generation (ROLLBACK_ENV)",
+        )
+    p = sub.add_parser("check")
+    for flag in ("--guard", "--host", "--bin", "--db"):
+        p.add_argument(flag, required=True)
+    p.add_argument("--unit", default="audiobook-organizer.service")
+    p.add_argument("--url", default="")
+    p.add_argument("--timeout", type=float, default=300.0)
+    p.add_argument("--env", default="")
     a = parser.parse_args(argv)
     guard = load_guard(a.guard)
     for k in ("host", "bin", "db", "unit", "url"):
@@ -569,14 +653,27 @@ def main(argv: list[str] | None = None) -> int:
     if a.mode == "restore":
         a.archive, a.release = a.archive.strip(), a.release.strip()
     a.env = a.env.strip()
-    if a.env not in ("", "snapshot"):
-        print("deploy_rollback: ROLLBACK_ENV must be empty or snapshot", file=sys.stderr)
+    if a.env == "snapshot":
+        print(
+            "deploy_rollback: ROLLBACK_ENV=snapshot is gone: it paired whatever environment was kept "
+            "with whatever binary was .prev. Name the generation instead, ROLLBACK_ENV=<sha256> "
+            "(make rollback-check lists them)",
+            file=sys.stderr,
+        )
+        return 2
+    if a.env and not re.fullmatch(r"[0-9a-f]{64}", a.env):
+        print(
+            "deploy_rollback: ROLLBACK_ENV must be empty or the 64-digit sha256 of a kept generation",
+            file=sys.stderr,
+        )
         return 2
     run = Run(guard, a)
     bad = guard._validate(run.o)
     if bad or a.timeout < 0:
         print(f"deploy_rollback: {bad or 'timeout must not be negative'}", file=sys.stderr)
         return 2
+    if a.mode == "check":
+        return check(run)
     return rollback(run) if a.mode == "rollback" else restore(run)
 
 

@@ -2157,12 +2157,17 @@ class Pprof(unittest.TestCase):
 
 class RollbackEnv(unittest.TestCase):
     """The service environment is part of a rollback: the unit and the
-    local.conf drop-in the previous binary ran under are kept beside
-    <bin>.prev as <bin>.prev.env and restored with it.
+    local.conf drop-in a binary ran under are kept, per binary, as one
+    generation under <bin>.envgen/ named by that binary's sha256, and
+    restored with it.
 
     A rollback that put the binary back alone starts the previous build
     under the NEW environment: after an env-name change that means a peer
-    allowlist that fails open and settings the old build never reads."""
+    allowlist that fails open and settings the old build never reads.
+
+    Every state here is reached by running the deploy and rollback verbs in
+    the order a host sees them, never by writing a generation by hand, except
+    where a test is about a damaged file."""
 
     # InstallStaged's fixtures, reused without its tests. host() sets these
     # attributes on the instance; they are declared so a type checker sees them.
@@ -2207,34 +2212,66 @@ class RollbackEnv(unittest.TestCase):
         self.live_conf.chmod(0o644)
         return h
 
-    def deploy(self, h, binary: str = "bat-signal-2", conf: str | None = None, unit=True) -> None:
+    def facts(self, binary: str, version="v1.0.0", levels="storage=1", enforced="0") -> list[str]:
+        """What a deploy recipe passes to `install binary` about the file it
+        stages: its hash, version, store levels and whether the retired-name
+        list is enforced in that build."""
+        return [self.text_sha(binary), version, levels, enforced]
+
+    def deploy(
+        self, h, binary: str = "bat-signal-2", conf: str | None = None, unit=True, facts=None
+    ) -> None:
         """What make deploy runs through the helper, in its order."""
         (self.stage / "audiobook-organizer").write_text(binary)
         self.stage_conf(self.NEW_CONF if conf is None else conf)
         if unit:
             self.assertEqual(h.run("install", "unit")[0], 0)
         self.assertEqual(h.run("install", "local-conf")[0], 0)
-        code, _, err = h.run("install", "binary")
+        code, _, err = h.run("install", "binary", *(facts or []))
         self.assertEqual(code, 0, err)
 
+    def conf(self, tag: str) -> str:
+        return f"[Service]\nEnvironment=GEN{tag}=1\n"
+
+    def gdir(self) -> Path:
+        return Path(f"{self.b}.envgen")
+
+    def gens(self) -> set[str]:
+        return {p.stem for p in self.gdir().glob("*.json") if len(p.stem) == 64}
+
+    def gen(self, sha: str) -> dict:
+        return json.loads((self.gdir() / f"{sha}.json").read_text())
+
+    def prev_sha(self) -> str:
+        return self.sha(Path(f"{self.b}.prev"))
+
     def bundle(self) -> dict:
-        return json.loads(Path(f"{self.b}.prev.env").read_text())
+        """The generation of the binary kept as .prev."""
+        return self.gen(self.prev_sha())
 
     def sha(self, path: Path) -> str:
+        return self.text_sha(path.read_bytes())
+
+    @staticmethod
+    def text_sha(data) -> str:
         import hashlib
 
-        return hashlib.sha256(path.read_bytes()).hexdigest()
+        return hashlib.sha256(data if isinstance(data, bytes) else data.encode()).hexdigest()
 
-    # -- a deploy keeps the previous environment beside .prev ---------------
+    def roll(self, h, *argv):
+        return h.run("install", "rollback", *argv)
 
-    def test_a_deploy_keeps_the_previous_unit_and_local_conf_with_prev(self):
+    # -- a deploy keeps the previous environment under the previous binary ---
+
+    def test_a_deploy_keeps_the_previous_unit_and_local_conf_by_the_replaced_binarys_hash(self):
         h = self.env_host()
         before = self.sha(self.b)
         self.deploy(h)
-        env = Path(f"{self.b}.prev.env")
-        self.assertEqual(stat.S_IMODE(os.stat(env).st_mode), 0o600, "local.conf may carry secrets")
+        self.assertEqual(stat.S_IMODE(os.stat(self.gdir()).st_mode), 0o700)
+        path = self.gdir() / f"{before}.json"
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600, "local.conf may carry secrets")
         doc = self.bundle()
-        self.assertEqual(doc["prev_sha256"], before)
+        self.assertEqual(doc["bin_sha256"], before)
         self.assertEqual(
             doc["unit"], {"present": True, "text": self.OLD_UNIT_MARK + self.unit_text}
         )
@@ -2242,16 +2279,32 @@ class RollbackEnv(unittest.TestCase):
         # ... while the live files are the new deploy's.
         self.assertEqual(self.live_unit.read_text(), self.unit_text)
         self.assertIn("ABO_CORE_PEERS", self.live_conf.read_text())
-        self.assertFalse(Path(f"{env}.pending").exists(), "the capture was promoted, not left over")
+        self.assertFalse((self.gdir() / "pending.json").exists(), "the capture was promoted")
         self.assertEqual(Path(f"{self.b}.prev").read_text(), "bat-signal-1")
 
     def test_nothing_is_kept_before_the_binary_is_replaced(self):
-        """The snapshot is committed with .prev, only when the binary rotates:
-        a deploy that stopped after the unit leaves the old pair intact."""
+        """A generation is committed only when the binary rotates: a deploy
+        that stopped after the unit leaves the kept ones intact."""
         h = self.env_host()
         self.assertEqual(h.run("install", "unit")[0], 0)
-        self.assertFalse(Path(f"{self.b}.prev.env").exists())
-        self.assertTrue(Path(f"{self.b}.prev.env.pending").exists())
+        self.assertEqual(self.gens(), set())
+        self.assertTrue((self.gdir() / "pending.json").exists())
+
+    def test_each_deploy_keeps_its_own_generation_and_a_rollback_finds_it_by_hash(self):
+        h = self.env_host()
+        a = self.sha(self.b)
+        self.deploy(h, "bat-signal-2", conf=self.conf("B"))
+        b = self.sha(self.b)
+        self.deploy(h, "bat-signal-3", conf=self.conf("C"))
+        self.assertEqual(self.gens(), {a, b})
+        self.assertIn("BATCAVE_PEERS", self.gen(a)["local_conf"]["text"])
+        self.assertIn("GENB", self.gen(b)["local_conf"]["text"])
+        # .prev is bat-signal-2: its generation is b's, not the newest or the oldest.
+        self.assertEqual(self.prev_sha(), b)
+        code, _, err = self.roll(h, "apply", b)
+        self.assertEqual(code, 0, err)
+        self.assertIn("GENB", self.live_conf.read_text())
+        self.assertNotIn("BATCAVE_PEERS", self.live_conf.read_text())
 
     def test_a_rerun_after_a_half_done_deploy_keeps_the_real_previous_environment(self):
         h = self.env_host()
@@ -2277,9 +2330,7 @@ class RollbackEnv(unittest.TestCase):
         self.live_conf.unlink()
         self.deploy(h, conf="[Service]\nEnvironment=A=1\n")
         self.assertEqual(self.bundle()["local_conf"], {"present": False})
-        self.assertEqual(
-            h.run("install", "rollback", "apply", "paired", self.bundle()["prev_sha256"])[0], 0
-        )
+        self.assertEqual(self.roll(h, "apply", self.prev_sha())[0], 0)
         self.assertFalse(self.live_conf.exists(), "the drop-in the deploy added is removed")
 
     def test_the_first_ever_binary_install_has_nothing_to_keep(self):
@@ -2287,8 +2338,8 @@ class RollbackEnv(unittest.TestCase):
         self.b.unlink()
         self.deploy(h)
         self.assertFalse(Path(f"{self.b}.prev").exists())
-        self.assertFalse(Path(f"{self.b}.prev.env").exists())
-        self.assertFalse(Path(f"{self.b}.prev.env.pending").exists())
+        self.assertEqual(self.gens(), set())
+        self.assertFalse((self.gdir() / "pending.json").exists())
 
     def test_a_capture_made_under_another_binary_is_dropped_not_trusted(self):
         """An older half-done deploy's capture, then the binary was changed
@@ -2300,38 +2351,55 @@ class RollbackEnv(unittest.TestCase):
         code, _, err = h.run("install", "binary")
         self.assertEqual(code, 0, err)
         self.assertIn("stale", err)
-        self.assertFalse(Path(f"{self.b}.prev.env").exists())
+        self.assertEqual(self.gens(), set())
         self.assertEqual(Path(f"{self.b}.prev").read_text(), "hand-swapped")
 
     def test_a_new_deploy_restarts_a_capture_made_under_another_binary(self):
         """The stale capture is not carried into the next deploy: that deploy
         captures what is live now, under the binary installed now, so its
-        rollback still has an environment (a kept stale capture would make
-        the promote drop the snapshot)."""
+        rollback still has an environment."""
         h = self.env_host()
         self.assertEqual(h.run("install", "unit")[0], 0)  # captures the OLD unit
         self.b.write_text("hand-swapped")
         self.deploy(h, binary="bat-signal-3")
         doc = self.bundle()
-        self.assertEqual(doc["prev_sha256"], self.sha(Path(f"{self.b}.prev")))
+        self.assertEqual(doc["bin_sha256"], self.prev_sha())
         self.assertEqual(Path(f"{self.b}.prev").read_text(), "hand-swapped")
         self.assertNotIn(self.OLD_UNIT_MARK, doc["unit"]["text"])
-        self.assertFalse(Path(f"{self.b}.prev.env.pending").exists())
+        self.assertFalse((self.gdir() / "pending.json").exists())
 
-    def test_a_stale_snapshot_never_outlives_a_deploy_whose_keep_failed(self):
+    def test_a_failed_keep_drops_only_the_generation_it_was_writing(self):
+        """The generations are keyed by binary, so an older binary's stay
+        valid when a later deploy cannot write beside .prev. What must go is
+        the generation of the binary now kept as .prev: an earlier deploy's
+        copy of it is not the environment it ran under last."""
         h = self.env_host()
-        self.deploy(h)
-        self.assertTrue(Path(f"{self.b}.prev.env").exists())
-        # The next deploy cannot write beside .prev: it refuses and leaves
-        # the live binary alone, and the old snapshot (of an OLDER binary)
-        # is gone rather than paired with the new .prev.
-        (self.stage / "audiobook-organizer").write_text("bat-signal-3")
+        a = self.sha(self.b)
+        self.deploy(h, "bat-signal-2", conf=self.conf("B"))
+        b = self.sha(self.b)
+        self.deploy(h, "bat-signal-3", conf=self.conf("C"))
+        self.assertEqual(self.gens(), {a, b})
+        # bat-signal-2 comes back as the binary (a hand rollback), is then
+        # deployed over by bat-signal-4, and the keep for it fails.
+        self.b.write_text("bat-signal-2")
+        (self.stage / "audiobook-organizer").write_text("bat-signal-4")
         with unittest.mock.patch.object(h.mod, "_env_promote", side_effect=OSError("disk full")):
             code, _, err = h.run("install", "binary")
         self.assertEqual(code, 1, err)
         self.assertIn("disk full", err)
         self.assertEqual(self.b.read_text(), "bat-signal-2", "the binary is unchanged")
-        self.assertFalse(Path(f"{self.b}.prev.env").exists())
+        self.assertEqual(self.gens(), {a}, "b's stale generation is gone, a's is untouched")
+
+    def test_an_unreadable_live_unit_does_not_block_the_deploy_but_blocks_the_rollback(self):
+        h = self.env_host()
+        self.live_unit.chmod(0o666)  # group- and world-writable: not root-trusted
+        self.deploy(h)
+        self.assertEqual(self.bundle()["unit"], {"unreadable": True})
+        code, _, err = self.roll(h, "check", "prev")
+        self.assertEqual(code, 1)
+        self.assertIn("could not be read", err)
+
+    # -- a failed deploy never lets a rerun mislabel the environment --------
 
     def half_deploy(self, h, fail: str) -> None:
         """A deploy whose unit and local.conf are installed and whose binary
@@ -2362,48 +2430,259 @@ class RollbackEnv(unittest.TestCase):
         self.assertEqual(self.b.read_text(), "bat-signal-1", "the binary is unchanged")
 
     def test_a_failed_binary_write_does_not_let_a_rerun_label_the_new_environment_as_old(self):
-        """The capture is committed before the binary is written. If it were
-        deleted then, the rerun would capture the NEW unit and local.conf the
-        first run installed, under the OLD binary, and a rollback would call
-        that pair consistent."""
+        """The capture is committed before the binary is renamed in. If it
+        were deleted then, the rerun would capture the NEW unit and local.conf
+        the first run installed, under the OLD binary, and a rollback would
+        call that pair consistent."""
         for fail in ("write", "promote"):
             with self.subTest(fail=fail):
                 h = self.env_host()
                 self.half_deploy(h, fail)
                 self.deploy(h)  # the same deploy, run again
                 doc = self.bundle()
-                self.assertEqual(doc["prev_sha256"], self.sha(Path(f"{self.b}.prev")))
+                self.assertEqual(doc["bin_sha256"], self.prev_sha())
                 self.assertEqual(Path(f"{self.b}.prev").read_text(), "bat-signal-1")
                 self.assertEqual(
                     doc["unit"], {"present": True, "text": self.OLD_UNIT_MARK + self.unit_text}
                 )
                 self.assertEqual(doc["local_conf"], {"present": True, "text": self.OLD_CONF})
-                self.assertFalse(Path(f"{self.b}.prev.env.pending").exists())
+                self.assertFalse((self.gdir() / "pending.json").exists())
 
     def test_the_capture_outlives_a_failed_write_and_goes_with_a_good_one(self):
         h = self.env_host()
         self.half_deploy(h, "write")
-        self.assertTrue(Path(f"{self.b}.prev.env.pending").exists())
+        self.assertTrue((self.gdir() / "pending.json").exists())
         self.deploy(h)
-        self.assertFalse(Path(f"{self.b}.prev.env.pending").exists())
+        self.assertFalse((self.gdir() / "pending.json").exists())
 
-    def test_an_unreadable_live_unit_does_not_block_the_deploy_but_blocks_the_rollback(self):
+    def test_a_full_disk_while_writing_the_new_binary_rotates_nothing(self):
+        """The new bytes are written first: a failure there leaves .prev and
+        the kept generations exactly as they were."""
         h = self.env_host()
-        self.live_unit.chmod(0o666)  # group- and world-writable: not root-trusted
-        self.deploy(h)
-        self.assertEqual(self.bundle()["unit"], {"unreadable": True})
-        code, _, err = h.run("install", "rollback", "check", "paired")
-        self.assertEqual(code, 1)
-        self.assertIn("could not be read", err)
+        self.deploy(h, "bat-signal-2", conf=self.conf("B"))
+        before_prev = Path(f"{self.b}.prev").read_bytes()
+        before_gens = {s: (self.gdir() / f"{s}.json").read_bytes() for s in self.gens()}
+        (self.stage / "audiobook-organizer").write_text("bat-signal-3")
+        with unittest.mock.patch.object(
+            h.mod.shutil, "copy2", side_effect=AssertionError("must not rotate")
+        ):
+            real_open = os.open
+
+            def failing_open(path, *a, **kw):
+                if str(path) == f"{self.b}.new":
+                    raise OSError("no space left on device")
+                return real_open(path, *a, **kw)
+
+            with unittest.mock.patch.object(h.mod.os, "open", side_effect=failing_open):
+                code, _, err = h.run("install", "binary")
+        self.assertEqual(code, 1, err)
+        self.assertEqual(Path(f"{self.b}.prev").read_bytes(), before_prev)
+        self.assertEqual(
+            {s: (self.gdir() / f"{s}.json").read_bytes() for s in self.gens()}, before_gens
+        )
+        self.assertEqual(self.b.read_text(), "bat-signal-2")
+
+    # -- the same build again rotates nothing --------------------------------
+
+    def test_a_redeploy_of_the_same_build_rotates_nothing_and_drops_its_capture(self):
+        """A hotfix of the same bytes (an environment-only change) must not
+        make .prev the flip build and push the pre-flip generation out. The
+        capture it made is not carried into a later rotation: it describes an
+        environment the binary was already running under."""
+        h = self.env_host()
+        self.deploy(h, "bat-signal-2", conf=self.conf("B"))
+        prev_bytes = Path(f"{self.b}.prev").read_bytes()
+        gens = {s: (self.gdir() / f"{s}.json").read_bytes() for s in self.gens()}
+        self.deploy(h, "bat-signal-2", conf=self.conf("B2"))
+        self.deploy(h, "bat-signal-2", conf=self.conf("B3"))
+        self.assertEqual(Path(f"{self.b}.prev").read_bytes(), prev_bytes)
+        self.assertEqual({s: (self.gdir() / f"{s}.json").read_bytes() for s in self.gens()}, gens)
+        self.assertFalse((self.gdir() / "pending.json").exists())
+        self.assertIn("GENB3", self.live_conf.read_text())
+        # The next real deploy keeps what bat-signal-2 last ran under.
+        self.deploy(h, "bat-signal-3", conf=self.conf("C"))
+        self.assertIn("GENB3", self.bundle()["local_conf"]["text"])
+
+    def test_the_same_build_says_so(self):
+        h = self.env_host()
+        self.deploy(h, "bat-signal-2")
+        (self.stage / "audiobook-organizer").write_text("bat-signal-2")
+        code, out, err = h.run("install", "binary")
+        self.assertEqual(code, 0, err)
+        self.assertIn("nothing replaced", out)
+
+    # -- the flip can be undone after hotfixes ------------------------------
+
+    def flip_then_hotfixes(self, h, hotfixes: int) -> tuple[str, str]:
+        """P (pre-flip, the host's OLD environment) -> F (the flip, new
+        environment, a store level up) -> hotfixes of different bytes at the
+        flip's level. Returns the hash of P and of F."""
+        p = self.sha(self.b)
+        self.deploy(
+            h,
+            "flip-build",
+            conf=self.NEW_CONF,
+            facts=self.facts("flip-build", "v2.0.0", "storage=2", "1"),
+        )
+        f = self.sha(self.b)
+        for n in range(hotfixes):
+            tag = f"hotfix-{n}"
+            self.deploy(
+                h,
+                tag,
+                conf=self.conf(f"H{n}"),
+                facts=self.facts(tag, f"v2.0.{n + 1}", "storage=2", "1"),
+            )
+        return p, f
+
+    def test_the_pre_flip_environment_survives_hotfixes_and_its_rollback_pairs_it(self):
+        """After the flip and four hotfixes, .prev is a hotfix and the
+        pre-flip environment is no newer than five generations back. It is
+        kept (the flip deploy raised the level it was replacing), and
+        RELEASE=<pre-flip> installs the pre-flip bytes as .prev, which the
+        rollback pairs with that environment by hash."""
+        h = self.env_host()
+        p, f = self.flip_then_hotfixes(h, 4)
+        self.assertIn(p, self.gens(), "pinned: the flip replaced it across a level change")
+        self.assertNotIn(f, self.gens(), "the flip's own generation is not pinned and aged out")
+        self.assertEqual(len(self.gens()), 4, "the newest 3 plus the pinned one")
+        # RELEASE=<pre-flip>: the same bytes arrive as .prev.
+        (self.stage / "audiobook-organizer").write_text("bat-signal-1")
+        self.assertEqual(h.run("install", "prev")[0], 0)
+        self.assertEqual(self.prev_sha(), p)
+        code, out, err = self.roll(h, "check", "prev")
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"generation={p}", out)
+        self.assertEqual(self.roll(h, "apply", p)[0], 0)
+        self.assertEqual(self.b.read_text(), "bat-signal-1")
+        self.assertIn("BATCAVE_PEERS", self.live_conf.read_text())
+        self.assertEqual(self.live_unit.read_text(), self.OLD_UNIT_MARK + self.unit_text)
+
+    def test_without_a_boundary_the_oldest_generation_ages_out(self):
+        """The pin is for boundaries only: deploys at one level with the list
+        in one state keep the newest GEN_KEEP and no more, so the directory
+        does not grow without bound."""
+        h = self.env_host()
+        self.b.unlink()
+        self.deploy(h, "bat-signal-1", facts=self.facts("bat-signal-1"))
+        first = self.sha(self.b)
+        for n in range(2, 6):
+            self.deploy(
+                h, f"bat-signal-{n}", conf=self.conf(str(n)), facts=self.facts(f"bat-signal-{n}")
+            )
+        self.assertNotIn(first, self.gens())
+        self.assertEqual(len(self.gens()), 3)
+
+    def test_a_deploy_that_tells_nothing_about_the_binary_pins_what_it_replaces(self):
+        """Without facts the helper cannot tell a boundary from a routine
+        deploy, and one extra generation costs less than a lost one. Later
+        routine deploys (with facts) age out around it."""
+        h = self.env_host()
+        p = self.sha(self.b)
+        self.deploy(h, "bat-signal-2", conf=self.conf("2"))
+        for n in range(3, 8):
+            tag = f"bat-signal-{n}"
+            self.deploy(h, tag, conf=self.conf(str(n)), facts=self.facts(tag))
+        self.assertIn(p, self.gens())
+        self.assertNotIn(self.text_sha("bat-signal-3"), self.gens(), "a routine one aged out")
+
+    def test_pins_are_bounded(self):
+        h = self.env_host()
+        for n in range(2, 14):
+            self.deploy(h, f"bat-signal-{n}", conf=self.conf(str(n)))
+        self.assertLessEqual(len(self.gens()), 6, "GEN_KEEP + GEN_KEEP_PINNED")
+
+    def test_a_damaged_generation_blocks_eviction_not_the_deploy(self):
+        h = self.env_host()
+        self.deploy(h, "bat-signal-2", conf=self.conf("2"))
+        (self.gdir() / ("0" * 64 + ".json")).write_text("{")
+        for n in range(3, 8):
+            self.deploy(h, f"bat-signal-{n}", conf=self.conf(str(n)))
+        self.assertGreater(len(self.gens()), 3, "nothing was evicted while a file was unreadable")
+
+    # -- facts the recipe passes ---------------------------------------------
+
+    def test_the_recipes_facts_are_recorded_and_listed_without_content(self):
+        h = self.env_host()
+        self.deploy(
+            h, "bat-signal-2", facts=self.facts("bat-signal-2", "v1.2.3", "storage=1,books=4", "0")
+        )
+        self.deploy(
+            h,
+            "bat-signal-3",
+            conf=self.conf("C"),
+            facts=self.facts("bat-signal-3", "v1.2.4", "storage=1,books=4", "0"),
+        )
+        code, out, err = self.roll(h, "list")
+        self.assertEqual(code, 0, err)
+        b = self.sha(Path(f"{self.b}.prev"))
+        self.assertIn(f"generation sha256={b}", out)
+        self.assertIn("version=v1.2.3 levels=books=4,storage=1", out)
+        self.assertIn(f"prev sha256={b} generation={b}", out)
+        self.assertIn("unit=present local_conf=present", out)
+        self.assertNotIn("BATCAVE_PEERS", out + err, "a listing never prints the environment")
+        self.assertNotIn("GENC", out + err)
+        # the first generation's binary was installed with no facts
+        self.assertIn("version=unrecorded levels=unrecorded", out)
+
+    def test_check_prints_the_hash_generation_version_and_levels(self):
+        h = self.env_host()
+        self.deploy(h, "bat-signal-2", facts=self.facts("bat-signal-2", "v1.2.3", ".", "1"))
+        self.deploy(
+            h,
+            "bat-signal-3",
+            conf=self.conf("C"),
+            facts=self.facts("bat-signal-3", "v1.2.4", "storage=2", "1"),
+        )
+        code, out, err = self.roll(h, "check", "prev")
+        self.assertEqual(code, 0, err)
+        b = self.prev_sha()
+        self.assertIn(f"current_prev_sha256={b}", out)
+        self.assertIn(f"generation={b}", out)
+        self.assertIn("version=v1.2.3 levels=. pinned=", out)
+
+    def test_facts_about_another_file_than_the_one_installed_are_not_recorded(self):
+        h = self.env_host()
+        self.deploy(h, "bat-signal-2")
+        (self.stage / "audiobook-organizer").write_text("bat-signal-3")
+        code, _, err = h.run("install", "binary", *self.facts("not-the-staged-file", "v9.9.9"))
+        self.assertEqual(code, 0, err)
+        self.assertIn("another file", err)
+        self.assertNotIn("v9.9.9", Path(f"{self.gdir()}/current.json").read_text())
+
+    def test_malformed_facts_are_refused_before_anything_changes(self):
+        h = self.env_host()
+        (self.stage / "audiobook-organizer").write_text("bat-signal-2")
+        good = self.facts("bat-signal-2")
+        bad = {
+            "too few": good[:3],
+            "too many": good + ["x"],
+            "bad sha": ["XYZ", *good[1:]],
+            "bad version": [good[0], "v1; rm -rf /", good[2], good[3]],
+            "bad levels": [good[0], good[1], "storage=one", good[3]],
+            "levels with a space": [good[0], good[1], "a=1, b=2", good[3]],
+            "bad owner": [good[0], good[1], "Storage=1", good[3]],
+            "bad enforced": [good[0], good[1], good[2], "yes"],
+        }
+        for name, argv in bad.items():
+            with self.subTest(name):
+                self.assertEqual(h.run("install", "binary", *argv)[0], 2)
+                self.assertEqual(self.b.read_text(), "bat-signal-1")
+                self.assertFalse(Path(f"{self.b}.prev").exists())
+
+    def test_a_bare_install_binary_still_works(self):
+        h = self.env_host()
+        (self.stage / "audiobook-organizer").write_text("bat-signal-2")
+        self.assertEqual(h.run("install", "binary")[0], 0)
 
     # -- the rollback restores all three, or none ---------------------------
 
     def test_rollback_restores_the_binary_the_unit_and_local_conf_together(self):
         h = self.env_host()
         self.deploy(h)
-        prev = self.sha(Path(f"{self.b}.prev"))
+        prev = self.prev_sha()
         h_calls_before = len(h.tools())
-        code, out, err = h.run("install", "rollback", "apply", "paired", prev)
+        code, out, err = self.roll(h, "apply", prev)
         self.assertEqual(code, 0, err)
         self.assertEqual(self.b.read_text(), "bat-signal-1")
         self.assertEqual(self.live_unit.read_text(), self.OLD_UNIT_MARK + self.unit_text)
@@ -2424,9 +2703,9 @@ class RollbackEnv(unittest.TestCase):
     def test_rollback_is_idempotent_and_can_be_finished_after_an_interruption(self):
         h = self.env_host()
         self.deploy(h)
-        prev = self.sha(Path(f"{self.b}.prev"))
-        self.assertEqual(h.run("install", "rollback", "apply", "paired", prev)[0], 0)
-        self.assertEqual(h.run("install", "rollback", "apply", "paired", prev)[0], 0)
+        prev = self.prev_sha()
+        self.assertEqual(self.roll(h, "apply", prev)[0], 0)
+        self.assertEqual(self.roll(h, "apply", prev)[0], 0)
         self.assertEqual(self.b.read_text(), "bat-signal-1")
 
     def test_an_interrupted_rollback_has_not_replaced_the_binary_yet(self):
@@ -2436,7 +2715,7 @@ class RollbackEnv(unittest.TestCase):
         rollback has not restored."""
         h = self.env_host()
         self.deploy(h)
-        prev = self.sha(Path(f"{self.b}.prev"))
+        prev = self.prev_sha()
         conf_dest = str(self.live_conf)
         real_replace = os.replace
 
@@ -2446,11 +2725,11 @@ class RollbackEnv(unittest.TestCase):
             return real_replace(src, dst, *a, **kw)
 
         with unittest.mock.patch.object(h.mod.os, "replace", side_effect=failing):
-            code, _, err = h.run("install", "rollback", "apply", "paired", prev)
+            code, _, err = self.roll(h, "apply", prev)
         self.assertNotEqual(code, 0)
         self.assertIn("run `install rollback apply` again", err)
         self.assertEqual(self.b.read_text(), "bat-signal-2", "the binary is the last rename")
-        self.assertEqual(h.run("install", "rollback", "apply", "paired", prev)[0], 0)
+        self.assertEqual(self.roll(h, "apply", prev)[0], 0)
         self.assertEqual(self.b.read_text(), "bat-signal-1")
         self.assertIn("Environment=BATCAVE_PEERS=192.0.2.0/24", self.live_conf.read_text())
 
@@ -2461,25 +2740,42 @@ class RollbackEnv(unittest.TestCase):
             p: p.read_bytes()
             for p in (self.b, self.live_unit, self.live_conf, Path(f"{self.b}.prev"))
         }
+        gens = {s: (self.gdir() / f"{s}.json").read_bytes() for s in self.gens()}
         changed = self.changes(h)
-        code, out, err = h.run("install", "rollback", "check", "paired")
+        code, out, err = self.roll(h, "check", "prev")
         self.assertEqual(code, 0, err)
-        self.assertIn(f"current_prev_sha256={self.sha(Path(f'{self.b}.prev'))}", out)
+        self.assertIn(f"current_prev_sha256={self.prev_sha()}", out)
         self.assertIn("environment_lines=1", out)
         self.assertEqual({p: p.read_bytes() for p in before}, before)
+        self.assertEqual({s: (self.gdir() / f"{s}.json").read_bytes() for s in self.gens()}, gens)
         self.assertEqual(self.changes(h), changed, "check reloads nothing")
         self.assertFalse(Path(f"{self.b}.rolled-back").exists())
+
+    def test_check_can_ask_about_a_binary_that_is_not_prev_yet(self):
+        """RELEASE= asks before it installs anything: the hash of the staged
+        file, no .prev needed."""
+        h = self.env_host()
+        a = self.sha(self.b)
+        self.deploy(h)
+        (self.stage / "audiobook-organizer").write_text("a-release-built-elsewhere")
+        other = self.text_sha("a-release-built-elsewhere")
+        code, _, err = self.roll(h, "check", other)
+        self.assertEqual(code, 1)
+        self.assertIn("no kept environment for the binary", err)
+        self.assertEqual(self.roll(h, "check", a)[0], 0, "the replaced binary's hash has one")
+        Path(f"{self.b}.prev").unlink()
+        self.assertEqual(self.roll(h, "check", a)[0], 0, "and it needs no .prev to ask")
 
     def test_rollback_refuses_without_a_kept_environment_and_changes_nothing(self):
         h = self.env_host()
         Path(f"{self.b}.prev").write_text("bat-signal-0")  # an old-style deploy's .prev
         before = (self.b.read_bytes(), self.live_unit.read_bytes(), self.live_conf.read_bytes())
-        for argv in (("check", "paired"), ("apply", "paired", self.sha(Path(f"{self.b}.prev")))):
+        for argv in (("check", "prev"), ("apply", self.prev_sha())):
             with self.subTest(argv=argv):
-                code, _, err = h.run("install", "rollback", *argv)
+                code, _, err = self.roll(h, *argv)
                 self.assertEqual(code, 1)
                 self.assertIn("binary alone", err)
-                self.assertIn(f"{self.b}.prev.env", err)
+                self.assertIn("none are kept", err)
         self.assertEqual(
             (self.b.read_bytes(), self.live_unit.read_bytes(), self.live_conf.read_bytes()), before
         )
@@ -2491,44 +2787,69 @@ class RollbackEnv(unittest.TestCase):
         the hash the recipe checked is no longer the file there."""
         h = self.env_host()
         self.deploy(h)
-        checked = self.sha(Path(f"{self.b}.prev"))
-        self.deploy(h, binary="bat-signal-3")  # rotates .prev (and the snapshot)
-        code, _, err = h.run("install", "rollback", "apply", "paired", checked)
+        checked = self.prev_sha()
+        self.deploy(h, binary="bat-signal-3")  # rotates .prev
+        code, _, err = self.roll(h, "apply", checked)
         self.assertEqual(code, 1)
         self.assertIn("landed in between", err)
         self.assertEqual(self.b.read_text(), "bat-signal-3")
         self.assertIn("ABO_CORE_PEERS", self.live_conf.read_text())
 
-    def test_rollback_refuses_a_prev_the_environment_was_not_kept_with_unless_told(self):
+    def test_a_prev_no_generation_belongs_to_is_refused_with_the_list_and_how_to_name_one(self):
         """make rollback-restore RELEASE=<tag> installs a fetched binary as
-        .prev; the snapshot was taken with the one the deploy replaced."""
+        .prev. A release built elsewhere never has the hash of the build that
+        was deployed, so no generation matches it by hash: the rollback says
+        which are kept and how to name one."""
         h = self.env_host()
+        a = self.sha(self.b)
         self.deploy(h)
         (self.stage / "audiobook-organizer").write_text("release-binary")
         self.assertEqual(h.run("install", "prev")[0], 0)
-        fetched = self.sha(Path(f"{self.b}.prev"))
-        for mode in ("check", "apply"):
-            with self.subTest(mode=mode):
-                argv = (mode, "paired") + ((fetched,) if mode == "apply" else ())
-                code, _, err = h.run("install", "rollback", *argv)
+        fetched = self.prev_sha()
+        for argv in (("check", "prev"), ("apply", fetched)):
+            with self.subTest(argv=argv):
+                code, _, err = self.roll(h, *argv)
                 self.assertEqual(code, 1)
-                self.assertIn("ROLLBACK_ENV=snapshot", err)
+                self.assertIn("ROLLBACK_ENV=<sha256>", err)
+                self.assertIn(a, err, "the kept generations are listed by hash")
         self.assertEqual(self.b.read_text(), "bat-signal-2")
-        code, _, err = h.run("install", "rollback", "apply", "unpaired", fetched)
+
+    def test_naming_a_generation_by_its_hash_restores_it_with_a_prev_of_another_hash(self):
+        h = self.env_host()
+        a = self.sha(self.b)
+        self.deploy(h)
+        (self.stage / "audiobook-organizer").write_text("release-binary")
+        self.assertEqual(h.run("install", "prev")[0], 0)
+        fetched = self.prev_sha()
+        code, out, err = self.roll(h, "check", "prev", a)
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"generation={a}", out)
+        code, _, err = self.roll(h, "apply", fetched, a)
         self.assertEqual(code, 0, err)
         self.assertEqual(self.b.read_text(), "release-binary")
         self.assertIn("BATCAVE_PEERS", self.live_conf.read_text())
 
+    def test_naming_a_generation_that_does_not_exist_is_refused(self):
+        h = self.env_host()
+        self.deploy(h)
+        nope = "ab" * 32
+        for argv in (("check", "prev", nope), ("apply", self.prev_sha(), nope)):
+            with self.subTest(argv=argv):
+                code, _, err = self.roll(h, *argv)
+                self.assertEqual(code, 1)
+                self.assertIn("no kept environment with that sha256", err)
+        self.assertEqual(self.b.read_text(), "bat-signal-2")
+
     def test_rollback_refuses_a_kept_unit_that_fails_the_unit_rules(self):
-        """The bundle is root-only, but a rollback writes a unit systemd runs
-        as root: it is held to the rules install unit holds a template to."""
+        """The generation is root-only, but a rollback writes a unit systemd
+        runs as root: it is held to the rules install unit holds a template to."""
         h = self.env_host()
         self.deploy(h)
         doc = self.bundle()
         doc["unit"]["text"] = doc["unit"]["text"].replace("User=alfred", "User=root")
-        Path(f"{self.b}.prev.env").write_text(json.dumps(doc))
+        (self.gdir() / f"{doc['bin_sha256']}.json").write_text(json.dumps(doc))
         before = (self.b.read_bytes(), self.live_unit.read_bytes(), self.live_conf.read_bytes())
-        code, _, err = h.run("install", "rollback", "apply", "paired", doc["prev_sha256"])
+        code, _, err = self.roll(h, "apply", doc["bin_sha256"])
         self.assertEqual(code, 1)
         self.assertIn("the kept unit", err)
         self.assertEqual(
@@ -2546,27 +2867,25 @@ class RollbackEnv(unittest.TestCase):
             with self.subTest(bad=bad):
                 doc = self.bundle()
                 doc["local_conf"] = {"present": True, "text": bad}
-                Path(f"{self.b}.prev.env").write_text(json.dumps(doc))
-                code, _, err = h.run("install", "rollback", "apply", "paired", doc["prev_sha256"])
+                (self.gdir() / f"{doc['bin_sha256']}.json").write_text(json.dumps(doc))
+                code, _, err = self.roll(h, "apply", doc["bin_sha256"])
                 self.assertEqual(code, 1)
                 self.assertIn("the kept local.conf", err)
                 self.assertEqual(self.b.read_text(), "bat-signal-2")
                 self.assertNotIn("LD_PRELOAD", self.live_conf.read_text())
 
-    def test_rollback_refuses_a_malformed_or_unsafe_bundle(self):
+    def test_rollback_refuses_a_malformed_or_unsafe_generation(self):
         h = self.env_host()
         self.deploy(h)
-        env = Path(f"{self.b}.prev.env")
-        good = env.read_text()
-        sha = self.bundle()["prev_sha256"]
+        sha = self.prev_sha()
+        gfile = self.gdir() / f"{sha}.json"
+        good = gfile.read_text()
         cases = {
             "not json": "{",
             "a list": "[]",
             "wrong version": json.dumps({**json.loads(good), "version": 99}),
-            "no hash": json.dumps(
-                {k: v for k, v in json.loads(good).items() if k != "prev_sha256"}
-            ),
-            "bad hash": json.dumps({**json.loads(good), "prev_sha256": "XYZ"}),
+            "another binary's hash": json.dumps({**json.loads(good), "bin_sha256": "ab" * 32}),
+            "no seq": json.dumps({k: v for k, v in json.loads(good).items() if k != "seq"}),
             "no unit": json.dumps({k: v for k, v in json.loads(good).items() if k != "unit"}),
             "unit absent": json.dumps({**json.loads(good), "unit": {"present": False}}),
             "text not a string": json.dumps(
@@ -2575,27 +2894,30 @@ class RollbackEnv(unittest.TestCase):
         }
         for name, text in cases.items():
             with self.subTest(name):
-                env.write_text(text)
-                code, _, err = h.run("install", "rollback", "apply", "paired", sha)
+                gfile.write_text(text)
+                code, _, err = self.roll(h, "apply", sha)
                 self.assertEqual(code, 1, err)
                 self.assertEqual(self.b.read_text(), "bat-signal-2")
-        env.write_text(good)
-        env.chmod(0o666)
-        self.assertEqual(
-            h.run("install", "rollback", "apply", "paired", sha)[0], 1, "group-writable"
-        )
-        env.chmod(0o600)
-        env.unlink()
-        os.symlink(self.live_unit, env)
-        self.assertEqual(h.run("install", "rollback", "apply", "paired", sha)[0], 1, "a symlink")
+        gfile.write_text(good)
+        gfile.chmod(0o666)
+        self.assertEqual(self.roll(h, "apply", sha)[0], 1, "group-writable")
+        gfile.chmod(0o600)
+        gfile.unlink()
+        os.symlink(self.live_unit, gfile)
+        self.assertEqual(self.roll(h, "apply", sha)[0], 1, "a symlink")
+        self.assertEqual(self.b.read_text(), "bat-signal-2")
+        gfile.unlink()
+        gfile.write_text(good)
+        os.chmod(self.gdir(), 0o777)
+        self.assertEqual(self.roll(h, "apply", sha)[0], 1, "a world-writable directory")
         self.assertEqual(self.b.read_text(), "bat-signal-2")
 
     def test_rollback_refuses_when_there_is_no_prev(self):
         h = self.env_host()
         self.deploy(h)
-        sha = self.bundle()["prev_sha256"]
+        sha = self.prev_sha()
         Path(f"{self.b}.prev").unlink()
-        code, _, err = h.run("install", "rollback", "apply", "paired", sha)
+        code, _, err = self.roll(h, "apply", sha)
         self.assertEqual(code, 1)
         self.assertIn("nothing to roll back to", err)
         self.assertEqual(self.b.read_text(), "bat-signal-2")
@@ -2603,23 +2925,27 @@ class RollbackEnv(unittest.TestCase):
     def test_rollback_arguments_are_checked_before_anything_is_read(self):
         h = self.env_host()
         self.deploy(h)
-        sha = self.bundle()["prev_sha256"]
+        sha = self.prev_sha()
         for argv in (
             (),
             ("check",),
             ("check", "bogus"),
-            ("check", "paired", "extra"),
+            ("check", "paired"),
+            ("check", "prev", "nothex"),
+            ("check", "prev", sha, "extra"),
             ("apply",),
-            ("apply", "paired"),
-            ("apply", "paired", "nothex"),
-            ("apply", "paired", sha.upper()),
-            ("apply", "paired", sha + "0"),
-            ("apply", "maybe", sha),
-            ("apply", "paired", sha, "extra"),
-            ("explode", "paired"),
+            ("apply", "paired", sha),
+            ("apply", "nothex"),
+            ("apply", sha.upper()),
+            ("apply", sha + "0"),
+            ("apply", "prev"),
+            ("apply", sha, "snapshot"),
+            ("apply", sha, sha, "extra"),
+            ("list", "extra"),
+            ("explode", sha),
         ):
             with self.subTest(argv=argv):
-                self.assertEqual(h.run("install", "rollback", *argv)[0], 2)
+                self.assertEqual(self.roll(h, *argv)[0], 2)
         self.assertEqual(self.b.read_text(), "bat-signal-2")
 
     def test_the_other_install_verbs_still_take_exactly_one_argument(self):
@@ -2630,12 +2956,29 @@ class RollbackEnv(unittest.TestCase):
 
     def test_swap_prev_still_swaps_the_binary_alone(self):
         """The manual emergency path is unchanged: the recipes no longer use
-        it, but an operator with no snapshot still has it."""
+        it, but an operator with no generation still has it."""
         h = self.env_host()
         self.deploy(h)
         self.assertEqual(h.run("swap-prev")[0], 0)
         self.assertEqual(self.b.read_text(), "bat-signal-1")
         self.assertIn("ABO_CORE_PEERS", self.live_conf.read_text())
+
+    def test_the_helper_never_executes_a_binary(self):
+        """The facts come from the recipe: nothing the helper does runs the
+        staged, installed or kept binary, as root or otherwise."""
+        h = self.env_host()
+        self.b.write_text("#!/bin/sh\ntouch " + str(self.b) + ".ran\n")
+        self.b.chmod(0o755)
+        self.deploy(h, "#!/bin/sh\ntouch " + str(self.b) + ".ran2\n", facts=None)
+        self.roll(h, "list")
+        self.roll(h, "check", "prev")
+        self.roll(h, "apply", self.prev_sha())
+        self.assertEqual(sorted(p.name for p in self.b.parent.glob("*.ran*")), [])
+        self.assertEqual(
+            {t["argv"][0] for t in h.tools()} - {"daemon-reload", "show"},
+            set(),
+            "only systemctl is run, never the binary",
+        )
 
 
 class Stubs(unittest.TestCase):
