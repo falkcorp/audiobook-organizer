@@ -55,7 +55,8 @@ func (c *Chain) setHeaders(h http.Header, r *http.Request) {
 	}
 }
 
-// finishHeaders writes the owner's CSP when the handler set none, and the
+// finishHeaders writes the owner's CSP when the handler set none (neither
+// Content-Security-Policy nor Content-Security-Policy-Report-Only), and the
 // owner's Reporting-Endpoints (FE-4, FE2-1).
 func (c *Chain) finishHeaders(h http.Header, r *http.Request) {
 	var p *Policy
@@ -69,7 +70,10 @@ func (c *Chain) finishHeaders(h http.Header, r *http.Request) {
 	if p != nil && p.CSPReport != "" {
 		h.Set("Reporting-Endpoints", reportGroup+`="`+p.CSPReport+`"`)
 	}
-	if h.Get("Content-Security-Policy") != "" {
+	// A handler's own policy, enforcing or report-only, is the response's
+	// policy: adding the enforcing default-src 'none' beside a report-only
+	// one would enforce what the owner asked only to report (07 §7.6.2).
+	if h.Get("Content-Security-Policy") != "" || h.Get("Content-Security-Policy-Report-Only") != "" {
 		return
 	}
 	csp := defaultCSP

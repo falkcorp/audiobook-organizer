@@ -921,7 +921,10 @@ Responsibility is split (FE-4):
   pre-paint script and the Access expiry redirect, FE2-1); otherwise `default-src 'none';
   frame-ancestors 'self'`. Server-rendered HTML outside the SPA (the ABS OIDC consent form,
   `handlers/abs/openid.go:1055`; placeholder pages) is therefore never without one, and a handler that
-  sets its own `Content-Security-Policy` keeps it (today's rule). Stage 5 also writes
+  sets its own `Content-Security-Policy` keeps it (today's rule). A handler-set
+  `Content-Security-Policy-Report-Only` counts as handler-set too: stage 5 then writes no enforcing
+  header, so `core.ui.csp.report_only` reports the shell policy without stage 5's `default-src 'none'`
+  enforcing beside it (F9-01 review; `TestHandler_CSPModesThroughRouterChain`). Stage 5 also writes
   `Reporting-Endpoints: csp="<owner's report URL>"` (`/api/v1/csp-report` for the legacy mount,
   `/api/core/v1/ui/csp-report` for `ui`), because Chromium prefers `report-to` over `report-uri`
   (`server_middleware.go:109` today). 05-http-api's `TestCSP_DefaultPerOwner` asserts that the legacy
@@ -1156,6 +1159,11 @@ The OpenAPI 3.1 documents and the TypeScript client pipeline are owned by
   `/api/core/v1/auth/{status,login,logout,setup,bootstrap}` and `/api/core/v1/me` (05-authn §4.13
   paths verbatim; `/auth/bootstrap` serves the `/setup` flow, FE2-18). `me.permissions` is the effective namespaced list; `usePermission` is advisory and fails
   closed on unknown/null, keeping today's `authEnabled: null` rule (`AuthContext.tsx:23-30`).
+  **Auth-disabled mode:** when `/auth/status` reports `auth_disabled`, the server enforces no
+  permission and `/me` lists none, so the shell treats the principal as holding every permission,
+  client-side only: nav, shell entries, slots, route guards, `usePermission` and `useAction` all pass
+  (one predicate, `grantsOf(auth)`). Filtering on the empty list would hide every gated page the
+  server serves anyway (F9-01 review ruling; `nav.permissions.test.tsx`).
 * **Session cookie and CSRF (FE-5, FE-6).** Cookie naming (`<AppID>_session`, `__Host-` when
   `Secure`, so two apps on one host never share a session), the handling of an unknown cookie and the
   cross-origin check are owned by 05-authn §4.3/§6 and 05-http-api stage 7; this file does not restate
