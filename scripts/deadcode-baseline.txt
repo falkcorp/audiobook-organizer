@@ -216,6 +216,8 @@ core/kernel.kernelOutbox.startNudger
 core/kernel.kernelOutbox.stopNudger
 core/kernel.kernelOutbox.writer
 core/kernel.kernelSecrets.close
+core/kernel.metricsGate
+core/kernel.mountMetrics
 core/kernel.newKernelEvents
 core/kernel.newKernelOutbox
 core/kernel.openSecrets
@@ -256,6 +258,7 @@ core/kernel.reapplyInput.untrusted
 core/kernel.reapplyInput.writeBookkeeping
 core/kernel.reapplyInput.writeMarkers
 core/kernel.reapplyRevocations
+core/kernel.registerBuildInfo
 core/kernel.registerCoreComponents
 core/kernel.reportSecretsHealth
 core/kernel.restoreAborted
