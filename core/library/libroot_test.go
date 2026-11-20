@@ -1,5 +1,5 @@
 // file: core/library/libroot_test.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 8e1c5a73-d2b4-4f69-a0e8-3b7f9d1c6a25
 // last-edited: 2026-11-19
 
@@ -829,5 +829,28 @@ func TestProbeFileIsNamedForTheDirectoryItProbes(t *testing.T) {
 				t.Fatalf("an unwritable %s directory must be refused naming its probe %q, got %v", tc.name, tc.probe, err)
 			}
 		})
+	}
+}
+
+// A ledger directory that is a symlink, or a file, is refused as such, and the
+// refusal is about the ledger.
+func TestLedgerPathNotifyRefusesAnUnusableLedgerDirNamingTheLedger(t *testing.T) {
+	root, _ := reportRootFor(t)
+	elsewhere := t.TempDir()
+	dir := filepath.Join(root, LedgerDirName)
+	if err := os.Symlink(elsewhere, dir); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LedgerPathNotify(root, "", "l.jsonl", nil)
+	if err == nil || !strings.Contains(err.Error(), "symlink") || !strings.Contains(err.Error(), "ledger") || strings.Contains(err.Error(), "report") {
+		t.Fatalf("a symlinked ledger dir must be refused as a ledger problem, got %v", err)
+	}
+	if ents, _ := os.ReadDir(elsewhere); len(ents) != 0 {
+		t.Fatalf("something was written through the symlink: %v", ents)
+	}
+	// The same through an explicit path.
+	_, err = LedgerPathNotify(root, "l.jsonl", "", nil)
+	if err == nil || !strings.Contains(err.Error(), "symlink") || strings.Contains(err.Error(), "report") {
+		t.Fatalf("a symlinked ledger dir must be refused for an explicit name too, got %v", err)
 	}
 }
