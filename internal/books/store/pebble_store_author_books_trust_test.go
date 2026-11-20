@@ -41,10 +41,12 @@ func abTrusted(t *testing.T, p *PebbleStore) bool {
 	return trusted
 }
 
-// abRequirePebbleListingMatchesMemDB requires the Pebble listing (the index
-// when trusted, else the scan) to list what memdb lists, which links
-// Book.AuthorID as well as the credit row.
-func abRequirePebbleListingMatchesMemDB(t *testing.T, p *PebbleStore, authorID int, want ...string) {
+// abRequireListingMatchesScan requires the UseMemDB=false listing (the index
+// when trusted, else the scan) to equal both the full scan
+// (getBooksByAuthorIDFull) and what memdb lists, which links Book.AuthorID as
+// well as the credit row. Callers run it before asserting on the trust flag,
+// so a missed revoke fails here on the listing itself.
+func abRequireListingMatchesScan(t *testing.T, p *PebbleStore, authorID int, want ...string) {
 	t.Helper()
 	mem, err := p.GetBooksByAuthorIDCore(authorID)
 	require.NoError(t, err)
@@ -53,7 +55,14 @@ func abRequirePebbleListingMatchesMemDB(t *testing.T, p *PebbleStore, authorID i
 	defer func() { p.UseMemDB = true }()
 	got, err := p.GetBooksByAuthorIDCore(authorID)
 	require.NoError(t, err)
-	require.ElementsMatch(t, abIDs(mem), abIDs(got))
+	require.ElementsMatch(t, abIDs(mem), abIDs(got), "the UseMemDB=false listing drops a book memdb lists")
+	scan, err := p.getBooksByAuthorIDFull(authorID)
+	require.NoError(t, err)
+	scanIDs := make([]string, 0, len(scan))
+	for _, b := range scan {
+		scanIDs = append(scanIDs, b.ID)
+	}
+	require.ElementsMatch(t, scanIDs, abIDs(got), "the UseMemDB=false listing differs from the scan")
 }
 
 // TestAuthorBooksTrust_BookWriteThatUncoversRevokes: after a clean reconcile,
@@ -112,8 +121,8 @@ func TestAuthorBooksTrust_BookWriteThatUncoversRevokes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p, _, selina, yearOne := abTrustedStore(t)
 			id := tc.write(t, p, selina, yearOne)
+			abRequireListingMatchesScan(t, p, selina, id)
 			require.False(t, abTrusted(t, p))
-			abRequirePebbleListingMatchesMemDB(t, p, selina, id)
 		})
 	}
 }
@@ -176,8 +185,8 @@ func TestAuthorBooksTrust_CreditRowDroppingAnAuthorRevokes(t *testing.T) {
 			require.True(t, abTrusted(t, p), "adding an author keeps the trust")
 
 			tc.drop(t, p, yearOne, bruce, selina)
+			abRequireListingMatchesScan(t, p, bruce, yearOne.ID)
 			require.False(t, abTrusted(t, p))
-			abRequirePebbleListingMatchesMemDB(t, p, bruce, yearOne.ID)
 		})
 	}
 }
@@ -202,8 +211,8 @@ func TestAuthorBooksTrust_WriteDuringReconcileWithholdsTrust(t *testing.T) {
 	require.Zero(t, rep.UncoveredBooks, "the scans ran before the write")
 	require.False(t, rep.Trusted)
 	require.True(t, rep.RevokedDuringRun)
+	abRequireListingMatchesScan(t, p, selina, yearOne.ID)
 	require.False(t, abTrusted(t, p))
-	abRequirePebbleListingMatchesMemDB(t, p, selina, yearOne.ID)
 
 	// A write during the run that uncovers nothing does not withhold it.
 	authorBooksBeforeTrustHook = func() {
