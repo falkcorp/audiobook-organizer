@@ -1,5 +1,5 @@
 // file: internal/books/writer/gate_test.go
-// version: 1.1.0
+// version: 1.0.1
 // guid: 0d6e48b2-7a95-4c13-b8f0-52e1c9a7d340
 // last-edited: 2026-11-19
 
@@ -103,8 +103,10 @@ func TestGate_EveryRowIsFencedOnEveryResource(t *testing.T) {
 }
 
 // A method with no row is refused (fail closed), as both ErrNoRow and
-// ErrOutsideEffects; a method whose row is empty writes nothing itself and runs
-// fn with no fence; a Preview records the intent and never calls fn.
+// ErrOutsideEffects; a method whose row is empty writes no Effects resource and
+// runs fn with no fence, even in Preview (the caller owns the mode and the
+// permit, see Gate.Do; F5-18c decides what each group does about it); a
+// Preview of a stamped method records the intent and never calls fn.
 func TestGate_UnknownEmptyAndPreview(t *testing.T) {
 	rows := writer.Rows{"Known": {ops.ResBooks}, "Quiet": {}}
 	t.Run("unknown method", func(t *testing.T) {
@@ -122,6 +124,15 @@ func TestGate_UnknownEmptyAndPreview(t *testing.T) {
 		err := writer.New(w, rows).Do(t.Context(), "Quiet", subject, func(context.Context) ([]tasks.Change, error) { called = true; return nil, nil })
 		require.NoError(t, err)
 		require.True(t, called)
+		require.Empty(t, w.Writes())
+		require.Empty(t, w.Refusals())
+	})
+	t.Run("empty row runs fn in Preview too: the caller owns the mode", func(t *testing.T) {
+		w := writertest.ForSet("books.k", nil, tasks.ModePreview)
+		called := false
+		err := writer.New(w, rows).Do(t.Context(), "Quiet", subject, func(context.Context) ([]tasks.Change, error) { called = true; return nil, nil })
+		require.NoError(t, err)
+		require.True(t, called, "an empty row is not fenced by the run's mode")
 		require.Empty(t, w.Writes())
 		require.Empty(t, w.Refusals())
 	})
@@ -188,7 +199,8 @@ func TestRawRows_AreQualifiedByFamily(t *testing.T) {
 	require.Equal(t, "SetRaw/metadata_fetch_cache", writer.RawMethod("SetRaw", "metadata_fetch_cache:"))
 	rows := writer.RawRows()
 	require.Equal(t, []ops.Resource{ops.ResMetadataCache}, rows["DeleteRaw/pcache"])
-	require.Equal(t, []ops.Resource{ops.ResBooks}, rows["SetRaw/metadata_rejection"])
+	require.Equal(t, []ops.Resource{ops.ResMetadataCache}, rows["SetRaw/metadata_fetch_cache"])
+	require.NotContains(t, rows, "SetRaw/metadata_rejection", "metafetch's apply never raw-writes a rejection (round 2, m4)")
 	require.Len(t, rows, 3*len(writer.RawFamilies()))
 }
 
