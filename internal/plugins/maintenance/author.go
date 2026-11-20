@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.19.1
+// version: 1.19.2
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
 // last-edited: 2026-11-19
 
@@ -826,10 +826,13 @@ func (p *Plugin) resolveProductionAuthorsNative(deps t6g1Deps, sched func(tasks.
 	c.Title = "Resolve production company authors"
 	c.Help = resolveProductionAuthorsHelp
 	// The fetch is metafetch's apply (see autoMatchTranscribedNative for the
-	// trace): book, credits, segment titles, change record (operations), the
-	// fetched-metadata cache (metadata_cache) and the field-state snapshot
-	// (field_states). The book writes also stage the ident: rows (indexes: the shared
-	// ModifyBook, CreateBook and DeleteBook rows, kinds_resources.go).
+	// trace): book, credits, segment titles, change record (metadata_change:
+	// rows, the books resource), the fetched-metadata cache (metadata_cache) and
+	// the field-state snapshot (field_states). The book writes also stage the
+	// ident: rows (indexes: the shared ModifyBook, CreateBook and DeleteBook
+	// rows, kinds_resources.go). operations is declared for the file-work path,
+	// not the apply: the organizer's undo journal writes through the gated store
+	// (CreateOperationChange, DeleteOperationState).
 	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResSeries)),
 		tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResOperations)), tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResFieldStates)),
 		tasks.Res("books", string(ops.ResIndexes)))

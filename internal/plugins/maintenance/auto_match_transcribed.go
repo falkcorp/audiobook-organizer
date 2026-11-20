@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/auto_match_transcribed.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 7a3b5c1d-2e4f-6a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-11-17
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -173,12 +173,15 @@ func (p *Plugin) autoMatchTranscribedNative(deps t6g1Deps, sched func(tasks.Kind
 	// that writes: the book row and its author credits (books, authors; the
 	// credit step creates an author row when the name is new), the per-file
 	// segment titles (book_files, generateSegmentTitles), the metadata change
-	// record (operations, recordApplyHistory), the fetched-metadata cache
+	// record (metadata_change: rows, the books resource, recordApplyHistory),
+	// the fetched-metadata cache
 	// (metadata_cache) and the per-field state snapshot (field_states) and the
 	// duplicate flag
 	// of a shared source hash (books, checkMetadataSourceHashDuplicates). The book
 	// writes also stage the ident: rows (indexes: the shared ModifyBook row,
-	// kinds_resources.go).
+	// kinds_resources.go). operations is declared for the file-work path, not
+	// the apply: the organizer's undo journal writes through the gated store
+	// (CreateOperationChange, DeleteOperationState).
 	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResBookFiles)),
 		tasks.Res("books", string(ops.ResOperations)), tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResFieldStates)),
 		tasks.Res("books", string(ops.ResIndexes)))
