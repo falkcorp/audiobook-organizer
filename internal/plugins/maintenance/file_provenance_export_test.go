@@ -898,3 +898,24 @@ func TestLastLedgerSeqReadsAcrossChunks(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, found)
 }
+
+// The refusal says which way the file fails to continue, so the operator can tell
+// a recreated empty file from one that was cut short.
+func TestCheckLedgerContinuityNamesWhatIsWrong(t *testing.T) {
+	for name, tc := range map[string]struct {
+		file []byte
+		want string
+	}{
+		"empty":                  {nil, "ledger file is empty"},
+		"no exported event":      {[]byte(`{"seq":0,"gap":"x"}` + "\n"), "holds no exported event"},
+		"ends before the cursor": {ledgerText(1, 2), "ends at seq 2"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := checkLedgerContinuity(newMemLedger(tc.file), 3, false)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+			assert.Contains(t, err.Error(), "seq 3")
+			assert.Contains(t, err.Error(), "start_new")
+		})
+	}
+}
