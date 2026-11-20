@@ -67,6 +67,16 @@ type Principal struct {
 	// (Compat.AuthenticateKey): its Method is the surface's, not
 	// MethodAPIKey, and CheckCredentialFor still has to re-read the key.
 	keyID string
+	// scopes are the scopes PrincipalFor built this principal over: nil is
+	// the method's own rule (the user's role permissions), a non-empty list a
+	// narrowing (an identity extension's Assertion.Scopes, a compat
+	// surface's own, a key's). Refresh rebuilds over them, so a narrowed
+	// credential stays narrowed; a key principal is rebuilt over the key's
+	// current scopes instead. built marks a principal PrincipalFor made:
+	// one assembled elsewhere carries no record of its narrowing, so Refresh
+	// refuses it rather than guess.
+	scopes []rbac.Permission
+	built  bool
 }
 
 // keyRef is the API key p was authenticated by, and false when p was not

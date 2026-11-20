@@ -264,20 +264,32 @@ func (s *Service) Revalidate(ctx context.Context, p *Principal) error {
 }
 
 func (s *Service) revalidate(ctx context.Context, p *Principal) error {
-	if p != nil && p.Method == MethodAuthDisabled && s.authOff {
-		// The auth-off binding has no user, credential or epoch to go
-		// stale (§4.11); it stands exactly while the mode does.
+	if s.authOffBinding(p) {
 		return nil
 	}
+	_, _, err := s.stands(ctx, p)
+	return err
+}
+
+// authOffBinding reports p is the auth-off binding while the mode is on: it
+// has no user, credential or epoch to go stale (§4.11), so it stands exactly
+// while the mode does.
+func (s *Service) authOffBinding(p *Principal) bool {
+	return p != nil && p.Method == MethodAuthDisabled && s.authOff
+}
+
+// stands is Revalidate's check of a principal with a user, returning the user
+// and, for a key principal, the key it read, both as the store holds them now.
+func (s *Service) stands(ctx context.Context, p *Principal) (*User, *APIKey, error) {
 	if p == nil || p.User == nil || p.User.ID == "" {
-		return fmt.Errorf("%w: no principal", ErrInvalidCredentials)
+		return nil, nil, fmt.Errorf("%w: no principal", ErrInvalidCredentials)
 	}
 	u, err := s.d.Store.GetUser(ctx, p.User.ID)
 	if err != nil {
-		return revalidateErr("user "+string(p.User.ID), err)
+		return nil, nil, revalidateErr("user "+string(p.User.ID), err)
 	}
 	if err := standing(u); err != nil {
-		return err
+		return nil, nil, err
 	}
 	now := s.now()
 	keyID, isKey := p.keyRef()
@@ -285,29 +297,80 @@ func (s *Service) revalidate(ctx context.Context, p *Principal) error {
 	case isKey:
 		k, err := s.d.Store.APIKeyByID(ctx, keyID)
 		if err != nil {
-			return revalidateErr("key "+keyID, err)
+			return nil, nil, revalidateErr("key "+keyID, err)
 		}
 		if k.Owner != u.ID {
-			return fmt.Errorf("%w: key %s is not %s's", ErrRevoked, keyID, u.ID)
+			return nil, nil, fmt.Errorf("%w: key %s is not %s's", ErrRevoked, keyID, u.ID)
 		}
-		return keyUsable(k, now)
+		if err := keyUsable(k, now); err != nil {
+			return nil, nil, err
+		}
+		return u, k, nil
 	case p.Method.sessionMethod():
 		rec, err := s.d.Store.SessionByPublicID(ctx, p.CredentialID)
 		if err != nil {
-			return revalidateErr("session "+p.CredentialID, err)
+			return nil, nil, revalidateErr("session "+p.CredentialID, err)
 		}
 		switch {
 		case rec.UserID != u.ID:
-			return fmt.Errorf("%w: session %s is not %s's", ErrRevoked, p.CredentialID, u.ID)
+			return nil, nil, fmt.Errorf("%w: session %s is not %s's", ErrRevoked, p.CredentialID, u.ID)
 		case !now.Before(rec.ExpiresAt):
-			return fmt.Errorf("%w: session %s", ErrExpired, p.CredentialID)
+			return nil, nil, fmt.Errorf("%w: session %s", ErrExpired, p.CredentialID)
 		case rec.CredentialEpoch != u.CredentialEpoch:
-			return fmt.Errorf("%w: session %s", ErrStaleEpoch, p.CredentialID)
+			return nil, nil, fmt.Errorf("%w: session %s", ErrStaleEpoch, p.CredentialID)
 		}
 	case u.CredentialEpoch != p.User.CredentialEpoch:
-		return fmt.Errorf("%w: %s", ErrStaleEpoch, u.ID)
+		return nil, nil, fmt.Errorf("%w: %s", ErrStaleEpoch, u.ID)
 	}
-	return nil
+	return u, nil, nil
+}
+
+// Refresh re-resolves p, a principal bound earlier and held by a long-lived
+// request (an SSE stream's Deps.Refresh, F6-03): it returns the principal p's
+// credential would be built as now, with a fresh checker, so a role change
+// (which moves neither the epoch nor the rbac generation) reaches it. p must
+// still stand, exactly as Revalidate decides (its user active and
+// unrestricted; its session alive and at the user's epoch; its key active,
+// unexpired and its user's; any other method at the epoch it was built at),
+// and the answer is built through PrincipalFor with p's own Method, over
+// the key's current scopes for a key principal (core's or a compat
+// surface's) and otherwise over the scopes p was built with: a narrowed
+// identity-extension or compat principal stays narrowed, and nil stays the
+// method's own rule. It never widens: a principal PrincipalFor did not build
+// carries no record of its narrowing and is refused. CredentialID, the key
+// reference, AuthTime, Assurance and ClientAddr are p's. The auth-off
+// binding is answered afresh while the mode is on. Errors are Revalidate's
+// (a store failure is ErrStoreUnavailable, anything else definite) and
+// PrincipalFor's. It reads the user and at most one credential and records
+// no metric (Revalidate counts the beat).
+func (s *Service) Refresh(ctx context.Context, p *Principal) (*Principal, error) {
+	if s.authOffBinding(p) {
+		np, _ := s.authDisabledPrincipal(ClientInfo{})
+		np.ClientAddr = p.ClientAddr
+		return np, nil
+	}
+	if p != nil && !p.built {
+		return nil, fmt.Errorf("%w: a principal auth did not build cannot be refreshed", ErrInvalidCredentials)
+	}
+	u, k, err := s.stands(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	scopes := p.scopes
+	if k != nil {
+		if len(k.Scopes) == 0 {
+			// Never stored (R3-1); nil would be the owner's whole role set.
+			return nil, fmt.Errorf("%w: key %s has no scope", ErrInvalidCredentials, k.ID)
+		}
+		scopes = k.Scopes
+	}
+	np, err := s.PrincipalFor(ctx, u, p.Method, scopes, u.CredentialEpoch)
+	if err != nil {
+		return nil, err
+	}
+	np.CredentialID, np.keyID = p.CredentialID, p.keyID
+	np.AuthTime, np.Assurance, np.ClientAddr = p.AuthTime, p.Assurance, p.ClientAddr
+	return np, nil
 }
 
 // revalidateErr maps a Revalidate point read's error: a missing record is a
@@ -368,5 +431,7 @@ func (s *Service) PrincipalFor(ctx context.Context, u *User, m Method, scopes []
 		Perms: s.d.RBAC.Compile(rbac.CheckerInput{
 			Roles: slices.Clone(u.Roles), Scopes: slices.Clone(scopes), Interactive: s.interactive(m),
 		}),
+		scopes: slices.Clone(scopes),
+		built:  true,
 	}, nil
 }

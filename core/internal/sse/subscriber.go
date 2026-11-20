@@ -126,12 +126,12 @@ func (s *Subscriber) end(reason string) bool {
 // tolerated everywhere, as a test recorder has no deadlines); any other failure
 // is reported through Hooks.InterruptFailed.
 func (s *Subscriber) interrupt() {
+	grace := min(s.b.limits().WriteTimeout, interruptGrace) // before wmu: Options.Limits is the caller's code
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	if !s.writing || s.rc == nil {
 		return
 	}
-	grace := min(s.b.opt.WriteTimeout, interruptGrace)
 	if err := s.rc.SetWriteDeadline(time.Now().Add(grace)); err != nil && !errors.Is(err, http.ErrNotSupported) && s.b.opt.Hooks.InterruptFailed != nil {
 		s.b.opt.Hooks.InterruptFailed(err)
 	}

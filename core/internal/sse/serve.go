@@ -184,13 +184,13 @@ func (s *Subscriber) write(rc *http.ResponseController, w http.ResponseWriter, b
 	if buf.Len() == 0 {
 		return ""
 	}
+	limit := s.b.limits().WriteTimeout // before wmu: Options.Limits is the caller's code
 	s.wmu.Lock()
 	if !final && s.endedReason() != "" {
 		s.wmu.Unlock()
 		buf.Reset()
 		return ""
 	}
-	limit := s.b.opt.WriteTimeout
 	if final {
 		// The closed frame is a few bytes to a client that is reading; a client
 		// that is not must not hold the stream open for a whole WriteTimeout.

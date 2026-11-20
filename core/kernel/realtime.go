@@ -14,10 +14,8 @@ import (
 
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/events"
-	"github.com/falkcorp/mediacore/internal/authstore"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
-	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/realtime"
 )
 
@@ -28,8 +26,9 @@ import (
 // F6-03 follows:
 //
 //   - P5, after the events bus exists and the auth service is built:
-//     newKernelRealtime over the bus's catalog, core.realtime.* from the core
-//     section, the auth service and its store;
+//     newKernelRealtime over the bus's catalog, the core.realtime section's
+//     live getter (as newKernelOutbox takes outbox settings) and the auth
+//     service;
 //   - P7: subscriptions, after EVERY Declare (core's, each enabled module's,
 //     and the journal's live tail, logjournal.TailSpec, which is declared only
 //     once P7 has collected the modules' other-user predicates) and before the
@@ -55,17 +54,25 @@ type kernelRealtime struct {
 // journal's live tail (core.log.recorded.v1, F6-05) shares the one ring with
 // every other realtime topic and, at info level, takes most of its slots, so a
 // ring of core.realtime.ring_size's default (1024) would shrink every other
-// topic's Last-Event-ID window to almost nothing (seams.d/F6-05.md). The floor
-// is applied here because the section default lives in core_sections.go; once
-// that default is raised to at least this value, the floor never applies and
-// can be deleted. A configured value above it is used as is.
+// topic's Last-Event-ID window to almost nothing (seams.d/F6-05.md). It is a
+// stopgap: the section default lives in core_sections.go, which this slice
+// does not edit; once that default is raised to at least this value (todo.d,
+// after #4765) the floor never applies and is deleted. A configured value above
+// it is used as is.
 const realtimeRingFloor = 4096
+
+// realtimeRingDefault is core.realtime.ring_size's section default
+// (core_sections.go; pinned by TestCoreSections_Defaults). The floor raising
+// it is expected and logged at info; raising any other value is an override
+// of what the operator set, logged as a warning.
+const realtimeRingDefault = 1024
 
 // realtimeOptions maps core.realtime.* (05-realtime §8) onto the hub's
 // Options. ring_size below realtimeRingFloor is raised to it; a negative value
 // is passed through for the hub to refuse. max_coalesce_keys has no hub
-// option (the bus's coalescer has no key bound, seams.d/F6-02.md), so it is
-// not read. AllowNoControlTopics stays false.
+// option (the bus's coalescer has no key bound, seams.d/F6-02.md; todo.d), so
+// it is not read. AllowNoControlTopics stays false. The four live keys are
+// also read through Options.Live by newKernelRealtime.
 func realtimeOptions(s realtimeSettings) realtime.Options {
 	ring := s.RingSize
 	if ring >= 0 && ring < realtimeRingFloor {
@@ -82,132 +89,65 @@ func realtimeOptions(s realtimeSettings) realtime.Options {
 	}
 }
 
+// realtimeLimits is the reloadable part of core.realtime.*: max_clients,
+// max_per_bucket, write_timeout and retry_after carry no reload:"restart"
+// tag, so a reload must reach a running hub (05-realtime §8).
+func realtimeLimits(s realtimeSettings) realtime.Limits {
+	return realtime.Limits{
+		MaxClients:   s.MaxClients,
+		MaxPerBucket: s.MaxPerBucket,
+		WriteTimeout: time.Duration(s.WriteTimeout),
+		RetryAfter:   time.Duration(s.RetryAfter),
+	}
+}
+
 // realtimeAuth is what the hub needs of the auth service: Revalidate on every
-// heartbeat, and PrincipalFor for refreshPrincipal. *auth.Service satisfies it.
+// heartbeat and Refresh, its Deps.Refresh. *auth.Service satisfies it.
+//
+// Refresh is auth's (05-authn; seams.d/F4-08-refresh.md), not the kernel's:
+// only auth knows what a principal was built from (a compat key's key, the
+// scopes an identity extension narrowed it to), so only auth can rebuild
+// every method without widening one. The kernel passes it through as is.
 type realtimeAuth interface {
 	realtime.Revalidator
-	PrincipalFor(ctx context.Context, u *auth.User, m auth.Method, scopes []rbac.Permission, epoch int64) (*auth.Principal, error)
+	Refresh(ctx context.Context, p *auth.Principal) (*auth.Principal, error)
 }
 
-// realtimeCredentials is the two point reads refreshPrincipal makes: the
-// stream's user and, for a key principal, the key. *authstore.Store (auth's
-// store) satisfies it.
-type realtimeCredentials interface {
-	GetUser(ctx context.Context, id auth.UserID) (*auth.User, error)
-	APIKeyByID(ctx context.Context, id string) (*auth.APIKey, error)
-}
-
-var (
-	_ realtimeAuth        = (*auth.Service)(nil)
-	_ realtimeCredentials = (*authstore.Store)(nil)
-)
-
-// errRefreshMethod is refreshPrincipal's answer for a principal whose method
-// it cannot rebuild without widening it (see refreshPrincipal).
-var errRefreshMethod = errors.New("kernel: realtime: a principal of this method cannot be refreshed")
-
-// refreshPrincipal is the hub's Deps.Refresh (05-realtime §4.6;
-// seams.d/F6-02.md): it rebuilds p's rights from the user and the credential
-// as the store holds them now, so a role change reaches an open stream on its
-// next heartbeat. It answers for the SAME credential: the result carries p's
-// Method and CredentialID, and only its rights are used by the hub.
-//
-//   - A session principal (MethodSession, MethodSessionDelegated) is rebuilt
-//     over the user's roles.
-//   - A core key principal (MethodAPIKey) is rebuilt over the stored key's own
-//     scopes, never over its owner's roles: a key the user no longer owns or
-//     that is not active is a definite refusal.
-//   - The auth-off principal (MethodAuthDisabled, no user) is returned as is:
-//     its rights are fixed by the mode, and Revalidate ends it when the mode
-//     changes.
-//   - Any other method (a module's compat surface) is refused definitely
-//     (errRefreshMethod), which ends its stream credential_revoked: a compat
-//     key principal keeps its key in a field auth does not export, so from
-//     here it cannot be told from a compat session, and rebuilding it over
-//     the owner's roles would show the stream more than the key may.
-//
-// Store failures keep their auth.ErrStoreUnavailable (the hub retries them on
-// the next heartbeat and withholds events meanwhile); a missing or undecodable
-// record, and every PrincipalFor refusal, is definite. It holds no state, so
-// concurrent calls (one per open stream per heartbeat, MaxClients/Heartbeat a
-// second at most) are safe; each costs one or two point reads.
-func refreshPrincipal(a realtimeAuth, creds realtimeCredentials) func(context.Context, *auth.Principal) (*auth.Principal, error) {
-	return func(ctx context.Context, p *auth.Principal) (*auth.Principal, error) {
-		if p == nil {
-			return nil, fmt.Errorf("%w: no principal", auth.ErrInvalidCredentials)
-		}
-		if p.Method == auth.MethodAuthDisabled && p.User == nil {
-			return p, nil
-		}
-		if p.User == nil || p.User.ID == "" {
-			return nil, fmt.Errorf("%w: a %q principal with no user", auth.ErrInvalidCredentials, p.Method)
-		}
-		var scopes []rbac.Permission
-		switch p.Method {
-		case auth.MethodSession, auth.MethodSessionDelegated:
-		case auth.MethodAPIKey:
-			k, err := creds.APIKeyByID(ctx, p.CredentialID)
-			if err != nil {
-				return nil, refreshReadErr("key "+p.CredentialID, err)
-			}
-			switch {
-			case k.Owner != p.User.ID:
-				return nil, fmt.Errorf("%w: key %s is not %s's", auth.ErrRevoked, p.CredentialID, p.User.ID)
-			case k.Status != auth.KeyActive:
-				return nil, fmt.Errorf("%w: key %s is %s", auth.ErrRevoked, p.CredentialID, k.Status)
-			case len(k.Scopes) == 0:
-				return nil, fmt.Errorf("%w: key %s carries no scope", auth.ErrInvalidCredentials, p.CredentialID)
-			}
-			scopes = k.Scopes
-		default:
-			return nil, fmt.Errorf("%w: %q", errRefreshMethod, p.Method)
-		}
-		u, err := creds.GetUser(ctx, p.User.ID)
-		if err != nil {
-			return nil, refreshReadErr("user "+string(p.User.ID), err)
-		}
-		np, err := a.PrincipalFor(ctx, u, p.Method, scopes, u.CredentialEpoch)
-		if err != nil {
-			return nil, fmt.Errorf("kernel: realtime: refresh %s: %w", u.ID, err)
-		}
-		np.CredentialID = p.CredentialID
-		return np, nil
-	}
-}
-
-// refreshReadErr maps a point read's error the way auth's Revalidate does: a
-// missing or undecodable record is definite, anything that is not already
-// auth.ErrStoreUnavailable becomes it (retried, never a revocation).
-func refreshReadErr(what string, err error) error {
-	switch {
-	case errors.Is(err, auth.ErrNotFound):
-		return fmt.Errorf("%w: %s is gone: %w", auth.ErrRevoked, what, err)
-	case errors.Is(err, auth.ErrUndecodableRecord), errors.Is(err, auth.ErrStoreUnavailable):
-		return fmt.Errorf("kernel: realtime: read %s: %w", what, err)
-	}
-	return fmt.Errorf("%w: read %s: %w", auth.ErrStoreUnavailable, what, err)
-}
+var _ realtimeAuth = (*auth.Service)(nil)
 
 // newKernelRealtime builds the hub over cat (the bus's catalog), the core
-// metrics scope <namespace>.realtime, settings s, the auth service a and its
-// store creds. It subscribes to nothing and starts no goroutine.
-func newKernelRealtime(cat events.Catalog, s realtimeSettings, a realtimeAuth, creds realtimeCredentials,
+// metrics scope <namespace>.realtime, the core.realtime section read through
+// settings (read now for the restart keys, and on every use for the four live
+// ones, so a hot reload applies to the next stream or write) and the auth
+// service a. It subscribes to nothing and starts no goroutine.
+func newKernelRealtime(cat events.Catalog, settings func() realtimeSettings, a realtimeAuth,
 	p *metrics.Provider, l *slog.Logger, now func() time.Time) (*kernelRealtime, error) {
-	if a == nil || creds == nil {
-		return nil, errors.New("kernel: realtime: the auth service and its store are required (build the hub after auth, F4-08)")
+	if a == nil || settings == nil {
+		return nil, errors.New("kernel: realtime: the auth service and the core.realtime settings are required (build the hub after auth, F4-08)")
 	}
 	if l == nil {
 		l = slog.New(slog.DiscardHandler)
 	}
+	s := settings()
+	opt := realtimeOptions(s)
+	opt.Live = func() realtime.Limits { return realtimeLimits(settings()) }
 	sc, err := p.Core("realtime", "topic", "reason")
 	if err != nil {
 		return nil, fmt.Errorf("kernel: realtime metrics scope: %w", err)
 	}
-	hub, err := realtime.NewHub(realtimeOptions(s), realtime.Deps{
-		Auth: a, Catalog: cat, Log: l, Metrics: sc, Clock: now, Refresh: refreshPrincipal(a, creds),
+	hub, err := realtime.NewHub(opt, realtime.Deps{
+		Auth: a, Catalog: cat, Log: l, Metrics: sc, Clock: now, Refresh: a.Refresh,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("kernel: realtime: %w", err)
+	}
+	if opt.RingSize != s.RingSize {
+		msg := "kernel: realtime: core.realtime.ring_size is below the floor the journal's live tail needs; the floor is used"
+		if s.RingSize == realtimeRingDefault || s.RingSize == 0 {
+			l.Info(msg, "configured", s.RingSize, "used", opt.RingSize)
+		} else {
+			l.Warn(msg, "configured", s.RingSize, "used", opt.RingSize)
+		}
 	}
 	return &kernelRealtime{hub: hub, log: l}, nil
 }

@@ -8,14 +8,14 @@ package kernel
 import (
 	"bufio"
 	"context"
-	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,9 +25,10 @@ import (
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/realtime"
 )
 
-// Batman names only: the Batcave streams sightings; Oracle holds keys.
+// Batman names only: the Batcave streams sightings to Oracle.
 
 var (
 	rtSighting    = events.NewTopic[kernelSighting]("batcave.sighting.reported.v1")
@@ -35,236 +36,137 @@ var (
 	rtRBACChanged = events.NewTopic[map[string]uint64]("core.rbac.changed.v1")
 )
 
-// fakeAuth is realtimeAuth: PrincipalFor records what it was asked and
-// answers with a principal whose checker grants exactly the roles' or the
-// scopes' permissions; Revalidate accepts everyone.
+// fakeAuth is realtimeAuth: Revalidate accepts everyone; Refresh counts its
+// calls and answers the request principal, or err once one is set.
 type fakeAuth struct {
-	mu    sync.Mutex
-	calls []principalForCall
-	err   error
-}
-
-type principalForCall struct {
-	user   auth.UserID
-	method auth.Method
-	scopes []rbac.Permission
-	epoch  int64
+	refreshed atomic.Int64
+	err       atomic.Value // error
 }
 
 func (f *fakeAuth) Revalidate(context.Context, *auth.Principal) error { return nil }
 
-func (f *fakeAuth) PrincipalFor(_ context.Context, u *auth.User, m auth.Method, scopes []rbac.Permission, epoch int64) (*auth.Principal, error) {
-	f.mu.Lock()
-	f.calls = append(f.calls, principalForCall{user: u.ID, method: m, scopes: slices.Clone(scopes), epoch: epoch})
-	err := f.err
-	f.mu.Unlock()
-	if err != nil {
+func (f *fakeAuth) Refresh(_ context.Context, p *auth.Principal) (*auth.Principal, error) {
+	f.refreshed.Add(1)
+	if err, _ := f.err.Load().(error); err != nil {
 		return nil, err
 	}
-	return &auth.Principal{User: u, Method: m}, nil
+	return p, nil
 }
 
-func (f *fakeAuth) last(t *testing.T) principalForCall {
-	t.Helper()
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.calls) == 0 {
-		t.Fatal("PrincipalFor was not called")
-	}
-	return f.calls[len(f.calls)-1]
+// oracle is a request principal as auth's middleware would bind it, with a
+// checker that grants everything.
+func oracle() *auth.Principal {
+	return &auth.Principal{User: &auth.User{ID: "u-oracle", Username: "oracle", CredentialEpoch: 6},
+		Method: auth.MethodSession, CredentialID: "s-cave", Perms: allowAll{}}
 }
 
-// fakeCreds is realtimeCredentials over two maps, with an injectable error.
-type fakeCreds struct {
-	mu      sync.Mutex
-	users   map[auth.UserID]*auth.User
-	keys    map[string]*auth.APIKey
-	userErr error
-	keyErr  error
+// fixed is a settings getter a test reloads.
+type fixed struct {
+	v atomic.Pointer[realtimeSettings]
 }
 
-func (f *fakeCreds) GetUser(_ context.Context, id auth.UserID) (*auth.User, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.userErr != nil {
-		return nil, f.userErr
-	}
-	u, ok := f.users[id]
-	if !ok {
-		return nil, auth.ErrNotFound
-	}
-	cp := *u
-	return &cp, nil
+func settingsOf(s realtimeSettings) *fixed {
+	f := &fixed{}
+	f.v.Store(&s)
+	return f
 }
+func (f *fixed) set(s realtimeSettings) { f.v.Store(&s) }
+func (f *fixed) get() realtimeSettings  { return *f.v.Load() }
 
-func (f *fakeCreds) APIKeyByID(_ context.Context, id string) (*auth.APIKey, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.keyErr != nil {
-		return nil, f.keyErr
+// TestRealtimeLimits maps the four reloadable core.realtime keys onto the
+// hub's Limits, and nothing else.
+func TestRealtimeLimits(t *testing.T) {
+	s := realtimeSettings{
+		RingSize: 8192, ClientBuffer: 64, MaxClients: 32, MaxPerBucket: 4,
+		Heartbeat: config.Duration(20 * time.Second), WriteTimeout: config.Duration(7 * time.Second),
+		RetryAfter: config.Duration(3 * time.Second), MaxCoalesceKeys: 99,
 	}
-	k, ok := f.keys[id]
-	if !ok {
-		return nil, auth.ErrNotFound
-	}
-	cp := *k
-	return &cp, nil
-}
-
-// gothamCreds stores Oracle (two roles, epoch 7) with one active key scoped
-// to a single permission, one disabled key, and one key Robin owns.
-func gothamCreds() *fakeCreds {
-	return &fakeCreds{
-		users: map[auth.UserID]*auth.User{
-			"u-oracle": {ID: "u-oracle", Username: "oracle", Roles: []rbac.RoleName{"batcave.keeper", "arkham.warden"}, Status: auth.StatusActive, CredentialEpoch: 7},
-			"u-robin":  {ID: "u-robin", Username: "robin", Status: auth.StatusActive, CredentialEpoch: 1},
-		},
-		keys: map[string]*auth.APIKey{
-			"k-batcomputer": {ID: "k-batcomputer", Owner: "u-oracle", Scopes: []rbac.Permission{"batcave:view"}, Status: auth.KeyActive},
-			"k-disabled":    {ID: "k-disabled", Owner: "u-oracle", Scopes: []rbac.Permission{"batcave:view"}, Status: auth.KeyDisabled},
-			"k-robin":       {ID: "k-robin", Owner: "u-robin", Scopes: []rbac.Permission{"batcave:view"}, Status: auth.KeyActive},
-			"k-empty":       {ID: "k-empty", Owner: "u-oracle", Status: auth.KeyActive},
-		},
+	want := realtime.Limits{MaxClients: 32, MaxPerBucket: 4, WriteTimeout: 7 * time.Second, RetryAfter: 3 * time.Second}
+	if got := realtimeLimits(s); got != want {
+		t.Errorf("realtimeLimits = %+v, want %+v", got, want)
 	}
 }
 
-// oracle is a request principal as auth's middleware would bind it: the
-// user's record as read at sign-in (epoch 6: the store has moved since).
-func oracle(m auth.Method, cred string) *auth.Principal {
-	return &auth.Principal{User: &auth.User{ID: "u-oracle", Username: "oracle", CredentialEpoch: 6}, Method: m, CredentialID: cred}
+// TestNewKernelRealtime_LiveReadsSettingsOnEachCall: the hub reads the
+// settings getter on every subscribe and refusal, so a reloaded
+// max_per_bucket or retry_after reaches the running hub with no rebuild.
+func TestNewKernelRealtime_LiveReadsSettingsOnEachCall(t *testing.T) {
+	st := settingsOf(realtimeSettings{MaxPerBucket: 1, RetryAfter: config.Duration(7 * time.Second)})
+	f := newRTFixtureWith(t, st.get, &fakeAuth{}, nil, false)
+	srv := f.serve(t)
+	f.stream(t, srv)
+	if code, ra := f.refusal(t, srv); code != http.StatusTooManyRequests || ra != "7" {
+		t.Fatalf("second stream at max_per_bucket 1: %d Retry-After %q, want 429 and 7", code, ra)
+	}
+	st.set(realtimeSettings{MaxPerBucket: 2, RetryAfter: config.Duration(2 * time.Second)})
+	f.stream(t, srv)
+	if code, ra := f.refusal(t, srv); code != http.StatusTooManyRequests || ra != "2" {
+		t.Fatalf("third stream after reloading max_per_bucket 2: %d Retry-After %q, want 429 and the reloaded 2", code, ra)
+	}
 }
 
-// TestRefreshPrincipal_RebuildsFromTheStore: a session principal is rebuilt
-// over the user as stored now (roles via nil scopes, the stored epoch), a key
-// principal over the stored key's own scopes, and both keep their method and
-// credential ID.
-func TestRefreshPrincipal_RebuildsFromTheStore(t *testing.T) {
+// TestNewKernelRealtime_RefreshIsAuths: the hub's Deps.Refresh is the auth
+// service's Refresh: a heartbeat calls it, and its definite refusal ends the
+// stream with closed{credential_revoked}.
+func TestNewKernelRealtime_RefreshIsAuths(t *testing.T) {
+	fa := &fakeAuth{}
+	f := newRTFixtureWith(t, settingsOf(realtimeSettings{Heartbeat: config.Duration(20 * time.Millisecond)}).get, fa, nil, false)
+	srv := f.serve(t)
+	lines := f.stream(t, srv)
+	deadline := time.Now().Add(10 * time.Second)
+	for fa.refreshed.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if fa.refreshed.Load() == 0 {
+		t.Fatal("no heartbeat called the auth service's Refresh")
+	}
+	fa.err.Store(auth.ErrRevoked)
+	waitLine(t, lines, `"reason":"credential_revoked"`)
+}
+
+// TestNewKernelRealtime_RingFloorLogging: the floor raising the section
+// default (or an unset value) is logged at info; raising a value the operator
+// set is a warning naming both; a value at or above the floor logs nothing.
+func TestNewKernelRealtime_RingFloorLogging(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		method     auth.Method
-		cred       string
-		wantScopes []rbac.Permission
+		ring  int
+		level string // "" = no line
 	}{
-		{"session", auth.MethodSession, "s-cave", nil},
-		{"delegated session", auth.MethodSessionDelegated, "s-temp", nil},
-		{"api key", auth.MethodAPIKey, "k-batcomputer", []rbac.Permission{"batcave:view"}},
+		{0, "INFO"},
+		{realtimeRingDefault, "INFO"},
+		{2048, "WARN"},
+		{realtimeRingFloor, ""},
+		{realtimeRingFloor * 2, ""},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			fa := &fakeAuth{}
-			np, err := refreshPrincipal(fa, gothamCreds())(context.Background(), oracle(tc.method, tc.cred))
-			if err != nil {
-				t.Fatalf("refresh: %v", err)
+		var buf syncBuf
+		l := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		newRTFixtureWith(t, settingsOf(realtimeSettings{RingSize: tc.ring}).get, &fakeAuth{}, l, false)
+		out := buf.String()
+		line := ""
+		for l := range strings.SplitSeq(out, "\n") {
+			if strings.Contains(l, "ring_size") {
+				line = l
 			}
-			if np.Method != tc.method || np.CredentialID != tc.cred {
-				t.Errorf("answer is %q/%q, want the request's %q/%q", np.Method, np.CredentialID, tc.method, tc.cred)
-			}
-			got := fa.last(t)
-			if got.user != "u-oracle" || got.method != tc.method || got.epoch != 7 {
-				t.Errorf("PrincipalFor(%s, %q, epoch %d), want (u-oracle, %q, the stored epoch 7)", got.user, got.method, got.epoch, tc.method)
-			}
-			if !slices.Equal(got.scopes, tc.wantScopes) || (tc.wantScopes == nil) != (got.scopes == nil) {
-				t.Errorf("scopes = %#v, want %#v (a key never widens to its owner's roles)", got.scopes, tc.wantScopes)
-			}
-			if !slices.Equal(np.User.Roles, []rbac.RoleName{"batcave.keeper", "arkham.warden"}) {
-				t.Errorf("rebuilt over roles %v, want the stored roles", np.User.Roles)
-			}
-		})
+		}
+		switch {
+		case tc.level == "" && line != "":
+			t.Errorf("ring_size %d logged %q, want nothing", tc.ring, line)
+		case tc.level != "" && !strings.Contains(line, "level="+tc.level):
+			t.Errorf("ring_size %d: line %q, want level=%s", tc.ring, line, tc.level)
+		case tc.level != "" && !strings.Contains(line, fmt.Sprintf("configured=%d used=%d", tc.ring, realtimeRingFloor)):
+			t.Errorf("ring_size %d: line %q does not name the configured and used sizes", tc.ring, line)
+		}
 	}
 }
 
-// TestRefreshPrincipal_AuthDisabledPassesThrough: the auth-off principal has
-// no user to read and is answered as is, with no store read.
-func TestRefreshPrincipal_AuthDisabledPassesThrough(t *testing.T) {
-	fa, fc := &fakeAuth{}, gothamCreds()
-	fc.userErr, fc.keyErr = errors.New("must not be read"), errors.New("must not be read")
-	p := &auth.Principal{Method: auth.MethodAuthDisabled}
-	np, err := refreshPrincipal(fa, fc)(context.Background(), p)
-	if err != nil || np != p {
-		t.Fatalf("refresh = %p, %v; want the same principal %p and no error", np, err, p)
-	}
-	if len(fa.calls) != 0 {
-		t.Errorf("PrincipalFor called %d times for the auth-off principal", len(fa.calls))
-	}
+// syncBuf is a log sink safe for the hub's goroutines.
+type syncBuf struct {
+	mu sync.Mutex
+	b  strings.Builder
 }
 
-// TestRefreshPrincipal_Refusals: every refusal the hub must treat as definite
-// is not auth.ErrStoreUnavailable, and every store failure is, so the hub
-// retries the second kind and ends the stream on the first.
-func TestRefreshPrincipal_Refusals(t *testing.T) {
-	boom := errors.New("pebble: disk on fire")
-	for _, tc := range []struct {
-		name      string
-		p         *auth.Principal
-		setup     func(*fakeAuth, *fakeCreds)
-		want      error // errors.Is target
-		transient bool
-	}{
-		{"nil principal", nil, nil, auth.ErrInvalidCredentials, false},
-		{"session with no user", &auth.Principal{Method: auth.MethodSession, CredentialID: "s-cave"}, nil, auth.ErrInvalidCredentials, false},
-		{"session with an empty user ID", &auth.Principal{User: &auth.User{}, Method: auth.MethodSession, CredentialID: "s-cave"}, nil, auth.ErrInvalidCredentials, false},
-		{"auth-disabled with a user", oracle(auth.MethodAuthDisabled, ""), nil, errRefreshMethod, false},
-		{"compat method", oracle("abs", "k-batcomputer"), nil, errRefreshMethod, false},
-		{"no method", oracle(auth.MethodNone, ""), nil, errRefreshMethod, false},
-		{"user gone", oracle(auth.MethodSession, "s-cave"), func(_ *fakeAuth, c *fakeCreds) { delete(c.users, "u-oracle") }, auth.ErrRevoked, false},
-		{"user undecodable", oracle(auth.MethodSession, "s-cave"), func(_ *fakeAuth, c *fakeCreds) { c.userErr = auth.ErrUndecodableRecord }, auth.ErrUndecodableRecord, false},
-		{"user read store down", oracle(auth.MethodSession, "s-cave"), func(_ *fakeAuth, c *fakeCreds) { c.userErr = auth.ErrStoreUnavailable }, auth.ErrStoreUnavailable, true},
-		{"user read other failure", oracle(auth.MethodSession, "s-cave"), func(_ *fakeAuth, c *fakeCreds) { c.userErr = boom }, boom, true},
-		{"key gone", oracle(auth.MethodAPIKey, "k-joker"), nil, auth.ErrRevoked, false},
-		{"key read store down", oracle(auth.MethodAPIKey, "k-batcomputer"), func(_ *fakeAuth, c *fakeCreds) { c.keyErr = auth.ErrStoreUnavailable }, auth.ErrStoreUnavailable, true},
-		{"key read other failure", oracle(auth.MethodAPIKey, "k-batcomputer"), func(_ *fakeAuth, c *fakeCreds) { c.keyErr = boom }, boom, true},
-		{"key of another user", oracle(auth.MethodAPIKey, "k-robin"), nil, auth.ErrRevoked, false},
-		{"key disabled", oracle(auth.MethodAPIKey, "k-disabled"), nil, auth.ErrRevoked, false},
-		{"key with no scope", oracle(auth.MethodAPIKey, "k-empty"), nil, auth.ErrInvalidCredentials, false},
-		{"principal refused", oracle(auth.MethodSession, "s-cave"), func(a *fakeAuth, _ *fakeCreds) { a.err = auth.ErrInactiveUser }, auth.ErrInactiveUser, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			fa, fc := &fakeAuth{}, gothamCreds()
-			if tc.setup != nil {
-				tc.setup(fa, fc)
-			}
-			np, err := refreshPrincipal(fa, fc)(context.Background(), tc.p)
-			if err == nil {
-				t.Fatalf("refresh = %+v, nil; want an error", np)
-			}
-			if np != nil {
-				t.Errorf("refresh answered a principal with its error")
-			}
-			if !errors.Is(err, tc.want) {
-				t.Errorf("err = %v, want errors.Is %v", err, tc.want)
-			}
-			if got := errors.Is(err, auth.ErrStoreUnavailable); got != tc.transient {
-				t.Errorf("errors.Is(err, ErrStoreUnavailable) = %v, want %v (err %v)", got, tc.transient, err)
-			}
-			if !tc.transient && errors.Is(tc.want, auth.ErrRevoked) && len(fa.calls) != 0 {
-				t.Errorf("PrincipalFor was called after a definite refusal")
-			}
-		})
-	}
-}
-
-// TestRefreshPrincipal_Concurrent: the closure holds no state, so the hub may
-// call it from every stream's goroutine at once (run with -race).
-func TestRefreshPrincipal_Concurrent(t *testing.T) {
-	fa, fc := &fakeAuth{}, gothamCreds()
-	refresh := refreshPrincipal(fa, fc)
-	var wg sync.WaitGroup
-	for i := range 64 {
-		wg.Go(func() {
-			m, cred := auth.MethodSession, "s-cave"
-			if i%2 == 1 {
-				m, cred = auth.MethodAPIKey, "k-batcomputer"
-			}
-			np, err := refresh(context.Background(), oracle(m, cred))
-			if err != nil || np.CredentialID != cred {
-				t.Errorf("refresh %s: %v, %v", cred, np, err)
-			}
-		})
-	}
-	wg.Wait()
-	if len(fa.calls) != 64 {
-		t.Errorf("PrincipalFor called %d times, want 64", len(fa.calls))
-	}
-}
+func (s *syncBuf) Write(p []byte) (int, error) { s.mu.Lock(); defer s.mu.Unlock(); return s.b.Write(p) }
+func (s *syncBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
 
 // TestRealtimeOptions maps every core.realtime key onto the hub's options and
 // raises ring_size to the floor the live tail needs.
@@ -308,6 +210,11 @@ type rtFixture struct {
 
 func newRTFixture(t *testing.T, s realtimeSettings, skipControl bool) *rtFixture {
 	t.Helper()
+	return newRTFixtureWith(t, settingsOf(s).get, &fakeAuth{}, nil, skipControl)
+}
+
+func newRTFixtureWith(t *testing.T, settings func() realtimeSettings, a realtimeAuth, l *slog.Logger, skipControl bool) *rtFixture {
+	t.Helper()
 	ke := newTestKernelEvents(t, 0, 0)
 	core := []events.TopicSpec{}
 	if !skipControl {
@@ -325,17 +232,26 @@ func newRTFixture(t *testing.T, s realtimeSettings, skipControl bool) *rtFixture
 	})}); len(probs) != 0 {
 		t.Fatalf("declare: %v", probs)
 	}
+	if l == nil {
+		l = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	kr, err := newKernelRealtime(ke.catalog(), settings, a, rtProvider(t), l, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &rtFixture{ke: ke, kr: kr}
+}
+
+// rtProvider is a fresh metrics provider: a core scope registers once per
+// provider, so every hub needs its own.
+func rtProvider(t *testing.T) *metrics.Provider {
+	t.Helper()
 	p, err := metrics.New(context.Background(), metrics.Options{AppID: "gotham", Prometheus: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
-	kr, err := newKernelRealtime(ke.catalog(), s, &fakeAuth{}, gothamCreds(), p,
-		slog.New(slog.NewTextHandler(io.Discard, nil)), time.Now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &rtFixture{ke: ke, kr: kr}
+	return p
 }
 
 // TestKernelRealtime_ControlTopicsRequired: with the control topics declared
@@ -372,43 +288,35 @@ func TestKernelRealtime_ControlTopicsRequired(t *testing.T) {
 	})
 }
 
-// TestNewKernelRealtime_Refusals: no auth service, or no store, builds no
-// hub; nor does a setting the hub refuses.
+// TestNewKernelRealtime_Refusals: no auth service, or no settings getter,
+// builds no hub; nor does a setting the hub refuses, or a second hub over the
+// same metrics scope.
 func TestNewKernelRealtime_Refusals(t *testing.T) {
 	ke := newTestKernelEvents(t, 0, 0)
-	// One provider per build: a core scope registers once per provider.
-	provider := func() *metrics.Provider {
-		p, err := metrics.New(context.Background(), metrics.Options{AppID: "gotham", Prometheus: true})
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
-		return p
-	}
-	if _, err := newKernelRealtime(ke.catalog(), realtimeSettings{}, nil, gothamCreds(), provider(), nil, nil); err == nil {
+	none := settingsOf(realtimeSettings{}).get
+	if _, err := newKernelRealtime(ke.catalog(), none, nil, rtProvider(t), nil, nil); err == nil {
 		t.Error("built a hub with no auth service")
 	}
-	if _, err := newKernelRealtime(ke.catalog(), realtimeSettings{}, &fakeAuth{}, nil, provider(), nil, nil); err == nil {
-		t.Error("built a hub with no credential store")
+	if _, err := newKernelRealtime(ke.catalog(), nil, &fakeAuth{}, rtProvider(t), nil, nil); err == nil {
+		t.Error("built a hub with no settings getter")
 	}
-	if _, err := newKernelRealtime(ke.catalog(), realtimeSettings{RingSize: -1}, &fakeAuth{}, gothamCreds(), provider(), nil, nil); err == nil {
+	if _, err := newKernelRealtime(ke.catalog(), settingsOf(realtimeSettings{RingSize: -1}).get, &fakeAuth{}, rtProvider(t), nil, nil); err == nil {
 		t.Error("built a hub with ring_size -1")
 	}
-	p := provider()
-	kr, err := newKernelRealtime(ke.catalog(), realtimeSettings{}, &fakeAuth{}, gothamCreds(), p, nil, nil)
+	p := rtProvider(t)
+	kr, err := newKernelRealtime(ke.catalog(), none, &fakeAuth{}, p, nil, nil)
 	if err != nil || kr.log == nil {
 		t.Fatalf("nil logger: %v, %v; want a hub with a discard logger", kr, err)
 	}
-	if _, err := newKernelRealtime(ke.catalog(), realtimeSettings{}, &fakeAuth{}, gothamCreds(), p, nil, nil); err == nil {
+	if _, err := newKernelRealtime(ke.catalog(), none, &fakeAuth{}, p, nil, nil); err == nil {
 		t.Error("built a second hub over the same metrics scope")
 	}
 }
 
-// TestKernelRealtime_ShutdownSendsClosedAndRunReturns: an open stream gets
-// core.stream.closed.v1{shutdown} from the RegisterOnShutdown hook, a new
-// stream is refused afterwards, and run returns once its context ends.
-func TestKernelRealtime_ShutdownSendsClosedAndRunReturns(t *testing.T) {
-	f := newRTFixture(t, realtimeSettings{}, false)
+// serve opens the bus with the hub's subscriptions and serves its handler
+// with oracle() bound, as auth's middleware would.
+func (f *rtFixture) serve(t *testing.T) *httptest.Server {
+	t.Helper()
 	subs, probs := f.kr.subscriptions()
 	if len(probs) != 0 {
 		t.Fatal(probs)
@@ -421,26 +329,26 @@ func TestKernelRealtime_ShutdownSendsClosedAndRunReturns(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = f.ke.close(context.Background()) })
-
-	bind := func(h http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			p := oracle(auth.MethodSession, "s-cave")
-			p.Perms = allowAll{}
-			h.ServeHTTP(w, r.WithContext(auth.WithPrincipal(r.Context(), p)))
-		})
-	}
-	srv := httptest.NewServer(bind(f.kr.hub.Handler()))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.kr.hub.Handler().ServeHTTP(w, r.WithContext(auth.WithPrincipal(r.Context(), oracle())))
+	}))
 	t.Cleanup(srv.Close)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = f.kr.hub.Close(ctx)
+	})
+	return srv
+}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	runDone := make(chan error, 1)
-	go func() { runDone <- f.kr.run(ctx) }()
-
+// stream opens a stream, waits for its opened frame and returns its lines.
+func (f *rtFixture) stream(t *testing.T, srv *httptest.Server) <-chan string {
+	t.Helper()
 	resp, err := http.Get(srv.URL + "/?topic=batcave.*")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("stream status %d", resp.StatusCode)
 	}
@@ -453,15 +361,38 @@ func TestKernelRealtime_ShutdownSendsClosedAndRunReturns(t *testing.T) {
 		close(lines)
 	}()
 	waitLine(t, lines, "core.stream.opened.v1")
+	return lines
+}
 
+// refusal opens a stream expected to be refused and returns its status and
+// Retry-After.
+func (f *rtFixture) refusal(t *testing.T, srv *httptest.Server) (int, string) {
+	t.Helper()
+	resp, err := http.Get(srv.URL + "/?topic=batcave.*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode, resp.Header.Get("Retry-After")
+}
+
+// TestKernelRealtime_ShutdownSendsClosedAndRunReturns: an open stream gets
+// core.stream.closed.v1{shutdown} from the RegisterOnShutdown hook, a new
+// stream is refused afterwards, and run returns once its context ends.
+func TestKernelRealtime_ShutdownSendsClosedAndRunReturns(t *testing.T) {
+	f := newRTFixture(t, realtimeSettings{}, false)
+	srv := f.serve(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() { runDone <- f.kr.run(ctx) }()
+
+	lines := f.stream(t, srv)
 	f.kr.closeOnShutdown(5 * time.Second)()
 	waitLine(t, lines, `"reason":"shutdown"`)
 
-	if resp2, err := http.Get(srv.URL + "/?topic=batcave.*"); err == nil {
-		if resp2.StatusCode != http.StatusServiceUnavailable {
-			t.Errorf("a stream opened after shutdown answered %d, want 503", resp2.StatusCode)
-		}
-		_ = resp2.Body.Close()
+	if code, _ := f.refusal(t, srv); code != http.StatusServiceUnavailable {
+		t.Errorf("a stream opened after shutdown answered %d, want 503", code)
 	}
 
 	cancel()
