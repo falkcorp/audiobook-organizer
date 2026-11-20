@@ -1,5 +1,5 @@
 // file: core/rbac/store.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 0b8f4d2e-61c7-4a95-8e3b-7d2c5a19f640
 // last-edited: 2026-11-19
 
@@ -181,15 +181,26 @@ type ImportSealer interface {
 //     it reads afterwards is at that generation or newer;
 //   - GuardRoleSet(b, g) stages into b an Expect that the counter is still g.
 //     It writes nothing. A role write committed in between fails b's Commit
-//     with storage.ErrConflict.
+//     with storage.ErrConflict. The first guard of a batch wins, and a g that
+//     is no longer the committed counter is refused at once with
+//     storage.ErrConflict, so a caller that decides twice in one batch cannot
+//     replace the older guard with a newer one;
+//   - ClaimRoleSet(b, g) is GuardRoleSet plus a bump of the counter in b. A
+//     user write that gives a user a role makes it, so that a DeleteRole that
+//     read the role's holders before the write landed conflicts with the
+//     write, as the guard makes the write conflict with a delete that landed
+//     first.
 //
-// Service.RoleSetGeneration and Service.GuardRoleSet are the entry points; they
-// report ErrNoRoleGuard when the store does not implement this interface. A
-// store that wraps another must forward both methods, or every user write that
-// runs the last-admin rule fails closed with ErrNoRoleGuard.
+// Service.RoleSetGeneration, Service.GuardRoleSet and Service.ClaimRoleSet are
+// the entry points; they report ErrNoRoleGuard when the store does not
+// implement this interface, and DeleteRole refuses on it too. A store that
+// wraps another must forward all three methods, or every user write that runs
+// the last-admin rule or gives a role, and every DeleteRole, fails closed with
+// ErrNoRoleGuard.
 type RoleGuarder interface {
 	RoleSetGeneration(ctx context.Context) (uint64, error)
 	GuardRoleSet(b *storage.Batch, generation uint64) error
+	ClaimRoleSet(b *storage.Batch, generation uint64) error
 }
 
 // customPrefix is the namespace of operator-created role names.
