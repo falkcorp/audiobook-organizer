@@ -1,5 +1,5 @@
 // file: core/httpapi/basicgate_mount_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d3a7c1e-92b4-4f08-a6d1-7e0c2b9f4a13
 // last-edited: 2026-11-19
 
@@ -8,9 +8,11 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"errors"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -215,5 +217,17 @@ func TestBuild_BasicGateRefusalOfARedirectedPathCarriesTheMountsPolicy(t *testin
 	signed := basicRequest(h, http.MethodGet, "/api/old/cowl", "bwayne:Wayne-Manor")
 	if signed.Code != http.StatusMovedPermanently || signed.Header().Get("Content-Security-Policy") != csp {
 		t.Errorf("signed in: %d, CSP %q; want the 301 under the mount's CSP", signed.Code, signed.Header().Get("Content-Security-Policy"))
+	}
+}
+
+// TestBasicGate_ProductionComparesWithSubtle: the compare a gate built for a
+// mount uses is crypto/subtle's constant-time one. The digests make a
+// timing leak invisible to a black-box test, so the wiring is pinned: a
+// plain == here would leak the first differing byte of a password digest.
+func TestBasicGate_ProductionComparesWithSubtle(t *testing.T) {
+	_, exempt := gcpdBasicRouter(t, headBasicAssets)
+	g := mustGate(t, BasicGateOptions{Settings: settingsOf(true, "bwayne"), Password: gatePW("Wayne-Manor", nil)}, exempt)
+	if reflect.ValueOf(g.equal).Pointer() != reflect.ValueOf(subtle.ConstantTimeCompare).Pointer() {
+		t.Fatal("the gate's compare is not subtle.ConstantTimeCompare")
 	}
 }
