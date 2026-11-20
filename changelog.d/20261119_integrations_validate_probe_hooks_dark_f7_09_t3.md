@@ -5,5 +5,6 @@
 
 ### Changed
 
-- `ai.Router.ClearBench` leaves a quota bench that is still in force alone (a health probe succeeds on a spent balance); a real successful call still ends every bench.
-- `integrationhttp.ErrHoldChanged` is now `providerhttp.ErrHoldChanged`, so the real provider registry serves the hold-release route without a wrapper.
+- `ai.Router.ClearBench` leaves a quota bench that is still in force alone (a health probe succeeds on a spent balance); a real successful call still ends every bench. A benching failure that lands while a quota bench is in force keeps it a quota bench with the later end time, so a probe cannot clear it and the quota window is not shortened.
+- The settings validator is handed what the row serves (stored layer plus operator overlay) as its stored layer, so a value an operator locks is grandfathered like a stored one.
+- `integrationhttp.ErrHoldChanged` is removed; the hold-release route recognises `providerhttp.ErrHoldChanged` directly, so the real provider registry serves it without a wrapper.
