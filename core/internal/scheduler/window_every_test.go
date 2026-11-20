@@ -254,3 +254,62 @@ func TestEveryAndWindow_BootOnStartFiresForMembers(t *testing.T) {
 		t.Fatalf("Members = %v", got)
 	}
 }
+
+// TestEveryAndWindow_FinishedIntervalRunDoesNotSuppressWindow pins HEAD's
+// dedup exactly: the interval fires at the poll the window opens and its run
+// finishes before the window reaches the member, so the window starts a
+// second run for the same moment. HEAD's window checked only isTaskRunning
+// and never read or stamped the interval clock
+// (internal/server/scheduler_maintenance_window_op.go); the fold covers an
+// active run and nothing more. seams.d/F5-14.md names this reading.
+func TestEveryAndWindow_FinishedIntervalRunDoesNotSuppressWindow(t *testing.T) {
+	f := newFixture(t, []tasks.Definition{gotham(tombstone, tasks.ScheduleFromConfig(tombstoneKey))},
+		fixtureOpts{schedules: map[string]tasks.ScheduleConfig{tombstoneKey: bothCfg(24*time.Hour, 7)}, windows: nightly()})
+	f.boot(day(1, 1, 0))
+	f.poll(day(1, 1, 0))
+	f.poll(day(2, 1, 0))
+	f.finish(tombstone, tasks.StateSucceeded)
+	f.windowRun(day(2, 1, 1))
+	f.expectAbout(tombstone,
+		"01-01T01:00 seed gotham.tombstone last_due=01-01T01:00",
+		"01-02T01:00 advance gotham.tombstone last_due=01-02T01:00",
+		"01-02T01:00 enqueue gotham.tombstone schedule",
+		"01-02T01:00 window nightly [gotham.tombstone]",
+		"01-02T01:01 enqueue gotham.tombstone window",
+	)
+	if c, _ := f.clockOf(tombstone); !c.LastDue.Equal(day(2, 1, 0)) {
+		t.Fatalf("the window moved the interval clock: last_due %s", c.LastDue)
+	}
+	if rs := runsOf(t, f.st, tombstone); len(rs) != 2 {
+		t.Fatalf("runs %d, want 2 (HEAD skips only an active run)", len(rs))
+	}
+}
+
+// TestEveryAndWindow_HotReloadKeepsTheIntervalClock: adding a window slot to
+// an interval schedule keeps its last_due (the interval continues; nothing is
+// counted missed across the schedule change), and dropping the slot again
+// leaves a plain interval kind that is no window member.
+func TestEveryAndWindow_HotReloadKeepsTheIntervalClock(t *testing.T) {
+	f := newFixture(t, []tasks.Definition{gotham(tombstone, tasks.ScheduleFromConfig(tombstoneKey))},
+		fixtureOpts{schedules: map[string]tasks.ScheduleConfig{tombstoneKey: every(6 * time.Hour)}, windows: nightly()})
+	f.boot(day(1, 12, 0))
+	f.poll(day(1, 12, 0))
+	f.cfg.set(tombstoneKey, bothCfg(6*time.Hour, 7))
+	if got := f.scheduler().Members("nightly"); !slices.Equal(got, []tasks.Kind{tombstone}) {
+		t.Fatalf("Members = %v after adding the slot", got)
+	}
+	f.poll(day(1, 17, 0))
+	f.poll(day(1, 18, 0))
+	f.expectAbout(tombstone,
+		"01-01T12:00 seed gotham.tombstone last_due=01-01T12:00",
+		"01-01T18:00 advance gotham.tombstone last_due=01-01T18:00",
+		"01-01T18:00 enqueue gotham.tombstone schedule",
+	)
+	if f.rec.missed[tombstone] != 0 {
+		t.Fatalf("a schedule change counted %d missed", f.rec.missed[tombstone])
+	}
+	f.cfg.set(tombstoneKey, every(6*time.Hour))
+	if got := f.scheduler().Members("nightly"); len(got) != 0 {
+		t.Fatalf("Members = %v after dropping the slot", got)
+	}
+}
