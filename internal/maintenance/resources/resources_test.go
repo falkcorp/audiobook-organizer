@@ -1,5 +1,5 @@
 // file: internal/maintenance/resources/resources_test.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: 7b3c9e52-1d84-4a6f-9c07-e5a2f81d3b46
 // last-edited: 2026-11-19
 
@@ -90,6 +90,7 @@ var rowsPinned = map[string]string{
 	"ReconcileFilterIndexCoverage":        "activity",
 	"RecordIntroTimeout":                  "book_files",
 	"RecordMetadataChange":                "books",
+	"RecordPathChange":                    "books",
 	"RecordOperationChange":               "operations",
 	"RecordSyncMerge":                     "sync_identity",
 	"BatchUpsertBookFiles":                "authors book_files books indexes metadata_cache",
