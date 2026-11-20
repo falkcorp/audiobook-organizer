@@ -1,5 +1,5 @@
 // file: core/auth/oidc/roleclaim_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7e4b1a93-c5d2-4f68-9a07-3b8d6e1f4c25
 // last-edited: 2026-11-19
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/falkcorp/mediacore/audit"
@@ -135,5 +136,70 @@ func TestOIDC_CreateLosingEveryTryIsContended(t *testing.T) {
 	}
 	if n := f.countUsers(); n != 0 {
 		t.Fatalf("%d account(s) created by a sign-in that never committed", n)
+	}
+}
+
+// afterRoleRead is a RoleReader that runs fn once, right after the at-th read
+// of role name returns: a role write landing after the resolver read the role
+// its decision rests on, and before anything else of the decision is left.
+type afterRoleRead struct {
+	RoleReader
+	name  rbac.RoleName
+	at    int
+	mu    sync.Mutex
+	calls int
+	fn    func()
+}
+
+func (r *afterRoleRead) Role(ctx context.Context, name rbac.RoleName) (*rbac.Role, error) {
+	role, err := r.RoleReader.Role(ctx, name)
+	r.mu.Lock()
+	var fn func()
+	if name == r.name {
+		r.calls++
+		if r.calls == r.at {
+			fn, r.fn = r.fn, nil
+		}
+	}
+	r.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+	return role, err
+}
+
+// TestOIDC_CreateReadsTheGenerationBeforeAnyRole (F4-02-ROLE-GUARD r3, n7):
+// the first sign-in reads the role-set generation before it reads the default
+// role, so a role write that lands right after its last read of the role, and
+// before the commit, is seen at the commit. A generation read after the role
+// reads would take the generation the write produced and let the stale decision
+// stand: the account would be created holding a deleted role. The reader here
+// deletes the role after the create's own read of it (the second: holdsAdmin
+// reads it first), which is the last role read of the decision.
+func TestOIDC_CreateReadsTheGenerationBeforeAnyRole(t *testing.T) {
+	f := newFx(t)
+	pol := untrusting()
+	pol.DefaultRole = roleSignal
+	var delErr error
+	var fired bool
+	roles := &afterRoleRead{RoleReader: f.rb, name: roleSignal, at: 2, fn: func() {
+		fired = true
+		delErr = f.deleteSignal()
+	}}
+	_, err := f.resolverOver(roles, nil).Resolve(context.Background(), pol, claims("sub-robin", "dick@wayne.example.test"))
+	if !fired {
+		t.Fatal("the role never changed: the resolver read the default role fewer than twice")
+	}
+	if delErr != nil {
+		t.Fatalf("DeleteRole, with no holder committed: %v", delErr)
+	}
+	if !errors.Is(err, auth.ErrBadInput) {
+		t.Fatalf("a first sign-in over a default role deleted right after its last read: err = %v, want auth.ErrBadInput (the retry cannot read the role)", err)
+	}
+	if n := f.countUsers(); n != 0 {
+		t.Fatalf("%d account(s) created over a deleted role", n)
+	}
+	if n := f.signalHolders(); n != 0 {
+		t.Fatalf("%d holder(s) of the deleted role", n)
 	}
 }

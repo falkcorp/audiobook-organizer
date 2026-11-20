@@ -1,5 +1,5 @@
 // file: core/auth/oidc/fixture_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b1d75824-9a46-4e31-a57d-84cb5a5a7945
 // last-edited: 2026-11-19
 
@@ -127,8 +127,15 @@ func newFx(t testing.TB) *fx {
 // resolver is a Resolver over the fixture.
 func (f *fx) resolver(extra func(context.Context, string) (bool, error)) *Resolver {
 	f.t.Helper()
+	return f.resolverOver(f.rb, extra)
+}
+
+// resolverOver is resolver with roles as the role reader, so a test can wrap
+// the fixture's rbac service.
+func (f *fx) resolverOver(roles RoleReader, extra func(context.Context, string) (bool, error)) *Resolver {
+	f.t.Helper()
 	r, err := NewResolver(ResolverDeps{
-		Store: f.st, NewBatch: f.st.NewBatch, Audit: f.audit, Roles: f.rb, Accounts: f.svc,
+		Store: f.st, NewBatch: f.st.NewBatch, Audit: f.audit, Roles: roles, Accounts: f.svc,
 		ExtraAllowed: extra, Clock: f.clock,
 	})
 	if err != nil {
