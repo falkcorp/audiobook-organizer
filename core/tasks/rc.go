@@ -96,7 +96,10 @@ type RunRef struct {
 	Existing bool // the start folded into (dedupe) or replayed (idempotency) an existing run; coined by F2-01
 }
 
-// Outcome is how an awaited child run ended (rc.Await).
+// Outcome is how an awaited child run ended (rc.Await). Result is set on a
+// failed, timed-out or canceled run too when the run returned a non-zero result
+// beside its error (F5-18d), so a caller decides success by State, never by
+// whether Result is set.
 type Outcome struct {
 	State  RunState
 	Result json.RawMessage
