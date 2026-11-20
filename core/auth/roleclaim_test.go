@@ -1,5 +1,5 @@
 // file: core/auth/roleclaim_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 0c5d7e21-93b4-4a68-8f1e-2d6a4b9c7e53
 // last-edited: 2026-11-19
 
@@ -698,5 +698,27 @@ func TestRoleClaim_InviteForARoleDeletedBeforeAcceptance(t *testing.T) {
 	}
 	if n := c.holdersOfRobin(); n != 0 {
 		t.Fatalf("%d user(s) hold the role after the second accept", n)
+	}
+}
+
+// TestRoleClaim_AdminStillRemovesADanglingRole (F4-02-ROLE-GUARD r3, m1): the
+// claim refuses an absent role for every actor, but only for roles a write adds.
+// A user already holding a name no role carries (stored behind the service's
+// back, as a restore or an old delete could leave it) can have it taken off by
+// an admin through SetRoles, which is why the cache check keeps its exemption
+// and removals never reach the claim. The manager is still refused.
+func TestRoleClaim_AdminStillRemovesADanglingRole(t *testing.T) {
+	const ghost rbac.RoleName = "custom.ghost"
+	c := newClaimFx(t)
+	ctx := context.Background()
+	c.f.setRoles(c.jason.ID, "gotham.detective", ghost)
+	if err := c.f.svc.SetRoles(ctx, c.manager, c.jason.ID, []rbac.RoleName{"gotham.detective"}); !errors.Is(err, auth.ErrScopeEscalation) && !errors.Is(err, auth.ErrDominance) {
+		t.Fatalf("the manager removing a role no one defined: err = %v, want a refusal", err)
+	}
+	if err := c.f.svc.SetRoles(ctx, c.adminActor(), c.jason.ID, []rbac.RoleName{"gotham.detective"}); err != nil {
+		t.Fatalf("an admin removing a role no one defined: %v", err)
+	}
+	if got := c.f.reload(c.jason.ID).Roles; !slices.Equal(got, []rbac.RoleName{"gotham.detective"}) {
+		t.Fatalf("roles after the removal = %v, want only gotham.detective", got)
 	}
 }
