@@ -424,8 +424,10 @@ func TestEngine_RebuildErrorsKeepTheProjection(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected openai_api_key's failure")
 	}
-	if got := e.Snapshot().OpenAIAPIKey + "/" + e.Snapshot().HardcoverAPIToken; got != "/penguin" {
-		t.Fatalf("after a half-applied secret write the projection is %q, want /penguin (what committed)", got)
+	// Update is all or nothing: the hardcover token that committed before the
+	// openai key failed is put back (undo_test.go pins each compensation).
+	if got := e.Snapshot().OpenAIAPIKey + "/" + e.Snapshot().HardcoverAPIToken; got != "/" {
+		t.Fatalf("after a failed secret write the projection is %q, want / (nothing committed)", got)
 	}
 }
 

@@ -185,7 +185,16 @@ type Facade interface {
 	Locks() map[string]string
 	// View is GET /api/v1/config's content.
 	View() View
-	// Update is PUT /api/v1/config's write.
+	// Update is PUT /api/v1/config's write. It is all or nothing across the
+	// stores it writes (core's keys, the secret store, the settings kept outside
+	// core): the refusals come before any write, what each step would replace is
+	// read before the first one, and a step that fails puts back the ones
+	// before it, newest first, so the error leaves the stores as they were. If
+	// putting a step back fails too, the error also wraps an incomplete-rollback
+	// error that names the steps it could not restore, and the stores may then
+	// disagree; a secret that held a value the store could not read cannot be
+	// restored either, and is named the same way. A key with a restart pending
+	// is put back to its effective value, not the stored one it replaced.
 	Update(ctx context.Context, a Actor, u Update) (UpdateResult, error)
 }
 

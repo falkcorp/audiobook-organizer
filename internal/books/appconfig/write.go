@@ -279,31 +279,50 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 	if v := execPathViolations(before, u); len(v) > 0 {
 		return config.UpdateResult{}, headErr(errors.Join(coreconfig.ErrInvalid, errors.Join(v...)), byPath)
 	}
+	// Update is all or nothing: its steps commit in different stores (core's
+	// rows, the secret store, the residual blob), so what each would replace is
+	// read first, before anything is written, and a failing step undoes the ones
+	// before it (compensate). The residual save is last because nothing can fail
+	// after it that needs undoing (a single batch, so a failed save wrote nothing),
+	// which is why it has no snapshot or undo of its own.
+	undo, err := e.snapshotForUndo(ctx, patch, secretSets, secretClears)
+	if err != nil {
+		return config.UpdateResult{}, err
+	}
 	var res coreconfig.Result
 	genBefore := e.acc.Generation()
+	var done []undoStep
+	fail := func(cause error) (config.UpdateResult, error) {
+		return config.UpdateResult{}, e.compensate(ctx, done, cause)
+	}
 	if len(patch.Set)+len(patch.Unset) > 0 {
 		var err error
 		if res, err = e.acc.Apply(ctx, patch, applyAs); err != nil {
 			return config.UpdateResult{}, headErr(err, byPath)
 		}
+		if res.Generation != genBefore {
+			done = append(done, undo.keysStep(e, applyAs))
+		}
 	}
 	for _, op := range secretSets {
 		if _, err := e.acc.PutSecret(ctx, op.name, secrets.NewValue(op.value), a.Subject); err != nil {
-			return e.partial(ctx, res, byPath, fmt.Errorf("appconfig: storing %s: %w", op.head, err))
+			return fail(fmt.Errorf("appconfig: storing %s: %w", op.head, err))
 		}
+		done = append(done, undo.secret(e, op.name, op.head, a.Subject))
 		res.Applied = append(res.Applied, coreconfig.Path(op.name))
 		byPath[coreconfig.Path(op.name)] = op.head
 	}
 	for _, op := range secretClears {
 		if err := e.acc.DeleteSecret(ctx, op.name, a.Subject); err != nil {
-			return e.partial(ctx, res, byPath, fmt.Errorf("appconfig: clearing %s: %w", op.head, err))
+			return fail(fmt.Errorf("appconfig: clearing %s: %w", op.head, err))
 		}
+		done = append(done, undo.secret(e, op.name, op.head, a.Subject))
 		res.Applied = append(res.Applied, coreconfig.Path(op.name))
 		byPath[coreconfig.Path(op.name)] = op.head
 	}
 	if len(resSet)+len(resUnset) > 0 {
 		if err := e.res.Save(ctx, resSet, resUnset); err != nil {
-			return e.partial(ctx, res, byPath, fmt.Errorf("appconfig: saving the residual settings: %w", err))
+			return fail(fmt.Errorf("appconfig: saving the residual settings: %w", err))
 		}
 		for h := range resSet {
 			res.Applied = append(res.Applied, coreconfig.Path(h))
@@ -392,13 +411,6 @@ func secretHeads(ops []secretOp) []string {
 		hs = append(hs, o.head)
 	}
 	return hs
-}
-
-// partial reports a secret write that failed after Apply committed: what
-// committed stays, and the projection is rebuilt to say so.
-func (e *Engine) partial(ctx context.Context, res coreconfig.Result, byPath map[coreconfig.Path]string, cause error) (config.UpdateResult, error) {
-	_ = e.Rebuild(ctx)
-	return config.UpdateResult{Generation: res.Generation}, cause
 }
 
 // headErr rewrites core's errors to HEAD's names: a path the store reports is the

@@ -33,6 +33,11 @@ type fakeAccess struct {
 	secretErr map[secrets.Name]error // a bare error Secret returns, with no Meta.Err
 	envSecret map[secrets.Name]bool
 	putFail   map[secrets.Name]bool
+	delFail   map[secrets.Name]bool
+	over      map[coreconfig.Path]bool            // keys a stored override holds
+	defs      map[coreconfig.Path]json.RawMessage // what an Unset falls back to
+	failApply int                                 // the 1-based Apply call that fails (0 = none)
+	applyN    int
 	pass      map[coreconfig.Path]coreconfig.OperatorValue
 	gen       uint64
 	hooks     []func(uint64)
@@ -42,11 +47,12 @@ type fakeAccess struct {
 	puts      []secrets.Name
 	dels      []secrets.Name
 	by        []string
+	trace     []string // every committed write in order: apply, put <name>, del <name>
 }
 
 func newFake() *fakeAccess {
 	return &fakeAccess{vals: map[coreconfig.Path]json.RawMessage{}, locked: map[coreconfig.Path]string{},
-		regSecret: map[coreconfig.Path]bool{}, secrets: map[secrets.Name]string{}, unreadble: map[secrets.Name]bool{}, secretErr: map[secrets.Name]error{}, envSecret: map[secrets.Name]bool{}, putFail: map[secrets.Name]bool{},
+		regSecret: map[coreconfig.Path]bool{}, secrets: map[secrets.Name]string{}, unreadble: map[secrets.Name]bool{}, secretErr: map[secrets.Name]error{}, envSecret: map[secrets.Name]bool{}, putFail: map[secrets.Name]bool{}, delFail: map[secrets.Name]bool{}, over: map[coreconfig.Path]bool{}, defs: map[coreconfig.Path]json.RawMessage{},
 		pass: map[coreconfig.Path]coreconfig.OperatorValue{}}
 }
 
@@ -61,7 +67,11 @@ func (f *fakeAccess) Lookup(p coreconfig.Path) (coreconfig.KeyState, bool) {
 	if !ok {
 		return coreconfig.KeyState{}, false
 	}
-	return coreconfig.KeyState{Path: p, Effective: v, LockedBy: f.locked[p], Pending: f.pending[p]}, true
+	src := coreconfig.SourceDefault
+	if f.over[p] {
+		src = coreconfig.SourceOverride
+	}
+	return coreconfig.KeyState{Path: p, Effective: v, Source: src, LockedBy: f.locked[p], Pending: f.pending[p]}, true
 }
 
 func (f *fakeAccess) Keys() iter.Seq2[coreconfig.Path, coreconfig.KeyState] {
@@ -71,11 +81,17 @@ func (f *fakeAccess) Keys() iter.Seq2[coreconfig.Path, coreconfig.KeyState] {
 func (f *fakeAccess) Apply(_ context.Context, p coreconfig.Patch, a coreconfig.Actor) (coreconfig.Result, error) {
 	f.mu.Lock()
 	f.actors = append(f.actors, a)
+	f.applyN++
+	if f.failApply != 0 && f.applyN == f.failApply {
+		f.mu.Unlock()
+		return coreconfig.Result{}, errors.New("core store is read-only")
+	}
 	if f.applyErr != nil {
 		f.mu.Unlock()
 		return coreconfig.Result{}, f.applyErr
 	}
 	f.applied = append(f.applied, p)
+	f.trace = append(f.trace, "apply")
 	var applied []coreconfig.Path
 	// Like core: a patch that leaves every value as it is commits nothing and
 	// moves no generation, yet reports the patch's paths as applied.
@@ -89,14 +105,19 @@ func (f *fakeAccess) Apply(_ context.Context, p coreconfig.Patch, a coreconfig.A
 		} else {
 			changed = changed || !bytes.Equal(f.vals[k], v)
 			f.vals[k] = v
+			f.over[k] = true
 		}
 		applied = append(applied, k)
 	}
 	for _, k := range p.Unset {
 		_, had := f.secrets[secrets.Name(k)]
 		_, hadVal := f.vals[k]
-		changed = changed || had || hadVal
+		changed = changed || had || hadVal || f.over[k]
 		delete(f.secrets, secrets.Name(k))
+		if d, ok := f.defs[k]; ok {
+			f.vals[k] = d
+		}
+		delete(f.over, k)
 		applied = append(applied, k)
 	}
 	slices.Sort(applied)
@@ -176,6 +197,7 @@ func (f *fakeAccess) PutSecret(_ context.Context, n secrets.Name, v secrets.Valu
 	}
 	f.secrets[n] = v.Reveal()
 	f.puts = append(f.puts, n)
+	f.trace = append(f.trace, "put "+string(n))
 	f.by = append(f.by, by)
 	return secrets.Meta{Name: n, Set: true}, nil
 }
@@ -183,8 +205,12 @@ func (f *fakeAccess) PutSecret(_ context.Context, n secrets.Name, v secrets.Valu
 func (f *fakeAccess) DeleteSecret(_ context.Context, n secrets.Name, by string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.delFail[n] {
+		return errors.New("secret store is read-only")
+	}
 	delete(f.secrets, n)
 	f.dels = append(f.dels, n)
+	f.trace = append(f.trace, "del "+string(n))
 	f.by = append(f.by, by)
 	return nil
 }
