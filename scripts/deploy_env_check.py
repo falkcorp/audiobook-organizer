@@ -300,8 +300,8 @@ def check_makefile_local(path: Path, environ: dict[str, str], list_path: Path = 
     detail = "\n".join(f"  {p}" for p in problems)
     owner_step = (
         "Install the helper bundle on the host FIRST (once, as the owner: `make install-rollback-helpers`, "
-        'docs/system/deploy-and-gpu-ops.md, "Rollback helpers"), THEN replace this file\'s deploy and '
-        "deploy-debug recipes with Makefile.local.example's: they install the binary, the unit and "
+        'docs/system/deploy-and-gpu-ops.md, "Rollback helpers"), THEN merge Makefile.local.example\'s deploy and '
+        "deploy-debug recipes into this file (keep your own variables): they install the binary, the unit and "
         "local.conf through the root-owned install-staged helper, which keeps the previous ones. A "
         "recipe that calls the helper before it is installed fails at its first step."
     )
