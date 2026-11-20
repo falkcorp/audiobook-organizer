@@ -1,5 +1,5 @@
 // file: core/secrets/offline.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: ea65355e-8977-4406-a748-63dd510dc8d8
 // last-edited: 2026-11-19
 
@@ -122,7 +122,22 @@ type ExportResult struct {
 // exists looser than 0600 or is not a regular file, and one that is the
 // keyring or its record. The copy is the keyring file byte for byte, header
 // install_id included, so storage restore-offline --keyring can put it back.
+//
+// Before it reads the keyring it fsyncs the keyring's directory
+// (labelExportSync) and fails closed when that fails: a keyring entry whose
+// directory sync once failed is only in the page cache, a power loss can drop
+// it, and the operator would hold a backup of a key the next boot does not
+// have (the same shape as the load-time sync in resolveKeyring).
 func ExportKeyring(stateDir *os.Root, keyFile, out string, now time.Time) (ExportResult, error) {
+	if stateDir == nil {
+		return ExportResult{}, errors.New("secrets: export-keyring needs the state directory")
+	}
+	return exportKeyring(stateDir, RootStateFiles(stateDir), keyFile, out, now)
+}
+
+// exportKeyring is ExportKeyring over files, the state directory's file
+// access (a test's spy wraps it).
+func exportKeyring(stateDir *os.Root, files StateFiles, keyFile, out string, now time.Time) (ExportResult, error) {
 	if stateDir == nil {
 		return ExportResult{}, errors.New("secrets: export-keyring needs the state directory")
 	}
@@ -134,7 +149,11 @@ func ExportKeyring(stateDir *os.Root, keyFile, out string, now time.Time) (Expor
 		return ExportResult{}, err
 	}
 	recordName := exportedRecordName(keyFile)
-	files := RootStateFiles(stateDir)
+	if _, err := files.Lstat(keyFile); err == nil {
+		if err := syncDir(files, labelExportSync, filepath.Dir(keyFile)); err != nil {
+			return ExportResult{}, fmt.Errorf("secrets: export-keyring did not copy the keyring: its directory could not be synced, so the entry may not be durable: %w", err)
+		}
+	}
 	raw, f, err := readKeyringBytes(files, keyFile)
 	if err != nil {
 		return ExportResult{}, err
