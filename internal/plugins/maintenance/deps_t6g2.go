@@ -38,15 +38,28 @@ type t6g2BootHost = t6g2BootWriter
 
 // newT6G2Deps is the books module's t6g2Deps. src is the store, host the boot
 // passes, rootDir the library root the report path is confined under.
+//
+// A missing input leaves the field that needs it unset rather than wrapping nil
+// in an adapter: the group's env builder refuses an unset Store, NewWriter or
+// NewWriter result by name, and an adapter around a nil would pass those
+// refusals and fail later on a nil dereference. A nil src leaves everything
+// unset; a nil host leaves NewWriter unset; a nil rootDir leaves
+// ReportPath unset.
 func newT6G2Deps(src t6g2Source, host t6g2BootHost, rootDir func() string) t6g2Deps {
-	rows := groupRows(nil, reflect.TypeFor[t6g2Writer]())
-	return t6g2Deps{
-		Store: &booksT6G2Store{src: src},
-		NewWriter: func(w tasks.Writer) t6g2Writer {
-			return &booksT6G2Writer{src: src, host: host, gate: newBooksGate(w, rows)}
-		},
-		ReportPath: reportPathOver(rootDir),
+	if src == nil {
+		return t6g2Deps{}
 	}
+	rows := groupRows(nil, reflect.TypeFor[t6g2Writer]())
+	d := t6g2Deps{Store: &booksT6G2Store{src: src}}
+	if host != nil {
+		d.NewWriter = func(w tasks.Writer) t6g2Writer {
+			return &booksT6G2Writer{src: src, host: host, gate: newBooksGate(w, rows)}
+		}
+	}
+	if rootDir != nil {
+		d.ReportPath = reportPathOver(rootDir)
+	}
+	return d
 }
 
 // booksT6G2Store is the group's reads. The optional ones resolve the
