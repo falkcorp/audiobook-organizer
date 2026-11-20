@@ -1,5 +1,5 @@
 // file: internal/books/appconfig/write.go
-// version: 1.1.0
+// version: 1.2.1
 // guid: 1e5a7c93-4d08-4f26-b3a9-8c0d2e6f1b74
 // last-edited: 2026-11-19
 
@@ -104,8 +104,39 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 	var unknown, readOnly []string
 	var invalid []error
 	byPath := map[coreconfig.Path]string{}
+	foldVals, rootsVals := map[string]json.RawMessage{}, map[string]json.RawMessage{}
 	add := func(head string, raw json.RawMessage, clear bool) {
 		p, ok := e.byHead[head]
+		if ok && (e.foldHeads[head] || p.kind != kindKey) {
+			// A field stored inside a core list: checked against its Config type
+			// here, folded into the list below. Clearing one is its zero value.
+			// The gate is the Engine's own: the lists are shared by several
+			// HEAD fields, so core's per-key policy alone is not asked.
+			if p.row.Admin {
+				adminHeads = append(adminHeads, head)
+			}
+			var probe config.Config
+			f, has := fieldAt(&probe, p.segs)
+			if !has {
+				unknown = append(unknown, head)
+				return
+			}
+			if clear {
+				raw = mustMarshal(f.Interface())
+			} else if json.Unmarshal(raw, f.Addr().Interface()) != nil {
+				invalid = append(invalid, &coreconfig.FieldError{Path: coreconfig.Path(head), Err: errors.New("the value does not fit the setting")})
+				return
+			}
+			switch {
+			case p.kind == kindRoots:
+				rootsVals[head] = raw
+				return
+			case p.kind == kindFold:
+				foldVals[head] = raw
+				return
+			}
+			foldVals[head] = raw // the allow-list also has a key of its own: fall through
+		}
 		switch {
 		case !ok:
 			unknown = append(unknown, head)
@@ -178,6 +209,10 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 			continue
 		}
 		add(head, nil, true)
+	}
+	also := map[coreconfig.Path][]string{}
+	if err := e.foldInto(ctx, &patch, byPath, also, foldVals, rootsVals, secretSets); err != nil {
+		invalid = append(invalid, err)
 	}
 	if len(unknown) > 0 {
 		slices.Sort(unknown)
@@ -267,6 +302,7 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 	}
 	for _, p := range res.Applied {
 		out.Applied = append(out.Applied, byPath[p])
+		out.Applied = append(out.Applied, also[p]...)
 	}
 	for _, p := range res.RestartPending {
 		if h, ok := byPath[p]; ok {

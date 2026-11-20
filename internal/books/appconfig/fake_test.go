@@ -1,5 +1,5 @@
 // file: internal/books/appconfig/fake_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2a6d8f14-7c39-4e51-9b0a-e3f5c1d7a862
 // last-edited: 2026-11-19
 
@@ -26,6 +26,7 @@ type fakeAccess struct {
 	mu        sync.Mutex
 	vals      map[coreconfig.Path]json.RawMessage // effective values of registered keys
 	locked    map[coreconfig.Path]string
+	pending   map[coreconfig.Path]bool // keys Lookup reports as stored-not-yet-effective
 	regSecret map[coreconfig.Path]bool // registered secret keys
 	secrets   map[secrets.Name]string  // the secret store
 	unreadble map[secrets.Name]bool
@@ -59,7 +60,7 @@ func (f *fakeAccess) Lookup(p coreconfig.Path) (coreconfig.KeyState, bool) {
 	if !ok {
 		return coreconfig.KeyState{}, false
 	}
-	return coreconfig.KeyState{Path: p, Effective: v, LockedBy: f.locked[p]}, true
+	return coreconfig.KeyState{Path: p, Effective: v, LockedBy: f.locked[p], Pending: f.pending[p]}, true
 }
 
 func (f *fakeAccess) Keys() iter.Seq2[coreconfig.Path, coreconfig.KeyState] {

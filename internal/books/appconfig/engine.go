@@ -1,5 +1,5 @@
 // file: internal/books/appconfig/engine.go
-// version: 1.1.0
+// version: 1.2.1
 // guid: 6c2f8a4d-9e13-4b75-a1c0-d4e7f3b82a59
 // last-edited: 2026-11-19
 
@@ -33,6 +33,10 @@ type Engine struct {
 	tab    *cutover.RenameTable
 	rows   []projRow
 	byHead map[string]projRow
+	// foldHeads are the HEAD fields written through core's OIDC provider list,
+	// and oidcSecret each provider's client-secret key (the entry's reference).
+	foldHeads  map[string]bool
+	oidcSecret map[string]string
 	// below is, for a row whose field holds other rows' fields (download_client
 	// holds the Deluge password, a secret row of its own), their paths: the
 	// holder's own value leaves them out, so a secret never lands in the residual.
@@ -108,6 +112,22 @@ func New(acc Store, publish func(config.Config), opts ...Option) *Engine {
 		byHead[p.row.Head] = p
 	}
 	e.tab, e.rows, e.byHead = tab, rows, byHead
+	e.foldHeads, e.oidcSecret = map[string]bool{}, map[string]string{}
+	for i := range tab.Rows {
+		r := &tab.Rows[i]
+		if foldsIntoOIDC(r) && hasField(strings.Split(r.Head, ".")) {
+			e.foldHeads[r.Head] = true
+		}
+		for _, id := range []string{"github", "google"} {
+			if r.Head == "oauth_"+id+"_client_secret" {
+				for _, t := range r.Targets {
+					if t.Kind == cutover.TargetSecret {
+						e.oidcSecret[id] = t.Path
+					}
+				}
+			}
+		}
+	}
 	e.below = map[string][][]string{}
 	for _, p := range rows {
 		for _, q := range rows {
@@ -141,7 +161,23 @@ type projRow struct {
 	segs     []string // Head split into the JSON path of the field
 	target   cutover.Target
 	residual bool // class i: read from and written to the Residual, no core key
+	kind     rowKind
 }
+
+// rowKind says how a row is read and written when it is not a plain key.
+type rowKind uint8
+
+const (
+	// kindKey is an ordinary row: one key, one secret, a passthrough or a
+	// residual field.
+	kindKey rowKind = iota
+	// kindFold is an oauth_* field that lives inside core's OIDC provider list
+	// (projectFolds reads it, FoldOIDC writes it).
+	kindFold
+	// kindRoots is root_dir or path_aliases, which live in core's library roots
+	// (projectFolds reads them, FoldRoots writes them).
+	kindRoots
+)
 
 // plan lists the rows the projection reads, in table order. A row is read when
 // it names a field of Config (not a container, a removed key, a process name or
@@ -157,7 +193,12 @@ func plan(tab *cutover.RenameTable, residual bool) []projRow {
 		}
 		if r.Class == cutover.ClassInput {
 			if foldsIntoRoots(r) {
-				continue // root_dir and path_aliases come from core.library.roots
+				// root_dir and path_aliases come from core.library.roots: read by
+				// projectFolds, written by FoldRoots.
+				if segs := strings.Split(r.Head, "."); hasField(segs) {
+					out = append(out, projRow{row: r, segs: segs, kind: kindRoots})
+				}
+				continue
 			}
 			if segs := strings.Split(r.Head, "."); residual && concrete(r.Head) && hasField(segs) {
 				out = append(out, projRow{row: r, segs: segs, residual: true})
@@ -173,6 +214,13 @@ func plan(tab *cutover.RenameTable, residual bool) []projRow {
 		case cutover.ClassEnv:
 			want = func(t cutover.Target) bool { return t.Kind == cutover.TargetKey || t.Kind == cutover.TargetPassthrough }
 		default:
+			continue
+		}
+		if r.Class == cutover.ClassKey && foldsIntoOIDC(r) && !hasKeyTarget(r) {
+			// A field only the provider list stores: no key of its own.
+			if segs := strings.Split(r.Head, "."); hasField(segs) {
+				out = append(out, projRow{row: r, segs: segs, kind: kindFold})
+			}
 			continue
 		}
 		for _, t := range r.Targets {
@@ -254,6 +302,9 @@ func (e *Engine) project(ctx context.Context) (*projection, error) {
 		return nil
 	}
 	for _, p := range e.rows {
+		if p.kind != kindKey {
+			continue // projectFolds reads these
+		}
 		var (
 			val   json.RawMessage
 			by    string
@@ -503,7 +554,7 @@ func (e *Engine) View() config.View {
 					kv.Value = raw
 				}
 			}
-			if st, ok := e.acc.Lookup(coreconfig.Path(p.target.Path)); ok {
+			if st, ok := e.acc.Lookup(coreconfig.Path(e.keyOf(p))); ok {
 				kv.RestartPending = st.Pending
 			}
 		}
@@ -559,4 +610,38 @@ func foldsIntoRoots(r *cutover.Row) bool {
 		}
 	}
 	return false
+}
+
+// foldsIntoOIDC reports whether a row is one of the HEAD fields that live in
+// core's OIDC provider list (a fold target of that list).
+func foldsIntoOIDC(r *cutover.Row) bool {
+	for _, t := range r.Targets {
+		if t.Kind == cutover.TargetFold && t.List == oidcProvidersKey {
+			return true
+		}
+	}
+	return false
+}
+
+// hasKeyTarget reports whether a row also has an ordinary key of its own (the
+// allow-list: M2 writes it to the Cloudflare Access key besides the fold).
+func hasKeyTarget(r *cutover.Row) bool {
+	for _, t := range r.Targets {
+		if t.Kind == cutover.TargetKey && concrete(t.Path) {
+			return true
+		}
+	}
+	return false
+}
+
+// keyOf is the core key a row's value is stored in: its own target, or the list
+// a fold or roots row lives in.
+func (e *Engine) keyOf(p projRow) string {
+	switch p.kind {
+	case kindFold:
+		return oidcProvidersKey
+	case kindRoots:
+		return libraryRootsKey
+	}
+	return p.target.Path
 }
