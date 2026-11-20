@@ -294,6 +294,7 @@ func aboUnreachedLabels() map[string]string {
 		"secrets.keyring.load-sync":    noConfigBoot + " (a boot that finds the keyring; TestBootCrashMatrix_ABOFlipCells/keyring-load-sync breaks it over the flip)",
 		"secrets.keyring":              noConfigBoot,
 		"secrets.meta":                 noConfigBoot,
+		"config.reset.fresh_rows":      noConfigBoot + " (the reset boot's FailClosed rows, SEC8-5; hello's reset fixtures break it)",
 		"storage.levelstep.sidecars":   "books declares no level step at R1 (Level 0; raising one is an R1-23 STOP condition)",
 		"storage.levelstep.rollback":   "books declares no level step at R1",
 		"storage.dm.plan":              noDataMigration,
