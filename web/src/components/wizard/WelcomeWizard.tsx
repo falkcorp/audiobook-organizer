@@ -1,5 +1,5 @@
 // file: web/src/components/wizard/WelcomeWizard.tsx
-// version: 1.6.1
+// version: 1.6.2
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-11-19
 
@@ -297,7 +297,11 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
       onComplete();
     } catch (error) {
       console.error('Failed to complete setup:', error);
-      alert('Failed to save settings. Please check the console for details.');
+      // Name the server's reason: a library root can now be refused (a 422 that
+      // names the field, a 403 for a caller short of the admin role), and
+      // "check the console" hides which.
+      const reason = error instanceof Error && error.message ? `\n\n${error.message}` : '';
+      alert(`Failed to save settings.${reason}`);
     } finally {
       setSaving(false);
     }
