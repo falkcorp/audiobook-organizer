@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.19.0
+// version: 1.19.1
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
 // last-edited: 2026-11-19
 
@@ -20,8 +20,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
@@ -672,8 +670,11 @@ type authorStripPreview struct {
 // its writes keep the plan order the undo ledger and the held counts depend on.
 func previewAuthorStripPlans(ctx context.Context, env authorStripMergeEnv, plans []authorStripPlan, doomed map[int]bool, relinked map[string]bool, skip *database.Author, log *slog.Logger) []authorStripPreview {
 	out := make([]authorStripPreview, len(plans))
-	var g errgroup.Group
-	g.SetLimit(authorStripPreviewParallelism())
+	// A WaitGroup behind a semaphore, not an errgroup: no unit has an error to
+	// return (each keeps its own in its slot), so errgroup's Wait result would
+	// be an error return with nothing in it for the caller to check.
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, authorStripPreviewParallelism())
 	var done atomic.Int64
 	var progressMu sync.Mutex // env.Progress is the run's, not safe to call from two workers at once
 	for i := range plans {
@@ -684,7 +685,11 @@ func previewAuthorStripPlans(ctx context.Context, env authorStripMergeEnv, plans
 		if skip != nil && pl.from.ID == skip.ID {
 			continue // the loop skips the fallback row too
 		}
-		g.Go(func() error {
+		sem <- struct{}{} // blocks while the pool is full
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
 			if pl.into != nil {
 				_, _, out[i].err = mergeAuthorIntoVia(ctx, env.Store, env.Writer, pl.from, *pl.into, true, "", log)
 			} else {
@@ -695,10 +700,9 @@ func previewAuthorStripPlans(ctx context.Context, env authorStripMergeEnv, plans
 				env.Progress(int(n), len(plans), "Previewing author repairs…")
 				progressMu.Unlock()
 			}
-			return nil
-		})
+		}()
 	}
-	_ = g.Wait() // the units return nil: each keeps its own error in its slot
+	wg.Wait()
 	return out
 }
 
