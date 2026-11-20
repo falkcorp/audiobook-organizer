@@ -3260,12 +3260,14 @@ func resolveAuthorBooksIndexer(s any) (authorBooksIndexer, bool) {
 
 // runAuthorBooksIndexBoot is the boot sequence of the author -> books index:
 // reconcile immediately, never after warmup. The index exists to cover the
-// warmup window, and a sentinel left by another build is only believed again
-// once this boot's reconcile has finished, so waiting for warmup would extend
-// the window in which readers fall back to the scan. The reconcile writes only
-// absent keys, so a boot that finds a complete index is a read-mostly pass. A
-// failure is logged and leaves readers on the scan: an unreadable credit row
-// removes the sentinel, and a failed pass never sets it.
+// warmup window, and it is trusted only once THIS process's reconcile has
+// finished clean (no persistent marker survives a restart, F5-18j), so waiting
+// for warmup would extend the window in which readers fall back to the scan.
+// The reconcile writes only absent keys, so a boot that finds a complete index
+// is a read-mostly pass. A failure is logged and leaves readers on the scan for
+// the life of the process: an unreadable credit row, or a listable book whose
+// AuthorID its credit list does not hold (the index cannot list it), keeps the
+// index untrusted until a later boot reconciles clean.
 func runAuthorBooksIndexBoot(ctx context.Context, b authorBooksIndexer) {
 	if _, err := b.ReconcileAuthorBooksIndex(ctx); err != nil {
 		lifecycleLog.Warn("author-books-index: reconcile failed, authors' book lists keep scanning until a boot completes it: err=%s", logger.SanitizeLogValue(err.Error()))

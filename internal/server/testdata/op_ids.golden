@@ -287,3 +287,4 @@ maintenance.combine-journal-check
 maintenance.credits-backfill
 metadata.batch-apply-refusals-reset
 maintenance.reparse-file-intros
+maintenance.author-books-legacy-retire

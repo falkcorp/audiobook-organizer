@@ -112,6 +112,7 @@ id library.size-refresh
 id library.transcode
 id maintenance.activity-filter-index-backfill
 id maintenance.ai-dedup-batch
+id maintenance.author-books-legacy-retire
 id maintenance.author-conjunction-repair
 id maintenance.author-duplicate-merge
 id maintenance.author-id-repair

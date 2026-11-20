@@ -86,10 +86,10 @@ const t6g4ResProvenance = ops.ResFileProvenance
 // ResFiles is the clips it cuts into the clip cache (bytes on disk, written
 // outside the writer). The Effects, the expected table and the parity case
 // follow this variable; the spy map names the journal's resource itself.
-// ResAuthors, ResMetadataCache and ResIndexes are what its ModifyBook calls can
-// write besides the books row (the author_books_legacy: rows, the stale stamp on an
-// identity change, the ident: rows), the shared ModifyBook row of t6WriterResources.
-var t6g4IntroTranscribeWrites = []ops.Resource{ops.ResBooks, ops.ResBookFiles, ops.ResAIJournal, ops.ResFiles, ops.ResAuthors, ops.ResMetadataCache, ops.ResIndexes}
+// ResMetadataCache and ResIndexes are what its ModifyBook calls can write besides
+// the books row (the stale stamp on an identity change, the ident: rows), the
+// shared ModifyBook row of t6WriterResources.
+var t6g4IntroTranscribeWrites = []ops.Resource{ops.ResBooks, ops.ResBookFiles, ops.ResAIJournal, ops.ResFiles, ops.ResMetadataCache, ops.ResIndexes}
 
 // ---- the group's two interfaces and its dependency value (rule R10) ----
 
