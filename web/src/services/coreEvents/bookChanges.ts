@@ -14,10 +14,13 @@
 //    created or deleted in the window;
 //  - flush order deleted, created, updated; ids sorted; at most BOOK_CHANGE_MAX_IDS per
 //    batch.
+// What is pending when the consumer refetches over REST is already in the refetch, so the
+// consumer drops it with clear() as it issues that request; the adapter does not guess
+// the moment from a resync, which reaches the consumer up to 5 s later (#4813 r1 m3).
 //
 // UNWIRED: nothing in the running app imports this until the F6 flip.
 
-import { useEffect, useLayoutEffect, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 
 import { getEventStream, type EventStream } from './manager';
 import type { BookChangeKind, TopicEvent, TopicPayloads } from './types';
@@ -48,7 +51,7 @@ export interface BookChangeBatcher {
   add(kind: BookChangeKind, id: string): void;
   /** Deliver everything pending now and re-open the window. */
   flush(): void;
-  /** Drop everything pending without delivering it (a resync refetches it all anyway). */
+  /** Drop everything pending without delivering it (a refetch now covers it). */
   clear(): void;
   /** clear() and stop: later adds are ignored and no timer is left behind. */
   dispose(): void;
@@ -92,6 +95,7 @@ export function createBookChangeBatcher(
     for (const kind of FLUSH_ORDER) {
       const ids = [...(batch.get(kind) ?? [])].sort();
       for (let start = 0; start < ids.length; start += maxIds) {
+        if (disposed) return; // a handler disposed it: deliver nothing more
         const b: BookChangeBatch = { kind, ids: ids.slice(start, start + maxIds) };
         try {
           onBatch(b);
@@ -141,17 +145,23 @@ export interface BookChangeSubscriptionOptions extends BookChangeBatcherOptions 
   onInvalid?: (event: TopicEvent) => void;
 }
 
-/**
- * Subscribe to books.book.changed.v1 on the shared stream and deliver batches. A resync
- * of the shared stream drops what is pending: the consumer refetches over REST, which
- * already reflects those changes, and delivering them after it would count a created
- * book twice. Returns the unsubscribe, which leaves no listener or timer behind.
- */
+export interface BookChangeSubscription {
+  /**
+   * Drop the pending window. Call it as the consumer issues the REST refetch that
+   * replaces those changes (on a resync, say): delivered after it, a created book would
+   * be counted twice.
+   */
+  clear(): void;
+  /** Stop; leaves no listener or timer behind. Idempotent. */
+  unsubscribe(): void;
+}
+
+/** Subscribe to books.book.changed.v1 on the shared stream and deliver batches. */
 export function subscribeBookChanges(
   stream: EventStream,
   onBatch: BookChangeBatchHandler,
   options: BookChangeSubscriptionOptions = {},
-): () => void {
+): BookChangeSubscription {
   const batcher = createBookChangeBatcher(onBatch, options);
   const onInvalid = options.onInvalid ?? defaultOnInvalid;
   const offTopic = stream.subscribe(BOOK_CHANGED_TOPIC, (event) => {
@@ -159,14 +169,15 @@ export function subscribeBookChanges(
     if (change) batcher.add(change.kind, change.id);
     else onInvalid(event);
   });
-  const offResync = stream.onResync(() => batcher.clear(), { coalesceMs: 0, minIntervalMs: 0 });
   let done = false;
-  return () => {
-    if (done) return;
-    done = true;
-    offTopic();
-    offResync();
-    batcher.dispose();
+  return {
+    clear: () => batcher.clear(),
+    unsubscribe() {
+      if (done) return;
+      done = true;
+      offTopic();
+      batcher.dispose();
+    },
   };
 }
 
@@ -177,20 +188,33 @@ export interface UseBookChangesOptions extends BookChangeSubscriptionOptions {
   enabled?: boolean;
 }
 
+export interface UseBookChangesResult {
+  /** The live subscription's clear (see BookChangeSubscription); a no-op while none is live. Stable. */
+  clear(): void;
+}
+
 /** Deliver book-change batches while mounted; inline callbacks never resubscribe. */
-export function useBookChanges(onBatch: BookChangeBatchHandler, opts: UseBookChangesOptions = {}): void {
+export function useBookChanges(onBatch: BookChangeBatchHandler, opts: UseBookChangesOptions = {}): UseBookChangesResult {
   const ref = useRef({ onBatch, onError: opts.onError, onInvalid: opts.onInvalid });
   useLayoutEffect(() => {
     ref.current = { onBatch, onError: opts.onError, onInvalid: opts.onInvalid };
   });
   const { source, enabled = true, windowMs, maxIds } = opts;
+  const live = useRef<BookChangeSubscription | null>(null);
   useEffect(() => {
     if (!enabled) return;
-    return subscribeBookChanges(source ?? getEventStream(), (b) => ref.current.onBatch(b), {
+    const sub = subscribeBookChanges(source ?? getEventStream(), (b) => ref.current.onBatch(b), {
       windowMs,
       maxIds,
       onError: (err, b) => (ref.current.onError ?? defaultOnError)(err, b),
       onInvalid: (e) => (ref.current.onInvalid ?? defaultOnInvalid)(e),
     });
+    live.current = sub;
+    return () => {
+      sub.unsubscribe();
+      if (live.current === sub) live.current = null;
+    };
   }, [source, enabled, windowMs, maxIds]);
+  const clear = useCallback(() => live.current?.clear(), []);
+  return useMemo(() => ({ clear }), [clear]);
 }

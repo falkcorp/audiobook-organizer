@@ -20,6 +20,7 @@
 
 import {
   createStreamConnection,
+  monotonicNow,
   type BackoffState,
   type ConnectionDeps,
   type ServerHold,
@@ -62,11 +63,13 @@ export interface ResyncOptions {
    * Whose resets to take: '' (default) the shared stream's, a key for that keyed stream's,
    * '*' every stream's. A new keyed stream opens with no id to resume from, so it always
    * raises 'reconnect'; a view that does not own the key must not refetch for it
-   * (#4785 r2 m2).
+   * (#4785 r2 m2). Coalescing is per stream: a '*' handler gets one call for each stream
+   * that reset in the window, so a handler that routes on `streamKey` never loses one.
    */
   streamKey?: string;
-  /** Merge every reset within this long of the first into one call (trailing). 0 with
-   * minIntervalMs 0 calls synchronously. */
+  /** Merge every reset within this long of the first into one call per stream (trailing),
+   * which is what turns a reopen's 'reconnect' and the reset the subscribe owed into one
+   * refetch. 0 with minIntervalMs 0 calls synchronously, once per reset. */
   coalesceMs?: number;
   /** At least this long between two calls; resets in between are merged into the next. */
   minIntervalMs?: number;
@@ -96,7 +99,8 @@ export interface EventStream {
   /**
    * Called when a stream must be resynced (core.stream.reset.v1, or a client-raised
    * 'reconnect'): refetch over REST. By default only the shared stream's resets, merged
-   * per DEFAULT_RESYNC_COALESCE_MS and at most one call per DEFAULT_RESYNC_MIN_INTERVAL_MS.
+   * per DEFAULT_RESYNC_COALESCE_MS and at most one call per DEFAULT_RESYNC_MIN_INTERVAL_MS
+   * (with streamKey '*', one call per stream that reset).
    */
   onResync(handler: ResyncHandler, opts?: ResyncOptions): () => void;
   /**
@@ -127,7 +131,9 @@ interface ResyncSub {
   coalesceMs: number;
   minIntervalMs: number;
   timer: ReturnType<typeof setTimeout> | null;
-  pending: ResyncInfo | null;
+  /** The latest reset per stream key since the last call. */
+  pending: Map<string, ResyncInfo>;
+  /** now() of the last call, for minIntervalMs. */
   lastCall: number;
 }
 
@@ -146,6 +152,8 @@ function documentVisibility(): VisibilitySource {
 
 export function createEventStream(options: EventStreamOptions = {}): EventStream {
   const keyedOnly = new Set(options.keyedOnlyTopics ?? DEFAULT_KEYED_ONLY_TOPICS);
+  // Monotonic, like the connections' deadlines: a wall-clock step moves no wait.
+  const now = options.deps?.now ?? monotonicNow;
   const visibility = options.visibility ?? documentVisibility();
   const subs = new Set<Sub>();
   const resyncSubs = new Set<ResyncSub>();
@@ -199,34 +207,48 @@ export function createEventStream(options: EventStreamOptions = {}): EventStream
   };
 
   const deliverResync = (r: ResyncSub, info: ResyncInfo) => {
+    // An earlier handler of this same reset may have removed this one.
+    if (!resyncSubs.has(r)) return;
     if (r.streamKey !== '*' && r.streamKey !== info.streamKey) return;
     if (r.coalesceMs <= 0 && r.minIntervalMs <= 0) {
       guard(() => r.handler(info), 'core.stream.reset.v1');
       return;
     }
-    r.pending = info; // the latest reason wins; the handler refetches either way
+    // Per stream, the latest reason wins (the handler refetches either way); streams are
+    // never merged into each other.
+    r.pending.set(info.streamKey, info);
     if (r.timer) return;
-    const now = Date.now();
-    const at = Math.max(now + r.coalesceMs, r.lastCall + r.minIntervalMs);
+    const t = now();
+    const at = Math.max(t + r.coalesceMs, r.lastCall + r.minIntervalMs);
     r.timer = setTimeout(() => {
       r.timer = null;
-      const p = r.pending;
-      r.pending = null;
-      if (!p || !resyncSubs.has(r)) return;
-      r.lastCall = Date.now();
-      guard(() => r.handler(p), 'core.stream.reset.v1');
-    }, at - now);
+      const due = [...r.pending.values()];
+      r.pending.clear();
+      if (due.length === 0 || !resyncSubs.has(r)) return;
+      r.lastCall = now();
+      for (const p of due) {
+        if (!resyncSubs.has(r)) return; // the handler unsubscribed itself
+        guard(() => r.handler(p), 'core.stream.reset.v1');
+      }
+    }, at - t);
   };
 
   const stopResync = (r: ResyncSub) => {
     if (r.timer) clearTimeout(r.timer);
     r.timer = null;
-    r.pending = null;
+    r.pending.clear();
     resyncSubs.delete(r);
   };
 
+  // Called only when a stream's connection is created, so no connection holds the state.
+  // A wait that has lapsed by then is spent: the stream starts again from attempt 0,
+  // whether or not a sync happened to prune it meanwhile.
   const backoffFor = (streamKey: string): BackoffState => {
     let b = backoffs.get(streamKey);
+    if (b && b.notBefore <= now()) {
+      b.attempt = 0;
+      b.notBefore = 0;
+    }
     if (!b) {
       b = { attempt: 0, notBefore: 0 };
       backoffs.set(streamKey, b);
@@ -297,9 +319,11 @@ export function createEventStream(options: EventStreamOptions = {}): EventStream
           signatures.delete(k);
         }
       }
-      const now = Date.now();
+      // Memory only: backoffFor resets a lapsed entry anyway, so pruning it here or not
+      // never changes what a reopened stream does.
+      const t = now();
       for (const [k, b] of backoffs) {
-        if (!connections.has(k) && b.notBefore <= now) backoffs.delete(k);
+        if (!connections.has(k) && b.notBefore <= t) backoffs.delete(k);
       }
     });
   };
@@ -338,7 +362,7 @@ export function createEventStream(options: EventStreamOptions = {}): EventStream
         coalesceMs: opts.coalesceMs ?? DEFAULT_RESYNC_COALESCE_MS,
         minIntervalMs: opts.minIntervalMs ?? DEFAULT_RESYNC_MIN_INTERVAL_MS,
         timer: null,
-        pending: null,
+        pending: new Map(),
         lastCall: -Infinity,
       };
       resyncSubs.add(r);
