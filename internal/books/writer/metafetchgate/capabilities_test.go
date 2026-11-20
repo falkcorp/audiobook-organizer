@@ -912,6 +912,16 @@ func TestNoMethodHandsBackTheInnerStore(t *testing.T) {
 			}
 		}
 	}
+	// Fields are a handle as much as methods are: an exported embedded
+	// metafetch.Store made `gated.Store.CreateBook(...)` a write past the gate
+	// with no method of the wrapper in the way (F5-18b round 4, minor). Any
+	// exported field, however typed, is a way for a caller to name it.
+	sty := reflect.TypeFor[metafetchgate.Store]()
+	for _, f := range reflect.VisibleFields(sty) {
+		if f.IsExported() {
+			bad = append(bad, fmt.Sprintf("field %s (%s) is exported: a caller can reach it", f.Name, f.Type))
+		}
+	}
 	require.Empty(t, bad, "the wrapper must not hand back the inner store (an Unwrap under another name)")
 }
 

@@ -42,11 +42,18 @@ import (
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
+// innerStore is the embedded field's name. The field is unexported on purpose:
+// an exported embedded metafetch.Store would be a public handle on the inner
+// store (gated.Store.CreateBook(...)), a write past the gate that no method
+// signature shows (TestNoMethodHandsBackTheInnerStore checks fields as well as
+// methods).
+type innerStore = metafetch.Store
+
 // Store is a metafetch.Store whose writes are gated.
 type Store struct {
-	metafetch.Store // reads, and nothing that writes (see the package doc)
-	ctx             context.Context
-	gate            *writer.Gate
+	innerStore // reads, and nothing that writes (see the package doc)
+	ctx        context.Context
+	gate       *writer.Gate
 }
 
 var _ metafetch.Store = (*Store)(nil)
@@ -60,7 +67,7 @@ func Rows() (writer.Rows, error) {
 // Wrap gates inner's writes through gate. ctx is the run's context: the fence
 // checks it (a stopped run's writes are refused).
 func Wrap(ctx context.Context, inner metafetch.Store, gate *writer.Gate) *Store {
-	return &Store{Store: inner, ctx: ctx, gate: gate}
+	return &Store{innerStore: inner, ctx: ctx, gate: gate}
 }
 
 func book(id string) entity.Ref { return tasks.ResID(writer.Module, string(ops.ResBooks), id) }
@@ -92,42 +99,42 @@ func (s *Store) CreateBook(b *database.Book) (out *database.Book, err error) {
 	if b != nil {
 		id = b.ID
 	}
-	err = s.do("CreateBook", book(id), func() (e error) { out, e = s.Store.CreateBook(b); return })
+	err = s.do("CreateBook", book(id), func() (e error) { out, e = s.innerStore.CreateBook(b); return })
 	return out, err
 }
 
 func (s *Store) UpdateBook(id string, b *database.Book) (out *database.Book, err error) {
-	err = s.do("UpdateBook", book(id), func() (e error) { out, e = s.Store.UpdateBook(id, b); return })
+	err = s.do("UpdateBook", book(id), func() (e error) { out, e = s.innerStore.UpdateBook(id, b); return })
 	return out, err
 }
 
 func (s *Store) ModifyBook(id string, fn func(*database.Book) error) (out *database.Book, err error) {
-	err = s.do("ModifyBook", book(id), func() (e error) { out, e = s.Store.ModifyBook(id, fn); return })
+	err = s.do("ModifyBook", book(id), func() (e error) { out, e = s.innerStore.ModifyBook(id, fn); return })
 	return out, err
 }
 
 func (s *Store) DeleteBook(id string) error {
-	return s.do("DeleteBook", book(id), func() error { return s.Store.DeleteBook(id) })
+	return s.do("DeleteBook", book(id), func() error { return s.innerStore.DeleteBook(id) })
 }
 
 func (s *Store) FlagMetadataHashDuplicate(primaryID, duplicateID string) error {
-	return s.do("FlagMetadataHashDuplicate", book(duplicateID), func() error { return s.Store.FlagMetadataHashDuplicate(primaryID, duplicateID) })
+	return s.do("FlagMetadataHashDuplicate", book(duplicateID), func() error { return s.innerStore.FlagMetadataHashDuplicate(primaryID, duplicateID) })
 }
 
 func (s *Store) SetLastWrittenAt(id string, t time.Time) error {
-	return s.do("SetLastWrittenAt", book(id), func() error { return s.Store.SetLastWrittenAt(id, t) })
+	return s.do("SetLastWrittenAt", book(id), func() error { return s.innerStore.SetLastWrittenAt(id, t) })
 }
 
 func (s *Store) MarkNeedsRescan(id string) error {
-	return s.do("MarkNeedsRescan", book(id), func() error { return s.Store.MarkNeedsRescan(id) })
+	return s.do("MarkNeedsRescan", book(id), func() error { return s.innerStore.MarkNeedsRescan(id) })
 }
 
 func (s *Store) AddBookTagWithSource(bookID, tag, source string) error {
-	return s.do("AddBookTagWithSource", book(bookID), func() error { return s.Store.AddBookTagWithSource(bookID, tag, source) })
+	return s.do("AddBookTagWithSource", book(bookID), func() error { return s.innerStore.AddBookTagWithSource(bookID, tag, source) })
 }
 
 func (s *Store) RemoveBookTagsByPrefix(bookID, prefix, source string) error {
-	return s.do("RemoveBookTagsByPrefix", book(bookID), func() error { return s.Store.RemoveBookTagsByPrefix(bookID, prefix, source) })
+	return s.do("RemoveBookTagsByPrefix", book(bookID), func() error { return s.innerStore.RemoveBookTagsByPrefix(bookID, prefix, source) })
 }
 
 func (s *Store) RecordPathChange(c *database.BookPathChange) error {
@@ -135,31 +142,31 @@ func (s *Store) RecordPathChange(c *database.BookPathChange) error {
 	if c != nil {
 		id = c.BookID
 	}
-	return s.do("RecordPathChange", book(id), func() error { return s.Store.RecordPathChange(c) })
+	return s.do("RecordPathChange", book(id), func() error { return s.innerStore.RecordPathChange(c) })
 }
 
 func (s *Store) SetBookNarrators(bookID string, n []database.BookNarrator) error {
-	return s.do("SetBookNarrators", book(bookID), func() error { return s.Store.SetBookNarrators(bookID, n) })
+	return s.do("SetBookNarrators", book(bookID), func() error { return s.innerStore.SetBookNarrators(bookID, n) })
 }
 
 // --- credits and series --------------------------------------------------
 
 func (s *Store) CreateAuthor(name string) (out *database.Author, err error) {
-	err = s.do("CreateAuthor", of(ops.ResAuthors, name), func() (e error) { out, e = s.Store.CreateAuthor(name); return })
+	err = s.do("CreateAuthor", of(ops.ResAuthors, name), func() (e error) { out, e = s.innerStore.CreateAuthor(name); return })
 	return out, err
 }
 
 func (s *Store) SetBookAuthors(bookID string, a []database.BookAuthor) error {
-	return s.do("SetBookAuthors", book(bookID), func() error { return s.Store.SetBookAuthors(bookID, a) })
+	return s.do("SetBookAuthors", book(bookID), func() error { return s.innerStore.SetBookAuthors(bookID, a) })
 }
 
 func (s *Store) ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) (out []database.BookAuthor, err error) {
-	err = s.do("ModifyBookAuthors", book(bookID), func() (e error) { out, e = s.Store.ModifyBookAuthors(bookID, fn); return })
+	err = s.do("ModifyBookAuthors", book(bookID), func() (e error) { out, e = s.innerStore.ModifyBookAuthors(bookID, fn); return })
 	return out, err
 }
 
 func (s *Store) CreateSeries(name string, authorID *int) (out *database.Series, err error) {
-	err = s.do("CreateSeries", of(ops.ResSeries, name), func() (e error) { out, e = s.Store.CreateSeries(name, authorID); return })
+	err = s.do("CreateSeries", of(ops.ResSeries, name), func() (e error) { out, e = s.innerStore.CreateSeries(name, authorID); return })
 	return out, err
 }
 
@@ -170,15 +177,15 @@ func (s *Store) CreateBookFile(f *database.BookFile) error {
 	if f != nil {
 		id = f.ID
 	}
-	return s.do("CreateBookFile", file(id), func() error { return s.Store.CreateBookFile(f) })
+	return s.do("CreateBookFile", file(id), func() error { return s.innerStore.CreateBookFile(f) })
 }
 
 func (s *Store) BatchCreateBookFiles(fs []*database.BookFile) error {
-	return s.do("BatchCreateBookFiles", tasks.Res(writer.Module, string(ops.ResBookFiles)), func() error { return s.Store.BatchCreateBookFiles(fs) })
+	return s.do("BatchCreateBookFiles", tasks.Res(writer.Module, string(ops.ResBookFiles)), func() error { return s.innerStore.BatchCreateBookFiles(fs) })
 }
 
 func (s *Store) UpdateBookFile(id string, f *database.BookFile) error {
-	return s.do("UpdateBookFile", file(id), func() error { return s.Store.UpdateBookFile(id, f) })
+	return s.do("UpdateBookFile", file(id), func() error { return s.innerStore.UpdateBookFile(id, f) })
 }
 
 // UpdateBookFileHashes takes the FILE row's id first (the store's
@@ -186,12 +193,12 @@ func (s *Store) UpdateBookFile(id string, f *database.BookFile) error {
 // subject is file(id); there is no book id argument.
 func (s *Store) UpdateBookFileHashes(id, originalHash, postMetadataHash, fileHash string) error {
 	return s.do("UpdateBookFileHashes", file(id), func() error {
-		return s.Store.UpdateBookFileHashes(id, originalHash, postMetadataHash, fileHash)
+		return s.innerStore.UpdateBookFileHashes(id, originalHash, postMetadataHash, fileHash)
 	})
 }
 
 func (s *Store) PatchBookFileFields(bookID, fileID string, p database.BookFileFieldPatch) (before, after *database.BookFile, err error) {
-	err = s.do("PatchBookFileFields", file(fileID), func() (e error) { before, after, e = s.Store.PatchBookFileFields(bookID, fileID, p); return })
+	err = s.do("PatchBookFileFields", file(fileID), func() (e error) { before, after, e = s.innerStore.PatchBookFileFields(bookID, fileID, p); return })
 	return before, after, err
 }
 
@@ -202,11 +209,11 @@ func (s *Store) PutMetadataCache(entry *database.MetadataCandidateCache) error {
 	if entry != nil {
 		id = entry.BookID
 	}
-	return s.do("PutMetadataCache", book(id), func() error { return s.Store.PutMetadataCache(entry) })
+	return s.do("PutMetadataCache", book(id), func() error { return s.innerStore.PutMetadataCache(entry) })
 }
 
 func (s *Store) DeleteMetadataCache(bookID string) error {
-	return s.do("DeleteMetadataCache", book(bookID), func() error { return s.Store.DeleteMetadataCache(bookID) })
+	return s.do("DeleteMetadataCache", book(bookID), func() error { return s.innerStore.DeleteMetadataCache(bookID) })
 }
 
 func (s *Store) UpsertMetadataFieldState(st *database.MetadataFieldState) error {
@@ -214,11 +221,11 @@ func (s *Store) UpsertMetadataFieldState(st *database.MetadataFieldState) error 
 	if st != nil {
 		id = st.BookID
 	}
-	return s.do("UpsertMetadataFieldState", book(id), func() error { return s.Store.UpsertMetadataFieldState(st) })
+	return s.do("UpsertMetadataFieldState", book(id), func() error { return s.innerStore.UpsertMetadataFieldState(st) })
 }
 
 func (s *Store) DeleteMetadataFieldState(bookID, field string) error {
-	return s.do("DeleteMetadataFieldState", book(bookID), func() error { return s.Store.DeleteMetadataFieldState(bookID, field) })
+	return s.do("DeleteMetadataFieldState", book(bookID), func() error { return s.innerStore.DeleteMetadataFieldState(bookID, field) })
 }
 
 func (s *Store) RecordMetadataChange(rec *database.MetadataChangeRecord) error {
@@ -226,7 +233,7 @@ func (s *Store) RecordMetadataChange(rec *database.MetadataChangeRecord) error {
 	if rec != nil {
 		id = rec.BookID
 	}
-	return s.do("RecordMetadataChange", book(id), func() error { return s.Store.RecordMetadataChange(rec) })
+	return s.do("RecordMetadataChange", book(id), func() error { return s.innerStore.RecordMetadataChange(rec) })
 }
 
 // --- the undo journal ----------------------------------------------------
@@ -236,25 +243,25 @@ func (s *Store) CreateOperationChange(c *database.OperationChange) error {
 	if c != nil {
 		id = c.ID
 	}
-	return s.do("CreateOperationChange", of(ops.ResOperations, id), func() error { return s.Store.CreateOperationChange(c) })
+	return s.do("CreateOperationChange", of(ops.ResOperations, id), func() error { return s.innerStore.CreateOperationChange(c) })
 }
 
 func (s *Store) DeleteOperationState(id string) error {
-	return s.do("DeleteOperationState", of(ops.ResOperations, id), func() error { return s.Store.DeleteOperationState(id) })
+	return s.do("DeleteOperationState", of(ops.ResOperations, id), func() error { return s.innerStore.DeleteOperationState(id) })
 }
 
 // --- preferences and the raw key-value store -----------------------------
 
 func (s *Store) SetUserPreference(key, value string) error {
-	return s.do("SetUserPreference", of(ops.ResUserState, key), func() error { return s.Store.SetUserPreference(key, value) })
+	return s.do("SetUserPreference", of(ops.ResUserState, key), func() error { return s.innerStore.SetUserPreference(key, value) })
 }
 
 func (s *Store) DeleteUserPreference(key string) error {
-	return s.do("DeleteUserPreference", of(ops.ResUserState, key), func() error { return s.Store.DeleteUserPreference(key) })
+	return s.do("DeleteUserPreference", of(ops.ResUserState, key), func() error { return s.innerStore.DeleteUserPreference(key) })
 }
 
 func (s *Store) SetUserPreferenceForUser(userID, key, value string) error {
-	return s.do("SetUserPreferenceForUser", of(ops.ResUserState, key), func() error { return s.Store.SetUserPreferenceForUser(userID, key, value) })
+	return s.do("SetUserPreferenceForUser", of(ops.ResUserState, key), func() error { return s.innerStore.SetUserPreferenceForUser(userID, key, value) })
 }
 
 // SetRaw is stamped by the key's family (writer.RawFamilies); a key in no
@@ -264,7 +271,7 @@ func (s *Store) SetRaw(key string, value []byte) error {
 	if err != nil {
 		return err
 	}
-	return s.do(m, of(res, key), func() error { return s.Store.SetRaw(key, value) })
+	return s.do(m, of(res, key), func() error { return s.innerStore.SetRaw(key, value) })
 }
 
 // DeleteRaw is stamped by the key's family, as SetRaw.
@@ -273,14 +280,14 @@ func (s *Store) DeleteRaw(key string) error {
 	if err != nil {
 		return err
 	}
-	return s.do(m, of(res, key), func() error { return s.Store.DeleteRaw(key) })
+	return s.do(m, of(res, key), func() error { return s.innerStore.DeleteRaw(key) })
 }
 
 // DeleteRawBatch is one store call, so its keys must be one family: a batch
 // that spans families is refused, not split.
 func (s *Store) DeleteRawBatch(keys []string) error {
 	if len(keys) == 0 {
-		return s.Store.DeleteRawBatch(keys)
+		return s.innerStore.DeleteRawBatch(keys)
 	}
 	m, res, err := s.rawMethod("DeleteRawBatch", keys[0])
 	if err != nil {
@@ -291,5 +298,5 @@ func (s *Store) DeleteRawBatch(keys []string) error {
 			return fmt.Errorf("%w: %w: DeleteRawBatch spans key families (%q)", tasks.ErrOutsideEffects, writer.ErrNoRow, k)
 		}
 	}
-	return s.do(m, of(res, keys[0]), func() error { return s.Store.DeleteRawBatch(keys) })
+	return s.do(m, of(res, keys[0]), func() error { return s.innerStore.DeleteRawBatch(keys) })
 }
