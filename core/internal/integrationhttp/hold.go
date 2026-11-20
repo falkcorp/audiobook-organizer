@@ -43,6 +43,10 @@ type HoldReleaser interface {
 // two packages and *providerhttp.Registry needs no wrapper to serve the route).
 var ErrHoldChanged = providerhttp.ErrHoldChanged
 
+// The real registry is the route's HoldReleaser as it is: the compiler holds
+// F7-09 to that, so no wrapper is needed.
+var _ HoldReleaser = (*providerhttp.Registry)(nil)
+
 // errHoldChanged is the 409 of a release that found a different hold in
 // force: the answer carries no hold text, and the operator reads the
 // instance's health again and decides again.
