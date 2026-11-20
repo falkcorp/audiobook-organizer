@@ -6,8 +6,12 @@
 /**
  * The post-login destination from `?return=`: a same-origin absolute path
  * (with its query and fragment), else "/". Rejects scheme-relative URLs
- * ("//host"), absolute URLs, backslash tricks ("/\host") and control characters,
- * then confirms by resolving against the page origin that the result stays on it.
+ * ("//host"), absolute URLs, backslash tricks ("/\host", "/%5chost") and
+ * control characters, then resolves against the page origin and checks the
+ * NORMALIZED path too: dot segments ("/.//host", "/..//host", "/%2e//host")
+ * collapse to a pathname that starts with "//", which a browser navigating
+ * to it reads as scheme-relative, so checking the raw input alone is a
+ * parser differential.
  */
 export function safeReturn(raw: string | null): string {
   if (!raw || !raw.startsWith('/') || raw.startsWith('//')) return '/';
@@ -17,6 +21,7 @@ export function safeReturn(raw: string | null): string {
   try {
     const url = new URL(raw, origin);
     if (url.origin !== origin) return '/';
+    if (url.pathname.startsWith('//') || /\\|%5c/i.test(url.pathname)) return '/';
     return url.pathname + url.search + url.hash;
   } catch {
     return '/';

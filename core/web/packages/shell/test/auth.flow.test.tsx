@@ -209,6 +209,18 @@ describe('safeReturn', () => {
     ['//192.0.2.1/evil', '/'],
     ['/\\192.0.2.1/evil', '/'],
     ['/books\n/x', '/'],
+    // Dot segments normalize to a pathname starting with "//" (scheme-relative on navigation).
+    ['/.//192.0.2.1', '/'],
+    ['/..//192.0.2.1', '/'],
+    ['/%2e//192.0.2.1', '/'],
+    ['/%2E%2E//192.0.2.1/evil', '/'],
+    ['/a/..//192.0.2.1', '/'],
+    ['/%5c192.0.2.1', '/'],
+    ['/%5C192.0.2.1', '/'],
+    ['/\t/192.0.2.1', '/'],
+    ['/books\t', '/'],
+    ['/books\r\n', '/'],
+    ['/./books', '/books'],
     ['/books', '/books'],
     ['/books/42?tab=files#top', '/books/42?tab=files#top'],
   ])('%j -> %j', (raw, want) => {
