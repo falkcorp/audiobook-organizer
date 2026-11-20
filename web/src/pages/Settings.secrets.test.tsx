@@ -30,7 +30,6 @@ const SOURCES = (googleKeySaved: boolean) => [
     enabled: true,
     priority: 1,
     requires_auth: false,
-    credentials: {},
   },
   {
     id: 'google-books',
@@ -39,7 +38,7 @@ const SOURCES = (googleKeySaved: boolean) => [
     priority: 2,
     requires_auth: true,
     // Served as the key with a blank value: presence means a key is saved.
-    credentials: googleKeySaved ? { apiKey: '' } : {},
+    ...(googleKeySaved ? { credentials: { apiKey: '' } } : {}),
     base_url: 'https://books.mirror.example.test',
   },
 ];

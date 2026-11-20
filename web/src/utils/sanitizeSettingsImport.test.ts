@@ -1,5 +1,5 @@
 // file: web/src/utils/sanitizeSettingsImport.test.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8a2d4f60-1b3e-4c7a-b95d-6e0f2a7c3d19
 // last-edited: 2026-11-19
 
@@ -9,8 +9,7 @@ import type * as api from '../services/api';
 
 // Legacy settings files carry keys that are no longer on api.Config, so the
 // fixtures go through an untyped record the way JSON.parse output does.
-const load = (raw: Record<string, unknown>) =>
-  sanitizeSettingsImport(raw as Partial<api.Config>);
+const load = (raw: Record<string, unknown>) => sanitizeSettingsImport(raw as Partial<api.Config>);
 
 describe('sanitizeSettingsImport', () => {
   it('folds flat auto_update_* keys into the nested auto_update object', () => {
@@ -65,7 +64,13 @@ describe('sanitizeSettingsImport', () => {
 
   it('drops the retired update window from a nested auto_update in an older export', () => {
     const cleaned = load({
-      auto_update: { enabled: true, channel: 'stable', check_minutes: 60, window_start: 0, window_end: 6 },
+      auto_update: {
+        enabled: true,
+        channel: 'stable',
+        check_minutes: 60,
+        window_start: 0,
+        window_end: 6,
+      },
     });
     expect(cleaned.auto_update).toEqual({ enabled: true, channel: 'stable', check_minutes: 60 });
   });
@@ -153,6 +158,30 @@ describe('sanitizeSettingsImport', () => {
       'metadata_sources[gotham-books].credentials.apiKey',
       'metadata_sources[gotham-books].credentials.user',
     ]);
+  });
+
+  it("keeps a source's base_url and rate_limit, and reports no blank credential from an exported file", () => {
+    const { cleaned, skipped } = sanitizeSettingsImportWithReport({
+      metadata_sources: [
+        {
+          id: 'hardcover',
+          name: 'Hardcover',
+          enabled: true,
+          priority: 1,
+          requires_auth: true,
+          // What an export carries: the key with a blank value.
+          credentials: { apiKey: '' },
+          base_url: 'https://books.mirror.example.test',
+          rate_limit: { tier: 'low' },
+        },
+      ],
+    } as unknown as Partial<api.Config>);
+    expect(cleaned.metadata_sources?.[0]).toMatchObject({
+      base_url: 'https://books.mirror.example.test',
+      rate_limit: { tier: 'low' },
+      credentials: {},
+    });
+    expect(skipped).toEqual([]);
   });
 
   it('reports nothing when the file carries no secret', () => {
