@@ -514,6 +514,17 @@ func (e *Engine) read(ctx context.Context, p projRow, pass map[coreconfig.Path]c
 	t := p.target
 	switch t.Kind {
 	case cutover.TargetSecret:
+		// A passthrough secret's path is no registered key, so core hands the
+		// operator's value (env, or the config file) to the integrations and not to
+		// the secret store, and the store never learns of it. HEAD read the same
+		// environment into its own settings (DELUGE_WEB_PASSWORD, OPENAI_API_KEY),
+		// so the operator's value is the effective one here and locks the setting,
+		// as it did.
+		if t.Passthrough {
+			if ov, ok := pass[coreconfig.Path(t.Path)]; ok {
+				return ov.Value, ov.By, readOK, nil
+			}
+		}
 		v, meta, err := e.acc.Secret(ctx, secrets.Name(t.Path))
 		switch {
 		case errors.Is(err, secrets.ErrNotSet):

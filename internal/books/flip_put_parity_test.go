@@ -215,6 +215,27 @@ func TestFlipPUTParity_FormerlyFileOnlyKeysAreOrdinaryKeys(t *testing.T) {
 // (The handler grants FirstRunPerm only in the first-run window, never to a key.)
 var apiKeyActor = config.Actor{Subject: "key:bootstrap", Interactive: false, Can: func(p string) bool { return p != config.FirstRunPerm }}
 
+// signInFamilies is one write per family of settings HEAD refused to an API key.
+var signInFamilies = map[string]map[string]any{
+	"sign-in switch":      {"basic_auth_enabled": true},
+	"basic credentials":   {"basic_auth_username": "robin"},
+	"basic password":      {"basic_auth_password": "correct-horse-battery"},
+	"oauth switch":        {"oauth_enabled": true},
+	"oauth client id":     {"oauth_github_client_id": "Iv1.alfred"},
+	"oauth client secret": {"oauth_github_client_secret": "gh-secret-value"},
+	"oauth redirect":      {"oauth_redirect_base_url": "https://192.0.2.20"},
+	"abs sign-in switch":  {"abs_api_enabled": true},
+	"abs auth modes":      {"abs_auth_modes": "jwt"},
+	"abs token lifetime":  {"abs_access_token_ttl": "2h"},
+	"abs refresh":         {"abs_refresh_token_ttl": "48h"},
+	"abs session max":     {"abs_session_max_ttl": "96h"},
+	"abs refresh grace":   {"abs_refresh_grace": "1m"},
+	"startup read-only":   {"write_startup_readonly_key": true},
+	"peer allow-list":     {"allowed_peer_cidrs": "192.0.2.0/24"},
+	"trusted proxies":     {"tunnel_connector_addrs": "192.0.2.1"},
+	"public base url":     {"public_base_url": "https://192.0.2.10"},
+}
+
 // Ruling: HEAD answered 403 when an API key (including the bootstrap key) PUT a
 // sign-in, executable, path or database setting. ProtectAdmin is checked as
 // Can("core:admin") && Interactive (05-config 1.3.7), so the same PUT from an API
@@ -222,25 +243,7 @@ var apiKeyActor = config.Actor{Subject: "key:bootstrap", Interactive: false, Can
 func TestFlipPUTParity_APIKeyCannotChangeProtectedFamilies(t *testing.T) {
 	bootFlippedFresh(t)
 	f := config.Current()
-	families := map[string]map[string]any{
-		"sign-in switch":      {"basic_auth_enabled": true},
-		"basic credentials":   {"basic_auth_username": "robin"},
-		"basic password":      {"basic_auth_password": "correct-horse-battery"},
-		"oauth switch":        {"oauth_enabled": true},
-		"oauth client id":     {"oauth_github_client_id": "Iv1.alfred"},
-		"oauth client secret": {"oauth_github_client_secret": "gh-secret-value"},
-		"oauth redirect":      {"oauth_redirect_base_url": "https://192.0.2.20"},
-		"abs sign-in switch":  {"abs_api_enabled": true},
-		"abs auth modes":      {"abs_auth_modes": "jwt"},
-		"abs token lifetime":  {"abs_access_token_ttl": "2h"},
-		"abs refresh":         {"abs_refresh_token_ttl": "48h"},
-		"abs session max":     {"abs_session_max_ttl": "96h"},
-		"abs refresh grace":   {"abs_refresh_grace": "1m"},
-		"startup read-only":   {"write_startup_readonly_key": true},
-		"peer allow-list":     {"allowed_peer_cidrs": "192.0.2.0/24"},
-		"trusted proxies":     {"tunnel_connector_addrs": "192.0.2.1"},
-		"public base url":     {"public_base_url": "https://192.0.2.10"},
-	}
+	families := signInFamilies
 	for name, set := range families {
 		raw := map[string]json.RawMessage{}
 		for k, v := range set {
@@ -264,6 +267,46 @@ func TestFlipPUTParity_APIKeyCannotChangeProtectedFamilies(t *testing.T) {
 			}
 		})
 	}
+}
+
+// windowKeyActor is what the handler builds for a key-authenticated request while
+// the first-run window is open (no user exists, setup is not complete): not an
+// interactive session, and FirstRunPerm granted by the window whoever calls. The
+// window must open the wizard's keys and nothing else, so a sign-in key is still
+// refused for it, alone or beside a wizard key.
+var windowKeyActor = config.Actor{Subject: "key:bootstrap", Interactive: false, Can: func(string) bool { return true }}
+
+func TestFlipPUTParity_APIKeyInTheFirstRunWindowStillCannotChangeSignIn(t *testing.T) {
+	bootFlippedFresh(t)
+	f := config.Current()
+	wizard := map[string]any{"setup_complete": true}
+	for name, one := range signInFamilies {
+		for shape, set := range map[string]map[string]any{"alone": one, "beside a wizard key": merged(wizard, one)} {
+			raw := map[string]json.RawMessage{}
+			for k, v := range set {
+				b, _ := json.Marshal(v)
+				raw[k] = b
+			}
+			t.Run(name+"/"+shape, func(t *testing.T) {
+				g := f.Generation()
+				_, err := f.Update(t.Context(), windowKeyActor, config.Update{Set: raw})
+				if err == nil || f.Generation() != g {
+					t.Fatalf("the first-run window must not let a key change %v: err=%v", one, err)
+				}
+			})
+		}
+	}
+}
+
+func merged(a, b map[string]any) map[string]any {
+	m := map[string]any{}
+	for k, v := range a {
+		m[k] = v
+	}
+	for k, v := range b {
+		m[k] = v
+	}
+	return m
 }
 
 // HEAD's owner trust root with no owner configured: refused for EVERY caller, a
@@ -331,5 +374,68 @@ func TestFlipPUTParity_DelugeEnvLockRefusesTheWrite(t *testing.T) {
 	}
 	if !strings.Contains(lockedBy, "ABO_INTEGRATIONS_DOWNLOAD_DELUGE_URL") {
 		t.Fatalf("the View must say the environment locks deluge_web_url, got LockedBy=%q", lockedBy)
+	}
+}
+
+// The Deluge password lives behind the secret path, not the residual blob: with the
+// operator's environment naming it, a write is still refused and the value stays
+// the operator's, and the View says what locks it.
+func TestFlipPUTParity_DelugePasswordEnvLockRefusesTheWrite(t *testing.T) {
+	old := flipDeclared
+	flipDeclared = true
+	t.Cleanup(func() { flipDeclared = old })
+	stateDir := t.TempDir()
+	bootComposedWith(t, false, stateDir, func(c *config.Config) {
+		c.RootDir = ""
+		c.SetupComplete = false
+	}, nil, func(o *app.Options) {
+		o.CoreConfigBoot = true
+		o.StateDir = stateDir
+		o.Env = []string{"ABO_INTEGRATIONS_DOWNLOAD_DELUGE_PASSWORD=operator-secret"}
+	})
+	f := config.Current()
+	err := mustRefuse(t, f, map[string]any{"deluge_web_password": "another-secret"})
+	var locked *coreconfig.LockedError
+	if !errors.As(err, &locked) && !errors.Is(err, config.ErrKeyReadOnly) {
+		t.Fatalf("want a locked (409) or read-only refusal, got %v", err)
+	}
+	if got := f.Snapshot().DelugeWebPassword; got != "operator-secret" {
+		t.Fatalf("the operator's value must be the effective one, got %q", got)
+	}
+	var lockedBy string
+	for _, k := range f.View().Keys {
+		if k.Name == "deluge_web_password" {
+			lockedBy = k.LockedBy
+		}
+	}
+	if !strings.Contains(lockedBy, "ABO_INTEGRATIONS_DOWNLOAD_DELUGE_PASSWORD") {
+		t.Fatalf("the View must say the environment locks the password, got LockedBy=%q", lockedBy)
+	}
+}
+
+// The ecosystem name OPENAI_API_KEY is bound to a passthrough secret path. HEAD
+// read it into the setting and the settings page showed it as environment-set; the
+// value an operator supplies is the effective one and a write is refused.
+func TestFlipPUTParity_OpenAIKeyFromTheEcosystemEnvIsEffectiveAndLocked(t *testing.T) {
+	old := flipDeclared
+	flipDeclared = true
+	t.Cleanup(func() { flipDeclared = old })
+	stateDir := t.TempDir()
+	bootComposedWith(t, false, stateDir, func(c *config.Config) {
+		c.RootDir = ""
+		c.SetupComplete = false
+	}, nil, func(o *app.Options) {
+		o.CoreConfigBoot = true
+		o.StateDir = stateDir
+		o.Env = []string{"OPENAI_API_KEY=bane"}
+	})
+	f := config.Current()
+	if got := f.Snapshot().OpenAIAPIKey; got != "bane" {
+		t.Fatalf("the ecosystem env must reach the setting, got %q", got)
+	}
+	err := mustRefuse(t, f, map[string]any{"openai_api_key": "another-key"})
+	var locked *coreconfig.LockedError
+	if !errors.As(err, &locked) {
+		t.Fatalf("want a locked refusal, got %v", err)
 	}
 }

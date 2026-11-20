@@ -214,6 +214,12 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 		}
 		path := coreconfig.Path(p.target.Path)
 		if p.target.Kind == cutover.TargetSecret {
+			if by, isLocked := locks[head]; isLocked {
+				// An operator-supplied secret locks the setting. Core's lock covers a
+				// registered key; a passthrough secret has no key for it to cover.
+				locked = append(locked, &coreconfig.LockedError{Path: path, By: by})
+				return
+			}
 			var s string
 			if !clear {
 				if err := json.Unmarshal(raw, &s); err != nil {
