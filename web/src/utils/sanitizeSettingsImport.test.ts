@@ -1,7 +1,7 @@
 // file: web/src/utils/sanitizeSettingsImport.test.ts
-// version: 1.3.1
+// version: 1.4.0
 // guid: 8a2d4f60-1b3e-4c7a-b95d-6e0f2a7c3d19
-// last-edited: 2026-10-30
+// last-edited: 2026-11-19
 
 import { describe, it, expect } from 'vitest';
 import { sanitizeSettingsImport, sanitizeSettingsImportWithReport } from './sanitizeSettingsImport';
@@ -121,9 +121,10 @@ describe('sanitizeSettingsImport', () => {
     });
   });
 
-  it('skips mask-shaped credentials and reports them', () => {
+  it('never imports a secret, masked or not, and reports it', () => {
     const { cleaned, skipped } = sanitizeSettingsImportWithReport({
-      openai_api_key: 'sk-****cdef',
+      openai_api_key: 'sk-batman-0001',
+      acoustid_api_key: 'sk-****cdef',
       metadata_sources: [
         {
           id: 'gotham-books',
@@ -131,20 +132,24 @@ describe('sanitizeSettingsImport', () => {
           enabled: true,
           priority: 1,
           requires_auth: true,
-          credentials: { apiKey: '********ab', user: 'bruce.wayne' },
+          credentials: { apiKey: 'sk-gotham-0002', user: 'bruce.wayne' },
         },
       ],
     } as unknown as Partial<api.Config>);
-    expect(cleaned.openai_api_key).toBeUndefined();
-    expect(cleaned.metadata_sources?.[0].credentials).toEqual({ user: 'bruce.wayne' });
-    expect(skipped).toEqual(['openai_api_key', 'metadata_sources[gotham-books].credentials.apiKey']);
+    expect(cleaned).not.toHaveProperty('openai_api_key');
+    expect(cleaned).not.toHaveProperty('acoustid_api_key');
+    expect(cleaned.metadata_sources?.[0].credentials).toEqual({});
+    expect(JSON.stringify(cleaned)).not.toContain('sk-');
+    expect(skipped).toEqual([
+      'openai_api_key',
+      'acoustid_api_key',
+      'metadata_sources[gotham-books].credentials.apiKey',
+      'metadata_sources[gotham-books].credentials.user',
+    ]);
   });
 
-  it('keeps a real credential with no asterisk run', () => {
-    const { cleaned, skipped } = sanitizeSettingsImportWithReport({
-      openai_api_key: 'sk-batman-0001',
-    } as unknown as Partial<api.Config>);
-    expect(cleaned.openai_api_key).toBe('sk-batman-0001');
+  it('reports nothing when the file carries no secret', () => {
+    const { skipped } = sanitizeSettingsImportWithReport({ root_dir: '/library' });
     expect(skipped).toEqual([]);
   });
 });

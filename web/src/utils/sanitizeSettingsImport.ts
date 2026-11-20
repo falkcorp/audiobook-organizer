@@ -1,7 +1,7 @@
 // file: web/src/utils/sanitizeSettingsImport.ts
-// version: 1.4.1
+// version: 1.5.0
 // guid: 3f6b1c2e-8d4a-4e7f-9a51-c2d0b7e4f813
-// last-edited: 2026-10-30
+// last-edited: 2026-11-19
 
 import type * as api from '../services/api';
 
@@ -13,21 +13,26 @@ import type * as api from '../services/api';
 // that path. It is a per-host setting and belongs to the host, not to a
 // portable settings blob.
 //
-// env_locked and setting_locks are absent because they are server-computed and
-// read-only; they appear in a GET response and are not settings at all. An
+// env_locked, setting_locks and secret_status are absent because they are
+// server-computed and read-only; they appear in a GET response and are not
+// settings at all.
+//
+// Secrets are never imported. The server does not return them (a secret has a
+// status, not a value), so a file this app exported has none, and one that
+// carries one was written by hand or by an older version, whose exports held a
+// masked placeholder that would overwrite the stored secret with garbage. They
+// are named in the report instead, so the user enters them in Settings. An
 // older export may still carry activity_db_path, activity_db_move_on_change or
 // activity_db_resolved_path from before the SQLite activity backend was
 // removed (2026-10-19); the server now refuses the first two, so they are
 // dropped here like any other unknown key.
-// True for any value carrying a run of four or more asterisks: the signature
-// of a masked secret of any shape (the server's current mask, or an older
-// one). Such a value is never a real secret, so an import drops it rather than
-// sending it back to overwrite the stored secret.
-export const looksLikeMask = (value: string): boolean => /\*{4,}/.test(value);
+// The top-level secret settings: write-only, so a settings file never carries
+// one into the server.
+const SECRET_KEYS = ['openai_api_key', 'acoustid_api_key'];
 
 export interface SanitizeReport {
   cleaned: Partial<api.Config>;
-  // Dotted names of the secret fields dropped because they were mask-shaped.
+  // Names of the secret fields in the file that were not imported.
   skipped: string[];
 }
 
@@ -44,7 +49,7 @@ export const sanitizeSettingsImportWithReport = (
     'folder_naming_pattern', 'file_naming_pattern', 'create_backups', 'supported_extensions',
     'exclude_patterns', 'enable_disk_quota', 'disk_quota_percent', 'enable_user_quotas',
     'enable_ai_parsing',
-    'openai_api_key', 'metadata_sources',
+    'metadata_sources',
     'concurrent_scans', 'cache_invalidate_on_book_update',
     'metadata_fetch_cache_ttl_days',
     'purge_soft_deleted_after_days', 'backup_retention_days', 'purge_soft_deleted_delete_files', 'log_level',
@@ -55,6 +60,10 @@ export const sanitizeSettingsImportWithReport = (
 
   const cleaned: Partial<api.Config> = {};
   if (!payload || typeof payload !== 'object') return { cleaned, skipped };
+
+  for (const key of SECRET_KEYS) {
+    if (key in payload) skipped.push(key);
+  }
 
   for (const key of Object.keys(payload)) {
     if (!allowed.has(key)) continue;
@@ -102,25 +111,15 @@ export const sanitizeSettingsImportWithReport = (
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               for (const [ck, cv] of Object.entries((s as any).credentials)) {
                 if (typeof cv !== 'string') continue;
-                if (looksLikeMask(cv)) {
-                  skipped.push(`metadata_sources[${src.id ?? '?'}].credentials.${ck}`);
-                  continue;
-                }
-                src.credentials[ck] = cv;
+                // Which credential fields are secrets is the server's call, and
+                // a file may carry a secret in any of them: none is imported.
+                skipped.push(`metadata_sources[${src.id ?? '?'}].credentials.${ck}`);
               }
             }
             return src;
           }).filter(Boolean);
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (cleaned as any)[key] = sanitizedSources;
-        }
-        break;
-
-      case 'openai_api_key':
-        if (typeof val === 'string') {
-          if (looksLikeMask(val)) skipped.push('openai_api_key');
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          else (cleaned as any).openai_api_key = val;
         }
         break;
 
