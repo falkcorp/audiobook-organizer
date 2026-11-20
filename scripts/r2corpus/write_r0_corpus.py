@@ -119,7 +119,9 @@ PRIVATE_IP_RE = re.compile(
 STEPS = ("M2", "M3", "M4", "M5", "M6", "books")
 
 # Expiries a replay must not outlive (MAJOR 4a of the F2-12 review). R0 caps an
-# API key at 365 days (handlers/apikeys.go MaxAPIKeyTTLDays: over it is a 400),
+# API key at 365 days (handlers/apikeys.go MaxAPIKeyTTLDays: over it is a 400).
+# 365 is the frozen R0 value: HEAD's maximum rose to 1096 days on 2026-11-20,
+# and the R0 corpus keeps the value R0 had,
 # so every fixture key gets the cap; an invite takes any number of hours, so
 # every fixture invite gets ten years. manifest.json records when the first key
 # lapses (``lapses``): a replay after that date sees expired keys.

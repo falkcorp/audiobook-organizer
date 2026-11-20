@@ -95,7 +95,7 @@ func coreSections() []any {
 			Password: authPassword{MinLength: 8},
 			APIKey: authAPIKey{
 				DefaultTTL: dur(720 * time.Hour),
-				MaxTTL:     dur(26280 * time.Hour), // 1095 days; auth caps any value there
+				MaxTTL:     dur(26304 * time.Hour), // 1096 days; auth caps any value there
 			},
 			Bootstrap: authBootstrap{
 				Enabled:  true,

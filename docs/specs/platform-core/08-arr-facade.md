@@ -70,7 +70,7 @@ for the facade beyond key management (07), Sonarr/Radarr data import.
 | No non-test web code calls `/api/v3` (grep of `web/src`, `cmd`, `scripts` at HEAD returns nothing) | grep |
 | Precedent for an external-protocol compatibility surface: the Audiobookshelf API, feature-flagged, its own auth stack resolving to core users | `internal/server/wire_abs_routes.go:628-653`; raw/10 G15 (`internal/server/middleware/absauth.go:783`) |
 | Reusable conformance engine: JSON-shape diff of our responses against captured fixtures (missing/extra field, type and length mismatch) | `internal/syncapi/conformance/diff.go` (`FindingKind` consts, `Compare`) |
-| API keys: `abk_` + base64url(32 bytes), SHA-256 stored, mandatory expiry (default 30 d, max 365 d), scopes intersect role permissions | raw/10 §2 (`internal/database/apikey_token.go:16-35`, `internal/server/handlers/apikeys.go:27-33`) |
+| API keys: `abk_` + base64url(32 bytes), SHA-256 stored, mandatory expiry (default 30 d, max 1096 d: 3 years, owner decisions 2026-11-20), scopes intersect role permissions | raw/10 §2 (`internal/database/apikey_token.go:16-35`, `internal/server/handlers/apikeys.go` `MaxAPIKeyTTLDays`) |
 | Access-log/trace redaction masks `?token=` and `api_key=` but not `apikey` | raw/10 §7 (`internal/server/server.go:695-704`) |
 
 ## 8.3 Design decisions

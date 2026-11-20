@@ -323,7 +323,7 @@ class TagTest(unittest.TestCase):
 
 class HygieneTest(unittest.TestCase):
     def test_no_lapsing_expiry(self):
-        self.assertEqual(w.KEY_TTL_DAYS, 365)  # R0's MaxAPIKeyTTLDays
+        self.assertEqual(w.KEY_TTL_DAYS, 365)  # R0's MaxAPIKeyTTLDays, frozen (HEAD's is 1096 since 2026-11-20)
         self.assertGreaterEqual(w.INVITE_TTL_HOURS, 5 * 365 * 24)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
