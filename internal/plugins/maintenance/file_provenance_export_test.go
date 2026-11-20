@@ -919,3 +919,13 @@ func TestCheckLedgerContinuityNamesWhatIsWrong(t *testing.T) {
 		})
 	}
 }
+
+// A line carrying a gap field is a marker, never an exported event, whatever seq it
+// has: the reader does not take a marker's seq for the end of the exported events.
+func TestLastLedgerSeqSkipsAMarkerWhateverItsSeq(t *testing.T) {
+	file := append(ledgerText(1, 2), []byte(`{"seq":9,"gap":"carried on"}`+"\n")...)
+	last, found, err := lastLedgerSeq(bytes.NewReader(file), int64(len(file)))
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.EqualValues(t, 2, last)
+}
