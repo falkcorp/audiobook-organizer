@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps_gate.go
 // version: 0.1.0
 // guid: 4c7e1a95-2d38-4b06-8f41-a09e63d2b715
-// last-edited: 2026-11-19
+// last-edited: 2026-11-20
 
 package maintenance
 

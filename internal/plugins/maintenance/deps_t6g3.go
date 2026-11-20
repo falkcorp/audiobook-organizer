@@ -413,7 +413,7 @@ func (w *booksT6G3Writer) DeleteNarrator(id int) error {
 
 func (w *booksT6G3Writer) CreateOperationChange(change *database.OperationChange) error {
 	return w.gate.do(runless(), "CreateOperationChange", kindRef(ops.ResOperations), func(context.Context) error {
-		return w.src.CreateOperationChange(change)
+		return database.RecordOperationChange(w.src, change)
 	})
 }
 
