@@ -194,9 +194,20 @@ type taglibReach struct {
 // the module's packages (followed as the program's SSA, with the oracle's walk).
 func taglibVariantReach(t *testing.T, op *oracleProgram, idx *taglibIndex, native bool) map[string]taglibReach {
 	t.Helper()
+	out, missing := taglibReachOf(op, idx, taglibVariantFiles(t, native), taglibWriteEntries)
+	for _, entry := range missing {
+		t.Errorf("the %s variant of internal/metadata has no %s", variantName(native), entry)
+	}
+	return out
+}
+
+// taglibReachOf is taglibVariantReach over the given files and entry points, and
+// the entries the files do not define.
+func taglibReachOf(op *oracleProgram, idx *taglibIndex, files []*ast.File, entries []string) (map[string]taglibReach, []string) {
 	decls := map[string]*ast.FuncDecl{}
 	imports := map[string]string{}
-	for _, f := range taglibVariantFiles(t, native) {
+	var missing []string
+	for _, f := range files {
 		for _, im := range f.Imports {
 			path, _ := strconv.Unquote(im.Path.Value)
 			name := path[strings.LastIndex(path, "/")+1:]
@@ -215,10 +226,10 @@ func taglibVariantReach(t *testing.T, op *oracleProgram, idx *taglibIndex, nativ
 		}
 	}
 	out := map[string]taglibReach{}
-	for _, entry := range taglibWriteEntries {
+	for _, entry := range entries {
 		fd := decls[entry]
 		if fd == nil {
-			t.Errorf("the %s variant of internal/metadata has no %s", variantName(native), entry)
+			missing = append(missing, entry)
 			continue
 		}
 		seen := map[string]bool{entry: true}
@@ -309,7 +320,7 @@ func taglibVariantReach(t *testing.T, op *oracleProgram, idx *taglibIndex, nativ
 		sort.Slice(r.helpers, func(i, j int) bool { return r.helpers[i] < r.helpers[j] })
 		out[entry] = r
 	}
-	return out
+	return out, missing
 }
 
 func sortedKeys(m map[string]bool) []string {
@@ -342,6 +353,37 @@ func newTaglibIndex(op *oracleProgram) *taglibIndex {
 		}
 	}
 	return idx
+}
+
+// TestTaglibReach_RecordsAStoreFunctionTheVariantCalls pins the store branch of
+// taglibReachOf: a variant's own direct call to a store-package function is a
+// classified call (the walk stops at once for a store function, so nothing else
+// records it). Neither variant of internal/metadata calls one today, so the
+// parity test alone would not notice the branch breaking (round-3 review n1).
+func TestTaglibReach_RecordsAStoreFunctionTheVariantCalls(t *testing.T) {
+	op := oracleFixture(t)
+	src := `package metadata
+
+import "` + oracleModule + `/internal/maintenance/jobs/testdata/oraclefix/internal/books/store"
+
+func writeBatcave(s *store.Store) error { return store.LookupBatcave(s, "robin") }
+
+func writeManor(s *store.Store) error { return nil }
+`
+	f, err := parser.ParseFile(token.NewFileSet(), "variant.go", src, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reach, missing := taglibReachOf(op, newTaglibIndex(op), []*ast.File{f}, []string{"writeBatcave", "writeManor", "writeAlfred"})
+	if !slices.Equal(missing, []string{"writeAlfred"}) {
+		t.Errorf("missing entries %v, want [writeAlfred]", missing)
+	}
+	if got := reach["writeBatcave"].calls; !slices.ContainsFunc(got, func(k string) bool { return strings.HasPrefix(k, "STOREFN.") && strings.HasSuffix(k, ".LookupBatcave") }) {
+		t.Errorf("a variant calling store.LookupBatcave reaches classified calls %v, want its STOREFN key", got)
+	}
+	if got := reach["writeManor"].calls; len(got) != 0 {
+		t.Errorf("a variant calling nothing reaches classified calls %v, want none", got)
+	}
 }
 
 func variantName(native bool) string {
