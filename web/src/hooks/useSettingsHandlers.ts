@@ -1,11 +1,12 @@
 // file: web/src/hooks/useSettingsHandlers.ts
-// version: 1.14.2
+// version: 1.15.0
 // guid: b8c9d0e1-f2a3-4567-bcde-678901234567
-// last-edited: 2026-11-07
+// last-edited: 2026-11-19
 
 import { ChangeEvent, Dispatch, MutableRefObject, SetStateAction } from 'react';
 import { NavigateFunction } from 'react-router';
 import * as api from '../services/api';
+import type { SecretStatus } from '../services/configView';
 import type { SettingsState } from '../pages/Settings';
 import { useImportFolderHandlers } from './useImportFolderHandlers';
 import { useBackupHandlers } from './useBackupHandlers';
@@ -55,7 +56,7 @@ export interface UseSettingsHandlersParams {
   settings: SettingsState;
   setSettings: Dispatch<SetStateAction<SettingsState>>;
   setSaved: Dispatch<SetStateAction<boolean>>;
-  setSavedApiKeyMask: Dispatch<SetStateAction<string>>;
+  setOpenaiKeyStatus: Dispatch<SetStateAction<SecretStatus | undefined>>;
   setConfigLoaded: Dispatch<SetStateAction<boolean>>;
   setDedupConfig: Dispatch<SetStateAction<api.DedupConfig>>;
   setEmbeddingConfig: Dispatch<SetStateAction<api.EmbeddingConfig>>;
@@ -98,7 +99,7 @@ export interface UseSettingsHandlersParams {
   setImportInProgress: Dispatch<SetStateAction<boolean>>;
   setExtensionsInput: Dispatch<SetStateAction<string>>;
   setExcludePatternInput: Dispatch<SetStateAction<string>>;
-  savedApiKeyMask: string;
+  openaiKeyStatus: SecretStatus | undefined;
   configLoaded: boolean;
   navigate: NavigateFunction;
   scanIntervalsRef: MutableRefObject<Record<number, number>>;
@@ -180,6 +181,7 @@ export interface UseSettingsHandlersReturn {
   handleSaveAndNavigate: () => Promise<void>;
   handleDiscardNavigation: () => void;
   handleCancelNavigation: () => void;
+  handleClearOpenAIKey: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -191,7 +193,7 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
     settings,
     setSettings,
     setSaved,
-    setSavedApiKeyMask,
+    setOpenaiKeyStatus,
     setConfigLoaded: _setConfigLoaded,
     setDedupConfig,
     setEmbeddingConfig,
@@ -234,7 +236,7 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
     setImportInProgress,
     setExtensionsInput,
     setExcludePatternInput,
-    savedApiKeyMask,
+    openaiKeyStatus,
     configLoaded,
     navigate,
     scanIntervalsRef,
@@ -443,16 +445,14 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
     }
 
     try {
-      const updates: Partial<api.Config> = {
+      const updates: api.ConfigUpdate = {
         root_dir: libraryPath,
         playlist_dir: `${libraryPath}/playlists`,
-        // Sent even when the server reports it locked, deliberately. The locked
-        // value shown in the field IS the effective one (the server re-applies
-        // --db/DATABASE_PATH over the blob before serving the config), so writing
-        // it back HEALS a stale blob entry rather than preserving it. A blob whose
-        // database_path had gone stale is exactly what took production down on
-        // 2026-09-09; leaving it untouched keeps that landmine armed for whenever
-        // the flag is next removed.
+        // updateConfig sends only what changed from what the server last said,
+        // and a locked key must not be named at all: the server refuses a write
+        // to a key an operator layer (flag, environment, config file) forces,
+        // even with the value it already has. The field is disabled while locked,
+        // so this is the effective value and drops out of the diff.
         database_path: settings.databasePath.trim(),
         organization_strategy: settings.organizationStrategy,
         scan_on_startup: settings.scanOnStartup,
@@ -466,7 +466,8 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
         disk_quota_percent: settings.diskQuotaPercent,
         enable_user_quotas: settings.enableUserQuotas,
         enable_ai_parsing: settings.enableAIParsing,
-        ...(settings.openaiApiKey ? { openai_api_key: settings.openaiApiKey } : {}),
+        // A secret is write-only: a typed key is stored, a blank field leaves the stored one alone.
+        ...(settings.openaiApiKey ? { secrets: { openai_api_key: settings.openaiApiKey } } : {}),
         metadata_sources: settings.metadataSources.map((source) => ({
           id: source.id,
           name: source.name,
@@ -508,8 +509,8 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
       const response = await api.updateConfig(updates);
 
       let nextSettings = settings;
-      if (settings.openaiApiKey && response.openai_api_key) {
-        setSavedApiKeyMask(response.openai_api_key);
+      if (settings.openaiApiKey) {
+        setOpenaiKeyStatus(response.secret_status?.openai_api_key);
         nextSettings = { ...settings, openaiApiKey: '' };
         setSettings(nextSettings);
       }
@@ -634,7 +635,7 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
       setOpenaiKeyError('Invalid API key format.');
       return;
     }
-    if (!apiKey && !savedApiKeyMask) {
+    if (!apiKey && !openaiKeyStatus?.set) {
       setOpenaiTestState({
         status: 'error',
         message: 'API key not provided.',
@@ -666,7 +667,8 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
     setExportInProgress(true);
     setImportNotice(null);
     try {
-      const config = await api.getConfig();
+      // secret_status is server-computed (it carries key fingerprints), not a setting.
+      const { secret_status: _secretStatus, ...config } = await api.getConfig();
       const blob = new Blob([JSON.stringify(config, null, 2)], {
         type: 'application/json',
       });
@@ -710,7 +712,7 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
       setImportDialogOpen(true);
       if (skipped.length > 0) {
         setImportNotice(
-          `Skipped masked secret(s) in the file: ${skipped.join(', ')}. Re-enter them manually.`
+          `Secrets are not imported from a file: ${skipped.join(', ')}. Enter them in Settings.`
         );
       }
     } catch (error) {
@@ -754,6 +756,26 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
     blocker.proceed?.();
   };
 
+  // The OpenAI key is write-only, so clearing it is its own request: the page
+  // never holds the key to blank out.
+  const handleClearOpenAIKey = () => {
+    if (!confirm('Clear the saved OpenAI API key?')) return;
+    void (async () => {
+      try {
+        const response = await api.updateConfig({ clear_secrets: ['openai_api_key'] });
+        setOpenaiKeyStatus(response.secret_status?.openai_api_key);
+      } catch (error) {
+        if (error instanceof api.ApiError && error.status === 401) {
+          navigate('/login');
+          return;
+        }
+        console.error('Failed to clear the OpenAI key:', error);
+        const reason = error instanceof Error && error.message ? `\n\n${error.message}` : '';
+        alert(`Failed to clear the OpenAI key.${reason}`);
+      }
+    })();
+  };
+
   const handleCancelNavigation = () => {
     blocker.reset?.();
   };
@@ -794,5 +816,6 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
     handleSaveAndNavigate,
     handleDiscardNavigation,
     handleCancelNavigation,
+    handleClearOpenAIKey,
   };
 }

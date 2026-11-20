@@ -1,8 +1,11 @@
 // file: web/src/components/settings/MetadataSettingsTab.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9e0f1a2b-3c4d-5e6f-7a8b-9c0d1e2f3a4b
-// last-edited: 2026-10-17
+// last-edited: 2026-11-19
 import { Dispatch, SetStateAction } from 'react';
+import type { SecretStatus } from '../../services/configView';
+import { canClearSecret, describeSecretStatus } from '../../utils/secretStatus';
+import { describeLock } from '../../utils/settingLocks';
 import {
   Box,
   Typography,
@@ -53,8 +56,11 @@ interface MetadataSettingsTabProps {
     message?: string;
   };
   openaiKeyError: string | null;
-  savedApiKeyMask: string;
-  setSavedApiKeyMask: (value: string) => void;
+  /** What the secret store says about the OpenAI key: set or not, never the key. */
+  openaiKeyStatus: SecretStatus | undefined;
+  /** What locks the OpenAI key (`setting_locks.openai_api_key`), when something does. */
+  openaiKeyLock?: string;
+  handleClearOpenAIKey: () => void;
   sourceTestStatus: Record<
     string,
     { testing: boolean; result?: { success: boolean; message?: string; error?: string } }
@@ -74,8 +80,9 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
     setExpandedSource,
     openaiTestState,
     openaiKeyError,
-    savedApiKeyMask,
-    setSavedApiKeyMask,
+    openaiKeyStatus,
+    openaiKeyLock,
+    handleClearOpenAIKey,
     sourceTestStatus,
     handleTestAIConnection,
     handleSourceToggle,
@@ -84,17 +91,17 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
     handleSourceReorder,
   } = props;
 
-  const openaiPlaceholder = savedApiKeyMask
-    ? `Key saved: ${savedApiKeyMask} (enter new key to change)`
+  const openaiPlaceholder = openaiKeyStatus?.set
+    ? 'Saved (type a new key to replace it)'
     : 'Enter your OpenAI API key';
 
   const openaiHelperText =
     openaiKeyError ||
-    (settings.enableAIParsing
-      ? savedApiKeyMask
-        ? 'Key configured'
-        : 'Required for AI parsing'
-      : '');
+    (openaiKeyLock
+      ? `Locked: set by ${describeLock(openaiKeyLock)}, which overrides any saved key.`
+      : settings.enableAIParsing
+        ? describeSecretStatus(openaiKeyStatus, 'Required for AI parsing')
+        : '');
 
   return (
     <Grid container spacing={3}>
@@ -146,18 +153,18 @@ export function MetadataSettingsTab(props: MetadataSettingsTabProps) {
             label="OpenAI API Key"
             type="password"
             value={settings.openaiApiKey}
-            onChange={(e) => {
-              handleChange('openaiApiKey', e.target.value);
-              // Clear saved mask when user starts typing
-              if (e.target.value && savedApiKeyMask) {
-                setSavedApiKeyMask('');
-              }
-            }}
-            disabled={!settings.enableAIParsing}
+            onChange={(e) => handleChange('openaiApiKey', e.target.value)}
+            autoComplete="off"
+            disabled={!settings.enableAIParsing || !!openaiKeyLock}
             error={Boolean(openaiKeyError)}
             placeholder={openaiPlaceholder}
             helperText={openaiHelperText}
           />
+          {canClearSecret(openaiKeyStatus) && !openaiKeyLock && (
+            <Button variant="text" color="error" onClick={handleClearOpenAIKey}>
+              Clear key
+            </Button>
+          )}
           <Button
             variant="outlined"
             onClick={handleTestAIConnection}

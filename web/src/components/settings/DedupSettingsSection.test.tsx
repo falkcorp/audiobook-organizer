@@ -1,7 +1,7 @@
 // file: web/src/components/settings/DedupSettingsSection.test.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: b8c7d6e5-f4a3-2109-bcde-fa8765432109
-// last-edited: 2026-10-12
+// last-edited: 2026-11-19
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
@@ -117,21 +117,31 @@ describe('DedupSettingsSection', () => {
 
   describe('AcoustID.org API key', () => {
     it('saves acoustid key through updateConfig', async () => {
-      vi.mocked(api.updateConfig).mockResolvedValue({ acoustid_api_key: '****cdef' } as api.Config);
+      vi.mocked(api.updateConfig).mockResolvedValue({
+        secret_status: { acoustid_api_key: { set: true, source: 'stored', fingerprint: 'cdef0123' } },
+      } as unknown as api.Config);
       render(<DedupSettingsSection config={defaultConfig} onChange={vi.fn()} />);
       const input = screen.getByLabelText('AcoustID.org API key');
       fireEvent.change(input, { target: { value: 'abcd-test-key-cdef' } });
       fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
       await waitFor(() =>
-        expect(api.updateConfig).toHaveBeenCalledWith({ acoustid_api_key: 'abcd-test-key-cdef' })
+        expect(api.updateConfig).toHaveBeenCalledWith({
+          secrets: { acoustid_api_key: 'abcd-test-key-cdef' },
+        })
       );
       expect(await screen.findByText('AcoustID API key saved.')).toBeInTheDocument();
     });
 
-    it('masked key never rendered in clear', async () => {
-      vi.mocked(api.updateConfig).mockResolvedValue({ acoustid_api_key: '****cdef' } as api.Config);
+    it('shows the key as a status and never renders its value', async () => {
+      vi.mocked(api.updateConfig).mockResolvedValue({
+        secret_status: { acoustid_api_key: { set: true, source: 'stored', fingerprint: 'cdef0123' } },
+      } as unknown as api.Config);
       render(
-        <DedupSettingsSection config={defaultConfig} onChange={vi.fn()} acoustidKeyMask="****cdef" />
+        <DedupSettingsSection
+          config={defaultConfig}
+          onChange={vi.fn()}
+          acoustidKeyStatus={{ set: true, source: 'stored', fingerprint: 'cdef0123' }}
+        />
       );
       const input = screen.getByLabelText('AcoustID.org API key') as HTMLInputElement;
       expect(input.type).toBe('password');
@@ -139,8 +149,41 @@ describe('DedupSettingsSection', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
       await screen.findByText('AcoustID API key saved.');
       expect(input.value).toBe('');
-      expect(screen.getByText(/\*\*\*\*cdef/)).toBeInTheDocument();
+      expect(screen.getByText(/fingerprint cdef0123/)).toBeInTheDocument();
       expect(document.body.textContent).not.toContain('abcd-test-key-cdef');
+    });
+
+    it('clears the key through clear_secrets, not an empty value', async () => {
+      vi.mocked(api.updateConfig).mockResolvedValue({
+        secret_status: { acoustid_api_key: { set: false } },
+      } as unknown as api.Config);
+      render(
+        <DedupSettingsSection
+          config={defaultConfig}
+          onChange={vi.fn()}
+          acoustidKeyStatus={{ set: true, source: 'stored' }}
+        />
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Clear key' }));
+      await waitFor(() =>
+        expect(api.updateConfig).toHaveBeenCalledWith({ clear_secrets: ['acoustid_api_key'] })
+      );
+      expect(await screen.findByText('AcoustID API key cleared.')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Clear key' })).not.toBeInTheDocument();
+    });
+
+    it('disables the field and says what locks it when the environment supplies the key', () => {
+      render(
+        <DedupSettingsSection
+          config={defaultConfig}
+          onChange={vi.fn()}
+          acoustidKeyStatus={{ set: true, source: 'env' }}
+          acoustidKeyLock="env ACOUSTID_API_KEY"
+        />
+      );
+      expect(screen.getByLabelText('AcoustID.org API key')).toBeDisabled();
+      expect(screen.getByText(/ACOUSTID_API_KEY environment variable/)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Clear key' })).not.toBeInTheDocument();
     });
   });
 });
