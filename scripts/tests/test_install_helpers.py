@@ -683,6 +683,13 @@ class InstallHelpers(unittest.TestCase):
         self.assertIn("NOTICE", p.stdout)
         self.assertIn("APPLY=1 will refuse", p.stdout)
 
+    def test_the_sudo_re_run_is_isolated_too(self) -> None:
+        argv = IH.sudo_argv()
+        self.assertEqual(argv[0], "sudo")
+        self.assertEqual(argv[1], sys.executable)
+        self.assertEqual(argv[2], "-I")
+        self.assertEqual(argv[3:], sys.argv)
+
     def test_python_runs_isolated_whatever_the_environment_says(self) -> None:
         poison = self.tmp / "poison"
         poison.mkdir()
