@@ -1,7 +1,7 @@
 // file: internal/server/reconcile_ops.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 5c2d8f41-a3e7-4b19-8d60-9f1e2c3a4b5d
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 // reconcile_ops registers the v2 OperationDefs for the reconcile scan and
 // reconcile apply operations. The HTTP handlers in reconcile.go enqueue these
@@ -225,7 +225,7 @@ func (s *Server) reconcileApplyDef() opsregistry.OperationDef {
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "reconcile",
 		DisplayName:     "Reconcile Apply",
-		Description:     "Apply a set of file-to-book reconcile matches, moving files and updating the database.",
+		Description:     "Apply a set of confirmed file-to-book reconcile matches: each book and its file row are repointed at the matched file already on disk. No file is moved, copied or deleted, and no row is deleted.",
 		DefaultPriority: opsregistry.PriorityNormal,
 		Cancellable:     true,
 		Isolate:         false,
@@ -254,11 +254,16 @@ func (s *Server) reconcileApplyDef() opsregistry.OperationDef {
 	}
 }
 
-// reconcileApplyPrecheck is the fail-safe cap (internal/applycap): each match
-// moves a file and rewrites a book row, so the whole set is refused before the
-// first move. Both shells call it before the core.
+// reconcileApplyPrecheck refuses the whole set before the first write: the
+// fail-safe cap (internal/applycap), because each match repoints a book and its
+// file row and clears hashes (nothing moves on disk), and a match type the scan
+// never produces (reconcile.ValidateApplyItems), because the type decides whether
+// a match keeps the book's hashes. Both shells call it before the core.
 func reconcileApplyPrecheck(p reconcileApplyOpParams) error {
-	return applycap.Check(reconcileApplyOpID, len(p.Matches), config.AppConfig.BulkApplyMaxItems)
+	if err := applycap.Check(reconcileApplyOpID, len(p.Matches), config.AppConfig.BulkApplyMaxItems); err != nil {
+		return err
+	}
+	return reconcile.ValidateApplyItems(p.Matches)
 }
 
 // reconcileApplyCore is the body of reconcile.apply, shared by HEAD's shell and

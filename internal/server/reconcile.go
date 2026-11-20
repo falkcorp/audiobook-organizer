@@ -1,7 +1,7 @@
 // file: internal/server/reconcile.go
-// version: 3.12.2
+// version: 3.12.3
 // guid: e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 // HTTP adapters — all logic in internal/reconcile
 
 package server
@@ -189,6 +189,12 @@ func (s *Server) startReconcile(c *gin.Context) {
 
 	if len(req.Matches) == 0 {
 		httputil.RespondWithBadRequest(c, "no matches provided")
+		return
+	}
+	// An unknown match_type decides whether a match keeps or clears the book's
+	// hashes, so it is refused here rather than applied as an unproven match.
+	if err := reconcile.ValidateApplyItems(req.Matches); err != nil {
+		httputil.RespondWithBadRequest(c, err.Error())
 		return
 	}
 

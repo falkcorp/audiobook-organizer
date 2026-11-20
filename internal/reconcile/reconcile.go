@@ -1,5 +1,5 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.29.2
+// version: 1.30.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-11-19
 
@@ -568,7 +568,7 @@ func BuildReconcilePreviewCtx(ctx context.Context, store Store, log logger.Logge
 					BookTitle:  book.Title,
 					OldPath:    book.FilePath,
 					NewPath:    fp,
-					MatchType:  "hash",
+					MatchType:  matchTypeHash,
 					Confidence: "high",
 					Score:      1.0,
 				})
@@ -590,7 +590,7 @@ func BuildReconcilePreviewCtx(ctx context.Context, store Store, log logger.Logge
 					BookTitle:  book.Title,
 					OldPath:    book.FilePath,
 					NewPath:    fp,
-					MatchType:  "original_hash",
+					MatchType:  matchTypeOriginalHash,
 					Confidence: "high",
 					Score:      0.95,
 				})
@@ -633,7 +633,7 @@ func BuildReconcilePreviewCtx(ctx context.Context, store Store, log logger.Logge
 						BookTitle:  book.Title,
 						OldPath:    book.FilePath,
 						NewPath:    fp,
-						MatchType:  "filename",
+						MatchType:  matchTypeFilename,
 						Confidence: "low",
 						Score:      0.5,
 					})
@@ -674,7 +674,7 @@ func BuildReconcilePreviewCtx(ctx context.Context, store Store, log logger.Logge
 					BookTitle:  book.Title,
 					OldPath:    book.FilePath,
 					NewPath:    fp,
-					MatchType:  "filename",
+					MatchType:  matchTypeFilename,
 					Confidence: "low",
 					Score:      0.3,
 				})
