@@ -205,8 +205,7 @@ func TestIntegrationsMigration_TrustCarried(t *testing.T) {
 		}
 	}
 	for _, k := range audits(s) {
-		if strings.HasPrefix(k, "core.integration.local_migrated|") {
-			id := strings.TrimPrefix(k, "core.integration.local_migrated|")
+		if id, ok := strings.CutPrefix(k, "core.integration.local_migrated|"); ok {
 			if _, ok := wantOrigin[id]; !ok {
 				t.Errorf("audit record %q for an instance that was not granted Local", k)
 			}
@@ -487,5 +486,36 @@ func TestIntegrationsMigration_ExactIDWinsForAIEndpoints(t *testing.T) {
 		return q.Key == memberPrefix+"ai_endpoints.0" && q.Reason == rInstanceConflict
 	}) {
 		t.Error("the renamed row listed first was not quarantined as the duplicate")
+	}
+}
+
+// TestIntegrationsMigration_RenamedSourceRefusedCarriesNothing: the carry is
+// staged, and reported, only once the instance import succeeds. When core
+// refuses the renamed instance, no secret or marker is written under the new
+// name and no carry is reported, readable or not.
+func TestIntegrationsMigration_RenamedSourceRefusedCarriesNothing(t *testing.T) {
+	const from = "integrations.metadata.batcave_db.credentials.api_key"
+	const to = "integrations.metadata.batcave-db.credentials.api_key"
+	for _, c := range []struct {
+		name string
+		opts []func(*rig)
+	}{
+		{"readable", nil},
+		{"unreadable", []func(*rig){func(r *rig) { delete(r.secrets.seed, from); r.secrets.unreadable[from] = true }}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r, s := runFixture(t, append([]func(*rig){renamedSource, conflict("instance", "metadata/batcave-db")}, c.opts...)...)
+			if _, ok := instances(t, s)["metadata/batcave-db"]; ok {
+				t.Fatal("the refused instance was written")
+			}
+			if v, ok := s.Rows[string(ownerSecrets)][to]; ok {
+				t.Errorf("the refused instance's carry wrote %q under the new name", v)
+			}
+			for _, e := range r.report.Entries() {
+				if e.ID == "metadata/batcave-db" && e.Kind == "note" && (strings.Contains(e.Detail, "carried") || strings.Contains(e.Detail, "stays in the store")) {
+					t.Errorf("a carry is reported for a refused instance: %v", e)
+				}
+			}
+		})
 	}
 }

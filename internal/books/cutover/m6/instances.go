@@ -621,11 +621,17 @@ func (m *Migration) aiInstance(raw json.RawMessage, i int, set secretSet) (p *pe
 	if ep.EmbedModel != "" {
 		settings["embed_model"] = ep.EmbedModel
 	}
-	if len(ep.CapabilityModels) > 0 {
-		cm := map[string]string{}
-		for k, v := range ep.CapabilityModels {
-			cm[capabilityID(k)] = v
+	// A per-capability model is kept only for a capability whose tick would be:
+	// HEAD never selected by one for a capability it does not register.
+	cm := map[string]string{}
+	for _, k := range slices.Sorted(maps.Keys(ep.CapabilityModels)) {
+		if strings.Contains(k, "*") || !headCapabilities[k] {
+			p.dropped = append(p.dropped, "capability_models entry "+strconv.Quote(k)+" is not for a capability HEAD registers")
+			continue
 		}
+		cm[capabilityID(k)] = ep.CapabilityModels[k]
+	}
+	if len(cm) > 0 {
 		settings["capability_models"] = cm
 	}
 	if len(ep.Labels) > 0 {
