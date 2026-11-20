@@ -1355,7 +1355,12 @@ def _env_promote(cfg: dict[str, str], had_binary: bool) -> None:
     for part in ENV_PARTS:
         doc[part] = pend.get(part) or _capture_env(cfg, part)
     _write_env_json(bundle_path, doc)
-    _forget_env(pending_path)
+    # The capture is NOT deleted here: install binary has not written the new
+    # binary yet. If that write fails and the deploy is run again, the capture
+    # is what keeps the environment the previous binary ran under; deleted now,
+    # the rerun would capture the NEW unit and local.conf the first run already
+    # installed, and label them as the previous binary's. install binary
+    # deletes it once the new binary is in place.
 
 
 def _read_snapshot(cfg: dict[str, str]) -> dict:
@@ -1611,8 +1616,8 @@ def _install_binary(cfg: dict[str, str], src: str) -> int:
             _env_promote(cfg, had)
         except (OSError, RefusedError) as e:
             # .prev is now the current binary: a snapshot of an older one
-            # must not outlive it.
-            _forget_env(*_env_paths(cfg))
+            # must not outlive it. The capture stays (see _env_promote).
+            _forget_env(_env_paths(cfg)[0])
             raise RefusedError(
                 f"keeping the environment beside {prev} failed ({e}); {b} is unchanged, "
                 "and a rollback refuses until a deploy succeeds"
@@ -1631,6 +1636,11 @@ def _install_binary(cfg: dict[str, str], src: str) -> int:
             with contextlib.suppress(OSError):
                 os.unlink(new)
             raise RefusedError(f"installing {src} as {b} failed ({e}); {b} is unchanged") from e
+        # The new binary is in place: this deploy's capture has done its job.
+        try:
+            _forget_env(_env_paths(cfg)[1])
+        except OSError as e:
+            print(f"warning: could not remove the finished capture ({e})", file=sys.stderr)
     finally:
         os.close(fd)
     print(f"installed {src} as {b}; the replaced binary is {prev}")
