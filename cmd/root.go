@@ -60,18 +60,7 @@ var logLevel string
 var metadataInspectFile string
 
 // persistentFlagConfigKeys maps each root persistent flag to the config key it
-// feeds. It drives BOTH viper.BindPFlag and the explicit-flag capture in
-// initConfig, deliberately: those two loops have to agree about which flags
-// exist, and a table is the only way to guarantee they still agree after
-// someone adds the next flag.
-//
-// The capture exists because viper flattens flags, environment, config file and
-// the persisted DB blob into one namespace and remembers only the winning
-// VALUE, never who supplied it. config.LoadConfigFromDatabase later overlays
-// the blob on top, at which point "the operator typed --db" is unrecoverable —
-// and neither viper.IsSet nor viper.Get can recover it, for reasons measured and
-// tabulated on config.explicitFlags. cobra's Changed() is the only API that
-// answers the question, and only while the parse is fresh.
+// feeds through viper.BindPFlag.
 var persistentFlagConfigKeys = map[string]string{
 	"dir":       "root_dir",
 	"db":        "database_path",
@@ -479,16 +468,6 @@ broken tags or filename fallbacks without running a full scan.`,
 const skipAppInitAnnotation = "audiobook-organizer/skip-app-init"
 
 func initConfig() {
-	// FIRST: record which flags the operator actually typed, before any config
-	// layer is loaded. cobra.OnInitialize runs after flag parsing and before the
-	// command body, so this is the earliest point where Changed() is both
-	// populated and still ahead of every consumer.
-	for flagName, configKey := range persistentFlagConfigKeys {
-		if rootCmd.PersistentFlags().Changed(flagName) {
-			config.MarkFlagExplicit(configKey)
-		}
-	}
-
 	if cfgFile != "" {
 		viper.SetConfigFile(cfgFile)
 	} else {

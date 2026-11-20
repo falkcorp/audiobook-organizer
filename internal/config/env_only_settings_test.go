@@ -54,14 +54,13 @@ func TestInviteConfig_DefaultsAreInert(t *testing.T) {
 	}
 }
 
-func TestInviteConfig_EnvReachesConfigAndSurvivesBlobOverlay(t *testing.T) {
+func TestInviteConfig_EnvReachesConfig(t *testing.T) {
 	resetViper(t)
 	registerInviteDefaults(viper.GetViper())
 	setInviteEnv(t)
 
-	// applyEnvAuthoritativeConfig runs after the blob load replaced the struct.
 	c := Config{}
-	applyEnvAuthoritativeConfig(&c)
+	applyInviteEnv(&c, viper.GetViper())
 	if c.SMTPHost != "127.0.0.1" || c.SMTPPort != 25 || c.SMTPPassword != testSMTPPassword {
 		t.Fatalf("SMTP settings not applied: host=%q port=%d", c.SMTPHost, c.SMTPPort)
 	}

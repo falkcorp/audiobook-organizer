@@ -149,32 +149,6 @@ func TestRemovedWriteBackupBefore_WarnsOnLoad(t *testing.T) {
 	if !strings.Contains(out, "key=metadata_scoring.write_backup_before ") || !strings.Contains(out, "removed setting is ignored") {
 		t.Errorf("no removed-setting WARN for metadata_scoring.write_backup_before in logs:\n%s", out)
 	}
-	if msg, ok := removedKeyInUpdate(map[string]any{"write_backup_before_tag_write": true}); !ok || !strings.Contains(msg, "create_backups") {
-		t.Errorf("update with write_backup_before_tag_write: ok=%v msg=%q, want a refusal naming create_backups", ok, msg)
-	}
-}
-
-func TestHasConfigKey(t *testing.T) {
-	m := map[string]any{
-		"flat.dotted": 1,
-		"a":           map[string]any{"b": map[string]any{"c": nil}},
-		"scalar":      3,
-	}
-	for _, tc := range []struct {
-		key  string
-		want bool
-	}{
-		{"flat.dotted", true},
-		{"a.b.c", true},
-		{"a.b", true},
-		{"a.x", false},
-		{"scalar.x", false},
-		{"missing", false},
-	} {
-		if got := hasConfigKey(m, tc.key); got != tc.want {
-			t.Errorf("hasConfigKey(%q) = %v, want %v", tc.key, got, tc.want)
-		}
-	}
 }
 
 // The qBittorrent and SABnzbd blocks were removed 2026-10-17 (01-P76). A config
@@ -208,19 +182,5 @@ func TestRemovedDownloadClientKeys_WarnAndRefuse(t *testing.T) {
 	}
 	if strings.Contains(out, "key=download_client.torrent.deluge") {
 		t.Errorf("the kept Deluge block was reported as removed:\n%s", out)
-	}
-
-	for _, payload := range []map[string]any{
-		{"download_client": map[string]any{"torrent": map[string]any{"qbittorrent": map[string]any{"host": "192.0.2.11"}}}},
-		{"download_client": map[string]any{"usenet": map[string]any{"type": "sabnzbd"}}},
-	} {
-		msg, ok := removedKeyInUpdate(payload)
-		if !ok || !strings.Contains(msg, "download-client settings were removed") {
-			t.Errorf("update %v: ok=%v msg=%q, want the removal message", payload, ok, msg)
-		}
-	}
-	if _, ok := removedKeyInUpdate(map[string]any{"download_client": map[string]any{
-		"torrent": map[string]any{"deluge": map[string]any{"host": "192.0.2.10"}}}}); ok {
-		t.Error("an update touching only the kept Deluge settings was refused")
 	}
 }

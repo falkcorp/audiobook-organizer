@@ -641,24 +641,3 @@ func TestUpdateWorkWithAltTitles(t *testing.T) {
 		t.Errorf("Expected 2 alt titles after update, got %d", len(result.AltTitles))
 	}
 }
-
-// TestDecryptValueErrors tests error handling in DecryptValue
-func TestDecryptValueErrors(t *testing.T) {
-	withCleanKey(t)
-	tempDir := t.TempDir()
-	if err := InitEncryption(tempDir); err != nil {
-		t.Fatalf("InitEncryption failed: %v", err)
-	}
-
-	// Test with invalid base64
-	_, err := DecryptValue("not-valid-base64!!!")
-	if err == nil {
-		t.Error("Expected error for invalid base64")
-	}
-
-	// Test with too short ciphertext
-	_, err = DecryptValue("YWJj") // "abc" in base64, but too short
-	if err == nil {
-		t.Error("Expected error for too short ciphertext")
-	}
-}

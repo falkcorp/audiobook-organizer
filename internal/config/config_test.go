@@ -649,14 +649,6 @@ func TestInitConfig_ActivityBackendFromEnv(t *testing.T) {
 	InitConfig()
 	assert.Equal(t, "pebble", Snapshot().ActivityBackend,
 		"ACTIVITY_BACKEND did not reach Config.ActivityBackend — check viper.BindEnv")
-
-	// The DB-persisted config blob replaces the whole struct at boot
-	// (LoadConfigFromDatabase). Simulate that wipe, then confirm the
-	// env-authoritative re-apply restores the environment value.
-	Mutate(func(c *Config) { c.ActivityBackend = "" })
-	ApplyEnvAuthoritativeConfig()
-	assert.Equal(t, "pebble", Snapshot().ActivityBackend,
-		"ACTIVITY_BACKEND dropped after DB-blob overlay — add it to applyEnvAuthoritativeConfig")
 	assert.NoError(t, ValidateActivityBackend(Snapshot().ActivityBackend))
 }
 

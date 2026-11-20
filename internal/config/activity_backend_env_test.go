@@ -36,43 +36,6 @@ func TestViperIsSetIsTrueForARegisteredDefault(t *testing.T) {
 	}
 }
 
-// TestEnvSupplied covers the helper's contract directly, including the deliberate
-// choice to treat an empty value as "not supplied".
-func TestEnvSupplied(t *testing.T) {
-	if envSupplied("AO_ENV_SUPPLIED_PROBE_DEFINITELY_UNSET_XYZ") {
-		t.Error("an unset variable must not count as supplied")
-	}
-
-	t.Setenv("AO_ENV_SUPPLIED_PROBE", "")
-	if envSupplied("AO_ENV_SUPPLIED_PROBE") {
-		t.Error("an empty value must not count as supplied — systemd `Environment=FOO=` " +
-			"must behave like an unset variable, not blank a persisted setting")
-	}
-
-	t.Setenv("AO_ENV_SUPPLIED_PROBE", "/mnt/x/value")
-	if !envSupplied("AO_ENV_SUPPLIED_PROBE") {
-		t.Error("a real value must count as supplied")
-	}
-}
-
-// TestActivityBackend_BlobCannotSelectTheBackend: with the environment silent,
-// the applied value is the registered "pebble" default, so a blob restored from
-// before 01-P75 that still says "sqlite" is replaced rather than kept. A stored
-// blob is not something the operator can see or edit, so it must never be what
-// stops startup; a config file or the environment is (see the next test).
-func TestActivityBackend_BlobCannotSelectTheBackend(t *testing.T) {
-	resetViper(t)
-	InitConfig() // no ACTIVITY_BACKEND in the environment
-
-	c := &Config{ActivityBackend: "sqlite"} // as if restored from the blob
-	applyEnvAuthoritativeConfig(c)
-
-	if c.ActivityBackend != "pebble" {
-		t.Fatalf("ActivityBackend = %q, want \"pebble\" — the blob must not be able to select "+
-			"the activity backend when the operator's environment is silent", c.ActivityBackend)
-	}
-}
-
 // TestActivityBackend_SQLiteFromConfFailsValidate is the fail-loud guarantee of
 // 01-P75: a conf that still says activity_backend: sqlite, in the config file or
 // the environment, loads into the field and is then refused by Validate (which
@@ -97,11 +60,7 @@ func TestActivityBackend_SQLiteFromConfFailsValidate(t *testing.T) {
 		resetViper(t)
 		t.Setenv("ACTIVITY_BACKEND", "sqlite")
 		InitConfig()
-		c := Snapshot()
-		// The blob overlay must not hide it either: the environment wins.
-		c.ActivityBackend = "pebble"
-		applyEnvAuthoritativeConfig(&c)
-		assertSQLiteRefused(t, c)
+		assertSQLiteRefused(t, Snapshot())
 	})
 }
 

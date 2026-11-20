@@ -210,41 +210,6 @@ func EncryptValue(plaintext string) (string, error) {
 	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
-// DecryptValue decrypts an encrypted value
-func DecryptValue(encrypted string) (string, error) {
-	if encryptionKey == nil {
-		return "", fmt.Errorf("encryption key not initialized")
-	}
-
-	ciphertext, err := base64.StdEncoding.DecodeString(encrypted)
-	if err != nil {
-		return "", err
-	}
-
-	block, err := aes.NewCipher(encryptionKey)
-	if err != nil {
-		return "", err
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-
-	nonceSize := gcm.NonceSize()
-	if len(ciphertext) < nonceSize {
-		return "", fmt.Errorf("ciphertext too short")
-	}
-
-	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return "", err
-	}
-
-	return string(plaintext), nil
-}
-
 // PebbleDB implementation
 func (s *PebbleStore) GetSetting(key string) (*Setting, error) {
 	data, closer, err := s.db.Get([]byte("setting:" + key))
