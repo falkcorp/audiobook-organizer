@@ -449,7 +449,9 @@ class TestRollbackGuardRefusesAfterCutover(unittest.TestCase):
         self.assertEqual(host.installed(), "prev")
         self.assertEqual(Path(f"{host.bin}.rolled-back").exists(), True)
         self.assertGreater(host.index("systemctl restart"), host.index("rollback apply"))
-        self.assertGreater(host.index("rollback apply"), host.index("systemctl show -p InvocationID"))
+        self.assertGreater(
+            host.index("rollback apply"), host.index("systemctl show -p InvocationID")
+        )
         self.assertIn("--print-storage-levels", " ".join(host.ssh()))
         self.assertTrue(
             any(c.startswith(UNIT_SHOW[1:]) for c in host.ssh()), "the wait reads the unit"
@@ -1255,7 +1257,10 @@ def service_environment(host: FakeHost) -> dict[str, str]:
     unit file's Environment= lines, then each drop-in's, in file-name order
     (systemd.unit(5)). Only the plain KEY=value form the helpers write."""
     env: dict[str, str] = {}
-    files = [host.unit_file, *sorted((host.unit_file.parent / (host.unit_file.name + ".d")).glob("*.conf"))]
+    files = [
+        host.unit_file,
+        *sorted((host.unit_file.parent / (host.unit_file.name + ".d")).glob("*.conf")),
+    ]
     for f in files:
         for line in f.read_text().splitlines():
             line = line.strip()
@@ -1340,7 +1345,9 @@ class RollbackRestoresEnvironment(unittest.TestCase):
 
     def test_a_snapshot_the_helper_refuses_stops_the_rollback_before_any_change(self) -> None:
         host = FakeHost(self)
-        host.write_snapshot(unit={"present": True, "text": host.unit_text.replace("User=alfred", "User=root")})
+        host.write_snapshot(
+            unit={"present": True, "text": host.unit_text.replace("User=alfred", "User=root")}
+        )
         before = host.environment()
         p = host.make("rollback-restore")
         self.assertNotEqual(p.returncode, 0, out(p))

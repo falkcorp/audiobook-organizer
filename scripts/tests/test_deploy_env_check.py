@@ -94,7 +94,9 @@ class Retired(Tmp):
         self.assertIn("became no setting", err)
 
     def test_a_conf_with_only_current_names_passes(self):
-        rc, out, _ = self.check("[Service]\nEnvironment=ABO_BOOKS_WHISPER_REMOTE_URL=http://192.0.2.7\n")
+        rc, out, _ = self.check(
+            "[Service]\nEnvironment=ABO_BOOKS_WHISPER_REMOTE_URL=http://192.0.2.7\n"
+        )
         self.assertEqual(rc, 0)
         self.assertIn("no retired env name", out)
 
@@ -236,14 +238,14 @@ class MissingDocstring(unittest.TestCase):
         self.assertEqual(out, "")
 
     def test_it_checks_nothing_in_that_case(self):
-        with mock.patch.object(chk, "__doc__", None), mock.patch.object(chk, "check_retired") as r, mock.patch.object(
-            chk, "check_makefile_local"
-        ) as m:
+        with mock.patch.object(chk, "__doc__", None), mock.patch.object(
+            chk, "check_retired"
+        ) as r, mock.patch.object(chk, "check_makefile_local") as m:
             chk.main([], environ={})
         r.assert_not_called()
         m.assert_not_called()
 
-    def test_python_dash_OO_really_exits_2(self):
+    def test_python_dash_dash_optimize_really_exits_2(self):
         p = subprocess.run(
             [sys.executable, "-OO", str(SCRIPTS / "deploy_env_check.py")],
             capture_output=True,
@@ -262,12 +264,20 @@ class MissingDocstring(unittest.TestCase):
 
 class RealList(unittest.TestCase):
     def setUp(self):
-        self.enforced, self.rows = chk.parse_list((REPO / "deploy" / "retired-env-names.txt").read_text())
+        self.enforced, self.rows = chk.parse_list(
+            (REPO / "deploy" / "retired-env-names.txt").read_text()
+        )
 
     def test_the_names_the_flip_retires_are_listed(self):
         for name in (
-            "WHISPER_REMOTE_URL", "WHISPER_ENDPOINTS", "SMTP_FROM", "ABS_AUTH_PROBE",
-            "CF_ACCOUNT_ID", "CF_GUESTS_POLICY_ID", "CF_GUEST_SERVICE_TOKENS", "CF_SERVICE_AUTH_POLICY_ID",
+            "WHISPER_REMOTE_URL",
+            "WHISPER_ENDPOINTS",
+            "SMTP_FROM",
+            "ABS_AUTH_PROBE",
+            "CF_ACCOUNT_ID",
+            "CF_GUESTS_POLICY_ID",
+            "CF_GUEST_SERVICE_TOKENS",
+            "CF_SERVICE_AUTH_POLICY_ID",
         ):
             self.assertEqual(self.rows[name][0], "warn", name)
 

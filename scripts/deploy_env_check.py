@@ -67,9 +67,7 @@ _SUDO_WITHOUT_N = re.compile(r"\bsudo\s+(?!-n\b)")
 # What a recipe sends over ssh: the quoted command after the host, or an
 # unquoted one up to the shell's next separator. Only that is examined for
 # `sudo`: an echo that mentions sudo is not a command.
-_REMOTE = re.compile(
-    r"""\bssh\s+(?:-\S+\s+)*\S+\s+(?:'([^']*)'|"([^"]*)"|([^;&|)'"]+))"""
-)
+_REMOTE = re.compile(r"""\bssh\s+(?:-\S+\s+)*\S+\s+(?:'([^']*)'|"([^"]*)"|([^;&|)'"]+))""")
 OVERRIDE = "DEPLOY_ALLOW_NO_ROLLBACK"
 
 
@@ -82,9 +80,8 @@ def logical_lines(text: str) -> list[str]:
         line = raw.strip()
         if cur is None and (not line or line[0] in "#;"):
             continue
-        if cur is not None:
-            if line and line[0] in "#;":
-                continue
+        if cur is not None and line and line[0] in "#;":
+            continue
         piece = line
         if piece.endswith("\\") and (len(piece) - len(piece.rstrip("\\"))) % 2 == 1:
             cur = (cur or "") + piece[:-1] + " "
@@ -239,7 +236,9 @@ def check_makefile_local(path: Path, environ: dict[str, str]) -> int:
                 "and local.conf are not kept"
             )
         elif _SUDO_WITHOUT_N.search(remote):
-            problems.append(f"`{target}` runs `sudo` without -n, which cannot run over a tty-less ssh")
+            problems.append(
+                f"`{target}` runs `sudo` without -n, which cannot run over a tty-less ssh"
+            )
         if "install-staged binary" not in body:
             problems.append(
                 f"`{target}` never runs `install-staged binary`, the step that keeps the previous "
@@ -262,7 +261,7 @@ def check_makefile_local(path: Path, environ: dict[str, str]) -> int:
         "Replace its deploy and deploy-debug recipes with Makefile.local.example's: they install the "
         "binary, the unit and local.conf through the root-owned install-staged helper, which keeps "
         "the previous ones beside <bin>.prev. The helper bundle is installed once as root "
-        "(docs/system/deploy-and-gpu-ops.md, \"Rollback helpers\"). Nothing was uploaded or installed. "
+        '(docs/system/deploy-and-gpu-ops.md, "Rollback helpers"). Nothing was uploaded or installed. '
         f"To deploy anyway: {OVERRIDE}=1 make deploy.",
         file=sys.stderr,
     )
