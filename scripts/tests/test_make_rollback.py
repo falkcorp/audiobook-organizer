@@ -40,6 +40,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -275,7 +276,6 @@ class FakeHost:
             "checkpoint-record",
             "restore-offline",
             "unit-type",
-            "swap-prev",
             "install-staged",
         ):
             text = (HELPERS / stub).read_text()
@@ -411,8 +411,7 @@ class FakeHost:
         out = []
         for c in self.ssh():
             if (
-                "swap-prev" in c
-                or "install-staged rollback apply" in c
+                "install-staged rollback apply" in c
                 or "systemctl stop" in c
                 or "systemctl start" in c
                 or "systemctl restart" in c
@@ -1317,18 +1316,22 @@ class RollbackRestoresEnvironment(unittest.TestCase):
         self.assertEqual(host.environment()[0], host.PREV_UNIT_MARK + host.unit_text)
 
     def test_drill_control_a_binary_only_swap_boots_the_previous_build_open(self) -> None:
-        """The failure the fix removes, run on the same host: `swap-prev` puts
-        the binary back and nothing else."""
+        """The failure the fix removes, run on the same host: the binary put
+        back by itself (no helper does this any more) and nothing else."""
         host = FakeHost(self)
-        proc = subprocess.run(
-            ["ssh", HOST, f"sudo -n {guard.HELPER_DIR}/swap-prev"],
-            env=dict(host.h["env"]),
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        shutil.copy2(host.prev, host.bin)
         self.assertEqual(host.installed(), "prev")
         self.assertEqual(boot_peers(host), "OPEN (fails open)")
+
+    def test_no_helper_swaps_the_binary_alone(self) -> None:
+        o = guard.Opts(
+            host="h",
+            db="/path/to/audiobooks.pebble",
+            bin="/usr/local/bin/audiobook-organizer",
+            user=USER,
+        )
+        self.assertNotIn("swap-prev", guard.sudoers(o, "deploy"))
+        self.assertFalse((HELPERS / "swap-prev").exists())
 
     def test_rollback_restore_puts_the_environment_back_too(self) -> None:
         host = FakeHost(self)

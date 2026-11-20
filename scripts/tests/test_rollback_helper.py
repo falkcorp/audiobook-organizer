@@ -35,7 +35,8 @@ import unittest.mock
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-HELPER = REPO_ROOT / "deploy" / "rollback-helpers" / "rollback_helper.py"
+HELPERS = REPO_ROOT / "deploy" / "rollback-helpers"
+HELPER = HELPERS / "rollback_helper.py"
 NAME = "20261101T020304Z-0badc0de"
 INJECTIONS = [
     "x; touch /tmp/pwned-r127",
@@ -750,64 +751,6 @@ class UnitType(unittest.TestCase):
             self.assertEqual(code, 2, argv)
             self.assertEqual(h.tools(), [], argv)
             self.assertFalse(h.systemd.exists(), argv)
-
-
-class SwapPrev(unittest.TestCase):
-    def setup_host(self) -> Host:
-        h = Host(self)
-        h.bin.write_text("current")
-        h.bin.chmod(0o755)
-        prev = Path(f"{h.bin}.prev")
-        prev.write_text("prev")
-        prev.chmod(0o755)
-        return h
-
-    def test_installs_prev_atomically_and_keeps_the_current_binary(self):
-        h = self.setup_host()
-        code, _, err = h.run("swap-prev")
-        self.assertEqual(code, 0, err)
-        self.assertEqual(h.bin.read_text(), "prev")
-        self.assertEqual(Path(f"{h.bin}.rolled-back").read_text(), "current")
-        self.assertTrue(os.stat(h.bin).st_mode & stat.S_IXUSR)
-        self.assertFalse(Path(f"{h.bin}.new").exists())
-
-    def test_the_running_binarys_inode_is_never_written(self):
-        """A rename over the old binary, never a write into it: the running
-        process's open file (its text) still reads the old content."""
-        h = self.setup_host()
-        before = os.stat(h.bin).st_ino
-        fd = os.open(h.bin, os.O_RDONLY)
-        self.addCleanup(os.close, fd)
-        code, _, err = h.run("swap-prev")
-        self.assertEqual(code, 0, err)
-        self.assertEqual(os.pread(fd, 64, 0), b"current")
-        self.assertNotEqual(os.stat(h.bin).st_ino, before)
-        self.assertEqual(h.bin.read_text(), "prev")
-
-    def test_without_prev_nothing_changes(self):
-        h = self.setup_host()
-        os.unlink(f"{h.bin}.prev")
-        code, _, err = h.run("swap-prev")
-        self.assertEqual(code, 1)
-        self.assertIn(".prev", err)
-        self.assertEqual(h.bin.read_text(), "current")
-
-    def test_symlinked_prev_is_refused(self):
-        h = self.setup_host()
-        os.unlink(f"{h.bin}.prev")
-        target = h.root / "joker-binary"
-        target.write_text("joker")
-        target.chmod(0o755)
-        os.symlink(target, f"{h.bin}.prev")
-        self.assertEqual(h.run("swap-prev")[0], 1)
-        self.assertEqual(h.bin.read_text(), "current")
-        self.assertFalse(Path(f"{h.bin}.rolled-back").exists())
-
-    def test_takes_no_arguments(self):
-        for extra in (["x"], ["/bin/sh"], [""]):
-            h = self.setup_host()
-            self.assertEqual(h.run("swap-prev", *extra)[0], 2, extra)
-            self.assertEqual(h.bin.read_text(), "current")
 
 
 # A local.conf shaped like a real host's, Environment= lines only: a JSON
@@ -3057,7 +3000,6 @@ class RollbackEnv(unittest.TestCase):
             ("install", "unit"),
             ("install", "local-conf"),
             ("install", "rollback", "apply", prev),
-            ("swap-prev",),
         ):
             with self.subTest(argv=argv):
                 code, _, err = h.run(*argv)
@@ -3454,14 +3396,16 @@ class RollbackEnv(unittest.TestCase):
             with self.subTest(argv=argv):
                 self.assertEqual(h.run("install", *argv)[0], 2)
 
-    def test_swap_prev_still_swaps_the_binary_alone(self):
-        """The manual emergency path is unchanged: the recipes no longer use
-        it, but an operator with no generation still has it."""
+    def test_there_is_no_swap_prev_verb_any_more(self):
+        """The binary alone starts the previous build under the new
+        environment. The verb, its stub and its sudoers grant are gone; the
+        recovery after a failed swap is `rollback apply` again."""
         h = self.env_host()
         self.deploy(h)
-        self.assertEqual(h.run("swap-prev")[0], 0)
-        self.assertEqual(self.b.read_text(), "bat-signal-1")
-        self.assertIn("ABO_CORE_PEERS", self.live_conf.read_text())
+        self.assertEqual(h.run("swap-prev")[0], 2)
+        self.assertEqual(self.b.read_text(), "bat-signal-2")
+        self.assertNotIn("swap-prev", h.mod.STUBS)
+        self.assertFalse((HELPERS / "swap-prev").exists())
 
     def test_the_helper_never_executes_a_binary(self):
         """The facts come from the recipe: nothing the helper does runs the

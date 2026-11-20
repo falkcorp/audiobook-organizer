@@ -561,7 +561,7 @@ class Sudoers(unittest.TestCase):
         self.assertNotIn("*", text)
         h = guard.HELPER_DIR
         self.assertIn(f'{h}/inflight-probe ""', text)
-        self.assertIn(f'{h}/swap-prev ""', text)
+        self.assertNotIn("swap-prev", text, "the binary alone is not granted")
         self.assertIn(f"{h}/restore-offline, ", text)
         self.assertTrue(text.rstrip().endswith(f"{h}/checkpoint-record"), text)
         self.assertNotIn("tee", text)

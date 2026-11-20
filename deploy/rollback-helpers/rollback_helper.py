@@ -128,20 +128,13 @@ Operations (the stub name, then the subcommand):
                      `daemon-reload`s. It refuses, changing nothing, when no
                      generation matches or it is malformed, rather than roll
                      back half. Every verb that changes something (install
-                     binary|prev|unit|local-conf, rollback apply, swap-prev)
+                     binary|prev|unit|local-conf, rollback apply)
                      holds one lock for its life and refuses, changing
                      nothing, if another holds it.
   pprof              `pprof on` or `pprof off`, as root. on writes the fixed
                      drop-in `[Service]\\nEnvironment=ABK_PPROF_ADDR=localhost:6060\\n`
                      to /etc/systemd/system/<unit>.d/pprof.conf; off removes
                      it. Then `systemctl daemon-reload`.
-  swap-prev          `swap-prev`, no arguments, as root: the BINARY only, kept
-                     as the manual emergency path (the recipes use `install
-                     rollback apply`, which restores the environment too).
-                     Keeps <bin> as
-                     <bin>.rolled-back and installs <bin>.prev as <bin>
-                     atomically (copy to <bin>.new, then rename), which also
-                     avoids ETXTBSY on the running executable.
 
 Exit 0 done; 1 refused or failed (the message says which step); 2 bad
 arguments. Standard library only. Tests: scripts/tests/test_rollback_helper.py.
@@ -192,7 +185,6 @@ STUBS = {
     "checkpoint-record": "record",
     "restore-offline": "restore",
     "unit-type": "unit-type",
-    "swap-prev": "swap-prev",
     "install-staged": "install",
     "pprof": "pprof",
 }
@@ -2290,47 +2282,11 @@ def _install_prev(b: str, src: str) -> int:
     return 0
 
 
-def op_swap_prev(args: list[str]) -> int:
-    _arity(args, 0, "swap-prev (no arguments)")
-    cfg = load_config()
-    with _helper_lock(cfg):
-        return _swap_prev(cfg["bin"])
-
-
-def _swap_prev(b: str) -> int:
-    prev, kept, new = f"{b}.prev", f"{b}.rolled-back", f"{b}.new"
-    try:
-        pst = os.lstat(prev)
-    except FileNotFoundError as e:
-        raise RefusedError(f"no {prev}: nothing to roll back to; {b} is unchanged") from e
-    if not stat.S_ISREG(pst.st_mode):
-        raise RefusedError(f"{prev} is not a regular file; {b} is unchanged")
-    try:
-        shutil.copy2(b, f"{kept}.tmp")
-        os.replace(f"{kept}.tmp", kept)
-    except OSError as e:
-        raise RefusedError(f"keeping {b} as {kept} failed ({e}); {b} is unchanged") from e
-    try:
-        shutil.copy2(prev, new)
-        with open(new, "rb") as f:
-            os.fsync(f.fileno())
-        os.replace(new, b)
-    except OSError as e:
-        with contextlib.suppress(OSError):
-            os.unlink(new)
-        raise RefusedError(
-            f"installing {prev} as {b} failed ({e}); {b} is unchanged (still the current binary)"
-        ) from e
-    print(f"installed {prev} as {b}; the replaced binary is {kept}")
-    return 0
-
-
 OPS = {
     "probe": op_probe,
     "record": op_record,
     "restore": op_restore,
     "unit-type": op_unit_type,
-    "swap-prev": op_swap_prev,
     "install": op_install,
     "pprof": op_pprof,
     "_into-worker": op_into_worker,
