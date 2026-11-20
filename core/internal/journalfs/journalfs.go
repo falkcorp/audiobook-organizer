@@ -99,7 +99,17 @@ func (m *memFS) MkdirAll(path string, _ fs.FileMode) error {
 }
 
 func (m *memFS) Rename(oldpath, newpath string) error { return m.mem.Rename(oldpath, newpath) }
-func (m *memFS) Remove(path string) error             { return m.mem.Remove(path) }
+
+// Remove is os.Remove. A name that is not there is os.ErrNotExist, answered
+// here: errorfs reports a remove of a missing name as nil before it reaches
+// the in-memory filesystem, and the journal's callers (RemoveMoved, the
+// cleanups) must see the error os gives.
+func (m *memFS) Remove(path string) error {
+	if _, err := m.mem.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return &fs.PathError{Op: "remove", Path: path, Err: fs.ErrNotExist}
+	}
+	return m.mem.Remove(path)
+}
 
 func (m *memFS) SyncDir(dir string) error {
 	d, err := m.mem.OpenDir(dir)
