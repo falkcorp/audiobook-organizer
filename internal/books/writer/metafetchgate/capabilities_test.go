@@ -1,5 +1,5 @@
 // file: internal/books/writer/metafetchgate/capabilities_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 0f6b2d84-93c1-4e75-a8d2-5b7e1c40a9f3
 // last-edited: 2026-11-19
 
@@ -71,20 +71,11 @@ type capability struct {
 
 func has[T any](v any) bool { _, ok := database.AsCapability[T](v); return ok }
 
-// The two authorcredit lookups it names unexported are matched by method set,
-// which is all a type assertion looks at.
-type (
-	aliasFinder interface {
-		FindAuthorByAlias(string) (*database.Author, error)
-	}
-	authorBooks interface {
-		GetBooksByAuthorIDWithRoleCore(int) ([]database.BookCore, error)
-	}
-	seriesRefGetter interface {
-		GetSeriesByID(int) (*database.Series, error)
-	}
-	retiredReaderAPI = database.RetiredBookFileReader
-)
+// seriesRefGetter is the store package's own unexported getter interface,
+// matched by method set, which is all a type assertion looks at.
+type seriesRefGetter interface {
+	GetSeriesByID(int) (*database.Series, error)
+}
 
 // capabilities is every optional capability the code the wrapper's store reaches
 // resolves. TestEveryCapabilityTheConsumersResolveIsClassified fails on a
@@ -100,14 +91,14 @@ var capabilities = []capability{
 	{name: "database.FileProvenanceRecorder", class: hiddenWrite, has: has[database.FileProvenanceRecorder],
 		sinks: []string{"AsCapability[database.FileProvenanceRecorder]"}},
 
-	{name: "authorcredit alias lookup", class: forwardedRead, has: has[aliasFinder],
-		sinks: []string{"AsCapability[aliasFinder]"}, methods: []string{"FindAuthorByAlias"}},
+	{name: "authorcredit alias lookup", class: forwardedRead, has: has[authorcredit.AliasFinder],
+		sinks: []string{"AsCapability[AliasFinder]"}, methods: []string{"FindAuthorByAlias"}},
 	{name: "authorcredit.TitleSource", class: forwardedRead, has: has[authorcredit.TitleSource],
 		sinks: []string{"AsCapability[TitleSource]"}, methods: []string{"GetAllBooksCore", "GetAllSeries"}},
 	{name: "authorcredit.HistorySource", class: forwardedRead, has: has[authorcredit.HistorySource],
 		sinks: []string{"AsCapability[HistorySource]"}, methods: []string{"GetMetadataChangeHistory"}},
-	{name: "authorcredit by-author book listing", class: forwardedRead, has: has[authorBooks],
-		sinks: []string{"AsCapability[authorBooksSource]"}, methods: []string{"GetBooksByAuthorIDWithRoleCore"}},
+	{name: "authorcredit by-author book listing", class: forwardedRead, has: has[authorcredit.AuthorBooksSource],
+		sinks: []string{"AsCapability[AuthorBooksSource]"}, methods: []string{"GetBooksByAuthorIDWithRoleCore"}},
 	{name: "database.RetiredBookFileReader", class: forwardedRead, has: has[database.RetiredBookFileReader],
 		sinks: []string{"BookFileByPathIncludingRetired"},
 		methods: []string{"GetAllBookFilesCoreIncludingRetired", "GetBookFileByPIDIncludingRetired", "GetBookFileByPathIncludingRetired",
@@ -224,9 +215,26 @@ func TestWrapperOffersNoMethodBeyondTheClassifiedReads(t *testing.T) {
 
 // consumerPackages are the packages the fetch service passes its store to and
 // that resolve capabilities from it (metafetch itself, and what it hands the
-// store to: organizer, tagger, fileops, authorcredit, ...).
+// store to: organizer, tagger, fileops, authorcredit, ...), each scanned with
+// every package below it. They are the one-hop set: found by listing what
+// metafetch's non-test files hand the store to, and by following every
+// consumer's calls into the packages that resolve capabilities (dedup, scanner,
+// merge, undo, operations, catalog) to check none is given the fetch store.
 var consumerPackages = []string{"metafetch", "organizer", "tagger", "fileops", "foldernames", "versionprimary", "authority", "authorcredit"}
 
+func parseFile(t *testing.T, fset *token.FileSet, path string) *ast.File {
+	t.Helper()
+	f, err := parser.ParseFile(fset, path, nil, 0)
+	require.NoError(t, err)
+	return f
+}
+
+func isNonTestGo(e os.DirEntry) bool {
+	n := e.Name()
+	return !e.IsDir() && strings.HasSuffix(n, ".go") && !strings.HasSuffix(n, "_test.go")
+}
+
+// parseNonTest parses the non-test files of ONE directory.
 func parseNonTest(t *testing.T, dir string) []*ast.File {
 	t.Helper()
 	ents, err := os.ReadDir(dir)
@@ -234,14 +242,33 @@ func parseNonTest(t *testing.T, dir string) []*ast.File {
 	fset := token.NewFileSet()
 	var out []*ast.File
 	for _, e := range ents {
-		n := e.Name()
-		if e.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
-			continue
+		if isNonTestGo(e) {
+			out = append(out, parseFile(t, fset, filepath.Join(dir, e.Name())))
 		}
-		f, err := parser.ParseFile(fset, filepath.Join(dir, n), nil, 0)
-		require.NoError(t, err)
-		out = append(out, f)
 	}
+	require.NotEmpty(t, out, dir)
+	return out
+}
+
+// parseTree parses the non-test files of dir and of every directory below it
+// (a consumer's subpackage is as much a consumer as the package: the store is
+// passed down).
+func parseTree(t *testing.T, dir string) []*ast.File {
+	t.Helper()
+	fset := token.NewFileSet()
+	var out []*ast.File
+	require.NoError(t, filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && d.Name() == "testdata" {
+			return filepath.SkipDir
+		}
+		if isNonTestGo(d) {
+			out = append(out, parseFile(t, fset, path))
+		}
+		return nil
+	}))
 	require.NotEmpty(t, out, dir)
 	return out
 }
@@ -264,12 +291,40 @@ func callName(c *ast.CallExpr) string {
 	return ""
 }
 
+// resolvesByHand reports whether fd resolves a capability without AsCapability:
+// it walks decorators itself (it names StoreUnwrapper), or it is an As*
+// resolver that type-asserts (as AsPebbleStore does).
+func resolvesByHand(fd *ast.FuncDecl) bool {
+	hit := false
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.Ident:
+			if x.Name == "StoreUnwrapper" {
+				hit = true
+			}
+		case *ast.TypeAssertExpr, *ast.TypeSwitchStmt:
+			if asHelperRe.MatchString(fd.Name.Name) {
+				hit = true
+			}
+		}
+		return !hit
+	})
+	return hit
+}
+
 // capabilityHelpers are the functions of the store package that resolve a
-// capability from a value passed as any: those calling AsCapability, an As*
-// resolver, or another such helper, to a fixed point.
-func capabilityHelpers(t *testing.T) map[string]bool {
+// capability from a value passed as any (see helpersOf).
+func capabilityHelpers(t *testing.T) (helpers map[string]bool, pkgName string) {
 	t.Helper()
 	files := parseNonTest(t, "../../store")
+	return helpersOf(files), files[0].Name.Name
+}
+
+// helpersOf are the top-level functions of files that resolve a capability:
+// those calling AsCapability, an As* resolver, or another such helper, to a
+// fixed point, and the hand-rolled resolvers they bottom out in (AsSeriesRefGetter
+// walks StoreUnwrapper itself and never calls AsCapability).
+func helpersOf(files []*ast.File) map[string]bool {
 	top := map[string]*ast.FuncDecl{}
 	for _, f := range files {
 		for _, d := range f.Decls {
@@ -279,6 +334,11 @@ func capabilityHelpers(t *testing.T) map[string]bool {
 		}
 	}
 	helpers := map[string]bool{}
+	for name, fd := range top {
+		if name != "AsCapability" && resolvesByHand(fd) {
+			helpers[name] = true
+		}
+	}
 	for changed := true; changed; {
 		changed = false
 		for name, fd := range top {
@@ -304,43 +364,110 @@ func capabilityHelpers(t *testing.T) map[string]bool {
 	return helpers
 }
 
+// storePackageName is the name file f imports the store package under: its
+// import name when it has one, else the package's own name; "" when f does not
+// import it.
+func storePackageName(f *ast.File, pkgName string) string {
+	for _, imp := range f.Imports {
+		if strings.HasSuffix(strings.Trim(imp.Path.Value, `"`), "/internal/books/store") {
+			if imp.Name != nil {
+				return imp.Name.Name
+			}
+			return pkgName
+		}
+	}
+	return ""
+}
+
+// scanSites records, as sink names, the capability resolutions in files:
+//
+//   - "AsCapability[T]" for a direct resolution;
+//   - the helper's name for a call of a store-package helper that resolves one
+//     (under whatever name the file imports the store package, or bare for a dot
+//     import);
+//   - "assert X.(T)" for a bare type assertion, and "switch X.(T)" for each case
+//     of a type switch: through the opaque wrapper they see exactly what
+//     AsCapability sees, and store_capability.go records them as the shape of
+//     earlier production bugs. Most are not on a store (a context value, a
+//     metadata source); those are listed in nonStoreAssertions.
+func scanSites(files []*ast.File, helpers map[string]bool, pkgName, label string, sites map[string][]string) {
+	add := func(k string) { sites[k] = append(sites[k], label) }
+	for _, f := range files {
+		alias := storePackageName(f, pkgName)
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.CallExpr:
+				if ix, ok := x.Fun.(*ast.IndexExpr); ok {
+					if callName(x) == "AsCapability" {
+						add("AsCapability[" + types.ExprString(ix.Index) + "]")
+					}
+					return true
+				}
+				switch fun := x.Fun.(type) {
+				case *ast.SelectorExpr:
+					if id, ok := fun.X.(*ast.Ident); ok && alias != "" && id.Name == alias && helpers[fun.Sel.Name] {
+						add(fun.Sel.Name)
+					}
+				case *ast.Ident:
+					if alias == "." && helpers[fun.Name] {
+						add(fun.Name)
+					}
+				}
+			case *ast.TypeAssertExpr:
+				if x.Type != nil { // x.(type) is the switch header, below
+					add("assert " + types.ExprString(x))
+				}
+			case *ast.TypeSwitchStmt:
+				var guard ast.Expr
+				switch a := x.Assign.(type) {
+				case *ast.AssignStmt:
+					guard = a.Rhs[0]
+				case *ast.ExprStmt:
+					guard = a.X
+				}
+				if ta, ok := guard.(*ast.TypeAssertExpr); ok {
+					for _, cl := range x.Body.List {
+						for _, e := range cl.(*ast.CaseClause).List {
+							add("switch " + types.ExprString(ta.X) + ".(" + types.ExprString(e) + ")")
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+}
+
 // resolutionSites are the capability resolutions the consumer packages make on
-// a store, as sink names: "AsCapability[T]" for a direct resolution, and the
-// helper's name for a call of a store-package helper that resolves one.
+// a store, as sink names (see scanSites).
 func resolutionSites(t *testing.T) map[string][]string {
 	t.Helper()
-	helpers := capabilityHelpers(t)
+	helpers, pkgName := capabilityHelpers(t)
 	sites := map[string][]string{}
 	for _, pkg := range consumerPackages {
-		for _, f := range parseNonTest(t, filepath.Join("../../..", pkg)) {
-			ast.Inspect(f, func(n ast.Node) bool {
-				c, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				if ix, ok := c.Fun.(*ast.IndexExpr); ok {
-					if callName(c) == "AsCapability" {
-						k := "AsCapability[" + types.ExprString(ix.Index) + "]"
-						sites[k] = append(sites[k], pkg)
-					}
-					return true
-				}
-				// A helper is called as database.Name from another package; the
-				// store package's own alias is "database" in every consumer.
-				if sel, ok := c.Fun.(*ast.SelectorExpr); ok {
-					if id, ok := sel.X.(*ast.Ident); ok && id.Name == "database" && helpers[sel.Sel.Name] {
-						sites[sel.Sel.Name] = append(sites[sel.Sel.Name], pkg)
-					}
-				}
-				return true
-			})
-		}
+		scanSites(parseTree(t, filepath.Join("../../..", pkg)), helpers, pkgName, pkg, sites)
 	}
 	return sites
 }
 
-// TestEveryCapabilityTheConsumersResolveIsClassified (round 3, M1): the
-// capability rows above are the capabilities the consumers of the wrapper's
+// nonStoreAssertions are the bare type assertions the consumers make that are
+// not on a store: each is spelled as the scan spells it, with why it is not a
+// capability resolution. A new bare assertion in a consumer package fails the
+// classification until it is either a row of `capabilities` (a store capability)
+// or listed here with its reason; a stale entry fails too.
+var nonStoreAssertions = map[string]string{
+	"assert ctx.Value(catalogStageStatsKey{}).(*CatalogStageStats)": "a context value",
+	"assert ctx.Value(noBackupKey{}).(bool)":                        "a context value",
+	"assert src.(metadata.ContextualSearch)":                        "a metadata source (not the store)",
+	"assert src.(interface{SupportsContextSearch() bool})":          "a metadata source (not the store)",
+	"assert c.(LoadReporter)":                                       "a cache, not the store",
+	"assert ts.(TitleCacheKeyer)":                                   "the title source naming its cache key (authorcredit.titleCacheKey)",
+	"assert providerSource().(AuthorityWaiter)":                     "the process-wide authority provider, not the store",
+	"assert l.(*authority.Snapshot)":                                "an authority listing, not the store",
+}
+
+// TestEveryCapabilityTheConsumersResolveIsClassified (round 3, M1; round 4, m2):
+// the capability rows above are the capabilities the consumers of the wrapper's
 // store resolve, found by scanning their source rather than by remembering
 // them. A resolution added to a consumer package that is in no row fails here
 // until someone decides whether the wrapper hides it (a write) or forwards it
@@ -357,9 +484,15 @@ func TestEveryCapabilityTheConsumersResolveIsClassified(t *testing.T) {
 			declared[s] = c.name
 		}
 	}
+	for s := range nonStoreAssertions {
+		_, dup := declared[s]
+		require.False(t, dup, "%q is both a capability row and a non-store assertion", s)
+	}
 	var unclassified, stale []string
 	for s, pkgs := range sites {
-		if _, ok := declared[s]; !ok {
+		_, row := declared[s]
+		_, other := nonStoreAssertions[s]
+		if !row && !other {
 			unclassified = append(unclassified, fmt.Sprintf("%s (%v)", s, slices.Compact(slices.Clone(pkgs))))
 		}
 	}
@@ -368,10 +501,137 @@ func TestEveryCapabilityTheConsumersResolveIsClassified(t *testing.T) {
 			stale = append(stale, s)
 		}
 	}
+	for s := range nonStoreAssertions {
+		if _, ok := sites[s]; !ok {
+			stale = append(stale, s)
+		}
+	}
 	sort.Strings(unclassified)
 	sort.Strings(stale)
-	require.Empty(t, unclassified, "a consumer of the gated store resolves a capability that is in no row of `capabilities`: classify it (hidden write or forwarded read)")
-	require.Empty(t, stale, "a row of `capabilities` names a resolution no consumer makes any more")
+	require.Empty(t, unclassified, "a consumer of the gated store resolves a capability that is in no row of `capabilities` (and is not a listed non-store assertion): classify it (hidden write or forwarded read)")
+	require.Empty(t, stale, "a row of `capabilities` or `nonStoreAssertions` names a resolution no consumer makes any more")
+}
+
+// The scan's own behaviour, on source it is given, so each blind spot of
+// round 3 stays closed: the scan is only as good as what it recognises.
+func scanSource(t *testing.T, src string) map[string][]string {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), "x.go", src, 0)
+	require.NoError(t, err)
+	helpers, pkgName := capabilityHelpers(t)
+	sites := map[string][]string{}
+	scanSites([]*ast.File{f}, helpers, pkgName, "x", sites)
+	return sites
+}
+
+func TestScanSeesEveryShapeOfResolution(t *testing.T) {
+	const storeImport = `"github.com/falkcorp/audiobook-organizer/internal/books/store"`
+	cases := []struct {
+		name, src, want string
+	}{
+		{"AsCapability", `package x
+import database ` + storeImport + `
+func f(s any) { database.AsCapability[Foo](s) }`, "AsCapability[Foo]"},
+		{"helper", `package x
+import database ` + storeImport + `
+func f(s any) { database.BooksHoldingFileHash(s, "h") }`, "BooksHoldingFileHash"},
+		{"helper under another import name", `package x
+import dbx ` + storeImport + `
+func f(s any) { dbx.BooksHoldingFileHash(s, "h") }`, "BooksHoldingFileHash"},
+		{"helper under the package's own name", `package x
+import ` + storeImport + `
+func f(s any) { ` + "DBPKG" + `.BooksHoldingFileHash(s, "h") }`, "BooksHoldingFileHash"},
+		{"helper by dot import", `package x
+import . ` + storeImport + `
+func f(s any) { BooksHoldingFileHash(s, "h") }`, "BooksHoldingFileHash"},
+		{"hand-rolled resolver", `package x
+import database ` + storeImport + `
+func f(s any) { database.AsSeriesRefGetter(s) }`, "AsSeriesRefGetter"},
+		{"bare assertion", `package x
+func f(db any) { _, _ = db.(Foo) }`, "assert db.(Foo)"},
+		{"type switch", `package x
+func f(db any) {
+	switch v := db.(type) {
+	case Foo:
+		_ = v
+	}
+}`, "switch db.(Foo)"},
+		{"type switch without a binding", `package x
+func f(db any) {
+	switch db.(type) {
+	case Foo, Bar:
+	}
+}`, "switch db.(Bar)"},
+	}
+	_, pkgName := capabilityHelpers(t)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := strings.ReplaceAll(c.src, "DBPKG", pkgName)
+			require.Contains(t, scanSource(t, src), c.want)
+		})
+	}
+	// Not a resolution: a call of a same-named function from another package.
+	require.Empty(t, scanSource(t, `package x
+import other "example.com/other"
+func f(s any) { other.BooksHoldingFileHash(s, "h") }`))
+}
+
+// The helper set includes the resolvers that never call AsCapability, and the
+// ones every consumer reaches.
+func TestCapabilityHelpersIncludeHandRolledResolvers(t *testing.T) {
+	helpers, _ := capabilityHelpers(t)
+	for _, want := range []string{"AsSeriesRefGetter", "DropDanglingSeriesRef", "AsSyncIdentityStore", "BookFileByPathIncludingRetired", "BooksHoldingFileHash"} {
+		require.True(t, helpers[want], "%s is a capability helper", want)
+	}
+	require.False(t, helpers["AsCapability"], "AsCapability is the sink spelled AsCapability[T], not a helper")
+}
+
+// What makes a store function a helper, on source it is given: it names
+// StoreUnwrapper, or it is an As* resolver that type-asserts, or it calls a
+// helper; and a function that does none of those is not one.
+func TestHelpersOfRecognisesEveryShapeOfResolver(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "x.go", `package x
+func AsCapability[T any](s any) (T, bool) { u, ok := s.(StoreUnwrapper); _ = u; var z T; return z, ok }
+func WalksByHand(s any) any { u, _ := s.(StoreUnwrapper); return u }
+func AsAsserting(s any) any { v, _ := s.(Foo); return v }
+func AsSwitching(s any) any { switch v := s.(type) { case Foo: return v }; return nil }
+func ViaCapability(s any) { AsCapability[Foo](s) }
+func ViaHelper(s any) { WalksByHand(s) }
+func ViaAsHelper(s any) { AsAsserting(s) }
+func Plain(s any) any { return s }
+func notAs(s any) any { v, _ := s.(Foo); return v }
+`, 0)
+	require.NoError(t, err)
+	got := helpersOf([]*ast.File{f})
+	for _, want := range []string{"WalksByHand", "AsAsserting", "AsSwitching", "ViaCapability", "ViaHelper", "ViaAsHelper"} {
+		require.True(t, got[want], "%s resolves a capability", want)
+	}
+	for _, not := range []string{"AsCapability", "Plain", "notAs"} {
+		require.False(t, got[not], "%s does not resolve one by itself", not)
+	}
+}
+
+// A consumer's subpackage is scanned with it.
+func TestParseTreeDescendsIntoSubpackages(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "sub", "deeper"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "testdata"), 0o755))
+	for path, pkg := range map[string]string{"a.go": "a", "sub/b.go": "b", "sub/deeper/c.go": "c", "testdata/d.go": "d", "sub/e_test.go": "e"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, path), []byte("package "+pkg+"\n"), 0o644))
+	}
+	var got []string
+	for _, f := range parseTree(t, dir) {
+		got = append(got, f.Name.Name)
+	}
+	sort.Strings(got)
+	require.Equal(t, []string{"a", "b", "c"}, got, "subpackages are scanned; testdata and test files are not")
+
+	// And the real consumers: versionprimary's subpackage is among what is scanned.
+	var seen []string
+	for _, f := range parseTree(t, "../../../versionprimary") {
+		seen = append(seen, f.Name.Name)
+	}
+	require.Contains(t, seen, "vptest")
 }
 
 // --- the forwarded reads reach the inner store ----------------------------
@@ -548,24 +808,111 @@ func TestForwardedReadsOverAStoreWithoutTheCapabilityAreAMiss(t *testing.T) {
 
 // --- the title index cache ------------------------------------------------
 
-// keyedInner is an inner store that names its own title cache key, so the
-// wrapper must pass that key on rather than name the inner store.
+// keyedInner is an inner store that names its own title cache key and is a
+// TitleSource, so the wrapper must pass that key on rather than name the inner
+// store.
 type keyedInner struct {
 	metafetch.Store
 	key any
 }
 
-func (k keyedInner) TitleCacheKey() any { return k.key }
+func (k keyedInner) TitleCacheKey() authorcredit.TitleKey     { return authorcredit.TitleKeyOf(k.key) }
+func (k keyedInner) GetAllSeries() ([]database.Series, error) { return nil, nil }
 
-func TestWrapperNamesTheInnerStoreAsItsTitleCacheKey(t *testing.T) {
+// layeredInner is a decorator with an Unwrap and no GetAllSeries: on the bare
+// decorator authorcredit's TitleSource resolves through Unwrap to the layer
+// below, so that layer is the cache entry.
+type layeredInner struct {
+	metafetch.Store
+	below any
+}
+
+func (l layeredInner) Unwrap() database.Store { return l.below.(database.Store) }
+
+// requireSameKey compares by ==: testify's Equal would DeepEqual the stores the
+// keys point at, which says nothing about identity.
+func requireSameKey(t *testing.T, want, got authorcredit.TitleKey, msg string) {
+	t.Helper()
+	require.True(t, want == got, msg)
+}
+
+// The wrapper names the key of the layer a BARE store resolves TitleSource at
+// (round 4, m1 and n2): the inner store when it is the TitleSource, that
+// layer's own key when it names one, the layer below for a decorator that
+// unwraps, and itself only when there is no inner store.
+func TestWrapperNamesTheBareStoresTitleLayerAsItsTitleCacheKey(t *testing.T) {
 	inner := realStore(t)
-	require.Same(t, inner, gatedOver(t, inner).TitleCacheKey(), "the key is the inner store")
+	requireSameKey(t, authorcredit.TitleKeyOf(inner), gatedOver(t, inner).TitleCacheKey(), "the key is the inner store")
 
 	own := &struct{ n int }{}
-	require.Same(t, own, gatedOver(t, keyedInner{key: own}).TitleCacheKey(), "an inner store's own key wins")
+	requireSameKey(t, authorcredit.TitleKeyOf(own), gatedOver(t, keyedInner{key: own}).TitleCacheKey(), "an inner store's own key wins")
+
+	// n2: a decorator over the real store that unwraps, with no GetAllSeries of
+	// its own. The bare decorator's TitleSource resolves at the real store.
+	dec := layeredInner{Store: inner, below: inner}
+	_, ok := database.AsCapability[authorcredit.TitleSource](dec)
+	require.True(t, ok, "the bare decorator resolves TitleSource through Unwrap")
+	requireSameKey(t, authorcredit.TitleKeyOf(inner), gatedOver(t, dec).TitleCacheKey(),
+		"a decorator in front of the layer that is the TitleSource must not change the entry")
+	require.False(t, authorcredit.TitleKeyOf(dec) == gatedOver(t, dec).TitleCacheKey(), "the key must not be the decorator")
+
+	// No layer is a TitleSource: the wrapper synthesizes one from the inner
+	// store's reads, cached under the inner store.
+	requireSameKey(t, authorcredit.TitleKeyOf(bareInnerPtr), gatedOver(t, bareInnerPtr).TitleCacheKey(), "no TitleSource layer: the inner store")
 
 	g := gatedOver(t, nil)
-	require.Same(t, g, g.TitleCacheKey(), "no inner store: the wrapper itself")
+	requireSameKey(t, authorcredit.TitleKeyOf(g), g.TitleCacheKey(), "no inner store: the wrapper itself")
+}
+
+var bareInnerPtr = &bareInner{}
+
+// The key is opaque (round 4, m1): returning the inner store from an exported
+// method is an Unwrap under another name. The key satisfies no store interface
+// and nothing outside authorcredit reads the store back from it.
+func TestTitleCacheKeyHandsBackNoStore(t *testing.T) {
+	inner := realStore(t)
+	var k any = gatedOver(t, inner).TitleCacheKey()
+	_, isMetafetch := k.(metafetch.Store)
+	require.False(t, isMetafetch, "the key satisfies metafetch.Store: it can write through the inner store")
+	_, isStore := k.(database.Store)
+	require.False(t, isStore, "the key satisfies database.Store")
+	_, unwraps := k.(database.StoreUnwrapper)
+	require.False(t, unwraps, "the key unwraps")
+	require.Zero(t, reflect.TypeOf(k).NumMethod(), "a key method could read the store back")
+	_, same := k.(*database.PebbleStore)
+	require.False(t, same)
+}
+
+// The no-Unwrap pin, for the shape TitleCacheKey once had (round 4, m1): no
+// method of the wrapper may return the inner store, or anything that could be
+// one. An output that is an empty interface (the store boxed as `any`), or that
+// satisfies a store interface or unwraps, is a handle on the inner store.
+func TestNoMethodHandsBackTheInnerStore(t *testing.T) {
+	storeIfaces := []reflect.Type{
+		reflect.TypeFor[metafetch.Store](),
+		reflect.TypeFor[database.Store](),
+		reflect.TypeFor[database.StoreUnwrapper](),
+	}
+	var bad []string
+	ty := reflect.TypeFor[*metafetchgate.Store]()
+	for i := range ty.NumMethod() {
+		m := ty.Method(i)
+		for j := range m.Type.NumOut() {
+			out := m.Type.Out(j)
+			if out.Kind() == reflect.Interface && out.NumMethod() == 0 {
+				bad = append(bad, fmt.Sprintf("%s returns %s (an empty interface can box the store)", m.Name, out))
+			}
+			for _, si := range storeIfaces {
+				if out.Implements(si) {
+					bad = append(bad, fmt.Sprintf("%s returns %s, which is a %s", m.Name, out, si.Name()))
+				}
+			}
+			if _, has := out.MethodByName("Unwrap"); has {
+				bad = append(bad, fmt.Sprintf("%s returns %s, which has Unwrap", m.Name, out))
+			}
+		}
+	}
+	require.Empty(t, bad, "the wrapper must not hand back the inner store (an Unwrap under another name)")
 }
 
 // A wrapper is built per run. Resolving a credit through one wrapper per run
