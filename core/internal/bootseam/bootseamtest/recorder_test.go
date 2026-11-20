@@ -1,5 +1,5 @@
 // file: core/internal/bootseam/bootseamtest/recorder_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7088e36e-83e4-4533-b4d0-a40f7503e603
 // last-edited: 2026-11-19
 
@@ -7,8 +7,11 @@ package bootseamtest
 
 import (
 	"errors"
+	"fmt"
 	"slices"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/cockroachdb/pebble/v2/vfs"
@@ -232,5 +235,72 @@ func TestRecorderFlagsPebblesWALRotation(t *testing.T) {
 	}
 	if kills == 0 {
 		t.Fatalf("the rotation has no fatal kill point to clone: %+v", fatal)
+	}
+}
+
+// TestRecorderCloneDoesNotDeadlockLockOrReuse: a crash clone taken by one
+// goroutine while another is in MemFS.Lock or MemFS.ReuseForWrite must not
+// hang. Pebble's crashable MemFS takes its clone mutex for reading in both and
+// again inside them (Create, Rename), so a CrashClone queued between the two
+// parks the second read lock; Pebble's cleanup goroutines remove files, which
+// are kill points, while a boot opens a store. The recorder's gate keeps the
+// clone out of those two calls (a cell run of the F3-07 flip boot hung for
+// minutes in this window).
+func TestRecorderCloneDoesNotDeadlockLockOrReuse(t *testing.T) {
+	r := New(vfs.NewCrashableMem(), Options{Clones: true})
+	fs := r.FS()
+	if err := fs.MkdirAll("/gotham/wayne", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const rounds = 3000
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() { // Pebble's LockDirectory and WAL recycling
+		defer wg.Done()
+		for i := range rounds {
+			c, err := fs.Lock(fmt.Sprintf("/gotham/wayne/LOCK-%d", i))
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := range rounds {
+			old := fmt.Sprintf("/gotham/wayne/old-%d", i)
+			if err := create(t, fs, old); err != nil {
+				t.Error(err)
+				return
+			}
+			f, err := fs.ReuseForWrite(old, fmt.Sprintf("/gotham/wayne/new-%d", i), vfs.WriteCategoryUnspecified)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			_ = f.Close()
+		}
+	}()
+	go func() { // the cleanup manager: every Remove is a kill point, so a clone
+		defer wg.Done()
+		for i := range rounds {
+			p := fmt.Sprintf("/gotham/wayne/obsolete-%d", i)
+			if err := create(t, fs, p); err != nil {
+				t.Error(err)
+				return
+			}
+			if err := fs.Remove(p); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+	}()
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(60 * time.Second):
+		t.Fatal("a crash clone deadlocked with MemFS.Lock or ReuseForWrite")
 	}
 }

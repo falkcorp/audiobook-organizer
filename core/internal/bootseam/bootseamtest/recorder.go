@@ -1,5 +1,5 @@
 // file: core/internal/bootseam/bootseamtest/recorder.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6473c7ec-c6f5-4957-863f-62991f66eaa2
 // last-edited: 2026-11-19
 
@@ -13,6 +13,7 @@
 package bootseamtest
 
 import (
+	"io"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -140,6 +141,16 @@ type Recorder struct {
 	fs   vfs.FS
 	opts Options
 
+	// cloneGate keeps a CrashClone out of every MemFS.Lock. Pebble's crashable
+	// MemFS takes its clone mutex for reading in Lock and again, inside it, in
+	// Create; a CrashClone (the writer) that arrives between the two parks the
+	// second read lock behind it, and Lock, the clone and everything that
+	// follows deadlock. The kill points of Pebble's own goroutines (the
+	// cleanup manager removing obsolete files) clone while a boot opens a
+	// store, so the window is real: Lock holds the gate for reading, a clone
+	// takes it for writing.
+	cloneGate sync.RWMutex
+
 	pebbleRE *regexp.Regexp
 
 	mu       sync.Mutex
@@ -154,8 +165,37 @@ type Recorder struct {
 // New wraps mem, which must be crashable when opts.Clones is set.
 func New(mem *vfs.MemFS, opts Options) *Recorder {
 	r := &Recorder{mem: mem, opts: opts, ordinals: map[string]int{}, pebbleRE: pebbleName()}
-	r.fs = errorfs.Wrap(mem, r)
+	r.fs = errorfs.Wrap(&gatedMem{MemFS: mem, gate: &r.cloneGate}, r)
 	return r
+}
+
+// gatedMem is the in-memory filesystem under the injector, with the two calls
+// that re-enter MemFS's clone mutex excluded from CrashClone
+// (Recorder.cloneGate): Lock calls Create, and ReuseForWrite calls Rename,
+// each while holding that mutex for reading. The gate sits below the
+// injector, not around it: the injector's own hook for ReuseForWrite is a kill
+// point that takes the gate for writing.
+type gatedMem struct {
+	*vfs.MemFS
+	gate *sync.RWMutex
+}
+
+// Unwrap lets vfs.Root see the MemFS underneath: the boot's state-directory
+// logic tells the in-memory filesystem from the real one by its root type.
+func (g *gatedMem) Unwrap() vfs.FS { return g.MemFS }
+
+// Lock implements vfs.FS.
+func (g *gatedMem) Lock(name string) (io.Closer, error) {
+	g.gate.RLock()
+	defer g.gate.RUnlock()
+	return g.MemFS.Lock(name)
+}
+
+// ReuseForWrite implements vfs.FS.
+func (g *gatedMem) ReuseForWrite(oldname, newname string, category vfs.DiskWriteCategory) (vfs.File, error) {
+	g.gate.RLock()
+	defer g.gate.RUnlock()
+	return g.MemFS.ReuseForWrite(oldname, newname, category)
 }
 
 // FS is the recording filesystem.
@@ -240,7 +280,10 @@ func (r *Recorder) MaybeError(op errorfs.Op) error {
 	}
 	r.events = append(r.events, ev)
 	if ev.Kill() && (r.opts.Clones || r.opts.CloneIf != nil && r.opts.CloneIf(ev)) {
-		r.clones = append(r.clones, Clone{Event: ev, FS: r.mem.CrashClone(vfs.CrashCloneCfg{})})
+		r.cloneGate.Lock()
+		clone := r.mem.CrashClone(vfs.CrashCloneCfg{})
+		r.cloneGate.Unlock()
+		r.clones = append(r.clones, Clone{Event: ev, FS: clone})
 	}
 	fail := r.opts.Fail
 	r.mu.Unlock()
