@@ -1,5 +1,5 @@
 // file: internal/books/writer/metafetchgate/capabilities.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5be0f2c9-71a4-4c38-9d6e-c2a41f0b7e83
 // last-edited: 2026-11-19
 
@@ -38,16 +38,27 @@ import (
 //     (ErrRetiredReaderUnavailable, ErrNoFileHashHolderLookup), because their
 //     callers fail closed on a miss.
 //
-// The one place the wrapper cannot match the bare store exactly is a consumer
-// that tells "no capability" from "capability, empty answer" (authorcredit adds
-// its by-author evidence source when the capability is present). It is harmless
-// there: an empty listing yields no evidence, which is what the absent source
-// contributes.
-
-// aliasLookup is authorcredit's optional alias lookup.
-type aliasLookup interface {
-	FindAuthorByAlias(aliasName string) (*database.Author, error)
-}
+// A hidden WRITE capability is not always "the write is skipped": the consumer
+// takes its own fallback, and that fallback is not always equivalent.
+// backup.Checkpointable, hidden, makes the organizer's auto-backup take the
+// live-directory walk instead of a checkpoint (racy against a writer); the
+// fetch path never reaches that (autoBackup runs only from PerformOrganizeStats),
+// and a path that does must say so in the seam (F5-18b.md).
+//
+// Two places the wrapper cannot match the bare store exactly, both reads:
+//
+//   - A consumer that tells "no capability" from "capability, empty answer"
+//     (authorcredit adds its by-author evidence source when the capability is
+//     present) gets the empty source instead of an absent one. An empty
+//     listing yields no evidence, which is what the absent source contributes.
+//   - authorcredit.TitleSource is SYNTHESIZED: the wrapper always has
+//     GetAllSeries (above) and the promoted GetAllBooksCore, so the wrapper is
+//     a TitleSource even over an inner store that has none. The bare store
+//     would then have no title index, so the title check is skipped; through
+//     the wrapper titlesOf builds a books-only index and the check runs. Not
+//     an empty answer standing for absence: a partial answer standing for
+//     none. PebbleStore has GetAllSeries (TestStoreCapabilitiesAreClassified),
+//     so production does not see it; a test fake without it does.
 
 // seriesLister is the series half of authorcredit.TitleSource; the book half,
 // GetAllBooksCore, is already a metafetch.Store read.
@@ -55,20 +66,21 @@ type seriesLister interface {
 	GetAllSeries() ([]database.Series, error)
 }
 
-// metadataHistory is authorcredit.HistorySource.
-type metadataHistory interface {
-	GetMetadataChangeHistory(bookID string, field string, limit int) ([]database.MetadataChangeRecord, error)
-}
-
-// authorBookLister is authorcredit's by-author book listing.
-type authorBookLister interface {
-	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
-}
+// The wrapper offers authorcredit's own interfaces (exported for this), so a
+// change to what authorcredit asks of a store is a compile error here instead of
+// a capability the wrapper silently stops satisfying.
+var (
+	_ authorcredit.TitleSource       = (*Store)(nil)
+	_ authorcredit.HistorySource     = (*Store)(nil)
+	_ authorcredit.AliasFinder       = (*Store)(nil)
+	_ authorcredit.AuthorBooksSource = (*Store)(nil)
+	_ authorcredit.TitleCacheKeyer   = (*Store)(nil)
+)
 
 // FindAuthorByAlias is the inner store's alias lookup; (nil, nil), a miss, when
 // it has none.
 func (s *Store) FindAuthorByAlias(aliasName string) (*database.Author, error) {
-	f, ok := database.AsCapability[aliasLookup](s.Store)
+	f, ok := database.AsCapability[authorcredit.AliasFinder](s.Store)
 	if !ok {
 		return nil, nil
 	}
@@ -87,7 +99,7 @@ func (s *Store) GetAllSeries() ([]database.Series, error) {
 // GetMetadataChangeHistory is the inner store's metadata change history for a
 // field; empty when it has none.
 func (s *Store) GetMetadataChangeHistory(bookID string, field string, limit int) ([]database.MetadataChangeRecord, error) {
-	h, ok := database.AsCapability[metadataHistory](s.Store)
+	h, ok := database.AsCapability[authorcredit.HistorySource](s.Store)
 	if !ok {
 		return nil, nil
 	}
@@ -97,7 +109,7 @@ func (s *Store) GetMetadataChangeHistory(bookID string, field string, limit int)
 // GetBooksByAuthorIDWithRoleCore is the inner store's by-author book listing;
 // empty when it has none.
 func (s *Store) GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error) {
-	l, ok := database.AsCapability[authorBookLister](s.Store)
+	l, ok := database.AsCapability[authorcredit.AuthorBooksSource](s.Store)
 	if !ok {
 		return nil, nil
 	}
@@ -180,16 +192,28 @@ func (s *Store) BooksByFileHash(hash string) ([]*database.Book, error) {
 var _ database.FileHashHolderLookup = (*Store)(nil)
 
 // TitleCacheKey is the identity authorcredit caches the title index under: the
-// inner store's own key when it names one, else the inner store itself. The
-// wrapper is built per run, and cached under its own value it would leave one
-// library-sized index behind per run; named like this every wrapper over one
-// store shares the entry the bare store would have had (authorcredit.TitleCacheKeyer).
-func (s *Store) TitleCacheKey() any {
+// key of the layer a bare store resolves authorcredit.TitleSource at (that
+// layer's own key when it names one, else that layer), so a decorator in front
+// of it does not change which entry is used. The wrapper is built per run, and
+// cached under its own value it would leave one library-sized index behind per
+// run; named like this every wrapper over one store shares the entry the bare
+// store would have had.
+//
+// The key is an authorcredit.TitleKey: opaque, holding the store in an
+// unexported field with no method that reads it back. Returning the store
+// itself (as `any`) would let any caller assert it to database.Store and write
+// through it with no stamp, an Unwrap under another name
+// (TestNoMethodHandsBackTheInnerStore).
+func (s *Store) TitleCacheKey() authorcredit.TitleKey {
 	if s.Store == nil {
-		return s
+		return authorcredit.TitleKeyOf(s)
 	}
-	if k, ok := s.Store.(authorcredit.TitleCacheKeyer); ok {
+	layer := any(s.Store)
+	if ts, ok := database.AsCapability[authorcredit.TitleSource](s.Store); ok {
+		layer = ts
+	}
+	if k, ok := layer.(authorcredit.TitleCacheKeyer); ok {
 		return k.TitleCacheKey()
 	}
-	return s.Store
+	return authorcredit.TitleKeyOf(layer)
 }

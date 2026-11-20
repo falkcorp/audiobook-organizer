@@ -1,11 +1,12 @@
 // file: internal/authorcredit/authorcredit_titlecache_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: c1d7e4a2-5f83-4b19-8a60-3e92b7d0f154
 // last-edited: 2026-11-19
 
 package authorcredit
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -21,7 +22,7 @@ type keyedStore struct {
 	key any
 }
 
-func (k keyedStore) TitleCacheKey() any { return k.key }
+func (k keyedStore) TitleCacheKey() TitleKey { return TitleKeyOf(k.key) }
 
 func titleCacheStore(t *testing.T) *database.PebbleStore {
 	t.Helper()
@@ -73,4 +74,27 @@ func TestTitlesOf_NonPointerKeyIsNotCached(t *testing.T) {
 	_, err := titlesOf(keyedStore{PebbleStore: st, key: "not-a-pointer"})
 	require.NoError(t, err)
 	require.Equal(t, 0, TitleCacheLen())
+}
+
+// A TitleKey is opaque (round 4, m1): a decorator returns one from TitleCacheKey,
+// and a key that exposed the store it names would be an Unwrap under another
+// name. It has no methods and no exported field, so it satisfies no store
+// interface, and TitleKeyOf(v) values for one pointer are equal.
+func TestTitleKey_IsOpaque(t *testing.T) {
+	ty := reflect.TypeFor[TitleKey]()
+	require.Equal(t, reflect.Struct, ty.Kind())
+	require.Zero(t, ty.NumMethod(), "a TitleKey method could hand back the store it names")
+	require.Zero(t, reflect.PointerTo(ty).NumMethod())
+	for i := range ty.NumField() {
+		require.False(t, ty.Field(i).IsExported(), "exported field %s reads the store back", ty.Field(i).Name)
+	}
+	var k any = TitleKeyOf(&database.PebbleStore{})
+	_, isStore := k.(database.Store)
+	require.False(t, isStore, "a TitleKey must not be a database.Store")
+	_, unwraps := k.(database.StoreUnwrapper)
+	require.False(t, unwraps, "a TitleKey must not be a StoreUnwrapper")
+
+	a, b := &struct{ n int }{}, &struct{ n int }{}
+	require.True(t, TitleKeyOf(a) == TitleKeyOf(a))
+	require.False(t, TitleKeyOf(a) == TitleKeyOf(b), "distinct pointers are distinct keys, whatever they point at")
 }
