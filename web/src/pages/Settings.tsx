@@ -1,7 +1,7 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.68.3
+// version: 1.69.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router';
@@ -30,6 +30,7 @@ import {
   ListItemText,
 } from '@mui/material';
 import * as api from '../services/api';
+import type { SecretStatus } from '../services/configView';
 import { ServerFileBrowser } from '../components/common/ServerFileBrowser';
 import { SettingsGeneral } from '../components/SettingsGeneral';
 import BlockedHashesTab from '../components/settings/BlockedHashesTab';
@@ -218,8 +219,8 @@ export function Settings() {
   const [importInProgress, setImportInProgress] = useState(false);
   const [savedSnapshot, setSavedSnapshot] = useState('');
   const [configLoaded, setConfigLoaded] = useState(false);
-  // Masked by the server; shown by the Dedup section, never the real key.
-  const [acoustidKeyMask, setAcoustidKeyMask] = useState('');
+  // What the secret store says about the AcoustID.org key: set or not, never the key.
+  const [acoustidKeyStatus, setAcoustidKeyStatus] = useState<SecretStatus | undefined>();
   // Config keys the server's environment is currently forcing; their controls
   // render disabled. Server-reported and read-only — never saved back.
   const [envLocked, setEnvLocked] = useState<string[]>([]);
@@ -345,7 +346,8 @@ export function Settings() {
       { testing: boolean; result?: { success: boolean; message?: string; error?: string } }
     >
   >({});
-  const [savedApiKeyMask, setSavedApiKeyMask] = useState<string>('');
+  // What the secret store says about the OpenAI key: set or not, never the key.
+  const [openaiKeyStatus, setOpenaiKeyStatus] = useState<SecretStatus | undefined>();
 
   // Nested config state (CFG-2)
   const [dedupConfig, setDedupConfig] = useState<api.DedupConfig>({
@@ -474,10 +476,8 @@ export function Settings() {
       setEnvLocked(config.env_locked ?? []);
       setSettingLocks(config.setting_locks ?? {});
       setNamingPatternTokens(config.naming_pattern_tokens);
-      // Store masked key if present
-      if (config.openai_api_key && config.openai_api_key.includes('***')) {
-        setSavedApiKeyMask(config.openai_api_key);
-      }
+      // Secrets are write-only: the server reports whether each is set, never its value.
+      setOpenaiKeyStatus(config.secret_status?.openai_api_key);
       // Map all backend config fields to frontend settings format
       const nextSettings: SettingsState = {
         // Library settings
@@ -599,7 +599,7 @@ export function Settings() {
         // Deluge integration
         protectedPaths: (config.protected_paths || []).join('\n'),
       };
-      setAcoustidKeyMask(config.acoustid_api_key || '');
+      setAcoustidKeyStatus(config.secret_status?.acoustid_api_key);
       if (config.dedup) setDedupConfig(config.dedup);
       if (config.embedding) setEmbeddingConfig(config.embedding);
       if (config.ai_backend) setAIBackendConfig(config.ai_backend);
@@ -664,11 +664,12 @@ export function Settings() {
     handleSaveAndNavigate,
     handleDiscardNavigation,
     handleCancelNavigation,
+    handleClearOpenAIKey,
   } = useSettingsHandlers({
     settings,
     setSettings,
     setSaved,
-    setSavedApiKeyMask,
+    setOpenaiKeyStatus,
     setConfigLoaded,
     setDedupConfig,
     setEmbeddingConfig,
@@ -711,7 +712,7 @@ export function Settings() {
     setImportInProgress,
     setExtensionsInput,
     setExcludePatternInput,
-    savedApiKeyMask,
+    openaiKeyStatus,
     configLoaded,
     navigate,
     scanIntervalsRef,
@@ -870,8 +871,9 @@ export function Settings() {
             setExpandedSource={setExpandedSource}
             openaiTestState={openaiTestState}
             openaiKeyError={openaiKeyError}
-            savedApiKeyMask={savedApiKeyMask}
-            setSavedApiKeyMask={setSavedApiKeyMask}
+            openaiKeyStatus={openaiKeyStatus}
+            openaiKeyLock={settingLocks.openai_api_key}
+            handleClearOpenAIKey={handleClearOpenAIKey}
             sourceTestStatus={sourceTestStatus}
             handleTestAIConnection={handleTestAIConnection}
             handleSourceToggle={handleSourceToggle}
@@ -885,7 +887,8 @@ export function Settings() {
           <DedupSettingsSection
             config={dedupConfig}
             onChange={handleDedupChange}
-            acoustidKeyMask={acoustidKeyMask}
+            acoustidKeyStatus={acoustidKeyStatus}
+            acoustidKeyLock={settingLocks.acoustid_api_key}
           />
           <Box sx={{ mt: 4 }}>
             <EmbeddingSettingsSection config={embeddingConfig} onChange={handleEmbeddingChange} />

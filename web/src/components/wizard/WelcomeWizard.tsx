@@ -1,7 +1,7 @@
 // file: web/src/components/wizard/WelcomeWizard.tsx
-// version: 1.6.0
+// version: 1.6.1
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-09-10
+// last-edited: 2026-11-19
 
 import { useState, useEffect } from 'react';
 import {
@@ -243,7 +243,7 @@ export function WelcomeWizard({ open, onComplete }: WelcomeWizardProps) {
       // Step 2: Save OpenAI key if provided
       if ((openaiKey || '').trim()) {
         await api.updateConfig({
-          openai_api_key: openaiKey,
+          secrets: { openai_api_key: openaiKey },
           enable_ai_parsing: true,
         });
       }
