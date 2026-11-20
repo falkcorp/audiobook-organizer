@@ -828,9 +828,15 @@ blob never stores one", `internal/config/invite_config.go:28-29` @748fd787a). It
 M1.4 step 2 at `integrations.notify.email.{host, port, username, password, from}`, and a `notify/email` stored through
 the API is a native row. A HEAD ID that does not match `InstanceID` (none at HEAD) is lower-cased with `_` → `-` and
 listed in the step's report. When the lowered ID is one another entry of the same list already has as its HEAD ID,
-that entry keeps it, listed before or after, and the renamed one is quarantined as the duplicate. A renamed instance
-takes only the credentials M2 stored under its own HEAD ID, carried to the names under its new ID; a secret already
-under a new name that no entry owns is reported and left unbound (seams.d/F7-08).
+that entry keeps it, listed before or after, and the renamed one is quarantined as the duplicate; when that entry is
+not written (it does not decode, or core refuses it), the first renamed entry takes the ID and the report says why. A
+renamed instance takes only the credentials M2 stored under its own HEAD ID, carried to the names under its new ID; a
+secret already under a new name is reported and left unbound. The one exception is an AI row renamed to `openai`
+whose `auth_ref` is `openai_api_key`: HEAD sent it the OpenAI key (`internal/ai/pool_routing.go` `poolSecret`), so
+`integrations.ai.openai.api_key` is bound to it and reported, and a stored OpenAI key no migrated endpoint refers to
+is reported. A renamed source never gets `OperatorSecretOrigin`: HEAD's provider switch was exact
+(`internal/metafetch/service_search.go`), so a renamed `google-books` or `hardcover` was an inert unknown source, and
+a renamed `openai` row pairs with the operator key only when its `auth_ref` named it (seams.d/F7-08).
 
 **Trust carried over.** For each migrated instance the step sets:
 - **`Local=true` with `LocalOrigin`** = the origin of its configured URL-typed field, for every instance with one,
@@ -865,7 +871,8 @@ under a new name that no entry owns is reported and left unbound (seams.d/F7-08)
 - An `ai_endpoints` capability tick HEAD does not register (HEAD kept it and ignored it in selection), a wildcard
   tick, and a feature outside the ones `ai.Router.ValidateEndpoint` declares are dropped from the instance and listed
   in the step's report. Carrying one would make core refuse the whole endpoint. A `capability_models` entry for such a
-  capability is dropped and reported with it, since nothing could select by it.
+  capability is dropped and reported with it, since nothing could select by it, and its model is quarantined under
+  `setting:config_blob#ai_endpoints.<n>.capability_models.<key>` so the owner can recover it.
 - A metadata source's `rate_limit.max_concurrent` (HEAD's bound on searches in flight in a bulk fetch) has no
   `Limits` field and is listed in the report.
 
@@ -1626,4 +1633,4 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
 - Round 13 (2026-11-04): IMPL-5 (`core.integrations.release-holds` registered from F5 through F2's minimal owner registration, extended at F7; the interim backend `providerhttp.InterimHolds`).
 - Round 14 (2026-11-05): V23 (checked: no round-13 ruling is cited bare; the bare R4, R5, R7 and R8 left in the text are 03 §3.5's rules), V27 (M1.10 cites 05-rbac §7.1 for `core.integration.local_migrated`, staged in M6's chunk batch).
 - Round 16 (2026-11-05): plan-gap fixes G2 (M2.4: `core.integrations.release-holds`' full `TaskSpec`, `Effects` on `core/providerhttp`, `Resume: ResumeDrop`, `Timeout: 1m`, `Perms.Start`, `PriorityHigh`, no schedule, its params and result types, and `providerhttp.InterimHolds`' one method `ReleaseHolds` with the kind's `Run` signature; 05-tasks §5T.8.2 copies them), G14 (M1.3: the `/api/core/v1/integrations/...` routes land at F7 and replace the class-`i` part of ABO's `/api/v1/config` handlers and HEAD's test-connection handlers, which F7's PR deletes with the SPA switched).
-- Round 17 (2026-11-20): F7-09 slice T1. M1.10 signs `LocalOrigin` and `OperatorSecretOrigin` from the effective destinations (seams.d/F7-01 rows 17 and 22, as F7-08 ruled). When a lowered HEAD ID meets another entry's exact HEAD ID, the exact entry keeps it, and a renamed instance takes only its own carried credentials. A renamed source's unreadable secret is carried as an unreadable marker. Unknown and wildcard capability ticks and undeclared features are dropped and reported, and so is `rate_limit.max_concurrent` (seams.d/F7-08).
+- Round 17 (2026-11-20): F7-09 slice T1. M1.10 signs `LocalOrigin` and `OperatorSecretOrigin` from the effective destinations (seams.d/F7-01 rows 17 and 22, as F7-08 ruled). When a lowered HEAD ID meets another entry's exact HEAD ID, the exact entry keeps it, and a renamed instance takes only its own carried credentials. A renamed source's unreadable secret is carried as an unreadable marker. Unknown and wildcard capability ticks and undeclared features are dropped and reported, and so is `rate_limit.max_concurrent` (seams.d/F7-08). Round 1 review of the slice: an exact entry keeps its ID only when written; an AI row renamed to `openai` with `auth_ref: openai_api_key` keeps HEAD's OpenAI key; a renamed source never gets `OperatorSecretOrigin` (a renamed `openai` row only with that `auth_ref`); a dropped `capability_models` model is quarantined.
