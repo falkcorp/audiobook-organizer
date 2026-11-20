@@ -645,6 +645,39 @@ exactly that helper. A `rollback.conf` that exists and differs is yours: it is
 shown as a diff and left alone unless you pass `REPLACE_CONF=1`. It does not
 write `host.conf` (below) and it never touches `Makefile.local`.
 
+What the installer trusts, because it runs as root and writes what root later
+executes:
+
+- **What is already there is not trusted.** A file counts as `unchanged` only
+  if its bytes, mode and owner are all right (and it has one link); a file the
+  deploy user owns, or that group or others can write, is rewritten (`fix` when
+  the bytes were already right, `replace` when they were not). An existing
+  directory is chowned `0:0` and chmod-ed to `0755`. The sudoers drop-in is held
+  to the same rule (mode `0440`, owner root). A `rollback.conf` with your bytes
+  but the wrong mode has its mode fixed without `REPLACE_CONF=1`; your bytes are
+  never touched.
+- **It refuses, naming the path,** when any parent of
+  `/usr/local/libexec/audiobook-organizer/rollback`, `/etc/audiobook-organizer`
+  or `/etc/sudoers.d` is not root-owned or is writable by group or others, or
+  when a directory it would fix is a symlink. Whoever can rename inside a parent
+  can swap what the installer just made for a path of their own. Dry runs refuse
+  too.
+- **It will not run as root from a checkout `--deploy-user` can write.** It
+  loads `scripts/storage_format_guard.py` from the checkout as root and copies
+  the helper out of it, so whoever can edit those gets root. A normal checkout
+  owned by the deploy user fails this check: `APPLY=1` refuses and names the
+  paths (a dry run only prints a NOTICE). Run it from a root-owned export:
+  `sudo install -d -o root -g root -m 755 /opt/aorg-install && git archive HEAD
+  deploy scripts | sudo tar -x --no-same-owner -C /opt/aorg-install && sudo
+  python3 -I /opt/aorg-install/deploy/rollback-helpers/install_helpers.py
+  <the arguments make passes>`. It re-runs itself with `python3 -I` either way.
+- **`--deploy-user` is required** (the drop-in grants that user, so it is never
+  guessed from `$SUDO_USER`). The dry run prints `Sudoers grantee: <user>` and
+  the rendered drop-in, or a diff against the installed one.
+- After moving the drop-in into place it runs `visudo -c` over the **whole**
+  sudoers configuration, and if that refuses it puts the previous drop-in back
+  (or removes the new one) and says so.
+
 **Order: this first, then sync `Makefile.local`.** The synced recipes call the
 helper at their first step, so a `Makefile.local` synced before the bundle is
 installed fails there.

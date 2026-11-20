@@ -15,13 +15,17 @@ drop-in existed at that moment, and answers as the test says.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import os
+import pwd
 import stat
 import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 from typing import Any
 
@@ -43,9 +47,15 @@ def load(name: str, path: Path) -> Any:
 
 
 RH = load("rollback_helper_under_test", HELPERS / "rollback_helper.py")
+IH = load("install_helpers_under_test", TOOL)
 
 FAKE_VISUDO = """#!/bin/sh
-# argv: -c -f FILE
+# argv: -c -f FILE (one file), or -c alone (the whole configuration)
+if [ "$2" != "-f" ]; then
+  echo "whole" >> "$VISUDO_WHOLE_LOG"
+  if [ -n "$VISUDO_WHOLE_FAIL" ]; then echo "visudo: unknown alias" >&2; exit 1; fi
+  exit 0
+fi
 echo "$3" >> "$VISUDO_LOG"
 if [ -e "$LIVE_DROPIN" ]; then echo "live-existed" >> "$VISUDO_LOG"; fi
 cp "$3" "$VISUDO_COPY"
@@ -82,15 +92,20 @@ class InstallHelpers(unittest.TestCase):
         self.conf = self.root / RH.CONFIG.lstrip("/")
         self.dropin = self.root / "etc" / "sudoers.d" / "audiobook-organizer-rollback"
 
-    def run_tool(self, *extra: str, fail: bool = False, args=None) -> subprocess.CompletedProcess:
+    def run_tool(
+        self, *extra: str, fail: bool = False, whole_fail: bool = False, args=None
+    ) -> subprocess.CompletedProcess:
         env = {
             **os.environ,
             "VISUDO_LOG": str(self.log),
             "VISUDO_COPY": str(self.copy),
             "LIVE_DROPIN": str(self.dropin),
+            "VISUDO_WHOLE_LOG": str(self.tmp / "visudo.whole.log"),
         }
         if fail:
             env["VISUDO_FAIL"] = "1"
+        if whole_fail:
+            env["VISUDO_WHOLE_FAIL"] = "1"
         return subprocess.run(
             [
                 sys.executable,
@@ -304,6 +319,397 @@ class InstallHelpers(unittest.TestCase):
 
     def test_a_bad_db_path_is_refused_by_the_guards_validation(self) -> None:
         args = [a for a in ARGS if not a.startswith("--db")] + ["--db=/tmp/x y"]
+        p = self.run_tool("--apply", args=args)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertEqual(self.tree(), [])
+
+    # -- what is already there is not trusted (r2 M-2) --------------------------
+
+    def call(self, *extra: str) -> tuple[int | str, str]:
+        """main() in this process, so the owner check can be steered."""
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            try:
+                rc: int | str = IH.main(
+                    [*ARGS, f"--root={self.root}", f"--visudo={self.visudo}", *extra]
+                )
+            except SystemExit as e:
+                rc = str(e.code)
+        return rc, out.getvalue()
+
+    def stranger(self):
+        """Every file and directory the test user owns now counts as owned by
+        somebody else (the test cannot chown to a real second user)."""
+        return unittest.mock.patch.object(IH, "trusted_uids", lambda: {os.geteuid() + 1})
+
+    def step(self, path: Path, data: bytes, mode: int, kind: str = "file") -> Any:
+        return IH.Step(str(path), data, mode, kind)
+
+    def test_a_file_with_the_right_bytes_and_mode_but_the_wrong_owner_is_replaced(self) -> None:
+        f = self.tmp / "helper"
+        f.write_bytes(b"x")
+        f.chmod(0o755)
+        step = self.step(f, b"x", 0o755)
+        self.assertEqual(IH.state(step), "unchanged" if False else IH.state(step))
+        IH.STAGING = True
+        self.addCleanup(setattr, IH, "STAGING", False)
+        self.assertEqual(IH.state(step), "unchanged")
+        with self.stranger():
+            self.assertEqual(IH.state(step), "fix")
+
+    def test_a_group_writable_file_is_replaced(self) -> None:
+        f = self.tmp / "helper"
+        f.write_bytes(b"x")
+        IH.STAGING = True
+        self.addCleanup(setattr, IH, "STAGING", False)
+        for mode in (0o775, 0o757, 0o777):
+            with self.subTest(mode=oct(mode)):
+                f.chmod(mode)
+                self.assertEqual(IH.state(self.step(f, b"x", 0o755)), "fix")
+
+    def test_a_hard_linked_file_is_replaced(self) -> None:
+        f = self.tmp / "helper"
+        f.write_bytes(b"x")
+        f.chmod(0o755)
+        os.link(f, self.tmp / "elsewhere")
+        IH.STAGING = True
+        self.addCleanup(setattr, IH, "STAGING", False)
+        self.assertEqual(IH.state(self.step(f, b"x", 0o755)), "fix")
+
+    def test_a_symlink_where_a_file_belongs_is_replaced_not_followed(self) -> None:
+        target = self.tmp / "target"
+        target.write_bytes(b"x")
+        link = self.tmp / "helper"
+        link.symlink_to(target)
+        self.assertEqual(IH.state(self.step(link, b"x", 0o755)), "replace")
+
+    def test_a_directory_the_wrong_owner_or_mode_is_fixed(self) -> None:
+        d = self.tmp / "dir"
+        d.mkdir()
+        d.chmod(0o755)
+        IH.STAGING = True
+        self.addCleanup(setattr, IH, "STAGING", False)
+        step = self.step(d, b"", 0o755, "dir")
+        self.assertEqual(IH.state(step), "unchanged")
+        d.chmod(0o775)
+        self.assertEqual(IH.state(step), "fix")
+        d.chmod(0o755)
+        with self.stranger():
+            self.assertEqual(IH.state(step), "fix")
+
+    def test_fixing_a_directory_chowns_it_to_root_and_sets_the_mode(self) -> None:
+        d = self.tmp / "dir"
+        d.mkdir()
+        d.chmod(0o777)
+        with unittest.mock.patch.object(IH.os, "chown") as chown:
+            IH.fix_dir(str(d), 0o755, chown=True)
+        chown.assert_called_once_with(str(d), 0, 0)
+        self.assertEqual(stat.S_IMODE(d.stat().st_mode), 0o755)
+
+    def test_a_symlinked_directory_is_refused(self) -> None:
+        real = self.tmp / "real"
+        real.mkdir()
+        link = self.tmp / "dir"
+        link.symlink_to(real)
+        with self.assertRaises(SystemExit) as cm:
+            IH.state(self.step(link, b"", 0o755, "dir"))
+        self.assertIn(str(link), str(cm.exception))
+
+    def test_apply_fixes_an_existing_group_writable_directory(self) -> None:
+        self.assertEqual(self.run_tool("--apply").returncode, 0)
+        self.conf.parent.chmod(0o775)
+        self.libdir.chmod(0o750)
+        p = self.run_tool("--apply")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("fix", p.stdout)
+        for d in (self.conf.parent, self.libdir):
+            self.assertEqual(stat.S_IMODE(d.stat().st_mode), 0o755, d)
+
+    def test_a_bad_parent_is_refused_naming_it_and_nothing_is_written(self) -> None:
+        for rel in ("usr/local/libexec", "etc"):
+            with self.subTest(parent=rel):
+                self.clear_root()
+                d = self.root / rel
+                d.mkdir(parents=True)
+                d.chmod(0o777)
+                before = self.tree()
+                p = self.run_tool("--apply")
+                self.assertNotEqual(p.returncode, 0)
+                self.assertIn(str(d), p.stdout + p.stderr)
+                self.assertIn("parent of", p.stdout + p.stderr)
+                self.assertEqual(self.tree(), before, "refused before any write")
+
+    def clear_root(self) -> None:
+        import shutil
+
+        for child in list(self.root.iterdir()):
+            with contextlib.suppress(OSError):
+                child.chmod(0o755)
+            shutil.rmtree(child, ignore_errors=True)
+
+    def test_a_group_writable_parent_is_refused_even_in_a_dry_run(self) -> None:
+        (self.root / "usr" / "local").mkdir(parents=True)
+        (self.root / "usr" / "local").chmod(0o775)
+        p = self.run_tool()
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("usr/local", p.stdout + p.stderr)
+
+    def test_the_sudoers_directory_itself_must_be_root_owned_and_closed(self) -> None:
+        d = self.root / "etc" / "sudoers.d"
+        d.mkdir(parents=True)
+        d.chmod(0o777)
+        p = self.run_tool("--apply")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("sudoers.d", p.stdout + p.stderr)
+        self.assertFalse(self.dropin.exists())
+
+    def test_a_parent_owned_by_somebody_else_is_refused(self) -> None:
+        (self.root / "usr" / "local").mkdir(parents=True)
+        IH.STAGING = True
+        self.addCleanup(setattr, IH, "STAGING", False)
+        IH.check_parents(str(self.root), str(self.libdir), include_target=False)  # fine
+        with self.stranger(), self.assertRaises(SystemExit) as cm:
+            IH.check_parents(str(self.root), str(self.libdir), include_target=False)
+        self.assertIn(str(self.root), str(cm.exception))
+        self.assertIn("not root-owned", str(cm.exception))
+
+    def test_a_parent_that_is_a_file_is_refused(self) -> None:
+        (self.root / "usr").write_text("not a directory")
+        IH.STAGING = True
+        self.addCleanup(setattr, IH, "STAGING", False)
+        with self.assertRaises(SystemExit) as cm:
+            IH.check_parents(str(self.root), str(self.libdir), include_target=False)
+        self.assertIn("not a directory", str(cm.exception))
+
+    # -- the sudoers drop-in (r2 m7, m8) ---------------------------------------------
+
+    def test_the_deploy_user_is_required_and_never_guessed(self) -> None:
+        args = [a for a in ARGS if not a.startswith("--deploy-user")]
+        env = {**os.environ, "SUDO_USER": "alfred", "USER": "alfred"}
+        p = subprocess.run(
+            [sys.executable, str(TOOL), *args, f"--root={self.root}", "--apply"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("--deploy-user is required", p.stdout + p.stderr)
+        self.assertEqual(self.tree(), [])
+
+    def test_the_dry_run_names_the_grantee_and_prints_the_rendered_sudoers(self) -> None:
+        p = self.run_tool()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("Sudoers grantee: alfred", p.stdout)
+        self.assertIn("alfred ALL=", p.stdout)
+        self.assertIn(
+            str(self.dropin).replace(str(self.root), ""), p.stdout.replace(str(self.root), "")
+        )
+
+    def test_the_dry_run_shows_a_diff_against_the_installed_sudoers(self) -> None:
+        self.assertEqual(self.run_tool("--apply").returncode, 0)
+        old = self.dropin.read_text()
+        self.dropin.chmod(0o640)
+        self.dropin.write_text(old.replace("alfred", "bruce"))
+        self.dropin.chmod(0o440)
+        p = self.run_tool()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("-bruce ALL=(root)", p.stdout)
+        self.assertIn("+alfred ALL=(root)", p.stdout)
+        self.assertEqual(
+            self.dropin.read_text(), old.replace("alfred", "bruce"), "dry run: untouched"
+        )
+
+    def test_a_sudoers_with_the_right_text_and_the_wrong_mode_is_rewritten(self) -> None:
+        self.assertEqual(self.run_tool("--apply").returncode, 0)
+        self.dropin.chmod(0o666)
+        p = self.run_tool("--apply")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(stat.S_IMODE(self.dropin.stat().st_mode), 0o440)
+        checked = [x for x in self.log.read_text().splitlines() if x != "live-existed"]
+        self.assertEqual(len(checked), 2, "validated again")
+
+    def test_a_sudoers_with_the_right_text_and_the_wrong_owner_is_not_unchanged(self) -> None:
+        self.assertEqual(self.run_tool("--apply").returncode, 0)
+        text = self.dropin.read_text()
+        IH.STAGING = True
+        self.addCleanup(setattr, IH, "STAGING", False)
+        self.assertEqual(IH.sudoers_state(str(self.dropin), text), "unchanged")
+        with self.stranger():
+            self.assertEqual(IH.sudoers_state(str(self.dropin), text), "fix")
+
+    def test_a_whole_config_check_runs_after_the_drop_in_is_in_place(self) -> None:
+        p = self.run_tool("--apply")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual((self.tmp / "visudo.whole.log").read_text().splitlines(), ["whole"])
+
+    def test_a_drop_in_that_breaks_the_whole_config_is_removed_again(self) -> None:
+        p = self.run_tool("--apply", whole_fail=True)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("whole configuration", p.stdout + p.stderr)
+        self.assertIn("removed", p.stdout + p.stderr)
+        self.assertFalse(self.dropin.exists())
+
+    def test_a_drop_in_that_breaks_the_whole_config_puts_the_old_one_back(self) -> None:
+        self.assertEqual(self.run_tool("--apply").returncode, 0)
+        old = self.dropin.read_text()
+        self.dropin.chmod(0o640)
+        self.dropin.write_text(old + "# an older rendering\n")
+        self.dropin.chmod(0o440)
+        older = self.dropin.read_bytes()
+        p = self.run_tool("--apply", whole_fail=True)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("put back as it was", p.stdout + p.stderr)
+        self.assertEqual(self.dropin.read_bytes(), older)
+        self.assertEqual(stat.S_IMODE(self.dropin.stat().st_mode), 0o440)
+
+    # -- rollback.conf with the right bytes (r2 m12) ----------------------------------
+
+    def test_a_conf_with_the_right_bytes_and_the_wrong_mode_gets_its_mode_fixed(self) -> None:
+        self.assertEqual(self.run_tool("--apply").returncode, 0)
+        self.conf.chmod(0o600)
+        p = self.run_tool("--apply")
+        self.assertEqual(
+            p.returncode, 0, "the owner's bytes are not touched, so nothing is left undone"
+        )
+        self.assertEqual(stat.S_IMODE(self.conf.stat().st_mode), 0o644)
+        self.assertNotIn("--replace-conf", p.stdout)
+
+    def test_a_group_writable_conf_with_the_right_bytes_is_fixed_too(self) -> None:
+        self.assertEqual(self.run_tool("--apply").returncode, 0)
+        self.conf.chmod(0o664)
+        self.assertEqual(self.run_tool("--apply").returncode, 0)
+        self.assertEqual(stat.S_IMODE(self.conf.stat().st_mode), 0o644)
+
+    # -- the checkout is not trusted either (r2 m9) -------------------------------------
+
+    def fake_checkout(self) -> Path:
+        co = self.tmp / "checkout"
+        for rel in (
+            "deploy/rollback-helpers/rollback_helper.py",
+            "deploy/audiobook-organizer.service",
+            "scripts/storage_format_guard.py",
+        ):
+            f = co / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("x")
+            f.chmod(0o644)
+        for d in (co, co / "deploy", co / "scripts", co / "deploy" / "rollback-helpers"):
+            d.chmod(0o755)
+        return co
+
+    def sources(self, co: Path, user: str) -> list[str]:
+        here = co / "deploy" / "rollback-helpers"
+        patches = [
+            unittest.mock.patch.object(IH, "REPO", co),
+            unittest.mock.patch.object(IH, "HERE", here),
+        ]
+        with contextlib.ExitStack() as stack:
+            for patch in patches:
+                stack.enter_context(patch)
+            return IH.check_sources(user, strict=True)
+
+    def test_a_clean_checkout_is_accepted(self) -> None:
+        self.assertEqual(self.sources(self.fake_checkout(), "alfred"), [])
+
+    def test_a_world_writable_source_file_is_named(self) -> None:
+        co = self.fake_checkout()
+        guard_py = co / "scripts" / "storage_format_guard.py"
+        guard_py.chmod(0o666)
+        self.assertEqual(self.sources(co, "alfred"), [str(guard_py)])
+
+    def test_a_world_writable_checkout_directory_is_named(self) -> None:
+        co = self.fake_checkout()
+        (co / "deploy").chmod(0o777)
+        self.assertIn(str(co / "deploy"), self.sources(co, "alfred"))
+
+    def test_files_the_deploy_user_owns_or_shares_a_group_with_are_named(self) -> None:
+        me = pwd.getpwuid(os.getuid()).pw_name
+        co = self.fake_checkout()
+        got = self.sources(co, me)
+        self.assertIn(str(co / "scripts" / "storage_format_guard.py"), got, "owned by that user")
+        self.assertIn(str(co), got)
+
+    def test_a_group_writable_file_is_named_for_a_member_of_the_group(self) -> None:
+        me = pwd.getpwuid(os.getuid()).pw_name
+        co = self.fake_checkout()
+        f = co / "deploy" / "audiobook-organizer.service"
+        with unittest.mock.patch.object(IH.os, "getgrouplist", lambda *_: [f.stat().st_gid]):
+            st = f.stat()
+            self.assertFalse(IH.writable_by(st, 12345, {st.st_gid}), "not group-writable yet")
+            f.chmod(0o664)
+            self.assertTrue(IH.writable_by(f.stat(), 12345, {f.stat().st_gid}))
+            self.assertFalse(IH.writable_by(f.stat(), 12345, set()))
+        self.assertTrue(me)
+
+    def test_apply_refuses_to_run_from_a_checkout_the_deploy_user_can_write(self) -> None:
+        me = pwd.getpwuid(os.getuid()).pw_name
+        args = [a for a in ARGS if not a.startswith("--deploy-user")] + [f"--deploy-user={me}"]
+        p = self.run_tool("--apply", args=args)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("REFUSING", p.stdout + p.stderr)
+        self.assertIn("root-owned export", p.stdout + p.stderr)
+        self.assertEqual(self.tree(), [], "nothing was written")
+
+    def test_a_dry_run_from_such_a_checkout_says_so_and_still_shows_the_plan(self) -> None:
+        me = pwd.getpwuid(os.getuid()).pw_name
+        args = [a for a in ARGS if not a.startswith("--deploy-user")] + [f"--deploy-user={me}"]
+        p = self.run_tool(args=args)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("NOTICE", p.stdout)
+        self.assertIn("APPLY=1 will refuse", p.stdout)
+
+    def test_python_runs_isolated_whatever_the_environment_says(self) -> None:
+        poison = self.tmp / "poison"
+        poison.mkdir()
+        (poison / "difflib.py").write_text("raise RuntimeError('loaded from PYTHONPATH')\n")
+        env = {
+            **os.environ,
+            "PYTHONPATH": str(poison),
+            "VISUDO_LOG": str(self.log),
+            "VISUDO_COPY": str(self.copy),
+            "LIVE_DROPIN": str(self.dropin),
+        }
+        p = subprocess.run(
+            [sys.executable, str(TOOL), *ARGS, f"--root={self.root}"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("loaded from PYTHONPATH", p.stdout + p.stderr)
+
+    # -- the guard's patterns (r2 m5) -----------------------------------------------------
+
+    def test_a_trailing_newline_does_not_pass_the_safe_user_or_path_patterns(self) -> None:
+        for bad in ("alfred\n", "alfred\nroot"):
+            self.assertIsNone(guard._SAFE_USER.fullmatch(bad), repr(bad))
+        for bad in ("/var/lib/x\n", "/var/lib/x\n/etc"):
+            self.assertIsNone(guard._SAFE_PATH.fullmatch(bad), repr(bad))
+        self.assertIsNotNone(guard._SAFE_USER.fullmatch("alfred"))
+        self.assertIsNotNone(guard._SAFE_PATH.fullmatch("/var/lib/x"))
+
+    def test_the_validation_rejects_a_path_and_a_user_with_a_trailing_newline(self) -> None:
+        o = guard.Opts(
+            host="localhost",
+            db="/path/to/audiobooks.pebble\n",
+            bin="/usr/local/bin/audiobook-organizer",
+            user="audiobook",
+            stage_bin="/home/alfred/audiobook-organizer",
+        )
+        self.assertTrue(guard._validate(o))
+        o2 = guard.Opts(
+            host="localhost",
+            db="/path/to/audiobooks.pebble",
+            bin="/usr/local/bin/audiobook-organizer",
+            user="audiobook\n",
+            stage_bin="/home/alfred/audiobook-organizer",
+        )
+        self.assertTrue(guard._validate(o2))
+
+    def test_a_deploy_user_with_a_trailing_newline_is_refused_by_the_installer(self) -> None:
+        args = [a for a in ARGS if not a.startswith("--deploy-user")] + ["--deploy-user=alfred\n"]
         p = self.run_tool("--apply", args=args)
         self.assertNotEqual(p.returncode, 0)
         self.assertEqual(self.tree(), [])
