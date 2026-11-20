@@ -1581,6 +1581,7 @@ internal/plugins/maintenance.Plugin.versionGroupPrimaryRepairNative
 internal/plugins/maintenance.Plugin.versionGroupPrimaryReportNative
 internal/plugins/maintenance.activityFilterIndexBackfillParallelism
 internal/plugins/maintenance.activityFilterNativeParams.UnmarshalJSON
+internal/plugins/maintenance.addJudged
 internal/plugins/maintenance.authorConjunctionRepairNativeParams.UnmarshalJSON
 internal/plugins/maintenance.authorDuplicateMergeNativeParams.UnmarshalJSON
 internal/plugins/maintenance.authorIDRepairNativeParams.UnmarshalJSON
@@ -1930,6 +1931,12 @@ internal/plugins/maintenance.jobsRows
 internal/plugins/maintenance.junkTitleFixer.buildJunkIndex
 internal/plugins/maintenance.junkTitleFixer.candidateTitle
 internal/plugins/maintenance.kindRef
+internal/plugins/maintenance.loadNativeAuthorityPlan
+internal/plugins/maintenance.nativeAuthorityPlans
+internal/plugins/maintenance.nativeCBFingerprint
+internal/plugins/maintenance.nativeCBLedger.judgedSources
+internal/plugins/maintenance.nativeCBLedger.markJudged
+internal/plugins/maintenance.nativeCBLedger.others
 internal/plugins/maintenance.newBooksGate
 internal/plugins/maintenance.newJobsDeps
 internal/plugins/maintenance.newT6G2Deps
@@ -1953,6 +1960,11 @@ internal/plugins/maintenance.reportPathOver
 internal/plugins/maintenance.resolveJobsCaps
 internal/plugins/maintenance.resolveProductionAuthorsParallelism
 internal/plugins/maintenance.resolveProductionNativeParams.UnmarshalJSON
+internal/plugins/maintenance.runClassLists.ClearClassLists
+internal/plugins/maintenance.runClassLists.SaveClassLists
+internal/plugins/maintenance.runRowStore.GetOpRows
+internal/plugins/maintenance.runRowStore.ReplaceOpRowsPrefix
+internal/plugins/maintenance.runRowStore.ScanOpRowIndex
 internal/plugins/maintenance.runless
 internal/plugins/maintenance.srcCap
 internal/plugins/maintenance.t6g1Common
@@ -2112,6 +2124,7 @@ internal/plugins/maintenance.t6g7Res
 internal/plugins/maintenance.t6g7StartRequirement
 internal/plugins/maintenance.titleKeyOf
 internal/plugins/maintenance.versionTwinFixer.readers
+internal/plugins/maintenance.withJudged
 internal/querygrammar.PatternSlotAcquisitions
 internal/repairs.GuardBooks
 internal/repairs.GuardBooksFor
