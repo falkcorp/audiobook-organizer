@@ -69,7 +69,7 @@ func (h *swapHost) config(deps *module.Deps, migs ...storage.Migration) Config {
 
 // boot boots c and closes it when the test ends.
 func (h *swapHost) boot(c Config) (*Kernel, error) {
-	k, err := New(h.ctx, c)
+	k, err := newKCtx(h.t, h.ctx, c)
 	if err != nil {
 		return nil, err
 	}
@@ -223,39 +223,6 @@ func stepsOf(recs []restorejournal.Record) []string {
 // restore boot of a build without P4d steps 2-3 journals machine 1's one
 // edge opened → marker_written{HooksOwed} → applied, deletes the in-flight
 // file, and serves the restored store.
-// TestStateDirWithoutStoragePathRefused (R1-21 review m10): a direct
-// kernel.Config with a state directory and no store is refused at New,
-// before P0a reads the state directory. A swap applies to a store: run with
-// none, a staged restore starts and waits at swapped, in flight, on every
-// boot. Here the staged intent stays in the slot and the live store where
-// it was.
-func TestStateDirWithoutStoragePathRefused(t *testing.T) {
-	h := newSwapHost(t)
-	h.close(h.mustBoot(h.config(nil)))
-	staged := h.stagedCopy("r-archive", "robin")
-	h.stage("r-archive", restorejournal.KindArchive, staged)
-	c := h.config(nil)
-	c.StoragePath = ""
-	if k, err := New(h.ctx, c); err == nil {
-		h.close(k)
-		t.Fatal("New booted a state directory without a store")
-	} else if !strings.Contains(err.Error(), "StoragePath") {
-		t.Fatalf("New = %v, want the refusal to name Config.StoragePath", err)
-	}
-	if _, err := os.Stat(restorejournal.PendingPath(h.state)); err != nil {
-		t.Fatalf("the staged intent left the slot: %v", err)
-	}
-	if _, ok, err := restoreswap.InFlight(vfs.Default, h.state); err != nil || ok {
-		t.Fatalf("in flight = %v, %v; want nothing started", ok, err)
-	}
-	if _, err := os.Stat(restorejournal.SetAsideDest(h.state, h.db, "r-archive", h.db)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the live store was set aside (%v)", err)
-	}
-	if _, err := os.Stat(staged); err != nil {
-		t.Fatalf("the staged store left staging: %v", err)
-	}
-}
-
 func TestRestoreBootWithoutHooksReachesApplied(t *testing.T) {
 	h := newSwapHost(t)
 	h.close(h.mustBoot(h.config(nil)))
@@ -424,7 +391,7 @@ func TestCheckpointRestoreBookkeepingFailureRetries(t *testing.T) {
 		seams.BuildID = swapBuild
 		c := testConfig(t, storageMod("alfred", nil, seedStep(1, "cave")))
 		c.StoragePath, c.StateDir = db, state
-		k, err := New(bootseam.With(t.Context(), seams), c)
+		k, err := newKCtx(t, bootseam.With(t.Context(), seams), c)
 		if err != nil {
 			return err
 		}

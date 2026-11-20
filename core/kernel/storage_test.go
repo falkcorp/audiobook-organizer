@@ -151,17 +151,17 @@ func TestStoragePhasesFreshInstallRunsSeed(t *testing.T) {
 	}
 }
 
-// TestStorageNeedsPath: an enabled module that declares storage refuses a
-// boot with no core.storage.path, naming the option; a disabled one does
-// not, and nothing is opened.
-func TestStorageNeedsPath(t *testing.T) {
-	_, err := New(t.Context(), testConfig(t, storageMod("alfred", nil)))
-	if err == nil || !strings.Contains(err.Error(), "core.storage.path") {
-		t.Fatalf("boot without a path = %v, want a refusal naming core.storage.path", err)
-	}
-	off := storageMod("alfred", nil).with(func(m *module.Manifest) { m.DefaultEnabled = false })
-	if k := mustNew(t, testConfig(t, off)); k.store != nil {
-		t.Fatal("a boot without a path opened a store")
+// TestStorageDefaultsUnderTheStateDirectory: an app whose module declares
+// storage and names no path (no core.storage.path, no compiled path) gets
+// <state dir>/storage/main.pebble from P0, and the store opens there.
+func TestStorageDefaultsUnderTheStateDirectory(t *testing.T) {
+	state := t.TempDir()
+	c := testConfig(t, storageMod("alfred", nil))
+	c.StateDirDefault = state
+	k := mustNew(t, c)
+	want := filepath.Join(state, "storage", "main.pebble")
+	if k.store == nil || k.cfg.StoragePath != want {
+		t.Fatalf("store = %v at %q, want one at %q", k.store, k.cfg.StoragePath, want)
 	}
 }
 
@@ -190,7 +190,7 @@ func TestFailedMigrationClosesStore(t *testing.T) {
 	path := tempStoragePath(t)
 	c := testConfig(t, storageMod("alfred", nil, broken))
 	c.StoragePath = path
-	_, err := New(t.Context(), c)
+	_, err := newK(t, c)
 	var failed *storage.ErrMigrationFailed
 	if !errors.As(err, &failed) || !strings.Contains(err.Error(), "bane broke it") {
 		t.Fatalf("boot with a failing step = %v, want *storage.ErrMigrationFailed", err)
@@ -344,7 +344,7 @@ func failedUpgrade(t *testing.T) (path, name string) {
 		Version: 2, Name: "broken", Compat: storage.Additive,
 		Up: func(context.Context, *storage.MigrationTx) error { return errors.New("bane broke it") }})}
 	var failed *storage.ErrMigrationFailed
-	if _, err := New(t.Context(), c); !errors.As(err, &failed) {
+	if _, err := newK(t, c); !errors.As(err, &failed) {
 		t.Fatalf("the failing upgrade = %v, want *storage.ErrMigrationFailed", err)
 	}
 	raw, err := os.ReadFile(path + ".migration-checkpoint")
@@ -620,7 +620,7 @@ func TestCloseWithoutRun(t *testing.T) {
 			c := testConfig(t, storageMod("alfred", nil))
 			c.StoragePath = tempStoragePath(t)
 			withCore(&c, "core.shutdown.budget", v)
-			if _, err := New(t.Context(), c); err == nil || !strings.Contains(err.Error(), "core.shutdown") {
+			if _, err := newK(t, c); err == nil || !strings.Contains(err.Error(), "core.shutdown") {
 				t.Fatalf("New with core.shutdown.budget %s = %v, want a refusal naming core.shutdown", v, err)
 			}
 		}
@@ -644,7 +644,7 @@ func TestCheckpointRecordsFromRelease(t *testing.T) {
 		c.Modules = []module.Module{storageMod("alfred", nil, seedStep(1, "cave"), storage.Migration{
 			Version: 2, Name: "broken", Compat: storage.Additive,
 			Up: func(context.Context, *storage.MigrationTx) error { return errors.New("bane broke it") }})}
-		if _, err := New(t.Context(), c); err == nil {
+		if _, err := newK(t, c); err == nil {
 			t.Fatal("the failing upgrade booted")
 		}
 		raw, err := os.ReadFile(path + ".migration-checkpoint")

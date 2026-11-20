@@ -113,24 +113,6 @@ type Options struct {
 	// from config (05-logging §4).
 	Logger *slog.Logger
 
-	// R1StoragePath is the app's own resolved database path, absolute (ABO:
-	// its config's database path, HEAD's --db / DATABASE_PATH, made absolute).
-	// It names core.storage.path when <EnvPrefix>_CORE_STORAGE_PATH is unset,
-	// so the store core opens is the one HEAD opened; both set to different
-	// paths fails New. "" = core's rule alone. Release R1 only: F3's config
-	// carries the renamed key (05-config's rename table) and deletes it.
-	R1StoragePath string
-	// CoreConfigBoot turns on core's own config and secrets boot (F3-07 slice
-	// a): the layered config store at P0 and P3 (operator layers, the boot
-	// record, core.modules.<id>.enabled), the secret store at P4b, the stored
-	// values attached at P4d. With it set, core.storage.path and the state
-	// directory come from the config layers at P0 and not from storagePath's
-	// environment read: only R1StoragePath is the compiled path, and an offline
-	// command resolves them through the same P0 (kernel.ResolveStorage). The
-	// shipped ABO binary leaves it false and behaves as before. Release R1
-	// only: slice (e) of F3-07 deletes the field with R1Values and the boot
-	// is always on.
-	CoreConfigBoot bool
 	// StorageStateFiles is the state-file table (05-config §2.4): the files
 	// the pre-migration checkpoint copies beside the store, each by its label
 	// and resolved absolute path; one that does not exist is skipped. The app

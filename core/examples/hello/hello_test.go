@@ -38,7 +38,6 @@ func TestHelloEndToEnd(t *testing.T) {
 		Env:         []string{}, // no HELLO_CORE_* variable of the host leaks in
 		ConfigFlags: map[config.Path]string{"core.http.listen": "localhost:0"},
 		// hello boots through the config boot, as cmd/hello does (F3-07).
-		CoreConfigBoot: true,
 	}, hello.New())
 	if err != nil {
 		t.Fatal(err)

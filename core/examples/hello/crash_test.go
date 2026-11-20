@@ -217,7 +217,7 @@ func crashScenarios(t *testing.T) []namedScenario {
 // build boots mod as the crash matrix's Build.
 func build(mod module.Module) func(testing.TB, *crashmatrix.Injector) error {
 	return func(_ testing.TB, inj *crashmatrix.Injector) error {
-		_, err := inj.New(context.Background(), app.Options{AppID: "hello", CoreConfigBoot: true, Logger: slog.New(slog.DiscardHandler)}, mod)
+		_, err := inj.New(context.Background(), app.Options{AppID: "hello", Logger: slog.New(slog.DiscardHandler)}, mod)
 		return err
 	}
 }

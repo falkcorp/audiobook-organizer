@@ -30,7 +30,6 @@ func bootFlippedFresh(t *testing.T) *composed {
 		c.RootDir = ""
 		c.SetupComplete = false
 	}, nil, func(o *app.Options) {
-		o.CoreConfigBoot = true
 		o.StateDir = stateDir
 		// The process environment carries the retired ABK_STATE_DIR the sandbox
 		// sets, which the config boot refuses; the boot sees only its own.

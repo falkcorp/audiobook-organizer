@@ -123,27 +123,6 @@ func importerStep(owner storage.Owner, imp module.Importers, seen *atomic.Int64)
 	}
 }
 
-// Manifest.Cutover's steps join the plan, and the importers they hold refuse
-// when P4b runs with no importer bound: the boot fails with
-// ErrImporterNotBound and the importer's store sees no call.
-func TestKernel_CutoverStepsRunWithUnboundImportersRefused(t *testing.T) {
-	h, _ := dryRunHost(t, map[string]string{"case:file/001": "The Long Halloween, part 1"})
-	var seen atomic.Int64
-	c := testConfig(t, gcpdMod(storage.ClaimReadWrite).with(func(m *module.Manifest) {
-		m.Cutover = func(imp module.Importers) []datamigrate.DataMigration {
-			return []datamigrate.DataMigration{importerStep("gcpd", imp, &seen)}
-		}
-	}))
-	c.StoragePath, c.StateDir = h.db, h.state
-	_, err := New(h.ctx, c)
-	if !errors.Is(err, module.ErrImporterNotBound) {
-		t.Fatalf("New = %v, want ErrImporterNotBound", err)
-	}
-	if seen.Load() == 0 {
-		t.Fatal("the Cutover step never ran: Manifest.Cutover's steps are not in the plan")
-	}
-}
-
 // P4b binds the kernel's importers before the first step runs: with a store
 // wired (the kernel's importerCfg) the same step reads through it.
 func TestMigrateStorage_BindsTheImportersBeforeTheSteps(t *testing.T) {
@@ -194,7 +173,7 @@ func TestCatalog_CutoverStepOfAnotherOwnerIsAProblem(t *testing.T) {
 				return []datamigrate.DataMigration{importerStep("arkham", imp, &seen)}
 			}
 		})
-		k, err := New(t.Context(), testConfig(t, m))
+		k, err := newK(t, testConfig(t, m))
 		if k != nil || !hasKind(err, module.ProblemMigrationOrder) {
 			t.Fatalf("enabled=%v: New = %v, %v; want a ProblemMigrationOrder", enabled, k, err)
 		}
@@ -300,7 +279,6 @@ func TestConfigBoot_AllowKeyRegenReachesTheImporters(t *testing.T) {
 		h := newSwapHost(t)
 		c := testConfig(t, gcpdMod(storage.ClaimReadWrite))
 		c.StoragePath, c.StateDir = h.db, h.state
-		c.CoreConfigBoot = true
 		c.ConfigOptions = config.Options{Environ: tc.env}
 		c.StateDirDefault = h.state
 		k := h.mustBoot(c)

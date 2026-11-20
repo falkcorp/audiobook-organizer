@@ -36,7 +36,6 @@ func flippedOfflineABO(t *testing.T, env *[]string) *offlineABO {
 	h.edit = func(c *config.Config) { c.DatabasePath, c.RootDir = h.path, h.root }
 	h.disk = func(o *app.Options) {
 		o.StorageFS = storage.FS{}
-		o.CoreConfigBoot = true
 		o.StateDir = h.state
 		o.Env = append([]string{storageEnv()}, *env...)
 	}

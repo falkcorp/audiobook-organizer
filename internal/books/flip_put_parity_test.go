@@ -351,7 +351,6 @@ func TestFlipPUTParity_DelugeEnvLockRefusesTheWrite(t *testing.T) {
 		c.RootDir = ""
 		c.SetupComplete = false
 	}, nil, func(o *app.Options) {
-		o.CoreConfigBoot = true
 		o.StateDir = stateDir
 		// The boot sees only its own environment (the sandbox's retired
 		// ABK_STATE_DIR is not in it): the operator names the Deluge URL.
@@ -389,7 +388,6 @@ func TestFlipPUTParity_DelugePasswordEnvLockRefusesTheWrite(t *testing.T) {
 		c.RootDir = ""
 		c.SetupComplete = false
 	}, nil, func(o *app.Options) {
-		o.CoreConfigBoot = true
 		o.StateDir = stateDir
 		o.Env = []string{storageEnv(), "ABO_INTEGRATIONS_DOWNLOAD_DELUGE_PASSWORD=operator-secret"}
 	})
@@ -425,7 +423,6 @@ func TestFlipPUTParity_OpenAIKeyFromTheEcosystemEnvIsEffectiveAndLocked(t *testi
 		c.RootDir = ""
 		c.SetupComplete = false
 	}, nil, func(o *app.Options) {
-		o.CoreConfigBoot = true
 		o.StateDir = stateDir
 		o.Env = []string{storageEnv(), "OPENAI_API_KEY=bane"}
 	})

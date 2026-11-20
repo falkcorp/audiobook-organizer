@@ -56,25 +56,24 @@ type kernelSwap struct {
 }
 
 // swapWanted gates P0a: a state directory, and not Describe, which performs
-// no I/O and never opens the store (COR2-13).
+// no I/O and never opens the store (COR2-13). P0 sets the state directory
+// together with the store path (bootCoreConfig), so a swap always has the
+// store it swaps (R1-21 review m10: a swap with no store would start a staged
+// restore and wait at swapped, in flight, on every boot).
 func (k *Kernel) swapWanted(describe bool) bool { return !describe && k.cfg.StateDir != "" }
 
 // storageOwners is the store's owners: core's own (the audit log, F2-07, and
 // the task keyspace, F2-03/F2-02, both enabled whatever the apps; config and
-// secrets too when Config.CoreConfigBoot is set) and every
+// secrets too, 05-config 1.3.3 and 2.3) and every
 // module that declares storage, enabled or not (a disabled module's claims stay
 // validated and its keyspace reserved). Core's two are claimed in every app's
 // store at its first P4b, whether or not tasks start: the keyspace is storage's
 // to register, the start rule is the kernel's (tasks.go).
 func (k *Kernel) storageOwners() []storage.OwnerSpec {
-	owners := []storage.OwnerSpec{auditOwnerSpec(), taskOwnerSpec()}
-	if k.cfg.CoreConfigBoot {
-		// c/config/ and c/secrets/ (05-config 1.3.3, 2.3): claimed only under
-		// the gate, so a build without it writes neither at its first P4b.
-		// Every reader of the owners reads this one function: P0a's swapper, the
-		// P2 open, the offline opens and the dry run.
-		owners = append(owners, configOwnerSpec(), secretsOwnerSpec())
-	}
+	// c/config/ and c/secrets/ (05-config 1.3.3, 2.3) are claimed in every
+	// app's store. Every reader of the owners reads this one function: P0a's
+	// swapper, the P2 open, the offline opens and the dry run.
+	owners := []storage.OwnerSpec{auditOwnerSpec(), taskOwnerSpec(), configOwnerSpec(), secretsOwnerSpec()}
 	// Core's half of M7 (core_level.go): registered when a manifest declares a
 	// cutover, so a build with none raises no level.
 	owners = append(owners, k.coreOwners()...)
@@ -171,12 +170,6 @@ func (p refuseProbe) Writable(dir string) error           { return p.refuse(dir)
 // reset, another service or any other opener), no two P0a runs overlap,
 // and neither offline swap starts while this process may use the store.
 func (k *Kernel) runP0a(ctx context.Context) error {
-	if k.cfg.StoragePath == "" {
-		// A swap applies to a store (R1-21 review m10): run with none, a
-		// staged restore would start and wait at swapped, in flight, on
-		// every boot. Refused before the state directory is read.
-		return errors.New("kernel: Config.StateDir is set without Config.StoragePath; the pre-boot swap (P0a) needs the store it swaps")
-	}
 	lock, err := k.lockSwapForP0a(ctx)
 	if err != nil {
 		return err
@@ -279,12 +272,9 @@ func (k *Kernel) swapAfter(ctx context.Context, phase string) error {
 		err = s.Opened(ctx, out.ID)
 	case out.Boot == restoreswap.BootRestore && phase == phaseP4b:
 		err = s.RestoreApplied(ctx, out.ID)
-	case out.Boot == restoreswap.BootReset && phase == phaseP4a && !k.cfg.CoreConfigBoot:
-		// Under Config.CoreConfigBoot applied is journalled in bindCoreStores
-		// instead, after secrets.Open rewrote the keyring header and the reset's
-		// fresh rows are committed (SEC8-5): the swap is not applied until both
-		// are durable.
-		err = s.ResetApplied(ctx, out.ID)
+	// A reset's applied record is not written here: bindCoreStores journals it,
+	// after secrets.Open rewrote the keyring header and the reset's fresh rows
+	// are committed (SEC8-5), so the swap is not applied until both are durable.
 	case (out.Boot == restoreswap.BootReset || out.Boot == restoreswap.BootResetApplied) && phase == phaseP4b:
 		if out.Intent.Reset == restorejournal.ResetFactory && k.resetEntry() != nil {
 			k.swap.hookOwed = true

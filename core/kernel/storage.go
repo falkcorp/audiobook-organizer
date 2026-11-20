@@ -60,22 +60,13 @@ type kernelStore struct {
 func DeclaresStorage(m module.Manifest) bool { return !reflect.ValueOf(m.Storage).IsZero() }
 
 // storageWanted gates P2 to P4: Config.StoragePath set, and not Describe,
-// which never opens the store. With no path, an enabled module that declares
-// storage refuses the boot, naming the option; a disabled one does not,
-// since nothing of it runs.
-func (k *Kernel) storageWanted(describe bool) (bool, error) {
-	if describe {
-		return false, nil
-	}
-	if k.cfg.StoragePath != "" {
-		return true, nil
-	}
-	for _, e := range k.entries {
-		if e.enabled && DeclaresStorage(e.man) {
-			return false, fmt.Errorf("kernel: module %s declares storage and core.storage.path is not set (kernel.Config.StoragePath)", e.man.ID)
-		}
-	}
-	return false, nil
+// which never opens the store. P0 sets the path for every app whose modules
+// declare storage (core.storage.path, the app's compiled path, or
+// <state dir>/storage/main.pebble), so an app with a module that declares
+// storage always has one by here; an app with none and no compiled path opens
+// no store.
+func (k *Kernel) storageWanted(describe bool) bool {
+	return !describe && k.cfg.StoragePath != ""
 }
 
 // openStorage is P2 (06 §6.5.1; 05-storage §5S.4 steps 1-5): open the store
@@ -142,9 +133,8 @@ func (k *Kernel) storageOptions(ctx context.Context) (storage.OpenOptions, error
 // and runs it through P0a's swapper (or, on an offline open, one built for it).
 // It keeps the runner for P4a's preflight and P5's metrics. No manifest
 // declaring a migration or a Rewrite is no runner: ABO's shape adds nothing to
-// the plan. Quarantine, LevelStep and Preflight are bound under
-// Config.CoreConfigBoot (config_boot.go); with it off a migration that drops a
-// sensitive row or raises a level fails closed.
+// the plan. Quarantine, LevelStep and Preflight are bound to core's secret
+// store, level owner and cutover preflight (config_boot.go).
 func (k *Kernel) dataSteps(ctx context.Context, owners []storage.OwnerSpec, build string, clock func() time.Time) ([]storage.DataStep, error) {
 	var migs []datamigrate.DataMigration
 	imp := k.importers().values()
@@ -159,15 +149,12 @@ func (k *Kernel) dataSteps(ctx context.Context, owners []storage.OwnerSpec, buil
 	cfg := DataMigrationsConfig{
 		Build: build, Logger: k.coreLog("storage"), Clock: clock, ExtendStart: k.extendStart(coreOwner), Rewrite: rw,
 	}
-	if k.cfg.CoreConfigBoot {
-		// The three seams DataMigrationsConfig leaves to the config flip: the
-		// quarantine seals into the secret store (late-bound, it opens at P4b),
-		// a level step raises the owner's level, and P4a runs the cutover
-		// preflight. Gate off, ABO's boot declares no migration and needs none.
-		cfg.Quarantine = storage.QuarantineWriter(quarantineSealer{k})
-		cfg.LevelStep = LevelStep
-		cfg.Preflight = CutoverPreflight(k.coreLog("storage"))
-	}
+	// The three seams DataMigrationsConfig leaves to the config flip: the
+	// quarantine seals into the secret store (late-bound, it opens at P4b), a
+	// level step raises the owner's level, and P4a runs the cutover preflight.
+	cfg.Quarantine = storage.QuarantineWriter(quarantineSealer{k})
+	cfg.LevelStep = LevelStep
+	cfg.Preflight = CutoverPreflight(k.coreLog("storage"))
 	if rw != nil {
 		sw, err := k.rewriteSwapper(ctx)
 		if err != nil {
@@ -256,7 +243,7 @@ func (k *Kernel) prepareStorage(ctx context.Context) error {
 func (k *Kernel) migrateStorage(ctx context.Context) error {
 	db := k.store.db
 	// The secrets store opens first and the config store binds to c/config/
-	// (06 §6.5.1 P4b), under the gate (Config.CoreConfigBoot, config_boot.go).
+	// (06 §6.5.1 P4b; config_boot.go).
 	if k.cfgBoot != nil {
 		if err := k.bindCoreStores(ctx); err != nil {
 			return err

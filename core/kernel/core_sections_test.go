@@ -217,7 +217,7 @@ var ownerKeys = []string{
 	"core.http.cors.allowed_origins", "core.http.body.json_max_bytes", "core.http.body.upload_max_bytes",
 	"core.http.rate_limit.enabled", "core.http.rate_limit.per_minute", "core.http.rate_limit.burst",
 	"core.http.rate_limit.max_clients", "core.http.basic_gate.enabled", "core.http.basic_gate.username",
-	"core.http.basic_gate.password",
+	"core.http.basic_gate.password", "core.http.tls.cert_file", "core.http.tls.key_file",
 	"core.http.openapi.public", "core.http.read_header_timeout", "core.http.idle_timeout",
 	// 05-library §5L.7 (core.library.mappings is also 05-download §7's row)
 	"core.library.roots", "core.library.mappings", "core.library.protected_paths",

@@ -54,9 +54,6 @@ func options(args []string) app.Options {
 		EnvPrefix:   "HELLO",       // the default, strings.ToUpper(AppID), spelled out
 		StateDir:    "hello-state", // compiled default; HELLO_CORE_PATHS_STATE_DIR overrides it
 		Args:        args,
-		// The config boot (F3-07): core config and the secret store are wired
-		// at P0, P3, P4b and P4d. Deleted with R1Values in F3-07's slice (e).
-		CoreConfigBoot: true,
 	}
 }
 

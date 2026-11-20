@@ -265,11 +265,10 @@ func hashTree(t *testing.T, dir string) map[string]string {
 }
 
 // TestMigrateCommand_DryRunPlansTheManifestsCutover is F3-07 e1's acceptance
-// at the command: over a fixture data directory served by the pre-cutover
-// build (gate off, so no keyring), storage migrate --dry-run of the cutover
-// build with the gate on prints M2's step with its counts and M8's copy, and
-// no byte of the state directory (store, swap lock, and the keyring above
-// all) changes. kernel's TestWireDryRun_* own the wiring's cells.
+// at the command: over a fixture data directory served by a build with no
+// cutover step, storage migrate --dry-run of the cutover build prints M2's
+// step with its counts and M8's copy, and no byte of the state directory
+// (store, swap lock, and the keyring above all) changes. kernel's TestWireDryRun_* own the wiring's cells.
 func TestMigrateCommand_DryRunPlansTheManifestsCutover(t *testing.T) {
 	opts := offlineOpts(t)
 	ctx := bootseam.With(t.Context(), &bootseam.Seams{BuildID: quarantineBuild})
@@ -304,11 +303,7 @@ func TestMigrateCommand_DryRunPlansTheManifestsCutover(t *testing.T) {
 	if err := errors.Join(b.Commit(ctx, storage.Sync), db.Close()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(opts.StateDir, "secrets.keyring")); !os.IsNotExist(err) {
-		t.Fatalf("fixture: the pre-cutover serve left a keyring: %v", err)
-	}
 
-	opts.CoreConfigBoot = true
 	migrate := command(t, OfflineCommands(opts, flipKeeper(storage.ClaimRetired, true)), "storage migrate")
 	before := hashTree(t, opts.StateDir)
 	var out bytes.Buffer

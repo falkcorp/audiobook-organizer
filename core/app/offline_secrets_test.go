@@ -18,8 +18,6 @@ import (
 	"testing"
 
 	"github.com/falkcorp/mediacore/internal/bootseam"
-	"github.com/falkcorp/mediacore/internal/statefs"
-	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -35,61 +33,32 @@ func secretsCmd(t *testing.T, cmds []Command, name string) Command {
 	return Command{}
 }
 
-// fixtureKeyring creates a keyring in stateDir the way F3-07's boot will
-// (secrets.Open over a c/secrets/ keyspace; here a scratch in-memory store,
-// since no boot opens the secret store before F3-07) and returns its keys'
-// material, base64, for leak checks.
-func fixtureKeyring(t *testing.T, stateDir string) []string {
+// bootKeyring reads the keyring the boot created in stateDir (every boot
+// creates one: secrets.Open over the store's c/secrets/ keyspace) and returns
+// its keys' material, base64, for leak checks, and the install ID its header
+// carries (the store's marker).
+func bootKeyring(t *testing.T, stateDir string) (material []string, installID string) {
 	t.Helper()
-	ctx := context.Background()
-	const owner storage.Owner = "core/secrets"
-	o, err := storage.Open(ctx, storage.OpenOptions{
-		Path:   filepath.Join(t.TempDir(), "main.pebble"),
-		Owners: []storage.OwnerSpec{{Owner: owner, Spec: storage.Spec{Keyspace: true, Serialized: []string{""}}, Enabled: true}},
-		Build:  "coretest+fixture", FreeSpaceMargin: 1, FS: storage.MemFS(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	db, err := o.Prepare(ctx)
-	if err == nil {
-		err = db.Migrate(ctx)
-	}
-	if err != nil {
-		_ = o.Close()
-		t.Fatal(err)
-	}
-	defer func() { _ = db.Close() }()
-	ks, _ := db.Keyspace(owner)
-	root, err := os.OpenRoot(stateDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = root.Close() }()
-	s, err := secrets.Open(ctx, secrets.Options{StateDir: statefs.FromRoot(root), Keyspace: ks, AppID: "gotham", InstallID: "batcave-0001"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
 	var f struct {
-		Keys []struct {
+		InstallID string `json:"install_id"`
+		Keys      []struct {
 			Material []byte `json:"material"`
 		} `json:"keys"`
 	}
 	raw, err := os.ReadFile(filepath.Join(stateDir, "secrets.keyring"))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("the boot left no keyring: %v", err)
 	}
 	if err := json.Unmarshal(raw, &f); err != nil {
 		t.Fatal(err)
 	}
-	var out []string
 	for _, k := range f.Keys {
-		out = append(out, base64.StdEncoding.EncodeToString(k.Material))
+		material = append(material, base64.StdEncoding.EncodeToString(k.Material))
 	}
-	return out
+	if f.InstallID == "" || len(material) == 0 {
+		t.Fatalf("the booted keyring has install ID %q and %d keys", f.InstallID, len(material))
+	}
+	return material, f.InstallID
 }
 
 // TestExportKeyring_OpensNoStore (05-config §2.9, SEC10-9): with the service
@@ -104,10 +73,7 @@ func TestExportKeyring_OpensNoStore(t *testing.T) {
 	keeper := offlineKeeper()
 	served(t, opts, keeper)
 	keyring := filepath.Join(opts.StateDir, "secrets.keyring")
-	if _, err := os.Stat(keyring); !os.IsNotExist(err) {
-		t.Fatalf("a boot created the keyring before F3-07 wires secrets.Open: %v", err)
-	}
-	material := fixtureKeyring(t, opts.StateDir)
+	material, installID := bootKeyring(t, opts.StateDir)
 	kr, err := os.ReadFile(keyring)
 	if err != nil {
 		t.Fatal(err)
@@ -132,7 +98,7 @@ func TestExportKeyring_OpensNoStore(t *testing.T) {
 	if err != nil || !bytes.Equal(got, kr) {
 		t.Fatalf("the export is not the keyring file (%v)", err)
 	}
-	if !strings.Contains(stdout.String(), "d1, k1") || !strings.Contains(stdout.String(), "batcave-0001") {
+	if !strings.Contains(stdout.String(), "d1, k1") || !strings.Contains(stdout.String(), installID) {
 		t.Fatalf("export output %q", stdout.String())
 	}
 	for _, m := range material {

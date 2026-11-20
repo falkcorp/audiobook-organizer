@@ -14,6 +14,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/falkcorp/mediacore/kernel"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -85,7 +86,7 @@ func pruneCheckpoints(ctx context.Context, opts Options, mods []module.Module, i
 	if err != nil {
 		return err
 	}
-	dbPath, stateDir, err := offlineStoragePath(ctx, opts, c, mods, "storage prune-checkpoints")
+	dbPath, stateDir, err := kernel.ResolveStorage(ctx, c, "storage prune-checkpoints")
 	if err != nil {
 		return err
 	}

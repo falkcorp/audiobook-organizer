@@ -157,7 +157,6 @@ func (fx *flipFixture) runFlipped(t *testing.T, atReady func(*composed)) {
 		cfg.RootDir = fx.dbDir
 	}, nil, func(o *app.Options) {
 		o.StorageFS = storage.FS{}
-		o.CoreConfigBoot = true
 		o.StateDir = fx.stateDir
 		o.Env = []string{storagePathEnv + "=" + fx.dbPath}
 		// sandboxStateDirAt wrote a fixed key; the rows are sealed under this one.
