@@ -229,8 +229,9 @@ func pathHasPlaceholderAuthorDir(path string) bool {
 	return slices.ContainsFunc(segments[:len(segments)-1], authorname.IsPlaceholder)
 }
 
-// buildUnknownAuthorAudit performs the sweep and RETURNS the report, so the
-// counts can be asserted as values rather than scraped from a log line.
+// unknownAuthorAuditCore is the sweep both shells run; it reads through env.Store
+// and reports through the env's hooks, and RETURNS the report so the counts can be
+// asserted as values rather than scraped from a log line.
 //
 // 🔴 PLAIN LOOP, ON PURPOSE. CLAUDE.md's concurrency rule targets whole-library
 // loops that do meaningful per-item work (a DB read/write, network call,
@@ -244,12 +245,6 @@ func pathHasPlaceholderAuthorDir(path string) bool {
 // one only increments counters, so there is nothing for extra cores to win.
 // If a future edit adds a per-book store read (e.g. hydrating for
 // HasResolvedAuthor), it must move to registry.RunItems WITH Concurrency set.
-func buildUnknownAuthorAudit(ctx context.Context, store unknownAuthorAuditStore, params unknownAuthorAuditParams, reporter sdk.Reporter) (unknownAuthorAuditReport, error) {
-	return unknownAuthorAuditCore(ctx, params, unknownAuthorAuditEnv{t6g7Env: t6g7HeadEnv(reporter, false), Store: store})
-}
-
-// unknownAuthorAuditCore is the sweep both shells run; it reads through env.Store
-// and reports through the env's hooks.
 func unknownAuthorAuditCore(ctx context.Context, params unknownAuthorAuditParams, env unknownAuthorAuditEnv) (unknownAuthorAuditReport, error) {
 	store := env.Store
 	if store == nil {

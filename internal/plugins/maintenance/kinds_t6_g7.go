@@ -120,6 +120,12 @@ type t6g7ItemsOptions struct {
 	// Collect runs every item and joins the item errors (HEAD ErrModeCollect);
 	// otherwise the first error stops dispatch and is returned.
 	Collect bool
+	// HeadWorkers is HEAD's worker count for the loop, when it is not what the
+	// loop's parallelism says: HEAD's registry.RunItems has no upper bound, where
+	// tasks.Fixed clamps at tasks.MaxFixed, so a loop sized beyond that (tag-backfill's
+	// NumCPU()*4) hands HEAD its own raw count and the native pool the clamped
+	// parallelism. Zero means the parallelism's own count.
+	HeadWorkers int
 	// ProgressBase and ProgressTotal place a slice of a larger set on the
 	// progress bar.
 	ProgressBase, ProgressTotal int
@@ -127,7 +133,8 @@ type t6g7ItemsOptions struct {
 	// running counters. Called inside the worker goroutines, so it reads them
 	// atomically. The native pool cannot carry it: tasks.ItemsOptions.Label is
 	// pure (the item only), so a counter label is dropped natively (a recorded
-	// seam in seams.d/F5-12.md: recover's three loops and the heal).
+	// seam in seams.d/F5-12.md: the title-repair, tag-backfill, version-group-primary-repair,
+	// rewrite-path-prefix and repoint-missing-to-folder-audio loops).
 	Label func(i, total int) string
 	// PureLabel is HEAD's label for a loop whose label reads only the item index
 	// and the total ("Phase 1/3: checking book i/total"). Both pools carry it:
@@ -141,8 +148,9 @@ type t6g7ItemsOptions struct {
 type t6g7ItemsFunc func(ctx context.Context, par tasks.Parallelism, n int, o t6g7ItemsOptions, fn func(ctx context.Context, i int) error) error
 
 // t6g7HeadItems is HEAD's pool: registry.RunItems over the indexes with the
-// worker count the parallelism names (RunItems clamps below 1 up to 1, so a
-// Sequential parallelism is the plain loop it was).
+// worker count the parallelism names, or the loop's own HeadWorkers when set
+// (RunItems clamps below 1 up to 1, so a Sequential parallelism is the plain
+// loop it was).
 func t6g7HeadItems(rep sdk.Reporter) t6g7ItemsFunc {
 	return func(ctx context.Context, par tasks.Parallelism, n int, o t6g7ItemsOptions, fn func(ctx context.Context, i int) error) error {
 		idx := make([]int, n)
@@ -157,10 +165,14 @@ func t6g7HeadItems(rep sdk.Reporter) t6g7ItemsFunc {
 		if lbl == nil {
 			lbl = o.PureLabel
 		}
+		workers := par.Workers()
+		if o.HeadWorkers > 0 {
+			workers = o.HeadWorkers
+		}
 		return opsregistry.RunItems(ctx, rep, idx, func(ctx context.Context, i int) error {
 			return fn(ctx, i)
 		}, opsregistry.RunItemsOptions{
-			Concurrency:    par.Workers(),
+			Concurrency:    workers,
 			ErrMode:        mode,
 			ProgressOffset: o.ProgressBase,
 			ProgressTotal:  o.ProgressTotal,
@@ -195,8 +207,7 @@ func t6g7NativeItems(rc *tasks.RC) t6g7ItemsFunc {
 		_, err := tasks.RunItems(rc, par, idx, func(ic *tasks.ItemRC, i int) error {
 			return fn(ic.Context(), i)
 		}, tasks.ItemsOptions[int]{OnError: mode, ProgressBase: o.ProgressBase, ProgressTotal: o.ProgressTotal, Label: label})
-		var ie *tasks.ItemsError
-		if errors.As(err, &ie) {
+		if ie, ok := errors.AsType[*tasks.ItemsError](err); ok {
 			if o.Collect && len(ie.Errs) > 0 {
 				return errors.Join(ie.Errs...)
 			}
