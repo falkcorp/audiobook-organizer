@@ -437,3 +437,25 @@ func TestFoldOIDC_NonStringIDIsAnError(t *testing.T) {
 		t.Errorf("= %s, %v", got, err)
 	}
 }
+
+// A partial write leaves the allow-list and the role as prev spells them,
+// byte for byte, even where the fold would spell them differently.
+func TestFoldOIDC_PartialWriteLeavesPolicyUntouched(t *testing.T) {
+	prev := `[{"id":"github","kind":"github","client_id":"gh-batman","allowed_emails":[" Bruce@batcave.example "],"default_role":" editor "}]`
+	got := foldOK(t, vals(t, map[string]any{"oauth_github_client_id": "gh-nightwing"}), prev)
+	wantJSON(t, got, `[{"id":"github","kind":"github","client_id":"gh-nightwing","allowed_emails":[" Bruce@batcave.example "],"default_role":" editor "}]`)
+}
+
+func TestFoldRoots_AnAliasWithNoRootNeverMatchesARootWithNoPath(t *testing.T) {
+	prev := `[{"id":"import-1","path":"","role":"import"}]`
+	got, err := FoldRoots("", json.RawMessage(`[{"windows":"W:"}]`), json.RawMessage(prev))
+	if !errors.Is(err, ErrNotRepresentable) || got != nil {
+		t.Errorf("FoldRoots = %s, %v; want ErrNotRepresentable", got, err)
+	}
+}
+
+func TestFoldRoots_AliasGoesToTheFirstRootAtItsPath(t *testing.T) {
+	prev := `[{"id":"import-1","path":"/gotham/imports/one"},{"id":"import-2","path":"/gotham/imports/one/"}]`
+	got := rootsOK(t, "", aliasJSON(t, headPathAlias{Root: "/gotham/imports/one", Windows: "Y:"}), prev)
+	wantJSON(t, got, `[{"id":"import-1","path":"/gotham/imports/one","aliases":[{"windows":"Y:"}]},{"id":"import-2","path":"/gotham/imports/one/"}]`)
+}

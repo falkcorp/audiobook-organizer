@@ -1,5 +1,5 @@
 // file: internal/books/cutover/rename_unconvert.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d042fa77-8702-4e8f-8fee-47d908a4ca77
 // last-edited: 2026-11-19
 
