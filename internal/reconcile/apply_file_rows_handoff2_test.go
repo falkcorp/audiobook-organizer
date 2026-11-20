@@ -39,8 +39,6 @@ func anotherWriterRepoints(t *testing.T, f *applyFixture, id string, hash, organ
 	}
 }
 
-func ptr(s string) *string { return &s }
-
 // m1: the book already holds the matched path when the apply writes it (another
 // writer got there after the plan), and its hashes are still the ones the plan
 // read. The apply's contract for a non-hash match is that the hashes go, so they
@@ -84,7 +82,7 @@ func TestExecuteReconcile_AHashRowForAClearThatNeverRanIsVoided(t *testing.T) {
 	row := f.row(id, old)
 	setBookHashes(t, f, id, "book-hash", "organized-hash")
 	store := &failingStore{PebbleStore: f.ps, failRowAfter: -1}
-	store.beforeBookCall = anotherWriterRepoints(t, f, id, ptr("newer-hash"), nil)
+	store.beforeBookCall = anotherWriterRepoints(t, f, id, new("newer-hash"), nil)
 
 	res, err := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath, MatchType: "filename"})
 	if err != nil || res.Applied != 1 {
@@ -113,7 +111,7 @@ func TestExecuteReconcile_ABookWithNoRowsRepointedByAnotherWriterLeavesNoLiveRow
 	id := f.book("Batman: Year One", f.missingPath("Year One.m4b"))
 	setBookHashes(t, f, id, "book-hash", "organized-hash")
 	store := &failingStore{PebbleStore: f.ps, failRowAfter: -1}
-	store.beforeBookCall = anotherWriterRepoints(t, f, id, ptr("newer-hash"), nil)
+	store.beforeBookCall = anotherWriterRepoints(t, f, id, new("newer-hash"), nil)
 
 	res, err := f.apply(store, "op-1", ReconcileApplyItem{BookID: id, NewPath: f.newPath, MatchType: "filename"})
 	if err != nil || res.Applied != 1 {
