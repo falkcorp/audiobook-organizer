@@ -23,8 +23,8 @@ The workstream index for agents is
 with its wave, tier, dependencies, files and spec sections. The same rows exist as JSON for the brief
 writers.
 
-**Size: 134 rows: 128 agent tasks, each one PR, and 6 owner checkpoints (NOT AGENT WORK),
-in 46 waves.**
+**Size: 135 rows: 129 agent tasks, each one PR, and 6 owner checkpoints (NOT AGENT WORK),
+in 47 waves** (F8-04 split into F8-04a and F8-04b on 2026-11-20; the second takes the wave W38b).
 
 ---
 
@@ -65,7 +65,7 @@ OWNER-03, before F3-08 and in OWNER-05; R2-02 is folded into OWNER-05 and R1-31 
 | R2, F5 | tasks and the log journal with its query route; conversion groups T2–T7; M4, M5 | 05-tasks §5T.8; 05-logging §5, §11 | F5-01 … F5-16, F5-18, F5-19 |
 | R2, F6 | outbox and realtime, the outbox operator routes, the journal's live tail | 05-events §5E.11, §5E.13; 05-realtime §11; 05-logging §5 | F6-01 … F6-05 |
 | R2, F7 | integrations with their instance routes, AI jobs, provider gates, library roots, notify; M6 | 05-metadata M1.3, M1.10; 05-ai §10; 05-notify §10; 05-library §5L.10 | F7-01 … F7-10 |
-| R2, F8 | backup, the updater move, health, the kernel `/metrics` mount | 05-backup §5B.10; 05-updater; 05-health §5H.10; 05-metrics §13 | F8-01 … F8-04, and F8-03b (the diagnostics bundle follow-up) |
+| R2, F8 | backup, the updater move, health, the kernel `/metrics` mount | 05-backup §5B.10; 05-updater; 05-health §5H.10; 05-metrics §13 | F8-01 … F8-03, F8-04a (backup, health, metrics), F8-04b (the updater; F8-04 was split on 2026-11-20), and F8-03b (the diagnostics bundle follow-up) |
 | R3, F9 | the whole shell (owner direction 2026-11-16, §(l) item 7): all five rows merge after OWNER-05, the dark rows first and the flip F9-03 last | 07 §7.11, §7.19 steps 4–5 | F9-01 … F9-05 |
 | R2, last PR | the runbook and the R2 release note; the owner ends the freeze in OWNER-05 | 09 §9.2.9, §9.4 R2 | R2-01 |
 | R3 | deletions, the service registry's last clusters, `legacy-file-cleanup`, `UpgradeFloor{InstallFirst: <R2 tag>}`, the R3 release note | 09 §9.4 R3; 09 §9.2.2; 06 §6.11.1 steps 4, 6 | R3-01 … R3-05 |
@@ -124,7 +124,7 @@ OWNER-01 (OWNER, 0.5) → R0-05 (T4, 3) → OWNER-02 (OWNER, 1) → R1-35 (T1, 0
 
 R0 and R1 take 30 of these days; R1's storage chain (R1-20 → R1-21 → R1-23 → R1-25) and the deploy
 tooling close R1. In R2 the path runs through the config and identity dark work into the serialized flips
-F3-07 → F4-08 → F5-18 → F6-03 → F7-09 → F8-04, each a one-PR atomic change (09 §9.2.1), so R2's length is
+F3-07 → F4-08 → F5-18 → F6-03 → F7-09 → F8-04a → F8-04b (F8-04 split on 2026-11-20; F8-04a depends on neither F6-03 nor F7-09 and may merge ahead of them), each a one-PR atomic change (09 §9.2.1), so R2's length is
 set by the flip PRs, not by the dark work, which almost all fits beside them.
 
 **Treat the base case as a floor.** It assumes unlimited parallel agents, no merge-queue time, owner
@@ -228,7 +228,8 @@ What makes the plan safe beyond the per-wave rule:
 | W35 | F5 | F5-18 | 6.5 | every dependency merged in an earlier wave (check 2); F5-18 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F5-18 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; F5-18 is the wave's one owner of the kernel and module wiring files. |
 | W36 | F6 | F6-03 | 3.5 | every dependency merged in an earlier wave (check 2); F6-03 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F6-03 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; F6-03 is the wave's one owner of the kernel and module wiring files. |
 | W37 | F7, F8 | F7-09, F8-03b | 3.5 | 2 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F7-09 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F7-09 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; F8-03b lands dark (it mounts no route and changes no schedule or stored row; it replaces the diagnostics path redactor and deletes the marker and archtest gate that keep every mount blocked, and F8-04, the F8 flip that mounts the diagnostics routes, waits for it in a later wave); F7-09 is the flip here, and the wave's one owner of the kernel and module wiring files. |
-| W38 | F8 | F8-04 | 3.5 | every dependency merged in an earlier wave (check 2); F8-04 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F8-04 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; F8-04 is the wave's one owner of the kernel and module wiring files. |
+| W38 | F8 | F8-04a | 2.0 | every dependency merged in an earlier wave (check 2); F8-04a (backup, health, metrics, the status publisher; F8-04's first half) is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; it runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; F8-04a is the wave's one owner of the kernel and module wiring files. It depends on F3-07, F4-08 and F5-18 only, so by the 2026-11-20 ruling it may merge before F6-03 (whichever is green first; the second rebases the shared lines and deletes `toplevel_auth_chain.go`): the wave number is the dispatch order, not a merge gate. |
+| W38b | F8 | F8-04b | 1.5 | every dependency merged in an earlier wave (check 2; W38b sorts between W38 and W39, `check_waves.py` pins it); F8-04b (the updater; F8-04's second half) is the one PR here touching main.go, internal/server/ and books' registration; it follows F8-04a, which owns the shared wiring files and `core.json` in series; its dependency on F7-09 is soft (nil `Deps.HTTP` and `Deps.Notify` keep HEAD's behaviour) and is listed so the plan keeps the order; it runs inside its own announced move window. |
 | W39 | R2 | R2-01 | 1.0 | every dependency merged in an earlier wave (check 2). |
 | W40 | OWNER | OWNER-05 | 1.0 | owner checkpoint OWNER-05: no files, NOT AGENT WORK; it gates the tasks that depend on it. |
 | W41 | F9, R3 | F9-01, R3-02 | 3.0 | 2 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); the F9 PR here lands dark (R3's, after OWNER-05; no route, schedule or stored row changes before F9-03). |
@@ -354,7 +355,7 @@ cutover suite never move to the nightly run (09 §9.2.10).
 | F6 (stream tests) | the hub stream tests of 05-realtime (`TestHub_ResumeFromLastEventID`, `TestHub_PerEventPermissionFilter`, `TestHub_RefusalsAreStatusesBeforeStream`) | 09 §9.4.1 (F6: the stream tests) | F6-02 |
 | F7 (integrations) | `TestBooksIndexRebuiltAtCutover` (the search oracle) | 09 §9.4.1 (F7); §9.4 R2 Verification | F7-09 |
 | F7 (integrations) | the webhook delivery test (`TestWebhook_JSONBodyGolden`, `TestWebhook_SignatureWithTimestamp`) | 09 §9.4.1 (F7); §9.4 R2 Verification | F7-05 |
-| F8 (backup, updater, health, metrics) | the dashboard-reference test over the kernel /metrics mount (extension of `TestDeployReferencedSeriesServed`) | 09 §9.4.1 (F8) | F8-04 |
+| F8 (backup, updater, health, metrics) | the dashboard-reference test over the kernel /metrics mount (extension of `TestDeployReferencedSeriesServed`) | 09 §9.4.1 (F8) | F8-04a |
 | F9 (shell) | the shell's checks (make build-api && ./audiobook-organizer serve answers / with the placeholder, and `TestABOManifestBootsWithShell`) | 09 §9.4.1 (F9: the shell's checks); 07 §7.19 step 4 | F9-03 |
 | R2 (step 3) | the generated-client coverage check (name coined here) | 09 §9.4.1 (07 §7.19 step 3) | R1-30 |
 | R3 (floor) | `TestPreR2StoreRefusedByR3` (the exit-78 boot test) | 09 §9.4 R3 Verification; §9.10 | R3-02 |
@@ -395,7 +396,7 @@ cutover suite never move to the nightly run (09 §9.2.10).
 | F8 (updater move; 05-*) | `TestABOUpdaterSourceMatchesHEAD` | 05-updater §5U.11, §5U.12 (R2 done-check) | F8-02 |
 | F8 (updater move; 05-*) | `TestApply_RawAssetNoBackup` | 05-updater §5U.11, §5U.12 (R2 done-check) | F8-02 |
 | F8 (updater move; 05-*) | `TestFetchRelease_NamedReleaseOnly` | 05-updater §5U.11, §5U.12 (R2 done-check) | F8-02 |
-| F8 (backup; 05-*) | `TestLegacyArchiveRestoreThenMigrate` | 05-backup §5B.10; 05-config §1.12.2 | F8-04 |
+| F8 (backup; 05-*) | `TestLegacyArchiveRestoreThenMigrate` | 05-backup §5B.10; 05-config §1.12.2 | F8-04a |
 | R1 (metrics core cells; 05-*) | `TestNoGlobals` | 05-metrics §12 | R1-13 |
 | R1 (metrics core cells; 05-*) | `TestKernelFamiliesGathered` | 05-metrics §12 | R1-13 |
 | R1 (metrics core cells; 05-*) | `TestFamilyTaken_ThroughGlobalProvider` | 05-metrics §12 | R1-15 |
@@ -437,7 +438,7 @@ From 14 §14.1 and §14.1.1; each row names the tasks that carry the mitigation.
 | Risk (14) | Plan mitigation |
 |---|---|
 | K20 — gates that gate nothing: merges and RCs were not CI-gated, a production minor auto-promoted every 10 RCs | OWNER-01 settles Q-I before R1-01; R1-02, R1-03, R1-04 build the named required checks; the owner's `RELEASE_FREEZE` variable (R1-35's switch) holds each freeze until the release is cut (D15); no merge with `--admin` past a required check. `/parallel-sweep` never admin-merges (Q-I (a), D15): it enqueues in the merge queue |
-| E14 — R2's blast radius, one release changing every core service | R1 carries the runtime half; every R2 subsystem lands dark first and its flip is one PR that only wires, deletes and switches callers; each flip is the only PR of its wave touching `main.go`, `internal/server/` and books' registration (waves W32, W34, W35, W36, W37, W38, W44) |
+| E14 — R2's blast radius, one release changing every core service | R1 carries the runtime half; every R2 subsystem lands dark first and its flip is one PR that only wires, deletes and switches callers; each flip is the only PR of its wave touching `main.go`, `internal/server/` and books' registration (waves W32, W34, W35, W36, W37, W38, W38b, W44) |
 | E1, E18 — a one-way migration loses data, with no previous-build oracle | F2-12 has the R0 binary write the corpus and record the answers; F2-13 the labelled overlay; F2-14 the production-shaped store; F2-15 the per-family, ID, reference and byte-identity checks and the restore drill; F2-06 the crash matrix at every chunk; F3-04 the dry run |
 | E3 — the shared `idx:` and `setting:` families split wrongly | F2-15's sub-prefix lists generated from `keyfamilies.go` and the census, with the byte-identity check on every R2 PR |
 | E4, E10 — secrets lost or plaintext copies left behind | F3-06 keeps HEAD's key guard and quarantines an undecryptable row; F3-03 the keyring export; F3-07 the no-plaintext canary; R1-24 the 7-day sweeper; OWNER-05 steps 1 and 7 |
@@ -651,12 +652,12 @@ decides" (09 §9.4.1; 04 §4.6 and open item 1); until then R1-26 renames it wit
 | F8 | create | `mediacore/updater` | F8-02 |
 | F8 | grow | `mediacore/health` | F8-03 |
 | F8 | grow | `mediacore/health/diagnostics` | F8-03 |
-| F8 | move | `internal/backup` → `mediacore/backup` | F8-04 |
-| F8 | move | `internal/server` → `mediacore/health` | F8-04 |
-| F8 | move | `internal/server` → `mediacore/updater` | F8-04 |
-| F8 | move | `internal/server/handlers` → `mediacore/health` | F8-04 |
-| F8 | move | `internal/startup` → `mediacore/kernel` | F8-04 |
-| F8 | move | `internal/sysinfo` → `mediacore/health` | F8-04 |
+| F8 | move | `internal/backup` → `mediacore/backup` | F8-04a |
+| F8 | move | `internal/server` → `mediacore/health` | F8-04a |
+| F8 | move | `internal/server` → `mediacore/updater` | F8-04b |
+| F8 | move | `internal/server/handlers` → `mediacore/health` | F8-04a |
+| F8 | move | `internal/startup` → `mediacore/kernel` | F8-04a |
+| F8 | move | `internal/sysinfo` → `mediacore/health` | F8-04a |
 | F8 | move | `internal/updater` → `mediacore/updater` | F8-02 |
 | F9 | create | hello web package | F9-01 |
 | F9 | create | `mediacore/ui` (full package, leaf since R1) | F9-01 |
@@ -722,7 +723,7 @@ tier when its base-commit re-verification finds more than the plan assumed; it n
 
 - **IDs** encode the release: `R0-nn`, `R1-nn`, `F2-nn` … `F9-nn` (R2's foundation and flips; F9, the shell, is R3's), `R2-nn` (R2's
   closing PRs), `R3-nn`, and `OWNER-nn` for owner checkpoints. The flips keep their first IDs (F3-07, F4-08,
-  F5-18, F6-03, F7-09, F8-04, F9-03); rows added later take the next free number of their label, and F5-17 is
+  F5-18, F6-03, F7-09, F8-04a, F8-04b, F9-03; F8-04 was one row until 2026-11-20); rows added later take the next free number of their label, and F5-17 is
   retired (its `tasklint` work is F2-17). One row, F8-03b (a follow-up to the merged F8-03), takes a lowercase
   letter after its parent's number because its name was the diagnostics marker's (the marker, its
   run-time refusal and its archtest gate, all deleted by that row); `tools/check_waves.py` accepts that form and
@@ -793,12 +794,12 @@ Each is a choice inside 09's rules, recorded so a reviewer can overturn it.
     `scripts/r2corpus/`.
 11. **Callers move with the code.** A move rewrites every caller in its own PR, with no forwarding shim (04 §2.1:
     the staying side's references are rewritten in the same PR): F4-02 lists its callers, F7-09 every importer
-    of what it moves, F8-04 every first-party `/api/health` caller (09 §9.2.9).
+    of what it moves, F8-04a every first-party `/api/health` caller (09 §9.2.9).
 12. **A gate whose last half needs the flip is the flip's.** `TestBooksIndexRebuiltAtCutover` is F7-09's (F7-08
-    lands the dark half), `TestLegacyArchiveRestoreThenMigrate` F8-04's (after F8-01's staging half) and
+    lands the dark half), `TestLegacyArchiveRestoreThenMigrate` F8-04a's (after F8-01's staging half) and
     `TestOIDC_AppHandoffMintsABSCode` F4-08's (after F4-05's core cells). A test that exists from an earlier
     release is owned by the row that creates it and extended later: `TestHealth_UnauthenticatedTokenSetGolden`
-    by R0-06 (R1-24, F2-10 and F8-04 extend it), `TestABOMetricsGatherNoDuplicate` by R1-15 (F2-03 extends it).
+    by R0-06 (R1-24, F2-10 and F8-04a extend it), `TestABOMetricsGatherNoDuplicate` by R1-15 (F2-03 extends it).
 13. **Leaf types before the tasks API.** F2-01 waits for F2-09 and F2-10 instead of carrying fallback types;
     `tasks.RunViewRedactor`, whose `events.RedactFunc` has its first consumer in the realtime filter, lands
     with F6-02, so F2-01 does not wait for `events`.
@@ -863,7 +864,7 @@ questions the plan carries instead:
 12. **Owner facts are committed.** OWNER-02 records the R0 tag, and F2-12 commits it as `ci/r0_release.txt`, the
     same way F3-08 commits the pre-freeze tag.
 13. **Direction, agent cap and the two-tier review bar (owner, 2026-11-16).** Product work comes first. All seven
-    flip rows (F3-07, F4-08, F5-18, F6-03, F7-09, F8-04, F9-03) are ON HOLD until the owner lifts the hold: no agent
+    flip rows (F3-07, F4-08, F5-18, F6-03, F7-09, F8-04a, F8-04b, F9-03) are ON HOLD until the owner lifts the hold: no agent
     starts, enqueues or merges one. At most 3 agents work on dark platform rows at a time. Reviews use two tiers:
     - **Dark tier**, for a row that only adds code no live path executes (a dark kind, a package nothing registers,
       tests, docs): it merges at 0 blocker and 0 major with CI green. Its minors do not go back for another round;

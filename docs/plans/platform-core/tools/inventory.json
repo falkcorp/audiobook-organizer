@@ -2990,10 +2990,12 @@
    "internal/serviceregistry/",
    "internal/books/cutover/stepids.go",
    "core/internal/loghttp/",
-   "internal/books/schedules_registered_test.go"
+   "internal/books/schedules_registered_test.go",
+   "core/internal/executor/",
+   "core/kernel/events.go"
   ],
   "spec": "09 §9.4 R2 flips table F5, §9.6 rows 2, 13, 17; 03 §3.8 F5; 05-tasks §5T.8.1, §5T.8.2 (F5 flip row); 05-metrics §13 items 1, 3; 05-logging §11 item 1 (R2 part); 05-events §5E.13; 05-realtime §11; 04 §8.1 F5; 06 §6.4.10 F5; 05-logging §5 (the query route lands here); 05-tasks §5T.8.4 (the exemptions empty)",
-  "notes": "Tier: the tasks flip deletes HEAD's engine and moves every definition at once. Creates internal/books/contract and the internal/books/writer rename; the HEAD run-row store files and legacy step 66's body move into internal/books/cutover. Does not delete opsgen, ops.ts or internal/operations/state (R3-02). G6/G7 hold from here. Deletes its own exemption entry file (the files of the HEAD definitions it deletes, T4's among them) and switches the ratchet to require the directory empty. Mounts F5-19's journal query route, deletes HEAD's GET /api/v1/system/logs and moves the SPA's log view to the native route (polling until F6). Moves every caller of pkg/plugin/sdk to core/tasks and module.Registrar (R3-01 deletes the package). Folds the shared bodies into their native shells, hands the sched hooks books.ScheduleFor, re-runs TestParity_ResumeCancelShutdown over the converted definitions and extends TestCutover_RepairsRowsAndMarksImported and TestCutover_TasksFixtureFromR0; rule 1's widened write sets start gating dispatch (an R2 release-note line); retention_and_hygiene drops its run-history half; deletes the ServiceDefs of ophub, opregistry, the four activity services and the five plugins (06 §6.11.1 step 4). Un-skips the stage-13 permission, guard and 401 cells of the route package it mounts. 04 keys: F5 create internal/books/contract; F5 rename internal/operations/opswriter -> internal/books/writer; F5 move internal/operations -> mediacore/tasks; F5 move internal/operations/childop -> mediacore/tasks; F5 move internal/operations/freshness -> mediacore/tasks; F5 move internal/operations/opmode -> mediacore/tasks; F5 move internal/operations/opswriter -> mediacore/tasks; F5 move internal/walkresume -> mediacore/tasks; F5 move pkg/ops -> mediacore/tasks; F5 move pkg/plugin/sdk -> mediacore/tasks; F5 move pkg/ops/opstest -> mediacore/tasks/taskstest; F5 move internal/maintenance -> mediacore/tasks; F5 move internal/operations/registry -> mediacore/internal/executor; F5 move internal/opsmetrics -> mediacore/internal/executor; F5 move internal/scheduler -> mediacore/internal/scheduler; F5 move internal/server/handlers -> mediacore/internal/taskhttp; F5 move internal/server/handlers/operations -> mediacore/internal/taskhttp; F5 move internal/server/handlers/opsv3 -> mediacore/internal/taskhttp; F5 move internal/scheduler -> internal/books; F5 move internal/operations/registry -> internal/books/contract; F5 move internal/server -> internal/books; F5 move internal/operations/registry -> internal/activity; F5 move internal/database -> internal/books/cutover; F5 delete internal/maintenance; F5 delete internal/opscatalog; F5 delete internal/plugins; F5 delete internal/logger/mocks. Owns gate tests: TestKindRenameMapCoversLedger; TestSecondModuleNoAudiobookEdit (G6/G7); tasklint's exemption directory empty at the flip. Flip PR: one atomic PR (09 §9.2.1)."
+  "notes": "Tier: the tasks flip deletes HEAD's engine and moves every definition at once. Creates internal/books/contract and the internal/books/writer rename; the HEAD run-row store files and legacy step 66's body move into internal/books/cutover. Does not delete opsgen, ops.ts or internal/operations/state (R3-02). G6/G7 hold from here. Deletes its own exemption entry file (the files of the HEAD definitions it deletes, T4's among them) and switches the ratchet to require the directory empty. Mounts F5-19's journal query route, deletes HEAD's GET /api/v1/system/logs and moves the SPA's log view to the native route (polling until F6). Moves every caller of pkg/plugin/sdk to core/tasks and module.Registrar (R3-01 deletes the package). Folds the shared bodies into their native shells, hands the sched hooks books.ScheduleFor, re-runs TestParity_ResumeCancelShutdown over the converted definitions and extends TestCutover_RepairsRowsAndMarksImported and TestCutover_TasksFixtureFromR0; rule 1's widened write sets start gating dispatch (an R2 release-note line); retention_and_hygiene drops its run-history half; deletes the ServiceDefs of ophub, opregistry, the four activity services and the five plugins (06 §6.11.1 step 4). Un-skips the stage-13 permission, guard and 401 cells of the route package it mounts. Publishes the three core.task.* topics (core.task.run-changed.v1, core.task.log-appended.v1, core.task.finished.v1) after each run commit and declares them in coreTopics() unless slice E6a landed first (amendment 2026-11-20; F6-03 STOPs without them). 04 keys: F5 create internal/books/contract; F5 rename internal/operations/opswriter -> internal/books/writer; F5 move internal/operations -> mediacore/tasks; F5 move internal/operations/childop -> mediacore/tasks; F5 move internal/operations/freshness -> mediacore/tasks; F5 move internal/operations/opmode -> mediacore/tasks; F5 move internal/operations/opswriter -> mediacore/tasks; F5 move internal/walkresume -> mediacore/tasks; F5 move pkg/ops -> mediacore/tasks; F5 move pkg/plugin/sdk -> mediacore/tasks; F5 move pkg/ops/opstest -> mediacore/tasks/taskstest; F5 move internal/maintenance -> mediacore/tasks; F5 move internal/operations/registry -> mediacore/internal/executor; F5 move internal/opsmetrics -> mediacore/internal/executor; F5 move internal/scheduler -> mediacore/internal/scheduler; F5 move internal/server/handlers -> mediacore/internal/taskhttp; F5 move internal/server/handlers/operations -> mediacore/internal/taskhttp; F5 move internal/server/handlers/opsv3 -> mediacore/internal/taskhttp; F5 move internal/scheduler -> internal/books; F5 move internal/operations/registry -> internal/books/contract; F5 move internal/server -> internal/books; F5 move internal/operations/registry -> internal/activity; F5 move internal/database -> internal/books/cutover; F5 delete internal/maintenance; F5 delete internal/opscatalog; F5 delete internal/plugins; F5 delete internal/logger/mocks. Owns gate tests: TestKindRenameMapCoversLedger; TestSecondModuleNoAudiobookEdit (G6/G7); tasklint's exemption directory empty at the flip. Flip PR: one atomic PR (09 §9.2.1)."
  },
  {
   "id": "F6-01",
@@ -3080,6 +3082,7 @@
   "wave": "W36",
   "tier": "T4",
   "depends_on": [
+   "F4-08",
    "F5-18",
    "F6-01",
    "F6-02",
@@ -3096,20 +3099,7 @@
    "core/module/deps.go",
    "core/openapi/core.json",
    "core/web/packages/api-client/src/generated/",
-   "internal/organizer/inplace_multifile.go",
-   "internal/organizer/pipeline.go",
-   "internal/audiobooks/revert.go",
-   "internal/undo/current.go",
-   "internal/undo/engine.go",
-   "internal/undo/restorable.go",
    "internal/plugins/deluge/path_update.go",
-   "internal/plugins/deluge/plugin.go",
-   "internal/plugins/maintenance/folder_books_fixer.go",
-   "internal/plugins/maintenance/fragment_consolidation_fixer.go",
-   "internal/plugins/maintenance/fs_regroup_xml.go",
-   "internal/plugins/maintenance/reconcile_fixer.go",
-   "internal/plugins/maintenance/retire_into.go",
-   "internal/books/store/change_type_class.go",
    "internal/realtime/",
    "internal/server/",
    "internal/itunes/service/",
@@ -3117,10 +3107,23 @@
    "web/src/",
    "internal/arch/layering_test.go",
    "scripts/ci/short_test_weights.json",
-   "core/internal/outboxhttp/routes_test.go"
+   "core/internal/outboxhttp/routes_test.go",
+   "internal/books/store/book_relocated_outbox.go",
+   "internal/books/store/pebble_store.go",
+   "internal/plugins/deluge/relocation_consumer.go",
+   "internal/plugins/deluge/kinds.go",
+   "core/kernel/realtime.go",
+   "core/kernel/events.go",
+   "core/archtest/outbox_consumers.go",
+   "internal/books/cutover/reach_gate_test.go",
+   "internal/books/cutover/reach_golden_test.go",
+   "internal/books/cutover/reach_baseline_test.go",
+   "scripts/deadcode-baseline.txt",
+   ".mockery.yaml",
+   "web/tests/e2e/"
   ],
   "spec": "09 §9.4 R2 flips table F6, §9.6 row 2; 03 §3.8 F6; 05-realtime §11; 05-events §5E.13; 07 §7.9.2; 06 §6.4.10 F6",
-  "notes": "Tier: the events flip moves the SPA's realtime client. books.book.relocated.v1 becomes a durable outbox topic consumed into books.deluge.path-update. Stages books.book.relocated.v1 in the batch of every book move (organizer, revert, undo, the fixers that name the path-update follow-up) for the Deluge path-update consumer; wires the relay and the hub with the F6 members OutboxConsumers, OutboxHandler and Outbox; mounts F6-04's routes; the SPA's log view moves from polling to F6-05's live tail. Un-skips the stage-13 permission, guard and 401 cells of the route package it mounts. 04 keys: F6 move internal/realtime -> mediacore/realtime. Flip PR: one atomic PR (09 §9.2.1)."
+  "notes": "Tier: the events flip moves the SPA's realtime client. books.book.relocated.v1 becomes a durable outbox topic consumed into books.deluge.path-update. Amended 2026-11-20 (pre-scope E7, 15 blockers): the relocation is staged once in the store's path-write funnel by #4798, so no producer file is edited and the 14-producer list is gone; this PR wires SetRelocationOutbox, the topic declaration, the outbox owner and the consumer, and deletes NotifyDelugeAfterOrganize; the version-swap and import moves stay in-process; the SPA switches onto web/src/services/coreEvents (#4785) and deletes eventSourceManager.ts, with a page.route fetch-stream mock for e2e; F5-18 publishes the core.task.* topics; F8-04a owns the status publisher and merges independently of this row; wires the relay and the hub with the F6 members OutboxConsumers, OutboxHandler and Outbox; mounts F6-04's routes; the SPA's log view moves from polling to F6-05's live tail. Un-skips the stage-13 permission, guard and 401 cells of the route package it mounts. 04 keys: F6 move internal/realtime -> mediacore/realtime. Flip PR: one atomic PR (09 §9.2.1)."
  },
  {
   "id": "F7-01",
@@ -3628,13 +3631,15 @@
   "notes": "Tier: a sanitizer that decides what a third party may read; Opus review and a T3 security review before merge. A follow-up row of the merged F8-03 (round 7 and 8 reviews of PR #4658), named F8-03b because its name was the marker's (the marker, the runtime refusal and the archtest gate this row deleted); the rows-take-the-next-free-number rule would call it F8-05. Replaces the token scanner in core/health/diagnostics/paths.go, applies the sanitizer to every byte that leaves (Writer.JSON values and keys, Writer.File lines, manifest text, zip entry names, the health route's Detail) and deletes the marker, the runtime refusal in New and Build, and the archtest gate, probe pin and linker-flag guard (the four core/archtest/f803b_*.go files, which are therefore no longer listed under files). Landed in round 13 of seams.d/F8-03.md. Covers no 04 key of its own: F8-03 owns the F8 grow of mediacore/health/diagnostics. F8-04 depends on it: F8-04 mounts the diagnostics routes. Dark: no route is mounted, nothing in ABO switches."
  },
  {
-  "id": "F8-04",
-  "title": "F8 flip, one PR: backup in core's layout with its routes, the updater move wired, health wired with /api/health and /api/v1/health deleted and every caller switched to /health, the kernel /metrics mount with no rename, InterimExport and app.Options.InterimBackends deleted",
+  "id": "F8-04a",
+  "title": "F8 flip part a, one PR: backup in core's layout with its routes and books' restore stager on it, health wired with /api/health and /api/v1/health deleted and every caller switched to /health, the kernel /metrics mount with no rename, the status-topic publisher, InterimExport and app.Options.InterimBackends deleted",
   "release": "F8",
   "wave": "W38",
   "tier": "T4",
   "depends_on": [
-   "F7-09",
+   "F3-07",
+   "F4-08",
+   "F5-18",
    "F8-01",
    "F8-02",
    "F8-03",
@@ -3643,10 +3648,8 @@
   "files": [
    "main.go",
    "cmd/root.go",
-   "internal/books/module.go",
    "internal/server/",
    "internal/backup/",
-   "internal/updater/",
    "internal/startup/",
    "internal/sysinfo/",
    "internal/diagnostics/",
@@ -3659,7 +3662,6 @@
    "core/openapi/core.json",
    "core/web/packages/api-client/src/generated/",
    "core/app/offline.go",
-   "internal/books/services.go",
    "internal/activity/writer_test.go",
    "web/tests/e2e/book-detail.spec.ts",
    "web/tests/e2e/files-history.spec.ts",
@@ -3684,10 +3686,65 @@
    "web/src/",
    "deploy/",
    "internal/arch/layering_test.go",
-   "scripts/ci/short_test_weights.json"
+   "scripts/ci/short_test_weights.json",
+   "core/kernel/backup_wire.go",
+   "core/kernel/diagnostics_wire.go",
+   "core/backup/",
+   "core/health/diagnostics/",
+   "web/src/services/coreBackups/",
+   "web/tests/e2e/backup-restore.spec.ts",
+   "internal/books/",
+   "internal/appdirs/",
+   "internal/config/",
+   "internal/books/cutover/reach_gate_test.go",
+   "internal/books/cutover/reach_golden_test.go",
+   "internal/books/cutover/reach_baseline_test.go",
+   "scripts/deadcode-baseline.txt"
   ],
   "spec": "09 §9.4 R2 flips table F8, §9.6 rows 3, 19; 03 §3.8 F8; 05-backup §5B.10; 05-health §5H.10; 05-metrics §6, §13; 05-http-api §8.1 F8 row; 06 §6.4.10 F8",
-  "notes": "Tier: the backup, health and metrics flip changes /health callers and the metrics mount. /health becomes Basic-exempt in place of the deleted paths (TestBasicGate_ExemptSetGolden updated). The first core.backup.create writes mediacore-backup/1. Switches every first-party /api/health and /api/v1/health caller to /health in this PR (09 §9.2.9): e2e, workflows, scripts, docs and the deploy skill. Adds the F8 module members (StartupSteps, Diagnostics, Backup), updater fetch-release, and TestHealth_UnauthenticatedTokenSetGolden's F8 cells; deletes the ServiceDefs of updater, updatescheduler, system, dashboard and metricsstore (06 §6.11.1 step 4). 04 keys: F8 move internal/backup -> mediacore/backup; F8 move internal/server -> mediacore/updater; F8 move internal/sysinfo -> mediacore/health; F8 move internal/server -> mediacore/health; F8 move internal/server/handlers -> mediacore/health; F8 move internal/startup -> mediacore/kernel. Owns gate tests: the dashboard-reference test over the kernel /metrics mount (extension of TestDeployReferencedSeriesServed); TestLegacyArchiveRestoreThenMigrate. Flip PR: one atomic PR (09 §9.2.1)."
+  "notes": "Tier: the backup, health and metrics flip (part a of the 2026-11-20 split of F8-04) changes /health callers, the metrics mount and books' live restore stager. /health becomes Basic-exempt in place of the deleted paths (TestBasicGate_ExemptSetGolden updated). The first core.backup.create writes mediacore-backup/1. Switches every first-party /api/health and /api/v1/health caller to /health in this PR (09 §9.2.9): e2e, workflows, scripts, docs and the deploy skill. Adds the F8 module members (StartupSteps, Diagnostics, Backup), and TestHealth_UnauthenticatedTokenSetGolden's F8 cells; deletes the ServiceDefs of system, dashboard and metricsstore (06 §6.11.1 step 4); the updater and updatescheduler ServiceDefs are F8-04b's. Re-points books' restore stager onto core backup and needs a read-only prod-copy restore rehearsal before merge. Owns the status publisher (SetStatusPublisher). Depends on F3-07, F4-08 and F5-18, not on F6-03 or F7-09: merges independently of F6-03, whichever is green first. 04 keys: F8 move internal/backup -> mediacore/backup; F8 move internal/sysinfo -> mediacore/health; F8 move internal/server -> mediacore/health; F8 move internal/server/handlers -> mediacore/health; F8 move internal/startup -> mediacore/kernel. Owns gate tests: the dashboard-reference test over the kernel /metrics mount (extension of TestDeployReferencedSeriesServed); TestLegacyArchiveRestoreThenMigrate. Flip PR: one atomic PR (09 §9.2.1)."
+ },
+ {
+  "id": "F8-04b",
+  "title": "F8 flip part b, one PR: the core updater wired (app.Options.Updater, routes, found-notification), /api/v1/update/* deleted, the SPA on /api/core/v1/updater*, internal/updater reduced to the options constructor",
+  "release": "F8",
+  "wave": "W38b",
+  "tier": "T4",
+  "depends_on": [
+   "F7-09",
+   "F8-02",
+   "F8-03",
+   "F8-04a"
+  ],
+  "files": [
+   "main.go",
+   "cmd/root.go",
+   "internal/books/module.go",
+   "internal/books/options.go",
+   "internal/server/",
+   "internal/updater/",
+   "core/kernel/boot.go",
+   "core/kernel/kernel.go",
+   "core/kernel/updater.go",
+   "core/module/manifest.go",
+   "core/module/registrar.go",
+   "core/module/deps.go",
+   "core/openapi/core.json",
+   "core/web/packages/api-client/src/generated/",
+   "core/app/options.go",
+   "core/updater/",
+   "web/src/",
+   "docs/specs/platform-core/05-updater.md",
+   "TODO.md",
+   "internal/books/cutover/reach_gate_test.go",
+   "internal/books/cutover/reach_golden_test.go",
+   "internal/books/cutover/reach_baseline_test.go",
+   "internal/arch/layering_test.go",
+   "scripts/ci/short_test_weights.json",
+   "scripts/deadcode-baseline.txt"
+  ],
+  "spec": "09 §9.4 R2 flips table F8, §9.6 row 19; 03 §3.8 F8; 05-updater §5U.3, §5U.10, §5U.12, §5U.13; 05-health §5H.10; 06 §6.4.10 F8",
+  "notes": "Tier: the updater flip (part b of the 2026-11-20 split of F8-04) replaces the running binary. AppID is \"abo\" and the core apply task's asset name follows internal/updater.FetchOptions (goreleaser's raw name, owner ruling O-5; 05-updater §5U.12 is edited here); the old brief's AppID and default RawBinary namer were wrong. Wires app.Options.Updater, updater.FoundTopicSpec in coreTopics, the c/updater/seen storage owner, the health probe and updaterhttp; deletes scheduler.go, register.go, the updatescheduler service, Updater.Install and /api/v1/update/*; moves the options constructor (CoreOptions, FetchOptions, ReleasedAsset) into internal/books before internal/updater goes; verifies at base that F5-18 already deleted the maintenance-window step 1. Soft dependency on F7-09: with Deps.HTTP and Deps.Notify nil the updater keeps HEAD's behaviour (no found notification); the providerhttp Ref the updater uses is open item 7 of 05-updater §5U.13. Depends on F8-04a (shared wiring files and core.json are owned in series). 04 keys: F8 move internal/server -> mediacore/updater. Flip PR: one atomic PR (09 §9.2.1)."
  },
  {
   "id": "F9-01",
@@ -3725,7 +3782,8 @@
   "tier": "T3",
   "depends_on": [
    "F9-01",
-   "F8-04",
+   "F8-04a",
+   "F8-04b",
    "OWNER-05"
   ],
   "files": [
@@ -3782,7 +3840,8 @@
   "tier": "T3",
   "depends_on": [
    "F9-01",
-   "F8-04",
+   "F8-04a",
+   "F8-04b",
    "F9-05"
   ],
   "files": [
@@ -3801,7 +3860,8 @@
   "tier": "T3",
   "depends_on": [
    "F9-01",
-   "F8-04",
+   "F8-04a",
+   "F8-04b",
    "F9-05"
   ],
   "files": [
@@ -3832,7 +3892,8 @@
   "wave": "W44",
   "tier": "T4",
   "depends_on": [
-   "F8-04",
+   "F8-04a",
+   "F8-04b",
    "F9-02",
    "F9-04",
    "F9-05",
@@ -3859,7 +3920,8 @@
   "wave": "W39",
   "tier": "T2",
   "depends_on": [
-   "F8-04"
+   "F8-04a",
+   "F8-04b"
   ],
   "files": [
    "docs/system/runbooks.md",

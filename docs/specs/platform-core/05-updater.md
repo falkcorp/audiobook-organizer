@@ -551,6 +551,19 @@ Check) and the durable clock of the `core.updater.check` kind, which `tasks.Stor
 5. (Closed: 06 `app.Options` has `Updater *updater.Options`.)
 6. (Closed by D10: there is no applied-steps sidecar check and no `StoreState`; `--print-upgrade-floor`
    stays as a fast exit of the binary (05-storage).)
+7. **Which `integrations.Ref` does the updater's outbound client use? (open, found 2026-11-20 in the F8-04 pre-scope.)**
+   `Deps.HTTP` is a `*providerhttp.Client` ("instance-scoped outbound client", the `Deps` struct in 5U.3), and a client is
+   obtained from `Registry.Client(ref integrations.Ref, policy Policy)` (`core/integrations/providerhttp/registry.go:192`).
+   But the updater is not an integration instance: this spec names no `Kind` and no `Instance` for it, and 05-metadata M1
+   addresses every integration by `integrations.Ref{Kind, Instance}`. Until a Ref is decided, the only well-defined wiring is
+   `Deps.HTTP == nil`, where the source falls back to its own https-only client with a 30 s header timeout
+   (`core/updater/updater.go:230`; `core/updater/github/github.go:118-136`), which is HEAD's behaviour but bypasses the
+   `providerhttp` egress policy this spec says the download goes through (5U.4, "Apply"). **Recommendation:** a core-owned fixed
+   Ref, `integrations.Ref{Kind: "core", Instance: "core.updater"}` (name to be matched to M1's reserved-kind rules), with a
+   `Policy` whose `Disabled` and `LANAllow` are read from the `core.updater` config section (so an operator who switched the
+   updater off, or runs a LAN release mirror, controls egress in one place), registered by the kernel, not by a module. Decide it
+   in F7-09's B3 (which builds `providerhttp`) or in F8-04b's slice 8b-3, and add one line to 5U.3 naming the Ref. F8-04b must
+   not set `Deps.HTTP` from a registry before this item is closed; with `Deps.HTTP == nil` it is not blocked.
 
 ## Out-of-scope defects found
 
