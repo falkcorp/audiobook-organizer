@@ -1,0 +1,3 @@
+### Fixed
+
+- `core/health/diagnostics` tests ran for about 9 minutes under `-race` (1307 s of a 25-minute shard on a loaded CI host): `TestSanitize_PlantedMarkerNeverAppears` compiled two regexes in `checkStructure` for each of its 1.43 million inputs and sanitized each input three times. The regexes are now compiled once and only run on words that hold the byte they need, each input is sanitized twice, and the cross product runs as parallel per-form subtests. Two linearity tests stopped rebuilding the sanitizer per key and re-sanitizing their 1 MiB inputs. The package's `-race` run on a 48-core Linux CI host went from 540 s to 29 s; every assertion is unchanged. Test-only change.
