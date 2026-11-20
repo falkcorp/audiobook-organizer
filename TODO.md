@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.55 -->
+<!-- version: 10.78.56 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -530,9 +530,15 @@ into one of the curated sections below, is a normal direct edit.
       and stores nothing. Decide whether the larger fix (a descriptor-level
       validation hook in `integrations`, about 40 lines) replaces the kernel's duty
       to remember the call. Brief: `docs/agent-tasks/platform-core/F7-09-f7-flip-integrations.md`.
+      Hook shipped dark by F7-09 T3 (`Registry.SetValidator`, `ImportValidator`,
+      `RouterOptions.ValidateEndpoints`); what is left is the F7-09 wiring and deleting
+      that option, see `todo.d/f7-09-delete-validate-endpoints-option.md`.
 - [ ] **TODO-F7-03-CLEAR-BENCH** Have the `core.integrations.health` task call
       `ai.Router.ClearBench` on a `HealthOK` probe (F7-09), without clearing a quota
       bench: `GET /v1/models` succeeds on a spent balance.
+      Hook shipped dark by F7-09 T3 (`ClearBench` keeps a quota bench in force,
+      `Options.Probed`, `Router.ObserveProbe`); what is left is wiring `Probed` to
+      `ObserveProbe` in the F7-09 health task.
 - [ ] **TODO-F7-01-HOLD-PERSIST** `integrations.HoldPolicy.Persist` is a dead flag:
       `providerhttp` writes every hold to the store unconditionally and merges the
       field with an OR (`providerhttp/scope.go`), so `false` cannot be expressed and
