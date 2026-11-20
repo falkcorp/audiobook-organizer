@@ -1130,12 +1130,29 @@ rollback-check:
 #     --stage-local-conf /home/alfred/audiobook-organizer-local.conf"
 # Install the bundle FIRST, then sync Makefile.local from Makefile.local.example:
 # the synced recipes call the helper at their first step.
+# APPLY=1 does not run the installer from this checkout: it runs as root and
+# loads scripts/storage_format_guard.py, which the deploy user can edit here.
+# The recipe exports HEAD (the dry run shows the working tree; what is installed
+# is HEAD) to the root-owned $(ROLLBACK_EXPORT_DIR)/aorg-install (default /opt),
+# overwriting what an earlier run left there, and runs the installer from it.
+ROLLBACK_EXPORT_DIR ?= /opt
 .PHONY: install-rollback-helpers
 install-rollback-helpers:
 	@[ -n "$(DEPLOY_BIN)" ] || (echo "ERROR: DEPLOY_BIN is not set. Add it to Makefile.local or export it."; exit 1)
 	@[ -n "$(DEPLOY_DB)" ] || (echo "ERROR: DEPLOY_DB is not set. Set it to the main Pebble store path on this host in Makefile.local or export it."; exit 1)
-	@python3 deploy/rollback-helpers/install_helpers.py --bin="$(DEPLOY_BIN)" --db="$(DEPLOY_DB)" \
-	  --unit="$(DEPLOY_UNIT)" $(ROLLBACK_INSTALL_ARGS) $(if $(APPLY),--apply,) $(if $(REPLACE_CONF),--replace-conf,)
+	@if [ -n "$(APPLY)" ]; then \
+	  set -e; \
+	  echo "→ Exporting HEAD to the root-owned $(ROLLBACK_EXPORT_DIR)/aorg-install (the installer runs as root and will not run from a checkout the deploy user can write)..."; \
+	  sudo install -d -o root -g root -m 755 "$(ROLLBACK_EXPORT_DIR)/aorg-install"; \
+	  git archive HEAD deploy/rollback-helpers deploy/audiobook-organizer.service scripts/storage_format_guard.py > /dev/null; \
+	  git archive HEAD deploy/rollback-helpers deploy/audiobook-organizer.service scripts/storage_format_guard.py | sudo tar -x --no-same-owner -C "$(ROLLBACK_EXPORT_DIR)/aorg-install"; \
+	  sudo python3 -I "$(ROLLBACK_EXPORT_DIR)/aorg-install/deploy/rollback-helpers/install_helpers.py" \
+	    --bin="$(DEPLOY_BIN)" --db="$(DEPLOY_DB)" --unit="$(DEPLOY_UNIT)" $(ROLLBACK_INSTALL_ARGS) \
+	    --apply $(if $(REPLACE_CONF),--replace-conf,); \
+	else \
+	  python3 -I deploy/rollback-helpers/install_helpers.py --bin="$(DEPLOY_BIN)" --db="$(DEPLOY_DB)" \
+	    --unit="$(DEPLOY_UNIT)" $(ROLLBACK_INSTALL_ARGS) $(if $(REPLACE_CONF),--replace-conf,); \
+	fi
 
 # Quick aliases
 .PHONY: t c b v

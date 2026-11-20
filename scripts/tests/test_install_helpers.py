@@ -520,6 +520,61 @@ class InstallHelpers(unittest.TestCase):
             self.dropin.read_text(), old.replace("alfred", "bruce"), "dry run: untouched"
         )
 
+    def make_n(self, *extra: str) -> str:
+        p = subprocess.run(
+            [
+                "make",
+                "-n",
+                "install-rollback-helpers",
+                "DEPLOY_BIN=/opt/x",
+                "DEPLOY_DB=/var/y",
+                *extra,
+            ],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return p.stdout
+
+    def test_make_apply_runs_the_installer_from_a_root_owned_export_not_the_checkout(self) -> None:
+        out = self.make_n("APPLY=1", "ROLLBACK_EXPORT_DIR=/srv/exp")
+        self.assertIn("sudo install -d -o root -g root -m 755", out)
+        self.assertIn("git archive HEAD deploy/rollback-helpers", out)
+        self.assertIn("scripts/storage_format_guard.py", out)
+        self.assertIn(
+            'sudo python3 -I "/srv/exp/aorg-install/deploy/rollback-helpers/install_helpers.py"',
+            out,
+        )
+        self.assertIn("--apply", out)
+        applied = out.split('if [ -n "1" ]; then', 1)[1].split("else", 1)[0]
+        self.assertNotIn("python3 -I deploy/rollback-helpers", applied, "never from the checkout")
+
+    def test_make_without_apply_stays_in_the_checkout_and_never_calls_sudo(self) -> None:
+        out = self.make_n()
+        self.assertIn("python3 -I deploy/rollback-helpers/install_helpers.py", out)
+        branch = out.split("else", 1)[1]
+        self.assertNotIn("sudo", branch)
+        self.assertNotIn("--apply", branch)
+
+    def test_a_dry_run_that_cannot_read_the_root_only_dropin_says_so_not_a_traceback(self) -> None:
+        if os.geteuid() == 0:
+            self.skipTest("root can read any file")
+        self.assertEqual(self.run_tool("--apply").returncode, 0)
+        before = self.dropin.read_text()
+        self.dropin.chmod(0o000)
+        try:
+            p = self.run_tool()
+        finally:
+            self.dropin.chmod(0o440)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertIn("unreadable", p.stdout)
+        self.assertIn("run the dry run with sudo", p.stdout)
+        self.assertIn("alfred ALL=", p.stdout, "the rendered text is still shown")
+        self.assertEqual(self.dropin.read_text(), before, "dry run: untouched")
+
     def test_a_sudoers_with_the_right_text_and_the_wrong_mode_is_rewritten(self) -> None:
         self.assertEqual(self.run_tool("--apply").returncode, 0)
         self.dropin.chmod(0o666)
@@ -681,7 +736,8 @@ class InstallHelpers(unittest.TestCase):
         p = self.run_tool(args=args)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("NOTICE", p.stdout)
-        self.assertIn("APPLY=1 will refuse", p.stdout)
+        self.assertIn("with --apply from here would refuse", p.stdout)
+        self.assertIn("exports HEAD to a root-owned directory", p.stdout)
 
     def test_the_sudo_re_run_is_isolated_too(self) -> None:
         argv = IH.sudo_argv()
