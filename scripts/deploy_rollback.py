@@ -22,7 +22,7 @@ rollback:
   1. `<bin>.prev` exists; the guard passes (the in-flight probe, the store's
      levels against `.prev`'s).
   2. Match the unit type to `.prev` (unit-type helper), read the unit's
-     InvocationID, install `.prev` atomically (swap-prev helper), restart.
+     InvocationID, install `.prev` with its unit and local.conf (install-staged rollback), restart.
   3. Wait (scripts/deploy_wait_ready.py) with that InvocationID, so the old
      process still serving after a restart that never ran is never called
      ready. A restart refused by sudo fails at once.
@@ -49,7 +49,7 @@ restore (make rollback-restore):
      restore-offline helper (as the service user, in a transient unit that
      outlives a dropped connection). Its swap lock refuses while a service is
      running or starting; nothing retries it.
-  5. Check the unit stayed stopped; install `.prev` (swap-prev helper);
+  5. Check the unit stayed stopped; install `.prev` and its environment (install-staged rollback);
      start; wait as above.
 
 Every failure after the first change says what state the host is in (the
