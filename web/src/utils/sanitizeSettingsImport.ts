@@ -1,5 +1,5 @@
 // file: web/src/utils/sanitizeSettingsImport.ts
-// version: 1.9.0
+// version: 1.10.0
 // guid: 3f6b1c2e-8d4a-4e7f-9a51-c2d0b7e4f813
 // last-edited: 2026-11-19
 
@@ -54,15 +54,16 @@ export interface SanitizeReport {
 /** What the report says of an address the import would have changed. */
 export const IGNORED_ADDRESS_NOTE = 'ignored: server address changes must be made by hand';
 
-// An address a stored secret travels to. A settings file that sets one on a
-// source that already has its credentials saved would point those credentials
-// at whatever host the file names, so the import never changes one:
-//  - a metadata source the server already has keeps its saved base_url;
-//  - a source new to the server may carry one, and arrives with no credentials;
+// An address a stored secret travels to. URLs are never imported: a file that
+// set one would point stored credentials at whatever host it names.
+//  - metadata_sources[].base_url is dropped on every source, new or existing
+//    (a built-in provider takes its key from the global settings, so a new source
+//    named like one would still send it there); a source the server already has
+//    keeps the base_url it has;
 //  - embedding.base_url (the embeddings client sends the OpenAI key there) keeps
 //    the server's value.
-// Without the server's current config nothing can be told new from existing, so
-// every such address is left out.
+// Without the server's current config no saved value can be kept, and none from
+// the file is imported.
 interface CurrentAddresses {
   metadata_sources?: Array<{ id?: string; base_url?: string }>;
   embedding?: { base_url?: string };
@@ -166,9 +167,12 @@ export const sanitizeSettingsImportWithReport = (
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               src.requires_auth = Boolean((s as any).requires_auth ?? (s as any).requiresAuth);
               // rate_limit rides along: a save names the whole list, so leaving it
-              // out would erase it on the server. base_url is an address the
-              // source's saved credentials are sent to, so a file never changes it
-              // on a source the server already has.
+              // out would erase it on the server. base_url is never imported: it is
+              // an address a source's credentials are sent to (a built-in provider
+              // takes its key from the global settings, so even a source new to the
+              // server would send it there). A source the server already has keeps
+              // its own base_url, which has to be named because the save names the
+              // whole list.
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               const rl = (s as any).rate_limit;
               if (rl && typeof rl === 'object' && !Array.isArray(rl)) src.rate_limit = rl;
@@ -176,18 +180,11 @@ export const sanitizeSettingsImportWithReport = (
               const fileBase =
                 typeof (s as any).base_url === 'string' ? (s as any).base_url : undefined;
               const existing = current?.metadata_sources?.find((c) => c.id === src.id);
-              const isNew =
-                current?.metadata_sources !== undefined && typeof src.id === 'string' && !existing;
-              if (isNew) {
-                if (fileBase) src.base_url = fileBase;
-              } else {
-                // Keep the server's own value; say so when the file asked for another.
-                if (existing?.base_url) src.base_url = existing.base_url;
-                if (fileBase && fileBase !== (existing?.base_url ?? '')) {
-                  ignored.push(
-                    `metadata_sources[${src.id ?? '?'}].base_url (${IGNORED_ADDRESS_NOTE})`
-                  );
-                }
+              if (existing?.base_url) src.base_url = existing.base_url;
+              if (fileBase && fileBase !== (existing?.base_url ?? '')) {
+                ignored.push(
+                  `metadata_sources[${src.id ?? '?'}].base_url (${IGNORED_ADDRESS_NOTE})`
+                );
               }
               src.credentials = {};
               // eslint-disable-next-line @typescript-eslint/no-explicit-any

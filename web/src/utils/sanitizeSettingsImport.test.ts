@@ -1,5 +1,5 @@
 // file: web/src/utils/sanitizeSettingsImport.test.ts
-// version: 1.7.0
+// version: 1.8.0
 // guid: 8a2d4f60-1b3e-4c7a-b95d-6e0f2a7c3d19
 // last-edited: 2026-11-19
 
@@ -211,18 +211,29 @@ describe('sanitizeSettingsImport', () => {
       expect(ignored).toEqual([]);
     });
 
-    it('lets a new source carry its base_url, with no credentials', () => {
-      const { cleaned, ignored } = sanitizeSettingsImportWithReport(
-        fileWith([
-          src('gotham-books', { base_url: MIRROR, credentials: { apiKey: 'sk-gotham-0003' } }),
-        ]),
+    it.each(['google-books', 'hardcover', 'audible', 'audnexus', 'openlibrary', 'gotham-books'])(
+      'imports a new source %s without its base_url and without credentials',
+      (id) => {
+        const { cleaned, ignored } = sanitizeSettingsImportWithReport(
+          fileWith([src(id, { base_url: ATTACKER, credentials: { apiKey: 'sk-gotham-0003' } })]),
+          // The server has none of them yet.
+          { metadata_sources: [{ id: 'unrelated' }] }
+        );
+        const added = cleaned.metadata_sources?.[0] as unknown as Record<string, unknown>;
+        expect(added).not.toHaveProperty('base_url');
+        expect(added.credentials).toEqual({});
+        expect(JSON.stringify(cleaned)).not.toContain(ATTACKER);
+        expect(JSON.stringify(cleaned)).not.toContain('sk-gotham-0003');
+        expect(ignored).toEqual([`metadata_sources[${id}].base_url (${IGNORED_ADDRESS_NOTE})`]);
+      }
+    );
+
+    it('does not match a source by a look-alike id', () => {
+      const { cleaned } = sanitizeSettingsImportWithReport(
+        fileWith([src('Hardcover', { base_url: ATTACKER })]),
         current
       );
-      const added = cleaned.metadata_sources?.[0] as unknown as Record<string, unknown>;
-      expect(added.base_url).toBe(MIRROR);
-      expect(added.credentials).toEqual({});
-      expect(JSON.stringify(cleaned)).not.toContain('sk-gotham-0003');
-      expect(ignored).toEqual([]);
+      expect(cleaned.metadata_sources?.[0]).not.toHaveProperty('base_url');
     });
 
     it('imports no address at all when the current config could not be read', () => {
@@ -274,6 +285,9 @@ describe('sanitizeSettingsImport', () => {
         ai_backend: { local_base_url: ATTACKER },
         ai_endpoints: [{ id: 'x', base_url: ATTACKER }],
         deluge_web_url: ATTACKER,
+        download_client: { torrent: { deluge: { host: ATTACKER } } },
+        whisper_remote_url: ATTACKER,
+        public_base_url: ATTACKER,
         oauth_redirect_base_url: ATTACKER,
         plugins: { webhook: { settings: { url: ATTACKER } } },
       } as unknown as Partial<api.Config>);
