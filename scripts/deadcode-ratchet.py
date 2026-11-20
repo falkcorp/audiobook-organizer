@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/deadcode-ratchet.py
-# version: 1.4.3
+# version: 1.4.4
 # guid: 5d0c7f2e-8a41-4b6d-9e13-c7a2f4b86d90
-# last-edited: 2026-11-09
+# last-edited: 2026-11-19
 """Ratchet on production functions unreachable from every `main`.
 
 Runs golang.org/x/tools/cmd/deadcode (pinned) and compares the set of
@@ -144,6 +144,7 @@ TEST_HELPER_DIRS = {
     "mailtest",
     "durtest",
     "metricstest",
+    "writertest",
 }
 EXCLUDED_PKG_NAMES = {"testutil", "conformance", "rapidgen"} | TEST_HELPER_DIRS
 
