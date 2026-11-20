@@ -1,7 +1,7 @@
 // file: internal/server/invite_guest_access_test.go
-// version: 1.12.3
+// version: 1.13.0
 // guid: 7a4c2e91-5d38-4b06-8f1a-c9e3b6d2a457
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package server
 
@@ -11,10 +11,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,6 +27,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/cfaccesspolicy"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
+	"github.com/falkcorp/mediacore/integrations"
+	imail "github.com/falkcorp/mediacore/integrations/notify/mail"
 )
 
 // fakeGuestPolicy records EnsureEmail and RemoveEmail calls. When entered
@@ -713,5 +717,46 @@ func TestGuestAccessDeadEnd(t *testing.T) {
 		if got := guestAccessDeadEnd(tc.c); got != tc.want {
 			t.Errorf("%s: guestAccessDeadEnd = %v, want %v", name, got, tc.want)
 		}
+	}
+}
+
+// The invite flow's sender dials its operator-configured relay as written
+// (mail.PlainDial): a sender with no dial refuses, so this pins that the
+// configured relay is still reached after the unguarded default was removed.
+func TestInviteMailSender_DialsTheConfiguredRelay(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	var accepted atomic.Int32
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted.Add(1)
+			_ = c.Close() // not an SMTP server: the send fails after the dial
+		}
+	}()
+	saved := config.Snapshot()
+	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = saved }) })
+	config.Mutate(func(c *config.Config) {
+		c.SMTPHost, c.SMTPPort, c.SMTPFrom = "127.0.0.1", ln.Addr().(*net.TCPAddr).Port, "books@example.com"
+	})
+	sender := (&Server{}).inviteMailSender()
+	if sender == nil {
+		t.Fatal("invite mail is configured but no sender was built")
+	}
+	err = sender.Send(context.Background(), imail.Message{To: "jim@example.com", Subject: "Hello", Text: "Hello"})
+	if err == nil {
+		t.Fatal("the send succeeded against a listener that speaks no SMTP")
+	}
+	if errors.Is(err, integrations.ErrNoEgressGuard) {
+		t.Fatalf("the invite sender refused to dial its configured relay: %v", err)
+	}
+	if n := accepted.Load(); n != 1 {
+		t.Fatalf("the relay accepted %d connections, want 1", n)
 	}
 }
