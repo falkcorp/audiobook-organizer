@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/taglib_variants_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 5a0d9c7e-2f41-4b86-9d3a-c1e8f7b20a64
 // last-edited: 2026-11-19
 
@@ -136,8 +136,17 @@ func taglibVariantFiles(t *testing.T, native bool) []*ast.File {
 // taglibCalls is what a function of internal/metadata calls: the functions of the
 // same package (by name), the functions of other packages it imports
 // ("<import path>.<name>"), and method names (the syntax gives no receiver).
-func taglibCalls(fd *ast.FuncDecl, imports map[string]string) (local, qualified, methods []string) {
+// refs is every "<import path>.<name>" the body names, called or not (os.Rename
+// handed on as a value is a file writer too).
+func taglibCalls(fd *ast.FuncDecl, imports map[string]string) (local, qualified, methods, refs []string) {
 	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok {
+			if id, ok := sel.X.(*ast.Ident); ok && id.Obj == nil {
+				if path, ok := imports[id.Name]; ok {
+					refs = append(refs, path+"."+sel.Sel.Name)
+				}
+			}
+		}
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
@@ -156,7 +165,7 @@ func taglibCalls(fd *ast.FuncDecl, imports map[string]string) (local, qualified,
 		}
 		return true
 	})
-	return local, qualified, methods
+	return local, qualified, methods, refs
 }
 
 // taglibReach is what one write entry point of one variant reaches.
@@ -167,8 +176,12 @@ type taglibReach struct {
 	// the module, and calls those calls' keys the oracle records for them.
 	kinds, calls []string
 	// osWriters are the file writers (of package os, and of the packages the
-	// oracle treats as file writers) the variant's own bodies call.
+	// oracle treats as file writers) the variant's own bodies call or name.
 	osWriters []string
+	// verbMethods are the method names, named like a write, the variant's own
+	// bodies call: a store or interface write made from the variant itself,
+	// which the syntax cannot resolve to a receiver (round-2 review m1).
+	verbMethods []string
 }
 
 // taglibVariantReach is, per write entry point of a variant of internal/metadata,
@@ -205,12 +218,12 @@ func taglibVariantReach(t *testing.T, op *oracleProgram, idx *taglibIndex, nativ
 		}
 		seen := map[string]bool{entry: true}
 		queue := []string{entry}
-		var qualified, methods []string
+		var qualified, methods, refs []string
 		for len(queue) > 0 {
 			name := queue[0]
 			queue = queue[1:]
-			l, q, m := taglibCalls(decls[name], imports)
-			qualified, methods = append(qualified, q...), append(methods, m...)
+			l, q, m, r := taglibCalls(decls[name], imports)
+			qualified, methods, refs = append(qualified, q...), append(methods, m...), append(refs, r...)
 			for _, callee := range append(l, m...) {
 				if _, ok := decls[callee]; ok && !seen[callee] {
 					seen[callee] = true
@@ -226,7 +239,15 @@ func taglibVariantReach(t *testing.T, op *oracleProgram, idx *taglibIndex, nativ
 				kinds[kind] = true
 			}
 			for key := range c {
-				calls[key] = true
+				// An UNRESOLVED key says where a walk could not follow a
+				// value, relative to where the walk started: a helper walked
+				// from here has parameters no walked caller supplies (the
+				// variant's caller is syntax, not SSA), so it names the start,
+				// not a write. TestJobWrites_NoUnresolvedCalls holds the
+				// jobs' keys to a reason.
+				if !strings.HasPrefix(key, "UNRESOLVED.") {
+					calls[key] = true
+				}
 			}
 			if h := helperOf(f); h != "" {
 				reached[h] = true
@@ -237,18 +258,34 @@ func taglibVariantReach(t *testing.T, op *oracleProgram, idx *taglibIndex, nativ
 				}
 			}
 		}
-		for _, q := range qualified {
+		for _, q := range refs {
 			i := strings.LastIndex(q, ".")
 			pkgPath, name := q[:i], q[i+1:]
 			if pkgPath == "os" && oracleFileWriters[name] || oracleOutsideFileWriters[pkgPath][name] {
 				writers[q] = true
 			}
+		}
+		for _, q := range qualified {
+			i := strings.LastIndex(q, ".")
+			pkgPath, name := q[:i], q[i+1:]
 			pkg := op.prog.ImportedPackage(pkgPath)
 			if pkg == nil {
 				continue
 			}
 			if f := pkg.Func(name); f != nil {
+				// The walk stops at once for a store function, so the key is
+				// recorded here, where the variant calls it, as the walk
+				// records it at a call site (round-2 review m1).
+				if strings.Contains(pkgPath, "/internal/books/store") {
+					calls[oracleStoreKey(f)] = true
+				}
 				walk(f)
+			}
+		}
+		verbs := map[string]bool{}
+		for _, m := range methods {
+			if oracleVerb.MatchString(m) {
+				verbs[m] = true
 			}
 		}
 		// A method call is resolved only to the write helpers, by the helper's
@@ -259,7 +296,7 @@ func taglibVariantReach(t *testing.T, op *oracleProgram, idx *taglibIndex, nativ
 				walk(f)
 			}
 		}
-		r := taglibReach{kinds: sortedKeys(kinds), calls: sortedKeys(calls), osWriters: sortedKeys(writers)}
+		r := taglibReach{kinds: sortedKeys(kinds), calls: sortedKeys(calls), osWriters: sortedKeys(writers), verbMethods: sortedKeys(verbs)}
 		for h := range reached {
 			r.helpers = append(r.helpers, h)
 		}
@@ -329,6 +366,7 @@ func TestTaglibVariants_ReachTheSameWriteHelpers(t *testing.T) {
 			"resource kinds":         {fmt.Sprint(s.kinds), fmt.Sprint(c.kinds)},
 			"classified calls":       {fmt.Sprint(s.calls), fmt.Sprint(c.calls)},
 			"file writers (os etc.)": {fmt.Sprint(s.osWriters), fmt.Sprint(c.osWriters)},
+			"write-named methods":    {fmt.Sprint(s.verbMethods), fmt.Sprint(c.verbMethods)},
 		} {
 			if pair[0] != pair[1] {
 				t.Errorf("%s reaches %s %s in taglib_support.go and %s in taglib_cgo.go; the oracle walks only the first, production ships the second", entry, what, pair[0], what+" "+pair[1])
