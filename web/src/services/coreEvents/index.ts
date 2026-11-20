@@ -18,6 +18,25 @@ export {
 export type { EventStream, EventStreamOptions, ResyncOptions, SubscribeOptions, VisibilitySource } from './manager';
 export { useResync, useStreamClosed, useStreamStatus, useTopic } from './hooks';
 export type { UseResyncOptions, UseTopicOptions } from './hooks';
+export {
+  BOOK_CHANGED_TOPIC,
+  BOOK_CHANGE_MAX_IDS,
+  BOOK_CHANGE_WINDOW_MS,
+  createBookChangeBatcher,
+  parseBookChange,
+  subscribeBookChanges,
+  useBookChanges,
+} from './bookChanges';
+export type {
+  BookChangeBatch,
+  BookChangeBatchHandler,
+  BookChangeBatcher,
+  BookChangeBatcherOptions,
+  BookChangeSubscriptionOptions,
+  UseBookChangesOptions,
+} from './bookChanges';
+export { useServerShutdown, watchServerShutdown } from './shutdown';
+export type { ServerShutdownInfo, ServerShutdownListener } from './shutdown';
 export { createSseParser } from './sseParser';
 export type { SseFrame, SseParser } from './sseParser';
 export * from './types';
