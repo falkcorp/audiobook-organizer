@@ -181,6 +181,7 @@ core/internal/rbacstore.StorageSpec
 core/internal/rbacstore.Store.ClaimRoleSet
 core/internal/rbacstore.Store.DeleteRole
 core/internal/rbacstore.Store.GetRole
+core/internal/rbacstore.Store.GuardRoleClaims
 core/internal/rbacstore.Store.GuardRoleSet
 core/internal/rbacstore.Store.ImportRole
 core/internal/rbacstore.Store.NewBatch
@@ -193,6 +194,8 @@ core/internal/rbacstore.Store.committed
 core/internal/rbacstore.Store.generationThrough
 core/internal/rbacstore.Store.stage
 core/internal/rbacstore.checkShape
+core/internal/rbacstore.claimKey
+core/internal/rbacstore.counterThrough
 core/internal/rbacstore.decode
 core/internal/rbacstore.decodeGeneration
 core/internal/rbacstore.encodeGeneration

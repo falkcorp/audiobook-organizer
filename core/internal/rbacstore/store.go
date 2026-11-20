@@ -1,5 +1,5 @@
 // file: core/internal/rbacstore/store.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6f1c9a3e-28d4-4b7e-a5f0-93e1d27c4b85
 // last-edited: 2026-11-19
 
@@ -44,17 +44,27 @@ const roleSeg = "role"
 // ScanRoles never meets it.
 const genSeg = "generation"
 
+// claimSeg is the one segment of the role-claim counter, beside the
+// generation row for the same reason: it is not a role.
+const claimSeg = "claims"
+
 // StorageSpec is the c/rbac/ spec the kernel registers for Owner: a core
 // keyspace whose role rows and generation row are Serialized, so every write
 // to one carries an Expect (05-storage R6-1), and an Expect on the generation
 // is allowed (rbac.RoleGuarder).
 func StorageSpec() storage.Spec {
-	return storage.Spec{Keyspace: true, Serialized: []string{string(rolePrefix()), string(generationKey())}}
+	return storage.Spec{Keyspace: true, Serialized: []string{string(rolePrefix()), string(generationKey()), string(claimKey())}}
 }
 
 // generationKey is the relative key of the role-set generation: a big-endian
 // uint64 that every role write raises by one. Absent is generation 0.
 func generationKey() []byte { return keys.Join(keys.Str(genSeg)) }
+
+// claimKey is the relative key of the role-claim counter: a big-endian uint64
+// that every ClaimRoleSet raises by one. It is separate from the generation so
+// that a claim does not conflict with a last-admin decision, which guards the
+// generation and does not care who was given a role. Absent is 0.
+func claimKey() []byte { return keys.Join(keys.Str(claimSeg)) }
 
 // rolePrefix is the relative prefix of every role row.
 func rolePrefix() []byte { return keys.Prefix(keys.Str(roleSeg)) }
@@ -294,30 +304,57 @@ func (s *Store) GuardRoleSet(b *storage.Batch, generation uint64) error {
 	return nil
 }
 
-// ClaimRoleSet is GuardRoleSet followed by a bump of the generation in the same
-// batch (rbac.RoleGuarder). A user write that gives a user a role calls it: the
-// guard makes the write conflict with any role write that committed after the
-// caller decided the role exists, and the bump makes a role write that decided
-// before this write (DeleteRole, which read the role's holders and found none)
-// conflict with it in turn, so the two cannot both commit whichever lands
-// first. The bump changes no role.
+// ClaimRoleSet is GuardRoleSet followed by a bump of the role-claim counter
+// in the same batch (rbac.RoleGuarder). A user write that gives a user a role
+// calls it: the guard makes the write conflict with any role write that
+// committed after the caller decided the role exists, and the bump makes a
+// DeleteRole that guarded the claim counter (GuardRoleClaims) before it read
+// the role's holders and found none conflict with this write in turn, so the
+// two cannot both commit whichever lands first. The bump changes no role and
+// not the generation, so a claim does not fail a last-admin decision.
 func (s *Store) ClaimRoleSet(b *storage.Batch, generation uint64) error {
 	if err := s.GuardRoleSet(b, generation); err != nil {
 		return err
 	}
-	return s.bumpGeneration(b)
+	cur, err := counterThrough(s, b, claimKey())
+	if err != nil {
+		return err
+	}
+	if err := b.In(s.ks).Set(claimKey(), encodeGeneration(cur+1)); err != nil {
+		return fmt.Errorf("rbacstore: stage the role-claim counter: %w", err)
+	}
+	return nil
 }
 
-// generationThrough reads the generation row through b, recording the
-// Expect on the committed value if b has none for it yet (and keeping the one
-// it has). An absent row is generation 0.
+// GuardRoleClaims stages into b an Expect that no ClaimRoleSet has committed
+// since this call (rbac.RoleGuarder): it records the claim counter's committed
+// value as of now. DeleteRole calls it before it reads a role's holders, so a
+// claim of that role that commits after the read, one the holders could not
+// show, fails the delete's Commit. Nothing is written.
+func (s *Store) GuardRoleClaims(b *storage.Batch) error {
+	if b == nil {
+		return errors.New("rbacstore: GuardRoleClaims needs the caller's batch")
+	}
+	b.Bind(s.ks)
+	_, err := counterThrough(s, b, claimKey())
+	return err
+}
+
+// generationThrough reads the generation row through b (counterThrough).
 func (s *Store) generationThrough(b *storage.Batch) (uint64, error) {
-	view, err := b.GetForUpdate(context.Background(), s.ks, generationKey())
+	return counterThrough(s, b, generationKey())
+}
+
+// counterThrough reads the counter row at key through b, recording the Expect
+// on the committed value if b has none for it yet (and keeping the one it has).
+// An absent row is 0.
+func counterThrough(s *Store, b *storage.Batch, key []byte) (uint64, error) {
+	view, err := b.GetForUpdate(context.Background(), s.ks, key)
 	switch {
 	case errors.Is(err, storage.ErrNotFound):
 		return 0, nil
 	case err != nil:
-		return 0, fmt.Errorf("rbacstore: read the role-set generation through the batch: %w", err)
+		return 0, fmt.Errorf("rbacstore: read counter %q through the batch: %w", key, err)
 	}
 	return decodeGeneration(view)
 }

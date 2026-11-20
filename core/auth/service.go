@@ -1,5 +1,5 @@
 // file: core/auth/service.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: ca90483b-e984-4a46-b126-bc0bb9aba4a5
 // last-edited: 2026-11-11
 
@@ -61,8 +61,16 @@ const (
 	DefaultTempLoginTTL = 15 * time.Minute
 	// DefaultInviteTTL is core.auth.invite.ttl's default (HEAD's 72 hours,
 	// handlers/user.go CreateInvite).
-	DefaultInviteTTL     = 72 * time.Hour
-	conflictRetries      = 4
+	DefaultInviteTTL = 72 * time.Hour
+	conflictRetries  = 4
+	// claimRetries is conflictRetries for the writes that give a user a role
+	// (CreateUser, SetRoles, AcceptInvite). Every one of them bumps the one
+	// role-claim counter, so two of them committing from the same read
+	// conflict although they touch different users. A conflict means another
+	// writer committed, so some write always makes progress and the retry
+	// loop cannot livelock; sixteen attempts let a burst of sixteen such
+	// writes all land, whatever the order they commit in.
+	claimRetries         = 16
 	auditModule          = "core"
 	refKindUser          = "user"
 	refKindAPIKey        = "apikey"
@@ -486,7 +494,12 @@ func ref(kind, id string) entity.Ref { return entity.Ref{Module: auditModule, Ki
 // storage.ErrConflict (a concurrent writer of a record stage read), up to
 // conflictRetries times. stage re-reads everything it decides on.
 func (s *Service) commitRetrying(ctx context.Context, stage func(b *storage.Batch) error) error {
-	return storage.RetryOnConflict(ctx, conflictRetries, func(ctx context.Context) (err error) {
+	return s.commitRetryingN(ctx, conflictRetries, stage)
+}
+
+// commitRetryingN is commitRetrying over attempts tries.
+func (s *Service) commitRetryingN(ctx context.Context, attempts int, stage func(b *storage.Batch) error) error {
+	return storage.RetryOnConflict(ctx, attempts, func(ctx context.Context) (err error) {
 		b := s.d.NewBatch()
 		defer func() {
 			if cerr := b.Close(); cerr != nil && err == nil {

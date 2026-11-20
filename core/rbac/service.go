@@ -70,7 +70,7 @@ var (
 	ErrFrozen = errors.New("rbac: the catalog is frozen")
 	// ErrNotFrozen is a call that needs the frozen catalog before Freeze.
 	ErrNotFrozen = errors.New("rbac: the catalog is not frozen yet")
-	// ErrNoRoleGuard is RoleSetGeneration, GuardRoleSet or ClaimRoleSet over a
+	// ErrNoRoleGuard is RoleSetGeneration, GuardRoleSet, ClaimRoleSet or GuardRoleClaims over a
 	// Deps.Store that does not implement RoleGuarder, and DeleteRole over one:
 	// the role set cannot be guarded in another owner's batch, so the caller
 	// (auth's last-admin rule, a user write that gives a role, DeleteRole)
@@ -562,13 +562,14 @@ func (s *Service) GuardRoleSet(b *storage.Batch, generation uint64) error {
 	return g.GuardRoleSet(b, generation)
 }
 
-// ClaimRoleSet is GuardRoleSet plus a bump of the generation in the same
-// batch (coined by F4-02-ROLE-GUARD). A user write that gives a user a role
-// calls it, after reading the generation and before it decides the role may be
-// given (CanAssignCommitted): a role write that commits after the read fails
-// the user write's Commit, and the bump fails the Commit of a DeleteRole that
-// read the role's holders before the user write landed, so assigning a role
-// and deleting it conflict whichever commits first. A Deps.Store that does
+// ClaimRoleSet is GuardRoleSet plus a bump of the role-claim counter in the
+// same batch (coined by F4-02-ROLE-GUARD). A user write that gives a user a
+// role calls it, after reading the generation and before it decides the role
+// may be given (CanAssignCommitted): a role write that commits after the read
+// fails the user write's Commit, and the bump fails the Commit of a DeleteRole
+// that guarded the claims (GuardRoleClaims) before the user write landed, so
+// assigning a role and deleting it conflict whichever commits first. The claim
+// counter is not the generation, so a claim fails no last-admin decision. A Deps.Store that does
 // not implement RoleGuarder answers ErrNoRoleGuard (fail closed).
 func (s *Service) ClaimRoleSet(b *storage.Batch, generation uint64) error {
 	g, ok := s.deps.Store.(RoleGuarder)
@@ -576,6 +577,17 @@ func (s *Service) ClaimRoleSet(b *storage.Batch, generation uint64) error {
 		return ErrNoRoleGuard
 	}
 	return g.ClaimRoleSet(b, generation)
+}
+
+// GuardRoleClaims stages into b an Expect that no ClaimRoleSet commits after
+// this call; DeleteRole calls it before it reads a role's holders. A
+// Deps.Store that does not implement RoleGuarder answers ErrNoRoleGuard.
+func (s *Service) GuardRoleClaims(b *storage.Batch) error {
+	g, ok := s.deps.Store.(RoleGuarder)
+	if !ok {
+		return ErrNoRoleGuard
+	}
+	return g.GuardRoleClaims(b)
 }
 
 // CreateRole creates the custom role in.Name (custom.<slug>) holding
@@ -694,16 +706,21 @@ func (s *Service) DeleteRole(ctx context.Context, actor Checker, id RoleName, if
 		// write that gives it to someone after that read (a CreateUser, a
 		// SetRoles, an accepted invite or a first OIDC sign-in naming the role)
 		// is not among them, and nothing this batch guards would change. Every
-		// such write bumps the role-set generation in its own batch
-		// (ClaimRoleSet), so guarding the generation as it was before any read
-		// of this attempt makes that write fail this Commit; the retry reads the
-		// new holder and refuses with ErrRoleInUse. A store that cannot guard
-		// the role set cannot show the delete safe, and refuses.
+		// such write bumps the role-claim counter in its own batch
+		// (ClaimRoleSet), so guarding the counter as it is before any read of
+		// this attempt makes that write fail this Commit; the retry reads the
+		// new holder and refuses with ErrRoleInUse. The role-set generation is
+		// guarded too, so a role write between this attempt's reads and its
+		// commit is seen. A store that cannot guard cannot show the delete
+		// safe, and refuses.
 		gen, err := s.RoleSetGeneration(ctx)
 		if err != nil {
 			return nil, err
 		}
 		if err := s.GuardRoleSet(b, gen); err != nil {
+			return nil, err
+		}
+		if err := s.GuardRoleClaims(b); err != nil {
 			return nil, err
 		}
 		cur, err := s.editable(ctx, id, ifVersion)
