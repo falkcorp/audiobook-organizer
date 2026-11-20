@@ -75,7 +75,10 @@ func Rows() []Row {
 		{Phase: "P4b, first (Config.CoreConfigBoot)", Writer: "secrets.Open: stale keyring temporary files removed, the keyring created (exclusive temp, fsync, link, directory fsync) or its mode fixed and its header's install_id written or rewritten (a reset boot), then c/secrets/meta's batch (05-config §2.4 step 1); a present keyring's directory is synced before it is trusted (secrets.keyring.load-sync: the boot that created it may have failed at its own directory fsync)", Labels: []string{
 			"secrets.keyring.stale", "secrets.keyring.load-sync", "secrets.keyring", "secrets.meta",
 		}},
-		{Phase: "P4b, after secrets.Open (reset boot; Config.CoreConfigBoot)", Writer: "the kernel: journal applied once the keyring header carries the fresh store's install ID (06 §6.5.1 P4b first; DATA7-17)", Labels: []string{
+		{Phase: "P4b, after secrets.Open (reset boot; Config.CoreConfigBoot)", Writer: "the kernel: the reset's fresh rows, every FailClosed key stored at its default in one batch, before applied (05-storage §5S.3.15 \"Next boot\"; SEC8-5)", Labels: []string{
+			"config.reset.fresh_rows",
+		}},
+		{Phase: "P4b, after secrets.Open (reset boot; Config.CoreConfigBoot)", Writer: "the kernel: journal applied once the keyring header carries the fresh store's install ID and the fresh rows are committed (06 §6.5.1 P4b first; DATA7-17, SEC8-5)", Labels: []string{
 			"swap.journal.applied",
 		}},
 		{Phase: "P4b", Writer: "storage: the migration list (each step's batch, the level step's sidecar, completion)", Labels: []string{

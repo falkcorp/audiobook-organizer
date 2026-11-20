@@ -297,12 +297,18 @@ func (cb *configBoot) close(ctx context.Context) error {
 //     ResetBoot is set on the reset boot of a KindReset journal only (it reads
 //     set_aside, not applied; store and factory resets alike, which is the
 //     swapper's one BootReset), so the header is rewritten exactly once;
-//  2. that reset boot's journal is marked applied right after, not after P4a:
-//     a crash between the fresh install and the keyring leaves set_aside, and
-//     the next boot repeats both (DATA7-17; swapAfter skips P4a under the gate);
-//  3. the native config store over c/config/ becomes the config importer's
+//  2. the native config store over c/config/ becomes the config importer's
 //     target, and the secret store its secret stager, so M2's writes reach both;
-//  4. the two Importers P4b hands every Cutover func are bound.
+//  3. on that reset boot only, the reset's fresh rows are committed
+//     (writeResetFreshRows, SEC8-5): every FailClosed key stored at its
+//     default, so a stale operator value cannot loosen it on the fresh store;
+//  4. that reset boot's journal is marked applied only then, not after P4a: a
+//     crash between the fresh install and the keyring or the fresh rows
+//     leaves set_aside, and the next boot repeats them (DATA7-17; swapAfter
+//     skips P4a under the gate). Marking it applied before the rows are
+//     durable would let a crash resume as BootResetApplied, which never
+//     writes them;
+//  5. the two Importers P4b hands every Cutover func are bound.
 func (k *Kernel) bindCoreStores(ctx context.Context) error {
 	cb, db := k.cfgBoot, k.store.db
 	keyFile, allowRegen, err := cb.secretsSettings()
@@ -319,15 +325,18 @@ func (k *Kernel) bindCoreStores(ctx context.Context) error {
 		return err
 	}
 	k.sec = ks
-	if k.swap != nil && k.swap.out.Boot == restoreswap.BootReset {
-		if err := k.swap.s.ResetApplied(ctx, k.swap.out.ID); err != nil {
-			return fmt.Errorf("kernel: swap journal %s after secrets.Open: %w", k.swap.out.ID, err)
-		}
-	}
 	if _, err := cb.buildConfigStore(db); err != nil {
 		return err
 	}
 	cb.store.SetImportSecrets(ks.store)
+	if k.swap != nil && k.swap.out.Boot == restoreswap.BootReset {
+		if err := writeResetFreshRows(ctx, db, cb.store, k.swap.out.ID); err != nil {
+			return err
+		}
+		if err := k.swap.s.ResetApplied(ctx, k.swap.out.ID); err != nil {
+			return fmt.Errorf("kernel: swap journal %s after secrets.Open and the fresh rows: %w", k.swap.out.ID, err)
+		}
+	}
 	k.importerCfg, k.importerSec = cb.store.Importer(), ks.store.Importer()
 	k.importerAllowRegen = allowRegen
 	return nil
