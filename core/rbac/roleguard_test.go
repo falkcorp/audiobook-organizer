@@ -1,5 +1,5 @@
 // file: core/rbac/roleguard_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c3a71d5e-2b84-4f09-9e6a-81d4b0f7a352
 // last-edited: 2026-11-19
 
@@ -374,4 +374,36 @@ func TestDeleteRole_RoleWrittenAfterItsReadsConflictsTheCommit(t *testing.T) {
 	if attempts != 2 {
 		t.Fatalf("commit attempts = %d, want 2: the role written after the reads must fail the first commit", attempts)
 	}
+}
+
+// TestDeleteRole_LastAdminRuleFailingToReadHoldersRefusesTheDelete (round 2):
+// DeleteRole runs the last-admin rule after its own holder read. When that
+// rule cannot read the holders (the first read, DeleteRole's own, succeeds and
+// shows the role unheld), its error must reach the caller and the role must
+// stay: a delete that decided without the rule would have taken core:admin
+// from a role on a read it never saw. When the role is unheld the rule's
+// ErrLastAdmin arm cannot fire (the other admin roles survive), so a failed
+// read is the one way the rule refuses here.
+func TestDeleteRole_LastAdminRuleFailingToReadHoldersRefusesTheDelete(t *testing.T) {
+	ctx := context.Background()
+	f := boot(t, newEnv(t), setup{modules: []module{gotham()}})
+	wayne := f.mustCreate("custom.wayne", "core:admin")
+	boom := errors.New("holder read broke")
+	calls := 0
+	f.users.wait = func() {
+		calls++
+		if calls == 1 {
+			f.users.mu.Lock()
+			f.users.err = boom
+			f.users.mu.Unlock()
+		}
+	}
+	err := f.svc.DeleteRole(ctx, f.admin(), "custom.wayne", wayne.Version)
+	if !errors.Is(err, boom) {
+		t.Fatalf("DeleteRole: err = %v, want the holder read error", err)
+	}
+	if calls != 2 {
+		t.Fatalf("HoldersOf ran %d times, want 2 (DeleteRole's own read, then the last-admin rule's)", calls)
+	}
+	f.unchanged("custom.wayne", wayne.Version)
 }
