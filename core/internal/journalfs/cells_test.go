@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
@@ -261,5 +262,67 @@ func TestKill_FirstOpenRecovers(t *testing.T) {
 			}
 			e.intactTo(journalAt, 1)
 		})
+	}
+}
+
+// TestKill_CutOfATornTailIsAtomic: the cut of an incomplete last line is a
+// truncate, which the in-memory file performs as an atomic replace; a crash
+// before any single durable step of it leaves a journal OpenFile still opens
+// whole at seq 2, cut or not yet cut.
+func TestKill_CutOfATornTailIsAtomic(t *testing.T) {
+	st := newStore(t)
+	_, clones := crashRun(t, st, func(e *env) { primed(e); e.tearTail(journalAt) }, func(e *env) {
+		j := e.mustOpen(journalAt)
+		if err := j.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if len(clones) < 4 {
+		t.Fatalf("the cut took %d kill points, want at least 4", len(clones))
+	}
+	for _, c := range clones {
+		t.Run(c.Event.Label+"/"+kindName(c.Event.Kind), func(t *testing.T) {
+			e := (&env{t: t, st: st}).after(c)
+			j, err := e.open(journalAt)
+			if err != nil {
+				t.Fatalf("OpenFile after a crash before %s: %v", c.Event.Label, err)
+			}
+			if err := j.Close(); err != nil {
+				t.Fatal(err)
+			}
+			e.intactTo(journalAt, 2)
+			if exists(t, e.rec.FS(), journalAt+".truncating") {
+				// The cut's temporary file is only ever replaced, never read.
+				t.Log("a temporary file of the cut survived the crash; the next cut replaces it")
+			}
+		})
+	}
+}
+
+// TestMemFS_RefusesNonRegularJournals: a directory at the journal's name is
+// not a journal: OpenFile fails with the open error ("is a directory", the
+// message open(2) gives for EISDIR), and MoveFile refuses a destination that
+// is a directory, as the same checks do over the real filesystem.
+func TestMemFS_RefusesNonRegularJournals(t *testing.T) {
+	e := newEnv(t, newStore(t), noOpts())
+	if err := e.rec.Mem().MkdirAll(journalAt, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if j, err := e.open(journalAt); err == nil || !strings.Contains(err.Error(), "is a directory") {
+		if j != nil {
+			_ = j.Close()
+		}
+		t.Fatalf("OpenFile of a directory: err = %v, want an \"is a directory\" open error", err)
+	}
+	other := stateDir + "/other.journal"
+	j := e.mustOpen(other)
+	if err := e.appendUncommitted(j); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.MoveFile(other, journalAt, keys{}, journal.WithFS(e.fsys)); !errors.Is(err, journal.ErrMoveRefused) || !errors.Is(err, journal.ErrNotRegular) {
+		t.Fatalf("MoveFile onto a directory: err = %v, want ErrMoveRefused wrapping ErrNotRegular", err)
 	}
 }
