@@ -651,18 +651,6 @@ func rewriteTarget(old, oldPrefix, newPrefix string) (string, bool) {
 	return newPrefix + rest, true
 }
 
-// planRewritePathPrefix is HEAD's planner entry: the core over HEAD's store,
-// stand-down and reporter.
-func planRewritePathPrefix(
-	ctx context.Context,
-	store rewritePathPrefixStore,
-	scan ScanController,
-	params rewritePathPrefixParams,
-	reporter sdk.Reporter,
-) (rewritePathPrefixPlan, error) {
-	return rewritePathPrefixPlanCore(ctx, params, rewritePathPrefixHeadEnv(store, scan, !params.dryRun(), reporter))
-}
-
 // rewritePathPrefixPlanCore plans the rewrite and, when env.Live, applies it.
 func rewritePathPrefixPlanCore(ctx context.Context, params rewritePathPrefixParams, env rewritePathPrefixEnv) (rewritePathPrefixPlan, error) {
 	store := env.Store

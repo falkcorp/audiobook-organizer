@@ -98,19 +98,6 @@ func (p *Plugin) runReviewStatusIndexRepair(ctx context.Context, rawParams json.
 	return reviewStatusIndexRepairReport(env.t6g7Env, result)
 }
 
-// repairReviewStatusIndex decodes the params and runs the core on HEAD's store,
-// returning the tally. The v2 shell and the HEAD tests read the tally through it
-// rather than by parsing a log line back out of a fake reporter.
-func (p *Plugin) repairReviewStatusIndex(ctx context.Context, rawParams json.RawMessage) (reviewStatusIndexRepairResult, error) {
-	var params reviewStatusIndexRepairParams
-	if len(rawParams) > 0 {
-		if err := json.Unmarshal(rawParams, &params); err != nil {
-			return reviewStatusIndexRepairResult{}, fmt.Errorf("review-status-index-repair: decode params: %w", err)
-		}
-	}
-	return reviewStatusIndexRepairCore(ctx, params.Apply, p.reviewStatusIndexRepairHeadEnv(nil, params.Apply))
-}
-
 // reviewStatusIndexRepairKind is rule R3's kind for the def above.
 const reviewStatusIndexRepairKind = tasks.Kind("books.maintenance.review-status-index-repair")
 

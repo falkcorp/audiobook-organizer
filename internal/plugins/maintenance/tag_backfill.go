@@ -256,11 +256,19 @@ type tagBackfillEnv struct {
 	Writer tagBackfillWriter
 }
 
-// tagBackfillParallelism is the op's concurrency: tag reads wait on the disk, so
-// four workers per core, as HEAD's pool ran. Each worker takes a whole book, so
-// no two touch the same rows; the row writes are batched behind one lock.
+// tagBackfillHeadWorkers is HEAD's pool size: four workers per core, as HEAD's
+// RunItems ran it, with no upper bound. The HEAD shell keeps this raw count
+// (t6g7ItemsOptions.HeadWorkers); the native pool takes tagBackfillParallelism,
+// which tasks.Fixed clamps at tasks.MaxFixed (a native-only difference on a host
+// with more than 16 logical CPUs, recorded in seams.d/F5-12.md).
+func tagBackfillHeadWorkers() int { return runtime.NumCPU() * 4 }
+
+// tagBackfillParallelism is the native op's concurrency: tag reads wait on the
+// disk, so four workers per core, up to the kernel's cap. Each worker takes a
+// whole book, so no two touch the same rows; the row writes are batched behind
+// one lock.
 func tagBackfillParallelism() tasks.Parallelism {
-	return tasks.Fixed(runtime.NumCPU()*4, "tag reads wait on the disk, so four workers per core; each worker takes a whole book and the row writes are batched behind one lock")
+	return tasks.Fixed(min(tagBackfillHeadWorkers(), tasks.MaxFixed), "tag reads wait on the disk, so four workers per core (up to the kernel cap); each worker takes a whole book and the row writes are batched behind one lock")
 }
 
 // tagBackfillNative is the native kind. Preview is the dry run HEAD's default
@@ -454,6 +462,7 @@ func tagBackfillCore(ctx context.Context, dryRun bool, params tagBackfillParams,
 	// Per-book work is I/O bound (stat + tag read per file), so the pool is sized
 	// like path_repair_resolver.go: NumCPU()*4.
 	runErr := env.Items(ctx, tagBackfillParallelism(), len(books), t6g7ItemsOptions{
+		HeadWorkers:   tagBackfillHeadWorkers(),
 		ProgressTotal: len(books),
 		// The label reads the running tallies, so only HEAD's pool carries it.
 		Label: func(i, t int) string {

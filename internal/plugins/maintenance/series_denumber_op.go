@@ -273,12 +273,22 @@ func (s seriesDenumberHead) GetSeriesBookRefCount(seriesID int) (int, error) {
 	return c.GetSeriesBookRefCount(seriesID)
 }
 
-func (s seriesDenumberHead) GetBooksBySeriesIDsAllVersions(ids []int) (map[int][]database.BookCore, error) {
-	m := database.AsSeriesMembershipStore(s.OpsStore)
-	if m == nil {
-		return nil, fmt.Errorf("store cannot load bulk series membership (got %T); refusing to run a series merge without it", s.OpsStore)
+// MembershipReady is nil when the store can load bulk series membership. HEAD's
+// database.SeriesMembershipAllVersions checks it before it looks at the ids, so a
+// store that could never answer fails closed even when nothing is requested;
+// seriesDenumberMembership asks for it first, ahead of its empty-ids shortcut.
+func (s seriesDenumberHead) MembershipReady() error {
+	if database.AsSeriesMembershipStore(s.OpsStore) == nil {
+		return fmt.Errorf("store cannot load bulk series membership (got %T); refusing to run a series merge without it", s.OpsStore)
 	}
-	return m.GetBooksBySeriesIDsAllVersions(ids)
+	return nil
+}
+
+func (s seriesDenumberHead) GetBooksBySeriesIDsAllVersions(ids []int) (map[int][]database.BookCore, error) {
+	if err := s.MembershipReady(); err != nil {
+		return nil, err
+	}
+	return database.AsSeriesMembershipStore(s.OpsStore).GetBooksBySeriesIDsAllVersions(ids)
 }
 
 func (s seriesDenumberHead) SeriesApplyReady() error {
@@ -319,8 +329,15 @@ func seriesDenumberStoreReady(store any) error {
 // seriesDenumberMembership is the bulk live membership of seriesIDs, read in one
 // pass. It fails CLOSED: an empty map on error would read as "every series is
 // empty", and the apply deletes on the strength of that. An empty seriesIDs reads
-// nothing.
+// nothing, but only after the store's capability is confirmed (HEAD's order): a
+// reads that can say it cannot answer (HEAD's adapter over a store that lacks the
+// capability) is asked first.
 func seriesDenumberMembership(reads seriesDenumberReads, seriesIDs []int) (database.SeriesBooksMap, error) {
+	if r, ok := reads.(interface{ MembershipReady() error }); ok {
+		if err := r.MembershipReady(); err != nil {
+			return nil, err
+		}
+	}
 	if len(seriesIDs) == 0 {
 		return database.SeriesBooksMap{}, nil
 	}

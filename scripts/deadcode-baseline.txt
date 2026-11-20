@@ -823,7 +823,6 @@ internal/plugins/maintenance.Plugin.recoverMissingFilesNative
 internal/plugins/maintenance.Plugin.regroupShatteredAINative
 internal/plugins/maintenance.Plugin.relinkUnlinkedBooksNative
 internal/plugins/maintenance.Plugin.repairMergedUserStateNative
-internal/plugins/maintenance.Plugin.repairReviewStatusIndex
 internal/plugins/maintenance.Plugin.repairTranscribeStatusNative
 internal/plugins/maintenance.Plugin.repointBookFileRowsNative
 internal/plugins/maintenance.Plugin.repointMissingToFolderAudioNative
@@ -872,7 +871,6 @@ internal/plugins/maintenance.auxRunReporter.SetCurrentItem
 internal/plugins/maintenance.auxStoreCompactDef
 internal/plugins/maintenance.auxStoreCompactDefEvery
 internal/plugins/maintenance.auxStoreCompactKindList
-internal/plugins/maintenance.buildUnknownAuthorAudit
 internal/plugins/maintenance.consolidationLeftoversFixer.newSource
 internal/plugins/maintenance.creditCensusParallelism
 internal/plugins/maintenance.creditsBackfillParallelism
@@ -886,7 +884,6 @@ internal/plugins/maintenance.junkTitleFixer.buildJunkIndex
 internal/plugins/maintenance.junkTitleFixer.candidateTitle
 internal/plugins/maintenance.newT6G2Watermark
 internal/plugins/maintenance.newT6g1Watermark
-internal/plugins/maintenance.planRewritePathPrefix
 internal/plugins/maintenance.pruneAIJournalNativeParams.UnmarshalJSON
 internal/plugins/maintenance.purgeEmptyAuthorsNativeParams.UnmarshalJSON
 internal/plugins/maintenance.rbfPreviewWriter.CreateOperationChange
