@@ -1,17 +1,17 @@
 // file: core/internal/journalfs/sites_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 98f6560d-0f04-49df-945a-41e7973e52cb
 // last-edited: 2026-11-19
 
 package journalfs_test
 
 import (
-	"os"
+	"errors"
+	"io/fs"
 	"slices"
 	"sync/atomic"
 	"testing"
 
-	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/cockroachdb/pebble/v2/vfs/errorfs"
 
 	"github.com/falkcorp/mediacore/backup/journal"
@@ -55,6 +55,27 @@ func primed(e *env) {
 	}
 }
 
+// vanishing is an FS whose Lstat of path, once, finds the file and then
+// removes it behind the caller's back (not through the recorder): the file
+// that vanished between MoveFile's existence check and its open of the source.
+type vanishing struct {
+	journal.FS
+	path string
+	rm   func(string) error
+	done bool
+}
+
+func (v *vanishing) Lstat(path string) (fs.FileInfo, error) {
+	fi, err := v.FS.Lstat(path)
+	if err == nil && path == v.path && !v.done {
+		v.done = true
+		if rmErr := v.rm(path); rmErr != nil {
+			return nil, rmErr
+		}
+	}
+	return fi, err
+}
+
 func sites() []site {
 	hdr := journal.Header{InstallID: installID, App: "gotham"}
 	base := journal.Head{Seq: 5, MAC: "oracle"}
@@ -76,14 +97,14 @@ func sites() []site {
 			want: []string{
 				"journal.append:writeat", "journal.append:sync",
 				"journal.rollback:create", "journal.rollback:write", "journal.rollback:sync",
-				"journal.rollback:rename", "journal.rollback:sync", "journal.rollback:sync",
+				"journal.rollback:rename", "journal.rollback:sync",
 			}},
 		{name: "OpenFile cuts an incomplete last line",
 			setup: func(e *env) { primed(e); e.tearTail(journalAt) },
 			run:   func(e *env) error { j, err := e.open(journalAt); return closeAfter(j, err) },
 			want: []string{
 				"journal.cut:create", "journal.cut:write", "journal.cut:sync",
-				"journal.cut:rename", "journal.cut:sync", "journal.cut:sync",
+				"journal.cut:rename", "journal.cut:sync",
 			}},
 		{name: "CreateBased creates, writes, fsyncs and syncs the directory",
 			run: func(e *env) error {
@@ -125,6 +146,20 @@ func sites() []site {
 			want: []string{
 				"journal.location.tmp:create", "journal.location.tmp:write", "journal.location.tmp:sync", "journal.location.cleanup:remove",
 			}},
+		{name: "WriteLocation whose temporary file cannot be opened removes nothing",
+			setup: func(e *env) {
+				if err := e.rec.Mem().MkdirAll(stateDir+"/"+journal.LocationFile+".tmp", 0o700); err != nil {
+					e.t.Fatal(err)
+				}
+			},
+			run:     func(e *env) error { return journal.WriteLocation(stateDir, location("robin"), journal.WithFS(e.fsys)) },
+			wantErr: true,
+			want:    nil},
+		{name: "a failed header write of a new journal has nothing to cut back (a zero-byte truncation is a no-op)",
+			fail:    failAt(journal.LabelHeader, errorfs.OpFileWriteAt),
+			run:     func(e *env) error { j, err := e.open(journalAt); return closeAfter(j, err) },
+			wantErr: true,
+			want:    []string{"journal.create:create", "journal.header:writeat", "journal.rollback:sync"}},
 		{name: "WriteLocation removes a temporary file whose rename failed",
 			fail:    failAt(journal.LabelLocationRename, errorfs.OpRename),
 			run:     func(e *env) error { return journal.WriteLocation(stateDir, location("robin"), journal.WithFS(e.fsys)) },
@@ -140,6 +175,13 @@ func sites() []site {
 				"journal.move.copy:create", "journal.move.copy:write", "journal.move.copy:sync",
 				"journal.move.rename:rename", "journal.move.dirsync:sync",
 			}},
+		{name: "MoveFile's open of a source that vanished creates it under the move's own label",
+			setup: primed,
+			run: func(e *env) error {
+				v := &vanishing{FS: e.fsys, path: journalAt, rm: e.rec.Mem().Remove}
+				return journal.MoveFile(journalAt, movedTo, keys{}, journal.WithFS(v))
+			},
+			want: []string{"journal.move.source:create"}},
 		{name: "MoveFile clears a temporary copy an earlier attempt left",
 			setup: func(e *env) { primed(e); e.plant(movedTo+".moving", "a torn copy") },
 			run:   func(e *env) error { return journal.MoveFile(journalAt, movedTo, keys{}, journal.WithFS(e.fsys)) },
@@ -184,7 +226,7 @@ func sites() []site {
 // closeAfter closes j when the open produced one.
 func closeAfter(j *journal.File, err error) error {
 	if j != nil {
-		err = errorsJoin(err, j.Close())
+		err = errors.Join(err, j.Close())
 	}
 	return err
 }
@@ -259,7 +301,3 @@ func TestEveryLabelOfTheWriterTableIsReachedBySomeSite(t *testing.T) {
 		t.Errorf("label %q is carried by a durable operation but is not in journal.FSLabels()", l)
 	}
 }
-
-// keep the imports the helpers above and the cell tests share.
-var _ = os.ErrNotExist
-var _ vfs.FS

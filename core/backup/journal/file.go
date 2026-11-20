@@ -1,5 +1,5 @@
 // file: core/backup/journal/file.go
-// version: 2.4.0
+// version: 2.4.1
 // guid: b701597d-6d06-4dd4-af78-0e0d6a9983ca
 // last-edited: 2026-11-19
 
@@ -219,7 +219,7 @@ func OpenFile(ctx context.Context, o FileOptions) (*File, error) {
 	if err != nil {
 		return j.fail(fmt.Errorf("journal: read %s records: %w", gapPrefix, err))
 	}
-	f, data, err := openJournal(j.fsys, o.Path)
+	f, data, err := openJournal(j.fsys, LabelCreate, o.Path)
 	if err != nil {
 		return j.fail(err)
 	}
@@ -301,9 +301,11 @@ func (j *File) fail(err error) (*File, error) {
 // openJournal is the one place the journal file is opened: read-write,
 // append-only writes, created 0600, never through a symbolic link, required to
 // be a regular file (ErrNotRegular), locked exclusively (lockJournal) before
-// anything is read, and its current content.
-func openJournal(fsys FS, path string) (FSFile, []byte, error) {
-	f, err := openLabelled(fsys, LabelCreate, path, os.O_RDWR|os.O_CREATE|os.O_APPEND|openNoFollow, 0o600)
+// anything is read, and its current content. label is the writer-table label
+// of the open (LabelCreate for OpenFile, LabelMoveSource for MoveFile), under
+// which a file the open creates is recorded.
+func openJournal(fsys FS, label, path string) (FSFile, []byte, error) {
+	f, err := openLabelled(fsys, label, path, os.O_RDWR|os.O_CREATE|os.O_APPEND|openNoFollow, 0o600)
 	if err != nil {
 		return nil, nil, openError(fsys, "open", path, err)
 	}

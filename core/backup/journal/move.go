@@ -1,5 +1,5 @@
 // file: core/backup/journal/move.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5a2c7e19-0b3d-4f86-a4d1-9e7c6b1f3a28
 // last-edited: 2026-11-19
 
@@ -47,7 +47,7 @@ func MoveFile(from, to string, keys Keys, opts ...FSOption) (err error) {
 	if _, err := fsys.Lstat(from); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	f, data, err := openJournal(fsys, from)
+	f, data, err := openJournal(fsys, LabelMoveSource, from)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrMoveRefused, err)
 	}

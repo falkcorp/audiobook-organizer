@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/kit_test.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 67d91a53-bcd6-4094-acf4-c145ba475897
 // last-edited: 2026-11-19
 
@@ -9,10 +9,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/parser"
+	"go/token"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -300,23 +303,26 @@ func TestUnobservedHonoursUnbound(t *testing.T) {
 }
 
 // TestJournalRowsAreUnboundUntilF408: the journal's file writers are listed
-// in the writer table with a reason that names F4-08, so the table cannot
-// quietly keep claiming "unbound" once a boot reaches them (see
-// TestUnobservedHonoursUnbound), and every Unbound row says why.
+// in the writer table; an Unbound row names F4-08, and a row can be Unbound
+// only while the kernel does not wire the journal. Once core/kernel imports
+// core/internal/journalfs (F4-08's wiring), no row may stay Unbound: a row a
+// fixture reaches is reported stale by Unobserved, but one no fixture reaches
+// would keep the mark and the matrix would go on never breaking its writer, so
+// F4-08 must convert every remaining journal row and put each label no
+// fixture reaches in the fixtures' allow maps, with its own reason.
 func TestJournalRowsAreUnboundUntilF408(t *testing.T) {
 	t.Parallel()
-	found := 0
-	for _, r := range Rows() {
-		if r.Unbound == "" {
-			continue
-		}
-		found++
-		if !strings.Contains(r.Unbound, "F4-08") {
-			t.Errorf("row %q is Unbound for %q, which names no owner", r.Writer, r.Unbound)
-		}
+	wired, parsed := kernelImports(t, "github.com/falkcorp/mediacore/internal/journalfs")
+	if parsed < 5 {
+		t.Fatalf("parsed %d kernel source files; the tripwire is not looking at core/kernel", parsed)
 	}
-	if found < 6 {
-		t.Fatalf("found %d Unbound rows, want the journal's five and the kernel's set-aside", found)
+	// The scan sees an import the kernel does make, so "not wired" is a
+	// finding and not a scan that finds nothing.
+	if known, _ := kernelImports(t, "github.com/falkcorp/mediacore/storage"); !known {
+		t.Fatal("the scan of core/kernel's imports did not find its import of storage")
+	}
+	for _, v := range unboundViolations(Rows(), wired) {
+		t.Error(v)
 	}
 	listed := map[string]bool{}
 	for _, r := range Rows() {
@@ -329,6 +335,102 @@ func TestJournalRowsAreUnboundUntilF408(t *testing.T) {
 			t.Errorf("label %s is in no writer-table row", l)
 		}
 	}
+}
+
+// unboundViolations is what is wrong with rows' Unbound marks: a mark that
+// names no owner, and, once the journal is wired (core/kernel imports
+// core/internal/journalfs), every mark at all.
+func unboundViolations(rows []Row, wired bool) []string {
+	var out []string
+	for _, r := range rows {
+		if r.Unbound == "" {
+			continue
+		}
+		if !strings.Contains(r.Unbound, "F4-08") {
+			out = append(out, fmt.Sprintf("row %q is Unbound for %q, which names no owner", r.Writer, r.Unbound))
+		}
+		if wired {
+			out = append(out, fmt.Sprintf("core/kernel imports core/internal/journalfs, so the journal is wired, but row %q is still Unbound (%q): drop the mark, and allow each label no fixture reaches in the fixtures' allow maps with a reason", r.Writer, r.Unbound))
+		}
+	}
+	return out
+}
+
+// TestUnboundTripwireFires: the check behind TestJournalRowsAreUnboundUntilF408
+// reports an Unbound row once the journal is wired, and an ownerless one
+// always, and nothing for an owned mark before the wiring.
+func TestUnboundTripwireFires(t *testing.T) {
+	t.Parallel()
+	rows := []Row{{Writer: "journal", Labels: []string{"a"}, Unbound: "until F4-08"}, {Writer: "other", Labels: []string{"b"}}}
+	if v := unboundViolations(rows, false); len(v) != 0 {
+		t.Errorf("an owned Unbound mark before the wiring is reported: %v", v)
+	}
+	if v := unboundViolations(rows, true); len(v) != 1 || !strings.Contains(v[0], `"journal"`) {
+		t.Errorf("an Unbound mark after the wiring is not reported exactly once: %v", v)
+	}
+	rows[0].Unbound = "no owner named"
+	if v := unboundViolations(rows, false); len(v) != 1 {
+		t.Errorf("an ownerless Unbound mark is not reported: %v", v)
+	}
+}
+
+// TestJournalLabelsAreUnboundOrAllowedNeverBoth: every label of the journal's
+// writers and the kernel's set-aside is in a row that is Unbound (the first
+// boot with a revocation reaches it, once wired) or in JournalUnreachedLabels
+// (a non-default branch no fixture sets up yet), and never both: an allow entry
+// for an Unbound label would hide the stale report a reaching fixture owes.
+func TestJournalLabelsAreUnboundOrAllowedNeverBoth(t *testing.T) {
+	t.Parallel()
+	unbound := map[string]bool{}
+	for _, r := range Rows() {
+		for _, l := range r.Labels {
+			if r.Unbound != "" {
+				unbound[l] = true
+			}
+		}
+	}
+	allowed := JournalUnreachedLabels()
+	for _, l := range append(backupjournal.FSLabels(), LabelKernelJournalAside, LabelKernelJournalAsideSync) {
+		switch {
+		case unbound[l] && allowed[l] != "":
+			t.Errorf("label %s is in an Unbound row and in JournalUnreachedLabels", l)
+		case !unbound[l] && allowed[l] == "":
+			t.Errorf("label %s is in no Unbound row and not in JournalUnreachedLabels: a fixture that never reaches it would fail Unobserved, and no reason says why", l)
+		}
+	}
+	for l := range allowed {
+		if !slices.Contains(append(backupjournal.FSLabels(), LabelKernelJournalAside, LabelKernelJournalAsideSync), l) {
+			t.Errorf("JournalUnreachedLabels lists %s, which is no journal or kernel set-aside label", l)
+		}
+	}
+}
+
+// kernelImports reports whether a non-test source file of core/kernel imports
+// path, and how many it parsed. It reads the import lists only, so build tags
+// and a package that does not compile cannot hide an import.
+func kernelImports(t *testing.T, path string) (found bool, parsed int) {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join("..", "..", "kernel", "*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, parser.ImportsOnly)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed++
+		for _, imp := range f.Imports {
+			if p, err := strconv.Unquote(imp.Path.Value); err == nil && p == path {
+				found = true
+			}
+		}
+	}
+	return found, parsed
 }
 
 // sweepLabel is the scarecrow's writer label.
