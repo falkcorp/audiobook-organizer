@@ -1,7 +1,7 @@
 // file: core/backup/journal/move_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e6b8d41-9a07-4c3f-b5e2-0c1d7f4a9e83
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package journal
 
@@ -142,4 +142,43 @@ func TestMoveFile_Refusals(t *testing.T) {
 			t.Errorf("the moved journal carries the torn tail: %q", got)
 		}
 	})
+}
+
+// plantAfterClear is the OS filesystem that, the moment MoveFile clears the
+// temporary copy's name, puts a file there again: a name taken between the
+// clear and the create (a second mover, or a file planted on the share).
+type plantAfterClear struct {
+	FS
+	planted bool
+}
+
+func (p *plantAfterClear) Remove(path string) error {
+	err := p.FS.Remove(path)
+	if strings.HasSuffix(path, ".moving") && !p.planted {
+		p.planted = true
+		err = errors.Join(err, os.WriteFile(path, []byte("planted"), 0o600))
+	}
+	return err
+}
+
+// TestMoveFile_TempCreateIsExclusive: a name that appears at the temporary
+// copy's path after the clear is never written through. The create fails, the
+// move is refused with ErrMoveRefused wrapping ErrExist and the destination is
+// never created (the temporary name is the move's to clear again).
+func TestMoveFile_TempCreateIsExclusive(t *testing.T) {
+	fx := newFixture(t)
+	fx.built(t)
+	dest := filepath.Join(t.TempDir(), "offsite", "gotham_revocations.journal")
+	fsys := &plantAfterClear{FS: OSFS()}
+
+	err := MoveFile(fx.path, dest, fx.keys, WithFS(fsys))
+	if !fsys.planted {
+		t.Fatal("the temporary copy's name was never cleared, so the test planted nothing")
+	}
+	if !errors.Is(err, ErrMoveRefused) || !errors.Is(err, os.ErrExist) {
+		t.Fatalf("err = %v, want ErrMoveRefused wrapping ErrExist", err)
+	}
+	if _, serr := os.Stat(dest); !errors.Is(serr, os.ErrNotExist) {
+		t.Errorf("the refused move created the destination: %v", serr)
+	}
 }

@@ -151,3 +151,40 @@ func TestMemFS_AppendIsAtTheEnd(t *testing.T) {
 		t.Fatalf("after a reopen and a third append the chain = %+v, %v; want intact to seq 3", c, err)
 	}
 }
+
+// TestMemFS_FileOperationsReportAsTheOSDoes: the in-memory filesystem answers
+// the two errors the journal branches on the way os does: an exclusive create
+// over an existing name is ErrExist, and removing a name that is not there is
+// ErrNotExist, never a silent success. The filesystem is the bare in-memory
+// one: the crash kit's errorfs wrapper reports a remove of a missing name as
+// nil before the adapter's answer is seen.
+func TestMemFS_FileOperationsReportAsTheOSDoes(t *testing.T) {
+	fsys, err := journalfs.From(bootseam.With(t.Context(), &bootseam.Seams{FS: vfs.NewMem()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fsys.MkdirAll(backupDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := backupDir + "/riddler.txt"
+
+	if err := fsys.Remove(path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Remove of a missing file: err = %v, want ErrNotExist", err)
+	}
+	f, err := fsys.Open(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatalf("exclusive create of a new file: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if g, err := fsys.Open(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600); !errors.Is(err, os.ErrExist) {
+		if g != nil {
+			_ = g.Close()
+		}
+		t.Errorf("exclusive create over an existing file: err = %v, want ErrExist", err)
+	}
+	if err := fsys.Remove(path); err != nil {
+		t.Errorf("Remove of an existing file: %v", err)
+	}
+}
