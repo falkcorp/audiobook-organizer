@@ -208,10 +208,10 @@ func TestBasicGate_MoreRestrictiveWins(t *testing.T) {
 		operator       string
 		wantOn, wantFC bool
 	}{
-		{"operator false, stored true", ptr(true), gateOff, true, true},
-		{"operator true, stored false", ptr(false), gateOn, true, false},
+		{"operator false, stored true", new(true), gateOff, true, true},
+		{"operator true, stored false", new(false), gateOn, true, false},
 		{"operator true, nothing stored", nil, gateOn, true, false},
-		{"operator false, stored false", ptr(false), gateOff, false, false},
+		{"operator false, stored false", new(false), gateOff, false, false},
 		{"operator false, nothing stored", nil, gateOff, false, false},
 	}
 	for _, cell := range cells {
@@ -246,7 +246,7 @@ func TestBasicGate_MoreRestrictiveWins(t *testing.T) {
 		raw, err := os.ReadFile(filepath.Join("..", "..", "docker-compose.yml"))
 		require.NoError(t, err)
 		seen := 0
-		for _, line := range strings.Split(string(raw), "\n") {
+		for line := range strings.SplitSeq(string(raw), "\n") {
 			l := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "-"))
 			if !strings.HasPrefix(l, "ABO_CORE_HTTP_BASIC_GATE_") && !strings.Contains(strings.ToUpper(l), "BASIC_AUTH_") {
 				continue
