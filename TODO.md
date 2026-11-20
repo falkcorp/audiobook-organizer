@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.57 -->
+<!-- version: 10.78.58 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -649,11 +649,11 @@ into one of the curated sections below, is a normal direct edit.
 - [ ] **Settle `stopping{watchdog}`: `failed` (reason watchdog) or `timed_out`** 05-tasks §5T.8.3 maps a run left stopping with StopReason watchdog to `failed` with reason watchdog; R0's own `StopTerminal` ends it `timed_out`. F2-13's `run-stopping-watchdog` records the spec's mapping (`expected` and `imported_as: {"state": "failed", "reason": "watchdog"}` in `internal/books/testdata/r2corpus/manifest.json`). Confirm the spec or change it; if it changes, update `IMPORTED_AS` in `scripts/r2corpus/overlay/build_overlay.py` and its pinned table in `scripts/tests/test_build_overlay.py` (seams.d/F2-13.md).
   - Owner: 05-tasks' owner, before F5's M4 lands.
 
-- [ ] **F4-02-ROLE-GUARD** (in progress, PR #4771 round 2: round 1 guarded only the role of
-      the other holder, which leaves two exits of `keepAnAdmin` and `DeleteRole` open; not done
-      until both are closed.) Guard role
-      definitions in core auth's last-admin rule before anything implements `rbac.Holders`.
-      Hard prerequisite of F4-08's `rbac.Holders` (see
+- [x] **F4-02-ROLE-GUARD** Guard role definitions in core auth's last-admin rule before
+      anything implements `rbac.Holders` (PR #4771, rounds 1 and 2). A role-set generation
+      guards all three exits of `keepAnAdmin`, `DeleteRole` applies the last-admin rule, and
+      every write that gives a role claims it against a role-claim counter that `DeleteRole`
+      guards. Hard prerequisite of F4-08's `rbac.Holders` (see
       `docs/agent-tasks/platform-core/seams.d/F4-02.md`, "F4-08 must know").
 
 - [ ] **PLATFORM-CORE-R1-25-ABO-SWAP-BACK-FIXTURE** ABO's boot crash matrix
