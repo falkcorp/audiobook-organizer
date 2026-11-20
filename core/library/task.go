@@ -56,8 +56,9 @@ func TransferRecoverTask(m Manager) tasks.Definition {
 		run = func(rc *tasks.RC, _ TransferRecoverParams) (TransferRecoverResult, error) {
 			rep, err := rec.Recover(rc.Context())
 			res := TransferRecoverResult(rep)
-			// The executor stores a result only for a run that succeeded, so
-			// the status line is where a failed pass's counts survive.
+			// The executor keeps this result on a failed run as well as on a
+			// succeeded one (F5-18d, O5); the status line carries the counts
+			// too, for the run's live view.
 			rc.Progress().Note(rep.String())
 			if err != nil {
 				return res, errors.Join(errors.New("library: transfer recovery"), err)

@@ -82,7 +82,10 @@ type t6g3HostActivity interface {
 
 // newT6G3Deps is the books module's t6g3Deps. As in newT6G2Deps, a missing
 // input leaves the field that needs it unset so the group's own refusals fire.
-func newT6G3Deps(src t6g3Source, host t6g3BootHost, guardTags repairs.GuardTagReader, standDownKey tasks.Key) t6g3Deps {
+//
+// runs is the tasks run store (t6g3Deps.Runs), passed through as it is: a nil
+// runs leaves the credits backfill refused while the other kinds run.
+func newT6G3Deps(src t6g3Source, host t6g3BootHost, guardTags repairs.GuardTagReader, standDownKey tasks.Key, runs cbRunStore) t6g3Deps {
 	if src == nil || host == nil {
 		return t6g3Deps{}
 	}
@@ -91,6 +94,7 @@ func newT6G3Deps(src t6g3Source, host t6g3BootHost, guardTags repairs.GuardTagRe
 		Store:        &booksT6G3Store{src: src, host: host},
 		GuardTags:    guardTags,
 		StandDownKey: standDownKey,
+		Runs:         runs,
 		NewWriter: func(w tasks.Writer) t6g3Writer {
 			return &booksT6G3Writer{src: src, host: host, gate: newBooksGate(w, rows)}
 		},
@@ -190,9 +194,6 @@ func (s *booksT6G3Store) Can(c t6g3Capability) bool {
 	case t6g3CapOpRows:
 		_, ok := database.AsCapability[database.OpRowStore](s.src)
 		return ok
-	case t6g3CapClassLists:
-		_, ok := database.AsCapability[database.OpRowStore](s.host.OperationQueueStore())
-		return ok
 	}
 	return false
 }
@@ -283,12 +284,14 @@ func (s *booksT6G3Store) ScanPrefix(prefix string) ([]database.KVPair, error) {
 // booksT6G3Writer is the group's writes. Every method whose row names a
 // resource is one gated call. The methods with an empty row are decided here:
 //
-//   - ReplaceOpRowsPrefix, SaveClassLists and ClearClassLists write the run's
-//     own result rows and the judged markers of other operations (ledger rows
-//     that belong to no Effects resource). They stay unfenced: the credits
-//     backfill stores its result in a preview too, and writes the markers only
-//     under Apply (credits_backfill.go: markLeftoversJudged is inside
-//     params.Apply). TestBooksT6G3Writer_EmptyRowMethodsStayUnfenced pins both.
+//   - ReplaceOpRowsPrefix, SaveClassLists and ClearClassLists write op rows
+//     beside a v2 operation (ledger rows that belong to no Effects resource).
+//     The native credits backfill no longer calls them (F5-18d): its class id
+//     lists are its own run rows (env.ClassLists) and its judgements ride in
+//     its result (env.Ledger), both in the tasks run store. They stay on the
+//     writer, unfenced, because t6g3Writer only gains methods (rule R10 item
+//     2); removing them is F5-18's call (seams.d/F5-18d.md).
+//     TestBooksT6G3Writer_EmptyRowMethodsStayUnfenced pins today's behaviour.
 //   - InvalidateAuthorsCache drops an in-memory cache: unfenced, as before.
 type booksT6G3Writer struct {
 	src  t6g3Source

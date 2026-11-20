@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 )
 
 // The type-erased runners of a definition (F2-03). Task, Batch and Fixer
@@ -72,6 +73,24 @@ func encodeResult[R any](kind Kind, r R) (json.RawMessage, error) {
 	return b, nil
 }
 
+// failedResult is what a run that returned err alongside r stores (F5-18d,
+// O5): r encoded when it is not R's zero value, so a run that did work and then
+// failed keeps what it did on its failed record (HEAD stored a run's payload on
+// its row before it returned the run's error), and nothing when r is zero, so a
+// run that returns the zero result with its error stores no result, as before.
+// The executor keeps the result only on a terminal outcome (attempt.finish); a
+// result that does not encode is dropped and err is returned unchanged.
+func failedResult[R any](kind Kind, r R, err error) (json.RawMessage, error) {
+	if reflect.ValueOf(&r).Elem().IsZero() {
+		return nil, err
+	}
+	b, encErr := encodeResult(kind, r)
+	if encErr != nil {
+		return nil, err
+	}
+	return b, err
+}
+
 func eraseTask[P, R any](kind Kind, s TaskSpec[P, R]) runners {
 	if s.Run == nil {
 		return runners{decode: decoder[P](kind)}
@@ -81,7 +100,7 @@ func eraseTask[P, R any](kind Kind, s TaskSpec[P, R]) runners {
 		Run: func(rc *RC, p any) (json.RawMessage, error) {
 			r, err := run(rc, as[P](p))
 			if err != nil {
-				return nil, err
+				return failedResult(kind, r, err)
 			}
 			return encodeResult(kind, r)
 		},
@@ -111,7 +130,7 @@ func eraseBatch[P, T, R any](kind Kind, s BatchSpec[P, T, R]) runners {
 		b.Finish = func(rc *RC, p any, sum Summary) (json.RawMessage, error) {
 			r, err := f(rc, as[P](p), sum)
 			if err != nil {
-				return nil, err
+				return failedResult(kind, r, err)
 			}
 			return encodeResult(kind, r)
 		}

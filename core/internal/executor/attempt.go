@@ -645,9 +645,13 @@ func (a *attempt) finish(res json.RawMessage, err error) {
 			next.Result, next.Error = res, ""
 			ev.Event = "complete"
 		case tasks.StateFailed, tasks.StateTimedOut:
-			next.Error = errText(err)
+			// The body's result, when it returned one beside its error, stays
+			// on the failed record (F5-18d, O5; tasks.failedResult): nil
+			// clears whatever an earlier attempt left.
+			next.Result, next.Error = res, errText(err)
 			ev.Event = "fail"
 		case tasks.StateCanceled:
+			next.Result = res
 			ev.Event = "cancel"
 		default:
 			ev.Event = "interrupt"

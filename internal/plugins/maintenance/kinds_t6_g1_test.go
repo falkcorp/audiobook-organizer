@@ -514,7 +514,7 @@ func TestT6G1Kinds_ReadDependenciesHaveNoWriteMethods(t *testing.T) {
 		types = append(types, st.Field(i).Type)
 	}
 	dt := reflect.TypeOf(t6g1Deps{})
-	for _, name := range []string{"ActivityFilter", "PlanReader"} {
+	for _, name := range []string{"ActivityFilter", "PlanRuns"} {
 		f, ok := dt.FieldByName(name)
 		require.True(t, ok, "t6g1Deps.%s", name)
 		types = append(types, f.Type)

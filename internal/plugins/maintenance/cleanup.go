@@ -1002,8 +1002,8 @@ func (p *Plugin) trashCleanupKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.S
 			if err != nil {
 				return TrashCleanupResult{}, err
 			}
-			// core drops a failed run's result (core/tasks/erased.go): see the
-			// F5-08 seams note.
+			// core keeps a failed run's non-zero result beside its error
+			// (core/tasks/erased.go failedResult, F5-18d O5).
 			return runTrashCleanupCore(rc.Context(), trashCleanupEnv{t6g3Base: base})
 		},
 	})

@@ -161,8 +161,6 @@ const (
 	// t6g3CapOpRows is GetOpRows and ScanOpRowIndex (and ReplaceOpRowsPrefix on
 	// the writer): the judged markers.
 	t6g3CapOpRows
-	// t6g3CapClassLists is the row store the class id lists are kept in.
-	t6g3CapClassLists
 )
 
 // t6g3CreditsReader is the credits backfill's reads beyond the census's.
@@ -214,6 +212,11 @@ type t6g3Deps struct {
 	// w (F5-18: internal/books/writer over rc.Writer()). w is nil for a
 	// ReadOnly kind, whose core writes nothing.
 	NewWriter func(w tasks.Writer) t6g3Writer
+	// Runs is the tasks run store the credits backfill keeps its class id lists
+	// in (its own run rows) and lists its other runs from (F5-18d, O10-O12).
+	// F5-18 passes the kernel's NativeStores.Runs. Nil: the credits backfill is
+	// refused; no other kind of the group reads it.
+	Runs cbRunStore
 }
 
 // --- the HEAD adapters (rule R10 item 5) ---
@@ -420,9 +423,6 @@ func (s headT6g3Store) Can(c t6g3Capability) bool {
 		return ok
 	case t6g3CapOpRows:
 		_, ok := database.AsCapability[database.OpRowStore](s.OpsStore)
-		return ok
-	case t6g3CapClassLists:
-		_, ok := database.AsCapability[database.OpRowStore](s.p.deps.OperationQueueStore())
 		return ok
 	}
 	return false
