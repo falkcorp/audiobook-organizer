@@ -180,7 +180,8 @@ export function createStreamConnection(opts: ConnectionOptions): StreamConnectio
   let wakeSleep: (() => void) | null = null;
   let lastEventId = '';
   // backoff.notBefore: never sooner than this (now() ms). Set from every failed attempt's
-  // backoff and Retry-After, honoured by open() and restart() too, reset only by a good open.
+  // backoff and Retry-After, honoured by open() and restart() too, zeroed by a good open
+  // (and by the manager once a closed stream's wait has lapsed).
   const backoff: BackoffState = opts.backoff ?? { attempt: 0, notBefore: 0 };
   const serverHold = opts.serverHold;
   let status: StreamStatus = { state: 'idle', attempt: backoff.attempt, streamKey: opts.key };

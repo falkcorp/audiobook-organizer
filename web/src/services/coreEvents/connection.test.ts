@@ -347,20 +347,37 @@ describe('open, close, restart', () => {
     conn.close('idle');
   });
 
-  // Waits are on the monotonic clock, so a wall-clock step back (an NTP correction, a
-  // resumed laptop) moves none of them (#4813 r1 m1); the zeroing on a good open still
-  // stops a spent wait from holding a healthy stream off (#4785 r2 n1).
-  it('a good open clears the wait even after the wall clock steps back: close then open connects at once', async () => {
-    const { server, conn } = setup();
+  // Waits are on deps.now, monotonic by default, so a wall-clock step back moves none of
+  // them (#4813 r1 m1; 'a wall-clock step back does not stretch a server hold'). The
+  // zeroing on a good open is what keeps a clock that does step back (an injected one)
+  // from holding a healthy stream off on a spent wait (#4785 r2 n1).
+  it('a good open clears the wait even after deps.now steps back: close then open connects at once', async () => {
+    const server = createFakeServer();
+    const clock = { t: 10_000_000 };
+    const backoff: BackoffState = { attempt: 0, notBefore: 0 };
     server.answer(() => problemResponse(429, 'rate_limited', 'x', { 'Retry-After': '30' }));
     const s = server.openStream();
     server.openStream();
+    const conn = createStreamConnection({
+      key: '',
+      topics: () => [RUN],
+      onEvent: () => {},
+      onReset: () => {},
+      onClosed: () => {},
+      onStatus: () => {},
+      deps: { fetch: server.fetch, random: () => 0, now: () => clock.t },
+      backoff,
+    });
     conn.open();
+    await tick();
+    expect(backoff.notBefore).toBe(10_030_000);
+    clock.t += 30000;
     await tick(30000);
     expect(server.calls).toHaveLength(2);
-    vi.setSystemTime(Date.now() - 5 * 60 * 1000);
+    clock.t -= 5 * 60 * 1000;
     s.control(TOPIC_OPENED, {});
     await tick();
+    expect(backoff).toEqual({ attempt: 0, notBefore: 0 });
     conn.close('hidden');
     conn.open();
     await tick();
