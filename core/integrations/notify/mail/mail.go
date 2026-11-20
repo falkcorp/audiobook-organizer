@@ -1,5 +1,5 @@
 // file: core/integrations/notify/mail/mail.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 11234e57-50d2-4d9a-be89-62e983dfeda9
 // last-edited: 2026-11-19
 
@@ -170,8 +170,10 @@ func NewSMTPSender(cfg SMTPConfig) (*SMTPSender, error) {
 		return nil, fmt.Errorf("mail: SMTP from address: %w", err)
 	}
 	if cfg.Dial == nil {
-		// No default dial: a sender nobody gave a dial refuses (the zero Ref
-		// names no instance; the channel overwrites it with the instance's).
+		// No default dial: a sender nobody gave a dial refuses. Only a direct
+		// NewSMTPSender caller that left Dial nil gets noDial (channel.Send
+		// always sets the instance's guarded dial first), and its refusal
+		// carries the zero Ref, so it names no instance.
 		cfg.Dial = noDial
 	}
 	return &SMTPSender{
