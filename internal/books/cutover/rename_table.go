@@ -396,6 +396,9 @@ func (g *generator) addSub(top, head string, s subRow) {
 		Admin: adminClass(head, s.admin, s.targets)})
 }
 
+// onStartupDroppedNote is the note of every scheduled.<task>.on_startup row.
+const onStartupDroppedNote = "not carried: a task's start trigger is part of its definition (05-tasks 5T.8.2); scan_on_startup is the one that stays"
+
 // scheduledRows generates one row per entry of the scheduled block.
 func (g *generator) scheduledRows(t reflect.Type) {
 	for i := 0; i < t.NumField(); i++ {
@@ -418,6 +421,17 @@ func (g *generator) scheduledRows(t reflect.Type) {
 			r.Note = "a second target: the same ScheduleConfig also seeds the core kind core.storage.compact's key"
 		}
 		g.add(r)
+		// What core's schedule value has no place for are their own dropped rows,
+		// so the retired names say so (no replacement) instead of pointing at the
+		// schedule key that does not carry them, and the R2 release note lists them.
+		if _, ok := sf.Type.FieldByNameFunc(func(n string) bool { return n == "OnStartup" }); ok {
+			g.add(Row{Head: "scheduled." + name + ".on_startup", Class: ClassDropped, Stored: StoredBlob, BlobField: "scheduled",
+				Note: onStartupDroppedNote})
+		}
+		if name == "library_scan_full" {
+			g.add(Row{Head: "scheduled.library_scan_full.interval", Class: ClassDropped, Stored: StoredBlob, BlobField: "scheduled",
+				Note: "the due-check cadence is fixed at one hour; the sweep period is period_hours (every)"})
+		}
 	}
 }
 

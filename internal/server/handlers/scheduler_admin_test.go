@@ -211,33 +211,26 @@ type taskIntField struct {
 func acceptedBoolFields() []taskBoolField {
 	return []taskBoolField{
 		{"dedup_refresh", "enabled", func() bool { return config.AppConfig.Scheduled.DedupRefresh.Enabled }},
-		{"dedup_refresh", "run_on_startup", func() bool { return config.AppConfig.Scheduled.DedupRefresh.OnStartup }},
 		{"dedup_refresh", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.DedupRefresh }},
 		{"author_split_scan", "enabled", func() bool { return config.AppConfig.Scheduled.AuthorSplit.Enabled }},
-		{"author_split_scan", "run_on_startup", func() bool { return config.AppConfig.Scheduled.AuthorSplit.OnStartup }},
 		{"author_split_scan", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.AuthorSplit }},
 		{"db_optimize", "enabled", func() bool { return config.AppConfig.Scheduled.DbOptimize.Enabled }},
-		{"db_optimize", "run_on_startup", func() bool { return config.AppConfig.Scheduled.DbOptimize.OnStartup }},
 		{"db_optimize", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.DbOptimize }},
 		{"metadata_refresh", "enabled", func() bool { return config.AppConfig.Scheduled.MetadataRefresh.Enabled }},
-		{"metadata_refresh", "run_on_startup", func() bool { return config.AppConfig.Scheduled.MetadataRefresh.OnStartup }},
 		{"metadata_refresh", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.MetadataRefresh }},
 		{"series_prune", "enabled", func() bool { return config.AppConfig.Scheduled.SeriesPrune.Enabled }},
-		{"series_prune", "run_on_startup", func() bool { return config.AppConfig.Scheduled.SeriesPrune.OnStartup }},
 		{"series_prune", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.SeriesPrune }},
 		// library_scan's first three bound only after 2026-08-16; before that the
 		// case wired the maintenance-window flag alone and dropped the rest.
 		{"library_scan", "enabled", func() bool { return config.AppConfig.Scheduled.LibraryScan.Enabled }},
-		{"library_scan", "run_on_startup", func() bool { return config.AppConfig.Scheduled.LibraryScan.OnStartup }},
+		{"library_scan", "run_on_startup", func() bool { return config.AppConfig.ScanOnStartup }},
 		{"library_scan", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.LibraryScan }},
 		{"reconcile_scan", "enabled", func() bool { return config.AppConfig.Scheduled.Reconcile.Enabled }},
-		{"reconcile_scan", "run_on_startup", func() bool { return config.AppConfig.Scheduled.Reconcile.OnStartup }},
 		{"reconcile_scan", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.Reconcile }},
 		{"purge_deleted", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.PurgeDeleted }},
 		{"purge_old_logs", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.PurgeOldLogs }},
 		{"tombstone_cleanup", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.TombstoneCleanup }},
 		{"library_organize", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.LibraryOrganize }},
-		{"metadata_upgrade", "run_on_startup", func() bool { return config.AppConfig.Scheduled.MetadataUpgrade.OnStartup }},
 	}
 }
 
@@ -275,6 +268,16 @@ func rejectedFields() []struct{ task, field string } {
 		{"library_organize", "run_on_startup"},
 		{"metadata_upgrade", "enabled"},
 		{"metadata_upgrade", "run_in_maintenance_window"},
+		// run on start is no longer a setting (core's schedule value has no
+		// such field), and the full sweep's due-check is fixed.
+		{"metadata_upgrade", "run_on_startup"},
+		{"dedup_refresh", "run_on_startup"},
+		{"author_split_scan", "run_on_startup"},
+		{"db_optimize", "run_on_startup"},
+		{"metadata_refresh", "run_on_startup"},
+		{"series_prune", "run_on_startup"},
+		{"reconcile_scan", "run_on_startup"},
+		{"library_scan_full", "interval_minutes"},
 		{"asin_backfill", "enabled"},
 		{"asin_backfill", "run_on_startup"},
 		{"asin_backfill", "run_in_maintenance_window"},
@@ -419,11 +422,12 @@ func TestUpdateTaskConfig_SchedulerReportsTheAppliedValue(t *testing.T) {
 	}
 }
 
-// TestUpdateTaskConfig_LibraryScanEnabledBeatsLegacyScanOnStartup pins the
-// specific masking this endpoint used to have. Before the fold, this PUT wrote
-// Scheduled.LibraryScan.Enabled=false, answered 200, and IsEnabled() stayed
-// true because it ORs in the legacy scan_on_startup key.
-func TestUpdateTaskConfig_LibraryScanEnabledBeatsLegacyScanOnStartup(t *testing.T) {
+// TestUpdateTaskConfig_LibraryScanEnabledNamesScanOnStartup pins the masking
+// this endpoint used to have: a PUT wrote Scheduled.LibraryScan.Enabled=false,
+// answered 200, and IsEnabled() stayed true because it ORs in scan_on_startup.
+// The write is refused while that key is set, naming it, and works once the
+// startup run is off.
+func TestUpdateTaskConfig_LibraryScanEnabledNamesScanOnStartup(t *testing.T) {
 	restoreAppConfig(t)
 	config.AppConfig.ScanOnStartup = true
 	config.AppConfig.Scheduled.LibraryScan.Enabled = true
@@ -433,8 +437,14 @@ func TestUpdateTaskConfig_LibraryScanEnabledBeatsLegacyScanOnStartup(t *testing.
 	require.True(t, before.Enabled, "precondition: the task should start enabled")
 
 	w := putTaskConfig(t, "library_scan", "enabled", false)
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	require.Contains(t, w.Body.String(), "scan_on_startup")
+	still, _ := schedulerView(t, "library_scan")
+	require.True(t, still.Enabled, "a refused write must change nothing")
 
+	require.Equal(t, http.StatusOK, putTaskConfig(t, "library_scan", "run_on_startup", false).Code)
+	w = putTaskConfig(t, "library_scan", "enabled", false)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	after, ok := schedulerView(t, "library_scan")
 	require.True(t, ok)
 	require.False(t, after.Enabled,
@@ -447,7 +457,6 @@ func TestUpdateTaskConfig_LibraryScanRunOnStartupOffKeepsTaskEnabled(t *testing.
 	restoreAppConfig(t)
 	config.AppConfig.ScanOnStartup = true
 	config.AppConfig.Scheduled.LibraryScan.Enabled = false
-	config.AppConfig.Scheduled.LibraryScan.OnStartup = false
 
 	w := putTaskConfig(t, "library_scan", "run_on_startup", false)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())

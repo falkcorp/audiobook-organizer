@@ -6,7 +6,7 @@
 # Rename table (05-config §1.12.3), generated from the frozen HEAD Config by rename_table.go.
 # Regenerate: go test ./internal/books/cutover -run TestRenameTable_Golden -update
 # top-level rows: 173 (k=135 s=11 i=9 o=16 x=2); rows with two targets: 2
-# sub-key rows: 137; virtual rows: 3; removed-key rows: 23; process-name rows: 2; rows: 338
+# sub-key rows: 153; virtual rows: 3; removed-key rows: 23; process-name rows: 2; rows: 354
 # os.Getenv literals outside core/, internal/config/ and this package (05-config §1.12.4 "Not config at all"): 16
 #   getenv ABK_ALLOW_ENCRYPTION_KEY_REGEN
 #   getenv ABK_DISABLE_MEDIAINFO
@@ -1684,15 +1684,25 @@ target key modules.books.scheduler.schedules.library_scan convert=schedule-stand
 retired env SCHEDULED.LIBRARY_SCAN -> modules.books.scheduler.schedules.library_scan warn
 retired env SCHEDULED_LIBRARY_SCAN_ENABLED -> modules.books.scheduler.schedules.library_scan warn
 retired env SCHEDULED_LIBRARY_SCAN_INTERVAL -> modules.books.scheduler.schedules.library_scan warn
-retired env SCHEDULED_LIBRARY_SCAN_ON_STARTUP -> modules.books.scheduler.schedules.library_scan warn
+
+## scheduled.library_scan.on_startup
+top=false stored=blob class=x blob=scheduled admin=false fail-closed=false url=false
+note not carried: a task's start trigger is part of its definition (05-tasks 5T.8.2); scan_on_startup is the one that stays
+retired env SCHEDULED.LIBRARY_SCAN.ON_STARTUP -> - warn
+retired env SCHEDULED_LIBRARY_SCAN_ON_STARTUP -> - warn
 
 ## scheduled.library_scan_full
 top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
 target key modules.books.scheduler.schedules.library_scan_full convert=schedule-full-scan env=ABO_BOOKS_SCHEDULER_SCHEDULES_LIBRARY_SCAN_FULL
 retired env SCHEDULED.LIBRARY_SCAN_FULL -> modules.books.scheduler.schedules.library_scan_full warn
 retired env SCHEDULED_LIBRARY_SCAN_FULL_ENABLED -> modules.books.scheduler.schedules.library_scan_full warn
-retired env SCHEDULED_LIBRARY_SCAN_FULL_INTERVAL -> modules.books.scheduler.schedules.library_scan_full warn
 retired env SCHEDULED_LIBRARY_SCAN_FULL_PERIOD_HOURS -> modules.books.scheduler.schedules.library_scan_full warn
+
+## scheduled.library_scan_full.interval
+top=false stored=blob class=x blob=scheduled admin=false fail-closed=false url=false
+note the due-check cadence is fixed at one hour; the sweep period is period_hours (every)
+retired env SCHEDULED.LIBRARY_SCAN_FULL.INTERVAL -> - warn
+retired env SCHEDULED_LIBRARY_SCAN_FULL_INTERVAL -> - warn
 
 ## scheduled.dedup_refresh
 top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
@@ -1700,7 +1710,12 @@ target key modules.books.scheduler.schedules.dedup_refresh convert=schedule-stan
 retired env SCHEDULED.DEDUP_REFRESH -> modules.books.scheduler.schedules.dedup_refresh warn
 retired env SCHEDULED_DEDUP_REFRESH_ENABLED -> modules.books.scheduler.schedules.dedup_refresh warn
 retired env SCHEDULED_DEDUP_REFRESH_INTERVAL -> modules.books.scheduler.schedules.dedup_refresh warn
-retired env SCHEDULED_DEDUP_REFRESH_ON_STARTUP -> modules.books.scheduler.schedules.dedup_refresh warn
+
+## scheduled.dedup_refresh.on_startup
+top=false stored=blob class=x blob=scheduled admin=false fail-closed=false url=false
+note not carried: a task's start trigger is part of its definition (05-tasks 5T.8.2); scan_on_startup is the one that stays
+retired env SCHEDULED.DEDUP_REFRESH.ON_STARTUP -> - warn
+retired env SCHEDULED_DEDUP_REFRESH_ON_STARTUP -> - warn
 
 ## scheduled.acoustid_backfill
 top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
@@ -1708,7 +1723,12 @@ target key modules.books.scheduler.schedules.acoustid_backfill convert=schedule-
 retired env SCHEDULED.ACOUSTID_BACKFILL -> modules.books.scheduler.schedules.acoustid_backfill warn
 retired env SCHEDULED_ACOUSTID_BACKFILL_ENABLED -> modules.books.scheduler.schedules.acoustid_backfill warn
 retired env SCHEDULED_ACOUSTID_BACKFILL_INTERVAL -> modules.books.scheduler.schedules.acoustid_backfill warn
-retired env SCHEDULED_ACOUSTID_BACKFILL_ON_STARTUP -> modules.books.scheduler.schedules.acoustid_backfill warn
+
+## scheduled.acoustid_backfill.on_startup
+top=false stored=blob class=x blob=scheduled admin=false fail-closed=false url=false
+note not carried: a task's start trigger is part of its definition (05-tasks 5T.8.2); scan_on_startup is the one that stays
+retired env SCHEDULED.ACOUSTID_BACKFILL.ON_STARTUP -> - warn
+retired env SCHEDULED_ACOUSTID_BACKFILL_ON_STARTUP -> - warn
 
 ## scheduled.label_refinement
 top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
@@ -1716,7 +1736,12 @@ target key modules.books.scheduler.schedules.label_refinement convert=schedule-s
 retired env SCHEDULED.LABEL_REFINEMENT -> modules.books.scheduler.schedules.label_refinement warn
 retired env SCHEDULED_LABEL_REFINEMENT_ENABLED -> modules.books.scheduler.schedules.label_refinement warn
 retired env SCHEDULED_LABEL_REFINEMENT_INTERVAL -> modules.books.scheduler.schedules.label_refinement warn
-retired env SCHEDULED_LABEL_REFINEMENT_ON_STARTUP -> modules.books.scheduler.schedules.label_refinement warn
+
+## scheduled.label_refinement.on_startup
+top=false stored=blob class=x blob=scheduled admin=false fail-closed=false url=false
+note not carried: a task's start trigger is part of its definition (05-tasks 5T.8.2); scan_on_startup is the one that stays
+retired env SCHEDULED.LABEL_REFINEMENT.ON_STARTUP -> - warn
+retired env SCHEDULED_LABEL_REFINEMENT_ON_STARTUP -> - warn
 
 ## scheduled.author_split
 top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
@@ -1724,7 +1749,12 @@ target key modules.books.scheduler.schedules.author_split convert=schedule-stand
 retired env SCHEDULED.AUTHOR_SPLIT -> modules.books.scheduler.schedules.author_split warn
 retired env SCHEDULED_AUTHOR_SPLIT_ENABLED -> modules.books.scheduler.schedules.author_split warn
 retired env SCHEDULED_AUTHOR_SPLIT_INTERVAL -> modules.books.scheduler.schedules.author_split warn
-retired env SCHEDULED_AUTHOR_SPLIT_ON_STARTUP -> modules.books.scheduler.schedules.author_split warn
+
+## scheduled.author_split.on_startup
+top=false stored=blob class=x blob=scheduled admin=false fail-closed=false url=false
+note not carried: a task's start trigger is part of its definition (05-tasks 5T.8.2); scan_on_startup is the one that stays
+retired env SCHEDULED.AUTHOR_SPLIT.ON_STARTUP -> - warn
+retired env SCHEDULED_AUTHOR_SPLIT_ON_STARTUP -> - warn
 
 ## scheduled.db_optimize
 top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
@@ -1734,7 +1764,12 @@ note a second target: the same ScheduleConfig also seeds the core kind core.stor
 retired env SCHEDULED.DB_OPTIMIZE -> modules.books.scheduler.schedules.db_optimize warn
 retired env SCHEDULED_DB_OPTIMIZE_ENABLED -> modules.books.scheduler.schedules.db_optimize warn
 retired env SCHEDULED_DB_OPTIMIZE_INTERVAL -> modules.books.scheduler.schedules.db_optimize warn
-retired env SCHEDULED_DB_OPTIMIZE_ON_STARTUP -> modules.books.scheduler.schedules.db_optimize warn
+
+## scheduled.db_optimize.on_startup
+top=false stored=blob class=x blob=scheduled admin=false fail-closed=false url=false
+note not carried: a task's start trigger is part of its definition (05-tasks 5T.8.2); scan_on_startup is the one that stays
+retired env SCHEDULED.DB_OPTIMIZE.ON_STARTUP -> - warn
+retired env SCHEDULED_DB_OPTIMIZE_ON_STARTUP -> - warn
 
 ## scheduled.metadata_refresh
 top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
@@ -1742,7 +1777,12 @@ target key modules.books.scheduler.schedules.metadata_refresh convert=schedule-s
 retired env SCHEDULED.METADATA_REFRESH -> modules.books.scheduler.schedules.metadata_refresh warn
 retired env SCHEDULED_METADATA_REFRESH_ENABLED -> modules.books.scheduler.schedules.metadata_refresh warn
 retired env SCHEDULED_METADATA_REFRESH_INTERVAL -> modules.books.scheduler.schedules.metadata_refresh warn
-retired env SCHEDULED_METADATA_REFRESH_ON_STARTUP -> modules.books.scheduler.schedules.metadata_refresh warn
+
+## scheduled.metadata_refresh.on_startup
+top=false stored=blob class=x blob=scheduled admin=false fail-closed=false url=false
+note not carried: a task's start trigger is part of its definition (05-tasks 5T.8.2); scan_on_startup is the one that stays
+retired env SCHEDULED.METADATA_REFRESH.ON_STARTUP -> - warn
+retired env SCHEDULED_METADATA_REFRESH_ON_STARTUP -> - warn
 
 ## scheduled.resolve_production_authors
 top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
@@ -1751,13 +1791,23 @@ retired env SCHEDULED.RESOLVE_PRODUCTION_AUTHORS -> modules.books.scheduler.sche
 retired env SCHEDULED_RESOLVE_PRODUCTION_AUTHORS_ENABLED -> modules.books.scheduler.schedules.resolve_production_authors warn
 retired env SCHEDULED_RESOLVE_PRODUCTION_AUTHORS_INTERVAL -> modules.books.scheduler.schedules.resolve_production_authors warn
 
+## scheduled.resolve_production_authors.on_startup
+top=false stored=blob class=x blob=scheduled admin=false fail-closed=false url=false
+note not carried: a task's start trigger is part of its definition (05-tasks 5T.8.2); scan_on_startup is the one that stays
+retired env SCHEDULED.RESOLVE_PRODUCTION_AUTHORS.ON_STARTUP -> - warn
+
 ## scheduled.series_prune
 top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
 target key modules.books.scheduler.schedules.series_prune convert=schedule-standard env=ABO_BOOKS_SCHEDULER_SCHEDULES_SERIES_PRUNE
 retired env SCHEDULED.SERIES_PRUNE -> modules.books.scheduler.schedules.series_prune warn
 retired env SCHEDULED_SERIES_PRUNE_ENABLED -> modules.books.scheduler.schedules.series_prune warn
 retired env SCHEDULED_SERIES_PRUNE_INTERVAL -> modules.books.scheduler.schedules.series_prune warn
-retired env SCHEDULED_SERIES_PRUNE_ON_STARTUP -> modules.books.scheduler.schedules.series_prune warn
+
+## scheduled.series_prune.on_startup
+top=false stored=blob class=x blob=scheduled admin=false fail-closed=false url=false
+note not carried: a task's start trigger is part of its definition (05-tasks 5T.8.2); scan_on_startup is the one that stays
+retired env SCHEDULED.SERIES_PRUNE.ON_STARTUP -> - warn
+retired env SCHEDULED_SERIES_PRUNE_ON_STARTUP -> - warn
 
 ## scheduled.ai_dedup_batch
 top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
@@ -1765,7 +1815,12 @@ target key modules.books.scheduler.schedules.ai_dedup_batch convert=schedule-sta
 retired env SCHEDULED.AI_DEDUP_BATCH -> modules.books.scheduler.schedules.ai_dedup_batch warn
 retired env SCHEDULED_AI_DEDUP_BATCH_ENABLED -> modules.books.scheduler.schedules.ai_dedup_batch warn
 retired env SCHEDULED_AI_DEDUP_BATCH_INTERVAL -> modules.books.scheduler.schedules.ai_dedup_batch warn
-retired env SCHEDULED_AI_DEDUP_BATCH_ON_STARTUP -> modules.books.scheduler.schedules.ai_dedup_batch warn
+
+## scheduled.ai_dedup_batch.on_startup
+top=false stored=blob class=x blob=scheduled admin=false fail-closed=false url=false
+note not carried: a task's start trigger is part of its definition (05-tasks 5T.8.2); scan_on_startup is the one that stays
+retired env SCHEDULED.AI_DEDUP_BATCH.ON_STARTUP -> - warn
+retired env SCHEDULED_AI_DEDUP_BATCH_ON_STARTUP -> - warn
 
 ## scheduled.reconcile
 top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
@@ -1773,14 +1828,24 @@ target key modules.books.scheduler.schedules.reconcile convert=schedule-standard
 retired env SCHEDULED.RECONCILE -> modules.books.scheduler.schedules.reconcile warn
 retired env SCHEDULED_RECONCILE_ENABLED -> modules.books.scheduler.schedules.reconcile warn
 retired env SCHEDULED_RECONCILE_INTERVAL -> modules.books.scheduler.schedules.reconcile warn
-retired env SCHEDULED_RECONCILE_ON_STARTUP -> modules.books.scheduler.schedules.reconcile warn
+
+## scheduled.reconcile.on_startup
+top=false stored=blob class=x blob=scheduled admin=false fail-closed=false url=false
+note not carried: a task's start trigger is part of its definition (05-tasks 5T.8.2); scan_on_startup is the one that stays
+retired env SCHEDULED.RECONCILE.ON_STARTUP -> - warn
+retired env SCHEDULED_RECONCILE_ON_STARTUP -> - warn
 
 ## scheduled.metadata_upgrade
 top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
 target key modules.books.scheduler.schedules.metadata_upgrade convert=schedule-interval env=ABO_BOOKS_SCHEDULER_SCHEDULES_METADATA_UPGRADE
 retired env SCHEDULED.METADATA_UPGRADE -> modules.books.scheduler.schedules.metadata_upgrade warn
 retired env SCHEDULED_METADATA_UPGRADE_INTERVAL -> modules.books.scheduler.schedules.metadata_upgrade warn
-retired env SCHEDULED_METADATA_UPGRADE_ON_STARTUP -> modules.books.scheduler.schedules.metadata_upgrade warn
+
+## scheduled.metadata_upgrade.on_startup
+top=false stored=blob class=x blob=scheduled admin=false fail-closed=false url=false
+note not carried: a task's start trigger is part of its definition (05-tasks 5T.8.2); scan_on_startup is the one that stays
+retired env SCHEDULED.METADATA_UPGRADE.ON_STARTUP -> - warn
+retired env SCHEDULED_METADATA_UPGRADE_ON_STARTUP -> - warn
 
 ## scheduled.asin_backfill
 top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
@@ -1788,16 +1853,31 @@ target key modules.books.scheduler.schedules.asin_backfill convert=schedule-inte
 retired env SCHEDULED.ASIN_BACKFILL -> modules.books.scheduler.schedules.asin_backfill warn
 retired env SCHEDULED_ASIN_BACKFILL_INTERVAL -> modules.books.scheduler.schedules.asin_backfill warn
 
+## scheduled.asin_backfill.on_startup
+top=false stored=blob class=x blob=scheduled admin=false fail-closed=false url=false
+note not carried: a task's start trigger is part of its definition (05-tasks 5T.8.2); scan_on_startup is the one that stays
+retired env SCHEDULED.ASIN_BACKFILL.ON_STARTUP -> - warn
+
 ## scheduled.candidate_fetch
 top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
 target key modules.books.scheduler.schedules.candidate_fetch convert=schedule-interval env=ABO_BOOKS_SCHEDULER_SCHEDULES_CANDIDATE_FETCH
 retired env SCHEDULED.CANDIDATE_FETCH -> modules.books.scheduler.schedules.candidate_fetch warn
+
+## scheduled.candidate_fetch.on_startup
+top=false stored=blob class=x blob=scheduled admin=false fail-closed=false url=false
+note not carried: a task's start trigger is part of its definition (05-tasks 5T.8.2); scan_on_startup is the one that stays
+retired env SCHEDULED.CANDIDATE_FETCH.ON_STARTUP -> - warn
 
 ## scheduled.catalog_harvest
 top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
 target key modules.books.scheduler.schedules.catalog_harvest convert=schedule-interval env=ABO_BOOKS_SCHEDULER_SCHEDULES_CATALOG_HARVEST
 retired env SCHEDULED.CATALOG_HARVEST -> modules.books.scheduler.schedules.catalog_harvest warn
 retired env SCHEDULED_CATALOG_HARVEST_INTERVAL -> modules.books.scheduler.schedules.catalog_harvest warn
+
+## scheduled.catalog_harvest.on_startup
+top=false stored=blob class=x blob=scheduled admin=false fail-closed=false url=false
+note not carried: a task's start trigger is part of its definition (05-tasks 5T.8.2); scan_on_startup is the one that stays
+retired env SCHEDULED.CATALOG_HARVEST.ON_STARTUP -> - warn
 
 ## plugins
 top=true stored=blob class=i blob=plugins admin=false fail-closed=false url=false
