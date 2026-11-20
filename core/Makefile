@@ -19,7 +19,7 @@ PYTHON ?= python3
 
 .PHONY: print-toolchain ci build vet test-short fmt-check fix-check tidy-check archtest exclude-check toolchain-check \
 	errcheck-ratchet interface-width pprof-check mocks-check web-install web-test web-lint openapi-check openapi-regen \
-	generate-api-client coverage-floor embed-check test-nightly version-check script-test hello-web hello e2e \
+	generate-api-client coverage-floor embed-check test-nightly version-check script-test hello-web hello-embed-test hello e2e \
 	tools readiness apidiff-gate coverage coredoc-check vulncheck
 
 ## print-toolchain: print the pin and nothing else (one line, e.g. goX.Y.Z).
@@ -43,7 +43,7 @@ print-toolchain:
 ## script (the darwin and integration vets run over core from the root's
 ## `make ci` already, R1-02). version-check joined with R1-06, with script-test,
 ## which runs the unit tests of core's own CI scripts.
-ci: build vet test-short fmt-check fix-check tidy-check archtest exclude-check toolchain-check errcheck-ratchet interface-width pprof-check mocks-check openapi-check web-lint web-test coverage-floor embed-check version-check script-test
+ci: build vet test-short fmt-check fix-check tidy-check archtest exclude-check toolchain-check errcheck-ratchet interface-width pprof-check mocks-check openapi-check web-lint web-test hello-embed-test coverage-floor embed-check version-check script-test
 	@echo "core ci passed"
 
 build:
@@ -173,6 +173,13 @@ web-test: web-install
 hello-web: web-install
 	cd web && npm run build && npm run build -w hello-web
 	cd web && npm run check-singletons
+
+## hello-embed-test: hello's tests under -tags embed_frontend over the SPA
+## hello-web just built: ui.FromFS parses Vite's real index.html and the
+## served CSP hashes its real boot script (ui_embed_test.go).
+hello-embed-test: hello-web
+	go test -count=1 -tags embed_frontend -run 'TestUIBundle_RealDist' ./examples/hello/
+	go build -tags embed_frontend ./examples/hello/...
 
 ## hello: the hello example with its embedded UI (ui_embed.go), bin/hello.
 hello: hello-web
