@@ -211,10 +211,17 @@ func isBundleName(name string) bool {
 }
 
 // Prune removes bundle files (and abandoned ".zip.tmp" partials) whose
-// modification time is older than retention at now. It touches only names
+// modification time is more than retention before now. retention <= 0 means
+// DefaultRetention, the rule OpenBundle and the download route apply: a zero
+// or negative core.diagnostics.retention must never read as "every bundle is
+// old" and delete the one being downloaded. A file exactly retention old is
+// kept, and so is one dated after now (a clock step). It touches only names
 // that match a bundle's, through the root. It returns how many it removed;
 // a file it could not remove is reported with the others removed.
 func Prune(root *os.Root, retention time.Duration, now time.Time) (removed int, err error) {
+	if retention <= 0 {
+		retention = DefaultRetention
+	}
 	d, err := root.Open(".")
 	if err != nil {
 		return 0, fmt.Errorf("diagnostics: open dir: %w", err)
