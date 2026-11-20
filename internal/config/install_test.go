@@ -16,7 +16,9 @@ type stubFacade struct {
 	mutateErr error
 	mutated   int
 	locks     map[string]string
-	envLocked []string
+	updates   []Update
+	updateAs  []Actor
+	updateErr error
 }
 
 func (s *stubFacade) Snapshot() Config   { return Config{} }
@@ -29,8 +31,9 @@ func (s *stubFacade) Mutate(fn func(*Config)) error {
 }
 func (s *stubFacade) Locks() map[string]string { return s.locks }
 func (s *stubFacade) View() View               { return View{Keys: []KeyView{}} }
-func (s *stubFacade) Update(context.Context, Actor, Update) (UpdateResult, error) {
-	return UpdateResult{}, nil
+func (s *stubFacade) Update(_ context.Context, a Actor, u Update) (UpdateResult, error) {
+	s.updates, s.updateAs = append(s.updates, u), append(s.updateAs, a)
+	return UpdateResult{}, s.updateErr
 }
 
 // installForTest installs f and restores whatever was installed.

@@ -24,10 +24,7 @@ import (
 // internalActor is who Mutate writes as: the process itself, which holds every
 // permission. A key an operator layer sets is still refused (core's lock), and
 // ProtectOperator keys are never writable through Apply at all.
-var internalActor = config.Actor{
-	Subject: "config:mutate", Interactive: true, Owner: true,
-	Can: func(string) bool { return true },
-}
+var internalActor = config.InternalActor
 
 // adminPerm is the permission ProtectAdmin asks for (core/config apply.go); the
 // Engine asks it before writing a secret outside Apply.

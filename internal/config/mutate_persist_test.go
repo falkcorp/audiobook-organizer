@@ -73,3 +73,23 @@ func TestMutate_ReportsARefusalAndMutateCheckedReturnsIt(t *testing.T) {
 	require.ErrorIs(t, MutateChecked(func(c *Config) {}), refusal)
 	require.Len(t, reported, 1, "MutateChecked reported as well as returned")
 }
+
+// TestApplyUpdates_WithAFacadeIsTheFacadesUpdate: the dedup calibration op's write
+// is the Facade's validated, key-by-key update as the process's own actor; the
+// settings blob is not written and a refusal is the error.
+func TestApplyUpdates_WithAFacadeIsTheFacadesUpdate(t *testing.T) {
+	f := &stubFacade{}
+	installForTest(t, f)
+	store := newMockSettingsStore()
+	svc := NewUpdateService(store)
+	require.NoError(t, svc.ApplyUpdates(t.Context(), map[string]any{"filename_parse_model": "alfred-pennyworth", "dedup": map[string]any{"x": 1}}))
+	require.Len(t, f.updates, 1)
+	require.JSONEq(t, `"alfred-pennyworth"`, string(f.updates[0].Set["filename_parse_model"]))
+	require.JSONEq(t, `{"x":1}`, string(f.updates[0].Set["dedup"]))
+	require.Equal(t, "config:mutate", f.updateAs[0].Subject)
+	require.Empty(t, store.settings, "the blob was written beside the Facade")
+
+	refusal := errors.New("config: alfred refuses")
+	f.updateErr = refusal
+	require.ErrorIs(t, svc.ApplyUpdates(t.Context(), map[string]any{"a": 1}), refusal)
+}

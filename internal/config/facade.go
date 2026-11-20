@@ -55,6 +55,15 @@ type Access interface {
 // principal's HEAD atoms mapped through books' atom table).
 type Actor = coreconfig.Actor
 
+// InternalActor is who the process's own writes run as: Mutate, and a caller that
+// applies an operator-less update (the dedup calibration op). It holds every
+// permission and is interactive and the owner; a key an operator layer sets is still
+// refused (core's lock), and ProtectOperator keys are never writable through Apply.
+var InternalActor = Actor{
+	Subject: "config:mutate", Interactive: true, Owner: true,
+	Can: func(string) bool { return true },
+}
+
 // FirstRunPerm is the permission atom the settings handler grants an Actor in the
 // first-run window (no user exists yet and setup is not complete). It is not an
 // RBAC atom: the Engine asks for it, and only for the keys the setup wizard

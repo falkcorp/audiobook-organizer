@@ -955,7 +955,26 @@ func payloadString(payload map[string]any, key string) (string, bool) {
 
 // ApplyUpdates applies config updates and persists them.
 // Deprecated: prefer UpdateConfig directly.
+//
+// With a Facade installed the update is the Facade's: UpdateConfig would change
+// and persist the Config first and validate after (every Mutate is a stored
+// write), and saves the whole blob, which with the projection's plaintext secrets
+// is the leak SaveConfigToDatabase now refuses. The payload keys are HEAD's, which
+// is what Facade.Update takes; it is validated and stored key by key, secrets in
+// the keyring, and a refusal is the error.
 func (us *UpdateService) ApplyUpdates(ctx context.Context, payload map[string]any) error {
+	if f := Current(); f != nil {
+		u := Update{Set: make(map[string]json.RawMessage, len(payload))}
+		for k, v := range payload {
+			raw, err := json.Marshal(v)
+			if err != nil {
+				return fmt.Errorf("config update: encoding %s: %w", k, err)
+			}
+			u.Set[k] = raw
+		}
+		_, err := f.Update(ctx, InternalActor, u)
+		return err
+	}
 	status, resp := us.UpdateConfig(ctx, payload)
 	if status >= 400 {
 		if errMsg, ok := resp["error"].(string); ok {
