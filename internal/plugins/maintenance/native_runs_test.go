@@ -47,8 +47,8 @@ func testTasksSpec() storage.Spec {
 // one is finished an hour later.
 func nativeRunAt(id tasks.RunID, kind tasks.Kind, mode tasks.Mode, state tasks.RunState, created time.Time) tasks.RunRecord {
 	r := tasks.RunRecord{
-		RunView: tasks.RunView{ID: id, Kind: kind, Mode: mode, State: state, Created: created, Started: created,
-			Actor: tasks.Actor{UserID: "alfred"}},
+		ID: id, Kind: kind, Mode: mode, State: state, Created: created, Started: created,
+		Actor:    tasks.Actor{UserID: "alfred"},
 		Priority: tasks.PriorityLow, Attempt: 1, FenceEpoch: 1,
 	}
 	if state.Terminal() {
