@@ -26,18 +26,18 @@ func TestMetricsProvider_DefaultsTheStateDir(t *testing.T) {
 	}
 }
 
-// NewMetricsProvider has no testing.TB to make and remove a directory, so an
-// unset StateDir is refused naming the field, and a named one is the state
-// directory the boot creates.
+// NewMetricsProvider has no testing.TB to make and remove a directory: with
+// no state directory named the boot fails naming core.paths.state_dir, and a
+// named one is the state directory the boot creates.
 func TestNewMetricsProvider_StateDir(t *testing.T) {
-	t.Run("unset is refused", func(t *testing.T) {
+	t.Run("unset fails the boot", func(t *testing.T) {
 		p, err := coretest.NewMetricsProvider(context.Background(), app.Options{MetricNamespace: "gotham"})
 		if err == nil {
 			_ = p.Shutdown(context.Background())
 			t.Fatal("NewMetricsProvider booted with no state directory")
 		}
-		if !strings.Contains(err.Error(), "StateDir") {
-			t.Fatalf("error %q does not name StateDir", err)
+		if !strings.Contains(err.Error(), "core.paths.state_dir") {
+			t.Fatalf("error %q does not name core.paths.state_dir", err)
 		}
 	})
 	t.Run("a named directory is the boot's", func(t *testing.T) {
