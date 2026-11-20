@@ -133,6 +133,64 @@ func TestKindValidator_OnlyItsKind(t *testing.T) {
 	}
 }
 
+// TestKindValidator_SeesTheEffectiveLayer: the validator is handed the layer
+// the write would serve, the stored settings with the operator overlay applied,
+// the same one the schema judges, so an operator value that breaks the kind's
+// rule is refused even though the request carries no such value.
+func TestKindValidator_SeesTheEffectiveLayer(t *testing.T) {
+	e := newEnv(t)
+	r := e.registry(t, overlay("integrations.notify.gcpd-roof.channel", "*"), nil)
+	v := &validatorLog{}
+	if err := r.SetValidator(integrations.KindNotify, v.validate); err != nil {
+		t.Fatal(err)
+	}
+	// The request leaves the operator-locked channel out, so only the effective
+	// layer carries it.
+	inst := signal("http://192.0.2.20/")
+	delete(inst.Settings, "channel")
+	_, err := r.Put(admin(), inst, cred("alfred-1"))
+	if !errors.Is(err, integrations.ErrInvalid) || !errors.Is(err, errNoWildcards) {
+		t.Fatalf("a Put whose operator-locked channel is a wildcard: err = %v, want the validator's refusal", err)
+	}
+	if got := v.last(t); got.settings["channel"] != "*" {
+		t.Errorf("the validator saw channel %v, want the operator's %q", got.settings["channel"], "*")
+	}
+}
+
+// TestKindValidator_CannotMutateTheRegistrysMaps: the validator is handed
+// copies. Put reads the same maps after the validator returns to decide whether
+// the destination moved and so whether the stored credential is still bound to
+// where it was granted, so a validator that edits them must not move that
+// decision.
+func TestKindValidator_CannotMutateTheRegistrysMaps(t *testing.T) {
+	e := newEnv(t)
+	r := e.registry(t, nil, nil)
+	const dest, elsewhere = "http://192.0.2.20/", "http://192.0.2.99/"
+	if err := r.SetValidator(integrations.KindNotify, func(_ integrations.AdapterID, settings, stored map[string]any) error {
+		settings["url"] = elsewhere
+		if stored != nil {
+			stored["url"] = elsewhere
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	first := mustPut(t, admin(), r, signal(dest), cred("alfred-1"))
+	row, _ := e.stored(t, signalRef)
+	if row.SecretsOrigin != "url=http://192.0.2.20:80" {
+		t.Errorf("SecretsOrigin = %q: the validator's edit of the effective layer reached the credential's binding", row.SecretsOrigin)
+	}
+	// Replace without resupplying the credential, same destination: it is kept
+	// unless the validator's edit of the stored layer made the destination look moved.
+	next := withChannel(signal(dest), "gotham")
+	next.Version = first.Version
+	mustPut(t, admin(), r, next, nil)
+	row, _ = e.stored(t, signalRef)
+	if _, ok := row.Config.Settings["password"].(secrets.Ref); !ok {
+		t.Errorf("the credential was dropped on a same-destination replace: settings = %v", row.Config.Settings)
+	}
+}
+
 // TestKindValidator_TestRunsIt: Registry.Test applies the same rule as Put,
 // so a settings block that could not be saved cannot be tested.
 func TestKindValidator_TestRunsIt(t *testing.T) {
@@ -270,6 +328,25 @@ func TestKindValidator_ImporterRefusesAndStagesNothing(t *testing.T) {
 	}
 	if v.count() != calls {
 		t.Error("the validator ran for an adapter this binary does not register")
+	}
+
+	// A record whose adapter is of another kind than its ref is not judged
+	// either, whichever validator the ref's kind has: the Registry reports it.
+	var metaCalls int
+	if err := r.SetValidator(integrations.KindMetadata, func(integrations.AdapterID, map[string]any, map[string]any) error {
+		metaCalls++
+		return errNoWildcards
+	}); err != nil {
+		t.Fatal(err)
+	}
+	crossed := gcpdImport()
+	crossed.Config.Ref = integrations.Ref{Kind: integrations.KindMetadata, Instance: "riddler-roof"}
+	crossed.Config.Settings = map[string]any{"url": "http://192.0.2.20/", "channel": "gcpd", "password": secrets.RefTo("integrations.metadata.riddler-roof.password")}
+	if _, err := stage(im, crossed); err != nil {
+		t.Errorf("an import whose adapter is of another kind than its ref: %v", err)
+	}
+	if metaCalls != 0 {
+		t.Error("the ref kind's validator judged a record whose adapter is of another kind")
 	}
 
 	// Without the option the importer validates nothing beyond its own rules.
