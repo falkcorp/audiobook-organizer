@@ -94,6 +94,28 @@ func diff(got, want []string) string {
 // and deletes all of it. A kill on such a visit loses that whole chunk, which is
 // what makes this the cell that matters.
 func TestCutoverCrashAtEveryChunk(t *testing.T) {
+	// The renamed fixture adds a source whose credentials are carried, one of
+	// them unreadable, so a resumed boot is shown not to see its own carried
+	// secret or marker as an orphan under the new name: the carry is staged in
+	// the chunk batch that converts and deletes the blob, so a resume either
+	// re-reads the blob with nothing carried or never reads it again.
+	for _, fx := range []struct {
+		name      string
+		opts      []func(*rig)
+		instances int
+	}{
+		{"head", nil, len(wantInstances)},
+		{"renamed", []func(*rig){renamedSource, func(r *rig) {
+			r.secrets.seed["integrations.metadata.batcave_db.credentials.token"] = "fixture-batcave-db-token-fox"
+			delete(r.secrets.seed, "integrations.metadata.batcave_db.credentials.api_key")
+			r.secrets.unreadable["integrations.metadata.batcave_db.credentials.api_key"] = true
+		}}, len(wantInstances) + 1},
+	} {
+		t.Run(fx.name, func(t *testing.T) { crashAtEveryChunk(t, fx.opts, fx.instances) })
+	}
+}
+
+func crashAtEveryChunk(t *testing.T, extra []func(*rig), wantN int) {
 	type mode struct {
 		name          string
 		before, power bool
@@ -107,7 +129,8 @@ func TestCutoverCrashAtEveryChunk(t *testing.T) {
 	var oracles [][]string
 	for _, chunk := range []int{1, 4} {
 		t.Run("chunk_"+strconv.Itoa(chunk), func(t *testing.T) {
-			opts := []func(*rig){withRows(headRows(t)), func(r *rig) { r.chunkItems = chunk }}
+			opts := append([]func(*rig){withRows(headRows(t))}, extra...)
+			opts = append(opts, func(r *rig) { r.chunkItems = chunk })
 			seeded := newRig(t, opts...).seed(t)
 
 			// The uninterrupted boot is the oracle, and counts the rows the shard visits.
@@ -123,7 +146,7 @@ func TestCutoverCrashAtEveryChunk(t *testing.T) {
 			if err != nil {
 				t.Fatalf("uninterrupted boot: %v\n%s", err, ref.logs)
 			}
-			if want.State != "done" || len(want.Verify.Failures) != 0 || len(instances(t, want)) != len(wantInstances) || len(jobs(t, want)) != 7 {
+			if want.State != "done" || len(want.Verify.Failures) != 0 || len(instances(t, want)) != wantN || len(jobs(t, want)) != 7 {
 				t.Fatalf("the oracle is wrong: state %q verify %+v", want.State, want.Verify)
 			}
 			wantRows := flatten(want)

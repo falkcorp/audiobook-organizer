@@ -864,7 +864,8 @@ under a new name that no entry owns is reported and left unbound (seams.d/F7-08)
 - Throttle holds and daily quota counts are dropped (M2.10).
 - An `ai_endpoints` capability tick HEAD does not register (HEAD kept it and ignored it in selection), a wildcard
   tick, and a feature outside the ones `ai.Router.ValidateEndpoint` declares are dropped from the instance and listed
-  in the step's report. Carrying one would make core refuse the whole endpoint.
+  in the step's report. Carrying one would make core refuse the whole endpoint. A `capability_models` entry for such a
+  capability is dropped and reported with it, since nothing could select by it.
 - A metadata source's `rate_limit.max_concurrent` (HEAD's bound on searches in flight in a bulk fetch) has no
   `Limits` field and is listed in the report.
 
@@ -1625,3 +1626,4 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
 - Round 13 (2026-11-04): IMPL-5 (`core.integrations.release-holds` registered from F5 through F2's minimal owner registration, extended at F7; the interim backend `providerhttp.InterimHolds`).
 - Round 14 (2026-11-05): V23 (checked: no round-13 ruling is cited bare; the bare R4, R5, R7 and R8 left in the text are 03 §3.5's rules), V27 (M1.10 cites 05-rbac §7.1 for `core.integration.local_migrated`, staged in M6's chunk batch).
 - Round 16 (2026-11-05): plan-gap fixes G2 (M2.4: `core.integrations.release-holds`' full `TaskSpec`, `Effects` on `core/providerhttp`, `Resume: ResumeDrop`, `Timeout: 1m`, `Perms.Start`, `PriorityHigh`, no schedule, its params and result types, and `providerhttp.InterimHolds`' one method `ReleaseHolds` with the kind's `Run` signature; 05-tasks §5T.8.2 copies them), G14 (M1.3: the `/api/core/v1/integrations/...` routes land at F7 and replace the class-`i` part of ABO's `/api/v1/config` handlers and HEAD's test-connection handlers, which F7's PR deletes with the SPA switched).
+- Round 17 (2026-11-20): F7-09 slice T1. M1.10 signs `LocalOrigin` and `OperatorSecretOrigin` from the effective destinations (seams.d/F7-01 rows 17 and 22, as F7-08 ruled). When a lowered HEAD ID meets another entry's exact HEAD ID, the exact entry keeps it, and a renamed instance takes only its own carried credentials. A renamed source's unreadable secret is carried as an unreadable marker. Unknown and wildcard capability ticks and undeclared features are dropped and reported, and so is `rate_limit.max_concurrent` (seams.d/F7-08).
