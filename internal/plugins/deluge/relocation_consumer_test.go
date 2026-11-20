@@ -73,7 +73,7 @@ func TestRelocationConsumer_UndeclaredNameRefused(t *testing.T) {
 
 func TestRelocationRunParams(t *testing.T) {
 	p, err := relocationRunParams(outbox.Message[database.BookRelocatedV1]{
-		Key: "joker-01", Payload: database.BookRelocatedV1{BookID: "joker-01", FromPath: "/gotham/a", ToPath: "/gotham/b"},
+		Key: "partition-key-not-the-payload", Payload: database.BookRelocatedV1{BookID: "joker-01", FromPath: "/gotham/a", ToPath: "/gotham/b"},
 	})
 	require.NoError(t, err)
 	raw, err := json.Marshal(p)
