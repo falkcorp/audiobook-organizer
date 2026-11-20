@@ -1,5 +1,5 @@
 // file: core/auth/roleclaim_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0c5d7e21-93b4-4a68-8f1e-2d6a4b9c7e53
 // last-edited: 2026-11-19
 
@@ -399,5 +399,61 @@ func TestRoleClaim_TheStoreDecidesNotTheCache(t *testing.T) {
 				t.Fatalf("%d user(s) hold the deleted role", n)
 			}
 		})
+	}
+}
+
+// TestRoleClaim_UnreadableRoleStoreRefusesTheWrite: the role-set generation is
+// the first read of every write that gives a role or runs the last-admin rule.
+// A role store that cannot answer it makes the write fail as an unavailable
+// store (503 auth_unavailable) and write nothing; it never decides on a guessed
+// generation.
+func TestRoleClaim_UnreadableRoleStoreRefusesTheWrite(t *testing.T) {
+	var gs *guardingRoleStore
+	c := newClaimFxOver(t, func(s rbac.Store) rbac.Store { gs = newGuardingRoleStore(s); return gs })
+	gs.mu.Lock()
+	gs.genErr = errors.New("the role keyspace is unreadable")
+	gs.mu.Unlock()
+	for _, way := range claimWays {
+		if err := c.assign(way)(); !errors.Is(err, auth.ErrStoreUnavailable) {
+			t.Errorf("%s over a role store that cannot read the generation: err = %v, want ErrStoreUnavailable", way, err)
+		}
+	}
+	// The last-admin rule reads it first too, before it looks at anyone's
+	// roles: disabling a detective, who holds no admin, still needs it.
+	if err := c.f.svc.SetStatus(context.Background(), c.manager, c.jason.ID, auth.StatusDisabled); !errors.Is(err, auth.ErrStoreUnavailable) {
+		t.Errorf("SetStatus over a role store that cannot read the generation: err = %v, want ErrStoreUnavailable", err)
+	}
+	if n := c.holdersOfRobin(); n != 0 {
+		t.Fatalf("%d user(s) hold the role after writes that were refused", n)
+	}
+}
+
+// TestRoleClaim_NoRolesNoClaim: a write that gives no role claims nothing. A
+// CreateUser with no roles whose commit window sees a role written must land on
+// its first try: it neither guards the role-set generation nor raises the claim
+// counter, so a role write cannot fail it.
+func TestRoleClaim_NoRolesNoClaim(t *testing.T) {
+	c := newClaimFx(t)
+	tries := 0
+	c.f.audit.hold = func(audit.Event) {
+		tries++
+		if tries == 1 {
+			c.createRobinAgain(t)
+		}
+	}
+	if _, err := c.f.svc.CreateUser(context.Background(), c.manager, auth.NewUser{Username: "tim-drake"}); err != nil {
+		t.Fatalf("CreateUser with no roles: %v", err)
+	}
+	if tries != 1 {
+		t.Fatalf("CreateUser with no roles made %d attempts, want 1: it must not conflict with a role write", tries)
+	}
+}
+
+// createRobinAgain writes an unrelated role through rbac, moving the role-set
+// generation.
+func (c *claimFx) createRobinAgain(t testing.TB) {
+	t.Helper()
+	if _, err := c.f.rb.CreateRole(context.Background(), c.rbacActor, rbac.RoleInput{Name: "custom.batgirl", Title: "Batgirl", Permissions: []rbac.Permission{"gotham:patrol"}}); err != nil {
+		t.Errorf("CreateRole: %v", err)
 	}
 }

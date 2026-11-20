@@ -1,7 +1,7 @@
 // file: core/auth/users_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 8d00694b-a22c-438a-82d5-31749fe5b244
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package auth_test
 
@@ -463,6 +463,59 @@ func TestLastAdmin_ConcurrentDemotions(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Go(func() { errs[0] = f.svc.SetRoles(ctx, pBruce, dick.ID, []rbac.RoleName{rbac.RoleViewer}) })
 	wg.Go(func() { errs[1] = f.svc.SetRoles(ctx, pDick, bruce.ID, []rbac.RoleName{rbac.RoleViewer}) })
+	wg.Wait()
+
+	refused := 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+		case errors.Is(err, auth.ErrLastAdmin):
+			refused++
+		default:
+			t.Fatalf("unexpected error %v", err)
+		}
+	}
+	if refused != 1 {
+		t.Fatalf("errors %v: want exactly one ErrLastAdmin", errs)
+	}
+	admins := 0
+	for _, id := range []auth.UserID{bruce.ID, dick.ID} {
+		if slices.Contains(f.reload(id).Roles, rbac.RoleAdmin) {
+			admins++
+		}
+	}
+	if admins != 1 {
+		t.Fatalf("%d admins left, want 1", admins)
+	}
+}
+
+// TestLastAdmin_ConcurrentSelfDemotions: the two last admins each step down at
+// once. The actor of a write is its own target, so the actor's record is no
+// help: only the guard on the other holder (Store.GuardUser in keepAnAdmin)
+// makes the second commit fail. One lands, the other retries and is refused.
+func TestLastAdmin_ConcurrentSelfDemotions(t *testing.T) {
+	f := newFx(t)
+	ctx := context.Background()
+	bruce := f.user("bruce-wayne", rbac.RoleAdmin)
+	dick := f.user("dick-grayson", rbac.RoleAdmin)
+	pBruce, pDick := f.session(bruce), f.session(dick)
+
+	var mu sync.Mutex
+	arrived := 0
+	both := make(chan struct{})
+	f.audit.hold = func(audit.Event) {
+		mu.Lock()
+		arrived++
+		if arrived == 2 {
+			close(both)
+		}
+		mu.Unlock()
+		<-both
+	}
+	errs := make([]error, 2)
+	var wg sync.WaitGroup
+	wg.Go(func() { errs[0] = f.svc.SetRoles(ctx, pBruce, bruce.ID, []rbac.RoleName{rbac.RoleViewer}) })
+	wg.Go(func() { errs[1] = f.svc.SetRoles(ctx, pDick, dick.ID, []rbac.RoleName{rbac.RoleViewer}) })
 	wg.Wait()
 
 	refused := 0

@@ -1,5 +1,5 @@
 // file: core/auth/oidc/roleclaim_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e4b1a93-c5d2-4f68-9a07-3b8d6e1f4c25
 // last-edited: 2026-11-19
 
@@ -8,12 +8,14 @@ package oidc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // deleteSignal deletes roleSignal as an admin would, at its current version.
@@ -106,5 +108,32 @@ func TestOIDC_CreateInsideRoleDelete(t *testing.T) {
 	}
 	if n := f.signalHolders(); n != 1 {
 		t.Fatalf("%d holder(s) of the role, want 1", n)
+	}
+}
+
+// TestOIDC_CreateLosingEveryTryIsContended: a first sign-in whose commit
+// conflicts on every try (a new role lands inside each one, moving the
+// role-set generation it claims at) answers auth.ErrContended, wrapping
+// storage.ErrConflict, and creates no account; authhttp's callback does not
+// treat it as a failure of the provider.
+func TestOIDC_CreateLosingEveryTryIsContended(t *testing.T) {
+	f := newFx(t)
+	pol := untrusting()
+	pol.DefaultRole = roleSignal
+	admin := f.rb.Compile(rbac.CheckerInput{Roles: []rbac.RoleName{rbac.RoleAdmin}, Interactive: true})
+	tries := 0
+	f.audit.hold = func(audit.Event) {
+		tries++
+		name := rbac.RoleName(fmt.Sprintf("custom.nightwing-%d", tries))
+		if _, err := f.rb.CreateRole(context.Background(), admin, rbac.RoleInput{Name: name, Title: "Nightwing", Permissions: []rbac.Permission{"core:users.view"}}); err != nil {
+			t.Errorf("CreateRole %s: %v", name, err)
+		}
+	}
+	_, err := resolve(t, f, pol, claims("sub-robin", "dick@wayne.example.test"))
+	if !errors.Is(err, auth.ErrContended) || !errors.Is(err, storage.ErrConflict) {
+		t.Fatalf("a first sign-in that lost every try: err = %v, want auth.ErrContended wrapping storage.ErrConflict", err)
+	}
+	if n := f.countUsers(); n != 0 {
+		t.Fatalf("%d account(s) created by a sign-in that never committed", n)
 	}
 }
