@@ -2586,6 +2586,38 @@ class RollbackEnv(unittest.TestCase):
         self.assertIn(p, self.gens())
         self.assertNotIn(self.text_sha("bat-signal-3"), self.gens(), "a routine one aged out")
 
+    def pin_probe(self, base, nxt):
+        """Install `base` (with facts), then `nxt`, then four routine deploys
+        that tell the same facts as `nxt`. Returns the hash of the generation
+        `base` was kept as, and the hashes still kept at the end."""
+        h = self.env_host()
+        self.deploy(
+            h,
+            "bat-signal-2",
+            conf=self.conf("0"),
+            facts=self.facts("bat-signal-2", "v1.0.0", *base),
+        )
+        b = self.sha(self.b)
+        self.deploy(
+            h, "bat-signal-3", conf=self.conf("1"), facts=self.facts("bat-signal-3", "v1.0.1", *nxt)
+        )
+        for n in range(4, 9):
+            tag = f"bat-signal-{n}"
+            self.deploy(h, tag, conf=self.conf(str(n)), facts=self.facts(tag, f"v1.0.{n}", *nxt))
+        return b, self.gens()
+
+    def test_a_store_level_raise_alone_pins_the_replaced_generation(self):
+        b, kept = self.pin_probe(("storage=1", "0"), ("storage=2", "0"))
+        self.assertIn(b, kept)
+
+    def test_a_retired_name_list_turning_enforced_alone_pins_the_replaced_generation(self):
+        b, kept = self.pin_probe(("storage=1", "0"), ("storage=1", "1"))
+        self.assertIn(b, kept)
+
+    def test_routine_deploys_with_the_same_facts_pin_nothing(self):
+        b, kept = self.pin_probe(("storage=1", "0"), ("storage=1", "0"))
+        self.assertNotIn(b, kept)
+
     def test_pins_are_bounded(self):
         h = self.env_host()
         for n in range(2, 14):
@@ -2594,11 +2626,16 @@ class RollbackEnv(unittest.TestCase):
 
     def test_a_damaged_generation_blocks_eviction_not_the_deploy(self):
         h = self.env_host()
-        self.deploy(h, "bat-signal-2", conf=self.conf("2"))
+        self.deploy(h, "bat-signal-2", conf=self.conf("2"), facts=self.facts("bat-signal-2"))
         (self.gdir() / ("0" * 64 + ".json")).write_text("{")
         for n in range(3, 8):
-            self.deploy(h, f"bat-signal-{n}", conf=self.conf(str(n)))
-        self.assertGreater(len(self.gens()), 3, "nothing was evicted while a file was unreadable")
+            tag = f"bat-signal-{n}"
+            self.deploy(h, tag, conf=self.conf(str(n)), facts=self.facts(tag))
+        self.assertIn(
+            self.text_sha("bat-signal-3"),
+            self.gens(),
+            "a routine generation that would have aged out stays while a file is unreadable",
+        )
 
     # -- facts the recipe passes ---------------------------------------------
 
