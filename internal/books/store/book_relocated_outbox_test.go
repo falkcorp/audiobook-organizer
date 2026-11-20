@@ -19,6 +19,7 @@ import (
 	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/falkcorp/mediacore/events"
 	"github.com/falkcorp/mediacore/outbox"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/codec"
 	skeys "github.com/falkcorp/mediacore/storage/keys"
@@ -162,6 +163,9 @@ func TestBookRelocatedTopicSpec(t *testing.T) {
 	}
 	if spec.Durable == nil || spec.Durable.Partitions != 16 {
 		t.Fatalf("Durable = %+v, want 16 partitions (fixed for the topic's lifetime)", spec.Durable)
+	}
+	if !reflect.DeepEqual(spec.Permission, rbac.Need("books:view")) {
+		t.Fatalf("Permission = %+v, want books:view (anyone who may view the library)", spec.Permission)
 	}
 	if spec.Realtime != nil || spec.Notify != nil {
 		t.Fatalf("a durable relocation topic carries no Realtime or Notify metadata: %+v", spec)
