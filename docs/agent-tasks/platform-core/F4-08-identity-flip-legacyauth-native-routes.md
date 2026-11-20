@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/F4-08-identity-flip-legacyauth-native-routes.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 0ad91c06-04c3-47a1-bdf3-1ab090720204 -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-19 -->
 
 # F4-08 — F4 flip, one PR: `LegacyAuthCore` with `LegacyAuthGinUntil` deleted, the `legacyauth` bridge, native identity and settings routes with the gin routes deleted, the OAuth paths served by core, M3 registered, the events bus live, the identity UI and the SPA's reset control
 
@@ -13,7 +13,7 @@
 | Wave | W34 — the only PR of its wave touching `main.go`, `internal/server/` and books' registration, and the wave's one owner of the kernel and module wiring files; it **merges alone**; runs inside an announced **move window** |
 | Depends on | F3-07, F4-03, F4-04, F4-05, F4-06, F4-07, F4-09, F4-10, F4-11 |
 | Owns gate tests | `TestOAuthCallback_HEADPathServedByCore`; `TestOAuthStart_HEADPathServedByCore`; `TestIdentityCutover_ABSSurvives` (the ABS conformance suite on the migrated corpus); `TestCutover_NoRawTokenOnDisk`; `TestOIDC_AppHandoffMintsABSCode`; the route cells of `TestWorkerKey_Confined`; `TestAuthOff_AuthModeWriteRefused` (05-authn §10); `TestAuthOffDockerBoots` (image job, 05-authn §10); the `auth_disabled_remote` health token on the authenticated `degraded` field (05-authn §4.11) |
-| Gate | Plan, then execute autonomously. |
+| Gate | Plan, then execute autonomously. **Not before the Preconditions below hold** (amendment 2026-11-19, owner-reviewable). |
 
 ## ⛔ START HERE
 
@@ -115,6 +115,124 @@ Switch identity to core for ABO in one PR, with every first-party caller (09 §9
     R1-37's exact signatures: `WithUser` seeds a principal holding exactly its permissions, `As` returns a `Client` whose
     requests reach stage 13 as that principal, and R1-37's "needs core authentication" failure path is deleted.
 
+## Pre-scope amendments (2026-11-19) — owner-reviewable decisions, not settled facts
+
+A read-only pre-scope against `origin/main` `5a24c5b2c` found that this brief, written against HEAD `ac4368bdb`, omits
+blockers, paths and live effects. Everything in this section is a **proposed decision** that the coordinator took from the
+pre-scope's Recommended option; the owner may overturn any of it. Anchors below are `origin/main` values at that SHA and
+shift as F3-07's slices land: regenerate them at BASE.
+
+### Preconditions (five blockers the first draft did not list)
+
+1. **F4-02-ROLE-GUARD must land first**, as its own pre-PR (**P-A**, S/M, no F3-07 dependency). This brief has the builder
+   implement `rbac.Holders`; without the role-definition last-admin guard, an rbac role edit and an auth user write can
+   commit in the wrong order and leave no active admin. The fix touches `core/rbac`, `core/internal/rbacstore` and
+   `core/auth` (all outside the Files table) and needs a concurrent last-admin test.
+2. **The reach obligations block `LegacyAuthCore`.** Six `reachObligations` rows plus the handler-admin pin
+   (`internal/books/cutover/reach_flip_obligations_test.go`, `reach_pin_source_test.go`) make
+   `TestReachFlip_FailsWhileThePinOrTheOwnerlessModelStands` fail the moment `internal/books/module.go` says
+   `LegacyAuthCore`. This PR must also: write `TestReachRegisteredPath_{AbsReplay,HandlerRefusals,HiddenHandlerChecks,OwnerSet,OwnerAllow}`
+   (`internal/books/cutover`) with their declared bars; write `TestLegacyStage13_RandomRolesAdmitOnlyWhatTheSuccessorAdmits`
+   (`core/httpapi`); discharge the 11 pinned cells and delete the pin files; replace the test-local replica
+   `reach_eval_test.go` with the registered path; build the core-route half of the oracle (auth-off against every core
+   route, 09 §9.2.6); port `TestReachHeadHandlers_RefuseTheAuthDisabledPrincipal` (`internal/server/reach_head_refusals_test.go`)
+   to the registered path. Size L+, the largest unlisted item.
+3. **F3-07 must merge with ABO's `CoreConfigBoot` on** (slice (e): `flipDeclared` on, `CoreConfigBoot` set in ABO's
+   options, `R1Values` and the gate deleted). P4d only exists behind that gate, F4-11's `reapplyRevocations` refuses before
+   P4d step 1 (`errReapplyNotReady`) and needs the keyring only the gated boot opens. If F3-07 merges with ABO gate-off,
+   F4-08 cannot run P4d steps 2-3 and would absorb F3-07's live switch, which is out of scope (STOP 3).
+4. **The F4-03 owner-link gate.** `seams.d/F4-03.md`: F4-08 must not register `cfaccess.Extension` until an owner-link path
+   exists, yet `F4-07-OWNER-SET` and `F4-07-OWNER-ALLOW` need `internal/cfaccess` configured on the registered path. The
+   code match was checked end to end (subject, provider `cfaccess`, `auth.CheckImportIdentity`), so the gate is met if
+   prod already holds the owner account's `oauthid:` row with provider `cfaccess` (M3 imports it). **Before dispatch the
+   coordinator runs a read-only prod count of those rows.** If absent, build F4-05's deferred prove-the-password link as a
+   pre-PR; never seed the row by hand. Not verified: that `oidc.Resolver`'s linked fast path still applies admission
+   (`Policy.AllowedDomains`, allowlist, `OwnerEmail`); `TestReachRegisteredPath_OwnerAllow` must prove the `ExtensionConfig.Policy`
+   this PR builds admits the owner's address.
+5. **The crash matrix needs a labelled-FS seam the revocation journal lacks** (**P-B**, M/L, own pre-PR, F3-07-independent).
+   F4-11's file writes go through raw `os` (`core/backup/journal/file.go` `OpenFile`, `location.go` temp file and
+   `Rename`, `move.go` `MkdirAll` and `Rename`), which the crash kit cannot see or break. P-B adds the seam (mirror F3-07's
+   `internal/statefs`) plus writer-table rows in `core/coretest/crashmatrix/rows.go`. Separately, every new boot batch
+   needs a `bootseam.Region(ctx, label)` at its commit site (`auth.BootWrites`, `rbac.CommitSeeds`, the re-apply's tail,
+   gap, restore-line and head commits, `served_boot`, the hooks' writes, and TODO F4-11-F4-08-QUEUE's writers: queue
+   batches, dequeue, `MarkUnappliedClosed`, `restore_run` write/clear, the kept admin's restriction commit, the withheld
+   head commit), which needs edits inside `core/auth`, `core/rbac` and `core/kernel/restore_*`.
+
+### Pre-PRs and sequencing (decisions Q1, Q7)
+
+| Pre-PR | Scope | Size | Lands |
+|---|---|---|---|
+| P-A | F4-02-ROLE-GUARD (optional role-guard interface on `rbacstore` plus an `rbac.Service` method auth calls in its batch, concurrent test) | S/M | now, own PR |
+| P-B | labelled-FS seam for `core/backup/journal` plus crashmatrix rows | M/L | now, own PR |
+| P-C | F4-03-OWNER: **not a pre-PR.** Done inside this PR **after the switch commit**, when only the config and repairs readers remain (a rename, TODO F4-03-OWNER). Acceptance needs `internal/auth` gone, so it cannot be a follow-up | S | inside F4-08 |
+| P-D | this docs amendment | S | now |
+
+Decision Q1: one draft branch of dark commits, each of which builds, steps 1-7 dark and the switch (Goal items 1 and 3, as
+the last behavioural commit) the only live one, merged as one PR under coordinator gate. Only the deadcode-baseline
+prune, the `.mockery.yaml` cleanup and shard weights may defer to a follow-up. Do not split the SPA, skill or scripts out
+(STOP 4), and do not mount core routes on ABO as an earlier dark step (reasoning, not verified: core's identity store is
+empty before M3).
+
+### Size and builder split (proposed)
+
+Well beyond the plan's 6.5-day flip estimate. Goal items 0 (kernel P5/P7 and P4d steps 2-4), 1-3 (routes), 6 (books), 2
+(bridge), 10 (SPA, skill, scripts) and the reach-obligation work are each L. Plan **2-3 builders on the one stacked
+branch**: (1) kernel/core, (2) books/server/bridge/reach obligations, (3) SPA, skill and scripts; exactly one of them owns
+`core/kernel/boot.go` and `kernel.go`. The builder bases on post-F3-07 main and does not start before F3-07 merges.
+
+### Live-behaviour switches (16)
+
+There is no off-switch: the PR is atomic by design (09 §9.2.1) and deleting gin routes cannot be dark. The gate is merge
+and deploy: keep the branch draft, merge only with coordinator and owner sign-off, hold the next deploy for the owner's OK.
+
+| # | Switch | What prod sees after deploy | Gate |
+|---|---|---|---|
+| 1 | books mount `LegacyAuthGin` to `LegacyAuthCore` | every gin route authenticates through core stage 12/13 | merge and deploy hold |
+| 2 | gin identity, OAuth and settings routes deleted | old bundles, scripts, external callers of `/api/v1/auth/*`, identity `/api/v1/users*`, settings `k`/`s`, `/auth/temp-login` get 404 (no alias, D10) | SPA, skill, scripts switch in the same PR |
+| 3 | M3 at P4b plus the new level step(s) | identity rows move to `c/auth/` and `c/rbac/`; store level raised; **no binary rollback** (`make rollback-restore` plus checkpoint) | run `storage cutover-blockers list` on prod data first |
+| 4 | web sessions and one-time tokens reset (D12 b) | every browser user signed out; pending invite, temp-login and reset links die | owner comms; ABS app sessions and `abk_` keys survive (`TestIdentityCutover_ABSSurvives`) |
+| 5 | OAuth start/callback served by core (PKCE and nonce new, same callback path) | redirect URI unchanged; flow differs slightly | `TestOAuthCallback_HEADPathServedByCore` |
+| 6 | `cfaccess.Extension` registered | Access sign-in goes through `oidc.Resolver` link rules; leaving it unregistered loses the owner's Access path | precondition 4 |
+| 7 | `/metrics` needs `core:metrics.read` | the prod scrape key keeps working unless it is a Confined worker key | `TestMetricsScrape_MigratedReach`; check the scrape key |
+| 8 | P4d steps 2-4 | new refuse-to-serve boot failures on journal errors; new journal file in the backup dir and `backup.location.json` in the state dir | health tokens; crash-matrix cells |
+| 9 | bootstrap token written by `BootWrites` | token file name or location may change from `.bootstrap-token`, breaking the `server-bootstrap` skill | skill updated in this PR; verify the path it reads |
+| 10 | auth-off posture (`DefaultDisabledAllowRemote: true`) | only if a deployment runs auth-off | `auth_disabled_remote` token |
+| 11 | events bus live (`core.rbac.changed.v1`, `core.principal.invalidated.v1`) | internal only | none needed |
+| 12 | factory-reset control back in the SPA | visible owner-only destructive control | owner guard plus two-step count confirmation |
+| 13 | `CoreConfigBoot` on for ABO (F3-07's switch) | config/secrets boot, M2, M7 | must already be live (precondition 3) |
+| 14 | SSO link rule moves to core `oidc` | an unlinked SSO identity whose address belongs to an admin with a password is refused `email_in_use`; non-ASCII addresses refused | owner comms; precondition 4's check covers the owner |
+| 15 | audit visibility default-deny | a non-manager no longer sees own sign-in rows or module actions in `/audit`; `credential_id` and `client_addr` stripped | owner may loosen (one-line change) |
+| 16 | an M3 preflight blocker refuses the boot | a prod blocker (two usernames folding to one, an undecodable merge journal, a rejected user row) fails the upgrade boot | `storage cutover-blockers list` on a prod copy (Q9) |
+
+### Decisions recorded (the pre-scope's §6, Recommended answer taken; all owner-reviewable)
+
+| Q | Decision (proposed) |
+|---|---|
+| Q1 | One atomic PR from one draft branch of dark commits; switch is the last live commit; see Pre-PRs above |
+| Q2 | F4-08 waits for F3-07 to merge with slice (e) complete (precondition 3) |
+| Q3 | Coordinator runs the read-only prod `cfaccess` `oauthid:` count first; if present, register the extension (tests use fixtures); if absent, build the prove-the-password link as a pre-PR; never seed by hand |
+| Q4 | The Files table gains the paths below; the coordinator pre-registers them in `inventory.json` and re-runs `check_waves.py` against F7-08 before dispatch |
+| Q5 | The `api/v1/auth/` acceptance grep excludes `scripts/r2corpus/`, `scripts/tests/test_record_r0_*.py` and `scripts/tests/test_write_r0_corpus.py` (they record the R0 binary and keep R0's routes), and adds `web/src/services/api.ts` to the checked set |
+| Q6a | A non-empty unapplied queue raises an info-severity authenticated `degraded` token (name coined here, added to 05-backup §5B.5 and the "never on `/health`" golden) plus offline `storage journal-queue list\|clear <seq> --confirm` |
+| Q6b | Re-enable is journalled as a new `user.enabled` kind in `KnownKind`, with a spec amendment (no age rule) |
+| Q6c | The health endpoint shows token and severity only; file paths go to the log |
+| Q6d | Compare `Header.App` at journal bind (mismatch reports `revocation_journal_broken`); the shared-`db_path` case stays a documented limit unless the owner wants a `StoreIdentity()` check |
+| Q7 | P-A and P-B are separate pre-PRs now; P-C stays inside F4-08 after the switch |
+| Q8 | `cutover.Flip` changes from a single `Level` to an ordered `Levels` list (F5-18 needs the same); F3-07's builder is asked only for a one-line note in `seams.d/F3-07.md` |
+| Q9 | Hold the deploy for explicit owner OK; owner told beforehand that browser sessions end, pending invites and temp links die, phone apps and API keys keep working, rollback is a restore not a binary swap; `storage cutover-blockers list` on a prod copy must report zero blockers first |
+| Q10 | Pre-approve a minimal edit to the image job's probe step for `TestAuthOffDockerBoots`: pinned SHAs only, pushed with git, never the MCP contents API (resolves STOP 3 for `.github/workflows/` and `scripts/ci/` for that one edit) |
+| Q11 | The builder reads 03 §3.8's F4 row and 05-storage §5S.3.13 first and records which owners' levels F4 raises in `seams.d/F4-08.md`; if silent, raise books only (`BooksIdentityLevel = 2`, `"books.level-2"` are proposed names); the coordinator confirms |
+
+### Corrected anchors
+
+`LegacyAuthGinUntil` has 15 non-test lines across files outside the Files table (below). The raw `auth.Can(` count is
+**11 calls and 3 comments** under `internal/server`, plus one raw call at `internal/cfaccess/owner_guard.go:74`.
+`internal/auth/owner.go` and `owner_test.go` still exist until F4-03-OWNER, whose callers are in `internal/config`,
+`internal/repairs/owner.go`, `internal/plugins/maintenance/repairs_ops.go`, `internal/server/handlers/repairs/handler.go`
+and `internal/server/middleware/auth.go`. `internal/books/cutover/steps.go` does not exist on main until F3-07 slice (d);
+its `Flip.Level` is hard-wired to `BooksCutoverLevel`, hence Q8. Real `api/v1/auth` callers also include
+`web/src/services/api.ts` and `web/src/pages/AcceptInvite.tsx`.
+
 ## Files (the row's list)
 
 | Action | Path |
@@ -134,6 +252,25 @@ Switch identity to core for ABO in one PR, with every first-party caller (09 §9
 | modify | `internal/arch/layering_test.go`, `scripts/ci/short_test_weights.json` |
 | modify | `web/eslint.config.mjs` (the permission-literal rule, Goal item 10) |
 
+**Added by the 2026-11-19 pre-scope (Q4, owner-reviewable; each was a STOP 3 trigger):**
+
+| Action | Path | Why |
+|---|---|---|
+| modify | `internal/books/options.go`, `internal/books/cutover.go` (F3-07's), `internal/books/crash_matrix_test.go` | `LegacyAuthGinUntil: ID`; the `app.Options.Auth` and `Authenticators` values are built here; flip wiring; ABO crash cells and allowlist |
+| modify / create | `core/httpapi/` (`router.go`, `problem.go`, `legacy.go`, new `legacy_stage13_random_roles_test.go`) | delete `LegacyAuthGin` and `ErrLegacyAuthGin`; stage 13 honours `core.auth.owner.required=false`; the random-roles discharge test |
+| modify | `core/module/validation.go`, `core/module/settings.go`, `core/module/module.go` | `ProblemLegacyAuth` text; `Importers.Auth/Roles/Audit` for M3 (same instances as the kernel's) |
+| modify / create | `core/kernel/` (beyond `boot.go`, `kernel.go`; several new files expected) | P4d journal wiring, reapply and hooks, health registration, `restoreAborted` from swap-back, the Holders adapter, the taskhttp `VerifiedMethod` closure, `confighttp.Deps.ReadPerm`, the reset `Stager` |
+| modify | `core/app/app.go` | passes `LegacyAuthGinUntil`; new options |
+| modify | `core/backup/journal/`, `core/coretest/crashmatrix/rows.go` | labelled-FS seam and writer rows, only if P-B has not landed |
+| modify | `core/rbac/`, `core/internal/rbacstore/`, `core/auth/` | `bootseam.Region` labels at each new boot batch; `auth.Service` exports the e-mail lock for `PATCH /me`; F4-02-ROLE-GUARD only if P-A has not landed |
+| modify | `core/internal/authhttp/` | the `Profiles` implementation for `PATCH /me` |
+| delete | `internal/legacyoauth/` | F4-03: this PR deletes it and the gin binder |
+| modify | `internal/config/`, `internal/repairs/owner.go`, `internal/plugins/maintenance/repairs_ops.go` | F4-03-OWNER callers (after the switch commit) |
+| modify / delete | `internal/books/cutover/reach_*_test.go` only (`reach_eval_test.go`, `reach_flip_obligations_test.go`, `reach_pin_test.go`, `reach_pin_source_test.go`, new `reach_registered_path_test.go` for the five `TestReachRegisteredPath_*`); never the directory, because F7-08 owns `internal/books/cutover/m6/` in the same wave. The `m3.Config` wiring and `Flip` shape live in `internal/books/cutover.go`, `steps.go` and `stepids.go` | precondition 2 |
+| modify | `internal/books/store/booksclaims.go` (or wherever `Flip.Spec` retires claims) | retire the 13 `m3.SourcePrefixes()` and the 2 exact bootstrap keys (`seams.d/F4-06.md`) |
+| modify | `docs/agent-tasks/platform-core/seams.d/F4-07.md`, `TODO.md` | clear the obligations rows both ways; check off F4-07-*, F4-02-ROLE-GUARD, F4-11-F4-08-*, F4-03-OWNER |
+| modify | `scripts/ci/` and, for `TestAuthOffDockerBoots` only, the image job in `.github/workflows/` (Q10) | the auth-off image probe |
+
 This PR is its wave's only owner of the kernel and module wiring files.
 
 ## Spec
@@ -152,7 +289,7 @@ route before F8); 07 §7.4.3, §7.18 (`TestOldLinkFormsNotServed`, the fragment 
 ```bash
 grep -rn 'LegacyAuthGinUntil' --include=*.go . | grep -v _test | wc -l          # > 0; 0 after (outside the archtest)
 grep -c 'func RequireAuth' internal/server/middleware/auth.go                    # HEAD 1 (:152)
-grep -rn 'auth.Can(' --include=*.go internal/server | grep -v _test | wc -l      # HEAD 14 sites to replace
+grep -rn 'auth.Can(' --include=*.go internal/server | grep -v _test | wc -l      # 14 grep lines = 11 calls + 3 comments (plus internal/cfaccess/owner_guard.go:74)
 ls internal/server/wire_auth_routes.go | wc -l                                   # 1
 ls internal/auth/                                                                # HEAD: auth_test.go context.go method_credentials_test.go owner.go … (owner.go gone after F4-03)
 grep -rn 'api/v1/auth' .claude/skills/server-bootstrap scripts | wc -l           # HEAD 22 caller lines
@@ -176,7 +313,7 @@ grep -c 'internal/auth$' tools/cmd/sdkguard/internal-deps.txt                   
 1. `TestIdentityCutover_ReachOracle` (F4-07) shows any difference outside its expected list on the registered path.
 2. The ABS conformance suite fails on the migrated corpus, or an ABS phone-app session issued by the R0 binary stops
    working (the only frozen contract, D12 (c)).
-3. The work needs a path outside the Files table above: report before editing it.
+3. The work needs a path outside the Files table above, including its 2026-11-19 additions: report before editing it.
 4. A first-party caller of a deleted route remains on `main` after this PR.
 
 ## Steps (one PR; every commit builds)
@@ -305,7 +442,8 @@ make sdkguard                                                                   
 ls -d internal/auth 2>/dev/null | wc -l                                                         # 0
 grep -rn 'LegacyAuthGinUntil' --include=*.go . | grep -v _test | wc -l                         # 0
 grep -rn 'auth\.Can(' --include=*.go internal/server | grep -v _test | grep -v legacyauth | wc -l   # 0
-grep -rn 'api/v1/auth/' .claude/skills/server-bootstrap scripts web/src | grep -v 'api/v1/auth/oauth' | wc -l   # 0
+grep -rn 'api/v1/auth/' .claude/skills/server-bootstrap scripts web/src | grep -v 'api/v1/auth/oauth' | grep -v -e '^scripts/r2corpus/' -e '^scripts/tests/test_record_r0_' -e '^scripts/tests/test_write_r0_corpus.py' | wc -l   # 0 (Q5: R0 recorders excluded, web/src/services/api.ts included)
+(go test -count=1 -run 'TestReachFlip_FailsWhileThePinOrTheOwnerlessModelStands|TestReachRegisteredPath_|TestLegacyStage13_RandomRolesAdmitOnlyWhatTheSuccessorAdmits' ./internal/books/... ./core/httpapi/...)   # ok (precondition 2)
 (cd web && npm run build && npm test -- --run)                                                  # exit 0
 make -C core ci                                                                                 # exit 0
 make ci                                                                                         # exit 0
