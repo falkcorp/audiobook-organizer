@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/taglib_variants_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 5a0d9c7e-2f41-4b86-9d3a-c1e8f7b20a64
 // last-edited: 2026-11-19
 
@@ -12,6 +12,7 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -133,6 +134,10 @@ func taglibVariantFiles(t *testing.T, native bool) []*ast.File {
 	return files
 }
 
+// taglibStartKey is the UNRESOLVED key of a called parameter no walked caller
+// supplies ("#parameter:<name>"), not one of a setter ("#parameter:set by ...").
+var taglibStartKey = regexp.MustCompile(`^UNRESOLVED\..*#parameter:[A-Za-z0-9_]+$`)
+
 // taglibCalls is what a function of internal/metadata calls: the functions of the
 // same package (by name), the functions of other packages it imports
 // ("<import path>.<name>"), and method names (the syntax gives no receiver).
@@ -239,13 +244,14 @@ func taglibVariantReach(t *testing.T, op *oracleProgram, idx *taglibIndex, nativ
 				kinds[kind] = true
 			}
 			for key := range c {
-				// An UNRESOLVED key says where a walk could not follow a
-				// value, relative to where the walk started: a helper walked
-				// from here has parameters no walked caller supplies (the
-				// variant's caller is syntax, not SSA), so it names the start,
-				// not a write. TestJobWrites_NoUnresolvedCalls holds the
-				// jobs' keys to a reason.
-				if !strings.HasPrefix(key, "UNRESOLVED.") {
+				// Only the "#parameter:<name>" key depends on where the walk
+				// started: a helper walked from a variant has parameters no
+				// walked caller supplies (the variant's caller is syntax, not
+				// SSA), so the key names the start, not a write. Every other
+				// UNRESOLVED key (an outside closure, an open interface, an
+				// exported or unset variable, a setter) is the code's own and
+				// is compared like any call.
+				if !taglibStartKey.MatchString(key) {
 					calls[key] = true
 				}
 			}
