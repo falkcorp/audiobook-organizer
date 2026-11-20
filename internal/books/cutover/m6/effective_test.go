@@ -7,6 +7,7 @@ package m6_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -166,5 +167,85 @@ func TestEffective_ErrorFailsTheBootWithNoInstance(t *testing.T) {
 		func(r *rig) { r.effectiveErr = errors.New("the config file is unreadable"); clear(r.secrets.seed) })
 	if _, err := r.run(t); err == nil || !strings.Contains(err.Error(), "effective destinations") {
 		t.Fatalf("a failing Effective gave %v, want the boot to fail naming it", err)
+	}
+}
+
+// TestEffective_EmptyOverlayIsNoOverlay: an operator field that is present but
+// empty supplies no destination (HEAD's env-authoritative pass ignores an unset
+// value), so the instance's trust and the report are the fixture's, not a field
+// with no origin to trust.
+func TestEffective_EmptyOverlayIsNoOverlay(t *testing.T) {
+	base, bs := runFixture(t)
+	for _, c := range []struct{ ref, field string }{
+		{"metadata/google-books", "base_url"},
+		{"download/deluge", "url"},
+	} {
+		t.Run(c.ref, func(t *testing.T) {
+			r, s := runFixture(t, withOverlay(c.ref, map[string]string{c.field: ""}))
+			got, want := instances(t, s)[c.ref], instances(t, bs)[c.ref]
+			if got == nil {
+				t.Fatalf("no %s instance", c.ref)
+			}
+			for _, k := range []string{"local_origin", "secrets_origin", "local"} {
+				if got[k] != want[k] {
+					t.Errorf("%s %v, want the fixture's %v", k, got[k], want[k])
+				}
+			}
+			if d := diff(reportLines(r.report), reportLines(base.report)); d != "" {
+				t.Errorf("an empty overlay changed the report:\n%s", d)
+			}
+		})
+	}
+}
+
+// TestEffective_DelugeUndecodableBlobOperatorWins: a deluge_web_url that is no
+// string is quarantined, and the operator's URL still builds the instance, as
+// HEAD used it whatever the blob held.
+func TestEffective_DelugeUndecodableBlobOperatorWins(t *testing.T) {
+	_, s := runFixture(t,
+		withBlob(func(tree map[string]any) { tree["deluge_web_url"] = map[string]any{"host": "192.0.2.20"} }),
+		withOverlay("download/deluge", map[string]string{"url": overlayURL}))
+	row, ok := instances(t, s)["download/deluge"]
+	if !ok {
+		t.Fatal("no download/deluge instance though the operator supplies the URL")
+	}
+	if got := settingsOf(row)["url"]; got != overlayURL {
+		t.Errorf("deluge url %v, want %s", got, overlayURL)
+	}
+	if !slices.ContainsFunc(s.Quarantine, func(q quarantined) bool {
+		return q.Key == memberPrefix+"deluge_web_url" && q.Reason == rBlobUndecodable
+	}) {
+		t.Error("the undecodable deluge_web_url was not quarantined")
+	}
+}
+
+// TestEffective_DelugeUnprovenOperatorURLIsReported: an operator URL a
+// credential cannot be ruled out of is not a row M6 owns, so it is reported and
+// no instance is built; the blob's own (different, clean) URL is not quarantined
+// for the operator's fault. When the blob holds that same URL, it is.
+func TestEffective_DelugeUnprovenOperatorURLIsReported(t *testing.T) {
+	const bad = "http://bat%zz@192.0.2.9:8112"
+	r, s := runFixture(t, withOverlay("download/deluge", map[string]string{"url": bad}))
+	if _, ok := instances(t, s)["download/deluge"]; ok {
+		t.Error("a download/deluge instance was built from an unproven operator URL")
+	}
+	if slices.ContainsFunc(s.Quarantine, func(q quarantined) bool { return q.Key == memberPrefix+"deluge_web_url" }) {
+		t.Error("the blob's clean URL was quarantined for the operator's unproven one")
+	}
+	text := reportText(r)
+	if !strings.Contains(text, "a credential cannot be ruled out of the operator's") {
+		t.Errorf("the unproven operator URL is not reported:\n%s", text)
+	}
+	if strings.Contains(text, "bat%zz") {
+		t.Errorf("the report prints the operator's URL:\n%s", text)
+	}
+
+	_, s = runFixture(t,
+		withBlob(func(tree map[string]any) { tree["deluge_web_url"] = bad }),
+		withOverlay("download/deluge", map[string]string{"url": bad}))
+	if !slices.ContainsFunc(s.Quarantine, func(q quarantined) bool {
+		return q.Key == memberPrefix+"deluge_web_url" && q.Reason == rUnprovenURL
+	}) {
+		t.Error("a blob value equal to the unproven operator URL was not quarantined")
 	}
 }

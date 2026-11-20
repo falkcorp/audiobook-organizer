@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/falkcorp/mediacore/integrations"
@@ -29,6 +31,10 @@ type headPlugin struct {
 	Settings map[string]string `json:"settings"`
 }
 
+// webhookSettingsRead are the plugins.webhook.settings keys M6 converts, and
+// secret, which M2 moved into the store before M6 runs (config_plan.go).
+var webhookSettingsRead = map[string]bool{"urls": true, "events": true, "secret": true}
+
 // webhooks converts plugins.webhook (05-notify section 10): one instance per
 // non-empty entry of the comma-separated urls (n counts the entries HEAD's
 // parser keeps, from 1), and one rule over the instances that were written.
@@ -41,6 +47,17 @@ func (g *groupRun) webhooks(ctx context.Context) error {
 	if err := json.Unmarshal(plugins, &all); err != nil {
 		return g.quarantineMember("plugins", plugins, reasonBlobUndecodable)
 	}
+	// leftovers skips plugins as a member M6 reads, so a plugin other than the
+	// webhook, or a webhook setting M6 does not convert, is kept here or it would
+	// be dropped with the blob without a record.
+	for _, name := range slices.Sorted(maps.Keys(all)) {
+		if name == "webhook" || emptyJSON(all[name]) {
+			continue
+		}
+		if err := g.quarantineMember("plugins."+name, all[name], reasonUnreadMember); err != nil {
+			return err
+		}
+	}
 	raw, present := all["webhook"]
 	if !present {
 		return nil
@@ -48,6 +65,14 @@ func (g *groupRun) webhooks(ctx context.Context) error {
 	var pl headPlugin
 	if err := json.Unmarshal(raw, &pl); err != nil {
 		return g.quarantineMember("plugins.webhook", raw, reasonBlobUndecodable)
+	}
+	for _, key := range slices.Sorted(maps.Keys(pl.Settings)) {
+		if webhookSettingsRead[key] || strings.TrimSpace(pl.Settings[key]) == "" {
+			continue
+		}
+		if err := g.quarantineMember("plugins.webhook.settings."+key, []byte(pl.Settings[key]), reasonUnreadMember); err != nil {
+			return err
+		}
 	}
 
 	var refs []integrations.Ref

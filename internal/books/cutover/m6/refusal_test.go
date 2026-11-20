@@ -45,8 +45,9 @@ func TestConfigListRefusal_QuarantinesWhatFedTheList(t *testing.T) {
 			"import_path:2":                 rListRefused,
 			"import_path:3":                 rListRefused,
 			memberPrefix + "path_aliases.0": rListRefused,
-			// The one mapping that resolved had a library root to resolve against.
-			memberPrefix + "itunes.path_mappings.0": "the iTunes mapping's To is under no library root",
+			// The one mapping that resolved would have resolved against a refused
+			// root: said as such, not as a mapping under no root.
+			memberPrefix + "itunes.path_mappings.0": "core refused the library roots this iTunes mapping's To resolves against",
 		}},
 		{"mappings", pathOf("core.library.mappings"), map[string]string{
 			memberPrefix + "itunes.path_mappings.0": rListRefused,
@@ -90,8 +91,16 @@ func TestConfigListRefusal_QuarantinesWhatFedTheList(t *testing.T) {
 			if _, has := s.Rows[string(ownerConfig)][string(c.path)]; has {
 				t.Errorf("the refused list %s was written", c.path)
 			}
+			// A refused list reports none of its entries as registered.
+			for _, e := range r.report.Entries() {
+				if c.name == "roots" && e.Kind == "root" || c.name != "protected paths" && e.Kind == "mapping" {
+					t.Errorf("the refused list's entry is reported: %+v", e)
+				}
+			}
 			if c.name == "roots" {
-				for k := range s.Rows[string(ownerConfig)] {
+				// The scan state moves to rootscan: rows in books' own range, so
+				// that is where one would be.
+				for k := range s.Legacy {
 					if strings.HasPrefix(k, "rootscan:") {
 						t.Errorf("a rootscan row %q for a refused root", k)
 					}

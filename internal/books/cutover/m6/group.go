@@ -45,6 +45,10 @@ type groupRun struct {
 	done  map[string]bool           // blob members already quarantined
 	wrote map[integrations.Ref]bool // instances imported this pass
 	seen  map[integrations.Ref]string
+	// exact is, for the list being converted, each instance ID some entry
+	// already has as its HEAD ID, with that entry's member: the ID it wins
+	// whatever the order (exactIDs).
+	exact map[integrations.Ref]string
 }
 
 func (g *groupRun) quarantineMember(member string, raw []byte, reason string) error {
@@ -56,6 +60,13 @@ func (g *groupRun) quarantineMember(member string, raw []byte, reason string) er
 // quarantined, never written over the first.
 func (g *groupRun) instance(ctx context.Context, p *pending) error {
 	ref := p.inst.Config.Ref
+	if owner, taken := g.exact[ref]; taken && p.renamedFrom != "" && owner != p.member {
+		// The entry whose HEAD ID already is this ID keeps it, listed before or
+		// after: the renamed one is the duplicate (and must not take that entry's
+		// credentials, which M2 stored under this very name).
+		g.m.report(Entry{Kind: "instance", ID: ref.String(), Detail: "id already taken by " + owner + ", whose HEAD id it is"})
+		return g.quarantineMember(p.member, p.raw, reasonInstanceConflict)
+	}
 	if first, dup := g.seen[ref]; dup {
 		g.m.report(Entry{Kind: "instance", ID: ref.String(), Detail: "id already taken by " + first})
 		return g.quarantineMember(p.member, p.raw, reasonInstanceConflict)
@@ -139,6 +150,30 @@ func (m *Migration) importPathRows(ctx context.Context) (rows, index []storage.K
 	return rows, index, nil
 }
 
+// exactIDs maps each instance ID that an entry of list already has as its HEAD
+// ID (kept by instanceID, not renamed) to that entry's member; the first such
+// entry when two share one (the later is the ordinary duplicate).
+func exactIDs(kind integrations.Kind, list string, entries []json.RawMessage) map[integrations.Ref]string {
+	out := map[integrations.Ref]string{}
+	for i, er := range entries {
+		var e struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(er, &e) != nil {
+			continue
+		}
+		id, renamed, ok := instanceID(e.ID)
+		if !ok || renamed {
+			continue
+		}
+		ref := integrations.Ref{Kind: kind, Instance: id}
+		if _, dup := out[ref]; !dup {
+			out[ref] = fmt.Sprintf("%s.%d", list, i)
+		}
+	}
+	return out
+}
+
 // instances converts the metadata sources, the AI endpoints (and the synthesised
 // ai/openai) and Deluge.
 func (g *groupRun) instances(ctx context.Context) error {
@@ -151,6 +186,7 @@ func (g *groupRun) instances(ctx context.Context) error {
 				return err
 			}
 		}
+		g.exact = exactIDs(integrations.KindMetadata, "metadata_sources", entries)
 		for i, er := range entries {
 			p, bad, why := m.metadataInstance(er, i, g.set)
 			if p == nil {
@@ -173,6 +209,7 @@ func (g *groupRun) instances(ctx context.Context) error {
 				return err
 			}
 		}
+		g.exact = exactIDs(integrations.KindAI, "ai_endpoints", entries)
 		for i, er := range entries {
 			p, bad, why := m.aiInstance(er, i, g.set)
 			if p == nil {
@@ -189,6 +226,7 @@ func (g *groupRun) instances(ctx context.Context) error {
 			}
 		}
 	}
+	g.exact = nil
 	// The row HEAD synthesises when an OpenAI key is stored and no stored row has
 	// the ID openai (internal/config/ai_endpoints.go).
 	if !haveOpenAI && g.set[secretOpenAI] {
@@ -245,34 +283,44 @@ func (g *groupRun) deluge(ctx context.Context) error {
 	if raw, ok := g.top["deluge_web_url"]; ok {
 		if err := json.Unmarshal(raw, &web); err != nil {
 			blobDecodes = false
+			web = ""
 			if err := g.quarantineMember("deluge_web_url", raw, reasonBlobUndecodable); err != nil {
 				return err
 			}
 		}
 	}
-	if blobDecodes {
-		use := web
-		if operatorURL != "" {
-			use = operatorURL
-			if strings.TrimSpace(web) != "" && web != operatorURL {
-				// HEAD ignored the stored value; so does the migrated instance. Said,
-				// without either URL.
-				m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the stored deluge_web_url is superseded by the operator's (environment or config file) and is not carried"})
-			}
+	// The operator's URL is used whether or not the blob's member decodes: HEAD
+	// ignored the stored value when one was supplied.
+	use, fromOperator := web, false
+	if operatorURL != "" {
+		use, fromOperator = operatorURL, true
+		if strings.TrimSpace(web) != "" && web != operatorURL {
+			// HEAD ignored the stored value; so does the migrated instance. Said,
+			// without either URL.
+			m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the stored deluge_web_url is superseded by the operator's (environment or config file) and is not carried"})
 		}
-		p, proven := m.delugeInstance(use, web, g.set)
-		switch {
-		case !proven:
+	}
+	p, proven := m.delugeInstance(use, web, g.set)
+	switch {
+	case !proven && fromOperator:
+		// The URL is the operator's, not a row M6 owns: reported, not quarantined.
+		// The blob's own value is quarantined only when it is that same URL.
+		m.report(Entry{Kind: "note", ID: ref.String(), Detail: "a credential cannot be ruled out of the operator's (environment or config file) Deluge web URL: no download/deluge instance is created; supply the URL without userinfo"})
+		if blobDecodes && web == operatorURL {
 			if err := g.quarantineMember("deluge_web_url", []byte(web), reasonUnprovenURL); err != nil {
 				return err
 			}
-		case p != nil:
-			if err := g.instance(ctx, p); err != nil {
-				return err
-			}
-		default:
-			m.report(Entry{Kind: "note", ID: ref.String(), Detail: "no web URL is stored and none is supplied by the environment or config file: no download/deluge instance is created"})
 		}
+	case !proven:
+		if err := g.quarantineMember("deluge_web_url", []byte(web), reasonUnprovenURL); err != nil {
+			return err
+		}
+	case p != nil:
+		if err := g.instance(ctx, p); err != nil {
+			return err
+		}
+	default:
+		m.report(Entry{Kind: "note", ID: ref.String(), Detail: "no web URL is stored and none is supplied by the environment or config file: no download/deluge instance is created"})
 	}
 	raw, ok := g.top["download_client"]
 	if !ok {
