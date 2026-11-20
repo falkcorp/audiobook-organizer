@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.55 -->
+<!-- version: 10.78.56 -->
 <!-- version: 10.78.49 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
@@ -4268,7 +4268,7 @@ into one of the curated sections below, is a normal direct edit.
 - [x] **ABS-SYNC: let ABS clients through BasicAuth on the 9 routes that have no — ✅ 2026-10-03: internal/server/handlers/abs/basicauth_exempt_test.go pins the exempt table (GET/HEAD cover, /login, /ping, openid)
       token check.** #3296 exempts only the ABS routes whose handler chain contains
       `ABSRequireAuth`. The nine below still sit behind the global
-      `servermiddleware.BasicAuth()`, so with `basic_auth_enabled` on (off in prod
+      `servermiddleware.BasicAuth()` (since replaced by core's stage-8 Basic gate, F3-07), so with `basic_auth_enabled` on (off in prod
       today) ABS clients still break: a client can't send Basic credentials and its
       ABS token together, because both use the `Authorization` header.
       - `POST /login`: new or logged-out clients can't get a token.
@@ -21652,7 +21652,8 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
   `servermiddleware.BasicAuth()`. With basic auth enabled (off by default) every ABS
   client would need to send `Authorization: Basic …`, which collides with the ABS
   bearer token on the same header — the clients would be unable to connect and the
-  cause would be invisible. Either exempt the ABS paths in `basicauth.go` or document
+  cause would be invisible. Either exempt the ABS paths in `basicauth.go` (deleted by F3-07;
+  the exemption now lives in `internal/server/legacy_manifest.go` and core's stage 8) or document
   that the two features are mutually exclusive.
 
 - [x] **ABS-SYNC: prune expired `abs_sess:` records on a schedule.** (done in #2737, TASK-139)

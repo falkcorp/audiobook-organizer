@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/F3-07-config-flip-facade-m2-freeze.md -->
-<!-- version: 1.2.3 -->
+<!-- version: 1.2.4 -->
 <!-- guid: cd0ab95d-94fd-4550-8089-03f6d358f1f1 -->
-<!-- last-edited: 2026-11-11 -->
+<!-- last-edited: 2026-11-19 -->
 
 # F3-07 — F3 flip, one PR: core config and secrets wired, ABO's `internal/config` becomes the façade, M2 with M7 and M8 registered, `R1Values` deleted, `/api/v1/config` on core config, the Basic gate into core, canonical names in every deploy file, behind F3-08's R2 freeze
 
@@ -136,6 +136,8 @@ Switch configuration and secrets to core in one PR, with every first-party consu
 This PR is its wave's only owner of the kernel and module wiring files; no sibling of W32 edits them.
 
 ## Re-verify at BASE (record every count; regenerate expected values at BASE)
+
+> Status 2026-11-19: the Basic-gate lines below are done on the PR branch (e4): `internal/server/middleware/basicauth.go` and its `router.Use` are deleted, the gate is core stage 8 with the legacy manifest's exempt set, and the HEAD-side pins are `internal/server/head_basic_gate_test.go` and `basic_gate_parity_test.go`. The counts here are for the tree before that commit.
 
 ```bash
 grep -rn 'R1Values' --include=*.go . | wc -l                        # > 0 now; 0 after this PR (outside the archtest)
