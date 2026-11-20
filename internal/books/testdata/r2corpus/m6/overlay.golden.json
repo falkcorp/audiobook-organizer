@@ -504,9 +504,6 @@
         ],
         "v": 1
       }
-    },
-    "core/secrets": {
-      "core.storage.quarantine.row-2": "{\"id\":9,\"path\":\"/tmp/r2corpus/stage1/import/Selina Kyle\",\"name\":\"Selina Kyle intake,\"torn\":"
     }
   },
   "removed_legacy_keys": [

@@ -707,10 +707,22 @@ reads HEAD's rows, writes the entries through `config.Importer` (05-config §1.3
 
 | HEAD source | Becomes |
 |---|---|
-| blob `root_dir` (non-empty), with `path_aliases` | entry `books-library`: `Path` = `root_dir`, `Role` library, `Owner` books, `Aliases` = `path_aliases`, `Watch` off (HEAD watches import paths only, `internal/watcher/supervisor.go:73`), `Sentinel` bootstrap, `Quarantine` `.failed`, `AppDir` `.mediacore`, `MinFree` 0 (HEAD has no floor) |
+| blob `root_dir` (non-empty), with `path_aliases` | entry `books-library`: `Path` = `root_dir`, `Role` library, `Owner` books, `Aliases` from `path_aliases` per root (below), `Watch` off (HEAD watches import paths only, `internal/watcher/supervisor.go:73`), `Sentinel` bootstrap, `Quarantine` `.failed`, `AppDir` `.mediacore`, `MinFree` 0 (HEAD has no floor) |
 | row `import_path:<n>` (`ID, Path, Name, Enabled, CreatedAt, LastScan, BookCount`, `internal/database/store.go:596-604`), its index row `import_path:path:<path>` and the counter `counter:import_path` | entry `import-<n>`: `Path`, `Name`, `Role` import, `Owner` books, `Watch` auto when `Enabled` else off (whether books acts on the events stays books' `modules.books.scan.auto_scan_enabled`), `Sentinel` bootstrap, library's defaults for the rest; `Enabled`, `CreatedAt`, `LastScan` and `BookCount` go to books' own per-root record `rootscan:<root ID>` (a new books family, name coined here), because they are books' scan state, not library's. Rows, index rows and counter are deleted |
 | blob `itunes.path_mappings` (`From`, `To`) | `core.library.mappings` entries `{Source: "itunes", Remote: From, Local: Resolve(To)}`, `Fold` for a Windows-form `From` (HEAD's `normalizeWindowsPrefix`, `internal/config/config.go:62-90`) |
 | blob `protected_paths` | `core.library.protected_paths` |
+
+**Path aliases are per root.** HEAD's `path_aliases` are not tied to a root: each `PathAlias.Root` is a path
+prefix, and HEAD renders a path through the alias with the longest matching `Root` (`web/src/utils/pathAliases.ts`).
+A core `Alias` has no root of its own and renders the path of the root that holds it. So for every root entry above
+(`books-library` and each `import-<n>`) M6 attaches each alias whose `Root` is the root's path. A root with none
+takes the alias or aliases with the longest `Root` that is an ancestor of the root's path, carried to it by
+appending the root's path relative to that `Root` in each form as HEAD renders it: Windows and UNC trim a trailing
+separator run and join with `\`, the SMB URL joins with `/` and percent-encodes each segment. An empty form stays
+empty. Every root then renders as HEAD rendered it. An alias no root takes is quarantined with its raw value, and
+the reason says its display rendering is not carried: one whose `Root` is inside a root (HEAD seeds those from an
+iTunes mapping whose `To` is below a root, `config.SeedPathAliases`), one over roots that each have a more specific
+alias, and one under no root and over none (seams.d/F7-08).
 
 **IDs are kept (14 E2).** HEAD's import-path ID `n` and the root ID `import-<n>` map to each other by one pure function
 in books, so no books row and no client that names `n` is rewritten; a root created after R2 gets an `import-<n>` ID

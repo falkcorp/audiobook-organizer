@@ -827,16 +827,20 @@ name of every HEAD secret. IDs that exist in ABO today are kept verbatim. The *O
 blob never stores one", `internal/config/invite_config.go:28-29` @748fd787a). Its operator values are the overlay of
 M1.4 step 2 at `integrations.notify.email.{host, port, username, password, from}`, and a `notify/email` stored through
 the API is a native row. A HEAD ID that does not match `InstanceID` (none at HEAD) is lower-cased with `_` → `-` and
-listed in the step's report.
+listed in the step's report. When the lowered ID is one another entry of the same list already has as its HEAD ID,
+that entry keeps it, listed before or after, and the renamed one is quarantined as the duplicate. A renamed instance
+takes only the credentials M2 stored under its own HEAD ID, carried to the names under its new ID; a secret already
+under a new name that no entry owns is reported and left unbound (seams.d/F7-08).
 
 **Trust carried over.** For each migrated instance the step sets:
 - **`Local=true` with `LocalOrigin`** = the origin of its configured URL-typed field, for every instance with one,
-  so a Deluge, AI endpoint or webhook on the LAN keeps working with no owner step. This is not a widening: at HEAD
+  taken from the effective value (the stored one with the operator overlay in effect at the cutover applied, the
+  view core signs at the first boot: seams.d/F7-01 rows 17 and 22, seams.d/F7-08), so a Deluge, AI endpoint or webhook on the LAN keeps working with no owner step. This is not a widening: at HEAD
   only `settings.manage` holders wrote those fields (seed: `admin` only, `internal/config/protected_fields.go:148`
   @748fd787a), and the grant is bound to the stored origin, so a later URL change by anyone without the ProtectAdmin
   check resets it (M1.3 `Put`). Each grant is audited as `core.integration.local_migrated` (05-rbac §7.1; staged in M6's chunk batch), and the R2 release note
   says how to clear it.
-- **`OperatorSecretOrigin`** = the stored destination origins, for the four operator-secret pairs of M1.4 step 2
+- **`OperatorSecretOrigin`** = the effective destination origins (as above), for the four operator-secret pairs of M1.4 step 2
   (`ai/openai`, `download/deluge`, `metadata/google-books`, `metadata/hardcover`): at HEAD an operator secret was sent
   beside whatever destination the blob held (`SyncConfigFromEnv`, `internal/config/persistence.go:2030-2035`; the
   env-authoritative Deluge password, `config.go:2249-2250` @748fd787a), so the env key keeps following the URL it
@@ -855,7 +859,14 @@ listed in the step's report.
   one or the operator sets its operator path; the step's report lists it.
 - A secret M2 could not decrypt (`.encryption_key` missing or wrong) leaves its ref unresolved: the instance is
   `HealthMisconfigured` reason `integration_secret_unreadable` and the operator re-enters it (05-config; 14 E4).
+  A renamed source's unreadable secret is carried to the name under its new ID as an unreadable marker (reason
+  `corrupt`), with the same result.
 - Throttle holds and daily quota counts are dropped (M2.10).
+- An `ai_endpoints` capability tick HEAD does not register (HEAD kept it and ignored it in selection), a wildcard
+  tick, and a feature outside the ones `ai.Router.ValidateEndpoint` declares are dropped from the instance and listed
+  in the step's report. Carrying one would make core refuse the whole endpoint.
+- A metadata source's `rate_limit.max_concurrent` (HEAD's bound on searches in flight in a bulk fetch) has no
+  `Limits` field and is listed in the report.
 
 The step's dry-run mode reports, per kind, the instances it would write, their IDs, the trust it would carry and
 every row it would quarantine (14 E1).

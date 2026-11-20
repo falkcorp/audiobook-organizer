@@ -385,3 +385,16 @@ func TestWebhookMigration_RuleNamesOnlyWhatWasImported(t *testing.T) {
 		t.Errorf("a rule %q was written though no webhook instance was", rules)
 	}
 }
+
+// TestMetadataMigration_MaxConcurrentReportedDropped: HEAD's per-source bound
+// on searches in flight has no field in core's Limits, so a set value is
+// reported as dropped on the instance, not lost without a word.
+func TestMetadataMigration_MaxConcurrentReportedDropped(t *testing.T) {
+	r, _ := runFixture(t, withBlob(func(tree map[string]any) {
+		src := tree["metadata_sources"].([]any)[1].(map[string]any)
+		src["rate_limit"] = map[string]any{"max_concurrent": 3}
+	}))
+	if !strings.Contains(reportText(r), "note|metadata/google-books|dropped: rate_limit.max_concurrent 3 has no native field") {
+		t.Errorf("the dropped max_concurrent is not reported:\n%s", reportText(r))
+	}
+}
