@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.57 -->
+<!-- version: 10.78.58 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -298,16 +298,19 @@ into one of the curated sections below, is a normal direct edit.
       `internal/maintenance/jobs/writes_oracle_test.go` and
       `writes_trace_test.go`, and three F5-18 preparation items.
       - **Done 2026-11-19 (F5-18m, #4768):** Rewrite the SSA walk on `golang.org/x/tools/go/callgraph/vta` over the
-        same program. It follows an interface call into its implementations and
-        judges it by the method's name as well (the union, so a partial set of
-        implementations or a body that writes through code outside the module
-        is still caught), follows functions passed as values (including values
-        loaded from a field, a package variable, a slice or a call result, read
-        from the module's own stores), and records any call through a function
-        value it cannot resolve as `UNRESOLVED` so that
-        `TestJobWrites_NoUnresolvedCalls` fails unless it is allowed with a
-        reason. A store write reached through a non-store name (for example
-        `dedup.dedupBookWriter.RevertBookToVersion`) is no longer dropped.
+        same program, default-deny. It follows an interface call into its
+        implementations and judges it by the method's name as well (the union),
+        walking every implementation the module's loaded packages declare when
+        the receiver can come from code the program does not show; follows
+        functions passed as values (loaded from a field, a package variable, a
+        slice, a local or a call result, read from the module's own stores and
+        from a constructor's callers); and records every reason a resolved set
+        can be incomplete as `UNRESOLVED`, so that
+        `TestJobWrites_NoUnresolvedCalls` fails unless it is allowed by an exact
+        key with a reason. A store write reached through a non-store name (for
+        example `dedup.dedupBookWriter.RevertBookToVersion`) is no longer
+        dropped. Implementations in packages the program does not load are not
+        seen (three such calls are allowed by key, traced).
       - [ ] Follow calls that leave the module: the walk does not enter code in
         another module or the standard library, so a write made there (a file
         writer outside the `os` and `fileops` lists, a client library that
