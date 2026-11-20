@@ -243,8 +243,6 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 	// Credentials follow their URL (egress.go): beyond HEAD parity. It sees the
 	// list the write ends with, so a model or URL folded in is checked too.
 	invalid = append(invalid, egressViolations(before, checked)...)
-	// A program the server runs must be a path an unprivileged user cannot swap.
-	invalid = append(invalid, execPathViolations(before, u)...)
 	if len(unknown) > 0 {
 		slices.Sort(unknown)
 		return config.UpdateResult{}, fmt.Errorf("%w: %s", coreconfig.ErrUnknownKey, strings.Join(unknown, ", "))
@@ -257,6 +255,11 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 		return config.UpdateResult{}, headErr(errors.Join(coreconfig.ErrInvalid, errors.Join(invalid...)), byPath)
 	}
 	needAdmin := append(secretHeads(append(slices.Clone(secretSets), secretClears...)), adminHeads...)
+	// A program path is judged against the server's filesystem, so who may ask is
+	// decided first: a caller short of the admin role is refused on the key alone
+	// and no check runs for them (the answer would say what exists and its mode).
+	execHeads := execPathHeads(before, u)
+	needAdmin = append(needAdmin, execHeads...)
 	applyAs := a
 	if !(a.Interactive && a.Can != nil && a.Can(adminPerm)) {
 		inWindow := firstRunMay(a, u)
@@ -273,6 +276,11 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 			// as they are and refuses every admin key in it.
 			applyAs = firstRunActor(a)
 		}
+	}
+	// A program the server runs must be a path an unprivileged user cannot swap.
+	// Only a caller already authorized to write it reaches the filesystem.
+	if v := execPathViolations(before, u); len(v) > 0 {
+		return config.UpdateResult{}, headErr(errors.Join(coreconfig.ErrInvalid, errors.Join(v...)), byPath)
 	}
 	var res coreconfig.Result
 	genBefore := e.acc.Generation()

@@ -8,12 +8,11 @@ package appconfig
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	coreconfig "github.com/falkcorp/mediacore/config"
@@ -55,11 +54,12 @@ const (
 	execDir                      // an absolute directory; may not exist yet
 )
 
-// execPathViolations are the refusals the update's executable-path values earn, as
-// field errors naming the key. An empty value (use the managed copy) and a key
-// being cleared are always allowed, and so is a value the write leaves unchanged.
-func execPathViolations(before config.Config, u config.Update) []error {
-	var out []error
+// execPathHeads are the executable-path rows the update would have judged: set to
+// a non-empty value the write changes. Authorization is decided on these first
+// (write.go): a caller short of the admin role must learn nothing about the
+// server's filesystem from the answer, so no check runs for them.
+func execPathHeads(before config.Config, u config.Update) []string {
+	var out []string
 	for head, row := range execPathRows {
 		raw, ok := u.Set[head]
 		if !ok {
@@ -72,7 +72,27 @@ func execPathViolations(before config.Config, u config.Update) []error {
 		if v == row.cur(before) {
 			continue
 		}
-		if err := checkExecPath(v, row.kind); err != nil {
+		out = append(out, head)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// pathChecker is checkExecPath; a variable so a test can prove that a refused
+// caller never reaches the filesystem.
+var pathChecker = checkExecPath
+
+// execPathViolations are the refusals the update's executable-path values earn, as
+// field errors naming the key. An empty value (use the managed copy) and a key
+// being cleared are always allowed, and so is a value the write leaves unchanged.
+// Only an authorized caller reaches it. The error text names the rule that failed
+// and never the operating system's own message: the detail is logged here.
+func execPathViolations(before config.Config, u config.Update) []error {
+	var out []error
+	for _, head := range execPathHeads(before, u) {
+		var v string
+		_ = json.Unmarshal(u.Set[head], &v)
+		if err := pathChecker(v, execPathRows[head].kind); err != nil {
 			out = append(out, &coreconfig.FieldError{Path: coreconfig.Path(head), Err: err})
 		}
 	}
@@ -94,7 +114,8 @@ func checkExecPath(p string, kind execPathKind) error {
 	case errors.Is(err, os.ErrNotExist) && kind == execDir:
 		return checkDirOf(filepath.Dir(p))
 	case err != nil:
-		return fmt.Errorf("cannot be used: %w", underlying(err))
+		slog.Warn("config: executable path refused", "path", p, "err", err)
+		return errors.New("cannot be used")
 	}
 	switch kind {
 	case execFile:
@@ -124,23 +145,11 @@ func checkExecPath(p string, kind execPathKind) error {
 func checkDirOf(dir string) error {
 	info, err := os.Stat(dir)
 	if err != nil {
-		return fmt.Errorf("its directory cannot be used: %w", underlying(err))
+		slog.Warn("config: executable path's directory refused", "dir", dir, "err", err)
+		return errors.New("its directory cannot be used")
 	}
 	if info.Mode().Perm()&0o002 != 0 {
 		return errors.New("its directory must not be writable by everyone")
 	}
 	return nil
-}
-
-// underlying is the errno or sentinel of a path error, without the path the caller
-// already knows.
-func underlying(err error) error {
-	var pe *os.PathError
-	if errors.As(err, &pe) {
-		if errno, ok := pe.Err.(syscall.Errno); ok {
-			return errno
-		}
-		return pe.Err
-	}
-	return err
 }

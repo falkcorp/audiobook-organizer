@@ -189,3 +189,62 @@ func TestExecPaths_EveryToolsRowIsClassified(t *testing.T) {
 		}
 	}
 }
+
+// TestExecPaths_NonAdminLearnsNothingAboutTheFilesystem: a caller short of the
+// admin role gets the same refusal for a path that exists and one that does not,
+// and no filesystem check runs for either. Authorization is decided before the
+// path is looked at.
+func TestExecPaths_NonAdminLearnsNothingAboutTheFilesystem(t *testing.T) {
+	root := t.TempDir()
+	exists := writeExec(t, root, "fpcalc", 0o755)
+	missing := filepath.Join(root, "nothing-here")
+	loose := writeExec(t, root, "loose", 0o777)
+	user := config.Actor{Subject: "user:robin", Interactive: true, Can: func(string) bool { return false }}
+
+	calls := 0
+	prev := pathChecker
+	pathChecker = func(p string, k execPathKind) error { calls++; return prev(p, k) }
+	t.Cleanup(func() { pathChecker = prev })
+
+	var msgs []string
+	for _, key := range []string{"tools.fpcalc.custom_path", "tools.ollama.custom_path", "tools.managed_dir"} {
+		for _, p := range []string{exists, missing, loose, "relative/path"} {
+			e, f := foldEngine(t, `[]`, `[]`)
+			_, err := e.Update(t.Context(), user, set(key, `"`+p+`"`))
+			if !errors.Is(err, coreconfig.ErrForbidden) {
+				t.Fatalf("%s=%s: non-admin got %v, want ErrForbidden", key, p, err)
+			}
+			if len(f.applied) != 0 {
+				t.Fatalf("%s=%s: a refused write wrote", key, p)
+			}
+			// The refusal names the key and the permission, never the path.
+			msgs = append(msgs, strings.ReplaceAll(err.Error(), key, "KEY"))
+			if strings.Contains(err.Error(), p) {
+				t.Fatalf("the refusal echoes the path: %v", err)
+			}
+		}
+	}
+	for _, m := range msgs {
+		if m != msgs[0] {
+			t.Fatalf("refusals differ by path or kind:\n%q\n%q", msgs[0], m)
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("the validator ran %d times for a caller who may not write the key", calls)
+	}
+}
+
+// TestExecPaths_RefusalNeverEchoesTheOSError: an admin who names a path that cannot
+// be stat'ed gets a fixed message; the operating system's text stays in the log.
+func TestExecPaths_RefusalNeverEchoesTheOSError(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "nothing-here")
+	err := execUpdate(t, "tools.fpcalc.custom_path", missing)
+	if !errors.Is(err, coreconfig.ErrInvalid) || !strings.Contains(err.Error(), "cannot be used") {
+		t.Fatalf("got %v", err)
+	}
+	for _, leak := range []string{"no such file", "permission denied", "not a directory"} {
+		if strings.Contains(strings.ToLower(err.Error()), leak) {
+			t.Fatalf("the refusal leaks the OS error %q: %v", leak, err)
+		}
+	}
+}
