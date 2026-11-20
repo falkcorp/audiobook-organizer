@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g7_test.go
-// version: 1.0.10
+// version: 1.0.11
 // guid: 4c7e1a92-6b3d-4f58-8a0e-2d9c5b71e3f6
 // last-edited: 2026-11-19
 
@@ -58,6 +58,10 @@ type t6g7Recorder struct {
 	bulkErr error
 	// bookFiles lets ModifyBookFile run the caller's fn on a copy, by file id.
 	bookFiles map[string]*database.BookFile
+	// opChangeErr fails CreateOperationChange (nothing is recorded for the row).
+	opChangeErr error
+	// keepSeries makes DeleteSeriesIfUnreferenced answer "still referenced".
+	keepSeries bool
 }
 
 // t6g7WriterResource maps every writer method the spy can record to the FULL set
@@ -194,6 +198,9 @@ func (r *t6g7Recorder) ModifyBook(id string, fn func(*database.Book) error) (*da
 	if fmt.Sprint(cur.SeriesID) != fmt.Sprint(b.SeriesID) {
 		line += " series=" + t6g7IntPtr(cur.SeriesID)
 	}
+	if fmt.Sprint(cur.SeriesSequence) != fmt.Sprint(b.SeriesSequence) {
+		line += " seq=" + t6g7IntPtr(cur.SeriesSequence)
+	}
 	if cur.FilePath != b.FilePath {
 		line += " path=" + filepath.Base(cur.FilePath)
 	}
@@ -266,7 +273,20 @@ func (r *t6g7Recorder) CreateSeries(name string, authorID *int) (*database.Serie
 	return &database.Series{ID: 9001, Name: name, AuthorID: authorID}, nil
 }
 
+// DeleteSeriesIfUnreferenced records the delete and reports it done, unless the
+// test made the series still referenced.
+func (r *t6g7Recorder) DeleteSeriesIfUnreferenced(id int, expectName string, _ *int) (bool, error) {
+	if r.keepSeries {
+		return false, nil
+	}
+	r.rec(fmt.Sprintf("DeleteSeriesIfUnreferenced %d %s", id, expectName))
+	return true, nil
+}
+
 func (r *t6g7Recorder) CreateOperationChange(c *database.OperationChange) error {
+	if r.opChangeErr != nil {
+		return r.opChangeErr
+	}
 	r.rec(fmt.Sprintf("CreateOperationChange %s %s %s->%s", c.BookID, c.FieldName, c.OldValue, c.NewValue))
 	return nil
 }
@@ -327,6 +347,34 @@ type t6g7TestStore struct {
 	activeErr  error
 	// atPathUnbuilt reports the book_atpath index as not built.
 	atPathUnbuilt bool
+	// counts, members, perSeriesRefs and authors are the series-denumber reads;
+	// applyReadyErr is what SeriesApplyReady refuses with.
+	counts        map[int]int
+	members       map[int][]database.BookCore
+	perSeriesRefs map[int]int
+	authors       []database.Author
+	applyReadyErr error
+}
+
+func (s *t6g7TestStore) GetAllSeriesBookCounts() (map[int]int, error) { return s.counts, nil }
+func (s *t6g7TestStore) GetAllAuthors() ([]database.Author, error)    { return s.authors, nil }
+func (s *t6g7TestStore) GetSeriesBookRefCount(id int) (int, error)    { return s.perSeriesRefs[id], nil }
+func (s *t6g7TestStore) SeriesApplyReady() error                      { return s.applyReadyErr }
+func (s *t6g7TestStore) GetSeriesByID(id int) (*database.Series, error) {
+	for i := range s.series {
+		if s.series[i].ID == id {
+			cp := s.series[i]
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+func (s *t6g7TestStore) GetBooksBySeriesIDsAllVersions(ids []int) (map[int][]database.BookCore, error) {
+	out := map[int][]database.BookCore{}
+	for _, id := range ids {
+		out[id] = append([]database.BookCore(nil), s.members[id]...)
+	}
+	return out, nil
 }
 
 // BookFilesAtPath answers every seeded row (by book) whose file is at path.
@@ -626,6 +674,9 @@ func t6g7KindWritersBuild() map[tasks.Kind]t6g7KindWrite {
 	// repoint-missing-to-folder-audio also writes its per-row report TSV, in Preview
 	// too: a file.
 	add(p.repointMissingToFolderAudioDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[rfWriter]()}, outside: []ops.Resource{ops.ResFiles}})
+	// series-denumber also writes its candidate report and the .applied outcome
+	// report: files, in Preview too.
+	add(p.seriesDenumberDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[seriesDenumberWriter]()}, outside: []ops.Resource{ops.ResFiles}})
 	add(p.repointUnrecordedRenamesDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[unrecordedRenameWriter]()}})
 	add(p.tagBackfillDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[tagBackfillWriter]()}})
 	add(p.userMergeDef(), t6g7KindWrite{writers: []reflect.Type{reflect.TypeFor[userMergeWriter]()}})
@@ -695,7 +746,7 @@ func TestT6G7Resources_TableCoversEveryWriterMethod(t *testing.T) {
 func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 	p := &Plugin{}
 	defs := p.t6g7Kinds(fakeT6G7Deps(t), nil)
-	require.Len(t, defs, 14, "grows to 15 as the group's definitions land")
+	require.Len(t, defs, 15, "every definition of the group")
 
 	// Every expected value below is written out by hand from the HEAD def and
 	// the coordinator's rulings, never derived from the code under test.
@@ -752,6 +803,10 @@ func TestT6G7Kinds_MatchHEADDefs(t *testing.T) {
 				par     tasks.Parallelism
 				wantPar string
 			}{{rfPlanParallelism(), "fixed(4): "}, {rfWriteParallelism(), "fixed(4): "}}},
+		// HEAD's apply is one sequential loop over plans (a plan's books and the
+		// delete of its emptied series depend on the plans before it), so the kind
+		// declares no pool. HEAD is ResumeDrop.
+		{head: p.seriesDenumberDef(), resume: tasks.ResumeDrop, timeout: 2 * time.Hour},
 		{head: p.tagBackfillDef(), resume: tasks.ResumeDrop, timeout: 120 * time.Minute,
 			par: &tagBackfillPar, wantPar: fmt.Sprintf("fixed(%d): ", runtime.NumCPU()*4)},
 		{head: p.titleRepairDef(), resume: tasks.ResumeDrop, timeout: 4 * time.Hour,
@@ -950,6 +1005,18 @@ func t6g7WriteCases() []t6g7WriteCase {
 			},
 		},
 		{
+			kind:       seriesDenumberKind,
+			params:     `{"reportPath":"denumber.tsv"}`,
+			standsDown: true,
+			setup: func(t *testing.T, p *t6g7Probe) {
+				seedDenumberRig(p)
+			},
+			// The journal rows of a move come before the write they describe, and the
+			// emptied series' row is journaled before its delete. A Preview run plans
+			// on reads and writes nothing.
+			live: denumberLiveWrites,
+		},
+		{
 			kind: repointUnrecordedRenamesKind,
 			setup: func(t *testing.T, p *t6g7Probe) {
 				seedRepointRig(t, p, "01BATBOOK00000000000000R1", "01BATFILE00000000000000R11", true)
@@ -1022,7 +1089,7 @@ func TestT6G7Kinds_WritesThroughShell(t *testing.T) {
 // case, before it builds a writer or touches the store: the run's mode comes
 // from the start request, never from params (coordinator ruling 3).
 func TestT6G7Kinds_WritingShellsRefuseModeKeys(t *testing.T) {
-	kinds := []tasks.Kind{reviewStatusIndexRepairKind, reportsPruneKind, titleBackfillKind, titleRepairKind, t6g7KindFor("maintenance.bulk-write-back"), t6g7KindFor("maintenance.user-merge"), tagBackfillKind, repointUnrecordedRenamesKind, seriesPhantomRepairKind, vgPrimaryRepairKind, rewritePathPrefixKind, rfKind}
+	kinds := []tasks.Kind{reviewStatusIndexRepairKind, reportsPruneKind, titleBackfillKind, titleRepairKind, t6g7KindFor("maintenance.bulk-write-back"), t6g7KindFor("maintenance.user-merge"), tagBackfillKind, repointUnrecordedRenamesKind, seriesPhantomRepairKind, vgPrimaryRepairKind, rewritePathPrefixKind, rfKind, seriesDenumberKind}
 	keys := []string{"dry_run", "dryRun", "DRY_RUN", "DryRun", "apply", "Apply", "APPLY"}
 	gate := &t6g7GateWriter{name: "gotham"}
 	for _, kind := range kinds {
@@ -2261,4 +2328,307 @@ func TestRepointFolderAudioCore_StopsWritingWhenTheLeaseLapses(t *testing.T) {
 	_, err = repointMissingToFolderAudioCore(context.Background(), rfParams{}, env)
 	require.ErrorContains(t, err, "no writer for a live run")
 	require.Empty(t, p.rec.snapshot())
+}
+
+// denumberBook ids: the base's own book, the book the numbered series holds, and
+// the two siblings that make "Gotham Knights 05" a run of three.
+const (
+	denumberBaseBook  = "01BATBOOK00000000000000D0"
+	denumberMoverBook = "01BATBOOK00000000000000D5"
+)
+
+// denumberLiveWrites is every write a Live run of the de-numbering makes on the
+// rig: the mover's two journal rows before its write (link, then position), the
+// write itself, the emptied series' journal row before its delete, then the
+// delete. The siblings hold a position of their own (99), so they move nothing.
+var denumberLiveWrites = []string{
+	"CreateOperationChange " + denumberMoverBook + " series_id 11->10",
+	"CreateOperationChange " + denumberMoverBook + " series_sequence ->5",
+	"ModifyBook " + denumberMoverBook + " title=Year One series=10 seq=5",
+	"CreateOperationChange   {\"id\":11,\"name\":\"Gotham Knights 05\",\"author_id\":5}->",
+	"DeleteSeriesIfUnreferenced 11 Gotham Knights 05",
+}
+
+// seedDenumberRig seeds a library where "Gotham Knights 05" holds one unplaced
+// book, its base "Gotham Knights" exists with a book at position 1, and two
+// sibling series "04" and "06" (one book each, a position of their own, their own
+// titles) make 05 a run of three consecutive numbers: the one plan that moves a
+// book.
+func seedDenumberRig(p *t6g7Probe) {
+	author := 5
+	ser := func(id int, name string) database.Series {
+		return database.Series{ID: id, Name: name, AuthorID: &author}
+	}
+	seq := func(n int) *int { return &n }
+	core := func(id, title string, seriesID int, pos *int) database.BookCore {
+		sid := seriesID
+		return database.BookCore{ID: id, Title: title, SeriesID: &sid, SeriesSequence: pos}
+	}
+	base := core(denumberBaseBook, "Hush", 10, seq(1))
+	mover := core(denumberMoverBook, "Year One", 11, nil)
+	sib4 := core("01BATBOOK00000000000000D4", "The Long Halloween", 20, seq(99))
+	sib6 := core("01BATBOOK00000000000000D6", "Dark Victory", 21, seq(99))
+	p.store = &t6g7TestStore{
+		series: []database.Series{
+			ser(10, "Gotham Knights"), ser(11, "Gotham Knights 05"), ser(20, "Gotham Knights 04"), ser(21, "Gotham Knights 06"),
+		},
+		authors:   []database.Author{{ID: author, Name: "Bruce Wayne"}},
+		counts:    map[int]int{10: 1, 11: 1, 20: 1, 21: 1},
+		refCounts: map[int]int{10: 1, 11: 1, 20: 1, 21: 1},
+		// The count the apply takes again before it writes into the base and
+		// before it deletes the emptied source: the source reads empty once its
+		// book has moved, which a static fixture states up front.
+		perSeriesRefs: map[int]int{10: 1, 11: 0, 20: 1, 21: 1},
+		members: map[int][]database.BookCore{
+			10: {base}, 11: {mover}, 20: {sib4}, 21: {sib6},
+		},
+	}
+	moverRow := &database.Book{ID: denumberMoverBook, Title: "Year One", AuthorID: &author, SeriesID: mover.SeriesID}
+	p.rec.books = map[string]*database.Book{denumberMoverBook: moverRow}
+}
+
+func runDenumberKind(t *testing.T, p *t6g7Probe, mode tasks.Mode, params string) (*t6g7Host, error) {
+	t.Helper()
+	def := t6g7ByKind(t, (&Plugin{}).t6g7Kinds(p.deps(), nil), seriesDenumberKind)
+	return runT6G7Kind(t, def, mode, &t6g7GateWriter{name: "gotham"}, params)
+}
+
+// A Preview run is HEAD's dry run: it plans on reads, writes the candidate report
+// and nothing else, and never builds a writer, parks the scan or drops a cache.
+func TestT6G7Kinds_SeriesDenumberPreviewPlansAndWritesNoRow(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedDenumberRig(p)
+	h, err := runDenumberKind(t, p, tasks.ModePreview, `{"reportPath":"denumber.tsv"}`)
+	require.NoError(t, err)
+	require.Zero(t, p.writerCalls(), "a preview built a writer")
+	require.Empty(t, p.rec.snapshot())
+	require.Empty(t, h.standDowns, "a preview parked the scan")
+	require.Zero(t, p.seriesInvalidated)
+	body, rerr := os.ReadFile(filepath.Join(p.root, "denumber.tsv"))
+	require.NoError(t, rerr)
+	require.Contains(t, string(body), "Gotham Knights 05")
+	require.Contains(t, string(body), denumberMoverBook)
+	_, aerr := os.Stat(filepath.Join(p.root, "denumber.tsv.applied"))
+	require.True(t, os.IsNotExist(aerr), "a preview wrote an outcome report")
+}
+
+// A Live run journals each move before its write, deletes the emptied series
+// behind its own journal row, drops the series caches once, and writes the
+// outcome report beside the candidate report.
+func TestT6G7Kinds_SeriesDenumberLiveMergesJournalsAndDeletes(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedDenumberRig(p)
+	h, err := runDenumberKind(t, p, tasks.ModeLive, `{"reportPath":"denumber.tsv"}`)
+	require.NoError(t, err)
+	require.Equal(t, denumberLiveWrites, p.rec.snapshot())
+	require.Equal(t, []tasks.Key{"books.gotham-watch"}, h.standDowns)
+	require.True(t, h.released, "the stand-down was not released")
+	require.Equal(t, 1, p.seriesInvalidated)
+	applied, rerr := os.ReadFile(filepath.Join(p.root, "denumber.tsv") + ".applied")
+	_ = applied
+	// The test's resolver joins an absolute path under the root, so the outcome
+	// report is where the core computed it: beside the resolved report.
+	if rerr != nil {
+		applied, rerr = os.ReadFile(filepath.Join(p.root, "denumber.tsv.applied"))
+	}
+	require.NoError(t, rerr)
+	require.Contains(t, string(applied), "moved")
+	require.Contains(t, string(applied), "deleted")
+}
+
+// An apply needs its report: refused before a writer or the scan hold exists.
+func TestT6G7Kinds_SeriesDenumberLiveNeedsAReport(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedDenumberRig(p)
+	h, err := runDenumberKind(t, p, tasks.ModeLive, `{}`)
+	require.ErrorContains(t, err, "apply requires reportPath")
+	require.Zero(t, p.writerCalls())
+	require.Empty(t, h.standDowns)
+	require.Empty(t, p.rec.snapshot())
+}
+
+// A store that cannot restore, recount or check-and-delete refuses the apply
+// before anything is read, written or held; a Preview needs none of it.
+func TestT6G7Kinds_SeriesDenumberLiveRefusesAStoreThatCannotUndo(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedDenumberRig(p)
+	p.store.(*t6g7TestStore).applyReadyErr = errors.New("this store cannot restore a deleted series")
+	h, err := runDenumberKind(t, p, tasks.ModeLive, `{"reportPath":"denumber.tsv"}`)
+	require.ErrorContains(t, err, "refusing to apply")
+	require.ErrorContains(t, err, "cannot restore a deleted series")
+	require.Empty(t, h.standDowns, "the scan was parked before the refusal")
+	require.Empty(t, p.rec.snapshot())
+	_, serr := os.Stat(filepath.Join(p.root, "denumber.tsv"))
+	require.True(t, os.IsNotExist(serr), "a refused apply wrote its report")
+
+	_, err = runDenumberKind(t, p, tasks.ModePreview, `{}`)
+	require.NoError(t, err, "a preview needs none of the undo capabilities")
+}
+
+// A reference that appears between the plan and the delete keeps the emptied
+// series: it is neither deleted nor journaled, and the books that moved stay
+// moved.
+func TestT6G7Kinds_SeriesDenumberKeepsTheSeriesAReferenceAppearedIn(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedDenumberRig(p)
+	p.store.(*t6g7TestStore).perSeriesRefs[11] = 1
+	_, err := runDenumberKind(t, p, tasks.ModeLive, `{"reportPath":"denumber.tsv"}`)
+	require.NoError(t, err)
+	require.Equal(t, denumberLiveWrites[:3], p.rec.snapshot(), "the move landed; the series was not journaled or deleted")
+
+	// The store's own check-and-delete refuses it: nothing is recorded as deleted.
+	p = newT6G7Probe(t)
+	seedDenumberRig(p)
+	p.rec.keepSeries = true
+	_, err = runDenumberKind(t, p, tasks.ModeLive, `{"reportPath":"denumber.tsv"}`)
+	require.NoError(t, err)
+	require.NotContains(t, p.rec.snapshot(), "DeleteSeriesIfUnreferenced 11 Gotham Knights 05")
+}
+
+// A journal row that cannot be written stops the book write it describes.
+func TestT6G7Kinds_SeriesDenumberAJournalFailureStopsTheBookWrite(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedDenumberRig(p)
+	p.rec.opChangeErr = errors.New("journal is down")
+	_, err := runDenumberKind(t, p, tasks.ModeLive, `{"reportPath":"denumber.tsv"}`)
+	require.Error(t, err, "a run whose writes failed is not a success")
+	for _, c := range p.rec.snapshot() {
+		require.False(t, strings.HasPrefix(c, "ModifyBook"), "a book was written without its journal row: %v", p.rec.snapshot())
+		require.False(t, strings.HasPrefix(c, "DeleteSeries"), "a series was deleted after a failed move: %v", p.rec.snapshot())
+	}
+}
+
+// baseName and minBooks scope the apply: a canary that selects no plan writes
+// nothing, and the candidate report still lists every candidate.
+func TestT6G7Kinds_SeriesDenumberCanaryScopesTheApply(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedDenumberRig(p)
+	_, err := runDenumberKind(t, p, tasks.ModeLive, `{"reportPath":"denumber.tsv","baseName":"Arkham"}`)
+	require.NoError(t, err)
+	require.Empty(t, p.rec.snapshot())
+	body, rerr := os.ReadFile(filepath.Join(p.root, "denumber.tsv"))
+	require.NoError(t, rerr)
+	require.Contains(t, string(body), "Gotham Knights 05")
+
+	p = newT6G7Probe(t)
+	seedDenumberRig(p)
+	_, err = runDenumberKind(t, p, tasks.ModeLive, `{"reportPath":"denumber.tsv","minBooks":2}`)
+	require.NoError(t, err)
+	require.Empty(t, p.rec.snapshot(), "a plan that moves one book is below minBooks 2")
+}
+
+func TestT6G7Kinds_SeriesDenumberRefusesBadParams(t *testing.T) {
+	for name, params := range map[string]string{
+		"unknown field":  `{"reportPth":"x"}`,
+		"duplicate key":  `{"limit":1,"limit":2}`,
+		"negative limit": `{"limit":-1}`,
+		"negative min":   `{"minBooks":-1}`,
+		"mode key":       `{"apply":true,"reportPath":"x"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := newT6G7Probe(t)
+			seedDenumberRig(p)
+			_, err := runDenumberKind(t, p, tasks.ModeLive, params)
+			require.Error(t, err)
+			require.Zero(t, p.writerCalls(), "a writer was built")
+			require.Empty(t, p.rec.snapshot())
+		})
+	}
+}
+
+func TestT6G7Kinds_SeriesDenumberNeedsItsDeps(t *testing.T) {
+	for name, strip := range map[string]func(*t6g7Deps){
+		"Store":                 func(d *t6g7Deps) { d.Store = nil },
+		"ResolveReportPath":     func(d *t6g7Deps) { d.ResolveReportPath = nil },
+		"InvalidateSeriesCache": func(d *t6g7Deps) { d.InvalidateSeriesCache = nil },
+		"NewWriter":             func(d *t6g7Deps) { d.NewWriter = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := newT6G7Probe(t)
+			seedDenumberRig(p)
+			deps := p.deps()
+			strip(&deps)
+			def := t6g7ByKind(t, (&Plugin{}).t6g7Kinds(deps, nil), seriesDenumberKind)
+			_, err := runT6G7Kind(t, def, tasks.ModeLive, &t6g7GateWriter{name: "gotham"}, `{"reportPath":"denumber.tsv"}`)
+			require.ErrorContains(t, err, name+" is not set")
+			require.Empty(t, p.rec.snapshot())
+		})
+	}
+}
+
+func TestT6G7Kinds_SeriesDenumberLiveNeedsTheScanStandDown(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedDenumberRig(p)
+	deps := p.deps()
+	deps.StandDownKey = ""
+	def := t6g7ByKind(t, (&Plugin{}).t6g7Kinds(deps, nil), seriesDenumberKind)
+	_, err := runT6G7Kind(t, def, tasks.ModeLive, &t6g7GateWriter{name: "gotham"}, `{"reportPath":"denumber.tsv"}`)
+	require.ErrorContains(t, err, "no scan stand-down key configured")
+	require.Empty(t, p.rec.snapshot())
+}
+
+// The core stops writing when the lease it holds lapses, and a Live core with no
+// interlock, no writer or no operation id refuses before a write.
+func TestSeriesDenumberCore_StopsWritingWhenTheLeaseLapses(t *testing.T) {
+	newEnv := func() (*t6g7Probe, seriesDenumberEnv) {
+		p := newT6G7Probe(t)
+		seedDenumberRig(p)
+		return p, seriesDenumberEnv{
+			t6g7Env:       t6g7HeadEnv(&opIDReporter{id: denumberOpID}, true),
+			Reads:         p.store,
+			Writer:        p.rec,
+			ResolveReport: func(explicit string) (string, error) { return filepath.Join(p.root, explicit), nil },
+		}
+	}
+	params := SeriesDenumberParams{ReportPath: "denumber.tsv"}
+
+	p, env := newEnv()
+	released := false
+	env.StandDown = func(context.Context, string) (t6g7Hold, error) {
+		return t6g7Hold{Lost: func() bool { return true }, Release: func() { released = true }}, nil
+	}
+	err := seriesDenumberCore(context.Background(), params, env)
+	require.ErrorContains(t, err, "scan stand-down lease lapsed")
+	require.Empty(t, p.rec.snapshot(), "rows were written after the lease lapsed")
+	require.True(t, released, "the hold was not released")
+
+	p, env = newEnv()
+	err = seriesDenumberCore(context.Background(), params, env)
+	require.ErrorContains(t, err, "no scan stand-down is available")
+	require.Empty(t, p.rec.snapshot())
+
+	p, env = newEnv()
+	env.Writer = nil
+	err = seriesDenumberCore(context.Background(), params, env)
+	require.ErrorContains(t, err, "no writer for a live run")
+	require.Empty(t, p.rec.snapshot())
+
+	p, env = newEnv()
+	env.OpID = ""
+	err = seriesDenumberCore(context.Background(), params, env)
+	require.ErrorContains(t, err, "no operation id")
+	require.Empty(t, p.rec.snapshot())
+}
+
+// The lease is checked once more right before the emptied series is deleted: the
+// plan and its book were written under it, the delete is the one write with no
+// loop around it, and a lapse there leaves the series (and its journal row)
+// alone.
+func TestSeriesDenumberCore_LeaseLapsingBeforeTheDeleteKeepsTheSeries(t *testing.T) {
+	p := newT6G7Probe(t)
+	seedDenumberRig(p)
+	checks := 0
+	env := seriesDenumberEnv{
+		t6g7Env:       t6g7HeadEnv(&opIDReporter{id: denumberOpID}, true),
+		Reads:         p.store,
+		Writer:        p.rec,
+		ResolveReport: func(explicit string) (string, error) { return filepath.Join(p.root, explicit), nil },
+	}
+	env.StandDown = func(context.Context, string) (t6g7Hold, error) {
+		// Held for the plan check and the book check; lapsed at the delete.
+		return t6g7Hold{Lost: func() bool { checks++; return checks >= 3 }, Release: func() {}}, nil
+	}
+	err := seriesDenumberCore(context.Background(), SeriesDenumberParams{ReportPath: "denumber.tsv"}, env)
+	require.ErrorContains(t, err, "lapsed before deleting series")
+	require.Equal(t, denumberLiveWrites[:3], p.rec.snapshot(), "the book moved under the lease; the series was neither journaled nor deleted")
 }

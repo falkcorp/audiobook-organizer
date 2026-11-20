@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_denumber_op.go
-// version: 5.4.5
+// version: 5.4.6
 // guid: 3f0b6c84-52d1-4a97-9e35-c8b71d0af426
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package maintenance
 
@@ -22,11 +22,13 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance/resources"
 	sdn "github.com/falkcorp/audiobook-organizer/internal/seriesdenumber"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/library"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // SeriesDenumberParams are the JSON parameters for the series de-numbering.
@@ -104,6 +106,37 @@ func writeReportRows(path string, rows []sdn.ReportRow) error {
 	return library.WriteReportFile(path, []byte(sdn.RenderReport(rows)), library.FileMode)
 }
 
+// seriesDenumberKind is the native kind of the series de-numbering.
+const seriesDenumberKind = tasks.Kind("books.maintenance.series-denumber")
+
+// seriesDenumberHelp is the operation's description, HEAD's and the native
+// kind's alike.
+const seriesDenumberHelp = "A series name should name the series, but many carry the book's position instead " +
+	"(\"Gotham Knights 05\", \"Court of Owls: Book 11\"), which splits one series into as many " +
+	"one-book series as it has volumes. This merges them onto the base name and moves the number " +
+	"into the book's series position. Only names that match one exact grammar are ever applied: " +
+	"<base><separator><optional Book/Bk/Vol/Volume/No/#><number 1-99>, where the base has no digit, " +
+	"no connector (of, to, &, and) before the number, no part/format/edition word and no volume word. " +
+	"And the number must be corroborated by the library: the series must hold exactly one book, and " +
+	"at least two other series of the same author with the same base, each holding exactly one book " +
+	"with its own title, must form a run of three or more consecutive numbers with it. A series that " +
+	"holds several books, a run with a member that holds several, one whose books share a title, an " +
+	"identifier or the base name itself, and a book's own stored position (the importer copies it from " +
+	"the name) are NOT corroboration. Everything else is held and reported with the reason: a lone " +
+	"\"Batman 66\" stays, and so do \"Part 2\", a fraction, a range, a base that is an author's name " +
+	"or a part of it, a series with no author, a dangling author or a placeholder author, a bracketed " +
+	"or leading number (reported as medium or low, never applied). A book the owner locked (series or " +
+	"position) is held, a book is never moved onto a position another book holds (live or trashed) or " +
+	"given a position over one it already has, and an emptied series is deleted only after its " +
+	"references are counted again and its row is read again right before the delete. The apply stands " +
+	"the scanner down while it writes. Every change is journaled, so an apply can be undone from the " +
+	"operation's change log. Dry-run by default; pass {\"apply\": true, " +
+	"\"reportPath\": \"...\"} to merge (the report is required to apply), and {\"limit\": N, " +
+	"\"minBooks\": N, \"baseName\": \"...\"} to canary. reportPath is a file name directly in the " +
+	"library's .reports directory (root_dir/.reports); the outcomes of an apply are written beside it " +
+	"as <reportPath>.applied. A path anywhere else, or with a directory in it, is refused before " +
+	"anything is read."
+
 func (p *Plugin) seriesDenumberDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.series-denumber",
@@ -111,31 +144,7 @@ func (p *Plugin) seriesDenumberDef() sdk.OperationDef {
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Merge series that carry a book number in their name",
-		Description: "A series name should name the series, but many carry the book's position instead " +
-			"(\"Gotham Knights 05\", \"Court of Owls: Book 11\"), which splits one series into as many " +
-			"one-book series as it has volumes. This merges them onto the base name and moves the number " +
-			"into the book's series position. Only names that match one exact grammar are ever applied: " +
-			"<base><separator><optional Book/Bk/Vol/Volume/No/#><number 1-99>, where the base has no digit, " +
-			"no connector (of, to, &, and) before the number, no part/format/edition word and no volume word. " +
-			"And the number must be corroborated by the library: the series must hold exactly one book, and " +
-			"at least two other series of the same author with the same base, each holding exactly one book " +
-			"with its own title, must form a run of three or more consecutive numbers with it. A series that " +
-			"holds several books, a run with a member that holds several, one whose books share a title, an " +
-			"identifier or the base name itself, and a book's own stored position (the importer copies it from " +
-			"the name) are NOT corroboration. Everything else is held and reported with the reason: a lone " +
-			"\"Batman 66\" stays, and so do \"Part 2\", a fraction, a range, a base that is an author's name " +
-			"or a part of it, a series with no author, a dangling author or a placeholder author, a bracketed " +
-			"or leading number (reported as medium or low, never applied). A book the owner locked (series or " +
-			"position) is held, a book is never moved onto a position another book holds (live or trashed) or " +
-			"given a position over one it already has, and an emptied series is deleted only after its " +
-			"references are counted again and its row is read again right before the delete. The apply stands " +
-			"the scanner down while it writes. Every change is journaled, so an apply can be undone from the " +
-			"operation's change log. Dry-run by default; pass {\"apply\": true, " +
-			"\"reportPath\": \"...\"} to merge (the report is required to apply), and {\"limit\": N, " +
-			"\"minBooks\": N, \"baseName\": \"...\"} to canary. reportPath is a file name directly in the " +
-			"library's .reports directory (root_dir/.reports); the outcomes of an apply are written beside it " +
-			"as <reportPath>.applied. A path anywhere else, or with a directory in it, is refused before " +
-			"anything is read.",
+		Description: seriesDenumberHelp,
 		// RESUME AUDIT 2026-09-11 (b): ResumeDrop, was ResumeRestart with no
 		// checkpoint. A from-zero restart recomputes the plan from the current
 		// series table, and the already-merged series are gone from it, so the
@@ -179,6 +188,153 @@ func (p *Plugin) seriesDenumberDef() sdk.OperationDef {
 	}
 }
 
+// seriesDenumberReads is every read the op makes, over the plan and the apply.
+// The capability reads (the unfiltered counts, the bulk membership, the
+// per-series count) are methods here, so a shell resolves each capability once
+// and a store that lacks one fails closed behind its own method. Split in two so
+// no declaration is wider than the interface-width ratchet allows; the method
+// set is the union.
+type seriesDenumberReads interface {
+	seriesDenumberListReads
+	seriesDenumberRefReads
+	database.MetadataFieldStateReader
+}
+
+// seriesDenumberListReads is the plain library reads.
+type seriesDenumberListReads interface {
+	GetAllSeries() ([]database.Series, error)
+	GetAllSeriesBookCounts() (map[int]int, error)
+	GetAllAuthors() ([]database.Author, error)
+	GetSeriesByName(name string, authorID *int) (*database.Series, error)
+	GetSeriesByID(id int) (*database.Series, error)
+	ListSoftDeletedBooks(limit, offset int, olderThan *time.Time) ([]database.Book, error)
+}
+
+// seriesDenumberRefReads is the capability reads that guard a delete.
+type seriesDenumberRefReads interface {
+	// GetAllSeriesBookRefCounts is the UNFILTERED series reference count (trashed
+	// and non-primary rows included): the guard on every delete. A store that
+	// cannot answer fails the run.
+	GetAllSeriesBookRefCounts() (map[int]int, error)
+	// GetSeriesBookRefCount is the same unfiltered count for one series, taken
+	// again right before a delete.
+	GetSeriesBookRefCount(seriesID int) (int, error)
+	// GetBooksBySeriesIDsAllVersions is the bulk live membership of the series
+	// (non-primary versions included, trashed books excluded).
+	GetBooksBySeriesIDsAllVersions(seriesIDs []int) (map[int][]database.BookCore, error)
+	// SeriesApplyReady is nil when the store can take an apply that can be undone:
+	// it restores a deleted series under its own id, counts one series' references
+	// and deletes a series only if nothing references it. Otherwise it says which
+	// one it cannot do.
+	SeriesApplyReady() error
+}
+
+// seriesDenumberWriter is the op's four writes: a created base series, a book's
+// series link and position under the book's write lock, the undo-journal row
+// that precedes each, and the delete of an emptied series.
+type seriesDenumberWriter interface {
+	CreateSeries(name string, authorID *int) (*database.Series, error)
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+	CreateOperationChange(change *database.OperationChange) error
+	// DeleteSeriesIfUnreferenced counts the series' references and deletes it in
+	// one step under every book write lock, and only while it is still the row
+	// the caller read (name and author).
+	DeleteSeriesIfUnreferenced(id int, expectName string, expectAuthorID *int) (bool, error)
+}
+
+// seriesDenumberEnv is what the core takes from its shell.
+type seriesDenumberEnv struct {
+	t6g7Env
+	Reads seriesDenumberReads
+	// Writer is nil unless the run applies: a dry run (HEAD) or Preview run
+	// (native) plans and reports and writes nothing.
+	Writer seriesDenumberWriter
+	// ResolveReport confines params.reportPath to the run's report directory.
+	ResolveReport func(explicit string) (string, error)
+	// InvalidateSeriesCache drops the series list and book-count caches after the
+	// apply changed them.
+	InvalidateSeriesCache func()
+}
+
+// seriesDenumberHead is HEAD's store for both sides: the plugin's OpsStore, with
+// the capability methods resolved through the decorator chain
+// (database.AsCapability) as HEAD always resolved them.
+type seriesDenumberHead struct{ OpsStore }
+
+func (s seriesDenumberHead) GetAllSeriesBookRefCounts() (map[int]int, error) {
+	return database.SeriesRefCounts(s.OpsStore)
+}
+
+func (s seriesDenumberHead) GetSeriesBookRefCount(seriesID int) (int, error) {
+	c, ok := database.AsCapability[database.SeriesBookRefCounter](s.OpsStore)
+	if !ok {
+		return 0, fmt.Errorf("store %T cannot count one series' references", s.OpsStore)
+	}
+	return c.GetSeriesBookRefCount(seriesID)
+}
+
+func (s seriesDenumberHead) GetBooksBySeriesIDsAllVersions(ids []int) (map[int][]database.BookCore, error) {
+	m := database.AsSeriesMembershipStore(s.OpsStore)
+	if m == nil {
+		return nil, fmt.Errorf("store cannot load bulk series membership (got %T); refusing to run a series merge without it", s.OpsStore)
+	}
+	return m.GetBooksBySeriesIDsAllVersions(ids)
+}
+
+func (s seriesDenumberHead) SeriesApplyReady() error {
+	return seriesDenumberStoreReady(s.OpsStore)
+}
+
+func (s seriesDenumberHead) DeleteSeriesIfUnreferenced(id int, expectName string, expectAuthorID *int) (bool, error) {
+	d, ok := database.AsCapability[database.SeriesUnreferencedDeleter](s.OpsStore)
+	if !ok {
+		return false, fmt.Errorf("store %T cannot delete a series only if nothing references it", s.OpsStore)
+	}
+	return d.DeleteSeriesIfUnreferenced(id, expectName, expectAuthorID)
+}
+
+// seriesDenumberStoreReady is SeriesApplyReady over a store that resolves its
+// capabilities with database.AsCapability: the three an undoable apply needs.
+//   - RestoreSeries is what lets the revert put a deleted numbered series back
+//     under its own id, without which the books' links could not go back;
+//   - the per-series count is what the base's creation checks the new row is
+//     empty with, and what the delete looks at before it journals anything;
+//   - the delete itself is the store's check-and-delete under the locks every
+//     book write takes: a count followed by a plain DeleteSeries leaves a window
+//     in which a book written into the series is stranded on a row that no longer
+//     exists.
+func seriesDenumberStoreReady(store any) error {
+	if _, ok := database.AsCapability[database.SeriesRestorer](store); !ok {
+		return errors.New("this store cannot restore a deleted series, so the run could not be undone")
+	}
+	if _, ok := database.AsCapability[database.SeriesBookRefCounter](store); !ok {
+		return errors.New("this store cannot count one series' references, so a delete could not be re-checked")
+	}
+	if _, ok := database.AsCapability[database.SeriesUnreferencedDeleter](store); !ok {
+		return errors.New("this store cannot delete a series only if nothing references it, so an emptied series could not be deleted safely")
+	}
+	return nil
+}
+
+// seriesDenumberMembership is the bulk live membership of seriesIDs, read in one
+// pass. It fails CLOSED: an empty map on error would read as "every series is
+// empty", and the apply deletes on the strength of that. An empty seriesIDs reads
+// nothing.
+func seriesDenumberMembership(reads seriesDenumberReads, seriesIDs []int) (database.SeriesBooksMap, error) {
+	if len(seriesIDs) == 0 {
+		return database.SeriesBooksMap{}, nil
+	}
+	m, err := reads.GetBooksBySeriesIDsAllVersions(seriesIDs)
+	if err != nil {
+		return nil, fmt.Errorf("bulk series membership: %w", err)
+	}
+	if m == nil {
+		m = make(map[int][]database.BookCore)
+	}
+	return database.SeriesBooksMap(m), nil
+}
+
+// runSeriesDenumber is HEAD's shell over seriesDenumberCore.
 func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 	var params SeriesDenumberParams
 	if err := decodeStrictParams(raw, &params); err != nil {
@@ -191,34 +347,118 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	log := reporter.Logger()
+	head := seriesDenumberHead{store}
+	env := seriesDenumberEnv{
+		t6g7Env: t6g7HeadEnv(reporter, params.Apply),
+		Reads:   head,
+		ResolveReport: func(explicit string) (string, error) {
+			return p.resolveReportPath(explicit, opReportFileName(reporter, "series-denumber"))
+		},
+		InvalidateSeriesCache: p.deps.InvalidateSeriesCache,
+	}
+	if params.Apply {
+		env.Writer = head
+		env.StandDown = func(ctx context.Context, _ string) (t6g7Hold, error) {
+			return standDownForApply(ctx, p.deps, reporter)
+		}
+	}
+	return seriesDenumberCore(ctx, params, env)
+}
+
+// seriesDenumberNative is the native kind. Preview is the dry run HEAD's default
+// was; Live applies, which needs a reportPath exactly as HEAD's {"apply": true}
+// did. The apply flag is not a param: the mode comes from the start request.
+//
+// The kind declares no pool: the apply is one loop over plans in report order,
+// because a plan's books, the base it folds into and the delete of its emptied
+// source depend on the plans before it (a todo.d fragment records the
+// group-partitioned apply).
+func (p *Plugin) seriesDenumberNative(deps t6g7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g7Common(seriesDenumberKind, sched)
+	c.Title = "Merge series that carry a book number in their name"
+	c.Help = seriesDenumberHelp
+	// The writes of a merge, the journal row of each, and the candidate and
+	// outcome reports (files, in Preview too).
+	c.Effects = tasks.Writes(t6g7Res(resources.Union(t6WriterResources["CreateSeries"],
+		t6WriterResources["ModifyBook"], t6WriterResources["CreateOperationChange"],
+		t6WriterResources["DeleteSeriesIfUnreferenced"], []ops.Resource{ops.ResFiles})...)...)
+	// HEAD: ResumeDrop (RESUME AUDIT 2026-09-11 (b)): a from-zero restart would
+	// apply the NEXT canary's worth of plans and overwrite the report of the first
+	// attempt, so an interrupted apply is surfaced for the operator to re-run.
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.series-denumber")
+	c.Timeout = 2 * time.Hour
+	c.ProgressTimeout = 30 * time.Minute
+	return tasks.Task(seriesDenumberKind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			params, err := t6g7DecodeStrictNative[SeriesDenumberParams](seriesDenumberKind, raw)
+			if err != nil {
+				return struct{}{}, err
+			}
+			live := rc.Mode() == tasks.ModeLive
+			params.Apply = live
+			if err := params.validate(); err != nil {
+				return struct{}{}, fmt.Errorf("invalid params: %w", err)
+			}
+			for _, d := range []struct {
+				name string
+				set  bool
+			}{{"Store", deps.Store != nil}, {"ResolveReportPath", deps.ResolveReportPath != nil},
+				{"InvalidateSeriesCache", deps.InvalidateSeriesCache != nil}} {
+				if err := t6g7NeedDep(seriesDenumberKind, d.name, d.set); err != nil {
+					return struct{}{}, err
+				}
+			}
+			env := seriesDenumberEnv{
+				t6g7Env: t6g7NativeEnv(rc),
+				Reads:   deps.Store,
+				ResolveReport: func(explicit string) (string, error) {
+					return deps.ResolveReportPath(explicit, "series-denumber-"+string(rc.RunID())+".tsv")
+				},
+				InvalidateSeriesCache: deps.InvalidateSeriesCache,
+			}
+			if live {
+				w, err := t6g7NewWriter(seriesDenumberKind, deps, rc)
+				if err != nil {
+					return struct{}{}, err
+				}
+				env.Writer = w
+				env.StandDown = t6g7NativeStandDown(rc, deps.StandDownKey)
+			}
+			return struct{}{}, seriesDenumberCore(rc.Context(), params, env)
+		},
+	})
+}
+
+// seriesDenumberCore is the body of the op; env.Live is whether it applies.
+func seriesDenumberCore(ctx context.Context, params SeriesDenumberParams, env seriesDenumberEnv) error {
+	params.Apply = env.Live
+	if err := params.validate(); err != nil {
+		return fmt.Errorf("invalid params: %w", err)
+	}
+	if env.Reads == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	if params.Apply && env.Writer == nil {
+		return errors.New("series-denumber: no writer for a live run")
+	}
+	log := env.Logger
 
 	// 🔒 An apply that could not be undone must not start. Both checks run before
 	// any read of the library, so a refusal has touched nothing:
 	//   - the operation id keys every undo-journal row of this run;
-	//   - RestoreSeries is what lets the revert put a deleted numbered series back
-	//     under its own id, without which the books' links could not go back.
+	//   - the store must be able to restore and delete the series the way the
+	//     revert and the check-and-delete need (SeriesApplyReady).
 	var opID string
 	if params.Apply {
-		opID = registry.ReporterOpID(reporter)
+		opID = env.OpID
 		if opID == "" {
 			return errors.New("series-denumber: refusing to apply: this run has no operation id, so its changes could not be journaled for undo")
 		}
-		if _, ok := database.AsCapability[database.SeriesRestorer](store); !ok {
-			return errors.New("series-denumber: refusing to apply: this store cannot restore a deleted series, so the run could not be undone")
-		}
-		// The base's creation checks the new row is empty, and the delete looks at
-		// the source's references before it journals anything: both need the
-		// per-series count.
-		if _, ok := database.AsCapability[database.SeriesBookRefCounter](store); !ok {
-			return errors.New("series-denumber: refusing to apply: this store cannot count one series' references, so a delete could not be re-checked")
-		}
-		// The delete itself is the store's check-and-delete under the locks every
-		// book write takes: a count here followed by a plain DeleteSeries leaves a
-		// window in which a book written into the series is stranded on a row that
-		// no longer exists.
-		if _, ok := database.AsCapability[database.SeriesUnreferencedDeleter](store); !ok {
-			return errors.New("series-denumber: refusing to apply: this store cannot delete a series only if nothing references it, so an emptied series could not be deleted safely")
+		if err := env.Reads.SeriesApplyReady(); err != nil {
+			return fmt.Errorf("series-denumber: refusing to apply: %w", err)
 		}
 	}
 	// The caller's reportPath is confined to {root_dir}/.reports before any read
@@ -227,11 +467,11 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 	// ReportPath + ".applied", so that name is held to the same rule now rather
 	// than failing after the apply.
 	if params.ReportPath != "" {
-		resolved, rpErr := p.resolveReportPath(params.ReportPath, opReportFileName(reporter, "series-denumber"))
+		resolved, rpErr := env.ResolveReport(params.ReportPath)
 		if rpErr != nil {
 			return fmt.Errorf("series-denumber: %w", rpErr)
 		}
-		if _, rpErr = p.resolveReportPath(resolved+".applied", opReportFileName(reporter, "series-denumber")); rpErr != nil {
+		if _, rpErr = env.ResolveReport(resolved + ".applied"); rpErr != nil {
 			return fmt.Errorf("series-denumber: %w", rpErr)
 		}
 		params.ReportPath = resolved
@@ -242,10 +482,13 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 	// the writes then change. A dry run writes nothing and takes no gate. The lease
 	// is renewed per plan and per book; a lapsed lease stops the writes
 	// (applySeriesDenumber).
-	hold := t6g1Hold{Lost: func() bool { return false }, Release: func() {}}
+	hold := t6g7Hold{Lost: func() bool { return false }, Release: func() {}}
 	if params.Apply {
+		if env.StandDown == nil {
+			return errors.New("series-denumber: refusing to apply: no scan stand-down is available, so a running scan could rewrite the books underneath the writes")
+		}
 		var sdErr error
-		if hold, sdErr = standDownForApply(ctx, p.deps, reporter); sdErr != nil {
+		if hold, sdErr = env.StandDown(ctx, "series-denumber apply"); sdErr != nil {
 			return sdErr
 		}
 		defer hold.Release()
@@ -254,7 +497,7 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 		"min_books", params.MinBooks, "base_name", params.BaseName)
 
 	planStart := time.Now()
-	run, err := planSeriesDenumber(store, params)
+	run, err := planSeriesDenumber(env.Reads, params)
 	if err != nil {
 		return err
 	}
@@ -266,8 +509,8 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 		"eligible", len(run.plans), "selected", len(run.selected), "planning_ms", time.Since(planStart).Milliseconds())
 	if len(run.candidates) == 0 {
 		summary := fmt.Sprintf("series-denumber: %d series scanned, 0 carry a book number — nothing to do", run.scanned)
-		_ = reporter.Log(slog.LevelInfo, summary)
-		_ = reporter.UpdateProgress(1, 1, summary)
+		env.Log(slog.LevelInfo, summary)
+		env.Progress(1, 1, summary)
 		return nil
 	}
 
@@ -283,18 +526,18 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 
 	if !params.Apply {
 		summary := "series-denumber (dry run): " + run.describe(params)
-		_ = reporter.Log(slog.LevelInfo, summary)
-		_ = reporter.UpdateProgress(len(run.candidates), len(run.candidates), summary)
+		env.Log(slog.LevelInfo, summary)
+		env.Progress(len(run.candidates), len(run.candidates), summary)
 		return nil
 	}
 
 	if len(run.selected) == 0 {
 		summary := "series-denumber: nothing to apply: " + run.describe(params)
-		_ = reporter.Log(slog.LevelInfo, summary)
-		_ = reporter.UpdateProgress(1, 1, summary)
+		env.Log(slog.LevelInfo, summary)
+		env.Progress(1, 1, summary)
 		return nil
 	}
-	return p.applySeriesDenumber(ctx, store, reporter, run, params, opID, hold)
+	return applySeriesDenumber(ctx, env, run, params, opID, hold)
 }
 
 // denumberGroup is every eligible plan that folds into one base series: the
@@ -335,16 +578,16 @@ type denumberRun struct {
 // the gate, refuses the apply. The shared helper (acquireScanStandDownForApply)
 // answers held=false with no error for a nil controller so that ops with no
 // interlock run on; this one writes series rows library-wide and does not.
-func standDownForApply(ctx context.Context, scan ScanController, reporter sdk.Reporter) (t6g1Hold, error) {
+func standDownForApply(ctx context.Context, scan ScanController, reporter sdk.Reporter) (t6g7Hold, error) {
 	holderID, held, release, err := acquireScanStandDownForApply(ctx, scan, reporter, "series-denumber apply")
 	if err != nil {
-		return t6g1Hold{}, fmt.Errorf("series-denumber: refusing to apply: acquire scan stand-down: %w", err)
+		return t6g7Hold{}, fmt.Errorf("series-denumber: refusing to apply: acquire scan stand-down: %w", err)
 	}
 	if !held {
 		release()
-		return t6g1Hold{}, errors.New("series-denumber: refusing to apply: the scanner could not be stood down (no scan controller), so a running scan could rewrite the books underneath the writes")
+		return t6g7Hold{}, errors.New("series-denumber: refusing to apply: the scanner could not be stood down (no scan controller), so a running scan could rewrite the books underneath the writes")
 	}
-	return t6g1Hold{
+	return t6g7Hold{
 		Lost:    func() bool { return scanStandDownLostForApply(scan, holderID, held) },
 		Release: release,
 	}, nil
@@ -361,7 +604,7 @@ func authorPtr(id int) *int {
 // planSeriesDenumber reads the library and decides, without writing, which books
 // move where. Every read fails closed: a run that cannot answer the unfiltered
 // reference question or load membership aborts, dry or apply.
-func planSeriesDenumber(store OpsStore, params SeriesDenumberParams) (*denumberRun, error) {
+func planSeriesDenumber(store seriesDenumberReads, params SeriesDenumberParams) (*denumberRun, error) {
 	allSeries, err := store.GetAllSeries()
 	if err != nil {
 		return nil, fmt.Errorf("GetAllSeries: %w", err)
@@ -416,7 +659,7 @@ func planSeriesDenumber(store OpsStore, params SeriesDenumberParams) (*denumberR
 	// is still referenced and must not be deleted. Fails CLOSED: falling back to
 	// the filtered counts is the bug, because it deletes rows while reporting
 	// success. Compare internal/maintenance/jobs/cleanup_series.go.
-	refCounts, rcErr := database.SeriesRefCounts(store)
+	refCounts, rcErr := store.GetAllSeriesBookRefCounts()
 	if rcErr != nil {
 		return nil, fmt.Errorf("series-denumber: refusing to run without unfiltered series reference counts: %w", rcErr)
 	}
@@ -507,7 +750,7 @@ func planSeriesDenumber(store OpsStore, params SeriesDenumberParams) (*denumberR
 			addMember(g.targetID)
 		}
 	}
-	members, mErr := database.SeriesMembershipAllVersions(store, memberIDs)
+	members, mErr := seriesDenumberMembership(store, memberIDs)
 	if mErr != nil {
 		return nil, fmt.Errorf("series-denumber: refusing to run without series membership: %w", mErr)
 	}
@@ -957,10 +1200,10 @@ type versionResult struct {
 // check passed and BEFORE ModifyBook writes the row, so a crash leaves a row for a
 // write that did not happen (voided by the caller, never replayed), never a write
 // without a row.
-func moveVersion(store OpsStore, record journalRecorder, mv sdn.Move, fromID, targetID int, dry bool) versionResult {
+func moveVersion(reads seriesDenumberReads, w seriesDenumberWriter, record journalRecorder, mv sdn.Move, fromID, targetID int, dry bool) versionResult {
 	var r versionResult
 	sid := targetID
-	written, err := store.ModifyBook(mv.BookID, func(full *database.Book) error {
+	written, err := w.ModifyBook(mv.BookID, func(full *database.Book) error {
 		if full.SeriesID == nil || *full.SeriesID != fromID {
 			r.skip = "left the source series meanwhile"
 			return database.ErrSkipBookWrite
@@ -972,7 +1215,7 @@ func moveVersion(store OpsStore, record journalRecorder, mv sdn.Move, fromID, ta
 		cur := mv
 		cur.SetSeq = full.SeriesSequence == nil
 		oldSeries, oldSeq := full.SeriesID, full.SeriesSequence
-		restored, lerr := database.ApplyRespectingLocks(store, full, func(b *database.Book) {
+		restored, lerr := database.ApplyRespectingLocks(reads, full, func(b *database.Book) {
 			b.SeriesID = &sid
 			if cur.SetSeq {
 				pos := mv.NewSeq
@@ -991,7 +1234,7 @@ func moveVersion(store OpsStore, record journalRecorder, mv sdn.Move, fromID, ta
 		}
 		// The base must still exist: a concurrent delete (dedup.series-prune)
 		// would otherwise leave the book pointing at a deleted series.
-		if tgt, terr := store.GetSeriesByID(targetID); terr != nil {
+		if tgt, terr := reads.GetSeriesByID(targetID); terr != nil {
 			return fmt.Errorf("read base series %d: %w", targetID, terr)
 		} else if tgt == nil {
 			r.skip = fmt.Sprintf("the base series %d no longer exists", targetID)
@@ -1023,9 +1266,9 @@ func moveVersion(store OpsStore, record journalRecorder, mv sdn.Move, fromID, ta
 // restoreVersion takes one moved row back to the source series (the
 // compensation of a book whose later version could not move). It acts only on a
 // row still in the target: one that moved again belongs to another writer now.
-func restoreVersion(store OpsStore, mv sdn.Move, fromID, targetID int) error {
+func restoreVersion(w seriesDenumberWriter, mv sdn.Move, fromID, targetID int) error {
 	moved := false
-	_, err := store.ModifyBook(mv.BookID, func(full *database.Book) error {
+	_, err := w.ModifyBook(mv.BookID, func(full *database.Book) error {
 		if full.SeriesID == nil || *full.SeriesID != targetID {
 			return database.ErrSkipBookWrite
 		}
@@ -1082,8 +1325,8 @@ type targetState struct {
 
 // readTargetState reads a base series' members again, live and trashed, right
 // before the first write into it.
-func readTargetState(store OpsStore, targetID int) (*targetState, error) {
-	live, err := database.SeriesMembershipAllVersions(store, []int{targetID})
+func readTargetState(store seriesDenumberReads, targetID int) (*targetState, error) {
+	live, err := seriesDenumberMembership(store, []int{targetID})
 	if err != nil {
 		return nil, fmt.Errorf("re-read members of series %d: %w", targetID, err)
 	}
@@ -1148,13 +1391,14 @@ func (r *denumberRun) heldByCode() (map[sdn.HoldCode]int, int) {
 // Cancelled or failed runs still drop the series cache and write the outcome
 // report for what they did write (the defer below): a half-applied run is the one
 // whose report matters most.
-func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, reporter sdk.Reporter,
-	run *denumberRun, params SeriesDenumberParams, opID string, hold t6g1Hold) (err error) {
-	log := reporter.Logger()
+func applySeriesDenumber(ctx context.Context, env seriesDenumberEnv,
+	run *denumberRun, params SeriesDenumberParams, opID string, hold t6g7Hold) (err error) {
+	log := env.Logger
+	store, w := env.Reads, env.Writer
 	record := func(c *database.OperationChange) error {
 		c.ID = ulid.Make().String()
 		c.OperationID = opID
-		return database.RecordOperationChange(store, c)
+		return database.RecordOperationChange(w, c)
 	}
 	// void takes back a journal row whose write was refused or failed: rewritten
 	// under its id with Voided and RevertedAt, so no revert acts on it.
@@ -1164,15 +1408,12 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 		for _, r := range rows {
 			v := *r
 			v.RevertedAt, v.Voided = &now, true
-			if verr := database.RecordOperationChange(store, &v); verr != nil {
+			if verr := database.RecordOperationChange(w, &v); verr != nil {
 				errs = append(errs, fmt.Errorf("void journal row %s: %w", v.ID, verr))
 			}
 		}
 		return errors.Join(errs...)
 	}
-	counter, _ := database.AsCapability[database.SeriesBookRefCounter](store)      // checked present by runSeriesDenumber
-	deleter, _ := database.AsCapability[database.SeriesUnreferencedDeleter](store) // checked present by runSeriesDenumber
-
 	targets := make(map[int]int, len(run.groups)) // group index -> base series in use
 	for gi, g := range run.groups {
 		if g.targetID != 0 {
@@ -1203,7 +1444,9 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 		// Without this the result is invisible on /api/v1/series until the next
 		// restart, which reads as an op that did nothing.
 		if created > 0 || deleted > 0 || movedBooks > 0 {
-			p.deps.InvalidateSeriesCache()
+			if env.InvalidateSeriesCache != nil {
+				env.InvalidateSeriesCache()
+			}
 		}
 		if params.ReportPath != "" {
 			if werr := writeReportRows(params.ReportPath+".applied", outcomes); werr != nil {
@@ -1241,7 +1484,7 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 				log.Warn("series-denumber: base series appeared since the plan was made, plan skipped", "name", pl.IntoName, "series", existing.ID)
 				continue
 			}
-			ns, cerr := store.CreateSeries(pl.IntoName, g.authorID)
+			ns, cerr := w.CreateSeries(pl.IntoName, g.authorID)
 			if cerr != nil || ns == nil {
 				failed++
 				log.Warn("series-denumber: CreateSeries failed", "name", pl.IntoName, "err", cerr)
@@ -1251,7 +1494,7 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 			// above and this call comes back as if it were new. The row this run
 			// creates is empty, so one that holds books is not ours: not used, not
 			// journaled (a revert of a series_create would delete THEIR series).
-			refs, rerr := counter.GetSeriesBookRefCount(ns.ID)
+			refs, rerr := store.GetSeriesBookRefCount(ns.ID)
 			switch {
 			case rerr != nil:
 				failed++
@@ -1321,7 +1564,7 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 			}
 			states[gi] = st
 		}
-		refs, rerr := counter.GetSeriesBookRefCount(targetID)
+		refs, rerr := store.GetSeriesBookRefCount(targetID)
 		if rerr != nil {
 			failed++
 			log.Warn("series-denumber: could not count the base's rows before writing, plan skipped", "series", targetID, "err", rerr)
@@ -1371,7 +1614,7 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 			if len(versions) > 1 {
 				blocked := ""
 				for _, mv := range versions {
-					r := moveVersion(store, record, mv, pl.FromID, targetID, true)
+					r := moveVersion(store, w, record, mv, pl.FromID, targetID, true)
 					if r.err != nil {
 						blocked = "its version " + mv.BookID + " could not be checked: " + r.err.Error()
 						break
@@ -1394,7 +1637,7 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 			}
 			var done []landed
 			for _, mv := range versions {
-				r := moveVersion(store, record, mv, pl.FromID, targetID, false)
+				r := moveVersion(store, w, record, mv, pl.FromID, targetID, false)
 				wrote := r.err == nil && r.written != nil && r.did
 				if len(r.journaled) > 0 && !wrote {
 					// The rows describe a write that did not happen (a later row failed,
@@ -1414,7 +1657,7 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 				// take them back, so the book is not split across two series.
 				for di := len(done) - 1; di >= 0; di-- {
 					d := done[di]
-					if rerr := restoreVersion(store, d.mv, pl.FromID, targetID); rerr != nil {
+					if rerr := restoreVersion(w, d.mv, pl.FromID, targetID); rerr != nil {
 						// It stays in the base. It is journaled, so a revert still puts it
 						// back; the run reports the split loudly and does not delete.
 						failed++
@@ -1548,7 +1791,7 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 					"series", src.ID, "planned_name", src.Name, "name_now", cur.Name)
 				outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: the series was renamed, re-authored or held since the plan"})
 			default:
-				if refs, rerr := counter.GetSeriesBookRefCount(src.ID); rerr != nil {
+				if refs, rerr := store.GetSeriesBookRefCount(src.ID); rerr != nil {
 					failed++
 					failedDelete++
 					log.Warn("series-denumber: not deleting emptied series: its references could not be counted", "series", src.ID, "err", rerr)
@@ -1576,7 +1819,7 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 						log.Warn("series-denumber: not deleting emptied series: its undo row was not written", "series", src.ID, "err", jerr)
 						outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: undo row not written: " + jerr.Error()})
 					default:
-						gone, derr := deleter.DeleteSeriesIfUnreferenced(src.ID, cur.Name, cur.AuthorID)
+						gone, derr := w.DeleteSeriesIfUnreferenced(src.ID, cur.Name, cur.AuthorID)
 						// The row stays unless it is gone (deleted here, or by someone
 						// else first: a revert recreates it either way), so its undo row
 						// is voided. A void that fails leaves a live row for a delete
@@ -1631,7 +1874,7 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 		}
 		merged++
 		if (n+1)%25 == 0 || n+1 == len(run.selected) {
-			_ = reporter.UpdateProgress(n+1, len(run.selected),
+			env.Progress(n+1, len(run.selected),
 				fmt.Sprintf("processed %d/%d plans (%d books moved)", merged, len(run.selected), movedBooks))
 		}
 	}
@@ -1660,8 +1903,8 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 		expectedDeletes, goneByOthers, notEmptied,
 		stayed, formatHoldCounts(appliedHeld), failed,
 		formatHoldCounts(heldPlan), run.demotedSummary(), opID)
-	_ = reporter.Log(slog.LevelInfo, summary)
-	_ = reporter.UpdateProgress(len(run.selected), len(run.selected), summary)
+	env.Log(slog.LevelInfo, summary)
+	env.Progress(len(run.selected), len(run.selected), summary)
 	if failed > 0 {
 		// A run with failed writes is not a success: the op's status says so, the
 		// summary above says what happened, and the journal still covers what landed.

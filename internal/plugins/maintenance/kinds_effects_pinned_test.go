@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_effects_pinned_test.go
-// version: 1.1.11
+// version: 1.1.12
 // guid: bbc0869b-3caf-4c34-96f7-b5383fa30423
 // last-edited: 2026-11-19
 
@@ -140,6 +140,7 @@ var t6KindEffectsPinned = map[tasks.Kind]t6EffectsPin{
 	"books.maintenance.version-group-primary-repair":       {writes: "authors books indexes metadata_cache", reads: "", deletes: ""},
 	"books.maintenance.rewrite-path-prefix":                {writes: "authors book_files books files indexes metadata_cache", reads: "", deletes: ""},
 	"books.maintenance.repoint-missing-to-folder-audio":    {writes: "authors book_files books files indexes metadata_cache", reads: "", deletes: ""},
+	"books.maintenance.series-denumber":                    {writes: "authors books files indexes metadata_cache operations series", reads: "", deletes: ""},
 }
 
 // t6PinnedNames is the sorted resource names of refs, which must be in module
