@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/writes_oracle_fixture_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8fbddfb2-91e8-42bd-ab62-8e8e7e8cd794
 // last-edited: 2026-11-19
 
@@ -214,6 +214,52 @@ func TestOracleWalk_NeedsTheCallGraph(t *testing.T) {
 	} {
 		if got := fixtureWrites(t, &op, root); !slices.Equal(got, want) {
 			t.Errorf("%s: finds %v without a call graph, want %v (it needs no graph)", root, got, want)
+		}
+	}
+}
+
+// TestOracleWalk_DefaultDeny: every shape the round-2 dispatch walked to no
+// target and no key (round-2 review B1 (a)-(f), M1) either finds the write or
+// records an UNRESOLVED key, and where the program holds the function the write
+// is found as well. want is the write set; key is a fragment one UNRESOLVED key
+// must contain ("" when the shape is fully resolved and must record none).
+func TestOracleWalk_DefaultDeny(t *testing.T) {
+	op := oracleFixture(t)
+	for _, tc := range []struct {
+		root string
+		want []string
+		key  string
+		why  string
+	}{
+		{"ViaInjectedField", []string{"books"}, "#apply", "(a) a field of a parameter filled by an exported constructor's parameter: the in-program caller's function, and a key for the wiring's"},
+		{"ViaInjectedFieldCallback", []string{"books"}, "#apply", "(a) the same field handed to a shared helper"},
+		{"ViaDefaultPlusSetter", []string{"authors"}, "#settable", "(b) a default plus an exported setter: the default, and a key for the setter"},
+		{"ViaParamOrUnset", nil, "#unsetStepB", "(c) a parameter mixed with an unset default, every caller passing nil"},
+		{"ViaTwoLevelForward", nil, "#unsetStepC", "(d) an unset variable forwarded through two helpers"},
+		{"ViaHelperOfCallResult", nil, "#outside:sync.", "(d) a helper handed a call result that names no function"},
+		{"ViaHelperOfOutsideClosure", nil, "#outside:context.WithCancel", "(d) a helper handed an outside closure"},
+		{"ViaCopiedSteps", []string{"authors"}, "", "(e) a local slice filled by copy from a package-level slice"},
+		{"ViaRangeCopied", nil, "#src", "(e) a local slice filled from a parameter's elements"},
+		{"ViaHandedOutside", nil, "#fire", "(f) a field nothing stores to handed to code outside the module"},
+		{"ViaPartialNonVerb", []string{"books"}, "", "M1: a non-verb method whose implementations the program knows in part: every implementation the program holds is walked"},
+		{"ViaOrphanNonVerb", nil, "#iface:", "M1: a non-verb method of a module interface the program holds no implementation of"},
+		{"ViaOutsideIface", nil, "#iface:fmt.Stringer.String", "M1: a non-verb method of an interface declared outside the module"},
+	} {
+		kinds, _, _, calls, _ := derivedWrites(op, op.roots[0].Func(tc.root))
+		if !slices.Equal(kinds, tc.want) {
+			t.Errorf("%s: the walk finds %v, want %v (%s)", tc.root, kinds, tc.want, tc.why)
+		}
+		var keys []string
+		for k := range calls {
+			if strings.HasPrefix(k, "UNRESOLVED.") {
+				keys = append(keys, k)
+			}
+		}
+		switch {
+		case tc.key == "" && len(keys) != 0:
+			t.Errorf("%s: records %v, want no UNRESOLVED key (%s)", tc.root, keys, tc.why)
+		case tc.key != "" && !slices.ContainsFunc(keys, func(k string) bool { return strings.Contains(k, tc.key) }):
+			t.Errorf("%s: records %v, want an UNRESOLVED key containing %q (%s)", tc.root, keys, tc.key, tc.why)
 		}
 	}
 }
