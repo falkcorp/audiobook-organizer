@@ -1,5 +1,5 @@
 // file: internal/books/cutover/rename_aibackend.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6C0A3B0B-B2A8-42A4-9C8B-C6F557EF5F42
 // last-edited: 2026-11-19
 
@@ -78,6 +78,10 @@ const (
 )
 
 var aiBackendNames = []string{aiBackendEmbeddingMode, aiBackendLLMMode, aiBackendLocalBaseURL, aiBackendLocalEmbModel, aiBackendLocalLLMModel}
+
+// AIBackendNames are the five names UnfoldAIBackend returns and FoldAIBackend
+// takes (the HEAD fields ai_backend.<name>), in a stable order.
+func AIBackendNames() []string { return slices.Clone(aiBackendNames) }
 
 // The capabilities each mode owns, by the row they sit on.
 var (

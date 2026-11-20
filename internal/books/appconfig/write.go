@@ -1,5 +1,5 @@
 // file: internal/books/appconfig/write.go
-// version: 1.2.1
+// version: 1.4.0
 // guid: 1e5a7c93-4d08-4f26-b3a9-8c0d2e6f1b74
 // last-edited: 2026-11-19
 
@@ -100,13 +100,23 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 	patch := coreconfig.Patch{Set: map[coreconfig.Path]json.RawMessage{}}
 	var secretSets, secretClears []secretOp
 	resSet, resUnset := map[string]json.RawMessage{}, []string{}
-	var adminHeads []string
+	var adminHeads, aiHeads []string
 	var unknown, readOnly []string
 	var invalid []error
 	byPath := map[coreconfig.Path]string{}
 	foldVals, rootsVals := map[string]json.RawMessage{}, map[string]json.RawMessage{}
+	aiVals := map[string]json.RawMessage{} // ai_backend.<name> -> value
 	add := func(head string, raw json.RawMessage, clear bool) {
 		p, ok := e.byHead[head]
+		if ok && p.kind == kindAI {
+			adminHeads = append(adminHeads, head)
+			if clear {
+				invalid = append(invalid, &coreconfig.FieldError{Path: coreconfig.Path(head), Err: errors.New("cannot be cleared: set the mode or the model you want")})
+				return
+			}
+			aiVals[strings.TrimPrefix(head, "ai_backend.")] = raw
+			return
+		}
 		if ok && (e.foldHeads[head] || p.kind != kindKey) {
 			// A field stored inside a core list: checked against its Config type
 			// here, folded into the list below. Clearing one is its zero value.
@@ -214,6 +224,25 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 	if err := e.foldInto(ctx, &patch, byPath, also, foldVals, rootsVals, secretSets); err != nil {
 		invalid = append(invalid, err)
 	}
+	// The ai_backend.* fields are one write of the ai_endpoints list.
+	checked := u
+	if len(aiVals) > 0 {
+		out, err := e.foldAIBackend(ctx, aiVals, resSet)
+		if err != nil {
+			invalid = append(invalid, err)
+		} else if out != nil {
+			resSet["ai_endpoints"] = out
+			checked.Set = maps.Clone(u.Set)
+			if checked.Set == nil {
+				checked.Set = map[string]json.RawMessage{}
+			}
+			checked.Set["ai_endpoints"] = out
+			aiHeads = slices.Sorted(maps.Keys(aiVals))
+		}
+	}
+	// Credentials follow their URL (egress.go): beyond HEAD parity. It sees the
+	// list the write ends with, so a model or URL folded in is checked too.
+	invalid = append(invalid, egressViolations(before, checked)...)
 	if len(unknown) > 0 {
 		slices.Sort(unknown)
 		return config.UpdateResult{}, fmt.Errorf("%w: %s", coreconfig.ErrUnknownKey, strings.Join(unknown, ", "))
@@ -259,6 +288,13 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 		for h := range resSet {
 			res.Applied = append(res.Applied, coreconfig.Path(h))
 			byPath[coreconfig.Path(h)] = h
+			if h == "ai_endpoints" && len(aiHeads) > 0 {
+				// The list was written for the fields; name them, not the list.
+				byPath[coreconfig.Path(h)] = "ai_backend." + aiHeads[0]
+				for _, n := range aiHeads[1:] {
+					also[coreconfig.Path(h)] = append(also[coreconfig.Path(h)], "ai_backend."+n)
+				}
+			}
 		}
 		for _, h := range resUnset {
 			res.Applied = append(res.Applied, coreconfig.Path(h))

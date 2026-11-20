@@ -1,5 +1,5 @@
 // file: internal/books/appconfig/engine.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 6c2f8a4d-9e13-4b75-a1c0-d4e7f3b82a59
 // last-edited: 2026-11-19
 
@@ -178,6 +178,11 @@ const (
 	// kindRoots is root_dir or path_aliases, which live in core's library roots
 	// (projectFolds reads them, FoldRoots writes them).
 	kindRoots
+	// kindAI is one of the five ai_backend.* fields, a view over the
+	// ai_endpoints list in the residual (projectAI reads them, FoldAIBackend
+	// writes them). The table has one class-x row, ai_backend; plan makes these
+	// rows from it.
+	kindAI
 )
 
 // plan lists the rows the projection reads, in table order. A row is read when
@@ -189,6 +194,17 @@ func plan(tab *cutover.RenameTable, residual bool) []projRow {
 	var out []projRow
 	for i := range tab.Rows {
 		r := &tab.Rows[i]
+		if r.Head == "ai_backend" && residual {
+			// A class-x row HEAD still saves five scalars of: served as a fold of
+			// ai_endpoints (cutover.UnfoldAIBackend / FoldAIBackend). Admin only,
+			// like the endpoint list it edits.
+			for _, name := range cutover.AIBackendNames() {
+				row := *r
+				row.Head, row.Class, row.Admin, row.Targets = "ai_backend."+name, cutover.ClassInput, true, nil
+				out = append(out, projRow{row: &row, segs: []string{"ai_backend", name}, kind: kindAI})
+			}
+			continue
+		}
 		if r.Container || r.Removed || r.Process || strings.ContainsAny(r.Head, "[]<>") {
 			continue
 		}
@@ -356,7 +372,34 @@ func (e *Engine) project(ctx context.Context) (*projection, error) {
 	if err := e.projectFolds(out, set); err != nil {
 		return nil, err
 	}
+	if err := e.projectAI(out, set, resv); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// projectAI reads the five ai_backend.* fields off the ai_endpoints list. No list
+// stored means the base holds them; a list the view cannot read (malformed, or
+// holding a shape HEAD's fields cannot say) keeps the base values and is recorded
+// as unrepresentable, so one bad row never freezes the rest of the projection.
+func (e *Engine) projectAI(out *projection, set func(string, json.RawMessage) error, resv map[string]json.RawMessage) error {
+	list := resv["ai_endpoints"]
+	if e.res == nil || len(list) == 0 {
+		return nil
+	}
+	vals, err := cutover.UnfoldAIBackend(list)
+	if err != nil {
+		e.noteUnrepresentable(out, "ai_backend", err)
+		return nil
+	}
+	for _, name := range cutover.AIBackendNames() {
+		if v, ok := vals[name]; ok {
+			if err := set("ai_backend."+name, v); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // The two list keys whose entries fold several HEAD fields (the rows with a
@@ -544,6 +587,14 @@ func (e *Engine) View() config.View {
 		// or, for a secret, its metadata.
 		shown := exposed(p.segs)
 		switch {
+		case p.kind == kindAI:
+			// Not a credential: the models, the URL and the two modes. (A URL
+			// the list holds is the local server's; auth_ref is never shown.)
+			if f, ok := e.own(cur, p); ok && shown {
+				if raw, err := json.Marshal(f.Interface()); err == nil {
+					kv.Value = raw
+				}
+			}
 		case p.residual:
 			if f, ok := e.own(cur, p); ok && shown {
 				if raw, err := json.Marshal(f.Interface()); err == nil {

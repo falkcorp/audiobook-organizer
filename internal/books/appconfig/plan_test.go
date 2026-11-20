@@ -1,5 +1,5 @@
 // file: internal/books/appconfig/plan_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5a0e7c31-8b94-4d26-a3f7-1c6d9e2b4f08
 // last-edited: 2026-11-19
 
@@ -47,10 +47,11 @@ func TestPlan_ConfigFieldsNoRowProjects(t *testing.T) {
 	walk(bv, nil)
 	// The fields no row projects, and why: the table drops them (class x: Pebble
 	// only, read and ignored, folded into ai_endpoints), so they keep the base
-	// (WithBase). The oauth_* and root fields live inside core lists and are rows
+	// (WithBase). The three ai_backend.parse_batch_* fields are in no list (HEAD's seed does not
+	// carry them either); the other five ai_backend fields are kindAI rows. The oauth_* and root fields live inside core lists and are rows
 	// of kind fold and roots. A new Config field with no row lands here and fails
 	// the test: give it a row or name it.
-	want := []string{"ai_backend", "ai_endpoints_routing", "auto_update.window_end", "auto_update.window_start", "database_type"}
+	want := []string{"ai_backend.parse_batch_size", "ai_backend.parse_batch_timeout_seconds", "ai_backend.parse_batch_workers", "ai_endpoints_routing", "auto_update.window_end", "auto_update.window_start", "database_type"}
 	slices.Sort(gaps)
 	if !slices.Equal(gaps, want) {
 		t.Fatalf("Config fields no row projects = %v, want %v", gaps, want)
