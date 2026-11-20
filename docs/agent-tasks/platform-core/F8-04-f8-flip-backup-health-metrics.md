@@ -40,10 +40,13 @@ Announce the move window one working day ahead naming the 04 rows below (09 §9.
    `Registrar.Backup` and `Deps.Backup` to `core/module/registrar.go`, `deps.go` and `manifest.go`; in
    `core/kernel/boot.go` and `kernel.go` call F8-03's start functions in `core/kernel/health.go` (heartbeat, watchdog
    ping, the remaining core components), build backup and the wired updater, and mount the backup, updater, health and
-   diagnostics routes; add `updater fetch-release` to the offline commands in `core/app/offline.go` (05-updater §5U.4);
+   diagnostics routes; `updater fetch-release` is already in `core/app/offline.go` (F8-02's seam; verify, do not add it again);
    regenerate `core/openapi/core.json` and the client under `core/web/packages/api-client/src/generated/`. **Service
-   registry** (06 §6.11.1 step 4): delete from `internal/books/services.go` the `ServiceDefs` of updater,
-   updatescheduler, system, dashboard and metricsstore.
+   registry** (06 §6.11.1 step 4): delete the five services from their real homes (`internal/books/services.go` does not exist at `fb92f28e5`; the list
+   is `serviceDefs` in `internal/server/registry_wire.go:103`, put there on purpose by R1-34): `system`
+   (`registry_wire.go:160`), `dashboard` (`internal/sysinfo/register.go:16`), `metricsstore` (`registry_wire.go:339`),
+   and the `updater`/`updatescheduler` container Overrides (`internal/server/server.go:976-977`). If F3-07 or F5-18
+   created `services.go` by then, use it.
 1. **Backup.** The kernel builds core `backup` (F8-01); `Registrar.Backup` and `Deps.Backup` live; the
    `/api/core/v1/backups*` routes mounted; HEAD's `/api/v1/backup/*` gin routes deleted with the SPA switched;
    `internal/backup` moved/deleted per 04 (`F8 move internal/backup -> mediacore/backup`); the organizer's
@@ -97,7 +100,7 @@ Announce the move window one working day ahead naming the 04 rows below (09 §9.
 
 | Action | Path |
 |---|---|
-| modify | wiring this PR owns in W38: `main.go`, `cmd/root.go`, `internal/books/module.go`, `internal/books/services.go`, `core/app/options.go`, `core/app/offline.go`, `core/kernel/boot.go`, `core/kernel/kernel.go`, `core/module/manifest.go`, `core/module/registrar.go`, `core/module/deps.go` |
+| modify | wiring this PR owns in W38: `main.go`, `cmd/root.go`, `internal/books/module.go`, `internal/server/registry_wire.go`, `internal/sysinfo/register.go`, `internal/server/server.go` (the five service deletions; `internal/books/services.go` only if F3-07 or F5-18 created it), `core/app/options.go`, `core/app/offline.go`, `core/kernel/boot.go`, `core/kernel/kernel.go`, `core/module/manifest.go`, `core/module/registrar.go`, `core/module/deps.go` |
 | regenerate | `core/openapi/core.json`, `core/web/packages/api-client/src/generated/` |
 | modify / delete | `internal/server/` (backup, update, health, metrics routes and handlers; Basic exempt set; tests) |
 | delete / move | `internal/backup/`, `internal/updater/`, `internal/startup/`, `internal/sysinfo/` (host parts), `internal/diagnostics/` (zip machinery) |
@@ -105,7 +108,8 @@ Announce the move window one working day ahead naming the 04 rows below (09 §9.
 | create | `core/kernel/metrics_mount.go` |
 | modify | `Dockerfile` (verify `HEALTHCHECK` stays on `/health`), `scripts/deploy-wait-ready.sh` (verify `/health`), `deploy/` (dashboards and rules only if a mount label changes; none expected) |
 | modify | `web/src/` (backup, updater, health callers; `App.tsx`'s health poll and `App.health.test.tsx`) |
-| modify | every other first-party `/api/health` or `/api/v1/health` caller at the plan's base (09 §9.2.9): `internal/activity/writer_test.go`; `web/tests/e2e/book-detail.spec.ts`, `files-history.spec.ts`, `import-paths.spec.ts`, `metadata-provenance.spec.ts`, `utils/setup-modes.spec.ts`, `utils/test-helpers.ts`; `.github/workflows/binary-smoke.yml`; `scripts/TEST-README.md`, `scripts/api_examples.sh`, `scripts/e2e_test.sh`, `scripts/record_demo.js`, `scripts/run_demo_recording.sh`, `scripts/test-api-endpoints.py`; `docs/developer-guide.md`, `docs/system/deploy-and-gpu-ops.md`; `.claude/skills/deploy/SKILL.md` |
+| modify | callers the original list missed (pre-scope 2026-11-19): `core/httpapi/basicgate.go` (comment), `core/httpapi/basicgate_test.go`, `core/httpapi/perimeter/perimeter_test.go`; `internal/books/{books,composed,perimeter_app,perimeter}_test.go`; `internal/server/` `handlers/system/handler.go` (comment), `legacy_manifest.go`, `legacy_manifest_test.go`, `metrics_health_exposure_test.go`, `server_test.go`, `basic_gate_health_token_test.go`, `startup_steps_test.go`, `build_id_test.go`, `perimeter_shim_test.go`, `activity_integration_test.go`, `wire_abs_routes_test.go`, `testdata/public_routes.golden`, `static_nonembed.go`; `web/src/components/StaleBuildBanner.test.tsx`, `web/src/utils/apiFetch.build.test.ts`. Never edit `internal/books/rbacreach/`, `scripts/r2corpus/`, `scripts/tests/test_record_r0_reach.py` (R0 recordings) |
+| modify | every other first-party `/api/health` or `/api/v1/health` caller at the plan's base (09 §9.2.9). **Already moved by the pre-slice PR (agent/platform-core-f8-04-pre): `.github/workflows/binary-smoke.yml`, `scripts/TEST-README.md`, `scripts/api_examples.sh`, `scripts/e2e_test.sh`, `scripts/test-api-endpoints.py`, `docs/developer-guide.md`, `docs/system/deploy-and-gpu-ops.md`, `.claude/skills/deploy/SKILL.md`; and `scripts/record_demo.js` and `scripts/run_demo_recording.sh`, which keep a `/api/health` fallback that THIS PR must delete.** The rest: `internal/activity/writer_test.go`; `web/tests/e2e/book-detail.spec.ts`, `files-history.spec.ts`, `import-paths.spec.ts`, `metadata-provenance.spec.ts`, `utils/setup-modes.spec.ts`, `utils/test-helpers.ts`; `.github/workflows/binary-smoke.yml`; `scripts/TEST-README.md`, `scripts/api_examples.sh`, `scripts/e2e_test.sh`, `scripts/record_demo.js`, `scripts/run_demo_recording.sh`, `scripts/test-api-endpoints.py`; `docs/developer-guide.md`, `docs/system/deploy-and-gpu-ops.md`; `.claude/skills/deploy/SKILL.md` |
 | modify | `internal/arch/layering_test.go`, `scripts/ci/short_test_weights.json`; `.mockery.yaml` only if a mocked interface moves (then name it in the PR) |
 | create | one `changelog.d/` fragment (headerless) |
 
@@ -123,8 +127,13 @@ Evidence counts are from HEAD `ac4368bdb`; regenerate them at your base and reco
 #     docs/developer-guide.md, docs/system/deploy-and-gpu-ops.md; internal/server tests and static_nonembed.go;
 #     internal/server/middleware/basicauth.go:34 (deleted by F3-07 at your base); internal/activity/writer_test.go;
 #     .claude/skills/deploy/SKILL.md]
-grep -rn -I -e '/api/health' -e '/api/v1/health' . \
-  | grep -v -E '^./(docs/specs|docs/plans|docs/archive|docs/agent-tasks|docs/diagnostics|node_modules|web/node_modules)|CHANGELOG|^./TODO.md|changelog.d/'
+git grep -n -I -e '/api/health' -e '/api/v1/health' -- . \
+  ':!docs/specs' ':!docs/plans' ':!docs/archive' ':!docs/agent-tasks' ':!docs/diagnostics' ':!CHANGELOG.md' ':!TODO.md' \
+  ':!changelog.d' ':!.claude/notes' ':!internal/books/rbacreach' ':!scripts/r2corpus' ':!scripts/tests/test_record_r0_reach.py'
+#    (git grep with pathspec excludes: the earlier `grep -rn ... | grep -v '^./...'` excluded nothing, because the
+#    paths print without a leading ./. The R0 recordings under internal/books/rbacreach and scripts/r2corpus are
+#    never edited. At fb92f28e5 this lists 45 files; the pre-slice PR (agent/platform-core-f8-04-pre) already moved
+#    the scripts, docs, deploy skill and binary-smoke.yml, so re-run it at your base rather than trusting a count.)
 # 1b. Module members this PR adds. Expected: 0
 grep -rn 'StartupSteps\|func (r \*Registrar) Diagnostics\|func (r \*Registrar) Backup' core/module/ | wc -l
 # 1c. F8-03's start functions, not yet called from boot.go (read their names in health.go first and grep boot.go
@@ -143,14 +152,17 @@ grep -rn 'InterimExport\|InterimBackends' --include='*.go' core/ internal/ main.
 # 4. The dark packages this PR wires. Expected: each present
 ls core/backup/ core/updater/ core/updater/github/ core/internal/healthhttp/ core/health/sysinfo/
 
-# 5. The Basic exempt-set golden. Expected: 1 test definition
-grep -rn 'func TestBasicGate_ExemptSetGolden' --include='*.go' .
+# 5. The Basic exempt-set golden. Expected: 1 test definition if F3-07 merged with it. At fb92f28e5 it is 0: the
+#    golden is TestBasicGate_HEADExemptRules (core/httpapi/basicgate_test.go:225), which F3-07's brief
+#    (F3-07-config-flip-facade-m2-freeze.md:286) renames to TestBasicGate_ExemptSetGolden. If F3-07 merged without
+#    it, this PR updates TestBasicGate_HEADExemptRules and creates the ExemptSetGolden name itself; that is not a STOP.
+grep -rn 'func TestBasicGate_ExemptSetGolden\|func TestBasicGate_HEADExemptRules' --include='*.go' .
 
 # 6. The dashboard-reference test. Expected: 1 definition (R1-10's)
 grep -rn 'func TestDeployReferencedSeriesServed' --include='*.go' .
 ```
 
-STOP if grep 4 misses a package (an F8 dark row is not merged), grep 5 or 6 finds no definition, or grep 1 lists a
+STOP if grep 4 misses a package (an F8 dark row is not merged), grep 6 finds no definition, grep 5 finds neither `TestBasicGate_ExemptSetGolden` nor `TestBasicGate_HEADExemptRules`, or grep 1 lists a
 caller in a repository path you cannot change in this PR (report it; do not leave a caller on a deleted path).
 
 ## Steps
@@ -173,8 +185,8 @@ caller in a repository path you cannot change in this PR (report it; do not leav
    `core:metrics.read`; delete the gin `/metrics` route; keep every series name; extend the dashboard-reference
    test to scrape the kernel mount. Register the kernel's `<namespace>_build_info` gauge (label `version`, value 1)
    and add it to `TestKernelFamiliesGathered`'s family list.
-7. Delete the five `ServiceDefs` from `internal/books/services.go`; add `updater fetch-release` to
-   `core/app/offline.go`; regenerate `core/openapi/core.json` and the client; update `internal/arch/layering_test.go`
+7. Delete the five services from `internal/server/registry_wire.go`, `internal/sysinfo/register.go` and `internal/server/server.go` (see the Service registry note above); verify `updater fetch-release` is already in
+   `core/app/offline.go` (it is, at `fb92f28e5`); regenerate `core/openapi/core.json` and the client; update `internal/arch/layering_test.go`
    (deleted and moved packages), shard weights, `.mockery.yaml` if needed.
 8. `go build ./... && (cd core && go build ./...)`, then the acceptance block. Bump headers. Fragment.
 
@@ -217,8 +229,9 @@ opts.Updater = &updater.Options{
 
 ```bash
 # No caller of the deleted paths. Expected: 0
-grep -rn -I -e '/api/health' -e '/api/v1/health' . \
-  | grep -v -E '^./(docs/specs|docs/plans|docs/archive|docs/agent-tasks|docs/diagnostics|node_modules|web/node_modules)|CHANGELOG|^./TODO.md|changelog.d/' | wc -l
+git grep -n -I -e '/api/health' -e '/api/v1/health' -- . \
+  ':!docs/specs' ':!docs/plans' ':!docs/archive' ':!docs/agent-tasks' ':!docs/diagnostics' ':!CHANGELOG.md' ':!TODO.md' \
+  ':!changelog.d' ':!.claude/notes' ':!internal/books/rbacreach' ':!scripts/r2corpus' ':!scripts/tests/test_record_r0_reach.py' | wc -l
 
 # Interim backends gone. Expected: 0
 grep -rn 'InterimExport\|InterimBackends' --include='*.go' core/ internal/ main.go | wc -l

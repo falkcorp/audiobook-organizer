@@ -52,7 +52,7 @@ pip3 install requests
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
 ================================================================================
-Testing: GET /api/health
+Testing: GET /health
 Description: Health check endpoint
 ✅ Status: 200 (expected 200)
 ⏱️  Duration: 45.23ms
@@ -132,7 +132,7 @@ cat test-results.json
 
 **System:**
 
-- `GET /api/health` - Health check
+- `GET /health` - Health check
 - `GET /api/v1/system/status` - System status
 - `GET /api/v1/config` - Configuration
 - `GET /api/v1/system/logs` - System logs
@@ -236,7 +236,7 @@ kill -9 <PID>
 
 ```bash
 # Ensure server is running
-curl http://localhost:8484/api/health
+curl http://localhost:8484/health
 ```
 
 ### Python script errors

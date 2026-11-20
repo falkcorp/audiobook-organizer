@@ -125,8 +125,7 @@ same way, the flow is:
 
 The server reports readiness in two places:
 
-- **`/health` field `data.ready`** (also `/api/health`, `/api/v1/health`;
-  the body is the `{"data": {...}}` envelope every API route uses). It is
+- **`/health` field `data.ready`** (the body is the `{"data": {...}}` envelope every API route uses). It is
   `false` while the in-memory read layer warms up, which takes 130-200 s on
   prod, and `true` once reads are on the fast path. The HTTP status is 200
   either way, so liveness probes are unaffected.

@@ -257,7 +257,7 @@ example_system_logs() {
 # ============================================================================
 example_health_check() {
     echo "Example: Health check"
-    curl -X GET "http://localhost:8484/api/health" \
+    curl -X GET "http://localhost:8484/health" \
         -H "Accept: application/json"
     echo ""
 }

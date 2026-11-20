@@ -80,7 +80,8 @@ main() {
     max_attempts=30
     attempt=0
     while [ $attempt -lt $max_attempts ]; do
-        if curl -s -k "${API_URL}/api/health" > /dev/null 2>&1; then
+        if curl -sf -k "${API_URL}/health" > /dev/null 2>&1 ||
+           curl -sf -k "${API_URL}/api/health" > /dev/null 2>&1; then
             log_success "API server is ready"
             break
         fi
