@@ -86,8 +86,6 @@ func TestOwnerApply_CoreAdminIsAFurtherRefusalUnderCoreIdentity(t *testing.T) {
 // context) must not carry over: the legacy stand-in below claims it in every
 // case and only the principal differs.
 func TestOwnerApply_CoreIdentityProofIsThePrincipals(t *testing.T) {
-	// The legacy context always claims HEAD's whole proof.
-	caller := ownerCaller{auth.MethodCFAccess, ownerUser, testOwnerEmail}
 	edit := rbac.Permission("test:" + string(auth.PermLibraryEditMetadata))
 	scopes := []rbac.Permission{rbac.CoreAdmin, edit}
 	const body = `{"plan_op_id":"op-owner-plan","row_id":"own"}`
@@ -105,34 +103,43 @@ func TestOwnerApply_CoreIdentityProofIsThePrincipals(t *testing.T) {
 		{"auth disabled", coreauth.MethodAuthDisabled, 0, testOwnerEmail, http.StatusForbidden},
 		{"the owner's principal with owner_email now unset", cfaccess.CoreMethod, coreauth.AssuranceOwner, "", http.StatusForbidden},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			inner, enq, grants := ownerSetupWithEmail(t, caller, tc.ownerMail)
-			id := bridgeIdentity(t, string(auth.PermLibraryEditMetadata))
-			outer := gin.New()
-			outer.Use(func(c *gin.Context) {
-				bindCoreOwner(c, id, tc.method, tc.assurance, scopes...)
-				c.Next()
+		// The legacy context claims HEAD's whole proof in one run, and the method
+		// the bridge would map a core principal to in the other: neither may
+		// change the decision or the method the op records.
+		for _, legacy := range []auth.Method{auth.MethodCFAccess, auth.MethodSession} {
+			t.Run(tc.name+"/legacy "+string(legacy), func(t *testing.T) {
+				caller := ownerCaller{method: legacy, user: ownerUser}
+				if legacy == auth.MethodCFAccess {
+					caller.accessEmail = testOwnerEmail
+				}
+				inner, enq, grants := ownerSetupWithEmail(t, caller, tc.ownerMail)
+				id := bridgeIdentity(t, string(auth.PermLibraryEditMetadata))
+				outer := gin.New()
+				outer.Use(func(c *gin.Context) {
+					bindCoreOwner(c, id, tc.method, tc.assurance, scopes...)
+					c.Next()
+				})
+				outer.Any("/*any", gin.WrapH(inner))
+				w := ownerPost(outer, ownerPath, body, browserHdrs)
+				require.Equal(t, tc.want, w.Code, w.Body.String())
+				if tc.want != http.StatusAccepted {
+					require.Empty(t, enq.calls, "a refused owner apply enqueues nothing")
+					return
+				}
+				require.Len(t, enq.calls, 1)
+				// The grant and the op record HEAD's method name and the configured
+				// owner e-mail, and the apply's own redemption accepts them once.
+				require.Equal(t, string(auth.MethodCFAccess), enq.calls[0].actorMethod)
+				require.True(t, enq.calls[0].ownerApply)
+				var p repairs.ApplyParams
+				require.NoError(t, json.Unmarshal(enq.calls[0].params, &p))
+				who := repairs.OwnerRedeemer{ActorUserID: enq.calls[0].actor,
+					IsOwner: func(e string) bool { return auth.IsOwnerEmail(e, testOwnerEmail) }}
+				a := repairs.ResolveOwnerApproval(grants, p, who)
+				require.Empty(t, a.Refused)
+				require.Equal(t, string(auth.MethodCFAccess), a.AuthMethod)
 			})
-			outer.Any("/*any", gin.WrapH(inner))
-			w := ownerPost(outer, ownerPath, body, browserHdrs)
-			require.Equal(t, tc.want, w.Code, w.Body.String())
-			if tc.want != http.StatusAccepted {
-				require.Empty(t, enq.calls, "a refused owner apply enqueues nothing")
-				return
-			}
-			require.Len(t, enq.calls, 1)
-			// The grant and the op record HEAD's method name and the configured
-			// owner e-mail, and the apply's own redemption accepts them once.
-			require.Equal(t, string(auth.MethodCFAccess), enq.calls[0].actorMethod)
-			require.True(t, enq.calls[0].ownerApply)
-			var p repairs.ApplyParams
-			require.NoError(t, json.Unmarshal(enq.calls[0].params, &p))
-			who := repairs.OwnerRedeemer{ActorUserID: enq.calls[0].actor,
-				IsOwner: func(e string) bool { return auth.IsOwnerEmail(e, testOwnerEmail) }}
-			a := repairs.ResolveOwnerApproval(grants, p, who)
-			require.Empty(t, a.Refused)
-			require.Equal(t, string(auth.MethodCFAccess), a.AuthMethod)
-		})
+		}
 	}
 }
 
