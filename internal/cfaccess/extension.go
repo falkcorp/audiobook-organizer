@@ -212,7 +212,11 @@ func (e *extension) authenticate(r *http.Request, raw string, fromHeader bool) (
 	switch {
 	case errors.Is(err, ErrKeysUnavailable):
 		return nil, fmt.Errorf("%w: cloudflare access keys", coreauth.ErrExtensionUnavailable)
-	case errors.Is(err, ErrNonIdentityAssertion):
+	case errors.Is(err, ErrNonIdentityAssertion), errors.Is(err, ErrNotConfigured):
+		// A service token names no person; an unconfigured Access (LateVerifier
+		// before it is bound, or an app with Access off) verifies nothing, as
+		// HEAD's binder ignored a header it had no verifier for. Either way
+		// nothing is granted and the request goes on to the next method.
 		return nil, coreauth.ErrNoCredential
 	case err != nil:
 		// The class only: the library's text can quote the token's claims.
