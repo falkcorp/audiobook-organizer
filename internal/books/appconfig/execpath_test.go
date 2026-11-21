@@ -32,7 +32,7 @@ func writeExec(t *testing.T, dir, name string, mode os.FileMode) string {
 
 func execUpdate(t *testing.T, key, val string) error {
 	t.Helper()
-	e, f := foldEngine(t, `[]`, `[]`)
+	e, f := foldEngine(t, `[]`)
 	_, err := e.Update(t.Context(), adminActor, set(key, `"`+val+`"`))
 	if err != nil && len(f.applied) != 0 {
 		t.Fatalf("a refused %s wrote", key)
@@ -133,7 +133,7 @@ func TestExecPaths_ManagedDir(t *testing.T) {
 func TestExecPaths_UnchangedValueIsNotJudgedAgain(t *testing.T) {
 	dir := t.TempDir()
 	was := writeExec(t, dir, "fpcalc", 0o755)
-	e, _ := foldEngine(t, `[]`, `[]`)
+	e, _ := foldEngine(t, `[]`)
 	if _, err := e.Update(t.Context(), adminActor, set("tools.fpcalc.custom_path", `"`+was+`"`)); err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestExecPaths_UnchangedValueIsNotJudgedAgain(t *testing.T) {
 // TestExecPaths_ClearAndModesAreFree: clearing a path and the mode rows (a choice,
 // not a path) are never refused by this rule.
 func TestExecPaths_ClearAndModesAreFree(t *testing.T) {
-	e, _ := foldEngine(t, `[]`, `[]`)
+	e, _ := foldEngine(t, `[]`)
 	if _, err := e.Update(t.Context(), adminActor, set("tools.fpcalc.mode", `"managed"`, "tools.ollama.mode", `"managed"`)); err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestExecPaths_NonAdminLearnsNothingAboutTheFilesystem(t *testing.T) {
 	var msgs []string
 	for _, key := range []string{"tools.fpcalc.custom_path", "tools.ollama.custom_path", "tools.managed_dir"} {
 		for _, p := range []string{exists, missing, loose, "relative/path"} {
-			e, f := foldEngine(t, `[]`, `[]`)
+			e, f := foldEngine(t, `[]`)
 			_, err := e.Update(t.Context(), user, set(key, `"`+p+`"`))
 			if !errors.Is(err, coreconfig.ErrForbidden) {
 				t.Fatalf("%s=%s: non-admin got %v, want ErrForbidden", key, p, err)

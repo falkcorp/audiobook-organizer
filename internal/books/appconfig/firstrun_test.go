@@ -7,6 +7,7 @@ package appconfig
 
 import (
 	"errors"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -19,17 +20,18 @@ import (
 var setupPrincipal = config.Actor{Can: func(p string) bool { return p == config.FirstRunPerm }}
 
 // TestFirstRun_WizardKeysNeedNoAdmin: the wizard's save (library path, playlists,
-// setup_complete) is written by the window's actor, and core sees an actor that
-// meets the library root's admin protection for exactly that write.
+// setup_complete) is written by the window's actor: the library path, an admin
+// field, reaches the blob, and core sees an actor that meets its keys'
+// protection for exactly that write.
 func TestFirstRun_WizardKeysNeedNoAdmin(t *testing.T) {
-	e, f := foldEngine(t, `[]`, `[]`)
+	e, f := foldEngine(t, `[]`)
 	// The playlist directory's parent must exist, as it had to for HEAD's PUT.
 	lib := t.TempDir()
 	res, err := e.Update(t.Context(), setupPrincipal, set("root_dir", strconv.Quote(lib), "playlist_dir", strconv.Quote(lib+"/playlists"), "setup_complete", `true`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e.Snapshot().RootDir != lib || !e.Snapshot().SetupComplete || len(res.Applied) == 0 {
+	if e.Snapshot().RootDir != lib || !e.Snapshot().SetupComplete || !slices.Contains(res.Applied, "root_dir") {
 		t.Fatalf("root=%q setup_complete=%v applied=%v", e.Snapshot().RootDir, e.Snapshot().SetupComplete, res.Applied)
 	}
 	if len(f.actors) != 1 || !f.actors[0].Interactive || !f.actors[0].Can("core:admin") {
@@ -49,7 +51,7 @@ func TestFirstRun_OnlyTheWizardsKeys(t *testing.T) {
 			"a clear":        {Unset: []string{"path_aliases"}},
 			"a clear beside": {Set: set("root_dir", `"/srv/library"`).Set, Unset: []string{"oauth_enabled"}},
 		} {
-			e, f := foldEngine(t, `[]`, `[]`)
+			e, f := foldEngine(t, `[]`)
 			_, err := e.Update(t.Context(), setupPrincipal, u)
 			if !errors.Is(err, coreconfig.ErrForbidden) {
 				t.Fatalf("%s: err = %v; want ErrForbidden", name, err)
@@ -66,7 +68,7 @@ func TestFirstRun_OnlyTheWizardsKeys(t *testing.T) {
 			"a plain key":           set("scan_on_startup", `true`),
 			"a wizard key and auth": set("root_dir", `"/srv/library"`, "enable_auth", `false`),
 		} {
-			e, f := foldEngine(t, `[]`, `[]`)
+			e, f := foldEngine(t, `[]`)
 			_, err := e.Update(t.Context(), setupPrincipal, u)
 			if name == "a wizard key and auth" {
 				if !errors.Is(err, coreconfig.ErrForbidden) {
@@ -96,7 +98,7 @@ func TestFirstRun_NeedsTheWindow(t *testing.T) {
 		"an admin API key":    {Subject: "user:alfred", Interactive: false, Can: func(p string) bool { return p != config.FirstRunPerm }},
 	} {
 		t.Run(name, func(t *testing.T) {
-			e, f := foldEngine(t, `[]`, `[]`)
+			e, f := foldEngine(t, `[]`)
 			_, err := e.Update(t.Context(), a, set("root_dir", `"/srv/library"`))
 			if !errors.Is(err, coreconfig.ErrForbidden) || len(f.applied) != 0 {
 				t.Fatalf("err = %v applied=%d", err, len(f.applied))
@@ -105,11 +107,11 @@ func TestFirstRun_NeedsTheWindow(t *testing.T) {
 	}
 }
 
-// TestFirstRun_AdminKeepsItsOwnActor: an admin writing a wizard key is not
+// TestFirstRun_AdminKeepsItsOwnActor: an admin writing the wizard's keys is not
 // rewritten into the window's actor: core sees who they are.
 func TestFirstRun_AdminKeepsItsOwnActor(t *testing.T) {
-	e, f := foldEngine(t, `[]`, `[]`)
-	if _, err := e.Update(t.Context(), adminActor, set("root_dir", `"/srv/library"`)); err != nil {
+	e, f := foldEngine(t, `[]`)
+	if _, err := e.Update(t.Context(), adminActor, set("root_dir", `"/srv/library"`, "setup_complete", `true`)); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.actors) != 1 || f.actors[0].Subject != adminActor.Subject || !f.actors[0].Owner {
