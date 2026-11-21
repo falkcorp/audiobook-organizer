@@ -6,5 +6,5 @@
   - no `restore/<id>` exists;
   - nothing under it is a symbolic link or other special file.
 
-  Anything else that holds `staging/`, and anything it cannot read, is left in place and named in a warning.
+  Anything else that holds `staging/`, and anything it cannot read, is left in place and named in a warning. That includes a `restore/<id>` with no journal that the slot does not name, which a `Stage` stopped before it linked the intent leaves behind. A linked intent (its journal is there, or the slot names it) is the swap's own and is passed over.
 - The restore's staging chain is fsynced level by level from the directory holding `.mediacore-restore` (`restorejournal.MkdirAllSynced`) and is 0700 at every level. Before, only the leaf directory was synced, so a power loss after step c could drop the staged copy and step d would finish with the state file missing. A checkpoint state file's staged copy is 0600 from creation, not only after it is verified.
