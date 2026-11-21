@@ -147,7 +147,10 @@ type RunView struct {
 	// standdown, paused, held), the running run behind a key or write-set
 	// deferral (BlockedBy, empty for the other reasons) and when its unbroken
 	// deferral began. All three are zero for a run that is not queued or that
-	// the last pass did not defer.
+	// the last pass did not defer. BlockedBy is further empty unless the caller
+	// may view the blocking run's kind (Client.Get and Runs decide it per
+	// caller; the realtime stream never carries it, RedactRunPayload): the ID of
+	// another kind's run is not for a caller who may not see that kind.
 	Deferred      string
 	BlockedBy     RunID
 	DeferredSince time.Time

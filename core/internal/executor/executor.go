@@ -19,6 +19,7 @@ import (
 
 	"github.com/falkcorp/mediacore/entity"
 	"github.com/falkcorp/mediacore/internal/taskstore"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -237,14 +238,41 @@ func (e *executor) held(kind tasks.Kind) bool {
 }
 
 // view is a record's read model with Held and the deferral fields computed
-// (never stored).
+// (never stored). It leaves BlockedBy blank: the blocking run's ID may be shown
+// only to a caller who may view the blocker's kind, which view cannot know, so
+// every path that has a caller goes through viewAs and anything that does not
+// (OnTerminal, an event projection) can never carry the ID.
 func (e *executor) view(r tasks.RunRecord) tasks.RunView {
+	v, _ := e.viewWith(r)
+	return v
+}
+
+// viewWith is view plus the run's wait record, for viewAs.
+func (e *executor) viewWith(r tasks.RunRecord) (tasks.RunView, wait) {
 	v := r.RunView
 	v.Held = e.held(r.Kind)
+	var w wait
 	if r.State == tasks.StateQueued {
-		if w, ok := e.waitsNow()[r.ID]; ok {
-			v.Deferred, v.BlockedBy, v.DeferredSince = w.reason, w.blocker, w.since
+		var ok bool
+		if w, ok = e.waitsNow()[r.ID]; ok {
+			v.Deferred, v.DeferredSince = w.reason, w.since
 		}
+	}
+	return v, w
+}
+
+// viewAs is view for a caller: BlockedBy is the blocking run's ID only when who
+// may view the blocker's kind (mayView, the rule Get and Runs apply to a run
+// itself). Deferred and DeferredSince describe the caller's own run, which Get
+// and Runs already established they may see, so they stay. A run the caller
+// may not view as a blocker still reads as deferred, with no one named: the
+// ID, and through it the existence and timing of another kind's run, is not
+// the caller's to learn. A nil who is the unauthenticated-internal caller and
+// mayView lets it through, as it does for the run itself.
+func (e *executor) viewAs(who rbac.Checker, r tasks.RunRecord) tasks.RunView {
+	v, w := e.viewWith(r)
+	if w.blocker.id != "" && e.mayView(who, w.blocker.kind) {
+		v.BlockedBy = w.blocker.id
 	}
 	return v
 }

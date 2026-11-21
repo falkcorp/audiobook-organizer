@@ -54,10 +54,11 @@ func (e *executor) Get(ctx context.Context, id tasks.RunID) (tasks.RunView, erro
 	if err != nil {
 		return tasks.RunView{}, err
 	}
-	if _, who := e.caller(ctx); !e.mayView(who, rec.Kind) {
+	_, who := e.caller(ctx)
+	if !e.mayView(who, rec.Kind) {
 		return tasks.RunView{}, fmt.Errorf("%w: %s", tasks.ErrRunNotFound, id)
 	}
-	return e.view(rec), nil
+	return e.viewAs(who, rec), nil
 }
 
 // Runs implements tasks.Client.Runs, omitting runs the caller may not view.
@@ -72,7 +73,7 @@ func (e *executor) Runs(ctx context.Context, q tasks.RunQuery) iter.Seq2[tasks.R
 			if !e.mayView(who, rec.Kind) {
 				continue
 			}
-			if !yield(e.view(rec), nil) {
+			if !yield(e.viewAs(who, rec), nil) {
 				return
 			}
 		}

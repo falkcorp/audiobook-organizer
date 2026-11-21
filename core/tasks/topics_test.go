@@ -309,6 +309,43 @@ func TestLogAppendedRedactor(t *testing.T) {
 	}
 }
 
+// TestRunViewRedactor_NeverCarriesTheBlocker: the realtime stream has a
+// subscriber's checker and a payload, and no way to ask whether that subscriber
+// may view the blocking run's kind, so a run-changed or finished payload never
+// carries blocked_by, whoever subscribes (even a holder of every scope). What
+// describes the run itself, the deferral reason and when it began, stays. GET
+// /runs gets the blocker only from Client.Get/Runs, which decide it per caller.
+func TestRunViewRedactor_NeverCarriesTheBlocker(t *testing.T) {
+	since := time.Date(2026, 11, 20, 9, 2, 0, 0, time.UTC)
+	payload, err := json.Marshal(tasks.NewRunPayload(tasks.RunView{
+		ID: "run-robin-1", State: tasks.StateQueued,
+		Deferred: "writeset", BlockedBy: "run-robin-0", DeferredSince: since,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	redact := tasks.RunViewRedactor()
+	for name, who := range map[string]rbac.Checker{
+		"nil":             nil,
+		"tasks.view only": checker{[]rbac.Permission{"core:tasks.view"}},
+		"every scope":     checker{[]rbac.Permission{"core:tasks.view", "core:tasks.manage", "core:users.view", "core:system.manage"}},
+	} {
+		var got tasks.RunPayload
+		if err := json.Unmarshal(redact(who, payload), &got); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got.BlockedBy != "" {
+			t.Errorf("%s: the stream carries blocked_by %q", name, got.BlockedBy)
+		}
+		if got.Deferred != "writeset" || !got.DeferredSince.Equal(since) {
+			t.Errorf("%s: the run's own deferral was lost: %+v", name, got)
+		}
+	}
+	if got := tasks.RedactRunPayload(nil, tasks.NewRunPayload(tasks.RunView{BlockedBy: "run-robin-0"})); got.BlockedBy != "" {
+		t.Errorf("RedactRunPayload kept blocked_by %q", got.BlockedBy)
+	}
+}
+
 // TestTaskTopics_SpecRedactIsARedactor: each entry's own Redact, the value the
 // hub applies, blanks the user-identifying text for a subscriber without
 // core:users.view and keeps it for a holder, on all three topics (a pass-through
