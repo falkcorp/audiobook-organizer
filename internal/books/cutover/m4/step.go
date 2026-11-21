@@ -107,7 +107,8 @@ type Migration struct {
 //
 // Parallelism is CPU(): the work is decoding and one batch per chunk, and the
 // partition is disjoint by construction. A run's rows are written by exactly
-// one worker, the one that steps the run's driver row (opv3:run:<id>): the
+// one worker, the one that steps the run's driver row (opv3:run:<id>, or
+// operation:<id> for a v1 operation with no v3 record; see driverOf): the
 // driver reads every row the run owns, imports them and stages their deletes in
 // its own chunk's batch. Another worker that reaches one of those rows first
 // finds the run's record still present and leaves the row alone (the driver
@@ -274,19 +275,30 @@ func (m *Migration) Step(ctx context.Context, kv storage.KV, w *datamigrate.Step
 const (
 	driverNone = iota
 	driverRun  // opv3:run:<id>
-	driverOp1  // operation:<id>, for a v1 operation no v3 record or v2 row covers
+	driverOp1  // operation:<id>, for a v1 operation no v3 record covers
 )
 
-// driverOf says which row imports the rows of run id: its v3 record, or, for
-// a v1 operation with no v3 record and no v2 operation row (a v2 row with no
-// record is an orphan the step sets aside, and so is the operation's history),
-// the v1 operation row.
+// driverOf says which row decides the fate of every row of run id: its v3
+// record, or, with no v3 record, the v1 operation row. Nothing else.
+//
+// The step's shards run in parallel and commit in no fixed order, so the
+// answer must not hang on a row that another shard's worker can move in the
+// meantime. Every row it reads is one that only the run's own driver ever
+// writes: the v3 record, and the v1 operation row, which another worker
+// either defers to (it is the driver) or, when the run has a v3 record,
+// leaves alone. A row an orphan path can quarantine on its own, such as the
+// v2 operation row, never takes part: it once did (a v2 operation row of no
+// v3 record made the v1 row an orphan), and then a v1 operation was imported
+// or set aside depending on which shard committed first. A v2 operation row
+// beside a v1 operation with no v3 record is now the v1 driver's to read,
+// and convertV1 sets the whole operation aside for it. A v2 operation row
+// with neither is an orphan, quarantined when visited.
 func (m *Migration) driverOf(ctx context.Context, id string) (int, error) {
 	r := m.legacy()
 	for _, c := range []struct {
 		key  string
 		want int
-	}{{prefixRun + id, driverRun}, {prefixOp2 + id, driverNone}, {prefixOp1 + id, driverOp1}} {
+	}{{prefixRun + id, driverRun}, {prefixOp1 + id, driverOp1}} {
 		_, err := r.Get(ctx, []byte(c.key))
 		switch {
 		case err == nil:
