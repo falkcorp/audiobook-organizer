@@ -8,6 +8,7 @@ import tseslint from 'typescript-eslint';
 import reactHooks from 'eslint-plugin-react-hooks';
 import reactRefresh from 'eslint-plugin-react-refresh';
 import globals from 'globals';
+import { PERMISSION_LITERAL_PENDING_FILES, permissionLiteralRestrictions } from './eslint-rules/permission-literal.mjs';
 
 export default tseslint.config(
   {
@@ -93,6 +94,25 @@ export default tseslint.config(
           message: 'Use apiFetch from utils/apiFetch (or a services/* function) instead of raw fetch.',
         })),
       ],
+    },
+  },
+  {
+    // 07 section 7.18 (FE-11, FE2-17): no string literal in a permission
+    // position (a usePermission/useAction/hasPermission argument, a permission
+    // or *_PERMISSION property or constant, an API-key scope list) unless it
+    // comes from manifest.permissions or the generated client. The selectors
+    // and their fixtures live in eslint-rules/permission-literal.mjs.
+    //
+    // PERMISSION_LITERAL_PENDING_FILES are the five files whose literals
+    // (ABO's legacy permission constants and APIKeysTab's scope list) go
+    // through the generated client in the SPA's switch; that change deletes
+    // the list. The rule is not weakened for them beyond that exact list:
+    // eslint-rules/permission-literal.test.ts fails if the list names a file
+    // that is clean or misses one that is not.
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: ['src/**/*.test.{ts,tsx}', ...PERMISSION_LITERAL_PENDING_FILES],
+    rules: {
+      'no-restricted-syntax': ['error', ...permissionLiteralRestrictions],
     },
   },
   {
