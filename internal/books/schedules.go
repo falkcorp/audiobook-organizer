@@ -146,9 +146,13 @@ var scheduleDecls = []scheduleDecl{
 	{task: "dedup_refresh", kind: "books.dedup.author-scan", key: "dedup_refresh", mode: modeNone,
 		gates: windowToggle(gateMaintDedupRefresh)},
 	{task: "label_refinement", kind: "books.dedup.label-refinement", key: "label_refinement", mode: modeNone,
-		gates: func(d ScheduleDeps, s *tasks.Schedule) *tasks.Schedule { return enabledBy(s, present(d.HasDedupPlugin)) }},
+		gates: func(d ScheduleDeps, s *tasks.Schedule) *tasks.Schedule {
+			return enabledBy(s, present(d.HasDedupPlugin))
+		}},
 	{task: "dedup_llm_review", kind: "books.dedup.llm-review", key: "dedup_llm_review", mode: modeLive,
-		gates: func(d ScheduleDeps, s *tasks.Schedule) *tasks.Schedule { return enabledBy(s, present(d.HasDedupPlugin)) }},
+		gates: func(d ScheduleDeps, s *tasks.Schedule) *tasks.Schedule {
+			return enabledBy(s, present(d.HasDedupPlugin))
+		}},
 	{task: "series_prune", kind: "books.dedup.series-prune", key: "series_prune", mode: modeLive,
 		gates: windowToggle(gateMaintSeriesPrune)},
 	// series_normalize: HEAD's IsEnabled was a constant false (manual only);
@@ -174,7 +178,9 @@ var scheduleDecls = []scheduleDecl{
 			return s.When(d.pending("collections_refresh", d.CollectionsRefreshPending))
 		}},
 	{task: "catalog_harvest", kind: "books.catalog.harvest-authors", key: "catalog_harvest", mode: modeLive,
-		gates: func(d ScheduleDeps, s *tasks.Schedule) *tasks.Schedule { return enabledBy(s, d.flag(gateCatalogEnabled)) }},
+		gates: func(d ScheduleDeps, s *tasks.Schedule) *tasks.Schedule {
+			return enabledBy(s, d.flag(gateCatalogEnabled))
+		}},
 	{task: "acoustid_backfill", kind: "books.acoustid.backfill", key: "acoustid_backfill", mode: modeLive},
 	{task: "temp_file_cleanup", kind: "books.maintenance.temp-file-cleanup", key: "temp_file_cleanup", mode: modeLive,
 		gates: onStart},
@@ -183,7 +189,9 @@ var scheduleDecls = []scheduleDecl{
 	{task: "trash_cleanup", kind: "books.maintenance.trash-cleanup", key: "trash_cleanup", mode: modeLive},
 	{task: "reports_prune", kind: "books.maintenance.reports-prune", key: "reports_prune", mode: modeLive},
 	{task: "metadata_upgrade", kind: "books.scheduler.metadata-upgrade", key: "metadata_upgrade", mode: modeLive,
-		gates: func(d ScheduleDeps, s *tasks.Schedule) *tasks.Schedule { return enabledBy(s, present(d.HasMetadataFetchSvc)) }},
+		gates: func(d ScheduleDeps, s *tasks.Schedule) *tasks.Schedule {
+			return enabledBy(s, present(d.HasMetadataFetchSvc))
+		}},
 	{task: "author_split_scan", kind: "books.maintenance.author-split-scan", key: "author_split", mode: modePreview,
 		gates: windowToggle(gateMaintAuthorSplit)},
 	{task: "db_optimize", kind: "books.maintenance.aux-store-compact", key: "db_optimize", mode: modeLive,
@@ -200,7 +208,9 @@ var scheduleDecls = []scheduleDecl{
 			})
 		}},
 	{task: "cleanup_old_backups", kind: "books.maintenance.cleanup-old-backups", key: "cleanup_old_backups", mode: modeLive,
-		gates: func(d ScheduleDeps, s *tasks.Schedule) *tasks.Schedule { return enabledBy(s, d.flag(gateMaintDBOptimize)) }},
+		gates: func(d ScheduleDeps, s *tasks.Schedule) *tasks.Schedule {
+			return enabledBy(s, d.flag(gateMaintDBOptimize))
+		}},
 	{task: "purge_deleted", kind: "books.maintenance.purge-deleted", key: "purge_deleted", mode: modeLive,
 		gates: func(d ScheduleDeps, s *tasks.Schedule) *tasks.Schedule {
 			// HEAD's IsEnabled was the retention alone; it gated the interval,
@@ -222,9 +232,13 @@ var scheduleDecls = []scheduleDecl{
 	{task: "reconcile_scan", kind: "books.reconcile.scan", key: "reconcile", mode: modeNone,
 		gates: windowToggle(gateMaintReconcile)},
 	{task: "ai_dedup_batch", kind: "books.maintenance.ai-dedup-batch", key: "ai_dedup_batch", mode: modeLive,
-		gates: func(d ScheduleDeps, s *tasks.Schedule) *tasks.Schedule { return enabledBy(s, d.flag(gateEnableAIParsing)) }},
+		gates: func(d ScheduleDeps, s *tasks.Schedule) *tasks.Schedule {
+			return enabledBy(s, d.flag(gateEnableAIParsing))
+		}},
 	{task: "cleanup_activity_log", kind: "books.maintenance.cleanup-activity-log", key: "cleanup_activity_log", mode: modeLive,
-		gates: func(d ScheduleDeps, s *tasks.Schedule) *tasks.Schedule { return enabledBy(s, present(d.HasActivitySvc)) }},
+		gates: func(d ScheduleDeps, s *tasks.Schedule) *tasks.Schedule {
+			return enabledBy(s, present(d.HasActivitySvc))
+		}},
 	{task: "nightly_activity_compaction", kind: "books.maintenance.nightly-compact-activity-log", key: "nightly_activity_compaction", mode: modeLive,
 		gates: func(d ScheduleDeps, s *tasks.Schedule) *tasks.Schedule {
 			svc, flag := present(d.HasActivitySvc), d.flag(gateNightlyCompaction)
