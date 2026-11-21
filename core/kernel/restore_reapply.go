@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/backup/journal"
+	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
@@ -826,7 +827,7 @@ func (in reapplyInput) queueUnapplied(ctx context.Context, lines []journal.Line,
 			if b.Count() == 0 {
 				return nil // every one is queued already
 			}
-			return b.Commit(ctx, storage.Sync)
+			return bootseam.Labelled(bootseam.From(ctx), labelReapplyQueue, func() error { return b.Commit(ctx, storage.Sync) })
 		}()
 		if err != nil {
 			return 0, fmt.Errorf("kernel: queue the revocation lines this build cannot apply, up to seq %d: %w", part[len(part)-1].Seq, err)
@@ -882,7 +883,7 @@ func (in reapplyInput) drainUnapplied(ctx context.Context, chain *journal.Chain,
 			}
 			return nil
 		}
-		kept, completed, err := in.commitTail(ctx, revs, dequeue, false)
+		kept, completed, err := in.commitTail(ctx, tailLabels{labelReapplyDrainAuth, labelReapplyDrainRBAC}, revs, dequeue, false)
 		if err != nil {
 			return drained, fmt.Errorf("kernel: apply the queued revocation lines up to seq %d: %w", part[len(part)-1].Seq, err)
 		}
@@ -940,7 +941,7 @@ func (k *keptAdmins) keep(users []string) {
 // is, and the commit never moves it back.
 func (in reapplyInput) restrictKept(ctx context.Context, owe *keptAdmins, p tailPlan, after journal.Head) error {
 	if len(owe.Users) > 0 {
-		if err := in.Apply.RestrictLastAdmins(ctx, owe.Users); err != nil {
+		if err := bootseam.Labelled(bootseam.From(ctx), labelReapplyRestrictKept, func() error { return in.Apply.RestrictLastAdmins(ctx, owe.Users) }); err != nil {
 			return fmt.Errorf("kernel: restrict the last admins %v: %w", owe.Users, err)
 		}
 	}
@@ -953,7 +954,7 @@ func (in reapplyInput) restrictKept(ctx context.Context, owe *keptAdmins, p tail
 					return err
 				}
 			}
-			return b.Commit(ctx, storage.Sync)
+			return bootseam.Labelled(bootseam.From(ctx), labelReapplyDequeue, func() error { return b.Commit(ctx, storage.Sync) })
 		}()
 		if err != nil {
 			return fmt.Errorf("kernel: remove the applied lines from the unapplied-revocation queue: %w", err)
@@ -962,13 +963,13 @@ func (in reapplyInput) restrictKept(ctx context.Context, owe *keptAdmins, p tail
 	if !owe.Head || p.Hold {
 		return nil
 	}
-	if p.Pending != nil {
-		if err := p.Pending.Commit(ctx); err != nil {
-			return fmt.Errorf("kernel: commit the journal head: %w", err)
+	err := bootseam.Labelled(bootseam.From(ctx), labelReapplyWithheldHead, func() error {
+		if p.Pending != nil {
+			return p.Pending.Commit(ctx)
 		}
-		return nil
-	}
-	if err := journal.CommitHead(ctx, in.KS, after); err != nil {
+		return journal.CommitHead(ctx, in.KS, after)
+	})
+	if err != nil {
 		return fmt.Errorf("kernel: commit the journal head: %w", err)
 	}
 	return nil
@@ -1013,7 +1014,7 @@ func (in reapplyInput) settleUnapplied(ctx context.Context, restoring bool, res 
 		}
 		res.Counts, res.FailedClosed = counts, true
 	}
-	if err := journal.MarkUnappliedClosed(ctx, in.KS, open); err != nil {
+	if err := bootseam.Labelled(bootseam.From(ctx), labelReapplyUnappliedClosed, func() error { return journal.MarkUnappliedClosed(ctx, in.KS, open) }); err != nil {
 		return fmt.Errorf("kernel: record the fail-closed pass for the unapplied revocation lines: %w", err)
 	}
 	return nil
@@ -1060,7 +1061,7 @@ func (in reapplyInput) applyTail(ctx context.Context, p tailPlan, owe *keptAdmin
 			h := journal.Head{Seq: last.Seq, MAC: last.MAC}
 			head = func(ctx context.Context, b *storage.Batch) error { return journal.StageHead(ctx, b, in.KS, h) }
 		}
-		kept, completed, err := in.commitTail(ctx, revs, head, owe.Head)
+		kept, completed, err := in.commitTail(ctx, tailLabels{labelReapplyTailAuth, labelReapplyTailRBAC}, revs, head, owe.Head)
 		if err != nil {
 			return applied, fmt.Errorf("kernel: re-apply the revocation journal up to seq %d: %w", last.Seq, err)
 		}
@@ -1071,7 +1072,7 @@ func (in reapplyInput) applyTail(ctx context.Context, p tailPlan, owe *keptAdmin
 		}
 	}
 	if len(parts) == 0 && p.Pending != nil && !p.Hold {
-		if err := p.Pending.Commit(ctx); err != nil {
+		if err := bootseam.Labelled(bootseam.From(ctx), labelReapplyPendingHead, func() error { return p.Pending.Commit(ctx) }); err != nil {
 			return applied, fmt.Errorf("kernel: commit the journal head: %w", err)
 		}
 	}
@@ -1092,8 +1093,13 @@ func (in reapplyInput) applyTail(ctx context.Context, p tailPlan, owe *keptAdmin
 // complete is left out when withhold is set and when rbac kept an admin (the
 // restriction is owed, and completing first would let a crash between the two
 // leave it with nothing to replay it): completed reports whether it was staged.
-func (in reapplyInput) commitTail(ctx context.Context, revs []journal.Revocation, complete func(context.Context, *storage.Batch) error, withhold bool) (kept []string, completed bool, err error) {
+//
+// labels are the crash-matrix labels of the two batches (a tail chunk's or a
+// drained chunk's).
+func (in reapplyInput) commitTail(ctx context.Context, labels tailLabels, revs []journal.Revocation, complete func(context.Context, *storage.Batch) error, withhold bool) (kept []string, completed bool, err error) {
+	seams := bootseam.From(ctx)
 	if len(revs) > 0 {
+		exit := bootseam.RegionOf(seams, labels.Auth)
 		err := storage.RetryOnConflict(ctx, 5, func(ctx context.Context) (err error) {
 			b := in.Apply.NewBatch()
 			defer func() { err = errors.Join(err, b.Close()) }()
@@ -1105,10 +1111,13 @@ func (in reapplyInput) commitTail(ctx context.Context, revs []journal.Revocation
 			}
 			return b.Commit(ctx, storage.Sync)
 		})
+		exit()
 		if err != nil {
 			return nil, false, err
 		}
 	}
+	exit := bootseam.RegionOf(seams, labels.RBAC)
+	defer exit()
 	err = storage.RetryOnConflict(ctx, 5, func(ctx context.Context) (err error) {
 		b := in.Apply.NewBatch()
 		defer func() { err = errors.Join(err, b.Close()) }()
@@ -1131,6 +1140,9 @@ func (in reapplyInput) commitTail(ctx context.Context, revs []journal.Revocation
 	})
 	return kept, completed, err
 }
+
+// tailLabels are the crash-matrix labels of commitTail's two batches.
+type tailLabels struct{ Auth, RBAC string }
 
 // writeBookkeeping writes the lines this boot owes the journal before it moves
 // the store's head, and returns the Pending whose head the re-apply commits
@@ -1221,7 +1233,10 @@ func (in reapplyInput) restoreLine(ctx context.Context, chain *journal.Chain, ab
 	if res.RestoreLine == 0 {
 		line := journal.RestoreLineOf(journal.RestoreInfo{Kind: restoreKindLabel(rb.Kind), Source: rb.ArchiveID,
 			Boundary: res.RestoreBoundary, RestoreID: rb.ID}, in.now())
-		if h, err := in.Journal.AppendLine(ctx, line); err != nil {
+		exit := bootseam.Region(ctx, labelReapplyRestoreLine)
+		h, err := in.Journal.AppendLine(ctx, line)
+		exit()
+		if err != nil {
 			// A journal that cannot take a line (broken, locked, unwritable)
 			// does not stop the restore: the hooks run, with no coverage when
 			// the journal is broken, and only the record that ties their lines
@@ -1262,7 +1277,9 @@ func (in reapplyInput) writeMarkers(ctx context.Context, res *reapplyResult) err
 // removes the old journal file of a move, now that the record points at the new
 // one.
 func writeStoreMarkers(ctx context.Context, comp *journal.Component, path string, id storage.StoreIdentity, moved string, log *slog.Logger) error {
+	exit := bootseam.Region(ctx, labelReapplyServedBoot)
 	pair, err := comp.AdvanceServedBoot(ctx)
+	exit()
 	if err != nil {
 		return fmt.Errorf("kernel: write served_boot: %w", err)
 	}

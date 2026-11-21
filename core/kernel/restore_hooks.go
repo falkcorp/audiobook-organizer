@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/internal/authstore"
+	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/internal/rbacstore"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
@@ -154,7 +155,10 @@ func runRestoreHooks(ctx context.Context, in restoreHooksInput) (res restoreHook
 		// same hooks find again, and that is gone once the run has finished.
 		runKey := ""
 		if r.RestoreLine == 0 {
-			if runKey, err = journal.EnsureHookRun(ctx, in.KS, in.now()); err != nil {
+			exit := bootseam.Region(ctx, labelHooksRunEnsure)
+			runKey, err = journal.EnsureHookRun(ctx, in.KS, in.now())
+			exit()
+			if err != nil {
 				return res, fmt.Errorf("kernel: record the restore hooks' run ID: %w", err)
 			}
 		}
@@ -208,7 +212,7 @@ func runRestoreHooks(ctx context.Context, in restoreHooksInput) (res restoreHook
 	// Crashing between the markers and here leaves an ID behind that the next
 	// restore's store replaces (a restore swaps the whole store in).
 	if r.RestoreLine == 0 {
-		if err := journal.ClearHookRun(ctx, in.KS); err != nil {
+		if err := bootseam.Labelled(bootseam.From(ctx), labelHooksRunClear, func() error { return journal.ClearHookRun(ctx, in.KS) }); err != nil {
 			return res, fmt.Errorf("kernel: clear the restore hooks' run ID: %w", err)
 		}
 	}
