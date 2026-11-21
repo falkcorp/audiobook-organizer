@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -90,6 +91,14 @@ func (s *Svc) slot() (pending *restorejournal.Intent, taken bool, inflight []str
 // StageRestore is the API phase of a restore, §5B.3.4 steps 1-9. It writes
 // only under <db parent>/.mediacore-restore/<id>/ and <state_dir>/restore/;
 // the live store is never opened for writing (TestRestoreNeverWritesLiveStore).
+//
+// Once the archive is found, every refusal counts once as a rejected restore
+// (mediacore_backup_restore_total{stage="rejected"}), and the core.restore.stage
+// audit record is written only after every check that can refuse the archive,
+// immediately before step 8's create: a refused restore leaves a rejected
+// count, never a bare stage record. If the create itself refuses after the
+// record is written, a second core.restore.stage record with outcome
+// "rejected" says so (auditRefused).
 func (s *Svc) StageRestore(ctx context.Context, id ArchiveID, o RestoreOptions) (pr PendingRestore, err error) {
 	if err := authorizeRestore(ctx, o); err != nil {
 		s.o.Metrics.Restore(ctx, "rejected", o.Foreign)
@@ -110,11 +119,19 @@ func (s *Svc) StageRestore(ctx context.Context, id ArchiveID, o RestoreOptions) 
 	if err != nil {
 		return PendingRestore{}, err
 	}
+	// foreign is the provenance the rejected count carries: the caller's flag
+	// until step 3 reads the archive's own.
+	foreign := o.Foreign
+	defer func() {
+		if err != nil {
+			s.o.Metrics.Restore(ctx, "rejected", foreign)
+		}
+	}()
 	// 2. Verify. verified is the archive file's digest the verification vouched
-	// for; a legacy archive is extracted only if it still has it.
+	// for; whatever staging extracts must still have it (extractCore,
+	// extractLegacy).
 	verified, err := s.verifyForRestore(ctx, f, o)
 	if err != nil {
-		s.o.Metrics.Restore(ctx, "rejected", o.Foreign)
 		return PendingRestore{}, err
 	}
 	// 3. Provenance, from the archive's own manifest, never a sidecar.
@@ -128,6 +145,13 @@ func (s *Svc) StageRestore(ctx context.Context, id ArchiveID, o RestoreOptions) 
 		}
 		defer s.closeRead("the archive being staged", open)
 		man = open.Manifest
+		// The path is opened again here, so the file may no longer be the
+		// archive the catalogue found under id: it must name itself id. This is
+		// what holds an own archive (whose MAC covers the ID) to the one selected
+		// when step 2 read no digest; the digest binds the rest (extractCore).
+		if man.ArchiveID != id {
+			return PendingRestore{}, fmt.Errorf("%w: %w: the file at the selected archive's path is another archive", ErrManifest, backuparchive.ErrChanged)
+		}
 	}
 	class := PreProvenance
 	if man != nil {
@@ -138,20 +162,13 @@ func (s *Svc) StageRestore(ctx context.Context, id ArchiveID, o RestoreOptions) 
 		class = Classify(man, s.o.Keyring, live)
 	}
 	if class != Own && !o.Foreign {
-		s.o.Metrics.Restore(ctx, "rejected", false)
 		return PendingRestore{}, fmt.Errorf("%w (%s)", ErrForeignArchive, class)
 	}
-	foreign := class != Own
-	if s.o.Audit != nil {
-		if err := s.o.Audit(ctx, "core.restore.stage", map[string]string{"foreign": fmt.Sprint(foreign), "archive": string(id)}); err != nil {
-			return PendingRestore{}, fmt.Errorf("backup: audit: %w", err)
-		}
-	}
+	foreign = class != Own
 	// 4. Compatibility, before anything is extracted.
 	var warnings []string
 	if man != nil {
 		if warnings, err = s.compat(man); err != nil {
-			s.o.Metrics.Restore(ctx, "rejected", foreign)
 			return PendingRestore{}, err
 		}
 	} else {
@@ -179,7 +196,7 @@ func (s *Svc) StageRestore(ctx context.Context, id ArchiveID, o RestoreOptions) 
 	}
 	var manifestSHA string
 	if man != nil {
-		if manifestSHA, err = s.extractCore(ctx, open, staging); err != nil {
+		if manifestSHA, err = s.extractCore(ctx, open, staging, verified); err != nil {
 			return PendingRestore{}, err
 		}
 	} else if manifestSHA, err = s.extractLegacy(ctx, f.Path, staging, verified); err != nil {
@@ -224,8 +241,17 @@ func (s *Svc) StageRestore(ctx context.Context, id ArchiveID, o RestoreOptions) 
 	if s.o.Stager == nil {
 		return PendingRestore{}, errors.New("backup: restore needs a Stager")
 	}
+	// The audit record (§5B.3.4 step 3's core.restore.stage), after every check
+	// that can refuse the archive and before the create it records: a failed
+	// write fails the call, so no intent exists without its record.
+	fields := map[string]string{"foreign": fmt.Sprint(foreign), "archive": string(id)}
+	if s.o.Audit != nil {
+		if err := s.o.Audit(ctx, "core.restore.stage", fields); err != nil {
+			return PendingRestore{}, fmt.Errorf("backup: audit: %w", err)
+		}
+	}
 	if err := s.o.Stager.Stage(ctx, in); err != nil {
-		s.o.Metrics.Restore(ctx, "rejected", foreign)
+		s.auditRefused(ctx, fields, err)
 		return PendingRestore{}, err
 	}
 	staged = true
@@ -242,6 +268,37 @@ func (s *Svc) StageRestore(ctx context.Context, id ArchiveID, o RestoreOptions) 
 		}
 	}
 	return pr, nil
+}
+
+// auditRefused records that a restore whose core.restore.stage record was
+// already written did not stage after all: the same action again with outcome
+// "rejected" and a fixed reason code (never the error's text, which can name a
+// path), so the ledger never shows a refused restore as a bare stage record. It
+// is written with ctx's values but not its cancellation (a cancelled request's
+// refusal is still a refusal), and a failure to write it is logged: the
+// refusal itself is the caller's answer.
+func (s *Svc) auditRefused(ctx context.Context, fields map[string]string, cause error) {
+	if s.o.Audit == nil {
+		return
+	}
+	rec := maps.Clone(fields)
+	rec["outcome"], rec["reason"] = "rejected", stageRefusal(cause)
+	if err := s.o.Audit(context.WithoutCancel(ctx), "core.restore.stage", rec); err != nil {
+		s.o.log().Warn("backup: could not record a refused restore", "reason", rec["reason"], "error", err)
+	}
+}
+
+// stageRefusal is the reason code of a create that refused after its audit
+// record was written.
+func stageRefusal(err error) string {
+	switch {
+	case errors.Is(err, restorejournal.ErrSwapPending):
+		return "swap_pending"
+	case errors.Is(err, restorejournal.ErrRenameRefused):
+		return "rename_refused"
+	default:
+		return "stage_failed"
+	}
 }
 
 // restartWarning is the warning for a failed restart request. The error's text
@@ -333,12 +390,23 @@ func (s *Svc) compat(m *Manifest) (warnings []string, err error) {
 // against the manifest as it streams, then the manifest itself beside them (step
 // b's anchor), everything fsynced. It returns the manifest's SHA-256.
 //
+// verified is the archive file's SHA-256 step 2 vouched for. The archive was
+// opened again at step 3, so the bytes extracted here must hash to it (the tee
+// under a, whole once consume finished), or the file was replaced after it was
+// verified and the call fails before the manifest is written; StageRestore then
+// removes the staging directory. For a foreign archive this digest is the only
+// tie between what is staged and what was verified: anyone can write a manifest
+// that names the selected ID, and its MAC proves nothing here. verified is ""
+// only when step 2 read no digest (a checksum-level, no-sidecar restore under
+// AllowWeakVerify), which verified nothing to bind to; an own archive is then
+// still held to the selected one by its MAC and step 3's ID check.
+//
 // The declared sizes (the manifest's entries and the manifest itself) are
 // checked against the free space of staging's filesystem, margin included,
 // before the first byte is written, and the extractor stops at that total: the
 // archive's own size and the reader's limits say what it costs to decode, not
 // what it costs to keep.
-func (s *Svc) extractCore(ctx context.Context, a *openedArchive, staging string) (string, error) {
+func (s *Svc) extractCore(ctx context.Context, a *openedArchive, staging, verified string) (string, error) {
 	declared, err := declaredBytes(a.Manifest.Entries, "")
 	if err != nil {
 		return "", err
@@ -357,6 +425,9 @@ func (s *Svc) extractCore(ctx context.Context, a *openedArchive, staging string)
 	ex.SetBudget(budgetOf(total))
 	cerr := a.consume(ctx, ex, "")
 	if cerr == nil {
+		cerr = bindVerified(a, verified)
+	}
+	if cerr == nil {
 		_, cerr = ex.WriteFile(ManifestName, bytes.NewReader(a.ManifestBytes), nil)
 	}
 	if serr := errors.Join(ex.Sync(), ex.Close()); cerr == nil {
@@ -366,6 +437,22 @@ func (s *Svc) extractCore(ctx context.Context, a *openedArchive, staging string)
 		return "", cerr
 	}
 	return SumManifest(a.ManifestBytes), nil
+}
+
+// bindVerified refuses an archive whose bytes, as a read them, are not the ones
+// step 2 vouched for (verified, "" for none: nothing to bind).
+func bindVerified(a *openedArchive, verified string) error {
+	if verified == "" {
+		return nil
+	}
+	got, err := a.fileSHA256()
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(got, verified) {
+		return fmt.Errorf("%w: %w: the archive is not the one the verification accepted", ErrChecksumMismatch, backuparchive.ErrChanged)
+	}
+	return nil
 }
 
 // legacyStaged is what a staged legacy-abo/0 restore keeps beside the store: the
@@ -396,7 +483,7 @@ func (s *Svc) extractLegacy(ctx context.Context, archive, staging, verified stri
 		return "", err
 	}
 	if verified != "" && !strings.EqualFold(info.SHA256, verified) {
-		return "", fmt.Errorf("%w: the archive is not the one the verification accepted", backuparchive.ErrChanged)
+		return "", fmt.Errorf("%w: %w: the archive is not the one the verification accepted", ErrChecksumMismatch, backuparchive.ErrChanged)
 	}
 	// The scan counted the bytes the extraction will write; they must fit before
 	// any is written (ExtractLegacy stops at the same figure).
@@ -625,16 +712,19 @@ func (s *Svc) RevertLastRestore(ctx context.Context, o RestoreOptions) (PendingR
 		StagedByBuild: s.o.BuildID, ExpiresAt: now.Add(ttl), RequestedBy: s.actor(ctx), RequestedAt: now,
 		InstallID: install,
 	}
-	if s.o.Audit != nil {
-		if err := s.o.Audit(ctx, "core.restore.stage", map[string]string{"kind": "revert", "undo": prevID}); err != nil {
-			return PendingRestore{}, fmt.Errorf("backup: audit: %w", err)
-		}
-	}
 	if s.o.Stager == nil {
 		return PendingRestore{}, errors.New("backup: restore needs a Stager")
 	}
+	fields := map[string]string{"kind": "revert", "undo": prevID}
+	if s.o.Audit != nil {
+		if err := s.o.Audit(ctx, "core.restore.stage", fields); err != nil {
+			return PendingRestore{}, fmt.Errorf("backup: audit: %w", err)
+		}
+	}
 	if err := s.o.Stager.Stage(ctx, in); err != nil {
 		_ = os.RemoveAll(restorejournal.JournalDir(s.o.StateDir, rid))
+		s.auditRefused(ctx, fields, err)
+		s.o.Metrics.Restore(ctx, "rejected", o.Foreign)
 		return PendingRestore{}, err
 	}
 	s.o.Metrics.Restore(ctx, "staged", o.Foreign)

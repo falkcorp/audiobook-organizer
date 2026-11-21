@@ -664,8 +664,15 @@ interactive owner proof; §5B.3.8). The same steps run offline in `<app> restore
    `TestSwapSlotExclusive`).
 2. Verify at `RestoreOptions.Verify` (default `VerifyOpen`). Legacy archives without a sidecar need
    `AllowWeakVerify` (today's `ErrVerificationUnsupported` choice, made explicit).
-3. Provenance: `Own`, or `Foreign: true` (`ErrForeignArchive` otherwise). Audit `core.restore.stage`
-   with `{foreign}` (05-rbac §7.1 action names).
+3. Provenance: `Own`, or `Foreign: true` (`ErrForeignArchive` otherwise). The archive is reopened
+   here, so its manifest's `archive_id` must be the selected ID, and whatever steps 6/7 extract must
+   hash to the archive digest step 2 vouched for (the sidecar-checked digest, or the digest of the
+   bytes the entries pass read); either mismatch means the file was replaced after verification and
+   refuses the restore with nothing staged. Audit `core.restore.stage` with `{foreign}` (05-rbac §7.1
+   action names), written after every check that can refuse the restore (steps 4-7) and just
+   before step 8's create, so a refused restore leaves a `rejected` count and no stage record; a
+   create that refuses after the record is written records the action again with
+   `{outcome: "rejected", reason}`.
 4. Compatibility: `App` must match (`ErrWrongApp`); every owner level in the manifest ≤ the build's
    supported level (the guard's own comparison, 05-storage §5S.3.7); `PebbleFormat` ≤ the pin; every
    owner's version known, or newer with only `Additive` steps; else `ErrBackupTooNew`. Then every
