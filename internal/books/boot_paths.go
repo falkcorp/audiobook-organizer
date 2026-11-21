@@ -53,6 +53,15 @@ func bootOptions(boot BootInputs) app.Options {
 	}
 }
 
+// ConfigCheckOptions is the app.Options core's offline config check runs with:
+// ABO's identity, the compiled defaults and the config layers boot names, with
+// nothing resolved (the check opens no store and creates no directory).
+func ConfigCheckOptions(boot BootInputs) app.Options {
+	o := bootOptions(boot)
+	o.CoreDefaults = coreDefaults
+	return o
+}
+
 // ResolveBootPaths is the store path and the state directory a boot with boot
 // opens, resolved by core's step 0 over the same layers serve reads (the
 // environment, boot.Flags, the operator file, the compiled default), with the

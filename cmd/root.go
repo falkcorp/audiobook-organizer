@@ -6,6 +6,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,7 +14,6 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books"
-	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
@@ -25,7 +25,6 @@ import (
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 var cfgFile string
@@ -35,15 +34,6 @@ var databaseType string
 var playlistDir string
 var logLevel string
 var metadataInspectFile string
-
-// persistentFlagConfigKeys maps each root persistent flag to the config key it
-// feeds through viper.BindPFlag.
-var persistentFlagConfigKeys = map[string]string{
-	"dir":       "root_dir",
-	"db":        "database_path",
-	"db-type":   "database_type",
-	"playlists": "playlist_dir",
-}
 
 // removedSQLiteFlag is the CLI flag TASK-020 (#3268) deleted. It is still
 // registered — hidden, deprecated, and bound to nothing — so that an off-repo
@@ -319,11 +309,11 @@ func init() {
 	// cobra.OnInitialize hook, so it knows which command is running and can
 	// skip commands annotated skipAppInitAnnotation (fp-worker). No
 	// subcommand defines its own PersistentPreRun, so this one runs for all.
-	rootCmd.PersistentPreRun = func(cmd *cobra.Command, _ []string) {
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
 		if cmd.Annotations[skipAppInitAnnotation] == "true" {
-			return
+			return nil
 		}
-		initConfig()
+		return initConfig()
 	}
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.audiobook-organizer.yaml)")
@@ -333,10 +323,6 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&playlistDir, "playlists", "playlists", "directory to store generated playlists")
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "log level: debug, info, warn, error")
 
-	for flagName, configKey := range persistentFlagConfigKeys {
-		viper.BindPFlag(configKey, rootCmd.PersistentFlags().Lookup(flagName))
-	}
-
 	// The removed --enable-sqlite3-i-know-the-risks flag: accepted, ignored,
 	// and warned about, never an error. Passing it makes pflag print
 	// "Flag --enable-sqlite3-i-know-the-risks has been deprecated, <message>"
@@ -345,9 +331,7 @@ func init() {
 	// launchd plists to their .err file, so that one line is the warning;
 	// there is deliberately no second slog line.
 	//
-	// It is bound to nothing: no variable, and NOT in persistentFlagConfigKeys.
-	// A viper binding would expose enable_sqlite3_i_know_the_risks to
-	// config.warnRemovedViperKeys and log the removed-key WARN a second time.
+	// It is bound to nothing: no variable and no config layer.
 	rootCmd.PersistentFlags().Bool(removedSQLiteFlag, false, "removed; ignored (PebbleDB is the only database backend)")
 	if err := rootCmd.PersistentFlags().MarkDeprecated(removedSQLiteFlag, removedSQLiteFlagMessage); err != nil {
 		panic(err)
@@ -441,26 +425,41 @@ broken tags or filename fallbacks without running a full scan.`,
 }
 
 // skipAppInitAnnotation marks a command that must not run initConfig: no
-// config file, no viper.AutomaticEnv, no playlist or database directories.
+// config projection, no playlist or database directories.
 const skipAppInitAnnotation = "audiobook-organizer/skip-app-init"
 
-func initConfig() {
-	if cfgFile != "" {
-		viper.SetConfigFile(cfgFile)
-	} else {
-		home, err := os.UserHomeDir()
-		cobra.CheckErr(err)
-
-		viper.AddConfigPath(home)
-		viper.SetConfigType("yaml")
-		viper.SetConfigName(".audiobook-organizer")
+func initConfig() error {
+	// The operator layers alone (ABO's compiled defaults, the operator file
+	// --config or ABO_CONFIG names, the ABO_* environment and the flags the
+	// operator set), projected into HEAD's Config by the books module's own
+	// Engine (F3-07 slice 3): no store is opened, no boot record read and no
+	// directory created, so a retired name that would refuse the boot
+	// refuses here first. serve's Facade replaces this projection with the
+	// stored settings once the App boots.
+	boot, err := rootBootInputs()
+	if err != nil {
+		return err
 	}
-
-	viper.AutomaticEnv()
-
-	if err := viper.ReadInConfig(); err == nil {
-		fmt.Println("Using config file:", viper.ConfigFileUsed())
+	cfg, err := books.OperatorAppConfig(context.Background(), books.Module(), boot)
+	if err != nil {
+		return err
 	}
+	// --dir and --playlists are not core keys (core.library.roots and the
+	// playlist directory are stored settings), so they feed the commands that
+	// read them here, as HEAD's flag binding did: only when set.
+	flags := rootCmd.PersistentFlags()
+	if f := flags.Lookup("dir"); f != nil && f.Changed {
+		cfg.RootDir = rootDir
+	}
+	if f := flags.Lookup("playlists"); f != nil && f.Changed {
+		cfg.PlaylistDir = playlistDir
+	}
+	// The library root an operator layer names (--dir, or
+	// ABO_CORE_LIBRARY_ROOTS / the operator file through the roots fold)
+	// overrides the stored one in the offline reset plan, as the boot's lock
+	// would.
+	config.SetOperatorRootDir(cfg.RootDir)
+	config.Project(cfg)
 
 	// Create playlist directory if it doesn't exist
 	if playlistDir != "" {
@@ -479,39 +478,17 @@ func initConfig() {
 		}
 	}
 
-	config.InitConfig()
-	if logLevel != "" {
-		config.Mutate(func(c *config.Config) { c.LogLevel = logLevel })
-	}
 	if err := config.AppConfig.Validate(); err != nil {
 		fmt.Printf("Warning: configuration validation failed: %v\n", err)
 	}
 
-	// Select which library sort fields get a memdb sorted index. This MUST
-	// happen before any store is opened: memdbSchema() reads the enabled set
-	// once, when NewMemStore builds the schema. Doing it here — right after
-	// config load, in the single cobra.OnInitialize hook — covers every
-	// command that later calls openCLIStore, rather than being repeated
-	// at each of the four call sites and eventually missed at one.
-	//
-	// Unknown names are warned about rather than ignored: a typo in config
-	// would otherwise silently leave a sort on the slow path with no
-	// indication why.
-	if unknown := database.SetEnabledSortIndexes(config.AppConfig.EnabledSortIndexes); len(unknown) > 0 {
-		fmt.Printf("Warning: unknown enabled_sort_indexes entries ignored: %v "+
-			"(the environment form is space-separated: ENABLED_SORT_INDEXES=\"year created_at\")\n", unknown)
-	}
-	// Report what was BUILT, not what was asked for. enabled_sort_indexes is
-	// boot-only: this is the value GET /api/v1/config shows for the life of
-	// the process (the setting is boot-only). Writing the
-	// accepted set back drops unknown names, so a typo is not reported as an
-	// enabled index.
-	builtSortIndexes := database.EnabledSortIndexFields()
-	config.Mutate(func(c *config.Config) { c.EnabledSortIndexes = builtSortIndexes })
-
-	// Same import-cycle constraint as SetEnabledSortIndexes above:
-	// internal/books/store can't import internal/config directly.
-	database.SetLibraryCountsCacheMinInterval(config.AppConfig.LibraryCountsCacheMinIntervalSeconds)
+	// The store tunables every CLI open path reads (openCLIStore, the
+	// op-runner child): memdbSchema() reads the enabled sort indexes once,
+	// when NewMemStore builds the schema, so they are set before any store
+	// opens. serve sets them again in books' Register from the booted store,
+	// whose stored value this projection cannot see.
+	books.ApplyStoreTunables(config.AppConfig.EnabledSortIndexes, config.AppConfig.LibraryCountsCacheMinIntervalSeconds)
+	return nil
 }
 
 func printMetadataField(label, value string) {
