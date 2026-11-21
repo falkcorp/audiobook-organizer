@@ -68,7 +68,7 @@ func New(ctx context.Context, opts Options, mods ...module.Module) (*App, error)
 	// c.StoragePath and c.StateDir stay empty: core's P0 resolves both from the
 	// config layers (kernel.bootCoreConfig), as an offline command's
 	// kernel.ResolveStorage does, so serve and offline cannot disagree.
-	if declaresStorage(mods) {
+	if c.WantsStore() {
 		if c.StorageClaimsShadow, err = claimsShadow(opts); err != nil {
 			return nil, err
 		}
@@ -306,12 +306,6 @@ func lookupEnv(env []string, name string) string {
 		}
 	}
 	return ""
-}
-
-// declaresStorage reports whether any module of the app declares storage: the
-// condition under which the app has a store, whatever path resolves it.
-func declaresStorage(mods []module.Module) bool {
-	return slices.ContainsFunc(mods, func(m module.Module) bool { return m != nil && kernel.DeclaresStorage(m.Manifest()) })
 }
 
 // claimsShadow is core.storage.claims.mode (05-storage §5S.0 D-S2, §5S.9.4
