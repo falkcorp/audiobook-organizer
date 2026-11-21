@@ -444,7 +444,7 @@ func initConfig() error {
 	if err != nil {
 		return err
 	}
-	// --dir and --playlists are not core keys (core.library.roots and the
+	// --dir and --playlists are not core keys (the library root and the
 	// playlist directory are stored settings), so they feed the commands that
 	// read them here, as HEAD's flag binding did: only when set.
 	flags := rootCmd.PersistentFlags()
@@ -455,9 +455,9 @@ func initConfig() error {
 		cfg.PlaylistDir = playlistDir
 	}
 	// The library root an operator layer names (--dir, or
-	// ABO_CORE_LIBRARY_ROOTS / the operator file through the roots fold)
-	// overrides the stored one in the offline reset plan, as the boot's lock
-	// would.
+	// ABO_CORE_LIBRARY_ROOTS / the operator file, which the projection
+	// overlays on root_dir) overrides the stored one in the offline reset
+	// plan, as the boot's lock would.
 	config.SetOperatorRootDir(cfg.RootDir)
 	config.Project(cfg)
 

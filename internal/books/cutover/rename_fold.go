@@ -8,21 +8,22 @@ package cutover
 import (
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"sort"
-	"strings"
 
-	"github.com/falkcorp/mediacore/library"
 	"github.com/falkcorp/mediacore/secrets"
 )
 
-// The forward direction of UnfoldOIDC and UnfoldRoots, for the layer that
-// writes HEAD's flat values through to the canonical lists (F3-07 e2). Both
-// take the existing canonical list and return the new one: what the flat
-// values determine is rewritten, and everything they do not (a provider's
-// extra fields, a root's operator-tuned fields, entries HEAD has no name for)
-// is carried over from prev. Pure functions.
+// The forward direction of UnfoldOIDC, for the layer that writes HEAD's flat
+// values through to the canonical list (F3-07 e2). It takes the existing
+// canonical list and returns the new one: what the flat values determine is
+// rewritten, and everything they do not (a provider's extra fields, entries
+// HEAD has no name for) is carried over from prev. A pure function.
+//
+// root_dir and path_aliases have no forward direction here: they are class i,
+// left in the settings blob by M2 and moved into core.library.roots only by M6
+// at F7, so until then the projection reads and writes them in the blob
+// (05-config 1.12.1). M6 owns the roots list's build (m6/roots.go).
 
 // ---- the OIDC fold ----
 
@@ -220,153 +221,3 @@ func decodeEntryList(in json.RawMessage, what string) ([]map[string]json.RawMess
 }
 
 // ---- the library roots ----
-
-// FoldRoots builds the new core.library.roots value from HEAD's root_dir, its
-// path_aliases (a JSON list of {root, windows, unc, smb_url}) and the existing
-// list prev.
-//
-// This mirrors M6's roots pass for root_dir and path_aliases
-// (internal/books/cutover/m6/roots.go, PR #4755 at 51d3ed94e): root_dir
-// becomes the books-library entry (role library, owner books, watch off,
-// sentinel bootstrap, min_free 0, quarantine .failed, the default app dir);
-// each alias is attached to the root whose cleaned path equals its cleaned
-// root, in alias order.
-//
-// TODO(F7-08): once #4755 and this merge, M6 must call FoldRoots so there is
-// one copy.
-//
-// Merging into prev: an existing books-library entry keeps every field but
-// path and aliases (an operator may have tuned min_free or watch); a root_dir
-// of "" is HEAD's "no root" and removes it (a partial write passes the current
-// root_dir, which UnfoldRoots returns); every other entry is carried over
-// untouched. An aliases of nil or empty (no JSON at all) means "keep": every
-// entry's aliases stay as prev has them. Any JSON list, null and [] included,
-// is HEAD's whole path_aliases: the aliases of the HEAD-derived roots
-// (books-library, import-<n>) are replaced by exactly those it names.
-// A new books-library entry goes first, as in M6's plan order.
-//
-// What M6 quarantines this refuses with ErrNotRepresentable, since a write
-// has no quarantine: a root_dir that is not an absolute path or holds a NUL, a
-// root_dir at the path of another root, and an alias whose root is empty or is
-// no HEAD-derived root's path.
-func FoldRoots(rootDir string, aliases json.RawMessage, prev json.RawMessage) (json.RawMessage, error) {
-	unrep := func(what string) error { return fmt.Errorf("%w: library roots: %s", ErrNotRepresentable, what) }
-	old, err := decodeEntryList(prev, "library roots")
-	if err != nil {
-		return nil, err
-	}
-	var heads []headPathAlias
-	if len(aliases) > 0 { // none at all: keep prev's aliases
-		if err := json.Unmarshal(aliases, &heads); err != nil {
-			return nil, fmt.Errorf("%w: library roots: want a list of path aliases", ErrConvertInput)
-		}
-	}
-	// An id or a path that is present and not a string is a corrupt prev: refuse
-	// it rather than read it as "" and treat the root as foreign.
-	for _, e := range old {
-		for _, k := range []string{"id", "path"} {
-			var v string
-			if raw, has := e[k]; has && json.Unmarshal(raw, &v) != nil {
-				return nil, fmt.Errorf("%w: library roots: a root's %s is not a string", ErrConvertInput, k)
-			}
-		}
-	}
-	idOf := func(e map[string]json.RawMessage) string {
-		var id string
-		_ = json.Unmarshal(e["id"], &id) // validated above
-		return id
-	}
-	pathOf := func(e map[string]json.RawMessage) string {
-		var p string
-		_ = json.Unmarshal(e["path"], &p) // validated above
-		return p
-	}
-
-	books := -1
-	for i, e := range old {
-		if idOf(e) == booksLibraryRootID {
-			if books >= 0 {
-				return nil, fmt.Errorf("%w: library roots: the books-library root is listed twice", ErrConvertInput)
-			}
-			books = i
-		}
-	}
-	roots := append([]map[string]json.RawMessage(nil), old...)
-	switch {
-	case strings.TrimSpace(rootDir) == "":
-		if books >= 0 {
-			roots = append(roots[:books], roots[books+1:]...)
-		}
-	case strings.ContainsRune(rootDir, 0) || !filepath.IsAbs(rootDir):
-		return nil, unrep("root_dir is not an absolute path")
-	default:
-		for i, e := range roots {
-			if i != books && filepath.Clean(pathOf(e)) == filepath.Clean(rootDir) {
-				return nil, unrep("root_dir is the path of another root")
-			}
-		}
-		if books >= 0 {
-			roots[books]["path"] = mustJSON(rootDir)
-		} else {
-			fresh, err := booksLibraryEntry(rootDir)
-			if err != nil {
-				return nil, err
-			}
-			roots = append([]map[string]json.RawMessage{fresh}, roots...)
-		}
-	}
-
-	if len(aliases) == 0 {
-		return mustJSON(nonNilRoots(roots)), nil
-	}
-	for _, e := range roots {
-		if headDerivedRoot(idOf(e)) {
-			delete(e, "aliases")
-		}
-	}
-	attached := map[int][]library.Alias{}
-	for _, a := range heads {
-		target := -1
-		for i, e := range roots {
-			if a.Root != "" && headDerivedRoot(idOf(e)) && filepath.Clean(pathOf(e)) == filepath.Clean(a.Root) {
-				target = i
-				break
-			}
-		}
-		if target < 0 {
-			return nil, unrep("an alias names no root")
-		}
-		attached[target] = append(attached[target], library.Alias{Windows: a.Windows, UNC: a.UNC, SMBURL: a.SMBURL})
-	}
-	for i, list := range attached {
-		roots[i]["aliases"] = mustJSON(list)
-	}
-	return mustJSON(nonNilRoots(roots)), nil
-}
-
-// nonNilRoots makes the empty list encode as [] and not null.
-func nonNilRoots(roots []map[string]json.RawMessage) []map[string]json.RawMessage {
-	if roots == nil {
-		return []map[string]json.RawMessage{}
-	}
-	return roots
-}
-
-// booksLibraryEntry is the entry M6 stages for root_dir, as the JSON object core
-// stores.
-func booksLibraryEntry(rootDir string) (map[string]json.RawMessage, error) {
-	spec := library.RootSpec{
-		ID: booksLibraryRootID, Path: rootDir, Role: library.RoleLibrary, Owner: "books",
-		Watch: library.WatchOff, Sentinel: library.SentinelBootstrap, MinFree: 0,
-		Quarantine: ".failed", AppDir: library.DefaultAppDir,
-	}
-	b, err := json.Marshal(spec)
-	if err != nil {
-		return nil, fmt.Errorf("%w: library roots: the books-library entry does not encode", ErrConvertInput)
-	}
-	var out map[string]json.RawMessage
-	if err := json.Unmarshal(b, &out); err != nil {
-		return nil, fmt.Errorf("%w: library roots: the books-library entry does not decode", ErrConvertInput)
-	}
-	return out, nil
-}
