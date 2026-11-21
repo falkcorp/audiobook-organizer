@@ -53,6 +53,12 @@ const (
 // configOwnerSpec is c/config/'s storage owner (05-config §1.3.3).
 func configOwnerSpec() storage.OwnerSpec { return configstore.OwnerSpec() }
 
+// newConfigStore is config.NewStore, the one constructor every config store
+// the kernel makes goes through. A variable so a test can see each store a
+// boot makes and the options it was given (sectioncache_test.go asserts that a
+// boot over a section cache builds every store over it).
+var newConfigStore = config.NewStore
+
 // configInput is what the config boot takes from app.Options.
 type configInput struct {
 	AppID, EnvPrefix string
@@ -173,17 +179,29 @@ func (in configInput) mkdir(ctx context.Context) func(string) error {
 	return func(d string) error { return statefs.MkdirAll(ctx, labelStateDirMkdir, d, 0o700) }
 }
 
+// operatorOptions are the config.Options of a store over the operator layers
+// alone: what step 0's store and step 0's scratch judgement store both start
+// from. Each caller adds only what is its own (the boot record root). The two
+// once spelled the options out separately, and the scratch store's copy lost
+// SectionCache, so every crash-matrix boot rebuilt every core section uncached
+// and the matrix ran three times slower.
+func (in configInput) operatorOptions() config.Options {
+	return config.Options{
+		AppID: in.AppID, EnvPrefix: in.EnvPrefix, Environ: in.Environ, FilePath: in.FilePath, Flags: in.Flags,
+		Passthrough: in.Passthrough, EnvBindings: in.EnvBindings, Retired: in.Retired,
+		Logger: in.logger(), Now: in.Now, OwnerSet: in.OwnerSet,
+		SectionCache: in.SectionCache,
+	}
+}
+
 // newStep0Store is the config store step 0 reads: the operator layers, the
 // boot record through bootRecord (nil = none: an offline resolve never reads
 // it), and every core section but core.paths and core.modules, so
 // core.storage.path is read canonically.
 func newStep0Store(in configInput, bootRecord func(string) (config.StateFiles, error)) (*config.Store, []any, error) {
-	st, err := config.NewStore(config.Options{
-		AppID: in.AppID, EnvPrefix: in.EnvPrefix, Environ: in.Environ, FilePath: in.FilePath, Flags: in.Flags,
-		Passthrough: in.Passthrough, EnvBindings: in.EnvBindings, Retired: in.Retired,
-		Logger: in.logger(), Now: in.Now, OwnerSet: in.OwnerSet,
-		BootRecordRoot: bootRecord, SectionCache: in.SectionCache,
-	})
+	o := in.operatorOptions()
+	o.BootRecordRoot = bootRecord
+	st, err := newConfigStore(o)
 	if err != nil {
 		return nil, nil, fmt.Errorf("kernel: config store: %w", err)
 	}
@@ -216,13 +234,10 @@ func step0(ctx context.Context, st *config.Store, in configInput, mkdir func(str
 	// The judgement runs on a scratch store over the same operator layers
 	// (st cannot judge core.paths before step 0 registers it); the real Boot
 	// judges again and warns.
+	judge := in.operatorOptions()
+	judge.Logger = slog.New(slog.DiscardHandler) // the real Boot judges again and warns
 	if _, err := CheckConfig(ctx, ConfigCheck{
-		Config: config.Options{
-			AppID: in.AppID, EnvPrefix: in.EnvPrefix, Environ: in.Environ, FilePath: in.FilePath, Flags: in.Flags,
-			Passthrough: in.Passthrough, EnvBindings: in.EnvBindings, Retired: in.Retired,
-			Logger: slog.New(slog.DiscardHandler), Now: in.Now, OwnerSet: in.OwnerSet,
-		},
-		StateDirDefault: in.StateDirDefault, Modules: in.Modules,
+		Config: judge, StateDirDefault: in.StateDirDefault, Modules: in.Modules,
 	}); err != nil {
 		if rerr, refused := errors.AsType[*config.RetiredNameError](err); refused {
 			return step0Result{}, fmt.Errorf("kernel: config boot: %w", rerr)
@@ -365,7 +380,7 @@ func loadOperatorLayers(ctx context.Context, c ConfigCheck) (st *config.Store, l
 	o := c.Config
 	o.BootRecordRoot = nil
 	o.Metrics, o.Secrets = nil, nil
-	st, err = config.NewStore(o)
+	st, err = newConfigStore(o)
 	if err != nil {
 		return nil, nil, fmt.Errorf("kernel: config check: %w", err)
 	}
