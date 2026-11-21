@@ -74,7 +74,7 @@ type PauseState struct {
 	Paused bool      `json:"paused"`
 	Reason string    `json:"reason,omitempty"`
 	By     string    `json:"by,omitempty"`
-	Since  time.Time `json:"since,omitempty"`
+	Since  time.Time `json:"since"`
 	// Waiting is how many item dispatches are parked right now. Zero while
 	// in-flight items are still draining, which is the normal first seconds of
 	// a pause and NOT a sign the pause failed to take.

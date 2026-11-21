@@ -21,8 +21,6 @@ import (
 // testChapterMaxSec is repair_chapter_max_min's default (120 min) in seconds.
 const testChapterMaxSec = 2 * 3600
 
-func secs(n int) *int { return &n }
-
 // detectKept is what the fail-closed DetectSplitBookCandidates returns for
 // slim books: the clusters with no veto.
 func detectKept(books []splitBookSlim, resolve func(int) string, chapterMaxSec int) []SplitBookCandidate {
@@ -95,8 +93,8 @@ func TestVeto_SeriesFolderOfSeparateBooks(t *testing.T) {
 			fmt.Sprintf("01HM%08d", n),
 			fmt.Sprintf("%s Quill: A Tale (The Quill Saga, Book %d)", name, n),
 			fmt.Sprintf("/lib/Author Q/Quill Saga Books 1-4/Quill Saga %02d - %s Quill/%s Quill.m4b", n, name, name),
-			author, series, secs((5+i)*3600)))
-		books[len(books)-1].SeriesSequence = secs(n)
+			author, series, new((5+i)*3600)))
+		books[len(books)-1].SeriesSequence = new(n)
 	}
 	c := wantVetoed(t, books, "V2", "V3", "V4", "V9")
 	if c.Shape != "grandparent" {
@@ -111,7 +109,7 @@ func TestVeto_StarfallVolSubfolders(t *testing.T) {
 	var books []splitBookSlim
 	for i := 1; i <= 4; i++ {
 		books = append(books, vbook(fmt.Sprintf("01SF%08d", i), "Starfall",
-			fmt.Sprintf("/lib/Author R/Starfall/Starfall, Vol. %02d/Starfall.m4b", i), new(5), nil, secs(1800)))
+			fmt.Sprintf("/lib/Author R/Starfall/Starfall, Vol. %02d/Starfall.m4b", i), new(5), nil, new(1800)))
 	}
 	wantVetoed(t, books, "V2")
 }
@@ -121,7 +119,7 @@ func TestVeto_KestrelTalesNumberedSubtitles(t *testing.T) {
 	var books []splitBookSlim
 	for i, st := range subs {
 		books = append(books, vbook(fmt.Sprintf("01KT%08d", i+1), fmt.Sprintf("Kestrel Tales %d: %s", i+1, st),
-			fmt.Sprintf("/lib/Author S/Kestrel Tales/%02d.m4b", i+1), new(6), nil, secs(1800)))
+			fmt.Sprintf("/lib/Author S/Kestrel Tales/%02d.m4b", i+1), new(6), nil, new(1800)))
 	}
 	wantVetoed(t, books, "V2b")
 }
@@ -130,7 +128,7 @@ func TestVeto_YearsRun(t *testing.T) {
 	var books []splitBookSlim
 	for y := 2010; y <= 2012; y++ {
 		books = append(books, vbook(fmt.Sprintf("01BS%08d", y), "Yearly Digest",
-			fmt.Sprintf("/lib/Author T/Yearly Digest/Yearly Digest %d.m4b", y), new(7), nil, secs(1800)))
+			fmt.Sprintf("/lib/Author T/Yearly Digest/Yearly Digest %d.m4b", y), new(7), nil, new(1800)))
 	}
 	wantVetoed(t, books, "V5")
 	if _, _, years := sequentialRun([]int{2010, 2011, 2012}); !years {
@@ -142,7 +140,7 @@ func TestVeto_CopySuffixes(t *testing.T) {
 	var books []splitBookSlim
 	for i := 1; i <= 5; i++ {
 		books = append(books, vbook(fmt.Sprintf("01CP%08d", i), "Some Title",
-			fmt.Sprintf("/lib/Author U/Some Title/Some Title_copy%d.m4b", i), new(8), nil, secs(120)))
+			fmt.Sprintf("/lib/Author U/Some Title/Some Title_copy%d.m4b", i), new(8), nil, new(120)))
 	}
 	wantVetoed(t, books, "V8")
 }
@@ -157,7 +155,7 @@ func TestVeto_EachRuleAlone(t *testing.T) {
 				d = testChapterMaxSec // at the limit: >= vetoes
 			}
 			books = append(books, vbook(fmt.Sprintf("v3-%d", i), "Ashfield",
-				fmt.Sprintf("/lib/A/Ashfield/%02d.m4b", i), new(1), nil, secs(d)))
+				fmt.Sprintf("/lib/A/Ashfield/%02d.m4b", i), new(1), nil, new(d)))
 		}
 		wantVetoed(t, books, "V3")
 	})
@@ -166,7 +164,7 @@ func TestVeto_EachRuleAlone(t *testing.T) {
 		for i := 1; i <= 4; i++ {
 			var d *int
 			if i%2 == 0 {
-				d = secs(0)
+				d = new(0)
 			}
 			books = append(books, vbook(fmt.Sprintf("v3n-%d", i), "Ashfield", fmt.Sprintf("/lib/A/Ashfield/%02d.m4b", i), new(1), nil, d))
 		}
@@ -176,7 +174,7 @@ func TestVeto_EachRuleAlone(t *testing.T) {
 		for _, folder := range []string{"Embergate Books 1-4", "Embergate Books 1 thru 6", "Embergate Books 2 & 3", "Embergate Series", "Embergate Collection", "Embergate Omnibus", "Embergate Box Set", "Embergate Boxed Set"} {
 			var books []splitBookSlim
 			for i := 1; i <= 3; i++ {
-				books = append(books, vbook(fmt.Sprintf("v4-%d", i), "Embergate", fmt.Sprintf("/lib/A/%s/%02d.m4b", folder, i), new(1), nil, secs(300)))
+				books = append(books, vbook(fmt.Sprintf("v4-%d", i), "Embergate", fmt.Sprintf("/lib/A/%s/%02d.m4b", folder, i), new(1), nil, new(300)))
 			}
 			wantVetoed(t, books, "V4")
 		}
@@ -184,21 +182,21 @@ func TestVeto_EachRuleAlone(t *testing.T) {
 	t.Run("V2 Book/Vol numbers in file names", func(t *testing.T) {
 		var books []splitBookSlim
 		for i := 1; i <= 3; i++ {
-			books = append(books, vbook(fmt.Sprintf("v2-%d", i), "Driftwood", fmt.Sprintf("/lib/A/Driftwood/Driftwood Bk %d.m4b", i), new(1), nil, secs(300)))
+			books = append(books, vbook(fmt.Sprintf("v2-%d", i), "Driftwood", fmt.Sprintf("/lib/A/Driftwood/Driftwood Bk %d.m4b", i), new(1), nil, new(300)))
 		}
 		wantVetoed(t, books, "V2")
 	})
 	t.Run("V2 hash markers in titles", func(t *testing.T) {
 		var books []splitBookSlim
 		for i := 1; i <= 3; i++ {
-			books = append(books, vbook(fmt.Sprintf("v2h-%d", i), fmt.Sprintf("Driftwood #%d", i), fmt.Sprintf("/lib/A/Driftwood/%02d.m4b", i), new(1), nil, secs(300)))
+			books = append(books, vbook(fmt.Sprintf("v2h-%d", i), fmt.Sprintf("Driftwood #%d", i), fmt.Sprintf("/lib/A/Driftwood/%02d.m4b", i), new(1), nil, new(300)))
 		}
 		wantVetoed(t, books, "V2")
 	})
 	t.Run("V9 grandparent subfolders name different things", func(t *testing.T) {
 		var books []splitBookSlim
 		for i, n := range []string{"Salt", "Tide", "Ledger"} {
-			books = append(books, vbook(fmt.Sprintf("v9-%d", i), "Harbor Songs", fmt.Sprintf("/lib/A/Harbor Songs/%02d %s/x.m4b", i+1, n), new(1), nil, secs(300)))
+			books = append(books, vbook(fmt.Sprintf("v9-%d", i), "Harbor Songs", fmt.Sprintf("/lib/A/Harbor Songs/%02d %s/x.m4b", i+1, n), new(1), nil, new(300)))
 		}
 		wantVetoed(t, books, "V9")
 	})
@@ -210,7 +208,7 @@ func TestVeto_DistinctASINs(t *testing.T) {
 	mkBooks := func(asins ...string) []splitBookSlim {
 		var books []splitBookSlim
 		for i, a := range asins {
-			b := vbook(fmt.Sprintf("asin-%d", i), "Reedmarsh", fmt.Sprintf("/lib/A/Reedmarsh/%02d.m4b", i+1), new(1), nil, secs(300))
+			b := vbook(fmt.Sprintf("asin-%d", i), "Reedmarsh", fmt.Sprintf("/lib/A/Reedmarsh/%02d.m4b", i+1), new(1), nil, new(300))
 			b.ASIN = a
 			books = append(books, b)
 		}
@@ -241,7 +239,7 @@ func TestVeto_EpisodesAndNumberedBooks(t *testing.T) {
 	titled := func(titles ...string) []splitBookSlim {
 		var books []splitBookSlim
 		for i, ti := range titles {
-			books = append(books, vbook(fmt.Sprintf("ep-%d", i), ti, fmt.Sprintf("/lib/A/Saga/%02d.m4b", i+1), new(1), nil, secs(300)))
+			books = append(books, vbook(fmt.Sprintf("ep-%d", i), ti, fmt.Sprintf("/lib/A/Saga/%02d.m4b", i+1), new(1), nil, new(300)))
 		}
 		return books
 	}
@@ -260,7 +258,7 @@ func TestVeto_EpisodesAndNumberedBooks(t *testing.T) {
 	t.Run("Volume IV and Vol. twelve in file names", func(t *testing.T) {
 		var books []splitBookSlim
 		for i, n := range []string{"Saga Volume IV", "Saga Vol. twelve", "Saga Vol. XX"} {
-			books = append(books, vbook(fmt.Sprintf("vf-%d", i), "Saga", fmt.Sprintf("/lib/A/Saga/%02d %s.m4b", i+1, n), new(1), nil, secs(300)))
+			books = append(books, vbook(fmt.Sprintf("vf-%d", i), "Saga", fmt.Sprintf("/lib/A/Saga/%02d %s.m4b", i+1, n), new(1), nil, new(300)))
 		}
 		wantVetoed(t, books, "V2")
 	})
@@ -299,13 +297,13 @@ func TestVeto_ChapterHeadingsAreNotVolumes(t *testing.T) {
 	var books []splitBookSlim
 	for i, st := range []string{"The Letter", "The Door", "The Stair"} {
 		books = append(books, vbook(fmt.Sprintf("ch-%d", i), fmt.Sprintf("Chapter %d: %s", i+1, st),
-			fmt.Sprintf("/lib/A/Quietus/%02d.m4b", i+1), new(1), nil, secs(300)))
+			fmt.Sprintf("/lib/A/Quietus/%02d.m4b", i+1), new(1), nil, new(300)))
 	}
 	wantQualifies(t, books)
 	books = nil
 	for i := 1; i <= 3; i++ {
 		books = append(books, vbook(fmt.Sprintf("tr-%d", i), fmt.Sprintf("Track #%d", i),
-			fmt.Sprintf("/lib/A/Quietus/%02d.m4b", i), new(1), nil, secs(300)))
+			fmt.Sprintf("/lib/A/Quietus/%02d.m4b", i), new(1), nil, new(300)))
 	}
 	wantQualifies(t, books)
 }
@@ -332,7 +330,7 @@ func TestQualifies_PartSubfolders(t *testing.T) {
 	var books []splitBookSlim
 	for i := 1; i <= 5; i++ {
 		books = append(books, vbook(fmt.Sprintf("pt-%d", i), fmt.Sprintf("Moonwatch - Part %02d", i),
-			fmt.Sprintf("/lib/Author R/Moonwatch/Moonwatch - Part %02d/Moonwatch.m4b", i), new(9), nil, secs(3000)))
+			fmt.Sprintf("/lib/Author R/Moonwatch/Moonwatch - Part %02d/Moonwatch.m4b", i), new(9), nil, new(3000)))
 	}
 	c := wantQualifies(t, books)
 	if c.Shape != "grandparent" || c.SuggestedTitle != "Moonwatch" {
@@ -347,7 +345,7 @@ func TestQualifies_NofM(t *testing.T) {
 	var books []splitBookSlim
 	for i := 1; i <= 3; i++ {
 		books = append(books, vbook(fmt.Sprintf("nm-%d", i), fmt.Sprintf("Lanternfall (%d of 3)", i),
-			fmt.Sprintf("/lib/Author R/Lanternfall/Lanternfall (%d of 3).m4b", i), new(9), nil, secs(3000)))
+			fmt.Sprintf("/lib/Author R/Lanternfall/Lanternfall (%d of 3).m4b", i), new(9), nil, new(3000)))
 	}
 	c := wantQualifies(t, books)
 	if c.SuggestedTitle != "Lanternfall" {
@@ -360,7 +358,7 @@ func TestQualifies_NofM(t *testing.T) {
 func TestQualifies_DistinctChapterNamesUseFolderTitle(t *testing.T) {
 	var books []splitBookSlim
 	for i, name := range []string{"03_Intro", "04_Preface", "05_Chapter 01"} {
-		books = append(books, vbook(fmt.Sprintf("dn-%d", i), name, fmt.Sprintf("/lib/Author V/Ironbound/%s.mp3", name), new(3), nil, secs(600)))
+		books = append(books, vbook(fmt.Sprintf("dn-%d", i), name, fmt.Sprintf("/lib/Author V/Ironbound/%s.mp3", name), new(3), nil, new(600)))
 	}
 	c := wantQualifies(t, books)
 	if c.SuggestedTitle != "Ironbound" {
@@ -378,7 +376,7 @@ func TestQualifies_BookNumberInTitleIsKept(t *testing.T) {
 	} {
 		var books []splitBookSlim
 		for i := 1; i <= 4; i++ {
-			books = append(books, vbook(fmt.Sprintf("gr-%d", i), tf(i), fmt.Sprintf("/lib/Author W/Galaxy Run Book 3/%02d.m4b", i), new(4), nil, secs(900)))
+			books = append(books, vbook(fmt.Sprintf("gr-%d", i), tf(i), fmt.Sprintf("/lib/Author W/Galaxy Run Book 3/%02d.m4b", i), new(4), nil, new(900)))
 		}
 		if c := wantQualifies(t, books); c.SuggestedTitle != "Galaxy Run Book 3" {
 			t.Errorf("suggested title %q, want it to keep its Book 3", c.SuggestedTitle)
@@ -423,7 +421,7 @@ func TestSequentialPatternNamesTheRealNumberSource(t *testing.T) {
 func TestVetoedClusterClaimsItsBooks(t *testing.T) {
 	var books []splitBookSlim
 	for i := 1; i <= 4; i++ {
-		books = append(books, vbook(fmt.Sprintf("01CL%08d", i), "Pale Fire", fmt.Sprintf("/lib/A/Pale Fire Series/%02d - Pale Fire.m4b", i), new(2), nil, secs(300)))
+		books = append(books, vbook(fmt.Sprintf("01CL%08d", i), "Pale Fire", fmt.Sprintf("/lib/A/Pale Fire Series/%02d - Pale Fire.m4b", i), new(2), nil, new(300)))
 		books[len(books)-1].OriginalFilename = fmt.Sprintf("%02d - Pale Fire.m4b", i)
 	}
 	got := detectFromSlimWithVetoes(books, nil, testChapterMaxSec)
@@ -508,7 +506,7 @@ func TestVetoParityWithClassifier(t *testing.T) {
 		for i := range c.titles {
 			var d *int
 			if c.durs[i] >= 0 {
-				d = secs(c.durs[i])
+				d = new(c.durs[i])
 			}
 			all = append(all, vbook(fmt.Sprintf("01P%02d%05d", ci, i), c.titles[i], c.paths[i], new(100+ci), nil, d))
 		}

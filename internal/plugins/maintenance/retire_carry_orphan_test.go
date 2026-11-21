@@ -40,7 +40,7 @@ func (j singleRowJournal) GetOperationChanges(op string) ([]*database.OperationC
 func TestRetireCarry_AJournalWithoutBatchesRefusesBeforeAnyWrite(t *testing.T) {
 	d := newDCFixture(t)
 	s, l := d.dune(t)
-	d.rcRate(t, "L", database.UpdateBookRatingRequest{Overall: rcFloat(4)})
+	d.rcRate(t, "L", database.UpdateBookRatingRequest{Overall: new(float64(4))})
 	col := d.rcCollection(t, "Favourites", l)
 	w := repairs.NewWriter(d.s, d.s, dcFixerID, "bulk_update", "repairs-").WithJournal(d.s, singleRowJournal{d.s}, "op-apply")
 	_, err := retireInto(context.Background(), d.p, d.s, w, time.Now, dcFixerID, l, s, nil)

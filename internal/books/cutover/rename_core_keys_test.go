@@ -103,7 +103,7 @@ func TestRenameTable_CoreProjectionMatchesFixture(t *testing.T) {
 		t.Fatalf("the rename table's projection onto core differs from %s (regenerate with -update, then run core's kernel tests):\n%s",
 			coreContractPath, firstDiff(string(want), got))
 	}
-	for _, line := range strings.Split(got, "\n") {
+	for line := range strings.SplitSeq(got, "\n") {
 		if strings.HasPrefix(line, "target ") {
 			return
 		}

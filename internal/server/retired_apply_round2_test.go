@@ -223,7 +223,7 @@ func TestRetiredApply_BatchApplyOpCountsRetiredBooks(t *testing.T) {
 			require.True(t, ok)
 			params, err := json.Marshal(batchApplyOpParams{BookIDs: []string{got.ID}, Mode: replace})
 			require.NoError(t, err)
-			rep := &capturingReporter{sdReporter: sdReporter{id: "op-retired-count"}}
+			rep := &capturingReporter{id: "op-retired-count"}
 			require.NoError(t, def.Run(context.Background(), params, rep))
 
 			summary := rep.last()

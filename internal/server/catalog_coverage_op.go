@@ -100,7 +100,7 @@ func (s *Server) headCatalogCoverage() headCatalogCoverage {
 	if !ok {
 		return headCatalogCoverage{err: fmt.Errorf("%s: the identification index is not available on this store", catalogCoverageOpID)}
 	}
-	return headCatalogCoverage{catalogCoverageParts: catalogCoverageParts{catalogCoverageBooks: store, catalogCoverageCatalog: cat, idents: idents}}
+	return headCatalogCoverage{catalogCoverageBooks: store, catalogCoverageCatalog: cat, idents: idents}
 }
 
 // catalogCoverageDef is HEAD's definition. Its Run is the v2 shell.

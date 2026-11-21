@@ -39,7 +39,7 @@ func TestCutover_RunFamiliesImportedAndSourceEmptied(t *testing.T) {
 	id := runID(1)
 	done := epoch.Add(time.Hour)
 	spec := runSpec{
-		id: id, def: "dedup.book-scan", st: "succeeded", completed: tptr(done), started: tptr(epoch.Add(time.Minute)),
+		id: id, def: "dedup.book-scan", st: "succeeded", completed: new(done), started: new(epoch.Add(time.Minute)),
 		trigger: "scheduled", priority: 2, evts: 3, intents: 2, items: 2, logs: 4,
 		ckpt: true, ledger: true, snaps: 2, rows: 3, rowmarks: 2, marks: 2, derived: true,
 	}
@@ -113,9 +113,9 @@ func keysOf(m map[string]string) []string {
 // owns, does not decode is set aside whole, with a fixed reason class (never a
 // decoder's text, which quotes the value), beside runs that import.
 func TestCutover_UndecodableRowQuarantined(t *testing.T) {
-	good := runSpec{id: runID(1), def: "library.scan", st: "succeeded", completed: tptr(epoch.Add(time.Hour)), evts: 1}
-	badRun := runSpec{id: runID(2), def: "library.scan", st: "succeeded", completed: tptr(epoch.Add(time.Hour)), evts: 2, corruptRun: true}
-	badLog := runSpec{id: runID(3), def: "library.scan", st: "succeeded", completed: tptr(epoch.Add(time.Hour)), evts: 1, logs: 2, corruptLog: true}
+	good := runSpec{id: runID(1), def: "library.scan", st: "succeeded", completed: new(epoch.Add(time.Hour)), evts: 1}
+	badRun := runSpec{id: runID(2), def: "library.scan", st: "succeeded", completed: new(epoch.Add(time.Hour)), evts: 2, corruptRun: true}
+	badLog := runSpec{id: runID(3), def: "library.scan", st: "succeeded", completed: new(epoch.Add(time.Hour)), evts: 1, logs: 2, corruptLog: true}
 	noQueued := runSpec{id: runID(4), def: "library.scan", st: "queued", noQueued: true}
 	noFinish := runSpec{id: runID(5), def: "library.scan", st: "succeeded"} // terminal, HEAD kept no CompletedAt
 	badKind := runSpec{id: runID(6), def: "Not A Kind!", st: "queued"}
@@ -174,7 +174,7 @@ func TestCutover_UndecodableRowQuarantined(t *testing.T) {
 func TestCutover_ReconcileRunsOnceBeforeAnyRow(t *testing.T) {
 	var specs []runSpec
 	for i := 1; i <= 12; i++ {
-		specs = append(specs, runSpec{id: runID(i), def: "library.scan", st: "succeeded", completed: tptr(epoch.Add(time.Hour)), evts: 2})
+		specs = append(specs, runSpec{id: runID(i), def: "library.scan", st: "succeeded", completed: new(epoch.Add(time.Hour)), evts: 2})
 	}
 	r := newRig(t, withRuns(nil, specs...))
 	if _, err := r.run(t); err != nil {
@@ -207,7 +207,7 @@ func TestM4_VerifyFailsWhenARowIsLeft(t *testing.T) {
 // leaves it alone. It is not an orphan: the driver imported it.
 func TestCutover_RowOfACommittedRunIsNotAnOrphan(t *testing.T) {
 	id := runID(1)
-	r := newRig(t, withRuns(nil, runSpec{id: id, def: "library.scan", st: "succeeded", completed: tptr(epoch.Add(time.Hour)), evts: 2}), func(r *rig) {
+	r := newRig(t, withRuns(nil, runSpec{id: id, def: "library.scan", st: "succeeded", completed: new(epoch.Add(time.Hour)), evts: 2}), func(r *rig) {
 		r.parallelism = func(dm *datamigrate.DataMigration) { dm.Parallelism = fixedOne() }
 		// Every row of the run sorts before its driver row except the run's own
 		// logs-and-later families; the dependent path reads the run record and
@@ -277,7 +277,7 @@ func TestCutover_RunRecordFullyMapped(t *testing.T) {
 	done := epoch.Add(2 * time.Hour)
 	params := `{"fixer_id":"two-face-asins","plan_op_id":"` + plan + `","dry_run":true}`
 	r := newRig(t, withRuns(nil, runSpec{
-		id: id, def: "repairs.apply", st: "failed", completed: tptr(done), started: tptr(epoch.Add(time.Minute)),
+		id: id, def: "repairs.apply", st: "failed", completed: new(done), started: new(epoch.Add(time.Minute)),
 		mode: "preview", params: json.RawMessage(params), parent: parent, priority: 1, result: `{"merged":3}`, errText: "mislabeled",
 		system: true, evts: 2, intents: 1, logs: 3,
 	}))
@@ -287,12 +287,10 @@ func TestCutover_RunRecordFullyMapped(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := tasks.RunRecord{
-			RunView: tasks.RunView{
-				ID: tasks.RunID(id), Kind: "books.repairs.two-face-asins", Mode: tasks.ModeLive, State: tasks.StateFailed,
-				Actor: tasks.Actor{AuthMethod: "system", System: "books"}, Trigger: tasks.TriggerManual,
-				Parent: tasks.RunID(parent), PlanRef: tasks.RunID(plan),
-				Created: epoch, Started: epoch.Add(time.Minute), Finished: done, Done: 7, Total: 9, Current: "The Long Halloween",
-			},
+			ID: tasks.RunID(id), Kind: "books.repairs.two-face-asins", Mode: tasks.ModeLive, State: tasks.StateFailed,
+			Actor: tasks.Actor{AuthMethod: "system", System: "books"}, Trigger: tasks.TriggerManual,
+			Parent: tasks.RunID(parent), PlanRef: tasks.RunID(plan),
+			Created: epoch, Started: epoch.Add(time.Minute), Finished: done, Done: 7, Total: 9, Current: "The Long Halloween",
 			Priority: tasks.PriorityNormal, Params: json.RawMessage(params), Result: json.RawMessage(`{"merged":3}`), Error: "mislabeled",
 			Attempt: 1, FenceEpoch: 2, Seq: tasks.RunSeqs{Event: 2, Intent: 1, Log: 3},
 		}
@@ -309,7 +307,7 @@ func TestCutover_RunRecordFullyMapped(t *testing.T) {
 func TestCutover_RunModeFollowsTheRecord(t *testing.T) {
 	done := epoch.Add(time.Hour)
 	run := func(i int, def, mode string, params any) runSpec {
-		return runSpec{id: runID(i), def: def, st: "succeeded", completed: tptr(done), mode: mode, params: params}
+		return runSpec{id: runID(i), def: def, st: "succeeded", completed: new(done), mode: mode, params: params}
 	}
 	r := newRig(t, withRuns(nil,
 		run(1, "dedup.book-scan", "preview", map[string]any{}),

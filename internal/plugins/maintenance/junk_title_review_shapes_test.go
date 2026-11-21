@@ -714,10 +714,10 @@ func TestJunkTitleFixer_RecordedSeriesInTranscriptionIsNoConflict(t *testing.T) 
 	zed := l.author("Zed Writer")
 	ser, err := l.store.CreateSeries("Brackle Wars", nil)
 	require.NoError(t, err)
-	l.add(evBook{name: "series-prefixed", title: "05 - Gorselby Lamps", author: zed, series: &ser.ID, seq: intp(3),
+	l.add(evBook{name: "series-prefixed", title: "05 - Gorselby Lamps", author: zed, series: &ser.ID, seq: new(3),
 		path:  "/lib/Zed Writer/Gorselby Lamps/Gorselby Lamps.mp3",
 		files: []string{"/lib/Zed Writer/Gorselby Lamps/Gorselby Lamps.mp3"}, transcribed: "Brackle Wars, Book 3, Gorselby Lamps"})
-	l.add(evBook{name: "other-title", title: "06 - Salt Garden", author: zed, series: &ser.ID, seq: intp(4),
+	l.add(evBook{name: "other-title", title: "06 - Salt Garden", author: zed, series: &ser.ID, seq: new(4),
 		path:  "/lib/Zed Writer/Salt Garden/Salt Garden.mp3",
 		files: []string{"/lib/Zed Writer/Salt Garden/Salt Garden.mp3"}, transcribed: "Brackle Wars, Book 4, Salt Orchard"})
 	rows := l.rows(l.fixer())
@@ -800,17 +800,17 @@ func TestJunkTitleFixer_SeriesEndingTheTitleIsNotCutOff(t *testing.T) {
 	// The real title is "Second Quillmoor", the third book of the series
 	// "Quillmoor": the folder says it with no separator.
 	dir := "/lib/Zed Writer/Second Quillmoor Book 3"
-	l.add(evBook{name: "bare", title: "read by narrator", author: zed, series: &quill.ID, seq: intp(3),
+	l.add(evBook{name: "bare", title: "read by narrator", author: zed, series: &quill.ID, seq: new(3),
 		path: dir, files: two(dir)})
 	// The same, with a comma after the title's first word, so the strip is
 	// reached: the transcription spells the whole title, which keeps the
 	// series in it.
 	dir2 := "/lib/Zed Writer/Second, Quillmoor Book 4"
-	l.add(evBook{name: "separated-own-file", title: "read by narrator", author: zed, series: &quill.ID, seq: intp(4),
+	l.add(evBook{name: "separated-own-file", title: "read by narrator", author: zed, series: &quill.ID, seq: new(4),
 		path: dir2, files: two(dir2), transcribed: "Second Quillmoor"})
 	// A genuine "<title>, <series>, Book N": cut, as before.
 	dir3 := "/lib/Zed Writer/Tarn Hollow, Quillmoor, Book 5"
-	l.add(evBook{name: "genuine-tail", title: "read by narrator", author: zed, series: &quill.ID, seq: intp(5),
+	l.add(evBook{name: "genuine-tail", title: "read by narrator", author: zed, series: &quill.ID, seq: new(5),
 		path: dir3, files: two(dir3)})
 	rows := l.rows(l.fixer())
 

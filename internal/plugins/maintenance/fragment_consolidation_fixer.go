@@ -4163,7 +4163,7 @@ type fragGroupState struct {
 	// run's PlannedAt, so its own runs and the original's are one row's.
 	// Not fingerprinted; Replan carries the planned value forward. A row
 	// stored without it (or without Flags) is planned again.
-	PlannedAt time.Time `json:"planned_at,omitempty"`
+	PlannedAt time.Time `json:"planned_at"`
 	// Join is an existing-book row's target (fragGroupPlan.Join).
 	Join string `json:"join,omitempty"`
 	// CoOwners are the co-owners the row was planned to assemble beside
@@ -6352,10 +6352,10 @@ func (f *fragmentFixer) replanParent(ctx context.Context, store OpsStore, lib *f
 			return f.checkOwners(store, hist, planned, r)
 		}
 	}
-	if strings.HasPrefix(planned.RowID, fragClassHashCopy+":") {
+	if after, ok := strings.CutPrefix(planned.RowID, fragClassHashCopy+":"); ok {
 		// A hash-copy child the gate now holds comes back as its hold row:
 		// say why, rather than that it no longer matches.
-		_, child, _ := strings.Cut(strings.TrimPrefix(planned.RowID, fragClassHashCopy+":"), "/")
+		_, child, _ := strings.Cut(after, "/")
 		for _, r := range rows {
 			if r.Class == fragClassHashCopy && r.Skipped != "" && strings.HasSuffix(r.RowID, ":"+child) {
 				return changedRow(planned, fmt.Sprintf("the hash can no longer stand as proof (%s): %s", r.Skipped, r.SkipReason)), nil

@@ -327,12 +327,10 @@ func TestRootGuard_ConcurrentCallersShareOneCheck(t *testing.T) {
 	errs := make([]error, 8)
 	start := make(chan struct{})
 	for i := range errs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			errs[i] = g.ready()
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()

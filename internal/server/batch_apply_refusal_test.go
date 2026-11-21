@@ -330,7 +330,7 @@ func TestBatchApplyRefusal_NilLedgerRemembersNothing(t *testing.T) {
 
 func TestResetApplyRefusals(t *testing.T) {
 	kv := newMemKV()
-	for i := 0; i < 1203; i++ { // more than one scan page
+	for i := range 1203 { // more than one scan page
 		kv.m[applyRefusalKey(fmt.Sprintf("book%04d", i))] = []byte("{}")
 	}
 	kv.m["metadata_cache:keep"] = []byte("x")

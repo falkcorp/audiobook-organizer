@@ -427,8 +427,6 @@ func (l *evLib) authorWithBook(name string) *int {
 	return id
 }
 
-func intp(n int) *int { return &n }
-
 func (l *evLib) rows(f *junkTitleFixer) map[string]repairs.Row {
 	l.t.Helper()
 	series, err := l.store.GetAllSeries()
@@ -594,16 +592,16 @@ func TestJunkTitleFixer_SeriesAndNumber(t *testing.T) {
 		seq                 *int
 		wantTitle           string // "" = not proposed
 	}{
-		{"real series, own position", "03", "Brackle Wars", intp(3), "Brackle Wars, Book 3"},
-		{"number is not the position", "03", "Brackle Wars", intp(4), ""},
+		{"real series, own position", "03", "Brackle Wars", new(3), "Brackle Wars, Book 3"},
+		{"number is not the position", "03", "Brackle Wars", new(4), ""},
 		{"no recorded position", "03", "Brackle Wars", nil, ""},
-		{"disc title", "Disc 03", "Brackle Wars", intp(3), ""},
-		{"CD title", "CD5", "Brackle Wars", intp(5), ""},
-		{"track of a total", "02 of 14", "Brackle Wars", intp(1), ""},
-		{"part title", "Part 02", "Brackle Wars", intp(2), ""},
-		{"series is a disc", "04", "Disc 04", intp(4), ""},
-		{"series is a placeholder album", "02", "Unknown Album", intp(2), ""},
-		{"series is a junk title", "02", "read by narrator", intp(2), ""},
+		{"disc title", "Disc 03", "Brackle Wars", new(3), ""},
+		{"CD title", "CD5", "Brackle Wars", new(5), ""},
+		{"track of a total", "02 of 14", "Brackle Wars", new(1), ""},
+		{"part title", "Part 02", "Brackle Wars", new(2), ""},
+		{"series is a disc", "04", "Disc 04", new(4), ""},
+		{"series is a placeholder album", "02", "Unknown Album", new(2), ""},
+		{"series is a junk title", "02", "read by narrator", new(2), ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -639,21 +637,21 @@ func TestJunkTitleFixer_DurationAndSuspiciousGate(t *testing.T) {
 		want     string
 		skipWhy  string
 	}{
-		{"9 s intro fragment", "read by narrator", intp(9), "", nil, "", "runs 9 s"},
-		{"five minute track", "read by narrator", intp(300), "", nil, "", "under the 1800 s"},
-		{"just under", "read by narrator", intp(1799), "", nil, "", "runs 1799 s"},
-		{"exactly the minimum", "read by narrator", intp(1800), "", nil, "Lantern Keepers", ""},
-		{"a whole book", "read by narrator", intp(36000), "", nil, "Lantern Keepers", ""},
+		{"9 s intro fragment", "read by narrator", new(9), "", nil, "", "runs 9 s"},
+		{"five minute track", "read by narrator", new(300), "", nil, "", "under the 1800 s"},
+		{"just under", "read by narrator", new(1799), "", nil, "", "runs 1799 s"},
+		{"exactly the minimum", "read by narrator", new(1800), "", nil, "Lantern Keepers", ""},
+		{"a whole book", "read by narrator", new(36000), "", nil, "Lantern Keepers", ""},
 		{"unknown duration", "read by narrator", nil, "", nil, "", "runtime unknown"},
-		{"zero duration is unknown", "read by narrator", intp(0), "", nil, "", "runtime unknown"},
-		{"unknown duration, gate off", "read by narrator", nil, "", intp(0), "Lantern Keepers", ""},
+		{"zero duration is unknown", "read by narrator", new(0), "", nil, "", "runtime unknown"},
+		{"unknown duration, gate off", "read by narrator", nil, "", new(0), "Lantern Keepers", ""},
 		{"unknown duration, stripped prefix", "05 - Lantern Keepers", nil, "", nil, "Lantern Keepers", ""},
-		{"suspicious", "read by narrator", intp(36000), "suspicious", nil, "", "marked the book suspicious"},
+		{"suspicious", "read by narrator", new(36000), "suspicious", nil, "", "marked the book suspicious"},
 		{"suspicious, unknown duration", "read by narrator", nil, "Suspicious", nil, "", "marked the book suspicious"},
-		{"another library state", "read by narrator", intp(36000), "imported", nil, "Lantern Keepers", ""},
-		{"gate off", "read by narrator", intp(9), "", intp(0), "Lantern Keepers", ""},
-		{"stripped prefix is not gated", "05 - Lantern Keepers", intp(9), "", nil, "Lantern Keepers", ""},
-		{"stripped prefix, suspicious", "05 - Lantern Keepers", intp(9), "suspicious", nil, "Lantern Keepers", ""},
+		{"another library state", "read by narrator", new(36000), "imported", nil, "Lantern Keepers", ""},
+		{"gate off", "read by narrator", new(9), "", new(0), "Lantern Keepers", ""},
+		{"stripped prefix is not gated", "05 - Lantern Keepers", new(9), "", nil, "Lantern Keepers", ""},
+		{"stripped prefix, suspicious", "05 - Lantern Keepers", new(9), "suspicious", nil, "Lantern Keepers", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

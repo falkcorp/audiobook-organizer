@@ -79,7 +79,7 @@ func TestActivityKinds_NoKindIsADefID(t *testing.T) {
 		t.Fatal(err)
 	}
 	var ids []string
-	for _, l := range strings.Split(string(raw), "\n") {
+	for l := range strings.SplitSeq(string(raw), "\n") {
 		f := strings.Fields(l)
 		switch {
 		case strings.HasPrefix(l, "#") || len(f) < 2:

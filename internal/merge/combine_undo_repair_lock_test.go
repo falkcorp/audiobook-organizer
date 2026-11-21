@@ -103,7 +103,7 @@ func TestRestoreOverrideLocks_KeepsAStandingRepairLock(t *testing.T) {
 func TestRestoreOverrideLocks_StripeAgainstClaimRepairLocksLocked(t *testing.T) {
 	store := setupTestStore(t)
 	svc := NewService(store)
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		book := fmt.Sprintf("book-robin-%d", i)
 		op := fmt.Sprintf("op-z%d", i)
 		o := repairLockUndoFixture(t, store, book, op)

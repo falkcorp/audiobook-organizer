@@ -451,9 +451,7 @@ func TestUnderProtectedPath_ConcurrentCallsAgree(t *testing.T) {
 	// instead of blocking the senders.
 	errs := make(chan string, workers*calls)
 	for w := range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for i := range calls {
 				switch (w + i) % 4 {
 				case 0:
@@ -479,7 +477,7 @@ func TestUnderProtectedPath_ConcurrentCallsAgree(t *testing.T) {
 					time.Sleep(2 * time.Millisecond) // let entries expire mid-run
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)
@@ -697,9 +695,7 @@ func TestProtectedHooks_AreReadUnderTheirLock(t *testing.T) {
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
 	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for {
 				select {
 				case <-stop:
@@ -710,7 +706,7 @@ func TestProtectedHooks_AreReadUnderTheirLock(t *testing.T) {
 				_, err := UnderProtectedPathUncached(f.unrelated, []string{loopA})
 				ShouldLogProtectedPathError(err)
 			}
-		}()
+		})
 	}
 	for range 200 {
 		restoreAbs := setAbsPath(filepath.Abs)

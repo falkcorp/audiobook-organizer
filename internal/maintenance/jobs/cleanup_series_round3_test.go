@@ -22,11 +22,11 @@ import (
 func TestCleanupSeriesRun_Phase1RowLocalDeleteErrorIsCountedAndTheRunGoesOn(t *testing.T) {
 	store := newCsCondStore(
 		[]database.Series{{ID: 7, Name: "Year One"}, {ID: 8, Name: "year one"}, {ID: 9, Name: "Zero Year"}},
-		database.Book{ID: "year-one-1", SeriesID: intp(7)},
-		database.Book{ID: "year-one-2", SeriesID: intp(8)},
-		database.Book{ID: "year-one-3", SeriesID: intp(8)},
-		database.Book{ID: "year-one-4", SeriesID: intp(8)},
-		database.Book{ID: "zero-year-1", SeriesID: intp(9)},
+		database.Book{ID: "year-one-1", SeriesID: new(7)},
+		database.Book{ID: "year-one-2", SeriesID: new(8)},
+		database.Book{ID: "year-one-3", SeriesID: new(8)},
+		database.Book{ID: "year-one-4", SeriesID: new(8)},
+		database.Book{ID: "zero-year-1", SeriesID: new(9)},
 	)
 	cause := errors.New("decode series 7: invalid character 'x' looking for beginning of value")
 	store.deleteErrFor = map[int]error{7: cause}
@@ -128,17 +128,17 @@ func TestCleanupSeriesRun_Phase2DoesNotRefuseASeriesPhase1PartlyUnlinked(t *test
 		[]database.Series{{ID: 7, Name: "Year One"}, {ID: 8, Name: "year one"}},
 		// Series 7: one primary book and two non-primary versions, so the display
 		// count says one book and the write set holds three.
-		database.Book{ID: "year-one-1", SeriesID: intp(7)},
-		database.Book{ID: "year-one-2", SeriesID: intp(7)},
-		database.Book{ID: "year-one-3", SeriesID: intp(7)},
-		database.Book{ID: "year-one-4", SeriesID: intp(8)},
-		database.Book{ID: "year-one-5", SeriesID: intp(8)},
+		database.Book{ID: "year-one-1", SeriesID: new(7)},
+		database.Book{ID: "year-one-2", SeriesID: new(7)},
+		database.Book{ID: "year-one-3", SeriesID: new(7)},
+		database.Book{ID: "year-one-4", SeriesID: new(8)},
+		database.Book{ID: "year-one-5", SeriesID: new(8)},
 	)
 	store.hidden = map[string]bool{"year-one-2": true, "year-one-3": true}
 	// A concurrent writer files year-one-2 in series 8 after the membership read:
 	// phase 1's compare-and-set skips it (Skipped), year-one-1 is unlinked
 	// (Unlinked), and year-one-3 fails once.
-	store.afterMembership = func(s *csCondStore) { s.books["year-one-2"].SeriesID = intp(8) }
+	store.afterMembership = func(s *csCondStore) { s.books["year-one-2"].SeriesID = new(8) }
 	store.modifyFailOnce = map[string]error{"year-one-3": errors.New("simulated transient write failure")}
 	rep := &csPhase1Reporter{}
 	done := csCaptureDone(t)
@@ -178,15 +178,15 @@ func TestCleanupSeriesRun_AStopCountsTheCandidatesAndGroupsItNeverReached(t *tes
 			{ID: 10, Name: "Court of Owls"}, {ID: 11, Name: "court of owls"},
 			{ID: 12, Name: "Night of Owls"}, {ID: 13, Name: "night of owls"},
 		},
-		database.Book{ID: "year-one-1", SeriesID: intp(7)},
-		database.Book{ID: "zero-year-1", SeriesID: intp(8)},
-		database.Book{ID: "endgame-1", SeriesID: intp(9)},
-		database.Book{ID: "court-of-owls-1", SeriesID: intp(10), SeriesSequence: intp(2)},
-		database.Book{ID: "court-of-owls-2", SeriesID: intp(11)},
-		database.Book{ID: "court-of-owls-3", SeriesID: intp(11)},
-		database.Book{ID: "night-of-owls-1", SeriesID: intp(12), SeriesSequence: intp(2)},
-		database.Book{ID: "night-of-owls-2", SeriesID: intp(13)},
-		database.Book{ID: "night-of-owls-3", SeriesID: intp(13)},
+		database.Book{ID: "year-one-1", SeriesID: new(7)},
+		database.Book{ID: "zero-year-1", SeriesID: new(8)},
+		database.Book{ID: "endgame-1", SeriesID: new(9)},
+		database.Book{ID: "court-of-owls-1", SeriesID: new(10), SeriesSequence: new(2)},
+		database.Book{ID: "court-of-owls-2", SeriesID: new(11)},
+		database.Book{ID: "court-of-owls-3", SeriesID: new(11)},
+		database.Book{ID: "night-of-owls-1", SeriesID: new(12), SeriesSequence: new(2)},
+		database.Book{ID: "night-of-owls-2", SeriesID: new(13)},
+		database.Book{ID: "night-of-owls-3", SeriesID: new(13)},
 	)
 	cause := csStoreWideErr(database.ErrSeriesDeleteMemdbNotServing)
 	store.deleteIfErr = cause

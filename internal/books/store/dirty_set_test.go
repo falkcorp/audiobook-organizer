@@ -145,13 +145,11 @@ func TestDirtySet_ConcurrentMarksAndDeletesKeepReMarked(t *testing.T) {
 	// outcome is deterministic while the calls still overlap in time.
 	wg.Wait()
 	for id, e := range snapshot {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if _, err := s.CompareAndDeleteRaw(testDirtyPrefix+id, epochBytes(e)); err != nil {
 				t.Error(err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	kvs, _, err := s.ScanPrefixPage(testDirtyPrefix, "", n+1)

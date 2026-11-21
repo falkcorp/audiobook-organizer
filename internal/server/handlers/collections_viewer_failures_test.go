@@ -179,7 +179,7 @@ func TestUnparseablePerViewerQueryNeverServesItsStoredList(t *testing.T) {
 		return &colFakeStore{cols: []database.Collection{perViewerRow("c1", broken, "b1", "b2")}}
 	}
 	t.Run("get", func(t *testing.T) {
-		rig := newFailureRig(t, newStore(), &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}}, true)
+		rig := newFailureRig(t, newStore(), &countingEval{states: viewerStates()}, true)
 		got := decodeViewerResponse(t, rig.do(t, http.MethodGet, "/api/v1/collections/c1", "alice", nil))
 		assert.Empty(t, got.Members, "the stored list is never served")
 		assert.True(t, got.MembersUnavailable)
@@ -188,7 +188,7 @@ func TestUnparseablePerViewerQueryNeverServesItsStoredList(t *testing.T) {
 		assert.Contains(t, rig.warns()[0], "query-invalid", "a different kind from an unavailable index, so its own log line")
 	})
 	t.Run("list", func(t *testing.T) {
-		rig := newFailureRig(t, newStore(), &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}}, true)
+		rig := newFailureRig(t, newStore(), &countingEval{states: viewerStates()}, true)
 		got := decodeViewerList(t, rig.do(t, http.MethodGet, "/api/v1/collections", "alice", nil))["c1"]
 		assert.Empty(t, got.Members)
 		assert.True(t, got.MembersUnavailable)
@@ -196,7 +196,7 @@ func TestUnparseablePerViewerQueryNeverServesItsStoredList(t *testing.T) {
 	})
 	t.Run("view helper used by the ABS surface", func(t *testing.T) {
 		store := newStore()
-		rig := newFailureRig(t, store, &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}}, true)
+		rig := newFailureRig(t, store, &countingEval{states: viewerStates()}, true)
 		res, err := rig.h.ViewerMembers(context.Background(), store.cols, "alice")
 		require.NoError(t, err)
 		assert.Equal(t, []string{}, res.Sets["c1"])
@@ -209,7 +209,7 @@ func TestUnparseablePerViewerQueryNeverServesItsStoredList(t *testing.T) {
 // no members showed an empty collection until a reload.
 func TestRenameOnlyPutOfAPerViewerCollectionAnswersTheCallersMembers(t *testing.T) {
 	store := &colFakeStore{cols: []database.Collection{perViewerRow("c1", "read_status:finished", "b9")}}
-	rig := newFailureRig(t, store, &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}}, true)
+	rig := newFailureRig(t, store, &countingEval{states: viewerStates()}, true)
 
 	got := decodeViewerResponse(t, rig.do(t, http.MethodPut, "/api/v1/collections/c1", "alice",
 		map[string]any{"name": "Renamed Knightfall"}))
@@ -232,7 +232,7 @@ func TestUnavailableMembersAreFlaggedAndLoggedOncePerKind(t *testing.T) {
 		{ID: "plain", Name: "Year One", Type: database.CollectionTypeDynamic, Query: "title:Alpha",
 			MaterializedBookIDs: []string{"b1"}},
 	}}
-	rig := newFailureRig(t, store, &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}}, false)
+	rig := newFailureRig(t, store, &countingEval{states: viewerStates()}, false)
 
 	got := decodeViewerResponse(t, rig.do(t, http.MethodGet, "/api/v1/collections/c1", "alice", nil))
 	assert.True(t, got.MembersUnavailable, "a closed index is flagged, not shown as no matches")
@@ -262,7 +262,7 @@ func TestUnreadableViewerStateIsUnavailableNotEveryBook(t *testing.T) {
 		perViewerRow("c1", "-read_status:finished"),
 		perViewerRow("c2", "read_status:unstarted"),
 	}}
-	ev := &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}, listErr: errors.New("disk read failed at /lib/Gotham")}
+	ev := &countingEval{states: viewerStates(), listErr: errors.New("disk read failed at /lib/Gotham")}
 	rig := newFailureRig(t, store, ev, true)
 
 	get := rig.do(t, http.MethodGet, "/api/v1/collections/c1", "alice", nil)
@@ -288,7 +288,7 @@ func TestListReadsTheViewersStateOncePerRequest(t *testing.T) {
 		perViewerRow("c2", "-read_status:finished"),
 		perViewerRow("c3", "read_status:unstarted"),
 	}}
-	ev := &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}}
+	ev := &countingEval{states: viewerStates()}
 	rig := newFailureRig(t, store, ev, true)
 
 	list := decodeViewerList(t, rig.do(t, http.MethodGet, "/api/v1/collections", "alice", nil))
@@ -308,7 +308,7 @@ func TestConcurrentEvaluationsAreBoundedAcrossRequests(t *testing.T) {
 	var inflight, peak atomic.Int64
 	gate := make(chan struct{})
 	var once sync.Once
-	ev := &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}}
+	ev := &countingEval{states: viewerStates()}
 	ev.onList = func() {
 		n := inflight.Add(1)
 		for {
@@ -333,13 +333,11 @@ func TestConcurrentEvaluationsAreBoundedAcrossRequests(t *testing.T) {
 	rig := newFailureRig(t, store, ev, true)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 12; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 12 {
+		wg.Go(func() {
 			w := rig.do(t, http.MethodGet, "/api/v1/collections/c1", "alice", nil)
 			assert.Equal(t, http.StatusOK, w.Code)
-		}()
+		})
 	}
 	wg.Wait()
 	assert.EqualValues(t, limit, peak.Load(), "twelve requests, at most %d evaluations at a time (and %d did run together)", limit, limit)

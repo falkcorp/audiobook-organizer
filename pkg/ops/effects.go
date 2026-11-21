@@ -158,7 +158,7 @@ func Writes(ws ...Resource) Effects {
 	e := Effects{declared: true}
 	for _, w := range ws {
 		if del, ok := strings.CutPrefix(string(w), deletePrefix); ok {
-			for _, d := range strings.Split(del, ",") {
+			for d := range strings.SplitSeq(del, ",") {
 				e.deletes = appendUnique(e.deletes, Resource(d))
 				e.writes = appendUnique(e.writes, Resource(d))
 			}

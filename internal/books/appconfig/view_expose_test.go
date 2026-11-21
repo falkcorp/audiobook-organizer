@@ -95,8 +95,7 @@ func TestView_NeverShowsAJSONDashField(t *testing.T) {
 	hidden := map[string]bool{}
 	var walk func(rt reflect.Type, path []string)
 	walk = func(rt reflect.Type, path []string) {
-		for i := range rt.NumField() {
-			f := rt.Field(i)
+		for f := range rt.Fields() {
 			name := fieldName(f)
 			if name == "" {
 				continue

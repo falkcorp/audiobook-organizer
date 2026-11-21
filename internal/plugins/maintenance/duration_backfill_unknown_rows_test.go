@@ -337,7 +337,7 @@ func TestUnknownRows_ProbePassRunsConcurrently(t *testing.T) {
 	dir := t.TempDir()
 	book := urBook(t, s, "Batman: Hush", dir)
 	const rows = 12
-	for i := 0; i < rows; i++ {
+	for i := range rows {
 		urFile(t, s, book.ID, filepath.Join(dir, fmt.Sprintf("%02d.mp3", i)), func(f *database.BookFile) { f.TrackNumber = i + 1 })
 	}
 
@@ -379,7 +379,7 @@ func TestUnknownRows_WorkersParamSizesThePool(t *testing.T) {
 			s := newRepairPebble(t)
 			dir := t.TempDir()
 			book := urBook(t, s, "Batman: Hush", dir)
-			for i := 0; i < 14; i++ {
+			for i := range 14 {
 				urFile(t, s, book.ID, filepath.Join(dir, fmt.Sprintf("%02d.mp3", i)), func(f *database.BookFile) { f.TrackNumber = i + 1 })
 			}
 			var inFlight, peak atomic.Int64
@@ -421,7 +421,7 @@ echo 30.0`)
 	urFile(t, s, mixed.ID, shared, nil)
 	urFile(t, s, mixed.ID, filepath.Join(dir, "h-02.mp3"), func(f *database.BookFile) { f.TrackNumber = 2 })
 	urFile(t, s, mixed.ID, filepath.Join(dir, "h-03.mp3"), func(f *database.BookFile) { f.TrackNumber = 3 })
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		urFile(t, s, failing.ID, filepath.Join(dir, fmt.Sprintf("bad_%d.mp3", i)), func(f *database.BookFile) { f.TrackNumber = i + 1 })
 	}
 
@@ -633,7 +633,7 @@ func TestUnknownRows_NarrowingByFileAndBookIDs(t *testing.T) {
 	a := urBook(t, s, "Batman: Hush", dir)
 	b := urBook(t, s, "Batman: Year One", dir)
 	var af, bf []database.BookFile
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		af = append(af, urFile(t, s, a.ID, filepath.Join(dir, fmt.Sprintf("a%d.mp3", i)), func(f *database.BookFile) { f.TrackNumber = i + 1 }))
 		bf = append(bf, urFile(t, s, b.ID, filepath.Join(dir, fmt.Sprintf("b%d.mp3", i)), func(f *database.BookFile) { f.TrackNumber = i + 1 }))
 	}
@@ -696,7 +696,7 @@ func TestUnknownRows_LimitCapsTheRowsExamined(t *testing.T) {
 	s := newRepairPebble(t)
 	dir := t.TempDir()
 	book := urBook(t, s, "Batman: Hush", dir)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		urFile(t, s, book.ID, filepath.Join(dir, fmt.Sprintf("%02d.mp3", i)), func(f *database.BookFile) { f.TrackNumber = i + 1 })
 	}
 	res := urApply(t, s, map[string]any{"limit": 2})
@@ -740,7 +740,7 @@ func TestUnknownRows_CancelledRunStillRecomputesWrittenBooks(t *testing.T) {
 	s := newRepairPebble(t)
 	dir := t.TempDir()
 	book := urBook(t, s, "Batman: Hush", dir)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		urFile(t, s, book.ID, filepath.Join(dir, fmt.Sprintf("%02d.mp3", i)), func(f *database.BookFile) { f.TrackNumber = i + 1 })
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1059,7 +1059,7 @@ func TestUnknownRows_TheClosersRecomputeWaitsForASiblingWriteStillInFlight(t *te
 	const bookID = "b1"
 	w := &heldWriter{hold: "f0", inWrite: make(chan struct{}), release: make(chan struct{})}
 	var group []unknownRowWork
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		id := fmt.Sprintf("f%d", i)
 		group = append(group, unknownRowWork{
 			row: database.BookFileCore{ID: id, BookID: bookID, FilePath: "/lib/" + id + ".mp3", FileSize: urSize},
@@ -1073,11 +1073,9 @@ func TestUnknownRows_TheClosersRecomputeWaitsForASiblingWriteStillInFlight(t *te
 	var counter atomic.Int64
 	var wg sync.WaitGroup
 	write := func(row unknownRowWork) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			run.writeRow(row, &counter, true, func(cur *database.BookFile) error { return cur.SetMeasuredDuration(row.sec) })
-		}()
+		})
 	}
 
 	write(group[0])
@@ -1085,11 +1083,9 @@ func TestUnknownRows_TheClosersRecomputeWaitsForASiblingWriteStillInFlight(t *te
 
 	var siblings sync.WaitGroup
 	for _, row := range group[1:3] {
-		siblings.Add(1)
-		go func() {
-			defer siblings.Done()
+		siblings.Go(func() {
 			run.writeRow(row, &counter, true, func(cur *database.BookFile) error { return cur.SetMeasuredDuration(row.sec) })
-		}()
+		})
 	}
 	siblings.Wait() // rows 1 and 2 have written and ended
 
@@ -1203,7 +1199,7 @@ func TestUnknownRows_AbsentFileIsNotProbed(t *testing.T) {
 	book := urBook(t, s, "Batman: Hush", dir)
 	shared := filepath.Join(dir, "01.mp3")
 	var ids []string
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		f := urFile(t, s, book.ID, shared, func(f *database.BookFile) { f.TrackNumber = i + 1 })
 		ids = append(ids, f.ID)
 	}
@@ -1223,7 +1219,7 @@ func TestUnknownRows_AbsentFileIsNotProbed(t *testing.T) {
 	}
 	// N6: absent files are Debug; they would drown the log as warnings.
 	var absentLines int
-	for _, line := range strings.Split(logs(), "\n") {
+	for line := range strings.SplitSeq(logs(), "\n") {
 		if strings.Contains(line, "file is absent") {
 			absentLines++
 			require.Contains(t, line, "level=DEBUG", "an absent file is not a warning")
@@ -1243,7 +1239,7 @@ func TestUnknownRows_MissingBinaryStaysAWarning(t *testing.T) {
 	res := urApply(t, s, map[string]any{})
 	require.Equal(t, 1, res.EnvironmentSkipped)
 	var warned bool
-	for _, line := range strings.Split(logs(), "\n") {
+	for line := range strings.SplitSeq(logs(), "\n") {
 		if strings.Contains(line, "probe could not run") {
 			warned = true
 			require.Contains(t, line, "level=WARN")
@@ -1296,13 +1292,13 @@ func TestUnknownRows_LimitIsNotSpentOnUnreadableRows(t *testing.T) {
 	dir := t.TempDir()
 	book := urBook(t, s, "Batman: Hush", dir)
 	const unreadable, probable, limit = 3, 5, 3
-	for i := 0; i < unreadable; i++ { // 00-... sorts first within the book
+	for i := range unreadable { // 00-... sorts first within the book
 		urFile(t, s, book.ID, filepath.Join(dir, fmt.Sprintf("00-bad-%d.mp3", i)), func(f *database.BookFile) {
 			f.TrackNumber = i + 1
 			f.Scan.DurationOK = database.StageStatus{Attempts: database.DeepScanMaxAttempts, LastError: "exit status 1"}
 		})
 	}
-	for i := 0; i < probable; i++ {
+	for i := range probable {
 		urFile(t, s, book.ID, filepath.Join(dir, fmt.Sprintf("10-ok-%d.mp3", i)), func(f *database.BookFile) { f.TrackNumber = 10 + i })
 	}
 
@@ -1423,7 +1419,7 @@ func TestUnknownRows_CancelStopsAGroupBetweenRows(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var group []unknownRowWork
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		group = append(group, unknownRowWork{row: database.BookFileCore{
 			ID: fmt.Sprintf("f%d", i), BookID: "b1", FilePath: path, FileSize: urSize}, src: srcProbe})
 	}

@@ -284,7 +284,7 @@ func TestCleanupSeriesRun_Phase1KeepsASeriesABookWasLinkedIntoAfterTheMembership
 	// delete must then find the new one and refuse.
 	store := newCsCondStore(
 		[]database.Series{{ID: 7, Name: "The Long Halloween"}},
-		database.Book{ID: "long-halloween-1", SeriesID: intp(7)},
+		database.Book{ID: "long-halloween-1", SeriesID: new(7)},
 	)
 	store.afterMembership = func(s *csCondStore) { s.linkBook("dark-victory-1", 7) }
 	rep := &csPhase1Reporter{}
@@ -313,7 +313,7 @@ func TestCleanupSeriesRun_Phase1DeletesAnUnchangedOneBookSeriesThroughTheConditi
 	// that refuses everything passes the test above.
 	store := newCsCondStore(
 		[]database.Series{{ID: 7, Name: "The Long Halloween"}},
-		database.Book{ID: "long-halloween-1", SeriesID: intp(7)},
+		database.Book{ID: "long-halloween-1", SeriesID: new(7)},
 	)
 	rep := &csPhase1Reporter{}
 
@@ -335,7 +335,7 @@ func TestCleanupSeriesRun_Phase1DeletesAnUnchangedOneBookSeriesThroughTheConditi
 func TestCleanupSeriesRun_Phase1FailsClosedWhenTheConditionalDeleteErrors(t *testing.T) {
 	store := newCsCondStore(
 		[]database.Series{{ID: 7, Name: "The Long Halloween"}},
-		database.Book{ID: "long-halloween-1", SeriesID: intp(7)},
+		database.Book{ID: "long-halloween-1", SeriesID: new(7)},
 	)
 	cause := csStoreWideErr(database.ErrMemdbIncomplete)
 	store.deleteIfErr = cause
@@ -363,9 +363,9 @@ func TestCleanupSeriesRun_Phase1FailsClosedWhenTheConditionalDeleteErrors(t *tes
 func dupSeriesStore() *csCondStore {
 	return newCsCondStore(
 		[]database.Series{{ID: 7, Name: "Court of Owls"}, {ID: 8, Name: "court of owls"}},
-		database.Book{ID: "court-of-owls-1", SeriesID: intp(7), SeriesSequence: intp(2)},
-		database.Book{ID: "night-of-owls-1", SeriesID: intp(8)},
-		database.Book{ID: "night-of-owls-2", SeriesID: intp(8)},
+		database.Book{ID: "court-of-owls-1", SeriesID: new(7), SeriesSequence: new(2)},
+		database.Book{ID: "night-of-owls-1", SeriesID: new(8)},
+		database.Book{ID: "night-of-owls-2", SeriesID: new(8)},
 	)
 }
 
@@ -441,7 +441,7 @@ func TestCleanupSeriesRun_Phase1AnUnlinkFailureIsNotCountedAsAFailedDelete(t *te
 	// design, and the warn line must not claim the store could not verify it.
 	store := newCsCondStore(
 		[]database.Series{{ID: 7, Name: "The Long Halloween"}},
-		database.Book{ID: "long-halloween-1", SeriesID: intp(7)},
+		database.Book{ID: "long-halloween-1", SeriesID: new(7)},
 	)
 	store.modifyErr = errors.New("simulated write failure")
 	rep := &csPhase1Reporter{}
@@ -463,7 +463,7 @@ func TestCleanupSeriesRun_Phase1KeepsASeriesRenamedAfterTheMembershipRead(t *tes
 	// renamed since is somebody's edit: kept, counted, not an error.
 	store := newCsCondStore(
 		[]database.Series{{ID: 7, Name: "The Long Halloween"}},
-		database.Book{ID: "long-halloween-1", SeriesID: intp(7)},
+		database.Book{ID: "long-halloween-1", SeriesID: new(7)},
 	)
 	store.afterMembership = func(s *csCondStore) { s.series[7] = database.Series{ID: 7, Name: "Dark Victory"} }
 	rep := &csPhase1Reporter{}
@@ -483,7 +483,7 @@ func TestCleanupSeriesRun_Phase1KeepsASeriesRenamedAfterTheMembershipRead(t *tes
 func TestCleanupSeriesRun_Phase1KeepsAHeldSeries(t *testing.T) {
 	store := newCsCondStore(
 		[]database.Series{{ID: 7, Name: "The Long Halloween"}},
-		database.Book{ID: "long-halloween-1", SeriesID: intp(7)},
+		database.Book{ID: "long-halloween-1", SeriesID: new(7)},
 	)
 	store.afterMembership = func(s *csCondStore) {
 		s.series[7] = database.Series{ID: 7, Name: "The Long Halloween", HeldBy: "repair"}
@@ -505,7 +505,7 @@ func TestCleanupSeriesRun_Phase1KeepsAHeldSeries(t *testing.T) {
 func TestCleanupSeriesRun_Phase1SkipsASeriesHeldAtTheRead(t *testing.T) {
 	store := newCsCondStore(
 		[]database.Series{{ID: 7, Name: "The Long Halloween", HeldBy: "repair"}},
-		database.Book{ID: "long-halloween-1", SeriesID: intp(7)},
+		database.Book{ID: "long-halloween-1", SeriesID: new(7)},
 	)
 	rep := &csPhase1Reporter{}
 
@@ -530,7 +530,7 @@ func TestCleanupSeriesRun_Phase1SkipsASeriesHeldAtTheRead(t *testing.T) {
 func TestCleanupSeriesRun_DryRunDoesNotReportAHeldSeriesAsACandidate(t *testing.T) {
 	store := newCsCondStore(
 		[]database.Series{{ID: 7, Name: "The Long Halloween", HeldBy: "repair"}},
-		database.Book{ID: "long-halloween-1", SeriesID: intp(7)},
+		database.Book{ID: "long-halloween-1", SeriesID: new(7)},
 	)
 	rep := &csPhase1Reporter{}
 
@@ -552,9 +552,9 @@ func TestCleanupSeriesRun_AHeldSeriesWithANameTwinIsNotMergedAway(t *testing.T) 
 	// onto 8 before the conditional delete refuses the row.
 	store := newCsCondStore(
 		[]database.Series{{ID: 7, Name: "Court of Owls", HeldBy: "repair"}, {ID: 8, Name: "court of owls"}},
-		database.Book{ID: "court-of-owls-1", SeriesID: intp(7)},
-		database.Book{ID: "night-of-owls-1", SeriesID: intp(8), SeriesSequence: intp(2)},
-		database.Book{ID: "night-of-owls-2", SeriesID: intp(8), SeriesSequence: intp(3)},
+		database.Book{ID: "court-of-owls-1", SeriesID: new(7)},
+		database.Book{ID: "night-of-owls-1", SeriesID: new(8), SeriesSequence: new(2)},
+		database.Book{ID: "night-of-owls-2", SeriesID: new(8), SeriesSequence: new(3)},
 	)
 	rep := &csPhase1Reporter{}
 
@@ -573,9 +573,9 @@ func TestCleanupSeriesRun_AHeldSeriesWithANameTwinIsNotMergedAway(t *testing.T) 
 func TestCleanupSeriesRun_Phase1CountsASeriesAlreadyDeletedBySomeoneElse(t *testing.T) {
 	store := newCsCondStore(
 		[]database.Series{{ID: 7, Name: "The Long Halloween"}, {ID: 8, Name: "Haunted Knight"}},
-		database.Book{ID: "long-halloween-1", SeriesID: intp(7)},
-		database.Book{ID: "haunted-knight-1", SeriesID: intp(8), SeriesSequence: intp(2)},
-		database.Book{ID: "haunted-knight-2", SeriesID: intp(8), SeriesSequence: intp(3)},
+		database.Book{ID: "long-halloween-1", SeriesID: new(7)},
+		database.Book{ID: "haunted-knight-1", SeriesID: new(8), SeriesSequence: new(2)},
+		database.Book{ID: "haunted-knight-2", SeriesID: new(8), SeriesSequence: new(3)},
 	)
 	store.afterMembership = func(s *csCondStore) { delete(s.series, 7) }
 	rep := &csPhase1Reporter{}
@@ -600,9 +600,9 @@ func TestCleanupSeriesRun_APhase1SeriesDeletedBySomeoneElseIsNotMergedInPhase2(t
 	// counted by the start-of-run counts) and report a refusal that never was one.
 	store := newCsCondStore(
 		[]database.Series{{ID: 7, Name: "Court of Owls"}, {ID: 8, Name: "court of owls"}},
-		database.Book{ID: "court-of-owls-1", SeriesID: intp(7)},
-		database.Book{ID: "night-of-owls-1", SeriesID: intp(8), SeriesSequence: intp(2)},
-		database.Book{ID: "night-of-owls-2", SeriesID: intp(8), SeriesSequence: intp(3)},
+		database.Book{ID: "court-of-owls-1", SeriesID: new(7)},
+		database.Book{ID: "night-of-owls-1", SeriesID: new(8), SeriesSequence: new(2)},
+		database.Book{ID: "night-of-owls-2", SeriesID: new(8), SeriesSequence: new(3)},
 	)
 	store.afterMembership = func(s *csCondStore) { delete(s.series, 7) }
 	rep := &csPhase1Reporter{}
@@ -626,10 +626,10 @@ func TestCleanupSeriesRun_Phase2KeepsOneMergedFromSeriesAndStillDeletesTheNext(t
 	// the group.
 	store := newCsCondStore(
 		[]database.Series{{ID: 7, Name: "Court of Owls"}, {ID: 8, Name: "court of owls"}, {ID: 9, Name: "The Court of Owls"}},
-		database.Book{ID: "court-of-owls-1", SeriesID: intp(7), SeriesSequence: intp(2)},
-		database.Book{ID: "court-of-owls-3", SeriesID: intp(9), SeriesSequence: intp(2)},
-		database.Book{ID: "night-of-owls-1", SeriesID: intp(8)},
-		database.Book{ID: "night-of-owls-2", SeriesID: intp(8)},
+		database.Book{ID: "court-of-owls-1", SeriesID: new(7), SeriesSequence: new(2)},
+		database.Book{ID: "court-of-owls-3", SeriesID: new(9), SeriesSequence: new(2)},
+		database.Book{ID: "night-of-owls-1", SeriesID: new(8)},
+		database.Book{ID: "night-of-owls-2", SeriesID: new(8)},
 	)
 	store.afterMembership = func(s *csCondStore) { s.linkBook("court-of-owls-2", 7) }
 	rep := &csPhase1Reporter{}
@@ -655,8 +655,8 @@ func TestCleanupSeriesRun_Phase2KeepsOneMergedFromSeriesAndStillDeletesTheNext(t
 func TestCsMergeSeriesGroup_AStoreErrorStopsTheGroupAndKeepsTheSeries(t *testing.T) {
 	store := newCsCondStore(
 		[]database.Series{{ID: 7, Name: "Court of Owls"}, {ID: 9, Name: "The Court of Owls"}},
-		database.Book{ID: "court-of-owls-1", SeriesID: intp(7)},
-		database.Book{ID: "court-of-owls-3", SeriesID: intp(9)},
+		database.Book{ID: "court-of-owls-1", SeriesID: new(7)},
+		database.Book{ID: "court-of-owls-3", SeriesID: new(9)},
 	)
 	store.deleteIfErr = csStoreWideErr(database.ErrMemdbIncomplete)
 	members := database.SeriesBooksMap{7: {{ID: "court-of-owls-1"}}, 9: {{ID: "court-of-owls-3"}}}
@@ -685,8 +685,8 @@ func TestCsMergeSeriesGroup_AStoreErrorStopsTheGroupAndKeepsTheSeries(t *testing
 func TestCsMergeSeriesGroup_ARowLocalDeleteErrorKeepsTheSeriesAndGoesOn(t *testing.T) {
 	store := newCsCondStore(
 		[]database.Series{{ID: 7, Name: "Court of Owls"}, {ID: 9, Name: "The Court of Owls"}},
-		database.Book{ID: "court-of-owls-1", SeriesID: intp(7)},
-		database.Book{ID: "court-of-owls-3", SeriesID: intp(9)},
+		database.Book{ID: "court-of-owls-1", SeriesID: new(7)},
+		database.Book{ID: "court-of-owls-3", SeriesID: new(9)},
 	)
 	store.deleteErrFor = map[int]error{7: errors.New("decode series 7: invalid character")}
 	members := database.SeriesBooksMap{7: {{ID: "court-of-owls-1"}}, 9: {{ID: "court-of-owls-3"}}}

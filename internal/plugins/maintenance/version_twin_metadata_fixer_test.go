@@ -507,7 +507,7 @@ func TestVersionTwinFixer_PrimaryRetiredBeforeWriteIsChangedSincePlan(t *testing
 			require.True(t, fresh.Applicable(), fresh.SkipReason)
 
 			// The apply retires the primary the moment it is asked to write it.
-			l.p.deps = retiringTwinDeps{fakeDeps: fakeDeps{store: l.st}, retire: func(id string) {
+			l.p.deps = retiringTwinDeps{store: l.st, retire: func(id string) {
 				_, merr := l.st.ModifyBook(id, mutate)
 				require.NoError(t, merr)
 			}}

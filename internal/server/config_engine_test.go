@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"iter"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -62,9 +63,7 @@ func (s *engineStore) OnCommit(fn func(uint64)) {
 func (s *engineStore) PassthroughValues() iter.Seq2[coreconfig.Path, coreconfig.OperatorValue] {
 	s.mu.Lock()
 	cp := make(map[coreconfig.Path]coreconfig.OperatorValue, len(s.pass))
-	for k, v := range s.pass {
-		cp[k] = v
-	}
+	maps.Copy(cp, s.pass)
 	s.mu.Unlock()
 	return func(yield func(coreconfig.Path, coreconfig.OperatorValue) bool) {
 		for k, v := range cp {

@@ -50,8 +50,6 @@ func setBasicGateEnv(t *testing.T, v *string) {
 	}
 }
 
-func strPtr(s string) *string { return &s }
-
 // TestBasicGatePassword_Precedence is HEAD's precedence (the removed gin
 // middleware's basicGatePassword): a saved password wins, blanks included and
 // compared as saved; an empty saved one falls back to BASIC_AUTH_PASSWORD,
@@ -65,12 +63,12 @@ func TestBasicGatePassword_Precedence(t *testing.T) {
 		wantEnv  bool
 		wantNone bool
 	}{
-		{name: "saved wins over env", stored: "Wayne-Manor", env: strPtr("Arkham"), want: "Wayne-Manor"},
-		{name: "saved blanks compared as saved", stored: "  ", env: strPtr("Arkham"), want: "  "},
-		{name: "empty saved, env recovers", stored: "", env: strPtr("Arkham"), want: "Arkham", wantEnv: true},
-		{name: "empty saved, env trimmed", stored: "", env: strPtr("  Arkham \n"), want: "Arkham", wantEnv: true},
-		{name: "empty saved, env blanks only", stored: "", env: strPtr(" \t"), wantNone: true},
-		{name: "empty saved, env empty", stored: "", env: strPtr(""), wantNone: true},
+		{name: "saved wins over env", stored: "Wayne-Manor", env: new("Arkham"), want: "Wayne-Manor"},
+		{name: "saved blanks compared as saved", stored: "  ", env: new("Arkham"), want: "  "},
+		{name: "empty saved, env recovers", stored: "", env: new("Arkham"), want: "Arkham", wantEnv: true},
+		{name: "empty saved, env trimmed", stored: "", env: new("  Arkham \n"), want: "Arkham", wantEnv: true},
+		{name: "empty saved, env blanks only", stored: "", env: new(" \t"), wantNone: true},
+		{name: "empty saved, env empty", stored: "", env: new(""), wantNone: true},
 		{name: "empty saved, env unset", stored: "", env: nil, wantNone: true},
 	}
 	for _, c := range cases {
@@ -126,7 +124,7 @@ func TestBasicGateEnvRecovery_WarnsOnceWithoutValue(t *testing.T) {
 	config.Mutate(func(c *config.Config) {
 		c.BasicAuthEnabled, c.BasicAuthUsername, c.BasicAuthPassword = true, "bwayne", ""
 	})
-	setBasicGateEnv(t, strPtr(recovery))
+	setBasicGateEnv(t, new(recovery))
 
 	var mu sync.Mutex
 	var buf bytes.Buffer
@@ -185,13 +183,11 @@ func TestBasicGate_NoRaceWithConfigMutate(t *testing.T) {
 	config.Mutate(func(c *config.Config) {
 		c.BasicAuthEnabled, c.BasicAuthUsername, c.BasicAuthPassword = true, "bwayne", "Wayne-Manor"
 	})
-	setBasicGateEnv(t, strPtr("recover"))
+	setBasicGateEnv(t, new("recover"))
 	o := LegacyBasicGate()
 	done := make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for i := 0; ; i++ {
 			select {
 			case <-done:
@@ -207,7 +203,7 @@ func TestBasicGate_NoRaceWithConfigMutate(t *testing.T) {
 				}
 			})
 		}
-	}()
+	})
 	for range 200 {
 		_ = o.Settings()
 		_, _ = o.Password.BasicGatePassword(context.Background())
@@ -230,7 +226,7 @@ func TestBasicGateHealthToken(t *testing.T) {
 	if !basicGateNoPassword() || basicGateUsesEnvPassword() {
 		t.Fatal("enabled, nothing saved, no env: want no password")
 	}
-	setBasicGateEnv(t, strPtr("recover"))
+	setBasicGateEnv(t, new("recover"))
 	if basicGateNoPassword() || !basicGateUsesEnvPassword() {
 		t.Fatal("env recovery: want a password, from the env")
 	}

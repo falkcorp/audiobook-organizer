@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/falkcorp/mediacore/audit"
@@ -274,12 +275,7 @@ func roleList(ids []string, outcomes map[string]roleVerdict, seeds map[string]Se
 }
 
 func containsRole(rs []rbac.RoleName, r rbac.RoleName) bool {
-	for _, x := range rs {
-		if x == r {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(rs, r)
 }
 
 // ---- users ----

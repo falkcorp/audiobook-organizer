@@ -57,7 +57,7 @@ func TestCatalogLinkedIntoBinary(t *testing.T) {
 		t.Fatalf("go list -deps %s: %v", modulePath, err)
 	}
 	linked := map[string]bool{}
-	for _, line := range strings.Fields(string(out)) {
+	for line := range strings.FieldsSeq(string(out)) {
 		linked[line] = true
 	}
 	inAll := catalogEntries(t, "catalog.go")

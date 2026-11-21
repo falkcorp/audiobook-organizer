@@ -134,8 +134,7 @@ func buildLinkIndex(store any, ownBookID string) (linkIndex, error) {
 
 	g, ctx := errgroup.WithContext(context.Background())
 	g.SetLimit(runtime.NumCPU())
-	for c := 0; c < chunks; c++ {
-		c := c
+	for c := range chunks {
 		g.Go(func() error {
 			lo, hi := c*linkChunk, min((c+1)*linkChunk, len(cands))
 			var out []hit
