@@ -7,9 +7,14 @@ package server
 
 import (
 	"errors"
+	"net/http"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	authpw "github.com/falkcorp/mediacore/auth/password"
+	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // The boot count is the rows the login verifier compares with bcrypt: the
@@ -60,4 +65,33 @@ func TestLogLegacyBcryptPasswordCount_ReadsOnceAndNeverFails(t *testing.T) {
 	}
 	var none database.Store
 	logLegacyBcryptPasswordCount(none)
+}
+
+// The wiring, end to end: on the real server and store, a web sign-in with a
+// legacy bcrypt password re-stores the row as argon2id (the capability
+// resolves through the store's decorators; were it nil the rehash would be a
+// silent no-op), the new hash still signs the user in, and the boot count
+// drops by one.
+func TestWebLogin_RehashesALegacyBcryptRowThroughTheRealStore(t *testing.T) {
+	fx := budgetFixture(t)
+	legacy, err := bcrypt.GenerateFromPassword([]byte("utility-belt-9"), bcrypt.MinCost)
+	require.NoError(t, err)
+	_, err = fx.store.CreateUser("oracle", "oracle@example.test", authpw.AlgoBcrypt, string(legacy), []string{auth.SeedRoleAdmin}, "active")
+	require.NoError(t, err)
+	users, err := fx.store.ListUsers()
+	require.NoError(t, err)
+	before := countLegacyBcryptPasswords(users)
+	require.Positive(t, before)
+
+	require.Equal(t, http.StatusOK, budgetLogin(fx, "/api/v1/auth/login", "192.0.2.93:4000", "oracle", "utility-belt-9"))
+	u, err := fx.store.GetUserByUsername("oracle")
+	require.NoError(t, err)
+	require.Equal(t, authpw.AlgoArgon2id, u.PasswordHashAlgo, "the verified bcrypt password is re-stored as argon2id")
+	require.NotEqual(t, string(legacy), u.PasswordHash)
+
+	users, err = fx.store.ListUsers()
+	require.NoError(t, err)
+	require.Equal(t, before-1, countLegacyBcryptPasswords(users))
+	require.Equal(t, http.StatusOK, budgetLogin(fx, "/api/v1/auth/login", "192.0.2.94:4000", "oracle", "utility-belt-9"),
+		"the argon2id row signs the same password in")
 }
