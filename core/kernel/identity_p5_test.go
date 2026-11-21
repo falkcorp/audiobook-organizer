@@ -24,16 +24,17 @@ import (
 
 // Batman names only: the Batcave's modules, roles and sessions.
 
-// depsHost is identityHost with a module that keeps the Deps it was handed and
-// subscribes to both identity topics, so a boot shows what P6 gave a module and
-// what reaches the bus.
+// depsProbe is what the probe module kept of its boot: the Deps it was handed
+// and the identity events it saw.
 type depsProbe struct {
 	deps    module.Deps
 	rbacEv  chan rbacChangedPayload
 	invalEv chan principalInvalidatedPayload
-	compat  auth.Compat // r.Deps().AuthCompat after AuthMethod
 }
 
+// probeHost is identityHost with a module that keeps the Deps it was handed and
+// subscribes to both identity topics, so a boot shows what P6 gave a module and
+// what reaches the bus.
 func probeHost(t *testing.T, switchOn bool) (*swapHost, Config, *depsProbe) {
 	t.Helper()
 	h := newSwapHost(t)
