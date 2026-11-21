@@ -616,8 +616,12 @@ func (e *Engine) validateCandidate(before config.Config, u config.Update, aiOut 
 			continue
 		}
 		if f, has := fieldAt(cand, p.segs); has && f.CanSet() {
-			// A value that does not fit was refused above; this decode cannot differ.
-			_ = json.Unmarshal(raw, f.Addr().Interface())
+			// A value that does not fit was refused above, so this decode
+			// cannot fail; if it did, judging a candidate without the value
+			// would pass a write nothing validated.
+			if err := json.Unmarshal(raw, f.Addr().Interface()); err != nil {
+				return &coreconfig.FieldError{Path: coreconfig.Path(head), Err: err}
+			}
 		}
 	}
 	// An unset returns the key to the value no row gives it, which is the base.
@@ -631,13 +635,15 @@ func (e *Engine) validateCandidate(before config.Config, u config.Update, aiOut 
 			dst, hasDst := fieldAt(cand, p.segs)
 			src, hasSrc := fieldAt(&def, p.segs)
 			if hasDst && hasSrc && dst.CanSet() {
-				_ = json.Unmarshal(mustMarshal(src.Interface()), dst.Addr().Interface())
+				dst.Set(src) // the same field of the same type; def is this call's own copy
 			}
 		}
 	}
 	if aiOut != nil {
 		if f, has := fieldAt(cand, []string{"ai_endpoints"}); has {
-			_ = json.Unmarshal(aiOut, f.Addr().Interface())
+			if err := json.Unmarshal(aiOut, f.Addr().Interface()); err != nil {
+				return &coreconfig.FieldError{Path: "ai_endpoints", Err: err}
+			}
 		}
 	}
 	found := cand.Problems()

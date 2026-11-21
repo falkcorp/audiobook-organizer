@@ -177,7 +177,12 @@ func egressViolations(before config.Config, u config.Update) []error {
 		}
 		var next string
 		if touched {
-			_ = json.Unmarshal(raw, &next) // a value that is not a string is refused by the field check
+			if err := json.Unmarshal(raw, &next); err != nil {
+				// Not a string: Update's own conversion of this field
+				// already refuses the write with a FieldError naming it,
+				// so there is no origin to compare.
+				continue
+			}
 		}
 		nextOrigin := originOf(next)
 		if r.emptyIsDefault && !r.openAIFallback {
@@ -186,7 +191,9 @@ func egressViolations(before config.Config, u config.Update) []error {
 		if r.openAIFallback {
 			base := before.OpenAIBaseURL
 			if raw, ok := u.Set["openai_base_url"]; ok {
-				_ = json.Unmarshal(raw, &base)
+				if err := json.Unmarshal(raw, &base); err != nil {
+					continue // refused by openai_base_url's own conversion, as above
+				}
 			} else if slices.Contains(u.Unset, "openai_base_url") {
 				base = ""
 			}
@@ -219,13 +226,17 @@ func delugeRPCViolation(before config.Config, u config.Update, supplied func(str
 	d := before.DownloadClient.Torrent.Deluge
 	next, touched := d, ""
 	if raw, ok := u.Set[host]; ok {
-		_ = json.Unmarshal(raw, &next.Host)
+		if err := json.Unmarshal(raw, &next.Host); err != nil {
+			return nil // refused by the host field's own conversion
+		}
 		touched = host
 	} else if slices.Contains(u.Unset, host) {
 		next.Host, touched = "", host
 	}
 	if raw, ok := u.Set[port]; ok {
-		_ = json.Unmarshal(raw, &next.Port)
+		if err := json.Unmarshal(raw, &next.Port); err != nil {
+			return nil // refused by the port field's own conversion
+		}
 		if touched == "" {
 			touched = port
 		}

@@ -35,7 +35,7 @@ import (
 // them. A retired name
 // that would refuse the boot refuses here, naming it, and so do the HEAD-era
 // settings files ResolveBootPaths refuses.
-func OperatorAppConfig(ctx context.Context, mod module.Module, boot BootInputs) (config.Config, error) {
+func OperatorAppConfig(ctx context.Context, mod module.Module, boot BootInputs) (_ config.Config, err error) {
 	if err := refuseHEADHomeFile(boot.ConfigFile); err != nil {
 		return config.Config{}, err
 	}
@@ -48,7 +48,14 @@ func OperatorAppConfig(ctx context.Context, mod module.Module, boot BootInputs) 
 	if err != nil {
 		return config.Config{}, err
 	}
-	defer func() { _ = acc.Close(context.WithoutCancel(ctx)) }()
+	defer func() {
+		// The projection is returned only if the accessor also closes: a
+		// failed close is reported, not dropped (it never hides an earlier
+		// error).
+		if cerr := acc.Close(context.WithoutCancel(ctx)); cerr != nil && err == nil {
+			err = fmt.Errorf("books: closing the operator settings: %w", cerr)
+		}
+	}()
 	var dbPath string
 	if ks, ok := acc.Lookup(storagePathKey); ok && len(ks.Effective) > 0 {
 		if err := json.Unmarshal(ks.Effective, &dbPath); err != nil {
