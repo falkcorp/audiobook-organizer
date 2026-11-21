@@ -92,11 +92,13 @@ var layerOf = map[string]int{
 	"internal/audioext":              0, // table: leaf
 	"internal/audioutil":             0, // computed: imports no module package
 	"internal/authorname":            0, // table: leaf
+	"internal/books/aicaps":         0, // computed: imports no module package (core only; its tests import internal/aidispatch, checked below)
 	"internal/books/cutover":         0, // override: imports only core and its own leaf m3 (its tests import internal/books/store)
 	"internal/books/cutover/m3":      0, // computed: imports no module package (core only; a leaf under cutover that names no books package)
 	"internal/books/cutover/m5":      0, // computed: imports no module package (core only; a leaf under cutover that names no books package)
 	"internal/books/cutover/m4":      0, // override: imports the layer-0 leaves kindrename and operations/state (see layerOverride)
 	"internal/books/cutover/m6":      0, // computed: imports no module package (core only; a leaf under cutover that names no books package)
+	"internal/books/topics":          0, // computed: imports no module package (core only)
 	"internal/cache":                 0, // table: leaf
 	"internal/cfaccesspolicy":        0, // computed: imports no module package
 	"internal/cfservicetoken":        0, // computed: imports no module package
