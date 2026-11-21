@@ -31,6 +31,7 @@ vi.mock('../../services/api', async () => ({
   validateOpenAIKey: vi.fn(),
   validateITunesLibrary: vi.fn(),
   importITunesLibrary: vi.fn(),
+  installTool: vi.fn(),
 }));
 
 const next = () => screen.getByRole('button', { name: /^next$/i });
@@ -43,6 +44,8 @@ beforeEach(() => {
   vi.mocked(api.getHomeDirectory).mockResolvedValue('/home/tester');
   vi.mocked(api.updateConfig).mockResolvedValue({} as never);
   vi.mocked(api.addImportPath).mockResolvedValue({} as never);
+  // Complete Setup installs the recommended tools in the background (the Tools step's default).
+  vi.mocked(api.installTool).mockResolvedValue({ path: '/tools/x', version: '1' });
 });
 
 afterEach(() => {
