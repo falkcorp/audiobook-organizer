@@ -79,27 +79,26 @@ func TestCheckpointRestoreAcrossFilesystems(t *testing.T) {
 // store. One restore stages on both sides, each file on its own target's
 // filesystem, and both come back.
 func TestArchiveRestoreAcrossFilesystems(t *testing.T) {
-	h, _ := newCrossDeviceHost(t)
-	h.close(h.mustBoot(h.config(nil)))
-	saved := filepath.Join(t.TempDir(), "archived.pebble")
-	copyTree(t, h.db, saved)
-	h.close(h.mustBoot(h.config(nil, caveStep(2, "bane"))))
-	c := h.config(nil)
-	c.ArchiveExtract = func(_ context.Context, _, dir string) (string, error) {
-		copyTree(t, saved, dir)
-		return "legacy-joker_20261112", nil
-	}
-	keyring := write(t, filepath.Join(h.state, "secrets.keyring"), "live-keyring", 0o600)
-	gap := write(t, filepath.Join(filepath.Dir(h.db), "config.yaml"), "live: gap\n", 0o600)
-	exported := write(t, filepath.Join(t.TempDir(), "gotham.keyring"), "exported-keyring", 0o600)
+	// Every boot creates the state directory's keyring and every boot after
+	// the restore decodes it, so the export is the booted keyring itself,
+	// re-indented to tell the two apart (newArchiveHostOn).
+	cx, _ := newCrossDeviceHost(t)
+	a := newArchiveHostOn(t, cx, "legacy-joker_20261112")
+	h, c := a.swapHost, a.cfg
+	gap := write(t, a.gap(), "live: gap\n", 0o600)
+	exported := write(t, filepath.Join(t.TempDir(), "gotham.keyring"), a.exportedKeyring, 0o600)
 	gapFill := write(t, filepath.Join(t.TempDir(), "config.yaml"), "root_dir: /batcave\n", 0o600)
-	res, err := RestoreOffline(h.ctx, c, RestoreOfflineRequest{Archive: filepath.Join(t.TempDir(), "joker.tar.gz"),
+	res, err := RestoreOffline(h.ctx, c, RestoreOfflineRequest{Archive: a.archive(),
 		Keyring: exported, GapFill: gapFill, AcceptLoss: true})
 	if err != nil {
 		t.Fatalf("archive restore across filesystems = %v, want it to restore", err)
 	}
-	if got := read(t, keyring); got != "exported-keyring" {
+	if got := read(t, a.keyring()); got != a.exportedKeyring {
 		t.Errorf("keyring = %q, want the export's", got)
+	}
+	// The replaced live keyring is set aside on the state directory's side.
+	if got := filesHolding(t, h.state, a.liveKeyring); len(got) != 1 {
+		t.Errorf("the replaced keyring is kept %d times under the state directory (%v), want once", len(got), got)
 	}
 	if got := read(t, gap); got != "root_dir: /batcave\n" {
 		t.Errorf("gap-fill file = %q, want the operator's", got)
