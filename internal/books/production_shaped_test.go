@@ -197,6 +197,11 @@ func bootShapedStore(t *testing.T, work string, key []byte, wait time.Duration) 
 	// The corpus' stored path settings name the directories its builder ran
 	// in (a scratch checkout of stage 1): point each at the copy's real
 	// location, so the boot never touches, or depends on, the builder's.
+	// The flip is always declared, so the first boot imports the stored
+	// settings into core config, whose environment layer is the one that
+	// outranks them: playlist_dir goes through it, as the cutover suite's
+	// boot does (cutoverBootConfig). The store itself is not edited.
+	t.Setenv("ABO_BOOKS_PLAYLIST_DIR", filepath.Join(work, "playlists"))
 	edit := func(c *config.Config) {
 		pointConfigAtStore(c, work)
 		shapedBootEnv(c)
