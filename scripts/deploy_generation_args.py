@@ -134,13 +134,15 @@ def measure_enforced(list_path: Path) -> str:
     return "-"
 
 
-def words(args: argparse.Namespace) -> list[str]:
-    sha = sha256_of(Path(args.file))
+def assemble(host: str, stage: str, sha: str, enforced: str, timeout: float) -> list[str]:
+    """The four words for the binary staged at `stage` on host, whose sha256
+    the caller already has (a local upload hashes its file; a release fetched
+    on the host hashes it there) and whose `enforced` fact the caller knows."""
     out = [
         sha,
-        measure_version(args.host, args.stage, args.timeout),
-        measure_levels(args.host, args.stage, args.timeout),
-        measure_enforced(Path(args.list)),
+        measure_version(host, stage, timeout),
+        measure_levels(host, stage, timeout),
+        enforced,
     ]
     # The helper's parser is the grammar. A word it would refuse (a version
     # tag with a character it does not allow) is replaced by unknown rather
@@ -155,6 +157,16 @@ def words(args: argparse.Namespace) -> list[str]:
             out[i] = "-"
     helper._parse_meta(out)  # raises on a shape bug here; never ship a bad line
     return out
+
+
+def words(args: argparse.Namespace) -> list[str]:
+    return assemble(
+        args.host,
+        args.stage,
+        sha256_of(Path(args.file)),
+        measure_enforced(Path(args.list)),
+        args.timeout,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

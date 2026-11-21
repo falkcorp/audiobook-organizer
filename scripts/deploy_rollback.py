@@ -12,6 +12,7 @@ rollback-restore`, 09 §9.2.1 "Rollback", 09 §9.2.2.
 Usage (the Makefile passes every value):
     deploy_rollback.py rollback --guard G --host H --bin B --db D --url U --unit N --timeout S
     deploy_rollback.py restore  --guard G --host H --bin B --db D --url U --unit N --timeout S [--archive NAME] [--release TAG]
+    deploy_rollback.py deploy   --guard G --host H --bin B --db D --url U --unit N --timeout S --release TAG
 
 The decisions are scripts/storage_format_guard.py's, loaded from --guard so
 the recipe tests can run a mutated copy; every remote command is in its
@@ -66,6 +67,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import os
 import re
 import sys
@@ -73,6 +75,7 @@ from pathlib import Path
 from types import ModuleType
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import deploy_generation_args  # noqa: E402
 import deploy_wait_ready  # noqa: E402
 
 # How long `updater fetch-release` may run on the host before the recipe gives
@@ -411,12 +414,14 @@ class Run:
             return {}
         return {k: int(v) for k, _, v in (part.partition("=") for part in text.split(","))}
 
-    def match_unit_type(self) -> int:
+    def match_unit_type(self, subject: str = "") -> int:
+        """subject: what the type is matched to, "" for .prev (the fetched
+        file of a deploy-release is not .prev yet)."""
         caps = self.get("prev_caps")
         notify = caps.rc == 0 and "sd_notify" in self.g.clean(caps.stdout).split()
         kind = "notify" if notify else "simple"
         self.say(
-            f"→ Matching the service type to {self.o.bin}.prev ("
+            f"→ Matching the service type to {subject or self.o.bin + '.prev'} ("
             + (
                 "it reports sd_notify: Type=notify"
                 if notify
@@ -648,6 +653,120 @@ def restore(run: Run) -> int:
     return 0
 
 
+def installed_version(run: Run, key: str) -> tuple[str | None, str]:
+    """(version, why not) from `<binary> --version-json` on the host."""
+    r = run.g.run_remote(run.o.host, run.cmd(key), timeout=60)
+    if r.rc != 0:
+        return None, run.g._cause(r)
+    try:
+        doc = json.loads(run.g.clean(r.stdout))
+    except ValueError:
+        return None, "its answer is not JSON"
+    v = doc.get("version") if isinstance(doc, dict) else None
+    if not isinstance(v, str) or not v:
+        return None, "its answer has no version"
+    return v, ""
+
+
+def same_version(got: str, tag: str) -> bool:
+    """A tag and a reported version are the same release with or without the
+    leading v (as `make deploy`'s own check reads them)."""
+    return got.removeprefix("v") == tag.removeprefix("v")
+
+
+def deploy(run: Run) -> int:
+    o = run.o
+    run.say(f"→ Deploying release {o.release} to {o.bin} on {o.host} (no local build)...")
+    if run.preflight():
+        return 1
+    probe = run.g.check_inflight(o, run.get)
+    if probe:
+        return run.refuse(*probe)
+    refusal = run.fetch_release(None)
+    if refusal:
+        return run.refuse(*refusal)
+    got, why = installed_version(run, "stage_version")
+    if got is None:
+        return run.refuse(
+            f"REFUSING: cannot read the version of the file fetched to {o.stage_bin} ({why}), so it cannot be "
+            f"told from another release. It is deleted; nothing was changed."
+        )
+    if not same_version(got, o.release):
+        return run.refuse(
+            f"REFUSING: RELEASE={o.release} fetched a binary that reports version {got}. It is deleted; "
+            "nothing was changed."
+        )
+    sha = run.g.clean(run.get("stage_sha256").stdout).strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", sha):
+        return run.refuse(
+            f"REFUSING: cannot hash the file fetched to {o.stage_bin}. It is deleted; nothing was changed."
+        )
+    words = deploy_generation_args.assemble(o.host, o.stage_bin, sha, "-", 30.0)
+    run.say(f"→ Fetched {o.release}: sha256 {sha[:12]}..., version {got}.")
+    unit = run.act("install_unit")
+    if unit.rc != 0:
+        return run.refuse(
+            f"ERROR: installing the unit from the helper bundle failed ({run.g._cause(unit)}). The binary "
+            f"was not replaced and {o.unit} was not restarted. The fetched file is deleted."
+        )
+    if run.match_unit_type(f"the fetched {o.release}"):
+        return 1
+    previous, err = run.invocation()
+    if previous is None:
+        return run.refuse(
+            f"REFUSING: cannot read {o.unit}'s InvocationID ({err}), which the wait needs to tell the "
+            f"restarted process from the old one. The binary was not replaced; the unit and its type now "
+            f"match {o.release}.",
+            *run.start_current_lines(),
+        )
+    install = run.g.run_remote(
+        o.host, run.cmd("install_binary") + " " + " ".join(words), timeout=120
+    )
+    if install.rc != 0:
+        return run.refuse(
+            f"ERROR: installing {o.release} as {o.bin} failed ({run.g._cause(install)}). {o.unit} was not "
+            f"restarted and still runs what it ran; the unit and its type now match {o.release}, so match "
+            f"them back before the next restart: bash scripts/deploy-match-unit-type.sh {o.host} {o.bin}"
+        )
+    run.discard_fetched()
+    restart = run.act("restart")
+    if restart.rc != 0:
+        if restart.sudo_refused:
+            return run.refuse(
+                f"ERROR: {o.bin} is now release {o.release} (the replaced binary is {o.bin}.prev), but "
+                f"{o.unit} was not restarted: sudo refused `{run.cmd('restart')}` ({run.g._cause(restart)}). "
+                "The OLD process is still the one serving.",
+                f"Restart it by hand: {run.ssh_line('restart')} (and add its sudoers line, {run.g.DOCS}).",
+            )
+        run.say(
+            f"   systemctl restart reported a failure ({run.g._cause(restart)}); the wait reads the unit and "
+            "names the cause."
+        )
+    run.say(
+        f"→ Restarted on {o.release}; waiting for /health to report ready ({run.a.timeout:g}s after the "
+        "unit leaves activating)..."
+    )
+    rc = run.wait(previous)
+    if rc != 0:
+        run.refuse(
+            f"ERROR: {o.release} is installed ({o.bin}.prev is the binary it replaced), but the server did "
+            "not report ready (the reason is above). `make rollback` goes back to .prev with its unit and "
+            "local.conf unless the store was already migrated (it then names make rollback-restore)."
+        )
+        return rc
+    now, why = installed_version(run, "bin_version")
+    if now is None or not same_version(now, o.release):
+        return run.refuse(
+            f"ERROR: {o.unit} is ready, but {o.bin} reports "
+            f"{'no version (' + why + ')' if now is None else 'version ' + now}, not {o.release}."
+        )
+    run.say(
+        f"✅ Deployed {o.release} to {o.bin} on {o.host} and restarted. The replaced binary is "
+        f"{o.bin}.prev: `make rollback` puts it back with its unit and local.conf."
+    )
+    return 0
+
+
 def check(run: Run) -> int:
     """`make rollback-check`: read-only. What environment generations the host
     keeps (one per binary, by sha256, with the version and store levels the
@@ -676,7 +795,7 @@ def check(run: Run) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="mode", required=True)
-    for mode in ("rollback", "restore"):
+    for mode in ("rollback", "restore", "deploy"):
         p = sub.add_parser(mode)
         p.add_argument("--guard", required=True)
         p.add_argument("--host", required=True)
@@ -687,7 +806,8 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--timeout", type=float, default=300.0)
         if mode == "restore":
             p.add_argument("--archive", default="")
-            p.add_argument("--release", default="")
+        if mode in ("restore", "deploy"):
+            p.add_argument("--release", default="", required=mode == "deploy")
         p.add_argument(
             "--env",
             default="",
@@ -705,7 +825,12 @@ def main(argv: list[str] | None = None) -> int:
     for k in ("host", "bin", "db", "unit", "url"):
         setattr(a, k, getattr(a, k).strip())
     if a.mode == "restore":
-        a.archive, a.release = a.archive.strip(), a.release.strip()
+        a.archive = a.archive.strip()
+    if a.mode in ("restore", "deploy"):
+        a.release = a.release.strip()
+    if a.mode == "deploy" and not a.release:
+        print("deploy_rollback: deploy needs RELEASE=<tag>", file=sys.stderr)
+        return 2
     a.env = a.env.strip()
     if a.env == "snapshot":
         print(
@@ -728,7 +853,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if a.mode == "check":
         return check(run)
-    return rollback(run) if a.mode == "rollback" else restore(run)
+    return {"rollback": rollback, "restore": restore, "deploy": deploy}[a.mode](run)
 
 
 if __name__ == "__main__":

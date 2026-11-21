@@ -1111,6 +1111,32 @@ rollback-restore:
 	  --url="$(DEPLOY_URL)" --unit="$(DEPLOY_UNIT)" --timeout="$(DEPLOY_READY_TIMEOUT)" \
 	  --archive="$(ROLLBACK_ARCHIVE)" --release="$(RELEASE)" --env="$(ROLLBACK_ENV)"
 
+## deploy-release: Deploy a TAGGED release (RELEASE=<tag>, e.g. an R2 release candidate) fetched on the host, with no local build (requires DEPLOY_HOST, DEPLOY_BIN, DEPLOY_DB, RELEASE; DEPLOY_URL defaults from API_URL or DEPLOY_HOST)
+#
+# scripts/deploy_rollback.py deploy runs it (R2-01t; the steps are in its
+# docstring). The CURRENT binary's `updater fetch-release` downloads the tag to
+# the helpers' stage_bin as the deploy user; the file's own --version-json must
+# name the tag; then the root-owned helpers install the unit and the binary
+# exactly as `make deploy` does, the replaced binary becoming <bin>.prev with the
+# unit and local.conf it ran under, so `make rollback` puts them back together.
+# The sha256 handed to install-staged is measured on the host, never taken from
+# a local file. deploy/local.conf is not uploaded and deploy-env-check is not run:
+# the host's local.conf stays as it is (change it with `make deploy`'s own step).
+# Set DEPLOY_READY_TIMEOUT to the measured first-boot time for a release that
+# migrates the store (the wait refuses ready until the unit has a new
+# InvocationID, and passes exit 78, the binary refusing the store, through).
+.PHONY: deploy-release
+deploy-release:
+	@[ -n "$(RELEASE)" ] || (echo "ERROR: RELEASE is not set. Pass the release tag: make deploy-release RELEASE=<tag>"; exit 1)
+	@[ -n "$(DEPLOY_HOST)" ] || (echo "ERROR: DEPLOY_HOST is not set. Add it to Makefile.local or export it."; exit 1)
+	@[ -n "$(DEPLOY_BIN)" ] || (echo "ERROR: DEPLOY_BIN is not set. Add it to Makefile.local or export it."; exit 1)
+	@[ -n "$(DEPLOY_DB)" ] || (echo "ERROR: DEPLOY_DB is not set. Set it to the main Pebble store path on DEPLOY_HOST (the --db / DATABASE_PATH value) in Makefile.local or export it."; exit 1)
+	@[ -n "$(DEPLOY_URL)" ] || (echo "ERROR: DEPLOY_URL is empty. Set DEPLOY_URL (or API_URL, or DEPLOY_HOST) in Makefile.local or export it."; exit 1)
+	@python3 scripts/deploy_rollback.py deploy \
+	  --guard="$(ROLLBACK_GUARD)" --host="$(DEPLOY_HOST)" --bin="$(DEPLOY_BIN)" --db="$(DEPLOY_DB)" \
+	  --url="$(DEPLOY_URL)" --unit="$(DEPLOY_UNIT)" --timeout="$(DEPLOY_READY_TIMEOUT)" \
+	  --release="$(RELEASE)"
+
 ## rollback-check: List the environment generations the deploy host keeps for rollback, and which one .prev matches (read-only; requires DEPLOY_HOST, DEPLOY_BIN, DEPLOY_DB)
 #
 # Runs `install-staged rollback list` over ssh: sha256, the version and store
