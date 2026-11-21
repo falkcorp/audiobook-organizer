@@ -1,8 +1,8 @@
-// file: internal/models/audiobook_test.go
+// file: internal/itunes/audiobook_test.go
 // version: 1.1.1
 // guid: e5f6a7b8-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 
-package models
+package itunes
 
 import (
 	"encoding/json"
@@ -15,7 +15,7 @@ func TestAuthorStruct(t *testing.T) {
 	// Arrange
 	author := Author{
 		ID:   1,
-		Name: "J.R.R. Tolkien",
+		Name: "Bruce Wayne",
 	}
 
 	// Act & Assert
@@ -23,8 +23,8 @@ func TestAuthorStruct(t *testing.T) {
 		t.Errorf("Expected ID to be 1, got %d", author.ID)
 	}
 
-	if author.Name != "J.R.R. Tolkien" {
-		t.Errorf("Expected Name to be 'J.R.R. Tolkien', got '%s'", author.Name)
+	if author.Name != "Bruce Wayne" {
+		t.Errorf("Expected Name to be 'Bruce Wayne', got '%s'", author.Name)
 	}
 }
 
@@ -64,7 +64,7 @@ func TestSeriesStruct(t *testing.T) {
 	authorID := 1
 	series := Series{
 		ID:       1,
-		Name:     "The Lord of the Rings",
+		Name:     "Batman Year One",
 		AuthorID: &authorID,
 	}
 
@@ -73,8 +73,8 @@ func TestSeriesStruct(t *testing.T) {
 		t.Errorf("Expected ID to be 1, got %d", series.ID)
 	}
 
-	if series.Name != "The Lord of the Rings" {
-		t.Errorf("Expected Name to be 'The Lord of the Rings', got '%s'", series.Name)
+	if series.Name != "Batman Year One" {
+		t.Errorf("Expected Name to be 'Batman Year One', got '%s'", series.Name)
 	}
 
 	if series.AuthorID == nil || *series.AuthorID != authorID {
@@ -226,236 +226,14 @@ func TestAudiobookVersionManagement(t *testing.T) {
 }
 
 // TestAudiobookListRequest tests the request struct
-func TestAudiobookListRequest(t *testing.T) {
-	// Arrange
-	req := AudiobookListRequest{
-		Page:    1,
-		Limit:   50,
-		Search:  "tolkien",
-		Author:  "J.R.R. Tolkien",
-		SortBy:  "title",
-		SortDir: "asc",
-	}
-
-	// Act & Assert
-	if req.Page != 1 {
-		t.Errorf("Expected Page to be 1, got %d", req.Page)
-	}
-
-	if req.Limit != 50 {
-		t.Errorf("Expected Limit to be 50, got %d", req.Limit)
-	}
-
-	if req.Search != "tolkien" {
-		t.Errorf("Expected Search to be 'tolkien', got '%s'", req.Search)
-	}
-
-	if req.SortBy != "title" {
-		t.Errorf("Expected SortBy to be 'title', got '%s'", req.SortBy)
-	}
-}
-
 // TestAudiobookListResponse tests the response struct
-func TestAudiobookListResponse(t *testing.T) {
-	// Arrange
-	audiobooks := []Audiobook{
-		{ID: 1, Title: "Book 1", FilePath: "/path1.mp3"},
-		{ID: 2, Title: "Book 2", FilePath: "/path2.mp3"},
-	}
-
-	resp := AudiobookListResponse{
-		Audiobooks: audiobooks,
-		Total:      100,
-		Page:       1,
-		Limit:      50,
-		Pages:      2,
-	}
-
-	// Act & Assert
-	if len(resp.Audiobooks) != 2 {
-		t.Errorf("Expected 2 audiobooks, got %d", len(resp.Audiobooks))
-	}
-
-	if resp.Total != 100 {
-		t.Errorf("Expected Total to be 100, got %d", resp.Total)
-	}
-
-	if resp.Pages != 2 {
-		t.Errorf("Expected Pages to be 2, got %d", resp.Pages)
-	}
-}
-
 // TestAudiobookUpdateRequest tests the update request struct
-func TestAudiobookUpdateRequest(t *testing.T) {
-	// Arrange
-	title := "Updated Title"
-	author := "New Author"
-	duration := 7200
-
-	req := AudiobookUpdateRequest{
-		Title:    &title,
-		Author:   &author,
-		Duration: &duration,
-	}
-
-	// Act & Assert
-	if req.Title == nil || *req.Title != title {
-		t.Error("Expected Title to be set")
-	}
-
-	if req.Author == nil || *req.Author != author {
-		t.Error("Expected Author to be set")
-	}
-
-	if req.Duration == nil || *req.Duration != duration {
-		t.Error("Expected Duration to be set")
-	}
-}
-
 // TestBatchUpdateRequest tests the batch update request struct
-func TestBatchUpdateRequest(t *testing.T) {
-	// Arrange
-	author := "Batch Author"
-	req := BatchUpdateRequest{
-		AudiobookIDs: []int{1, 2, 3},
-		Updates: AudiobookUpdateRequest{
-			Author: &author,
-		},
-	}
-
-	// Act & Assert
-	if len(req.AudiobookIDs) != 3 {
-		t.Errorf("Expected 3 audiobook IDs, got %d", len(req.AudiobookIDs))
-	}
-
-	if req.Updates.Author == nil || *req.Updates.Author != author {
-		t.Error("Expected Author to be set in Updates")
-	}
-}
-
 // TestFileSystemItem tests the filesystem item struct
-func TestFileSystemItem(t *testing.T) {
-	// Arrange
-	modTime := time.Now()
-	item := FileSystemItem{
-		Name:           "test.mp3",
-		Path:           "/path/to/test.mp3",
-		IsDirectory:    false,
-		Size:           1024000,
-		ModTime:        modTime,
-		IsExcluded:     false,
-		AudiobookCount: 1,
-	}
-
-	// Act & Assert
-	if item.Name != "test.mp3" {
-		t.Errorf("Expected Name to be 'test.mp3', got '%s'", item.Name)
-	}
-
-	if item.IsDirectory {
-		t.Error("Expected IsDirectory to be false")
-	}
-
-	if item.Size != 1024000 {
-		t.Errorf("Expected Size to be 1024000, got %d", item.Size)
-	}
-
-	if item.AudiobookCount != 1 {
-		t.Errorf("Expected AudiobookCount to be 1, got %d", item.AudiobookCount)
-	}
-}
-
 // TestBrowseRequest tests the browse request struct
-func TestBrowseRequest(t *testing.T) {
-	// Arrange
-	req := BrowseRequest{
-		Path: "/media/audiobooks",
-	}
-
-	// Act & Assert
-	if req.Path != "/media/audiobooks" {
-		t.Errorf("Expected Path to be '/media/audiobooks', got '%s'", req.Path)
-	}
-}
-
 // TestExclusionRequest tests the exclusion request struct
-func TestExclusionRequest(t *testing.T) {
-	// Arrange
-	req := ExclusionRequest{
-		Path:   "/media/audiobooks/excluded",
-		Reason: "Test exclusion",
-	}
-
-	// Act & Assert
-	if req.Path != "/media/audiobooks/excluded" {
-		t.Errorf("Expected Path to be '/media/audiobooks/excluded', got '%s'", req.Path)
-	}
-
-	if req.Reason != "Test exclusion" {
-		t.Errorf("Expected Reason to be 'Test exclusion', got '%s'", req.Reason)
-	}
-}
-
 // TestSystemStatus tests the system status struct
-func TestSystemStatus(t *testing.T) {
-	// Arrange
-	diskUsage := map[string]int64{
-		"total": 1000000000,
-		"used":  500000000,
-		"free":  500000000,
-	}
-
-	status := SystemStatus{
-		Version:          "1.0.0",
-		Uptime:           "2h30m",
-		DatabasePath:     "/data/audiobooks.db",
-		TotalBooks:       1000,
-		TotalAuthors:     200,
-		TotalSeries:      50,
-		ImportPaths:      3,
-		ActiveOperations: 0,
-		DiskUsage:        diskUsage,
-	}
-
-	// Act & Assert
-	if status.Version != "1.0.0" {
-		t.Errorf("Expected Version to be '1.0.0', got '%s'", status.Version)
-	}
-
-	if status.TotalBooks != 1000 {
-		t.Errorf("Expected TotalBooks to be 1000, got %d", status.TotalBooks)
-	}
-
-	if len(status.DiskUsage) != 3 {
-		t.Errorf("Expected 3 disk usage entries, got %d", len(status.DiskUsage))
-	}
-}
-
 // TestLogEntry tests the log entry struct
-func TestLogEntry(t *testing.T) {
-	// Arrange
-	timestamp := time.Now()
-	entry := LogEntry{
-		Level:     "info",
-		Timestamp: timestamp,
-		Message:   "Test log message",
-		Source:    "test",
-	}
-
-	// Act & Assert
-	if entry.Level != "info" {
-		t.Errorf("Expected Level to be 'info', got '%s'", entry.Level)
-	}
-
-	if entry.Message != "Test log message" {
-		t.Errorf("Expected Message to be 'Test log message', got '%s'", entry.Message)
-	}
-
-	if entry.Source != "test" {
-		t.Errorf("Expected Source to be 'test', got '%s'", entry.Source)
-	}
-}
-
 // TestAudiobookMediaInfo tests media info fields
 func TestAudiobookMediaInfo(t *testing.T) {
 	// Arrange

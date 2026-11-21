@@ -55,8 +55,8 @@ export type EvidenceKind = 'confidence' | 'facts' | 'waterfall';
 /**
  * One signal's contribution to a noisy-OR score.
  *
- * `confidence` is the number the scorer actually consumes -- models.Signal in
- * internal/models/dedup_score.go says so outright: "ComposeScore reads this
+ * `confidence` is the number the scorer actually consumes -- unified.Signal in
+ * internal/dedup/unified/score.go says so outright: "ComposeScore reads this
  * field; Raw is stored for human auditing and re-calibration". So confidence is
  * the headline and `raw` is context, never the other way round.
  *

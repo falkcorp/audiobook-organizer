@@ -27,8 +27,8 @@ import (
 //     invalid ladder is reported there, after the write, with the remedy).
 //
 // It lives in this package, not in internal/dedup, because the write boundary
-// (UpdateConfig) is here and config → unified is a legal import (unified pulls
-// in only internal/models); the reverse, unified → config, would be a
+// (UpdateConfig) is here and config → unified is a legal import (unified imports
+// no module package); the reverse, unified → config, would be a
 // cycle, which is why the conversion cannot live in unified itself.
 //
 // A returned error means the effective config failed unified.Validate

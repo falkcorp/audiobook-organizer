@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/models"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
@@ -358,7 +357,7 @@ func ValidateImport(opts ImportOptions) (*ValidationResult, error) {
 }
 
 // ConvertTrack converts an iTunes track to an audiobook model
-func ConvertTrack(track *Track, opts ImportOptions) (*models.Audiobook, error) {
+func ConvertTrack(track *Track, opts ImportOptions) (*Audiobook, error) {
 	// Apply path remapping on raw location, then decode
 	location := opts.RemapPath(track.Location)
 	filePath, err := DecodeLocation(location)
@@ -391,7 +390,7 @@ func ConvertTrack(track *Track, opts ImportOptions) (*models.Audiobook, error) {
 	}
 
 	// Create audiobook model
-	book := &models.Audiobook{
+	book := &Audiobook{
 		Title:                track.Name,
 		FilePath:             filePath,
 		Format:               strings.ToLower(filepath.Ext(filePath)[1:]), // e.g., "m4b", "mp3"

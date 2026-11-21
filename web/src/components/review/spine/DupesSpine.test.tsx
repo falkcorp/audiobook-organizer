@@ -64,7 +64,7 @@ function candidate(over: Partial<DedupCandidate> = {}): DedupCandidate {
   } as unknown as DedupCandidate;
 }
 
-// Signals in the REAL wire shape (models.Signal JSON tags). There is no
+// Signals in the REAL wire shape (unified.Signal JSON tags). There is no
 // `primary` on the wire -- the chips derive it from the kind -- so callers pass
 // kinds and the primary/supporting split follows from them.
 function withSignals(kinds: string[]): DedupCandidate {

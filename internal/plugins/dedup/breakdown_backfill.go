@@ -392,7 +392,7 @@ func breakdownBackfillCore(ctx context.Context, env breakdownBackfillEnv) (break
 		// A provenance-only breakdown (the exact rule that created the row,
 		// no score) is not a score: the row is still a target. The store keeps
 		// its provenance signals when the composed score is written
-		// (models.CarryProvenance in UpdateCandidateScores).
+		// (unified.CarryProvenance in UpdateCandidateScores).
 		if c.ScoreBreakdown != nil && len(c.ScoreBreakdown.Signals) > 0 && !c.ScoreBreakdown.IsProvenanceOnly() {
 			skippedHasBreakdown++
 			continue

@@ -22,7 +22,6 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
-	"github.com/falkcorp/audiobook-organizer/internal/models"
 )
 
 // seedCandidate upserts a pending dedup candidate and returns its store ID.
@@ -130,7 +129,7 @@ func TestBreakdownBackfill_SkipsHasBreakdown(t *testing.T) {
 		Score:   88.0,
 		Band:    "HIGH",
 		Formula: "noisy_or_v1",
-		Signals: []models.Signal{{Kind: unified.SigExactFile, Confidence: 0.99}},
+		Signals: []unified.Signal{{Kind: unified.SigExactFile, Confidence: 0.99}},
 	}
 	id := seedCandidate(t, es, database.DedupCandidate{
 		EntityAID: "hasA", EntityBID: "hasB", Layer: "exact",
@@ -432,26 +431,26 @@ func TestBreakdownBackfill_BandHistogram(t *testing.T) {
 	pebble := newPebbleForISBNIndexTest(t)
 	es := database.NewEmbeddingStore(pebble.DB())
 
-	mk := func(score float64, band string, sigs ...models.Signal) *unified.UnifiedDedupScore {
+	mk := func(score float64, band string, sigs ...unified.Signal) *unified.UnifiedDedupScore {
 		return &unified.UnifiedDedupScore{Score: score, Band: band, Signals: sigs, Formula: "test"}
 	}
 	scorer := &perPairScorer{byOther: map[string]*unified.UnifiedDedupScore{
 		// CERTAIN, one signal, one primary kind → "1"
-		"hB1": mk(100, unified.BandCertain, models.Signal{Kind: unified.SigExactFile, Confidence: 1.0}),
+		"hB1": mk(100, unified.BandCertain, unified.Signal{Kind: unified.SigExactFile, Confidence: 1.0}),
 		// CERTAIN, two primary kinds → "2+" (the only auto-mergeable shape)
 		"hB2": mk(99, unified.BandCertain,
-			models.Signal{Kind: unified.SigExactFile, Confidence: 1.0},
-			models.Signal{Kind: unified.SigISBNASIN, Confidence: 0.98}),
+			unified.Signal{Kind: unified.SigExactFile, Confidence: 1.0},
+			unified.Signal{Kind: unified.SigISBNASIN, Confidence: 0.98}),
 		// CERTAIN with NO auto-resolve primary kind → "0"
 		"hB3": mk(98, unified.BandCertain,
-			models.Signal{Kind: unified.SigMetaFuzzy, Confidence: 0.85},
-			models.Signal{Kind: unified.SigEmbedHigh, Confidence: 0.90},
-			models.Signal{Kind: unified.SigDuration, Confidence: 0}),
-		"hB4": mk(92, unified.BandHigh, models.Signal{Kind: unified.SigMetaFuzzy, Confidence: 0.85}),
-		"hB5": mk(80, unified.BandMedium, models.Signal{Kind: unified.SigMetaFuzzy, Confidence: 0.80}),
-		"hB6": mk(65, unified.BandReview, models.Signal{Kind: unified.SigEmbedMedium, Confidence: 0.65}),
-		"hB7": mk(4, "", models.Signal{Kind: unified.SigDuration, Confidence: 0}), // below the REVIEW floor
-		"hB8": nil,                                                                // zero-signal: scored nothing, so it has no band
+			unified.Signal{Kind: unified.SigMetaFuzzy, Confidence: 0.85},
+			unified.Signal{Kind: unified.SigEmbedHigh, Confidence: 0.90},
+			unified.Signal{Kind: unified.SigDuration, Confidence: 0}),
+		"hB4": mk(92, unified.BandHigh, unified.Signal{Kind: unified.SigMetaFuzzy, Confidence: 0.85}),
+		"hB5": mk(80, unified.BandMedium, unified.Signal{Kind: unified.SigMetaFuzzy, Confidence: 0.80}),
+		"hB6": mk(65, unified.BandReview, unified.Signal{Kind: unified.SigEmbedMedium, Confidence: 0.65}),
+		"hB7": mk(4, "", unified.Signal{Kind: unified.SigDuration, Confidence: 0}), // below the REVIEW floor
+		"hB8": nil,                                                                 // zero-signal: scored nothing, so it has no band
 	}}
 
 	for i := 1; i <= 8; i++ {
@@ -546,7 +545,7 @@ func TestBreakdownBackfill_HistogramCountedOnApply(t *testing.T) {
 
 	scorer := &perPairScorer{byOther: map[string]*unified.UnifiedDedupScore{
 		"apB1": {Score: 100, Band: unified.BandCertain, Formula: "test",
-			Signals: []models.Signal{{Kind: unified.SigExactFile, Confidence: 1.0}}},
+			Signals: []unified.Signal{{Kind: unified.SigExactFile, Confidence: 1.0}}},
 	}}
 	seedCandidate(t, es, database.DedupCandidate{EntityAID: "apA1", EntityBID: "apB1", Layer: "exact"})
 

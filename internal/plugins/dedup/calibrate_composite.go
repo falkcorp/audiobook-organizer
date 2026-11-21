@@ -105,7 +105,6 @@ import (
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
-	"github.com/falkcorp/audiobook-organizer/internal/models"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -172,7 +171,7 @@ func (p *Plugin) calibrateCompositeDef() sdk.OperationDef {
 // recovered from its stored ScoreBreakdown. It is scored under candidate configs.
 type compositePair struct {
 	trueDup bool // true = true_dup, false = not_dup
-	signals []models.Signal
+	signals []unified.Signal
 }
 
 // primaryKinds are the signal kinds that feed the noisy-OR product and whose
@@ -192,8 +191,8 @@ func isPrimaryKind(k unified.SignalKind) bool {
 // replays collector-side clamping so a confidence-bound change actually moves the
 // composite score (ComposeScore itself reads Confidence verbatim). Supporting
 // signals are passed through unchanged (they contribute boosts, not confidence).
-func scoreWithClamp(signals []models.Signal, cfg unified.ScoreConfig) float64 {
-	clamped := make([]models.Signal, len(signals))
+func scoreWithClamp(signals []unified.Signal, cfg unified.ScoreConfig) float64 {
+	clamped := make([]unified.Signal, len(signals))
 	for i, s := range signals {
 		cs := s
 		if isPrimaryKind(s.Kind) {
@@ -513,7 +512,7 @@ func calibrateCompositeCore(ctx context.Context, env calibrateCompositeEnv, para
 			// dismissed not_dup example keeps its stale snapshot forever. Recover the
 			// breakdown by JOINING to the candidate record by CandidateID. This reads
 			// data of the IDENTICAL kind as the examples that already parse (same
-			// *models.UnifiedDedupScore the collectors persisted), so it introduces no
+			// *unified.UnifiedDedupScore the collectors persisted), so it introduces no
 			// heterogeneity and no scorer fork — it is a pure read-mismatch repair.
 			sigs, ok = candidateBreakdownSignalsVia(env.Store, ex.CandidateID)
 			if ok {
@@ -866,7 +865,7 @@ func describeBandRec(r bandRec, orderingConflict bool) string {
 // Returns ok=false for a zero/missing CandidateID, a read/unmarshal error, an
 // absent candidate, or a candidate whose breakdown carries no signals — every
 // un-scorable case is skipped+counted upstream, never treated as a zero score.
-func candidateBreakdownSignalsVia(store calibrateCompositeStore, candidateID int64) ([]models.Signal, bool) {
+func candidateBreakdownSignalsVia(store calibrateCompositeStore, candidateID int64) ([]unified.Signal, bool) {
 	if candidateID == 0 || store == nil {
 		return nil, false
 	}
@@ -886,11 +885,11 @@ func candidateBreakdownSignalsVia(store calibrateCompositeStore, candidateID int
 // snapshot. Returns ok=false for nil/empty/unparseable payloads OR a parsed
 // breakdown carrying no signals (both are un-scorable and must be skipped+counted,
 // never treated as a zero score).
-func parseBreakdownSignals(raw json.RawMessage) ([]models.Signal, bool) {
+func parseBreakdownSignals(raw json.RawMessage) ([]unified.Signal, bool) {
 	if len(raw) == 0 {
 		return nil, false
 	}
-	var uds models.UnifiedDedupScore
+	var uds unified.UnifiedDedupScore
 	if err := json.Unmarshal(raw, &uds); err != nil {
 		return nil, false
 	}

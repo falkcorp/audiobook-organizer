@@ -14,7 +14,6 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
-	"github.com/falkcorp/audiobook-organizer/internal/models"
 )
 
 // recordingRescoreWriter is the injection seam (PR #3052 follow-up, D2): it
@@ -62,7 +61,7 @@ func seedRescorableCandidates(t *testing.T, es *database.EmbeddingStore, n int) 
 	t.Helper()
 	for i := range n {
 		sim := 0.95
-		bd := &models.UnifiedDedupScore{
+		bd := &unified.UnifiedDedupScore{
 			Score:   95.0,
 			Band:    unified.BandHigh,
 			Formula: "unified_v1",

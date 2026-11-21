@@ -20,7 +20,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
-	"github.com/falkcorp/audiobook-organizer/internal/models"
 )
 
 // breakdownWith builds a ScoreBreakdown JSON snapshot carrying a single primary
@@ -28,8 +27,8 @@ import (
 // score deterministically (single-signal noisy-OR → score = 100*confidence,
 // after cfg clamping).
 func breakdownWith(kind unified.SignalKind, conf float64) json.RawMessage {
-	uds := models.UnifiedDedupScore{
-		Signals: []models.Signal{{Kind: kind, Confidence: conf, Raw: conf}},
+	uds := unified.UnifiedDedupScore{
+		Signals: []unified.Signal{{Kind: kind, Confidence: conf, Raw: conf}},
 	}
 	b, _ := json.Marshal(uds)
 	return b
@@ -287,7 +286,7 @@ func TestCalibrateCompositeApplyPersistsBands(t *testing.T) {
 	// the default CERTAIN floor (97) and where the sweep will put it. Its
 	// stored band is what AutoResolveCertain would read.
 	def := unified.DefaultScoreConfig()
-	staleSignals := []models.Signal{{Kind: unified.SigEmbedHigh, Confidence: 0.94, Raw: 0.94}}
+	staleSignals := []unified.Signal{{Kind: unified.SigEmbedHigh, Confidence: 0.94, Raw: 0.94}}
 	staleUnderDefaults := unified.ComposeScore(staleSignals, nil, def, [2]string{"stale-a", "stale-b"})
 	staleSim := 0.94
 	staleID, _, err := es.UpsertCandidateNew(database.DedupCandidate{
@@ -390,8 +389,8 @@ func upsertCandidateBreakdown(t *testing.T, es *database.EmbeddingStore, tag str
 		EntityAID:  "ca-" + tag,
 		EntityBID:  "cb-" + tag,
 		Status:     "pending",
-		ScoreBreakdown: &models.UnifiedDedupScore{
-			Signals: []models.Signal{{Kind: kind, Confidence: conf, Raw: conf}},
+		ScoreBreakdown: &unified.UnifiedDedupScore{
+			Signals: []unified.Signal{{Kind: kind, Confidence: conf, Raw: conf}},
 		},
 	})
 	if err != nil {

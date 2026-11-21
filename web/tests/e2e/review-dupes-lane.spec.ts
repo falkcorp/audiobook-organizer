@@ -59,8 +59,8 @@ const MOCK_CANDIDATE = {
     score: 98.0,
     band: 'CERTAIN',
     formula: 'v2',
-    // Real wire shape: these are the JSON tags on models.Signal in
-    // internal/models/dedup_score.go. This mock previously sent
+    // Real wire shape: these are the JSON tags on unified.Signal in
+    // internal/dedup/unified/score.go. This mock previously sent
     // {value, weight, primary}, none of which the backend emits -- so the e2e
     // suite was exercising a payload production never produces, and the
     // blank evidence panel in production stayed invisible to it.
