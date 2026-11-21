@@ -625,14 +625,22 @@ func (s *Service) leftUndecodable(kind string, id UserID, err error) bool {
 // core:admin from its last active holder is refused (ErrLastAdmin). The
 // epoch is not bumped: permissions are recomputed on the next request from
 // the role list (§4.12). Each removed role is journaled role.unassigned.
-// The same role set writes nothing.
+// The same role set writes nothing. A committed change tells rbac
+// (AssignmentsChanged), whose generation bump makes an open stream re-resolve
+// its rights at once (F4-08 A16); rights are not a credential, so nothing is
+// invalidated.
 func (s *Service) SetRoles(ctx context.Context, actor *Principal, id UserID, roles []rbac.RoleName) error {
 	if err := s.mayManageUsers(actor, "change a user's roles"); err != nil {
 		return err
 	}
 	next := normalizeRoles(roles)
 	now := s.now().UTC()
-	return s.commitRetryingN(ctx, claimRetries, func(b *storage.Batch) error {
+	// staged is whether the committed attempt staged a change: a same-set
+	// call commits nothing to report. A failed write reports nothing, as
+	// rbac's own role writes report only after their commit.
+	staged := false
+	err := s.commitRetryingN(ctx, claimRetries, func(b *storage.Batch) error {
+		staged = false
 		u, err := s.d.Store.GetUser(ctx, id)
 		if err != nil {
 			return err
@@ -663,6 +671,7 @@ func (s *Service) SetRoles(ctx context.Context, actor *Principal, id UserID, rol
 		if err := s.d.Store.PutUser(b, &up); err != nil {
 			return err
 		}
+		staged = true
 		subject := ref(refKindUser, string(id))
 		if s.holdsUsersManage(u.Roles) && !s.holdsUsersManage(up.Roles) {
 			// The user can no longer mint a link, so none it minted may be
@@ -679,6 +688,10 @@ func (s *Service) SetRoles(ctx context.Context, actor *Principal, id UserID, rol
 			Details: map[string]any{"added": roleStrings(added), "removed": roleStrings(removed)},
 		})
 	})
+	if err == nil && staged {
+		s.d.RBAC.AssignmentsChanged()
+	}
+	return err
 }
 
 // adminHolds returns the holder predicate of the last-admin rule and of

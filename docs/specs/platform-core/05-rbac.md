@@ -308,6 +308,10 @@ func (s *Service) Dominates(actor Checker, target []RoleName) error
 // skipped and counted.
 func (s *Service) Compile(in CheckerInput) Checker
 func (s *Service) Generation() uint64
+// AssignmentsChanged bumps Generation and calls Deps.OnChange for a committed
+// change of a user's role assignment, which lives on auth's user row (auth's
+// SetRoles calls it; F4-08 A16). It writes and reloads nothing.
+func (s *Service) AssignmentsChanged()
 
 type CheckerInput struct {
 	Roles       []RoleName
@@ -839,8 +843,10 @@ would rewrite every user row that names it and the worker setup docs.
    merge's batch (seed rows with their audit records) is committed in P7 as 06's "seeded grants"
    writer, so P5 writes nothing.
 5. `httpapi.Build` validates route requirements against the frozen catalog.
-6. Runtime: role writes bump `Generation()` and call `Deps.OnChange`, through which the kernel
-   publishes `core.rbac.changed.v1`; caches key on generation, so the next request sees the change.
+6. Runtime: role writes, and auth's committed role-assignment changes (`AssignmentsChanged`), bump
+   `Generation()` and call `Deps.OnChange`, through which the kernel publishes `core.rbac.changed.v1`;
+   caches key on generation, so the next request sees the change, and every open realtime stream
+   re-resolves its rights at once rather than at its next heartbeat.
 7. `audit` starts its async writer goroutine; the kernel registers `core.audit.prune` on
    `tasks.ScheduleFromConfig("core.audit.schedules.prune")`, a declared `tasks.ScheduleConfig` key in
    audit's own namespace (resolution R2-7, SIMP2-1); until R2's tasks flip is on `main` nothing prunes,

@@ -53,10 +53,6 @@ func (c *cast) narrowed(t testing.TB, u *auth.User, old *auth.Principal, scopes 
 	return p
 }
 
-func (c *cast) rbacChanged(gen uint64) {
-	events.Publish(c.cor, context.Background(), topicRBAC, "", RBACChanged{Generation: gen})
-}
-
 // TestHub_PermissionRevokedDropsTopic: an rbac generation bump makes every
 // stream re-resolve its principal (the kernel's Refresh). A topic the new
 // rights no longer cover is dropped from a wildcard stream without a word and
@@ -339,13 +335,16 @@ func TestHub_SubscriptionsRefuseAnUndeclaredControlTopic(t *testing.T) {
 	}
 }
 
-// TestHub_RoleChangeReachesAnOpenStream: auth.SetRoles moves neither the
-// credential epoch nor the rbac generation and nothing publishes a control
-// topic for it, so only the per-heartbeat refresh can notice. A demoted user's
-// wildcard stream loses the topic its role no longer covers within a heartbeat
-// and keeps the rest; one that named the topic exactly is ended.
+// TestHub_RoleChangeReachesAnOpenStream: auth.SetRoles moves the rbac
+// generation (rbac.AssignmentsChanged, F4-08 A16), and OnChange publishes
+// core.rbac.changed.v1, which wakes every stream to re-resolve its rights at
+// once. The heartbeat is a minute, far past the test's 5 s read deadline, so
+// nothing else can be what notices. A demoted user's stream that named the
+// topic its role no longer covers is ended; a wildcard stream loses that
+// topic and keeps the rest. (Before A16 the generation did not move, and only
+// the next heartbeat's refresh saw the demotion.)
 func TestHub_RoleChangeReachesAnOpenStream(t *testing.T) {
-	c := newCast(t, hubOptions{opts: hubHeartbeat(50 * time.Millisecond)})
+	c := newCast(t, hubOptions{opts: hubHeartbeat(time.Minute)})
 	wild := c.open(t, "lucius", "/events?topic=batcave.*")
 	wild.expectOpened()
 	named := c.open(t, "lucius", "/events?topic="+tCell+"&topic="+tSignal)
@@ -360,8 +359,8 @@ func TestHub_RoleChangeReachesAnOpenStream(t *testing.T) {
 	if reason := named.drainUntilClosed(); reason != "permission_revoked" {
 		t.Errorf("the stream that named the topic closed with %q, want permission_revoked", reason)
 	}
-	// The wildcard stream refreshes on its own heartbeat; four beats on, it has
-	// been cut over to what the watcher role holds.
+	// The wildcard stream re-resolved on the same wake; give its goroutine a
+	// moment to finish the cut-over to what the watcher role holds.
 	time.Sleep(200 * time.Millisecond)
 	c.signal(topicCell, "", "after-demotion", "x")
 	c.signal(topicSignal, "", "visible", "public")
