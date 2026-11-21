@@ -1,7 +1,7 @@
 // file: internal/server/handlers/user_merge.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 5e1c7a93-2b48-4d06-8f3a-c91d07e4b256
-// last-edited: 2026-11-05
+// last-edited: 2026-11-21
 
 package handlers
 
@@ -29,6 +29,10 @@ const UserMergeOpID = usermerge.OpDefID
 // UserMergeService is what the merge routes need of usermerge.Service.
 type UserMergeService interface {
 	Footprint(userID string) (*usermerge.Footprint, error)
+	// CheckAction refuses an undo or resume once the identity flip makes
+	// merges permanent (usermerge.ErrMergePermanent); the journal routes ask it
+	// before they read a journal.
+	CheckAction(action usermerge.Action, journalID string) error
 	BuildPlan(ctx context.Context, req usermerge.PlanRequest) (*usermerge.Plan, error)
 	LoadJournal(id string) (*usermerge.Journal, error)
 	ListJournals() ([]usermerge.JournalSummary, error)
@@ -232,6 +236,13 @@ func (h *UserHandler) journalAction(c *gin.Context, action usermerge.Action, all
 		return
 	}
 	jid := c.Param("jid")
+	// First, before any journal is read: after the identity flip every journal
+	// is permanent (F4-08 A9), whatever its content, so an undecodable one is
+	// answered 409 like the rest rather than as a load failure.
+	if err := h.merge.CheckAction(action, jid); err != nil {
+		h.mergeError(c, "check merge action", err)
+		return
+	}
 	j, err := h.merge.LoadJournal(jid)
 	if err != nil {
 		h.mergeError(c, "load merge journal", err)
@@ -285,6 +296,8 @@ func respondMergeConflict(c *gin.Context, msg string, plan *usermerge.Plan) {
 
 func (h *UserHandler) mergeError(c *gin.Context, what string, err error) {
 	switch {
+	case errors.Is(err, usermerge.ErrMergePermanent):
+		httputil.RespondWithError(c, http.StatusConflict, err.Error(), usermerge.ProblemMergePermanent)
 	case errors.Is(err, usermerge.ErrJournalNotFound):
 		httputil.RespondWithNotFound(c, "merge journal", c.Param("jid"))
 	case errors.Is(err, usermerge.ErrUnsupported):
