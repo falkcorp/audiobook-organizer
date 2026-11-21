@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -197,6 +198,9 @@ type rig struct {
 	// chunk commits, and for what HEAD's reconcile leaves behind (the runner's
 	// own iterator keeps the snapshot it started from).
 	view func(key string) (val []byte, handled bool, err error)
+	// scanHide, when set, drops the keys it reports from the legacy range's
+	// scans (a row another worker's commit took, as a scan would see it).
+	scanHide func(key string) bool
 	// zone is the window clock's zone; the default is gotham.
 	zone *time.Location
 	// reconcileFn, when set, is what HEAD's reconcile does in the rig.
@@ -221,17 +225,38 @@ func (f fakeRuns) Get(_ context.Context, id tasks.RunID) (tasks.RunRecord, error
 	return tasks.RunRecord{ID: id, Kind: k}, nil
 }
 
-// viewReader is a storage.Reader whose point reads go through view first.
+// viewReader is a storage.Reader whose point reads go through view first and
+// whose scans drop the keys scanHide reports.
 type viewReader struct {
 	storage.Reader
-	view func(key string) ([]byte, bool, error)
+	view     func(key string) ([]byte, bool, error)
+	scanHide func(key string) bool
 }
 
 func (v viewReader) Get(ctx context.Context, key []byte) ([]byte, error) {
-	if val, handled, err := v.view(string(key)); handled {
-		return val, err
+	if v.view != nil {
+		if val, handled, err := v.view(string(key)); handled {
+			return val, err
+		}
 	}
 	return v.Reader.Get(ctx, key)
+}
+
+func (v viewReader) Scan(ctx context.Context, opts storage.ScanOptions) iter.Seq2[storage.KV, error] {
+	inner := v.Reader.Scan(ctx, opts)
+	if v.scanHide == nil {
+		return inner
+	}
+	return func(yield func(storage.KV, error) bool) {
+		for kv, err := range inner {
+			if err == nil && v.scanHide(string(kv.Key)) {
+				continue
+			}
+			if !yield(kv, err) {
+				return
+			}
+		}
+	}
 }
 
 func newRig(t testing.TB, opts ...func(*rig)) *rig {
@@ -325,8 +350,8 @@ func (r *rig) config() m4.Config {
 			if lr == nil {
 				r.t.Fatal("the legacy range is read before the store is open")
 			}
-			if r.view != nil {
-				return viewReader{Reader: *lr, view: r.view}
+			if r.view != nil || r.scanHide != nil {
+				return viewReader{Reader: *lr, view: r.view, scanHide: r.scanHide}
 			}
 			return *lr
 		},

@@ -35,7 +35,7 @@ const (
 // Outcomes of the families above.
 const (
 	OutcomeClock         = "clock-imported"
-	OutcomeClockDropped  = "clock-dropped"  // a clock of a task that fires nothing, or of a retired kind
+	OutcomeClockDropped  = "clock-dropped"  // a clock of a task that fires nothing, of a retired kind, or library_scan_full's due-check tick
 	OutcomePause         = "pause-imported" // a set marker
 	OutcomeMarkerCleared = "marker-cleared" // HEAD's cleared sentinel: a blank value or one that reads as absent
 	OutcomeStandDown     = "standdown-imported"
@@ -90,8 +90,10 @@ func settingValue(raw []byte) (string, bool) {
 
 // clockSource is one source row of a kind's clock.
 type clockSource struct {
-	kv   storage.KV
-	kind tasks.Kind
+	kv storage.KV
+	// kinds are the kinds the row is a clock of: one, except a db-optimize
+	// clock, which is the clock of both its halves (splitKinds).
+	kinds []tasks.Kind
 	// due, fire and run are the times the row contributes (zero: none).
 	due, fire, run time.Time
 	missed         int64
@@ -102,11 +104,43 @@ type clockSource struct {
 type clockClass int
 
 const (
-	clockGood      clockClass = iota // contributes to the clock of kind
+	clockGood      clockClass = iota // contributes to the clock of each of its kinds
 	clockDrop                        // fires nothing: deleted, no clock
 	clockBad                         // quarantined by itself, with reason
 	clockNotSource                   // not a clock row
 )
+
+// Two of HEAD's clocks are not one kind's clock as kindrename names them
+// (05-tasks §5T.8.2 and §5T.3.8):
+//
+//   - library_scan_full's interval clock is the hourly due check
+//     (fullSweepDueCheck): HEAD stamped it every hour whether or not a sweep
+//     ran, while the sweep's own clock is library_scan_full_last_run. Merged to
+//     the latest, the tick would move the weekly sweep to cutover time plus a
+//     period. It is dropped.
+//   - db-optimize was one def that compacted the main store and the two aux
+//     stores. Core splits it into core.storage.compact and books'
+//     books.maintenance.aux-store-compact (scheduled by the books key
+//     db_optimize). Every db-optimize clock (the db_optimize interval clock,
+//     the v3 schedule state of maintenance.db-optimize or its former ID) was
+//     the last run of both halves, so both get it (splitKinds).
+const (
+	fullSweepTickTask = "library_scan_full"
+	// storageCompactKind is what kindrename names every db-optimize source
+	// (the def, its former ID and the db_optimize task).
+	storageCompactKind tasks.Kind = "core.storage.compact"
+	// auxStoreCompactKind is books' half of db-optimize
+	// (internal/plugins/maintenance/db.go auxStoreCompactKind).
+	auxStoreCompactKind tasks.Kind = "books.maintenance.aux-store-compact"
+)
+
+// splitKinds is the kinds a clock of kind k is the clock of.
+func splitKinds(k tasks.Kind) []tasks.Kind {
+	if k == storageCompactKind {
+		return []tasks.Kind{storageCompactKind, auxStoreCompactKind}
+	}
+	return []tasks.Kind{k}
+}
 
 // classifyClock reads one clock source row.
 func (m *Migration) classifyClock(kv storage.KV) (clockSource, clockClass, string) {
@@ -125,7 +159,7 @@ func (m *Migration) classifyClock(kv storage.KV) (clockSource, clockClass, strin
 		if tg.Rule == kindrename.RuleRetired {
 			return src, clockDrop, ""
 		}
-		src.kind, src.missed = tg.Kind, s.Missed
+		src.kinds, src.missed = splitKinds(tg.Kind), s.Missed
 		if s.LastFire != nil {
 			// HEAD's SchedState carries LastFire, not the LastDue and LastRun
 			// 5T.8.3 lists: its schedule fires at the due time, so the fire time
@@ -147,10 +181,10 @@ func (m *Migration) classifyClock(kv storage.KV) (clockSource, clockClass, strin
 		if !ok || err != nil {
 			return src, clockBad, reasonTickTime
 		}
-		if target.Dropped {
+		if target.Dropped || task == fullSweepTickTask {
 			return src, clockDrop, ""
 		}
-		src.kind, src.due = target.Kind, at.UTC()
+		src.kinds, src.due = splitKinds(target.Kind), at.UTC()
 		return src, clockGood, ""
 	case key == keyFullSweep:
 		v, ok := settingValue(kv.Value)
@@ -158,7 +192,7 @@ func (m *Migration) classifyClock(kv storage.KV) (clockSource, clockClass, strin
 		if !ok || err != nil {
 			return src, clockBad, reasonTickTime
 		}
-		src.kind, src.due = kindrename.FullSweepKind, at.UTC()
+		src.kinds, src.due = []tasks.Kind{kindrename.FullSweepKind}, at.UTC()
 		return src, clockGood, ""
 	case key == keyWindow:
 		v, ok := settingValue(kv.Value)
@@ -173,7 +207,7 @@ func (m *Migration) classifyClock(kv storage.KV) (clockSource, clockClass, strin
 		if err != nil {
 			return src, clockBad, reasonWindowDate
 		}
-		src.kind, src.due, src.run = tg.Kind, at.UTC(), at.UTC()
+		src.kinds, src.due, src.run = []tasks.Kind{tg.Kind}, at.UTC(), at.UTC()
 		return src, clockGood, ""
 	}
 	return src, clockNotSource, ""
@@ -207,11 +241,13 @@ func (m *Migration) clockRows(ctx context.Context) ([]storage.KV, error) {
 // stepClock handles one clock source row. A kind's clock may come from several
 // rows (a def's v3 schedule state, the scheduler's interval clock of the task
 // that fires it, the full sweep's and the window's own clocks), and Importer.Clock
-// replaces what it finds, so one row owns each kind: the lowest key among the
-// kind's rows, found by reading the (small) clock families live. That row
-// merges the group, imports one clock and deletes every row of the group in its
-// own batch; the others leave their rows to it. A row that is no longer among
-// the live rows was taken by its group's batch.
+// replaces what it finds, so one row owns each kind. A row may also be the
+// clock of two kinds (a db-optimize clock, splitKinds), so the group is closed over
+// shared rows: every kind of every row in it, and every row of those kinds.
+// The group's lowest key, found by reading the (small) clock families live,
+// merges each kind's rows, imports one clock per kind and deletes every row of
+// the group in its own batch; the others leave their rows to it. A row that is
+// no longer among the live rows was taken by its group's batch.
 func (m *Migration) stepClock(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
 	rows, err := m.clockRows(ctx)
 	if err != nil {
@@ -242,13 +278,13 @@ func (m *Migration) stepClock(ctx context.Context, kv storage.KV, w *datamigrate
 	default:
 		return errors.New("m4: a row that is no clock source reached the clock step")
 	}
-	var group []clockSource
+	var good []clockSource
 	for _, row := range rows {
-		src, c, _ := m.classifyClock(row)
-		if c == clockGood && src.kind == self.kind {
-			group = append(group, src)
+		if src, c, _ := m.classifyClock(row); c == clockGood {
+			good = append(good, src)
 		}
 	}
+	kinds, group := clockGroup(self, good)
 	slices.SortFunc(group, func(a, b clockSource) int { return strings.Compare(string(a.kv.Key), string(b.kv.Key)) })
 	if string(group[0].kv.Key) != string(kv.Key) {
 		m.deferred.Add(1)
@@ -267,25 +303,56 @@ func (m *Migration) stepClock(ctx context.Context, kv storage.KV, w *datamigrate
 	} else if err != nil {
 		return err
 	}
-	var c tasks.Clock
-	for _, g := range group {
-		c.LastDue = later(c.LastDue, g.due)
-		c.LastFire = later(c.LastFire, g.fire)
-		c.LastRun = later(c.LastRun, g.run)
-		c.GateClosedAt = later(c.GateClosedAt, g.gate)
-		c.Missed = int(max(int64(c.Missed), g.missed))
-	}
-	if err := m.imp.Clock(ctx, w.Batch(), self.kind, c); err != nil {
-		return err
+	for _, k := range kinds {
+		var c tasks.Clock
+		for _, g := range group {
+			if !slices.Contains(g.kinds, k) {
+				continue
+			}
+			c.LastDue = later(c.LastDue, g.due)
+			c.LastFire = later(c.LastFire, g.fire)
+			c.LastRun = later(c.LastRun, g.run)
+			c.GateClosedAt = later(c.GateClosedAt, g.gate)
+			c.Missed = int(max(int64(c.Missed), g.missed))
+		}
+		if err := m.imp.Clock(ctx, w.Batch(), k, c); err != nil {
+			return err
+		}
 	}
 	for _, g := range group {
 		if err := w.Delete(g.kv.Key); err != nil {
 			return err
 		}
 	}
-	m.clocks.Add(1)
-	w.Count(OutcomeClock)
+	m.clocks.Add(int64(len(kinds)))
+	for range kinds {
+		w.Count(OutcomeClock)
+	}
 	return nil
+}
+
+// clockGroup closes self over good: the kinds of every row in the group and
+// every row naming one of those kinds, until neither grows. kinds is sorted.
+func clockGroup(self clockSource, good []clockSource) (kinds []tasks.Kind, group []clockSource) {
+	kinds = slices.Clone(self.kinds)
+	in := make([]bool, len(good))
+	for grew := true; grew; {
+		grew = false
+		for i, src := range good {
+			if in[i] || !slices.ContainsFunc(src.kinds, func(k tasks.Kind) bool { return slices.Contains(kinds, k) }) {
+				continue
+			}
+			in[i], grew = true, true
+			group = append(group, src)
+			for _, k := range src.kinds {
+				if !slices.Contains(kinds, k) {
+					kinds = append(kinds, k)
+				}
+			}
+		}
+	}
+	slices.Sort(kinds)
+	return kinds, group
 }
 
 func later(a, b time.Time) time.Time {
