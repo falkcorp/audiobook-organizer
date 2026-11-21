@@ -7,7 +7,6 @@ package coretest
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -56,12 +55,10 @@ func MetricsProvider(t testing.TB, opts app.Options) *metrics.Provider {
 // instruments once (they bind to the first MeterProvider installed as the OTel
 // global and never rebind). The caller shuts the Provider down. The defaults
 // are MetricsProvider's, except the state directory: it has no testing.TB to
-// make and remove one, so opts.StateDir must name a directory the caller
-// removes, and an unset one is refused.
+// make and remove one, so the caller names it (opts.StateDir, or
+// CORETEST_CORE_PATHS_STATE_DIR in opts.Env) and removes it; with neither the
+// boot fails naming core.paths.state_dir.
 func NewMetricsProvider(ctx context.Context, opts app.Options) (*metrics.Provider, error) {
-	if opts.StateDir == "" {
-		return nil, errors.New("opts.StateDir is unset: the boot keeps its keyring and boot record in a state directory, so pass one the caller removes")
-	}
 	if opts.AppID == "" {
 		opts.AppID = "coretest"
 	}

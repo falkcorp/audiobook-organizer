@@ -8,6 +8,7 @@ package books
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -300,12 +301,8 @@ func TestFlipPUTParity_APIKeyInTheFirstRunWindowStillCannotChangeSignIn(t *testi
 
 func merged(a, b map[string]any) map[string]any {
 	m := map[string]any{}
-	for k, v := range a {
-		m[k] = v
-	}
-	for k, v := range b {
-		m[k] = v
-	}
+	maps.Copy(m, a)
+	maps.Copy(m, b)
 	return m
 }
 
@@ -422,8 +419,7 @@ func TestFlipPUTParity_OpenAIKeyFromTheEcosystemEnvIsEffectiveAndLocked(t *testi
 		t.Fatalf("the ecosystem env must reach the setting, got %q", got)
 	}
 	err := mustRefuse(t, f, map[string]any{"openai_api_key": "another-key"})
-	var locked *coreconfig.LockedError
-	if !errors.As(err, &locked) {
+	if _, ok := errors.AsType[*coreconfig.LockedError](err); !ok {
 		t.Fatalf("want a locked refusal, got %v", err)
 	}
 }
