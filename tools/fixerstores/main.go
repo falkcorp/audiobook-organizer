@@ -50,7 +50,8 @@
 // call result, a copy loaded through a pointer) is not looked into: it was
 // built elsewhere, where its funcs are followed or reported.
 //
-// Only the join points are pruned: the module's registry.RunItems, whose
+// Only the join points are pruned (see joinPoints): the module's
+// registry.RunItems and the books module's two gated-write trampolines, whose
 // call-graph edges join every caller to every callback its other callers pass.
 // What a join point calls is reached through the callbacks named at each call.
 //
@@ -115,9 +116,24 @@ var rootMethods = []string{"Plan", "Replan", "Apply", "Meta", "BeginApply", "Aft
 // joinPoints are functions of this module that run a callback they were given
 // for many different callers. The call graph joins every caller to every
 // callback (and every callback to every caller), so their edges are not
-// followed; the callbacks named at each call are (see passedFuncs).
+// followed; the callbacks named at each call are (see passedValues). A method
+// is keyed as pkg.Type.method.
+//
+//   - registry.RunItems runs the Label, CheckpointFn and CheckpointStateFn of
+//     every caller.
+//   - booksGate.do and gateQuiet are the books module's gated-write trampolines
+//     (internal/plugins/maintenance/deps_gate.go, deps_t6g3.go): each writer
+//     method hands its store call to one of them as a closure and the trampoline
+//     only calls it, so VTA, which has no call-site context for a func value a
+//     shared helper invokes, gives the helper every closure any writer method
+//     ever passed. Without this the fixer path through booksJobsStore's gated
+//     CreateOperationChange (repairs.Writer.Journal) "reaches" the unrelated
+//     BackfillExternalIDs, ClearClassLists and ten more closures of the group 2,
+//     3 and 6 writers, 15 reports of calls that cannot happen.
 var joinPoints = map[string]bool{
 	modulePath + "/internal/operations/registry.RunItems": true,
+	maintenancePkg + ".booksGate.do":                      true,
+	maintenancePkg + ".gateQuiet":                         true,
 }
 
 // storeFamily are the interface names whose methods are the shell's stores:
@@ -322,7 +338,17 @@ func (a *analysis) isJoinPoint(fn *ssa.Function) bool {
 	if og := fn.Origin(); og != nil {
 		o = og
 	}
-	return joinPoints[o.Pkg.Pkg.Path()+"."+o.Name()]
+	key := o.Pkg.Pkg.Path() + "." + o.Name()
+	if recv := o.Signature.Recv(); recv != nil {
+		t := recv.Type()
+		if p, ok := t.(*types.Pointer); ok {
+			t = p.Elem()
+		}
+		if n, ok := t.(*types.Named); ok {
+			key = o.Pkg.Pkg.Path() + "." + n.Obj().Name() + "." + o.Name()
+		}
+	}
+	return joinPoints[key]
 }
 
 // traversable is a function the walk follows: one of this module (but not a
