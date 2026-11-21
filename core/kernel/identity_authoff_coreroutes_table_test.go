@@ -105,6 +105,7 @@ const (
 	clNeedUser      = "05-authn 4.11 bullet 3 (SEC-3) and 05-rbac 4.11 (d): credential metadata needs a user, the auth-disabled principal has none, so 401 authentication_required before the handler acts"
 	clAudit         = "05-rbac 4.11 (d) and 6.1: core:audit.view is AuthRequired, so the auth-disabled checker never holds it and the audit query and export answer 401"
 	clReset         = "05-rbac 6.2 (factory-reset row) and 4.11 bullet 1: core:admin is AuthRequired and the route carries Guards.Interactive and Guards.Owner; Interactive refuses first"
+	clReview        = "05-rbac 7.1 (acknowledge each restore_admins_review holder: an interactive core:admin session, audited core.role.review_admin) and 4.11 bullet 1: core:admin is AuthRequired and the route carries Guards.Interactive; Interactive refuses first"
 	clSettings      = "05-config 1.3.7 (cited by confighttp/routes.go): settings keep their auth-off reach, AnyAuthenticated with the per-section and per-key checks inside the handler"
 	clProtect       = "05-config 1.3.7 and 05-authn 4.11 (SEC4-8): the auth-disabled principal changes any key below ProtectAdmin and none at or above it; core.auth.mode is never changed by it"
 	clUIReport      = "07 7.5.2 (AnyAuthenticated, no guard; uihttp/uihttp.go 101-106): the shell of an auth-off install still reports, a report is not a credential change"
@@ -180,6 +181,7 @@ var offCoreRows = []offRow{
 	{Route: "PATCH /api/core/v1/roles/{name}", Want: offDeny, Code: "interactive_required", Clause: clInteractive},
 	{Route: "DELETE /api/core/v1/roles/{name}", Want: offDeny, Code: "interactive_required", Clause: clInteractive},
 	{Route: "POST /api/core/v1/roles/{name}/accept-seed", Want: offDeny, Code: "interactive_required", Clause: clInteractive},
+	{Route: "POST /api/core/v1/users/{id}/review-admin", Want: offDeny, Code: "interactive_required", Clause: clReview},
 
 	// ---- audit ------------------------------------------------------------------
 	{Route: "GET /api/core/v1/audit", Want: offDeny, Code: "authentication_required", Clause: clAudit},

@@ -39,6 +39,7 @@ import (
 //	ErrNoPendingSeed    409 no_pending_seed    (coined)
 //	ErrVersionMismatch  412 precondition_failed (§8)
 //	ErrUnknownRole      404 not_found
+//	ErrNotInAdminReview 404 not_found          (coined: the account is not on the restore report's review list)
 //	ErrRoleName, ErrBadScope, ErrUnknownScope 422 validation_failed
 //	ErrContended        503 busy               (coined; Retry-After 1s: the write lost every try to other writers)
 //	ErrNotFrozen        503 unavailable
@@ -63,6 +64,8 @@ func mapError(err error, permField string) error {
 		return &httpapi.Error{Status: http.StatusForbidden, Code: "permission_denied", Detail: "permission denied", Err: err}
 	case errors.Is(err, rbac.ErrUnknownRole):
 		return &httpapi.Error{Status: http.StatusNotFound, Code: "not_found", Detail: "no such role", Err: err}
+	case errors.Is(err, rbac.ErrNotInAdminReview):
+		return &httpapi.Error{Status: http.StatusNotFound, Code: "not_found", Detail: "no such account is listed for review", Err: err}
 	case errors.Is(err, rbac.ErrLockedRole):
 		return &httpapi.Error{Status: http.StatusConflict, Code: "role_locked", Detail: "this role is locked and cannot be changed", Err: err}
 	case errors.Is(err, rbac.ErrSeedRoleLocked):
@@ -135,14 +138,27 @@ func unavailable() error {
 // The interactive check comes first so a non-interactive administrator, whose
 // checker holds no Sensitive scope at all (§4.4), is told why.
 func (a *api) guard(p *auth.Principal, perm rbac.Permission, write bool) error {
+	return a.gate(p, perm, write, a.roles != nil, rolesNeedInteractive)
+}
+
+// The detail of the 403 interactive_required of a role write and of an admin
+// review acknowledgement.
+const (
+	rolesNeedInteractive   = "changing roles needs an interactive session"
+	reviewNeedsInteractive = "acknowledging an admin review needs an interactive session"
+)
+
+// gate is guard over the service the route calls: ready says whether it is
+// wired (503 when not) and needInteractive is the detail of the 403 a write by a
+// non-interactive principal gets.
+func (a *api) gate(p *auth.Principal, perm rbac.Permission, write, ready bool, needInteractive string) error {
 	switch {
 	case p == nil:
 		return unauthenticated()
-	case a.roles == nil:
+	case !ready:
 		return unavailable()
 	case write && !p.Method.MayChangeCredentials():
-		return &httpapi.Error{Status: http.StatusForbidden, Code: "interactive_required",
-			Detail: "changing roles needs an interactive session"}
+		return &httpapi.Error{Status: http.StatusForbidden, Code: "interactive_required", Detail: needInteractive}
 	case p.Perms == nil || !p.Perms.Has(perm) || !p.Perms.Satisfies(rbac.Need(perm)):
 		return httpapi.Forbidden(perm)
 	}
