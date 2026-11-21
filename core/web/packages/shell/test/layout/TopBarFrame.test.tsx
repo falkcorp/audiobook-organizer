@@ -1,16 +1,15 @@
-// file: web/src/components/layout/TopBarFrame.test.tsx
+// file: core/web/packages/shell/test/layout/TopBarFrame.test.tsx
 // version: 0.1.0
 // guid: 2b6d9e48-3f17-4a05-9c8e-d1a7f4b0c653
 // last-edited: 2026-11-21
 
 // TopBarFrame takes its title, slots and connection feed as props and names no
-// audiobook route or service, so this test feeds it Gotham ones of its own. It
-// moves into core/web/packages/shell/src/layout/ with the frame.
+// audiobook route or service, so this test feeds it Gotham ones of its own.
 
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { act, fireEvent, screen } from '@testing-library/react';
-import { renderWithProviders } from '../../test/renderWithProviders';
-import { TopBarFrame, type ConnectionFeed, type ConnectionState } from './TopBarFrame';
+import { renderWithProviders } from './render';
+import { TopBarFrame, type ConnectionFeed, type ConnectionState } from '../../src/layout/TopBarFrame';
 
 function feed() {
   let push: (s: ConnectionState) => void = () => undefined;

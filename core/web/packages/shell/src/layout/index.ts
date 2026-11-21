@@ -4,7 +4,35 @@
 // last-edited: 2026-11-21
 
 // The shell's layout (the layout slots, TopBar, UserMenu, the sidebar, the
-// operations indicator). F9-02 fills this entry file; F9-05 creates it only so
-// the shell root can re-export it before the layout lands.
+// operations indicator). F9-02 fills this entry file; F9-05 created it so the
+// shell root re-exports it. Each frame takes its data and its audiobook (or any
+// module's) pieces as props and slots; the audiobook app's layout directory
+// binds the books ones.
 
-export {};
+export { isSubItemSelected } from './sidebarSelection';
+export { SidebarFrame, type SidebarFrameProps, type SidebarItem } from './SidebarFrame';
+export {
+  TopBarFrame,
+  type ConnectionFeed,
+  type ConnectionState,
+  type TopBarFrameProps,
+} from './TopBarFrame';
+export { MainLayoutFrame, type MainLayoutFrameProps } from './MainLayoutFrame';
+export { UserMenuFrame, type UserMenuFrameProps } from './UserMenuFrame';
+export {
+  OperationsIndicatorFrame,
+  type ActivityTarget,
+  type OperationsFeed,
+  type OperationsFrameRow,
+  type OperationsIndicatorFrameProps,
+  type RunStatusModel,
+} from './OperationsIndicatorFrame';
+export { formatProgressCounts } from './operationProgress';
+
+export { UserMenu } from './UserMenu';
+export {
+  OperationsIndicator,
+  shellRunStatus,
+  useShellOperationsFeed,
+  type OperationsIndicatorProps,
+} from './shellOperations';

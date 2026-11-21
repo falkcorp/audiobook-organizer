@@ -1,17 +1,16 @@
-// file: web/src/components/layout/MainLayoutFrame.test.tsx
+// file: core/web/packages/shell/test/layout/MainLayoutFrame.test.tsx
 // version: 0.1.0
 // guid: 8e1c5a27-9d43-4b60-a2f7-c3b8d0e4f159
 // last-edited: 2026-11-21
 
 // MainLayoutFrame renders the nav entries, top bar and banners it is handed and
-// names no audiobook import, so this test feeds it Gotham ones of its own. It
-// moves into core/web/packages/shell/src/layout/ with the frame.
+// names no audiobook import, so this test feeds it Gotham ones of its own.
 
 import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, screen, within } from '@testing-library/react';
 import DashboardIcon from '@mui/icons-material/Dashboard';
-import { renderWithProviders } from '../../test/renderWithProviders';
-import { MainLayoutFrame, type MainLayoutFrameProps } from './MainLayoutFrame';
+import { renderWithProviders } from './render';
+import { MainLayoutFrame, type MainLayoutFrameProps } from '../../src/layout/MainLayoutFrame';
 
 const items = [{ text: 'Batcave', icon: DashboardIcon, path: '/batcave' }];
 

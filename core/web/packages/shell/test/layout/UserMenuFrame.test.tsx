@@ -1,17 +1,16 @@
-// file: web/src/components/layout/UserMenuFrame.test.tsx
+// file: core/web/packages/shell/test/layout/UserMenuFrame.test.tsx
 // version: 0.1.0
 // guid: 3c8f1e52-7a96-4d04-b2e8-a5d0c9f7b146
 // last-edited: 2026-11-21
 
 // UserMenuFrame reads the shell's auth shape and takes its two server calls as
 // props, so this test drives it with a Gotham AuthState of its own and no
-// audiobook module. It moves into core/web/packages/shell/src/layout/ with the
-// frame.
+// audiobook module.
 
 import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { renderWithProviders } from '../../test/renderWithProviders';
-import { UserMenuFrame, type UserMenuFrameProps } from './UserMenuFrame';
+import { renderWithProviders } from './render';
+import { UserMenuFrame, type UserMenuFrameProps } from '../../src/layout/UserMenuFrame';
 
 const navigateSpy = vi.fn();
 vi.mock('react-router', async () => {

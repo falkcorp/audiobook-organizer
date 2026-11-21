@@ -1,4 +1,4 @@
-// file: web/src/components/layout/OperationsIndicatorFrame.test.tsx
+// file: core/web/packages/shell/test/layout/OperationsIndicatorFrame.test.tsx
 // version: 0.1.0
 // guid: 6e2a8c40-1d95-4b73-a0f6-c9b3d5e7f182
 // last-edited: 2026-11-21
@@ -6,8 +6,7 @@
 // OperationsIndicatorFrame renders the feed, status model and slots it is
 // handed and names no audiobook store, service or route, so this test drives it
 // with Gotham rows, core's task-run state names (succeeded, canceled) and
-// slots of its own. It moves into core/web/packages/shell/src/layout/ with the
-// frame.
+// slots of its own.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -17,7 +16,7 @@ import {
   type OperationsFeed,
   type OperationsFrameRow,
   type RunStatusModel,
-} from './OperationsIndicatorFrame';
+} from '../../src/layout/OperationsIndicatorFrame';
 
 const navigateSpy = vi.fn();
 vi.mock('react-router', async () => {

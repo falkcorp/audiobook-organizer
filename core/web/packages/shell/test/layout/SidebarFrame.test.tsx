@@ -1,18 +1,17 @@
-// file: web/src/components/layout/SidebarFrame.test.tsx
+// file: core/web/packages/shell/test/layout/SidebarFrame.test.tsx
 // version: 0.1.0
 // guid: 0c9e4b72-6a15-4d38-8f21-b7d3a5e1c964
 // last-edited: 2026-11-21
 
 // SidebarFrame renders whatever items it is handed and names no audiobook
-// route, store or icon, so this test feeds it Gotham entries of its own. It
-// moves into core/web/packages/shell/src/layout/ with the frame.
+// route, store or icon, so this test feeds it Gotham entries of its own.
 
 import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, screen, within } from '@testing-library/react';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import MapIcon from '@mui/icons-material/Map';
-import { renderWithProviders } from '../../test/renderWithProviders';
-import { SidebarFrame, type SidebarItem } from './SidebarFrame';
+import { renderWithProviders } from './render';
+import { SidebarFrame, type SidebarItem } from '../../src/layout/SidebarFrame';
 
 const navigateSpy = vi.fn();
 vi.mock('react-router', async () => {
