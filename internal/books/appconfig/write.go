@@ -616,10 +616,11 @@ func (e *Engine) validateCandidate(before config.Config, u config.Update, aiOut 
 			continue
 		}
 		if f, has := fieldAt(cand, p.segs); has && f.CanSet() {
-			// A value that does not fit was refused above, so this decode
-			// cannot fail; if it did, judging a candidate without the value
+			// The field takes the value as the projection would set it
+			// (decodeHEADField). A value that does not fit was refused above;
+			// if it still fails here, judging a candidate without the value
 			// would pass a write nothing validated.
-			if err := json.Unmarshal(raw, f.Addr().Interface()); err != nil {
+			if err := decodeHEADField(f, raw); err != nil {
 				return &coreconfig.FieldError{Path: coreconfig.Path(head), Err: err}
 			}
 		}
