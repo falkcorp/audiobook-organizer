@@ -130,7 +130,7 @@ func TestCatalogLinkCheckFlagsServiceDefsMissingFromList(t *testing.T) {
 func TestCalledServiceDefsReadsTheProductionList(t *testing.T) {
 	got := calledServiceDefs(t, filepath.Join("..", "server", "registry_wire.go"), "serviceDefs")
 	for _, want := range []string{
-		modulePath + "/internal/config",
+		modulePath + "/internal/fileops",
 		modulePath + "/internal/plugins/dedup",
 		modulePath + "/internal/activity",
 	} {
