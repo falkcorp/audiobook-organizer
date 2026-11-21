@@ -77,6 +77,15 @@ func NewFlipShape(opts FlipOptions) Flip {
 		f.identity = true
 		f.Levels = append(f.Levels, BooksLevelStep(opts.LevelStepVersion+1, BooksIdentityLevel, BooksLevelStepRef(opts.LevelStepVersion)))
 		ids = append(ids, IdentityCutoverID)
+		// Execution order is not list order here. Storage makes every data
+		// step without a Barrier depend on its owner's highest versioned step
+		// (stepGraph, core/storage/migrate.go), so on a store that meets both
+		// flips at once books.level-2 runs before M2: level-1, level-2, M2,
+		// M3, M8. Entries keeps the list order ValidateCutoverList checks
+		// (level-1, M2, level-2, M3). Stamping level 2 before M2 only makes
+		// the F3 build refuse the store sooner, and M2's RaisesLevel 1 is then
+		// a no-op stamp, so M2 takes no Barrier. level-2 cannot be After M2:
+		// with the implicit edge that is a cycle.
 	}
 	after := make([]storage.StepRef, 0, len(ids))
 	for _, id := range ids {
