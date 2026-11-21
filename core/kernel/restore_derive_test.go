@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/mediacore/backup"
 	"github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/internal/restoreswap"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
 
@@ -279,6 +280,12 @@ func TestIdentityBoot_ARestoreBootRunsItsHooksAtTheSourceBoundary(t *testing.T) 
 	if err := first.ident.svc.Auth.SetStatus(t.Context(), actor, u.ID, auth.StatusDisabled); err != nil {
 		t.Fatal(err)
 	}
+	// An admin holder: with the pre-swap store open the hooks take the most
+	// restrictive of both and list nobody; with none (no PreSwapDir) every admin
+	// holder is listed for review.
+	if _, err := first.ident.svc.Auth.CreateUser(t.Context(), actor, auth.NewUser{Username: "oracle", Password: fixturePassword, Roles: []rbac.RoleName{rbac.RoleAdmin}}); err != nil {
+		t.Fatal(err)
+	}
 	src := newArchiveSource()
 	src.intentInstall = "live"
 	src.manifest.JournalSeq = 1
@@ -291,6 +298,9 @@ func TestIdentityBoot_ARestoreBootRunsItsHooksAtTheSourceBoundary(t *testing.T) 
 	}
 	if !k.ident.p4d.Hooks.Ran {
 		t.Error("the restore hooks did not run")
+	}
+	if got := k.ident.p4d.Hooks.Report.AdminsToReview; len(got) != 0 {
+		t.Errorf("admins to review = %v: the hooks did not open the pre-swap store the derivation found", got)
 	}
 	if got := lastStepOf(h.journal("r-identity-restore")); got != restoreswap.StepApplied {
 		t.Errorf("restore journal ends at %q, want applied", got)
@@ -358,5 +368,48 @@ func TestDeriveRestoreBoot_CheckpointTakesTheRecordsJournalSeq(t *testing.T) {
 				t.Errorf("checkpoint restore = %v seq %d foreign=%v, want seq %d", rb.Kind, rb.SourceSeq, rb.Foreign, tc.want)
 			}
 		})
+	}
+}
+
+// TestIdentityBoot_ARefusedRestoreIsNotServedByTheNextBoot: a checkpoint restore
+// whose record is gone refuses the identity boot at P4d (errRestoreSourceUnreadable),
+// the restore having been swapped in and journaled applied at P4b. The swapped-in
+// store has lost a revocation the journal holds. The next boot must not serve it
+// with that revocation undone: it either refuses again or re-applies it.
+func TestIdentityBoot_ARefusedRestoreIsNotServedByTheNextBoot(t *testing.T) {
+	h, c, first := restoreHost(t)
+	actor := &auth.Principal{Method: auth.MethodSession, Perms: holdsAll{}, User: &auth.User{ID: "u-alfred", Username: "alfred"}}
+	u, err := first.ident.svc.Auth.CreateUser(t.Context(), actor, auth.NewUser{Username: "lucius", Password: fixturePassword})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.close(first)
+	const cpName = "20261121T000000Z-ba7c4ae1"
+	cpDir := filepath.Join(filepath.Dir(h.db), ".mediacore-checkpoints")
+	staged := filepath.Join(cpDir, cpName, "db")
+	copyTree(t, h.db, staged) // lucius is active in the copy
+
+	later := h.mustBoot(c)
+	if err := later.ident.svc.Auth.SetStatus(t.Context(), actor, u.ID, auth.StatusDisabled); err != nil {
+		t.Fatal(err)
+	}
+	h.close(later)
+	h.stage("r-refused", restorejournal.KindCheckpoint, staged)
+
+	if _, err := h.boot(c); !errors.Is(err, errRestoreSourceUnreadable) || !errors.Is(err, errP4dRefuse) {
+		t.Fatalf("first boot = %v, want errRestoreSourceUnreadable under errP4dRefuse", err)
+	}
+	k, err := h.boot(c)
+	if err != nil {
+		t.Logf("second boot refuses too: %v", err)
+		return
+	}
+	defer h.close(k)
+	got, err := k.ident.svc.Auth.User(t.Context(), u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != auth.StatusDisabled {
+		t.Fatalf("second boot serves the refused restore with lucius %q: the disable the restore lost is undone", got.Status)
 	}
 }
