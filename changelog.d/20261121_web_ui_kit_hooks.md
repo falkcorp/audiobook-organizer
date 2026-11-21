@@ -1,0 +1,3 @@
+### Added
+
+- `@mediacore/ui-kit` gains `useAsyncAction` (loading and error state around an async call, with a `run` whose identity is stable so it can sit in an effect's dependencies), `useDebouncedSearch` / `useSettledSearch` / `serverAnsweredTerm` (the settled twin of a search box and the guard that stands a client-side filter down once the server has answered for the term) and `useRowSelection` / `applyRowClick` (page select-all, select-all-matching and shift-range selection), all from the package root (F9-05, dark: the running SPA still imports its own `web/src/hooks` copies). The debounced-search and row-selection tests moved with them, and `useAsyncAction`, `useSettledSearch` and the root exports are covered for the first time.
