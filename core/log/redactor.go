@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
+	"sync/atomic"
 )
 
 // The replacement texts. redactedText is the same "[REDACTED]" the invite
@@ -171,11 +172,15 @@ func URLKeys() []string {
 // Redactor is the one redaction type of core (05-logging §3, decision L4): the
 // logging pipeline redacts every record through it once, before fan-out, and
 // the metrics Provider's span exporter redacts span names and attributes with
-// the same value (05-metrics §3). It is immutable after NewRedactor (its maps
-// and rule slice are never written again), so one value is safe for
-// concurrent use without a lock.
+// the same value (05-metrics §3). Every table is immutable once built (its
+// maps and rule slice are never written again), so one value is safe for
+// concurrent use without a lock. The one table that changes at run time is
+// the key deny-list, which SetExtraKeys replaces whole through an atomic
+// pointer: core.log.redact_keys applies live (05-logging §4 item 3), and the
+// kernel hands this one value to the logging pipeline, the metrics Provider
+// and the HTTP layer, so replacing the table behind it reaches all of them.
 type Redactor struct {
-	keys     map[string]struct{} // normalised deny-listed keys (normKey)
+	keys     atomic.Pointer[map[string]struct{}] // normalised deny-listed keys (normKey); replaced whole by SetExtraKeys
 	suffixes []string            // credentialSuffixes()
 	harmless []string            // harmlessSuffixes()
 	query    map[string]struct{} // lower-case credential query names
@@ -189,18 +194,12 @@ type Redactor struct {
 // a nil Fn redacts nothing and is skipped.
 func NewRedactor(extraKeys []string, extraPaths ...PathRule) *Redactor {
 	r := &Redactor{
-		keys:     map[string]struct{}{},
 		suffixes: credentialSuffixes(),
 		harmless: harmlessSuffixes(),
 		query:    map[string]struct{}{},
 		urlKeys:  map[string]struct{}{},
 	}
-	keys := append(DefaultRedactKeys(), builtinCredentialKeys()...)
-	for _, k := range append(keys, extraKeys...) {
-		if n := normKey(k); n != "" {
-			r.keys[n] = struct{}{}
-		}
-	}
+	r.SetExtraKeys(extraKeys)
 	for _, q := range DefaultRedactQuery() {
 		r.query[strings.ToLower(q)] = struct{}{}
 	}
@@ -214,6 +213,31 @@ func NewRedactor(extraKeys []string, extraPaths ...PathRule) *Redactor {
 		}
 	}
 	return r
+}
+
+// keySet is the deny-list: the defaults, the built-in credential keys and
+// extraKeys, normalised. It is a fresh map every call and is never written
+// after it is published.
+func keySet(extraKeys []string) map[string]struct{} {
+	m := map[string]struct{}{}
+	keys := append(DefaultRedactKeys(), builtinCredentialKeys()...)
+	for _, k := range append(keys, extraKeys...) {
+		if n := normKey(k); n != "" {
+			m[n] = struct{}{}
+		}
+	}
+	return m
+}
+
+// SetExtraKeys replaces the extra deny-listed keys (core.log.redact_keys): the
+// deny-list becomes the defaults plus extraKeys, so a key dropped from the
+// setting stops being redacted by it and a key added starts at the next
+// record. It swaps the whole table atomically, so a concurrent reader sees
+// the old list or the new one, never a mixture, and the redaction hot path
+// takes no lock. extraKeys is not retained.
+func (r *Redactor) SetExtraKeys(extraKeys []string) {
+	m := keySet(extraKeys)
+	r.keys.Store(&m)
 }
 
 // normKey lower-cases k and drops '-', '_' and '.'.
@@ -251,11 +275,12 @@ func (r *Redactor) matchKey(key string) keyMatch {
 	if n == "" {
 		return keyClear
 	}
-	if _, ok := r.keys[n]; ok {
+	keys := *r.keys.Load() // one load: both lookups see the same table
+	if _, ok := keys[n]; ok {
 		return keyExact
 	}
 	if i := strings.LastIndexByte(key, '.'); i >= 0 && i < len(key)-1 {
-		if _, ok := r.keys[normKey(key[i+1:])]; ok {
+		if _, ok := keys[normKey(key[i+1:])]; ok {
 			return keyExact
 		}
 	}
