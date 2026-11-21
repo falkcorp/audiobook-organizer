@@ -82,6 +82,10 @@ func (k *Kernel) storageOwners() []storage.OwnerSpec {
 	// Core's half of M7 (core_level.go): registered when a manifest declares a
 	// cutover, so a build with none raises no level.
 	owners = append(owners, k.coreOwners()...)
+	// The identity flip's three (F4-08 B3), only for an app that declared it.
+	if k.identityBootDeclared() {
+		owners = append(owners, identityOwners()...)
+	}
 	for _, e := range k.entries {
 		if DeclaresStorage(e.man) {
 			owners = append(owners, storage.OwnerSpec{Owner: storage.Owner(e.man.ID), Spec: e.man.Storage, Enabled: e.enabled})
