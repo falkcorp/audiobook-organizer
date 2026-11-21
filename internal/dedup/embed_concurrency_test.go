@@ -6,6 +6,7 @@
 package dedup
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
@@ -49,5 +50,34 @@ func TestEngine_EmbedConcurrency(t *testing.T) {
 	}
 	if got := noClient.EmbedConcurrency(4); got != 4 {
 		t.Fatalf("no embed client: EmbedConcurrency = %d, want 4", got)
+	}
+}
+
+// EmbedReadiness passes the client's answer through; a nil client is ready.
+func TestEngine_EmbedReadiness(t *testing.T) {
+	pool := &ai.PoolSource{
+		Active: func() bool { return true },
+		Endpoints: func() []aidispatch.Endpoint {
+			other := embedEndpoint("scarecrow", "http://127.0.0.1:3/v1", 2)
+			other.EmbedModel = "nomic-embed-text"
+			return []aidispatch.Endpoint{other}
+		},
+		Secret:  func(string) string { return "" },
+		Options: []aidispatch.Option{aidispatch.WithSlots(aidispatch.NewSlots())},
+	}
+	client := ai.NewEmbeddingClientWithOptions("ollama", "bge-m3", "").WithPoolRouting(pool)
+	eng, err := NewEngine(nil, nil, client, nil, nil, unified.DefaultScoreConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.EmbedReadiness(); !errors.Is(err, aidispatch.ErrNoCapableEndpoint) {
+		t.Fatalf("no endpoint serves the model: err = %v, want ErrNoCapableEndpoint", err)
+	}
+	noClient, err := NewEngine(nil, nil, nil, nil, nil, unified.DefaultScoreConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := noClient.EmbedReadiness(); err != nil {
+		t.Fatalf("no embed client: %v", err)
 	}
 }

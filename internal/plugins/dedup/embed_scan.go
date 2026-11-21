@@ -89,6 +89,10 @@ type embedScanEngine interface {
 	EmbedBook(ctx context.Context, bookID string) (dedupengine.EmbedStatus, error)
 	EmbedBooksAsync(ctx context.Context) (batchID string, count int, err error)
 	EmbedConcurrency(fallback int) int
+	// EmbedReadiness is non-nil when pool routing is on and no endpoint can
+	// serve the pinned embedding model; the synchronous path fails on it at
+	// start. The async (batch API) path is not pool-routed and never asks.
+	EmbedReadiness() error
 }
 
 // embedScanEnv is what the embed-scan and embed-async cores take from their
@@ -196,6 +200,13 @@ func embedScanCore(ctx context.Context, env embedScanEnv) (embedScanResult, erro
 		prog.Finalize("writing results...")
 		prog.Done(fmt.Sprintf("Submitted %d books to OpenAI Batch API (batch_id=%s). Results will be ingested automatically within 24h.", count, batchID))
 		return embedScanResult{Async: true, BatchID: batchID, Submitted: count}, nil
+	}
+
+	// Fail closed before loading books: with routing on and no endpoint able to
+	// embed, every book would otherwise fail with NoCapableEndpointError, one by
+	// one across the library.
+	if err := env.Engine.EmbedReadiness(); err != nil {
+		return embedScanResult{}, fmt.Errorf("embed-scan: no endpoint can embed: %w", err)
 	}
 
 	// Synchronous path: embed books one by one (batched by engine.EmbedBook).
