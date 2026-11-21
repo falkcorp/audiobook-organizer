@@ -38,13 +38,15 @@ import (
 // must act on before any restart can help (sysexits EX_CONFIG): the cutover
 // blocked (storage.ErrCutoverBlocked), the store rewrite swapped back twice
 // (storage.ErrRewriteSwappedBack), and a store too new for this build
-// (*storage.LevelTooNewError, 05-storage §5S.3.7). A supervisor that restarts
-// on failure must not restart on it.
+// (*storage.LevelTooNewError, 05-storage §5S.3.7), and a store below a
+// declared upgrade floor (*storage.ErrUpgradeFloor, R2-4: the operator must
+// install the release it names first). A supervisor that restarts on failure
+// must not restart on it.
 const ExitConfig = 78
 
 // ExitCode maps a boot's error to the process's exit status: 0 for nil,
-// ExitConfig for the refusals above, 1 for any other error. The cmd layer
-// (F2-16) exits with it.
+// ExitConfig for the refusals above, 1 for any other error. The host's
+// process exit calls it through app.ExitStatus (R3-02).
 func ExitCode(err error) int {
 	if err == nil {
 		return 0
@@ -53,6 +55,9 @@ func ExitCode(err error) int {
 		return ExitConfig
 	}
 	if _, ok := errors.AsType[*storage.LevelTooNewError](err); ok {
+		return ExitConfig
+	}
+	if _, ok := errors.AsType[*storage.ErrUpgradeFloor](err); ok {
 		return ExitConfig
 	}
 	return 1
