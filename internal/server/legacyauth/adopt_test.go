@@ -137,3 +137,94 @@ func TestAuthenticate(t *testing.T) {
 		t.Errorf("auth-disabled: status %d user %v, want a pass with no user bound", rec.Code, gotUser)
 	}
 }
+
+// Held, HeldOrAuthOff and HeldLive answer only on a request that runs under
+// core identity; elsewhere they report bridged=false and the caller's HEAD
+// code decides.
+func TestHeld(t *testing.T) {
+	b := newBridge(t, nil)
+	refresh := func(_ context.Context, p *coreauth.Principal) (*coreauth.Principal, error) { return p, nil }
+	id := &Identity{Bridge: b, Refresh: refresh}
+	lib := setChecker{"books:view", "core:tasks.view"}
+	for name, tc := range map[string]struct {
+		ctx             context.Context
+		held, authOffOK bool
+		bridged         bool
+		atom            string
+	}{
+		"not under core identity":         {ctx: as(coreauth.MethodSession, lib), bridged: false, atom: "library.view"},
+		"a principal holding the atom":    {ctx: WithIdentity(as(coreauth.MethodSession, lib), id), held: true, authOffOK: true, bridged: true, atom: "library.view"},
+		"a principal lacking the atom":    {ctx: WithIdentity(as(coreauth.MethodSession, setChecker{"books:view"}), id), bridged: true, atom: "library.view"},
+		"an atom the table does not know": {ctx: WithIdentity(as(coreauth.MethodSession, laxChecker{}), id), bridged: true, atom: "batcave.flood"},
+		"no principal":                    {ctx: WithIdentity(context.Background(), id), bridged: true, atom: "library.view"},
+		"the auth-disabled principal":     {ctx: WithIdentity(as(coreauth.MethodAuthDisabled, laxChecker{}), id), authOffOK: true, bridged: true, atom: "library.view"},
+	} {
+		held, bridged := Held(tc.ctx, tc.atom)
+		if bridged != tc.bridged || (bridged && held != tc.held) {
+			t.Errorf("%s: Held = (%v, %v), want (%v, %v)", name, held, bridged, tc.held, tc.bridged)
+		}
+		held, bridged = HeldOrAuthOff(tc.ctx, tc.atom)
+		if bridged != tc.bridged || (bridged && held != (tc.held || tc.authOffOK)) {
+			t.Errorf("%s: HeldOrAuthOff = (%v, %v), want (%v, %v)", name, held, bridged, tc.held || tc.authOffOK, tc.bridged)
+		}
+	}
+}
+
+func TestHeldLive(t *testing.T) {
+	b := newBridge(t, nil)
+	lib := setChecker{"books:view", "core:tasks.view"}
+	same := func(_ context.Context, p *coreauth.Principal) (*coreauth.Principal, error) { return p, nil }
+	run := func(refresh func(context.Context, *coreauth.Principal) (*coreauth.Principal, error), ctx context.Context) (bool, bool) {
+		return HeldLive(WithIdentity(ctx, &Identity{Bridge: b, Refresh: refresh}), "library.view")
+	}
+	if _, bridged := HeldLive(as(coreauth.MethodSession, lib), "library.view"); bridged {
+		t.Error("HeldLive reports core identity on a request without one")
+	}
+	if held, bridged := run(same, as(coreauth.MethodSession, lib)); !held || !bridged {
+		t.Errorf("a standing principal: (%v, %v), want (true, true)", held, bridged)
+	}
+	narrowed := func(_ context.Context, p *coreauth.Principal) (*coreauth.Principal, error) {
+		np := *p
+		np.Perms = setChecker{"books:view"}
+		return &np, nil
+	}
+	if held, _ := run(narrowed, as(coreauth.MethodSession, lib)); held {
+		t.Error("a refreshed principal that lost a scope still holds the atom")
+	}
+	// The refresh decides, not the checker the request opened with: a fresh
+	// checker that holds the atom is held even when the bound one no longer does.
+	widened := func(_ context.Context, p *coreauth.Principal) (*coreauth.Principal, error) {
+		np := *p
+		np.Perms = lib
+		return &np, nil
+	}
+	if held, _ := run(widened, as(coreauth.MethodSession, setChecker{})); !held {
+		t.Error("the refreshed principal's checker is what is asked")
+	}
+	for name, refresh := range map[string]func(context.Context, *coreauth.Principal) (*coreauth.Principal, error){
+		"a refusal": func(context.Context, *coreauth.Principal) (*coreauth.Principal, error) {
+			return nil, coreauth.ErrInactiveUser
+		},
+		"a nil principal": func(context.Context, *coreauth.Principal) (*coreauth.Principal, error) { return nil, nil },
+		"no checker": func(context.Context, *coreauth.Principal) (*coreauth.Principal, error) {
+			return &coreauth.Principal{Method: coreauth.MethodSession}, nil
+		},
+		"no refresh handle": nil,
+	} {
+		if held, bridged := run(refresh, as(coreauth.MethodSession, lib)); held || !bridged {
+			t.Errorf("%s: (%v, %v), want (false, true)", name, held, bridged)
+		}
+	}
+	if held, bridged := run(same, bound(nil, lib)); held || !bridged {
+		t.Errorf("no principal: (%v, %v), want (false, true)", held, bridged)
+	}
+	off := as(coreauth.MethodAuthDisabled, laxChecker{})
+	if held, _ := run(same, off); !held {
+		t.Error("auth off passes while core still answers it")
+	}
+	if held, _ := run(func(context.Context, *coreauth.Principal) (*coreauth.Principal, error) {
+		return nil, coreauth.ErrInactiveUser
+	}, off); held {
+		t.Error("auth off stops once core refuses the principal")
+	}
+}

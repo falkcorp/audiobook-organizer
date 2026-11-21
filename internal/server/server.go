@@ -184,7 +184,7 @@ type Server struct {
 	// (WithIdentity); every adopted auth site reads it, or the request's bound
 	// copy, and takes HEAD's path when it is nil.
 	identity *legacyauth.Identity
-	store database.Store
+	store    database.Store
 	// credRoutes records every route registered through credRoute /
 	// credRouteWhen ("METHOD /full/path"), for credential_routes_test.go.
 	credRoutes map[string]credRouteKind

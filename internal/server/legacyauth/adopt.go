@@ -41,6 +41,15 @@ type Identity struct {
 	// (address, user agent, proxy trust). Core's throttle keys on it, so the
 	// handlers never build one from gin's own client address.
 	Client func(*http.Request) coreauth.ClientInfo
+	// Refresh re-resolves a principal held by a request that outlives its
+	// permission check (an event stream), as core.auth Service.Refresh does:
+	// it fails when the principal no longer stands (user disabled or removed,
+	// session or key gone, epoch moved) and otherwise returns the principal
+	// with a fresh checker, so a role lowered after the stream opened stops
+	// being held. HEAD answered the same question from books' own store
+	// (permHoldsLive); under core identity that store is no longer the
+	// account's record, so the question goes to core.
+	Refresh func(context.Context, *coreauth.Principal) (*coreauth.Principal, error)
 }
 
 // Validate reports a missing member. A server built over a partial Identity
@@ -56,6 +65,8 @@ func (id *Identity) Validate() error {
 		return errors.New("legacyauth: identity has no compat handle")
 	case id.Client == nil:
 		return errors.New("legacyauth: identity has no client resolver")
+	case id.Refresh == nil:
+		return errors.New("legacyauth: identity has no principal refresh")
 	}
 	return nil
 }
@@ -146,4 +157,56 @@ func (b *Bridge) Authenticate(setUser func(*gin.Context, *database.User)) gin.Ha
 		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	}
+}
+
+// Held is the in-handler check of an adopted site under core identity: whether
+// the caller satisfies the atom's table entry (Bridge.Can), and whether the
+// request runs under core identity at all. bridged false means the server was
+// built without an Identity (LegacyAuthGin) and the caller answers with HEAD's
+// own code; held is then meaningless. The auth-disabled principal does not
+// hold any atom (Check), so a site whose HEAD code bypasses its check with
+// auth off asks HeldOrAuthOff.
+func Held(ctx context.Context, atom string) (held, bridged bool) {
+	b, ok := BridgeFrom(ctx)
+	if !ok {
+		return false, false
+	}
+	return b.Can(ctx, atom), true
+}
+
+// HeldOrAuthOff is Held for a site whose HEAD code holds every permission when
+// auth is off (middleware.RequirePermission's s.perm, the ops v3 Holds): the
+// auth-disabled principal passes and any other caller is judged as Held does.
+// HEAD read books' EnableAuth for this; core's reading is the principal.
+func HeldOrAuthOff(ctx context.Context, atom string) (held, bridged bool) {
+	b, ok := BridgeFrom(ctx)
+	if !ok {
+		return false, false
+	}
+	return b.AuthOff(ctx) || b.Can(ctx, atom), true
+}
+
+// HeldLive is HeldOrAuthOff for a request that outlives its permission check:
+// the principal is first re-resolved through the identity's Refresh, so an
+// account that was disabled, removed or demoted after the request began stops
+// holding what it lost (HEAD's permHoldsLive recheck against books' store). A
+// refusal, a nil Refresh or a refreshed principal without a checker fails
+// closed. The auth-disabled principal is passed to Refresh like any other:
+// core answers it afresh while the mode is on and refuses it once it is off.
+// Refresh can only narrow what the stream was opened with, never widen it.
+func HeldLive(ctx context.Context, atom string) (held, bridged bool) {
+	id, ok := IdentityFrom(ctx)
+	if !ok {
+		return false, false
+	}
+	p, ok := coreauth.PrincipalFrom(ctx)
+	if !ok || id.Refresh == nil {
+		return false, true
+	}
+	np, err := id.Refresh(ctx, p)
+	if err != nil || np == nil || np.Perms == nil {
+		return false, true
+	}
+	fresh := rbac.WithChecker(coreauth.WithPrincipal(ctx, np), np.Perms)
+	return id.Bridge.AuthOff(fresh) || id.Bridge.Can(fresh, atom), true
 }
