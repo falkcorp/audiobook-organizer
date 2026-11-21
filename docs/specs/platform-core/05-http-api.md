@@ -201,6 +201,7 @@ type Route struct {
 // Guards are identity requirements beyond the permission.
 type Guards struct {
 	Interactive bool // refuse API keys, ABS tokens and auth-disabled (today's credGuard, auth.Method.MayChangeCredentials)
+	Session     bool // the user's own sign-in only (auth.Method.Interactive): also refuses a delegated session; 403 interactive_required (05-health SEC2-13)
 	Owner       bool // require an owner-assurance principal (today's RequireOwner; 05-authn §4.8)
 }
 
@@ -958,7 +959,7 @@ types:
   expansion `Page_<T>` (COR4-21); component
   names `<module>.<GoType>`; two Go types mapping to one name → `ErrSchema`; a non-snake_case
   property → `ErrJSONName`.
-- Extensions: `x-mediacore-permission` (scope or `public`/`authenticated`) and `x-mediacore-guards`.
+- Extensions: `x-mediacore-permission` (scope or `public`/`authenticated`) and `x-mediacore-guards` (`interactive`, `session`, `owner`).
 - Security schemes: `sessionCookie` (apiKey in cookie) and `bearer` (session or API key);
   `apiKeyHeader` (`X-Api-Key`) is added with the facade (deferred-build, §3.6).
 - Served at `GET /api/core/v1/openapi/{owner}.json` (perm `rbac.AnyAuthenticated`;

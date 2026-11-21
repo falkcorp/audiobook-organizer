@@ -81,8 +81,10 @@ func (d AuthzDecision) Admitted() bool { return d.Refusal == nil }
 //  2. Public (with no Guards): admitted.
 //  3. No principal: 401 authentication_required.
 //  4. Guards: Interactive needs Method.MayChangeCredentials (403
-//     interactive_required). Owner needs AssuranceOwner (403 owner_required)
-//     while OwnerRequired, else Interactive plus core:admin (05-authn §4.8).
+//     interactive_required). Session needs Method.Interactive, the user's own
+//     sign-in and not a delegated session (403 interactive_required). Owner
+//     needs AssuranceOwner (403 owner_required) while OwnerRequired, else
+//     Interactive plus core:admin (05-authn §4.8).
 //  5. Perm through the principal's checker (confinement and Sensitive are the
 //     checker's, 05-rbac §4.4, §4.10), a legacy kind resolved through
 //     opts.ResolveAtom first: 403 permission_denied naming the missing scope,
@@ -114,6 +116,9 @@ func Authorize(req AuthzRequest, opts AuthzOptions) AuthzDecision {
 	}
 	if req.Guards.Interactive && !p.Method.MayChangeCredentials() {
 		return refuse(errInteractiveRequired())
+	}
+	if req.Guards.Session && !p.Method.Interactive() {
+		return refuse(errSessionRequired())
 	}
 	if req.Guards.Owner {
 		if e := ownerRefusal(p, opts.OwnerRequired); e != nil {
@@ -248,6 +253,13 @@ func errAuthRequired() *Error {
 
 func errInteractiveRequired() *Error {
 	return &Error{Status: http.StatusForbidden, Code: "interactive_required", Detail: "this route needs an interactive sign-in, not an API key"}
+}
+
+// errSessionRequired is Guards.Session's refusal: the interactive_required
+// code a client already handles, with a detail that names the delegated
+// session too.
+func errSessionRequired() *Error {
+	return &Error{Status: http.StatusForbidden, Code: "interactive_required", Detail: "this route needs your own interactive sign-in, not a delegated session or an API key"}
 }
 
 func errOwnerRequired() *Error {

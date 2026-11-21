@@ -62,7 +62,14 @@ type Route struct {
 // Guards are identity requirements beyond the permission.
 type Guards struct {
 	Interactive bool // refuse API keys, ABS tokens and auth-disabled (HEAD's credGuard, auth.Method.MayChangeCredentials)
-	Owner       bool // require an owner-assurance principal (HEAD's RequireOwner; 05-authn §4.8)
+	// Session refuses every method but the user's own interactive sign-in
+	// (auth.Method.Interactive: MethodSession), so a delegated session
+	// (temp-login, invite) is refused too, where Interactive admits it. It is
+	// for routes whose spec closes them to delegated sessions, such as the
+	// diagnostics bundle download (05-health §5H.5, SEC2-13). Answered 403
+	// interactive_required, like Interactive.
+	Session bool
+	Owner   bool // require an owner-assurance principal (HEAD's RequireOwner; 05-authn §4.8)
 }
 
 // RateClass is a route's rate-limit bucket class (stage 10, R1-17).

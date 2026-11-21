@@ -281,7 +281,7 @@ component `core.startup.<token>` with `StatusDegraded`.
 | `GET /api/core/v1/system/info` | `core:system.manage` (SEC-8) | 200 | `sysinfo.Info` |
 | `GET /api/core/v1/system/status` | `core:system.status` (readiness tokens only; seeded to editor/viewer if the shell shows a status banner, 05-rbac) | 200 | `{ready, not_ready[]}` — the `/readyz` body, authenticated |
 | `POST /api/core/v1/diagnostics` | `core:system.manage` | 202 + run ref | starts `core.diagnostics.export` |
-| `GET /api/core/v1/diagnostics/{run}` | route `Perm` `core:system.manage` with `Guards.Interactive`; the handler **also** requires that the caller is the run's actor or holds `core:admin` (SEC2-13) | 200 zip / 403 / 404 / 410 expired | bundle, re-filtered at download time (5H.3.5); every download audited as `core.diagnostics.download` (05-rbac §7.1) |
+| `GET /api/core/v1/diagnostics/{run}` | route `Perm` `core:system.manage` with `Guards.Interactive` and `Guards.Session` (the user's own sign-in, so the router refuses a delegated session, SEC2-13); the handler **also** requires that the caller is the run's actor or holds `core:admin` (SEC2-13) | 200 zip / 403 / 404 / 410 expired | bundle, re-filtered at download time (5H.3.5); every download audited as `core.diagnostics.download` (05-rbac §7.1) |
 
 **Status topic.** From **F8** (with the probes and routes, 5H.10), `health` declares
 `core.system.status-changed.v1` in the one catalog ([05-events](05-events.md)); no earlier build

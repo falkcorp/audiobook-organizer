@@ -166,6 +166,9 @@ func newAPI(d Deps) *api {
 type gate struct {
 	perm        rbac.Permission
 	interactive bool
+	// session is httpapi.Guards.Session: the user's own sign-in only, so a
+	// delegated session (temp-login, invite) is refused too (SEC2-13).
+	session bool
 	// anon lets a principal with no user (the auth-disabled one) through, as
 	// the router does for a scope that is not AuthRequired (system.status).
 	anon bool
@@ -187,7 +190,7 @@ func Register(g *httpapi.Group, d Deps) {
 		httpapi.HandleRaw(g, httpapi.Route{
 			Method: def.method, Path: def.path, Name: def.name,
 			Perm:   rbac.Need(def.gate.perm),
-			Guards: httpapi.Guards{Interactive: def.gate.interactive},
+			Guards: httpapi.Guards{Interactive: def.gate.interactive, Session: def.gate.session},
 			Tags:   []string{"health"}, MaxBody: def.maxBody, RateClass: def.rate,
 			Summary: def.summary, Doc: def.doc,
 		}, def.raw, def.handler)
@@ -207,7 +210,10 @@ func RegisterProbes(r *httpapi.Router, reg *health.Registry) {
 // both read it, so the table the router enforces is the table the tests drive.
 func (a *api) routeTable() []routeDef {
 	manage := gate{perm: permSystemManage}
-	manageInteractive := gate{perm: permSystemManage, interactive: true}
+	// The bundle download authorizes the credential, not only the user: the
+	// user's own sign-in, never a key, a delegated session or another
+	// non-interactive method (05-health §5H.5, SEC2-13).
+	download := gate{perm: permSystemManage, interactive: true, session: true}
 	status := gate{perm: permSystemStatus, anon: true}
 	return []routeDef{
 		{method: http.MethodGet, path: "/health", name: "getHealth", gate: manage,
@@ -227,12 +233,12 @@ func (a *api) routeTable() []routeDef {
 			doc: `Body (optional) {sections?: ["<moduleID>.<name>", ...]}; no sections means every section the caller may read. ` +
 				`202 {run_id}: the bundle is built as a task, never on this request, and fetched with GET /diagnostics/{run}.`,
 			raw: httpapi.RawDoc{Request: httpapi.BodyOf[startRequest](), Success: httpapi.BodyOf[startResponse](), Status: http.StatusAccepted}, handler: a.wrap(manage, a.start)},
-		{method: http.MethodGet, path: "/diagnostics/{run}", name: "downloadDiagnostics", gate: manageInteractive,
+		{method: http.MethodGet, path: "/diagnostics/{run}", name: "downloadDiagnostics", gate: download,
 			summary: "Download a diagnostics bundle", rate: httpapi.RateExpensive,
-			doc: "Needs core:system.manage and an interactive session, and the caller must be the run's actor or hold core:admin (404 otherwise). " +
+			doc: "Needs core:system.manage and the user's own interactive sign-in (not an API key or a delegated session), and the caller must be the run's actor or hold core:admin (404 otherwise). " +
 				"Sections the caller's current permissions no longer satisfy are left out and listed. 409 bundle_not_ready while the run has no file; " +
 				"410 bundle_expired once the file is pruned. Audited as core.diagnostics.download before the stream starts.",
-			raw: httpapi.RawDoc{}, handler: a.wrap(manageInteractive, a.download)},
+			raw: httpapi.RawDoc{}, handler: a.wrap(download, a.download)},
 	}
 }
 
@@ -272,24 +278,33 @@ func holds(p *auth.Principal, perm rbac.Permission) bool {
 	return p.Perms != nil && p.Perms.Has(perm) && p.Perms.Satisfies(rbac.Need(perm))
 }
 
-// authorise is the repetition of the route's permission and guards, in the
-// order stage 13 refuses them: a principal (401), the permission (403), an
-// interactive credential (403). "Interactive" is MethodSession alone, not
-// MayChangeCredentials: a temp-login or invite session (MethodSessionDelegated)
-// may change credentials but must not download operator data (05-health
-// §5H.3.3, §5H.5, SEC2-13). The router's shared Guards are left as they are.
+// authorise repeats stage 13's judgement of the route's permission and guards
+// (httpapi.Authorize, over the same Perm and Guards Register declares), so a
+// handler mounted without the router refuses exactly what the router would,
+// in the same order: a principal (401), the interactive guard, the session
+// guard (403 interactive_required), then the permission (403
+// permission_denied). The download's rule that a delegated session may change
+// credentials but must not take operator data (05-health §5H.3.3, §5H.5,
+// SEC2-13) is the route's declared Guards.Session, so the router enforces it
+// and the OpenAPI document says it. The one rule of its own comes after
+// Authorize admits: a route other than the status route needs a user to name
+// as the actor, so the auth-disabled principal is answered 401 there. It
+// passes no rbac catalog, so a non-interactive principal missing a Sensitive
+// scope is told permission_denied where the router says interactive_required;
+// the router judges first, so a caller never sees the difference.
 func authorise(p *auth.Principal, g gate) (string, error) {
 	subject := ""
 	if p != nil && p.User != nil {
 		subject = string(p.User.ID)
 	}
-	switch {
-	case p == nil || (!g.anon && subject == ""):
+	d := httpapi.Authorize(httpapi.AuthzRequest{
+		Perm: rbac.Need(g.perm), Guards: httpapi.Guards{Interactive: g.interactive, Session: g.session}, Principal: p,
+	}, httpapi.AuthzOptions{OwnerRequired: true})
+	if d.Refusal != nil {
+		return "", d.Refusal
+	}
+	if !g.anon && subject == "" {
 		return "", &httpapi.Error{Status: http.StatusUnauthorized, Code: "authentication_required", Detail: "authentication is required"}
-	case !holds(p, g.perm):
-		return "", httpapi.Forbidden(g.perm)
-	case g.interactive && !p.Method.Interactive():
-		return "", &httpapi.Error{Status: http.StatusForbidden, Code: "interactive_required", Detail: "this route needs an interactive session"}
 	}
 	return subject, nil
 }

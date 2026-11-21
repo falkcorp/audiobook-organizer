@@ -346,7 +346,15 @@ func TestHealthRoutesPermissions(t *testing.T) {
 			} else {
 				t.Run("auth disabled", func(t *testing.T) {
 					p := hhAs(hhBruce, auth.MethodAuthDisabled, c.perm)
-					if rep := setup().do(p, c.method, c.target, c.ctype, c.body); rep.status != 401 {
+					rep := setup().do(p, c.method, c.target, c.ctype, c.body)
+					if c.interactive {
+						// The guard refuses it first, as the router does.
+						if rep.status != 403 || problemCode(t, rep) != "interactive_required" {
+							t.Errorf("= %d %s, want 403 interactive_required", rep.status, rep.body)
+						}
+						return
+					}
+					if rep.status != 401 {
 						t.Errorf("status = %d, want 401 (a route that names an actor needs a user)", rep.status)
 					}
 				})
@@ -561,10 +569,12 @@ func TestDiagnostics_DownloadOtherActor404(t *testing.T) {
 func TestDiagnostics_NarrowKeyOfActor403(t *testing.T) {
 	r := newRig(t)
 	r.bundleFor("run-bruce", hhBruce)
-	// The actor's own scrape key, scoped to metrics only.
+	// The actor's own scrape key, scoped to metrics only: a key, so the
+	// interactive guard refuses it before its scopes are read (stage 13's
+	// order).
 	rep := r.do(hhAs(hhBruce, auth.MethodAPIKey, "core:metrics.read"), "GET", "/diagnostics/run-bruce", "", "")
-	if rep.status != 403 || problemCode(t, rep) != "permission_denied" {
-		t.Errorf("narrow key = %d %s", rep.status, rep.body)
+	if rep.status != 403 || problemCode(t, rep) != "interactive_required" {
+		t.Errorf("narrow key = %d %s, want 403 interactive_required", rep.status, rep.body)
 	}
 	// The actor's full-scope but non-interactive key, and a delegated session.
 	for _, m := range []auth.Method{auth.MethodAPIKey, auth.MethodSessionDelegated} {
@@ -575,6 +585,31 @@ func TestDiagnostics_NarrowKeyOfActor403(t *testing.T) {
 	}
 	if r.rec.count() != 0 {
 		t.Error("a refused credential was audited as a download")
+	}
+}
+
+// TestDiagnostics_DelegatedSessionRefusedPlainSessionAdmitted (SEC2-13,
+// 05-health §5H.5): the download is the route's Guards.Session, judged by
+// httpapi.Authorize. A delegated session (an admin's temp-login) holding
+// core:system.manage and core:admin is refused 403 interactive_required and
+// nothing is audited; the same user's own session is admitted. A delegated
+// session lacking the permission is refused for the guard, not the scope.
+func TestDiagnostics_DelegatedSessionRefusedPlainSessionAdmitted(t *testing.T) {
+	r := newRig(t)
+	r.bundleFor("run-bruce", hhBruce)
+	rep := r.do(hhAs(hhBruce, auth.MethodSessionDelegated, manage, adminPerm), "GET", "/diagnostics/run-bruce", "", "")
+	if rep.status != 403 || problemCode(t, rep) != "interactive_required" {
+		t.Errorf("delegated session = %d %s, want 403 interactive_required", rep.status, rep.body)
+	}
+	if r.rec.count() != 0 {
+		t.Error("a delegated session's refused download was audited")
+	}
+	rep = r.do(hhAs(hhBruce, auth.MethodSessionDelegated, "core:users.view"), "GET", "/diagnostics/run-bruce", "", "")
+	if rep.status != 403 || problemCode(t, rep) != "interactive_required" {
+		t.Errorf("delegated session lacking the scope = %d %s, want 403 interactive_required", rep.status, rep.body)
+	}
+	if rep := r.do(hhAs(hhBruce, auth.MethodSession, manage), "GET", "/diagnostics/run-bruce", "", ""); rep.status != 200 {
+		t.Errorf("the actor's own session = %d %s, want 200", rep.status, rep.body)
 	}
 }
 
@@ -714,13 +749,14 @@ func registered(t testing.TB) *httpapi.Router {
 func TestHealthRegisterRouteTable(t *testing.T) {
 	want := map[string]struct {
 		method, pattern, perm string
-		interactive           bool
+		guards                httpapi.Guards
 	}{
-		"getHealth":           {"GET", hhBase + "/health", "core:system.manage", false},
-		"getSystemInfo":       {"GET", hhBase + "/system/info", "core:system.manage", false},
-		"getSystemStatus":     {"GET", hhBase + "/system/status", "core:system.status", false},
-		"startDiagnostics":    {"POST", hhBase + "/diagnostics", "core:system.manage", false},
-		"downloadDiagnostics": {"GET", hhBase + "/diagnostics/{run}", "core:system.manage", true},
+		"getHealth":        {"GET", hhBase + "/health", "core:system.manage", httpapi.Guards{}},
+		"getSystemInfo":    {"GET", hhBase + "/system/info", "core:system.manage", httpapi.Guards{}},
+		"getSystemStatus":  {"GET", hhBase + "/system/status", "core:system.status", httpapi.Guards{}},
+		"startDiagnostics": {"POST", hhBase + "/diagnostics", "core:system.manage", httpapi.Guards{}},
+		// SEC2-13: the router itself refuses a delegated session the download.
+		"downloadDiagnostics": {"GET", hhBase + "/diagnostics/{run}", "core:system.manage", httpapi.Guards{Interactive: true, Session: true}},
 	}
 	seen := 0
 	for ri := range registered(t).Routes() {
@@ -730,7 +766,7 @@ func TestHealthRegisterRouteTable(t *testing.T) {
 			continue
 		}
 		seen++
-		if ri.Method != w.method || ri.Pattern != w.pattern || ri.Perm.String() != w.perm || ri.Guards != (httpapi.Guards{Interactive: w.interactive}) {
+		if ri.Method != w.method || ri.Pattern != w.pattern || ri.Perm.String() != w.perm || ri.Guards != w.guards {
 			t.Errorf("%s = %s %s %s %+v", ri.Name, ri.Method, ri.Pattern, ri.Perm, ri.Guards)
 		}
 	}

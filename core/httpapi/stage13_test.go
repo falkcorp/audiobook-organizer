@@ -189,6 +189,13 @@ func TestStage13_Decision(t *testing.T) {
 		{"Interactive refuses a key", AuthzRequest{Perm: rbac.Need(rbac.CoreAdmin), Guards: interactive, Principal: s13Key(cat, []rbac.Permission{rbac.CoreAdmin}, rbac.CoreAdmin)}, opts, s13Want{403, "interactive_required", "", false}},
 		{"Interactive refuses auth-disabled", AuthzRequest{Perm: rbac.Need("books:view"), Guards: interactive, Principal: s13AuthOff(cat)}, opts, s13Want{403, "interactive_required", "", false}},
 		{"Interactive admits a delegated session", AuthzRequest{Perm: rbac.Need("books:view"), Guards: interactive, Principal: s13Delegated(cat, "books:view")}, opts, s13Want{}},
+		// Session is the stricter guard: the user's own sign-in only.
+		{"Session refuses a delegated session holding Perm", AuthzRequest{Perm: rbac.Need("books:view"), Guards: Guards{Interactive: true, Session: true}, Principal: s13Delegated(cat, "books:view")}, opts, s13Want{403, "interactive_required", "", false}},
+		{"Session alone refuses a delegated session", AuthzRequest{Perm: rbac.Need("books:view"), Guards: Guards{Session: true}, Principal: s13Delegated(cat, "books:view")}, opts, s13Want{403, "interactive_required", "", false}},
+		{"Session admits the user's own session", AuthzRequest{Perm: rbac.Need("books:view"), Guards: Guards{Interactive: true, Session: true}, Principal: s13Session(cat, "books:view")}, opts, s13Want{}},
+		{"Session refuses a key", AuthzRequest{Perm: rbac.Need("books:view"), Guards: Guards{Session: true}, Principal: s13Key(cat, []rbac.Permission{"books:view"}, "books:view")}, opts, s13Want{403, "interactive_required", "", false}},
+		{"Session refuses auth-disabled", AuthzRequest{Perm: rbac.Need("books:view"), Guards: Guards{Session: true}, Principal: s13AuthOff(cat)}, opts, s13Want{403, "interactive_required", "", false}},
+		{"Session is checked before Perm", AuthzRequest{Perm: rbac.Need("books:delete"), Guards: Guards{Session: true}, Principal: s13Delegated(cat, "books:view")}, opts, s13Want{403, "interactive_required", "", false}},
 		{"Owner required refuses an admin without assurance", AuthzRequest{Perm: rbac.Need(rbac.CoreAdmin), Guards: owner, Principal: admin}, opts, s13Want{403, "owner_required", "", false}},
 		{"Owner required admits the owner", AuthzRequest{Perm: rbac.Need("books:view"), Guards: owner, Principal: s13Owner(cat, "books:view")}, opts, s13Want{}},
 		{"Owner required: the owner still needs Perm", AuthzRequest{Perm: rbac.Need("books:delete"), Guards: owner, Principal: s13Owner(cat, "books:view")}, opts, s13Want{403, "permission_denied", "books:delete", false}},
