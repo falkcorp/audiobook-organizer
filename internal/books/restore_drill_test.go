@@ -526,6 +526,53 @@ func testCutoverSelftest(t *testing.T) {
 	t.Run("checkpoint-guard", testCheckpointGuardSelftest)
 	t.Run("residual", testResidualSelftest)
 	t.Run("completion", testCompletionSelftest)
+	t.Run("surviving-cases", testSurvivingCasesSelftest)
+}
+
+// testSurvivingCasesSelftest proves casesSurvivingWrites resolves an overlay
+// case only when the writes removed its fault: a rewritten row, or a
+// rewritten blob without the member. An untouched row, or a rewritten blob
+// still naming the member, keeps the case.
+func testSurvivingCasesSelftest(t *testing.T) {
+	const (
+		secret, blob = "setting:basic_auth_password", "setting:config_blob"
+		member       = blob + "#batcomputer_uplink_mode"
+	)
+	cases := []r2Stage2Case{
+		{Label: "corrupt-secret", Keys: []string{secret}, Outcome: "quarantined"},
+		{Label: "unmapped-field", Keys: []string{member}, Outcome: "quarantined"},
+	}
+	baseRows := map[string]string{secret: `{"value":"not-ciphertext"}`, blob: `{"value":"{\"batcomputer_uplink_mode\":\"cave\",\"gotham\":1}"}`}
+	write := func(t *testing.T, rows map[string]string) string {
+		dir := filepath.Join(t.TempDir(), "db")
+		db, err := pebble.Open(dir, &pebble.Options{})
+		require.NoError(t, err)
+		for k, v := range rows {
+			require.NoError(t, db.Set([]byte(k), []byte(v), pebble.Sync))
+		}
+		require.NoError(t, db.Close())
+		return dir
+	}
+	for name, tc := range map[string]struct {
+		after    map[string]string
+		resolved []string
+	}{
+		"untouched":                   {after: baseRows},
+		"the-secret-re-saved":         {after: map[string]string{secret: `{"value":"sealed"}`, blob: baseRows[blob]}, resolved: []string{"corrupt-secret"}},
+		"the-secret-deleted":          {after: map[string]string{blob: baseRows[blob]}, resolved: []string{"corrupt-secret"}},
+		"the-blob-rewritten-without":  {after: map[string]string{secret: baseRows[secret], blob: `{"value":"{\"gotham\":2}"}`}, resolved: []string{"unmapped-field"}},
+		"the-blob-rewritten-but-kept": {after: map[string]string{secret: baseRows[secret], blob: `{"value":"{\"batcomputer_uplink_mode\":\"cave\",\"gotham\":2}"}`}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			kept, resolved := casesSurvivingWrites(t, write(t, baseRows), write(t, tc.after), cases)
+			var got []string
+			for _, qc := range resolved {
+				got = append(got, qc.Label)
+			}
+			require.Equal(t, tc.resolved, got)
+			require.Len(t, kept, len(cases)-len(got))
+		})
+	}
 }
 
 // selftestOwner is books' module ID, which its level stamp and data migration
