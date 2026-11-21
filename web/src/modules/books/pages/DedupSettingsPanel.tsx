@@ -15,7 +15,7 @@ import { useBooksSettings } from './booksSettingsContext';
 
 export function DedupSettingsPanel() {
   const {
-    acoustidKeyMask,
+    acoustidKeyStatus,
     aiBackendConfig,
     dedupConfig,
     embeddingConfig,
@@ -26,6 +26,7 @@ export function DedupSettingsPanel() {
     handleScheduledChange,
     metadataScoringConfig,
     scheduledConfig,
+    settingLocks,
   } = useBooksSettings();
 
   return (
@@ -33,7 +34,8 @@ export function DedupSettingsPanel() {
       <DedupSettingsSection
         config={dedupConfig}
         onChange={handleDedupChange}
-        acoustidKeyMask={acoustidKeyMask}
+        acoustidKeyStatus={acoustidKeyStatus}
+        acoustidKeyLock={settingLocks.acoustid_api_key}
       />
       <Box sx={{ mt: 4 }}>
         <EmbeddingSettingsSection config={embeddingConfig} onChange={handleEmbeddingChange} />

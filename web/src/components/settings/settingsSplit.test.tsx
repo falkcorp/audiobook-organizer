@@ -7,7 +7,9 @@
 // links, the config load, the dirty-state save bar and the save itself, the footer,
 // the advanced switch and a few dialogs. F9-04 slice 6 splits the page into a shell
 // frame and books panels without changing any of this; these tests are written
-// first, against the untouched page, and must pass unchanged after the cut.
+// first, against the untouched page, and passed unchanged through the cut. F3-07's
+// key-shaped config wire (GET returns keys; a PUT names only the changed ones in
+// `set`) changed the fetch stub and the save assertion, not the page behaviour.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
@@ -40,12 +42,23 @@ const CONFIG = {
   organization_strategy: 'auto',
 };
 
+// GET /config is key-shaped: one entry per key with its class (see services/configView.ts).
+const viewOf = (values: Record<string, unknown>) => ({
+  generation: 1,
+  keys: Object.entries(values).map(([name, value]) => ({
+    name,
+    class: name === 'root_dir' ? 'i' : 'k',
+    value,
+  })),
+});
+
 const BACKUP = {
   filename: 'backup-year-one.tar.gz',
   size: 2048,
   created_at: '2026-11-01T00:00:00Z',
 };
 
+// The `set` half of each PUT /config body: the keys a save named.
 let putBodies: Array<Record<string, unknown>> = [];
 
 function Probe() {
@@ -77,10 +90,11 @@ function stubFetch() {
       const method = (init?.method ?? 'GET').toUpperCase();
       if (url.includes('/config')) {
         if (method === 'PUT') {
-          putBodies.push(JSON.parse(String(init?.body)));
-          return json({ config: { ...CONFIG, ...JSON.parse(String(init?.body)) } });
+          const body = JSON.parse(String(init?.body)) as { set?: Record<string, unknown> };
+          putBodies.push(body.set ?? {});
+          return json(viewOf({ ...CONFIG, ...body.set }));
         }
-        return json({ config: CONFIG });
+        return json(viewOf(CONFIG));
       }
       if (url.includes('/import-paths')) return json({ import_paths: [] });
       if (url.includes('/backup/list')) return json({ backups: [BACKUP], count: 1 });
@@ -185,7 +199,8 @@ describe('Settings page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
     expect(await screen.findByText('Settings saved successfully!')).toBeInTheDocument();
     expect(putBodies).toHaveLength(1);
-    expect(putBodies[0].root_dir).toBe(CONFIG.root_dir);
+    // A save names only the keys that moved: the untouched library root is not sent.
+    expect(putBodies[0]).not.toHaveProperty('root_dir');
     expect(putBodies[0].supported_extensions).toEqual(['.flac', '.m4b', '.mp3']);
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: 'Discard' })).not.toBeInTheDocument()

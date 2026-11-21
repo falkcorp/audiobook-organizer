@@ -138,8 +138,15 @@ describe('WelcomeWizard composition (F9-04 slice 5)', () => {
     await user.click(screen.getByRole('button', { name: 'Complete Setup' }));
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
     expect(vi.mocked(api.updateConfig).mock.calls).toEqual([
-      [{ root_dir: '/library/gotham', playlist_dir: '/library/gotham/playlists', setup_complete: true }],
-      [{ openai_api_key: 'sk-test-0001', enable_ai_parsing: true }],
+      [
+        {
+          root_dir: '/library/gotham',
+          playlist_dir: '/library/gotham/playlists',
+          secrets: { openai_api_key: 'sk-test-0001' },
+          enable_ai_parsing: true,
+          setup_complete: true,
+        },
+      ],
     ]);
     expect(api.addImportPath).toHaveBeenCalledWith('/audio/in/gotham', 'gotham');
     expect(api.importITunesLibrary).not.toHaveBeenCalled();
@@ -171,7 +178,7 @@ describe('WelcomeWizard composition (F9-04 slice 5)', () => {
     vi.mocked(api.updateConfig).mockRejectedValueOnce(new Error('disk full'));
     const { onComplete } = await walkTo('import');
     await user.click(screen.getByRole('button', { name: 'Complete Setup' }));
-    await waitFor(() => expect(alertSpy).toHaveBeenCalledWith('Failed to save settings. Please check the console for details.'));
+    await waitFor(() => expect(alertSpy).toHaveBeenCalledWith('Failed to save settings.\n\ndisk full'));
     expect(onComplete).not.toHaveBeenCalled();
     expect(localStorage.getItem(STORAGE_KEYS.WELCOME_WIZARD_COMPLETED)).toBeNull();
     expect(screen.getByRole('button', { name: 'Complete Setup' })).toBeEnabled();
