@@ -14,7 +14,7 @@
 Audiobook Organizer is a single-binary server (Go backend, React frontend) for scanning,
 normalizing, enriching, deduplicating, organizing, and serving audiobook
 libraries. The backend exposes Gin API routes, coordinates long-running
-operation pipelines, stores domain state in PebbleDB (activity-log data is stored in NutsDB), and embeds the
+operation pipelines, stores domain state in PebbleDB (the activity log lives in the same Pebble database, under the `act:` key prefix), and embeds the
 compiled React UI so the same binary can manage library data, filesystem
 changes, metadata fetches, AI-assisted parsing, and operational workflows.
 

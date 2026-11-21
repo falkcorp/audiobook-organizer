@@ -23,7 +23,7 @@ This document lists all backend packages in `internal/`, their responsibilities,
 | `cache` | Generic TTL-keyed in-memory cache | `Cache[K,V]` |
 | `config` | Server configuration struct hierarchy (7 sub-structs) | `Config`, `EmbeddingConfig`, `DedupConfig`, `ITunesConfig`, … |
 | `covers` | Cover art storage, SHA-256 dedup, history archival | `Store`, `WriteImage`, `DeduplicateCover` |
-| `database` | Store interfaces, PebbleDB impl, memdb, NutsDB, schema | `Store`, `PebbleStore`, `BookReader`, `BookWriter`, `OpsV2Store` |
+| `database` | Store interfaces, PebbleDB impl, memdb, schema, Pebble activity store | `Store`, `PebbleStore`, `BookReader`, `BookWriter`, `OpsV2Store` |
 | `dedup` | Unified dedup scoring engine, LSH index, candidate management | `Engine`, `LSHIndex`, `Candidate`, `UnifiedScorer` |
 | `deluge` | Deluge torrent download integration and importer | `Client`, `Centralizer` |
 | `diagnosis` | Structured diagnostic result types | `Result`, `Finding` |
@@ -43,7 +43,7 @@ This document lists all backend packages in `internal/`, their responsibilities,
 | `metabatch` | Bulk metadata fetch queue and batch dispatch | `BatchQueue`, `Dispatcher` |
 | `metadata` | Metadata state tracking, apply pipeline, tag priority logic | `ApplyPipeline`, `isProtectedPath`, `MetadataState` |
 | `metafetch` | Multi-source metadata fetch (Open Library, Google Books, Audible) + scoring with transcription hints | `Fetcher`, `pickBestMatchFromScored`, `transcriptionHints` |
-| `metrics` | Prometheus metrics collection and NutsDB metrics store | `MetricsStore`, `Collector` |
+| `metrics` | Prometheus metrics: operation, search-index and pipeline series plus Pebble LSM gauges | `Register`, `PebbleSample`, `PebbleSource` |
 | `models` | Shared domain model types (not database-specific) | `AudiobookSummary`, `TagMap` |
 | `mtls` | mTLS bridge for subprocess isolation (Whisper, etc.) | `Bridge`, `Client` |
 | `openlibrary` | Open Library API client for ISBN/ASIN lookup | `Client`, `Search` |
@@ -104,7 +104,6 @@ flowchart TD
     subgraph DB
         Pebble["PebbleDB"]
         MemDB["memdb"]
-        NutsDB["NutsDB"]
     end
     subgraph Search_AI["Search + AI"]
         Search["search\nBleve index"]
@@ -140,7 +139,7 @@ flowchart TD
     MetaFetch --> Database
     MetaFetch --> Matcher
     Transcribe --> Database
-    Activity --> NutsDB
+    Activity --> Pebble
 
     Database --> Pebble
     Database --> MemDB

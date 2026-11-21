@@ -14,7 +14,7 @@ For full project context see **CLAUDE.md** at the repo root.
 ## Project overview
 
 Go 1.27 backend (Gin) + React 18/TypeScript frontend (Material UI).
-DB: PebbleDB (primary), NutsDB (activity log). SQLite removed Jun 2026.
+DB: PebbleDB (primary; SQLite is still selectable for the main store via `database_type`), memdb query layer. The activity log lives in Pebble (`act:` keys); Pebble is the only activity backend.
 Integration: Open Library, AcoustID fingerprinting, OpenAI batch API.
 
 ## Key directories
