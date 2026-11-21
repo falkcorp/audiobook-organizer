@@ -325,7 +325,7 @@ func IsRevocation(k Kind) bool {
 // rather than pass it (the head never moves over a line nothing applied).
 func KnownKind(k Kind) bool {
 	switch k {
-	case APIKeyRevoked, APIKeyDisabled, UserDisabled, UserDeleted, CredentialEpochBumped, PasswordChanged,
+	case APIKeyRevoked, APIKeyDisabled, UserDisabled, UserDeleted, UserEnabled, CredentialEpochBumped, PasswordChanged,
 		IdentityUnlinked, SessionRevoked, RoleUnassigned, RoleNarrowed, RoleDeleted,
 		Restore, Gap, RestoreAborted:
 		return true

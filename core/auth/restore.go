@@ -58,6 +58,7 @@ const (
 	CountKeysUnconfirmed    = "api_keys_unconfirmed"
 	CountUsersDisabled      = "users_disabled"
 	CountUsersDeleted       = "users_deleted"
+	CountUsersEnabled       = "users_enabled" // user.enabled lines a clamped restore replay applied (F4-08 Q6b)
 	CountPasswordsBlanked   = "passwords_blanked"
 	CountIdentitiesUnlinked = "identities_unlinked"
 	CountSessionsRevoked    = "sessions_revoked"
@@ -167,6 +168,13 @@ type restorePlan struct {
 	identDel  map[[2]string]bool
 	sessions  []*SessionRecord // journaled session revocations to delete
 	lines     []journal.Revocation
+	// clamped is set when the pre-swap store's state is applied after the
+	// replay (PostRestore with d.Previous): only then is a user.enabled line
+	// applied, because preSwap re-disables any user whose pre-swap row is not
+	// active or pending, so an enable whose batch never committed (its line is
+	// written before the commit) is undone before anything is served. Every
+	// other replay ignores user.enabled (restorePlan.enable).
+	clamped bool
 }
 
 // load reads every user, key and identity (an undecodable record is skipped:
@@ -355,6 +363,8 @@ func (p *restorePlan) reapply(ctx context.Context, r journal.Revocation) error {
 		p.disableUser(UserID(r.Subject.ID), r.Epoch, false)
 	case journal.UserDeleted:
 		p.deleteUser(UserID(r.Subject.ID))
+	case journal.UserEnabled:
+		return p.enable(r)
 	case journal.CredentialEpochBumped:
 		if u := p.users[UserID(r.Subject.ID)]; u != nil && !p.deleted[u.ID] && r.Epoch > u.CredentialEpoch {
 			u.CredentialEpoch = r.Epoch
@@ -384,6 +394,39 @@ func (p *restorePlan) reapply(ctx context.Context, r journal.Revocation) error {
 			p.count(CountSessionsRevoked)
 		}
 	}
+	return nil
+}
+
+// enable applies a user.enabled line (F4-08 Q6b, owner ruling 2026-11-20):
+// lines are applied in journal order, so an enable after a disable re-opens
+// the user and a disable after an enable closes it again, whatever the lines'
+// At says. A malformed line (no user subject, a non-positive epoch) is an
+// error, which fails the replay and with it the boot. The line is ignored
+// unless the replay is clamped (restorePlan.clamped): the same-store tail and
+// the queue drain only ever hold lines whose batches did not commit, and a
+// restore with no pre-swap store has nothing to prove the enable committed,
+// so neither may open access. A user that is deleted (by the store or an
+// earlier line), pending, _system or already active is left as it is: only a
+// disabled user is re-enabled, at the higher of its epoch and the line's.
+func (p *restorePlan) enable(r journal.Revocation) error {
+	if r.Subject.Module != auditModule || r.Subject.Kind != refKindUser || r.Subject.ID == "" || r.Epoch <= 0 {
+		return fmt.Errorf("%w: malformed %s line at seq %d (subject %q, epoch %d)",
+			ErrBadInput, journal.UserEnabled, r.Seq, r.Subject.String(), r.Epoch)
+	}
+	if !p.clamped {
+		return nil
+	}
+	id := UserID(r.Subject.ID)
+	u := p.users[id]
+	if u == nil || p.deleted[id] || u.Status != StatusDisabled {
+		return nil
+	}
+	u.Status = StatusActive
+	if r.Epoch > u.CredentialEpoch {
+		u.CredentialEpoch = r.Epoch
+	}
+	p.userDirty[id] = true
+	p.count(CountUsersEnabled)
 	return nil
 }
 
@@ -580,7 +623,9 @@ func (p *restorePlan) stage(ctx context.Context, b *storage.Batch) error {
 //  1. re-applies every rc.Revocations line (key revokes and disables, user
 //     disables and deletes with their credentials, epoch bumps, session
 //     revocations; a password.changed user has the restored hash blanked and
-//     a reset required; an identity.unlinked link is deleted);
+//     a reset required; an identity.unlinked link is deleted), and, only when
+//     d.Previous is set, every user.enabled line in its journal place, which
+//     step 2 then clamps (restorePlan.enable);
 //  2. when d.Previous is set, takes the more restrictive of the restored and
 //     the pre-swap state whatever the journal held, and, when rc.Revocations
 //     is nil, sets every restored active or disabled key needs_confirmation
@@ -607,6 +652,7 @@ func PostRestore(ctx context.Context, d RestoreDeps, rc journal.RestoreContext) 
 		if err != nil {
 			return err
 		}
+		p.clamped = d.Previous != nil
 		for _, r := range lines {
 			if err := p.reapply(ctx, r); err != nil {
 				return err
