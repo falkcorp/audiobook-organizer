@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"os"
 	"runtime"
 	"strings"
 
@@ -1099,6 +1100,10 @@ func (w headT6g5Writer) Reflink(src, dst string) error {
 		return w.p.reflinkFile(src, dst)
 	}
 	return fileops.Reflink(src, dst)
+}
+
+func (w headT6g5Writer) RemoveClonePath(path string) error {
+	return os.Remove(path)
 }
 
 func (w headT6g5Writer) userState() (merge.UserProgressMerger, error) {

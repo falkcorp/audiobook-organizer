@@ -238,6 +238,7 @@ func Table() map[string][]ops.Resource {
 		"RetireAuthorBooksLegacy": {ops.ResAuthors},
 		// --- files on disk -------------------------------------------------------
 		"Reflink":                  {ops.ResFiles},
+		"RemoveClonePath":          {ops.ResFiles},
 		"HealTrack":                {ops.ResFiles},
 		"CleanupOrphanedTempFiles": {ops.ResActivity, ops.ResFiles},
 		"CleanupStaleTempFiles":    {ops.ResFiles},

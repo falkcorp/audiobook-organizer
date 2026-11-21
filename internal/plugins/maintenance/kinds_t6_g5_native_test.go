@@ -280,6 +280,11 @@ func (s *t6g5Spy) Reflink(src, dst string) error {
 	return s.inner.Reflink(src, dst)
 }
 
+func (s *t6g5Spy) RemoveClonePath(path string) error {
+	defer s.note("RemoveClonePath")()
+	return s.inner.RemoveClonePath(path)
+}
+
 func (s *t6g5Spy) SaveChaptersForBook(bookID string, chapters []database.Chapter) error {
 	defer s.note("SaveChaptersForBook")()
 	return s.inner.SaveChaptersForBook(bookID, chapters)
@@ -929,6 +934,38 @@ func TestT6G5Native_CloneMixedApplyReflinksThroughTheWriter(t *testing.T) {
 	require.NoError(t, err, "the clone landed in the library")
 }
 
+// A mixed apply that fails part-way removes the files it already cloned. That
+// cleanup changes bytes on disk, so it runs through the run's writer (F5-18g):
+// the removal is a recorded `files` write, not a bare os.Remove beside the fence.
+func TestT6G5Native_CloneMixedFailureCleanupRemovesThroughTheWriter(t *testing.T) {
+	f := newICFixture(t)
+	lib := filepath.Join(f.root, "Author", "Book F", "01.mp3")
+	it2, it3 := f.itunes("02.mp3"), f.itunes("03.mp3")
+	f.book(t, "F", "vg-f", "Book F", []string{lib, it2, it3})
+	p := t6g5ClonePlugin(f)
+	calls := 0
+	p.reflinkFile = func(src, dst string) error {
+		calls++
+		if calls == 2 {
+			return fmt.Errorf("%w: forced", fileops.ErrReflinkUnsupported)
+		}
+		return fileops.CopyFileIngestExclusive(src, dst)
+	}
+
+	r := t6g5RunNativeOn(t, p, tasks.ModeLive, "itunes.clone-into-library", t6g5ScanKey,
+		`{"apply":true,"group_ids":["vg-f"]}`)
+	require.NoError(t, r.err)
+	r.requireWriter(t)
+	var rep icReport
+	require.NoError(t, json.Unmarshal(r.out, &rep))
+	g := icGroup(t, &rep, "vg-f")
+	require.Equal(t, icOutcomeFailed, g.Outcome, g.Reason+g.Error)
+	assert.Equal(t, 1, r.spy.count("RemoveClonePath"), "the one clone already made was removed through the writer")
+	assert.Contains(t, r.spy.recorded(), string(ops.ResFiles))
+	_, err := os.Stat(filepath.Join(f.root, "Author", "Book F", "02.mp3"))
+	assert.True(t, os.IsNotExist(err), "the half-made clone was cleaned up")
+}
+
 // The rollback reads the run's store for the retired rows
 // (database.RefuseRetiredShell). With the native env's `reads` unset every
 // rollback is refused before it writes anything; this run must complete.
@@ -940,6 +977,12 @@ func TestT6G5Native_CloneRollback(t *testing.T) {
 	require.Equal(t, icOutcomeApplied, g.Outcome, g.Error)
 	cloneID := g.CloneBookID
 	require.NotEmpty(t, cloneID)
+	cloneFiles, err := f.s.GetBookFiles(cloneID)
+	require.NoError(t, err)
+	require.Len(t, cloneFiles, 1)
+	cloneFilePath := cloneFiles[0].FilePath
+	_, err = os.Stat(cloneFilePath)
+	require.NoError(t, err, "the apply put a clone file in the library")
 
 	r, d := t6g5RunNativeDiff(t, f.s, t6g5ClonePlugin(f), tasks.ModeLive, "itunes.clone-into-library", t6g5ScanKey,
 		`{"rollback":true,"group_ids":["vg-t"]}`)
@@ -957,6 +1000,10 @@ func TestT6G5Native_CloneRollback(t *testing.T) {
 	assert.Positive(t, r.spy.count("DeleteBook"), "the clone book was removed through the writer")
 	assert.Positive(t, r.spy.count("SaveChaptersForBook"))
 	assert.Positive(t, r.spy.count("SetUserPreferenceForUser"), "the record was cleared through the writer")
+	assert.Equal(t, 2, r.spy.count("RemoveClonePath"), "the clone file and its emptied folder were removed through the writer")
+	assert.Contains(t, r.spy.recorded(), string(ops.ResFiles), "the removal is a recorded files write")
+	_, statErr := os.Stat(cloneFilePath)
+	assert.True(t, os.IsNotExist(statErr), "the clone file is gone from the library")
 
 	owner, err := f.s.GetBookFileByPID("PID-T0")
 	require.NoError(t, err)
