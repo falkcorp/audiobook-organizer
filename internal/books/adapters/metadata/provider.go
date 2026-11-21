@@ -83,7 +83,7 @@ func (p *provider) Search(ctx context.Context, q Query) ([]Result, error) {
 			return rs, nil
 		}
 	}
-	if q.Author != "" {
+	if q.Title != "" && q.Author != "" {
 		rs, err = src.SearchByTitleAndAuthor(ctx, q.Title, q.Author)
 		if rung(rs, err) {
 			return rs, nil
