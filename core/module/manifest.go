@@ -6,6 +6,7 @@
 package module
 
 import (
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
@@ -31,6 +32,29 @@ type Manifest struct {
 	// Until config lands (F3) nothing sets the key, so it is the module's
 	// enablement.
 	DefaultEnabled bool
+
+	// RBAC declarations, types owned by 05-rbac §3.2: permissions in this
+	// module's namespace (each with its DefaultGrants into core seed roles
+	// "editor"/"viewer" or the module's own roles) and the module's own seed
+	// roles ("<ID>.<name>", 05-rbac §3.3). There are no permission-string
+	// aliases: stored roles and keys hold native scopes from R2's identity
+	// step, and books' gin routes map HEAD's atoms to native scopes in books'
+	// own code (05-rbac §6). The kernel feeds them to rbac's Declarer in P5,
+	// after rbac.New has its role store (COR2-7); a seed role's stored row is
+	// its seed (HEAD's overwrite at boot), and a restricted addition waits in
+	// PendingSeed until an admin accepts it with AcceptSeed (05-rbac §4.8).
+	// Nothing reads them until F4-08's boot wiring (B3).
+	Permissions []rbac.PermissionSpec
+	Roles       []rbac.RoleSeed
+
+	// ImportedRoleIDs are the un-namespaced role IDs this module's seed roles
+	// may keep as their RoleSeed.Name, because data the module imported names
+	// them (books: "fp-worker", HEAD's worker role, whose ID stored user rows
+	// name and R2's identity step keeps, like every ID; 05-rbac §3.3, §6).
+	// Every other seed role is "<ID>.<name>". P1 refuses an ID listed by two
+	// manifests or equal to a core seed role (ProblemImportedRole); the kernel
+	// hands the list to rbac's Declarer with Roles (COR5-5). R2, identity flip.
+	ImportedRoleIDs []rbac.RoleName
 
 	// UI lists the descriptor IDs the module's client bundle may contribute.
 	// The server reports them in /api/core/v1/modules; the shell refuses

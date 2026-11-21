@@ -11,16 +11,21 @@ import (
 	"iter"
 	"log/slog"
 
+	"github.com/falkcorp/mediacore/audit"
+	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/events"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 )
 
 // Deps are the handles a module may use (06 §6.4.4). Every handle is scoped
-// to the module and safe for concurrent use; none is nil except Config. These
-// are the R1 fields; the rest arrive with their subsystems' R2 flips (06
-// §6.4.10).
+// to the module and safe for concurrent use; none is nil except Config and
+// AuthCompat, and, until F4-08's boot wiring (B3) builds them, Auth, AuthAdmin
+// and Audit, which the kernel leaves nil. These are the R1 fields and the
+// identity flip's (Auth, AuthAdmin, AuthCompat, Audit, Events); the rest
+// arrive with their subsystems' R2 flips (06 §6.4.10).
 type Deps struct {
 	Module ID
 
@@ -70,6 +75,40 @@ type Deps struct {
 	// lacks; it does let the module name any Actor, which is why only a module
 	// the App's manifest review admits takes it.
 	Config ConfigAccess
+
+	// Events publishes the module's own catalog topics (05-events §5E.3.2:
+	// the App's Bus bound to this module, which refuses a topic the module
+	// did not declare with Registrar.Topics; subscriptions go through
+	// Registrar.Subscribe). Unlike the handles around it, its zero value is
+	// usable: a Scope with no bus drops every publish silently, which is what
+	// a module gets until the kernel builds the bus (F4-08, B3).
+	Events events.Scope
+
+	// Auth is the read-only identity view (05-authn §3.1): lookups by ID and
+	// username, a user listing and the request principal, no credential,
+	// session or user mutation. Nil until the kernel builds the auth service
+	// (F4-08, B3).
+	Auth auth.Identities
+
+	// AuthAdmin is the actor-checked identity participant for multi-owner
+	// commits (05-authn §3.1: StageUserMerge): every method re-checks the ctx
+	// principal (core:users.manage, interactive, dominance, the owner rule), so
+	// holding it grants nothing, and it joins the caller's batch and never
+	// commits. Nil until the kernel builds the auth service (F4-08, B3).
+	AuthAdmin auth.Admin
+
+	// AuthCompat is the method-bound handle of the module's own
+	// Registrar.AuthMethod method (05-authn §3.1, SEC-1; books: books.abs):
+	// every call is bound to that method, so the principal it returns names
+	// it. It is nil for every module that registered no method, the one
+	// handle besides Config a module must nil-check, and nil for all of them
+	// until the kernel hands compat methods to auth at P7 (F4-08, B3).
+	AuthCompat auth.Compat
+
+	// Audit records audit events, the actor taken from the ctx (05-rbac §3.5:
+	// Record, RecordIn, Emit); the action namespace "<ID>." is checked. Nil
+	// until the kernel builds the audit logger for modules (F4-08, B3).
+	Audit audit.Logger
 }
 
 // ConfigAccess is Deps.Config: *config.Store's reads, one write, its
