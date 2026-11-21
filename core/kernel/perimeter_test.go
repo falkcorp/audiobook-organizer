@@ -84,7 +84,7 @@ func TestPerimeter_BadValuesAreRefusedWhenConfigLoads(t *testing.T) {
 			rec := &recorder{}
 			c := supervised(t, rec, hooked("alfred", rec))
 			withCore(&c, tc.key, tc.value)
-			_, err := New(t.Context(), c)
+			_, err := newK(t, c)
 			if err == nil || !strings.Contains(err.Error(), tc.key) {
 				t.Fatalf("New = %v, want a refusal naming %s", err, tc.key)
 			}

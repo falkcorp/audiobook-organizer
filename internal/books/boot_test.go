@@ -85,7 +85,9 @@ func TestOptions_StorageInputs(t *testing.T) {
 	mod := Module()
 	opts, err := Options(mod, ServeInputs{})
 	require.NoError(t, err)
-	assert.Empty(t, opts.R1StoragePath, "no compiled store path: core's step 0 resolves the layers")
+	gotDB, err := OfflineStorePath(opts)
+	require.NoError(t, err)
+	assert.Equal(t, db, gotDB, "no compiled store path: core's step 0 resolves the layers to the one named")
 	assert.Equal(t, db, mod.(*booksModule).dbPath)
 	assert.Equal(t, stateDir, opts.StateDir)
 	assert.Equal(t, []storage.StateFile{

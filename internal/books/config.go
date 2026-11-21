@@ -40,9 +40,8 @@ import (
 // modules.books.plugins.<id>.settings is a secret record with no key
 // (05-config 1.12.3), so no section declares it.
 //
-// Nothing reads these handles until the facade lands: ABO's boot leaves
-// Config.CoreConfigBoot off, so the sections are registered only by tests
-// and by a boot that sets the gate.
+// The facade the sections register on is core's, bound at every boot
+// (config_wire.go).
 
 // ptr returns a pointer to v, for the *float64 keys whose HEAD default is set.
 func ptr[T any](v T) *T { return &v }

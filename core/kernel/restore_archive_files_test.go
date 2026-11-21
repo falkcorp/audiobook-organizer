@@ -8,6 +8,7 @@ package kernel
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -24,6 +25,12 @@ import (
 type archiveHost struct {
 	*swapHost
 	cfg Config
+	// liveKeyring is the keyring the host's boots created in the state
+	// directory, byte for byte. exportedKeyring is the same keyring (same
+	// install ID, same keys: every boot after the restore must decode it)
+	// re-indented, so its bytes differ from the live file's and a test can tell
+	// which of the two is in place.
+	liveKeyring, exportedKeyring string
 }
 
 // newArchiveHost boots the host twice, so that restoring the saved store is a
@@ -40,7 +47,15 @@ func newArchiveHost(t *testing.T, id string) *archiveHost {
 		copyTree(t, saved, dir)
 		return id, nil
 	}
-	return &archiveHost{swapHost: h, cfg: c}
+	live := read(t, filepath.Join(h.state, "secrets.keyring"))
+	var out bytes.Buffer
+	if err := json.Indent(&out, []byte(live), "", "\t"); err != nil {
+		t.Fatalf("the booted keyring is not JSON: %v", err)
+	}
+	if out.String() == live {
+		t.Fatal("the re-indented keyring is byte-identical to the live one")
+	}
+	return &archiveHost{swapHost: h, cfg: c, liveKeyring: live, exportedKeyring: out.String()}
 }
 
 // keyring is the default keyring path of the host's state directory.
@@ -108,15 +123,14 @@ func warned(res RestoreOfflineResult, sub string) bool {
 func TestRestoreOfflineBringsBackKeyringAndStateFiles(t *testing.T) {
 	t.Run("both files", func(t *testing.T) {
 		h := newArchiveHost(t, "legacy-joker_20261112")
-		write(t, h.keyring(), "live-keyring", 0o600)
 		write(t, h.gap(), "live: gap\n", 0o600)
-		exported := write(t, filepath.Join(t.TempDir(), "gotham.keyring"), "exported-keyring", 0o600)
+		exported := write(t, filepath.Join(t.TempDir(), "gotham.keyring"), h.exportedKeyring, 0o600)
 		gapFill := write(t, filepath.Join(t.TempDir(), "config.yaml"), "root_dir: /batcave\n", 0o644)
 		res, err := RestoreOffline(h.ctx, h.cfg, RestoreOfflineRequest{Archive: h.archive(), Keyring: exported, GapFill: gapFill, AcceptLoss: true})
 		if err != nil {
 			t.Fatalf("RestoreOffline = %v", err)
 		}
-		if got := read(t, h.keyring()); got != "exported-keyring" {
+		if got := read(t, h.keyring()); got != h.exportedKeyring {
 			t.Errorf("keyring = %q, want the export's", got)
 		}
 		if got := read(t, h.gap()); got != "root_dir: /batcave\n" {
@@ -129,7 +143,7 @@ func TestRestoreOfflineBringsBackKeyringAndStateFiles(t *testing.T) {
 		}
 		// Set aside, not deleted: the replaced files survive in the swap's
 		// private directories.
-		if got := filesHolding(t, h.state, "live-keyring"); len(got) != 1 {
+		if got := filesHolding(t, h.state, h.liveKeyring); len(got) != 1 {
 			t.Errorf("the replaced keyring is kept %d times (%v), want once", len(got), got)
 		}
 		if got := filesHolding(t, h.state, "live: gap\n"); len(got) != 1 {
@@ -144,13 +158,12 @@ func TestRestoreOfflineBringsBackKeyringAndStateFiles(t *testing.T) {
 	})
 	t.Run("neither file", func(t *testing.T) {
 		h := newArchiveHost(t, "legacy-joker_20261112")
-		write(t, h.keyring(), "live-keyring", 0o600)
 		write(t, h.gap(), "live: gap\n", 0o600)
 		res, err := RestoreOffline(h.ctx, h.cfg, RestoreOfflineRequest{Archive: h.archive(), AcceptLoss: true})
 		if err != nil {
 			t.Fatalf("RestoreOffline = %v", err)
 		}
-		if got := read(t, h.keyring()); got != "live-keyring" {
+		if got := read(t, h.keyring()); got != h.liveKeyring {
 			t.Errorf("keyring = %q, want the live one kept (DATA-11)", got)
 		}
 		if got := read(t, h.gap()); got != "live: gap\n" {
@@ -176,16 +189,16 @@ func TestRestoreOfflineBringsBackKeyringAndStateFiles(t *testing.T) {
 		gapDest := filepath.Join(h.state, "gap", "bat.yaml")
 		c := h.cfg
 		c.StorageStateFiles = []storage.StateFile{{Label: "keyring", Path: keyDest}, {Label: "gap_fill", Path: gapDest}, {Label: "encryption_key", Path: h.keyFile()}}
-		exported := write(t, filepath.Join(t.TempDir(), "k"), "exported-keyring", 0o600)
+		exported := write(t, filepath.Join(t.TempDir(), "k"), h.exportedKeyring, 0o600)
 		gapFill := write(t, filepath.Join(t.TempDir(), "g"), "root_dir: /batcave\n", 0o600)
 		if _, err := RestoreOffline(h.ctx, c, RestoreOfflineRequest{Archive: h.archive(), Keyring: exported, GapFill: gapFill, AcceptLoss: true}); err != nil {
 			t.Fatalf("RestoreOffline = %v", err)
 		}
-		if read(t, keyDest) != "exported-keyring" || read(t, gapDest) != "root_dir: /batcave\n" {
+		if read(t, keyDest) != h.exportedKeyring || read(t, gapDest) != "root_dir: /batcave\n" {
 			t.Errorf("the files are not at the declared paths")
 		}
-		if _, err := os.Stat(h.keyring()); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("a keyring was also placed at the default path: %v", err)
+		if got := read(t, h.keyring()); got != h.liveKeyring {
+			t.Errorf("the keyring at the default path changed although the declared path was given: %q", got)
 		}
 	})
 }
@@ -198,50 +211,49 @@ func TestRestoreOfflineRefusesUnusableKeyringAndGapFill(t *testing.T) {
 	big := strings.Repeat("g", maxOperatorFileBytes+1)
 	for _, tc := range []struct {
 		name  string
-		build func(t *testing.T, dir string) RestoreOfflineRequest
+		build func(t *testing.T, h *archiveHost, dir string) RestoreOfflineRequest
 		want  string
 	}{
-		{"keyring readable by others", func(t *testing.T, dir string) RestoreOfflineRequest {
-			return RestoreOfflineRequest{Keyring: write(t, filepath.Join(dir, "k"), "exported-keyring", 0o644)}
+		{"keyring readable by others", func(t *testing.T, h *archiveHost, dir string) RestoreOfflineRequest {
+			return RestoreOfflineRequest{Keyring: write(t, filepath.Join(dir, "k"), h.exportedKeyring, 0o644)}
 		}, "readable by group or others"},
-		{"keyring is a symlink", func(t *testing.T, dir string) RestoreOfflineRequest {
-			real := write(t, filepath.Join(dir, "real"), "exported-keyring", 0o600)
+		{"keyring is a symlink", func(t *testing.T, h *archiveHost, dir string) RestoreOfflineRequest {
+			real := write(t, filepath.Join(dir, "real"), h.exportedKeyring, 0o600)
 			link := filepath.Join(dir, "link")
 			if err := os.Symlink(real, link); err != nil {
 				t.Fatal(err)
 			}
 			return RestoreOfflineRequest{Keyring: link}
 		}, "not a regular file"},
-		{"keyring is empty", func(t *testing.T, dir string) RestoreOfflineRequest {
+		{"keyring is empty", func(t *testing.T, h *archiveHost, dir string) RestoreOfflineRequest {
 			return RestoreOfflineRequest{Keyring: write(t, filepath.Join(dir, "k"), "", 0o600)}
 		}, "is empty"},
-		{"keyring is missing", func(t *testing.T, dir string) RestoreOfflineRequest {
+		{"keyring is missing", func(t *testing.T, h *archiveHost, dir string) RestoreOfflineRequest {
 			return RestoreOfflineRequest{Keyring: filepath.Join(dir, "absent")}
 		}, "no such file"},
-		{"gap-fill is too large", func(t *testing.T, dir string) RestoreOfflineRequest {
+		{"gap-fill is too large", func(t *testing.T, h *archiveHost, dir string) RestoreOfflineRequest {
 			return RestoreOfflineRequest{GapFill: write(t, filepath.Join(dir, "g"), big, 0o600)}
 		}, "limit"},
-		{"gap-fill is a directory", func(t *testing.T, dir string) RestoreOfflineRequest {
+		{"gap-fill is a directory", func(t *testing.T, h *archiveHost, dir string) RestoreOfflineRequest {
 			return RestoreOfflineRequest{GapFill: dir}
 		}, "not a regular file"},
-		{"relative keyring", func(t *testing.T, _ string) RestoreOfflineRequest {
+		{"relative keyring", func(t *testing.T, _ *archiveHost, _ string) RestoreOfflineRequest {
 			return RestoreOfflineRequest{Keyring: "gotham.keyring"}
 		}, "not an absolute path"},
-		{"relative gap-fill", func(t *testing.T, _ string) RestoreOfflineRequest {
+		{"relative gap-fill", func(t *testing.T, _ *archiveHost, _ string) RestoreOfflineRequest {
 			return RestoreOfflineRequest{GapFill: "config.yaml"}
 		}, "not an absolute path"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newArchiveHost(t, "legacy-joker_20261112")
-			write(t, h.keyring(), "live-keyring", 0o600)
-			req := tc.build(t, t.TempDir())
+			req := tc.build(t, h, t.TempDir())
 			req.Archive, req.AcceptLoss = h.archive(), true
 			_, err := RestoreOffline(h.ctx, h.cfg, req)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("RestoreOffline = %v, want a refusal containing %q", err, tc.want)
 			}
 			h.assertNothingStaged()
-			if got := read(t, h.keyring()); got != "live-keyring" {
+			if got := read(t, h.keyring()); got != h.liveKeyring {
 				t.Errorf("live keyring = %q after a refusal", got)
 			}
 			if got := h.readCave(caveStep(2, "bane")); got != "bane" {
@@ -252,7 +264,7 @@ func TestRestoreOfflineRefusesUnusableKeyringAndGapFill(t *testing.T) {
 	t.Run("with a checkpoint", func(t *testing.T) {
 		h := newSwapHost(t)
 		name := h.failedUpgrade()
-		exported := write(t, filepath.Join(t.TempDir(), "k"), "exported-keyring", 0o600)
+		exported := write(t, filepath.Join(t.TempDir(), "k"), "a file the refusal never reads", 0o600)
 		for _, req := range []RestoreOfflineRequest{
 			{Checkpoint: name, Keyring: exported},
 			{Checkpoint: name, GapFill: exported},
@@ -270,8 +282,7 @@ func TestRestoreOfflineRefusesUnusableKeyringAndGapFill(t *testing.T) {
 // touches no live file.
 func TestRestoreOfflineIntoCopiesTheFilesBesideTheStore(t *testing.T) {
 	h := newArchiveHost(t, "legacy-joker_20261112")
-	write(t, h.keyring(), "live-keyring", 0o600)
-	exported := write(t, filepath.Join(t.TempDir(), "k"), "exported-keyring", 0o600)
+	exported := write(t, filepath.Join(t.TempDir(), "k"), h.exportedKeyring, 0o600)
 	gapFill := write(t, filepath.Join(t.TempDir(), "g"), "root_dir: /batcave\n", 0o600)
 	into := filepath.Join(filepath.Dir(h.db), ".mediacore-checkpoints", "scratch", "rehearsal")
 	res, err := RestoreOffline(h.ctx, h.cfg, RestoreOfflineRequest{Archive: h.archive(), Into: into, Keyring: exported, GapFill: gapFill})
@@ -282,7 +293,7 @@ func TestRestoreOfflineIntoCopiesTheFilesBesideTheStore(t *testing.T) {
 	if res.IntoState != state {
 		t.Fatalf("IntoState = %q, want %q", res.IntoState, state)
 	}
-	for label, want := range map[string]string{"keyring": "exported-keyring", "gap_fill": "root_dir: /batcave\n"} {
+	for label, want := range map[string]string{"keyring": h.exportedKeyring, "gap_fill": "root_dir: /batcave\n"} {
 		p := filepath.Join(state, label)
 		if got := read(t, p); got != want {
 			t.Errorf("%s = %q, want %q", p, got, want)
@@ -291,7 +302,7 @@ func TestRestoreOfflineIntoCopiesTheFilesBesideTheStore(t *testing.T) {
 			t.Errorf("%s: %v, %v; want mode 0600", p, fi, err)
 		}
 	}
-	if got := read(t, h.keyring()); got != "live-keyring" {
+	if got := read(t, h.keyring()); got != h.liveKeyring {
 		t.Errorf("--into changed the live keyring: %q", got)
 	}
 	if _, err := os.Stat(h.gap()); !errors.Is(err, os.ErrNotExist) {
@@ -304,7 +315,7 @@ func TestRestoreOfflineIntoCopiesTheFilesBesideTheStore(t *testing.T) {
 
 	// A refused file leaves no copy, no state directory and no sidecar behind.
 	bad := filepath.Join(filepath.Dir(into), "refused")
-	loose := write(t, filepath.Join(t.TempDir(), "loose"), "exported-keyring", 0o644)
+	loose := write(t, filepath.Join(t.TempDir(), "loose"), h.exportedKeyring, 0o644)
 	if _, err := RestoreOffline(h.ctx, h.cfg, RestoreOfflineRequest{Archive: h.archive(), Into: bad, Keyring: loose}); err == nil {
 		t.Fatal("--into with a keyring readable by others succeeded")
 	}

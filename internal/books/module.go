@@ -125,7 +125,7 @@ var errNotBooks = errors.New("books: not the module books.Module returned")
 // refuses a boot whose settings, once the store is open, turn it the other
 // way (errABSFlagDrift).
 func Module() module.Module {
-	return &booksModule{abs: absSurfaceFromEnv(), flip: flipDeclared}
+	return &booksModule{abs: absSurfaceFromEnv()}
 }
 
 // absEnabledEnv is the environment name of modules.books.abs.api_enabled (the
@@ -143,12 +143,6 @@ func absSurfaceFromEnv() bool {
 // booksModule is books' module.Module.
 type booksModule struct {
 	abs bool
-	// flip is the one switch that makes books declare F3's cutover (cutover.go):
-	// the level step on its storage spec, M2 in Manifest.Cutover and M8 in
-	// Manifest.Rewrite. Module() leaves it off, so the shipped manifest is the
-	// pre-flip one; slice (e) of F3-07 turns it on together with the config
-	// boot gate (app.Options.CoreConfigBoot) the steps need. Tests set it.
-	flip bool
 
 	// steps is serve's startup runner and stateDir the secure state
 	// directory, both set by Options before app.New, whose Register reads

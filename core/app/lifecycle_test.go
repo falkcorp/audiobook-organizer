@@ -96,9 +96,8 @@ func TestRun_StopOrderThroughR1Listen(t *testing.T) {
 	}}
 	var gotOpts httpapi.ListenOptions
 	listening := make(chan struct{})
-	a, err := New(t.Context(), Options{
+	a, err := New(t.Context(), Options{StateDir: t.TempDir(),
 		AppID: "gotham", LogOutput: &syncBuffer{}, Env: []string{},
-		CoreConfigBoot: true,
 		ConfigFlags: map[config.Path]string{
 			"core.http.listen": "192.0.2.1:8484", "core.http.tls.cert_file": "batcave.crt", "core.http.tls.key_file": "batcave.key",
 			"core.shutdown.budget": "5s",
@@ -174,7 +173,7 @@ func TestRun_StopOrderThroughR1Listen(t *testing.T) {
 // resource attributes are the app's (production tracing survives the move to
 // the App's Provider). Without Telemetry the TracerProvider is the no-op.
 func TestTelemetry_TracingReachesProvider(t *testing.T) {
-	base := Options{AppID: "gotham", LogOutput: &syncBuffer{}, Env: []string{}}
+	base := Options{AppID: "gotham", StateDir: t.TempDir(), LogOutput: &syncBuffer{}, Env: []string{}}
 	off, err := New(t.Context(), base)
 	if err != nil {
 		t.Fatal(err)
@@ -213,7 +212,7 @@ func TestTelemetry_TracingReachesProvider(t *testing.T) {
 // stop recording, and a Run after Close is refused rather than serving on a
 // closed Provider.
 func TestClose_ReleasesAnAppThatNeverRan(t *testing.T) {
-	a, err := New(t.Context(), Options{AppID: "gotham", LogOutput: &syncBuffer{}, Env: []string{},
+	a, err := New(t.Context(), Options{StateDir: t.TempDir(), AppID: "gotham", LogOutput: &syncBuffer{}, Env: []string{},
 		Telemetry: &Telemetry{Tracing: &metrics.OTLPTracing{Endpoint: "http://192.0.2.1:4317"}}})
 	if err != nil {
 		t.Fatal(err)

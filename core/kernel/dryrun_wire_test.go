@@ -102,9 +102,9 @@ func wireMod() testModule {
 	})
 }
 
-// wireHost serves a store with the legacy rows under the pre-cutover build,
-// gate off, so the state directory holds no keyring, and returns the cutover
-// build's Config with the gate on over the operator environment env.
+// wireHost serves a store with the legacy rows (the boot creates the keyring
+// in the state directory, as every boot does) and returns the cutover build's
+// Config over the operator environment env.
 func wireHost(t *testing.T, env ...string) (*swapHost, Config) {
 	t.Helper()
 	h, _ := dryRunHost(t, map[string]string{
@@ -112,19 +112,15 @@ func wireHost(t *testing.T, env ...string) (*swapHost, Config) {
 		"case:file/002":  "The Long Halloween, part 2",
 		"case:vault/001": "Wayne Manor safe combination 1",
 	})
-	if _, err := os.Stat(filepath.Join(h.state, "secrets.keyring")); !os.IsNotExist(err) {
-		t.Fatalf("fixture: the pre-cutover serve left a keyring in the state directory: %v", err)
-	}
 	return h, wireConfig(t, h, env...)
 }
 
-// wireConfig is the cutover build's Config over h with the gate on and the
-// operator environment env.
+// wireConfig is the cutover build's Config over h and the operator environment
+// env.
 func wireConfig(t *testing.T, h *swapHost, env ...string) Config {
 	t.Helper()
 	c := testConfig(t, wireMod())
 	c.StoragePath, c.StateDir = h.db, h.state
-	c.CoreConfigBoot = true
 	c.ConfigOptions = config.Options{Environ: append([]string{}, env...)}
 	c.StateDirDefault = h.state
 	return c
@@ -238,9 +234,6 @@ func TestWireDryRun_PlansM2AndM8AndWritesNothing(t *testing.T) {
 
 	sameTree(t, "the store directory", storeBefore, hashTree(t, h.db))
 	sameTree(t, "the state directory", stateBefore, hashTree(t, h.state))
-	if _, err := os.Stat(filepath.Join(h.state, "secrets.keyring")); !os.IsNotExist(err) {
-		t.Errorf("the dry run created the state directory's keyring: %v", err)
-	}
 	var leftovers []string
 	_ = filepath.WalkDir(filepath.Dir(h.state), func(p string, d fs.DirEntry, err error) error {
 		if err == nil && strings.HasPrefix(d.Name(), "dryrun-") {
@@ -320,50 +313,7 @@ func TestWireDryRun_BindFailureReleasesAndLeavesNothing(t *testing.T) {
 	sameTree(t, "the state directory", stateBefore, hashTree(t, h.state))
 }
 
-// With the gate off the live boot has no config or secret store: only the
-// legacy ranges bind (migrateStorage), so the dry run mirrors it. A step that
-// reads its legacy range runs; one that reaches the config importer fails
-// with ErrImporterNotBound; no keyring is created anywhere.
-func TestWireDryRun_GateOffBindsOnlyTheLegacyRange(t *testing.T) {
-	h, _ := dryRunHost(t, map[string]string{wireProbeKey: wireProbeRow})
-	var sawLegacy atomic.Bool
-	var stageErr atomic.Value
-	m := gcpdMod(storage.ClaimRetired).with(func(m *module.Manifest) {
-		m.Cutover = func(imp module.Importers) []datamigrate.DataMigration {
-			step := wireProbeStep(imp)
-			inner := step.Step
-			step.Step = func(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
-				if string(kv.Key) == wireProbeKey {
-					if r := imp.Legacy("gcpd"); r != nil {
-						sawLegacy.Store(true)
-					}
-					_, err := imp.Config.Default("core.backup.retention.max_count")
-					stageErr.Store(fmt.Sprint(errors.Is(err, module.ErrImporterNotBound)))
-					return nil
-				}
-				return inner(ctx, kv, w)
-			}
-			return []datamigrate.DataMigration{step}
-		}
-	})
-	c := testConfig(t, m)
-	c.StoragePath, c.StateDir = h.db, h.state
-	rep, _, err := wireRun(t, h, c, DryRunOptions{})
-	if err != nil {
-		t.Fatalf("gate-off dry run: %v (report %+v)", err, rep)
-	}
-	if !sawLegacy.Load() {
-		t.Error("the legacy range was not bound with the gate off")
-	}
-	if got, _ := stageErr.Load().(string); got != "true" {
-		t.Errorf("the config importer with the gate off: ErrImporterNotBound = %q, want true", got)
-	}
-	if _, err := os.Stat(filepath.Join(h.state, "secrets.keyring")); !os.IsNotExist(err) {
-		t.Errorf("a gate-off dry run created a keyring: %v", err)
-	}
-}
-
-// A copy that already holds sealed secrets (a store served with the gate on,
+// A copy that already holds sealed secrets (a store the cutover build served,
 // past the point where the keyring was created) does not refuse the dry run:
 // the throw-away keyring is new and the copy's sealed records are not its
 // concern, so secrets.Open must not answer ErrKeyMissing for want of the live
@@ -373,7 +323,6 @@ func TestWireDryRun_ASealedCopyNeedsNoKeyring(t *testing.T) {
 	h := newSwapHost(t)
 	seed := testConfig(t, gcpdMod(storage.ClaimReadWrite))
 	seed.StoragePath, seed.StateDir = h.db, h.state
-	seed.CoreConfigBoot = true
 	seed.ConfigOptions = config.Options{Environ: []string{}}
 	seed.StateDirDefault = h.state
 	k := h.mustBoot(seed)
@@ -390,7 +339,7 @@ func TestWireDryRun_ASealedCopyNeedsNoKeyring(t *testing.T) {
 	}
 	h.close(k)
 	if _, err := os.Stat(filepath.Join(h.state, "secrets.keyring")); err != nil {
-		t.Fatalf("fixture: the gate-on serve left no keyring: %v", err)
+		t.Fatalf("fixture: the serve left no keyring: %v", err)
 	}
 	storeBefore, stateBefore := hashTree(t, h.db), hashTree(t, h.state)
 
@@ -418,7 +367,6 @@ func TestWireDryRun_ImporterDeletesEntrySecretsThroughTheStager(t *testing.T) {
 	h := newSwapHost(t)
 	seed := testConfig(t, gcpdMod(storage.ClaimReadWrite))
 	seed.StoragePath, seed.StateDir = h.db, h.state
-	seed.CoreConfigBoot = true
 	seed.ConfigOptions = config.Options{Environ: []string{}}
 	seed.StateDirDefault = h.state
 	k := h.mustBoot(seed)
@@ -458,7 +406,6 @@ func TestWireDryRun_ImporterDeletesEntrySecretsThroughTheStager(t *testing.T) {
 		}
 	}))
 	c.StoragePath, c.StateDir = h.db, h.state
-	c.CoreConfigBoot = true
 	c.ConfigOptions = config.Options{Environ: []string{}}
 	c.StateDirDefault = h.state
 	rep, _, err := wireRun(t, h, c, DryRunOptions{})
@@ -467,35 +414,5 @@ func TestWireDryRun_ImporterDeletesEntrySecretsThroughTheStager(t *testing.T) {
 	}
 	if st := stepOf(rep, "gcpd.providers"); st == nil || st.Items["replaced"] != 1 {
 		t.Errorf("the step did not run to the end: %+v", st)
-	}
-}
-
-// With the gate off the live boot has no quarantine writer, so a step that
-// quarantines a row fails; the dry run must not seal into a store of its own
-// that the live boot would not have. The failure names the missing writer, not
-// a closed secret store.
-func TestWireDryRun_GateOffHasNoQuarantineSealer(t *testing.T) {
-	h, _ := dryRunHost(t, map[string]string{wireProbeKey: wireProbeRow})
-	m := gcpdMod(storage.ClaimRetired).with(func(m *module.Manifest) {
-		m.Cutover = func(module.Importers) []datamigrate.DataMigration {
-			return []datamigrate.DataMigration{{
-				ID: "gcpd.vault", Owner: "gcpd", Description: "quarantine a sensitive row",
-				Source:      []storage.Range{{Start: []byte("case:"), End: []byte("case;")}},
-				Parallelism: tasks.Fixed(1, "test: one shard"), Mode: datamigrate.BootBlocking,
-				Compat: storage.Breaking, Cutover: true, Sensitive: []string{"case:"},
-				Step: func(_ context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
-					return w.Quarantine(kv.Key, kv.Value, "a credential the importer does not carry")
-				},
-			}}
-		}
-	})
-	c := testConfig(t, m)
-	c.StoragePath, c.StateDir = h.db, h.state
-	rep, _, err := wireRun(t, h, c, DryRunOptions{})
-	if err == nil {
-		t.Fatalf("a gate-off dry run sealed a sensitive row: %+v", rep)
-	}
-	if !strings.Contains(err.Error(), "no sealer wired") {
-		t.Errorf("the gate-off dry run's failure = %v, want the live boot's: no sealer wired", err)
 	}
 }

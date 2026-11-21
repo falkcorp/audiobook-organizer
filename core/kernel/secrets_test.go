@@ -53,9 +53,9 @@ func openTestSecrets(t *testing.T, db *storage.DB, stateDir string, mut func(*se
 }
 
 // TestSecretsOwnerSpec: c/secrets/ is an enabled keyspace, Serialized as a
-// whole, with no claims or migrations, and a boot with Config.CoreConfigBoot
-// off (ABO's) does not list it. TestConfigBoot_P4bOpensTheSecretStore is the
-// gate-on twin.
+// whole, with no claims or migrations, and every boot lists it, opens its
+// keyspace and creates the keyring. TestConfigBoot_P4bOpensTheSecretStore
+// reads the store it opened.
 func TestSecretsOwnerSpec(t *testing.T) {
 	spec := secretsOwnerSpec()
 	if spec.Owner != "core/secrets" || !spec.Spec.Keyspace || !spec.Enabled || !slices.Equal(spec.Spec.Serialized, []string{""}) {
@@ -66,16 +66,14 @@ func TestSecretsOwnerSpec(t *testing.T) {
 	}
 	h := newSwapHost(t)
 	k := h.mustBoot(h.config(nil))
-	for _, o := range k.storageOwners() {
-		if o.Owner == secretsOwnerID {
-			t.Fatal("storageOwners lists core/secrets with the gate off")
-		}
+	if !slices.ContainsFunc(k.storageOwners(), func(o storage.OwnerSpec) bool { return o.Owner == secretsOwnerID }) {
+		t.Fatal("storageOwners does not list core/secrets")
 	}
-	if _, ok := k.store.db.Keyspace(secretsOwnerID); ok {
-		t.Fatal("a boot opened the c/secrets/ keyspace with the gate off")
+	if _, ok := k.store.db.Keyspace(secretsOwnerID); !ok {
+		t.Fatal("a boot did not open the c/secrets/ keyspace")
 	}
-	if _, err := os.Stat(filepath.Join(h.state, "secrets.keyring")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("a boot created the keyring with the gate off: %v", err)
+	if _, err := os.Stat(filepath.Join(h.state, "secrets.keyring")); err != nil {
+		t.Fatalf("a boot did not create the keyring: %v", err)
 	}
 }
 
@@ -360,6 +358,11 @@ func TestSetInstallID_RestoresLineageOffline(t *testing.T) {
 	c := h.config(nil)
 	k := h.mustBoot(c)
 	marker := k.store.db.Admin().InstallID()
+	// The boot created a keyring carrying this store's marker; the scenario is
+	// the one after a reset and an undo, a keyring that names another store.
+	if err := os.Remove(filepath.Join(h.state, "secrets.keyring")); err != nil {
+		t.Fatal(err)
+	}
 	freshID := writeFixtureKeyring(t, h.state)
 	root, err := os.OpenRoot(h.state)
 	if err != nil {
