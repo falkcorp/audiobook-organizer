@@ -18,10 +18,12 @@ import (
 // crash-matrix label the identity boot's store commits carry (F4-08 A5: the
 // re-apply, the restore hooks' run ID, auth.BootWrites, rbac.CommitSeeds) is in
 // exactly one row of the writer table, the row is bound (F4-08 B3 wired the
-// boot, so no row is Unbound), and IdentityUnreachedLabels allows the label
-// until a fixture declares the flip. A label left out of the table is a region
-// the matrix never kills; one left out of the allow set fails every fixture's
-// coverage test.
+// boot, so no row is Unbound), and IdentityUnreachedLabels allows the label for
+// every fixture that does not declare the flip (the kit's own identity scenario
+// does, and TestIdentityScenario_ReachesWhatIdentityUnreachedLabelsSaysItDoes
+// holds the reasons to what it reaches). A label left out of the table is a
+// region the matrix never kills; one left out of the allow set fails every
+// fixture's coverage test.
 func TestIdentityBootLabelsAreBoundRowsAllowedUntilAFixtureDeclaresIdentity(t *testing.T) {
 	want := slices.Concat(kernel.ReapplyLabels(), kernel.HookRunLabels(), auth.BootWritesLabels(), []string{rbac.LabelCommitSeeds})
 	rowOf := map[string][]Row{}
