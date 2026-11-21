@@ -370,6 +370,19 @@ var headProtected = []string{
 	"itunes.libraries.import_source",
 }
 
+// unreadEnvNames are env names no build of the app ever read that deployments
+// set anyway, retired under the row whose setting they look like so that a boot
+// that finds one says so (canonical "": a warning, never a refusal) and the
+// deploy check reports it. AUDIOBOOK_ROOT_DIR was in the shipped systemd unit
+// and README while the library root came from ROOT_DIR (AutomaticEnv) or the
+// stored settings; the deploy files dropped it in F3-07, but a live unit
+// installed from an older helper bundle may still set it.
+var unreadEnvNames = []struct {
+	env, row, message string
+}{
+	{"AUDIOBOOK_ROOT_DIR", "root_dir", "delete it: no build ever read it; the library root is the stored setting"},
+}
+
 // processNames are the two ABK_* names HEAD reads outside viper
 // (05-config §1.12.3 step 1): they retire into canonical keys of core.
 var processNames = []struct {

@@ -111,6 +111,9 @@ type RetiredUse struct {
 	Canonical    Path   // "" for a dropped key
 	CanonicalEnv string // the canonical env name, "" for a dropped key
 	Refused      bool   // a protected or secret key: this boot was refused
+	// Message is the app's reason (RetiredName.Message), "" when it gave
+	// none. The warning, the refusal and config check all print it.
+	Message string
 	// Unchecked: a module key of a module that registered no section (not
 	// enabled at this boot, or config check without the module's sections),
 	// so its class is unknown; the use is ignored with a warning.
