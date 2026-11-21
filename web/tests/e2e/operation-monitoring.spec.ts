@@ -25,15 +25,16 @@ import { setupMockApi } from './utils/test-helpers';
 
 /**
  * Build an OperationV2 timeline row. Note `display_name` is deliberately left
- * empty: ActivityLog renders `displayName || def_id || type`, so a row without
- * a curated display name shows its def_id — which is what a plain scan row
- * from the timeline endpoint actually looks like.
+ * empty, as a plain timeline row's is. The def_id is the FULL registered id
+ * ('library.scan'): operationDisplayName looks the curated label up on the whole
+ * id (0a51e5d6c re-keyed the table), so a short code like 'scan' now renders
+ * de-slugged ("Scan") instead of "Library Scan".
  */
 const timelineOp = (
   overrides: Record<string, unknown>
 ): Record<string, unknown> => ({
   id: 'op-1',
-  def_id: 'scan',
+  def_id: 'library.scan',
   plugin: 'core',
   display_name: '',
   status: 'running',
@@ -58,7 +59,7 @@ const timelineOp = (
 
 const runningScan = timelineOp({
   id: 'scan-1',
-  def_id: 'scan',
+  def_id: 'library.scan',
   status: 'running',
   progress_current: 20,
   progress_total: 100,
@@ -67,7 +68,7 @@ const runningScan = timelineOp({
 
 const runningOrganize = timelineOp({
   id: 'organize-1',
-  def_id: 'organize',
+  def_id: 'library.organize',
   status: 'running',
   progress_current: 5,
   progress_total: 20,
@@ -76,7 +77,7 @@ const runningOrganize = timelineOp({
 
 const completedScan = timelineOp({
   id: 'hist-1',
-  def_id: 'scan',
+  def_id: 'library.scan',
   status: 'completed',
   progress_current: 100,
   progress_total: 100,
@@ -86,7 +87,7 @@ const completedScan = timelineOp({
 
 const failedScan = timelineOp({
   id: 'hist-2',
-  def_id: 'scan',
+  def_id: 'library.scan',
   status: 'failed',
   progress_current: 20,
   progress_total: 100,
@@ -187,7 +188,7 @@ test.describe('Operation Monitoring', () => {
             operations: [
               timelineOp({
                 id: 'scan-1',
-                def_id: 'scan',
+                def_id: 'library.scan',
                 status: 'running',
                 progress_current: 25,
                 progress_total: 100,
