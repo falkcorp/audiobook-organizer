@@ -3,8 +3,15 @@
 // guid: 7f943bca-2a8a-4381-87be-b0142c0526ad
 // last-edited: 2026-11-21
 
-// ui-kit's hooks (07 §7.11): useAsyncAction, useDebouncedSearch and
-// useRowSelection. They arrive in F9-05's later slices; the entry file exists so
-// each slice adds only a line here, not to the package root.
+// ui-kit's hooks (07 §7.11). useKeyboardShortcuts lives under shortcuts/ (F9-01).
 
-export {};
+export { useAsyncAction, type AsyncActionState, type UseAsyncActionReturn } from './useAsyncAction';
+export { serverAnsweredTerm, useDebouncedSearch, useSettledSearch } from './useDebouncedSearch';
+export {
+  applyRowClick,
+  useRowSelection,
+  type RowCheckboxProps,
+  type RowSelection,
+  type SelectionMode,
+  type UseRowSelectionOptions,
+} from './useRowSelection';
