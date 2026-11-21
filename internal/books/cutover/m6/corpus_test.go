@@ -285,10 +285,24 @@ func identicalOutsideM6(t *testing.T, before, after map[string][]byte) {
 	}
 }
 
+// corpusShadowedCredential is the quarantine record of hardcover's
+// credentials.apiKey in both corpora: the source is the fifth of metadata_sources
+// and holds the operator's api_token as well, which HEAD read first.
+const corpusShadowedCredential = m6.KeyBlob + "#metadata_sources.4.secrets.credentials.api_key"
+
 func TestCorpus_Stage1(t *testing.T) {
 	_, s, before, g := recordCorpus(t, "stage1")
-	if len(g.Quarantined) != 0 {
-		t.Errorf("stage1 has no M6 quarantine case, got %v", g.Quarantined)
+	// Its one M6 quarantine record: hardcover's credentials.apiKey, a key HEAD
+	// never sent because the operator's api_token (also stored) is read first.
+	var gotQ []string
+	for _, q := range g.Quarantined {
+		gotQ = append(gotQ, q.Key)
+		if q.Reason != rUnreadCredential {
+			t.Errorf("%s quarantined as %q, want the unread-credential reason", q.Key, q.Reason)
+		}
+	}
+	if want := []string{corpusShadowedCredential}; !slices.Equal(gotQ, want) {
+		t.Errorf("stage1 quarantined %v, want exactly %v", gotQ, want)
 	}
 	identicalOutsideM6(t, before, s.Legacy)
 	wantGone := []string{"counter:import_path", "import_path:1", "import_path:path:/tmp/r2corpus/stage1/import", "setting:config_blob"}
@@ -301,12 +315,13 @@ func TestCorpus_Stage1(t *testing.T) {
 func TestCorpus_Overlay(t *testing.T) {
 	r, s, before, g := recordCorpus(t, "overlay")
 	// The overlay's M6 quarantine cases, and only those (F2-13's manifest:
-	// corrupt-import-root and corrupt-aijob).
+	// corrupt-import-root and corrupt-aijob), plus the shadowed hardcover
+	// credential every corpus holds (stage1's one case too).
 	var got []string
 	for _, q := range g.Quarantined {
 		got = append(got, q.Key)
 	}
-	want := []string{"aijob:01M731PC80XRKWT53PV5E2M8AD", "import_path:9"}
+	want := []string{"aijob:01M731PC80XRKWT53PV5E2M8AD", "import_path:9", corpusShadowedCredential}
 	if !slices.Equal(got, want) {
 		t.Fatalf("quarantined %v, want exactly %v", got, want)
 	}
