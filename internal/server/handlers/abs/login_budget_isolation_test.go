@@ -69,7 +69,7 @@ func TestRefreshBudget_SpentRefreshBudgetDoesNotRefuseAbsLogin(t *testing.T) {
 func TestRefreshBudget_ASuccessfulLoginDoesNotRefundIt(t *testing.T) {
 	h := newHarness(t, "cf,jwt", nil, withVisitorThrottleKey(), func(o *abshandler.Options) { o.Throttle = quickThrottle() })
 	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
-	for i := 0; i < coreauth.DefaultMaxFailuresPerSource-1; i++ {
+	for i := range coreauth.DefaultMaxFailuresPerSource - 1 {
 		if code := failRefresh(t, h, "192.0.2.23"); code != http.StatusUnauthorized {
 			t.Fatalf("refresh %d: %d, want 401", i, code)
 		}
@@ -189,7 +189,7 @@ func TestLogin_FailedAbsLoginTimingDoesNotRevealWhetherTheNameExists(t *testing.
 	names := []string{"owner", "ghost", "oracle"}
 	fastest := map[string]time.Duration{}
 	visitor := 0
-	for r := 0; r < rounds; r++ {
+	for r := range rounds {
 		for k := range names {
 			name := names[(r+k)%len(names)]
 			visitor++
@@ -264,7 +264,7 @@ func TestRefreshBudget_ASuccessfulRefreshDoesNotRefundIt(t *testing.T) {
 		}
 		return str(t, userObj(t, body), "refreshToken")
 	}
-	for i := 0; i < coreauth.DefaultMaxFailuresPerSource-1; i++ {
+	for range coreauth.DefaultMaxFailuresPerSource - 1 {
 		failRefresh(t, h, visitor)
 	}
 	w, _ := h.do(t, request{method: http.MethodPost, path: "/auth/refresh",

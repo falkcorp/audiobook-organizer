@@ -877,6 +877,12 @@ with transparent rehash, `oauth`/empty hash never authenticates (`absauth/passwo
 Minimum length `core.auth.password.min_length` (default 8 — today's value; raising it is open item 2).
 Hashing runs on a bounded semaphore (`runtime.NumCPU()` permits) because each verify allocates
 64 MiB: an unbounded login burst would otherwise exhaust memory before the throttle trips.
+Equal timing (§3.2): every login verification (`VerifyLogin*`, `SpendVerification`) spends one argon2id
+derivation and one bcrypt comparison under one permit, the stored hash's own kind against it and the
+other kind against a dummy of the Hasher's cost (both dummies when the account has no usable hash, which
+includes one that does not parse). So an unknown name, an OAuth user, an argon2id account and a legacy
+bcrypt account cost the same, and a busy Hasher refuses them alike. The bcrypt half costs about one
+DefaultCost comparison per login and is dropped once no bcrypt rows remain (each start logs the count).
 
 ### 4.6 Bootstrap and first run (G10: app-agnostic)
 
