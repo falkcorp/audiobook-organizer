@@ -1167,6 +1167,18 @@ class DeployReleaseTest(unittest.TestCase):
         self.assertEqual(self.installs(host), [])
         self.assertFalse(host.stage.exists())
 
+    def test_a_hash_the_host_cannot_produce_is_refused_and_nothing_changes(self) -> None:
+        for answer in ({"stdout": "not-a-hash\n"}, {"stdout": "", "exit": 1, "stderr": "no sha\n"}):
+            with self.subTest(answer=answer):
+                host = self.host(rules=[{"match": r"^sha256sum ", "responses": [answer]}])
+                p = host.make("deploy-release", RELEASE=self.TAG)
+                self.assertNotEqual(p.returncode, 0, out(p))
+                self.assertIn("cannot hash", out(p))
+                self.assertEqual(self.installs(host), [])
+                self.assertFalse(any("install-staged unit" in c for c in host.ssh()))
+                self.assertFalse(host.stage.exists())
+                self.assertEqual(host.installed(), "current")
+
     def test_a_release_that_does_not_exist_changes_nothing(self) -> None:
         host = self.host()
         p = host.make("deploy-release", RELEASE="v9.9.9")
