@@ -181,10 +181,10 @@ func URLKeys() []string {
 // and the HTTP layer, so replacing the table behind it reaches all of them.
 type Redactor struct {
 	keys     atomic.Pointer[map[string]struct{}] // normalised deny-listed keys (normKey); replaced whole by SetExtraKeys
-	suffixes []string            // credentialSuffixes()
-	harmless []string            // harmlessSuffixes()
-	query    map[string]struct{} // lower-case credential query names
-	urlKeys  map[string]struct{} // lower-case URL keys
+	suffixes []string                            // credentialSuffixes()
+	harmless []string                            // harmlessSuffixes()
+	query    map[string]struct{}                 // lower-case credential query names
+	urlKeys  map[string]struct{}                 // lower-case URL keys
 	rules    []PathRule
 }
 

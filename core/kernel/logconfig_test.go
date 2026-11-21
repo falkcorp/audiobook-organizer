@@ -56,7 +56,7 @@ func TestCoreLogConfig_AppliesLive(t *testing.T) {
 	ctx := context.Background()
 	admin := interactiveAdmin()
 	scanner := k.Logging().Scope("books", "scanner") // exists before every change
-	redactorHeldByMetricsAndHTTP := k.redactor      // the pointer boot hands to them
+	redactorHeldByMetricsAndHTTP := k.redactor       // the pointer boot hands to them
 
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
