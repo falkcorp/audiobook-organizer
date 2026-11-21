@@ -70,26 +70,35 @@ func FoldOIDC(values map[string]json.RawMessage, prev json.RawMessage) (json.Raw
 	if err != nil {
 		return nil, err
 	}
-	// Split prev into the entries HEAD can express and the rest.
-	for _, e := range old {
-		var v string
-		if raw, has := e["id"]; has && json.Unmarshal(raw, &v) != nil {
-			return nil, bad("a provider's id is not a string")
+	// headID is the HEAD provider an entry is, "" for one HEAD cannot
+	// express (or one with no id). An id that is not a string is refused,
+	// in prev and in what the fold stages alike.
+	headID := func(e map[string]json.RawMessage) (string, error) {
+		raw, has := e["id"]
+		if !has {
+			return "", nil
 		}
-	}
-	headID := func(e map[string]json.RawMessage) string {
 		var id string
-		_ = json.Unmarshal(e["id"], &id) // validated above
+		if err := json.Unmarshal(raw, &id); err != nil {
+			return "", bad("a provider's id is not a string")
+		}
 		for _, p := range oidcProviders {
 			if p.id == id {
-				return id
+				return id, nil
 			}
 		}
-		return ""
+		return "", nil
 	}
+	// Split prev into the entries HEAD can express and the rest.
+	oldIDs := make([]string, len(old))
 	var head []json.RawMessage
-	for _, e := range old {
-		if headID(e) != "" {
+	for i, e := range old {
+		id, err := headID(e)
+		if err != nil {
+			return nil, err
+		}
+		oldIDs[i] = id
+		if id != "" {
 			head = append(head, mustJSON(e))
 		}
 	}
@@ -152,15 +161,19 @@ func FoldOIDC(values map[string]json.RawMessage, prev json.RawMessage) (json.Raw
 			return nil, err
 		}
 		for _, e := range list {
-			built[headID(e)] = e
+			id, err := headID(e)
+			if err != nil {
+				return nil, err
+			}
+			built[id] = e
 		}
 	}
 
 	// Assemble: prev's order, the new providers after it.
 	out := []map[string]json.RawMessage{}
 	placed := map[string]bool{}
-	for _, e := range old {
-		id := headID(e)
+	for i, e := range old {
+		id := oldIDs[i]
 		if id == "" {
 			out = append(out, e)
 			continue

@@ -8,6 +8,7 @@ package appconfig
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -54,12 +55,13 @@ const (
 	execDir                      // an absolute directory; may not exist yet
 )
 
-// execPathHeads are the executable-path rows the update would have judged: set to
-// a non-empty value the write changes. Authorization is decided on these first
-// (write.go): a caller short of the admin role must learn nothing about the
-// server's filesystem from the answer, so no check runs for them.
-func execPathHeads(before config.Config, u config.Update) []string {
-	var out []string
+// execPathSets are the executable-path rows the update would have judged, each
+// with the value it sets: set to a non-empty value the write changes.
+// Authorization is decided on these first (write.go): a caller short of the
+// admin role must learn nothing about the server's filesystem from the answer,
+// so no check runs for them.
+func execPathSets(before config.Config, u config.Update) map[string]string {
+	out := map[string]string{}
 	for head, row := range execPathRows {
 		raw, ok := u.Set[head]
 		if !ok {
@@ -72,10 +74,14 @@ func execPathHeads(before config.Config, u config.Update) []string {
 		if v == row.cur(before) {
 			continue
 		}
-		out = append(out, head)
+		out[head] = v
 	}
-	slices.Sort(out)
 	return out
+}
+
+// execPathHeads are execPathSets' rows, sorted.
+func execPathHeads(before config.Config, u config.Update) []string {
+	return slices.Sorted(maps.Keys(execPathSets(before, u)))
 }
 
 // pathChecker is checkExecPath; a variable so a test can prove that a refused
@@ -92,9 +98,7 @@ var pathChecker = checkExecPath
 // and never the operating system's own message: the detail is logged here.
 func execPathViolations(before config.Config, u config.Update) []error {
 	var out []error
-	for _, head := range execPathHeads(before, u) {
-		var v string
-		_ = json.Unmarshal(u.Set[head], &v)
+	for head, v := range execPathSets(before, u) {
 		if err := pathChecker(v, execPathRows[head].kind); err != nil {
 			out = append(out, &coreconfig.FieldError{Path: coreconfig.Path(head), Err: err})
 		}
