@@ -1,0 +1,465 @@
+// file: core/internal/executor/dispatch_wait_test.go
+// version: 0.1.0
+// guid: 8e2d6a41-5c7b-4f93-a0e8-3b1c9d7f5a62
+// last-edited: 2026-11-21
+
+package executor
+
+import (
+	"context"
+	"fmt"
+	"math"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"testing/synctest"
+	"time"
+
+	dto "github.com/prometheus/client_model/go"
+
+	"github.com/falkcorp/mediacore/metrics"
+	"github.com/falkcorp/mediacore/tasks"
+)
+
+// F5-18i: a run held by a dispatch gate is visible. The run view (GET /runs,
+// the Activity page) names the gate's reason, the running run behind a key or
+// write-set deferral and when the deferral began; the wait gauge carries the
+// longest wait per kind, reason and trigger for the alert. Neither changes
+// which runs are deferred or the dispatch_deferred counter (once per run and
+// reason).
+
+// fakeClock is Options.Now for tests that read the gauge: the dispatcher keeps
+// its real tick, and the test moves the clock the waits are measured on.
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+// newFakeClock starts at the real time, so the deadlines the executor derives
+// from its clock (a run's timeout) are not already past on the real one.
+func newFakeClock() *fakeClock { return &fakeClock{t: time.Now()} }
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	c.t = c.t.Add(d)
+	c.mu.Unlock()
+}
+
+// writesOf declares the resources a fixture kind writes.
+func writesOf(names ...string) func(*tasks.Common) {
+	return func(c *tasks.Common) {
+		refs := make([]tasks.Resource, len(names))
+		for i, n := range names {
+			refs[i] = tasks.Res("gotham", n)
+		}
+		c.Effects = tasks.Writes(refs...)
+	}
+}
+
+// metricHarness is newHarness with the instruments on, in a core ops scope of
+// its own provider, and clk as the executor's clock.
+func metricHarness(t *testing.T, defs []tasks.Definition, clk *fakeClock) (*harness, *metrics.Provider) {
+	t.Helper()
+	p, err := metrics.New(context.Background(), metrics.Options{AppID: "gotham", MetricNamespace: "gotham", Prometheus: true})
+	if err != nil {
+		t.Fatalf("metrics.New: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
+	sc, err := p.Core("ops", Attributes()...)
+	if err != nil {
+		t.Fatalf("core ops scope: %v", err)
+	}
+	h := newHarness(t, defs, func(o *Options) {
+		o.Metrics, o.InstrumentsOff, o.Now = sc, false, clk.Now
+	})
+	return h, p
+}
+
+// waitSample is one sample of the wait gauge.
+type waitSample struct {
+	kind, reason, trigger string
+	seconds               float64
+}
+
+// family gathers p and returns the family named name, or nil.
+func family(t *testing.T, p *metrics.Provider, name string) *dto.MetricFamily {
+	t.Helper()
+	mfs, err := p.Gatherer().Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() == name {
+			return mf
+		}
+	}
+	return nil
+}
+
+func label(m *dto.Metric, name string) string {
+	for _, l := range m.GetLabel() {
+		if l.GetName() == name {
+			return l.GetValue()
+		}
+	}
+	return ""
+}
+
+func waitSamples(t *testing.T, p *metrics.Provider) []waitSample {
+	t.Helper()
+	var out []waitSample
+	if mf := family(t, p, "gotham_ops_dispatch_wait_seconds"); mf != nil {
+		for _, m := range mf.GetMetric() {
+			out = append(out, waitSample{label(m, "def_id"), label(m, "reason"), label(m, "trigger"), m.GetGauge().GetValue()})
+		}
+	}
+	return out
+}
+
+// deferredCount is the dispatch_deferred counter for reason.
+func deferredCount(t *testing.T, p *metrics.Provider, reason string) float64 {
+	t.Helper()
+	if mf := family(t, p, "gotham_ops_dispatch_deferred_total"); mf != nil {
+		for _, m := range mf.GetMetric() {
+			if label(m, "reason") == reason {
+				return m.GetCounter().GetValue()
+			}
+		}
+	}
+	return 0
+}
+
+// eventually polls cond for up to 10s of real time.
+func eventually(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// viewOf is the run's read model as GET /runs serves it.
+func (h *harness) viewOf(id tasks.RunID) tasks.RunView {
+	h.t.Helper()
+	v, err := h.x.Get(context.Background(), id)
+	if err != nil {
+		h.t.Fatalf("get view %s: %v", id, err)
+	}
+	return v
+}
+
+// TestRunView_NamesWhatBlocksAQueuedRun: a run held by the write-set gate
+// reads back with the reason, the holder and when the hold began, the start of
+// the hold does not move while the run waits, and the fields vanish when the
+// run starts. The stored row never carries them.
+func TestRunView_NamesWhatBlocksAQueuedRun(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started := make(chan tasks.RunID, 1)
+		h := newHarness(t, []tasks.Definition{
+			taskDef("gotham.evidence", blockUntilCtx(started)),
+			taskDef("gotham.forgery", okBody),
+		}, synctestConfig)
+		holder := h.start("gotham.evidence", tasks.StartRequest{})
+		<-started
+		waiter := h.start("gotham.forgery", tasks.StartRequest{})
+		h.stays(waiter, tasks.StateQueued, 5*time.Second)
+
+		v := h.viewOf(waiter)
+		if v.Deferred != deferWriteSet || v.BlockedBy != holder {
+			t.Fatalf("view = deferred %q blocked by %q, want %q behind %q", v.Deferred, v.BlockedBy, deferWriteSet, holder)
+		}
+		if v.DeferredSince.IsZero() || time.Since(v.DeferredSince) < 4*time.Second {
+			t.Errorf("deferred since %v, want the first pass 5s ago", v.DeferredSince)
+		}
+		since := v.DeferredSince
+		h.stays(waiter, tasks.StateQueued, 5*time.Second)
+		if v := h.viewOf(waiter); v.DeferredSince != since {
+			t.Errorf("deferred since moved from %v to %v while the run kept waiting", since, v.DeferredSince)
+		}
+		if r := h.get(waiter); r.Deferred != "" || r.BlockedBy != "" || !r.DeferredSince.IsZero() {
+			t.Errorf("stored row carries deferral fields: %+v", r.RunView)
+		}
+		// The holder is running, not queued: nothing to say about it.
+		if v := h.viewOf(holder); v.Deferred != "" || v.BlockedBy != "" || !v.DeferredSince.IsZero() {
+			t.Errorf("a running run reads back deferred: %+v", v)
+		}
+
+		if err := h.x.Cancel(context.Background(), holder); err != nil {
+			t.Fatal(err)
+		}
+		h.waitState(waiter, tasks.StateSucceeded)
+		if v := h.viewOf(waiter); v.Deferred != "" || v.BlockedBy != "" || !v.DeferredSince.IsZero() {
+			t.Errorf("a finished run reads back deferred: %+v", v)
+		}
+	})
+}
+
+// TestRunView_KeyDeferralNamesTheKeyHolder: a run held behind its
+// concurrency key's holder says "key" and names the holder, and a run no gate
+// holds says nothing.
+func TestRunView_KeyDeferralNamesTheKeyHolder(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started := make(chan tasks.RunID, 1)
+		key := func(c *tasks.Common) { c.ConcurrencyKey = "gotham.signal" }
+		h := newHarness(t, []tasks.Definition{
+			taskDef("gotham.watch", blockUntilCtx(started), key, writesOf("lab")),
+			taskDef("gotham.beacon", okBody, key, writesOf("vault")),
+			taskDef("gotham.lantern", okBody, writesOf("roof")),
+		}, synctestConfig)
+		holder := h.start("gotham.watch", tasks.StartRequest{})
+		<-started
+		beacon := h.start("gotham.beacon", tasks.StartRequest{})
+		free := h.start("gotham.lantern", tasks.StartRequest{})
+		h.waitState(free, tasks.StateSucceeded)
+		h.stays(beacon, tasks.StateQueued, 3*time.Second)
+		if v := h.viewOf(beacon); v.Deferred != deferKey || v.BlockedBy != holder {
+			t.Errorf("beacon view = deferred %q blocked by %q, want %q behind %q", v.Deferred, v.BlockedBy, deferKey, holder)
+		}
+		if v := h.viewOf(free); v.Deferred != "" || v.BlockedBy != "" {
+			t.Errorf("a run no gate held reads back deferred: %+v", v)
+		}
+	})
+}
+
+// TestRunView_PausedDeferralHasNoBlocker: a reason that is not a run's doing
+// (paused) carries no blocker, and the wait still starts.
+func TestRunView_PausedDeferralHasNoBlocker(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := newHarness(t, []tasks.Definition{taskDef("gotham.forgery", okBody)}, synctestConfig)
+		h.e.setPaused(true)
+		id := h.start("gotham.forgery", tasks.StartRequest{})
+		h.stays(id, tasks.StateQueued, 3*time.Second)
+		v := h.viewOf(id)
+		if v.Deferred != deferPaused || v.BlockedBy != "" || v.DeferredSince.IsZero() {
+			t.Errorf("view = %+v, want paused, no blocker, a start time", v)
+		}
+	})
+}
+
+// TestDispatchWait_BlockerChangeKeepsTheWaitAndTheCount: when one of two
+// running holders ends and the other still blocks the run, the view names the
+// remaining holder, the wait keeps its start, and dispatch_deferred does not
+// count the run's writeset deferral again.
+func TestDispatchWait_BlockerChangeKeepsTheWaitAndTheCount(t *testing.T) {
+	clk := newFakeClock()
+	startedA, startedB := make(chan tasks.RunID, 1), make(chan tasks.RunID, 1)
+	h, p := metricHarness(t, []tasks.Definition{
+		taskDef("gotham.evidence", blockUntilCtx(startedA), writesOf("lab")),
+		taskDef("gotham.ballistics", blockUntilCtx(startedB), writesOf("vault")),
+		taskDef("gotham.forgery", okBody, writesOf("lab", "vault")),
+	}, clk)
+	a := h.start("gotham.evidence", tasks.StartRequest{})
+	b := h.start("gotham.ballistics", tasks.StartRequest{})
+	<-startedA
+	<-startedB
+	w := h.start("gotham.forgery", tasks.StartRequest{})
+	eventually(t, "the forgery to be deferred", func() bool { return h.viewOf(w).Deferred == deferWriteSet })
+	first := h.viewOf(w)
+	if first.BlockedBy != a && first.BlockedBy != b {
+		t.Fatalf("blocked by %q, want one of the two holders %q or %q", first.BlockedBy, a, b)
+	}
+	clk.Advance(time.Hour)
+	other, ended := b, a
+	if first.BlockedBy == b {
+		other, ended = a, b
+	}
+	if err := h.x.Cancel(context.Background(), ended); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the blocker to change", func() bool { return h.viewOf(w).BlockedBy == other })
+	v := h.viewOf(w)
+	if v.Deferred != deferWriteSet || !v.DeferredSince.Equal(first.DeferredSince) {
+		t.Errorf("after the blocker changed: deferred %q since %v, want %q since %v", v.Deferred, v.DeferredSince, deferWriteSet, first.DeferredSince)
+	}
+	time.Sleep(150 * time.Millisecond) // several dispatch passes of the 20ms test tick
+	if n := deferredCount(t, p, deferWriteSet); n != 1 {
+		t.Errorf("dispatch_deferred{reason=writeset} = %v, want 1: a blocker change is not a new deferral", n)
+	}
+	if got := waitSamples(t, p); len(got) != 1 || got[0].reason != deferWriteSet || got[0].seconds < time.Hour.Seconds() {
+		t.Errorf("wait gauge = %+v, want one writeset sample of at least an hour", got)
+	}
+}
+
+// TestDispatchWait_GaugeSplitsByTriggerAndForgetsRunsThatLeft: the gauge reports
+// the longest wait per kind, reason and trigger (a scheduled run is told apart
+// from a manual one), grows with the clock, and drops a run's sample once the
+// run is canceled while still queued: a stale entry would page for a run that
+// is gone.
+func TestDispatchWait_GaugeSplitsByTriggerAndForgetsRunsThatLeft(t *testing.T) {
+	clk := newFakeClock()
+	started := make(chan tasks.RunID, 1)
+	h, p := metricHarness(t, []tasks.Definition{
+		taskDef("gotham.evidence", blockUntilCtx(started)),
+		taskDef("gotham.forgery", okBody),
+		taskDef("gotham.audit", okBody),
+	}, clk)
+	h.start("gotham.evidence", tasks.StartRequest{})
+	<-started
+	manual := h.start("gotham.forgery", tasks.StartRequest{Trigger: tasks.TriggerManual})
+	sched := h.start("gotham.audit", tasks.StartRequest{Trigger: tasks.TriggerSchedule})
+	eventually(t, "both runs deferred", func() bool {
+		return h.viewOf(manual).Deferred != "" && h.viewOf(sched).Deferred != ""
+	})
+	clk.Advance(3 * time.Hour)
+	find := func(trigger string) (waitSample, bool) {
+		for _, s := range waitSamples(t, p) {
+			if s.trigger == trigger {
+				return s, true
+			}
+		}
+		return waitSample{}, false
+	}
+	s, ok := find("schedule")
+	if !ok || s.kind != "gotham.audit" || s.reason != deferWriteSet || s.seconds < 3*3600 || s.seconds > 3*3600+60 {
+		t.Errorf("scheduled sample = %+v (found %v), want gotham.audit, writeset, about 3h", s, ok)
+	}
+	m, ok := find("manual")
+	if !ok || m.kind != "gotham.forgery" || m.reason != deferWriteSet {
+		t.Errorf("manual sample = %+v (found %v), want gotham.forgery, writeset", m, ok)
+	}
+	if err := h.x.Cancel(context.Background(), sched); err != nil {
+		t.Fatal(err)
+	}
+	h.waitState(sched, tasks.StateCanceled)
+	eventually(t, "the canceled run's sample to go", func() bool { _, still := find("schedule"); return !still })
+	if _, still := h.e.waitsNow()[sched]; still {
+		t.Errorf("the canceled run is still in the pass record")
+	}
+	if _, ok := find("manual"); !ok {
+		t.Errorf("the manual run's sample went with the canceled one")
+	}
+}
+
+// TestDispatchWait_ConcurrentDeferralsReadersAndCancels (run with -race): the
+// dispatcher defers a crowd of runs while Start adds more, Cancel removes some,
+// and readers hit the run view, the run list and the metrics gather. The pass
+// record is replaced whole under e.mu and read without it, so the race detector
+// decides; the assertions pin the end state: every waiter that survived read
+// back deferred, and none of the others left an entry in the pass record.
+func TestDispatchWait_ConcurrentDeferralsReadersAndCancels(t *testing.T) {
+	clk := newFakeClock()
+	started := make(chan tasks.RunID, 1)
+	h, p := metricHarness(t, []tasks.Definition{
+		taskDef("gotham.evidence", blockUntilCtx(started)),
+		taskDef("gotham.forgery", okBody),
+	}, clk)
+	holder := h.start("gotham.evidence", tasks.StartRequest{})
+	<-started
+
+	const starters, perStarter = 6, 8
+	var mu sync.Mutex
+	var ids []tasks.RunID
+	var wg sync.WaitGroup
+	for s := range starters {
+		wg.Go(func() {
+			for n := range perStarter {
+				// A distinct case each, or a start folds into the queued run of
+				// the same kind and params (dedupe) and returns its ID.
+				id := h.start("gotham.forgery", tasks.StartRequest{Params: mustParams(t, fmt.Sprintf("case-%d-%d", s, n))})
+				mu.Lock()
+				ids = append(ids, id)
+				mu.Unlock()
+			}
+		})
+	}
+	stop := make(chan struct{})
+	var readers sync.WaitGroup
+	var reads atomic.Int64
+	read := func(f func()) {
+		readers.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					f()
+					reads.Add(1)
+				}
+			}
+		})
+	}
+	read(func() { family(t, p, "gotham_ops_dispatch_wait_seconds") })
+	read(func() {
+		for v, err := range h.x.Runs(context.Background(), tasks.RunQuery{}) {
+			if err == nil && v.Deferred != "" && v.DeferredSince.IsZero() {
+				t.Errorf("run %s reads deferred %q with no start time", v.ID, v.Deferred)
+			}
+		}
+	})
+	read(func() {
+		mu.Lock()
+		snap := append([]tasks.RunID(nil), ids...)
+		mu.Unlock()
+		for _, id := range snap {
+			if v, err := h.x.Get(context.Background(), id); err == nil && v.Deferred != "" && v.BlockedBy != holder {
+				t.Errorf("run %s deferred %q behind %q, want the only holder %q", id, v.Deferred, v.BlockedBy, holder)
+			}
+		}
+	})
+	wg.Wait()
+
+	// Cancel every third waiter while the readers run.
+	canceled := map[tasks.RunID]bool{}
+	mu.Lock()
+	all := append([]tasks.RunID(nil), ids...)
+	mu.Unlock()
+	for i, id := range all {
+		if i%3 == 0 {
+			if err := h.x.Cancel(context.Background(), id); err != nil {
+				t.Fatalf("cancel %s: %v", id, err)
+			}
+			canceled[id] = true
+		}
+	}
+	survivors := len(all) - len(canceled)
+	eventually(t, "every surviving waiter to read deferred", func() bool {
+		for _, id := range all {
+			if !canceled[id] && h.viewOf(id).Deferred != deferWriteSet {
+				return false
+			}
+		}
+		return true
+	})
+	close(stop)
+	readers.Wait()
+	if reads.Load() == 0 {
+		t.Fatal("the readers never ran")
+	}
+	eventually(t, "the canceled waiters to leave the pass record", func() bool {
+		w := h.e.waitsNow()
+		for id := range canceled {
+			if _, still := w[id]; still {
+				return false
+			}
+		}
+		return len(w) == survivors
+	})
+	// Every survivor was counted at least once. No upper bound: a pass that
+	// had already read a run when Cancel finished it defers it once more
+	// (deferRun re-adds the entry the terminal move deleted), which is how the
+	// counter has always behaved and is not this slice's to change.
+	if n := deferredCount(t, p, deferWriteSet); n < float64(survivors) || n != math.Trunc(n) {
+		t.Errorf("dispatch_deferred{reason=writeset} = %v, want at least %d", n, survivors)
+	}
+	if err := h.x.Cancel(context.Background(), holder); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range all {
+		if !canceled[id] {
+			h.waitState(id, tasks.StateSucceeded)
+		}
+	}
+	eventually(t, "an empty pass record once every run left the queue", func() bool { return len(h.e.waitsNow()) == 0 })
+	if got := waitSamples(t, p); len(got) != 0 {
+		t.Errorf("wait gauge after every run left the queue = %+v, want none", got)
+	}
+}

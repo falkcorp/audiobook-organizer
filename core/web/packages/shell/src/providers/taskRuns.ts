@@ -63,6 +63,17 @@ export interface TaskRunWire {
   total: number;
   /** Blank unless the caller holds core:users.view (the server redacts it). */
   current?: string;
+  /**
+   * Why a queued run is not running yet: the dispatch gate's reason token (key,
+   * writeset, ready, module_cap, zombie_cap, standdown, paused, held). Computed
+   * by the executor at read time from its last dispatch pass and never stored,
+   * so it is absent for a run that is not queued or that pass did not defer.
+   */
+  deferred?: string;
+  /** The running run behind a `key` or `writeset` deferral (the other reasons name none). */
+  blocked_by?: string;
+  /** RFC 3339: when the run's unbroken deferral began. */
+  deferred_since?: string;
 }
 
 /**

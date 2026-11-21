@@ -21,6 +21,7 @@ func fullRunView() RunView {
 		Trigger: TriggerManual, Parent: "run-nightwing-0", PlanRef: "run-nightwing-plan",
 		Created: created, Started: created.Add(time.Minute), Finished: created.Add(time.Hour),
 		Done: 3, Total: 9, Current: "Talon's case file",
+		Deferred: "writeset", BlockedBy: "run-nightwing-2", DeferredSince: created.Add(2 * time.Minute),
 	}
 }
 

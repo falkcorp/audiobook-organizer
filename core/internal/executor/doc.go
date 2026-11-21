@@ -31,7 +31,7 @@
 //	batch.go       batch.go, batch_runner.go, chunk_ledger.go, batch_hooks.go   Batch: chunks, ledger, resume
 //	fixer.go       preview.go and the v3 apply path      Fixer: plan rows, approval, apply with marks
 //	budget.go      run_items.go's CPU budget and ref locks   the per-executor CPU semaphore, ref-lock table, lane leases
-//	instruments.go the opsmetrics package                the 18 <ns>.ops instruments
+//	instruments.go the opsmetrics package                the 19 <ns>.ops instruments
 //
 // Every batch that carries a run-store write is built inside WriteRuns and
 // committed with storage.Sync under storage.RetryOnConflict; every in-process

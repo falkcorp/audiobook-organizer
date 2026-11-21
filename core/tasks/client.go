@@ -139,6 +139,18 @@ type RunView struct {
 	Done     int       // completed items (Batch/Fixer/RunItems; Task: last reported)
 	Total    int       // 0 = unknown
 	Current  string    // current item label; may name a user, so blanked by RedactRunView (below)
+
+	// Deferred, BlockedBy and DeferredSince say why a queued run is not running
+	// yet. Like Held they are computed at read time from the executor's last
+	// dispatch pass and never stored: a queued run the pass deferred carries the
+	// gate's reason token (key, writeset, ready, module_cap, zombie_cap,
+	// standdown, paused, held), the running run behind a key or write-set
+	// deferral (BlockedBy, empty for the other reasons) and when its unbroken
+	// deferral began. All three are zero for a run that is not queued or that
+	// the last pass did not defer.
+	Deferred      string
+	BlockedBy     RunID
+	DeferredSince time.Time
 }
 
 // usersView is the scope that may read user-identifying run text (05-authn GET /users).

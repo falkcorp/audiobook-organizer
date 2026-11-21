@@ -74,6 +74,12 @@ type RunPayload struct {
 	Done     int          `json:"done"`
 	Total    int          `json:"total"`
 	Current  string       `json:"current,omitempty"`
+
+	// Deferred, BlockedBy and DeferredSince are RunView's read-time deferral
+	// fields: why a queued run waits, behind which running run, and since when.
+	Deferred      string    `json:"deferred,omitempty"`
+	BlockedBy     string    `json:"blocked_by,omitempty"`
+	DeferredSince time.Time `json:"deferred_since,omitzero"`
 }
 
 // NewRunPayload is the wire form of v. It does not redact: the REST handler
@@ -84,6 +90,7 @@ func NewRunPayload(v RunView) RunPayload {
 		Reason: v.Reason, Actor: NewActorPayload(v.Actor), Trigger: string(v.Trigger), Parent: string(v.Parent),
 		PlanRef: string(v.PlanRef), Created: v.Created, Started: v.Started, Finished: v.Finished,
 		Done: v.Done, Total: v.Total, Current: v.Current,
+		Deferred: v.Deferred, BlockedBy: string(v.BlockedBy), DeferredSince: v.DeferredSince,
 	}
 }
 
@@ -115,6 +122,7 @@ func (p RunPayload) runView() RunView {
 		Reason: p.Reason, Actor: Actor(p.Actor), Trigger: Trigger(p.Trigger), Parent: RunID(p.Parent),
 		PlanRef: RunID(p.PlanRef), Created: p.Created, Started: p.Started, Finished: p.Finished,
 		Done: p.Done, Total: p.Total, Current: p.Current,
+		Deferred: p.Deferred, BlockedBy: RunID(p.BlockedBy), DeferredSince: p.DeferredSince,
 	}
 }
 

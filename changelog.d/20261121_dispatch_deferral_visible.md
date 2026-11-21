@@ -1,0 +1,3 @@
+### Added
+
+- The task executor (dark until the flip) makes a write-set or concurrency-key deferral visible. A queued run that a dispatch gate holds now reads back, through the run view and the run payload (`deferred`, `blocked_by`, `deferred_since`), with the gate's reason, the running run behind it and when its unbroken wait began. The fields are computed at read time from the last dispatch pass and are never stored, so dispatch writes no run row. A new gauge, `dispatch_wait` (seconds, by `def_id`, `reason` and `trigger`), reports the longest wait of a registered kind, so a scheduled kind queued behind a manual one can be alerted on once the executor serves metrics. Which runs are deferred, and the `dispatch_deferred` counter, are unchanged.

@@ -427,3 +427,50 @@ func TestPerRunSeq_NoReissueAfterCrash(t *testing.T) {
 		t.Fatalf("next seq after the crash = %d, %v; want 3", seq, err)
 	}
 }
+
+// TestNativeStores_DeferralFieldsNeverStored (F5-18i): Deferred, BlockedBy and
+// DeferredSince are read-time fields the executor's dispatch pass owns, like
+// Held. A record that carries them (a RunView handed back as a RunRecord) is
+// stored without them, on insert and on a transition, so a stale blocker can
+// never be read back from the row.
+func TestNativeStores_DeferralFieldsNeverStored(t *testing.T) {
+	h := newHarness(t)
+	ctx := t.Context()
+	runs := h.native.Runs
+	open := runs.(taskstest.BatchOpener)
+	commit := func(stage func(b *storage.Batch) error) {
+		t.Helper()
+		b := open.NewBatch()
+		defer func() { _ = b.Close() }()
+		if err := stage(b); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.Commit(ctx, storage.Sync); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deferred := func(r tasks.RunRecord) tasks.RunRecord {
+		r.Held = true
+		r.Deferred, r.BlockedBy, r.DeferredSince = "writeset", "01BLOCKERBATMOBILE", r.Created.Add(time.Minute)
+		return r
+	}
+	queued := deferred(runOf("01DEFERREDQUEUED", tasks.StateQueued))
+	commit(func(b *storage.Batch) error { return runs.Insert(ctx, b, queued) })
+	assertClean := func(when string) {
+		t.Helper()
+		got, err := runs.Get(ctx, "01DEFERREDQUEUED")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Held || got.Deferred != "" || got.BlockedBy != "" || !got.DeferredSince.IsZero() {
+			t.Errorf("%s: stored row carries read-time fields: held %v deferred %q blocked_by %q since %v",
+				when, got.Held, got.Deferred, got.BlockedBy, got.DeferredSince)
+		}
+	}
+	assertClean("after Insert")
+	next := deferred(runOf("01DEFERREDQUEUED", tasks.StateRunning))
+	commit(func(b *storage.Batch) error {
+		return runs.Transition(ctx, b, "01DEFERREDQUEUED", tasks.Expect{State: tasks.StateQueued, Attempt: 1, FenceEpoch: 1}, next)
+	})
+	assertClean("after Transition")
+}
