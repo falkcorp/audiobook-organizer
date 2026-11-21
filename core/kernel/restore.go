@@ -78,7 +78,8 @@ type RestoreOfflineResult struct {
 //     the files an archive does not carry: the operator's copy of the
 //     keyring export and of the off-host gap-fill config.yaml, each staged
 //     under its state-file label and replacing the live file of that label,
-//     set aside like every replaced state file; a source with no such file
+//     set aside like every replaced state file, each staged on its own
+//     target's filesystem as a checkpoint's are; a source with no such file
 //     never removes or replaces the live one. A legacy archive restored
 //     without --gap-fill warns what then migrates empty. In --into they
 //     are copied to <into>.state/<label>;
@@ -97,16 +98,22 @@ type RestoreOfflineResult struct {
 //     --accept-loss; the store's lock refuses an opener that takes no swap
 //     lock (ErrStoreHeld); the source store opens read-only with this
 //     build's guard (a store this build refuses is never staged); each
-//     state file the checkpoint holds is copied into the staging directory
-//     and checked against its recorded SHA-256 before anything is staged;
+//     state file the checkpoint holds is copied into a staging directory on
+//     its own target's filesystem (restorejournal.StagingDest: the state
+//     directory's private directory for a file under it, the store's for
+//     one beside the store), so a state directory on another filesystem
+//     than the store restores, and checked against its recorded SHA-256
+//     before anything is staged;
 //     Config.BeforeSwap runs; then the journaled swap
 //     runs in this process (restoreswap.Swapper.RestoreOffline: a pending
 //     intent superseded, a failed checkpoint restore escaped, every rename
 //     pre-validated, the journal finished at applied_offline). The
 //     checkpoint's record turns consumed once the journal reached swapped
 //     or applied_offline (DATA-6), and is released when a swap-back moved
-//     its store copy away. What a refused restore staged is removed: the
-//     swap owns the staging directory only once it linked the intent;
+//     its store copy away. What a refused restore staged is removed, on
+//     every filesystem it staged on (restorejournal.StagingRoots): the
+//     swap owns the staging directories only once it linked the intent.
+//     An applied restore removes its emptied staging directories;
 //   - --into copies the source into a new directory inside the scratch
 //     area, the state files into <dir>.state/, modes 0700 and 0600, and
 //     touches nothing else: no store lock, no swap lock, no slot read, no
@@ -265,10 +272,20 @@ func (k *Kernel) restoreInPlace(ctx context.Context, fs vfs.FS, sw *restoreswap.
 		return res, err
 	}
 	id := restoreswap.NewID(bootClock(ctx)())
-	staging := restorejournal.StagingDir(dbPath, id)
-	src, warns, err := k.stageSource(ctx, fs, cp, req, id, staging)
+	// Every private directory this restore stages into, one per filesystem
+	// its targets lie on (restorejournal.StagingDest): the id is fresh, so
+	// until Stage links the intent each holds only what this restore staged.
+	roots := restorejournal.StagingRoots(k.cfg.StateDir, dbPath, id, k.stagedTargets(cp, req))
+	removeStaging := func() error {
+		var errs []error
+		for _, r := range roots {
+			errs = append(errs, removeIfExists(fs, r))
+		}
+		return errors.Join(errs...)
+	}
+	src, warns, err := k.stageSource(ctx, fs, cp, req, id)
 	if err != nil {
-		return res, errors.Join(err, removeIfExists(fs, filepath.Dir(staging)))
+		return res, errors.Join(err, removeStaging())
 	}
 	res.Warnings = append(res.Warnings, warns...)
 	if src.InstallID == "" {
@@ -278,17 +295,27 @@ func (k *Kernel) restoreInPlace(ctx context.Context, fs vfs.FS, sw *restoreswap.
 	k.log.Warn("kernel: restoring; every write made since the source was taken is discarded", "source", res.Source, "id", id)
 	if f := k.cfg.BeforeSwap; f != nil {
 		if err := f(dbPath); err != nil {
-			return res, errors.Join(fmt.Errorf("kernel: before the restore swaps: %w", err), removeIfExists(fs, filepath.Dir(staging)))
+			return res, errors.Join(fmt.Errorf("kernel: before the restore swaps: %w", err), removeStaging())
 		}
 	}
 	r, rerr := sw.RestoreOffline(ctx, dbPath, req.RequestedBy, src)
 	res.ID, res.Escaped, res.Superseded = r.ID, r.Escaped, r.Superseded
 	res.Warnings = append(res.Warnings, r.Warnings...)
-	if !r.Linked && (rerr != nil || r.Escaped) {
+	switch {
+	case !r.Linked && (rerr != nil || r.Escaped):
 		// Refused before Stage linked the intent, or an escape, which
 		// journals no staging path: what this restore staged is its own,
 		// copies the swap no longer needs.
-		rerr = errors.Join(rerr, removeIfExists(fs, filepath.Dir(staging)))
+		rerr = errors.Join(rerr, removeStaging())
+	case rerr == nil:
+		// Applied: step d placed every staged item, so the staging leaves
+		// hold empty directories only, which would otherwise stay behind
+		// in the state directory after each restore.
+		for _, r := range roots {
+			if err := removeEmptyStaging(fs, r); err != nil {
+				res.Warnings = append(res.Warnings, fmt.Sprintf("the restore's empty staging directory under %s was not removed: %v", r, err))
+			}
+		}
 	}
 	if cp.Name != "" {
 		res.Warnings = append(res.Warnings, k.settleCheckpoint(ctx, fs, cps, cp, r)...)
@@ -296,16 +323,72 @@ func (k *Kernel) restoreInPlace(ctx context.Context, fs vfs.FS, sw *restoreswap.
 	return res, rerr
 }
 
-// stageSource builds the swap's source: a checkpoint's store copy in place
-// with each state file copied into staging/state/<label> and checked
-// against its SHA-256, or an archive extracted into staging/db and opened
-// read-only.
-func (k *Kernel) stageSource(ctx context.Context, fs vfs.FS, cp storage.Checkpoint, req RestoreOfflineRequest,
-	id, staging string) (src restoreswap.OfflineSource, warnings []string, err error) {
-	src = restoreswap.OfflineSource{ID: id}
-	if err := mkdirPrivate(fs, staging); err != nil {
-		return src, nil, err
+// stagedTargets is every live path the restore stages a file for: each
+// state file the checkpoint holds, or each file --keyring and --gap-fill
+// bring back with an archive.
+func (k *Kernel) stagedTargets(cp storage.Checkpoint, req RestoreOfflineRequest) []string {
+	var out []string
+	if cp.Name != "" {
+		for _, f := range cp.StateFiles {
+			out = append(out, f.Path)
+		}
+		return out
 	}
+	for _, f := range k.archiveFiles(req) {
+		out = append(out, f.to)
+	}
+	return out
+}
+
+// removeEmptyStaging removes root's staging/ leaf when it holds no file,
+// then root when that left it empty. A file left in it is kept, as is
+// root's other content (previous/, the only undo).
+func removeEmptyStaging(fs vfs.FS, root string) error {
+	leaf := filepath.Join(root, "staging")
+	if empty, err := holdsNoFile(fs, leaf); err != nil || !empty {
+		if errors.Is(err, os.ErrNotExist) {
+			err = nil
+		}
+		return err
+	}
+	if err := fs.RemoveAll(leaf); err != nil {
+		return err
+	}
+	if names, err := fs.List(root); err == nil && len(names) == 0 {
+		return fs.Remove(root)
+	}
+	return nil
+}
+
+// holdsNoFile reports a directory tree with directories only.
+func holdsNoFile(fs vfs.FS, dir string) (bool, error) {
+	fi, err := fs.Stat(dir)
+	if err != nil {
+		return false, err
+	}
+	if !fi.IsDir() {
+		return false, nil
+	}
+	names, err := fs.List(dir)
+	if err != nil {
+		return false, err
+	}
+	for _, n := range names {
+		if ok, err := holdsNoFile(fs, filepath.Join(dir, n)); err != nil || !ok {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// stageSource builds the swap's source: a checkpoint's store copy in place,
+// or an archive extracted into StagingDir/db and opened read-only, with each
+// state file staged at its restorejournal.StagingDest, on its target's own
+// filesystem (a checkpoint's checked against its SHA-256).
+func (k *Kernel) stageSource(ctx context.Context, fs vfs.FS, cp storage.Checkpoint, req RestoreOfflineRequest,
+	id string) (src restoreswap.OfflineSource, warnings []string, err error) {
+	src = restoreswap.OfflineSource{ID: id}
+	dbPath := k.cfg.StoragePath
 	if cp.Name != "" {
 		// The checkpoint's store copy opens with this build's guard, as an
 		// extracted archive does, unless it is gone: an interrupted escape
@@ -319,13 +402,11 @@ func (k *Kernel) stageSource(ctx context.Context, fs vfs.FS, cp storage.Checkpoi
 			return src, nil, fmt.Errorf("kernel: checkpoint %s: %w", cp.Name, err)
 		}
 		src.Kind, src.Store, src.HooksOwed, src.InstallID = restorejournal.KindCheckpoint, cp.Store(), cp.HooksOwed, cp.InstallID
-		if len(cp.StateFiles) > 0 {
-			if err := mkdirPrivate(fs, filepath.Join(staging, "state")); err != nil {
+		for _, f := range cp.StateFiles {
+			staged := restorejournal.StagingDest(k.cfg.StateDir, dbPath, id, f.Path, f.Label)
+			if err := mkdirPrivate(fs, filepath.Dir(staged)); err != nil {
 				return src, nil, err
 			}
-		}
-		for _, f := range cp.StateFiles {
-			staged := filepath.Join(staging, "state", f.Label)
 			if err := copyVerified(fs, cp.StateCopy(f.Label), staged, f.SHA256); err != nil {
 				return src, nil, err
 			}
@@ -333,7 +414,7 @@ func (k *Kernel) stageSource(ctx context.Context, fs vfs.FS, cp storage.Checkpoi
 		}
 		return src, nil, nil
 	}
-	store := filepath.Join(staging, "db")
+	store := filepath.Join(restorejournal.StagingDir(dbPath, id), "db")
 	if err := mkdirPrivate(fs, store); err != nil {
 		return src, nil, err
 	}
@@ -346,13 +427,11 @@ func (k *Kernel) stageSource(ctx context.Context, fs vfs.FS, cp storage.Checkpoi
 	}
 	src.Kind, src.Store, src.ArchiveID = restorejournal.KindArchive, store, archiveID
 	files, warnings := k.archiveStateFiles(archiveID, req)
-	if len(files) > 0 {
-		if err := mkdirPrivate(fs, filepath.Join(staging, "state")); err != nil {
+	for _, f := range files {
+		staged := restorejournal.StagingDest(k.cfg.StateDir, dbPath, id, f.to, f.label)
+		if err := mkdirPrivate(fs, filepath.Dir(staged)); err != nil {
 			return src, nil, err
 		}
-	}
-	for _, f := range files {
-		staged := filepath.Join(staging, "state", f.label)
 		if err := copyOperatorFile(fs, f.from, staged, f.max, f.private); err != nil {
 			return src, nil, err
 		}

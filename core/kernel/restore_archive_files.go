@@ -60,7 +60,8 @@ func checkArchiveFiles(req RestoreOfflineRequest) error {
 }
 
 // archiveFile is one operator-supplied file to stage: from is the operator's,
-// to the live path it replaces, label its name under staging/state/.
+// to the live path it replaces, label its name under staging/state/ (its
+// restorejournal.StagingDest).
 type archiveFile struct {
 	label, from, to string
 	max             int64
@@ -72,6 +73,16 @@ type archiveFile struct {
 // archiveStateFiles is what --keyring and --gap-fill bring back with an
 // archive, and the warnings an archive restored without them earns.
 func (k *Kernel) archiveStateFiles(archiveID string, req RestoreOfflineRequest) (files []archiveFile, warnings []string) {
+	if req.GapFill == "" && backup.IsLegacyID(archiveID) {
+		warnings = append(warnings, warnLegacyNoGapFill)
+	}
+	return k.archiveFiles(req), warnings
+}
+
+// archiveFiles is what --keyring and --gap-fill bring back, each with the
+// live path it replaces; it needs no archive, so a restore names its
+// staging roots before it extracts one.
+func (k *Kernel) archiveFiles(req RestoreOfflineRequest) (files []archiveFile) {
 	if req.Keyring != "" {
 		files = append(files, archiveFile{
 			label: keyringLabel, from: req.Keyring, max: maxOperatorFileBytes, private: true,
@@ -84,10 +95,7 @@ func (k *Kernel) archiveStateFiles(archiveID string, req RestoreOfflineRequest) 
 			to: k.stateFilePath(gapFillLabel, filepath.Join(filepath.Dir(k.cfg.StoragePath), gapFileName)),
 		})
 	}
-	if req.GapFill == "" && backup.IsLegacyID(archiveID) {
-		warnings = append(warnings, warnLegacyNoGapFill)
-	}
-	return files, warnings
+	return files
 }
 
 // stateFilePath is the path the app declared for label, else fallback.
