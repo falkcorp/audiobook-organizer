@@ -164,6 +164,9 @@ func TestFlipOptions_WireTheKernelsSeams(t *testing.T) {
 			return nil
 		},
 		AllowKeyRegen: func() bool { return true },
+		OperatorSet: func(p coreconfig.Path) (string, bool) {
+			return "env", p == "core.auth.oidc.providers"
+		},
 	}
 	opts := m.flipOptions(imp)
 	if opts.LevelStepVersion != booksLevelStepVersion {
@@ -183,8 +186,17 @@ func TestFlipOptions_WireTheKernelsSeams(t *testing.T) {
 	if !c.AllowKeyRegen() {
 		t.Error("AllowKeyRegen did not report the bound value")
 	}
-	if un := m.flipOptions(module.Importers{}).Config; un.Legacy != nil || (un.AllowKeyRegen != nil && un.AllowKeyRegen()) {
-		t.Error("an unbound Importers produced a Legacy reader or a true AllowKeyRegen")
+	if c.OperatorSet == nil {
+		t.Fatal("OperatorSet is not wired")
+	}
+	if _, set := c.OperatorSet("core.auth.oidc.providers"); !set {
+		t.Error("OperatorSet did not report the bound lock")
+	}
+	if _, set := c.OperatorSet("core.log.level"); set {
+		t.Error("OperatorSet reported a lock the bound func does not")
+	}
+	if un := m.flipOptions(module.Importers{}).Config; un.Legacy != nil || (un.AllowKeyRegen != nil && un.AllowKeyRegen()) || un.OperatorSet != nil {
+		t.Error("an unbound Importers produced a Legacy reader, a true AllowKeyRegen or an OperatorSet")
 	}
 }
 

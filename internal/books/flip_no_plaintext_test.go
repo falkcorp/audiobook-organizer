@@ -59,7 +59,7 @@ func canaryBlob() (blob string, planted []canarySecret) {
 		`"acoustid_api_key":%q,"deluge_web_password":%q,`+
 		`"download_client":{"torrent":{"deluge":{"password":%q}}},`+
 		`"oauth_enabled":true,"oauth_github_client_id":"robin-github","oauth_github_client_secret":%q,`+
-		`"oauth_google_client_id":"batgirl-google","oauth_google_client_secret":%q,`+
+		`"oauth_google_client_id":"batgirl-google","oauth_google_client_secret":%q,"oauth_allowed_emails":"alfred@batcave.example",`+
 		`"plugins":{"webhook":{"enabled":true,"settings":{"events":"all","urls":"http://192.0.2.10/gotham","secret":%q}},`+
 		`"batsignal":{"enabled":true,"settings":{"token":%q}}},`+
 		`"metadata_sources":[{"id":"hardcover","display_name":"Hardcover","enabled":true,"priority":1,"credentials":{"apiKey":%q}}]}`,

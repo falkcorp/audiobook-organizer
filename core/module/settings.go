@@ -169,6 +169,14 @@ type Importers struct {
 	// boot whose config store is not wired. Never nil as a func. Added and
 	// removed with Legacy.
 	AllowKeyRegen func() bool
+	// OperatorSet reports whether an operator layer (the environment, the
+	// operator file or a flag) sets p for this boot, and which one
+	// (config.KeyState.LockedBy): a step that would carry a legacy value into
+	// a key the operator now supplies can tell the two apart (books' M2
+	// refuses to drop an OAuth allow-list unless the operator supplies the
+	// provider list). False until bound, and false on a boot whose config
+	// store is not wired. Never nil as a func. Added and removed with Legacy.
+	OperatorSet func(p config.Path) (by string, set bool)
 }
 
 // ErrImporterNotBound is what a late-bound importer returns before the

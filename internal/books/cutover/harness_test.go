@@ -425,7 +425,10 @@ type rig struct {
 	mutate     func(t testing.TB, lr storage.LegacyRange)
 	files      FileOps
 	allowRegen bool
-	noKeyDir   bool // the state directory has no key file once the store is seeded
+	// operatorSet is ConfigStepOptions.OperatorSet: the keys an operator
+	// layer sets for this boot, by path, with the layer's name.
+	operatorSet map[string]string
+	noKeyDir    bool // the state directory has no key file once the store is seeded
 	// afterSeed edits the state directory once the store is seeded (seeding
 	// itself seals rows with HEAD's key, so the key is only broken after it).
 	afterSeed func(t testing.TB, stateDir string)
@@ -533,8 +536,12 @@ func (r *rig) migration() datamigrate.DataMigration {
 		ConfigFile:       r.confFile,
 		Legacy:           func() storage.Reader { _, _, l := r.h.get(); return l },
 		AllowKeyRegen:    func() bool { return r.allowRegen },
-		Files:            r.files,
-		Logger:           slog.New(slog.NewTextHandler(r.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		OperatorSet: func(p string) (string, bool) {
+			by, ok := r.operatorSet[p]
+			return by, ok
+		},
+		Files:  r.files,
+		Logger: slog.New(slog.NewTextHandler(r.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	}
 	return ConfigStep(lazyConfig{r.h}, lazySecrets{r.h}, opts)
 }
