@@ -316,6 +316,7 @@ core/kernel.restoreHooksInput.writeMarkers
 core/kernel.restoreKindLabel
 core/kernel.restoreUsers.ScanUsers
 core/kernel.restoreUsers.StageRoles
+core/kernel.runP4dSteps
 core/kernel.runRestoreHooks
 core/kernel.secretsHealth
 core/kernel.secretsMetrics
