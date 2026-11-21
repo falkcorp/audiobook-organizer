@@ -1,0 +1,3 @@
+### Fixed
+
+- Tasks cutover step (M4, not yet registered in any build): a stray row in a subject's completions or in a debounce bucket no longer stops the boot. A stray row is one whose key lies under the group's prefix but does not decode. When it sorted lowest it was quarantined on its own, while the group's other rows waited on it to import them, so they were left behind and the step's final check failed the boot. With the default chunk size this happened every time. Now the group's lowest row handles the whole group whatever its shape, and a stray key sets the whole subject (with its revision row) or bucket aside, so nothing is imported half-read or deleted unread.

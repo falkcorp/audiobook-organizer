@@ -418,3 +418,47 @@ func TestCutover_DBOptimizeClockFeedsBothHalves(t *testing.T) {
 		})
 	}
 }
+
+// TestCutover_DebounceStrayKeySetsTheBucketAside: a row under an op type's
+// prefix whose key does not decode as a debounce row (no subject separator) is
+// the bucket's: the bucket's lowest row owns it whatever its shape, and the
+// stray key sets the whole bucket aside, under a retired kind too (rows that
+// cannot be read are not deleted unread), wherever the stray sorts and however
+// the runner cuts chunks or shards. Another op type's bucket imports as usual.
+func TestCutover_DebounceStrayKeySetsTheBucketAside(t *testing.T) {
+	a := time.Date(2026, 11, 3, 1, 0, 0, 0, time.UTC)
+	for _, tc := range []struct{ name, opType, stray string }{
+		{"stray_lowest", "dedup.book-scan", "op:batch:dedup.book-scan:a"},
+		{"stray_highest", "dedup.book-scan", "op:batch:dedup.book-scan:zzz"},
+		{"stray_retired_kind", "operations.backfill-legacy-status", "op:batch:operations.backfill-legacy-status:a"},
+	} {
+		for _, mode := range strayModes {
+			t.Run(tc.name+"/"+mode.name, func(t *testing.T) {
+				good1 := "op:batch:" + tc.opType + ":book:killing-joke"
+				good2 := "op:batch:" + tc.opType + ":book:year-one"
+				raw := map[string]string{
+					tc.stray: batchRowJSON("book", "hush", a),
+					good1:    batchRowJSON("book", "killing-joke", a),
+					good2:    batchRowJSON("book", "year-one", a.Add(time.Minute)),
+					"op:batch:metafetch.asin-backfill:book:arkham-asylum": batchRowJSON("book", "arkham-asylum", a),
+				}
+				r := mode.rig(t, raw)
+				r.runObserve(t, func(ctx context.Context, s *snap) {
+					whole := "set aside whole"
+					quarantineReasons(t, s, map[string]string{
+						tc.stray: "key or entry does not decode",
+						good1:    whole,
+						good2:    whole,
+					})
+					if len(s.Left) != 0 {
+						t.Errorf("left %v", keysOf(s.Left))
+					}
+					buckets := collect(t, func(y func(tasks.DebounceBucket, error) bool) { s.Stores.Runs.DebounceBuckets(ctx)(y) })
+					if len(buckets) != 1 || buckets[0].Kind != "books.metafetch.asin-backfill" {
+						t.Errorf("buckets = %+v, want only the other op type's", buckets)
+					}
+				})
+			})
+		}
+	}
+}

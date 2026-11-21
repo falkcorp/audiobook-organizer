@@ -26,6 +26,9 @@ const (
 	reasonCompletion     = "the completion row's key or value does not decode"
 	reasonCompletionKind = "the completion row's operation names no usable kind"
 	reasonDeprev         = "the dependency revision row's key or value does not decode"
+	// reasonCompletionStray is the reason of every other row of a subject one of
+	// whose completion keys does not decode: the subject is set aside whole.
+	reasonCompletionStray = "a completion key of the subject does not decode, so the subject is set aside whole"
 
 	OutcomeStamp      = "stamp-imported"
 	OutcomeStampStale = "stamp-dropped" // a completion older than its subject's dependency revision
@@ -67,6 +70,23 @@ func (k completionKey) subject() entity.Ref {
 	return subjectRef(k.subjectType + ":" + k.subjectID)
 }
 
+// completionSubject is the subject of an op:completion: key that lies under a
+// subject's prefix (subjectPrefix), whatever the rest of the key holds: every
+// such row is in the subject driver's scan, so it is the driver's to handle
+// even when the key does not decode as a completion. ok is false for a key
+// that names no subject (no driver ever scans it).
+func completionSubject(key string) (subjectType, subjectID string, ok bool) {
+	rest, ok := strings.CutPrefix(key, prefixCompletion)
+	if !ok {
+		return "", "", false
+	}
+	parts := strings.SplitN(rest, ":", 3)
+	if len(parts) < 3 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
 // subjectPrefix is the key prefix of every completion of one subject.
 func subjectPrefix(subjectType, subjectID string) string {
 	return prefixCompletion + subjectType + ":" + subjectID + ":"
@@ -87,13 +107,23 @@ func deprevKey(subjectType, subjectID string) string {
 // the subject's lowest completion row drives, imports the subject's whole set and
 // deletes it with the revision row in one batch; the others leave their rows to
 // it, and the revision row defers while any completion of the subject remains.
+//
+// Every row under the subject's prefix belongs to the subject, including one
+// whose key does not decode as a completion (a stray key): the lowest row
+// drives whatever its shape, and a stray key anywhere in the subject sets the
+// whole subject aside, its revision row with it. A stray row is never set aside
+// by its own worker. It once was, while the others deferred to the lowest row:
+// when the stray row was the lowest, nothing drove the subject, and whether its
+// completions were imported or left behind (failing Verify) hung on whether the
+// stray row's quarantine had committed when the others were stepped. Only a
+// key that names no subject, which no driver scans, is set aside by itself.
 func (m *Migration) stepSubjectStamps(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
-	first, ok := parseCompletionKey(string(kv.Key))
+	subjectType, subjectID, ok := completionSubject(string(kv.Key))
 	if !ok {
 		return m.quarantineOne(kv, w, reasonCompletion)
 	}
 	r := m.legacy()
-	rows, err := scanRows(ctx, r, subjectPrefix(first.subjectType, first.subjectID))
+	rows, err := scanRows(ctx, r, subjectPrefix(subjectType, subjectID))
 	if err != nil {
 		return err
 	}
@@ -105,14 +135,24 @@ func (m *Migration) stepSubjectStamps(ctx context.Context, kv storage.KV, w *dat
 		return nil
 	}
 	var curRev uint64
-	depKey := []byte(deprevKey(first.subjectType, first.subjectID))
+	depKey := []byte(deprevKey(subjectType, subjectID))
 	raw, err := r.Get(ctx, depKey)
-	switch {
-	case errors.Is(err, storage.ErrNotFound):
-		// Never bumped: revision 0, as HEAD's GetDepRev reads it.
-	case err != nil:
+	// Not found: never bumped, revision 0, as HEAD's GetDepRev reads it.
+	found := err == nil
+	if err != nil && !errors.Is(err, storage.ErrNotFound) {
 		return err
-	default:
+	}
+	var dep *storage.KV
+	if found {
+		dep = &storage.KV{Key: depKey, Value: raw}
+	}
+	if slices.ContainsFunc(rows, func(row storage.KV) bool {
+		_, ok := parseCompletionKey(string(row.Key))
+		return !ok
+	}) {
+		return m.quarantineSubject(rows, dep, w)
+	}
+	if found {
 		var d revRow
 		if json.Unmarshal(raw, &d) != nil {
 			// No completion of the subject can be judged current without it, and
@@ -134,9 +174,9 @@ func (m *Migration) stepSubjectStamps(ctx context.Context, kv storage.KV, w *dat
 	stamped := map[stampTarget]bool{}
 	var order []stampTarget
 	for _, row := range rows {
-		k, ok := parseCompletionKey(string(row.Key))
+		k, _ := parseCompletionKey(string(row.Key)) // every key decodes: a stray set the subject aside above
 		var v revRow
-		if !ok || json.Unmarshal(row.Value, &v) != nil {
+		if json.Unmarshal(row.Value, &v) != nil {
 			if err := m.quarantineOne(row, w, reasonCompletion); err != nil {
 				return err
 			}
@@ -175,8 +215,27 @@ func (m *Migration) stepSubjectStamps(ctx context.Context, kv storage.KV, w *dat
 		m.stamps.Add(1)
 		w.Count(OutcomeStamp)
 	}
-	if raw != nil {
+	if found {
 		return w.Delete(depKey)
+	}
+	return nil
+}
+
+// quarantineSubject sets a subject with a stray completion key aside whole: each
+// stray row with the decode reason, every other completion and the revision row
+// (dep, when the subject has one) with the stray reason.
+func (m *Migration) quarantineSubject(rows []storage.KV, dep *storage.KV, w *datamigrate.StepWriter) error {
+	for _, row := range rows {
+		why := reasonCompletionStray
+		if _, ok := parseCompletionKey(string(row.Key)); !ok {
+			why = reasonCompletion
+		}
+		if err := m.quarantineOne(row, w, why); err != nil {
+			return err
+		}
+	}
+	if dep != nil {
+		return m.quarantineOne(*dep, w, reasonCompletionStray)
 	}
 	return nil
 }

@@ -8,9 +8,11 @@ package m4_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/mediacore/entity"
+	"github.com/falkcorp/mediacore/storage/datamigrate"
 	"github.com/falkcorp/mediacore/tasks"
 )
 
@@ -166,4 +168,99 @@ func TestM4_StampShardsDisjoint(t *testing.T) {
 			}
 		}
 	})
+}
+
+// strayMode is a runner shape the stray-key tests run under. sequential_chunk_64
+// is the one that failed every time before the fix: a stray key that sorts
+// lowest is quarantined in the same chunk as the rows that defer to it, the
+// step's live reads cannot see a quarantine the chunk has only staged, and so
+// nothing drove the group and Verify failed the boot.
+type strayMode struct {
+	name  string
+	chunk int
+	seq   bool
+}
+
+var strayModes = []strayMode{
+	{"sequential_chunk_1", 1, true},
+	{"sequential_chunk_64", 64, true},
+	{"parallel_chunk_1", 1, false},
+}
+
+func (m strayMode) rig(t *testing.T, raw map[string]string) *rig {
+	r := newRig(t, withRaw(raw), func(r *rig) { r.chunkItems = m.chunk })
+	if m.seq {
+		r.parallelism = func(dm *datamigrate.DataMigration) { dm.Parallelism = fixedOne() }
+	}
+	return r
+}
+
+// quarantineReasons checks that the quarantine holds exactly want's keys, each
+// with a reason containing want's text.
+func quarantineReasons(t *testing.T, s *snap, want map[string]string) {
+	t.Helper()
+	got := map[string]string{}
+	for _, q := range s.Quarantine {
+		got[q.Key] = q.Reason
+	}
+	for k, w := range want {
+		if !strings.Contains(got[k], w) {
+			t.Errorf("%s: reason %q, want one saying %q", k, got[k], w)
+		}
+	}
+	for k := range got {
+		if _, ok := want[k]; !ok {
+			t.Errorf("%s was quarantined unexpectedly (%q)", k, got[k])
+		}
+	}
+}
+
+// TestCutover_StampsStrayKeySetsTheSubjectAside: a row under a subject's prefix
+// whose key does not decode as a completion (five parts, or no operation) is
+// the subject's: the subject's lowest row drives whatever its shape, and the
+// stray key sets the whole subject aside, its revision row with it, wherever
+// the stray sorts and however the runner cuts chunks or shards. Another subject
+// imports as usual.
+func TestCutover_StampsStrayKeySetsTheSubjectAside(t *testing.T) {
+	for _, tc := range []struct{ name, stray string }{
+		{"stray_lowest", "op:completion:book:year-one:a:b:c"},
+		{"stray_highest", "op:completion:book:year-one:zzz:b:c"},
+		{"stray_no_operation", "op:completion:book:year-one:"},
+	} {
+		for _, mode := range strayModes {
+			t.Run(tc.name+"/"+mode.name, func(t *testing.T) {
+				raw := map[string]string{
+					tc.stray: revJSON(2),
+					"op:completion:book:year-one:dedup.book-scan":     revJSON(2),
+					"op:completion:book:year-one:itunes.heal":         revJSON(2),
+					"op:deprev:book:year-one":                         revJSON(2),
+					"op:completion:book:killing-joke:dedup.book-scan": revJSON(0),
+				}
+				r := mode.rig(t, raw)
+				r.runObserve(t, func(ctx context.Context, s *snap) {
+					whole := "set aside whole"
+					quarantineReasons(t, s, map[string]string{
+						tc.stray: "key or value does not decode",
+						"op:completion:book:year-one:dedup.book-scan": whole,
+						"op:completion:book:year-one:itunes.heal":     whole,
+						"op:deprev:book:year-one":                     whole,
+					})
+					if len(s.Left) != 0 {
+						t.Errorf("left %v", keysOf(s.Left))
+					}
+					for _, k := range []tasks.Kind{"books.dedup.book-scan", "books.itunes.heal"} {
+						if _, ok := stampOf(ctx, t, s, "books", "year-one", k); ok {
+							t.Errorf("the set-aside subject was stamped for %s", k)
+						}
+					}
+					if _, ok := stampOf(ctx, t, s, "books", "killing-joke", "books.dedup.book-scan"); !ok {
+						t.Error("the other subject's completion was not imported")
+					}
+					if s.Verify.Written != 1 || s.Verify.Quarantined != 4 {
+						t.Errorf("report: %+v", s.Verify)
+					}
+				})
+			})
+		}
+	}
 }

@@ -30,6 +30,9 @@ const (
 	reasonStandDown  = "the stand-down marker does not decode"
 	reasonBatchKey   = "the debounce row's key or entry does not decode"
 	reasonBatchKind  = "the debounce row's operation names no usable kind"
+	// reasonBatchStray is the reason of every other row of a bucket one of whose
+	// keys does not decode: the bucket is set aside whole.
+	reasonBatchStray = "a debounce key of the operation type does not decode, so the bucket is set aside whole"
 )
 
 // Outcomes of the families above.

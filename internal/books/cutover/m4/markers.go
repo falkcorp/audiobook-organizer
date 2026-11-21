@@ -8,6 +8,7 @@ package m4
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"time"
 
@@ -88,8 +89,18 @@ func (m *Migration) quarantineOne(kv storage.KV, w *datamigrate.StepWriter, reas
 // per pending subject under op:batch:<op type>:; the native bucket is one record
 // per kind, so the lowest row of the op type owns it, as in stepClock: it reads
 // every row of the op type, imports one bucket and deletes them all in one batch.
+//
+// Every row under the op type's prefix belongs to the bucket, including one
+// whose key does not decode as a debounce row (a stray key): the lowest row
+// owns the bucket whatever its shape, and a stray key anywhere in it sets the
+// whole bucket aside. A stray row is never set aside by its own worker. It
+// once was, while the others deferred to the lowest row: when the stray row
+// was the lowest, nothing owned the bucket, and whether its rows were imported
+// or left behind (failing Verify) hung on whether the stray row's quarantine
+// had committed when the others were stepped. Only a key that names no op
+// type, which no owner scans, is set aside by itself.
 func (m *Migration) stepBucket(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
-	opType, ok := batchOpType(string(kv.Key))
+	opType, ok := batchBucket(string(kv.Key))
 	if !ok {
 		return m.quarantineOne(kv, w, reasonBatchKey)
 	}
@@ -103,6 +114,23 @@ func (m *Migration) stepBucket(ctx context.Context, kv storage.KV, w *datamigrat
 		// since the runner read it.
 		m.deferred.Add(1)
 		w.Count(OutcomeDeferred)
+		return nil
+	}
+	if slices.ContainsFunc(rows, func(row storage.KV) bool {
+		_, ok := batchOpType(string(row.Key))
+		return !ok
+	}) {
+		// Before the kind: rows that cannot be read are not deleted unread, even
+		// under a retired kind.
+		for _, row := range rows {
+			why := reasonBatchStray
+			if _, ok := batchOpType(string(row.Key)); !ok {
+				why = reasonBatchKey
+			}
+			if err := m.quarantineOne(row, w, why); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 	tg, err := kindrename.Resolve(opType)
@@ -123,9 +151,8 @@ func (m *Migration) stepBucket(ctx context.Context, kv storage.KV, w *datamigrat
 	d := tasks.DebounceBucket{Kind: tg.Kind}
 	var good []storage.KV
 	for _, row := range rows {
-		var e batchEntry
-		_, ok := batchOpType(string(row.Key))
-		if !ok || json.Unmarshal(row.Value, &e) != nil || e.Sub.ID == "" {
+		var e batchEntry // every key decodes: a stray set the bucket aside above
+		if json.Unmarshal(row.Value, &e) != nil || e.Sub.ID == "" {
 			if err := m.quarantineOne(row, w, reasonBatchKey); err != nil {
 				return err
 			}
@@ -164,6 +191,19 @@ func (m *Migration) quarantineBucket(rows []storage.KV, w *datamigrate.StepWrite
 		}
 	}
 	return nil
+}
+
+// batchBucket is the op type of an op:batch: key that lies under an op type's
+// prefix (op:batch:<op type>:), whatever the rest of the key holds: every such
+// row is in the bucket owner's scan. ok is false for a key that names no op
+// type (no owner ever scans it).
+func batchBucket(key string) (string, bool) {
+	rest, ok := strings.CutPrefix(key, prefixBatch)
+	if !ok {
+		return "", false
+	}
+	opType, _, ok := strings.Cut(rest, ":")
+	return opType, ok && opType != ""
 }
 
 // batchOpType is the op type of an op:batch:<op type>:<subject type>:<subject
