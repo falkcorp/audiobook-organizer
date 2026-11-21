@@ -47,8 +47,8 @@ type enginePinger interface {
 type kernelReporters struct {
 	Storage health.Reporter // core.storage
 	Secrets health.Reporter // core.secrets
-	// Config is core.config, registered push-only when Config.CoreConfigBoot
-	// booted a config store (config_boot.go): the store's tokens, pushed once
+	// Config is core.config, registered push-only when the boot built a config
+	// store (config_boot.go): the store's tokens, pushed once
 	// P4d has attached the DB layer.
 	Config health.Reporter
 }

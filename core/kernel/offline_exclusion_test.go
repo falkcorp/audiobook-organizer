@@ -83,7 +83,7 @@ func exclusionChild(t *testing.T) int {
 	h := &swapHost{t: t, state: state, db: db,
 		ctx: bootseam.With(context.Background(), &bootseam.Seams{BuildID: swapBuild})}
 	var deps module.Deps
-	k, err := New(h.ctx, h.config(&deps))
+	k, err := newKCtx(h.t, h.ctx, h.config(&deps))
 	if err != nil {
 		fmt.Println("BOOTERR", err)
 		return 3
@@ -196,7 +196,7 @@ func TestBootRefusedDuringOfflineRestore(t *testing.T) {
 		t.Fatalf("the offline restore finished without reaching its sidecar rewrite: %v", offErr)
 	}
 	before := h.slot()
-	_, bootErr := New(h.ctx, h.keyed(h.config(nil, caveStep(2, "bane"))))
+	_, bootErr := newKCtx(h.t, h.ctx, h.keyed(h.config(nil, caveStep(2, "bane"))))
 	after := h.slot()
 	close(pause.release)
 	<-done

@@ -31,7 +31,7 @@ func TestCatalog_SettingsOutsideTheModulesNamespace(t *testing.T) {
 	// A disabled module's manifest stays known, so its declaration is checked too.
 	for _, enabled := range []bool{true, false} {
 		m := beltModule(nil, module.Settings(otherSection)).with(func(m *module.Manifest) { m.DefaultEnabled = enabled })
-		k, err := New(t.Context(), testConfig(t, m))
+		k, err := newK(t, testConfig(t, m))
 		if k != nil || !hasKind(err, module.ProblemSettingsNamespace) {
 			t.Fatalf("enabled=%v: New = %v, %v; want a ProblemSettingsNamespace", enabled, k, err)
 		}
@@ -55,7 +55,7 @@ func TestRegister_SettingOfAnUndeclaredSectionIsAProblem(t *testing.T) {
 		_ = module.Setting(r, beltSection)
 		return r.Err()
 	})
-	k, err := New(t.Context(), testConfig(t, m))
+	k, err := newK(t, testConfig(t, m))
 	if k != nil || !hasKind(err, module.ProblemSettingsUndeclared) {
 		t.Fatalf("New = %v, %v; want a ProblemSettingsUndeclared", k, err)
 	}
@@ -74,7 +74,7 @@ func TestCatalog_AtMostOneRewrite(t *testing.T) {
 		mod("batcave", nil).with(func(m *module.Manifest) { m.Rewrite = rw("batcave"); m.DefaultEnabled = false }),
 		mod("arkham", nil).with(func(m *module.Manifest) { m.Rewrite = rw("arkham") }),
 	}
-	k, err := New(t.Context(), testConfig(t, two...))
+	k, err := newK(t, testConfig(t, two...))
 	if k != nil || !hasKind(err, module.ProblemMigrationOrder) {
 		t.Fatalf("New = %v, %v; want a ProblemMigrationOrder for the second Rewrite", k, err)
 	}

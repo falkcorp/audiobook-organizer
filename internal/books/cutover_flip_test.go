@@ -9,7 +9,6 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -24,10 +23,10 @@ import (
 	"github.com/falkcorp/mediacore/storage"
 )
 
-// flipOn is a books module with F3's cutover declared, the way slice (e) will
-// ship it: the switch on and Options' paths set.
+// flipOn is a books module with F3's cutover declared, the way serve ships it:
+// Options' paths set (declaresFlip is a database named).
 func flipOn() *booksModule {
-	return &booksModule{flip: true, stateDir: "/srv/gotham/state", dbPath: "/srv/gotham/main.pebble"}
+	return &booksModule{stateDir: "/srv/gotham/state", dbPath: "/srv/gotham/main.pebble"}
 }
 
 // flipOnAt is flipOn over a state directory and a database path that exist: the
@@ -48,17 +47,17 @@ func versionOf(ms []storage.Migration, name string) (storage.Migration, bool) {
 	return ms[i], true
 }
 
-// TestManifest_FlipIsDarkUnlessSwitchedOn: the shipped Module() declares none of
-// F3's cutover, so the manifest is the pre-flip one: no level step, no raised
-// Level, no Cutover, no Rewrite. The same module with the switch on but no
-// database path (an offline open that never ran Options) declares none either:
-// a level must never rise without M2 behind it.
-func TestManifest_FlipIsDarkUnlessSwitchedOn(t *testing.T) {
+// TestManifest_FlipNeedsADatabase: a books module no database was named for
+// (Module() as the help listing builds it, or an offline open that never ran
+// Options) declares none of F3's cutover: no level step, no raised Level, no
+// Cutover, no Rewrite. A level must never rise without M2 behind it. (The
+// switch-off cells went with the switch: with a database named the flip is
+// always declared, TestManifest_FlipDeclaresM2M7M8.)
+func TestManifest_FlipNeedsADatabase(t *testing.T) {
 	withConfig(t, config.Config{})
-	shipped := Module().Manifest()
-	offline := (&booksModule{flip: true}).Manifest()
-	switchedOffWithPaths := (&booksModule{stateDir: "/srv/gotham/state", dbPath: "/srv/gotham/main.pebble"}).Manifest()
-	for name, man := range map[string]module.Manifest{"shipped": shipped, "flip without paths": offline, "paths without flip": switchedOffWithPaths} {
+	identityOnly := Module().Manifest()
+	stateOnly := (&booksModule{stateDir: "/srv/gotham/state"}).Manifest()
+	for name, man := range map[string]module.Manifest{"identity only": identityOnly, "a state directory without a database": stateOnly} {
 		if man.Cutover != nil || man.Rewrite != nil || man.Storage.Level != 0 {
 			t.Errorf("%s: Cutover=%v Rewrite=%v Level=%d, want none declared", name, man.Cutover != nil, man.Rewrite, man.Storage.Level)
 		}
@@ -68,7 +67,7 @@ func TestManifest_FlipIsDarkUnlessSwitchedOn(t *testing.T) {
 	}
 }
 
-// TestManifest_FlipDeclaresM2M7M8 (F3-07 d): switched on, the manifest carries
+// TestManifest_FlipDeclaresM2M7M8 (F3-07 d): over a database, the manifest carries
 // books.level-1 at the pinned version raising books to level 1 with Spec.Level
 // to match, exactly M2 behind it, and M8 after M2.
 func TestManifest_FlipDeclaresM2M7M8(t *testing.T) {
@@ -198,38 +197,22 @@ func (oracleModule) Manifest() module.Manifest {
 }
 func (oracleModule) Register(*module.Registrar) error { return nil }
 
-// TestFlipConfigNames_DarkUntilDeclared: the retired names and the OPENAI
-// bindings reach app.Options only with the flip declared. Dark, Options and
-// OfflineOptions carry neither, so `config check` never calls a name HEAD still
-// reads "retired". Declared, the lists are the rename table's: the retired names
+// TestFlipConfigNames_Lists: OfflineOptions carries the retired names, the
+// OPENAI bindings and the passthrough predicate, so `config check` calls a name
+// the flip retires "retired". They are the rename table's: the retired names
 // exclude the ecosystem names, and the bindings are exactly the two OPENAI ones.
-func TestFlipConfigNames_DarkUntilDeclared(t *testing.T) {
+// (The dark half, the lists absent until the flip was declared, went with the
+// switch.)
+func TestFlipConfigNames_Lists(t *testing.T) {
 	gotham := filepath.Join(t.TempDir(), "gotham.pebble")
 	withConfig(t, config.Config{DatabasePath: gotham})
 	t.Setenv(storagePathEnv, gotham)
-	// The flip is declared in the build now; the dark gate stays until the off
-	// branch is deleted, and this test still holds it to its contract.
-	old := flipDeclared
-	flipDeclared = false
-	t.Cleanup(func() { flipDeclared = old })
 	opts, err := OfflineOptions(BootInputs{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opts.RetiredConfigNames != nil || opts.ConfigEnvBindings != nil || opts.ConfigPassthrough != nil {
-		t.Errorf("OfflineOptions carries retired=%d bindings=%d passthrough=%t while the flip is dark", len(opts.RetiredConfigNames), len(opts.ConfigEnvBindings), opts.ConfigPassthrough != nil)
-	}
-	if r, b, pt := flipConfigNames(false); r != nil || b != nil || pt != nil {
-		t.Errorf("flipConfigNames(false) = %v, %v, %t, want nothing", r, b, pt != nil)
-	}
-
-	flipDeclared = true
-	opts, err = OfflineOptions(BootInputs{})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if len(opts.RetiredConfigNames) == 0 {
-		t.Error("a declared flip's OfflineOptions has no retired names")
+		t.Error("OfflineOptions has no retired names")
 	}
 	for _, r := range opts.RetiredConfigNames {
 		if r.Name == "OPENAI_API_KEY" || r.Name == "OPENAI_BASE_URL" {
@@ -242,10 +225,7 @@ func TestFlipConfigNames_DarkUntilDeclared(t *testing.T) {
 		t.Errorf("bindings = %v, want %v", opts.ConfigEnvBindings, want)
 	}
 	if opts.ConfigPassthrough == nil || !opts.ConfigPassthrough("integrations.ai.openai.api_key") {
-		t.Error("a declared flip's OfflineOptions has no passthrough predicate for the OPENAI bindings")
-	}
-	if Module().(*booksModule).flip != true {
-		t.Error("Module() did not copy the switch")
+		t.Error("OfflineOptions has no passthrough predicate for the OPENAI bindings")
 	}
 }
 
@@ -256,9 +236,6 @@ func TestFlipConfigNames_DarkUntilDeclared(t *testing.T) {
 // would report a list serve does not run; built over OfflineOptions' paths it
 // plans what Options' module does.
 func TestOfflineModule_PlansTheFlipOnlyOverADatabase(t *testing.T) {
-	old := flipDeclared
-	flipDeclared = true
-	t.Cleanup(func() { flipDeclared = old })
 	gotham := filepath.Join(t.TempDir(), "gotham.pebble")
 	withConfig(t, config.Config{DatabasePath: gotham})
 	t.Setenv(storagePathEnv, gotham)
@@ -284,8 +261,12 @@ func TestOfflineModule_PlansTheFlipOnlyOverADatabase(t *testing.T) {
 			t.Errorf("%s: storage level declared = %t, want %t", c.name, got, c.want)
 		}
 	}
-	if m := OfflineModule(opts).(*booksModule); m.dbPath != opts.R1StoragePath || m.stateDir != opts.StateDir || m.version != opts.Version {
-		t.Errorf("OfflineModule carries db=%q state=%q version=%q, want %q %q %q", m.dbPath, m.stateDir, m.version, opts.R1StoragePath, opts.StateDir, opts.Version)
+	wantDB, err := OfflineStorePath(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := OfflineModule(opts).(*booksModule); m.dbPath != wantDB || m.stateDir != opts.StateDir || m.version != opts.Version {
+		t.Errorf("OfflineModule carries db=%q state=%q version=%q, want %q %q %q", m.dbPath, m.stateDir, m.version, wantDB, opts.StateDir, opts.Version)
 	}
 }
 
@@ -297,11 +278,11 @@ func TestOfflineModule_PlansTheFlipOnlyOverADatabase(t *testing.T) {
 // ("no registered section owns"), which is what the todo.d fragment of slice (d)
 // recorded: the predicate is what makes the bindings bootable.
 func TestFlipConfigNames_BootsWithTheOpenAIBindings(t *testing.T) {
-	retired, bindings, passthrough := flipConfigNames(true)
+	retired, bindings, passthrough := flipConfigNames()
 	env := []string{"OPENAI_API_KEY=bane", "OPENAI_BASE_URL=https://api.gotham.invalid/v1"}
 	boot := func(pt func(coreconfig.Path) bool) error {
 		a, err := app.New(t.Context(), app.Options{
-			AppID: AppID, StateDir: t.TempDir(), CoreConfigBoot: true,
+			AppID: AppID, StateDir: t.TempDir(),
 			Args: []string{}, Env: env, RetiredConfigNames: retired,
 			ConfigEnvBindings: bindings, ConfigPassthrough: pt,
 		}, oracleModule{})
@@ -322,25 +303,18 @@ func TestFlipConfigNames_BootsWithTheOpenAIBindings(t *testing.T) {
 	}
 }
 
-// TestOptions_CarriesTheConfigListsOnlyWithTheSwitch: serve's Options hands the
-// retired names, OPENAI bindings and passthrough predicate to app.Options exactly when the module it
-// is given declares the flip; Module() as shipped hands neither.
-func TestOptions_CarriesTheConfigListsOnlyWithTheSwitch(t *testing.T) {
-	for _, on := range []bool{false, true} {
-		t.Run("flip="+strconv.FormatBool(on), func(t *testing.T) {
-			initConfigForTest(t)
-			sandboxStateDir(t)
-			config.AppConfig.DatabasePath = filepath.Join(tempDir(t), "gotham.pebble")
-			t.Setenv(storagePathEnv, config.AppConfig.DatabasePath)
-			mod := Module().(*booksModule)
-			mod.flip = on
-			opts, err := Options(mod, ServeInputs{Server: server.GetDefaultServerConfig(), Telemetry: config.Snapshot()})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := len(opts.RetiredConfigNames) > 0 && len(opts.ConfigEnvBindings) == 2 && opts.ConfigPassthrough != nil; got != on {
-				t.Errorf("Options carries retired=%d bindings=%d passthrough=%t", len(opts.RetiredConfigNames), len(opts.ConfigEnvBindings), opts.ConfigPassthrough != nil)
-			}
-		})
+// TestOptions_CarriesTheConfigLists: serve's Options hands the retired names,
+// OPENAI bindings and passthrough predicate to app.Options.
+func TestOptions_CarriesTheConfigLists(t *testing.T) {
+	initConfigForTest(t)
+	sandboxStateDir(t)
+	config.AppConfig.DatabasePath = filepath.Join(tempDir(t), "gotham.pebble")
+	t.Setenv(storagePathEnv, config.AppConfig.DatabasePath)
+	opts, err := Options(Module().(*booksModule), ServeInputs{Server: server.GetDefaultServerConfig(), Telemetry: config.Snapshot()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(opts.RetiredConfigNames) > 0 && len(opts.ConfigEnvBindings) == 2 && opts.ConfigPassthrough != nil; !got {
+		t.Errorf("Options carries retired=%d bindings=%d passthrough=%t", len(opts.RetiredConfigNames), len(opts.ConfigEnvBindings), opts.ConfigPassthrough != nil)
 	}
 }

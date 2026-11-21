@@ -79,7 +79,7 @@ func TestPruneCheckpointsCommand(t *testing.T) {
 			t.Errorf("Close = %v", err)
 		}
 	}()
-	dbPath, _, err := storagePath(opts, mods)
+	dbPath, _, err := ResolveStorage(t.Context(), opts, mods, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestPruneCheckpointsCommand(t *testing.T) {
 	// user, it is refused before it takes the sweep lock, so it neither
 	// deletes the checkpoint nor leaves a lock file the service cannot
 	// open. The lock file is absent here because no sweep has run.
-	_, stateDir, err := storagePath(opts, mods)
+	_, stateDir, err := ResolveStorage(t.Context(), opts, mods, "")
 	if err != nil {
 		t.Fatal(err)
 	}

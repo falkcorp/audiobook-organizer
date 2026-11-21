@@ -76,12 +76,11 @@ type ServeInputs struct {
 // §1.12.1), for mod, the value Module returned:
 //
 //   - ABO's identity and build version;
-//   - the store core opens: R1StoragePath is HEAD's database path, made
-//     absolute (a database_type other than Pebble, or no path, refuses);
-//     StateDir is the secure state directory ABO resolves (EnsureSecureStateDir,
-//     HEAD's resolver, ABK_STATE_DIR and its fallback beside the database),
-//     which core's ResolveStateDir must agree with; StorageStateFiles is the
-//     state-file table the first-boot checkpoint copies (StateFiles);
+//   - the store core opens: the one core's step 0 resolves from the layers
+//     (ResolveBootPaths; no compiled database path is handed over). StateDir is
+//     the state directory it chose, which core's ResolveStateDir must agree
+//     with; StorageStateFiles is the state-file table the first-boot
+//     checkpoint copies (StateFiles);
 //   - CoreDefaults: ABO's compiled defaults of core.http.listen and
 //     core.http.client_ip_header (coreDefaults); the listener, perimeter and
 //     shutdown budget are core config keys, read by the kernel at start step
@@ -140,14 +139,13 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 	// Before app.New runs P0a: whether it may swap the store, which voids
 	// the HNSW clean-stop marker Register takes (swapVoidReason).
 	m.swapVoid = swapVoidReason(m.stateDir)
-	// No R1StoragePath: the store is whatever the layers named, which
-	// core's step 0 resolves again to the path ResolveBootPaths returned.
-	// StateDir is that step's result, so the log directory
-	// (app.ResolveStateDir, environment only) agrees with it when the default
-	// could not be created and the state sits beside a store named by a flag.
-	o := bootOptions(in.Boot, m.flip)
+	// The store is whatever the layers named, which core's step 0 resolves
+	// again to the path ResolveBootPaths returned. StateDir is that step's
+	// result, so the log directory (app.ResolveStateDir, environment only)
+	// agrees with it when the default could not be created and the state sits
+	// beside a store named by a flag.
+	o := bootOptions(in.Boot)
 	return app.Options{
-		CoreConfigBoot:        o.CoreConfigBoot,
 		RetiredConfigNames:    o.RetiredConfigNames,
 		ConfigEnvBindings:     o.ConfigEnvBindings,
 		ConfigPassthrough:     o.ConfigPassthrough,
@@ -191,9 +189,8 @@ func OfflineOptions(boot BootInputs) (app.Options, error) {
 	// InitConfig gave them the database_path it resolved.
 	config.Mutate(func(c *config.Config) { c.DatabasePath, c.DatabaseType = dbPath, "pebble" })
 	coreOpts := updater.FetchOptions()
-	o := bootOptions(boot, flipDeclared)
+	o := bootOptions(boot)
 	return app.Options{
-		CoreConfigBoot:     o.CoreConfigBoot,
 		RetiredConfigNames: o.RetiredConfigNames,
 		ConfigEnvBindings:  o.ConfigEnvBindings,
 		ConfigPassthrough:  o.ConfigPassthrough,
@@ -204,9 +201,8 @@ func OfflineOptions(boot BootInputs) (app.Options, error) {
 		// serve's Version: the binary ID a staged swap records hashes it, so
 		// a reset or restore staged offline must carry the one the serve
 		// boot computes, or its P0a rejects the intent as another binary's.
-		Version:       telemetry.Version(),
-		StateDir:      stateDir,
-		R1StoragePath: dbPath,
+		Version:  telemetry.Version(),
+		StateDir: stateDir,
 		// The state files serve's checkpoints copy (the encryption key):
 		// storage restore-offline puts a checkpoint's copies back over them,
 		// and the offline open reads the same table serve's open does.
@@ -235,17 +231,40 @@ func OfflineOptions(boot BootInputs) (app.Options, error) {
 
 // OfflineModule is the books module core's offline commands run over
 // (app.OfflineCommands' mods): Module() with the database and state directory
-// opts names (OfflineOptions' R1StoragePath, StateDir and Version). An offline
-// command reads the module's Manifest to plan the same migration list serve
-// boots with, and the flip's steps (the level step, M2, M8, the retired claims)
-// are declared only for a module that knows its database (declaresFlip), so a
-// module built without it would plan none of them and `storage migrate
-// --dry-run` would report a list serve does not run. With opts that name no
-// database (the help listing's identity-only Options) it is Module().
+// opts names (OfflineOptions' StateDir and Version, and the store its layers
+// resolve to). An offline command reads the module's Manifest to plan the same
+// migration list serve boots with, and the flip's steps (the level step, M2,
+// M8, the retired claims) are declared only for a module that knows its
+// database (declaresFlip), so a module built without it would plan none of them
+// and `storage migrate --dry-run` would report a list serve does not run. With
+// opts that name no state directory (the help listing's identity-only Options)
+// it is Module(), and no I/O happens. If the store cannot be resolved here
+// (OfflineStorePath) the module names no database, and the command's own open
+// reports the failure.
 func OfflineModule(opts app.Options) module.Module {
 	m := Module().(*booksModule)
-	m.dbPath, m.stateDir, m.version = opts.R1StoragePath, opts.StateDir, opts.Version
+	if opts.StateDir == "" {
+		return m
+	}
+	dbPath, err := OfflineStorePath(opts)
+	if err != nil {
+		return m
+	}
+	m.dbPath, m.stateDir, m.version = dbPath, opts.StateDir, opts.Version
 	return m
+}
+
+// OfflineStorePath is the store path an offline command over opts (the value
+// OfflineOptions returned) opens: core's step 0 over the layers opts carries,
+// the resolution OfflineOptions asked for and an offline open repeats, so they
+// agree by construction. It is "" when opts name no state directory (the help
+// listing's identity-only Options).
+func OfflineStorePath(opts app.Options) (string, error) {
+	if opts.StateDir == "" {
+		return "", nil
+	}
+	dbPath, _, err := app.ResolveStorage(context.Background(), opts, []module.Module{Module()}, "")
+	return dbPath, err
 }
 
 // swapVoidReason is why a boot must not trust the HNSW clean-stop marker

@@ -51,7 +51,7 @@ func (s *syncBuffer) String() string {
 // gothamApp boots a zero-module App whose pipeline writes to out.
 func gothamApp(t *testing.T, out *syncBuffer, mods ...module.Module) *App {
 	t.Helper()
-	a, err := New(t.Context(), Options{AppID: "gotham", MetricNamespace: "gotham", LogOutput: out, Env: []string{}}, mods...)
+	a, err := New(t.Context(), Options{StateDir: t.TempDir(), AppID: "gotham", MetricNamespace: "gotham", LogOutput: out, Env: []string{}}, mods...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ func TestFamilyTaken_DuringNew(t *testing.T) {
 		_, _ = r.Deps().Metrics.Meter().Float64Gauge("gotham.kernel.boot_phase", metric.WithUnit("s"))
 		return nil
 	}}
-	_, err := New(t.Context(), Options{AppID: "gotham", MetricNamespace: "gotham", LogOutput: &syncBuffer{}, Env: []string{}}, m)
+	_, err := New(t.Context(), Options{StateDir: t.TempDir(), AppID: "gotham", MetricNamespace: "gotham", LogOutput: &syncBuffer{}, Env: []string{}}, m)
 	if !errors.Is(err, metrics.ErrFamilyTaken) {
 		t.Fatalf("New with a module re-owning a core family: %v, want ErrFamilyTaken", err)
 	}
@@ -307,7 +307,7 @@ func TestNew_ProcessDefaults_SDKSinkBeforeProvider(t *testing.T) {
 	})
 
 	var out syncBuffer
-	opts := Options{AppID: "gotham", MetricNamespace: "gotham", LogOutput: &out, Env: []string{}, ProcessDefaults: true,
+	opts := Options{AppID: "gotham", StateDir: t.TempDir(), MetricNamespace: "gotham", LogOutput: &out, Env: []string{}, ProcessDefaults: true,
 		Telemetry: &Telemetry{Tracing: &metrics.OTLPTracing{Endpoint: "http://192.0.2.1:4317"}}}
 	a, err := New(t.Context(), opts)
 	if err != nil {
@@ -330,7 +330,7 @@ func TestNew_ProcessDefaults_SDKSinkBeforeProvider(t *testing.T) {
 		t.Fatalf("the SDK's report of the bad env did not reach the App's sink (the test is blind):\n%s", got)
 	}
 
-	if _, err := New(t.Context(), Options{AppID: "arkham", MetricNamespace: "arkham", LogOutput: &syncBuffer{},
+	if _, err := New(t.Context(), Options{StateDir: t.TempDir(), AppID: "arkham", MetricNamespace: "arkham", LogOutput: &syncBuffer{},
 		Env: []string{}, ProcessDefaults: true}); !errors.Is(err, ErrProcessDefaultsTaken) {
 		t.Fatalf("a second App's New with ProcessDefaults: %v, want ErrProcessDefaultsTaken", err)
 	}
@@ -362,7 +362,7 @@ func TestNew_ProcessDefaults_RestoredWhenBootFails(t *testing.T) {
 		otel.SetLogger(stdr.New(stdlog.New(os.Stderr, "", stdlog.LstdFlags|stdlog.Lshortfile)))
 	})
 	m := testModule{id: "wayne", register: func(*module.Registrar) error { return errors.New("Bane broke the module") }}
-	if _, err := New(t.Context(), Options{AppID: "gotham", MetricNamespace: "gotham", LogOutput: &syncBuffer{},
+	if _, err := New(t.Context(), Options{StateDir: t.TempDir(), AppID: "gotham", MetricNamespace: "gotham", LogOutput: &syncBuffer{},
 		Env: []string{}, ProcessDefaults: true}, m); err == nil {
 		t.Fatal("New with a failing Register succeeded")
 	}
@@ -396,7 +396,7 @@ func TestNew_ProcessDefaults_PipelineIsDefaultBeforeRegister(t *testing.T) {
 		return nil
 	}}
 	var out syncBuffer
-	a, err := New(t.Context(), Options{AppID: "gotham", MetricNamespace: "gotham", LogOutput: &out,
+	a, err := New(t.Context(), Options{StateDir: t.TempDir(), AppID: "gotham", MetricNamespace: "gotham", LogOutput: &out,
 		Env: []string{}, ProcessDefaults: true}, m)
 	if err != nil {
 		t.Fatal(err)
@@ -447,7 +447,7 @@ func TestNew_ProcessDefaults_SlogRestoredWhenBootFails(t *testing.T) {
 	prevSlog := slog.Default()
 	prevLogOut, prevLogFlags := stdlog.Writer(), stdlog.Flags()
 	m := testModule{id: "wayne", register: func(*module.Registrar) error { return errors.New("Bane broke the module") }}
-	if _, err := New(t.Context(), Options{AppID: "gotham", MetricNamespace: "gotham", LogOutput: &syncBuffer{},
+	if _, err := New(t.Context(), Options{StateDir: t.TempDir(), AppID: "gotham", MetricNamespace: "gotham", LogOutput: &syncBuffer{},
 		Env: []string{}, ProcessDefaults: true}, m); err == nil {
 		t.Fatal("New with a failing Register succeeded")
 	}

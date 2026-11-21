@@ -50,7 +50,7 @@ func TestLazyCoreConfig_BuiltOnlyWhenTasksNeedIt(t *testing.T) {
 			if tc.seeds != nil {
 				ctx = bootseam.With(ctx, &bootseam.Seams{TaskRuns: tc.seeds})
 			}
-			k, err := New(ctx, tc.cfg(t))
+			k, err := newKCtx(t, ctx, tc.cfg(t))
 			if err != nil {
 				t.Fatal(err)
 			}
