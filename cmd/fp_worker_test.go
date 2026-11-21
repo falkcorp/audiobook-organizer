@@ -16,15 +16,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/viper"
-
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint/workerclient"
 )
 
 // fp-worker runs on a Mac in whatever directory it is started from: the
 // root command's app setup (playlists/ and database directories, the
-// ~/.audiobook-organizer.yaml config, viper.AutomaticEnv) must not run.
+// operator config projection) must not run.
 func TestFPWorker_SkipsAppInitSideEffects(t *testing.T) {
 	cwd := t.TempDir()
 	t.Chdir(cwd)
@@ -32,7 +30,6 @@ func TestFPWorker_SkipsAppInitSideEffects(t *testing.T) {
 	origDB, origPl, origCfg, origApp := databasePath, playlistDir, cfgFile, config.AppConfig
 	t.Cleanup(func() {
 		databasePath, playlistDir, cfgFile, config.AppConfig = origDB, origPl, origCfg, origApp
-		viper.Reset()
 		rootCmd.SetArgs(nil)
 	})
 	databasePath, playlistDir, cfgFile = "dbdir/audiobooks.pebble", "playlists", ""
