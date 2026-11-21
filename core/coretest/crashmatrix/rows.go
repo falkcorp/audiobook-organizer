@@ -156,31 +156,58 @@ func Rows() []Row {
 	}
 }
 
+// identityFlipOnly is the reason of an identity label that this build's own
+// identity scenario (identity_matrix_test.go, TestIdentityBootCrashMatrix)
+// reaches, and that no other fixture does because none declares the flip.
+const identityFlipOnly = "reached by the kit's identity scenario (TestIdentityBootCrashMatrix); no other fixture declares the identity flip (app.Options.IdentityBoot) until F4-08 B9b (hello) and B10 (ABO), and the first one that does reaches this writer and drops the entry"
+
 // IdentityUnreachedLabels is the allow-map entries, one reason per label, for
 // every writer the identity boot wires (F4-08 B3: P4d steps 2-4, the journal,
-// P7's seed commit) that no fixture reaches yet, because no fixture declares the
-// flip (app.Options.IdentityBoot): hello's does at B9 and ABO's at B10. A
-// fixture's allow map takes the whole set (maps.Copy) and drops a label only
-// when one of its own scenarios reaches it; Unobserved reports an entry a
-// fixture reaches as stale, so a boot that starts reaching a writer fails until
-// its entry goes. The two labels that no fault-free boot reaches even with
-// identity on are given their own reasons.
+// P7's seed commit) that a fixture's fault-free boot does not reach. The kit's
+// own identity scenario declares the flip and reaches most of them; hello's
+// fixtures do not (hello declares the flip at B9b, ABO at B10). A fixture's
+// allow map takes the whole set (maps.Copy) and drops a label only when one of
+// its own scenarios reaches it; Unobserved reports an entry a fixture reaches
+// as stale, so a boot that starts reaching a writer fails until its entry goes.
+// The labels that no fault-free boot reaches even with identity on are given
+// their own reasons: they need a journal state, a replaced store or a restore
+// that no fixture sets up, and TestIdentityScenario_ReachesWhatIdentityUnreachedLabelsSaysItDoes
+// fails when a reason says more or less than the scenario does.
 func IdentityUnreachedLabels() map[string]string {
 	const (
-		flip = "no fixture declares the identity flip (app.Options.IdentityBoot) until F4-08 B9 (hello) and B10 (ABO); the first fixture that does reaches this writer and drops the entry"
-		trim = "nothing calls File.Trim until F8-04a G2 wires backup.Options.PruneJournal to Component.Trim; core/internal/journalfs's TestKill_Trim breaks its steps meanwhile"
-		roll = "a failed append's cut back runs only after a journal write failed; core/backup/journal's own crash cells break it, and no fault-free boot appends a line that fails"
-		cut  = "the cut of an incomplete last line runs only when a journal ends mid-line, which a crash leaves; no fault-free boot starts from one"
+		trim     = "nothing calls File.Trim until F8-04a G2 wires backup.Options.PruneJournal to Component.Trim; core/internal/journalfs's TestKill_Trim breaks its steps meanwhile"
+		roll     = "a failed append's cut back runs only after a journal write failed; core/backup/journal's own crash cells break it, and no fault-free boot appends a line that fails"
+		cut      = "the cut of an incomplete last line runs only when a journal ends mid-line, which a crash leaves; no fault-free boot starts from one"
+		tail     = "the re-apply's tail, drain, queue, restriction and head writers run only when the journal holds lines past the store's head or an unapplied queue, a journal state no fixture builds: the kernel's restore_* tests break each of them with a crash between its batches (TailBatch 1, a wrapped NewBatch); F4-08 B10 or a journal-tail fixture reaches them in the matrix"
+		hooks    = "the restore hooks' run ID is written only when the hooks run with no restore line (a replaced store, or a hooks-owed restore), a state no fixture builds: restore_runkey_test.go crashes between its ensure and its clear"
+		startup  = "the start-up key's revoke and mint run only with core.auth.bootstrap.readonly_key set and an active admin, state no fixture builds (the kit's identity scenario has no user)"
+		disabled = "the deletion of stored bootstrap tokens runs only with core.auth.bootstrap.enabled false (the default mints one), a setting the kit's identity scenario leaves at its default"
+		appendOK = "a revocation line is appended only when something is revoked, which no fault-free boot does; core/backup/journal's own crash cells and the kernel's restore_* tests break the append"
+		cleanup  = "the failed location temporary file's removal runs only after the temporary file's write failed; the error mode of journal.location.tmp reaches it from the next boot's cleanup, and no fault-free boot does"
 	)
 	out := map[string]string{}
 	for _, l := range slices.Concat(
-		kernel.ReapplyLabels(), kernel.HookRunLabels(), auth.BootWritesLabels(),
-		[]string{rbac.LabelCommitSeeds, kernel.LabelBackupDirMkdir, auth.BootstrapTokenLabel, auth.ReadOnlyKeyLabel},
-		[]string{backupjournal.LabelCreate, backupjournal.LabelHeader, backupjournal.LabelDirSync, backupjournal.LabelAppend},
-		[]string{backupjournal.LabelLocationTmp, backupjournal.LabelLocationRename, backupjournal.LabelLocationDirSync, backupjournal.LabelLocationCleanup},
+		[]string{rbac.LabelCommitSeeds, kernel.LabelBackupDirMkdir, auth.BootstrapTokenLabel},
+		auth.BootWritesLabels(),
+		[]string{backupjournal.LabelCreate, backupjournal.LabelHeader, backupjournal.LabelDirSync},
+		[]string{backupjournal.LabelLocationTmp, backupjournal.LabelLocationRename, backupjournal.LabelLocationDirSync},
+		[]string{"kernel.reapply.served_boot"},
 	) {
-		out[l] = flip
+		out[l] = identityFlipOnly
 	}
+	for _, l := range kernel.ReapplyLabels() {
+		if l != "kernel.reapply.served_boot" {
+			out[l] = tail
+		}
+	}
+	for _, l := range kernel.HookRunLabels() {
+		out[l] = hooks
+	}
+	out[auth.LabelBootBootstrapDelete] = disabled
+	out[auth.LabelBootStartupKey] = startup
+	out[auth.ReadOnlyKeyLabel] = startup
+	out[backupjournal.LabelAppend] = appendOK
+	out[backupjournal.LabelLocationCleanup] = cleanup
 	for _, l := range []string{backupjournal.LabelTrimClear, backupjournal.LabelTrimCopy, backupjournal.LabelTrimRename, backupjournal.LabelTrimDirSync, backupjournal.LabelTrimCleanup} {
 		out[l] = trim
 	}
