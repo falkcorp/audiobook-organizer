@@ -501,7 +501,14 @@ func (r *Router) buildLegacy(mux *http.ServeMux) []error {
 		// Stage 8's facts ride on the registered handler (basicGateRoutes):
 		// a pattern dropped by the dedup above or by a refusal is never
 		// registered, so it carries no facts.
-		h := gateRoute{Handler: r.legacyHandler(reg.pat.String(), reg.admits, m.Handler, spec), facts: legacyGateFacts(reg, m)}
+		mh := m.Handler
+		if r.auth != nil && m.Auth == LegacyAuthCore && !first.OwnAuth {
+			// The members share Perm, Guards and OwnAuth (sameRequirements),
+			// so the first speaks for all. An OwnAuth route authenticates
+			// itself and never meets stages 12 and 13.
+			mh = r.authWrap(first.Perm, first.Guards, first.Method+" "+reg.pat.path(), mh)
+		}
+		h := gateRoute{Handler: r.legacyHandler(reg.pat.String(), reg.admits, mh, spec), facts: legacyGateFacts(reg, m)}
 		if err := register(mux, reg.pat.String(), h); err != nil {
 			errs = append(errs, err)
 		}
@@ -572,10 +579,10 @@ func (r *Router) nativeNodes() []*node {
 // service.
 func (r *Router) checkMount(m LegacyMount, routes []LegacyRoute) []error {
 	var errs []error
-	if m.Auth == LegacyAuthCore {
+	if m.Auth == LegacyAuthCore && r.auth == nil {
 		// Stage 13 enforces a LegacyAuthCore mount's Perm and Guards; until
-		// the auth service exists (R2) nothing could, so the mount is refused
-		// exactly as a non-Public native route is (fail closed).
+		// SetAuth wires it nothing could, so the mount is refused exactly as
+		// a non-Public native route is (fail closed).
 		n := 0
 		for _, lr := range routes {
 			if lr.Perm.Kind() != rbac.KindPublic {

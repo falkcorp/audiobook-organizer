@@ -243,6 +243,7 @@ func (c *Chain) peer(next http.Handler) http.Handler {
 		}
 		st := From(r.Context())
 		if st != nil {
+			st.trustedPeer = trusted
 			if ok {
 				st.client = a.WithZone("")
 			}
