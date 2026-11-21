@@ -346,9 +346,6 @@ internal/authority.PersonKey
 internal/authority.PutPersonOverride
 internal/authority.PutPublisherOverride
 internal/authority.pubOverrideKey
-internal/bookfiles.FirstAudioFile
-internal/bookfiles.FirstAudioFiles
-internal/bookfiles.firstAudioIndex
 internal/books/aicaps.BooksID
 internal/books/aicaps.HEADID
 internal/books/aicaps.HEADToBooks

@@ -107,10 +107,10 @@ That is what keeps core's identifiers `core/`-prefixed in the one
 scripts/deadcode-baseline.txt (there is no separate core baseline) and keeps
 the baseline format unchanged.
 
-Excluded from the set: pkg/ (public SDK, exported on purpose),
-internal/writeback/ (the iTunes writer), test files, test helper packages
-(testutil, conformance, rapidgen and the explicit TEST_HELPER_DIRS list), mock_store.go, and any name
-containing `ForTest` (test seams).
+Excluded from the set: pkg/ (public SDK, exported on purpose), test files,
+test helper packages (testutil, conformance, rapidgen and the explicit
+TEST_HELPER_DIRS list), mock_store.go, and any name containing `ForTest` (test
+seams).
 """
 
 from __future__ import annotations
@@ -131,7 +131,7 @@ DEADCODE_TOOLS_VERSION = "v0.51.0"  # keep equal to tools/deadcode/go.mod (a tes
 INSTALL_TIMEOUT_S = 300
 RUN_TIMEOUT_S = 1800
 LINE_RE = re.compile(r"^(?P<file>[^:\s]+):\d+:\d+: unreachable func: (?P<name>\S+)\s*$")
-EXCLUDED_DIR_PREFIXES = ("pkg/", "internal/writeback/")
+EXCLUDED_DIR_PREFIXES = ("pkg/",)
 # Test-helper package directories, listed explicitly. A `*test` suffix match
 # would also drop a production package such as a future internal/latest/.
 # Update this list when a new test-helper package is added.

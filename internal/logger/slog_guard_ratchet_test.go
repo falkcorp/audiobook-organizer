@@ -10,8 +10,8 @@ package logger
 // one-way: the test no longer fails when a count improves, so lowering a
 // ceiling by hand in the PR that lowers the count is the rule.
 const (
-	slogRatchetFileCeiling = 264
-	slogRatchetCallCeiling = 1444
+	slogRatchetFileCeiling = 263
+	slogRatchetCallCeiling = 1442
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -286,5 +286,4 @@ var slogRatchet = map[string]int{
 	"internal/versions/swap.go":                                  2,
 	"internal/watcher/supervisor.go":                             5,
 	"internal/watcher/watcher.go":                                3,
-	"internal/writeback/outbox.go":                               2,
 }

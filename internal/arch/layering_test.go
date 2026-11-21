@@ -186,7 +186,6 @@ var layerOf = map[string]int{
 	"internal/backup":                   3, // computed: max of imports=0, floored at 3
 	"internal/batch":                    3, // computed: max of imports=3, floored at 3
 	"internal/boilerplate":              3, // computed: max of imports=0, floored at 3
-	"internal/bookfiles":                3, // computed: max of imports=2, floored at 3
 	"internal/bookfileaudio":            3, // computed: max of imports=3, floored at 3
 	"internal/covers":                   0, // computed: imports no module package (its safehttp guard moved to core/integrations/providerhttp, F7-02)
 	"internal/books/store/storetest":    3, // computed: max of imports=2, floored at 3
@@ -243,7 +242,6 @@ var layerOf = map[string]int{
 	"internal/watcher":                  3, // computed: max of imports=3, floored at 3
 	"internal/wirecontract":             0, // computed: imports no module package (test-only package)
 	"internal/work":                     3, // computed: max of imports=2, floored at 3
-	"internal/writeback":                3, // table: domain
 	"pkg/ops":                           3, // computed: max of imports=3 (auth, undo), floored at 3
 
 	// Layer 4: jobs
@@ -519,7 +517,7 @@ var namedLayer = map[string]int{
 	"internal/merge": 3, "internal/versionprimary": 3, "internal/versions": 3, "internal/dedup": 3,
 	"internal/matcher": 3, "internal/fingerprint": 3, "internal/metadata": 3, "internal/organizer": 3,
 	"internal/scanner": 3, "internal/itunes": 3, "internal/audiobooks": 3, "internal/metafetch": 3,
-	"internal/reconcile": 3, "internal/repairs": 3, "internal/undo": 3, "internal/usermerge": 3, "internal/writeback": 3,
+	"internal/reconcile": 3, "internal/repairs": 3, "internal/undo": 3, "internal/usermerge": 3,
 	// Layer 4 jobs.
 	"internal/operations/registry": 4, "internal/scheduler": 4, "internal/maintenance/jobs": 4,
 	// Layer 5 transport.

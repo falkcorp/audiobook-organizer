@@ -33,7 +33,6 @@ internal/foo/a_test.go:5:6: unreachable func: HelperInTest
 internal/foo/b.go:5:6: unreachable func: ResetForTest
 internal/foo/c.go:5:6: unreachable func: SetXForTesting
 pkg/sdk/s.go:5:6: unreachable func: Exported
-internal/writeback/w.go:5:6: unreachable func: Write
 internal/testutil/t.go:5:6: unreachable func: Make
 internal/books/store/storetest/t.go:5:6: unreachable func: Make
 internal/versionprimary/vptest/t.go:5:6: unreachable func: Make
