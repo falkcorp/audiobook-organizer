@@ -498,10 +498,13 @@ core/kernel.StorageHealth
 core/kernel.authHolders.HoldersOf
 core/kernel.authSettingsFrom
 core/kernel.authSettingsReader
+core/kernel.backupProbe
+core/kernel.backupReasonRank
 core/kernel.beginHealthShutdown
 core/kernel.bootConfig
 core/kernel.buildIdentity
 core/kernel.classifyStore
+core/kernel.combineBackup
 core/kernel.configBoot.HealthTokens
 core/kernel.configBoot.attachConfig
 core/kernel.configBoot.bootRoot
@@ -529,7 +532,9 @@ core/kernel.hookReport.add
 core/kernel.identityMetrics
 core/kernel.identityRoutes.deps
 core/kernel.identityRoutes.missing
+core/kernel.identityTopicSpecs
 core/kernel.journalShowsReplaced
+core/kernel.journalTokens
 core/kernel.keptAdmins.keep
 core/kernel.kernelEvents.catalog
 core/kernel.kernelEvents.close
@@ -568,6 +573,10 @@ core/kernel.outboxOwnerSpec
 core/kernel.outboxProbe
 core/kernel.outboxProblems
 core/kernel.permissions
+core/kernel.principalInvalidatedTopic
+core/kernel.publishPrincipalInvalidated
+core/kernel.publishRBACChanged
+core/kernel.rbacChangedTopic
 core/kernel.realtimeLimits
 core/kernel.realtimeOptions
 core/kernel.reapplyApplyFor
@@ -611,6 +620,7 @@ core/kernel.restoreHooksInput.now
 core/kernel.restoreHooksInput.run
 core/kernel.restoreHooksInput.writeMarkers
 core/kernel.restoreKindLabel
+core/kernel.restoreTokens
 core/kernel.restoreUsers.ScanUsers
 core/kernel.restoreUsers.StageRoles
 core/kernel.runP4dSteps
