@@ -280,6 +280,11 @@ func (k *Kernel) swapAfter(ctx context.Context, phase string) error {
 	case out.Boot == restoreswap.BootRestore && phase == phaseP2:
 		err = s.Opened(ctx, out.ID)
 	case out.Boot == restoreswap.BootRestore && phase == phaseP4b:
+		if bootseam.RestoreWalk(ctx) {
+			// The crash-matrix cell's walk (F4-08 B10j): P4d's steps 2 and 3 journal
+			// restore_line, hooks_done, marker_written and applied; none is owed here.
+			break
+		}
 		// M8's hook may have journaled it already; the call is idempotent, and a
 		// build with no M8 does it here.
 		err = s.RestoreApplied(ctx, out.ID)
@@ -345,7 +350,7 @@ func (k *Kernel) swapFailed(ctx context.Context, phase string, cause error) erro
 // starts, because M8's own swap refuses while a restore holds the intent
 // slot (restorejournal.ErrSwapPending). Any other boot does nothing.
 func (k *Kernel) restoreAppliedBeforeRewrite(ctx context.Context) error {
-	if k.swap == nil || k.swap.out.Boot != restoreswap.BootRestore {
+	if k.swap == nil || k.swap.out.Boot != restoreswap.BootRestore || bootseam.RestoreWalk(ctx) {
 		return nil
 	}
 	if err := k.swap.s.RestoreApplied(ctx, k.swap.out.ID); err != nil {
