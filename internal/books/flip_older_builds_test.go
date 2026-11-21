@@ -37,7 +37,7 @@ func flipBootOn(t *testing.T, work string, failM2 bool) error {
 		wrap = append(wrap, func(m module.Module) module.Module { return m2Killed{m} })
 	}
 	return bootAt(t, work, func(o *app.Options) {
-		o.Env = append([]string{storageEnv()}, absEnv()...)
+		o.Env = bootEnv(absEnv()...)
 	}, wrap...)
 }
 
