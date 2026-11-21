@@ -7,6 +7,7 @@ import { defineConfig } from 'vite';
 import react, { reactCompilerPreset } from '@vitejs/plugin-react';
 import babel from '@rolldown/plugin-babel';
 import path from 'path';
+import { SINGLETONS } from '@mediacore/shell/vite';
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mediacoreBuildPlugin, resolveBuildId, type CleanCommit } from './build-id';
@@ -70,7 +71,11 @@ export default defineConfig(({ command }) => ({
     // takes every page down, and the e2e suite that would catch it is currently
     // broken -- so this stays pinned rather than relying on npm's tree happening
     // to dedupe.
-    dedupe: ['react', 'react-dom'],
+    // @mediacore/shell and ui-kit are file: links whose real path is under
+    // core/web, which has its own node_modules; the same list core's presets and
+    // check-singletons.mjs use keeps react, react-router, MUI and emotion to one
+    // copy each (07 §7.3.2).
+    dedupe: SINGLETONS,
   },
   server: {
     port: 5173,

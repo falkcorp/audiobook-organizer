@@ -9,7 +9,7 @@
 # the Docker frontend stage is node:26-alpine and has no bash. It builds nothing in web/,
 # sets no UI build ID, and leaves a caller's BUILD_ID alone. npm flags other than
 # --no-audit/--no-fund come from the caller's environment (npm_config_ignore_scripts=true,
-# npm_config_prefer_offline=true). Core packages build in this explicit order (one today).
+# npm_config_prefer_offline=true). Core packages build in this explicit order: api-client, ui-kit, shell (shell's types and bundle read the other two).
 # Usage: sh scripts/ci/build_web.sh deps
 set -eu
 if [ "$#" -ne 1 ] || [ "$1" != deps ]; then
@@ -21,6 +21,8 @@ if [ -f "$root/core/web/package.json" ]; then
   cd "$root/core/web"
   npm ci --no-audit --no-fund
   npm run build -w @mediacore/api-client
+  npm run build -w @mediacore/ui-kit
+  npm run build -w @mediacore/shell
 fi
 cd "$root/web"
 npm ci --no-audit --no-fund

@@ -23,7 +23,7 @@ WORKDIR /build/web
 # three run by the entry point in one RUN: core/web (manifests and sources, since
 # web/'s file: dependency points at the dist/ the ordered build writes; .dockerignore
 # keeps the host's node_modules and dist/ out) and web/'s manifests are copied, then
-# `build_web.sh deps` runs npm ci in core/web, builds @mediacore/api-client, and runs
+# `build_web.sh deps` runs npm ci in core/web, builds @mediacore/api-client, ui-kit and shell, and runs
 # npm ci in web/. A change under web/src never reaches this layer.
 COPY scripts/ci/build_web.sh scripts/ci/ensure_core_web.sh ../scripts/ci/
 COPY core/web/ ../core/web/
