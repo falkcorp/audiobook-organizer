@@ -24,6 +24,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
@@ -1591,7 +1592,7 @@ func (f *versionTwinFixer) Apply(ctx context.Context, w *repairs.Writer, fresh r
 	case vtClassApplied:
 		return f.applyRecord(w, rd.svc, d, pre, guard)
 	case vtClassCandidates:
-		return f.copyCandidates(w, rd.svc, d, pre, guard)
+		return f.copyCandidates(w, rd.svc, rd.store, d, pre, guard)
 	}
 	return fmt.Errorf("row %s: unknown class %q", fresh.RowID, d.class)
 }
@@ -1679,7 +1680,19 @@ func vtApplyOptions(d *vtDetail, batch string, guard func(*database.Book) error)
 // vtWriteGuard, and no candidates or fetch verdict of its own. The prior
 // row (or its absence) is journaled after the copy, so the op revert
 // removes it again.
-func (f *versionTwinFixer) copyCandidates(w *repairs.Writer, svc VersionTwinMetadataService, d *vtDetail, pre func() error, guard func(*database.Book) error) error {
+//
+// The copied row is then re-ranked by the primary's OWN owner rejections: the
+// twin's row was ordered for the twin, so a candidate the owner rejected for
+// the primary could otherwise sit first until the next search or reject
+// rewrote it. The order is copy, re-rank, journal. The journaled stamp
+// (undo.MetadataCacheStamp) is built from the source hash, fetch time,
+// candidate COUNT, fingerprint, ASIN and stale flag, not from candidate
+// order, and the re-rank refuses any count change, so the stamp is the same
+// before and after it and the op revert is unaffected. The copy and the
+// re-rank take the row lock one after the other; buildRank reads the book and
+// its rejections under the second lock, so the order written is the one the
+// newest rejection set gives.
+func (f *versionTwinFixer) copyCandidates(w *repairs.Writer, svc VersionTwinMetadataService, store OpsStore, d *vtDetail, pre func() error, guard func(*database.Book) error) error {
 	if err := w.Beat("candidate copy onto book " + d.primaryID); err != nil {
 		return err
 	}
@@ -1703,13 +1716,36 @@ func (f *versionTwinFixer) copyCandidates(w *repairs.Writer, svc VersionTwinMeta
 	if err != nil {
 		return fmt.Errorf("copy twin %s's candidates to %s: %w", d.twinID, d.primaryID, err)
 	}
+	// The copy is written: whatever the re-rank does, journal it so the op
+	// revert can reach it.
+	_, rerr := svc.RerankCachedCandidates(d.primaryID, func() (func(metafetch.MetadataCandidate) int, error) {
+		book, err := store.GetBookByID(d.primaryID)
+		if err != nil {
+			return nil, fmt.Errorf("read book: %w", err)
+		}
+		if book == nil {
+			return nil, fmt.Errorf("book %s no longer exists", d.primaryID)
+		}
+		rejected, err := metafetch.LoadRejectedCandidates(store, d.primaryID)
+		if err != nil {
+			return nil, err
+		}
+		return metabatch.MergeRankerFor(book, rejected, metabatch.RuntimeLoaderFor(store, book)), nil
+	})
 	oldV, err := undo.EncodeMetadataCacheOld(prior)
 	if err == nil {
 		err = w.Journal(d.primaryID, undo.ChangeTypeMetadataCacheCopy, undo.MetadataCacheField, oldV, undo.MetadataCacheStamp(cp))
 	}
-	if err != nil {
+	switch {
+	case err != nil && rerr != nil:
+		return fmt.Errorf("%w: %d candidates copied to %s, but they were not re-ranked (%v) and the journal row was not recorded: %v",
+			repairs.ErrPartiallyApplied, len(cp.Candidates), d.primaryID, rerr, err)
+	case err != nil:
 		return fmt.Errorf("%w: %d candidates copied to %s, but the journal row was not recorded: %v",
 			repairs.ErrPartiallyApplied, len(cp.Candidates), d.primaryID, err)
+	case rerr != nil:
+		return fmt.Errorf("%w: %d candidates copied to %s and journaled, but they were not re-ranked by the book's own rejections: %v",
+			repairs.ErrPartiallyApplied, len(cp.Candidates), d.primaryID, rerr)
 	}
 	return nil
 }
