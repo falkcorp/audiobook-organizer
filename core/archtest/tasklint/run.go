@@ -142,7 +142,7 @@ func Analyze(cfg Config, root string, patterns []string) ([]Finding, int, error)
 	if err != nil {
 		return nil, 0, err
 	}
-	pkgs, err := packages.Load(&packages.Config{Mode: packages.LoadSyntax}, patterns...)
+	pkgs, err := loadTyped(patterns) // not packages.Load: see loadTyped
 	if err != nil {
 		return nil, 0, fmt.Errorf("load: %w", err)
 	}
