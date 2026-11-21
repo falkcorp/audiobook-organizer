@@ -266,8 +266,11 @@ type Options struct {
 	// exists, whose boundary is not known here. nil until backup/journal has a
 	// trim.
 	PruneJournal func(ctx context.Context, seq uint64) error
-	// Audit records an action before it happens (core.restore.stage); a failed
-	// write fails the call. nil = none.
+	// Audit records an action before it happens (core.restore.stage, written
+	// after every check that can refuse the restore and just before the intent's
+	// create); a failed write fails the call. When the create refuses after the
+	// record is written, the action is recorded again with fields outcome
+	// "rejected" and a fixed reason code. nil = none.
 	Audit func(ctx context.Context, action string, fields map[string]string) error
 	// Metrics receives the §5B.8 series; nil = none.
 	Metrics *Metrics

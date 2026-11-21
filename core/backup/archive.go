@@ -170,10 +170,16 @@ func streamEntry(root *os.Root, e Entry, put func(string, int64, io.Reader) erro
 }
 
 // openedArchive is a mediacore-backup/1 archive open for reading, its
-// manifest read and parsed (the first entry, by rule).
+// manifest read and parsed (the first entry, by rule). Every byte the reader
+// takes from the file also goes through sum, so once consume has read the
+// archive to its end, fileSHA256 is the SHA-256 of exactly the bytes whose
+// manifest and entries were checked: the digest a verification vouches for and
+// a restore's staging is bound to.
 type openedArchive struct {
 	f             *os.File
 	rd            *backuparchive.Reader
+	sum           hash.Hash
+	finished      bool // consume read the codec and the file to their ends
 	Manifest      *Manifest
 	ManifestBytes []byte
 }
@@ -196,7 +202,8 @@ func openArchive(path string, lim backuparchive.Limits) (a *openedArchive, err e
 			err = errors.Join(err, f.Close())
 		}
 	}()
-	rd, err = backuparchive.NewReader(f, lim, false)
+	sum := sha256.New()
+	rd, err = backuparchive.NewReader(io.TeeReader(f, sum), lim, false)
 	if err != nil {
 		return nil, err
 	}
@@ -224,10 +231,21 @@ func openArchive(path string, lim backuparchive.Limits) (a *openedArchive, err e
 	if err != nil {
 		return nil, err
 	}
-	return &openedArchive{f: f, rd: rd, Manifest: m, ManifestBytes: raw}, nil
+	return &openedArchive{f: f, rd: rd, sum: sum, Manifest: m, ManifestBytes: raw}, nil
 }
 
 func (a *openedArchive) Close() error { return errors.Join(a.rd.Close(), a.f.Close()) }
+
+// fileSHA256 is the lower-case hex SHA-256 of the archive file as this reader
+// read it. It is the whole file's digest only after consume succeeded (Finish
+// reads the codec's trailer and then the file to its end); before that it would
+// be the digest of a prefix, so it refuses rather than return one.
+func (a *openedArchive) fileSHA256() (string, error) {
+	if !a.finished {
+		return "", errors.New("backup: the archive was not read to its end, so it has no digest yet")
+	}
+	return hex.EncodeToString(a.sum.Sum(nil)), nil
+}
 
 // consume reads the rest of the archive against its manifest: every entry must
 // be listed (an unlisted one is ErrManifest), match its size and digest, and
@@ -275,6 +293,7 @@ func (a *openedArchive) consume(ctx context.Context, ex *backuparchive.Extractor
 	if seen != len(want) {
 		return fmt.Errorf("%w: the archive holds %d of the manifest's %d entries", ErrManifest, seen, len(want))
 	}
+	a.finished = true
 	return nil
 }
 
