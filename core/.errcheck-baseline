@@ -26,4 +26,7 @@
 # Lowered 2026-11-07 to 1 by R1-36, which deleted core/log/structured.go (the
 # json.Marshal finding) with the rest of core log's stage-2 names. The one left is
 # core/buildid/buildid.go:83.
-1
+#
+# Lowered 2026-11-21 to 0: the two discarded f.Close errors (buildid.fileSHA256 and
+# typedload.readExportData) now return the Close error through a named result.
+0

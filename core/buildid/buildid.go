@@ -75,12 +75,20 @@ func commitFrom(settings []debug.BuildSetting) string {
 }
 
 // fileSHA256 streams path through SHA-256 and returns the lowercase hex sum.
-func fileSHA256(path string) (string, error) {
+//
+// A Close error on the read-only handle is returned rather than dropped: the
+// sum was already computed, but a failing Close is the one sign the read was
+// not clean, and the caller treats any error as "no build id".
+func fileSHA256(path string) (sum string, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("buildid: open executable: %w", err)
 	}
-	defer func() { _ = f.Close() }()
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			sum, err = "", fmt.Errorf("buildid: close executable: %w", cerr)
+		}
+	}()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", fmt.Errorf("buildid: hash executable: %w", err)

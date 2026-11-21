@@ -17,6 +17,7 @@ import {
   type OperationsFrameRow,
   type RunStatusModel,
 } from '../../src/layout/OperationsIndicatorFrame';
+import { setShellAppId } from '../../src/app/appId';
 
 const navigateSpy = vi.fn();
 vi.mock('react-router', async () => {
@@ -70,6 +71,16 @@ beforeEach(() => {
 });
 
 describe('OperationsIndicatorFrame', () => {
+  it('keeps the section collapse state under the app ID, not a pre-shell key', () => {
+    setShellAppId('gotham');
+    rows = [row({ id: 'c', status: 'succeeded', finishedAt: 1 })];
+    mount();
+    fireEvent.click(bell());
+    fireEvent.click(within(screen.getByRole('presentation')).getByText('Completed (1)'));
+    expect(JSON.parse(localStorage.getItem('gotham.operations.indicatorCollapse') ?? 'null')).toMatchObject({ completed: true });
+    expect(localStorage.getItem('ops-indicator-collapse-v1')).toBeNull();
+  });
+
   it('counts only runs the status model calls in progress', () => {
     rows = [
       row({ id: 'a', status: 'running' }),
