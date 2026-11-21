@@ -8,6 +8,7 @@ import { Routes, Route, Navigate, useLocation } from 'react-router';
 import { Box, Backdrop, CircularProgress, Typography, Stack } from '@mui/material';
 import { MainLayout } from './components/layout/MainLayout';
 import { WelcomeWizard } from './components/wizard/WelcomeWizard';
+import { booksSetup } from './modules/books/pages/booksSetup';
 import { KeyboardShortcutsDialog } from './components/KeyboardShortcutsDialog';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { StaleBuildBanner } from './components/StaleBuildBanner';
@@ -17,7 +18,6 @@ import { AcceptInvite } from './pages/AcceptInvite';
 import { NotFound } from './pages/NotFound';
 import { ABS_REDIRECTS } from './utils/absRedirects';
 import { eventSourceManager } from './services/eventSourceManager';
-import * as api from './services/api';
 import { useAuth } from './contexts/AuthContext';
 import { useOperationsStore } from './stores/useOperationsStore';
 import { useReviewStore } from './stores/useReviewStore';
@@ -92,12 +92,10 @@ function App() {
     let cancelled = false;
     const checkWizardStatus = async () => {
       try {
-        const config = await api.getConfig();
-        const setupComplete =
-          Boolean(config.root_dir && config.root_dir.trim()) || Boolean(config.setup_complete);
+        const setupRequired = await booksSetup.isRequired();
         if (!cancelled) {
-          setShowWizard(!setupComplete);
-          if (setupComplete) {
+          setShowWizard(setupRequired);
+          if (!setupRequired) {
             localStorage.setItem(STORAGE_KEYS.WELCOME_WIZARD_COMPLETED, 'true');
           }
         }
