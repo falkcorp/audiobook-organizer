@@ -78,10 +78,10 @@ func (c Config) WantsStore() bool {
 
 // storageWanted gates P2 to P4: Config.StoragePath set, and not Describe,
 // which never opens the store. P0 sets the path for every app whose modules
-// declare storage (core.storage.path, the app's compiled path, or
-// <state dir>/storage/main.pebble), so an app with a module that declares
-// storage always has one by here; an app with none and no compiled path opens
-// no store.
+// have a store (Config.WantsStore: a module declares storage, or the identity
+// boot is declared; core.storage.path, the app's compiled path, or
+// <state dir>/storage/main.pebble), so such an app always has one by here; an
+// app with none and no compiled path opens no store.
 func (k *Kernel) storageWanted(describe bool) bool {
 	return !describe && k.cfg.StoragePath != ""
 }

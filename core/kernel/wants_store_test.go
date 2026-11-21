@@ -204,7 +204,7 @@ func TestWantsStore_OfflineOpenOfAnIdentityApp(t *testing.T) {
 	if off.StoragePath, off.StateDir, err = ResolveStorage(t.Context(), off, ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenOffline(t.Context(), off, true); err == nil || !strings.Contains(err.Error(), "has no store") {
-		t.Errorf("offline open with no store = %v, want a refusal saying the app has no store", err)
+	if _, err := OpenOffline(t.Context(), off, true); err == nil || !strings.Contains(err.Error(), "no store to open offline") {
+		t.Errorf("offline open with no store = %v, want the refusal that there is no store to open", err)
 	}
 }
