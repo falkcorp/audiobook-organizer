@@ -9,7 +9,7 @@
 // context and the two profile API calls are mocked at their modules, so the
 // same mocks hold on both sides of the cut.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { renderWithProviders } from '../../../test/renderWithProviders';
 import { UserMenu } from '../../../components/layout/UserMenu';
@@ -27,9 +27,10 @@ const auth = vi.hoisted(() => ({
 }));
 vi.mock('../../../contexts/AuthContext', () => ({ useAuth: () => auth.value }));
 
+type AsyncFn = (...args: unknown[]) => Promise<unknown>;
 const apiMock = vi.hoisted(() => ({
-  updateMe: undefined as unknown as ReturnType<typeof vi.fn>,
-  changePassword: undefined as unknown as ReturnType<typeof vi.fn>,
+  updateMe: undefined as unknown as Mock<AsyncFn>,
+  changePassword: undefined as unknown as Mock<AsyncFn>,
 }));
 vi.mock('../../../services/api', () => ({
   updateMe: (...a: unknown[]) => apiMock.updateMe(...a),
@@ -50,8 +51,8 @@ beforeEach(() => {
   navigateSpy.mockReset();
   auth.logout = vi.fn().mockResolvedValue(undefined);
   auth.refresh = vi.fn().mockResolvedValue(undefined);
-  apiMock.updateMe = vi.fn().mockResolvedValue({});
-  apiMock.changePassword = vi.fn().mockResolvedValue(undefined);
+  apiMock.updateMe = vi.fn<AsyncFn>().mockResolvedValue({});
+  apiMock.changePassword = vi.fn<AsyncFn>().mockResolvedValue(undefined);
   signIn();
 });
 
