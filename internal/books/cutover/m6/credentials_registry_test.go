@@ -226,6 +226,29 @@ func oldShape(ctx context.Context, t *testing.T, ks storage.Keyspace, bind map[s
 	}
 }
 
+// forgetSecret deletes a secret row M6's own fold wrote, so a store is as an M6
+// without the fold left it: the instance holds the dotted setting and nothing
+// stands at the declared name.
+func forgetSecret(ctx context.Context, t *testing.T, r *rig, db *storage.DB, n secrets.Name) {
+	t.Helper()
+	ks, _ := db.Keyspace(ownerSecrets)
+	b := ks.NewBatch()
+	// A Serialized range refuses a write that carries no Expect on its key.
+	b.Bind(ks)
+	if _, err := b.GetForUpdate(ctx, ks, []byte(n)); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.In(ks).Delete([]byte(n)); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Commit(ctx, storage.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if v, found, err := r.secrets.value(ctx, n); err != nil || found {
+		t.Fatalf("%s still holds %q after it was forgotten (found %v, %v)", n, v, found, err)
+	}
+}
+
 func repairConfig(r *rig, ks storage.Keyspace, rep *m6.Report) m6.RepairConfig {
 	return m6.RepairConfig{
 		Store: integrations.NativeInstanceStore(ks), Secrets: r.secrets, NewBatch: ks.NewBatch,
@@ -252,6 +275,7 @@ func TestRepairMetadataCredentials(t *testing.T) {
 			"hardcover":    {"api_token": fieldName("hardcover", "api_token"), "credentials.api_key": hcCred},
 			"openlibrary":  {"credentials.token": credName("openlibrary", "token")},
 		})
+		forgetSecret(ctx, t, r, db, fieldName("google-books", "api_key"))
 		before := healths(ctx, t, loadRegistry(ctx, t, r, db))
 		if got, want := misconfigured(before), []string{"google-books", "hardcover", "openlibrary"}; !slices.Equal(got, want) {
 			t.Fatalf("before the repair the misconfigured sources are %v, want %v (the pre-fold shape is not what this test thinks)", got, want)
@@ -397,4 +421,41 @@ func auditRow(ctx context.Context, t *testing.T, db *storage.DB, key string) ([]
 		t.Fatal(err)
 	}
 	return raw, true
+}
+
+// TestRepairMetadataCredentials_UnreadableCredential: a credential M2 could not
+// read is folded as an unreadable marker at the declared name (there are no bytes
+// to copy), exactly as M6's own fold does, and the secret setting is bound to it.
+func TestRepairMetadataCredentials_UnreadableCredential(t *testing.T) {
+	gbCred := credName("google-books", "api_key")
+	declared := fieldName("google-books", "api_key")
+	opts := []func(*rig){withSecrets(map[secrets.Name]string{}, declared, gbCred), func(r *rig) { r.secrets.unreadable[gbCred] = true }}
+	withLive(t, opts, func(ctx context.Context, r *rig, db *storage.DB, s *snap) {
+		ks, _ := db.Keyspace(ownerInteg)
+		oldShape(ctx, t, ks, map[string]map[string]secrets.Name{"google-books": {"credentials.api_key": gbCred}})
+		forgetSecret(ctx, t, r, db, declared)
+		res, err := m6.RepairMetadataCredentials(ctx, repairConfig(r, ks, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Repaired != 1 {
+			t.Fatalf("repaired %d rows, want 1", res.Repaired)
+		}
+		sks, _ := db.Keyspace(ownerSecrets)
+		raw, err := sks.Get(ctx, []byte(declared))
+		if err != nil || string(raw) != unreadableMarker+"corrupt" {
+			t.Errorf("the declared name holds %q (%v), want the corrupt unreadable marker", raw, err)
+		}
+		rows, err := integrations.NativeInstanceStore(ks).Load(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range rows {
+			if row.Config.Ref == metadataRef("google-books") {
+				if ref, ok := row.Config.Settings["api_key"].(secrets.Ref); !ok || ref.Name() != declared {
+					t.Errorf("api_key is %v, want a ref to %s", row.Config.Settings["api_key"], declared)
+				}
+			}
+		}
+	})
 }

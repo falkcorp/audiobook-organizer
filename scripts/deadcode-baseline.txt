@@ -1090,12 +1090,15 @@ internal/books/cutover/m6.Migration.tallyQuarantine
 internal/books/cutover/m6.Migration.writeInstance
 internal/books/cutover/m6.New
 internal/books/cutover/m6.Plan
+internal/books/cutover/m6.RepairConfig.report
+internal/books/cutover/m6.RepairMetadataCredentials
 internal/books/cutover/m6.Report.ByKind
 internal/books/cutover/m6.Report.Entries
 internal/books/cutover/m6.Report.IDs
 internal/books/cutover/m6.RootID
 internal/books/cutover/m6.SourceRanges
 internal/books/cutover/m6.aliasReason
+internal/books/cutover/m6.auditUpdate
 internal/books/cutover/m6.authorityHasAt
 internal/books/cutover/m6.badRootPath
 internal/books/cutover/m6.capabilityID
@@ -1113,6 +1116,7 @@ internal/books/cutover/m6.discardIntegrations.ImportInstance
 internal/books/cutover/m6.discardNotify.ImportRule
 internal/books/cutover/m6.discardSecrets.ImportSecret
 internal/books/cutover/m6.discardSecrets.ImportUnreadable
+internal/books/cutover/m6.droppedRef.line
 internal/books/cutover/m6.emptyJSON
 internal/books/cutover/m6.emptyValue
 internal/books/cutover/m6.encodeURIComponent
@@ -1133,6 +1137,7 @@ internal/books/cutover/m6.groupRun.webhooks
 internal/books/cutover/m6.groupRun.write
 internal/books/cutover/m6.instanceID
 internal/books/cutover/m6.jobState
+internal/books/cutover/m6.keysOf
 internal/books/cutover/m6.knownFeature
 internal/books/cutover/m6.knownFeatures
 internal/books/cutover/m6.mapCaps
@@ -1142,7 +1147,9 @@ internal/books/cutover/m6.nonEmpty
 internal/books/cutover/m6.originOf
 internal/books/cutover/m6.pending.cleanURL
 internal/books/cutover/m6.pending.finish
+internal/books/cutover/m6.pending.foldMetadataCredentials
 internal/books/cutover/m6.pending.secretRefs
+internal/books/cutover/m6.planCredentialFold
 internal/books/cutover/m6.planWrites.Batch
 internal/books/cutover/m6.planWrites.Count
 internal/books/cutover/m6.planWrites.Delete
@@ -1151,6 +1158,7 @@ internal/books/cutover/m6.planWrites.Set
 internal/books/cutover/m6.protocolAdapter
 internal/books/cutover/m6.refsFor
 internal/books/cutover/m6.refused
+internal/books/cutover/m6.repairRow
 internal/books/cutover/m6.resolve
 internal/books/cutover/m6.rootSpecs
 internal/books/cutover/m6.secretName
