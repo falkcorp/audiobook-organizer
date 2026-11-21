@@ -23,15 +23,20 @@ import (
 // value: each builder method returns a changed copy and leaves its receiver
 // as it was, so one base schedule can seed several definitions.
 type Schedule struct {
-	key      string        // ScheduleFromConfig
-	every    time.Duration // Every
-	onStart  bool
-	when     func() bool
-	params   json.RawMessage
-	live     bool
-	preview  bool
-	missed   MissedPolicy
-	problems []string
+	key     string        // ScheduleFromConfig
+	every   time.Duration // Every
+	onStart bool
+	when    func() bool
+	// startWhen is OnStartWhen's gate: when set, the start trigger fires on
+	// it alone, whatever the key's enabled flag and the When gate say.
+	startWhen func() bool
+	// windowWhen is WindowWhen's gate: it closes window membership only.
+	windowWhen func() bool
+	params     json.RawMessage
+	live       bool
+	preview    bool
+	missed     MissedPolicy
+	problems   []string
 }
 
 // ScheduleFromConfig is the standard schedule (SIMP-6). Its timing is a config
@@ -174,8 +179,44 @@ func (s *Schedule) clone() *Schedule {
 func (s *Schedule) OnStart() *Schedule { c := s.clone(); c.onStart = true; return c }
 
 // When returns a copy with a non-timing gate re-read each poll (e.g. updater
-// mode).
+// mode). It closes every fire of the kind: the interval (or DailyAt, Cron),
+// the window start and the OnStart run.
 func (s *Schedule) When(gate func() bool) *Schedule { c := s.clone(); c.when = gate; return c }
+
+// OnStartWhen returns a copy that fires once when the scheduler starts if
+// gate reports true then, whatever the key's enabled flag and the When gate
+// say; a closed gate means no start run, and the clock is left as it was.
+// It is HEAD's RunOnStart read from a setting that is not the schedule's
+// own enable flag: library_scan ran at boot when scan_on_startup was set,
+// with its interval off or on (F5-14). A start on a disabled key writes no
+// clock, so the kind is still seeded by the first poll that finds it
+// enabled. A nil gate is a problem.
+func (s *Schedule) OnStartWhen(gate func() bool) *Schedule {
+	c := s.clone()
+	if gate == nil {
+		c.problems = append(c.problems, "Schedule.OnStartWhen: nil gate")
+		return c
+	}
+	c.onStart, c.startWhen = true, gate
+	return c
+}
+
+// WindowWhen returns a copy whose window membership is also gated by gate,
+// re-read when the window reaches the member; the interval (Every) keeps
+// running whatever it says. It is HEAD's RunInMaintenanceWindow toggle on a
+// task that also ticks on an interval (dedup_refresh, tombstone_cleanup,
+// purge_deleted, ...): the toggle took the task out of the nightly window
+// and left its interval alone (F5-14). The When gate, when set, still closes
+// the window too. A nil gate is a problem.
+func (s *Schedule) WindowWhen(gate func() bool) *Schedule {
+	c := s.clone()
+	if gate == nil {
+		c.problems = append(c.problems, "Schedule.WindowWhen: nil gate")
+		return c
+	}
+	c.windowWhen = gate
+	return c
+}
 
 // Params returns a copy whose scheduled runs get params p, JSON-encoded now;
 // an encoding error is recorded as a problem.
@@ -212,6 +253,26 @@ func (s *Schedule) RunsOnStart() bool { return s.onStart }
 
 // Open reports the When gate (true without one). Accessor coined by F2-01.
 func (s *Schedule) Open() bool { return s.when == nil || s.when() }
+
+// HasStartGate reports whether the start trigger has its own gate
+// (OnStartWhen). Accessor coined by F5-14.
+func (s *Schedule) HasStartGate() bool { return s.startWhen != nil }
+
+// StartOpen reports whether the start trigger may fire now: OnStartWhen's
+// gate when set, else the When gate. Accessor coined by F5-14.
+func (s *Schedule) StartOpen() bool {
+	if s.startWhen != nil {
+		return s.startWhen()
+	}
+	return s.Open()
+}
+
+// WindowOpen reports whether a window may start the kind now: the When gate
+// and WindowWhen's gate both open (true without either). Accessor coined by
+// F5-14.
+func (s *Schedule) WindowOpen() bool {
+	return s.Open() && (s.windowWhen == nil || s.windowWhen())
+}
 
 // RunParams is a copy of the encoded Params (nil when unset). Accessor coined
 // by F2-01.

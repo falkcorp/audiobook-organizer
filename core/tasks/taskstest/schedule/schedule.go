@@ -82,9 +82,9 @@ const (
 	EventAdvance EventType = "advance" // the clock moved (a due check, a gate edge)
 	EventEnqueue EventType = "enqueue" // a run was inserted (Trigger: schedule, on_start or window)
 	EventFold    EventType = "fold"    // a fire found an active run of the kind and mode and inserted nothing
-	EventGated   EventType = "gated"   // a fire's When gate was closed: the clock advanced, no run
+	EventGated   EventType = "gated"   // a fire's When gate was closed: the clock advanced, no run (a closed OnStartWhen gate records nothing)
 	EventFailed  EventType = "failed"  // a fire's start failed: the clock advanced alone
-	EventWindow  EventType = "window"  // a window opened; Members are what its run would start, in order
+	EventWindow  EventType = "window"  // a window opened; Members are what its run would start, in order (When and WindowWhen gates read at the opening)
 )
 
 // Event is one observed scheduler write. It is comparable field by field
