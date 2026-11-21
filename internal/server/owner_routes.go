@@ -27,9 +27,17 @@ import (
 // s.perm / RequireAdmin.
 func (s *Server) ownerGateWhenOwnerSet() gin.HandlerFunc {
 	ownerEmail := func() string { return config.Snapshot().OwnerEmail }
-	return cfaccess.RequireOwner(ownerEmail, "", func(*gin.Context) bool {
-		return strings.TrimSpace(ownerEmail()) != ""
-	})
+	ownerSet := func(*gin.Context) bool { return strings.TrimSpace(ownerEmail()) != "" }
+	// Under core identity (F4-08 B10b2) the same gate reads core's principal:
+	// the Access extension's, with AssuranceOwner (cfaccess.RequireOwnerCore).
+	// It is not the bridge's RequireOwner, whose core.auth.owner.required=false
+	// fallback to an interactive core:admin principal would admit a
+	// password-session admin where HEAD refuses everyone but the Access owner.
+	// The mode is the wiring's (s.identity), never the request's.
+	if s.identity != nil {
+		return cfaccess.RequireOwnerCore(ownerEmail, "", nil, ownerSet)
+	}
+	return cfaccess.RequireOwner(ownerEmail, "", ownerSet)
 }
 
 // ownerCredRoute is credRoute for a route behind ownerGateWhenOwnerSet. The
