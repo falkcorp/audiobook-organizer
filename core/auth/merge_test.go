@@ -31,7 +31,8 @@ func (f *fx) keyRow(id string) auth.MergeRow {
 }
 
 // stageMerge stages plan as actor into a fresh batch and commits it when
-// staging succeeded. It returns the staging error, else the commit's.
+// staging succeeded, then runs the merge's AfterCommit as a caller must. It
+// returns the staging error, else the commit's.
 func (f *fx) stageMerge(actor *auth.Principal, plan auth.UserMergePlan) error {
 	f.t.Helper()
 	ctx := context.Background()
@@ -40,10 +41,18 @@ func (f *fx) stageMerge(actor *auth.Principal, plan auth.UserMergePlan) error {
 	}
 	b := f.st.NewBatch()
 	defer func() { _ = b.Close() }()
-	if err := f.svc.StageUserMerge(ctx, b, plan); err != nil {
+	after, err := f.svc.StageUserMerge(ctx, b, plan)
+	if err != nil {
+		if after != nil {
+			f.t.Errorf("StageUserMerge returned an AfterCommit with its error %v", err)
+		}
 		return err
 	}
-	return b.Commit(ctx, storage.Sync)
+	if err := b.Commit(ctx, storage.Sync); err != nil {
+		return err
+	}
+	after(ctx)
+	return nil
 }
 
 // TestUserMergeDeletesSourceInvites (DATA4-9): a merge whose source has an
@@ -169,7 +178,8 @@ func TestUserMerge_Gates(t *testing.T) {
 	wantErr(t, "a user manager below admin, no owner gate", f.stageMerge(f.signedIn(gordon), plan), auth.ErrDenied)
 	wantErr(t, "a user manager who is not an admin, dominating neither admin",
 		f.stageMerge(owner(f.signedIn(gordon)), auth.UserMergePlan{Source: jason.ID, Target: bruce.ID}), auth.ErrDominance)
-	wantErr(t, "no batch", f.svc.StageUserMerge(auth.WithPrincipal(context.Background(), f.signedIn(bruce)), nil, plan), auth.ErrBadInput)
+	_, noBatch := f.svc.StageUserMerge(auth.WithPrincipal(context.Background(), f.signedIn(bruce)), nil, plan)
+	wantErr(t, "no batch", noBatch, auth.ErrBadInput)
 	// The sole admin, so a merge that went on would meet the last-admin rule.
 	wantErr(t, "one user twice", f.stageMerge(f.signedIn(bruce), auth.UserMergePlan{Source: bruce.ID, Target: bruce.ID}), auth.ErrBadInput)
 	alfred := f.edit(f.user("alfred-pennyworth"), func(u *auth.User) { u.Status = auth.StatusSystem })

@@ -24,8 +24,16 @@ const reasonMerged = "merged"
 // Every method re-checks the ctx principal, so holding it grants nothing;
 // each joins the caller's batch and never commits.
 type Admin interface {
-	StageUserMerge(ctx context.Context, b *storage.Batch, plan UserMergePlan) error
+	StageUserMerge(ctx context.Context, b *storage.Batch, plan UserMergePlan) (AfterCommit, error)
 }
+
+// AfterCommit is what a staging method hands back for the caller to run once
+// the caller's batch has committed: auth cannot see that commit, so it cannot
+// publish core.principal.invalidated.v1 for it on its own (§4.12). Calling it
+// after a commit that failed publishes nothing: it re-reads what the batch was
+// to write and publishes only what the store holds. It never fails and never
+// blocks; calling it twice publishes twice.
+type AfterCommit func(ctx context.Context)
 
 var _ Admin = (*Service)(nil)
 
@@ -46,45 +54,72 @@ var _ Admin = (*Service)(nil)
 // disabled and its epoch moved (inviteRefusal, linkCreatorRefusal). The
 // caller commits; a record changed since the plan was
 // built fails the commit with storage.ErrConflict, which the caller reports
-// as ErrMergeConflict.
-func (s *Service) StageUserMerge(ctx context.Context, b *storage.Batch, plan UserMergePlan) error {
+// as ErrMergeConflict. After its commit the caller runs the returned
+// AfterCommit, which publishes Source's invalidation (every credential: Source
+// is disabled); the step is nil whenever the error is not.
+func (s *Service) StageUserMerge(ctx context.Context, b *storage.Batch, plan UserMergePlan) (AfterCommit, error) {
+	epoch, err := s.stageUserMerge(ctx, b, plan)
+	if err != nil {
+		return nil, err
+	}
+	return s.mergeCommitted(plan.Source, epoch), nil
+}
+
+// mergeCommitted is StageUserMerge's AfterCommit: it publishes Source's
+// user-wide invalidation only when the store shows the merge's write, Source
+// disabled at the bumped epoch or later, so a caller whose commit failed and
+// who runs it anyway publishes nothing.
+func (s *Service) mergeCommitted(src UserID, epoch int64) AfterCommit {
+	return func(ctx context.Context) {
+		u, err := s.d.Store.GetUser(ctx, src)
+		if err != nil || u.Status != StatusDisabled || u.CredentialEpoch < epoch {
+			return
+		}
+		inv := &invalidations{}
+		inv.user(src, journal.UserDisabled)
+		s.publishInvalidations(ctx, inv)
+	}
+}
+
+// stageUserMerge stages the merge into b and returns Source's bumped epoch.
+func (s *Service) stageUserMerge(ctx context.Context, b *storage.Batch, plan UserMergePlan) (int64, error) {
 	if b == nil {
-		return fmt.Errorf("%w: a merge stages into the caller's batch", ErrBadInput)
+		return 0, fmt.Errorf("%w: a merge stages into the caller's batch", ErrBadInput)
 	}
 	actor, _ := PrincipalFrom(ctx)
 	if err := s.mayManageUsers(actor, "merge users"); err != nil {
-		return err
+		return 0, err
 	}
 	if !s.ownerSatisfied(actor) {
-		return fmt.Errorf("%w: merging users needs the deployment owner", ErrDenied)
+		return 0, fmt.Errorf("%w: merging users needs the deployment owner", ErrDenied)
 	}
 	if plan.Source == "" || plan.Target == "" || plan.Source == plan.Target {
-		return fmt.Errorf("%w: a merge needs two distinct users", ErrBadInput)
+		return 0, fmt.Errorf("%w: a merge needs two distinct users", ErrBadInput)
 	}
 	src, err := s.d.Store.GetUser(ctx, plan.Source)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	tgt, err := s.d.Store.GetUser(ctx, plan.Target)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	for _, u := range []*User{src, tgt} {
 		if err := mutable(u); err != nil {
-			return err
+			return 0, err
 		}
 		if err := s.dominates(actor, u); err != nil {
-			return err
+			return 0, err
 		}
 	}
 	if tgt.Status != StatusActive {
-		return fmt.Errorf("%w: the merge target %s is %s, not active", ErrInactiveUser, tgt.ID, tgt.Status)
+		return 0, fmt.Errorf("%w: the merge target %s is %s, not active", ErrInactiveUser, tgt.ID, tgt.Status)
 	}
 	if err := s.keepAnAdmin(ctx, b, src, src.Roles, StatusDisabled); err != nil {
-		return err
+		return 0, err
 	}
 	if err := s.d.Store.StageMerge(b, plan); err != nil {
-		return err
+		return 0, err
 	}
 	up := *src
 	up.Status = StatusDisabled
@@ -92,7 +127,7 @@ func (s *Service) StageUserMerge(ctx context.Context, b *storage.Batch, plan Use
 	up.CredentialEpoch = src.CredentialEpoch + 1
 	up.UpdatedAt = s.now().UTC()
 	if err := s.d.Store.PutUser(b, &up); err != nil {
-		return err
+		return 0, err
 	}
 	deleted := 0
 	for t, err := range s.d.Store.ScanOneTime(ctx, OneTimeInvite) {
@@ -100,24 +135,24 @@ func (s *Service) StageUserMerge(ctx context.Context, b *storage.Batch, plan Use
 			if s.leftUndecodable("onetime", src.ID, err) {
 				continue
 			}
-			return err
+			return 0, err
 		}
 		if t.CreatedBy != src.ID {
 			continue
 		}
 		if err := s.d.Store.DeleteOneTime(b, OneTimeInvite, t.ID); err != nil {
-			return err
+			return 0, err
 		}
 		deleted++
 	}
 	links, err := s.deleteCreatedLinks(ctx, b, src.ID)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	subject := ref(refKindUser, string(src.ID))
 	s.journalLine(ctx, b, journal.Revocation{Kind: journal.UserDisabled, Subject: subject, Epoch: up.CredentialEpoch})
 	s.journalLine(ctx, b, journal.Revocation{Kind: journal.CredentialEpochBumped, Subject: subject, Epoch: up.CredentialEpoch})
-	return s.d.Audit.RecordIn(ctx, b, audit.Event{
+	return up.CredentialEpoch, s.d.Audit.RecordIn(ctx, b, audit.Event{
 		Action: actionUserDisable, Outcome: audit.Success, Target: subject, Reason: reasonMerged,
 		Details: map[string]any{"into": string(tgt.ID), "invites_deleted": deleted, "links_deleted": links, "rows": len(plan.Rows)},
 	})
