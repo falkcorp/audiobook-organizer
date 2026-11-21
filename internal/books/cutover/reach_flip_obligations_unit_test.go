@@ -49,7 +49,7 @@ func reachStateOf(t *testing.T, in reachObligationInput, name string) reachOblig
 // in core/httpapi (F4-08 B6a). A row joins this set when its discharge lands.
 var reachDischargedRows = map[string]bool{"F4-07-RANDOM-ROLES": true}
 
-func TestReachObligations_TheTableIsStatedInTheSeamsAndEveryRowIsOpenToday(t *testing.T) {
+func TestReachObligations_TheTableIsStatedInTheSeamsAndEachRowIsOpenUntilItsDischargeLands(t *testing.T) {
 	for _, p := range reachObligationProblemsNow(t) {
 		t.Error(p)
 	}
