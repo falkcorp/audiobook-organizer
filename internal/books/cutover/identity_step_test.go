@@ -30,10 +30,10 @@ func TestIdentityStep_Declaration(t *testing.T) {
 	if dm.Mode != datamigrate.BootBlocking {
 		t.Errorf("mode %v: the identity cutover blocks the boot", dm.Mode)
 	}
-	if !dm.Cutover || !dm.RewritesInPlace || dm.RaisesLevel != BooksCutoverLevel || dm.Compat != storage.Breaking {
+	if !dm.Cutover || !dm.RewritesInPlace || dm.RaisesLevel != BooksIdentityLevel || dm.Compat != storage.Breaking {
 		t.Errorf("cutover %v rewrites-in-place %v raises-level %d compat %v", dm.Cutover, dm.RewritesInPlace, dm.RaisesLevel, dm.Compat)
 	}
-	if want := []storage.StepRef{BooksLevelStepRef(r.levelVersion())}; !slices.Equal(dm.After, want) {
+	if want := []storage.StepRef{BooksLevelStepRef(r.identityLevelVersion())}; !slices.Equal(dm.After, want) {
 		t.Errorf("After = %v, want %v", dm.After, want)
 	}
 	if got := dm.Parallelism.String(); !strings.HasPrefix(got, "sequential: ") || len(got) < len("sequential: ")+20 || dm.Parallelism.Workers() != 1 {
@@ -103,38 +103,57 @@ func TestIdentityStep_RefusesWhatItCannotRun(t *testing.T) {
 	var good m3.Config
 	r.config = func(c *m3.Config) { good = *c }
 	_ = r.migration()
-	after := BooksLevelStepRef(r.levelVersion())
+	after := BooksLevelStepRef(r.identityLevelVersion())
 
-	if _, err := IdentityStep(good, BooksCutoverLevel, after); err != nil {
+	if _, err := IdentityStep(good, BooksIdentityLevel, after); err != nil {
 		t.Fatalf("the rig's own config: %v", err)
+	}
+	m2 := storage.StepRef{Owner: BooksOwner, DataMigration: ConfigCutoverID}
+	if dm, err := IdentityStep(good, BooksIdentityLevel, after, m2); err != nil {
+		t.Errorf("a data step after the level step is accepted: %v", err)
+	} else if want := []storage.StepRef{after, m2}; !slices.Equal(dm.After, want) {
+		t.Errorf("After = %v, want %v", dm.After, want)
 	}
 	withID := good
 	withID.StepID = IdentityCutoverID
-	if _, err := IdentityStep(withID, BooksCutoverLevel, after); err != nil {
+	if _, err := IdentityStep(withID, BooksIdentityLevel, after); err != nil {
 		t.Errorf("the step's own ID in the config is accepted: %v", err)
 	}
 	for name, call := range map[string]func() error{
 		"no level to raise to": func() error { _, err := IdentityStep(good, 0, after); return err },
 		"a negative level":     func() error { _, err := IdentityStep(good, -1, after); return err },
-		"no predecessor":       func() error { _, err := IdentityStep(good, BooksCutoverLevel, storage.StepRef{}); return err },
+		"no predecessor":       func() error { _, err := IdentityStep(good, BooksIdentityLevel, storage.StepRef{}); return err },
 		"another owner's step": func() error {
-			_, err := IdentityStep(good, BooksCutoverLevel, storage.StepRef{Owner: "core/auth", Version: 3})
+			_, err := IdentityStep(good, BooksIdentityLevel, storage.StepRef{Owner: "core/auth", Version: 3})
 			return err
 		},
 		"a predecessor with no version": func() error {
-			_, err := IdentityStep(good, BooksCutoverLevel, storage.StepRef{Owner: BooksOwner})
+			_, err := IdentityStep(good, BooksIdentityLevel, storage.StepRef{Owner: BooksOwner})
+			return err
+		},
+		"a data step as the level step": func() error { _, err := IdentityStep(good, BooksIdentityLevel, m2); return err },
+		"a later step of another owner": func() error {
+			_, err := IdentityStep(good, BooksIdentityLevel, after, storage.StepRef{Owner: "core/auth", DataMigration: "x"})
+			return err
+		},
+		"a later step naming a version and a data migration": func() error {
+			_, err := IdentityStep(good, BooksIdentityLevel, after, storage.StepRef{Owner: BooksOwner, Version: 3, DataMigration: ConfigCutoverID})
+			return err
+		},
+		"a later step naming nothing": func() error {
+			_, err := IdentityStep(good, BooksIdentityLevel, after, storage.StepRef{Owner: BooksOwner})
 			return err
 		},
 		"another step's ID": func() error {
 			c := good
 			c.StepID = "books.config-cutover"
-			_, err := IdentityStep(c, BooksCutoverLevel, after)
+			_, err := IdentityStep(c, BooksIdentityLevel, after)
 			return err
 		},
 		"an incomplete config": func() error {
 			c := good
 			c.Atoms = nil
-			_, err := IdentityStep(c, BooksCutoverLevel, after)
+			_, err := IdentityStep(c, BooksIdentityLevel, after)
 			return err
 		},
 	} {

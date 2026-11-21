@@ -215,30 +215,21 @@ func newIDRig(t testing.TB, name string, opts ...func(*idRig)) *idRig {
 }
 
 // spec is books' storage spec for the build: the pre-cutover one (every family
-// read-write), or the cutover build's with books at its cutover level behind
-// books' level step and the identity families' claims retired.
+// read-write), or the cutover build's with the identity flip on, built through
+// Flip.Spec (the shipped manifest's own function, so the rig cannot drift from
+// it): books at level 2 behind books.level-1 and books.level-2, the identity
+// families' claims retired and the two bootstrap rows' exact-key claims added
+// (ownership table row 8).
 func (r *idRig) spec(cutover bool) storage.Spec {
 	spec := store.BooksSpec(nil)
 	if !cutover {
 		return spec
 	}
-	spec.Level = BooksCutoverLevel
-	spec.Migrations = append(spec.Migrations, BooksLevelStep(r.levelVersion(), BooksCutoverLevel))
-	retired := m3.SourcePrefixes()
-	for i := range spec.Claims {
-		if slices.Contains(retired, spec.Claims[i].Prefix) {
-			spec.Claims[i].Mode = storage.ClaimRetired
-		}
-	}
-	// Ownership table row 8: the two bootstrap rows are exact-key claims inside
-	// the read-write setting: family, retired in the cutover build. booksclaims.go
-	// declares no claim for them at R1, so the flip (F4-08) adds these two.
-	for _, k := range m3.SourceKeys() {
-		spec.Claims = append(spec.Claims, storage.Claim{Key: k, Mode: storage.ClaimRetired, Serialized: true, Description: "HEAD's bootstrap row (ownership table row 8)"})
-	}
-	return spec
+	return NewFlipShape(FlipOptions{LevelStepVersion: r.levelVersion(), Identity: &IdentityFlipOptions{}}).Spec(spec)
 }
 
+// levelVersion is books.level-1's version, books' next contiguous one;
+// identityLevelVersion is books.level-2's, the one M3 runs behind.
 func (r *idRig) levelVersion() int {
 	last := 0
 	for _, m := range store.BooksSpec(nil).Migrations {
@@ -246,6 +237,8 @@ func (r *idRig) levelVersion() int {
 	}
 	return last + 1
 }
+
+func (r *idRig) identityLevelVersion() int { return r.levelVersion() + 1 }
 
 func (r *idRig) owners(cutover bool) []storage.OwnerSpec {
 	ks := storage.Spec{Keyspace: true, Serialized: []string{""}}
@@ -272,7 +265,10 @@ func (r *idRig) migration() datamigrate.DataMigration {
 	if r.config != nil {
 		r.config(&cfg)
 	}
-	dm, err := IdentityStep(cfg, BooksCutoverLevel, BooksLevelStepRef(r.levelVersion()))
+	// M2 is not registered in this rig (it needs core's config and secrets
+	// importers), so M3 names books.level-2 alone; the shipped list also names
+	// M2 (NewFlip, TestFlip_IdentityOnSpecAndSteps).
+	dm, err := IdentityStep(cfg, BooksIdentityLevel, BooksLevelStepRef(r.identityLevelVersion()))
 	if err != nil {
 		r.t.Fatal(err)
 	}
