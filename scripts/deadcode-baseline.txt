@@ -1049,7 +1049,9 @@ internal/books/writer/metafetchgate.Wrap
 internal/books/writer/metafetchgate.book
 internal/books/writer/metafetchgate.file
 internal/books/writer/metafetchgate.of
+internal/cfaccess.ClientAddrTrust.AccessClientAddr
 internal/cfaccess.Extension
+internal/cfaccess.connectingIP
 internal/cfaccess.extension.Authenticate
 internal/cfaccess.extension.Name
 internal/cfaccess.extension.authenticate
