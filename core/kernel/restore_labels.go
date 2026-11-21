@@ -66,6 +66,10 @@ const (
 	// labelHooksHeldHead is the journal head a replaced store's restore line held
 	// back, committed once the hooks have completed (journal.CommitHead).
 	labelHooksHeldHead = "kernel.hooks.held_head"
+	// labelHooksReport is c/backup/restore_report, the hooks' report that the
+	// restore health tokens read (journal.PutRestoreReport), committed before the
+	// hooks' completion record.
+	labelHooksReport = "kernel.hooks.report"
 	// labelHookAuth, labelHookRBAC and labelHookAudit are each module's restore
 	// hook (auth.PostRestore, rbac.PostRestore, audit.RestoreHook): a region around
 	// the whole hook, so every store batch it commits is recorded under its name.
@@ -93,7 +97,7 @@ func ReapplyLabels() []string {
 // head they commit, restore_hooks.go), for the writer table.
 func HookRunLabels() []string {
 	return []string{
-		labelHooksRunEnsure, labelHooksRunClear, labelHooksMarkHooked, labelHooksHeldHead,
+		labelHooksRunEnsure, labelHooksRunClear, labelHooksMarkHooked, labelHooksHeldHead, labelHooksReport,
 		labelHookAuth, labelHookRBAC, labelHookAudit,
 	}
 }

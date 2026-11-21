@@ -131,7 +131,7 @@ func TestReapplyRegions_EveryCommitSiteCarriesItsLabel(t *testing.T) {
 		s := newRestoreScene(t, nil)
 		s.labels.take()
 		s.boot(archiveBoot("restore-1", "arch-1", s.previous, &rxSteps{}), nil)
-		expect(t, s.labels.take(), labelReapplyRestoreLine, labelReapplyServedBoot, labelHooksMarkHooked)
+		expect(t, s.labels.take(), labelReapplyRestoreLine, labelReapplyServedBoot, labelHooksMarkHooked, labelHooksReport)
 	})
 
 	for _, l := range append(ReapplyLabels(), HookRunLabels()...) {

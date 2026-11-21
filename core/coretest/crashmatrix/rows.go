@@ -148,7 +148,7 @@ func Rows() []Row {
 		// conflicts trivially. The boot wires them behind app.Options.IdentityBoot
 		// (F4-08 B3); IdentityUnreachedLabels is what no fixture reaches yet.
 		{Phase: "P4d 2", Writer: "the kernel: the re-apply's store commits: each tail chunk's two batches (auth's revocations, then rbac's with the head), each drained chunk's two (the second with the dequeue of its entries), the head of the boot's own line committed alone, a restore boot's restore line with its head, the unapplied queue's batches, the dequeue of the entries a kept admin held, the kept admins' restriction, the withheld head, MarkUnappliedClosed, and served_boot (on a restore boot after the hooks) (restore_reapply.go; 05-backup §5B.3.6 \"Boot re-apply\")", Labels: kernel.ReapplyLabels()},
-		{Phase: "P4d 3", Writer: "the kernel: the restore hooks' run ID, written before a run with no restore line and cleared after it (journal.EnsureHookRun, journal.ClearHookRun), restore_hooked/<seq> once the hooks completed (journal.MarkHooked), the head a replaced store's restore line held back (journal.CommitHead), and the commits of auth's, rbac's and audit's restore hooks, each under its own region (restore_hooks.go)", Labels: kernel.HookRunLabels()},
+		{Phase: "P4d 3", Writer: "the kernel: the restore hooks' run ID, written before a run with no restore line and cleared after it (journal.EnsureHookRun, journal.ClearHookRun), the hooks' report that the restore health tokens read, recorded before restore_hooked/<seq> (journal.PutRestoreReport), restore_hooked/<seq> once the hooks completed (journal.MarkHooked), the head a replaced store's restore line held back (journal.CommitHead), and the commits of auth's, rbac's and audit's restore hooks, each under its own region (restore_hooks.go)", Labels: kernel.HookRunLabels()},
 		{Phase: "P4d 4", Writer: "auth: BootWrites' commits: the _system user's seed, the bootstrap token's mint or the deletion of the stored ones, and the start-up key's revoke and mint (05-authn §3.2, §4.6)", Labels: auth.BootWritesLabels()},
 		{Phase: "P4d 2 (before the journal opens)", Writer: "the kernel: the effective backup directory created in the boot's journal filesystem, so the journal file can be created inside it (identity_p4d.go ensureBackupDir; a no-operation when the directory exists)", Labels: []string{kernel.LabelBackupDirMkdir}},
 		{Phase: "P4d 4", Writer: "auth: BootWrites' state files, each a temporary file written and fsynced, renamed into place and the state directory fsynced: the bootstrap token (written, or removed when bootstrap is disabled) and the start-up key's file (05-authn §4.6; auth.StateFiles over the labelled state directory)", Labels: []string{auth.BootstrapTokenLabel, auth.ReadOnlyKeyLabel}},
@@ -195,7 +195,7 @@ func IdentityUnreachedLabels() map[string]string {
 		[]string{backupjournal.LabelLocationTmp, backupjournal.LabelLocationRename, backupjournal.LabelLocationDirSync},
 		// A restore boot's own writers: the restore line, restore_hooked, and the
 		// auth and audit hooks' commits (the scenario's revert fixture stages a restore).
-		[]string{"kernel.reapply.served_boot", "kernel.reapply.restore_line", "kernel.hooks.marked", "kernel.hooks.auth", "kernel.hooks.audit"},
+		[]string{"kernel.reapply.served_boot", "kernel.reapply.restore_line", "kernel.hooks.marked", "kernel.hooks.report", "kernel.hooks.auth", "kernel.hooks.audit"},
 	) {
 		out[l] = identityFlipOnly
 	}
