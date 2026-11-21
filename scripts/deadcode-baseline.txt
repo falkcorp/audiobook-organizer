@@ -1326,6 +1326,9 @@ internal/server.t7Watermark.complete
 internal/server.t7Writes
 internal/server/handlers/abs.Handler.SetClock
 internal/server/handlers/abs.Handler.SetSleep
+internal/server/handlers/abs.NewAppHandoff
+internal/server/handlers/abs.appHandoff.Allowed
+internal/server/handlers/abs.appHandoff.Mint
 internal/server/handlers/system.HealthPostureTokens
 internal/server/middleware.ABSIdentityResolver.Config
 internal/startup.Class.String
