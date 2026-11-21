@@ -213,6 +213,13 @@ func extractLegacyStore(ctx context.Context, archive, storeDir string, lim backu
 		return "", fmt.Errorf("backup: extract store: %w", err)
 	}
 	if _, err := backuparchive.ExtractLegacy(ctx, archive, info, storeDir, lim); err != nil {
+		if verified != "" && errors.Is(err, backuparchive.ErrChanged) {
+			// ExtractLegacy opens the path again and holds the bytes it extracts
+			// to the scan's digest, which the check above held to the one the
+			// checksum check accepted: ErrChanged here means the archive was
+			// replaced after the scan, the same refusal as above.
+			return "", fmt.Errorf("backup: extract store: %w: %w: the archive is not the one the checksum check accepted", ErrChecksumMismatch, err)
+		}
 		return "", fmt.Errorf("backup: extract store: %w", err)
 	}
 	id := legacyIDOf(filepath.Base(archive))
