@@ -94,6 +94,9 @@ func seedKnown(r *rig) {
 			tree["oauth_github_client_secret"] = fxGitHub
 			tree["oauth_google_client_id"] = "batgirl-google-client"
 			tree["oauth_google_client_secret"] = fxGoogleO
+			// A non-empty allow-list: an enabled sign-in with an empty one
+			// refuses the upgrade (TestConfigCutover_OAuthEmptyAllowListRefuses).
+			tree["oauth_allowed_emails"] = "alfred@batcave.example"
 			tree["plugins"] = map[string]any{
 				"webhook": map[string]any{"enabled": true, "settings": map[string]any{
 					"events": "all", "urls": "http://192.0.2.10/gotham, http://192.0.2.11/bludhaven", "secret": fxWebhook}},
