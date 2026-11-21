@@ -293,6 +293,9 @@ type Kernel struct {
 	// it; false until then. P4b binds it, with the Legacy reader, into the
 	// Importers a Cutover func holds (Importers.AllowKeyRegen).
 	importerAllowRegen bool
+	// ident is the identity boot's state (identity_boot.go): nil unless the app
+	// declared Config.IdentityBoot and the boot got to P4b.
+	ident *identityBoot
 	// cfgBoot is the layered config store: built at P0, loaded at P3, bound to
 	// the DB layer at P4b and attached at P4d. nil for Describe, which does no
 	// I/O and so has no boot.

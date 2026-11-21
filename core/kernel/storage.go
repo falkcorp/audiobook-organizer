@@ -250,6 +250,14 @@ func (k *Kernel) migrateStorage(ctx context.Context) error {
 			return err
 		}
 	}
+	// The identity stores, and with them Importers.Auth, Roles and Audit, bind
+	// here too, from the same instances the P5 services are built over; an app
+	// that did not declare the identity boot builds none of it.
+	if k.identityBootDeclared() {
+		if err := k.buildIdentityStores(ctx); err != nil {
+			return err
+		}
+	}
 	// The Cutover importers bind before the first step can run (06 §6.5.1
 	// P4b); with no config or secrets store wired (the gate off) they stay
 	// unbound and a step that reaches one fails with module.ErrImporterNotBound.
