@@ -32,6 +32,7 @@ top=true stored=blob class=i blob=root_dir admin=true fail-closed=false url=fals
 target entry core.library.roots entry books-library (Path) convert=- list=core.library.roots env=ABO_CORE_LIBRARY_ROOTS
 retired file root_dir -> core.library.roots refuse
 retired env ROOT_DIR -> core.library.roots refuse
+retired env AUDIOBOOK_ROOT_DIR -> - warn message="delete it: no build ever read it; the library root is th..."
 
 ## path_aliases
 top=true stored=blob class=i blob=path_aliases admin=true fail-closed=false url=false

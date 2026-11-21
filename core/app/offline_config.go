@@ -84,7 +84,7 @@ func configCheckCommand(opts Options, mods []module.Module) Command {
 			uses, err := kernel.CheckConfig(ctx, kernel.ConfigCheck{
 				Config: co, StateDirDefault: opts.StateDir, Modules: mods,
 			})
-			if werr := writeRetiredReport(stdout, uses, opts.RetiredConfigNames); werr != nil {
+			if werr := writeRetiredReport(stdout, uses); werr != nil {
 				return errors.Join(err, werr)
 			}
 			if rerr, refused := errors.AsType[*config.RetiredNameError](err); refused {
@@ -114,7 +114,7 @@ func countUnchecked(uses []config.RetiredUse) int {
 
 // writeRetiredReport prints one line per retired name set, refused ones
 // first, then unchecked ones, then ignored ones, and a summary.
-func writeRetiredReport(w io.Writer, uses []config.RetiredUse, list []config.RetiredName) error {
+func writeRetiredReport(w io.Writer, uses []config.RetiredUse) error {
 	var b strings.Builder
 	if len(uses) == 0 {
 		b.WriteString("No retired config names are set.\n")
@@ -152,11 +152,11 @@ func writeRetiredReport(w io.Writer, uses []config.RetiredUse, list []config.Ret
 			fmt.Fprintf(&b, "%s %s: %s; ", kind, u.Name, verdict)
 			if u.Canonical == "" {
 				b.WriteString("the setting was removed")
-				if msg := retiredMessage(list, u); msg != "" {
-					fmt.Fprintf(&b, " (%s)", msg)
-				}
 			} else {
 				fmt.Fprintf(&b, "set %s or the operator file key %s instead", u.CanonicalEnv, u.Canonical)
+			}
+			if u.Message != "" {
+				fmt.Fprintf(&b, " (%s)", u.Message)
 			}
 			b.WriteString("\n")
 		}
@@ -166,13 +166,3 @@ func writeRetiredReport(w io.Writer, uses []config.RetiredUse, list []config.Ret
 	return err
 }
 
-// retiredMessage is the app's reason for a dropped name, "" when it gave
-// none.
-func retiredMessage(list []config.RetiredName, u config.RetiredUse) string {
-	for _, r := range list {
-		if r.Name == u.Name && r.File == u.File {
-			return r.Message
-		}
-	}
-	return ""
-}
